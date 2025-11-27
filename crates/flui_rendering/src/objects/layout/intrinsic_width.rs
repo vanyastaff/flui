@@ -1,4 +1,7 @@
 //! RenderIntrinsicWidth - sizes child to its intrinsic width
+//!
+//! Flutter equivalent: `RenderIntrinsicWidth`
+//! Source: https://api.flutter.dev/flutter/rendering/RenderIntrinsicWidth-class.html
 
 use crate::core::{
     RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},

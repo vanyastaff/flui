@@ -2824,6 +2824,13 @@ impl Canvas {
         self
     }
 
+    /// Draws a rectangle with uniform corner radius and returns self for chaining.
+    #[inline]
+    pub fn rounded_rect(&mut self, rect: Rect, radius: f32, paint: &Paint) -> &mut Self {
+        self.draw_rounded_rect(rect, radius, paint);
+        self
+    }
+
     /// Draws a circle and returns self for chaining.
     #[inline]
     pub fn circle(&mut self, center: Point, radius: f32, paint: &Paint) -> &mut Self {
@@ -2862,6 +2869,146 @@ impl Canvas {
     #[inline]
     pub fn oval(&mut self, rect: Rect, paint: &Paint) -> &mut Self {
         self.draw_oval(rect, paint);
+        self
+    }
+
+    /// Draws a texture and returns self for chaining.
+    ///
+    /// # Arguments
+    ///
+    /// * `texture_id` - The ID of the texture to draw
+    /// * `dst` - Destination rectangle where the texture will be drawn
+    /// * `src` - Optional source rectangle for texture cropping (None = entire texture)
+    /// * `filter_quality` - Quality of texture filtering
+    /// * `opacity` - Opacity of the texture (0.0 to 1.0)
+    #[inline]
+    pub fn texture(
+        &mut self,
+        texture_id: crate::display_list::TextureId,
+        dst: Rect,
+        src: Option<Rect>,
+        filter_quality: crate::display_list::FilterQuality,
+        opacity: f32,
+    ) -> &mut Self {
+        self.draw_texture(texture_id, dst, src, filter_quality, opacity);
+        self
+    }
+
+    /// Draws an image and returns self for chaining.
+    #[inline]
+    pub fn image(&mut self, image: Image, dst: Rect, paint: Option<&Paint>) -> &mut Self {
+        self.draw_image(image, dst, paint);
+        self
+    }
+
+    /// Draws a tiled/repeated image and returns self for chaining.
+    #[inline]
+    pub fn image_repeat(
+        &mut self,
+        image: Image,
+        dst: Rect,
+        repeat: crate::display_list::ImageRepeat,
+        paint: Option<&Paint>,
+    ) -> &mut Self {
+        self.draw_image_repeat(image, dst, repeat, paint);
+        self
+    }
+
+    /// Draws an image with 9-slice scaling and returns self for chaining.
+    #[inline]
+    pub fn image_nine_slice(
+        &mut self,
+        image: Image,
+        center_slice: Rect,
+        dst: Rect,
+        paint: Option<&Paint>,
+    ) -> &mut Self {
+        self.draw_image_nine_slice(image, center_slice, dst, paint);
+        self
+    }
+
+    /// Draws an image with a color filter and returns self for chaining.
+    #[inline]
+    pub fn image_filtered(
+        &mut self,
+        image: Image,
+        dst: Rect,
+        filter: crate::display_list::ColorFilter,
+        paint: Option<&Paint>,
+    ) -> &mut Self {
+        self.draw_image_filtered(image, dst, filter, paint);
+        self
+    }
+
+    /// Draws a shadow and returns self for chaining.
+    #[inline]
+    pub fn shadow(&mut self, path: &Path, color: Color, elevation: f32) -> &mut Self {
+        self.draw_shadow(path, color, elevation);
+        self
+    }
+
+    /// Draws a gradient-filled rectangle and returns self for chaining.
+    #[inline]
+    pub fn gradient(&mut self, rect: Rect, shader: crate::display_list::Shader) -> &mut Self {
+        self.draw_gradient(rect, shader);
+        self
+    }
+
+    /// Draws a gradient-filled rounded rectangle and returns self for chaining.
+    #[inline]
+    pub fn gradient_rrect(
+        &mut self,
+        rrect: RRect,
+        shader: crate::display_list::Shader,
+    ) -> &mut Self {
+        self.draw_gradient_rrect(rrect, shader);
+        self
+    }
+
+    /// Draws an arc segment and returns self for chaining.
+    #[inline]
+    pub fn arc(
+        &mut self,
+        rect: Rect,
+        start_angle: f32,
+        sweep_angle: f32,
+        use_center: bool,
+        paint: &Paint,
+    ) -> &mut Self {
+        self.draw_arc(rect, start_angle, sweep_angle, use_center, paint);
+        self
+    }
+
+    /// Draws difference between two rounded rectangles and returns self for chaining.
+    #[inline]
+    pub fn drrect(&mut self, outer: RRect, inner: RRect, paint: &Paint) -> &mut Self {
+        self.draw_drrect(outer, inner, paint);
+        self
+    }
+
+    /// Draws points with the specified mode and returns self for chaining.
+    #[inline]
+    pub fn points(
+        &mut self,
+        mode: crate::display_list::PointMode,
+        points: Vec<Point>,
+        paint: &Paint,
+    ) -> &mut Self {
+        self.draw_points_with_mode(mode, points, paint);
+        self
+    }
+
+    /// Draws custom vertices and returns self for chaining.
+    #[inline]
+    pub fn vertices(
+        &mut self,
+        vertices: Vec<Point>,
+        colors: Option<Vec<Color>>,
+        tex_coords: Option<Vec<Point>>,
+        indices: Vec<u16>,
+        paint: &Paint,
+    ) -> &mut Self {
+        self.draw_vertices(vertices, colors, tex_coords, indices, paint);
         self
     }
 

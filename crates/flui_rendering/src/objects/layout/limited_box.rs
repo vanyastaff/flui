@@ -1,4 +1,7 @@
-//! RenderLimitedBox - limits max width/height
+//! RenderLimitedBox - limits max width/height when unconstrained
+//!
+//! Flutter equivalent: `RenderLimitedBox`
+//! Source: https://api.flutter.dev/flutter/rendering/RenderLimitedBox-class.html
 
 use crate::core::{BoxProtocol, LayoutContext, PaintContext};
 use crate::core::{Optional, RenderBox};

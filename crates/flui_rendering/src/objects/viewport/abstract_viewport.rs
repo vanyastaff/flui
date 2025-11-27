@@ -1,8 +1,10 @@
 //! RenderAbstractViewport - Abstract interface for viewport render objects
+//!
+//! Flutter reference: <https://api.flutter.dev/flutter/rendering/RenderAbstractViewport-class.html>
 
 use crate::core::ElementId;
 use flui_types::layout::Axis;
-use flui_types::prelude::*;
+use flui_types::Rect;
 
 /// Offset and metadata needed to reveal a target in a viewport
 ///
@@ -21,6 +23,20 @@ impl RevealedOffset {
     /// Create a new RevealedOffset
     pub fn new(offset: f32, rect: Rect) -> Self {
         Self { offset, rect }
+    }
+
+    /// Create with zero offset and empty rect
+    pub fn zero() -> Self {
+        Self {
+            offset: 0.0,
+            rect: Rect::ZERO,
+        }
+    }
+}
+
+impl Default for RevealedOffset {
+    fn default() -> Self {
+        Self::zero()
     }
 }
 
@@ -49,8 +65,9 @@ impl RevealedOffset {
 ///
 /// ```rust,ignore
 /// use flui_rendering::{RenderAbstractViewport, RevealedOffset};
+/// use flui_rendering::core::ElementId;
 ///
-/// fn scroll_to_item(viewport: &dyn RenderAbstractViewport, target_id: ElementId) {
+/// fn scroll_to_item<V: RenderAbstractViewport>(viewport: &V, target_id: ElementId) {
 ///     let revealed = viewport.get_offset_to_reveal(
 ///         target_id,
 ///         0.5,  // Center alignment
@@ -68,7 +85,6 @@ pub trait RenderAbstractViewport {
     ///
     /// # Arguments
     ///
-    /// * `tree` - Element tree for traversal
     /// * `target` - Element to reveal
     /// * `alignment` - Where to position the target:
     ///   - `0.0` = leading edge (top/left)
@@ -82,7 +98,6 @@ pub trait RenderAbstractViewport {
     /// `RevealedOffset` containing the scroll offset and target rect.
     fn get_offset_to_reveal(
         &self,
-        tree: &ElementTree,
         target: ElementId,
         alignment: f32,
         rect: Option<Rect>,
@@ -93,41 +108,6 @@ pub trait RenderAbstractViewport {
     ///
     /// Returns the axis along which the viewport scrolls.
     fn axis(&self) -> Axis;
-
-    /// Find the nearest ancestor viewport in the tree
-    ///
-    /// Walks up the tree from `start` to find the first RenderAbstractViewport.
-    /// Returns None if no viewport ancestor is found.
-    ///
-    /// # Arguments
-    ///
-    /// * `tree` - Element tree for traversal
-    /// * `start` - Element to start searching from
-    fn find_ancestor_viewport(tree: &ElementTree, start: ElementId) -> Option<ElementId>
-    where
-        Self: Sized,
-    {
-        let mut current = start;
-
-        loop {
-            // Get parent
-            let Some(parent_id) = tree.parent(current) else {
-                return None;
-            };
-
-            // Check if parent is a viewport
-            // In a real implementation, we'd check if the render object
-            // implements RenderAbstractViewport
-            // For now, we return None as we can't do trait downcasting easily
-
-            current = parent_id;
-
-            // Simplified: return None after checking root
-            if tree.parent(current).is_none() {
-                return None;
-            }
-        }
-    }
 }
 
 /// Default cache extent for viewports (in pixels)
@@ -142,30 +122,34 @@ mod tests {
 
     #[test]
     fn test_revealed_offset_creation() {
-        let revealed = RevealedOffset::new(
-            100.0,
-            Rect::from_xywh(0.0, 100.0, 50.0, 50.0),
-        );
+        let revealed = RevealedOffset::new(100.0, Rect::from_xywh(0.0, 100.0, 50.0, 50.0));
 
         assert_eq!(revealed.offset, 100.0);
-        assert_eq!(revealed.rect.x, 0.0);
-        assert_eq!(revealed.rect.y, 100.0);
-        assert_eq!(revealed.rect.width, 50.0);
-        assert_eq!(revealed.rect.height, 50.0);
+        assert_eq!(revealed.rect.left(), 0.0);
+        assert_eq!(revealed.rect.top(), 100.0);
+        assert_eq!(revealed.rect.width(), 50.0);
+        assert_eq!(revealed.rect.height(), 50.0);
     }
 
     #[test]
     fn test_revealed_offset_equality() {
-        let revealed1 = RevealedOffset::new(
-            100.0,
-            Rect::from_xywh(0.0, 100.0, 50.0, 50.0),
-        );
-        let revealed2 = RevealedOffset::new(
-            100.0,
-            Rect::from_xywh(0.0, 100.0, 50.0, 50.0),
-        );
+        let revealed1 = RevealedOffset::new(100.0, Rect::from_xywh(0.0, 100.0, 50.0, 50.0));
+        let revealed2 = RevealedOffset::new(100.0, Rect::from_xywh(0.0, 100.0, 50.0, 50.0));
 
         assert_eq!(revealed1, revealed2);
+    }
+
+    #[test]
+    fn test_revealed_offset_zero() {
+        let revealed = RevealedOffset::zero();
+        assert_eq!(revealed.offset, 0.0);
+        assert_eq!(revealed.rect, Rect::ZERO);
+    }
+
+    #[test]
+    fn test_revealed_offset_default() {
+        let revealed = RevealedOffset::default();
+        assert_eq!(revealed.offset, 0.0);
     }
 
     #[test]

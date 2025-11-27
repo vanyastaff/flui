@@ -1,4 +1,9 @@
 //! RenderCustomMultiChildLayoutBox - Custom multi-child layout with delegate
+//!
+//! Defers the layout of multiple children to a delegate, enabling custom
+//! layout logic for complex multi-child arrangements.
+//!
+//! Flutter reference: <https://api.flutter.dev/flutter/rendering/RenderCustomMultiChildLayoutBox-class.html>
 
 use crate::core::{
     BoxProtocol, LayoutContext, LayoutTree, PaintContext, PaintTree, RenderBox, Variable,

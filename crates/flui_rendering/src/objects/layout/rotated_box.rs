@@ -1,4 +1,7 @@
 //! RenderRotatedBox - rotates child by quarter turns (90°, 180°, 270°)
+//!
+//! Flutter equivalent: `RenderRotatedBox`
+//! Source: https://api.flutter.dev/flutter/rendering/RenderRotatedBox-class.html
 
 use crate::core::{
     RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
@@ -102,25 +105,19 @@ impl RenderBox<Single> for RenderRotatedBox {
         T: crate::core::PaintTree,
     {
         let child_id = ctx.children.single();
+        let offset = ctx.offset;
 
         // If no rotation, just paint child directly
         if self.quarter_turns == QuarterTurns::Zero {
-            ctx.paint_child(child_id, ctx.offset);
+            ctx.paint_child(child_id, offset);
             return;
         }
 
-        // Read offset before taking mutable borrow
-        let offset = ctx.offset;
-
-        // Save canvas state
-        ctx.canvas().save();
-
-        // Move to rotation origin (our top-left)
-        ctx.canvas().translate(offset.dx, offset.dy);
-
-        // Apply rotation transform
-        let angle_radians = self.quarter_turns.radians();
-        ctx.canvas().rotate(angle_radians);
+        // Apply rotation transform using chaining API
+        ctx.canvas()
+            .saved()
+            .translated(offset.dx, offset.dy)
+            .rotated(self.quarter_turns.radians());
 
         // Calculate child offset in rotated space
         let child_offset = match self.quarter_turns {
@@ -130,11 +127,9 @@ impl RenderBox<Single> for RenderRotatedBox {
             QuarterTurns::Three => Offset::new(-self.size.height, 0.0), // 270° CW
         };
 
-        // Paint child with rotated offset
+        // Paint child with rotated offset and restore canvas state
         ctx.paint_child(child_id, child_offset);
-
-        // Restore canvas state
-        ctx.canvas().restore();
+        ctx.canvas().restored();
     }
 }
 

@@ -1,4 +1,12 @@
 //! RenderGrid - CSS Grid-inspired layout
+//!
+//! Arranges children in a grid with configurable row and column sizing.
+//! Supports flexible (fr), fixed (px), and automatic (auto) track sizing.
+//!
+//! Note: This is a CSS Grid-inspired implementation, not a direct Flutter port.
+//! For Flutter's grid, see GridView which uses slivers.
+//!
+//! Flutter reference: <https://api.flutter.dev/flutter/widgets/GridView-class.html>
 
 use crate::core::{BoxProtocol, LayoutContext, LayoutTree, PaintContext, RenderBox, Variable};
 use flui_types::{BoxConstraints, Offset, Size};

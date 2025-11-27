@@ -134,6 +134,23 @@ pub fn dispatch_command(command: &DrawCommand, renderer: &mut dyn CommandRendere
         } => {
             renderer.render_image(image, *dst, paint.as_ref(), transform);
         }
+        DrawCommand::DrawTexture {
+            texture_id,
+            dst,
+            src,
+            filter_quality,
+            opacity,
+            transform,
+        } => {
+            renderer.render_texture(
+                *texture_id,
+                *dst,
+                *src,
+                *filter_quality,
+                *opacity,
+                transform,
+            );
+        }
         DrawCommand::DrawShadow {
             path,
             color,
@@ -219,6 +236,33 @@ pub fn dispatch_command(command: &DrawCommand, renderer: &mut dyn CommandRendere
             );
         }
 
+        // === Gradient Commands ===
+        DrawCommand::DrawGradient {
+            rect,
+            shader,
+            transform,
+        } => {
+            renderer.render_gradient(*rect, shader, transform);
+        }
+        DrawCommand::DrawGradientRRect {
+            rrect,
+            shader,
+            transform,
+        } => {
+            renderer.render_gradient_rrect(*rrect, shader, transform);
+        }
+
+        // === Effects ===
+        DrawCommand::ShaderMask {
+            child,
+            shader,
+            bounds,
+            blend_mode,
+            transform,
+        } => {
+            renderer.render_shader_mask(child, shader, *bounds, *blend_mode, transform);
+        }
+
         // === Clipping Commands ===
         DrawCommand::ClipRect { rect, transform } => {
             renderer.clip_rect(*rect, transform);
@@ -228,6 +272,62 @@ pub fn dispatch_command(command: &DrawCommand, renderer: &mut dyn CommandRendere
         }
         DrawCommand::ClipPath { path, transform } => {
             renderer.clip_path(path, transform);
+        }
+        DrawCommand::BackdropFilter {
+            child,
+            filter,
+            bounds,
+            blend_mode,
+            transform,
+        } => {
+            renderer.render_backdrop_filter(
+                child.as_ref().map(|c| c.as_ref()),
+                filter,
+                *bounds,
+                *blend_mode,
+                transform,
+            );
+        }
+
+        // === Image Extensions ===
+        DrawCommand::DrawImageRepeat {
+            image,
+            dst,
+            repeat,
+            paint,
+            transform,
+        } => {
+            renderer.render_image_repeat(image, *dst, *repeat, paint.as_ref(), transform);
+        }
+        DrawCommand::DrawImageNineSlice {
+            image,
+            center_slice,
+            dst,
+            paint,
+            transform,
+        } => {
+            renderer.render_image_nine_slice(image, *center_slice, *dst, paint.as_ref(), transform);
+        }
+        DrawCommand::DrawImageFiltered {
+            image,
+            dst,
+            filter,
+            paint,
+            transform,
+        } => {
+            renderer.render_image_filtered(image, *dst, *filter, paint.as_ref(), transform);
+        }
+
+        // === Layer Commands ===
+        DrawCommand::SaveLayer {
+            bounds,
+            paint,
+            transform,
+        } => {
+            renderer.save_layer(*bounds, paint, transform);
+        }
+        DrawCommand::RestoreLayer { transform } => {
+            renderer.restore_layer(transform);
         }
     }
 }

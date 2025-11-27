@@ -1,8 +1,7 @@
 //! RenderSliverOverlapAbsorber - Absorbs overlap for nested scroll views
 
-use crate::core::{RuntimeArity, LegacySliverRender, SliverLayoutContext, SliverPaintContext};
-use flui_painting::Canvas;
-use flui_types::SliverGeometry;
+use crate::core::{LayoutContext, LayoutTree, PaintContext, PaintTree, Single, SliverProtocol, SliverRender};
+use flui_types::{Offset, SliverGeometry};
 use std::sync::{Arc, Mutex};
 
 /// Handle for communicating absorbed overlap between RenderSliverOverlapAbsorber
@@ -79,9 +78,6 @@ impl Default for SliverOverlapAbsorberHandle {
 pub struct RenderSliverOverlapAbsorber {
     /// Handle for communicating absorbed overlap
     pub handle: SliverOverlapAbsorberHandle,
-
-    // Layout cache
-    sliver_geometry: SliverGeometry,
 }
 
 impl RenderSliverOverlapAbsorber {
@@ -90,15 +86,7 @@ impl RenderSliverOverlapAbsorber {
     /// # Arguments
     /// * `handle` - Handle for storing absorbed overlap extent
     pub fn new(handle: SliverOverlapAbsorberHandle) -> Self {
-        Self {
-            handle,
-            sliver_geometry: SliverGeometry::default(),
-        }
-    }
-
-    /// Get the sliver geometry from last layout
-    pub fn geometry(&self) -> SliverGeometry {
-        self.sliver_geometry
+        Self { handle }
     }
 
     /// Calculate sliver geometry for overlap absorption
@@ -130,7 +118,7 @@ impl RenderSliverOverlapAbsorber {
             paint_extent: child_geometry.paint_extent,
             paint_origin: child_geometry.paint_origin,
             max_paint_extent: child_geometry.max_paint_extent,
-            max_scroll_obsolescence: child_geometry.max_scroll_obsolescence,
+            max_scroll_obstruction_extent: child_geometry.max_scroll_obstruction_extent,
             visible_fraction: child_geometry.visible_fraction,
             cross_axis_extent: child_geometry.cross_axis_extent,
             cache_extent: child_geometry.cache_extent,
@@ -148,44 +136,36 @@ impl Default for RenderSliverOverlapAbsorber {
     }
 }
 
-impl LegacySliverRender for RenderSliverOverlapAbsorber {
-    fn layout(&mut self, ctx: &SliverLayoutContext) -> SliverGeometry {
-        // If no child, return zero geometry and clear handle
-        let Some(child_id) = ctx.children.try_single() else {
-            self.handle.set_extent(0.0);
-            self.sliver_geometry = SliverGeometry::default();
-            return self.sliver_geometry;
-        };
+impl SliverRender<Single> for RenderSliverOverlapAbsorber {
+    fn layout<T>(
+        &mut self,
+        mut ctx: LayoutContext<'_, T, Single, SliverProtocol>,
+    ) -> SliverGeometry
+    where
+        T: LayoutTree,
+    {
+        let constraints = ctx.constraints;
 
         // Layout child with unchanged constraints
-        let child_geometry = ctx.tree.layout_sliver_child(child_id, ctx.constraints);
+        let child_geometry = ctx.layout_child(ctx.children.single(), constraints);
 
         // Calculate our geometry by absorbing child's overlap
-        self.sliver_geometry = self.calculate_sliver_geometry(child_geometry);
-        self.sliver_geometry
+        self.calculate_sliver_geometry(child_geometry)
     }
 
-    fn paint(&self, ctx: &SliverPaintContext) -> Canvas {
-        // Paint child if present
-        if let Some(child_id) = ctx.children.try_single() {
-            return ctx.tree.paint_child(child_id, ctx.offset);
-        }
-
-        Canvas::new()
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> RuntimeArity {
-        RuntimeArity::Exact(1) // Single child sliver
+    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Single>)
+    where
+        T: PaintTree,
+    {
+        // Paint child
+        ctx.paint_child(ctx.children.single(), Offset::ZERO);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_types::constraints::{GrowthDirection, ScrollDirection};
 
     #[test]
     fn test_sliver_overlap_absorber_handle_new() {
@@ -238,7 +218,7 @@ mod tests {
             paint_origin: 0.0,
             layout_extent: 150.0,
             max_paint_extent: 200.0,
-            max_scroll_obsolescence: 0.0,
+            max_scroll_obstruction_extent: 0.0,
             visible_fraction: 1.0,
             cross_axis_extent: 400.0,
             cache_extent: 150.0,
@@ -275,7 +255,7 @@ mod tests {
             paint_origin: 0.0,
             layout_extent: 200.0,
             max_paint_extent: 300.0,
-            max_scroll_obsolescence: 0.0,
+            max_scroll_obstruction_extent: 0.0,
             visible_fraction: 1.0,
             cross_axis_extent: 400.0,
             cache_extent: 200.0,
@@ -310,7 +290,7 @@ mod tests {
             paint_origin: 0.0,
             layout_extent: 180.0,
             max_paint_extent: 250.0,
-            max_scroll_obsolescence: 0.0,
+            max_scroll_obstruction_extent: 0.0,
             visible_fraction: 1.0,
             cross_axis_extent: 400.0,
             cache_extent: 180.0,
@@ -332,9 +312,4 @@ mod tests {
         assert_eq!(geometry.layout_extent, 0.0);
     }
 
-    #[test]
-    fn test_arity_is_single_child() {
-        let absorber = RenderSliverOverlapAbsorber::default();
-        assert_eq!(absorber.arity(), RuntimeArity::Exact(1));
-    }
 }

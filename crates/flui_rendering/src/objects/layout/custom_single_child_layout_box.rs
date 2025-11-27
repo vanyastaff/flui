@@ -6,7 +6,7 @@
 //! - Child constraints
 //! - Child positioning
 //!
-//! Similar to Flutter's RenderCustomSingleChildLayoutBox.
+//! Flutter reference: <https://api.flutter.dev/flutter/rendering/RenderCustomSingleChildLayoutBox-class.html>
 
 use crate::core::{BoxProtocol, LayoutContext, PaintContext, RenderBox, Single};
 use flui_types::{BoxConstraints, Offset, Size};

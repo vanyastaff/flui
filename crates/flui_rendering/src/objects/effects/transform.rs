@@ -108,34 +108,27 @@ impl RenderBox<Single> for RenderTransform {
         T: crate::core::PaintTree,
     {
         let child_id = ctx.children.single();
-
-        // Read offset before taking mutable borrow
         let offset = ctx.offset;
 
-        // Apply transform using Canvas API
-        ctx.canvas().save();
-
-        // Move to offset first
-        ctx.canvas().translate(offset.dx, offset.dy);
-
-        // Apply alignment if needed
+        // Apply transform using Canvas chaining API
         if self.alignment != Offset::ZERO {
-            ctx.canvas().translate(self.alignment.dx, self.alignment.dy);
-        }
-
-        // Use the new Canvas::transform() method
-        ctx.canvas().transform(&self.transform);
-
-        // Reverse alignment
-        if self.alignment != Offset::ZERO {
+            // With alignment: translate to offset, apply alignment, transform, reverse alignment
             ctx.canvas()
-                .translate(-self.alignment.dx, -self.alignment.dy);
+                .saved()
+                .translated(offset.dx + self.alignment.dx, offset.dy + self.alignment.dy)
+                .transformed(&self.transform)
+                .translated(-self.alignment.dx, -self.alignment.dy);
+        } else {
+            // Without alignment: simple translate + transform
+            ctx.canvas()
+                .saved()
+                .translated(offset.dx, offset.dy)
+                .transformed(&self.transform);
         }
 
         // Paint child at origin (transform already applied)
         ctx.paint_child(child_id, Offset::ZERO);
-
-        ctx.canvas().restore();
+        ctx.canvas().restored();
     }
 
     fn hit_test<T>(

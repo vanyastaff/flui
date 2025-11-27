@@ -1,4 +1,7 @@
 //! RenderConstrainedBox - applies additional constraints to a child
+//!
+//! Flutter equivalent: `RenderConstrainedBox`
+//! Source: https://api.flutter.dev/flutter/rendering/RenderConstrainedBox-class.html
 
 use crate::core::{BoxProtocol, LayoutContext, PaintContext};
 use crate::core::{Optional, RenderBox};

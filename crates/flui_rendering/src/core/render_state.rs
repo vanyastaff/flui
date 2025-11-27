@@ -29,11 +29,23 @@
 //! }
 //! ```
 
-use flui_types::Offset;
+use flui_types::{layout::TextBaseline, Offset};
 use parking_lot::RwLock;
 
 use super::geometry::{Constraints, Geometry};
 use super::render_flags::{AtomicRenderFlags, RenderFlags};
+
+/// Cached baseline values for text alignment.
+///
+/// Stores the distance from the top of the element to each type of baseline.
+/// Only set for elements that have baselines (text, inline elements, etc.).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Baselines {
+    /// Distance from top to alphabetic baseline (None if no baseline)
+    pub alphabetic: Option<f32>,
+    /// Distance from top to ideographic baseline (None if no baseline)
+    pub ideographic: Option<f32>,
+}
 
 /// State for a Render object using type-erased geometry and constraints.
 ///
@@ -82,6 +94,12 @@ pub struct RenderState {
     ///
     /// Set during parent's layout phase.
     pub offset: RwLock<Offset>,
+
+    /// Cached baseline values for text alignment.
+    ///
+    /// Set during layout for elements that have baselines (text, etc.).
+    /// Used by RenderBaseline and other baseline-aware layouts.
+    pub baselines: RwLock<Baselines>,
 }
 
 impl RenderState {
@@ -94,6 +112,7 @@ impl RenderState {
             geometry: RwLock::new(None),
             constraints: RwLock::new(None),
             offset: RwLock::new(Offset::ZERO),
+            baselines: RwLock::new(Baselines::default()),
         }
     }
 
@@ -104,6 +123,7 @@ impl RenderState {
             geometry: RwLock::new(None),
             constraints: RwLock::new(None),
             offset: RwLock::new(Offset::ZERO),
+            baselines: RwLock::new(Baselines::default()),
         }
     }
 
@@ -252,6 +272,48 @@ impl RenderState {
         *self.offset.write() = offset;
     }
 
+    // ========== Baselines ==========
+
+    /// Get baseline for the specified type.
+    ///
+    /// Returns `None` if the element doesn't have that baseline type.
+    #[inline]
+    pub fn baseline(&self, baseline_type: TextBaseline) -> Option<f32> {
+        let baselines = self.baselines.read();
+        match baseline_type {
+            TextBaseline::Alphabetic => baselines.alphabetic,
+            TextBaseline::Ideographic => baselines.ideographic,
+        }
+    }
+
+    /// Get all cached baselines.
+    #[inline]
+    pub fn baselines(&self) -> Baselines {
+        *self.baselines.read()
+    }
+
+    /// Set the alphabetic baseline.
+    pub fn set_alphabetic_baseline(&self, baseline: f32) {
+        self.baselines.write().alphabetic = Some(baseline);
+    }
+
+    /// Set the ideographic baseline.
+    pub fn set_ideographic_baseline(&self, baseline: f32) {
+        self.baselines.write().ideographic = Some(baseline);
+    }
+
+    /// Set both baselines at once.
+    pub fn set_baselines(&self, alphabetic: Option<f32>, ideographic: Option<f32>) {
+        let mut baselines = self.baselines.write();
+        baselines.alphabetic = alphabetic;
+        baselines.ideographic = ideographic;
+    }
+
+    /// Clear all baselines.
+    pub fn clear_baselines(&self) {
+        *self.baselines.write() = Baselines::default();
+    }
+
     // ========== Lifecycle ==========
 
     /// Reset all state (for reuse)
@@ -260,6 +322,7 @@ impl RenderState {
         *self.geometry.write() = None;
         *self.constraints.write() = None;
         *self.offset.write() = Offset::ZERO;
+        *self.baselines.write() = Baselines::default();
     }
 }
 
@@ -296,6 +359,7 @@ impl Clone for RenderState {
             geometry: RwLock::new(self.geometry.read().clone()),
             constraints: RwLock::new(self.constraints.read().clone()),
             offset: RwLock::new(*self.offset.read()),
+            baselines: RwLock::new(*self.baselines.read()),
         }
     }
 }

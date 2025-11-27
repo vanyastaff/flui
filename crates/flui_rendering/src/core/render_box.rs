@@ -55,7 +55,7 @@ use super::protocol::BoxProtocol;
 ///     where
 ///         T: PaintTree,
 ///     {
-///         ctx.canvas().draw_rect(Rect::from_size(self.size), self.color);
+///         ctx.canvas().rect(Rect::from_size(self.size), &self.paint);
 ///     }
 /// }
 /// ```

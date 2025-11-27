@@ -7,7 +7,7 @@
 /// # Examples
 ///
 /// ```
-/// use flui_types::TextBaseline;
+/// use flui_types::layout::TextBaseline;
 ///
 /// let alphabetic = TextBaseline::Alphabetic;
 /// let ideographic = TextBaseline::Ideographic;

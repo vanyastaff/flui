@@ -5,7 +5,9 @@
 //! A scale gesture requires:
 //! - Two or more pointers down
 //! - Distance between pointers changes
-//! - Calculates scale factor and focal point (center)
+//! - Calculates scale factor, rotation angle, and focal point (center)
+//!
+//! Flutter reference: https://api.flutter.dev/flutter/gestures/ScaleGestureRecognizer-class.html
 
 use super::recognizer::{GestureRecognizer, GestureRecognizerState};
 use crate::arena::{GestureArenaMember, PointerId};
@@ -50,6 +52,8 @@ pub struct ScaleUpdateDetails {
     pub horizontal_scale: f32,
     /// Vertical scale factor
     pub vertical_scale: f32,
+    /// Rotation angle in radians (positive = clockwise)
+    pub rotation: f32,
     /// Number of pointers involved
     pub pointer_count: usize,
 }
@@ -61,6 +65,8 @@ pub struct ScaleEndDetails {
     pub focal_point: Offset,
     /// Final scale factor
     pub scale: f32,
+    /// Final rotation angle in radians
+    pub rotation: f32,
     /// Velocity of scale change (scale units per second)
     pub velocity: f32,
 }
@@ -137,8 +143,12 @@ struct ScaleState {
     initial_horizontal_span: Option<f32>,
     /// Initial vertical span
     initial_vertical_span: Option<f32>,
+    /// Initial rotation angle (radians)
+    initial_rotation: Option<f32>,
     /// Previous span (for calculating delta)
     previous_span: Option<f32>,
+    /// Current rotation angle
+    current_rotation: f32,
 }
 
 impl Default for ScaleState {
@@ -149,7 +159,9 @@ impl Default for ScaleState {
             initial_span: None,
             initial_horizontal_span: None,
             initial_vertical_span: None,
+            initial_rotation: None,
             previous_span: None,
+            current_rotation: 0.0,
         }
     }
 }
@@ -212,12 +224,14 @@ impl ScaleGestureRecognizer {
             // We have two pointers now - can start tracking
             state.phase = ScalePhase::Possible;
 
-            // Calculate initial spans
+            // Calculate initial spans and rotation
             let spans = self.calculate_spans(&state.pointers);
             state.initial_span = Some(spans.0);
             state.initial_horizontal_span = Some(spans.1);
             state.initial_vertical_span = Some(spans.2);
+            state.initial_rotation = Some(self.calculate_rotation(&state.pointers));
             state.previous_span = Some(spans.0);
+            state.current_rotation = 0.0;
         } else if state.pointers.len() > 2 {
             // Additional pointers - recalculate initial span if not started
             if state.phase == ScalePhase::Possible {
@@ -225,7 +239,9 @@ impl ScaleGestureRecognizer {
                 state.initial_span = Some(spans.0);
                 state.initial_horizontal_span = Some(spans.1);
                 state.initial_vertical_span = Some(spans.2);
+                state.initial_rotation = Some(self.calculate_rotation(&state.pointers));
                 state.previous_span = Some(spans.0);
+                state.current_rotation = 0.0;
             }
         }
     }
@@ -278,17 +294,28 @@ impl ScaleGestureRecognizer {
                 }
             }
             ScalePhase::Started => {
-                // Update scale
-                if let (Some(initial_span), Some(initial_h_span), Some(initial_v_span)) = (
+                // Update scale and rotation
+                if let (
+                    Some(initial_span),
+                    Some(initial_h_span),
+                    Some(initial_v_span),
+                    Some(initial_rotation),
+                ) = (
                     state.initial_span,
                     state.initial_horizontal_span,
                     state.initial_vertical_span,
+                    state.initial_rotation,
                 ) {
                     let scale = current_span / initial_span;
                     let h_scale = current_h_span / initial_h_span;
                     let v_scale = current_v_span / initial_v_span;
 
+                    // Calculate rotation delta from initial angle
+                    let current_rotation_raw = self.calculate_rotation(&state.pointers);
+                    let rotation = current_rotation_raw - initial_rotation;
+
                     state.previous_span = Some(current_span);
+                    state.current_rotation = rotation;
 
                     let focal_point = self.calculate_focal_point(&state.pointers);
                     let pointer_count = state.pointers.len();
@@ -302,6 +329,7 @@ impl ScaleGestureRecognizer {
                             scale,
                             horizontal_scale: h_scale,
                             vertical_scale: v_scale,
+                            rotation,
                             pointer_count,
                         };
                         callback(details);
@@ -336,11 +364,15 @@ impl ScaleGestureRecognizer {
                     1.0
                 };
 
+                let rotation = state.current_rotation;
+
                 state.phase = ScalePhase::Ready;
                 state.initial_span = None;
                 state.initial_horizontal_span = None;
                 state.initial_vertical_span = None;
+                state.initial_rotation = None;
                 state.previous_span = None;
+                state.current_rotation = 0.0;
                 drop(state); // Release lock before callback
 
                 // Call on_end callback
@@ -348,6 +380,7 @@ impl ScaleGestureRecognizer {
                     let details = ScaleEndDetails {
                         focal_point,
                         scale,
+                        rotation,
                         velocity: 0.0, // TODO: Calculate velocity
                     };
                     callback(details);
@@ -360,7 +393,9 @@ impl ScaleGestureRecognizer {
                 state.initial_span = None;
                 state.initial_horizontal_span = None;
                 state.initial_vertical_span = None;
+                state.initial_rotation = None;
                 state.previous_span = None;
+                state.current_rotation = 0.0;
             }
         } else if state.pointers.len() >= 2 && state.phase == ScalePhase::Possible {
             // Still have 2+ pointers, recalculate initial span
@@ -368,6 +403,7 @@ impl ScaleGestureRecognizer {
             state.initial_span = Some(spans.0);
             state.initial_horizontal_span = Some(spans.1);
             state.initial_vertical_span = Some(spans.2);
+            state.initial_rotation = Some(self.calculate_rotation(&state.pointers));
             state.previous_span = Some(spans.0);
         }
     }
@@ -382,7 +418,9 @@ impl ScaleGestureRecognizer {
             state.initial_span = None;
             state.initial_horizontal_span = None;
             state.initial_vertical_span = None;
+            state.initial_rotation = None;
             state.previous_span = None;
+            state.current_rotation = 0.0;
             drop(state);
 
             // Call on_cancel callback
@@ -446,6 +484,44 @@ impl ScaleGestureRecognizer {
 
         let count = pointers.len() as f32;
         Offset::new(sum_x / count, sum_y / count)
+    }
+
+    /// Calculate rotation angle between pointers (in radians)
+    ///
+    /// For 2 pointers, returns the angle of the line between them.
+    /// For more pointers, returns the average angle from the focal point to each pointer.
+    fn calculate_rotation(&self, pointers: &HashMap<PointerId, Offset>) -> f32 {
+        if pointers.len() < 2 {
+            return 0.0;
+        }
+
+        let positions: Vec<&Offset> = pointers.values().collect();
+
+        if positions.len() == 2 {
+            // For exactly 2 pointers, calculate angle of line between them
+            let delta = *positions[1] - *positions[0];
+            delta.dy.atan2(delta.dx)
+        } else {
+            // For more pointers, calculate average angle from focal point
+            let focal = self.calculate_focal_point(pointers);
+            let mut total_angle = 0.0;
+            let mut count = 0;
+
+            for pos in positions {
+                let delta = *pos - focal;
+                if delta.distance() > 0.001 {
+                    // Avoid division by zero
+                    total_angle += delta.dy.atan2(delta.dx);
+                    count += 1;
+                }
+            }
+
+            if count > 0 {
+                total_angle / count as f32
+            } else {
+                0.0
+            }
+        }
     }
 }
 

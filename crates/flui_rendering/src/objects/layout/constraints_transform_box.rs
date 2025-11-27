@@ -7,6 +7,8 @@
 //! - Applying custom constraint logic based on parent constraints
 //!
 //! The parent tries to match the child's size but respects its own constraints.
+//!
+//! Flutter reference: <https://api.flutter.dev/flutter/rendering/RenderConstraintsTransformBox-class.html>
 
 use crate::core::{BoxProtocol, LayoutContext, PaintContext, RenderBox, Single};
 use flui_types::{Alignment, BoxConstraints, Offset, Size};

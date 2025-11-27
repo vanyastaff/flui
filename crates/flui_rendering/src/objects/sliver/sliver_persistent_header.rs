@@ -1,7 +1,6 @@
 //! RenderSliverPersistentHeader - Sticky header that stays visible during scroll
 
-use crate::core::{RuntimeArity, LegacySliverRender, SliverLayoutContext, SliverPaintContext};
-use flui_painting::Canvas;
+use crate::core::{LayoutContext, LayoutTree, PaintContext, PaintTree, Single, SliverProtocol, SliverRender};
 use flui_types::{SliverConstraints, SliverGeometry};
 
 /// RenderObject for a persistent header that sticks during scrolling
@@ -38,9 +37,6 @@ pub struct RenderSliverPersistentHeader {
     pub pinned: bool,
     /// Whether header floats (reappears on scroll up)
     pub floating: bool,
-
-    // Layout cache
-    sliver_geometry: SliverGeometry,
 }
 
 impl RenderSliverPersistentHeader {
@@ -54,7 +50,6 @@ impl RenderSliverPersistentHeader {
             extent,
             pinned,
             floating: false,
-            sliver_geometry: SliverGeometry::default(),
         }
     }
 
@@ -72,11 +67,6 @@ impl RenderSliverPersistentHeader {
     pub fn with_floating(mut self) -> Self {
         self.floating = true;
         self
-    }
-
-    /// Get the sliver geometry from last layout
-    pub fn geometry(&self) -> SliverGeometry {
-        self.sliver_geometry
     }
 
     /// Calculate sliver geometry
@@ -118,7 +108,7 @@ impl RenderSliverPersistentHeader {
             paint_origin: 0.0,
             layout_extent,
             max_paint_extent: self.extent,
-            max_scroll_obsolescence: 0.0,
+            max_scroll_obstruction_extent: 0.0,
             visible_fraction: if self.extent > 0.0 {
                 (paint_extent / self.extent).min(1.0)
             } else {
@@ -134,30 +124,26 @@ impl RenderSliverPersistentHeader {
     }
 }
 
-impl LegacySliverRender for RenderSliverPersistentHeader {
-    fn layout(&mut self, ctx: &SliverLayoutContext) -> SliverGeometry {
-        // Calculate and cache sliver geometry
-        self.sliver_geometry = self.calculate_sliver_geometry(&ctx.constraints);
-        self.sliver_geometry
+impl SliverRender<Single> for RenderSliverPersistentHeader {
+    fn layout<T>(
+        &mut self,
+        ctx: LayoutContext<'_, T, Single, SliverProtocol>,
+    ) -> SliverGeometry
+    where
+        T: LayoutTree,
+    {
+        let constraints = ctx.constraints;
+        // Calculate sliver geometry
+        self.calculate_sliver_geometry(&constraints)
     }
 
-    fn paint(&self, ctx: &SliverPaintContext) -> Canvas {
-        // Paint child if present and visible
-        if let Some(child_id) = ctx.children.try_single() {
-            if self.sliver_geometry.visible {
-                return ctx.tree.paint_child(child_id, ctx.offset);
-            }
-        }
-
-        Canvas::new()
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> RuntimeArity {
-        RuntimeArity::Exact(1) // Single child (header content)
+    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Single>)
+    where
+        T: PaintTree,
+    {
+        // Paint child if present
+        let child_id = ctx.children.single();
+        ctx.paint_child(child_id, ctx.offset);
     }
 }
 
@@ -165,6 +151,7 @@ impl LegacySliverRender for RenderSliverPersistentHeader {
 mod tests {
     use super::*;
     use flui_types::layout::AxisDirection;
+    use flui_types::constraints::{GrowthDirection, ScrollDirection};
 
     #[test]
     fn test_render_sliver_persistent_header_new_pinned() {
@@ -214,7 +201,7 @@ mod tests {
 
         let constraints = SliverConstraints {
             axis_direction: AxisDirection::TopToBottom,
-            grow_direction_reversed: false,
+            growth_direction: GrowthDirection::Forward,
             scroll_offset: 0.0,
             remaining_paint_extent: 600.0,
             cross_axis_extent: 400.0,
@@ -222,6 +209,7 @@ mod tests {
             viewport_main_axis_extent: 600.0,
             remaining_cache_extent: 1000.0,
             cache_origin: 0.0,
+        ..SliverConstraints::default()
         };
 
         let geometry = header.calculate_sliver_geometry(&constraints);
@@ -238,7 +226,7 @@ mod tests {
 
         let constraints = SliverConstraints {
             axis_direction: AxisDirection::TopToBottom,
-            grow_direction_reversed: false,
+            growth_direction: GrowthDirection::Forward,
             scroll_offset: 25.0, // Scrolled halfway
             remaining_paint_extent: 600.0,
             cross_axis_extent: 400.0,
@@ -246,6 +234,7 @@ mod tests {
             viewport_main_axis_extent: 600.0,
             remaining_cache_extent: 1000.0,
             cache_origin: 0.0,
+        ..SliverConstraints::default()
         };
 
         let geometry = header.calculate_sliver_geometry(&constraints);
@@ -262,7 +251,7 @@ mod tests {
 
         let constraints = SliverConstraints {
             axis_direction: AxisDirection::TopToBottom,
-            grow_direction_reversed: false,
+            growth_direction: GrowthDirection::Forward,
             scroll_offset: 60.0, // Scrolled past
             remaining_paint_extent: 600.0,
             cross_axis_extent: 400.0,
@@ -270,6 +259,7 @@ mod tests {
             viewport_main_axis_extent: 600.0,
             remaining_cache_extent: 1000.0,
             cache_origin: 0.0,
+        ..SliverConstraints::default()
         };
 
         let geometry = header.calculate_sliver_geometry(&constraints);
@@ -286,7 +276,7 @@ mod tests {
 
         let constraints = SliverConstraints {
             axis_direction: AxisDirection::TopToBottom,
-            grow_direction_reversed: false,
+            growth_direction: GrowthDirection::Forward,
             scroll_offset: 60.0, // Scrolled past
             remaining_paint_extent: 600.0,
             cross_axis_extent: 400.0,
@@ -294,6 +284,7 @@ mod tests {
             viewport_main_axis_extent: 600.0,
             remaining_cache_extent: 1000.0,
             cache_origin: 0.0,
+        ..SliverConstraints::default()
         };
 
         let geometry = header.calculate_sliver_geometry(&constraints);
@@ -310,7 +301,7 @@ mod tests {
 
         let constraints = SliverConstraints {
             axis_direction: AxisDirection::TopToBottom,
-            grow_direction_reversed: false,
+            growth_direction: GrowthDirection::Forward,
             scroll_offset: 25.0, // Before fully scrolled
             remaining_paint_extent: 600.0,
             cross_axis_extent: 400.0,
@@ -318,6 +309,7 @@ mod tests {
             viewport_main_axis_extent: 600.0,
             remaining_cache_extent: 1000.0,
             cache_origin: 0.0,
+        ..SliverConstraints::default()
         };
 
         let geometry = header.calculate_sliver_geometry(&constraints);
@@ -326,11 +318,5 @@ mod tests {
         assert_eq!(geometry.scroll_extent, 50.0);
         assert_eq!(geometry.paint_extent, 25.0); // 50 - 25
         assert!(geometry.visible);
-    }
-
-    #[test]
-    fn test_arity_is_single_child() {
-        let header = RenderSliverPersistentHeader::new(50.0, true);
-        assert_eq!(header.arity(), RuntimeArity::Exact(1));
     }
 }

@@ -1,8 +1,9 @@
 //! RenderSliverGrid - Scrollable grid with lazy loading
 
-
-use crate::core::{RuntimeArity, SliverLayoutContext, SliverPaintContext, LegacySliverRender};
-use flui_painting::Canvas;
+use crate::core::{
+    ChildrenAccess, LayoutContext, LayoutTree, PaintContext, PaintTree, SliverProtocol,
+    SliverRender, Variable,
+};
 use flui_types::{SliverConstraints, SliverGeometry};
 
 /// Grid delegate for calculating grid layout
@@ -112,9 +113,6 @@ pub struct RenderSliverGrid {
     pub delegate: Box<dyn SliverGridDelegate>,
     /// Cross axis extent (width for vertical scroll)
     pub cross_axis_extent: f32,
-
-    // Layout cache
-    sliver_geometry: SliverGeometry,
 }
 
 impl std::fmt::Debug for RenderSliverGrid {
@@ -122,7 +120,6 @@ impl std::fmt::Debug for RenderSliverGrid {
         f.debug_struct("RenderSliverGrid")
             .field("delegate", &self.delegate)
             .field("cross_axis_extent", &self.cross_axis_extent)
-            .field("sliver_geometry", &self.sliver_geometry)
             .finish()
     }
 }
@@ -133,7 +130,6 @@ impl RenderSliverGrid {
         Self {
             delegate,
             cross_axis_extent: 0.0,
-            sliver_geometry: SliverGeometry::default(),
         }
     }
 
@@ -142,20 +138,14 @@ impl RenderSliverGrid {
         self.cross_axis_extent = extent;
     }
 
-    /// Get the sliver geometry from last layout
-    pub fn geometry(&self) -> SliverGeometry {
-        self.sliver_geometry
-    }
-
     /// Calculate sliver geometry for grid layout
     fn calculate_sliver_geometry(
         &self,
         constraints: &SliverConstraints,
-        _tree: &ElementTree,
-        children: &[flui_core::element::ElementId],
+        child_count: usize,
     ) -> SliverGeometry {
         // If no children, return zero geometry
-        if children.is_empty() {
+        if child_count == 0 {
             return SliverGeometry::default();
         }
 
@@ -172,8 +162,7 @@ impl RenderSliverGrid {
         let (main_spacing, _cross_spacing) = self.delegate.get_spacing();
 
         // Calculate total rows
-        let child_count = children.len();
-        let row_count = (child_count + column_count - 1) / column_count; // Ceiling division
+        let row_count = child_count.div_ceil(column_count);
 
         // Calculate total extent
         // For simplicity, assume all rows have same height (delegate returns same value)
@@ -197,7 +186,7 @@ impl RenderSliverGrid {
             paint_origin: 0.0,
             layout_extent: paint_extent,
             max_paint_extent: total_extent,
-            max_scroll_obsolescence: 0.0,
+            max_scroll_obstruction_extent: 0.0,
             visible_fraction: if total_extent > 0.0 {
                 (paint_extent / total_extent).min(1.0)
             } else {
@@ -213,43 +202,63 @@ impl RenderSliverGrid {
     }
 }
 
-impl LegacySliverRender for RenderSliverGrid {
-    fn layout(&mut self, ctx: &SliverLayoutContext) -> SliverGeometry {
-        let constraints = &ctx.constraints;
+impl SliverRender<Variable> for RenderSliverGrid {
+    fn layout<T>(&mut self, ctx: LayoutContext<'_, T, Variable, SliverProtocol>) -> SliverGeometry
+    where
+        T: LayoutTree,
+    {
+        let constraints = ctx.constraints;
 
         // Store cross axis extent
         self.cross_axis_extent = constraints.cross_axis_extent;
 
-        // Calculate and cache sliver geometry
-        let children_slice = ctx.children.as_slice();
-        self.sliver_geometry = self.calculate_sliver_geometry(constraints, ctx.tree, children_slice);
-        self.sliver_geometry
+        // Calculate sliver geometry using child count
+        let child_count = ctx.children.len();
+        self.calculate_sliver_geometry(&constraints, child_count)
     }
 
-    fn paint(&self, _ctx: &SliverPaintContext) -> Canvas {
-        let canvas = Canvas::new();
+    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Variable>)
+    where
+        T: PaintTree,
+    {
+        use flui_types::geometry::Offset;
 
-        // Grid painting happens in viewport
-        // Children are painted in grid positions based on scroll offset
+        // Paint children in grid positions
+        let children = ctx.children.iter().collect::<Vec<_>>();
+        let cross_axis_extent = self.cross_axis_extent;
 
-        // TODO: Implement actual child painting with grid layout
-        // This would calculate grid positions and paint visible children
+        // Get grid parameters from delegate
+        let column_count = self.delegate.get_column_count(cross_axis_extent);
+        if column_count == 0 {
+            return;
+        }
 
-        canvas
-    }
+        let (main_spacing, cross_spacing) = self.delegate.get_spacing();
+        let row_height = self.delegate.get_main_axis_extent(0, cross_axis_extent);
 
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
+        // Calculate cell width (cross axis extent / columns - spacing)
+        let total_cross_spacing = cross_spacing * (column_count - 1).max(0) as f32;
+        let cell_width = (cross_axis_extent - total_cross_spacing) / column_count as f32;
 
-    fn arity(&self) -> RuntimeArity {
-        RuntimeArity::Variable // Multiple children
+        for (index, &child_id) in children.iter().enumerate() {
+            // Calculate grid position
+            let row = index / column_count;
+            let col = index % column_count;
+
+            // Calculate child offset
+            let x = col as f32 * (cell_width + cross_spacing);
+            let y = row as f32 * (row_height + main_spacing);
+            let child_offset = Offset::new(x, y);
+
+            ctx.paint_child(child_id, ctx.offset + child_offset);
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_types::constraints::{GrowthDirection, ScrollDirection};
 
     #[test]
     fn test_sliver_grid_delegate_fixed_new() {
@@ -328,22 +337,24 @@ mod tests {
     fn test_render_sliver_grid_geometry_empty() {
         let delegate = Box::new(SliverGridDelegateFixedCrossAxisCount::new(3, 100.0));
         let grid = RenderSliverGrid::new(delegate);
-        let tree = ElementTree::new();
-        let children = vec![];
 
         let constraints = SliverConstraints {
             axis_direction: flui_types::layout::AxisDirection::TopToBottom,
-            grow_direction_reversed: false,
+            growth_direction: GrowthDirection::Forward,
+            user_scroll_direction: ScrollDirection::Idle,
             scroll_offset: 0.0,
+            preceding_scroll_extent: 0.0,
+            overlap: 0.0,
             remaining_paint_extent: 600.0,
             cross_axis_extent: 400.0,
             cross_axis_direction: flui_types::layout::AxisDirection::LeftToRight,
             viewport_main_axis_extent: 600.0,
             remaining_cache_extent: 1000.0,
             cache_origin: 0.0,
+            ..SliverConstraints::default()
         };
 
-        let geometry = grid.calculate_sliver_geometry(&constraints, &tree, &children);
+        let geometry = grid.calculate_sliver_geometry(&constraints, 0);
 
         assert_eq!(geometry.scroll_extent, 0.0);
         assert_eq!(geometry.paint_extent, 0.0);
@@ -354,28 +365,25 @@ mod tests {
     fn test_render_sliver_grid_geometry_single_row() {
         let delegate = Box::new(SliverGridDelegateFixedCrossAxisCount::new(3, 100.0));
         let grid = RenderSliverGrid::new(delegate);
-        let tree = ElementTree::new();
-
-        // 3 children = 1 row
-        let children = vec![
-            flui_core::element::ElementId::new(1),
-            flui_core::element::ElementId::new(2),
-            flui_core::element::ElementId::new(3),
-        ];
 
         let constraints = SliverConstraints {
             axis_direction: flui_types::layout::AxisDirection::TopToBottom,
-            grow_direction_reversed: false,
+            growth_direction: GrowthDirection::Forward,
+            user_scroll_direction: ScrollDirection::Idle,
             scroll_offset: 0.0,
+            preceding_scroll_extent: 0.0,
+            overlap: 0.0,
             remaining_paint_extent: 600.0,
             cross_axis_extent: 400.0,
             cross_axis_direction: flui_types::layout::AxisDirection::LeftToRight,
             viewport_main_axis_extent: 600.0,
             remaining_cache_extent: 1000.0,
             cache_origin: 0.0,
+            ..SliverConstraints::default()
         };
 
-        let geometry = grid.calculate_sliver_geometry(&constraints, &tree, &children);
+        // 3 children = 1 row
+        let geometry = grid.calculate_sliver_geometry(&constraints, 3);
 
         // 1 row * 100px = 100px
         assert_eq!(geometry.scroll_extent, 100.0);
@@ -388,34 +396,25 @@ mod tests {
     fn test_render_sliver_grid_geometry_multiple_rows() {
         let delegate = Box::new(SliverGridDelegateFixedCrossAxisCount::new(3, 100.0));
         let grid = RenderSliverGrid::new(delegate);
-        let tree = ElementTree::new();
-
-        // 9 children = 3 rows
-        let children = vec![
-            flui_core::element::ElementId::new(1),
-            flui_core::element::ElementId::new(2),
-            flui_core::element::ElementId::new(3),
-            flui_core::element::ElementId::new(4),
-            flui_core::element::ElementId::new(5),
-            flui_core::element::ElementId::new(6),
-            flui_core::element::ElementId::new(7),
-            flui_core::element::ElementId::new(8),
-            flui_core::element::ElementId::new(9),
-        ];
 
         let constraints = SliverConstraints {
             axis_direction: flui_types::layout::AxisDirection::TopToBottom,
-            grow_direction_reversed: false,
+            growth_direction: GrowthDirection::Forward,
+            user_scroll_direction: ScrollDirection::Idle,
             scroll_offset: 0.0,
+            preceding_scroll_extent: 0.0,
+            overlap: 0.0,
             remaining_paint_extent: 600.0,
             cross_axis_extent: 400.0,
             cross_axis_direction: flui_types::layout::AxisDirection::LeftToRight,
             viewport_main_axis_extent: 600.0,
             remaining_cache_extent: 1000.0,
             cache_origin: 0.0,
+            ..SliverConstraints::default()
         };
 
-        let geometry = grid.calculate_sliver_geometry(&constraints, &tree, &children);
+        // 9 children = 3 rows
+        let geometry = grid.calculate_sliver_geometry(&constraints, 9);
 
         // 3 rows * 100px = 300px
         assert_eq!(geometry.scroll_extent, 300.0);
@@ -429,29 +428,25 @@ mod tests {
             SliverGridDelegateFixedCrossAxisCount::new(2, 100.0).with_main_axis_spacing(10.0),
         );
         let grid = RenderSliverGrid::new(delegate);
-        let tree = ElementTree::new();
-
-        // 4 children = 2 rows
-        let children = vec![
-            flui_core::element::ElementId::new(1),
-            flui_core::element::ElementId::new(2),
-            flui_core::element::ElementId::new(3),
-            flui_core::element::ElementId::new(4),
-        ];
 
         let constraints = SliverConstraints {
             axis_direction: flui_types::layout::AxisDirection::TopToBottom,
-            grow_direction_reversed: false,
+            growth_direction: GrowthDirection::Forward,
+            user_scroll_direction: ScrollDirection::Idle,
             scroll_offset: 0.0,
+            preceding_scroll_extent: 0.0,
+            overlap: 0.0,
             remaining_paint_extent: 600.0,
             cross_axis_extent: 400.0,
             cross_axis_direction: flui_types::layout::AxisDirection::LeftToRight,
             viewport_main_axis_extent: 600.0,
             remaining_cache_extent: 1000.0,
             cache_origin: 0.0,
+            ..SliverConstraints::default()
         };
 
-        let geometry = grid.calculate_sliver_geometry(&constraints, &tree, &children);
+        // 4 children = 2 rows
+        let geometry = grid.calculate_sliver_geometry(&constraints, 4);
 
         // 2 rows * 100px + 1 spacing * 10px = 210px
         assert_eq!(geometry.scroll_extent, 210.0);
@@ -462,25 +457,10 @@ mod tests {
     fn test_render_sliver_grid_geometry_scrolled() {
         let delegate = Box::new(SliverGridDelegateFixedCrossAxisCount::new(2, 100.0));
         let grid = RenderSliverGrid::new(delegate);
-        let tree = ElementTree::new();
-
-        // 10 children = 5 rows
-        let children = vec![
-            flui_core::element::ElementId::new(1),
-            flui_core::element::ElementId::new(2),
-            flui_core::element::ElementId::new(3),
-            flui_core::element::ElementId::new(4),
-            flui_core::element::ElementId::new(5),
-            flui_core::element::ElementId::new(6),
-            flui_core::element::ElementId::new(7),
-            flui_core::element::ElementId::new(8),
-            flui_core::element::ElementId::new(9),
-            flui_core::element::ElementId::new(10),
-        ];
 
         let constraints = SliverConstraints {
             axis_direction: flui_types::layout::AxisDirection::TopToBottom,
-            grow_direction_reversed: false,
+            growth_direction: GrowthDirection::Forward,
             scroll_offset: 150.0, // Scrolled past 1.5 rows
             remaining_paint_extent: 300.0,
             cross_axis_extent: 400.0,
@@ -488,9 +468,11 @@ mod tests {
             viewport_main_axis_extent: 600.0,
             remaining_cache_extent: 1000.0,
             cache_origin: 0.0,
+            ..SliverConstraints::default()
         };
 
-        let geometry = grid.calculate_sliver_geometry(&constraints, &tree, &children);
+        // 10 children = 5 rows
+        let geometry = grid.calculate_sliver_geometry(&constraints, 10);
 
         // 5 rows * 100px = 500px total
         assert_eq!(geometry.scroll_extent, 500.0);
@@ -498,13 +480,5 @@ mod tests {
         assert_eq!(geometry.paint_extent, 300.0);
         assert!(geometry.visible);
         assert_eq!(geometry.visible_fraction, 0.6); // 300/500
-    }
-
-    #[test]
-    fn test_arity_is_variable() {
-        let delegate = Box::new(SliverGridDelegateFixedCrossAxisCount::new(3, 100.0));
-        let grid = RenderSliverGrid::new(delegate);
-
-        assert_eq!(grid.arity(), RuntimeArity::Variable);
     }
 }

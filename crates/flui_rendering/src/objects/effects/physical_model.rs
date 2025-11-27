@@ -3,7 +3,7 @@
 use crate::core::{BoxProtocol, LayoutContext, PaintContext};
 use crate::core::{Optional, RenderBox};
 use flui_painting::Paint;
-use flui_types::{painting::Path, Color, Point, RRect, Rect, Size};
+use flui_types::{painting::Path, Color, Point, Rect, Size};
 
 /// Shape for physical model
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -140,32 +140,17 @@ impl RenderBox<Optional> for RenderPhysicalModel {
         T: crate::core::PaintTree,
     {
         let offset = ctx.offset;
-
         let size = self.size;
+        let rect = Rect::from_xywh(offset.dx, offset.dy, size.width, size.height);
 
         // Draw shadow if elevation > 0
         // Note: For proper shadow rendering, we would need to use a more sophisticated
-        // shadow algorithm. For now, we use Canvas::draw_shadow which provides basic support.
+        // shadow algorithm. For now, we use Canvas::shadow which provides basic support.
         if self.elevation > 0.0 {
-            let shadow_path = match self.shape {
-                PhysicalShape::Rectangle => {
-                    let mut path = Path::new();
-                    let rect = Rect::from_xywh(offset.dx, offset.dy, size.width, size.height);
-                    path.add_rect(rect);
-                    path
-                }
-                PhysicalShape::RoundedRectangle | PhysicalShape::Circle => {
-                    // For rounded shapes, approximate with a simple rect for shadow
-                    // A full implementation would use Path::add_rrect() when available
-                    let mut path = Path::new();
-                    let rect = Rect::from_xywh(offset.dx, offset.dy, size.width, size.height);
-                    path.add_rect(rect);
-                    path
-                }
-            };
-
+            let mut shadow_path = Path::new();
+            shadow_path.add_rect(rect);
             ctx.canvas()
-                .draw_shadow(&shadow_path, self.shadow_color, self.elevation);
+                .shadow(&shadow_path, self.shadow_color, self.elevation);
         }
 
         // Paint background shape at the offset position
@@ -173,22 +158,16 @@ impl RenderBox<Optional> for RenderPhysicalModel {
 
         match self.shape {
             PhysicalShape::Rectangle => {
-                let rect = Rect::from_xywh(offset.dx, offset.dy, size.width, size.height);
-                ctx.canvas().draw_rect(rect, &paint);
+                ctx.canvas().rect(rect, &paint);
             }
             PhysicalShape::RoundedRectangle => {
-                let radius = flui_types::styling::Radius::circular(self.border_radius);
-                let rrect = RRect::from_rect_and_radius(
-                    Rect::from_xywh(offset.dx, offset.dy, size.width, size.height),
-                    radius,
-                );
-                ctx.canvas().draw_rrect(rrect, &paint);
+                ctx.canvas().rounded_rect(rect, self.border_radius, &paint);
             }
             PhysicalShape::Circle => {
                 let radius = size.width.min(size.height) / 2.0;
                 let center =
                     Point::new(offset.dx + size.width / 2.0, offset.dy + size.height / 2.0);
-                ctx.canvas().draw_circle(center, radius, &paint);
+                ctx.canvas().circle(center, radius, &paint);
             }
         }
 

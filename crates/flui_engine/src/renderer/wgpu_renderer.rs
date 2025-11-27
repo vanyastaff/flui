@@ -197,9 +197,114 @@ impl CommandRenderer for WgpuRenderer {
         });
     }
 
+    fn render_image_repeat(
+        &mut self,
+        image: &Image,
+        dst: Rect,
+        repeat: flui_painting::display_list::ImageRepeat,
+        _paint: Option<&Paint>,
+        transform: &Matrix4,
+    ) {
+        self.with_transform(transform, |painter| {
+            painter.draw_image_repeat(image, dst, repeat);
+        });
+    }
+
+    fn render_image_nine_slice(
+        &mut self,
+        image: &Image,
+        center_slice: Rect,
+        dst: Rect,
+        _paint: Option<&Paint>,
+        transform: &Matrix4,
+    ) {
+        self.with_transform(transform, |painter| {
+            painter.draw_image_nine_slice(image, center_slice, dst);
+        });
+    }
+
+    fn render_image_filtered(
+        &mut self,
+        image: &Image,
+        dst: Rect,
+        filter: flui_painting::display_list::ColorFilter,
+        _paint: Option<&Paint>,
+        transform: &Matrix4,
+    ) {
+        self.with_transform(transform, |painter| {
+            painter.draw_image_filtered(image, dst, filter);
+        });
+    }
+
+    fn render_texture(
+        &mut self,
+        texture_id: flui_types::painting::TextureId,
+        dst: Rect,
+        src: Option<Rect>,
+        filter_quality: flui_types::painting::FilterQuality,
+        opacity: f32,
+        transform: &Matrix4,
+    ) {
+        self.with_transform(transform, |painter| {
+            painter.draw_texture(texture_id, dst, src, filter_quality, opacity);
+        });
+    }
+
     fn render_shadow(&mut self, path: &Path, color: Color, elevation: f32, transform: &Matrix4) {
         self.with_transform(transform, |painter| {
             painter.draw_shadow(path, color, elevation);
+        });
+    }
+
+    fn render_shader_mask(
+        &mut self,
+        child: &flui_painting::DisplayList,
+        _shader: &flui_painting::Shader,
+        _bounds: Rect,
+        _blend_mode: BlendMode,
+        _transform: &Matrix4,
+    ) {
+        // TODO: Implement full shader mask rendering
+        //
+        // Current architecture limitation: WgpuRenderer wraps WgpuPainter which doesn't
+        // have access to OffscreenRenderer (lives in GpuRenderer).
+        //
+        // For full implementation, we need to either:
+        // 1. Pass OffscreenRenderer to WgpuRenderer constructor, OR
+        // 2. Move shader mask handling to GpuRenderer level (render Layer directly), OR
+        // 3. Refactor to give WgpuPainter access to GPU resources
+        //
+        // For now, just render child content without masking as fallback
+        tracing::warn!(
+            "ShaderMask rendering via DisplayList not yet fully wired - rendering child without mask"
+        );
+
+        // Render child content without masking (fallback behavior)
+        for command in child.commands() {
+            super::dispatch_command(command, self);
+        }
+    }
+
+    fn render_gradient(&mut self, rect: Rect, shader: &flui_painting::Shader, transform: &Matrix4) {
+        // Sample gradient center for fallback solid color until GPU gradient shader is implemented
+        let color = <WgpuPainter as Painter>::sample_gradient_center(shader, rect);
+        let paint = Paint::fill(color);
+        self.with_transform(transform, |painter| {
+            painter.rect(rect, &paint);
+        });
+    }
+
+    fn render_gradient_rrect(
+        &mut self,
+        rrect: RRect,
+        shader: &flui_painting::Shader,
+        transform: &Matrix4,
+    ) {
+        // Sample gradient center for fallback solid color until GPU gradient shader is implemented
+        let color = <WgpuPainter as Painter>::sample_gradient_center(shader, rrect.rect);
+        let paint = Paint::fill(color);
+        self.with_transform(transform, |painter| {
+            painter.rrect(rrect, &paint);
         });
     }
 
@@ -209,6 +314,37 @@ impl CommandRenderer for WgpuRenderer {
             let paint = Paint::fill(color);
             painter.rect(viewport_bounds, &paint);
         });
+    }
+
+    fn render_backdrop_filter(
+        &mut self,
+        child: Option<&flui_painting::DisplayList>,
+        _filter: &flui_painting::display_list::ImageFilter,
+        _bounds: Rect,
+        _blend_mode: BlendMode,
+        _transform: &Matrix4,
+    ) {
+        // TODO: Implement full backdrop filter rendering
+        //
+        // Current architecture limitation: WgpuRenderer wraps WgpuPainter which doesn't
+        // have access to OffscreenRenderer (lives in GpuRenderer).
+        //
+        // For full implementation, we need to either:
+        // 1. Capture backdrop into offscreen texture
+        // 2. Apply image filter (blur, color adjustment, etc.)
+        // 3. Composite filtered backdrop with optional child content
+        //
+        // For now, just render child content without filtering as fallback
+        tracing::warn!(
+            "BackdropFilter rendering not yet fully implemented - rendering child without filter"
+        );
+
+        // Render child content without filtering (fallback behavior)
+        if let Some(child) = child {
+            for command in child.commands() {
+                super::dispatch_command(command, self);
+            }
+        }
     }
 
     fn render_vertices(
@@ -245,5 +381,15 @@ impl CommandRenderer for WgpuRenderer {
 
     fn viewport_bounds(&self) -> Rect {
         self.painter.viewport_bounds()
+    }
+
+    fn save_layer(&mut self, bounds: Option<Rect>, paint: &Paint, transform: &Matrix4) {
+        self.with_transform(transform, |painter| {
+            painter.save_layer(bounds, paint);
+        });
+    }
+
+    fn restore_layer(&mut self, _transform: &Matrix4) {
+        self.painter.restore_layer();
     }
 }

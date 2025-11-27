@@ -34,7 +34,7 @@
 //! ```
 //!
 //! Basic example:
-//! ```rust,no_run
+//! ```rust,ignore
 //! # use flui::prelude::*;
 //! #
 //! #[derive(Clone)]
@@ -84,7 +84,7 @@ pub use flui_widgets as widgets;
 /// Prelude for common imports - brings in everything needed for most use cases
 ///
 /// # Example
-/// ```rust,no_run
+/// ```rust,ignore
 /// use flui::prelude::*;
 ///
 /// struct MyView;

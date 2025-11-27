@@ -251,8 +251,6 @@ impl RenderBox<Leaf> for RenderEditableLine {
     where
         T: crate::core::PaintTree,
     {
-        let mut paint = Paint::default();
-
         // Draw selection highlight if not collapsed
         if !self.selection.is_collapsed() {
             let selection_rect = Rect::from_xywh(
@@ -261,33 +259,31 @@ impl RenderBox<Leaf> for RenderEditableLine {
                 self.selection.length() as f32 * 8.0,
                 self.size.height,
             );
-            paint.color = self.selection_color;
-            paint.style = flui_painting::PaintStyle::Fill;
-            ctx.canvas().draw_rect(selection_rect, &paint);
+            let selection_paint = Paint::fill(self.selection_color);
+            ctx.canvas().rect(selection_rect, &selection_paint);
         }
 
         // Draw text
-        paint.color = self.style.color.unwrap_or(Color::BLACK);
+        let text_paint = Paint::fill(self.style.color.unwrap_or(Color::BLACK));
         let display_text = if self.obscure_text {
             "•".repeat(self.text.len())
         } else {
             self.text.clone()
         };
 
-        ctx.canvas().draw_text(
+        ctx.canvas().text(
             &display_text,
-            flui_types::Offset::new(0.0, 0.0),
+            flui_types::Offset::ZERO,
             &self.style,
-            &paint,
+            &text_paint,
         );
 
-        // Draw cursor if showing
+        // Draw cursor if showing using conditional drawing
         if self.show_cursor {
             let cursor_x = self.selection.base as f32 * 8.0; // Approximate
             let cursor_rect = Rect::from_xywh(cursor_x, 0.0, self.cursor_width, self.size.height);
-            paint.color = self.cursor_color;
-            paint.style = flui_painting::PaintStyle::Fill;
-            ctx.canvas().draw_rect(cursor_rect, &paint);
+            let cursor_paint = Paint::fill(self.cursor_color);
+            ctx.canvas().rect(cursor_rect, &cursor_paint);
         }
     }
 }

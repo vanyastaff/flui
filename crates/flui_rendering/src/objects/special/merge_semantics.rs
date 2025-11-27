@@ -1,4 +1,6 @@
 //! RenderMergeSemantics - merges descendant semantics into one node
+//!
+//! Flutter reference: <https://api.flutter.dev/flutter/widgets/MergeSemantics-class.html>
 
 use crate::core::{
     RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},

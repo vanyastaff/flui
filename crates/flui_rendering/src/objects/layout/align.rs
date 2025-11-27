@@ -1,4 +1,6 @@
 //! RenderAlign - aligns child within available space
+//!
+//! Flutter reference: <https://api.flutter.dev/flutter/rendering/RenderPositionedBox-class.html>
 
 use crate::core::{BoxProtocol, LayoutContext, Optional, PaintContext, RenderBox};
 use flui_types::{Alignment, Offset, Size};

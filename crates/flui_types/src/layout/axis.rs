@@ -209,7 +209,7 @@ impl AxisDirection {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::{Axis, AxisDirection};
+    /// use flui_types::{Axis, layout::AxisDirection};
     ///
     /// assert_eq!(AxisDirection::LeftToRight.axis(), Axis::Horizontal);
     /// assert_eq!(AxisDirection::TopToBottom.axis(), Axis::Vertical);
@@ -226,7 +226,7 @@ impl AxisDirection {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::AxisDirection;
+    /// use flui_types::layout::AxisDirection;
     ///
     /// assert_eq!(AxisDirection::LeftToRight.opposite(), AxisDirection::RightToLeft);
     /// assert_eq!(AxisDirection::TopToBottom.opposite(), AxisDirection::BottomToTop);
@@ -245,7 +245,7 @@ impl AxisDirection {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::AxisDirection;
+    /// use flui_types::layout::AxisDirection;
     ///
     /// assert!(AxisDirection::LeftToRight.is_positive());
     /// assert!(!AxisDirection::RightToLeft.is_positive());
@@ -262,7 +262,7 @@ impl AxisDirection {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::AxisDirection;
+    /// use flui_types::layout::AxisDirection;
     ///
     /// assert!(AxisDirection::RightToLeft.is_negative());
     /// assert!(!AxisDirection::LeftToRight.is_negative());
@@ -276,7 +276,7 @@ impl AxisDirection {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::AxisDirection;
+    /// use flui_types::layout::AxisDirection;
     ///
     /// assert!(AxisDirection::RightToLeft.is_reversed());
     /// assert!(!AxisDirection::LeftToRight.is_reversed());
@@ -293,7 +293,7 @@ impl AxisDirection {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::AxisDirection;
+    /// use flui_types::layout::AxisDirection;
     ///
     /// assert_eq!(AxisDirection::LeftToRight.sign(), 1.0);
     /// assert_eq!(AxisDirection::RightToLeft.sign(), -1.0);
@@ -313,7 +313,7 @@ impl AxisDirection {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::{Axis, AxisDirection};
+    /// use flui_types::{Axis, layout::AxisDirection};
     ///
     /// assert_eq!(AxisDirection::from_axis(Axis::Horizontal, false), AxisDirection::LeftToRight);
     /// assert_eq!(AxisDirection::from_axis(Axis::Horizontal, true), AxisDirection::RightToLeft);
@@ -334,7 +334,7 @@ impl AxisDirection {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::AxisDirection;
+    /// use flui_types::layout::AxisDirection;
     ///
     /// assert_eq!(AxisDirection::TopToBottom.flip(), AxisDirection::LeftToRight);
     /// assert_eq!(AxisDirection::BottomToTop.flip(), AxisDirection::RightToLeft);
@@ -369,7 +369,7 @@ impl Orientation {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::{Orientation, Size};
+    /// use flui_types::{layout::Orientation, Size};
     ///
     /// assert_eq!(Orientation::from_size(Size::new(100.0, 200.0)), Orientation::Portrait);
     /// assert_eq!(Orientation::from_size(Size::new(200.0, 100.0)), Orientation::Landscape);
@@ -389,7 +389,7 @@ impl Orientation {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::{Axis, Orientation};
+    /// use flui_types::{Axis, layout::Orientation};
     ///
     /// assert_eq!(Orientation::Portrait.main_axis(), Axis::Vertical);
     /// assert_eq!(Orientation::Landscape.main_axis(), Axis::Horizontal);
@@ -406,7 +406,7 @@ impl Orientation {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::{Axis, Orientation};
+    /// use flui_types::{Axis, layout::Orientation};
     ///
     /// assert_eq!(Orientation::Portrait.cross_axis(), Axis::Horizontal);
     /// assert_eq!(Orientation::Landscape.cross_axis(), Axis::Vertical);
@@ -446,7 +446,7 @@ impl VerticalDirection {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::{AxisDirection, VerticalDirection};
+    /// use flui_types::layout::{AxisDirection, VerticalDirection};
     ///
     /// assert_eq!(VerticalDirection::Down.to_axis_direction(), AxisDirection::TopToBottom);
     /// assert_eq!(VerticalDirection::Up.to_axis_direction(), AxisDirection::BottomToTop);
@@ -473,7 +473,7 @@ impl VerticalDirection {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::VerticalDirection;
+    /// use flui_types::layout::VerticalDirection;
     ///
     /// assert_eq!(VerticalDirection::Down.opposite(), VerticalDirection::Up);
     /// assert_eq!(VerticalDirection::Up.opposite(), VerticalDirection::Down);

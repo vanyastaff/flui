@@ -2,6 +2,8 @@
 //!
 //! This is a Leaf RenderObject that renders multi-line text with styling,
 //! line breaks, and text wrapping.
+//!
+//! Flutter reference: <https://api.flutter.dev/flutter/rendering/RenderParagraph-class.html>
 
 use crate::core::{BoxProtocol, LayoutContext, PaintContext};
 use crate::core::{Leaf, RenderBox};
@@ -254,10 +256,7 @@ impl RenderBox<Leaf> for RenderParagraph {
         T: crate::core::PaintTree,
     {
         // Draw text using Canvas API
-        let paint = Paint {
-            color: self.data.color,
-            ..Default::default()
-        };
+        let paint = Paint::fill(self.data.color);
 
         // Get the offset from context - this is where we should draw
         let offset = ctx.offset;
@@ -312,7 +311,7 @@ impl RenderBox<Leaf> for RenderParagraph {
 
         // Draw the text
         ctx.canvas()
-            .draw_text(&self.data.text, position, &text_style, &paint);
+            .text(&self.data.text, position, &text_style, &paint);
     }
 }
 

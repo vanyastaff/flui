@@ -1,4 +1,7 @@
 //! RenderIndexedStack - shows only one child by index
+//!
+//! Flutter equivalent: `RenderIndexedStack`
+//! Source: https://api.flutter.dev/flutter/rendering/RenderIndexedStack-class.html
 
 use crate::core::{BoxProtocol, ChildrenAccess, LayoutContext, PaintContext, RenderBox, Variable};
 use flui_types::{Alignment, Size};

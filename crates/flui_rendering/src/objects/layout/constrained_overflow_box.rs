@@ -8,6 +8,8 @@
 //! - Creating fixed-size widgets regardless of parent constraints
 //! - Allowing children to exceed parent boundaries with specific size limits
 //! - Transforming constraints passed to children
+//!
+//! Flutter reference: <https://api.flutter.dev/flutter/rendering/RenderConstrainedOverflowBox-class.html>
 
 use crate::core::{BoxProtocol, LayoutContext, PaintContext, RenderBox, Single};
 use flui_types::{Alignment, BoxConstraints, Size};

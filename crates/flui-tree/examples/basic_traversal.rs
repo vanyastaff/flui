@@ -34,7 +34,7 @@ impl DemoTree {
     }
 
     fn insert(&mut self, name: &str, parent: Option<ElementId>) -> ElementId {
-        let id = ElementId::new(self.nodes.len() as u64 + 1);
+        let id = ElementId::new(self.nodes.len() + 1);
         self.nodes.push(Some(DemoNode {
             name: name.to_string(),
             parent,
@@ -43,7 +43,7 @@ impl DemoTree {
 
         // Add to parent's children
         if let Some(parent_id) = parent {
-            if let Some(Some(parent_node)) = self.nodes.get_mut(parent_id.get() as usize - 1) {
+            if let Some(Some(parent_node)) = self.nodes.get_mut(parent_id.get() - 1) {
                 parent_node.children.push(id);
             }
         }

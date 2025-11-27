@@ -1,4 +1,9 @@
 //! RenderFlow - Custom layout with delegate pattern
+//!
+//! Implements the flow layout algorithm, optimized for efficiently repositioning
+//! child widgets using transformation matrices during the paint phase.
+//!
+//! Flutter reference: <https://api.flutter.dev/flutter/rendering/RenderFlow-class.html>
 
 use crate::core::{BoxProtocol, LayoutContext, PaintContext, RenderBox, Variable};
 use flui_types::{BoxConstraints, Matrix4, Offset, Size};
@@ -26,14 +31,50 @@ where
     T: crate::core::PaintTree,
 {
     /// Paint a child with transformation matrix
+    ///
+    /// The transformation matrix is applied to the child's coordinate system.
+    /// This allows repositioning children efficiently without re-layout.
+    ///
+    /// # Arguments
+    ///
+    /// * `index` - Index of the child to paint
+    /// * `transform` - 4x4 transformation matrix to apply
+    /// * `offset` - Base offset for painting (typically the flow container's offset)
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // Translate child by (100, 50)
+    /// let transform = Matrix4::translation(100.0, 50.0, 0.0);
+    /// context.paint_child(0, transform, offset);
+    ///
+    /// // Rotate child 45 degrees around center
+    /// let transform = Matrix4::rotation_z(std::f32::consts::PI / 4.0);
+    /// context.paint_child(1, transform, offset);
+    /// ```
     pub fn paint_child(&mut self, index: usize, transform: Matrix4, offset: Offset) {
         if index >= self.children.len() {
             return;
         }
 
-        // TODO: Apply transformation matrix when transform layers are supported
-        // For now, just paint at offset
-        let _ = transform; // Suppress warning
+        // Apply transformation using chaining API
+        // The transform is applied BEFORE the offset translation
+        self.paint_ctx.canvas().saved().transformed(transform);
+
+        // Paint child - the offset is applied in the transformed coordinate system
+        self.paint_ctx.paint_child(self.children[index], offset);
+
+        self.paint_ctx.canvas().restored();
+    }
+
+    /// Paint a child without transformation (just offset)
+    ///
+    /// This is equivalent to `paint_child(index, Matrix4::IDENTITY, offset)` but
+    /// avoids unnecessary save/restore overhead.
+    pub fn paint_child_simple(&mut self, index: usize, offset: Offset) {
+        if index >= self.children.len() {
+            return;
+        }
         self.paint_ctx.paint_child(self.children[index], offset);
     }
 }

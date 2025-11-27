@@ -230,7 +230,7 @@ where
 ///
 /// ```rust,ignore
 /// fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
-///     ctx.canvas().draw_rect(rect, paint);
+///     ctx.canvas().rect(rect, &paint);
 ///     ctx.paint_child(ctx.children.single(), ctx.offset);
 /// }
 /// ```

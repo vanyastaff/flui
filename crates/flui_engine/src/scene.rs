@@ -25,7 +25,7 @@
 //! - Scene is immutable after creation (no interior mutability)
 //! - Thread-safe for multi-threaded rendering
 
-use crate::layer::CanvasLayer;
+use crate::layer::{CanvasLayer, Layer};
 use flui_types::Size;
 use std::sync::Arc;
 
@@ -37,19 +37,20 @@ use std::sync::Arc;
 /// # Example
 ///
 /// ```rust,ignore
-/// use flui_engine::Scene;
+/// use flui_engine::{Layer, Scene};
 /// use flui_types::Size;
 ///
 /// // Create scene from pipeline
+/// let layer = Layer::Canvas(canvas_layer);
 /// let scene = Scene::with_layer(
 ///     Size::new(800.0, 600.0),
-///     Arc::new(canvas_layer),
+///     Arc::new(layer),
 ///     frame_number,
 /// );
 ///
 /// // Render to GPU
 /// let mut renderer = WgpuRenderer::new(painter);
-/// scene.render(&mut renderer, &view, &mut encoder)?;
+/// scene.render(&mut renderer);
 ///
 /// // Share layer for hit testing (Arc clone is cheap!)
 /// if let Some(layer) = scene.root_layer() {
@@ -67,7 +68,7 @@ pub struct Scene {
     /// - Zero-copy sharing between rendering and hit testing
     /// - Thread-safe access from multiple threads
     /// - Automatic cleanup when all references dropped
-    root_layer: Option<Arc<CanvasLayer>>,
+    root_layer: Option<Arc<Layer>>,
 
     /// Frame number (for debugging and profiling)
     frame_number: u64,
@@ -103,20 +104,54 @@ impl Scene {
     /// # Arguments
     ///
     /// * `size` - Viewport dimensions
-    /// * `layer` - Root canvas layer (Arc-wrapped for sharing)
+    /// * `layer` - Root layer (Arc-wrapped for sharing)
     /// * `frame_number` - Frame counter for debugging
     ///
     /// # Example
     ///
     /// ```rust,ignore
-    /// let layer = Arc::new(CanvasLayer::from_canvas(canvas));
+    /// let layer = Layer::Canvas(CanvasLayer::from_canvas(canvas));
     /// let scene = Scene::with_layer(
     ///     Size::new(800.0, 600.0),
-    ///     layer,
+    ///     Arc::new(layer),
     ///     42,
     /// );
     /// ```
-    pub fn with_layer(size: Size, layer: Arc<CanvasLayer>, frame_number: u64) -> Self {
+    pub fn with_layer(size: Size, layer: Arc<Layer>, frame_number: u64) -> Self {
+        Self {
+            size,
+            root_layer: Some(layer),
+            frame_number,
+        }
+    }
+
+    /// Create scene from CanvasLayer (backward compatibility)
+    ///
+    /// Convenience method that wraps a CanvasLayer in Layer::Canvas.
+    ///
+    /// # Arguments
+    ///
+    /// * `size` - Viewport dimensions
+    /// * `canvas` - Canvas layer to wrap
+    /// * `frame_number` - Frame counter for debugging
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let canvas_layer = CanvasLayer::from_canvas(canvas);
+    /// let scene = Scene::from_canvas_layer(
+    ///     Size::new(800.0, 600.0),
+    ///     Arc::new(canvas_layer),
+    ///     42,
+    /// );
+    /// ```
+    pub fn from_canvas_layer(size: Size, canvas: Arc<CanvasLayer>, frame_number: u64) -> Self {
+        // Move CanvasLayer out of Arc, wrap in Layer::Canvas, then wrap in new Arc
+        // This avoids Arc<Arc<...>> nesting
+        let layer = Arc::try_unwrap(canvas)
+            .map(|canvas_layer| Arc::new(Layer::Canvas(canvas_layer)))
+            .expect("Scene::from_canvas_layer: CanvasLayer has multiple Arc references");
+
         Self {
             size,
             root_layer: Some(layer),
@@ -143,7 +178,7 @@ impl Scene {
     ///
     /// # Returns
     ///
-    /// `Some(&Arc<CanvasLayer>)` if scene has content, `None` otherwise
+    /// `Some(&Arc<Layer>)` if scene has content, `None` otherwise
     ///
     /// # Example
     ///
@@ -157,7 +192,7 @@ impl Scene {
     /// }
     /// ```
     #[must_use]
-    pub fn root_layer(&self) -> Option<&Arc<CanvasLayer>> {
+    pub fn root_layer(&self) -> Option<&Arc<Layer>> {
         self.root_layer.as_ref()
     }
 
@@ -202,7 +237,7 @@ impl Scene {
     ///
     /// # Returns
     ///
-    /// `Some(Arc<CanvasLayer>)` if scene had content, `None` otherwise
+    /// `Some(Arc<Layer>)` if scene had content, `None` otherwise
     ///
     /// # Example
     ///
@@ -211,7 +246,7 @@ impl Scene {
     /// let layer = scene.take_layer();
     /// assert!(!scene.has_content());
     /// ```
-    pub fn take_layer(&mut self) -> Option<Arc<CanvasLayer>> {
+    pub fn take_layer(&mut self) -> Option<Arc<Layer>> {
         self.root_layer.take()
     }
 }
@@ -225,7 +260,7 @@ impl Default for Scene {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::layer::CanvasLayer;
+    use crate::layer::{CanvasLayer, Layer};
     use flui_types::Size;
 
     #[test]
@@ -238,7 +273,8 @@ mod tests {
 
     #[test]
     fn test_scene_with_layer() {
-        let layer = Arc::new(CanvasLayer::new());
+        let canvas_layer = CanvasLayer::new();
+        let layer = Arc::new(Layer::Canvas(canvas_layer));
         let scene = Scene::with_layer(Size::new(1920.0, 1080.0), layer.clone(), 42);
 
         assert_eq!(scene.size(), Size::new(1920.0, 1080.0));
@@ -249,7 +285,8 @@ mod tests {
 
     #[test]
     fn test_layer_sharing() {
-        let layer = Arc::new(CanvasLayer::new());
+        let canvas_layer = CanvasLayer::new();
+        let layer = Arc::new(Layer::Canvas(canvas_layer));
         let scene = Scene::with_layer(Size::new(800.0, 600.0), layer.clone(), 1);
 
         // Arc::clone is cheap (just increments refcount)
@@ -262,13 +299,28 @@ mod tests {
 
     #[test]
     fn test_take_layer() {
-        let layer = Arc::new(CanvasLayer::new());
+        let canvas_layer = CanvasLayer::new();
+        let layer = Arc::new(Layer::Canvas(canvas_layer));
         let mut scene = Scene::with_layer(Size::new(800.0, 600.0), layer, 1);
 
         assert!(scene.has_content());
         let taken = scene.take_layer();
         assert!(taken.is_some());
         assert!(!scene.has_content());
+    }
+
+    #[test]
+    fn test_from_canvas_layer() {
+        let canvas_layer = Arc::new(CanvasLayer::new());
+        let scene = Scene::from_canvas_layer(Size::new(800.0, 600.0), canvas_layer, 1);
+
+        assert!(scene.has_content());
+        assert_eq!(scene.size(), Size::new(800.0, 600.0));
+
+        // Should be wrapped in Layer::Canvas
+        if let Some(layer) = scene.root_layer() {
+            assert!(matches!(**layer, Layer::Canvas(_)));
+        }
     }
 
     #[test]

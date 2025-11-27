@@ -16,7 +16,7 @@
 //!
 //! ## Arc Text
 //! ```rust,ignore
-//! use flui_types::text_path::*;
+//! use flui_types::geometry::text_path::*;
 //!
 //! let text = "CIRCULAR TEXT";
 //! for (i, ch) in text.chars().enumerate() {
@@ -62,7 +62,7 @@ pub struct CharTransform {
 ///
 /// # Example
 /// ```
-/// use flui_types::text_path::arc_position;
+/// use flui_types::geometry::text_path::arc_position;
 /// use std::f32::consts::TAU;
 ///
 /// // Position character 3 out of 10 on a circle
@@ -98,7 +98,7 @@ pub fn arc_position(
 ///
 /// # Example
 /// ```
-/// use flui_types::text_path::wave_offset;
+/// use flui_types::geometry::text_path::wave_offset;
 ///
 /// let offset_y = wave_offset(5, 0.5, 15.0);
 /// // Apply offset_y to character Y position
@@ -122,7 +122,7 @@ pub fn wave_offset(char_index: usize, frequency: f32, amplitude: f32) -> f32 {
 ///
 /// # Example
 /// ```
-/// use flui_types::text_path::spiral_position;
+/// use flui_types::geometry::text_path::spiral_position;
 ///
 /// // 3 full spirals, expanding from radius 50 to 150
 /// let transform = spiral_position(10, 50, 50.0, 100.0, 3.0);
@@ -157,7 +157,7 @@ pub fn spiral_position(
 ///
 /// # Example
 /// ```
-/// use flui_types::text_path::wave_rotation;
+/// use flui_types::geometry::text_path::wave_rotation;
 ///
 /// let rotation = wave_rotation(7, 0.3, 0.5); // Max ±28.6 degrees
 /// ```
@@ -178,7 +178,7 @@ pub fn wave_rotation(char_index: usize, frequency: f32, max_angle: f32) -> f32 {
 ///
 /// # Example
 /// ```
-/// use flui_types::text_path::vertical_scale;
+/// use flui_types::geometry::text_path::vertical_scale;
 ///
 /// // Pyramid: narrow top (0.5), wide bottom (1.0)
 /// let scale_at_middle = vertical_scale(0.5, 0.5, 1.0); // Returns 0.75
@@ -201,7 +201,7 @@ pub fn vertical_scale(normalized_y: f32, top_scale: f32, bottom_scale: f32) -> f
 ///
 /// # Example
 /// ```
-/// use flui_types::text_path::grid_position;
+/// use flui_types::geometry::text_path::grid_position;
 ///
 /// // 10 characters per row, 30px wide, 40px tall
 /// let pos = grid_position(15, 10, 30.0, 40.0);
@@ -233,7 +233,7 @@ pub fn grid_position(
 ///
 /// # Example
 /// ```
-/// use flui_types::{Point, text_path::bezier_point};
+/// use flui_types::{Point, geometry::text_path::bezier_point};
 ///
 /// let start = Point::new(0.0, 0.0);
 /// let control = Point::new(50.0, 100.0);
@@ -288,7 +288,7 @@ pub fn bezier_tangent_rotation(t: f32, p0: Point, p1: Point, p2: Point) -> f32 {
 ///
 /// # Example
 /// ```rust,ignore
-/// use flui_types::text_path::parametric_position;
+/// use flui_types::geometry::text_path::parametric_position;
 ///
 /// // Custom lemniscate (figure-8) path
 /// let transform = parametric_position(5, 20, |t| {

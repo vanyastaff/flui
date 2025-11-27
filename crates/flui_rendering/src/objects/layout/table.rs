@@ -1,4 +1,8 @@
 //! RenderTable - Table layout with configurable column widths
+//!
+//! A table where the columns and rows are sized to fit the contents of the cells.
+//!
+//! Flutter reference: <https://api.flutter.dev/flutter/rendering/RenderTable-class.html>
 
 use crate::core::{BoxProtocol, LayoutContext, LayoutTree, PaintContext, RenderBox, Variable};
 use flui_types::{BoxConstraints, Offset, Size};
@@ -68,6 +72,8 @@ pub struct RenderTable {
     // Cache for layout
     computed_column_widths: Vec<f32>,
     computed_row_heights: Vec<f32>,
+    /// Cached child sizes from layout (indexed by child order)
+    child_sizes: Vec<Size>,
     size: Size,
 }
 
@@ -81,6 +87,7 @@ impl RenderTable {
             default_vertical_alignment: TableCellVerticalAlignment::default(),
             computed_column_widths: Vec::new(),
             computed_row_heights: Vec::new(),
+            child_sizes: Vec::new(),
             size: Size::ZERO,
         }
     }
@@ -182,24 +189,28 @@ impl RenderTable {
         widths
     }
 
-    /// Compute row heights based on column widths and cell contents
+    /// Compute row heights and cache child sizes
+    ///
+    /// Returns (row_heights, child_sizes) tuple.
+    /// child_sizes is indexed by child order (row * columns + col).
     #[allow(clippy::needless_range_loop)]
-    fn compute_row_heights<T>(
+    fn compute_row_heights_and_sizes<T>(
         &self,
         children: &[NonZeroUsize],
         ctx: &mut LayoutContext<'_, T, Variable, BoxProtocol>,
         column_widths: &[f32],
         constraints: BoxConstraints,
-    ) -> Vec<f32>
+    ) -> (Vec<f32>, Vec<Size>)
     where
         T: LayoutTree,
     {
         if self.columns == 0 || children.is_empty() {
-            return Vec::new();
+            return (Vec::new(), Vec::new());
         }
 
         let row_count = children.len().div_ceil(self.columns);
         let mut heights = vec![0.0; row_count];
+        let mut sizes = vec![Size::ZERO; children.len()];
 
         for row in 0..row_count {
             let mut max_height: f32 = 0.0;
@@ -214,6 +225,7 @@ impl RenderTable {
                         constraints.max_height,
                     );
                     let child_size = ctx.layout_child(children[idx], child_constraints);
+                    sizes[idx] = child_size;
                     max_height = max_height.max(child_size.height);
                 }
             }
@@ -221,7 +233,7 @@ impl RenderTable {
             heights[row] = max_height;
         }
 
-        heights
+        (heights, sizes)
     }
 }
 
@@ -239,6 +251,7 @@ impl RenderBox<Variable> for RenderTable {
         if self.columns == 0 || child_ids.is_empty() {
             self.computed_column_widths.clear();
             self.computed_row_heights.clear();
+            self.child_sizes.clear();
             self.size = Size::ZERO;
             return Size::ZERO;
         }
@@ -246,13 +259,15 @@ impl RenderBox<Variable> for RenderTable {
         // Compute column widths
         self.computed_column_widths = self.compute_column_widths(&child_ids, &mut ctx, constraints);
 
-        // Compute row heights
-        self.computed_row_heights = self.compute_row_heights(
+        // Compute row heights and cache child sizes
+        let (row_heights, child_sizes) = self.compute_row_heights_and_sizes(
             &child_ids,
             &mut ctx,
             &self.computed_column_widths,
             constraints,
         );
+        self.computed_row_heights = row_heights;
+        self.child_sizes = child_sizes;
 
         // Calculate total size
         let total_width: f32 = self.computed_column_widths.iter().sum();
@@ -291,19 +306,20 @@ impl RenderBox<Variable> for RenderTable {
                 }
 
                 let col_width = self.computed_column_widths[col];
+                let child_size = self.child_sizes.get(idx).copied().unwrap_or(Size::ZERO);
 
                 // Calculate cell offset based on vertical alignment
                 let cell_offset = match self.default_vertical_alignment {
                     TableCellVerticalAlignment::Top => Offset::new(x, y),
                     TableCellVerticalAlignment::Middle => {
                         // Center child vertically in row
-                        // TODO: Get actual child height for proper centering
-                        Offset::new(x, y + row_height / 2.0)
+                        let vertical_offset = (row_height - child_size.height) / 2.0;
+                        Offset::new(x, y + vertical_offset)
                     }
                     TableCellVerticalAlignment::Bottom => {
                         // Align to bottom of row
-                        // TODO: Get actual child height
-                        Offset::new(x, y + row_height)
+                        let vertical_offset = row_height - child_size.height;
+                        Offset::new(x, y + vertical_offset)
                     }
                     TableCellVerticalAlignment::Fill => Offset::new(x, y),
                 };

@@ -1,4 +1,7 @@
 //! RenderSizedBox - enforces exact size constraints
+//!
+//! Flutter equivalent: `RenderConstrainedBox` with tight constraints
+//! Source: https://api.flutter.dev/flutter/rendering/RenderConstrainedBox-class.html
 
 use crate::core::{BoxProtocol, LayoutContext, PaintContext};
 use crate::core::{Optional, RenderBox};

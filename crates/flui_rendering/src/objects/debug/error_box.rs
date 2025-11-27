@@ -109,48 +109,39 @@ impl RenderBox<Leaf> for RenderErrorBox {
     where
         T: crate::core::PaintTree,
     {
-        let mut paint = Paint::default();
         let rect = Rect::from_min_size(flui_types::Point::ZERO, self.size);
 
         // Draw background
-        paint.color = self.background_color;
-        paint.style = flui_painting::PaintStyle::Fill;
-        ctx.canvas().draw_rect(rect, &paint);
+        let bg_paint = Paint::fill(self.background_color);
+        ctx.canvas().rect(rect, &bg_paint);
 
         // Draw diagonal stripes if enabled
         if self.show_stripes {
-            paint.color = Color::rgba(255, 255, 255, 50); // Semi-transparent white
-            paint.style = flui_painting::PaintStyle::Stroke;
-            paint.stroke_width = 2.0;
+            let stripe_paint = Paint::stroke(Color::rgba(255, 255, 255, 50), 2.0);
 
             let stripe_spacing = 20.0;
             let mut x = 0.0;
             while x < self.size.width + self.size.height {
-                ctx.canvas().draw_line(
+                ctx.canvas().line(
                     flui_types::Point::new(x, 0.0),
                     flui_types::Point::new(x - self.size.height, self.size.height),
-                    &paint,
+                    &stripe_paint,
                 );
                 x += stripe_spacing;
             }
         }
 
         // Draw error message
-        paint.color = self.text_color;
-        paint.style = flui_painting::PaintStyle::Fill;
-
-        let text_x = 10.0;
-        let text_y = self.size.height / 2.0;
-
+        let text_paint = Paint::fill(self.text_color);
         let text_style = TextStyle::default()
             .with_font_size(14.0)
             .with_color(self.text_color);
 
-        ctx.canvas().draw_text(
+        ctx.canvas().text(
             &self.message,
-            flui_types::Offset::new(text_x, text_y),
+            flui_types::Offset::new(10.0, self.size.height / 2.0),
             &text_style,
-            &paint,
+            &text_paint,
         );
     }
 }

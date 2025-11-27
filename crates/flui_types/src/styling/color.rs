@@ -144,7 +144,7 @@ impl Color {
     /// let opaque_red = Color::rgb(255, 0, 0);
     /// let transparent_red = opaque_red.with_alpha(128);
     ///
-    /// assert_eq!(transparent_red.alpha(), 128);
+    /// assert_eq!(transparent_red.a, 128);
     /// ```
     pub const fn with_alpha(&self, alpha: u8) -> Self {
         Self::rgba(self.r, self.g, self.b, alpha)
@@ -162,7 +162,7 @@ impl Color {
     /// let opaque = Color::rgb(255, 0, 0);
     /// let half = opaque.with_opacity(0.5);
     ///
-    /// assert_eq!(half.alpha(), 127); // 0.5 * 255
+    /// assert_eq!(half.a, 127); // 0.5 * 255
     /// ```
     pub fn with_opacity(&self, opacity: f32) -> Self {
         let alpha = (opacity.clamp(0.0, 1.0) * 255.0) as u8;

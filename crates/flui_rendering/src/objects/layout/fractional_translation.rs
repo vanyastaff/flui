@@ -2,6 +2,8 @@
 //!
 //! Applies a translation transformation before painting, where the translation
 //! is specified as a fraction of the child's size rather than absolute pixels.
+//!
+//! Flutter reference: <https://api.flutter.dev/flutter/rendering/RenderFractionalTranslation-class.html>
 
 use crate::core::{BoxProtocol, LayoutContext, PaintContext, RenderBox, Single};
 use flui_types::{Offset, Size};

@@ -1,4 +1,6 @@
 //! RenderShiftedBox - Shifts child position by an offset
+//!
+//! Flutter reference: <https://api.flutter.dev/flutter/rendering/RenderShiftedBox-class.html>
 
 use crate::core::{
     RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},

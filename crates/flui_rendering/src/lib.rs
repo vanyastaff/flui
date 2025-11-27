@@ -62,7 +62,7 @@ pub use core::{
     // Parent data
     BoxParentData,
     BoxProtocol,
-    // Wrappers (TODO: Update to new API)
+    // Note: Wrappers not needed with current context-based API
     // BoxRenderWrapper,
     ChildrenAccess,
     // Geometry types
@@ -115,7 +115,8 @@ pub use core::{
     SliverProtocol,
     SliverRender,
     SliverRenderExt,
-    // SliverRenderWrapper, // TODO: Update to new API
+    // Note: Wrappers not needed with current context-based API
+    // SliverRenderWrapper,
     TreeNav,
     TreeRead,
     TreeWrite,

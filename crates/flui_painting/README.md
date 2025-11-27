@@ -388,11 +388,33 @@ canvas
 canvas
     .rect(rect1, &paint1)
     .rrect(rrect, &paint2)
+    .rounded_rect(rect, 10.0, &paint)  // uniform corner radius
     .circle(center, radius, &paint3)
     .oval(oval_rect, &paint4)
     .line(p1, p2, &stroke)
     .path(&custom_path, &fill)
+    .arc(rect, start_angle, sweep_angle, use_center, &paint)
+    .drrect(outer_rrect, inner_rrect, &paint)  // ring/border
     .text("Hello", offset, &style, &paint);
+
+// Images and textures
+canvas
+    .image(img, dst_rect, Some(&paint))
+    .image_repeat(img, dst, ImageRepeat::Repeat, None)
+    .image_nine_slice(img, center_slice, dst, None)
+    .image_filtered(img, dst, ColorFilter::grayscale(), None)
+    .texture(texture_id, dst, None, FilterQuality::Medium, 1.0);
+
+// Effects
+canvas
+    .shadow(&path, shadow_color, elevation)
+    .gradient(rect, linear_gradient)
+    .gradient_rrect(rrect, radial_gradient);
+
+// Points and vertices
+canvas
+    .points(PointMode::Polygon, points, &paint)
+    .vertices(verts, Some(colors), None, indices, &paint);
 
 // Conditional drawing
 canvas

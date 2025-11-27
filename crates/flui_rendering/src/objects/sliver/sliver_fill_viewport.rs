@@ -1,8 +1,6 @@
 //! RenderSliverFillViewport - Sliver where each child fills the viewport
 
-
-use crate::core::{RuntimeArity, SliverLayoutContext, SliverPaintContext, LegacySliverRender};
-use flui_painting::Canvas;
+use crate::core::{ChildrenAccess, LayoutContext, LayoutTree, PaintContext, PaintTree, SliverProtocol, SliverRender, Variable};
 use flui_types::{SliverConstraints, SliverGeometry};
 
 /// RenderObject where each child fills the entire viewport
@@ -23,8 +21,10 @@ pub struct RenderSliverFillViewport {
     /// Fraction of viewport each child should occupy (typically 1.0)
     pub viewport_fraction: f32,
 
-    // Layout cache
-    sliver_geometry: SliverGeometry,
+    // Layout cache (set during layout, used during paint)
+    cached_child_extent: f32,
+    cached_scroll_offset: f32,
+    cached_viewport_extent: f32,
 }
 
 impl RenderSliverFillViewport {
@@ -35,7 +35,9 @@ impl RenderSliverFillViewport {
     pub fn new(viewport_fraction: f32) -> Self {
         Self {
             viewport_fraction,
-            sliver_geometry: SliverGeometry::default(),
+            cached_child_extent: 0.0,
+            cached_scroll_offset: 0.0,
+            cached_viewport_extent: 0.0,
         }
     }
 
@@ -44,19 +46,13 @@ impl RenderSliverFillViewport {
         self.viewport_fraction = fraction;
     }
 
-    /// Get the sliver geometry from last layout
-    pub fn geometry(&self) -> SliverGeometry {
-        self.sliver_geometry
-    }
-
     /// Calculate sliver geometry
     fn calculate_sliver_geometry(
         &self,
         constraints: &SliverConstraints,
-        _tree: &ElementTree,
-        children: &[flui_core::element::ElementId],
+        child_count: usize,
     ) -> SliverGeometry {
-        if children.is_empty() {
+        if child_count == 0 {
             return SliverGeometry::default();
         }
 
@@ -68,7 +64,6 @@ impl RenderSliverFillViewport {
         let child_extent = viewport_extent * self.viewport_fraction;
 
         // Total extent is child_extent * number of children
-        let child_count = children.len();
         let total_extent = child_extent * child_count as f32;
 
         // Calculate visible portion
@@ -83,7 +78,7 @@ impl RenderSliverFillViewport {
             paint_origin: 0.0,
             layout_extent: paint_extent,
             max_paint_extent: total_extent,
-            max_scroll_obsolescence: 0.0,
+            max_scroll_obstruction_extent: 0.0,
             visible_fraction: if total_extent > 0.0 {
                 (paint_extent / total_extent).min(1.0)
             } else {
@@ -105,59 +100,57 @@ impl Default for RenderSliverFillViewport {
     }
 }
 
-impl LegacySliverRender for RenderSliverFillViewport {
-    fn layout(&mut self, ctx: &SliverLayoutContext) -> SliverGeometry {
-        let constraints = &ctx.constraints;
+impl SliverRender<Variable> for RenderSliverFillViewport {
+    fn layout<T>(
+        &mut self,
+        ctx: LayoutContext<'_, T, Variable, SliverProtocol>,
+    ) -> SliverGeometry
+    where
+        T: LayoutTree,
+    {
+        let constraints = ctx.constraints;
+        let child_count = ctx.children.len();
 
-        // Each child fills the viewport based on viewport_fraction
-        let child_extent = constraints.viewport_main_axis_extent * self.viewport_fraction;
-        let child_count = ctx.children.as_slice().len();
-        let total_extent = child_extent * child_count as f32;
+        // Cache values for use during paint
+        self.cached_viewport_extent = constraints.viewport_main_axis_extent;
+        self.cached_scroll_offset = constraints.scroll_offset;
+        self.cached_child_extent = constraints.viewport_main_axis_extent * self.viewport_fraction;
 
-        // Calculate visible portion
-        let scroll_offset = constraints.scroll_offset;
-        let remaining_extent = constraints.remaining_paint_extent;
+        // Calculate geometry using viewport fraction
+        // In full implementation, each child would be laid out to fill
+        // viewport_fraction * viewport_main_axis_extent
+        self.calculate_sliver_geometry(&constraints, child_count)
+    }
 
-        let paint_extent = (total_extent - scroll_offset).max(0.0).min(remaining_extent);
+    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Variable>)
+    where
+        T: PaintTree,
+    {
+        use flui_types::geometry::Offset;
 
-        SliverGeometry {
-            scroll_extent: total_extent,
-            paint_extent,
-            paint_origin: 0.0,
-            layout_extent: paint_extent,
-            max_paint_extent: total_extent,
-            max_scroll_obsolescence: 0.0,
-            visible_fraction: if total_extent > 0.0 {
-                (paint_extent / total_extent).min(1.0)
-            } else {
-                0.0
-            },
-            cross_axis_extent: constraints.cross_axis_extent,
-            cache_extent: paint_extent,
-            visible: paint_extent > 0.0,
-            has_visual_overflow: total_extent > paint_extent,
-            hit_test_extent: Some(paint_extent),
-            scroll_offset_correction: None,
+        // Use cached values from layout
+        let viewport_extent = self.cached_viewport_extent;
+        let scroll_offset = self.cached_scroll_offset;
+        let child_extent = self.cached_child_extent;
+
+        // Paint visible children at their viewport-filling positions
+        let children = ctx.children.iter().collect::<Vec<_>>();
+
+        for (index, &child_id) in children.iter().enumerate() {
+            // Calculate child's scroll position
+            let child_scroll_position = index as f32 * child_extent;
+
+            // Check if child is visible in viewport
+            let child_trailing_edge = child_scroll_position + child_extent;
+
+            if child_trailing_edge > scroll_offset &&
+               child_scroll_position < scroll_offset + viewport_extent {
+                // Child is at least partially visible
+                // Calculate paint offset relative to scroll position
+                let child_offset = Offset::new(0.0, child_scroll_position - scroll_offset);
+                ctx.paint_child(child_id, ctx.offset + child_offset);
+            }
         }
-    }
-
-    fn paint(&self, _ctx: &SliverPaintContext) -> Canvas {
-        let canvas = Canvas::new();
-
-        // Children are painted by viewport
-        // Each child is painted at its calculated position
-
-        // TODO: Paint visible children at their viewport-filling positions
-
-        canvas
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> RuntimeArity {
-        RuntimeArity::Variable // Multiple children
     }
 }
 
@@ -165,6 +158,7 @@ impl LegacySliverRender for RenderSliverFillViewport {
 mod tests {
     use super::*;
     use flui_types::layout::AxisDirection;
+    use flui_types::constraints::{GrowthDirection, ScrollDirection};
 
     #[test]
     fn test_render_sliver_fill_viewport_new() {
@@ -191,22 +185,24 @@ mod tests {
     #[test]
     fn test_calculate_sliver_geometry_empty() {
         let viewport = RenderSliverFillViewport::new(1.0);
-        let tree = ElementTree::new();
-        let children = vec![];
 
         let constraints = SliverConstraints {
             axis_direction: AxisDirection::TopToBottom,
-            grow_direction_reversed: false,
+            growth_direction: GrowthDirection::Forward,
+            user_scroll_direction: ScrollDirection::Idle,
             scroll_offset: 0.0,
+            preceding_scroll_extent: 0.0,
+            overlap: 0.0,
             remaining_paint_extent: 600.0,
             cross_axis_extent: 400.0,
             cross_axis_direction: AxisDirection::LeftToRight,
             viewport_main_axis_extent: 600.0,
             remaining_cache_extent: 1000.0,
             cache_origin: 0.0,
+        ..SliverConstraints::default()
         };
 
-        let geometry = viewport.calculate_sliver_geometry(&constraints, &tree, &children);
+        let geometry = viewport.calculate_sliver_geometry(&constraints, 0);
 
         assert_eq!(geometry.scroll_extent, 0.0);
         assert_eq!(geometry.paint_extent, 0.0);
@@ -216,22 +212,24 @@ mod tests {
     #[test]
     fn test_calculate_sliver_geometry_single_child_full_viewport() {
         let viewport = RenderSliverFillViewport::new(1.0);
-        let tree = ElementTree::new();
-        let children = vec![flui_core::element::ElementId::new(1)];
 
         let constraints = SliverConstraints {
             axis_direction: AxisDirection::TopToBottom,
-            grow_direction_reversed: false,
+            growth_direction: GrowthDirection::Forward,
+            user_scroll_direction: ScrollDirection::Idle,
             scroll_offset: 0.0,
+            preceding_scroll_extent: 0.0,
+            overlap: 0.0,
             remaining_paint_extent: 600.0,
             cross_axis_extent: 400.0,
             cross_axis_direction: AxisDirection::LeftToRight,
             viewport_main_axis_extent: 600.0,
             remaining_cache_extent: 1000.0,
             cache_origin: 0.0,
+        ..SliverConstraints::default()
         };
 
-        let geometry = viewport.calculate_sliver_geometry(&constraints, &tree, &children);
+        let geometry = viewport.calculate_sliver_geometry(&constraints, 1);
 
         // 1 child * 600px = 600px
         assert_eq!(geometry.scroll_extent, 600.0);
@@ -243,26 +241,24 @@ mod tests {
     #[test]
     fn test_calculate_sliver_geometry_multiple_children() {
         let viewport = RenderSliverFillViewport::new(1.0);
-        let tree = ElementTree::new();
-        let children = vec![
-            flui_core::element::ElementId::new(1),
-            flui_core::element::ElementId::new(2),
-            flui_core::element::ElementId::new(3),
-        ];
 
         let constraints = SliverConstraints {
             axis_direction: AxisDirection::TopToBottom,
-            grow_direction_reversed: false,
+            growth_direction: GrowthDirection::Forward,
+            user_scroll_direction: ScrollDirection::Idle,
             scroll_offset: 0.0,
+            preceding_scroll_extent: 0.0,
+            overlap: 0.0,
             remaining_paint_extent: 600.0,
             cross_axis_extent: 400.0,
             cross_axis_direction: AxisDirection::LeftToRight,
             viewport_main_axis_extent: 600.0,
             remaining_cache_extent: 1000.0,
             cache_origin: 0.0,
+        ..SliverConstraints::default()
         };
 
-        let geometry = viewport.calculate_sliver_geometry(&constraints, &tree, &children);
+        let geometry = viewport.calculate_sliver_geometry(&constraints, 3);
 
         // 3 children * 600px = 1800px total
         assert_eq!(geometry.scroll_extent, 1800.0);
@@ -275,25 +271,24 @@ mod tests {
     #[test]
     fn test_calculate_sliver_geometry_half_viewport() {
         let viewport = RenderSliverFillViewport::new(0.5);
-        let tree = ElementTree::new();
-        let children = vec![
-            flui_core::element::ElementId::new(1),
-            flui_core::element::ElementId::new(2),
-        ];
 
         let constraints = SliverConstraints {
             axis_direction: AxisDirection::TopToBottom,
-            grow_direction_reversed: false,
+            growth_direction: GrowthDirection::Forward,
+            user_scroll_direction: ScrollDirection::Idle,
             scroll_offset: 0.0,
+            preceding_scroll_extent: 0.0,
+            overlap: 0.0,
             remaining_paint_extent: 600.0,
             cross_axis_extent: 400.0,
             cross_axis_direction: AxisDirection::LeftToRight,
             viewport_main_axis_extent: 600.0,
             remaining_cache_extent: 1000.0,
             cache_origin: 0.0,
+        ..SliverConstraints::default()
         };
 
-        let geometry = viewport.calculate_sliver_geometry(&constraints, &tree, &children);
+        let geometry = viewport.calculate_sliver_geometry(&constraints, 2);
 
         // 2 children * (600 * 0.5) = 600px total
         assert_eq!(geometry.scroll_extent, 600.0);
@@ -304,16 +299,10 @@ mod tests {
     #[test]
     fn test_calculate_sliver_geometry_scrolled() {
         let viewport = RenderSliverFillViewport::new(1.0);
-        let tree = ElementTree::new();
-        let children = vec![
-            flui_core::element::ElementId::new(1),
-            flui_core::element::ElementId::new(2),
-            flui_core::element::ElementId::new(3),
-        ];
 
         let constraints = SliverConstraints {
             axis_direction: AxisDirection::TopToBottom,
-            grow_direction_reversed: false,
+            growth_direction: GrowthDirection::Forward,
             scroll_offset: 600.0, // Scrolled past first child
             remaining_paint_extent: 600.0,
             cross_axis_extent: 400.0,
@@ -321,9 +310,10 @@ mod tests {
             viewport_main_axis_extent: 600.0,
             remaining_cache_extent: 1000.0,
             cache_origin: 0.0,
+        ..SliverConstraints::default()
         };
 
-        let geometry = viewport.calculate_sliver_geometry(&constraints, &tree, &children);
+        let geometry = viewport.calculate_sliver_geometry(&constraints, 3);
 
         // 3 children * 600px = 1800px total
         assert_eq!(geometry.scroll_extent, 1800.0);
@@ -335,15 +325,10 @@ mod tests {
     #[test]
     fn test_calculate_sliver_geometry_partially_scrolled() {
         let viewport = RenderSliverFillViewport::new(1.0);
-        let tree = ElementTree::new();
-        let children = vec![
-            flui_core::element::ElementId::new(1),
-            flui_core::element::ElementId::new(2),
-        ];
 
         let constraints = SliverConstraints {
             axis_direction: AxisDirection::TopToBottom,
-            grow_direction_reversed: false,
+            growth_direction: GrowthDirection::Forward,
             scroll_offset: 300.0, // Halfway through first child
             remaining_paint_extent: 600.0,
             cross_axis_extent: 400.0,
@@ -351,9 +336,10 @@ mod tests {
             viewport_main_axis_extent: 600.0,
             remaining_cache_extent: 1000.0,
             cache_origin: 0.0,
+        ..SliverConstraints::default()
         };
 
-        let geometry = viewport.calculate_sliver_geometry(&constraints, &tree, &children);
+        let geometry = viewport.calculate_sliver_geometry(&constraints, 2);
 
         // 2 children * 600px = 1200px total
         assert_eq!(geometry.scroll_extent, 1200.0);
@@ -366,15 +352,10 @@ mod tests {
     #[test]
     fn test_calculate_sliver_geometry_scrolled_off() {
         let viewport = RenderSliverFillViewport::new(1.0);
-        let tree = ElementTree::new();
-        let children = vec![
-            flui_core::element::ElementId::new(1),
-            flui_core::element::ElementId::new(2),
-        ];
 
         let constraints = SliverConstraints {
             axis_direction: AxisDirection::TopToBottom,
-            grow_direction_reversed: false,
+            growth_direction: GrowthDirection::Forward,
             scroll_offset: 2000.0, // Scrolled past all children
             remaining_paint_extent: 600.0,
             cross_axis_extent: 400.0,
@@ -382,20 +363,15 @@ mod tests {
             viewport_main_axis_extent: 600.0,
             remaining_cache_extent: 1000.0,
             cache_origin: 0.0,
+        ..SliverConstraints::default()
         };
 
-        let geometry = viewport.calculate_sliver_geometry(&constraints, &tree, &children);
+        let geometry = viewport.calculate_sliver_geometry(&constraints, 2);
 
         // 2 children * 600px = 1200px total
         assert_eq!(geometry.scroll_extent, 1200.0);
         // Nothing visible
         assert_eq!(geometry.paint_extent, 0.0);
         assert!(!geometry.visible);
-    }
-
-    #[test]
-    fn test_arity_is_variable() {
-        let viewport = RenderSliverFillViewport::new(1.0);
-        assert_eq!(viewport.arity(), RuntimeArity::Variable);
     }
 }

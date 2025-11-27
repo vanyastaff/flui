@@ -97,9 +97,18 @@ impl Paint {
     /// assert_eq!(paint.color, Color::BLUE);
     /// assert_eq!(paint.stroke_width, 2.0);
     /// ```
+    ///
+    /// # Panics
+    ///
+    /// In debug builds, panics if `width` is negative or NaN.
     #[inline]
     #[must_use]
-    pub const fn stroke(color: Color, width: f32) -> Self {
+    pub fn stroke(color: Color, width: f32) -> Self {
+        debug_assert!(
+            width >= 0.0 && !width.is_nan(),
+            "Stroke width must be non-negative and not NaN, got: {}",
+            width
+        );
         Self {
             style: PaintStyle::Stroke,
             color,
@@ -148,10 +157,19 @@ impl Paint {
         self
     }
 
-    /// Sets the stroke width
+    /// Sets the stroke width.
+    ///
+    /// # Panics
+    ///
+    /// In debug builds, panics if `width` is negative or NaN.
     #[inline]
     #[must_use]
-    pub const fn with_stroke_width(mut self, width: f32) -> Self {
+    pub fn with_stroke_width(mut self, width: f32) -> Self {
+        debug_assert!(
+            width >= 0.0 && !width.is_nan(),
+            "Stroke width must be non-negative and not NaN, got: {}",
+            width
+        );
         self.stroke_width = width;
         self
     }

@@ -3,6 +3,8 @@
 //! RenderView is the root RenderObject that connects the render tree to the
 //! compositor/window. It handles the initial frame setup and coordinates
 //! the output surface configuration.
+//!
+//! Flutter reference: <https://api.flutter.dev/flutter/rendering/RenderView-class.html>
 
 use crate::core::{
     RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},

@@ -1,4 +1,7 @@
 //! RenderIntrinsicHeight - sizes child to its intrinsic height
+//!
+//! Flutter equivalent: `RenderIntrinsicHeight`
+//! Source: https://api.flutter.dev/flutter/rendering/RenderIntrinsicHeight-class.html
 
 use crate::core::{
     RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},

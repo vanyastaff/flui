@@ -53,11 +53,12 @@ pub struct SliverGeometry {
     /// For expanding slivers (like fill remaining), this is infinity.
     pub max_paint_extent: f32,
 
-    /// The maximum amount of scroll extent that could be scrolled
+    /// The maximum extent by which this sliver can reduce the scrollable area
     ///
-    /// For most slivers, this is scroll_extent. But for slivers
-    /// that can shrink (like SliverFillRemaining), it might be less.
-    pub max_scroll_obsolescence: f32,
+    /// This is used for pinned headers that obstruct the viewport.
+    /// For a pinned header with height 56.0, this would be 56.0.
+    /// For non-pinned slivers, this is 0.0.
+    pub max_scroll_obstruction_extent: f32,
 
     /// Fraction of the sliver currently visible (0.0 to 1.0)
     ///
@@ -82,25 +83,29 @@ pub struct SliverGeometry {
     /// True if the sliver wanted to paint more than paint_extent allowed.
     pub has_visual_overflow: bool,
 
-    /// Whether hit testing should be performed
+    /// The extent used for hit testing
     ///
-    /// False for slivers that are completely off-screen or transparent.
+    /// None means use paint_extent for hit testing.
+    /// Some(value) specifies a custom hit test extent.
     pub hit_test_extent: Option<f32>,
 
-    /// Whether this sliver contributes to the viewport's max scroll extent
+    /// Scroll offset correction requested by this sliver
+    ///
+    /// If set, the viewport should adjust the scroll offset by this amount
+    /// and re-run layout. Used when content changes during layout.
     pub scroll_offset_correction: Option<f32>,
 }
 
 impl SliverGeometry {
-    /// Create geometry for a fully scrolled sliver
-    pub fn zero() -> Self {
+    /// Create geometry for a fully scrolled sliver (zero extent)
+    pub const fn zero() -> Self {
         Self {
             scroll_extent: 0.0,
             paint_extent: 0.0,
             paint_origin: 0.0,
             layout_extent: 0.0,
             max_paint_extent: 0.0,
-            max_scroll_obsolescence: 0.0,
+            max_scroll_obstruction_extent: 0.0,
             visible_fraction: 0.0,
             cross_axis_extent: 0.0,
             cache_extent: 0.0,
@@ -128,7 +133,24 @@ impl SliverGeometry {
         }
     }
 
+    /// Create geometry for a pinned sliver (e.g., pinned header)
+    ///
+    /// Pinned slivers obstruct the viewport and reduce scrollable area.
+    pub fn pinned(extent: f32) -> Self {
+        Self {
+            scroll_extent: extent,
+            paint_extent: extent,
+            layout_extent: extent,
+            max_paint_extent: extent,
+            max_scroll_obstruction_extent: extent,
+            visible: true,
+            visible_fraction: 1.0,
+            ..Self::zero()
+        }
+    }
+
     /// Check if sliver is scrolled off-screen
+    #[inline]
     pub fn is_scrolled_off_screen(&self) -> bool {
         !self.visible
     }
@@ -136,14 +158,137 @@ impl SliverGeometry {
     /// Get the trailing scroll offset
     ///
     /// This is the scroll offset at the trailing edge of this sliver.
+    #[inline]
     pub fn trailing_scroll_offset(&self, leading_scroll_offset: f32) -> f32 {
         leading_scroll_offset + self.scroll_extent
+    }
+
+    /// Get the effective hit test extent
+    ///
+    /// Returns `hit_test_extent` if set, otherwise `paint_extent`.
+    #[inline]
+    pub fn effective_hit_test_extent(&self) -> f32 {
+        self.hit_test_extent.unwrap_or(self.paint_extent)
+    }
+
+    /// Check if geometry is valid
+    ///
+    /// Returns true if all extents are non-negative and finite.
+    #[inline]
+    pub fn is_valid(&self) -> bool {
+        self.scroll_extent >= 0.0
+            && self.paint_extent >= 0.0
+            && self.layout_extent >= 0.0
+            && self.max_paint_extent >= 0.0
+            && self.scroll_extent.is_finite()
+            && self.paint_extent.is_finite()
+            && self.layout_extent.is_finite()
+    }
+
+    /// Create a builder for constructing SliverGeometry
+    pub fn builder() -> SliverGeometryBuilder {
+        SliverGeometryBuilder::new()
     }
 }
 
 impl Default for SliverGeometry {
     fn default() -> Self {
         Self::zero()
+    }
+}
+
+/// Builder for constructing SliverGeometry with a fluent API
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SliverGeometryBuilder {
+    geometry: SliverGeometry,
+}
+
+impl SliverGeometryBuilder {
+    /// Create a new builder with default values
+    pub const fn new() -> Self {
+        Self {
+            geometry: SliverGeometry::zero(),
+        }
+    }
+
+    /// Set the scroll extent
+    pub const fn scroll_extent(mut self, value: f32) -> Self {
+        self.geometry.scroll_extent = value;
+        self
+    }
+
+    /// Set the paint extent
+    pub const fn paint_extent(mut self, value: f32) -> Self {
+        self.geometry.paint_extent = value;
+        self
+    }
+
+    /// Set the paint origin
+    pub const fn paint_origin(mut self, value: f32) -> Self {
+        self.geometry.paint_origin = value;
+        self
+    }
+
+    /// Set the layout extent
+    pub const fn layout_extent(mut self, value: f32) -> Self {
+        self.geometry.layout_extent = value;
+        self
+    }
+
+    /// Set the max paint extent
+    pub const fn max_paint_extent(mut self, value: f32) -> Self {
+        self.geometry.max_paint_extent = value;
+        self
+    }
+
+    /// Set the max scroll obstruction extent
+    pub const fn max_scroll_obstruction_extent(mut self, value: f32) -> Self {
+        self.geometry.max_scroll_obstruction_extent = value;
+        self
+    }
+
+    /// Set the cache extent
+    pub const fn cache_extent(mut self, value: f32) -> Self {
+        self.geometry.cache_extent = value;
+        self
+    }
+
+    /// Set the visible flag
+    pub const fn visible(mut self, value: bool) -> Self {
+        self.geometry.visible = value;
+        self
+    }
+
+    /// Set the has_visual_overflow flag
+    pub const fn has_visual_overflow(mut self, value: bool) -> Self {
+        self.geometry.has_visual_overflow = value;
+        self
+    }
+
+    /// Set the hit test extent
+    pub const fn hit_test_extent(mut self, value: f32) -> Self {
+        self.geometry.hit_test_extent = Some(value);
+        self
+    }
+
+    /// Set the scroll offset correction
+    pub const fn scroll_offset_correction(mut self, value: f32) -> Self {
+        self.geometry.scroll_offset_correction = Some(value);
+        self
+    }
+
+    /// Build the SliverGeometry
+    pub fn build(mut self) -> SliverGeometry {
+        // Auto-calculate visible_fraction if not explicitly set
+        if self.geometry.scroll_extent > 0.0 {
+            self.geometry.visible_fraction =
+                (self.geometry.paint_extent / self.geometry.scroll_extent).min(1.0);
+        }
+        // Auto-set visible based on paint_extent
+        if self.geometry.paint_extent > 0.0 {
+            self.geometry.visible = true;
+        }
+        self.geometry
     }
 }
 
@@ -157,6 +302,7 @@ mod tests {
 
         assert_eq!(geometry.scroll_extent, 0.0);
         assert_eq!(geometry.paint_extent, 0.0);
+        assert_eq!(geometry.max_scroll_obstruction_extent, 0.0);
         assert!(!geometry.visible);
         assert!(!geometry.has_visual_overflow);
     }
@@ -171,6 +317,17 @@ mod tests {
         assert_eq!(geometry.max_paint_extent, 1000.0);
         assert!(geometry.visible);
         assert!((geometry.visible_fraction - 0.6).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_pinned() {
+        let geometry = SliverGeometry::pinned(56.0);
+
+        assert_eq!(geometry.scroll_extent, 56.0);
+        assert_eq!(geometry.paint_extent, 56.0);
+        assert_eq!(geometry.max_scroll_obstruction_extent, 56.0);
+        assert!(geometry.visible);
+        assert_eq!(geometry.visible_fraction, 1.0);
     }
 
     #[test]
@@ -208,6 +365,56 @@ mod tests {
 
         assert_eq!(geometry.trailing_scroll_offset(100.0), 600.0);
         assert_eq!(geometry.trailing_scroll_offset(0.0), 500.0);
+    }
+
+    #[test]
+    fn test_effective_hit_test_extent() {
+        let mut geometry = SliverGeometry {
+            paint_extent: 100.0,
+            ..Default::default()
+        };
+        assert_eq!(geometry.effective_hit_test_extent(), 100.0);
+
+        geometry.hit_test_extent = Some(50.0);
+        assert_eq!(geometry.effective_hit_test_extent(), 50.0);
+    }
+
+    #[test]
+    fn test_is_valid() {
+        let geometry = SliverGeometry::simple(100.0, 50.0);
+        assert!(geometry.is_valid());
+
+        let invalid = SliverGeometry {
+            scroll_extent: -10.0,
+            ..Default::default()
+        };
+        assert!(!invalid.is_valid());
+    }
+
+    #[test]
+    fn test_builder() {
+        let geometry = SliverGeometry::builder()
+            .scroll_extent(1000.0)
+            .paint_extent(600.0)
+            .layout_extent(600.0)
+            .max_paint_extent(1000.0)
+            .build();
+
+        assert_eq!(geometry.scroll_extent, 1000.0);
+        assert_eq!(geometry.paint_extent, 600.0);
+        assert!(geometry.visible);
+        assert!((geometry.visible_fraction - 0.6).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_builder_with_obstruction() {
+        let geometry = SliverGeometry::builder()
+            .scroll_extent(56.0)
+            .paint_extent(56.0)
+            .max_scroll_obstruction_extent(56.0)
+            .build();
+
+        assert_eq!(geometry.max_scroll_obstruction_extent, 56.0);
     }
 
     #[test]

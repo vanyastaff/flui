@@ -1,4 +1,6 @@
 //! RenderIgnorePointer - makes widget ignore pointer events
+//!
+//! Flutter reference: https://api.flutter.dev/flutter/rendering/RenderIgnorePointer-class.html
 
 use crate::core::{
     HitTestTree, RenderBox, Single, {BoxProtocol, HitTestContext, LayoutContext, PaintContext},

@@ -1,4 +1,6 @@
 //! RenderExcludeSemantics - excludes child from semantics tree
+//!
+//! Flutter reference: <https://api.flutter.dev/flutter/widgets/ExcludeSemantics-class.html>
 
 use crate::core::{
     RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},

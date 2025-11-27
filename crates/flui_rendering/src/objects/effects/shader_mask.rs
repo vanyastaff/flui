@@ -6,34 +6,13 @@
 use crate::core::{
     RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
 };
-use flui_types::{painting::BlendMode, styling::Color32, Size};
-
-// ===== Data Structure =====
-/// FIXME: This is a placeholder structure for shader mask data. All types should be in flui_types.
-/// Shader specification (simplified for now)
-#[derive(Debug, Clone)]
-pub enum ShaderSpec {
-    /// Linear gradient shader
-    LinearGradient {
-        /// Start point (relative to size)
-        start: (f32, f32),
-        /// End point (relative to size)
-        end: (f32, f32),
-        /// Colors
-        colors: Vec<Color32>,
-    },
-    /// Radial gradient shader
-    RadialGradient {
-        /// Center point (relative to size)
-        center: (f32, f32),
-        /// Radius (relative to size)
-        radius: f32,
-        /// Colors
-        colors: Vec<Color32>,
-    },
-    /// Solid color (for testing)
-    Solid(Color32),
-}
+use flui_foundation::ElementId;
+use flui_types::{
+    geometry::Rect,
+    painting::{BlendMode, ShaderSpec},
+    styling::Color32,
+    Size,
+};
 
 // ===== RenderObject =====
 
@@ -144,15 +123,35 @@ impl RenderBox<Single> for RenderShaderMask {
         T: crate::core::PaintTree,
     {
         let child_id = ctx.children.single();
+        let child_element_id = ElementId::new(child_id.get());
 
-        // Note: Full shader masking requires compositor support
-        // For now, we'll paint child normally
-        // In production, this would use a ShaderMaskLayer with egui's shader system
-        // or a custom compositor
-        //
-        // TODO: Implement ShaderMaskLayer when compositor supports it
+        // Get the child's size to calculate absolute shader positions
+        let child_size_tuple = ctx
+            .tree()
+            .get_size(child_element_id)
+            .expect("Child should have a size after layout");
+        let child_size = Size::new(child_size_tuple.0, child_size_tuple.1);
 
-        ctx.paint_child(child_id, ctx.offset);
+        // Convert ShaderSpec to flui_painting::Shader
+        let shader = self.shader.to_shader(child_size);
+
+        // Create bounds for the shader mask region
+        let bounds = Rect::from_min_size(ctx.offset, child_size);
+
+        // Save offset before mutably borrowing ctx
+        let offset = ctx.offset;
+
+        // Paint child content FIRST (before shader mask)
+        let child_canvas = ctx
+            .tree_mut()
+            .perform_paint(child_element_id, offset)
+            .expect("Child paint should succeed");
+
+        // Use Canvas::draw_shader_mask() to apply shader mask
+        ctx.canvas().draw_shader_mask(bounds, shader, self.blend_mode, |mask_canvas| {
+            // Append the pre-rendered child content to the masking canvas
+            mask_canvas.append_canvas(child_canvas);
+        });
     }
 }
 

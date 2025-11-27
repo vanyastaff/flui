@@ -9,6 +9,9 @@
 //! - FlexItemMetadata is stored inline (not in separate ParentData)
 //! - Parent (RenderFlex) accesses metadata via GAT-based downcast
 //! - Zero-cost when not using flexible children
+//!
+//! Flutter reference: <https://api.flutter.dev/flutter/widgets/Flexible-class.html>
+//! Flutter reference: <https://api.flutter.dev/flutter/widgets/Expanded-class.html>
 
 use crate::core::{BoxProtocol, LayoutContext, PaintContext, RenderBox, Single};
 use flui_types::{layout::FlexFit, Size};

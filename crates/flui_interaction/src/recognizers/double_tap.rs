@@ -7,6 +7,8 @@
 //! - Second tap starts within DOUBLE_TAP_TIMEOUT_MS (300ms)
 //! - Second tap within DOUBLE_TAP_SLOP (100px) of first tap
 //! - Second tap completes successfully
+//!
+//! Flutter reference: https://api.flutter.dev/flutter/gestures/DoubleTapGestureRecognizer-class.html
 
 use super::recognizer::{constants, GestureRecognizer, GestureRecognizerState};
 use crate::arena::{GestureArenaMember, PointerId};

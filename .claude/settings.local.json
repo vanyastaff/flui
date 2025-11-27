@@ -45,7 +45,10 @@
       "mcp__filesystem__edit_file",
       "mcp__filesystem__read_text_file",
       "Bash(cargo nextest run:*)",
-      "Bash(cargo hack check:*)"
+      "Bash(cargo hack check:*)",
+      "SlashCommand(/openspec:apply)",
+      "SlashCommand(/openspec:archive)",
+      "SlashCommand(/openspec:archive:*)"
     ],
     "deny": [],
     "ask": []

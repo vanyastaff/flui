@@ -24,6 +24,15 @@ pub struct CanvasLayer {
     canvas: Canvas,
 }
 
+// Manual Debug implementation (Canvas doesn't derive Debug)
+impl std::fmt::Debug for CanvasLayer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CanvasLayer")
+            .field("canvas", &"<Canvas>")
+            .finish()
+    }
+}
+
 impl CanvasLayer {
     pub fn new() -> Self {
         Self::default()

@@ -6,6 +6,8 @@
 //! - Specified number of pointers down within time window
 //! - All pointers stay within slop tolerance
 //! - All pointers released (tap completed)
+//!
+//! Flutter reference: https://api.flutter.dev/flutter/gestures/MultiTapGestureRecognizer-class.html
 
 use super::recognizer::{constants, GestureRecognizer, GestureRecognizerState};
 use crate::arena::{GestureArenaMember, PointerId};

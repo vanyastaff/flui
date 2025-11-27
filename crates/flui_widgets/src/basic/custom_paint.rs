@@ -24,7 +24,7 @@ pub type PainterCallback = Arc<dyn Fn(&mut Canvas, Size, Offset) + Send + Sync>;
 ///     .painter(|canvas, size, offset| {
 ///         // Draw custom graphics
 ///         let paint = Paint::fill(Color::RED);
-///         canvas.draw_circle(Point::new(size.width / 2.0, size.height / 2.0), 50.0, &paint);
+///         canvas.circle(Point::new(size.width / 2.0, size.height / 2.0), 50.0, &paint);
 ///     })
 ///     .size(Size::new(200.0, 200.0))
 ///     .build()

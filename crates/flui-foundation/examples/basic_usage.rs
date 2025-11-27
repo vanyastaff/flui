@@ -104,41 +104,6 @@ fn main() {
     println!();
 
     // ========================================================================
-    // ATOMIC FLAGS
-    // ========================================================================
-
-    println!("⚛️  Atomic Flags:");
-
-    let flags = AtomicElementFlags::new();
-
-    // Set some flags
-    flags.insert(ElementFlags::DIRTY);
-    flags.insert(ElementFlags::NEEDS_LAYOUT);
-
-    println!("  Flags set: DIRTY, NEEDS_LAYOUT");
-    println!("  Is dirty? {}", flags.contains(ElementFlags::DIRTY));
-    println!(
-        "  Needs layout? {}",
-        flags.contains(ElementFlags::NEEDS_LAYOUT)
-    );
-    println!(
-        "  Needs paint? {}",
-        flags.contains(ElementFlags::NEEDS_PAINT)
-    );
-
-    // Load all flags at once
-    let current_flags = flags.load();
-    println!("  Current flags: {:?}", current_flags);
-
-    // Clear a flag
-    flags.remove(ElementFlags::DIRTY);
-    println!(
-        "  After clearing DIRTY: is dirty? {}",
-        flags.contains(ElementFlags::DIRTY)
-    );
-    println!();
-
-    // ========================================================================
     // DIAGNOSTICS
     // ========================================================================
 
@@ -231,30 +196,19 @@ impl Diagnosticable for MyWidget {
     }
 }
 
-// Example showing thread safety
+// Example showing thread safety with ChangeNotifier
 #[allow(dead_code)]
 fn demonstrate_thread_safety() {
     use std::thread;
 
-    let flags = Arc::new(AtomicElementFlags::new());
     let notifier = Arc::new(ChangeNotifier::new());
 
-    // Spawn threads to modify flags and trigger notifications
+    // Spawn threads to trigger notifications
     let handles: Vec<_> = (0..4)
-        .map(|i| {
-            let flags = flags.clone();
+        .map(|_i| {
             let notifier = notifier.clone();
 
             thread::spawn(move || {
-                // Set different flags from each thread
-                match i {
-                    0 => flags.insert(ElementFlags::DIRTY),
-                    1 => flags.insert(ElementFlags::NEEDS_LAYOUT),
-                    2 => flags.insert(ElementFlags::NEEDS_PAINT),
-                    3 => flags.insert(ElementFlags::MOUNTED),
-                    _ => unreachable!(),
-                }
-
                 // Notify from each thread
                 notifier.notify_listeners();
             })
@@ -266,6 +220,5 @@ fn demonstrate_thread_safety() {
         handle.join().unwrap();
     }
 
-    // Check final state
-    println!("Final flags after threaded operations: {:?}", flags.load());
+    println!("All threads completed notifications successfully");
 }

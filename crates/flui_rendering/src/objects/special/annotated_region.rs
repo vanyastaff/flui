@@ -2,6 +2,8 @@
 //!
 //! This widget provides metadata about the region it covers that can be read by
 //! ancestors or the system (e.g., system UI overlay styling).
+//!
+//! Flutter reference: <https://api.flutter.dev/flutter/rendering/RenderAnnotatedRegion-class.html>
 
 use crate::core::{
     LayoutTree, PaintTree, RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},

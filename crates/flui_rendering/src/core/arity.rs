@@ -41,6 +41,8 @@
 //! - Use `runtime_arity()` in error messages to report expected arity.
 //! - Leverage the `ChildrenAccess` trait for flexible, arity-agnostic code.
 
+use flui_foundation::ElementId;
+
 /// Runtime arity information
 ///
 /// Represents the runtime equivalent of compile-time arity types.
@@ -344,28 +346,52 @@ impl<'a, const N: usize> ChildrenAccess for FixedChildren<'a, N> {
 }
 
 impl<'a> FixedChildren<'a, 1> {
-    /// Return the single child (guaranteed to exist).
+    /// Return the single child as NonZeroUsize (guaranteed to exist).
     #[inline(always)]
     pub fn single(&self) -> std::num::NonZeroUsize {
         self.children[0]
     }
+
+    /// Return the single child as ElementId (guaranteed to exist).
+    #[inline(always)]
+    pub fn single_id(&self) -> ElementId {
+        ElementId::new(self.children[0].get())
+    }
 }
 
 impl<'a> FixedChildren<'a, 2> {
-    /// First child.
+    /// First child as NonZeroUsize.
     #[inline(always)]
     pub fn first(&self) -> std::num::NonZeroUsize {
         self.children[0]
     }
-    /// Second child.
+    /// First child as ElementId.
+    #[inline(always)]
+    pub fn first_id(&self) -> ElementId {
+        ElementId::new(self.children[0].get())
+    }
+    /// Second child as NonZeroUsize.
     #[inline(always)]
     pub fn second(&self) -> std::num::NonZeroUsize {
         self.children[1]
     }
-    /// Both children as a tuple.
+    /// Second child as ElementId.
+    #[inline(always)]
+    pub fn second_id(&self) -> ElementId {
+        ElementId::new(self.children[1].get())
+    }
+    /// Both children as a tuple of NonZeroUsize.
     #[inline(always)]
     pub fn pair(&self) -> (std::num::NonZeroUsize, std::num::NonZeroUsize) {
         (self.children[0], self.children[1])
+    }
+    /// Both children as a tuple of ElementId.
+    #[inline(always)]
+    pub fn pair_ids(&self) -> (ElementId, ElementId) {
+        (
+            ElementId::new(self.children[0].get()),
+            ElementId::new(self.children[1].get()),
+        )
     }
 }
 

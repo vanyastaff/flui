@@ -12,7 +12,7 @@ use super::color::Color;
 /// # Examples
 ///
 /// ```
-/// use flui_types::{Color, HSLColor};
+/// use flui_types::prelude::{Color, HSLColor};
 ///
 /// let red = Color::RED;
 /// let hsl: HSLColor = red.into();
@@ -140,7 +140,7 @@ impl From<HSLColor> for Color {
 /// # Examples
 ///
 /// ```
-/// use flui_types::{Color, HSVColor};
+/// use flui_types::prelude::{Color, HSVColor};
 ///
 /// let blue = Color::BLUE;
 /// let hsv: HSVColor = blue.into();

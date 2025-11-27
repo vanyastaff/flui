@@ -1,4 +1,6 @@
 //! RenderBlockSemantics - blocks descendant semantics from being merged
+//!
+//! Flutter reference: <https://api.flutter.dev/flutter/widgets/BlockSemantics-class.html>
 
 use crate::core::{
     RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},

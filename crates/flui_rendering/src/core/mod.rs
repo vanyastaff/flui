@@ -43,7 +43,7 @@ pub mod render_proxy;
 pub mod render_sliver;
 pub mod render_state;
 pub mod render_tree;
-// TODO: Update wrappers.rs to use new context-based API
+// Note: wrappers.rs not needed with current context-based API
 // pub mod wrappers;
 
 // Re-export arity types
@@ -63,12 +63,13 @@ pub use flui_types::{SliverConstraints, SliverGeometry};
 
 // Re-export parent data types
 pub use parent_data::{
-    BoxParentData, ContainerBoxParentData, ContainerParentData, ParentData, ParentDataWithOffset,
+    BoxParentData, ContainerBoxParentData, ContainerParentData, FlexParentData, ParentData,
+    ParentDataWithOffset, StackParentData,
 };
 
 // Re-export flags and state
 pub use render_flags::{AtomicRenderFlags, RenderFlags};
-pub use render_state::RenderState;
+pub use render_state::{Baselines, RenderState};
 
 // Re-export hit testing from flui_interaction
 pub use flui_interaction::{HitTestBehavior, HitTestEntry, HitTestResult, HitTestable};
@@ -98,5 +99,5 @@ pub use render_sliver::{SliverRender, SliverRenderExt};
 // Re-export proxy traits
 pub use render_proxy::{RenderBoxProxy, RenderSliverProxy};
 
-// Re-export wrappers (TODO: Update to new API)
+// Note: Wrappers not needed with current context-based API
 // pub use wrappers::{BoxRenderWrapper, SliverRenderWrapper};

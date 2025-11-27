@@ -21,9 +21,9 @@ pub mod decorated_box;
 // Single Arity - Migrated ✅
 pub mod animated_size;
 
-// TODO: Re-enable after migration
-pub mod physical_model; // Optional arity
-                        // pub mod physical_shape;     // Optional arity
+// Optional Arity - Migrated ✅
+pub mod physical_model;
+pub mod physical_shape;
 
 pub mod clip_base; // Helper module
 
@@ -38,7 +38,7 @@ pub use custom_paint::RenderCustomPaint;
 pub use offstage::RenderOffstage;
 pub use opacity::RenderOpacity;
 pub use repaint_boundary::RenderRepaintBoundary;
-pub use shader_mask::{RenderShaderMask, ShaderSpec};
+pub use shader_mask::RenderShaderMask;
 pub use transform::RenderTransform;
 pub use visibility::RenderVisibility;
 
@@ -50,6 +50,4 @@ pub use animated_size::{RenderAnimatedSize, SizeAlignment};
 
 // Physical model (Optional arity)
 pub use physical_model::{PhysicalShape, RenderPhysicalModel};
-
-// TODO: Re-enable after migration
-// pub use physical_shape::{RenderPhysicalShape, ShapeClipper};
+pub use physical_shape::{RenderPhysicalShape, ShapeClipper};

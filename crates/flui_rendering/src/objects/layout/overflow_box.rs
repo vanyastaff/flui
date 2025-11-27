@@ -1,4 +1,7 @@
-//! RenderOverflowBox - allows child_id to overflow constraints
+//! RenderOverflowBox - allows child to overflow constraints
+//!
+//! Flutter equivalent: `RenderConstrainedOverflowBox`
+//! Source: https://api.flutter.dev/flutter/rendering/RenderConstrainedOverflowBox-class.html
 
 use crate::core::{BoxProtocol, LayoutContext, PaintContext, RenderBox, Single};
 use flui_types::constraints::BoxConstraints;

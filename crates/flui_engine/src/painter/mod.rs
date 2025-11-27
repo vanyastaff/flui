@@ -57,6 +57,7 @@
 pub mod buffer_pool;
 pub mod effects;
 pub mod effects_pipeline;
+pub mod external_texture_registry;
 pub mod instancing;
 pub mod multi_draw;
 pub mod pipeline;
@@ -79,6 +80,9 @@ pub use vertex::Vertex;
 
 // Tessellator (public for advanced use)
 pub use tessellator::Tessellator;
+
+// External texture registry
+pub use external_texture_registry::{ExternalTextureEntry, ExternalTextureRegistry};
 
 // Re-export RRect from flui_types
 pub use flui_types::geometry::RRect;

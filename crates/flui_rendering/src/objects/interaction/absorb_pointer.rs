@@ -1,4 +1,6 @@
 //! RenderAbsorbPointer - prevents pointer events from reaching children
+//!
+//! Flutter reference: https://api.flutter.dev/flutter/rendering/RenderAbsorbPointer-class.html
 
 use crate::core::{
     HitTestTree, RenderBox, Single, {BoxProtocol, HitTestContext, LayoutContext, PaintContext},

@@ -177,7 +177,7 @@ impl<S: ClipShape + 'static> RenderBox<Single> for RenderClip<S> {
         ctx.paint_child(child_id, Offset::ZERO);
 
         // Restore canvas state
-        ctx.canvas().restore();
+        ctx.canvas().restored();
     }
 
     fn hit_test<T>(

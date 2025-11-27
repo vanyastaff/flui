@@ -1,7 +1,6 @@
 //! RenderSliverConstrainedCrossAxis - Constrains cross-axis extent for slivers
 
-use crate::core::{RuntimeArity, LegacySliverRender, SliverLayoutContext, SliverPaintContext};
-use flui_painting::Canvas;
+use crate::core::{LayoutContext, LayoutTree, RenderSliverProxy, Single, SliverProtocol};
 use flui_types::{SliverConstraints, SliverGeometry};
 
 /// RenderObject that constrains the cross-axis extent of sliver content
@@ -29,9 +28,6 @@ use flui_types::{SliverConstraints, SliverGeometry};
 pub struct RenderSliverConstrainedCrossAxis {
     /// Maximum cross-axis extent
     pub max_extent: f32,
-
-    // Layout cache
-    sliver_geometry: SliverGeometry,
 }
 
 impl RenderSliverConstrainedCrossAxis {
@@ -40,20 +36,12 @@ impl RenderSliverConstrainedCrossAxis {
     /// # Arguments
     /// * `max_extent` - Maximum cross-axis extent
     pub fn new(max_extent: f32) -> Self {
-        Self {
-            max_extent,
-            sliver_geometry: SliverGeometry::default(),
-        }
+        Self { max_extent }
     }
 
     /// Set maximum extent
     pub fn set_max_extent(&mut self, max_extent: f32) {
         self.max_extent = max_extent;
-    }
-
-    /// Get the sliver geometry from last layout
-    pub fn geometry(&self) -> SliverGeometry {
-        self.sliver_geometry
     }
 
     /// Calculate child constraints with limited cross-axis extent
@@ -62,8 +50,11 @@ impl RenderSliverConstrainedCrossAxis {
 
         SliverConstraints {
             axis_direction: constraints.axis_direction,
-            grow_direction_reversed: constraints.grow_direction_reversed,
+            growth_direction: constraints.growth_direction,
+            user_scroll_direction: constraints.user_scroll_direction,
             scroll_offset: constraints.scroll_offset,
+            preceding_scroll_extent: constraints.preceding_scroll_extent,
+            overlap: constraints.overlap,
             remaining_paint_extent: constraints.remaining_paint_extent,
             cross_axis_extent: constrained_cross_axis,
             cross_axis_direction: constraints.cross_axis_direction,
@@ -88,7 +79,7 @@ impl RenderSliverConstrainedCrossAxis {
             paint_origin: child_geometry.paint_origin,
             layout_extent: child_geometry.layout_extent,
             max_paint_extent: child_geometry.max_paint_extent,
-            max_scroll_obsolescence: child_geometry.max_scroll_obsolescence,
+            max_scroll_obstruction_extent: child_geometry.max_scroll_obstruction_extent,
             visible_fraction: child_geometry.visible_fraction,
             cross_axis_extent: constrained_cross_axis,
             cache_extent: child_geometry.cache_extent,
@@ -106,48 +97,34 @@ impl Default for RenderSliverConstrainedCrossAxis {
     }
 }
 
-impl LegacySliverRender for RenderSliverConstrainedCrossAxis {
-    fn layout(&mut self, ctx: &SliverLayoutContext) -> SliverGeometry {
-        let constraints = &ctx.constraints;
+impl RenderSliverProxy for RenderSliverConstrainedCrossAxis {
+    // Layout: custom implementation to constrain cross-axis
+    fn proxy_layout<T>(
+        &mut self,
+        mut ctx: LayoutContext<'_, T, Single, SliverProtocol>,
+    ) -> SliverGeometry
+    where
+        T: LayoutTree,
+    {
+        let constraints = ctx.constraints;
 
         // Constrain cross-axis for child
-        let child_constraints = self.child_constraints(constraints);
+        let child_constraints = self.child_constraints(&constraints);
 
-        // Layout child
-        let child_geometry = if let Some(child_id) = ctx.children.try_single() {
-            ctx.tree.layout_sliver_child(child_id, child_constraints)
-        } else {
-            SliverGeometry::default()
-        };
+        // Layout child with constrained cross-axis
+        let child_geometry = ctx.layout_child(ctx.children.single(), child_constraints);
 
-        // Calculate and cache geometry with constrained cross-axis
-        self.sliver_geometry = self.calculate_sliver_geometry(constraints, child_geometry);
-        self.sliver_geometry
+        // Calculate geometry with constrained cross-axis
+        self.calculate_sliver_geometry(&constraints, child_geometry)
     }
 
-    fn paint(&self, ctx: &SliverPaintContext) -> Canvas {
-        // Paint child if present and visible
-        if let Some(child_id) = ctx.children.try_single() {
-            if self.sliver_geometry.visible {
-                return ctx.tree.paint_child(child_id, ctx.offset);
-            }
-        }
-
-        Canvas::new()
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> RuntimeArity {
-        RuntimeArity::Exact(1) // Single child sliver
-    }
+    // Paint: use default proxy (child painted normally)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_types::constraints::{GrowthDirection, ScrollDirection};
     use flui_types::layout::AxisDirection;
 
     #[test]
@@ -178,14 +155,18 @@ mod tests {
 
         let constraints = SliverConstraints {
             axis_direction: AxisDirection::TopToBottom,
-            grow_direction_reversed: false,
+            growth_direction: GrowthDirection::Forward,
+            user_scroll_direction: ScrollDirection::Idle,
             scroll_offset: 0.0,
+            preceding_scroll_extent: 0.0,
+            overlap: 0.0,
             remaining_paint_extent: 800.0,
             cross_axis_extent: 400.0, // Less than max
             cross_axis_direction: AxisDirection::LeftToRight,
             viewport_main_axis_extent: 800.0,
             remaining_cache_extent: 1000.0,
             cache_origin: 0.0,
+            ..SliverConstraints::default()
         };
 
         let child_constraints = constrained.child_constraints(&constraints);
@@ -200,14 +181,18 @@ mod tests {
 
         let constraints = SliverConstraints {
             axis_direction: AxisDirection::TopToBottom,
-            grow_direction_reversed: false,
+            growth_direction: GrowthDirection::Forward,
+            user_scroll_direction: ScrollDirection::Idle,
             scroll_offset: 0.0,
+            preceding_scroll_extent: 0.0,
+            overlap: 0.0,
             remaining_paint_extent: 800.0,
             cross_axis_extent: 1000.0, // Exceeds max
             cross_axis_direction: AxisDirection::LeftToRight,
             viewport_main_axis_extent: 800.0,
             remaining_cache_extent: 1000.0,
             cache_origin: 0.0,
+            ..SliverConstraints::default()
         };
 
         let child_constraints = constrained.child_constraints(&constraints);
@@ -222,14 +207,18 @@ mod tests {
 
         let constraints = SliverConstraints {
             axis_direction: AxisDirection::TopToBottom,
-            grow_direction_reversed: false,
+            growth_direction: GrowthDirection::Forward,
+            user_scroll_direction: ScrollDirection::Idle,
             scroll_offset: 0.0,
+            preceding_scroll_extent: 0.0,
+            overlap: 0.0,
             remaining_paint_extent: 800.0,
             cross_axis_extent: 600.0, // Exactly at max
             cross_axis_direction: AxisDirection::LeftToRight,
             viewport_main_axis_extent: 800.0,
             remaining_cache_extent: 1000.0,
             cache_origin: 0.0,
+            ..SliverConstraints::default()
         };
 
         let child_constraints = constrained.child_constraints(&constraints);
@@ -244,14 +233,18 @@ mod tests {
 
         let constraints = SliverConstraints {
             axis_direction: AxisDirection::TopToBottom,
-            grow_direction_reversed: false,
+            growth_direction: GrowthDirection::Forward,
+            user_scroll_direction: ScrollDirection::Idle,
             scroll_offset: 0.0,
+            preceding_scroll_extent: 0.0,
+            overlap: 0.0,
             remaining_paint_extent: 800.0,
             cross_axis_extent: 1000.0,
             cross_axis_direction: AxisDirection::LeftToRight,
             viewport_main_axis_extent: 800.0,
             remaining_cache_extent: 1000.0,
             cache_origin: 0.0,
+            ..SliverConstraints::default()
         };
 
         let child_geometry = SliverGeometry {
@@ -267,7 +260,7 @@ mod tests {
             has_visual_overflow: false,
             hit_test_extent: Some(500.0),
             scroll_offset_correction: None,
-            max_scroll_obsolescence: 0.0,
+            max_scroll_obstruction_extent: 0.0,
         };
 
         let geometry = constrained.calculate_sliver_geometry(&constraints, child_geometry);
@@ -285,14 +278,18 @@ mod tests {
 
         let constraints = SliverConstraints {
             axis_direction: AxisDirection::TopToBottom,
-            grow_direction_reversed: false,
+            growth_direction: GrowthDirection::Forward,
+            user_scroll_direction: ScrollDirection::Idle,
             scroll_offset: 0.0,
+            preceding_scroll_extent: 0.0,
+            overlap: 0.0,
             remaining_paint_extent: 800.0,
             cross_axis_extent: 1000.0,
             cross_axis_direction: AxisDirection::LeftToRight,
             viewport_main_axis_extent: 800.0,
             remaining_cache_extent: 1000.0,
             cache_origin: 0.0,
+            ..SliverConstraints::default()
         };
 
         let child_geometry = SliverGeometry {
@@ -308,18 +305,12 @@ mod tests {
             has_visual_overflow: false,
             hit_test_extent: Some(500.0),
             scroll_offset_correction: None,
-            max_scroll_obsolescence: 0.0,
+            max_scroll_obstruction_extent: 0.0,
         };
 
         let geometry = constrained.calculate_sliver_geometry(&constraints, child_geometry);
 
         // Cross-axis should pass through unchanged
         assert_eq!(geometry.cross_axis_extent, 1000.0);
-    }
-
-    #[test]
-    fn test_arity_is_single_child() {
-        let constrained = RenderSliverConstrainedCrossAxis::new(600.0);
-        assert_eq!(constrained.arity(), RuntimeArity::Exact(1));
     }
 }

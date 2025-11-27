@@ -2,11 +2,8 @@
 
 use crate::core::{BoxProtocol, LayoutContext, PaintContext};
 use crate::core::{Optional, RenderBox};
-use flui_painting::{Canvas, Paint};
-use flui_types::{
-    painting::Path,
-    Color, Size,
-};
+use flui_painting::Paint;
+use flui_types::{painting::Path, Color, Size};
 
 /// Clipper function that creates a custom path for the given size
 pub type ShapeClipper = Box<dyn Fn(Size) -> Path + Send + Sync>;
@@ -131,25 +128,21 @@ impl RenderBox<Optional> for RenderPhysicalShape {
 
         // Get the custom shape path in local coordinates
         let local_path = self.get_shape_path();
+        let paint = Paint::fill(self.color);
 
         // Transform the path to world coordinates by applying offset translation
         // Since Path doesn't have a transform method, we use Canvas transforms instead
-        ctx.canvas().save();
-        ctx.canvas().translate(offset.dx, offset.dy);
-
-        // Draw shadow if elevation > 0
-        if self.elevation > 0.0 {
-            ctx.canvas().draw_shadow(&local_path, self.shadow_color, self.elevation);
-        }
-
-        // Fill the shape with color
-        let paint = Paint::fill(self.color);
-        ctx.canvas().draw_path(&local_path, &paint);
-
-        // Clip to shape for child
-        ctx.canvas().clip_path(&local_path);
-
-        ctx.canvas().restore();
+        ctx.canvas()
+            .saved()
+            .translated(offset.dx, offset.dy)
+            // Draw shadow if elevation > 0
+            .when(self.elevation > 0.0, |c| {
+                c.shadow(&local_path, self.shadow_color, self.elevation)
+            })
+            // Fill the shape with color and clip to shape for child
+            .path(&local_path, &paint)
+            .clipped_path(&local_path)
+            .restored();
 
         // Paint child on top if present
         if let Some(child_id) = ctx.children.get() {

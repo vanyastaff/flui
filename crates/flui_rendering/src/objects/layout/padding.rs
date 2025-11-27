@@ -1,4 +1,6 @@
 //! RenderPadding - adds padding around a child
+//!
+//! Flutter reference: <https://api.flutter.dev/flutter/rendering/RenderPadding-class.html>
 
 use crate::core::{BoxProtocol, LayoutContext, PaintContext, RenderBox, Single};
 use flui_types::{EdgeInsets, Size};

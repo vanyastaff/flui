@@ -457,6 +457,173 @@ If text doesn't appear on screen but all pipeline phases execute:
 
 **Common issue:** Layout dirty set and RenderState flags out of sync.
 
+## Advanced Visual Effects
+
+### Shader Mask Effects
+
+FLUI provides GPU-accelerated shader mask effects for advanced visual styling through the `RenderShaderMask` render object. Shader masks apply gradient or solid color masks to child content, enabling effects like fades, vignettes, and spotlights.
+
+**Architecture:**
+
+```
+Child Content → Offscreen Texture → Apply Shader Mask → Composite to Framebuffer
+```
+
+The implementation spans three layers:
+- **`flui_rendering`**: `RenderShaderMask` render object (crates/flui_rendering/src/objects/effects/shader_mask.rs:122)
+- **`flui_painting`**: Canvas API with `draw_shader_mask()` method
+- **`flui_engine`**: GPU implementation via `ShaderMaskLayer`, offscreen rendering, and WGSL shaders
+
+**Basic Usage:**
+
+```rust
+use flui_rendering::prelude::RenderShaderMask;
+use flui_types::{
+    painting::{BlendMode, ShaderSpec},
+    styling::Color32,
+};
+
+// Linear gradient fade (left opaque → right transparent)
+let fade = RenderShaderMask {
+    shader: ShaderSpec::LinearGradient {
+        start: (0.0, 0.5),  // Left center (normalized 0-1)
+        end: (1.0, 0.5),    // Right center
+        colors: vec![
+            Color32::WHITE,        // Fully opaque
+            Color32::TRANSPARENT,  // Fully transparent
+        ],
+    },
+    blend_mode: BlendMode::SrcOver,
+};
+
+// Radial gradient vignette (bright center → dark edges)
+let vignette = RenderShaderMask::radial_gradient(
+    (0.5, 0.5),  // Center of viewport
+    0.7,         // Radius (70% of viewport)
+    vec![
+        Color32::WHITE,  // Bright center
+        Color32::from_rgba_unmultiplied(0, 0, 0, 200),  // Dark edges
+    ],
+)
+.with_blend_mode(BlendMode::Multiply);
+
+// Solid color mask (for testing)
+let solid = RenderShaderMask::solid(Color32::WHITE);
+```
+
+**Coordinate System:**
+
+- **Normalized coordinates (0.0 - 1.0)**: ShaderSpec uses relative positions
+- **Absolute coordinates**: Converted during paint() based on child size
+- **Example**: `(0.5, 0.5)` always points to the center regardless of actual size
+
+**Blend Modes:**
+
+- `SrcOver` - Standard alpha compositing (default)
+- `Multiply` - Darkens content (perfect for vignettes)
+- `Screen` - Lightens content
+- Other Porter-Duff modes supported via `BlendMode` enum
+
+**Common Patterns:**
+
+```rust
+// Pattern 1: Horizontal fade (text fade-out)
+let horizontal = RenderShaderMask::linear_gradient(
+    (0.0, 0.5), (1.0, 0.5),
+    vec![Color32::WHITE, Color32::TRANSPARENT],
+);
+
+// Pattern 2: Vertical fade (scroll fade indicator)
+let vertical = RenderShaderMask::linear_gradient(
+    (0.5, 0.0), (0.5, 1.0),
+    vec![Color32::TRANSPARENT, Color32::WHITE, Color32::TRANSPARENT],
+);
+
+// Pattern 3: Diagonal fade (creative effect)
+let diagonal = RenderShaderMask::linear_gradient(
+    (0.0, 0.0), (1.0, 1.0),
+    vec![Color32::RED, Color32::BLUE],
+).with_blend_mode(BlendMode::Multiply);
+
+// Pattern 4: Spotlight (focused attention)
+let spotlight = RenderShaderMask::radial_gradient(
+    (0.5, 0.5), 0.5,
+    vec![Color32::WHITE, Color32::BLACK],
+);
+
+// Pattern 5: Colored vignette (creative atmosphere)
+let colored = RenderShaderMask::radial_gradient(
+    (0.5, 0.5), 0.8,
+    vec![Color32::WHITE, Color32::from_rgb(150, 100, 200)],
+).with_blend_mode(BlendMode::Multiply);
+```
+
+**Performance Characteristics:**
+
+- **Shader Compilation**: Cached per shader type (SolidMask, LinearGradientMask, RadialGradientMask)
+- **Texture Pooling**: Offscreen textures reused via texture pool to minimize GPU allocations
+- **GPU Execution**: All masking operations run on GPU via WGSL shaders
+- **First Use Cost**: ~1-2ms for shader compilation (subsequent uses: < 0.1ms)
+
+**Implementation Status:**
+
+✅ Phase 1: ShaderMaskLayer (GPU infrastructure) - COMPLETE
+✅ Phase 3: RenderObject Integration - COMPLETE
+- Canvas API: `Canvas::draw_shader_mask()` (crates/flui_painting/src/canvas.rs)
+- RenderShaderMask paint implementation (crates/flui_rendering/src/objects/effects/shader_mask.rs:122)
+- Offscreen rendering with texture pooling
+- WGSL shaders: solid, linear gradient, radial gradient
+- Type consolidation: `ShaderSpec` in flui_types
+
+✅ Phase 2: BackdropFilterLayer - COMPLETE
+
+**BackdropFilterLayer** applies image filters (blur, color adjustments) to backdrop content:
+
+- **Architecture**: Capture framebuffer → Apply GPU filter → Composite with child
+- **Filters**: Gaussian blur, dilate, erode, matrix, color, compose
+- **Blur Implementation**: Two-pass separable Gaussian (horizontal + vertical)
+- **Shaders**: `gaussian_blur_horizontal.wgsl`, `gaussian_blur_vertical.wgsl`
+- **Performance**: O(n) complexity per pixel (vs O(n²) for 2D blur)
+
+**Usage Example:**
+
+```rust
+use flui_rendering::RenderBackdropFilter;
+use flui_types::painting::ImageFilter;
+
+// Frosted glass effect with 10px blur
+let backdrop_filter = RenderBackdropFilter::blur(10.0);
+```
+
+**Canvas API:**
+
+```rust
+ctx.canvas().draw_backdrop_filter(
+    bounds,
+    ImageFilter::blur(5.0),
+    BlendMode::SrcOver,
+    Some(|canvas| {
+        // Draw child content on top of filtered backdrop
+        canvas.draw_rect(rect, paint);
+    }),
+);
+```
+
+**Examples:**
+
+- `examples/shader_mask_gradient.rs` - Gradient fade effects (horizontal, vertical, diagonal)
+- `examples/shader_mask_vignette.rs` - Vignette effects (classic, soft, spotlight, colored)
+- ⏸️ `examples/backdrop_filter_frosted.rs` - Frosted glass (pending visual examples)
+
+**See Also:**
+
+- OpenSpec proposal: `openspec/changes/add-compositor-layer-support/`
+- ShaderMask implementation: `crates/flui_engine/src/layer/shader_mask.rs`
+- BackdropFilter implementation: `crates/flui_engine/src/layer/backdrop_filter.rs`
+- Shader compiler: `crates/flui_engine/src/layer/shader_compiler.rs`
+- Gaussian blur shaders: `crates/flui_engine/src/layer/shaders/gaussian_blur_*.wgsl`
+- Offscreen renderer: `crates/flui_engine/src/layer/offscreen_renderer.rs`
+
 ## Common Patterns
 
 ### Creating a Simple View (New API)
@@ -567,6 +734,238 @@ impl MultiRender for RenderFlex {
     }
 }
 ```
+
+### Using RenderSliverProxy Pattern
+
+**IMPORTANT:** Use `RenderSliverProxy` for sliver objects that pass through layout unchanged but need to modify painting, hit testing, or semantics.
+
+The RenderSliverProxy pattern is a zero-cost abstraction for implementing single-child sliver objects that act as lightweight wrappers around their child. Common examples include opacity, ignoring pointer events, and offstage rendering.
+
+```rust
+use flui_rendering::core::{RenderSliverProxy, PaintContext, PaintTree, Single};
+
+/// Sliver that applies opacity to its child
+pub struct RenderSliverOpacity {
+    pub opacity: f32,
+}
+
+impl RenderSliverOpacity {
+    pub fn new(opacity: f32) -> Self {
+        Self {
+            opacity: opacity.clamp(0.0, 1.0),
+        }
+    }
+}
+
+impl RenderSliverProxy for RenderSliverOpacity {
+    // Layout: Default implementation passes constraints through unchanged
+    // No need to override unless you modify constraints
+
+    // Paint: Custom implementation applies opacity
+    fn proxy_paint<T>(&self, ctx: &mut PaintContext<'_, T, Single>)
+    where
+        T: PaintTree,
+    {
+        // Apply opacity effect, then paint child
+        // TODO: Apply opacity layer when canvas API supports it
+        ctx.proxy();  // Paint child
+    }
+}
+```
+
+**When to use RenderSliverProxy:**
+- ✅ Single-child sliver objects
+- ✅ Layout constraints pass through unchanged
+- ✅ Only paint/hit-test/semantics behavior differs
+- ✅ Examples: opacity, ignore pointer, offstage, clipping
+
+**When NOT to use RenderSliverProxy:**
+- ❌ Layout needs modification (use SliverRender<Single> instead)
+- ❌ Multiple children (use SliverRender<Variable>)
+- ❌ Complex geometry transformations (implement full SliverRender)
+
+**Built-in Proxy Objects:**
+
+```rust
+// Opacity - applies transparency
+RenderSliverOpacity::new(0.5)
+
+// Ignore pointer - blocks pointer events
+RenderSliverIgnorePointer::new(true)
+
+// Offstage - hides content (keeps in layout)
+RenderSliverOffstage::new(true)
+
+// Animated opacity - optimized for animations
+RenderSliverAnimatedOpacity::new(1.0)
+
+// Constrained cross-axis - limits cross-axis extent
+RenderSliverConstrainedCrossAxis::new(200.0)
+```
+
+**Key Benefits:**
+- ✅ One-line implementations for simple proxies
+- ✅ Zero overhead - compiles to direct pass-through
+- ✅ Automatic protocol compliance
+- ✅ Type-safe child access via PaintContext
+- ✅ Consistent with Flutter's RenderProxyBox pattern
+
+**Implementation Details:**
+- Default `proxy_layout()` passes constraints through unchanged
+- Default `proxy_paint()` just calls `ctx.proxy()` to paint child
+- Override only the methods you need to customize
+- All proxy objects have `Single` arity (exactly one child)
+
+**See also:**
+- Implementation: `crates/flui_rendering/src/objects/sliver/sliver_opacity.rs`
+- More examples: `crates/flui_rendering/src/objects/sliver/sliver_animated_opacity.rs`
+- Proxy trait definition: `crates/flui_rendering/src/core/sliver_proxy.rs`
+
+### Superior Design Patterns (Better than Flutter)
+
+FLUI demonstrates several design improvements over Flutter's architecture that eliminate code duplication and improve type safety.
+
+#### Generic Clip Pattern
+
+**Problem in Flutter:** Four separate clip classes with ~400 lines of duplicated code
+**FLUI Solution:** Single generic `RenderClip<S: ClipShape>` trait
+
+```rust
+use flui_rendering::core::{RenderClip, ClipShape};
+use flui_types::{Canvas, Size, Offset, Rect, Path};
+
+// Define the clip shape behavior
+pub trait ClipShape: std::fmt::Debug + Send + Sync {
+    fn apply_clip(&self, canvas: &mut Canvas, size: Size);
+    fn contains_point(&self, position: Offset, size: Size) -> bool {
+        // Default rectangular bounds check
+        position.dx >= 0.0 && position.dy >= 0.0 &&
+        position.dx <= size.width && position.dy <= size.height
+    }
+}
+
+// Specific clip shapes
+pub struct RectShape;
+impl ClipShape for RectShape {
+    fn apply_clip(&self, canvas: &mut Canvas, size: Size) {
+        let clip_rect = Rect::from_xywh(0.0, 0.0, size.width, size.height);
+        canvas.clip_rect(clip_rect);
+    }
+}
+
+// Type aliases for convenience
+pub type RenderClipRect = RenderClip<RectShape>;
+pub type RenderClipRRect = RenderClip<RRectShape>;
+pub type RenderClipOval = RenderClip<OvalShape>;
+pub type RenderClipPath = RenderClip<PathShape>;
+```
+
+**Benefits:**
+- ✅ Eliminates ~400 lines of code duplication vs Flutter
+- ✅ Type-safe: Compile-time guarantees for clip shapes
+- ✅ Extensible: Add new clip shapes without modifying core
+- ✅ Shared logic: Hit testing, bounds checking all in one place
+- ✅ Zero-cost abstraction: Compiles to same performance as hand-written code
+
+**Implementation:** `crates/flui_rendering/src/objects/effects/clip_base.rs`
+
+#### Optional Arity for Decorative Boxes
+
+**Problem in Flutter:** DecoratedBox requires a child even for pure decoration
+**FLUI Solution:** Use `RenderBox<Optional>` arity for flexible child handling
+
+```rust
+use flui_rendering::core::{RenderBox, Optional, LayoutContext, PaintContext};
+
+impl RenderBox<Optional> for RenderDecoratedBox {
+    fn layout(&mut self, mut ctx: LayoutContext<Optional>) -> Size {
+        if let Some(child_id) = ctx.children.get() {
+            // Has child - use child size
+            ctx.layout_child(child_id, ctx.constraints)
+        } else {
+            // No child - use constraints for decorative box
+            Size::new(ctx.constraints.max_width, ctx.constraints.max_height)
+        }
+    }
+
+    fn paint(&self, ctx: &mut PaintContext<Optional>) {
+        // Paint background decoration
+        if self.position == DecorationPosition::Background {
+            self.paint_decoration(ctx.canvas(), rect);
+        }
+
+        // Paint child if present
+        if let Some(child_id) = ctx.children.get() {
+            ctx.paint_child(child_id, offset);
+        }
+
+        // Paint foreground decoration
+        if self.position == DecorationPosition::Foreground {
+            self.paint_decoration(ctx.canvas(), rect);
+        }
+    }
+}
+```
+
+**Objects using Optional arity:**
+- `RenderDecoratedBox` - Decorative backgrounds without child
+- `RenderPhysicalModel` - Material elevation shadow only
+- `RenderPhysicalShape` - Custom shape shadows only
+- `RenderCustomPaint` - Custom painting without child
+
+**Benefits:**
+- ✅ More flexible API: Child is optional, not required
+- ✅ Matches Flutter behavior: CustomPaint works without child
+- ✅ Better semantics: Decorative use cases are explicit
+- ✅ Type-safe: Compiler enforces Optional handling
+
+**Fixed in:** Validation proposal `validate-effects-against-flutter`
+
+#### Clipper Delegate Pattern with Closures
+
+**Problem in Flutter:** Uses abstract `CustomClipper<T>` class requiring inheritance
+**FLUI Solution:** Use Rust closures with `Send + Sync` bounds
+
+```rust
+use flui_types::{Size, Path};
+
+// Type alias for clipper function
+pub type ShapeClipper = Box<dyn Fn(Size) -> Path + Send + Sync>;
+
+pub struct RenderPhysicalShape {
+    clipper: ShapeClipper,
+    elevation: f32,
+    color: Color,
+    // ...
+}
+
+impl RenderPhysicalShape {
+    pub fn new(clipper: ShapeClipper, elevation: f32, color: Color) -> Self {
+        Self { clipper, elevation, color, /* ... */ }
+    }
+
+    fn get_shape_path(&self) -> Path {
+        (self.clipper)(self.size)  // Call closure
+    }
+}
+
+// Usage: Create star shape with custom clipper
+let star_clipper = Box::new(|size| {
+    let mut path = Path::new();
+    // ... create star shape using size
+    path
+});
+let star = RenderPhysicalShape::new(star_clipper, 4.0, Color::YELLOW);
+```
+
+**Benefits:**
+- ✅ Idiomatic Rust: Uses closures instead of inheritance
+- ✅ Thread-safe: `Send + Sync` bounds ensure safety
+- ✅ Zero-cost: Function pointer has no runtime overhead
+- ✅ Flexible: Capture environment in closure
+- ✅ Testable: Easy to create mock clippers
+
+**Implementation:** `crates/flui_rendering/src/objects/effects/physical_shape.rs`
 
 ### Using Hooks for State
 
@@ -1062,3 +1461,5 @@ impl View for MyWidget {
 ```
 
 **Benefits:** 75% less code, automatic tree management, no GATs, no manual rebuilds.
+
+## Recent Completed Work (2025-11-26)

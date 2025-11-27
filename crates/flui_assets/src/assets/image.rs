@@ -77,6 +77,7 @@ impl Asset for ImageAsset {
 
     async fn load(&self) -> Result<Self::Data, Self::Error> {
         // Get bytes either from memory or file
+        #[cfg_attr(not(feature = "images"), allow(unused_variables))]
         let bytes = if let Some(ref bytes) = self.bytes {
             bytes.clone()
         } else {

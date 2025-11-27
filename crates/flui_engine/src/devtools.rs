@@ -236,18 +236,17 @@ impl PerformanceOverlay {
 
         // Draw background
         let bg_rect = Rect::from_xywh(x, y, width, height);
-        let bg_paint = Paint {
-            color: Color::from_rgba_f32_array([0.0, 0.0, 0.0, self.bg_opacity]), // Semi-transparent black with configurable opacity
-            ..Default::default()
-        };
+        let bg_paint = Paint::fill(Color::from_rgba_f32_array([0.0, 0.0, 0.0, self.bg_opacity]));
         painter.save();
         painter.rect(bg_rect, &bg_paint);
 
         // Text paint (white) - with separate text opacity
-        let text_paint = Paint {
-            color: Color::from_rgba_f32_array([1.0, 1.0, 1.0, self.text_opacity]),
-            ..Default::default()
-        };
+        let text_paint = Paint::fill(Color::from_rgba_f32_array([
+            1.0,
+            1.0,
+            1.0,
+            self.text_opacity,
+        ]));
 
         let mut current_y = y + 15.0;
         let line_height = 18.0;
@@ -294,10 +293,12 @@ impl PerformanceOverlay {
             // Draw jank indicator
             if self.show_jank {
                 if stats.is_jank() {
-                    let jank_paint = Paint {
-                        color: Color::from_rgba_f32_array([1.0, 0.3, 0.3, self.text_opacity]), // Red for jank with text opacity
-                        ..Default::default()
-                    };
+                    let jank_paint = Paint::fill(Color::from_rgba_f32_array([
+                        1.0,
+                        0.3,
+                        0.3,
+                        self.text_opacity,
+                    ]));
                     painter.text(
                         "⚠ JANK",
                         Point::new(padding_x, current_y),
@@ -390,20 +391,13 @@ impl FrameTimelineGraph {
 
         // Draw background
         let bg_rect = Rect::from_xywh(x, y, self.width, self.height);
-        let bg_paint = Paint {
-            color: Color::from_rgba_f32_array([0.0, 0.0, 0.0, self.bg_opacity]),
-            ..Default::default()
-        };
+        let bg_paint = Paint::fill(Color::from_rgba_f32_array([0.0, 0.0, 0.0, self.bg_opacity]));
         painter.save();
         painter.rect(bg_rect, &bg_paint);
 
         // Draw target line (60fps = 16.67ms)
         let target_y = y + self.height - (self.target_frame_time_ms / 33.33 * self.height);
-        let target_paint = Paint {
-            color: Color::from_rgba_f32_array([0.4, 0.4, 0.4, 0.5]), // Gray line
-            stroke_width: 1.0,
-            ..Default::default()
-        };
+        let target_paint = Paint::stroke(Color::from_rgba_f32_array([0.4, 0.4, 0.4, 0.5]), 1.0);
         painter.line(
             Point::new(x, target_y),
             Point::new(x + self.width, target_y),
@@ -433,20 +427,19 @@ impl FrameTimelineGraph {
                 Color::from_rgba_f32_array([0.2, 0.8, 0.4, 0.85]) // Green for good
             };
 
-            let bar_paint = Paint {
-                color,
-                ..Default::default()
-            };
+            let bar_paint = Paint::fill(color);
 
             let bar_rect = Rect::from_xywh(bar_x, bar_y, bar_width - 1.0, bar_height);
             painter.rect(bar_rect, &bar_paint);
         }
 
         // Draw label
-        let text_paint = Paint {
-            color: Color::from_rgba_f32_array([0.8, 0.8, 0.8, self.text_opacity]),
-            ..Default::default()
-        };
+        let text_paint = Paint::fill(Color::from_rgba_f32_array([
+            0.8,
+            0.8,
+            0.8,
+            self.text_opacity,
+        ]));
         painter.text(
             "Frame Time",
             Point::new(x + 5.0, y + 12.0),
@@ -524,20 +517,13 @@ impl MemoryGraph {
 
         // Draw background
         let bg_rect = Rect::from_xywh(x, y, self.width, self.height);
-        let bg_paint = Paint {
-            color: Color::from_rgba_f32_array([0.0, 0.0, 0.0, self.bg_opacity]),
-            ..Default::default()
-        };
+        let bg_paint = Paint::fill(Color::from_rgba_f32_array([0.0, 0.0, 0.0, self.bg_opacity]));
         painter.save();
         painter.rect(bg_rect, &bg_paint);
 
         // Draw memory line
         if history.len() > 1 {
-            let line_paint = Paint {
-                color: Color::from_rgba_f32_array([0.3, 0.7, 1.0, 0.9]), // Blue line
-                stroke_width: 2.0,
-                ..Default::default()
-            };
+            let line_paint = Paint::stroke(Color::from_rgba_f32_array([0.3, 0.7, 1.0, 0.9]), 2.0);
 
             let point_width = self.width / (history.len() - 1) as f32;
 
@@ -559,10 +545,12 @@ impl MemoryGraph {
         }
 
         // Draw current memory value
-        let text_paint = Paint {
-            color: Color::from_rgba_f32_array([0.9, 0.9, 0.9, self.text_opacity]),
-            ..Default::default()
-        };
+        let text_paint = Paint::fill(Color::from_rgba_f32_array([
+            0.9,
+            0.9,
+            0.9,
+            self.text_opacity,
+        ]));
 
         let current_mb = memory_profiler.current_stats().total_mb();
         let mem_text = format!("Mem: {:.1} MB", current_mb);
@@ -580,10 +568,12 @@ impl MemoryGraph {
 
         // Leak warning
         if memory_profiler.is_leaking() {
-            let warning_paint = Paint {
-                color: Color::from_rgba_f32_array([1.0, 0.3, 0.3, self.text_opacity]),
-                ..Default::default()
-            };
+            let warning_paint = Paint::fill(Color::from_rgba_f32_array([
+                1.0,
+                0.3,
+                0.3,
+                self.text_opacity,
+            ]));
             painter.text(
                 "⚠ LEAK?",
                 Point::new(x + 5.0, y + 60.0),
@@ -717,18 +707,17 @@ impl UnifiedDevToolsOverlay {
 
         // Draw background
         let bg_rect = Rect::from_xywh(x, y, self.width, total_height);
-        let bg_paint = Paint {
-            color: Color::from_rgba_f32_array([0.0, 0.0, 0.0, self.bg_opacity]),
-            ..Default::default()
-        };
+        let bg_paint = Paint::fill(Color::from_rgba_f32_array([0.0, 0.0, 0.0, self.bg_opacity]));
         painter.save();
         painter.rect(bg_rect, &bg_paint);
 
         // Text paint
-        let text_paint = Paint {
-            color: Color::from_rgba_f32_array([1.0, 1.0, 1.0, self.text_opacity]),
-            ..Default::default()
-        };
+        let text_paint = Paint::fill(Color::from_rgba_f32_array([
+            1.0,
+            1.0,
+            1.0,
+            self.text_opacity,
+        ]));
 
         let padding_x = x + 10.0;
         y += 12.0;
@@ -740,10 +729,12 @@ impl UnifiedDevToolsOverlay {
             let jank_pct = profiler.jank_percentage();
 
             // Title
-            let title_paint = Paint {
-                color: Color::from_rgba_f32_array([0.7, 0.9, 1.0, self.text_opacity]), // Light blue
-                ..Default::default()
-            };
+            let title_paint = Paint::fill(Color::from_rgba_f32_array([
+                0.7,
+                0.9,
+                1.0,
+                self.text_opacity,
+            ]));
             painter.text(
                 "⚡ PERFORMANCE",
                 Point::new(padding_x, y),
@@ -775,10 +766,12 @@ impl UnifiedDevToolsOverlay {
 
                 // Jank
                 if stats.is_jank() {
-                    let jank_paint = Paint {
-                        color: Color::from_rgba_f32_array([1.0, 0.3, 0.3, self.text_opacity]),
-                        ..Default::default()
-                    };
+                    let jank_paint = Paint::fill(Color::from_rgba_f32_array([
+                        1.0,
+                        0.3,
+                        0.3,
+                        self.text_opacity,
+                    ]));
                     painter.text("⚠ JANK", Point::new(padding_x + 15.0, y), 11.0, &jank_paint);
                 } else {
                     let jank_text = format!("Jank: {:.1}%", jank_pct);
@@ -797,10 +790,12 @@ impl UnifiedDevToolsOverlay {
 
         // === Timeline Graph Section ===
         if self.show_timeline {
-            let title_paint = Paint {
-                color: Color::from_rgba_f32_array([0.7, 1.0, 0.8, self.text_opacity]), // Light green
-                ..Default::default()
-            };
+            let title_paint = Paint::fill(Color::from_rgba_f32_array([
+                0.7,
+                1.0,
+                0.8,
+                self.text_opacity,
+            ]));
             painter.text("📊 TIMELINE", Point::new(padding_x, y), 12.0, &title_paint);
             y += line_height + 2.0;
 
@@ -812,19 +807,12 @@ impl UnifiedDevToolsOverlay {
 
             // Draw graph background
             let graph_bg_rect = Rect::from_xywh(graph_x, graph_y, graph_width, graph_height);
-            let graph_bg_paint = Paint {
-                color: Color::from_rgba_f32_array([0.1, 0.1, 0.1, 0.5]),
-                ..Default::default()
-            };
+            let graph_bg_paint = Paint::fill(Color::from_rgba_f32_array([0.1, 0.1, 0.1, 0.5]));
             painter.rect(graph_bg_rect, &graph_bg_paint);
 
             // Draw target line (60fps)
             let target_y = graph_y + graph_height - (16.67 / 33.33 * graph_height);
-            let target_paint = Paint {
-                color: Color::from_rgba_f32_array([0.4, 0.4, 0.4, 0.5]),
-                stroke_width: 1.0,
-                ..Default::default()
-            };
+            let target_paint = Paint::stroke(Color::from_rgba_f32_array([0.4, 0.4, 0.4, 0.5]), 1.0);
             painter.line(
                 Point::new(graph_x, target_y),
                 Point::new(graph_x + graph_width, target_y),
@@ -854,10 +842,7 @@ impl UnifiedDevToolsOverlay {
                         Color::from_rgba_f32_array([0.2, 0.8, 0.4, 0.85])
                     };
 
-                    let bar_paint = Paint {
-                        color,
-                        ..Default::default()
-                    };
+                    let bar_paint = Paint::fill(color);
 
                     let bar_rect = Rect::from_xywh(bar_x, bar_y, bar_width - 1.0, bar_height);
                     painter.rect(bar_rect, &bar_paint);
@@ -871,10 +856,12 @@ impl UnifiedDevToolsOverlay {
         #[cfg(feature = "memory-profiler")]
         if self.show_memory {
             if let Some(mem_profiler) = memory_profiler {
-                let title_paint = Paint {
-                    color: Color::from_rgba_f32_array([1.0, 0.8, 0.6, self.text_opacity]), // Light orange
-                    ..Default::default()
-                };
+                let title_paint = Paint::fill(Color::from_rgba_f32_array([
+                    1.0,
+                    0.8,
+                    0.6,
+                    self.text_opacity,
+                ]));
                 painter.text("💾 MEMORY", Point::new(padding_x, y), 12.0, &title_paint);
                 y += line_height + 2.0;
 
@@ -910,10 +897,12 @@ impl UnifiedDevToolsOverlay {
 
                 // Leak warning
                 if mem_profiler.is_leaking() {
-                    let warning_paint = Paint {
-                        color: Color::from_rgba_f32_array([1.0, 0.3, 0.3, self.text_opacity]),
-                        ..Default::default()
-                    };
+                    let warning_paint = Paint::fill(Color::from_rgba_f32_array([
+                        1.0,
+                        0.3,
+                        0.3,
+                        self.text_opacity,
+                    ]));
                     painter.text(
                         "⚠ LEAK DETECTED",
                         Point::new(padding_x + 15.0, y),

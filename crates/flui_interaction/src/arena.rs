@@ -13,6 +13,8 @@
 //! 4. Arena resolves winner
 //! 5. Winner receives all future events for that pointer
 //! ```
+//!
+//! Flutter reference: https://api.flutter.dev/flutter/gestures/GestureArenaManager-class.html
 
 use dashmap::DashMap;
 use parking_lot::Mutex;

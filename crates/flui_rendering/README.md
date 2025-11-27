@@ -19,6 +19,50 @@ FLUI Rendering implements the render layer of FLUI's three-tree architecture, pr
 - 🔧 **Callback-Based Operations** - Layout/paint via closures for flexibility
 - 🚀 **Zero-Cost Abstractions** - Generic types compile to concrete code
 
+## Migration Status
+
+**Current Progress: 79/82 RenderObjects migrated to new arity-based API (96% complete)**
+
+FLUI Rendering has successfully migrated to a modern compile-time arity checking system, replacing the legacy runtime API with type-safe RenderBox<Arity> and SliverRender<Arity> traits.
+
+### Migration Summary
+
+- **Box Objects**: 54/56 migrated (96%)
+- **Sliver Objects**: 25/26 migrated (96%)
+- **Total**: 79/82 objects (96%)
+- **Testing**: 681 unit tests passing
+- **Code Quality**: Clippy clean with `-D warnings`
+
+### Completed Migration Phases
+
+1. ✅ **Phase 1: Quick Wins** - 6 objects (RenderEditableLine + 5 sliver proxies)
+2. ✅ **Phase 2: Sliver Single Manual** - 5 objects (padding, fill remaining, box adapter, etc.)
+3. ✅ **Phase 3: Critical Sliver Foundation** - 3 objects (RenderSliver base, multi-box adaptor, list)
+4. ✅ **Phase 4: Variable Box Objects** - 2 objects (RenderFlow, RenderCustomMultiChildLayoutBox)
+5. ✅ **Phase 5: Essential Slivers** - 3 objects (fixed extent list, grid, fill viewport)
+6. ✅ **Phase 6: Complex Variable Box** - 3 objects (table, list wheel viewport, viewport stub)
+7. ✅ **Phase 7: Advanced Slivers** - 8 objects (app bars, headers, grouping, safe area)
+
+### What Was Migrated
+
+**62 RenderBox implementations:**
+- Leaf arity: Text, images, custom paint, decorated boxes, etc.
+- Single arity: Containers, padding, transform, opacity, clip effects, etc.
+- Variable arity: Flex layouts, stack, wrap, table, flow, etc.
+
+**17 SliverRender implementations:**
+- Single arity: Padding, fill remaining, box adapter, app bars, persistent headers, safe area
+- Variable arity: List, grid, fixed extent list, fill viewport, grouping, prototype extent list
+
+### Deferred Objects (3)
+
+The following objects are deferred pending infrastructure work:
+- **RenderAbstractViewport** - Trait definition only, no concrete implementation needed
+- **RenderShrinkWrappingViewport** - Placeholder stub, requires full viewport infrastructure
+- **RenderOverflowIndicator** - Requires painting infrastructure enhancements
+
+For detailed migration documentation, see [`docs/plan.md`](docs/plan.md) and the OpenSpec proposal at [`openspec/changes/migrate-renderobjects-to-new-api/`](../../../openspec/changes/migrate-renderobjects-to-new-api/).
+
 ## Architecture
 
 FLUI Rendering sits between the tree abstractions and concrete implementations:

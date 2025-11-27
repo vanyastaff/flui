@@ -6,6 +6,8 @@
 //! - **Vertical**: Movement constrained to vertical axis
 //! - **Horizontal**: Movement constrained to horizontal axis
 //! - **Pan**: Free movement in any direction
+//!
+//! Flutter reference: https://api.flutter.dev/flutter/gestures/DragGestureRecognizer-class.html
 
 use super::recognizer::{constants, GestureRecognizer, GestureRecognizerState};
 use crate::arena::{GestureArenaMember, PointerId};
@@ -23,6 +25,17 @@ pub enum DragAxis {
     Horizontal,
     /// Free drag (any direction)
     Free,
+}
+
+/// Details about drag down (pointer contact before drag starts)
+#[derive(Debug, Clone)]
+pub struct DragDownDetails {
+    /// Global position where pointer contacted the screen
+    pub global_position: Offset,
+    /// Local position (relative to widget)
+    pub local_position: Offset,
+    /// Pointer device kind
+    pub kind: flui_types::events::PointerDeviceKind,
 }
 
 /// Details about drag start
@@ -88,6 +101,7 @@ impl Velocity {
 }
 
 /// Callback types for drag events
+pub type DragDownCallback = Arc<dyn Fn(DragDownDetails) + Send + Sync>;
 pub type DragStartCallback = Arc<dyn Fn(DragStartDetails) + Send + Sync>;
 pub type DragUpdateCallback = Arc<dyn Fn(DragUpdateDetails) + Send + Sync>;
 pub type DragEndCallback = Arc<dyn Fn(DragEndDetails) + Send + Sync>;
@@ -140,6 +154,7 @@ pub struct DragGestureRecognizer {
 
 #[derive(Default)]
 struct DragCallbacks {
+    on_down: Option<DragDownCallback>,
     on_start: Option<DragStartCallback>,
     on_update: Option<DragUpdateCallback>,
     on_end: Option<DragEndCallback>,
@@ -250,6 +265,19 @@ impl DragGestureRecognizer {
         })
     }
 
+    /// Set the drag down callback (called on pointer contact before drag starts)
+    ///
+    /// This is called when a pointer contacts the screen with a primary button
+    /// and might begin to move. Unlike `on_start`, this is called before any
+    /// movement threshold is met.
+    pub fn with_on_down(
+        self: Arc<Self>,
+        callback: impl Fn(DragDownDetails) + Send + Sync + 'static,
+    ) -> Arc<Self> {
+        self.callbacks.lock().on_down = Some(Arc::new(callback));
+        self
+    }
+
     /// Set the drag start callback
     pub fn with_on_start(
         self: Arc<Self>,
@@ -287,7 +315,7 @@ impl DragGestureRecognizer {
     }
 
     /// Handle pointer down - start tracking
-    fn handle_down(&self, position: Offset, _kind: flui_types::events::PointerDeviceKind) {
+    fn handle_down(&self, position: Offset, kind: flui_types::events::PointerDeviceKind) {
         let mut state = self.drag_state.lock();
         state.state = DragPhase::Possible;
         state.start_time = Some(Instant::now());
@@ -296,6 +324,17 @@ impl DragGestureRecognizer {
         state.total_delta = Offset::ZERO;
         state.velocity_tracker.reset();
         state.velocity_tracker.add_sample(Instant::now(), position);
+        drop(state); // Release lock before callback
+
+        // Call on_down callback (pointer contact before drag starts)
+        if let Some(callback) = self.callbacks.lock().on_down.clone() {
+            let details = DragDownDetails {
+                global_position: position,
+                local_position: position,
+                kind,
+            };
+            callback(details);
+        }
     }
 
     /// Handle pointer move - check slop and start/update drag
@@ -457,10 +496,12 @@ impl GestureRecognizer for DragGestureRecognizer {
 
     fn dispose(&self) {
         self.state.mark_disposed();
-        self.callbacks.lock().on_start = None;
-        self.callbacks.lock().on_update = None;
-        self.callbacks.lock().on_end = None;
-        self.callbacks.lock().on_cancel = None;
+        let mut callbacks = self.callbacks.lock();
+        callbacks.on_down = None;
+        callbacks.on_start = None;
+        callbacks.on_update = None;
+        callbacks.on_end = None;
+        callbacks.on_cancel = None;
     }
 
     fn primary_pointer(&self) -> Option<PointerId> {

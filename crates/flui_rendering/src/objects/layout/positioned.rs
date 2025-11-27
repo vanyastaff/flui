@@ -9,6 +9,8 @@
 //! - PositionedMetadata is stored inline (not in separate ParentData)
 //! - Parent (RenderStack) accesses metadata via GAT-based downcast
 //! - Zero-cost when not using positioned children
+//!
+//! Flutter reference: <https://api.flutter.dev/flutter/widgets/Positioned-class.html>
 
 use crate::core::{BoxProtocol, LayoutContext, PaintContext, RenderBox, Single};
 use flui_types::constraints::BoxConstraints;

@@ -483,16 +483,51 @@ impl Path {
         self.bounds = None;
     }
 
-    /// Computes and returns the bounding box of the path.
+    /// Returns the cached bounding box if available, without computing.
     ///
-    /// This is cached after the first computation.
+    /// This is useful when you have an immutable reference to the path and need
+    /// the bounds if they were already computed. Returns `None` if bounds haven't
+    /// been computed yet.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use flui_types::painting::Path;
+    /// use flui_types::geometry::Point;
+    ///
+    /// let mut path = Path::new();
+    /// path.move_to(Point::new(0.0, 0.0));
+    /// path.line_to(Point::new(100.0, 100.0));
+    ///
+    /// // Before computing
+    /// assert!(path.cached_bounds().is_none());
+    ///
+    /// // After computing
+    /// let _ = path.bounds();
+    /// assert!(path.cached_bounds().is_some());
+    /// ```
+    #[inline]
     #[must_use]
-    pub fn bounds(&mut self) -> Rect {
+    pub fn cached_bounds(&self) -> Option<Rect> {
+        self.bounds
+    }
+
+    /// Computes the bounding box without caching.
+    ///
+    /// Use this when you have an immutable reference and need bounds computed.
+    /// For repeated access, prefer `bounds()` which caches the result.
+    #[must_use]
+    pub fn compute_bounds(&self) -> Rect {
+        // Quick return if cached
         if let Some(bounds) = self.bounds {
             return bounds;
         }
 
-        // Compute bounds from commands
+        self.compute_bounds_internal()
+    }
+
+    /// Internal bounds computation (shared between bounds() and compute_bounds())
+    fn compute_bounds_internal(&self) -> Rect {
         let mut min_x = f32::INFINITY;
         let mut min_y = f32::INFINITY;
         let mut max_x = f32::NEG_INFINITY;
@@ -536,14 +571,37 @@ impl Path {
             }
         }
 
-        let bounds = if min_x.is_finite() && max_x.is_finite() {
+        if min_x.is_finite() && max_x.is_finite() {
             Rect::from_min_max(Point::new(min_x, min_y), Point::new(max_x, max_y))
         } else {
             Rect::ZERO
-        };
+        }
+    }
 
+    /// Computes and returns the bounding box of the path.
+    ///
+    /// This is cached after the first computation.
+    #[must_use]
+    pub fn bounds(&mut self) -> Rect {
+        if let Some(bounds) = self.bounds {
+            return bounds;
+        }
+
+        let bounds = self.compute_bounds_internal();
         self.bounds = Some(bounds);
         bounds
+    }
+
+    /// Computes and returns the bounding box of the path (legacy).
+    ///
+    /// This is cached after the first computation.
+    #[deprecated(
+        since = "0.2.0",
+        note = "Use `bounds()` for mutable or `compute_bounds()` for immutable access"
+    )]
+    #[must_use]
+    pub fn bounds_mut(&mut self) -> Rect {
+        self.bounds()
     }
 
     /// Transforms the path by translating it.
@@ -617,8 +675,8 @@ impl Path {
     /// ```
     #[must_use]
     pub fn contains(&self, point: Point) -> bool {
-        // Quick bounds check
-        let bounds = self.clone().bounds();
+        // Quick bounds check using compute_bounds() (no mutation needed)
+        let bounds = self.compute_bounds();
         if !bounds.contains(point) {
             return false;
         }

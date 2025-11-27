@@ -1,4 +1,8 @@
 //! RenderEmpty - a render object that does nothing
+//!
+//! This is a placeholder render object similar to Flutter's SizedBox.shrink() behavior.
+//!
+//! Flutter reference: <https://api.flutter.dev/flutter/widgets/SizedBox/SizedBox.shrink.html>
 
 use crate::core::{
     BoxProtocol, LayoutContext, LayoutTree, Leaf, PaintContext, PaintTree, RenderBox,

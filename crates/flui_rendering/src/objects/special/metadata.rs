@@ -1,4 +1,6 @@
 //! RenderMetaData - attaches metadata to child for parent access
+//!
+//! Flutter reference: <https://api.flutter.dev/flutter/rendering/RenderMetaData-class.html>
 
 use crate::core::{
     RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},

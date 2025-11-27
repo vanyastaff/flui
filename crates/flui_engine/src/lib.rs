@@ -54,8 +54,8 @@ pub mod text;
 // Re-export GPU renderer (high-level abstraction)
 pub use gpu_renderer::{GpuRenderer, RenderError};
 
-// Re-export modern layer type
-pub use layer::CanvasLayer;
+// Re-export modern layer types
+pub use layer::{CanvasLayer, Layer, ShaderMaskLayer};
 
 // Re-export Scene (rendering snapshot)
 pub use scene::Scene;

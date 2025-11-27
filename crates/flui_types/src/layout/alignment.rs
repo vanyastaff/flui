@@ -14,7 +14,7 @@ use crate::{Offset, Size};
 /// # Examples
 ///
 /// ```
-/// use flui_types::MainAxisSize;
+/// use flui_types::layout::MainAxisSize;
 ///
 /// let min = MainAxisSize::Min;
 /// let max = MainAxisSize::Max;
@@ -53,7 +53,7 @@ impl MainAxisSize {
 /// # Examples
 ///
 /// ```
-/// use flui_types::MainAxisAlignment;
+/// use flui_types::layout::MainAxisAlignment;
 ///
 /// // Children at the start
 /// let start = MainAxisAlignment::Start;
@@ -108,7 +108,7 @@ impl MainAxisAlignment {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::MainAxisAlignment;
+    /// use flui_types::layout::MainAxisAlignment;
     ///
     /// assert!(!MainAxisAlignment::Start.requires_custom_spacing());
     /// assert!(MainAxisAlignment::SpaceBetween.requires_custom_spacing());
@@ -129,7 +129,7 @@ impl MainAxisAlignment {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::MainAxisAlignment;
+    /// use flui_types::layout::MainAxisAlignment;
     ///
     /// // 100px available, 3 children
     /// let (leading, between) = MainAxisAlignment::SpaceBetween.calculate_spacing(100.0, 3);
@@ -172,7 +172,7 @@ impl MainAxisAlignment {
 /// # Examples
 ///
 /// ```
-/// use flui_types::CrossAxisAlignment;
+/// use flui_types::layout::CrossAxisAlignment;
 ///
 /// // Children at the start of cross axis
 /// let start = CrossAxisAlignment::Start;
@@ -219,7 +219,7 @@ impl CrossAxisAlignment {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::CrossAxisAlignment;
+    /// use flui_types::layout::CrossAxisAlignment;
     ///
     /// assert!(!CrossAxisAlignment::Start.requires_custom_sizing());
     /// assert!(CrossAxisAlignment::Stretch.requires_custom_sizing());

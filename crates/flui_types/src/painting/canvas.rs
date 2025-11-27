@@ -286,6 +286,73 @@ pub enum VertexMode {
     TriangleFan,
 }
 
+/// GPU texture identifier for external texture rendering.
+///
+/// TextureId represents a platform-specific handle to a GPU texture that
+/// can be rendered by the FLUI engine. Common use cases include:
+/// - Video decoder output frames
+/// - Camera preview streams
+/// - External rendering contexts (e.g., embedded OpenGL/Vulkan content)
+/// - Platform view textures
+///
+/// # Examples
+///
+/// ```
+/// use flui_types::painting::TextureId;
+///
+/// let texture_id = TextureId::new(42);
+/// assert_eq!(texture_id.get(), 42);
+///
+/// // TextureId is Copy for cheap passing
+/// let copy = texture_id;
+/// assert_eq!(copy, texture_id);
+/// ```
+///
+/// # Platform Notes
+///
+/// The meaning of the underlying u64 value is platform-specific:
+/// - On Android: May reference a SurfaceTexture ID
+/// - On iOS: May reference a CVPixelBuffer or IOSurface ID
+/// - On Desktop: May reference a shared texture handle
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct TextureId(u64);
+
+impl TextureId {
+    /// Create a new texture ID from a raw platform handle.
+    #[inline]
+    #[must_use]
+    pub const fn new(id: u64) -> Self {
+        Self(id)
+    }
+
+    /// Get the underlying platform texture handle.
+    #[inline]
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+
+    /// Returns true if this is a null/invalid texture ID (value 0).
+    #[inline]
+    #[must_use]
+    pub const fn is_null(self) -> bool {
+        self.0 == 0
+    }
+}
+
+impl From<u64> for TextureId {
+    fn from(id: u64) -> Self {
+        Self::new(id)
+    }
+}
+
+impl From<TextureId> for u64 {
+    fn from(id: TextureId) -> Self {
+        id.get()
+    }
+}
+
 /// Point drawing mode for DrawPoints command
 ///
 /// Defines how a sequence of points should be interpreted when drawing.

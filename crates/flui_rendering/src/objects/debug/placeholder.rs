@@ -2,7 +2,7 @@
 
 use crate::core::{BoxProtocol, LayoutContext, LayoutTree, PaintContext, PaintTree};
 use crate::core::{Leaf, RenderBox};
-use flui_painting::{Canvas, Paint};
+use flui_painting::Paint;
 use flui_types::prelude::{Color, TextStyle};
 use flui_types::{Rect, Size};
 
@@ -140,30 +140,20 @@ impl RenderBox<Leaf> for RenderPlaceholder {
         size
     }
 
-    fn paint<T>(&self, _ctx: &mut PaintContext<'_, T, Leaf>)
+    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Leaf>)
     where
         T: PaintTree,
     {
-        let offset = _ctx.offset;
-        let mut canvas = Canvas::new();
-
+        let offset = ctx.offset;
         let rect = Rect::from_xywh(offset.dx, offset.dy, self.size.width, self.size.height);
 
         // Draw fill
-        let fill_paint = Paint {
-            color: self.fill_color,
-            ..Default::default()
-        };
-        canvas.draw_rect(rect, &fill_paint);
+        let fill_paint = Paint::fill(self.fill_color);
+        ctx.canvas().rect(rect, &fill_paint);
 
         // Draw border
-        let stroke_paint = Paint {
-            color: self.stroke_color,
-            style: flui_painting::PaintStyle::Stroke,
-            stroke_width: self.stroke_width,
-            ..Default::default()
-        };
-        canvas.draw_rect(rect, &stroke_paint);
+        let stroke_paint = Paint::stroke(self.stroke_color, self.stroke_width);
+        ctx.canvas().rect(rect, &stroke_paint);
 
         // Draw label if present
         if let Some(ref label) = self.label {
@@ -171,16 +161,12 @@ impl RenderBox<Leaf> for RenderPlaceholder {
                 .with_color(Color::BLACK)
                 .with_font_size(14.0);
 
-            // Center the text
             let text_offset =
                 flui_types::Offset::new(offset.dx + 10.0, offset.dy + self.size.height / 2.0);
 
-            let text_paint = Paint {
-                color: Color::BLACK,
-                ..Default::default()
-            };
-
-            canvas.draw_text(label, text_offset, &text_style, &text_paint);
+            let text_paint = Paint::fill(Color::BLACK);
+            ctx.canvas()
+                .text(label, text_offset, &text_style, &text_paint);
         }
     }
 }

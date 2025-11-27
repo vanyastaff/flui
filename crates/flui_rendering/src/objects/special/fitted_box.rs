@@ -1,4 +1,6 @@
 //! RenderFittedBox - scales and positions child according to BoxFit
+//!
+//! Flutter reference: <https://api.flutter.dev/flutter/rendering/RenderFittedBox-class.html>
 
 use crate::core::{
     RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
@@ -28,6 +30,10 @@ pub struct RenderFittedBox {
     pub alignment: Alignment,
     /// Clip behavior
     pub clip_behavior: ClipBehavior,
+
+    // Layout cache (set during layout, used during paint)
+    cached_container_size: Size,
+    cached_child_size: Size,
 }
 
 // ===== Public API =====
@@ -39,6 +45,8 @@ impl RenderFittedBox {
             fit,
             alignment: Alignment::CENTER,
             clip_behavior: ClipBehavior::None,
+            cached_container_size: Size::ZERO,
+            cached_child_size: Size::ZERO,
         }
     }
 
@@ -48,6 +56,8 @@ impl RenderFittedBox {
             fit,
             alignment,
             clip_behavior: ClipBehavior::None,
+            cached_container_size: Size::ZERO,
+            cached_child_size: Size::ZERO,
         }
     }
 
@@ -178,7 +188,11 @@ impl RenderBox<Single> for RenderFittedBox {
         // Layout child with unbounded constraints to get natural size
         let child_constraints =
             flui_types::constraints::BoxConstraints::new(0.0, f32::INFINITY, 0.0, f32::INFINITY);
-        ctx.layout_child(child_id, child_constraints);
+        let child_size = ctx.layout_child(child_id, child_constraints);
+
+        // Cache sizes for paint phase
+        self.cached_container_size = size;
+        self.cached_child_size = child_size;
 
         size
     }
@@ -189,11 +203,40 @@ impl RenderBox<Single> for RenderFittedBox {
     {
         let child_id = ctx.children.single();
 
-        // TODO: Apply transform for scaling based on self.calculate_fit()
-        // For now, just paint child as-is
-        // In a real implementation, we'd wrap in a TransformLayer
+        // Apply transform for scaling based on self.calculate_fit()
+        let (fitted_size, child_offset) =
+            self.calculate_fit(self.cached_child_size, self.cached_container_size);
 
-        ctx.paint_child(child_id, ctx.offset);
+        // Calculate scale factors
+        let scale_x = if self.cached_child_size.width > 0.0 {
+            fitted_size.width / self.cached_child_size.width
+        } else {
+            1.0
+        };
+        let scale_y = if self.cached_child_size.height > 0.0 {
+            fitted_size.height / self.cached_child_size.height
+        } else {
+            1.0
+        };
+
+        // Apply transform if scaling is needed
+        let needs_transform = (scale_x - 1.0).abs() > 1e-6 || (scale_y - 1.0).abs() > 1e-6;
+
+        if needs_transform {
+            // Translate to offset position and apply scale using chaining API
+            let total_offset = ctx.offset + child_offset;
+            ctx.canvas()
+                .saved()
+                .translated(total_offset.dx, total_offset.dy)
+                .scaled_xy(scale_x, scale_y);
+
+            // Paint child at origin (already translated)
+            ctx.paint_child(child_id, flui_types::geometry::Offset::ZERO);
+            ctx.canvas().restored();
+        } else {
+            // No transform needed, paint with offset
+            ctx.paint_child(child_id, ctx.offset + child_offset);
+        }
     }
 }
 

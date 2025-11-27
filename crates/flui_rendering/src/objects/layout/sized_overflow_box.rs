@@ -1,4 +1,9 @@
 //! RenderSizedOverflowBox - fixed size with child overflow
+//!
+//! A box with a specified size that passes its original constraints
+//! through to its child, which may overflow.
+//!
+//! Flutter reference: <https://api.flutter.dev/flutter/rendering/RenderSizedOverflowBox-class.html>
 
 use crate::core::{
     RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},

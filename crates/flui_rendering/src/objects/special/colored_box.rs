@@ -66,15 +66,11 @@ impl RenderBox<Leaf> for RenderColoredBox {
     where
         T: crate::core::PaintTree,
     {
-        // Draw solid color rectangle
+        // Draw solid color rectangle using chaining API
         let rect = Rect::from_min_size(flui_types::Point::ZERO, self.size);
-        let paint = flui_painting::Paint {
-            color: self.color,
-            style: flui_painting::PaintStyle::Fill,
-            ..Default::default()
-        };
+        let paint = flui_painting::Paint::fill(self.color);
 
-        ctx.canvas().draw_rect(rect, &paint);
+        ctx.canvas().rect(rect, &paint);
     }
 }
 

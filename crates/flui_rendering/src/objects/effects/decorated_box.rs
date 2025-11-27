@@ -109,25 +109,49 @@ impl RenderDecoratedBox {
         }
 
         // Paint background (gradient or solid color)
-        if let Some(ref _gradient) = decoration.gradient {
-            // TODO: Gradient support not implemented yet in Canvas
-            // When implemented, use canvas.draw_gradient()
-        } else if let Some(color) = decoration.color {
-            let border_radius = decoration.border_radius.map(|r| r.top_left.x);
-            let paint = Paint::fill(color);
+        if let Some(ref gradient) = decoration.gradient {
+            // Convert Gradient to Shader and draw
+            let shader = Self::gradient_to_shader(gradient, rect);
+            let border_radius = decoration.border_radius;
 
-            if let Some(radius) = border_radius {
-                let circular_radius = Radius::circular(radius);
+            if let Some(br) = border_radius {
                 let rrect = RRect {
                     rect,
-                    top_left: circular_radius,
-                    top_right: circular_radius,
-                    bottom_right: circular_radius,
-                    bottom_left: circular_radius,
+                    top_left: br.top_left,
+                    top_right: br.top_right,
+                    bottom_right: br.bottom_right,
+                    bottom_left: br.bottom_left,
                 };
-                canvas.draw_rrect(rrect, &paint);
+                canvas.draw_gradient_rrect(rrect, shader);
             } else {
-                canvas.draw_rect(rect, &paint);
+                canvas.draw_gradient(rect, shader);
+            }
+        } else if let Some(color) = decoration.color {
+            let paint = Paint::fill(color);
+
+            if let Some(br) = decoration.border_radius {
+                // Check if all corners have the same radius
+                let is_uniform = br.top_left == br.top_right
+                    && br.top_right == br.bottom_right
+                    && br.bottom_right == br.bottom_left;
+
+                if is_uniform {
+                    // Uniform radius - use chaining method
+                    canvas.rounded_rect(rect, br.top_left.x, &paint);
+                } else {
+                    // Per-corner radii - use convenience method
+                    canvas.draw_rounded_rect_corners(
+                        rect,
+                        br.top_left.x,
+                        br.top_right.x,
+                        br.bottom_right.x,
+                        br.bottom_left.x,
+                        &paint,
+                    );
+                }
+            } else {
+                // Simple rect - use chaining API
+                canvas.rect(rect, &paint);
             }
         }
 
@@ -199,30 +223,99 @@ impl RenderDecoratedBox {
                 bottom_right: circular_radius,
                 bottom_left: circular_radius,
             };
-            canvas.draw_rrect(rrect, &paint);
+            canvas.rrect(rrect, &paint);
         } else {
-            // For straight borders, draw individual lines for each side
-            match position {
-                BorderPosition::Top => {
-                    let p1 = Point::new(rect.left(), rect.top() + side.width / 2.0);
-                    let p2 = Point::new(rect.right(), rect.top() + side.width / 2.0);
-                    canvas.draw_line(p1, p2, &paint);
-                }
-                BorderPosition::Right => {
-                    let p1 = Point::new(rect.right() - side.width / 2.0, rect.top());
-                    let p2 = Point::new(rect.right() - side.width / 2.0, rect.bottom());
-                    canvas.draw_line(p1, p2, &paint);
-                }
-                BorderPosition::Bottom => {
-                    let p1 = Point::new(rect.left(), rect.bottom() - side.width / 2.0);
-                    let p2 = Point::new(rect.right(), rect.bottom() - side.width / 2.0);
-                    canvas.draw_line(p1, p2, &paint);
-                }
-                BorderPosition::Left => {
-                    let p1 = Point::new(rect.left() + side.width / 2.0, rect.top());
-                    let p2 = Point::new(rect.left() + side.width / 2.0, rect.bottom());
-                    canvas.draw_line(p1, p2, &paint);
-                }
+            // For straight borders, draw individual lines using chaining API
+            let (p1, p2) = match position {
+                BorderPosition::Top => (
+                    Point::new(rect.left(), rect.top() + side.width / 2.0),
+                    Point::new(rect.right(), rect.top() + side.width / 2.0),
+                ),
+                BorderPosition::Right => (
+                    Point::new(rect.right() - side.width / 2.0, rect.top()),
+                    Point::new(rect.right() - side.width / 2.0, rect.bottom()),
+                ),
+                BorderPosition::Bottom => (
+                    Point::new(rect.left(), rect.bottom() - side.width / 2.0),
+                    Point::new(rect.right(), rect.bottom() - side.width / 2.0),
+                ),
+                BorderPosition::Left => (
+                    Point::new(rect.left() + side.width / 2.0, rect.top()),
+                    Point::new(rect.left() + side.width / 2.0, rect.bottom()),
+                ),
+            };
+            canvas.line(p1, p2, &paint);
+        }
+    }
+
+    /// Convert a Gradient (from BoxDecoration) to a Shader (for Canvas)
+    fn gradient_to_shader(
+        gradient: &flui_types::styling::Gradient,
+        rect: Rect,
+    ) -> flui_painting::Shader {
+        use flui_painting::Shader;
+        use flui_types::geometry::Offset;
+        use flui_types::styling::Gradient;
+
+        match gradient {
+            Gradient::Linear(linear) => {
+                // Convert alignment-based positions to absolute offsets
+                let begin_x = rect.left() + (linear.begin.x + 1.0) * 0.5 * rect.width();
+                let begin_y = rect.top() + (linear.begin.y + 1.0) * 0.5 * rect.height();
+                let end_x = rect.left() + (linear.end.x + 1.0) * 0.5 * rect.width();
+                let end_y = rect.top() + (linear.end.y + 1.0) * 0.5 * rect.height();
+
+                Shader::linear_gradient(
+                    Offset::new(begin_x, begin_y),
+                    Offset::new(end_x, end_y),
+                    linear.colors.clone(),
+                    linear.stops.clone(),
+                    linear.tile_mode,
+                )
+            }
+            Gradient::Radial(radial) => {
+                // Convert alignment-based center to absolute offset
+                let center_x = rect.left() + (radial.center.x + 1.0) * 0.5 * rect.width();
+                let center_y = rect.top() + (radial.center.y + 1.0) * 0.5 * rect.height();
+
+                // Convert relative radius to absolute (based on rect size)
+                let abs_radius = radial.radius * rect.width().min(rect.height()) * 0.5;
+
+                // Convert focal alignment to offset if present
+                let focal = radial.focal.map(|f| {
+                    Offset::new(
+                        rect.left() + (f.x + 1.0) * 0.5 * rect.width(),
+                        rect.top() + (f.y + 1.0) * 0.5 * rect.height(),
+                    )
+                });
+
+                let focal_radius = radial
+                    .focal_radius
+                    .map(|r| r * rect.width().min(rect.height()) * 0.5);
+
+                Shader::radial_gradient(
+                    Offset::new(center_x, center_y),
+                    abs_radius,
+                    radial.colors.clone(),
+                    radial.stops.clone(),
+                    radial.tile_mode,
+                    focal,
+                    focal_radius,
+                )
+            }
+            Gradient::Sweep(sweep) => {
+                // Convert alignment-based center to absolute offset
+                let center_x = rect.left() + (sweep.center.x + 1.0) * 0.5 * rect.width();
+                let center_y = rect.top() + (sweep.center.y + 1.0) * 0.5 * rect.height();
+
+                Shader::sweep_gradient(
+                    Offset::new(center_x, center_y),
+                    sweep.colors.clone(),
+                    sweep.stops.clone(),
+                    sweep.tile_mode,
+                    sweep.start_angle,
+                    sweep.end_angle,
+                )
             }
         }
     }
@@ -246,6 +339,7 @@ impl RenderDecoratedBox {
         // This is a simplified implementation - a full implementation would use proper blur
         let blur_steps = (shadow.blur_radius / 2.0).max(1.0) as usize;
         let alpha_step = shadow.color.a as f32 / (blur_steps as f32);
+        let base_radius = border_radius.map(|r| r.top_left.x).unwrap_or(0.0);
 
         for i in 0..blur_steps {
             let step_radius = (i as f32) * 2.0;
@@ -261,18 +355,12 @@ impl RenderDecoratedBox {
                 Color::rgba(shadow.color.r, shadow.color.g, shadow.color.b, step_alpha);
             let paint = Paint::fill(step_color);
 
-            if let Some(radius) = border_radius.map(|r| r.top_left.x + step_radius) {
-                let circular_radius = Radius::circular(radius);
-                let rrect = RRect {
-                    rect: step_rect,
-                    top_left: circular_radius,
-                    top_right: circular_radius,
-                    bottom_right: circular_radius,
-                    bottom_left: circular_radius,
-                };
-                canvas.draw_rrect(rrect, &paint);
+            if base_radius > 0.0 {
+                // Use chaining method for rounded shadow
+                canvas.rounded_rect(step_rect, base_radius + step_radius, &paint);
             } else {
-                canvas.draw_rect(step_rect, &paint);
+                // Use chaining API for simple rect
+                canvas.rect(step_rect, &paint);
             }
         }
     }

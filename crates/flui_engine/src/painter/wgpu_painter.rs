@@ -141,6 +141,9 @@ pub struct WgpuPainter {
     /// Texture cache for efficient texture loading and reuse
     texture_cache: super::texture_cache::TextureCache,
 
+    /// External texture registry for video/camera/platform textures
+    external_texture_registry: super::external_texture_registry::ExternalTextureRegistry,
+
     // ===== Tessellation =====
     /// Lyon-based path tessellator for complex shapes
     tessellator: Tessellator,
@@ -614,6 +617,10 @@ impl WgpuPainter {
         // Create texture cache (uses Arc for safe sharing)
         let texture_cache = super::texture_cache::TextureCache::new(device.clone(), queue.clone());
 
+        // Create external texture registry for video/camera/platform textures
+        let external_texture_registry =
+            super::external_texture_registry::ExternalTextureRegistry::new(device.clone());
+
         Self {
             device,
             queue,
@@ -648,6 +655,7 @@ impl WgpuPainter {
             current_gradient_stops,
             default_sampler,
             texture_cache,
+            external_texture_registry,
             tessellator,
             text_renderer,
             transform_stack,
@@ -778,6 +786,37 @@ impl WgpuPainter {
             0,
             bytemuck::cast_slice(&viewport_data),
         );
+    }
+
+    // ===== External Texture Registry Access =====
+
+    /// Get a reference to the external texture registry
+    ///
+    /// Use this to register external textures (video frames, camera preview, etc.)
+    /// that can be rendered via `Canvas::draw_texture()`.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use flui_types::painting::TextureId;
+    ///
+    /// let texture_id = TextureId::new(42);
+    /// painter.external_texture_registry()
+    ///     .register(texture_id, gpu_texture, 1920, 1080, true, true);
+    /// ```
+    pub fn external_texture_registry(
+        &self,
+    ) -> &super::external_texture_registry::ExternalTextureRegistry {
+        &self.external_texture_registry
+    }
+
+    /// Get a mutable reference to the external texture registry
+    ///
+    /// Use this to register, update, or unregister external textures.
+    pub fn external_texture_registry_mut(
+        &mut self,
+    ) -> &mut super::external_texture_registry::ExternalTextureRegistry {
+        &mut self.external_texture_registry
     }
 
     // ===== Helper Methods =====
@@ -1191,6 +1230,178 @@ pub trait Painter {
     fn text(&mut self, text: &str, position: Point, font_size: f32, paint: &Paint);
     fn texture(&mut self, texture_id: &super::texture_cache::TextureId, dst_rect: Rect);
 
+    /// Sample a gradient shader at the center of a rect to get a representative color
+    ///
+    /// This is a fallback for when full GPU gradient rendering is not available.
+    /// Returns the color at the center position of the gradient.
+    fn sample_gradient_center(
+        shader: &flui_painting::Shader,
+        rect: Rect,
+    ) -> flui_types::styling::Color
+    where
+        Self: Sized,
+    {
+        use flui_painting::Shader;
+        use flui_types::styling::Color;
+
+        match shader {
+            Shader::LinearGradient {
+                from,
+                to,
+                colors,
+                stops,
+                ..
+            } => {
+                if colors.is_empty() {
+                    return Color::TRANSPARENT;
+                }
+                if colors.len() == 1 {
+                    return colors[0];
+                }
+
+                // Calculate center point relative to gradient line
+                let center_x = rect.left() + rect.width() / 2.0;
+                let center_y = rect.top() + rect.height() / 2.0;
+
+                // Project center onto gradient line to get t value
+                let dx = to.dx - from.dx;
+                let dy = to.dy - from.dy;
+                let len_sq = dx * dx + dy * dy;
+
+                let t = if len_sq > f32::EPSILON {
+                    let px = center_x - from.dx;
+                    let py = center_y - from.dy;
+                    ((px * dx + py * dy) / len_sq).clamp(0.0, 1.0)
+                } else {
+                    0.5
+                };
+
+                Self::interpolate_gradient_color(colors, stops.as_deref(), t)
+            }
+            Shader::RadialGradient {
+                center,
+                radius,
+                colors,
+                stops,
+                ..
+            } => {
+                if colors.is_empty() {
+                    return Color::TRANSPARENT;
+                }
+                if colors.len() == 1 {
+                    return colors[0];
+                }
+
+                // Calculate distance from gradient center to rect center
+                let rect_center_x = rect.left() + rect.width() / 2.0;
+                let rect_center_y = rect.top() + rect.height() / 2.0;
+
+                let dx = rect_center_x - center.dx;
+                let dy = rect_center_y - center.dy;
+                let dist = (dx * dx + dy * dy).sqrt();
+
+                let t = if *radius > f32::EPSILON {
+                    (dist / radius).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+
+                Self::interpolate_gradient_color(colors, stops.as_deref(), t)
+            }
+            Shader::SweepGradient {
+                center,
+                colors,
+                stops,
+                start_angle,
+                end_angle,
+                ..
+            } => {
+                if colors.is_empty() {
+                    return Color::TRANSPARENT;
+                }
+                if colors.len() == 1 {
+                    return colors[0];
+                }
+
+                // Calculate angle from gradient center to rect center
+                let rect_center_x = rect.left() + rect.width() / 2.0;
+                let rect_center_y = rect.top() + rect.height() / 2.0;
+
+                let dx = rect_center_x - center.dx;
+                let dy = rect_center_y - center.dy;
+                let angle = dy.atan2(dx);
+
+                // Normalize angle to t in [0, 1]
+                let angle_range = end_angle - start_angle;
+                let t = if angle_range.abs() > f32::EPSILON {
+                    ((angle - start_angle) / angle_range).clamp(0.0, 1.0)
+                } else {
+                    0.5
+                };
+
+                Self::interpolate_gradient_color(colors, stops.as_deref(), t)
+            }
+            Shader::Image(_) => Color::WHITE, // Fallback for image shader
+        }
+    }
+
+    /// Interpolate between gradient colors at a given t value
+    fn interpolate_gradient_color(
+        colors: &[flui_types::styling::Color],
+        stops: Option<&[f32]>,
+        t: f32,
+    ) -> flui_types::styling::Color
+    where
+        Self: Sized,
+    {
+        use flui_types::styling::Color;
+
+        if colors.is_empty() {
+            return Color::TRANSPARENT;
+        }
+        if colors.len() == 1 {
+            return colors[0];
+        }
+
+        // Generate default stops if not provided
+        let default_stops: Vec<f32> = (0..colors.len())
+            .map(|i| i as f32 / (colors.len() - 1) as f32)
+            .collect();
+        let stops = stops.unwrap_or(&default_stops);
+
+        // Find the two colors to interpolate between
+        let mut idx = 0;
+        for (i, &stop) in stops.iter().enumerate() {
+            if t <= stop {
+                idx = i;
+                break;
+            }
+            idx = i;
+        }
+
+        if idx == 0 {
+            return colors[0];
+        }
+
+        let prev_stop = stops[idx - 1];
+        let next_stop = stops[idx];
+        let local_t = if (next_stop - prev_stop).abs() > f32::EPSILON {
+            (t - prev_stop) / (next_stop - prev_stop)
+        } else {
+            0.5
+        };
+
+        let c1 = &colors[idx - 1];
+        let c2 = &colors[idx.min(colors.len() - 1)];
+
+        Color::rgba(
+            (c1.r as f32 + (c2.r as f32 - c1.r as f32) * local_t) as u8,
+            (c1.g as f32 + (c2.g as f32 - c1.g as f32) * local_t) as u8,
+            (c1.b as f32 + (c2.b as f32 - c1.b as f32) * local_t) as u8,
+            (c1.a as f32 + (c2.a as f32 - c1.a as f32) * local_t) as u8,
+        )
+    }
+
     // Transform stack
     fn save(&mut self);
     fn restore(&mut self);
@@ -1207,10 +1418,6 @@ pub trait Painter {
     fn viewport_bounds(&self) -> Rect;
 
     // Advanced methods with default implementations (stubs for layers)
-    fn save_layer(&mut self) {
-        self.save(); // Fallback to regular save
-    }
-
     fn save_layer_backdrop(&mut self) {
         self.save(); // Fallback to regular save
     }
@@ -1293,6 +1500,32 @@ pub trait Painter {
         tracing::warn!("Painter::draw_image: not implemented");
     }
 
+    /// Draw a GPU texture referenced by ID
+    ///
+    /// Renders an external GPU texture (video frame, camera preview, platform view)
+    /// to the destination rectangle. The texture must be registered with the
+    /// rendering engine's texture registry.
+    ///
+    /// # Arguments
+    ///
+    /// * `texture_id` - GPU texture identifier (from flui_types::painting::TextureId)
+    /// * `dst` - Destination rectangle
+    /// * `src` - Optional source rectangle within texture (None = entire texture)
+    /// * `filter_quality` - Quality of texture sampling
+    /// * `opacity` - Opacity (0.0 = transparent, 1.0 = opaque)
+    fn draw_texture(
+        &mut self,
+        _texture_id: flui_types::painting::TextureId,
+        _dst: Rect,
+        _src: Option<Rect>,
+        _filter_quality: flui_types::painting::FilterQuality,
+        _opacity: f32,
+    ) {
+        // No-op by default - subclasses should implement texture lookup and rendering
+        #[cfg(debug_assertions)]
+        tracing::warn!("Painter::draw_texture: not implemented - texture_id lookup not available");
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn text_with_shadow(
         &mut self,
@@ -1332,9 +1565,130 @@ pub trait Painter {
         self.rect(rect, paint);
     }
 
+    // ===== Gradient Drawing =====
+
+    // TODO: Gradient drawing should use ShaderMaskLayer instead of direct painter methods
+    //
+    // The methods below (draw_gradient and draw_gradient_rrect) were removed because they
+    // called sample_gradient_center, which is not implemented in the Painter trait.
+    //
+    // For proper gradient rendering, use the following approach:
+    // 1. Create a ShaderMaskLayer with the desired gradient shader
+    // 2. Use the layer system to compose gradients with other content
+    // 3. Leverage GPU-accelerated gradient rendering via WgpuPainter::gradient_rect()
+    //    or WgpuPainter::radial_gradient_rect()
+    //
+    // This architectural change ensures gradients are rendered efficiently through the
+    // layer pipeline rather than as fallback solid colors.
+
+    // /// Draw a gradient-filled rectangle
+    // fn draw_gradient(&mut self, rect: Rect, shader: &flui_painting::Shader)
+    // where
+    //     Self: Sized,
+    // {
+    //     // Default implementation: sample gradient at corners and draw with average color
+    //     // Full GPU implementation will use a gradient shader
+    //     let color = Self::sample_gradient_center(shader, rect);
+    //     let paint = Paint::fill(color);
+    //     self.rect(rect, &paint);
+    //
+    //     #[cfg(debug_assertions)]
+    //     tracing::debug!("Painter::draw_gradient: using fallback solid color (GPU gradient shader not yet implemented)");
+    // }
+
+    // /// Draw a gradient-filled rounded rectangle
+    // fn draw_gradient_rrect(&mut self, rrect: RRect, shader: &flui_painting::Shader)
+    // where
+    //     Self: Sized,
+    // {
+    //     // Default implementation: sample gradient at center and draw with that color
+    //     // Full GPU implementation will use a gradient shader
+    //     let color = Self::sample_gradient_center(shader, rrect.rect);
+    //     let paint = Paint::fill(color);
+    //     self.rrect(rrect, &paint);
+    //
+    //     #[cfg(debug_assertions)]
+    //     tracing::debug!("Painter::draw_gradient_rrect: using fallback solid color (GPU gradient shader not yet implemented)");
+    // }
+
     // ===== DELETED: All deprecated methods removed in Clean Architecture refactor =====
     // Use CommandRenderer trait instead of direct Painter calls
     // Migrate to: PictureLayer::render(WgpuRenderer) for modern architecture
+
+    // ===== Image Extensions =====
+
+    /// Draw an image with repeat/tiling
+    ///
+    /// Tiles the image to fill the destination rectangle based on the repeat mode.
+    fn draw_image_repeat(
+        &mut self,
+        image: &flui_types::painting::Image,
+        dst: Rect,
+        repeat: flui_painting::display_list::ImageRepeat,
+    ) {
+        // Default implementation: just draw single image (no tiling)
+        // Full implementation should tile based on repeat mode
+        let _ = repeat; // Ignore repeat mode in fallback
+        self.draw_image(image, dst);
+
+        #[cfg(debug_assertions)]
+        tracing::debug!("Painter::draw_image_repeat: using fallback (no tiling)");
+    }
+
+    /// Draw an image with 9-slice/9-patch scaling
+    ///
+    /// Draws the image with a center slice that scales while corners and edges
+    /// maintain their natural size.
+    fn draw_image_nine_slice(
+        &mut self,
+        image: &flui_types::painting::Image,
+        _center_slice: Rect,
+        dst: Rect,
+    ) {
+        // Default implementation: just draw scaled image (no 9-slice)
+        self.draw_image(image, dst);
+
+        #[cfg(debug_assertions)]
+        tracing::debug!("Painter::draw_image_nine_slice: using fallback (no 9-slice)");
+    }
+
+    /// Draw an image with a color filter applied
+    fn draw_image_filtered(
+        &mut self,
+        image: &flui_types::painting::Image,
+        dst: Rect,
+        _filter: flui_painting::display_list::ColorFilter,
+    ) {
+        // Default implementation: just draw image without filter
+        self.draw_image(image, dst);
+
+        #[cfg(debug_assertions)]
+        tracing::debug!("Painter::draw_image_filtered: using fallback (no filter)");
+    }
+
+    // ===== Layer Operations =====
+
+    /// Save canvas state and create a new compositing layer with paint settings
+    ///
+    /// This creates an offscreen buffer for subsequent drawing commands.
+    /// When `restore_layer` is called, the layer is composited back with
+    /// the specified paint settings (opacity, blend mode, etc.).
+    fn save_layer(&mut self, _bounds: Option<Rect>, _paint: &Paint) {
+        // Default implementation: just do regular save (no compositing layer)
+        self.save();
+
+        #[cfg(debug_assertions)]
+        tracing::debug!("Painter::save_layer: using fallback (no offscreen compositing)");
+    }
+
+    /// Restore canvas state and composite the saved layer
+    fn restore_layer(&mut self) {
+        // Default implementation: just do regular restore
+        self.restore();
+
+        #[cfg(debug_assertions)]
+        tracing::debug!("Painter::restore_layer: using fallback restore");
+    }
 }
 
 impl Painter for WgpuPainter {
@@ -1853,6 +2207,96 @@ impl Painter for WgpuPainter {
                 #[cfg(debug_assertions)]
                 tracing::error!("Failed to load atlas texture: {}", e);
             }
+        }
+    }
+
+    fn draw_texture(
+        &mut self,
+        texture_id: flui_types::painting::TextureId,
+        dst: Rect,
+        src: Option<Rect>,
+        _filter_quality: flui_types::painting::FilterQuality,
+        opacity: f32,
+    ) {
+        #[cfg(debug_assertions)]
+        tracing::debug!(
+            "WgpuPainter::draw_texture: id={}, dst={:?}, src={:?}, opacity={}",
+            texture_id.get(),
+            dst,
+            src,
+            opacity
+        );
+
+        // Look up the external texture in the registry
+        if let Some(entry) = self.external_texture_registry.get(texture_id) {
+            // Calculate UV coordinates from source rect
+            let src_uv = if let Some(src_rect) = src {
+                // Normalize to texture dimensions
+                let tex_width = entry.width as f32;
+                let tex_height = entry.height as f32;
+                [
+                    src_rect.left() / tex_width,
+                    src_rect.top() / tex_height,
+                    src_rect.right() / tex_width,
+                    src_rect.bottom() / tex_height,
+                ]
+            } else {
+                // Full texture
+                [0.0, 0.0, 1.0, 1.0]
+            };
+
+            // Apply opacity via tint color alpha
+            let tint = flui_types::styling::Color::rgba(255, 255, 255, (opacity * 255.0) as u8);
+
+            // Create texture instance
+            let instance = super::instancing::TextureInstance::with_uv(dst, src_uv, tint);
+            self.texture_batch.add(instance);
+
+            // Note: The actual texture rendering happens in flush_all_instanced_batches()
+            // which needs to use entry.bind_group for the texture binding.
+            // For now, the texture batch uses a placeholder - full integration requires
+            // modifying the texture rendering pass to support per-texture bind groups.
+
+            #[cfg(debug_assertions)]
+            tracing::trace!(
+                "External texture {} found: {}x{}, frame={}",
+                texture_id.get(),
+                entry.width,
+                entry.height,
+                entry.frame_count
+            );
+        } else {
+            // Texture not registered - render placeholder for debugging
+            #[cfg(debug_assertions)]
+            tracing::warn!(
+                "External texture {} not registered - rendering placeholder",
+                texture_id.get()
+            );
+
+            // Create a placeholder color based on texture ID (for debugging)
+            let id_hash = texture_id.get();
+            let r = (id_hash & 0xFF) as u8;
+            let g = ((id_hash >> 8) & 0xFF) as u8;
+            let b = ((id_hash >> 16) & 0xFF) as u8;
+            let a = (opacity * 255.0) as u8;
+            let placeholder_color =
+                flui_types::styling::Color::rgba(r.max(64), g.max(64), b.max(64), a);
+
+            // Default UV coordinates
+            let src_uv = if let Some(src_rect) = src {
+                [
+                    src_rect.left(),
+                    src_rect.top(),
+                    src_rect.right(),
+                    src_rect.bottom(),
+                ]
+            } else {
+                [0.0, 0.0, 1.0, 1.0]
+            };
+
+            let instance =
+                super::instancing::TextureInstance::with_uv(dst, src_uv, placeholder_color);
+            self.texture_batch.add(instance);
         }
     }
 

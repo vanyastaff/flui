@@ -1,4 +1,9 @@
 //! RenderListWheelViewport - 3D wheel picker viewport
+//!
+//! Renders a scrollable collection of fixed-size widgets in a wheel-like format,
+//! creating a cylindrical projection where items appear on a rotating cylinder.
+//!
+//! Flutter reference: <https://api.flutter.dev/flutter/rendering/RenderListWheelViewport-class.html>
 
 use crate::core::{BoxProtocol, ChildrenAccess, LayoutContext, PaintContext, RenderBox, Variable};
 use flui_types::constraints::BoxConstraints;
@@ -263,13 +268,21 @@ impl RenderBox<Variable> for RenderListWheelViewport {
             }
 
             let child_offset = self.child_offsets[index];
+            let transform = self
+                .child_transforms
+                .get(index)
+                .cloned()
+                .flatten()
+                .unwrap_or_else(Matrix4::identity);
 
-            // Paint child at calculated offset
-            // TODO: Apply 3D transform when transform layer support is available
-            // For now, just using the calculated offsets for cylindrical positioning
-            // Visibility culling would be done based on scroll position, but for now
-            // we paint all children (could be optimized later)
+            // Apply 3D transform for cylindrical effect using chaining API
+            // This creates the wheel picker appearance where items appear
+            // to be on a rotating cylinder with perspective
+            ctx.canvas().saved().transformed(transform);
+
+            // Paint child at calculated offset within the transformed coordinate system
             ctx.paint_child(child_id, offset + child_offset);
+            ctx.canvas().restored();
         }
     }
 }

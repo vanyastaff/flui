@@ -98,10 +98,10 @@ impl RendererBinding {
 
         // Create scene using flui_engine::Scene API
         let scene = if let Some(canvas) = canvas {
-            // Convert Canvas to CanvasLayer and wrap in Arc for zero-copy sharing with hit testing
+            // Convert Canvas to CanvasLayer and wrap in Layer enum
             use flui_engine::CanvasLayer;
-            let layer = CanvasLayer::from_canvas(canvas);
-            Scene::with_layer(size, Arc::new(layer), 0)
+            let canvas_layer = CanvasLayer::from_canvas(canvas);
+            Scene::from_canvas_layer(size, Arc::new(canvas_layer), 0)
         } else {
             Scene::new(size)
         };

@@ -13,7 +13,7 @@ use super::color::Color;
 /// # Examples
 ///
 /// ```
-/// use flui_types::MaterialColors;
+/// use flui_types::styling::MaterialColors;
 ///
 /// let primary = MaterialColors::BLUE_500;
 /// let accent = MaterialColors::PINK_A200;

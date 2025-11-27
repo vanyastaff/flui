@@ -1,4 +1,7 @@
 //! RenderWrap - arranges children with wrapping (like flexbox wrap)
+//!
+//! Flutter equivalent: `RenderWrap`
+//! Source: https://api.flutter.dev/flutter/rendering/RenderWrap-class.html
 
 use crate::core::{BoxProtocol, ChildrenAccess, LayoutContext, PaintContext, RenderBox, Variable};
 use flui_types::constraints::BoxConstraints;
@@ -36,6 +39,13 @@ pub enum WrapCrossAlignment {
 ///
 /// Like Flex (Row/Column), but wraps to the next line when reaching
 /// the edge of the container.
+///
+/// # Layout Algorithm (Flutter-compatible)
+///
+/// 1. Layout each child with unbounded main axis constraints
+/// 2. Place children adjacent in main axis direction with `spacing`
+/// 3. When no space remains, create new run with `run_spacing` between
+/// 4. Apply alignment within runs and between runs
 ///
 /// # Example
 ///
@@ -139,10 +149,11 @@ impl RenderBox<Variable> for RenderWrap {
                 let mut total_width = 0.0_f32;
 
                 for child_id in children.iter() {
-                    // Child gets unconstrained width, constrained height
+                    // Flutter-compatible: children get UNBOUNDED main axis
+                    // This allows them to take their natural size
                     let child_constraints = BoxConstraints::new(
                         0.0,
-                        max_width - current_x,
+                        f32::INFINITY, // Unbounded width - child sizes naturally
                         0.0,
                         constraints.max_height,
                     );
@@ -177,12 +188,13 @@ impl RenderBox<Variable> for RenderWrap {
                 let mut total_height = 0.0_f32;
 
                 for child_id in children.iter() {
-                    // Child gets constrained width, unconstrained height
+                    // Flutter-compatible: children get UNBOUNDED main axis
+                    // This allows them to take their natural size
                     let child_constraints = BoxConstraints::new(
                         0.0,
                         constraints.max_width,
                         0.0,
-                        max_height - current_y,
+                        f32::INFINITY, // Unbounded height - child sizes naturally
                     );
 
                     let child_size = ctx.layout_child(child_id, child_constraints);

@@ -1,4 +1,6 @@
 //! RenderPositionedBox - positions child with explicit coordinates
+//!
+//! Flutter reference: <https://api.flutter.dev/flutter/rendering/RenderPositionedBox-class.html>
 
 use crate::core::{
     RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},

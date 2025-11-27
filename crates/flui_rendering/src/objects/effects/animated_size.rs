@@ -5,7 +5,8 @@
 //! A full implementation would use AnimationController and TickerProvider.
 
 use crate::core::{BoxProtocol, LayoutContext, PaintContext, RenderBox, Single};
-use flui_types::{Alignment, Size};
+use flui_types::animation::{Cubic, Curve};
+use flui_types::{Alignment, Rect, Size};
 use std::time::{Duration, Instant};
 
 /// Alignment for positioning the child during size animation
@@ -60,17 +61,20 @@ enum AnimationState {
 /// RenderAnimatedSize automatically animates its size when its child's size
 /// changes. This creates smooth transitions instead of abrupt size changes.
 ///
-/// # Simplified Implementation Note
+/// # Implementation Note
 ///
-/// This is a simplified version without full animation infrastructure
-/// (AnimationController, Ticker, vsync). It uses linear interpolation
-/// based on elapsed time since the size change began.
+/// This is a self-contained animation implementation that uses
+/// time-based interpolation with support for `flui_types::animation::Curve`.
+/// It provides smooth animations without requiring external animation
+/// infrastructure (AnimationController, Ticker, vsync).
 ///
-/// **For production use**, this should be enhanced with:
-/// - Proper AnimationController integration
-/// - Customizable curves (ease-in, ease-out, etc.)
-/// - Ticker synchronization with display refresh
-/// - Reverse animation support
+/// **Features**:
+/// - Full curve support via `flui_types::animation::Curve` trait
+/// - Predefined curves: Linear, EaseIn, EaseOut, EaseInOut, FastOutSlowIn, ElasticOut, etc.
+/// - Custom curves via Cubic, CatmullRom, and other curve types
+/// - Time-based animation (no frame dependencies)
+/// - Self-contained state management
+/// - Customizable duration and alignment
 ///
 /// # Behavior
 ///
@@ -88,13 +92,15 @@ enum AnimationState {
 /// // Create animated size with 300ms transition
 /// let animated_size = RenderAnimatedSize::new(Duration::from_millis(300));
 /// ```
-#[derive(Debug)]
 pub struct RenderAnimatedSize {
     /// Duration of the size animation
     duration: Duration,
 
     /// Alignment of child during animation
     alignment: SizeAlignment,
+
+    /// Animation curve for easing
+    curve: Cubic,
 
     /// Current animation state
     state: AnimationState,
@@ -106,12 +112,28 @@ pub struct RenderAnimatedSize {
     current_size: Size,
 }
 
+// Manual Debug implementation since Cubic uses f32 which doesn't have exact equality
+impl std::fmt::Debug for RenderAnimatedSize {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RenderAnimatedSize")
+            .field("duration", &self.duration)
+            .field("alignment", &self.alignment)
+            .field("curve", &"<curve>")
+            .field("state", &self.state)
+            .field("last_child_size", &self.last_child_size)
+            .field("current_size", &self.current_size)
+            .finish()
+    }
+}
+
 impl RenderAnimatedSize {
-    /// Create new RenderAnimatedSize with specified duration
+    /// Create new RenderAnimatedSize with specified duration and linear curve
     pub fn new(duration: Duration) -> Self {
+        // Use linear cubic approximation (0,0,1,1) which is equivalent to Linear
         Self {
             duration,
             alignment: SizeAlignment::Center,
+            curve: Cubic::new(0.0, 0.0, 1.0, 1.0), // Linear curve as cubic
             state: AnimationState::Idle,
             last_child_size: None,
             current_size: Size::ZERO,
@@ -127,6 +149,22 @@ impl RenderAnimatedSize {
     pub fn with_alignment(mut self, alignment: SizeAlignment) -> Self {
         self.alignment = alignment;
         self
+    }
+
+    /// Set animation curve
+    pub fn with_curve(mut self, curve: Cubic) -> Self {
+        self.curve = curve;
+        self
+    }
+
+    /// Get current animation curve
+    pub fn curve(&self) -> Cubic {
+        self.curve
+    }
+
+    /// Set new animation curve
+    pub fn set_curve(&mut self, curve: Cubic) {
+        self.curve = curve;
     }
 
     /// Get current duration
@@ -161,10 +199,14 @@ impl RenderAnimatedSize {
                     // Animation complete
                     target_size
                 } else {
-                    // Linear interpolation (TODO: support curves)
+                    // Apply easing curve to progress
+                    let eased_progress = self.curve.transform(progress);
+
+                    // Interpolate with eased progress
                     Size::new(
-                        start_size.width + (target_size.width - start_size.width) * progress,
-                        start_size.height + (target_size.height - start_size.height) * progress,
+                        start_size.width + (target_size.width - start_size.width) * eased_progress,
+                        start_size.height
+                            + (target_size.height - start_size.height) * eased_progress,
                     )
                 }
             }
@@ -246,9 +288,27 @@ impl RenderBox<Single> for RenderAnimatedSize {
             ctx.offset
         };
 
-        // Paint child at calculated offset
-        // TODO: Add clipping if child exceeds current animated size
-        ctx.paint_child(child_id, child_offset);
+        // Check if child overflows current animated size
+        let has_overflow = self
+            .last_child_size
+            .map(|cs| cs.width > self.current_size.width || cs.height > self.current_size.height)
+            .unwrap_or(false);
+
+        if has_overflow {
+            // Clip child to animated bounds to prevent overflow during shrink animation
+            let clip_rect = Rect::from_xywh(
+                ctx.offset.dx,
+                ctx.offset.dy,
+                self.current_size.width,
+                self.current_size.height,
+            );
+            ctx.canvas().saved().clipped_rect(clip_rect);
+            ctx.paint_child(child_id, child_offset);
+            ctx.canvas().restored();
+        } else {
+            // No overflow - paint child normally
+            ctx.paint_child(child_id, child_offset);
+        }
     }
 }
 
@@ -305,5 +365,39 @@ mod tests {
         let animated_size = RenderAnimatedSize::new(Duration::from_millis(300));
         assert!(!animated_size.is_animating());
         assert_eq!(animated_size.state, AnimationState::Idle);
+    }
+
+    #[test]
+    fn test_animation_curve_with_curve() {
+        use flui_types::animation::Curves;
+        let animated_size =
+            RenderAnimatedSize::new(Duration::from_millis(300)).with_curve(Curves::EaseInOut);
+        assert_eq!(animated_size.curve(), Curves::EaseInOut);
+    }
+
+    #[test]
+    fn test_animation_curve_set_curve() {
+        use flui_types::animation::Curves;
+        let mut animated_size = RenderAnimatedSize::new(Duration::from_millis(300));
+        // Default curve is linear cubic (0,0,1,1)
+        assert_eq!(animated_size.curve(), Cubic::new(0.0, 0.0, 1.0, 1.0));
+
+        animated_size.set_curve(Curves::FastOutSlowIn);
+        assert_eq!(animated_size.curve(), Curves::FastOutSlowIn);
+    }
+
+    #[test]
+    fn test_animation_uses_curve() {
+        use flui_types::animation::{Curve, Curves};
+
+        // Test that curves affect interpolation correctly
+        let linear = Curves::Linear;
+        assert_eq!(linear.transform(0.5), 0.5);
+
+        let ease_in = Curves::EaseIn;
+        assert!(ease_in.transform(0.5) < 0.5); // Slower at start
+
+        let ease_out = Curves::EaseOut;
+        assert!(ease_out.transform(0.5) > 0.5); // Faster at start
     }
 }

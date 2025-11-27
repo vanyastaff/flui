@@ -6,6 +6,8 @@
 //! - Pointer down
 //! - Pointer stays within TAP_SLOP (18px) of initial position
 //! - Pointer up within timeout
+//!
+//! Flutter reference: https://api.flutter.dev/flutter/gestures/TapGestureRecognizer-class.html
 
 use super::recognizer::{constants, GestureRecognizer, GestureRecognizerState};
 use crate::arena::{GestureArenaMember, PointerId};
@@ -61,6 +63,7 @@ pub struct TapGestureRecognizer {
 #[derive(Default)]
 struct TapCallbacks {
     on_tap_down: Option<TapCallback>,
+    on_tap_move: Option<TapCallback>,
     on_tap_up: Option<TapCallback>,
     on_tap: Option<TapCallback>,
     on_tap_cancel: Option<TapCallback>,
@@ -89,6 +92,18 @@ impl TapGestureRecognizer {
         callback: impl Fn(TapDetails) + Send + Sync + 'static,
     ) -> Arc<Self> {
         self.callbacks.lock().on_tap_down = Some(Arc::new(callback));
+        self
+    }
+
+    /// Set the tap move callback (called when pointer moves during tap)
+    ///
+    /// This callback is triggered when a pointer that initiated a tap moves
+    /// but stays within the slop tolerance.
+    pub fn with_on_tap_move(
+        self: Arc<Self>,
+        callback: impl Fn(TapDetails) + Send + Sync + 'static,
+    ) -> Arc<Self> {
+        self.callbacks.lock().on_tap_move = Some(Arc::new(callback));
         self
     }
 
@@ -186,6 +201,23 @@ impl TapGestureRecognizer {
         }
     }
 
+    /// Handle tap move event (pointer moved within slop tolerance)
+    fn handle_tap_move(&self, position: Offset, kind: flui_types::events::PointerDeviceKind) {
+        let current_state = *self.gesture_state.lock();
+
+        if current_state == TapState::Down {
+            // Call on_tap_move callback
+            if let Some(callback) = self.callbacks.lock().on_tap_move.clone() {
+                let details = TapDetails {
+                    global_position: position,
+                    local_position: position,
+                    kind,
+                };
+                callback(details);
+            }
+        }
+    }
+
     /// Check if pointer moved too far (beyond slop tolerance)
     fn check_slop(&self, current_position: Offset) -> bool {
         if let Some(initial_pos) = self.state.initial_position() {
@@ -222,6 +254,9 @@ impl GestureRecognizer for TapGestureRecognizer {
                 // Check if moved too far (slop detection)
                 if self.check_slop(data.position) {
                     self.handle_tap_cancel(data.position, data.device_kind);
+                } else {
+                    // Still within slop - call tap move callback
+                    self.handle_tap_move(data.position, data.device_kind);
                 }
             }
             PointerEvent::Up(data) => {
@@ -236,10 +271,12 @@ impl GestureRecognizer for TapGestureRecognizer {
 
     fn dispose(&self) {
         self.state.mark_disposed();
-        self.callbacks.lock().on_tap_down = None;
-        self.callbacks.lock().on_tap_up = None;
-        self.callbacks.lock().on_tap = None;
-        self.callbacks.lock().on_tap_cancel = None;
+        let mut callbacks = self.callbacks.lock();
+        callbacks.on_tap_down = None;
+        callbacks.on_tap_move = None;
+        callbacks.on_tap_up = None;
+        callbacks.on_tap = None;
+        callbacks.on_tap_cancel = None;
     }
 
     fn primary_pointer(&self) -> Option<PointerId> {

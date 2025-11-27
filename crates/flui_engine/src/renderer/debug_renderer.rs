@@ -144,6 +144,70 @@ impl CommandRenderer for DebugRenderer {
         self.log_command("render_atlas", &format!("sprites={}", sprites.len()));
     }
 
+    fn render_image_repeat(
+        &mut self,
+        _image: &Image,
+        dst: Rect,
+        repeat: flui_painting::display_list::ImageRepeat,
+        _paint: Option<&Paint>,
+        _transform: &Matrix4,
+    ) {
+        self.log_command(
+            "render_image_repeat",
+            &format!("dst={:?}, repeat={:?}", dst, repeat),
+        );
+    }
+
+    fn render_image_nine_slice(
+        &mut self,
+        _image: &Image,
+        center_slice: Rect,
+        dst: Rect,
+        _paint: Option<&Paint>,
+        _transform: &Matrix4,
+    ) {
+        self.log_command(
+            "render_image_nine_slice",
+            &format!("center_slice={:?}, dst={:?}", center_slice, dst),
+        );
+    }
+
+    fn render_image_filtered(
+        &mut self,
+        _image: &Image,
+        dst: Rect,
+        filter: flui_painting::display_list::ColorFilter,
+        _paint: Option<&Paint>,
+        _transform: &Matrix4,
+    ) {
+        self.log_command(
+            "render_image_filtered",
+            &format!("dst={:?}, filter={:?}", dst, filter),
+        );
+    }
+
+    fn render_texture(
+        &mut self,
+        texture_id: flui_types::painting::TextureId,
+        dst: Rect,
+        src: Option<Rect>,
+        filter_quality: flui_types::painting::FilterQuality,
+        opacity: f32,
+        _transform: &Matrix4,
+    ) {
+        self.log_command(
+            "render_texture",
+            &format!(
+                "texture_id={}, dst={:?}, src={:?}, filter={:?}, opacity={}",
+                texture_id.get(),
+                dst,
+                src,
+                filter_quality,
+                opacity
+            ),
+        );
+    }
+
     fn render_shadow(&mut self, _path: &Path, color: Color, elevation: f32, _transform: &Matrix4) {
         self.log_command(
             "render_shadow",
@@ -151,8 +215,72 @@ impl CommandRenderer for DebugRenderer {
         );
     }
 
+    fn render_shader_mask(
+        &mut self,
+        child: &flui_painting::DisplayList,
+        shader: &flui_painting::Shader,
+        bounds: Rect,
+        blend_mode: BlendMode,
+        _transform: &Matrix4,
+    ) {
+        self.log_command(
+            "render_shader_mask",
+            &format!(
+                "shader={:?}, bounds={:?}, blend_mode={:?}, child_commands={}",
+                shader,
+                bounds,
+                blend_mode,
+                child.commands().count()
+            ),
+        );
+    }
+
+    fn render_gradient(
+        &mut self,
+        rect: Rect,
+        shader: &flui_painting::Shader,
+        _transform: &Matrix4,
+    ) {
+        self.log_command(
+            "render_gradient",
+            &format!("rect={:?}, shader={:?}", rect, shader),
+        );
+    }
+
+    fn render_gradient_rrect(
+        &mut self,
+        rrect: RRect,
+        shader: &flui_painting::Shader,
+        _transform: &Matrix4,
+    ) {
+        self.log_command(
+            "render_gradient_rrect",
+            &format!("rrect={:?}, shader={:?}", rrect, shader),
+        );
+    }
+
     fn render_color(&mut self, color: Color, _blend_mode: BlendMode, _transform: &Matrix4) {
         self.log_command("render_color", &format!("color={:?}", color));
+    }
+
+    fn render_backdrop_filter(
+        &mut self,
+        child: Option<&flui_painting::DisplayList>,
+        filter: &flui_painting::display_list::ImageFilter,
+        bounds: Rect,
+        blend_mode: BlendMode,
+        _transform: &Matrix4,
+    ) {
+        self.log_command(
+            "render_backdrop_filter",
+            &format!(
+                "filter={:?}, bounds={:?}, blend_mode={:?}, child_commands={}",
+                filter,
+                bounds,
+                blend_mode,
+                child.map(|c| c.commands().count()).unwrap_or(0)
+            ),
+        );
     }
 
     fn render_vertices(
@@ -184,5 +312,16 @@ impl CommandRenderer for DebugRenderer {
 
     fn viewport_bounds(&self) -> Rect {
         self.viewport
+    }
+
+    fn save_layer(&mut self, bounds: Option<Rect>, paint: &Paint, _transform: &Matrix4) {
+        self.log_command(
+            "save_layer",
+            &format!("bounds={:?}, paint={:?}", bounds, paint),
+        );
+    }
+
+    fn restore_layer(&mut self, _transform: &Matrix4) {
+        self.log_command("restore_layer", "");
     }
 }

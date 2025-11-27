@@ -8,6 +8,11 @@
 //! - Event propagation control (stop/continue)
 //! - HitTestBehavior for controlling hit detection
 //! - Dispatch order from leaf to root (most specific first)
+//!
+//! Flutter references:
+//! - HitTestTarget: https://api.flutter.dev/flutter/gestures/HitTestTarget-class.html
+//! - HitTestResult: https://api.flutter.dev/flutter/rendering/HitTestResult-class.html
+//! - HitTestBehavior: https://api.flutter.dev/flutter/rendering/HitTestBehavior.html
 
 use flui_types::{
     events::PointerEvent,
@@ -549,7 +554,11 @@ mod tests {
         // Push transform
         result.push_offset(Offset::new(10.0, 20.0));
 
-        let entry = HitTestEntry::new(ElementId::new(1), Offset::ZERO, Rect::from_xywh(0.0, 0.0, 100.0, 100.0));
+        let entry = HitTestEntry::new(
+            ElementId::new(1),
+            Offset::ZERO,
+            Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
+        );
         result.add(entry);
 
         result.pop_transform();

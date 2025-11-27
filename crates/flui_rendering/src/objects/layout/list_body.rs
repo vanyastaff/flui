@@ -1,4 +1,9 @@
 //! RenderListBody - simple scrollable list layout
+//!
+//! Displays children sequentially along a given axis, forcing them to the
+//! dimensions of the parent in the other axis.
+//!
+//! Flutter reference: <https://api.flutter.dev/flutter/rendering/RenderListBody-class.html>
 
 use crate::core::{BoxProtocol, ChildrenAccess, LayoutContext, PaintContext, RenderBox, Variable};
 use flui_types::constraints::BoxConstraints;
