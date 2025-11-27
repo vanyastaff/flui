@@ -162,14 +162,13 @@ impl<S: ClipShape + 'static> RenderBox<Single> for RenderClip<S> {
             return;
         }
 
-        // Read offset before taking mutable borrow
+        // Extract offset before borrowing canvas
         let offset = ctx.offset;
 
-        // Save canvas state before clipping
-        ctx.canvas().save();
-
-        // Move to offset
-        ctx.canvas().translate(offset.dx, offset.dy);
+        // Apply transform and clipping with chaining API
+        ctx.canvas()
+            .saved()
+            .translated(offset.dx, offset.dy);
 
         // Let the shape apply its specific clipping
         self.shape.apply_clip(ctx.canvas(), self.size);
