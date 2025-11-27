@@ -104,6 +104,23 @@ pub trait ViewObject: Send + Sync + 'static {
     /// Clean up resources here.
     fn dispose(&mut self, _ctx: &dyn BuildContext) {}
 
+    // ========== RENDER STATE (for render views) ==========
+
+    /// Returns the render state for render views.
+    ///
+    /// Default: None (non-render views don't have render state)
+    /// Overridden by RenderObjectWrapper and RenderViewWrapper.
+    fn render_state(&self) -> Option<&dyn Any> {
+        None
+    }
+
+    /// Returns a mutable reference to the render state.
+    ///
+    /// Default: None (non-render views don't have render state)
+    fn render_state_mut(&mut self) -> Option<&mut dyn Any> {
+        None
+    }
+
     // ========== DOWNCASTING ==========
 
     /// Upcast to Any for downcasting support

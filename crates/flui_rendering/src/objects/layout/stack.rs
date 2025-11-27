@@ -214,9 +214,9 @@ impl RenderBox<Variable> for RenderStack {
         let constraints = ctx.constraints;
         let children = ctx.children;
 
-        // Collect raw child IDs for layout_child calls
-        let raw_child_ids: Vec<std::num::NonZeroUsize> = children.iter().collect();
-        let child_count = raw_child_ids.len();
+        // Collect child IDs for layout_child calls
+        let child_ids: Vec<ElementId> = children.iter().collect();
+        let child_count = child_ids.len();
 
         if child_count == 0 {
             self.child_sizes.clear();
@@ -239,9 +239,7 @@ impl RenderBox<Variable> for RenderStack {
         let mut has_non_positioned = false;
 
         // ========== PASS 1: Layout non-positioned children ==========
-        for (i, &raw_child_id) in raw_child_ids.iter().enumerate() {
-            let child_id = ElementId::from(raw_child_id);
-
+        for (i, &child_id) in child_ids.iter().enumerate() {
             if self.is_child_positioned(child_id) {
                 // Skip positioned children in pass 1
                 continue;
@@ -256,7 +254,7 @@ impl RenderBox<Variable> for RenderStack {
                 StackFit::Passthrough => constraints,
             };
 
-            let child_size = ctx.layout_child(raw_child_id, child_constraints);
+            let child_size = ctx.layout_child(child_id, child_constraints);
             self.child_sizes[i] = child_size;
             max_width = max_width.max(child_size.width);
             max_height = max_height.max(child_size.height);
@@ -279,9 +277,7 @@ impl RenderBox<Variable> for RenderStack {
         };
 
         // ========== PASS 2: Layout positioned children ==========
-        for (i, &raw_child_id) in raw_child_ids.iter().enumerate() {
-            let child_id = ElementId::from(raw_child_id);
-
+        for (i, &child_id) in child_ids.iter().enumerate() {
             let parent_data = match self.child_parent_data.get(&child_id) {
                 Some(pd) if pd.is_positioned() => pd,
                 _ => continue, // Non-positioned, already laid out
@@ -289,7 +285,7 @@ impl RenderBox<Variable> for RenderStack {
 
             // Calculate constraints based on position values
             let child_constraints = self.positioned_child_constraints(parent_data, size);
-            let child_size = ctx.layout_child(raw_child_id, child_constraints);
+            let child_size = ctx.layout_child(child_id, child_constraints);
             self.child_sizes[i] = child_size;
         }
 
@@ -300,8 +296,7 @@ impl RenderBox<Variable> for RenderStack {
         );
 
         // ========== Calculate child offsets ==========
-        for (i, &raw_child_id) in raw_child_ids.iter().enumerate() {
-            let child_id = ElementId::from(raw_child_id);
+        for (i, &child_id) in child_ids.iter().enumerate() {
             let child_size = self.child_sizes[i];
 
             let offset = if let Some(parent_data) = self.child_parent_data.get(&child_id) {

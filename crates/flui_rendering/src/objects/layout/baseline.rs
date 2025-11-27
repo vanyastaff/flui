@@ -90,10 +90,9 @@ impl RenderBox<Single> for RenderBaseline {
 
         // Query child's baseline via LayoutTree trait
         // Falls back to estimated baseline if child doesn't have one
-        let child_element_id = ctx.children.single_id();
         let child_baseline = ctx
             .tree()
-            .get_baseline(child_element_id, self.baseline_type)
+            .get_baseline(child_id, self.baseline_type)
             .unwrap_or({
                 // Fallback: estimate baseline based on type
                 // Typical values for text without explicit baseline

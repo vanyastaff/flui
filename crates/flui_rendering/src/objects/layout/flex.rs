@@ -256,9 +256,9 @@ impl RenderBox<Variable> for RenderFlex {
         // Clear cache
         self.child_offsets.clear();
 
-        // Collect raw child IDs for layout_child calls, and convert to ElementId for parent data lookup
-        let raw_child_ids: Vec<std::num::NonZeroUsize> = children.iter().collect();
-        let child_count = raw_child_ids.len();
+        // Collect child IDs for layout_child calls and parent data lookup
+        let child_ids: Vec<ElementId> = children.iter().collect();
+        let child_count = child_ids.len();
 
         if child_count == 0 {
             return constraints.smallest();
@@ -302,8 +302,7 @@ impl RenderBox<Variable> for RenderFlex {
         let mut inflexible_main_size = 0.0f32;
         let mut max_cross_size = 0.0f32;
 
-        for (i, &raw_child_id) in raw_child_ids.iter().enumerate() {
-            let child_id = ElementId::from(raw_child_id);
+        for (i, &child_id) in child_ids.iter().enumerate() {
             let flex_factor = self.get_child_flex_factor(child_id);
 
             if flex_factor == 0 {
@@ -323,7 +322,7 @@ impl RenderBox<Variable> for RenderFlex {
                     ),
                 };
 
-                let child_size = ctx.layout_child(raw_child_id, child_constraints);
+                let child_size = ctx.layout_child(child_id, child_constraints);
                 child_sizes[i] = Some(child_size);
 
                 let child_main = match direction {
@@ -354,13 +353,12 @@ impl RenderBox<Variable> for RenderFlex {
 
         let mut total_main_size = inflexible_main_size;
 
-        for (i, &raw_child_id) in raw_child_ids.iter().enumerate() {
+        for (i, &child_id) in child_ids.iter().enumerate() {
             if child_sizes[i].is_some() {
                 // Already laid out in pass 1
                 continue;
             }
 
-            let child_id = ElementId::from(raw_child_id);
             let flex_factor = self.get_child_flex_factor(child_id);
             let flex_fit = self.get_child_flex_fit(child_id);
 
@@ -395,7 +393,7 @@ impl RenderBox<Variable> for RenderFlex {
                 ),
             };
 
-            let child_size = ctx.layout_child(raw_child_id, child_constraints);
+            let child_size = ctx.layout_child(child_id, child_constraints);
             child_sizes[i] = Some(child_size);
 
             let child_main = match direction {

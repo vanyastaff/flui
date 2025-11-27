@@ -670,14 +670,9 @@ impl Element {
     /// # Returns
     ///
     /// Reference to the RenderState as `dyn Any`, or `None` if not a render element.
-    ///
-    /// # Note
-    ///
-    /// This is a stub implementation. Full render state management is in progress.
     #[inline]
     pub fn render_state(&self) -> Option<&dyn std::any::Any> {
-        // TODO: Implement render state access via ViewObject
-        None
+        self.view_object.as_ref()?.render_state()
     }
 
     /// Returns a mutable reference to the render state, if it's a render element.
@@ -685,14 +680,9 @@ impl Element {
     /// # Returns
     ///
     /// Mutable reference to the RenderState as `dyn Any`, or `None` if not a render element.
-    ///
-    /// # Note
-    ///
-    /// This is a stub implementation. Full render state management is in progress.
     #[inline]
     pub fn render_state_mut(&mut self) -> Option<&mut dyn std::any::Any> {
-        // TODO: Implement render state access via ViewObject
-        None
+        self.view_object.as_mut()?.render_state_mut()
     }
 }
 

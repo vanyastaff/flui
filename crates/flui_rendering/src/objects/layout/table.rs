@@ -5,9 +5,9 @@
 //! Flutter reference: <https://api.flutter.dev/flutter/rendering/RenderTable-class.html>
 
 use crate::core::{BoxProtocol, LayoutContext, LayoutTree, PaintContext, RenderBox, Variable};
+use flui_foundation::ElementId;
 use flui_types::{BoxConstraints, Offset, Size};
 use std::collections::HashMap;
-use std::num::NonZeroUsize;
 
 /// Column width specification for table columns
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -119,7 +119,7 @@ impl RenderTable {
     #[allow(clippy::needless_range_loop)]
     fn compute_column_widths<T>(
         &self,
-        children: &[NonZeroUsize],
+        children: &[ElementId],
         ctx: &mut LayoutContext<'_, T, Variable, BoxProtocol>,
         constraints: BoxConstraints,
     ) -> Vec<f32>
@@ -196,7 +196,7 @@ impl RenderTable {
     #[allow(clippy::needless_range_loop)]
     fn compute_row_heights_and_sizes<T>(
         &self,
-        children: &[NonZeroUsize],
+        children: &[ElementId],
         ctx: &mut LayoutContext<'_, T, Variable, BoxProtocol>,
         column_widths: &[f32],
         constraints: BoxConstraints,

@@ -9,9 +9,9 @@
 //! Flutter reference: <https://api.flutter.dev/flutter/widgets/GridView-class.html>
 
 use crate::core::{BoxProtocol, LayoutContext, LayoutTree, PaintContext, RenderBox, Variable};
+use flui_foundation::ElementId;
 use flui_types::{BoxConstraints, Offset, Size};
 use std::collections::HashMap;
-use std::num::NonZeroUsize;
 
 /// Track size specification for grid rows/columns
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -184,7 +184,7 @@ impl RenderGrid {
     /// Compute column widths based on track sizes
     fn compute_column_widths<T>(
         &self,
-        children: &[NonZeroUsize],
+        children: &[ElementId],
         ctx: &mut LayoutContext<'_, T, Variable, BoxProtocol>,
         constraints: BoxConstraints,
     ) -> Vec<f32>
@@ -252,7 +252,7 @@ impl RenderGrid {
     /// Compute row heights based on track sizes
     fn compute_row_heights<T>(
         &self,
-        children: &[NonZeroUsize],
+        children: &[ElementId],
         ctx: &mut LayoutContext<'_, T, Variable, BoxProtocol>,
         column_widths: &[f32],
         constraints: BoxConstraints,

@@ -43,8 +43,7 @@ pub mod render_proxy;
 pub mod render_sliver;
 pub mod render_state;
 pub mod render_tree;
-// Note: wrappers.rs not needed with current context-based API
-// pub mod wrappers;
+pub mod wrappers;
 
 // Re-export arity types
 pub use arity::{
@@ -102,5 +101,6 @@ pub use render_sliver::{SliverRender, SliverRenderExt};
 // Re-export proxy traits
 pub use render_proxy::{RenderBoxProxy, RenderSliverProxy};
 
-// Note: Wrappers not needed with current context-based API
+// Note: BoxRenderWrapper and SliverRenderWrapper are deprecated.
+// RenderObjectWrapper now directly wraps RenderBox<A> without type erasure.
 // pub use wrappers::{BoxRenderWrapper, SliverRenderWrapper};

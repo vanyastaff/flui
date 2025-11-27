@@ -108,10 +108,10 @@ pub trait Arity: sealed::Sealed + Send + Sync + 'static {
     /// # Panics (debug only)
     /// Panics in debug builds if count doesn't match arity.
     /// Zero cost in release builds.
-    fn from_slice(children: &[std::num::NonZeroUsize]) -> Self::Children<'_>;
+    fn from_slice(children: &[ElementId]) -> Self::Children<'_>;
 
     /// Try to convert slice to typed accessor
-    fn try_from_slice(children: &[std::num::NonZeroUsize]) -> Option<Self::Children<'_>> {
+    fn try_from_slice(children: &[ElementId]) -> Option<Self::Children<'_>> {
         if Self::validate_count(children.len()) {
             Some(Self::from_slice(children))
         } else {
@@ -138,7 +138,7 @@ mod sealed {
 /// which ensures they can be safely returned from methods returning `A::Children<'_>`.
 pub trait ChildrenAccess: std::fmt::Debug + Copy {
     /// Borrow the underlying slice of child ids.
-    fn as_slice(&self) -> &[std::num::NonZeroUsize];
+    fn as_slice(&self) -> &[ElementId];
 
     /// Number of children.
     #[inline]
@@ -171,7 +171,7 @@ impl Arity for Leaf {
     }
 
     #[inline(always)]
-    fn from_slice(children: &[std::num::NonZeroUsize]) -> Self::Children<'_> {
+    fn from_slice(children: &[ElementId]) -> Self::Children<'_> {
         debug_assert!(
             children.is_empty(),
             "Leaf expects 0 children, got {}",
@@ -187,7 +187,7 @@ pub struct NoChildren;
 
 impl ChildrenAccess for NoChildren {
     /// Always returns an empty slice (leaf has no children).
-    fn as_slice(&self) -> &[std::num::NonZeroUsize] {
+    fn as_slice(&self) -> &[ElementId] {
         &[]
     }
 }
@@ -211,7 +211,7 @@ impl Arity for Optional {
     }
 
     #[inline(always)]
-    fn from_slice(children: &[std::num::NonZeroUsize]) -> Self::Children<'_> {
+    fn from_slice(children: &[ElementId]) -> Self::Children<'_> {
         debug_assert!(
             children.len() <= 1,
             "Optional expects 0 or 1 child, got {}",
@@ -224,12 +224,12 @@ impl Arity for Optional {
 /// Optional child accessor (like `Option<T>`)
 #[derive(Debug, Clone, Copy)]
 pub struct OptionalChild<'a> {
-    children: &'a [std::num::NonZeroUsize],
+    children: &'a [ElementId],
 }
 
 impl ChildrenAccess for OptionalChild<'_> {
     /// Returns the slice (length 0 or 1).
-    fn as_slice(&self) -> &[std::num::NonZeroUsize] {
+    fn as_slice(&self) -> &[ElementId] {
         self.children
     }
 }
@@ -237,7 +237,7 @@ impl ChildrenAccess for OptionalChild<'_> {
 impl<'a> OptionalChild<'a> {
     /// Get the optional child
     #[inline(always)]
-    pub fn get(&self) -> Option<std::num::NonZeroUsize> {
+    pub fn get(&self) -> Option<ElementId> {
         self.children.first().copied()
     }
 
@@ -255,7 +255,7 @@ impl<'a> OptionalChild<'a> {
 
     /// Get child or panic
     #[inline(always)]
-    pub fn unwrap(&self) -> std::num::NonZeroUsize {
+    pub fn unwrap(&self) -> ElementId {
         self.children
             .first()
             .copied()
@@ -264,7 +264,7 @@ impl<'a> OptionalChild<'a> {
 
     /// Get child or default
     #[inline(always)]
-    pub fn unwrap_or(&self, default: std::num::NonZeroUsize) -> std::num::NonZeroUsize {
+    pub fn unwrap_or(&self, default: ElementId) -> ElementId {
         self.children.first().copied().unwrap_or(default)
     }
 
@@ -272,7 +272,7 @@ impl<'a> OptionalChild<'a> {
     #[inline]
     pub fn map<F, T>(&self, f: F) -> Option<T>
     where
-        F: FnOnce(std::num::NonZeroUsize) -> T,
+        F: FnOnce(ElementId) -> T,
     {
         self.children.first().copied().map(f)
     }
@@ -281,7 +281,7 @@ impl<'a> OptionalChild<'a> {
     #[inline]
     pub fn map_or<F, T>(&self, default: T, f: F) -> T
     where
-        F: FnOnce(std::num::NonZeroUsize) -> T,
+        F: FnOnce(ElementId) -> T,
     {
         self.children.first().copied().map(f).unwrap_or(default)
     }
@@ -290,7 +290,7 @@ impl<'a> OptionalChild<'a> {
     #[inline]
     pub fn map_or_else<F, D, T>(&self, default: D, f: F) -> T
     where
-        F: FnOnce(std::num::NonZeroUsize) -> T,
+        F: FnOnce(ElementId) -> T,
         D: FnOnce() -> T,
     {
         self.children
@@ -317,7 +317,7 @@ impl<const N: usize> Arity for Exact<N> {
     }
 
     #[inline(always)]
-    fn from_slice(children: &[std::num::NonZeroUsize]) -> Self::Children<'_> {
+    fn from_slice(children: &[ElementId]) -> Self::Children<'_> {
         debug_assert!(
             children.len() == N,
             "Exact<{}> expects {} children, got {}",
@@ -326,8 +326,7 @@ impl<const N: usize> Arity for Exact<N> {
             children.len()
         );
         // Safe: we've validated the length
-        let arr: &[std::num::NonZeroUsize; N] =
-            children.try_into().expect("slice length already validated");
+        let arr: &[ElementId; N] = children.try_into().expect("slice length already validated");
         FixedChildren { children: arr }
     }
 }
@@ -335,76 +334,48 @@ impl<const N: usize> Arity for Exact<N> {
 /// Fixed children accessor (for `Exact<N>`)
 #[derive(Debug, Clone, Copy)]
 pub struct FixedChildren<'a, const N: usize> {
-    children: &'a [std::num::NonZeroUsize; N],
+    children: &'a [ElementId; N],
 }
 
 impl<'a, const N: usize> ChildrenAccess for FixedChildren<'a, N> {
     /// Returns the fixed-size slice of children.
-    fn as_slice(&self) -> &[std::num::NonZeroUsize] {
+    fn as_slice(&self) -> &[ElementId] {
         self.children
     }
 }
 
 impl<'a> FixedChildren<'a, 1> {
-    /// Return the single child as NonZeroUsize (guaranteed to exist).
+    /// Return the single child (guaranteed to exist).
     #[inline(always)]
-    pub fn single(&self) -> std::num::NonZeroUsize {
+    pub fn single(&self) -> ElementId {
         self.children[0]
-    }
-
-    /// Return the single child as ElementId (guaranteed to exist).
-    #[inline(always)]
-    pub fn single_id(&self) -> ElementId {
-        ElementId::new(self.children[0].get())
     }
 }
 
 impl<'a> FixedChildren<'a, 2> {
-    /// First child as NonZeroUsize.
+    /// First child.
     #[inline(always)]
-    pub fn first(&self) -> std::num::NonZeroUsize {
+    pub fn first(&self) -> ElementId {
         self.children[0]
     }
-    /// First child as ElementId.
+
+    /// Second child.
     #[inline(always)]
-    pub fn first_id(&self) -> ElementId {
-        ElementId::new(self.children[0].get())
-    }
-    /// Second child as NonZeroUsize.
-    #[inline(always)]
-    pub fn second(&self) -> std::num::NonZeroUsize {
+    pub fn second(&self) -> ElementId {
         self.children[1]
     }
-    /// Second child as ElementId.
+
+    /// Both children as a tuple.
     #[inline(always)]
-    pub fn second_id(&self) -> ElementId {
-        ElementId::new(self.children[1].get())
-    }
-    /// Both children as a tuple of NonZeroUsize.
-    #[inline(always)]
-    pub fn pair(&self) -> (std::num::NonZeroUsize, std::num::NonZeroUsize) {
+    pub fn pair(&self) -> (ElementId, ElementId) {
         (self.children[0], self.children[1])
-    }
-    /// Both children as a tuple of ElementId.
-    #[inline(always)]
-    pub fn pair_ids(&self) -> (ElementId, ElementId) {
-        (
-            ElementId::new(self.children[0].get()),
-            ElementId::new(self.children[1].get()),
-        )
     }
 }
 
 impl<'a> FixedChildren<'a, 3> {
     /// All three children as a tuple.
     #[inline(always)]
-    pub fn triple(
-        &self,
-    ) -> (
-        std::num::NonZeroUsize,
-        std::num::NonZeroUsize,
-        std::num::NonZeroUsize,
-    ) {
+    pub fn triple(&self) -> (ElementId, ElementId, ElementId) {
         (self.children[0], self.children[1], self.children[2])
     }
 }
@@ -428,7 +399,7 @@ impl<const N: usize> Arity for AtLeast<N> {
     }
 
     #[inline(always)]
-    fn from_slice(children: &[std::num::NonZeroUsize]) -> Self::Children<'_> {
+    fn from_slice(children: &[ElementId]) -> Self::Children<'_> {
         debug_assert!(
             children.len() >= N,
             "AtLeast<{}> expects >= {} children, got {}",
@@ -456,7 +427,7 @@ impl Arity for Variable {
     }
 
     #[inline(always)]
-    fn from_slice(children: &[std::num::NonZeroUsize]) -> Self::Children<'_> {
+    fn from_slice(children: &[ElementId]) -> Self::Children<'_> {
         SliceChildren { children }
     }
 }
@@ -464,12 +435,12 @@ impl Arity for Variable {
 /// Slice children accessor (for Variable and AtLeast)
 #[derive(Debug, Clone, Copy)]
 pub struct SliceChildren<'a> {
-    children: &'a [std::num::NonZeroUsize],
+    children: &'a [ElementId],
 }
 
 impl ChildrenAccess for SliceChildren<'_> {
     /// Returns the backing slice.
-    fn as_slice(&self) -> &[std::num::NonZeroUsize] {
+    fn as_slice(&self) -> &[ElementId] {
         self.children
     }
 }
@@ -477,25 +448,25 @@ impl ChildrenAccess for SliceChildren<'_> {
 impl<'a> SliceChildren<'a> {
     /// Get child at index or None if out of bounds.
     #[inline(always)]
-    pub fn get(&self, index: usize) -> Option<std::num::NonZeroUsize> {
+    pub fn get(&self, index: usize) -> Option<ElementId> {
         self.children.get(index).copied()
     }
 
     /// Iterator over all children (by value).
     #[inline(always)]
-    pub fn iter(&self) -> impl Iterator<Item = std::num::NonZeroUsize> + '_ {
+    pub fn iter(&self) -> impl Iterator<Item = ElementId> + '_ {
         self.children.iter().copied()
     }
 
     /// First child, if any.
     #[inline(always)]
-    pub fn first(&self) -> Option<std::num::NonZeroUsize> {
+    pub fn first(&self) -> Option<ElementId> {
         self.children.first().copied()
     }
 
     /// Last child, if any.
     #[inline(always)]
-    pub fn last(&self) -> Option<std::num::NonZeroUsize> {
+    pub fn last(&self) -> Option<ElementId> {
         self.children.last().copied()
     }
 }
@@ -555,9 +526,7 @@ mod tests {
 
     #[test]
     fn test_optional_child_like_option() {
-        use std::num::NonZeroUsize;
-
-        let child_id = NonZeroUsize::new(1).unwrap();
+        let child_id = ElementId::new(1);
         let children = [child_id];
         let optional = Optional::from_slice(&children);
 
@@ -569,7 +538,7 @@ mod tests {
 
     #[test]
     fn test_optional_empty() {
-        let children = [];
+        let children: [ElementId; 0] = [];
         let optional = Optional::from_slice(&children);
 
         assert!(optional.is_none());
@@ -579,8 +548,7 @@ mod tests {
 
     #[test]
     fn test_fixed_children_single() {
-        use std::num::NonZeroUsize;
-        let child = NonZeroUsize::new(1).unwrap();
+        let child = ElementId::new(1);
         let children = [child];
         let fixed = Exact::<1>::from_slice(&children);
         assert_eq!(fixed.single(), child);
@@ -588,9 +556,8 @@ mod tests {
 
     #[test]
     fn test_fixed_children_pair() {
-        use std::num::NonZeroUsize;
-        let a = NonZeroUsize::new(1).unwrap();
-        let b = NonZeroUsize::new(2).unwrap();
+        let a = ElementId::new(1);
+        let b = ElementId::new(2);
         let children = [a, b];
         let fixed = Exact::<2>::from_slice(&children);
         assert_eq!(fixed.first(), a);
@@ -600,9 +567,7 @@ mod tests {
 
     #[test]
     fn test_slice_children() {
-        use std::num::NonZeroUsize;
-
-        let ids: Vec<_> = (1..=5).map(|i| NonZeroUsize::new(i).unwrap()).collect();
+        let ids: Vec<_> = (1..=5).map(ElementId::new).collect();
         let slice = Variable::from_slice(&ids);
 
         assert_eq!(slice.len(), 5);
@@ -620,11 +585,10 @@ mod tests {
     mod property_tests {
         use super::*;
         use quickcheck::{quickcheck, TestResult};
-        use std::num::NonZeroUsize;
 
-        // Helper: create NonZeroUsize vec safely
-        fn make_children(count: usize) -> Vec<NonZeroUsize> {
-            (1..=count).map(|i| NonZeroUsize::new(i).unwrap()).collect()
+        // Helper: create ElementId vec safely
+        fn make_children(count: usize) -> Vec<ElementId> {
+            (1..=count).map(ElementId::new).collect()
         }
 
         #[test]

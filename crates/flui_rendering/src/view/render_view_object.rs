@@ -2,19 +2,26 @@
 //!
 //! This trait extends ViewObject with render-specific operations.
 //! Only RenderViewWrapper and RenderObjectWrapper implement this.
+//!
+//! # Tree Integration
+//!
+//! The trait uses generic tree parameters (`T: LayoutTree`, `T: PaintTree`)
+//! instead of callbacks, integrating cleanly with `flui-tree` abstractions.
 
 use flui_foundation::ElementId;
-use flui_painting::Canvas;
+use flui_interaction::HitTestResult;
 use flui_types::{constraints::BoxConstraints, Offset, Size};
 
-use crate::core::{Geometry, LayoutProtocol, RenderObject, RenderState, RuntimeArity};
+use crate::core::{
+    render_tree::{HitTestTree, LayoutTree, PaintTree},
+    LayoutProtocol, RenderState, RuntimeArity,
+};
 
 /// Extension trait for ViewObjects that wrap render objects.
 ///
 /// Provides access to:
-/// - RenderObject for layout/paint
 /// - RenderState for cached size/offset
-/// - Layout and paint operations
+/// - Layout, paint, and hit test operations with tree access
 ///
 /// # Design
 ///
@@ -23,22 +30,18 @@ use crate::core::{Geometry, LayoutProtocol, RenderObject, RenderState, RuntimeAr
 /// 2. Keeps base ViewObject in flui-view without rendering dependencies
 /// 3. Interface Segregation Principle
 ///
+/// # Tree-Based API
+///
+/// Methods use generic tree parameters instead of callbacks:
+/// - `perform_layout<T: LayoutTree>` - layout with tree access
+/// - `perform_paint<T: PaintTree>` - paint with tree access
+/// - `perform_hit_test<T: HitTestTree>` - hit test with tree access
+///
 /// # Implementors
 ///
 /// - `RenderViewWrapper<V, P, A>` - For RenderView implementations
-/// - `RenderObjectWrapper` - For raw RenderObject instances
+/// - `RenderObjectWrapper<A, R>` - For raw RenderBox instances
 pub trait RenderViewObject: Send + 'static {
-    /// Get the render object.
-    ///
-    /// Returns `None` if the render object hasn't been created yet
-    /// (i.e., `create_render_object()` hasn't been called).
-    fn render_object(&self) -> Option<&dyn RenderObject>;
-
-    /// Get mutable render object.
-    ///
-    /// Returns `None` if the render object hasn't been created yet.
-    fn render_object_mut(&mut self) -> Option<&mut dyn RenderObject>;
-
     /// Get the render state (cached size, offset, dirty flags).
     fn render_state(&self) -> &RenderState;
 
@@ -51,60 +54,74 @@ pub trait RenderViewObject: Send + 'static {
     /// Get arity specification.
     fn arity(&self) -> RuntimeArity;
 
-    /// Perform layout computation.
+    /// Perform layout computation using tree access.
+    ///
+    /// # Type Parameters
+    ///
+    /// - `T`: Tree type implementing `LayoutTree`
     ///
     /// # Arguments
     ///
+    /// - `tree`: Mutable reference to layout tree
+    /// - `self_id`: This element's ID (for tree operations)
     /// - `children`: Child element IDs
     /// - `constraints`: Layout constraints
-    /// - `layout_child`: Callback to layout children
     ///
     /// # Returns
     ///
     /// Computed size.
-    fn perform_layout(
+    fn perform_layout<T: LayoutTree>(
         &mut self,
+        tree: &mut T,
+        self_id: ElementId,
         children: &[ElementId],
         constraints: BoxConstraints,
-        layout_child: &mut dyn FnMut(ElementId, BoxConstraints) -> Size,
     ) -> Size;
 
-    /// Perform paint computation.
+    /// Perform paint computation using tree access.
+    ///
+    /// # Type Parameters
+    ///
+    /// - `T`: Tree type implementing `PaintTree`
     ///
     /// # Arguments
     ///
+    /// - `tree`: Mutable reference to paint tree
+    /// - `self_id`: This element's ID
     /// - `children`: Child element IDs
     /// - `offset`: Paint offset
-    /// - `paint_child`: Callback to paint children
-    ///
-    /// # Returns
-    ///
-    /// Canvas with painted content.
-    fn perform_paint(
+    fn perform_paint<T: PaintTree>(
         &self,
+        tree: &mut T,
+        self_id: ElementId,
         children: &[ElementId],
         offset: Offset,
-        paint_child: &mut dyn FnMut(ElementId, Offset) -> Canvas,
-    ) -> Canvas;
+    );
 
-    /// Perform hit testing.
+    /// Perform hit testing using tree access.
+    ///
+    /// # Type Parameters
+    ///
+    /// - `T`: Tree type implementing `HitTestTree`
     ///
     /// # Arguments
     ///
+    /// - `tree`: Reference to hit test tree
+    /// - `self_id`: This element's ID
     /// - `children`: Child element IDs
     /// - `position`: Hit test position
-    /// - `geometry`: Element geometry
-    /// - `hit_test_child`: Callback to hit test children
+    /// - `result`: Hit test result accumulator
     ///
     /// # Returns
     ///
     /// `true` if hit, `false` otherwise.
-    fn perform_hit_test(
+    fn perform_hit_test<T: HitTestTree>(
         &self,
+        tree: &T,
+        self_id: ElementId,
         children: &[ElementId],
         position: Offset,
-        geometry: &Geometry,
-        hit_test_child: &mut dyn FnMut(ElementId, Offset) -> bool,
+        result: &mut HitTestResult,
     ) -> bool;
 }
 

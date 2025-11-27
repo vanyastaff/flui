@@ -6,19 +6,20 @@
 //! Flutter reference: <https://api.flutter.dev/flutter/rendering/RenderCustomMultiChildLayoutBox-class.html>
 
 use crate::core::{
-    BoxProtocol, LayoutContext, LayoutTree, PaintContext, PaintTree, RenderBox, Variable,
+    arity::ChildrenAccess, BoxProtocol, LayoutContext, LayoutTree, PaintContext, PaintTree,
+    RenderBox, Variable,
 };
+use flui_foundation::ElementId;
 use flui_types::{BoxConstraints, Offset, Size};
 use std::any::Any;
 use std::fmt::Debug;
-use std::num::NonZeroUsize;
 
 /// Context provided to delegate during layout
 pub struct MultiChildLayoutContext<'a, 'b, T: LayoutTree> {
     /// The layout context
     ctx: &'a mut LayoutContext<'b, T, Variable, BoxProtocol>,
     /// The children IDs
-    pub children: &'a [NonZeroUsize],
+    pub children: &'a [ElementId],
 }
 
 impl<'a, 'b, T: LayoutTree> MultiChildLayoutContext<'a, 'b, T> {
@@ -223,13 +224,13 @@ impl<D: MultiChildLayoutDelegate> RenderBox<Variable> for RenderCustomMultiChild
         let constraints = ctx.constraints;
         let children = ctx.children;
 
-        // Collect children for delegate
-        let child_ids: Vec<_> = children.iter().collect();
+        // Get children slice for delegate
+        let child_ids = children.as_slice();
 
         // Create layout context for delegate
         let mut layout_ctx = MultiChildLayoutContext {
             ctx: &mut ctx,
-            children: &child_ids,
+            children: child_ids,
         };
 
         // Let delegate perform layout

@@ -25,10 +25,9 @@ use flui_interaction::HitTestResult;
 use flui_types::{Offset, Size};
 use std::fmt::Debug;
 
-use super::arity::{Arity, Leaf, Single, Optional, Variable};
+use super::arity::{Arity, Leaf, Optional, Single, Variable};
 use super::contexts::{HitTestContext, LayoutContext, PaintContext};
 use super::protocol::BoxProtocol;
-use super::RenderObject;
 
 // ============================================================================
 // RENDER BOX TRAIT
@@ -224,17 +223,17 @@ pub struct RenderBoxWithChildren<R> {
 // IntoElement IMPLEMENTATIONS
 // ============================================================================
 
+use crate::core::RuntimeArity;
+use crate::view::RenderObjectWrapper;
 use flui_element::IntoElement;
 use flui_foundation::ViewMode;
-use crate::view::RenderObjectWrapper;
-use crate::core::RuntimeArity;
 
 impl<R> IntoElement for RenderBoxLeaf<R>
 where
-    R: RenderBox<Leaf> + RenderObject + 'static,
+    R: RenderBox<Leaf> + 'static,
 {
     fn into_element(self) -> Element {
-        let wrapper = RenderObjectWrapper::new_box(self.render, RuntimeArity::Exact(0));
+        let wrapper = RenderObjectWrapper::new(self.render, RuntimeArity::Exact(0));
         Element::with_mode(wrapper, ViewMode::RenderBox)
         // No children for Leaf
     }
@@ -242,29 +241,27 @@ where
 
 impl<R> IntoElement for RenderBoxWithChild<R>
 where
-    R: RenderBox<Single> + RenderObject + 'static,
+    R: RenderBox<Single> + 'static,
 {
     fn into_element(self) -> Element {
-        let wrapper = RenderObjectWrapper::new_box(self.render, RuntimeArity::Exact(1));
-        Element::with_mode(wrapper, ViewMode::RenderBox)
-            .with_pending_children(vec![self.child])
+        let wrapper = RenderObjectWrapper::new(self.render, RuntimeArity::Exact(1));
+        Element::with_mode(wrapper, ViewMode::RenderBox).with_pending_children(vec![self.child])
     }
 }
 
 impl<R> IntoElement for RenderBoxWithChildren<R>
 where
-    R: RenderBox<Variable> + RenderObject + 'static,
+    R: RenderBox<Variable> + 'static,
 {
     fn into_element(self) -> Element {
-        let wrapper = RenderObjectWrapper::new_box(self.render, RuntimeArity::Variable);
-        Element::with_mode(wrapper, ViewMode::RenderBox)
-            .with_pending_children(self.children)
+        let wrapper = RenderObjectWrapper::new(self.render, RuntimeArity::Variable);
+        Element::with_mode(wrapper, ViewMode::RenderBox).with_pending_children(self.children)
     }
 }
 
 impl<R> IntoElement for RenderBoxWithOptionalChild<R>
 where
-    R: RenderBox<Optional> + RenderObject + 'static,
+    R: RenderBox<Optional> + 'static,
 {
     fn into_element(self) -> Element {
         let has_child = self.child.is_some();
@@ -273,7 +270,7 @@ where
         } else {
             RuntimeArity::Exact(0)
         };
-        let wrapper = RenderObjectWrapper::new_box(self.render, arity);
+        let wrapper = RenderObjectWrapper::new(self.render, arity);
         let mut element = Element::with_mode(wrapper, ViewMode::RenderBox);
 
         // Set pending children if child is present

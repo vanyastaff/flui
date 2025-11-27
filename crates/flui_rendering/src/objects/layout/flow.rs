@@ -6,10 +6,10 @@
 //! Flutter reference: <https://api.flutter.dev/flutter/rendering/RenderFlow-class.html>
 
 use crate::core::{BoxProtocol, LayoutContext, PaintContext, RenderBox, Variable};
+use flui_foundation::ElementId;
 use flui_types::{BoxConstraints, Matrix4, Offset, Size};
 use std::any::Any;
 use std::fmt::Debug;
-use std::num::NonZeroUsize;
 
 /// Context provided to FlowDelegate during paint
 pub struct FlowPaintContext<'a, 'b, T>
@@ -23,7 +23,7 @@ where
     /// Size of each child (after layout)
     pub child_sizes: &'a [Size],
     /// Children IDs
-    pub children: &'a [NonZeroUsize],
+    pub children: &'a [ElementId],
 }
 
 impl<'a, 'b, T> FlowPaintContext<'a, 'b, T>

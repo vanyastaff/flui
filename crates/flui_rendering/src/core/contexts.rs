@@ -150,13 +150,9 @@ where
     /// # Panics
     /// Panics if layout fails (indicates a framework bug).
     #[inline]
-    pub fn layout_child(
-        &mut self,
-        child_id: std::num::NonZeroUsize,
-        constraints: BoxConstraints,
-    ) -> Size {
+    pub fn layout_child(&mut self, child_id: ElementId, constraints: BoxConstraints) -> Size {
         self.tree
-            .perform_layout(ElementId::new(child_id.get()), constraints)
+            .perform_layout(child_id, constraints)
             .expect("Layout failed - this is a framework bug")
     }
 }
@@ -175,11 +171,11 @@ where
     #[inline]
     pub fn layout_child(
         &mut self,
-        child_id: std::num::NonZeroUsize,
+        child_id: ElementId,
         constraints: SliverConstraints,
     ) -> SliverGeometry {
         self.tree
-            .perform_sliver_layout(ElementId::new(child_id.get()), constraints)
+            .perform_sliver_layout(child_id, constraints)
             .expect("Sliver layout failed - this is a framework bug")
     }
 }
@@ -299,10 +295,10 @@ where
     /// # Panics
     /// Panics if paint fails (indicates a framework bug).
     #[inline]
-    pub fn paint_child(&mut self, child_id: std::num::NonZeroUsize, offset: Offset) {
+    pub fn paint_child(&mut self, child_id: ElementId, offset: Offset) {
         let child_canvas = self
             .tree
-            .perform_paint(ElementId::new(child_id.get()), offset)
+            .perform_paint(child_id, offset)
             .expect("Paint failed - this is a framework bug");
         self.canvas.append_canvas(child_canvas);
     }
