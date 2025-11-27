@@ -53,76 +53,66 @@
 //!     .build()
 //! ```
 
-// #![warn(missing_docs)]
-// pub mod basic;
-// pub mod error;
-// pub mod gestures;
-// pub mod interaction;
-// pub mod layout;
-// pub mod scrolling;
-// pub mod style;
-// pub mod visual_effects;
+#![warn(missing_docs)]
 
-// // Re-exports for convenient top-level access
-// // Just Text for now
-// pub use basic::Text;
-// pub use gestures::GestureDetector;
-// pub use interaction::{AbsorbPointer, IgnorePointer, MouseRegion};
-// pub use layout::{
-//     Baseline, Column, Expanded, Flex, Flexible, FractionallySizedBox, IndexedStack,
-//     IntrinsicHeight, IntrinsicWidth, ListBody, OverflowBox, Positioned, PositionedDirectional,
-//     RotatedBox, Row, Scaffold, ScrollController, SingleChildScrollView, SizedOverflowBox, Spacer,
-//     Stack, Wrap,
-// };
-// // TODO: Re-enable after sliver migration is complete
-// // pub use scrolling::{CustomScrollView, Scrollable, Viewport};
-// // TODO: Re-enable visual_effects after fixing Box<dyn> syntax and builder issues
-// // pub use visual_effects::{
-// //     BackdropFilter, ClipOval, ClipRRect, ClipRect, Material, Offstage, Opacity, PhysicalModel,
-// //     RepaintBoundary, Transform, Visibility,
-// // };
+pub mod basic;
+pub mod error;
+pub mod gestures;
+pub mod interaction;
+pub mod layout;
+pub mod scrolling;
+pub mod style;
+pub mod visual_effects;
 
-// // Re-export commonly used types
-// pub use flui_rendering::DecorationPosition;
-// pub use flui_types::layout::{FlexFit, StackFit};
-// pub use flui_types::styling::{BorderRadius, BoxDecoration, Radius};
-// pub use flui_types::{Alignment, BoxConstraints, Color, EdgeInsets, Matrix4, Offset, Size};
+// Re-exports for convenient top-level access
+pub use basic::{
+    Align, AspectRatio, Builder, Button, Card, Center, ColoredBox, ConstrainedBox, Container,
+    CustomPaint, DecoratedBox, Divider, Empty, FittedBox, LayoutBuilder, LimitedBox, Padding,
+    SafeArea, SizedBox, Text, VerticalDivider,
+};
+pub use gestures::GestureDetector;
+pub use interaction::{AbsorbPointer, IgnorePointer, MouseRegion};
+pub use layout::{
+    Baseline, Column, Expanded, Flex, Flexible, FractionallySizedBox, IndexedStack,
+    IntrinsicHeight, IntrinsicWidth, ListBody, OverflowBox, Positioned, PositionedDirectional,
+    RotatedBox, Row, Scaffold, ScrollController, SingleChildScrollView, SizedOverflowBox, Spacer,
+    Stack, Wrap,
+};
 
-// /// Prelude module for convenient imports
-// ///
-// /// Import this module to get access to all commonly used widgets and types:
-// /// ```rust,ignore
-// /// use flui_widgets::prelude::*;
-// /// ```
-// pub mod prelude {
-//     // Re-export essential widgets for Container and Flex layout
-//     pub use crate::basic::{
-//         Align, AspectRatio, Builder, Button, Card, Center, ColoredBox, ConstrainedBox, Container,
-//         DecoratedBox, Divider, FittedBox, LayoutBuilder, LimitedBox, Padding, SafeArea, SizedBox,
-//         Text, VerticalDivider,
-//     };
-//     pub use crate::gestures::GestureDetector;
-//     pub use crate::interaction::{AbsorbPointer, IgnorePointer, MouseRegion};
-//     pub use crate::layout::{
-//         Baseline, Column, Expanded, Flex, Flexible, FractionallySizedBox, IndexedStack,
-//         IntrinsicHeight, IntrinsicWidth, ListBody, OverflowBox, Positioned, PositionedDirectional,
-//         RotatedBox, Row, ScrollController, SingleChildScrollView, SizedOverflowBox, Spacer, Stack,
-//         Wrap,
-//     };
-//     // TODO: Re-enable after sliver migration is complete
-//     // pub use crate::scrolling::{CustomScrollView, Scrollable, Viewport};
-//     // TODO: Re-enable visual_effects after fixing Box<dyn> syntax and builder issues
-//     // pub use crate::visual_effects::{
-//     //     BackdropFilter, ClipOval, ClipRRect, ClipRect, Offstage, Opacity, PhysicalModel,
-//     //     RepaintBoundary, Transform, Visibility,
-//     // };
+// Re-export commonly used types
+pub use flui_rendering::DecorationPosition;
+pub use flui_types::layout::{FlexFit, StackFit};
+pub use flui_types::styling::{BorderRadius, BoxDecoration, Radius};
+pub use flui_types::{Alignment, BoxConstraints, Color, EdgeInsets, Matrix4, Offset, Size};
 
-//     // Re-export core types
-//     pub use flui_core::BuildContext;
-//     pub use flui_types::layout::{
-//         CrossAxisAlignment, FlexFit, MainAxisAlignment, MainAxisSize, StackFit,
-//     };
-//     pub use flui_types::styling::{BorderRadius, BoxDecoration, Radius};
-//     pub use flui_types::BoxConstraints;
-//     pub use flui_types::{Alignment, Color, EdgeInsets, Matrix4, Offset, Size};
-// }
+/// Prelude module for convenient imports
+///
+/// Import this module to get access to all commonly used widgets and types:
+/// ```rust,ignore
+/// use flui_widgets::prelude::*;
+/// ```
+pub mod prelude {
+    // Re-export essential widgets for Container and Flex layout
+    pub use crate::basic::{
+        Align, AspectRatio, Builder, Button, Card, Center, ColoredBox, ConstrainedBox, Container,
+        CustomPaint, DecoratedBox, Divider, Empty, FittedBox, LayoutBuilder, LimitedBox, Padding,
+        SafeArea, SizedBox, Text, VerticalDivider,
+    };
+    pub use crate::gestures::GestureDetector;
+    pub use crate::interaction::{AbsorbPointer, IgnorePointer, MouseRegion};
+    pub use crate::layout::{
+        Baseline, Column, Expanded, Flex, Flexible, FractionallySizedBox, IndexedStack,
+        IntrinsicHeight, IntrinsicWidth, ListBody, OverflowBox, Positioned, PositionedDirectional,
+        RotatedBox, Row, ScrollController, SingleChildScrollView, SizedOverflowBox, Spacer, Stack,
+        Wrap,
+    };
+
+    // Re-export core types
+    pub use flui_core::BuildContext;
+    pub use flui_types::layout::{
+        CrossAxisAlignment, FlexFit, MainAxisAlignment, MainAxisSize, StackFit,
+    };
+    pub use flui_types::styling::{BorderRadius, BoxDecoration, Radius};
+    pub use flui_types::BoxConstraints;
+    pub use flui_types::{Alignment, Color, EdgeInsets, Matrix4, Offset, Size};
+}

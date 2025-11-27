@@ -74,6 +74,21 @@ pub struct Element {
     /// Child element IDs
     children: Vec<ElementId>,
 
+    /// Pending child elements (before BuildPipeline converts to ElementIds)
+    ///
+    /// This field stores child Elements temporarily during element creation,
+    /// before they are inserted into the tree and converted to ElementIds.
+    /// BuildPipeline processes these during mount phase.
+    ///
+    /// # Lifecycle
+    ///
+    /// 1. **Creation**: IntoElement sets pending_children via with_pending_children()
+    /// 2. **Mount**: BuildPipeline calls take_pending_children() and inserts each
+    /// 3. **Post-mount**: Field is None after processing
+    ///
+    /// This is similar to Flutter's two-phase mounting pattern.
+    pending_children: Option<Vec<Element>>,
+
     /// Debug name for diagnostics
     debug_name: Option<&'static str>,
 }
@@ -114,6 +129,7 @@ impl Element {
             view_mode: mode,
             key: None,
             children: Vec::new(),
+            pending_children: None,
             debug_name: None,
         }
     }
@@ -139,6 +155,7 @@ impl Element {
             view_mode: ViewMode::Empty,
             key: None,
             children: Vec::new(),
+            pending_children: None,
             debug_name: None,
         }
     }
@@ -153,6 +170,7 @@ impl Element {
             view_mode: ViewMode::Empty,
             key: None,
             children: Vec::new(),
+            pending_children: None,
             debug_name: Some("Empty"),
         }
     }
@@ -170,6 +188,7 @@ impl Element {
             view_mode: ViewMode::Empty,
             key: None,
             children: Vec::with_capacity(child_count),
+            pending_children: Some(children),
             debug_name: Some("Container"),
         }
     }
@@ -245,6 +264,43 @@ impl Element {
     pub fn with_key(mut self, key: Key) -> Self {
         self.key = Some(key);
         self
+    }
+
+    // ========== Pending Children ==========
+
+    /// Set pending children (builder pattern).
+    ///
+    /// Used by IntoElement implementations to store child Elements before
+    /// they are inserted into the tree.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let element = Element::with_mode(wrapper, ViewMode::RenderBox)
+    ///     .with_pending_children(vec![child1, child2]);
+    /// ```
+    pub fn with_pending_children(mut self, children: Vec<Element>) -> Self {
+        self.pending_children = Some(children);
+        self
+    }
+
+    /// Take pending children for processing.
+    ///
+    /// BuildPipeline calls this during mount phase to extract and insert
+    /// pending child Elements into the tree.
+    ///
+    /// # Returns
+    ///
+    /// `Some(Vec<Element>)` if there are pending children, `None` otherwise.
+    pub fn take_pending_children(&mut self) -> Option<Vec<Element>> {
+        self.pending_children.take()
+    }
+
+    /// Check if element has pending children.
+    #[inline]
+    #[must_use]
+    pub fn has_pending_children(&self) -> bool {
+        self.pending_children.is_some()
     }
 
     // ========== View Object Access ==========

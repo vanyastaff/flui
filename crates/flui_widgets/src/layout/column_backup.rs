@@ -277,7 +277,7 @@ impl Default for Row {
 
 // Implement View for Row - New architecture
 impl StatelessView for Row {
-    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
         let render_flex = RenderFlex::row()
             .with_main_axis_alignment(self.main_axis_alignment)
             .with_cross_axis_alignment(self.cross_axis_alignment)
@@ -319,7 +319,7 @@ mod tests {
     struct MockView;
 
     impl StatelessView for MockView {
-        fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+        fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
             (RenderPadding::new(EdgeInsets::ZERO), ())}
     }
 

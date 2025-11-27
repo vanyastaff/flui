@@ -222,7 +222,7 @@ macro_rules! align {
 
 // Implement View for Align
 impl StatelessView for Align {
-    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
         RenderAlign::with_factors(self.alignment, self.width_factor, self.height_factor)
             .maybe_child(self.child)
     }
@@ -238,7 +238,7 @@ mod tests {
     struct MockView;
 
     impl StatelessView for MockView {
-        fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+        fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
             RenderEmpty.leaf()
         }
     }

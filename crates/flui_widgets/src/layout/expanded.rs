@@ -239,7 +239,7 @@ impl Expanded {
 
 // Implement View trait - Simplified API
 impl StatelessView for Expanded {
-    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
         RenderFlexItem::new(FlexItemMetadata::expanded_with_flex(self.flex)).child(self.child)
     }
 }

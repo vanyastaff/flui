@@ -245,7 +245,7 @@ mod tests {
 
 // Implement View trait
 impl StatelessView for IgnorePointer {
-    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
         RenderIgnorePointer::new(self.ignoring).child_opt(self.child.into_inner())
     }
 }

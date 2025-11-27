@@ -250,7 +250,7 @@ impl Default for Stack {
 
 // Implement View for Stack - New architecture
 impl StatelessView for Stack {
-    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
         let mut render_stack = RenderStack::with_alignment(self.alignment);
         render_stack.fit = self.fit;
 
@@ -350,7 +350,7 @@ mod tests {
     }
 
     impl StatelessView for MockView {
-        fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+        fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
             RenderEmpty.leaf()
         }
     }

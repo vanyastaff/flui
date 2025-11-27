@@ -294,7 +294,7 @@ impl Default for IndexedStack {
 
 // Implement View for IndexedStack - New architecture
 impl StatelessView for IndexedStack {
-    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
         RenderIndexedStack::with_alignment(self.index, self.alignment).children(self.children)
     }
 }
@@ -390,7 +390,7 @@ mod tests {
     }
 
     impl StatelessView for MockView {
-        fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+        fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
             RenderEmpty.leaf()
         }
     }

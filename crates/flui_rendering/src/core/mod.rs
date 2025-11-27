@@ -92,7 +92,10 @@ pub use flui_tree::{TreeNav, TreeRead, TreeWrite};
 pub use contexts::{HasTypedChildren, HitTestContext, LayoutContext, PaintContext};
 
 // Re-export render object traits
-pub use render_box::{EmptyRender, RenderBox, RenderBoxExt};
+pub use render_box::{
+    EmptyRender, RenderBox, RenderBoxExt, RenderBoxLeaf, RenderBoxWithChild, RenderBoxWithChildren,
+    RenderBoxWithOptionalChild,
+};
 pub use render_object::RenderObject;
 pub use render_sliver::{SliverRender, SliverRenderExt};
 

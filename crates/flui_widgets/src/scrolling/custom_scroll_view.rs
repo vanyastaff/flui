@@ -155,7 +155,7 @@ impl Default for CustomScrollView {
 }
 
 impl StatelessView for CustomScrollView {
-    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
         // Get scroll offset from controller if present
         let scroll_offset = self
             .controller

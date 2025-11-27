@@ -20,7 +20,7 @@ use flui_rendering::objects::RenderEmpty;
 pub struct Empty;
 
 impl StatelessView for Empty {
-    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
         // Returns a leaf render that does nothing
         RenderEmpty.leaf()
     }

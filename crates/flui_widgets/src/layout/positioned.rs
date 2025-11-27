@@ -390,7 +390,7 @@ impl Default for Positioned {
 
 // Implement View trait - Simplified API
 impl StatelessView for Positioned {
-    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
         let metadata = self.create_metadata();
 
         RenderPositioned::new(metadata).child_opt(self.child)
@@ -490,7 +490,7 @@ mod tests {
     }
 
     impl StatelessView for MockView {
-        fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+        fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
             RenderEmpty.leaf()
         }
     }

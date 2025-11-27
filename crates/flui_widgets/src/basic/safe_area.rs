@@ -155,7 +155,7 @@ impl SafeArea {
     ///
     /// In a real implementation, this would query the platform for actual safe area insets.
     /// For now, we use placeholder values.
-    fn calculate_insets(&self, _ctx: &BuildContext) -> EdgeInsets {
+    fn calculate_insets(&self, _ctx: &dyn BuildContext) -> EdgeInsets {
         // TODO: Query actual safe area insets from platform
         // For now, use common default values for mobile devices
 
@@ -204,7 +204,7 @@ impl<S: State> SafeAreaBuilder<S> {
 
 // Implement View trait
 impl StatelessView for SafeArea {
-    fn build(self, ctx: &BuildContext) -> impl IntoElement {
+    fn build(self, ctx: &dyn BuildContext) -> impl IntoElement {
         let insets = self.calculate_insets(ctx);
 
         RenderPadding::new(insets).child_opt(self.child)

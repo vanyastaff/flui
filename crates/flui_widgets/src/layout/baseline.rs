@@ -177,7 +177,7 @@ impl Default for Baseline {
 
 // Implement View for Baseline - New architecture
 impl StatelessView for Baseline {
-    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
         let baseline = self.baseline.unwrap_or(0.0);
 
         RenderBaseline::new(baseline, self.baseline_type).child_opt(self.child)
@@ -235,7 +235,7 @@ mod tests {
     struct MockView;
 
     impl StatelessView for MockView {
-        fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+        fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
             RenderEmpty.leaf()
         }
     }

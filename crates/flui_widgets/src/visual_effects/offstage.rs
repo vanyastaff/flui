@@ -164,7 +164,7 @@ impl<S: State> OffstageBuilder<S> {
 
 // Implement View trait
 impl StatelessView for Offstage {
-    fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoElement {
         (RenderOffstage::new(self.offstage), self.child)
     }
 }

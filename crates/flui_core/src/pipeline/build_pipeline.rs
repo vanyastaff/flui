@@ -509,6 +509,33 @@ impl BuildPipeline {
             child.mount(Some(parent_id), None, depth);
         }
 
+        // Process pending children (Element-owned lifecycle pattern)
+        // If this element has pending children, we need to:
+        // 1. Extract pending child Elements from Element
+        // 2. Insert each child into tree -> get ElementId
+        // 3. Add ElementIds to this element's children list
+        //
+        // This works for ALL element types (RenderBox, RenderSliver, Containers, etc.)
+        if let Some(element) = tree_guard.get_mut(new_id) {
+            if let Some(pending_children) = element.take_pending_children() {
+                // Insert each child Element into tree
+                let child_depth = depth + 1;
+                for child_element in pending_children {
+                    let child_id = tree_guard.insert(child_element);
+
+                    // Mount child
+                    if let Some(child) = tree_guard.get_mut(child_id) {
+                        child.mount(Some(new_id), None, child_depth);
+                    }
+
+                    // Add child ID to parent's children list
+                    if let Some(parent) = tree_guard.get_mut(new_id) {
+                        parent.add_child(child_id);
+                    }
+                }
+            }
+        }
+
         new_id
     }
 

@@ -3,7 +3,6 @@
 //! This module defines error types for widget operations including build failures,
 //! configuration errors, and constraint violations.
 
-use flui_core::CoreError;
 use std::borrow::Cow;
 use thiserror::Error;
 
@@ -38,10 +37,6 @@ pub enum WidgetError {
         /// Details about the violation
         details: Cow<'static, str>,
     },
-
-    /// Core error propagation
-    #[error(transparent)]
-    Core(#[from] CoreError),
 }
 
 /// Result type for widget operations

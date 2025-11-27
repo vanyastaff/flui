@@ -169,7 +169,7 @@ impl<S: State> AppBarBuilder<S> {
 
 // Implement View trait
 impl StatelessView for AppBar {
-    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
         // TODO: Add elevation support when PhysicalModel is available
         use crate::{ColoredBox, Row, SizedBox};
         use flui_types::{Alignment, EdgeInsets};

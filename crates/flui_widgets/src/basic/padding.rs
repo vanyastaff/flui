@@ -272,7 +272,7 @@ macro_rules! padding {
 
 // Implement View for Padding
 impl StatelessView for Padding {
-    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
         RenderPadding::new(self.padding).child_opt(self.child)
     }
 }
@@ -287,7 +287,7 @@ mod tests {
     struct MockView;
 
     impl StatelessView for MockView {
-        fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+        fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
             RenderEmpty.leaf()
         }
     }

@@ -323,7 +323,7 @@ impl Default for ClipRRect {
 
 // Implement View for ClipRRect - New architecture
 impl StatelessView for ClipRRect {
-    fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoElement {
         (
             RenderClipRRect::new(RRectShape::new(self.border_radius), self.clip_behavior),
             self.child,

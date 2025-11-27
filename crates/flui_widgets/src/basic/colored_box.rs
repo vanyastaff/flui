@@ -148,7 +148,7 @@ impl<S: State> ColoredBoxBuilder<S> {
 
 // Implement View for ColoredBox
 impl StatelessView for ColoredBox {
-    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
         // RenderColoredBox is a Leaf render (no children)
         // If we have a child, we need to use a Stack to layer them
         if self.child.is_some() {
@@ -178,7 +178,7 @@ mod tests {
     struct MockView;
 
     impl StatelessView for MockView {
-        fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+        fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
             RenderEmpty.leaf()
         }
     }

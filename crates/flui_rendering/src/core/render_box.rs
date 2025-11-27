@@ -20,13 +20,15 @@
 //! The trait uses context-based API where `LayoutContext` and `PaintContext`
 //! provide access to children and tree operations.
 
+use flui_element::Element;
 use flui_interaction::HitTestResult;
 use flui_types::{Offset, Size};
 use std::fmt::Debug;
 
-use super::arity::{Arity, Leaf};
+use super::arity::{Arity, Leaf, Single, Optional, Variable};
 use super::contexts::{HitTestContext, LayoutContext, PaintContext};
 use super::protocol::BoxProtocol;
+use super::RenderObject;
 
 // ============================================================================
 // RENDER BOX TRAIT
@@ -160,17 +162,247 @@ pub trait RenderBox<A: Arity>: Send + Sync + Debug + 'static {
 }
 
 // ============================================================================
+// BUILDER WRAPPERS FOR RENDERBOX -> ELEMENT
+// ============================================================================
+
+// Import Child and Children from flui-view
+// Note: These are re-exported through flui_core::view::children
+
+/// Wrapper for RenderBox with no children (Leaf arity).
+///
+/// Returned by `RenderBoxExt::leaf()` for render objects with no children.
+pub struct RenderBoxLeaf<R> {
+    /// The render object
+    pub(crate) render: R,
+}
+
+/// Wrapper for RenderBox with single child (Single arity).
+///
+/// Returned by `RenderBoxExt::with_child()` for render objects with exactly one child.
+///
+/// # Note
+///
+/// The child is stored as `flui_view::Child` which will be extracted during
+/// element inflation by the BuildPipeline.
+pub struct RenderBoxWithChild<R> {
+    /// The render object
+    pub(crate) render: R,
+    /// The single child (from flui-view)
+    pub(crate) child: flui_element::Element,
+}
+
+/// Wrapper for RenderBox with optional child (Optional arity).
+///
+/// Returned by `RenderBoxExt::maybe_child()` for render objects with 0 or 1 child.
+///
+/// # Note
+///
+/// The child is stored as `flui_view::Child` (which wraps `Option<Element>`).
+pub struct RenderBoxWithOptionalChild<R> {
+    /// The render object
+    pub(crate) render: R,
+    /// Optional child (from flui-view)
+    pub(crate) child: Option<flui_element::Element>,
+}
+
+/// Wrapper for RenderBox with multiple children (Variable arity).
+///
+/// Returned by `RenderBoxExt::with_children()` for render objects with N children.
+///
+/// # Note
+///
+/// The children are stored as `flui_view::Children` which will be extracted
+/// during element inflation by the BuildPipeline.
+pub struct RenderBoxWithChildren<R> {
+    /// The render object
+    pub(crate) render: R,
+    /// Child elements (from flui-view)
+    pub(crate) children: Vec<flui_element::Element>,
+}
+
+// ============================================================================
+// IntoElement IMPLEMENTATIONS
+// ============================================================================
+
+use flui_element::IntoElement;
+use flui_foundation::ViewMode;
+use crate::view::RenderObjectWrapper;
+use crate::core::RuntimeArity;
+
+impl<R> IntoElement for RenderBoxLeaf<R>
+where
+    R: RenderBox<Leaf> + RenderObject + 'static,
+{
+    fn into_element(self) -> Element {
+        let wrapper = RenderObjectWrapper::new_box(self.render, RuntimeArity::Exact(0));
+        Element::with_mode(wrapper, ViewMode::RenderBox)
+        // No children for Leaf
+    }
+}
+
+impl<R> IntoElement for RenderBoxWithChild<R>
+where
+    R: RenderBox<Single> + RenderObject + 'static,
+{
+    fn into_element(self) -> Element {
+        let wrapper = RenderObjectWrapper::new_box(self.render, RuntimeArity::Exact(1));
+        Element::with_mode(wrapper, ViewMode::RenderBox)
+            .with_pending_children(vec![self.child])
+    }
+}
+
+impl<R> IntoElement for RenderBoxWithChildren<R>
+where
+    R: RenderBox<Variable> + RenderObject + 'static,
+{
+    fn into_element(self) -> Element {
+        let wrapper = RenderObjectWrapper::new_box(self.render, RuntimeArity::Variable);
+        Element::with_mode(wrapper, ViewMode::RenderBox)
+            .with_pending_children(self.children)
+    }
+}
+
+impl<R> IntoElement for RenderBoxWithOptionalChild<R>
+where
+    R: RenderBox<Optional> + RenderObject + 'static,
+{
+    fn into_element(self) -> Element {
+        let has_child = self.child.is_some();
+        let arity = if has_child {
+            RuntimeArity::Exact(1)
+        } else {
+            RuntimeArity::Exact(0)
+        };
+        let wrapper = RenderObjectWrapper::new_box(self.render, arity);
+        let mut element = Element::with_mode(wrapper, ViewMode::RenderBox);
+
+        // Set pending children if child is present
+        if let Some(child) = self.child {
+            element = element.with_pending_children(vec![child]);
+        }
+
+        element
+    }
+}
+
+// ============================================================================
 // EXTENSION TRAIT
 // ============================================================================
 
 /// Extension trait for ergonomic render box operations.
-pub trait RenderBoxExt<A: Arity>: RenderBox<A> {
+///
+/// Provides convenience methods for converting RenderBox to Element,
+/// enabling widgets to use builder-style API like `RenderPadding::new().child(...)`.
+pub trait RenderBoxExt<A: Arity>: RenderBox<A> + Sized {
     /// Checks if position is within the given size bounds.
     fn contains(&self, position: Offset, size: Size) -> bool {
         position.dx >= 0.0
             && position.dy >= 0.0
             && position.dx < size.width
             && position.dy < size.height
+    }
+
+    /// Convert leaf render object to element (no children).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use flui_rendering::prelude::*;
+    ///
+    /// impl StatelessView for Text {
+    ///     fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
+    ///         RenderParagraph::new(self.data).leaf()
+    ///     }
+    /// }
+    /// ```
+    fn leaf(self) -> RenderBoxLeaf<Self>
+    where
+        Self: RenderBox<crate::core::arity::Leaf> + 'static,
+    {
+        RenderBoxLeaf { render: self }
+    }
+
+    /// Add single child to render object.
+    ///
+    /// Accepts anything that can be converted to `Element` (including `Child` from flui-view).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use flui_rendering::prelude::*;
+    /// use flui_view::Child;
+    ///
+    /// impl StatelessView for Padding {
+    ///     fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
+    ///         RenderPadding::new(self.padding).with_child(self.child)  // child: Child
+    ///     }
+    /// }
+    /// ```
+    fn with_child<C>(self, child: C) -> RenderBoxWithChild<Self>
+    where
+        Self: RenderBox<crate::core::arity::Single> + 'static,
+        C: flui_element::IntoElement,
+    {
+        RenderBoxWithChild {
+            render: self,
+            child: child.into_element(),
+        }
+    }
+
+    /// Add multiple children to render object.
+    ///
+    /// Accepts `Vec<Element>`, `Vec<impl IntoElement>`, or iterators.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use flui_rendering::prelude::*;
+    /// use flui_view::Children;
+    ///
+    /// impl StatelessView for Row {
+    ///     fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
+    ///         RenderFlex::row().with_children(self.children)  // children: Children
+    ///     }
+    /// }
+    /// ```
+    fn with_children<I>(self, children: I) -> RenderBoxWithChildren<Self>
+    where
+        Self: RenderBox<crate::core::arity::Variable> + 'static,
+        I: IntoIterator,
+        I::Item: flui_element::IntoElement,
+    {
+        RenderBoxWithChildren {
+            render: self,
+            children: children.into_iter().map(|c| c.into_element()).collect(),
+        }
+    }
+
+    /// Add optional child to render object.
+    ///
+    /// Accepts either `Option<Element>` or `Child` from flui-view.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use flui_rendering::prelude::*;
+    /// use flui_view::Child;
+    ///
+    /// impl StatelessView for Container {
+    ///     fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
+    ///         RenderSizedBox::new(self.width, self.height)
+    ///             .maybe_child(self.child)  // self.child: Child
+    ///     }
+    /// }
+    /// ```
+    fn maybe_child<C>(self, child: C) -> RenderBoxWithOptionalChild<Self>
+    where
+        Self: RenderBox<crate::core::arity::Optional> + 'static,
+        C: Into<Option<Element>>,
+    {
+        RenderBoxWithOptionalChild {
+            render: self,
+            child: child.into(),
+        }
     }
 }
 
@@ -214,4 +446,8 @@ mod tests {
             "flui_rendering::core::render_box::EmptyRender"
         );
     }
+
+    // Note: Testing RenderBoxExt API requires RenderBox + RenderObject implementations.
+    // EmptyRender only implements RenderBox<Leaf>, not RenderObject.
+    // The API is tested in actual widget implementations (e.g., Padding, Container).
 }

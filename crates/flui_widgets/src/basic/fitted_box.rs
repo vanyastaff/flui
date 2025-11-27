@@ -172,7 +172,7 @@ impl Default for FittedBox {
 
 // Implement View for FittedBox - New architecture
 impl StatelessView for FittedBox {
-    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
         RenderFittedBox::with_alignment(self.fit, self.alignment).child_opt(self.child)
     }
 }
@@ -209,7 +209,7 @@ mod tests {
     struct MockView;
 
     impl StatelessView for MockView {
-        fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+        fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
             RenderEmpty.leaf()
         }
     }

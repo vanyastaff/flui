@@ -252,7 +252,7 @@ impl<S: State> PositionedDirectionalBuilder<S> {
 
 // Implement View trait
 impl StatelessView for PositionedDirectional {
-    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
         // Get text direction from context or use default
         let text_direction = self.text_direction.unwrap_or(TextDirection::Ltr);
 

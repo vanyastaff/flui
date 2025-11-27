@@ -327,7 +327,7 @@ impl<S: State> SizedOverflowBoxBuilder<S> {
 
 // Implement View trait - Simplified API
 impl StatelessView for SizedOverflowBox {
-    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
         let mut render = if self.child_min_width.is_some()
             || self.child_max_width.is_some()
             || self.child_min_height.is_some()

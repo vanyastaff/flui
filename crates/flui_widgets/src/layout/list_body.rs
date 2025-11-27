@@ -192,7 +192,7 @@ impl<S: State> ListBodyBuilder<S> {
 
 // Implement View trait
 impl StatelessView for ListBody {
-    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
         let mut render = RenderListBody::new(self.main_axis);
         render.set_spacing(self.spacing);
 

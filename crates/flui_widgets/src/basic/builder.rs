@@ -18,7 +18,7 @@ use flui_core::BuildContext;
 use std::sync::Arc;
 
 /// Type for builder function that creates a widget from BuildContext
-pub type WidgetBuilder = Arc<dyn Fn(&BuildContext) -> Element + Send + Sync>;
+pub type WidgetBuilder = Arc<dyn Fn(&dyn BuildContext) -> Element + Send + Sync>;
 
 /// A widget that calls a builder function to create its child.
 ///
@@ -89,7 +89,7 @@ impl Builder {
     /// ```
     pub fn new<F>(builder: F) -> Self
     where
-        F: Fn(&BuildContext) -> Element + Send + Sync + 'static,
+        F: Fn(&dyn BuildContext) -> Element + Send + Sync + 'static,
     {
         Self {
             key: None,
@@ -106,7 +106,7 @@ impl Builder {
 
 // Implement View trait
 impl StatelessView for Builder {
-    fn build(self, ctx: &BuildContext) -> impl IntoElement {
+    fn build(self, ctx: &dyn BuildContext) -> impl IntoElement {
         // Call the builder function with the context
         (self.builder)(ctx)
     }

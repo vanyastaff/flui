@@ -175,7 +175,7 @@ impl<S: State> DividerBuilder<S> {
 
 // Implement View trait
 impl StatelessView for Divider {
-    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
         // Calculate effective height (use height if specified, otherwise thickness)
         let effective_height = self.height.unwrap_or(self.thickness);
 

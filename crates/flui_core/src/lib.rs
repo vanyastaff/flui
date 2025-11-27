@@ -48,11 +48,25 @@ pub use flui_foundation::{ElementId, Key, Slot, ViewMode};
 
 pub use flui_element::{Element, ElementLifecycle, ElementTree};
 
+// Element module for backward compatibility with widgets
+pub mod element {
+    pub use flui_element::{Element, ElementLifecycle, ElementTree};
+    pub use flui_foundation::ElementId;
+}
+
 // =============================================================================
 // Re-exports from flui-view crate
 // =============================================================================
 
 pub use flui_view::{BuildContext, IntoElement, ViewObject};
+
+// View traits module for backward compatibility with widgets
+pub mod view {
+    pub use flui_view::{
+        children, AnimatedView, BuildContext, Child, Children, IntoElement, Listenable,
+        ProviderView, ProxyView, StatefulView, StatelessView, ViewMode, ViewState,
+    };
+}
 
 // =============================================================================
 // Re-exports from flui-rendering
@@ -62,6 +76,12 @@ pub use flui_rendering::{
     core::{Arity, RenderBox, RenderState, RuntimeArity},
     view::{RenderObjectWrapper, RenderView, RenderViewObject, RenderViewWrapper, UpdateResult},
 };
+
+// Render module for backward compatibility with widgets
+pub mod render {
+    pub use flui_rendering::prelude::*;
+    pub use flui_rendering::{LayoutContext, PaintContext, RenderBoxExt, SliverRenderExt};
+}
 
 // =============================================================================
 // Re-exports from flui-pipeline

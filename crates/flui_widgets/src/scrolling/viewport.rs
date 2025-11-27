@@ -131,7 +131,7 @@ impl Default for Viewport {
 }
 
 impl StatelessView for Viewport {
-    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
         // TODO: RenderViewport not yet implemented
         // Placeholder using RenderEmpty until RenderViewport is available
         use flui_core::render::RenderBoxExt;

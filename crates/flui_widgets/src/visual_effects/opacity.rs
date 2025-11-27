@@ -148,7 +148,7 @@ impl Default for Opacity {
 
 // Implement View for Opacity - New architecture
 impl StatelessView for Opacity {
-    fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoElement {
         (RenderOpacity::new(self.opacity), self.child)
     }
 }

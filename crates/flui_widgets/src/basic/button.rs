@@ -76,7 +76,7 @@ impl Button {
 }
 
 impl StatelessView for Button {
-    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
         // Calculate intrinsic size based on text + padding
         // Text width is approximately char_count * font_size * 0.6
         let text_width = (self.label.len() as f32) * 14.0 * 0.6;

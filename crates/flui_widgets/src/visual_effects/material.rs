@@ -219,7 +219,7 @@ impl<S: State> MaterialBuilder<S> {
 
 // Implement View trait
 impl StatelessView for Material {
-    fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoElement {
         // Get uniform border radius (use top_left as uniform)
         let radius = self.border_radius.top_left.x;
 

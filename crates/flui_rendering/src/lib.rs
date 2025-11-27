@@ -123,6 +123,9 @@ pub use core::{
     Variable,
 };
 
+// Re-export all RenderObjects from objects module
+pub use objects::*;
+
 // Re-export from flui_types for convenience
 pub use flui_types::layout::{FlexFit, StackFit};
 pub use flui_types::{SliverConstraints, SliverGeometry};

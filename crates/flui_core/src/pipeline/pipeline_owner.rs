@@ -493,6 +493,144 @@ impl PipelineOwner {
     pub fn enable_frame_buffer(&mut self) {
         self.features.enable_frame_buffer();
     }
+
+    // =========================================================================
+    // Hit Testing
+    // =========================================================================
+
+    /// Perform hit testing at the given position
+    ///
+    /// This traverses the element tree from root to leaves, testing each
+    /// render object's bounds against the position. Results are accumulated
+    /// in `HitTestResult`, ordered from front to back (topmost first).
+    ///
+    /// # Arguments
+    ///
+    /// * `position` - The position to test, in root coordinate space
+    ///
+    /// # Returns
+    ///
+    /// A `HitTestResult` containing all hit elements with their handlers.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let result = owner.perform_hit_test(Offset::new(100.0, 200.0));
+    /// if !result.is_empty() {
+    ///     result.dispatch(&pointer_event);
+    /// }
+    /// ```
+    pub fn perform_hit_test(
+        &self,
+        position: flui_types::Offset,
+    ) -> flui_interaction::HitTestResult {
+        use flui_interaction::HitTestResult;
+
+        let mut result = HitTestResult::new();
+
+        // Check cache first (if enabled)
+        if let Some(cache) = self.features.hit_test_cache() {
+            if let Some(cached) = cache.get(position) {
+                return cached.clone();
+            }
+        }
+
+        // Get root element
+        let root_id = match self.root_mgr.root_id() {
+            Some(id) => id,
+            None => return result,
+        };
+
+        // Perform hit test traversal
+        let tree = self.tree.read();
+        self.hit_test_element(&tree, root_id, position, &mut result);
+
+        result
+    }
+
+    /// Recursively hit test an element and its children
+    fn hit_test_element(
+        &self,
+        tree: &ElementTree,
+        element_id: ElementId,
+        position: flui_types::Offset,
+        result: &mut flui_interaction::HitTestResult,
+    ) -> bool {
+        use flui_interaction::HitTestEntry;
+
+        let element = match tree.get(element_id) {
+            Some(e) => e,
+            None => return false,
+        };
+
+        // Get render state if this is a render element
+        // Note: Element::render_state() is currently a stub returning None.
+        // Full hit testing through element tree will be enabled when RenderState
+        // is properly accessible via ViewObject. For now, we use bounds from
+        // HitRegion in CanvasLayer (registered during paint phase).
+        let (size, offset) = if let Some(render_state_any) = element.render_state() {
+            // Try to downcast to RenderState
+            if let Some(rs) = render_state_any.downcast_ref::<flui_rendering::RenderState>() {
+                (rs.size(), rs.offset())
+            } else {
+                (flui_types::Size::ZERO, flui_types::Offset::ZERO)
+            }
+        } else {
+            (flui_types::Size::ZERO, flui_types::Offset::ZERO)
+        };
+
+        // Transform position to local coordinates
+        let local_position =
+            flui_types::Offset::new(position.dx - offset.dx, position.dy - offset.dy);
+
+        // Check if position is within bounds
+        let within_bounds = local_position.dx >= 0.0
+            && local_position.dy >= 0.0
+            && local_position.dx < size.width
+            && local_position.dy < size.height;
+
+        if !within_bounds {
+            return false;
+        }
+
+        // Test children first (back to front for proper z-order)
+        let mut hit = false;
+        for child_id in element.children().iter().rev() {
+            if self.hit_test_element(tree, *child_id, local_position, result) {
+                hit = true;
+            }
+        }
+
+        // Add self to result if we have a handler or if children were hit
+        // Note: The actual handler is stored in HitRegion via paint phase
+        // Here we just record the element for the hit path
+        if hit || within_bounds {
+            let bounds = flui_types::Rect::from_xywh(0.0, 0.0, size.width, size.height);
+            let entry = HitTestEntry::new(element_id, local_position, bounds);
+            result.add(entry);
+            return true;
+        }
+
+        false
+    }
+
+    /// Perform hit test and dispatch event to handlers
+    ///
+    /// Convenience method that performs hit test and immediately dispatches
+    /// the event to all hit handlers.
+    ///
+    /// # Arguments
+    ///
+    /// * `position` - The position to test
+    /// * `event` - The pointer event to dispatch
+    pub fn hit_test_and_dispatch(
+        &self,
+        position: flui_types::Offset,
+        event: &flui_types::events::PointerEvent,
+    ) {
+        let result = self.perform_hit_test(position);
+        result.dispatch(event);
+    }
 }
 
 impl Default for PipelineOwner {

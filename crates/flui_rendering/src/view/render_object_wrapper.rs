@@ -175,6 +175,35 @@ impl RenderViewObject for RenderObjectWrapper {
 }
 
 // ============================================================================
+// ViewObject IMPLEMENTATION
+// ============================================================================
+
+use flui_element::{BuildContext, Element, ViewMode, ViewObject};
+
+impl ViewObject for RenderObjectWrapper {
+    fn mode(&self) -> ViewMode {
+        match self.protocol {
+            LayoutProtocol::Box => ViewMode::RenderBox,
+            LayoutProtocol::Sliver => ViewMode::RenderSliver,
+        }
+    }
+
+    fn build(&mut self, _ctx: &dyn BuildContext) -> Element {
+        // Render objects don't build children - they just render
+        // Children are managed by the framework
+        Element::empty()
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+}
+
+// ============================================================================
 // TESTS
 // ============================================================================
 

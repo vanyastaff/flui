@@ -142,7 +142,7 @@ impl Default for DecoratedBox {
 
 // Implement View for DecoratedBox
 impl StatelessView for DecoratedBox {
-    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
         RenderDecoratedBox::with_position(self.decoration, self.position).maybe_child(self.child)
     }
 }
@@ -216,7 +216,7 @@ mod tests {
     struct MockView;
 
     impl StatelessView for MockView {
-        fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+        fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
             RenderEmpty.leaf()
         }
     }

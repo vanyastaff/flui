@@ -300,7 +300,7 @@ impl<S: State> TextBuilder<S> {
 
 // Implement View for Text - Simplified API
 impl StatelessView for Text {
-    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
         // Create paragraph data
         let data = ParagraphData::new(&self.data)
             .with_font_size(self.size)

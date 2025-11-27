@@ -288,7 +288,7 @@ impl Default for Flexible {
 
 // Implement View trait - Simplified API
 impl StatelessView for Flexible {
-    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
         RenderFlexItem::new(FlexItemMetadata {
             flex: self.flex,
             fit: self.fit,
