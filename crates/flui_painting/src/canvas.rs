@@ -3091,7 +3091,7 @@ struct CanvasState {
 /// Currently used for tracking clip depth in save/restore operations.
 /// The clip geometry (Rect/RRect/Path) is stored for future optimizations:
 /// - Culling: Skip drawing commands outside the clip bounds
-/// - Clip bounds queries: `canvas.get_local_clip_bounds()`
+/// - Clip bounds queries: `canvas.local_clip_bounds()`
 /// - Render optimization: Merge adjacent clips
 ///
 /// TODO: Add methods to query clip bounds and use for culling optimization
