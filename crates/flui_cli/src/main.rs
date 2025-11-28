@@ -1,3 +1,8 @@
+//! Command-line interface for FLUI.
+//!
+//! This crate provides the `flui` CLI tool for creating, building, and managing
+//! FLUI projects across multiple platforms (Windows, Linux, macOS, Android, iOS, Web).
+
 use clap::{Parser, Subcommand, ValueEnum};
 use clap_complete::Shell;
 use std::path::PathBuf;
@@ -8,11 +13,13 @@ pub mod error;
 mod templates;
 mod utils;
 
-#[derive(Parser)]
+/// Command-line interface for FLUI - A declarative UI framework for Rust.
+#[derive(Debug, Parser)]
 #[command(name = "flui")]
 #[command(about = "FLUI CLI - Build beautiful cross-platform apps with Rust", long_about = None)]
 #[command(version)]
 pub struct Cli {
+    /// Subcommand to execute
     #[command(subcommand)]
     command: Commands,
 
@@ -21,7 +28,7 @@ pub struct Cli {
     verbose: bool,
 }
 
-#[derive(Subcommand)]
+#[derive(Debug, Subcommand)]
 enum Commands {
     /// Create a new FLUI project
     Create {
@@ -218,7 +225,7 @@ enum Commands {
     },
 }
 
-#[derive(Subcommand)]
+#[derive(Debug, Subcommand)]
 enum PlatformSubcommand {
     /// Add platform support
     Add {
