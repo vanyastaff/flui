@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 use crate::platform::{private, BuildArtifacts, BuilderContext, FinalArtifacts, PlatformBuilder};
 use crate::util::{check_command_exists, environment, process};
 
+/// Builder for Android platform (APK builds via Gradle and cargo-ndk)
+#[derive(Debug)]
 pub struct AndroidBuilder {
     workspace_root: PathBuf,
     android_home: PathBuf,
@@ -12,6 +14,11 @@ pub struct AndroidBuilder {
 }
 
 impl AndroidBuilder {
+    /// Creates a new AndroidBuilder
+    ///
+    /// # Errors
+    ///
+    /// Returns error if ANDROID_HOME or NDK is not configured
     pub fn new(workspace_root: &Path) -> Result<Self> {
         let android_home = environment::resolve_android_home()?;
         let ndk_home = environment::resolve_ndk_home(&android_home)?;

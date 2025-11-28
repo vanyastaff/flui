@@ -4,11 +4,18 @@ use std::path::{Path, PathBuf};
 use crate::platform::{private, BuildArtifacts, BuilderContext, FinalArtifacts, PlatformBuilder};
 use crate::util::process;
 
+/// Builder for desktop platforms (Windows, macOS, Linux)
+#[derive(Debug)]
 pub struct DesktopBuilder {
     workspace_root: PathBuf,
 }
 
 impl DesktopBuilder {
+    /// Creates a new DesktopBuilder
+    ///
+    /// # Errors
+    ///
+    /// Currently infallible, but returns Result for consistency
     pub fn new(workspace_root: &Path) -> Result<Self> {
         Ok(Self {
             workspace_root: workspace_root.to_path_buf(),

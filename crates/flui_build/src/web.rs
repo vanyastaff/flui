@@ -4,11 +4,18 @@ use std::path::{Path, PathBuf};
 use crate::platform::{private, BuildArtifacts, BuilderContext, FinalArtifacts, PlatformBuilder};
 use crate::util::{check_command_exists, process};
 
+/// Builder for Web/WASM platform (via wasm-pack)
+#[derive(Debug)]
 pub struct WebBuilder {
     workspace_root: PathBuf,
 }
 
 impl WebBuilder {
+    /// Creates a new WebBuilder
+    ///
+    /// # Errors
+    ///
+    /// Currently infallible, but returns Result for consistency
     pub fn new(workspace_root: &Path) -> Result<Self> {
         Ok(Self {
             workspace_root: workspace_root.to_path_buf(),

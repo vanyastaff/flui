@@ -1,4 +1,6 @@
+/// Environment variable resolution and validation
 pub mod environment;
+/// Process execution utilities
 pub mod process;
 
 pub use environment::{check_command_exists, get_env_var, resolve_android_home, resolve_java_home};

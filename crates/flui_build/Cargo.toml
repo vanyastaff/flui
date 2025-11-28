@@ -1,11 +1,12 @@
 [package]
 name = "flui_build"
-version = "0.1.0"
-edition = "2021"
-authors = ["FLUI Contributors"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
 description = "Build system library for FLUI framework - handles cross-platform builds"
-license = "MIT OR Apache-2.0"
-repository = "https://github.com/your-repo/flui"
 keywords = ["flui", "build", "cross-platform", "android", "wasm"]
 categories = ["development-tools::build-utils"]
 
@@ -17,3 +18,6 @@ tracing.workspace = true
 tokio = { workspace = true, features = ["process"] }
 which.workspace = true
 pollster.workspace = true
+
+[lints]
+workspace = true

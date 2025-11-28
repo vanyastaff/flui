@@ -47,13 +47,21 @@
 //! # }
 //! ```
 
+/// Android platform build support
 pub mod android;
+/// Type-state builder for BuilderContext
 pub mod context_builder;
+/// Extension trait with utility methods for BuilderContext
 pub mod context_ext;
+/// Desktop platform build support (Windows, macOS, Linux)
 pub mod desktop;
+/// Custom error types for build operations
 pub mod error;
+/// Platform abstractions and core types
 pub mod platform;
+/// Utility functions and helpers
 pub mod util;
+/// Web/WASM platform build support
 pub mod web;
 
 pub use android::AndroidBuilder;
