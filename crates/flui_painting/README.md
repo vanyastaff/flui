@@ -4,13 +4,13 @@
 [![Documentation](https://docs.rs/flui_painting/badge.svg)](https://docs.rs/flui_painting)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](https://github.com/flui-org/flui)
 
-**Canvas-based painting abstraction for FLUI - Records drawing commands into optimized display lists for GPU rendering.**
+**High-performance Canvas API for recording 2D drawing commands into optimized display lists for GPU rendering.**
 
 FLUI Painting provides a high-level Canvas API that records drawing operations into efficient DisplayLists. It serves as the bridge between FLUI's rendering layer and the GPU engine, following the Command Pattern for deferred execution.
 
 ## Features
 
-- **Canvas API** - Flutter-compatible drawing interface with state management
+- **Canvas API** - Intuitive drawing interface with state management
 - **Display Lists** - Immutable command sequences for efficient GPU execution
 - **Paint Objects** - Configurable styling (colors, strokes, blend modes)
 - **Path Operations** - Complex shapes with Bezier curves and arcs
@@ -104,7 +104,7 @@ canvas.transform(Transform::rotate_around(PI / 2.0, 50.0, 50.0));
 ```rust
 let mut canvas = Canvas::new();
 
-// Flutter-compatible save count (initial = 1)
+// Initial save count is 1
 assert_eq!(canvas.save_count(), 1);
 
 canvas.save();
@@ -538,7 +538,7 @@ canvas.draw_rect(rect, &paint);
 assert!(!canvas.is_empty());
 assert_eq!(canvas.len(), 1);
 
-// Save count (Flutter-compatible, initial = 1)
+// Save count (initial = 1)
 assert_eq!(canvas.save_count(), 1);
 
 // Get bounds of all recorded commands
@@ -589,7 +589,7 @@ for cmd in display_list.commands() {
         CommandKind::Effect => println!("Effect command"),
         CommandKind::Layer => println!("Layer command"),
     }
-    
+
     // Type-specific checks
     if cmd.is_shape() { /* rect, circle, path, etc. */ }
     if cmd.is_image() { /* image, texture */ }
@@ -668,7 +668,7 @@ let translated = display_list.map(|mut cmd| {
 
 ```rust
 // Apply opacity to all commands
-let faded = display_list.with_opacity(0.5);
+let faded = display_list.to_opacity(0.5);
 ```
 
 ### Hit Regions
@@ -759,6 +759,21 @@ std::thread::spawn(move || {
 | `local_clip_bounds()` | Clip bounds in local coordinates |
 | `device_clip_bounds()` | Clip bounds in device coordinates |
 | `would_be_clipped(rect)` | Check if rect would be clipped |
+
+## Documentation
+
+### Guides
+
+- **[Architecture Guide](docs/ARCHITECTURE.md)** - Internal architecture and design patterns
+- **[Performance Guide](docs/PERFORMANCE.md)** - Optimization techniques and benchmarking
+- **[Migration Guide](docs/MIGRATION.md)** - Upgrading between versions
+- **[Contributing Guide](CONTRIBUTING.md)** - How to contribute
+- **[Changelog](CHANGELOG.md)** - Version history and changes
+
+### API Reference
+
+- **[docs.rs](https://docs.rs/flui_painting)** - Full API documentation
+- `cargo doc --open` - Build and view documentation locally
 
 ## License
 

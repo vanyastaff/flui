@@ -1,9 +1,9 @@
 //! Canvas Transform API Tests
 //!
-//! Tests for the Canvas::transform() method integration with the high-level
-//! Transform API from flui_types::geometry.
+//! Tests for the `Canvas::transform()` method integration with the high-level
+//! Transform API from `flui_types::geometry`.
 
-use flui_painting::{Canvas, Paint};
+use flui_painting::prelude::*;
 use flui_types::{
     geometry::{Matrix4, Rect, Transform},
     styling::Color,
@@ -202,8 +202,11 @@ fn test_transform_get_current_matrix() {
 
     // Verify translation was applied
     let expected = Matrix4::translation(50.0, 100.0, 0.0);
-    assert_eq!(current.m[12], expected.m[12]); // Translation X
-    assert_eq!(current.m[13], expected.m[13]); // Translation Y
+    #[allow(clippy::float_cmp)] // Exact comparison is correct for transform matrices
+    {
+        assert_eq!(current.m[12], expected.m[12]); // Translation X
+        assert_eq!(current.m[13], expected.m[13]); // Translation Y
+    }
 }
 
 #[test]
@@ -265,7 +268,7 @@ fn test_transform_parallax_layers() {
         Rect::from_ltrb(0.0, 0.0, 800.0, 600.0),
         &Paint::fill(Color::rgba(200, 200, 255, 255)),
     );
-    parent.append_canvas(bg);
+    parent.extend_from(bg);
 
     // Midground layer (medium)
     let mut mg = Canvas::new();
@@ -274,7 +277,7 @@ fn test_transform_parallax_layers() {
         Rect::from_ltrb(0.0, 0.0, 800.0, 600.0),
         &Paint::fill(Color::rgba(150, 150, 255, 255)),
     );
-    parent.append_canvas(mg);
+    parent.extend_from(mg);
 
     // Foreground layer (fast)
     let mut fg = Canvas::new();
@@ -283,7 +286,7 @@ fn test_transform_parallax_layers() {
         Rect::from_ltrb(0.0, 0.0, 800.0, 600.0),
         &Paint::fill(Color::rgba(100, 100, 255, 255)),
     );
-    parent.append_canvas(fg);
+    parent.extend_from(fg);
 
     let display_list = parent.finish();
     assert_eq!(display_list.len(), 3);

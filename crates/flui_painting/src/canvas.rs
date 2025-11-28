@@ -1,8 +1,8 @@
 //! Canvas - High-level drawing API
 //!
-//! This module provides the `Canvas` type, which is a Flutter-compatible
-//! drawing interface that records commands into a DisplayList for later
-//! execution by the GPU backend.
+//! This module provides the `Canvas` type, which is a high-level drawing
+//! interface that records commands into a DisplayList for later execution
+//! by the GPU backend.
 //!
 //! # Architecture
 //!
@@ -14,7 +14,7 @@
 //!
 //! 1. **Recording only**: Canvas does NOT perform actual rendering
 //! 2. **Immutable commands**: Once recorded, DisplayList is immutable
-//! 3. **Flutter-compatible API**: Same methods as Flutter's Canvas
+//! 3. **Intuitive API**: Consistent with common 2D graphics APIs
 //! 4. **Transform tracking**: Maintains current transform matrix
 //! 5. **Save/restore stack**: Supports save() and restore() for state management
 //! 6. **Thread-safe**: Canvas and DisplayList are Send (can be sent across threads)
@@ -30,7 +30,9 @@
 //!
 //! This design enables efficient parallel painting in FLUI's parallel build pipeline.
 
-use crate::display_list::{BlendMode, DisplayList, DrawCommand, ImageFilter, Paint};
+use crate::display_list::{
+    BlendMode, DisplayList, DisplayListCore, DrawCommand, ImageFilter, Paint,
+};
 use flui_types::{
     geometry::{Matrix4, Offset, Point, RRect, Rect},
     painting::{Clip, ClipOp, Image, Path},
@@ -38,7 +40,7 @@ use flui_types::{
     typography::TextStyle,
 };
 
-/// High-level drawing canvas (Flutter-compatible API)
+/// High-level drawing canvas with intuitive API
 ///
 /// Canvas records drawing commands into a DisplayList without performing
 /// any actual rendering. Rendering happens later in flui_engine via WgpuPainter.
@@ -71,6 +73,7 @@ use flui_types::{
 /// canvas.draw_rect(rect, &paint);
 /// canvas.restore();
 /// ```
+#[derive(Debug, Clone)]
 pub struct Canvas {
     /// Commands being recorded
     display_list: DisplayList,
@@ -330,9 +333,7 @@ impl Canvas {
     /// If the saved state was created by `save_layer()`, this also composites
     /// the layer back using the paint specified when the layer was created.
     ///
-    /// # Panics
-    ///
-    /// Panics if there is no saved state (save/restore mismatch)
+    /// If there is no saved state, this is a no-op.
     #[inline]
     pub fn restore(&mut self) {
         if let Some(state) = self.save_stack.pop() {
@@ -345,15 +346,11 @@ impl Canvas {
 
             self.transform = state.transform;
             self.clip_stack.truncate(state.clip_depth);
-        } else {
-            #[cfg(debug_assertions)]
-            panic!("Canvas::restore() called without matching save()");
         }
+        // No saved state: silently ignore (no-op)
     }
 
     /// Returns the number of saved states (plus 1 for the initial state).
-    ///
-    /// This is equivalent to Flutter's `getSaveCount()`.
     /// The initial save count is 1.
     pub fn save_count(&self) -> usize {
         self.save_stack.len() + 1
@@ -362,7 +359,6 @@ impl Canvas {
     /// Restores the canvas state to a specific save count.
     ///
     /// This pops states from the save stack until the stack reaches the specified count.
-    /// Equivalent to Flutter's `restoreToCount()`.
     ///
     /// # Arguments
     ///
@@ -433,6 +429,12 @@ impl Canvas {
     /// canvas.draw_rect(rect2, &blue_paint);
     /// canvas.restore(); // Composites the layer at 50% opacity
     /// ```
+    #[tracing::instrument(skip(self, paint), fields(
+        bounds = ?bounds,
+        opacity = paint.color.alpha_f32(),
+        blend_mode = ?paint.blend_mode,
+        layer_depth = self.save_stack.len(),
+    ))]
     pub fn save_layer(&mut self, bounds: Option<Rect>, paint: &Paint) {
         // Save state for restore (marked as layer)
         self.save_stack.push(CanvasState {
@@ -447,6 +449,11 @@ impl Canvas {
             paint: paint.clone(),
             transform: self.transform,
         });
+
+        tracing::debug!(
+            layer_depth = self.save_stack.len(),
+            "Layer created"
+        );
     }
 
     /// Saves the canvas state with a layer that applies alpha transparency
@@ -562,7 +569,7 @@ impl Canvas {
 
     /// Clips to a rectangle with explicit options.
     ///
-    /// Equivalent to Flutter's `clipRect` with `clipOp` and `doAntiAlias` parameters.
+    /// Supports clip operations (intersect/difference) and anti-aliasing.
     ///
     /// # Arguments
     ///
@@ -810,34 +817,13 @@ impl Canvas {
     /// * `style` - Text style (font, size, etc.)
     /// * `paint` - Paint style (color)
     pub fn draw_text(&mut self, text: &str, offset: Offset, style: &TextStyle, paint: &Paint) {
-        #[cfg(debug_assertions)]
-        tracing::trace!(
-            target: "canvas",
-            text = %text,
-            offset = ?offset,
-            font_size = ?style.font_size,
-            color = ?paint.color,
-            transform_depth = ?self.transform,
-            "Canvas::draw_text push"
-        );
         self.display_list.push(DrawCommand::DrawText {
             text: text.to_string(),
-
             offset,
-
             style: style.clone(),
-
             paint: paint.clone(),
-
             transform: self.transform,
         });
-
-        #[cfg(debug_assertions)]
-        tracing::trace!(
-            target: "canvas",
-            commands_len = self.display_list.len(),
-            "Canvas::draw_text complete"
-        );
     }
 
     /// Draws an image
@@ -1281,7 +1267,7 @@ impl Canvas {
 
     /// Fills entire canvas with a paint (respects clipping).
     ///
-    /// This is equivalent to Flutter's `drawPaint()`.
+    /// Useful for solid backgrounds or full-screen effects.
     /// Fills the canvas with the paint, which can include colors, gradients, or patterns.
     ///
     /// # Examples
@@ -1304,7 +1290,7 @@ impl Canvas {
         });
     }
 
-    /// Draws a previously recorded DisplayList (equivalent to Flutter's drawPicture).
+    /// Draws a previously recorded DisplayList.
     ///
     /// This replays all commands from the DisplayList into this canvas.
     /// Useful for caching and reusing drawing commands.
@@ -1550,10 +1536,17 @@ impl Canvas {
 
     // ===== Canvas Composition =====
 
-    /// Appends all drawing commands from another canvas to this canvas
+    /// Extends this canvas with all commands from another canvas
     ///
+    /// Takes ownership of the child canvas and moves all its commands into this canvas.
     /// This is useful for parent RenderObjects that need to draw their own content
     /// and then draw their children on top.
+    ///
+    /// # Naming
+    ///
+    /// Uses `extend_from` (not `append`) to follow Rust API conventions:
+    /// - `append(&mut other)` in std takes a mutable reference and drains it
+    /// - `extend_from(other)` takes ownership (consuming), matching our use case
     ///
     /// # Performance
     ///
@@ -1572,48 +1565,75 @@ impl Canvas {
     /// parent_canvas.draw_rect(background_rect, &background_paint);
     ///
     /// let child_canvas = child.paint(ctx);
-    /// parent_canvas.append_canvas(child_canvas);  // Zero-copy move
+    /// parent_canvas.extend_from(child_canvas);  // Zero-copy move
     /// ```
-    pub fn append_canvas(&mut self, other: Canvas) {
+    #[tracing::instrument(skip(self, other), fields(
+        parent_commands = self.display_list.len(),
+        child_commands = other.display_list.len(),
+    ))]
+    pub fn extend_from(&mut self, other: Canvas) {
+        let child_count = other.display_list.len();
+
         // Zero-copy move of commands via DisplayList::append
         self.display_list.append(other.display_list);
+
+        tracing::debug!(
+            total_commands = self.display_list.len(),
+            appended = child_count,
+            "Canvas composition complete"
+        );
     }
 
-    /// Appends all drawing commands from another canvas with opacity applied
+    /// Extends this canvas from multiple canvases
     ///
-    /// This is useful for implementing opacity effects on entire subtrees of rendering.
-    /// All drawing commands from the child canvas will have the specified opacity
-    /// multiplied with their existing paint opacity.
+    /// Efficiently appends commands from multiple child canvases in order.
+    /// This is useful for multi-child render objects like Column, Row, Stack.
     ///
     /// # Arguments
     ///
-    /// * `other` - Child canvas to append
-    /// * `opacity` - Opacity to apply (0.0 = fully transparent, 1.0 = fully opaque)
+    /// * `others` - Iterator of canvases to extend from
     ///
     /// # Performance
     ///
-    /// This method creates a new DisplayList with modified Paint objects, which
-    /// involves cloning commands. For opacity of 1.0, prefer using `append_canvas()`
-    /// directly which uses zero-copy move semantics.
+    /// Uses zero-copy move semantics for each canvas, making it very efficient
+    /// even with many children.
     ///
     /// # Examples
     ///
     /// ```rust,ignore
-    /// let mut parent_canvas = Canvas::new();
-    /// parent_canvas.draw_rect(background_rect, &background_paint);
-    ///
-    /// let child_canvas = child.paint(ctx);
-    /// parent_canvas.append_canvas_with_opacity(child_canvas, 0.5);  // 50% transparent
+    /// let mut parent = Canvas::new();
+    /// let children: Vec<Canvas> = vec![child1, child2, child3];
+    /// parent.extend(children);
     /// ```
-    pub fn append_canvas_with_opacity(&mut self, other: Canvas, opacity: f32) {
-        if opacity >= 1.0 {
-            // Fast path: no opacity change needed
-            self.append_canvas(other);
-        } else {
-            // Apply opacity to all commands
-            let modified_display_list = other.display_list.with_opacity(opacity);
-            self.display_list.append(modified_display_list);
+    pub fn extend(&mut self, others: impl IntoIterator<Item = Canvas>) {
+        for canvas in others {
+            self.extend_from(canvas);
         }
+    }
+
+    /// Merges two canvases into a new canvas
+    ///
+    /// Unlike `extend_from` which modifies `self`, this creates a new canvas
+    /// containing commands from both canvases.
+    ///
+    /// # Arguments
+    ///
+    /// * `other` - Canvas to merge with
+    ///
+    /// # Performance
+    ///
+    /// This consumes both canvases and creates a new one using zero-copy moves.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let background = Canvas::new();
+    /// let foreground = Canvas::new();
+    /// let combined = background.merge(foreground);
+    /// ```
+    pub fn merge(mut self, other: Canvas) -> Self {
+        self.extend_from(other);
+        self
     }
 
     /// Appends a cached DisplayList at a given offset
@@ -1711,16 +1731,23 @@ impl Canvas {
     /// canvas.draw_rect(rect, &paint);
     /// let display_list = canvas.finish();
     /// ```
+    #[tracing::instrument(skip(self), fields(
+        commands = self.display_list.len(),
+        save_depth = self.save_stack.len(),
+    ))]
     pub fn finish(self) -> DisplayList {
-        #[cfg(debug_assertions)]
-        {
-            if !self.save_stack.is_empty() {
-                tracing::warn!(
-                    "Canvas::finish() called with {} unrestored save(s)",
-                    self.save_stack.len()
-                );
-            }
+        if !self.save_stack.is_empty() {
+            tracing::warn!(
+                unrestored_saves = self.save_stack.len(),
+                "Canvas finished with unrestored save() calls"
+            );
         }
+
+        tracing::debug!(
+            commands = self.display_list.len(),
+            bounds = ?self.display_list.bounds(),
+            "Canvas finalized"
+        );
 
         self.display_list
     }
@@ -1734,6 +1761,29 @@ impl Canvas {
 impl Default for Canvas {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+// ===== AsRef Implementation =====
+
+/// Allow zero-cost conversion from Canvas to DisplayList reference
+///
+/// This enables generic functions that accept `impl AsRef<DisplayList>` to work with Canvas.
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// fn count_commands(dl: impl AsRef<DisplayList>) -> usize {
+///     dl.as_ref().len()
+/// }
+///
+/// let canvas = Canvas::new();
+/// canvas.draw_rect(rect, &paint);
+/// let count = count_commands(&canvas); // Works!
+/// ```
+impl AsRef<DisplayList> for Canvas {
+    fn as_ref(&self) -> &DisplayList {
+        &self.display_list
     }
 }
 
@@ -3072,7 +3122,7 @@ mod tests {
     #[test]
     fn test_canvas_creation() {
         let canvas = Canvas::new();
-        assert_eq!(canvas.save_count(), 1); // Initial count is 1 (Flutter-compatible)
+        assert_eq!(canvas.save_count(), 1); // Initial count is 1
         assert_eq!(canvas.display_list().len(), 0);
     }
 
@@ -3145,9 +3195,14 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Canvas::restore() called without matching save()")]
     fn test_canvas_restore_without_save() {
+        // Test that restore() without matching save() is safe (no-op)
         let mut canvas = Canvas::new();
-        canvas.restore(); // Should panic
+        canvas.restore(); // Should not panic, just do nothing
+
+        // Verify canvas is still usable
+        let paint = Paint::fill(Color::RED);
+        canvas.draw_rect(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), &paint);
+        assert_eq!(canvas.len(), 1);
     }
 }

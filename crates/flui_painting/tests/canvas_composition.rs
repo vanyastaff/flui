@@ -1,9 +1,9 @@
 //! Canvas Composition Tests
 //!
-//! Tests for the zero-copy Canvas::append_canvas() optimization and
-//! DisplayList::append() method.
+//! Tests for the zero-copy `Canvas::extend_from()` optimization and
+//! `DisplayList::append()` method.
 
-use flui_painting::{Canvas, Paint};
+use flui_painting::prelude::*;
 use flui_types::{geometry::Rect, styling::Color};
 
 #[test]
@@ -23,7 +23,7 @@ fn test_append_canvas_empty_parent() {
     let mut child2 = Canvas::new();
     child2.draw_rect(rect, &paint);
 
-    parent.append_canvas(child2);
+    parent.extend_from(child2);
 
     let parent_list = parent.finish();
 
@@ -44,7 +44,7 @@ fn test_append_canvas_non_empty_parent() {
     let paint2 = Paint::fill(Color::RED);
     child.draw_rect(rect2, &paint2);
 
-    parent.append_canvas(child);
+    parent.extend_from(child);
 
     let parent_list = parent.finish();
 
@@ -63,7 +63,7 @@ fn test_append_canvas_multiple_children() {
         let paint = Paint::fill(Color::RED);
         child.draw_rect(rect, &paint);
 
-        parent.append_canvas(child);
+        parent.extend_from(child);
     }
 
     let parent_list = parent.finish();
@@ -87,14 +87,14 @@ fn test_append_canvas_preserves_order() {
     let rect1 = Rect::from_ltrb(10.0, 10.0, 50.0, 50.0);
     let paint1 = Paint::fill(Color::RED);
     child1.draw_rect(rect1, &paint1);
-    parent.append_canvas(child1);
+    parent.extend_from(child1);
 
     // Child 2
     let mut child2 = Canvas::new();
     let rect2 = Rect::from_ltrb(30.0, 30.0, 70.0, 70.0);
     let paint2 = Paint::fill(Color::BLUE);
     child2.draw_rect(rect2, &paint2);
-    parent.append_canvas(child2);
+    parent.extend_from(child2);
 
     // Foreground
     let fg_rect = Rect::from_ltrb(40.0, 40.0, 60.0, 60.0);
@@ -116,7 +116,7 @@ fn test_append_empty_canvas() {
     parent.draw_rect(rect, &paint);
 
     let empty_child = Canvas::new();
-    parent.append_canvas(empty_child);
+    parent.extend_from(empty_child);
 
     let parent_list = parent.finish();
 
@@ -139,7 +139,7 @@ fn test_append_canvas_with_transforms() {
     child.draw_rect(rect, &paint);
     child.restore();
 
-    parent.append_canvas(child);
+    parent.extend_from(child);
 
     let parent_list = parent.finish();
 
@@ -159,7 +159,7 @@ fn test_bounds_after_append() {
     let rect2 = Rect::from_ltrb(100.0, 100.0, 200.0, 200.0);
     child.draw_rect(rect2, &paint);
 
-    parent.append_canvas(child);
+    parent.extend_from(child);
 
     let parent_list = parent.finish();
     let bounds = parent_list.bounds();
@@ -211,7 +211,7 @@ fn test_large_composition_performance() {
             child.draw_rect(rect, &paint);
         }
 
-        parent.append_canvas(child);
+        parent.extend_from(child);
     }
 
     let parent_list = parent.finish();
@@ -234,14 +234,14 @@ fn test_nested_composition() {
         Rect::from_ltrb(0.0, 0.0, 20.0, 20.0),
         &Paint::fill(Color::GREEN),
     );
-    child.append_canvas(grandchild);
+    child.extend_from(grandchild);
 
     let mut parent = Canvas::new();
     parent.draw_rect(
         Rect::from_ltrb(0.0, 0.0, 30.0, 30.0),
         &Paint::fill(Color::BLUE),
     );
-    parent.append_canvas(child);
+    parent.extend_from(child);
 
     let parent_list = parent.finish();
 

@@ -1,6 +1,6 @@
 //! Tests for closure-based scoped Canvas operations
 
-use flui_painting::{Canvas, Paint};
+use flui_painting::prelude::*;
 use flui_types::geometry::{Matrix4, Point, RRect, Rect};
 use flui_types::painting::Path;
 use flui_types::styling::Color;

@@ -9,11 +9,15 @@ use thiserror::Error;
 /// Painting-specific error type
 ///
 /// All fallible painting operations return `Result<T, PaintingError>`.
+///
+/// This type is marked as `#[non_exhaustive]` to allow adding new error variants
+/// in the future without breaking existing code. Always use a catch-all pattern when matching.
+#[non_exhaustive]
 #[derive(Error, Debug, Clone)]
 pub enum PaintingError {
     /// Decoration painting failed
     #[error("Failed to paint decoration: {reason}")]
-    DecorationFailed {
+    PaintDecorationFailed {
         /// Failure reason
         reason: Cow<'static, str>,
     },
@@ -34,14 +38,14 @@ pub enum PaintingError {
 
     /// Text painting failed
     #[error("Text painting failed: {reason}")]
-    TextPaintingFailed {
+    PaintTextFailed {
         /// Failure reason
         reason: Cow<'static, str>,
     },
 
     /// Image loading/painting failed
     #[error("Image operation failed: {reason}")]
-    ImageFailed {
+    PaintImageFailed {
         /// Failure reason
         reason: Cow<'static, str>,
     },
@@ -51,12 +55,12 @@ pub enum PaintingError {
 pub type Result<T> = std::result::Result<T, PaintingError>;
 
 impl PaintingError {
-    /// Create a decoration failed error
+    /// Create a decoration painting failed error
     ///
     /// Accepts both static strings (zero-cost) and dynamic strings (allocated).
     #[must_use]
-    pub fn decoration_failed(reason: impl Into<Cow<'static, str>>) -> Self {
-        Self::DecorationFailed {
+    pub fn paint_decoration_failed(reason: impl Into<Cow<'static, str>>) -> Self {
+        Self::PaintDecorationFailed {
             reason: reason.into(),
         }
     }
@@ -85,18 +89,18 @@ impl PaintingError {
     ///
     /// Accepts both static strings (zero-cost) and dynamic strings (allocated).
     #[must_use]
-    pub fn text_painting_failed(reason: impl Into<Cow<'static, str>>) -> Self {
-        Self::TextPaintingFailed {
+    pub fn paint_text_failed(reason: impl Into<Cow<'static, str>>) -> Self {
+        Self::PaintTextFailed {
             reason: reason.into(),
         }
     }
 
-    /// Create an image failed error
+    /// Create an image painting failed error
     ///
     /// Accepts both static strings (zero-cost) and dynamic strings (allocated).
     #[must_use]
-    pub fn image_failed(reason: impl Into<Cow<'static, str>>) -> Self {
-        Self::ImageFailed {
+    pub fn paint_image_failed(reason: impl Into<Cow<'static, str>>) -> Self {
+        Self::PaintImageFailed {
             reason: reason.into(),
         }
     }
@@ -107,8 +111,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_decoration_failed() {
-        let err = PaintingError::decoration_failed("border rendering failed");
+    fn test_paint_decoration_failed() {
+        let err = PaintingError::paint_decoration_failed("border rendering failed");
         assert!(err.to_string().contains("border rendering failed"));
     }
 
@@ -125,37 +129,35 @@ mod tests {
     }
 
     #[test]
-    fn test_text_painting_failed() {
-        let err = PaintingError::text_painting_failed("font not found");
+    fn test_paint_text_failed() {
+        let err = PaintingError::paint_text_failed("font not found");
         assert!(err.to_string().contains("font not found"));
     }
 
     #[test]
-    fn test_image_failed() {
-        let err = PaintingError::image_failed("image not loaded");
+    fn test_paint_image_failed() {
+        let err = PaintingError::paint_image_failed("image not loaded");
         assert!(err.to_string().contains("image not loaded"));
     }
 
     #[test]
     fn test_cow_string_static() {
         let err = PaintingError::invalid_gradient("static");
-        match err {
-            PaintingError::InvalidGradient { reason } => {
-                assert_eq!(reason, "static");
-            }
-            _ => panic!("Wrong variant"),
-        }
+        #[allow(clippy::panic)] // Test assertion
+        let PaintingError::InvalidGradient { reason } = err else {
+            panic!("Expected InvalidGradient variant");
+        };
+        assert_eq!(reason, "static");
     }
 
     #[test]
     fn test_cow_string_dynamic() {
         let dynamic = format!("dynamic {}", 42);
         let err = PaintingError::invalid_gradient(dynamic.clone());
-        match err {
-            PaintingError::InvalidGradient { reason } => {
-                assert_eq!(reason.as_ref(), &dynamic);
-            }
-            _ => panic!("Wrong variant"),
-        }
+        #[allow(clippy::panic)] // Test assertion
+        let PaintingError::InvalidGradient { reason } = err else {
+            panic!("Expected InvalidGradient variant");
+        };
+        assert_eq!(reason.as_ref(), &dynamic);
     }
 }

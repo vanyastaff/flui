@@ -4,15 +4,25 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "Canvas-based painting abstraction for FLUI - records drawing commands into DisplayList"
 repository.workspace = true
+rust-version.workspace = true
+description = "Canvas-based painting abstraction for FLUI - records drawing commands into DisplayList"
+keywords = ["gui", "canvas", "painting", "2d-graphics", "rendering"]
+categories = ["graphics", "gui", "rendering"]
+readme = "README.md"
 
 [dependencies]
 flui_types = { path = "../flui_types" }
 
-# Note: Math operations use Matrix4 from flui_types, which internally uses glam
-# No direct glam dependency needed here
 thiserror = { workspace = true }
 tracing = { workspace = true }
+serde = { workspace = true, optional = true }
 
 [dev-dependencies]
+
+[features]
+default = []
+serde = ["dep:serde", "flui_types/serde"]
+
+[lints]
+workspace = true

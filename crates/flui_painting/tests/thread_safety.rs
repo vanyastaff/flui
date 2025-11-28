@@ -1,9 +1,9 @@
 //! Thread Safety Tests
 //!
-//! Tests verifying that Canvas and DisplayList can be safely sent across threads
+//! Tests verifying that Canvas and `DisplayList` can be safely sent across threads
 //! for parallel painting and execution.
 
-use flui_painting::{Canvas, Paint};
+use flui_painting::prelude::*;
 use flui_types::{geometry::Rect, styling::Color};
 use std::sync::Arc;
 use std::thread;
@@ -163,7 +163,7 @@ fn test_parallel_build_then_compose() {
 
     for handle in handles {
         let child = handle.join().unwrap();
-        parent.append_canvas(child);
+        parent.extend_from(child);
     }
 
     let parent_list = parent.finish();
@@ -226,7 +226,7 @@ fn test_canvas_not_sync() {
     */
 
     // If this test compiles, Canvas is correctly !Sync
-    assert!(true);
+    // No assertion needed - compilation is the test
 }
 
 #[test]

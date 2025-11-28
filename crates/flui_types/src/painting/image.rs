@@ -22,6 +22,7 @@ use std::sync::Arc;
 /// println!("Image size: {}x{}", image.width(), image.height());
 /// ```
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Image {
     /// The width of the image in pixels.
     width: u32,

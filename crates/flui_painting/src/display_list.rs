@@ -117,6 +117,7 @@ impl std::fmt::Debug for HitRegion {
 /// // DrawCommands now contain the transformed Matrix4
 /// ```
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DisplayList {
     /// Drawing commands in order
     commands: Vec<DrawCommand>,
@@ -125,7 +126,340 @@ pub struct DisplayList {
     bounds: Rect,
 
     /// Hit-testable regions with event handlers
+    #[cfg_attr(feature = "serde", serde(skip))]
     hit_regions: Vec<HitRegion>,
+}
+
+// ===== Sealed Trait Pattern =====
+
+/// Internal module for sealing traits.
+///
+/// This module is public for technical reasons (trait bounds) but should not be
+/// used directly. It's hidden from documentation.
+#[doc(hidden)]
+pub mod private {
+    /// Sealed trait to prevent external implementations of DisplayListCore.
+    ///
+    /// This ensures only types in this crate can implement DisplayListCore,
+    /// allowing us to add methods to DisplayListExt without breaking changes.
+    pub trait Sealed {}
+}
+
+/// Core DisplayList API providing fundamental access methods.
+///
+/// This trait defines the minimal interface for accessing display list data.
+/// It is sealed to prevent external implementations, allowing the library to add
+/// methods to [`DisplayListExt`] in the future without breaking changes.
+///
+/// # Implementation
+///
+/// This trait is automatically implemented for:
+/// - [`DisplayList`]
+/// - `Arc<DisplayList>`
+/// - `Box<DisplayList>`
+/// - `&DisplayList`
+///
+/// All implementors automatically receive extension methods from [`DisplayListExt`]
+/// via a blanket implementation.
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// use flui_painting::prelude::*;
+///
+/// fn process_commands(dl: &impl DisplayListCore) {
+///     println!("Commands: {}", dl.len());
+///     for cmd in dl.commands() {
+///         // Process each command
+///     }
+/// }
+/// ```
+///
+/// # See Also
+///
+/// - [`DisplayListExt`] for convenient filtering and query methods
+pub trait DisplayListCore: private::Sealed {
+    /// Returns an iterator over all commands in this display list.
+    ///
+    /// The iterator yields references to [`DrawCommand`]s in the order they were recorded.
+    fn commands(&self) -> impl Iterator<Item = &DrawCommand>;
+
+    /// Returns the bounding rectangle containing all drawing operations.
+    ///
+    /// The bounds are calculated incrementally as commands are added and represent
+    /// the union of all command bounds.
+    fn bounds(&self) -> Rect;
+
+    /// Returns the total number of commands in this display list.
+    fn len(&self) -> usize;
+
+    /// Returns `true` if this display list contains no commands.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let display_list = DisplayList::new();
+    /// assert!(display_list.is_empty());
+    /// ```
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+/// Extension trait providing convenient filtering and query methods.
+///
+/// This trait is automatically implemented for all types implementing [`DisplayListCore`]
+/// via a blanket implementation. It provides zero-cost methods for filtering, counting,
+/// and analyzing drawing commands.
+///
+/// # Automatic Implementation
+///
+/// You don't need to implement this trait manually. Any type implementing
+/// [`DisplayListCore`] automatically gets all these methods.
+///
+/// # Performance
+///
+/// All filtering methods return lazy iterators that don't allocate. They only
+/// iterate through commands when consumed.
+///
+/// # Examples
+///
+/// ## Filtering Commands
+///
+/// ```rust,ignore
+/// use flui_painting::prelude::*;
+///
+/// let display_list = canvas.finish();
+///
+/// // Get only drawing commands (excludes clips, layers, effects)
+/// for cmd in display_list.draw_commands() {
+///     // Process drawing commands
+/// }
+///
+/// // Get only shape commands
+/// let shape_count = display_list.shape_commands().count();
+/// ```
+///
+/// ## Statistics
+///
+/// ```rust,ignore
+/// let stats = display_list.stats();
+/// println!("Shapes: {}, Text: {}, Images: {}",
+///          stats.shapes, stats.text, stats.images);
+/// ```
+///
+/// # See Also
+///
+/// - [`DisplayListCore`] for the core API
+/// - [`DisplayListStats`] for statistics structure
+pub trait DisplayListExt: DisplayListCore {
+    /// Returns an iterator over drawing commands only.
+    ///
+    /// This excludes clipping commands, layer commands, and effect commands,
+    /// returning only commands that produce visible output.
+    ///
+    /// # Performance
+    ///
+    /// Returns a lazy iterator - no allocation until consumed.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// for cmd in display_list.draw_commands() {
+    ///     // Only shapes, text, and images
+    /// }
+    /// ```
+    fn draw_commands(&self) -> impl Iterator<Item = &DrawCommand> {
+        self.commands().filter(|cmd| cmd.is_draw())
+    }
+
+    /// Returns an iterator over clipping commands only.
+    ///
+    /// Includes `ClipRect`, `ClipRRect`, and `ClipPath` commands.
+    fn clip_commands(&self) -> impl Iterator<Item = &DrawCommand> {
+        self.commands().filter(|cmd| cmd.is_clip())
+    }
+
+    /// Returns an iterator over shape drawing commands.
+    ///
+    /// Includes rectangles, circles, paths, ovals, and other geometric primitives.
+    /// Excludes text and images.
+    fn shape_commands(&self) -> impl Iterator<Item = &DrawCommand> {
+        self.commands().filter(|cmd| cmd.is_shape())
+    }
+
+    /// Returns an iterator over image and texture commands.
+    ///
+    /// Includes `DrawImage`, `DrawTexture`, and image-related commands.
+    fn image_commands(&self) -> impl Iterator<Item = &DrawCommand> {
+        self.commands().filter(|cmd| cmd.is_image())
+    }
+
+    /// Returns an iterator over text rendering commands.
+    fn text_commands(&self) -> impl Iterator<Item = &DrawCommand> {
+        self.commands().filter(|cmd| cmd.is_text())
+    }
+
+    /// Counts commands grouped by their category.
+    ///
+    /// Returns a tuple of `(draw, clip, effect, layer)` command counts.
+    ///
+    /// # Performance
+    ///
+    /// O(n) where n is the number of commands. Iterates through all commands once.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let (draws, clips, effects, layers) = display_list.count_by_kind();
+    /// println!("Drawing: {}, Clipping: {}, Effects: {}, Layers: {}",
+    ///          draws, clips, effects, layers);
+    /// ```
+    ///
+    /// # Returns
+    ///
+    /// A tuple containing:
+    /// - `draw`: Number of drawing commands (shapes, text, images)
+    /// - `clip`: Number of clipping commands
+    /// - `effect`: Number of effect commands (shader masks, filters)
+    /// - `layer`: Number of layer commands (save/restore layer)
+    fn count_by_kind(&self) -> (usize, usize, usize, usize) {
+        let mut draw = 0;
+        let mut clip = 0;
+        let mut effect = 0;
+        let mut layer = 0;
+
+        for cmd in self.commands() {
+            match cmd.kind() {
+                CommandKind::Draw => draw += 1,
+                CommandKind::Clip => clip += 1,
+                CommandKind::Effect => effect += 1,
+                CommandKind::Layer => layer += 1,
+            }
+        }
+
+        (draw, clip, effect, layer)
+    }
+
+    /// Computes comprehensive statistics about this display list.
+    ///
+    /// Returns a [`DisplayListStats`] structure containing detailed counts
+    /// of different command types.
+    ///
+    /// # Performance
+    ///
+    /// O(n) - iterates through all commands to count by type.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let stats = display_list.stats();
+    /// println!("{}", stats); // Pretty-printed: "DisplayList: 42 commands..."
+    ///
+    /// // Access individual counts
+    /// assert_eq!(stats.shapes, 10);
+    /// assert_eq!(stats.text, 5);
+    /// ```
+    ///
+    /// # See Also
+    ///
+    /// - [`DisplayListStats`] for the statistics structure
+    /// - [`count_by_kind`](Self::count_by_kind) for category counts only
+    fn stats(&self) -> DisplayListStats {
+        let (draw, clip, effect, layer) = self.count_by_kind();
+        let shapes = self.commands().filter(|c| c.is_shape()).count();
+        let images = self.commands().filter(|c| c.is_image()).count();
+        let text = self.commands().filter(|c| c.is_text()).count();
+
+        DisplayListStats {
+            total: self.len(),
+            draw,
+            clip,
+            effect,
+            layer,
+            shapes,
+            images,
+            text,
+            hit_regions: 0, // Will be overridden in DisplayList impl
+        }
+    }
+}
+
+// Blanket implementation: all DisplayListCore types get DisplayListExt methods
+impl<T: DisplayListCore> DisplayListExt for T {}
+
+// Implement sealed trait for DisplayList
+impl private::Sealed for DisplayList {}
+
+// Implement core trait for DisplayList
+impl DisplayListCore for DisplayList {
+    fn commands(&self) -> impl Iterator<Item = &DrawCommand> {
+        self.commands.iter()
+    }
+
+    fn bounds(&self) -> Rect {
+        self.bounds
+    }
+
+    fn len(&self) -> usize {
+        self.commands.len()
+    }
+}
+
+// ===== Blanket Implementations for Smart Pointers =====
+
+// Implement sealed trait for Arc<DisplayList>
+impl private::Sealed for Arc<DisplayList> {}
+
+// Implement core trait for Arc<DisplayList>
+impl DisplayListCore for Arc<DisplayList> {
+    fn commands(&self) -> impl Iterator<Item = &DrawCommand> {
+        (**self).commands()
+    }
+
+    fn bounds(&self) -> Rect {
+        (**self).bounds()
+    }
+
+    fn len(&self) -> usize {
+        (**self).len()
+    }
+}
+
+// Implement sealed trait for Box<DisplayList>
+impl private::Sealed for Box<DisplayList> {}
+
+// Implement core trait for Box<DisplayList>
+impl DisplayListCore for Box<DisplayList> {
+    fn commands(&self) -> impl Iterator<Item = &DrawCommand> {
+        (**self).commands()
+    }
+
+    fn bounds(&self) -> Rect {
+        (**self).bounds()
+    }
+
+    fn len(&self) -> usize {
+        (**self).len()
+    }
+}
+
+// Implement sealed trait for &DisplayList
+impl private::Sealed for &DisplayList {}
+
+// Implement core trait for &DisplayList
+impl DisplayListCore for &DisplayList {
+    fn commands(&self) -> impl Iterator<Item = &DrawCommand> {
+        (*self).commands()
+    }
+
+    fn bounds(&self) -> Rect {
+        (*self).bounds()
+    }
+
+    fn len(&self) -> usize {
+        (*self).len()
+    }
 }
 
 impl DisplayList {
@@ -136,6 +470,42 @@ impl DisplayList {
             bounds: Rect::ZERO,
             hit_regions: Vec::new(),
         }
+    }
+
+    /// Returns an iterator over command references.
+    ///
+    /// This method is provided to satisfy clippy's convention for types
+    /// that implement `IntoIterator`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let display_list = canvas.finish();
+    ///
+    /// for cmd in display_list.iter() {
+    ///     // process command
+    /// }
+    /// ```
+    pub fn iter(&self) -> std::slice::Iter<'_, DrawCommand> {
+        self.commands.iter()
+    }
+
+    /// Returns an iterator over mutable command references.
+    ///
+    /// This method is provided to satisfy clippy's convention for types
+    /// that implement `IntoIterator`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let mut display_list = canvas.finish();
+    ///
+    /// for cmd in display_list.iter_mut() {
+    ///     // modify command
+    /// }
+    /// ```
+    pub fn iter_mut(&mut self) -> std::slice::IterMut<'_, DrawCommand> {
+        self.commands.iter_mut()
     }
 
     /// Add a hit-testable region with an event handler
@@ -163,93 +533,23 @@ impl DisplayList {
         self.commands.push(command);
     }
 
-    /// Returns an iterator over commands
-    pub fn commands(&self) -> impl Iterator<Item = &DrawCommand> {
-        self.commands.iter()
-    }
-
-    /// Returns the bounds of all drawing
-    pub fn bounds(&self) -> Rect {
-        self.bounds
-    }
-
-    /// Returns the number of commands
-    pub fn len(&self) -> usize {
-        self.commands.len()
-    }
-
-    /// Returns true if empty
-    pub fn is_empty(&self) -> bool {
-        self.commands.is_empty()
-    }
-
     /// Returns an iterator over mutable command references.
     pub fn commands_mut(&mut self) -> impl Iterator<Item = &mut DrawCommand> {
         self.commands.iter_mut()
     }
 
-    /// Returns only drawing commands (excludes clips, layers, effects).
-    pub fn draw_commands(&self) -> impl Iterator<Item = &DrawCommand> {
-        self.commands.iter().filter(|cmd| cmd.is_draw())
-    }
-
-    /// Returns only clipping commands.
-    pub fn clip_commands(&self) -> impl Iterator<Item = &DrawCommand> {
-        self.commands.iter().filter(|cmd| cmd.is_clip())
-    }
-
-    /// Returns only shape commands (rect, circle, path, etc).
-    pub fn shape_commands(&self) -> impl Iterator<Item = &DrawCommand> {
-        self.commands.iter().filter(|cmd| cmd.is_shape())
-    }
-
-    /// Returns only image/texture commands.
-    pub fn image_commands(&self) -> impl Iterator<Item = &DrawCommand> {
-        self.commands.iter().filter(|cmd| cmd.is_image())
-    }
-
-    /// Returns only text commands.
-    pub fn text_commands(&self) -> impl Iterator<Item = &DrawCommand> {
-        self.commands.iter().filter(|cmd| cmd.is_text())
-    }
-
-    /// Counts commands by kind.
+    /// Returns statistics about this display list (overrides extension trait).
     ///
-    /// Returns a tuple of (draw, clip, effect, layer) counts.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// let (draws, clips, effects, layers) = display_list.count_by_kind();
-    /// println!("Draw commands: {}", draws);
-    /// ```
-    pub fn count_by_kind(&self) -> (usize, usize, usize, usize) {
-        let mut draw = 0;
-        let mut clip = 0;
-        let mut effect = 0;
-        let mut layer = 0;
-
-        for cmd in &self.commands {
-            match cmd.kind() {
-                CommandKind::Draw => draw += 1,
-                CommandKind::Clip => clip += 1,
-                CommandKind::Effect => effect += 1,
-                CommandKind::Layer => layer += 1,
-            }
-        }
-
-        (draw, clip, effect, layer)
-    }
-
-    /// Returns statistics about this display list.
+    /// This implementation includes hit_regions count, which the default
+    /// extension trait implementation cannot access.
     pub fn stats(&self) -> DisplayListStats {
         let (draw, clip, effect, layer) = self.count_by_kind();
-        let shapes = self.commands.iter().filter(|c| c.is_shape()).count();
-        let images = self.commands.iter().filter(|c| c.is_image()).count();
-        let text = self.commands.iter().filter(|c| c.is_text()).count();
+        let shapes = self.commands().filter(|c| c.is_shape()).count();
+        let images = self.commands().filter(|c| c.is_image()).count();
+        let text = self.commands().filter(|c| c.is_text()).count();
 
         DisplayListStats {
-            total: self.commands.len(),
+            total: self.len(),
             draw,
             clip,
             effect,
@@ -296,6 +596,7 @@ impl DisplayList {
     /// // Keep only shape commands
     /// let shapes_only = display_list.filter(|cmd| cmd.is_shape());
     /// ```
+    #[must_use = "filter returns a new DisplayList and does not modify the original"]
     pub fn filter<F>(&self, predicate: F) -> Self
     where
         F: Fn(&DrawCommand) -> bool,
@@ -319,6 +620,7 @@ impl DisplayList {
     /// Maps each command through a function.
     ///
     /// Returns a new DisplayList with transformed commands.
+    #[must_use = "map returns a new DisplayList and does not modify the original"]
     pub fn map<F>(&self, f: F) -> Self
     where
         F: Fn(&DrawCommand) -> DrawCommand,
@@ -362,13 +664,22 @@ impl DisplayList {
     ///
     /// parent.append(child);  // Zero-copy move
     /// ```
+    #[tracing::instrument(skip(self, other), fields(
+        parent_len = self.commands.len(),
+        child_len = other.commands.len(),
+    ))]
     pub(crate) fn append(&mut self, mut other: DisplayList) {
         if self.commands.is_empty() {
             // Fast path: just swap the vectors (zero-cost)
+            tracing::trace!("Using fast path: vector swap (O(1))");
             std::mem::swap(&mut self.commands, &mut other.commands);
             self.bounds = other.bounds;
         } else if !other.commands.is_empty() {
             // Slow path: append commands (still no cloning, just moves)
+            tracing::trace!(
+                commands_to_append = other.commands.len(),
+                "Using append path (O(N))"
+            );
             self.commands.append(&mut other.commands);
 
             // Update bounds
@@ -381,14 +692,24 @@ impl DisplayList {
         if !other.hit_regions.is_empty() {
             self.hit_regions.append(&mut other.hit_regions);
         }
+
+        tracing::debug!(
+            total_commands = self.commands.len(),
+            "DisplayList append complete"
+        );
         // other.commands and hit_regions are now empty (moved), will be dropped
     }
 
-    /// Apply opacity to all commands in this DisplayList
+    /// Apply opacity to all commands, creating a new DisplayList
     ///
     /// Creates a new DisplayList where all Paint objects have their opacity
     /// multiplied by the given value. This is used for implementing opacity
     /// effects without needing a separate layer.
+    ///
+    /// # Naming
+    ///
+    /// Uses `to_` prefix following Rust API Guidelines (C-CONV) because this is
+    /// an expensive borrowed-to-owned conversion (clones all commands).
     ///
     /// # Arguments
     ///
@@ -403,10 +724,21 @@ impl DisplayList {
     ///
     /// ```rust,ignore
     /// let display_list = canvas.finish();
-    /// let semi_transparent = display_list.with_opacity(0.5);
+    /// let semi_transparent = display_list.to_opacity(0.5);
     /// ```
-    pub fn with_opacity(&self, opacity: f32) -> Self {
+    #[must_use = "to_opacity returns a new DisplayList and does not modify the original"]
+    #[tracing::instrument(skip(self), fields(
+        commands = self.commands.len(),
+        opacity = opacity,
+    ))]
+    pub fn to_opacity(&self, opacity: f32) -> Self {
         let opacity = opacity.clamp(0.0, 1.0);
+
+        tracing::debug!(
+            commands = self.commands.len(),
+            clamped_opacity = opacity,
+            "Applying opacity to DisplayList"
+        );
 
         let commands = self
             .commands
@@ -428,10 +760,41 @@ impl Default for DisplayList {
     }
 }
 
-/// Statistics about a DisplayList's contents.
+/// Detailed statistics about a [`DisplayList`]'s contents.
 ///
-/// Returned by `DisplayList::stats()`.
+/// Provides counts of different command types to help analyze rendering complexity
+/// and optimize performance.
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// use flui_painting::prelude::*;
+///
+/// let stats = display_list.stats();
+///
+/// // Check rendering complexity
+/// if stats.total > 1000 {
+///     println!("Warning: Complex display list with {} commands", stats.total);
+/// }
+///
+/// // Pretty print
+/// println!("{}", stats);
+/// // Output: "DisplayList: 42 commands (10 shapes, 5 images, ...)"
+/// ```
+///
+/// # Field Categories
+///
+/// - **Total**: All commands
+/// - **By Category**: `draw`, `clip`, `effect`, `layer`
+/// - **By Content Type**: `shapes`, `images`, `text` (subsets of `draw`)
+/// - **Other**: `hit_regions`
+///
+/// # See Also
+///
+/// - [`DisplayListExt::stats`] for computing statistics
+/// - [`DisplayList`] for the main type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DisplayListStats {
     /// Total number of commands
     pub total: usize,
@@ -451,6 +814,80 @@ pub struct DisplayListStats {
     pub text: usize,
     /// Number of hit regions
     pub hit_regions: usize,
+}
+
+impl DisplayListStats {
+    /// Creates a new statistics object with all counts set to zero.
+    ///
+    /// This is a `const fn` and can be used in constant contexts.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use flui_painting::DisplayListStats;
+    ///
+    /// const EMPTY: DisplayListStats = DisplayListStats::zero();
+    /// assert_eq!(EMPTY.total, 0);
+    /// ```
+    pub const fn zero() -> Self {
+        Self {
+            total: 0,
+            draw: 0,
+            clip: 0,
+            effect: 0,
+            layer: 0,
+            shapes: 0,
+            images: 0,
+            text: 0,
+            hit_regions: 0,
+        }
+    }
+
+    /// Creates a new statistics object with the specified counts.
+    ///
+    /// This is a `const fn` and can be used in constant contexts.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use flui_painting::DisplayListStats;
+    ///
+    /// const STATS: DisplayListStats = DisplayListStats::new(
+    ///     100, // total
+    ///     80,  // draw
+    ///     10,  // clip
+    ///     5,   // effect
+    ///     5,   // layer
+    ///     50,  // shapes
+    ///     20,  // images
+    ///     10,  // text
+    ///     0    // hit_regions
+    /// );
+    /// ```
+    #[allow(clippy::too_many_arguments)]
+    pub const fn new(
+        total: usize,
+        draw: usize,
+        clip: usize,
+        effect: usize,
+        layer: usize,
+        shapes: usize,
+        images: usize,
+        text: usize,
+        hit_regions: usize,
+    ) -> Self {
+        Self {
+            total,
+            draw,
+            clip,
+            effect,
+            layer,
+            shapes,
+            images,
+            text,
+            hit_regions,
+        }
+    }
 }
 
 impl std::fmt::Display for DisplayListStats {
@@ -493,6 +930,7 @@ impl std::fmt::Display for DisplayListStats {
 /// canvas.restore();
 /// ```
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum DrawCommand {
     // === Clipping Commands ===
     /// Clip to a rectangle
@@ -939,7 +1377,7 @@ impl DrawCommand {
     /// Apply opacity to the Paint in this command
     ///
     /// Creates a new DrawCommand with the Paint's opacity multiplied by the given value.
-    /// This is used by DisplayList::with_opacity() to implement opacity effects.
+    /// This is used by DisplayList::to_opacity() to implement opacity effects.
     ///
     /// # Arguments
     ///
@@ -949,6 +1387,7 @@ impl DrawCommand {
     ///
     /// A new DrawCommand with modified Paint opacity.
     /// Clipping commands and commands without Paint are returned unchanged.
+    #[must_use = "with_opacity returns a new DrawCommand and does not modify the original"]
     pub fn with_opacity(&self, opacity: f32) -> Self {
         match self {
             DrawCommand::DrawRect {
@@ -1201,7 +1640,7 @@ impl DrawCommand {
                 blend_mode,
                 transform,
             } => DrawCommand::ShaderMask {
-                child: Box::new(child.with_opacity(opacity)),
+                child: Box::new(child.to_opacity(opacity)),
                 shader: shader.clone(),
                 bounds: *bounds,
                 blend_mode: *blend_mode,
@@ -1214,7 +1653,7 @@ impl DrawCommand {
                 blend_mode,
                 transform,
             } => DrawCommand::BackdropFilter {
-                child: child.as_ref().map(|c| Box::new(c.with_opacity(opacity))),
+                child: child.as_ref().map(|c| Box::new(c.to_opacity(opacity))),
                 filter: filter.clone(),
                 bounds: *bounds,
                 blend_mode: *blend_mode,
@@ -1715,6 +2154,89 @@ pub enum CommandKind {
     Effect,
     /// Layer commands (save/restore layer)
     Layer,
+}
+
+// ===== AsRef / AsMut Implementations =====
+
+/// Allow zero-cost conversion from DisplayList to slice of commands
+impl AsRef<[DrawCommand]> for DisplayList {
+    fn as_ref(&self) -> &[DrawCommand] {
+        &self.commands
+    }
+}
+
+/// Allow zero-cost mutable conversion from DisplayList to slice of commands
+impl AsMut<[DrawCommand]> for DisplayList {
+    fn as_mut(&mut self) -> &mut [DrawCommand] {
+        &mut self.commands
+    }
+}
+
+// ===== IntoIterator Implementation =====
+
+/// Allow iterating over DisplayList directly with `for cmd in &display_list`
+///
+/// This provides ergonomic iteration over commands without needing to call `.commands()`.
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// let display_list = canvas.finish();
+///
+/// // Before: display_list.commands()
+/// for cmd in display_list.commands() {
+///     // process command
+/// }
+///
+/// // After: just iterate directly (more ergonomic)
+/// for cmd in &display_list {
+///     // process command
+/// }
+/// ```
+impl<'a> IntoIterator for &'a DisplayList {
+    type Item = &'a DrawCommand;
+    type IntoIter = std::slice::Iter<'a, DrawCommand>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.commands.iter()
+    }
+}
+
+/// Allow iterating over DisplayList mutably with `for cmd in &mut display_list`
+impl<'a> IntoIterator for &'a mut DisplayList {
+    type Item = &'a mut DrawCommand;
+    type IntoIter = std::slice::IterMut<'a, DrawCommand>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.commands.iter_mut()
+    }
+}
+
+// ===== Index Trait Implementation =====
+
+use std::ops::{Index, IndexMut};
+
+/// Allow indexing into DisplayList to get commands by index
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// let display_list = canvas.finish();
+/// let first_cmd = &display_list[0];  // Get first command
+/// ```
+impl Index<usize> for DisplayList {
+    type Output = DrawCommand;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.commands[index]
+    }
+}
+
+/// Allow mutable indexing into DisplayList
+impl IndexMut<usize> for DisplayList {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        &mut self.commands[index]
+    }
 }
 
 #[cfg(test)]
