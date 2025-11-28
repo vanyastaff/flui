@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use crate::error::{CliError, CliResult, ResultExt};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -82,10 +82,12 @@ fn default_opt_level() -> u8 {
 impl FluiConfig {
     /// Load configuration from flui.toml
     #[allow(dead_code)]
-    pub fn load() -> Result<Self> {
+    pub fn load() -> CliResult<Self> {
         let config_path = Path::new("flui.toml");
         if !config_path.exists() {
-            anyhow::bail!("Not a FLUI project (flui.toml not found)");
+            return Err(CliError::NotFluiProject {
+                reason: "flui.toml not found".to_string(),
+            });
         }
 
         let content = std::fs::read_to_string(config_path).context("Failed to read flui.toml")?;
@@ -97,7 +99,7 @@ impl FluiConfig {
 
     /// Save configuration to flui.toml
     #[allow(dead_code)]
-    pub fn save(&self, path: &Path) -> Result<()> {
+    pub fn save(&self, path: &Path) -> CliResult<()> {
         let content = toml::to_string_pretty(self).context("Failed to serialize configuration")?;
 
         std::fs::write(path.join("flui.toml"), content).context("Failed to write flui.toml")?;
@@ -187,7 +189,7 @@ fn default_devtools_port() -> u16 {
 impl GlobalConfig {
     /// Load global configuration
     #[allow(dead_code)]
-    pub fn load() -> Result<Self> {
+    pub fn load() -> CliResult<Self> {
         let config_path = Self::config_path()?;
 
         if !config_path.exists() {
@@ -206,7 +208,7 @@ impl GlobalConfig {
 
     /// Save global configuration
     #[allow(dead_code)]
-    pub fn save(&self) -> Result<()> {
+    pub fn save(&self) -> CliResult<()> {
         let config_path = Self::config_path()?;
         let config_dir = config_path.parent().unwrap();
 
@@ -221,9 +223,14 @@ impl GlobalConfig {
 
     /// Get global config path (~/.flui/config.toml)
     #[allow(dead_code)]
-    fn config_path() -> Result<PathBuf> {
-        let home =
-            dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Could not find home directory"))?;
+    fn config_path() -> CliResult<PathBuf> {
+        let home = dirs::home_dir().ok_or_else(|| CliError::WithContext {
+            message: "Could not find home directory".to_string(),
+            source: Box::new(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "Home directory not found",
+            )),
+        })?;
 
         Ok(home.join(".flui").join("config.toml"))
     }

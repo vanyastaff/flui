@@ -149,20 +149,6 @@ impl CliError {
     }
 }
 
-// Allow conversion from anyhow::Error for internal modules
-impl From<anyhow::Error> for CliError {
-    fn from(err: anyhow::Error) -> Self {
-        let root_cause = err.root_cause();
-        Self::WithContext {
-            message: root_cause.to_string(),
-            source: Box::new(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                root_cause.to_string(),
-            )),
-        }
-    }
-}
-
 /// Extension trait to add context to Results.
 pub trait ResultExt<T> {
     /// Add context to an error result.

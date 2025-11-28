@@ -1,4 +1,4 @@
-use anyhow::Result;
+use crate::error::{CliError, CliResult};
 use std::path::Path;
 use std::process::Command;
 
@@ -10,7 +10,7 @@ pub fn command_exists(cmd: &str) -> bool {
 
 /// Run a command and capture output
 #[allow(dead_code)]
-pub fn run_command(cmd: &str, args: &[&str], cwd: Option<&Path>) -> Result<String> {
+pub fn run_command(cmd: &str, args: &[&str], cwd: Option<&Path>) -> CliResult<String> {
     let mut command = Command::new(cmd);
     command.args(args);
 
@@ -24,13 +24,19 @@ pub fn run_command(cmd: &str, args: &[&str], cwd: Option<&Path>) -> Result<Strin
         Ok(String::from_utf8_lossy(&output.stdout).to_string())
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("Command failed: {}", stderr);
+        Err(CliError::WithContext {
+            message: format!("Command failed: {}", stderr),
+            source: Box::new(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "Command execution failed",
+            )),
+        })
     }
 }
 
 /// Copy directory recursively
 #[allow(dead_code)]
-pub fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
+pub fn copy_dir_recursive(src: &Path, dst: &Path) -> CliResult<()> {
     if !dst.exists() {
         std::fs::create_dir_all(dst)?;
     }

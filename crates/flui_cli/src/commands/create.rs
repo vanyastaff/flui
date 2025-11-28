@@ -67,27 +67,13 @@ pub fn execute(
     spinner.set_message("Generating project files...");
 
     match template {
-        Template::Counter => template_gen
-            .generate_counter(&project_dir)
-            .map_err(|e| wrap_anyhow_error(e, "Failed to generate counter template"))?,
-        Template::Basic => template_gen
-            .generate_basic(&project_dir)
-            .map_err(|e| wrap_anyhow_error(e, "Failed to generate basic template"))?,
-        Template::Todo => template_gen
-            .generate_todo(&project_dir)
-            .map_err(|e| wrap_anyhow_error(e, "Failed to generate todo template"))?,
-        Template::Dashboard => template_gen
-            .generate_dashboard(&project_dir)
-            .map_err(|e| wrap_anyhow_error(e, "Failed to generate dashboard template"))?,
-        Template::Widget => template_gen
-            .generate_widget(&project_dir)
-            .map_err(|e| wrap_anyhow_error(e, "Failed to generate widget template"))?,
-        Template::Plugin => template_gen
-            .generate_plugin(&project_dir)
-            .map_err(|e| wrap_anyhow_error(e, "Failed to generate plugin template"))?,
-        Template::Empty => template_gen
-            .generate_empty(&project_dir)
-            .map_err(|e| wrap_anyhow_error(e, "Failed to generate empty template"))?,
+        Template::Counter => template_gen.generate_counter(&project_dir)?,
+        Template::Basic => template_gen.generate_basic(&project_dir)?,
+        Template::Todo => template_gen.generate_todo(&project_dir)?,
+        Template::Dashboard => template_gen.generate_dashboard(&project_dir)?,
+        Template::Widget => template_gen.generate_widget(&project_dir)?,
+        Template::Plugin => template_gen.generate_plugin(&project_dir)?,
+        Template::Empty => template_gen.generate_empty(&project_dir)?,
     }
 
     spinner.finish_and_clear();
@@ -245,26 +231,5 @@ fn run_cargo_check(dir: &PathBuf) -> CliResult<()> {
     }
 
     Ok(())
-}
-
-fn wrap_anyhow_error(err: anyhow::Error, message: &str) -> CliError {
-    // Convert from anyhow and add context
-    let cli_err: CliError = err.into();
-    match cli_err {
-        CliError::WithContext {
-            message: inner_msg,
-            source,
-        } => CliError::WithContext {
-            message: format!("{}: {}", message, inner_msg),
-            source,
-        },
-        other => CliError::WithContext {
-            message: format!("{}: {}", message, other),
-            source: Box::new(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                other.to_string(),
-            )),
-        },
-    }
 }
 

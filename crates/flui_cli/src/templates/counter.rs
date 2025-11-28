@@ -1,8 +1,8 @@
-use anyhow::{Context, Result};
+use crate::error::{CliResult, ResultExt};
 use std::fs;
 use std::path::Path;
 
-pub fn generate(dir: &Path, name: &str, org: &str) -> Result<()> {
+pub fn generate(dir: &Path, name: &str, org: &str) -> CliResult<()> {
     // Create Cargo.toml
     generate_cargo_toml(dir, name)?;
 
@@ -21,7 +21,7 @@ pub fn generate(dir: &Path, name: &str, org: &str) -> Result<()> {
     Ok(())
 }
 
-fn generate_cargo_toml(dir: &Path, name: &str) -> Result<()> {
+fn generate_cargo_toml(dir: &Path, name: &str) -> CliResult<()> {
     let content = format!(
         r#"[package]
 name = "{}"
@@ -55,7 +55,7 @@ strip = "debuginfo"
     Ok(())
 }
 
-fn generate_main(dir: &Path) -> Result<()> {
+fn generate_main(dir: &Path) -> CliResult<()> {
     let content = r#"use flui_app::runApp;
 use flui_core::prelude::*;
 use flui_widgets::*;
@@ -132,7 +132,7 @@ impl View for CounterView {
     Ok(())
 }
 
-fn generate_flui_config(dir: &Path, name: &str, org: &str) -> Result<()> {
+fn generate_flui_config(dir: &Path, name: &str, org: &str) -> CliResult<()> {
     let content = format!(
         r#"[app]
 name = "{}"
@@ -161,7 +161,7 @@ directories = ["assets"]
     Ok(())
 }
 
-fn generate_readme(dir: &Path, name: &str) -> Result<()> {
+fn generate_readme(dir: &Path, name: &str) -> CliResult<()> {
     let content = format!(
         r#"# {}
 
