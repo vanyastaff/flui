@@ -183,6 +183,7 @@ use std::f32::consts::PI;
 /// This matches Flutter's transform semantics and Canvas2D API.
 #[derive(Debug, Clone, PartialEq, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
 pub enum Transform {
     /// Identity transform (no transformation)
     #[default]

@@ -25,6 +25,7 @@ use crate::styling::{Color, Color32};
 /// ```
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
 pub enum Shader {
     /// A linear gradient shader.
     LinearGradient {
@@ -449,6 +450,7 @@ impl MaskFilter {
 /// ```
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
 pub enum ShaderSpec {
     /// Linear gradient shader
     LinearGradient {
@@ -504,12 +506,18 @@ impl ShaderSpec {
                 let to = Offset::new(end.0 * size.width, end.1 * size.height);
 
                 // Convert Color32 to Color
-                let converted_colors: Vec<Color> =
-                    colors.iter().map(|c| Color::rgba(c.r(), c.g(), c.b(), c.a())).collect();
+                let converted_colors: Vec<Color> = colors
+                    .iter()
+                    .map(|c| Color::rgba(c.r(), c.g(), c.b(), c.a()))
+                    .collect();
 
                 Shader::simple_linear(from, to, converted_colors)
             }
-            ShaderSpec::RadialGradient { center, radius, colors } => {
+            ShaderSpec::RadialGradient {
+                center,
+                radius,
+                colors,
+            } => {
                 // Convert relative position to absolute offset
                 let center_offset = Offset::new(center.0 * size.width, center.1 * size.height);
 
@@ -517,8 +525,10 @@ impl ShaderSpec {
                 let absolute_radius = *radius * ((size.width + size.height) / 2.0);
 
                 // Convert Color32 to Color
-                let converted_colors: Vec<Color> =
-                    colors.iter().map(|c| Color::rgba(c.r(), c.g(), c.b(), c.a())).collect();
+                let converted_colors: Vec<Color> = colors
+                    .iter()
+                    .map(|c| Color::rgba(c.r(), c.g(), c.b(), c.a()))
+                    .collect();
 
                 Shader::simple_radial(center_offset, absolute_radius, converted_colors)
             }
@@ -584,7 +594,11 @@ impl ShaderSpec {
 
                 data
             }
-            ShaderSpec::RadialGradient { center, radius, colors } => {
+            ShaderSpec::RadialGradient {
+                center,
+                radius,
+                colors,
+            } => {
                 let mut data = Vec::with_capacity(48);
 
                 // Center point

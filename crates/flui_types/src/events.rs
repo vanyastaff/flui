@@ -7,6 +7,7 @@ use crate::{Offset, Size};
 
 /// Device type that generated the pointer event
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 #[allow(missing_docs)]
 pub enum PointerDeviceKind {
     /// Mouse pointer
@@ -23,6 +24,7 @@ pub enum PointerDeviceKind {
 
 /// Mouse button that was pressed
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 #[allow(missing_docs)]
 pub enum PointerButton {
     /// Primary button (usually left mouse button)
@@ -76,6 +78,7 @@ impl PointerEventData {
 
 /// Pointer event types
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 #[allow(missing_docs)]
 pub enum PointerEvent {
     /// Pointer device was added (connected)
@@ -297,6 +300,7 @@ impl HitTestResult {
 
 /// Physical key on the keyboard
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 #[allow(missing_docs)]
 pub enum PhysicalKey {
     /// Letter keys
@@ -395,6 +399,7 @@ pub enum PhysicalKey {
 
 /// Logical key - the meaning of the key press
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 #[allow(missing_docs)]
 pub enum LogicalKey {
     /// Character input (e.g., 'a', 'A', '1', '!')
@@ -475,6 +480,7 @@ impl KeyEventData {
 
 /// Keyboard event types
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 #[allow(missing_docs)]
 pub enum KeyEvent {
     /// Key was pressed down
@@ -519,6 +525,7 @@ impl KeyEvent {
 
 /// Scroll delta
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
 #[allow(missing_docs)]
 pub enum ScrollDelta {
     /// Scroll by lines (e.g., mouse wheel clicks)
@@ -576,6 +583,7 @@ impl Theme {
 
 /// Window event types
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
 #[allow(missing_docs)]
 pub enum WindowEvent {
     /// Window was resized
@@ -599,6 +607,7 @@ pub enum WindowEvent {
 
 /// Unified event type
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 #[allow(missing_docs)]
 pub enum Event {
     /// Pointer event (mouse, touch, etc.)
