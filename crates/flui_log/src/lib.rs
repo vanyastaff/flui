@@ -3,7 +3,7 @@
 //! Provides automatic logging configuration for:
 //! - **Desktop**: stdout via `tracing_subscriber::fmt` (or `tracing-forest` with "pretty" feature)
 //! - **Android**: logcat via `android_log-sys`
-//! - **iOS**: os_log via `tracing-oslog`
+//! - **iOS**: `os_log` via `tracing-oslog`
 //! - **WASM**: browser console via `tracing-wasm`
 //!
 //! # Quick Start
@@ -65,7 +65,7 @@
 //! | Desktop  | `fmt` or `tracing-forest` | Terminal/stdout |
 //! | Android  | `android_log-sys` | `adb logcat` |
 //! | iOS      | `tracing-oslog` | Xcode Console / Console.app |
-//! | WASM     | `tracing-wasm` | Browser DevTools Console |
+//! | WASM     | `tracing-wasm` | Browser `DevTools` Console |
 //!
 //! # Environment Variables
 //!

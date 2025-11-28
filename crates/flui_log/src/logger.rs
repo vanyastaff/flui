@@ -3,25 +3,73 @@ use tracing::Level;
 /// Cross-platform logging for FLUI
 ///
 /// Automatically configures the appropriate logging backend for each platform:
-/// - Desktop: stdout with optional pretty formatting (tracing-forest)
-/// - Android: logcat integration
-/// - iOS: os_log integration
-/// - WASM: browser console
+///
+/// | Platform | Backend | Output | Viewing Tools |
+/// |----------|---------|--------|---------------|
+/// | **Desktop** | `tracing-forest` or `fmt` | stdout/stderr | Terminal |
+/// | **Android** | `android_log-sys` | logcat | `adb logcat` |
+/// | **iOS** | `tracing-oslog` | `os_log` | Xcode Console, Console.app, `log stream` |
+/// | **WASM** | `tracing-wasm` | Browser console | `DevTools` (F12) |
+///
+/// # Platform-Specific Details
+///
+/// ## Android
+/// - Logs to Android's logcat system via native FFI
+/// - View with: `adb logcat`, `adb logcat -s flui:*`, or Android Studio Logcat
+/// - Tag format: module path (e.g., `flui_core::pipeline`)
+/// - Priority mapping: TRACE→VERBOSE, DEBUG→DEBUG, INFO→INFO, WARN→WARN, ERROR→ERROR
+///
+/// ## iOS
+/// - Integrates with Apple's unified logging system (`os_log`)
+/// - View with: Xcode Console, Console.app, or `log stream --predicate 'subsystem == "com.flui.app"'`
+/// - Subsystem: "com.flui.app" (configurable in source)
+/// - Privacy-preserving by default, efficient structured logging
+///
+/// ## WASM
+/// - Outputs to browser `DevTools` console with color coding
+/// - Requires browser environment (Chrome, Firefox, Safari, Edge)
+/// - **Does NOT work** in Node.js or Cloudflare Workers
+/// - Uses `window.performance` API for timing measurements
+/// - View Performance tab for span durations
+///
+/// ## Desktop
+/// - Standard output with optional hierarchical formatting
+/// - Enable `pretty` feature for `tracing-forest` (recommended for development)
 ///
 /// # Examples
 ///
 /// ```rust,no_run
 /// use flui_log::Logger;
 ///
-/// // Use defaults (info level, wgpu=warn filter)
+/// // Use defaults (info level, wgpu=warn filter, app_name="flui")
 /// Logger::default().init();
 ///
-/// // Custom configuration
+/// // Custom configuration with app name
 /// use flui_log::Level;
 /// Logger::new()
+///     .with_app_name("my_game")
 ///     .with_filter("debug,wgpu=error,flui_core=trace")
 ///     .with_level(Level::DEBUG)
 ///     .init();
+/// ```
+///
+/// ## Application Name Usage
+///
+/// The `app_name` field is used differently on each platform:
+///
+/// ```rust,no_run
+/// use flui_log::Logger;
+///
+/// // For a game called "space_shooter"
+/// Logger::new()
+///     .with_app_name("space_shooter")
+///     .init();
+///
+/// // Results in:
+/// // - Android: logcat tag "space_shooter" (when module path unavailable)
+/// // - iOS: subsystem "com.space_shooter.app"
+/// // - WASM: Reserved for future features
+/// // - Desktop: Reserved for future features
 /// ```
 ///
 /// # Pretty Logging (Desktop only)
@@ -42,29 +90,41 @@ use tracing::Level;
 ///     .with_pretty(true)  // Only available with "pretty" feature
 ///     .init();
 /// ```
+#[derive(Debug, Clone)]
 pub struct Logger {
+    /// Application name used for platform-specific logging
+    ///
+    /// - **Android**: Used as fallback logcat tag when module path is unavailable
+    /// - **iOS**: Used as subsystem identifier (e.g., `"com.{app_name}.app"`)
+    /// - **WASM**: Could be used for console grouping (future enhancement)
+    /// - **Desktop**: Not currently used, reserved for future features
+    ///
+    /// Default: "flui"
+    app_name: String,
+
     /// Log filter string (e.g. "info,wgpu=warn,flui=debug")
     ///
     /// This uses the `tracing_subscriber::EnvFilter` syntax:
     /// - "info" - Set global level to INFO
     /// - "debug,wgpu=warn" - DEBUG globally, but WARN for wgpu
-    /// - "flui_core=trace" - TRACE level for flui_core module
-    pub filter: String,
+    /// - "`flui_core=trace`" - TRACE level for `flui_core` module
+    filter: String,
 
     /// Global log level (used as fallback)
-    pub level: Level,
+    level: Level,
 
     /// Use pretty hierarchical logging (tracing-forest)
     ///
     /// Only available on desktop with "pretty" feature enabled.
     /// Automatically enabled in debug builds if feature is present.
     #[cfg(feature = "pretty")]
-    pub use_pretty: bool,
+    use_pretty: bool,
 }
 
 impl Default for Logger {
     fn default() -> Self {
         Self {
+            app_name: "flui".to_string(),
             filter: "info,wgpu=warn".to_string(),
             level: Level::INFO,
             #[cfg(feature = "pretty")]
@@ -75,8 +135,94 @@ impl Default for Logger {
 
 impl Logger {
     /// Create a new Logger with default settings
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Get the current application name
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use flui_log::Logger;
+    ///
+    /// let logger = Logger::new();
+    /// assert_eq!(logger.app_name(), "flui");
+    /// ```
+    #[must_use]
+    pub fn app_name(&self) -> &str {
+        &self.app_name
+    }
+
+    /// Get the current log filter string
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use flui_log::Logger;
+    ///
+    /// let logger = Logger::new();
+    /// assert_eq!(logger.filter(), "info,wgpu=warn");
+    /// ```
+    #[must_use]
+    pub fn filter(&self) -> &str {
+        &self.filter
+    }
+
+    /// Get the current global log level
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use flui_log::{Logger, Level};
+    ///
+    /// let logger = Logger::new();
+    /// assert_eq!(logger.level(), &Level::INFO);
+    /// ```
+    #[must_use]
+    pub fn level(&self) -> &Level {
+        &self.level
+    }
+
+    /// Check if pretty logging is enabled (desktop only)
+    ///
+    /// Only available with the "pretty" feature flag.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use flui_log::Logger;
+    ///
+    /// let logger = Logger::new();
+    /// #[cfg(feature = "pretty")]
+    /// let is_pretty = logger.use_pretty();
+    /// ```
+    #[cfg(feature = "pretty")]
+    #[must_use]
+    pub fn use_pretty(&self) -> bool {
+        self.use_pretty
+    }
+
+    /// Set the application name
+    ///
+    /// The application name is used for platform-specific logging:
+    /// - **Android**: Fallback logcat tag when module path unavailable
+    /// - **iOS**: Subsystem identifier (formatted as `"com.{app_name}.app"`)
+    /// - **WASM**: Reserved for future console grouping features
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use flui_log::Logger;
+    ///
+    /// let logger = Logger::new()
+    ///     .with_app_name("my_game");
+    /// ```
+    #[must_use]
+    pub fn with_app_name(mut self, app_name: impl Into<String>) -> Self {
+        self.app_name = app_name.into();
+        self
     }
 
     /// Set the log filter string
@@ -89,6 +235,7 @@ impl Logger {
     /// let logger = Logger::new()
     ///     .with_filter("debug,wgpu=warn,flui_core=trace");
     /// ```
+    #[must_use]
     pub fn with_filter(mut self, filter: impl Into<String>) -> Self {
         self.filter = filter.into();
         self
@@ -104,6 +251,7 @@ impl Logger {
     /// let logger = Logger::new()
     ///     .with_level(Level::DEBUG);
     /// ```
+    #[must_use]
     pub fn with_level(mut self, level: Level) -> Self {
         self.level = level;
         self
@@ -123,6 +271,7 @@ impl Logger {
     ///     .with_pretty(true);  // Requires "pretty" feature
     /// ```
     #[cfg(feature = "pretty")]
+    #[must_use]
     pub fn with_pretty(mut self, pretty: bool) -> Self {
         self.use_pretty = pretty;
         self
@@ -137,7 +286,7 @@ impl Logger {
     ///
     /// - **Desktop**: Uses `tracing-forest` (if "pretty" feature enabled) or `fmt` layer
     /// - **Android**: Uses `android_log-sys` → logcat
-    /// - **iOS**: Uses `tracing-oslog` → os_log
+    /// - **iOS**: Uses `tracing-oslog` → `os_log`
     /// - **WASM**: Uses `tracing-wasm` → browser console
     ///
     /// # Panics
@@ -199,9 +348,9 @@ impl Logger {
         // === ANDROID ===
         #[cfg(target_os = "android")]
         {
-            let subscriber = Registry::default()
-                .with(filter_layer)
-                .with(crate::android_layer::AndroidLayer::default());
+            let android_layer = crate::android_layer::AndroidLayer::new(&self.app_name);
+
+            let subscriber = Registry::default().with(filter_layer).with(android_layer);
 
             tracing::subscriber::set_global_default(subscriber)
                 .expect("Failed to set tracing subscriber");
@@ -210,11 +359,29 @@ impl Logger {
         }
 
         // === iOS ===
+        // Uses tracing-oslog crate which integrates with Apple's unified logging system (os_log).
+        // Logs can be viewed in:
+        // - Xcode Console (when running from Xcode)
+        // - Console.app (macOS application)
+        // - Command line: `log stream --predicate 'subsystem == "com.flui.app"'`
+        //
+        // The subsystem identifier ("com.flui.app") should match your app's bundle ID
+        // for proper log organization. The category ("default") groups related logs.
+        //
+        // os_log advantages:
+        // - Native Apple platform integration
+        // - Efficient structured logging
+        // - Privacy-preserving by default
+        // - Integration with Apple's debugging tools
         #[cfg(target_os = "ios")]
         {
             use tracing_oslog::OsLogger;
 
-            let os_logger = OsLogger::new("com.flui.app", "default");
+            // Create os_log logger with subsystem and category
+            // Subsystem: Formatted as "com.{app_name}.app" for proper iOS identification
+            // Category: Logical grouping for logs (e.g., "network", "ui", "database")
+            let subsystem = format!("com.{}.app", self.app_name);
+            let os_logger = OsLogger::new(&subsystem, "default");
 
             let subscriber = Registry::default().with(filter_layer).with(os_logger);
 
@@ -225,10 +392,35 @@ impl Logger {
         }
 
         // === WASM ===
+        // Uses tracing-wasm crate which integrates with browser DevTools console.
+        // Leverages window.performance API for timing measurements.
+        //
+        // Requirements:
+        // - Browser environment (Chrome, Firefox, Safari, Edge)
+        // - Does NOT work in Node.js or Cloudflare Workers (no window.performance)
+        //
+        // Logs appear in browser DevTools console (F12):
+        // - TRACE/DEBUG → console.debug()
+        // - INFO → console.info()
+        // - WARN → console.warn()
+        // - ERROR → console.error()
+        //
+        // Features:
+        // - Color-coded output in DevTools
+        // - Performance marks and measures
+        // - Stack traces for errors
+        // - Interactive console exploration
+        //
+        // Note: WASMLayer uses window.performance.mark/measure for timing,
+        // so you can see span durations in the browser's Performance tab.
         #[cfg(target_arch = "wasm32")]
         {
             use tracing_wasm::WASMLayerConfigBuilder;
 
+            // Configure WASM layer with max level from Logger settings
+            // Additional configuration options:
+            // - set_report_logs_in_timings(bool) - Include logs in performance timeline
+            // - set_console_config(ConsoleConfig) - Customize console output format
             let wasm_layer = tracing_wasm::WASMLayer::new(
                 WASMLayerConfigBuilder::new()
                     .set_max_level(self.level)

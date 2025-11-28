@@ -1,10 +1,16 @@
 [package]
 name = "flui_log"
-version = "0.1.0"
-edition = "2021"
-license = "MIT OR Apache-2.0"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
 description = "Cross-platform logging for FLUI framework"
-repository = "https://github.com/vanyastaff/flui"
+repository.workspace = true
+keywords = ["logging", "tracing", "cross-platform", "android", "ios"]
+categories = ["development-tools::debugging", "development-tools::profiling"]
+
+[lints]
+workspace = true
 
 [dependencies]
 # Core tracing
@@ -12,9 +18,7 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 # Optional: Pretty hierarchical logging for desktop development
-tracing-forest = { version = "0.3", optional = true, features = ["ansi"] }
-
-# === Platform-specific dependencies ===
+tracing-forest = { workspace = true, optional = true }
 
 # Android: logcat integration
 [target.'cfg(target_os = "android")'.dependencies]
@@ -37,24 +41,3 @@ pretty = ["tracing-forest"]
 
 [dev-dependencies]
 tokio = { workspace = true }
-
-# ===================================================================
-# Usage Examples
-# ===================================================================
-#
-# 1. Basic usage (no pretty logging):
-#    [dependencies]
-#    flui_log = { path = "../flui_log" }
-#
-# 2. With pretty logging for development:
-#    [dependencies]
-#    flui_log = { path = "../flui_log", features = ["pretty"] }
-#
-# 3. Disable pretty logging in release builds:
-#    [dependencies]
-#    flui_log = { path = "../flui_log", features = ["pretty"] }
-#
-#    [profile.release]
-#    # Features are automatically disabled in release
-#
-# ===================================================================
