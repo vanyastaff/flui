@@ -57,8 +57,12 @@ pub mod context_ext;
 pub mod desktop;
 /// Custom error types for build operations
 pub mod error;
+/// Output parsers for build tools (cargo, gradle, wasm-pack)
+pub mod output_parser;
 /// Platform abstractions and core types
 pub mod platform;
+/// Build progress tracking and reporting
+pub mod progress;
 /// Utility functions and helpers
 pub mod util;
 /// Web/WASM platform build support

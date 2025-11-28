@@ -99,6 +99,7 @@ bitflags = "2.10"
 dyn-clone = "1.0"
 downcast-rs = "2.0.2"
 which = "5.0" # Command discovery - Used by flui_build
+indicatif = "0.17" # Progress bars - Used by flui_build
 
 # STRING INTERNING - Used by flui_assets
 lasso = { version = "0.7", features = ["multi-threaded"] }

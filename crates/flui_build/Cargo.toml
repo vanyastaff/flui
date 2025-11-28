@@ -18,6 +18,7 @@ tracing.workspace = true
 tokio = { workspace = true, features = ["process"] }
 which.workspace = true
 pollster.workspace = true
+indicatif.workspace = true  # Progress bars for build status
 
 [lints]
 workspace = true
