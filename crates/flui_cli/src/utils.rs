@@ -24,12 +24,9 @@ pub fn run_command(cmd: &str, args: &[&str], cwd: Option<&Path>) -> CliResult<St
         Ok(String::from_utf8_lossy(&output.stdout).to_string())
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(CliError::WithContext {
-            message: format!("Command failed: {}", stderr),
-            source: Box::new(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "Command execution failed",
-            )),
+        Err(CliError::CommandFailed {
+            context: format!("Command failed: {}", stderr),
+            exit_code: output.status.code(),
         })
     }
 }

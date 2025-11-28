@@ -1,11 +1,33 @@
-use crate::error::{CliError, CliResult, ResultExt};
-use crate::templates::TemplateGenerator;
+//! Project creation command.
+//!
+//! This module handles the `flui create` command for generating new FLUI projects.
+
+use crate::error::{CliResult, ResultExt};
+use crate::runner::{GitCommand, OutputStyle};
+use crate::templates::TemplateBuilder;
+use crate::types::{OrganizationId, ProjectName, ProjectPath};
 use crate::{Platform, Template};
 use console::style;
-use indicatif::{ProgressBar, ProgressStyle};
-use std::path::PathBuf;
-use std::process::Command;
+use std::path::{Path, PathBuf};
 
+/// Execute the create command.
+///
+/// # Arguments
+///
+/// * `name` - Project name (will be validated)
+/// * `org` - Organization ID in reverse domain notation
+/// * `template` - Template to use for project generation
+/// * `_platforms` - Target platforms (reserved for future use)
+/// * `path` - Optional custom output directory
+/// * `_is_lib` - Whether to create a library (reserved for future use)
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - Project name is invalid
+/// - Directory already exists
+/// - Template generation fails
+/// - Git initialization fails
 pub fn execute(
     name: String,
     org: String,
@@ -14,168 +36,100 @@ pub fn execute(
     path: Option<PathBuf>,
     _is_lib: bool,
 ) -> CliResult<()> {
-    println!(
-        "{}",
-        style(format!("Creating FLUI project '{}'...", name))
-            .green()
-            .bold()
+    // Validate and create type-safe wrappers
+    let project_name = ProjectName::new(&name)?;
+    let org_id = OrganizationId::new(&org)?;
+
+    cliclack::intro(style(" flui create ").on_cyan().black())?;
+    cliclack::log::info(format!("Project: {}", style(&project_name).cyan()))?;
+
+    // Create validated project path
+    let project_path = ProjectPath::new(&project_name, path)?;
+    let project_dir = project_path.as_path();
+
+    // Step 1: Create project directory
+    let spinner = cliclack::spinner();
+    spinner.start("Creating project directory...");
+    std::fs::create_dir_all(project_dir).context("Failed to create project directory")?;
+    spinner.stop(format!("{} Created project directory", style("✓").green()));
+
+    // Step 2: Generate project from template
+    cliclack::log::info(format!(
+        "Template: {}",
+        style(template.description()).cyan()
+    ))?;
+
+    let spinner = cliclack::spinner();
+    spinner.start("Generating project files...");
+    let _generated = TemplateBuilder::new(project_name.clone(), org_id)
+        .template(template)
+        .with_git(false)
+        .with_cargo_check(false)
+        .generate(project_dir)?;
+    spinner.stop(format!("{} Generated project files", style("✓").green()));
+
+    // Step 3: Initialize git repository
+    let spinner = cliclack::spinner();
+    spinner.start("Initializing git repository...");
+    init_git_repo(project_dir)?;
+    spinner.stop(format!("{} Initialized git repository", style("✓").green()));
+
+    // Step 4: Run cargo check
+    let spinner = cliclack::spinner();
+    spinner.start("Running cargo check (this may take a while)...");
+    run_cargo_check(project_dir)?;
+    spinner.stop(format!("{} Cargo check completed", style("✓").green()));
+
+    // Print next steps
+    let next_steps = format!(
+        "{}\n  {}\n  {}",
+        style("To get started:").bold(),
+        style(format!("cd {}", project_name)).dim(),
+        style("flui run").dim(),
     );
-    println!();
+    cliclack::note("Next Steps", next_steps)?;
 
-    // Validate project name
-    validate_project_name(&name)?;
-
-    // Determine project directory
-    let project_dir = if let Some(custom_path) = path {
-        custom_path.join(&name)
-    } else {
-        PathBuf::from(&name)
-    };
-
-    // Check if directory exists
-    if project_dir.exists() {
-        return Err(CliError::DirectoryExists {
-            path: project_dir,
-        });
-    }
-
-    // Create progress spinner
-    let spinner = ProgressBar::new_spinner();
-    spinner.set_style(
-        ProgressStyle::default_spinner()
-            .template("{spinner:.green} {msg}")
-            .unwrap(),
-    );
-
-    // Create project directory
-    spinner.set_message("Creating project directory...");
-    std::fs::create_dir_all(&project_dir).context("Failed to create project directory")?;
-
-    spinner.finish_and_clear();
-
-    // Generate project from template
-    let template_gen = TemplateGenerator::new(name.clone(), org.clone());
-
-    println!("  {} Using template: {:?}", style("✓").green(), template);
-
-    let spinner = ProgressBar::new_spinner();
-    spinner.set_style(
-        ProgressStyle::default_spinner()
-            .template("{spinner:.green} {msg}")
-            .unwrap(),
-    );
-    spinner.set_message("Generating project files...");
-
-    match template {
-        Template::Counter => template_gen.generate_counter(&project_dir)?,
-        Template::Basic => template_gen.generate_basic(&project_dir)?,
-        Template::Todo => template_gen.generate_todo(&project_dir)?,
-        Template::Dashboard => template_gen.generate_dashboard(&project_dir)?,
-        Template::Widget => template_gen.generate_widget(&project_dir)?,
-        Template::Plugin => template_gen.generate_plugin(&project_dir)?,
-        Template::Empty => template_gen.generate_empty(&project_dir)?,
-    }
-
-    spinner.finish_and_clear();
-
-    // Initialize git repository
-    let spinner = ProgressBar::new_spinner();
-    spinner.set_style(
-        ProgressStyle::default_spinner()
-            .template("{spinner:.green} {msg}")
-            .unwrap(),
-    );
-    spinner.set_message("Initializing git repository...");
-    init_git_repo(&project_dir)?;
-    spinner.finish_and_clear();
-    println!("  {} Initialized git repository", style("✓").green());
-
-    // Run cargo check to ensure dependencies are valid
-    let spinner = ProgressBar::new_spinner();
-    spinner.set_style(
-        ProgressStyle::default_spinner()
-            .template("{spinner:.green} {msg}")
-            .unwrap(),
-    );
-    spinner.set_message("Running cargo check (this may take a while)...");
-    run_cargo_check(&project_dir)?;
-    spinner.finish_and_clear();
-    println!("  {} Cargo check completed", style("✓").green());
-
-    println!();
-    println!(
-        "{}",
-        style(format!("✓ Successfully created FLUI project '{}'", name))
-            .green()
-            .bold()
-    );
-    println!();
-    println!("To get started:");
-    println!(
-        "  {} {}",
-        style("$").dim(),
-        style(format!("cd {}", name)).cyan()
-    );
-    println!("  {} {}", style("$").dim(), style("flui run").cyan());
-    println!();
+    cliclack::outro(style(format!("Successfully created '{}'", project_name)).green())?;
 
     Ok(())
 }
 
-fn validate_project_name(name: &str) -> CliResult<()> {
-    if name.is_empty() {
-        return Err(CliError::InvalidProjectName {
-            name: name.to_string(),
-            reason: "Project name cannot be empty".to_string(),
-        });
-    }
-
-    if !name
-        .chars()
-        .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
-    {
-        return Err(CliError::InvalidProjectName {
-            name: name.to_string(),
-            reason: "Project name must contain only alphanumeric characters, hyphens, and underscores".to_string(),
-        });
-    }
-
-    if name.starts_with(|c: char| c.is_numeric()) {
-        return Err(CliError::InvalidProjectName {
-            name: name.to_string(),
-            reason: "Project name cannot start with a number".to_string(),
-        });
-    }
-
-    // Reserved Rust keywords
-    const RESERVED: &[&str] = &[
-        "abstract", "as", "async", "await", "become", "box", "break", "const", "continue", "crate",
-        "do", "dyn", "else", "enum", "extern", "false", "final", "fn", "for", "if", "impl", "in",
-        "let", "loop", "macro", "match", "mod", "move", "mut", "override", "priv", "pub", "ref",
-        "return", "self", "Self", "static", "struct", "super", "trait", "true", "type", "typeof",
-        "unsafe", "unsized", "use", "virtual", "where", "while", "yield",
-    ];
-
-    if RESERVED.contains(&name) {
-        return Err(CliError::InvalidProjectName {
-            name: name.to_string(),
-            reason: format!("Project name cannot be a Rust keyword: {}", name),
-        });
-    }
-
-    Ok(())
-}
-
-fn init_git_repo(dir: &PathBuf) -> CliResult<()> {
-    // Initialize git
-    Command::new("git")
-        .args(["init"])
-        .current_dir(dir)
-        .output()
-        .context("Failed to initialize git repository")?;
+/// Initialize a git repository in the project directory.
+fn init_git_repo(dir: &Path) -> CliResult<()> {
+    GitCommand::init()
+        .output_style(OutputStyle::Silent)
+        .run()
+        .ok(); // Ignore git init errors (git might not be installed)
 
     // Create .gitignore
-    let gitignore = r"# Build artifacts
+    std::fs::write(dir.join(".gitignore"), GITIGNORE_TEMPLATE)
+        .context("Failed to create .gitignore")?;
+
+    Ok(())
+}
+
+/// Run cargo check to validate the generated project.
+fn run_cargo_check(dir: &Path) -> CliResult<()> {
+    use std::process::Command;
+
+    let output = Command::new("cargo")
+        .args(["check", "--quiet"])
+        .current_dir(dir)
+        .output()
+        .context("Failed to run cargo check")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let _ = cliclack::log::warning("cargo check reported issues:");
+        eprintln!("{}", stderr);
+        let _ = cliclack::log::remark("The project was created but may need fixes.");
+    }
+
+    Ok(())
+}
+
+/// Template for .gitignore file.
+const GITIGNORE_TEMPLATE: &str = r"# Build artifacts
 /target
 /build
 
@@ -204,32 +158,3 @@ flui.lock
 *.pdb
 Cargo.lock
 ";
-
-    std::fs::write(dir.join(".gitignore"), gitignore).context("Failed to create .gitignore")?;
-
-    Ok(())
-}
-
-fn run_cargo_check(dir: &PathBuf) -> CliResult<()> {
-    let output = Command::new("cargo")
-        .args(["check", "--quiet"])
-        .current_dir(dir)
-        .output()
-        .context("Failed to run cargo check")?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        eprintln!(
-            "\n{}",
-            style("Warning: cargo check reported issues:").yellow()
-        );
-        eprintln!("{}", stderr);
-        eprintln!(
-            "{}",
-            style("The project was created but may need fixes.").yellow()
-        );
-    }
-
-    Ok(())
-}
-

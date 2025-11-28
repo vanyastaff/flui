@@ -1,37 +1,40 @@
-use crate::error::{CliError, CliResult, ResultExt};
+//! Analyze command for code linting.
+//!
+//! Wraps `cargo clippy` with workspace support, pedantic mode,
+//! and auto-fix capabilities.
+
+use crate::error::CliResult;
+use crate::runner::{CargoCommand, OutputStyle};
 use console::style;
-use std::process::Command;
 
+/// Execute the analyze command.
+///
+/// # Arguments
+///
+/// * `fix` - Automatically fix issues where possible
+/// * `pedantic` - Enable pedantic lints
+///
+/// # Errors
+///
+/// Returns `CliError::AnalysisFailed` if clippy finds issues.
 pub fn execute(fix: bool, pedantic: bool) -> CliResult<()> {
-    println!("{}", style("Analyzing code...").green().bold());
-    println!();
+    cliclack::intro(style(" flui analyze ").on_blue().black())?;
 
-    let mut cmd = Command::new("cargo");
-    cmd.arg("clippy");
-    cmd.arg("--workspace");
-    cmd.arg("--");
-    cmd.arg("-D").arg("warnings");
+    let mut cmd = CargoCommand::clippy().workspace().deny_warnings();
 
     if pedantic {
-        cmd.arg("-W").arg("clippy::pedantic");
-        println!("  {} Pedantic mode enabled", style("→").cyan());
+        cmd = cmd.pedantic();
+        cliclack::log::info(format!("Pedantic mode: {}", style("enabled").cyan()))?;
     }
 
     if fix {
-        println!("  {} Auto-fixing issues...", style("→").cyan());
-        cmd.arg("--fix");
+        cmd = cmd.fix();
+        cliclack::log::info("Auto-fixing issues...")?;
     }
 
-    println!();
+    cmd.output_style(OutputStyle::Streaming).run()?;
 
-    let status = cmd.status().context("Failed to run cargo clippy")?;
-
-    if !status.success() {
-        return Err(CliError::AnalysisIssues);
-    }
-
-    println!();
-    println!("{}", style("✓ No issues found").green().bold());
+    cliclack::outro(style("Analysis complete - no issues found").green())?;
 
     Ok(())
 }

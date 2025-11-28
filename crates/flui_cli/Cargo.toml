@@ -8,6 +8,7 @@ authors.workspace = true
 repository.workspace = true
 description = "Command-line interface for FLUI - Project creation, building, and deployment automation"
 keywords = ["cli", "flui", "ui", "cross-platform", "build-tool"]
+categories = ["command-line-utilities", "development-tools", "gui"]
 
 [[bin]]
 name = "flui"
@@ -29,13 +30,14 @@ thiserror = { workspace = true }
 
 # Serialization
 serde = { workspace = true }
+
+tracing = { workspace = true }
 toml = "0.9"
 
 # Utilities
 which = "8.0"
-indicatif = "0.18"
-console = "0.16"
-dialoguer = "0.12"
+cliclack = "0.3.6"
+console = "0.15"
 dirs = "5.0"
 
 [dev-dependencies]

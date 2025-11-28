@@ -1,195 +1,156 @@
 # FLUI CLI
 
-**Command-line interface for FLUI** - Project creation, building, and deployment automation.
+Command-line interface for the FLUI framework.
 
 [![Crates.io](https://img.shields.io/crates/v/flui_cli.svg)](https://crates.io/crates/flui_cli)
-[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](../LICENSE)
-
-## Overview
-
-`flui_cli` is a command-line tool that provides a Flutter-like developer experience for FLUI applications. It handles project scaffolding, building, running, testing, and deployment across multiple platforms.
+[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](../../LICENSE-MIT)
 
 ## Installation
 
-### From source
-
-```bash
-# Clone the repository
-git clone https://github.com/vanyastaff/flui.git
-cd flui
-
-# Install CLI globally
-cargo install --path crates/flui_cli
-
-# Verify installation
-flui --version
-```
-
-### From crates.io (when published)
-
 ```bash
 cargo install flui_cli
-flui --version
+```
+
+Or build from source:
+
+```bash
+git clone https://github.com/vanyastaff/flui.git
+cd flui
+cargo install --path crates/flui_cli
 ```
 
 ## Quick Start
 
-### Create a new project
-
 ```bash
-# Create a counter app (default template)
+# Create a new project
 flui create my_app
 
-# Create with custom organization
-flui create my_app --org com.mycompany
+# Run in development mode
+cd my_app
+flui run
 
-# Create with specific template
-flui create my_app --template basic
+# Build for production
+flui build desktop --release
 ```
 
-### Run your app
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| `flui create <name>` | Create a new FLUI project |
+| `flui run` | Run the application |
+| `flui build <platform>` | Build for target platform |
+| `flui test` | Run tests |
+| `flui analyze` | Run clippy analysis |
+| `flui format` | Format source code |
+| `flui clean` | Clean build artifacts |
+| `flui doctor` | Check environment setup |
+| `flui devices` | List available devices |
+| `flui upgrade` | Update CLI and dependencies |
+| `flui platform` | Manage platform support |
+| `flui completions` | Generate shell completions |
+
+## Project Creation
 
 ```bash
-cd my_app
+# Default counter template
+flui create my_app
 
-# Run in debug mode with hot reload
+# With organization ID
+flui create my_app --org com.example
+
+# Specific template
+flui create my_app --template basic
+
+# Skip git initialization
+flui create my_app --no-git
+```
+
+### Templates
+
+- **counter** (default) - Counter app with state management
+- **basic** - Minimal "Hello, FLUI!" application
+- **todo** - Todo list application (planned)
+- **dashboard** - Dashboard with multiple widgets (planned)
+
+## Building
+
+```bash
+# Desktop (current platform)
+flui build desktop --release
+
+# Android
+flui build android --release
+flui build android --release --split-per-abi
+
+# iOS
+flui build ios --release
+flui build ios --release --universal
+
+# Web
+flui build web --release
+flui build web --release --optimize-wasm
+```
+
+## Development
+
+```bash
+# Run with hot reload
 flui run
 
 # Run in release mode
 flui run --release
+
+# Run on specific device
+flui run --device pixel_5
 ```
 
-### Build for production
+## Code Quality
 
 ```bash
-# Build for current desktop platform
-flui build desktop --release
+# Run tests
+flui test
 
-# Build for Android
-flui build android --release
+# Analyze with clippy
+flui analyze
+flui analyze --fix
 
-# Build for Web
-flui build web --release
+# Format code
+flui format
+flui format --check
 ```
 
-## Available Commands
+## Environment
 
-### Project Management
-
-- **`flui create <name>`** - Create a new FLUI project
-  - `--org <ORG>` - Organization name (reverse domain notation)
-  - `--template <TEMPLATE>` - Project template (counter, basic, todo, dashboard)
-  - `--platforms <PLATFORMS>` - Target platforms (comma-separated)
-
-### Development
-
-- **`flui run`** - Run the application
-  - `-r, --release` - Build in release mode
-  - `--device <DEVICE>` - Target device
-  - `--hot-reload` - Enable hot reload (default: true)
-
-- **`flui test`** - Run tests
-  - `--unit` - Run unit tests only
-  - `--integration` - Run integration tests only
-
-- **`flui analyze`** - Analyze code for issues
-  - `--fix` - Automatically fix issues
-  - `--pedantic` - Enable pedantic lints
-
-- **`flui format`** - Format source code
-  - `--check` - Check formatting without modifying files
-
-### Build & Deploy
-
-- **`flui build <platform>`** - Build for target platform
-  - Platforms: `android`, `ios`, `web`, `windows`, `linux`, `macos`, `desktop`
-  - `-r, --release` - Build in release mode
-  - `-o, --output <PATH>` - Output directory
-  - `--split-per-abi` - Android: Create separate APKs per ABI
-  - `--optimize-wasm` - Web: Optimize WASM size
-  - `--universal` - iOS: Build universal binary
-
-### Utilities
-
-- **`flui doctor`** - Check environment setup
-  - `-v, --verbose` - Show detailed information
-  - `--android` - Check only Android toolchain
-  - `--ios` - Check only iOS toolchain
-  - `--web` - Check only Web toolchain
-
-- **`flui devices`** - List available devices
-  - `--details` - Show detailed device information
-
-- **`flui clean`** - Clean build artifacts
-  - `--deep` - Deep clean (including cargo caches)
-
-- **`flui upgrade`** - Update flui_cli and dependencies
-  - `--self` - Update flui_cli only
-  - `--dependencies` - Update project dependencies only
-
-- **`flui platform`** - Manage platform support
-  - `add <platform>` - Add platform support
-  - `remove <platform>` - Remove platform support
-  - `list` - List supported platforms
-
-## Project Templates
-
-### Counter (default)
-A simple counter app demonstrating state management with hooks.
-
-```bash
-flui create my_counter --template counter
-```
-
-### Basic
-A minimal FLUI application with just a "Hello, FLUI!" message.
-
-```bash
-flui create my_app --template basic
-```
-
-### Todo (planned)
-A todo list app demonstrating lists, state management, and user input.
-
-### Dashboard (planned)
-A dashboard UI with multiple widgets and complex layouts.
-
-## Environment Setup
-
-### Check your environment
+Check your development environment:
 
 ```bash
 flui doctor
+flui doctor --verbose
+flui doctor --android
 ```
 
-This will check for:
-- ✓ Rust installation
-- ✓ Cargo package manager
-- ✓ FLUI CLI version
-- ✓ Platform-specific tools (Android SDK, Xcode, etc.)
-- ✓ wgpu support
+### Requirements
 
-### Platform-specific requirements
+**Desktop:**
+- Rust 1.75+
+- Platform build tools (MSVC, GCC, or Xcode)
 
 **Android:**
 - Android SDK
-- Android NDK (r25+)
-- Java Development Kit (JDK 11+)
+- Android NDK r25+
+- JDK 11+
 
 **iOS (macOS only):**
 - Xcode 14+
-- iOS deployment target 13.0+
 
 **Web:**
-- wasm-pack (optional but recommended)
-- Modern browser with WebGPU support
-
-**Desktop:**
-- Platform build tools (MSVC/GCC/Xcode)
+- wasm-pack (optional)
+- Browser with WebGPU support
 
 ## Configuration
 
-### Project configuration (flui.toml)
+### Project (flui.toml)
 
 ```toml
 [app]
@@ -202,12 +163,9 @@ target_platforms = ["windows", "linux", "macos"]
 
 [assets]
 directories = ["assets"]
-
-[fonts]
-# Custom fonts configuration
 ```
 
-### Global configuration (~/.flui/config.toml)
+### Global (~/.flui/config.toml)
 
 ```toml
 [sdk]
@@ -218,103 +176,24 @@ jobs = 4
 
 [devtools]
 port = 9100
-auto_launch = true
 ```
 
-## Examples
-
-### Development workflow
+## Shell Completions
 
 ```bash
-# Create project
-flui create my_app --template counter
+# Bash
+flui completions bash > ~/.local/share/bash-completion/completions/flui
 
-# Navigate to project
-cd my_app
+# Zsh
+flui completions zsh > ~/.zfunc/_flui
 
-# Run with hot reload
-flui run
+# Fish
+flui completions fish > ~/.config/fish/completions/flui.fish
 
-# Make changes to src/main.rs (automatically reloads)
-
-# Test
-flui test
-
-# Analyze code
-flui analyze
-
-# Format code
-flui format
+# PowerShell
+flui completions powershell >> $PROFILE
 ```
-
-### Release workflow
-
-```bash
-# Clean previous builds
-flui clean
-
-# Run tests
-flui test
-
-# Analyze code
-flui analyze
-
-# Build for multiple platforms
-flui build android --release
-flui build web --release --optimize-wasm
-flui build desktop --release
-
-# Verify builds
-ls target/flui-out/
-```
-
-## Troubleshooting
-
-### "flui: command not found"
-
-```bash
-# Ensure cargo bin is in PATH
-export PATH="$HOME/.cargo/bin:$PATH"
-
-# Reinstall
-cargo install --path crates/flui_cli --force
-```
-
-### "Android SDK not found"
-
-```bash
-# Set ANDROID_HOME
-export ANDROID_HOME="$HOME/Android/Sdk"
-
-# Verify
-flui doctor --android
-```
-
-### "Not a FLUI project"
-
-Make sure you're in a directory with `Cargo.toml` and FLUI dependencies.
-
-## Contributing
-
-Contributions are welcome! See [CONTRIBUTING.md](../../CONTRIBUTING.md) for guidelines.
 
 ## License
 
-Licensed under either of:
-
-- Apache License, Version 2.0 ([LICENSE-APACHE](../../LICENSE-APACHE))
-- MIT license ([LICENSE-MIT](../../LICENSE-MIT))
-
-at your option.
-
-## Resources
-
-- [FLUI Documentation](../../docs/)
-- [Examples](../../examples/)
-- [GitHub Repository](https://github.com/vanyastaff/flui)
-
----
-
-**Built with ❤️ in Rust**
-
-*Making cross-platform Rust UI development delightful*
+MIT OR Apache-2.0

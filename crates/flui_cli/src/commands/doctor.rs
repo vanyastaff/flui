@@ -1,219 +1,218 @@
+//! Doctor command for checking FLUI environment setup.
+//!
+//! Verifies that all required tools and SDKs are properly installed.
+
 use crate::error::CliResult;
 use console::style;
 use std::process::Command;
 
+/// Execute the doctor command.
+///
+/// # Arguments
+///
+/// * `verbose` - Show detailed information
+/// * `android` - Check only Android toolchain
+/// * `ios` - Check only iOS toolchain
+/// * `web` - Check only Web toolchain
 pub fn execute(verbose: bool, android: bool, ios: bool, web: bool) -> CliResult<()> {
-    println!("{}", style("Checking FLUI environment...").green().bold());
-    println!();
+    cliclack::intro(style(" flui doctor ").on_cyan().black())?;
 
+    let mut results = Vec::new();
     let mut all_ok = true;
 
-    // Check Rust installation
-    all_ok &= check_rust(verbose);
-
-    // Check Cargo
-    all_ok &= check_cargo(verbose);
-
-    // Check FLUI installation
-    all_ok &= check_flui(verbose);
+    // Core checks (always run)
+    results.push(check_rust(verbose, &mut all_ok));
+    results.push(check_cargo(&mut all_ok));
+    results.push(check_flui());
 
     // Platform-specific checks
-    if android || (!ios && !web) {
-        all_ok &= check_java(verbose);
-        all_ok &= check_android(verbose);
+    let check_all = !android && !ios && !web;
+
+    if android || check_all {
+        results.push(check_java(verbose, &mut all_ok));
+        results.push(check_android(verbose, &mut all_ok));
     }
 
-    if ios || (!android && !web) {
+    if ios || check_all {
         #[cfg(target_os = "macos")]
         {
-            all_ok &= check_ios(verbose);
+            results.push(check_ios(verbose, &mut all_ok));
         }
         #[cfg(not(target_os = "macos"))]
         {
             if ios {
-                println!(
-                    "{} iOS: Not available on non-macOS platforms",
-                    style("[!]").yellow()
-                );
+                results.push(format!(
+                    "{} iOS: Not available on non-macOS",
+                    style("⚠").yellow()
+                ));
             }
         }
     }
 
-    if web || (!android && !ios) {
-        all_ok &= check_web(verbose);
+    if web || check_all {
+        results.push(check_web(&mut all_ok));
     }
 
     // Check wgpu support
-    all_ok &= check_wgpu(verbose);
+    results.push(check_wgpu(verbose));
 
-    println!();
+    // Display all results
+    let output = results.join("\n");
+    cliclack::note("Environment Check", output)?;
 
     if all_ok {
-        println!("{}", style("✓ All checks passed!").green().bold());
+        cliclack::outro(style("All checks passed!").green())?;
     } else {
-        println!(
-            "{}",
-            style("✗ Some checks failed. Please fix the issues above.")
-                .yellow()
-                .bold()
-        );
+        cliclack::outro_cancel("Some checks failed. Please fix the issues above.")?;
     }
 
     Ok(())
 }
 
-fn check_rust(verbose: bool) -> bool {
-    print!("{} Rust: ", style("[✓]").green());
-
+fn check_rust(verbose: bool, all_ok: &mut bool) -> String {
     match Command::new("rustc").arg("--version").output() {
         Ok(output) => {
             let version = String::from_utf8_lossy(&output.stdout);
-            let version = version.trim();
-            println!("{}", style(version).cyan());
+            let mut result = format!(
+                "{} Rust: {}",
+                style("✓").green(),
+                style(version.trim()).cyan()
+            );
 
             if verbose {
                 if let Ok(path) = which::which("rustc") {
-                    println!("    Path: {}", style(path.display()).dim());
+                    result.push_str(&format!("\n  Path: {}", style(path.display()).dim()));
                 }
             }
-
-            true
+            result
         }
         Err(_) => {
-            println!("{}", style("Not found").red());
-            println!("    Please install Rust: https://rustup.rs/");
-            false
+            *all_ok = false;
+            format!(
+                "{} Rust: {}\n  {}",
+                style("✗").red(),
+                style("Not found").red(),
+                style("Install from https://rustup.rs/").dim()
+            )
         }
     }
 }
 
-fn check_cargo(_verbose: bool) -> bool {
-    print!("{} Cargo: ", style("[✓]").green());
-
+fn check_cargo(all_ok: &mut bool) -> String {
     match Command::new("cargo").arg("--version").output() {
         Ok(output) => {
             let version = String::from_utf8_lossy(&output.stdout);
-            println!("{}", style(version.trim()).cyan());
-            true
+            format!(
+                "{} Cargo: {}",
+                style("✓").green(),
+                style(version.trim()).cyan()
+            )
         }
         Err(_) => {
-            println!("{}", style("Not found").red());
-            false
+            *all_ok = false;
+            format!("{} Cargo: {}", style("✗").red(), style("Not found").red())
         }
     }
 }
 
-fn check_flui(verbose: bool) -> bool {
-    print!("{} FLUI CLI: ", style("[✓]").green());
-
-    let flui_version = env!("CARGO_PKG_VERSION");
-    println!("{}", style(format!("v{}", flui_version)).cyan());
-
-    if verbose {
-        println!("    Location: {}", style(env!("CARGO_MANIFEST_DIR")).dim());
-    }
-
-    true
+fn check_flui() -> String {
+    let version = env!("CARGO_PKG_VERSION");
+    format!(
+        "{} FLUI CLI: {}",
+        style("✓").green(),
+        style(format!("v{}", version)).cyan()
+    )
 }
 
-fn check_java(verbose: bool) -> bool {
-    print!("{} Java (JDK): ", style("[✓]").green());
-
+fn check_java(verbose: bool, all_ok: &mut bool) -> String {
     match Command::new("java").arg("-version").output() {
         Ok(output) => {
-            // Java outputs version to stderr
             let version_output = String::from_utf8_lossy(&output.stderr);
-
-            // Extract version from output like "java version \"11.0.12\""
             if let Some(line) = version_output.lines().next() {
-                println!("{}", style(line.trim()).cyan());
+                let mut result =
+                    format!("{} Java: {}", style("✓").green(), style(line.trim()).cyan());
 
                 if verbose {
-                    // Check JAVA_HOME
                     if let Ok(java_home) = std::env::var("JAVA_HOME") {
-                        println!("    JAVA_HOME: {}", style(&java_home).dim());
-                    } else {
-                        println!("    JAVA_HOME: {}", style("Not set").yellow());
-                    }
-
-                    // Get java path
-                    if let Ok(path) = which::which("java") {
-                        println!("    Path: {}", style(path.display()).dim());
+                        result.push_str(&format!("\n  JAVA_HOME: {}", style(java_home).dim()));
                     }
                 }
 
-                // Check if version is 11 or higher
                 if version_output.contains("version \"1.8") {
-                    println!(
-                        "    {}: Java 11+ recommended for Android development",
-                        style("Warning").yellow()
-                    );
-                    return true; // Still works, just warn
+                    result.push_str(&format!("\n  {}", style("⚠ Java 11+ recommended").yellow()));
                 }
-
-                true
+                result
             } else {
-                println!("{}", style("Version not detected").yellow());
-                true
+                format!(
+                    "{} Java: {}",
+                    style("⚠").yellow(),
+                    style("Version not detected").yellow()
+                )
             }
         }
         Err(_) => {
-            println!("{}", style("Not found").red());
-            println!("    Java 11+ is required for Android development");
-            println!("    Download from: https://adoptium.net/");
-            false
+            *all_ok = false;
+            format!(
+                "{} Java: {}\n  {}",
+                style("✗").red(),
+                style("Not found").red(),
+                style("Download from https://adoptium.net/").dim()
+            )
         }
     }
 }
 
-fn check_android(verbose: bool) -> bool {
-    let mut android_ok = true;
+fn check_android(verbose: bool, all_ok: &mut bool) -> String {
+    let mut results = Vec::new();
 
     // Check ANDROID_HOME
-    print!("{} Android SDK: ", style("[✓]").green());
     if let Ok(android_home) = std::env::var("ANDROID_HOME") {
         let sdk_path = std::path::Path::new(&android_home);
         if sdk_path.exists() {
-            println!("{}", style(&android_home).cyan());
+            results.push(format!(
+                "{} Android SDK: {}",
+                style("✓").green(),
+                style(&android_home).cyan()
+            ));
 
             if verbose {
-                // Check for NDK
                 let ndk_path = sdk_path.join("ndk");
                 if ndk_path.exists() {
-                    println!("    NDK: {}", style("Installed").green());
+                    results.push(format!("  {} NDK installed", style("✓").green()));
                 } else {
-                    println!("    NDK: {}", style("Not found").yellow());
-                    android_ok = false;
-                }
-
-                // Check for platform-tools
-                let platform_tools = sdk_path.join("platform-tools");
-                if platform_tools.exists() {
-                    println!("    Platform tools: {}", style("Installed").green());
-                } else {
-                    println!("    Platform tools: {}", style("Not found").yellow());
+                    results.push(format!("  {} NDK not found", style("⚠").yellow()));
                 }
             }
         } else {
-            println!("{}", style("Path not found").yellow());
-            println!("    ANDROID_HOME set to: {}", android_home);
-            println!("    But directory doesn't exist");
-            android_ok = false;
+            *all_ok = false;
+            results.push(format!(
+                "{} Android SDK: {}",
+                style("⚠").yellow(),
+                style("Path not found").yellow()
+            ));
         }
     } else {
-        println!("{}", style("Not configured").yellow());
-        println!("    Please set ANDROID_HOME environment variable");
-        println!("    Example: export ANDROID_HOME=$HOME/Android/Sdk");
-        android_ok = false;
+        *all_ok = false;
+        results.push(format!(
+            "{} Android SDK: {}\n  {}",
+            style("⚠").yellow(),
+            style("Not configured").yellow(),
+            style("Set ANDROID_HOME environment variable").dim()
+        ));
     }
 
     // Check Android Rust targets
+    results.push(check_android_targets(all_ok));
+
+    results.join("\n")
+}
+
+fn check_android_targets(all_ok: &mut bool) -> String {
     if let Ok(output) = Command::new("rustup")
         .args(["target", "list", "--installed"])
         .output()
     {
         let targets = String::from_utf8_lossy(&output.stdout);
-
         let android_targets = [
             "aarch64-linux-android",
             "armv7-linux-androideabi",
@@ -221,122 +220,148 @@ fn check_android(verbose: bool) -> bool {
             "x86_64-linux-android",
         ];
 
-        let mut missing_targets = Vec::new();
-        for target in &android_targets {
-            if !targets.contains(target) {
-                missing_targets.push(*target);
-            }
-        }
+        let missing: Vec<&str> = android_targets
+            .iter()
+            .filter(|t| !targets.contains(*t))
+            .copied()
+            .collect();
 
-        if missing_targets.is_empty() {
-            print!("{} Android targets: ", style("[✓]").green());
-            println!("{}", style("All installed").green());
+        if missing.is_empty() {
+            format!(
+                "{} Android targets: {}",
+                style("✓").green(),
+                style("All installed").cyan()
+            )
         } else {
-            print!("{} Android targets: ", style("[!]").yellow());
-            println!("{}", style("Missing some targets").yellow());
-            for target in &missing_targets {
-                println!("    Missing: {}", style(target).yellow());
-            }
-            println!(
-                "    Install with: rustup target add {}",
-                missing_targets.join(" ")
+            *all_ok = false;
+            let mut result = format!(
+                "{} Android targets: {}",
+                style("⚠").yellow(),
+                style("Missing").yellow()
             );
-            android_ok = false;
+            for target in &missing {
+                result.push_str(&format!("\n  {} {}", style("⚠").yellow(), target));
+            }
+            result.push_str(&format!(
+                "\n  {}",
+                style(format!("rustup target add {}", missing.join(" "))).dim()
+            ));
+            result
         }
+    } else {
+        String::new()
     }
-
-    android_ok
 }
 
 #[cfg(target_os = "macos")]
-fn check_ios(verbose: bool) -> bool {
-    let mut ios_ok = true;
+fn check_ios(verbose: bool, all_ok: &mut bool) -> String {
+    let mut results = Vec::new();
 
-    // Check Xcode
-    print!("{} Xcode: ", style("[✓]").green());
     match Command::new("xcode-select").arg("-p").output() {
         Ok(output) => {
             if output.status.success() {
                 let path = String::from_utf8_lossy(&output.stdout);
-                println!("{}", style("Installed").green());
+                results.push(format!(
+                    "{} Xcode: {}",
+                    style("✓").green(),
+                    style("Installed").cyan()
+                ));
 
                 if verbose {
-                    println!("    Path: {}", style(path.trim()).dim());
+                    results.push(format!("  Path: {}", style(path.trim()).dim()));
                 }
             } else {
-                println!("{}", style("Not found").red());
-                println!("    Install with: xcode-select --install");
-                ios_ok = false;
+                *all_ok = false;
+                results.push(format!(
+                    "{} Xcode: {}\n  {}",
+                    style("✗").red(),
+                    style("Not found").red(),
+                    style("xcode-select --install").dim()
+                ));
             }
         }
         Err(_) => {
-            println!("{}", style("Not found").red());
-            println!("    Install with: xcode-select --install");
-            ios_ok = false;
+            *all_ok = false;
+            results.push(format!(
+                "{} Xcode: {}",
+                style("✗").red(),
+                style("Not found").red()
+            ));
         }
     }
 
-    // Check iOS Rust targets
+    results.push(check_ios_targets(all_ok));
+    results.join("\n")
+}
+
+#[cfg(target_os = "macos")]
+fn check_ios_targets(all_ok: &mut bool) -> String {
     if let Ok(output) = Command::new("rustup")
         .args(["target", "list", "--installed"])
         .output()
     {
         let targets = String::from_utf8_lossy(&output.stdout);
-
         let ios_targets = [
             "aarch64-apple-ios",
             "aarch64-apple-ios-sim",
             "x86_64-apple-ios",
         ];
 
-        let mut missing_targets = Vec::new();
-        for target in &ios_targets {
-            if !targets.contains(target) {
-                missing_targets.push(*target);
-            }
-        }
+        let missing: Vec<&str> = ios_targets
+            .iter()
+            .filter(|t| !targets.contains(*t))
+            .copied()
+            .collect();
 
-        if missing_targets.is_empty() {
-            print!("{} iOS targets: ", style("[✓]").green());
-            println!("{}", style("All installed").green());
+        if missing.is_empty() {
+            format!(
+                "{} iOS targets: {}",
+                style("✓").green(),
+                style("All installed").cyan()
+            )
         } else {
-            print!("{} iOS targets: ", style("[!]").yellow());
-            println!("{}", style("Missing some targets").yellow());
-            for target in &missing_targets {
-                println!("    Missing: {}", style(target).yellow());
-            }
-            println!(
-                "    Install with: rustup target add {}",
-                missing_targets.join(" ")
+            *all_ok = false;
+            let mut result = format!(
+                "{} iOS targets: {}",
+                style("⚠").yellow(),
+                style("Missing").yellow()
             );
-            ios_ok = false;
+            for target in &missing {
+                result.push_str(&format!("\n  {} {}", style("⚠").yellow(), target));
+            }
+            result
         }
+    } else {
+        String::new()
     }
-
-    ios_ok
 }
 
 #[cfg(not(target_os = "macos"))]
 #[allow(dead_code)]
-fn check_ios(_verbose: bool) -> bool {
-    true // Skip on non-macOS
+fn check_ios(_verbose: bool, _all_ok: &mut bool) -> String {
+    String::new()
 }
 
-fn check_web(_verbose: bool) -> bool {
-    let mut web_ok = true;
+fn check_web(all_ok: &mut bool) -> String {
+    let mut results = Vec::new();
 
     // Check wasm-pack
-    print!("{} wasm-pack: ", style("[✓]").green());
     match Command::new("wasm-pack").arg("--version").output() {
         Ok(output) => {
             let version = String::from_utf8_lossy(&output.stdout);
-            println!("{}", style(version.trim()).cyan());
+            results.push(format!(
+                "{} wasm-pack: {}",
+                style("✓").green(),
+                style(version.trim()).cyan()
+            ));
         }
         Err(_) => {
-            println!("{}", style("Not found").yellow());
-            println!("    Install with: cargo install wasm-pack");
-            println!("    Note: wasm-pack is optional but recommended for Web builds");
-            // Not critical, don't mark as failure
+            results.push(format!(
+                "{} wasm-pack: {}\n  {}",
+                style("⚠").yellow(),
+                style("Not found (optional)").yellow(),
+                style("cargo install wasm-pack").dim()
+            ));
         }
     }
 
@@ -346,48 +371,35 @@ fn check_web(_verbose: bool) -> bool {
         .output()
     {
         let targets = String::from_utf8_lossy(&output.stdout);
-
         if targets.contains("wasm32-unknown-unknown") {
-            print!("{} WASM target: ", style("[✓]").green());
-            println!("{}", style("Installed").green());
+            results.push(format!(
+                "{} WASM target: {}",
+                style("✓").green(),
+                style("Installed").cyan()
+            ));
         } else {
-            print!("{} WASM target: ", style("[!]").yellow());
-            println!("{}", style("Not installed").yellow());
-            println!("    Install with: rustup target add wasm32-unknown-unknown");
-            web_ok = false;
+            *all_ok = false;
+            results.push(format!(
+                "{} WASM target: {}\n  {}",
+                style("⚠").yellow(),
+                style("Not installed").yellow(),
+                style("rustup target add wasm32-unknown-unknown").dim()
+            ));
         }
     }
 
-    web_ok
+    results.join("\n")
 }
 
-fn check_wgpu(verbose: bool) -> bool {
-    print!("{} wgpu support: ", style("[✓]").green());
+fn check_wgpu(verbose: bool) -> String {
+    let mut result = format!("{} wgpu: {}", style("✓").green(), style("Available").cyan());
 
-    // wgpu is a library dependency, check if target is installed
-    match Command::new("rustup")
-        .args(["target", "list", "--installed"])
-        .output()
-    {
-        Ok(output) => {
-            let targets = String::from_utf8_lossy(&output.stdout);
-            let has_wasm = targets.contains("wasm32-unknown-unknown");
-
-            println!("{}", style("Available").green());
-
-            if verbose {
-                println!("    wgpu is provided via Rust dependencies");
-                if has_wasm {
-                    println!("    wasm32 target: {}", style("Installed").green());
-                }
-            }
-
-            true
-        }
-        Err(_) => {
-            println!("{}", style("Available").green());
-            println!("    (via Rust)");
-            true
-        }
+    if verbose {
+        result.push_str(&format!(
+            "\n  {}",
+            style("Provided via Rust dependencies").dim()
+        ));
     }
+
+    result
 }

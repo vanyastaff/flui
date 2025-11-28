@@ -2,15 +2,52 @@
 //!
 //! This crate provides the `flui` CLI tool for creating, building, and managing
 //! FLUI projects across multiple platforms (Windows, Linux, macOS, Android, iOS, Web).
+//!
+//! # Architecture
+//!
+//! The CLI is organized into several modules:
+//! - [`commands`] - Individual command implementations
+//! - [`config`] - Configuration file handling (flui.toml)
+//! - [`error`] - Error types and result aliases
+//! - [`templates`] - Project template generation
+//! - [`types`] - Type-safe wrappers (newtypes) for validated values
+//!
+//! # Examples
+//!
+//! Create a new project:
+//! ```bash
+//! flui create my-app --template counter
+//! ```
+//!
+//! Build for Android:
+//! ```bash
+//! flui build android --release
+//! ```
 
+use clap::builder::styling::{AnsiColor, Effects, Styles};
 use clap::{Parser, Subcommand, ValueEnum};
 use clap_complete::Shell;
+use std::fmt::{self, Display, Formatter};
 use std::path::PathBuf;
+
+/// Custom styles for CLI help output.
+///
+/// Uses cyan for headers and literals to match cliclack styling.
+const STYLES: Styles = Styles::styled()
+    .header(AnsiColor::Cyan.on_default().effects(Effects::BOLD))
+    .usage(AnsiColor::Cyan.on_default().effects(Effects::BOLD))
+    .literal(AnsiColor::Green.on_default())
+    .placeholder(AnsiColor::Green.on_default())
+    .error(AnsiColor::Red.on_default().effects(Effects::BOLD))
+    .valid(AnsiColor::Green.on_default().effects(Effects::BOLD))
+    .invalid(AnsiColor::Yellow.on_default().effects(Effects::BOLD));
 
 mod commands;
 mod config;
 pub mod error;
+pub mod runner;
 mod templates;
+pub mod types;
 mod utils;
 
 /// Command-line interface for FLUI - A declarative UI framework for Rust.
@@ -18,6 +55,7 @@ mod utils;
 #[command(name = "flui")]
 #[command(about = "FLUI CLI - Build beautiful cross-platform apps with Rust", long_about = None)]
 #[command(version)]
+#[command(styles = STYLES)]
 pub struct Cli {
     /// Subcommand to execute
     #[command(subcommand)]
@@ -243,43 +281,192 @@ enum PlatformSubcommand {
     List,
 }
 
-#[derive(Clone, Copy, ValueEnum, Debug)]
-enum Template {
-    /// Basic application
+/// Available project templates.
+///
+/// Templates provide starting points for different types of FLUI applications.
+#[derive(Clone, Copy, ValueEnum, Debug, PartialEq, Eq, Hash, Default)]
+pub enum Template {
+    /// Basic application with minimal setup
     Basic,
-    /// Counter app (default)
+    /// Counter app demonstrating state management (default)
+    #[default]
     Counter,
-    /// Todo list app
+    /// Todo list app with CRUD operations
     Todo,
-    /// Dashboard UI
+    /// Dashboard UI with multiple widgets
     Dashboard,
-    /// Widget package
+    /// Reusable widget package
     Widget,
-    /// Plugin package
+    /// Plugin package for extending FLUI
     Plugin,
-    /// Empty project
+    /// Empty project with just the essentials
     Empty,
 }
 
-#[derive(Clone, Copy, ValueEnum, Debug)]
-enum Platform {
+impl Display for Template {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Basic => write!(f, "basic"),
+            Self::Counter => write!(f, "counter"),
+            Self::Todo => write!(f, "todo"),
+            Self::Dashboard => write!(f, "dashboard"),
+            Self::Widget => write!(f, "widget"),
+            Self::Plugin => write!(f, "plugin"),
+            Self::Empty => write!(f, "empty"),
+        }
+    }
+}
+
+impl Template {
+    /// Get a human-readable description of the template.
+    #[must_use]
+    pub const fn description(&self) -> &'static str {
+        match self {
+            Self::Basic => "Basic application with minimal setup",
+            Self::Counter => "Counter app demonstrating state management",
+            Self::Todo => "Todo list app with CRUD operations",
+            Self::Dashboard => "Dashboard UI with multiple widgets",
+            Self::Widget => "Reusable widget package",
+            Self::Plugin => "Plugin package for extending FLUI",
+            Self::Empty => "Empty project with just the essentials",
+        }
+    }
+}
+
+/// Target platforms for FLUI applications.
+#[derive(Clone, Copy, ValueEnum, Debug, PartialEq, Eq, Hash)]
+pub enum Platform {
+    /// Microsoft Windows
     Windows,
+    /// Linux distributions
     Linux,
+    /// Apple macOS
     Macos,
+    /// Google Android
     Android,
+    /// Apple iOS
     Ios,
+    /// Web browser (WASM)
     Web,
 }
 
-#[derive(Clone, Copy, ValueEnum, Debug)]
-enum BuildTarget {
+impl Display for Platform {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Windows => write!(f, "windows"),
+            Self::Linux => write!(f, "linux"),
+            Self::Macos => write!(f, "macos"),
+            Self::Android => write!(f, "android"),
+            Self::Ios => write!(f, "ios"),
+            Self::Web => write!(f, "web"),
+        }
+    }
+}
+
+impl Platform {
+    /// Check if this platform requires a specific host OS.
+    #[must_use]
+    pub const fn requires_host_os(&self) -> Option<&'static str> {
+        match self {
+            Self::Ios | Self::Macos => Some("macOS"),
+            _ => None,
+        }
+    }
+
+    /// Get the Rust target triple for this platform.
+    #[must_use]
+    pub const fn target_triple(&self) -> &'static str {
+        match self {
+            Self::Windows => "x86_64-pc-windows-msvc",
+            Self::Linux => "x86_64-unknown-linux-gnu",
+            Self::Macos => "x86_64-apple-darwin",
+            Self::Android => "aarch64-linux-android",
+            Self::Ios => "aarch64-apple-ios",
+            Self::Web => "wasm32-unknown-unknown",
+        }
+    }
+}
+
+/// Build targets for the FLUI application.
+#[derive(Clone, Copy, ValueEnum, Debug, PartialEq, Eq, Hash)]
+pub enum BuildTarget {
+    /// Google Android
     Android,
+    /// Apple iOS
     Ios,
+    /// Web browser (WASM)
     Web,
+    /// Microsoft Windows
     Windows,
+    /// Linux distributions
     Linux,
+    /// Apple macOS
     Macos,
+    /// Build for the current host platform
     Desktop,
+}
+
+impl Display for BuildTarget {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Android => write!(f, "android"),
+            Self::Ios => write!(f, "ios"),
+            Self::Web => write!(f, "web"),
+            Self::Windows => write!(f, "windows"),
+            Self::Linux => write!(f, "linux"),
+            Self::Macos => write!(f, "macos"),
+            Self::Desktop => write!(f, "desktop"),
+        }
+    }
+}
+
+impl BuildTarget {
+    /// Get the corresponding Platform, if applicable.
+    ///
+    /// Returns `None` for `Desktop` which is host-dependent.
+    #[must_use]
+    pub const fn platform(&self) -> Option<Platform> {
+        match self {
+            Self::Android => Some(Platform::Android),
+            Self::Ios => Some(Platform::Ios),
+            Self::Web => Some(Platform::Web),
+            Self::Windows => Some(Platform::Windows),
+            Self::Linux => Some(Platform::Linux),
+            Self::Macos => Some(Platform::Macos),
+            Self::Desktop => None,
+        }
+    }
+
+    /// Get the Rust target triple for this build target.
+    #[must_use]
+    pub fn target_triple(&self) -> &'static str {
+        match self {
+            Self::Windows => "x86_64-pc-windows-msvc",
+            Self::Linux => "x86_64-unknown-linux-gnu",
+            Self::Macos => "x86_64-apple-darwin",
+            Self::Android => "aarch64-linux-android",
+            Self::Ios => "aarch64-apple-ios",
+            Self::Web => "wasm32-unknown-unknown",
+            Self::Desktop => {
+                #[cfg(target_os = "windows")]
+                {
+                    "x86_64-pc-windows-msvc"
+                }
+                #[cfg(target_os = "linux")]
+                {
+                    "x86_64-unknown-linux-gnu"
+                }
+                #[cfg(target_os = "macos")]
+                {
+                    "x86_64-apple-darwin"
+                }
+                #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
+                {
+                    "unknown"
+                }
+            }
+        }
+    }
 }
 
 fn main() {
@@ -366,9 +553,7 @@ fn main() {
             web,
         } => commands::doctor::execute(verbose, android, ios, web),
 
-        Commands::Devices { details, platform } => {
-            commands::devices::execute(details, platform)
-        }
+        Commands::Devices { details, platform } => commands::devices::execute(details, platform),
 
         Commands::Emulators { launch } => commands::emulators::execute(launch),
 
@@ -380,8 +565,8 @@ fn main() {
         } => commands::upgrade::execute(self_update, dependencies),
 
         Commands::Platform { subcommand } => match subcommand {
-            PlatformSubcommand::Add { platforms } => commands::platform::add(platforms),
-            PlatformSubcommand::Remove { platform } => commands::platform::remove(platform),
+            PlatformSubcommand::Add { platforms } => commands::platform::add(&platforms),
+            PlatformSubcommand::Remove { platform } => commands::platform::remove(&platform),
             PlatformSubcommand::List => commands::platform::list(),
         },
 
@@ -393,7 +578,7 @@ fn main() {
     };
 
     if let Err(e) = result {
-        eprintln!("\n{} {}", console::style("Error:").red().bold(), e);
+        let _ = cliclack::log::error(format!("{}", e));
         std::process::exit(1);
     }
 }

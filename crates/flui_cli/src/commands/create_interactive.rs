@@ -1,92 +1,79 @@
+//! Interactive project creation command.
+//!
+//! This module provides an interactive CLI wizard for creating new FLUI projects
+//! using cliclack for beautiful prompts.
+
 use crate::error::{CliError, CliResult};
+use crate::runner::{input, select};
+use crate::types::{OrganizationId, ProjectName};
 use crate::Template;
 use console::style;
-use dialoguer::{Confirm, Input, Select};
 
+/// Configuration collected from interactive prompts.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectConfig {
+    /// Validated project name.
     pub name: String,
+    /// Validated organization ID.
     pub org: String,
+    /// Selected project template.
     pub template: Template,
 }
 
+/// Run the interactive project creation wizard.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - User input is invalid
+/// - User cancels the operation
+/// - Dialog interaction fails
 pub fn interactive_create() -> CliResult<ProjectConfig> {
-    println!(
-        "{}",
-        style("Let's create a new FLUI project!").green().bold()
-    );
-    println!();
+    cliclack::intro(style(" Create FLUI Project ").on_cyan().black())?;
 
-    // Ask for project name
-    let name: String = Input::new()
-        .with_prompt("Project name")
-        .validate_with(|input: &String| -> Result<(), &str> {
-            if input.is_empty() {
-                return Err("Project name cannot be empty");
-            }
-            if !input.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-') {
-                return Err("Project name must contain only alphanumeric characters, hyphens, and underscores");
-            }
-            if input.starts_with(|c: char| c.is_numeric()) {
-                return Err("Project name cannot start with a number");
-            }
-            Ok(())
+    // Ask for project name with validation
+    let name: String = input("Project name")
+        .placeholder("my-app")
+        .validate(|input: &String| {
+            ProjectName::new(input)
+                .map(|_| ())
+                .map_err(|e| e.to_string())
         })
-        .interact_text()?;
+        .interact()
+        .map_err(|_| CliError::UserCancelled)?;
 
-    // Ask for organization
-    let org: String = Input::new()
-        .with_prompt("Organization (reverse domain notation)")
-        .default("com.example".into())
-        .interact_text()?;
+    // Ask for organization with validation
+    let org: String = input("Organization (reverse domain notation)")
+        .default_input("com.example")
+        .validate(|input: &String| {
+            OrganizationId::new(input)
+                .map(|_| ())
+                .map_err(|e| e.to_string())
+        })
+        .interact()
+        .map_err(|_| CliError::UserCancelled)?;
 
     // Ask for template
-    let templates = [
-        ("Counter", "Simple counter app with state management"),
-        ("Basic", "Minimal FLUI application"),
-        ("Todo", "Todo list app (coming soon)"),
-        ("Dashboard", "Dashboard UI (coming soon)"),
-    ];
-
-    let selection = Select::new()
-        .with_prompt("Choose a template")
-        .items(
-            templates
-                .iter()
-                .map(|(name, desc)| format!("{} - {}", name, desc))
-                .collect::<Vec<_>>()
-                .as_slice(),
+    let template = select("Choose a template")
+        .item(
+            Template::Counter,
+            "Counter",
+            "Simple counter with state management",
         )
-        .default(0)
-        .interact()?;
+        .item(Template::Basic, "Basic", "Minimal FLUI application")
+        .item(Template::Todo, "Todo", "Todo list app (coming soon)")
+        .item(
+            Template::Dashboard,
+            "Dashboard",
+            "Dashboard UI (coming soon)",
+        )
+        .item(Template::Widget, "Widget", "Reusable widget package")
+        .item(Template::Plugin, "Plugin", "Plugin for extending FLUI")
+        .item(Template::Empty, "Empty", "Empty project with essentials")
+        .interact()
+        .map_err(|_| CliError::UserCancelled)?;
 
-    let template = match selection {
-        0 => Template::Counter,
-        1 => Template::Basic,
-        2 => Template::Todo,
-        3 => Template::Dashboard,
-        _ => Template::Counter,
-    };
-
-    // Confirm
-    println!();
-    println!("{}", style("Summary:").cyan().bold());
-    println!("  Name: {}", style(&name).yellow());
-    println!("  Organization: {}", style(&org).yellow());
-    println!(
-        "  Template: {:?}",
-        style(format!("{:?}", template)).yellow()
-    );
-    println!();
-
-    let confirmed = Confirm::new()
-        .with_prompt("Create project?")
-        .default(true)
-        .interact()?;
-
-    if !confirmed {
-        return Err(CliError::UserCancelled);
-    }
-
+    // If we get here, user didn't cancel
     Ok(ProjectConfig {
         name,
         org,

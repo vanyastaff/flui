@@ -139,7 +139,7 @@ directories = ["assets"]
 
 fn generate_readme(dir: &Path, name: &str) -> CliResult<()> {
     let content = format!(
-        r#"# {}
+        r"# {name}
 
 A FLUI application.
 
@@ -154,8 +154,7 @@ flui run
 ```bash
 flui build desktop --release
 ```
-"#,
-        name
+"
     );
 
     fs::write(dir.join("README.md"), content).context("Failed to create README.md")?;

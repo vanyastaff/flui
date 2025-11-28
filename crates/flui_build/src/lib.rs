@@ -76,5 +76,7 @@ pub use context_ext::BuilderContextExt;
 pub use desktop::DesktopBuilder;
 pub use error::{BuildError, BuildResult};
 pub use ios::IOSBuilder;
+pub use output_parser::{get_parser, BuildEvent, OutputParser};
 pub use platform::*;
+pub use progress::{BuildPhase, BuildProgress, ProgressManager};
 pub use web::WebBuilder;

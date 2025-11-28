@@ -1,7 +1,26 @@
-use crate::error::{CliError, CliResult, ResultExt};
-use console::style;
-use std::process::Command;
+//! Run command for executing FLUI applications.
+//!
+//! Wraps `cargo run` with hot reload support and device selection.
 
+use crate::error::{CliError, CliResult};
+use crate::runner::{CargoCommand, OutputStyle};
+use console::style;
+
+/// Execute the run command.
+///
+/// # Arguments
+///
+/// * `device` - Target device (optional, defaults to desktop)
+/// * `release` - Build in release mode
+/// * `hot_reload` - Enable hot reload (development mode only)
+/// * `profile` - Custom build profile
+/// * `verbose` - Enable verbose output
+///
+/// # Errors
+///
+/// Returns `CliError::NotFluiProject` if not in a FLUI project.
+/// Returns `CliError::NoDefaultDevice` if no device is available.
+/// Returns `CliError::RunFailed` if the application fails to run.
 pub fn execute(
     device: Option<String>,
     release: bool,
@@ -10,68 +29,48 @@ pub fn execute(
     verbose: bool,
 ) -> CliResult<()> {
     let mode = if release { "release" } else { "debug" };
-    println!(
-        "{}",
-        style(format!("Running FLUI app ({} mode)...", mode))
-            .green()
-            .bold()
-    );
-    println!();
+    cliclack::intro(style(" flui run ").on_green().black())?;
+    cliclack::log::info(format!("Mode: {}", style(mode).cyan()))?;
 
     // Check if in FLUI project
     ensure_flui_project()?;
 
     // Select device
-    let target_device = if let Some(device) = device {
-        device
-    } else {
-        select_default_device()?
-    };
+    let target_device = device.map_or_else(select_default_device, Ok)?;
+    cliclack::log::info(format!("Target device: {}", style(&target_device).cyan()))?;
 
-    println!(
-        "  {} Target device: {}",
-        style("✓").green(),
-        style(&target_device).cyan()
-    );
+    // Build command
+    let mut cmd = CargoCommand::run_app();
 
-    // Build cargo command
-    let mut cmd = Command::new("cargo");
-    cmd.arg("run");
-
-    // Add mode flags
     if release {
-        cmd.arg("--release");
-    } else if let Some(profile) = profile {
-        cmd.arg(format!("--profile={}", profile));
+        cmd = cmd.release();
+    } else if let Some(prof) = profile {
+        cmd = cmd.profile(prof);
     }
 
-    // Add hot reload flag (via environment variable)
+    // Hot reload via environment variable
     if hot_reload && !release {
-        cmd.env("FLUI_HOT_RELOAD", "1");
-        println!("  {} Hot reload enabled", style("✓").green());
+        cmd = cmd.env("FLUI_HOT_RELOAD", "1");
+        cliclack::log::success("Hot reload enabled")?;
     }
 
-    // Add verbose flag
     if verbose {
-        cmd.arg("--verbose");
+        cmd = cmd.verbose();
     }
 
-    println!();
-    println!("{}", style("Building and running...").dim());
-    println!();
+    cliclack::log::step("Building and running...")?;
 
-    // Run command
-    let status = cmd.status().context("Failed to run cargo")?;
+    cmd.output_style(OutputStyle::Streaming).run()?;
 
-    if !status.success() {
-        return Err(CliError::RunFailed);
-    }
+    cliclack::outro(style("Application finished").green())?;
 
     Ok(())
 }
 
+/// Ensure we're in a FLUI project directory.
 fn ensure_flui_project() -> CliResult<()> {
     let cargo_toml = std::path::Path::new("Cargo.toml");
+
     if !cargo_toml.exists() {
         return Err(CliError::NotFluiProject {
             reason: "Cargo.toml not found".to_string(),
@@ -89,8 +88,8 @@ fn ensure_flui_project() -> CliResult<()> {
     Ok(())
 }
 
+/// Select the default device based on host OS.
 fn select_default_device() -> CliResult<String> {
-    // For desktop, return current OS
     #[cfg(target_os = "windows")]
     return Ok("Windows Desktop".to_string());
 

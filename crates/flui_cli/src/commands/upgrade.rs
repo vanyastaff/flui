@@ -1,44 +1,53 @@
-use crate::error::{CliError, CliResult, ResultExt};
+//! Upgrade command for updating flui_cli and dependencies.
+//!
+//! Handles both self-update (flui_cli) and project dependency updates.
+
+use crate::error::CliResult;
+use crate::runner::{CargoCommand, OutputStyle};
 use console::style;
-use std::process::Command;
 
+/// Execute the upgrade command.
+///
+/// # Arguments
+///
+/// * `self_update` - Update only flui_cli itself
+/// * `dependencies` - Update only project dependencies
+///
+/// # Errors
+///
+/// Returns `CliError::UpgradeFailed` if flui_cli upgrade fails.
+/// Returns `CliError::UpdateFailed` if dependency update fails.
 pub fn execute(self_update: bool, dependencies: bool) -> CliResult<()> {
-    if self_update || !dependencies {
-        println!("{}", style("Upgrading flui_cli...").green().bold());
-        println!();
+    cliclack::intro(style(" flui upgrade ").on_blue().white())?;
 
-        let status = Command::new("cargo")
-            .args(["install", "flui_cli", "--force"])
-            .status()
-            .context("Failed to upgrade flui_cli")?;
+    // If neither flag is set, do both
+    let do_self = self_update || !dependencies;
+    let do_deps = dependencies || !self_update;
 
-        if !status.success() {
-            return Err(CliError::UpgradeFailed);
-        }
+    if do_self {
+        let spinner = cliclack::spinner();
+        spinner.start("Upgrading flui_cli...");
 
-        println!();
-        println!("{}", style("✓ flui_cli upgraded").green().bold());
+        CargoCommand::install("flui_cli")
+            .force()
+            .output_style(OutputStyle::Silent)
+            .run()?;
+
+        spinner.stop(format!("{} flui_cli upgraded", style("✓").green()));
     }
 
-    if dependencies || !self_update {
-        println!(
-            "{}",
-            style("Updating project dependencies...").green().bold()
-        );
-        println!();
+    if do_deps {
+        let spinner = cliclack::spinner();
+        spinner.start("Updating project dependencies...");
 
-        let status = Command::new("cargo")
-            .arg("update")
-            .status()
-            .context("Failed to update dependencies")?;
+        CargoCommand::update()
+            .output_style(OutputStyle::Silent)
+            .run()?;
 
-        if !status.success() {
-            return Err(CliError::UpdateFailed);
-        }
-
-        println!();
-        println!("{}", style("✓ Dependencies updated").green().bold());
+        spinner.stop(format!("{} Dependencies updated", style("✓").green()));
     }
+
+    cliclack::outro(style("Upgrade complete").green())?;
 
     Ok(())
 }

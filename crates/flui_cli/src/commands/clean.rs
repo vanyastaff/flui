@@ -1,94 +1,93 @@
-use crate::error::{CliError, CliResult, ResultExt};
+//! Clean command for removing build artifacts.
+//!
+//! Supports cleaning cargo build artifacts and platform-specific
+//! build directories (Android, iOS, Web).
+
+use crate::error::CliResult;
+use crate::runner::{CargoCommand, OutputStyle};
 use console::style;
-use std::process::Command;
+use std::path::Path;
 
+/// Execute the clean command.
+///
+/// # Arguments
+///
+/// * `deep` - Also clean platform-specific directories
+/// * `platform` - Clean only a specific platform
+///
+/// # Errors
+///
+/// Returns `CliError::CleanFailed` if cargo clean fails.
 pub fn execute(deep: bool, platform: Option<String>) -> CliResult<()> {
-    println!("{}", style("Cleaning build artifacts...").green().bold());
-    println!();
+    cliclack::intro(style(" flui clean ").on_red().white())?;
 
-    if deep {
-        println!("  {} Deep clean enabled", style("→").cyan());
-    }
+    let spinner = cliclack::spinner();
 
-    if let Some(platform) = platform {
-        println!(
-            "  {} Cleaning platform: {}",
-            style("→").cyan(),
-            style(&platform).cyan()
-        );
-        clean_platform(&platform)?;
+    if let Some(ref plat) = platform {
+        spinner.start(format!("Cleaning {} artifacts...", plat));
+        clean_platform(plat)?;
+        spinner.stop(format!("{} {} cleaned", style("✓").green(), plat));
     } else {
-        // Clean using cargo
-        let mut cmd = Command::new("cargo");
-        cmd.arg("clean");
+        spinner.start("Cleaning cargo artifacts...");
+        CargoCommand::clean()
+            .output_style(OutputStyle::Silent)
+            .run()?;
+        spinner.stop(format!("{} Cargo artifacts cleaned", style("✓").green()));
 
-        let status = cmd.status().context("Failed to run cargo clean")?;
-
-        if !status.success() {
-            return Err(CliError::CleanFailed {
-                details: "cargo clean command failed".to_string(),
-            });
-        }
-
-        // Clean platform-specific directories
         if deep {
+            let spinner = cliclack::spinner();
+            spinner.start("Cleaning platform directories...");
             clean_platform_dirs()?;
+            spinner.stop(format!(
+                "{} Platform directories cleaned",
+                style("✓").green()
+            ));
         }
     }
 
-    println!();
-    println!("{}", style("✓ Clean completed").green().bold());
+    let mode = if deep { "deep" } else { "standard" };
+    cliclack::outro(format!("Clean completed ({})", style(mode).cyan()))?;
 
     Ok(())
 }
 
+/// Clean build artifacts for a specific platform.
 fn clean_platform(platform: &str) -> CliResult<()> {
-    let platform_dir = std::path::Path::new("platforms").join(platform);
+    let platform_dir = Path::new("platforms").join(platform);
 
-    if platform_dir.exists() {
-        match platform {
-            "android" => {
-                let build_dir = platform_dir.join("app").join("build");
-                if build_dir.exists() {
-                    std::fs::remove_dir_all(&build_dir)?;
-                    println!("  {} Removed {}", style("✓").green(), build_dir.display());
-                }
+    if !platform_dir.exists() {
+        return Ok(());
+    }
 
-                let gradle_dir = platform_dir.join(".gradle");
-                if gradle_dir.exists() {
-                    std::fs::remove_dir_all(&gradle_dir)?;
-                    println!("  {} Removed {}", style("✓").green(), gradle_dir.display());
-                }
-            }
-            "web" => {
-                let pkg_dir = platform_dir.join("pkg");
-                if pkg_dir.exists() {
-                    std::fs::remove_dir_all(&pkg_dir)?;
-                    println!("  {} Removed {}", style("✓").green(), pkg_dir.display());
-                }
-            }
-            "ios" => {
-                let build_dir = platform_dir.join("build");
-                if build_dir.exists() {
-                    std::fs::remove_dir_all(&build_dir)?;
-                    println!("  {} Removed {}", style("✓").green(), build_dir.display());
-                }
-            }
-            _ => {
-                println!("  {} Unknown platform: {}", style("!").yellow(), platform);
-            }
+    match platform {
+        "android" => {
+            remove_dir_if_exists(&platform_dir.join("app").join("build"))?;
+            remove_dir_if_exists(&platform_dir.join(".gradle"))?;
         }
+        "web" => {
+            remove_dir_if_exists(&platform_dir.join("pkg"))?;
+        }
+        "ios" => {
+            remove_dir_if_exists(&platform_dir.join("build"))?;
+        }
+        _ => {}
     }
 
     Ok(())
 }
 
+/// Clean all platform-specific build directories.
 fn clean_platform_dirs() -> CliResult<()> {
-    let platforms = ["android", "ios", "web"];
-
-    for platform in &platforms {
+    for platform in &["android", "ios", "web"] {
         let _ = clean_platform(platform);
     }
+    Ok(())
+}
 
+/// Remove a directory if it exists.
+fn remove_dir_if_exists(path: &Path) -> CliResult<()> {
+    if path.exists() {
+        std::fs::remove_dir_all(path)?;
+    }
     Ok(())
 }

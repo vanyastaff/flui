@@ -1,25 +1,37 @@
+//! DevTools command for launching the FLUI development tools.
+//!
+//! This command will launch a visual debugging interface for FLUI applications.
+//!
+//! # Planned Features
+//!
+//! - Visual widget inspector
+//! - Performance profiling
+//! - Network monitoring
+//! - State debugging
+
 use crate::error::CliResult;
 use console::style;
 
+/// Execute the devtools command.
+///
+/// # Errors
+///
+/// Returns an error if cliclack output fails.
 pub fn execute(port: u16) -> CliResult<()> {
-    println!(
-        "{}",
-        style(format!("Launching DevTools on port {}...", port))
-            .green()
-            .bold()
+    cliclack::intro(style(" flui devtools ").on_green().black())?;
+
+    let features = format!(
+        "{}\n\n  {} Visual widget inspector\n  {} Performance profiling\n  {} Network monitoring\n  {} State debugging\n\n{}",
+        style(format!("Port: {}", port)).cyan(),
+        style("○").dim(),
+        style("○").dim(),
+        style("○").dim(),
+        style("○").dim(),
+        style("Coming soon...").dim(),
     );
-    println!();
-    println!(
-        "{}",
-        style("Note: DevTools integration not yet implemented").yellow()
-    );
-    println!("  This will be available in a future version");
-    println!();
-    println!("  Planned features:");
-    println!("  • Visual widget inspector");
-    println!("  • Performance profiling");
-    println!("  • Network monitoring");
-    println!("  • State debugging");
+
+    cliclack::note("Planned Features", features)?;
+    cliclack::outro(style("Not yet implemented").dim())?;
 
     Ok(())
 }

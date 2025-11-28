@@ -163,7 +163,7 @@ directories = ["assets"]
 
 fn generate_readme(dir: &Path, name: &str) -> CliResult<()> {
     let content = format!(
-        r#"# {}
+        r"# {name}
 
 A FLUI counter application.
 
@@ -191,8 +191,7 @@ flui test
 
 - [FLUI Documentation](https://github.com/vanyastaff/flui)
 - [Examples](https://github.com/vanyastaff/flui/tree/main/examples)
-"#,
-        name
+"
     );
 
     fs::write(dir.join("README.md"), content).context("Failed to create README.md")?;

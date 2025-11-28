@@ -1,54 +1,97 @@
-use crate::error::CliResult;
+//! Platform management commands.
+//!
+//! Manages platform support for FLUI projects (add, remove, list).
+//!
+//! # Planned Features
+//!
+//! - Add platform scaffolding (android/, ios/, web/ directories)
+//! - Remove platform support
+//! - List currently enabled platforms
+
+use crate::error::{CliError, CliResult};
 use console::style;
 
-pub fn add(platforms: Vec<String>) -> CliResult<()> {
-    println!(
-        "{}",
-        style(format!("Adding platform support: {}", platforms.join(", ")))
-            .green()
-            .bold()
-    );
-    println!();
-    println!(
-        "{}",
-        style("Note: Platform management not yet fully implemented").yellow()
-    );
-    println!("  This will be available in a future version");
-    println!();
-    println!("  For now, platform directories should be added manually:");
-    println!("  • platforms/android/");
-    println!("  • platforms/ios/");
-    println!("  • platforms/web/");
+/// Add platform support to the project.
+///
+/// # Arguments
+///
+/// * `platforms` - List of platforms to add (android, ios, web, etc.)
+///
+/// # Errors
+///
+/// Returns `CliError::NotImplemented` as this feature is not yet available.
+pub fn add(platforms: &[String]) -> CliResult<()> {
+    cliclack::intro(style(" flui platform add ").on_yellow().black())?;
 
-    Ok(())
+    let workaround = format!(
+        "{}\n  {}\n  {}\n  {}",
+        style("Manually create platform directories:").bold(),
+        "• platforms/android/",
+        "• platforms/ios/",
+        "• platforms/web/"
+    );
+
+    cliclack::note(format!("Adding: {}", platforms.join(", ")), workaround)?;
+
+    cliclack::outro_cancel("Platform add not yet implemented")?;
+
+    Err(CliError::not_implemented("Platform add"))
 }
 
-pub fn remove(platform: String) -> CliResult<()> {
-    println!(
-        "{}",
-        style(format!("Removing platform support: {}", platform))
-            .green()
-            .bold()
-    );
-    println!();
-    println!(
-        "{}",
-        style("Note: Platform management not yet fully implemented").yellow()
-    );
-    println!("  This will be available in a future version");
+/// Remove platform support from the project.
+///
+/// # Arguments
+///
+/// * `platform` - Platform to remove
+///
+/// # Errors
+///
+/// Returns `CliError::NotImplemented` as this feature is not yet available.
+pub fn remove(platform: &str) -> CliResult<()> {
+    cliclack::intro(style(" flui platform remove ").on_red().black())?;
 
-    Ok(())
+    cliclack::note(
+        format!("Removing: {}", platform),
+        style("This will delete the platform directory")
+            .dim()
+            .to_string(),
+    )?;
+
+    cliclack::outro_cancel("Platform remove not yet implemented")?;
+
+    Err(CliError::not_implemented("Platform remove"))
 }
 
+/// List all supported platforms.
+///
+/// This function works and shows all platforms FLUI can target.
 pub fn list() -> CliResult<()> {
-    println!("{}", style("Supported platforms:").green().bold());
-    println!();
-    println!("  {} Android", style("✓").green());
-    println!("  {} iOS (macOS only)", style("✓").green());
-    println!("  {} Web (WASM)", style("✓").green());
-    println!("  {} Windows", style("✓").green());
-    println!("  {} Linux", style("✓").green());
-    println!("  {} macOS", style("✓").green());
+    cliclack::intro(style(" flui platforms ").on_blue().black())?;
+
+    let platforms = format!(
+        "{} Android      {}\n\
+         {} iOS          {}\n\
+         {} Web          {}\n\
+         {} Windows      {}\n\
+         {} Linux        {}\n\
+         {} macOS        {}",
+        style("●").green(),
+        style("Mobile").dim(),
+        style("●").green(),
+        style("Mobile (macOS only)").dim(),
+        style("●").green(),
+        style("WASM").dim(),
+        style("●").green(),
+        style("Desktop").dim(),
+        style("●").green(),
+        style("Desktop").dim(),
+        style("●").green(),
+        style("Desktop").dim(),
+    );
+
+    cliclack::note("Supported Platforms", platforms)?;
+
+    cliclack::outro(format!("{} platforms available", style("6").cyan()))?;
 
     Ok(())
 }
