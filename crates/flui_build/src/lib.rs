@@ -18,7 +18,7 @@
 //! use flui_build::*;
 //! use std::path::PathBuf;
 //!
-//! # fn main() -> anyhow::Result<()> {
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! // Create build context
 //! let ctx = BuilderContext {
 //!     workspace_root: PathBuf::from("."),
@@ -49,9 +49,9 @@
 
 /// Android platform build support
 pub mod android;
-/// Type-state builder for BuilderContext
+/// Type-state builder for `BuilderContext`
 pub mod context_builder;
-/// Extension trait with utility methods for BuilderContext
+/// Extension trait with utility methods for `BuilderContext`
 pub mod context_ext;
 /// Desktop platform build support (Windows, macOS, Linux)
 pub mod desktop;

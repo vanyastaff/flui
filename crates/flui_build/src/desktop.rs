@@ -1,6 +1,6 @@
-use anyhow::{anyhow, Result};
 use std::path::{Path, PathBuf};
 
+use crate::error::{BuildError, BuildResult};
 use crate::platform::{private, BuildArtifacts, BuilderContext, FinalArtifacts, PlatformBuilder};
 use crate::util::process;
 
@@ -11,12 +11,12 @@ pub struct DesktopBuilder {
 }
 
 impl DesktopBuilder {
-    /// Creates a new DesktopBuilder
+    /// Creates a new `DesktopBuilder`
     ///
     /// # Errors
     ///
     /// Currently infallible, but returns Result for consistency
-    pub fn new(workspace_root: &Path) -> Result<Self> {
+    pub fn new(workspace_root: &Path) -> BuildResult<Self> {
         Ok(Self {
             workspace_root: workspace_root.to_path_buf(),
         })
@@ -55,22 +55,24 @@ impl DesktopBuilder {
 impl private::Sealed for DesktopBuilder {}
 
 impl PlatformBuilder for DesktopBuilder {
-    fn platform_name(&self) -> &str {
+    fn platform_name(&self) -> &'static str {
         "desktop"
     }
 
-    fn validate_environment(&self) -> Result<()> {
+    fn validate_environment(&self) -> BuildResult<()> {
         // Just need cargo
         crate::util::check_command_exists("cargo")?;
         Ok(())
     }
 
-    fn build_rust(&self, ctx: &BuilderContext) -> Result<BuildArtifacts> {
+    fn build_rust(&self, ctx: &BuilderContext) -> BuildResult<BuildArtifacts> {
         let target = match &ctx.platform {
             crate::platform::Platform::Desktop { target } => {
                 target.clone().unwrap_or_else(Self::detect_host_target)
             }
-            _ => return Err(anyhow!("Invalid platform for Desktop builder")),
+            _ => return Err(BuildError::InvalidPlatform {
+                reason: "Expected Desktop platform".to_string(),
+            }),
         };
 
         tracing::info!("Building for desktop target: {}", target);
@@ -106,7 +108,10 @@ impl PlatformBuilder for DesktopBuilder {
             .join(lib_name);
 
         if !lib_path.exists() {
-            return Err(anyhow!("Library not found at: {:?}", lib_path));
+            return Err(BuildError::PathNotFound {
+                path: lib_path.clone(),
+                context: "Compiled library not found".to_string(),
+            });
         }
 
         Ok(BuildArtifacts {
@@ -121,11 +126,11 @@ impl PlatformBuilder for DesktopBuilder {
         &self,
         ctx: &BuilderContext,
         artifacts: &BuildArtifacts,
-    ) -> Result<FinalArtifacts> {
+    ) -> BuildResult<FinalArtifacts> {
         let lib_src = artifacts
             .rust_libs
             .first()
-            .ok_or_else(|| anyhow!("No library found"))?;
+            .ok_or_else(|| BuildError::Other("No library found".to_string()))?;
 
         // Copy to output directory
         let lib_name = lib_src.file_name().unwrap();
@@ -144,7 +149,7 @@ impl PlatformBuilder for DesktopBuilder {
         })
     }
 
-    fn clean(&self, ctx: &BuilderContext) -> Result<()> {
+    fn clean(&self, ctx: &BuilderContext) -> BuildResult<()> {
         if ctx.output_dir.exists() {
             std::fs::remove_dir_all(&ctx.output_dir)?;
             tracing::info!("Cleaned output: {:?}", ctx.output_dir);

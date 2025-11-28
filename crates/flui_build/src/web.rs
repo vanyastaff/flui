@@ -1,6 +1,6 @@
-use anyhow::{anyhow, Context, Result};
 use std::path::{Path, PathBuf};
 
+use crate::error::{BuildError, BuildResult};
 use crate::platform::{private, BuildArtifacts, BuilderContext, FinalArtifacts, PlatformBuilder};
 use crate::util::{check_command_exists, process};
 
@@ -11,12 +11,12 @@ pub struct WebBuilder {
 }
 
 impl WebBuilder {
-    /// Creates a new WebBuilder
+    /// Creates a new `WebBuilder`
     ///
     /// # Errors
     ///
     /// Currently infallible, but returns Result for consistency
-    pub fn new(workspace_root: &Path) -> Result<Self> {
+    pub fn new(workspace_root: &Path) -> BuildResult<Self> {
         Ok(Self {
             workspace_root: workspace_root.to_path_buf(),
         })
@@ -26,14 +26,13 @@ impl WebBuilder {
 impl private::Sealed for WebBuilder {}
 
 impl PlatformBuilder for WebBuilder {
-    fn platform_name(&self) -> &str {
+    fn platform_name(&self) -> &'static str {
         "web"
     }
 
-    fn validate_environment(&self) -> Result<()> {
+    fn validate_environment(&self) -> BuildResult<()> {
         // Check wasm-pack
-        check_command_exists("wasm-pack")
-            .context("wasm-pack not installed. Install with: cargo install wasm-pack")?;
+        check_command_exists("wasm-pack")?;
 
         // Check WASM target
         let output = std::process::Command::new("rustup")
@@ -43,18 +42,20 @@ impl PlatformBuilder for WebBuilder {
         let installed_targets = String::from_utf8_lossy(&output.stdout);
 
         if !installed_targets.contains("wasm32-unknown-unknown") {
-            return Err(anyhow!(
-                "wasm32-unknown-unknown target not installed. Install with: rustup target add wasm32-unknown-unknown"
-            ));
+            return Err(BuildError::TargetNotInstalled {
+                target: "wasm32-unknown-unknown".to_string(),
+                install_cmd: "rustup target add wasm32-unknown-unknown".to_string(),
+            });
         }
 
         Ok(())
     }
 
-    fn build_rust(&self, ctx: &BuilderContext) -> Result<BuildArtifacts> {
-        let target = match &ctx.platform {
-            crate::platform::Platform::Web { target } => target,
-            _ => return Err(anyhow!("Invalid platform for Web builder")),
+    fn build_rust(&self, ctx: &BuilderContext) -> BuildResult<BuildArtifacts> {
+        let crate::platform::Platform::Web { target } = &ctx.platform else {
+            return Err(BuildError::InvalidPlatform {
+                reason: "Expected Web platform".to_string(),
+            });
         };
 
         tracing::info!("Building WASM for target: {}", target);
@@ -99,7 +100,7 @@ impl PlatformBuilder for WebBuilder {
         }
 
         if rust_libs.is_empty() {
-            return Err(anyhow!("No WASM files generated"));
+            return Err(BuildError::Other("No WASM files generated".to_string()));
         }
 
         tracing::info!("Generated {} WASM files", rust_libs.len());
@@ -114,7 +115,7 @@ impl PlatformBuilder for WebBuilder {
         &self,
         ctx: &BuilderContext,
         artifacts: &BuildArtifacts,
-    ) -> Result<FinalArtifacts> {
+    ) -> BuildResult<FinalArtifacts> {
         // Copy HTML and other web assets to dist
         let web_dir = self.workspace_root.join("platforms").join("web");
         let dist_dir = web_dir.join("dist");
@@ -169,7 +170,7 @@ impl PlatformBuilder for WebBuilder {
         })
     }
 
-    fn clean(&self, ctx: &BuilderContext) -> Result<()> {
+    fn clean(&self, ctx: &BuilderContext) -> BuildResult<()> {
         let dist_dir = self
             .workspace_root
             .join("platforms")
@@ -191,7 +192,7 @@ impl PlatformBuilder for WebBuilder {
 }
 
 /// Recursively copy directory
-fn copy_dir_recursive(src: &PathBuf, dst: &PathBuf) -> Result<()> {
+fn copy_dir_recursive(src: &PathBuf, dst: &PathBuf) -> BuildResult<()> {
     std::fs::create_dir_all(dst)?;
 
     for entry in std::fs::read_dir(src)? {

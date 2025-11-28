@@ -1,11 +1,12 @@
-use anyhow::{anyhow, Context, Result};
 use std::path::Path;
 use std::process::Stdio;
 use tokio::process::Command;
 
+use crate::error::{BuildError, BuildResult};
+
 /// Run a command and stream output to console
-pub async fn run_command<S: AsRef<str>>(program: &str, args: &[S]) -> Result<()> {
-    let args_str: Vec<&str> = args.iter().map(|s| s.as_ref()).collect();
+pub async fn run_command<S: AsRef<str>>(program: &str, args: &[S]) -> BuildResult<()> {
+    let args_str: Vec<&str> = args.iter().map(std::convert::AsRef::as_ref).collect();
 
     tracing::info!("Running: {} {}", program, args_str.join(" "));
 
@@ -16,21 +17,29 @@ pub async fn run_command<S: AsRef<str>>(program: &str, args: &[S]) -> Result<()>
         .stderr(Stdio::inherit())
         .status()
         .await
-        .with_context(|| format!("Failed to execute: {}", program))?;
+        .map_err(|e| BuildError::CommandFailed {
+            command: format!("{} {}", program, args_str.join(" ")),
+            exit_code: -1,
+            stderr: e.to_string(),
+        })?;
 
     if !status.success() {
-        return Err(anyhow!(
-            "Command failed with exit code: {:?}",
-            status.code()
-        ));
+        return Err(BuildError::CommandFailed {
+            command: format!("{} {}", program, args_str.join(" ")),
+            exit_code: status.code().unwrap_or(-1),
+            stderr: format!("Command failed with exit code: {:?}", status.code()),
+        });
     }
 
     Ok(())
 }
 
 /// Run a command and capture output
-pub async fn run_command_with_output<S: AsRef<str>>(program: &str, args: &[S]) -> Result<String> {
-    let args_str: Vec<&str> = args.iter().map(|s| s.as_ref()).collect();
+pub async fn run_command_with_output<S: AsRef<str>>(
+    program: &str,
+    args: &[S],
+) -> BuildResult<String> {
+    let args_str: Vec<&str> = args.iter().map(std::convert::AsRef::as_ref).collect();
 
     tracing::debug!(
         "Running (capturing output): {} {}",
@@ -45,11 +54,19 @@ pub async fn run_command_with_output<S: AsRef<str>>(program: &str, args: &[S]) -
         .stderr(Stdio::piped())
         .output()
         .await
-        .with_context(|| format!("Failed to execute: {}", program))?;
+        .map_err(|e| BuildError::CommandFailed {
+            command: format!("{} {}", program, args_str.join(" ")),
+            exit_code: -1,
+            stderr: e.to_string(),
+        })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(anyhow!("Command failed: {}", stderr));
+        return Err(BuildError::CommandFailed {
+            command: format!("{} {}", program, args_str.join(" ")),
+            exit_code: output.status.code().unwrap_or(-1),
+            stderr: stderr.to_string(),
+        });
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
@@ -61,8 +78,8 @@ pub async fn run_command_in_dir<S: AsRef<str>>(
     program: &str,
     args: &[S],
     dir: &Path,
-) -> Result<()> {
-    let args_str: Vec<&str> = args.iter().map(|s| s.as_ref()).collect();
+) -> BuildResult<()> {
+    let args_str: Vec<&str> = args.iter().map(std::convert::AsRef::as_ref).collect();
 
     tracing::info!("Running in {:?}: {} {}", dir, program, args_str.join(" "));
 
@@ -74,13 +91,18 @@ pub async fn run_command_in_dir<S: AsRef<str>>(
         .stderr(Stdio::inherit())
         .status()
         .await
-        .with_context(|| format!("Failed to execute: {}", program))?;
+        .map_err(|e| BuildError::CommandFailed {
+            command: format!("{} {}", program, args_str.join(" ")),
+            exit_code: -1,
+            stderr: e.to_string(),
+        })?;
 
     if !status.success() {
-        return Err(anyhow!(
-            "Command failed with exit code: {:?}",
-            status.code()
-        ));
+        return Err(BuildError::CommandFailed {
+            command: format!("{} {}", program, args_str.join(" ")),
+            exit_code: status.code().unwrap_or(-1),
+            stderr: format!("Command failed with exit code: {:?}", status.code()),
+        });
     }
 
     Ok(())

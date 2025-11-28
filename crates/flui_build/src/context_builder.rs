@@ -1,6 +1,6 @@
-/// Type state builder for BuilderContext with compile-time validation.
+/// Type state builder for `BuilderContext` with compile-time validation.
 ///
-/// This module implements the Type State pattern to ensure BuilderContext
+/// This module implements the Type State pattern to ensure `BuilderContext`
 /// is always constructed with all required fields. The type system prevents
 /// invalid configurations at compile time.
 ///
@@ -46,9 +46,9 @@ pub struct NoProfile;
 #[derive(Debug)]
 pub struct HasProfile(pub(crate) Profile);
 
-/// Builder for BuilderContext with compile-time validation.
+/// Builder for `BuilderContext` with compile-time validation.
 ///
-/// Uses the Type State pattern to ensure all required fields are set before build().
+/// Uses the Type State pattern to ensure all required fields are set before `build()`.
 ///
 /// # Type Parameters
 ///
@@ -119,6 +119,7 @@ impl BuilderContextBuilder<NoPlatform, NoProfile> {
     ///
     /// let builder = BuilderContextBuilder::new(PathBuf::from("."));
     /// ```
+    #[must_use] 
     pub fn new(workspace_root: PathBuf) -> Self {
         Self {
             workspace_root,
@@ -205,6 +206,7 @@ impl<P, Pr> BuilderContextBuilder<P, Pr> {
     /// let builder = BuilderContextBuilder::new(PathBuf::from("."))
     ///     .with_features(vec!["feature1".to_string(), "feature2".to_string()]);
     /// ```
+    #[must_use]
     pub fn with_features(mut self, features: Vec<String>) -> Self {
         self.features = features;
         self
@@ -226,6 +228,7 @@ impl<P, Pr> BuilderContextBuilder<P, Pr> {
     ///     .with_feature("feature1".to_string())
     ///     .with_feature("feature2".to_string());
     /// ```
+    #[must_use]
     pub fn with_feature(mut self, feature: String) -> Self {
         self.features.push(feature);
         self
@@ -248,6 +251,7 @@ impl<P, Pr> BuilderContextBuilder<P, Pr> {
     /// let builder = BuilderContextBuilder::new(PathBuf::from("."))
     ///     .with_output_dir(PathBuf::from("custom/output"));
     /// ```
+    #[must_use]
     pub fn with_output_dir(mut self, output_dir: PathBuf) -> Self {
         self.output_dir = Some(output_dir);
         self
@@ -256,7 +260,7 @@ impl<P, Pr> BuilderContextBuilder<P, Pr> {
 
 // Build only when both platform and profile are set
 impl BuilderContextBuilder<HasPlatform, HasProfile> {
-    /// Build the final BuilderContext.
+    /// Build the final `BuilderContext`.
     ///
     /// This method is only available when both platform and profile have been set,
     /// ensuring compile-time validation of required fields.
@@ -280,6 +284,7 @@ impl BuilderContextBuilder<HasPlatform, HasProfile> {
     ///
     /// assert_eq!(ctx.profile, Profile::Release);
     /// ```
+    #[must_use] 
     pub fn build(self) -> BuilderContext {
         let output_dir = self.output_dir.unwrap_or_else(|| {
             self.workspace_root

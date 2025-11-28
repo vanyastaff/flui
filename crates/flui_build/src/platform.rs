@@ -1,9 +1,10 @@
-use anyhow::Result;
 use std::path::PathBuf;
 
-/// Private module to seal the PlatformBuilder trait.
+use crate::error::BuildResult;
+
+/// Private module to seal the `PlatformBuilder` trait.
 ///
-/// This prevents external implementations of PlatformBuilder,
+/// This prevents external implementations of `PlatformBuilder`,
 /// allowing us to add methods to the trait in the future without
 /// breaking changes.
 pub(crate) mod private {
@@ -47,6 +48,7 @@ pub enum Platform {
 
 impl Platform {
     /// Returns the platform name as a string
+    #[must_use] 
     pub fn name(&self) -> &str {
         match self {
             Platform::Android { .. } => "android",
@@ -70,6 +72,7 @@ impl Profile {
     /// Returns the cargo flag for this profile
     ///
     /// Returns `None` for Debug (default), `Some("--release")` for Release
+    #[must_use] 
     pub fn cargo_flag(&self) -> Option<&'static str> {
         match self {
             Profile::Debug => None,
@@ -78,6 +81,7 @@ impl Profile {
     }
 
     /// Returns the profile name as a string
+    #[must_use] 
     pub fn as_str(&self) -> &'static str {
         match self {
             Profile::Debug => "debug",
@@ -105,7 +109,6 @@ impl From<&str> for Platform {
             "web" => Platform::Web {
                 target: "web".to_string(),
             },
-            "desktop" => Platform::Desktop { target: None },
             _ => Platform::Desktop { target: None },
         }
     }
@@ -145,18 +148,18 @@ pub trait PlatformBuilder: private::Sealed + Send + Sync {
     fn platform_name(&self) -> &str;
 
     /// Validate environment (check tools, SDK, etc.)
-    fn validate_environment(&self) -> Result<()>;
+    fn validate_environment(&self) -> BuildResult<()>;
 
     /// Build Rust libraries
-    fn build_rust(&self, ctx: &BuilderContext) -> Result<BuildArtifacts>;
+    fn build_rust(&self, ctx: &BuilderContext) -> BuildResult<BuildArtifacts>;
 
     /// Build platform-specific artifacts (APK, WASM, etc.)
     fn build_platform(
         &self,
         ctx: &BuilderContext,
         artifacts: &BuildArtifacts,
-    ) -> Result<FinalArtifacts>;
+    ) -> BuildResult<FinalArtifacts>;
 
     /// Clean build artifacts
-    fn clean(&self, ctx: &BuilderContext) -> Result<()>;
+    fn clean(&self, ctx: &BuilderContext) -> BuildResult<()>;
 }

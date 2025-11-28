@@ -1,6 +1,6 @@
-use anyhow::{anyhow, Context, Result};
 use std::path::{Path, PathBuf};
 
+use crate::error::{BuildError, BuildResult};
 use crate::platform::{private, BuildArtifacts, BuilderContext, FinalArtifacts, PlatformBuilder};
 use crate::util::{check_command_exists, environment, process};
 
@@ -14,12 +14,12 @@ pub struct AndroidBuilder {
 }
 
 impl AndroidBuilder {
-    /// Creates a new AndroidBuilder
+    /// Creates a new `AndroidBuilder`
     ///
     /// # Errors
     ///
-    /// Returns error if ANDROID_HOME or NDK is not configured
-    pub fn new(workspace_root: &Path) -> Result<Self> {
+    /// Returns error if `ANDROID_HOME` or NDK is not configured
+    pub fn new(workspace_root: &Path) -> BuildResult<Self> {
         let android_home = environment::resolve_android_home()?;
         let ndk_home = environment::resolve_ndk_home(&android_home)?;
 
@@ -42,13 +42,13 @@ impl AndroidBuilder {
 impl private::Sealed for AndroidBuilder {}
 
 impl PlatformBuilder for AndroidBuilder {
-    fn platform_name(&self) -> &str {
+    fn platform_name(&self) -> &'static str {
         "android"
     }
 
-    fn validate_environment(&self) -> Result<()> {
+    fn validate_environment(&self) -> BuildResult<()> {
         // Check cargo-ndk
-        check_command_exists("cargo").context("cargo not found - Rust toolchain required")?;
+        check_command_exists("cargo")?;
 
         // Try to find cargo-ndk
         let cargo_ndk_result = std::process::Command::new("cargo")
@@ -56,9 +56,10 @@ impl PlatformBuilder for AndroidBuilder {
             .output();
 
         if cargo_ndk_result.is_err() || !cargo_ndk_result.as_ref().unwrap().status.success() {
-            return Err(anyhow!(
-                "cargo-ndk not installed. Install with: cargo install cargo-ndk"
-            ));
+            return Err(BuildError::ToolNotFound {
+                tool: "cargo-ndk".to_string(),
+                install_hint: "cargo install cargo-ndk".to_string(),
+            });
         }
 
         // Check Gradle (optional - warn if not found)
@@ -84,9 +85,10 @@ impl PlatformBuilder for AndroidBuilder {
 
         // Check for at least one Android target
         if !installed_targets.contains("android") {
-            return Err(anyhow!(
-                "No Android Rust targets installed. Install with: rustup target add aarch64-linux-android"
-            ));
+            return Err(BuildError::TargetNotInstalled {
+                target: "aarch64-linux-android".to_string(),
+                install_cmd: "rustup target add aarch64-linux-android".to_string(),
+            });
         }
 
         tracing::debug!("Android environment validation passed");
@@ -96,10 +98,11 @@ impl PlatformBuilder for AndroidBuilder {
         Ok(())
     }
 
-    fn build_rust(&self, ctx: &BuilderContext) -> Result<BuildArtifacts> {
-        let targets = match &ctx.platform {
-            crate::platform::Platform::Android { targets } => targets,
-            _ => return Err(anyhow!("Invalid platform for Android builder")),
+    fn build_rust(&self, ctx: &BuilderContext) -> BuildResult<BuildArtifacts> {
+        let crate::platform::Platform::Android { targets } = &ctx.platform else {
+            return Err(BuildError::InvalidPlatform {
+                reason: "Expected Android platform".to_string(),
+            });
         };
 
         let jni_libs_dir = self
@@ -155,7 +158,7 @@ impl PlatformBuilder for AndroidBuilder {
         }
 
         if rust_libs.is_empty() {
-            return Err(anyhow!("No .so files generated"));
+            return Err(BuildError::Other("No .so files generated".to_string()));
         }
 
         tracing::info!("Generated {} native libraries", rust_libs.len());
@@ -170,7 +173,7 @@ impl PlatformBuilder for AndroidBuilder {
         &self,
         ctx: &BuilderContext,
         artifacts: &BuildArtifacts,
-    ) -> Result<FinalArtifacts> {
+    ) -> BuildResult<FinalArtifacts> {
         tracing::info!("Building APK with Gradle...");
 
         let android_dir = self.workspace_root.join("platforms").join("android");
@@ -193,7 +196,7 @@ impl PlatformBuilder for AndroidBuilder {
             let so_file = artifacts
                 .rust_libs
                 .first()
-                .ok_or_else(|| anyhow!("No native libraries found"))?;
+                .ok_or_else(|| BuildError::Other("No native libraries found".to_string()))?;
             let size_bytes = std::fs::metadata(so_file)?.len();
 
             return Ok(FinalArtifacts {
@@ -223,10 +226,13 @@ impl PlatformBuilder for AndroidBuilder {
             .join(ctx.profile.as_str());
 
         let apk_path = std::fs::read_dir(&apk_dir)?
-            .filter_map(|entry| entry.ok())
+            .filter_map(std::result::Result::ok)
             .map(|entry| entry.path())
             .find(|path| path.extension().is_some_and(|ext| ext == "apk"))
-            .ok_or_else(|| anyhow!("APK not found in {:?}", apk_dir))?;
+            .ok_or_else(|| BuildError::PathNotFound {
+                path: apk_dir.clone(),
+                context: "APK file not found in build output".to_string(),
+            })?;
 
         let size_bytes = std::fs::metadata(&apk_path)?.len();
 
@@ -244,7 +250,7 @@ impl PlatformBuilder for AndroidBuilder {
         })
     }
 
-    fn clean(&self, ctx: &BuilderContext) -> Result<()> {
+    fn clean(&self, ctx: &BuilderContext) -> BuildResult<()> {
         let jni_libs_dir = self
             .workspace_root
             .join("platforms")

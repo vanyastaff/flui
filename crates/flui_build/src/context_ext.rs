@@ -1,4 +1,4 @@
-/// Extension trait for BuilderContext with convenient utility methods.
+/// Extension trait for `BuilderContext` with convenient utility methods.
 ///
 /// This module provides the `BuilderContextExt` trait which adds utility methods
 /// to `BuilderContext` without bloating the core struct. This follows the
@@ -27,7 +27,7 @@ use std::path::PathBuf;
 
 use crate::platform::{BuilderContext, Platform, Profile};
 
-/// Extension trait providing convenient methods for BuilderContext.
+/// Extension trait providing convenient methods for `BuilderContext`.
 ///
 /// This trait is automatically implemented for all `BuilderContext` instances
 /// via blanket implementation, providing useful utility methods without

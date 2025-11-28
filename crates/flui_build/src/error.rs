@@ -1,4 +1,4 @@
-/// Custom error types for the flui_build crate.
+/// Custom error types for the `flui_build` crate.
 ///
 /// This module provides type-safe error handling with detailed error messages
 /// and context. All build errors are represented by the `BuildError` enum.
@@ -87,7 +87,7 @@ pub enum BuildError {
     /// Environment variable missing or invalid
     #[error("Environment variable {var} error: {reason}")]
     EnvVarError {
-        /// Environment variable name (e.g., "ANDROID_HOME")
+        /// Environment variable name (e.g., "`ANDROID_HOME`")
         var: String,
         /// Error description
         reason: String,
@@ -175,7 +175,7 @@ pub type BuildResult<T> = Result<T, BuildError>;
 
 // Helper functions for creating common errors
 impl BuildError {
-    /// Create a ToolNotFound error.
+    /// Create a `ToolNotFound` error.
     ///
     /// # Examples
     ///
@@ -191,7 +191,7 @@ impl BuildError {
         }
     }
 
-    /// Create a TargetNotInstalled error.
+    /// Create a `TargetNotInstalled` error.
     ///
     /// # Examples
     ///
@@ -213,7 +213,7 @@ impl BuildError {
         }
     }
 
-    /// Create an EnvVarError.
+    /// Create an `EnvVarError`.
     ///
     /// # Examples
     ///
@@ -229,7 +229,7 @@ impl BuildError {
         }
     }
 
-    /// Create a CommandFailed error.
+    /// Create a `CommandFailed` error.
     ///
     /// # Examples
     ///
@@ -250,7 +250,7 @@ impl BuildError {
         }
     }
 
-    /// Create a PathNotFound error.
+    /// Create a `PathNotFound` error.
     ///
     /// # Examples
     ///
@@ -270,7 +270,7 @@ impl BuildError {
         }
     }
 
-    /// Create an InvalidPlatform error.
+    /// Create an `InvalidPlatform` error.
     ///
     /// # Examples
     ///
@@ -285,7 +285,7 @@ impl BuildError {
         }
     }
 
-    /// Create an InvalidConfig error.
+    /// Create an `InvalidConfig` error.
     ///
     /// # Examples
     ///
