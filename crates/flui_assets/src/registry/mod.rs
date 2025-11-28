@@ -39,7 +39,16 @@ pub struct AssetRegistry {
     caches: Arc<RwLock<HashMap<TypeId, Box<dyn Any + Send + Sync>>>>,
 
     /// Default cache capacity in bytes.
-    default_capacity: usize,
+    pub(crate) default_capacity: usize,
+}
+
+impl std::fmt::Debug for AssetRegistry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AssetRegistry")
+            .field("cache_count", &self.caches.read().len())
+            .field("default_capacity", &self.default_capacity)
+            .finish()
+    }
 }
 
 impl AssetRegistry {
@@ -70,6 +79,17 @@ impl AssetRegistry {
     }
 
     /// Loads an asset, using the cache if available.
+    ///
+    /// If the asset is already cached, returns the cached version immediately.
+    /// Otherwise, loads the asset and adds it to the cache.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The asset cannot be loaded (`AssetError::LoadFailed`)
+    /// - The asset data is invalid (`AssetError::DecodeFailed`)
+    /// - The asset format is unsupported (`AssetError::UnsupportedFormat`)
+    /// - Any I/O error occurs (`AssetError::Io`)
     ///
     /// # Examples
     ///
@@ -251,32 +271,84 @@ impl Default for AssetRegistry {
     }
 }
 
-/// Builder for constructing an asset registry.
+// ===== Type State Builder Pattern =====
+
+/// Type-state marker: Capacity not yet set.
+#[derive(Debug, Clone, Copy)]
+pub struct NoCapacity;
+
+/// Type-state marker: Capacity has been set.
+#[derive(Debug, Clone, Copy)]
+pub struct HasCapacity(pub(crate) usize);
+
+/// Builder for constructing an asset registry with compile-time validation.
+///
+/// This builder uses the type-state pattern to ensure required configuration
+/// is provided at compile-time. The `build()` method is only available after
+/// capacity has been set.
+///
+/// # Type States
+///
+/// - `AssetRegistryBuilder<NoCapacity>` - Initial state, capacity must be set
+/// - `AssetRegistryBuilder<HasCapacity>` - Ready to build
 ///
 /// # Examples
 ///
 /// ```rust,ignore
 /// use flui_assets::AssetRegistryBuilder;
 ///
+/// // This compiles - capacity is set
 /// let registry = AssetRegistryBuilder::new()
 ///     .with_capacity(200 * 1024 * 1024) // 200 MB
 ///     .build();
+///
+/// // This won't compile - capacity not set
+/// // let registry = AssetRegistryBuilder::new().build(); // ❌ ERROR
 /// ```
-pub struct AssetRegistryBuilder {
-    default_capacity: usize,
+///
+/// # Default Capacity
+///
+/// If you want a registry with default capacity, use `with_default_capacity()`:
+///
+/// ```rust,ignore
+/// let registry = AssetRegistryBuilder::new()
+///     .with_default_capacity() // 100 MB
+///     .build();
+/// ```
+pub struct AssetRegistryBuilder<C = NoCapacity> {
+    capacity: C,
 }
 
-impl AssetRegistryBuilder {
+// ===== Initial State: NoCapacity =====
+
+impl AssetRegistryBuilder<NoCapacity> {
     /// Creates a new registry builder.
+    ///
+    /// You must call `with_capacity()` or `with_default_capacity()` before building.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let builder = AssetRegistryBuilder::new();
+    /// // builder.build(); // ❌ Won't compile - capacity not set
+    /// ```
     pub fn new() -> Self {
         Self {
-            default_capacity: 100 * 1024 * 1024, // 100 MB default
+            capacity: NoCapacity,
         }
     }
 
-    /// Sets the default cache capacity in bytes.
+    /// Sets a custom cache capacity in bytes.
     ///
     /// This capacity is used for each asset type's cache.
+    ///
+    /// # Arguments
+    ///
+    /// * `capacity_bytes` - Cache capacity in bytes (must be > 0)
+    ///
+    /// # Panics
+    ///
+    /// Panics if `capacity_bytes` is 0.
     ///
     /// # Examples
     ///
@@ -285,18 +357,72 @@ impl AssetRegistryBuilder {
     ///     .with_capacity(500 * 1024 * 1024) // 500 MB
     ///     .build();
     /// ```
-    pub fn with_capacity(mut self, capacity_bytes: usize) -> Self {
-        self.default_capacity = capacity_bytes;
-        self
+    pub fn with_capacity(self, capacity_bytes: usize) -> AssetRegistryBuilder<HasCapacity> {
+        assert!(capacity_bytes > 0, "Capacity must be greater than 0");
+        AssetRegistryBuilder {
+            capacity: HasCapacity(capacity_bytes),
+        }
     }
 
-    /// Builds the registry.
-    pub fn build(self) -> AssetRegistry {
-        AssetRegistry::new(self.default_capacity)
+    /// Sets the default cache capacity (100 MB).
+    ///
+    /// This is a convenience method for the common case.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let registry = AssetRegistryBuilder::new()
+    ///     .with_default_capacity()
+    ///     .build();
+    /// ```
+    pub fn with_default_capacity(self) -> AssetRegistryBuilder<HasCapacity> {
+        AssetRegistryBuilder {
+            capacity: HasCapacity(100 * 1024 * 1024), // 100 MB
+        }
     }
 }
 
-impl Default for AssetRegistryBuilder {
+// ===== Final State: HasCapacity =====
+
+impl AssetRegistryBuilder<HasCapacity> {
+    /// Builds the asset registry.
+    ///
+    /// This method is only available after capacity has been set.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let registry = AssetRegistryBuilder::new()
+    ///     .with_capacity(200 * 1024 * 1024)
+    ///     .build();
+    /// ```
+    pub fn build(self) -> AssetRegistry {
+        AssetRegistry::new(self.capacity.0)
+    }
+
+    /// Updates the capacity after it has been set.
+    ///
+    /// This allows changing the capacity even after calling `with_capacity()`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let registry = AssetRegistryBuilder::new()
+    ///     .with_capacity(100 * 1024 * 1024)
+    ///     .with_capacity(200 * 1024 * 1024) // Override previous value
+    ///     .build();
+    /// ```
+    pub fn with_capacity(self, capacity_bytes: usize) -> AssetRegistryBuilder<HasCapacity> {
+        assert!(capacity_bytes > 0, "Capacity must be greater than 0");
+        AssetRegistryBuilder {
+            capacity: HasCapacity(capacity_bytes),
+        }
+    }
+}
+
+// ===== Convenience: Default Implementation =====
+
+impl Default for AssetRegistryBuilder<NoCapacity> {
     fn default() -> Self {
         Self::new()
     }
@@ -399,5 +525,91 @@ mod tests {
 
         // Should be the same instance
         assert!(std::ptr::eq(registry1, registry2));
+    }
+
+    // ===== Type State Builder Tests =====
+
+    #[test]
+    fn test_builder_with_capacity() {
+        let registry = AssetRegistryBuilder::new()
+            .with_capacity(50 * 1024 * 1024)
+            .build();
+
+        // Registry should work correctly
+        assert_eq!(registry.default_capacity, 50 * 1024 * 1024);
+    }
+
+    #[test]
+    fn test_builder_with_default_capacity() {
+        let registry = AssetRegistryBuilder::new()
+            .with_default_capacity()
+            .build();
+
+        // Should use default capacity (100 MB)
+        assert_eq!(registry.default_capacity, 100 * 1024 * 1024);
+    }
+
+    #[test]
+    fn test_builder_capacity_override() {
+        let registry = AssetRegistryBuilder::new()
+            .with_capacity(100 * 1024 * 1024)
+            .with_capacity(200 * 1024 * 1024) // Override
+            .build();
+
+        // Should use the last capacity set
+        assert_eq!(registry.default_capacity, 200 * 1024 * 1024);
+    }
+
+    #[test]
+    #[should_panic(expected = "Capacity must be greater than 0")]
+    fn test_builder_zero_capacity_panics() {
+        let _registry = AssetRegistryBuilder::new()
+            .with_capacity(0) // Should panic
+            .build();
+    }
+
+    #[test]
+    fn test_builder_default() {
+        let builder = AssetRegistryBuilder::default();
+        let registry = builder.with_default_capacity().build();
+
+        assert_eq!(registry.default_capacity, 100 * 1024 * 1024);
+    }
+
+    // This test demonstrates compile-time safety
+    // Uncommenting this should cause a compile error:
+    // #[test]
+    // fn test_builder_without_capacity_does_not_compile() {
+    //     let _registry = AssetRegistryBuilder::new().build(); // ❌ ERROR: no method `build` on NoCapacity
+    // }
+
+    #[test]
+    fn test_registry_is_send_sync() {
+        fn assert_send<T: Send>() {}
+        fn assert_sync<T: Sync>() {}
+
+        assert_send::<AssetRegistry>();
+        assert_sync::<AssetRegistry>();
+    }
+
+    #[test]
+    fn test_registry_debug() {
+        let registry = AssetRegistry::default();
+        let debug_str = format!("{:?}", registry);
+        assert!(debug_str.contains("AssetRegistry"));
+        assert!(debug_str.contains("cache_count"));
+        assert!(debug_str.contains("default_capacity"));
+    }
+
+    #[test]
+    fn test_type_state_markers_debug() {
+        let no_cap = NoCapacity;
+        let has_cap = HasCapacity(100);
+
+        let debug1 = format!("{:?}", no_cap);
+        let debug2 = format!("{:?}", has_cap);
+
+        assert!(debug1.contains("NoCapacity"));
+        assert!(debug2.contains("HasCapacity"));
     }
 }

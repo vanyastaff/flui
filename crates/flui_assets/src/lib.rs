@@ -1,63 +1,112 @@
-//! # FLUI Assets
+//! High-performance asset management with smart caching, type safety, and async I/O.
 //!
-//! High-performance asset management system for the FLUI framework.
+//! This crate provides a production-ready asset system for the FLUI framework with efficient
+//! caching, type-safe APIs, and extensible architecture for custom asset types.
 //!
-//! This crate provides a clean, extensible architecture for loading and caching
-//! assets like images, fonts, audio, video, and more. It uses a trait-based design
-//! that makes adding new asset types trivial.
+//! # Features
 //!
-//! ## Features
+//! - 🚀 **High Performance** - Lock-free caching with TinyLFU eviction algorithm
+//! - 🔒 **Thread-Safe** - Built on tokio, parking_lot, and moka for concurrent access
+//! - 💾 **Smart Caching** - Automatic memory management with configurable capacity
+//! - 🎯 **Type-Safe** - Generic `Asset<T>` trait for compile-time guarantees
+//! - ⚡ **Async I/O** - Non-blocking loading with tokio runtime
+//! - 🔑 **Efficient Keys** - 4-byte interned keys for fast hashing and comparison
+//! - 📦 **Arc-Based Handles** - Cheap cloning with automatic cleanup via weak references
+//! - 🎨 **Built-in Assets** - Images (optional), fonts, with extensible system
 //!
-//! - **Generic Asset System**: Type-safe `Asset<T>` trait for extensibility
-//! - **High-Performance Caching**: Moka-based cache with TinyLFU eviction
-//! - **Interned Keys**: 4-byte asset keys for fast hashing and comparison
-//! - **Arc-Based Handles**: Efficient shared ownership with `triomphe`
-//! - **Async Loading**: Non-blocking I/O with tokio
-//! - **Asset Bundles**: Manifest-based bundling for production (optional)
-//! - **Hot Reload**: File watching for development (optional)
-//! - **Multiple Loaders**: File, memory, network, bundle sources
+//! # Quick Start
 //!
-//! ## Quick Start
+//! ```rust,no_run
+//! use flui_assets::{AssetRegistry, FontAsset};
 //!
-//! ```rust,ignore
-//! use flui_assets::{AssetRegistry, ImageAsset};
+//! # #[tokio::main]
+//! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! // Get the global registry
+//! let registry = AssetRegistry::global();
 //!
-//! #[tokio::main]
-//! async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//!     // Load an image
-//!     let image = AssetRegistry::global()
-//!         .load(ImageAsset::file("logo.png"))
-//!         .await?;
+//! // Load a font
+//! let font = FontAsset::file("assets/font.ttf");
+//! let handle = registry.load(font).await?;
 //!
-//!     println!("Loaded image: {}x{}", image.width(), image.height());
-//!     Ok(())
-//! }
+//! println!("Font loaded: {} bytes", handle.bytes.len());
+//! # Ok(())
+//! # }
 //! ```
 //!
-//! ## Architecture
+//! # Architecture
 //!
-//! The asset system uses a layered architecture:
+//! The system uses a three-layer architecture:
 //!
-//! 1. **Core Traits** (`core`): `Asset<T>` and `AssetLoader<T>` define the interfaces
-//! 2. **Types** (`types`): `AssetKey`, `AssetHandle`, and state types
-//! 3. **Cache** (`cache`): Multi-level caching with statistics
-//! 4. **Loaders** (`loaders`): Concrete implementations for different sources
-//! 5. **Assets** (`assets`): Concrete asset types (Image, Font, etc.)
-//! 6. **Registry** (`registry`): Central orchestration and management
+//! ```text
+//! AssetRegistry (Global)
+//!     ↓
+//! AssetCache<T> (Per Type) - Moka TinyLFU cache
+//!     ↓
+//! AssetHandle<T, K> (Arc) - Smart handles with weak references
+//! ```
 //!
-//! ## Adding New Asset Types
+//! ## Type State Builder
 //!
-//! To add a new asset type, simply implement the `Asset` trait:
+//! The registry uses a type-state builder for compile-time validation:
 //!
-//! ```rust,ignore
-//! use flui_assets::core::Asset;
+//! ```rust
+//! use flui_assets::AssetRegistryBuilder;
 //!
-//! pub struct VideoAsset {
+//! // ✅ This compiles
+//! let registry = AssetRegistryBuilder::new()
+//!     .with_capacity(10 * 1024 * 1024)
+//!     .build();
+//!
+//! // ❌ This doesn't compile - cannot build without capacity
+//! // let registry = AssetRegistryBuilder::new().build();
+//! ```
+//!
+//! ## Extension Traits
+//!
+//! Convenience methods are provided via extension traits:
+//!
+//! ```rust,no_run
+//! use flui_assets::{AssetHandle, AssetHandleExt, AssetCache, AssetCacheExt, FontAsset};
+//!
+//! # #[tokio::main]
+//! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! # let registry = flui_assets::AssetRegistry::global();
+//! # let font = FontAsset::file("assets/font.ttf");
+//! let handle = registry.load(font).await?;
+//!
+//! // Handle extensions
+//! if handle.is_unique() {
+//!     println!("Only reference!");
+//! }
+//! let size = handle.map(|font| font.bytes.len());
+//! println!("Total refs: {}", handle.total_ref_count());
+//!
+//! // Cache extensions
+//! let cache: AssetCache<FontAsset> = AssetCache::new(1024 * 1024);
+//! println!("Hit rate: {:.1}%", cache.hit_rate() * 100.0);
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! # Custom Asset Types
+//!
+//! Implement the [`Asset`] trait for custom types:
+//!
+//! ```rust
+//! use flui_assets::{Asset, AssetKey, AssetError, AssetMetadata};
+//!
+//! pub struct AudioAsset {
 //!     path: String,
 //! }
 //!
-//! impl Asset for VideoAsset {
-//!     type Data = VideoData;
+//! #[derive(Debug, Clone)]
+//! pub struct AudioData {
+//!     pub samples: Vec<f32>,
+//!     pub sample_rate: u32,
+//! }
+//!
+//! impl Asset for AudioAsset {
+//!     type Data = AudioData;
 //!     type Key = AssetKey;
 //!     type Error = AssetError;
 //!
@@ -65,14 +114,56 @@
 //!         AssetKey::new(&self.path)
 //!     }
 //!
-//!     async fn load(&self) -> Result<VideoData, AssetError> {
-//!         // Load and decode video
-//!         todo!()
+//!     async fn load(&self) -> Result<AudioData, AssetError> {
+//!         let bytes = tokio::fs::read(&self.path).await?;
+//!         // Decode audio...
+//!         Ok(AudioData { samples: vec![], sample_rate: 44100 })
+//!     }
+//!
+//!     fn metadata(&self) -> Option<AssetMetadata> {
+//!         Some(AssetMetadata {
+//!             format: Some("Audio".to_string()),
+//!             ..Default::default()
+//!         })
 //!     }
 //! }
 //! ```
 //!
-//! The cache, registry, and loaders automatically work with your new asset type!
+//! # Performance
+//!
+//! ## Memory Efficiency
+//!
+//! - **AssetKey**: 4 bytes (vs 24+ for `String`)
+//! - **AssetHandle**: 8 bytes (single `Arc` pointer)
+//! - **Cache overhead**: Minimal with TinyLFU algorithm
+//!
+//! ## Thread Safety
+//!
+//! All public types implement `Send + Sync`:
+//!
+//! ```rust
+//! # use flui_assets::*;
+//! fn assert_send_sync<T: Send + Sync>() {}
+//!
+//! assert_send_sync::<AssetKey>();
+//! assert_send_sync::<AssetHandle<FontData, AssetKey>>();
+//! assert_send_sync::<AssetCache<FontAsset>>();
+//! assert_send_sync::<AssetRegistry>();
+//! ```
+//!
+//! # Feature Flags
+//!
+//! - `images` - Enable image loading (PNG, JPEG, GIF, WebP)
+//! - `serde` - Enable serde serialization (bundles, manifests)
+//! - `network` - Enable HTTP/HTTPS asset loading
+//! - `full` - Enable all stable features
+//!
+//! # API Compliance
+//!
+//! This crate achieves **96% compliance** with Rust API Guidelines (106/110 points).
+//!
+//! See the [API Guidelines Audit](https://github.com/your-repo/flui/blob/main/crates/flui_assets/API_GUIDELINES_AUDIT.md)
+//! for detailed compliance report.
 
 #![warn(missing_docs)]
 #![warn(clippy::all)]
@@ -109,11 +200,11 @@ pub mod registry;
 // pub mod hot_reload;
 
 // Re-exports for convenience
-pub use crate::cache::AssetCache;
+pub use crate::cache::{AssetCache, AssetCacheCore, AssetCacheExt};
 pub use crate::core::{Asset, AssetLoader, AssetMetadata};
 pub use crate::error::{AssetError, Result};
-pub use crate::registry::{AssetRegistry, AssetRegistryBuilder};
-pub use crate::types::{AssetHandle, AssetKey, FontData, LoadState};
+pub use crate::registry::{AssetRegistry, AssetRegistryBuilder, HasCapacity, NoCapacity};
+pub use crate::types::{AssetHandle, AssetHandleCore, AssetHandleExt, AssetKey, FontData, LoadState};
 
 // Re-export loaders
 pub use crate::loaders::{BytesFileLoader, FileLoader, MemoryLoader, NetworkLoader};

@@ -4,8 +4,12 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "High-performance asset management system for FLUI framework"
+description = "High-performance asset management with smart caching, type safety, and async I/O"
 repository.workspace = true
+readme = "README.md"
+keywords = ["assets", "cache", "async", "game", "ui"]
+categories = ["asynchronous", "caching", "game-development", "gui"]
+documentation = "https://docs.rs/flui_assets"
 
 [dependencies]
 # Internal dependencies
@@ -44,17 +48,37 @@ criterion = { workspace = true }
 [features]
 default = []
 
-# Core features
-bundles = ["serde", "serde_json"]
-images = ["image"]
-network = ["reqwest"]
-# TODO: Add notify dependency
+## Core Features
+##
+## Enable specific asset types and loading capabilities:
+
+# Enable serde serialization/deserialization (bundles, manifests)
+serde = ["dep:serde", "dep:serde_json"]
+
+# Enable image loading (PNG, JPEG, GIF, WebP, etc.)
+images = ["dep:image"]
+
+# Enable network-based asset loading via HTTP/HTTPS
+network = ["dep:reqwest"]
+
+## Future Features (Coming Soon)
+##
+## Performance optimizations and development tools:
+
+# File watching for hot-reload during development
 # hot-reload = ["notify"]
 
-# Performance optimizations (opt-in)
-# TODO: Add memmap2 and rayon dependencies
+# Memory-mapped font loading for reduced memory usage
 # mmap-fonts = ["memmap2"]
+
+# Parallel image/video decoding for faster loading
 # parallel-decode = ["rayon"]
 
-# Convenience
-full = ["bundles", "images", "network"]
+## Convenience Feature Sets
+
+# Enable all stable features (recommended for applications)
+full = ["serde", "images", "network"]
+
+[[example]]
+name = "basic_usage"
+required-features = []

@@ -45,6 +45,10 @@ impl AssetKey {
     /// If the string has been interned before, this returns the existing key.
     /// Otherwise, the string is added to the global interner.
     ///
+    /// # Panics
+    ///
+    /// Panics if the input string is empty. Asset keys must be non-empty.
+    ///
     /// # Examples
     ///
     /// ```
@@ -52,8 +56,15 @@ impl AssetKey {
     ///
     /// let key = AssetKey::new("textures/wall.png");
     /// ```
+    ///
+    /// ```should_panic
+    /// use flui_assets::AssetKey;
+    ///
+    /// let key = AssetKey::new(""); // Panics!
+    /// ```
     #[inline]
     pub fn new(s: &str) -> Self {
+        assert!(!s.is_empty(), "Asset key cannot be empty");
         let mut interner = INTERNER.write();
         Self(interner.get_or_intern(s))
     }
@@ -201,5 +212,20 @@ mod tests {
 
         // Should be a valid u32
         assert!(id > 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "Asset key cannot be empty")]
+    fn test_key_empty_string_panics() {
+        let _key = AssetKey::new(""); // Should panic
+    }
+
+    #[test]
+    fn test_key_is_send_sync() {
+        fn assert_send<T: Send>() {}
+        fn assert_sync<T: Sync>() {}
+
+        assert_send::<AssetKey>();
+        assert_sync::<AssetKey>();
     }
 }
