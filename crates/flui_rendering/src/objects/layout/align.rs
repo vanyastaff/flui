@@ -94,7 +94,7 @@ impl Default for RenderAlign {
     }
 }
 
-impl RenderBox<Optional> for RenderAlign {
+impl<T: FullRenderTree> RenderBox<T, Optional> for RenderAlign {
     fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Optional, BoxProtocol>) -> Size
     where
         T: crate::core::LayoutTree,

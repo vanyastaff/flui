@@ -1,7 +1,7 @@
-use anyhow::Result;
+use crate::error::CliResult;
 use console::style;
 
-pub fn add(platforms: Vec<String>) -> Result<()> {
+pub fn add(platforms: Vec<String>) -> CliResult<()> {
     println!(
         "{}",
         style(format!("Adding platform support: {}", platforms.join(", ")))
@@ -23,7 +23,7 @@ pub fn add(platforms: Vec<String>) -> Result<()> {
     Ok(())
 }
 
-pub fn remove(platform: String) -> Result<()> {
+pub fn remove(platform: String) -> CliResult<()> {
     println!(
         "{}",
         style(format!("Removing platform support: {}", platform))
@@ -40,7 +40,7 @@ pub fn remove(platform: String) -> Result<()> {
     Ok(())
 }
 
-pub fn list() -> Result<()> {
+pub fn list() -> CliResult<()> {
     println!("{}", style("Supported platforms:").green().bold());
     println!();
     println!("  {} Android", style("✓").green());

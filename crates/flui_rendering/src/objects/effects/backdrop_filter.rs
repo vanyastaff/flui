@@ -4,7 +4,8 @@
 //! behind it in the paint order. Common use case is frosted glass effect.
 
 use crate::core::{
-    RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
+    FullRenderTree,
+    FullRenderTree, RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
 };
 use flui_foundation::ElementId;
 use flui_types::{geometry::Rect, painting::BlendMode, painting::ImageFilter, Size};
@@ -86,7 +87,7 @@ impl RenderBackdropFilter {
 
 // ===== RenderObject Implementation =====
 
-impl RenderBox<Single> for RenderBackdropFilter {
+impl<T: FullRenderTree> RenderBox<T, Single> for RenderBackdropFilter {
     fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Single, BoxProtocol>) -> Size
     where
         T: crate::core::LayoutTree,

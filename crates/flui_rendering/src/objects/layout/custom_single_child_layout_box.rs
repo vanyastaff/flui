@@ -8,7 +8,7 @@
 //!
 //! Flutter reference: <https://api.flutter.dev/flutter/rendering/RenderCustomSingleChildLayoutBox-class.html>
 
-use crate::core::{BoxProtocol, LayoutContext, PaintContext, RenderBox, Single};
+use crate::core::{BoxProtocol, LayoutContext, PaintContext, FullRenderTree, RenderBox, Single};
 use flui_types::{BoxConstraints, Offset, Size};
 use std::any::Any;
 use std::fmt::Debug;
@@ -190,7 +190,7 @@ impl RenderCustomSingleChildLayoutBox {
     }
 }
 
-impl RenderBox<Single> for RenderCustomSingleChildLayoutBox {
+impl<T: FullRenderTree> RenderBox<T, Single> for RenderCustomSingleChildLayoutBox {
     fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Single, BoxProtocol>) -> Size
     where
         T: crate::core::LayoutTree,

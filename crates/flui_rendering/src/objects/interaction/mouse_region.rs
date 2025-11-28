@@ -3,7 +3,8 @@
 //! Flutter reference: https://api.flutter.dev/flutter/rendering/RenderMouseRegion-class.html
 
 use crate::core::{
-    RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
+    FullRenderTree,
+    FullRenderTree, RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
 };
 use flui_types::Size;
 
@@ -171,7 +172,7 @@ impl RenderMouseRegion {
     }
 }
 
-impl RenderBox<Single> for RenderMouseRegion {
+impl<T: FullRenderTree> RenderBox<T, Single> for RenderMouseRegion {
     fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Single, BoxProtocol>) -> Size
     where
         T: crate::core::LayoutTree,

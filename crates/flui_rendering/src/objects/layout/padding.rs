@@ -37,7 +37,7 @@ impl RenderPadding {
     }
 }
 
-impl RenderBox<Optional> for RenderPadding {
+impl<T: FullRenderTree> RenderBox<T, Optional> for RenderPadding {
     fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Optional, BoxProtocol>) -> Size
     where
         T: crate::core::LayoutTree,

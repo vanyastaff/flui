@@ -99,7 +99,7 @@ impl std::fmt::Debug for RenderPhysicalShape {
     }
 }
 
-impl RenderBox<Optional> for RenderPhysicalShape {
+impl<T: FullRenderTree> RenderBox<T, Optional> for RenderPhysicalShape {
     fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Optional, BoxProtocol>) -> Size
     where
         T: crate::core::LayoutTree,

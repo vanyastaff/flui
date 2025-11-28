@@ -3,7 +3,8 @@
 //! Flutter reference: <https://api.flutter.dev/flutter/widgets/BlockSemantics-class.html>
 
 use crate::core::{
-    RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
+    FullRenderTree,
+    FullRenderTree, RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
 };
 use flui_types::Size;
 
@@ -53,7 +54,7 @@ impl RenderBlockSemantics {
 
 // ===== RenderObject Implementation =====
 
-impl RenderBox<Single> for RenderBlockSemantics {
+impl<T: FullRenderTree> RenderBox<T, Single> for RenderBlockSemantics {
     fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Single, BoxProtocol>) -> Size
     where
         T: crate::core::LayoutTree,

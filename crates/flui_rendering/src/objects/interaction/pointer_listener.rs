@@ -4,7 +4,8 @@
 //! calling the appropriate callbacks when events occur.
 
 use crate::core::{
-    HitTestTree, RenderBox, Single, {BoxProtocol, HitTestContext, LayoutContext, PaintContext},
+    FullRenderTree,
+    HitTestTree, FullRenderTree, RenderBox, Single, {BoxProtocol, HitTestContext, LayoutContext, PaintContext},
 };
 use flui_foundation::ElementId;
 use flui_interaction::HitTestResult;
@@ -171,7 +172,7 @@ impl RenderPointerListener {
     }
 }
 
-impl RenderBox<Single> for RenderPointerListener {
+impl<T: FullRenderTree> RenderBox<T, Single> for RenderPointerListener {
     fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Single, BoxProtocol>) -> Size
     where
         T: crate::core::LayoutTree,

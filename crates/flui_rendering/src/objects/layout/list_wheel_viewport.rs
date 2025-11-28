@@ -5,7 +5,7 @@
 //!
 //! Flutter reference: <https://api.flutter.dev/flutter/rendering/RenderListWheelViewport-class.html>
 
-use crate::core::{BoxProtocol, ChildrenAccess, LayoutContext, PaintContext, RenderBox, Variable};
+use crate::core::{BoxProtocol, ChildrenAccess, LayoutContext, PaintContext, FullRenderTree, RenderBox, Variable};
 use flui_types::constraints::BoxConstraints;
 use flui_types::prelude::*;
 use std::f32::consts::PI;
@@ -206,7 +206,7 @@ impl Default for RenderListWheelViewport {
     }
 }
 
-impl RenderBox<Variable> for RenderListWheelViewport {
+impl<T: FullRenderTree> RenderBox<T, Variable> for RenderListWheelViewport {
     fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Variable, BoxProtocol>) -> Size
     where
         T: crate::core::LayoutTree,

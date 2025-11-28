@@ -5,7 +5,7 @@
 //!
 //! Flutter reference: <https://api.flutter.dev/flutter/widgets/SingleChildScrollView-class.html>
 
-use crate::core::{BoxProtocol, LayoutContext, PaintContext, RenderBox, Single};
+use crate::core::{BoxProtocol, LayoutContext, PaintContext, FullRenderTree, RenderBox, Single};
 use flui_types::layout::Axis;
 use flui_types::painting::Paint;
 use flui_types::prelude::*;
@@ -249,7 +249,7 @@ impl Default for RenderScrollView {
     }
 }
 
-impl RenderBox<Single> for RenderScrollView {
+impl<T: FullRenderTree> RenderBox<T, Single> for RenderScrollView {
     fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Single, BoxProtocol>) -> Size
     where
         T: crate::core::LayoutTree,

@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use crate::core::{BoxProtocol, FlexParentData, LayoutContext, PaintContext, RenderBox, Variable};
+use crate::core::{BoxProtocol, FlexParentData, LayoutContext, PaintContext, FullRenderTree, RenderBox, Variable};
 use flui_foundation::ElementId;
 use flui_types::{
     constraints::BoxConstraints,
@@ -245,7 +245,7 @@ impl Default for RenderFlex {
     }
 }
 
-impl RenderBox<Variable> for RenderFlex {
+impl<T: FullRenderTree> RenderBox<T, Variable> for RenderFlex {
     fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Variable, BoxProtocol>) -> Size
     where
         T: crate::core::LayoutTree,

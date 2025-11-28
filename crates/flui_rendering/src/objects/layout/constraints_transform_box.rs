@@ -10,7 +10,7 @@
 //!
 //! Flutter reference: <https://api.flutter.dev/flutter/rendering/RenderConstraintsTransformBox-class.html>
 
-use crate::core::{BoxProtocol, LayoutContext, PaintContext, RenderBox, Single};
+use crate::core::{BoxProtocol, LayoutContext, PaintContext, FullRenderTree, RenderBox, Single};
 use flui_types::{Alignment, BoxConstraints, Offset, Size};
 use std::fmt::Debug;
 
@@ -157,7 +157,7 @@ impl RenderConstraintsTransformBox {
     }
 }
 
-impl RenderBox<Single> for RenderConstraintsTransformBox {
+impl<T: FullRenderTree> RenderBox<T, Single> for RenderConstraintsTransformBox {
     fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Single, BoxProtocol>) -> Size
     where
         T: crate::core::LayoutTree,

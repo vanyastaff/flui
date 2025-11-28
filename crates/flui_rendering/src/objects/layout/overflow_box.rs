@@ -3,7 +3,7 @@
 //! Flutter equivalent: `RenderConstrainedOverflowBox`
 //! Source: https://api.flutter.dev/flutter/rendering/RenderConstrainedOverflowBox-class.html
 
-use crate::core::{BoxProtocol, LayoutContext, PaintContext, RenderBox, Single};
+use crate::core::{BoxProtocol, LayoutContext, PaintContext, FullRenderTree, RenderBox, Single};
 use flui_types::constraints::BoxConstraints;
 use flui_types::{Alignment, Offset, Size};
 
@@ -101,7 +101,7 @@ impl Default for RenderOverflowBox {
     }
 }
 
-impl RenderBox<Single> for RenderOverflowBox {
+impl<T: FullRenderTree> RenderBox<T, Single> for RenderOverflowBox {
     fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Single, BoxProtocol>) -> Size
     where
         T: crate::core::LayoutTree,

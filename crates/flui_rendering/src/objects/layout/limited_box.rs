@@ -62,7 +62,7 @@ impl Default for RenderLimitedBox {
     }
 }
 
-impl RenderBox<Optional> for RenderLimitedBox {
+impl<T: FullRenderTree> RenderBox<T, Optional> for RenderLimitedBox {
     fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Optional, BoxProtocol>) -> Size
     where
         T: crate::core::LayoutTree,

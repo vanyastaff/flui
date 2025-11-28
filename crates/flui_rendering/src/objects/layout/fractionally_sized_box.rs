@@ -4,7 +4,8 @@
 //! Source: https://api.flutter.dev/flutter/rendering/RenderFractionallySizedOverflowBox-class.html
 
 use crate::core::{
-    RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
+    FullRenderTree,
+    FullRenderTree, RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
 };
 use flui_types::{Alignment, Size};
 
@@ -119,7 +120,7 @@ impl Default for RenderFractionallySizedBox {
     }
 }
 
-impl RenderBox<Single> for RenderFractionallySizedBox {
+impl<T: FullRenderTree> RenderBox<T, Single> for RenderFractionallySizedBox {
     fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Single, BoxProtocol>) -> Size
     where
         T: crate::core::LayoutTree,

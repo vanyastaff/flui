@@ -1,7 +1,8 @@
 //! RenderOffstage - hides widget from display
 
 use crate::core::{
-    RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
+    FullRenderTree,
+    FullRenderTree, RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
 };
 use flui_types::Size;
 
@@ -45,7 +46,7 @@ impl Default for RenderOffstage {
     }
 }
 
-impl RenderBox<Single> for RenderOffstage {
+impl<T: FullRenderTree> RenderBox<T, Single> for RenderOffstage {
     fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Single, BoxProtocol>) -> Size
     where
         T: crate::core::LayoutTree,

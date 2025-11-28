@@ -155,7 +155,7 @@ impl RenderShrinkWrappingViewport {
     }
 }
 
-impl RenderBox<Variable> for RenderShrinkWrappingViewport {
+impl<T: FullRenderTree> RenderBox<T, Variable> for RenderShrinkWrappingViewport {
     fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Variable, BoxProtocol>) -> Size
     where
         T: LayoutTree,

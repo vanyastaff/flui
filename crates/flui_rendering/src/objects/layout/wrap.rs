@@ -3,7 +3,7 @@
 //! Flutter equivalent: `RenderWrap`
 //! Source: https://api.flutter.dev/flutter/rendering/RenderWrap-class.html
 
-use crate::core::{BoxProtocol, ChildrenAccess, LayoutContext, PaintContext, RenderBox, Variable};
+use crate::core::{BoxProtocol, ChildrenAccess, LayoutContext, PaintContext, FullRenderTree, RenderBox, Variable};
 use flui_types::constraints::BoxConstraints;
 use flui_types::{Axis, Offset, Size};
 
@@ -124,7 +124,7 @@ impl Default for RenderWrap {
     }
 }
 
-impl RenderBox<Variable> for RenderWrap {
+impl<T: FullRenderTree> RenderBox<T, Variable> for RenderWrap {
     fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Variable, BoxProtocol>) -> Size
     where
         T: crate::core::LayoutTree,

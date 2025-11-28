@@ -3,7 +3,8 @@
 //! Flutter reference: <https://api.flutter.dev/flutter/rendering/RenderFittedBox-class.html>
 
 use crate::core::{
-    RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
+    FullRenderTree,
+    FullRenderTree, RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
 };
 use flui_types::{layout::BoxFit, painting::ClipBehavior, Alignment, Offset, Size};
 
@@ -175,7 +176,7 @@ impl Default for RenderFittedBox {
 
 // ===== RenderObject Implementation =====
 
-impl RenderBox<Single> for RenderFittedBox {
+impl<T: FullRenderTree> RenderBox<T, Single> for RenderFittedBox {
     fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Single, BoxProtocol>) -> Size
     where
         T: crate::core::LayoutTree,

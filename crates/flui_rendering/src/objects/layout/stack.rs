@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use crate::core::{BoxProtocol, LayoutContext, PaintContext, RenderBox, StackParentData, Variable};
+use crate::core::{BoxProtocol, LayoutContext, PaintContext, FullRenderTree, RenderBox, StackParentData, Variable};
 use flui_foundation::ElementId;
 use flui_types::constraints::BoxConstraints;
 use flui_types::layout::StackFit;
@@ -206,7 +206,7 @@ impl Default for RenderStack {
     }
 }
 
-impl RenderBox<Variable> for RenderStack {
+impl<T: FullRenderTree> RenderBox<T, Variable> for RenderStack {
     fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Variable, BoxProtocol>) -> Size
     where
         T: crate::core::LayoutTree,

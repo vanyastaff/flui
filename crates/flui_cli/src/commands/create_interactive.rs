@@ -1,5 +1,5 @@
+use crate::error::{CliError, CliResult};
 use crate::Template;
-use anyhow::Result;
 use console::style;
 use dialoguer::{Confirm, Input, Select};
 
@@ -9,7 +9,7 @@ pub struct ProjectConfig {
     pub template: Template,
 }
 
-pub fn interactive_create() -> Result<ProjectConfig> {
+pub fn interactive_create() -> CliResult<ProjectConfig> {
     println!(
         "{}",
         style("Let's create a new FLUI project!").green().bold()
@@ -84,7 +84,7 @@ pub fn interactive_create() -> Result<ProjectConfig> {
         .interact()?;
 
     if !confirmed {
-        anyhow::bail!("Project creation cancelled");
+        return Err(CliError::UserCancelled);
     }
 
     Ok(ProjectConfig {

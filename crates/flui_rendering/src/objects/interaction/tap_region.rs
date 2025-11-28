@@ -6,7 +6,7 @@
 //!
 //! Flutter reference: https://api.flutter.dev/flutter/widgets/TapRegion-class.html
 
-use crate::core::{BoxProtocol, LayoutContext, PaintContext, RenderBox, Single};
+use crate::core::{BoxProtocol, LayoutContext, PaintContext, FullRenderTree, RenderBox, Single};
 use flui_types::Size;
 use std::sync::Arc;
 
@@ -253,7 +253,7 @@ impl Default for RenderTapRegion {
     }
 }
 
-impl RenderBox<Single> for RenderTapRegion {
+impl<T: FullRenderTree> RenderBox<T, Single> for RenderTapRegion {
     fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Single, BoxProtocol>) -> Size
     where
         T: crate::core::LayoutTree,

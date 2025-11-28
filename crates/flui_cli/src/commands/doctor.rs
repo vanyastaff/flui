@@ -1,8 +1,8 @@
-use anyhow::Result;
+use crate::error::CliResult;
 use console::style;
 use std::process::Command;
 
-pub fn execute(verbose: bool, android: bool, ios: bool, web: bool) -> Result<()> {
+pub fn execute(verbose: bool, android: bool, ios: bool, web: bool) -> CliResult<()> {
     println!("{}", style("Checking FLUI environment...").green().bold());
     println!();
 

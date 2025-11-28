@@ -5,7 +5,7 @@
 //!
 //! Flutter reference: <https://api.flutter.dev/flutter/rendering/RenderFractionalTranslation-class.html>
 
-use crate::core::{BoxProtocol, LayoutContext, PaintContext, RenderBox, Single};
+use crate::core::{BoxProtocol, LayoutContext, PaintContext, FullRenderTree, RenderBox, Single};
 use flui_types::{Offset, Size};
 
 /// RenderObject that translates its child by a fraction of the child's size
@@ -122,7 +122,7 @@ impl RenderFractionalTranslation {
     }
 }
 
-impl RenderBox<Single> for RenderFractionalTranslation {
+impl<T: FullRenderTree> RenderBox<T, Single> for RenderFractionalTranslation {
     fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Single, BoxProtocol>) -> Size
     where
         T: crate::core::LayoutTree,

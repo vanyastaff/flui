@@ -382,7 +382,7 @@ struct SliverLayoutResult {
     pub scroll_offset_correction: Option<f32>,
 }
 
-impl RenderBox<Variable> for RenderViewport {
+impl<T: FullRenderTree> RenderBox<T, Variable> for RenderViewport {
     fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Variable, BoxProtocol>) -> Size
     where
         T: LayoutTree,

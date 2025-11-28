@@ -3,7 +3,7 @@
 //! Flutter equivalent: `RenderIndexedStack`
 //! Source: https://api.flutter.dev/flutter/rendering/RenderIndexedStack-class.html
 
-use crate::core::{BoxProtocol, ChildrenAccess, LayoutContext, PaintContext, RenderBox, Variable};
+use crate::core::{BoxProtocol, ChildrenAccess, LayoutContext, PaintContext, FullRenderTree, RenderBox, Variable};
 use flui_types::{Alignment, Size};
 
 /// RenderObject that shows only one child from a list
@@ -71,7 +71,7 @@ impl Default for RenderIndexedStack {
     }
 }
 
-impl RenderBox<Variable> for RenderIndexedStack {
+impl<T: FullRenderTree> RenderBox<T, Variable> for RenderIndexedStack {
     fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Variable, BoxProtocol>) -> Size
     where
         T: crate::core::LayoutTree,

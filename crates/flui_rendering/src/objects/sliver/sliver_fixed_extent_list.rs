@@ -1,6 +1,7 @@
 //! RenderSliverFixedExtentList - Optimized list with fixed item size
 
 use crate::core::{
+    FullRenderTree,
     ChildrenAccess, LayoutContext, LayoutTree, PaintContext, PaintTree, SliverProtocol,
     SliverRender, Variable,
 };

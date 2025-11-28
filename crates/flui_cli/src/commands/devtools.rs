@@ -1,7 +1,7 @@
-use anyhow::Result;
+use crate::error::CliResult;
 use console::style;
 
-pub fn execute(port: u16) -> Result<()> {
+pub fn execute(port: u16) -> CliResult<()> {
     println!(
         "{}",
         style(format!("Launching DevTools on port {}...", port))

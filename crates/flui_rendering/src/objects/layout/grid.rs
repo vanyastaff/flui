@@ -8,7 +8,7 @@
 //!
 //! Flutter reference: <https://api.flutter.dev/flutter/widgets/GridView-class.html>
 
-use crate::core::{BoxProtocol, LayoutContext, LayoutTree, PaintContext, RenderBox, Variable};
+use crate::core::{BoxProtocol, LayoutContext, LayoutTree, PaintContext, FullRenderTree, RenderBox, Variable};
 use flui_foundation::ElementId;
 use flui_types::{BoxConstraints, Offset, Size};
 use std::collections::HashMap;
@@ -326,7 +326,7 @@ impl RenderGrid {
     }
 }
 
-impl RenderBox<Variable> for RenderGrid {
+impl<T: FullRenderTree> RenderBox<T, Variable> for RenderGrid {
     fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Variable, BoxProtocol>) -> Size
     where
         T: crate::core::LayoutTree,

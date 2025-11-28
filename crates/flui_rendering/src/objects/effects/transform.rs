@@ -1,7 +1,8 @@
 //! RenderTransform - applies matrix transformation to child
 
 use crate::core::{
-    HitTestTree, RenderBox, Single, {BoxProtocol, HitTestContext, LayoutContext, PaintContext},
+    FullRenderTree,
+    HitTestTree, FullRenderTree, RenderBox, Single, {BoxProtocol, HitTestContext, LayoutContext, PaintContext},
 };
 use flui_interaction::HitTestResult;
 use flui_types::{geometry::Transform, Matrix4, Offset, Size};
@@ -93,7 +94,7 @@ impl RenderTransform {
     }
 }
 
-impl RenderBox<Single> for RenderTransform {
+impl<T: FullRenderTree> RenderBox<T, Single> for RenderTransform {
     fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Single, BoxProtocol>) -> Size
     where
         T: crate::core::LayoutTree,

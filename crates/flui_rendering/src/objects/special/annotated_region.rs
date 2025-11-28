@@ -6,7 +6,8 @@
 //! Flutter reference: <https://api.flutter.dev/flutter/rendering/RenderAnnotatedRegion-class.html>
 
 use crate::core::{
-    LayoutTree, PaintTree, RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
+    FullRenderTree,
+    LayoutTree, PaintTree, FullRenderTree, RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
 };
 use flui_types::Size;
 

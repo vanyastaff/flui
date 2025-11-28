@@ -3,7 +3,8 @@
 //! More advanced than RenderOffstage, supports maintaining size, state, and other properties.
 
 use crate::core::{
-    RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
+    FullRenderTree,
+    FullRenderTree, RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
 };
 use flui_types::Size;
 
@@ -94,7 +95,7 @@ impl Default for RenderVisibility {
     }
 }
 
-impl RenderBox<Single> for RenderVisibility {
+impl<T: FullRenderTree> RenderBox<T, Single> for RenderVisibility {
     fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Single, BoxProtocol>) -> Size
     where
         T: crate::core::LayoutTree,

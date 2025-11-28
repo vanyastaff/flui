@@ -1,6 +1,6 @@
 //! Sliver protocol render trait.
 //!
-//! This module provides the `SliverRender<A>` trait for implementing render objects
+//! This module provides the `SliverRender<T, A>` trait for implementing render objects
 //! that participate in scrollable layouts (viewports).
 //!
 //! # Sliver vs Box
@@ -11,7 +11,7 @@
 //! # Architecture
 //!
 //! ```text
-//! SliverRender<A> trait
+//! SliverRender<T, A> trait
 //! ├── layout() → SliverGeometry
 //! ├── paint() → ()
 //! └── hit_test() → bool
@@ -24,7 +24,7 @@ use std::fmt::Debug;
 use super::arity::Arity;
 use super::contexts::{HitTestContext, LayoutContext, PaintContext};
 use super::protocol::SliverProtocol;
-use super::render_tree::{HitTestTree, LayoutTree, PaintTree};
+use super::render_tree::FullRenderTree;
 use flui_interaction::HitTestResult;
 
 // ============================================================================
@@ -37,18 +37,16 @@ use flui_interaction::HitTestResult;
 ///
 /// # Type Parameters
 ///
+/// - `T`: Tree type implementing `FullRenderTree`
 /// - `A`: Arity - compile-time child count (Leaf, Single, Variable, etc.)
 ///
 /// # Example
 ///
 /// ```rust,ignore
-/// use flui_rendering::{SliverRender, Variable, LayoutContext, SliverProtocol};
+/// use flui_rendering::{SliverRender, Variable, LayoutContext, SliverProtocol, FullRenderTree};
 ///
-/// impl SliverRender<Variable> for RenderSliverList {
-///     fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Variable, SliverProtocol>) -> SliverGeometry
-///     where
-///         T: LayoutTree,
-///     {
+/// impl<T: FullRenderTree> SliverRender<T, Variable> for RenderSliverList {
+///     fn layout(&mut self, mut ctx: LayoutContext<'_, T, Variable, SliverProtocol>) -> SliverGeometry {
 ///         let mut scroll_extent = 0.0;
 ///
 ///         for child_id in ctx.children.iter() {
@@ -64,7 +62,7 @@ use flui_interaction::HitTestResult;
 ///     }
 /// }
 /// ```
-pub trait SliverRender<A: Arity>: Send + Sync + Debug + 'static {
+pub trait SliverRender<T: FullRenderTree, A: Arity>: Send + Sync + Debug + 'static {
     /// Computes the sliver geometry given constraints.
     ///
     /// # Arguments
@@ -75,18 +73,14 @@ pub trait SliverRender<A: Arity>: Send + Sync + Debug + 'static {
     ///
     /// `SliverGeometry` describing scroll extent, paint extent, layout extent,
     /// and other properties for viewport integration.
-    fn layout<T>(&mut self, ctx: LayoutContext<'_, T, A, SliverProtocol>) -> SliverGeometry
-    where
-        T: LayoutTree;
+    fn layout(&mut self, ctx: LayoutContext<'_, T, A, SliverProtocol>) -> SliverGeometry;
 
     /// Paints the sliver to a canvas.
     ///
     /// # Arguments
     ///
     /// * `ctx` - Paint context with offset, children access, canvas, and tree operations
-    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, A>)
-    where
-        T: PaintTree;
+    fn paint(&self, ctx: &mut PaintContext<'_, T, A>);
 
     /// Performs hit testing for pointer events.
     ///
@@ -100,14 +94,11 @@ pub trait SliverRender<A: Arity>: Send + Sync + Debug + 'static {
     /// # Returns
     ///
     /// `true` if this element or any child was hit.
-    fn hit_test<T>(
+    fn hit_test(
         &self,
         _ctx: &HitTestContext<'_, T, A, SliverProtocol>,
         _result: &mut HitTestResult,
-    ) -> bool
-    where
-        T: HitTestTree,
-    {
+    ) -> bool {
         // Default: no hit (transparent to hit testing)
         false
     }
@@ -139,7 +130,7 @@ pub trait SliverRender<A: Arity>: Send + Sync + Debug + 'static {
 // ============================================================================
 
 /// Extension trait for SliverRender with helper methods.
-pub trait SliverRenderExt<A: Arity>: SliverRender<A> {
+pub trait SliverRenderExt<Tree: FullRenderTree, A: Arity>: SliverRender<Tree, A> {
     /// Returns the protocol type (always SliverProtocol).
     fn protocol(&self) -> SliverProtocol {
         SliverProtocol
@@ -147,4 +138,4 @@ pub trait SliverRenderExt<A: Arity>: SliverRender<A> {
 }
 
 /// Blanket implementation of SliverRenderExt for all SliverRender types.
-impl<A: Arity, T: SliverRender<A>> SliverRenderExt<A> for T {}
+impl<Tree: FullRenderTree, A: Arity, T: SliverRender<Tree, A>> SliverRenderExt<Tree, A> for T {}

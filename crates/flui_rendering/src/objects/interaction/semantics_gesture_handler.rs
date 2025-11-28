@@ -5,7 +5,7 @@
 //!
 //! Flutter reference: https://api.flutter.dev/flutter/rendering/RenderSemanticsGestureHandler-class.html
 
-use crate::core::{BoxProtocol, LayoutContext, PaintContext, RenderBox, Single};
+use crate::core::{BoxProtocol, LayoutContext, PaintContext, FullRenderTree, RenderBox, Single};
 use flui_types::Size;
 use std::sync::Arc;
 
@@ -213,7 +213,7 @@ impl Default for RenderSemanticsGestureHandler {
     }
 }
 
-impl RenderBox<Single> for RenderSemanticsGestureHandler {
+impl<T: FullRenderTree> RenderBox<T, Single> for RenderSemanticsGestureHandler {
     fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Single, BoxProtocol>) -> Size
     where
         T: crate::core::LayoutTree,

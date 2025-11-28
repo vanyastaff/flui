@@ -28,7 +28,8 @@
 //! ```
 
 use crate::core::{
-    HitTestTree, RenderBox, Single, {BoxProtocol, HitTestContext, LayoutContext, PaintContext},
+    FullRenderTree,
+    HitTestTree, FullRenderTree, RenderBox, Single, {BoxProtocol, HitTestContext, LayoutContext, PaintContext},
 };
 use flui_interaction::HitTestResult;
 use flui_painting::Canvas;

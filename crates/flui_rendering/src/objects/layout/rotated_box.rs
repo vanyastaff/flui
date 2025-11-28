@@ -4,7 +4,8 @@
 //! Source: https://api.flutter.dev/flutter/rendering/RenderRotatedBox-class.html
 
 use crate::core::{
-    RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
+    FullRenderTree,
+    FullRenderTree, RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
 };
 use flui_types::constraints::BoxConstraints;
 use flui_types::{geometry::QuarterTurns, Offset, Size};
@@ -65,7 +66,7 @@ impl RenderRotatedBox {
 
 // ===== RenderObject Implementation =====
 
-impl RenderBox<Single> for RenderRotatedBox {
+impl<T: FullRenderTree> RenderBox<T, Single> for RenderRotatedBox {
     fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Single, BoxProtocol>) -> Size
     where
         T: crate::core::LayoutTree,

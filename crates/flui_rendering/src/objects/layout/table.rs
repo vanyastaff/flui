@@ -4,7 +4,7 @@
 //!
 //! Flutter reference: <https://api.flutter.dev/flutter/rendering/RenderTable-class.html>
 
-use crate::core::{BoxProtocol, LayoutContext, LayoutTree, PaintContext, RenderBox, Variable};
+use crate::core::{BoxProtocol, LayoutContext, LayoutTree, PaintContext, FullRenderTree, RenderBox, Variable};
 use flui_foundation::ElementId;
 use flui_types::{BoxConstraints, Offset, Size};
 use std::collections::HashMap;
@@ -237,7 +237,7 @@ impl RenderTable {
     }
 }
 
-impl RenderBox<Variable> for RenderTable {
+impl<T: FullRenderTree> RenderBox<T, Variable> for RenderTable {
     fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Variable, BoxProtocol>) -> Size
     where
         T: crate::core::LayoutTree,

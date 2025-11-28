@@ -1,12 +1,12 @@
 //! Box protocol render trait.
 //!
-//! This module provides the `RenderBox<A>` trait for implementing render objects
+//! This module provides the `RenderBox<T, A>` trait for implementing render objects
 //! that use the standard 2D box layout protocol.
 //!
 //! # Architecture
 //!
 //! ```text
-//! RenderBox<A> trait
+//! RenderBox<T, A> trait
 //! ├── layout() → Size
 //! ├── paint()
 //! └── hit_test() → bool
@@ -15,7 +15,13 @@
 //! # Design
 //!
 //! `RenderBox` is generic over:
+//! - `T`: Tree type implementing `FullRenderTree` (LayoutTree + PaintTree + HitTestTree)
 //! - `A`: Arity - compile-time child count (Leaf, Single, Optional, Variable)
+//!
+//! Having `T` at trait level (not method level) provides:
+//! - dyn-compatibility for concrete tree types
+//! - Better IDE support and error messages
+//! - Consistent tree type across all methods
 //!
 //! The trait uses context-based API where `LayoutContext` and `PaintContext`
 //! provide access to children and tree operations.
@@ -39,28 +45,30 @@ use super::protocol::BoxProtocol;
 ///
 /// # Type Parameters
 ///
+/// - `T`: Tree type implementing `FullRenderTree`
 /// - `A`: Arity - compile-time child count (Leaf, Single, Optional, Variable)
+///
+/// # dyn-compatibility
+///
+/// By having `T` at trait level (not method level), this trait is dyn-compatible
+/// for a concrete tree type. This enables `Box<dyn RenderBox<MyTree, Leaf>>`.
 ///
 /// # Example
 ///
 /// ```rust,ignore
-/// impl RenderBox<Leaf> for RenderColoredBox {
-///     fn layout<T>(&mut self, ctx: LayoutContext<'_, T, Leaf, BoxProtocol>) -> Size
-///     where
-///         T: LayoutTree,
-///     {
+/// impl<T: FullRenderTree> RenderBox<T, Leaf> for RenderColoredBox {
+///     fn layout(&mut self, ctx: LayoutContext<'_, T, Leaf, BoxProtocol>) -> Size {
 ///         ctx.constraints.constrain(Size::new(100.0, 100.0))
 ///     }
 ///
-///     fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Leaf>)
-///     where
-///         T: PaintTree,
-///     {
+///     fn paint(&self, ctx: &mut PaintContext<'_, T, Leaf>) {
 ///         ctx.canvas().rect(Rect::from_size(self.size), &self.paint);
 ///     }
 /// }
 /// ```
-pub trait RenderBox<A: Arity>: Send + Sync + Debug + 'static {
+pub trait RenderBox<T: super::render_tree::FullRenderTree, A: Arity>:
+    Send + Sync + Debug + 'static
+{
     /// Computes the size of this render object given constraints.
     ///
     /// # Arguments
@@ -70,18 +78,14 @@ pub trait RenderBox<A: Arity>: Send + Sync + Debug + 'static {
     /// # Returns
     ///
     /// The computed size that satisfies the constraints.
-    fn layout<T>(&mut self, ctx: LayoutContext<'_, T, A, BoxProtocol>) -> Size
-    where
-        T: super::render_tree::LayoutTree;
+    fn layout(&mut self, ctx: LayoutContext<'_, T, A, BoxProtocol>) -> Size;
 
     /// Paints this render object to a canvas.
     ///
     /// # Arguments
     ///
     /// * `ctx` - Paint context with offset, children access, canvas, and tree
-    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, A>)
-    where
-        T: super::render_tree::PaintTree;
+    fn paint(&self, ctx: &mut PaintContext<'_, T, A>);
 
     /// Performs hit testing for pointer events.
     ///
@@ -93,14 +97,11 @@ pub trait RenderBox<A: Arity>: Send + Sync + Debug + 'static {
     /// # Returns
     ///
     /// `true` if this element or any child was hit.
-    fn hit_test<T>(
+    fn hit_test(
         &self,
         ctx: &HitTestContext<'_, T, A, BoxProtocol>,
         result: &mut HitTestResult,
-    ) -> bool
-    where
-        T: super::render_tree::HitTestTree,
-    {
+    ) -> bool {
         // Default: test children first, then self
         let hit_children = self.hit_test_children(ctx, result);
         if hit_children || self.hit_test_self(ctx.position, ctx.size()) {
@@ -122,14 +123,11 @@ pub trait RenderBox<A: Arity>: Send + Sync + Debug + 'static {
     ///
     /// Default iterates children and tests each. Override for custom
     /// traversal (e.g., z-order, clipping regions).
-    fn hit_test_children<T>(
+    fn hit_test_children(
         &self,
         _ctx: &HitTestContext<'_, T, A, BoxProtocol>,
         _result: &mut HitTestResult,
-    ) -> bool
-    where
-        T: super::render_tree::HitTestTree,
-    {
+    ) -> bool {
         // Default: no children hit (override for non-leaf)
         false
     }
@@ -228,12 +226,17 @@ use crate::view::RenderObjectWrapper;
 use flui_element::IntoElement;
 use flui_foundation::ViewMode;
 
+// Note: IntoElement implementations don't require RenderBox<T, A> bound because:
+// 1. RenderObjectWrapper only requires Send + Sync + Debug + 'static on struct
+// 2. The RenderBox<T, A> bound is checked later when RenderViewObject<T> is used
+// 3. This allows creating Elements without knowing the concrete tree type T
+
 impl<R> IntoElement for RenderBoxLeaf<R>
 where
-    R: RenderBox<Leaf> + 'static,
+    R: Send + Sync + std::fmt::Debug + 'static,
 {
     fn into_element(self) -> Element {
-        let wrapper = RenderObjectWrapper::new(self.render, RuntimeArity::Exact(0));
+        let wrapper = RenderObjectWrapper::<Leaf, _>::new(self.render, RuntimeArity::Exact(0));
         Element::with_mode(wrapper, ViewMode::RenderBox)
         // No children for Leaf
     }
@@ -241,27 +244,27 @@ where
 
 impl<R> IntoElement for RenderBoxWithChild<R>
 where
-    R: RenderBox<Single> + 'static,
+    R: Send + Sync + std::fmt::Debug + 'static,
 {
     fn into_element(self) -> Element {
-        let wrapper = RenderObjectWrapper::new(self.render, RuntimeArity::Exact(1));
+        let wrapper = RenderObjectWrapper::<Single, _>::new(self.render, RuntimeArity::Exact(1));
         Element::with_mode(wrapper, ViewMode::RenderBox).with_pending_children(vec![self.child])
     }
 }
 
 impl<R> IntoElement for RenderBoxWithChildren<R>
 where
-    R: RenderBox<Variable> + 'static,
+    R: Send + Sync + std::fmt::Debug + 'static,
 {
     fn into_element(self) -> Element {
-        let wrapper = RenderObjectWrapper::new(self.render, RuntimeArity::Variable);
+        let wrapper = RenderObjectWrapper::<Variable, _>::new(self.render, RuntimeArity::Variable);
         Element::with_mode(wrapper, ViewMode::RenderBox).with_pending_children(self.children)
     }
 }
 
 impl<R> IntoElement for RenderBoxWithOptionalChild<R>
 where
-    R: RenderBox<Optional> + 'static,
+    R: Send + Sync + std::fmt::Debug + 'static,
 {
     fn into_element(self) -> Element {
         let has_child = self.child.is_some();
@@ -270,7 +273,7 @@ where
         } else {
             RuntimeArity::Exact(0)
         };
-        let wrapper = RenderObjectWrapper::new(self.render, arity);
+        let wrapper = RenderObjectWrapper::<Optional, _>::new(self.render, arity);
         let mut element = Element::with_mode(wrapper, ViewMode::RenderBox);
 
         // Set pending children if child is present
@@ -290,7 +293,10 @@ where
 ///
 /// Provides convenience methods for converting RenderBox to Element,
 /// enabling widgets to use builder-style API like `RenderPadding::new().child(...)`.
-pub trait RenderBoxExt<A: Arity>: RenderBox<A> + Sized {
+///
+/// Note: This trait is independent of tree type T since these are builder methods
+/// that don't require tree access.
+pub trait RenderBoxExt: Sized {
     /// Checks if position is within the given size bounds.
     fn contains(&self, position: Offset, size: Size) -> bool {
         position.dx >= 0.0
@@ -314,7 +320,7 @@ pub trait RenderBoxExt<A: Arity>: RenderBox<A> + Sized {
     /// ```
     fn leaf(self) -> RenderBoxLeaf<Self>
     where
-        Self: RenderBox<crate::core::arity::Leaf> + 'static,
+        Self: 'static,
     {
         RenderBoxLeaf { render: self }
     }
@@ -337,7 +343,7 @@ pub trait RenderBoxExt<A: Arity>: RenderBox<A> + Sized {
     /// ```
     fn with_child<C>(self, child: C) -> RenderBoxWithChild<Self>
     where
-        Self: RenderBox<crate::core::arity::Single> + 'static,
+        Self: 'static,
         C: flui_element::IntoElement,
     {
         RenderBoxWithChild {
@@ -364,7 +370,7 @@ pub trait RenderBoxExt<A: Arity>: RenderBox<A> + Sized {
     /// ```
     fn with_children<I>(self, children: I) -> RenderBoxWithChildren<Self>
     where
-        Self: RenderBox<crate::core::arity::Variable> + 'static,
+        Self: 'static,
         I: IntoIterator,
         I::Item: flui_element::IntoElement,
     {
@@ -393,7 +399,7 @@ pub trait RenderBoxExt<A: Arity>: RenderBox<A> + Sized {
     /// ```
     fn maybe_child<C>(self, child: C) -> RenderBoxWithOptionalChild<Self>
     where
-        Self: RenderBox<crate::core::arity::Optional> + 'static,
+        Self: 'static,
         C: Into<Option<Element>>,
     {
         RenderBoxWithOptionalChild {
@@ -403,7 +409,9 @@ pub trait RenderBoxExt<A: Arity>: RenderBox<A> + Sized {
     }
 }
 
-impl<A: Arity, R: RenderBox<A>> RenderBoxExt<A> for R {}
+/// Blanket implementation for all types that can be render boxes.
+/// The actual RenderBox<T, A> bound is checked at IntoElement impl site.
+impl<R> RenderBoxExt for R {}
 
 // ============================================================================
 // EMPTY RENDER
@@ -415,18 +423,12 @@ impl<A: Arity, R: RenderBox<A>> RenderBoxExt<A> for R {}
 #[derive(Debug, Clone, Copy, Default)]
 pub struct EmptyRender;
 
-impl RenderBox<Leaf> for EmptyRender {
-    fn layout<T>(&mut self, _ctx: LayoutContext<'_, T, Leaf, BoxProtocol>) -> Size
-    where
-        T: super::render_tree::LayoutTree,
-    {
+impl<T: super::render_tree::FullRenderTree> RenderBox<T, Leaf> for EmptyRender {
+    fn layout(&mut self, _ctx: LayoutContext<'_, T, Leaf, BoxProtocol>) -> Size {
         Size::ZERO
     }
 
-    fn paint<T>(&self, _ctx: &mut PaintContext<'_, T, Leaf>)
-    where
-        T: super::render_tree::PaintTree,
-    {
+    fn paint(&self, _ctx: &mut PaintContext<'_, T, Leaf>) {
         // Nothing to paint
     }
 }

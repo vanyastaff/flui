@@ -687,7 +687,7 @@ impl Default for RenderImage {
     }
 }
 
-impl RenderBox<Leaf> for RenderImage {
+impl<T: FullRenderTree> RenderBox<T, Leaf> for RenderImage {
     fn layout<T>(&mut self, ctx: LayoutContext<'_, T, Leaf, BoxProtocol>) -> Size
     where
         T: crate::core::LayoutTree,

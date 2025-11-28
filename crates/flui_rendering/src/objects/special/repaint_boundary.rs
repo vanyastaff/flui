@@ -21,7 +21,8 @@
 //! the boundary isn't helping and may be removed.
 
 use crate::core::{
-    LayoutTree, PaintTree, RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
+    FullRenderTree,
+    LayoutTree, PaintTree, FullRenderTree, RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
 };
 use flui_painting::DisplayList;
 use flui_types::Size;
@@ -280,7 +281,7 @@ impl Default for RenderRepaintBoundary {
 
 // ===== RenderObject Implementation =====
 
-impl RenderBox<Single> for RenderRepaintBoundary {
+impl<T: FullRenderTree> RenderBox<T, Single> for RenderRepaintBoundary {
     fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Single, BoxProtocol>) -> Size
     where
         T: LayoutTree,

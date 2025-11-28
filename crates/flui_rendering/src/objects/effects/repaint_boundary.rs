@@ -1,7 +1,8 @@
 //! RenderRepaintBoundary - optimization boundary for repainting
 
 use crate::core::{
-    RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
+    FullRenderTree,
+    FullRenderTree, RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
 };
 use flui_types::Size;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -90,7 +91,7 @@ impl Default for RenderRepaintBoundary {
     }
 }
 
-impl RenderBox<Single> for RenderRepaintBoundary {
+impl<T: FullRenderTree> RenderBox<T, Single> for RenderRepaintBoundary {
     fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Single, BoxProtocol>) -> Size
     where
         T: crate::core::LayoutTree,

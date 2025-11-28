@@ -1,7 +1,7 @@
-use anyhow::Result;
+use crate::error::CliResult;
 use console::style;
 
-pub fn execute(launch: Option<String>) -> Result<()> {
+pub fn execute(launch: Option<String>) -> CliResult<()> {
     if let Some(emulator_name) = launch {
         println!(
             "{}",

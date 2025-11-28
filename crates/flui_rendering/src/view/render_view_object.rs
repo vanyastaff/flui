@@ -5,23 +5,24 @@
 //!
 //! # Tree Integration
 //!
-//! The trait uses generic tree parameters (`T: LayoutTree`, `T: PaintTree`)
-//! instead of callbacks, integrating cleanly with `flui-tree` abstractions.
+//! The trait is generic over `T: FullRenderTree`, providing type-safe
+//! access to tree operations for layout, paint, and hit testing.
 
 use flui_foundation::ElementId;
 use flui_interaction::HitTestResult;
 use flui_types::{constraints::BoxConstraints, Offset, Size};
 
-use crate::core::{
-    render_tree::{HitTestTree, LayoutTree, PaintTree},
-    LayoutProtocol, RenderState, RuntimeArity,
-};
+use crate::core::{render_tree::FullRenderTree, LayoutProtocol, RenderState, RuntimeArity};
 
 /// Extension trait for ViewObjects that wrap render objects.
 ///
 /// Provides access to:
 /// - RenderState for cached size/offset
 /// - Layout, paint, and hit test operations with tree access
+///
+/// # Type Parameters
+///
+/// - `T`: Tree type implementing `FullRenderTree` (LayoutTree + PaintTree + HitTestTree)
 ///
 /// # Design
 ///
@@ -30,18 +31,16 @@ use crate::core::{
 /// 2. Keeps base ViewObject in flui-view without rendering dependencies
 /// 3. Interface Segregation Principle
 ///
-/// # Tree-Based API
-///
-/// Methods use generic tree parameters instead of callbacks:
-/// - `perform_layout<T: LayoutTree>` - layout with tree access
-/// - `perform_paint<T: PaintTree>` - paint with tree access
-/// - `perform_hit_test<T: HitTestTree>` - hit test with tree access
+/// Having `T` at trait level (not method level) provides:
+/// - dyn-compatibility for concrete tree types
+/// - Better IDE support and error messages
+/// - Consistent tree type across all methods
 ///
 /// # Implementors
 ///
-/// - `RenderViewWrapper<V, P, A>` - For RenderView implementations
-/// - `RenderObjectWrapper<A, R>` - For raw RenderBox instances
-pub trait RenderViewObject: Send + 'static {
+/// - `RenderViewWrapper<T, V, P, A>` - For RenderView implementations
+/// - `RenderObjectWrapper<T, A, R>` - For raw RenderBox instances
+pub trait RenderViewObject<T: FullRenderTree>: Send + 'static {
     /// Get the render state (cached size, offset, dirty flags).
     fn render_state(&self) -> &RenderState;
 
@@ -56,10 +55,6 @@ pub trait RenderViewObject: Send + 'static {
 
     /// Perform layout computation using tree access.
     ///
-    /// # Type Parameters
-    ///
-    /// - `T`: Tree type implementing `LayoutTree`
-    ///
     /// # Arguments
     ///
     /// - `tree`: Mutable reference to layout tree
@@ -70,7 +65,7 @@ pub trait RenderViewObject: Send + 'static {
     /// # Returns
     ///
     /// Computed size.
-    fn perform_layout<T: LayoutTree>(
+    fn perform_layout(
         &mut self,
         tree: &mut T,
         self_id: ElementId,
@@ -80,17 +75,13 @@ pub trait RenderViewObject: Send + 'static {
 
     /// Perform paint computation using tree access.
     ///
-    /// # Type Parameters
-    ///
-    /// - `T`: Tree type implementing `PaintTree`
-    ///
     /// # Arguments
     ///
     /// - `tree`: Mutable reference to paint tree
     /// - `self_id`: This element's ID
     /// - `children`: Child element IDs
     /// - `offset`: Paint offset
-    fn perform_paint<T: PaintTree>(
+    fn perform_paint(
         &self,
         tree: &mut T,
         self_id: ElementId,
@@ -99,10 +90,6 @@ pub trait RenderViewObject: Send + 'static {
     );
 
     /// Perform hit testing using tree access.
-    ///
-    /// # Type Parameters
-    ///
-    /// - `T`: Tree type implementing `HitTestTree`
     ///
     /// # Arguments
     ///
@@ -115,7 +102,7 @@ pub trait RenderViewObject: Send + 'static {
     /// # Returns
     ///
     /// `true` if hit, `false` otherwise.
-    fn perform_hit_test<T: HitTestTree>(
+    fn perform_hit_test(
         &self,
         tree: &T,
         self_id: ElementId,

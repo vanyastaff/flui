@@ -3,7 +3,8 @@
 //! Flutter reference: <https://api.flutter.dev/flutter/rendering/RenderOffstage-class.html>
 
 use crate::core::{
-    LayoutTree, PaintTree, RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
+    FullRenderTree,
+    LayoutTree, PaintTree, FullRenderTree, RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
 };
 use flui_types::Size;
 
@@ -87,7 +88,7 @@ impl Default for RenderOffstage {
 
 // ===== RenderObject Implementation =====
 
-impl RenderBox<Single> for RenderOffstage {
+impl<T: FullRenderTree> RenderBox<T, Single> for RenderOffstage {
     fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Single, BoxProtocol>) -> Size
     where
         T: LayoutTree,

@@ -4,7 +4,8 @@
 //! to its child, controlling which parts are visible.
 
 use crate::core::{
-    RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
+    FullRenderTree,
+    FullRenderTree, RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
 };
 use flui_foundation::ElementId;
 use flui_types::{
@@ -108,7 +109,7 @@ impl RenderShaderMask {
 
 // ===== RenderObject Implementation =====
 
-impl RenderBox<Single> for RenderShaderMask {
+impl<T: FullRenderTree> RenderBox<T, Single> for RenderShaderMask {
     fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Single, BoxProtocol>) -> Size
     where
         T: crate::core::LayoutTree,

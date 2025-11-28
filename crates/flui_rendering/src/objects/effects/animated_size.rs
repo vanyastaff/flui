@@ -4,7 +4,7 @@
 //! It smoothly transitions between sizes using linear interpolation.
 //! A full implementation would use AnimationController and TickerProvider.
 
-use crate::core::{BoxProtocol, LayoutContext, PaintContext, RenderBox, Single};
+use crate::core::{BoxProtocol, LayoutContext, PaintContext, FullRenderTree, RenderBox, Single};
 use flui_types::animation::{Cubic, Curve};
 use flui_types::{Alignment, Rect, Size};
 use std::time::{Duration, Instant};
@@ -240,7 +240,7 @@ impl RenderAnimatedSize {
     }
 }
 
-impl RenderBox<Single> for RenderAnimatedSize {
+impl<T: FullRenderTree> RenderBox<T, Single> for RenderAnimatedSize {
     fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Single, BoxProtocol>) -> Size
     where
         T: crate::core::LayoutTree,

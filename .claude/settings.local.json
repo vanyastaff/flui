@@ -48,7 +48,8 @@
       "Bash(cargo hack check:*)",
       "SlashCommand(/openspec:apply)",
       "SlashCommand(/openspec:archive)",
-      "SlashCommand(/openspec:archive:*)"
+      "SlashCommand(/openspec:archive:*)",
+      "WebFetch(domain:rust-lang.github.io)"
     ],
     "deny": [],
     "ask": []

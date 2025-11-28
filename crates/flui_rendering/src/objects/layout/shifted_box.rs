@@ -3,7 +3,8 @@
 //! Flutter reference: <https://api.flutter.dev/flutter/rendering/RenderShiftedBox-class.html>
 
 use crate::core::{
-    RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
+    FullRenderTree,
+    FullRenderTree, RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
 };
 use flui_types::{Offset, Size};
 
@@ -77,7 +78,7 @@ impl Default for RenderShiftedBox {
     }
 }
 
-impl RenderBox<Single> for RenderShiftedBox {
+impl<T: FullRenderTree> RenderBox<T, Single> for RenderShiftedBox {
     fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Single, BoxProtocol>) -> Size
     where
         T: crate::core::LayoutTree,

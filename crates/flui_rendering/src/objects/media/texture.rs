@@ -202,7 +202,7 @@ impl RenderTexture {
     }
 }
 
-impl RenderBox<Leaf> for RenderTexture {
+impl<T: FullRenderTree> RenderBox<T, Leaf> for RenderTexture {
     fn layout<T>(&mut self, ctx: LayoutContext<'_, T, Leaf, BoxProtocol>) -> Size
     where
         T: crate::core::LayoutTree,

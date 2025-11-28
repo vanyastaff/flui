@@ -1,8 +1,8 @@
-use anyhow::Result;
+use crate::error::CliResult;
 use console::style;
 use std::process::Command;
 
-pub fn execute(details: bool, _platform: Option<String>) -> Result<()> {
+pub fn execute(details: bool, _platform: Option<String>) -> CliResult<()> {
     // Enable ANSI colors on Windows
     #[cfg(target_os = "windows")]
     {

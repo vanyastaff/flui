@@ -14,12 +14,12 @@
 //! }
 //!
 //! // Just implement the proxy trait - get full RenderBox impl for free!
-//! impl RenderBoxProxy for RenderSemantics {}
+//! impl<T: FullRenderTree> RenderBoxProxy<T> for RenderSemantics {}
 //! ```
 
 use crate::core::{
-    BoxProtocol, HitTestContext, HitTestResult, HitTestTree, LayoutContext, LayoutTree,
-    PaintContext, PaintTree, RenderBox, Single, SliverProtocol, SliverRender,
+    BoxProtocol, FullRenderTree, HitTestContext, HitTestResult, LayoutContext, PaintContext,
+    RenderBox, Single, SliverProtocol, SliverRender,
 };
 use flui_types::{Size, SliverGeometry};
 use std::fmt::Debug;
@@ -32,6 +32,10 @@ use std::fmt::Debug;
 ///
 /// Implement this trait for render objects that simply pass through to their
 /// child without modifying layout, paint, or hit testing behavior.
+///
+/// # Type Parameters
+///
+/// - `T`: Tree type implementing `FullRenderTree`
 ///
 /// Perfect for:
 /// - Semantic annotations
@@ -54,35 +58,26 @@ use std::fmt::Debug;
 ///     pub label: String,
 /// }
 ///
-/// impl RenderBoxProxy for RenderMetadata {}
+/// impl<T: FullRenderTree> RenderBoxProxy<T> for RenderMetadata {}
 /// // That's it! Now has full RenderBox implementation
 /// ```
-pub trait RenderBoxProxy: Debug + Send + Sync + 'static {
+pub trait RenderBoxProxy<T: FullRenderTree>: Debug + Send + Sync + 'static {
     /// Layout the child with the same constraints
-    fn proxy_layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Single, BoxProtocol>) -> Size
-    where
-        T: LayoutTree,
-    {
+    fn proxy_layout(&mut self, mut ctx: LayoutContext<'_, T, Single, BoxProtocol>) -> Size {
         ctx.proxy()
     }
 
     /// Paint the child at the same offset
-    fn proxy_paint<T>(&self, ctx: &mut PaintContext<'_, T, Single>)
-    where
-        T: PaintTree,
-    {
+    fn proxy_paint(&self, ctx: &mut PaintContext<'_, T, Single>) {
         ctx.proxy();
     }
 
     /// Forward hit test to child
-    fn proxy_hit_test<T>(
+    fn proxy_hit_test(
         &self,
         ctx: &HitTestContext<'_, T, Single, BoxProtocol>,
         result: &mut HitTestResult,
-    ) -> bool
-    where
-        T: HitTestTree,
-    {
+    ) -> bool {
         // Default: just return false (no hit)
         // Override if you need custom hit test behavior
         let _ = (ctx, result);
@@ -90,30 +85,21 @@ pub trait RenderBoxProxy: Debug + Send + Sync + 'static {
     }
 }
 
-/// Blanket implementation: any RenderBoxProxy automatically implements RenderBox<Single>
-impl<P: RenderBoxProxy> RenderBox<Single> for P {
-    fn layout<T>(&mut self, ctx: LayoutContext<'_, T, Single, BoxProtocol>) -> Size
-    where
-        T: LayoutTree,
-    {
+/// Blanket implementation: any RenderBoxProxy<T> automatically implements RenderBox<T, Single>
+impl<T: FullRenderTree, P: RenderBoxProxy<T>> RenderBox<T, Single> for P {
+    fn layout(&mut self, ctx: LayoutContext<'_, T, Single, BoxProtocol>) -> Size {
         self.proxy_layout(ctx)
     }
 
-    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Single>)
-    where
-        T: PaintTree,
-    {
+    fn paint(&self, ctx: &mut PaintContext<'_, T, Single>) {
         self.proxy_paint(ctx);
     }
 
-    fn hit_test<T>(
+    fn hit_test(
         &self,
         ctx: &HitTestContext<'_, T, Single, BoxProtocol>,
         result: &mut HitTestResult,
-    ) -> bool
-    where
-        T: HitTestTree,
-    {
+    ) -> bool {
         self.proxy_hit_test(ctx, result)
     }
 }
@@ -126,6 +112,10 @@ impl<P: RenderBoxProxy> RenderBox<Single> for P {
 ///
 /// Similar to `RenderBoxProxy` but for sliver render objects in scrollable
 /// containers.
+///
+/// # Type Parameters
+///
+/// - `T`: Tree type implementing `FullRenderTree`
 ///
 /// Perfect for:
 /// - Semantic annotations on slivers
@@ -150,66 +140,48 @@ impl<P: RenderBoxProxy> RenderBox<Single> for P {
 ///     pub id: usize,
 /// }
 ///
-/// impl RenderSliverProxy for RenderSliverMetadata {}
+/// impl<T: FullRenderTree> RenderSliverProxy<T> for RenderSliverMetadata {}
 /// // That's it! Now has full SliverRender implementation
 /// ```
-pub trait RenderSliverProxy: Debug + Send + Sync + 'static {
+pub trait RenderSliverProxy<T: FullRenderTree>: Debug + Send + Sync + 'static {
     /// Layout the child with the same sliver constraints
-    fn proxy_layout<T>(
+    fn proxy_layout(
         &mut self,
         mut ctx: LayoutContext<'_, T, Single, SliverProtocol>,
-    ) -> SliverGeometry
-    where
-        T: LayoutTree,
-    {
+    ) -> SliverGeometry {
         ctx.proxy()
     }
 
     /// Paint the child at the same offset
-    fn proxy_paint<T>(&self, ctx: &mut PaintContext<'_, T, Single>)
-    where
-        T: PaintTree,
-    {
+    fn proxy_paint(&self, ctx: &mut PaintContext<'_, T, Single>) {
         ctx.proxy();
     }
 
     /// Forward hit test to child (default: no hit)
-    fn proxy_hit_test<T>(
+    fn proxy_hit_test(
         &self,
         _ctx: &HitTestContext<'_, T, Single, SliverProtocol>,
         _result: &mut HitTestResult,
-    ) -> bool
-    where
-        T: HitTestTree,
-    {
+    ) -> bool {
         false
     }
 }
 
-/// Blanket implementation: any RenderSliverProxy automatically implements SliverRender<Single>
-impl<P: RenderSliverProxy> SliverRender<Single> for P {
-    fn layout<T>(&mut self, ctx: LayoutContext<'_, T, Single, SliverProtocol>) -> SliverGeometry
-    where
-        T: LayoutTree,
-    {
+/// Blanket implementation: any RenderSliverProxy<T> automatically implements SliverRender<T, Single>
+impl<T: FullRenderTree, P: RenderSliverProxy<T>> SliverRender<T, Single> for P {
+    fn layout(&mut self, ctx: LayoutContext<'_, T, Single, SliverProtocol>) -> SliverGeometry {
         self.proxy_layout(ctx)
     }
 
-    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Single>)
-    where
-        T: PaintTree,
-    {
+    fn paint(&self, ctx: &mut PaintContext<'_, T, Single>) {
         self.proxy_paint(ctx);
     }
 
-    fn hit_test<T>(
+    fn hit_test(
         &self,
         ctx: &HitTestContext<'_, T, Single, SliverProtocol>,
         result: &mut HitTestResult,
-    ) -> bool
-    where
-        T: HitTestTree,
-    {
+    ) -> bool {
         self.proxy_hit_test(ctx, result)
     }
 }

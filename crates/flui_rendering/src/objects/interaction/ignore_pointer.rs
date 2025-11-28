@@ -3,7 +3,8 @@
 //! Flutter reference: https://api.flutter.dev/flutter/rendering/RenderIgnorePointer-class.html
 
 use crate::core::{
-    HitTestTree, RenderBox, Single, {BoxProtocol, HitTestContext, LayoutContext, PaintContext},
+    FullRenderTree,
+    HitTestTree, FullRenderTree, RenderBox, Single, {BoxProtocol, HitTestContext, LayoutContext, PaintContext},
 };
 use flui_interaction::HitTestResult;
 use flui_types::Size;
@@ -52,7 +53,7 @@ impl Default for RenderIgnorePointer {
     }
 }
 
-impl RenderBox<Single> for RenderIgnorePointer {
+impl<T: FullRenderTree> RenderBox<T, Single> for RenderIgnorePointer {
     fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Single, BoxProtocol>) -> Size
     where
         T: crate::core::LayoutTree,

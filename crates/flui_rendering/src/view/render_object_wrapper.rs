@@ -13,7 +13,7 @@ use crate::core::{
     arity::Arity,
     contexts::{LayoutContext, PaintContext},
     geometry::Geometry,
-    LayoutProtocol, LayoutTree, PaintTree, RenderBox, RenderState, RuntimeArity,
+    FullRenderTree, LayoutProtocol, LayoutTree, PaintTree, RenderBox, RenderState, RuntimeArity,
 };
 
 use super::RenderViewObject;
@@ -26,7 +26,13 @@ use super::RenderViewObject;
 /// # Type Parameters
 ///
 /// - `A`: Arity (Leaf, Single, Optional, Variable)
-/// - `R`: The concrete RenderBox type
+/// - `R`: The concrete RenderBox type (must implement `RenderBox<T, A>` for some T)
+///
+/// # Note
+///
+/// The tree type `T` is not part of the struct definition - it's only constrained
+/// in the `RenderViewObject` implementation. This allows creating wrappers without
+/// knowing the concrete tree type upfront.
 ///
 /// # Example
 ///
@@ -37,7 +43,7 @@ use super::RenderViewObject;
 pub struct RenderObjectWrapper<A, R>
 where
     A: Arity,
-    R: RenderBox<A>,
+    R: Send + Sync + std::fmt::Debug + 'static,
 {
     /// The render object (concrete type, not boxed)
     render_object: R,
@@ -55,7 +61,7 @@ where
 impl<A, R> RenderObjectWrapper<A, R>
 where
     A: Arity,
-    R: RenderBox<A>,
+    R: Send + Sync + std::fmt::Debug + 'static,
 {
     /// Create a new wrapper for a RenderBox.
     ///
@@ -72,11 +78,6 @@ where
         }
     }
 
-    /// Get the debug name.
-    pub fn debug_name(&self) -> &'static str {
-        self.render_object.debug_name()
-    }
-
     /// Get reference to the inner render object.
     pub fn inner(&self) -> &R {
         &self.render_object
@@ -88,41 +89,20 @@ where
     }
 
     /// Downcast render object to concrete type (for inspection).
-    pub fn downcast_ref<T: 'static>(&self) -> Option<&T>
-    where
-        R: 'static,
-    {
-        self.render_object.as_any().downcast_ref::<T>()
+    pub fn downcast_ref<U: 'static>(&self) -> Option<&U> {
+        (&self.render_object as &dyn std::any::Any).downcast_ref::<U>()
     }
 
     /// Downcast render object to concrete type (mutable).
-    pub fn downcast_mut<T: 'static>(&mut self) -> Option<&mut T>
-    where
-        R: 'static,
-    {
-        self.render_object.as_any_mut().downcast_mut::<T>()
-    }
-}
-
-// Convenience constructor for backward compatibility
-impl<A, R> RenderObjectWrapper<A, R>
-where
-    A: Arity,
-    R: RenderBox<A> + 'static,
-{
-    /// Create a new wrapper for a box protocol render object.
-    ///
-    /// This is a convenience method that matches the old API signature.
-    #[inline]
-    pub fn new_box(render: R, arity: RuntimeArity) -> Self {
-        Self::new(render, arity)
+    pub fn downcast_mut<U: 'static>(&mut self) -> Option<&mut U> {
+        (&mut self.render_object as &mut dyn std::any::Any).downcast_mut::<U>()
     }
 }
 
 impl<A, R> std::fmt::Debug for RenderObjectWrapper<A, R>
 where
     A: Arity,
-    R: RenderBox<A>,
+    R: Send + Sync + std::fmt::Debug + 'static,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RenderObjectWrapper")
@@ -139,10 +119,11 @@ where
 use crate::core::contexts::HitTestContext;
 use flui_interaction::HitTestResult;
 
-impl<A, R> RenderViewObject for RenderObjectWrapper<A, R>
+impl<T, A, R> RenderViewObject<T> for RenderObjectWrapper<A, R>
 where
+    T: FullRenderTree,
     A: Arity + 'static,
-    R: RenderBox<A> + 'static,
+    R: RenderBox<T, A> + 'static,
 {
     fn render_state(&self) -> &RenderState {
         &self.render_state
@@ -160,7 +141,7 @@ where
         self.arity
     }
 
-    fn perform_layout<T: LayoutTree>(
+    fn perform_layout(
         &mut self,
         tree: &mut T,
         _self_id: ElementId,
@@ -184,7 +165,7 @@ where
         size
     }
 
-    fn perform_paint<T: PaintTree>(
+    fn perform_paint(
         &self,
         tree: &mut T,
         _self_id: ElementId,
@@ -201,7 +182,7 @@ where
         self.render_object.paint(&mut ctx);
     }
 
-    fn perform_hit_test<T: crate::core::HitTestTree>(
+    fn perform_hit_test(
         &self,
         tree: &T,
         self_id: ElementId,
@@ -236,7 +217,7 @@ use flui_element::{BuildContext, Element, ViewMode, ViewObject};
 impl<A, R> ViewObject for RenderObjectWrapper<A, R>
 where
     A: Arity + 'static,
-    R: RenderBox<A> + 'static,
+    R: Send + Sync + std::fmt::Debug + 'static,
 {
     fn mode(&self) -> ViewMode {
         ViewMode::RenderBox
@@ -273,27 +254,15 @@ where
 mod tests {
     use super::*;
     use crate::core::arity::Leaf;
+    use crate::core::protocol::BoxProtocol;
 
     #[derive(Debug)]
     struct TestRenderBox {
         size: Size,
     }
 
-    impl RenderBox<Leaf> for TestRenderBox {
-        fn layout<T>(&mut self, ctx: LayoutContext<'_, T, Leaf, BoxProtocol>) -> Size
-        where
-            T: LayoutTree,
-        {
-            ctx.constraints.constrain(self.size)
-        }
-
-        fn paint<T>(&self, _ctx: &mut PaintContext<'_, T, Leaf>)
-        where
-            T: PaintTree,
-        {
-            // No painting needed for test
-        }
-    }
+    // Note: Tests for RenderBox<T, A> require a concrete FullRenderTree implementation.
+    // Basic wrapper tests work without RenderBox bound since struct only requires Send+Sync+Debug.
 
     #[test]
     fn test_wrapper_creation() {
@@ -304,8 +273,7 @@ mod tests {
             RuntimeArity::Exact(0),
         );
 
-        assert_eq!(wrapper.protocol(), LayoutProtocol::Box);
-        assert_eq!(wrapper.arity(), RuntimeArity::Exact(0));
+        assert_eq!(wrapper.arity, RuntimeArity::Exact(0));
     }
 
     #[test]

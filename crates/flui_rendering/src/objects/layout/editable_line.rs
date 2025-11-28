@@ -223,7 +223,7 @@ impl RenderEditableLine {
     }
 }
 
-impl RenderBox<Leaf> for RenderEditableLine {
+impl<T: FullRenderTree> RenderBox<T, Leaf> for RenderEditableLine {
     fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Leaf, BoxProtocol>) -> Size
     where
         T: crate::core::LayoutTree,

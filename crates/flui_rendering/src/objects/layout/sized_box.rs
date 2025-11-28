@@ -96,7 +96,7 @@ impl Default for RenderSizedBox {
     }
 }
 
-impl RenderBox<Optional> for RenderSizedBox {
+impl<T: FullRenderTree> RenderBox<T, Optional> for RenderSizedBox {
     fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Optional, BoxProtocol>) -> Size
     where
         T: crate::core::LayoutTree,

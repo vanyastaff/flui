@@ -4,7 +4,8 @@
 //! Source: https://api.flutter.dev/flutter/rendering/RenderIntrinsicHeight-class.html
 
 use crate::core::{
-    RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
+    FullRenderTree,
+    FullRenderTree, RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
 };
 use flui_types::constraints::BoxConstraints;
 use flui_types::Size;
@@ -81,7 +82,7 @@ impl Default for RenderIntrinsicHeight {
     }
 }
 
-impl RenderBox<Single> for RenderIntrinsicHeight {
+impl<T: FullRenderTree> RenderBox<T, Single> for RenderIntrinsicHeight {
     fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Single, BoxProtocol>) -> Size
     where
         T: crate::core::LayoutTree,

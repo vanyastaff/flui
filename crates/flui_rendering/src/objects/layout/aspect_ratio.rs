@@ -4,7 +4,7 @@
 //! Source: https://api.flutter.dev/flutter/rendering/RenderAspectRatio-class.html
 
 use crate::core::{BoxProtocol, LayoutContext, PaintContext};
-use crate::core::{RenderBox, Single};
+use crate::core::{FullRenderTree, RenderBox, Single};
 use flui_types::constraints::BoxConstraints;
 use flui_types::Size;
 
@@ -112,7 +112,7 @@ impl Default for RenderAspectRatio {
     }
 }
 
-impl RenderBox<Single> for RenderAspectRatio {
+impl<T: FullRenderTree> RenderBox<T, Single> for RenderAspectRatio {
     fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Single, BoxProtocol>) -> Size
     where
         T: crate::core::LayoutTree,

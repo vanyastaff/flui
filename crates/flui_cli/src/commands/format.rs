@@ -1,8 +1,8 @@
-use anyhow::{Context, Result};
+use crate::error::{CliError, CliResult, ResultExt};
 use console::style;
 use std::process::Command;
 
-pub fn execute(check: bool) -> Result<()> {
+pub fn execute(check: bool) -> CliResult<()> {
     if check {
         println!("{}", style("Checking code formatting...").green().bold());
     } else {
@@ -22,9 +22,9 @@ pub fn execute(check: bool) -> Result<()> {
 
     if !status.success() {
         if check {
-            anyhow::bail!("Code is not formatted. Run 'flui format' to fix.");
+            return Err(CliError::FormattingCheck);
         }
-        anyhow::bail!("Formatting failed");
+        return Err(CliError::FormattingFailed);
     }
 
     println!();

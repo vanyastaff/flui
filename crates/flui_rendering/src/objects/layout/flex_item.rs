@@ -13,7 +13,7 @@
 //! Flutter reference: <https://api.flutter.dev/flutter/widgets/Flexible-class.html>
 //! Flutter reference: <https://api.flutter.dev/flutter/widgets/Expanded-class.html>
 
-use crate::core::{BoxProtocol, LayoutContext, PaintContext, RenderBox, Single};
+use crate::core::{BoxProtocol, LayoutContext, PaintContext, FullRenderTree, RenderBox, Single};
 use flui_types::{layout::FlexFit, Size};
 
 /// Metadata for flexible children in Flex layout
@@ -188,7 +188,7 @@ impl RenderFlexItem {
     }
 }
 
-impl RenderBox<Single> for RenderFlexItem {
+impl<T: FullRenderTree> RenderBox<T, Single> for RenderFlexItem {
     fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Single, BoxProtocol>) -> Size
     where
         T: crate::core::LayoutTree,

@@ -7,7 +7,8 @@
 //! Flutter reference: <https://api.flutter.dev/flutter/rendering/RenderView-class.html>
 
 use crate::core::{
-    RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
+    FullRenderTree,
+    FullRenderTree, RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
 };
 use flui_types::{BoxConstraints, Size};
 
@@ -131,7 +132,7 @@ impl RenderView {
     }
 }
 
-impl RenderBox<Single> for RenderView {
+impl<T: FullRenderTree> RenderBox<T, Single> for RenderView {
     fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Single, BoxProtocol>) -> Size
     where
         T: crate::core::LayoutTree,

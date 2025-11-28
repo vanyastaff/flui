@@ -12,7 +12,7 @@
 //!
 //! Flutter reference: <https://api.flutter.dev/flutter/widgets/Positioned-class.html>
 
-use crate::core::{BoxProtocol, LayoutContext, PaintContext, RenderBox, Single};
+use crate::core::{BoxProtocol, LayoutContext, PaintContext, FullRenderTree, RenderBox, Single};
 use flui_types::constraints::BoxConstraints;
 use flui_types::{Offset, Size};
 
@@ -262,7 +262,7 @@ impl RenderPositioned {
     }
 }
 
-impl RenderBox<Single> for RenderPositioned {
+impl<T: FullRenderTree> RenderBox<T, Single> for RenderPositioned {
     fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Single, BoxProtocol>) -> Size
     where
         T: crate::core::LayoutTree,

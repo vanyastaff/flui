@@ -46,6 +46,14 @@ pub enum CliError {
     #[error("{feature} is not yet implemented")]
     NotImplemented { feature: String },
 
+    /// Code formatting check failed.
+    #[error("Code is not formatted. Run 'flui format' to fix.")]
+    FormattingCheck,
+
+    /// Code formatting failed.
+    #[error("Formatting failed")]
+    FormattingFailed,
+
     /// I/O error occurred.
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
@@ -61,6 +69,10 @@ pub enum CliError {
     /// Build system error.
     #[error("Build system error: {0}")]
     Build(#[from] flui_build::error::BuildError),
+
+    /// Dialog interaction error.
+    #[error("Dialog error: {0}")]
+    Dialog(#[from] dialoguer::Error),
 
     /// Generic error with context.
     #[error("{message}")]

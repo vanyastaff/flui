@@ -5,7 +5,7 @@
 //!
 //! Flutter reference: <https://api.flutter.dev/flutter/rendering/RenderListBody-class.html>
 
-use crate::core::{BoxProtocol, ChildrenAccess, LayoutContext, PaintContext, RenderBox, Variable};
+use crate::core::{BoxProtocol, ChildrenAccess, LayoutContext, PaintContext, FullRenderTree, RenderBox, Variable};
 use flui_types::constraints::BoxConstraints;
 use flui_types::{Axis, Offset, Size};
 
@@ -78,7 +78,7 @@ impl Default for RenderListBody {
     }
 }
 
-impl RenderBox<Variable> for RenderListBody {
+impl<T: FullRenderTree> RenderBox<T, Variable> for RenderListBody {
     fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Variable, BoxProtocol>) -> Size
     where
         T: crate::core::LayoutTree,

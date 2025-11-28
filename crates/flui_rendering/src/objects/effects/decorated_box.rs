@@ -368,7 +368,7 @@ impl RenderDecoratedBox {
 
 // ===== RenderObject Implementation =====
 
-impl RenderBox<Optional> for RenderDecoratedBox {
+impl<T: FullRenderTree> RenderBox<T, Optional> for RenderDecoratedBox {
     fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Optional, BoxProtocol>) -> Size
     where
         T: crate::core::LayoutTree,

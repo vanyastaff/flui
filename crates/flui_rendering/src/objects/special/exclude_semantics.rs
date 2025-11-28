@@ -3,7 +3,8 @@
 //! Flutter reference: <https://api.flutter.dev/flutter/widgets/ExcludeSemantics-class.html>
 
 use crate::core::{
-    RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
+    FullRenderTree,
+    FullRenderTree, RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
 };
 use flui_types::Size;
 
@@ -52,7 +53,7 @@ impl RenderExcludeSemantics {
 
 // ===== RenderObject Implementation =====
 
-impl RenderBox<Single> for RenderExcludeSemantics {
+impl<T: FullRenderTree> RenderBox<T, Single> for RenderExcludeSemantics {
     fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Single, BoxProtocol>) -> Size
     where
         T: crate::core::LayoutTree,

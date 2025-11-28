@@ -114,7 +114,7 @@ impl Default for RenderPhysicalModel {
     }
 }
 
-impl RenderBox<Optional> for RenderPhysicalModel {
+impl<T: FullRenderTree> RenderBox<T, Optional> for RenderPhysicalModel {
     fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Optional, BoxProtocol>) -> Size
     where
         T: crate::core::LayoutTree,

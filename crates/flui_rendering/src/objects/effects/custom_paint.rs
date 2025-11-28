@@ -1,7 +1,8 @@
 //! RenderCustomPaint - custom painting with user-defined painters
 
 use crate::core::{
-    RenderBox, Optional, {BoxProtocol, LayoutContext, PaintContext},
+    FullRenderTree,
+    FullRenderTree, RenderBox, Optional, {BoxProtocol, LayoutContext, PaintContext},
 };
 use flui_painting::Canvas;
 use flui_types::Size;
@@ -147,7 +148,7 @@ impl Default for RenderCustomPaint {
 
 // ===== RenderObject Implementation =====
 
-impl RenderBox<Optional> for RenderCustomPaint {
+impl<T: FullRenderTree> RenderBox<T, Optional> for RenderCustomPaint {
     fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Optional, BoxProtocol>) -> Size
     where
         T: crate::core::LayoutTree,

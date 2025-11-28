@@ -3,7 +3,8 @@
 //! Flutter reference: <https://api.flutter.dev/flutter/widgets/MergeSemantics-class.html>
 
 use crate::core::{
-    RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
+    FullRenderTree,
+    FullRenderTree, RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
 };
 use flui_types::Size;
 
@@ -44,7 +45,7 @@ impl Default for RenderMergeSemantics {
 
 // ===== RenderObject Implementation =====
 
-impl RenderBox<Single> for RenderMergeSemantics {
+impl<T: FullRenderTree> RenderBox<T, Single> for RenderMergeSemantics {
     fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Single, BoxProtocol>) -> Size
     where
         T: crate::core::LayoutTree,

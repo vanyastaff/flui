@@ -309,7 +309,7 @@ fn main() {
                         path,
                         lib,
                     ),
-                    Err(e) => Err(e),
+                    Err(e) => Err(anyhow::Error::new(e)),
                 }
             } else if let Some(name) = name {
                 // Non-interactive mode
@@ -357,11 +357,16 @@ fn main() {
             android,
             ios,
             web,
-        } => commands::doctor::execute(verbose, android, ios, web),
+        } => commands::doctor::execute(verbose, android, ios, web)
+            .map_err(|e| anyhow::Error::new(e)),
 
-        Commands::Devices { details, platform } => commands::devices::execute(details, platform),
+        Commands::Devices { details, platform } => {
+            commands::devices::execute(details, platform).map_err(|e| anyhow::Error::new(e))
+        }
 
-        Commands::Emulators { launch } => commands::emulators::execute(launch),
+        Commands::Emulators { launch } => {
+            commands::emulators::execute(launch).map_err(|e| anyhow::Error::new(e))
+        }
 
         Commands::Clean { deep, platform } => commands::clean::execute(deep, platform),
 
@@ -371,14 +376,22 @@ fn main() {
         } => commands::upgrade::execute(self_update, dependencies),
 
         Commands::Platform { subcommand } => match subcommand {
-            PlatformSubcommand::Add { platforms } => commands::platform::add(platforms),
-            PlatformSubcommand::Remove { platform } => commands::platform::remove(platform),
-            PlatformSubcommand::List => commands::platform::list(),
+            PlatformSubcommand::Add { platforms } => {
+                commands::platform::add(platforms).map_err(|e| anyhow::Error::new(e))
+            }
+            PlatformSubcommand::Remove { platform } => {
+                commands::platform::remove(platform).map_err(|e| anyhow::Error::new(e))
+            }
+            PlatformSubcommand::List => commands::platform::list().map_err(|e| anyhow::Error::new(e)),
         },
 
-        Commands::Format { check } => commands::format::execute(check),
+        Commands::Format { check } => {
+            commands::format::execute(check).map_err(|e| anyhow::Error::new(e))
+        }
 
-        Commands::Devtools { port } => commands::devtools::execute(port),
+        Commands::Devtools { port } => {
+            commands::devtools::execute(port).map_err(|e| anyhow::Error::new(e))
+        }
 
         Commands::Completions { shell } => {
             commands::completions::execute(shell).map_err(|e| anyhow::Error::new(e))

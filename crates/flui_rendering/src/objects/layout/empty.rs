@@ -5,6 +5,7 @@
 //! Flutter reference: <https://api.flutter.dev/flutter/widgets/SizedBox/SizedBox.shrink.html>
 
 use crate::core::{
+    FullRenderTree,
     BoxProtocol, LayoutContext, LayoutTree, Leaf, PaintContext, PaintTree, RenderBox,
 };
 use flui_types::Size;
@@ -16,7 +17,7 @@ use flui_types::Size;
 #[derive(Debug, Clone, Copy, Default)]
 pub struct RenderEmpty;
 
-impl RenderBox<Leaf> for RenderEmpty {
+impl<T: FullRenderTree> RenderBox<T, Leaf> for RenderEmpty {
     fn layout<T>(&mut self, ctx: LayoutContext<'_, T, Leaf, BoxProtocol>) -> Size
     where
         T: LayoutTree,

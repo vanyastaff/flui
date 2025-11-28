@@ -4,7 +4,7 @@
 //! Source: https://api.flutter.dev/flutter/rendering/RenderBaseline-class.html
 
 use crate::core::{BoxProtocol, LayoutContext, PaintContext};
-use crate::core::{RenderBox, Single};
+use crate::core::{FullRenderTree, RenderBox, Single};
 use flui_types::{layout::TextBaseline, Offset, Size};
 
 /// RenderObject that positions child based on baseline
@@ -77,7 +77,7 @@ impl RenderBaseline {
 
 // ===== RenderObject Implementation =====
 
-impl RenderBox<Single> for RenderBaseline {
+impl<T: FullRenderTree> RenderBox<T, Single> for RenderBaseline {
     fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Single, BoxProtocol>) -> Size
     where
         T: crate::core::LayoutTree,

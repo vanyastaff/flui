@@ -1,8 +1,7 @@
 //! RenderOpacity - applies opacity to a child using OpacityLayer
 
-use crate::core::ElementId;
 use crate::core::{
-    RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
+    BoxProtocol, ElementId, FullRenderTree, LayoutContext, PaintContext, RenderBox, Single,
 };
 use flui_types::Size;
 
@@ -38,20 +37,14 @@ impl RenderOpacity {
     }
 }
 
-impl RenderBox<Single> for RenderOpacity {
-    fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Single, BoxProtocol>) -> Size
-    where
-        T: crate::core::LayoutTree,
-    {
+impl<T: FullRenderTree> RenderBox<T, Single> for RenderOpacity {
+    fn layout(&mut self, mut ctx: LayoutContext<'_, T, Single, BoxProtocol>) -> Size {
         let child_id = ctx.children.single();
         // Layout child with same constraints
         ctx.layout_child(child_id, ctx.constraints)
     }
 
-    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Single>)
-    where
-        T: crate::core::PaintTree,
-    {
+    fn paint(&self, ctx: &mut PaintContext<'_, T, Single>) {
         let child_id = ctx.children.single();
 
         // If fully transparent, don't paint anything
