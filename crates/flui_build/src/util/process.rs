@@ -149,7 +149,7 @@ pub async fn run_command_with_progress<S: AsRef<str>>(
 
         while let Ok(Some(line)) = lines.next_line().await {
             if verbose {
-                println!("{}", line);
+                println!("{line}");
             }
 
             if let Some(event) = parser.parse_line(&line) {
@@ -161,6 +161,7 @@ pub async fn run_command_with_progress<S: AsRef<str>>(
                             }
                         }
                         BuildEvent::Progress { current, total } => {
+                            #[allow(clippy::cast_possible_truncation)]
                             let percent = (current * 100 / total.max(1)) as u8;
                             prog.set_progress(percent);
                         }

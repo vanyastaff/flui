@@ -50,7 +50,7 @@ pub trait OutputParser: Send + Sync {
     fn parse_line(&self, line: &str) -> Option<BuildEvent>;
 
     /// Get the tool name
-    fn tool_name(&self) -> &str;
+    fn tool_name(&self) -> &'static str;
 }
 
 /// Parser for cargo output
@@ -76,9 +76,11 @@ impl OutputParser for CargoParser {
             if let Some(time_str) = line.split(" in ").nth(1) {
                 let time_str = time_str.trim_end_matches('s');
                 if let Ok(seconds) = time_str.parse::<f64>() {
+                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                    let duration = (seconds * 1000.0) as u64;
                     return Some(BuildEvent::Completed {
                         task: "Rust compilation".to_string(),
-                        duration_ms: Some((seconds * 1000.0) as u64),
+                        duration_ms: Some(duration),
                     });
                 }
             }
@@ -101,7 +103,7 @@ impl OutputParser for CargoParser {
         None
     }
 
-    fn tool_name(&self) -> &str {
+    fn tool_name(&self) -> &'static str {
         "cargo"
     }
 }
@@ -120,7 +122,7 @@ impl OutputParser for GradleParser {
                 .trim_start_matches("> Task")
                 .trim()
                 .split(':')
-                .last()?
+                .next_back()?
                 .to_string();
             return Some(BuildEvent::Started { task: task_name });
         }
@@ -162,7 +164,7 @@ impl OutputParser for GradleParser {
         None
     }
 
-    fn tool_name(&self) -> &str {
+    fn tool_name(&self) -> &'static str {
         "gradle"
     }
 }
@@ -207,9 +209,11 @@ impl OutputParser for WasmPackParser {
             if let Some(time_str) = line.split("Done in ").nth(1) {
                 let time_str = time_str.trim_end_matches('s');
                 if let Ok(seconds) = time_str.parse::<f64>() {
+                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                    let duration = (seconds * 1000.0) as u64;
                     return Some(BuildEvent::Completed {
                         task: "WASM build".to_string(),
-                        duration_ms: Some((seconds * 1000.0) as u64),
+                        duration_ms: Some(duration),
                     });
                 }
             }
@@ -218,19 +222,19 @@ impl OutputParser for WasmPackParser {
         None
     }
 
-    fn tool_name(&self) -> &str {
+    fn tool_name(&self) -> &'static str {
         "wasm-pack"
     }
 }
 
 /// Get parser for a specific tool
+#[must_use]
 pub fn get_parser(tool: &str) -> Arc<dyn OutputParser> {
     match tool.to_lowercase().as_str() {
-        "cargo" | "cargo-ndk" => Arc::new(CargoParser),
         "gradle" | "gradlew" | "gradlew.bat" => Arc::new(GradleParser),
         "wasm-pack" => Arc::new(WasmPackParser),
         "xcodebuild" | "xcode" => Arc::new(XcodeParser),
-        _ => Arc::new(CargoParser), // Default to cargo parser
+        _ => Arc::new(CargoParser), // Default to cargo parser (includes "cargo" and "cargo-ndk")
     }
 }
 
@@ -306,7 +310,7 @@ impl OutputParser for XcodeParser {
             if let Some(target) = line.split("TARGET ").nth(1) {
                 let target_name = target.split(" OF ").next()?.to_string();
                 return Some(BuildEvent::Started {
-                    task: format!("Building {}", target_name),
+                    task: format!("Building {target_name}"),
                 });
             }
         }
@@ -315,7 +319,7 @@ impl OutputParser for XcodeParser {
         if line.starts_with("▸ Compiling") {
             let file = line.trim_start_matches("▸ Compiling").trim();
             return Some(BuildEvent::Info {
-                message: format!("Compiling {}", file),
+                message: format!("Compiling {file}"),
             });
         }
 
@@ -323,7 +327,7 @@ impl OutputParser for XcodeParser {
         if line.starts_with("▸ Linking") {
             let file = line.trim_start_matches("▸ Linking").trim();
             return Some(BuildEvent::Info {
-                message: format!("Linking {}", file),
+                message: format!("Linking {file}"),
             });
         }
 
@@ -331,7 +335,7 @@ impl OutputParser for XcodeParser {
         if line.starts_with("▸ Building") {
             let msg = line.trim_start_matches("▸ Building").trim();
             return Some(BuildEvent::Started {
-                task: format!("Building {}", msg),
+                task: format!("Building {msg}"),
             });
         }
 
@@ -340,9 +344,11 @@ impl OutputParser for XcodeParser {
             if let Some(time_str) = line.split('[').nth(1) {
                 let time_str = time_str.trim_end_matches(']').trim_end_matches(" sec");
                 if let Ok(seconds) = time_str.parse::<f64>() {
+                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                    let duration = (seconds * 1000.0) as u64;
                     return Some(BuildEvent::Completed {
                         task: "Xcode build".to_string(),
-                        duration_ms: Some((seconds * 1000.0) as u64),
+                        duration_ms: Some(duration),
                     });
                 }
             }
@@ -372,7 +378,7 @@ impl OutputParser for XcodeParser {
         None
     }
 
-    fn tool_name(&self) -> &str {
+    fn tool_name(&self) -> &'static str {
         "xcodebuild"
     }
 }

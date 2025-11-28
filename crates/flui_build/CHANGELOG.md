@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **iOS Platform Support** - Complete iOS builder with xcodebuild integration (commit: d8f0240)
+  - `IOSBuilder` with support for simulator and device builds
+  - Automatic scheme and workspace detection
+  - Multiple architecture support (arm64, x86_64)
+  - Platform-specific signing and provisioning
+  - Integration with Xcode build system
+
+- **Progress Reporting System** - Unified visual progress indicators (commit: 7919bf1)
+  - Multi-platform progress coordination using `indicatif`
+  - Real-time build phase tracking: Validate, Build Rust, Build Platform, Clean
+  - Output parsing for cargo, gradle, wasm-pack, and xcodebuild
+  - Visual progress bars with emoji indicators (🔍 ⚙️ 📦 🧹)
+  - Structured build event system (Started, Progress, Completed, Warning, Error, Info)
+  - `ProgressManager` for coordinating multiple platform builds
+  - `BuildProgress` for per-build phase tracking
+
 - **Type-State Builder Pattern** - `BuilderContextBuilder` with compile-time validation
   - Type states: `NoPlatform`/`HasPlatform`, `NoProfile`/`HasProfile`
   - Ensures all required fields are set before `build()`
@@ -58,7 +74,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- N/A (initial feature release)
+- **Error Handling** - Migrated from anyhow to thiserror for better type safety (commits: 02dd663, ee0f90e)
+  - Custom `BuildError` enum with specific error variants
+  - Better error messages with actionable context
+  - Type-safe error propagation throughout the crate
+  - Proper `std::error::Error` trait implementations
+
+- **Documentation** - Comprehensive documentation improvements (commits: e74d2b2, ff625ac, 5c6d305)
+  - Complete README with 4-platform architecture diagram
+  - Full API reference for all public types and methods
+  - Platform-specific examples for Android/iOS/Web/Desktop
+  - Extension traits and type-state builder documentation
+  - Platform requirements and setup guides
+  - Output parser documentation for all build tools
+
+- **Code Quality** - Achieved 100% Rust API Guidelines compliance (commit: 1480788)
+  - All clippy warnings resolved with `-D warnings`
+  - Proper error handling patterns throughout
+  - Comprehensive documentation coverage
+  - Type-safe APIs with minimal `unsafe` code
+  - Consistent naming and organization
+
+### Refactored
+
+- **Workspace Integration** - Centralized dependency and metadata management (commits: 201398c, c9beafb)
+  - Use workspace package metadata for consistency
+  - Use workspace dependencies to reduce duplication
+  - Use workspace lints for consistent code quality
+  - Simplified Cargo.toml maintenance
 
 ### Deprecated
 

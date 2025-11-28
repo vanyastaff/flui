@@ -22,6 +22,7 @@ pub enum BuildPhase {
 
 impl BuildPhase {
     /// Returns the display name for this phase
+    #[must_use]
     pub fn display_name(&self) -> &'static str {
         match self {
             BuildPhase::Validate => "Validate",
@@ -32,6 +33,7 @@ impl BuildPhase {
     }
 
     /// Returns the emoji for this phase
+    #[must_use]
     pub fn emoji(&self) -> &'static str {
         match self {
             BuildPhase::Validate => "🔍",
@@ -43,10 +45,12 @@ impl BuildPhase {
 }
 
 /// Progress reporter for a single build
+#[derive(Debug)]
 pub struct BuildProgress {
     multi: Arc<MultiProgress>,
     main_bar: ProgressBar,
     phase_bar: Option<ProgressBar>,
+    #[allow(dead_code)]
     platform: String,
 }
 
@@ -67,7 +71,7 @@ impl BuildProgress {
                 .unwrap()
                 .progress_chars("█▓▒░ "),
         );
-        main_bar.set_prefix(format!("Building {}", platform));
+        main_bar.set_prefix(format!("Building {platform}"));
 
         Self {
             multi,
@@ -129,7 +133,7 @@ impl BuildProgress {
 
     /// Update overall build progress (0-100)
     pub fn set_progress(&self, percent: u8) {
-        self.main_bar.set_position(percent as u64);
+        self.main_bar.set_position(u64::from(percent));
     }
 
     /// Finish the entire build successfully
@@ -164,12 +168,14 @@ impl Drop for BuildProgress {
 }
 
 /// Global progress manager for coordinating multiple platform builds
+#[derive(Debug)]
 pub struct ProgressManager {
     multi: Arc<MultiProgress>,
 }
 
 impl ProgressManager {
     /// Create a new progress manager
+    #[must_use]
     pub fn new() -> Self {
         Self {
             multi: Arc::new(MultiProgress::new()),
