@@ -98,6 +98,7 @@ ahash = "0.8"
 bitflags = "2.10"
 dyn-clone = "1.0"
 downcast-rs = "2.0.2"
+which = "5.0" # Command discovery - Used by flui_build
 
 # STRING INTERNING - Used by flui_assets
 lasso = { version = "0.7", features = ["multi-threaded"] }
@@ -109,6 +110,24 @@ triomphe = "0.1"
 criterion = "0.7"
 tracing-tracy = "0.11"
 puffin_http = "0.16"
+
+# Workspace-wide lints for consistent code quality (Rust 1.74+)
+[workspace.lints.rust]
+unsafe_code = "warn"
+missing_docs = "warn"
+missing_debug_implementations = "warn"
+rust_2018_idioms = "warn"
+
+[workspace.lints.clippy]
+# Lint groups need lower priority to allow individual lint overrides
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+# Allow reasonable exceptions
+cast_precision_loss = "allow"
+module_name_repetitions = "allow"
+too_many_lines = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
 
 [package]
 name = "flui"

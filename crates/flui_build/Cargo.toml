@@ -10,11 +10,10 @@ keywords = ["flui", "build", "cross-platform", "android", "wasm"]
 categories = ["development-tools::build-utils"]
 
 [dependencies]
-
-# Core dependencies
-anyhow = { workspace = true }
-serde_json = { workspace = true }
-tracing = { workspace = true }
+# All dependencies from workspace
+anyhow.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
 tokio = { workspace = true, features = ["process"] }
-which = "5"
-pollster = { workspace = true }
+which.workspace = true
+pollster.workspace = true
