@@ -1,8 +1,8 @@
-use anyhow::{Context, Result};
+use crate::error::{CliError, CliResult, ResultExt};
 use console::style;
 use std::process::Command;
 
-pub fn execute(deep: bool, platform: Option<String>) -> Result<()> {
+pub fn execute(deep: bool, platform: Option<String>) -> CliResult<()> {
     println!("{}", style("Cleaning build artifacts...").green().bold());
     println!();
 
@@ -25,7 +25,9 @@ pub fn execute(deep: bool, platform: Option<String>) -> Result<()> {
         let status = cmd.status().context("Failed to run cargo clean")?;
 
         if !status.success() {
-            anyhow::bail!("Clean failed");
+            return Err(CliError::CleanFailed {
+                details: "cargo clean command failed".to_string(),
+            });
         }
 
         // Clean platform-specific directories
@@ -40,7 +42,7 @@ pub fn execute(deep: bool, platform: Option<String>) -> Result<()> {
     Ok(())
 }
 
-fn clean_platform(platform: &str) -> Result<()> {
+fn clean_platform(platform: &str) -> CliResult<()> {
     let platform_dir = std::path::Path::new("platforms").join(platform);
 
     if platform_dir.exists() {
@@ -81,7 +83,7 @@ fn clean_platform(platform: &str) -> Result<()> {
     Ok(())
 }
 
-fn clean_platform_dirs() -> Result<()> {
+fn clean_platform_dirs() -> CliResult<()> {
     let platforms = ["android", "ios", "web"];
 
     for platform in &platforms {

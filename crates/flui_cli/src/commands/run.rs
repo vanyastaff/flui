@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use crate::error::{CliError, CliResult, ResultExt};
 use console::style;
 use std::process::Command;
 
@@ -8,7 +8,7 @@ pub fn execute(
     hot_reload: bool,
     profile: Option<String>,
     verbose: bool,
-) -> Result<()> {
+) -> CliResult<()> {
     let mode = if release { "release" } else { "debug" };
     println!(
         "{}",
@@ -64,30 +64,32 @@ pub fn execute(
     let status = cmd.status().context("Failed to run cargo")?;
 
     if !status.success() {
-        anyhow::bail!("cargo run failed");
+        return Err(CliError::RunFailed);
     }
 
     Ok(())
 }
 
-fn ensure_flui_project() -> Result<()> {
+fn ensure_flui_project() -> CliResult<()> {
     let cargo_toml = std::path::Path::new("Cargo.toml");
     if !cargo_toml.exists() {
-        anyhow::bail!("Not a FLUI project (Cargo.toml not found)");
+        return Err(CliError::NotFluiProject {
+            reason: "Cargo.toml not found".to_string(),
+        });
     }
 
     // Check for FLUI dependency
     let content = std::fs::read_to_string(cargo_toml)?;
     if !content.contains("flui_app") && !content.contains("flui_widgets") {
-        anyhow::bail!(
-            "Not a FLUI project (flui_app or flui_widgets dependency not found in Cargo.toml)"
-        );
+        return Err(CliError::NotFluiProject {
+            reason: "flui_app or flui_widgets dependency not found in Cargo.toml".to_string(),
+        });
     }
 
     Ok(())
 }
 
-fn select_default_device() -> Result<String> {
+fn select_default_device() -> CliResult<String> {
     // For desktop, return current OS
     #[cfg(target_os = "windows")]
     return Ok("Windows Desktop".to_string());
@@ -99,5 +101,5 @@ fn select_default_device() -> Result<String> {
     return Ok("macOS Desktop".to_string());
 
     #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
-    anyhow::bail!("No default device for this platform");
+    Err(CliError::NoDefaultDevice)
 }

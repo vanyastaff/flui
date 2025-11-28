@@ -1,5 +1,5 @@
+use crate::error::{CliError, CliResult, ResultExt};
 use crate::BuildTarget;
-use anyhow::{Context, Result};
 use console::style;
 use flui_build::*;
 use std::path::PathBuf;
@@ -11,7 +11,7 @@ pub fn execute(
     split_per_abi: bool,
     optimize_wasm: bool,
     universal: bool,
-) -> Result<()> {
+) -> CliResult<()> {
     let mode = if release { "release" } else { "debug" };
     println!(
         "{}",
@@ -49,7 +49,7 @@ pub fn execute(
     Ok(())
 }
 
-fn build_android(release: bool, _split_per_abi: bool) -> Result<()> {
+fn build_android(release: bool, _split_per_abi: bool) -> CliResult<()> {
     println!("  {} Building Android APK", style("→").cyan());
 
     let workspace_root = std::env::current_dir()?;
@@ -106,7 +106,7 @@ fn build_android(release: bool, _split_per_abi: bool) -> Result<()> {
     Ok(())
 }
 
-fn build_ios(release: bool, _universal: bool) -> Result<()> {
+fn build_ios(release: bool, _universal: bool) -> CliResult<()> {
     println!("  {} iOS builds not yet supported", style("!").yellow());
     println!("  {} iOS support coming soon", style("→").cyan());
     println!();
@@ -121,10 +121,12 @@ fn build_ios(release: bool, _universal: bool) -> Result<()> {
     );
     println!("  2. Or use Xcode for iOS builds");
 
-    anyhow::bail!("iOS build via flui CLI not yet implemented")
+    Err(CliError::NotImplemented {
+        feature: "iOS build via flui CLI".to_string(),
+    })
 }
 
-fn build_web(release: bool, _optimize_wasm: bool) -> Result<()> {
+fn build_web(release: bool, _optimize_wasm: bool) -> CliResult<()> {
     println!("  {} Building Web (WASM)", style("→").cyan());
 
     let workspace_root = std::env::current_dir()?;
@@ -175,7 +177,7 @@ fn build_web(release: bool, _optimize_wasm: bool) -> Result<()> {
     Ok(())
 }
 
-fn build_desktop(release: bool) -> Result<()> {
+fn build_desktop(release: bool) -> CliResult<()> {
     println!("  {} Building Desktop binary", style("→").cyan());
 
     let workspace_root = std::env::current_dir()?;
@@ -230,7 +232,7 @@ fn build_desktop(release: bool) -> Result<()> {
     Ok(())
 }
 
-fn build_specific_platform(target: BuildTarget, release: bool) -> Result<()> {
+fn build_specific_platform(target: BuildTarget, release: bool) -> CliResult<()> {
     let target_triple = get_target_triple(target);
 
     println!(

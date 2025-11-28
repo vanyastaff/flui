@@ -31,8 +31,32 @@ pub enum CliError {
     CleanFailed { details: String },
 
     /// Analysis found issues.
-    #[error("Analysis found {count} issue(s)")]
-    AnalysisIssues { count: usize },
+    #[error("Analysis found issues")]
+    AnalysisIssues,
+
+    /// Test execution failed.
+    #[error("Tests failed")]
+    TestsFailed,
+
+    /// Upgrade operation failed.
+    #[error("Upgrade failed")]
+    UpgradeFailed,
+
+    /// Update operation failed.
+    #[error("Update failed")]
+    UpdateFailed,
+
+    /// Run operation failed.
+    #[error("cargo run failed")]
+    RunFailed,
+
+    /// Not a FLUI project.
+    #[error("Not a FLUI project: {reason}")]
+    NotFluiProject { reason: String },
+
+    /// No default device available.
+    #[error("No default device for this platform")]
+    NoDefaultDevice,
 
     /// Shell detection failed.
     #[error("Could not detect shell. Please specify explicitly with --shell")]

@@ -308,12 +308,14 @@ fn main() {
                         platforms,
                         path,
                         lib,
-                    ),
+                    )
+                    .map_err(|e| anyhow::Error::new(e)),
                     Err(e) => Err(anyhow::Error::new(e)),
                 }
             } else if let Some(name) = name {
                 // Non-interactive mode
                 commands::create::execute(name, org, template, platforms, path, lib)
+                    .map_err(|e| anyhow::Error::new(e))
             } else {
                 unreachable!("name is Some due to previous check")
             }
@@ -325,7 +327,8 @@ fn main() {
             hot_reload,
             profile,
             verbose,
-        } => commands::run::execute(device, release, hot_reload, profile, verbose),
+        } => commands::run::execute(device, release, hot_reload, profile, verbose)
+            .map_err(|e| anyhow::Error::new(e)),
 
         Commands::Build {
             platform,
@@ -341,16 +344,20 @@ fn main() {
             split_per_abi,
             optimize_wasm,
             universal,
-        ),
+        )
+        .map_err(|e| anyhow::Error::new(e)),
 
         Commands::Test {
             filter,
             unit,
             integration,
             platform,
-        } => commands::test::execute(filter, unit, integration, platform),
+        } => commands::test::execute(filter, unit, integration, platform)
+            .map_err(|e| anyhow::Error::new(e)),
 
-        Commands::Analyze { fix, pedantic } => commands::analyze::execute(fix, pedantic),
+        Commands::Analyze { fix, pedantic } => {
+            commands::analyze::execute(fix, pedantic).map_err(|e| anyhow::Error::new(e))
+        }
 
         Commands::Doctor {
             verbose,
@@ -368,12 +375,15 @@ fn main() {
             commands::emulators::execute(launch).map_err(|e| anyhow::Error::new(e))
         }
 
-        Commands::Clean { deep, platform } => commands::clean::execute(deep, platform),
+        Commands::Clean { deep, platform } => {
+            commands::clean::execute(deep, platform).map_err(|e| anyhow::Error::new(e))
+        }
 
         Commands::Upgrade {
             self_update,
             dependencies,
-        } => commands::upgrade::execute(self_update, dependencies),
+        } => commands::upgrade::execute(self_update, dependencies)
+            .map_err(|e| anyhow::Error::new(e)),
 
         Commands::Platform { subcommand } => match subcommand {
             PlatformSubcommand::Add { platforms } => {

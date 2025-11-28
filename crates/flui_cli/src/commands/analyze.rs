@@ -1,8 +1,8 @@
-use anyhow::{Context, Result};
+use crate::error::{CliError, CliResult, ResultExt};
 use console::style;
 use std::process::Command;
 
-pub fn execute(fix: bool, pedantic: bool) -> Result<()> {
+pub fn execute(fix: bool, pedantic: bool) -> CliResult<()> {
     println!("{}", style("Analyzing code...").green().bold());
     println!();
 
@@ -27,7 +27,7 @@ pub fn execute(fix: bool, pedantic: bool) -> Result<()> {
     let status = cmd.status().context("Failed to run cargo clippy")?;
 
     if !status.success() {
-        anyhow::bail!("Analysis found issues");
+        return Err(CliError::AnalysisIssues);
     }
 
     println!();

@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use crate::error::{CliError, CliResult, ResultExt};
 use console::style;
 use std::process::Command;
 
@@ -7,7 +7,7 @@ pub fn execute(
     unit: bool,
     integration: bool,
     _platform: Option<String>,
-) -> Result<()> {
+) -> CliResult<()> {
     println!("{}", style("Running tests...").green().bold());
     println!();
 
@@ -34,7 +34,7 @@ pub fn execute(
     let status = cmd.status().context("Failed to run cargo test")?;
 
     if !status.success() {
-        anyhow::bail!("Tests failed");
+        return Err(CliError::TestsFailed);
     }
 
     println!();

@@ -1,8 +1,8 @@
-use anyhow::{Context, Result};
+use crate::error::{CliError, CliResult, ResultExt};
 use console::style;
 use std::process::Command;
 
-pub fn execute(self_update: bool, dependencies: bool) -> Result<()> {
+pub fn execute(self_update: bool, dependencies: bool) -> CliResult<()> {
     if self_update || !dependencies {
         println!("{}", style("Upgrading flui_cli...").green().bold());
         println!();
@@ -13,7 +13,7 @@ pub fn execute(self_update: bool, dependencies: bool) -> Result<()> {
             .context("Failed to upgrade flui_cli")?;
 
         if !status.success() {
-            anyhow::bail!("Upgrade failed");
+            return Err(CliError::UpgradeFailed);
         }
 
         println!();
@@ -33,7 +33,7 @@ pub fn execute(self_update: bool, dependencies: bool) -> Result<()> {
             .context("Failed to update dependencies")?;
 
         if !status.success() {
-            anyhow::bail!("Update failed");
+            return Err(CliError::UpdateFailed);
         }
 
         println!();

@@ -1,6 +1,6 @@
+use crate::error::{CliError, CliResult, ResultExt};
 use crate::templates::TemplateGenerator;
 use crate::{Platform, Template};
-use anyhow::{Context, Result};
 use console::style;
 use indicatif::{ProgressBar, ProgressStyle};
 use std::path::PathBuf;
@@ -13,7 +13,7 @@ pub fn execute(
     _platforms: Option<Vec<Platform>>,
     path: Option<PathBuf>,
     _is_lib: bool,
-) -> Result<()> {
+) -> CliResult<()> {
     println!(
         "{}",
         style(format!("Creating FLUI project '{}'...", name))
@@ -34,7 +34,9 @@ pub fn execute(
 
     // Check if directory exists
     if project_dir.exists() {
-        anyhow::bail!("Directory '{}' already exists", project_dir.display());
+        return Err(CliError::DirectoryExists {
+            path: project_dir,
+        });
     }
 
     // Create progress spinner
@@ -65,13 +67,27 @@ pub fn execute(
     spinner.set_message("Generating project files...");
 
     match template {
-        Template::Counter => template_gen.generate_counter(&project_dir)?,
-        Template::Basic => template_gen.generate_basic(&project_dir)?,
-        Template::Todo => template_gen.generate_todo(&project_dir)?,
-        Template::Dashboard => template_gen.generate_dashboard(&project_dir)?,
-        Template::Widget => template_gen.generate_widget(&project_dir)?,
-        Template::Plugin => template_gen.generate_plugin(&project_dir)?,
-        Template::Empty => template_gen.generate_empty(&project_dir)?,
+        Template::Counter => template_gen
+            .generate_counter(&project_dir)
+            .map_err(|e| wrap_anyhow_error(e, "Failed to generate counter template"))?,
+        Template::Basic => template_gen
+            .generate_basic(&project_dir)
+            .map_err(|e| wrap_anyhow_error(e, "Failed to generate basic template"))?,
+        Template::Todo => template_gen
+            .generate_todo(&project_dir)
+            .map_err(|e| wrap_anyhow_error(e, "Failed to generate todo template"))?,
+        Template::Dashboard => template_gen
+            .generate_dashboard(&project_dir)
+            .map_err(|e| wrap_anyhow_error(e, "Failed to generate dashboard template"))?,
+        Template::Widget => template_gen
+            .generate_widget(&project_dir)
+            .map_err(|e| wrap_anyhow_error(e, "Failed to generate widget template"))?,
+        Template::Plugin => template_gen
+            .generate_plugin(&project_dir)
+            .map_err(|e| wrap_anyhow_error(e, "Failed to generate plugin template"))?,
+        Template::Empty => template_gen
+            .generate_empty(&project_dir)
+            .map_err(|e| wrap_anyhow_error(e, "Failed to generate empty template"))?,
     }
 
     spinner.finish_and_clear();
@@ -120,22 +136,29 @@ pub fn execute(
     Ok(())
 }
 
-fn validate_project_name(name: &str) -> Result<()> {
+fn validate_project_name(name: &str) -> CliResult<()> {
     if name.is_empty() {
-        anyhow::bail!("Project name cannot be empty");
+        return Err(CliError::InvalidProjectName {
+            name: name.to_string(),
+            reason: "Project name cannot be empty".to_string(),
+        });
     }
 
     if !name
         .chars()
         .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
     {
-        anyhow::bail!(
-            "Project name must contain only alphanumeric characters, hyphens, and underscores"
-        );
+        return Err(CliError::InvalidProjectName {
+            name: name.to_string(),
+            reason: "Project name must contain only alphanumeric characters, hyphens, and underscores".to_string(),
+        });
     }
 
     if name.starts_with(|c: char| c.is_numeric()) {
-        anyhow::bail!("Project name cannot start with a number");
+        return Err(CliError::InvalidProjectName {
+            name: name.to_string(),
+            reason: "Project name cannot start with a number".to_string(),
+        });
     }
 
     // Reserved Rust keywords
@@ -148,13 +171,16 @@ fn validate_project_name(name: &str) -> Result<()> {
     ];
 
     if RESERVED.contains(&name) {
-        anyhow::bail!("Project name cannot be a Rust keyword: {}", name);
+        return Err(CliError::InvalidProjectName {
+            name: name.to_string(),
+            reason: format!("Project name cannot be a Rust keyword: {}", name),
+        });
     }
 
     Ok(())
 }
 
-fn init_git_repo(dir: &PathBuf) -> Result<()> {
+fn init_git_repo(dir: &PathBuf) -> CliResult<()> {
     // Initialize git
     Command::new("git")
         .args(["init"])
@@ -198,7 +224,7 @@ Cargo.lock
     Ok(())
 }
 
-fn run_cargo_check(dir: &PathBuf) -> Result<()> {
+fn run_cargo_check(dir: &PathBuf) -> CliResult<()> {
     let output = Command::new("cargo")
         .args(["check", "--quiet"])
         .current_dir(dir)
@@ -220,3 +246,13 @@ fn run_cargo_check(dir: &PathBuf) -> Result<()> {
 
     Ok(())
 }
+
+fn wrap_anyhow_error(err: anyhow::Error, message: &str) -> CliError {
+    // Extract root cause from anyhow error chain
+    let root_cause = err.root_cause();
+    CliError::WithContext {
+        message: format!("{}: {}", message, root_cause),
+        source: Box::new(std::io::Error::new(std::io::ErrorKind::Other, root_cause.to_string())),
+    }
+}
+
