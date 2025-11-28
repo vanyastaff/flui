@@ -1366,6 +1366,7 @@ dependencies = [
  "predicates",
  "serde",
  "tempfile",
+ "thiserror 2.0.17",
  "toml",
  "which 8.0.0",
 ]

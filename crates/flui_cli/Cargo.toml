@@ -1,13 +1,13 @@
 [package]
 name = "flui_cli"
-version = "0.1.0"
-edition = "2021"
-rust-version = "1.90"
-license = "MIT OR Apache-2.0"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
 description = "Command-line interface for FLUI - Project creation, building, and deployment automation"
 keywords = ["cli", "flui", "ui", "cross-platform", "build-tool"]
-authors = ["Flui Contributors"]
-repository = "https://github.com/vanyastaff/flui"
 
 [[bin]]
 name = "flui"
@@ -26,6 +26,7 @@ clap_complete = "4.5"
 
 # Error handling
 anyhow = { workspace = true }
+thiserror = { workspace = true }
 
 # Serialization
 serde = { workspace = true }
@@ -42,3 +43,6 @@ dirs = "5.0"
 tempfile = "3.10"
 assert_cmd = "2.0"
 predicates = "3.1"
+
+[lints]
+workspace = true

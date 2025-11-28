@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 mod commands;
 mod config;
+pub mod error;
 mod templates;
 mod utils;
 
@@ -379,7 +380,9 @@ fn main() {
 
         Commands::Devtools { port } => commands::devtools::execute(port),
 
-        Commands::Completions { shell } => commands::completions::execute(shell),
+        Commands::Completions { shell } => {
+            commands::completions::execute(shell).map_err(|e| anyhow::Error::new(e))
+        }
     };
 
     if let Err(e) = result {

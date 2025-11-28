@@ -1,10 +1,10 @@
-use anyhow::Result;
+use crate::error::CliResult;
 use clap::CommandFactory;
 use clap_complete::{generate, Shell};
 use console::style;
 use std::io;
 
-pub fn execute(shell: Option<Shell>) -> Result<()> {
+pub fn execute(shell: Option<Shell>) -> CliResult<()> {
     let shell = if let Some(s) = shell {
         s
     } else {
@@ -69,7 +69,7 @@ pub fn execute(shell: Option<Shell>) -> Result<()> {
     Ok(())
 }
 
-fn detect_shell() -> Result<Shell> {
+fn detect_shell() -> CliResult<Shell> {
     // Try to detect from SHELL environment variable
     if let Ok(shell_path) = std::env::var("SHELL") {
         if shell_path.contains("bash") {
@@ -96,5 +96,5 @@ fn detect_shell() -> Result<Shell> {
     return Ok(Shell::PowerShell);
 
     #[cfg(not(any(unix, windows)))]
-    anyhow::bail!("Could not detect shell. Please specify explicitly with --shell");
+    Err(CliError::ShellDetection)
 }

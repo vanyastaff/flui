@@ -23,9 +23,8 @@ pub fn execute(check: bool) -> Result<()> {
     if !status.success() {
         if check {
             anyhow::bail!("Code is not formatted. Run 'flui format' to fix.");
-        } else {
-            anyhow::bail!("Formatting failed");
         }
+        anyhow::bail!("Formatting failed");
     }
 
     println!();

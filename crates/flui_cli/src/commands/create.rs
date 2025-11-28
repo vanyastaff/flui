@@ -163,7 +163,7 @@ fn init_git_repo(dir: &PathBuf) -> Result<()> {
         .context("Failed to initialize git repository")?;
 
     // Create .gitignore
-    let gitignore = r#"# Build artifacts
+    let gitignore = r"# Build artifacts
 /target
 /build
 
@@ -191,7 +191,7 @@ flui.lock
 **/*.rs.bk
 *.pdb
 Cargo.lock
-"#;
+";
 
     std::fs::write(dir.join(".gitignore"), gitignore).context("Failed to create .gitignore")?;
 
