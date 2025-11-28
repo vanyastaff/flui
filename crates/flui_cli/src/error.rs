@@ -12,23 +12,44 @@ pub type CliResult<T> = Result<T, CliError>;
 pub enum CliError {
     /// Project directory already exists.
     #[error("Directory '{path}' already exists")]
-    DirectoryExists { path: PathBuf },
+    DirectoryExists {
+        /// Path to the existing directory
+        path: PathBuf,
+    },
 
     /// Invalid project name provided.
     #[error("Invalid project name '{name}': {reason}")]
-    InvalidProjectName { name: String, reason: String },
+    InvalidProjectName {
+        /// The invalid project name
+        name: String,
+        /// Reason why the name is invalid
+        reason: String,
+    },
 
     /// Required tool not found on system.
     #[error("Required tool '{tool}' not found. {suggestion}")]
-    ToolNotFound { tool: String, suggestion: String },
+    ToolNotFound {
+        /// Name of the missing tool
+        tool: String,
+        /// Suggestion for how to install the tool
+        suggestion: String,
+    },
 
     /// Build operation failed.
     #[error("Build failed for platform '{platform}': {details}")]
-    BuildFailed { platform: String, details: String },
+    BuildFailed {
+        /// Platform that failed to build
+        platform: String,
+        /// Details about the build failure
+        details: String,
+    },
 
     /// Clean operation failed.
     #[error("Clean failed: {details}")]
-    CleanFailed { details: String },
+    CleanFailed {
+        /// Details about the clean failure
+        details: String,
+    },
 
     /// Analysis found issues.
     #[error("Analysis found issues")]
@@ -52,7 +73,10 @@ pub enum CliError {
 
     /// Not a FLUI project.
     #[error("Not a FLUI project: {reason}")]
-    NotFluiProject { reason: String },
+    NotFluiProject {
+        /// Reason why this is not a FLUI project
+        reason: String,
+    },
 
     /// No default device available.
     #[error("No default device for this platform")]
@@ -68,7 +92,10 @@ pub enum CliError {
 
     /// Feature not yet implemented.
     #[error("{feature} is not yet implemented")]
-    NotImplemented { feature: String },
+    NotImplemented {
+        /// Name of the unimplemented feature
+        feature: String,
+    },
 
     /// Code formatting check failed.
     #[error("Code is not formatted. Run 'flui format' to fix.")]
@@ -101,7 +128,9 @@ pub enum CliError {
     /// Generic error with context.
     #[error("{message}")]
     WithContext {
+        /// Error message with context
         message: String,
+        /// Underlying source error
         #[source]
         source: Box<dyn std::error::Error + Send + Sync>,
     },
