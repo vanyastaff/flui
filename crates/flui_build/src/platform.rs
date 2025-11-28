@@ -13,22 +13,40 @@ pub(crate) mod private {
 /// Build context containing configuration and paths
 #[derive(Debug, Clone, PartialEq)]
 pub struct BuilderContext {
+    /// Root directory of the workspace
     pub workspace_root: PathBuf,
+    /// Target platform to build for
     pub platform: Platform,
+    /// Build profile (debug or release)
     pub profile: Profile,
+    /// Cargo features to enable
     pub features: Vec<String>,
+    /// Output directory for build artifacts
     pub output_dir: PathBuf,
 }
 
 /// Platform to build for
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Platform {
-    Android { targets: Vec<String> },
-    Web { target: String },
-    Desktop { target: Option<String> },
+    /// Android platform with target architectures
+    Android {
+        /// Target architectures (e.g., "aarch64-linux-android")
+        targets: Vec<String>
+    },
+    /// Web/WASM platform
+    Web {
+        /// Target identifier (e.g., "web")
+        target: String
+    },
+    /// Desktop platform (Windows, macOS, Linux)
+    Desktop {
+        /// Optional target triple (auto-detected if None)
+        target: Option<String>
+    },
 }
 
 impl Platform {
+    /// Returns the platform name as a string
     pub fn name(&self) -> &str {
         match self {
             Platform::Android { .. } => "android",
@@ -41,12 +59,17 @@ impl Platform {
 /// Build profile (debug or release)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum Profile {
+    /// Debug profile (default) - faster compilation, includes debug symbols
     #[default]
     Debug,
+    /// Release profile - optimized, slower compilation
     Release,
 }
 
 impl Profile {
+    /// Returns the cargo flag for this profile
+    ///
+    /// Returns `None` for Debug (default), `Some("--release")` for Release
     pub fn cargo_flag(&self) -> Option<&'static str> {
         match self {
             Profile::Debug => None,
@@ -54,6 +77,7 @@ impl Profile {
         }
     }
 
+    /// Returns the profile name as a string
     pub fn as_str(&self) -> &'static str {
         match self {
             Profile::Debug => "debug",
@@ -90,14 +114,18 @@ impl From<&str> for Platform {
 /// Build artifacts produced by Rust compilation
 #[derive(Debug)]
 pub struct BuildArtifacts {
+    /// Paths to compiled Rust libraries (.so, .dll, .dylib, .wasm)
     pub rust_libs: Vec<PathBuf>,
+    /// Platform-specific metadata (JSON)
     pub metadata: serde_json::Value,
 }
 
 /// Final artifacts after platform-specific build
 #[derive(Debug)]
 pub struct FinalArtifacts {
+    /// Path to the final application binary (APK, WASM, executable, etc.)
     pub app_binary: PathBuf,
+    /// Size of the final artifact in bytes
     pub size_bytes: u64,
 }
 
