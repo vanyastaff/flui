@@ -12,7 +12,8 @@ categories = ["development-tools::build-utils"]
 
 [dependencies]
 # All dependencies from workspace
-anyhow.workspace = true
+anyhow.workspace = true  # For convenience in builders
+thiserror.workspace = true  # For library error types
 serde_json.workspace = true
 tracing.workspace = true
 tokio = { workspace = true, features = ["process"] }

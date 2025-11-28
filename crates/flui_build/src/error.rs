@@ -23,9 +23,8 @@
 ///     _ => {}
 /// }
 /// ```
-use std::error::Error;
-use std::fmt::{Display, Formatter};
 use std::path::PathBuf;
+use thiserror::Error;
 
 /// Errors that can occur during the build process.
 ///
@@ -64,10 +63,11 @@ use std::path::PathBuf;
 /// // Output: Command 'cargo build' failed with exit code 1
 /// //         Stderr: error: could not compile
 /// ```
-#[derive(Debug)]
+#[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum BuildError {
     /// Required tool not found (cargo, wasm-pack, gradle, etc.)
+    #[error("{tool} not found. Install with: {install_hint}")]
     ToolNotFound {
         /// Name of the missing tool
         tool: String,
@@ -76,6 +76,7 @@ pub enum BuildError {
     },
 
     /// Platform target not installed
+    #[error("Rust target '{target}' not installed. Install with: {install_cmd}")]
     TargetNotInstalled {
         /// Rust target triple (e.g., "aarch64-linux-android")
         target: String,
@@ -84,6 +85,7 @@ pub enum BuildError {
     },
 
     /// Environment variable missing or invalid
+    #[error("Environment variable {var} error: {reason}")]
     EnvVarError {
         /// Environment variable name (e.g., "ANDROID_HOME")
         var: String,
@@ -92,6 +94,7 @@ pub enum BuildError {
     },
 
     /// Build command failed
+    #[error("Command '{command}' failed with exit code {exit_code}\nStderr: {stderr}")]
     CommandFailed {
         /// Command that was executed
         command: String,
@@ -102,6 +105,7 @@ pub enum BuildError {
     },
 
     /// File or directory not found
+    #[error("Path not found: {path:?} ({context})")]
     PathNotFound {
         /// Path that was not found
         path: PathBuf,
@@ -110,12 +114,14 @@ pub enum BuildError {
     },
 
     /// Invalid platform configuration
+    #[error("Invalid platform: {reason}")]
     InvalidPlatform {
         /// Error description
         reason: String,
     },
 
     /// Invalid build configuration
+    #[error("Invalid config for '{field}': {reason}")]
     InvalidConfig {
         /// Field name that is invalid
         field: String,
@@ -124,62 +130,12 @@ pub enum BuildError {
     },
 
     /// I/O error occurred
-    Io(std::io::Error),
+    #[error("I/O error")]
+    Io(#[from] std::io::Error),
 
     /// Other error with custom message
+    #[error("{0}")]
     Other(String),
-}
-
-impl Display for BuildError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::ToolNotFound { tool, install_hint } => {
-                write!(f, "{} not found. Install with: {}", tool, install_hint)
-            }
-            Self::TargetNotInstalled { target, install_cmd } => write!(
-                f,
-                "Rust target '{}' not installed. Install with: {}",
-                target, install_cmd
-            ),
-            Self::EnvVarError { var, reason } => {
-                write!(f, "Environment variable {} error: {}", var, reason)
-            }
-            Self::CommandFailed {
-                command,
-                exit_code,
-                stderr,
-            } => write!(
-                f,
-                "Command '{}' failed with exit code {}\nStderr: {}",
-                command, exit_code, stderr
-            ),
-            Self::PathNotFound { path, context } => {
-                write!(f, "Path not found: {} ({})", path.display(), context)
-            }
-            Self::InvalidPlatform { reason } => write!(f, "Invalid platform: {}", reason),
-            Self::InvalidConfig { field, reason } => {
-                write!(f, "Invalid config for '{}': {}", field, reason)
-            }
-            Self::Io(e) => write!(f, "I/O error: {}", e),
-            Self::Other(msg) => write!(f, "{}", msg),
-        }
-    }
-}
-
-impl Error for BuildError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Io(e) => Some(e),
-            _ => None,
-        }
-    }
-}
-
-// Conversion from std::io::Error
-impl From<std::io::Error> for BuildError {
-    fn from(e: std::io::Error) -> Self {
-        Self::Io(e)
-    }
 }
 
 // Conversion from String for convenience
