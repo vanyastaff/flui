@@ -296,6 +296,26 @@ pub trait BuilderContextExt {
     /// ```
     fn is_android(&self) -> bool;
 
+    /// Check if this build is for iOS.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use flui_build::*;
+    /// use std::path::PathBuf;
+    ///
+    /// let ctx = BuilderContextBuilder::new(PathBuf::from("."))
+    ///     .with_platform(Platform::IOS {
+    ///         targets: vec!["aarch64-apple-ios".to_string()],
+    ///     })
+    ///     .with_profile(Profile::Debug)
+    ///     .build();
+    ///
+    /// assert!(ctx.is_ios());
+    /// assert!(!ctx.is_android());
+    /// ```
+    fn is_ios(&self) -> bool;
+
     /// Check if this build is for Web/WASM.
     ///
     /// # Examples
@@ -382,6 +402,10 @@ impl BuilderContextExt for BuilderContext {
 
     fn is_android(&self) -> bool {
         matches!(self.platform, Platform::Android { .. })
+    }
+
+    fn is_ios(&self) -> bool {
+        matches!(self.platform, Platform::IOS { .. })
     }
 
     fn is_web(&self) -> bool {

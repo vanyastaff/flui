@@ -34,6 +34,11 @@ pub enum Platform {
         /// Target architectures (e.g., "aarch64-linux-android")
         targets: Vec<String>
     },
+    /// iOS platform with target architectures
+    IOS {
+        /// Target architectures (e.g., "aarch64-apple-ios", "x86_64-apple-ios")
+        targets: Vec<String>
+    },
     /// Web/WASM platform
     Web {
         /// Target identifier (e.g., "web")
@@ -52,6 +57,7 @@ impl Platform {
     pub fn name(&self) -> &str {
         match self {
             Platform::Android { .. } => "android",
+            Platform::IOS { .. } => "ios",
             Platform::Web { .. } => "web",
             Platform::Desktop { .. } => "desktop",
         }
@@ -105,6 +111,9 @@ impl From<&str> for Platform {
         match s {
             "android" => Platform::Android {
                 targets: vec!["aarch64-linux-android".to_string()],
+            },
+            "ios" => Platform::IOS {
+                targets: vec!["aarch64-apple-ios".to_string()],
             },
             "web" => Platform::Web {
                 target: "web".to_string(),

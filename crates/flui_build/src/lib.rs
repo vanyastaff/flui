@@ -57,6 +57,8 @@ pub mod context_ext;
 pub mod desktop;
 /// Custom error types for build operations
 pub mod error;
+/// iOS platform build support
+pub mod ios;
 /// Output parsers for build tools (cargo, gradle, wasm-pack)
 pub mod output_parser;
 /// Platform abstractions and core types
@@ -73,5 +75,6 @@ pub use context_builder::BuilderContextBuilder;
 pub use context_ext::BuilderContextExt;
 pub use desktop::DesktopBuilder;
 pub use error::{BuildError, BuildResult};
+pub use ios::IOSBuilder;
 pub use platform::*;
 pub use web::WebBuilder;
