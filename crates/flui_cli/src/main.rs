@@ -288,7 +288,7 @@ fn main() {
     flui_log::Logger::new().with_level(log_level).init();
 
     // Dispatch command
-    let result = match cli.command {
+    let result: crate::error::CliResult<()> = match cli.command {
         Commands::Create {
             name,
             org,
@@ -308,14 +308,12 @@ fn main() {
                         platforms,
                         path,
                         lib,
-                    )
-                    .map_err(|e| anyhow::Error::new(e)),
-                    Err(e) => Err(anyhow::Error::new(e)),
+                    ),
+                    Err(e) => Err(e),
                 }
             } else if let Some(name) = name {
                 // Non-interactive mode
                 commands::create::execute(name, org, template, platforms, path, lib)
-                    .map_err(|e| anyhow::Error::new(e))
             } else {
                 unreachable!("name is Some due to previous check")
             }
@@ -327,8 +325,7 @@ fn main() {
             hot_reload,
             profile,
             verbose,
-        } => commands::run::execute(device, release, hot_reload, profile, verbose)
-            .map_err(|e| anyhow::Error::new(e)),
+        } => commands::run::execute(device, release, hot_reload, profile, verbose),
 
         Commands::Build {
             platform,
@@ -344,68 +341,48 @@ fn main() {
             split_per_abi,
             optimize_wasm,
             universal,
-        )
-        .map_err(|e| anyhow::Error::new(e)),
+        ),
 
         Commands::Test {
             filter,
             unit,
             integration,
             platform,
-        } => commands::test::execute(filter, unit, integration, platform)
-            .map_err(|e| anyhow::Error::new(e)),
+        } => commands::test::execute(filter, unit, integration, platform),
 
-        Commands::Analyze { fix, pedantic } => {
-            commands::analyze::execute(fix, pedantic).map_err(|e| anyhow::Error::new(e))
-        }
+        Commands::Analyze { fix, pedantic } => commands::analyze::execute(fix, pedantic),
 
         Commands::Doctor {
             verbose,
             android,
             ios,
             web,
-        } => commands::doctor::execute(verbose, android, ios, web)
-            .map_err(|e| anyhow::Error::new(e)),
+        } => commands::doctor::execute(verbose, android, ios, web),
 
         Commands::Devices { details, platform } => {
-            commands::devices::execute(details, platform).map_err(|e| anyhow::Error::new(e))
+            commands::devices::execute(details, platform)
         }
 
-        Commands::Emulators { launch } => {
-            commands::emulators::execute(launch).map_err(|e| anyhow::Error::new(e))
-        }
+        Commands::Emulators { launch } => commands::emulators::execute(launch),
 
-        Commands::Clean { deep, platform } => {
-            commands::clean::execute(deep, platform).map_err(|e| anyhow::Error::new(e))
-        }
+        Commands::Clean { deep, platform } => commands::clean::execute(deep, platform),
 
         Commands::Upgrade {
             self_update,
             dependencies,
-        } => commands::upgrade::execute(self_update, dependencies)
-            .map_err(|e| anyhow::Error::new(e)),
+        } => commands::upgrade::execute(self_update, dependencies),
 
         Commands::Platform { subcommand } => match subcommand {
-            PlatformSubcommand::Add { platforms } => {
-                commands::platform::add(platforms).map_err(|e| anyhow::Error::new(e))
-            }
-            PlatformSubcommand::Remove { platform } => {
-                commands::platform::remove(platform).map_err(|e| anyhow::Error::new(e))
-            }
-            PlatformSubcommand::List => commands::platform::list().map_err(|e| anyhow::Error::new(e)),
+            PlatformSubcommand::Add { platforms } => commands::platform::add(platforms),
+            PlatformSubcommand::Remove { platform } => commands::platform::remove(platform),
+            PlatformSubcommand::List => commands::platform::list(),
         },
 
-        Commands::Format { check } => {
-            commands::format::execute(check).map_err(|e| anyhow::Error::new(e))
-        }
+        Commands::Format { check } => commands::format::execute(check),
 
-        Commands::Devtools { port } => {
-            commands::devtools::execute(port).map_err(|e| anyhow::Error::new(e))
-        }
+        Commands::Devtools { port } => commands::devtools::execute(port),
 
-        Commands::Completions { shell } => {
-            commands::completions::execute(shell).map_err(|e| anyhow::Error::new(e))
-        }
+        Commands::Completions { shell } => commands::completions::execute(shell),
     };
 
     if let Err(e) = result {

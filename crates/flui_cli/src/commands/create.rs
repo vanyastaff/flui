@@ -248,11 +248,23 @@ fn run_cargo_check(dir: &PathBuf) -> CliResult<()> {
 }
 
 fn wrap_anyhow_error(err: anyhow::Error, message: &str) -> CliError {
-    // Extract root cause from anyhow error chain
-    let root_cause = err.root_cause();
-    CliError::WithContext {
-        message: format!("{}: {}", message, root_cause),
-        source: Box::new(std::io::Error::new(std::io::ErrorKind::Other, root_cause.to_string())),
+    // Convert from anyhow and add context
+    let cli_err: CliError = err.into();
+    match cli_err {
+        CliError::WithContext {
+            message: inner_msg,
+            source,
+        } => CliError::WithContext {
+            message: format!("{}: {}", message, inner_msg),
+            source,
+        },
+        other => CliError::WithContext {
+            message: format!("{}: {}", message, other),
+            source: Box::new(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                other.to_string(),
+            )),
+        },
     }
 }
 
