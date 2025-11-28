@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Result};
 use std::path::{Path, PathBuf};
 
-use crate::platform::{BuildArtifacts, BuilderContext, FinalArtifacts, PlatformBuilder};
+use crate::platform::{private, BuildArtifacts, BuilderContext, FinalArtifacts, PlatformBuilder};
 use crate::util::process;
 
 pub struct DesktopBuilder {
@@ -44,6 +44,8 @@ impl DesktopBuilder {
         }
     }
 }
+
+impl private::Sealed for DesktopBuilder {}
 
 impl PlatformBuilder for DesktopBuilder {
     fn platform_name(&self) -> &str {

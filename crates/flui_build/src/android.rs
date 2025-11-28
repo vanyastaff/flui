@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Context, Result};
 use std::path::{Path, PathBuf};
 
-use crate::platform::{BuildArtifacts, BuilderContext, FinalArtifacts, PlatformBuilder};
+use crate::platform::{private, BuildArtifacts, BuilderContext, FinalArtifacts, PlatformBuilder};
 use crate::util::{check_command_exists, environment, process};
 
 pub struct AndroidBuilder {
@@ -31,6 +31,8 @@ impl AndroidBuilder {
         })
     }
 }
+
+impl private::Sealed for AndroidBuilder {}
 
 impl PlatformBuilder for AndroidBuilder {
     fn platform_name(&self) -> &str {

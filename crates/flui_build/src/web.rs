@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Context, Result};
 use std::path::{Path, PathBuf};
 
-use crate::platform::{BuildArtifacts, BuilderContext, FinalArtifacts, PlatformBuilder};
+use crate::platform::{private, BuildArtifacts, BuilderContext, FinalArtifacts, PlatformBuilder};
 use crate::util::{check_command_exists, process};
 
 pub struct WebBuilder {
@@ -15,6 +15,8 @@ impl WebBuilder {
         })
     }
 }
+
+impl private::Sealed for WebBuilder {}
 
 impl PlatformBuilder for WebBuilder {
     fn platform_name(&self) -> &str {

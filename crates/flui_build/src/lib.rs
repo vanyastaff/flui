@@ -48,12 +48,18 @@
 //! ```
 
 pub mod android;
+pub mod context_builder;
+pub mod context_ext;
 pub mod desktop;
+pub mod error;
 pub mod platform;
 pub mod util;
 pub mod web;
 
 pub use android::AndroidBuilder;
+pub use context_builder::BuilderContextBuilder;
+pub use context_ext::BuilderContextExt;
 pub use desktop::DesktopBuilder;
+pub use error::{BuildError, BuildResult};
 pub use platform::*;
 pub use web::WebBuilder;
