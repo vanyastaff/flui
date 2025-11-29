@@ -353,21 +353,14 @@ flui = { version = "0.1", features = ["devtools"] }
 
 ### Commit Message Format
 
-Use conventional commits with co-authorship:
+Use conventional commits:
 
 ```bash
-git commit -m "$(cat <<'EOF'
-feat: Add new widget for user profiles
+git commit -m "feat: Add new widget for user profiles
 
 - Implement ProfileCard view
 - Add avatar support with image loading
-- Add responsive layout for mobile/desktop
-
-🤖 Generated with [Claude Code](https://claude.com/claude-code)
-
-Co-Authored-By: Claude <noreply@anthropic.com>
-EOF
-)"
+- Add responsive layout for mobile/desktop"
 ```
 
 ### Branch Structure
