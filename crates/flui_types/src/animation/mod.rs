@@ -9,15 +9,16 @@ pub mod tween;
 
 // Re-exports for convenience
 pub use curve::{
-    CatmullRomCurve, CatmullRomSpline, Cubic, Curve, Curve2D, Curve2DSample, Curves,
-    ElasticInCurve, ElasticInOutCurve, ElasticOutCurve, FlippedCurve, Interval, Linear,
-    ParametricCurve, ReverseCurve, SawTooth, Threshold,
+    BounceInCurve, BounceInOutCurve, BounceOutCurve, CatmullRomCurve, CatmullRomSpline, Cubic,
+    Curve, Curve2D, Curve2DSample, Curves, DecelerateCurve, ElasticInCurve, ElasticInOutCurve,
+    ElasticOutCurve, FlippedCurve, Interval, Linear, ParametricCurve, ReverseCurve, SawTooth,
+    Threshold,
 };
 
 pub use tween::{
-    AlignmentTween, Animatable, BorderRadiusTween, ColorTween, ConstantTween, EdgeInsetsTween,
-    FloatTween, IntTween, OffsetTween, RectTween, ReverseTween, SizeTween, StepTween, Tween,
-    TweenSequence, TweenSequenceItem,
+    AlignmentTween, Animatable, AnimatableExt, BorderRadiusTween, ChainedTween, ColorTween,
+    ConstantTween, CurveExt, CurveTween, EdgeInsetsTween, FloatTween, IntTween, OffsetTween,
+    RectTween, ReverseTween, SizeTween, StepTween, Tween, TweenSequence, TweenSequenceItem,
 };
 
 pub use status::{AnimationBehavior, AnimationStatus};

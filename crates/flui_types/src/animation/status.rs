@@ -15,6 +15,7 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Default)]
+#[non_exhaustive]
 pub enum AnimationStatus {
     /// The animation is stopped at the beginning.
     #[default]
@@ -107,6 +108,7 @@ impl AnimationStatus {
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
 pub enum AnimationBehavior {
     /// The animation will run normally.
     #[default]

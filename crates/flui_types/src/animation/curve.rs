@@ -32,12 +32,26 @@ pub trait Curve {
     /// The value of `t` must be between 0.0 and 1.0, inclusive.
     fn transform(&self, t: f32) -> f32;
 
-    /// Returns a new curve that is the reversed curve of this one.
+    /// Returns a new curve that is the flipped version of this one.
+    ///
+    /// Flipping swaps the output: `transform(t)` becomes `1.0 - transform(t)`.
+    #[must_use]
     fn flipped(self) -> FlippedCurve<Self>
     where
         Self: Sized,
     {
         FlippedCurve { curve: self }
+    }
+
+    /// Returns a new curve that is the reversed version of this one.
+    ///
+    /// Reversing swaps the input: `transform(t)` becomes `transform(1.0 - t)`.
+    #[must_use]
+    fn reversed(self) -> ReverseCurve<Self>
+    where
+        Self: Sized,
+    {
+        ReverseCurve { curve: self }
     }
 }
 
@@ -243,6 +257,7 @@ pub struct Cubic {
 
 impl Cubic {
     /// Creates a new cubic curve.
+    #[must_use]
     pub const fn new(a: f32, b: f32, c: f32, d: f32) -> Self {
         Self { a, b, c, d }
     }
@@ -303,6 +318,7 @@ pub struct ElasticInCurve {
 
 impl ElasticInCurve {
     /// Creates a new elastic-in curve with the given period.
+    #[must_use]
     pub const fn new(period: f32) -> Self {
         Self { period }
     }
@@ -335,6 +351,7 @@ pub struct ElasticOutCurve {
 
 impl ElasticOutCurve {
     /// Creates a new elastic-out curve with the given period.
+    #[must_use]
     pub const fn new(period: f32) -> Self {
         Self { period }
     }
@@ -367,6 +384,7 @@ pub struct ElasticInOutCurve {
 
 impl ElasticInOutCurve {
     /// Creates a new elastic-in-out curve with the given period.
+    #[must_use]
     pub const fn new(period: f32) -> Self {
         Self { period }
     }
@@ -389,6 +407,95 @@ impl Curve for ElasticInOutCurve {
         } else {
             0.5 * ((2.0_f32).powf(-10.0 * t) * ((t - s) * (2.0 * PI) / self.period).sin()) + 1.0
         }
+    }
+}
+
+// ============================================================================
+// Bounce Curves
+// ============================================================================
+
+/// A bounce curve that bounces at the end.
+///
+/// Similar to Flutter's `Curves.bounceOut`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct BounceOutCurve;
+
+impl Curve for BounceOutCurve {
+    fn transform(&self, t: f32) -> f32 {
+        let t = t.clamp(0.0, 1.0);
+        bounce_out(t)
+    }
+}
+
+/// A bounce curve that bounces at the beginning.
+///
+/// Similar to Flutter's `Curves.bounceIn`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct BounceInCurve;
+
+impl Curve for BounceInCurve {
+    fn transform(&self, t: f32) -> f32 {
+        let t = t.clamp(0.0, 1.0);
+        1.0 - bounce_out(1.0 - t)
+    }
+}
+
+/// A bounce curve that bounces at both ends.
+///
+/// Similar to Flutter's `Curves.bounceInOut`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct BounceInOutCurve;
+
+impl Curve for BounceInOutCurve {
+    fn transform(&self, t: f32) -> f32 {
+        let t = t.clamp(0.0, 1.0);
+        if t < 0.5 {
+            (1.0 - bounce_out(1.0 - t * 2.0)) * 0.5
+        } else {
+            bounce_out(t * 2.0 - 1.0) * 0.5 + 0.5
+        }
+    }
+}
+
+/// Helper function for bounce calculations.
+#[inline]
+fn bounce_out(t: f32) -> f32 {
+    const N1: f32 = 7.5625;
+    const D1: f32 = 2.75;
+
+    if t < 1.0 / D1 {
+        N1 * t * t
+    } else if t < 2.0 / D1 {
+        let t = t - 1.5 / D1;
+        N1 * t * t + 0.75
+    } else if t < 2.5 / D1 {
+        let t = t - 2.25 / D1;
+        N1 * t * t + 0.9375
+    } else {
+        let t = t - 2.625 / D1;
+        N1 * t * t + 0.984375
+    }
+}
+
+// ============================================================================
+// Decelerate Curve
+// ============================================================================
+
+/// A curve where the rate of change starts fast and then decelerates.
+///
+/// Similar to Flutter's `Curves.decelerate`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct DecelerateCurve;
+
+impl Curve for DecelerateCurve {
+    #[inline]
+    fn transform(&self, t: f32) -> f32 {
+        let t = t.clamp(0.0, 1.0);
+        1.0 - (1.0 - t) * (1.0 - t)
     }
 }
 
@@ -683,6 +790,18 @@ impl Curves {
 
     /// An elastic ease-in-out curve.
     pub const ElasticInOut: ElasticInOutCurve = ElasticInOutCurve::new(0.4);
+
+    /// A bounce curve that bounces at the beginning.
+    pub const BounceIn: BounceInCurve = BounceInCurve;
+
+    /// A bounce curve that bounces at the end.
+    pub const BounceOut: BounceOutCurve = BounceOutCurve;
+
+    /// A bounce curve that bounces at both ends.
+    pub const BounceInOut: BounceInOutCurve = BounceInOutCurve;
+
+    /// A curve where the rate of change starts fast and then decelerates.
+    pub const Decelerate: DecelerateCurve = DecelerateCurve;
 }
 
 #[cfg(test)]
@@ -794,5 +913,53 @@ mod tests {
 
         let result = spline.transform(0.5);
         assert!(result.value >= 0.0 && result.value <= 1.0);
+    }
+
+    #[test]
+    fn test_bounce_out_curve() {
+        let curve = BounceOutCurve;
+        assert_eq!(curve.transform(0.0), 0.0);
+        assert!(curve.transform(0.5) > 0.5); // bounces high
+        assert!((curve.transform(1.0) - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_bounce_in_curve() {
+        let curve = BounceInCurve;
+        assert!((curve.transform(0.0) - 0.0).abs() < 1e-6);
+        assert!(curve.transform(0.5) < 0.5); // slow start due to bouncing
+        assert!((curve.transform(1.0) - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_bounce_in_out_curve() {
+        let curve = BounceInOutCurve;
+        assert!((curve.transform(0.0) - 0.0).abs() < 1e-6);
+        assert!((curve.transform(0.5) - 0.5).abs() < 1e-6); // midpoint
+        assert!((curve.transform(1.0) - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_decelerate_curve() {
+        let curve = DecelerateCurve;
+        assert_eq!(curve.transform(0.0), 0.0);
+        assert!(curve.transform(0.5) > 0.5); // fast start, slow end
+        assert_eq!(curve.transform(1.0), 1.0);
+    }
+
+    #[test]
+    fn test_curves_bounce_constants() {
+        assert!((Curves::BounceIn.transform(1.0) - 1.0).abs() < 1e-6);
+        assert!((Curves::BounceOut.transform(1.0) - 1.0).abs() < 1e-6);
+        assert!((Curves::BounceInOut.transform(1.0) - 1.0).abs() < 1e-6);
+        assert_eq!(Curves::Decelerate.transform(1.0), 1.0);
+    }
+
+    #[test]
+    fn test_curve_reversed_method() {
+        let curve = Linear.reversed();
+        assert_eq!(curve.transform(0.0), 1.0);
+        assert_eq!(curve.transform(0.5), 0.5);
+        assert_eq!(curve.transform(1.0), 0.0);
     }
 }

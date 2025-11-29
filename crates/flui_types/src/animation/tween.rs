@@ -1,5 +1,31 @@
 //! Tween types for animating values.
+//!
+//! This module provides types for animating values between a beginning and ending state.
+//! The core abstraction is the [`Animatable`] trait, which maps a progress value (0.0 to 1.0)
+//! to an output value of any type.
+//!
+//! # Extension Traits
+//!
+//! This module provides extension traits for fluent API composition:
+//!
+//! - [`AnimatableExt`] - adds `.reversed()` and `.chain()` methods to any `Animatable`
+//!
+//! # Examples
+//!
+//! ```
+//! use flui_types::animation::{FloatTween, Animatable, AnimatableExt};
+//!
+//! let tween = FloatTween::new(0.0, 100.0);
+//!
+//! // Use the tween directly
+//! assert_eq!(tween.transform(0.5), 50.0);
+//!
+//! // Or reverse it using extension trait
+//! let reversed = tween.reversed();
+//! assert_eq!(reversed.transform(0.0), 100.0);
+//! ```
 
+use crate::animation::curve::Curve;
 use crate::geometry::{Offset, Rect, Size};
 use crate::layout::{Alignment, EdgeInsets};
 use crate::styling::{BorderRadius, Color};
@@ -55,6 +81,7 @@ pub struct FloatTween {
 
 impl FloatTween {
     /// Creates a new float tween.
+    #[must_use]
     pub const fn new(begin: f32, end: f32) -> Self {
         Self { begin, end }
     }
@@ -95,6 +122,7 @@ pub struct IntTween {
 
 impl IntTween {
     /// Creates a new integer tween.
+    #[must_use]
     pub const fn new(begin: i32, end: i32) -> Self {
         Self { begin, end }
     }
@@ -136,6 +164,7 @@ pub struct StepTween {
 
 impl StepTween {
     /// Creates a new step tween.
+    #[must_use]
     pub const fn new(begin: i32, end: i32) -> Self {
         Self { begin, end }
     }
@@ -174,6 +203,7 @@ pub struct ConstantTween<T: Clone> {
 
 impl<T: Clone> ConstantTween<T> {
     /// Creates a new constant tween.
+    #[must_use]
     pub const fn new(value: T) -> Self {
         Self { value }
     }
@@ -212,6 +242,7 @@ pub struct ReverseTween<T, A: Animatable<T>> {
 
 impl<T, A: Animatable<T>> ReverseTween<T, A> {
     /// Creates a new reversed tween.
+    #[must_use]
     pub fn new(tween: A) -> Self {
         Self {
             tween,
@@ -244,6 +275,7 @@ pub struct ColorTween {
 
 impl ColorTween {
     /// Creates a new color tween.
+    #[must_use]
     pub const fn new(begin: Color, end: Color) -> Self {
         Self { begin, end }
     }
@@ -283,6 +315,7 @@ pub struct SizeTween {
 
 impl SizeTween {
     /// Creates a new size tween.
+    #[must_use]
     pub const fn new(begin: Size, end: Size) -> Self {
         Self { begin, end }
     }
@@ -326,6 +359,7 @@ pub struct RectTween {
 
 impl RectTween {
     /// Creates a new rectangle tween.
+    #[must_use]
     pub const fn new(begin: Rect, end: Rect) -> Self {
         Self { begin, end }
     }
@@ -370,6 +404,7 @@ pub struct OffsetTween {
 
 impl OffsetTween {
     /// Creates a new offset tween.
+    #[must_use]
     pub const fn new(begin: Offset, end: Offset) -> Self {
         Self { begin, end }
     }
@@ -409,6 +444,7 @@ pub struct AlignmentTween {
 
 impl AlignmentTween {
     /// Creates a new alignment tween.
+    #[must_use]
     pub const fn new(begin: Alignment, end: Alignment) -> Self {
         Self { begin, end }
     }
@@ -448,6 +484,7 @@ pub struct EdgeInsetsTween {
 
 impl EdgeInsetsTween {
     /// Creates a new edge insets tween.
+    #[must_use]
     pub const fn new(begin: EdgeInsets, end: EdgeInsets) -> Self {
         Self { begin, end }
     }
@@ -493,6 +530,7 @@ pub struct BorderRadiusTween {
 
 impl BorderRadiusTween {
     /// Creates a new border radius tween.
+    #[must_use]
     pub const fn new(begin: BorderRadius, end: BorderRadius) -> Self {
         Self { begin, end }
     }
@@ -522,10 +560,15 @@ impl Tween<BorderRadius> for BorderRadiusTween {
 // Complex Tweens
 // ============================================================================
 
-/// A tween that chains together multiple float tweens in sequence.
+/// A tween that chains together multiple tweens in sequence.
 ///
-/// Similar to Flutter's `TweenSequence<T>`. This is a simplified version
-/// that works with f32 values only for now.
+/// Similar to Flutter's `TweenSequence<T>`. Each item in the sequence has a
+/// weight that determines what portion of the animation duration it occupies.
+///
+/// # Type Parameters
+///
+/// - `T`: The output type of the animation.
+/// - `A`: The animatable type that produces `T` values.
 ///
 /// # Examples
 ///
@@ -542,16 +585,43 @@ impl Tween<BorderRadius> for BorderRadiusTween {
 /// assert_eq!(sequence.transform(0.5), 50.0);
 /// assert_eq!(sequence.transform(1.0), 100.0);
 /// ```
+///
+/// # Example with Colors
+///
+/// ```
+/// use flui_types::animation::{TweenSequence, TweenSequenceItem, ColorTween, Animatable};
+/// use flui_types::styling::Color;
+///
+/// let items = vec![
+///     TweenSequenceItem::new(ColorTween::new(Color::RED, Color::GREEN), 1.0),
+///     TweenSequenceItem::new(ColorTween::new(Color::GREEN, Color::BLUE), 1.0),
+/// ];
+/// let sequence = TweenSequence::new(items);
+///
+/// // At t=0, we get RED
+/// let start = sequence.transform(0.0);
+/// assert_eq!(start, Color::RED);
+///
+/// // At t=0.5, we get GREEN (transition point)
+/// let mid = sequence.transform(0.5);
+/// assert_eq!(mid, Color::GREEN);
+/// ```
 #[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct TweenSequence {
+pub struct TweenSequence<T, A: Animatable<T>> {
     /// The items in the sequence.
-    pub items: Vec<TweenSequenceItem>,
+    items: Vec<TweenSequenceItem<T, A>>,
+    /// Cached total weight for performance.
+    total_weight: f32,
 }
 
-impl TweenSequence {
+impl<T, A: Animatable<T>> TweenSequence<T, A> {
     /// Creates a new tween sequence.
-    pub fn new(items: Vec<TweenSequenceItem>) -> Self {
+    ///
+    /// # Panics
+    ///
+    /// Panics if `items` is empty or if total weight is not positive.
+    #[must_use]
+    pub fn new(items: Vec<TweenSequenceItem<T, A>>) -> Self {
         assert!(
             !items.is_empty(),
             "TweenSequence must have at least one item"
@@ -561,25 +631,39 @@ impl TweenSequence {
         let total_weight: f32 = items.iter().map(|item| item.weight).sum();
         assert!(total_weight > 0.0, "Total weight must be positive");
 
-        Self { items }
+        Self {
+            items,
+            total_weight,
+        }
+    }
+
+    /// Returns the items in the sequence.
+    #[inline]
+    #[must_use]
+    pub fn items(&self) -> &[TweenSequenceItem<T, A>] {
+        &self.items
+    }
+
+    /// Returns the total weight of all items.
+    #[inline]
+    #[must_use]
+    pub fn total_weight(&self) -> f32 {
+        self.total_weight
     }
 }
 
-impl Animatable<f32> for TweenSequence {
-    fn transform(&self, t: f32) -> f32 {
+impl<T, A: Animatable<T>> Animatable<T> for TweenSequence<T, A> {
+    fn transform(&self, t: f32) -> T {
         let t = t.clamp(0.0, 1.0);
-
-        // Calculate total weight
-        let total_weight: f32 = self.items.iter().map(|item| item.weight).sum();
 
         // Find which item we're in
         let mut accumulated_weight = 0.0;
         for (i, item) in self.items.iter().enumerate() {
-            let item_end = (accumulated_weight + item.weight) / total_weight;
+            let item_end = (accumulated_weight + item.weight) / self.total_weight;
 
             if t <= item_end || i == self.items.len() - 1 {
                 // Calculate local t within this item
-                let item_start = accumulated_weight / total_weight;
+                let item_start = accumulated_weight / self.total_weight;
                 let local_t = if (item_end - item_start).abs() < 1e-6 {
                     0.0
                 } else {
@@ -597,32 +681,251 @@ impl Animatable<f32> for TweenSequence {
     }
 }
 
-/// An item in a [TweenSequence].
+/// An item in a [`TweenSequence`].
 ///
 /// Similar to Flutter's `TweenSequenceItem<T>`.
+///
+/// # Type Parameters
+///
+/// - `T`: The output type of the animation.
+/// - `A`: The animatable type that produces `T` values.
 #[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct TweenSequenceItem {
+pub struct TweenSequenceItem<T, A: Animatable<T>> {
     /// The tween to use for this item.
-    pub tween: FloatTween,
+    pub tween: A,
 
     /// The weight of this item in the sequence.
     ///
     /// The time spent in this item is proportional to its weight.
     pub weight: f32,
+
+    _phantom: std::marker::PhantomData<T>,
 }
 
-impl TweenSequenceItem {
+impl<T, A: Animatable<T>> TweenSequenceItem<T, A> {
     /// Creates a new tween sequence item.
-    pub fn new(tween: FloatTween, weight: f32) -> Self {
+    ///
+    /// # Panics
+    ///
+    /// Panics if `weight` is negative.
+    #[must_use]
+    pub fn new(tween: A, weight: f32) -> Self {
         assert!(weight >= 0.0, "Weight must be non-negative");
-        Self { tween, weight }
+        Self {
+            tween,
+            weight,
+            _phantom: std::marker::PhantomData,
+        }
     }
 }
+
+// ============================================================================
+// Curve-based Tweens
+// ============================================================================
+
+/// A tween that applies a curve to the animation progress.
+///
+/// Unlike [`CurvedAnimation`] in `flui_animation` which wraps an `Animation`,
+/// `CurveTween` implements [`Animatable`] and can be chained with other tweens.
+///
+/// Similar to Flutter's `CurveTween`.
+///
+/// # Examples
+///
+/// ```
+/// use flui_types::animation::{CurveTween, Animatable, Curves};
+///
+/// // Apply ease-in curve to progress
+/// let curve_tween = CurveTween::new(Curves::EaseIn);
+/// assert!(curve_tween.transform(0.0).abs() < 0.001); // ~0
+/// assert!(curve_tween.transform(0.5) < 0.5); // ease-in is slower at start
+/// assert!((curve_tween.transform(1.0) - 1.0).abs() < 0.001); // ~1
+/// ```
+///
+/// [`CurvedAnimation`]: crate::animation::CurvedAnimation
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CurveTween<C: Curve> {
+    /// The curve to apply.
+    pub curve: C,
+}
+
+impl<C: Curve> CurveTween<C> {
+    /// Creates a new curve tween.
+    #[inline]
+    #[must_use]
+    pub const fn new(curve: C) -> Self {
+        Self { curve }
+    }
+}
+
+impl<C: Curve> Animatable<f32> for CurveTween<C> {
+    #[inline]
+    fn transform(&self, t: f32) -> f32 {
+        self.curve.transform(t.clamp(0.0, 1.0))
+    }
+}
+
+// ============================================================================
+// Chained Tweens
+// ============================================================================
+
+/// A tween that chains two animatables together.
+///
+/// The first animatable transforms the input `t`, and its output is passed
+/// to the second animatable.
+///
+/// This is useful for applying a curve before a value tween:
+///
+/// # Examples
+///
+/// ```
+/// use flui_types::animation::{ChainedTween, CurveTween, FloatTween, Animatable, Curves};
+///
+/// // Chain a curve with a float tween
+/// let chained = ChainedTween::new(
+///     CurveTween::new(Curves::EaseIn),
+///     FloatTween::new(0.0, 100.0),
+/// );
+///
+/// assert!(chained.transform(0.0).abs() < 0.1); // ~0
+/// assert!(chained.transform(0.5) < 50.0); // ease-in effect
+/// assert!((chained.transform(1.0) - 100.0).abs() < 0.1); // ~100
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ChainedTween<A, B> {
+    /// The first animatable (transforms t).
+    pub first: A,
+    /// The second animatable (transforms the output of first).
+    pub second: B,
+}
+
+impl<A, B> ChainedTween<A, B> {
+    /// Creates a new chained tween.
+    #[inline]
+    #[must_use]
+    pub const fn new(first: A, second: B) -> Self {
+        Self { first, second }
+    }
+}
+
+impl<T, A, B> Animatable<T> for ChainedTween<A, B>
+where
+    A: Animatable<f32>,
+    B: Animatable<T>,
+{
+    #[inline]
+    fn transform(&self, t: f32) -> T {
+        let curved_t = self.first.transform(t);
+        self.second.transform(curved_t)
+    }
+}
+
+// ============================================================================
+// Extension Traits
+// ============================================================================
+
+/// Extension trait for [`Animatable`] types.
+///
+/// Provides fluent methods for composing and transforming animatables.
+///
+/// # Examples
+///
+/// ```
+/// use flui_types::animation::{FloatTween, Animatable, AnimatableExt, Curves};
+///
+/// let tween = FloatTween::new(0.0, 100.0);
+///
+/// // Reverse the tween
+/// let reversed = tween.reversed();
+/// assert_eq!(reversed.transform(0.0), 100.0);
+///
+/// // Chain with a curve
+/// let curved = tween.with_curve(Curves::EaseIn);
+/// assert!(curved.transform(0.5) < 50.0);
+/// ```
+pub trait AnimatableExt<T>: Animatable<T> + Sized {
+    /// Returns a reversed version of this animatable.
+    ///
+    /// The reversed animatable transforms `t` to `1.0 - t` before passing
+    /// to the original animatable.
+    #[inline]
+    #[must_use]
+    fn reversed(self) -> ReverseTween<T, Self> {
+        ReverseTween::new(self)
+    }
+
+    /// Chains this animatable with another.
+    ///
+    /// The output of `self` is passed as input to `other`.
+    /// This is useful when `self` outputs `f32` (like a curve) and `other`
+    /// transforms that to the final type.
+    #[inline]
+    #[must_use]
+    fn chain<B>(self, other: B) -> ChainedTween<Self, B>
+    where
+        Self: Animatable<f32>,
+    {
+        ChainedTween::new(self, other)
+    }
+
+    /// Applies a curve to this animatable.
+    ///
+    /// This is a convenience method that chains a `CurveTween` before this animatable.
+    #[inline]
+    #[must_use]
+    fn with_curve<C: Curve>(self, curve: C) -> ChainedTween<CurveTween<C>, Self>
+    where
+        Self: Animatable<T>,
+    {
+        ChainedTween::new(CurveTween::new(curve), self)
+    }
+}
+
+// Blanket implementation for all Animatable types
+impl<T, A: Animatable<T>> AnimatableExt<T> for A {}
+
+/// Extension trait for [`Curve`] types.
+///
+/// Provides fluent methods for converting curves to animatables.
+///
+/// # Examples
+///
+/// ```
+/// use flui_types::animation::{Curves, CurveExt, FloatTween, Animatable};
+///
+/// // Convert curve to tween
+/// let tween = Curves::EaseIn.into_tween();
+/// assert!(tween.transform(0.5) < 0.5);
+///
+/// // Chain curve with value tween
+/// let value_tween = Curves::EaseIn.then(FloatTween::new(0.0, 100.0));
+/// assert!(value_tween.transform(0.5) < 50.0);
+/// ```
+pub trait CurveExt: Curve + Sized {
+    /// Converts this curve into a [`CurveTween`].
+    #[inline]
+    #[must_use]
+    fn into_tween(self) -> CurveTween<Self> {
+        CurveTween::new(self)
+    }
+
+    /// Chains this curve with an animatable.
+    ///
+    /// The curve is applied first, then its output is passed to the animatable.
+    #[inline]
+    #[must_use]
+    fn then<T, A: Animatable<T>>(self, animatable: A) -> ChainedTween<CurveTween<Self>, A> {
+        ChainedTween::new(CurveTween::new(self), animatable)
+    }
+}
+
+// Blanket implementation for all Curve types
+impl<C: Curve> CurveExt for C {}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::animation::Curves;
 
     #[test]
     fn test_float_tween() {
@@ -756,5 +1059,125 @@ mod tests {
         // 62.5% through total = 50% through second item
         assert!((sequence.transform(0.625) - 75.0).abs() < 1e-5);
         assert_eq!(sequence.transform(1.0), 100.0);
+    }
+
+    // ========================================================================
+    // Tests for new types: CurveTween, ChainedTween, extension traits
+    // ========================================================================
+
+    #[test]
+    fn test_curve_tween() {
+        let tween = CurveTween::new(Curves::Linear);
+        assert_eq!(tween.transform(0.0), 0.0);
+        assert_eq!(tween.transform(0.5), 0.5);
+        assert_eq!(tween.transform(1.0), 1.0);
+    }
+
+    #[test]
+    fn test_curve_tween_ease_in() {
+        let tween = CurveTween::new(Curves::EaseIn);
+        assert!(tween.transform(0.0).abs() < 0.001);
+        assert!(tween.transform(0.5) < 0.5); // ease-in is slower at start
+        assert!((tween.transform(1.0) - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_curve_tween_clamps_input() {
+        let tween = CurveTween::new(Curves::Linear);
+        assert_eq!(tween.transform(-0.5), 0.0);
+        assert_eq!(tween.transform(1.5), 1.0);
+    }
+
+    #[test]
+    fn test_chained_tween() {
+        let chained =
+            ChainedTween::new(CurveTween::new(Curves::Linear), FloatTween::new(0.0, 100.0));
+        assert_eq!(chained.transform(0.0), 0.0);
+        assert_eq!(chained.transform(0.5), 50.0);
+        assert_eq!(chained.transform(1.0), 100.0);
+    }
+
+    #[test]
+    fn test_chained_tween_with_ease_in() {
+        let chained =
+            ChainedTween::new(CurveTween::new(Curves::EaseIn), FloatTween::new(0.0, 100.0));
+        assert!(chained.transform(0.0).abs() < 0.1);
+        assert!(chained.transform(0.5) < 50.0); // ease-in effect
+        assert!((chained.transform(1.0) - 100.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn test_animatable_ext_reversed() {
+        let tween = FloatTween::new(0.0, 100.0);
+        let reversed = tween.reversed();
+        assert_eq!(reversed.transform(0.0), 100.0);
+        assert_eq!(reversed.transform(0.5), 50.0);
+        assert_eq!(reversed.transform(1.0), 0.0);
+    }
+
+    #[test]
+    fn test_animatable_ext_chain() {
+        let curve = CurveTween::new(Curves::Linear);
+        let chained = curve.chain(FloatTween::new(0.0, 100.0));
+        assert_eq!(chained.transform(0.5), 50.0);
+    }
+
+    #[test]
+    fn test_animatable_ext_with_curve() {
+        let tween = FloatTween::new(0.0, 100.0);
+        let curved = tween.with_curve(Curves::Linear);
+        assert_eq!(curved.transform(0.5), 50.0);
+    }
+
+    #[test]
+    fn test_curve_ext_into_tween() {
+        let tween = Curves::Linear.into_tween();
+        assert_eq!(tween.transform(0.5), 0.5);
+    }
+
+    #[test]
+    fn test_curve_ext_then() {
+        let chained = Curves::Linear.then(FloatTween::new(0.0, 100.0));
+        assert_eq!(chained.transform(0.5), 50.0);
+    }
+
+    #[test]
+    fn test_double_reverse() {
+        let tween = FloatTween::new(0.0, 100.0);
+        let double_reversed = tween.reversed().reversed();
+        assert_eq!(double_reversed.transform(0.0), 0.0);
+        assert_eq!(double_reversed.transform(1.0), 100.0);
+    }
+
+    #[test]
+    fn test_tween_sequence_generic_with_color() {
+        use crate::styling::Color;
+
+        let items = vec![
+            TweenSequenceItem::new(ColorTween::new(Color::RED, Color::GREEN), 1.0),
+            TweenSequenceItem::new(ColorTween::new(Color::GREEN, Color::BLUE), 1.0),
+        ];
+        let sequence = TweenSequence::new(items);
+
+        // At t=0, we get RED
+        assert_eq!(sequence.transform(0.0), Color::RED);
+
+        // At t=0.5, we get GREEN (transition point)
+        assert_eq!(sequence.transform(0.5), Color::GREEN);
+
+        // At t=1.0, we get BLUE
+        assert_eq!(sequence.transform(1.0), Color::BLUE);
+    }
+
+    #[test]
+    fn test_tween_sequence_items_accessor() {
+        let items = vec![
+            TweenSequenceItem::new(FloatTween::new(0.0, 50.0), 1.0),
+            TweenSequenceItem::new(FloatTween::new(50.0, 100.0), 2.0),
+        ];
+        let sequence = TweenSequence::new(items);
+
+        assert_eq!(sequence.items().len(), 2);
+        assert_eq!(sequence.total_weight(), 3.0);
     }
 }
