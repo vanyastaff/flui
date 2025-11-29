@@ -148,16 +148,8 @@ impl TextAlignVertical {
     }
 }
 
-/// Text baseline for vertical alignment.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum TextBaseline {
-    /// Alphabetic baseline (default for most scripts).
-    #[default]
-    Alphabetic,
-    /// Ideographic baseline (for CJK characters).
-    Ideographic,
-}
+// Re-export TextBaseline from layout module (canonical source)
+pub use crate::layout::TextBaseline;
 
 /// Text direction (left-to-right or right-to-left).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]

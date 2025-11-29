@@ -174,6 +174,6 @@ pub use sliver::{
 
 // Viewport objects
 pub use viewport::{
-    ClipBehavior, RenderAbstractViewport, RenderShrinkWrappingViewport, RenderViewport,
+    CacheExtentStyle, Clip, RenderAbstractViewport, RenderShrinkWrappingViewport, RenderViewport,
     RevealedOffset, ScrollDirection, ViewportOffset, ViewportOffsetCallback, DEFAULT_CACHE_EXTENT,
 };

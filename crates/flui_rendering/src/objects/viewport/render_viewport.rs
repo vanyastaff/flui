@@ -29,7 +29,8 @@ use crate::core::render_tree::{HitTestTree, LayoutTree, PaintTree};
 use crate::core::ElementId;
 use flui_interaction::HitTestResult;
 use flui_types::constraints::{GrowthDirection, ScrollDirection};
-use flui_types::layout::{Axis, AxisDirection};
+use flui_types::layout::{Axis, AxisDirection, CacheExtentStyle};
+use flui_types::painting::Clip;
 use flui_types::{Offset, Rect, Size, SliverConstraints, SliverGeometry};
 
 /// RenderObject that provides a viewport for sliver content
@@ -66,7 +67,7 @@ pub struct RenderViewport {
     /// Cache extent style (pixels or viewport fraction)
     pub cache_extent_style: CacheExtentStyle,
     /// Whether to clip content to viewport bounds
-    pub clip_behavior: ClipBehavior,
+    pub clip_behavior: Clip,
     /// Anchor position (0.0 = start, 1.0 = end)
     /// Determines where scroll offset 0.0 places the center sliver
     pub anchor: f32,
@@ -96,32 +97,6 @@ struct SliverLayoutData {
     pub is_reverse: bool,
 }
 
-/// How to interpret the cache extent value
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum CacheExtentStyle {
-    /// Cache extent is specified in logical pixels
-    #[default]
-    Pixel,
-    /// Cache extent is a fraction of the viewport extent
-    Viewport,
-}
-
-/// Clipping behavior for viewport
-///
-/// Determines how content outside the viewport bounds is handled.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum ClipBehavior {
-    /// No clipping - content can paint outside bounds
-    None,
-    /// Clip content to viewport bounds (default)
-    #[default]
-    HardEdge,
-    /// Clip with anti-aliasing for smoother edges
-    AntiAlias,
-    /// Clip with anti-aliasing and save layer for proper blending
-    AntiAliasWithSaveLayer,
-}
-
 impl RenderViewport {
     /// Create new viewport with default settings
     ///
@@ -137,7 +112,7 @@ impl RenderViewport {
             scroll_offset: 0.0,
             cache_extent: 250.0,
             cache_extent_style: CacheExtentStyle::Pixel,
-            clip_behavior: ClipBehavior::HardEdge,
+            clip_behavior: Clip::HardEdge,
             anchor: 0.0,
             center_index: None,
             size: Size::ZERO,
@@ -164,7 +139,7 @@ impl RenderViewport {
     }
 
     /// Set clip behavior
-    pub fn set_clip_behavior(&mut self, behavior: ClipBehavior) {
+    pub fn set_clip_behavior(&mut self, behavior: Clip) {
         self.clip_behavior = behavior;
     }
 
@@ -475,7 +450,7 @@ impl<T: FullRenderTree> RenderBox<T, Variable> for RenderViewport {
         T: PaintTree,
     {
         // Apply clipping if needed using chaining API
-        let needs_clip = self.clip_behavior != ClipBehavior::None;
+        let needs_clip = self.clip_behavior != Clip::None;
         if needs_clip {
             let clip_rect = Rect::from_xywh(0.0, 0.0, self.size.width, self.size.height);
             ctx.canvas().saved().clipped_rect(clip_rect);
@@ -575,7 +550,7 @@ mod tests {
         assert_eq!(viewport.axis_direction, AxisDirection::TopToBottom);
         assert_eq!(viewport.scroll_offset, 0.0);
         assert_eq!(viewport.cache_extent, 250.0);
-        assert_eq!(viewport.clip_behavior, ClipBehavior::HardEdge);
+        assert_eq!(viewport.clip_behavior, Clip::HardEdge);
         assert_eq!(viewport.anchor, 0.0);
         assert_eq!(viewport.center_index, None);
     }
@@ -607,9 +582,9 @@ mod tests {
     #[test]
     fn test_set_clip_behavior() {
         let mut viewport = RenderViewport::new(AxisDirection::TopToBottom);
-        viewport.set_clip_behavior(ClipBehavior::AntiAlias);
+        viewport.set_clip_behavior(Clip::AntiAlias);
 
-        assert_eq!(viewport.clip_behavior, ClipBehavior::AntiAlias);
+        assert_eq!(viewport.clip_behavior, Clip::AntiAlias);
     }
 
     #[test]
@@ -646,17 +621,14 @@ mod tests {
 
     #[test]
     fn test_clip_behavior_default() {
-        assert_eq!(ClipBehavior::default(), ClipBehavior::HardEdge);
+        assert_eq!(Clip::default(), Clip::HardEdge);
     }
 
     #[test]
     fn test_clip_behavior_variants() {
-        assert_ne!(ClipBehavior::None, ClipBehavior::HardEdge);
-        assert_ne!(ClipBehavior::HardEdge, ClipBehavior::AntiAlias);
-        assert_ne!(
-            ClipBehavior::AntiAlias,
-            ClipBehavior::AntiAliasWithSaveLayer
-        );
+        assert_ne!(Clip::None, Clip::HardEdge);
+        assert_ne!(Clip::HardEdge, Clip::AntiAlias);
+        assert_ne!(Clip::AntiAlias, Clip::AntiAliasWithSaveLayer);
     }
 
     #[test]

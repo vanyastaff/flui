@@ -7,7 +7,7 @@ use crate::layout::ScrollController;
 use flui_core::view::children::Children;
 use flui_core::view::{BuildContext, IntoElement, StatelessView};
 use flui_types::layout::AxisDirection;
-use flui_types::painting::ClipBehavior;
+use flui_types::painting::Clip;
 
 /// High-level widget for sliver-based scrolling
 ///
@@ -56,7 +56,7 @@ pub struct CustomScrollView {
     pub cache_extent: f32,
 
     /// Clipping behavior
-    pub clip_behavior: ClipBehavior,
+    pub clip_behavior: Clip,
 
     /// Whether physics are enabled
     pub physics_enabled: bool,
@@ -87,7 +87,7 @@ impl CustomScrollView {
             reverse: false,
             controller: None,
             cache_extent: 250.0,
-            clip_behavior: ClipBehavior::HardEdge,
+            clip_behavior: Clip::HardEdge,
             physics_enabled: true,
             slivers: Children::new(),
         }
@@ -118,7 +118,7 @@ impl CustomScrollView {
     }
 
     /// Set clip behavior
-    pub fn clip_behavior(mut self, behavior: ClipBehavior) -> Self {
+    pub fn clip_behavior(mut self, behavior: Clip) -> Self {
         self.clip_behavior = behavior;
         self
     }
@@ -157,11 +157,7 @@ impl Default for CustomScrollView {
 impl StatelessView for CustomScrollView {
     fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
         // Get scroll offset from controller if present
-        let scroll_offset = self
-            .controller
-            .as_ref()
-            .map(|c| c.offset())
-            .unwrap_or(0.0);
+        let scroll_offset = self.controller.as_ref().map(|c| c.offset()).unwrap_or(0.0);
 
         // Create Viewport with slivers
         let viewport = Viewport::new()
@@ -209,14 +205,14 @@ mod tests {
             .reverse(true)
             .controller(controller.clone())
             .cache_extent(500.0)
-            .clip_behavior(ClipBehavior::AntiAlias)
+            .clip_behavior(Clip::AntiAlias)
             .physics_enabled(false);
 
         assert_eq!(scroll_view.axis_direction, AxisDirection::LeftToRight);
         assert!(scroll_view.reverse);
         assert!(!scroll_view.physics_enabled);
         assert_eq!(scroll_view.cache_extent, 500.0);
-        assert_eq!(scroll_view.clip_behavior, ClipBehavior::AntiAlias);
+        assert_eq!(scroll_view.clip_behavior, Clip::AntiAlias);
         assert!(scroll_view.controller.is_some());
     }
 

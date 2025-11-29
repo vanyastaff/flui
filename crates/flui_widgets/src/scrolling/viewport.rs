@@ -6,7 +6,7 @@ use flui_core::view::children::Children;
 use flui_core::view::{BuildContext, IntoElement, StatelessView};
 use flui_rendering::RenderEmpty;
 use flui_types::layout::AxisDirection;
-use flui_types::painting::ClipBehavior;
+use flui_types::painting::Clip;
 
 /// Viewport widget for displaying sliver children
 ///
@@ -51,7 +51,7 @@ pub struct Viewport {
     pub cache_extent: f32,
 
     /// Clipping behavior
-    pub clip_behavior: ClipBehavior,
+    pub clip_behavior: Clip,
 
     /// Sliver children
     pub slivers: Children,
@@ -76,7 +76,7 @@ impl Viewport {
             axis_direction: AxisDirection::TopToBottom,
             scroll_offset: 0.0,
             cache_extent: 250.0,
-            clip_behavior: ClipBehavior::HardEdge,
+            clip_behavior: Clip::HardEdge,
             slivers: Children::new(),
         }
     }
@@ -100,7 +100,7 @@ impl Viewport {
     }
 
     /// Set clip behavior
-    pub fn clip_behavior(mut self, behavior: ClipBehavior) -> Self {
+    pub fn clip_behavior(mut self, behavior: Clip) -> Self {
         self.clip_behavior = behavior;
         self
     }
@@ -151,7 +151,7 @@ mod tests {
         assert_eq!(viewport.axis_direction, AxisDirection::TopToBottom);
         assert_eq!(viewport.scroll_offset, 0.0);
         assert_eq!(viewport.cache_extent, 250.0);
-        assert_eq!(viewport.clip_behavior, ClipBehavior::HardEdge);
+        assert_eq!(viewport.clip_behavior, Clip::HardEdge);
         assert!(viewport.slivers.is_empty());
     }
 
@@ -161,12 +161,12 @@ mod tests {
             .axis_direction(AxisDirection::LeftToRight)
             .scroll_offset(100.0)
             .cache_extent(500.0)
-            .clip_behavior(ClipBehavior::AntiAlias);
+            .clip_behavior(Clip::AntiAlias);
 
         assert_eq!(viewport.axis_direction, AxisDirection::LeftToRight);
         assert_eq!(viewport.scroll_offset, 100.0);
         assert_eq!(viewport.cache_extent, 500.0);
-        assert_eq!(viewport.clip_behavior, ClipBehavior::AntiAlias);
+        assert_eq!(viewport.clip_behavior, Clip::AntiAlias);
     }
 
     #[test]

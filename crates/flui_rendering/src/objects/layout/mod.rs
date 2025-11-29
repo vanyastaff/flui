@@ -91,7 +91,9 @@ pub use indexed_stack::RenderIndexedStack;
 pub use list_body::RenderListBody;
 pub use list_wheel_viewport::RenderListWheelViewport;
 pub use stack::RenderStack;
-pub use table::{RenderTable, TableCellVerticalAlignment, TableColumnWidth};
+pub use table::RenderTable;
+// Re-export table types from flui_types for convenience
+pub use flui_types::layout::{TableCellVerticalAlignment, TableColumnWidth};
 pub use wrap::{RenderWrap, WrapAlignment, WrapCrossAlignment};
 
 // Optional arity

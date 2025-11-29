@@ -94,6 +94,13 @@ impl Color {
     ///
     /// Supports formats: "#RRGGBB", "RRGGBB", "#AARRGGBB", "AARRGGBB"
     ///
+    /// # Errors
+    ///
+    /// Returns [`ParseColorError::InvalidLength`] if the string is not 6 or 8 characters
+    /// (excluding the optional `#` prefix).
+    ///
+    /// Returns [`ParseColorError::InvalidHex`] if the string contains non-hexadecimal characters.
+    ///
     /// # Examples
     ///
     /// ```

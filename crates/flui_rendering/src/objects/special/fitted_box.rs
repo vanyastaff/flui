@@ -3,10 +3,9 @@
 //! Flutter reference: <https://api.flutter.dev/flutter/rendering/RenderFittedBox-class.html>
 
 use crate::core::{
-    FullRenderTree,
-    FullRenderTree, RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
+    FullRenderTree, FullRenderTree, RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
 };
-use flui_types::{layout::BoxFit, painting::ClipBehavior, Alignment, Offset, Size};
+use flui_types::{layout::BoxFit, painting::Clip, Alignment, Offset, Size};
 
 /// RenderObject that scales and positions its child_id according to BoxFit
 ///
@@ -30,7 +29,7 @@ pub struct RenderFittedBox {
     /// How to align child within parent
     pub alignment: Alignment,
     /// Clip behavior
-    pub clip_behavior: ClipBehavior,
+    pub clip_behavior: Clip,
 
     // Layout cache (set during layout, used during paint)
     cached_container_size: Size,
@@ -45,7 +44,7 @@ impl RenderFittedBox {
         Self {
             fit,
             alignment: Alignment::CENTER,
-            clip_behavior: ClipBehavior::None,
+            clip_behavior: Clip::None,
             cached_container_size: Size::ZERO,
             cached_child_size: Size::ZERO,
         }
@@ -56,7 +55,7 @@ impl RenderFittedBox {
         Self {
             fit,
             alignment,
-            clip_behavior: ClipBehavior::None,
+            clip_behavior: Clip::None,
             cached_container_size: Size::ZERO,
             cached_child_size: Size::ZERO,
         }
@@ -73,7 +72,7 @@ impl RenderFittedBox {
     }
 
     /// Set clip behavior
-    pub fn set_clip_behavior(&mut self, clip_behavior: ClipBehavior) {
+    pub fn set_clip_behavior(&mut self, clip_behavior: Clip) {
         self.clip_behavior = clip_behavior;
     }
 
@@ -257,7 +256,7 @@ mod tests {
         let fitted = RenderFittedBox::new(BoxFit::Cover);
         assert_eq!(fitted.fit, BoxFit::Cover);
         assert_eq!(fitted.alignment, Alignment::CENTER);
-        assert_eq!(fitted.clip_behavior, ClipBehavior::None);
+        assert_eq!(fitted.clip_behavior, Clip::None);
     }
 
     #[test]
@@ -339,8 +338,8 @@ mod tests {
     #[test]
     fn test_render_fitted_box_set_clip_behavior() {
         let mut fitted = RenderFittedBox::new(BoxFit::Contain);
-        fitted.set_clip_behavior(ClipBehavior::AntiAlias);
-        assert_eq!(fitted.clip_behavior, ClipBehavior::AntiAlias);
+        fitted.set_clip_behavior(Clip::AntiAlias);
+        assert_eq!(fitted.clip_behavior, Clip::AntiAlias);
     }
 
     #[test]

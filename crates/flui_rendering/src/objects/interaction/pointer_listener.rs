@@ -4,12 +4,13 @@
 //! calling the appropriate callbacks when events occur.
 
 use crate::core::{
-    FullRenderTree,
-    HitTestTree, FullRenderTree, RenderBox, Single, {BoxProtocol, HitTestContext, LayoutContext, PaintContext},
+    FullRenderTree, FullRenderTree, HitTestTree, RenderBox, Single,
+    {BoxProtocol, HitTestContext, LayoutContext, PaintContext},
 };
 use flui_foundation::ElementId;
+use flui_interaction::hit_test::PointerEventHandler;
 use flui_interaction::HitTestResult;
-use flui_types::events::{PointerEvent, PointerEventHandler};
+use flui_types::events::PointerEvent;
 use flui_types::{Offset, Size};
 use std::sync::Arc;
 

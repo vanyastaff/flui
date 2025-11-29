@@ -38,12 +38,15 @@ pub enum BlurMode {
     Backdrop,
 }
 
-/// Color filter types for image and content manipulation.
+/// Color adjustment types for image and content manipulation.
 ///
 /// Similar to CSS filter functions and SVG color matrix filters.
+/// These are high-level color adjustments (brightness, contrast, etc.)
+/// as opposed to [`crate::painting::ColorFilter`] which is a low-level
+/// Skia/Flutter-style color filter with blend modes.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum ColorFilter {
+pub enum ColorAdjustment {
     /// Adjust brightness (-1.0 to 1.0, 0.0 = no change)
     Brightness(f32),
 
@@ -453,7 +456,7 @@ pub enum PathPaintMode {
 /// # Examples
 ///
 /// ```rust,ignore
-/// use flui_types::painting::effects::{ImageFilter, ColorFilter};
+/// use flui_types::painting::effects::{ImageFilter, ColorAdjustment};
 ///
 /// // Blur filter
 /// let blur = ImageFilter::Blur {
@@ -461,13 +464,13 @@ pub enum PathPaintMode {
 ///     sigma_y: 5.0,
 /// };
 ///
-/// // Color filter
-/// let grayscale = ImageFilter::Color(ColorFilter::Grayscale(1.0));
+/// // Color adjustment
+/// let grayscale = ImageFilter::ColorAdjust(ColorAdjustment::Grayscale(1.0));
 ///
 /// // Combined filters
 /// let filters = vec![
 ///     ImageFilter::Blur { sigma_x: 3.0, sigma_y: 3.0 },
-///     ImageFilter::Color(ColorFilter::Brightness(0.1)),
+///     ImageFilter::ColorAdjust(ColorAdjustment::Brightness(0.1)),
 /// ];
 /// ```
 #[derive(Debug, Clone, PartialEq)]
@@ -504,10 +507,10 @@ pub enum ImageFilter {
     /// Applies a custom color transformation matrix to all pixels.
     Matrix(ColorMatrix),
 
-    /// Color manipulation filter.
+    /// Color adjustment filter.
     ///
     /// Applies brightness, contrast, saturation, or other color adjustments.
-    Color(ColorFilter),
+    ColorAdjust(ColorAdjustment),
 
     /// Combined filters (applied in order).
     ///
@@ -575,11 +578,11 @@ impl ImageFilter {
         Self::Matrix(matrix)
     }
 
-    /// Create a color filter.
+    /// Create a color adjustment filter.
     #[inline]
     #[must_use]
-    pub fn color(filter: ColorFilter) -> Self {
-        Self::Color(filter)
+    pub fn color_adjust(adjustment: ColorAdjustment) -> Self {
+        Self::ColorAdjust(adjustment)
     }
 
     /// Create an overflow indicator filter (debug mode only).

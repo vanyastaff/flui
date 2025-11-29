@@ -31,7 +31,7 @@ use flui_types::constraints::{GrowthDirection, ScrollDirection};
 use flui_types::layout::{Axis, AxisDirection};
 use flui_types::{Offset, Rect, Size, SliverConstraints, SliverGeometry};
 
-use super::render_viewport::ClipBehavior;
+use flui_types::painting::Clip;
 
 /// Viewport that sizes itself to its content
 ///
@@ -56,7 +56,7 @@ pub struct RenderShrinkWrappingViewport {
     /// Current scroll offset
     pub scroll_offset: f32,
     /// Whether to clip content to viewport bounds
-    pub clip_behavior: ClipBehavior,
+    pub clip_behavior: Clip,
 
     // Layout cache
     size: Size,
@@ -90,7 +90,7 @@ impl RenderShrinkWrappingViewport {
                 Axis::Horizontal => AxisDirection::TopToBottom,
             },
             scroll_offset: 0.0,
-            clip_behavior: ClipBehavior::HardEdge,
+            clip_behavior: Clip::HardEdge,
             size: Size::ZERO,
             sliver_geometries: Vec::new(),
             has_visual_overflow: false,
@@ -106,7 +106,7 @@ impl RenderShrinkWrappingViewport {
     }
 
     /// Set clip behavior
-    pub fn set_clip_behavior(&mut self, behavior: ClipBehavior) {
+    pub fn set_clip_behavior(&mut self, behavior: Clip) {
         self.clip_behavior = behavior;
     }
 
@@ -290,7 +290,7 @@ impl<T: FullRenderTree> RenderBox<T, Variable> for RenderShrinkWrappingViewport 
         T: PaintTree,
     {
         // Apply clipping if needed using chaining API
-        let needs_clip = self.clip_behavior != ClipBehavior::None;
+        let needs_clip = self.clip_behavior != Clip::None;
         if needs_clip {
             let clip_rect = Rect::from_xywh(0.0, 0.0, self.size.width, self.size.height);
             ctx.canvas().saved().clipped_rect(clip_rect);
@@ -387,7 +387,7 @@ mod tests {
 
         assert_eq!(viewport.axis_direction, AxisDirection::TopToBottom);
         assert_eq!(viewport.scroll_offset, 0.0);
-        assert_eq!(viewport.clip_behavior, ClipBehavior::HardEdge);
+        assert_eq!(viewport.clip_behavior, Clip::HardEdge);
     }
 
     #[test]
@@ -412,9 +412,9 @@ mod tests {
     #[test]
     fn test_set_clip_behavior() {
         let mut viewport = RenderShrinkWrappingViewport::new(AxisDirection::TopToBottom);
-        viewport.set_clip_behavior(ClipBehavior::AntiAlias);
+        viewport.set_clip_behavior(Clip::AntiAlias);
 
-        assert_eq!(viewport.clip_behavior, ClipBehavior::AntiAlias);
+        assert_eq!(viewport.clip_behavior, Clip::AntiAlias);
     }
 
     #[test]

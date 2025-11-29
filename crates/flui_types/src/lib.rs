@@ -70,18 +70,15 @@ pub mod painting;
 pub mod physics;
 pub mod platform;
 pub mod semantics;
-pub mod sliver_constraints;
-pub mod sliver_geometry;
 pub mod styling;
 pub mod typography;
 
 // Re-exports for convenience - Most commonly used types
-pub use constraints::BoxConstraints;
-pub use events::{Event, KeyEvent, PointerEvent, Theme, WindowEvent};
+pub use constraints::{BoxConstraints, SliverConstraints, SliverGeometry};
+pub use events::{Event, KeyEvent, PointerEvent, PointerEventData, Theme, WindowEvent};
 pub use geometry::{Matrix4, Offset, Point, RRect, Rect, Size};
+pub use gestures::PointerDeviceKind;
 pub use layout::{Alignment, Axis, EdgeInsets};
-pub use sliver_constraints::SliverConstraints;
-pub use sliver_geometry::SliverGeometry;
 pub use styling::{Color, Color32};
 
 /// Prelude module for convenient glob imports

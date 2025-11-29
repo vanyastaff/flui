@@ -4,43 +4,13 @@
 //!
 //! Flutter reference: <https://api.flutter.dev/flutter/rendering/RenderTable-class.html>
 
-use crate::core::{BoxProtocol, LayoutContext, LayoutTree, PaintContext, FullRenderTree, RenderBox, Variable};
+use crate::core::{
+    BoxProtocol, FullRenderTree, LayoutContext, LayoutTree, PaintContext, RenderBox, Variable,
+};
 use flui_foundation::ElementId;
+use flui_types::layout::{TableCellVerticalAlignment, TableColumnWidth};
 use flui_types::{BoxConstraints, Offset, Size};
 use std::collections::HashMap;
-
-/// Column width specification for table columns
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum TableColumnWidth {
-    /// Fixed width in logical pixels
-    Fixed(f32),
-    /// Flexible width with flex factor (similar to Flex widget)
-    Flex(f32),
-    /// Intrinsic width based on cell contents (min or max)
-    Intrinsic,
-    /// Fraction of available width (0.0-1.0)
-    Fraction(f32),
-}
-
-impl Default for TableColumnWidth {
-    fn default() -> Self {
-        TableColumnWidth::Flex(1.0)
-    }
-}
-
-/// Vertical alignment for table cells
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum TableCellVerticalAlignment {
-    /// Align to top of row
-    #[default]
-    Top,
-    /// Center vertically in row
-    Middle,
-    /// Align to bottom of row
-    Bottom,
-    /// Fill entire row height
-    Fill,
-}
 
 /// RenderObject that implements table layout
 ///
@@ -322,6 +292,11 @@ impl<T: FullRenderTree> RenderBox<T, Variable> for RenderTable {
                         Offset::new(x, y + vertical_offset)
                     }
                     TableCellVerticalAlignment::Fill => Offset::new(x, y),
+                    TableCellVerticalAlignment::Baseline => {
+                        // TODO: Implement baseline alignment when baseline info is available
+                        // For now, fallback to top alignment
+                        Offset::new(x, y)
+                    }
                 };
 
                 ctx.paint_child(child_ids[idx], cell_offset);
@@ -379,55 +354,5 @@ mod tests {
             table.default_vertical_alignment,
             TableCellVerticalAlignment::Middle
         );
-    }
-
-    #[test]
-    fn test_table_column_width_variants() {
-        assert_eq!(
-            TableColumnWidth::Fixed(100.0),
-            TableColumnWidth::Fixed(100.0)
-        );
-        assert_ne!(
-            TableColumnWidth::Fixed(100.0),
-            TableColumnWidth::Fixed(200.0)
-        );
-        assert_eq!(TableColumnWidth::Flex(1.0), TableColumnWidth::Flex(1.0));
-        assert_eq!(TableColumnWidth::Intrinsic, TableColumnWidth::Intrinsic);
-        assert_eq!(
-            TableColumnWidth::Fraction(0.5),
-            TableColumnWidth::Fraction(0.5)
-        );
-    }
-
-    #[test]
-    fn test_table_cell_vertical_alignment_variants() {
-        assert_eq!(
-            TableCellVerticalAlignment::Top,
-            TableCellVerticalAlignment::Top
-        );
-        assert_ne!(
-            TableCellVerticalAlignment::Top,
-            TableCellVerticalAlignment::Middle
-        );
-        assert_eq!(
-            TableCellVerticalAlignment::Bottom,
-            TableCellVerticalAlignment::Bottom
-        );
-        assert_eq!(
-            TableCellVerticalAlignment::Fill,
-            TableCellVerticalAlignment::Fill
-        );
-    }
-
-    #[test]
-    fn test_table_column_width_default() {
-        let default = TableColumnWidth::default();
-        assert_eq!(default, TableColumnWidth::Flex(1.0));
-    }
-
-    #[test]
-    fn test_table_cell_vertical_alignment_default() {
-        let default = TableCellVerticalAlignment::default();
-        assert_eq!(default, TableCellVerticalAlignment::Top);
     }
 }

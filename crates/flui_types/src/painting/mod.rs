@@ -22,13 +22,7 @@ pub use clipping::{
     AutomaticNotchedShape, CircularNotchedRectangle, Clip, ClipBehavior, ClipOp, NotchedShape,
 };
 pub use effects::{
-    BlurMode,
-    BlurQuality,
-    ColorFilter as EffectColorFilter, // Renamed to avoid conflict with image::ColorFilter
-    ColorMatrix,
-    ImageFilter,
-    PathPaintMode,
-    StrokeOptions,
+    BlurMode, BlurQuality, ColorAdjustment, ColorMatrix, ImageFilter, PathPaintMode, StrokeOptions,
 };
 pub use image::{BoxFit, ColorFilter, FittedSizes, Image, ImageConfiguration, ImageRepeat};
 pub use paint::{Paint, PaintBuilder, PaintStyle};
