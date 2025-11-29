@@ -1,6 +1,7 @@
 //! AnimationController - The primary animation driver.
 
 use crate::animation::{Animation, AnimationDirection, StatusCallback};
+use crate::error::AnimationError;
 use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
 use flui_scheduler::{Scheduler, Ticker};
 use flui_types::animation::AnimationStatus;
@@ -8,22 +9,6 @@ use parking_lot::Mutex;
 use std::fmt;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-
-/// Errors that can occur when using an AnimationController.
-#[derive(Debug, thiserror::Error)]
-pub enum AnimationError {
-    /// The AnimationController has been disposed.
-    #[error("AnimationController has been disposed")]
-    Disposed,
-
-    /// Invalid animation bounds.
-    #[error("Invalid animation bounds: {0}")]
-    InvalidBounds(String),
-
-    /// Ticker not available.
-    #[error("Ticker not available")]
-    TickerNotAvailable,
-}
 
 /// Controls an animation, driving it forward/backward.
 ///
@@ -123,7 +108,9 @@ impl AnimationController {
     /// * `duration` - Duration of the forward animation
     /// * `scheduler` - Scheduler for frame coordination
     pub fn new(duration: Duration, scheduler: Arc<Scheduler>) -> Self {
+        // SAFETY: 0.0 < 1.0 is always true, so this cannot fail
         Self::with_bounds(duration, scheduler, 0.0, 1.0)
+            .expect("Default bounds (0.0, 1.0) should never fail validation")
     }
 
     /// Create an animation controller with custom bounds.
@@ -134,16 +121,42 @@ impl AnimationController {
     /// * `scheduler` - Scheduler for frame coordination
     /// * `lower_bound` - Minimum value (default 0.0)
     /// * `upper_bound` - Maximum value (default 1.0)
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AnimationError::InvalidBounds`] if `lower_bound >= upper_bound`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn main() -> Result<(), flui_animation::AnimationError> {
+    /// use flui_animation::AnimationController;
+    /// use flui_scheduler::Scheduler;
+    /// use std::sync::Arc;
+    /// use std::time::Duration;
+    ///
+    /// let scheduler = Arc::new(Scheduler::new());
+    /// let controller = AnimationController::with_bounds(
+    ///     Duration::from_millis(300),
+    ///     scheduler,
+    ///     0.0,
+    ///     100.0,
+    /// )?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn with_bounds(
         duration: Duration,
         scheduler: Arc<Scheduler>,
         lower_bound: f32,
         upper_bound: f32,
-    ) -> Self {
-        assert!(
-            lower_bound < upper_bound,
-            "lower_bound must be less than upper_bound"
-        );
+    ) -> Result<Self, AnimationError> {
+        if lower_bound >= upper_bound {
+            return Err(AnimationError::InvalidBounds(format!(
+                "lower_bound ({}) must be less than upper_bound ({})",
+                lower_bound, upper_bound
+            )));
+        }
 
         let notifier = Arc::new(ChangeNotifier::new());
 
@@ -168,10 +181,10 @@ impl AnimationController {
             next_listener_id: 0,
         };
 
-        Self {
+        Ok(Self {
             inner: Arc::new(Mutex::new(inner)),
             notifier,
-        }
+        })
     }
 
     /// Set the duration for reverse animation.
@@ -181,13 +194,25 @@ impl AnimationController {
     }
 
     /// Start animation forward from current value to upper bound.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AnimationError::Disposed`] if the controller has been disposed.
     pub fn forward(&self) -> Result<(), AnimationError> {
         self.forward_from(None)
     }
 
     /// Start animation forward from a specific value.
     ///
-    /// If `from` is None, starts from current value.
+    /// If `from` is `None`, starts from current value.
+    ///
+    /// # Arguments
+    ///
+    /// * `from` - Optional starting value. If `None`, uses current value.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AnimationError::Disposed`] if the controller has been disposed.
     pub fn forward_from(&self, from: Option<f32>) -> Result<(), AnimationError> {
         let mut inner = self.inner.lock();
         self.check_disposed(&inner)?;
@@ -214,13 +239,25 @@ impl AnimationController {
     }
 
     /// Start animation in reverse from current value to lower bound.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AnimationError::Disposed`] if the controller has been disposed.
     pub fn reverse(&self) -> Result<(), AnimationError> {
         self.reverse_from(None)
     }
 
     /// Start animation in reverse from a specific value.
     ///
-    /// If `from` is None, starts from current value.
+    /// If `from` is `None`, starts from current value.
+    ///
+    /// # Arguments
+    ///
+    /// * `from` - Optional starting value. If `None`, uses current value.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AnimationError::Disposed`] if the controller has been disposed.
     pub fn reverse_from(&self, from: Option<f32>) -> Result<(), AnimationError> {
         let mut inner = self.inner.lock();
         self.check_disposed(&inner)?;
@@ -247,6 +284,15 @@ impl AnimationController {
     }
 
     /// Stop the animation at its current value.
+    ///
+    /// The animation status will be updated based on the current value:
+    /// - [`AnimationStatus::Completed`] if at upper bound
+    /// - [`AnimationStatus::Dismissed`] if at lower bound
+    /// - Previous direction status if stopped in the middle
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AnimationError::Disposed`] if the controller has been disposed.
     pub fn stop(&self) -> Result<(), AnimationError> {
         let mut inner = self.inner.lock();
         self.check_disposed(&inner)?;
@@ -272,6 +318,12 @@ impl AnimationController {
     }
 
     /// Reset to beginning (lower bound).
+    ///
+    /// Sets the value to `lower_bound` and status to [`AnimationStatus::Dismissed`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AnimationError::Disposed`] if the controller has been disposed.
     pub fn reset(&self) -> Result<(), AnimationError> {
         let mut inner = self.inner.lock();
         self.check_disposed(&inner)?;
@@ -293,6 +345,15 @@ impl AnimationController {
     }
 
     /// Animate to a specific value.
+    ///
+    /// # Arguments
+    ///
+    /// * `target` - The target value to animate to (will be clamped to bounds)
+    /// * `duration` - Optional custom duration. If `None`, uses the controller's duration.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AnimationError::Disposed`] if the controller has been disposed.
     pub fn animate_to(
         &self,
         target: f32,
@@ -395,12 +456,6 @@ impl AnimationController {
             let inner = self.inner.lock();
             self.notify_status_listeners(new_status, &inner);
         }
-    }
-
-    /// Get the current value.
-    #[must_use]
-    pub fn current_value(&self) -> f32 {
-        self.inner.lock().value
     }
 
     /// Set the value directly without animating.
@@ -549,7 +604,8 @@ mod tests {
     fn test_animation_controller_bounds() {
         let scheduler = Arc::new(Scheduler::new());
         let controller =
-            AnimationController::with_bounds(Duration::from_millis(100), scheduler, 10.0, 20.0);
+            AnimationController::with_bounds(Duration::from_millis(100), scheduler, 10.0, 20.0)
+                .unwrap();
 
         assert_eq!(controller.value(), 10.0);
 
@@ -561,6 +617,15 @@ mod tests {
         assert_eq!(controller.value(), 20.0);
 
         controller.dispose();
+    }
+
+    #[test]
+    fn test_animation_controller_invalid_bounds() {
+        let scheduler = Arc::new(Scheduler::new());
+        let result =
+            AnimationController::with_bounds(Duration::from_millis(100), scheduler, 20.0, 10.0);
+
+        assert!(matches!(result, Err(AnimationError::InvalidBounds(_))));
     }
 
     #[test]

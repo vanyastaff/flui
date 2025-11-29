@@ -1,292 +1,94 @@
-# flui-animation
+# flui_animation
 
-Persistent animation objects for the FLUI framework, following Flutter's proven animation architecture.
+Persistent animation objects for the FLUI framework, following Flutter's proven animation architecture with idiomatic Rust patterns.
 
-## ✨ Features
+## Overview
 
-- **Type-Safe Animations**: Generic `Animation<T>` trait for any value type
-- **Composable**: Chain animations with tweens, curves, and operators
-- **Thread-Safe**: Full `Send + Sync` support with `Arc` and `parking_lot`
-- **Persistent Objects**: Animations survive widget rebuilds
-- **Flutter-Inspired**: Matches Flutter's animation API and patterns
-- **Zero-Cost Abstractions**: Efficient trait-based design
+This crate provides the animation infrastructure for FLUI:
 
-## 📦 What's Included
+| Type | Description |
+|------|-------------|
+| `Animation<T>` | Base trait for all animations |
+| `AnimationController` | Primary animation driver (0.0 to 1.0) |
+| `AnimationControllerBuilder` | Builder for configuring controllers |
+| `CurvedAnimation` | Apply easing curves to animations |
+| `TweenAnimation<T>` | Map f32 values to any type T |
+| `ReverseAnimation` | Invert an animation's values |
+| `ProxyAnimation` | Hot-swap animations at runtime |
+| `CompoundAnimation` | Combine animations with operators |
+| `AnimatableExt` | Extension trait for tweens |
+| `AnimationExt` | Extension trait for composition |
 
-### Core Types
+## Architecture
 
-- **`Animation<T>`** - Base trait for all animations
-- **`AnimationController`** - Primary animation driver (0.0 → 1.0)
-- **`CurvedAnimation`** - Apply easing curves to animations
-- **`TweenAnimation<T>`** - Map f32 values to any type T
-- **`ReverseAnimation`** - Invert an animation's values
-- **`ProxyAnimation`** - Hot-swap animations at runtime
-- **`CompoundAnimation`** - Combine animations with operators (+, *, min, max)
+```
+flui_widgets (AnimatedWidget, Transitions)
+       │
+       ▼
+flui_animation (this crate)
+       │
+       ├── flui_types/animation (Curve, Tween, AnimationStatus)
+       └── flui-scheduler (Scheduler, Ticker)
+```
 
-### Integration
-
-- **`Scheduler`** - Frame scheduling and animation timing (via `flui-scheduler`)
-- **`Ticker`** - Frame-based callback system (from `flui-scheduler`)
-- Full integration with `flui_types::animation` (Curves, Tweens)
-
-## 🚀 Quick Start
+## Quick Start
 
 ```rust
-use flui_animation::prelude::*;
+use flui_animation::{AnimationController, Animation, AnimationExt};
 use flui_scheduler::Scheduler;
+use flui_types::animation::Curves;
 use std::sync::Arc;
 use std::time::Duration;
 
-// Create a scheduler
-let scheduler = Arc::new(Scheduler::new());
+fn example() -> Result<(), flui_animation::AnimationError> {
+    let scheduler = Arc::new(Scheduler::new());
 
-// Create an animation controller
-let controller = AnimationController::new(
-    Duration::from_millis(300),
-    scheduler,
-);
+    // Create controller with builder
+    let controller = AnimationController::builder(
+        Duration::from_millis(300),
+        scheduler,
+    )
+    .bounds(0.0, 1.0)?
+    .build()?;
 
-// Apply an easing curve
-let curved = CurvedAnimation::new(
-    Arc::new(controller.clone()),
-    Curves::EaseInOut,
-);
+    // Apply curve using extension trait
+    let curved = Arc::new(controller.clone()).curved(Curves::EaseInOut);
 
-// Map to a color
-let tween = ColorTween::new(Color::RED, Color::BLUE);
-let color_animation = TweenAnimation::new(tween, Arc::new(curved));
+    // Start animation
+    controller.forward()?;
 
-// Start the animation
-controller.forward().unwrap();
+    // Get value
+    let value = curved.value();
 
-// Get the current value
-let color = color_animation.value();
-
-// Clean up when done
-controller.dispose();
+    // Cleanup
+    controller.dispose();
+    Ok(())
+}
 ```
 
-## 📊 Architecture
+## Feature Flags
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                   flui_widgets                          │
-│  AnimatedWidget, AnimatedBuilder, ImplicitAnimations    │
-└──────────────────────┬──────────────────────────────────┘
-                       │ uses
-┌──────────────────────▼──────────────────────────────────┐
-│                 flui_animation                          │
-│  Animation<T>, AnimationController, CurvedAnimation     │
-└──────────────────────┬──────────────────────────────────┘
-                       │ uses
-┌──────────────────────▼──────────────────────────────────┐
-│             flui_types/animation                        │
-│  Curve, Tween<T>, AnimationStatus (data only)          │
-└──────────────────────┬──────────────────────────────────┘
-                       │ uses
-┌──────────────────────▼──────────────────────────────────┐
-│              flui-scheduler                             │
-│  Scheduler, Ticker, FrameBudget, Priority               │
-└─────────────────────────────────────────────────────────┘
-```
+| Feature | Description |
+|---------|-------------|
+| `serde` | Enable serialization support for animation types |
 
-## 🎯 Examples
+## Documentation
 
-### Basic Controller
+| Document | Description |
+|----------|-------------|
+| [GUIDE.md](docs/GUIDE.md) | Complete usage guide |
+| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | System internals and design |
+| [PATTERNS.md](docs/PATTERNS.md) | Design patterns and rationale |
+| [PERFORMANCE.md](docs/PERFORMANCE.md) | Performance characteristics |
 
-```rust
-let scheduler = Arc::new(Scheduler::new());
-let controller = AnimationController::new(
-    Duration::from_millis(300),
-    scheduler,
-);
-
-controller.forward().unwrap();  // Animate forward
-controller.reverse().unwrap();  // Animate backward
-controller.reset().unwrap();    // Reset to beginning
-controller.stop().unwrap();     // Stop at current value
-```
-
-### Curved Animation
-
-```rust
-let curved = CurvedAnimation::new(
-    Arc::new(controller),
-    Curves::EaseInOut,
-);
-
-// With different reverse curve
-let curved = CurvedAnimation::new(
-    Arc::new(controller),
-    Curves::EaseIn,
-).with_reverse_curve(Curves::EaseOut);
-```
-
-### Tween Animation
-
-```rust
-// Float tween
-let tween = FloatTween::new(0.0, 100.0);
-let animation = TweenAnimation::new(tween, Arc::new(controller));
-
-// Color tween
-let tween = ColorTween::new(Color::RED, Color::BLUE);
-let animation = TweenAnimation::new(tween, Arc::new(controller));
-
-// Size tween
-let tween = SizeTween::new(
-    Size::new(100.0, 100.0),
-    Size::new(200.0, 200.0),
-);
-let animation = TweenAnimation::new(tween, Arc::new(controller));
-```
-
-### Reverse Animation
-
-```rust
-let reversed = ReverseAnimation::new(Arc::new(controller));
-
-controller.set_value(0.25);
-assert_eq!(reversed.value(), 0.75);  // 1.0 - 0.25
-```
-
-### Compound Animation
-
-```rust
-// Addition
-let compound = CompoundAnimation::add(
-    Arc::new(controller1),
-    Arc::new(controller2),
-);
-
-// Multiplication
-let compound = CompoundAnimation::multiply(
-    Arc::new(controller1),
-    Arc::new(controller2),
-);
-
-// Min/Max
-let compound = CompoundAnimation::min(
-    Arc::new(controller1),
-    Arc::new(controller2),
-);
-```
-
-### Proxy Animation
-
-```rust
-let proxy = ProxyAnimation::new(Arc::new(controller1));
-
-// Later, swap to a different animation
-proxy.set_parent(Arc::new(controller2));
-```
-
-## 🧪 Testing
+## Testing
 
 ```bash
-# Run all tests
 cargo test -p flui_animation
-
-# Run with output
-cargo test -p flui_animation -- --nocapture
-
-# Run examples
-cargo run --example basic_animation
 ```
 
-**Test Coverage**: 22 tests, all passing ✅
+## Related Crates
 
-## 📚 Documentation
-
-- [Animation Architecture](../../docs/arch/ANIMATION_ARCHITECTURE.md) - Detailed architecture document
-- [API Guide](../../docs/API_GUIDE.md) - Comprehensive API reference
-- [Examples](./examples/) - Working examples
-
-Generate local documentation:
-
-```bash
-cargo doc -p flui_animation --open
-```
-
-## 🎨 Available Curves
-
-From `flui_types::animation::Curves`:
-
-- **Linear**: `Linear`
-- **Ease**: `EaseIn`, `EaseOut`, `EaseInOut`
-- **Fast/Slow**: `FastOutSlowIn`, `SlowOutFastIn`
-- **Sine**: `EaseInSine`, `EaseOutSine`, `EaseInOutSine`
-- **Expo**: `EaseInExpo`, `EaseOutExpo`, `EaseInOutExpo`
-- **Circ**: `EaseInCirc`, `EaseOutCirc`, `EaseInOutCirc`
-- **Back**: `EaseInBack`, `EaseOutBack`, `EaseInOutBack`
-- **Elastic**: `ElasticIn`, `ElasticOut`, `ElasticInOut`
-
-## 🔧 Available Tweens
-
-From `flui_types::animation`:
-
-- **Numeric**: `FloatTween`, `IntTween`, `StepTween`
-- **Geometric**: `SizeTween`, `OffsetTween`, `RectTween`
-- **Styling**: `ColorTween`, `BorderRadiusTween`, `EdgeInsetsTween`
-- **Layout**: `AlignmentTween`
-- **Special**: `ConstantTween`, `ReverseTween`, `TweenSequence`
-
-## 🔐 Thread Safety
-
-All animation types are fully thread-safe:
-
-- Uses `Arc` for shared ownership
-- Uses `parking_lot::Mutex` for interior mutability (2-3x faster than std)
-- All callbacks are `Send + Sync`
-- No `Rc` or `RefCell` - safe for multi-threaded UI
-
-## ⚠️ Important Notes
-
-### Disposing Controllers
-
-**Always dispose animation controllers when done:**
-
-```rust
-let scheduler = Arc::new(Scheduler::new());
-let controller = AnimationController::new(duration, scheduler);
-
-// Use the controller...
-
-controller.dispose();  // ⚠️ Required to prevent leaks!
-```
-
-### Hook Integration
-
-When using with hooks (future):
-
-```rust
-// In a widget's build method
-let controller = use_animation_controller(ctx, duration);
-// Automatically disposed when widget is unmounted
-```
-
-## 📈 Performance
-
-- **~1,939 lines of code** (well-commented)
-- **22 comprehensive tests**
-- Zero runtime overhead for type erasure
-- Efficient `Arc`-based sharing
-- Lock-free where possible
-
-## 🚦 Status
-
-**✅ Phase 1 Complete**: Core animation infrastructure
-- Animation trait system ✅
-- AnimationController ✅
-- Tween system ✅
-- Curve system ✅
-- Ticker system ✅
-
-**⏳ Phase 2 In Progress**: Widget integration
-- AnimatedWidget (future)
-- Transition widgets (future)
-- Implicit animations (future)
-
-## 📝 License
-
-MIT OR Apache-2.0
+- `flui_types` - Core types including Curve, Tween, AnimationStatus
+- `flui-scheduler` - Frame scheduling and ticker system
+- `flui-foundation` - Listenable trait and change notification

@@ -8,9 +8,14 @@ use std::fmt;
 use std::sync::Arc;
 
 /// Operator for combining two animations.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// Defines how two animation values are combined mathematically.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
 pub enum AnimationOperator {
     /// Add the two animation values.
+    #[default]
     Add,
     /// Multiply the two animation values.
     Multiply,

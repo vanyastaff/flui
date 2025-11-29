@@ -11,9 +11,15 @@ use std::sync::Arc;
 pub type StatusCallback = Arc<dyn Fn(AnimationStatus) + Send + Sync>;
 
 /// The direction an animation is running.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+///
+/// This enum represents whether an animation is progressing forward (from begin to end)
+/// or in reverse (from end to begin).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
 pub enum AnimationDirection {
     /// Animation is running forward (from begin to end).
+    #[default]
     Forward,
     /// Animation is running in reverse (from end to begin).
     Reverse,

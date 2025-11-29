@@ -1263,9 +1263,9 @@ version = "0.1.0"
 dependencies = [
  "flui-foundation",
  "flui-scheduler",
- "flui_core",
  "flui_types",
  "parking_lot",
+ "serde",
  "thiserror 2.0.17",
  "tokio",
  "tracing-subscriber",

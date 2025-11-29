@@ -1,32 +1,38 @@
 [package]
 name = "flui_animation"
-version = "0.1.0"
-edition = "2021"
-authors = ["FLUI Contributors"]
-license = "MIT OR Apache-2.0"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
 description = "Animation system for FLUI framework - persistent animation objects"
-repository = "https://github.com/YOUR_REPO/flui"
 keywords = ["ui", "animation", "flutter", "rust"]
 categories = ["gui"]
 
+[lints]
+workspace = true
+
 [dependencies]
 # Core FLUI types
-flui_types = { version = "0.1", path = "../flui_types" }
-flui-foundation = { version = "0.1", path = "../flui-foundation" }
-flui_core = { version = "0.1", path = "../flui_core" }
-flui-scheduler = { version = "0.1", path = "../flui-scheduler" }
-
-
+flui_types = { path = "../flui_types" }
+flui-foundation = { path = "../flui-foundation" }
+flui-scheduler = { path = "../flui-scheduler" }
 
 # Concurrency
-parking_lot = {workspace = true}
+parking_lot.workspace = true
 
 # Utility
-thiserror = {workspace = true}
+thiserror.workspace = true
+
+# Serialization (optional)
+serde = { workspace = true, optional = true }
 
 [dev-dependencies]
-tokio = { workspace = true}
-tracing-subscriber = { workspace = true}
+tokio.workspace = true
+tracing-subscriber.workspace = true
 
 [features]
 default = []
+## Enable serde serialization/deserialization support for animation types.
+serde = ["dep:serde", "flui_types/serde"]
