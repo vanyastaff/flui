@@ -52,6 +52,7 @@ impl ReverseAnimation {
     /// # Arguments
     ///
     /// * `parent` - The parent animation to reverse
+    #[must_use]
     pub fn new(parent: Arc<dyn Animation<f32>>) -> Self {
         let notifier = Arc::new(ChangeNotifier::new());
 
@@ -63,6 +64,7 @@ impl ReverseAnimation {
     }
 
     /// Get the parent animation.
+    #[inline]
     #[must_use]
     pub fn parent(&self) -> &Arc<dyn Animation<f32>> {
         &self.parent
@@ -70,16 +72,20 @@ impl ReverseAnimation {
 }
 
 impl Animation<f32> for ReverseAnimation {
+    #[inline]
     fn value(&self) -> f32 {
         1.0 - self.parent.value()
     }
 
+    #[inline]
     fn status(&self) -> AnimationStatus {
         match self.parent.status() {
             AnimationStatus::Forward => AnimationStatus::Reverse,
             AnimationStatus::Reverse => AnimationStatus::Forward,
             AnimationStatus::Dismissed => AnimationStatus::Completed,
             AnimationStatus::Completed => AnimationStatus::Dismissed,
+            // Handle future variants (AnimationStatus is #[non_exhaustive])
+            _ => self.parent.status(),
         }
     }
 
@@ -91,6 +97,8 @@ impl Animation<f32> for ReverseAnimation {
                 AnimationStatus::Reverse => AnimationStatus::Forward,
                 AnimationStatus::Dismissed => AnimationStatus::Completed,
                 AnimationStatus::Completed => AnimationStatus::Dismissed,
+                // Handle future variants (AnimationStatus is #[non_exhaustive])
+                _ => status,
             };
             callback(reversed_status);
         });

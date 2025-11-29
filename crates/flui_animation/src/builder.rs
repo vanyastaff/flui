@@ -83,6 +83,7 @@ impl AnimationControllerBuilder {
     ///     scheduler,
     /// );
     /// ```
+    #[must_use]
     pub fn new(duration: Duration, scheduler: Arc<Scheduler>) -> Self {
         Self {
             duration,
@@ -269,6 +270,7 @@ impl AnimationController {
     /// # Ok(())
     /// # }
     /// ```
+    #[must_use]
     pub fn builder(duration: Duration, scheduler: Arc<Scheduler>) -> AnimationControllerBuilder {
         AnimationControllerBuilder::new(duration, scheduler)
     }

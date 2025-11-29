@@ -107,6 +107,7 @@ impl AnimationController {
     ///
     /// * `duration` - Duration of the forward animation
     /// * `scheduler` - Scheduler for frame coordination
+    #[must_use]
     pub fn new(duration: Duration, scheduler: Arc<Scheduler>) -> Self {
         // SAFETY: 0.0 < 1.0 is always true, so this cannot fail
         Self::with_bounds(duration, scheduler, 0.0, 1.0)
@@ -500,10 +501,12 @@ impl AnimationController {
 }
 
 impl Animation<f32> for AnimationController {
+    #[inline]
     fn value(&self) -> f32 {
         self.inner.lock().value
     }
 
+    #[inline]
     fn status(&self) -> AnimationStatus {
         self.inner.lock().status
     }

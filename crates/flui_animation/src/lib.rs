@@ -123,7 +123,50 @@ pub use flui_scheduler::{
 };
 
 // Re-export types from flui_types for convenience
-pub use flui_types::animation::{Animatable, AnimationStatus, Curve, Curves, Tween, TweenSequence};
+pub use flui_types::animation::{
+    AlignmentTween,
+    // Core traits and types
+    Animatable,
+    // Extension traits
+    AnimatableExt as TypesAnimatableExt,
+    AnimationBehavior,
+    AnimationStatus,
+    BorderRadiusTween,
+    // Curve types
+    BounceInCurve,
+    BounceInOutCurve,
+    BounceOutCurve,
+    // Tween types
+    ChainedTween,
+    ColorTween,
+    ConstantTween,
+    Cubic,
+    Curve,
+    CurveExt,
+    CurveTween,
+    Curves,
+    DecelerateCurve,
+    EdgeInsetsTween,
+    ElasticInCurve,
+    ElasticInOutCurve,
+    ElasticOutCurve,
+    FlippedCurve,
+    FloatTween,
+    IntTween,
+    Interval,
+    Linear,
+    OffsetTween,
+    RectTween,
+    ReverseCurve,
+    ReverseTween,
+    SawTooth,
+    SizeTween,
+    StepTween,
+    Threshold,
+    Tween,
+    TweenSequence,
+    TweenSequenceItem,
+};
 
 /// Prelude module for convenient imports
 pub mod prelude {
@@ -137,7 +180,10 @@ pub mod prelude {
     pub use crate::proxy::ProxyAnimation;
     pub use crate::reverse::ReverseAnimation;
     pub use crate::tween::TweenAnimation;
-    pub use flui_types::animation::{Animatable, AnimationStatus, Curve, Curves, Tween};
+    pub use flui_types::animation::{
+        Animatable, AnimationBehavior, AnimationStatus, Curve, CurveExt, Curves, Tween,
+        TweenSequence,
+    };
 
     // Re-export scheduler types
     pub use crate::{

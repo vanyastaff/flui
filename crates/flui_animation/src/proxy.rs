@@ -54,6 +54,7 @@ where
     /// # Arguments
     ///
     /// * `parent` - The initial parent animation
+    #[must_use]
     pub fn new(parent: Arc<dyn Animation<T>>) -> Self {
         Self {
             parent: Arc::new(RwLock::new(parent)),
@@ -62,6 +63,7 @@ where
     }
 
     /// Get the current parent animation.
+    #[inline]
     #[must_use]
     pub fn parent(&self) -> Arc<dyn Animation<T>> {
         self.parent.read().clone()
@@ -80,10 +82,12 @@ impl<T> Animation<T> for ProxyAnimation<T>
 where
     T: Clone + Send + Sync + fmt::Debug + 'static,
 {
+    #[inline]
     fn value(&self) -> T {
         self.parent.read().value()
     }
 
+    #[inline]
     fn status(&self) -> AnimationStatus {
         self.parent.read().status()
     }

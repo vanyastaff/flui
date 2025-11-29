@@ -62,6 +62,7 @@ where
     ///
     /// * `tween` - The tween that maps f32 → T
     /// * `parent` - The parent animation (typically 0.0 to 1.0)
+    #[must_use]
     pub fn new(tween: A, parent: Arc<dyn Animation<f32>>) -> Self {
         let notifier = Arc::new(ChangeNotifier::new());
 
@@ -75,12 +76,14 @@ where
     }
 
     /// Get a reference to the tween.
+    #[inline]
     #[must_use]
     pub fn tween(&self) -> &A {
         &self.tween
     }
 
     /// Get a reference to the parent animation.
+    #[inline]
     #[must_use]
     pub fn parent(&self) -> &Arc<dyn Animation<f32>> {
         &self.parent
@@ -92,11 +95,13 @@ where
     T: Clone + Send + Sync + fmt::Debug + 'static,
     A: Animatable<T> + Clone + Send + Sync + fmt::Debug + 'static,
 {
+    #[inline]
     fn value(&self) -> T {
         let t = self.parent.value();
         self.tween.transform(t)
     }
 
+    #[inline]
     fn status(&self) -> AnimationStatus {
         self.parent.status()
     }

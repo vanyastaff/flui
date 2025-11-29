@@ -14,11 +14,17 @@ use std::sync::Arc;
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub enum AnimationOperator {
-    /// Add the two animation values.
+    /// Add the two animation values: `first + next`.
     #[default]
     Add,
-    /// Multiply the two animation values.
+    /// Subtract the second from the first: `first - next`.
+    Subtract,
+    /// Multiply the two animation values: `first * next`.
     Multiply,
+    /// Divide the first by the second: `first / next`.
+    ///
+    /// Note: Division by zero will produce infinity or NaN.
+    Divide,
     /// Return the minimum of the two values.
     Min,
     /// Return the maximum of the two values.
@@ -79,6 +85,7 @@ impl CompoundAnimation {
     /// * `first` - The first animation
     /// * `next` - The second animation
     /// * `operator` - The operator to combine them with
+    #[must_use]
     pub fn new(
         first: Arc<dyn Animation<f32>>,
         next: Arc<dyn Animation<f32>>,
@@ -102,10 +109,24 @@ impl CompoundAnimation {
         Self::new(first, next, AnimationOperator::Add)
     }
 
+    /// Create a compound animation that subtracts the second animation from the first.
+    #[must_use]
+    pub fn subtract(first: Arc<dyn Animation<f32>>, next: Arc<dyn Animation<f32>>) -> Self {
+        Self::new(first, next, AnimationOperator::Subtract)
+    }
+
     /// Create a compound animation that multiplies two animations.
     #[must_use]
     pub fn multiply(first: Arc<dyn Animation<f32>>, next: Arc<dyn Animation<f32>>) -> Self {
         Self::new(first, next, AnimationOperator::Multiply)
+    }
+
+    /// Create a compound animation that divides the first animation by the second.
+    ///
+    /// Note: Division by zero will produce infinity or NaN.
+    #[must_use]
+    pub fn divide(first: Arc<dyn Animation<f32>>, next: Arc<dyn Animation<f32>>) -> Self {
+        Self::new(first, next, AnimationOperator::Divide)
     }
 
     /// Create a compound animation that returns the minimum of two animations.
@@ -121,10 +142,13 @@ impl CompoundAnimation {
     }
 
     /// Apply the operator to two values.
+    #[inline]
     fn apply_operator(&self, a: f32, b: f32) -> f32 {
         match self.operator {
             AnimationOperator::Add => a + b,
+            AnimationOperator::Subtract => a - b,
             AnimationOperator::Multiply => a * b,
+            AnimationOperator::Divide => a / b,
             AnimationOperator::Min => a.min(b),
             AnimationOperator::Max => a.max(b),
         }
@@ -132,12 +156,14 @@ impl CompoundAnimation {
 }
 
 impl Animation<f32> for CompoundAnimation {
+    #[inline]
     fn value(&self) -> f32 {
         let first_value = self.first.value();
         let next_value = self.next.value();
         self.apply_operator(first_value, next_value)
     }
 
+    #[inline]
     fn status(&self) -> AnimationStatus {
         // Return the status of the first animation
         // (both animations might have different statuses)
@@ -219,6 +245,22 @@ mod tests {
     }
 
     #[test]
+    fn test_compound_animation_subtract() {
+        let controller1 = create_controller(0.8);
+        let controller2 = create_controller(0.3);
+
+        let compound = CompoundAnimation::subtract(
+            controller1.clone() as Arc<dyn Animation<f32>>,
+            controller2.clone() as Arc<dyn Animation<f32>>,
+        );
+
+        assert!((compound.value() - 0.5).abs() < 1e-6);
+
+        controller1.dispose();
+        controller2.dispose();
+    }
+
+    #[test]
     fn test_compound_animation_multiply() {
         let controller1 = create_controller(0.5);
         let controller2 = create_controller(0.4);
@@ -229,6 +271,22 @@ mod tests {
         );
 
         assert!((compound.value() - 0.2).abs() < 1e-6);
+
+        controller1.dispose();
+        controller2.dispose();
+    }
+
+    #[test]
+    fn test_compound_animation_divide() {
+        let controller1 = create_controller(0.8);
+        let controller2 = create_controller(0.4);
+
+        let compound = CompoundAnimation::divide(
+            controller1.clone() as Arc<dyn Animation<f32>>,
+            controller2.clone() as Arc<dyn Animation<f32>>,
+        );
+
+        assert!((compound.value() - 2.0).abs() < 1e-6);
 
         controller1.dispose();
         controller2.dispose();

@@ -275,6 +275,62 @@ pub trait AnimationExt: Animation<f32> + Sized + 'static {
         CompoundAnimation::multiply(self as Arc<dyn Animation<f32>>, other)
     }
 
+    /// Subtract another animation from this one.
+    ///
+    /// This is a convenience method equivalent to `combine(other, AnimationOperator::Subtract)`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_animation::{AnimationController, Animation};
+    /// use flui_animation::ext::AnimationExt;
+    /// use flui_scheduler::Scheduler;
+    /// use std::sync::Arc;
+    /// use std::time::Duration;
+    ///
+    /// let scheduler = Arc::new(Scheduler::new());
+    /// let c1 = Arc::new(AnimationController::new(Duration::from_millis(300), scheduler.clone()));
+    /// let c2 = Arc::new(AnimationController::new(Duration::from_millis(300), scheduler));
+    ///
+    /// c1.set_value(0.8);
+    /// c2.set_value(0.3);
+    ///
+    /// let diff = c1.subtract(c2 as Arc<dyn Animation<f32>>);
+    /// assert!((diff.value() - 0.5).abs() < 1e-6);
+    /// ```
+    fn subtract(self: Arc<Self>, other: Arc<dyn Animation<f32>>) -> CompoundAnimation {
+        CompoundAnimation::subtract(self as Arc<dyn Animation<f32>>, other)
+    }
+
+    /// Divide this animation by another.
+    ///
+    /// This is a convenience method equivalent to `combine(other, AnimationOperator::Divide)`.
+    ///
+    /// Note: Division by zero will produce infinity or NaN.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_animation::{AnimationController, Animation};
+    /// use flui_animation::ext::AnimationExt;
+    /// use flui_scheduler::Scheduler;
+    /// use std::sync::Arc;
+    /// use std::time::Duration;
+    ///
+    /// let scheduler = Arc::new(Scheduler::new());
+    /// let c1 = Arc::new(AnimationController::new(Duration::from_millis(300), scheduler.clone()));
+    /// let c2 = Arc::new(AnimationController::new(Duration::from_millis(300), scheduler));
+    ///
+    /// c1.set_value(0.8);
+    /// c2.set_value(0.4);
+    ///
+    /// let quotient = c1.divide(c2 as Arc<dyn Animation<f32>>);
+    /// assert!((quotient.value() - 2.0).abs() < 1e-6);
+    /// ```
+    fn divide(self: Arc<Self>, other: Arc<dyn Animation<f32>>) -> CompoundAnimation {
+        CompoundAnimation::divide(self as Arc<dyn Animation<f32>>, other)
+    }
+
     /// Return the minimum of this animation and another.
     ///
     /// This is a convenience method equivalent to `combine(other, AnimationOperator::Min)`.
@@ -389,6 +445,50 @@ mod tests {
 
         let product = c1.clone().multiply(c2.clone() as Arc<dyn Animation<f32>>);
         assert!((product.value() - 0.2).abs() < 1e-6);
+
+        c1.dispose();
+        c2.dispose();
+    }
+
+    #[test]
+    fn test_animation_ext_subtract() {
+        let scheduler = Arc::new(Scheduler::new());
+        let c1 = Arc::new(AnimationController::new(
+            Duration::from_millis(100),
+            scheduler.clone(),
+        ));
+        let c2 = Arc::new(AnimationController::new(
+            Duration::from_millis(100),
+            scheduler,
+        ));
+
+        c1.set_value(0.8);
+        c2.set_value(0.3);
+
+        let diff = c1.clone().subtract(c2.clone() as Arc<dyn Animation<f32>>);
+        assert!((diff.value() - 0.5).abs() < 1e-6);
+
+        c1.dispose();
+        c2.dispose();
+    }
+
+    #[test]
+    fn test_animation_ext_divide() {
+        let scheduler = Arc::new(Scheduler::new());
+        let c1 = Arc::new(AnimationController::new(
+            Duration::from_millis(100),
+            scheduler.clone(),
+        ));
+        let c2 = Arc::new(AnimationController::new(
+            Duration::from_millis(100),
+            scheduler,
+        ));
+
+        c1.set_value(0.8);
+        c2.set_value(0.4);
+
+        let quotient = c1.clone().divide(c2.clone() as Arc<dyn Animation<f32>>);
+        assert!((quotient.value() - 2.0).abs() < 1e-6);
 
         c1.dispose();
         c2.dispose();

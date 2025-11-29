@@ -47,6 +47,7 @@ impl<C: Curve + Clone + Send + Sync> CurvedAnimation<C> {
     ///
     /// * `parent` - The parent animation (typically 0.0 to 1.0)
     /// * `curve` - The curve to apply
+    #[must_use]
     pub fn new(parent: Arc<dyn Animation<f32>>, curve: C) -> Self {
         let notifier = Arc::new(ChangeNotifier::new());
 
@@ -67,6 +68,7 @@ impl<C: Curve + Clone + Send + Sync> CurvedAnimation<C> {
     }
 
     /// Get the current curve being used (respects reverse).
+    #[inline]
     fn current_curve(&self) -> &C {
         match self.parent.status() {
             AnimationStatus::Reverse => self.reverse_curve.as_ref().unwrap_or(&self.curve),
@@ -76,12 +78,14 @@ impl<C: Curve + Clone + Send + Sync> CurvedAnimation<C> {
 }
 
 impl<C: Curve + Clone + Send + Sync + fmt::Debug + 'static> Animation<f32> for CurvedAnimation<C> {
+    #[inline]
     fn value(&self) -> f32 {
         let t = self.parent.value();
         let curve = self.current_curve();
         curve.transform(t)
     }
 
+    #[inline]
     fn status(&self) -> AnimationStatus {
         self.parent.status()
     }
