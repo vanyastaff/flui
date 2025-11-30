@@ -12,7 +12,8 @@
 //! Flutter reference: https://api.flutter.dev/flutter/gestures/LongPressGestureRecognizer-class.html
 
 use super::recognizer::{constants, GestureRecognizer, GestureRecognizerState};
-use crate::arena::{GestureArenaMember, PointerId};
+use crate::arena::GestureArenaMember;
+use crate::ids::PointerId;
 use flui_types::{events::PointerEvent, Offset};
 use parking_lot::Mutex;
 use std::sync::Arc;
@@ -31,7 +32,7 @@ pub type LongPressStartCallback = Arc<dyn Fn(LongPressStartDetails) + Send + Syn
 pub type LongPressCallback = Arc<dyn Fn(LongPressDetails) + Send + Sync>;
 
 /// Details about long press down (initial contact)
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct LongPressDownDetails {
     /// Global position where pointer contacted screen
     pub global_position: Offset,
@@ -42,7 +43,7 @@ pub struct LongPressDownDetails {
 }
 
 /// Details about long press start
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct LongPressStartDetails {
     /// Global position where long press started
     pub global_position: Offset,
@@ -53,7 +54,7 @@ pub struct LongPressStartDetails {
 }
 
 /// Details about long press event
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct LongPressDetails {
     /// Global position
     pub global_position: Offset,

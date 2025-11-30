@@ -10,11 +10,14 @@
 //! Flutter reference: https://api.flutter.dev/flutter/gestures/ScaleGestureRecognizer-class.html
 
 use super::recognizer::{GestureRecognizer, GestureRecognizerState};
-use crate::arena::{GestureArenaMember, PointerId};
+use crate::arena::GestureArenaMember;
+use crate::ids::PointerId;
+use crate::processing::VelocityTracker;
 use flui_types::{events::PointerEvent, Offset};
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Instant;
 
 /// Callback for scale start events
 pub type ScaleStartCallback = Arc<dyn Fn(ScaleStartDetails) + Send + Sync>;
@@ -29,7 +32,7 @@ pub type ScaleEndCallback = Arc<dyn Fn(ScaleEndDetails) + Send + Sync>;
 pub type ScaleCancelCallback = Arc<dyn Fn() + Send + Sync>;
 
 /// Details about scale gesture start
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ScaleStartDetails {
     /// Focal point (center between pointers) in global coordinates
     pub focal_point: Offset,
@@ -40,7 +43,7 @@ pub struct ScaleStartDetails {
 }
 
 /// Details about scale gesture update
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ScaleUpdateDetails {
     /// Focal point (center between pointers) in global coordinates
     pub focal_point: Offset,
@@ -59,7 +62,7 @@ pub struct ScaleUpdateDetails {
 }
 
 /// Details about scale gesture end
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ScaleEndDetails {
     /// Final focal point
     pub focal_point: Offset,
@@ -111,6 +114,16 @@ pub struct ScaleGestureRecognizer {
     min_scale_delta: f32,
 }
 
+impl std::fmt::Debug for ScaleGestureRecognizer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ScaleGestureRecognizer")
+            .field("state", &self.state)
+            .field("gesture_state", &*self.gesture_state.lock())
+            .field("min_scale_delta", &self.min_scale_delta)
+            .finish_non_exhaustive()
+    }
+}
+
 #[derive(Default)]
 struct ScaleCallbacks {
     on_start: Option<ScaleStartCallback>,
@@ -149,6 +162,10 @@ struct ScaleState {
     previous_span: Option<f32>,
     /// Current rotation angle
     current_rotation: f32,
+    /// Velocity tracker for scale changes
+    scale_velocity_tracker: VelocityTracker,
+    /// Last update time for velocity calculation
+    last_update_time: Option<Instant>,
 }
 
 impl Default for ScaleState {
@@ -162,6 +179,8 @@ impl Default for ScaleState {
             initial_rotation: None,
             previous_span: None,
             current_rotation: 0.0,
+            scale_velocity_tracker: VelocityTracker::new(),
+            last_update_time: None,
         }
     }
 }
@@ -314,6 +333,14 @@ impl ScaleGestureRecognizer {
                     let current_rotation_raw = self.calculate_rotation(&state.pointers);
                     let rotation = current_rotation_raw - initial_rotation;
 
+                    // Track scale velocity: use scale as a position-like value
+                    // (we track how scale changes over time)
+                    let now = Instant::now();
+                    state
+                        .scale_velocity_tracker
+                        .add_position(now, Offset::new(scale, 0.0));
+                    state.last_update_time = Some(now);
+
                     state.previous_span = Some(current_span);
                     state.current_rotation = rotation;
 
@@ -366,6 +393,10 @@ impl ScaleGestureRecognizer {
 
                 let rotation = state.current_rotation;
 
+                // Calculate scale velocity from tracker
+                // The velocity is in scale units per second (e.g., 0.5 means scaling at 50% per second)
+                let velocity = state.scale_velocity_tracker.velocity().pixels_per_second.dx;
+
                 state.phase = ScalePhase::Ready;
                 state.initial_span = None;
                 state.initial_horizontal_span = None;
@@ -373,6 +404,8 @@ impl ScaleGestureRecognizer {
                 state.initial_rotation = None;
                 state.previous_span = None;
                 state.current_rotation = 0.0;
+                state.scale_velocity_tracker.reset();
+                state.last_update_time = None;
                 drop(state); // Release lock before callback
 
                 // Call on_end callback
@@ -381,7 +414,7 @@ impl ScaleGestureRecognizer {
                         focal_point,
                         scale,
                         rotation,
-                        velocity: 0.0, // TODO: Calculate velocity
+                        velocity,
                     };
                     callback(details);
                 }
@@ -396,6 +429,8 @@ impl ScaleGestureRecognizer {
                 state.initial_rotation = None;
                 state.previous_span = None;
                 state.current_rotation = 0.0;
+                state.scale_velocity_tracker.reset();
+                state.last_update_time = None;
             }
         } else if state.pointers.len() >= 2 && state.phase == ScalePhase::Possible {
             // Still have 2+ pointers, recalculate initial span
@@ -421,6 +456,8 @@ impl ScaleGestureRecognizer {
             state.initial_rotation = None;
             state.previous_span = None;
             state.current_rotation = 0.0;
+            state.scale_velocity_tracker.reset();
+            state.last_update_time = None;
             drop(state);
 
             // Call on_cancel callback
@@ -579,16 +616,6 @@ impl GestureArenaMember for ScaleGestureRecognizer {
     fn reject_gesture(&self, _pointer: PointerId) {
         // We lost the arena - cancel the gesture
         self.handle_cancel();
-    }
-}
-
-impl std::fmt::Debug for ScaleGestureRecognizer {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ScaleGestureRecognizer")
-            .field("state", &self.state)
-            .field("gesture_state", &self.gesture_state.lock())
-            .field("min_scale_delta", &self.min_scale_delta)
-            .finish()
     }
 }
 

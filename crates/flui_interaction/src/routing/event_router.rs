@@ -3,10 +3,9 @@
 //! EventRouter is the central hub for routing input events to UI elements.
 //! It uses hit testing for pointer events and focus management for keyboard events.
 
-use crate::{
-    focus_manager::FocusManager,
-    hit_test::{HitTestResult, HitTestable},
-};
+use super::focus::FocusManager;
+use super::hit_test::{HitTestResult, HitTestable};
+use crate::ids::PointerId;
 use flui_types::events::{Event, KeyEvent, PointerEvent, ScrollEventData};
 use parking_lot::RwLock;
 use std::collections::HashMap;
@@ -34,7 +33,7 @@ use std::sync::Arc;
 /// ```
 pub struct EventRouter {
     /// Pointer state tracking (for drag gestures)
-    pointer_state: Arc<RwLock<HashMap<u32, PointerState>>>,
+    pointer_state: Arc<RwLock<HashMap<PointerId, PointerState>>>,
 }
 
 /// State for a single pointer (finger/mouse)
@@ -85,7 +84,7 @@ impl EventRouter {
     /// Route pointer event via hit testing
     fn route_pointer_event(&mut self, root: &mut dyn HitTestable, event: &PointerEvent) {
         let position = event.position();
-        let pointer_id = event.pointer_id();
+        let pointer_id = PointerId::new(event.device());
 
         match event {
             PointerEvent::Down(_) => {
@@ -170,31 +169,55 @@ impl EventRouter {
         }
     }
 
-    /// Route keyboard event to focused element
-    fn route_key_event(&mut self, _root: &mut dyn HitTestable, event: &KeyEvent) {
-        if let Some(focused_id) = FocusManager::global().focused() {
-            tracing::trace!("Routing key event to focused element: {:?}", focused_id);
+    /// Route keyboard event to focused element.
+    ///
+    /// Events are dispatched via FocusManager:
+    /// 1. Global key handlers (shortcuts)
+    /// 2. Focused node's handler
+    ///
+    /// Returns `true` if the event was handled.
+    fn route_key_event(&mut self, _root: &mut dyn HitTestable, event: &KeyEvent) -> bool {
+        let handled = FocusManager::global().dispatch_key_event(event);
 
-            // TODO: Look up focused element in tree and dispatch
-            // For now, FocusNode callbacks handle this directly
-            let _ = (focused_id, event); // Suppress unused warning
-        } else {
-            tracing::trace!("No focused element, key event ignored");
+        if !handled {
+            if FocusManager::global().focused().is_some() {
+                tracing::trace!("Key event not handled by focused element");
+            } else {
+                tracing::trace!("No focused element for key event");
+            }
         }
+
+        handled
     }
 
-    /// Route scroll event via hit testing with bubbling
-    fn route_scroll_event(&mut self, root: &mut dyn HitTestable, event: &ScrollEventData) {
+    /// Route scroll event via hit testing with bubbling.
+    ///
+    /// Scroll events bubble from innermost (first hit) to outermost (last hit)
+    /// until a handler returns `EventPropagation::Stop`.
+    ///
+    /// Returns `true` if the event was handled.
+    fn route_scroll_event(&mut self, root: &mut dyn HitTestable, event: &ScrollEventData) -> bool {
         let position = event.position;
 
         // Hit test to find scrollable targets
         let mut result = HitTestResult::new();
         root.hit_test(position, &mut result);
 
-        // TODO: Dispatch scroll event with bubbling
-        // (innermost → outermost until handled)
-        let _ = result; // Suppress unused warning
-        tracing::trace!("Scroll event at {:?}", position);
+        tracing::trace!(
+            position = ?position,
+            hit_count = result.len(),
+            scroll_handlers = result.entries_with_scroll_handlers().count(),
+            "Scroll event routing"
+        );
+
+        // Dispatch with bubbling (innermost → outermost until handled)
+        let handled = result.dispatch_scroll(event);
+
+        if !handled {
+            tracing::trace!("Scroll event not handled by any element");
+        }
+
+        handled
     }
 
     /// Clear all pointer state (useful for testing or window focus loss)
@@ -209,34 +232,22 @@ impl Default for EventRouter {
     }
 }
 
-// Helper extension trait for PointerEvent
-trait PointerEventExt {
-    /// Get pointer ID (for multi-touch)
-    fn pointer_id(&self) -> u32;
-}
-
-impl PointerEventExt for PointerEvent {
-    fn pointer_id(&self) -> u32 {
-        // Use device() method which works for all variants
-        self.device() as u32
-    }
-}
-
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
+    use super::super::hit_test::HitTestEntry;
     use super::*;
     use flui_foundation::ElementId;
     use flui_types::geometry::{Offset, Rect};
 
     /// Mock layer for testing
-    struct MockLayer {
-        bounds: Rect,
+    pub(crate) struct MockLayer {
+        pub(crate) bounds: Rect,
     }
 
     impl HitTestable for MockLayer {
         fn hit_test(&self, position: Offset, result: &mut HitTestResult) -> bool {
             if self.bounds.contains(position) {
-                result.add(crate::hit_test::HitTestEntry::new(ElementId::new(1), position, self.bounds));
+                result.add(HitTestEntry::new(ElementId::new(1), position, self.bounds));
                 true
             } else {
                 false
@@ -280,11 +291,13 @@ mod tests {
 
     #[test]
     fn test_clear_pointer_state() {
+        use crate::ids::PointerId;
+
         let mut router = EventRouter::new();
 
         // Add some state
         router.pointer_state.write().insert(
-            0,
+            PointerId::new(0),
             PointerState {
                 is_down: true,
                 last_position: Offset::new(0.0, 0.0),

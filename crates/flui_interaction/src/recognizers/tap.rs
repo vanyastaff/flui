@@ -10,7 +10,8 @@
 //! Flutter reference: https://api.flutter.dev/flutter/gestures/TapGestureRecognizer-class.html
 
 use super::recognizer::{constants, GestureRecognizer, GestureRecognizerState};
-use crate::arena::{GestureArenaMember, PointerId};
+use crate::arena::GestureArenaMember;
+use crate::ids::PointerId;
 use flui_types::{events::PointerEvent, Offset};
 use parking_lot::Mutex;
 use std::sync::Arc;
@@ -19,7 +20,7 @@ use std::sync::Arc;
 pub type TapCallback = Arc<dyn Fn(TapDetails) + Send + Sync>;
 
 /// Details about a tap gesture
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TapDetails {
     /// Global position where tap occurred
     pub global_position: Offset,
@@ -58,6 +59,15 @@ pub struct TapGestureRecognizer {
 
     /// Current gesture state
     gesture_state: Arc<Mutex<TapState>>,
+}
+
+impl std::fmt::Debug for TapGestureRecognizer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TapGestureRecognizer")
+            .field("state", &self.state)
+            .field("gesture_state", &*self.gesture_state.lock())
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Default)]
@@ -295,16 +305,6 @@ impl GestureArenaMember for TapGestureRecognizer {
         if let Some(pos) = self.state.initial_position() {
             self.handle_tap_cancel(pos, flui_types::events::PointerDeviceKind::Touch);
         }
-    }
-}
-
-impl std::fmt::Debug for TapGestureRecognizer {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("TapGestureRecognizer")
-            .field("state", &self.state)
-            .field("gesture_state", &self.gesture_state.lock())
-            .field("has_on_tap", &self.callbacks.lock().on_tap.is_some())
-            .finish()
     }
 }
 

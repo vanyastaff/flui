@@ -10,7 +10,9 @@
 //! Flutter reference: https://api.flutter.dev/flutter/gestures/DragGestureRecognizer-class.html
 
 use super::recognizer::{constants, GestureRecognizer, GestureRecognizerState};
-use crate::arena::{GestureArenaMember, PointerId};
+use crate::arena::GestureArenaMember;
+use crate::ids::PointerId;
+use crate::processing::VelocityTracker;
 use flui_types::{events::PointerEvent, Offset};
 use parking_lot::Mutex;
 use std::sync::Arc;
@@ -28,7 +30,7 @@ pub enum DragAxis {
 }
 
 /// Details about drag down (pointer contact before drag starts)
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct DragDownDetails {
     /// Global position where pointer contacted the screen
     pub global_position: Offset,
@@ -52,7 +54,7 @@ pub struct DragStartDetails {
 }
 
 /// Details about drag update
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct DragUpdateDetails {
     /// Current global position
     pub global_position: Offset,
@@ -67,7 +69,7 @@ pub struct DragUpdateDetails {
 }
 
 /// Details about drag end
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct DragEndDetails {
     /// Velocity at end of drag (pixels per second)
     pub velocity: Velocity,
@@ -79,26 +81,8 @@ pub struct DragEndDetails {
     pub primary_velocity: f32,
 }
 
-/// Velocity information
-#[derive(Debug, Clone, Copy)]
-pub struct Velocity {
-    /// Velocity in pixels per second
-    pub pixels_per_second: Offset,
-}
-
-impl Velocity {
-    /// Create zero velocity
-    pub fn zero() -> Self {
-        Self {
-            pixels_per_second: Offset::ZERO,
-        }
-    }
-
-    /// Get the magnitude of velocity
-    pub fn magnitude(&self) -> f32 {
-        self.pixels_per_second.distance()
-    }
-}
+// Re-export Velocity from the velocity module
+pub use crate::processing::Velocity;
 
 /// Callback types for drag events
 pub type DragDownCallback = Arc<dyn Fn(DragDownDetails) + Send + Sync>;
@@ -152,6 +136,18 @@ pub struct DragGestureRecognizer {
     min_fling_velocity: f32,
 }
 
+impl std::fmt::Debug for DragGestureRecognizer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DragGestureRecognizer")
+            .field("state", &self.state)
+            .field("axis", &self.axis)
+            .field("drag_state", &*self.drag_state.lock())
+            .field("min_drag_distance", &self.min_drag_distance)
+            .field("min_fling_velocity", &self.min_fling_velocity)
+            .finish_non_exhaustive()
+    }
+}
+
 #[derive(Default)]
 struct DragCallbacks {
     on_down: Option<DragDownCallback>,
@@ -195,60 +191,6 @@ impl Default for DragState {
             total_delta: Offset::ZERO,
             velocity_tracker: VelocityTracker::new(),
         }
-    }
-}
-
-/// Simple velocity tracker
-#[derive(Debug, Clone)]
-struct VelocityTracker {
-    /// Recent position samples
-    samples: Vec<(Instant, Offset)>,
-    /// Maximum number of samples to keep
-    max_samples: usize,
-}
-
-impl VelocityTracker {
-    fn new() -> Self {
-        Self {
-            samples: Vec::new(),
-            max_samples: 20,
-        }
-    }
-
-    fn add_sample(&mut self, time: Instant, position: Offset) {
-        self.samples.push((time, position));
-        if self.samples.len() > self.max_samples {
-            self.samples.remove(0);
-        }
-    }
-
-    fn calculate_velocity(&self) -> Velocity {
-        if self.samples.len() < 2 {
-            return Velocity::zero();
-        }
-
-        // Use last N samples (or all if less than N)
-        let n = self.samples.len().min(5);
-        let start_idx = self.samples.len() - n;
-
-        let (start_time, start_pos) = self.samples[start_idx];
-        let (end_time, end_pos) = self.samples[self.samples.len() - 1];
-
-        let dt = end_time.duration_since(start_time).as_secs_f32();
-        if dt < 0.001 {
-            return Velocity::zero();
-        }
-
-        let delta = end_pos - start_pos;
-        let velocity = Offset::new(delta.dx / dt, delta.dy / dt);
-
-        Velocity {
-            pixels_per_second: velocity,
-        }
-    }
-
-    fn reset(&mut self) {
-        self.samples.clear();
     }
 }
 
@@ -323,7 +265,9 @@ impl DragGestureRecognizer {
         state.last_time = Some(Instant::now());
         state.total_delta = Offset::ZERO;
         state.velocity_tracker.reset();
-        state.velocity_tracker.add_sample(Instant::now(), position);
+        state
+            .velocity_tracker
+            .add_position(Instant::now(), position);
         drop(state); // Release lock before callback
 
         // Call on_down callback (pointer contact before drag starts)
@@ -372,7 +316,9 @@ impl DragGestureRecognizer {
                     state.total_delta = state.total_delta + delta;
                     state.last_position = Some(position);
                     state.last_time = Some(Instant::now());
-                    state.velocity_tracker.add_sample(Instant::now(), position);
+                    state
+                        .velocity_tracker
+                        .add_position(Instant::now(), position);
 
                     let primary_delta = self.calculate_primary_delta(state.total_delta);
 
@@ -400,7 +346,7 @@ impl DragGestureRecognizer {
 
         if state.state == DragPhase::Started {
             // Calculate final velocity
-            let velocity = state.velocity_tracker.calculate_velocity();
+            let velocity = state.velocity_tracker.velocity();
             let primary_velocity = self.calculate_primary_velocity(velocity.pixels_per_second);
 
             state.state = DragPhase::Ready;
@@ -521,16 +467,6 @@ impl GestureArenaMember for DragGestureRecognizer {
     }
 }
 
-impl std::fmt::Debug for DragGestureRecognizer {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("DragGestureRecognizer")
-            .field("axis", &self.axis)
-            .field("state", &self.drag_state.lock().state)
-            .field("has_on_start", &self.callbacks.lock().on_start.is_some())
-            .finish()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -599,15 +535,15 @@ mod tests {
         let start_time = Instant::now();
         let start_pos = Offset::new(0.0, 0.0);
 
-        tracker.add_sample(start_time, start_pos);
+        tracker.add_position(start_time, start_pos);
 
         // Simulate movement over 100ms
         let dt = std::time::Duration::from_millis(100);
         let end_pos = Offset::new(100.0, 0.0); // Moved 100px in 100ms = 1000 px/s
 
-        tracker.add_sample(start_time + dt, end_pos);
+        tracker.add_position(start_time + dt, end_pos);
 
-        let velocity = tracker.calculate_velocity();
+        let velocity = tracker.velocity();
 
         // Should be approximately 1000 px/s horizontally
         assert!(velocity.pixels_per_second.dx > 900.0);

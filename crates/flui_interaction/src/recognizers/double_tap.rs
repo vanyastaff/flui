@@ -11,7 +11,8 @@
 //! Flutter reference: https://api.flutter.dev/flutter/gestures/DoubleTapGestureRecognizer-class.html
 
 use super::recognizer::{constants, GestureRecognizer, GestureRecognizerState};
-use crate::arena::{GestureArenaMember, PointerId};
+use crate::arena::GestureArenaMember;
+use crate::ids::PointerId;
 use flui_types::{events::PointerEvent, Offset};
 use parking_lot::Mutex;
 use std::sync::Arc;
@@ -21,7 +22,7 @@ use std::time::{Duration, Instant};
 pub type DoubleTapCallback = Arc<dyn Fn(DoubleTapDetails) + Send + Sync>;
 
 /// Details about a double tap gesture
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct DoubleTapDetails {
     /// Global position where double tap occurred
     pub global_position: Offset,

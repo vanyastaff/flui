@@ -21,13 +21,18 @@
 //!              Interpolation Logic
 //! ```
 //!
+//! # Type System Features
+//!
+//! - **Newtype pattern**: Uses `PointerId` for type-safe pointer identification
+//!
 //! # Example
 //!
 //! ```rust,ignore
 //! use flui_interaction::resampler::PointerEventResampler;
+//! use flui_interaction::ids::PointerId;
 //! use std::time::Duration;
 //!
-//! let mut resampler = PointerEventResampler::new(pointer_id);
+//! let mut resampler = PointerEventResampler::new(PointerId::new(0));
 //!
 //! // Add incoming events
 //! resampler.add_event(pointer_event);
@@ -46,6 +51,8 @@ use std::time::{Duration, Instant};
 
 use flui_types::events::PointerEvent;
 use flui_types::geometry::Offset;
+
+use crate::ids::PointerId;
 
 /// Maximum number of events to buffer (prevents unbounded memory growth)
 const MAX_BUFFERED_EVENTS: usize = 100;
@@ -80,7 +87,7 @@ pub struct PointerEventResampler {
 
 struct ResamplerInner {
     /// Pointer ID this resampler tracks
-    pointer_id: i32,
+    pointer_id: PointerId,
     /// Queue of buffered events
     event_queue: VecDeque<BufferedEvent>,
     /// Whether the pointer is currently down
@@ -95,7 +102,7 @@ struct ResamplerInner {
 
 impl PointerEventResampler {
     /// Creates a new resampler for the given pointer ID
-    pub fn new(pointer_id: i32) -> Self {
+    pub fn new(pointer_id: PointerId) -> Self {
         Self {
             inner: Arc::new(Mutex::new(ResamplerInner {
                 pointer_id,
@@ -137,7 +144,7 @@ impl PointerEventResampler {
             });
         } else {
             tracing::warn!(
-                pointer_id = inner.pointer_id,
+                pointer_id = inner.pointer_id.get(),
                 "Event queue full, dropping event"
             );
         }
@@ -288,7 +295,7 @@ impl PointerEventResampler {
     }
 
     /// Returns the pointer ID this resampler tracks
-    pub fn pointer_id(&self) -> i32 {
+    pub fn pointer_id(&self) -> PointerId {
         self.inner.lock().pointer_id
     }
 
@@ -306,18 +313,19 @@ mod tests {
 
     #[test]
     fn test_resampler_basic() {
-        let resampler = PointerEventResampler::new(0);
+        let resampler = PointerEventResampler::new(PointerId::new(0));
 
         assert!(!resampler.is_tracked());
         assert!(!resampler.is_down());
         assert!(!resampler.has_pending_events());
+        assert_eq!(resampler.pointer_id(), PointerId::new(0));
     }
 
     #[test]
     fn test_add_event() {
         use flui_types::events::{PointerDeviceKind, PointerEventData};
 
-        let resampler = PointerEventResampler::new(0);
+        let resampler = PointerEventResampler::new(PointerId::new(0));
 
         let mut data = PointerEventData::new(Offset::new(10.0, 20.0), PointerDeviceKind::Mouse);
         data.device = 0;
@@ -333,7 +341,7 @@ mod tests {
     fn test_sample_events() {
         use flui_types::events::{PointerDeviceKind, PointerEventData};
 
-        let resampler = PointerEventResampler::new(0);
+        let resampler = PointerEventResampler::new(PointerId::new(0));
 
         // Add down event
         let mut data = PointerEventData::new(Offset::new(10.0, 20.0), PointerDeviceKind::Mouse);
@@ -355,7 +363,7 @@ mod tests {
     fn test_stop_flushes_events() {
         use flui_types::events::{PointerDeviceKind, PointerEventData};
 
-        let resampler = PointerEventResampler::new(0);
+        let resampler = PointerEventResampler::new(PointerId::new(0));
 
         let mut data1 = PointerEventData::new(Offset::new(10.0, 20.0), PointerDeviceKind::Mouse);
         data1.device = 0;
@@ -379,7 +387,7 @@ mod tests {
     fn test_clear() {
         use flui_types::events::{PointerDeviceKind, PointerEventData};
 
-        let resampler = PointerEventResampler::new(0);
+        let resampler = PointerEventResampler::new(PointerId::new(0));
 
         let mut data = PointerEventData::new(Offset::new(10.0, 20.0), PointerDeviceKind::Mouse);
         data.device = 0;

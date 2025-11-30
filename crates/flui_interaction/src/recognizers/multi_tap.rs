@@ -10,7 +10,8 @@
 //! Flutter reference: https://api.flutter.dev/flutter/gestures/MultiTapGestureRecognizer-class.html
 
 use super::recognizer::{constants, GestureRecognizer, GestureRecognizerState};
-use crate::arena::{GestureArenaMember, PointerId};
+use crate::arena::GestureArenaMember;
+use crate::ids::PointerId;
 use flui_types::{events::PointerEvent, Offset};
 use parking_lot::Mutex;
 use std::collections::HashMap;
@@ -21,7 +22,7 @@ use std::time::{Duration, Instant};
 pub type MultiTapCallback = Arc<dyn Fn(MultiTapDetails) + Send + Sync>;
 
 /// Details about a multi-tap gesture
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct MultiTapDetails {
     /// Number of pointers/fingers involved
     pub pointer_count: usize,
@@ -136,7 +137,16 @@ impl MultiTapGestureRecognizer {
     /// # Arguments
     /// * `arena` - Gesture arena for conflict resolution
     /// * `required_pointer_count` - Number of simultaneous pointers required (2, 3, 4, etc.)
+    ///
+    /// # Panics
+    ///
+    /// Panics if `required_pointer_count` is less than 2.
     pub fn new(arena: crate::arena::GestureArena, required_pointer_count: usize) -> Arc<Self> {
+        assert!(
+            required_pointer_count >= 2,
+            "MultiTapGestureRecognizer requires at least 2 pointers, got {}",
+            required_pointer_count
+        );
         Arc::new(Self {
             state: GestureRecognizerState::new(arena),
             required_pointer_count,
