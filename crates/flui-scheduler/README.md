@@ -6,9 +6,12 @@ Frame scheduling, task prioritization, and animation coordination for FLUI.
 
 - **Frame Scheduling** - VSync coordination and frame lifecycle management
 - **Priority-based Task Queue** - Execute tasks in priority order (UserInput > Animation > Build > Idle)
-- **Animation Tickers** - Frame-perfect animation timing
+- **Animation Tickers** - Frame-perfect animation timing with typestate safety
 - **Frame Budget Management** - Enforce time limits to maintain target FPS
 - **VSync Integration** - Coordinate with display refresh to avoid tearing
+- **Type-Safe Durations** - Newtype wrappers prevent unit confusion
+- **Type-Safe IDs** - PhantomData markers prevent ID type mixing
+- **Optional Serde Support** - Serialization for all data types
 
 ## Architecture
 
@@ -25,6 +28,16 @@ Frame Timeline:
 VSync → BeginFrame → Tasks (Build/Layout/Paint) → EndFrame → Present
 ```
 
+## Installation
+
+```toml
+[dependencies]
+flui-scheduler = "0.1"
+
+# With serialization support
+flui-scheduler = { version = "0.1", features = ["serde"] }
+```
+
 ## Usage
 
 ### Basic Frame Scheduling
@@ -32,12 +45,11 @@ VSync → BeginFrame → Tasks (Build/Layout/Paint) → EndFrame → Present
 ```rust
 use flui_scheduler::{Scheduler, Priority};
 
-let mut scheduler = Scheduler::new();
-scheduler.set_target_fps(60);
+let scheduler = Scheduler::new();
 
 // Schedule a frame callback
 scheduler.schedule_frame(Box::new(|timing| {
-    println!("Frame {} started at {:?}", timing.id, timing.start_time);
+    println!("Frame started");
 }));
 
 // Add tasks with different priorities
@@ -85,7 +97,7 @@ budget.record_layout_time(3.0);
 budget.record_paint_time(4.0);
 
 if budget.is_over_budget() {
-    println!("Frame is over budget by {:.2}ms", -budget.remaining_ms());
+    println!("Frame is over budget!");
 }
 
 // Get statistics
@@ -127,38 +139,142 @@ vsync.set_callback(|instant| {
 let vsync_time = vsync.wait_for_vsync();
 ```
 
+## Advanced Type System Features
+
+This crate leverages Rust's advanced type system for zero-cost safety guarantees.
+
+### Typestate Pattern for Tickers
+
+Compile-time state machine prevents invalid operations:
+
+```rust
+use flui_scheduler::typestate::{TypestateTicker, Idle, Active};
+
+// Create idle ticker
+let ticker: TypestateTicker<Idle> = TypestateTicker::new();
+
+// Start transitions to Active state
+let ticker: TypestateTicker<Active> = ticker.start(|elapsed| {
+    println!("Elapsed: {:.2}s", elapsed);
+});
+
+// tick() only available in Active state - compile error if called on Idle!
+ticker.tick();
+
+// Stop transitions back to Idle
+let ticker: TypestateTicker<Idle> = ticker.stop();
+```
+
+### Type-Safe Duration Wrappers
+
+Newtype pattern prevents unit mixing:
+
+```rust
+use flui_scheduler::duration::{Milliseconds, Seconds, FrameDuration};
+
+let elapsed = Milliseconds::new(10.0);     // 10ms
+let timeout = Seconds::new(1.5);           // 1.5s
+let budget = FrameDuration::from_fps(60);  // ~16.67ms
+
+// Type-safe comparisons
+assert!(!budget.is_over_budget(elapsed));
+
+// Conversions are explicit
+let as_seconds: Seconds = elapsed.as_seconds();
+```
+
+### Type-Safe IDs
+
+PhantomData markers prevent ID type confusion at compile time:
+
+```rust
+use flui_scheduler::{FrameId, TaskId, TickerId};
+
+let frame_id = FrameId::new();
+let task_id = TaskId::new();
+
+// These are different types - can't be accidentally mixed!
+// frame_id == task_id  // Compile error!
+```
+
+### Typed Tasks with Compile-Time Priority
+
+```rust
+use flui_scheduler::task::TypedTask;
+use flui_scheduler::traits::{UserInputPriority, IdlePriority};
+
+// Type encodes the priority
+let input_task = TypedTask::<UserInputPriority>::new(|| {
+    println!("High priority!");
+});
+
+// Function that only accepts user input tasks
+fn process_urgent<F>(task: TypedTask<UserInputPriority>) {
+    task.execute();
+}
+
+process_urgent(input_task); // OK
+
+// let idle_task = TypedTask::<IdlePriority>::new(|| {});
+// process_urgent(idle_task); // Compile error! Wrong priority type
+```
+
+### Builder Pattern
+
+```rust
+use flui_scheduler::{FrameBudgetBuilder, SchedulerBuilder};
+use flui_scheduler::duration::FrameDuration;
+
+// Fluent builder for FrameBudget
+let budget = FrameBudgetBuilder::new()
+    .with_target_fps(120)
+    .build();
+
+// Builder for Scheduler
+let scheduler = SchedulerBuilder::new()
+    .with_target_fps(60)
+    .build();
+```
+
+## Preludes
+
+Two prelude modules for convenient imports:
+
+```rust
+// Basic types
+use flui_scheduler::prelude::*;
+
+// Advanced types (typestate, typed IDs, etc.)
+use flui_scheduler::prelude_advanced::*;
+```
+
 ## Priority Levels
 
-Tasks are executed in strict priority order:
+Tasks execute in strict priority order:
 
 | Priority | Use Case | Examples |
 |----------|----------|----------|
-| **UserInput** | Immediate response to user actions | Mouse clicks, keyboard input, touch events |
-| **Animation** | Smooth 60fps animations | Ticker callbacks, transitions, implicit animations |
-| **Build** | Widget tree rebuilds | State changes, layout updates |
-| **Idle** | Background work | Garbage collection, telemetry, preloading |
+| **UserInput** | Immediate response | Mouse clicks, keyboard, touch |
+| **Animation** | Smooth 60fps | Tickers, transitions |
+| **Build** | Widget rebuilds | State changes, layout |
+| **Idle** | Background work | GC, telemetry, preloading |
 
 ## Integration with FLUI
 
 ### In flui_core Pipeline
 
 ```rust
-use flui_scheduler::{Scheduler, Priority};
+use flui_scheduler::{Scheduler, FramePhase};
 
 pub struct PipelineOwner {
     scheduler: Scheduler,
-    // ...
 }
 
 impl PipelineOwner {
     pub fn build_frame(&mut self) {
-        self.scheduler.set_phase(FramePhase::Build);
+        // Execute frame phases in order
         self.flush_build();
-        
-        self.scheduler.set_phase(FramePhase::Layout);
         self.flush_layout();
-        
-        self.scheduler.set_phase(FramePhase::Paint);
         self.flush_paint();
     }
 }
@@ -167,85 +283,71 @@ impl PipelineOwner {
 ### In Event Loop
 
 ```rust
-use flui_scheduler::Scheduler;
-use winit::event_loop::EventLoop;
+use flui_scheduler::{Scheduler, Priority};
 
-let mut scheduler = Scheduler::new();
+let scheduler = Scheduler::new();
 
-event_loop.run(move |event, _, control_flow| {
-    match event {
-        Event::MainEventsCleared => {
-            // Execute scheduled frame
-            if scheduler.is_frame_scheduled() {
-                scheduler.execute_frame();
-                window.request_redraw();
-            }
+// In your event loop
+match event {
+    Event::MainEventsCleared => {
+        if scheduler.is_frame_scheduled() {
+            scheduler.execute_frame();
+            window.request_redraw();
         }
-        Event::UserInput(input) => {
-            // Handle input with highest priority
-            scheduler.add_task(Priority::UserInput, move || {
-                handle_input(input);
-            });
-            scheduler.schedule_frame(Box::new(|_| {}));
-        }
-        _ => {}
     }
-});
+    Event::UserInput(input) => {
+        scheduler.add_task(Priority::UserInput, move || {
+            handle_input(input);
+        });
+        scheduler.schedule_frame(Box::new(|_| {}));
+    }
+    _ => {}
+}
 ```
 
 ## Performance
 
 ### Frame Budget Enforcement
 
-The scheduler automatically manages frame budgets:
+| Target FPS | Frame Budget |
+|------------|--------------|
+| 60 FPS | 16.67ms |
+| 120 FPS | 8.33ms |
+| 144 FPS | 6.94ms |
 
-- **60 FPS** = 16.67ms per frame
-- **120 FPS** = 8.33ms per frame
-- **144 FPS** = 6.94ms per frame
+When over budget, low-priority work is automatically skipped.
 
-When over budget, low-priority work is skipped:
+### Zero-Cost Abstractions
 
-```rust
-scheduler.execute_frame(); // Automatically skips Idle tasks if over budget
-```
+- Typestate pattern: No runtime overhead - states checked at compile time
+- Newtype wrappers: Zero-cost - same as raw `f64`
+- PhantomData markers: Zero-size - no memory overhead
 
-### Priority-based Execution
+## Feature Flags
 
-Tasks execute in strict priority order, ensuring:
-
-- User input is always processed immediately
-- Animations remain smooth at 60fps
-- Build phase can be interrupted if over budget
-- Background work only runs when there's spare time
-
-## Testing
-
-Run tests:
-
-```bash
-cargo test -p flui_scheduler
-```
-
-Run with profiling:
-
-```bash
-cargo test -p flui_scheduler --features profiling
-```
-
-## Examples
-
-See `examples/` directory for complete examples:
-
-- `basic_scheduler.rs` - Basic frame scheduling
-- `animation_ticker.rs` - Animation with tickers
-- `budget_management.rs` - Frame budget tracking
-- `priority_tasks.rs` - Task priority demonstration
+| Feature | Description |
+|---------|-------------|
+| `serde` | Enable serialization for duration types, priorities, and statistics |
 
 ## Platform Support
 
-- **Native** (Windows, macOS, Linux) - Full support with native vsync
-- **Web** (WebAssembly) - Uses `requestAnimationFrame` for vsync
-- **iOS/Android** - Integrates with platform refresh rate
+| Platform | VSync Method |
+|----------|--------------|
+| Windows, macOS, Linux | Native vsync via `web-time` |
+| WebAssembly | `performance.now()` |
+| iOS/Android | Platform refresh rate |
+
+All types are `Send + Sync` and safe for multi-threaded use.
+
+## Testing
+
+```bash
+# Run all tests
+cargo test -p flui-scheduler
+
+# Run with serde feature
+cargo test -p flui-scheduler --features serde
+```
 
 ## License
 
