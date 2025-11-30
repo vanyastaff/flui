@@ -23,11 +23,19 @@
 //!             ├── Convenience methods
 //!             └── Batch operations
 //! ```
+//!
+//! # Arity Integration
+//!
+//! `RenderChildAccessor` uses the unified arity system from [`crate::arity`].
+//! The arity markers (`Leaf`, `Single`, `Optional`, `Variable`) provide
+//! compile-time guarantees about child counts.
 
 use flui_foundation::ElementId;
+use flui_types::{Offset, Size};
 use std::any::Any;
 
 use super::TreeNav;
+use crate::arity::{Arity, Leaf, Optional, Single, Variable};
 
 // ============================================================================
 // RENDER TREE ACCESS (BASE TRAIT)
@@ -122,7 +130,7 @@ pub trait RenderTreeAccess: TreeNav {
         self.render_object(id).is_some()
     }
 
-    /// Gets the size from `RenderState`, if available.
+    /// Returns the size from `RenderState`, if available.
     ///
     /// This is a convenience method that accesses the cached size
     /// from the `RenderState`. Returns `None` if:
@@ -139,12 +147,12 @@ pub trait RenderTreeAccess: TreeNav {
     /// Default implementation returns `None`. Concrete implementations
     /// should override to extract size from `RenderState`.
     #[inline]
-    fn get_size(&self, id: ElementId) -> Option<(f32, f32)> {
+    fn size(&self, id: ElementId) -> Option<Size> {
         let _ = id;
         None
     }
 
-    /// Gets the cached constraints from `RenderState`, if available.
+    /// Returns the cached constraints from `RenderState`, if available.
     ///
     /// # Arguments
     ///
@@ -155,12 +163,12 @@ pub trait RenderTreeAccess: TreeNav {
     /// Default implementation returns `None`. Concrete implementations
     /// should override to extract constraints from `RenderState`.
     #[inline]
-    fn get_constraints(&self, id: ElementId) -> Option<&dyn Any> {
+    fn constraints(&self, id: ElementId) -> Option<&dyn Any> {
         let _ = id;
         None
     }
 
-    /// Gets the offset from `RenderState`, if available.
+    /// Returns the offset from `RenderState`, if available.
     ///
     /// The offset is the position relative to the parent.
     ///
@@ -168,7 +176,7 @@ pub trait RenderTreeAccess: TreeNav {
     ///
     /// * `id` - The element ID
     #[inline]
-    fn get_offset(&self, id: ElementId) -> Option<(f32, f32)> {
+    fn offset(&self, id: ElementId) -> Option<Offset> {
         let _ = id;
         None
     }
@@ -537,45 +545,169 @@ pub trait RenderTreeExt: RenderTreeAccess {
 impl<T: RenderTreeAccess + ?Sized> RenderTreeExt for T {}
 
 // ============================================================================
-// RENDER CHILD ACCESSOR
+// RENDER CHILD ACCESSOR - TYPE STATE PATTERN
 // ============================================================================
 
-/// A typed accessor for render children based on arity.
+// Re-export Multi as alias for Variable for backwards compatibility
+/// Marker type for multi-child render objects (any number of children).
 ///
-/// This provides compile-time guarantees about child count, improving
-/// type safety for render objects.
+/// This is an alias for [`Variable`] from the unified arity system.
+pub type Multi = Variable;
+
+/// A typed accessor for render children with compile-time arity guarantees.
+///
+/// Uses the Type State pattern to provide different APIs based on expected
+/// child count. This moves runtime assertions to compile-time type checking.
+///
+/// # Type States
+///
+/// Uses markers from the unified [`crate::arity`] module:
+///
+/// - [`Leaf`]: No children expected. Only provides validation.
+/// - [`Single`]: Exactly one child expected. Provides `child()` method.
+/// - [`Optional`]: Zero or one child expected. Provides `child()` returning `Option`.
+/// - [`Variable`] (aliased as `Multi`): Any number of children. Provides full iterator API.
 ///
 /// # Example
 ///
 /// ```rust,ignore
-/// let accessor = RenderChildAccessor::new(&tree, parent_id);
+/// use flui_tree::{RenderChildAccessor, Single, Optional, Variable};
 ///
-/// // For Single arity render objects:
-/// let child = accessor.single();
+/// // For Single arity render objects (e.g., Padding, Align):
+/// let accessor: RenderChildAccessor<_, Single> = RenderChildAccessor::single(&tree, parent_id);
+/// let child = accessor.child(); // Guaranteed to exist
 ///
-/// // For Optional arity:
-/// if let Some(child) = accessor.optional() {
+/// // For Optional arity (e.g., Container):
+/// let accessor: RenderChildAccessor<_, Optional> = RenderChildAccessor::optional(&tree, parent_id);
+/// if let Some(child) = accessor.child() {
 ///     // ...
 /// }
 ///
-/// // For Variable arity:
+/// // For Variable/Multi arity (e.g., Flex, Stack):
+/// let accessor: RenderChildAccessor<_, Variable> = RenderChildAccessor::multi(&tree, parent_id);
 /// for child in accessor.iter() {
 ///     // ...
 /// }
 /// ```
 #[derive(Debug, Clone, Copy)]
-pub struct RenderChildAccessor<'a, T: RenderTreeAccess> {
+pub struct RenderChildAccessor<'a, T: RenderTreeAccess, A: Arity = Variable> {
     tree: &'a T,
     parent: ElementId,
+    _arity: std::marker::PhantomData<A>,
 }
 
-impl<'a, T: RenderTreeAccess> RenderChildAccessor<'a, T> {
-    /// Creates a new render child accessor.
+// ============================================================================
+// CONSTRUCTORS
+// ============================================================================
+
+impl<'a, T: RenderTreeAccess> RenderChildAccessor<'a, T, Variable> {
+    /// Creates a new variable-child accessor (default).
+    ///
+    /// Use this for render objects with variable child count (Flex, Stack, etc.).
     #[inline]
     pub const fn new(tree: &'a T, parent: ElementId) -> Self {
-        Self { tree, parent }
+        Self {
+            tree,
+            parent,
+            _arity: std::marker::PhantomData,
+        }
     }
 
+    /// Alias for `new()` - creates a multi-child accessor.
+    #[inline]
+    pub const fn multi(tree: &'a T, parent: ElementId) -> Self {
+        Self::new(tree, parent)
+    }
+
+    /// Alias for `new()` - creates a variable-child accessor.
+    #[inline]
+    pub const fn variable(tree: &'a T, parent: ElementId) -> Self {
+        Self::new(tree, parent)
+    }
+}
+
+impl<'a, T: RenderTreeAccess> RenderChildAccessor<'a, T, Single> {
+    /// Creates a single-child accessor.
+    ///
+    /// Use this for render objects that always have exactly one child
+    /// (Padding, Align, Transform, etc.).
+    ///
+    /// # Panics
+    ///
+    /// Panics in debug mode if there are zero or multiple children.
+    #[inline]
+    pub fn single(tree: &'a T, parent: ElementId) -> Self {
+        #[cfg(debug_assertions)]
+        {
+            let count = crate::iter::RenderChildren::new(tree, parent).count();
+            assert!(
+                count == 1,
+                "Single arity requires exactly one child, found {count}"
+            );
+        }
+        Self {
+            tree,
+            parent,
+            _arity: std::marker::PhantomData,
+        }
+    }
+}
+
+impl<'a, T: RenderTreeAccess> RenderChildAccessor<'a, T, Optional> {
+    /// Creates an optional-child accessor.
+    ///
+    /// Use this for render objects that have zero or one child (Container, etc.).
+    ///
+    /// # Panics
+    ///
+    /// Panics in debug mode if there are multiple children.
+    #[inline]
+    pub fn optional(tree: &'a T, parent: ElementId) -> Self {
+        #[cfg(debug_assertions)]
+        {
+            let count = crate::iter::RenderChildren::new(tree, parent).count();
+            assert!(
+                count <= 1,
+                "Optional arity allows at most one child, found {count}"
+            );
+        }
+        Self {
+            tree,
+            parent,
+            _arity: std::marker::PhantomData,
+        }
+    }
+}
+
+impl<'a, T: RenderTreeAccess> RenderChildAccessor<'a, T, Leaf> {
+    /// Creates a leaf accessor (no children expected).
+    ///
+    /// Use this for render objects that should never have children
+    /// (Text, Image, etc.).
+    ///
+    /// # Panics
+    ///
+    /// Panics in debug mode if there are any children.
+    #[inline]
+    pub fn leaf(tree: &'a T, parent: ElementId) -> Self {
+        #[cfg(debug_assertions)]
+        {
+            let count = crate::iter::RenderChildren::new(tree, parent).count();
+            assert!(count == 0, "Leaf arity expects no children, found {count}");
+        }
+        Self {
+            tree,
+            parent,
+            _arity: std::marker::PhantomData,
+        }
+    }
+}
+
+// ============================================================================
+// COMMON METHODS (all arities)
+// ============================================================================
+
+impl<'a, T: RenderTreeAccess, A: Arity> RenderChildAccessor<'a, T, A> {
     /// Returns the tree reference.
     #[inline]
     pub const fn tree(&self) -> &'a T {
@@ -588,6 +720,65 @@ impl<'a, T: RenderTreeAccess> RenderChildAccessor<'a, T> {
         self.parent
     }
 
+    /// Converts to a different arity type.
+    ///
+    /// # Safety
+    ///
+    /// This is unchecked in release mode. Use the typed constructors
+    /// (`single()`, `optional()`, `leaf()`) for validation.
+    #[inline]
+    pub fn into_arity<B: Arity>(self) -> RenderChildAccessor<'a, T, B> {
+        RenderChildAccessor {
+            tree: self.tree,
+            parent: self.parent,
+            _arity: std::marker::PhantomData,
+        }
+    }
+}
+
+// ============================================================================
+// SINGLE ARITY METHODS
+// ============================================================================
+
+impl<'a, T: RenderTreeAccess> RenderChildAccessor<'a, T, Single> {
+    /// Returns the single render child.
+    ///
+    /// This method is only available for `Single` arity accessors,
+    /// providing compile-time guarantee that a child exists.
+    #[inline]
+    pub fn child(&self) -> ElementId {
+        // Safety: Single constructor validates exactly one child exists
+        crate::iter::RenderChildren::new(self.tree, self.parent)
+            .next()
+            .expect("Single arity accessor was constructed with no children")
+    }
+}
+
+// ============================================================================
+// OPTIONAL ARITY METHODS
+// ============================================================================
+
+impl<'a, T: RenderTreeAccess> RenderChildAccessor<'a, T, Optional> {
+    /// Returns the optional render child.
+    ///
+    /// This method is only available for `Optional` arity accessors.
+    #[inline]
+    pub fn child(&self) -> Option<ElementId> {
+        crate::iter::RenderChildren::new(self.tree, self.parent).next()
+    }
+
+    /// Returns `true` if there is a child.
+    #[inline]
+    pub fn has_child(&self) -> bool {
+        self.child().is_some()
+    }
+}
+
+// ============================================================================
+// VARIABLE (MULTI) ARITY METHODS
+// ============================================================================
+
+impl<'a, T: RenderTreeAccess> RenderChildAccessor<'a, T, Variable> {
     /// Returns an iterator over render children.
     #[inline]
     pub fn iter(&self) -> crate::iter::RenderChildren<'a, T> {
@@ -624,45 +815,12 @@ impl<'a, T: RenderTreeAccess> RenderChildAccessor<'a, T> {
         self.iter().nth(n)
     }
 
-    /// Returns the single render child (for Single arity).
-    ///
-    /// # Panics
-    ///
-    /// Panics in debug mode if there are zero or multiple children.
-    #[inline]
-    pub fn single(&self) -> ElementId {
-        let mut iter = self.iter();
-        let first = iter
-            .next()
-            .expect("Single arity requires exactly one child");
-        debug_assert!(iter.next().is_none(), "Single arity has multiple children");
-        first
-    }
-
-    /// Returns the optional render child (for Optional arity).
-    #[inline]
-    pub fn optional(&self) -> Option<ElementId> {
-        let mut iter = self.iter();
-        let first = iter.next();
-        debug_assert!(
-            first.is_none() || iter.next().is_none(),
-            "Optional arity has multiple children"
-        );
-        first
-    }
-
     /// Collects all render children into a Vec.
+    ///
+    /// Note: This allocates. For zero-allocation iteration, use [`iter()`](Self::iter).
     #[inline]
     pub fn collect(&self) -> Vec<ElementId> {
         self.iter().collect()
-    }
-
-    /// Returns a slice-like view for variable children.
-    ///
-    /// Note: This allocates. For zero-allocation, use `iter()`.
-    #[inline]
-    pub fn to_vec(&self) -> Vec<ElementId> {
-        self.collect()
     }
 
     /// Checks if a specific element is a render child.
@@ -678,7 +836,7 @@ impl<'a, T: RenderTreeAccess> RenderChildAccessor<'a, T> {
     }
 }
 
-impl<'a, T: RenderTreeAccess> IntoIterator for RenderChildAccessor<'a, T> {
+impl<'a, T: RenderTreeAccess> IntoIterator for RenderChildAccessor<'a, T, Variable> {
     type Item = ElementId;
     type IntoIter = crate::iter::RenderChildren<'a, T>;
 
@@ -688,7 +846,7 @@ impl<'a, T: RenderTreeAccess> IntoIterator for RenderChildAccessor<'a, T> {
     }
 }
 
-impl<'a, T: RenderTreeAccess> IntoIterator for &RenderChildAccessor<'a, T> {
+impl<'a, T: RenderTreeAccess> IntoIterator for &RenderChildAccessor<'a, T, Variable> {
     type Item = ElementId;
     type IntoIter = crate::iter::RenderChildren<'a, T>;
 
@@ -838,8 +996,11 @@ mod tests {
                 .map(|s| s as &mut dyn Any)
         }
 
-        fn get_size(&self, id: ElementId) -> Option<(f32, f32)> {
-            self.get(id)?.render_state.as_ref().map(|s| s.size)
+        fn size(&self, id: ElementId) -> Option<Size> {
+            self.get(id)?
+                .render_state
+                .as_ref()
+                .map(|s| Size::new(s.size.0, s.size.1))
         }
     }
 
@@ -994,7 +1155,7 @@ mod tests {
     // ========================================================================
 
     #[test]
-    fn test_render_child_accessor() {
+    fn test_render_child_accessor_multi() {
         let mut tree = TestTree::new();
 
         let parent = tree.insert_render(None);
@@ -1005,9 +1166,52 @@ mod tests {
         assert_eq!(accessor.count(), 1);
         assert!(!accessor.is_empty());
         assert_eq!(accessor.first(), Some(child));
-        assert_eq!(accessor.single(), child);
         assert!(accessor.contains(child));
         assert_eq!(accessor.position(child), Some(0));
+    }
+
+    #[test]
+    fn test_render_child_accessor_single() {
+        let mut tree = TestTree::new();
+
+        let parent = tree.insert_render(None);
+        let component = tree.insert_component(Some(parent));
+        let child = tree.insert_render(Some(component));
+
+        // Single arity accessor
+        let accessor = RenderChildAccessor::single(&tree, parent);
+        assert_eq!(accessor.child(), child);
+    }
+
+    #[test]
+    fn test_render_child_accessor_optional() {
+        let mut tree = TestTree::new();
+
+        let parent = tree.insert_render(None);
+        let component = tree.insert_component(Some(parent));
+        let child = tree.insert_render(Some(component));
+
+        // Optional arity accessor with child
+        let accessor = RenderChildAccessor::optional(&tree, parent);
+        assert_eq!(accessor.child(), Some(child));
+        assert!(accessor.has_child());
+
+        // Optional arity accessor without child
+        let empty_parent = tree.insert_render(None);
+        let empty_accessor = RenderChildAccessor::optional(&tree, empty_parent);
+        assert_eq!(empty_accessor.child(), None);
+        assert!(!empty_accessor.has_child());
+    }
+
+    #[test]
+    fn test_render_child_accessor_leaf() {
+        let mut tree = TestTree::new();
+
+        let leaf = tree.insert_render(None);
+
+        // Leaf arity accessor
+        let accessor = RenderChildAccessor::leaf(&tree, leaf);
+        assert_eq!(accessor.parent(), leaf);
     }
 
     #[test]
@@ -1047,6 +1251,19 @@ mod tests {
         let accessor2 = RenderChildAccessor::new(&tree, parent);
         let collected2: Vec<_> = (&accessor2).into_iter().collect();
         assert_eq!(collected2, vec![child1, child2]);
+    }
+
+    #[test]
+    fn test_render_child_accessor_into_arity() {
+        let mut tree = TestTree::new();
+
+        let parent = tree.insert_render(None);
+        let child = tree.insert_render(Some(parent));
+
+        // Start with Multi, convert to Single
+        let multi = RenderChildAccessor::new(&tree, parent);
+        let single: RenderChildAccessor<'_, _, Single> = multi.into_arity();
+        assert_eq!(single.child(), child);
     }
 
     // ========================================================================

@@ -50,17 +50,62 @@ use std::sync::atomic::{AtomicU8, Ordering};
 ///
 /// # Example
 ///
-/// ```rust,ignore
+/// ```rust
 /// use flui_tree::DirtyTracking;
+/// use flui_foundation::ElementId;
+/// use std::sync::Mutex;
+/// use std::collections::HashSet;
 ///
-/// fn process_dirty_layout<T: DirtyTracking>(tree: &T, dirty_ids: &[ElementId]) {
-///     for &id in dirty_ids {
-///         if tree.needs_layout(id) {
-///             // Process layout...
-///             tree.clear_needs_layout(id);
+/// struct SimpleDirtyTracker {
+///     layout_dirty: Mutex<HashSet<ElementId>>,
+///     paint_dirty: Mutex<HashSet<ElementId>>,
+/// }
+///
+/// impl SimpleDirtyTracker {
+///     fn new() -> Self {
+///         Self {
+///             layout_dirty: Mutex::new(HashSet::new()),
+///             paint_dirty: Mutex::new(HashSet::new()),
 ///         }
 ///     }
 /// }
+///
+/// impl DirtyTracking for SimpleDirtyTracker {
+///     fn mark_needs_layout(&self, id: ElementId) {
+///         self.layout_dirty.lock().unwrap().insert(id);
+///     }
+///
+///     fn mark_needs_paint(&self, id: ElementId) {
+///         self.paint_dirty.lock().unwrap().insert(id);
+///     }
+///
+///     fn clear_needs_layout(&self, id: ElementId) {
+///         self.layout_dirty.lock().unwrap().remove(&id);
+///     }
+///
+///     fn clear_needs_paint(&self, id: ElementId) {
+///         self.paint_dirty.lock().unwrap().remove(&id);
+///     }
+///
+///     fn needs_layout(&self, id: ElementId) -> bool {
+///         self.layout_dirty.lock().unwrap().contains(&id)
+///     }
+///
+///     fn needs_paint(&self, id: ElementId) -> bool {
+///         self.paint_dirty.lock().unwrap().contains(&id)
+///     }
+/// }
+///
+/// // Usage
+/// let tracker = SimpleDirtyTracker::new();
+/// let id = ElementId::new(1);
+///
+/// tracker.mark_needs_layout(id);
+/// assert!(tracker.needs_layout(id));
+/// assert!(tracker.is_dirty(id));
+///
+/// tracker.clear_needs_layout(id);
+/// assert!(!tracker.needs_layout(id));
 /// ```
 pub trait DirtyTracking: Send + Sync {
     /// Marks an element as needing layout.

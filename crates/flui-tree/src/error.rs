@@ -10,7 +10,8 @@ use thiserror::Error;
 pub type TreeResult<T> = Result<T, TreeError>;
 
 /// Errors that can occur during tree operations.
-#[derive(Debug, Clone, Error)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[non_exhaustive]
 pub enum TreeError {
     /// Element not found in tree.
     #[error("element {0} not found in tree")]

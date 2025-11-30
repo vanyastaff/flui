@@ -13,10 +13,12 @@ authors = ["FLUI Contributors"]
 [dependencies]
 # Internal dependencies
 flui-foundation = { path = "../flui-foundation" }
+flui_types = { path = "../flui_types" }
 
 # Core dependencies
 thiserror = { workspace = true }
 tracing = { workspace = true }
+smallvec = "1.13"
 
 # Optional: serde support
 serde = { workspace = true, optional = true }

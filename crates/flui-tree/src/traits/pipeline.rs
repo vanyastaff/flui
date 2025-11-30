@@ -14,6 +14,7 @@
 //! The concrete types (`BoxConstraints`, `Canvas`, `HitTestResult`) remain in `flui_rendering`.
 //! This keeps `flui-tree` dependency-free while enabling maximum code reuse.
 
+use crate::iter::RenderChildrenCollector;
 use crate::traits::RenderTreeAccess;
 use flui_foundation::ElementId;
 
@@ -138,7 +139,7 @@ pub trait LayoutVisitable {
 pub trait LayoutVisitableExt: LayoutVisitable + RenderTreeAccess {
     /// Layout all render children of an element.
     ///
-    /// Note: This collects children first to avoid borrow conflicts.
+    /// Uses [`RenderChildrenCollector`] to collect children first, avoiding borrow conflicts.
     fn layout_render_children(
         &mut self,
         parent: ElementId,
@@ -147,13 +148,11 @@ pub trait LayoutVisitableExt: LayoutVisitable + RenderTreeAccess {
     where
         Self::Constraints: Clone,
     {
-        use crate::iter::RenderChildren;
-
-        // Collect children first to release the borrow on self
-        let children: Vec<_> = RenderChildren::new(self, parent).collect();
+        let collector = RenderChildrenCollector::new(self, parent);
+        let children = collector.into_variable();
 
         children
-            .into_iter()
+            .copied()
             .map(|child| self.layout_element(child, constraints.clone()))
             .collect()
     }
@@ -183,7 +182,7 @@ pub trait PaintVisitable {
 pub trait PaintVisitableExt: PaintVisitable + RenderTreeAccess {
     /// Paint all render children of an element.
     ///
-    /// Note: This collects children first to avoid borrow conflicts.
+    /// Uses [`RenderChildrenCollector`] to collect children first, avoiding borrow conflicts.
     fn paint_render_children(
         &mut self,
         parent: ElementId,
@@ -192,13 +191,11 @@ pub trait PaintVisitableExt: PaintVisitable + RenderTreeAccess {
     where
         Self::Position: Clone,
     {
-        use crate::iter::RenderChildren;
-
-        // Collect children first to release the borrow on self
-        let children: Vec<_> = RenderChildren::new(self, parent).collect();
+        let collector = RenderChildrenCollector::new(self, parent);
+        let children = collector.into_variable();
 
         children
-            .into_iter()
+            .copied()
             .map(|child| self.paint_element(child, base_position.clone()))
             .collect()
     }
@@ -239,6 +236,9 @@ pub trait HitTestVisitable {
 /// Extension trait for hit test operations.
 pub trait HitTestVisitableExt: HitTestVisitable + RenderTreeAccess {
     /// Hit test all render children (in reverse order for proper z-ordering).
+    ///
+    /// Uses [`RenderChildrenCollector`] to collect children first, then iterates
+    /// in reverse for proper z-order (topmost element tested first).
     fn hit_test_render_children(
         &self,
         parent: ElementId,
@@ -248,12 +248,11 @@ pub trait HitTestVisitableExt: HitTestVisitable + RenderTreeAccess {
     where
         Self::Position: Clone,
     {
-        use crate::iter::RenderChildren;
+        let collector = RenderChildrenCollector::new(self, parent);
+        let children = collector.into_variable();
 
-        // Collect children first, then iterate in reverse for proper z-order
-        let children: Vec<_> = RenderChildren::new(self, parent).collect();
-
-        for child in children.into_iter().rev() {
+        // Iterate in reverse for proper z-order (topmost tested first)
+        for &child in children.iter().rev() {
             let child_position = self.transform_position_for_child(parent, child, position.clone());
             if self.hit_test_element(child, child_position, result) {
                 return true;
@@ -383,8 +382,6 @@ where
     F: FnMut(ElementId, &P) -> bool,
     P: Clone,
 {
-    use crate::iter::RenderChildren;
-
     if !tree.contains(id) || !tree.is_render_element(id) {
         return false;
     }
@@ -398,8 +395,10 @@ where
     path.push(id);
 
     // Check children in reverse order (top-most first)
-    let children: Vec<_> = RenderChildren::new(tree, id).collect();
-    for child in children.into_iter().rev() {
+    let collector = RenderChildrenCollector::new(tree, id);
+    let children = collector.into_variable();
+
+    for &child in children.iter().rev() {
         if hit_test_recursive(tree, child, position, hit_test_fn, path) {
             return true;
         }

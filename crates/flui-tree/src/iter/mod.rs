@@ -86,8 +86,8 @@ pub use render::{
     collect_render_children, count_render_children, count_render_elements, find_render_ancestor,
     find_render_root, first_render_child, has_render_children, is_render_descendant,
     is_render_leaf, last_render_child, lowest_common_render_ancestor, nth_render_child,
-    render_depth, render_parent, RenderAncestors, RenderChildren, RenderChildrenWithIndex,
-    RenderDescendants, RenderLeaves, RenderPath, RenderSiblings, RenderSubtree, RenderSubtreeItem,
-    SiblingDirection,
+    render_depth, render_parent, RenderAncestors, RenderChildren, RenderChildrenCollector,
+    RenderChildrenWithIndex, RenderDescendants, RenderLeaves, RenderPath, RenderSiblings,
+    RenderSubtree, RenderSubtreeItem, SiblingDirection,
 };
 pub use siblings::{Siblings, SiblingsDirection};

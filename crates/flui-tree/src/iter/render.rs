@@ -13,11 +13,34 @@
 //! - [`RenderSubtree`] - BFS traversal of render subtree with depth info
 //! - [`RenderLeaves`] - Find leaf render elements (no render children)
 //!
+//! # Arity Integration
+//!
+//! Use [`RenderChildrenCollector`] to collect render children with compile-time
+//! arity validation:
+//!
+//! ```rust,ignore
+//! use flui_tree::{RenderChildrenCollector, Single, Variable, Arity};
+//!
+//! // Collect into a typed accessor with runtime validation
+//! let collector = RenderChildrenCollector::new(tree, parent_id);
+//! if let Some(children) = collector.try_into_arity::<Single>() {
+//!     let child = children.single();
+//!     // ...
+//! }
+//!
+//! // Or use the infallible version for Variable arity
+//! let children = collector.into_variable();
+//! for child in children.copied() {
+//!     // ...
+//! }
+//! ```
+//!
 //! # Performance Notes
 //!
 //! All iterators are zero-allocation during iteration (only initial Vec allocation
 //! for stack-based iterators). Use `with_capacity` hints when known.
 
+use crate::arity::{Arity, SliceChildren, Variable};
 use crate::traits::RenderTreeAccess;
 use flui_foundation::ElementId;
 
@@ -308,11 +331,13 @@ impl<T: RenderTreeAccess + ?Sized> std::iter::FusedIterator for RenderChildrenWi
 // ============================================================================
 
 /// Direction for sibling iteration.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
 pub enum SiblingDirection {
     /// Iterate towards earlier siblings (left/previous).
     Previous,
     /// Iterate towards later siblings (right/next).
+    #[default]
     Next,
     /// Iterate all siblings (excluding self).
     All,
@@ -773,6 +798,117 @@ pub fn lowest_common_render_ancestor<T: RenderTreeAccess + ?Sized>(
 }
 
 // ============================================================================
+// ARITY-AWARE COLLECTION
+// ============================================================================
+
+/// Collects render children into an owned buffer for arity-aware access.
+///
+/// This collector bridges the lazy iteration of [`RenderChildren`] with the
+/// compile-time arity system. Use it when you need to validate child count
+/// at runtime and get a typed accessor.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use flui_tree::{RenderChildrenCollector, Single, Variable, Arity};
+///
+/// let collector = RenderChildrenCollector::new(tree, parent_id);
+///
+/// // Try to get exactly one child
+/// match collector.try_into_single() {
+///     Some(children) => {
+///         let child_id = *children.single();
+///         // layout single child...
+///     }
+///     None => {
+///         // Handle wrong child count
+///     }
+/// }
+///
+/// // Or get children with any arity
+/// let collector = RenderChildrenCollector::new(tree, parent_id);
+/// let children = collector.into_variable();
+/// for &child_id in children.iter() {
+///     // layout child...
+/// }
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct RenderChildrenCollector {
+    children: Vec<ElementId>,
+}
+
+impl RenderChildrenCollector {
+    /// Creates a new collector by eagerly collecting render children.
+    pub fn new<T: RenderTreeAccess + ?Sized>(tree: &T, parent: ElementId) -> Self {
+        Self {
+            children: collect_render_children(tree, parent),
+        }
+    }
+
+    /// Creates a collector with a pre-allocated capacity.
+    pub fn with_capacity<T: RenderTreeAccess + ?Sized>(
+        tree: &T,
+        parent: ElementId,
+        capacity: usize,
+    ) -> Self {
+        let mut children = Vec::with_capacity(capacity);
+        children.extend(RenderChildren::new(tree, parent));
+        Self { children }
+    }
+
+    /// Returns the number of collected children.
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.children.len()
+    }
+
+    /// Returns true if no children were collected.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.children.is_empty()
+    }
+
+    /// Returns the children as a slice.
+    #[inline]
+    pub fn as_slice(&self) -> &[ElementId] {
+        &self.children
+    }
+
+    /// Tries to convert to a typed accessor for the given arity.
+    ///
+    /// Returns `None` if the child count doesn't match the arity.
+    #[inline]
+    pub fn try_into_arity<A: Arity>(&self) -> Option<A::Accessor<'_, ElementId>> {
+        A::try_from_slice(&self.children)
+    }
+
+    /// Converts to an accessor, panicking in debug mode if count doesn't match.
+    ///
+    /// # Panics (debug only)
+    ///
+    /// Panics in debug builds if the child count doesn't match the arity.
+    #[inline]
+    pub fn into_arity<A: Arity>(&self) -> A::Accessor<'_, ElementId> {
+        A::from_slice(&self.children)
+    }
+
+    /// Converts to a [`SliceChildren`] accessor (always succeeds).
+    ///
+    /// This is the most flexible conversion - use when you don't know
+    /// the child count at compile time.
+    #[inline]
+    pub fn into_variable(&self) -> SliceChildren<'_, ElementId> {
+        Variable::from_slice(&self.children)
+    }
+
+    /// Consumes the collector and returns the underlying `Vec`.
+    #[inline]
+    pub fn into_vec(self) -> Vec<ElementId> {
+        self.children
+    }
+}
+
+// ============================================================================
 // TESTS
 // ============================================================================
 
@@ -1059,5 +1195,76 @@ mod tests {
             lowest_common_render_ancestor(&tree, render4, render2),
             Some(render2)
         );
+    }
+
+    #[test]
+    fn test_render_children_collector() {
+        use crate::arity::{ChildrenAccess, Exact, Single};
+
+        let mut tree = TestTree::new();
+
+        // Build: render1 -> [render2, render3]
+        let render1 = tree.insert_render(None);
+        let render2 = tree.insert_render(Some(render1));
+        let render3 = tree.insert_render(Some(render1));
+
+        let collector = RenderChildrenCollector::new(&tree, render1);
+        assert_eq!(collector.len(), 2);
+        assert!(!collector.is_empty());
+
+        // Should fail for Single (needs exactly 1)
+        assert!(collector.try_into_arity::<Single>().is_none());
+
+        // Should succeed for Exact<2>
+        let children = collector.try_into_arity::<Exact<2>>().unwrap();
+        assert_eq!(children.first(), &render2);
+        assert_eq!(children.second(), &render3);
+
+        // Variable should always work
+        let children = collector.into_variable();
+        assert_eq!(children.len(), 2);
+
+        // Iterate by value using copied()
+        let ids: Vec<_> = children.copied().collect();
+        assert_eq!(ids, vec![render2, render3]);
+    }
+
+    #[test]
+    fn test_render_children_collector_single() {
+        use crate::arity::Single;
+
+        let mut tree = TestTree::new();
+
+        // Build: render1 -> render2 (single child)
+        let render1 = tree.insert_render(None);
+        let render2 = tree.insert_render(Some(render1));
+
+        let collector = RenderChildrenCollector::new(&tree, render1);
+        assert_eq!(collector.len(), 1);
+
+        // Should succeed for Single
+        let children = collector.try_into_arity::<Single>().unwrap();
+        assert_eq!(children.single(), &render2);
+    }
+
+    #[test]
+    fn test_render_children_collector_empty() {
+        use crate::arity::{Leaf, Optional};
+
+        let mut tree = TestTree::new();
+
+        // Build: render1 (no children)
+        let render1 = tree.insert_render(None);
+
+        let collector = RenderChildrenCollector::new(&tree, render1);
+        assert!(collector.is_empty());
+        assert_eq!(collector.len(), 0);
+
+        // Should succeed for Leaf
+        assert!(collector.try_into_arity::<Leaf>().is_some());
+
+        // Should succeed for Optional
+        let opt = collector.try_into_arity::<Optional>().unwrap();
+        assert!(opt.is_none());
     }
 }

@@ -63,5 +63,5 @@ pub use pipeline::{
     PipelinePhaseCoordinator, SimpleTreeVisitor, TreeOperation, TreeVisitor,
 };
 pub use read::TreeRead;
-pub use render::{RenderTreeAccess, RenderTreeAccessExt, RenderTreeExt};
+pub use render::{Multi, RenderChildAccessor, RenderTreeAccess, RenderTreeAccessExt, RenderTreeExt};
 pub use write::{TreeWrite, TreeWriteNav};
