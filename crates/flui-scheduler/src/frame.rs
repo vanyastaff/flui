@@ -31,7 +31,326 @@ use serde::{Deserialize, Serialize};
 /// `Option<FrameId>` is the same size as `FrameId` (8 bytes).
 pub type FrameId = TypedId<FrameIdMarker>;
 
+/// Scheduler phase - which part of the frame lifecycle is executing
+///
+/// This follows Flutter's SchedulerPhase model for proper frame coordination.
+/// The phases execute in order:
+///
+/// ```text
+/// Idle → TransientCallbacks → MidFrameMicrotasks → PersistentCallbacks → PostFrameCallbacks → Idle
+/// ```
+///
+/// - **TransientCallbacks**: Animation tickers fire here (one-time frame callbacks)
+/// - **MidFrameMicrotasks**: Microtask queue flushes between animations and rendering
+/// - **PersistentCallbacks**: Rendering pipeline runs here (build/layout/paint)
+/// - **PostFrameCallbacks**: Cleanup and post-frame work
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[repr(u8)]
+pub enum SchedulerPhase {
+    /// No frame is being processed. Between frames.
+    #[default]
+    Idle = 0,
+
+    /// Transient callbacks are being executed.
+    /// Animation tickers fire during this phase.
+    /// Corresponds to Flutter's `handleBeginFrame`.
+    TransientCallbacks = 1,
+
+    /// Microtasks scheduled during TransientCallbacks are being executed.
+    /// Allows async work triggered by animations to complete.
+    MidFrameMicrotasks = 2,
+
+    /// Persistent callbacks are being executed.
+    /// The rendering pipeline (build/layout/paint) runs during this phase.
+    /// Corresponds to Flutter's `handleDrawFrame`.
+    PersistentCallbacks = 3,
+
+    /// Post-frame callbacks are being executed.
+    /// Cleanup and one-time post-frame work happens here.
+    PostFrameCallbacks = 4,
+}
+
+impl SchedulerPhase {
+    /// All phases in execution order
+    pub const ALL: [SchedulerPhase; 5] = [
+        SchedulerPhase::Idle,
+        SchedulerPhase::TransientCallbacks,
+        SchedulerPhase::MidFrameMicrotasks,
+        SchedulerPhase::PersistentCallbacks,
+        SchedulerPhase::PostFrameCallbacks,
+    ];
+
+    /// Check if valid transition from current phase to next phase
+    #[inline]
+    pub const fn can_transition_to(self, next: Self) -> bool {
+        matches!(
+            (self, next),
+            (Self::Idle, Self::TransientCallbacks)
+                | (Self::TransientCallbacks, Self::MidFrameMicrotasks)
+                | (Self::MidFrameMicrotasks, Self::PersistentCallbacks)
+                | (Self::PersistentCallbacks, Self::PostFrameCallbacks)
+                | (Self::PostFrameCallbacks, Self::Idle)
+                // Allow skipping MidFrameMicrotasks if no microtasks pending
+                | (Self::TransientCallbacks, Self::PersistentCallbacks)
+        )
+    }
+
+    /// Get the next phase in normal execution order
+    #[inline]
+    pub const fn next(self) -> Option<Self> {
+        match self {
+            Self::Idle => Some(Self::TransientCallbacks),
+            Self::TransientCallbacks => Some(Self::MidFrameMicrotasks),
+            Self::MidFrameMicrotasks => Some(Self::PersistentCallbacks),
+            Self::PersistentCallbacks => Some(Self::PostFrameCallbacks),
+            Self::PostFrameCallbacks => None,
+        }
+    }
+
+    /// Check if currently in a frame (not idle)
+    #[inline]
+    pub const fn is_in_frame(self) -> bool {
+        !matches!(self, Self::Idle)
+    }
+
+    /// Check if currently in animation phase
+    #[inline]
+    pub const fn is_animating(self) -> bool {
+        matches!(self, Self::TransientCallbacks)
+    }
+
+    /// Check if currently in rendering phase
+    #[inline]
+    pub const fn is_rendering(self) -> bool {
+        matches!(self, Self::PersistentCallbacks)
+    }
+}
+
+impl fmt::Display for SchedulerPhase {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Idle => write!(f, "Idle"),
+            Self::TransientCallbacks => write!(f, "TransientCallbacks"),
+            Self::MidFrameMicrotasks => write!(f, "MidFrameMicrotasks"),
+            Self::PersistentCallbacks => write!(f, "PersistentCallbacks"),
+            Self::PostFrameCallbacks => write!(f, "PostFrameCallbacks"),
+        }
+    }
+}
+
+/// Application lifecycle state (follows Flutter's AppLifecycleState)
+///
+/// This tracks the overall state of the application as seen by the platform.
+/// Different platforms may not support all states - the scheduler normalizes
+/// to the closest supported state.
+///
+/// ## State Transitions
+///
+/// ```text
+///                  ┌──────────┐
+///          ┌──────►│ inactive │◄─────┐
+///          │       └────┬─────┘      │
+///          │            │            │
+///     ┌────┴───┐        ▼        ┌───┴────┐
+///     │ resumed│◄───────────────►│ hidden │
+///     └────────┘                 └───┬────┘
+///                                    │
+///                               ┌────▼────┐
+///                               │ paused  │
+///                               └────┬────┘
+///                                    │
+///                               ┌────▼────┐
+///                               │detached │
+///                               └─────────┘
+/// ```
+///
+/// - **Resumed**: App is visible, focused, and receiving events
+/// - **Inactive**: App visible but not focused (modal dialog, split screen)
+/// - **Hidden**: App hidden but still running (another app in front)
+/// - **Paused**: App not visible, may be suspended soon
+/// - **Detached**: App still hosted but detached from views (before exit)
+///
+/// ## Example
+///
+/// ```rust
+/// use flui_scheduler::frame::AppLifecycleState;
+///
+/// let state = AppLifecycleState::Resumed;
+///
+/// if state.should_animate() {
+///     // Run animations
+/// }
+///
+/// if state.should_render() {
+///     // Render frames
+/// }
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[repr(u8)]
+pub enum AppLifecycleState {
+    /// The application is visible and responding to user input.
+    ///
+    /// This is the default running state. Animations should run,
+    /// frames should be scheduled normally.
+    #[default]
+    Resumed = 0,
+
+    /// The application is visible but not focused.
+    ///
+    /// Occurs when:
+    /// - A modal dialog is shown
+    /// - Split screen / multitasking
+    /// - Phone call overlay
+    ///
+    /// Animations may continue but at reduced priority.
+    /// User input may not be received.
+    Inactive = 1,
+
+    /// The application is not visible but still running.
+    ///
+    /// On desktop: Window minimized or completely covered.
+    /// On mobile: Another app is in foreground.
+    ///
+    /// Frame scheduling should be paused to save resources.
+    /// Background work may continue.
+    Hidden = 2,
+
+    /// The application is not visible and may be suspended.
+    ///
+    /// This is the last state before the OS may kill the app.
+    /// Save state and release resources.
+    Paused = 3,
+
+    /// The application is still hosted but detached from views.
+    ///
+    /// This is the state before app termination or during
+    /// engine warm-up before the first view is attached.
+    Detached = 4,
+}
+
+impl AppLifecycleState {
+    /// All states in typical lifecycle order
+    pub const ALL: [AppLifecycleState; 5] = [
+        AppLifecycleState::Detached,
+        AppLifecycleState::Resumed,
+        AppLifecycleState::Inactive,
+        AppLifecycleState::Hidden,
+        AppLifecycleState::Paused,
+    ];
+
+    /// Check if the app is currently visible to the user
+    #[inline]
+    pub const fn is_visible(self) -> bool {
+        matches!(self, Self::Resumed | Self::Inactive)
+    }
+
+    /// Check if the app is currently focused and receiving input
+    #[inline]
+    pub const fn is_focused(self) -> bool {
+        matches!(self, Self::Resumed)
+    }
+
+    /// Check if animations should run at full speed
+    ///
+    /// Returns true only when resumed (visible and focused).
+    #[inline]
+    pub const fn should_animate(self) -> bool {
+        matches!(self, Self::Resumed)
+    }
+
+    /// Check if animations can run (possibly at reduced rate)
+    ///
+    /// Returns true when resumed or inactive (visible).
+    #[inline]
+    pub const fn can_animate(self) -> bool {
+        matches!(self, Self::Resumed | Self::Inactive)
+    }
+
+    /// Check if frames should be rendered
+    ///
+    /// Returns true only when the app is visible.
+    #[inline]
+    pub const fn should_render(self) -> bool {
+        matches!(self, Self::Resumed | Self::Inactive)
+    }
+
+    /// Check if the app should save state
+    ///
+    /// Returns true when transitioning away from resumed/inactive.
+    #[inline]
+    pub const fn should_save_state(self) -> bool {
+        matches!(self, Self::Paused | Self::Detached)
+    }
+
+    /// Check if the app should release heavy resources
+    ///
+    /// Returns true when hidden or paused.
+    #[inline]
+    pub const fn should_release_resources(self) -> bool {
+        matches!(self, Self::Hidden | Self::Paused | Self::Detached)
+    }
+
+    /// Check if the state transition is valid
+    ///
+    /// Most transitions are valid, but some are logically unusual.
+    pub const fn can_transition_to(self, next: Self) -> bool {
+        match (self, next) {
+            // Same state is always valid (no-op)
+            (a, b) if a as u8 == b as u8 => true,
+
+            // Resumed can go to any state
+            (Self::Resumed, _) => true,
+
+            // Inactive can go to resumed, hidden, or paused
+            (Self::Inactive, Self::Resumed | Self::Hidden | Self::Paused) => true,
+
+            // Hidden can go to inactive, paused, or resumed (when coming back)
+            (Self::Hidden, Self::Inactive | Self::Paused | Self::Resumed) => true,
+
+            // Paused can resume through hidden/inactive or go to detached
+            (Self::Paused, Self::Hidden | Self::Inactive | Self::Resumed | Self::Detached) => true,
+
+            // Detached can transition to any state (app starting up)
+            (Self::Detached, _) => true,
+
+            // Other transitions are unusual but not forbidden
+            _ => true,
+        }
+    }
+
+    /// Get human-readable description
+    pub const fn description(self) -> &'static str {
+        match self {
+            Self::Resumed => "Application is visible and focused",
+            Self::Inactive => "Application is visible but not focused",
+            Self::Hidden => "Application is not visible",
+            Self::Paused => "Application is paused and may be suspended",
+            Self::Detached => "Application is detached from views",
+        }
+    }
+}
+
+impl fmt::Display for AppLifecycleState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Resumed => write!(f, "Resumed"),
+            Self::Inactive => write!(f, "Inactive"),
+            Self::Hidden => write!(f, "Hidden"),
+            Self::Paused => write!(f, "Paused"),
+            Self::Detached => write!(f, "Detached"),
+        }
+    }
+}
+
+/// Listener callback for lifecycle state changes
+pub type LifecycleStateCallback = Box<dyn Fn(AppLifecycleState) + Send + Sync>;
+
 /// Frame phase - which part of the render pipeline is executing
+/// 
+/// This is used within the PersistentCallbacks scheduler phase to track
+/// rendering pipeline progress.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[repr(u8)]
@@ -266,16 +585,28 @@ impl Default for FrameTiming {
     }
 }
 
-/// Frame callback - executed at frame boundaries
+/// Transient frame callback - executed during TransientCallbacks phase.
+///
+/// These are one-time callbacks that fire during the animation phase.
+/// Animation tickers use this to receive the vsync timestamp.
+/// Receives the vsync timestamp for synchronized timing.
+pub type TransientFrameCallback = Box<dyn FnOnce(Instant) + Send>;
+
+/// Frame callback - executed at frame boundaries (legacy, prefer TransientFrameCallback)
 pub type FrameCallback = Box<dyn FnOnce(&FrameTiming) + Send>;
 
 /// Persistent frame callback (can be called multiple times)
 ///
+/// These run during the PersistentCallbacks phase every frame.
+/// The rendering pipeline (build/layout/paint) registers here.
 /// Uses Arc for cheap cloning - persistent callbacks are cloned before execution
 /// to avoid holding locks during callback invocation.
 pub type PersistentFrameCallback = Arc<dyn Fn(&FrameTiming) + Send + Sync>;
 
 /// Post-frame callback - executed after frame completes
+///
+/// These run during the PostFrameCallbacks phase, after rendering is complete.
+/// Use for cleanup, analytics, or scheduling the next frame.
 pub type PostFrameCallback = Box<dyn FnOnce(&FrameTiming) + Send>;
 
 /// Builder for creating frame timing with custom configuration
@@ -394,5 +725,46 @@ mod tests {
         let util = timing.utilization();
         // Just started, should be very low
         assert!(util.value() < 10.0);
+    }
+
+    // AppLifecycleState tests
+
+    #[test]
+    fn test_app_lifecycle_state_default() {
+        let state = AppLifecycleState::default();
+        assert_eq!(state, AppLifecycleState::Resumed);
+    }
+
+    #[test]
+    fn test_app_lifecycle_state_display() {
+        assert_eq!(format!("{}", AppLifecycleState::Resumed), "Resumed");
+        assert_eq!(format!("{}", AppLifecycleState::Inactive), "Inactive");
+        assert_eq!(format!("{}", AppLifecycleState::Hidden), "Hidden");
+        assert_eq!(format!("{}", AppLifecycleState::Paused), "Paused");
+        assert_eq!(format!("{}", AppLifecycleState::Detached), "Detached");
+    }
+
+    #[test]
+    fn test_app_lifecycle_state_transitions() {
+        // All transitions from Resumed should be valid
+        assert!(AppLifecycleState::Resumed.can_transition_to(AppLifecycleState::Inactive));
+        assert!(AppLifecycleState::Resumed.can_transition_to(AppLifecycleState::Hidden));
+        assert!(AppLifecycleState::Resumed.can_transition_to(AppLifecycleState::Paused));
+        assert!(AppLifecycleState::Resumed.can_transition_to(AppLifecycleState::Detached));
+
+        // All transitions from Detached should be valid (app starting up)
+        assert!(AppLifecycleState::Detached.can_transition_to(AppLifecycleState::Resumed));
+        assert!(AppLifecycleState::Detached.can_transition_to(AppLifecycleState::Inactive));
+
+        // Same state transition is valid (no-op)
+        assert!(AppLifecycleState::Resumed.can_transition_to(AppLifecycleState::Resumed));
+        assert!(AppLifecycleState::Hidden.can_transition_to(AppLifecycleState::Hidden));
+    }
+
+    #[test]
+    fn test_app_lifecycle_state_all_array() {
+        assert_eq!(AppLifecycleState::ALL.len(), 5);
+        assert!(AppLifecycleState::ALL.contains(&AppLifecycleState::Resumed));
+        assert!(AppLifecycleState::ALL.contains(&AppLifecycleState::Detached));
     }
 }

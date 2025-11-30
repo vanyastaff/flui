@@ -174,13 +174,20 @@ pub use budget::{
     AllPhaseStats, BudgetPolicy, FrameBudget, FrameBudgetBuilder, PhaseStats, SharedBudget,
 };
 pub use frame::{
-    FrameCallback, FrameId, FramePhase, FrameTiming, FrameTimingBuilder, PersistentFrameCallback,
-    PostFrameCallback,
+    AppLifecycleState, FrameCallback, FrameId, FramePhase, FrameTiming, FrameTimingBuilder,
+    LifecycleStateCallback, PersistentFrameCallback, PostFrameCallback, SchedulerPhase,
+    TransientFrameCallback,
 };
-pub use scheduler::{Scheduler, SchedulerBinding, SchedulerBuilder};
+pub use scheduler::{
+    CallbackId, FrameCompletionFuture, FrameSkipPolicy, Scheduler, SchedulerBinding,
+    SchedulerBuilder,
+};
 pub use task::{Priority, PriorityCount, Task, TaskId, TaskQueue, TypedTask};
-pub use ticker::{Ticker, TickerCallback, TickerGroup, TickerId, TickerProvider, TickerState};
-pub use vsync::{VsyncCallback, VsyncMode, VsyncScheduler, VsyncStats};
+pub use ticker::{
+    ScheduledTicker, ScheduledTickerCallback, Ticker, TickerCallback, TickerGroup, TickerId,
+    TickerProvider, TickerState,
+};
+pub use vsync::{VsyncCallback, VsyncDrivenScheduler, VsyncMode, VsyncScheduler, VsyncStats};
 
 // Re-exports - Duration types
 pub use duration::{FrameDuration, Microseconds, Milliseconds, Percentage, Seconds};
@@ -208,8 +215,9 @@ pub use typestate::{
 pub mod prelude {
     // Core types
     pub use crate::{
-        BudgetPolicy, FrameBudget, FrameId, FramePhase, FrameTiming, Priority, Scheduler,
-        SchedulerBinding, Task, TaskId, TaskQueue, Ticker, TickerProvider, TickerState,
+        BudgetPolicy, FrameBudget, FrameId, FramePhase, FrameTiming, Priority, ScheduledTicker,
+        Scheduler, SchedulerBinding, SchedulerPhase, Task, TaskId, TaskQueue, Ticker,
+        TickerProvider, TickerState, TransientFrameCallback,
     };
 
     // Duration types

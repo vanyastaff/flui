@@ -345,8 +345,18 @@ impl Microseconds {
     }
 
     /// Convert to std::time::Duration
+    ///
+    /// # Panics
+    ///
+    /// Panics if the value is negative, as `std::time::Duration` cannot
+    /// represent negative durations.
     #[inline]
     pub fn to_std_duration(self) -> std::time::Duration {
+        assert!(
+            self.0 >= 0,
+            "Cannot convert negative Microseconds ({}) to Duration",
+            self.0
+        );
         std::time::Duration::from_micros(self.0 as u64)
     }
 }
@@ -372,9 +382,12 @@ impl From<std::time::Duration> for Microseconds {
 }
 
 impl From<Microseconds> for std::time::Duration {
+    /// # Panics
+    ///
+    /// Panics if the `Microseconds` value is negative.
     #[inline]
     fn from(us: Microseconds) -> Self {
-        std::time::Duration::from_micros(us.0 as u64)
+        us.to_std_duration()
     }
 }
 
@@ -628,5 +641,23 @@ mod tests {
         assert_eq!(format!("{}", Seconds::new(1.234)), "1.234s");
         assert_eq!(format!("{}", Microseconds::new(1000)), "1000μs");
         assert_eq!(format!("{}", Percentage::new(75.5)), "75.5%");
+    }
+
+    #[test]
+    fn test_microseconds_to_std_duration() {
+        let us = Microseconds::new(1000);
+        let duration = us.to_std_duration();
+        assert_eq!(duration.as_micros(), 1000);
+
+        // Zero should work
+        let zero = Microseconds::ZERO.to_std_duration();
+        assert_eq!(zero.as_micros(), 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "Cannot convert negative Microseconds")]
+    fn test_negative_microseconds_panics() {
+        let negative = Microseconds::new(-100);
+        let _ = negative.to_std_duration();
     }
 }

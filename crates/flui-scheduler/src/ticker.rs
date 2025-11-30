@@ -4,14 +4,15 @@
 //! They coordinate with the scheduler to ensure animations stay synchronized with
 //! the display refresh rate.
 //!
-//! ## Typestate vs Runtime Ticker
+//! ## Ticker Types
 //!
-//! This module provides two ticker implementations:
+//! This module provides multiple ticker implementations:
 //!
-//! - **`Ticker`**: Runtime state machine, flexible and familiar API
+//! - **`Ticker`**: Manual ticking, you call `tick()` each frame
+//! - **`ScheduledTicker`**: Auto-schedules with scheduler, Flutter-like behavior
 //! - **`TypestateTicker`**: Compile-time state checking (see `typestate` module)
 //!
-//! ## Example
+//! ## Manual Ticker Example
 //!
 //! ```rust
 //! use flui_scheduler::{Ticker, TickerProvider, Scheduler};
@@ -23,8 +24,26 @@
 //!     println!("Frame at {:.3}s", elapsed);
 //! });
 //!
-//! // In your render loop
+//! // In your render loop - manual tick
 //! ticker.tick(&scheduler);
+//! ```
+//!
+//! ## Scheduled Ticker Example (Flutter-like)
+//!
+//! ```rust
+//! use flui_scheduler::{Scheduler, ScheduledTicker};
+//! use std::sync::Arc;
+//!
+//! let scheduler = Arc::new(Scheduler::new());
+//! let mut ticker = ScheduledTicker::new(scheduler.clone());
+//!
+//! // Start auto-schedules callbacks with the scheduler
+//! ticker.start(|elapsed| {
+//!     println!("Auto-ticked at {:.3}s", elapsed);
+//! });
+//!
+//! // Ticker automatically registers for next frame
+//! // No need to manually call tick()
 //! ```
 
 use crate::duration::Seconds;
@@ -504,6 +523,312 @@ impl Extend<Ticker> for TickerGroup {
     }
 }
 
+// =============================================================================
+// ScheduledTicker - Flutter-like auto-scheduling ticker
+// =============================================================================
+
+/// Callback for ScheduledTicker that receives elapsed time in seconds
+pub type ScheduledTickerCallback = Arc<Mutex<dyn FnMut(f64) + Send>>;
+
+/// A Flutter-like ticker that automatically schedules with the scheduler
+///
+/// Unlike `Ticker` which requires manual `tick()` calls, `ScheduledTicker`
+/// automatically registers transient callbacks with the scheduler on each frame.
+/// This is the recommended approach for animations.
+///
+/// # Flutter Comparison
+///
+/// In Flutter, a `Ticker` is provided by a `TickerProvider` (usually a `State` mixin)
+/// and automatically receives vsync callbacks. `ScheduledTicker` provides the same
+/// behavior in Rust.
+///
+/// # Examples
+///
+/// ```rust
+/// use flui_scheduler::{Scheduler, ScheduledTicker};
+/// use std::sync::Arc;
+///
+/// let scheduler = Arc::new(Scheduler::new());
+/// let mut ticker = ScheduledTicker::new(scheduler.clone());
+///
+/// ticker.start(|elapsed| {
+///     println!("Animation at {:.3}s", elapsed);
+/// });
+///
+/// // Ticker auto-schedules - just run frames
+/// scheduler.execute_frame();
+/// scheduler.execute_frame();
+///
+/// ticker.stop();
+/// ```
+#[allow(clippy::type_complexity)]
+pub struct ScheduledTicker {
+    /// Unique identifier
+    id: TickerId,
+
+    /// Reference to the scheduler
+    scheduler: Arc<crate::scheduler::Scheduler>,
+
+    /// Current state
+    state: Arc<Mutex<TickerState>>,
+
+    /// Start time
+    start_time: Arc<Mutex<Option<Instant>>>,
+
+    /// Callback (wrapped for sharing across frame callbacks)
+    callback: Arc<Mutex<Option<Arc<Mutex<dyn FnMut(f64) + Send>>>>>,
+
+    /// Elapsed time when muted
+    muted_elapsed: Arc<Mutex<Seconds>>,
+
+    /// Whether next frame callback is scheduled
+    scheduled: Arc<Mutex<bool>>,
+}
+
+impl ScheduledTicker {
+    /// Create a new scheduled ticker
+    pub fn new(scheduler: Arc<crate::scheduler::Scheduler>) -> Self {
+        Self {
+            id: TickerId::new(),
+            scheduler,
+            state: Arc::new(Mutex::new(TickerState::Idle)),
+            start_time: Arc::new(Mutex::new(None)),
+            callback: Arc::new(Mutex::new(None)),
+            muted_elapsed: Arc::new(Mutex::new(Seconds::ZERO)),
+            scheduled: Arc::new(Mutex::new(false)),
+        }
+    }
+
+    /// Get the ticker ID
+    #[inline]
+    pub fn id(&self) -> TickerId {
+        self.id
+    }
+
+    /// Start the ticker with a callback
+    ///
+    /// The callback receives elapsed time in seconds since start.
+    /// Automatically schedules for the next frame.
+    pub fn start<F>(&mut self, callback: F)
+    where
+        F: FnMut(f64) + Send + 'static,
+    {
+        *self.state.lock() = TickerState::Active;
+        *self.start_time.lock() = Some(Instant::now());
+        *self.callback.lock() = Some(Arc::new(Mutex::new(callback)));
+        *self.muted_elapsed.lock() = Seconds::ZERO;
+
+        // Schedule for next frame
+        self.schedule_next_frame();
+    }
+
+    /// Start with a type-safe callback
+    pub fn start_typed<F>(&mut self, mut callback: F)
+    where
+        F: FnMut(Seconds) + Send + 'static,
+    {
+        self.start(move |elapsed| callback(Seconds::new(elapsed)));
+    }
+
+    /// Stop the ticker
+    pub fn stop(&mut self) {
+        *self.state.lock() = TickerState::Stopped;
+        *self.callback.lock() = None;
+        *self.scheduled.lock() = false;
+    }
+
+    /// Mute the ticker (pause without stopping)
+    pub fn mute(&mut self) {
+        let state = *self.state.lock();
+        if state == TickerState::Active {
+            if let Some(start) = *self.start_time.lock() {
+                let elapsed = Seconds::new(start.elapsed().as_secs_f64());
+                *self.muted_elapsed.lock() = elapsed;
+            }
+            *self.state.lock() = TickerState::Muted;
+        }
+    }
+
+    /// Unmute the ticker (resume)
+    pub fn unmute(&mut self) {
+        let state = *self.state.lock();
+        if state == TickerState::Muted {
+            let muted_elapsed = *self.muted_elapsed.lock();
+            let now = Instant::now();
+            let adjusted_start = now - std::time::Duration::from_secs_f64(muted_elapsed.value());
+            *self.start_time.lock() = Some(adjusted_start);
+            *self.state.lock() = TickerState::Active;
+
+            // Re-schedule
+            self.schedule_next_frame();
+        }
+    }
+
+    /// Get current state
+    #[inline]
+    pub fn state(&self) -> TickerState {
+        *self.state.lock()
+    }
+
+    /// Check if active
+    #[inline]
+    pub fn is_active(&self) -> bool {
+        self.state().can_tick()
+    }
+
+    /// Check if muted
+    #[inline]
+    pub fn is_muted(&self) -> bool {
+        *self.state.lock() == TickerState::Muted
+    }
+
+    /// Check if running (active or muted)
+    #[inline]
+    pub fn is_running(&self) -> bool {
+        self.state().is_running()
+    }
+
+    /// Get elapsed time
+    pub fn elapsed(&self) -> Seconds {
+        match *self.state.lock() {
+            TickerState::Idle | TickerState::Stopped => Seconds::ZERO,
+            TickerState::Muted => *self.muted_elapsed.lock(),
+            TickerState::Active => {
+                if let Some(start) = *self.start_time.lock() {
+                    Seconds::new(start.elapsed().as_secs_f64())
+                } else {
+                    Seconds::ZERO
+                }
+            }
+        }
+    }
+
+    /// Schedule callback for next frame
+    fn schedule_next_frame(&self) {
+        // Only schedule if active and not already scheduled
+        if *self.state.lock() != TickerState::Active {
+            return;
+        }
+
+        if *self.scheduled.lock() {
+            return;
+        }
+
+        *self.scheduled.lock() = true;
+
+        // Clone Arcs for the callback
+        let state = Arc::clone(&self.state);
+        let start_time = Arc::clone(&self.start_time);
+        let callback = Arc::clone(&self.callback);
+        let scheduled = Arc::clone(&self.scheduled);
+        let scheduler = Arc::clone(&self.scheduler);
+
+        // Register transient callback - fires during TransientCallbacks phase
+        self.scheduler
+            .schedule_frame_callback(Box::new(move |_vsync_time| {
+                // Clear scheduled flag
+                *scheduled.lock() = false;
+
+                // Check if still active
+                if *state.lock() != TickerState::Active {
+                    return;
+                }
+
+                // Calculate elapsed time
+                let elapsed = if let Some(start) = *start_time.lock() {
+                    start.elapsed().as_secs_f64()
+                } else {
+                    return;
+                };
+
+                // Invoke callback
+                if let Some(cb) = callback.lock().as_ref() {
+                    cb.lock()(elapsed);
+                }
+
+                // Schedule next frame if still active
+                if *state.lock() == TickerState::Active {
+                    *scheduled.lock() = true;
+
+                    // Clone for next callback
+                    let state = Arc::clone(&state);
+                    let start_time = Arc::clone(&start_time);
+                    let callback = Arc::clone(&callback);
+                    let scheduled_inner = Arc::clone(&scheduled);
+                    let scheduler_inner = Arc::clone(&scheduler);
+
+                    scheduler.schedule_frame_callback(Box::new(move |_vsync| {
+                        // Recursive scheduling via helper
+                        Self::tick_and_reschedule(
+                            state,
+                            start_time,
+                            callback,
+                            scheduled_inner,
+                            scheduler_inner,
+                        );
+                    }));
+                }
+            }));
+    }
+
+    /// Helper for recursive frame scheduling
+    #[allow(clippy::type_complexity)]
+    fn tick_and_reschedule(
+        state: Arc<Mutex<TickerState>>,
+        start_time: Arc<Mutex<Option<Instant>>>,
+        callback: Arc<Mutex<Option<Arc<Mutex<dyn FnMut(f64) + Send>>>>>,
+        scheduled: Arc<Mutex<bool>>,
+        scheduler: Arc<crate::scheduler::Scheduler>,
+    ) {
+        *scheduled.lock() = false;
+
+        if *state.lock() != TickerState::Active {
+            return;
+        }
+
+        let elapsed = if let Some(start) = *start_time.lock() {
+            start.elapsed().as_secs_f64()
+        } else {
+            return;
+        };
+
+        if let Some(cb) = callback.lock().as_ref() {
+            cb.lock()(elapsed);
+        }
+
+        if *state.lock() == TickerState::Active {
+            *scheduled.lock() = true;
+
+            let state = Arc::clone(&state);
+            let start_time = Arc::clone(&start_time);
+            let callback = Arc::clone(&callback);
+            let scheduled_inner = Arc::clone(&scheduled);
+            let scheduler_inner = Arc::clone(&scheduler);
+
+            scheduler.schedule_frame_callback(Box::new(move |_vsync| {
+                Self::tick_and_reschedule(
+                    state,
+                    start_time,
+                    callback,
+                    scheduled_inner,
+                    scheduler_inner,
+                );
+            }));
+        }
+    }
+}
+
+impl std::fmt::Debug for ScheduledTicker {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ScheduledTicker")
+            .field("id", &self.id)
+            .field("state", &self.state())
+            .field("elapsed", &self.elapsed())
+            .field("scheduled", &*self.scheduled.lock())
+            .finish()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -632,5 +957,90 @@ mod tests {
 
         assert_eq!(ticker.state(), TickerState::Idle);
         assert_eq!(ticker.elapsed(), Seconds::ZERO);
+    }
+
+    // ScheduledTicker tests
+
+    #[test]
+    fn test_scheduled_ticker_lifecycle() {
+        let scheduler = Arc::new(crate::scheduler::Scheduler::new());
+        let mut ticker = ScheduledTicker::new(scheduler.clone());
+
+        assert_eq!(ticker.state(), TickerState::Idle);
+        assert!(!ticker.is_active());
+
+        ticker.start(|_| {});
+        assert_eq!(ticker.state(), TickerState::Active);
+        assert!(ticker.is_active());
+
+        ticker.stop();
+        assert_eq!(ticker.state(), TickerState::Stopped);
+    }
+
+    #[test]
+    fn test_scheduled_ticker_auto_scheduling() {
+        let scheduler = Arc::new(crate::scheduler::Scheduler::new());
+        let counter = Arc::new(AtomicU32::new(0));
+
+        let mut ticker = ScheduledTicker::new(scheduler.clone());
+        let c = Arc::clone(&counter);
+        ticker.start(move |_elapsed| {
+            c.fetch_add(1, Ordering::Relaxed);
+        });
+
+        // Execute frames - ticker should auto-tick
+        scheduler.execute_frame();
+        scheduler.execute_frame();
+        scheduler.execute_frame();
+
+        // Callback should have been invoked each frame
+        assert_eq!(counter.load(Ordering::Relaxed), 3);
+
+        ticker.stop();
+
+        // After stop, no more callbacks
+        scheduler.execute_frame();
+        assert_eq!(counter.load(Ordering::Relaxed), 3);
+    }
+
+    #[test]
+    fn test_scheduled_ticker_mute() {
+        let scheduler = Arc::new(crate::scheduler::Scheduler::new());
+        let counter = Arc::new(AtomicU32::new(0));
+
+        let mut ticker = ScheduledTicker::new(scheduler.clone());
+        let c = Arc::clone(&counter);
+        ticker.start(move |_elapsed| {
+            c.fetch_add(1, Ordering::Relaxed);
+        });
+
+        scheduler.execute_frame();
+        assert_eq!(counter.load(Ordering::Relaxed), 1);
+
+        ticker.mute();
+        scheduler.execute_frame();
+        // Still 1 - muted ticker doesn't fire
+        assert_eq!(counter.load(Ordering::Relaxed), 1);
+
+        ticker.unmute();
+        scheduler.execute_frame();
+        // Now 2 - unmuted
+        assert_eq!(counter.load(Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn test_scheduled_ticker_elapsed() {
+        let scheduler = Arc::new(crate::scheduler::Scheduler::new());
+        let mut ticker = ScheduledTicker::new(scheduler);
+
+        assert_eq!(ticker.elapsed(), Seconds::ZERO);
+
+        ticker.start(|_| {});
+
+        std::thread::sleep(std::time::Duration::from_millis(10));
+
+        let elapsed = ticker.elapsed();
+        assert!(elapsed.value() > 0.0);
+        assert!(elapsed.value() < 1.0);
     }
 }
