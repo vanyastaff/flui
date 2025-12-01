@@ -16,12 +16,6 @@
 //! The `Constraints` and `Geometry` enums (from `geometry.rs`) provide runtime
 //! discrimination between Box and Sliver protocols. The wrappers in `wrappers.rs`
 //! convert between typed and type-erased representations.
-//!
-//! # Tree Integration
-//!
-//! RenderObject methods use generic tree parameters (`T: LayoutTree`, `T: PaintTree`)
-//! instead of callbacks. This integrates cleanly with `flui-tree` abstractions
-//! while maintaining object safety at the `Box<dyn RenderObject>` boundary.
 
 use flui_foundation::ElementId;
 use flui_painting::Canvas;

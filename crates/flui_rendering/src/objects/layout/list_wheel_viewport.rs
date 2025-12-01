@@ -1,11 +1,8 @@
 //! RenderListWheelViewport - 3D wheel picker viewport
-//!
-//! Renders a scrollable collection of fixed-size widgets in a wheel-like format,
-//! creating a cylindrical projection where items appear on a rotating cylinder.
-//!
-//! Flutter reference: <https://api.flutter.dev/flutter/rendering/RenderListWheelViewport-class.html>
 
-use crate::core::{BoxProtocol, ChildrenAccess, LayoutContext, PaintContext, FullRenderTree, RenderBox, Variable};
+use flui_core::render::{
+    BoxProtocol, ChildrenAccess, LayoutContext, PaintContext, RenderBox, Variable,
+};
 use flui_types::constraints::BoxConstraints;
 use flui_types::prelude::*;
 use std::f32::consts::PI;
@@ -206,11 +203,8 @@ impl Default for RenderListWheelViewport {
     }
 }
 
-impl<T: FullRenderTree> RenderBox<T, Variable> for RenderListWheelViewport {
-    fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Variable, BoxProtocol>) -> Size
-    where
-        T: crate::core::LayoutTree,
-    {
+impl RenderBox<Variable> for RenderListWheelViewport {
+    fn layout(&mut self, ctx: LayoutContext<'_, Variable, BoxProtocol>) -> Size {
         let constraints = ctx.constraints;
         let children = ctx.children;
 
@@ -247,10 +241,7 @@ impl<T: FullRenderTree> RenderBox<T, Variable> for RenderListWheelViewport {
         size
     }
 
-    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Variable>)
-    where
-        T: crate::core::PaintTree,
-    {
+    fn paint(&self, ctx: &mut PaintContext<'_, Variable>) {
         let offset = ctx.offset;
 
         // Collect child IDs first to avoid borrow checker issues
@@ -268,21 +259,13 @@ impl<T: FullRenderTree> RenderBox<T, Variable> for RenderListWheelViewport {
             }
 
             let child_offset = self.child_offsets[index];
-            let transform = self
-                .child_transforms
-                .get(index)
-                .cloned()
-                .flatten()
-                .unwrap_or_else(Matrix4::identity);
 
-            // Apply 3D transform for cylindrical effect using chaining API
-            // This creates the wheel picker appearance where items appear
-            // to be on a rotating cylinder with perspective
-            ctx.canvas().saved().transformed(transform);
-
-            // Paint child at calculated offset within the transformed coordinate system
+            // Paint child at calculated offset
+            // TODO: Apply 3D transform when transform layer support is available
+            // For now, just using the calculated offsets for cylindrical positioning
+            // Visibility culling would be done based on scroll position, but for now
+            // we paint all children (could be optimized later)
             ctx.paint_child(child_id, offset + child_offset);
-            ctx.canvas().restored();
         }
     }
 }

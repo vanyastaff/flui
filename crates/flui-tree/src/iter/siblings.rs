@@ -33,8 +33,8 @@ pub enum SiblingsDirection {
 #[derive(Debug)]
 pub struct Siblings<'a, T: TreeNav> {
     _tree: &'a T,
-    /// Parent's children list
-    children: &'a [ElementId],
+    /// Parent's children list (owned)
+    children: Vec<ElementId>,
     /// Current index in siblings list
     current_index: Option<usize>,
     /// Direction of iteration
@@ -62,12 +62,12 @@ impl<'a, T: TreeNav> Siblings<'a, T> {
     ) -> Self {
         // Get parent and find index
         let (children, current_index) = if let Some(parent) = tree.parent(start) {
-            let sibs = tree.children(parent);
+            let sibs: Vec<_> = tree.children(parent).collect();
             let idx = sibs.iter().position(|&id| id == start);
             (sibs, idx)
         } else {
             // No parent means no siblings
-            (&[][..], None)
+            (Vec::new(), None)
         };
 
         Self {

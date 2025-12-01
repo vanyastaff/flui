@@ -1,6 +1,7 @@
 //! RenderSliverSafeArea - Adds safe area insets to sliver content
 
-use crate::core::{LayoutContext, LayoutTree, PaintContext, PaintTree, Single, SliverProtocol, SliverRender};
+use flui_core::render::{RuntimeArity, LegacySliverRender, SliverLayoutContext, SliverPaintContext};
+use flui_painting::Canvas;
 use flui_types::prelude::*;
 use flui_types::{SliverConstraints, SliverGeometry};
 
@@ -40,6 +41,9 @@ pub struct RenderSliverSafeArea {
     pub minimum: EdgeInsets,
     /// Whether to maintain bottom view padding
     pub maintain_bottom_view_padding: bool,
+
+    // Layout cache
+    sliver_geometry: SliverGeometry,
 }
 
 impl RenderSliverSafeArea {
@@ -52,6 +56,7 @@ impl RenderSliverSafeArea {
             insets,
             minimum: EdgeInsets::ZERO,
             maintain_bottom_view_padding: false,
+            sliver_geometry: SliverGeometry::default(),
         }
     }
 
@@ -69,6 +74,11 @@ impl RenderSliverSafeArea {
     pub fn with_minimum(mut self, minimum: EdgeInsets) -> Self {
         self.minimum = minimum;
         self
+    }
+
+    /// Get the sliver geometry from last layout
+    pub fn geometry(&self) -> SliverGeometry {
+        self.sliver_geometry
     }
 
     /// Calculate effective padding (max of insets and minimum)
@@ -116,7 +126,7 @@ impl RenderSliverSafeArea {
             paint_origin: 0.0,
             layout_extent: paint_extent,
             max_paint_extent: total_padding,
-            max_scroll_obstruction_extent: 0.0,
+            max_scroll_obsolescence: 0.0,
             visible_fraction: if total_padding > 0.0 {
                 (paint_extent / total_padding).min(1.0)
             } else {
@@ -138,24 +148,24 @@ impl Default for RenderSliverSafeArea {
     }
 }
 
-impl SliverRender<Single> for RenderSliverSafeArea {
-    fn layout<T>(
-        &mut self,
-        ctx: LayoutContext<'_, T, Single, SliverProtocol>,
-    ) -> SliverGeometry
-    where
-        T: LayoutTree,
-    {
-        let constraints = ctx.constraints;
-        // Calculate sliver geometry
-        self.calculate_sliver_geometry(&constraints)
+impl LegacySliverRender for RenderSliverSafeArea {
+    fn layout(&mut self, ctx: &SliverLayoutContext) -> SliverGeometry {
+        // Calculate and cache sliver geometry
+        self.sliver_geometry = self.calculate_sliver_geometry(&ctx.constraints);
+        self.sliver_geometry
     }
 
-    fn paint<T>(&self, _ctx: &mut PaintContext<'_, T, Single>)
-    where
-        T: PaintTree,
-    {
+    fn paint(&self, _ctx: &SliverPaintContext) -> Canvas {
         // Safe area doesn't paint anything - it just adds spacing
+        Canvas::new()
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn arity(&self) -> RuntimeArity {
+        RuntimeArity::Exact(1) // Single child sliver
     }
 }
 
@@ -163,7 +173,6 @@ impl SliverRender<Single> for RenderSliverSafeArea {
 mod tests {
     use super::*;
     use flui_types::layout::AxisDirection;
-    use flui_types::constraints::{GrowthDirection, ScrollDirection};
 
     #[test]
     fn test_render_sliver_safe_area_new() {
@@ -249,7 +258,7 @@ mod tests {
 
         let constraints = SliverConstraints {
             axis_direction: AxisDirection::TopToBottom,
-            growth_direction: GrowthDirection::Forward,
+            grow_direction_reversed: false,
             scroll_offset: 0.0,
             remaining_paint_extent: 600.0,
             cross_axis_extent: 400.0,
@@ -257,7 +266,6 @@ mod tests {
             viewport_main_axis_extent: 600.0,
             remaining_cache_extent: 1000.0,
             cache_origin: 0.0,
-        ..SliverConstraints::default()
         };
 
         let geometry = safe_area.calculate_sliver_geometry(&constraints);
@@ -275,7 +283,7 @@ mod tests {
 
         let constraints = SliverConstraints {
             axis_direction: AxisDirection::TopToBottom,
-            growth_direction: GrowthDirection::Forward,
+            grow_direction_reversed: false,
             scroll_offset: 30.0, // Scrolled 30px
             remaining_paint_extent: 600.0,
             cross_axis_extent: 400.0,
@@ -283,7 +291,6 @@ mod tests {
             viewport_main_axis_extent: 600.0,
             remaining_cache_extent: 1000.0,
             cache_origin: 0.0,
-        ..SliverConstraints::default()
         };
 
         let geometry = safe_area.calculate_sliver_geometry(&constraints);
@@ -302,7 +309,7 @@ mod tests {
 
         let constraints = SliverConstraints {
             axis_direction: AxisDirection::TopToBottom,
-            growth_direction: GrowthDirection::Forward,
+            grow_direction_reversed: false,
             scroll_offset: 50.0, // Scrolled past leading padding
             remaining_paint_extent: 600.0,
             cross_axis_extent: 400.0,
@@ -310,7 +317,6 @@ mod tests {
             viewport_main_axis_extent: 600.0,
             remaining_cache_extent: 1000.0,
             cache_origin: 0.0,
-        ..SliverConstraints::default()
         };
 
         let geometry = safe_area.calculate_sliver_geometry(&constraints);
@@ -320,5 +326,11 @@ mod tests {
         assert_eq!(geometry.scroll_extent, 60.0);
         assert_eq!(geometry.paint_extent, 60.0);
         assert!(geometry.visible);
+    }
+
+    #[test]
+    fn test_arity_is_single_child() {
+        let safe_area = RenderSliverSafeArea::new(EdgeInsets::ZERO);
+        assert_eq!(safe_area.arity(), RuntimeArity::Exact(1));
     }
 }

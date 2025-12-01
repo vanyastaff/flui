@@ -39,7 +39,6 @@ pub mod protocol;
 pub mod render_box;
 pub mod render_flags;
 pub mod render_object;
-pub mod render_proxy;
 pub mod render_sliver;
 pub mod render_state;
 pub mod render_tree;
@@ -62,13 +61,12 @@ pub use flui_types::{SliverConstraints, SliverGeometry};
 
 // Re-export parent data types
 pub use parent_data::{
-    BoxParentData, ContainerBoxParentData, ContainerParentData, FlexParentData, ParentData,
-    ParentDataWithOffset, StackParentData,
+    BoxParentData, ContainerBoxParentData, ContainerParentData, ParentData, ParentDataWithOffset,
 };
 
 // Re-export flags and state
 pub use render_flags::{AtomicRenderFlags, RenderFlags};
-pub use render_state::{Baselines, RenderState};
+pub use render_state::RenderState;
 
 // Re-export hit testing from flui_interaction
 pub use flui_interaction::{HitTestBehavior, HitTestEntry, HitTestResult, HitTestable};
@@ -91,16 +89,9 @@ pub use flui_tree::{TreeNav, TreeRead, TreeWrite};
 pub use contexts::{HasTypedChildren, HitTestContext, LayoutContext, PaintContext};
 
 // Re-export render object traits
-pub use render_box::{
-    EmptyRender, RenderBox, RenderBoxExt, RenderBoxLeaf, RenderBoxWithChild, RenderBoxWithChildren,
-    RenderBoxWithOptionalChild,
-};
+pub use render_box::{EmptyRender, RenderBox, RenderBoxExt};
 pub use render_object::RenderObject;
 pub use render_sliver::{SliverRender, SliverRenderExt};
 
-// Re-export proxy traits
-pub use render_proxy::{RenderBoxProxy, RenderSliverProxy};
-
-// Note: BoxRenderWrapper and SliverRenderWrapper are deprecated.
-// RenderObjectWrapper now directly wraps RenderBox<A> without type erasure.
-// pub use wrappers::{BoxRenderWrapper, SliverRenderWrapper};
+// Re-export wrappers
+pub use wrappers::{BoxRenderWrapper, SliverRenderWrapper};

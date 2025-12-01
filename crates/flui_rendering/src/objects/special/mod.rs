@@ -5,9 +5,7 @@ pub mod exclude_semantics;
 pub mod fitted_box;
 pub mod merge_semantics;
 pub mod metadata;
-pub mod offstage;
 pub mod render_view;
-pub mod repaint_boundary;
 
 pub use annotated_region::*;
 pub use block_semantics::*;
@@ -16,6 +14,4 @@ pub use exclude_semantics::*;
 pub use fitted_box::*;
 pub use merge_semantics::*;
 pub use metadata::*;
-pub use offstage::*;
 pub use render_view::{RenderView, ViewConfiguration};
-pub use repaint_boundary::*;

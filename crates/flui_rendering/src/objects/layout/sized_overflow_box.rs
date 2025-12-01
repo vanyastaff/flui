@@ -1,13 +1,7 @@
 //! RenderSizedOverflowBox - fixed size with child overflow
-//!
-//! A box with a specified size that passes its original constraints
-//! through to its child, which may overflow.
-//!
-//! Flutter reference: <https://api.flutter.dev/flutter/rendering/RenderSizedOverflowBox-class.html>
 
-use crate::core::{
-    FullRenderTree,
-    FullRenderTree, RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
+use flui_core::render::{
+    RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
 };
 use flui_types::constraints::BoxConstraints;
 use flui_types::{Alignment, Size};
@@ -126,11 +120,8 @@ impl RenderSizedOverflowBox {
 
 // ===== RenderObject Implementation =====
 
-impl<T: FullRenderTree> RenderBox<T, Single> for RenderSizedOverflowBox {
-    fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Single, BoxProtocol>) -> Size
-    where
-        T: crate::core::LayoutTree,
-    {
+impl RenderBox<Single> for RenderSizedOverflowBox {
+    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
         let child_id = ctx.children.single();
 
         // Build child constraints from override values
@@ -157,10 +148,7 @@ impl<T: FullRenderTree> RenderBox<T, Single> for RenderSizedOverflowBox {
         self.size
     }
 
-    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Single>)
-    where
-        T: crate::core::PaintTree,
-    {
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         let child_id = ctx.children.single();
 
         // Calculate aligned position

@@ -8,8 +8,7 @@
 //! It provides a global singleton accessed via `ensure_initialized()`.
 
 use super::{BindingBase, GestureBinding, RendererBinding, SchedulerBinding};
-use crate::providers::MediaQueryData;
-use flui_core::pipeline::PipelineOwner;
+use flui_core::{pipeline::PipelineOwner, view::StatelessView};
 use flui_engine::Scene;
 use flui_types::constraints::BoxConstraints;
 use parking_lot::RwLock;
@@ -46,10 +45,6 @@ pub struct AppBinding {
 
     /// On-demand rendering flag - set when redraw is needed
     needs_redraw: Arc<AtomicBool>,
-
-    /// Media query data - Window and device information
-    /// Updated on window resize events
-    media_query: Arc<RwLock<MediaQueryData>>,
 
     /// Gesture binding (event routing)
     pub gesture: GestureBinding,
@@ -92,14 +87,9 @@ impl AppBinding {
                 let pipeline_owner = Arc::new(RwLock::new(PipelineOwner::new()));
                 let needs_redraw = Arc::new(AtomicBool::new(false));
 
-                // Initialize media query with default values
-                // Will be updated when window is created
-                let media_query = Arc::new(RwLock::new(MediaQueryData::default()));
-
                 let mut binding = Self {
                     pipeline_owner: pipeline_owner.clone(),
                     needs_redraw: needs_redraw.clone(),
-                    media_query,
                     gesture: GestureBinding::new(),
                     scheduler: SchedulerBinding::new(),
                     renderer: RendererBinding::new(),
@@ -183,7 +173,7 @@ impl AppBinding {
     /// ```
     pub fn attach_root_widget<V>(&self, widget: V)
     where
-        V: flui_view::StatelessView + Clone + Sync,
+        V: flui_core::view::StatelessView + Clone + Sync,
     {
         let mut pipeline = self.pipeline_owner.write();
         pipeline
@@ -243,45 +233,6 @@ impl AppBinding {
     /// Access to frame timing, budget tracking, and performance statistics.
     pub fn frame_budget(&self) -> Arc<parking_lot::Mutex<flui_scheduler::FrameBudget>> {
         self.scheduler.scheduler().budget()
-    }
-
-    // ========================================================================
-    // MediaQuery methods
-    // ========================================================================
-
-    /// Get current media query data
-    ///
-    /// Returns window size, device pixel ratio, and other platform metrics.
-    pub fn media_query(&self) -> MediaQueryData {
-        self.media_query.read().clone()
-    }
-
-    /// Update media query data
-    ///
-    /// Called when window resizes or DPI changes.
-    /// This will trigger rebuilds of widgets that depend on MediaQuery.
-    pub fn update_media_query(&self, data: MediaQueryData) {
-        let mut media = self.media_query.write();
-        let old_data = media.clone();
-        *media = data.clone();
-
-        // If data changed significantly, request redraw
-        if media.size != old_data.size || media.device_pixel_ratio != old_data.device_pixel_ratio {
-            tracing::debug!(
-                "MediaQuery updated: size={:?}, dpr={}",
-                media.size,
-                media.device_pixel_ratio
-            );
-            self.request_redraw();
-        }
-    }
-
-    /// Get shared reference to media query data
-    ///
-    /// Internal use for RootWidget provider setup.
-    #[allow(dead_code)]
-    pub(crate) fn media_query_arc(&self) -> Arc<RwLock<MediaQueryData>> {
-        self.media_query.clone()
     }
 }
 

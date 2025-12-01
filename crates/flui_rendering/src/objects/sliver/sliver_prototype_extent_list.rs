@@ -1,7 +1,8 @@
 //! RenderSliverPrototypeExtentList - List with prototype-based item sizing
 
-
-use crate::core::{ChildrenAccess, LayoutContext, LayoutTree, PaintContext, PaintTree, Variable, SliverProtocol, SliverRender};
+use flui_core::element::ElementTree;
+use flui_core::render::{RuntimeArity, SliverLayoutContext, SliverPaintContext, LegacySliverRender};
+use flui_painting::Canvas;
 use flui_types::{SliverConstraints, SliverGeometry};
 
 /// RenderObject for lists where item size is determined by a prototype
@@ -35,8 +36,8 @@ pub struct RenderSliverPrototypeExtentList {
     /// Cached extent from prototype measurement
     prototype_extent: Option<f32>,
 
-    // Layout cache (set during layout, used during paint)
-    cached_is_vertical: bool,
+    // Layout cache
+    sliver_geometry: SliverGeometry,
 }
 
 impl RenderSliverPrototypeExtentList {
@@ -44,7 +45,7 @@ impl RenderSliverPrototypeExtentList {
     pub fn new() -> Self {
         Self {
             prototype_extent: None,
-            cached_is_vertical: true,
+            sliver_geometry: SliverGeometry::default(),
         }
     }
 
@@ -56,6 +57,11 @@ impl RenderSliverPrototypeExtentList {
     /// Get prototype extent if available
     pub fn prototype_extent(&self) -> Option<f32> {
         self.prototype_extent
+    }
+
+    /// Get the sliver geometry from last layout
+    pub fn geometry(&self) -> SliverGeometry {
+        self.sliver_geometry
     }
 
     /// Calculate which items are visible
@@ -89,19 +95,21 @@ impl RenderSliverPrototypeExtentList {
     fn calculate_sliver_geometry(
         &self,
         constraints: &SliverConstraints,
-        child_count: usize,
+        _tree: &ElementTree,
+        children: &[flui_core::element::ElementId],
     ) -> SliverGeometry {
         let Some(extent) = self.prototype_extent else {
             return SliverGeometry::default();
         };
 
-        if child_count == 0 || extent <= 0.0 {
+        if children.is_empty() || extent <= 0.0 {
             return SliverGeometry::default();
         }
 
         let scroll_offset = constraints.scroll_offset;
         let remaining_extent = constraints.remaining_paint_extent;
 
+        let child_count = children.len();
         let total_extent = extent * child_count as f32;
 
         // Calculate visible portion
@@ -116,7 +124,7 @@ impl RenderSliverPrototypeExtentList {
             paint_origin: 0.0,
             layout_extent: paint_extent,
             max_paint_extent: total_extent,
-            max_scroll_obstruction_extent: 0.0,
+            max_scroll_obsolescence: 0.0,
             visible_fraction: if total_extent > 0.0 {
                 (paint_extent / total_extent).min(1.0)
             } else {
@@ -138,64 +146,61 @@ impl Default for RenderSliverPrototypeExtentList {
     }
 }
 
-impl SliverRender<Variable> for RenderSliverPrototypeExtentList {
-    fn layout<T>(
-        &mut self,
-        ctx: LayoutContext<'_, T, Variable, SliverProtocol>,
-    ) -> SliverGeometry
-    where
-        T: LayoutTree,
-    {
-        use flui_types::layout::AxisDirection;
+impl LegacySliverRender for RenderSliverPrototypeExtentList {
+    fn layout(&mut self, ctx: &SliverLayoutContext) -> SliverGeometry {
+        let constraints = &ctx.constraints;
 
-        let constraints = ctx.constraints;
-        let child_count = ctx.children.len();
+        // TODO: Measure prototype if not yet measured
+        // TODO: Layout visible children using prototype extent
 
-        // Cache axis direction for paint
-        self.cached_is_vertical = matches!(
-            constraints.axis_direction,
-            AxisDirection::TopToBottom | AxisDirection::BottomToTop
-        );
+        // For now, use fixed extent for all children
+        let prototype_extent = self.prototype_extent.unwrap_or(50.0);
+        let child_count = ctx.children.as_slice().len();
+        let total_extent = prototype_extent * child_count as f32;
 
-        // Note: Prototype measurement optimization can be added:
-        // 1. Measure prototype child if not yet measured
-        // 2. Use prototype extent to layout visible children efficiently
-        // Current implementation uses estimated geometry which works correctly
-        // for basic scrolling, but a full implementation would layout actual children
+        let scroll_offset = constraints.scroll_offset;
+        let remaining_extent = constraints.remaining_paint_extent;
 
-        // Use calculate_sliver_geometry for geometry calculation
-        self.calculate_sliver_geometry(&constraints, child_count)
+        let paint_extent = (total_extent - scroll_offset).max(0.0).min(remaining_extent);
+
+        SliverGeometry {
+            scroll_extent: total_extent,
+            paint_extent,
+            paint_origin: 0.0,
+            layout_extent: paint_extent,
+            max_paint_extent: total_extent,
+            max_scroll_obsolescence: 0.0,
+            visible_fraction: if total_extent > 0.0 {
+                (paint_extent / total_extent).min(1.0)
+            } else {
+                0.0
+            },
+            cross_axis_extent: constraints.cross_axis_extent,
+            cache_extent: paint_extent,
+            visible: paint_extent > 0.0,
+            has_visual_overflow: total_extent > paint_extent,
+            hit_test_extent: Some(paint_extent),
+            scroll_offset_correction: None,
+        }
     }
 
-    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Variable>)
-    where
-        T: PaintTree,
-    {
-        use flui_types::geometry::Offset;
+    fn paint(&self, _ctx: &SliverPaintContext) -> Canvas {
+        let canvas = Canvas::new();
 
-        // Need prototype extent to paint
-        let Some(extent) = self.prototype_extent else {
-            return; // Can't paint without knowing item size
-        };
+        // Children are painted by viewport at their calculated positions
+        // Each child is at prototype_extent * index from the start
 
-        // Use cached axis direction from layout
-        let is_vertical = self.cached_is_vertical;
+        // TODO: Paint visible children at their positions
 
-        // Paint visible children at their calculated positions
-        // Each child is positioned at prototype_extent * index from the start
-        let children = ctx.children.iter().collect::<Vec<_>>();
+        canvas
+    }
 
-        for (index, &child_id) in children.iter().enumerate() {
-            // Calculate child offset based on index, prototype extent, and axis
-            let child_offset = if is_vertical {
-                Offset::new(0.0, index as f32 * extent)
-            } else {
-                Offset::new(index as f32 * extent, 0.0)
-            };
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 
-            // Paint child at calculated position
-            ctx.paint_child(child_id, ctx.offset + child_offset);
-        }
+    fn arity(&self) -> RuntimeArity {
+        RuntimeArity::Variable // Multiple children
     }
 }
 
@@ -203,7 +208,6 @@ impl SliverRender<Variable> for RenderSliverPrototypeExtentList {
 mod tests {
     use super::*;
     use flui_types::layout::AxisDirection;
-    use flui_types::constraints::{GrowthDirection, ScrollDirection};
 
     #[test]
     fn test_render_sliver_prototype_extent_list_new() {
@@ -233,7 +237,7 @@ mod tests {
 
         let constraints = SliverConstraints {
             axis_direction: AxisDirection::TopToBottom,
-            growth_direction: GrowthDirection::Forward,
+            grow_direction_reversed: false,
             scroll_offset: 0.0,
             remaining_paint_extent: 600.0,
             cross_axis_extent: 400.0,
@@ -241,7 +245,6 @@ mod tests {
             viewport_main_axis_extent: 600.0,
             remaining_cache_extent: 1000.0,
             cache_origin: 0.0,
-        ..SliverConstraints::default()
         };
 
         let (first, last) = list.visible_range(&constraints, 10);
@@ -256,7 +259,7 @@ mod tests {
 
         let constraints = SliverConstraints {
             axis_direction: AxisDirection::TopToBottom,
-            growth_direction: GrowthDirection::Forward,
+            grow_direction_reversed: false,
             scroll_offset: 0.0,
             remaining_paint_extent: 600.0,
             cross_axis_extent: 400.0,
@@ -264,7 +267,6 @@ mod tests {
             viewport_main_axis_extent: 600.0,
             remaining_cache_extent: 1000.0,
             cache_origin: 0.0,
-        ..SliverConstraints::default()
         };
 
         let (first, last) = list.visible_range(&constraints, 0);
@@ -279,7 +281,7 @@ mod tests {
 
         let constraints = SliverConstraints {
             axis_direction: AxisDirection::TopToBottom,
-            growth_direction: GrowthDirection::Forward,
+            grow_direction_reversed: false,
             scroll_offset: 0.0,
             remaining_paint_extent: 600.0,
             cross_axis_extent: 400.0,
@@ -287,7 +289,6 @@ mod tests {
             viewport_main_axis_extent: 600.0,
             remaining_cache_extent: 1000.0,
             cache_origin: 0.0,
-        ..SliverConstraints::default()
         };
 
         // 10 items * 50px = 500px (all fit in 600px viewport)
@@ -303,7 +304,7 @@ mod tests {
 
         let constraints = SliverConstraints {
             axis_direction: AxisDirection::TopToBottom,
-            growth_direction: GrowthDirection::Forward,
+            grow_direction_reversed: false,
             scroll_offset: 0.0,
             remaining_paint_extent: 600.0,
             cross_axis_extent: 400.0,
@@ -311,7 +312,6 @@ mod tests {
             viewport_main_axis_extent: 600.0,
             remaining_cache_extent: 1000.0,
             cache_origin: 0.0,
-        ..SliverConstraints::default()
         };
 
         // 20 items * 50px = 1000px (only first 600px visible = 12 items)
@@ -327,7 +327,7 @@ mod tests {
 
         let constraints = SliverConstraints {
             axis_direction: AxisDirection::TopToBottom,
-            growth_direction: GrowthDirection::Forward,
+            grow_direction_reversed: false,
             scroll_offset: 100.0, // Scrolled past 2 items
             remaining_paint_extent: 600.0,
             cross_axis_extent: 400.0,
@@ -335,7 +335,6 @@ mod tests {
             viewport_main_axis_extent: 600.0,
             remaining_cache_extent: 1000.0,
             cache_origin: 0.0,
-        ..SliverConstraints::default()
         };
 
         let (first, last) = list.visible_range(&constraints, 20);
@@ -346,10 +345,12 @@ mod tests {
     #[test]
     fn test_calculate_sliver_geometry_no_prototype() {
         let list = RenderSliverPrototypeExtentList::new();
+        let tree = ElementTree::new();
+        let children = vec![flui_core::element::ElementId::new(1)];
 
         let constraints = SliverConstraints {
             axis_direction: AxisDirection::TopToBottom,
-            growth_direction: GrowthDirection::Forward,
+            grow_direction_reversed: false,
             scroll_offset: 0.0,
             remaining_paint_extent: 600.0,
             cross_axis_extent: 400.0,
@@ -357,10 +358,9 @@ mod tests {
             viewport_main_axis_extent: 600.0,
             remaining_cache_extent: 1000.0,
             cache_origin: 0.0,
-        ..SliverConstraints::default()
         };
 
-        let geometry = list.calculate_sliver_geometry(&constraints, 1);
+        let geometry = list.calculate_sliver_geometry(&constraints, &tree, &children);
 
         assert_eq!(geometry.scroll_extent, 0.0);
         assert_eq!(geometry.paint_extent, 0.0);
@@ -372,9 +372,12 @@ mod tests {
         let mut list = RenderSliverPrototypeExtentList::new();
         list.set_prototype_extent(50.0);
 
+        let tree = ElementTree::new();
+        let children = vec![];
+
         let constraints = SliverConstraints {
             axis_direction: AxisDirection::TopToBottom,
-            growth_direction: GrowthDirection::Forward,
+            grow_direction_reversed: false,
             scroll_offset: 0.0,
             remaining_paint_extent: 600.0,
             cross_axis_extent: 400.0,
@@ -382,10 +385,9 @@ mod tests {
             viewport_main_axis_extent: 600.0,
             remaining_cache_extent: 1000.0,
             cache_origin: 0.0,
-        ..SliverConstraints::default()
         };
 
-        let geometry = list.calculate_sliver_geometry(&constraints, 0);
+        let geometry = list.calculate_sliver_geometry(&constraints, &tree, &children);
 
         assert_eq!(geometry.scroll_extent, 0.0);
         assert_eq!(geometry.paint_extent, 0.0);
@@ -397,9 +399,18 @@ mod tests {
         let mut list = RenderSliverPrototypeExtentList::new();
         list.set_prototype_extent(50.0);
 
+        let tree = ElementTree::new();
+        let children = vec![
+            flui_core::element::ElementId::new(1),
+            flui_core::element::ElementId::new(2),
+            flui_core::element::ElementId::new(3),
+            flui_core::element::ElementId::new(4),
+            flui_core::element::ElementId::new(5),
+        ];
+
         let constraints = SliverConstraints {
             axis_direction: AxisDirection::TopToBottom,
-            growth_direction: GrowthDirection::Forward,
+            grow_direction_reversed: false,
             scroll_offset: 0.0,
             remaining_paint_extent: 600.0,
             cross_axis_extent: 400.0,
@@ -407,10 +418,9 @@ mod tests {
             viewport_main_axis_extent: 600.0,
             remaining_cache_extent: 1000.0,
             cache_origin: 0.0,
-        ..SliverConstraints::default()
         };
 
-        let geometry = list.calculate_sliver_geometry(&constraints, 5);
+        let geometry = list.calculate_sliver_geometry(&constraints, &tree, &children);
 
         // 5 items * 50px = 250px
         assert_eq!(geometry.scroll_extent, 250.0);
@@ -424,9 +434,14 @@ mod tests {
         let mut list = RenderSliverPrototypeExtentList::new();
         list.set_prototype_extent(50.0);
 
+        let tree = ElementTree::new();
+        let children: Vec<_> = (1..=20)
+            .map(|i| flui_core::element::ElementId::new(i))
+            .collect();
+
         let constraints = SliverConstraints {
             axis_direction: AxisDirection::TopToBottom,
-            growth_direction: GrowthDirection::Forward,
+            grow_direction_reversed: false,
             scroll_offset: 0.0,
             remaining_paint_extent: 300.0, // Only 300px visible
             cross_axis_extent: 400.0,
@@ -434,10 +449,9 @@ mod tests {
             viewport_main_axis_extent: 600.0,
             remaining_cache_extent: 1000.0,
             cache_origin: 0.0,
-        ..SliverConstraints::default()
         };
 
-        let geometry = list.calculate_sliver_geometry(&constraints, 20);
+        let geometry = list.calculate_sliver_geometry(&constraints, &tree, &children);
 
         // 20 items * 50px = 1000px total
         assert_eq!(geometry.scroll_extent, 1000.0);
@@ -452,9 +466,14 @@ mod tests {
         let mut list = RenderSliverPrototypeExtentList::new();
         list.set_prototype_extent(50.0);
 
+        let tree = ElementTree::new();
+        let children: Vec<_> = (1..=20)
+            .map(|i| flui_core::element::ElementId::new(i))
+            .collect();
+
         let constraints = SliverConstraints {
             axis_direction: AxisDirection::TopToBottom,
-            growth_direction: GrowthDirection::Forward,
+            grow_direction_reversed: false,
             scroll_offset: 200.0, // Scrolled 200px
             remaining_paint_extent: 300.0,
             cross_axis_extent: 400.0,
@@ -462,15 +481,20 @@ mod tests {
             viewport_main_axis_extent: 600.0,
             remaining_cache_extent: 1000.0,
             cache_origin: 0.0,
-        ..SliverConstraints::default()
         };
 
-        let geometry = list.calculate_sliver_geometry(&constraints, 20);
+        let geometry = list.calculate_sliver_geometry(&constraints, &tree, &children);
 
         // 20 items * 50px = 1000px total
         assert_eq!(geometry.scroll_extent, 1000.0);
         // From 200 to 500 = 300px visible
         assert_eq!(geometry.paint_extent, 300.0);
         assert!(geometry.visible);
+    }
+
+    #[test]
+    fn test_arity_is_variable() {
+        let list = RenderSliverPrototypeExtentList::new();
+        assert_eq!(list.arity(), RuntimeArity::Variable);
     }
 }

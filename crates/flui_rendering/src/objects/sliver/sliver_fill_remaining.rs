@@ -1,6 +1,7 @@
 //! RenderSliverFillRemaining - Fills remaining viewport space
 
-use crate::core::{LayoutContext, LayoutTree, PaintContext, PaintTree, Single, SliverProtocol, SliverRender};
+use flui_core::render::{RuntimeArity, SliverLayoutContext, SliverPaintContext, LegacySliverRender};
+use flui_painting::Canvas;
 use flui_types::prelude::*;
 use flui_types::{SliverConstraints, SliverGeometry};
 
@@ -30,6 +31,9 @@ pub struct RenderSliverFillRemaining {
     pub has_scrolled_body: bool,
     /// Minimum child extent
     pub fill_overscroll: bool,
+
+    // Layout cache
+    sliver_geometry: SliverGeometry,
 }
 
 impl RenderSliverFillRemaining {
@@ -38,6 +42,7 @@ impl RenderSliverFillRemaining {
         Self {
             has_scrolled_body: false,
             fill_overscroll: false,
+            sliver_geometry: SliverGeometry::default(),
         }
     }
 
@@ -55,6 +60,11 @@ impl RenderSliverFillRemaining {
     pub fn with_fill_overscroll(mut self) -> Self {
         self.fill_overscroll = true;
         self
+    }
+
+    /// Get the sliver geometry from last layout
+    pub fn geometry(&self) -> SliverGeometry {
+        self.sliver_geometry
     }
 
     /// Calculate sliver geometry
@@ -112,7 +122,7 @@ impl RenderSliverFillRemaining {
             paint_origin: 0.0,
             layout_extent: paint_extent,
             max_paint_extent: extent,
-            max_scroll_obstruction_extent: 0.0,
+            max_scroll_obsolescence: 0.0,
             visible_fraction: if scroll_extent > 0.0 {
                 (paint_extent / scroll_extent).min(1.0)
             } else {
@@ -134,40 +144,46 @@ impl Default for RenderSliverFillRemaining {
     }
 }
 
-impl SliverRender<Single> for RenderSliverFillRemaining {
-    fn layout<T>(
-        &mut self,
-        mut ctx: LayoutContext<'_, T, Single, SliverProtocol>,
-    ) -> SliverGeometry
-    where
-        T: LayoutTree,
-    {
-        let constraints = ctx.constraints;
-        let child_id = ctx.children.single().into();
+impl LegacySliverRender for RenderSliverFillRemaining {
+    fn layout(&mut self, ctx: &SliverLayoutContext) -> SliverGeometry {
+        let constraints = &ctx.constraints;
 
         // Layout child with box constraints based on remaining viewport space
-        let remaining_extent = constraints.remaining_paint_extent;
-        let box_constraints = BoxConstraints::new(
-            0.0,
-            constraints.cross_axis_extent,
-            0.0,
-            remaining_extent,
-        );
-        // Protocol bridge: layout BOX child from SLIVER context using direct tree access
-        let child_size = ctx.tree_mut()
-            .layout_child(child_id, box_constraints)
-            .expect("Failed to layout box child in sliver fill remaining");
+        let child_size = if let Some(child_id) = ctx.children.try_single() {
+            let remaining_extent = constraints.remaining_paint_extent;
+            let box_constraints = BoxConstraints::new(
+                0.0,
+                constraints.cross_axis_extent,
+                0.0,
+                remaining_extent,
+            );
+            ctx.tree.layout_child(child_id, box_constraints)
+        } else {
+            Size::ZERO
+        };
 
-        // Calculate sliver geometry
-        self.calculate_sliver_geometry(&constraints, child_size)
+        // Calculate and cache sliver geometry
+        self.sliver_geometry = self.calculate_sliver_geometry(constraints, child_size);
+        self.sliver_geometry
     }
 
-    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Single>)
-    where
-        T: PaintTree,
-    {
-        // Paint child
-        ctx.paint_child(ctx.children.single(), Offset::ZERO);
+    fn paint(&self, ctx: &SliverPaintContext) -> Canvas {
+        // Paint child if present and visible
+        if let Some(child_id) = ctx.children.try_single() {
+            if self.sliver_geometry.visible {
+                return ctx.tree.paint_child(child_id, ctx.offset);
+            }
+        }
+
+        Canvas::new()
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn arity(&self) -> RuntimeArity {
+        RuntimeArity::Exact(1) // Single child
     }
 }
 
@@ -175,7 +191,6 @@ impl SliverRender<Single> for RenderSliverFillRemaining {
 mod tests {
     use super::*;
     use flui_types::layout::AxisDirection;
-    use flui_types::constraints::{GrowthDirection, ScrollDirection};
 
     #[test]
     fn test_render_sliver_fill_remaining_new() {
@@ -222,18 +237,14 @@ mod tests {
 
         let constraints = SliverConstraints {
             axis_direction: AxisDirection::TopToBottom,
-            growth_direction: GrowthDirection::Forward,
-            user_scroll_direction: ScrollDirection::Idle,
+            grow_direction_reversed: false,
             scroll_offset: 0.0,
-            preceding_scroll_extent: 0.0,
-            overlap: 0.0,
             remaining_paint_extent: 600.0,
             cross_axis_extent: 400.0,
             cross_axis_direction: AxisDirection::LeftToRight,
             viewport_main_axis_extent: 600.0,
             remaining_cache_extent: 1000.0,
             cache_origin: 0.0,
-        ..SliverConstraints::default()
         };
 
         let child_size = Size::new(400.0, 200.0);
@@ -253,7 +264,7 @@ mod tests {
 
         let constraints = SliverConstraints {
             axis_direction: AxisDirection::TopToBottom,
-            growth_direction: GrowthDirection::Forward,
+            grow_direction_reversed: false,
             scroll_offset: 0.0,
             remaining_paint_extent: 200.0, // Only 200px left
             cross_axis_extent: 400.0,
@@ -261,7 +272,6 @@ mod tests {
             viewport_main_axis_extent: 600.0,
             remaining_cache_extent: 1000.0,
             cache_origin: 0.0,
-        ..SliverConstraints::default()
         };
 
         let child_size = Size::new(400.0, 100.0);
@@ -278,7 +288,7 @@ mod tests {
 
         let constraints = SliverConstraints {
             axis_direction: AxisDirection::TopToBottom,
-            growth_direction: GrowthDirection::Forward,
+            grow_direction_reversed: false,
             scroll_offset: 0.0,
             remaining_paint_extent: 200.0,
             cross_axis_extent: 400.0,
@@ -286,7 +296,6 @@ mod tests {
             viewport_main_axis_extent: 600.0,
             remaining_cache_extent: 1000.0,
             cache_origin: 0.0,
-        ..SliverConstraints::default()
         };
 
         let child_size = Size::new(400.0, 300.0); // Child is bigger
@@ -303,18 +312,14 @@ mod tests {
 
         let constraints = SliverConstraints {
             axis_direction: AxisDirection::TopToBottom,
-            growth_direction: GrowthDirection::Forward,
-            user_scroll_direction: ScrollDirection::Idle,
+            grow_direction_reversed: false,
             scroll_offset: 0.0,
-            preceding_scroll_extent: 0.0,
-            overlap: 0.0,
             remaining_paint_extent: 600.0,
             cross_axis_extent: 400.0,
             cross_axis_direction: AxisDirection::LeftToRight,
             viewport_main_axis_extent: 600.0,
             remaining_cache_extent: 1000.0,
             cache_origin: 0.0,
-        ..SliverConstraints::default()
         };
 
         let child_size = Size::new(400.0, 200.0);
@@ -331,7 +336,7 @@ mod tests {
 
         let constraints = SliverConstraints {
             axis_direction: AxisDirection::TopToBottom,
-            growth_direction: GrowthDirection::Forward,
+            grow_direction_reversed: false,
             scroll_offset: 500.0, // Scrolled past child
             remaining_paint_extent: 600.0,
             cross_axis_extent: 400.0,
@@ -339,7 +344,6 @@ mod tests {
             viewport_main_axis_extent: 600.0,
             remaining_cache_extent: 1000.0,
             cache_origin: 0.0,
-        ..SliverConstraints::default()
         };
 
         let child_size = Size::new(400.0, 200.0);
@@ -357,7 +361,7 @@ mod tests {
 
         let constraints = SliverConstraints {
             axis_direction: AxisDirection::TopToBottom,
-            growth_direction: GrowthDirection::Forward,
+            grow_direction_reversed: false,
             scroll_offset: 100.0, // Partially scrolled
             remaining_paint_extent: 300.0,
             cross_axis_extent: 400.0,
@@ -365,7 +369,6 @@ mod tests {
             viewport_main_axis_extent: 600.0,
             remaining_cache_extent: 1000.0,
             cache_origin: 0.0,
-        ..SliverConstraints::default()
         };
 
         let child_size = Size::new(400.0, 500.0);
@@ -377,4 +380,9 @@ mod tests {
         assert!(geometry.visible);
     }
 
+    #[test]
+    fn test_arity_is_single_child() {
+        let fill = RenderSliverFillRemaining::new();
+        assert_eq!(fill.arity(), RuntimeArity::Exact(1));
+    }
 }

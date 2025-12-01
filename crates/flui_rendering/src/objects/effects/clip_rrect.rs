@@ -2,9 +2,9 @@
 
 use flui_painting::Canvas;
 use flui_types::{
-    geometry::{Point, RRect},
+    geometry::RRect,
     painting::Clip,
-    styling::BorderRadius,
+    styling::{BorderRadius, Radius},
     Offset, Rect, Size,
 };
 
@@ -33,30 +33,78 @@ impl ClipShape for RRectShape {
     fn apply_clip(&self, canvas: &mut Canvas, size: Size) {
         let rect = Rect::from_xywh(0.0, 0.0, size.width, size.height);
 
-        // Use per-corner radii from BorderRadius
-        let rrect = RRect::from_rect_and_corners(
-            rect,
-            self.border_radius.top_left,
-            self.border_radius.top_right,
-            self.border_radius.bottom_right,
-            self.border_radius.bottom_left,
-        );
+        // Calculate average radius from all corners
+        // TODO: Support per-corner radii when RRect supports it
+        let avg_radius = (self.border_radius.top_left.x
+            + self.border_radius.top_right.x
+            + self.border_radius.bottom_right.x
+            + self.border_radius.bottom_left.x)
+            / 4.0;
+
+        let radius = Radius::circular(avg_radius);
+        let rrect = RRect::from_rect_and_radius(rect, radius);
 
         canvas.clip_rrect(rrect);
     }
 
     fn contains_point(&self, position: Offset, size: Size) -> bool {
-        // Use RRect's contains method for proper per-corner hit testing
-        let rect = Rect::from_xywh(0.0, 0.0, size.width, size.height);
-        let rrect = RRect::from_rect_and_corners(
-            rect,
-            self.border_radius.top_left,
-            self.border_radius.top_right,
-            self.border_radius.bottom_right,
-            self.border_radius.bottom_left,
-        );
+        // For rounded rectangle hit testing, we need to check:
+        // 1. If point is in the main rectangular area (excluding corners)
+        // 2. If point is in one of the corner circles
+        //
+        // Using average radius for simplicity (matching apply_clip behavior)
 
-        rrect.contains(Point::new(position.dx, position.dy))
+        let x = position.dx;
+        let y = position.dy;
+
+        // Quick bounds check
+        if x < 0.0 || y < 0.0 || x > size.width || y > size.height {
+            return false;
+        }
+
+        // Calculate average radius (matching apply_clip)
+        let radius = (self.border_radius.top_left.x
+            + self.border_radius.top_right.x
+            + self.border_radius.bottom_right.x
+            + self.border_radius.bottom_left.x)
+            / 4.0;
+
+        // If radius is 0, it's a regular rectangle
+        if radius < f32::EPSILON {
+            return true; // Already passed bounds check
+        }
+
+        // Check which region the point is in:
+        // - Top-left corner region
+        if x < radius && y < radius {
+            let dx = x - radius;
+            let dy = y - radius;
+            return dx * dx + dy * dy <= radius * radius;
+        }
+
+        // - Top-right corner region
+        if x > size.width - radius && y < radius {
+            let dx = x - (size.width - radius);
+            let dy = y - radius;
+            return dx * dx + dy * dy <= radius * radius;
+        }
+
+        // - Bottom-left corner region
+        if x < radius && y > size.height - radius {
+            let dx = x - radius;
+            let dy = y - (size.height - radius);
+            return dx * dx + dy * dy <= radius * radius;
+        }
+
+        // - Bottom-right corner region
+        if x > size.width - radius && y > size.height - radius {
+            let dx = x - (size.width - radius);
+            let dy = y - (size.height - radius);
+            return dx * dx + dy * dy <= radius * radius;
+        }
+
+        // Point is in the main rectangular area (not in corners)
+        true
     }
 }
 

@@ -1,9 +1,7 @@
 //! RenderSliverPadding - Adds padding around sliver content
 
-use crate::core::{
-    FullRenderTree,
-    LayoutContext, LayoutTree, PaintContext, PaintTree, Single, SliverProtocol, SliverRender,
-};
+use flui_core::render::{RuntimeArity, LegacySliverRender, SliverLayoutContext, SliverPaintContext};
+use flui_painting::Canvas;
 use flui_types::prelude::*;
 use flui_types::{SliverConstraints, SliverGeometry};
 
@@ -26,12 +24,18 @@ use flui_types::{SliverConstraints, SliverGeometry};
 pub struct RenderSliverPadding {
     /// Padding to apply
     pub padding: EdgeInsets,
+
+    // Layout cache
+    sliver_geometry: SliverGeometry,
 }
 
 impl RenderSliverPadding {
     /// Create new sliver padding
     pub fn new(padding: EdgeInsets) -> Self {
-        Self { padding }
+        Self {
+            padding,
+            sliver_geometry: SliverGeometry::default(),
+        }
     }
 
     /// Create with all sides equal
@@ -54,6 +58,11 @@ impl RenderSliverPadding {
         self.padding = padding;
     }
 
+    /// Get the sliver geometry from last layout
+    pub fn geometry(&self) -> SliverGeometry {
+        self.sliver_geometry
+    }
+
     /// Calculate adjusted sliver constraints for child
     fn child_constraints(&self, constraints: &SliverConstraints) -> SliverConstraints {
         // Adjust constraints to account for padding
@@ -69,11 +78,8 @@ impl RenderSliverPadding {
 
         SliverConstraints {
             axis_direction: constraints.axis_direction,
-            growth_direction: constraints.growth_direction,
-            user_scroll_direction: constraints.user_scroll_direction,
+            grow_direction_reversed: constraints.grow_direction_reversed,
             scroll_offset: (constraints.scroll_offset - main_axis_padding).max(0.0),
-            preceding_scroll_extent: constraints.preceding_scroll_extent,
-            overlap: constraints.overlap,
             remaining_paint_extent: (constraints.remaining_paint_extent - main_axis_padding)
                 .max(0.0),
             cross_axis_extent: (constraints.cross_axis_extent - cross_axis_padding).max(0.0),
@@ -95,9 +101,10 @@ impl RenderSliverPadding {
             paint_origin: child_geometry.paint_origin,
             layout_extent: child_geometry.layout_extent + main_axis_padding,
             max_paint_extent: child_geometry.max_paint_extent + main_axis_padding,
-            max_scroll_obstruction_extent: child_geometry.max_scroll_obstruction_extent,
+            max_scroll_obsolescence: child_geometry.max_scroll_obsolescence,
             visible_fraction: child_geometry.visible_fraction,
-            cross_axis_extent: child_geometry.cross_axis_extent + self.padding.horizontal_total(),
+            cross_axis_extent: child_geometry.cross_axis_extent
+                + self.padding.horizontal_total(),
             cache_extent: child_geometry.cache_extent + main_axis_padding,
             visible: child_geometry.visible,
             has_visual_overflow: child_geometry.has_visual_overflow,
@@ -109,30 +116,41 @@ impl RenderSliverPadding {
     }
 }
 
-impl SliverRender<Single> for RenderSliverPadding {
-    fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Single, SliverProtocol>) -> SliverGeometry
-    where
-        T: LayoutTree,
-    {
-        let constraints = ctx.constraints;
+impl LegacySliverRender for RenderSliverPadding {
+    fn layout(&mut self, ctx: &SliverLayoutContext) -> SliverGeometry {
+        let child_id = ctx.children.single();
 
         // Adjust constraints for padding
-        let child_constraints = self.child_constraints(&constraints);
+        let child_constraints = self.child_constraints(&ctx.constraints);
 
         // Layout child
-        let child_geometry = ctx.layout_child(ctx.children.single(), child_constraints);
+        let child_geometry = ctx.layout_child(child_id, child_constraints);
 
         // Add padding to geometry
-        self.child_to_parent_geometry(child_geometry)
+        let geometry = self.child_to_parent_geometry(child_geometry);
+
+        // Cache geometry
+        self.sliver_geometry = geometry;
+
+        geometry
     }
 
-    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Single>)
-    where
-        T: PaintTree,
-    {
+    fn paint(&self, ctx: &SliverPaintContext) -> Canvas {
+        let child_id = ctx.children.single();
+
         // Paint child with padding offset
         let padding_offset = Offset::new(self.padding.left, self.padding.top);
-        ctx.paint_child(ctx.children.single(), padding_offset);
+        let child_offset = ctx.offset + padding_offset;
+
+        ctx.paint_child(child_id, child_offset)
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn arity(&self) -> RuntimeArity {
+        RuntimeArity::Exact(1) // Single child sliver
     }
 }
 
@@ -140,7 +158,6 @@ impl SliverRender<Single> for RenderSliverPadding {
 mod tests {
     use super::*;
     use flui_types::layout::AxisDirection;
-    use flui_types::constraints::{GrowthDirection, ScrollDirection};
 
     #[test]
     fn test_render_sliver_padding_new() {
@@ -167,7 +184,10 @@ mod tests {
     fn test_render_sliver_padding_only() {
         let padding = RenderSliverPadding::only(5.0, 10.0, 15.0, 20.0);
 
-        assert_eq!(padding.padding, EdgeInsets::new(5.0, 10.0, 15.0, 20.0));
+        assert_eq!(
+            padding.padding,
+            EdgeInsets::new(5.0, 10.0, 15.0, 20.0)
+        );
     }
 
     #[test]
@@ -184,18 +204,14 @@ mod tests {
 
         let parent_constraints = SliverConstraints {
             axis_direction: AxisDirection::TopToBottom,
-            growth_direction: GrowthDirection::Forward,
-            user_scroll_direction: ScrollDirection::Idle,
+            grow_direction_reversed: false,
             scroll_offset: 100.0,
-            preceding_scroll_extent: 0.0,
-            overlap: 0.0,
             remaining_paint_extent: 600.0,
             cross_axis_extent: 400.0,
             cross_axis_direction: AxisDirection::LeftToRight,
             viewport_main_axis_extent: 600.0,
             remaining_cache_extent: 1000.0,
             cache_origin: 0.0,
-        ..SliverConstraints::default()
         };
 
         let child_constraints = padding.child_constraints(&parent_constraints);
@@ -215,18 +231,14 @@ mod tests {
 
         let parent_constraints = SliverConstraints {
             axis_direction: AxisDirection::TopToBottom,
-            growth_direction: GrowthDirection::Forward,
-            user_scroll_direction: ScrollDirection::Idle,
+            grow_direction_reversed: false,
             scroll_offset: 50.0,
-            preceding_scroll_extent: 0.0,
-            overlap: 0.0,
             remaining_paint_extent: 100.0,
             cross_axis_extent: 100.0,
             cross_axis_direction: AxisDirection::LeftToRight,
             viewport_main_axis_extent: 600.0,
             remaining_cache_extent: 200.0,
             cache_origin: 0.0,
-        ..SliverConstraints::default()
         };
 
         let child_constraints = padding.child_constraints(&parent_constraints);
@@ -248,7 +260,7 @@ mod tests {
             paint_origin: 0.0,
             layout_extent: 300.0,
             max_paint_extent: 500.0,
-            max_scroll_obstruction_extent: 0.0,
+            max_scroll_obsolescence: 0.0,
             visible_fraction: 0.6,
             cross_axis_extent: 360.0,
             cache_extent: 300.0,
@@ -290,5 +302,11 @@ mod tests {
         // Even with zero child, padding adds extent
         assert_eq!(parent_geometry.scroll_extent, 20.0); // 0 + 20 (top+bottom)
         assert_eq!(parent_geometry.paint_extent, 20.0);
+    }
+
+    #[test]
+    fn test_arity_is_single_child() {
+        let padding = RenderSliverPadding::all(10.0);
+        assert_eq!(padding.arity(), RuntimeArity::Exact(1));
     }
 }

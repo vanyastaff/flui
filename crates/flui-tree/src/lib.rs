@@ -179,31 +179,80 @@ pub mod visitor;
 
 // Core traits with advanced type features
 pub use traits::{
+    // Tree diffing
+    find_common_subtrees,
+    // Tree validation
+    find_orphans,
+    has_cycles,
     // Pipeline traits with HRTB support
     hit_test_with_callback,
     layout_with_callback,
     paint_with_callback,
+    tree_edit_distance,
+    validate_tree,
+    // TreeContext traits
+    AncestorLookup,
+    // Tree views
+    AncestorView,
     AtomicDirtyFlags,
+    // Reconciliation traits
+    CanUpdate,
+    ChangeTracker,
+    // InheritedElement support
+    Dependencies,
+    DependencyTracker,
+    DepthLimitedView,
+    // Element lifecycle traits
+    DepthTracking,
+    DiffOptions,
+    DiffSummary,
     DirtyTracking,
     DirtyTrackingExt,
+    ElementTreeOps,
+    FilteredView,
     // Combined traits with GAT
     FullTreeAccess,
+    GlobalKeyRegistry,
     HitTestVisitable,
     HitTestVisitableExt,
+    IdMatcher,
+    InheritedData,
+    InheritedElement,
+    InheritedLookup,
+    InheritedRegistry,
+    InheritedScope,
+    InheritedState,
+    InsertAction,
     LayoutVisitable,
     LayoutVisitableExt,
+    Lifecycle,
+    LinearReconciler,
+    MoveAction,
     // Multi alias for Variable (backwards compatibility)
     Multi,
+    NodeMatcher,
+    NotificationPolicy,
+    OwnerTracking,
     PaintVisitable,
     PaintVisitableExt,
     PipelinePhaseCoordinator,
+    PredicateMatcher,
+    RebuildPriority,
+    RebuildScheduler,
+    Reconciler,
+    ReconciliationResult,
     // Render child accessor (Type State pattern using unified Arity)
     RenderChildAccessor,
     // Render access with GAT
     RenderTreeAccess,
     RenderTreeAccessExt,
     RenderTreeExt,
+    SiblingView,
     SimpleTreeVisitor as PipelineSimpleVisitor,
+    SnapshotDiff,
+    SubtreeView,
+    TreeDiff,
+    TreeDiffResult,
     TreeMut,
     TreeNav,
     TreeNavDyn,
@@ -212,10 +261,21 @@ pub use traits::{
     TreeRead,
     // Object-safe variants
     TreeReadDyn,
+    TreeSnapshot,
+    TreeValidator,
+    TreeViewExt,
     TreeVisitor as PipelineTreeVisitor,
     TreeWrite,
     TreeWriteNav,
+    UpdateAction,
+    ValidationIssue,
+    ValidationIssues,
+    ValidationOptions,
+    ValidationReport,
 };
+
+// Sealed trait markers for external implementations
+pub use traits::sealed;
 
 // Enhanced Arity system with advanced type features
 pub use arity::{
@@ -289,6 +349,9 @@ pub use iter::{
 pub use visitor::{
     // Convenience functions with HRTB
     collect_all,
+    // Statistics visitors
+    collect_statistics,
+    compare_statistics,
     count_all,
     count_with_limit,
     find_first, // Enhanced with HRTB
@@ -297,24 +360,51 @@ pub use visitor::{
     max_depth_with_threshold,
     // Visitor states for typestate pattern
     states,
+    tree_summary,
+    // Fallible visitors
+    try_collect,
+    try_for_each,
+    validate_depth,
     // Enhanced traversal functions with const generics
     visit_breadth_first,
     visit_depth_first,
     visit_depth_first_typed, // New: GAT-based typed visitor
-    visit_stateful,          // New: Typestate pattern visitor
+    visit_fallible,
+    visit_fallible_breadth_first,
+    visit_fallible_with_path,
+    visit_stateful, // New: Typestate pattern visitor
     // Enhanced built-in visitors
-    CollectVisitor,  // Now with const generics
-    CountVisitor,    // Enhanced with limits
-    FindVisitor,     // Now with HRTB support
-    ForEachVisitor,  // Enhanced with HRTB
-    IterationHint,   // New: Performance optimization hints
+    CollectVisitor, // Now with const generics
+    // Visitor composition
+    ComposedVisitor,
+    ConditionalVisitor,
+    CountVisitor, // Enhanced with limits
+    DepthLimitExceeded,
+    DepthLimitVisitor,
+    DynVisitor,
+    FallibleVisitor,
+    FallibleVisitorMut,
+    FindVisitor,    // Now with HRTB support
+    ForEachVisitor, // Enhanced with HRTB
+    IterationHint,  // New: Performance optimization hints
+    MappedVisitor,
     MaxDepthVisitor, // Enhanced with early termination
     StatefulVisitor, // New: Typestate pattern
+    StatisticsComparison,
+    StatisticsVisitor,
+    StatisticsVisitorMut,
+    TreeStatistics,
     // Visitor traits with advanced features
     TreeVisitor,
     TreeVisitorMut,
+    TripleComposedVisitor,
+    TryCollectVisitor,
+    TryForEachVisitor,
     TypedVisitor, // New: GAT-based visitor
+    VisitorError,
+    VisitorExt,
     VisitorResult,
+    VisitorVec,
 };
 
 // Errors

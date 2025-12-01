@@ -65,7 +65,7 @@ impl<T: TreeNav> Iterator for BreadthFirstIter<'_, T> {
         }
 
         // Add children to back of queue
-        for &child in self.tree.children(current) {
+        for child in self.tree.children(current) {
             self.queue.push_back(child);
         }
 
@@ -115,7 +115,7 @@ impl<T: TreeNav> Iterator for BreadthFirstIterWithDepth<'_, T> {
             return self.next();
         }
 
-        for &child in self.tree.children(current) {
+        for child in self.tree.children(current) {
             self.queue.push_back((child, depth + 1));
         }
 

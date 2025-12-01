@@ -2,20 +2,6 @@
 //!
 //! GestureBinding converts platform events (from winit) to FLUI events
 //! and routes them through the EventRouter to the appropriate handlers.
-//!
-//! # Hit Testing Approaches
-//!
-//! FLUI supports two hit testing approaches:
-//!
-//! 1. **Layer-based** (current default): Hit testing via `CanvasLayer` which uses
-//!    `HitRegion`s registered during the paint phase. Handlers are stored directly
-//!    in the HitRegion and called when hit.
-//!
-//! 2. **Element tree-based** (future): Hit testing via `PipelineOwner::perform_hit_test()`
-//!    which traverses the element tree. This approach enables better support for
-//!    gesture arenas, custom hit test behaviors, and complex gesture recognizers.
-//!
-//! The layer-based approach is currently used for simplicity and correctness.
 
 use super::BindingBase;
 use flui_interaction::EventRouter;

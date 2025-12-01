@@ -1,11 +1,8 @@
 //! RenderListBody - simple scrollable list layout
-//!
-//! Displays children sequentially along a given axis, forcing them to the
-//! dimensions of the parent in the other axis.
-//!
-//! Flutter reference: <https://api.flutter.dev/flutter/rendering/RenderListBody-class.html>
 
-use crate::core::{BoxProtocol, ChildrenAccess, LayoutContext, PaintContext, FullRenderTree, RenderBox, Variable};
+use flui_core::render::{
+    BoxProtocol, ChildrenAccess, LayoutContext, PaintContext, RenderBox, Variable,
+};
 use flui_types::constraints::BoxConstraints;
 use flui_types::{Axis, Offset, Size};
 
@@ -78,11 +75,8 @@ impl Default for RenderListBody {
     }
 }
 
-impl<T: FullRenderTree> RenderBox<T, Variable> for RenderListBody {
-    fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Variable, BoxProtocol>) -> Size
-    where
-        T: crate::core::LayoutTree,
-    {
+impl RenderBox<Variable> for RenderListBody {
+    fn layout(&mut self, ctx: LayoutContext<'_, Variable, BoxProtocol>) -> Size {
         let constraints = ctx.constraints;
         let children = ctx.children;
 
@@ -152,10 +146,7 @@ impl<T: FullRenderTree> RenderBox<T, Variable> for RenderListBody {
         }
     }
 
-    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Variable>)
-    where
-        T: crate::core::PaintTree,
-    {
+    fn paint(&self, ctx: &mut PaintContext<'_, Variable>) {
         let offset = ctx.offset;
 
         // Collect child IDs first to avoid borrow checker issues

@@ -2,11 +2,9 @@
 //!
 //! This is a Leaf RenderObject that renders multi-line text with styling,
 //! line breaks, and text wrapping.
-//!
-//! Flutter reference: <https://api.flutter.dev/flutter/rendering/RenderParagraph-class.html>
 
-use crate::core::{BoxProtocol, LayoutContext, PaintContext};
-use crate::core::{Leaf, RenderBox};
+use flui_core::render::{BoxProtocol, LayoutContext, PaintContext};
+use flui_core::render::{Leaf, RenderBox};
 use flui_painting::Paint;
 use flui_types::{
     styling::Color,
@@ -180,11 +178,8 @@ impl RenderParagraph {
 
 // ===== RenderObject Implementation =====
 
-impl<T: FullRenderTree> RenderBox<T, Leaf> for RenderParagraph {
-    fn layout<T>(&mut self, ctx: LayoutContext<'_, T, Leaf, BoxProtocol>) -> Size
-    where
-        T: crate::core::LayoutTree,
-    {
+impl RenderBox<Leaf> for RenderParagraph {
+    fn layout(&mut self, ctx: LayoutContext<'_, Leaf, BoxProtocol>) -> Size {
         let constraints = ctx.constraints;
         tracing::trace!(
             text = %self.data.text,
@@ -251,12 +246,12 @@ impl<T: FullRenderTree> RenderBox<T, Leaf> for RenderParagraph {
         size
     }
 
-    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Leaf>)
-    where
-        T: crate::core::PaintTree,
-    {
+    fn paint(&self, ctx: &mut PaintContext<'_, Leaf>) {
         // Draw text using Canvas API
-        let paint = Paint::fill(self.data.color);
+        let paint = Paint {
+            color: self.data.color,
+            ..Default::default()
+        };
 
         // Get the offset from context - this is where we should draw
         let offset = ctx.offset;
@@ -311,7 +306,7 @@ impl<T: FullRenderTree> RenderBox<T, Leaf> for RenderParagraph {
 
         // Draw the text
         ctx.canvas()
-            .text(&self.data.text, position, &text_style, &paint);
+            .draw_text(&self.data.text, position, &text_style, &paint);
     }
 }
 

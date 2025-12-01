@@ -327,7 +327,7 @@ pub trait Arity: sealed::Sealed + Send + Sync + Debug + Copy + Default + 'static
     /// Try to convert slice to typed accessor.
     ///
     /// Returns `None` if the count doesn't match the arity.
-    fn try_from_slice<T>(children: &[T]) -> Option<Self::Accessor<'_, T>> {
+    fn try_from_slice<T: Send + Sync>(children: &[T]) -> Option<Self::Accessor<'_, T>> {
         if Self::validate_count(children.len()) {
             Some(Self::from_slice(children))
         } else {
@@ -400,7 +400,7 @@ mod sealed {
 pub struct Range<const MIN: usize, const MAX: usize>;
 
 impl<const MIN: usize, const MAX: usize> Arity for Range<MIN, MAX> {
-    type Accessor<'a, T: 'a> = SliceChildren<'a, T>;
+    type Accessor<'a, T: 'a + Send + Sync> = SliceChildren<'a, T>;
     type Iterator<'a, T: 'a>
         = std::slice::Iter<'a, T>
     where
@@ -478,7 +478,7 @@ impl Default for Never {
 }
 
 impl Arity for Never {
-    type Accessor<'a, T: 'a> = NeverAccessor<T>;
+    type Accessor<'a, T: 'a + Send + Sync> = NeverAccessor<T>;
     type Iterator<'a, T: 'a>
         = std::iter::Empty<&'a T>
     where
@@ -543,7 +543,7 @@ impl Arity for Never {
 pub struct Leaf;
 
 impl Arity for Leaf {
-    type Accessor<'a, T: 'a> = NoChildren<T>;
+    type Accessor<'a, T: 'a + Send + Sync> = NoChildren<T>;
     type Iterator<'a, T: 'a>
         = std::iter::Empty<&'a T>
     where
@@ -617,7 +617,11 @@ impl Leaf {
 pub struct Optional;
 
 impl Arity for Optional {
-    type Accessor<'a, T: 'a> = OptionalChild<'a, T>;
+    type Accessor<'a, T: 'a + Send + Sync> = OptionalChild<'a, T>;
+    type Iterator<'a, T: 'a>
+        = std::slice::Iter<'a, T>
+    where
+        T: 'a;
 
     #[inline]
     fn runtime_arity() -> RuntimeArity {
@@ -637,6 +641,15 @@ impl Arity for Optional {
             children.len()
         );
         OptionalChild { children }
+    }
+
+    #[inline(always)]
+    fn iter_slice<'a, T>(children: &'a [T]) -> Self::Iterator<'a, T>
+    where
+        T: 'a,
+    {
+        debug_assert!(children.len() <= 1);
+        children.iter()
     }
 }
 
@@ -661,7 +674,11 @@ impl Arity for Optional {
 pub struct Exact<const N: usize>;
 
 impl<const N: usize> Arity for Exact<N> {
-    type Accessor<'a, T: 'a> = FixedChildren<'a, T, N>;
+    type Accessor<'a, T: 'a + Send + Sync> = FixedChildren<'a, T, N>;
+    type Iterator<'a, T: 'a>
+        = std::slice::Iter<'a, T>
+    where
+        T: 'a;
 
     #[inline]
     fn runtime_arity() -> RuntimeArity {
@@ -688,6 +705,15 @@ impl<const N: usize> Arity for Exact<N> {
         FixedChildren {
             children: array_ref,
         }
+    }
+
+    #[inline(always)]
+    fn iter_slice<'a, T>(children: &'a [T]) -> Self::Iterator<'a, T>
+    where
+        T: 'a,
+    {
+        debug_assert!(children.len() == N);
+        children.iter()
     }
 }
 
@@ -725,7 +751,11 @@ pub type Single = Exact<1>;
 pub struct AtLeast<const N: usize>;
 
 impl<const N: usize> Arity for AtLeast<N> {
-    type Accessor<'a, T: 'a> = SliceChildren<'a, T>;
+    type Accessor<'a, T: 'a + Send + Sync> = SliceChildren<'a, T>;
+    type Iterator<'a, T: 'a>
+        = std::slice::Iter<'a, T>
+    where
+        T: 'a;
 
     #[inline]
     fn runtime_arity() -> RuntimeArity {
@@ -747,6 +777,15 @@ impl<const N: usize> Arity for AtLeast<N> {
             children.len()
         );
         SliceChildren { children }
+    }
+
+    #[inline(always)]
+    fn iter_slice<'a, T>(children: &'a [T]) -> Self::Iterator<'a, T>
+    where
+        T: 'a,
+    {
+        debug_assert!(children.len() >= N);
+        children.iter()
     }
 }
 
@@ -772,7 +811,11 @@ impl<const N: usize> Arity for AtLeast<N> {
 pub struct Variable;
 
 impl Arity for Variable {
-    type Accessor<'a, T: 'a> = SliceChildren<'a, T>;
+    type Accessor<'a, T: 'a + Send + Sync> = SliceChildren<'a, T>;
+    type Iterator<'a, T: 'a>
+        = std::slice::Iter<'a, T>
+    where
+        T: 'a;
 
     #[inline]
     fn runtime_arity() -> RuntimeArity {
@@ -787,6 +830,14 @@ impl Arity for Variable {
     #[inline(always)]
     fn from_slice<T: Send + Sync>(children: &[T]) -> Self::Accessor<'_, T> {
         SliceChildren { children }
+    }
+
+    #[inline(always)]
+    fn iter_slice<'a, T>(children: &'a [T]) -> Self::Iterator<'a, T>
+    where
+        T: 'a,
+    {
+        children.iter()
     }
 }
 

@@ -1,10 +1,7 @@
 //! RenderPositionedBox - positions child with explicit coordinates
-//!
-//! Flutter reference: <https://api.flutter.dev/flutter/rendering/RenderPositionedBox-class.html>
 
-use crate::core::{
-    FullRenderTree,
-    FullRenderTree, RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
+use flui_core::render::{
+    RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
 };
 use flui_types::{Offset, Size};
 
@@ -88,11 +85,8 @@ impl Default for RenderPositionedBox {
     }
 }
 
-impl<T: FullRenderTree> RenderBox<T, Single> for RenderPositionedBox {
-    fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Single, BoxProtocol>) -> Size
-    where
-        T: crate::core::LayoutTree,
-    {
+impl RenderBox<Single> for RenderPositionedBox {
+    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
         let child_id = ctx.children.single();
         let constraints = ctx.constraints;
 
@@ -125,10 +119,7 @@ impl<T: FullRenderTree> RenderBox<T, Single> for RenderPositionedBox {
         ctx.layout_child(child_id, child_constraints)
     }
 
-    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Single>)
-    where
-        T: crate::core::PaintTree,
-    {
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         let child_id = ctx.children.single();
 
         // Calculate paint offset based on positioning

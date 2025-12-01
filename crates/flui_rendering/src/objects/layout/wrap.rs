@@ -1,9 +1,8 @@
 //! RenderWrap - arranges children with wrapping (like flexbox wrap)
-//!
-//! Flutter equivalent: `RenderWrap`
-//! Source: https://api.flutter.dev/flutter/rendering/RenderWrap-class.html
 
-use crate::core::{BoxProtocol, ChildrenAccess, LayoutContext, PaintContext, FullRenderTree, RenderBox, Variable};
+use flui_core::render::{
+    BoxProtocol, ChildrenAccess, LayoutContext, PaintContext, RenderBox, Variable,
+};
 use flui_types::constraints::BoxConstraints;
 use flui_types::{Axis, Offset, Size};
 
@@ -39,13 +38,6 @@ pub enum WrapCrossAlignment {
 ///
 /// Like Flex (Row/Column), but wraps to the next line when reaching
 /// the edge of the container.
-///
-/// # Layout Algorithm (Flutter-compatible)
-///
-/// 1. Layout each child with unbounded main axis constraints
-/// 2. Place children adjacent in main axis direction with `spacing`
-/// 3. When no space remains, create new run with `run_spacing` between
-/// 4. Apply alignment within runs and between runs
 ///
 /// # Example
 ///
@@ -124,11 +116,8 @@ impl Default for RenderWrap {
     }
 }
 
-impl<T: FullRenderTree> RenderBox<T, Variable> for RenderWrap {
-    fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Variable, BoxProtocol>) -> Size
-    where
-        T: crate::core::LayoutTree,
-    {
+impl RenderBox<Variable> for RenderWrap {
+    fn layout(&mut self, ctx: LayoutContext<'_, Variable, BoxProtocol>) -> Size {
         let constraints = ctx.constraints;
         let children = ctx.children;
 
@@ -149,11 +138,10 @@ impl<T: FullRenderTree> RenderBox<T, Variable> for RenderWrap {
                 let mut total_width = 0.0_f32;
 
                 for child_id in children.iter() {
-                    // Flutter-compatible: children get UNBOUNDED main axis
-                    // This allows them to take their natural size
+                    // Child gets unconstrained width, constrained height
                     let child_constraints = BoxConstraints::new(
                         0.0,
-                        f32::INFINITY, // Unbounded width - child sizes naturally
+                        max_width - current_x,
                         0.0,
                         constraints.max_height,
                     );
@@ -188,13 +176,12 @@ impl<T: FullRenderTree> RenderBox<T, Variable> for RenderWrap {
                 let mut total_height = 0.0_f32;
 
                 for child_id in children.iter() {
-                    // Flutter-compatible: children get UNBOUNDED main axis
-                    // This allows them to take their natural size
+                    // Child gets constrained width, unconstrained height
                     let child_constraints = BoxConstraints::new(
                         0.0,
                         constraints.max_width,
                         0.0,
-                        f32::INFINITY, // Unbounded height - child sizes naturally
+                        max_height - current_y,
                     );
 
                     let child_size = ctx.layout_child(child_id, child_constraints);
@@ -222,10 +209,7 @@ impl<T: FullRenderTree> RenderBox<T, Variable> for RenderWrap {
         }
     }
 
-    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Variable>)
-    where
-        T: crate::core::PaintTree,
-    {
+    fn paint(&self, ctx: &mut PaintContext<'_, Variable>) {
         let offset = ctx.offset;
 
         // Collect child IDs first to avoid borrow checker issues

@@ -1,13 +1,6 @@
 //! RenderEmpty - a render object that does nothing
-//!
-//! This is a placeholder render object similar to Flutter's SizedBox.shrink() behavior.
-//!
-//! Flutter reference: <https://api.flutter.dev/flutter/widgets/SizedBox/SizedBox.shrink.html>
 
-use crate::core::{
-    FullRenderTree,
-    BoxProtocol, LayoutContext, LayoutTree, Leaf, PaintContext, PaintTree, RenderBox,
-};
+use flui_core::render::{BoxProtocol, LayoutContext, Leaf, PaintContext, RenderBox};
 use flui_types::Size;
 
 /// A render object that renders nothing
@@ -17,20 +10,14 @@ use flui_types::Size;
 #[derive(Debug, Clone, Copy, Default)]
 pub struct RenderEmpty;
 
-impl<T: FullRenderTree> RenderBox<T, Leaf> for RenderEmpty {
-    fn layout<T>(&mut self, ctx: LayoutContext<'_, T, Leaf, BoxProtocol>) -> Size
-    where
-        T: LayoutTree,
-    {
+impl RenderBox<Leaf> for RenderEmpty {
+    fn layout(&mut self, ctx: LayoutContext<'_, Leaf, BoxProtocol>) -> Size {
         // Take minimum space
         let constraints = &ctx.constraints;
         flui_types::Size::new(constraints.min_width, constraints.min_height)
     }
 
-    fn paint<T>(&self, _ctx: &mut PaintContext<'_, T, Leaf>)
-    where
-        T: PaintTree,
-    {
+    fn paint(&self, _ctx: &mut PaintContext<'_, Leaf>) {
         // Nothing to paint
     }
 }

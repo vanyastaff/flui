@@ -1,11 +1,7 @@
 //! RenderIntrinsicHeight - sizes child to its intrinsic height
-//!
-//! Flutter equivalent: `RenderIntrinsicHeight`
-//! Source: https://api.flutter.dev/flutter/rendering/RenderIntrinsicHeight-class.html
 
-use crate::core::{
-    FullRenderTree,
-    FullRenderTree, RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
+use flui_core::render::{
+    RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
 };
 use flui_types::constraints::BoxConstraints;
 use flui_types::Size;
@@ -82,11 +78,8 @@ impl Default for RenderIntrinsicHeight {
     }
 }
 
-impl<T: FullRenderTree> RenderBox<T, Single> for RenderIntrinsicHeight {
-    fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Single, BoxProtocol>) -> Size
-    where
-        T: crate::core::LayoutTree,
-    {
+impl RenderBox<Single> for RenderIntrinsicHeight {
+    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
         let child_id = ctx.children.single();
 
         // Layout child with infinite height to get intrinsic height
@@ -116,10 +109,7 @@ impl<T: FullRenderTree> RenderBox<T, Single> for RenderIntrinsicHeight {
         ctx.constraints.constrain(Size::new(width, height))
     }
 
-    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Single>)
-    where
-        T: crate::core::PaintTree,
-    {
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         let child_id = ctx.children.single();
         ctx.paint_child(child_id, ctx.offset);
     }

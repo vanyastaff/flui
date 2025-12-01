@@ -1,12 +1,9 @@
 //! RenderIgnorePointer - makes widget ignore pointer events
-//!
-//! Flutter reference: https://api.flutter.dev/flutter/rendering/RenderIgnorePointer-class.html
 
-use crate::core::{
-    FullRenderTree,
-    HitTestTree, FullRenderTree, RenderBox, Single, {BoxProtocol, HitTestContext, LayoutContext, PaintContext},
+use flui_core::element::hit_test::BoxHitTestResult;
+use flui_core::render::{
+    RenderBox, Single, {BoxProtocol, HitTestContext, LayoutContext, PaintContext},
 };
-use flui_interaction::HitTestResult;
 use flui_types::Size;
 
 /// RenderObject that makes its subtree ignore pointer events
@@ -53,40 +50,31 @@ impl Default for RenderIgnorePointer {
     }
 }
 
-impl<T: FullRenderTree> RenderBox<T, Single> for RenderIgnorePointer {
-    fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Single, BoxProtocol>) -> Size
-    where
-        T: crate::core::LayoutTree,
-    {
+impl RenderBox<Single> for RenderIgnorePointer {
+    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
         let child_id = ctx.children.single();
         // Layout child with same constraints
         ctx.layout_child(child_id, ctx.constraints)
     }
 
-    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Single>)
-    where
-        T: crate::core::PaintTree,
-    {
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         let child_id = ctx.children.single();
         // Paint child normally - ignoring only affects hit testing
         ctx.paint_child(child_id, ctx.offset);
     }
 
-    fn hit_test<T>(
+    fn hit_test(
         &self,
-        ctx: &HitTestContext<'_, T, Single, BoxProtocol>,
-        result: &mut HitTestResult,
-    ) -> bool
-    where
-        T: HitTestTree,
-    {
+        ctx: HitTestContext<'_, Single, BoxProtocol>,
+        result: &mut BoxHitTestResult,
+    ) -> bool {
         if self.ignoring {
             // Ignore pointer events - return false to let events pass through
             // This makes this widget and its children transparent to pointer events
             false // Events pass through to widgets behind
         } else {
             // Not ignoring - use default behavior (test children)
-            self.hit_test_children(ctx, result)
+            self.hit_test_children(&ctx, result)
         }
     }
 }

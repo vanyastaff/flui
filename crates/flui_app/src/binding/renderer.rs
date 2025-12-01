@@ -78,12 +78,12 @@ impl RendererBinding {
         let mut owner = pipeline.write();
 
         // Execute complete pipeline: build → layout → paint
-        let canvas = match owner.build_frame(constraints) {
-            Ok(canvas_opt) => {
-                if canvas_opt.is_none() {
+        let layer = match owner.build_frame(constraints) {
+            Ok(layer_opt) => {
+                if layer_opt.is_none() {
                     tracing::warn!("Pipeline returned None (empty tree or no root)");
                 }
-                canvas_opt
+                layer_opt
             }
             Err(e) => {
                 tracing::error!(error = ?e, "Pipeline build_frame failed");
@@ -92,16 +92,23 @@ impl RendererBinding {
         };
 
         // Extract size from root element or use constraints as fallback
-        // TODO: Phase 5 - Get size from RenderState once Element properly supports it
-        // Currently render_state() returns None (stub), so we use constraints as fallback
-        let size = Size::new(constraints.max_width, constraints.max_height);
+        let size = owner
+            .root_element_id()
+            .and_then(|root_id| {
+                let tree = owner.tree();
+                let tree_guard = tree.read();
+                tree_guard
+                    .get(root_id)
+                    .and_then(|element| element.render_state())
+                    .filter(|state| state.has_size())
+                    .map(|state| state.size())
+            })
+            .unwrap_or_else(|| Size::new(constraints.max_width, constraints.max_height));
 
         // Create scene using flui_engine::Scene API
-        let scene = if let Some(canvas) = canvas {
-            // Convert Canvas to CanvasLayer and wrap in Layer enum
-            use flui_engine::CanvasLayer;
-            let canvas_layer = CanvasLayer::from_canvas(canvas);
-            Scene::from_canvas_layer(size, Arc::new(canvas_layer), 0)
+        let scene = if let Some(layer) = layer {
+            // Wrap layer in Arc for zero-copy sharing with hit testing
+            Scene::with_layer(size, Arc::new(*layer), 0)
         } else {
             Scene::new(size)
         };

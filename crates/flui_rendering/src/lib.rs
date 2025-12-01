@@ -45,8 +45,9 @@
 
 pub mod core;
 pub mod error;
-pub mod objects;
 pub mod view;
+// TODO: Migrate objects/ to use new trait-based architecture
+// pub mod objects;
 
 // Re-export from core module
 pub use core::{
@@ -62,8 +63,8 @@ pub use core::{
     // Parent data
     BoxParentData,
     BoxProtocol,
-    // Note: Wrappers not needed with current context-based API
-    // BoxRenderWrapper,
+    // Wrappers
+    BoxRenderWrapper,
     ChildrenAccess,
     // Geometry types
     Constraints,
@@ -102,10 +103,8 @@ pub use core::{
     Protocol,
     RenderBox,
     RenderBoxExt,
-    RenderBoxProxy,
     RenderFlags,
     RenderObject,
-    RenderSliverProxy,
     RenderState,
     RenderTreeAccess,
     RenderTreeAccessExt,
@@ -115,16 +114,12 @@ pub use core::{
     SliverProtocol,
     SliverRender,
     SliverRenderExt,
-    // Note: Wrappers not needed with current context-based API
-    // SliverRenderWrapper,
+    SliverRenderWrapper,
     TreeNav,
     TreeRead,
     TreeWrite,
     Variable,
 };
-
-// Re-export all RenderObjects from objects module
-pub use objects::*;
 
 // Re-export from flui_types for convenience
 pub use flui_types::layout::{FlexFit, StackFit};
@@ -158,6 +153,4 @@ pub mod prelude {
         SliverRender,
         Variable,
     };
-
-    pub use crate::objects::*;
 }

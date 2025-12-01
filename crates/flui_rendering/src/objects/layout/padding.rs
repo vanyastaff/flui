@@ -1,8 +1,6 @@
 //! RenderPadding - adds padding around a child
-//!
-//! Flutter reference: <https://api.flutter.dev/flutter/rendering/RenderPadding-class.html>
 
-use crate::core::{BoxProtocol, LayoutContext, PaintContext, Optional, RenderBox};
+use flui_core::render::{BoxProtocol, LayoutContext, PaintContext, RenderBox, Single};
 use flui_types::{EdgeInsets, Size};
 
 /// RenderObject that adds padding around its child
@@ -37,17 +35,10 @@ impl RenderPadding {
     }
 }
 
-impl<T: FullRenderTree> RenderBox<T, Optional> for RenderPadding {
-    fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Optional, BoxProtocol>) -> Size
-    where
-        T: crate::core::LayoutTree,
-    {
+impl RenderBox<Single> for RenderPadding {
+    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
+        let child_id = ctx.children.single();
         let padding = self.padding;
-
-        // If no child, return padded zero size
-        let Some(child_id) = ctx.children.get() else {
-            return Size::new(padding.horizontal_total(), padding.vertical_total());
-        };
 
         // Deflate constraints by padding
         let child_constraints = ctx.constraints.deflate(&padding);
@@ -62,14 +53,8 @@ impl<T: FullRenderTree> RenderBox<T, Optional> for RenderPadding {
         )
     }
 
-    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Optional>)
-    where
-        T: crate::core::PaintTree,
-    {
-        // If no child, nothing to paint
-        let Some(child_id) = ctx.children.get() else {
-            return;
-        };
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
+        let child_id = ctx.children.single();
 
         // Apply padding offset and paint child
         let child_offset = flui_types::Offset::new(self.padding.left, self.padding.top);

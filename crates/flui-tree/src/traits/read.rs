@@ -210,16 +210,20 @@ pub trait TreeRead: sealed::Sealed + Send + Sync {
 /// This ensures that only well-tested implementations in this crate
 /// can implement the core TreeRead trait, preventing subtle bugs
 /// from incorrect external implementations.
-mod sealed {
+///
+/// External crates can implement the sealed trait via
+/// `flui_tree::traits::sealed::TreeReadSealed`.
+pub(crate) mod sealed {
     /// Sealed trait marker.
     ///
     /// Only types in this crate can implement this trait,
     /// ensuring TreeRead remains correctly implemented.
     pub trait Sealed {}
 
-    // Implementations will be added by concrete tree types
-    // in flui-element and other crates via feature flags or
-    // by implementing the sealed trait in their modules.
+    // Blanket implementations for wrapper types
+    impl<T: Sealed + ?Sized> Sealed for &T {}
+    impl<T: Sealed + ?Sized> Sealed for &mut T {}
+    impl<T: Sealed + ?Sized> Sealed for Box<T> {}
 }
 
 // ============================================================================

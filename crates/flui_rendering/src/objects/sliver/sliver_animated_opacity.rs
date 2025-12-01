@@ -1,6 +1,8 @@
 //! RenderSliverAnimatedOpacity - Animated opacity for sliver content
 
-use crate::core::{PaintContext, PaintTree, RenderSliverProxy, Single};
+use flui_core::render::{RuntimeArity, LegacySliverRender, SliverLayoutContext, SliverPaintContext};
+use flui_painting::Canvas;
+use flui_types::SliverGeometry;
 
 /// RenderObject that applies animated opacity to a sliver child
 ///
@@ -40,6 +42,9 @@ pub struct RenderSliverAnimatedOpacity {
     pub always_include_semantics: bool,
     /// Whether the animation is currently running
     pub animating: bool,
+
+    // Layout cache
+    sliver_geometry: SliverGeometry,
 }
 
 impl RenderSliverAnimatedOpacity {
@@ -52,6 +57,7 @@ impl RenderSliverAnimatedOpacity {
             opacity: opacity.clamp(0.0, 1.0),
             always_include_semantics: false,
             animating: false,
+            sliver_geometry: SliverGeometry::default(),
         }
     }
 
@@ -80,6 +86,11 @@ impl RenderSliverAnimatedOpacity {
         self.animating = animating;
     }
 
+    /// Get the sliver geometry from last layout
+    pub fn geometry(&self) -> SliverGeometry {
+        self.sliver_geometry
+    }
+
     /// Check if child should be painted
     pub fn should_paint(&self) -> bool {
         self.opacity > 0.0
@@ -90,7 +101,7 @@ impl RenderSliverAnimatedOpacity {
     /// Returns true if opacity is between 0 and 1, or if actively animating
     /// (even at opacity 1.0, to avoid layer creation/destruction during animation).
     pub fn needs_compositing(&self) -> bool {
-        (self.animating || self.opacity < 1.0) && self.opacity > 0.0
+        (self.opacity > 0.0 && self.opacity < 1.0) || (self.animating && self.opacity > 0.0)
     }
 }
 
@@ -100,28 +111,52 @@ impl Default for RenderSliverAnimatedOpacity {
     }
 }
 
-impl RenderSliverProxy for RenderSliverAnimatedOpacity {
-    // Layout: use default proxy (passes constraints through, opacity doesn't affect layout)
-
-    // Paint: custom implementation for animated opacity
-    fn proxy_paint<T>(&self, ctx: &mut PaintContext<'_, T, Single>)
-    where
-        T: PaintTree,
-    {
-        // If fully transparent, skip painting (unless semantics required)
-        if !self.should_paint() && !self.always_include_semantics {
-            return;
-        }
-
-        // Apply compositing layer for opacity if needed
-        if self.needs_compositing() {
-            ctx.canvas().save_layer_opacity(None, self.opacity);
-            ctx.proxy();
-            ctx.canvas().restored();
+impl LegacySliverRender for RenderSliverAnimatedOpacity {
+    fn layout(&mut self, ctx: &SliverLayoutContext) -> SliverGeometry {
+        // Pass constraints through to child
+        let child_geometry = if let Some(child_id) = ctx.children.try_single() {
+            ctx.tree.layout_sliver_child(child_id, ctx.constraints)
         } else {
-            // Fully opaque and not animating - no layer needed
-            ctx.proxy();
+            SliverGeometry::default()
+        };
+
+        // Cache geometry (opacity doesn't affect layout)
+        self.sliver_geometry = child_geometry;
+        self.sliver_geometry
+    }
+
+    fn paint(&self, ctx: &SliverPaintContext) -> Canvas {
+        // Don't paint if completely transparent
+        if !self.should_paint() {
+            return Canvas::new();
         }
+
+        // Paint child if present
+        if let Some(child_id) = ctx.children.try_single() {
+            if self.sliver_geometry.visible {
+                let child_canvas = ctx.tree.paint_child(child_id, ctx.offset);
+
+                // Apply opacity to canvas
+                // TODO: When opacity layer support is available, apply it here
+                // For now, we just paint normally (opacity would be applied by compositor)
+                if self.needs_compositing() {
+                    // Mark that this needs a compositing layer with opacity
+                    // In full implementation, this would wrap in an OpacityLayer
+                }
+
+                return child_canvas;
+            }
+        }
+
+        Canvas::new()
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn arity(&self) -> RuntimeArity {
+        RuntimeArity::Exact(1) // Single child sliver
     }
 }
 
@@ -229,5 +264,11 @@ mod tests {
         let opacity = RenderSliverAnimatedOpacity::new(0.0);
 
         assert!(!opacity.needs_compositing());
+    }
+
+    #[test]
+    fn test_arity_is_single_child() {
+        let opacity = RenderSliverAnimatedOpacity::new(0.5);
+        assert_eq!(opacity.arity(), RuntimeArity::Exact(1));
     }
 }

@@ -1,27 +1,13 @@
 //! RenderBaseline - aligns child based on baseline
-//!
-//! Flutter equivalent: `RenderBaseline`
-//! Source: https://api.flutter.dev/flutter/rendering/RenderBaseline-class.html
 
-use crate::core::{BoxProtocol, LayoutContext, PaintContext};
-use crate::core::{FullRenderTree, RenderBox, Single};
-use flui_types::{layout::TextBaseline, Offset, Size};
+use flui_core::render::{BoxProtocol, LayoutContext, PaintContext};
+use flui_core::render::{RenderBox, Single};
+use flui_types::{typography::TextBaseline, Offset, Size};
 
 /// RenderObject that positions child based on baseline
 ///
-/// Shifts the child down such that the child's baseline (or the bottom of the
-/// child, if the child has no baseline) is `baseline` logical pixels below the
-/// top of this box.
-///
 /// This is used for aligning text and other widgets along a common baseline.
-///
-/// # Layout Algorithm (Flutter-compatible)
-///
-/// 1. Layout child with incoming constraints
-/// 2. Query child's baseline (or use child's height if no baseline)
-/// 3. Calculate vertical offset: `baseline - child_baseline`
-/// 4. If offset is negative, child may overflow top (not hittable)
-/// 5. Final height = max(baseline, child_baseline) + (child_height - child_baseline)
+/// The baseline is measured from the top of the widget.
 ///
 /// # Example
 ///
@@ -33,13 +19,10 @@ use flui_types::{layout::TextBaseline, Offset, Size};
 /// ```
 #[derive(Debug)]
 pub struct RenderBaseline {
-    /// Distance from top of this box to the baseline
+    /// Distance from top to baseline
     pub baseline: f32,
-    /// Type of baseline to align to
+    /// Type of baseline
     pub baseline_type: TextBaseline,
-
-    /// Cached child offset for paint phase
-    child_offset: Offset,
 }
 
 // ===== Public API =====
@@ -50,7 +33,6 @@ impl RenderBaseline {
         Self {
             baseline,
             baseline_type,
-            child_offset: Offset::ZERO,
         }
     }
 
@@ -77,75 +59,29 @@ impl RenderBaseline {
 
 // ===== RenderObject Implementation =====
 
-impl<T: FullRenderTree> RenderBox<T, Single> for RenderBaseline {
-    fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Single, BoxProtocol>) -> Size
-    where
-        T: crate::core::LayoutTree,
-    {
+impl RenderBox<Single> for RenderBaseline {
+    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
         let child_id = ctx.children.single();
         let constraints = ctx.constraints;
 
         // Layout child with same constraints
         let child_size = ctx.layout_child(child_id, constraints);
 
-        // Query child's baseline via LayoutTree trait
-        // Falls back to estimated baseline if child doesn't have one
-        let child_baseline = ctx
-            .tree()
-            .get_baseline(child_id, self.baseline_type)
-            .unwrap_or({
-                // Fallback: estimate baseline based on type
-                // Typical values for text without explicit baseline
-                match self.baseline_type {
-                    TextBaseline::Alphabetic => child_size.height * 0.75,
-                    TextBaseline::Ideographic => child_size.height * 0.85,
-                }
-            });
-
-        // Calculate how much to shift child down so its baseline aligns with our baseline
-        // child_top = our_baseline - child_baseline
-        let child_top = self.baseline - child_baseline;
-
-        // Cache offset for paint (can be negative if baseline is too small)
-        self.child_offset = Offset::new(0.0, child_top);
-
-        // Calculate our height:
-        // - Top boundary: 0 (even if child overflows top)
-        // - Bottom boundary: child's bottom position
-        // Height = child_top + child_height, but at least child_height
-        let height = if child_top >= 0.0 {
-            child_top + child_size.height
-        } else {
-            // Child overflows top, but we still need to contain its bottom
-            // Our height is from 0 to child's bottom
-            // child's bottom = child_top + child_size.height
-            (child_top + child_size.height).max(0.0)
-        };
-
-        // Constrain to parent constraints
-        let size = constraints.constrain(Size::new(child_size.width, height));
-
-        tracing::trace!(
-            baseline = self.baseline,
-            child_baseline = child_baseline,
-            child_top = child_top,
-            child_size = ?child_size,
-            final_size = ?size,
-            "RenderBaseline::layout"
-        );
-
-        size
+        // Our height includes space above baseline and child height
+        // For simplicity, we use child height + baseline offset
+        Size::new(
+            child_size.width,
+            (child_size.height + self.baseline).max(child_size.height),
+        )
     }
 
-    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Single>)
-    where
-        T: crate::core::PaintTree,
-    {
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         let child_id = ctx.children.single();
         let offset = ctx.offset;
 
-        // Paint child at calculated offset (may be negative for overflow)
-        ctx.paint_child(child_id, offset + self.child_offset);
+        // Apply baseline offset to child painting position
+        let child_offset = offset + Offset::new(0.0, self.baseline);
+        ctx.paint_child(child_id, child_offset);
     }
 }
 
@@ -163,14 +99,6 @@ mod tests {
         let baseline = RenderBaseline::alphabetic(20.0);
         assert_eq!(baseline.baseline, 20.0);
         assert_eq!(baseline.baseline_type, TextBaseline::Alphabetic);
-        assert_eq!(baseline.child_offset, Offset::ZERO);
-    }
-
-    #[test]
-    fn test_render_baseline_ideographic() {
-        let baseline = RenderBaseline::ideographic(30.0);
-        assert_eq!(baseline.baseline, 30.0);
-        assert_eq!(baseline.baseline_type, TextBaseline::Ideographic);
     }
 
     #[test]

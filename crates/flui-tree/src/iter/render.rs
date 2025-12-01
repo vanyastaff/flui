@@ -178,8 +178,8 @@ impl<T: RenderTreeAccess + ?Sized> Iterator for RenderDescendants<'_, T> {
             }
 
             // Always push children (even from non-render elements)
-            let children = self.tree.children(current);
-            for &child in children.iter().rev() {
+            let children: Vec<_> = self.tree.children(current).collect();
+            for child in children.into_iter().rev() {
                 self.stack.push(child);
             }
 
@@ -226,7 +226,8 @@ impl<'a, T: RenderTreeAccess + ?Sized> RenderChildren<'a, T> {
 
         // Start with direct children
         if tree.contains(parent) {
-            for &child in tree.children(parent).iter().rev() {
+            let children: Vec<_> = tree.children(parent).collect();
+            for child in children.into_iter().rev() {
                 stack.push(child);
             }
         }
@@ -240,7 +241,8 @@ impl<'a, T: RenderTreeAccess + ?Sized> RenderChildren<'a, T> {
         let mut stack = Vec::with_capacity(capacity);
 
         if tree.contains(parent) {
-            for &child in tree.children(parent).iter().rev() {
+            let children: Vec<_> = tree.children(parent).collect();
+            for child in children.into_iter().rev() {
                 stack.push(child);
             }
         }
@@ -266,8 +268,8 @@ impl<T: RenderTreeAccess + ?Sized> Iterator for RenderChildren<'_, T> {
             }
 
             // Non-render element - look at its children
-            let children = self.tree.children(current);
-            for &child in children.iter().rev() {
+            let children: Vec<_> = self.tree.children(current).collect();
+            for child in children.into_iter().rev() {
                 self.stack.push(child);
             }
         }

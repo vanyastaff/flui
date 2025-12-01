@@ -430,9 +430,14 @@ impl<T: TreeNav> TreeNavExt for T {}
 /// Sealed trait pattern for TreeNav.
 ///
 /// Ensures only well-tested implementations can provide navigation.
-mod sealed {
+/// External crates can implement via `flui_tree::traits::sealed::TreeNavSealed`.
+pub(crate) mod sealed {
     pub trait Sealed {}
-    // Implementations added by concrete tree types
+
+    // Blanket implementations for wrapper types
+    impl<T: Sealed + ?Sized> Sealed for &T {}
+    impl<T: Sealed + ?Sized> Sealed for &mut T {}
+    impl<T: Sealed + ?Sized> Sealed for Box<T> {}
 }
 
 // ============================================================================

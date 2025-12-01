@@ -1,7 +1,7 @@
 //! RenderErrorBox - Debug error visualization
 
-use crate::core::{BoxProtocol, LayoutContext, PaintContext};
-use crate::core::{Leaf, RenderBox};
+use flui_core::render::{BoxProtocol, LayoutContext, PaintContext};
+use flui_core::render::{Leaf, RenderBox};
 use flui_painting::Paint;
 use flui_types::prelude::{Color, TextStyle};
 use flui_types::{Rect, Size};
@@ -91,11 +91,8 @@ impl Default for RenderErrorBox {
     }
 }
 
-impl<T: FullRenderTree> RenderBox<T, Leaf> for RenderErrorBox {
-    fn layout<T>(&mut self, ctx: LayoutContext<'_, T, Leaf, BoxProtocol>) -> Size
-    where
-        T: crate::core::LayoutTree,
-    {
+impl RenderBox<Leaf> for RenderErrorBox {
+    fn layout(&mut self, ctx: LayoutContext<'_, Leaf, BoxProtocol>) -> Size {
         let constraints = ctx.constraints;
 
         // Error box takes up all available space
@@ -105,43 +102,49 @@ impl<T: FullRenderTree> RenderBox<T, Leaf> for RenderErrorBox {
         size
     }
 
-    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Leaf>)
-    where
-        T: crate::core::PaintTree,
-    {
+    fn paint(&self, ctx: &mut PaintContext<'_, Leaf>) {
+        let mut paint = Paint::default();
         let rect = Rect::from_min_size(flui_types::Point::ZERO, self.size);
 
         // Draw background
-        let bg_paint = Paint::fill(self.background_color);
-        ctx.canvas().rect(rect, &bg_paint);
+        paint.color = self.background_color;
+        paint.style = flui_painting::PaintStyle::Fill;
+        ctx.canvas().draw_rect(rect, &paint);
 
         // Draw diagonal stripes if enabled
         if self.show_stripes {
-            let stripe_paint = Paint::stroke(Color::rgba(255, 255, 255, 50), 2.0);
+            paint.color = Color::rgba(255, 255, 255, 50); // Semi-transparent white
+            paint.style = flui_painting::PaintStyle::Stroke;
+            paint.stroke_width = 2.0;
 
             let stripe_spacing = 20.0;
             let mut x = 0.0;
             while x < self.size.width + self.size.height {
-                ctx.canvas().line(
+                ctx.canvas().draw_line(
                     flui_types::Point::new(x, 0.0),
                     flui_types::Point::new(x - self.size.height, self.size.height),
-                    &stripe_paint,
+                    &paint,
                 );
                 x += stripe_spacing;
             }
         }
 
         // Draw error message
-        let text_paint = Paint::fill(self.text_color);
+        paint.color = self.text_color;
+        paint.style = flui_painting::PaintStyle::Fill;
+
+        let text_x = 10.0;
+        let text_y = self.size.height / 2.0;
+
         let text_style = TextStyle::default()
             .with_font_size(14.0)
             .with_color(self.text_color);
 
-        ctx.canvas().text(
+        ctx.canvas().draw_text(
             &self.message,
-            flui_types::Offset::new(10.0, self.size.height / 2.0),
+            flui_types::Offset::new(text_x, text_y),
             &text_style,
-            &text_paint,
+            &paint,
         );
     }
 }

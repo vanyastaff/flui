@@ -3,15 +3,11 @@
 //! This RenderObject wraps a child and listens for pointer events,
 //! calling the appropriate callbacks when events occur.
 
-use crate::core::{
-    FullRenderTree, FullRenderTree, HitTestTree, RenderBox, Single,
-    {BoxProtocol, HitTestContext, LayoutContext, PaintContext},
+use flui_core::render::{
+    RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
 };
-use flui_foundation::ElementId;
-use flui_interaction::hit_test::PointerEventHandler;
-use flui_interaction::HitTestResult;
-use flui_types::events::PointerEvent;
-use flui_types::{Offset, Size};
+use flui_types::events::{PointerEvent, PointerEventHandler};
+use flui_types::Size;
 use std::sync::Arc;
 
 /// Pointer event callbacks
@@ -173,11 +169,8 @@ impl RenderPointerListener {
     }
 }
 
-impl<T: FullRenderTree> RenderBox<T, Single> for RenderPointerListener {
-    fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Single, BoxProtocol>) -> Size
-    where
-        T: crate::core::LayoutTree,
-    {
+impl RenderBox<Single> for RenderPointerListener {
+    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
         let child_id = ctx.children.single();
 
         // Layout child with same constraints
@@ -189,10 +182,7 @@ impl<T: FullRenderTree> RenderBox<T, Single> for RenderPointerListener {
         size
     }
 
-    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Single>)
-    where
-        T: crate::core::PaintTree,
-    {
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         let child_id = ctx.children.single();
         let offset = ctx.offset;
 
@@ -241,49 +231,6 @@ impl<T: FullRenderTree> RenderBox<T, Single> for RenderPointerListener {
 
         // Paint child
         ctx.paint_child(child_id, offset);
-    }
-
-    fn hit_test<T>(
-        &self,
-        ctx: &HitTestContext<'_, T, Single, BoxProtocol>,
-        result: &mut HitTestResult,
-    ) -> bool
-    where
-        T: HitTestTree,
-    {
-        // Test children first (following Flutter's convention)
-        let hit_children = self.hit_test_children(ctx, result);
-
-        // Always add self to result if within bounds, regardless of children hit
-        // This ensures we receive pointer events even if child is transparent
-        if hit_children || self.hit_test_self(ctx.position, ctx.size()) {
-            ctx.add_to_result(result);
-            return true;
-        }
-
-        false
-    }
-
-    fn hit_test_self(&self, position: Offset, size: Size) -> bool {
-        // Hit if position is within bounds
-        position.dx >= 0.0
-            && position.dy >= 0.0
-            && position.dx < size.width
-            && position.dy < size.height
-    }
-
-    fn hit_test_children<T>(
-        &self,
-        ctx: &HitTestContext<'_, T, Single, BoxProtocol>,
-        result: &mut HitTestResult,
-    ) -> bool
-    where
-        T: HitTestTree,
-    {
-        // Test single child using the tree's hit_test_child method
-        let child_id = ctx.children.single();
-        ctx.tree()
-            .hit_test_child(ElementId::new(child_id.get()), ctx.position, result)
     }
 }
 

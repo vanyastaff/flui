@@ -1,10 +1,7 @@
 //! RenderShiftedBox - Shifts child position by an offset
-//!
-//! Flutter reference: <https://api.flutter.dev/flutter/rendering/RenderShiftedBox-class.html>
 
-use crate::core::{
-    FullRenderTree,
-    FullRenderTree, RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
+use flui_core::render::{
+    RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
 };
 use flui_types::{Offset, Size};
 
@@ -78,11 +75,8 @@ impl Default for RenderShiftedBox {
     }
 }
 
-impl<T: FullRenderTree> RenderBox<T, Single> for RenderShiftedBox {
-    fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Single, BoxProtocol>) -> Size
-    where
-        T: crate::core::LayoutTree,
-    {
+impl RenderBox<Single> for RenderShiftedBox {
+    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
         let child_id = ctx.children.single();
 
         // Layout child with full constraints
@@ -95,10 +89,7 @@ impl<T: FullRenderTree> RenderBox<T, Single> for RenderShiftedBox {
         size
     }
 
-    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Single>)
-    where
-        T: crate::core::PaintTree,
-    {
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         let child_id = ctx.children.single();
 
         // Paint child at shifted position

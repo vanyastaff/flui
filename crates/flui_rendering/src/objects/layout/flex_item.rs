@@ -9,11 +9,8 @@
 //! - FlexItemMetadata is stored inline (not in separate ParentData)
 //! - Parent (RenderFlex) accesses metadata via GAT-based downcast
 //! - Zero-cost when not using flexible children
-//!
-//! Flutter reference: <https://api.flutter.dev/flutter/widgets/Flexible-class.html>
-//! Flutter reference: <https://api.flutter.dev/flutter/widgets/Expanded-class.html>
 
-use crate::core::{BoxProtocol, LayoutContext, PaintContext, FullRenderTree, RenderBox, Single};
+use flui_core::render::{BoxProtocol, LayoutContext, PaintContext, RenderBox, Single};
 use flui_types::{layout::FlexFit, Size};
 
 /// Metadata for flexible children in Flex layout
@@ -188,20 +185,14 @@ impl RenderFlexItem {
     }
 }
 
-impl<T: FullRenderTree> RenderBox<T, Single> for RenderFlexItem {
-    fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Single, BoxProtocol>) -> Size
-    where
-        T: crate::core::LayoutTree,
-    {
+impl RenderBox<Single> for RenderFlexItem {
+    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
         let child_id = ctx.children.single();
         // Pass-through: just layout child with same constraints
         ctx.layout_child(child_id, ctx.constraints)
     }
 
-    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Single>)
-    where
-        T: crate::core::PaintTree,
-    {
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         let child_id = ctx.children.single();
         // Pass-through: just paint child at same offset
         ctx.paint_child(child_id, ctx.offset);

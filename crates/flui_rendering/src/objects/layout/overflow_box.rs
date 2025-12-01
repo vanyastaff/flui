@@ -1,9 +1,6 @@
-//! RenderOverflowBox - allows child to overflow constraints
-//!
-//! Flutter equivalent: `RenderConstrainedOverflowBox`
-//! Source: https://api.flutter.dev/flutter/rendering/RenderConstrainedOverflowBox-class.html
+//! RenderOverflowBox - allows child_id to overflow constraints
 
-use crate::core::{BoxProtocol, LayoutContext, PaintContext, FullRenderTree, RenderBox, Single};
+use flui_core::render::{BoxProtocol, LayoutContext, PaintContext, RenderBox, Single};
 use flui_types::constraints::BoxConstraints;
 use flui_types::{Alignment, Offset, Size};
 
@@ -101,11 +98,8 @@ impl Default for RenderOverflowBox {
     }
 }
 
-impl<T: FullRenderTree> RenderBox<T, Single> for RenderOverflowBox {
-    fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Single, BoxProtocol>) -> Size
-    where
-        T: crate::core::LayoutTree,
-    {
+impl RenderBox<Single> for RenderOverflowBox {
+    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
         let child_id = ctx.children.single();
         let constraints = ctx.constraints;
 
@@ -136,10 +130,7 @@ impl<T: FullRenderTree> RenderBox<T, Single> for RenderOverflowBox {
         size
     }
 
-    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Single>)
-    where
-        T: crate::core::PaintTree,
-    {
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         let child_id = ctx.children.single();
         let offset = ctx.offset;
 

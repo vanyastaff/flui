@@ -56,6 +56,11 @@ pub mod fractional_translation;
 pub mod positioned;
 
 pub mod custom_single_child_layout_box;
+
+// ============================================================================
+// TODO: Uncomment after migration
+// ============================================================================
+// pub mod editable_line;                   // Optional arity
 pub mod scroll_view; // Single arity
 
 // ============================================================================
@@ -91,9 +96,7 @@ pub use indexed_stack::RenderIndexedStack;
 pub use list_body::RenderListBody;
 pub use list_wheel_viewport::RenderListWheelViewport;
 pub use stack::RenderStack;
-pub use table::RenderTable;
-// Re-export table types from flui_types for convenience
-pub use flui_types::layout::{TableCellVerticalAlignment, TableColumnWidth};
+pub use table::{RenderTable, TableCellVerticalAlignment, TableColumnWidth};
 pub use wrap::{RenderWrap, WrapAlignment, WrapCrossAlignment};
 
 // Optional arity
@@ -110,4 +113,9 @@ pub use custom_single_child_layout_box::{
 pub use flex_item::{FlexItemMetadata, RenderFlexItem};
 pub use fractional_translation::RenderFractionalTranslation;
 pub use positioned::{PositionedMetadata, RenderPositioned};
+
+// ============================================================================
+// TODO: Uncomment after migration
+// ============================================================================
+// pub use editable_line::{RenderEditableLine, TextSelection};
 pub use scroll_view::RenderScrollView;

@@ -3,12 +3,10 @@
 //! This render object applies image filters (like blur) to the content that lies
 //! behind it in the paint order. Common use case is frosted glass effect.
 
-use crate::core::{
-    FullRenderTree,
-    FullRenderTree, RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
+use flui_core::render::{
+    RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
 };
-use flui_foundation::ElementId;
-use flui_types::{geometry::Rect, painting::BlendMode, painting::ImageFilter, Size};
+use flui_types::{painting::BlendMode, painting::ImageFilter, Size};
 
 // ===== RenderObject =====
 
@@ -87,52 +85,27 @@ impl RenderBackdropFilter {
 
 // ===== RenderObject Implementation =====
 
-impl<T: FullRenderTree> RenderBox<T, Single> for RenderBackdropFilter {
-    fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Single, BoxProtocol>) -> Size
-    where
-        T: crate::core::LayoutTree,
-    {
+impl RenderBox<Single> for RenderBackdropFilter {
+    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
         let child_id = ctx.children.single();
         // Layout child with same constraints
         ctx.layout_child(child_id, ctx.constraints)
     }
 
-    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Single>)
-    where
-        T: crate::core::PaintTree,
-    {
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         let child_id = ctx.children.single();
-        let child_element_id = ElementId::new(child_id.get());
 
-        // Get the child's size to calculate backdrop bounds
-        let child_size_tuple = ctx
-            .tree()
-            .get_size(child_element_id)
-            .expect("Child should have a size after layout");
-        let child_size = Size::new(child_size_tuple.0, child_size_tuple.1);
+        // Note: Full backdrop filtering requires compositor support
+        // In production, this would:
+        // 1. Capture the current paint layer content
+        // 2. Apply the image filter to that content
+        // 3. Paint the filtered result
+        // 4. Paint the child on top
+        //
+        // For now, we just paint the child
+        // TODO: Implement BackdropFilterLayer when compositor supports it
 
-        // Create bounds for the backdrop filter region
-        let bounds = Rect::from_min_size(ctx.offset, child_size);
-
-        // Save offset before mutably borrowing ctx
-        let offset = ctx.offset;
-
-        // Paint child content FIRST (to be rendered on top of filtered backdrop)
-        let child_canvas = ctx
-            .tree_mut()
-            .perform_paint(child_element_id, offset)
-            .expect("Child paint should succeed");
-
-        // Use Canvas::draw_backdrop_filter() to apply backdrop filter
-        ctx.canvas().draw_backdrop_filter(
-            bounds,
-            self.filter.clone(),
-            self.blend_mode,
-            Some(|backdrop_canvas: &mut flui_painting::Canvas| {
-                // Append the pre-rendered child content on top of filtered backdrop
-                backdrop_canvas.append_canvas(child_canvas);
-            }),
-        );
+        ctx.paint_child(child_id, ctx.offset);
     }
 }
 

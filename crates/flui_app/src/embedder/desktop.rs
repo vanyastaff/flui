@@ -5,7 +5,6 @@
 //! event loop until the window is closed.
 
 use crate::binding::AppBinding;
-use crate::providers::MediaQueryData;
 use crate::{event_callbacks::WindowEventCallbacks, window_state::WindowStateTracker};
 use flui_engine::{GpuRenderer, Scene};
 use flui_types::{
@@ -106,21 +105,6 @@ impl DesktopEmbedder {
             "GPU initialized"
         );
 
-        // 3. Initialize MediaQueryData with window size
-        let scale_factor = window.scale_factor() as f32;
-        let logical_size = Size::new(
-            size.width as f32 / scale_factor,
-            size.height as f32 / scale_factor,
-        );
-        let media_data = MediaQueryData::new(logical_size, scale_factor);
-        binding.update_media_query(media_data);
-
-        tracing::debug!(
-            "Initial MediaQuery: size={:?}, dpr={}",
-            logical_size,
-            scale_factor
-        );
-
         Self {
             binding,
             window,
@@ -181,15 +165,6 @@ impl DesktopEmbedder {
 
                 // Delegate resize to GpuRenderer (handles surface reconfiguration)
                 self.renderer.resize(size.width, size.height);
-
-                // Update MediaQueryData with new window size
-                let scale_factor = self.window.scale_factor() as f32;
-                let logical_size = Size::new(
-                    size.width as f32 / scale_factor,
-                    size.height as f32 / scale_factor,
-                );
-                let media_data = MediaQueryData::new(logical_size, scale_factor);
-                self.binding.update_media_query(media_data);
 
                 // Request layout for the entire tree with new window size
                 let pipeline = self.binding.pipeline();

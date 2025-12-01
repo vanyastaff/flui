@@ -20,12 +20,13 @@
 //! }
 //! ```
 
+// TODO: Migrate to Render<A>
+// use flui_core::render::{RuntimeArity, LayoutContext, PaintContext, LegacyRender};
 #[cfg(debug_assertions)]
-use crate::core::{BoxProtocol, LayoutContext, LayoutTree, PaintContext, PaintTree, Render, Single};
 #[cfg(debug_assertions)]
-use flui_engine::layer::{pool, BoxedLayer, DrawCommand};
 #[cfg(debug_assertions)]
-use flui_engine::Paint;
+#[cfg(debug_assertions)]
+#[cfg(debug_assertions)]
 #[cfg(debug_assertions)]
 use flui_types::{Color, Offset, Rect, Size};
 
@@ -326,33 +327,21 @@ impl RenderOverflowIndicator {
 }
 
 #[cfg(debug_assertions)]
-impl Render<Single> for RenderOverflowIndicator {
-    type Metadata = ();
-
-    fn layout<T>(
-        &mut self,
-        mut ctx: LayoutContext<'_, T, Single, BoxProtocol>,
-    ) -> Size
-    where
-        T: LayoutTree,
-    {
+impl LegacyRender for RenderOverflowIndicator {
+    fn layout(&mut self, ctx: &LayoutContext) -> Size {
+        let tree = ctx.tree;
         let child_id = ctx.children.single();
         let constraints = ctx.constraints;
         // Pass through layout to child - no changes
-        ctx.tree_mut()
-            .layout_child(child_id, constraints)
-            .expect("Failed to layout overflow indicator child")
+        tree.layout_child(child_id, constraints)
     }
 
-    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Single>) -> BoxedLayer
-    where
-        T: PaintTree,
-    {
+    fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
+        let tree = ctx.tree;
         let child_id = ctx.children.single();
         let offset = ctx.offset;
-
         // Paint child first
-        let child_layer = ctx.tree_mut().paint_child(child_id, offset);
+        let child_layer = tree.paint_child(child_id, offset);
 
         // Early exit if no overflow
         if self.overflow_h <= 0.0 && self.overflow_v <= 0.0 {
@@ -394,6 +383,13 @@ impl Render<Single> for RenderOverflowIndicator {
         container.add_child(Box::new(indicator));
 
         Box::new(container)
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn arity(&self) -> RuntimeArity {
+        RuntimeArity::Variable // Default - update if needed
     }
 }
 

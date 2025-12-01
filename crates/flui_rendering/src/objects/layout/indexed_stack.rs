@@ -1,9 +1,8 @@
 //! RenderIndexedStack - shows only one child by index
-//!
-//! Flutter equivalent: `RenderIndexedStack`
-//! Source: https://api.flutter.dev/flutter/rendering/RenderIndexedStack-class.html
 
-use crate::core::{BoxProtocol, ChildrenAccess, LayoutContext, PaintContext, FullRenderTree, RenderBox, Variable};
+use flui_core::render::{
+    BoxProtocol, ChildrenAccess, LayoutContext, PaintContext, RenderBox, Variable,
+};
 use flui_types::{Alignment, Size};
 
 /// RenderObject that shows only one child from a list
@@ -71,11 +70,8 @@ impl Default for RenderIndexedStack {
     }
 }
 
-impl<T: FullRenderTree> RenderBox<T, Variable> for RenderIndexedStack {
-    fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Variable, BoxProtocol>) -> Size
-    where
-        T: crate::core::LayoutTree,
-    {
+impl RenderBox<Variable> for RenderIndexedStack {
+    fn layout(&mut self, ctx: LayoutContext<'_, Variable, BoxProtocol>) -> Size {
         let constraints = ctx.constraints;
         let children = ctx.children;
 
@@ -104,10 +100,7 @@ impl<T: FullRenderTree> RenderBox<T, Variable> for RenderIndexedStack {
         self.size
     }
 
-    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Variable>)
-    where
-        T: crate::core::PaintTree,
-    {
+    fn paint(&self, ctx: &mut PaintContext<'_, Variable>) {
         let offset = ctx.offset;
 
         // Collect child IDs first to avoid borrow checker issues

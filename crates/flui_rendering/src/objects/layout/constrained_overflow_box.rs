@@ -8,10 +8,8 @@
 //! - Creating fixed-size widgets regardless of parent constraints
 //! - Allowing children to exceed parent boundaries with specific size limits
 //! - Transforming constraints passed to children
-//!
-//! Flutter reference: <https://api.flutter.dev/flutter/rendering/RenderConstrainedOverflowBox-class.html>
 
-use crate::core::{BoxProtocol, LayoutContext, PaintContext, FullRenderTree, RenderBox, Single};
+use flui_core::render::{BoxProtocol, LayoutContext, PaintContext, RenderBox, Single};
 use flui_types::{Alignment, BoxConstraints, Size};
 
 /// A render object that imposes different constraints on its child than it gets from its parent,
@@ -141,11 +139,8 @@ impl Default for RenderConstrainedOverflowBox {
     }
 }
 
-impl<T: FullRenderTree> RenderBox<T, Single> for RenderConstrainedOverflowBox {
-    fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Single, BoxProtocol>) -> Size
-    where
-        T: crate::core::LayoutTree,
-    {
+impl RenderBox<Single> for RenderConstrainedOverflowBox {
+    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
         let child_id = ctx.children.single();
 
         // Parent sizes itself according to its incoming constraints
@@ -164,10 +159,7 @@ impl<T: FullRenderTree> RenderBox<T, Single> for RenderConstrainedOverflowBox {
         parent_size
     }
 
-    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Single>)
-    where
-        T: crate::core::PaintTree,
-    {
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         let child_id = ctx.children.single();
 
         // Calculate child offset based on alignment

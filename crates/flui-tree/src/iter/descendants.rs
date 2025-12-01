@@ -65,8 +65,8 @@ impl<T: TreeNav> Iterator for Descendants<'_, T> {
         }
 
         // Push children in reverse order (so first child is processed first)
-        let children = self.tree.children(current);
-        for &child in children.iter().rev() {
+        let children: Vec<_> = self.tree.children(current).collect();
+        for child in children.into_iter().rev() {
             self.stack.push(child);
         }
 
@@ -113,8 +113,8 @@ impl<T: TreeNav> Iterator for DescendantsWithDepth<'_, T> {
             return self.next();
         }
 
-        let children = self.tree.children(current);
-        for &child in children.iter().rev() {
+        let children: Vec<_> = self.tree.children(current).collect();
+        for child in children.into_iter().rev() {
             self.stack.push((child, depth + 1));
         }
 

@@ -1,17 +1,9 @@
 //! RenderGrid - CSS Grid-inspired layout
-//!
-//! Arranges children in a grid with configurable row and column sizing.
-//! Supports flexible (fr), fixed (px), and automatic (auto) track sizing.
-//!
-//! Note: This is a CSS Grid-inspired implementation, not a direct Flutter port.
-//! For Flutter's grid, see GridView which uses slivers.
-//!
-//! Flutter reference: <https://api.flutter.dev/flutter/widgets/GridView-class.html>
 
-use crate::core::{BoxProtocol, LayoutContext, LayoutTree, PaintContext, FullRenderTree, RenderBox, Variable};
-use flui_foundation::ElementId;
+use flui_core::render::{BoxProtocol, LayoutContext, PaintContext, RenderBox, Variable};
 use flui_types::{BoxConstraints, Offset, Size};
 use std::collections::HashMap;
+use std::num::NonZeroUsize;
 
 /// Track size specification for grid rows/columns
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -182,15 +174,12 @@ impl RenderGrid {
     }
 
     /// Compute column widths based on track sizes
-    fn compute_column_widths<T>(
+    fn compute_column_widths(
         &self,
-        children: &[ElementId],
-        ctx: &mut LayoutContext<'_, T, Variable, BoxProtocol>,
+        children: &[NonZeroUsize],
+        ctx: &LayoutContext<'_, Variable, BoxProtocol>,
         constraints: BoxConstraints,
-    ) -> Vec<f32>
-    where
-        T: LayoutTree,
-    {
+    ) -> Vec<f32> {
         if self.column_sizes.is_empty() {
             return Vec::new();
         }
@@ -250,16 +239,13 @@ impl RenderGrid {
     }
 
     /// Compute row heights based on track sizes
-    fn compute_row_heights<T>(
+    fn compute_row_heights(
         &self,
-        children: &[ElementId],
-        ctx: &mut LayoutContext<'_, T, Variable, BoxProtocol>,
+        children: &[NonZeroUsize],
+        ctx: &LayoutContext<'_, Variable, BoxProtocol>,
         column_widths: &[f32],
         constraints: BoxConstraints,
-    ) -> Vec<f32>
-    where
-        T: LayoutTree,
-    {
+    ) -> Vec<f32> {
         if self.row_sizes.is_empty() {
             return Vec::new();
         }
@@ -326,11 +312,8 @@ impl RenderGrid {
     }
 }
 
-impl<T: FullRenderTree> RenderBox<T, Variable> for RenderGrid {
-    fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Variable, BoxProtocol>) -> Size
-    where
-        T: crate::core::LayoutTree,
-    {
+impl RenderBox<Variable> for RenderGrid {
+    fn layout(&mut self, ctx: LayoutContext<'_, Variable, BoxProtocol>) -> Size {
         let constraints = ctx.constraints;
         let children = ctx.children;
 
@@ -345,13 +328,9 @@ impl<T: FullRenderTree> RenderBox<T, Variable> for RenderGrid {
         }
 
         // Compute track sizes
-        self.computed_column_widths = self.compute_column_widths(&child_ids, &mut ctx, constraints);
-        self.computed_row_heights = self.compute_row_heights(
-            &child_ids,
-            &mut ctx,
-            &self.computed_column_widths,
-            constraints,
-        );
+        self.computed_column_widths = self.compute_column_widths(&child_ids, &ctx, constraints);
+        self.computed_row_heights =
+            self.compute_row_heights(&child_ids, &ctx, &self.computed_column_widths, constraints);
 
         // Layout each child in its grid cell
         for (idx, &child_id) in child_ids.iter().enumerate() {
@@ -401,10 +380,7 @@ impl<T: FullRenderTree> RenderBox<T, Variable> for RenderGrid {
         size
     }
 
-    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Variable>)
-    where
-        T: crate::core::PaintTree,
-    {
+    fn paint(&self, ctx: &mut PaintContext<'_, Variable>) {
         let offset = ctx.offset;
 
         // Collect child IDs first to avoid borrow checker issues

@@ -2,10 +2,8 @@
 //!
 //! This render object provides simple box-based scrolling for a single child.
 //! Used by SingleChildScrollView for straightforward scroll scenarios without slivers.
-//!
-//! Flutter reference: <https://api.flutter.dev/flutter/widgets/SingleChildScrollView-class.html>
 
-use crate::core::{BoxProtocol, LayoutContext, PaintContext, FullRenderTree, RenderBox, Single};
+use flui_core::render::{BoxProtocol, LayoutContext, PaintContext, RenderBox, Single};
 use flui_types::layout::Axis;
 use flui_types::painting::Paint;
 use flui_types::prelude::*;
@@ -175,8 +173,6 @@ impl RenderScrollView {
         }
 
         let current_offset = *self.scroll_offset.lock();
-        let track_paint = Paint::fill(Color::rgba(0, 0, 0, 25)); // ~0.1 alpha
-        let handle_paint = Paint::fill(Color::rgba(0, 0, 0, 128)); // ~0.5 alpha
 
         match self.axis {
             Axis::Vertical => {
@@ -185,29 +181,32 @@ impl RenderScrollView {
                 let content_height = self.child_size.height;
 
                 // Scrollbar handle size proportional to visible ratio
-                let handle_height = (viewport_height / content_height * viewport_height).max(20.0);
+                let handle_height = (viewport_height / content_height) * viewport_height;
+                let handle_height = handle_height.max(20.0); // Minimum handle size
 
                 // Scrollbar position based on scroll offset
                 let scroll_ratio = current_offset / max_offset;
-                let handle_offset = scroll_ratio * (viewport_height - handle_height);
+                let max_handle_offset = viewport_height - handle_height;
+                let handle_offset = scroll_ratio * max_handle_offset;
 
-                // Draw scrollbar track and handle using pill shape (rounded ends)
+                // Draw scrollbar track
                 let track_rect = Rect::from_xywh(
                     self.viewport_size.width - self.scrollbar_thickness,
                     0.0,
                     self.scrollbar_thickness,
                     viewport_height,
                 );
+                canvas.draw_rect(track_rect, &Paint::fill(Color::rgba(0, 0, 0, 25))); // ~0.1 alpha
+
+                // Draw scrollbar handle
                 let handle_rect = Rect::from_xywh(
                     self.viewport_size.width - self.scrollbar_thickness,
                     handle_offset,
                     self.scrollbar_thickness,
                     handle_height,
                 );
-
-                canvas
-                    .rect(track_rect, &track_paint)
-                    .draw_pill(handle_rect, &handle_paint);
+                canvas.draw_rect(handle_rect, &Paint::fill(Color::rgba(0, 0, 0, 128)));
+                // ~0.5 alpha
             }
             Axis::Horizontal => {
                 // Horizontal scrollbar on bottom edge
@@ -215,29 +214,32 @@ impl RenderScrollView {
                 let content_width = self.child_size.width;
 
                 // Scrollbar handle size proportional to visible ratio
-                let handle_width = (viewport_width / content_width * viewport_width).max(20.0);
+                let handle_width = (viewport_width / content_width) * viewport_width;
+                let handle_width = handle_width.max(20.0); // Minimum handle size
 
                 // Scrollbar position based on scroll offset
                 let scroll_ratio = current_offset / max_offset;
-                let handle_offset = scroll_ratio * (viewport_width - handle_width);
+                let max_handle_offset = viewport_width - handle_width;
+                let handle_offset = scroll_ratio * max_handle_offset;
 
-                // Draw scrollbar track and handle using pill shape (rounded ends)
+                // Draw scrollbar track
                 let track_rect = Rect::from_xywh(
                     0.0,
                     self.viewport_size.height - self.scrollbar_thickness,
                     viewport_width,
                     self.scrollbar_thickness,
                 );
+                canvas.draw_rect(track_rect, &Paint::fill(Color::rgba(0, 0, 0, 25))); // ~0.1 alpha
+
+                // Draw scrollbar handle
                 let handle_rect = Rect::from_xywh(
                     handle_offset,
                     self.viewport_size.height - self.scrollbar_thickness,
                     handle_width,
                     self.scrollbar_thickness,
                 );
-
-                canvas
-                    .rect(track_rect, &track_paint)
-                    .draw_pill(handle_rect, &handle_paint);
+                canvas.draw_rect(handle_rect, &Paint::fill(Color::rgba(0, 0, 0, 128)));
+                // ~0.5 alpha
             }
         }
     }
@@ -249,11 +251,8 @@ impl Default for RenderScrollView {
     }
 }
 
-impl<T: FullRenderTree> RenderBox<T, Single> for RenderScrollView {
-    fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Single, BoxProtocol>) -> Size
-    where
-        T: crate::core::LayoutTree,
-    {
+impl RenderBox<Single> for RenderScrollView {
+    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
         let viewport_constraints = &ctx.constraints;
 
         // Store viewport size
@@ -279,22 +278,21 @@ impl<T: FullRenderTree> RenderBox<T, Single> for RenderScrollView {
         self.viewport_size
     }
 
-    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Single>)
-    where
-        T: crate::core::PaintTree,
-    {
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         let child_id = ctx.children.single();
-        let paint_offset = ctx.offset + self.paint_offset();
 
-        // Apply clipping to viewport bounds with chaining API
+        // Apply clipping to viewport bounds
+        ctx.canvas().save();
         ctx.canvas()
-            .saved()
-            .clipped_rect(Rect::from_min_size(Point::ZERO, self.viewport_size));
+            .clip_rect(Rect::from_min_size(Point::ZERO, self.viewport_size));
+
+        // Calculate paint offset
+        let paint_offset = ctx.offset + self.paint_offset();
 
         // Paint child at scrolled position
         ctx.paint_child(child_id, paint_offset);
 
-        ctx.canvas().restored();
+        ctx.canvas().restore();
 
         // Paint scrollbar if enabled
         if self.show_scrollbar && self.max_scroll_offset() > 0.0 {
@@ -409,7 +407,7 @@ mod tests {
 
     #[test]
     fn test_paint_offset_vertical() {
-        let scroll_view = RenderScrollView::new(Axis::Vertical, false);
+        let mut scroll_view = RenderScrollView::new(Axis::Vertical, false);
 
         *scroll_view.scroll_offset.lock() = 100.0;
 
@@ -419,7 +417,7 @@ mod tests {
 
     #[test]
     fn test_paint_offset_horizontal() {
-        let scroll_view = RenderScrollView::new(Axis::Horizontal, false);
+        let mut scroll_view = RenderScrollView::new(Axis::Horizontal, false);
 
         *scroll_view.scroll_offset.lock() = 50.0;
 
@@ -429,7 +427,7 @@ mod tests {
 
     #[test]
     fn test_paint_offset_reversed() {
-        let scroll_view = RenderScrollView::new(Axis::Vertical, true);
+        let mut scroll_view = RenderScrollView::new(Axis::Vertical, true);
 
         *scroll_view.scroll_offset.lock() = 100.0;
 

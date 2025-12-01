@@ -111,8 +111,8 @@ impl<T: TreeNav> DepthFirstIter<'_, T> {
         let current = entry.id;
 
         // Push children in reverse order
-        let children = self.tree.children(current);
-        for &child in children.iter().rev() {
+        let children: Vec<_> = self.tree.children(current).collect();
+        for child in children.into_iter().rev() {
             self.stack.push(StackEntry {
                 id: child,
                 child_index: 0,
@@ -125,7 +125,7 @@ impl<T: TreeNav> DepthFirstIter<'_, T> {
     fn next_post_order(&mut self) -> Option<ElementId> {
         loop {
             let entry = self.stack.last_mut()?;
-            let children = self.tree.children(entry.id);
+            let children: Vec<_> = self.tree.children(entry.id).collect();
 
             if entry.child_index < children.len() {
                 // More children to process

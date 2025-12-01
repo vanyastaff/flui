@@ -92,95 +92,50 @@ pub mod embedder;
 pub mod event_callbacks;
 pub mod window_state;
 
-// Platform providers
-pub mod providers;
-
-// Error handling
-pub mod error_handling;
-
-// Application widgets
-mod root_widget;
-pub mod widgets_app;
-
-// Re-export public app widgets
-pub use widgets_app::{TextDirection, WidgetsApp};
-
-// Re-export platform providers
-pub use providers::{MediaQueryData, MediaQueryProvider};
-
-// Re-export error handling types
-pub use error_handling::{ErrorBoundary, ErrorInfo, ErrorWidget};
-
 // Re-exports for convenience
 pub use binding::AppBinding;
 pub use embedder::WgpuEmbedder;
 
 // Re-export commonly used types from flui_core
 pub use flui_core::{
-    // View system (now at top level)
-    BuildContext,
-    // Element system (now at top level)
-    Element,
+    // Element system
+    element::Element,
 
-    // Foundation types (now at top level)
-    ElementId,
-    Key,
-    Slot,
+    // Foundation types
+    foundation::{ElementId, Key, Slot},
+
+    // View system (new API)
+    view::{BuildContext, RootView, StatelessView},
 };
-
-// StatelessView is in flui-view
-pub use flui_view::StatelessView;
 
 use winit::event_loop::EventLoop;
 
 /// Run a FLUI app
 ///
 /// This is the main entry point for FLUI applications.
-/// It initializes the framework bindings, wraps your app in RootWidget,
-/// creates a window, and starts the event loop.
+/// It initializes the framework bindings, creates a window, and starts the event loop.
 ///
 /// # Parameters
 ///
-/// - `app`: The root widget (typically WidgetsApp or MaterialApp)
+/// - `app`: The root widget (typically an App or MaterialApp)
 ///
-/// # Recommended Usage
-///
-/// Use `WidgetsApp` to get framework services (MediaQuery, Navigator, etc.):
+/// # Example
 ///
 /// ```rust,ignore
-/// use flui_app::{run_app, WidgetsApp};
+/// use flui_app::run_app;
 /// use flui_widgets::*;
 ///
-/// #[derive(Debug, Clone)]
-/// struct Home;
+/// #[derive(Debug)]
+/// struct MyApp;
 ///
-/// impl StatelessView for Home {
+/// impl View for MyApp {
 ///     fn build(self, ctx: &BuildContext) -> impl IntoElement {
 ///         Text::new("Hello, FLUI!")
 ///     }
 /// }
 ///
 /// fn main() {
-///     run_app(WidgetsApp::new(Home).title("My App"));
-/// }
-/// ```
-///
-/// # Direct Usage (without WidgetsApp)
-///
-/// You can also pass any StatelessView directly:
-///
-/// ```rust,ignore
-/// #[derive(Debug, Clone)]
-/// struct SimpleApp;
-///
-/// impl StatelessView for SimpleApp {
-///     fn build(self, ctx: &BuildContext) -> impl IntoElement {
-///         Text::new("Minimal app")
-///     }
-/// }
-///
-/// fn main() {
-///     run_app(SimpleApp);
+///     run_app(MyApp);
 /// }
 /// ```
 ///
@@ -193,7 +148,7 @@ use winit::event_loop::EventLoop;
 #[cfg(not(target_os = "android"))]
 pub fn run_app<V>(app: V) -> !
 where
-    V: flui_view::StatelessView + Clone + Sync,
+    V: flui_core::view::StatelessView + Clone + Sync,
 {
     use crate::embedder::DesktopEmbedder;
     use winit::application::ApplicationHandler;
@@ -212,11 +167,8 @@ where
     // 1. Initialize bindings
     let binding = AppBinding::ensure_initialized();
 
-    // 2. Wrap user app in RootWidget (internal framework wrapper)
-    let root = root_widget::RootWidget::new(app);
-
-    // 3. Attach root widget to pipeline
-    binding.attach_root_widget(root);
+    // 2. Attach root widget
+    binding.attach_root_widget(app);
 
     tracing::info!("Entering event loop");
 

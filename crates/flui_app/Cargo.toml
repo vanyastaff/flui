@@ -44,7 +44,6 @@ devtools = ["flui_engine/devtools"]
 [dependencies]
 # Flui crates
 flui_core = { path = "../flui_core" }
-flui-view = { path = "../flui-view" }
 flui_types = { path = "../flui_types" }
 flui_widgets = { path = "../flui_widgets", optional = true }
 flui_interaction = { path = "../flui_interaction" }
@@ -63,7 +62,7 @@ winit.workspace = true
 # Utilities
 tracing.workspace = true
 parking_lot.workspace = true
-pollster = { workspace = true }
+pollster = "0.3"
 
 # Android dependencies
 [target.'cfg(target_os = "android")'.dependencies]

@@ -1,80 +1,33 @@
 //! RenderFlow - Custom layout with delegate pattern
-//!
-//! Implements the flow layout algorithm, optimized for efficiently repositioning
-//! child widgets using transformation matrices during the paint phase.
-//!
-//! Flutter reference: <https://api.flutter.dev/flutter/rendering/RenderFlow-class.html>
 
-use crate::core::{BoxProtocol, LayoutContext, PaintContext, FullRenderTree, RenderBox, Variable};
-use flui_foundation::ElementId;
+use flui_core::render::{BoxProtocol, LayoutContext, PaintContext, RenderBox, Variable};
 use flui_types::{BoxConstraints, Matrix4, Offset, Size};
 use std::any::Any;
 use std::fmt::Debug;
+use std::num::NonZeroUsize;
 
 /// Context provided to FlowDelegate during paint
-pub struct FlowPaintContext<'a, 'b, T>
-where
-    T: crate::core::PaintTree,
-{
+pub struct FlowPaintContext<'a, 'b> {
     /// Paint context reference
-    pub paint_ctx: &'a mut PaintContext<'b, T, Variable>,
+    pub paint_ctx: &'a mut PaintContext<'b, Variable>,
     /// Number of children
     pub child_count: usize,
     /// Size of each child (after layout)
     pub child_sizes: &'a [Size],
     /// Children IDs
-    pub children: &'a [ElementId],
+    pub children: &'a [NonZeroUsize],
 }
 
-impl<'a, 'b, T> FlowPaintContext<'a, 'b, T>
-where
-    T: crate::core::PaintTree,
-{
+impl<'a, 'b> FlowPaintContext<'a, 'b> {
     /// Paint a child with transformation matrix
-    ///
-    /// The transformation matrix is applied to the child's coordinate system.
-    /// This allows repositioning children efficiently without re-layout.
-    ///
-    /// # Arguments
-    ///
-    /// * `index` - Index of the child to paint
-    /// * `transform` - 4x4 transformation matrix to apply
-    /// * `offset` - Base offset for painting (typically the flow container's offset)
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// // Translate child by (100, 50)
-    /// let transform = Matrix4::translation(100.0, 50.0, 0.0);
-    /// context.paint_child(0, transform, offset);
-    ///
-    /// // Rotate child 45 degrees around center
-    /// let transform = Matrix4::rotation_z(std::f32::consts::PI / 4.0);
-    /// context.paint_child(1, transform, offset);
-    /// ```
     pub fn paint_child(&mut self, index: usize, transform: Matrix4, offset: Offset) {
         if index >= self.children.len() {
             return;
         }
 
-        // Apply transformation using chaining API
-        // The transform is applied BEFORE the offset translation
-        self.paint_ctx.canvas().saved().transformed(transform);
-
-        // Paint child - the offset is applied in the transformed coordinate system
-        self.paint_ctx.paint_child(self.children[index], offset);
-
-        self.paint_ctx.canvas().restored();
-    }
-
-    /// Paint a child without transformation (just offset)
-    ///
-    /// This is equivalent to `paint_child(index, Matrix4::IDENTITY, offset)` but
-    /// avoids unnecessary save/restore overhead.
-    pub fn paint_child_simple(&mut self, index: usize, offset: Offset) {
-        if index >= self.children.len() {
-            return;
-        }
+        // TODO: Apply transformation matrix when transform layers are supported
+        // For now, just paint at offset
+        let _ = transform; // Suppress warning
         self.paint_ctx.paint_child(self.children[index], offset);
     }
 }
@@ -92,9 +45,7 @@ pub trait FlowDelegate: Debug + Send + Sync {
     ) -> BoxConstraints;
 
     /// Paint children with custom transformations
-    fn paint_children<T>(&self, context: &mut FlowPaintContext<'_, '_, T>, offset: Offset)
-    where
-        T: crate::core::PaintTree;
+    fn paint_children(&self, context: &mut FlowPaintContext, offset: Offset);
 
     /// Check if layout should be recomputed
     fn should_relayout(&self, old: &dyn Any) -> bool;
@@ -135,10 +86,7 @@ impl FlowDelegate for SimpleFlowDelegate {
         BoxConstraints::new(0.0, constraints.max_width, 0.0, constraints.max_height)
     }
 
-    fn paint_children<T>(&self, context: &mut FlowPaintContext<'_, '_, T>, offset: Offset)
-    where
-        T: crate::core::PaintTree,
-    {
+    fn paint_children(&self, context: &mut FlowPaintContext, offset: Offset) {
         let mut x = 0.0;
 
         for i in 0..context.child_count {
@@ -183,18 +131,18 @@ impl FlowDelegate for SimpleFlowDelegate {
 /// let delegate = Box::new(SimpleFlowDelegate::new(10.0));
 /// let flow = RenderFlow::new(delegate);
 /// ```
-pub struct RenderFlow<D: FlowDelegate + 'static> {
+pub struct RenderFlow {
     /// Layout delegate
-    delegate: D,
+    delegate: Box<dyn FlowDelegate>,
 
     // Cache for layout
     child_sizes: Vec<Size>,
     size: Size,
 }
 
-impl<D: FlowDelegate> RenderFlow<D> {
+impl RenderFlow {
     /// Create new RenderFlow with delegate
-    pub fn new(delegate: D) -> Self {
+    pub fn new(delegate: Box<dyn FlowDelegate>) -> Self {
         Self {
             delegate,
             child_sizes: Vec::new(),
@@ -203,12 +151,12 @@ impl<D: FlowDelegate> RenderFlow<D> {
     }
 
     /// Set new delegate
-    pub fn set_delegate(&mut self, delegate: D) {
+    pub fn set_delegate(&mut self, delegate: Box<dyn FlowDelegate>) {
         self.delegate = delegate;
     }
 }
 
-impl<D: FlowDelegate> Debug for RenderFlow<D> {
+impl Debug for RenderFlow {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RenderFlow")
             .field("delegate", &"<delegate>")
@@ -218,11 +166,8 @@ impl<D: FlowDelegate> Debug for RenderFlow<D> {
     }
 }
 
-impl<D: FlowDelegate> RenderBox<Variable> for RenderFlow<D> {
-    fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Variable, BoxProtocol>) -> Size
-    where
-        T: crate::core::LayoutTree,
-    {
+impl RenderBox<Variable> for RenderFlow {
+    fn layout(&mut self, ctx: LayoutContext<'_, Variable, BoxProtocol>) -> Size {
         let constraints = ctx.constraints;
         let children = ctx.children;
 
@@ -241,10 +186,7 @@ impl<D: FlowDelegate> RenderBox<Variable> for RenderFlow<D> {
         size
     }
 
-    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Variable>)
-    where
-        T: crate::core::PaintTree,
-    {
+    fn paint(&self, ctx: &mut PaintContext<'_, Variable>) {
         let offset = ctx.offset;
 
         // Collect child IDs first to avoid borrow checker issues
@@ -313,7 +255,7 @@ mod tests {
 
     #[test]
     fn test_render_flow_new() {
-        let delegate = SimpleFlowDelegate::new(10.0);
+        let delegate = Box::new(SimpleFlowDelegate::new(10.0));
         let flow = RenderFlow::new(delegate);
 
         assert_eq!(flow.child_sizes.len(), 0);
@@ -322,10 +264,10 @@ mod tests {
 
     #[test]
     fn test_render_flow_set_delegate() {
-        let delegate1 = SimpleFlowDelegate::new(10.0);
+        let delegate1 = Box::new(SimpleFlowDelegate::new(10.0));
         let mut flow = RenderFlow::new(delegate1);
 
-        let delegate2 = SimpleFlowDelegate::new(20.0);
+        let delegate2 = Box::new(SimpleFlowDelegate::new(20.0));
         flow.set_delegate(delegate2);
 
         // Delegate should be updated (can't easily verify without layout)

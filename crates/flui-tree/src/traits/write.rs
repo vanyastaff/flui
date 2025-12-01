@@ -113,7 +113,8 @@ pub trait TreeWrite: TreeRead {
         Self: super::TreeNav + Sized,
     {
         // Collect all descendants first (to avoid borrow issues)
-        let to_remove: Vec<_> = self.descendants(id).collect();
+        // descendants() returns (ElementId, depth) tuples
+        let to_remove: Vec<_> = self.descendants(id).map(|(id, _depth)| id).collect();
         let count = to_remove.len();
 
         // Remove in reverse order (children before parents)
@@ -228,12 +229,13 @@ pub trait TreeWriteNav: TreeWrite + super::TreeNav {
         }
 
         // Check for cycles: 'to' can't be a descendant of 'from'
-        if self.is_descendant(to, from) {
+        // is_ancestor_of(from, to) means 'from' is ancestor of 'to', i.e., 'to' is descendant of 'from'
+        if self.is_ancestor_of(from, to) {
             return Err(TreeError::cycle_detected(to));
         }
 
         // Collect children first (to avoid borrow issues)
-        let children: Vec<_> = self.children(from).to_vec();
+        let children: Vec<_> = self.children(from).collect();
 
         // Move each child
         for child in children {

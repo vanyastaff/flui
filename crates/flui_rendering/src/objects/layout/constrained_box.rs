@@ -1,10 +1,7 @@
 //! RenderConstrainedBox - applies additional constraints to a child
-//!
-//! Flutter equivalent: `RenderConstrainedBox`
-//! Source: https://api.flutter.dev/flutter/rendering/RenderConstrainedBox-class.html
 
-use crate::core::{BoxProtocol, LayoutContext, PaintContext};
-use crate::core::{Optional, RenderBox};
+use flui_core::render::{BoxProtocol, LayoutContext, PaintContext};
+use flui_core::render::{Optional, RenderBox};
 use flui_types::constraints::BoxConstraints;
 use flui_types::Size;
 
@@ -54,11 +51,8 @@ impl Default for RenderConstrainedBox {
     }
 }
 
-impl<T: FullRenderTree> RenderBox<T, Optional> for RenderConstrainedBox {
-    fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Optional, BoxProtocol>) -> Size
-    where
-        T: crate::core::LayoutTree,
-    {
+impl RenderBox<Optional> for RenderConstrainedBox {
+    fn layout(&mut self, ctx: LayoutContext<'_, Optional, BoxProtocol>) -> Size {
         let constraints = ctx.constraints;
 
         // Enforce additional constraints by intersecting with incoming constraints
@@ -84,10 +78,7 @@ impl<T: FullRenderTree> RenderBox<T, Optional> for RenderConstrainedBox {
         size
     }
 
-    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Optional>)
-    where
-        T: crate::core::PaintTree,
-    {
+    fn paint(&self, ctx: &mut PaintContext<'_, Optional>) {
         // If we have a child, paint it at our offset
         if let Some(child_id) = ctx.children.get() {
             ctx.paint_child(child_id, ctx.offset);

@@ -1,9 +1,9 @@
 //! RenderPhysicalModel - Material Design elevation with shadow
 
-use crate::core::{BoxProtocol, LayoutContext, PaintContext};
-use crate::core::{Optional, RenderBox};
+use flui_core::render::{BoxProtocol, LayoutContext, PaintContext};
+use flui_core::render::{Optional, RenderBox};
 use flui_painting::Paint;
-use flui_types::{painting::Path, Color, Point, Rect, Size};
+use flui_types::{painting::Path, Color, Point, RRect, Rect, Size};
 
 /// Shape for physical model
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -114,11 +114,8 @@ impl Default for RenderPhysicalModel {
     }
 }
 
-impl<T: FullRenderTree> RenderBox<T, Optional> for RenderPhysicalModel {
-    fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Optional, BoxProtocol>) -> Size
-    where
-        T: crate::core::LayoutTree,
-    {
+impl RenderBox<Optional> for RenderPhysicalModel {
+    fn layout(&mut self, ctx: LayoutContext<'_, Optional, BoxProtocol>) -> Size {
         let constraints = ctx.constraints;
 
         let size = if let Some(child_id) = ctx.children.get() {
@@ -135,22 +132,34 @@ impl<T: FullRenderTree> RenderBox<T, Optional> for RenderPhysicalModel {
         size
     }
 
-    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Optional>)
-    where
-        T: crate::core::PaintTree,
-    {
+    fn paint(&self, ctx: &mut PaintContext<'_, Optional>) {
         let offset = ctx.offset;
+
         let size = self.size;
-        let rect = Rect::from_xywh(offset.dx, offset.dy, size.width, size.height);
 
         // Draw shadow if elevation > 0
         // Note: For proper shadow rendering, we would need to use a more sophisticated
-        // shadow algorithm. For now, we use Canvas::shadow which provides basic support.
+        // shadow algorithm. For now, we use Canvas::draw_shadow which provides basic support.
         if self.elevation > 0.0 {
-            let mut shadow_path = Path::new();
-            shadow_path.add_rect(rect);
+            let shadow_path = match self.shape {
+                PhysicalShape::Rectangle => {
+                    let mut path = Path::new();
+                    let rect = Rect::from_xywh(offset.dx, offset.dy, size.width, size.height);
+                    path.add_rect(rect);
+                    path
+                }
+                PhysicalShape::RoundedRectangle | PhysicalShape::Circle => {
+                    // For rounded shapes, approximate with a simple rect for shadow
+                    // A full implementation would use Path::add_rrect() when available
+                    let mut path = Path::new();
+                    let rect = Rect::from_xywh(offset.dx, offset.dy, size.width, size.height);
+                    path.add_rect(rect);
+                    path
+                }
+            };
+
             ctx.canvas()
-                .shadow(&shadow_path, self.shadow_color, self.elevation);
+                .draw_shadow(&shadow_path, self.shadow_color, self.elevation);
         }
 
         // Paint background shape at the offset position
@@ -158,16 +167,22 @@ impl<T: FullRenderTree> RenderBox<T, Optional> for RenderPhysicalModel {
 
         match self.shape {
             PhysicalShape::Rectangle => {
-                ctx.canvas().rect(rect, &paint);
+                let rect = Rect::from_xywh(offset.dx, offset.dy, size.width, size.height);
+                ctx.canvas().draw_rect(rect, &paint);
             }
             PhysicalShape::RoundedRectangle => {
-                ctx.canvas().rounded_rect(rect, self.border_radius, &paint);
+                let radius = flui_types::styling::Radius::circular(self.border_radius);
+                let rrect = RRect::from_rect_and_radius(
+                    Rect::from_xywh(offset.dx, offset.dy, size.width, size.height),
+                    radius,
+                );
+                ctx.canvas().draw_rrect(rrect, &paint);
             }
             PhysicalShape::Circle => {
                 let radius = size.width.min(size.height) / 2.0;
                 let center =
                     Point::new(offset.dx + size.width / 2.0, offset.dy + size.height / 2.0);
-                ctx.canvas().circle(center, radius, &paint);
+                ctx.canvas().draw_circle(center, radius, &paint);
             }
         }
 

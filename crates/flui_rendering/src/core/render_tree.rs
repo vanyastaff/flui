@@ -174,45 +174,6 @@ pub trait LayoutTree: DirtyTracking + RenderTreeAccessExt {
 
     /// Get the offset of an element.
     fn get_offset(&self, id: ElementId) -> Option<Offset>;
-
-    /// Get the distance from the top of the element to its baseline.
-    ///
-    /// Returns `None` if the element doesn't have a baseline (e.g., non-text elements).
-    ///
-    /// This is used for aligning elements along a common baseline, typically for
-    /// text alignment in mixed content (e.g., icons with text labels).
-    ///
-    /// # Arguments
-    ///
-    /// * `id` - The element ID to query
-    /// * `baseline_type` - The type of baseline to query (alphabetic or ideographic)
-    ///
-    /// # Returns
-    ///
-    /// * `Some(distance)` - Distance from the top of the element to the baseline
-    /// * `None` - Element doesn't have a baseline
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// use flui_types::layout::TextBaseline;
-    ///
-    /// // Get alphabetic baseline for text alignment
-    /// if let Some(baseline) = tree.get_baseline(child_id, TextBaseline::Alphabetic) {
-    ///     let offset = target_baseline - baseline;
-    ///     // Position child at offset
-    /// }
-    /// ```
-    fn get_baseline(
-        &self,
-        id: ElementId,
-        baseline_type: flui_types::layout::TextBaseline,
-    ) -> Option<f32> {
-        // Default implementation: return None (no baseline)
-        // RenderObjects that have baselines (like text) should store this in RenderState
-        self.render_state_typed::<RenderState>(id)?
-            .baseline(baseline_type)
-    }
 }
 
 /// Extension trait for iterator-based layout operations.
@@ -399,10 +360,12 @@ pub trait HitTestTreeExt: HitTestTree {
     ) -> Option<ElementId> {
         // Collect children and iterate in reverse for proper z-ordering
         let children: Vec<_> = RenderChildren::new(self, parent).collect();
-        children
-            .into_iter()
-            .rev()
-            .find(|&child| self.hit_test(child, position, result))
+        for child in children.into_iter().rev() {
+            if self.hit_test(child, position, result) {
+                return Some(child);
+            }
+        }
+        None
     }
 
     /// Hit test all render children with position transform.

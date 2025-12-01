@@ -1,10 +1,7 @@
 //! RenderBlockSemantics - blocks descendant semantics from being merged
-//!
-//! Flutter reference: <https://api.flutter.dev/flutter/widgets/BlockSemantics-class.html>
 
-use crate::core::{
-    FullRenderTree,
-    FullRenderTree, RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
+use flui_core::render::{
+    RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
 };
 use flui_types::Size;
 
@@ -54,20 +51,14 @@ impl RenderBlockSemantics {
 
 // ===== RenderObject Implementation =====
 
-impl<T: FullRenderTree> RenderBox<T, Single> for RenderBlockSemantics {
-    fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Single, BoxProtocol>) -> Size
-    where
-        T: crate::core::LayoutTree,
-    {
+impl RenderBox<Single> for RenderBlockSemantics {
+    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
         let child_id = ctx.children.single();
         // Layout child with same constraints (pass-through)
         ctx.layout_child(child_id, ctx.constraints)
     }
 
-    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Single>)
-    where
-        T: crate::core::PaintTree,
-    {
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         let child_id = ctx.children.single();
         // Paint child directly (pass-through)
         ctx.paint_child(child_id, ctx.offset);

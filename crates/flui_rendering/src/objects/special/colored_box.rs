@@ -1,7 +1,7 @@
 //! RenderColoredBox - simple solid color box
 
-use crate::core::{BoxProtocol, LayoutContext, PaintContext};
-use crate::core::{Leaf, RenderBox};
+use flui_core::render::{BoxProtocol, LayoutContext, PaintContext};
+use flui_core::render::{Leaf, RenderBox};
 use flui_types::{Color, Rect, Size};
 
 /// RenderObject that paints a solid color background
@@ -50,11 +50,8 @@ impl Default for RenderColoredBox {
     }
 }
 
-impl<T: FullRenderTree> RenderBox<T, Leaf> for RenderColoredBox {
-    fn layout<T>(&mut self, ctx: LayoutContext<'_, T, Leaf, BoxProtocol>) -> Size
-    where
-        T: crate::core::LayoutTree,
-    {
+impl RenderBox<Leaf> for RenderColoredBox {
+    fn layout(&mut self, ctx: LayoutContext<'_, Leaf, BoxProtocol>) -> Size {
         let constraints = ctx.constraints;
         // Leaf renders have no children - fill available space
         let size = Size::new(constraints.max_width, constraints.max_height);
@@ -62,15 +59,16 @@ impl<T: FullRenderTree> RenderBox<T, Leaf> for RenderColoredBox {
         size
     }
 
-    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Leaf>)
-    where
-        T: crate::core::PaintTree,
-    {
-        // Draw solid color rectangle using chaining API
+    fn paint(&self, ctx: &mut PaintContext<'_, Leaf>) {
+        // Draw solid color rectangle
         let rect = Rect::from_min_size(flui_types::Point::ZERO, self.size);
-        let paint = flui_painting::Paint::fill(self.color);
+        let paint = flui_painting::Paint {
+            color: self.color,
+            style: flui_painting::PaintStyle::Fill,
+            ..Default::default()
+        };
 
-        ctx.canvas().rect(rect, &paint);
+        ctx.canvas().draw_rect(rect, &paint);
     }
 }
 

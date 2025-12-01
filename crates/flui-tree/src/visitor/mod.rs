@@ -16,6 +16,16 @@
 //! - [`TreeVisitorMut`] - Mutable visitor with node access
 //! - [`TypedVisitor`] - GAT-based visitor with flexible return types
 //! - [`StatefulVisitor`] - Visitor with compile-time state tracking
+//! - [`FallibleVisitor`] - Visitor that can return errors
+//! - [`StatisticsVisitor`] - Visitor for collecting tree statistics
+//!
+//! # Composition
+//!
+//! Visitors can be composed for efficiency:
+//! - [`ComposedVisitor`] - Combine two visitors
+//! - [`TripleComposedVisitor`] - Combine three visitors
+//! - [`VisitorVec`] - Dynamic collection of visitors
+//! - [`ConditionalVisitor`] - Filter visited nodes
 //!
 //! # Performance Features
 //!
@@ -32,7 +42,33 @@
 //! // HRTB visitor that works with any lifetime
 //! let mut visitor = FindVisitor::new(|node: &SomeNodeType| node.name == "target");
 //! let result = visit_depth_first_typed(&tree, root, &mut visitor);
+//!
+//! // Compose multiple visitors
+//! let count = CountVisitor::new();
+//! let depth = MaxDepthVisitor::new();
+//! let mut composed = count.and_then(depth);
+//! visit_depth_first(&tree, root, &mut composed);
 //! ```
+
+// Submodules
+pub mod composition;
+pub mod fallible;
+pub mod statistics;
+
+// Re-exports from submodules
+pub use composition::{
+    ComposedVisitor, ConditionalVisitor, DynVisitor, MappedVisitor, TripleComposedVisitor,
+    VisitorExt, VisitorVec,
+};
+pub use fallible::{
+    try_collect, try_for_each, validate_depth, visit_fallible, visit_fallible_breadth_first,
+    visit_fallible_with_path, DepthLimitExceeded, DepthLimitVisitor, FallibleVisitor,
+    FallibleVisitorMut, TryCollectVisitor, TryForEachVisitor, VisitorError,
+};
+pub use statistics::{
+    collect_statistics, compare_statistics, tree_summary, StatisticsComparison, StatisticsVisitor,
+    StatisticsVisitorMut, TreeStatistics,
+};
 
 use flui_foundation::ElementId;
 use std::collections::VecDeque;
@@ -383,45 +419,56 @@ where
 ///
 /// Uses GAT to collect results of any type while maintaining
 /// zero-cost abstractions and optimal memory usage.
+///
+/// Note: Returns Vec<ElementId> for simplicity due to lifetime constraints.
 pub fn visit_depth_first_typed<'a, T, V>(
     tree: &'a T,
     root: ElementId,
     visitor: &'a mut V,
-) -> V::Collection<'a>
+) -> Vec<ElementId>
 where
     T: TreeNav,
     V: TypedVisitor<T>,
 {
-    let mut collection = visitor.create_collection();
+    let mut collection = Vec::new();
     visit_typed_impl(tree, root, 0, visitor, &mut collection);
     collection
 }
 
 /// Internal typed visitor implementation.
-fn visit_typed_impl<T, V>(
-    tree: &T,
-    node: ElementId,
-    depth: usize,
+///
+/// Uses an iterative approach to avoid lifetime issues with recursive mutable borrows.
+fn visit_typed_impl<'a, T, V>(
+    tree: &'a T,
+    root: ElementId,
+    initial_depth: usize,
     visitor: &mut V,
-    collection: &mut V::Collection<'_>,
+    collection: &mut Vec<ElementId>,
 ) where
     T: TreeNav,
     V: TypedVisitor<T>,
 {
-    let (result, item) = visitor.visit_typed(tree, node, depth);
+    // Use iterative approach with explicit stack to avoid lifetime issues
+    let mut stack: Vec<(ElementId, usize)> = vec![(root, initial_depth)];
 
-    if let Some(item) = item {
-        collection.extend(std::iter::once(item));
-    }
+    while let Some((node, depth)) = stack.pop() {
+        let (result, item) = visitor.visit_typed(tree, node, depth);
 
-    if result.should_visit_children() {
-        for child in tree.children(node) {
-            visit_typed_impl(tree, child, depth + 1, visitor, collection);
+        if let Some(_item) = item {
+            // Store just the ElementId to avoid lifetime issues
+            collection.push(node);
+        }
 
-            // Check for early termination hints
-            if matches!(result, VisitorResult::Stop | VisitorResult::SkipSiblings) {
-                break;
+        if result.should_visit_children() {
+            // Collect children first, then push in reverse for correct order
+            let children: Vec<_> = tree.children(node).collect();
+            for child in children.into_iter().rev() {
+                stack.push((child, depth + 1));
             }
+        }
+
+        if result.should_stop() {
+            break;
         }
     }
 }
@@ -430,46 +477,46 @@ fn visit_typed_impl<T, V>(
 // BUILT-IN VISITORS WITH ADVANCED FEATURES
 // ============================================================================
 
-/// Collector visitor using const generics for optimization.
+/// Collector visitor for gathering element IDs.
 ///
-/// Collects element IDs with stack-allocated storage for
-/// small collections and heap allocation for larger ones.
-pub struct CollectVisitor<const INLINE_SIZE: usize = 32> {
-    /// Collected element IDs with inline storage.
-    pub collected: smallvec::SmallVec<[ElementId; INLINE_SIZE]>,
+/// Collects element IDs with heap-allocated storage.
+/// Uses `Vec` for simplicity and broad compatibility.
+pub struct CollectVisitor {
+    /// Collected element IDs.
+    pub collected: Vec<ElementId>,
 }
 
-impl<const INLINE_SIZE: usize> CollectVisitor<INLINE_SIZE> {
+impl CollectVisitor {
     /// Create new collector with default capacity.
     pub fn new() -> Self {
         Self {
-            collected: smallvec::SmallVec::new(),
+            collected: Vec::new(),
         }
     }
 
     /// Create collector with specific capacity.
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
-            collected: smallvec::SmallVec::with_capacity(capacity),
+            collected: Vec::with_capacity(capacity),
         }
     }
 
     /// Consume visitor and return collected items.
-    pub fn into_inner(self) -> smallvec::SmallVec<[ElementId; INLINE_SIZE]> {
+    pub fn into_inner(self) -> Vec<ElementId> {
         self.collected
     }
 }
 
-impl<const INLINE_SIZE: usize> sealed::Sealed for CollectVisitor<INLINE_SIZE> {}
+impl sealed::Sealed for CollectVisitor {}
 
-impl<const INLINE_SIZE: usize> TreeVisitor for CollectVisitor<INLINE_SIZE> {
+impl TreeVisitor for CollectVisitor {
     fn visit(&mut self, id: ElementId, _depth: usize) -> VisitorResult {
         self.collected.push(id);
         VisitorResult::Continue
     }
 }
 
-impl<const INLINE_SIZE: usize> Default for CollectVisitor<INLINE_SIZE> {
+impl Default for CollectVisitor {
     fn default() -> Self {
         Self::new()
     }
@@ -745,9 +792,9 @@ pub fn collect_all<T>(tree: &T, root: ElementId) -> Vec<ElementId>
 where
     T: TreeNav,
 {
-    let mut visitor = CollectVisitor::<32>::new();
-    visit_depth_first::<T, _, 64>(tree, root, &mut visitor);
-    visitor.into_inner().into_vec()
+    let mut visitor = CollectVisitor::new();
+    visit_depth_first(tree, root, &mut visitor);
+    visitor.into_inner()
 }
 
 /// Count all nodes in a subtree with optional limit.
@@ -756,7 +803,7 @@ where
     T: TreeNav,
 {
     let mut visitor = CountVisitor::new();
-    visit_depth_first::<T, _, 32>(tree, root, &mut visitor);
+    visit_depth_first(tree, root, &mut visitor);
     visitor.count
 }
 
@@ -766,7 +813,7 @@ where
     T: TreeNav,
 {
     let mut visitor = CountVisitor::with_limit(limit);
-    visit_depth_first::<T, _, 32>(tree, root, &mut visitor);
+    visit_depth_first(tree, root, &mut visitor);
     visitor.count
 }
 
@@ -776,7 +823,7 @@ where
     T: TreeNav,
 {
     let mut visitor = MaxDepthVisitor::new();
-    visit_depth_first::<T, _, 64>(tree, root, &mut visitor);
+    visit_depth_first(tree, root, &mut visitor);
     visitor.max_depth
 }
 
@@ -786,7 +833,7 @@ where
     T: TreeNav,
 {
     let mut visitor = MaxDepthVisitor::with_threshold(threshold);
-    visit_depth_first::<T, _, 32>(tree, root, &mut visitor);
+    visit_depth_first(tree, root, &mut visitor);
     visitor.max_depth
 }
 
@@ -797,7 +844,7 @@ where
     P: for<'a> Fn(ElementId, usize) -> bool,
 {
     let mut visitor = FindVisitor::new(predicate);
-    visit_depth_first::<T, _, 48>(tree, root, &mut visitor);
+    visit_depth_first(tree, root, &mut visitor);
     visitor.found
 }
 
@@ -808,7 +855,7 @@ where
     F: for<'a> FnMut(ElementId, usize),
 {
     let mut visitor = ForEachVisitor::new(callback);
-    visit_depth_first::<T, _, 32>(tree, root, &mut visitor);
+    visit_depth_first(tree, root, &mut visitor);
 }
 
 /// Stateful traversal with typestate guarantees.
@@ -825,7 +872,7 @@ where
     Data: for<'a> FnMut(ElementId, usize) -> VisitorResult,
 {
     let mut visitor = StatefulVisitor::new(data).start();
-    visit_depth_first::<T, _, 32>(tree, root, &mut visitor);
+    visit_depth_first(tree, root, &mut visitor);
     visitor.finish()
 }
 

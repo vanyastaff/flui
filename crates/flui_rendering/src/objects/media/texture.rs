@@ -1,13 +1,24 @@
 //! RenderTexture - GPU texture rendering
-//!
-//! Flutter reference: <https://api.flutter.dev/flutter/widgets/Texture-class.html>
 
-use crate::core::{BoxProtocol, LayoutContext, Leaf, PaintContext, RenderBox};
+use flui_core::render::{BoxProtocol, LayoutContext, Leaf, PaintContext, RenderBox};
 use flui_types::styling::BoxFit;
 use flui_types::{Rect, Size};
 
-// Re-export TextureId and FilterQuality from flui_types for convenience
-pub use flui_types::painting::{FilterQuality, TextureId};
+/// Texture ID reference (platform-specific handle)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct TextureId(pub u64);
+
+impl TextureId {
+    /// Create new texture ID
+    pub const fn new(id: u64) -> Self {
+        Self(id)
+    }
+
+    /// Get the underlying ID
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+}
 
 /// RenderObject for displaying GPU textures
 ///
@@ -38,6 +49,20 @@ pub struct RenderTexture {
 
     // Cache for layout
     size: Size,
+}
+
+/// Filter quality for texture sampling
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FilterQuality {
+    /// Nearest neighbor (pixelated, fastest)
+    None,
+    /// Bilinear filtering (smooth)
+    #[default]
+    Low,
+    /// Bilinear + mipmaps
+    Medium,
+    /// Bicubic filtering (best quality, slowest)
+    High,
 }
 
 impl RenderTexture {
@@ -202,11 +227,8 @@ impl RenderTexture {
     }
 }
 
-impl<T: FullRenderTree> RenderBox<T, Leaf> for RenderTexture {
-    fn layout<T>(&mut self, ctx: LayoutContext<'_, T, Leaf, BoxProtocol>) -> Size
-    where
-        T: crate::core::LayoutTree,
-    {
+impl RenderBox<Leaf> for RenderTexture {
+    fn layout(&mut self, ctx: LayoutContext<'_, Leaf, BoxProtocol>) -> Size {
         let constraints = ctx.constraints;
 
         // Textures typically take up all available space
@@ -217,22 +239,22 @@ impl<T: FullRenderTree> RenderBox<T, Leaf> for RenderTexture {
         size
     }
 
-    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Leaf>)
-    where
-        T: crate::core::PaintTree,
-    {
-        // Calculate destination rect based on layout size
-        let dst_rect = Rect::from_min_size(flui_types::Point::ZERO, self.size);
+    fn paint(&self, ctx: &mut PaintContext<'_, Leaf>) {
+        // Draw GPU texture
+        // Note: Canvas API will need to support texture drawing
+        // For now, we draw a placeholder rectangle to show the texture bounds
+        let rect = Rect::from_min_size(flui_types::Point::ZERO, self.size);
+        let paint = flui_painting::Paint {
+            style: flui_painting::PaintStyle::Stroke,
+            stroke_width: 2.0,
+            color: flui_types::Color::rgba(128, 128, 128, 255),
+            ..Default::default()
+        };
 
-        // Draw the GPU texture using Canvas API
-        // The texture will be looked up by ID in the rendering engine's texture registry
-        ctx.canvas().texture(
-            self.texture_id,
-            dst_rect,
-            None, // Use entire texture (no source rect cropping)
-            self.filter_quality,
-            1.0, // Full opacity
-        );
+        ctx.canvas().draw_rect(rect, &paint);
+
+        // TODO: Once Canvas supports texture drawing, use:
+        // ctx.canvas().draw_texture(self.texture_id, rect, self.filter_quality);
     }
 }
 

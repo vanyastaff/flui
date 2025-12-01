@@ -1,8 +1,7 @@
 //! RenderCustomPaint - custom painting with user-defined painters
 
-use crate::core::{
-    FullRenderTree,
-    FullRenderTree, RenderBox, Optional, {BoxProtocol, LayoutContext, PaintContext},
+use flui_core::render::{
+    RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
 };
 use flui_painting::Canvas;
 use flui_types::Size;
@@ -23,19 +22,14 @@ pub trait CustomPainter: std::fmt::Debug + Send + Sync {
 /// RenderObject that allows custom painting
 ///
 /// This widget allows you to paint custom graphics before and/or after
-/// the child widget. Useful for drawing custom shapes, decorations, etc.
-///
-/// # Without Child
-///
-/// When no child is present, CustomPaint uses its `size` field to determine
-/// layout size (decorative painting only).
+/// the child_id widget. Useful for drawing custom shapes, decorations, etc.
 ///
 /// # Example
 ///
 /// ```rust,ignore
 /// use flui_rendering::RenderCustomPaint;
 ///
-/// // Custom paint with preferred size (can work without child)
+/// // Custom paint with preferred size
 /// let custom = RenderCustomPaint::new(Size::new(100.0, 100.0));
 /// ```
 #[derive(Debug)]
@@ -148,44 +142,32 @@ impl Default for RenderCustomPaint {
 
 // ===== RenderObject Implementation =====
 
-impl<T: FullRenderTree> RenderBox<T, Optional> for RenderCustomPaint {
-    fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Optional, BoxProtocol>) -> Size
-    where
-        T: crate::core::LayoutTree,
-    {
-        let constraints = ctx.constraints;
+impl RenderBox<Single> for RenderCustomPaint {
+    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
+        let child_id = ctx.children.single();
 
-        let size = if let Some(child_id) = ctx.children.get() {
-            // Layout child and use its size
-            ctx.layout_child(child_id, constraints)
-        } else {
-            // No child - use preferred size constrained by layout constraints
-            // This matches Flutter's behavior: constraints.constrain(preferredSize ?? Size.zero)
-            constraints.constrain(self.size)
-        };
+        // Single arity always has exactly one child
+        // Layout child with our constraints
+        let size = ctx.layout_child(child_id, ctx.constraints);
 
         // Store the laid out size for use during paint
         self.laid_out_size = size;
         size
     }
 
-    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Optional>)
-    where
-        T: crate::core::PaintTree,
-    {
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
+        let child_id = ctx.children.single();
+
         // Use the size from layout phase
         let size = self.laid_out_size;
-        let offset = ctx.offset;
 
         // Paint background painter (if any)
         if let Some(bg_painter) = &self.painter {
             bg_painter.paint(ctx.canvas(), size);
         }
 
-        // Paint child if present
-        if let Some(child_id) = ctx.children.get() {
-            ctx.paint_child(child_id, offset);
-        }
+        // Paint child
+        ctx.paint_child(child_id, ctx.offset);
 
         // Paint foreground painter on top (if any)
         if let Some(fg_painter) = &self.foreground_painter {
@@ -255,36 +237,5 @@ mod tests {
         assert_eq!(custom.size(), Size::new(50.0, 75.0));
         assert!(custom.painter.is_none());
         assert!(custom.foreground_painter.is_some());
-    }
-
-    #[test]
-    fn test_render_custom_paint_with_both() {
-        let custom = RenderCustomPaint::with_both(
-            Box::new(MockPainter),
-            Box::new(MockPainter),
-            Size::new(100.0, 100.0),
-        );
-        assert_eq!(custom.size(), Size::new(100.0, 100.0));
-        assert!(custom.painter.is_some());
-        assert!(custom.foreground_painter.is_some());
-    }
-
-    #[test]
-    fn test_render_custom_paint_optional_arity_supports_no_child() {
-        // This test documents that RenderCustomPaint now uses Optional arity
-        // which allows it to work without a child (decorative use case)
-        let custom = RenderCustomPaint::with_painter(Box::new(MockPainter), Size::new(200.0, 150.0));
-        assert_eq!(custom.size(), Size::new(200.0, 150.0));
-
-        // The key improvement: CustomPaint can now be used for decorative painting
-        // without requiring a child widget, matching Flutter's behavior
-    }
-
-    #[test]
-    fn test_render_custom_paint_default_creates_zero_size() {
-        let custom = RenderCustomPaint::default();
-        assert_eq!(custom.size(), Size::ZERO);
-        assert!(custom.painter.is_none());
-        assert!(custom.foreground_painter.is_none());
     }
 }

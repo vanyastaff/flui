@@ -1,6 +1,7 @@
 //! RenderSliverOffstage - Conditionally hides sliver without removing from tree
 
-use crate::core::{LayoutContext, LayoutTree, PaintContext, PaintTree, RenderSliverProxy, Single, SliverProtocol};
+use flui_core::render::{RuntimeArity, LegacySliverRender, SliverLayoutContext, SliverPaintContext};
+use flui_painting::Canvas;
 use flui_types::SliverGeometry;
 
 /// RenderObject that conditionally hides a sliver child
@@ -24,6 +25,9 @@ use flui_types::SliverGeometry;
 pub struct RenderSliverOffstage {
     /// Whether child is offstage (hidden)
     pub offstage: bool,
+
+    // Layout cache
+    sliver_geometry: SliverGeometry,
 }
 
 impl RenderSliverOffstage {
@@ -32,12 +36,20 @@ impl RenderSliverOffstage {
     /// # Arguments
     /// * `offstage` - Whether to hide the child
     pub fn new(offstage: bool) -> Self {
-        Self { offstage }
+        Self {
+            offstage,
+            sliver_geometry: SliverGeometry::default(),
+        }
     }
 
     /// Set offstage state
     pub fn set_offstage(&mut self, offstage: bool) {
         self.offstage = offstage;
+    }
+
+    /// Get the sliver geometry from last layout
+    pub fn geometry(&self) -> SliverGeometry {
+        self.sliver_geometry
     }
 
     /// Check if child should be painted
@@ -57,33 +69,42 @@ impl Default for RenderSliverOffstage {
     }
 }
 
-impl RenderSliverProxy for RenderSliverOffstage {
-    // Layout: custom implementation to return zero geometry when offstage
-    fn proxy_layout<T>(
-        &mut self,
-        mut ctx: LayoutContext<'_, T, Single, SliverProtocol>,
-    ) -> SliverGeometry
-    where
-        T: LayoutTree,
-    {
+impl LegacySliverRender for RenderSliverOffstage {
+    fn layout(&mut self, ctx: &SliverLayoutContext) -> SliverGeometry {
         if self.offstage {
             // When offstage, report zero geometry
-            SliverGeometry::default()
+            self.sliver_geometry = SliverGeometry::default();
         } else {
             // Pass through to child when visible
-            ctx.proxy()
+            if let Some(child_id) = ctx.children.try_single() {
+                self.sliver_geometry = ctx.tree.layout_sliver_child(child_id, ctx.constraints);
+            } else {
+                self.sliver_geometry = SliverGeometry::default();
+            }
         }
+
+        self.sliver_geometry
     }
 
-    // Paint: custom implementation to skip painting when offstage
-    fn proxy_paint<T>(&self, ctx: &mut PaintContext<'_, T, Single>)
-    where
-        T: PaintTree,
-    {
+    fn paint(&self, ctx: &SliverPaintContext) -> Canvas {
         // Only paint if not offstage
         if self.should_paint() {
-            ctx.proxy();
+            if let Some(child_id) = ctx.children.try_single() {
+                if self.sliver_geometry.visible {
+                    return ctx.tree.paint_child(child_id, ctx.offset);
+                }
+            }
         }
+
+        Canvas::new()
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn arity(&self) -> RuntimeArity {
+        RuntimeArity::Exact(1) // Single child sliver
     }
 }
 
@@ -138,4 +159,9 @@ mod tests {
         assert!(!offstage.offstage);
     }
 
+    #[test]
+    fn test_arity_is_single_child() {
+        let offstage = RenderSliverOffstage::new(true);
+        assert_eq!(offstage.arity(), RuntimeArity::Exact(1));
+    }
 }

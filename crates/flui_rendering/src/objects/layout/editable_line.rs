@@ -1,7 +1,7 @@
 //! RenderEditableLine - Single-line editable text
 
-use crate::core::{BoxProtocol, LayoutContext, PaintContext};
-use crate::core::{Leaf, RenderBox};
+use flui_core::render::{BoxProtocol, LayoutContext, PaintContext};
+use flui_core::render::{Leaf, RenderBox};
 use flui_painting::{Canvas, Paint};
 use flui_types::prelude::{Color, TextAlign, TextStyle};
 use flui_types::{Rect, Size};
@@ -223,11 +223,8 @@ impl RenderEditableLine {
     }
 }
 
-impl<T: FullRenderTree> RenderBox<T, Leaf> for RenderEditableLine {
-    fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Leaf, BoxProtocol>) -> Size
-    where
-        T: crate::core::LayoutTree,
-    {
+impl RenderBox<Leaf> for RenderEditableLine {
+    fn layout(&mut self, ctx: LayoutContext<'_, Leaf, BoxProtocol>) -> Size {
         let constraints = ctx.constraints;
 
         // Calculate text size
@@ -247,10 +244,9 @@ impl<T: FullRenderTree> RenderBox<T, Leaf> for RenderEditableLine {
         size
     }
 
-    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Leaf>)
-    where
-        T: crate::core::PaintTree,
-    {
+    fn paint(&self, ctx: &mut PaintContext<'_, Leaf>) {
+        let mut paint = Paint::default();
+
         // Draw selection highlight if not collapsed
         if !self.selection.is_collapsed() {
             let selection_rect = Rect::from_xywh(
@@ -259,31 +255,33 @@ impl<T: FullRenderTree> RenderBox<T, Leaf> for RenderEditableLine {
                 self.selection.length() as f32 * 8.0,
                 self.size.height,
             );
-            let selection_paint = Paint::fill(self.selection_color);
-            ctx.canvas().rect(selection_rect, &selection_paint);
+            paint.color = self.selection_color;
+            paint.style = flui_painting::PaintStyle::Fill;
+            ctx.canvas().draw_rect(selection_rect, &paint);
         }
 
         // Draw text
-        let text_paint = Paint::fill(self.style.color.unwrap_or(Color::BLACK));
+        paint.color = self.style.color.unwrap_or(Color::BLACK);
         let display_text = if self.obscure_text {
             "•".repeat(self.text.len())
         } else {
             self.text.clone()
         };
 
-        ctx.canvas().text(
+        ctx.canvas().draw_text(
             &display_text,
-            flui_types::Offset::ZERO,
+            flui_types::Offset::new(0.0, 0.0),
             &self.style,
-            &text_paint,
+            &paint,
         );
 
-        // Draw cursor if showing using conditional drawing
+        // Draw cursor if showing
         if self.show_cursor {
             let cursor_x = self.selection.base as f32 * 8.0; // Approximate
             let cursor_rect = Rect::from_xywh(cursor_x, 0.0, self.cursor_width, self.size.height);
-            let cursor_paint = Paint::fill(self.cursor_color);
-            ctx.canvas().rect(cursor_rect, &cursor_paint);
+            paint.color = self.cursor_color;
+            paint.style = flui_painting::PaintStyle::Fill;
+            ctx.canvas().draw_rect(cursor_rect, &paint);
         }
     }
 }

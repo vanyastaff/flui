@@ -5,19 +5,17 @@
 use std::marker::PhantomData;
 
 use flui_foundation::ElementId;
-use flui_interaction::HitTestResult;
+use flui_painting::Canvas;
 use flui_types::{constraints::BoxConstraints, Offset, Size};
 
 use crate::core::{
     arity::{Arity, Leaf, Optional, Single, Variable},
-    contexts::{HitTestContext, LayoutContext, PaintContext},
-    geometry::Geometry,
+    geometry::{Constraints, Geometry},
     protocol::{BoxProtocol, Protocol},
-    render_tree::{HitTestTree, LayoutTree, PaintTree},
-    LayoutProtocol, RenderBox, RenderState, RuntimeArity,
+    LayoutProtocol, RenderObject, RenderState, RuntimeArity,
 };
 
-use super::{RenderView, RenderViewObject, UpdateResult};
+use super::{RenderObjectFor, RenderView, RenderViewObject, UpdateResult};
 
 // ============================================================================
 // ArityToRuntime - Convert compile-time Arity to RuntimeArity
@@ -189,9 +187,21 @@ where
 impl<V, A> RenderViewObject for RenderViewWrapper<V, BoxProtocol, A>
 where
     V: RenderView<BoxProtocol, A>,
-    V::RenderObject: RenderBox<A>,
-    A: ArityToRuntime + 'static,
+    V::RenderObject: RenderObject,
+    A: ArityToRuntime,
 {
+    fn render_object(&self) -> &dyn RenderObject {
+        self.render_object
+            .as_ref()
+            .expect("render_object called before create_render_object")
+    }
+
+    fn render_object_mut(&mut self) -> &mut dyn RenderObject {
+        self.render_object
+            .as_mut()
+            .expect("render_object_mut called before create_render_object")
+    }
+
     fn render_state(&self) -> &RenderState {
         &self.render_state
     }
@@ -208,128 +218,63 @@ where
         A::to_runtime()
     }
 
-    fn perform_layout<T: LayoutTree>(
+    fn perform_layout(
         &mut self,
-        tree: &mut T,
-        _self_id: ElementId,
         children: &[ElementId],
         constraints: BoxConstraints,
+        layout_child: &mut dyn FnMut(ElementId, BoxConstraints) -> Size,
     ) -> Size {
-        let Some(render) = self.render_object.as_mut() else {
-            tracing::warn!("perform_layout called before create_render_object");
-            return Size::ZERO;
-        };
+        let render = self
+            .render_object
+            .as_mut()
+            .expect("perform_layout called before create_render_object");
 
-        // Create arity-aware children accessor
-        let children_accessor = A::from_slice(children);
+        let type_erased = Constraints::Box(constraints);
+        let geometry = render.layout(
+            children,
+            &type_erased,
+            &mut |child_id, child_constraints| {
+                let child_size = layout_child(child_id, *child_constraints.as_box());
+                Geometry::Box(child_size)
+            },
+        );
 
-        // Create layout context
-        let ctx = LayoutContext::new(tree, constraints, children_accessor);
-
-        // Call the RenderBox layout
-        let size = render.layout(ctx);
+        let size = geometry.as_box();
 
         // Cache the geometry
-        let geometry = Geometry::Box(size);
         *self.render_state.geometry.write() = Some(geometry);
         self.render_state.clear_needs_layout();
 
         size
     }
 
-    fn perform_paint<T: PaintTree>(
+    fn perform_paint(
         &self,
-        tree: &mut T,
-        _self_id: ElementId,
         children: &[ElementId],
         offset: Offset,
-    ) {
-        let Some(render) = self.render_object.as_ref() else {
-            tracing::warn!("perform_paint called before create_render_object");
-            return;
-        };
+        paint_child: &mut dyn FnMut(ElementId, Offset) -> Canvas,
+    ) -> Canvas {
+        let render = self
+            .render_object
+            .as_ref()
+            .expect("perform_paint called before create_render_object");
 
-        // Create arity-aware children accessor
-        let children_accessor = A::from_slice(children);
-
-        // Create paint context
-        let mut ctx = PaintContext::new(tree, offset, children_accessor);
-
-        // Call the RenderBox paint
-        render.paint(&mut ctx);
+        render.paint(children, offset, paint_child)
     }
 
-    fn perform_hit_test<T: HitTestTree>(
+    fn perform_hit_test(
         &self,
-        tree: &T,
-        self_id: ElementId,
         children: &[ElementId],
         position: Offset,
-        result: &mut HitTestResult,
+        geometry: &Geometry,
+        hit_test_child: &mut dyn FnMut(ElementId, Offset) -> bool,
     ) -> bool {
-        let Some(render) = self.render_object.as_ref() else {
-            tracing::warn!("perform_hit_test called before create_render_object");
-            return false;
-        };
+        let render = self
+            .render_object
+            .as_ref()
+            .expect("perform_hit_test called before create_render_object");
 
-        // Get cached geometry for size
-        let size = self
-            .render_state
-            .geometry()
-            .and_then(|g| g.try_as_box())
-            .unwrap_or(Size::ZERO);
-
-        // Create arity-aware children accessor
-        let children_accessor = A::from_slice(children);
-
-        // Create hit test context (order: tree, position, geometry, element_id, children)
-        let ctx = HitTestContext::new(tree, position, size, self_id, children_accessor);
-
-        // Call the RenderBox hit_test
-        render.hit_test(&ctx, result)
-    }
-}
-
-// ============================================================================
-// ViewObject IMPLEMENTATION
-// ============================================================================
-
-use flui_element::{BuildContext, Element, ViewMode, ViewObject};
-
-impl<V, A> ViewObject for RenderViewWrapper<V, BoxProtocol, A>
-where
-    V: RenderView<BoxProtocol, A>,
-    V::RenderObject: RenderBox<A>,
-    A: ArityToRuntime + 'static,
-{
-    fn mode(&self) -> ViewMode {
-        ViewMode::RenderBox
-    }
-
-    fn build(&mut self, _ctx: &dyn BuildContext) -> Element {
-        // Render objects don't build children - they just render
-        // Children are managed by the framework
-        Element::empty()
-    }
-
-    fn render_state(&self) -> Option<&dyn std::any::Any> {
-        Some(&self.render_state)
-    }
-
-    fn render_state_mut(&mut self) -> Option<&mut dyn std::any::Any> {
-        Some(&mut self.render_state)
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-        self
-    }
-
-    fn debug_name(&self) -> &'static str {
-        std::any::type_name::<V>()
+        render.hit_test(children, position, geometry, hit_test_child)
     }
 }
 
@@ -340,25 +285,54 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::arity::Leaf;
+    use std::any::Any;
 
     #[derive(Debug)]
     struct TestRenderBox {
         size: Size,
     }
 
-    impl RenderBox<Leaf> for TestRenderBox {
-        fn layout<T>(&mut self, ctx: LayoutContext<'_, T, Leaf, BoxProtocol>) -> Size
-        where
-            T: LayoutTree,
-        {
-            ctx.constraints.constrain(self.size)
+    impl RenderObject for TestRenderBox {
+        fn layout(
+            &mut self,
+            _children: &[ElementId],
+            constraints: &Constraints,
+            _layout_child: &mut dyn FnMut(ElementId, Constraints) -> Geometry,
+        ) -> Geometry {
+            let box_constraints = constraints.as_box();
+            Geometry::Box(box_constraints.constrain(self.size))
         }
 
-        fn paint<T>(&self, _ctx: &mut PaintContext<'_, T, Leaf>)
-        where
-            T: PaintTree,
-        {
-            // No painting needed for test
+        fn paint(
+            &self,
+            _children: &[ElementId],
+            _offset: Offset,
+            _paint_child: &mut dyn FnMut(ElementId, Offset) -> Canvas,
+        ) -> Canvas {
+            Canvas::new()
+        }
+
+        fn hit_test(
+            &self,
+            _children: &[ElementId],
+            position: Offset,
+            geometry: &Geometry,
+            _hit_test_child: &mut dyn FnMut(ElementId, Offset) -> bool,
+        ) -> bool {
+            let size = geometry.as_box();
+            position.dx >= 0.0
+                && position.dy >= 0.0
+                && position.dx < size.width
+                && position.dy < size.height
+        }
+
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn as_any_mut(&mut self) -> &mut dyn Any {
+            self
         }
     }
 
@@ -406,6 +380,20 @@ mod tests {
         assert!(wrapper.render_state().needs_paint());
     }
 
-    // Note: perform_layout test requires a mock LayoutTree implementation.
-    // The actual integration is tested in flui_core with ElementTree.
+    #[test]
+    fn test_perform_layout() {
+        let mut wrapper =
+            RenderViewWrapper::<TestRenderView, BoxProtocol, Leaf>::new(TestRenderView {
+                size: Size::new(100.0, 50.0),
+            });
+
+        wrapper.create_render_object();
+
+        let constraints = BoxConstraints::tight(Size::new(200.0, 100.0));
+        let size = wrapper.perform_layout(&[], constraints, &mut |_, _| Size::zero());
+
+        // Should be constrained to tight size
+        assert_eq!(size, Size::new(200.0, 100.0));
+        assert!(!wrapper.render_state().needs_layout());
+    }
 }

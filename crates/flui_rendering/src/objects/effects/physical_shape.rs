@@ -1,9 +1,12 @@
 //! RenderPhysicalShape - Custom shape with Material Design elevation
 
-use crate::core::{BoxProtocol, LayoutContext, PaintContext};
-use crate::core::{Optional, RenderBox};
-use flui_painting::Paint;
-use flui_types::{painting::Path, Color, Size};
+use flui_core::render::{BoxProtocol, LayoutContext, PaintContext};
+use flui_core::render::{Optional, RenderBox};
+use flui_painting::{Canvas, Paint};
+use flui_types::{
+    painting::Path,
+    Color, Size,
+};
 
 /// Clipper function that creates a custom path for the given size
 pub type ShapeClipper = Box<dyn Fn(Size) -> Path + Send + Sync>;
@@ -99,11 +102,8 @@ impl std::fmt::Debug for RenderPhysicalShape {
     }
 }
 
-impl<T: FullRenderTree> RenderBox<T, Optional> for RenderPhysicalShape {
-    fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Optional, BoxProtocol>) -> Size
-    where
-        T: crate::core::LayoutTree,
-    {
+impl RenderBox<Optional> for RenderPhysicalShape {
+    fn layout(&mut self, ctx: LayoutContext<'_, Optional, BoxProtocol>) -> Size {
         let constraints = ctx.constraints;
 
         let size = if let Some(child_id) = ctx.children.get() {
@@ -120,29 +120,30 @@ impl<T: FullRenderTree> RenderBox<T, Optional> for RenderPhysicalShape {
         size
     }
 
-    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Optional>)
-    where
-        T: crate::core::PaintTree,
-    {
+    fn paint(&self, ctx: &mut PaintContext<'_, Optional>) {
         let offset = ctx.offset;
 
         // Get the custom shape path in local coordinates
         let local_path = self.get_shape_path();
-        let paint = Paint::fill(self.color);
 
         // Transform the path to world coordinates by applying offset translation
         // Since Path doesn't have a transform method, we use Canvas transforms instead
-        ctx.canvas()
-            .saved()
-            .translated(offset.dx, offset.dy)
-            // Draw shadow if elevation > 0
-            .when(self.elevation > 0.0, |c| {
-                c.shadow(&local_path, self.shadow_color, self.elevation)
-            })
-            // Fill the shape with color and clip to shape for child
-            .path(&local_path, &paint)
-            .clipped_path(&local_path)
-            .restored();
+        ctx.canvas().save();
+        ctx.canvas().translate(offset.dx, offset.dy);
+
+        // Draw shadow if elevation > 0
+        if self.elevation > 0.0 {
+            ctx.canvas().draw_shadow(&local_path, self.shadow_color, self.elevation);
+        }
+
+        // Fill the shape with color
+        let paint = Paint::fill(self.color);
+        ctx.canvas().draw_path(&local_path, &paint);
+
+        // Clip to shape for child
+        ctx.canvas().clip_path(&local_path);
+
+        ctx.canvas().restore();
 
         // Paint child on top if present
         if let Some(child_id) = ctx.children.get() {

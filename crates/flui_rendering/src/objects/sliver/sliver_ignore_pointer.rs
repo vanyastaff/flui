@@ -1,6 +1,8 @@
 //! RenderSliverIgnorePointer - Ignores pointer events for sliver content
 
-use crate::core::{HitTestContext, HitTestResult, HitTestTree, RenderSliverProxy, Single, SliverProtocol};
+use flui_core::render::{RuntimeArity, LegacySliverRender, SliverLayoutContext, SliverPaintContext};
+use flui_painting::Canvas;
+use flui_types::SliverGeometry;
 
 /// RenderObject that makes a sliver ignore pointer events
 ///
@@ -28,6 +30,9 @@ pub struct RenderSliverIgnorePointer {
     pub ignoring: bool,
     /// Whether to ignore semantics (accessibility)
     pub ignore_semantics: bool,
+
+    // Layout cache
+    sliver_geometry: SliverGeometry,
 }
 
 impl RenderSliverIgnorePointer {
@@ -39,6 +44,7 @@ impl RenderSliverIgnorePointer {
         Self {
             ignoring,
             ignore_semantics: false,
+            sliver_geometry: SliverGeometry::default(),
         }
     }
 
@@ -58,6 +64,11 @@ impl RenderSliverIgnorePointer {
         self
     }
 
+    /// Get the sliver geometry from last layout
+    pub fn geometry(&self) -> SliverGeometry {
+        self.sliver_geometry
+    }
+
     /// Check if this sliver should block hit testing
     pub fn blocks_hit_testing(&self) -> bool {
         self.ignoring
@@ -70,22 +81,35 @@ impl Default for RenderSliverIgnorePointer {
     }
 }
 
-impl RenderSliverProxy for RenderSliverIgnorePointer {
-    // Layout: use default proxy (passes constraints through)
-    // Paint: use default proxy (passes painting through)
+impl LegacySliverRender for RenderSliverIgnorePointer {
+    fn layout(&mut self, ctx: &SliverLayoutContext) -> SliverGeometry {
+        // Pass through to child - IgnorePointer doesn't affect layout
+        if let Some(child_id) = ctx.children.try_single() {
+            self.sliver_geometry = ctx.tree.layout_sliver_child(child_id, ctx.constraints);
+        } else {
+            self.sliver_geometry = SliverGeometry::default();
+        }
 
-    // Hit test: custom implementation to ignore pointer events
-    fn proxy_hit_test<T>(
-        &self,
-        _ctx: &HitTestContext<'_, T, Single, SliverProtocol>,
-        _result: &mut HitTestResult,
-    ) -> bool
-    where
-        T: HitTestTree,
-    {
-        // When ignoring, don't forward hit test to child
-        // Return false to indicate hit test should not continue
-        !self.ignoring
+        self.sliver_geometry
+    }
+
+    fn paint(&self, ctx: &SliverPaintContext) -> Canvas {
+        // Child is painted normally, hit testing is affected separately
+        if let Some(child_id) = ctx.children.try_single() {
+            if self.sliver_geometry.visible {
+                return ctx.tree.paint_child(child_id, ctx.offset);
+            }
+        }
+
+        Canvas::new()
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn arity(&self) -> RuntimeArity {
+        RuntimeArity::Exact(1) // Single child sliver
     }
 }
 
@@ -148,4 +172,9 @@ mod tests {
         assert!(ignore.ignoring);
     }
 
+    #[test]
+    fn test_arity_is_single_child() {
+        let ignore = RenderSliverIgnorePointer::new(true);
+        assert_eq!(ignore.arity(), RuntimeArity::Exact(1));
+    }
 }

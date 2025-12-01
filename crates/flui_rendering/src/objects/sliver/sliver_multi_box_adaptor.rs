@@ -1,6 +1,6 @@
 //! RenderSliverMultiBoxAdaptor - Base for slivers with multiple box children
 
-use crate::core::ElementId;
+use flui_core::element::ElementId;
 use flui_types::Size;
 
 /// Parent data for children of RenderSliverMultiBoxAdaptor
@@ -152,7 +152,6 @@ pub trait RenderSliverMultiBoxAdaptor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_types::constraints::{GrowthDirection, ScrollDirection};
 
     #[test]
     fn test_parent_data_creation() {

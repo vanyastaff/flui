@@ -2,9 +2,8 @@
 //!
 //! More advanced than RenderOffstage, supports maintaining size, state, and other properties.
 
-use crate::core::{
-    FullRenderTree,
-    FullRenderTree, RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
+use flui_core::render::{
+    RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
 };
 use flui_types::Size;
 
@@ -95,11 +94,8 @@ impl Default for RenderVisibility {
     }
 }
 
-impl<T: FullRenderTree> RenderBox<T, Single> for RenderVisibility {
-    fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Single, BoxProtocol>) -> Size
-    where
-        T: crate::core::LayoutTree,
-    {
+impl RenderBox<Single> for RenderVisibility {
+    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
         let child_id = ctx.children.single();
 
         // Layout child if visible OR if we need to maintain state/size
@@ -125,10 +121,7 @@ impl<T: FullRenderTree> RenderBox<T, Single> for RenderVisibility {
         }
     }
 
-    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Single>)
-    where
-        T: crate::core::PaintTree,
-    {
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         // Only paint if visible
         if self.visible {
             let child_id = ctx.children.single();
