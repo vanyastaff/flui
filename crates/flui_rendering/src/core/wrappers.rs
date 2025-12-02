@@ -5,6 +5,41 @@
 //! These wrappers leverage the unified arity system and provide zero-cost
 //! abstractions for common rendering scenarios.
 //!
+//! # Proxy Traits: SimpleBoxProxy vs ProxyRender
+//!
+//! FLUI provides two levels of proxy abstraction:
+//!
+//! ## SimpleBoxProxy / SimpleSliverProxy (in `render_proxy.rs`)
+//!
+//! Use these for **simple pass-through** wrappers that don't modify behavior:
+//! - Semantic annotations (accessibility labels)
+//! - Debug wrappers (logging, profiling)
+//! - Event listeners that don't affect layout
+//!
+//! ```rust,ignore
+//! // Just implement the marker trait - get full RenderBox for free!
+//! impl<T: FullRenderTree> SimpleBoxProxy<T> for RenderSemantics {}
+//! ```
+//!
+//! ## ProxyRender (in this module)
+//!
+//! Use this for **complex proxies** that transform constraints, sizes, or offsets:
+//! - Padding (deflates constraints, inflates size)
+//! - Transform (applies matrix transformation)
+//! - Align (positions child within available space)
+//!
+//! ```rust,ignore
+//! impl ProxyRender<Single> for RenderPadding {
+//!     fn proxy_child(&self) -> Option<ElementId> { self.child }
+//!     fn transform_constraints(&self, ctx: &BoxLayoutContext<'_, Single>) -> BoxConstraints {
+//!         ctx.constraints.deflate(&self.padding)
+//!     }
+//!     fn transform_size(&self, child_size: Size) -> Size {
+//!         child_size + self.padding.size()
+//!     }
+//! }
+//! ```
+//!
 //! # Design Philosophy
 //!
 //! - **Composition over inheritance**: Wrappers enable flexible object composition
@@ -25,13 +60,13 @@
 //!
 //! Utility wrappers provide common functionality:
 //! - [`BoxRenderWrapper`] - Wraps any RenderBox for type erasure
-//! - [`SliverRenderWrapper`] - Wraps any SliverRender for type erasure
+//! - [`SliverRenderWrapper`] - Wraps any RenderSliver for type erasure
 //! - [`RenderWrapper`] - Generic wrapper with custom behavior
 //!
 //! ## Trait Implementations
 //!
 //! Helper traits for implementing wrappers:
-//! - [`ProxyRender`] - Trait for proxy render objects
+//! - [`ProxyRender`] - Trait for proxy render objects with transformation hooks
 //! - [`WrapperRender`] - Trait for wrapper render objects
 //!
 //! # Usage Examples

@@ -21,11 +21,10 @@
 //! └─────────────────────────────────────┘
 //! ```
 
-use crate::core::arity::Variable;
-use crate::core::contexts::{HitTestContext, LayoutContext, PaintContext};
-use crate::core::protocol::BoxProtocol;
-use crate::core::render_box::RenderBox;
-use crate::core::render_tree::{HitTestTree, LayoutTree, PaintTree};
+use crate::core::{
+    BoxProtocol, HitTestContext, HitTestTree, LayoutTree, PaintContext, PaintTree, RenderBox,
+    Variable,
+};
 use crate::core::ElementId;
 use flui_interaction::HitTestResult;
 use flui_types::constraints::{GrowthDirection, ScrollDirection};
@@ -358,7 +357,7 @@ struct SliverLayoutResult {
 }
 
 impl<T: FullRenderTree> RenderBox<T, Variable> for RenderViewport {
-    fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Variable, BoxProtocol>) -> Size
+    fn layout<T>(&mut self, mut ctx: <'_, T, Variable, BoxProtocol>) -> Size
     where
         T: LayoutTree,
     {
