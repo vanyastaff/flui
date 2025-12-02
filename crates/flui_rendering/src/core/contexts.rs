@@ -91,7 +91,7 @@ use flui_interaction::HitTestResult;
 use flui_painting::Canvas;
 use flui_types::{Offset, Rect, Size, SliverConstraints, SliverGeometry};
 
-use super::arity::{Arity, ChildrenAccess, RenderChildrenExt};
+use super::arity::{Arity, ChildrenAccess};
 use super::geometry::BoxConstraints;
 use super::protocol::{BoxProtocol, Protocol, SliverProtocol};
 use super::render_tree::{HitTestTree, LayoutTree, PaintTree};
@@ -142,7 +142,7 @@ pub type SliverHitTestContext<'a, A> = HitTestContext<'a, A, SliverProtocol>;
 /// - **SIMD-friendly**: Layout operations can be vectorized
 pub struct LayoutContext<'a, A: Arity, P: Protocol>
 where
-    A::Accessor<'a, ElementId>: RenderChildrenExt<'a>,
+    A::Accessor<'a, ElementId>: ChildrenAccess<'a, ElementId>,
 {
     tree: &'a mut (dyn LayoutTree + Send + Sync),
     element_id: ElementId,
@@ -154,7 +154,7 @@ where
 
 impl<'a, A: Arity, P: Protocol> fmt::Debug for LayoutContext<'a, A, P>
 where
-    A::Accessor<'a, ElementId>: RenderChildrenExt<'a>,
+    A::Accessor<'a, ElementId>: ChildrenAccess<'a, ElementId>,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LayoutContext")
@@ -167,7 +167,7 @@ where
 
 impl<'a, A: Arity, P: Protocol> LayoutContext<'a, A, P>
 where
-    A::Accessor<'a, ElementId>: RenderChildrenExt<'a>,
+    A::Accessor<'a, ElementId>: ChildrenAccess<'a, ElementId>,
 {
     /// Creates a new layout context.
     pub fn new(
@@ -270,7 +270,7 @@ where
 // Box protocol specific methods
 impl<'a, A: Arity> LayoutContext<'a, A, BoxProtocol>
 where
-    A::Accessor<'a, ElementId>: RenderChildrenExt<'a>,
+    A::Accessor<'a, ElementId>: ChildrenAccess<'a, ElementId>,
 {
     /// Layouts a child element with box constraints.
     ///
@@ -440,7 +440,7 @@ impl<'a> LayoutContext<'a, super::arity::Single, BoxProtocol> {
 // Sliver protocol specific methods
 impl<'a, A: Arity> LayoutContext<'a, A, SliverProtocol>
 where
-    A::Accessor<'a, ElementId>: RenderChildrenExt<'a>,
+    A::Accessor<'a, ElementId>: ChildrenAccess<'a, ElementId>,
 {
     /// Layouts a child sliver element.
     pub fn layout_child(
@@ -479,7 +479,7 @@ where
 /// type-safe children management and efficient canvas operations.
 pub struct PaintContext<'a, A: Arity, P: Protocol>
 where
-    A::Accessor<'a, ElementId>: RenderChildrenExt<'a>,
+    A::Accessor<'a, ElementId>: ChildrenAccess<'a, ElementId>,
 {
     tree: &'a mut (dyn PaintTree + Send + Sync),
     element_id: ElementId,
@@ -494,7 +494,7 @@ where
 
 impl<'a, A: Arity, P: Protocol> fmt::Debug for PaintContext<'a, A, P>
 where
-    A::Accessor<'a, ElementId>: RenderChildrenExt<'a>,
+    A::Accessor<'a, ElementId>: ChildrenAccess<'a, ElementId>,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PaintContext")
@@ -508,7 +508,7 @@ where
 
 impl<'a, A: Arity, P: Protocol> PaintContext<'a, A, P>
 where
-    A::Accessor<'a, ElementId>: RenderChildrenExt<'a>,
+    A::Accessor<'a, ElementId>: ChildrenAccess<'a, ElementId>,
 {
     /// Creates a new paint context.
     pub fn new(
@@ -715,7 +715,7 @@ impl<'a> PaintContext<'a, super::arity::Single, BoxProtocol> {
 /// optimizations and early termination support.
 pub struct HitTestContext<'a, A: Arity, P: Protocol>
 where
-    A::Accessor<'a, ElementId>: RenderChildrenExt<'a>,
+    A::Accessor<'a, ElementId>: ChildrenAccess<'a, ElementId>,
 {
     tree: &'a (dyn HitTestTree + Send + Sync),
     element_id: ElementId,
@@ -729,7 +729,7 @@ where
 
 impl<'a, A: Arity, P: Protocol> fmt::Debug for HitTestContext<'a, A, P>
 where
-    A::Accessor<'a, ElementId>: RenderChildrenExt<'a>,
+    A::Accessor<'a, ElementId>: ChildrenAccess<'a, ElementId>,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("HitTestContext")
@@ -743,7 +743,7 @@ where
 
 impl<'a, A: Arity, P: Protocol> HitTestContext<'a, A, P>
 where
-    A::Accessor<'a, ElementId>: RenderChildrenExt<'a>,
+    A::Accessor<'a, ElementId>: ChildrenAccess<'a, ElementId>,
 {
     /// Creates a new hit test context.
     pub fn new(
@@ -905,7 +905,7 @@ pub fn create_box_layout_context<'a, A: Arity>(
     children_accessor: A::Accessor<'a, ElementId>,
 ) -> LayoutContext<'a, A, BoxProtocol>
 where
-    A::Accessor<'a, ElementId>: RenderChildrenExt<'a>,
+    A::Accessor<'a, ElementId>: ChildrenAccess<'a, ElementId>,
 {
     LayoutContext::new(tree, element_id, constraints, children_accessor)
 }
@@ -920,7 +920,7 @@ pub fn create_box_paint_context<'a, A: Arity>(
     children_accessor: A::Accessor<'a, ElementId>,
 ) -> PaintContext<'a, A, BoxProtocol>
 where
-    A::Accessor<'a, ElementId>: RenderChildrenExt<'a>,
+    A::Accessor<'a, ElementId>: ChildrenAccess<'a, ElementId>,
 {
     PaintContext::new(tree, element_id, offset, size, canvas, children_accessor)
 }
@@ -934,7 +934,7 @@ pub fn create_box_hit_test_context<'a, A: Arity>(
     children_accessor: A::Accessor<'a, ElementId>,
 ) -> HitTestContext<'a, A, BoxProtocol>
 where
-    A::Accessor<'a, ElementId>: RenderChildrenExt<'a>,
+    A::Accessor<'a, ElementId>: ChildrenAccess<'a, ElementId>,
 {
     HitTestContext::new(tree, element_id, position, size, children_accessor)
 }

@@ -44,7 +44,7 @@
 //! validation with advanced type features:
 //!
 //! ```rust,ignore
-//! use flui_rendering::{RenderBox, Single, Variable, RenderChildrenExt};
+//! use flui_rendering::{RenderBox, Single, Variable, ChildrenAccess};
 //!
 //! // Single child wrapper
 //! impl RenderBox<Single> for RenderPadding {
@@ -104,9 +104,6 @@ pub use core::{BoxProtocol, Protocol, SliverProtocol};
 
 // Arity system (re-exported from flui-tree)
 pub use core::{Arity, AtLeast, ChildrenAccess, Exact, Leaf, Optional, Range, Single, Variable};
-
-// Rendering extensions for arity
-pub use core::RenderChildrenExt;
 
 // Wrappers and proxies
 pub use core::{

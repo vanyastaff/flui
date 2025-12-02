@@ -272,22 +272,16 @@ pub use arity::{
     Optional,
     // Optional child accessor
     OptionalChild,
-    // Extension traits for ergonomics
-    OptionalChildExt,
     OptionalChildren,
     // Range arity for bounded children
     Range,
-    // Rendering-specific extensions
-    RenderChildrenExt,
     // Runtime arity for dynamic dispatch
     RuntimeArity,
     Single,
-    SingleChildExt,
     SingleChildren,
     // Slice children accessor
     SliceChildren,
     Variable,
-    VariableChildExt,
     VariableChildren,
 };
 
