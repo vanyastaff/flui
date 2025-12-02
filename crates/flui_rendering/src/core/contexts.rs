@@ -249,24 +249,6 @@ impl<'a, A: Arity, T: LayoutTree> LayoutContext<'a, A, BoxProtocol, T>
 where
     A::Accessor<'a, ElementId>: ChildrenAccess<'a, ElementId>,
 {
-    /// Creates a new Box protocol layout context (named constructor).
-    ///
-    /// This is an explicit alternative to [`new`](Self::new) that makes the protocol clear.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// let ctx = LayoutContext::for_box(tree, id, constraints, accessor);
-    /// ```
-    pub fn for_box(
-        tree: &'a mut T,
-        element_id: ElementId,
-        constraints: BoxConstraints,
-        children_accessor: A::Accessor<'a, ElementId>,
-    ) -> Self {
-        Self::new(tree, element_id, constraints, children_accessor)
-    }
-
     /// Layouts a child box element.
     ///
     /// Returns the computed size that satisfies the given constraints.
@@ -333,24 +315,6 @@ impl<'a, A: Arity, T: LayoutTree> LayoutContext<'a, A, SliverProtocol, T>
 where
     A::Accessor<'a, ElementId>: ChildrenAccess<'a, ElementId>,
 {
-    /// Creates a new Sliver protocol layout context (named constructor).
-    ///
-    /// This is an explicit alternative to [`new`](Self::new) that makes the protocol clear.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// let ctx = LayoutContext::for_sliver(tree, id, constraints, accessor);
-    /// ```
-    pub fn for_sliver(
-        tree: &'a mut T,
-        element_id: ElementId,
-        constraints: SliverConstraints,
-        children_accessor: A::Accessor<'a, ElementId>,
-    ) -> Self {
-        Self::new(tree, element_id, constraints, children_accessor)
-    }
-
     /// Layouts a child sliver element.
     ///
     /// Returns the computed geometry with scroll/paint extents.
@@ -550,26 +514,6 @@ impl<'a, A: Arity, T: PaintTree> PaintContext<'a, A, BoxProtocol, T>
 where
     A::Accessor<'a, ElementId>: ChildrenAccess<'a, ElementId>,
 {
-    /// Creates a new Box protocol paint context (named constructor).
-    ///
-    /// This is an explicit alternative to [`new`](Self::new) that makes the protocol clear.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// let ctx = PaintContext::for_box(tree, id, offset, size, canvas, accessor);
-    /// ```
-    pub fn for_box(
-        tree: &'a mut T,
-        element_id: ElementId,
-        offset: Offset,
-        size: Size,
-        canvas: &'a mut Canvas,
-        children_accessor: A::Accessor<'a, ElementId>,
-    ) -> Self {
-        Self::new(tree, element_id, offset, size, canvas, children_accessor)
-    }
-
     /// Returns the size of this element (convenience for Box protocol).
     ///
     /// This is equivalent to `ctx.geometry` but more ergonomic.
@@ -621,33 +565,6 @@ impl<'a, A: Arity, T: PaintTree> PaintContext<'a, A, SliverProtocol, T>
 where
     A::Accessor<'a, ElementId>: ChildrenAccess<'a, ElementId>,
 {
-    /// Creates a new Sliver protocol paint context (named constructor).
-    ///
-    /// This is an explicit alternative to [`new`](Self::new) that makes the protocol clear.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// let ctx = PaintContext::for_sliver(tree, id, offset, geometry, canvas, accessor);
-    /// ```
-    pub fn for_sliver(
-        tree: &'a mut T,
-        element_id: ElementId,
-        offset: Offset,
-        geometry: SliverGeometry,
-        canvas: &'a mut Canvas,
-        children_accessor: A::Accessor<'a, ElementId>,
-    ) -> Self {
-        Self::new(
-            tree,
-            element_id,
-            offset,
-            geometry,
-            canvas,
-            children_accessor,
-        )
-    }
-
     /// Returns the sliver geometry (convenience for Sliver protocol).
     ///
     /// This is equivalent to `ctx.geometry` but more ergonomic.
@@ -813,25 +730,6 @@ impl<'a, A: Arity, T: HitTestTree> HitTestContext<'a, A, BoxProtocol, T>
 where
     A::Accessor<'a, ElementId>: ChildrenAccess<'a, ElementId>,
 {
-    /// Creates a new Box protocol hit test context (named constructor).
-    ///
-    /// This is an explicit alternative to [`new`](Self::new) that makes the protocol clear.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// let ctx = HitTestContext::for_box(tree, id, position, size, accessor);
-    /// ```
-    pub fn for_box(
-        tree: &'a T,
-        element_id: ElementId,
-        position: Offset,
-        size: Size,
-        children_accessor: A::Accessor<'a, ElementId>,
-    ) -> Self {
-        Self::new(tree, element_id, position, size, children_accessor)
-    }
-
     /// Returns the size of this element (convenience for Box protocol).
     #[inline]
     pub fn size(&self) -> Size {
@@ -848,129 +746,4 @@ where
     pub fn position_in_rect(&self, rect: Rect) -> bool {
         rect.contains(self.position)
     }
-}
-
-// ============================================================================
-// HIT TEST CONTEXT - SLIVER PROTOCOL SPECIFIC
-// ============================================================================
-
-impl<'a, A: Arity, T: HitTestTree> HitTestContext<'a, A, SliverProtocol, T>
-where
-    A::Accessor<'a, ElementId>: ChildrenAccess<'a, ElementId>,
-{
-    /// Creates a new Sliver protocol hit test context (named constructor).
-    ///
-    /// This is an explicit alternative to [`new`](Self::new) that makes the protocol clear.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// let ctx = HitTestContext::for_sliver(tree, id, position, geometry, accessor);
-    /// ```
-    pub fn for_sliver(
-        tree: &'a T,
-        element_id: ElementId,
-        position: Offset,
-        geometry: SliverGeometry,
-        children_accessor: A::Accessor<'a, ElementId>,
-    ) -> Self {
-        Self::new(tree, element_id, position, geometry, children_accessor)
-    }
-}
-
-// ============================================================================
-// CONTEXT CREATION HELPERS
-// ============================================================================
-
-/// Creates a layout context for box protocol operations (helper function).
-///
-/// This is equivalent to `LayoutContext::for_box()` or using the constructor directly.
-pub fn create_box_layout_context<'a, A: Arity, T: LayoutTree>(
-    tree: &'a mut T,
-    element_id: ElementId,
-    constraints: BoxConstraints,
-    children_accessor: A::Accessor<'a, ElementId>,
-) -> LayoutContext<'a, A, BoxProtocol, T>
-where
-    A::Accessor<'a, ElementId>: ChildrenAccess<'a, ElementId>,
-{
-    LayoutContext::for_box(tree, element_id, constraints, children_accessor)
-}
-
-/// Creates a paint context for box protocol operations (helper function).
-pub fn create_box_paint_context<'a, A: Arity, T: PaintTree>(
-    tree: &'a mut T,
-    element_id: ElementId,
-    offset: Offset,
-    size: Size,
-    canvas: &'a mut Canvas,
-    children_accessor: A::Accessor<'a, ElementId>,
-) -> PaintContext<'a, A, BoxProtocol, T>
-where
-    A::Accessor<'a, ElementId>: ChildrenAccess<'a, ElementId>,
-{
-    PaintContext::for_box(tree, element_id, offset, size, canvas, children_accessor)
-}
-
-/// Creates a hit test context for box protocol operations (helper function).
-pub fn create_box_hit_test_context<'a, A: Arity, T: HitTestTree>(
-    tree: &'a T,
-    element_id: ElementId,
-    position: Offset,
-    size: Size,
-    children_accessor: A::Accessor<'a, ElementId>,
-) -> HitTestContext<'a, A, BoxProtocol, T>
-where
-    A::Accessor<'a, ElementId>: ChildrenAccess<'a, ElementId>,
-{
-    HitTestContext::for_box(tree, element_id, position, size, children_accessor)
-}
-
-/// Creates a layout context for sliver protocol operations (helper function).
-pub fn create_sliver_layout_context<'a, A: Arity, T: LayoutTree>(
-    tree: &'a mut T,
-    element_id: ElementId,
-    constraints: SliverConstraints,
-    children_accessor: A::Accessor<'a, ElementId>,
-) -> LayoutContext<'a, A, SliverProtocol, T>
-where
-    A::Accessor<'a, ElementId>: ChildrenAccess<'a, ElementId>,
-{
-    LayoutContext::for_sliver(tree, element_id, constraints, children_accessor)
-}
-
-/// Creates a paint context for sliver protocol operations (helper function).
-pub fn create_sliver_paint_context<'a, A: Arity, T: PaintTree>(
-    tree: &'a mut T,
-    element_id: ElementId,
-    offset: Offset,
-    geometry: SliverGeometry,
-    canvas: &'a mut Canvas,
-    children_accessor: A::Accessor<'a, ElementId>,
-) -> PaintContext<'a, A, SliverProtocol, T>
-where
-    A::Accessor<'a, ElementId>: ChildrenAccess<'a, ElementId>,
-{
-    PaintContext::for_sliver(
-        tree,
-        element_id,
-        offset,
-        geometry,
-        canvas,
-        children_accessor,
-    )
-}
-
-/// Creates a hit test context for sliver protocol operations (helper function).
-pub fn create_sliver_hit_test_context<'a, A: Arity, T: HitTestTree>(
-    tree: &'a T,
-    element_id: ElementId,
-    position: Offset,
-    geometry: SliverGeometry,
-    children_accessor: A::Accessor<'a, ElementId>,
-) -> HitTestContext<'a, A, SliverProtocol, T>
-where
-    A::Accessor<'a, ElementId>: ChildrenAccess<'a, ElementId>,
-{
-    HitTestContext::for_sliver(tree, element_id, position, geometry, children_accessor)
 }
