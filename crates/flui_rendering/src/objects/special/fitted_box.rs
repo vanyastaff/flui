@@ -1,7 +1,7 @@
 //! RenderFittedBox - scales and positions child according to BoxFit
 
-use flui_core::render::{
-    RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
+use crate::core::{
+    RenderBox, Single, {BoxLayoutCtx, BoxPaintCtx},
 };
 use flui_types::{layout::BoxFit, painting::ClipBehavior, Alignment, Offset, Size};
 
@@ -166,7 +166,7 @@ impl Default for RenderFittedBox {
 // ===== RenderObject Implementation =====
 
 impl RenderBox<Single> for RenderFittedBox {
-    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
+    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Single>) -> Size {
         let child_id = ctx.children.single();
 
         // Our size is determined by constraints (we try to be as large as possible)
@@ -180,7 +180,7 @@ impl RenderBox<Single> for RenderFittedBox {
         size
     }
 
-    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
+    fn paint(&self, ctx: &mut BoxPaintCtx<'_, Single>) {
         let child_id = ctx.children.single();
 
         // TODO: Apply transform for scaling based on self.calculate_fit()

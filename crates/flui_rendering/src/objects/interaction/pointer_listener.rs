@@ -3,8 +3,8 @@
 //! This RenderObject wraps a child and listens for pointer events,
 //! calling the appropriate callbacks when events occur.
 
-use flui_core::render::{
-    RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
+use crate::core::{
+    RenderBox, Single, {BoxLayoutCtx, BoxPaintCtx},
 };
 use flui_types::events::{PointerEvent, PointerEventHandler};
 use flui_types::Size;
@@ -170,7 +170,7 @@ impl RenderPointerListener {
 }
 
 impl RenderBox<Single> for RenderPointerListener {
-    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
+    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Single>) -> Size {
         let child_id = ctx.children.single();
 
         // Layout child with same constraints
@@ -182,7 +182,7 @@ impl RenderBox<Single> for RenderPointerListener {
         size
     }
 
-    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
+    fn paint(&self, ctx: &mut BoxPaintCtx<'_, Single>) {
         let child_id = ctx.children.single();
         let offset = ctx.offset;
 

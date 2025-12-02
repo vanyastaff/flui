@@ -4,7 +4,7 @@
 
 use crate::core::{
     FullRenderTree,
-    LayoutTree, PaintTree, FullRenderTree, RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
+    LayoutTree, PaintTree, FullRenderTree, RenderBox, Single, {BoxLayoutCtx, PaintContext},
 };
 use flui_types::Size;
 

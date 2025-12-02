@@ -1,6 +1,6 @@
 //! RenderCustomMultiChildLayoutBox - Custom multi-child layout with delegate
 
-use flui_core::render::{BoxProtocol, LayoutContext, PaintContext, RenderBox, Variable};
+use crate::core::{BoxLayoutCtx, BoxPaintCtx, RenderBox, Variable};
 use flui_types::{BoxConstraints, Offset, Size};
 use std::any::Any;
 use std::fmt::Debug;
@@ -209,7 +209,7 @@ impl RenderCustomMultiChildLayoutBox {
 }
 
 impl RenderBox<Variable> for RenderCustomMultiChildLayoutBox {
-    fn layout(&mut self, ctx: LayoutContext<'_, Variable, BoxProtocol>) -> Size {
+    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Variable>) -> Size {
         let constraints = ctx.constraints;
         let children = ctx.children;
 
@@ -232,7 +232,7 @@ impl RenderBox<Variable> for RenderCustomMultiChildLayoutBox {
         constraints.constrain(size)
     }
 
-    fn paint(&self, ctx: &mut PaintContext<'_, Variable>) {
+    fn paint(&self, ctx: &mut BoxPaintCtx<'_, Variable>) {
         let offset = ctx.offset;
 
         // Collect child IDs first to avoid borrow checker issues

@@ -1,6 +1,6 @@
 //! RenderSliverIgnorePointer - Ignores pointer events for sliver content
 
-use flui_core::render::{RuntimeArity, LegacySliverRender, SliverLayoutContext, SliverPaintContext};
+use crate::core::{RuntimeArity, LegacySliverRender, SliverSliver};
 use flui_painting::Canvas;
 use flui_types::SliverGeometry;
 
@@ -82,7 +82,7 @@ impl Default for RenderSliverIgnorePointer {
 }
 
 impl LegacySliverRender for RenderSliverIgnorePointer {
-    fn layout(&mut self, ctx: &SliverLayoutContext) -> SliverGeometry {
+    fn layout(&mut self, ctx: &Sliver) -> SliverGeometry {
         // Pass through to child - IgnorePointer doesn't affect layout
         if let Some(child_id) = ctx.children.try_single() {
             self.sliver_geometry = ctx.tree.layout_sliver_child(child_id, ctx.constraints);
@@ -93,7 +93,7 @@ impl LegacySliverRender for RenderSliverIgnorePointer {
         self.sliver_geometry
     }
 
-    fn paint(&self, ctx: &SliverPaintContext) -> Canvas {
+    fn paint(&self, ctx: &Sliver) -> Canvas {
         // Child is painted normally, hit testing is affected separately
         if let Some(child_id) = ctx.children.try_single() {
             if self.sliver_geometry.visible {

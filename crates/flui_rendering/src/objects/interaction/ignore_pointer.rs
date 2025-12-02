@@ -1,8 +1,8 @@
 //! RenderIgnorePointer - makes widget ignore pointer events
 
-use flui_core::element::hit_test::BoxHitTestResult;
-use flui_core::render::{
-    RenderBox, Single, {BoxProtocol, HitTestContext, LayoutContext, PaintContext},
+use flui_interaction::HitTestResult;
+use crate::core::{
+    RenderBox, Single, {BoxLayoutCtx, HitTestContext},
 };
 use flui_types::Size;
 
@@ -51,13 +51,13 @@ impl Default for RenderIgnorePointer {
 }
 
 impl RenderBox<Single> for RenderIgnorePointer {
-    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
+    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Single>) -> Size {
         let child_id = ctx.children.single();
         // Layout child with same constraints
         ctx.layout_child(child_id, ctx.constraints)
     }
 
-    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
+    fn paint(&self, ctx: &mut BoxPaintCtx<'_, Single>) {
         let child_id = ctx.children.single();
         // Paint child normally - ignoring only affects hit testing
         ctx.paint_child(child_id, ctx.offset);
@@ -66,7 +66,7 @@ impl RenderBox<Single> for RenderIgnorePointer {
     fn hit_test(
         &self,
         ctx: HitTestContext<'_, Single, BoxProtocol>,
-        result: &mut BoxHitTestResult,
+        result: &mut HitTestResult,
     ) -> bool {
         if self.ignoring {
             // Ignore pointer events - return false to let events pass through

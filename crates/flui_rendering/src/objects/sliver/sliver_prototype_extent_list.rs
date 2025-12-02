@@ -1,7 +1,7 @@
 //! RenderSliverPrototypeExtentList - List with prototype-based item sizing
 
 use flui_core::element::ElementTree;
-use flui_core::render::{RuntimeArity, SliverLayoutContext, SliverPaintContext, LegacySliverRender};
+use crate::core::{RuntimeArity, SliverSliverBoxPaintCtx, LegacySliverRender};
 use flui_painting::Canvas;
 use flui_types::{SliverConstraints, SliverGeometry};
 
@@ -147,7 +147,7 @@ impl Default for RenderSliverPrototypeExtentList {
 }
 
 impl LegacySliverRender for RenderSliverPrototypeExtentList {
-    fn layout(&mut self, ctx: &SliverLayoutContext) -> SliverGeometry {
+    fn layout(&mut self, ctx: &Sliver) -> SliverGeometry {
         let constraints = &ctx.constraints;
 
         // TODO: Measure prototype if not yet measured
@@ -184,7 +184,7 @@ impl LegacySliverRender for RenderSliverPrototypeExtentList {
         }
     }
 
-    fn paint(&self, _ctx: &SliverPaintContext) -> Canvas {
+    fn paint(&self, _ctx: &Sliver) -> Canvas {
         let canvas = Canvas::new();
 
         // Children are painted by viewport at their calculated positions

@@ -1,7 +1,7 @@
 //! RenderSizedBox - enforces exact size constraints
 
-use flui_core::render::{BoxProtocol, LayoutContext, PaintContext};
-use flui_core::render::{Optional, RenderBox};
+use crate::core::{BoxLayoutCtx, BoxPaintCtx};
+use crate::core::{Optional, RenderBox};
 use flui_types::constraints::BoxConstraints;
 use flui_types::Size;
 
@@ -94,7 +94,7 @@ impl Default for RenderSizedBox {
 }
 
 impl RenderBox<Optional> for RenderSizedBox {
-    fn layout(&mut self, ctx: LayoutContext<'_, Optional, BoxProtocol>) -> Size {
+    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Optional>) -> Size {
         let constraints = ctx.constraints;
 
         // Check if we have a child
@@ -136,7 +136,7 @@ impl RenderBox<Optional> for RenderSizedBox {
         }
     }
 
-    fn paint(&self, ctx: &mut PaintContext<'_, Optional>) {
+    fn paint(&self, ctx: &mut BoxPaintCtx<'_, Optional>) {
         // If we have a child, paint it at our offset
         if let Some(child_id) = ctx.children.get() {
             ctx.paint_child(child_id, ctx.offset);

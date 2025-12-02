@@ -27,9 +27,9 @@
 //! pub type RenderClipRect = RenderClip<RectShape>;
 //! ```
 
-use flui_core::element::hit_test::BoxHitTestResult;
-use flui_core::render::{
-    RenderBox, Single, {BoxProtocol, HitTestContext, LayoutContext, PaintContext},
+use flui_interaction::HitTestResult;
+use crate::core::{
+    RenderBox, Single, {BoxLayoutCtx, HitTestContext},
 };
 use flui_painting::Canvas;
 use flui_types::{painting::Clip, Offset, Size};
@@ -138,7 +138,7 @@ impl<S: ClipShape> RenderClip<S> {
 }
 
 impl<S: ClipShape + 'static> RenderBox<Single> for RenderClip<S> {
-    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
+    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Single>) -> Size {
         let child_id = ctx.children.single();
         // Layout child with same constraints (pass-through)
         let size = ctx.layout_child(child_id, ctx.constraints);
@@ -147,7 +147,7 @@ impl<S: ClipShape + 'static> RenderBox<Single> for RenderClip<S> {
         size
     }
 
-    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
+    fn paint(&self, ctx: &mut BoxPaintCtx<'_, Single>) {
         let child_id = ctx.children.single();
 
         // If no clipping needed, just paint child directly
@@ -178,7 +178,7 @@ impl<S: ClipShape + 'static> RenderBox<Single> for RenderClip<S> {
     fn hit_test(
         &self,
         ctx: HitTestContext<'_, Single, BoxProtocol>,
-        result: &mut BoxHitTestResult,
+        result: &mut HitTestResult,
     ) -> bool {
         // For clipping, we need to check if the hit position is inside the clip region.
         // If it's outside, the hit should fail even if it would hit the child.

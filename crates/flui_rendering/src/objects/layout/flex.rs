@@ -1,7 +1,7 @@
 //! RenderFlex - flex layout container (Row/Column)
 
-use flui_core::render::{
-    BoxProtocol, ChildrenAccess, LayoutContext, PaintContext, RenderBox, Variable,
+use crate::core::{
+    BoxLayoutCtx, ChildrenAccess, BoxPaintCtx, RenderBox, Variable,
 };
 use flui_types::{
     constraints::BoxConstraints,
@@ -160,7 +160,7 @@ impl Default for RenderFlex {
 }
 
 impl RenderBox<Variable> for RenderFlex {
-    fn layout(&mut self, ctx: LayoutContext<'_, Variable, BoxProtocol>) -> Size {
+    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Variable>) -> Size {
         let constraints = ctx.constraints;
         let children = ctx.children;
 
@@ -348,7 +348,7 @@ impl RenderBox<Variable> for RenderFlex {
         size
     }
 
-    fn paint(&self, ctx: &mut PaintContext<'_, Variable>) {
+    fn paint(&self, ctx: &mut BoxPaintCtx<'_, Variable>) {
         let offset = ctx.offset;
 
         // Collect child IDs first to avoid borrow checker issues

@@ -2,8 +2,6 @@
 //!
 //! Used when you have a RenderObject directly without a RenderView.
 
-use std::any::Any;
-
 use flui_foundation::ElementId;
 use flui_painting::Canvas;
 use flui_types::{constraints::BoxConstraints, Offset, Size};
@@ -184,6 +182,7 @@ impl RenderViewObject for RenderObjectWrapper {
 mod tests {
     use super::*;
     use crate::core::geometry::Geometry;
+    use std::any::Any;
 
     #[derive(Debug)]
     struct TestRenderBox {

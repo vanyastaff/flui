@@ -4,7 +4,7 @@
 //! It smoothly transitions between sizes using linear interpolation.
 //! A full implementation would use AnimationController and TickerProvider.
 
-use flui_core::render::{BoxProtocol, LayoutContext, PaintContext, RenderBox, Single};
+use crate::core::{BoxLayoutCtx, BoxPaintCtx, RenderBox, Single};
 use flui_types::{Alignment, Size};
 use std::time::{Duration, Instant};
 
@@ -199,7 +199,7 @@ impl RenderAnimatedSize {
 }
 
 impl RenderBox<Single> for RenderAnimatedSize {
-    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
+    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Single>) -> Size {
         let child_id = ctx.children.single();
 
         // Layout child with same constraints
@@ -226,7 +226,7 @@ impl RenderBox<Single> for RenderAnimatedSize {
         ctx.constraints.constrain(animated_size)
     }
 
-    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
+    fn paint(&self, ctx: &mut BoxPaintCtx<'_, Single>) {
         let child_id = ctx.children.single();
 
         // Calculate child offset based on alignment

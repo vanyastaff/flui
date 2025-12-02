@@ -1,7 +1,7 @@
 //! RenderDecoratedBox - paints decoration around a child
 
-use flui_core::render::{BoxProtocol, LayoutContext, PaintContext};
-use flui_core::render::{Optional, RenderBox};
+use crate::core::{BoxLayoutCtx, BoxPaintCtx};
+use crate::core::{Optional, RenderBox};
 use flui_painting::{Canvas, Paint};
 use flui_types::{
     styling::{BorderPosition, BoxDecoration, Radius},
@@ -281,7 +281,7 @@ impl RenderDecoratedBox {
 // ===== RenderObject Implementation =====
 
 impl RenderBox<Optional> for RenderDecoratedBox {
-    fn layout(&mut self, ctx: LayoutContext<'_, Optional, BoxProtocol>) -> Size {
+    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Optional>) -> Size {
         let constraints = ctx.constraints;
 
         let size = if let Some(child_id) = ctx.children.get() {
@@ -309,7 +309,7 @@ impl RenderBox<Optional> for RenderDecoratedBox {
         size
     }
 
-    fn paint(&self, ctx: &mut PaintContext<'_, Optional>) {
+    fn paint(&self, ctx: &mut BoxPaintCtx<'_, Optional>) {
         let offset = ctx.offset;
 
         // Paint decoration in LOCAL coordinates at offset

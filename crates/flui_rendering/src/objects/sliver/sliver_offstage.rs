@@ -1,6 +1,6 @@
 //! RenderSliverOffstage - Conditionally hides sliver without removing from tree
 
-use flui_core::render::{RuntimeArity, LegacySliverRender, SliverLayoutContext, SliverPaintContext};
+use crate::core::{RuntimeArity, LegacySliverRender, SliverSliver};
 use flui_painting::Canvas;
 use flui_types::SliverGeometry;
 
@@ -70,7 +70,7 @@ impl Default for RenderSliverOffstage {
 }
 
 impl LegacySliverRender for RenderSliverOffstage {
-    fn layout(&mut self, ctx: &SliverLayoutContext) -> SliverGeometry {
+    fn layout(&mut self, ctx: &Sliver) -> SliverGeometry {
         if self.offstage {
             // When offstage, report zero geometry
             self.sliver_geometry = SliverGeometry::default();
@@ -86,7 +86,7 @@ impl LegacySliverRender for RenderSliverOffstage {
         self.sliver_geometry
     }
 
-    fn paint(&self, ctx: &SliverPaintContext) -> Canvas {
+    fn paint(&self, ctx: &Sliver) -> Canvas {
         // Only paint if not offstage
         if self.should_paint() {
             if let Some(child_id) = ctx.children.try_single() {

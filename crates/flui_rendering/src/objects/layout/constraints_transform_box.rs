@@ -8,7 +8,7 @@
 //!
 //! The parent tries to match the child's size but respects its own constraints.
 
-use flui_core::render::{BoxProtocol, LayoutContext, PaintContext, RenderBox, Single};
+use crate::core::{BoxLayoutCtx, BoxPaintCtx, RenderBox, Single};
 use flui_types::{Alignment, BoxConstraints, Offset, Size};
 use std::fmt::Debug;
 
@@ -156,7 +156,7 @@ impl RenderConstraintsTransformBox {
 }
 
 impl RenderBox<Single> for RenderConstraintsTransformBox {
-    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
+    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Single>) -> Size {
         let child_id = ctx.children.single();
 
         // Apply transform to parent constraints
@@ -173,7 +173,7 @@ impl RenderBox<Single> for RenderConstraintsTransformBox {
         parent_size
     }
 
-    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
+    fn paint(&self, ctx: &mut BoxPaintCtx<'_, Single>) {
         let child_id = ctx.children.single();
 
         // Calculate child offset based on alignment (if sizes differ)

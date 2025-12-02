@@ -1,6 +1,6 @@
 //! RenderSliverMainAxisGroup - Groups multiple slivers along main axis
 
-use flui_core::render::{RuntimeArity, LegacySliverRender, SliverLayoutContext, SliverPaintContext};
+use crate::core::{RuntimeArity, LegacySliverRender, SliverSliver};
 use flui_painting::Canvas;
 use flui_types::{Offset, SliverGeometry};
 
@@ -70,7 +70,7 @@ impl RenderSliverMainAxisGroup {
     /// to compute the group's total geometry.
     fn calculate_sliver_geometry(
         &mut self,
-        ctx: &SliverLayoutContext,
+        ctx: &Sliver,
     ) -> SliverGeometry {
         let children = ctx.children.as_slice();
 
@@ -154,12 +154,12 @@ impl Default for RenderSliverMainAxisGroup {
 }
 
 impl LegacySliverRender for RenderSliverMainAxisGroup {
-    fn layout(&mut self, ctx: &SliverLayoutContext) -> SliverGeometry {
+    fn layout(&mut self, ctx: &Sliver) -> SliverGeometry {
         self.sliver_geometry = self.calculate_sliver_geometry(ctx);
         self.sliver_geometry
     }
 
-    fn paint(&self, ctx: &SliverPaintContext) -> Canvas {
+    fn paint(&self, ctx: &Sliver) -> Canvas {
         let mut canvas = Canvas::new();
         let children = ctx.children.as_slice();
 

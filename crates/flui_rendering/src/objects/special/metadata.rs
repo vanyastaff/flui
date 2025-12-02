@@ -1,7 +1,7 @@
 //! RenderMetaData - attaches metadata to child for parent access
 
-use flui_core::render::{
-    RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
+use crate::core::{
+    RenderBox, Single, {BoxLayoutCtx, BoxPaintCtx},
 };
 use flui_types::Size;
 use std::any::Any;
@@ -111,13 +111,13 @@ impl Default for RenderMetaData {
 // ===== RenderObject Implementation =====
 
 impl RenderBox<Single> for RenderMetaData {
-    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
+    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Single>) -> Size {
         let child_id = ctx.children.single();
         // Layout child with same constraints (pass-through)
         ctx.layout_child(child_id, ctx.constraints)
     }
 
-    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
+    fn paint(&self, ctx: &mut BoxPaintCtx<'_, Single>) {
         let child_id = ctx.children.single();
         // Paint child directly (pass-through)
         ctx.paint_child(child_id, ctx.offset);

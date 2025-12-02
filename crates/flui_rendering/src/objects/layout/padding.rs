@@ -1,7 +1,8 @@
 //! RenderPadding - adds padding around a child
 
-use flui_core::render::{BoxProtocol, LayoutContext, PaintContext, RenderBox, Single};
-use flui_types::{EdgeInsets, Size};
+use crate::core::{BoxLayoutCtx, BoxPaintCtx, RenderBox, Single};
+use flui_types::{EdgeInsets, Offset, Size};
+use std::any::Any;
 
 /// RenderObject that adds padding around its child
 ///
@@ -36,8 +37,8 @@ impl RenderPadding {
 }
 
 impl RenderBox<Single> for RenderPadding {
-    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
-        let child_id = ctx.children.single();
+    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Single>) -> Size {
+        let child_id = *ctx.children.single();
         let padding = self.padding;
 
         // Deflate constraints by padding
@@ -53,12 +54,20 @@ impl RenderBox<Single> for RenderPadding {
         )
     }
 
-    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
-        let child_id = ctx.children.single();
+    fn paint(&self, ctx: &mut BoxPaintCtx<'_, Single>) {
+        let child_id = *ctx.children.single();
 
         // Apply padding offset and paint child
-        let child_offset = flui_types::Offset::new(self.padding.left, self.padding.top);
+        let child_offset = Offset::new(self.padding.left, self.padding.top);
         ctx.paint_child(child_id, ctx.offset + child_offset);
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
     }
 }
 

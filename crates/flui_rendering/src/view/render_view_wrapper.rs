@@ -15,7 +15,7 @@ use crate::core::{
     LayoutProtocol, RenderObject, RenderState, RuntimeArity,
 };
 
-use super::{RenderObjectFor, RenderView, RenderViewObject, UpdateResult};
+use super::{RenderView, RenderViewObject, UpdateResult};
 
 // ============================================================================
 // ArityToRuntime - Convert compile-time Arity to RuntimeArity
@@ -286,11 +286,42 @@ where
 mod tests {
     use super::*;
     use crate::core::arity::Leaf;
+    use crate::core::render_box::RenderBox;
+    use crate::core::BoxConstraints;
     use std::any::Any;
 
     #[derive(Debug)]
     struct TestRenderBox {
         size: Size,
+    }
+
+    // Implement RenderBox<Leaf> for TestRenderBox (required by RenderObjectFor)
+    impl RenderBox<Leaf> for TestRenderBox {
+        fn layout(
+            &mut self,
+            constraints: BoxConstraints,
+            _children: &[ElementId],
+            _layout_child: &mut dyn FnMut(ElementId, BoxConstraints) -> Size,
+        ) -> Size {
+            constraints.constrain(self.size)
+        }
+
+        fn paint(
+            &self,
+            _offset: Offset,
+            _children: &[ElementId],
+            _paint_child: &mut dyn FnMut(ElementId, Offset) -> Canvas,
+        ) -> Canvas {
+            Canvas::new()
+        }
+
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn as_any_mut(&mut self) -> &mut dyn Any {
+            self
+        }
     }
 
     impl RenderObject for TestRenderBox {

@@ -296,7 +296,7 @@ mod tests {
         let geometry = SliverGeometry {
             scroll_extent: 1000.0,
             paint_extent: 500.0,
-            max_paint_extent: 500.0,
+            max_paint_extent: Some(500.0),
             layout_extent: Some(500.0),
             ..Default::default()
         };

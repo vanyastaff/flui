@@ -1,6 +1,6 @@
 //! RenderSliverPinnedPersistentHeader - Pinned header that stays visible
 
-use flui_core::render::{RuntimeArity, LegacySliverRender, SliverLayoutContext, SliverPaintContext};
+use crate::core::{RuntimeArity, LegacySliverRender, SliverSliver};
 use flui_painting::Canvas;
 use flui_types::{SliverConstraints, SliverGeometry};
 
@@ -138,13 +138,13 @@ impl Default for RenderSliverPinnedPersistentHeader {
 }
 
 impl LegacySliverRender for RenderSliverPinnedPersistentHeader {
-    fn layout(&mut self, ctx: &SliverLayoutContext) -> SliverGeometry {
+    fn layout(&mut self, ctx: &Sliver) -> SliverGeometry {
         // Calculate and cache sliver geometry
         self.sliver_geometry = self.calculate_sliver_geometry(&ctx.constraints);
         self.sliver_geometry
     }
 
-    fn paint(&self, ctx: &SliverPaintContext) -> Canvas {
+    fn paint(&self, ctx: &Sliver) -> Canvas {
         // Paint child if present and visible
         if let Some(child_id) = ctx.children.try_single() {
             if self.sliver_geometry.visible {

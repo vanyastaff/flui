@@ -21,7 +21,7 @@
 //! ```
 
 // TODO: Migrate to Render<A>
-// use flui_core::render::{RuntimeArity, LayoutContext, PaintContext, LegacyRender};
+// use crate::core::{RuntimeArity, BoxPaintCtx, LegacyRender};
 #[cfg(debug_assertions)]
 #[cfg(debug_assertions)]
 #[cfg(debug_assertions)]
@@ -328,7 +328,7 @@ impl RenderOverflowIndicator {
 
 #[cfg(debug_assertions)]
 impl LegacyRender for RenderOverflowIndicator {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
+    fn layout(&mut self, ctx: &) -> Size {
         let tree = ctx.tree;
         let child_id = ctx.children.single();
         let constraints = ctx.constraints;

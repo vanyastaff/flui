@@ -10,7 +10,7 @@ use std::marker::PhantomData;
 use flui_foundation::ElementId;
 use flui_interaction::HitTestResult;
 use flui_painting::Canvas;
-use flui_types::{Offset, Rect, Size, SliverConstraints, SliverGeometry};
+use flui_types::{BoxConstraints, Offset, Rect, Size, SliverConstraints, SliverGeometry};
 
 use super::arity::{Arity, ChildrenAccess, Single};
 use super::geometry::BoxConstraints;

@@ -1,6 +1,6 @@
 //! RenderTable - Table layout with configurable column widths
 
-use flui_core::render::{BoxProtocol, LayoutContext, PaintContext, RenderBox, Variable};
+use crate::core::{BoxLayoutCtx, BoxPaintCtx, RenderBox, Variable};
 use flui_types::{BoxConstraints, Offset, Size};
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
@@ -113,7 +113,7 @@ impl RenderTable {
     fn compute_column_widths(
         &self,
         children: &[NonZeroUsize],
-        ctx: &LayoutContext<'_, Variable, BoxProtocol>,
+        ctx: &BoxLayoutCtx<'_, Variable>,
         constraints: BoxConstraints,
     ) -> Vec<f32> {
         if self.columns == 0 {
@@ -184,7 +184,7 @@ impl RenderTable {
     fn compute_row_heights(
         &self,
         children: &[NonZeroUsize],
-        ctx: &LayoutContext<'_, Variable, BoxProtocol>,
+        ctx: &BoxLayoutCtx<'_, Variable>,
         column_widths: &[f32],
         constraints: BoxConstraints,
     ) -> Vec<f32> {
@@ -220,7 +220,7 @@ impl RenderTable {
 }
 
 impl RenderBox<Variable> for RenderTable {
-    fn layout(&mut self, ctx: LayoutContext<'_, Variable, BoxProtocol>) -> Size {
+    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Variable>) -> Size {
         let constraints = ctx.constraints;
         let children = ctx.children;
 
@@ -251,7 +251,7 @@ impl RenderBox<Variable> for RenderTable {
         size
     }
 
-    fn paint(&self, ctx: &mut PaintContext<'_, Variable>) {
+    fn paint(&self, ctx: &mut BoxPaintCtx<'_, Variable>) {
         let offset = ctx.offset;
 
         // Collect child IDs first to avoid borrow checker issues

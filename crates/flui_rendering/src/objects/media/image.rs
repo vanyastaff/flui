@@ -1,6 +1,6 @@
 //! RenderImage - Displays a raster image
 
-use flui_core::render::{BoxProtocol, LayoutContext, Leaf, PaintContext, RenderBox};
+use crate::core::{BoxLayoutCtx, Leaf, BoxPaintCtx, RenderBox};
 use flui_painting::Paint;
 use flui_types::{painting::Image, Rect, Size};
 
@@ -150,7 +150,7 @@ impl RenderImage {
 }
 
 impl RenderBox<Leaf> for RenderImage {
-    fn layout(&mut self, ctx: LayoutContext<'_, Leaf, BoxProtocol>) -> Size {
+    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Leaf>) -> Size {
         let constraints = &ctx.constraints;
 
         // If we have specific size constraints, use them
@@ -171,7 +171,7 @@ impl RenderBox<Leaf> for RenderImage {
         }
     }
 
-    fn paint(&self, ctx: &mut PaintContext<'_, Leaf>) {
+    fn paint(&self, ctx: &mut BoxPaintCtx<'_, Leaf>) {
         // Get the destination rectangle based on fit and alignment
         let dest_rect = self.calculate_dest_rect(Size::new(
             self.image.width() as f32,

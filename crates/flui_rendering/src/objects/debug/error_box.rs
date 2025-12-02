@@ -1,7 +1,6 @@
 //! RenderErrorBox - Debug error visualization
 
-use flui_core::render::{BoxProtocol, LayoutContext, PaintContext};
-use flui_core::render::{Leaf, RenderBox};
+use crate::core::{BoxLayoutCtx, BoxPaintCtx, Leaf, RenderBox};
 use flui_painting::Paint;
 use flui_types::prelude::{Color, TextStyle};
 use flui_types::{Rect, Size};
@@ -92,7 +91,7 @@ impl Default for RenderErrorBox {
 }
 
 impl RenderBox<Leaf> for RenderErrorBox {
-    fn layout(&mut self, ctx: LayoutContext<'_, Leaf, BoxProtocol>) -> Size {
+    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Leaf>) -> Size {
         let constraints = ctx.constraints;
 
         // Error box takes up all available space
@@ -102,7 +101,7 @@ impl RenderBox<Leaf> for RenderErrorBox {
         size
     }
 
-    fn paint(&self, ctx: &mut PaintContext<'_, Leaf>) {
+    fn paint(&self, ctx: &mut BoxPaintCtx<'_, Leaf>) {
         let mut paint = Paint::default();
         let rect = Rect::from_min_size(flui_types::Point::ZERO, self.size);
 

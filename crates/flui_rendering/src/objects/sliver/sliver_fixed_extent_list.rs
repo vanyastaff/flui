@@ -1,7 +1,7 @@
 //! RenderSliverFixedExtentList - Optimized list with fixed item size
 
 use flui_core::element::ElementTree;
-use flui_core::render::{RuntimeArity, SliverLayoutContext, SliverPaintContext, LegacySliverRender};
+use crate::core::{RuntimeArity, SliverSliverBoxPaintCtx, LegacySliverRender};
 use flui_painting::Canvas;
 use flui_types::{SliverConstraints, SliverGeometry};
 
@@ -128,7 +128,7 @@ impl RenderSliverFixedExtentList {
 }
 
 impl LegacySliverRender for RenderSliverFixedExtentList {
-    fn layout(&mut self, ctx: &SliverLayoutContext) -> SliverGeometry {
+    fn layout(&mut self, ctx: &Sliver) -> SliverGeometry {
         let constraints = &ctx.constraints;
 
         // Calculate and cache sliver geometry
@@ -136,7 +136,7 @@ impl LegacySliverRender for RenderSliverFixedExtentList {
         self.calculate_sliver_geometry(constraints, ctx.tree, children_slice)
     }
 
-    fn paint(&self, _ctx: &SliverPaintContext) -> Canvas {
+    fn paint(&self, _ctx: &Sliver) -> Canvas {
         let canvas = Canvas::new();
 
         // Children are painted by viewport at their calculated positions

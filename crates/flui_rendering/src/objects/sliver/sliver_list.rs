@@ -1,7 +1,7 @@
 //! RenderSliverList - Scrollable list with lazy loading
 
 use flui_core::element::ElementTree;
-use flui_core::render::{RuntimeArity, SliverLayoutContext, SliverPaintContext, LegacySliverRender};
+use crate::core::{RuntimeArity, SliverSliverBoxPaintCtx, LegacySliverRender};
 use flui_painting::Canvas;
 use flui_types::{SliverConstraints, SliverGeometry};
 
@@ -198,7 +198,7 @@ impl Default for RenderSliverList {
 }
 
 impl LegacySliverRender for RenderSliverList {
-    fn layout(&mut self, ctx: &SliverLayoutContext) -> SliverGeometry {
+    fn layout(&mut self, ctx: &Sliver) -> SliverGeometry {
         let constraints = &ctx.constraints;
 
         // Store cross axis extent
@@ -210,7 +210,7 @@ impl LegacySliverRender for RenderSliverList {
         self.sliver_geometry
     }
 
-    fn paint(&self, _ctx: &SliverPaintContext) -> Canvas {
+    fn paint(&self, _ctx: &Sliver) -> Canvas {
         let canvas = Canvas::new();
 
         // Slivers paint their visible children based on scroll offset

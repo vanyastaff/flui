@@ -5,7 +5,7 @@
 //!
 //! Flutter reference: https://api.flutter.dev/flutter/rendering/RenderSemanticsGestureHandler-class.html
 
-use crate::core::{BoxProtocol, LayoutContext, PaintContext, FullRenderTree, RenderBox, Single};
+use crate::core::{BoxLayoutCtx, BoxPaintCtx, FullRenderTree, RenderBox, Single};
 use flui_types::Size;
 use std::sync::Arc;
 

@@ -1,6 +1,6 @@
 //! RenderSliverPadding - Adds padding around sliver content
 
-use flui_core::render::{RuntimeArity, LegacySliverRender, SliverLayoutContext, SliverPaintContext};
+use crate::core::{RuntimeArity, LegacySliverRender, SliverSliver};
 use flui_painting::Canvas;
 use flui_types::prelude::*;
 use flui_types::{SliverConstraints, SliverGeometry};
@@ -117,7 +117,7 @@ impl RenderSliverPadding {
 }
 
 impl LegacySliverRender for RenderSliverPadding {
-    fn layout(&mut self, ctx: &SliverLayoutContext) -> SliverGeometry {
+    fn layout(&mut self, ctx: &Sliver) -> SliverGeometry {
         let child_id = ctx.children.single();
 
         // Adjust constraints for padding
@@ -135,7 +135,7 @@ impl LegacySliverRender for RenderSliverPadding {
         geometry
     }
 
-    fn paint(&self, ctx: &SliverPaintContext) -> Canvas {
+    fn paint(&self, ctx: &Sliver) -> Canvas {
         let child_id = ctx.children.single();
 
         // Paint child with padding offset

@@ -1,6 +1,6 @@
 //! RenderSliverSafeArea - Adds safe area insets to sliver content
 
-use flui_core::render::{RuntimeArity, LegacySliverRender, SliverLayoutContext, SliverPaintContext};
+use crate::core::{RuntimeArity, LegacySliverRender, SliverSliver};
 use flui_painting::Canvas;
 use flui_types::prelude::*;
 use flui_types::{SliverConstraints, SliverGeometry};
@@ -149,13 +149,13 @@ impl Default for RenderSliverSafeArea {
 }
 
 impl LegacySliverRender for RenderSliverSafeArea {
-    fn layout(&mut self, ctx: &SliverLayoutContext) -> SliverGeometry {
+    fn layout(&mut self, ctx: &Sliver) -> SliverGeometry {
         // Calculate and cache sliver geometry
         self.sliver_geometry = self.calculate_sliver_geometry(&ctx.constraints);
         self.sliver_geometry
     }
 
-    fn paint(&self, _ctx: &SliverPaintContext) -> Canvas {
+    fn paint(&self, _ctx: &Sliver) -> Canvas {
         // Safe area doesn't paint anything - it just adds spacing
         Canvas::new()
     }

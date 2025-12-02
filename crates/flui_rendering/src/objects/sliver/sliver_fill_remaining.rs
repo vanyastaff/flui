@@ -1,6 +1,6 @@
 //! RenderSliverFillRemaining - Fills remaining viewport space
 
-use flui_core::render::{RuntimeArity, SliverLayoutContext, SliverPaintContext, LegacySliverRender};
+use crate::core::{RuntimeArity, SliverSliverBoxPaintCtx, LegacySliverRender};
 use flui_painting::Canvas;
 use flui_types::prelude::*;
 use flui_types::{SliverConstraints, SliverGeometry};
@@ -145,7 +145,7 @@ impl Default for RenderSliverFillRemaining {
 }
 
 impl LegacySliverRender for RenderSliverFillRemaining {
-    fn layout(&mut self, ctx: &SliverLayoutContext) -> SliverGeometry {
+    fn layout(&mut self, ctx: &Sliver) -> SliverGeometry {
         let constraints = &ctx.constraints;
 
         // Layout child with box constraints based on remaining viewport space
@@ -167,7 +167,7 @@ impl LegacySliverRender for RenderSliverFillRemaining {
         self.sliver_geometry
     }
 
-    fn paint(&self, ctx: &SliverPaintContext) -> Canvas {
+    fn paint(&self, ctx: &Sliver) -> Canvas {
         // Paint child if present and visible
         if let Some(child_id) = ctx.children.try_single() {
             if self.sliver_geometry.visible {

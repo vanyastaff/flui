@@ -9,7 +9,7 @@
 //! - Allowing children to exceed parent boundaries with specific size limits
 //! - Transforming constraints passed to children
 
-use flui_core::render::{BoxProtocol, LayoutContext, PaintContext, RenderBox, Single};
+use crate::core::{BoxLayoutCtx, BoxPaintCtx, RenderBox, Single};
 use flui_types::{Alignment, BoxConstraints, Size};
 
 /// A render object that imposes different constraints on its child than it gets from its parent,
@@ -140,7 +140,7 @@ impl Default for RenderConstrainedOverflowBox {
 }
 
 impl RenderBox<Single> for RenderConstrainedOverflowBox {
-    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
+    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Single>) -> Size {
         let child_id = ctx.children.single();
 
         // Parent sizes itself according to its incoming constraints
@@ -159,7 +159,7 @@ impl RenderBox<Single> for RenderConstrainedOverflowBox {
         parent_size
     }
 
-    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
+    fn paint(&self, ctx: &mut BoxPaintCtx<'_, Single>) {
         let child_id = ctx.children.single();
 
         // Calculate child offset based on alignment

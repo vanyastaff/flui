@@ -1,6 +1,6 @@
 //! RenderSliverOpacity - Applies opacity to sliver content
 
-use flui_core::render::{RuntimeArity, LegacySliverRender, SliverLayoutContext, SliverPaintContext};
+use crate::core::{RuntimeArity, LegacySliverRender, SliverSliver};
 use flui_painting::Canvas;
 use flui_types::SliverGeometry;
 
@@ -80,7 +80,7 @@ impl Default for RenderSliverOpacity {
 }
 
 impl LegacySliverRender for RenderSliverOpacity {
-    fn layout(&mut self, ctx: &SliverLayoutContext) -> SliverGeometry {
+    fn layout(&mut self, ctx: &Sliver) -> SliverGeometry {
         // Pass through to child
         if let Some(child_id) = ctx.children.try_single() {
             self.sliver_geometry = ctx.tree.layout_sliver_child(child_id, ctx.constraints);
@@ -91,7 +91,7 @@ impl LegacySliverRender for RenderSliverOpacity {
         self.sliver_geometry
     }
 
-    fn paint(&self, ctx: &SliverPaintContext) -> Canvas {
+    fn paint(&self, ctx: &Sliver) -> Canvas {
         // If fully transparent, skip painting (unless semantics required)
         if !self.should_paint() && !self.always_include_semantics {
             return Canvas::new();

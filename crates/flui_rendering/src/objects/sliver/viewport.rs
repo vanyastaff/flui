@@ -2,7 +2,7 @@
 
 use flui_core::element::ElementTree;
 // TODO: Migrate to Render<A>
-// use flui_core::render::{RuntimeArity, LayoutContext, PaintContext, LegacyRender};
+// use crate::core::{RuntimeArity, BoxPaintCtx, LegacyRender};
 use flui_painting::Canvas;
 use flui_types::prelude::*;
 use flui_types::layout::{Axis, AxisDirection};
@@ -201,7 +201,7 @@ impl Default for RenderViewport {
 }
 
 impl LegacyRender for RenderViewport {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
+    fn layout(&mut self, ctx: &) -> Size {
         let constraints = &ctx.constraints;
 
         // Viewport takes up the space given by box constraints
@@ -226,7 +226,7 @@ impl LegacyRender for RenderViewport {
         Size::new(width, height)
     }
 
-    fn paint(&self, ctx: &PaintContext) -> Canvas {
+    fn paint(&self, ctx: &) -> Canvas {
         let _offset = ctx.offset;
         let canvas = Canvas::new();
 

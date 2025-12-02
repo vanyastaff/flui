@@ -1,7 +1,7 @@
 //! RenderShiftedBox - Shifts child position by an offset
 
-use flui_core::render::{
-    RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
+use crate::core::{
+    RenderBox, Single, {BoxLayoutCtx, BoxPaintCtx},
 };
 use flui_types::{Offset, Size};
 
@@ -76,7 +76,7 @@ impl Default for RenderShiftedBox {
 }
 
 impl RenderBox<Single> for RenderShiftedBox {
-    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
+    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Single>) -> Size {
         let child_id = ctx.children.single();
 
         // Layout child with full constraints
@@ -89,7 +89,7 @@ impl RenderBox<Single> for RenderShiftedBox {
         size
     }
 
-    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
+    fn paint(&self, ctx: &mut BoxPaintCtx<'_, Single>) {
         let child_id = ctx.children.single();
 
         // Paint child at shifted position

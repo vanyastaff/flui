@@ -1,7 +1,7 @@
 //! RenderColoredBox - simple solid color box
 
-use flui_core::render::{BoxProtocol, LayoutContext, PaintContext};
-use flui_core::render::{Leaf, RenderBox};
+use crate::core::{BoxLayoutCtx, BoxPaintCtx};
+use crate::core::{Leaf, RenderBox};
 use flui_types::{Color, Rect, Size};
 
 /// RenderObject that paints a solid color background
@@ -51,7 +51,7 @@ impl Default for RenderColoredBox {
 }
 
 impl RenderBox<Leaf> for RenderColoredBox {
-    fn layout(&mut self, ctx: LayoutContext<'_, Leaf, BoxProtocol>) -> Size {
+    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Leaf>) -> Size {
         let constraints = ctx.constraints;
         // Leaf renders have no children - fill available space
         let size = Size::new(constraints.max_width, constraints.max_height);
@@ -59,7 +59,7 @@ impl RenderBox<Leaf> for RenderColoredBox {
         size
     }
 
-    fn paint(&self, ctx: &mut PaintContext<'_, Leaf>) {
+    fn paint(&self, ctx: &mut BoxPaintCtx<'_, Leaf>) {
         // Draw solid color rectangle
         let rect = Rect::from_min_size(flui_types::Point::ZERO, self.size);
         let paint = flui_painting::Paint {

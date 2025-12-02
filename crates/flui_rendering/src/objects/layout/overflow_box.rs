@@ -1,6 +1,6 @@
 //! RenderOverflowBox - allows child_id to overflow constraints
 
-use flui_core::render::{BoxProtocol, LayoutContext, PaintContext, RenderBox, Single};
+use crate::core::{BoxLayoutCtx, BoxPaintCtx, RenderBox, Single};
 use flui_types::constraints::BoxConstraints;
 use flui_types::{Alignment, Offset, Size};
 
@@ -99,7 +99,7 @@ impl Default for RenderOverflowBox {
 }
 
 impl RenderBox<Single> for RenderOverflowBox {
-    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
+    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Single>) -> Size {
         let child_id = ctx.children.single();
         let constraints = ctx.constraints;
 
@@ -130,7 +130,7 @@ impl RenderBox<Single> for RenderOverflowBox {
         size
     }
 
-    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
+    fn paint(&self, ctx: &mut BoxPaintCtx<'_, Single>) {
         let child_id = ctx.children.single();
         let offset = ctx.offset;
 

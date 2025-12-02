@@ -1,7 +1,7 @@
 //! RenderOffstage - hides widget from display
 
-use flui_core::render::{
-    RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
+use crate::core::{
+    RenderBox, Single, {BoxLayoutCtx, BoxPaintCtx},
 };
 use flui_types::Size;
 
@@ -46,7 +46,7 @@ impl Default for RenderOffstage {
 }
 
 impl RenderBox<Single> for RenderOffstage {
-    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
+    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Single>) -> Size {
         let child_id = ctx.children.single();
         // Single arity always has exactly one child - layout it to maintain state
         let child_size = ctx.layout_child(child_id, ctx.constraints);
@@ -61,7 +61,7 @@ impl RenderBox<Single> for RenderOffstage {
         }
     }
 
-    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
+    fn paint(&self, ctx: &mut BoxPaintCtx<'_, Single>) {
         // Don't paint if offstage
         if !self.offstage {
             let child_id = ctx.children.single();

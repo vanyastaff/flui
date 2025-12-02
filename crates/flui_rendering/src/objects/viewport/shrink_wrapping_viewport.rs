@@ -8,7 +8,7 @@
 
 use flui_core::element::{ElementId, ElementTree};
 // TODO: Migrate to Render<A>
-// use flui_core::render::{RuntimeArity, LayoutContext, PaintContext, LegacyRender};
+// use crate::core::{RuntimeArity, BoxPaintCtx, LegacyRender};
 use flui_painting::Canvas;
 use flui_types::layout::{Axis, AxisDirection};
 use flui_types::prelude::*;
@@ -101,7 +101,7 @@ impl RenderShrinkWrappingViewport {
 }
 
 impl LegacyRender for RenderShrinkWrappingViewport {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
+    fn layout(&mut self, ctx: &) -> Size {
         // Placeholder: In real implementation, would:
         // 1. Layout sliver children to measure total extent
         // 2. Size viewport to match content (up to max constraints)

@@ -6,7 +6,7 @@
 //!
 //! Flutter reference: https://api.flutter.dev/flutter/widgets/TapRegion-class.html
 
-use crate::core::{BoxProtocol, LayoutContext, PaintContext, FullRenderTree, RenderBox, Single};
+use crate::core::{BoxLayoutCtx, BoxPaintCtx, FullRenderTree, RenderBox, Single};
 use flui_types::Size;
 use std::sync::Arc;
 

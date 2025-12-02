@@ -3,8 +3,8 @@
 //! This render object applies a shader (gradient, pattern, etc.) as a mask
 //! to its child, controlling which parts are visible.
 
-use flui_core::render::{
-    RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
+use crate::core::{
+    RenderBox, Single, {BoxLayoutCtx, BoxPaintCtx},
 };
 use flui_types::{painting::BlendMode, styling::Color32, Size};
 
@@ -130,13 +130,13 @@ impl RenderShaderMask {
 // ===== RenderObject Implementation =====
 
 impl RenderBox<Single> for RenderShaderMask {
-    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
+    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Single>) -> Size {
         let child_id = ctx.children.single();
         // Layout child with same constraints
         ctx.layout_child(child_id, ctx.constraints)
     }
 
-    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
+    fn paint(&self, ctx: &mut BoxPaintCtx<'_, Single>) {
         let child_id = ctx.children.single();
 
         // Note: Full shader masking requires compositor support
