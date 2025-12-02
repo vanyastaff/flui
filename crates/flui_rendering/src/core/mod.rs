@@ -18,7 +18,7 @@
 //!     │
 //!     ├── RenderObject (base trait for all render objects)
 //!     ├── RenderBox<A> (box protocol with arity A)
-//!     ├── SliverRender<A> (sliver protocol with arity A)
+//!     ├── RenderSliver<A> (sliver protocol with arity A)
 //!     ├── Contexts (GAT-based layout/paint/hit-test contexts)
 //!     ├── TreeOps (dyn-compatible tree operations)
 //!     └── Wrappers (ergonomic proxy and utility wrappers)
@@ -38,7 +38,7 @@
 //!
 //! - [`RenderObject`] - Base trait for all render objects with type erasure support
 //! - [`RenderBox<A>`] - Box protocol render objects with arity validation
-//! - [`SliverRender<A>`] - Sliver protocol render objects with arity validation
+//! - [`RenderSliver<A>`] - Sliver protocol render objects with arity validation
 //!
 //! ## Contexts (GAT-based)
 //!
@@ -237,10 +237,8 @@ mod render_box;
 // Sliver protocol render trait
 mod render_sliver;
 
-// dyn-compatible tree operations
-mod tree_ops;
-
-// Full render tree trait (combines LayoutTree + PaintTree + HitTestTree)
+// Full render tree traits (combines LayoutTree + PaintTree + HitTestTree)
+// Note: tree_ops.rs was removed - all tree traits are now in render_tree.rs
 mod render_tree;
 
 // Proxy traits for pass-through render objects
@@ -316,7 +314,12 @@ pub use flui_types::{Axis, EdgeInsets, Offset, Rect, Size, SliverConstraints, Sl
 
 pub use render_box::{RenderBox, RenderBoxExt};
 pub use render_object::RenderObject;
-pub use render_sliver::{SliverRender, SliverRenderExt};
+pub use render_sliver::{RenderSliver, RenderSliverExt};
+
+// Re-export old names for backward compatibility
+// These are just re-exports, not deprecated aliases, to ensure impl blocks work
+pub use render_sliver::RenderSliver as SliverRender;
+pub use render_sliver::RenderSliverExt as SliverRenderExt;
 
 // ============================================================================
 // PARENT DATA SYSTEM
@@ -363,31 +366,35 @@ pub type BoxPaintCtx<'a, A> = BoxPaintContext<'a, A>;
 // TREE OPERATIONS (dyn-compatible)
 // ============================================================================
 
-pub use tree_ops::{
-    hit_test_subtree,
+pub use render_tree::{
     // Utility functions
+    hit_test_subtree,
+    layout_batch,
     layout_subtree,
+    paint_batch,
     paint_subtree,
-    HitTestTree,
-    HitTestTreeExt,
+    // Combined traits
+    FullRenderTree,
     // Phase-specific traits
-    LayoutTree,
+    HitTestTree,
     // Extension traits
+    HitTestTreeExt,
+    LayoutTree,
     LayoutTreeExt,
     PaintTree,
     PaintTreeExt,
-    // Combined trait
     RenderTreeOps,
 };
-
-// Full render tree trait (combines all phases)
-pub use render_tree::FullRenderTree;
 
 // ============================================================================
 // PROXY TRAITS
 // ============================================================================
 
-pub use render_proxy::{RenderBoxProxy, RenderSliverProxy};
+pub use render_proxy::{SimpleBoxProxy, SimpleSliverProxy};
+
+// Re-export old names for backward compatibility
+pub use render_proxy::SimpleBoxProxy as RenderBoxProxy;
+pub use render_proxy::SimpleSliverProxy as RenderSliverProxy;
 
 // ============================================================================
 // WRAPPERS AND UTILITIES
@@ -460,7 +467,7 @@ pub use crate::error::{RenderError, Result as RenderResult};
 /// ```
 pub mod prelude {
     // Core traits
-    pub use super::{RenderBox, RenderObject, SliverRender};
+    pub use super::{RenderBox, RenderObject, RenderSliver};
 
     // Arity system
     pub use super::{Arity, AtLeast, Exact, Leaf, Optional, Single, Variable};

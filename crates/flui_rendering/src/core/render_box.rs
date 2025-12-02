@@ -737,7 +737,7 @@ impl<A: Arity> RenderObject for EmptyRenderBox<A> {
 mod tests {
     use super::*;
     use crate::core::arity::{Leaf, Single, Variable};
-    use crate::core::tree_ops::*;
+    use crate::core::render_tree::*;
     use flui_foundation::ElementId;
 
     // Mock tree for testing

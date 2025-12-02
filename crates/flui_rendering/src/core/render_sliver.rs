@@ -1,7 +1,12 @@
 //! Sliver protocol render trait with context-based API.
 //!
-//! This module provides the `SliverRender<A>` trait for implementing render objects
+//! This module provides the `RenderSliver<A>` trait for implementing render objects
 //! that participate in scrollable layouts (viewports).
+//!
+//! # Naming Convention
+//!
+//! This trait is named `RenderSliver` (not `SliverRender`) for consistency with
+//! `RenderBox`. Both follow the pattern `Render{Protocol}`.
 //!
 //! # Sliver vs Box
 //!
@@ -11,7 +16,7 @@
 //! # Architecture
 //!
 //! ```text
-//! SliverRender<A> trait
+//! RenderSliver<A> trait
 //! ├── layout(ctx: SliverLayoutContext<'_, A>) → SliverGeometry
 //! ├── paint(ctx: &mut SliverPaintContext<'_, A>)
 //! └── hit_test(ctx: &SliverHitTestContext<'_, A>, result) → bool
@@ -20,10 +25,10 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use flui_rendering::{SliverRender, SliverLayoutContext, Variable};
+//! use flui_rendering::{RenderSliver, SliverLayoutContext, Variable};
 //! use flui_types::SliverGeometry;
 //!
-//! impl SliverRender<Variable> for RenderSliverList {
+//! impl RenderSliver<Variable> for RenderSliverList {
 //!     fn layout(&mut self, ctx: SliverLayoutContext<'_, Variable>) -> SliverGeometry {
 //!         let mut total_extent = 0.0;
 //!         for child in ctx.children.element_ids() {
@@ -52,12 +57,17 @@ use super::arity::Arity;
 use super::contexts::{SliverHitTestContext, SliverLayoutContext, SliverPaintContext};
 
 // ============================================================================
-// SLIVER RENDER TRAIT
+// RENDER SLIVER TRAIT
 // ============================================================================
 
 /// Sliver protocol render trait with context-based API.
 ///
 /// Implement this trait for render objects that participate in scrollable layouts.
+///
+/// # Naming
+///
+/// Named `RenderSliver` for consistency with `RenderBox`. Both follow the
+/// pattern `Render{Protocol}`.
 ///
 /// # Type Parameters
 ///
@@ -69,7 +79,7 @@ use super::contexts::{SliverHitTestContext, SliverLayoutContext, SliverPaintCont
 /// - Access to children via typed accessors (`ctx.children`)
 /// - Tree operations (`ctx.layout_child()`, `ctx.paint_child()`)
 /// - Protocol-specific data (`ctx.constraints`, `ctx.offset`, etc.)
-pub trait SliverRender<A: Arity>: Send + Sync + Debug + 'static {
+pub trait RenderSliver<A: Arity>: Send + Sync + Debug + 'static {
     /// Computes the sliver geometry given constraints.
     ///
     /// # Context
@@ -152,14 +162,14 @@ pub trait SliverRender<A: Arity>: Send + Sync + Debug + 'static {
 // ============================================================================
 
 /// Extension trait for ergonomic sliver render operations.
-pub trait SliverRenderExt<A: Arity>: SliverRender<A> {
+pub trait RenderSliverExt<A: Arity>: RenderSliver<A> {
     /// Checks if position is within the paint extent.
     fn is_in_paint_extent(&self, position: Offset, geometry: &SliverGeometry) -> bool {
         position.dy >= 0.0 && position.dy < geometry.paint_extent
     }
 }
 
-impl<A: Arity, R: SliverRender<A>> SliverRenderExt<A> for R {}
+impl<A: Arity, R: RenderSliver<A>> RenderSliverExt<A> for R {}
 
 // ============================================================================
 // TESTS
@@ -175,7 +185,7 @@ mod tests {
         extent: f32,
     }
 
-    impl SliverRender<Leaf> for TestSliverBox {
+    impl RenderSliver<Leaf> for TestSliverBox {
         fn layout(&mut self, ctx: SliverLayoutContext<'_, Leaf>) -> SliverGeometry {
             let paint_extent = self.extent.min(ctx.constraints.remaining_paint_extent);
             SliverGeometry {

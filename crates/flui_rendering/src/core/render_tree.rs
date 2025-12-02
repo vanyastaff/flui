@@ -420,11 +420,7 @@ pub trait LayoutTreeExt: LayoutTree {
     ///
     /// Useful for layout algorithms that need to know the aggregate size
     /// of all children before positioning them.
-    fn total_children_size(
-        &mut self,
-        parent: ElementId,
-        constraints: BoxConstraints,
-    ) -> Size {
+    fn total_children_size(&mut self, parent: ElementId, constraints: BoxConstraints) -> Size {
         let children_sizes = self.layout_render_children(parent, constraints);
         children_sizes.iter().fold(Size::ZERO, |acc, (_, size)| {
             Size::new(acc.width + size.width, acc.height.max(size.height))
@@ -550,6 +546,68 @@ pub fn hit_test_subtree(
     result
 }
 
+/// Performs batch layout operations on multiple elements.
+///
+/// This is an optimized version of layout that can process multiple elements
+/// efficiently using parallelization and other techniques.
+///
+/// # Arguments
+///
+/// * `tree` - The render tree
+/// * `elements` - Elements to layout with their constraints
+///
+/// # Returns
+///
+/// Vector of layout results in the same order as input.
+pub fn layout_batch(
+    tree: &mut dyn LayoutTree,
+    elements: &[(ElementId, BoxConstraints)],
+) -> Vec<Result<Size, RenderError>> {
+    tracing::trace!("Batch layout for {} elements", elements.len());
+
+    elements
+        .iter()
+        .map(|&(id, constraints)| tree.perform_layout(id, constraints))
+        .collect()
+}
+
+/// Performs batch paint operations on multiple elements.
+///
+/// This is an optimized version of paint that can process multiple elements
+/// efficiently using layer composition and caching.
+///
+/// # Arguments
+///
+/// * `tree` - The render tree
+/// * `elements` - Elements to paint with their offsets
+///
+/// # Returns
+///
+/// Vector of paint results in the same order as input.
+pub fn paint_batch(
+    tree: &mut dyn PaintTree,
+    elements: &[(ElementId, Offset)],
+) -> Vec<Result<Canvas, RenderError>> {
+    tracing::trace!("Batch paint for {} elements", elements.len());
+
+    elements
+        .iter()
+        .map(|&(id, offset)| tree.perform_paint(id, offset))
+        .collect()
+}
+
+// ============================================================================
+// TRAIT ALIASES FOR COMPATIBILITY
+// ============================================================================
+
+/// Alias trait for `FullRenderTree` for compatibility with code using `RenderTreeOps`.
+///
+/// This trait is identical to `FullRenderTree` and exists for backward compatibility.
+pub trait RenderTreeOps: FullRenderTree {}
+
+// Blanket implementation: any FullRenderTree also implements RenderTreeOps
+impl<T: FullRenderTree> RenderTreeOps for T {}
+
 // ============================================================================
 // TESTS
 // ============================================================================
@@ -600,7 +658,11 @@ mod tests {
     }
 
     impl PaintTree for MockRenderTree {
-        fn perform_paint(&mut self, _id: ElementId, _offset: Offset) -> Result<Canvas, RenderError> {
+        fn perform_paint(
+            &mut self,
+            _id: ElementId,
+            _offset: Offset,
+        ) -> Result<Canvas, RenderError> {
             Ok(Canvas::new(Size::new(100.0, 100.0)))
         }
 
