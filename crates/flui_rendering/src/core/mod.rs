@@ -252,37 +252,8 @@ mod wrappers;
 // ============================================================================
 
 pub use arity::{
-    // Access pattern hints
-    AccessPattern,
-    // Core arity trait
-    Arity,
-    // Arity markers with const generic support
-    AtLeast,
-    // GAT-based accessor trait
-    ChildrenAccess,
-    Exact,
-    // Concrete accessor types
-    ExactChildren,
-    // Fixed children accessor
-    FixedChildren,
-    Leaf,
-    LeafChildren,
-    // No children accessor
-    NoChildren,
-    Optional,
-    // Optional child accessor
-    OptionalChild,
-    OptionalChildren,
-    // Range arity for bounded children
-    Range,
-    // Runtime arity for dynamic dispatch
-    RuntimeArity,
-    Single,
-    SingleChildren,
-    // Slice children accessor
-    SliceChildren,
-    Variable,
-    VariableChildren,
+    AccessPattern, Arity, AtLeast, ChildrenAccess, Exact, FixedChildren, Leaf, NoChildren,
+    Optional, OptionalChild, Range, RuntimeArity, Single, SliceChildren, Variable,
 };
 
 // ============================================================================
