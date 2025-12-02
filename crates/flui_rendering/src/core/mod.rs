@@ -252,6 +252,8 @@ mod wrappers;
 // ============================================================================
 
 pub use arity::{
+    // Access pattern hints
+    AccessPattern,
     // Core arity trait
     Arity,
     // Arity markers with const generic support
@@ -261,9 +263,15 @@ pub use arity::{
     Exact,
     // Concrete accessor types
     ExactChildren,
+    // Fixed children accessor
+    FixedChildren,
     Leaf,
     LeafChildren,
+    // No children accessor
+    NoChildren,
     Optional,
+    // Optional child accessor
+    OptionalChild,
     // Extension traits for ergonomics
     OptionalChildExt,
     OptionalChildren,
@@ -271,9 +279,13 @@ pub use arity::{
     Range,
     // Rendering-specific extensions
     RenderChildrenExt,
+    // Runtime arity for dynamic dispatch
+    RuntimeArity,
     Single,
     SingleChildExt,
     SingleChildren,
+    // Slice children accessor
+    SliceChildren,
     Variable,
     VariableChildExt,
     VariableChildren,
