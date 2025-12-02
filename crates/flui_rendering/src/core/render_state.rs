@@ -174,6 +174,24 @@ impl RenderState<BoxProtocol> {
 }
 
 // ============================================================================
+// CONVENIENCE METHODS FOR SLIVER PROTOCOL
+// ============================================================================
+
+impl RenderState<SliverProtocol> {
+    /// Returns scroll extent, or 0.0 if geometry is not set.
+    #[inline]
+    pub fn scroll_extent(&self) -> f32 {
+        self.geometry().map(|g| g.scroll_extent).unwrap_or(0.0)
+    }
+
+    /// Returns paint extent, or 0.0 if geometry is not set.
+    #[inline]
+    pub fn paint_extent(&self) -> f32 {
+        self.geometry().map(|g| g.paint_extent).unwrap_or(0.0)
+    }
+}
+
+// ============================================================================
 // CLONE
 // ============================================================================
 
