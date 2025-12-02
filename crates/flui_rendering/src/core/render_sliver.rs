@@ -1,4 +1,4 @@
-//! Sliver protocol render trait.
+//! Sliver protocol render trait with context-based API.
 //!
 //! This module provides the `SliverRender<A>` trait for implementing render objects
 //! that participate in scrollable layouts (viewports).
@@ -12,23 +12,50 @@
 //!
 //! ```text
 //! SliverRender<A> trait
-//! ├── layout() → SliverGeometry
-//! ├── paint() → Canvas
-//! └── hit_test() → bool
+//! ├── layout(ctx: SliverLayoutContext<'_, A>) → SliverGeometry
+//! ├── paint(ctx: &mut SliverPaintContext<'_, A>)
+//! └── hit_test(ctx: &SliverHitTestContext<'_, A>, result) → bool
+//! ```
+//!
+//! # Example
+//!
+//! ```rust,ignore
+//! use flui_rendering::{SliverRender, SliverLayoutContext, Variable};
+//! use flui_types::SliverGeometry;
+//!
+//! impl SliverRender<Variable> for RenderSliverList {
+//!     fn layout(&mut self, ctx: SliverLayoutContext<'_, Variable>) -> SliverGeometry {
+//!         let mut total_extent = 0.0;
+//!         for child in ctx.children.element_ids() {
+//!             let child_geom = ctx.layout_child(child, ctx.constraints);
+//!             total_extent += child_geom.scroll_extent;
+//!         }
+//!         SliverGeometry {
+//!             scroll_extent: total_extent,
+//!             paint_extent: total_extent.min(ctx.constraints.remaining_paint_extent),
+//!             ..Default::default()
+//!         }
+//!     }
+//!
+//!     fn paint(&self, ctx: &mut SliverPaintContext<'_, Variable>) {
+//!         // Paint visible children
+//!     }
+//! }
 //! ```
 
-use flui_foundation::ElementId;
-use flui_painting::Canvas;
-use flui_types::{Offset, SliverConstraints, SliverGeometry};
+use flui_interaction::HitTestResult;
+use flui_types::{Offset, SliverGeometry};
+use std::any::Any;
 use std::fmt::Debug;
 
 use super::arity::Arity;
+use super::contexts::{SliverHitTestContext, SliverLayoutContext, SliverPaintContext};
 
 // ============================================================================
 // SLIVER RENDER TRAIT
 // ============================================================================
 
-/// Sliver protocol render trait.
+/// Sliver protocol render trait with context-based API.
 ///
 /// Implement this trait for render objects that participate in scrollable layouts.
 ///
@@ -36,89 +63,69 @@ use super::arity::Arity;
 ///
 /// - `A`: Arity - compile-time child count (Leaf, Single, Variable, etc.)
 ///
-/// # Example
+/// # Context Objects
 ///
-/// ```rust,ignore
-/// impl SliverRender<Variable> for RenderSliverList {
-///     fn layout(
-///         &mut self,
-///         constraints: SliverConstraints,
-///         children: &[ElementId],
-///         layout_child: &mut dyn FnMut(ElementId, SliverConstraints) -> SliverGeometry,
-///     ) -> SliverGeometry {
-///         // Layout children and compute sliver geometry
-///         SliverGeometry {
-///             scroll_extent: total_height,
-///             paint_extent: visible_height,
-///             ..Default::default()
-///         }
-///     }
-/// }
-/// ```
+/// All methods receive context objects that provide:
+/// - Access to children via typed accessors (`ctx.children`)
+/// - Tree operations (`ctx.layout_child()`, `ctx.paint_child()`)
+/// - Protocol-specific data (`ctx.constraints`, `ctx.offset`, etc.)
 pub trait SliverRender<A: Arity>: Send + Sync + Debug + 'static {
     /// Computes the sliver geometry given constraints.
     ///
-    /// # Arguments
+    /// # Context
     ///
-    /// * `constraints` - Sliver constraints from viewport
-    /// * `children` - Slice of child element IDs
-    /// * `layout_child` - Callback to layout a child: `(child_id, constraints) -> SliverGeometry`
+    /// - `ctx.constraints` - Sliver constraints from viewport
+    /// - `ctx.children` - Typed accessor for child ElementIds
+    /// - `ctx.layout_child(id, constraints)` - Layout a child sliver
     ///
     /// # Returns
     ///
     /// `SliverGeometry` describing scroll extent, paint extent, layout extent,
     /// and other properties for viewport integration.
-    fn layout(
-        &mut self,
-        constraints: SliverConstraints,
-        children: &[ElementId],
-        layout_child: &mut dyn FnMut(ElementId, SliverConstraints) -> SliverGeometry,
-    ) -> SliverGeometry;
+    fn layout(&mut self, ctx: SliverLayoutContext<'_, A>) -> SliverGeometry;
 
     /// Paints the sliver to a canvas.
     ///
-    /// # Arguments
+    /// # Context
     ///
-    /// * `offset` - Offset in parent's coordinate space
-    /// * `children` - Slice of child element IDs
-    /// * `paint_child` - Callback to paint a child: `(child_id, offset) -> Canvas`
-    ///
-    /// # Returns
-    ///
-    /// A canvas with all drawing operations.
-    fn paint(
-        &self,
-        offset: Offset,
-        children: &[ElementId],
-        paint_child: &mut dyn FnMut(ElementId, Offset) -> Canvas,
-    ) -> Canvas;
+    /// - `ctx.offset` - Offset in parent's coordinate space
+    /// - `ctx.children` - Typed accessor for child ElementIds
+    /// - `ctx.canvas()` - Mutable access to the canvas
+    /// - `ctx.paint_child(id, offset)` - Paint a child
+    fn paint(&self, ctx: &mut SliverPaintContext<'_, A>);
 
     /// Performs hit testing for pointer events.
     ///
-    /// # Arguments
+    /// # Context
     ///
-    /// * `position` - Position in local coordinates
-    /// * `geometry` - Computed geometry from layout
-    /// * `children` - Slice of child element IDs
-    /// * `hit_test_child` - Callback to hit test a child: `(child_id, position) -> bool`
+    /// - `ctx.position` - Position in local coordinates
+    /// - `ctx.geometry` - Computed sliver geometry from layout
+    /// - `ctx.children` - Typed accessor for child ElementIds
+    /// - `ctx.hit_test_child(id, position, result)` - Hit test a child
     ///
     /// # Returns
     ///
     /// `true` if this element or any child was hit.
-    fn hit_test(
-        &self,
-        position: Offset,
-        geometry: &SliverGeometry,
-        children: &[ElementId],
-        hit_test_child: &mut dyn FnMut(ElementId, Offset) -> bool,
-    ) -> bool {
-        // Default: test children first
-        for &child in children {
-            if hit_test_child(child, position) {
+    ///
+    /// # Default Implementation
+    ///
+    /// Tests children first, then self via `hit_test_self`.
+    fn hit_test(&self, ctx: &SliverHitTestContext<'_, A>, result: &mut HitTestResult) -> bool {
+        // Test children first
+        let child_ids: Vec<_> = ctx.children.element_ids().collect();
+        for child_id in child_ids.into_iter().rev() {
+            if ctx.hit_test_child(child_id, ctx.position, result) {
                 return true;
             }
         }
-        self.hit_test_self(position, geometry)
+
+        // Test self
+        if self.hit_test_self(ctx.position, &ctx.geometry) {
+            ctx.add_to_result(result);
+            return true;
+        }
+
+        false
     }
 
     /// Tests if the position hits this sliver (excluding children).
@@ -134,10 +141,10 @@ pub trait SliverRender<A: Arity>: Send + Sync + Debug + 'static {
     }
 
     /// Downcasts to concrete type for inspection.
-    fn as_any(&self) -> &dyn std::any::Any;
+    fn as_any(&self) -> &dyn Any;
 
     /// Downcasts to mutable concrete type for mutation.
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
+    fn as_any_mut(&mut self) -> &mut dyn Any;
 }
 
 // ============================================================================
@@ -154,6 +161,10 @@ pub trait SliverRenderExt<A: Arity>: SliverRender<A> {
 
 impl<A: Arity, R: SliverRender<A>> SliverRenderExt<A> for R {}
 
+// ============================================================================
+// TESTS
+// ============================================================================
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -165,52 +176,41 @@ mod tests {
     }
 
     impl SliverRender<Leaf> for TestSliverBox {
-        fn layout(
-            &mut self,
-            constraints: SliverConstraints,
-            _children: &[ElementId],
-            _layout_child: &mut dyn FnMut(ElementId, SliverConstraints) -> SliverGeometry,
-        ) -> SliverGeometry {
-            let paint_extent = self.extent.min(constraints.remaining_paint_extent);
+        fn layout(&mut self, ctx: SliverLayoutContext<'_, Leaf>) -> SliverGeometry {
+            let paint_extent = self.extent.min(ctx.constraints.remaining_paint_extent);
             SliverGeometry {
                 scroll_extent: self.extent,
                 paint_extent,
-                layout_extent: paint_extent,
-                max_paint_extent: self.extent,
+                layout_extent: Some(paint_extent),
+                max_paint_extent: Some(self.extent),
                 ..Default::default()
             }
         }
 
-        fn paint(
-            &self,
-            _offset: Offset,
-            _children: &[ElementId],
-            _paint_child: &mut dyn FnMut(ElementId, Offset) -> Canvas,
-        ) -> Canvas {
-            Canvas::new()
+        fn paint(&self, _ctx: &mut SliverPaintContext<'_, Leaf>) {
+            // Nothing to paint in this test
         }
 
-        fn as_any(&self) -> &dyn std::any::Any {
+        fn as_any(&self) -> &dyn Any {
             self
         }
 
-        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        fn as_any_mut(&mut self) -> &mut dyn Any {
             self
         }
     }
 
     #[test]
-    fn test_sliver_layout() {
-        let mut sliver = TestSliverBox { extent: 200.0 };
+    fn test_sliver_extension() {
+        let sliver = TestSliverBox { extent: 200.0 };
 
-        let constraints = SliverConstraints {
-            remaining_paint_extent: 100.0,
+        let geometry = SliverGeometry {
+            scroll_extent: 200.0,
+            paint_extent: 100.0,
             ..Default::default()
         };
 
-        let geometry = sliver.layout(constraints, &[], &mut |_, _| SliverGeometry::default());
-
-        assert_eq!(geometry.scroll_extent, 200.0);
-        assert_eq!(geometry.paint_extent, 100.0);
+        assert!(sliver.is_in_paint_extent(Offset::new(0.0, 50.0), &geometry));
+        assert!(!sliver.is_in_paint_extent(Offset::new(0.0, 150.0), &geometry));
     }
 }

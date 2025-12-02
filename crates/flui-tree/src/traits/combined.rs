@@ -214,7 +214,8 @@ mod tests {
                 if !self.contains(parent_id) {
                     return Err(TreeError::not_found(parent_id));
                 }
-                if self.is_descendant(parent_id, child) || parent_id == child {
+                // Check for cycles: new_parent must not be a descendant of child
+                if self.is_ancestor_of(child, parent_id) || parent_id == child {
                     return Err(TreeError::cycle_detected(child));
                 }
             }

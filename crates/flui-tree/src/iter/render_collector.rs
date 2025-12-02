@@ -185,14 +185,19 @@ impl<const INLINE_SIZE: usize> RenderChildrenCollector<INLINE_SIZE> {
     ///
     /// # Panics
     ///
-    /// Panics in debug mode if there are more than 1 children.
+    /// Panics if there are more than 1 children. In debug mode, this is
+    /// checked immediately. In release mode, the check is deferred
+    /// until methods are called.
     #[inline]
     pub fn into_optional(self) -> CollectedChildren<Optional, INLINE_SIZE> {
-        debug_assert!(
-            self.len() <= 1,
-            "Optional arity expects 0 or 1 children, found {}",
-            self.len()
-        );
+        #[cfg(debug_assertions)]
+        {
+            assert!(
+                self.len() <= 1,
+                "Optional arity expects 0 or 1 children, found {}",
+                self.len()
+            );
+        }
         CollectedChildren {
             children: self.children,
             _arity: PhantomData,
@@ -203,14 +208,19 @@ impl<const INLINE_SIZE: usize> RenderChildrenCollector<INLINE_SIZE> {
     ///
     /// # Panics
     ///
-    /// Panics in debug mode if there is not exactly 1 child.
+    /// Panics if there is not exactly 1 child. In debug mode, this is
+    /// checked immediately. In release mode, the check is deferred
+    /// until `single()` is called.
     #[inline]
     pub fn into_single(self) -> CollectedChildren<Single, INLINE_SIZE> {
-        debug_assert!(
-            self.len() == 1,
-            "Single arity expects exactly 1 child, found {}",
-            self.len()
-        );
+        #[cfg(debug_assertions)]
+        {
+            assert!(
+                self.len() == 1,
+                "Single arity expects exactly 1 child, found {}",
+                self.len()
+            );
+        }
         CollectedChildren {
             children: self.children,
             _arity: PhantomData,
@@ -221,14 +231,19 @@ impl<const INLINE_SIZE: usize> RenderChildrenCollector<INLINE_SIZE> {
     ///
     /// # Panics
     ///
-    /// Panics in debug mode if there are any children.
+    /// Panics if there are any children. In debug mode, this is
+    /// checked immediately. In release mode, the check is deferred
+    /// until `validate_empty()` is called.
     #[inline]
     pub fn into_leaf(self) -> CollectedChildren<Leaf, INLINE_SIZE> {
-        debug_assert!(
-            self.is_empty(),
-            "Leaf arity expects no children, found {}",
-            self.len()
-        );
+        #[cfg(debug_assertions)]
+        {
+            assert!(
+                self.is_empty(),
+                "Leaf arity expects no children, found {}",
+                self.len()
+            );
+        }
         CollectedChildren {
             children: self.children,
             _arity: PhantomData,
@@ -410,9 +425,27 @@ impl<const INLINE_SIZE: usize> CollectedChildren<Single, INLINE_SIZE> {
     ///
     /// This method is only available for `Single` arity, providing
     /// compile-time guarantee that exactly one child exists.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the accessor was created with an invalid child count
+    /// (not exactly 1). This can happen if the tree state changed or
+    /// if `into_arity()` was used incorrectly.
     #[inline]
     pub fn single(&self) -> ElementId {
-        debug_assert_eq!(self.len(), 1, "Single arity must have exactly 1 child");
+        #[cfg(debug_assertions)]
+        {
+            debug_assert_eq!(self.len(), 1, "Single arity must have exactly 1 child");
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            if self.children.is_empty() {
+                panic!("Single arity accessor: expected exactly 1 child, found 0");
+            }
+            if self.children.len() > 1 {
+                panic!("Single arity accessor: expected exactly 1 child, found {}", self.children.len());
+            }
+        }
         self.children[0]
     }
 
@@ -504,11 +537,24 @@ impl<const INLINE_SIZE: usize> CollectedChildren<Variable, INLINE_SIZE> {
 impl<const INLINE_SIZE: usize> CollectedChildren<Leaf, INLINE_SIZE> {
     /// Validates that no children exist.
     ///
-    /// This is a no-op method that serves as documentation
-    /// that leaf elements should have no children.
+    /// This method checks that the leaf accessor was created correctly.
+    ///
+    /// # Panics
+    ///
+    /// Panics if there are any children. This can happen if the accessor
+    /// was created incorrectly or if the tree state changed.
     #[inline]
     pub fn validate_empty(&self) {
-        debug_assert!(self.is_empty(), "Leaf arity must have no children");
+        #[cfg(debug_assertions)]
+        {
+            debug_assert!(self.is_empty(), "Leaf arity must have no children");
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            if !self.is_empty() {
+                panic!("Leaf arity accessor: expected no children, found {}", self.len());
+            }
+        }
     }
 }
 

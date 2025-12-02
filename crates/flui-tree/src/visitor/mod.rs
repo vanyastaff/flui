@@ -895,8 +895,8 @@ mod tests {
         nodes: std::collections::HashMap<ElementId, TestNode>,
     }
 
-    impl super::super::traits::read::sealed::Sealed for TestTree {}
-    impl super::super::traits::nav::sealed::Sealed for TestTree {}
+    impl crate::traits::sealed::TreeReadSealed for TestTree {}
+    impl crate::traits::sealed::TreeNavSealed for TestTree {}
 
     impl TestTree {
         fn new() -> Self {
@@ -946,8 +946,8 @@ mod tests {
             = impl Iterator<Item = ElementId> + 'a
         where
             Self: 'a;
-        type AncestorsIter<'a> = super::super::traits::nav::AncestorIterator<'a, Self>;
-        type DescendantsIter<'a> = super::super::traits::nav::DescendantsIterator<'a, Self>;
+        type AncestorsIter<'a> = crate::iter::Ancestors<'a, Self>;
+        type DescendantsIter<'a> = crate::iter::Descendants<'a, Self>;
         type SiblingsIter<'a>
             = impl Iterator<Item = ElementId> + 'a
         where
@@ -966,11 +966,11 @@ mod tests {
         }
 
         fn ancestors(&self, start: ElementId) -> Self::AncestorsIter<'_> {
-            super::super::traits::nav::AncestorIterator::new(self, start)
+            crate::iter::Ancestors::new(self, start)
         }
 
         fn descendants(&self, root: ElementId) -> Self::DescendantsIter<'_> {
-            super::super::traits::nav::DescendantsIterator::new(self, root)
+            crate::iter::Descendants::new(self, root)
         }
 
         fn siblings(&self, id: ElementId) -> Self::SiblingsIter<'_> {

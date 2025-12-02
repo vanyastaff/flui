@@ -979,28 +979,11 @@ impl<'a, T> TypedChildren<'a, T> {
 }
 
 // ============================================================================
-// RANGE ARITY SUPPORT (New Advanced Feature)
+// RANGE ARITY SUPPORT
 // ============================================================================
-
-/// Range arity marker - bounded number of children with const generics.
-///
-/// Provides compile-time validation for bounded ranges while maintaining
-/// flexibility for dynamic sizes within those bounds.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct Range<const MIN: usize, const MAX: usize>;
-
-// Note: Implementation of Range arity would go in the main arity module,
-// but we define the associated accessor here for completeness.
-
-/// Never arity marker for impossible operations.
-///
-/// Used for operations that should never succeed, providing compile-time
-/// safety through the never type.
-#[derive(Debug, Clone, Copy)]
-pub struct Never;
-
-// Never type implementation would also go in the main arity module.
-// This is just a placeholder to show the concept.
+//
+// Note: Range<MIN, MAX> and Never are defined in mod.rs, not here.
+// This section is kept for documentation purposes only.
 
 #[cfg(test)]
 mod advanced_tests {

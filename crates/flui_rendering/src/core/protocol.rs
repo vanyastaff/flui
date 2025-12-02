@@ -1,197 +1,452 @@
-//! Protocol system for unified rendering architecture.
+//! Layout protocol definitions for the FLUI rendering system.
 //!
-//! The protocol system abstracts over different layout systems:
-//! - **Box Protocol**: Standard 2D layout (constraints → size)
-//! - **Sliver Protocol**: Scrollable content (sliver constraints → sliver geometry)
+//! This module defines the core protocol abstraction that enables different
+//! layout algorithms to work within the unified rendering framework. Protocols
+//! define the constraint and geometry types used for layout operations.
 //!
-//! This enables a single `RenderBox<A>` or `SliverRender<A>` trait to work
-//! with both protocols transparently while maintaining type safety.
+//! # Design Philosophy
 //!
-//! # Architecture
+//! - **Protocol abstraction**: Clean separation between different layout approaches
+//! - **Type safety**: Each protocol has well-defined constraint and geometry types
+//! - **Extensibility**: New protocols can be added without changing existing code
+//! - **Zero-cost**: All protocol operations compile to direct type usage
 //!
-//! ```text
-//! Protocol (trait)
-//! ├── BoxProtocol    → BoxConstraints → Size
-//! └── SliverProtocol → SliverConstraints → SliverGeometry
-//! ```
+//! # Core Protocols
 //!
-//! # Example
+//! ## Box Protocol
+//!
+//! The box protocol is used for standard 2D rectangular layouts. It uses
+//! `BoxConstraints` to specify allowed sizes and returns `Size` as geometry.
+//!
+//! ## Sliver Protocol
+//!
+//! The sliver protocol is used for scrollable content with potentially infinite
+//! dimensions. It uses `SliverConstraints` for viewport information and returns
+//! `SliverGeometry` with scroll extent data.
+//!
+//! # Usage Examples
+//!
+//! ## Generic Protocol Functions
 //!
 //! ```rust,ignore
-//! fn layout<P: Protocol>(&mut self, constraints: P::Constraints) -> P::Geometry {
-//!     // Generic over protocol
+//! use flui_rendering::core::{Protocol, BoxProtocol, SliverProtocol};
+//!
+//! fn layout_with_protocol<P: Protocol>(
+//!     constraints: P::Constraints,
+//!     layout_fn: impl Fn(P::Constraints) -> P::Geometry,
+//! ) -> P::Geometry {
+//!     layout_fn(constraints)
+//! }
+//!
+//! // Use with box protocol
+//! let box_result = layout_with_protocol::<BoxProtocol>(
+//!     BoxConstraints::tight(Size::new(100.0, 50.0)),
+//!     |constraints| constraints.biggest(),
+//! );
+//!
+//! // Use with sliver protocol
+//! let sliver_result = layout_with_protocol::<SliverProtocol>(
+//!     SliverConstraints::default(),
+//!     |constraints| SliverGeometry::zero(),
+//! );
+//! ```
+//!
+//! ## Protocol-Aware Render Objects
+//!
+//! ```rust,ignore
+//! use flui_rendering::core::{Protocol, RenderBox, LayoutContext};
+//!
+//! impl<P: Protocol> RenderBox<P> for GenericRenderObject
+//! where
+//!     P::Constraints: Clone,
+//! {
+//!     fn layout(&mut self, ctx: LayoutContext<'_, Leaf, P>) -> RenderResult<P::Geometry> {
+//!         // Protocol-agnostic layout logic
+//!         Ok(P::Geometry::default())
+//!     }
 //! }
 //! ```
+//!
+//! # Protocol Properties
+//!
+//! Each protocol defines:
+//! - **Constraints**: Input parameters for layout (size limits, viewport info, etc.)
+//! - **Geometry**: Output results from layout (computed sizes, scroll extents, etc.)
+//! - **Semantic meaning**: What the constraints represent and how geometry is interpreted
 
-use std::fmt;
+use std::fmt::Debug;
 
-// Re-export from flui_types
-pub use flui_types::constraints::BoxConstraints;
-pub use flui_types::{Size, SliverConstraints, SliverGeometry};
+use flui_types::{Size, SliverConstraints, SliverGeometry};
 
-/// Runtime identifier for layout protocols.
+use super::geometry::BoxConstraints;
+
+// ============================================================================
+// CORE PROTOCOL TRAIT
+// ============================================================================
+
+/// Core trait defining a layout protocol.
 ///
-/// Used for type-erased operations where the protocol type is not known
-/// at compile time, such as in `RenderElement` storage.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum LayoutProtocol {
-    /// Standard 2D box layout (BoxConstraints → Size).
-    Box,
-    /// Scrollable/sliver layout (SliverConstraints → SliverGeometry).
-    Sliver,
-}
-
-impl fmt::Display for LayoutProtocol {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Box => write!(f, "Box"),
-            Self::Sliver => write!(f, "Sliver"),
-        }
-    }
-}
-
-/// Protocol trait defining constraints and geometry types.
+/// A protocol defines the types and semantics for a particular approach to
+/// layout computation. Different protocols enable different layout strategies
+/// while maintaining type safety and performance.
 ///
-/// This trait provides the type-level association between constraint inputs
-/// and geometry outputs for a layout protocol. It is sealed to ensure only
-/// `BoxProtocol` and `SliverProtocol` can implement it.
+/// # Type Parameters
 ///
-/// # Sealed Trait
+/// ## Constraints
 ///
-/// Users cannot implement this trait directly. Use one of the provided
-/// protocol types:
-/// - [`BoxProtocol`]: For standard 2D layouts
-/// - [`SliverProtocol`]: For scrollable content
-pub trait Protocol: sealed::Sealed + Send + Sync + 'static {
-    /// Input constraint type for layout computation.
-    type Constraints: Clone + fmt::Debug + Default + Send + Sync + 'static;
+/// The constraints type represents the input parameters for layout operations.
+/// This typically includes size limits, available space, or viewport information.
+///
+/// Requirements:
+/// - `Debug` for debugging and development tools
+/// - `Clone` for passing constraints to multiple children
+/// - `Send + Sync` for thread safety
+/// - `'static` for storage in trait objects
+///
+/// ## Geometry
+///
+/// The geometry type represents the output results from layout operations.
+/// This typically includes computed sizes, positioning information, or scroll extents.
+///
+/// Requirements:
+/// - `Debug` for debugging and development tools
+/// - `Clone` for caching and manipulation
+/// - `Send + Sync` for thread safety
+/// - `'static` for storage in trait objects
+///
+/// # Protocol Semantics
+///
+/// Each protocol implementation defines:
+/// - How constraints should be interpreted
+/// - What geometry represents
+/// - Valid constraint-to-geometry transformations
+/// - Performance characteristics and optimization opportunities
+///
+/// # Thread Safety
+///
+/// All protocol types must be `Send + Sync` to enable:
+/// - Parallel layout computation
+/// - Cross-thread constraint passing
+/// - Background geometry caching
+///
+/// # Example Implementation
+///
+/// ```rust,ignore
+/// struct CustomProtocol;
+///
+/// impl Protocol for CustomProtocol {
+///     type Constraints = CustomConstraints;
+///     type Geometry = CustomGeometry;
+/// }
+///
+/// #[derive(Debug, Clone)]
+/// struct CustomConstraints {
+///     available_space: f32,
+///     priority: i32,
+/// }
+///
+/// #[derive(Debug, Clone)]
+/// struct CustomGeometry {
+///     allocated_space: f32,
+///     overflow: f32,
+/// }
+/// ```
+pub trait Protocol: 'static {
+    /// The constraint type for this protocol.
+    ///
+    /// Constraints define the input parameters for layout operations,
+    /// such as available space, size limits, or viewport information.
+    type Constraints: Debug + Clone + Send + Sync + 'static;
 
-    /// Output geometry type from layout computation.
-    type Geometry: Clone + fmt::Debug + Default + Send + Sync + 'static;
-
-    /// Runtime protocol identifier for type-erased operations.
-    const ID: LayoutProtocol;
-
-    /// Human-readable protocol name for debugging.
-    const NAME: &'static str;
-}
-
-mod sealed {
-    pub trait Sealed {}
-
-    impl Sealed for super::BoxProtocol {}
-    impl Sealed for super::SliverProtocol {}
+    /// The geometry type for this protocol.
+    ///
+    /// Geometry represents the output results from layout operations,
+    /// such as computed sizes, positioning data, or scroll extents.
+    type Geometry: Debug + Clone + Send + Sync + 'static;
 }
 
 // ============================================================================
 // BOX PROTOCOL
 // ============================================================================
 
-/// Box protocol for standard 2D layout.
+/// Box layout protocol for 2D rectangular layouts.
 ///
-/// The most common protocol, used for regular UI elements that lay out
-/// within rectangular bounds. Takes `BoxConstraints` (min/max width/height)
-/// and produces a `Size`.
+/// The box protocol is the standard layout approach for most UI elements.
+/// It uses rectangular constraints to specify allowed sizes and returns
+/// computed sizes as geometry.
 ///
-/// # Constraint Flow
+/// # Characteristics
 ///
-/// ```text
-/// Parent passes BoxConstraints → Child computes Size
-/// ```
+/// - **2D layout**: Handles both width and height simultaneously
+/// - **Bounded constraints**: Specifies minimum and maximum allowed sizes
+/// - **Simple geometry**: Returns a single computed size
+/// - **Performance**: Highly optimized for common layout scenarios
 ///
-/// # Usage
+/// # Use Cases
 ///
-/// Used by most render objects: containers, text, images, buttons, etc.
-#[derive(Debug, Clone, Copy)]
+/// - Standard UI elements (buttons, text, images)
+/// - Container layouts (padding, margins, alignment)
+/// - Flex layouts (rows, columns, wrapping)
+/// - Grid layouts (fixed and flexible)
+/// - Most traditional UI layout scenarios
+///
+/// # Constraint Semantics
+///
+/// Box constraints specify:
+/// - Minimum width and height the element must occupy
+/// - Maximum width and height the element can occupy
+/// - Elements must return a size within these bounds
+///
+/// # Geometry Semantics
+///
+/// Box geometry represents:
+/// - The computed width and height of the element
+/// - Must satisfy the input constraints
+/// - Used for positioning children and hit testing
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct BoxProtocol;
 
 impl Protocol for BoxProtocol {
     type Constraints = BoxConstraints;
     type Geometry = Size;
 
-    const ID: LayoutProtocol = LayoutProtocol::Box;
-    const NAME: &'static str = "Box";
+    // TODO: maybe add here types context ?
 }
 
 // ============================================================================
 // SLIVER PROTOCOL
 // ============================================================================
 
-/// Sliver protocol for scrollable/viewport-aware layout.
+/// Sliver layout protocol for scrollable content with infinite dimensions.
 ///
-/// Used for elements within scrollable containers that need viewport awareness.
-/// Takes `SliverConstraints` (scroll offset, remaining extent) and produces
-/// `SliverGeometry` (scroll/paint/layout extents).
+/// The sliver protocol is designed for scrollable content where one dimension
+/// can be infinite. It uses viewport-based constraints and returns scroll
+/// extent information as geometry.
 ///
-/// # Constraint Flow
+/// # Characteristics
 ///
-/// ```text
-/// Viewport passes SliverConstraints → Sliver computes SliverGeometry
-/// ```
+/// - **Infinite dimension**: One axis can extend infinitely (scroll direction)
+/// - **Viewport-based**: Constraints include scroll position and viewport size
+/// - **Scroll geometry**: Returns paint extent, scroll extent, and layout extent
+/// - **Lazy layout**: Supports efficient virtualization of large content
 ///
-/// # Usage
+/// # Use Cases
 ///
-/// Used by scrollable content: lists, grids, sliver app bars, etc.
-#[derive(Debug, Clone, Copy)]
+/// - Scrollable lists (ListView, GridView)
+/// - Infinite scrolling content
+/// - Virtualized layouts for large datasets
+/// - Custom scrollable widgets
+/// - Nested scrolling scenarios
+///
+/// # Constraint Semantics
+///
+/// Sliver constraints specify:
+/// - Scroll offset (how far the content has been scrolled)
+/// - Remaining paint extent (visible viewport size)
+/// - Cross-axis extent (width for vertical scrolling)
+/// - Growth direction and scroll direction
+///
+/// # Geometry Semantics
+///
+/// Sliver geometry represents:
+/// - Paint extent: How much space the sliver occupies in the viewport
+/// - Layout extent: How much space the sliver takes up in the scroll view
+/// - Scroll extent: How much the sliver contributes to total scrollable area
+/// - Max paint extent: Maximum space the sliver could occupy
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SliverProtocol;
 
 impl Protocol for SliverProtocol {
     type Constraints = SliverConstraints;
     type Geometry = SliverGeometry;
-
-    const ID: LayoutProtocol = LayoutProtocol::Sliver;
-    const NAME: &'static str = "Sliver";
 }
+
+// ============================================================================
+// PROTOCOL UTILITIES
+// ============================================================================
+
+/// Trait for types that can identify their protocol at runtime.
+///
+/// This enables protocol-agnostic code to determine which protocol
+/// a constraint or geometry belongs to.
+pub trait ProtocolIdentifier {
+    /// Returns the protocol identifier for this type.
+    fn protocol_id() -> ProtocolId;
+}
+
+impl ProtocolIdentifier for BoxConstraints {
+    fn protocol_id() -> ProtocolId {
+        ProtocolId::Box
+    }
+}
+
+impl ProtocolIdentifier for Size {
+    fn protocol_id() -> ProtocolId {
+        ProtocolId::Box
+    }
+}
+
+impl ProtocolIdentifier for SliverConstraints {
+    fn protocol_id() -> ProtocolId {
+        ProtocolId::Sliver
+    }
+}
+
+impl ProtocolIdentifier for SliverGeometry {
+    fn protocol_id() -> ProtocolId {
+        ProtocolId::Sliver
+    }
+}
+
+/// Runtime identifier for layout protocols.
+///
+/// This enum allows runtime identification of which protocol
+/// a constraint or geometry belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ProtocolId {
+    /// Box protocol identifier.
+    Box,
+    /// Sliver protocol identifier.
+    Sliver,
+}
+
+impl ProtocolId {
+    /// Returns the human-readable name of the protocol.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Box => "Box",
+            Self::Sliver => "Sliver",
+        }
+    }
+
+    /// Returns whether this protocol supports 2D layout.
+    pub const fn supports_2d_layout(self) -> bool {
+        match self {
+            Self::Box => true,
+            Self::Sliver => false, // Slivers have one infinite dimension
+        }
+    }
+
+    /// Returns whether this protocol supports infinite dimensions.
+    pub const fn supports_infinite_dimensions(self) -> bool {
+        match self {
+            Self::Box => false,
+            Self::Sliver => true,
+        }
+    }
+
+    /// Returns whether this protocol supports scrolling.
+    pub const fn supports_scrolling(self) -> bool {
+        match self {
+            Self::Box => false,
+            Self::Sliver => true,
+        }
+    }
+}
+
+// ============================================================================
+// LAYOUT PROTOCOL ENUM (Runtime protocol identifier)
+// ============================================================================
+
+/// Runtime identifier for layout protocols.
+///
+/// This enum is used for runtime protocol identification when type erasure
+/// is needed (e.g., in RenderObjectWrapper, RenderState).
+///
+/// For compile-time protocol usage, use the `Protocol` trait with type
+/// parameters (e.g., `BoxProtocol`, `SliverProtocol`).
+pub type LayoutProtocol = ProtocolId;
+
+// ============================================================================
+// TESTS
+// ============================================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_layout_protocol_display() {
-        assert_eq!(format!("{}", LayoutProtocol::Box), "Box");
-        assert_eq!(format!("{}", LayoutProtocol::Sliver), "Sliver");
+    fn test_protocol_types() {
+        // Test that protocol types implement required traits
+        fn assert_protocol<P: Protocol>()
+        where
+            P::Constraints: Debug + Clone + Send + Sync + 'static,
+            P::Geometry: Debug + Clone + Send + Sync + 'static,
+        {
+            // This function just needs to compile to verify trait bounds
+        }
+
+        assert_protocol::<BoxProtocol>();
+        assert_protocol::<SliverProtocol>();
     }
 
     #[test]
-    fn test_box_protocol_constants() {
-        assert_eq!(BoxProtocol::ID, LayoutProtocol::Box);
-        assert_eq!(BoxProtocol::NAME, "Box");
+    fn test_protocol_identifiers() {
+        assert_eq!(BoxConstraints::protocol_id(), ProtocolId::Box);
+        assert_eq!(Size::protocol_id(), ProtocolId::Box);
+        assert_eq!(SliverConstraints::protocol_id(), ProtocolId::Sliver);
+        assert_eq!(SliverGeometry::protocol_id(), ProtocolId::Sliver);
     }
 
     #[test]
-    fn test_sliver_protocol_constants() {
-        assert_eq!(SliverProtocol::ID, LayoutProtocol::Sliver);
-        assert_eq!(SliverProtocol::NAME, "Sliver");
+    fn test_protocol_id_properties() {
+        assert_eq!(ProtocolId::Box.name(), "Box");
+        assert_eq!(ProtocolId::Sliver.name(), "Sliver");
+
+        assert!(ProtocolId::Box.supports_2d_layout());
+        assert!(!ProtocolId::Sliver.supports_2d_layout());
+
+        assert!(!ProtocolId::Box.supports_infinite_dimensions());
+        assert!(ProtocolId::Sliver.supports_infinite_dimensions());
+
+        assert!(!ProtocolId::Box.supports_scrolling());
+        assert!(ProtocolId::Sliver.supports_scrolling());
     }
 
     #[test]
-    fn test_box_constraints_tight() {
-        let size = Size::new(100.0, 50.0);
-        let constraints = BoxConstraints::tight(size);
+    fn test_protocol_zero_cost() {
+        // Test that protocols compile to zero-cost abstractions
+        fn use_box_protocol() -> Size {
+            let constraints = <BoxProtocol as Protocol>::Constraints::tight(Size::new(100.0, 50.0));
+            constraints.biggest()
+        }
 
-        assert_eq!(constraints.min_width, 100.0);
-        assert_eq!(constraints.max_width, 100.0);
-        assert_eq!(constraints.min_height, 50.0);
-        assert_eq!(constraints.max_height, 50.0);
+        fn use_sliver_protocol() -> SliverGeometry {
+            let _constraints = <SliverProtocol as Protocol>::Constraints::default();
+            SliverGeometry::zero()
+        }
+
+        let size = use_box_protocol();
+        assert_eq!(size, Size::new(100.0, 50.0));
+
+        let geometry = use_sliver_protocol();
+        assert_eq!(geometry.paint_extent, 0.0);
     }
 
     #[test]
-    fn test_box_constraints_loose() {
-        let constraints = BoxConstraints::loose(Size::new(f32::INFINITY, f32::INFINITY));
+    fn test_protocol_equality() {
+        let box1 = BoxProtocol;
+        let box2 = BoxProtocol;
+        assert_eq!(box1, box2);
 
-        assert_eq!(constraints.min_width, 0.0);
-        assert_eq!(constraints.max_width, f32::INFINITY);
-        assert_eq!(constraints.min_height, 0.0);
-        assert_eq!(constraints.max_height, f32::INFINITY);
+        let sliver1 = SliverProtocol;
+        let sliver2 = SliverProtocol;
+        assert_eq!(sliver1, sliver2);
     }
 
     #[test]
-    fn test_sliver_constraints_default() {
-        let constraints = SliverConstraints::default();
+    fn test_generic_protocol_usage() {
+        fn layout_with_protocol<P: Protocol>(constraints: P::Constraints) -> P::Constraints {
+            // Just return constraints to test generic usage
+            constraints
+        }
 
-        assert_eq!(constraints.scroll_offset, 0.0);
-        assert_eq!(constraints.remaining_paint_extent, 0.0);
-        assert_eq!(constraints.remaining_cache_extent, 0.0);
+        let box_constraints = BoxConstraints::tight(Size::new(100.0, 50.0));
+        let result = layout_with_protocol::<BoxProtocol>(box_constraints);
+        assert_eq!(result, box_constraints);
+
+        let sliver_constraints = SliverConstraints::default();
+        let result = layout_with_protocol::<SliverProtocol>(sliver_constraints);
+        assert_eq!(result, sliver_constraints);
     }
 }

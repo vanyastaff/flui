@@ -59,9 +59,13 @@ impl<T: TreeNav> Iterator for Ancestors<'_, T> {
 
     #[inline]
     fn size_hint(&self) -> (usize, Option<usize>) {
-        // We know there's at least 0 elements
-        // Upper bound is unknown without traversing
-        (0, None)
+        // We know there's at least 1 element if current is Some
+        // Upper bound is MAX_DEPTH from the trait (typical tree depth)
+        if self.current.is_some() {
+            (1, Some(T::MAX_DEPTH))
+        } else {
+            (0, Some(0))
+        }
     }
 }
 

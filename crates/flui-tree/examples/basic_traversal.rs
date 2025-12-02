@@ -69,12 +69,41 @@ impl TreeRead for DemoTree {
 }
 
 impl TreeNav for DemoTree {
+    type ChildrenIter<'a> = std::iter::Flatten<std::option::IntoIter<std::iter::Copied<std::slice::Iter<'a, ElementId>>>>;
+    type AncestorsIter<'a> = flui_tree::iter::Ancestors<'a, Self>;
+    type DescendantsIter<'a> = flui_tree::iter::Descendants<'a, Self>;
+    type SiblingsIter<'a> = std::iter::Flatten<std::option::IntoIter<std::iter::Filter<std::iter::Copied<std::slice::Iter<'a, ElementId>>, fn(&ElementId) -> bool>>>;
+
     fn parent(&self, id: ElementId) -> Option<ElementId> {
         self.get(id)?.parent
     }
 
-    fn children(&self, id: ElementId) -> &[ElementId] {
-        self.get(id).map(|n| n.children.as_slice()).unwrap_or(&[])
+    fn children(&self, id: ElementId) -> Self::ChildrenIter<'_> {
+        self.get(id)
+            .map(|n| n.children.iter().copied())
+            .into_iter()
+            .flatten()
+    }
+
+    fn ancestors(&self, start: ElementId) -> Self::AncestorsIter<'_> {
+        flui_tree::iter::Ancestors::new(self, start)
+    }
+
+    fn descendants(&self, root: ElementId) -> Self::DescendantsIter<'_> {
+        flui_tree::iter::Descendants::new(self, root)
+    }
+
+    fn siblings(&self, id: ElementId) -> Self::SiblingsIter<'_> {
+        let parent = self.parent(id);
+        self.get(parent?)
+            .map(|p| {
+                p.children
+                    .iter()
+                    .copied()
+                    .filter(move |&child_id| child_id != id)
+            })
+            .into_iter()
+            .flatten()
     }
 
     fn slot(&self, _id: ElementId) -> Option<Slot> {

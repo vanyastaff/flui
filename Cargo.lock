@@ -1230,6 +1230,7 @@ name = "flui-scheduler"
 version = "0.1.0"
 dependencies = [
  "parking_lot",
+ "serde",
  "web-time",
 ]
 
@@ -1239,8 +1240,10 @@ version = "0.1.0"
 dependencies = [
  "criterion",
  "flui-foundation",
+ "flui_types",
  "proptest",
  "serde",
+ "smallvec",
  "thiserror 2.0.17",
  "tracing",
 ]
@@ -1278,7 +1281,6 @@ dependencies = [
  "android-activity",
  "console_error_panic_hook",
  "flui-scheduler",
- "flui-view",
  "flui_core",
  "flui_engine",
  "flui_interaction",
@@ -1291,7 +1293,7 @@ dependencies = [
  "ndk-glue",
  "objc",
  "parking_lot",
- "pollster",
+ "pollster 0.3.0",
  "tracing",
  "wasm-bindgen",
  "wasm-bindgen-futures",
@@ -1324,7 +1326,7 @@ name = "flui_build"
 version = "0.1.0"
 dependencies = [
  "indicatif",
- "pollster",
+ "pollster 0.4.0",
  "serde_json",
  "thiserror 2.0.17",
  "tokio",
@@ -1415,7 +1417,7 @@ dependencies = [
  "ndk-context",
  "objc",
  "parking_lot",
- "pollster",
+ "pollster 0.4.0",
  "thiserror 2.0.17",
  "tokio",
  "tracing",
@@ -1480,7 +1482,6 @@ dependencies = [
  "flui_types",
  "moka",
  "parking_lot",
- "quickcheck",
  "serde",
  "slab",
  "thiserror 2.0.17",
@@ -3359,6 +3360,12 @@ dependencies = [
  "rustix 1.1.2",
  "windows-sys 0.61.2",
 ]
+
+[[package]]
+name = "pollster"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22686f4785f02a4fcc856d3b3bb19bf6c8160d103f7a99cc258bddd0251dc7f2"
 
 [[package]]
 name = "pollster"

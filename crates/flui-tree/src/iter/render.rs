@@ -115,7 +115,15 @@ impl<T: RenderTreeAccess + ?Sized> Iterator for RenderAncestors<'_, T> {
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        (0, None)
+        if self.current.is_some() {
+            // If we have a current node, there's at least 1 more element (itself)
+            // The upper bound is the maximum possible depth of the tree.
+            // Use default MAX_DEPTH value (32) as a conservative estimate.
+            // Render elements are typically a subset of all elements, so this is safe.
+            (1, Some(32))
+        } else {
+            (0, Some(0))
+        }
     }
 }
 

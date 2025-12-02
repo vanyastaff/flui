@@ -172,6 +172,17 @@ pub trait TreeWriteNav: TreeWrite + super::TreeNav {
     ///
     /// Validates no cycle, updates old parent's children, updates
     /// new parent's children, and sets child's parent.
+    ///
+    /// # Note
+    ///
+    /// This method has no default implementation because it requires
+    /// access to the internal node structure. Implementations must
+    /// provide their own version that:
+    /// 1. Validates child and new_parent exist
+    /// 2. Checks for cycles (new_parent must not be a descendant of child)
+    /// 3. Updates old parent's children list
+    /// 4. Updates new parent's children list
+    /// 5. Updates child's parent reference
     fn set_parent(&mut self, child: ElementId, new_parent: Option<ElementId>) -> TreeResult<()>;
 
     /// Adds a child to a parent node.
@@ -450,8 +461,9 @@ mod tests {
                     return Err(TreeError::not_found(parent_id));
                 }
 
-                // Check for cycles
-                if self.is_descendant(parent_id, child) || parent_id == child {
+                // Check for cycles: new_parent must not be a descendant of child
+                // This prevents creating cycles like: child -> parent -> child
+                if self.is_ancestor_of(child, parent_id) || parent_id == child {
                     return Err(TreeError::cycle_detected(child));
                 }
             }

@@ -102,6 +102,7 @@ pub use accessors::{
     OptionalChild,
     SliceChildren,
     SmartChildren,
+    TypeInfo,
     TypedChildren,
 };
 
@@ -141,7 +142,11 @@ impl RuntimeArity {
             Self::Optional => count <= 1,
             Self::AtLeast(n) => count >= *n,
             Self::Variable => true,
-            Self::Range(min, max) => count >= *min && count <= *max,
+            Self::Range(min, max) => {
+                // Validate that min <= max (logical constraint)
+                // If min > max, the range is invalid and always returns false
+                *min <= *max && count >= *min && count <= *max
+            }
             Self::Never => false, // Never type - always invalid
         }
     }
@@ -406,6 +411,8 @@ impl<const MIN: usize, const MAX: usize> Arity for Range<MIN, MAX> {
     where
         T: 'a;
 
+    // Expected size is average of MIN and MAX
+    // Note: If MIN > MAX, this will be incorrect, but validate_count will catch it
     const EXPECTED_SIZE: usize = (MIN + MAX) / 2;
     const INLINE_THRESHOLD: usize = MAX;
     const BATCH_SIZE: usize = MAX;
@@ -417,11 +424,25 @@ impl<const MIN: usize, const MAX: usize> Arity for Range<MIN, MAX> {
 
     #[inline]
     fn validate_count(count: usize) -> bool {
+        // Ensure MIN <= MAX (logical constraint)
+        // If MIN > MAX, the range is invalid and always returns false
+        if MIN > MAX {
+            return false;
+        }
         count >= MIN && count <= MAX
     }
 
     #[inline(always)]
     fn from_slice<T: Send + Sync>(children: &[T]) -> Self::Accessor<'_, T> {
+        // Validate MIN <= MAX constraint
+        debug_assert!(
+            MIN <= MAX,
+            "Range<{}, {}> is invalid: MIN ({}) must be <= MAX ({})",
+            MIN,
+            MAX,
+            MIN,
+            MAX
+        );
         debug_assert!(
             children.len() >= MIN,
             "Range<{}, {}> expects >= {} children, got {}",
@@ -700,8 +721,25 @@ impl<const N: usize> Arity for Exact<N> {
             children.len()
         );
         // SAFETY: We've validated the length in debug mode.
-        // In release mode, we trust the caller.
-        let array_ref: &[T; N] = children.try_into().expect("slice length mismatch");
+        // In release mode, we trust the caller, but still need to handle the error
+        // gracefully to avoid panics in production code.
+        let array_ref: &[T; N] = match children.try_into() {
+            Ok(arr) => arr,
+            Err(_) => {
+                // This should never happen if debug_assert above passed
+                // But in release mode, we need to handle it
+                #[cfg(debug_assertions)]
+                {
+                    panic!("Exact<{}> expects {} children, got {}", N, N, children.len());
+                }
+                #[cfg(not(debug_assertions))]
+                {
+                    // In release, we can't safely convert, so we need to panic
+                    // This is a programming error that should be caught in debug
+                    panic!("slice length mismatch: expected {}, got {}", N, children.len());
+                }
+            }
+        };
         FixedChildren {
             children: array_ref,
         }
@@ -958,5 +996,37 @@ mod tests {
             format!("{}", RuntimeArity::Variable),
             "Variable (any number)"
         );
+    }
+
+    #[test]
+    fn test_range_arity_validation() {
+        // Valid range: MIN <= MAX
+        assert!(Range::<2, 5>::validate_count(3));
+        assert!(Range::<2, 5>::validate_count(2));
+        assert!(Range::<2, 5>::validate_count(5));
+        assert!(!Range::<2, 5>::validate_count(1));
+        assert!(!Range::<2, 5>::validate_count(6));
+
+        // Invalid range: MIN > MAX should always return false
+        assert!(!Range::<5, 2>::validate_count(3));
+        assert!(!Range::<5, 2>::validate_count(1));
+        assert!(!Range::<5, 2>::validate_count(10));
+    }
+
+    #[test]
+    fn test_runtime_arity_range_validation() {
+        // Valid range
+        let valid_range = RuntimeArity::Range(2, 5);
+        assert!(valid_range.validate(3));
+        assert!(valid_range.validate(2));
+        assert!(valid_range.validate(5));
+        assert!(!valid_range.validate(1));
+        assert!(!valid_range.validate(6));
+
+        // Invalid range: MIN > MAX
+        let invalid_range = RuntimeArity::Range(5, 2);
+        assert!(!invalid_range.validate(3)); // Should always be false
+        assert!(!invalid_range.validate(1));
+        assert!(!invalid_range.validate(10));
     }
 }

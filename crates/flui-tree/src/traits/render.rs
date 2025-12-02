@@ -745,12 +745,33 @@ impl<'a, T: RenderTreeAccess> RenderChildAccessor<'a, T, Single> {
     ///
     /// This method is only available for `Single` arity accessors,
     /// providing compile-time guarantee that a child exists.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the tree state has changed since the accessor was created
+    /// and there is no longer exactly one render child. This can happen if
+    /// the tree was modified between accessor creation and this call.
     #[inline]
     pub fn child(&self) -> ElementId {
-        // Safety: Single constructor validates exactly one child exists
-        crate::iter::RenderChildren::new(self.tree, self.parent)
-            .next()
-            .expect("Single arity accessor was constructed with no children")
+        let mut iter = crate::iter::RenderChildren::new(self.tree, self.parent);
+        match iter.next() {
+            Some(child) => {
+                // In debug mode, verify there's exactly one child
+                #[cfg(debug_assertions)]
+                {
+                    if iter.next().is_some() {
+                        panic!("Single arity accessor found multiple children - tree state changed");
+                    }
+                }
+                child
+            }
+            None => {
+                #[cfg(debug_assertions)]
+                panic!("Single arity accessor was constructed with no children - tree state changed");
+                #[cfg(not(debug_assertions))]
+                panic!("Single arity accessor: expected exactly one child, found none");
+            }
+        }
     }
 }
 
