@@ -183,9 +183,7 @@ use flui_types::{Offset, Size};
 use super::arity::Arity;
 use super::contexts::{BoxHitTestContext, BoxLayoutContext, BoxPaintContext};
 use super::geometry::BoxConstraints;
-use super::render_object::{
-    ComplexityHint, RenderObject, RenderObjectCategory, RenderTypeInfo, RenderTypeInfoBuilder,
-};
+use super::render_object::RenderObject;
 use crate::core::RenderResult;
 
 // ============================================================================
@@ -459,151 +457,6 @@ pub trait RenderBox<A: Arity>: Send + Sync + fmt::Debug + 'static {
     fn compute_max_intrinsic_height(&self) -> Option<f32> {
         None
     }
-
-    // ========================================================================
-    // PERFORMANCE AND OPTIMIZATION HOOKS
-    // ========================================================================
-
-    /// Returns hints about the computational complexity of layout operations.
-    ///
-    /// This information helps the layout scheduler optimize layout passes
-    /// by prioritizing simple layouts and parallelizing complex ones.
-    ///
-    /// # Default Implementation
-    ///
-    /// Returns complexity based on arity:
-    /// - `Leaf`: Constant complexity (no children to layout)
-    /// - `Single`: Linear complexity (one child plus self)
-    /// - `Variable`: Linear complexity (scales with number of children)
-    ///
-    /// # Override for Optimization
-    ///
-    /// ```rust,ignore
-    /// fn layout_complexity_hint(&self) -> ComplexityHint {
-    ///     if self.uses_expensive_algorithm {
-    ///         ComplexityHint::Quadratic
-    ///     } else {
-    ///         ComplexityHint::Linear
-    ///     }
-    /// }
-    /// ```
-    fn layout_complexity_hint(&self) -> ComplexityHint {
-        // Default based on arity
-        match A::runtime_arity() {
-            super::arity::RuntimeArity::Exact(0) => ComplexityHint::Constant,
-            super::arity::RuntimeArity::Exact(1) => ComplexityHint::Linear,
-            _ => ComplexityHint::Linear,
-        }
-    }
-
-    /// Returns hints about the computational complexity of paint operations.
-    fn paint_complexity_hint(&self) -> ComplexityHint {
-        // Most paint operations are linear in number of children
-        ComplexityHint::Linear
-    }
-
-    /// Indicates whether this render object supports parallel layout of children.
-    ///
-    /// When `true`, the layout system may choose to layout children in parallel
-    /// for better performance on multi-core systems.
-    ///
-    /// # Default Implementation
-    ///
-    /// Returns `false` for safety. Override to `true` when:
-    /// - Child layout order doesn't matter
-    /// - No shared mutable state is accessed during child layout
-    /// - Children don't depend on each other's layout results
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// fn supports_parallel_layout(&self) -> bool {
-    ///     // Stack layout can parallelize since children don't affect each other
-    ///     matches!(self.layout_type, LayoutType::Stack)
-    /// }
-    /// ```
-    fn supports_parallel_layout(&self) -> bool {
-        false
-    }
-
-    /// Indicates whether this render object benefits from layout result caching.
-    ///
-    /// When `true`, the layout system may cache layout results to avoid
-    /// redundant computations when constraints haven't changed.
-    fn supports_layout_caching(&self) -> bool {
-        true // Most render objects benefit from caching
-    }
-
-    /// Indicates whether this render object benefits from paint result caching.
-    ///
-    /// When `true`, the paint system may cache paint results as layers
-    /// to avoid redundant drawing operations.
-    fn supports_paint_caching(&self) -> bool {
-        false // Default to false for dynamic content
-    }
-
-    // ========================================================================
-    // DEBUGGING AND INTROSPECTION HOOKS
-    // ========================================================================
-
-    /// Returns detailed type information for debugging and tooling.
-    ///
-    /// # Default Implementation
-    ///
-    /// Provides basic information including protocol support and arity.
-    /// Override to add custom debugging information.
-    fn render_type_info(&self) -> RenderTypeInfo {
-        RenderTypeInfoBuilder::new::<Self>()
-            .with_box_protocol()
-            .with_arity_info(format!("{:?}", A::runtime_arity()))
-            .with_category(self.render_object_category())
-            .build()
-    }
-
-    /// Returns the category of this render object for classification.
-    ///
-    /// # Default Implementation
-    ///
-    /// Returns category based on arity:
-    /// - `Leaf`: Leaf category
-    /// - `Single`: Decorator category
-    /// - `Variable`: Container category
-    fn render_object_category(&self) -> RenderObjectCategory {
-        match A::runtime_arity() {
-            super::arity::RuntimeArity::Exact(0) => RenderObjectCategory::Leaf,
-            super::arity::RuntimeArity::Exact(1) => RenderObjectCategory::Decorator,
-            _ => RenderObjectCategory::Container,
-        }
-    }
-
-    /// Returns custom debug properties for development tools.
-    ///
-    /// Override to provide render-object-specific debugging information.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// fn debug_properties(&self) -> Vec<(&'static str, String)> {
-    ///     vec![
-    ///         ("flex_direction", format!("{:?}", self.direction)),
-    ///         ("main_axis_alignment", format!("{:?}", self.main_axis_alignment)),
-    ///         ("cross_axis_alignment", format!("{:?}", self.cross_axis_alignment)),
-    ///     ]
-    /// }
-    /// ```
-    fn debug_properties(&self) -> Vec<(&'static str, String)> {
-        vec![
-            ("arity", format!("{:?}", A::runtime_arity())),
-            (
-                "layout_complexity",
-                format!("{:?}", self.layout_complexity_hint()),
-            ),
-            (
-                "paint_complexity",
-                format!("{:?}", self.paint_complexity_hint()),
-            ),
-        ]
-    }
 }
 
 // ============================================================================
@@ -654,17 +507,6 @@ pub trait RenderBoxExt<A: Arity>: RenderBox<A> {
     /// Gets the debug name from the underlying `RenderObject`.
     fn debug_name(&self) -> &'static str {
         self.as_render_object().debug_name()
-    }
-
-    /// Returns a comprehensive debug summary.
-    fn debug_summary(&self) -> String {
-        format!(
-            "{} (arity: {:?}, layout: {:?}, paint: {:?})",
-            self.debug_name(),
-            A::runtime_arity(),
-            self.layout_complexity_hint(),
-            self.paint_complexity_hint()
-        )
     }
 }
 
@@ -718,14 +560,6 @@ impl<A: Arity> RenderObject for EmptyRenderBox<A> {
 
     fn debug_name(&self) -> &'static str {
         "EmptyRenderBox"
-    }
-
-    fn layout_complexity(&self) -> ComplexityHint {
-        ComplexityHint::Constant
-    }
-
-    fn paint_complexity(&self) -> ComplexityHint {
-        ComplexityHint::Constant
     }
 }
 
@@ -837,60 +671,5 @@ mod tests {
         assert!(!empty.position_in_bounds(Offset::new(50.0, -1.0), size));
         assert!(!empty.position_in_bounds(Offset::new(100.0, 25.0), size));
         assert!(!empty.position_in_bounds(Offset::new(50.0, 50.0), size));
-    }
-
-    #[test]
-    fn test_render_box_debug_properties() {
-        let empty = create_empty_render_box::<Variable>();
-        let props = empty.debug_properties();
-
-        // Should have at least arity information
-        assert!(props.iter().any(|(key, _)| *key == "arity"));
-        assert!(props.iter().any(|(key, _)| *key == "layout_complexity"));
-        assert!(props.iter().any(|(key, _)| *key == "paint_complexity"));
-    }
-
-    #[test]
-    fn test_layout_complexity_hints() {
-        let leaf_box = create_empty_render_box::<Leaf>();
-        let single_box = create_empty_render_box::<Single>();
-        let variable_box = create_empty_render_box::<Variable>();
-
-        assert_eq!(leaf_box.layout_complexity_hint(), ComplexityHint::Constant);
-        assert_eq!(single_box.layout_complexity_hint(), ComplexityHint::Linear);
-        assert_eq!(
-            variable_box.layout_complexity_hint(),
-            ComplexityHint::Linear
-        );
-    }
-
-    #[test]
-    fn test_render_object_category() {
-        let leaf_box = create_empty_render_box::<Leaf>();
-        let single_box = create_empty_render_box::<Single>();
-        let variable_box = create_empty_render_box::<Variable>();
-
-        assert_eq!(
-            leaf_box.render_object_category(),
-            RenderObjectCategory::Leaf
-        );
-        assert_eq!(
-            single_box.render_object_category(),
-            RenderObjectCategory::Decorator
-        );
-        assert_eq!(
-            variable_box.render_object_category(),
-            RenderObjectCategory::Container
-        );
-    }
-
-    #[test]
-    fn test_debug_summary() {
-        let empty = create_empty_render_box::<Leaf>();
-        let summary = empty.debug_summary();
-
-        assert!(summary.contains("EmptyRenderBox"));
-        assert!(summary.contains("Exact(0)")); // Leaf arity
-        assert!(summary.contains("Constant")); // Complexity
     }
 }
