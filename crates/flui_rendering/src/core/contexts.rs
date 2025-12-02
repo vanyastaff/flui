@@ -1,87 +1,8 @@
-//! Advanced GAT-based contexts for layout, paint, and hit testing operations.
+//! GAT-based contexts for layout, paint, and hit testing.
 //!
-//! This module provides the core context types that render objects use to interact
-//! with the rendering system. These contexts leverage Generic Associated Types (GAT)
-//! for zero-cost abstractions and provide comprehensive access to tree operations,
-//! children management, and rendering services.
-//!
-//! # Design Philosophy
-//!
-//! - **GAT-based**: Zero-cost abstractions with compile-time optimization
-//! - **Protocol-generic**: Works with any layout protocol (Box, Sliver, Custom)
-//! - **Arity-aware**: Type-safe children access based on arity constraints
-//! - **Performance-optimized**: Batch operations and HRTB predicates
-//! - **Ergonomic**: Convenient methods for common rendering operations
-//!
-//! # Context Types
-//!
-//! ## Layout Context
-//!
-//! Provides access to layout operations, constraints, and children management:
-//!
-//! ```rust,ignore
-//! impl RenderBox<Variable> for RenderFlex {
-//!     fn layout(&mut self, ctx: LayoutContext<'_, Variable, BoxProtocol>) -> Size {
-//!         let mut total_size = 0.0;
-//!
-//!         // Use GAT-based iteration
-//!         for child_id in ctx.children() {
-//!             let size = ctx.layout_child(child_id, ctx.constraints)?;
-//!             total_size += size.width;
-//!         }
-//!
-//!         // Use HRTB predicates
-//!         let flexible_children = ctx.children_where(|id| ctx.is_flexible(*id));
-//!
-//!         Size::new(total_size, ctx.constraints.max_height())
-//!     }
-//! }
-//! ```
-//!
-//! ## Paint Context
-//!
-//! Provides canvas access and child painting operations:
-//!
-//! ```rust,ignore
-//! impl RenderBox<Single> for RenderDecoratedBox {
-//!     fn paint(&self, ctx: &mut PaintContext<'_, Single, BoxProtocol>) {
-//!         // Draw decoration
-//!         ctx.canvas_mut().draw_decoration(&self.decoration, ctx.bounds());
-//!
-//!         // Paint child
-//!         let child_id = ctx.single_child();
-//!         ctx.paint_child(child_id, Offset::ZERO)?;
-//!     }
-//! }
-//! ```
-//!
-//! ## Hit Test Context
-//!
-//! Provides efficient hit testing with spatial optimizations:
-//!
-//! ```rust,ignore
-//! impl RenderBox<Variable> for RenderStack {
-//!     fn hit_test(&self, ctx: &HitTestContext<'_, Variable, BoxProtocol>, result: &mut HitTestResult) -> bool {
-//!         // Test children in reverse z-order
-//!         for child_id in ctx.children_reverse() {
-//!             if ctx.hit_test_child(child_id, ctx.position, result) {
-//!                 return true; // Early termination
-//!             }
-//!         }
-//!
-//!         // Test self
-//!         ctx.hit_test_self(result)
-//!     }
-//! }
-//! ```
-//!
-//! # Performance Features
-//!
-//! - **Batch operations**: Process multiple children efficiently
-//! - **Const generic optimization**: Compile-time sizing for common cases
-//! - **HRTB predicates**: Flexible filtering and searching
-//! - **Early termination**: Optimized algorithms for common patterns
-//! - **Cache integration**: Automatic result caching where beneficial
+//! - [`LayoutContext`] - Layout operations with constraint passing
+//! - [`PaintContext`] - Canvas operations and child painting
+//! - [`HitTestContext`] - Pointer event detection
 
 use std::fmt;
 use std::marker::PhantomData;
@@ -91,33 +12,60 @@ use flui_interaction::HitTestResult;
 use flui_painting::Canvas;
 use flui_types::{Offset, Rect, Size, SliverConstraints, SliverGeometry};
 
-use super::arity::{Arity, ChildrenAccess};
+use super::arity::{Arity, ChildrenAccess, Single};
 use super::geometry::BoxConstraints;
 use super::protocol::{BoxProtocol, Protocol, SliverProtocol};
 use super::render_tree::{HitTestTree, LayoutTree, PaintTree};
 use crate::core::RenderResult;
 
 // ============================================================================
-// TYPE ALIASES FOR COMMON PROTOCOLS
+// TYPE ALIASES FOR ERGONOMICS
 // ============================================================================
 
-/// Layout context for box protocol operations.
-pub type BoxLayoutContext<'a, A> = LayoutContext<'a, A, BoxProtocol>;
+/// Box layout context with dynamic dispatch (convenience alias).
+///
+/// Equivalent to `LayoutContext<'a, A, BoxProtocol, Box<dyn LayoutTree + Send + Sync>>`.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// fn layout(&mut self, mut ctx: BoxLayoutContext<'_, Single>) -> Size {
+///     let child_id = ctx.single_child();
+///     ctx.layout_child(child_id, ctx.constraints)?
+/// }
+/// ```
+pub type BoxLayoutContext<'a, A, T = Box<dyn LayoutTree + Send + Sync>> =
+    LayoutContext<'a, A, BoxProtocol, T>;
 
-/// Paint context for box protocol operations.
-pub type BoxPaintContext<'a, A> = PaintContext<'a, A, BoxProtocol>;
+/// Sliver layout context with dynamic dispatch (convenience alias).
+///
+/// Equivalent to `LayoutContext<'a, A, SliverProtocol, Box<dyn LayoutTree + Send + Sync>>`.
+pub type SliverLayoutContext<'a, A, T = Box<dyn LayoutTree + Send + Sync>> =
+    LayoutContext<'a, A, SliverProtocol, T>;
 
-/// Hit test context for box protocol operations.
-pub type BoxHitTestContext<'a, A> = HitTestContext<'a, A, BoxProtocol>;
+/// Box paint context with dynamic dispatch (convenience alias).
+///
+/// Equivalent to `PaintContext<'a, A, BoxProtocol, Box<dyn PaintTree + Send + Sync>>`.
+pub type BoxPaintContext<'a, A, T = Box<dyn PaintTree + Send + Sync>> =
+    PaintContext<'a, A, BoxProtocol, T>;
 
-/// Layout context for sliver protocol operations.
-pub type SliverLayoutContext<'a, A> = LayoutContext<'a, A, SliverProtocol>;
+/// Sliver paint context with dynamic dispatch (convenience alias).
+///
+/// Equivalent to `PaintContext<'a, A, SliverProtocol, Box<dyn PaintTree + Send + Sync>>`.
+pub type SliverPaintContext<'a, A, T = Box<dyn PaintTree + Send + Sync>> =
+    PaintContext<'a, A, SliverProtocol, T>;
 
-/// Paint context for sliver protocol operations.
-pub type SliverPaintContext<'a, A> = PaintContext<'a, A, SliverProtocol>;
+/// Box hit test context with dynamic dispatch (convenience alias).
+///
+/// Equivalent to `HitTestContext<'a, A, BoxProtocol, Box<dyn HitTestTree + Send + Sync>>`.
+pub type BoxHitTestContext<'a, A, T = Box<dyn HitTestTree + Send + Sync>> =
+    HitTestContext<'a, A, BoxProtocol, T>;
 
-/// Hit test context for sliver protocol operations.
-pub type SliverHitTestContext<'a, A> = HitTestContext<'a, A, SliverProtocol>;
+/// Sliver hit test context with dynamic dispatch (convenience alias).
+///
+/// Equivalent to `HitTestContext<'a, A, SliverProtocol, Box<dyn HitTestTree + Send + Sync>>`.
+pub type SliverHitTestContext<'a, A, T = Box<dyn HitTestTree + Send + Sync>> =
+    HitTestContext<'a, A, SliverProtocol, T>;
 
 // ============================================================================
 // LAYOUT CONTEXT
@@ -125,34 +73,74 @@ pub type SliverHitTestContext<'a, A> = HitTestContext<'a, A, SliverProtocol>;
 
 /// GAT-based layout context for computing element sizes and positions.
 ///
-/// This context provides type-safe access to layout operations with compile-time
-/// arity validation and zero-cost abstractions through Generic Associated Types.
+/// This context provides type-safe access to layout operations with:
+/// - Compile-time arity validation
+/// - Protocol-specific constraints and geometry
+/// - Optional static dispatch for performance
+/// - Zero-cost abstractions through generics
 ///
 /// # Type Parameters
 ///
 /// - `'a`: Lifetime of tree reference and children access
 /// - `A`: Arity type constraining the number of children
-/// - `P`: Layout protocol (BoxProtocol, SliverProtocol, etc.)
+/// - `P`: Layout protocol (defaults to `BoxProtocol`)
+/// - `T`: Tree implementation (defaults to dynamic dispatch)
 ///
-/// # Performance Characteristics
+/// # Protocol-Specific Types
 ///
-/// - **O(1) tree access**: Direct access to tree operations
-/// - **Zero-cost iteration**: GAT-based children iteration
-/// - **Compile-time optimization**: Const generics for batch operations
-/// - **SIMD-friendly**: Layout operations can be vectorized
-pub struct LayoutContext<'a, A: Arity, P: Protocol>
-where
+/// - `BoxProtocol`: constraints is `BoxConstraints`, returns `Size`
+/// - `SliverProtocol`: constraints is `SliverConstraints`, returns `SliverGeometry`
+///
+/// # Examples
+///
+/// ## Minimal (uses defaults)
+///
+/// ```rust,ignore
+/// fn layout(&mut self, mut ctx: LayoutContext<'_, Single>) -> Size {
+///     // Uses BoxProtocol and dynamic dispatch by default
+///     ctx.layout_single_child()?
+/// }
+/// ```
+///
+/// ## With type alias
+///
+/// ```rust,ignore
+/// fn layout(&mut self, mut ctx: BoxLayoutContext<'_, Variable>) -> Size {
+///     let mut total_width = 0.0;
+///     for child_id in ctx.children() {
+///         let size = ctx.layout_child(child_id, ctx.constraints)?;
+///         total_width += size.width;
+///     }
+///     Size::new(total_width, ctx.constraints.max_height)
+/// }
+/// ```
+///
+/// ## With named constructor
+///
+/// ```rust,ignore
+/// let ctx = LayoutContext::for_box(tree, id, constraints, accessor);
+/// let ctx = LayoutContext::for_sliver(tree, id, constraints, accessor);
+/// ```
+pub struct LayoutContext<
+    'a,
+    A: Arity,
+    P: Protocol = BoxProtocol,
+    T: LayoutTree = Box<dyn LayoutTree + Send + Sync>,
+> where
     A::Accessor<'a, ElementId>: ChildrenAccess<'a, ElementId>,
 {
-    tree: &'a mut (dyn LayoutTree + Send + Sync),
+    tree: &'a mut T,
     element_id: ElementId,
-    /// Layout constraints from the parent element.
+    /// Layout constraints from the parent element (protocol-specific).
+    ///
+    /// - For `BoxProtocol`: `BoxConstraints` (min/max width/height)
+    /// - For `SliverProtocol`: `SliverConstraints` (scroll offset, viewport)
     pub constraints: P::Constraints,
     children_accessor: A::Accessor<'a, ElementId>,
     _phantom: PhantomData<P>,
 }
 
-impl<'a, A: Arity, P: Protocol> fmt::Debug for LayoutContext<'a, A, P>
+impl<'a, A: Arity, P: Protocol, T: LayoutTree> fmt::Debug for LayoutContext<'a, A, P, T>
 where
     A::Accessor<'a, ElementId>: ChildrenAccess<'a, ElementId>,
 {
@@ -165,13 +153,21 @@ where
     }
 }
 
-impl<'a, A: Arity, P: Protocol> LayoutContext<'a, A, P>
+// ============================================================================
+// LAYOUT CONTEXT - COMMON METHODS
+// ============================================================================
+
+impl<'a, A: Arity, P: Protocol, T: LayoutTree> LayoutContext<'a, A, P, T>
 where
     A::Accessor<'a, ElementId>: ChildrenAccess<'a, ElementId>,
 {
     /// Creates a new layout context.
+    ///
+    /// For more explicit construction, consider using:
+    /// - [`LayoutContext::for_box`] for Box protocol
+    /// - [`LayoutContext::for_sliver`] for Sliver protocol
     pub fn new(
-        tree: &'a mut (dyn LayoutTree + Send + Sync),
+        tree: &'a mut T,
         element_id: ElementId,
         constraints: P::Constraints,
         children_accessor: A::Accessor<'a, ElementId>,
@@ -193,13 +189,13 @@ where
 
     /// Gets read-only access to the tree for navigation operations.
     #[inline]
-    pub fn tree(&self) -> &dyn LayoutTree {
+    pub fn tree(&self) -> &T {
         self.tree
     }
 
     /// Gets mutable access to the tree for layout operations.
     #[inline]
-    pub fn tree_mut(&mut self) -> &mut (dyn LayoutTree + Send + Sync) {
+    pub fn tree_mut(&mut self) -> &mut T {
         self.tree
     }
 
@@ -215,98 +211,76 @@ where
     ///
     /// This method leverages Higher-Rank Trait Bounds for maximum flexibility
     /// while maintaining zero-cost abstractions.
-    pub fn children_where<F>(&self, predicate: F) -> impl Iterator<Item = ElementId> + 'a
-    where
-        F: for<'b> Fn(&'b ElementId) -> bool + 'a,
-    {
-        self.children().filter(move |id| predicate(id))
-    }
-
-    /// Gets the number of children.
-    #[inline]
-    pub fn child_count(&self) -> usize {
-        self.children_accessor.len()
-    }
-
-    /// Checks if this element has no children.
-    #[inline]
-    pub fn is_leaf(&self) -> bool {
-        self.children_accessor.is_empty()
-    }
-
-    /// Finds the first child matching the predicate.
-    pub fn find_child<F>(&self, predicate: F) -> Option<ElementId>
+    pub fn children_where<F>(&self, predicate: F) -> Vec<ElementId>
     where
         F: for<'b> Fn(&'b ElementId) -> bool,
     {
-        self.children().find(|id| predicate(id))
+        self.children().filter(|id| predicate(id)).collect()
     }
 
-    /// Counts children matching the predicate.
-    pub fn count_children_where<F>(&self, predicate: F) -> usize
-    where
-        F: for<'b> Fn(&'b ElementId) -> bool,
-    {
-        self.children().filter(|id| predicate(id)).count()
+    /// Sets the offset of a child element.
+    ///
+    /// Called during parent's layout to position children.
+    pub fn set_child_offset(&mut self, child_id: ElementId, offset: Offset) {
+        self.tree.set_offset(child_id, offset);
     }
 
-    /// Checks if any child matches the predicate.
-    pub fn any_child_where<F>(&self, predicate: F) -> bool
-    where
-        F: for<'b> Fn(&'b ElementId) -> bool,
-    {
-        self.children().any(|id| predicate(id))
+    /// Gets the offset of a child element.
+    pub fn get_child_offset(&self, child_id: ElementId) -> Option<Offset> {
+        self.tree.get_offset(child_id)
     }
 
-    /// Checks if all children match the predicate.
-    pub fn all_children_where<F>(&self, predicate: F) -> bool
-    where
-        F: for<'b> Fn(&'b ElementId) -> bool,
-    {
-        !self.is_leaf() && self.children().all(|id| predicate(id))
+    /// Marks a child as needing layout.
+    pub fn mark_child_needs_layout(&mut self, child_id: ElementId) {
+        self.tree.mark_needs_layout(child_id);
+    }
+
+    /// Checks if a child needs layout.
+    pub fn child_needs_layout(&self, child_id: ElementId) -> bool {
+        self.tree.needs_layout(child_id)
     }
 }
 
-// Box protocol specific methods
-impl<'a, A: Arity> LayoutContext<'a, A, BoxProtocol>
+// ============================================================================
+// LAYOUT CONTEXT - BOX PROTOCOL SPECIFIC
+// ============================================================================
+
+impl<'a, A: Arity, T: LayoutTree> LayoutContext<'a, A, BoxProtocol, T>
 where
     A::Accessor<'a, ElementId>: ChildrenAccess<'a, ElementId>,
 {
-    /// Layouts a child element with box constraints.
+    /// Creates a new Box protocol layout context (named constructor).
     ///
-    /// This is the primary method for performing child layout operations.
-    /// It handles error propagation and integrates with the dirty tracking system.
+    /// This is an explicit alternative to [`new`](Self::new) that makes the protocol clear.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let ctx = LayoutContext::for_box(tree, id, constraints, accessor);
+    /// ```
+    pub fn for_box(
+        tree: &'a mut T,
+        element_id: ElementId,
+        constraints: BoxConstraints,
+        children_accessor: A::Accessor<'a, ElementId>,
+    ) -> Self {
+        Self::new(tree, element_id, constraints, children_accessor)
+    }
+
+    /// Layouts a child box element.
+    ///
+    /// Returns the computed size that satisfies the given constraints.
     pub fn layout_child(
         &mut self,
         child_id: ElementId,
         constraints: BoxConstraints,
     ) -> RenderResult<Size> {
-        match self.tree.perform_layout(child_id, constraints) {
-            Ok(size) => {
-                self.tree.set_offset(child_id, Offset::ZERO);
-                Ok(size)
-            }
-            Err(e) => Err(e),
-        }
-    }
-
-    /// Layouts a child at a specific offset.
-    ///
-    /// This combines layout and positioning in a single operation.
-    pub fn layout_child_at(
-        &mut self,
-        child_id: ElementId,
-        constraints: BoxConstraints,
-        offset: Offset,
-    ) -> RenderResult<Size> {
-        let size = self.layout_child(child_id, constraints)?;
-        self.tree.set_offset(child_id, offset);
-        Ok(size)
+        self.tree.perform_layout(child_id, constraints)
     }
 
     /// Layouts all children with the same constraints.
     ///
-    /// Returns successful layouts only, filtering out any failures.
+    /// Returns a vector of (child_id, size) tuples.
     pub fn layout_all_children(&mut self, constraints: BoxConstraints) -> Vec<(ElementId, Size)> {
         let children: Vec<_> = self.children().collect();
         let mut results = Vec::with_capacity(children.len());
@@ -319,100 +293,14 @@ where
 
         results
     }
-
-    /// Layouts children in batches using const generic optimization.
-    ///
-    /// This method can be optimized at compile time for known batch sizes,
-    /// enabling better vectorization and cache usage.
-    pub fn layout_children_batch<const BATCH_SIZE: usize>(
-        &mut self,
-        constraints: BoxConstraints,
-    ) -> Vec<[Option<Size>; BATCH_SIZE]> {
-        let children: Vec<_> = self.children().collect();
-        let mut results = Vec::new();
-
-        for batch in children.chunks(BATCH_SIZE) {
-            let mut batch_result = [None; BATCH_SIZE];
-
-            for (i, &child_id) in batch.iter().enumerate() {
-                batch_result[i] = self.layout_child(child_id, constraints).ok();
-            }
-
-            results.push(batch_result);
-        }
-
-        results
-    }
-
-    /// Layouts children conditionally based on a predicate.
-    ///
-    /// This is useful for layouts that only need to process certain children
-    /// (e.g., visible children in a viewport).
-    pub fn layout_children_where<F>(
-        &mut self,
-        constraints: BoxConstraints,
-        predicate: F,
-    ) -> Vec<(ElementId, Size)>
-    where
-        F: for<'b> Fn(&'b ElementId) -> bool,
-    {
-        let target_children: Vec<_> = self.children_where(predicate).collect();
-        let mut results = Vec::with_capacity(target_children.len());
-
-        for child_id in target_children {
-            if let Ok(size) = self.layout_child(child_id, constraints) {
-                results.push((child_id, size));
-            }
-        }
-
-        results
-    }
-
-    /// Computes intrinsic dimensions by laying out children with loose constraints.
-    ///
-    /// This is useful for determining the natural size of an element when
-    /// not constrained by parent layout requirements.
-    pub fn compute_intrinsic_size(&mut self, axis: Option<f32>) -> Size {
-        let loose_constraints = match axis {
-            Some(width) => BoxConstraints::loose_width(width),
-            None => BoxConstraints::loose(Size::new(f32::INFINITY, f32::INFINITY)),
-        };
-
-        let children_sizes = self.layout_all_children(loose_constraints);
-
-        children_sizes
-            .iter()
-            .fold(Size::ZERO, |max_size, (_, size)| {
-                Size::new(
-                    max_size.width.max(size.width),
-                    max_size.height.max(size.height),
-                )
-            })
-    }
-
-    /// Gets the cached size of a child, if available.
-    ///
-    /// This avoids re-layout if the child hasn't changed since the last layout pass.
-    pub fn get_child_size(&self, child_id: ElementId) -> Option<Size> {
-        // This would integrate with the tree's caching system
-        // For now, return None to force layout
-        None
-    }
-
-    /// Checks if a child needs to be laid out.
-    pub fn child_needs_layout(&self, child_id: ElementId) -> bool {
-        self.tree.needs_layout(child_id)
-    }
-
-    /// Marks a child as needing layout.
-    pub fn mark_child_needs_layout(&mut self, child_id: ElementId) {
-        self.tree.mark_needs_layout(child_id);
-    }
 }
 
-// Single child convenience methods
-impl<'a> LayoutContext<'a, super::arity::Single, BoxProtocol> {
-    /// Gets the single child ElementId.
+// ============================================================================
+// LAYOUT CONTEXT - SINGLE CHILD BOX PROTOCOL
+// ============================================================================
+
+impl<'a, T: LayoutTree> LayoutContext<'a, Single, BoxProtocol, T> {
+    /// Gets the single child ID (convenience for Single arity).
     #[inline]
     pub fn single_child(&self) -> ElementId {
         self.children_accessor.single_child_id()
@@ -437,12 +325,35 @@ impl<'a> LayoutContext<'a, super::arity::Single, BoxProtocol> {
     }
 }
 
-// Sliver protocol specific methods
-impl<'a, A: Arity> LayoutContext<'a, A, SliverProtocol>
+// ============================================================================
+// LAYOUT CONTEXT - SLIVER PROTOCOL SPECIFIC
+// ============================================================================
+
+impl<'a, A: Arity, T: LayoutTree> LayoutContext<'a, A, SliverProtocol, T>
 where
     A::Accessor<'a, ElementId>: ChildrenAccess<'a, ElementId>,
 {
+    /// Creates a new Sliver protocol layout context (named constructor).
+    ///
+    /// This is an explicit alternative to [`new`](Self::new) that makes the protocol clear.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let ctx = LayoutContext::for_sliver(tree, id, constraints, accessor);
+    /// ```
+    pub fn for_sliver(
+        tree: &'a mut T,
+        element_id: ElementId,
+        constraints: SliverConstraints,
+        children_accessor: A::Accessor<'a, ElementId>,
+    ) -> Self {
+        Self::new(tree, element_id, constraints, children_accessor)
+    }
+
     /// Layouts a child sliver element.
+    ///
+    /// Returns the computed geometry with scroll/paint extents.
     pub fn layout_child(
         &mut self,
         child_id: ElementId,
@@ -475,24 +386,74 @@ where
 
 /// GAT-based paint context for drawing elements to a canvas.
 ///
-/// This context provides comprehensive access to painting operations with
-/// type-safe children management and efficient canvas operations.
-pub struct PaintContext<'a, A: Arity, P: Protocol>
-where
+/// This context provides comprehensive access to painting operations with:
+/// - Type-safe children management
+/// - Protocol-specific geometry
+/// - Efficient canvas operations
+/// - Optional static dispatch
+///
+/// # Type Parameters
+///
+/// - `'a`: Lifetime of tree reference and children access
+/// - `A`: Arity type constraining the number of children
+/// - `P`: Layout protocol (defaults to `BoxProtocol`)
+/// - `T`: Tree implementation (defaults to dynamic dispatch)
+///
+/// # Protocol-Specific Geometry
+///
+/// The `geometry` field type depends on the protocol:
+/// - `BoxProtocol`: `Size` (width, height)
+/// - `SliverProtocol`: `SliverGeometry` (paint/scroll/layout extents)
+///
+/// # Examples
+///
+/// ## Minimal
+///
+/// ```rust,ignore
+/// fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
+///     // Uses BoxProtocol by default, geometry is Size
+///     ctx.canvas_mut().draw_rect(Rect::from_size(ctx.geometry));
+/// }
+/// ```
+///
+/// ## With type alias
+///
+/// ```rust,ignore
+/// fn paint(&self, ctx: &mut BoxPaintContext<'_, Single>) {
+///     let bounds = ctx.bounds();  // Box-specific method
+///     ctx.canvas_mut().draw_rect(bounds);
+/// }
+/// ```
+///
+/// ## With named constructor
+///
+/// ```rust,ignore
+/// let ctx = PaintContext::for_box(tree, id, offset, size, canvas, accessor);
+/// let ctx = PaintContext::for_sliver(tree, id, offset, geometry, canvas, accessor);
+/// ```
+pub struct PaintContext<
+    'a,
+    A: Arity,
+    P: Protocol = BoxProtocol,
+    T: PaintTree = Box<dyn PaintTree + Send + Sync>,
+> where
     A::Accessor<'a, ElementId>: ChildrenAccess<'a, ElementId>,
 {
-    tree: &'a mut (dyn PaintTree + Send + Sync),
+    tree: &'a mut T,
     element_id: ElementId,
     /// The offset of this element in parent coordinates.
     pub offset: Offset,
-    /// The size of this element from layout.
-    pub size: Size,
+    /// The computed geometry from layout (protocol-specific).
+    ///
+    /// - For `BoxProtocol`: `Size` (width, height)
+    /// - For `SliverProtocol`: `SliverGeometry` (paint/scroll extents)
+    pub geometry: P::Geometry,
     canvas: &'a mut Canvas,
     children_accessor: A::Accessor<'a, ElementId>,
     _phantom: PhantomData<P>,
 }
 
-impl<'a, A: Arity, P: Protocol> fmt::Debug for PaintContext<'a, A, P>
+impl<'a, A: Arity, P: Protocol, T: PaintTree> fmt::Debug for PaintContext<'a, A, P, T>
 where
     A::Accessor<'a, ElementId>: ChildrenAccess<'a, ElementId>,
 {
@@ -500,22 +461,30 @@ where
         f.debug_struct("PaintContext")
             .field("element_id", &self.element_id)
             .field("offset", &self.offset)
-            .field("size", &self.size)
+            .field("geometry", &self.geometry)
             .field("children_count", &self.children_accessor.len())
             .finish_non_exhaustive()
     }
 }
 
-impl<'a, A: Arity, P: Protocol> PaintContext<'a, A, P>
+// ============================================================================
+// PAINT CONTEXT - COMMON METHODS
+// ============================================================================
+
+impl<'a, A: Arity, P: Protocol, T: PaintTree> PaintContext<'a, A, P, T>
 where
     A::Accessor<'a, ElementId>: ChildrenAccess<'a, ElementId>,
 {
     /// Creates a new paint context.
+    ///
+    /// For more explicit construction, consider using:
+    /// - [`PaintContext::for_box`] for Box protocol
+    /// - [`PaintContext::for_sliver`] for Sliver protocol
     pub fn new(
-        tree: &'a mut (dyn PaintTree + Send + Sync),
+        tree: &'a mut T,
         element_id: ElementId,
         offset: Offset,
-        size: Size,
+        geometry: P::Geometry,
         canvas: &'a mut Canvas,
         children_accessor: A::Accessor<'a, ElementId>,
     ) -> Self {
@@ -523,7 +492,7 @@ where
             tree,
             element_id,
             offset,
-            size,
+            geometry,
             canvas,
             children_accessor,
             _phantom: PhantomData,
@@ -554,127 +523,84 @@ where
         self.children_accessor.element_ids()
     }
 
-    /// Returns the bounding rectangle of this element.
-    #[inline]
-    pub fn bounds(&self) -> Rect {
-        Rect::from_offset_size(self.offset, self.size)
-    }
-
-    /// Returns the local bounding rectangle (at origin).
-    #[inline]
-    pub fn local_bounds(&self) -> Rect {
-        Rect::from_size(self.size)
-    }
-
     /// Paints a child element at the given offset.
-    pub fn paint_child(&mut self, child_id: ElementId, child_offset: Offset) -> RenderResult<()> {
-        let absolute_offset = self.offset + child_offset;
-        match self.tree.perform_paint(child_id, absolute_offset) {
-            Ok(child_canvas) => {
-                // Composite the child canvas onto our canvas
-                self.canvas.composite(child_canvas, child_offset);
-                Ok(())
-            }
-            Err(e) => Err(e),
-        }
+    pub fn paint_child(&mut self, child_id: ElementId, offset: Offset) -> RenderResult<()> {
+        let _canvas = self.tree.perform_paint(child_id, offset)?;
+        Ok(())
     }
 
     /// Paints all children at their stored offsets.
-    ///
-    /// This assumes that child offsets were set during the layout phase.
-    /// Paints all children at their stored offsets.
-    ///
-    /// # Note
-    ///
-    /// Children without a stored offset will be painted at `Offset::ZERO`.
-    /// This is safe because layout should have set offsets, but we gracefully
-    /// handle missing offsets to avoid panics.
-    pub fn paint_all_children(&mut self) -> Vec<RenderResult<()>> {
+    pub fn paint_all_children(&mut self) -> RenderResult<()> {
         let children: Vec<_> = self.children().collect();
-        let mut results = Vec::with_capacity(children.len());
 
         for child_id in children {
-            // Use ZERO as fallback if offset wasn't set during layout
-            let child_offset = self.tree.get_offset(child_id).unwrap_or(Offset::ZERO);
-            results.push(self.paint_child(child_id, child_offset));
+            let offset = self.tree.get_child_offset(child_id).unwrap_or(Offset::ZERO);
+            self.paint_child(child_id, offset)?;
         }
 
-        results
-    }
-
-    /// Paints children with the same offset.
-    pub fn paint_children_at(&mut self, offset: Offset) -> Vec<RenderResult<()>> {
-        let children: Vec<_> = self.children().collect();
-        let mut results = Vec::with_capacity(children.len());
-
-        for child_id in children {
-            results.push(self.paint_child(child_id, offset));
-        }
-
-        results
-    }
-
-    /// Paints children conditionally based on a predicate.
-    ///
-    /// # Note
-    ///
-    /// Children without a stored offset will be painted at `Offset::ZERO`.
-    /// See `paint_all_children()` for details on offset fallback behavior.
-    pub fn paint_children_where<F>(&mut self, predicate: F) -> Vec<RenderResult<()>>
-    where
-        F: for<'b> Fn(&'b ElementId) -> bool,
-    {
-        let target_children: Vec<_> = self.children().filter(|id| predicate(id)).collect();
-
-        let mut results = Vec::with_capacity(target_children.len());
-
-        for child_id in target_children {
-            // Use ZERO as fallback if offset wasn't set during layout
-            let child_offset = self.tree.get_offset(child_id).unwrap_or(Offset::ZERO);
-            results.push(self.paint_child(child_id, child_offset));
-        }
-
-        results
-    }
-
-    /// Saves the current canvas state for later restoration.
-    pub fn save(&mut self) {
-        self.canvas.save();
-    }
-
-    /// Restores the previously saved canvas state.
-    pub fn restore(&mut self) {
-        self.canvas.restore();
-    }
-
-    /// Applies a clipping region for child painting.
-    pub fn with_clip<F, R>(&mut self, clip_rect: Rect, f: F) -> R
-    where
-        F: FnOnce(&mut Self) -> R,
-    {
-        self.canvas.save();
-        self.canvas.clip_rect(clip_rect);
-        let result = f(self);
-        self.canvas.restore();
-        result
-    }
-
-    /// Applies a translation offset for child painting.
-    pub fn with_translation<F, R>(&mut self, offset: Offset, f: F) -> R
-    where
-        F: FnOnce(&mut Self) -> R,
-    {
-        self.canvas.save();
-        self.canvas.translate(offset.x, offset.y);
-        let result = f(self);
-        self.canvas.restore();
-        result
+        Ok(())
     }
 }
 
-// Single child convenience methods
-impl<'a> PaintContext<'a, super::arity::Single, BoxProtocol> {
-    /// Gets the single child ElementId.
+// ============================================================================
+// PAINT CONTEXT - BOX PROTOCOL SPECIFIC
+// ============================================================================
+
+impl<'a, A: Arity, T: PaintTree> PaintContext<'a, A, BoxProtocol, T>
+where
+    A::Accessor<'a, ElementId>: ChildrenAccess<'a, ElementId>,
+{
+    /// Creates a new Box protocol paint context (named constructor).
+    ///
+    /// This is an explicit alternative to [`new`](Self::new) that makes the protocol clear.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let ctx = PaintContext::for_box(tree, id, offset, size, canvas, accessor);
+    /// ```
+    pub fn for_box(
+        tree: &'a mut T,
+        element_id: ElementId,
+        offset: Offset,
+        size: Size,
+        canvas: &'a mut Canvas,
+        children_accessor: A::Accessor<'a, ElementId>,
+    ) -> Self {
+        Self::new(tree, element_id, offset, size, canvas, children_accessor)
+    }
+
+    /// Returns the size of this element (convenience for Box protocol).
+    ///
+    /// This is equivalent to `ctx.geometry` but more ergonomic.
+    #[inline]
+    pub fn size(&self) -> Size {
+        self.geometry
+    }
+
+    /// Returns the bounding rectangle of this element in parent coordinates.
+    ///
+    /// This combines offset and size into a Rect.
+    #[inline]
+    pub fn bounds(&self) -> Rect {
+        Rect::from_offset_size(self.offset, self.geometry)
+    }
+
+    /// Returns the local bounding rectangle (at origin).
+    ///
+    /// This is useful for drawing within the element's own coordinate space.
+    #[inline]
+    pub fn local_bounds(&self) -> Rect {
+        Rect::from_size(self.geometry)
+    }
+}
+
+// ============================================================================
+// PAINT CONTEXT - SINGLE CHILD BOX PROTOCOL
+// ============================================================================
+
+impl<'a, T: PaintTree> PaintContext<'a, Single, BoxProtocol, T> {
+    /// Gets the single child ID (convenience for Single arity).
     #[inline]
     pub fn single_child(&self) -> ElementId {
         self.children_accessor.single_child_id()
@@ -685,23 +611,61 @@ impl<'a> PaintContext<'a, super::arity::Single, BoxProtocol> {
         let child_id = self.single_child();
         self.paint_child(child_id, offset)
     }
+}
 
-    /// Paints the single child at its stored offset.
+// ============================================================================
+// PAINT CONTEXT - SLIVER PROTOCOL SPECIFIC
+// ============================================================================
+
+impl<'a, A: Arity, T: PaintTree> PaintContext<'a, A, SliverProtocol, T>
+where
+    A::Accessor<'a, ElementId>: ChildrenAccess<'a, ElementId>,
+{
+    /// Creates a new Sliver protocol paint context (named constructor).
     ///
-    /// # Note
+    /// This is an explicit alternative to [`new`](Self::new) that makes the protocol clear.
     ///
-    /// If the child's offset hasn't been set (returns `None`), this method
-    /// uses `Offset::ZERO` as a fallback. This is safe because:
-    /// - The child will be painted at the parent's origin
-    /// - Layout should have set the offset before painting
-    /// - Using ZERO prevents panics while maintaining reasonable behavior
-    pub fn paint_single_child_at_offset(&mut self) -> RenderResult<()> {
-        let child_id = self.single_child();
-        // Use ZERO as fallback if offset wasn't set during layout
-        // This is safe because layout should have set the offset, but we
-        // gracefully handle the case where it wasn't to avoid panics.
-        let offset = self.tree.get_offset(child_id).unwrap_or(Offset::ZERO);
-        self.paint_child(child_id, offset)
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let ctx = PaintContext::for_sliver(tree, id, offset, geometry, canvas, accessor);
+    /// ```
+    pub fn for_sliver(
+        tree: &'a mut T,
+        element_id: ElementId,
+        offset: Offset,
+        geometry: SliverGeometry,
+        canvas: &'a mut Canvas,
+        children_accessor: A::Accessor<'a, ElementId>,
+    ) -> Self {
+        Self::new(
+            tree,
+            element_id,
+            offset,
+            geometry,
+            canvas,
+            children_accessor,
+        )
+    }
+
+    /// Returns the sliver geometry (convenience for Sliver protocol).
+    ///
+    /// This is equivalent to `ctx.geometry` but more ergonomic.
+    #[inline]
+    pub fn sliver_geometry(&self) -> SliverGeometry {
+        self.geometry.clone()
+    }
+
+    /// Returns the paint extent (how much space is visible).
+    #[inline]
+    pub fn paint_extent(&self) -> f32 {
+        self.geometry.paint_extent
+    }
+
+    /// Returns the scroll extent (how much scrollable content).
+    #[inline]
+    pub fn scroll_extent(&self) -> f32 {
+        self.geometry.scroll_extent
     }
 }
 
@@ -709,25 +673,61 @@ impl<'a> PaintContext<'a, super::arity::Single, BoxProtocol> {
 // HIT TEST CONTEXT
 // ============================================================================
 
-/// GAT-based hit test context for pointer event handling.
+/// GAT-based hit test context for pointer event detection.
 ///
-/// This context provides efficient hit testing capabilities with spatial
-/// optimizations and early termination support.
-pub struct HitTestContext<'a, A: Arity, P: Protocol>
-where
+/// This context provides efficient hit testing with:
+/// - Spatial optimizations
+/// - Protocol-specific geometry
+/// - Type-safe children access
+/// - Optional static dispatch
+///
+/// # Type Parameters
+///
+/// - `'a`: Lifetime of tree reference and children access
+/// - `A`: Arity type constraining the number of children
+/// - `P`: Layout protocol (defaults to `BoxProtocol`)
+/// - `T`: Tree implementation (defaults to dynamic dispatch)
+///
+/// # Protocol-Specific Geometry
+///
+/// The `geometry` field type depends on the protocol:
+/// - `BoxProtocol`: `Size` for rectangular hit testing
+/// - `SliverProtocol`: `SliverGeometry` for scroll-aware hit testing
+///
+/// # Examples
+///
+/// ## Minimal
+///
+/// ```rust,ignore
+/// fn hit_test(&self, ctx: &HitTestContext<'_, Variable>, result: &mut HitTestResult) -> bool {
+///     // Test children in reverse z-order
+///     for child_id in ctx.children_reverse() {
+///         if ctx.hit_test_child(child_id, ctx.position, result) {
+///             return true;
+///         }
+///     }
+///     ctx.hit_test_self(result)
+/// }
+/// ```
+pub struct HitTestContext<
+    'a,
+    A: Arity,
+    P: Protocol = BoxProtocol,
+    T: HitTestTree = Box<dyn HitTestTree + Send + Sync>,
+> where
     A::Accessor<'a, ElementId>: ChildrenAccess<'a, ElementId>,
 {
-    tree: &'a (dyn HitTestTree + Send + Sync),
+    tree: &'a T,
     element_id: ElementId,
-    /// The position being tested in local coordinates.
+    /// The position to test (in parent coordinates).
     pub position: Offset,
-    /// The size of this element.
-    pub size: Size,
+    /// The computed geometry from layout (protocol-specific).
+    pub geometry: P::Geometry,
     children_accessor: A::Accessor<'a, ElementId>,
     _phantom: PhantomData<P>,
 }
 
-impl<'a, A: Arity, P: Protocol> fmt::Debug for HitTestContext<'a, A, P>
+impl<'a, A: Arity, P: Protocol, T: HitTestTree> fmt::Debug for HitTestContext<'a, A, P, T>
 where
     A::Accessor<'a, ElementId>: ChildrenAccess<'a, ElementId>,
 {
@@ -735,35 +735,43 @@ where
         f.debug_struct("HitTestContext")
             .field("element_id", &self.element_id)
             .field("position", &self.position)
-            .field("size", &self.size)
+            .field("geometry", &self.geometry)
             .field("children_count", &self.children_accessor.len())
             .finish_non_exhaustive()
     }
 }
 
-impl<'a, A: Arity, P: Protocol> HitTestContext<'a, A, P>
+// ============================================================================
+// HIT TEST CONTEXT - COMMON METHODS
+// ============================================================================
+
+impl<'a, A: Arity, P: Protocol, T: HitTestTree> HitTestContext<'a, A, P, T>
 where
     A::Accessor<'a, ElementId>: ChildrenAccess<'a, ElementId>,
 {
     /// Creates a new hit test context.
+    ///
+    /// For more explicit construction, consider using:
+    /// - [`HitTestContext::for_box`] for Box protocol
+    /// - [`HitTestContext::for_sliver`] for Sliver protocol
     pub fn new(
-        tree: &'a (dyn HitTestTree + Send + Sync),
+        tree: &'a T,
         element_id: ElementId,
         position: Offset,
-        size: Size,
+        geometry: P::Geometry,
         children_accessor: A::Accessor<'a, ElementId>,
     ) -> Self {
         Self {
             tree,
             element_id,
             position,
-            size,
+            geometry,
             children_accessor,
             _phantom: PhantomData,
         }
     }
 
-    /// Gets the element ID being tested.
+    /// Gets the element ID this context is testing.
     #[inline]
     pub fn element_id(&self) -> ElementId {
         self.element_id
@@ -777,29 +785,7 @@ where
 
     /// Returns children in reverse order (for z-order hit testing).
     pub fn children_reverse(&self) -> impl Iterator<Item = ElementId> + 'a {
-        let children: Vec<_> = self.children().collect();
-        children.into_iter().rev()
-    }
-
-    /// Returns the bounds of this element.
-    #[inline]
-    pub fn bounds(&self) -> Rect {
-        Rect::from_size(self.size)
-    }
-
-    /// Checks if the position is within this element's bounds.
-    #[inline]
-    pub fn contains_position(&self, position: Offset) -> bool {
-        position.dx >= 0.0
-            && position.dy >= 0.0
-            && position.dx < self.size.width
-            && position.dy < self.size.height
-    }
-
-    /// Checks if the test position is within this element's bounds.
-    #[inline]
-    pub fn contains_self(&self) -> bool {
-        self.contains_position(self.position)
+        self.children().rev()
     }
 
     /// Hit tests a child element.
@@ -809,298 +795,182 @@ where
         position: Offset,
         result: &mut HitTestResult,
     ) -> bool {
-        self.tree.hit_test(child_id, position, result)
-    }
-
-    /// Hit tests children with early termination.
-    ///
-    /// Returns true as soon as the first hit is found, which is more
-    /// efficient for simple hit testing scenarios.
-    pub fn hit_test_children_early(&self, result: &mut HitTestResult) -> bool {
-        for child_id in self.children_reverse() {
-            if self.hit_test_child(child_id, self.position, result) {
-                return true;
-            }
-        }
-        false
-    }
-
-    /// Hit tests all children and accumulates results.
-    ///
-    /// This is useful when you need all hits (e.g., for multi-touch scenarios).
-    pub fn hit_test_all_children(&self, result: &mut HitTestResult) -> bool {
-        let mut any_hit = false;
-
-        for child_id in self.children_reverse() {
-            if self.hit_test_child(child_id, self.position, result) {
-                any_hit = true;
-            }
-        }
-
-        any_hit
+        self.tree.perform_hit_test(child_id, position, result)
     }
 
     /// Adds this element to the hit test result.
-    pub fn add_to_result(&self, result: &mut HitTestResult) {
+    pub fn hit_test_self(&self, result: &mut HitTestResult) -> bool {
         result.add(self.element_id);
-    }
-
-    /// Performs a complete hit test including self and children.
-    ///
-    /// This is a convenience method that implements the standard hit testing
-    /// algorithm: test children first (in reverse z-order), then self.
-    pub fn hit_test_self_and_children(&self, result: &mut HitTestResult) -> bool {
-        // Test children first (topmost first)
-        if self.hit_test_children_early(result) {
-            return true;
-        }
-
-        // Test self if no children were hit
-        if self.contains_self() {
-            self.add_to_result(result);
-            return true;
-        }
-
-        false
-    }
-
-    /// Finds the topmost child at the given position.
-    pub fn find_child_at_position(&self, position: Offset) -> Option<ElementId> {
-        let mut result = HitTestResult::new();
-
-        for child_id in self.children_reverse() {
-            if self.hit_test_child(child_id, position, &mut result) {
-                return Some(child_id);
-            }
-        }
-
-        None
-    }
-}
-
-// Single child convenience methods
-impl<'a> HitTestContext<'a, super::arity::Single, BoxProtocol> {
-    /// Gets the single child ElementId.
-    #[inline]
-    pub fn single_child(&self) -> ElementId {
-        self.children_accessor.single_child_id()
-    }
-
-    /// Hit tests the single child.
-    pub fn hit_test_single_child(&self, result: &mut HitTestResult) -> bool {
-        let child_id = self.single_child();
-        self.hit_test_child(child_id, self.position, result)
+        true
     }
 }
 
 // ============================================================================
-// UTILITY FUNCTIONS
+// HIT TEST CONTEXT - BOX PROTOCOL SPECIFIC
 // ============================================================================
 
-/// Creates a layout context for box protocol operations.
-pub fn create_box_layout_context<'a, A: Arity>(
-    tree: &'a mut (dyn LayoutTree + Send + Sync),
-    element_id: ElementId,
-    constraints: BoxConstraints,
-    children_accessor: A::Accessor<'a, ElementId>,
-) -> LayoutContext<'a, A, BoxProtocol>
+impl<'a, A: Arity, T: HitTestTree> HitTestContext<'a, A, BoxProtocol, T>
 where
     A::Accessor<'a, ElementId>: ChildrenAccess<'a, ElementId>,
 {
-    LayoutContext::new(tree, element_id, constraints, children_accessor)
+    /// Creates a new Box protocol hit test context (named constructor).
+    ///
+    /// This is an explicit alternative to [`new`](Self::new) that makes the protocol clear.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let ctx = HitTestContext::for_box(tree, id, position, size, accessor);
+    /// ```
+    pub fn for_box(
+        tree: &'a T,
+        element_id: ElementId,
+        position: Offset,
+        size: Size,
+        children_accessor: A::Accessor<'a, ElementId>,
+    ) -> Self {
+        Self::new(tree, element_id, position, size, children_accessor)
+    }
+
+    /// Returns the size of this element (convenience for Box protocol).
+    #[inline]
+    pub fn size(&self) -> Size {
+        self.geometry
+    }
+
+    /// Checks if the position is within this element's bounds.
+    pub fn contains_position(&self) -> bool {
+        let local_bounds = Rect::from_size(self.geometry);
+        local_bounds.contains(self.position)
+    }
+
+    /// Checks if the position is within a specific rectangle.
+    pub fn position_in_rect(&self, rect: Rect) -> bool {
+        rect.contains(self.position)
+    }
 }
 
-/// Creates a paint context for box protocol operations.
-pub fn create_box_paint_context<'a, A: Arity>(
-    tree: &'a mut (dyn PaintTree + Send + Sync),
+// ============================================================================
+// HIT TEST CONTEXT - SLIVER PROTOCOL SPECIFIC
+// ============================================================================
+
+impl<'a, A: Arity, T: HitTestTree> HitTestContext<'a, A, SliverProtocol, T>
+where
+    A::Accessor<'a, ElementId>: ChildrenAccess<'a, ElementId>,
+{
+    /// Creates a new Sliver protocol hit test context (named constructor).
+    ///
+    /// This is an explicit alternative to [`new`](Self::new) that makes the protocol clear.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let ctx = HitTestContext::for_sliver(tree, id, position, geometry, accessor);
+    /// ```
+    pub fn for_sliver(
+        tree: &'a T,
+        element_id: ElementId,
+        position: Offset,
+        geometry: SliverGeometry,
+        children_accessor: A::Accessor<'a, ElementId>,
+    ) -> Self {
+        Self::new(tree, element_id, position, geometry, children_accessor)
+    }
+}
+
+// ============================================================================
+// CONTEXT CREATION HELPERS
+// ============================================================================
+
+/// Creates a layout context for box protocol operations (helper function).
+///
+/// This is equivalent to `LayoutContext::for_box()` or using the constructor directly.
+pub fn create_box_layout_context<'a, A: Arity, T: LayoutTree>(
+    tree: &'a mut T,
+    element_id: ElementId,
+    constraints: BoxConstraints,
+    children_accessor: A::Accessor<'a, ElementId>,
+) -> LayoutContext<'a, A, BoxProtocol, T>
+where
+    A::Accessor<'a, ElementId>: ChildrenAccess<'a, ElementId>,
+{
+    LayoutContext::for_box(tree, element_id, constraints, children_accessor)
+}
+
+/// Creates a paint context for box protocol operations (helper function).
+pub fn create_box_paint_context<'a, A: Arity, T: PaintTree>(
+    tree: &'a mut T,
     element_id: ElementId,
     offset: Offset,
     size: Size,
     canvas: &'a mut Canvas,
     children_accessor: A::Accessor<'a, ElementId>,
-) -> PaintContext<'a, A, BoxProtocol>
+) -> PaintContext<'a, A, BoxProtocol, T>
 where
     A::Accessor<'a, ElementId>: ChildrenAccess<'a, ElementId>,
 {
-    PaintContext::new(tree, element_id, offset, size, canvas, children_accessor)
+    PaintContext::for_box(tree, element_id, offset, size, canvas, children_accessor)
 }
 
-/// Creates a hit test context for box protocol operations.
-pub fn create_box_hit_test_context<'a, A: Arity>(
-    tree: &'a (dyn HitTestTree + Send + Sync),
+/// Creates a hit test context for box protocol operations (helper function).
+pub fn create_box_hit_test_context<'a, A: Arity, T: HitTestTree>(
+    tree: &'a T,
     element_id: ElementId,
     position: Offset,
     size: Size,
     children_accessor: A::Accessor<'a, ElementId>,
-) -> HitTestContext<'a, A, BoxProtocol>
+) -> HitTestContext<'a, A, BoxProtocol, T>
 where
     A::Accessor<'a, ElementId>: ChildrenAccess<'a, ElementId>,
 {
-    HitTestContext::new(tree, element_id, position, size, children_accessor)
+    HitTestContext::for_box(tree, element_id, position, size, children_accessor)
 }
 
-// ============================================================================
-// TESTS
-// ============================================================================
+/// Creates a layout context for sliver protocol operations (helper function).
+pub fn create_sliver_layout_context<'a, A: Arity, T: LayoutTree>(
+    tree: &'a mut T,
+    element_id: ElementId,
+    constraints: SliverConstraints,
+    children_accessor: A::Accessor<'a, ElementId>,
+) -> LayoutContext<'a, A, SliverProtocol, T>
+where
+    A::Accessor<'a, ElementId>: ChildrenAccess<'a, ElementId>,
+{
+    LayoutContext::for_sliver(tree, element_id, constraints, children_accessor)
+}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::core::arity::{Leaf, Single, Variable};
+/// Creates a paint context for sliver protocol operations (helper function).
+pub fn create_sliver_paint_context<'a, A: Arity, T: PaintTree>(
+    tree: &'a mut T,
+    element_id: ElementId,
+    offset: Offset,
+    geometry: SliverGeometry,
+    canvas: &'a mut Canvas,
+    children_accessor: A::Accessor<'a, ElementId>,
+) -> PaintContext<'a, A, SliverProtocol, T>
+where
+    A::Accessor<'a, ElementId>: ChildrenAccess<'a, ElementId>,
+{
+    PaintContext::for_sliver(
+        tree,
+        element_id,
+        offset,
+        geometry,
+        canvas,
+        children_accessor,
+    )
+}
 
-    // Mock implementations for testing
-    struct MockLayoutTree;
-    impl LayoutTree for MockLayoutTree {
-        fn perform_layout(
-            &mut self,
-            _id: ElementId,
-            constraints: BoxConstraints,
-        ) -> RenderResult<Size> {
-            Ok(constraints.biggest())
-        }
-        fn perform_sliver_layout(
-            &mut self,
-            _id: ElementId,
-            _constraints: SliverConstraints,
-        ) -> RenderResult<SliverGeometry> {
-            Ok(SliverGeometry::zero())
-        }
-        fn set_offset(&mut self, _id: ElementId, _offset: Offset) {}
-        fn get_offset(&self, _id: ElementId) -> Option<Offset> {
-            Some(Offset::ZERO)
-        }
-        fn mark_needs_layout(&mut self, _id: ElementId) {}
-        fn needs_layout(&self, _id: ElementId) -> bool {
-            false
-        }
-        fn render_object(&self, _id: ElementId) -> Option<&dyn std::any::Any> {
-            None
-        }
-        fn render_object_mut(&mut self, _id: ElementId) -> Option<&mut dyn std::any::Any> {
-            None
-        }
-    }
-
-    struct MockPaintTree;
-    impl PaintTree for MockPaintTree {
-        fn perform_paint(&mut self, _id: ElementId, _offset: Offset) -> RenderResult<Canvas> {
-            Ok(Canvas::new())
-        }
-        fn mark_needs_paint(&mut self, _id: ElementId) {}
-        fn needs_paint(&self, _id: ElementId) -> bool {
-            false
-        }
-        fn render_object(&self, _id: ElementId) -> Option<&dyn std::any::Any> {
-            None
-        }
-        fn render_object_mut(&mut self, _id: ElementId) -> Option<&mut dyn std::any::Any> {
-            None
-        }
-    }
-
-    struct MockHitTestTree;
-    impl HitTestTree for MockHitTestTree {
-        fn hit_test(&self, _id: ElementId, _position: Offset, _result: &mut HitTestResult) -> bool {
-            false
-        }
-        fn render_object(&self, _id: ElementId) -> Option<&dyn std::any::Any> {
-            None
-        }
-    }
-
-    #[test]
-    fn test_layout_context_creation() {
-        let mut tree = MockLayoutTree;
-        let constraints = BoxConstraints::tight(Size::new(100.0, 100.0));
-        let children: [ElementId; 0] = [];
-        let accessor = Leaf::from_slice(&children);
-
-        let ctx = LayoutContext::new(&mut tree, ElementId::new(1), constraints, accessor);
-
-        assert_eq!(ctx.element_id(), ElementId::new(1));
-        assert_eq!(ctx.child_count(), 0);
-        assert!(ctx.is_leaf());
-    }
-
-    #[test]
-    fn test_single_child_methods() {
-        let mut tree = MockLayoutTree;
-        let constraints = BoxConstraints::tight(Size::new(100.0, 100.0));
-        let children = [ElementId::new(42)];
-        let accessor = Single::from_slice(&children);
-
-        let ctx = LayoutContext::new(&mut tree, ElementId::new(1), constraints, accessor);
-
-        assert_eq!(ctx.single_child(), ElementId::new(42));
-        assert_eq!(ctx.child_count(), 1);
-        assert!(!ctx.is_leaf());
-    }
-
-    #[test]
-    fn test_children_predicates() {
-        let mut tree = MockLayoutTree;
-        let constraints = BoxConstraints::tight(Size::new(100.0, 100.0));
-        let children = [
-            ElementId::new(1),
-            ElementId::new(2),
-            ElementId::new(3),
-            ElementId::new(4),
-        ];
-        let accessor = Variable::from_slice(&children);
-
-        let ctx = LayoutContext::new(&mut tree, ElementId::new(1), constraints, accessor);
-
-        // Test HRTB predicates
-        let even_count = ctx.count_children_where(|id| id.get() % 2 == 0);
-        assert_eq!(even_count, 2);
-
-        let has_large = ctx.any_child_where(|id| id.get() > 3);
-        assert!(has_large);
-
-        let all_positive = ctx.all_children_where(|id| id.get() > 0);
-        assert!(all_positive);
-
-        let first_even = ctx.find_child(|id| id.get() % 2 == 0);
-        assert_eq!(first_even, Some(ElementId::new(2)));
-    }
-
-    #[test]
-    fn test_paint_context_bounds() {
-        let mut tree = MockPaintTree;
-        let mut canvas = Canvas::new();
-        let children: [ElementId; 0] = [];
-        let accessor = Leaf::from_slice(&children);
-
-        let ctx = PaintContext::new(
-            &mut tree,
-            ElementId::new(1),
-            Offset::new(10.0, 20.0),
-            Size::new(100.0, 50.0),
-            &mut canvas,
-            accessor,
-        );
-
-        assert_eq!(ctx.bounds(), Rect::from_xywh(10.0, 20.0, 100.0, 50.0));
-        assert_eq!(ctx.local_bounds(), Rect::from_xywh(0.0, 0.0, 100.0, 50.0));
-    }
-
-    #[test]
-    fn test_hit_test_context_contains() {
-        let tree = MockHitTestTree;
-        let children: [ElementId; 0] = [];
-        let accessor = Leaf::from_slice(&children);
-
-        let ctx = HitTestContext::new(
-            &tree,
-            ElementId::new(1),
-            Offset::new(25.0, 15.0),
-            Size::new(100.0, 50.0),
-            accessor,
-        );
-
-        assert!(ctx.contains_self());
-        assert!(ctx.contains_position(Offset::new(50.0, 25.0)));
-        assert!(!ctx.contains_position(Offset::new(150.0, 25.0)));
-        assert!(!ctx.contains_position(Offset::new(-10.0, 25.0)));
-    }
+/// Creates a hit test context for sliver protocol operations (helper function).
+pub fn create_sliver_hit_test_context<'a, A: Arity, T: HitTestTree>(
+    tree: &'a T,
+    element_id: ElementId,
+    position: Offset,
+    geometry: SliverGeometry,
+    children_accessor: A::Accessor<'a, ElementId>,
+) -> HitTestContext<'a, A, SliverProtocol, T>
+where
+    A::Accessor<'a, ElementId>: ChildrenAccess<'a, ElementId>,
+{
+    HitTestContext::for_sliver(tree, element_id, position, geometry, children_accessor)
 }
