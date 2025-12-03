@@ -27,10 +27,8 @@
 //! pub type RenderClipRect = RenderClip<RectShape>;
 //! ```
 
+use crate::core::{BoxHitTestCtx, BoxLayoutCtx, BoxPaintCtx, RenderBox, Single};
 use flui_interaction::HitTestResult;
-use crate::core::{
-    RenderBox, Single, {BoxLayoutCtx, HitTestContext},
-};
 use flui_painting::Canvas;
 use flui_types::{painting::Clip, Offset, Size};
 
@@ -138,21 +136,20 @@ impl<S: ClipShape> RenderClip<S> {
 }
 
 impl<S: ClipShape + 'static> RenderBox<Single> for RenderClip<S> {
-    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Single>) -> Size {
-        let child_id = ctx.children.single();
+    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Single>) -> Size {
         // Layout child with same constraints (pass-through)
-        let size = ctx.layout_child(child_id, ctx.constraints);
+        let size = ctx
+            .layout_single_child()
+            .unwrap_or_else(|_| ctx.constraints.smallest());
         // Cache size for paint
         self.size = size;
         size
     }
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Single>) {
-        let child_id = ctx.children.single();
-
         // If no clipping needed, just paint child directly
         if !self.clip_behavior.clips() {
-            ctx.paint_child(child_id, ctx.offset);
+            let _ = ctx.paint_single_child(ctx.offset);
             return;
         }
 
@@ -160,26 +157,22 @@ impl<S: ClipShape + 'static> RenderBox<Single> for RenderClip<S> {
         let offset = ctx.offset;
 
         // Save canvas state before clipping
-        ctx.canvas().save();
+        ctx.canvas_mut().save();
 
         // Move to offset
-        ctx.canvas().translate(offset.dx, offset.dy);
+        ctx.canvas_mut().translate(offset.dx, offset.dy);
 
         // Let the shape apply its specific clipping
-        self.shape.apply_clip(ctx.canvas(), self.size);
+        self.shape.apply_clip(ctx.canvas_mut(), self.size);
 
         // Paint child at origin (already translated)
-        ctx.paint_child(child_id, Offset::ZERO);
+        let _ = ctx.paint_single_child(Offset::ZERO);
 
         // Restore canvas state
-        ctx.canvas().restore();
+        ctx.canvas_mut().restore();
     }
 
-    fn hit_test(
-        &self,
-        ctx: HitTestContext<'_, Single, BoxProtocol>,
-        result: &mut HitTestResult,
-    ) -> bool {
+    fn hit_test(&self, ctx: &BoxHitTestCtx<'_, Single>, result: &mut HitTestResult) -> bool {
         // For clipping, we need to check if the hit position is inside the clip region.
         // If it's outside, the hit should fail even if it would hit the child.
         //
@@ -188,7 +181,7 @@ impl<S: ClipShape + 'static> RenderBox<Single> for RenderClip<S> {
 
         // If no clipping is applied, use default behavior
         if !self.clip_behavior.clips() {
-            return self.hit_test_children(&ctx, result);
+            return ctx.hit_test_children(result);
         }
 
         // Check if position is inside the clip shape
@@ -198,7 +191,7 @@ impl<S: ClipShape + 'static> RenderBox<Single> for RenderClip<S> {
         }
 
         // Position is inside clip region - test children normally
-        self.hit_test_children(&ctx, result)
+        ctx.hit_test_children(result)
     }
 }
 

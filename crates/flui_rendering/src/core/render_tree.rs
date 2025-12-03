@@ -194,6 +194,33 @@ pub trait LayoutTree {
     /// Mutable reference to the render object as `dyn Any`, or `None` if the
     /// element doesn't exist or is not a render element.
     fn render_object_mut(&mut self, id: ElementId) -> Option<&mut dyn Any>;
+
+    /// Sets up ParentData for a child element.
+    ///
+    /// Called when a child is added to a parent. The parent's render object
+    /// creates appropriate ParentData and attaches it to the child.
+    ///
+    /// # Flutter Protocol
+    ///
+    /// ```dart
+    /// // Flutter equivalent (called by framework):
+    /// void adoptChild(RenderObject child) {
+    ///   setupParentData(child);
+    ///   // ... rest of adoption
+    /// }
+    /// ```
+    ///
+    /// # Arguments
+    ///
+    /// * `parent_id` - The parent element
+    /// * `child_id` - The child element to set up
+    ///
+    /// # Notes
+    ///
+    /// - Called automatically when adding children to a parent
+    /// - Parent's `create_parent_data()` determines the ParentData type
+    /// - Child's existing ParentData (if any) is replaced
+    fn setup_child_parent_data(&mut self, parent_id: ElementId, child_id: ElementId);
 }
 
 // ============================================================================
@@ -439,6 +466,10 @@ impl LayoutTree for Box<dyn LayoutTree + Send + Sync> {
 
     fn render_object_mut(&mut self, id: ElementId) -> Option<&mut dyn Any> {
         (**self).render_object_mut(id)
+    }
+
+    fn setup_child_parent_data(&mut self, parent_id: ElementId, child_id: ElementId) {
+        (**self).setup_child_parent_data(parent_id, child_id)
     }
 }
 
@@ -854,6 +885,10 @@ mod tests {
         fn render_object_mut(&mut self, _id: ElementId) -> Option<&mut dyn Any> {
             None
         }
+
+        fn setup_child_parent_data(&mut self, _parent_id: ElementId, _child_id: ElementId) {
+            // Mock: no-op
+        }
     }
 
     impl PaintTree for MockRenderTree {
@@ -890,6 +925,14 @@ mod tests {
         }
 
         fn render_object(&self, _id: ElementId) -> Option<&dyn Any> {
+            None
+        }
+
+        fn children(&self, _id: ElementId) -> Box<dyn Iterator<Item = ElementId> + '_> {
+            Box::new(std::iter::empty())
+        }
+
+        fn get_offset(&self, _id: ElementId) -> Option<Offset> {
             None
         }
     }

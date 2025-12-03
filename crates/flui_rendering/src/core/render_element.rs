@@ -39,13 +39,19 @@
 //!
 //! # FLUI Architecture
 //!
-//! FLUI doesn't use separate Widget layer (too much overhead for Rust).
-//! Instead, RenderElement directly owns RenderObject:
+//! FLUI uses a three-tree architecture similar to Flutter:
 //!
 //! ```text
 //! ┌─────────────────────────────────┐
-//! │     Element Tree (flui-element) │  ← Manages lifecycle, rebuild
+//! │   View Tree (flui-view)         │  ← Immutable config (like Flutter Widget)
+//! │  - StatelessView, StatefulView  │
+//! │  - Declarative UI description   │
+//! └─────────────────────────────────┘
+//!              ↓ builds
+//! ┌─────────────────────────────────┐
+//! │   Element Tree (flui-element)   │  ← Mutable state, manages lifecycle
 //! │  - Component, Render, Provider  │
+//! │  - Reconciliation / diffing     │
 //! └─────────────────────────────────┘
 //!              ↓ owns
 //! ┌─────────────────────────────────┐
@@ -574,16 +580,49 @@ impl RenderElement {
     /// flex_data.set_flex(2);
     /// ```
     pub fn parent_data_as<T: ParentData>(&self) -> Option<&T> {
-        self.parent_data
+        let result = self
+            .parent_data
             .as_ref()
-            .and_then(|pd| pd.as_any().downcast_ref::<T>())
+            .and_then(|pd| pd.as_any().downcast_ref::<T>());
+
+        // Debug assertion: if parent_data exists but downcast failed,
+        // it's likely a logic error (wrong parent type expected)
+        #[cfg(debug_assertions)]
+        if self.parent_data.is_some() && result.is_none() {
+            tracing::warn!(
+                element_id = ?self.id,
+                expected_type = std::any::type_name::<T>(),
+                "ParentData downcast failed: parent_data exists but is not the expected type. \
+                 This usually indicates a layout logic error - check that the parent \
+                 creates the correct ParentData type in create_parent_data()."
+            );
+        }
+
+        result
     }
 
     /// Downcasts parent data to specific type (mutable).
     pub fn parent_data_as_mut<T: ParentData>(&mut self) -> Option<&mut T> {
-        self.parent_data
+        let has_parent_data = self.parent_data.is_some();
+        let result = self
+            .parent_data
             .as_mut()
-            .and_then(|pd| pd.as_any_mut().downcast_mut::<T>())
+            .and_then(|pd| pd.as_any_mut().downcast_mut::<T>());
+
+        // Debug assertion: if parent_data exists but downcast failed,
+        // it's likely a logic error (wrong parent type expected)
+        #[cfg(debug_assertions)]
+        if has_parent_data && result.is_none() {
+            tracing::warn!(
+                element_id = ?self.id,
+                expected_type = std::any::type_name::<T>(),
+                "ParentData downcast failed: parent_data exists but is not the expected type. \
+                 This usually indicates a layout logic error - check that the parent \
+                 creates the correct ParentData type in create_parent_data()."
+            );
+        }
+
+        result
     }
 }
 
@@ -761,7 +800,9 @@ impl RenderElement {
     /// Returns last box constraints.
     #[inline]
     pub fn constraints_box(&self) -> Option<BoxConstraints> {
-        self.state.as_box_state().and_then(|s| s.constraints().copied())
+        self.state
+            .as_box_state()
+            .and_then(|s| s.constraints().copied())
     }
 
     /// Sets box constraints (called during layout).
@@ -775,7 +816,9 @@ impl RenderElement {
     /// Returns last sliver constraints.
     #[inline]
     pub fn constraints_sliver(&self) -> Option<SliverConstraints> {
-        self.state.as_sliver_state().and_then(|s| s.constraints().copied())
+        self.state
+            .as_sliver_state()
+            .and_then(|s| s.constraints().copied())
     }
 
     /// Sets sliver constraints (called during layout).
@@ -987,6 +1030,7 @@ impl RenderElement {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::any::Any;
 
     #[derive(Debug)]
     struct TestRenderObject {

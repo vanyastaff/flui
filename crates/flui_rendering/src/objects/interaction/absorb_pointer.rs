@@ -1,11 +1,8 @@
 //! RenderAbsorbPointer - prevents pointer events from reaching children
 
-use flui_interaction::HitTestResult;
-use flui_interaction::HitTestEntry;
-use crate::core::{
-    RenderBox, Single, {BoxLayoutCtx, HitTestContext},
-};
-use flui_types::Size;
+use crate::core::{BoxHitTestCtx, BoxLayoutCtx, BoxPaintCtx, RenderBox, Single};
+use flui_interaction::{HitTestEntry, HitTestResult};
+use flui_types::{Offset, Rect, Size};
 
 /// RenderObject that prevents pointer events from reaching its child
 ///
@@ -53,34 +50,28 @@ impl Default for RenderAbsorbPointer {
 }
 
 impl RenderBox<Single> for RenderAbsorbPointer {
-    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Single>) -> Size {
-        let child_id = ctx.children.single();
+    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Single>) -> Size {
         // Layout child with same constraints
-        ctx.layout_child(child_id, ctx.constraints)
+        ctx.layout_single_child()
+            .unwrap_or_else(|_| ctx.constraints.smallest())
     }
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Single>) {
-        let child_id = ctx.children.single();
         // Paint child normally - absorbing only affects hit testing
-        ctx.paint_child(child_id, ctx.offset);
+        let _ = ctx.paint_single_child(Offset::ZERO);
     }
 
-    fn hit_test(
-        &self,
-        ctx: HitTestContext<'_, Single, BoxProtocol>,
-        result: &mut HitTestResult,
-    ) -> bool {
+    fn hit_test(&self, ctx: &BoxHitTestCtx<'_, Single>, result: &mut HitTestResult) -> bool {
         if self.absorbing {
             // Absorb pointer events - add self to result but DON'T test children
             // This prevents events from reaching the child
-            result.add(
-                ctx.element_id,
-                HitTestEntry::new(ctx.position, ctx.size()),
-            );
+            let bounds = Rect::from_min_size(Offset::ZERO, ctx.size());
+            let entry = HitTestEntry::new(ctx.element_id(), ctx.position, bounds);
+            result.add(entry);
             true // Event absorbed!
         } else {
             // Not absorbing - use default behavior (test children)
-            self.hit_test_children(&ctx, result)
+            ctx.hit_test_children(result)
         }
     }
 }

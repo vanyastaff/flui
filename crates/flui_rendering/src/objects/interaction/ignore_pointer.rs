@@ -1,10 +1,8 @@
 //! RenderIgnorePointer - makes widget ignore pointer events
 
+use crate::core::{BoxHitTestCtx, BoxLayoutCtx, BoxPaintCtx, RenderBox, Single};
 use flui_interaction::HitTestResult;
-use crate::core::{
-    RenderBox, Single, {BoxLayoutCtx, HitTestContext},
-};
-use flui_types::Size;
+use flui_types::{Offset, Size};
 
 /// RenderObject that makes its subtree ignore pointer events
 ///
@@ -51,30 +49,25 @@ impl Default for RenderIgnorePointer {
 }
 
 impl RenderBox<Single> for RenderIgnorePointer {
-    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Single>) -> Size {
-        let child_id = ctx.children.single();
+    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Single>) -> Size {
         // Layout child with same constraints
-        ctx.layout_child(child_id, ctx.constraints)
+        ctx.layout_single_child()
+            .unwrap_or_else(|_| ctx.constraints.smallest())
     }
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Single>) {
-        let child_id = ctx.children.single();
         // Paint child normally - ignoring only affects hit testing
-        ctx.paint_child(child_id, ctx.offset);
+        let _ = ctx.paint_single_child(Offset::ZERO);
     }
 
-    fn hit_test(
-        &self,
-        ctx: HitTestContext<'_, Single, BoxProtocol>,
-        result: &mut HitTestResult,
-    ) -> bool {
+    fn hit_test(&self, ctx: &BoxHitTestCtx<'_, Single>, result: &mut HitTestResult) -> bool {
         if self.ignoring {
             // Ignore pointer events - return false to let events pass through
             // This makes this widget and its children transparent to pointer events
             false // Events pass through to widgets behind
         } else {
             // Not ignoring - use default behavior (test children)
-            self.hit_test_children(&ctx, result)
+            ctx.hit_test_children(result)
         }
     }
 }

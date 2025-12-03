@@ -423,6 +423,55 @@ pub trait RenderObject: Send + Sync + fmt::Debug + 'static {
     fn handles_pointer_events(&self) -> bool {
         false
     }
+
+    // ============================================================================
+    // PARENT DATA (Flutter setupParentData)
+    // ============================================================================
+
+    /// Creates default ParentData for a child of this render object.
+    ///
+    /// Called by the framework when a child is added to this parent. The parent
+    /// returns the appropriate ParentData type that the child should use.
+    ///
+    /// # Flutter Protocol
+    ///
+    /// ```dart
+    /// // Flutter equivalent:
+    /// @override
+    /// void setupParentData(RenderObject child) {
+    ///   if (child.parentData is! BoxParentData) {
+    ///     child.parentData = BoxParentData();
+    ///   }
+    /// }
+    /// ```
+    ///
+    /// # When to Override
+    ///
+    /// Override when your render object needs specific ParentData:
+    /// - `RenderFlex` → `FlexParentData` (flex factor, fit)
+    /// - `RenderStack` → `StackParentData` (positioned rect)
+    /// - `RenderViewport` → `SliverPhysicalParentData` (paint offset)
+    ///
+    /// # Default Implementation
+    ///
+    /// Returns `BoxParentData` which is suitable for most box layouts.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// // Custom ParentData for Flex layout
+    /// fn create_parent_data(&self) -> Box<dyn ParentData> {
+    ///     Box::new(FlexParentData::new())
+    /// }
+    ///
+    /// // Custom ParentData for Stack layout
+    /// fn create_parent_data(&self) -> Box<dyn ParentData> {
+    ///     Box::new(StackParentData::new())
+    /// }
+    /// ```
+    fn create_parent_data(&self) -> Box<dyn crate::core::ParentData> {
+        Box::new(crate::core::BoxParentData::default())
+    }
 }
 
 // ============================================================================

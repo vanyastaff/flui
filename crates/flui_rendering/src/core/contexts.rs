@@ -864,6 +864,56 @@ where
     ) -> bool {
         self.tree.hit_test(child_id, position, result)
     }
+
+    /// Creates a new context with a transformed position.
+    ///
+    /// This is used by render objects that apply transformations (like
+    /// `RenderTransform`) to convert the hit test position into child
+    /// coordinate space.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // In a transform render object's hit_test:
+    /// let inverse_transform = self.transform.inverse()?;
+    /// let transformed_pos = inverse_transform.transform_point(ctx.position);
+    /// let child_ctx = ctx.with_position(transformed_pos);
+    /// self.hit_test_child(&child_ctx, result)
+    /// ```
+    pub fn with_position(&self, new_position: Offset) -> Self
+    where
+        A::Accessor<'a, ElementId>: Clone,
+    {
+        Self {
+            tree: self.tree,
+            element_id: self.element_id,
+            position: new_position,
+            geometry: self.geometry.clone(),
+            children_accessor: self.children_accessor.clone(),
+            _phantom: PhantomData,
+        }
+    }
+
+    /// Hit tests all children in reverse z-order (front to back).
+    ///
+    /// This is the standard pattern for hit testing children - test from
+    /// front to back and return on first hit.
+    ///
+    /// # Returns
+    ///
+    /// `true` if any child was hit, `false` otherwise.
+    pub fn hit_test_children(&self, result: &mut HitTestResult) -> bool {
+        for child_id in self.children_reverse() {
+            // Get child offset from tree
+            let child_offset = self.tree.get_offset(child_id).unwrap_or(Offset::ZERO);
+            let child_position = self.position - child_offset;
+
+            if self.tree.hit_test(child_id, child_position, result) {
+                return true;
+            }
+        }
+        false
+    }
 }
 
 // ============================================================================
