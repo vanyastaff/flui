@@ -349,10 +349,12 @@ pub trait RenderSliver<A: Arity>: RenderObject + fmt::Debug + Send + Sync {
     /// # Returns
     ///
     /// Cached extent (for preloading).
-    fn calculate_cache_offset(&self, constraints: &SliverConstraints, from: f32, to: f32) -> f32 {
-        let cache_origin = constraints.cache_origin.unwrap_or(0.0);
-        let remaining_cache = constraints.remaining_cache_extent.unwrap_or(0.0);
-        let cache_extent = cache_origin + remaining_cache;
+    fn calculate_cache_offset(&self, _constraints: &SliverConstraints, from: f32, to: f32) -> f32 {
+        // Note: SliverConstraints doesn't have cache_origin and remaining_cache_extent.
+        // This is a simplified implementation that returns the region extent.
+        // In a full implementation, these would come from viewport configuration.
+        let cache_origin: f32 = 0.0;
+        let cache_extent: f32 = f32::INFINITY; // Full caching by default
 
         let target_last = to;
         let target_first = from;

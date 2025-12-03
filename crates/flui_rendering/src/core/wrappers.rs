@@ -37,8 +37,7 @@ use std::fmt;
 
 use flui_foundation::ElementId;
 use flui_interaction::HitTestResult;
-use flui_painting::Canvas;
-use flui_types::{Offset, Rect, Size, SliverGeometry};
+use flui_types::{Rect, Size, SliverGeometry};
 
 use super::arity::Arity;
 use super::contexts::{
@@ -48,7 +47,7 @@ use super::contexts::{
 use super::render_box::RenderBox;
 use super::render_object::RenderObject;
 use super::render_sliver::RenderSliver;
-use super::{BoxConstraints, HitTestTree, LayoutTree, PaintTree};
+use super::{BoxConstraints, LayoutTree};
 use crate::RenderResult;
 
 // ============================================================================
@@ -201,7 +200,7 @@ impl<A: Arity> RenderBox<A> for BoxRenderWrapper<A> {
     }
 
     fn baseline_offset(&self) -> Option<f32> {
-        self.inner.baseline_offset()
+        RenderBox::baseline_offset(self.inner.as_ref())
     }
 
     fn local_bounds(&self) -> Rect {

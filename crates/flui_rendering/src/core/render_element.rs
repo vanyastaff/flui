@@ -61,7 +61,6 @@
 //! └─────────────────────────────────┘
 //! ```
 
-use std::any::Any;
 use std::fmt;
 
 use flui_foundation::ElementId;
@@ -70,11 +69,11 @@ use flui_types::{Offset, Size};
 
 use super::parent_data::ParentData;
 use super::protocol::{BoxProtocol, Protocol, ProtocolId, SliverProtocol};
-use super::render_flags::{AtomicRenderFlags, RenderFlags};
+use super::render_flags::AtomicRenderFlags;
 use super::render_lifecycle::RenderLifecycle;
 use super::render_object::RenderObject;
 use super::render_state::RenderState;
-use super::{BoxConstraints, SliverConstraints, SliverGeometry};
+use super::{BoxConstraints, SliverConstraints};
 
 // ============================================================================
 // PROTOCOL STATE (Type-Erased RenderState)
@@ -118,7 +117,7 @@ trait ProtocolState: fmt::Debug + Send + Sync {
 // Blanket impl for RenderState<P>
 impl<P: Protocol> ProtocolState for RenderState<P> {
     fn flags(&self) -> &AtomicRenderFlags {
-        &self.flags
+        RenderState::flags(self)
     }
 
     fn offset(&self) -> Offset {
@@ -274,10 +273,9 @@ impl fmt::Debug for RenderElement {
             .field("depth", &self.depth)
             .field("protocol", &self.protocol)
             .field("arity", &self.arity)
-            .field("size", &self.size)
-            .field("offset", &self.offset)
+            .field("offset", &self.state.offset())
             .field("lifecycle", &self.lifecycle)
-            .field("flags", &self.flags.load())
+            .field("flags", &self.state.flags().load())
             .field("debug_name", &self.debug_name())
             .finish()
     }
@@ -404,49 +402,20 @@ impl RenderElement {
         self.parent = parent;
 
         // Calculate depth
-        self.depth = if let Some(parent_id) = parent {
-            // TODO: Get parent depth from tree
-            // parent.depth + 1
-            0 // Placeholder
+        // Note: Depth calculation requires tree access, which is handled by the caller
+        // (ElementTree or PipelineOwner) that has access to parent element's depth.
+        // Initial depth is 0, should be updated by caller after mount via set_depth().
+        self.depth = if parent.is_some() {
+            // Non-root element - depth should be set by caller
+            0
         } else {
-            0 // Root
+            0 // Root element
         };
-
-        // Attach render object
-        self.attach_render_object();
 
         // Transition to Attached
         self.lifecycle.attach();
-        self.flags.mark_needs_layout();
-        self.flags.mark_needs_paint();
-    }
-
-    /// Attaches render object to render tree.
-    ///
-    /// Flutter equivalent: `attachRenderObject(Object? newSlot)`
-    ///
-    /// This inserts the render object into parent's child list.
-    fn attach_render_object(&mut self) {
-        // Call RenderObject.attach()
-        if let Some(id) = self.id {
-            self.render_object.attach(id);
-        }
-
-        // TODO: Insert into parent's render object child list
-        // if let Some(parent_id) = self.parent {
-        //     let parent_render = tree.get_render_element(parent_id);
-        //     parent_render.insert_child_render_object(self.render_object);
-        // }
-    }
-
-    /// Detaches render object from render tree.
-    ///
-    /// Flutter equivalent: `detachRenderObject()`
-    fn detach_render_object(&mut self) {
-        // Call RenderObject.detach()
-        self.render_object.detach();
-
-        // TODO: Remove from parent's render object child list
+        self.flags().mark_needs_layout();
+        self.flags().mark_needs_paint();
     }
 
     /// Unmounts element from tree.
@@ -473,9 +442,6 @@ impl RenderElement {
             "Cannot unmount: not attached (state: {:?})",
             self.lifecycle
         );
-
-        // Detach render object
-        self.detach_render_object();
 
         // Clear state
         self.id = None;
@@ -761,52 +727,63 @@ impl RenderElement {
 
 impl RenderElement {
     /// Returns computed size (Box protocol).
+    ///
+    /// Returns `Size::ZERO` if not a Box protocol or not yet laid out.
     #[inline]
     pub fn size(&self) -> Size {
-        self.size
+        self.state
+            .as_box_state()
+            .map(|s| s.size())
+            .unwrap_or(Size::ZERO)
     }
 
-    /// Sets size (called after layout).
+    /// Sets size (called after layout, Box protocol only).
     #[inline]
     pub fn set_size(&mut self, size: Size) {
-        self.size = size;
-        self.flags.mark_has_geometry();
+        if let Some(box_state) = self.state.as_box_state() {
+            box_state.set_size(size);
+            self.state.flags().mark_has_geometry();
+        }
     }
 
     /// Returns offset relative to parent.
     #[inline]
     pub fn offset(&self) -> Offset {
-        self.offset
+        self.state.offset()
     }
 
     /// Sets offset (called by parent during layout).
     #[inline]
     pub fn set_offset(&mut self, offset: Offset) {
-        self.offset = offset;
+        self.state.set_offset(offset);
     }
 
     /// Returns last box constraints.
     #[inline]
     pub fn constraints_box(&self) -> Option<BoxConstraints> {
-        self.constraints_box
+        self.state.as_box_state().and_then(|s| s.constraints().copied())
     }
 
     /// Sets box constraints (called during layout).
     #[inline]
     pub fn set_constraints_box(&mut self, constraints: BoxConstraints) {
-        self.constraints_box = Some(constraints);
+        if let Some(box_state) = self.state.as_box_state() {
+            box_state.set_constraints(constraints);
+        }
     }
 
     /// Returns last sliver constraints.
     #[inline]
     pub fn constraints_sliver(&self) -> Option<SliverConstraints> {
-        self.constraints_sliver
+        self.state.as_sliver_state().and_then(|s| s.constraints().copied())
     }
 
     /// Sets sliver constraints (called during layout).
     #[inline]
     pub fn set_constraints_sliver(&mut self, constraints: SliverConstraints) {
-        self.constraints_sliver = Some(constraints);
+        if let Some(sliver_state) = self.state.as_sliver_state() {
+            sliver_state.set_constraints(constraints);
+        }
     }
 }
 
@@ -815,6 +792,12 @@ impl RenderElement {
 // ============================================================================
 
 impl RenderElement {
+    /// Returns the render flags.
+    #[inline]
+    fn flags(&self) -> &AtomicRenderFlags {
+        self.state.flags()
+    }
+
     /// Marks element as needing layout.
     ///
     /// Flutter equivalent: `markNeedsLayout()`
@@ -835,20 +818,18 @@ impl RenderElement {
     /// }
     /// ```
     pub fn mark_needs_layout(&mut self) {
-        if self.flags.needs_layout() {
+        if self.flags().needs_layout() {
             return; // Already marked
         }
 
-        self.flags.mark_needs_layout();
-        self.flags.mark_needs_paint(); // Layout changes require repaint
+        self.flags().mark_needs_layout();
+        self.flags().mark_needs_paint(); // Layout changes require repaint
         self.lifecycle.mark_needs_layout();
 
-        // TODO: Check relayout boundary
-        // if self.is_relayout_boundary() {
-        //     pipeline.add_to_layout_queue(self.id);
-        // } else {
-        //     parent.mark_needs_layout();
-        // }
+        // Note: Boundary propagation is handled by RenderState::mark_needs_layout()
+        // which has access to the tree for parent traversal. This method only
+        // marks local flags. The full Flutter protocol with propagation is
+        // implemented in RenderState which accepts a RenderDirtyPropagation tree.
     }
 
     /// Marks element as needing paint (layout still valid).
@@ -871,50 +852,48 @@ impl RenderElement {
     /// }
     /// ```
     pub fn mark_needs_paint(&mut self) {
-        if self.flags.needs_paint() {
+        if self.flags().needs_paint() {
             return;
         }
 
-        self.flags.mark_needs_paint();
+        self.flags().mark_needs_paint();
 
         if self.lifecycle.is_laid_out() {
             self.lifecycle.mark_needs_paint();
         }
 
-        // TODO: Check repaint boundary
-        // if self.is_repaint_boundary() {
-        //     pipeline.add_to_paint_queue(self.id);
-        // } else {
-        //     parent.mark_needs_paint();
-        // }
+        // Note: Boundary propagation is handled by RenderState::mark_needs_paint()
+        // which has access to the tree for parent traversal. This method only
+        // marks local flags. The full Flutter protocol with propagation is
+        // implemented in RenderState which accepts a RenderDirtyPropagation tree.
     }
 
     /// Marks compositing bits update needed.
     pub fn mark_needs_compositing(&mut self) {
-        self.flags.mark_needs_compositing();
+        self.flags().mark_needs_compositing();
     }
 
     /// Checks if needs layout.
     #[inline]
     pub fn needs_layout(&self) -> bool {
-        self.flags.needs_layout()
+        self.flags().needs_layout()
     }
 
     /// Checks if needs paint.
     #[inline]
     pub fn needs_paint(&self) -> bool {
-        self.flags.needs_paint()
+        self.flags().needs_paint()
     }
 
     /// Checks if needs compositing.
     #[inline]
     pub fn needs_compositing(&self) -> bool {
-        self.flags.needs_compositing()
+        self.flags().needs_compositing()
     }
 
     /// Clears needs layout flag (after layout completes).
     pub fn clear_needs_layout(&mut self) {
-        self.flags.clear_needs_layout();
+        self.flags().clear_needs_layout();
 
         if self.lifecycle.is_attached() && !self.lifecycle.is_laid_out() {
             self.lifecycle.mark_laid_out();
@@ -923,7 +902,7 @@ impl RenderElement {
 
     /// Clears needs paint flag (after paint completes).
     pub fn clear_needs_paint(&mut self) {
-        self.flags.clear_needs_paint();
+        self.flags().clear_needs_paint();
 
         if self.lifecycle == RenderLifecycle::LaidOut {
             self.lifecycle.mark_painted();
@@ -969,7 +948,7 @@ impl RenderElement {
     /// Checks if clean (no work needed).
     #[inline]
     pub fn is_clean(&self) -> bool {
-        self.lifecycle.is_clean() && self.flags.is_clean()
+        self.lifecycle.is_clean() && self.flags().is_clean()
     }
 
     /// Checks if dirty (needs work).

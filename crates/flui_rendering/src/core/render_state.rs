@@ -127,9 +127,8 @@ use std::marker::PhantomData;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use flui_foundation::ElementId;
-use flui_tree::DirtyTracking;
 use flui_types::Offset;
-use once_cell::sync::OnceCell; // TODO: Use this maybe or chenge this  to do better???
+use once_cell::sync::OnceCell;
 
 use super::protocol::{BoxProtocol, Protocol, SliverProtocol};
 use super::render_flags::{AtomicRenderFlags, RenderFlags};
@@ -200,10 +199,11 @@ impl AtomicOffset {
 // TREE OPERATIONS TRAIT
 // ============================================================================
 
-/// Minimal trait for tree operations needed by dirty tracking.
+/// Minimal trait for tree operations needed by Flutter-style dirty propagation.
 ///
-/// This allows RenderState to interact with the tree without depending
-/// on the full tree implementation. Any tree type can implement this.
+/// This trait provides the tree operations needed for boundary-aware dirty
+/// propagation following Flutter's exact `markNeedsLayout()` and `markNeedsPaint()`
+/// semantics.
 ///
 /// # Why This Trait?
 ///
@@ -211,7 +211,14 @@ impl AtomicOffset {
 /// - Allows different tree implementations (HashMap, Arena, etc.)
 /// - Testable with mock implementations
 /// - Follows dependency inversion principle
-pub trait DirtyTrackingTree {
+///
+/// # Note on Naming
+///
+/// This trait is intentionally named differently from `flui_tree::DirtyTracking`
+/// because they serve different purposes:
+/// - `flui_tree::DirtyTracking` - Generic per-element flag operations
+/// - `RenderDirtyPropagation` - Flutter-style boundary-aware propagation
+pub trait RenderDirtyPropagation {
     /// Gets the parent element ID, if any.
     fn parent(&self, id: ElementId) -> Option<ElementId>;
 
@@ -366,6 +373,30 @@ impl<P: Protocol> Default for RenderState<P> {
     }
 }
 
+impl<P: Protocol> Clone for RenderState<P>
+where
+    P::Geometry: Clone,
+    P::Constraints: Clone,
+{
+    fn clone(&self) -> Self {
+        Self {
+            flags: AtomicRenderFlags::new(self.flags.load()),
+            geometry: self.geometry.get().cloned().map_or_else(OnceCell::new, |g| {
+                let cell = OnceCell::new();
+                let _ = cell.set(g);
+                cell
+            }),
+            constraints: self.constraints.get().cloned().map_or_else(OnceCell::new, |c| {
+                let cell = OnceCell::new();
+                let _ = cell.set(c);
+                cell
+            }),
+            offset: AtomicOffset::new(self.offset.load()),
+            _phantom: PhantomData,
+        }
+    }
+}
+
 // ============================================================================
 // FLUTTER-STYLE DIRTY TRACKING
 // ============================================================================
@@ -425,7 +456,7 @@ impl<P: Protocol> RenderState<P> {
     /// DO NOT call during:
     /// - Layout phase (will assert in debug builds)
     /// - Paint phase (will assert in debug builds)
-    pub fn mark_needs_layout(&self, element_id: ElementId, tree: &mut impl DirtyTrackingTree) {
+    pub fn mark_needs_layout(&self, element_id: ElementId, tree: &mut impl RenderDirtyPropagation) {
         // Flutter optimization: early return if already dirty
         if self.flags.needs_layout() {
             return;
@@ -441,10 +472,37 @@ impl<P: Protocol> RenderState<P> {
             tree.register_needs_layout(element_id);
         } else {
             // Not a boundary - propagate to parent
-            if let Some(parent_id) = tree.parent(element_id) {
+            // Note: We get parent_id first, then mark it dirty in a separate call
+            // to satisfy the borrow checker (can't borrow tree twice).
+            let parent_id = tree.parent(element_id);
+            if let Some(parent_id) = parent_id {
+                // Check if parent exists and mark it (the parent's mark_needs_layout
+                // will do its own recursive propagation)
                 if let Some(parent_state) = tree.get_render_state::<P>(parent_id) {
-                    // Recursive propagation up the tree
-                    parent_state.mark_needs_layout(parent_id, tree);
+                    parent_state.flags.mark_needs_layout();
+                    // Need to register or continue propagation for parent
+                    if parent_state.is_relayout_boundary() {
+                        tree.register_needs_layout(parent_id);
+                    } else {
+                        // Continue propagation iteratively instead of recursively
+                        // to avoid borrow checker issues
+                        let mut current = tree.parent(parent_id);
+                        while let Some(curr_id) = current {
+                            if let Some(state) = tree.get_render_state::<P>(curr_id) {
+                                if state.flags.needs_layout() {
+                                    break; // Already dirty, stop
+                                }
+                                state.flags.mark_needs_layout();
+                                if state.is_relayout_boundary() {
+                                    tree.register_needs_layout(curr_id);
+                                    break;
+                                }
+                            } else {
+                                break;
+                            }
+                            current = tree.parent(curr_id);
+                        }
+                    }
                 }
             }
         }
@@ -512,16 +570,31 @@ impl<P: Protocol> RenderState<P> {
     pub fn mark_parent_needs_layout(
         &self,
         element_id: ElementId,
-        tree: &mut impl DirtyTrackingTree,
+        tree: &mut impl RenderDirtyPropagation,
     ) {
         // Mark self dirty
         self.flags.mark_needs_layout();
 
         // ALWAYS propagate to parent (ignore relayout boundary)
-        if let Some(parent_id) = tree.parent(element_id) {
-            if let Some(parent_state) = tree.get_render_state::<P>(parent_id) {
-                // Propagate using normal markNeedsLayout (which respects parent's boundary)
-                parent_state.mark_needs_layout(parent_id, tree);
+        // Use iterative approach to avoid borrow checker issues
+        let parent_id = tree.parent(element_id);
+        if let Some(parent_id) = parent_id {
+            // Start propagation from parent using iterative approach
+            let mut current = Some(parent_id);
+            while let Some(curr_id) = current {
+                if let Some(state) = tree.get_render_state::<P>(curr_id) {
+                    if state.flags.needs_layout() {
+                        break; // Already dirty, stop
+                    }
+                    state.flags.mark_needs_layout();
+                    if state.is_relayout_boundary() {
+                        tree.register_needs_layout(curr_id);
+                        break;
+                    }
+                } else {
+                    break;
+                }
+                current = tree.parent(curr_id);
             }
         }
     }
@@ -583,7 +656,7 @@ impl<P: Protocol> RenderState<P> {
     /// DO NOT call when:
     /// - Layout changes (use `mark_needs_layout()` which marks paint too)
     /// - During paint phase itself
-    pub fn mark_needs_paint(&self, element_id: ElementId, tree: &mut impl DirtyTrackingTree) {
+    pub fn mark_needs_paint(&self, element_id: ElementId, tree: &mut impl RenderDirtyPropagation) {
         // Flutter optimization: early return if already dirty
         if self.flags.needs_paint() {
             return;
@@ -597,11 +670,25 @@ impl<P: Protocol> RenderState<P> {
             // We are a repaint boundary - stop propagation here
             tree.register_needs_paint(element_id);
         } else {
-            // Not a boundary - propagate to parent
-            if let Some(parent_id) = tree.parent(element_id) {
-                if let Some(parent_state) = tree.get_render_state::<P>(parent_id) {
-                    // Recursive propagation up the tree
-                    parent_state.mark_needs_paint(parent_id, tree);
+            // Not a boundary - propagate to parent using iterative approach
+            // to avoid borrow checker issues with recursive calls
+            let parent_id = tree.parent(element_id);
+            if let Some(parent_id) = parent_id {
+                let mut current = Some(parent_id);
+                while let Some(curr_id) = current {
+                    if let Some(state) = tree.get_render_state::<P>(curr_id) {
+                        if state.flags.needs_paint() {
+                            break; // Already dirty, stop
+                        }
+                        state.flags.mark_needs_paint();
+                        if state.is_repaint_boundary() {
+                            tree.register_needs_paint(curr_id);
+                            break;
+                        }
+                    } else {
+                        break;
+                    }
+                    current = tree.parent(curr_id);
                 }
             }
         }
@@ -621,6 +708,15 @@ impl<P: Protocol> RenderState<P> {
 // ============================================================================
 
 impl<P: Protocol> RenderState<P> {
+    /// Returns a reference to the atomic render flags.
+    ///
+    /// This provides direct access to the flags for callers that need
+    /// fine-grained control over flag operations.
+    #[inline]
+    pub fn flags(&self) -> &AtomicRenderFlags {
+        &self.flags
+    }
+
     /// Checks if layout is needed (lock-free, O(1)).
     ///
     /// This is called frequently in hot paths, so it's optimized for speed:
@@ -1034,13 +1130,17 @@ impl RenderState<SliverProtocol> {
     /// Returns layout extent, or 0.0 if geometry is not set.
     #[inline]
     pub fn layout_extent(&self) -> f32 {
-        self.geometry().map(|g| g.layout_extent).unwrap_or(0.0)
+        self.geometry()
+            .and_then(|g| g.layout_extent)
+            .unwrap_or(0.0)
     }
 
     /// Returns max paint extent, or 0.0 if geometry is not set.
     #[inline]
     pub fn max_paint_extent(&self) -> f32 {
-        self.geometry().map(|g| g.max_paint_extent).unwrap_or(0.0)
+        self.geometry()
+            .and_then(|g| g.max_paint_extent)
+            .unwrap_or(0.0)
     }
 }
 
@@ -1086,7 +1186,7 @@ mod tests {
         }
     }
 
-    impl DirtyTrackingTree for MockTree {
+    impl RenderDirtyPropagation for MockTree {
         fn parent(&self, id: ElementId) -> Option<ElementId> {
             self.parents.get(&id).copied()
         }

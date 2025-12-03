@@ -20,7 +20,7 @@ use std::fmt;
 use flui_foundation::{DiagnosticsProperty, ElementId};
 use flui_interaction::{HitTestEntry, HitTestResult};
 use flui_painting::Canvas;
-use flui_types::{Offset, Size};
+use flui_types::{Offset, Rect, Size};
 
 use crate::core::{BoxConstraints, HitTestTree, LayoutTree, PaintTree};
 use crate::RenderResult;
@@ -181,18 +181,14 @@ pub trait RenderObject: Send + Sync + fmt::Debug + 'static {
     /// Default paints all children at their stored offsets.
     fn paint(
         &self,
-        element_id: ElementId,
-        offset: Offset,
+        _element_id: ElementId,
+        _offset: Offset,
         _size: Size,
         _canvas: &mut Canvas,
-        tree: &dyn PaintTree,
+        _tree: &dyn PaintTree,
     ) {
-        // Default: paint all children
-        self.visit_children(&mut |child_id| {
-            if let Some(child_offset) = tree.get_offset(child_id) {
-                let _ = tree.perform_paint(child_id, offset + child_offset);
-            }
-        });
+        // Default: no-op. Override this method to paint content.
+        // Child painting is coordinated by the pipeline, not by individual render objects.
     }
 
     // ============================================================================
@@ -242,7 +238,8 @@ pub trait RenderObject: Send + Sync + fmt::Debug + 'static {
 
         // Add self if hit
         if any_hit || self.handles_pointer_events() {
-            result.add(HitTestEntry::new(element_id));
+            let bounds = Rect::from_min_size(Offset::ZERO, size);
+            result.add(HitTestEntry::new(element_id, position, bounds));
             return true;
         }
 

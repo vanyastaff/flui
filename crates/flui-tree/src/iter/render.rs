@@ -43,6 +43,7 @@
 use crate::arity::{Arity, SliceChildren, Variable};
 use crate::traits::RenderTreeAccess;
 use flui_foundation::ElementId;
+use smallvec::SmallVec;
 
 // ============================================================================
 // RENDER ANCESTORS ITERATOR
@@ -142,17 +143,22 @@ impl<T: RenderTreeAccess + ?Sized> std::iter::FusedIterator for RenderAncestors<
 ///
 /// Collecting all render objects that need layout/paint, skipping
 /// wrapper elements.
+///
+/// # Performance
+///
+/// Uses `SmallVec` with inline capacity to avoid heap allocation for
+/// typical tree structures (up to 16 elements on stack).
 #[derive(Debug)]
 pub struct RenderDescendants<'a, T: RenderTreeAccess + ?Sized> {
     tree: &'a T,
-    stack: Vec<ElementId>,
+    stack: SmallVec<[ElementId; 16]>,
 }
 
 impl<'a, T: RenderTreeAccess + ?Sized> RenderDescendants<'a, T> {
     /// Creates a new render descendants iterator.
     #[inline]
     pub fn new(tree: &'a T, root: ElementId) -> Self {
-        let mut stack = Vec::with_capacity(16);
+        let mut stack = SmallVec::new();
 
         if tree.contains(root) {
             stack.push(root);
@@ -162,9 +168,11 @@ impl<'a, T: RenderTreeAccess + ?Sized> RenderDescendants<'a, T> {
     }
 
     /// Creates with custom capacity hint.
+    ///
+    /// Note: SmallVec will use inline storage for up to 16 elements regardless.
     #[inline]
     pub fn with_capacity(tree: &'a T, root: ElementId, capacity: usize) -> Self {
-        let mut stack = Vec::with_capacity(capacity);
+        let mut stack = SmallVec::with_capacity(capacity);
 
         if tree.contains(root) {
             stack.push(root);
@@ -186,7 +194,8 @@ impl<T: RenderTreeAccess + ?Sized> Iterator for RenderDescendants<'_, T> {
             }
 
             // Always push children (even from non-render elements)
-            let children: Vec<_> = self.tree.children(current).collect();
+            // Use SmallVec to avoid heap allocation for typical cases
+            let children: SmallVec<[ElementId; 8]> = self.tree.children(current).collect();
             for child in children.into_iter().rev() {
                 self.stack.push(child);
             }
@@ -220,21 +229,26 @@ impl<T: RenderTreeAccess + ?Sized> std::iter::FusedIterator for RenderDescendant
 ///
 /// During layout, a render parent needs to find its render children
 /// to call `performLayout` on them.
+///
+/// # Performance
+///
+/// Uses `SmallVec` with inline capacity to avoid heap allocation for
+/// typical layouts (up to 8 children on stack).
 #[derive(Debug)]
 pub struct RenderChildren<'a, T: RenderTreeAccess + ?Sized> {
     tree: &'a T,
-    stack: Vec<ElementId>,
+    stack: SmallVec<[ElementId; 8]>,
 }
 
 impl<'a, T: RenderTreeAccess + ?Sized> RenderChildren<'a, T> {
     /// Creates a new render children iterator.
     #[inline]
     pub fn new(tree: &'a T, parent: ElementId) -> Self {
-        let mut stack = Vec::with_capacity(8);
+        let mut stack = SmallVec::new();
 
         // Start with direct children
         if tree.contains(parent) {
-            let children: Vec<_> = tree.children(parent).collect();
+            let children: SmallVec<[ElementId; 8]> = tree.children(parent).collect();
             for child in children.into_iter().rev() {
                 stack.push(child);
             }
@@ -244,12 +258,14 @@ impl<'a, T: RenderTreeAccess + ?Sized> RenderChildren<'a, T> {
     }
 
     /// Creates with custom capacity hint.
+    ///
+    /// Note: SmallVec will use inline storage for up to 8 elements regardless.
     #[inline]
     pub fn with_capacity(tree: &'a T, parent: ElementId, capacity: usize) -> Self {
-        let mut stack = Vec::with_capacity(capacity);
+        let mut stack = SmallVec::with_capacity(capacity);
 
         if tree.contains(parent) {
-            let children: Vec<_> = tree.children(parent).collect();
+            let children: SmallVec<[ElementId; 8]> = tree.children(parent).collect();
             for child in children.into_iter().rev() {
                 stack.push(child);
             }
@@ -276,7 +292,8 @@ impl<T: RenderTreeAccess + ?Sized> Iterator for RenderChildren<'_, T> {
             }
 
             // Non-render element - look at its children
-            let children: Vec<_> = self.tree.children(current).collect();
+            // Use SmallVec to avoid heap allocation for typical cases
+            let children: SmallVec<[ElementId; 8]> = self.tree.children(current).collect();
             for child in children.into_iter().rev() {
                 self.stack.push(child);
             }

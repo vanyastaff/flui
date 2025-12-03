@@ -1,13 +1,13 @@
 //! RenderBox - Box Protocol Render Trait with Arity System
 //!
-//! Это ПОЛНЫЙ гайд по RenderBox в FLUI, включающий:
-//! - Текущую реализацию
+//! This is the complete guide to RenderBox in FLUI, including:
+//! - Current implementation
 //! - Flutter compliance
-//! - Примеры для каждой Arity
+//! - Examples for each Arity type
 //! - Best practices
 //! - Common pitfalls
 //!
-//! # Архитектура
+//! # Architecture
 //!
 //! ```text
 //! RenderObject (base)
@@ -21,12 +21,10 @@
 //!  └─ RenderContainer: RenderBox<Optional>
 //! ```
 
-use std::any::Any;
 use std::fmt;
 
-use flui_foundation::ElementId;
 use flui_interaction::HitTestResult;
-use flui_types::{Axis, BoxConstraints, Offset, Rect, Size};
+use flui_types::{BoxConstraints, Offset, Rect, Size};
 
 use super::arity::Arity;
 use super::contexts::{BoxHitTestContext, BoxLayoutContext, BoxPaintContext};
@@ -73,7 +71,7 @@ use crate::RenderResult;
 ///
 /// # Required Methods
 ///
-/// ## layout() - ОБЯЗАТЕЛЬНЫЙ
+/// ## layout() - REQUIRED
 ///
 /// Computes size given constraints. **MUST** satisfy constraints.
 ///
@@ -86,7 +84,7 @@ use crate::RenderResult;
 /// - Output: `Size` that satisfies constraints
 /// - Must be idempotent (same constraints → same size)
 ///
-/// ## paint() - ОБЯЗАТЕЛЬНЫЙ
+/// ## paint() - REQUIRED
 ///
 /// Draws to canvas using geometry from layout.
 ///
@@ -137,15 +135,15 @@ use crate::RenderResult;
 /// ```rust,ignore
 /// let size = desired_size;
 /// // WRONG:
-/// return size;  // Может нарушать constraints
+/// return size;  // May violate constraints
 ///
 /// // CORRECT:
-/// return ctx.constraints.constrain(size);  // Гарантированно удовлетворяет
+/// return ctx.constraints.constrain(size);  // Guaranteed to satisfy constraints
 /// ```
 ///
 /// ✅ **MUST** be idempotent:
 /// ```rust,ignore
-/// // Одни constraints → один и тот же size каждый раз
+/// // Same constraints → same size every time
 /// fn layout(&mut self, ctx) -> Size {
 ///     // ❌ WRONG: random size
 ///     Size::new(rand(), rand())
@@ -393,7 +391,12 @@ pub trait RenderBox<A: Arity>: RenderObject + fmt::Debug + Send + Sync {
         }
 
         // Add self to hit test result
-        result.add(flui_interaction::HitTestEntry::new(ctx.element_id));
+        let bounds = Rect::from_min_size(Offset::ZERO, ctx.geometry);
+        result.add(flui_interaction::HitTestEntry::new(
+            ctx.element_id(),
+            ctx.position,
+            bounds,
+        ));
         true
     }
 
@@ -481,110 +484,8 @@ pub trait RenderBox<A: Arity>: RenderObject + fmt::Debug + Send + Sync {
     }
 }
 
-// ============================================================================
-// BOX CONSTRAINTS
-// ============================================================================
-
-impl BoxConstraints {
-    /// Constrains size to satisfy these constraints.
-    ///
-    /// # Flutter contract
-    ///
-    /// This is the CRITICAL method for protocol compliance:
-    ///
-    /// ```rust,ignore
-    /// // ❌ WRONG: might violate constraints
-    /// fn layout(&mut self, ctx) -> Size {
-    ///     let desired = Size::new(100.0, 50.0);
-    ///     desired  // What if constraints are tighter?
-    /// }
-    ///
-    /// // ✅ CORRECT: guaranteed to satisfy
-    /// fn layout(&mut self, ctx) -> Size {
-    ///     let desired = Size::new(100.0, 50.0);
-    ///     ctx.constraints.constrain(desired)  // Safe!
-    /// }
-    /// ```
-    pub fn constrain(&self, size: Size) -> Size {
-        Size::new(
-            size.width.clamp(self.min_width, self.max_width),
-            size.height.clamp(self.min_height, self.max_height),
-        )
-    }
-
-    /// Returns smallest size satisfying constraints.
-    pub fn smallest(&self) -> Size {
-        Size::new(self.min_width, self.min_height)
-    }
-
-    /// Returns largest size satisfying constraints.
-    pub fn biggest(&self) -> Size {
-        Size::new(self.max_width, self.max_height)
-    }
-
-    /// Deflates constraints by edge insets (for padding).
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// let padding = EdgeInsets::all(10.0);
-    /// let inner = constraints.deflate(&padding);
-    /// // inner has 20px less width and height
-    /// ```
-    pub fn deflate(&self, insets: &flui_types::EdgeInsets) -> Self {
-        let horizontal = insets.left + insets.right;
-        let vertical = insets.top + insets.bottom;
-
-        Self {
-            min_width: (self.min_width - horizontal).max(0.0),
-            max_width: (self.max_width - horizontal).max(0.0),
-            min_height: (self.min_height - vertical).max(0.0),
-            max_height: (self.max_height - vertical).max(0.0),
-        }
-    }
-
-    /// Loosens constraints (sets min to 0).
-    pub fn loosen(&self) -> Self {
-        Self {
-            min_width: 0.0,
-            min_height: 0.0,
-            ..*self
-        }
-    }
-
-    /// Tightens constraints to exact size.
-    pub fn tighten(&self, size: Size) -> Self {
-        Self::tight(size)
-    }
-
-    /// Creates tight constraints (min = max).
-    pub fn tight(size: Size) -> Self {
-        Self {
-            min_width: size.width,
-            max_width: size.width,
-            min_height: size.height,
-            max_height: size.height,
-        }
-    }
-
-    /// Creates loose constraints (min = 0).
-    pub fn loose(size: Size) -> Self {
-        Self {
-            min_width: 0.0,
-            max_width: size.width,
-            min_height: 0.0,
-            max_height: size.height,
-        }
-    }
-
-    /// Checks if size satisfies constraints.
-    pub fn is_satisfied_by(&self, size: Size) -> bool {
-        size.width >= self.min_width
-            && size.width <= self.max_width
-            && size.height >= self.min_height
-            && size.height <= self.max_height
-    }
-}
+// Note: BoxConstraints methods (constrain, smallest, biggest, deflate, loosen, tight, loose, is_satisfied_by)
+// are defined in flui_types::BoxConstraints. See examples in the trait documentation above.
 
 // ============================================================================
 // COMMON PITFALLS AND SOLUTIONS
@@ -681,7 +582,7 @@ impl BoxConstraints {
 mod _docs {}
 
 // ============================================================================
-// ПРИМЕРЫ РЕАЛИЗАЦИЙ
+// IMPLEMENTATION EXAMPLES
 // ============================================================================
 
 #[cfg(doc)]

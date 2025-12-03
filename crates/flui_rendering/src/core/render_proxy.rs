@@ -15,7 +15,7 @@
 use std::fmt;
 
 use flui_foundation::{DiagnosticsProperty, ElementId};
-use flui_types::{Matrix4, Offset, Rect, Size, SliverGeometry, TextBaseline};
+use flui_types::{prelude::TextBaseline, Matrix4, Offset, Rect, Size, SliverGeometry};
 
 use super::arity::Single;
 use super::contexts::{

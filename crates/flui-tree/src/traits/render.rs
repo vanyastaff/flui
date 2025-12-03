@@ -551,7 +551,9 @@ impl<T: RenderTreeAccess + ?Sized> RenderTreeExt for T {}
 // Re-export Multi as alias for Variable for backwards compatibility
 /// Marker type for multi-child render objects (any number of children).
 ///
-/// This is an alias for [`Variable`] from the unified arity system.
+/// This is a deprecated alias for [`Variable`] from the unified arity system.
+/// Use [`Variable`] directly instead.
+#[deprecated(since = "0.2.0", note = "Use `Variable` directly instead of `Multi`")]
 pub type Multi = Variable;
 
 /// A typed accessor for render children with compile-time arity guarantees.
