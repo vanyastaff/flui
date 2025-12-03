@@ -93,6 +93,18 @@ impl Child {
     {
         self.inner.map(f)
     }
+
+    /// Returns a reference to the inner view object if present.
+    #[inline]
+    pub fn as_ref(&self) -> Option<&dyn ViewObject> {
+        self.inner.as_ref().map(|b| b.as_ref())
+    }
+
+    /// Returns a mutable reference to the inner view object if present.
+    #[inline]
+    pub fn as_mut(&mut self) -> Option<&mut dyn ViewObject> {
+        self.inner.as_mut().map(|b| b.as_mut())
+    }
 }
 
 impl IntoView for Child {
@@ -131,6 +143,12 @@ mod tests {
     fn test_child_into_view() {
         let child = Child::none();
         let view_obj = child.into_view();
-        assert_eq!(view_obj.mode(), crate::ViewMode::Stateless);
+        assert_eq!(view_obj.mode(), crate::ViewMode::Empty);
+    }
+
+    #[test]
+    fn test_child_as_ref() {
+        let child = Child::none();
+        assert!(child.as_ref().is_none());
     }
 }

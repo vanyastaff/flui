@@ -3,7 +3,6 @@
 //! Implements `ViewObject` for `StatelessView` types.
 
 use std::any::Any;
-use std::marker::PhantomData;
 
 use crate::traits::StatelessView;
 use crate::{BuildContext, IntoView, ViewMode, ViewObject};
@@ -14,18 +13,12 @@ use crate::{BuildContext, IntoView, ViewMode, ViewObject};
 pub struct StatelessViewWrapper<V: StatelessView> {
     /// The view (consumed on first build)
     view: Option<V>,
-
-    /// Type name for debugging
-    _marker: PhantomData<V>,
 }
 
 impl<V: StatelessView> StatelessViewWrapper<V> {
     /// Create a new wrapper
     pub fn new(view: V) -> Self {
-        Self {
-            view: Some(view),
-            _marker: PhantomData,
-        }
+        Self { view: Some(view) }
     }
 }
 

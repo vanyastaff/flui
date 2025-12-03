@@ -2,17 +2,27 @@
 //!
 //! For views that subscribe to animation changes and rebuild automatically.
 
+use flui_foundation::ListenerId;
+
 use crate::{BuildContext, IntoView};
 
-/// Listenable - Types that can notify listeners of changes
+/// Listenable - Types that can notify listeners of changes.
+///
+/// This trait uses interior mutability pattern (via `&self`) to allow
+/// subscribing from immutable references, which is common in UI frameworks.
 ///
 /// Implemented by animation controllers, value notifiers, etc.
+///
+/// # Note
+///
+/// This differs from `flui_foundation::Listenable` which uses `&mut self`.
+/// The interior mutability version is more convenient for UI patterns.
 pub trait Listenable: Send + Sync + 'static {
-    /// Add a listener callback
-    fn add_listener(&self, callback: Box<dyn Fn() + Send + Sync>);
+    /// Add a listener callback. Returns an ID for later removal.
+    fn add_listener(&self, callback: Box<dyn Fn() + Send + Sync>) -> ListenerId;
 
-    /// Remove a listener callback (by some identifier)
-    fn remove_listener(&self);
+    /// Remove a listener by its ID.
+    fn remove_listener(&self, id: ListenerId);
 }
 
 /// `AnimatedView` - Views that subscribe to animation changes.

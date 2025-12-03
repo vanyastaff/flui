@@ -45,7 +45,7 @@ struct EmptyViewObject;
 
 impl ViewObject for EmptyViewObject {
     fn mode(&self) -> ViewMode {
-        ViewMode::Stateless
+        ViewMode::Empty
     }
 
     fn build(&mut self, _ctx: &dyn BuildContext) -> Option<Box<dyn ViewObject>> {
@@ -84,20 +84,20 @@ mod tests {
     fn test_empty_view() {
         let view = EmptyView::new();
         let view_obj = view.into_view();
-        assert_eq!(view_obj.mode(), ViewMode::Stateless);
+        assert_eq!(view_obj.mode(), ViewMode::Empty);
     }
 
     #[test]
     fn test_empty_view_default() {
         let view = EmptyView::default();
         let view_obj = view.into_view();
-        assert_eq!(view_obj.mode(), ViewMode::Stateless);
+        assert_eq!(view_obj.mode(), ViewMode::Empty);
     }
 
     #[test]
     fn test_unit_into_view() {
         let view_obj = ().into_view();
-        assert_eq!(view_obj.mode(), ViewMode::Stateless);
+        assert_eq!(view_obj.mode(), ViewMode::Empty);
     }
 
     #[test]

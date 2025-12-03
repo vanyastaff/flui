@@ -6,6 +6,8 @@ use std::any::Any;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+use flui_foundation::ListenerId;
+
 use crate::traits::{AnimatedView, Listenable};
 use crate::{BuildContext, IntoView, ViewMode, ViewObject};
 
@@ -24,6 +26,9 @@ where
     /// Flag indicating listener is attached
     listening: Arc<AtomicBool>,
 
+    /// The listener ID for removal
+    listener_id: Option<ListenerId>,
+
     /// Type marker for the listenable
     _marker: std::marker::PhantomData<L>,
 }
@@ -38,6 +43,7 @@ where
         Self {
             view,
             listening: Arc::new(AtomicBool::new(false)),
+            listener_id: None,
             _marker: std::marker::PhantomData,
         }
     }
@@ -63,7 +69,7 @@ where
     }
 
     /// Start listening to the listenable
-    fn start_listening(&self) {
+    fn start_listening(&mut self) {
         if self.listening.swap(true, Ordering::SeqCst) {
             return; // Already listening
         }
@@ -72,21 +78,24 @@ where
         // Note: In a real implementation, we'd need to capture the element ID
         // and schedule a rebuild when the listenable notifies
         let listening = self.listening.clone();
-        self.view.listenable().add_listener(Box::new(move || {
+        let id = self.view.listenable().add_listener(Box::new(move || {
             if listening.load(Ordering::Relaxed) {
                 // TODO: Schedule rebuild via BuildContext or BuildOwner
                 tracing::trace!("Animation tick - would schedule rebuild");
             }
         }));
+        self.listener_id = Some(id);
     }
 
     /// Stop listening to the listenable
-    fn stop_listening(&self) {
+    fn stop_listening(&mut self) {
         if !self.listening.swap(false, Ordering::SeqCst) {
             return; // Not listening
         }
 
-        self.view.listenable().remove_listener();
+        if let Some(id) = self.listener_id.take() {
+            self.view.listenable().remove_listener(id);
+        }
     }
 }
 
@@ -198,7 +207,7 @@ where
 mod tests {
     use super::*;
     use crate::context::MockBuildContext;
-    use flui_foundation::ElementId;
+    use flui_foundation::{ElementId, ListenerId};
     use parking_lot::Mutex;
 
     // Helper for tests - represents an empty view
@@ -233,25 +242,31 @@ mod tests {
     /// Simple test animation controller
     struct TestAnimation {
         _value: f32,
-        callback: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
+        listeners: Mutex<Vec<(ListenerId, Box<dyn Fn() + Send + Sync>)>>,
+        next_id: Mutex<usize>,
     }
 
     impl TestAnimation {
         fn new(value: f32) -> Self {
             Self {
                 _value: value,
-                callback: Mutex::new(None),
+                listeners: Mutex::new(Vec::new()),
+                next_id: Mutex::new(0),
             }
         }
     }
 
     impl Listenable for TestAnimation {
-        fn add_listener(&self, callback: Box<dyn Fn() + Send + Sync>) {
-            *self.callback.lock() = Some(callback);
+        fn add_listener(&self, callback: Box<dyn Fn() + Send + Sync>) -> ListenerId {
+            let mut next_id = self.next_id.lock();
+            let id = ListenerId::new(*next_id);
+            *next_id += 1;
+            self.listeners.lock().push((id, callback));
+            id
         }
 
-        fn remove_listener(&self) {
-            *self.callback.lock() = None;
+        fn remove_listener(&self, id: ListenerId) {
+            self.listeners.lock().retain(|(lid, _)| *lid != id);
         }
     }
 
