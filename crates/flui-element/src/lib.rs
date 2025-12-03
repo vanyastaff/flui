@@ -15,19 +15,29 @@
 //!
 //! ## Key Types
 //!
-//! - [`Element`] - Unified element struct with type-erased view object
+//! - [`Element`] - Unified element enum (View | Render variants)
+//! - [`ViewElement`] - Element for component views (Stateless, Stateful, Provider)
+//! - [`RenderElement`] - Element for render views (RenderBox, RenderSliver)
+//! - [`ElementBase`] - Common base with lifecycle, flags, parent/slot
 //! - [`ElementTree`] - Slab-based storage with O(1) access
 //! - [`ElementLifecycle`] - Lifecycle states (Initial, Active, Inactive, Defunct)
 //! - [`IntoElement`] - Trait for converting types to elements
 //!
 //! ## Design Principles
 //!
+//! ### Two Element Variants
+//!
+//! Element is an enum with two variants:
+//! - `View(ViewElement)`: Component views that build children
+//! - `Render(RenderElement)`: Render views that handle layout/paint
+//!
+//! This mirrors Flutter's distinction between ComponentElement and RenderObjectElement.
+//!
 //! ### Type Erasure
 //!
-//! Element stores `Box<dyn Any + Send>` instead of `Box<dyn ViewObject>`.
-//! This breaks the dependency on ViewObject trait, allowing flui-element
-//! to be independent of flui-view. The actual ViewObject is stored inside
-//! and can be accessed via downcasting.
+//! ViewElement stores `Box<dyn ViewObject>` for component behavior.
+//! RenderElement stores `Box<dyn Any>` for both render object and render state,
+//! allowing flui-element to remain independent of flui_rendering types.
 //!
 //! ### Slab-Based Storage
 //!
@@ -43,15 +53,19 @@
 //! ## Example
 //!
 //! ```rust
-//! use flui_element::{Element, ElementTree, ElementLifecycle, IntoElement};
-//! use flui_foundation::ElementId;
+//! use flui_element::{Element, ViewElement, RenderElement, ElementTree, ElementLifecycle};
+//! use flui_foundation::{ElementId, ViewMode};
 //!
 //! // Create a tree
 //! let mut tree = ElementTree::new();
 //!
-//! // Insert elements
-//! let root_id = tree.insert(Element::empty());
-//! let child_id = tree.insert(Element::empty());
+//! // Insert a view element
+//! let view_elem = Element::empty();
+//! let root_id = tree.insert(view_elem);
+//!
+//! // Insert another element as child
+//! let child_elem = Element::empty();
+//! let child_id = tree.insert(child_elem);
 //!
 //! // Set up parent-child relationship
 //! if let Some(child) = tree.get_mut(child_id) {
@@ -70,13 +84,15 @@
 //! ## Crate Dependencies
 //!
 //! ```text
-//! flui-foundation (ElementId, Slot, Flags)
+//! flui-foundation (ElementId, Slot, ViewMode, Flags)
 //!        ↓
-//! flui-tree (TreeRead, TreeNav, TreeWrite)
+//! flui-tree (TreeRead, TreeNav, TreeWrite, RenderTreeAccess)
 //!        ↓
-//! flui-element (Element, ElementTree, IntoElement)  ← This crate
+//! flui-view (ViewObject, BuildContext, IntoView)
 //!        ↓
-//! flui-view (ViewObject, BuildContext, View traits)
+//! flui-element (Element, ViewElement, RenderElement, ElementTree)
+//!        ↓
+//! flui_rendering (RenderObject, RenderState, layout/paint)
 //! ```
 
 #![warn(
@@ -90,7 +106,7 @@
     clippy::module_name_repetitions,
     clippy::must_use_candidate,
     clippy::return_self_not_must_use,
-    clippy::doc_markdown, // TODO: Add backticks around type names in documentation
+    clippy::doc_markdown,
     clippy::redundant_closure_for_method_calls,
     clippy::map_unwrap_or,
     clippy::missing_fields_in_debug,
@@ -103,26 +119,29 @@
 // MODULES
 // ============================================================================
 
-pub mod context;
 pub mod element;
 pub mod into_element;
-pub mod provider_view_object;
 pub mod tree;
-pub mod view_object;
+
+// ============================================================================
+// RE-EXPORTS FROM flui-view
+// ============================================================================
+
+// ViewObject and BuildContext are now defined in flui-view
+pub use flui_view::{BuildContext, ViewObject};
+
+// IntoView for convenience
+pub use flui_view::IntoView;
 
 // ============================================================================
 // RE-EXPORTS
 // ============================================================================
 
-// Context trait
-pub use context::BuildContext;
-
-// ViewObject traits
-pub use provider_view_object::ProviderViewObject;
-pub use view_object::{ElementViewObjectExt, ViewObject};
-
-// Element types
-pub use element::{AtomicElementFlags, Element, ElementBase, ElementFlags, ElementLifecycle};
+// Element types - the new architecture
+pub use element::{
+    AtomicElementFlags, Element, ElementBase, ElementFlags, ElementLifecycle, RenderElement,
+    RenderObjectTrait, ViewElement,
+};
 
 // Tree types
 pub use tree::ElementTree;
@@ -131,7 +150,8 @@ pub use tree::ElementTree;
 pub use into_element::IntoElement;
 
 // Re-export from flui-foundation for convenience
-pub use flui_foundation::{ElementId, Slot, ViewMode};
+pub use flui_foundation::{ElementId, Slot};
+pub use flui_view::ViewMode;
 
 // Re-export tree traits for convenience
 pub use flui_tree::{RenderTreeAccess, TreeNav, TreeRead, TreeWrite, TreeWriteNav};
@@ -146,9 +166,22 @@ pub use flui_tree::{RenderTreeAccess, TreeNav, TreeRead, TreeWrite, TreeWriteNav
 /// use flui_element::prelude::*;
 /// ```
 pub mod prelude {
-    pub use crate::element::{Element, ElementLifecycle};
+    // Core element types
+    pub use crate::element::{Element, ElementLifecycle, RenderElement, ViewElement};
+
+    // Conversion trait
     pub use crate::into_element::IntoElement;
+
+    // Tree types
     pub use crate::tree::ElementTree;
+
+    // Foundation types
     pub use flui_foundation::ElementId;
+    pub use flui_view::ViewMode;
+
+    // Tree traits
     pub use flui_tree::{RenderTreeAccess, TreeNav, TreeRead, TreeWrite};
+
+    // From flui-view
+    pub use flui_view::{BuildContext, ViewObject};
 }

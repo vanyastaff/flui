@@ -135,7 +135,6 @@
 pub mod element_id;
 pub mod key;
 pub mod slot;
-pub mod view_mode;
 
 // Reactive programming - change notification and observables
 pub mod change_notifier;
@@ -165,7 +164,6 @@ pub mod serde_support;
 pub use element_id::ElementId;
 pub use key::{Key, KeyRef};
 pub use slot::Slot;
-pub use view_mode::ViewMode;
 
 // Change notification
 pub use change_notifier::{

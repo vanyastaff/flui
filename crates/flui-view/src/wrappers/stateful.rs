@@ -4,9 +4,8 @@
 
 use std::any::Any;
 
-use flui_element::{BuildContext, Element, IntoElement, ViewMode, ViewObject};
-
 use crate::traits::StatefulView;
+use crate::{BuildContext, IntoView, ViewMode, ViewObject};
 
 /// Wrapper for `StatefulView` that implements `ViewObject`
 ///
@@ -54,7 +53,7 @@ impl<V: StatefulView> ViewObject for StatefulViewWrapper<V> {
         ViewMode::Stateful
     }
 
-    fn build(&mut self, ctx: &dyn BuildContext) -> Element {
+    fn build(&mut self, ctx: &dyn BuildContext) -> Option<Box<dyn ViewObject>> {
         // Initialize state on first build
         if self.state.is_none() {
             self.state = Some(self.view.create_state());
@@ -62,9 +61,9 @@ impl<V: StatefulView> ViewObject for StatefulViewWrapper<V> {
 
         // Build with state
         if let Some(ref mut state) = self.state {
-            self.view.build(state, ctx).into_element()
+            Some(self.view.build(state, ctx).into_view())
         } else {
-            Element::empty()
+            None
         }
     }
 
@@ -100,19 +99,18 @@ impl<V: StatefulView> ViewObject for StatefulViewWrapper<V> {
 }
 
 // ============================================================================
-// IntoElement IMPLEMENTATION
+// IntoView IMPLEMENTATION
 // ============================================================================
 
 /// Helper struct to disambiguate `StatefulView` from `StatelessView`
 ///
-/// Use `Stateful(my_view)` to create a stateful element.
+/// Use `Stateful(my_view)` to create a stateful view object.
 #[derive(Debug)]
 pub struct Stateful<V: StatefulView>(pub V);
 
-impl<V: StatefulView> IntoElement for Stateful<V> {
-    fn into_element(self) -> Element {
-        let wrapper = StatefulViewWrapper::new(self.0);
-        Element::with_mode(wrapper, ViewMode::Stateful)
+impl<V: StatefulView> IntoView for Stateful<V> {
+    fn into_view(self) -> Box<dyn ViewObject> {
+        Box::new(StatefulViewWrapper::new(self.0))
     }
 }
 
@@ -123,6 +121,9 @@ impl<V: StatefulView> IntoElement for Stateful<V> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::context::MockBuildContext;
+    use crate::state::ViewState;
+    use flui_foundation::ElementId;
 
     struct TestStatefulView {
         initial: i32,
@@ -130,6 +131,37 @@ mod tests {
 
     struct TestState {
         count: i32,
+    }
+
+    // Note: ViewState is automatically implemented via blanket impl
+
+    // Helper for tests - represents an empty view
+    struct EmptyIntoView;
+
+    impl IntoView for EmptyIntoView {
+        fn into_view(self) -> Box<dyn ViewObject> {
+            Box::new(EmptyViewObject)
+        }
+    }
+
+    struct EmptyViewObject;
+
+    impl ViewObject for EmptyViewObject {
+        fn mode(&self) -> ViewMode {
+            ViewMode::Stateless
+        }
+
+        fn build(&mut self, _ctx: &dyn BuildContext) -> Option<Box<dyn ViewObject>> {
+            None
+        }
+
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn as_any_mut(&mut self) -> &mut dyn Any {
+            self
+        }
     }
 
     impl StatefulView for TestStatefulView {
@@ -141,9 +173,9 @@ mod tests {
             }
         }
 
-        fn build(&self, state: &mut Self::State, _ctx: &dyn BuildContext) -> impl IntoElement {
+        fn build(&self, state: &mut Self::State, _ctx: &dyn BuildContext) -> impl IntoView {
             state.count += 1;
-            ()
+            EmptyIntoView
         }
     }
 
@@ -155,9 +187,24 @@ mod tests {
     }
 
     #[test]
-    fn test_into_element() {
+    fn test_into_view() {
         let view = TestStatefulView { initial: 10 };
-        let element = Stateful(view).into_element();
-        assert!(element.has_view_object());
+        let view_obj = Stateful(view).into_view();
+        assert_eq!(view_obj.mode(), ViewMode::Stateful);
+    }
+
+    #[test]
+    fn test_state_persistence() {
+        let mut wrapper = StatefulViewWrapper::new(TestStatefulView { initial: 10 });
+        let ctx = MockBuildContext::new(ElementId::new(1));
+
+        // First build creates state
+        wrapper.build(&ctx);
+        assert!(wrapper.state.is_some());
+        assert_eq!(wrapper.state().unwrap().count, 11);
+
+        // Second build reuses state
+        wrapper.build(&ctx);
+        assert_eq!(wrapper.state().unwrap().count, 12);
     }
 }

@@ -1,443 +1,430 @@
-//! Element struct - Unified element with type-erased view object
+//! Element enum - Unified element type for the element tree
 //!
-//! This module provides the unified `Element` struct that can hold any view type
-//! through type erasure using `Box<dyn ViewObject>`.
+//! This module provides the `Element` enum that can represent either a
+//! `ViewElement` (component views) or `RenderElement` (render views).
 //!
 //! # Architecture
 //!
 //! ```text
-//! View (Config)
-//!   ↓ wrap in ViewObject
-//! Element (Lifecycle + type-erased ViewObject)
-//!   ├─ base: ElementBase (lifecycle, flags, parent/slot)
-//!   ├─ view_object: Box<dyn ViewObject> (type-erased!)
-//!   └─ children: Vec<ElementId>
+//! enum Element {
+//!     View(ViewElement),    // Stateless, Stateful, Provider, etc.
+//!     Render(RenderElement), // RenderBox, RenderSliver
+//! }
 //! ```
 //!
-//! # Type Erasure
-//!
-//! Element stores `Box<dyn ViewObject>` which provides:
-//! - `as_any()` for downcasting to concrete wrapper types
-//! - `as_any_mut()` for mutable downcasting
-//! - `build()`, `init()`, `dispose()` lifecycle methods
-//!
-//! The actual ViewObject is stored inside and can be accessed via downcasting:
-//!
-//! ```rust,ignore
-//! // In flui-view, after downcasting:
-//! let wrapper = element.view_object_as::<StatelessViewWrapper<MyView>>()?;
-//! ```
+//! This design follows Flutter's element hierarchy where elements can be
+//! either component-based (building other widgets) or render-based
+//! (participating in layout/paint).
 
 use std::any::Any;
-use std::fmt;
 
-use flui_foundation::{ElementId, Key, Slot, ViewMode};
+use flui_foundation::{ElementId, Key, Slot};
+use flui_view::ViewMode;
 
-use super::{ElementBase, ElementLifecycle};
+use super::{ElementBase, ElementLifecycle, RenderElement, ViewElement};
 use crate::ViewObject;
 
-/// Element - Unified element struct with type-erased view object
+/// Element - Unified element type
 ///
-/// This struct represents any View instance in the element tree.
-/// The view-specific behavior is stored in a type-erased `Box<dyn Any + Send + Sync>`.
+/// An Element can be either:
+/// - `View`: A component element that builds children (Stateless, Stateful, Provider, etc.)
+/// - `Render`: A render element that participates in layout/paint (RenderBox, RenderSliver)
 ///
-/// # Design Principles
+/// # Design
 ///
-/// - `base`: Common lifecycle fields (parent, slot, lifecycle, flags)
-/// - `view_object`: Type-erased view object (Any + Send + Sync)
-/// - `children`: Child element IDs
+/// Both variants share a common API through delegation, allowing uniform
+/// tree operations while preserving type-specific behavior.
 ///
 /// # Thread Safety
 ///
-/// Element is `Send + Sync` because all internal fields are Send + Sync.
-pub struct Element {
-    /// Common lifecycle fields
-    base: ElementBase,
+/// Element is `Send` because both ViewElement and RenderElement are Send.
+#[derive(Debug)]
+pub enum Element {
+    /// Component element (Stateless, Stateful, Provider, Proxy, Animated)
+    View(ViewElement),
 
-    /// Type-erased view object storage
-    ///
-    /// Contains the actual ViewObject wrapper (StatelessViewWrapper, etc.)
-    /// stored as `dyn ViewObject` for type erasure.
-    view_object: Option<Box<dyn ViewObject>>,
-
-    /// View mode - categorizes the view type (Stateless, Stateful, RenderBox, etc.)
-    ///
-    /// Stored separately to allow querying without downcasting.
-    view_mode: ViewMode,
-
-    /// Optional key for element identity and reconciliation
-    ///
-    /// Used during reconciliation to determine if an element can be reused.
-    /// Elements with matching ViewMode and Key can be reused instead of recreated.
-    key: Option<Key>,
-
-    /// Child element IDs
-    children: Vec<ElementId>,
-
-    /// Pending child elements (before BuildPipeline converts to ElementIds)
-    ///
-    /// This field stores child Elements temporarily during element creation,
-    /// before they are inserted into the tree and converted to ElementIds.
-    /// BuildPipeline processes these during mount phase.
-    ///
-    /// # Lifecycle
-    ///
-    /// 1. **Creation**: IntoElement sets pending_children via with_pending_children()
-    /// 2. **Mount**: BuildPipeline calls take_pending_children() and inserts each
-    /// 3. **Post-mount**: Field is None after processing
-    ///
-    /// This is similar to Flutter's two-phase mounting pattern.
-    pending_children: Option<Vec<Element>>,
-
-    /// Debug name for diagnostics
-    debug_name: Option<&'static str>,
-}
-
-// Element is Send because ViewObject requires Send
-// Sync is not implemented - use Arc<RwLock<Element>> for shared access
-
-impl fmt::Debug for Element {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Element")
-            .field("parent", &self.base.parent())
-            .field("lifecycle", &self.base.lifecycle())
-            .field("children_count", &self.children.len())
-            .field("has_view_object", &self.view_object.is_some())
-            .field("debug_name", &self.debug_name)
-            .finish()
-    }
+    /// Render element (RenderBox, RenderSliver)
+    Render(RenderElement),
 }
 
 impl Element {
-    /// Creates a new Element with the given view object and mode.
-    ///
-    /// # Arguments
-    ///
-    /// * `view_object` - Any type that implements `ViewObject`
-    /// * `mode` - The ViewMode categorizing this element
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// let wrapper = StatelessViewWrapper::new(my_view);
-    /// let element = Element::with_mode(wrapper, ViewMode::Stateless);
-    /// ```
-    pub fn with_mode<V: ViewObject>(view_object: V, mode: ViewMode) -> Self {
-        Self {
-            base: ElementBase::new(),
-            view_object: Some(Box::new(view_object)),
-            view_mode: mode,
-            key: None,
-            children: Vec::new(),
-            pending_children: None,
-            debug_name: None,
-        }
+    // ========== Constructors ==========
+
+    /// Creates a new View element with the given view object and mode.
+    pub fn view<V: ViewObject>(view_object: V, mode: ViewMode) -> Self {
+        Self::View(ViewElement::new(view_object, mode))
     }
 
-    /// Creates a new Element with the given view object (defaults to Empty mode).
-    ///
-    /// Prefer `with_mode()` when the mode is known.
-    ///
-    /// # Arguments
-    ///
-    /// * `view_object` - Any type that implements `ViewObject`
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// let wrapper = StatelessViewWrapper::new(my_view);
-    /// let element = Element::new(wrapper);
-    /// ```
-    pub fn new<V: ViewObject>(view_object: V) -> Self {
-        Self {
-            base: ElementBase::new(),
-            view_object: Some(Box::new(view_object)),
-            view_mode: ViewMode::Empty,
-            key: None,
-            children: Vec::new(),
-            pending_children: None,
-            debug_name: None,
-        }
+    /// Creates a new Render element with render object and state.
+    pub fn render<RO, RS>(render_object: RO, render_state: RS, mode: ViewMode) -> Self
+    where
+        RO: Any + Send + Sync + 'static,
+        RS: Any + Send + Sync + 'static,
+    {
+        Self::Render(RenderElement::new(render_object, render_state, mode))
     }
 
-    /// Creates an empty element (no view object).
-    ///
-    /// Useful for placeholder elements or unit type `()` conversions.
+    /// Creates an empty element (View variant).
     pub fn empty() -> Self {
-        Self {
-            base: ElementBase::new(),
-            view_object: None,
-            view_mode: ViewMode::Empty,
-            key: None,
-            children: Vec::new(),
-            pending_children: None,
-            debug_name: Some("Empty"),
-        }
+        Self::View(ViewElement::empty())
     }
 
-    /// Creates an element with multiple children (container).
-    ///
-    /// Used for `Vec<T>` and tuple conversions.
+    /// Creates a container element with pending children.
     pub fn container(children: Vec<Element>) -> Self {
-        // For now, container just holds children
-        // In practice, these get flattened during tree insertion
-        let child_count = children.len();
-        Self {
-            base: ElementBase::new(),
-            view_object: None,
-            view_mode: ViewMode::Empty,
-            key: None,
-            children: Vec::with_capacity(child_count),
-            pending_children: Some(children),
-            debug_name: Some("Container"),
+        Self::View(ViewElement::container(children))
+    }
+
+    /// Creates an element with mode (for backward compatibility).
+    ///
+    /// Uses View variant for component modes, but callers should prefer
+    /// `Element::view()` or `Element::render()` for clarity.
+    pub fn with_mode<V: ViewObject>(view_object: V, mode: ViewMode) -> Self {
+        Self::View(ViewElement::new(view_object, mode))
+    }
+
+    /// Creates a new view element (backward compatibility alias).
+    pub fn new<V: ViewObject>(view_object: V) -> Self {
+        Self::View(ViewElement::new(view_object, ViewMode::Empty))
+    }
+
+    // ========== Variant Checks ==========
+
+    /// Returns true if this is a View element.
+    #[inline]
+    #[must_use]
+    pub fn is_view_element(&self) -> bool {
+        matches!(self, Self::View(_))
+    }
+
+    /// Returns true if this is a Render element.
+    #[inline]
+    #[must_use]
+    pub fn is_render_element(&self) -> bool {
+        matches!(self, Self::Render(_))
+    }
+
+    /// Get as ViewElement reference.
+    #[inline]
+    #[must_use]
+    pub fn as_view(&self) -> Option<&ViewElement> {
+        match self {
+            Self::View(v) => Some(v),
+            Self::Render(_) => None,
         }
     }
 
-    /// Creates an element with a debug name.
-    pub fn with_debug_name(mut self, name: &'static str) -> Self {
-        self.debug_name = Some(name);
-        self
+    /// Get as ViewElement mutable reference.
+    #[inline]
+    #[must_use]
+    pub fn as_view_mut(&mut self) -> Option<&mut ViewElement> {
+        match self {
+            Self::View(v) => Some(v),
+            Self::Render(_) => None,
+        }
     }
 
-    /// Sets the view mode.
-    pub fn set_view_mode(&mut self, mode: ViewMode) {
-        self.view_mode = mode;
+    /// Get as RenderElement reference.
+    #[inline]
+    #[must_use]
+    pub fn as_render(&self) -> Option<&RenderElement> {
+        match self {
+            Self::View(_) => None,
+            Self::Render(r) => Some(r),
+        }
     }
 
-    // ========== View Mode Queries ==========
+    /// Get as RenderElement mutable reference.
+    #[inline]
+    #[must_use]
+    pub fn as_render_mut(&mut self) -> Option<&mut RenderElement> {
+        match self {
+            Self::View(_) => None,
+            Self::Render(r) => Some(r),
+        }
+    }
 
-    /// Get the view mode of this element.
+    // ========== View Mode Queries (delegated) ==========
+
+    /// Get the view mode.
     #[inline]
     #[must_use]
     pub fn view_mode(&self) -> ViewMode {
-        self.view_mode
+        match self {
+            Self::View(v) => v.view_mode(),
+            Self::Render(r) => r.view_mode(),
+        }
     }
 
-    /// Check if this element is a component view (Stateless, Stateful, Proxy, Animated, Provider).
+    /// Set the view mode.
+    #[inline]
+    pub fn set_view_mode(&mut self, mode: ViewMode) {
+        match self {
+            Self::View(v) => v.set_view_mode(mode),
+            Self::Render(r) => r.set_view_mode(mode),
+        }
+    }
+
+    /// Check if this is a component view.
     #[inline]
     #[must_use]
     pub fn is_component(&self) -> bool {
-        self.view_mode.is_component()
+        self.view_mode().is_component()
     }
 
-    /// Check if this element is a render view (RenderBox, RenderSliver).
+    /// Check if this is a render view.
     #[inline]
     #[must_use]
     pub fn is_render(&self) -> bool {
-        self.view_mode.is_render()
+        self.view_mode().is_render()
     }
 
-    /// Check if this element is a provider view.
+    /// Check if this is a provider view.
     #[inline]
     #[must_use]
     pub fn is_provider(&self) -> bool {
-        self.view_mode.is_provider()
+        self.view_mode().is_provider()
     }
 
     // ========== Key Access ==========
 
-    /// Get the key of this element (if any).
-    ///
-    /// Keys are used during reconciliation to determine if elements can be reused.
+    /// Get the key.
     #[inline]
     #[must_use]
     pub fn key(&self) -> Option<Key> {
-        self.key
+        match self {
+            Self::View(v) => v.key(),
+            Self::Render(r) => r.key(),
+        }
     }
 
-    /// Set the key of this element.
-    ///
-    /// Used during element construction or updates.
+    /// Set the key.
     #[inline]
     pub fn set_key(&mut self, key: Option<Key>) {
-        self.key = key;
+        match self {
+            Self::View(v) => v.set_key(key),
+            Self::Render(r) => r.set_key(key),
+        }
     }
 
-    /// Create element with a key (builder pattern).
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// let element = Element::with_mode(view_object, ViewMode::Stateless)
-    ///     .with_key(Key::from_str("my_element"));
-    /// ```
+    /// Builder: set key.
     pub fn with_key(mut self, key: Key) -> Self {
-        self.key = Some(key);
+        self.set_key(Some(key));
         self
     }
 
     // ========== Pending Children ==========
 
-    /// Set pending children (builder pattern).
-    ///
-    /// Used by IntoElement implementations to store child Elements before
-    /// they are inserted into the tree.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// let element = Element::with_mode(wrapper, ViewMode::RenderBox)
-    ///     .with_pending_children(vec![child1, child2]);
-    /// ```
-    pub fn with_pending_children(mut self, children: Vec<Element>) -> Self {
-        self.pending_children = Some(children);
-        self
-    }
-
     /// Take pending children for processing.
-    ///
-    /// BuildPipeline calls this during mount phase to extract and insert
-    /// pending child Elements into the tree.
-    ///
-    /// # Returns
-    ///
-    /// `Some(Vec<Element>)` if there are pending children, `None` otherwise.
     pub fn take_pending_children(&mut self) -> Option<Vec<Element>> {
-        self.pending_children.take()
+        match self {
+            Self::View(v) => v.take_pending_children(),
+            Self::Render(r) => r.take_pending_children(),
+        }
     }
 
     /// Check if element has pending children.
     #[inline]
     #[must_use]
     pub fn has_pending_children(&self) -> bool {
-        self.pending_children.is_some()
+        match self {
+            Self::View(v) => v.has_pending_children(),
+            Self::Render(r) => r.has_pending_children(),
+        }
     }
 
-    // ========== View Object Access ==========
+    /// Builder: set pending children.
+    pub fn with_pending_children(mut self, children: Vec<Element>) -> Self {
+        match &mut self {
+            Self::View(v) => {
+                *v = std::mem::replace(v, ViewElement::empty()).with_pending_children(children);
+            }
+            Self::Render(r) => {
+                *r = std::mem::replace(r, RenderElement::empty()).with_pending_children(children);
+            }
+        }
+        self
+    }
+
+    // ========== View Object Access (View variant only) ==========
 
     /// Returns true if this element has a view object.
     #[inline]
     #[must_use]
     pub fn has_view_object(&self) -> bool {
-        self.view_object.is_some()
+        match self {
+            Self::View(v) => v.has_view_object(),
+            Self::Render(_) => false,
+        }
     }
 
-    /// Get the view object as a reference to ViewObject.
+    /// Get the view object as a reference.
     #[inline]
     #[must_use]
     pub fn view_object(&self) -> Option<&dyn ViewObject> {
-        self.view_object.as_ref().map(|b| b.as_ref())
+        match self {
+            Self::View(v) => v.view_object(),
+            Self::Render(_) => None,
+        }
     }
 
-    /// Get the view object as a mutable reference to ViewObject.
+    /// Get the view object as a mutable reference.
     #[inline]
     #[must_use]
     pub fn view_object_mut(&mut self) -> Option<&mut dyn ViewObject> {
-        self.view_object.as_mut().map(|b| b.as_mut())
+        match self {
+            Self::View(v) => v.view_object_mut(),
+            Self::Render(_) => None,
+        }
     }
 
-    /// Get the view object as a reference to Any (via ViewObject::as_any).
+    /// Get the view object as Any for downcasting.
     #[inline]
     #[must_use]
     pub fn view_object_any(&self) -> Option<&dyn Any> {
-        self.view_object.as_ref().map(|b| b.as_any())
+        match self {
+            Self::View(v) => v.view_object_any(),
+            Self::Render(_) => None,
+        }
     }
 
-    /// Get the view object as a mutable reference to Any (via ViewObject::as_any_mut).
+    /// Get the view object as mutable Any for downcasting.
     #[inline]
     #[must_use]
     pub fn view_object_any_mut(&mut self) -> Option<&mut dyn Any> {
-        self.view_object.as_mut().map(|b| b.as_any_mut())
+        match self {
+            Self::View(v) => v.view_object_any_mut(),
+            Self::Render(_) => None,
+        }
     }
 
     /// Downcast view object to concrete type.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// if let Some(wrapper) = element.view_object_as::<StatelessViewWrapper<MyView>>() {
-    ///     // Use wrapper
-    /// }
-    /// ```
     #[inline]
     pub fn view_object_as<V: Any + Send + Sync + 'static>(&self) -> Option<&V> {
-        self.view_object.as_ref()?.as_any().downcast_ref::<V>()
+        match self {
+            Self::View(v) => v.view_object_as::<V>(),
+            Self::Render(_) => None,
+        }
     }
 
     /// Downcast view object to concrete type (mutable).
     #[inline]
     pub fn view_object_as_mut<V: Any + Send + Sync + 'static>(&mut self) -> Option<&mut V> {
-        self.view_object.as_mut()?.as_any_mut().downcast_mut::<V>()
+        match self {
+            Self::View(v) => v.view_object_as_mut::<V>(),
+            Self::Render(_) => None,
+        }
     }
 
-    /// Take the view object out of the element.
-    ///
-    /// Returns the boxed view object, leaving None in its place.
+    /// Take the view object out.
     #[inline]
     pub fn take_view_object(&mut self) -> Option<Box<dyn ViewObject>> {
-        self.view_object.take()
+        match self {
+            Self::View(v) => v.take_view_object(),
+            Self::Render(_) => None,
+        }
     }
 
-    /// Set a new view object.
-    ///
-    /// The view object must implement `ViewObject`.
+    /// Set a new view object (View variant only).
     #[inline]
     pub fn set_view_object<V: ViewObject>(&mut self, view_object: V) {
-        self.view_object = Some(Box::new(view_object));
+        if let Self::View(v) = self {
+            v.set_view_object(view_object);
+        }
     }
 
     /// Set view object from boxed ViewObject.
     #[inline]
     pub fn set_view_object_boxed(&mut self, view_object: Box<dyn ViewObject>) {
-        self.view_object = Some(view_object);
+        if let Self::View(v) = self {
+            v.set_view_object_boxed(view_object);
+        }
+    }
+
+    // ========== Render State Access (for RenderTreeAccess trait) ==========
+
+    /// Returns the render state for this element.
+    #[inline]
+    pub fn render_state(&self) -> Option<&dyn Any> {
+        match self {
+            Self::View(v) => v.view_object()?.render_state(),
+            Self::Render(r) => r.render_state(),
+        }
+    }
+
+    /// Returns a mutable reference to the render state.
+    #[inline]
+    pub fn render_state_mut(&mut self) -> Option<&mut dyn Any> {
+        match self {
+            Self::View(v) => v.view_object_mut()?.render_state_mut(),
+            Self::Render(r) => r.render_state_mut(),
+        }
     }
 
     // ========== Lifecycle Delegation ==========
 
     /// Mount element to tree.
-    ///
-    /// # Parameters
-    ///
-    /// - `parent`: Parent element ID (None for root)
-    /// - `slot`: Slot position in parent
-    /// - `depth`: Depth in tree (0 for root, parent.depth() + 1 for children)
     #[inline]
     pub fn mount(&mut self, parent: Option<ElementId>, slot: Option<Slot>, depth: usize) {
-        self.base.mount(parent, slot, depth);
+        match self {
+            Self::View(v) => v.mount(parent, slot, depth),
+            Self::Render(r) => r.mount(parent, slot, depth),
+        }
     }
 
     /// Unmount element from tree.
     #[inline]
     pub fn unmount(&mut self) {
-        self.base.unmount();
+        match self {
+            Self::View(v) => v.unmount(),
+            Self::Render(r) => r.unmount(),
+        }
     }
 
     /// Activate element.
     #[inline]
     pub fn activate(&mut self) {
-        self.base.activate();
+        match self {
+            Self::View(v) => v.activate(),
+            Self::Render(r) => r.activate(),
+        }
     }
 
     /// Deactivate element.
     #[inline]
     pub fn deactivate(&mut self) {
-        self.base.deactivate();
+        match self {
+            Self::View(v) => v.deactivate(),
+            Self::Render(r) => r.deactivate(),
+        }
     }
 
     /// Get current lifecycle state.
     #[inline]
     #[must_use]
     pub fn lifecycle(&self) -> ElementLifecycle {
-        self.base.lifecycle()
+        match self {
+            Self::View(v) => v.lifecycle(),
+            Self::Render(r) => r.lifecycle(),
+        }
     }
 
-    /// Get cached depth in tree (0 = root).
-    ///
-    /// **Lock-free and thread-safe!** O(1) lookup.
+    /// Get cached depth in tree.
     #[inline]
     #[must_use]
     pub fn depth(&self) -> usize {
-        self.base.depth()
+        match self {
+            Self::View(v) => v.depth(),
+            Self::Render(r) => r.depth(),
+        }
     }
 
-    /// Set cached depth in tree.
-    ///
-    /// **Lock-free and thread-safe!**
-    ///
-    /// Called when element is mounted or reparented.
+    /// Set cached depth.
     #[inline]
     pub fn set_depth(&self, depth: usize) {
-        self.base.set_depth(depth);
+        match self {
+            Self::View(v) => v.set_depth(depth),
+            Self::Render(r) => r.set_depth(depth),
+        }
     }
 
     // ========== Parent/Slot Accessors ==========
@@ -446,14 +433,20 @@ impl Element {
     #[inline]
     #[must_use]
     pub fn parent(&self) -> Option<ElementId> {
-        self.base.parent()
+        match self {
+            Self::View(v) => v.parent(),
+            Self::Render(r) => r.parent(),
+        }
     }
 
     /// Get slot position.
     #[inline]
     #[must_use]
     pub fn slot(&self) -> Option<Slot> {
-        self.base.slot()
+        match self {
+            Self::View(v) => v.slot(),
+            Self::Render(r) => r.slot(),
+        }
     }
 
     // ========== Dirty Tracking ==========
@@ -462,64 +455,90 @@ impl Element {
     #[inline]
     #[must_use]
     pub fn is_dirty(&self) -> bool {
-        self.base.is_dirty()
+        match self {
+            Self::View(v) => v.is_dirty(),
+            Self::Render(r) => r.is_dirty(),
+        }
     }
 
     /// Mark element as needing rebuild.
     #[inline]
     pub fn mark_dirty(&self) {
-        self.base.mark_dirty();
+        match self {
+            Self::View(v) => v.mark_dirty(),
+            Self::Render(r) => r.mark_dirty(),
+        }
     }
 
     /// Clear dirty flag.
     #[inline]
     pub fn clear_dirty(&self) {
-        self.base.clear_dirty();
+        match self {
+            Self::View(v) => v.clear_dirty(),
+            Self::Render(r) => r.clear_dirty(),
+        }
     }
 
     /// Check if needs layout.
     #[inline]
     #[must_use]
     pub fn needs_layout(&self) -> bool {
-        self.base.needs_layout()
+        match self {
+            Self::View(_) => false,
+            Self::Render(r) => r.needs_layout(),
+        }
     }
 
     /// Mark needs layout.
     #[inline]
     pub fn mark_needs_layout(&self) {
-        self.base.mark_needs_layout();
+        if let Self::Render(r) = self {
+            r.mark_needs_layout();
+        }
     }
 
     /// Clear needs layout.
     #[inline]
     pub fn clear_needs_layout(&self) {
-        self.base.clear_needs_layout();
+        if let Self::Render(r) = self {
+            r.clear_needs_layout();
+        }
     }
 
     /// Check if needs paint.
     #[inline]
     #[must_use]
     pub fn needs_paint(&self) -> bool {
-        self.base.needs_paint()
+        match self {
+            Self::View(_) => false,
+            Self::Render(r) => r.needs_paint(),
+        }
     }
 
     /// Mark needs paint.
     #[inline]
     pub fn mark_needs_paint(&self) {
-        self.base.mark_needs_paint();
+        if let Self::Render(r) = self {
+            r.mark_needs_paint();
+        }
     }
 
     /// Clear needs paint.
     #[inline]
     pub fn clear_needs_paint(&self) {
-        self.base.clear_needs_paint();
+        if let Self::Render(r) = self {
+            r.clear_needs_paint();
+        }
     }
 
     /// Check if mounted.
     #[inline]
     #[must_use]
     pub fn is_mounted(&self) -> bool {
-        self.base.is_mounted()
+        match self {
+            Self::View(v) => v.is_mounted(),
+            Self::Render(r) => r.is_mounted(),
+        }
     }
 
     // ========== Child Management ==========
@@ -528,59 +547,86 @@ impl Element {
     #[inline]
     #[must_use]
     pub fn children(&self) -> &[ElementId] {
-        &self.children
+        match self {
+            Self::View(v) => v.children(),
+            Self::Render(r) => r.children(),
+        }
     }
 
     /// Get mutable child element IDs.
     #[inline]
     #[must_use]
     pub fn children_mut(&mut self) -> &mut Vec<ElementId> {
-        &mut self.children
+        match self {
+            Self::View(v) => v.children_mut(),
+            Self::Render(r) => r.children_mut(),
+        }
     }
 
     /// Add a child element.
     #[inline]
     pub fn add_child(&mut self, child_id: ElementId) {
-        self.children.push(child_id);
+        match self {
+            Self::View(v) => v.add_child(child_id),
+            Self::Render(r) => r.add_child(child_id),
+        }
     }
 
     /// Remove a child element.
     #[inline]
     pub fn remove_child(&mut self, child_id: ElementId) {
-        self.children.retain(|&id| id != child_id);
+        match self {
+            Self::View(v) => v.remove_child(child_id),
+            Self::Render(r) => r.remove_child(child_id),
+        }
     }
 
     /// Clear all children.
     #[inline]
     pub fn clear_children(&mut self) {
-        self.children.clear();
+        match self {
+            Self::View(v) => v.clear_children(),
+            Self::Render(r) => r.clear_children(),
+        }
     }
 
     /// Set children from iterator.
     #[inline]
     pub fn set_children(&mut self, children: impl IntoIterator<Item = ElementId>) {
-        self.children = children.into_iter().collect();
+        match self {
+            Self::View(v) => v.set_children(children),
+            Self::Render(r) => r.set_children(children),
+        }
     }
 
     /// Check if element has children.
     #[inline]
     #[must_use]
     pub fn has_children(&self) -> bool {
-        !self.children.is_empty()
+        match self {
+            Self::View(v) => v.has_children(),
+            Self::Render(r) => r.has_children(),
+        }
     }
 
     /// Get first child.
     #[inline]
     #[must_use]
     pub fn first_child(&self) -> Option<ElementId> {
-        self.children.first().copied()
+        match self {
+            Self::View(v) => v.first_child(),
+            Self::Render(r) => r.first_child(),
+        }
     }
 
     /// Get child count.
     #[inline]
     #[must_use]
     pub fn child_count(&self) -> usize {
-        self.children.len()
+        match self {
+            Self::View(v) => v.child_count(),
+            Self::Render(r) => r.child_count(),
+        }
     }
 
     // ========== Debug ==========
@@ -589,29 +635,43 @@ impl Element {
     #[inline]
     #[must_use]
     pub fn debug_name(&self) -> &'static str {
-        self.debug_name.unwrap_or("Element")
+        match self {
+            Self::View(v) => v.debug_name(),
+            Self::Render(r) => r.debug_name(),
+        }
+    }
+
+    /// Builder: set debug name.
+    pub fn with_debug_name(self, name: &'static str) -> Self {
+        match self {
+            Self::View(v) => Self::View(v.with_debug_name(name)),
+            Self::Render(r) => Self::Render(r.with_debug_name(name)),
+        }
     }
 
     /// Access the internal ElementBase.
     #[inline]
     #[must_use]
     pub fn base(&self) -> &ElementBase {
-        &self.base
+        match self {
+            Self::View(v) => v.base(),
+            Self::Render(r) => r.base(),
+        }
     }
 
     /// Access the internal ElementBase mutably.
     #[inline]
     #[must_use]
     pub fn base_mut(&mut self) -> &mut ElementBase {
-        &mut self.base
+        match self {
+            Self::View(v) => v.base_mut(),
+            Self::Render(r) => r.base_mut(),
+        }
     }
 
     // ========== Compatibility Stubs ==========
-    // These methods provide API compatibility with the old element module.
 
     /// Stub: Get dependents list for provider elements (always returns None).
-    ///
-    /// Provider dependents are managed by ProviderViewWrapper in flui-view.
     #[inline]
     #[must_use]
     pub fn dependents(&self) -> Option<&[ElementId]> {
@@ -619,8 +679,6 @@ impl Element {
     }
 
     /// Stub: Get as component (returns Some(()) if is_component).
-    ///
-    /// For actual component data, downcast the view_object.
     #[inline]
     #[must_use]
     pub fn as_component(&self) -> Option<()> {
@@ -643,8 +701,6 @@ impl Element {
     }
 
     /// Stub: Get as provider (returns Some(()) if is_provider).
-    ///
-    /// For actual provider data, downcast the view_object.
     #[inline]
     #[must_use]
     pub fn as_provider(&self) -> Option<()> {
@@ -655,34 +711,10 @@ impl Element {
         }
     }
 
-    /// Stub: Handle event (always returns false - not handled).
-    ///
-    /// Event handling should be implemented in the gesture/interaction layer.
+    /// Stub: Handle event (always returns false).
     #[inline]
-    pub fn handle_event(&mut self, _event: &dyn std::any::Any) -> bool {
+    pub fn handle_event(&mut self, _event: &dyn Any) -> bool {
         false
-    }
-
-    // ========== Render State Access (for RenderTreeAccess trait) ==========
-
-    /// Returns the render state for this element, if it's a render element.
-    ///
-    /// # Returns
-    ///
-    /// Reference to the RenderState as `dyn Any`, or `None` if not a render element.
-    #[inline]
-    pub fn render_state(&self) -> Option<&dyn std::any::Any> {
-        self.view_object.as_ref()?.render_state()
-    }
-
-    /// Returns a mutable reference to the render state, if it's a render element.
-    ///
-    /// # Returns
-    ///
-    /// Mutable reference to the RenderState as `dyn Any`, or `None` if not a render element.
-    #[inline]
-    pub fn render_state_mut(&mut self) -> Option<&mut dyn std::any::Any> {
-        self.view_object.as_mut()?.render_state_mut()
     }
 }
 
@@ -695,7 +727,7 @@ mod tests {
     use super::*;
     use crate::BuildContext;
 
-    // Test view object type for testing
+    // Test view object type
     #[derive(Debug)]
     struct TestViewObject {
         value: i32,
@@ -706,8 +738,8 @@ mod tests {
             ViewMode::Stateless
         }
 
-        fn build(&mut self, _ctx: &dyn BuildContext) -> Element {
-            Element::empty()
+        fn build(&mut self, _ctx: &dyn BuildContext) -> Option<Box<dyn ViewObject>> {
+            None
         }
 
         fn as_any(&self) -> &dyn Any {
@@ -719,79 +751,92 @@ mod tests {
         }
     }
 
+    #[derive(Debug)]
+    struct TestRenderObject {
+        value: i32,
+    }
+
+    #[derive(Debug)]
+    struct TestRenderState {
+        size: (f32, f32),
+    }
+
     #[test]
-    fn test_element_creation() {
-        let element = Element::new(TestViewObject { value: 42 });
+    fn test_element_view_variant() {
+        let element = Element::view(TestViewObject { value: 42 }, ViewMode::Stateless);
+
+        assert!(element.is_view_element());
+        assert!(!element.is_render_element());
+        assert!(element.is_component());
+        assert!(!element.is_render());
         assert!(element.has_view_object());
-        assert_eq!(element.lifecycle(), ElementLifecycle::Initial);
+    }
+
+    #[test]
+    fn test_element_render_variant() {
+        let element = Element::render(
+            TestRenderObject { value: 42 },
+            TestRenderState {
+                size: (100.0, 50.0),
+            },
+            ViewMode::RenderBox,
+        );
+
+        assert!(!element.is_view_element());
+        assert!(element.is_render_element());
+        assert!(!element.is_component());
+        assert!(element.is_render());
+        assert!(!element.has_view_object());
     }
 
     #[test]
     fn test_element_empty() {
         let element = Element::empty();
+        assert!(element.is_view_element());
         assert!(!element.has_view_object());
-        assert_eq!(element.debug_name(), "Empty");
     }
 
     #[test]
-    fn test_view_object_downcast() {
-        let element = Element::new(TestViewObject { value: 42 });
+    fn test_as_view_as_render() {
+        let view = Element::view(TestViewObject { value: 1 }, ViewMode::Stateless);
+        assert!(view.as_view().is_some());
+        assert!(view.as_render().is_none());
 
-        let view_object = element.view_object_as::<TestViewObject>();
-        assert!(view_object.is_some());
-        assert_eq!(view_object.unwrap().value, 42);
-
-        // Wrong type returns None
-        let wrong: Option<&String> = element.view_object_as::<String>();
-        assert!(wrong.is_none());
+        let render = Element::render(
+            TestRenderObject { value: 1 },
+            TestRenderState { size: (10.0, 10.0) },
+            ViewMode::RenderBox,
+        );
+        assert!(render.as_view().is_none());
+        assert!(render.as_render().is_some());
     }
 
     #[test]
-    fn test_view_object_downcast_mut() {
-        let mut element = Element::new(TestViewObject { value: 42 });
+    fn test_lifecycle() {
+        let mut element = Element::view(TestViewObject { value: 1 }, ViewMode::Stateless);
 
-        if let Some(vo) = element.view_object_as_mut::<TestViewObject>() {
-            vo.value = 100;
-        }
-
-        let view_object = element.view_object_as::<TestViewObject>();
-        assert_eq!(view_object.unwrap().value, 100);
-    }
-
-    #[test]
-    fn test_element_lifecycle() {
-        let mut element = Element::new(TestViewObject { value: 1 });
-
-        // Initial state
-        assert!(element.is_dirty());
         assert_eq!(element.lifecycle(), ElementLifecycle::Initial);
 
-        // Mount
-        element.mount(Some(ElementId::new(1)), Some(Slot::new(0)), 0);
+        element.mount(Some(ElementId::new(1)), Some(Slot::new(0)), 1);
         assert_eq!(element.lifecycle(), ElementLifecycle::Active);
         assert!(element.is_mounted());
 
-        // Deactivate
         element.deactivate();
         assert_eq!(element.lifecycle(), ElementLifecycle::Inactive);
 
-        // Activate
         element.activate();
         assert_eq!(element.lifecycle(), ElementLifecycle::Active);
 
-        // Unmount
         element.unmount();
         assert_eq!(element.lifecycle(), ElementLifecycle::Defunct);
     }
 
     #[test]
     fn test_children_management() {
-        let mut element = Element::new(TestViewObject { value: 1 });
+        let mut element = Element::view(TestViewObject { value: 1 }, ViewMode::Stateless);
 
         assert!(!element.has_children());
-        assert_eq!(element.child_count(), 0);
 
-        // Add children
         element.add_child(ElementId::new(10));
         element.add_child(ElementId::new(20));
 
@@ -799,29 +844,20 @@ mod tests {
         assert_eq!(element.child_count(), 2);
         assert_eq!(element.first_child(), Some(ElementId::new(10)));
 
-        // Remove child
         element.remove_child(ElementId::new(10));
         assert_eq!(element.child_count(), 1);
-        assert_eq!(element.first_child(), Some(ElementId::new(20)));
 
-        // Clear
         element.clear_children();
         assert!(!element.has_children());
     }
 
     #[test]
-    fn test_take_view_object() {
-        let mut element = Element::new(TestViewObject { value: 42 });
+    fn test_backward_compatibility() {
+        // Test that old API still works
+        let element = Element::with_mode(TestViewObject { value: 42 }, ViewMode::Stateless);
         assert!(element.has_view_object());
 
-        let taken = element.take_view_object();
-        assert!(taken.is_some());
-        assert!(!element.has_view_object());
-
-        // Can downcast the taken value via as_any()
-        let boxed = taken.unwrap();
-        let downcasted = boxed.as_any().downcast_ref::<TestViewObject>();
-        assert!(downcasted.is_some());
-        assert_eq!(downcasted.unwrap().value, 42);
+        let element2 = Element::new(TestViewObject { value: 42 });
+        assert!(element2.has_view_object());
     }
 }

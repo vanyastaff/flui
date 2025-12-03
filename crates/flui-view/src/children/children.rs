@@ -1,10 +1,10 @@
 //! Multiple children wrapper.
 
-use flui_element::{Element, IntoElement};
+use crate::{IntoView, ViewObject};
 
 /// Multiple children wrapper.
 ///
-/// Provides a cleaner API than `Vec<Element>` for multi-child widgets.
+/// Provides a cleaner API than `Vec<Box<dyn ViewObject>>` for multi-child widgets.
 ///
 /// # Examples
 ///
@@ -18,15 +18,23 @@ use flui_element::{Element, IntoElement};
 ///         Self { children: Children::new() }
 ///     }
 ///
-///     pub fn child(mut self, child: impl IntoElement) -> Self {
+///     pub fn child(mut self, child: impl IntoView) -> Self {
 ///         self.children.push(child);
 ///         self
 ///     }
 /// }
 /// ```
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct Children {
-    inner: Vec<Element>,
+    inner: Vec<Box<dyn ViewObject>>,
+}
+
+impl std::fmt::Debug for Children {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Children")
+            .field("count", &self.inner.len())
+            .finish()
+    }
 }
 
 impl Children {
@@ -46,20 +54,20 @@ impl Children {
 
     /// Adds a child.
     #[inline]
-    pub fn push<V: IntoElement>(&mut self, view: V) {
-        self.inner.push(view.into_element());
+    pub fn push<V: IntoView>(&mut self, view: V) {
+        self.inner.push(view.into_view());
     }
 
-    /// Adds an element.
+    /// Adds a boxed ViewObject.
     #[inline]
-    pub fn push_element(&mut self, element: Element) {
-        self.inner.push(element);
+    pub fn push_view_object(&mut self, view_object: Box<dyn ViewObject>) {
+        self.inner.push(view_object);
     }
 
     /// Extends with multiple children.
     pub fn extend<V, I>(&mut self, views: I)
     where
-        V: IntoElement,
+        V: IntoView,
         I: IntoIterator<Item = V>,
     {
         for view in views {
@@ -85,14 +93,14 @@ impl Children {
         self.inner.clear();
     }
 
-    /// Converts to `Vec<Element>`.
+    /// Converts to `Vec<Box<dyn ViewObject>>`.
     #[inline]
-    pub fn into_inner(self) -> Vec<Element> {
+    pub fn into_inner(self) -> Vec<Box<dyn ViewObject>> {
         self.inner
     }
 }
 
-impl<V: IntoElement> FromIterator<V> for Children {
+impl<V: IntoView> FromIterator<V> for Children {
     fn from_iter<I: IntoIterator<Item = V>>(iter: I) -> Self {
         let mut children = Children::new();
         children.extend(iter);
@@ -101,28 +109,25 @@ impl<V: IntoElement> FromIterator<V> for Children {
 }
 
 impl IntoIterator for Children {
-    type Item = Element;
-    type IntoIter = std::vec::IntoIter<Element>;
+    type Item = Box<dyn ViewObject>;
+    type IntoIter = std::vec::IntoIter<Box<dyn ViewObject>>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.inner.into_iter()
     }
 }
 
-impl From<Children> for Vec<Element> {
+impl From<Children> for Vec<Box<dyn ViewObject>> {
     fn from(children: Children) -> Self {
         children.inner
     }
 }
 
-// Allow Vec<V> where V: IntoElement to be converted to Children
-impl<V: IntoElement> From<Vec<V>> for Children {
+// Allow Vec<V> where V: IntoView to be converted to Children
+impl<V: IntoView> From<Vec<V>> for Children {
     fn from(views: Vec<V>) -> Self {
         Children {
-            inner: views
-                .into_iter()
-                .map(flui_element::IntoElement::into_element)
-                .collect(),
+            inner: views.into_iter().map(IntoView::into_view).collect(),
         }
     }
 }
@@ -142,5 +147,19 @@ mod tests {
     fn test_children_with_capacity() {
         let children = Children::with_capacity(10);
         assert!(children.is_empty());
+    }
+
+    #[test]
+    fn test_children_push() {
+        let mut children = Children::new();
+        children.push(crate::EmptyView);
+        assert_eq!(children.len(), 1);
+    }
+
+    #[test]
+    fn test_children_from_vec() {
+        let views = vec![crate::EmptyView, crate::EmptyView];
+        let children: Children = views.into();
+        assert_eq!(children.len(), 2);
     }
 }

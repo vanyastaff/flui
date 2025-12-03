@@ -175,23 +175,8 @@ impl BuildContext for PipelineBuildContext {
                 // Get the view object and check if it provides the right type
                 let view_object = element.view_object()?;
 
-                // Downcast to ProviderViewObject to get provided_value()
-                // We can't directly downcast trait objects, so we use a workaround:
-                // Call as_any() and then try to call provided_value via the concrete type
-                //
-                // Since we know the element is a provider (ViewMode::Provider),
-                // we know it must implement ProviderViewObject.
-                // We can use the fact that provided_value is exposed through the concrete wrapper.
-                //
-                // For now, use unsafe transmute as a workaround
-                // TODO: Find a better way to access ProviderViewObject methods
-                use std::mem::transmute;
-
-                // SAFETY: We know this is a ProviderViewObject because is_provider() returned true
-                let provider: &dyn flui_element::ProviderViewObject =
-                    unsafe { transmute(view_object) };
-
-                let provided = provider.provided_value();
+                // Get provided value directly from ViewObject trait
+                let provided = view_object.provided_value()?;
 
                 // Check if type matches
                 if (*provided).type_id() != type_id {
@@ -209,11 +194,7 @@ impl BuildContext for PipelineBuildContext {
                 let mut tree_mut = self.tree.write();
                 if let Some(provider_elem) = tree_mut.get_mut(current_id) {
                     if let Some(provider_vo) = provider_elem.view_object_mut() {
-                        use std::mem::transmute;
-                        // SAFETY: We know this is a ProviderViewObject
-                        let provider_mut: &mut dyn flui_element::ProviderViewObject =
-                            unsafe { transmute(provider_vo) };
-                        provider_mut.add_dependent(self.element_id);
+                        provider_vo.add_dependent(self.element_id);
                     }
                 }
             }

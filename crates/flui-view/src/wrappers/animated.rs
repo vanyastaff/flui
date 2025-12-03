@@ -6,9 +6,8 @@ use std::any::Any;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use flui_element::{BuildContext, Element, IntoElement, ViewMode, ViewObject};
-
 use crate::traits::{AnimatedView, Listenable};
+use crate::{BuildContext, IntoView, ViewMode, ViewObject};
 
 /// Wrapper for `AnimatedView` that implements `ViewObject`
 ///
@@ -112,12 +111,12 @@ where
         ViewMode::Animated
     }
 
-    fn build(&mut self, ctx: &dyn BuildContext) -> Element {
+    fn build(&mut self, ctx: &dyn BuildContext) -> Option<Box<dyn ViewObject>> {
         // Call animation tick hook
         self.view.on_animation_tick(ctx);
 
         // Build the child
-        self.view.build(ctx).into_element()
+        Some(self.view.build(ctx).into_view())
     }
 
     fn init(&mut self, ctx: &dyn BuildContext) {
@@ -158,12 +157,12 @@ where
 }
 
 // ============================================================================
-// IntoElement IMPLEMENTATION
+// IntoView IMPLEMENTATION
 // ============================================================================
 
 /// Helper struct to disambiguate `AnimatedView` from other view types
 ///
-/// Use `Animated(my_view)` to create an animated element.
+/// Use `Animated(my_view)` to create an animated view object.
 #[derive(Debug)]
 pub struct Animated<V, L>(pub V, std::marker::PhantomData<L>)
 where
@@ -181,14 +180,13 @@ where
     }
 }
 
-impl<V, L> IntoElement for Animated<V, L>
+impl<V, L> IntoView for Animated<V, L>
 where
     V: AnimatedView<L>,
     L: Listenable,
 {
-    fn into_element(self) -> Element {
-        let wrapper = AnimatedViewWrapper::<V, L>::new(self.0);
-        Element::with_mode(wrapper, ViewMode::Animated)
+    fn into_view(self) -> Box<dyn ViewObject> {
+        Box::new(AnimatedViewWrapper::<V, L>::new(self.0))
     }
 }
 
@@ -199,24 +197,51 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::context::MockBuildContext;
+    use flui_foundation::ElementId;
     use parking_lot::Mutex;
+
+    // Helper for tests - represents an empty view
+    struct EmptyIntoView;
+
+    impl IntoView for EmptyIntoView {
+        fn into_view(self) -> Box<dyn ViewObject> {
+            Box::new(EmptyViewObject)
+        }
+    }
+
+    struct EmptyViewObject;
+
+    impl ViewObject for EmptyViewObject {
+        fn mode(&self) -> ViewMode {
+            ViewMode::Stateless
+        }
+
+        fn build(&mut self, _ctx: &dyn BuildContext) -> Option<Box<dyn ViewObject>> {
+            None
+        }
+
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn as_any_mut(&mut self) -> &mut dyn Any {
+            self
+        }
+    }
 
     /// Simple test animation controller
     struct TestAnimation {
-        value: f32,
+        _value: f32,
         callback: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
     }
 
     impl TestAnimation {
         fn new(value: f32) -> Self {
             Self {
-                value,
+                _value: value,
                 callback: Mutex::new(None),
             }
-        }
-
-        fn value(&self) -> f32 {
-            self.value
         }
     }
 
@@ -235,9 +260,9 @@ mod tests {
     }
 
     impl AnimatedView<TestAnimation> for TestAnimatedView {
-        fn build(&mut self, _ctx: &dyn BuildContext) -> impl IntoElement {
+        fn build(&mut self, _ctx: &dyn BuildContext) -> impl IntoView {
             // Would use animation.value() to build UI
-            ()
+            EmptyIntoView
         }
 
         fn listenable(&self) -> &TestAnimation {
@@ -255,11 +280,22 @@ mod tests {
     }
 
     #[test]
-    fn test_into_element() {
+    fn test_into_view() {
         let view = TestAnimatedView {
             animation: TestAnimation::new(0.5),
         };
-        let element = Animated::new(view).into_element();
-        assert!(element.has_view_object());
+        let view_obj = Animated::new(view).into_view();
+        assert_eq!(view_obj.mode(), ViewMode::Animated);
+    }
+
+    #[test]
+    fn test_build() {
+        let mut wrapper = AnimatedViewWrapper::new(TestAnimatedView {
+            animation: TestAnimation::new(0.5),
+        });
+        let ctx = MockBuildContext::new(ElementId::new(1));
+
+        let result = wrapper.build(&ctx);
+        assert!(result.is_some());
     }
 }

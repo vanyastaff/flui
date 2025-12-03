@@ -33,7 +33,8 @@
 pub use flui_view::{AnimatedView, ProviderView, ProxyView, StatefulView, StatelessView};
 
 /// Render view trait
-pub use flui_rendering::view::RenderView;
+// TODO: Re-enable after view module is fixed for typed protocols
+// pub use flui_rendering::view::RenderView;
 
 /// Context for view building (abstract trait)
 pub use flui_view::BuildContext;
@@ -42,7 +43,7 @@ pub use flui_view::BuildContext;
 pub use flui_pipeline::context::PipelineBuildContext;
 
 /// Trait for converting to elements
-pub use flui_view::IntoElement;
+pub use flui_element::IntoElement;
 
 /// Element from flui-element
 pub use flui_element::Element;

@@ -5,8 +5,7 @@
 
 use std::sync::Arc;
 
-use flui_element::BuildContext;
-use flui_element::IntoElement;
+use crate::{BuildContext, IntoView};
 
 /// `ProviderView` - Views that provide data to descendants.
 ///
@@ -28,26 +27,26 @@ use flui_element::IntoElement;
 /// ```rust,ignore
 /// struct ThemeProvider {
 ///     theme: Arc<Theme>,
-///     child: Element,
+///     child: Box<dyn ViewObject>,
 /// }
 ///
 /// impl ProviderView<Theme> for ThemeProvider {
-///     fn value(&self) -> &Theme {
-///         &self.theme
+///     fn value(&self) -> Arc<Theme> {
+///         self.theme.clone()
 ///     }
 ///
-///     fn build(&mut self, _ctx: &BuildContext) -> impl IntoElement {
-///         self.child.clone()
+///     fn build(&mut self, _ctx: &dyn BuildContext) -> impl IntoView {
+///         // Return child
 ///     }
 ///
-///     fn should_notify(&self, old: &Self) -> bool {
-///         !Arc::ptr_eq(&self.theme, &old.theme)
+///     fn should_notify(&self, old: &Theme) -> bool {
+///         self.theme.primary_color != old.primary_color
 ///     }
 /// }
 ///
 /// // Usage in descendant:
 /// impl StatelessView for ThemedButton {
-///     fn build(self, ctx: &BuildContext) -> impl IntoElement {
+///     fn build(self, ctx: &dyn BuildContext) -> impl IntoView {
 ///         let theme = ctx.depend_on::<Theme>();
 ///         Button::new("Click").color(theme.primary_color)
 ///     }
@@ -69,9 +68,9 @@ use flui_element::IntoElement;
 pub trait ProviderView<T: Send + Sync + 'static>: Send + Sync + 'static {
     /// Build the child subtree.
     ///
-    /// Typically just returns the child element unchanged, as the provider
+    /// Typically just returns the child view object unchanged, as the provider
     /// doesn't modify layout - it only provides data.
-    fn build(&mut self, ctx: &dyn BuildContext) -> impl IntoElement;
+    fn build(&mut self, ctx: &dyn BuildContext) -> impl IntoView;
 
     /// Get the value to provide (as Arc for sharing).
     ///

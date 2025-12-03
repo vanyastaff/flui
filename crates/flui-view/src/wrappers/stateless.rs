@@ -5,9 +5,8 @@
 use std::any::Any;
 use std::marker::PhantomData;
 
-use flui_element::{BuildContext, Element, IntoElement, ViewMode, ViewObject};
-
 use crate::traits::StatelessView;
+use crate::{BuildContext, IntoView, ViewMode, ViewObject};
 
 /// Wrapper for `StatelessView` that implements `ViewObject`
 ///
@@ -43,12 +42,12 @@ impl<V: StatelessView> ViewObject for StatelessViewWrapper<V> {
         ViewMode::Stateless
     }
 
-    fn build(&mut self, ctx: &dyn BuildContext) -> Element {
+    fn build(&mut self, ctx: &dyn BuildContext) -> Option<Box<dyn ViewObject>> {
         // Take the view (it's consumed by build)
         if let Some(view) = self.view.take() {
-            view.build(ctx).into_element()
+            Some(view.build(ctx).into_view())
         } else {
-            Element::empty()
+            None
         }
     }
 
@@ -66,27 +65,18 @@ impl<V: StatelessView> ViewObject for StatelessViewWrapper<V> {
 }
 
 // ============================================================================
-// IntoElement IMPLEMENTATION
+// IntoView IMPLEMENTATION
 // ============================================================================
 
-// Note: Blanket impl `impl<V: StatelessView> IntoElement for V` is not possible
-// because IntoElement is defined in flui-element (orphan rules).
-//
-// Instead, users can:
-// 1. Implement IntoElement manually for their view type
-// 2. Use StatelessViewWrapper directly: Element::new(StatelessViewWrapper::new(view))
-// 3. Use the Stateless helper (below)
-
-/// Helper struct to convert `StatelessView` into Element
+/// Helper struct to convert `StatelessView` into ViewObject
 ///
-/// Use `Stateless(my_view)` to create an element from a stateless view.
+/// Use `Stateless(my_view)` to create a view object from a stateless view.
 #[derive(Debug)]
 pub struct Stateless<V: StatelessView>(pub V);
 
-impl<V: StatelessView> IntoElement for Stateless<V> {
-    fn into_element(self) -> Element {
-        let wrapper = StatelessViewWrapper::new(self.0);
-        Element::with_mode(wrapper, ViewMode::Stateless)
+impl<V: StatelessView> IntoView for Stateless<V> {
+    fn into_view(self) -> Box<dyn ViewObject> {
+        Box::new(StatelessViewWrapper::new(self.0))
     }
 }
 
@@ -97,28 +87,74 @@ impl<V: StatelessView> IntoElement for Stateless<V> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::context::MockBuildContext;
+    use flui_foundation::ElementId;
 
     struct TestView {
-        value: i32,
+        _value: i32,
     }
 
     impl StatelessView for TestView {
-        fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
-            () // Returns empty element
+        fn build(self, _ctx: &dyn BuildContext) -> impl IntoView {
+            // Returns None - empty view
+            EmptyIntoView
+        }
+    }
+
+    // Helper for tests - represents an empty view
+    struct EmptyIntoView;
+
+    impl IntoView for EmptyIntoView {
+        fn into_view(self) -> Box<dyn ViewObject> {
+            Box::new(EmptyViewObject)
+        }
+    }
+
+    struct EmptyViewObject;
+
+    impl ViewObject for EmptyViewObject {
+        fn mode(&self) -> ViewMode {
+            ViewMode::Stateless
+        }
+
+        fn build(&mut self, _ctx: &dyn BuildContext) -> Option<Box<dyn ViewObject>> {
+            None
+        }
+
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn as_any_mut(&mut self) -> &mut dyn Any {
+            self
         }
     }
 
     #[test]
     fn test_wrapper_creation() {
-        let wrapper = StatelessViewWrapper::new(TestView { value: 42 });
+        let wrapper = StatelessViewWrapper::new(TestView { _value: 42 });
         assert!(wrapper.view.is_some());
         assert_eq!(wrapper.mode(), ViewMode::Stateless);
     }
 
     #[test]
-    fn test_into_element() {
-        let view = TestView { value: 42 };
-        let element = Stateless(view).into_element();
-        assert!(element.has_view_object());
+    fn test_into_view() {
+        let view = TestView { _value: 42 };
+        let view_obj = Stateless(view).into_view();
+        assert_eq!(view_obj.mode(), ViewMode::Stateless);
+    }
+
+    #[test]
+    fn test_build_consumes_view() {
+        let mut wrapper = StatelessViewWrapper::new(TestView { _value: 42 });
+        let ctx = MockBuildContext::new(ElementId::new(1));
+
+        // First build should succeed
+        let result = wrapper.build(&ctx);
+        assert!(result.is_some());
+
+        // Second build should return None (view consumed)
+        let result2 = wrapper.build(&ctx);
+        assert!(result2.is_none());
     }
 }

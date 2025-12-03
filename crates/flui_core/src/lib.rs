@@ -40,7 +40,8 @@ pub use flui_types::{Offset, Size};
 // Re-exports from flui-foundation crate
 // =============================================================================
 
-pub use flui_foundation::{ElementId, Key, Slot, ViewMode};
+pub use flui_foundation::{ElementId, Key, Slot};
+pub use flui_view::ViewMode;
 
 // =============================================================================
 // Re-exports from flui-element crate
@@ -58,13 +59,15 @@ pub mod element {
 // Re-exports from flui-view crate
 // =============================================================================
 
-pub use flui_view::{BuildContext, IntoElement, ViewObject};
+pub use flui_element::IntoElement;
+pub use flui_view::{BuildContext, ViewObject};
 
 // View traits module for backward compatibility with widgets
 pub mod view {
+    pub use flui_element::IntoElement;
     pub use flui_view::{
-        children, AnimatedView, BuildContext, Child, Children, IntoElement, Listenable,
-        ProviderView, ProxyView, StatefulView, StatelessView, ViewMode, ViewState,
+        children, AnimatedView, BuildContext, Child, Children, Listenable, ProviderView, ProxyView,
+        StatefulView, StatelessView, ViewMode, ViewState,
     };
 }
 
@@ -72,15 +75,20 @@ pub mod view {
 // Re-exports from flui-rendering
 // =============================================================================
 
-pub use flui_rendering::{
-    core::{Arity, RenderBox, RenderState, RuntimeArity},
-    view::{RenderObjectWrapper, RenderView, RenderViewObject, RenderViewWrapper, UpdateResult},
-};
+pub use flui_rendering::core::{Arity, RenderBox, RuntimeArity};
+// TODO: Re-enable after view module is fixed for typed protocols
+// pub use flui_rendering::view::{RenderObjectWrapper, RenderView, RenderViewObject, RenderViewWrapper, UpdateResult};
 
 // Render module for backward compatibility with widgets
 pub mod render {
     pub use flui_rendering::prelude::*;
-    pub use flui_rendering::{LayoutContext, PaintContext, RenderBoxExt, SliverRenderExt};
+    // Additional re-exports for convenience
+    pub use flui_rendering::{
+        BoxHitTestContext, BoxLayoutContext, BoxPaintContext, HitTestContext, LayoutContext,
+        PaintContext, SliverHitTestContext, SliverLayoutContext, SliverPaintContext,
+    };
+    // RenderState types
+    pub use flui_rendering::core::{BoxRenderState, RenderState, SliverRenderState};
 }
 
 // =============================================================================

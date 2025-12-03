@@ -10,9 +10,9 @@
 //!   ↓ implement ViewObject
 //! ViewObject (dynamic dispatch)
 //!   ├─ Component views: Stateless, Stateful, Proxy, Animated
-//!   │   └─ build() returns child View (wrapped in Element)
+//!   │   └─ build() returns child ViewObject via IntoView
 //!   └─ Provider views: Inherited data provider
-//!       └─ build() returns child View, has provided_value(), dependents()
+//!       └─ build() returns child ViewObject, has provided_value(), dependents()
 //!
 //! Render views are handled by RenderViewObject in flui_rendering.
 //! ```
@@ -20,26 +20,16 @@
 //! # Design Principles
 //!
 //! This trait is intentionally minimal and has NO dependencies on:
+//! - flui-element (Element, ElementTree, etc.)
 //! - flui_rendering (RenderObject, RenderState, etc.)
 //! - flui_painting (Canvas)
-//! - flui_types (BoxConstraints, Size, Offset)
-//!
-//! # Trait Hierarchy
-//!
-//! ```text
-//! ViewObject (core lifecycle) ─────────────────────────────────────┐
-//!   │                                                               │
-//!   ├── ProviderViewObject (provider-specific)                      │
-//!   │     └── provided_value(), dependents()                        │
-//!   │                                                               │
-//!   └── (in flui_rendering)                                         │
-//!         RenderViewObject (render-specific)                        │
-//!           └── render_object(), render_state(), perform_layout()   │
-//! ```
 
 use std::any::Any;
+use std::sync::Arc;
 
-use crate::{BuildContext, Element, ViewMode};
+use flui_foundation::ElementId;
+
+use crate::{BuildContext, ViewMode};
 
 /// ViewObject - Core dynamic dispatch interface for view lifecycle
 ///
@@ -48,11 +38,11 @@ use crate::{BuildContext, Element, ViewMode};
 ///
 /// # Thread Safety
 ///
-/// ViewObject requires `Send` for cross-thread element transfer.
+/// ViewObject requires `Send + Sync` for cross-thread element transfer.
 ///
 /// # Lifecycle
 ///
-/// 1. `build()` - Create child element(s)
+/// 1. `build()` - Create child view object(s)
 /// 2. `init()` - Called after element is mounted
 /// 3. `did_change_dependencies()` - Called when inherited values change
 /// 4. `did_update()` - Called when view is updated with new config
@@ -69,15 +59,21 @@ pub trait ViewObject: Send + Sync + 'static {
     /// Get the view mode (Stateless, Stateful, RenderBox, etc.)
     fn mode(&self) -> ViewMode;
 
-    /// Build this view, producing child element(s)
+    /// Build this view, producing child view object(s)
     ///
     /// Called during the build phase to create/update children.
     ///
     /// # Returns
     ///
-    /// For component views: Returns the child element
-    /// For render views: Returns Element::empty() (render views don't have logical children)
-    fn build(&mut self, ctx: &dyn BuildContext) -> Element;
+    /// For component views: Returns the child view object (wrapped in Option)
+    /// For render views: Returns None (render views don't have logical children built this way)
+    ///
+    /// # Note
+    ///
+    /// The return type is `Option<Box<dyn ViewObject>>` to avoid circular
+    /// dependency between flui-view and flui-element. The Element wrapper
+    /// in flui-element handles converting this to an Element.
+    fn build(&mut self, ctx: &dyn BuildContext) -> Option<Box<dyn ViewObject>>;
 
     // ========== LIFECYCLE (with defaults) ==========
 
@@ -119,6 +115,60 @@ pub trait ViewObject: Send + Sync + 'static {
     /// Default: None (non-render views don't have render state)
     fn render_state_mut(&mut self) -> Option<&mut dyn Any> {
         None
+    }
+
+    // ========== PROVIDER METHODS (for provider views) ==========
+
+    /// Get provided value as Arc<dyn Any>.
+    ///
+    /// Only implemented by ProviderViewWrapper.
+    /// Returns None for non-provider views.
+    fn provided_value(&self) -> Option<Arc<dyn Any + Send + Sync>> {
+        None
+    }
+
+    /// Get dependents list.
+    ///
+    /// Only implemented by ProviderViewWrapper.
+    /// Returns empty slice for non-provider views.
+    fn dependents(&self) -> &[ElementId] {
+        &[]
+    }
+
+    /// Get mutable dependents list.
+    ///
+    /// Only implemented by ProviderViewWrapper.
+    /// Returns None for non-provider views.
+    fn dependents_mut(&mut self) -> Option<&mut Vec<ElementId>> {
+        None
+    }
+
+    /// Add a dependent element.
+    ///
+    /// Only works for provider views.
+    fn add_dependent(&mut self, id: ElementId) {
+        if let Some(deps) = self.dependents_mut() {
+            if !deps.contains(&id) {
+                deps.push(id);
+            }
+        }
+    }
+
+    /// Remove a dependent element.
+    ///
+    /// Only works for provider views.
+    fn remove_dependent(&mut self, id: ElementId) {
+        if let Some(deps) = self.dependents_mut() {
+            deps.retain(|&dep| dep != id);
+        }
+    }
+
+    /// Check if dependents should be notified of value change.
+    ///
+    /// Only implemented by ProviderViewWrapper.
+    /// Returns false for non-provider views.
+    fn should_notify_dependents(&self, _old_value: &dyn Any) -> bool {
+        false
     }
 
     // ========== DOWNCASTING ==========
@@ -172,47 +222,6 @@ impl dyn ViewObject {
 }
 
 // ============================================================================
-// HELPER TRAIT FOR ELEMENT ACCESS
-// ============================================================================
-
-/// Extension trait for accessing ViewObject from Element
-///
-/// Since Element now stores `view_mode` directly, type queries no longer
-/// require downcasting. For actual ViewObject access, use the specific
-/// `view_object_as::<ConcreteWrapper>()` method on Element.
-///
-/// # Usage
-///
-/// ```rust,ignore
-/// use flui_element::ElementViewObjectExt;
-///
-/// // Type queries use stored view_mode (no downcasting needed)
-/// if element.is_component() {
-///     // For actual ViewObject access, downcast to concrete type:
-///     if let Some(wrapper) = element.view_object_as::<StatelessViewWrapper<MyView>>() {
-///         let child = wrapper.build(ctx);
-///     }
-/// }
-/// ```
-pub trait ElementViewObjectExt {
-    /// Try to downcast `view_object` to a specific `ViewObject` implementation.
-    fn view_object_downcast<V: ViewObject + Sync>(&self) -> Option<&V>;
-
-    /// Try to downcast `view_object` to a specific `ViewObject` implementation (mutable).
-    fn view_object_downcast_mut<V: ViewObject + Sync>(&mut self) -> Option<&mut V>;
-}
-
-impl ElementViewObjectExt for Element {
-    fn view_object_downcast<V: ViewObject + Sync>(&self) -> Option<&V> {
-        self.view_object_as::<V>()
-    }
-
-    fn view_object_downcast_mut<V: ViewObject + Sync>(&mut self) -> Option<&mut V> {
-        self.view_object_as_mut::<V>()
-    }
-}
-
-// ============================================================================
 // TESTS
 // ============================================================================
 
@@ -228,8 +237,8 @@ mod tests {
             ViewMode::Stateless
         }
 
-        fn build(&mut self, _ctx: &dyn BuildContext) -> Element {
-            Element::empty()
+        fn build(&mut self, _ctx: &dyn BuildContext) -> Option<Box<dyn ViewObject>> {
+            None // Empty build
         }
 
         fn as_any(&self) -> &dyn Any {
@@ -260,19 +269,10 @@ mod tests {
     }
 
     #[test]
-    fn test_element_view_mode_queries() {
-        // Element now has direct view_mode field
-        let element = Element::with_mode(TestViewObject, ViewMode::Stateless);
-        assert!(element.is_component());
-        assert!(!element.is_render());
-        assert!(!element.is_provider());
-
-        let render_element = Element::with_mode(TestViewObject, ViewMode::RenderBox);
-        assert!(render_element.is_render());
-        assert!(!render_element.is_component());
-
-        let provider_element = Element::with_mode(TestViewObject, ViewMode::Provider);
-        assert!(provider_element.is_provider());
-        assert!(provider_element.is_component()); // Provider is also a component
+    fn test_view_object_helpers() {
+        let obj: &dyn ViewObject = &TestViewObject;
+        assert!(!obj.is_render());
+        assert!(!obj.is_provider());
+        assert!(obj.is_component());
     }
 }

@@ -5,11 +5,10 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use flui_element::{
-    BuildContext, Element, ElementId, IntoElement, ProviderViewObject, ViewMode, ViewObject,
-};
+use flui_foundation::ElementId;
 
 use crate::traits::ProviderView;
+use crate::{BuildContext, IntoView, ViewMode, ViewObject};
 
 /// Wrapper for `ProviderView` that implements `ViewObject`
 ///
@@ -98,9 +97,9 @@ where
         ViewMode::Provider
     }
 
-    fn build(&mut self, ctx: &dyn BuildContext) -> Element {
+    fn build(&mut self, ctx: &dyn BuildContext) -> Option<Box<dyn ViewObject>> {
         // Build the child
-        self.view.build(ctx).into_element()
+        Some(self.view.build(ctx).into_view())
     }
 
     fn init(&mut self, ctx: &dyn BuildContext) {
@@ -139,29 +138,21 @@ where
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
-}
 
-// ============================================================================
-// ProviderViewObject IMPLEMENTATION
-// ============================================================================
+    // ========== PROVIDER METHODS ==========
 
-impl<V, T> ProviderViewObject for ProviderViewWrapper<V, T>
-where
-    V: ProviderView<T>,
-    T: Send + Sync + 'static,
-{
-    fn provided_value(&self) -> Arc<dyn Any + Send + Sync> {
+    fn provided_value(&self) -> Option<Arc<dyn Any + Send + Sync>> {
         // Get Arc<T> from view and upcast to Arc<dyn Any>
         let arc_t = self.view.value();
-        arc_t as Arc<dyn Any + Send + Sync>
+        Some(arc_t as Arc<dyn Any + Send + Sync>)
     }
 
     fn dependents(&self) -> &[ElementId] {
         &self.dependents
     }
 
-    fn dependents_mut(&mut self) -> &mut Vec<ElementId> {
-        &mut self.dependents
+    fn dependents_mut(&mut self) -> Option<&mut Vec<ElementId>> {
+        Some(&mut self.dependents)
     }
 
     fn should_notify_dependents(&self, old_value: &dyn Any) -> bool {
@@ -174,12 +165,12 @@ where
 }
 
 // ============================================================================
-// IntoElement IMPLEMENTATION
+// IntoView IMPLEMENTATION
 // ============================================================================
 
 /// Helper struct to disambiguate `ProviderView` from other view types
 ///
-/// Use `Provider::new(my_view)` to create a provider element.
+/// Use `Provider::new(my_view)` to create a provider view object.
 #[derive(Debug)]
 pub struct Provider<V, T>(pub V, std::marker::PhantomData<T>)
 where
@@ -197,14 +188,13 @@ where
     }
 }
 
-impl<V, T> IntoElement for Provider<V, T>
+impl<V, T> IntoView for Provider<V, T>
 where
     V: ProviderView<T>,
     T: Send + Sync + 'static,
 {
-    fn into_element(self) -> Element {
-        let wrapper = ProviderViewWrapper::<V, T>::new(self.0);
-        Element::with_mode(wrapper, ViewMode::Provider)
+    fn into_view(self) -> Box<dyn ViewObject> {
+        Box::new(ProviderViewWrapper::<V, T>::new(self.0))
     }
 }
 
@@ -215,20 +205,49 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::context::MockBuildContext;
 
     #[derive(Clone)]
     struct TestTheme {
         primary_color: u32,
     }
 
+    // Helper for tests - represents an empty view
+    struct EmptyIntoView;
+
+    impl IntoView for EmptyIntoView {
+        fn into_view(self) -> Box<dyn ViewObject> {
+            Box::new(EmptyViewObject)
+        }
+    }
+
+    struct EmptyViewObject;
+
+    impl ViewObject for EmptyViewObject {
+        fn mode(&self) -> ViewMode {
+            ViewMode::Stateless
+        }
+
+        fn build(&mut self, _ctx: &dyn BuildContext) -> Option<Box<dyn ViewObject>> {
+            None
+        }
+
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn as_any_mut(&mut self) -> &mut dyn Any {
+            self
+        }
+    }
+
     struct TestThemeProvider {
         theme: Arc<TestTheme>,
-        child: Element,
     }
 
     impl ProviderView<TestTheme> for TestThemeProvider {
-        fn build(&mut self, _ctx: &dyn BuildContext) -> impl IntoElement {
-            std::mem::replace(&mut self.child, Element::empty())
+        fn build(&mut self, _ctx: &dyn BuildContext) -> impl IntoView {
+            EmptyIntoView
         }
 
         fn value(&self) -> Arc<TestTheme> {
@@ -246,7 +265,6 @@ mod tests {
             theme: Arc::new(TestTheme {
                 primary_color: 0xFF0000,
             }),
-            child: Element::empty(),
         });
         assert_eq!(wrapper.mode(), ViewMode::Provider);
         assert_eq!(wrapper.value().primary_color, 0xFF0000);
@@ -258,26 +276,37 @@ mod tests {
             theme: Arc::new(TestTheme {
                 primary_color: 0xFF0000,
             }),
-            child: Element::empty(),
         });
 
         let id = ElementId::new(1);
         wrapper.add_dependent(id);
-        assert_eq!(ProviderViewObject::dependents(&wrapper).len(), 1);
+        assert_eq!(ViewObject::dependents(&wrapper).len(), 1);
 
         wrapper.remove_dependent(id);
-        assert_eq!(ProviderViewObject::dependents(&wrapper).len(), 0);
+        assert_eq!(ViewObject::dependents(&wrapper).len(), 0);
     }
 
     #[test]
-    fn test_into_element() {
+    fn test_into_view() {
         let view = TestThemeProvider {
             theme: Arc::new(TestTheme {
                 primary_color: 0xFF0000,
             }),
-            child: Element::empty(),
         };
-        let element = Provider::new(view).into_element();
-        assert!(element.has_view_object());
+        let view_obj = Provider::new(view).into_view();
+        assert_eq!(view_obj.mode(), ViewMode::Provider);
+    }
+
+    #[test]
+    fn test_build() {
+        let mut wrapper = ProviderViewWrapper::new(TestThemeProvider {
+            theme: Arc::new(TestTheme {
+                primary_color: 0xFF0000,
+            }),
+        });
+        let ctx = MockBuildContext::new(ElementId::new(1));
+
+        let result = wrapper.build(&ctx);
+        assert!(result.is_some());
     }
 }

@@ -12,7 +12,7 @@
 /// # Examples
 ///
 /// ```rust
-/// use flui_foundation::ViewMode;
+/// use flui_view::ViewMode;
 ///
 /// let mode = ViewMode::Stateless;
 /// assert!(mode.is_component());

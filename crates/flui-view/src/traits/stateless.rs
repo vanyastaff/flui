@@ -3,9 +3,7 @@
 //! `StatelessView` is for simple views that only depend on their configuration.
 //! They rebuild completely when their parent rebuilds.
 
-use flui_element::IntoElement;
-
-use flui_element::BuildContext;
+use crate::{BuildContext, IntoView};
 
 /// `StatelessView` - A view without internal state
 ///
@@ -22,7 +20,7 @@ use flui_element::BuildContext;
 /// }
 ///
 /// impl StatelessView for Greeting {
-///     fn build(self, ctx: &BuildContext) -> impl IntoElement {
+///     fn build(self, ctx: &dyn BuildContext) -> impl IntoView {
 ///         Text::new(format!("Hello, {}!", self.name))
 ///     }
 /// }
@@ -32,11 +30,11 @@ use flui_element::BuildContext;
 ///
 /// `StatelessView` requires `Send + 'static` for cross-thread element transfer.
 pub trait StatelessView: Send + Sync + 'static {
-    /// Build the view, producing child element(s)
+    /// Build the view, producing child view object(s)
     ///
     /// Called by the framework during the build phase.
-    /// Return any type that implements `IntoElement`.
-    fn build(self, ctx: &dyn BuildContext) -> impl IntoElement;
+    /// Return any type that implements `IntoView`.
+    fn build(self, ctx: &dyn BuildContext) -> impl IntoView;
 }
 
 // ============================================================================

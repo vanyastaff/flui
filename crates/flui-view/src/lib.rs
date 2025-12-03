@@ -23,28 +23,28 @@
 //! ## Example
 //!
 //! ```rust,ignore
-//! use flui_view::{StatelessView, BuildContext, IntoElement};
+//! use flui_view::{StatelessView, BuildContext, IntoView};
 //!
 //! struct Greeting {
 //!     name: String,
 //! }
 //!
 //! impl StatelessView for Greeting {
-//!     fn build(self, ctx: &BuildContext) -> impl IntoElement {
+//!     fn build(self, ctx: &dyn BuildContext) -> impl IntoView {
 //!         Text::new(format!("Hello, {}!", self.name))
 //!     }
 //! }
 //!
 //! // Use the view
-//! let element = Greeting { name: "World".into() }.into_element();
+//! let view_obj = Greeting { name: "World".into() }.into_view_wrapped();
 //! ```
 //!
 //! ## Crate Dependencies
 //!
 //! ```text
-//! flui-foundation → flui-tree → flui-element → flui-view
-//!                                     ↓
-//!                               (Element, IntoElement)
+//! flui-foundation → flui-tree → flui-view
+//!                                   ↓
+//!                             flui-element (depends on flui-view)
 //! ```
 
 #![warn(
@@ -68,9 +68,12 @@
 // ============================================================================
 
 pub mod children;
-pub mod protocol;
+pub mod context;
+pub mod into_view;
 pub mod state;
 pub mod traits;
+pub mod view_mode;
+pub mod view_object;
 pub mod wrappers;
 
 mod empty;
@@ -79,11 +82,13 @@ mod empty;
 // RE-EXPORTS
 // ============================================================================
 
-// Context (re-exported from flui-element)
-pub use flui_element::BuildContext;
+// Context (defined in this crate)
+pub use context::BuildContext;
+#[cfg(any(test, feature = "test-utils"))]
+pub use context::MockBuildContext;
 
-// Protocol
-pub use protocol::ViewMode;
+// ViewMode (defined in this crate)
+pub use view_mode::ViewMode;
 
 // State
 pub use state::ViewState;
@@ -91,8 +96,8 @@ pub use state::ViewState;
 // View traits
 pub use traits::{AnimatedView, Listenable, ProviderView, ProxyView, StatefulView, StatelessView};
 
-// ViewObject (re-exported from flui-element)
-pub use flui_element::{ElementViewObjectExt, ProviderViewObject, ViewObject};
+// ViewObject (defined in this crate)
+pub use view_object::ViewObject;
 
 // Wrappers
 pub use wrappers::{
@@ -103,11 +108,13 @@ pub use wrappers::{
 // Empty view
 pub use empty::EmptyView;
 
+// IntoView trait
+pub use into_view::IntoView;
+
 // Children
 pub use children::{Child, Children};
 
-// Re-export from flui-element for convenience
-pub use flui_element::{Element, ElementTree, IntoElement};
+// Re-export from flui-foundation for convenience
 pub use flui_foundation::ElementId;
 
 // ============================================================================
@@ -120,11 +127,13 @@ pub use flui_foundation::ElementId;
 /// use flui_view::prelude::*;
 /// ```
 pub mod prelude {
+    pub use crate::context::BuildContext;
     pub use crate::empty::EmptyView;
-    pub use crate::protocol::ViewMode;
+    pub use crate::into_view::IntoView;
     pub use crate::traits::{
         AnimatedView, Listenable, ProviderView, ProxyView, StatefulView, StatelessView,
     };
+    pub use crate::view_mode::ViewMode;
+    pub use crate::view_object::ViewObject;
     pub use crate::wrappers::{Animated, Provider, Proxy, Stateful, Stateless};
-    pub use flui_element::{BuildContext, Element, IntoElement};
 }

@@ -4,7 +4,7 @@
 
 use super::{ErrorInfo, ErrorWidget};
 use crate::{BuildContext, Element};
-use flui_view::{IntoElement, StatefulView, StatelessView};
+use flui_view::{IntoView, StatefulView, StatelessView};
 use parking_lot::RwLock;
 use std::sync::Arc;
 
@@ -125,7 +125,7 @@ impl StatefulView for ErrorBoundary {
         ErrorBoundaryState::new()
     }
 
-    fn build(&self, state: &mut Self::State, _ctx: &dyn BuildContext) -> impl IntoElement {
+    fn build(&self, state: &mut Self::State, ctx: &dyn BuildContext) -> impl IntoView {
         // Check if we have an error
         if let Some(error) = state.get_error() {
             // Call error handler if set
@@ -134,15 +134,16 @@ impl StatefulView for ErrorBoundary {
             }
 
             // Show error widget
-            return ErrorWidget::new(error).build(_ctx).into_element();
+            return flui_view::Stateless(ErrorWidget::new(error)).into_view();
         }
 
         // No error - show child
-        // Take child from Arc<RwLock<Option<Element>>>
-        self.child.write().take().unwrap_or_else(|| {
-            tracing::warn!("ErrorBoundary: child already taken, returning empty");
-            Element::empty()
-        })
+        // TODO: Properly handle child Element -> ViewObject conversion
+        // For now, return empty since Element is in flui-element, not flui-view
+        if let Some(_child) = self.child.write().take() {
+            tracing::debug!("ErrorBoundary: child taken but Element->ViewObject conversion needed");
+        }
+        flui_view::EmptyView.into_view()
     }
 }
 

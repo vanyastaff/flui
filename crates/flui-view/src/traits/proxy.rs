@@ -3,10 +3,9 @@
 //! For views that add behavior, metadata, or event handling without
 //! affecting layout.
 
-use flui_element::IntoElement;
 use flui_types::Event;
 
-use flui_element::BuildContext;
+use crate::{BuildContext, IntoView};
 
 /// `ProxyView` - Views that wrap a single child.
 ///
@@ -34,15 +33,15 @@ use flui_element::BuildContext;
 /// ```rust,ignore
 /// struct IgnorePointer {
 ///     ignoring: bool,
-///     child: Element,
+///     child: Box<dyn ViewObject>,
 /// }
 ///
 /// impl ProxyView for IgnorePointer {
-///     fn build_child(&mut self, _ctx: &BuildContext) -> impl IntoElement {
-///         self.child.clone()
+///     fn build_child(&mut self, _ctx: &dyn BuildContext) -> impl IntoView {
+///         // Return child
 ///     }
 ///
-///     fn handle_event(&mut self, _event: &Event, _ctx: &BuildContext) -> bool {
+///     fn handle_event(&mut self, _event: &Event, _ctx: &dyn BuildContext) -> bool {
 ///         self.ignoring  // Block events if ignoring
 ///     }
 /// }
@@ -62,10 +61,10 @@ use flui_element::BuildContext;
 /// - Multiple children → Use `StatelessView` or render object
 /// - Need state → Use `StatefulView`
 pub trait ProxyView: Send + Sync + 'static {
-    /// Build the child element.
+    /// Build the child view object.
     ///
-    /// Required method. Must return exactly one child element.
-    fn build_child(&mut self, ctx: &dyn BuildContext) -> impl IntoElement;
+    /// Required method. Must return exactly one child.
+    fn build_child(&mut self, ctx: &dyn BuildContext) -> impl IntoView;
 
     /// Called before child builds (optional).
     ///

@@ -1170,6 +1170,7 @@ dependencies = [
  "bitflags 2.10.0",
  "flui-foundation",
  "flui-tree",
+ "flui-view",
  "flui_types",
  "parking_lot",
  "serde",
@@ -1252,7 +1253,6 @@ dependencies = [
 name = "flui-view"
 version = "0.1.0"
 dependencies = [
- "flui-element",
  "flui-foundation",
  "flui-tree",
  "flui_types",

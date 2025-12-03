@@ -858,7 +858,8 @@ impl BuildPipeline {
                 Err(panic_info) => {
                     // Panic occurred during build - handle it
                     use crate::error_handling::{handle_build_panic, ErrorWidget};
-                    use flui_view::{IntoElement, StatelessView};
+                    use flui_element::IntoElement;
+                    use flui_view::StatelessView;
 
                     let error = handle_build_panic(&*panic_info);
 
@@ -874,19 +875,25 @@ impl BuildPipeline {
                     }
 
                     // Return ErrorWidget as child
-                    ErrorWidget::new(error).build(&ctx).into_element()
+                    use flui_view::IntoView;
+                    Some(flui_view::Stateless(ErrorWidget::new(error)).into_view())
                 }
             }
         };
 
         // Stage 3: Reconcile old child with new child
         {
+            use flui_element::IntoElement;
+
+            // Convert Option<Box<dyn ViewObject>> to Option<Element>
+            let new_child_element = new_element.map(|view_obj| view_obj.into_element());
+
             let mut tree_guard = tree.write();
             Self::reconcile_child(
                 &mut tree_guard,
                 element_id,
                 old_child_id,
-                Some(new_element),
+                new_child_element,
                 tree,
                 &self.dirty_set,
             );

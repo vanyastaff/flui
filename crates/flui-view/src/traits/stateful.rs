@@ -2,10 +2,8 @@
 //!
 //! `StatefulView` is for views that need to maintain state between rebuilds.
 
-use flui_element::IntoElement;
-
 use crate::state::ViewState;
-use flui_element::BuildContext;
+use crate::{BuildContext, IntoView};
 
 /// `StatefulView` - A view with internal mutable state
 ///
@@ -32,7 +30,7 @@ use flui_element::BuildContext;
 ///         CounterState { count: self.initial }
 ///     }
 ///
-///     fn build(&self, state: &mut Self::State, ctx: &BuildContext) -> impl IntoElement {
+///     fn build(&self, state: &mut Self::State, ctx: &dyn BuildContext) -> impl IntoView {
 ///         Column::new()
 ///             .child(Text::new(format!("Count: {}", state.count)))
 ///             .child(Button::new("+").on_press(|| {
@@ -64,8 +62,8 @@ pub trait StatefulView: Send + Sync + 'static {
     /// Build the view with current state
     ///
     /// Called during each rebuild. Modify state as needed,
-    /// then return the child element(s).
-    fn build(&self, state: &mut Self::State, ctx: &dyn BuildContext) -> impl IntoElement;
+    /// then return the child view object(s).
+    fn build(&self, state: &mut Self::State, ctx: &dyn BuildContext) -> impl IntoView;
 
     /// Called when view configuration changes
     ///

@@ -4,7 +4,7 @@
 //! when a build error occurs.
 
 use crate::{BuildContext, Element};
-use flui_view::{IntoElement, StatelessView};
+use flui_view::{IntoView, StatelessView};
 
 /// Error information displayed by ErrorWidget
 #[derive(Debug, Clone)]
@@ -63,7 +63,7 @@ impl ErrorWidget {
 }
 
 impl StatelessView for ErrorWidget {
-    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
+    fn build(self, _ctx: &dyn BuildContext) -> impl IntoView {
         // Log error with full details
         if self.error.is_debug {
             tracing::error!(
@@ -89,9 +89,9 @@ impl StatelessView for ErrorWidget {
         }
 
         // TODO: Replace with RenderErrorBox when render integration is ready
-        // For now, return empty element
+        // For now, return empty view
         // The visual error display will be implemented in a future update
-        Element::empty()
+        flui_view::EmptyView
     }
 }
 

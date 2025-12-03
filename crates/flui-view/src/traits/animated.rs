@@ -2,9 +2,7 @@
 //!
 //! For views that subscribe to animation changes and rebuild automatically.
 
-use flui_element::IntoElement;
-
-use flui_element::BuildContext;
+use crate::{BuildContext, IntoView};
 
 /// Listenable - Types that can notify listeners of changes
 ///
@@ -35,7 +33,7 @@ pub trait Listenable: Send + Sync + 'static {
 /// ```rust,ignore
 /// struct FadeTransition {
 ///     opacity: Animation<f32>,
-///     child: Element,
+///     child: Box<dyn ViewObject>,
 /// }
 ///
 /// impl AnimatedView<Animation<f32>> for FadeTransition {
@@ -43,7 +41,7 @@ pub trait Listenable: Send + Sync + 'static {
 ///         &self.opacity
 ///     }
 ///
-///     fn build(&mut self, _ctx: &BuildContext) -> impl IntoElement {
+///     fn build(&mut self, _ctx: &dyn BuildContext) -> impl IntoView {
 ///         Opacity::new(self.opacity.value())
 ///             .child(self.child.clone())
 ///     }
@@ -65,7 +63,7 @@ pub trait AnimatedView<L: Listenable>: Send + Sync + 'static {
     /// Build UI with current animation value.
     ///
     /// Called on every animation frame when listenable notifies.
-    fn build(&mut self, ctx: &dyn BuildContext) -> impl IntoElement;
+    fn build(&mut self, ctx: &dyn BuildContext) -> impl IntoView;
 
     /// Get the listenable to subscribe to.
     ///

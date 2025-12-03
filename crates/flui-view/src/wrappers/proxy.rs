@@ -4,10 +4,10 @@
 
 use std::any::Any;
 
-use flui_element::{BuildContext, Element, IntoElement, ViewMode, ViewObject};
 use flui_types::Event;
 
 use crate::traits::ProxyView;
+use crate::{BuildContext, IntoView, ViewMode, ViewObject};
 
 /// Wrapper for `ProxyView` that implements `ViewObject`
 ///
@@ -51,17 +51,17 @@ impl<V: ProxyView> ViewObject for ProxyViewWrapper<V> {
         ViewMode::Proxy
     }
 
-    fn build(&mut self, ctx: &dyn BuildContext) -> Element {
+    fn build(&mut self, ctx: &dyn BuildContext) -> Option<Box<dyn ViewObject>> {
         // Call lifecycle hooks
         self.view.before_child_build(ctx);
 
         // Build the child
-        let child = self.view.build_child(ctx).into_element();
+        let child = self.view.build_child(ctx).into_view();
 
         // Call lifecycle hooks
         self.view.after_child_build(ctx);
 
-        child
+        Some(child)
     }
 
     fn init(&mut self, ctx: &dyn BuildContext) {
@@ -86,19 +86,18 @@ impl<V: ProxyView> ViewObject for ProxyViewWrapper<V> {
 }
 
 // ============================================================================
-// IntoElement IMPLEMENTATION
+// IntoView IMPLEMENTATION
 // ============================================================================
 
 /// Helper struct to disambiguate `ProxyView` from other view types
 ///
-/// Use `Proxy(my_view)` to create a proxy element.
+/// Use `Proxy(my_view)` to create a proxy view object.
 #[derive(Debug)]
 pub struct Proxy<V: ProxyView>(pub V);
 
-impl<V: ProxyView> IntoElement for Proxy<V> {
-    fn into_element(self) -> Element {
-        let wrapper = ProxyViewWrapper::new(self.0);
-        Element::with_mode(wrapper, ViewMode::Proxy)
+impl<V: ProxyView> IntoView for Proxy<V> {
+    fn into_view(self) -> Box<dyn ViewObject> {
+        Box::new(ProxyViewWrapper::new(self.0))
     }
 }
 
@@ -109,20 +108,50 @@ impl<V: ProxyView> IntoElement for Proxy<V> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::context::MockBuildContext;
+    use flui_foundation::ElementId;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    // Helper for tests - represents an empty view
+    struct EmptyIntoView;
+
+    impl IntoView for EmptyIntoView {
+        fn into_view(self) -> Box<dyn ViewObject> {
+            Box::new(EmptyViewObject)
+        }
+    }
+
+    struct EmptyViewObject;
+
+    impl ViewObject for EmptyViewObject {
+        fn mode(&self) -> ViewMode {
+            ViewMode::Stateless
+        }
+
+        fn build(&mut self, _ctx: &dyn BuildContext) -> Option<Box<dyn ViewObject>> {
+            None
+        }
+
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn as_any_mut(&mut self) -> &mut dyn Any {
+            self
+        }
+    }
 
     struct TestProxyView {
-        child: Element,
-        events_handled: std::sync::atomic::AtomicUsize,
+        events_handled: AtomicUsize,
     }
 
     impl ProxyView for TestProxyView {
-        fn build_child(&mut self, _ctx: &dyn BuildContext) -> impl IntoElement {
-            std::mem::replace(&mut self.child, Element::empty())
+        fn build_child(&mut self, _ctx: &dyn BuildContext) -> impl IntoView {
+            EmptyIntoView
         }
 
         fn handle_event(&mut self, _event: &Event, _ctx: &dyn BuildContext) -> bool {
-            self.events_handled
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.events_handled.fetch_add(1, Ordering::Relaxed);
             true // Consume all events
         }
     }
@@ -130,19 +159,28 @@ mod tests {
     #[test]
     fn test_wrapper_creation() {
         let wrapper = ProxyViewWrapper::new(TestProxyView {
-            child: Element::empty(),
-            events_handled: std::sync::atomic::AtomicUsize::new(0),
+            events_handled: AtomicUsize::new(0),
         });
         assert_eq!(wrapper.mode(), ViewMode::Proxy);
     }
 
     #[test]
-    fn test_into_element() {
+    fn test_into_view() {
         let view = TestProxyView {
-            child: Element::empty(),
-            events_handled: std::sync::atomic::AtomicUsize::new(0),
+            events_handled: AtomicUsize::new(0),
         };
-        let element = Proxy(view).into_element();
-        assert!(element.has_view_object());
+        let view_obj = Proxy(view).into_view();
+        assert_eq!(view_obj.mode(), ViewMode::Proxy);
+    }
+
+    #[test]
+    fn test_build() {
+        let mut wrapper = ProxyViewWrapper::new(TestProxyView {
+            events_handled: AtomicUsize::new(0),
+        });
+        let ctx = MockBuildContext::new(ElementId::new(1));
+
+        let result = wrapper.build(&ctx);
+        assert!(result.is_some());
     }
 }

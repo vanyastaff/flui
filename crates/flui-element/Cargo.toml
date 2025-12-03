@@ -10,9 +10,10 @@ keywords = ["ui", "element", "tree", "flui", "framework"]
 categories = ["gui", "data-structures"]
 
 [dependencies]
-# FLUI internal dependencies (minimal - no flui-view to avoid circular deps)
+# FLUI internal dependencies
 flui-foundation = { path = "../flui-foundation" }
 flui-tree = { path = "../flui-tree" }
+flui-view = { path = "../flui-view" }
 flui_types = { path = "../flui_types" }
 
 # Core dependencies

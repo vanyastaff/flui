@@ -7,7 +7,7 @@
 //! # Architecture
 //!
 //! ```text
-//! flui-element (this crate)
+//! flui-view (this crate)
 //! ├── BuildContext trait (abstraction)
 //! └── ViewObject uses &dyn BuildContext
 //!
@@ -18,14 +18,14 @@
 //! ```
 //!
 //! This design avoids circular dependencies:
-//! - flui-element defines the trait
+//! - flui-view defines the trait
 //! - flui-pipeline implements it
 //! - No cycle!
 
 use std::any::{Any, TypeId};
 use std::sync::Arc;
 
-use crate::ElementId;
+use flui_foundation::ElementId;
 
 // ============================================================================
 // BuildContext TRAIT
@@ -46,7 +46,7 @@ use crate::ElementId;
 ///
 /// ```rust,ignore
 /// impl StatelessView for MyView {
-///     fn build(self, ctx: &dyn BuildContext) -> impl IntoElement {
+///     fn build(self, ctx: &dyn BuildContext) -> impl IntoView {
 ///         let id = ctx.element_id();
 ///         // ...
 ///     }
@@ -129,7 +129,7 @@ impl dyn BuildContext {
     /// }
     ///
     /// impl StatelessView for ThemedButton {
-    ///     fn build(self, ctx: &dyn BuildContext) -> impl IntoElement {
+    ///     fn build(self, ctx: &dyn BuildContext) -> impl IntoView {
     ///         // Look up theme from provider
     ///         let theme = ctx.depend_on::<Theme>()
     ///             .expect("Theme provider not found");
@@ -163,6 +163,76 @@ impl dyn BuildContext {
 }
 
 // ============================================================================
+// MOCK FOR TESTING
+// ============================================================================
+
+/// Mock implementation of BuildContext for testing.
+///
+/// Provides a simple implementation that can be used in unit tests.
+#[cfg(any(test, feature = "test-utils"))]
+pub struct MockBuildContext {
+    /// The element ID for this context.
+    pub element_id: ElementId,
+    /// The parent element ID.
+    pub parent_id: Option<ElementId>,
+    /// The depth in the tree.
+    pub depth: usize,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+impl MockBuildContext {
+    /// Create a new mock context with the given element ID.
+    pub fn new(element_id: ElementId) -> Self {
+        Self {
+            element_id,
+            parent_id: None,
+            depth: 0,
+        }
+    }
+
+    /// Create a mock context with parent information.
+    pub fn with_parent(element_id: ElementId, parent_id: ElementId, depth: usize) -> Self {
+        Self {
+            element_id,
+            parent_id: Some(parent_id),
+            depth,
+        }
+    }
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+impl BuildContext for MockBuildContext {
+    fn element_id(&self) -> ElementId {
+        self.element_id
+    }
+
+    fn parent_id(&self) -> Option<ElementId> {
+        self.parent_id
+    }
+
+    fn depth(&self) -> usize {
+        self.depth
+    }
+
+    fn mark_dirty(&self) {
+        // no-op for mock
+    }
+
+    fn schedule_rebuild(&self, _element_id: ElementId) {
+        // no-op for mock
+    }
+
+    fn depend_on_raw(&self, _type_id: TypeId) -> Option<Arc<dyn Any + Send + Sync>> {
+        // Mock: no providers
+        None
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+// ============================================================================
 // TESTS
 // ============================================================================
 
@@ -170,46 +240,10 @@ impl dyn BuildContext {
 mod tests {
     use super::*;
 
-    // Mock implementation for testing
-    struct MockBuildContext {
-        element_id: ElementId,
-    }
-
-    impl BuildContext for MockBuildContext {
-        fn element_id(&self) -> ElementId {
-            self.element_id
-        }
-
-        fn parent_id(&self) -> Option<ElementId> {
-            None
-        }
-
-        fn depth(&self) -> usize {
-            0
-        }
-
-        fn mark_dirty(&self) {
-            // no-op for mock
-        }
-
-        fn schedule_rebuild(&self, _element_id: ElementId) {
-            // no-op for mock
-        }
-
-        fn depend_on_raw(&self, _type_id: TypeId) -> Option<Arc<dyn Any + Send + Sync>> {
-            // Mock: no providers
-            None
-        }
-
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-    }
-
     #[test]
     fn test_mock_context() {
         let id = ElementId::new(1);
-        let ctx = MockBuildContext { element_id: id };
+        let ctx = MockBuildContext::new(id);
 
         assert_eq!(ctx.element_id(), id);
         assert_eq!(ctx.parent_id(), None);
@@ -217,9 +251,20 @@ mod tests {
     }
 
     #[test]
+    fn test_mock_context_with_parent() {
+        let id = ElementId::new(2);
+        let parent = ElementId::new(1);
+        let ctx = MockBuildContext::with_parent(id, parent, 1);
+
+        assert_eq!(ctx.element_id(), id);
+        assert_eq!(ctx.parent_id(), Some(parent));
+        assert_eq!(ctx.depth(), 1);
+    }
+
+    #[test]
     fn test_downcast() {
         let id = ElementId::new(1);
-        let ctx: &dyn BuildContext = &MockBuildContext { element_id: id };
+        let ctx: &dyn BuildContext = &MockBuildContext::new(id);
 
         let downcasted = ctx.downcast_ref::<MockBuildContext>();
         assert!(downcasted.is_some());
