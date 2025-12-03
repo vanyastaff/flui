@@ -289,6 +289,22 @@ impl PipelineOwner {
         Ok(self.set_root(element))
     }
 
+    /// Attach a root element directly from an IntoElement type.
+    ///
+    /// This is useful for render-only views that implement IntoElement
+    /// but not StatelessView (like Text, Container, etc.).
+    pub fn attach_element<E>(&mut self, element: E) -> Result<ElementId, PipelineError>
+    where
+        E: flui_element::IntoElement,
+    {
+        if self.root_mgr.root_id().is_some() {
+            return Err(PipelineError::RootAlreadyAttached);
+        }
+
+        let element = element.into_element();
+        Ok(self.set_root(element))
+    }
+
     // =========================================================================
     // Build Scheduling
     // =========================================================================

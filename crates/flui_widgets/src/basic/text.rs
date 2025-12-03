@@ -42,10 +42,9 @@
 //! ```
 
 use bon::Builder;
-use flui_core::render::RenderBoxExt;
-use flui_core::view::{IntoElement, StatelessView};
-use flui_core::BuildContext;
-use flui_rendering::{ParagraphData, RenderParagraph};
+use flui_core::element::Element;
+use flui_core::IntoElement;
+use flui_rendering::{BoxRenderWrapper, Leaf, ParagraphData, RenderParagraph};
 use flui_types::{
     typography::{TextAlign, TextDirection, TextOverflow},
     Color,
@@ -298,9 +297,9 @@ impl<S: State> TextBuilder<S> {
     }
 }
 
-// Implement View for Text - Simplified API
-impl StatelessView for Text {
-    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
+// Implement IntoElement for Text - converts directly to render element
+impl IntoElement for Text {
+    fn into_element(self) -> Element {
         // Create paragraph data
         let data = ParagraphData::new(&self.data)
             .with_font_size(self.size)
@@ -317,8 +316,8 @@ impl StatelessView for Text {
         data.text_direction = self.text_direction;
         data.soft_wrap = self.soft_wrap;
 
-        // Create and return RenderParagraph using RenderBoxExt
-        RenderParagraph::new(data).leaf()
+        // Create RenderParagraph and wrap in BoxRenderWrapper for IntoElement
+        BoxRenderWrapper::<Leaf>::new(RenderParagraph::new(data)).into_element()
     }
 }
 

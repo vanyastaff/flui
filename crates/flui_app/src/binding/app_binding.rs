@@ -182,6 +182,21 @@ impl AppBinding {
         self.request_redraw();
     }
 
+    /// Attach a root element directly from an IntoElement type.
+    ///
+    /// This is useful for render-only views that implement IntoElement
+    /// but not StatelessView (like Text, Container, etc.).
+    pub fn attach_root_element<E>(&self, element: E)
+    where
+        E: flui_core::IntoElement,
+    {
+        let mut pipeline = self.pipeline_owner.write();
+        pipeline
+            .attach_element(element)
+            .expect("Failed to attach root element");
+        self.request_redraw();
+    }
+
     /// Get shared reference to the pipeline owner
     ///
     /// This is the main access point for direct pipeline operations.

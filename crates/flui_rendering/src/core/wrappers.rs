@@ -73,6 +73,7 @@ use super::render_box::RenderBox;
 use super::render_object::RenderObject;
 use super::render_sliver::RenderSliver;
 use crate::RenderResult;
+use flui_element::{Element, IntoElement, RenderElement, ViewMode};
 use flui_interaction::HitTestResult;
 use flui_types::{Rect, Size, SliverGeometry};
 
@@ -291,6 +292,15 @@ impl<A: Arity> RenderObject for BoxRenderWrapper<A> {
     }
 }
 
+/// Convert BoxRenderWrapper into Element for the view tree.
+///
+/// This allows render objects to be returned directly from `View::build()`.
+impl<A: Arity> IntoElement for BoxRenderWrapper<A> {
+    fn into_element(self) -> Element {
+        Element::Render(RenderElement::with_render_object(self, ViewMode::RenderBox))
+    }
+}
+
 // ============================================================================
 // SLIVER RENDER WRAPPER
 // ============================================================================
@@ -452,6 +462,18 @@ impl<A: Arity> RenderObject for SliverRenderWrapper<A> {
 
     fn debug_name(&self) -> &'static str {
         self.inner.as_ref().debug_name()
+    }
+}
+
+/// Convert SliverRenderWrapper into Element for the view tree.
+///
+/// This allows sliver render objects to be returned directly from `View::build()`.
+impl<A: Arity> IntoElement for SliverRenderWrapper<A> {
+    fn into_element(self) -> Element {
+        Element::Render(RenderElement::with_render_object(
+            self,
+            ViewMode::RenderSliver,
+        ))
     }
 }
 

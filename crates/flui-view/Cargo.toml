@@ -10,7 +10,6 @@ keywords = ["ui", "view", "widget", "flui", "framework"]
 categories = ["gui"]
 
 [dependencies]
-# FLUI internal (NO flui-element - flui-element depends on us!)
 flui-foundation = { path = "../flui-foundation" }
 flui-tree = { path = "../flui-tree" }
 flui_types = { path = "../flui_types" }

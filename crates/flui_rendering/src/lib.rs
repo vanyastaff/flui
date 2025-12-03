@@ -80,6 +80,7 @@ pub mod error;
 pub mod into_render;
 // TODO: Re-enable after fixing render objects
 // pub mod objects;
+pub mod text;
 pub mod view;
 
 // ============================================================================
@@ -128,8 +129,8 @@ pub use flui_types::{Offset, Rect, Size, SliverConstraints, SliverGeometry};
 // RE-EXPORTS FROM OBJECTS MODULE
 // ============================================================================
 
-// Basic render objects - only include what definitely exists
-// TODO: Add more object re-exports after migration is complete
+// Text rendering
+pub use text::{ParagraphData, RenderParagraph};
 
 // ============================================================================
 // RE-EXPORTS FROM VIEW MODULE

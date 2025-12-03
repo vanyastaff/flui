@@ -256,3 +256,146 @@ where
     // Unreachable, but needed to satisfy return type !
     std::process::exit(0)
 }
+
+/// Run a FLUI application with an IntoElement root.
+///
+/// This is useful for render-only views that implement IntoElement
+/// but not StatelessView (like Text, Container, etc.).
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use flui_app::run_app_element;
+/// use flui_widgets::Text;
+///
+/// fn main() {
+///     run_app_element(Text::headline("Hello, FLUI!"));
+/// }
+/// ```
+#[cfg(not(target_os = "android"))]
+pub fn run_app_element<E>(element: E) -> !
+where
+    E: flui_core::IntoElement,
+{
+    use crate::embedder::DesktopEmbedder;
+    use winit::application::ApplicationHandler;
+    use winit::event::WindowEvent;
+    use winit::event_loop::ActiveEventLoop;
+    use winit::window::WindowId;
+
+    // Initialize cross-platform logging
+    flui_log::Logger::default()
+        .with_filter("info,wgpu=warn,flui_core=debug,flui_app=info")
+        .init();
+
+    let _app_span = tracing::info_span!("flui_app").entered();
+    tracing::info!("Starting FLUI app (element mode)");
+
+    // 1. Initialize bindings
+    let binding = AppBinding::ensure_initialized();
+    tracing::debug!("Bindings initialized");
+
+    // 2. Attach root element
+    binding.attach_root_element(element);
+    tracing::debug!("Root element attached");
+
+    // Check what's in the tree
+    {
+        let pipeline = binding.pipeline();
+        let owner = pipeline.read();
+        let tree = owner.tree();
+        let tree_guard = tree.read();
+        tracing::info!(element_count = tree_guard.len(), "Element tree status");
+        if let Some(root_id) = owner.root_manager().root_id() {
+            tracing::info!(?root_id, "Root element found");
+            if let Some(root) = tree_guard.get(root_id) {
+                tracing::info!(
+                    is_render = root.is_render(),
+                    view_mode = ?root.view_mode(),
+                    "Root element details"
+                );
+            }
+        } else {
+            tracing::warn!("No root element found!");
+        }
+    }
+
+    tracing::info!("Entering event loop");
+
+    // Application state for winit 0.30+ ApplicationHandler
+    struct AppState {
+        binding: std::sync::Arc<AppBinding>,
+        embedder: Option<DesktopEmbedder>,
+    }
+
+    impl ApplicationHandler for AppState {
+        fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+            if self.embedder.is_none() {
+                let _span = tracing::info_span!("create_embedder").entered();
+                let embedder = pollster::block_on(DesktopEmbedder::new(
+                    self.binding.pipeline(),
+                    self.binding.needs_redraw_flag(),
+                    self.binding.scheduler.scheduler_arc(),
+                    self.binding.gesture.event_router().clone(),
+                    event_loop,
+                ))
+                .expect("Failed to create desktop embedder");
+                self.embedder = Some(embedder);
+                tracing::info!("Desktop embedder ready");
+            }
+        }
+
+        fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+            if let Some(ref emb) = self.embedder {
+                let has_pending = {
+                    let pipeline = self.binding.pipeline();
+                    let owner = pipeline.read();
+                    owner.has_pending_rebuilds()
+                };
+
+                if self.binding.needs_redraw() || has_pending {
+                    emb.winit_window().request_redraw();
+                }
+            }
+        }
+
+        fn window_event(
+            &mut self,
+            event_loop: &ActiveEventLoop,
+            _window_id: WindowId,
+            event: WindowEvent,
+        ) {
+            if let Some(ref mut emb) = self.embedder {
+                match event {
+                    WindowEvent::RedrawRequested => {
+                        tracing::trace!("RedrawRequested event, rendering frame");
+                        emb.render_frame();
+                        self.binding.mark_rendered();
+                    }
+                    WindowEvent::CloseRequested => {
+                        tracing::info!("Window close requested");
+                        event_loop.exit();
+                    }
+                    other => {
+                        emb.handle_window_event(other, event_loop);
+                    }
+                }
+            }
+        }
+    }
+
+    // 3. Create event loop
+    let event_loop = EventLoop::new().expect("Failed to create event loop");
+
+    // 4. Create app state and run
+    let mut app_state = AppState {
+        binding,
+        embedder: None,
+    };
+
+    event_loop
+        .run_app(&mut app_state)
+        .expect("Event loop error");
+
+    std::process::exit(0)
+}

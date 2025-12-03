@@ -148,15 +148,13 @@
 //! - `serde` - Enable serialization with GAT support
 //! - `full` - Enable all optional advanced features
 
-#![warn(
+#![warn(rust_2018_idioms, clippy::all, clippy::pedantic)]
+#![allow(
+    dead_code,
+    unused_variables,
     missing_docs,
     missing_debug_implementations,
-    rust_2018_idioms,
     unreachable_pub,
-    clippy::all,
-    clippy::pedantic
-)]
-#![allow(
     clippy::module_name_repetitions,
     clippy::must_use_candidate,
     clippy::return_self_not_must_use
