@@ -202,7 +202,7 @@ pub trait RenderProxyBox: RenderObject + fmt::Debug + Send + Sync {
     /// ```
     fn proxy_paint(&self, ctx: &mut BoxPaintContext<'_, Single>) {
         // Default: paint child at origin
-        ctx.paint_single_child(Offset::ZERO);
+        let _ = ctx.paint_single_child(Offset::ZERO);
     }
 
     /// Performs hit testing by forwarding to the child.
@@ -253,9 +253,9 @@ pub trait RenderProxyBox: RenderObject + fmt::Debug + Send + Sync {
 
     /// Gets the local bounding rectangle.
     ///
-    /// Default uses the RenderObject's bounds.
+    /// Default returns an empty rectangle. Override for proper hit testing.
     fn proxy_local_bounds(&self) -> Rect {
-        (self as &dyn RenderObject).local_bounds()
+        Rect::ZERO
     }
 }
 
@@ -358,12 +358,12 @@ pub trait RenderProxySliver: RenderObject + fmt::Debug + Send + Sync {
     ///
     /// ```rust,ignore
     /// // Default: pass through
-    /// fn proxy_layout(&mut self, mut ctx: SliverLayoutContext<'_, Single>) -> SliverGeometry {
+    /// fn proxy_layout(&mut self, mut ctx: SliverLayoutContext<'_, Single>) -> RenderResult<SliverGeometry> {
     ///     ctx.layout_single_child()
     /// }
     ///
     /// // Custom: modify constraints
-    /// fn proxy_layout(&mut self, mut ctx: SliverLayoutContext<'_, Single>) -> SliverGeometry {
+    /// fn proxy_layout(&mut self, mut ctx: SliverLayoutContext<'_, Single>) -> RenderResult<SliverGeometry> {
     ///     let modified = SliverConstraints {
     ///         scroll_offset: ctx.constraints.scroll_offset + 100.0,
     ///         ..ctx.constraints
@@ -371,7 +371,10 @@ pub trait RenderProxySliver: RenderObject + fmt::Debug + Send + Sync {
     ///     ctx.layout_single_child_with(|_| modified)
     /// }
     /// ```
-    fn proxy_layout(&mut self, mut ctx: SliverLayoutContext<'_, Single>) -> SliverGeometry {
+    fn proxy_layout(
+        &mut self,
+        mut ctx: SliverLayoutContext<'_, Single>,
+    ) -> RenderResult<SliverGeometry> {
         // Default: pass constraints directly to the child
         ctx.layout_single_child()
     }
@@ -396,7 +399,7 @@ pub trait RenderProxySliver: RenderObject + fmt::Debug + Send + Sync {
     /// ```
     fn proxy_paint(&self, ctx: &mut SliverPaintContext<'_, Single>) {
         // Default: paint child at origin
-        ctx.paint_single_child(Offset::ZERO);
+        let _ = ctx.paint_single_child(Offset::ZERO);
     }
 
     /// Performs hit testing by forwarding to the child.
@@ -436,15 +439,15 @@ pub trait RenderProxySliver: RenderObject + fmt::Debug + Send + Sync {
 
     /// Gets the local bounding rectangle.
     ///
-    /// Default uses the RenderObject's bounds.
+    /// Default returns an empty rectangle. Override for proper hit testing.
     fn proxy_local_bounds(&self) -> Rect {
-        (self as &dyn RenderObject).local_bounds()
+        Rect::ZERO
     }
 }
 
 // Blanket implementation: RenderProxySliver -> RenderSliver
 impl<T: RenderProxySliver> RenderSliver<Single> for T {
-    fn layout(&mut self, ctx: SliverLayoutContext<'_, Single>) -> SliverGeometry {
+    fn layout(&mut self, ctx: SliverLayoutContext<'_, Single>) -> RenderResult<SliverGeometry> {
         self.proxy_layout(ctx)
     }
 

@@ -316,9 +316,9 @@ pub trait RenderBox<A: Arity>: RenderObject + fmt::Debug + Send + Sync {
 
     /// Gets the local bounding rectangle.
     ///
-    /// Default uses the RenderObject's `local_bounds()` method.
+    /// Default returns an empty rectangle. Override for proper hit testing.
     fn local_bounds(&self) -> Rect {
-        (self as &dyn RenderObject).local_bounds()
+        Rect::ZERO
     }
 }
 
@@ -351,7 +351,7 @@ mod tests {
 
     impl<A: Arity> RenderBox<A> for TestRenderBox<A> {
         fn layout(&mut self, ctx: BoxLayoutContext<'_, A>) -> RenderResult<Size> {
-            ctx.constraints.constrain(self.size)
+            Ok(ctx.constraints.constrain(self.size))
         }
 
         fn paint(&self, _ctx: &mut BoxPaintContext<'_, A>) {

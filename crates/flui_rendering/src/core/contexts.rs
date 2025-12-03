@@ -8,12 +8,11 @@ use std::fmt;
 use std::marker::PhantomData;
 
 use flui_foundation::ElementId;
-use flui_interaction::HitTestResult;
+use flui_interaction::{HitTestEntry, HitTestResult};
 use flui_painting::Canvas;
 use flui_types::{BoxConstraints, Offset, Rect, Size, SliverConstraints, SliverGeometry};
 
 use super::arity::{Arity, ChildrenAccess, Single};
-use super::geometry::BoxConstraints;
 use super::protocol::{BoxProtocol, Protocol, SliverProtocol};
 use super::render_tree::{HitTestTree, LayoutTree, PaintTree};
 use crate::core::RenderResult;
@@ -204,7 +203,7 @@ where
     /// This provides zero-cost iteration with proper lifetime management.
     #[inline]
     pub fn children(&self) -> impl Iterator<Item = ElementId> + 'a {
-        self.children_accessor.element_ids()
+        self.children_accessor.iter().copied()
     }
 
     /// Returns children matching the given HRTB predicate.
@@ -285,7 +284,7 @@ impl<'a, T: LayoutTree> LayoutContext<'a, Single, BoxProtocol, T> {
     /// Gets the single child ID (convenience for Single arity).
     #[inline]
     pub fn single_child(&self) -> ElementId {
-        self.children_accessor.single_child_id()
+        *self.children_accessor.single()
     }
 
     /// Layouts the single child with the current constraints.
@@ -345,6 +344,34 @@ where
 }
 
 // ============================================================================
+// LAYOUT CONTEXT - SINGLE CHILD SLIVER PROTOCOL
+// ============================================================================
+
+impl<'a, T: LayoutTree> LayoutContext<'a, Single, SliverProtocol, T> {
+    /// Gets the single child ID (convenience for Single arity).
+    #[inline]
+    pub fn single_child(&self) -> ElementId {
+        *self.children_accessor.single()
+    }
+
+    /// Layouts the single child with the current constraints.
+    pub fn layout_single_child(&mut self) -> RenderResult<SliverGeometry> {
+        let child_id = self.single_child();
+        self.layout_child(child_id, self.constraints.clone())
+    }
+
+    /// Layouts the single child with transformed constraints.
+    pub fn layout_single_child_with<F>(&mut self, transform: F) -> RenderResult<SliverGeometry>
+    where
+        F: FnOnce(SliverConstraints) -> SliverConstraints,
+    {
+        let child_id = self.single_child();
+        let transformed_constraints = transform(self.constraints.clone());
+        self.layout_child(child_id, transformed_constraints)
+    }
+}
+
+// ============================================================================
 // PAINT CONTEXT
 // ============================================================================
 
@@ -376,7 +403,7 @@ where
 /// ```rust,ignore
 /// fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
 ///     // Uses BoxProtocol by default, geometry is Size
-///     ctx.canvas_mut().draw_rect(Rect::from_size(ctx.geometry));
+///     ctx.canvas_mut().draw_rect(Rect::from_min_size(Offset::ZERO, ctx.geometry));
 /// }
 /// ```
 ///
@@ -484,7 +511,7 @@ where
     /// Returns a GAT-based iterator over child ElementIds.
     #[inline]
     pub fn children(&self) -> impl Iterator<Item = ElementId> + 'a {
-        self.children_accessor.element_ids()
+        self.children_accessor.iter().copied()
     }
 
     /// Paints a child element at the given offset.
@@ -493,12 +520,16 @@ where
         Ok(())
     }
 
-    /// Paints all children at their stored offsets.
+    /// Paints all children using their stored offsets from layout.
+    ///
+    /// This method retrieves each child's offset that was set during the layout
+    /// phase via `set_child_offset` and paints the child at that position.
+    /// If a child has no stored offset, it defaults to `Offset::ZERO`.
     pub fn paint_all_children(&mut self) -> RenderResult<()> {
         let children: Vec<_> = self.children().collect();
 
         for child_id in children {
-            let offset = self.tree.get_child_offset(child_id).unwrap_or(Offset::ZERO);
+            let offset = self.tree.get_offset(child_id).unwrap_or(Offset::ZERO);
             self.paint_child(child_id, offset)?;
         }
 
@@ -527,7 +558,7 @@ where
     /// This combines offset and size into a Rect.
     #[inline]
     pub fn bounds(&self) -> Rect {
-        Rect::from_offset_size(self.offset, self.geometry)
+        Rect::from_min_size(self.offset, self.geometry)
     }
 
     /// Returns the local bounding rectangle (at origin).
@@ -535,7 +566,7 @@ where
     /// This is useful for drawing within the element's own coordinate space.
     #[inline]
     pub fn local_bounds(&self) -> Rect {
-        Rect::from_size(self.geometry)
+        Rect::from_min_size(Offset::ZERO, self.geometry)
     }
 }
 
@@ -547,7 +578,7 @@ impl<'a, T: PaintTree> PaintContext<'a, Single, BoxProtocol, T> {
     /// Gets the single child ID (convenience for Single arity).
     #[inline]
     pub fn single_child(&self) -> ElementId {
-        self.children_accessor.single_child_id()
+        *self.children_accessor.single()
     }
 
     /// Paints the single child at the given offset.
@@ -583,6 +614,24 @@ where
     #[inline]
     pub fn scroll_extent(&self) -> f32 {
         self.geometry.scroll_extent
+    }
+}
+
+// ============================================================================
+// PAINT CONTEXT - SINGLE CHILD SLIVER PROTOCOL
+// ============================================================================
+
+impl<'a, T: PaintTree> PaintContext<'a, Single, SliverProtocol, T> {
+    /// Gets the single child ID (convenience for Single arity).
+    #[inline]
+    pub fn single_child(&self) -> ElementId {
+        *self.children_accessor.single()
+    }
+
+    /// Paints the single child at the given offset.
+    pub fn paint_single_child(&mut self, offset: Offset) -> RenderResult<()> {
+        let child_id = self.single_child();
+        self.paint_child(child_id, offset)
     }
 }
 
@@ -697,12 +746,12 @@ where
     /// Returns a GAT-based iterator over child ElementIds.
     #[inline]
     pub fn children(&self) -> impl Iterator<Item = ElementId> + 'a {
-        self.children_accessor.element_ids()
+        self.children_accessor.iter().copied()
     }
 
     /// Returns children in reverse order (for z-order hit testing).
-    pub fn children_reverse(&self) -> impl Iterator<Item = ElementId> + 'a {
-        self.children().rev()
+    pub fn children_reverse(&self) -> impl DoubleEndedIterator<Item = ElementId> + 'a {
+        self.children_accessor.as_slice().iter().copied().rev()
     }
 
     /// Hit tests a child element.
@@ -712,13 +761,7 @@ where
         position: Offset,
         result: &mut HitTestResult,
     ) -> bool {
-        self.tree.perform_hit_test(child_id, position, result)
-    }
-
-    /// Adds this element to the hit test result.
-    pub fn hit_test_self(&self, result: &mut HitTestResult) -> bool {
-        result.add(self.element_id);
-        true
+        self.tree.hit_test(child_id, position, result)
     }
 }
 
@@ -736,14 +779,84 @@ where
         self.geometry
     }
 
+    /// Adds this element to the hit test result.
+    pub fn hit_test_self(&self, result: &mut HitTestResult) -> bool {
+        let bounds = Rect::from_min_size(Offset::ZERO, self.geometry);
+        let entry = HitTestEntry::new(self.element_id, self.position, bounds);
+        result.add(entry);
+        true
+    }
+
     /// Checks if the position is within this element's bounds.
     pub fn contains_position(&self) -> bool {
-        let local_bounds = Rect::from_size(self.geometry);
+        let local_bounds = Rect::from_min_size(Offset::ZERO, self.geometry);
         local_bounds.contains(self.position)
     }
 
     /// Checks if the position is within a specific rectangle.
     pub fn position_in_rect(&self, rect: Rect) -> bool {
         rect.contains(self.position)
+    }
+}
+
+// ============================================================================
+// HIT TEST CONTEXT - SINGLE CHILD BOX PROTOCOL
+// ============================================================================
+
+impl<'a, T: HitTestTree> HitTestContext<'a, Single, BoxProtocol, T> {
+    /// Gets the single child ID (convenience for Single arity).
+    #[inline]
+    pub fn single_child(&self) -> ElementId {
+        *self.children_accessor.single()
+    }
+
+    /// Hit tests the single child at the given position.
+    pub fn hit_test_single_child(&self, position: Offset, result: &mut HitTestResult) -> bool {
+        let child_id = self.single_child();
+        self.hit_test_child(child_id, position, result)
+    }
+}
+
+// ============================================================================
+// HIT TEST CONTEXT - SLIVER PROTOCOL SPECIFIC
+// ============================================================================
+
+impl<'a, A: Arity, T: HitTestTree> HitTestContext<'a, A, SliverProtocol, T>
+where
+    A::Accessor<'a, ElementId>: ChildrenAccess<'a, ElementId>,
+{
+    /// Returns the sliver geometry (convenience for Sliver protocol).
+    #[inline]
+    pub fn sliver_geometry(&self) -> SliverGeometry {
+        self.geometry.clone()
+    }
+
+    /// Adds this element to the hit test result.
+    ///
+    /// For slivers, uses the paint extent for bounds.
+    pub fn hit_test_self(&self, result: &mut HitTestResult) -> bool {
+        // For slivers, use paint extent for bounds calculation
+        let bounds = Rect::from_ltwh(0.0, 0.0, 0.0, self.geometry.paint_extent);
+        let entry = HitTestEntry::new(self.element_id, self.position, bounds);
+        result.add(entry);
+        true
+    }
+}
+
+// ============================================================================
+// HIT TEST CONTEXT - SINGLE CHILD SLIVER PROTOCOL
+// ============================================================================
+
+impl<'a, T: HitTestTree> HitTestContext<'a, Single, SliverProtocol, T> {
+    /// Gets the single child ID (convenience for Single arity).
+    #[inline]
+    pub fn single_child(&self) -> ElementId {
+        *self.children_accessor.single()
+    }
+
+    /// Hit tests the single child at the given position.
+    pub fn hit_test_single_child(&self, position: Offset, result: &mut HitTestResult) -> bool {
+        let child_id = self.single_child();
+        self.hit_test_child(child_id, position, result)
     }
 }

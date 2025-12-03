@@ -198,7 +198,7 @@ impl RenderState<SliverProtocol> {
 impl<P: Protocol> Clone for RenderState<P> {
     fn clone(&self) -> Self {
         Self {
-            flags: AtomicRenderFlags::new(self.flags.get()),
+            flags: AtomicRenderFlags::new(self.flags.load()),
             geometry: RwLock::new(self.geometry.read().clone()),
             constraints: RwLock::new(self.constraints.read().clone()),
             offset: RwLock::new(*self.offset.read()),

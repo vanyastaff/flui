@@ -132,6 +132,7 @@ use flui_types::{Offset, Rect, SliverConstraints, SliverGeometry};
 use super::arity::Arity;
 use super::contexts::{SliverHitTestContext, SliverLayoutContext, SliverPaintContext};
 use super::render_object::RenderObject;
+use super::RenderResult;
 
 // ============================================================================
 // CORE RENDER SLIVER TRAIT
@@ -181,7 +182,7 @@ pub trait RenderSliver<A: Arity>: RenderObject + fmt::Debug + Send + Sync {
     ///
     /// # Returns
     ///
-    /// `SliverGeometry` with:
+    /// `RenderResult<SliverGeometry>` with:
     /// - `scroll_extent`: Total scrollable length
     /// - `paint_extent`: Amount currently painted (visible)
     /// - `layout_extent`: Amount consuming viewport space
@@ -191,38 +192,38 @@ pub trait RenderSliver<A: Arity>: RenderObject + fmt::Debug + Send + Sync {
     ///
     /// ```rust,ignore
     /// // Fixed-height sliver
-    /// fn layout(&mut self, ctx: SliverLayoutContext<'_, Leaf>) -> SliverGeometry {
+    /// fn layout(&mut self, ctx: SliverLayoutContext<'_, Leaf>) -> RenderResult<SliverGeometry> {
     ///     let height = 100.0;
     ///     let visible = height.min(ctx.constraints.remaining_paint_extent);
     ///
-    ///     SliverGeometry {
+    ///     Ok(SliverGeometry {
     ///         scroll_extent: height,
     ///         paint_extent: visible,
     ///         layout_extent: visible,
     ///         max_paint_extent: height,
     ///         ..Default::default()
-    ///     }
+    ///     })
     /// }
     ///
     /// // Single child wrapper
-    /// fn layout(&mut self, mut ctx: SliverLayoutContext<'_, Single>) -> SliverGeometry {
+    /// fn layout(&mut self, mut ctx: SliverLayoutContext<'_, Single>) -> RenderResult<SliverGeometry> {
     ///     ctx.layout_single_child()
     /// }
     ///
     /// // Multiple children list
-    /// fn layout(&mut self, mut ctx: SliverLayoutContext<'_, Variable>) -> SliverGeometry {
+    /// fn layout(&mut self, mut ctx: SliverLayoutContext<'_, Variable>) -> RenderResult<SliverGeometry> {
     ///     let mut geometry = SliverGeometry::zero();
     ///
     ///     for child_id in ctx.children() {
-    ///         let child_geometry = ctx.layout_child(child_id, ctx.constraints);
+    ///         let child_geometry = ctx.layout_child(child_id, ctx.constraints)?;
     ///         geometry.scroll_extent += child_geometry.scroll_extent;
     ///         geometry.paint_extent += child_geometry.paint_extent;
     ///     }
     ///
-    ///     geometry
+    ///     Ok(geometry)
     /// }
     /// ```
-    fn layout(&mut self, ctx: SliverLayoutContext<'_, A>) -> SliverGeometry;
+    fn layout(&mut self, ctx: SliverLayoutContext<'_, A>) -> RenderResult<SliverGeometry>;
 
     /// Paints this sliver to the canvas.
     ///
@@ -327,8 +328,9 @@ pub trait RenderSliver<A: Arity>: RenderObject + fmt::Debug + Send + Sync {
     /// Gets the local bounding rectangle.
     ///
     /// For slivers, this is typically based on paint extent.
+    /// Default returns an empty rectangle. Override for proper hit testing.
     fn local_bounds(&self) -> Rect {
-        (self as &dyn RenderObject).local_bounds()
+        Rect::ZERO
     }
 }
 
@@ -359,16 +361,16 @@ mod tests {
     }
 
     impl<A: Arity> RenderSliver<A> for TestRenderSliver<A> {
-        fn layout(&mut self, ctx: SliverLayoutContext<'_, A>) -> SliverGeometry {
+        fn layout(&mut self, ctx: SliverLayoutContext<'_, A>) -> RenderResult<SliverGeometry> {
             let visible = self.extent.min(ctx.constraints.remaining_paint_extent);
 
-            SliverGeometry {
+            Ok(SliverGeometry {
                 scroll_extent: self.extent,
                 paint_extent: visible,
-                layout_extent: visible,
-                max_paint_extent: self.extent,
+                layout_extent: Some(visible),
+                max_paint_extent: Some(self.extent),
                 ..Default::default()
-            }
+            })
         }
 
         fn paint(&self, _ctx: &mut SliverPaintContext<'_, A>) {

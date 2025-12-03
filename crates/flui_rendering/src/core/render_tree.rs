@@ -267,6 +267,19 @@ pub trait PaintTree {
     /// Mutable reference to the render object as `dyn Any`, or `None` if the
     /// element doesn't exist or is not a render element.
     fn render_object_mut(&mut self, id: ElementId) -> Option<&mut dyn Any>;
+
+    /// Gets the offset of an element (position relative to parent).
+    ///
+    /// This is used during paint to retrieve offsets that were set during layout.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - The element to query
+    ///
+    /// # Returns
+    ///
+    /// The offset if the element exists and has been positioned, `None` otherwise.
+    fn get_offset(&self, id: ElementId) -> Option<Offset>;
 }
 
 // ============================================================================
@@ -374,6 +387,88 @@ pub trait FullRenderTree: LayoutTree + PaintTree + HitTestTree {
 impl<T> FullRenderTree for T where T: LayoutTree + PaintTree + HitTestTree {}
 
 // ============================================================================
+// BOX<DYN TRAIT> IMPLEMENTATIONS
+// ============================================================================
+
+impl LayoutTree for Box<dyn LayoutTree + Send + Sync> {
+    fn perform_layout(
+        &mut self,
+        id: ElementId,
+        constraints: BoxConstraints,
+    ) -> Result<Size, RenderError> {
+        (**self).perform_layout(id, constraints)
+    }
+
+    fn perform_sliver_layout(
+        &mut self,
+        id: ElementId,
+        constraints: SliverConstraints,
+    ) -> Result<SliverGeometry, RenderError> {
+        (**self).perform_sliver_layout(id, constraints)
+    }
+
+    fn set_offset(&mut self, id: ElementId, offset: Offset) {
+        (**self).set_offset(id, offset)
+    }
+
+    fn get_offset(&self, id: ElementId) -> Option<Offset> {
+        (**self).get_offset(id)
+    }
+
+    fn mark_needs_layout(&mut self, id: ElementId) {
+        (**self).mark_needs_layout(id)
+    }
+
+    fn needs_layout(&self, id: ElementId) -> bool {
+        (**self).needs_layout(id)
+    }
+
+    fn render_object(&self, id: ElementId) -> Option<&dyn Any> {
+        (**self).render_object(id)
+    }
+
+    fn render_object_mut(&mut self, id: ElementId) -> Option<&mut dyn Any> {
+        (**self).render_object_mut(id)
+    }
+}
+
+impl PaintTree for Box<dyn PaintTree + Send + Sync> {
+    fn perform_paint(&mut self, id: ElementId, offset: Offset) -> Result<Canvas, RenderError> {
+        (**self).perform_paint(id, offset)
+    }
+
+    fn mark_needs_paint(&mut self, id: ElementId) {
+        (**self).mark_needs_paint(id)
+    }
+
+    fn needs_paint(&self, id: ElementId) -> bool {
+        (**self).needs_paint(id)
+    }
+
+    fn render_object(&self, id: ElementId) -> Option<&dyn Any> {
+        (**self).render_object(id)
+    }
+
+    fn render_object_mut(&mut self, id: ElementId) -> Option<&mut dyn Any> {
+        (**self).render_object_mut(id)
+    }
+
+    fn get_offset(&self, id: ElementId) -> Option<Offset> {
+        (**self).get_offset(id)
+    }
+}
+
+impl HitTestTree for Box<dyn HitTestTree + Send + Sync> {
+    fn hit_test(&self, id: ElementId, position: Offset, result: &mut HitTestResult) -> bool {
+        (**self).hit_test(id, position, result)
+    }
+
+    fn render_object(&self, id: ElementId) -> Option<&dyn Any> {
+        (**self).render_object(id)
+    }
+}
+
+// ============================================================================
 // EXTENSION TRAITS (for concrete types)
 // ============================================================================
 
@@ -471,7 +566,7 @@ pub trait HitTestTreeExt: HitTestTree {
     fn hit_test_first(&self, id: ElementId, position: Offset) -> Option<ElementId> {
         let mut result = HitTestResult::new();
         if self.hit_test(id, position, &mut result) {
-            result.entries().first().map(|entry| entry.target)
+            result.entries().first().map(|entry| entry.element_id)
         } else {
             None
         }
@@ -663,7 +758,7 @@ mod tests {
             _id: ElementId,
             _offset: Offset,
         ) -> Result<Canvas, RenderError> {
-            Ok(Canvas::new(Size::new(100.0, 100.0)))
+            Ok(Canvas::new())
         }
 
         fn mark_needs_paint(&mut self, _id: ElementId) {}
@@ -677,6 +772,10 @@ mod tests {
         }
 
         fn render_object_mut(&mut self, _id: ElementId) -> Option<&mut dyn Any> {
+            None
+        }
+
+        fn get_offset(&self, _id: ElementId) -> Option<Offset> {
             None
         }
     }

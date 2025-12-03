@@ -77,15 +77,18 @@
 
 pub mod core;
 pub mod error;
-pub mod objects;
-pub mod view;
+pub mod into_render;
+// TODO: Re-enable after fixing render objects
+// pub mod objects;
+// TODO: Re-enable after fixing view module for typed protocols
+// pub mod view;
 
 // ============================================================================
 // RE-EXPORTS FROM CORE MODULE
 // ============================================================================
 
 // Core rendering traits
-pub use core::{RenderBox, RenderBoxExt, RenderObject, SliverRender, SliverRenderExt};
+pub use core::{RenderBox, RenderObject, RenderSliver};
 
 // Context types for layout/paint/hit-test
 pub use core::{
@@ -97,7 +100,7 @@ pub use core::{
 pub use core::{HitTestTree, HitTestTreeExt, LayoutTree, LayoutTreeExt, PaintTree, PaintTreeExt};
 
 // Geometry and constraints
-pub use core::{BoxConstraints, Constraints, Geometry};
+pub use core::BoxConstraints;
 
 // Protocol system
 pub use core::{BoxProtocol, Protocol, SliverProtocol};
@@ -106,13 +109,13 @@ pub use core::{BoxProtocol, Protocol, SliverProtocol};
 pub use core::{Arity, AtLeast, ChildrenAccess, Exact, Leaf, Optional, Range, Single, Variable};
 
 // Wrappers and proxies
-pub use core::{
-    BoxRenderWrapper, ProxyRender, RenderProxy, RenderWrapper, SingleChildProxy,
-    SliverRenderWrapper, WrapperRender,
-};
+pub use core::{BoxRenderWrapper, RenderProxyBox, RenderProxySliver, SliverRenderWrapper};
 
 // Error handling
 pub use core::{RenderError, RenderResult};
+
+// IntoRender trait
+pub use into_render::{IntoRender, IntoRenderState};
 
 // Foundation types
 pub use core::ElementId;
@@ -133,7 +136,8 @@ pub use flui_types::{Offset, Rect, Size, SliverConstraints, SliverGeometry};
 // RE-EXPORTS FROM VIEW MODULE
 // ============================================================================
 
-pub use view::{RenderObjectWrapper, RenderView, RenderViewObject, RenderViewWrapper};
+// TODO: Re-enable after fixing view module for typed protocols
+// pub use view::{RenderObjectWrapper, RenderView, RenderViewObject, RenderViewWrapper};
 
 // ============================================================================
 // PRELUDE MODULE
@@ -157,8 +161,11 @@ pub use view::{RenderObjectWrapper, RenderView, RenderViewObject, RenderViewWrap
 pub mod prelude {
     pub use super::core::prelude::*;
 
+    // IntoRender trait
+    pub use super::into_render::{IntoRender, IntoRenderState};
+
     // Most commonly used traits
-    pub use super::{RenderBox, RenderBoxExt, RenderObject, SliverRender, SliverRenderExt};
+    pub use super::{RenderBox, RenderObject, RenderSliver};
 
     // Most commonly used context types
     pub use super::{BoxHitTestContext, BoxLayoutContext, BoxPaintContext};
@@ -200,9 +207,48 @@ pub struct ReadmeDoctests;
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Get version as a tuple (major, minor, patch)
+///
+/// Parses the `CARGO_PKG_VERSION` at compile time.
+/// Assumes semantic versioning format: "MAJOR.MINOR.PATCH" or "MAJOR.MINOR.PATCH-suffix"
 pub const fn version_tuple() -> (u32, u32, u32) {
-    const VERSION_ARRAY: &[u8] = VERSION.as_bytes();
-    // Simple parsing for const context - assumes semantic versioning
-    // This would need proper parsing in real implementation
-    (0, 1, 0) // Placeholder - in real code this would parse VERSION
+    const fn parse_digit(b: u8) -> u32 {
+        (b - b'0') as u32
+    }
+
+    const fn parse_number(bytes: &[u8], start: usize, end: usize) -> u32 {
+        let mut result = 0u32;
+        let mut i = start;
+        while i < end {
+            result = result * 10 + parse_digit(bytes[i]);
+            i += 1;
+        }
+        result
+    }
+
+    let bytes = VERSION.as_bytes();
+    let len = bytes.len();
+
+    // Find first dot (end of major)
+    let mut first_dot = 0;
+    while first_dot < len && bytes[first_dot] != b'.' {
+        first_dot += 1;
+    }
+
+    // Find second dot (end of minor)
+    let mut second_dot = first_dot + 1;
+    while second_dot < len && bytes[second_dot] != b'.' {
+        second_dot += 1;
+    }
+
+    // Find end of patch (stop at '-' for pre-release or end of string)
+    let mut patch_end = second_dot + 1;
+    while patch_end < len && bytes[patch_end] != b'-' && bytes[patch_end].is_ascii_digit() {
+        patch_end += 1;
+    }
+
+    let major = parse_number(bytes, 0, first_dot);
+    let minor = parse_number(bytes, first_dot + 1, second_dot);
+    let patch = parse_number(bytes, second_dot + 1, patch_end);
+
+    (major, minor, patch)
 }

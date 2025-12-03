@@ -1,16 +1,15 @@
-
 // ============================================================================
 // CORE MODULES
 // ============================================================================
 
 // Arity system re-exports and rendering extensions
-mod arity;
+pub mod arity;
 
 // Rendering contexts with GAT integration
 mod contexts;
 
 // Protocol definitions (Box, Sliver)
-mod protocol;
+pub mod protocol;
 
 // Parent data system for per-child layout metadata
 mod parent_data;
@@ -65,9 +64,9 @@ pub use flui_types::{
 // CORE RENDER TRAITS
 // ============================================================================
 
-pub use render_box::{RenderBox};
+pub use render_box::RenderBox;
 pub use render_object::RenderObject;
-pub use render_sliver::{RenderSliver};
+pub use render_sliver::RenderSliver;
 
 // ============================================================================
 // PARENT DATA SYSTEM
@@ -82,7 +81,7 @@ pub use parent_data::{
 // ============================================================================
 
 pub use render_flags::{AtomicRenderFlags, RenderFlags};
-pub use render_state::RenderState;
+pub use render_state::{BoxRenderState, RenderState, SliverRenderState};
 
 // ============================================================================
 // CONTEXTS (GAT-based)
@@ -103,6 +102,13 @@ pub use contexts::{
     SliverPaintContext,
 };
 
+// Short aliases for convenience (used by render objects)
+pub type BoxLayoutCtx<'a, A, T = Box<dyn LayoutTree + Send + Sync>> = BoxLayoutContext<'a, A, T>;
+pub type BoxPaintCtx<'a, A, T = Box<dyn PaintTree + Send + Sync>> = BoxPaintContext<'a, A, T>;
+pub type BoxHitTestCtx<'a, A, T = Box<dyn HitTestTree + Send + Sync>> = BoxHitTestContext<'a, A, T>;
+pub type SliverLayoutCtx<'a, A, T = Box<dyn LayoutTree + Send + Sync>> =
+    SliverLayoutContext<'a, A, T>;
+pub type SliverPaintCtx<'a, A, T = Box<dyn PaintTree + Send + Sync>> = SliverPaintContext<'a, A, T>;
 
 // ============================================================================
 // TREE OPERATIONS (dyn-compatible)
@@ -138,10 +144,7 @@ pub use render_proxy::{RenderProxyBox, RenderProxySliver};
 // WRAPPERS AND UTILITIES
 // ============================================================================
 
-pub use wrappers::{
-    BoxRenderWrapper,
-    SliverRenderWrapper,
-};
+pub use wrappers::{BoxRenderWrapper, SliverRenderWrapper};
 
 // ============================================================================
 // FLUI-TREE INTEGRATION
@@ -221,4 +224,3 @@ pub mod prelude {
     // Error handling
     pub use super::{RenderError, RenderResult};
 }
-

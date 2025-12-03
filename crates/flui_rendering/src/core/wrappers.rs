@@ -273,7 +273,7 @@ impl<A: Arity> RenderBox<A> for BoxRenderWrapper<A> {
     }
 
     fn local_bounds(&self) -> Rect {
-        self.inner.local_bounds()
+        RenderBox::local_bounds(self.inner.as_ref())
     }
 }
 
@@ -415,7 +415,7 @@ impl<A: Arity> fmt::Debug for SliverRenderWrapper<A> {
 
 // Implement RenderSliver by delegating to inner
 impl<A: Arity> RenderSliver<A> for SliverRenderWrapper<A> {
-    fn layout(&mut self, ctx: SliverLayoutContext<'_, A>) -> SliverGeometry {
+    fn layout(&mut self, ctx: SliverLayoutContext<'_, A>) -> RenderResult<SliverGeometry> {
         self.inner.layout(ctx)
     }
 
@@ -436,7 +436,8 @@ impl<A: Arity> RenderSliver<A> for SliverRenderWrapper<A> {
     }
 
     fn local_bounds(&self) -> Rect {
-        self.inner.local_bounds()
+        // Default: return empty bounds. Override for proper hit testing.
+        Rect::ZERO
     }
 }
 
@@ -519,12 +520,12 @@ mod tests {
     }
 
     impl<A: Arity> RenderSliver<A> for TestRenderSliver<A> {
-        fn layout(&mut self, _ctx: SliverLayoutContext<'_, A>) -> SliverGeometry {
-            SliverGeometry {
+        fn layout(&mut self, _ctx: SliverLayoutContext<'_, A>) -> RenderResult<SliverGeometry> {
+            Ok(SliverGeometry {
                 scroll_extent: self.extent,
                 paint_extent: self.extent,
                 ..Default::default()
-            }
+            })
         }
 
         fn paint(&self, _ctx: &mut SliverPaintContext<'_, A>) {}
