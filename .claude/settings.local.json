@@ -49,7 +49,8 @@
       "SlashCommand(/openspec:apply)",
       "SlashCommand(/openspec:archive)",
       "SlashCommand(/openspec:archive:*)",
-      "WebFetch(domain:rust-lang.github.io)"
+      "WebFetch(domain:rust-lang.github.io)",
+      "mcp__filesystem__directory_tree"
     ],
     "deny": [],
     "ask": []

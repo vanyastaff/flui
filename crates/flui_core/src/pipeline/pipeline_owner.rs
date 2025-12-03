@@ -276,13 +276,16 @@ impl PipelineOwner {
     where
         V: flui_view::StatelessView,
     {
-        use flui_view::IntoElement;
+        use flui_element::IntoElement;
+        use flui_view::IntoView;
 
         if self.root_mgr.root_id().is_some() {
             return Err(PipelineError::RootAlreadyAttached);
         }
 
-        let element = flui_view::Stateless(widget).into_element();
+        // Convert StatelessView -> ViewObject -> Element
+        let view_object = flui_view::Stateless(widget).into_view();
+        let element = view_object.into_element();
         Ok(self.set_root(element))
     }
 
@@ -570,7 +573,9 @@ impl PipelineOwner {
         // HitRegion in CanvasLayer (registered during paint phase).
         let (size, offset) = if let Some(render_state_any) = element.render_state() {
             // Try to downcast to RenderState
-            if let Some(rs) = render_state_any.downcast_ref::<flui_rendering::RenderState>() {
+            if let Some(rs) =
+                render_state_any.downcast_ref::<flui_rendering::core::BoxRenderState>()
+            {
                 (rs.size(), rs.offset())
             } else {
                 (flui_types::Size::ZERO, flui_types::Offset::ZERO)

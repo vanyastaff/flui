@@ -30,7 +30,9 @@ impl ShaderType {
             ShaderType::SolidMask => include_str!("shaders/solid_mask.wgsl"),
             ShaderType::LinearGradientMask => include_str!("shaders/linear_gradient_mask.wgsl"),
             ShaderType::RadialGradientMask => include_str!("shaders/radial_gradient_mask.wgsl"),
-            ShaderType::GaussianBlurHorizontal => include_str!("shaders/gaussian_blur_horizontal.wgsl"),
+            ShaderType::GaussianBlurHorizontal => {
+                include_str!("shaders/gaussian_blur_horizontal.wgsl")
+            }
             ShaderType::GaussianBlurVertical => include_str!("shaders/gaussian_blur_vertical.wgsl"),
         }
     }
@@ -52,6 +54,7 @@ impl ShaderType {
             ShaderSpec::Solid(_) => ShaderType::SolidMask,
             ShaderSpec::LinearGradient { .. } => ShaderType::LinearGradientMask,
             ShaderSpec::RadialGradient { .. } => ShaderType::RadialGradientMask,
+            _ => ShaderType::SolidMask, // Fallback for future variants
         }
     }
 }
@@ -211,7 +214,12 @@ pub struct RadialGradientUniforms {
 }
 
 impl RadialGradientUniforms {
-    pub fn new(center: (f32, f32), radius: f32, center_color: Color32, edge_color: Color32) -> Self {
+    pub fn new(
+        center: (f32, f32),
+        radius: f32,
+        center_color: Color32,
+        edge_color: Color32,
+    ) -> Self {
         Self {
             center: [center.0, center.1],
             radius,
@@ -245,11 +253,7 @@ pub fn create_uniforms_from_spec(spec: &ShaderSpec) -> Vec<u8> {
                 .to_vec()
             }
         }
-        ShaderSpec::LinearGradient {
-            start,
-            end,
-            colors,
-        } => {
+        ShaderSpec::LinearGradient { start, end, colors } => {
             let start_color = colors.first().copied().unwrap_or(Color32::WHITE);
             let end_color = colors.last().copied().unwrap_or(Color32::BLACK);
             let uniforms = LinearGradientUniforms::new(*start, *end, start_color, end_color);
@@ -273,6 +277,17 @@ pub fn create_uniforms_from_spec(spec: &ShaderSpec) -> Vec<u8> {
                 std::slice::from_raw_parts(
                     &uniforms as *const _ as *const u8,
                     std::mem::size_of::<RadialGradientUniforms>(),
+                )
+                .to_vec()
+            }
+        }
+        // Fallback for future ShaderSpec variants
+        _ => {
+            let uniforms = SolidMaskUniforms::from_color(Color32::WHITE);
+            unsafe {
+                std::slice::from_raw_parts(
+                    &uniforms as *const _ as *const u8,
+                    std::mem::size_of::<SolidMaskUniforms>(),
                 )
                 .to_vec()
             }
@@ -312,7 +327,9 @@ mod tests {
 
     #[test]
     fn test_shader_source_code() {
-        assert!(ShaderType::SolidMask.source_code().contains("Solid Color Mask"));
+        assert!(ShaderType::SolidMask
+            .source_code()
+            .contains("Solid Color Mask"));
         assert!(ShaderType::LinearGradientMask
             .source_code()
             .contains("Linear Gradient"));
@@ -373,8 +390,7 @@ mod tests {
     fn test_linear_gradient_uniforms() {
         let start_color = Color32::RED;
         let end_color = Color32::BLUE;
-        let uniforms =
-            LinearGradientUniforms::new((0.0, 0.0), (1.0, 1.0), start_color, end_color);
+        let uniforms = LinearGradientUniforms::new((0.0, 0.0), (1.0, 1.0), start_color, end_color);
 
         assert_eq!(uniforms.start, [0.0, 0.0]);
         assert_eq!(uniforms.end, [1.0, 1.0]);

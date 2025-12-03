@@ -7,7 +7,7 @@ use std::fmt::Debug;
 use crate::core::{
     arity::Arity,
     protocol::{BoxProtocol, Protocol, SliverProtocol},
-    RenderBox, RenderObject, SliverRender,
+    RenderBox, RenderObject, RenderSliver,
 };
 
 use super::UpdateResult;
@@ -77,7 +77,7 @@ pub trait RenderView<P: Protocol, A: Arity>: Send + Sync + 'static {
 pub trait RenderObjectFor<P: Protocol, A: Arity>: RenderObject {}
 
 impl<A: Arity, R> RenderObjectFor<BoxProtocol, A> for R where R: RenderBox<A> + RenderObject {}
-impl<A: Arity, R> RenderObjectFor<SliverProtocol, A> for R where R: SliverRender<A> + RenderObject {}
+impl<A: Arity, R> RenderObjectFor<SliverProtocol, A> for R where R: RenderSliver<A> + RenderObject {}
 
 // ============================================================================
 // RenderViewConfig - Type-erased config for serialization/debugging

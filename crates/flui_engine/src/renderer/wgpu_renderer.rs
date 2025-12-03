@@ -4,7 +4,7 @@
 
 use super::command_renderer::CommandRenderer;
 use crate::painter::{Painter, WgpuPainter};
-use flui_painting::{BlendMode, Paint, PointMode};
+use flui_painting::{BlendMode, DisplayListCore, Paint, PointMode};
 use flui_types::{
     geometry::{Matrix4, Offset, Point, RRect, Rect, Transform},
     painting::{Image, Path},

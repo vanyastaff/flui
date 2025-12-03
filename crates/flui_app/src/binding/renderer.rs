@@ -100,15 +100,19 @@ impl RendererBinding {
                 tree_guard
                     .get(root_id)
                     .and_then(|element| element.render_state())
-                    .filter(|state| state.has_size())
+                    .and_then(|state| state.downcast_ref::<flui_core::render::BoxRenderState>())
                     .map(|state| state.size())
+                    .filter(|size| size.width > 0.0 && size.height > 0.0)
             })
             .unwrap_or_else(|| Size::new(constraints.max_width, constraints.max_height));
 
         // Create scene using flui_engine::Scene API
-        let scene = if let Some(layer) = layer {
-            // Wrap layer in Arc for zero-copy sharing with hit testing
-            Scene::with_layer(size, Arc::new(*layer), 0)
+        let scene = if let Some(canvas) = layer {
+            // Convert Canvas to Layer via CanvasLayer
+            use flui_engine::layer::{CanvasLayer, Layer};
+            let canvas_layer = CanvasLayer::from_canvas(canvas);
+            let layer: Layer = canvas_layer.into();
+            Scene::with_layer(size, Arc::new(layer), 0)
         } else {
             Scene::new(size)
         };

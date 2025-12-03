@@ -421,8 +421,12 @@ impl GpuRenderer {
         // Dispatch to appropriate rendering method based on layer type
         match layer {
             Layer::Canvas(canvas_layer) => self.render_canvas_layer(canvas_layer),
-            Layer::ShaderMask(shader_mask_layer) => self.render_shader_mask_layer(shader_mask_layer),
-            Layer::BackdropFilter(backdrop_filter_layer) => self.render_backdrop_filter_layer(backdrop_filter_layer),
+            Layer::ShaderMask(shader_mask_layer) => {
+                self.render_shader_mask_layer(shader_mask_layer)
+            }
+            Layer::BackdropFilter(backdrop_filter_layer) => {
+                self.render_backdrop_filter_layer(backdrop_filter_layer)
+            }
             Layer::Cached(cached_layer) => {
                 // Render the wrapped layer
                 // The CachedLayer handles its own caching logic
@@ -546,7 +550,9 @@ impl GpuRenderer {
         // Architecture note: This would align with Flutter's ShaderMask widget which
         // wraps a child widget and applies shader as mask.
 
-        let offscreen_renderer = self.offscreen_renderer.as_mut()
+        let offscreen_renderer = self
+            .offscreen_renderer
+            .as_mut()
             .ok_or_else(|| RenderError::PainterError("OffscreenRenderer not initialized".into()))?;
 
         // For demonstration: create a dummy child texture
@@ -638,11 +644,7 @@ impl GpuRenderer {
         // Phase 2.3: Apply image filter
         match &backdrop_filter_layer.filter {
             ImageFilter::Blur { sigma_x, sigma_y } => {
-                tracing::debug!(
-                    sigma_x,
-                    sigma_y,
-                    "Applying Gaussian blur filter"
-                );
+                tracing::debug!(sigma_x, sigma_y, "Applying Gaussian blur filter");
 
                 // Two-pass separable Gaussian blur
                 // Pass 1: Horizontal blur
@@ -657,26 +659,21 @@ impl GpuRenderer {
                 );
             }
             ImageFilter::Dilate { radius } => {
-                tracing::debug!(
-                    radius,
-                    "Dilate filter requested (not yet implemented)"
-                );
+                tracing::debug!(radius, "Dilate filter requested (not yet implemented)");
             }
             ImageFilter::Erode { radius } => {
-                tracing::debug!(
-                    radius,
-                    "Erode filter requested (not yet implemented)"
-                );
+                tracing::debug!(radius, "Erode filter requested (not yet implemented)");
             }
-            ImageFilter::Matrix { .. } => {
+            ImageFilter::Matrix(_) => {
                 tracing::debug!("Matrix filter requested (not yet implemented)");
             }
-            ImageFilter::Color { .. } => {
-                tracing::debug!("Color filter requested (not yet implemented)");
+            ImageFilter::ColorAdjust(_) => {
+                tracing::debug!("ColorAdjust filter requested (not yet implemented)");
             }
-            ImageFilter::Compose { .. } => {
+            ImageFilter::Compose(_) => {
                 tracing::debug!("Compose filter requested (not yet implemented)");
             }
+            #[cfg(debug_assertions)]
             ImageFilter::OverflowIndicator { .. } => {
                 tracing::debug!("OverflowIndicator filter requested (not yet implemented)");
             }
@@ -695,7 +692,10 @@ impl GpuRenderer {
     }
 
     /// Internal method to render a CanvasLayer
-    fn render_canvas_layer(&mut self, layer: &crate::layer::CanvasLayer) -> Result<(), RenderError> {
+    fn render_canvas_layer(
+        &mut self,
+        layer: &crate::layer::CanvasLayer,
+    ) -> Result<(), RenderError> {
         tracing::trace!("GpuRenderer::render() START");
 
         // Get current frame

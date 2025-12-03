@@ -41,6 +41,16 @@
       <sourceFolder url="file://$MODULE_DIR$/crates/flui-reactivity/tests" isTestSource="true" />
       <sourceFolder url="file://$MODULE_DIR$/crates/flui_painting/tests" isTestSource="true" />
       <sourceFolder url="file://$MODULE_DIR$/demos/counter/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/flui-element/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/flui-foundation/examples" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/flui-foundation/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/flui-pipeline/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/flui-tree/benches" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/flui-tree/examples" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/flui-tree/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/flui-view/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/flui_build/examples" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/flui_rendering/examples" isTestSource="false" />
       <excludeFolder url="file://$MODULE_DIR$/demos/counter/target" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
     </content>

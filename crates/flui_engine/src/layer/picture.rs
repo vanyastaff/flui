@@ -4,7 +4,7 @@
 
 use crate::renderer::CommandRenderer;
 use flui_interaction::{ElementId, HitTestResult, HitTestable};
-use flui_painting::{Canvas, DisplayList};
+use flui_painting::{Canvas, DisplayList, DisplayListCore};
 use flui_types::Offset;
 
 /// Canvas layer - a leaf layer that contains drawing commands
@@ -115,8 +115,8 @@ impl CanvasLayer {
 /// 3. Fall back to bounds check if no regions registered
 ///
 /// This connects GestureDetector callbacks to actual pointer events.
-impl HitTestable for CanvasLayer {
-    fn hit_test(&self, position: Offset, result: &mut HitTestResult) -> bool {
+impl flui_interaction::CustomHitTestable for CanvasLayer {
+    fn perform_hit_test(&self, position: Offset, result: &mut HitTestResult) -> bool {
         use flui_interaction::HitTestEntry;
         use flui_types::geometry::Point;
 
@@ -130,7 +130,7 @@ impl HitTestable for CanvasLayer {
             if region.contains(point) {
                 // Create handler that wraps the region's handler
                 let region_handler = region.handler.clone();
-                let handler: flui_interaction::hit_test::PointerEventHandler =
+                let handler: flui_interaction::PointerEventHandler =
                     std::sync::Arc::new(move |event| {
                         region_handler(event);
                         flui_interaction::EventPropagation::Stop
@@ -174,3 +174,6 @@ impl HitTestable for CanvasLayer {
         any_hit
     }
 }
+
+// Note: HitTestable is automatically implemented via blanket impl
+// for types that implement CustomHitTestable

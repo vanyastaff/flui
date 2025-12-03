@@ -80,8 +80,7 @@ pub mod error;
 pub mod into_render;
 // TODO: Re-enable after fixing render objects
 // pub mod objects;
-// TODO: Re-enable after fixing view module for typed protocols
-// pub mod view;
+pub mod view;
 
 // ============================================================================
 // RE-EXPORTS FROM CORE MODULE

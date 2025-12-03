@@ -3,7 +3,7 @@
 //! Useful for development, debugging, and testing rendering without GPU.
 
 use super::command_renderer::CommandRenderer;
-use flui_painting::{BlendMode, Paint, PointMode};
+use flui_painting::{BlendMode, DisplayListCore, Paint, PointMode};
 use flui_types::{
     geometry::{Matrix4, Offset, Point, RRect, Rect},
     painting::{Image, Path},

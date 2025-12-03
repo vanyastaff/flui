@@ -1342,6 +1342,7 @@ pub trait Painter {
                 Self::interpolate_gradient_color(colors, stops.as_deref(), t)
             }
             Shader::Image(_) => Color::WHITE, // Fallback for image shader
+            _ => Color::WHITE,                // Fallback for future variants
         }
     }
 

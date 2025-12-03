@@ -101,11 +101,12 @@ pub use flui_core::{
     // Element system
     element::Element,
 
-    // Foundation types
-    foundation::{ElementId, Key, Slot},
-
     // View system (new API)
-    view::{BuildContext, RootView, StatelessView},
+    view::{BuildContext, StatelessView},
+    // Foundation types (re-exported directly from flui_foundation)
+    ElementId,
+    Key,
+    Slot,
 };
 
 use winit::event_loop::EventLoop;

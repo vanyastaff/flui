@@ -1480,10 +1480,8 @@ dependencies = [
  "flui_interaction",
  "flui_painting",
  "flui_types",
- "moka",
  "parking_lot",
  "serde",
- "slab",
  "thiserror 2.0.17",
  "tracing",
 ]

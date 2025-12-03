@@ -148,19 +148,19 @@ mod tests {
 
     #[test]
     fn test_backdrop_filter_layer_color_filter() {
-        use flui_types::painting::effects::ColorFilter;
+        use flui_types::painting::effects::ColorAdjustment;
 
-        let filter = ImageFilter::Color(ColorFilter::Brightness(0.2));
+        let filter = ImageFilter::ColorAdjust(ColorAdjustment::Brightness(0.2));
         let bounds = Rect::from_xywh(0.0, 0.0, 100.0, 100.0);
 
         let layer = BackdropFilterLayer::new(filter, BlendMode::Screen, bounds);
 
         assert_eq!(layer.blend_mode, BlendMode::Screen);
         match layer.filter {
-            ImageFilter::Color(ColorFilter::Brightness(brightness)) => {
+            ImageFilter::ColorAdjust(ColorAdjustment::Brightness(brightness)) => {
                 assert_eq!(brightness, 0.2);
             }
-            _ => panic!("Expected Color filter with Brightness"),
+            _ => panic!("Expected ColorAdjust filter with Brightness"),
         }
     }
 
