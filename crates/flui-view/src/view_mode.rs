@@ -7,7 +7,7 @@
 ///
 /// Used by the framework to determine how to process a view:
 /// - Component views (Stateless, Stateful, etc.) produce child elements
-/// - Render views (RenderBox, RenderSliver) perform layout/paint
+/// - Render views (`RenderBox`, `RenderSliver`) perform layout/paint
 ///
 /// # Examples
 ///

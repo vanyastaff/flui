@@ -1,4 +1,4 @@
-//! IntoView trait - Convert types into ViewObject
+//! `IntoView` trait - Convert types into `ViewObject`
 //!
 //! # Overview
 //!
@@ -31,7 +31,7 @@ use crate::traits::{StatefulView, StatelessView};
 use crate::wrappers::{StatefulViewWrapper, StatelessViewWrapper};
 use crate::ViewObject;
 
-/// Converts a type into a boxed ViewObject.
+/// Converts a type into a boxed `ViewObject`.
 ///
 /// This trait enables automatic conversion of view types into
 /// trait objects for dynamic dispatch in the element tree.
@@ -60,7 +60,7 @@ use crate::ViewObject;
 /// let view_obj = Stateless(Greeting { name: "World".into() }).into_view();
 /// ```
 pub trait IntoView: Send + 'static {
-    /// Convert this value into a boxed ViewObject.
+    /// Convert this value into a boxed `ViewObject`.
     fn into_view(self) -> Box<dyn ViewObject>;
 }
 
@@ -69,7 +69,7 @@ pub trait IntoView: Send + 'static {
 // ============================================================================
 
 impl IntoView for Box<dyn ViewObject> {
-    /// Identity conversion - already a boxed ViewObject.
+    /// Identity conversion - already a boxed `ViewObject`.
     #[inline]
     fn into_view(self) -> Box<dyn ViewObject> {
         self
@@ -81,7 +81,7 @@ impl IntoView for Box<dyn ViewObject> {
 // ============================================================================
 
 impl<V: StatelessView> IntoView for StatelessViewWrapper<V> {
-    /// Convert StatelessViewWrapper into boxed ViewObject.
+    /// Convert `StatelessViewWrapper` into boxed `ViewObject`.
     #[inline]
     fn into_view(self) -> Box<dyn ViewObject> {
         Box::new(self)
@@ -89,7 +89,7 @@ impl<V: StatelessView> IntoView for StatelessViewWrapper<V> {
 }
 
 impl<V: StatefulView> IntoView for StatefulViewWrapper<V> {
-    /// Convert StatefulViewWrapper into boxed ViewObject.
+    /// Convert `StatefulViewWrapper` into boxed `ViewObject`.
     #[inline]
     fn into_view(self) -> Box<dyn ViewObject> {
         Box::new(self)
@@ -104,7 +104,7 @@ impl<V: StatefulView> IntoView for StatefulViewWrapper<V> {
 ///
 /// This is a convenience trait that wraps the view and then converts.
 pub trait StatelessIntoView: StatelessView {
-    /// Wrap in StatelessViewWrapper and convert to ViewObject.
+    /// Wrap in `StatelessViewWrapper` and convert to `ViewObject`.
     fn into_view_wrapped(self) -> Box<dyn ViewObject>
     where
         Self: Sized,
@@ -117,7 +117,7 @@ impl<V: StatelessView> StatelessIntoView for V {}
 
 /// Extension trait for converting stateful view trait implementations directly.
 pub trait StatefulIntoView: StatefulView {
-    /// Wrap in StatefulViewWrapper and convert to ViewObject.
+    /// Wrap in `StatefulViewWrapper` and convert to `ViewObject`.
     fn into_view_wrapped(self) -> Box<dyn ViewObject>
     where
         Self: Sized,
@@ -135,9 +135,7 @@ impl<V: StatefulView> StatefulIntoView for V {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::context::MockBuildContext;
     use crate::ViewMode;
-    use flui_foundation::ElementId;
     use std::any::Any;
 
     // Helper for tests - represents an empty view

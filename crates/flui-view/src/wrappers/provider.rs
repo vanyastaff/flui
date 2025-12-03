@@ -17,8 +17,8 @@ use crate::{BuildContext, IntoView, ViewMode, ViewObject};
 ///
 /// # Value Storage
 ///
-/// The provided value is wrapped in Arc<T> for efficient sharing across dependents.
-/// The `ProviderView` trait returns Arc<T> directly.
+/// The provided value is wrapped in `Arc<T>` for efficient sharing across dependents.
+/// The `ProviderView` trait returns `Arc<T>` directly.
 pub struct ProviderViewWrapper<V, T>
 where
     V: ProviderView<T>,
@@ -58,7 +58,7 @@ where
         &mut self.view
     }
 
-    /// Get the provided value (as Arc)
+    /// Get the provided value (as `Arc`)
     pub fn value(&self) -> Arc<T> {
         self.view.value()
     }
@@ -263,18 +263,18 @@ mod tests {
     fn test_wrapper_creation() {
         let wrapper = ProviderViewWrapper::new(TestThemeProvider {
             theme: Arc::new(TestTheme {
-                primary_color: 0xFF0000,
+                primary_color: 0x00FF_0000,
             }),
         });
         assert_eq!(wrapper.mode(), ViewMode::Provider);
-        assert_eq!(wrapper.value().primary_color, 0xFF0000);
+        assert_eq!(wrapper.value().primary_color, 0x00FF_0000);
     }
 
     #[test]
     fn test_dependents() {
         let mut wrapper = ProviderViewWrapper::new(TestThemeProvider {
             theme: Arc::new(TestTheme {
-                primary_color: 0xFF0000,
+                primary_color: 0x00FF_0000,
             }),
         });
 
@@ -290,7 +290,7 @@ mod tests {
     fn test_into_view() {
         let view = TestThemeProvider {
             theme: Arc::new(TestTheme {
-                primary_color: 0xFF0000,
+                primary_color: 0x00FF_0000,
             }),
         };
         let view_obj = Provider::new(view).into_view();
@@ -301,7 +301,7 @@ mod tests {
     fn test_build() {
         let mut wrapper = ProviderViewWrapper::new(TestThemeProvider {
             theme: Arc::new(TestTheme {
-                primary_color: 0xFF0000,
+                primary_color: 0x00FF_0000,
             }),
         });
         let ctx = MockBuildContext::new(ElementId::new(1));

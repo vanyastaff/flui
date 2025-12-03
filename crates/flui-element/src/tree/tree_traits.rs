@@ -10,13 +10,22 @@
 //! - [`TreeWrite`] - Mutable tree operations
 //! - [`TreeWriteNav`] - Tree structure modifications
 //! - [`RenderTreeAccess`] - Render-specific data access (stub implementation)
+//! - [`Lifecycle`] - Element lifecycle management (for Element)
+//! - [`DepthTracking`] - Depth tracking (for Element)
 
 use flui_foundation::{ElementId, Slot};
 use flui_tree::error::{TreeError, TreeResult};
-use flui_tree::{TreeNav, TreeRead, TreeWrite, TreeWriteNav};
+use flui_tree::{sealed, DepthTracking, Lifecycle, TreeNav, TreeRead, TreeWrite, TreeWriteNav};
 
 use super::ElementTree;
 use crate::Element;
+
+// ============================================================================
+// Sealed Trait Implementations
+// ============================================================================
+
+impl sealed::TreeReadSealed for ElementTree {}
+impl sealed::TreeNavSealed for ElementTree {}
 
 // ============================================================================
 // TreeRead Implementation
@@ -24,6 +33,10 @@ use crate::Element;
 
 impl TreeRead for ElementTree {
     type Node = Element;
+    type NodeIter<'a>
+        = Box<dyn Iterator<Item = ElementId> + 'a>
+    where
+        Self: 'a;
 
     /// Returns a reference to the element with the given ID.
     ///
@@ -46,10 +59,8 @@ impl TreeRead for ElementTree {
         self.nodes.len()
     }
 
-    fn node_ids(&self) -> Option<Box<dyn Iterator<Item = ElementId> + '_>> {
-        Some(Box::new(
-            self.nodes.iter().map(|(idx, _)| ElementId::new(idx + 1)),
-        ))
+    fn node_ids(&self) -> Self::NodeIter<'_> {
+        Box::new(self.nodes.iter().map(|(idx, _)| ElementId::new(idx + 1)))
     }
 }
 
@@ -58,24 +69,157 @@ impl TreeRead for ElementTree {
 // ============================================================================
 
 impl TreeNav for ElementTree {
+    type ChildrenIter<'a>
+        = Box<dyn Iterator<Item = ElementId> + 'a>
+    where
+        Self: 'a;
+    type AncestorsIter<'a>
+        = AncestorIter<'a>
+    where
+        Self: 'a;
+    type DescendantsIter<'a>
+        = DescendantsIter<'a>
+    where
+        Self: 'a;
+    type SiblingsIter<'a>
+        = Box<dyn Iterator<Item = ElementId> + 'a>
+    where
+        Self: 'a;
+
     /// Returns the parent of the given element.
     #[inline]
     fn parent(&self, id: ElementId) -> Option<ElementId> {
         self.get(id)?.parent()
     }
 
-    /// Returns the children of the given element.
-    ///
-    /// Returns an empty slice if the element has no children or doesn't exist.
+    /// Returns an iterator over the children of the given element.
     #[inline]
-    fn children(&self, id: ElementId) -> &[ElementId] {
-        self.get(id).map(|e| e.children()).unwrap_or(&[])
+    fn children(&self, id: ElementId) -> Self::ChildrenIter<'_> {
+        Box::new(
+            self.get(id)
+                .map(|e| e.children().iter().copied())
+                .into_iter()
+                .flatten(),
+        )
+    }
+
+    /// Returns an iterator over ancestors of the given element.
+    fn ancestors(&self, start: ElementId) -> Self::AncestorsIter<'_> {
+        AncestorIter {
+            tree: self,
+            current: Some(start),
+        }
+    }
+
+    /// Returns an iterator over descendants of the given element.
+    fn descendants(&self, root: ElementId) -> Self::DescendantsIter<'_> {
+        DescendantsIter::new(self, root)
+    }
+
+    /// Returns an iterator over siblings of the given element.
+    fn siblings(&self, id: ElementId) -> Self::SiblingsIter<'_> {
+        let parent = self.parent(id);
+        Box::new(
+            parent
+                .map(|p| {
+                    self.get(p)
+                        .map(|e| e.children().iter().copied().filter(move |&c| c != id))
+                        .into_iter()
+                        .flatten()
+                })
+                .into_iter()
+                .flatten(),
+        )
     }
 
     /// Returns the slot of the given element within its parent.
     #[inline]
     fn slot(&self, id: ElementId) -> Option<Slot> {
         self.get(id)?.slot()
+    }
+}
+
+// ============================================================================
+// Iterator Types for TreeNav
+// ============================================================================
+
+/// Iterator over ancestors of an element.
+#[derive(Debug)]
+pub struct AncestorIter<'a> {
+    tree: &'a ElementTree,
+    current: Option<ElementId>,
+}
+
+impl Iterator for AncestorIter<'_> {
+    type Item = ElementId;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let current = self.current?;
+
+        // Check if current exists in tree
+        if !self.tree.contains(current) {
+            self.current = None;
+            return None;
+        }
+
+        // Move to parent for next iteration
+        self.current = self.tree.parent(current);
+
+        Some(current)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        if self.current.is_some() {
+            // If we have a current node, there's at least 1 more element (itself)
+            // The upper bound is the maximum possible depth of the tree.
+            (1, Some(32)) // Use default MAX_DEPTH as conservative estimate
+        } else {
+            (0, Some(0))
+        }
+    }
+}
+
+/// Iterator over descendants of an element in depth-first order.
+#[derive(Debug)]
+pub struct DescendantsIter<'a> {
+    tree: &'a ElementTree,
+    stack: Vec<(ElementId, usize)>,
+}
+
+impl<'a> DescendantsIter<'a> {
+    fn new(tree: &'a ElementTree, root: ElementId) -> Self {
+        Self {
+            tree,
+            stack: vec![(root, 0)],
+        }
+    }
+}
+
+impl Iterator for DescendantsIter<'_> {
+    type Item = (ElementId, usize);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            let (current, depth) = self.stack.pop()?;
+
+            // Check if current exists in tree
+            if !self.tree.contains(current) {
+                continue;
+            }
+
+            // Add children to stack in reverse order for correct DFS order
+            if let Some(element) = self.tree.get(current) {
+                for &child in element.children().iter().rev() {
+                    self.stack.push((child, depth + 1));
+                }
+            }
+
+            return Some((current, depth));
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.stack.len(), None)
     }
 }
 
@@ -152,16 +296,9 @@ impl TreeWriteNav for ElementTree {
             }
 
             // Check if new_parent is a descendant of child (would create cycle)
-            let mut current = Some(parent_id);
-            while let Some(id) = current {
-                if let Some(p) = self.get(id).and_then(|e| e.parent()) {
-                    if p == child {
-                        return Err(TreeError::cycle_detected(child));
-                    }
-                    current = Some(p);
-                } else {
-                    break;
-                }
+            // Use is_ancestor_of from TreeNav trait for efficient cycle detection
+            if self.is_ancestor_of(child, parent_id) {
+                return Err(TreeError::cycle_detected(child));
             }
         }
 
@@ -232,6 +369,89 @@ impl flui_tree::RenderTreeAccess for ElementTree {
 }
 
 // ============================================================================
+// Lifecycle Implementation for Element
+// ============================================================================
+
+impl Lifecycle for Element {
+    /// Check if element is currently active.
+    #[inline]
+    fn is_active(&self) -> bool {
+        self.lifecycle().is_active()
+    }
+
+    /// Check if element is mounted in the tree.
+    #[inline]
+    fn is_mounted(&self) -> bool {
+        Element::is_mounted(self)
+    }
+
+    /// Mount element into the tree.
+    ///
+    /// Sets lifecycle to Active and records parent/slot.
+    fn mount(&mut self, parent: Option<ElementId>, slot: Slot) {
+        // Calculate depth from parent (root = 0)
+        let depth = 0; // Will be set by tree during insertion
+        Element::mount(self, parent, Some(slot), depth);
+    }
+
+    /// Unmount element from the tree.
+    ///
+    /// Sets lifecycle to Defunct.
+    fn unmount(&mut self) {
+        Element::unmount(self);
+    }
+
+    /// Mark element as needing rebuild.
+    #[inline]
+    fn mark_needs_build(&mut self) {
+        self.mark_dirty();
+    }
+
+    /// Check if element needs rebuild.
+    #[inline]
+    fn needs_build(&self) -> bool {
+        self.is_dirty()
+    }
+
+    /// Perform the build operation.
+    ///
+    /// Clears dirty flag. Actual build logic is in ViewObject.
+    fn perform_rebuild(&mut self) {
+        self.clear_dirty();
+        // Note: Actual build invokes view_object.build(ctx)
+        // This is handled by the pipeline, not here
+    }
+
+    /// Deactivate element (temporary removal).
+    fn deactivate(&mut self) {
+        Element::deactivate(self);
+    }
+
+    /// Activate previously deactivated element.
+    fn activate(&mut self) {
+        Element::activate(self);
+    }
+}
+
+// ============================================================================
+// DepthTracking Implementation for Element
+// ============================================================================
+
+impl DepthTracking for Element {
+    /// Get element's depth in tree (root = 0).
+    #[inline]
+    fn depth(&self) -> usize {
+        Element::depth(self)
+    }
+
+    /// Set element's depth.
+    #[inline]
+    fn set_depth(&mut self, depth: usize) {
+        Element::set_depth(self, depth);
+    }
+}
+
+// ============================================================================
 // TESTS
 // ============================================================================
 
@@ -273,7 +493,8 @@ mod tests {
 
         // Check via TreeNav
         assert_eq!(TreeNav::parent(&tree, child_id), Some(parent_id));
-        assert_eq!(TreeNav::children(&tree, parent_id), &[child_id]);
+        let children: Vec<_> = TreeNav::children(&tree, parent_id).collect();
+        assert_eq!(children, vec![child_id]);
     }
 
     #[test]
@@ -323,7 +544,7 @@ mod tests {
         TreeWrite::insert(&mut tree, test_element());
         TreeWrite::insert(&mut tree, test_element());
 
-        let ids: Vec<_> = TreeRead::node_ids(&tree).unwrap().collect();
+        let ids: Vec<_> = TreeRead::node_ids(&tree).collect();
         assert_eq!(ids.len(), 3);
 
         // IDs should be 1, 2, 3 (1-based)

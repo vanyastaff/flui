@@ -1,7 +1,7 @@
-//! ViewObject trait - Dynamic dispatch for view lifecycle
+//! `ViewObject` trait - Dynamic dispatch for view lifecycle
 //!
-//! ViewObject is the core trait that all view wrappers implement.
-//! It's stored inside Element as `Box<dyn ViewObject>` for type erasure.
+//! `ViewObject` is the core trait that all view wrappers implement.
+//! It's stored inside `Element` as `Box<dyn ViewObject>` for type erasure.
 //!
 //! # Architecture
 //!
@@ -14,15 +14,15 @@
 //!   └─ Provider views: Inherited data provider
 //!       └─ build() returns child ViewObject, has provided_value(), dependents()
 //!
-//! Render views are handled by RenderViewObject in flui_rendering.
+//! Render views are handled by `RenderViewObject` in `flui_rendering`.
 //! ```
 //!
 //! # Design Principles
 //!
 //! This trait is intentionally minimal and has NO dependencies on:
-//! - flui-element (Element, ElementTree, etc.)
-//! - flui_rendering (RenderObject, RenderState, etc.)
-//! - flui_painting (Canvas)
+//! - flui-element (Element, `ElementTree`, etc.)
+//! - `flui_rendering` (`RenderObject`, `RenderState`, etc.)
+//! - `flui_painting` (Canvas)
 
 use std::any::Any;
 use std::sync::Arc;
@@ -31,14 +31,14 @@ use flui_foundation::ElementId;
 
 use crate::{BuildContext, ViewMode};
 
-/// ViewObject - Core dynamic dispatch interface for view lifecycle
+/// `ViewObject` - Core dynamic dispatch interface for view lifecycle
 ///
 /// This trait defines the operations that ALL view types support.
-/// Wrappers (StatelessViewWrapper, StatefulViewWrapper, etc.) implement this.
+/// Wrappers (`StatelessViewWrapper`, `StatefulViewWrapper`, etc.) implement this.
 ///
 /// # Thread Safety
 ///
-/// ViewObject requires `Send + Sync` for cross-thread element transfer.
+/// `ViewObject` requires `Send + Sync` for cross-thread element transfer.
 ///
 /// # Lifecycle
 ///
@@ -51,12 +51,12 @@ use crate::{BuildContext, ViewMode};
 ///
 /// # Render Views
 ///
-/// For render-specific methods (layout, paint, hit_test), see
+/// For render-specific methods (layout, paint, `hit_test`), see
 /// `RenderViewObject` trait in `flui_rendering::view`.
 pub trait ViewObject: Send + Sync + 'static {
     // ========== CORE METHODS (required) ==========
 
-    /// Get the view mode (Stateless, Stateful, RenderBox, etc.)
+    /// Get the view mode (Stateless, Stateful, `RenderBox`, etc.)
     fn mode(&self) -> ViewMode;
 
     /// Build this view, producing child view object(s)
@@ -104,32 +104,32 @@ pub trait ViewObject: Send + Sync + 'static {
 
     /// Returns the render state for render views.
     ///
-    /// Default: None (non-render views don't have render state)
-    /// Overridden by RenderObjectWrapper and RenderViewWrapper.
+    /// Default: `None` (non-render views don't have render state)
+    /// Overridden by `RenderObjectWrapper` and `RenderViewWrapper`.
     fn render_state(&self) -> Option<&dyn Any> {
         None
     }
 
     /// Returns a mutable reference to the render state.
     ///
-    /// Default: None (non-render views don't have render state)
+    /// Default: `None` (non-render views don't have render state)
     fn render_state_mut(&mut self) -> Option<&mut dyn Any> {
         None
     }
 
     // ========== PROVIDER METHODS (for provider views) ==========
 
-    /// Get provided value as Arc<dyn Any>.
+    /// Get provided value as `Arc<dyn Any>`.
     ///
-    /// Only implemented by ProviderViewWrapper.
-    /// Returns None for non-provider views.
+    /// Only implemented by `ProviderViewWrapper`.
+    /// Returns `None` for non-provider views.
     fn provided_value(&self) -> Option<Arc<dyn Any + Send + Sync>> {
         None
     }
 
     /// Get dependents list.
     ///
-    /// Only implemented by ProviderViewWrapper.
+    /// Only implemented by `ProviderViewWrapper`.
     /// Returns empty slice for non-provider views.
     fn dependents(&self) -> &[ElementId] {
         &[]
@@ -137,8 +137,8 @@ pub trait ViewObject: Send + Sync + 'static {
 
     /// Get mutable dependents list.
     ///
-    /// Only implemented by ProviderViewWrapper.
-    /// Returns None for non-provider views.
+    /// Only implemented by `ProviderViewWrapper`.
+    /// Returns `None` for non-provider views.
     fn dependents_mut(&mut self) -> Option<&mut Vec<ElementId>> {
         None
     }
@@ -165,18 +165,18 @@ pub trait ViewObject: Send + Sync + 'static {
 
     /// Check if dependents should be notified of value change.
     ///
-    /// Only implemented by ProviderViewWrapper.
-    /// Returns false for non-provider views.
+    /// Only implemented by `ProviderViewWrapper`.
+    /// Returns `false` for non-provider views.
     fn should_notify_dependents(&self, _old_value: &dyn Any) -> bool {
         false
     }
 
     // ========== DOWNCASTING ==========
 
-    /// Upcast to Any for downcasting support
+    /// Upcast to `Any` for downcasting support
     fn as_any(&self) -> &dyn Any;
 
-    /// Upcast to Any (mutable) for downcasting support
+    /// Upcast to `Any` (mutable) for downcasting support
     fn as_any_mut(&mut self) -> &mut dyn Any;
 
     // ========== DEBUG ==========

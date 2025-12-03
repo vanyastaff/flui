@@ -75,8 +75,7 @@ impl ViewElement {
     pub fn new<V: ViewObject>(view_object: V, mode: ViewMode) -> Self {
         debug_assert!(
             mode.is_component() || mode.is_empty(),
-            "ViewElement should only be used for component views, got {:?}",
-            mode
+            "ViewElement should only be used for component views, got {mode:?}"
         );
 
         Self {

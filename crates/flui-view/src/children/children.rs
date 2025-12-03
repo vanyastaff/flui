@@ -58,7 +58,7 @@ impl Children {
         self.inner.push(view.into_view());
     }
 
-    /// Adds a boxed ViewObject.
+    /// Adds a boxed `ViewObject`.
     #[inline]
     pub fn push_view_object(&mut self, view_object: Box<dyn ViewObject>) {
         self.inner.push(view_object);

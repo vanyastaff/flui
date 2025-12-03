@@ -1,4 +1,4 @@
-//! BuildContext - Abstract context trait for view building
+//! `BuildContext` - Abstract context trait for view building
 //!
 //! This module defines the `BuildContext` trait - an abstraction that allows
 //! views to access framework services during build without coupling to
@@ -31,7 +31,7 @@ use flui_foundation::ElementId;
 // BuildContext TRAIT
 // ============================================================================
 
-/// BuildContext - Abstract context for view building
+/// `BuildContext` - Abstract context for view building
 ///
 /// Passed to `build()` methods to provide:
 /// - Current element's position in tree
@@ -75,7 +75,7 @@ pub trait BuildContext: Send + Sync {
     /// Schedule a rebuild for a specific element.
     fn schedule_rebuild(&self, element_id: ElementId);
 
-    /// Look up inherited value by TypeId (low-level API).
+    /// Look up inherited value by `TypeId` (low-level API).
     ///
     /// Walks up the tree to find the nearest provider element that provides
     /// a value of the given type. Registers a dependency so that when the
@@ -98,7 +98,7 @@ pub trait BuildContext: Send + Sync {
 // ============================================================================
 
 impl dyn BuildContext {
-    /// Try to downcast to a specific BuildContext implementation.
+    /// Try to downcast to a specific `BuildContext` implementation.
     pub fn downcast_ref<T: BuildContext + 'static>(&self) -> Option<&T> {
         self.as_any().downcast_ref::<T>()
     }
@@ -144,9 +144,9 @@ impl dyn BuildContext {
     ///
     /// This method:
     /// 1. Walks up the parent chain from current element
-    /// 2. Checks each ancestor to see if it's a Provider<T>
+    /// 2. Checks each ancestor to see if it's a `Provider<T>`
     /// 3. When found, registers current element as dependent
-    /// 4. Returns Arc<T> to the provided value
+    /// 4. Returns `Arc<T>` to the provided value
     ///
     /// # Performance
     ///
@@ -166,10 +166,11 @@ impl dyn BuildContext {
 // MOCK FOR TESTING
 // ============================================================================
 
-/// Mock implementation of BuildContext for testing.
+/// Mock implementation of `BuildContext` for testing.
 ///
 /// Provides a simple implementation that can be used in unit tests.
 #[cfg(any(test, feature = "test-utils"))]
+#[derive(Debug)]
 pub struct MockBuildContext {
     /// The element ID for this context.
     pub element_id: ElementId,

@@ -5,7 +5,6 @@
 
 use crate::element::{Element, ViewElement};
 use crate::ViewObject;
-use flui_view::ViewMode;
 
 /// Trait for types that can be converted into an Element.
 ///
@@ -83,6 +82,7 @@ impl IntoElement for Vec<Element> {
 mod tests {
     use super::*;
     use crate::BuildContext;
+    use flui_view::ViewMode;
     use std::any::Any;
 
     struct TestViewObject;

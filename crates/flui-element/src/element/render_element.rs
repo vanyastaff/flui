@@ -119,8 +119,7 @@ impl RenderElement {
     {
         debug_assert!(
             mode.is_render(),
-            "RenderElement should only be used for render views, got {:?}",
-            mode
+            "RenderElement should only be used for render views, got {mode:?}"
         );
 
         Self {
@@ -142,8 +141,7 @@ impl RenderElement {
     {
         debug_assert!(
             mode.is_render(),
-            "RenderElement should only be used for render views, got {:?}",
-            mode
+            "RenderElement should only be used for render views, got {mode:?}"
         );
 
         Self {

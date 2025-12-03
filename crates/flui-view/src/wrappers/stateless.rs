@@ -61,7 +61,7 @@ impl<V: StatelessView> ViewObject for StatelessViewWrapper<V> {
 // IntoView IMPLEMENTATION
 // ============================================================================
 
-/// Helper struct to convert `StatelessView` into ViewObject
+/// Helper struct to convert `StatelessView` into `ViewObject`
 ///
 /// Use `Stateless(my_view)` to create a view object from a stateless view.
 #[derive(Debug)]

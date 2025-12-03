@@ -53,7 +53,7 @@ impl Child {
         }
     }
 
-    /// Creates a child from a boxed ViewObject.
+    /// Creates a child from a boxed `ViewObject`.
     #[inline]
     pub fn from_view_object(view_object: Box<dyn ViewObject>) -> Self {
         Self {
@@ -97,13 +97,13 @@ impl Child {
     /// Returns a reference to the inner view object if present.
     #[inline]
     pub fn as_ref(&self) -> Option<&dyn ViewObject> {
-        self.inner.as_ref().map(|b| b.as_ref())
+        self.inner.as_ref().map(AsRef::as_ref)
     }
 
     /// Returns a mutable reference to the inner view object if present.
     #[inline]
     pub fn as_mut(&mut self) -> Option<&mut dyn ViewObject> {
-        self.inner.as_mut().map(|b| b.as_mut())
+        self.inner.as_mut().map(AsMut::as_mut)
     }
 }
 

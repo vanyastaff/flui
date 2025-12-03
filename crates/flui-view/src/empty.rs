@@ -39,7 +39,7 @@ impl IntoView for EmptyView {
     }
 }
 
-/// Internal ViewObject for EmptyView
+/// Internal `ViewObject` for `EmptyView`
 #[derive(Debug)]
 struct EmptyViewObject;
 
