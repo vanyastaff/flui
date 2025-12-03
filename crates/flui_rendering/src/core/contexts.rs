@@ -261,18 +261,25 @@ where
 
     /// Layouts all children with the same constraints.
     ///
-    /// Returns a vector of (child_id, size) tuples.
-    pub fn layout_all_children(&mut self, constraints: BoxConstraints) -> Vec<(ElementId, Size)> {
+    /// Returns a vector of (child_id, size) tuples on success.
+    /// If any child layout fails, the error is propagated immediately.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first error encountered during child layout.
+    pub fn layout_all_children(
+        &mut self,
+        constraints: BoxConstraints,
+    ) -> RenderResult<Vec<(ElementId, Size)>> {
         let children: Vec<_> = self.children().collect();
         let mut results = Vec::with_capacity(children.len());
 
         for child_id in children {
-            if let Ok(size) = self.layout_child(child_id, constraints) {
-                results.push((child_id, size));
-            }
+            let size = self.layout_child(child_id, constraints)?;
+            results.push((child_id, size));
         }
 
-        results
+        Ok(results)
     }
 }
 
@@ -326,20 +333,26 @@ where
     }
 
     /// Layouts all sliver children with the same constraints.
+    ///
+    /// Returns a vector of (child_id, geometry) tuples on success.
+    /// If any child layout fails, the error is propagated immediately.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first error encountered during child layout.
     pub fn layout_all_children(
         &mut self,
         constraints: SliverConstraints,
-    ) -> Vec<(ElementId, SliverGeometry)> {
+    ) -> RenderResult<Vec<(ElementId, SliverGeometry)>> {
         let children: Vec<_> = self.children().collect();
         let mut results = Vec::with_capacity(children.len());
 
         for child_id in children {
-            if let Ok(geometry) = self.layout_child(child_id, constraints) {
-                results.push((child_id, geometry));
-            }
+            let geometry = self.layout_child(child_id, constraints)?;
+            results.push((child_id, geometry));
         }
 
-        results
+        Ok(results)
     }
 }
 
