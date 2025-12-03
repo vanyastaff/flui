@@ -20,6 +20,7 @@ members = [
     "crates/flui_animation",    # Animation system
     "crates/flui-scheduler",    # Frame scheduling and task prioritization
     "crates/flui-reactivity",   # Reactive state management with hooks and signals
+    "crates/flui-platform",     # Cross-platform embedder abstraction
     "crates/flui_cli",          # CLI tool for project management
     "crates/flui_build",        # Build system library for cross-platform builds
 ]

@@ -184,10 +184,16 @@ where
             if self.embedder.is_none() {
                 let _span = tracing::info_span!("create_embedder").entered();
                 // Safe to create window and surface now
-                self.embedder = Some(pollster::block_on(DesktopEmbedder::new(
-                    self.binding.clone(),
+                // Pass individual components to flui_platform::DesktopEmbedder
+                let embedder = pollster::block_on(DesktopEmbedder::new(
+                    self.binding.pipeline(),
+                    self.binding.needs_redraw_flag(),
+                    self.binding.scheduler.scheduler_arc(),
+                    self.binding.gesture.event_router().clone(),
                     event_loop,
-                )));
+                ))
+                .expect("Failed to create desktop embedder");
+                self.embedder = Some(embedder);
                 tracing::info!("Desktop embedder ready");
             }
         }
@@ -203,7 +209,7 @@ where
                 };
 
                 if self.binding.needs_redraw() || has_pending {
-                    emb.window().request_redraw();
+                    emb.winit_window().request_redraw();
                 }
             }
         }

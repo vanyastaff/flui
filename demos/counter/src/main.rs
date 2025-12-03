@@ -1,6 +1,6 @@
 use flui_app::run_app;
 use flui_core::prelude::*;
-use flui_view::{IntoElement, Stateful, StatefulView, StatelessView};
+use flui_view::{IntoView, Stateful, StatefulView, StatelessView};
 
 fn main() {
     run_app(CounterAppWrapper);
@@ -11,7 +11,7 @@ fn main() {
 struct CounterAppWrapper;
 
 impl StatelessView for CounterAppWrapper {
-    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
+    fn build(self, _ctx: &dyn BuildContext) -> impl IntoView {
         Stateful(CounterApp)
     }
 }
@@ -26,12 +26,12 @@ impl StatefulView for CounterApp {
         CounterState { count: 0 }
     }
 
-    fn build(&self, state: &mut Self::State, _ctx: &dyn BuildContext) -> impl IntoElement {
+    fn build(&self, state: &mut Self::State, _ctx: &dyn BuildContext) -> impl IntoView {
         tracing::info!("Building UI with current count: {}", state.count);
 
         // TODO: Add Text widget once flui_widgets is refactored
-        // For now just return empty element
-        Element::empty()
+        // For now just return empty view
+        ()
     }
 }
 

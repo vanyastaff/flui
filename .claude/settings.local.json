@@ -50,7 +50,9 @@
       "SlashCommand(/openspec:archive)",
       "SlashCommand(/openspec:archive:*)",
       "WebFetch(domain:rust-lang.github.io)",
-      "mcp__filesystem__directory_tree"
+      "mcp__filesystem__directory_tree",
+      "SlashCommand(/feature-dev:feature-dev Абстракция кроссплатформенного embedder слоя для flui_app с унификацией flui-scheduler и flui_interaction интеграции. Цели: устранить дублирование кода между Desktop/Android embedder, убрать unsafe код в hit testing, создать чистую абстракцию для поддержки новых платформ (iOS, Web, консоли))",
+      "SlashCommand(/feature-dev:feature-dev:*)"
     ],
     "deny": [],
     "ask": []

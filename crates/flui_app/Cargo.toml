@@ -48,6 +48,7 @@ flui_types = { path = "../flui_types" }
 flui_widgets = { path = "../flui_widgets", optional = true }
 flui_interaction = { path = "../flui_interaction" }
 flui-scheduler = { path = "../flui-scheduler" }
+flui-platform = { path = "../flui-platform" }
 flui_log = { path = "../flui_log" }
 
 # Rendering engine

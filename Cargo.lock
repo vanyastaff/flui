@@ -1210,6 +1210,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "flui-platform"
+version = "0.1.0"
+dependencies = [
+ "flui-foundation",
+ "flui-scheduler",
+ "flui_core",
+ "flui_engine",
+ "flui_interaction",
+ "flui_types",
+ "parking_lot",
+ "thiserror 2.0.17",
+ "tokio",
+ "tracing",
+ "winit",
+]
+
+[[package]]
 name = "flui-reactivity"
 version = "0.1.0"
 dependencies = [
@@ -1280,6 +1297,7 @@ version = "0.1.0"
 dependencies = [
  "android-activity",
  "console_error_panic_hook",
+ "flui-platform",
  "flui-scheduler",
  "flui_core",
  "flui_engine",

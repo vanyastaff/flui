@@ -1,6 +1,6 @@
 //! Platform embedder module
 //!
-//! This module provides platform-specific integration layers for FLUI apps.
+//! This module re-exports platform-specific embedders from `flui-platform`.
 //! Each platform has its own embedder optimized for its lifecycle and requirements.
 //!
 //! # Platform Selection
@@ -11,31 +11,38 @@
 //!
 //! # Architecture
 //!
+//! All embedders are thin wrappers around `flui_platform::EmbedderCore`,
+//! which contains 90%+ of the shared logic.
+//!
 //! ```text
-//! Platform Embedder (desktop.rs / android.rs)
-//!   ├─ Window Management (winit)
-//!   ├─ GPU Rendering (flui_engine::GpuRenderer)
-//!   ├─ Framework Integration (AppBinding)
-//!   └─ Platform Lifecycle (desktop: simple / android: suspend/resume)
+//! flui_platform::EmbedderCore (shared logic)
+//!   ├─ Pipeline coordination
+//!   ├─ Safe hit testing (GestureBinding)
+//!   ├─ Frame scheduling (SchedulerBinding)
+//!   └─ Scene caching
+//!
+//! Platform Embedders (thin wrappers)
+//!   ├─ DesktopEmbedder - winit window + GPU
+//!   └─ AndroidEmbedder - Android lifecycle
 //! ```
 
-// Platform-specific modules
-#[cfg(not(target_os = "android"))]
-mod desktop;
+// Re-export from flui-platform
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+pub use flui_platform::DesktopEmbedder;
 
 #[cfg(target_os = "android")]
-mod android;
-
-// Platform-specific re-exports
-#[cfg(not(target_os = "android"))]
-pub use desktop::DesktopEmbedder;
-
-#[cfg(target_os = "android")]
-pub use android::AndroidEmbedder;
+pub use flui_platform::AndroidEmbedder;
 
 // Backward compatibility: WgpuEmbedder type alias
-// This allows existing code to continue working without changes
-#[cfg(not(target_os = "android"))]
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
 pub type WgpuEmbedder = DesktopEmbedder;
 
 #[cfg(target_os = "android")]
