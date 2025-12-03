@@ -26,7 +26,6 @@ serde = { workspace = true, optional = true }
 [dev-dependencies]
 # Testing utilities
 proptest = "1.4"
-criterion = { workspace = true }
 
 [features]
 default = []

@@ -1256,7 +1256,6 @@ dependencies = [
 name = "flui-tree"
 version = "0.1.0"
 dependencies = [
- "criterion",
  "flui-foundation",
  "flui_types",
  "proptest",
