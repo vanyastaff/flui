@@ -265,6 +265,45 @@ where
         result
     }
 
+    /// Layouts a child only if it needs layout.
+    ///
+    /// This is an optimization that skips layout if the child's dirty flag is not set.
+    /// Returns `None` if the child doesn't need layout (caller should use cached size).
+    ///
+    /// # Use Cases
+    ///
+    /// - Re-layout after minor state changes where most children are unchanged
+    /// - Incremental layout updates
+    /// - Performance-critical paths where avoiding unnecessary work matters
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// for child_id in ctx.children() {
+    ///     let size = if let Some(new_size) = ctx.layout_child_if_needed(child_id, constraints)? {
+    ///         new_size
+    ///     } else {
+    ///         ctx.get_child_cached_size(child_id).unwrap_or(Size::ZERO)
+    ///     };
+    ///     // ... use size
+    /// }
+    /// ```
+    #[instrument(level = "trace", skip(self, constraints), fields(child = %child_id.get()))]
+    pub fn layout_child_if_needed(
+        &mut self,
+        child_id: ElementId,
+        constraints: BoxConstraints,
+    ) -> RenderResult<Option<Size>> {
+        if !self.tree.needs_layout(child_id) {
+            trace!("child layout skipped (not dirty)");
+            return Ok(None);
+        }
+
+        let size = self.tree.perform_layout(child_id, constraints)?;
+        trace!(width = %size.width, height = %size.height, "child layout complete");
+        Ok(Some(size))
+    }
+
     /// Layouts all children with the same constraints.
     ///
     /// Returns a vector of (child_id, size) tuples on success.
@@ -347,6 +386,30 @@ where
             );
         }
         result
+    }
+
+    /// Layouts a sliver child only if it needs layout.
+    ///
+    /// This is an optimization that skips layout if the child's dirty flag is not set.
+    /// Returns `None` if the child doesn't need layout (caller should use cached geometry).
+    #[instrument(level = "trace", skip(self, constraints), fields(child = %child_id.get()))]
+    pub fn layout_child_if_needed(
+        &mut self,
+        child_id: ElementId,
+        constraints: SliverConstraints,
+    ) -> RenderResult<Option<SliverGeometry>> {
+        if !self.tree.needs_layout(child_id) {
+            trace!("sliver child layout skipped (not dirty)");
+            return Ok(None);
+        }
+
+        let geometry = self.tree.perform_sliver_layout(child_id, constraints)?;
+        trace!(
+            scroll_extent = %geometry.scroll_extent,
+            paint_extent = %geometry.paint_extent,
+            "sliver child layout complete"
+        );
+        Ok(Some(geometry))
     }
 
     /// Layouts all sliver children with the same constraints.

@@ -692,6 +692,92 @@ pub fn paint_batch(
 }
 
 // ============================================================================
+// DEBUG UTILITIES
+// ============================================================================
+
+/// Debug information about a render element.
+#[derive(Debug, Clone)]
+pub struct RenderElementDebugInfo {
+    /// Element ID
+    pub id: ElementId,
+    /// Depth in the tree (0 = root)
+    pub depth: usize,
+    /// Whether the element needs layout
+    pub needs_layout: bool,
+    /// Whether the element needs paint
+    pub needs_paint: bool,
+    /// Current offset (if available)
+    pub offset: Option<Offset>,
+}
+
+/// Collects debug information about a render element.
+///
+/// This is useful for debugging and visualizing the render tree state.
+///
+/// # Arguments
+///
+/// * `tree` - The render tree (must implement both LayoutTree and PaintTree)
+/// * `id` - The element ID to inspect
+/// * `depth` - The depth of this element in the tree
+///
+/// # Returns
+///
+/// Debug information about the element.
+pub fn debug_element_info<T: LayoutTree + PaintTree>(
+    tree: &T,
+    id: ElementId,
+    depth: usize,
+) -> RenderElementDebugInfo {
+    RenderElementDebugInfo {
+        id,
+        depth,
+        needs_layout: tree.needs_layout(id),
+        needs_paint: tree.needs_paint(id),
+        offset: LayoutTree::get_offset(tree, id),
+    }
+}
+
+/// Formats a render element for debug output.
+///
+/// Produces a single-line summary suitable for tree visualization.
+///
+/// # Format
+///
+/// ```text
+/// [id:42] needs_layout=true, needs_paint=false, offset=(10.0, 20.0)
+/// ```
+pub fn format_element_debug(info: &RenderElementDebugInfo) -> String {
+    let offset_str = match info.offset {
+        Some(o) => format!("({:.1}, {:.1})", o.dx, o.dy),
+        None => "none".to_string(),
+    };
+
+    format!(
+        "[id:{}] needs_layout={}, needs_paint={}, offset={}",
+        info.id.get(),
+        info.needs_layout,
+        info.needs_paint,
+        offset_str
+    )
+}
+
+/// Formats a render element as a tree node with indentation.
+///
+/// # Arguments
+///
+/// * `info` - Debug information about the element
+/// * `indent` - Indentation string (e.g., "  " for 2-space indent)
+///
+/// # Returns
+///
+/// A formatted string with proper indentation.
+pub fn format_tree_node(info: &RenderElementDebugInfo, indent: &str) -> String {
+    let prefix = indent.repeat(info.depth);
+    let marker = if info.depth == 0 { "─" } else { "├─" };
+    format!("{}{} {}", prefix, marker, format_element_debug(info))
+}
+
+// ============================================================================
 // TRAIT ALIASES FOR COMPATIBILITY
 // ============================================================================
 

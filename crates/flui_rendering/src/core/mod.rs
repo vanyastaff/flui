@@ -115,6 +115,10 @@ pub type SliverPaintCtx<'a, A, T = Box<dyn PaintTree + Send + Sync>> = SliverPai
 // ============================================================================
 
 pub use render_tree::{
+    // Debug utilities
+    debug_element_info,
+    format_element_debug,
+    format_tree_node,
     // Utility functions
     hit_test_subtree,
     layout_batch,
@@ -131,6 +135,7 @@ pub use render_tree::{
     LayoutTreeExt,
     PaintTree,
     PaintTreeExt,
+    RenderElementDebugInfo,
     RenderTreeOps,
 };
 

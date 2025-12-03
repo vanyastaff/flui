@@ -26,6 +26,24 @@ pub trait RenderObject: Send + Sync + fmt::Debug + 'static {
         std::any::type_name::<Self>()
     }
 
+    /// Full type name including module path.
+    ///
+    /// Returns the full type name like `flui_rendering::widgets::RenderFlex`.
+    /// Useful for debugging and error messages.
+    fn type_name(&self) -> &'static str {
+        std::any::type_name::<Self>()
+    }
+
+    /// Short type name without module path.
+    ///
+    /// Returns just the type name like `RenderFlex` instead of the full path.
+    /// Useful for compact debug output and logging.
+    fn short_type_name(&self) -> &'static str {
+        let full_name = std::any::type_name::<Self>();
+        // Find last :: and return everything after it
+        full_name.rsplit("::").next().unwrap_or(full_name)
+    }
+
     /// Natural size independent of constraints (e.g., image dimensions).
     fn intrinsic_size(&self) -> Option<Size> {
         None
@@ -194,6 +212,37 @@ mod tests {
         assert_eq!(obj.local_bounds(), Rect::ZERO);
         assert!(!obj.handles_pointer_events());
         assert!(obj.debug_name().contains("MinimalRenderObject"));
+    }
+
+    #[test]
+    fn test_type_name() {
+        let obj = TestRenderObject { value: 42 };
+
+        // Full type name includes module path
+        let full_name = obj.type_name();
+        assert!(full_name.contains("TestRenderObject"));
+
+        // Short type name is just the struct name
+        let short_name = obj.short_type_name();
+        assert_eq!(short_name, "TestRenderObject");
+    }
+
+    #[test]
+    fn test_short_type_name_strips_path() {
+        #[derive(Debug)]
+        struct SomeNestedType;
+
+        impl RenderObject for SomeNestedType {
+            fn as_any(&self) -> &dyn Any {
+                self
+            }
+            fn as_any_mut(&mut self) -> &mut dyn Any {
+                self
+            }
+        }
+
+        let obj = SomeNestedType;
+        assert_eq!(obj.short_type_name(), "SomeNestedType");
     }
 
     #[test]
