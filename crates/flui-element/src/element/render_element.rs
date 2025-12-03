@@ -26,7 +26,13 @@ use std::any::Any;
 use std::fmt;
 
 use flui_foundation::{ElementId, Key, Slot};
-use flui_view::ViewMode;
+use flui_tree::RuntimeArity;
+pub use flui_view::ViewMode;
+
+// Re-export ProtocolId from flui_rendering
+pub use flui_rendering::core::ProtocolId;
+// Re-export RenderObject trait for convenience
+pub use flui_rendering::core::RenderObject;
 
 use super::{ElementBase, ElementLifecycle};
 
@@ -74,8 +80,11 @@ pub struct RenderElement {
     /// depending on `view_mode`. Stored as Any for type erasure.
     render_state: Option<Box<dyn Any + Send + Sync>>,
 
-    /// View mode - RenderBox or RenderSliver
-    view_mode: ViewMode,
+    /// Protocol - RenderBox or RenderSliver
+    protocol: ProtocolId,
+
+    /// Runtime arity of the element (how many children)
+    arity: RuntimeArity,
 
     /// Optional key for reconciliation
     key: Option<Key>,
@@ -95,7 +104,8 @@ impl fmt::Debug for RenderElement {
         f.debug_struct("RenderElement")
             .field("parent", &self.base.parent())
             .field("lifecycle", &self.base.lifecycle())
-            .field("view_mode", &self.view_mode)
+            .field("protocol", &self.protocol)
+            .field("arity", &self.arity)
             .field("children_count", &self.children.len())
             .field("has_render_object", &self.render_object.is_some())
             .field("has_render_state", &self.render_state.is_some())
@@ -111,22 +121,24 @@ impl RenderElement {
     ///
     /// * `render_object` - Type-erased render object
     /// * `render_state` - Type-erased render state
-    /// * `mode` - ViewMode::RenderBox or ViewMode::RenderSliver
-    pub fn new<RO, RS>(render_object: RO, render_state: RS, mode: ViewMode) -> Self
+    /// * `protocol` - ProtocolId::Box or ProtocolId::Sliver
+    /// * `arity` - Runtime arity (how many children expected)
+    pub fn new<RO, RS>(
+        render_object: RO,
+        render_state: RS,
+        protocol: ProtocolId,
+        arity: RuntimeArity,
+    ) -> Self
     where
         RO: Any + Send + Sync + 'static,
         RS: Any + Send + Sync + 'static,
     {
-        debug_assert!(
-            mode.is_render(),
-            "RenderElement should only be used for render views, got {mode:?}"
-        );
-
         Self {
             base: ElementBase::new(),
             render_object: Some(Box::new(render_object)),
             render_state: Some(Box::new(render_state)),
-            view_mode: mode,
+            protocol,
+            arity,
             key: None,
             children: Vec::new(),
             pending_children: None,
@@ -135,20 +147,26 @@ impl RenderElement {
     }
 
     /// Creates a RenderElement with only render object (state created separately).
-    pub fn with_render_object<RO>(render_object: RO, mode: ViewMode) -> Self
+    ///
+    /// # Arguments
+    ///
+    /// * `render_object` - Type-erased render object
+    /// * `protocol` - ProtocolId::Box or ProtocolId::Sliver
+    /// * `arity` - Runtime arity (how many children expected)
+    pub fn with_render_object<RO>(
+        render_object: RO,
+        protocol: ProtocolId,
+        arity: RuntimeArity,
+    ) -> Self
     where
         RO: Any + Send + Sync + 'static,
     {
-        debug_assert!(
-            mode.is_render(),
-            "RenderElement should only be used for render views, got {mode:?}"
-        );
-
         Self {
             base: ElementBase::new(),
             render_object: Some(Box::new(render_object)),
             render_state: None,
-            view_mode: mode,
+            protocol,
+            arity,
             key: None,
             children: Vec::new(),
             pending_children: None,
@@ -162,7 +180,8 @@ impl RenderElement {
             base: ElementBase::new(),
             render_object: None,
             render_state: None,
-            view_mode: ViewMode::RenderBox,
+            protocol: ProtocolId::Box,
+            arity: RuntimeArity::Exact(0),
             key: None,
             children: Vec::new(),
             pending_children: None,
@@ -197,40 +216,63 @@ impl RenderElement {
         self
     }
 
-    // ========== View Mode Queries ==========
+    // ========== Protocol & Arity Queries ==========
 
-    /// Get the view mode.
+    /// Get the protocol (RenderBox or RenderSliver).
     #[inline]
     #[must_use]
-    pub fn view_mode(&self) -> ViewMode {
-        self.view_mode
+    pub fn protocol(&self) -> ProtocolId {
+        self.protocol
     }
 
-    /// Set the view mode.
+    /// Set the protocol.
     #[inline]
-    pub fn set_view_mode(&mut self, mode: ViewMode) {
-        self.view_mode = mode;
+    pub fn set_protocol(&mut self, protocol: ProtocolId) {
+        self.protocol = protocol;
     }
 
-    /// Check if this is a render view.
+    /// Get the runtime arity.
     #[inline]
     #[must_use]
-    pub fn is_render(&self) -> bool {
-        self.view_mode.is_render()
+    pub fn arity(&self) -> RuntimeArity {
+        self.arity
+    }
+
+    /// Set the runtime arity.
+    #[inline]
+    pub fn set_arity(&mut self, arity: RuntimeArity) {
+        self.arity = arity;
     }
 
     /// Check if this is a box render.
     #[inline]
     #[must_use]
     pub fn is_box(&self) -> bool {
-        self.view_mode == ViewMode::RenderBox
+        self.protocol == ProtocolId::Box
     }
 
     /// Check if this is a sliver render.
     #[inline]
     #[must_use]
     pub fn is_sliver(&self) -> bool {
-        self.view_mode == ViewMode::RenderSliver
+        self.protocol == ProtocolId::Sliver
+    }
+
+    /// Get the view mode based on protocol.
+    #[inline]
+    #[must_use]
+    pub fn view_mode(&self) -> ViewMode {
+        match self.protocol {
+            ProtocolId::Box => ViewMode::RenderBox,
+            ProtocolId::Sliver => ViewMode::RenderSliver,
+        }
+    }
+
+    /// Check if this is a render view (always true for RenderElement).
+    #[inline]
+    #[must_use]
+    pub fn is_render(&self) -> bool {
+        true
     }
 
     // ========== Key Access ==========
@@ -598,12 +640,14 @@ mod tests {
             TestRenderState {
                 size: (100.0, 50.0),
             },
-            ViewMode::RenderBox,
+            ProtocolId::Box,
+            RuntimeArity::Exact(0),
         );
 
         assert!(element.has_render_object());
         assert!(element.has_render_state());
-        assert_eq!(element.view_mode(), ViewMode::RenderBox);
+        assert_eq!(element.protocol(), ProtocolId::Box);
+        assert_eq!(element.arity(), RuntimeArity::Exact(0));
         assert!(element.is_render());
         assert!(element.is_box());
         assert!(!element.is_sliver());
@@ -623,7 +667,8 @@ mod tests {
             TestRenderState {
                 size: (100.0, 50.0),
             },
-            ViewMode::RenderBox,
+            ProtocolId::Box,
+            RuntimeArity::Exact(0),
         );
 
         let ro = element.render_object_as::<TestRenderObject>();
@@ -640,7 +685,8 @@ mod tests {
         let mut element = RenderElement::new(
             TestRenderObject { value: 1 },
             TestRenderState { size: (10.0, 10.0) },
-            ViewMode::RenderBox,
+            ProtocolId::Box,
+            RuntimeArity::Exact(0),
         );
 
         assert_eq!(element.lifecycle(), ElementLifecycle::Initial);
@@ -658,7 +704,8 @@ mod tests {
         let mut element = RenderElement::new(
             TestRenderObject { value: 1 },
             TestRenderState { size: (10.0, 10.0) },
-            ViewMode::RenderBox,
+            ProtocolId::Box,
+            RuntimeArity::AtLeast(0),
         );
 
         assert!(!element.has_children());

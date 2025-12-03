@@ -4,278 +4,23 @@
 //! - [`RenderObject`] - Base trait for all render objects (protocol-agnostic)
 //! - [`RenderObjectExt`] - Extension trait for safe downcasting
 //!
-//! # Architecture
+//! # Flutter Protocol Compliance
 //!
-//! RenderObject provides two complementary APIs that work together:
+//! This implementation follows Flutter's RenderObject protocol with enhanced Rust safety:
 //!
-//! ## Level 1: Dyn-Compatible Methods (Type-Erased, Flutter-Style)
-//!
-//! These methods enable type-erased rendering operations without compile-time arity knowledge.
-//! They work directly with the tree and are called by `RenderElement`:
-//!
-//! ```rust,ignore
-//! // RenderElement calls dyn-compatible methods:
-//! let size = render_object.perform_layout(element_id, constraints, tree)?;
-//! render_object.paint(element_id, offset, size, canvas, tree);
-//! let hit = render_object.hit_test(element_id, position, result, tree);
-//! ```
-//!
-//! **When to use:**
-//! - Storing `Box<dyn RenderObject>` in collections
-//! - Runtime polymorphism without knowing specific types
-//! - Framework-level operations on heterogeneous render objects
-//!
-//! ## Level 2: Typed Methods (Protocol-Specific, High-Performance)
-//!
-//! These are the high-performance typed APIs provided by `RenderBox<A>` and
-//! `RenderSliver<A>` traits that use typed contexts with compile-time arity validation:
-//!
-//! ```rust,ignore
-//! // Typed API with compile-time validation:
-//! impl RenderBox<Single> for RenderPadding {
-//!     fn layout(&mut self, ctx: BoxLayoutContext<'_, Single>) -> RenderResult<Size> {
-//!         let child_size = ctx.layout_single_child()?;  // Type-safe!
-//!         Ok(child_size + self.padding.size())
-//!     }
-//! }
-//! ```
-//!
-//! **When to use:**
-//! - Implementing new render objects
-//! - Hot-path operations where performance matters
-//! - Leveraging compile-time arity validation
-//!
-//! # Design Philosophy
-//!
-//! - **Two-level API**: Type-erased for flexibility, typed for performance
-//! - **State externalization**: State lives in `RenderState<P>`, not in render object
-//! - **Protocol agnostic**: Base trait works with any protocol (Box, Sliver, custom)
-//! - **Flutter compatibility**: Exact Flutter RenderObject semantics
-//! - **Zero-cost abstractions**: No overhead for type erasure when not needed
-//!
-//! # Relationship with Flutter
-//!
-//! | Flutter | FLUI | Notes |
-//! |---------|------|-------|
-//! | `RenderObject` | `RenderObject` | Base trait, protocol-agnostic |
-//! | `RenderBox` | `RenderBox<A>` | Box protocol with arity `A` |
-//! | `RenderSliver` | `RenderSliver<A>` | Sliver protocol with arity `A` |
-//! | `performLayout()` | `perform_layout()` | Dyn-compatible layout |
-//! | `layout()` (typed) | `layout(ctx)` | Typed layout with contexts |
-//! | `paint()` | `paint()` | Dyn-compatible paint |
-//! | `hitTest()` | `hit_test()` | Dyn-compatible hit test |
-//!
-//! # State Management
-//!
-//! State is managed externally in `RenderState<P>`, **not** in the render object:
-//!
-//! ```text
-//! RenderElement
-//!  ├── render_object: Box<dyn RenderObject>  (immutable configuration)
-//!  └── state: RenderState<P>                 (mutable state)
-//!       ├── flags: AtomicRenderFlags         (lock-free dirty tracking)
-//!       ├── geometry: OnceCell<P::Geometry>  (cached layout result)
-//!       ├── constraints: OnceCell<P::Constraints>  (cache validation)
-//!       └── offset: AtomicOffset             (paint position)
-//! ```
-//!
-//! **Why external state?**
-//! - ✅ Enables immutable render objects (functional style)
-//! - ✅ Simplifies concurrent access (no &mut self needed for reads)
-//! - ✅ Allows state to be protocol-specific while render object is generic
-//! - ✅ Makes cloning/comparing render objects trivial
-//!
-//! # Examples
-//!
-//! ## Implementing a Leaf Render Object
-//!
-//! ```rust,ignore
-//! use flui_rendering::core::{RenderObject, RenderBox, Leaf};
-//!
-//! /// Render object for displaying an image
-//! #[derive(Debug, Clone)]
-//! pub struct RenderImage {
-//!     image_data: Arc<ImageData>,
-//!     fit: BoxFit,
-//! }
-//!
-//! impl RenderBox<Leaf> for RenderImage {
-//!     fn layout(&mut self, ctx: BoxLayoutContext<'_, Leaf>) -> RenderResult<Size> {
-//!         // Get intrinsic image size
-//!         let intrinsic = self.image_data.size();
-//!
-//!         // Apply fit and constrain to parent constraints
-//!         let size = self.fit.apply(intrinsic, ctx.constraints);
-//!         Ok(ctx.constraints.constrain(size))
-//!     }
-//!
-//!     fn paint(&self, ctx: &mut BoxPaintContext<'_, Leaf>) {
-//!         let rect = Rect::from_min_size(ctx.offset, ctx.geometry);
-//!         ctx.canvas_mut().draw_image(&self.image_data, rect);
-//!     }
-//! }
-//!
-//! impl RenderObject for RenderImage {
-//!     fn as_any(&self) -> &dyn Any { self }
-//!     fn as_any_mut(&mut self) -> &mut dyn Any { self }
-//!
-//!     fn intrinsic_size(&self) -> Option<Size> {
-//!         Some(self.image_data.size())
-//!     }
-//!
-//!     fn handles_pointer_events(&self) -> bool {
-//!         false  // Images don't handle events by default
-//!     }
-//! }
-//! ```
-//!
-//! ## Implementing a Container with Dyn-Compatible Methods
-//!
-//! ```rust,ignore
-//! /// Custom column layout (dyn-compatible implementation)
-//! #[derive(Debug)]
-//! pub struct CustomColumn {
-//!     spacing: f32,
-//! }
-//!
-//! impl RenderObject for CustomColumn {
-//!     fn as_any(&self) -> &dyn Any { self }
-//!     fn as_any_mut(&mut self) -> &mut dyn Any { self }
-//!
-//!     fn perform_layout(
-//!         &mut self,
-//!         element_id: ElementId,
-//!         constraints: BoxConstraints,
-//!         tree: &mut dyn LayoutTree,
-//!     ) -> RenderResult<Size> {
-//!         let children: Vec<_> = tree.children(element_id).collect();
-//!
-//!         let mut y = 0.0;
-//!         let mut max_width = 0.0;
-//!
-//!         // Layout each child
-//!         for child_id in children {
-//!             let child_size = tree.perform_layout(child_id, constraints)?;
-//!             tree.set_offset(child_id, Offset::new(0.0, y));
-//!
-//!             y += child_size.height + self.spacing;
-//!             max_width = max_width.max(child_size.width);
-//!         }
-//!
-//!         // Remove trailing spacing
-//!         if y > 0.0 {
-//!             y -= self.spacing;
-//!         }
-//!
-//!         Ok(constraints.constrain(Size::new(max_width, y)))
-//!     }
-//!
-//!     fn paint(
-//!         &self,
-//!         element_id: ElementId,
-//!         offset: Offset,
-//!         _size: Size,
-//!         _canvas: &mut Canvas,
-//!         tree: &dyn PaintTree,
-//!     ) {
-//!         // Paint all children using their stored offsets
-//!         for child_id in tree.children(element_id) {
-//!             if let Some(child_offset) = tree.get_offset(child_id) {
-//!                 let _ = tree.perform_paint(child_id, offset + child_offset);
-//!             }
-//!         }
-//!     }
-//! }
-//! ```
-//!
-//! ## Using Both APIs Together
-//!
-//! ```rust,ignore
-//! // Typed API for new implementations (preferred)
-//! impl RenderBox<Variable> for MyWidget {
-//!     fn layout(&mut self, ctx: BoxLayoutContext<'_, Variable>) -> RenderResult<Size> {
-//!         // Use typed context for compile-time safety
-//!         for child_id in ctx.children() {
-//!             let size = ctx.layout_child(child_id, constraints)?;
-//!             // ...
-//!         }
-//!         Ok(total_size)
-//!     }
-//! }
-//!
-//! impl RenderObject for MyWidget {
-//!     // Dyn-compatible methods are auto-implemented via blanket impl
-//!     fn as_any(&self) -> &dyn Any { self }
-//!     fn as_any_mut(&mut self) -> &mut dyn Any { self }
-//! }
-//!
-//! // Framework can use either API as needed:
-//! let typed: &dyn RenderBox<Variable> = &my_widget;
-//! let erased: &dyn RenderObject = &my_widget;
-//! ```
-//!
-//! # Thread Safety
-//!
-//! All render objects must be `Send + Sync`:
-//! - Enables parallel layout in different subtrees
-//! - Allows rendering from multiple threads
-//! - Required for web workers and isolates
-//!
-//! If your render object contains non-Send data, use `Arc` or similar:
-//!
-//! ```rust,ignore
-//! #[derive(Debug)]
-//! pub struct RenderCustomPaint {
-//!     painter: Arc<dyn CustomPainter>,  // Arc makes it Send + Sync
-//! }
-//! ```
-//!
-//! # Performance Considerations
-//!
-//! - **Use typed API** (`RenderBox<A>`) for new implementations - it's faster
-//! - **Dyn-compatible methods** have tiny vtable overhead (~1-2ns per call)
-//! - **State is external** so render objects can be immutable (better cache usage)
-//! - **Atomic flags** for dirty tracking are lock-free and very fast
-//!
-//! # Common Patterns
-//!
-//! ## Relayout Boundary
-//!
-//! ```rust,ignore
-//! impl RenderObject for MyWidget {
-//!     fn is_relayout_boundary(&self) -> bool {
-//!         true  // Don't propagate layout changes upward
-//!     }
-//! }
-//! ```
-//!
-//! ## Repaint Boundary
-//!
-//! ```rust,ignore
-//! impl RenderObject for MyWidget {
-//!     fn is_repaint_boundary(&self) -> bool {
-//!         true  // Enable layer caching
-//!     }
-//! }
-//! ```
-//!
-//! ## Custom Intrinsics
-//!
-//! ```rust,ignore
-//! impl RenderObject for MyWidget {
-//!     fn intrinsic_size(&self) -> Option<Size> {
-//!         Some(Size::new(100.0, 50.0))  // Natural size
-//!     }
-//! }
-//! ```
+//! - **Two-level API**: Dyn-compatible + Typed methods
+//! - **sizedByParent optimization**: Separate resize/layout phases
+//! - **Relayout/Repaint boundaries**: Performance isolation
+//! - **Tree traversal**: Type-safe visit_children
+//! - **Debug utilities**: Rich diagnostics using flui_foundation
 
 use std::any::Any;
 use std::fmt;
 
-use flui_foundation::ElementId;
+use flui_foundation::{DiagnosticsProperty, ElementId};
 use flui_interaction::{HitTestEntry, HitTestResult};
 use flui_painting::Canvas;
-use flui_types::{Offset, Rect, Size};
+use flui_types::{Offset, Size};
 
 use crate::core::{BoxConstraints, HitTestTree, LayoutTree, PaintTree};
 use crate::RenderResult;
@@ -286,514 +31,181 @@ use crate::RenderResult;
 
 /// Base trait for all render objects (protocol-agnostic).
 ///
-/// This trait provides the foundation for FLUI's rendering system with two
-/// complementary APIs:
+/// Provides two complementary APIs:
+/// 1. **Dyn-compatible methods** - Type-erased operations (perform_layout, paint, hit_test)
+/// 2. **Typed protocol traits** - High-performance RenderBox<A>/RenderSliver<A>
 ///
-/// 1. **Dyn-compatible methods** for type-erased operations (Flutter-style)
-/// 2. **Typed protocol traits** (`RenderBox<A>`, `RenderSliver<A>`) for performance
+/// # Flutter Relationship
 ///
-/// # Required Trait Bounds
+/// | Flutter | FLUI | Notes |
+/// |---------|------|-------|
+/// | `RenderObject` | `RenderObject` | Base trait |
+/// | `performLayout()` | `perform_layout()` | Dyn-compatible |
+/// | `paint()` | `paint()` | Dyn-compatible |
+/// | `hitTest()` | `hit_test()` | Dyn-compatible |
+/// | `sizedByParent` | `sized_by_parent()` | Optimization flag |
+/// | `performResize()` | `perform_resize()` | Resize phase |
+/// | `visitChildren()` | `visit_children()` | Tree traversal |
 ///
-/// - `Send + Sync`: Required for thread-safe tree operations and parallel layout
-/// - `Debug`: Required for debugging and error messages
-/// - `'static`: Ensures render objects live for the program duration
+/// # Examples
 ///
-/// # State Management
+/// ```rust,ignore
+/// #[derive(Debug)]
+/// struct RenderPadding {
+///     padding: EdgeInsets,
+/// }
 ///
-/// State is **NOT** stored in the render object itself. Instead, `RenderElement`
-/// maintains `RenderState<P>` separately. This enables:
-/// - Immutable render objects (functional style)
-/// - Better concurrent access patterns
-/// - Protocol-specific state while keeping base trait generic
+/// impl RenderObject for RenderPadding {
+///     fn as_any(&self) -> &dyn Any { self }
+///     fn as_any_mut(&mut self) -> &mut dyn Any { self }
 ///
-/// # Implementing RenderObject
+///     fn perform_layout(
+///         &mut self,
+///         element_id: ElementId,
+///         constraints: BoxConstraints,
+///         tree: &mut dyn LayoutTree,
+///     ) -> RenderResult<Size> {
+///         // Layout single child
+///         let child_id = tree.children(element_id).next().unwrap();
+///         let child_constraints = constraints.deflate(self.padding);
+///         let child_size = tree.perform_layout(child_id, child_constraints)?;
 ///
-/// Most render objects should implement the typed protocol traits (`RenderBox<A>`
-/// or `RenderSliver<A>`) instead of implementing this trait directly. The
-/// protocol traits provide:
-/// - Compile-time arity validation
-/// - Typed contexts with helper methods
-/// - Automatic dyn-compatible implementations
+///         // Position child
+///         tree.set_offset(child_id, self.padding.top_left());
 ///
-/// Only implement `RenderObject` directly if:
-/// - You need a custom protocol (not Box or Sliver)
-/// - You're implementing framework-level infrastructure
-/// - You need explicit control over dyn-compatible methods
+///         // Return padded size
+///         Ok(constraints.constrain(child_size + self.padding.size()))
+///     }
 ///
-/// # Safety Guarantees
-///
-/// - ✅ Thread-safe: All methods can be called from any thread
-/// - ✅ Memory-safe: Rust ownership prevents use-after-free
-/// - ✅ Type-safe: Downcasting uses runtime type checks
-/// - ✅ No panics: All fallible operations return `Result`
+///     fn paint(
+///         &self,
+///         element_id: ElementId,
+///         offset: Offset,
+///         size: Size,
+///         canvas: &mut Canvas,
+///         tree: &dyn PaintTree,
+///     ) {
+///         // Paint child at padded offset
+///         let child_id = tree.children(element_id).next().unwrap();
+///         if let Some(child_offset) = tree.get_offset(child_id) {
+///             let _ = tree.perform_paint(child_id, offset + child_offset);
+///         }
+///     }
+/// }
+/// ```
 pub trait RenderObject: Send + Sync + fmt::Debug + 'static {
     // ============================================================================
-    // TYPE ERASURE METHODS (Required)
+    // TYPE ERASURE (Required)
     // ============================================================================
 
-    /// Returns a reference to this object as `&dyn Any` for downcasting.
-    ///
-    /// This is the safe way to downcast from `&dyn RenderObject` to a concrete type.
-    /// Always returns `self` - implementers should not override this.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// let render_object: &dyn RenderObject = &my_render_padding;
-    /// if let Some(padding) = render_object.as_any().downcast_ref::<RenderPadding>() {
-    ///     println!("Padding: {:?}", padding.padding);
-    /// }
-    /// ```
+    /// Returns `&dyn Any` for safe downcasting.
     fn as_any(&self) -> &dyn Any;
 
-    /// Returns a mutable reference to this object as `&mut dyn Any` for downcasting.
-    ///
-    /// Like `as_any()` but for mutable access.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// let render_object: &mut dyn RenderObject = &mut my_render_padding;
-    /// if let Some(padding) = render_object.as_any_mut().downcast_mut::<RenderPadding>() {
-    ///     padding.padding = EdgeInsets::all(20.0);
-    /// }
-    /// ```
+    /// Returns `&mut dyn Any` for safe downcasting.
     fn as_any_mut(&mut self) -> &mut dyn Any;
 
     // ============================================================================
-    // DEBUG METHODS (Optional)
+    // DYN-COMPATIBLE LAYOUT (Required for Box protocol)
     // ============================================================================
 
-    /// Returns a human-readable debug name for this render object.
+    /// Performs layout using box constraints (dyn-compatible).
     ///
-    /// Default implementation returns the full type name. Override to provide
-    /// a custom name for debugging.
+    /// This is the type-erased entry point for layout. It receives constraints
+    /// as `BoxConstraints` and returns a `Size`.
     ///
-    /// # Examples
+    /// # Flutter Protocol
     ///
-    /// ```rust,ignore
-    /// impl RenderObject for MyCustomWidget {
-    ///     fn debug_name(&self) -> &'static str {
-    ///         "MyCustomWidget"
-    ///     }
+    /// ```dart
+    /// // Flutter equivalent:
+    /// @override
+    /// void performLayout() {
+    ///   size = constraints.biggest;
+    ///   if (child != null) {
+    ///     child.layout(constraints, parentUsesSize: true);
+    ///   }
     /// }
     /// ```
-    fn debug_name(&self) -> &'static str {
-        std::any::type_name::<Self>()
-    }
-
-    /// Returns the full type name including module path.
-    ///
-    /// Useful for debugging and error messages where you need the complete type path.
-    ///
-    /// # Returns
-    ///
-    /// Full type name like `flui_rendering::widgets::RenderFlex`
-    fn type_name(&self) -> &'static str {
-        std::any::type_name::<Self>()
-    }
-
-    /// Returns just the type name without module path.
-    ///
-    /// Useful for compact debug output and logging.
-    ///
-    /// # Returns
-    ///
-    /// Short type name like `RenderFlex` instead of full path
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// println!("Rendering {}", render_object.short_type_name());  // "RenderFlex"
-    /// ```
-    fn short_type_name(&self) -> &'static str {
-        let full_name = std::any::type_name::<Self>();
-        full_name.rsplit("::").next().unwrap_or(full_name)
-    }
-
-    // ============================================================================
-    // INTRINSIC PROPERTIES (Optional)
-    // ============================================================================
-
-    /// Returns the natural size independent of constraints.
-    ///
-    /// This is the size the render object "wants" to be if unconstrained.
-    /// Useful for:
-    /// - Images (natural image dimensions)
-    /// - Text (measured text size)
-    /// - Icons (icon design size)
-    ///
-    /// Returns `None` if the render object has no intrinsic size preference.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// impl RenderObject for RenderImage {
-    ///     fn intrinsic_size(&self) -> Option<Size> {
-    ///         Some(self.image_data.dimensions())
-    ///     }
-    /// }
-    /// ```
-    fn intrinsic_size(&self) -> Option<Size> {
-        None
-    }
-
-    /// Returns the bounding box in local coordinates.
-    ///
-    /// Default returns an empty rectangle. Override for accurate bounds,
-    /// especially important for hit testing and overflow detection.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// impl RenderObject for MyWidget {
-    ///     fn local_bounds(&self) -> Rect {
-    ///         Rect::from_min_size(Offset::ZERO, self.cached_size)
-    ///     }
-    /// }
-    /// ```
-    fn local_bounds(&self) -> Rect {
-        Rect::ZERO
-    }
-
-    /// Returns whether this render object handles pointer events.
-    ///
-    /// If `false`, hit testing will skip this object (performance optimization).
-    /// If `true`, the object participates in hit testing.
-    ///
-    /// Default is `false` (no pointer event handling).
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// impl RenderObject for RenderButton {
-    ///     fn handles_pointer_events(&self) -> bool {
-    ///         true  // Buttons handle clicks
-    ///     }
-    /// }
-    /// ```
-    fn handles_pointer_events(&self) -> bool {
-        false
-    }
-
-    // ============================================================================
-    // BOUNDARY FLAGS (Optional)
-    // ============================================================================
-
-    /// Returns whether this render object is a relayout boundary.
-    ///
-    /// Relayout boundaries prevent layout changes from propagating upward,
-    /// improving performance by limiting relayout scope.
-    ///
-    /// Set to `true` when:
-    /// - Layout only depends on own constraints (not parent size)
-    /// - Children changing doesn't affect parent
-    /// - You want to isolate layout computation
-    ///
-    /// # Flutter Contract
-    ///
-    /// When a relayout boundary is marked dirty, layout stops propagating
-    /// upward. The boundary itself will relayout, but its parent won't.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// impl RenderObject for RenderSizedBox {
-    ///     fn is_relayout_boundary(&self) -> bool {
-    ///         self.width.is_some() && self.height.is_some()
-    ///         // Fixed size = natural boundary
-    ///     }
-    /// }
-    /// ```
-    fn is_relayout_boundary(&self) -> bool {
-        false
-    }
-
-    /// Returns whether this render object is a repaint boundary.
-    ///
-    /// Repaint boundaries enable layer caching and more efficient repainting.
-    /// The subtree below a repaint boundary can be cached and reused without
-    /// re-executing paint.
-    ///
-    /// Set to `true` when:
-    /// - Paint is expensive (complex paths, images, filters)
-    /// - This subtree rarely changes
-    /// - You want to enable GPU layer caching
-    ///
-    /// # Performance Impact
-    ///
-    /// - **Pro**: Expensive paint operations happen once, then cached
-    /// - **Pro**: Ancestor repaint doesn't trigger child repaint
-    /// - **Con**: Extra memory for layer storage
-    /// - **Con**: Cache invalidation overhead
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// impl RenderObject for RenderOpacity {
-    ///     fn is_repaint_boundary(&self) -> bool {
-    ///         self.opacity < 1.0  // Compositing layer needed
-    ///     }
-    /// }
-    /// ```
-    fn is_repaint_boundary(&self) -> bool {
-        false
-    }
-
-    // ============================================================================
-    // DYN-COMPATIBLE METHODS (Flutter-style)
-    // ============================================================================
-
-    /// Computes the size of this render object (Flutter: `performLayout`).
-    ///
-    /// This is the dyn-compatible layout method that works without knowing the
-    /// arity at compile time. It's called by `RenderElement` and works directly
-    /// with the tree.
     ///
     /// # Arguments
     ///
-    /// * `element_id` - This element's ID for accessing children via tree
-    /// * `constraints` - Box constraints from parent that must be satisfied
-    /// * `tree` - Tree interface for child layout operations
+    /// * `element_id` - ID of this element in the tree
+    /// * `constraints` - Layout constraints from parent
+    /// * `tree` - Tree for accessing children
     ///
     /// # Returns
     ///
-    /// The computed size that satisfies the input constraints, or error if layout fails.
-    ///
-    /// # Flutter Contract
-    ///
-    /// - Returned size MUST satisfy input constraints
-    /// - Layout must be idempotent (same constraints → same size)
-    /// - Must position children by calling `tree.set_offset()`
-    /// - Can layout children by calling `tree.perform_layout()`
+    /// Computed size that satisfies constraints.
     ///
     /// # Default Implementation
     ///
-    /// Returns the smallest size satisfying the constraints. Override this
-    /// method to implement custom layout logic.
-    ///
-    /// # Performance Note
-    ///
-    /// For new implementations, prefer using `RenderBox<A>` with typed contexts
-    /// instead of implementing this method directly. The typed API provides:
-    /// - Compile-time arity validation
-    /// - Helper methods for common patterns
-    /// - Better type inference
-    /// - Identical performance (inlined)
-    ///
-    /// # Examples
-    ///
-    /// ## Simple leaf element
-    ///
-    /// ```rust,ignore
-    /// fn perform_layout(
-    ///     &mut self,
-    ///     _element_id: ElementId,
-    ///     constraints: BoxConstraints,
-    ///     _tree: &mut dyn LayoutTree,
-    /// ) -> RenderResult<Size> {
-    ///     let intrinsic = self.compute_intrinsic_size();
-    ///     Ok(constraints.constrain(intrinsic))
-    /// }
-    /// ```
-    ///
-    /// ## Container with children
-    ///
-    /// ```rust,ignore
-    /// fn perform_layout(
-    ///     &mut self,
-    ///     element_id: ElementId,
-    ///     constraints: BoxConstraints,
-    ///     tree: &mut dyn LayoutTree,
-    /// ) -> RenderResult<Size> {
-    ///     let children: Vec<_> = tree.children(element_id).collect();
-    ///
-    ///     let mut y = 0.0;
-    ///     let mut max_width = 0.0;
-    ///
-    ///     for child_id in children {
-    ///         let child_size = tree.perform_layout(child_id, constraints)?;
-    ///         tree.set_offset(child_id, Offset::new(0.0, y));
-    ///         y += child_size.height;
-    ///         max_width = max_width.max(child_size.width);
-    ///     }
-    ///
-    ///     Ok(constraints.constrain(Size::new(max_width, y)))
-    /// }
-    /// ```
+    /// Default returns constraints.smallest() for leaf nodes.
+    /// Override for custom layout logic.
     fn perform_layout(
         &mut self,
         _element_id: ElementId,
         constraints: BoxConstraints,
         _tree: &mut dyn LayoutTree,
     ) -> RenderResult<Size> {
-        // Safe default: smallest size satisfying constraints
+        // Default: leaf node returns minimum size
         Ok(constraints.smallest())
     }
 
-    /// Paints this render object to canvas (Flutter: `paint`).
+    // ============================================================================
+    // DYN-COMPATIBLE PAINT (Required)
+    // ============================================================================
+
+    /// Paints this render object to canvas (dyn-compatible).
     ///
-    /// This is the dyn-compatible paint method for type-erased rendering.
-    /// It receives the size computed during layout and has direct tree access
-    /// for painting children.
+    /// # Flutter Protocol
+    ///
+    /// ```dart
+    /// // Flutter equivalent:
+    /// @override
+    /// void paint(PaintingContext context, Offset offset) {
+    ///   if (child != null) {
+    ///     context.paintChild(child, offset + childParentData.offset);
+    ///   }
+    /// }
+    /// ```
     ///
     /// # Arguments
     ///
-    /// * `element_id` - This element's ID for accessing children via tree
-    /// * `offset` - Position in parent coordinates where to paint
-    /// * `size` - Size computed during layout (geometry from `RenderState`)
-    /// * `canvas` - Canvas to paint on
-    /// * `tree` - Tree interface for child paint operations
-    ///
-    /// # Flutter Contract
-    ///
-    /// - MUST NOT call layout during paint (will cause assertion failure)
-    /// - MUST use size from layout phase (don't recompute)
-    /// - SHOULD save/restore canvas state if modifying it
-    /// - MUST paint children using `tree.perform_paint()`
+    /// * `element_id` - ID of this element
+    /// * `offset` - Paint offset in global coordinates
+    /// * `size` - Computed size from layout
+    /// * `canvas` - Canvas to draw on
+    /// * `tree` - Tree for accessing children
     ///
     /// # Default Implementation
     ///
-    /// Does nothing. Override to implement custom painting.
-    ///
-    /// # Canvas State
-    ///
-    /// If you modify canvas state (transform, clip, etc.), save and restore it:
-    ///
-    /// ```rust,ignore
-    /// fn paint(..., canvas: &mut Canvas, ...) {
-    ///     canvas.save();
-    ///     canvas.clip_rect(my_clip);
-    ///     // ... paint content ...
-    ///     canvas.restore();
-    /// }
-    /// ```
-    ///
-    /// # Examples
-    ///
-    /// ## Paint background and children
-    ///
-    /// ```rust,ignore
-    /// fn paint(
-    ///     &self,
-    ///     element_id: ElementId,
-    ///     offset: Offset,
-    ///     size: Size,
-    ///     canvas: &mut Canvas,
-    ///     tree: &dyn PaintTree,
-    /// ) {
-    ///     // Paint background
-    ///     let rect = Rect::from_min_size(offset, size);
-    ///     canvas.draw_rect(rect, &self.background_paint);
-    ///
-    ///     // Paint all children at their stored offsets
-    ///     for child_id in tree.children(element_id) {
-    ///         if let Some(child_offset) = tree.get_offset(child_id) {
-    ///             let _ = tree.perform_paint(child_id, offset + child_offset);
-    ///         }
-    ///     }
-    /// }
-    /// ```
+    /// Default paints all children at their stored offsets.
     fn paint(
         &self,
-        _element_id: ElementId,
-        _offset: Offset,
+        element_id: ElementId,
+        offset: Offset,
         _size: Size,
         _canvas: &mut Canvas,
-        _tree: &dyn PaintTree,
+        tree: &dyn PaintTree,
     ) {
-        // Default: do nothing
+        // Default: paint all children
+        self.visit_children(&mut |child_id| {
+            if let Some(child_offset) = tree.get_offset(child_id) {
+                let _ = tree.perform_paint(child_id, offset + child_offset);
+            }
+        });
     }
 
-    /// Performs hit testing for pointer events (Flutter: `hitTest`).
+    // ============================================================================
+    // DYN-COMPATIBLE HIT TEST (Optional)
+    // ============================================================================
+
+    /// Hit tests at position (dyn-compatible).
     ///
-    /// This is the dyn-compatible hit test method that determines if a pointer
-    /// event intersects this render object or its children.
-    ///
-    /// # Arguments
-    ///
-    /// * `element_id` - This element's ID for accessing children via tree
-    /// * `position` - Hit position in local coordinates
-    /// * `result` - Collection to add hit test entries to
-    /// * `tree` - Tree interface for child hit test operations
+    /// Default: rectangular bounds check + test children.
     ///
     /// # Returns
     ///
-    /// `true` if this object or any child was hit, `false` otherwise.
-    ///
-    /// # Flutter Contract
-    ///
-    /// - Position is in LOCAL coordinates (relative to this object's offset)
-    /// - Test children in REVERSE order (front to back, z-order)
-    /// - Return immediately if a child is hit (early exit)
-    /// - Add self to result only if actually hit
-    /// - Transform position when testing children
-    ///
-    /// # Default Implementation
-    ///
-    /// Tests rectangular bounds and children in reverse order. Override for
-    /// custom shapes or hit testing logic.
-    ///
-    /// # Examples
-    ///
-    /// ## Default rectangular hit test
-    ///
-    /// ```rust,ignore
-    /// // Default is fine for rectangular shapes - no override needed
-    /// ```
-    ///
-    /// ## Custom circular hit test
-    ///
-    /// ```rust,ignore
-    /// fn hit_test(
-    ///     &self,
-    ///     element_id: ElementId,
-    ///     position: Offset,
-    ///     result: &mut HitTestResult,
-    ///     tree: &dyn HitTestTree,
-    /// ) -> bool {
-    ///     let center = self.size / 2.0;
-    ///     let radius = center.width.min(center.height);
-    ///     let distance = (position - center).length();
-    ///
-    ///     if distance <= radius {
-    ///         result.add(HitTestEntry::new(element_id));
-    ///         true
-    ///     } else {
-    ///         false
-    ///     }
-    /// }
-    /// ```
-    ///
-    /// ## With child transformation
-    ///
-    /// ```rust,ignore
-    /// fn hit_test(
-    ///     &self,
-    ///     element_id: ElementId,
-    ///     position: Offset,
-    ///     result: &mut HitTestResult,
-    ///     tree: &dyn HitTestTree,
-    /// ) -> bool {
-    ///     // Test children with transformed position
-    ///     for child_id in tree.children_reverse(element_id) {
-    ///         if let Some(child_offset) = tree.get_offset(child_id) {
-    ///             let child_pos = position - child_offset;
-    ///             if tree.perform_hit_test(child_id, child_pos, result) {
-    ///                 return true;
-    ///             }
-    ///         }
-    ///     }
-    ///
-    ///     // Check self
-    ///     if self.contains_position(position) {
-    ///         result.add(HitTestEntry::new(element_id));
-    ///         true
-    ///     } else {
-    ///         false
-    ///     }
-    /// }
-    /// ```
+    /// `true` if hit, `false` otherwise.
     fn hit_test(
         &self,
         element_id: ElementId,
@@ -801,10 +213,12 @@ pub trait RenderObject: Send + Sync + fmt::Debug + 'static {
         result: &mut HitTestResult,
         tree: &dyn HitTestTree,
     ) -> bool {
-        // Default: rectangular hit testing with children
-
-        // Get size from tree if available
-        let size = tree.get_geometry(element_id).unwrap_or(Size::ZERO);
+        // Get geometry
+        let size = tree
+            .render_object(element_id)
+            .and_then(|any| any.downcast_ref::<Size>())
+            .copied()
+            .unwrap_or(Size::ZERO);
 
         // Check bounds
         if position.dx < 0.0
@@ -815,19 +229,202 @@ pub trait RenderObject: Send + Sync + fmt::Debug + 'static {
             return false;
         }
 
-        // Test children in reverse order (front to back)
-        for child_id in tree.children_reverse(element_id) {
+        // Test children (reverse order = front to back)
+        let mut any_hit = false;
+        self.visit_children(&mut |child_id| {
             if let Some(child_offset) = tree.get_offset(child_id) {
                 let child_position = position - child_offset;
-                if tree.perform_hit_test(child_id, child_position, result) {
-                    return true; // Early exit on first hit
+                if tree.hit_test(child_id, child_position, result) {
+                    any_hit = true;
                 }
             }
+        });
+
+        // Add self if hit
+        if any_hit || self.handles_pointer_events() {
+            result.add(HitTestEntry::new(element_id));
+            return true;
         }
 
-        // Add self to result
-        result.add(HitTestEntry::new(element_id));
-        true
+        false
+    }
+
+    // ============================================================================
+    // DEBUG METHODS (Optional)
+    // ============================================================================
+
+    /// Returns human-readable debug name.
+    fn debug_name(&self) -> &'static str {
+        std::any::type_name::<Self>()
+    }
+
+    /// Returns full type name with module path.
+    fn type_name(&self) -> &'static str {
+        std::any::type_name::<Self>()
+    }
+
+    /// Returns short type name without module path.
+    fn short_type_name(&self) -> &'static str {
+        let full_name = std::any::type_name::<Self>();
+        full_name.rsplit("::").next().unwrap_or(full_name)
+    }
+
+    /// Fills diagnostic properties (Flutter debugFillProperties).
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// fn debug_fill_properties(&self, properties: &mut Vec<DiagnosticsProperty>) {
+    ///     properties.push(DiagnosticsProperty::new("padding", self.padding));
+    ///     properties.push(DiagnosticsProperty::new("alignment", self.alignment));
+    /// }
+    /// ```
+    #[cfg(debug_assertions)]
+    fn debug_fill_properties(&self, _properties: &mut Vec<DiagnosticsProperty>) {
+        // Override to add custom properties
+    }
+
+    /// Paints debug visualization (Flutter debugPaint).
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// fn debug_paint(&self, canvas: &mut Canvas, geometry: &dyn Any) {
+    ///     if let Some(size) = geometry.downcast_ref::<Size>() {
+    ///         let rect = Rect::from_xywh(0.0, 0.0, size.width, size.height);
+    ///         canvas.rect(rect, &Paint::stroke(Color::RED, 1.0));
+    ///     }
+    /// }
+    /// ```
+    #[cfg(debug_assertions)]
+    fn debug_paint(&self, _canvas: &mut Canvas, _geometry: &dyn Any) {
+        // Override for custom debug visualization
+    }
+
+    // ============================================================================
+    // FLUTTER SIZED-BY-PARENT OPTIMIZATION
+    // ============================================================================
+
+    /// Whether size is determined solely by constraints (Flutter sizedByParent).
+    ///
+    /// If `true`, framework separates layout into:
+    /// 1. Resize phase: `perform_resize()` with constraints only
+    /// 2. Layout phase: `perform_layout()` to position children
+    ///
+    /// # When to return true
+    ///
+    /// - Size = f(constraints) only (children don't affect size)
+    /// - Examples: SizedBox, ConstrainedBox, LimitedBox
+    ///
+    /// # Performance
+    ///
+    /// When constraints unchanged:
+    /// - ✅ Skip `perform_resize()` entirely
+    /// - ✅ Only run `perform_layout()` if children dirty
+    fn sized_by_parent(&self) -> bool {
+        false // Default: size depends on children
+    }
+
+    /// Computes size from constraints only (Flutter performResize).
+    ///
+    /// Called when `sized_by_parent() == true`. Must be pure function of constraints.
+    ///
+    /// # Contract
+    ///
+    /// - MUST NOT access children
+    /// - MUST NOT read cached child sizes
+    /// - MUST set size fields for later use
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// fn perform_resize(&mut self, constraints: &dyn Any) -> RenderResult<()> {
+    ///     let box_constraints = constraints.downcast_ref::<BoxConstraints>()?;
+    ///     self.cached_size = box_constraints.biggest();
+    ///     Ok(())
+    /// }
+    /// ```
+    fn perform_resize(&mut self, _constraints: &dyn Any) -> RenderResult<()> {
+        Ok(()) // Default: no-op
+    }
+
+    // ============================================================================
+    // TREE TRAVERSAL
+    // ============================================================================
+
+    /// Visits all immediate children (Flutter visitChildren).
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// // Single child
+    /// fn visit_children(&self, visitor: &mut dyn FnMut(ElementId)) {
+    ///     if let Some(child) = self.child {
+    ///         visitor(child);
+    ///     }
+    /// }
+    ///
+    /// // Multiple children
+    /// fn visit_children(&self, visitor: &mut dyn FnMut(ElementId)) {
+    ///     for &child_id in &self.children {
+    ///         visitor(child_id);
+    ///     }
+    /// }
+    /// ```
+    fn visit_children(&self, _visitor: &mut dyn FnMut(ElementId)) {
+        // Default: no children (Leaf)
+    }
+
+    /// Counts immediate children (derived from visit_children).
+    ///
+    /// Default: O(n). Override for O(1) if cached.
+    fn child_count(&self) -> usize {
+        let mut count = 0;
+        self.visit_children(&mut |_| count += 1);
+        count
+    }
+
+    // ============================================================================
+    // INTRINSIC PROPERTIES (Optional)
+    // ============================================================================
+
+    /// Natural size independent of constraints.
+    ///
+    /// # When to override
+    ///
+    /// - Image: intrinsic image dimensions
+    /// - Text: natural text size
+    /// - Icon: natural icon size
+    fn intrinsic_size(&self) -> Option<Size> {
+        None
+    }
+
+    /// Baseline offset for text alignment.
+    fn baseline_offset(&self) -> Option<f32> {
+        None
+    }
+
+    // ============================================================================
+    // BOUNDARY FLAGS (Optimization)
+    // ============================================================================
+
+    /// Whether this is a relayout boundary (stops layout propagation).
+    fn is_relayout_boundary(&self) -> bool {
+        false
+    }
+
+    /// Whether this is a repaint boundary (enables layer caching).
+    fn is_repaint_boundary(&self) -> bool {
+        false
+    }
+
+    // ============================================================================
+    // INTERACTION
+    // ============================================================================
+
+    /// Whether this render object handles pointer events.
+    fn handles_pointer_events(&self) -> bool {
+        false
     }
 }
 
@@ -835,47 +432,15 @@ pub trait RenderObject: Send + Sync + fmt::Debug + 'static {
 // EXTENSION TRAIT FOR DOWNCASTING
 // ============================================================================
 
-/// Extension trait providing safe downcasting operations for RenderObject.
-///
-/// This trait is automatically implemented for all `RenderObject` trait objects
-/// and provides convenient methods for downcasting to concrete types.
-///
-/// # Examples
-///
-/// ```rust,ignore
-/// use flui_rendering::core::RenderObjectExt;
-///
-/// let render: &dyn RenderObject = get_render_object();
-///
-/// // Safe downcasting
-/// if let Some(padding) = render.downcast_ref::<RenderPadding>() {
-///     println!("Padding: {:?}", padding.padding);
-/// }
-///
-/// // Mutable downcasting
-/// if let Some(padding) = render_mut.downcast_mut::<RenderPadding>() {
-///     padding.padding = EdgeInsets::all(20.0);
-/// }
-///
-/// // Check type without downcasting
-/// if render.is::<RenderPadding>() {
-///     println!("This is a RenderPadding!");
-/// }
-/// ```
+/// Extension trait for safe downcasting.
 pub trait RenderObjectExt {
-    /// Attempts to downcast to a concrete type.
-    ///
-    /// Returns `Some(&T)` if the render object is of type `T`, `None` otherwise.
+    /// Attempts to downcast to concrete type.
     fn downcast_ref<T: RenderObject>(&self) -> Option<&T>;
 
-    /// Attempts to mutably downcast to a concrete type.
-    ///
-    /// Returns `Some(&mut T)` if the render object is of type `T`, `None` otherwise.
+    /// Attempts to mutably downcast to concrete type.
     fn downcast_mut<T: RenderObject>(&mut self) -> Option<&mut T>;
 
-    /// Checks if this render object is of a specific type.
-    ///
-    /// Returns `true` if the render object is type `T`, `false` otherwise.
+    /// Checks if this is type `T`.
     fn is<T: RenderObject>(&self) -> bool;
 }
 
@@ -902,11 +467,11 @@ mod tests {
     use super::*;
 
     #[derive(Debug)]
-    struct TestRenderObject {
-        value: i32,
+    struct TestRenderLeaf {
+        size: Size,
     }
 
-    impl RenderObject for TestRenderObject {
+    impl RenderObject for TestRenderLeaf {
         fn as_any(&self) -> &dyn Any {
             self
         }
@@ -914,62 +479,98 @@ mod tests {
         fn as_any_mut(&mut self) -> &mut dyn Any {
             self
         }
+
+        fn perform_layout(
+            &mut self,
+            _element_id: ElementId,
+            constraints: BoxConstraints,
+            _tree: &mut dyn LayoutTree,
+        ) -> RenderResult<Size> {
+            Ok(constraints.constrain(self.size))
+        }
+
+        fn intrinsic_size(&self) -> Option<Size> {
+            Some(self.size)
+        }
+
+        #[cfg(debug_assertions)]
+        fn debug_fill_properties(&self, properties: &mut Vec<DiagnosticsProperty>) {
+            properties.push(DiagnosticsProperty::new("size", format!("{:?}", self.size)));
+        }
+    }
+
+    #[derive(Debug)]
+    struct TestRenderContainer {
+        children: Vec<ElementId>,
+    }
+
+    impl RenderObject for TestRenderContainer {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn as_any_mut(&mut self) -> &mut dyn Any {
+            self
+        }
+
+        fn visit_children(&self, visitor: &mut dyn FnMut(ElementId)) {
+            for &child_id in &self.children {
+                visitor(child_id);
+            }
+        }
+
+        fn child_count(&self) -> usize {
+            self.children.len() // O(1) override
+        }
     }
 
     #[test]
     fn test_downcast() {
-        let obj = TestRenderObject { value: 42 };
-        let render: &dyn RenderObject = &obj;
+        let obj = TestRenderLeaf {
+            size: Size::new(100.0, 50.0),
+        };
+        let trait_obj: &dyn RenderObject = &obj;
 
-        // Successful downcast
-        let downcasted = render.downcast_ref::<TestRenderObject>();
-        assert!(downcasted.is_some());
-        assert_eq!(downcasted.unwrap().value, 42);
-
-        // Failed downcast
-        #[derive(Debug)]
-        struct OtherType;
-        impl RenderObject for OtherType {
-            fn as_any(&self) -> &dyn Any {
-                self
-            }
-            fn as_any_mut(&mut self) -> &mut dyn Any {
-                self
-            }
-        }
-
-        let failed = render.downcast_ref::<OtherType>();
-        assert!(failed.is_none());
+        assert!(trait_obj.downcast_ref::<TestRenderLeaf>().is_some());
+        assert!(trait_obj.is::<TestRenderLeaf>());
     }
 
     #[test]
-    fn test_is_type() {
-        let obj = TestRenderObject { value: 42 };
-        let render: &dyn RenderObject = &obj;
+    fn test_visit_children() {
+        let obj = TestRenderContainer {
+            children: vec![ElementId::new(1), ElementId::new(2), ElementId::new(3)],
+        };
 
-        assert!(render.is::<TestRenderObject>());
+        let mut visited = Vec::new();
+        obj.visit_children(&mut |id| visited.push(id));
+
+        assert_eq!(visited.len(), 3);
+        assert_eq!(obj.child_count(), 3);
     }
 
     #[test]
-    fn test_default_methods() {
-        let obj = TestRenderObject { value: 42 };
+    fn test_default_boundaries() {
+        let obj = TestRenderLeaf {
+            size: Size::new(100.0, 50.0),
+        };
 
-        assert_eq!(obj.intrinsic_size(), None);
-        assert_eq!(obj.local_bounds(), Rect::ZERO);
-        assert!(!obj.handles_pointer_events());
         assert!(!obj.is_relayout_boundary());
         assert!(!obj.is_repaint_boundary());
+        assert!(!obj.sized_by_parent());
+        assert!(!obj.handles_pointer_events());
     }
 
+    #[cfg(debug_assertions)]
     #[test]
-    fn test_type_names() {
-        let obj = TestRenderObject { value: 42 };
-        let render: &dyn RenderObject = &obj;
+    fn test_debug_properties() {
+        let obj = TestRenderLeaf {
+            size: Size::new(100.0, 50.0),
+        };
 
-        let type_name = render.type_name();
-        assert!(type_name.contains("TestRenderObject"));
+        let mut props = Vec::new();
+        obj.debug_fill_properties(&mut props);
 
-        let short_name = render.short_type_name();
-        assert_eq!(short_name, "TestRenderObject");
+        assert_eq!(props.len(), 1);
+        assert_eq!(props[0].name(), "size");
     }
 }

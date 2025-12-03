@@ -1,80 +1,21 @@
 //! Proxy traits for pass-through render objects.
 //!
-//! This module provides traits for render objects that simply forward their
-//! operations to a single child without modification, making it easy to add
-//! metadata, semantic labels, or other transparent wrappers.
+//! This module provides traits for render objects that forward operations to
+//! a single child with minimal modification.
 //!
-//! # Design Philosophy
+//! # Flutter Compatibility
 //!
-//! - **Minimal boilerplate**: Just implement the proxy trait, get full RenderBox/RenderSliver for free
-//! - **Transparent forwarding**: All operations pass through to child by default
-//! - **Optional hooks**: Override specific methods when you need custom behavior
-//! - **Type safe**: Compile-time validation of child relationships
-//!
-//! # Proxy Types
-//!
-//! ## RenderProxyBox
-//!
-//! For transparent box protocol wrappers (always has exactly one child):
-//! - Forwards layout to child
-//! - Forwards paint to child
-//! - Forwards hit testing to child
-//! - Use for: metadata, semantic labels, debugging wrappers
-//!
-//! ## RenderProxySliver
-//!
-//! For transparent sliver protocol wrappers (always has exactly one child):
-//! - Forwards layout to child
-//! - Forwards paint to child
-//! - Forwards hit testing to child
-//! - Use for: scroll metadata, semantic labels
-//!
-//! # Examples
-//!
-//! ## Simple Metadata Wrapper
-//!
-//! ```rust,ignore
-//! use flui_rendering::core::{RenderProxyBox, RenderObject};
-//!
-//! #[derive(Debug)]
-//! struct RenderMetadata {
-//!     label: String,
-//! }
-//!
-//! // That's it! Full RenderBox implementation for free
-//! impl RenderProxyBox for RenderMetadata {}
-//!
-//! impl RenderObject for RenderMetadata {
-//!     fn as_any(&self) -> &dyn std::any::Any { self }
-//!     fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
-//! }
-//! ```
-//!
-//! ## Custom Transform Proxy
-//!
-//! ```rust,ignore
-//! #[derive(Debug)]
-//! struct RenderOpacity {
-//!     opacity: f32,
-//! }
-//!
-//! impl RenderProxyBox for RenderOpacity {
-//!     // Override paint to apply opacity
-//!     fn proxy_paint(&self, ctx: &mut BoxPaintContext<'_, Single>) {
-//!         ctx.canvas_mut().save();
-//!         ctx.canvas_mut().set_opacity(self.opacity);
-//!         ctx.paint_single_child(Offset::ZERO);
-//!         ctx.canvas_mut().restore();
-//!     }
-//! }
-//!
-//! impl RenderObject for RenderOpacity {
-//!     fn as_any(&self) -> &dyn std::any::Any { self }
-//!     fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
-//! }
-//! ```
+//! Follows Flutter's RenderProxyBox and RenderProxySliver protocols:
+//! - **Size forwarding**: Adopts child's size or smallest size if no child
+//! - **Paint forwarding**: Paints child at origin (identity transform)
+//! - **Hit test forwarding**: Delegates to child
+//! - **Baseline forwarding**: Delegates baseline calculations to child
+//! - **Intrinsics forwarding**: Delegates intrinsic dimensions to child
 
 use std::fmt;
+
+use flui_foundation::{DiagnosticsProperty, ElementId};
+use flui_types::{Matrix4, Offset, Rect, Size, SliverGeometry, TextBaseline};
 
 use super::arity::Single;
 use super::contexts::{
@@ -84,18 +25,41 @@ use super::contexts::{
 use super::render_box::RenderBox;
 use super::render_object::RenderObject;
 use super::render_sliver::RenderSliver;
+use super::BoxConstraints;
 use crate::RenderResult;
 use flui_interaction::HitTestResult;
-use flui_types::{Offset, Rect, Size, SliverGeometry};
 
 // ============================================================================
 // RENDER PROXY BOX
 // ============================================================================
 
-/// Trait for box protocol renders objects that forward all operations to a single child.
+/// Trait for box protocol render objects that delegate to a single child.
 ///
-/// Implement this trait to create transparent wrappers around box render objects.
-/// All methods have default implementations that simply pass through to the child.
+/// RenderProxyBox is the base for transparent wrappers that mimic most
+/// properties of their child. It provides default implementations that
+/// forward all operations to the child.
+///
+/// # Flutter Protocol
+///
+/// ```dart
+/// // Flutter equivalent:
+/// class RenderProxyBox extends RenderBox {
+///   @override
+///   void performLayout() {
+///     size = child?.size ?? computeSizeForNoChild(constraints);
+///   }
+///
+///   @override
+///   void paint(PaintingContext context, Offset offset) {
+///     if (child != null) context.paintChild(child, offset);
+///   }
+///
+///   @override
+///   void applyPaintTransform(RenderObject child, Matrix4 transform) {
+///     // Identity transform - no changes
+///   }
+/// }
+/// ```
 ///
 /// # Arity
 ///
@@ -103,16 +67,23 @@ use flui_types::{Offset, Rect, Size, SliverGeometry};
 ///
 /// # Default Behavior
 ///
-/// - **Layout**: Passes constraints directly to child, returns child size
-/// - **Paint**: Paints child at offset (0, 0)
+/// All methods forward to child by default:
+/// - **Layout**: Returns child size or smallest size if no child
+/// - **Paint**: Paints child at origin (0, 0)
 /// - **Hit test**: Forwards to child
+/// - **Paint transform**: Identity (no transformation)
+/// - **Baseline**: Forwards to child
+/// - **Intrinsics**: Forwards to child
 ///
 /// # Override Points
 ///
-/// Override any method to customize behavior:
-/// - [`proxy_layout`](Self::proxy_layout) - Modify constraints or size
-/// - [`proxy_paint`](Self::proxy_paint) - Add visual effects
-/// - [`proxy_hit_test`](Self::proxy_hit_test) - Custom hit testing
+/// Override only what you need to customize:
+/// - [`proxy_layout`] - Modify constraints or size
+/// - [`proxy_paint`] - Add visual effects (opacity, clipping, etc)
+/// - [`proxy_hit_test`] - Custom hit testing
+/// - [`apply_paint_transform`] - Coordinate space transformations
+/// - [`compute_size_for_no_child`] - Size when no child exists
+/// - [`compute_distance_to_baseline`] - Custom baseline calculation
 ///
 /// # Examples
 ///
@@ -124,6 +95,7 @@ use flui_types::{Offset, Rect, Size, SliverGeometry};
 ///     label: String,
 /// }
 ///
+/// // That's it! Full RenderBox for free
 /// impl RenderProxyBox for RenderSemantics {}
 ///
 /// impl RenderObject for RenderSemantics {
@@ -132,67 +104,143 @@ use flui_types::{Offset, Rect, Size, SliverGeometry};
 /// }
 /// ```
 ///
-/// ## Custom Layout Proxy
+/// ## Opacity Proxy
 ///
 /// ```rust,ignore
 /// #[derive(Debug)]
-/// struct RenderConstrainedProxy {
-///     max_width: f32,
+/// struct RenderOpacity {
+///     opacity: f32,
 /// }
 ///
-/// impl RenderProxyBox for RenderConstrainedProxy {
-///     fn proxy_layout(&mut self, mut ctx: BoxLayoutContext<'_, Single>) -> Size {
-///         // Constrain child width
-///         let constrained = BoxConstraints {
-///             max_width: self.max_width.min(ctx.constraints.max_width),
-///             ..ctx.constraints
-///         };
-///         ctx.layout_single_child_with(|_| constrained)
+/// impl RenderProxyBox for RenderOpacity {
+///     fn proxy_paint(&self, ctx: &mut BoxPaintContext<'_, Single>) {
+///         ctx.canvas_mut().save();
+///         ctx.canvas_mut().set_opacity(self.opacity);
+///         ctx.paint_single_child(Offset::ZERO);
+///         ctx.canvas_mut().restore();
 ///     }
 /// }
 ///
-/// impl RenderObject for RenderConstrainedProxy {
+/// impl RenderObject for RenderOpacity {
+///     fn as_any(&self) -> &dyn std::any::Any { self }
+///     fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
+/// }
+/// ```
+///
+/// ## Transform Proxy
+///
+/// ```rust,ignore
+/// #[derive(Debug)]
+/// struct RenderTransform {
+///     transform: Matrix4,
+/// }
+///
+/// impl RenderProxyBox for RenderTransform {
+///     fn apply_paint_transform(&self, _child_id: ElementId, transform: &mut Matrix4) {
+///         // Apply transformation to child coordinates
+///         transform.multiply(&self.transform);
+///     }
+///
+///     fn proxy_paint(&self, ctx: &mut BoxPaintContext<'_, Single>) {
+///         ctx.canvas_mut().save();
+///         ctx.canvas_mut().transform(&self.transform);
+///         ctx.paint_single_child(Offset::ZERO);
+///         ctx.canvas_mut().restore();
+///     }
+/// }
+///
+/// impl RenderObject for RenderTransform {
 ///     fn as_any(&self) -> &dyn std::any::Any { self }
 ///     fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
 /// }
 /// ```
 pub trait RenderProxyBox: RenderObject + fmt::Debug + Send + Sync {
+    // ============================================================================
+    // LAYOUT (Optional override)
+    // ============================================================================
+
     /// Performs layout by forwarding to the child.
     ///
-    /// The default implementation passes constraints directly to child and returns child size.
+    /// Default: passes constraints to child, returns child size or
+    /// `compute_size_for_no_child()` if no child.
+    ///
+    /// # Flutter Protocol
+    ///
+    /// ```dart
+    /// @override
+    /// void performLayout() {
+    ///   size = child?.size ?? computeSizeForNoChild(constraints);
+    /// }
+    /// ```
     ///
     /// # Examples
     ///
     /// ```rust,ignore
-    /// // Default: pass through
-    /// fn proxy_layout(&mut self, mut ctx: BoxLayoutContext<'_, Single>) -> Size {
+    /// // Default: forward to child
+    /// fn proxy_layout(&mut self, mut ctx: BoxLayoutContext<'_, Single>) -> RenderResult<Size> {
     ///     ctx.layout_single_child()
+    ///         .or_else(|_| Ok(self.compute_size_for_no_child(&ctx.constraints)))
     /// }
     ///
     /// // Custom: modify constraints
-    /// fn proxy_layout(&mut self, mut ctx: BoxLayoutContext<'_, Single>) -> Size {
-    ///     let modified = ctx.constraints.loosen();
-    ///     ctx.layout_single_child_with(|_| modified)
+    /// fn proxy_layout(&mut self, mut ctx: BoxLayoutContext<'_, Single>) -> RenderResult<Size> {
+    ///     let loosened = ctx.constraints.loosen();
+    ///     ctx.layout_single_child_with(|_| loosened)
     /// }
     /// ```
     fn proxy_layout(&mut self, mut ctx: BoxLayoutContext<'_, Single>) -> RenderResult<Size> {
-        // Default: pass constraints directly to the child
+        // Try to layout child, fallback to no-child size
         ctx.layout_single_child()
+            .or_else(|_| Ok(self.compute_size_for_no_child(&ctx.constraints)))
     }
 
-    /// Performs painting by forwarding to the child.
+    /// Computes size when no child exists (Flutter computeSizeForNoChild).
     ///
-    /// Default implementation paints child at offset (0, 0).
+    /// Default: returns `constraints.smallest()`.
+    ///
+    /// # Flutter Protocol
+    ///
+    /// ```dart
+    /// Size computeSizeForNoChild(BoxConstraints constraints) {
+    ///   return constraints.smallest;
+    /// }
+    /// ```
     ///
     /// # Examples
     ///
     /// ```rust,ignore
-    /// // Default: paint at origin
-    /// fn proxy_paint(&self, ctx: &mut BoxPaintContext<'_, Single>) {
-    ///     ctx.paint_single_child(Offset::ZERO);
+    /// // Custom: prefer specific size
+    /// fn compute_size_for_no_child(&self, constraints: &BoxConstraints) -> Size {
+    ///     constraints.constrain(Size::new(100.0, 100.0))
     /// }
+    /// ```
+    fn compute_size_for_no_child(&self, constraints: &BoxConstraints) -> Size {
+        constraints.smallest()
+    }
+
+    // ============================================================================
+    // PAINT (Optional override)
+    // ============================================================================
+
+    /// Performs painting by forwarding to the child.
     ///
-    /// // Custom: add visual effects
+    /// Default: paints child at offset (0, 0).
+    ///
+    /// # Flutter Protocol
+    ///
+    /// ```dart
+    /// @override
+    /// void paint(PaintingContext context, Offset offset) {
+    ///   if (child != null) {
+    ///     context.paintChild(child, offset);
+    ///   }
+    /// }
+    /// ```
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// // Custom: add opacity
     /// fn proxy_paint(&self, ctx: &mut BoxPaintContext<'_, Single>) {
     ///     ctx.canvas_mut().save();
     ///     ctx.canvas_mut().set_opacity(0.5);
@@ -201,40 +249,24 @@ pub trait RenderProxyBox: RenderObject + fmt::Debug + Send + Sync {
     /// }
     /// ```
     fn proxy_paint(&self, ctx: &mut BoxPaintContext<'_, Single>) {
-        // Default: paint child at origin
+        // Paint child at origin
         let _ = ctx.paint_single_child(Offset::ZERO);
     }
 
+    // ============================================================================
+    // HIT TESTING (Optional override)
+    // ============================================================================
+
     /// Performs hit testing by forwarding to the child.
     ///
-    /// Default implementation forwards to child and adds self if the child was hit.
+    /// Default: forwards to child, adds self if child hit.
     ///
-    /// # Examples
+    /// # Flutter Protocol
     ///
-    /// ```rust,ignore
-    /// // Default: forward to child
-    /// fn proxy_hit_test(
-    ///     &self,
-    ///     ctx: &BoxHitTestContext<'_, Single>,
-    ///     result: &mut HitTestResult,
-    /// ) -> bool {
-    ///     if ctx.hit_test_single_child(ctx.position, result) {
-    ///         ctx.hit_test_self(result);
-    ///         true
-    ///     } else {
-    ///         false
-    ///     }
-    /// }
-    ///
-    /// // Custom: always handle hits
-    /// fn proxy_hit_test(
-    ///     &self,
-    ///     ctx: &BoxHitTestContext<'_, Single>,
-    ///     result: &mut HitTestResult,
-    /// ) -> bool {
-    ///     ctx.hit_test_single_child(ctx.position, result);
-    ///     ctx.hit_test_self(result);
-    ///     true  // Always handle
+    /// ```dart
+    /// @override
+    /// bool hitTestChildren(BoxHitTestResult result, {required Offset position}) {
+    ///   return child?.hitTest(result, position: position) ?? false;
     /// }
     /// ```
     fn proxy_hit_test(
@@ -242,7 +274,7 @@ pub trait RenderProxyBox: RenderObject + fmt::Debug + Send + Sync {
         ctx: &BoxHitTestContext<'_, Single>,
         result: &mut HitTestResult,
     ) -> bool {
-        // Default: forward to child, add self if child was hit
+        // Forward to child
         if ctx.hit_test_single_child(ctx.position, result) {
             ctx.hit_test_self(result);
             true
@@ -251,15 +283,116 @@ pub trait RenderProxyBox: RenderObject + fmt::Debug + Send + Sync {
         }
     }
 
+    // ============================================================================
+    // PAINT TRANSFORM (Optional override)
+    // ============================================================================
+
+    /// Applies paint transform for coordinate space conversion.
+    ///
+    /// Default: identity transform (no changes).
+    ///
+    /// Override this when paint applies transformations. The transform must
+    /// match what was applied during painting for hit testing to work correctly.
+    ///
+    /// # Flutter Protocol
+    ///
+    /// ```dart
+    /// @override
+    /// void applyPaintTransform(RenderObject child, Matrix4 transform) {
+    ///   // Default: no transform (identity)
+    /// }
+    /// ```
+    ///
+    /// # When to override
+    ///
+    /// Override when:
+    /// - Applying rotation, scale, or translation
+    /// - Changing coordinate space during paint
+    /// - Using canvas transforms
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// // Rotation transform
+    /// fn apply_paint_transform(&self, _child_id: ElementId, transform: &mut Matrix4) {
+    ///     transform.rotate_z(self.angle);
+    /// }
+    ///
+    /// // Translation transform
+    /// fn apply_paint_transform(&self, _child_id: ElementId, transform: &mut Matrix4) {
+    ///     transform.translate(self.offset.dx, self.offset.dy);
+    /// }
+    /// ```
+    fn apply_paint_transform(&self, _child_id: ElementId, _transform: &mut Matrix4) {
+        // Default: identity transform (no changes)
+    }
+
+    // ============================================================================
+    // BASELINE (Optional override)
+    // ============================================================================
+
+    /// Computes distance to baseline by forwarding to child.
+    ///
+    /// Default: forwards to child's baseline.
+    ///
+    /// # Flutter Protocol
+    ///
+    /// ```dart
+    /// @override
+    /// double? computeDistanceToActualBaseline(TextBaseline baseline) {
+    ///   return child?.getDistanceToActualBaseline(baseline);
+    /// }
+    /// ```
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// // Ignore baseline (return None)
+    /// fn compute_distance_to_baseline(&self, _baseline: TextBaseline) -> Option<f32> {
+    ///     None
+    /// }
+    ///
+    /// // Offset child baseline
+    /// fn compute_distance_to_baseline(&self, baseline: TextBaseline) -> Option<f32> {
+    ///     // Get child baseline and add offset
+    ///     self.get_child_baseline(baseline).map(|b| b + self.offset.dy)
+    /// }
+    /// ```
+    fn compute_distance_to_baseline(&self, _baseline: TextBaseline) -> Option<f32> {
+        None // Default: forward to child (handled by RenderBox trait)
+    }
+
+    // ============================================================================
+    // BOUNDS (Optional override)
+    // ============================================================================
+
     /// Gets the local bounding rectangle.
     ///
-    /// Default returns an empty rectangle. Override for proper hit testing.
+    /// Default: empty rectangle.
     fn proxy_local_bounds(&self) -> Rect {
         Rect::ZERO
     }
+
+    // ============================================================================
+    // DEBUG (Optional override)
+    // ============================================================================
+
+    /// Fills diagnostic properties for debugging.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// fn proxy_debug_fill_properties(&self, properties: &mut Vec<DiagnosticsProperty>) {
+    ///     properties.push(DiagnosticsProperty::new("opacity", self.opacity));
+    /// }
+    /// ```
+    #[cfg(debug_assertions)]
+    fn proxy_debug_fill_properties(&self, _properties: &mut Vec<DiagnosticsProperty>) {
+        // Default: no custom properties
+    }
 }
 
-// Blanket implementation: RenderProxyBox -> RenderBox
+// Blanket implementation: RenderProxyBox -> RenderBox<Single>
 impl<T: RenderProxyBox> RenderBox<Single> for T {
     fn layout(&mut self, ctx: BoxLayoutContext<'_, Single>) -> RenderResult<Size> {
         self.proxy_layout(ctx)
@@ -273,6 +406,11 @@ impl<T: RenderProxyBox> RenderBox<Single> for T {
         self.proxy_hit_test(ctx, result)
     }
 
+    fn baseline_offset(&self) -> Option<f32> {
+        // Forward to child's baseline
+        self.compute_distance_to_baseline(TextBaseline::Alphabetic)
+    }
+
     fn local_bounds(&self) -> Rect {
         self.proxy_local_bounds()
     }
@@ -282,10 +420,10 @@ impl<T: RenderProxyBox> RenderBox<Single> for T {
 // RENDER PROXY SLIVER
 // ============================================================================
 
-/// Trait for sliver protocol render objects that forward all operations to a single child.
+/// Trait for sliver protocol render objects that delegate to a single child.
 ///
-/// Implement this trait to create transparent wrappers around sliver render objects.
-/// All methods have default implementations that simply pass through to the child.
+/// RenderProxySliver provides default implementations that forward all
+/// operations to the child sliver.
 ///
 /// # Arity
 ///
@@ -293,20 +431,13 @@ impl<T: RenderProxyBox> RenderBox<Single> for T {
 ///
 /// # Default Behavior
 ///
-/// - **Layout**: Passes constraints directly to child, returns child geometry
-/// - **Paint**: Paints child at offset (0, 0)
+/// - **Layout**: Forwards constraints to child, returns child geometry
+/// - **Paint**: Paints child at origin
 /// - **Hit test**: Forwards to child
-///
-/// # Override Points
-///
-/// Override any method to customize behavior:
-/// - [`proxy_layout`](Self::proxy_layout) - Modify constraints or geometry
-/// - [`proxy_paint`](Self::proxy_paint) - Add visual effects
-/// - [`proxy_hit_test`](Self::proxy_hit_test) - Custom hit testing
 ///
 /// # Examples
 ///
-/// ## Minimal Proxy (Metadata)
+/// ## Minimal Proxy
 ///
 /// ```rust,ignore
 /// #[derive(Debug)]
@@ -322,29 +453,32 @@ impl<T: RenderProxyBox> RenderBox<Single> for T {
 /// }
 /// ```
 ///
-/// ## Custom Layout Proxy
+/// ## Scroll Offset Proxy
 ///
 /// ```rust,ignore
 /// #[derive(Debug)]
-/// struct RenderSliverOffsetProxy {
-///     offset: f32,
+/// struct RenderSliverPadding {
+///     padding: f32,
 /// }
 ///
-/// impl RenderProxySliver for RenderSliverOffsetProxy {
-///     fn proxy_layout(&mut self, mut ctx: SliverLayoutContext<'_, Single>) -> SliverGeometry {
-///         // Adjust scroll offset
+/// impl RenderProxySliver for RenderSliverPadding {
+///     fn proxy_layout(
+///         &mut self,
+///         mut ctx: SliverLayoutContext<'_, Single>,
+///     ) -> RenderResult<SliverGeometry> {
+///         // Adjust scroll offset for padding
 ///         let adjusted = SliverConstraints {
-///             scroll_offset: (ctx.constraints.scroll_offset - self.offset).max(0.0),
+///             scroll_offset: (ctx.constraints.scroll_offset - self.padding).max(0.0),
 ///             ..ctx.constraints
 ///         };
 ///
-///         let mut geometry = ctx.layout_single_child_with(|_| adjusted);
-///         geometry.scroll_extent += self.offset;
-///         geometry
+///         let mut geometry = ctx.layout_single_child_with(|_| adjusted)?;
+///         geometry.scroll_extent += self.padding;
+///         Ok(geometry)
 ///     }
 /// }
 ///
-/// impl RenderObject for RenderSliverOffsetProxy {
+/// impl RenderObject for RenderSliverPadding {
 ///     fn as_any(&self) -> &dyn std::any::Any { self }
 ///     fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
 /// }
@@ -352,83 +486,29 @@ impl<T: RenderProxyBox> RenderBox<Single> for T {
 pub trait RenderProxySliver: RenderObject + fmt::Debug + Send + Sync {
     /// Performs layout by forwarding to the child.
     ///
-    /// The default implementation passes constraints directly to child and returns child geometry.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// // Default: pass through
-    /// fn proxy_layout(&mut self, mut ctx: SliverLayoutContext<'_, Single>) -> RenderResult<SliverGeometry> {
-    ///     ctx.layout_single_child()
-    /// }
-    ///
-    /// // Custom: modify constraints
-    /// fn proxy_layout(&mut self, mut ctx: SliverLayoutContext<'_, Single>) -> RenderResult<SliverGeometry> {
-    ///     let modified = SliverConstraints {
-    ///         scroll_offset: ctx.constraints.scroll_offset + 100.0,
-    ///         ..ctx.constraints
-    ///     };
-    ///     ctx.layout_single_child_with(|_| modified)
-    /// }
-    /// ```
+    /// Default: passes constraints directly to child and returns child geometry.
     fn proxy_layout(
         &mut self,
         mut ctx: SliverLayoutContext<'_, Single>,
     ) -> RenderResult<SliverGeometry> {
-        // Default: pass constraints directly to the child
         ctx.layout_single_child()
     }
 
     /// Performs painting by forwarding to the child.
     ///
-    /// Default implementation paints child at offset (0, 0).
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// // Default: paint at origin
-    /// fn proxy_paint(&self, ctx: &mut SliverPaintContext<'_, Single>) {
-    ///     ctx.paint_single_child(Offset::ZERO);
-    /// }
-    ///
-    /// // Custom: offset painting
-    /// fn proxy_paint(&self, ctx: &mut SliverPaintContext<'_, Single>) {
-    ///     let offset = Offset::new(0.0, 10.0);
-    ///     ctx.paint_single_child(offset);
-    /// }
-    /// ```
+    /// Default: paints child at offset (0, 0).
     fn proxy_paint(&self, ctx: &mut SliverPaintContext<'_, Single>) {
-        // Default: paint child at origin
         let _ = ctx.paint_single_child(Offset::ZERO);
     }
 
     /// Performs hit testing by forwarding to the child.
     ///
-    /// Default implementation forwards to child and adds self if child was hit.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// // Default: forward to child
-    /// fn proxy_hit_test(
-    ///     &self,
-    ///     ctx: &SliverHitTestContext<'_, Single>,
-    ///     result: &mut HitTestResult,
-    /// ) -> bool {
-    ///     if ctx.hit_test_single_child(ctx.position, result) {
-    ///         ctx.hit_test_self(result);
-    ///         true
-    ///     } else {
-    ///         false
-    ///     }
-    /// }
-    /// ```
+    /// Default: forwards to child, adds self if child hit.
     fn proxy_hit_test(
         &self,
         ctx: &SliverHitTestContext<'_, Single>,
         result: &mut HitTestResult,
     ) -> bool {
-        // Default: forward to child, add self if child was hit
         if ctx.hit_test_single_child(ctx.position, result) {
             ctx.hit_test_self(result);
             true
@@ -438,14 +518,18 @@ pub trait RenderProxySliver: RenderObject + fmt::Debug + Send + Sync {
     }
 
     /// Gets the local bounding rectangle.
-    ///
-    /// Default returns an empty rectangle. Override for proper hit testing.
     fn proxy_local_bounds(&self) -> Rect {
         Rect::ZERO
     }
+
+    /// Fills diagnostic properties for debugging.
+    #[cfg(debug_assertions)]
+    fn proxy_debug_fill_properties(&self, _properties: &mut Vec<DiagnosticsProperty>) {
+        // Default: no custom properties
+    }
 }
 
-// Blanket implementation: RenderProxySliver -> RenderSliver
+// Blanket implementation: RenderProxySliver -> RenderSliver<Single>
 impl<T: RenderProxySliver> RenderSliver<Single> for T {
     fn layout(&mut self, ctx: SliverLayoutContext<'_, Single>) -> RenderResult<SliverGeometry> {
         self.proxy_layout(ctx)
@@ -526,5 +610,18 @@ mod tests {
 
         // Should compile - TestProxySliver implements RenderSliver<Single>
         let _: &dyn RenderSliver<Single> = &proxy;
+    }
+
+    #[test]
+    fn test_compute_size_for_no_child() {
+        let proxy = TestProxyBox {
+            label: "test".to_string(),
+        };
+
+        let constraints = BoxConstraints::tight(Size::new(100.0, 50.0));
+        let size = proxy.compute_size_for_no_child(&constraints);
+
+        // Should return smallest size (which is tight size)
+        assert_eq!(size, Size::new(100.0, 50.0));
     }
 }
