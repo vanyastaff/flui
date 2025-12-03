@@ -2,10 +2,16 @@
 //!
 //! This module defines error types for rendering operations including layout failures,
 //! paint errors, and parent data issues.
+//!
+//! # Tracing Integration
+//!
+//! All error creation methods automatically emit tracing events at the appropriate level,
+//! providing observability without requiring manual logging at call sites.
 
 use flui_foundation::ElementId;
 use std::borrow::Cow;
 use thiserror::Error;
+use tracing::{error, warn};
 
 /// Rendering-specific error type
 ///
@@ -69,61 +75,112 @@ impl RenderError {
     /// Create a layout failed error
     ///
     /// Accepts both static strings (zero-cost) and dynamic strings (allocated).
+    /// Automatically emits a tracing error event.
     #[must_use]
     pub fn layout_failed(
         render_object: &'static str,
         reason: impl Into<Cow<'static, str>>,
     ) -> Self {
+        let reason = reason.into();
+        error!(
+            render_object = render_object,
+            reason = %reason,
+            "layout failed"
+        );
         Self::LayoutFailed {
             render_object,
-            reason: reason.into(),
+            reason,
         }
     }
 
     /// Create a paint failed error
     ///
     /// Accepts both static strings (zero-cost) and dynamic strings (allocated).
+    /// Automatically emits a tracing error event.
     #[must_use]
     pub fn paint_failed(render_object: &'static str, reason: impl Into<Cow<'static, str>>) -> Self {
+        let reason = reason.into();
+        error!(
+            render_object = render_object,
+            reason = %reason,
+            "paint failed"
+        );
         Self::PaintFailed {
             render_object,
-            reason: reason.into(),
+            reason,
         }
     }
 
     /// Create an invalid parent data error
+    ///
+    /// Automatically emits a tracing error event.
     #[must_use]
     pub fn invalid_parent_data(expected: &'static str, actual: &'static str) -> Self {
+        error!(
+            expected = expected,
+            actual = actual,
+            "invalid parent data type"
+        );
         Self::InvalidParentData { expected, actual }
     }
 
     /// Create a constraint violation error
     ///
     /// Accepts both static strings (zero-cost) and dynamic strings (allocated).
+    /// Automatically emits a tracing warning event (violations may be recoverable).
     #[must_use]
     pub fn constraint_violation(details: impl Into<Cow<'static, str>>) -> Self {
-        Self::ConstraintViolation {
-            details: details.into(),
-        }
+        let details = details.into();
+        warn!(details = %details, "constraint violation");
+        Self::ConstraintViolation { details }
     }
 
     /// Create an element not found error
+    ///
+    /// Automatically emits a tracing error event.
     #[must_use]
     pub fn element_not_found(id: ElementId) -> Self {
+        error!(element_id = %id.get(), "element not found");
         Self::ElementNotFound(id)
     }
 
     /// Create a not render element error
+    ///
+    /// Automatically emits a tracing error event.
     #[must_use]
     pub fn not_render_element(id: ElementId) -> Self {
+        error!(element_id = %id.get(), "element is not a render element");
         Self::NotRenderElement(id)
     }
 
     /// Create a hit test failed error
+    ///
+    /// Automatically emits a tracing warning event (hit test failures are often expected).
     #[must_use]
     pub fn hit_test_failed(reason: impl Into<Cow<'static, str>>) -> Self {
-        Self::HitTestFailed {
-            reason: reason.into(),
+        let reason = reason.into();
+        warn!(reason = %reason, "hit test failed");
+        Self::HitTestFailed { reason }
+    }
+
+    /// Returns true if this error is recoverable and should not abort rendering.
+    ///
+    /// Recoverable errors include constraint violations and hit test failures,
+    /// which can often be handled gracefully by using fallback values.
+    #[must_use]
+    pub fn is_recoverable(&self) -> bool {
+        matches!(
+            self,
+            Self::ConstraintViolation { .. } | Self::HitTestFailed { .. }
+        )
+    }
+
+    /// Returns the element ID associated with this error, if any.
+    #[must_use]
+    pub fn element_id(&self) -> Option<ElementId> {
+        match self {
+            Self::ElementNotFound(id) | Self::NotRenderElement(id) => Some(*id),
+            _ => None,
         }
     }
 }
@@ -163,5 +220,29 @@ mod tests {
     fn test_element_not_found() {
         let err = RenderError::element_not_found(ElementId::new(42));
         assert!(err.to_string().contains("42"));
+    }
+
+    #[test]
+    fn test_is_recoverable() {
+        // Recoverable errors
+        assert!(RenderError::constraint_violation("test").is_recoverable());
+        assert!(RenderError::hit_test_failed("test").is_recoverable());
+
+        // Non-recoverable errors
+        assert!(!RenderError::layout_failed("Test", "test").is_recoverable());
+        assert!(!RenderError::paint_failed("Test", "test").is_recoverable());
+        assert!(!RenderError::element_not_found(ElementId::new(1)).is_recoverable());
+    }
+
+    #[test]
+    fn test_element_id_extraction() {
+        let id = ElementId::new(42);
+
+        assert_eq!(RenderError::element_not_found(id).element_id(), Some(id));
+        assert_eq!(RenderError::not_render_element(id).element_id(), Some(id));
+        assert_eq!(
+            RenderError::layout_failed("Test", "test").element_id(),
+            None
+        );
     }
 }

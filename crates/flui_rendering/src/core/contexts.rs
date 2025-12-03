@@ -11,6 +11,7 @@ use flui_foundation::ElementId;
 use flui_interaction::{HitTestEntry, HitTestResult};
 use flui_painting::Canvas;
 use flui_types::{BoxConstraints, Offset, Rect, Size, SliverConstraints, SliverGeometry};
+use tracing::{instrument, trace};
 
 use super::arity::{Arity, ChildrenAccess, Single};
 use super::protocol::{BoxProtocol, Protocol, SliverProtocol};
@@ -251,12 +252,17 @@ where
     /// Layouts a child box element.
     ///
     /// Returns the computed size that satisfies the given constraints.
+    #[instrument(level = "trace", skip(self, constraints), fields(child = %child_id.get()))]
     pub fn layout_child(
         &mut self,
         child_id: ElementId,
         constraints: BoxConstraints,
     ) -> RenderResult<Size> {
-        self.tree.perform_layout(child_id, constraints)
+        let result = self.tree.perform_layout(child_id, constraints);
+        if let Ok(size) = &result {
+            trace!(width = %size.width, height = %size.height, "child layout complete");
+        }
+        result
     }
 
     /// Layouts all children with the same constraints.
@@ -267,11 +273,13 @@ where
     /// # Errors
     ///
     /// Returns the first error encountered during child layout.
+    #[instrument(level = "trace", skip(self, constraints), fields(element = %self.element_id.get()))]
     pub fn layout_all_children(
         &mut self,
         constraints: BoxConstraints,
     ) -> RenderResult<Vec<(ElementId, Size)>> {
         let children: Vec<_> = self.children().collect();
+        trace!(child_count = children.len(), "laying out all children");
         let mut results = Vec::with_capacity(children.len());
 
         for child_id in children {
@@ -324,12 +332,21 @@ where
     /// Layouts a child sliver element.
     ///
     /// Returns the computed geometry with scroll/paint extents.
+    #[instrument(level = "trace", skip(self, constraints), fields(child = %child_id.get()))]
     pub fn layout_child(
         &mut self,
         child_id: ElementId,
         constraints: SliverConstraints,
     ) -> RenderResult<SliverGeometry> {
-        self.tree.perform_sliver_layout(child_id, constraints)
+        let result = self.tree.perform_sliver_layout(child_id, constraints);
+        if let Ok(geometry) = &result {
+            trace!(
+                scroll_extent = %geometry.scroll_extent,
+                paint_extent = %geometry.paint_extent,
+                "sliver child layout complete"
+            );
+        }
+        result
     }
 
     /// Layouts all sliver children with the same constraints.
@@ -340,15 +357,20 @@ where
     /// # Errors
     ///
     /// Returns the first error encountered during child layout.
+    #[instrument(level = "trace", skip(self, constraints), fields(element = %self.element_id.get()))]
     pub fn layout_all_children(
         &mut self,
         constraints: SliverConstraints,
     ) -> RenderResult<Vec<(ElementId, SliverGeometry)>> {
         let children: Vec<_> = self.children().collect();
+        trace!(
+            child_count = children.len(),
+            "laying out all sliver children"
+        );
         let mut results = Vec::with_capacity(children.len());
 
         for child_id in children {
-            let geometry = self.layout_child(child_id, constraints)?;
+            let geometry = self.layout_child(child_id, constraints.clone())?;
             results.push((child_id, geometry));
         }
 
@@ -528,6 +550,7 @@ where
     }
 
     /// Paints a child element at the given offset.
+    #[instrument(level = "trace", skip(self), fields(child = %child_id.get(), x = %offset.dx, y = %offset.dy))]
     pub fn paint_child(&mut self, child_id: ElementId, offset: Offset) -> RenderResult<()> {
         let _canvas = self.tree.perform_paint(child_id, offset)?;
         Ok(())
@@ -538,8 +561,10 @@ where
     /// This method retrieves each child's offset that was set during the layout
     /// phase via `set_child_offset` and paints the child at that position.
     /// If a child has no stored offset, it defaults to `Offset::ZERO`.
+    #[instrument(level = "trace", skip(self), fields(element = %self.element_id.get()))]
     pub fn paint_all_children(&mut self) -> RenderResult<()> {
         let children: Vec<_> = self.children().collect();
+        trace!(child_count = children.len(), "painting all children");
 
         for child_id in children {
             let offset = self.tree.get_offset(child_id).unwrap_or(Offset::ZERO);
