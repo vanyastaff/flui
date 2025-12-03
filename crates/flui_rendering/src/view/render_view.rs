@@ -100,8 +100,6 @@ pub trait RenderViewConfig: Send + Sync + Debug {
 // BUILDER PATTERN EXTENSION
 // ============================================================================
 
-use flui_element::Element;
-
 /// Extension trait for RenderView with builder methods.
 pub trait RenderViewExt: Sized {
     /// Wraps view as a leaf element (no children).
@@ -113,7 +111,7 @@ pub trait RenderViewExt: Sized {
     }
 
     /// Wraps view with a single child.
-    fn with_child(self, child: Element) -> RenderViewWithChild<Self>
+    fn with_child<C>(self, child: C) -> RenderViewWithChild<Self, C>
     where
         Self: RenderView<BoxProtocol, crate::core::arity::Single>,
     {
@@ -121,7 +119,7 @@ pub trait RenderViewExt: Sized {
     }
 
     /// Wraps view with an optional child.
-    fn with_optional_child(self, child: Option<Element>) -> RenderViewWithOptionalChild<Self>
+    fn with_optional_child<C>(self, child: Option<C>) -> RenderViewWithOptionalChild<Self, C>
     where
         Self: RenderView<BoxProtocol, crate::core::arity::Optional>,
     {
@@ -129,7 +127,7 @@ pub trait RenderViewExt: Sized {
     }
 
     /// Wraps view with multiple children.
-    fn with_children(self, children: Vec<Element>) -> RenderViewWithChildren<Self>
+    fn with_children<C>(self, children: Vec<C>) -> RenderViewWithChildren<Self, C>
     where
         Self: RenderView<BoxProtocol, crate::core::arity::Variable>,
     {
@@ -155,29 +153,29 @@ pub struct RenderViewLeaf<V> {
 
 /// Wrapper for render view with single child.
 #[derive(Debug)]
-pub struct RenderViewWithChild<V> {
+pub struct RenderViewWithChild<V, C> {
     /// The view configuration
     pub view: V,
     /// The single child element
-    pub child: Element,
+    pub child: C,
 }
 
 /// Wrapper for render view with optional child.
 #[derive(Debug)]
-pub struct RenderViewWithOptionalChild<V> {
+pub struct RenderViewWithOptionalChild<V, C> {
     /// The view configuration
     pub view: V,
     /// Optional child element
-    pub child: Option<Element>,
+    pub child: Option<C>,
 }
 
 /// Wrapper for render view with multiple children.
 #[derive(Debug)]
-pub struct RenderViewWithChildren<V> {
+pub struct RenderViewWithChildren<V, C> {
     /// The view configuration
     pub view: V,
     /// Child elements
-    pub children: Vec<Element>,
+    pub children: Vec<C>,
 }
 
 // ============================================================================

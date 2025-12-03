@@ -319,6 +319,16 @@ pub trait HitTestTree {
     /// Reference to the render object as `dyn Any`, or `None` if the element
     /// doesn't exist or is not a render element.
     fn render_object(&self, id: ElementId) -> Option<&dyn Any>;
+
+    /// Returns an iterator over child element IDs.
+    ///
+    /// Used by default hit_test_children implementation to iterate over children.
+    fn children(&self, id: ElementId) -> Box<dyn Iterator<Item = ElementId> + '_>;
+
+    /// Gets the offset of an element relative to its parent.
+    ///
+    /// Used by hit testing to transform positions to child coordinates.
+    fn get_offset(&self, id: ElementId) -> Option<Offset>;
 }
 
 // ============================================================================
@@ -465,6 +475,14 @@ impl HitTestTree for Box<dyn HitTestTree + Send + Sync> {
 
     fn render_object(&self, id: ElementId) -> Option<&dyn Any> {
         (**self).render_object(id)
+    }
+
+    fn children(&self, id: ElementId) -> Box<dyn Iterator<Item = ElementId> + '_> {
+        (**self).children(id)
+    }
+
+    fn get_offset(&self, id: ElementId) -> Option<Offset> {
+        (**self).get_offset(id)
     }
 }
 

@@ -66,6 +66,15 @@ pub enum RenderError {
         /// Failure reason
         reason: Cow<'static, str>,
     },
+
+    /// Unsupported protocol
+    #[error("Unsupported protocol: expected {expected}, found {found}")]
+    UnsupportedProtocol {
+        /// Expected protocol
+        expected: &'static str,
+        /// Found protocol
+        found: &'static str,
+    },
 }
 
 /// Result type for rendering operations

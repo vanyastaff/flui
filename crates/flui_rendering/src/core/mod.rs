@@ -39,6 +39,12 @@ mod render_proxy;
 // Utility wrappers and proxies
 mod wrappers;
 
+// Render lifecycle states
+mod render_lifecycle;
+
+// Render element - core element type for rendering
+mod render_element;
+
 // ============================================================================
 // ARITY SYSTEM RE-EXPORTS
 // ============================================================================
@@ -150,6 +156,13 @@ pub use render_proxy::{RenderProxyBox, RenderProxySliver};
 // ============================================================================
 
 pub use wrappers::{BoxRenderWrapper, SliverRenderWrapper};
+
+// ============================================================================
+// RENDER ELEMENT
+// ============================================================================
+
+pub use render_element::RenderElement;
+pub use render_lifecycle::RenderLifecycle;
 
 // ============================================================================
 // FLUI-TREE INTEGRATION

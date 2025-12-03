@@ -13,11 +13,12 @@ flui_painting = { path = "../flui_painting" }
 flui_interaction = { path = "../flui_interaction" }
 flui-foundation = { path = "../flui-foundation" }
 flui-tree = { path = "../flui-tree" }
-flui-element = { path = "../flui-element" }
+
 parking_lot = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 serde = { workspace = true, optional = true }
+once_cell = { workspace = true }
 
 # Essential dependencies for render core
 bitflags = { workspace = true }
