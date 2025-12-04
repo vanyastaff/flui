@@ -45,6 +45,9 @@ mod render_lifecycle;
 // Render element - core element type for rendering
 mod render_element;
 
+// Semantics tree for accessibility
+mod semantics;
+
 // ============================================================================
 // ARITY SYSTEM RE-EXPORTS
 // ============================================================================
@@ -71,7 +74,7 @@ pub use flui_types::{
 // ============================================================================
 
 pub use render_box::RenderBox;
-pub use render_object::RenderObject;
+pub use render_object::{new_layer_handle, LayerHandle, LayerRef, RenderObject};
 pub use render_sliver::RenderSliver;
 
 // ============================================================================
@@ -163,6 +166,12 @@ pub use wrappers::{BoxRenderWrapper, SliverRenderWrapper};
 
 pub use render_element::RenderElement;
 pub use render_lifecycle::RenderLifecycle;
+
+// ============================================================================
+// SEMANTICS / ACCESSIBILITY
+// ============================================================================
+
+pub use semantics::{SemanticsHandle, SemanticsNode, SemanticsNodeId, SemanticsOwner};
 
 // ============================================================================
 // FLUI-TREE INTEGRATION
