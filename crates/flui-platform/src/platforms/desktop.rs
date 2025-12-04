@@ -13,7 +13,7 @@ use flui_engine::GpuRenderer;
 use flui_interaction::EventRouter;
 use flui_scheduler::Scheduler;
 use flui_types::{
-    events::{PointerButton, PointerDeviceKind},
+    events::{MouseCursor, PointerButton, PointerDeviceKind, SystemMouseCursor},
     Offset,
 };
 use parking_lot::RwLock;
@@ -21,7 +21,7 @@ use std::sync::{atomic::AtomicBool, Arc};
 use winit::{
     event::{ElementState, MouseButton, WindowEvent},
     event_loop::ActiveEventLoop,
-    window::Window,
+    window::{CursorIcon, Window},
 };
 
 /// Desktop embedder for Windows, macOS, Linux
@@ -187,6 +187,27 @@ impl DesktopEmbedder {
     pub fn winit_window(&self) -> &Arc<Window> {
         self.window.inner()
     }
+
+    /// Set the mouse cursor
+    ///
+    /// Converts FLUI's MouseCursor to winit's CursorIcon and applies it.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// embedder.set_cursor(MouseCursor::CLICK);
+    /// ```
+    pub fn set_cursor(&self, cursor: MouseCursor) {
+        let icon = convert_mouse_cursor(cursor);
+        self.window.inner().set_cursor(icon);
+    }
+
+    /// Set cursor visibility
+    ///
+    /// Use this with `SystemMouseCursor::None` to hide the cursor.
+    pub fn set_cursor_visible(&self, visible: bool) {
+        self.window.inner().set_cursor_visible(visible);
+    }
 }
 
 impl PlatformEmbedder for DesktopEmbedder {
@@ -215,5 +236,57 @@ fn convert_mouse_button(button: MouseButton) -> PointerButton {
         MouseButton::Back => PointerButton::Other(3),
         MouseButton::Forward => PointerButton::Other(4),
         MouseButton::Other(n) => PointerButton::Other(n as u8),
+    }
+}
+
+/// Convert FLUI MouseCursor to winit CursorIcon
+///
+/// Maps FLUI's Flutter-compatible cursor types to winit's cursor icons.
+/// For `MouseCursor::Defer` and `MouseCursor::Uncontrolled`, returns `CursorIcon::Default`.
+pub fn convert_mouse_cursor(cursor: MouseCursor) -> CursorIcon {
+    match cursor {
+        MouseCursor::System(system) => convert_system_cursor(system),
+        MouseCursor::Defer | MouseCursor::Uncontrolled => CursorIcon::Default,
+    }
+}
+
+/// Convert FLUI SystemMouseCursor to winit CursorIcon
+fn convert_system_cursor(cursor: SystemMouseCursor) -> CursorIcon {
+    match cursor {
+        SystemMouseCursor::None => CursorIcon::Default, // winit doesn't have hidden cursor via icon
+        SystemMouseCursor::Basic => CursorIcon::Default,
+        SystemMouseCursor::Click => CursorIcon::Pointer,
+        SystemMouseCursor::Wait => CursorIcon::Wait,
+        SystemMouseCursor::Progress => CursorIcon::Progress,
+        SystemMouseCursor::Forbidden => CursorIcon::NotAllowed,
+        SystemMouseCursor::Text => CursorIcon::Text,
+        SystemMouseCursor::VerticalText => CursorIcon::VerticalText,
+        SystemMouseCursor::Precise => CursorIcon::Crosshair,
+        SystemMouseCursor::ContextMenu => CursorIcon::ContextMenu,
+        SystemMouseCursor::Grab => CursorIcon::Grab,
+        SystemMouseCursor::Grabbing => CursorIcon::Grabbing,
+        SystemMouseCursor::Move => CursorIcon::Move,
+        SystemMouseCursor::AllScroll => CursorIcon::AllScroll,
+        SystemMouseCursor::Copy => CursorIcon::Copy,
+        SystemMouseCursor::Alias => CursorIcon::Alias,
+        SystemMouseCursor::NoDrop => CursorIcon::NoDrop,
+        SystemMouseCursor::Cell => CursorIcon::Cell,
+        SystemMouseCursor::ResizeUp => CursorIcon::NResize,
+        SystemMouseCursor::ResizeDown => CursorIcon::SResize,
+        SystemMouseCursor::ResizeLeft => CursorIcon::WResize,
+        SystemMouseCursor::ResizeRight => CursorIcon::EResize,
+        SystemMouseCursor::ResizeUpLeft => CursorIcon::NwResize,
+        SystemMouseCursor::ResizeUpRight => CursorIcon::NeResize,
+        SystemMouseCursor::ResizeDownLeft => CursorIcon::SwResize,
+        SystemMouseCursor::ResizeDownRight => CursorIcon::SeResize,
+        SystemMouseCursor::ResizeUpDown => CursorIcon::NsResize,
+        SystemMouseCursor::ResizeLeftRight => CursorIcon::EwResize,
+        SystemMouseCursor::ResizeUpLeftDownRight => CursorIcon::NwseResize,
+        SystemMouseCursor::ResizeUpRightDownLeft => CursorIcon::NeswResize,
+        SystemMouseCursor::ResizeColumn => CursorIcon::ColResize,
+        SystemMouseCursor::ResizeRow => CursorIcon::RowResize,
+        SystemMouseCursor::ZoomIn => CursorIcon::ZoomIn,
+        SystemMouseCursor::ZoomOut => CursorIcon::ZoomOut,
+        SystemMouseCursor::Help => CursorIcon::Help,
     }
 }
