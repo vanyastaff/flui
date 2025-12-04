@@ -8,6 +8,7 @@
 //! - **Newtype pattern**: `FocusNodeId` uses `NonZeroU64` for niche optimization
 //! - **Singleton pattern**: Global focus manager via `OnceLock`
 //! - **parking_lot**: High-performance read-write locks
+//! - **FocusScope integration**: Tab/Shift+Tab navigation via `FocusScopeManager`
 //!
 //! # Example
 //!
@@ -23,6 +24,9 @@
 //! if FocusManager::global().has_focus(my_node) {
 //!     println!("We have focus!");
 //! }
+//!
+//! // Tab navigation (uses FocusScopeManager)
+//! FocusManager::global().focus_next();
 //!
 //! // Release focus
 //! FocusManager::global().unfocus();

@@ -46,7 +46,7 @@ use parking_lot::Mutex;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use flui_types::events::PointerEvent;
+use flui_types::events::{MouseCursor, PointerEvent};
 use flui_types::geometry::Offset;
 
 use crate::ids::{DeviceId, RegionId};
@@ -123,6 +123,8 @@ struct DeviceState {
     last_position: Offset,
     /// Set of regions currently under this device
     active_regions: HashSet<RegionId>,
+    /// Current mouse cursor for this device
+    current_cursor: MouseCursor,
 }
 
 /// Global mouse tracker
@@ -134,6 +136,9 @@ pub struct MouseTracker {
     inner: Arc<Mutex<MouseTrackerInner>>,
 }
 
+/// Callback for cursor changes.
+pub type CursorChangeCallback = Arc<dyn Fn(DeviceId, MouseCursor) + Send + Sync>;
+
 struct MouseTrackerInner {
     /// State for each mouse device
     devices: HashMap<DeviceId, DeviceState>,
@@ -141,6 +146,8 @@ struct MouseTrackerInner {
     annotations: HashMap<RegionId, MouseTrackerAnnotation>,
     /// Whether any mouse is connected
     mouse_connected: bool,
+    /// Callback for cursor changes
+    cursor_change_callback: Option<CursorChangeCallback>,
 }
 
 // Global singleton
@@ -155,6 +162,7 @@ impl MouseTracker {
                 devices: HashMap::new(),
                 annotations: HashMap::new(),
                 mouse_connected: false,
+                cursor_change_callback: None,
             })),
         }
     }
@@ -206,6 +214,7 @@ impl MouseTracker {
                     DeviceState {
                         last_position: Offset::ZERO,
                         active_regions: HashSet::new(),
+                        current_cursor: MouseCursor::BASIC,
                     },
                 );
                 return;
@@ -225,6 +234,7 @@ impl MouseTracker {
             .or_insert_with(|| DeviceState {
                 last_position: position,
                 active_regions: HashSet::new(),
+                current_cursor: MouseCursor::BASIC,
             });
 
         // Build new set of active regions from hit test
@@ -253,9 +263,14 @@ impl MouseTracker {
             .copied()
             .collect();
 
+        // Resolve cursor from hit test result
+        let new_cursor = hit_test_result.resolve_cursor();
+        let cursor_changed = state.current_cursor != new_cursor;
+
         // Update state
         state.last_position = position;
         state.active_regions = new_regions;
+        state.current_cursor = new_cursor;
 
         // Trigger callbacks (must be done outside the lock to avoid deadlock)
         let enter_callbacks: Vec<_> = entered
@@ -288,6 +303,13 @@ impl MouseTracker {
             })
             .collect();
 
+        // Get cursor change callback if cursor changed
+        let cursor_callback = if cursor_changed {
+            inner.cursor_change_callback.clone()
+        } else {
+            None
+        };
+
         // Release lock before calling callbacks
         drop(inner);
 
@@ -302,6 +324,11 @@ impl MouseTracker {
 
         for callback in hover_callbacks {
             callback(device_id, position);
+        }
+
+        // Notify cursor change
+        if let Some(callback) = cursor_callback {
+            callback(device_id, new_cursor);
         }
     }
 
@@ -336,6 +363,47 @@ impl MouseTracker {
             .get(&device_id)
             .map(|state| state.active_regions.clone())
             .unwrap_or_default()
+    }
+
+    /// Gets the current cursor for a device.
+    ///
+    /// Returns `MouseCursor::BASIC` if the device is not tracked.
+    pub fn device_cursor(&self, device_id: DeviceId) -> MouseCursor {
+        self.inner
+            .lock()
+            .devices
+            .get(&device_id)
+            .map(|state| state.current_cursor)
+            .unwrap_or(MouseCursor::BASIC)
+    }
+
+    /// Sets the callback for cursor changes.
+    ///
+    /// The callback is invoked whenever the active cursor changes for any device.
+    /// Use this to update the platform cursor.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// tracker.set_cursor_change_callback(Arc::new(|device_id, cursor| {
+    ///     // Update platform cursor
+    ///     window.set_cursor(cursor.into());
+    /// }));
+    /// ```
+    pub fn set_cursor_change_callback(&self, callback: CursorChangeCallback) {
+        self.inner.lock().cursor_change_callback = Some(callback);
+    }
+
+    /// Clears the cursor change callback.
+    pub fn clear_cursor_change_callback(&self) {
+        self.inner.lock().cursor_change_callback = None;
+    }
+
+    /// Gets the current cursor for the primary mouse device (device 0).
+    ///
+    /// This is a convenience method for single-mouse scenarios.
+    pub fn current_cursor(&self) -> MouseCursor {
+        self.device_cursor(0)
     }
 }
 

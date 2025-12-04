@@ -41,7 +41,7 @@
 //! - HitTestBehavior: https://api.flutter.dev/flutter/rendering/HitTestBehavior.html
 
 use flui_types::{
-    events::{PointerEvent, ScrollEventData},
+    events::{MouseCursor, PointerEvent, ScrollEventData},
     geometry::{Matrix4, Offset, Rect},
 };
 use std::sync::Arc;
@@ -437,6 +437,37 @@ impl HitTestResult {
     pub fn entries_with_scroll_handlers(&self) -> impl Iterator<Item = &HitTestEntry> {
         self.entries.iter().filter(|e| e.scroll_handler.is_some())
     }
+
+    /// Resolves the active mouse cursor from hit test entries.
+    ///
+    /// Iterates through entries (front to back) and returns the first
+    /// non-`Defer` cursor found. If all cursors are `Defer` or no entries
+    /// exist, returns `MouseCursor::BASIC` (the default arrow cursor).
+    ///
+    /// This follows Flutter's cursor resolution pattern where the front-most
+    /// (topmost in z-order) element with a non-defer cursor wins.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let hit_result = perform_hit_test(cursor_position);
+    /// let cursor = hit_result.resolve_cursor();
+    /// window.set_cursor(cursor);
+    /// ```
+    pub fn resolve_cursor(&self) -> MouseCursor {
+        for entry in &self.entries {
+            if !entry.cursor.is_defer() {
+                return entry.cursor;
+            }
+        }
+        // Default to basic arrow if no cursor specified
+        MouseCursor::BASIC
+    }
+
+    /// Returns an iterator over entries that have non-defer cursors.
+    pub fn entries_with_cursors(&self) -> impl Iterator<Item = &HitTestEntry> {
+        self.entries.iter().filter(|e| e.has_cursor())
+    }
 }
 
 // ============================================================================
@@ -473,6 +504,12 @@ pub struct HitTestEntry {
     /// Captured automatically when the entry is added to HitTestResult.
     /// Used to transform events to local coordinates during dispatch.
     pub transform: Option<Matrix4>,
+
+    /// Mouse cursor for this element.
+    ///
+    /// Used by MouseTracker to determine the active cursor.
+    /// `MouseCursor::Defer` means defer to the next element in the hit test chain.
+    pub cursor: MouseCursor,
 }
 
 impl std::fmt::Debug for HitTestEntry {
@@ -484,6 +521,7 @@ impl std::fmt::Debug for HitTestEntry {
             .field("has_handler", &self.handler.is_some())
             .field("has_scroll_handler", &self.scroll_handler.is_some())
             .field("has_transform", &self.transform.is_some())
+            .field("cursor", &self.cursor)
             .finish()
     }
 }
@@ -492,6 +530,7 @@ impl HitTestEntry {
     /// Create a new hit test entry.
     ///
     /// The transform will be captured automatically when added to HitTestResult.
+    /// Cursor defaults to `MouseCursor::Defer`.
     #[inline]
     pub fn new(element_id: ElementId, local_position: Offset, bounds: Rect) -> Self {
         Self {
@@ -501,6 +540,7 @@ impl HitTestEntry {
             handler: None,
             scroll_handler: None,
             transform: None,
+            cursor: MouseCursor::Defer,
         }
     }
 
@@ -521,6 +561,7 @@ impl HitTestEntry {
             handler: Some(handler),
             scroll_handler: None,
             transform: None,
+            cursor: MouseCursor::Defer,
         }
     }
 
@@ -541,6 +582,7 @@ impl HitTestEntry {
             handler: None,
             scroll_handler: Some(scroll_handler),
             transform: None,
+            cursor: MouseCursor::Defer,
         }
     }
 
@@ -560,7 +602,36 @@ impl HitTestEntry {
             handler: Some(handler),
             scroll_handler: Some(scroll_handler),
             transform: None,
+            cursor: MouseCursor::Defer,
         }
+    }
+
+    /// Create entry with a specific mouse cursor.
+    ///
+    /// The transform will be captured automatically when added to HitTestResult.
+    #[inline]
+    pub fn with_cursor(
+        element_id: ElementId,
+        local_position: Offset,
+        bounds: Rect,
+        cursor: MouseCursor,
+    ) -> Self {
+        Self {
+            element_id,
+            local_position,
+            bounds,
+            handler: None,
+            scroll_handler: None,
+            transform: None,
+            cursor,
+        }
+    }
+
+    /// Sets the cursor for this entry (builder pattern).
+    #[inline]
+    pub fn cursor(mut self, cursor: MouseCursor) -> Self {
+        self.cursor = cursor;
+        self
     }
 
     /// Returns `true` if this entry has a pointer handler.
@@ -579,6 +650,12 @@ impl HitTestEntry {
     #[inline]
     pub fn has_transform(&self) -> bool {
         self.transform.is_some()
+    }
+
+    /// Returns `true` if this entry has a non-defer cursor.
+    #[inline]
+    pub fn has_cursor(&self) -> bool {
+        !self.cursor.is_defer()
     }
 }
 

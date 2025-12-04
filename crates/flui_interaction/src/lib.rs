@@ -5,6 +5,8 @@
 //! - **EventRouter**: Routes pointer/keyboard events via hit testing
 //! - **HitTest**: Determines which UI elements are under cursor/touch
 //! - **FocusManager**: Manages keyboard focus (global singleton)
+//! - **FocusScope**: Groups focusable elements for keyboard navigation
+//! - **FocusTraversalPolicy**: Determines Tab/Shift+Tab navigation order
 //! - **GestureRecognizers**: High-level gesture detection (Tap, Drag, Scale, etc.)
 //! - **GestureArena**: Resolves conflicts between competing gesture recognizers
 //!
@@ -170,9 +172,11 @@ pub use ids::{FocusNodeId, HandlerId, PointerId};
 // ============================================================================
 
 pub use routing::{
-    ElementId, EventPropagation, EventRouter, FocusManager, GlobalPointerHandler, HitTestBehavior,
-    HitTestEntry, HitTestResult, HitTestable, KeyEventCallback, PointerEventHandler,
-    PointerRouteHandler, PointerRouter, ScrollEventHandler, TransformGuard,
+    DirectionalFocusPolicy, ElementId, EventPropagation, EventRouter, FocusManager, FocusNode,
+    FocusScopeNode, FocusTraversalPolicy, GlobalPointerHandler, HitTestBehavior, HitTestEntry,
+    HitTestResult, HitTestable, KeyEventCallback, KeyEventHandler, KeyEventResult,
+    OrderedTraversalPolicy, PointerEventHandler, PointerRouteHandler, PointerRouter,
+    ReadingOrderPolicy, ScrollEventHandler, TransformGuard, TraversalDirection,
 };
 
 // ============================================================================
@@ -212,7 +216,7 @@ pub use testing::{
 // Re-exports: Other
 // ============================================================================
 
-pub use mouse_tracker::{MouseTracker, MouseTrackerAnnotation};
+pub use mouse_tracker::{CursorChangeCallback, MouseTracker, MouseTrackerAnnotation};
 pub use sealed::{CustomGestureRecognizer, CustomHitTestable};
 pub use signal_resolver::{PointerSignalResolver, SignalPriority};
 
