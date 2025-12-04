@@ -1261,7 +1261,8 @@ mod tests {
 
     #[test]
     fn test_container_box_translate() {
-        let mut data = ContainerBoxParentData::with_offset(Offset::new(10.0, 20.0));
+        let mut data: ContainerBoxParentData<u32> =
+            ContainerBoxParentData::with_offset(Offset::new(10.0, 20.0));
         data.translate(Offset::new(5.0, 10.0));
         assert_eq!(data.offset(), Offset::new(15.0, 30.0));
     }
@@ -1284,13 +1285,13 @@ mod tests {
     fn test_size() {
         use std::mem::size_of;
 
-        // BoxParentData should be 8 bytes (one Offset)
+        // BoxParentData should be 8 bytes (one Offset = 2 * f32)
         assert_eq!(size_of::<BoxParentData>(), 8);
 
-        // ContainerParentData<u64> should be 16 bytes (two Option<u64>)
-        assert_eq!(size_of::<ContainerParentData<u64>>(), 16);
+        // ContainerParentData<u64> - two Option<u64> = 2 * 16 = 32 bytes
+        assert_eq!(size_of::<ContainerParentData<u64>>(), 32);
 
-        // ContainerBoxParentData<u64> should be 24 bytes (8 + 16)
-        assert_eq!(size_of::<ContainerBoxParentData<u64>>(), 24);
+        // ContainerBoxParentData<u64> = BoxParentData + ContainerParentData = 8 + 32 = 40 bytes
+        assert_eq!(size_of::<ContainerBoxParentData<u64>>(), 40);
     }
 }

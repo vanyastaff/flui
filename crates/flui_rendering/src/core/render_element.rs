@@ -1046,7 +1046,7 @@ mod tests {
             self
         }
 
-        fn debug_name(&self) -> &str {
+        fn debug_name(&self) -> &'static str {
             "TestRenderObject"
         }
     }

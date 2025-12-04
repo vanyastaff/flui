@@ -623,6 +623,7 @@ mod tests {
         let visible = SliverGeometry {
             scroll_extent: 100.0,
             paint_extent: 50.0,
+            visible: true,
             ..Default::default()
         };
         assert!(visible.is_visible());
@@ -635,7 +636,7 @@ mod tests {
     fn test_debug_properties() {
         let sliver = TestRenderSliver { extent: 100.0 };
         let mut props = Vec::new();
-        sliver.debug_fill_properties(&mut props);
+        RenderSliver::debug_fill_properties(&sliver, &mut props);
 
         assert_eq!(props.len(), 1);
         assert_eq!(props[0].name(), "extent");
