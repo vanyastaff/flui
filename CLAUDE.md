@@ -113,13 +113,39 @@ cargo build -p flui_app
 # Test all crates
 cargo test --workspace
 
-# Test specific layer
+# Test specific crate
 cargo test -p flui-foundation
 cargo test -p flui-reactivity
 cargo test -p flui_core
 
+# Run a single test by name
+cargo test -p flui_rendering test_layout_constraints
+
+# Run tests with output (nocapture)
+cargo test -p flui_core -- --nocapture
+
 # Run with logging
 RUST_LOG=debug cargo test -p flui_core
+```
+
+### Useful Cargo Aliases
+
+Defined in `.cargo/config.toml`:
+
+```bash
+# Cross-platform builds
+cargo build-android-release
+cargo build-web-release
+cargo build-desktop-release
+
+# Development
+cargo dev-android --logcat
+cargo dev-web
+
+# Quality
+cargo lint                    # Run clippy
+cargo lint-fix               # Auto-fix clippy warnings
+cargo fmt-check              # Check formatting
 ```
 
 For complete build instructions including cross-platform builds, see **[BUILD.md](BUILD.md)**.
@@ -139,7 +165,8 @@ For complete build instructions including cross-platform builds, see **[BUILD.md
 - ElementId uses `NonZeroUsize` for niche optimization (Option<ElementId> = 8 bytes)
 
 **Render Tree (Layout/Paint):**
-- Three render traits based on child count: `LeafRender` (0), `SingleRender` (1), `MultiRender` (N)
+- Arity system for compile-time child count validation: `Leaf` (0), `Single` (1), `Optional` (0-1), `Variable` (N)
+- `RenderBox<A>` trait parameterized by arity type for type-safe child access
 - Uses GAT (Generic Associated Types) for type-safe metadata
 - Pipeline coordination handled by `flui-pipeline` crate
 
@@ -292,7 +319,7 @@ For common development patterns including:
 - Advanced visual effects (ShaderMask, BackdropFilter)
 - Generic patterns that improve on Flutter's design
 
-See **[PATTERNS.md](PATTERNS.md)**.
+See **[docs/arch/PATTERNS.md](docs/arch/PATTERNS.md)**.
 
 ## Feature Flags
 
@@ -370,7 +397,7 @@ git commit -m "feat: Add new widget for user profiles
 
 ## Key Dependencies
 
-- **wgpu 25.x** - Cross-platform GPU API (Vulkan/Metal/DX12/WebGPU)
+- **wgpu 25.x** - Cross-platform GPU API (Vulkan/Metal/DX12/WebGPU). **Note:** Stay on 25.x; wgpu 26.0+ has compilation issues with codespan-reporting
 - **parking_lot 0.12** - High-performance RwLock/Mutex (2-3x faster than std)
 - **tokio 1.43** - Async runtime (LTS until March 2026)
 - **tracing** - Structured logging (always use this, never println!)
@@ -403,9 +430,14 @@ If you get "Hook state type mismatch" panics:
 2. Never call hooks conditionally (no `if` around hooks)
 3. Never call hooks in loops with variable iterations
 
-## Recent Completed Work (2025-11-28)
+## Troubleshooting
 
-- ✅ **flui_log enhancements** - Added configurable app name and enhanced platform documentation
-- ✅ **Serde support** - Added serialization support to flui_painting and flui_types
-- ✅ **RenderBox trait refactoring** - Prepared for generic T parameter on RenderBox trait
-- ✅ **Element-owned pending children** - Completed Phase 1 of new architecture
+### wgpu Compilation Issues
+
+If you see errors related to `codespan-reporting` or feature flags when upgrading wgpu:
+- Stay on wgpu 25.x (configured in workspace Cargo.toml)
+- See: https://github.com/gfx-rs/wgpu/issues/7915
+
+### Build Order Issues
+
+If you encounter confusing type errors after making changes, rebuild crates in dependency order (Foundation → Framework → Rendering → Widget layers) as shown in "Building Individual Crates" section.
