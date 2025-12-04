@@ -109,9 +109,7 @@ pub use reconciliation::{
     CanUpdate, GlobalKeyRegistry, InsertAction, LinearReconciler, MoveAction, Reconciler,
     ReconciliationResult, UpdateAction,
 };
-pub use render::{
-    Multi, RenderChildAccessor, RenderTreeAccess, RenderTreeAccessExt, RenderTreeExt,
-};
+pub use render::{RenderChildAccessor, RenderTreeAccess, RenderTreeAccessExt, RenderTreeExt};
 pub use validation::{
     find_orphans, has_cycles, validate_tree, TreeValidator, ValidationIssue, ValidationIssues,
     ValidationOptions, ValidationReport,

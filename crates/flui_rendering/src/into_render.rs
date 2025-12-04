@@ -114,7 +114,6 @@ impl<T: Any + Send + Sync + 'static> IntoRenderState for T {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fmt;
 
     #[derive(Debug)]
     struct TestRenderObject {

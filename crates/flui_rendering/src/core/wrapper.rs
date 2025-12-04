@@ -352,7 +352,7 @@ impl<A: Arity> RenderObject for SliverRenderWrapper<A> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{Leaf, Single};
+    use crate::core::Leaf;
 
     #[derive(Debug)]
     struct MockRenderBox {

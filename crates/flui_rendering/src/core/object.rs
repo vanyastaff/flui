@@ -1632,36 +1632,6 @@ pub trait RenderObject: Send + Sync + fmt::Debug + 'static {
 }
 
 // ============================================================================
-// EXTENSION TRAIT FOR DOWNCASTING
-// ============================================================================
-
-/// Extension trait for safe downcasting.
-pub trait RenderObjectExt {
-    /// Attempts to downcast to concrete type.
-    fn downcast_ref<T: RenderObject>(&self) -> Option<&T>;
-
-    /// Attempts to mutably downcast to concrete type.
-    fn downcast_mut<T: RenderObject>(&mut self) -> Option<&mut T>;
-
-    /// Checks if this is type `T`.
-    fn is<T: RenderObject>(&self) -> bool;
-}
-
-impl RenderObjectExt for dyn RenderObject {
-    fn downcast_ref<T: RenderObject>(&self) -> Option<&T> {
-        self.as_any().downcast_ref::<T>()
-    }
-
-    fn downcast_mut<T: RenderObject>(&mut self) -> Option<&mut T> {
-        self.as_any_mut().downcast_mut::<T>()
-    }
-
-    fn is<T: RenderObject>(&self) -> bool {
-        self.as_any().is::<T>()
-    }
-}
-
-// ============================================================================
 // TESTS
 // ============================================================================
 
@@ -1734,8 +1704,12 @@ mod tests {
         };
         let trait_obj: &dyn RenderObject = &obj;
 
-        assert!(trait_obj.downcast_ref::<TestRenderLeaf>().is_some());
-        assert!(trait_obj.is::<TestRenderLeaf>());
+        // Use as_any() for downcasting (standard Rust pattern)
+        assert!(trait_obj
+            .as_any()
+            .downcast_ref::<TestRenderLeaf>()
+            .is_some());
+        assert!(trait_obj.as_any().is::<TestRenderLeaf>());
     }
 
     #[test]

@@ -553,8 +553,8 @@ pub trait LayoutTreeExt: LayoutTree {
     /// for better performance.
     fn layout_render_children(
         &mut self,
-        parent: ElementId,
-        constraints: BoxConstraints,
+        _parent: ElementId,
+        _constraints: BoxConstraints,
     ) -> Vec<(ElementId, Size)> {
         // Default implementation - override in concrete types for efficiency
         Vec::new()

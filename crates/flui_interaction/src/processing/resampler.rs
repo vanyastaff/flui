@@ -61,6 +61,7 @@ const MAX_BUFFERED_EVENTS: usize = 100;
 const MIN_SAMPLE_INTERVAL: Duration = Duration::from_micros(1000); // 1ms
 
 /// Callback for handling resampled events
+#[allow(dead_code)] // Future public API
 pub type HandleEventCallback = Box<dyn FnMut(PointerEvent) + Send>;
 
 /// Buffered pointer event with timestamp

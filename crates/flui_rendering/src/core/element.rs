@@ -101,23 +101,11 @@ trait ProtocolState: fmt::Debug + Send + Sync {
     /// Sets offset.
     fn set_offset(&self, offset: Offset);
 
-    /// Clones the state.
-    fn clone_state(&self) -> Box<dyn ProtocolState>;
-
-    /// Returns protocol ID.
-    fn protocol_id(&self) -> ProtocolId;
-
     /// Downcasts to BoxRenderState (if Box protocol).
     fn as_box_state(&self) -> Option<&RenderState<BoxProtocol>>;
 
-    /// Downcasts to BoxRenderState (mutable).
-    fn as_box_state_mut(&mut self) -> Option<&mut RenderState<BoxProtocol>>;
-
     /// Downcasts to SliverRenderState (if Sliver protocol).
     fn as_sliver_state(&self) -> Option<&RenderState<SliverProtocol>>;
-
-    /// Downcasts to SliverRenderState (mutable).
-    fn as_sliver_state_mut(&mut self) -> Option<&mut RenderState<SliverProtocol>>;
 }
 
 // Blanket impl for RenderState<P>
@@ -134,18 +122,6 @@ impl<P: Protocol> ProtocolState for RenderState<P> {
         self.set_offset(offset)
     }
 
-    fn clone_state(&self) -> Box<dyn ProtocolState> {
-        Box::new(self.clone())
-    }
-
-    fn protocol_id(&self) -> ProtocolId {
-        if std::any::TypeId::of::<P>() == std::any::TypeId::of::<BoxProtocol>() {
-            ProtocolId::Box
-        } else {
-            ProtocolId::Sliver
-        }
-    }
-
     fn as_box_state(&self) -> Option<&RenderState<BoxProtocol>> {
         if std::any::TypeId::of::<P>() == std::any::TypeId::of::<BoxProtocol>() {
             // SAFETY: We just checked TypeId matches
@@ -155,28 +131,10 @@ impl<P: Protocol> ProtocolState for RenderState<P> {
         }
     }
 
-    fn as_box_state_mut(&mut self) -> Option<&mut RenderState<BoxProtocol>> {
-        if std::any::TypeId::of::<P>() == std::any::TypeId::of::<BoxProtocol>() {
-            // SAFETY: We just checked TypeId matches
-            Some(unsafe { &mut *(self as *mut RenderState<P> as *mut RenderState<BoxProtocol>) })
-        } else {
-            None
-        }
-    }
-
     fn as_sliver_state(&self) -> Option<&RenderState<SliverProtocol>> {
         if std::any::TypeId::of::<P>() == std::any::TypeId::of::<SliverProtocol>() {
             // SAFETY: We just checked TypeId matches
             Some(unsafe { &*(self as *const RenderState<P> as *const RenderState<SliverProtocol>) })
-        } else {
-            None
-        }
-    }
-
-    fn as_sliver_state_mut(&mut self) -> Option<&mut RenderState<SliverProtocol>> {
-        if std::any::TypeId::of::<P>() == std::any::TypeId::of::<SliverProtocol>() {
-            // SAFETY: We just checked TypeId matches
-            Some(unsafe { &mut *(self as *mut RenderState<P> as *mut RenderState<SliverProtocol>) })
         } else {
             None
         }
@@ -556,12 +514,12 @@ impl RenderElement {
 
     /// Returns parent data (if set).
     pub fn parent_data(&self) -> Option<&dyn ParentData> {
-        self.parent_data.as_ref().map(|pd| &**pd)
+        self.parent_data.as_deref()
     }
 
     /// Returns mutable parent data.
     pub fn parent_data_mut(&mut self) -> Option<&mut dyn ParentData> {
-        self.parent_data.as_mut().map(|pd| &mut **pd)
+        self.parent_data.as_deref_mut()
     }
 
     /// Downcasts parent data to specific type.

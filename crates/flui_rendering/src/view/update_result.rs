@@ -3,9 +3,10 @@
 /// Result of updating a render object
 ///
 /// Returned by `RenderView::update()` to indicate what changed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum UpdateResult {
     /// Nothing changed - skip work
+    #[default]
     Unchanged,
 
     /// Layout-affecting properties changed - needs relayout
@@ -32,11 +33,5 @@ impl UpdateResult {
     #[inline]
     pub fn needs_paint(self) -> bool {
         matches!(self, Self::NeedsLayout | Self::NeedsPaint)
-    }
-}
-
-impl Default for UpdateResult {
-    fn default() -> Self {
-        Self::Unchanged
     }
 }

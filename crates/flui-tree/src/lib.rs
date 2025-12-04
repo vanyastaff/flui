@@ -226,8 +226,6 @@ pub use traits::{
     Lifecycle,
     LinearReconciler,
     MoveAction,
-    // Multi alias for Variable (backwards compatibility)
-    Multi,
     NodeMatcher,
     NotificationPolicy,
     OwnerTracking,

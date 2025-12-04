@@ -445,92 +445,6 @@ pub trait RenderSliver<A: Arity>: RenderObject + fmt::Debug + Send + Sync {
 }
 
 // ============================================================================
-// GEOMETRY VALIDATION HELPER
-// ============================================================================
-
-/// Validates sliver geometry in debug builds (Flutter protocol compliance).
-///
-/// Checks invariants:
-/// - `paint_extent ≤ remaining_paint_extent`
-/// - `layout_extent ≤ paint_extent`
-/// - `paint_extent ≤ scroll_extent`
-/// - `max_paint_extent ≥ paint_extent`
-#[cfg(debug_assertions)]
-pub fn validate_sliver_geometry(geometry: &SliverGeometry, constraints: &SliverConstraints) {
-    // Verify paint_extent ≤ remaining_paint_extent
-    debug_assert!(
-        geometry.paint_extent <= constraints.remaining_paint_extent + 0.001,
-        "Sliver geometry violation: paint_extent ({}) exceeds remaining_paint_extent ({})",
-        geometry.paint_extent,
-        constraints.remaining_paint_extent
-    );
-
-    // Verify layout_extent ≤ paint_extent
-    if let Some(layout_extent) = geometry.layout_extent {
-        debug_assert!(
-            layout_extent <= geometry.paint_extent + 0.001,
-            "Sliver geometry violation: layout_extent ({}) exceeds paint_extent ({})",
-            layout_extent,
-            geometry.paint_extent
-        );
-    }
-
-    // Verify paint_extent ≤ scroll_extent (unless pinned/floating)
-    debug_assert!(
-        geometry.paint_extent <= geometry.scroll_extent + 0.001,
-        "Sliver geometry violation: paint_extent ({}) exceeds scroll_extent ({})",
-        geometry.paint_extent,
-        geometry.scroll_extent
-    );
-
-    // Verify max_paint_extent ≥ paint_extent
-    if let Some(max_paint) = geometry.max_paint_extent {
-        debug_assert!(
-            max_paint >= geometry.paint_extent - 0.001,
-            "Sliver geometry violation: max_paint_extent ({}) less than paint_extent ({})",
-            max_paint,
-            geometry.paint_extent
-        );
-    }
-}
-
-// ============================================================================
-// HELPER EXTENSION TRAIT
-// ============================================================================
-
-/// Extension trait for SliverGeometry helpers.
-pub trait SliverGeometryExt {
-    /// Creates zero geometry (all extents are 0).
-    fn zero() -> Self;
-
-    /// Returns true if this geometry has visible content.
-    fn is_visible(&self) -> bool;
-
-    /// Returns true if completely scrolled off-screen.
-    fn is_scrolled_off_screen(&self, scroll_offset: f32) -> bool;
-}
-
-impl SliverGeometryExt for SliverGeometry {
-    fn zero() -> Self {
-        Self {
-            scroll_extent: 0.0,
-            paint_extent: 0.0,
-            layout_extent: Some(0.0),
-            max_paint_extent: Some(0.0),
-            ..Default::default()
-        }
-    }
-
-    fn is_visible(&self) -> bool {
-        self.paint_extent > 0.0
-    }
-
-    fn is_scrolled_off_screen(&self, scroll_offset: f32) -> bool {
-        scroll_offset >= self.scroll_extent
-    }
-}
-
-// ============================================================================
 // TESTS
 // ============================================================================
 
@@ -538,7 +452,6 @@ impl SliverGeometryExt for SliverGeometry {
 mod tests {
     use super::*;
     use crate::core::arity::Leaf;
-    use std::marker::PhantomData;
 
     #[derive(Debug)]
     struct TestRenderSliver {
@@ -627,8 +540,6 @@ mod tests {
             ..Default::default()
         };
         assert!(visible.is_visible());
-        assert!(!visible.is_scrolled_off_screen(50.0));
-        assert!(visible.is_scrolled_off_screen(150.0));
     }
 
     #[cfg(debug_assertions)]

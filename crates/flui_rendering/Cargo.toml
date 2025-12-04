@@ -19,8 +19,6 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 serde = { workspace = true, optional = true }
 once_cell = { workspace = true }
-
-# Essential dependencies for render core
 bitflags = { workspace = true }
 
 [dev-dependencies]
@@ -28,7 +26,4 @@ criterion.workspace = true
 
 [features]
 default = []
-
-# === Serialization ===
-# Serde support for render objects
 serde = ["dep:serde", "flui_types/serde"]

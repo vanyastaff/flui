@@ -103,7 +103,10 @@ pub use core::{HitTestTree, HitTestTreeExt, LayoutTree, LayoutTreeExt, PaintTree
 pub use core::BoxConstraints;
 
 // Protocol system
-pub use core::{BoxProtocol, Protocol, SliverProtocol};
+pub use core::{BoxProtocol, Protocol, ProtocolId, SliverProtocol};
+
+// RenderElement and lifecycle
+pub use core::{RenderElement, RenderLifecycle};
 
 // Arity system (re-exported from flui-tree)
 pub use core::{Arity, AtLeast, ChildrenAccess, Exact, Leaf, Optional, Range, Single, Variable};

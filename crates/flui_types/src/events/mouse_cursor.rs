@@ -486,7 +486,7 @@ impl SystemMouseCursor {
         const IDC_IBEAM: u32 = 32513;
         const IDC_WAIT: u32 = 32514;
         const IDC_CROSS: u32 = 32515;
-        const IDC_UPARROW: u32 = 32516;
+        const _IDC_UPARROW: u32 = 32516;
         const IDC_SIZENWSE: u32 = 32642;
         const IDC_SIZENESW: u32 = 32643;
         const IDC_SIZEWE: u32 = 32644;

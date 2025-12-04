@@ -559,7 +559,7 @@ mod tests {
     // Simple test proxy box
     #[derive(Debug)]
     struct TestProxyBox {
-        label: String,
+        _label: String,
     }
 
     impl RenderProxyBox for TestProxyBox {}
@@ -577,7 +577,7 @@ mod tests {
     // Simple test proxy sliver
     #[derive(Debug)]
     struct TestProxySliver {
-        label: String,
+        _label: String,
     }
 
     impl RenderProxySliver for TestProxySliver {}
@@ -595,7 +595,7 @@ mod tests {
     #[test]
     fn test_proxy_box_is_render_box() {
         let proxy = TestProxyBox {
-            label: "test".to_string(),
+            _label: "test".to_string(),
         };
 
         // Should compile - TestProxyBox implements RenderBox<Single>
@@ -605,7 +605,7 @@ mod tests {
     #[test]
     fn test_proxy_sliver_is_render_sliver() {
         let proxy = TestProxySliver {
-            label: "test".to_string(),
+            _label: "test".to_string(),
         };
 
         // Should compile - TestProxySliver implements RenderSliver<Single>
@@ -615,7 +615,7 @@ mod tests {
     #[test]
     fn test_compute_size_for_no_child() {
         let proxy = TestProxyBox {
-            label: "test".to_string(),
+            _label: "test".to_string(),
         };
 
         let constraints = BoxConstraints::tight(Size::new(100.0, 50.0));

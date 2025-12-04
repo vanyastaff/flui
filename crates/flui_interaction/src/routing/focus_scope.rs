@@ -977,6 +977,7 @@ pub(crate) struct FocusManagerInner {
     listeners: RwLock<Vec<Arc<dyn Fn(Option<FocusNodeId>, Option<FocusNodeId>) + Send + Sync>>>,
 }
 
+#[allow(dead_code)] // Future public API for focus management
 impl FocusManagerInner {
     pub fn new() -> Arc<Self> {
         let root_scope = FocusScopeNode::with_debug_label("Root Focus Scope");

@@ -128,19 +128,15 @@ use super::flags::AtomicRenderFlags;
 /// Note: Flags are authoritative for dirty state. Lifecycle is for phase tracking.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
+#[derive(Default)]
 pub enum RenderLifecycle {
+    #[default]
     Detached = 0,
     Attached = 1,
     NeedsLayout = 2,
     LaidOut = 3,
     NeedsPaint = 4,
     Painted = 5,
-}
-
-impl Default for RenderLifecycle {
-    fn default() -> Self {
-        Self::Detached
-    }
 }
 
 // ============================================================================

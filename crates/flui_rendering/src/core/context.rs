@@ -433,7 +433,7 @@ where
         let mut results = Vec::with_capacity(children.len());
 
         for child_id in children {
-            let geometry = self.layout_child(child_id, constraints.clone())?;
+            let geometry = self.layout_child(child_id, constraints)?;
             results.push((child_id, geometry));
         }
 
@@ -455,7 +455,7 @@ impl<'a, T: LayoutTree> LayoutContext<'a, Single, SliverProtocol, T> {
     /// Layouts the single child with the current constraints.
     pub fn layout_single_child(&mut self) -> RenderResult<SliverGeometry> {
         let child_id = self.single_child();
-        self.layout_child(child_id, self.constraints.clone())
+        self.layout_child(child_id, self.constraints)
     }
 
     /// Layouts the single child with transformed constraints.
@@ -464,7 +464,7 @@ impl<'a, T: LayoutTree> LayoutContext<'a, Single, SliverProtocol, T> {
         F: FnOnce(SliverConstraints) -> SliverConstraints,
     {
         let child_id = self.single_child();
-        let transformed_constraints = transform(self.constraints.clone());
+        let transformed_constraints = transform(self.constraints);
         self.layout_child(child_id, transformed_constraints)
     }
 }
@@ -702,7 +702,7 @@ where
     /// This is equivalent to `ctx.geometry` but more ergonomic.
     #[inline]
     pub fn sliver_geometry(&self) -> SliverGeometry {
-        self.geometry.clone()
+        self.geometry
     }
 
     /// Returns the paint extent (how much space is visible).
@@ -889,7 +889,7 @@ where
             element_id: self.element_id,
             position: new_position,
             geometry: self.geometry.clone(),
-            children_accessor: self.children_accessor.clone(),
+            children_accessor: self.children_accessor,
             _phantom: PhantomData,
         }
     }
@@ -979,7 +979,7 @@ where
     /// Returns the sliver geometry (convenience for Sliver protocol).
     #[inline]
     pub fn sliver_geometry(&self) -> SliverGeometry {
-        self.geometry.clone()
+        self.geometry
     }
 
     /// Adds this element to the hit test result.

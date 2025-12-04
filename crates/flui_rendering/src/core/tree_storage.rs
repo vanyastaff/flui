@@ -44,9 +44,9 @@ use flui_painting::Canvas;
 use flui_tree::{RenderTreeAccess, TreeNav, TreeRead};
 use flui_types::{BoxConstraints, Offset, Size, SliverConstraints, SliverGeometry};
 
-use crate::core::{BoxRenderState, HitTestTree, LayoutTree, PaintTree, SliverRenderState};
-use flui_types::Axis;
+use crate::core::{HitTestTree, LayoutTree, PaintTree, RenderStateExt};
 use crate::error::RenderError;
+use flui_types::Axis;
 
 // ============================================================================
 // RENDER TREE STORAGE TRAIT
@@ -183,19 +183,11 @@ impl<T: RenderTreeStorage> RenderTree<T> {
 impl<T: RenderTreeStorage> RenderTree<T> {
     /// Gets the offset of an element (internal helper to avoid trait method ambiguity).
     ///
-    /// Supports both Box and Sliver protocols.
+    /// Supports both Box and Sliver protocols via `RenderStateExt`.
     fn get_element_offset(&self, id: ElementId) -> Option<Offset> {
-        self.storage.render_state(id).and_then(|state| {
-            // Try Box protocol first (most common)
-            if let Some(box_state) = state.downcast_ref::<BoxRenderState>() {
-                return Some(box_state.offset());
-            }
-            // Try Sliver protocol
-            if let Some(sliver_state) = state.downcast_ref::<SliverRenderState>() {
-                return Some(sliver_state.offset());
-            }
-            None
-        })
+        self.storage
+            .render_state(id)
+            .and_then(|state| state.offset())
     }
 
     /// Gets hit test bounds for an element based on its protocol type.
@@ -208,13 +200,12 @@ impl<T: RenderTreeStorage> RenderTree<T> {
             .render_state(id)
             .and_then(|state| {
                 // Try Box protocol first (most common)
-                if let Some(box_state) = state.downcast_ref::<BoxRenderState>() {
-                    let size = box_state.geometry().unwrap_or(Size::ZERO);
+                if let Some(size) = state.box_geometry() {
                     return Some(flui_types::Rect::from_min_size(Offset::ZERO, size));
                 }
 
                 // Try Sliver protocol
-                if let Some(sliver_state) = state.downcast_ref::<SliverRenderState>() {
+                if let Some(sliver_state) = state.as_sliver_state() {
                     let geometry = sliver_state.geometry().unwrap_or(SliverGeometry::zero());
                     let bounds = compute_sliver_hit_bounds(
                         &geometry,
@@ -357,7 +348,7 @@ impl<T: RenderTreeStorage> RenderTree<T> {
         for id in elements {
             // Update compositing bits for each element
             if let Some(state) = self.storage.render_state(id) {
-                if let Some(box_state) = state.downcast_ref::<BoxRenderState>() {
+                if let Some(box_state) = state.as_box_state() {
                     box_state.clear_needs_compositing();
                 }
             }
@@ -375,8 +366,8 @@ impl<T: RenderTreeStorage> LayoutTree for RenderTree<T> {
         id: ElementId,
         constraints: BoxConstraints,
     ) -> Result<Size, RenderError> {
-        // Get render object
-        let render_obj = self
+        // Get render object (validates it exists)
+        let _render_obj = self
             .storage
             .render_object(id)
             .ok_or_else(|| RenderError::not_render_element(id))?;
@@ -387,14 +378,12 @@ impl<T: RenderTreeStorage> LayoutTree for RenderTree<T> {
 
         // Get render state to check/set dirty flags
         if let Some(state) = self.storage.render_state(id) {
-            if let Some(box_state) = state.downcast_ref::<BoxRenderState>() {
-                // Clear needs_layout flag
-                box_state.clear_needs_layout();
+            // Clear needs_layout flag
+            state.clear_needs_layout();
 
-                // Return cached geometry if available
-                if let Some(size) = box_state.geometry() {
-                    return Ok(size);
-                }
+            // Return cached geometry if available
+            if let Some(size) = state.box_geometry() {
+                return Ok(size);
             }
         }
 
@@ -402,13 +391,10 @@ impl<T: RenderTreeStorage> LayoutTree for RenderTree<T> {
         // For now, return a default size
         let size = constraints.constrain(Size::new(100.0, 100.0));
 
-        // Cache the result
-        if let Some(state) = self.storage.render_state(id) {
-            if let Some(box_state) = state.downcast_ref::<BoxRenderState>() {
-                // Note: set_geometry will panic if already set - that's intentional
-                // box_state.set_geometry(size);
-            }
-        }
+        // Cache the result - currently disabled (set_geometry panics if already set)
+        // if let Some(box_state) = self.storage.render_state(id).and_then(|s| s.as_box_state()) {
+        //     box_state.set_geometry(size);
+        // }
 
         Ok(size)
     }
@@ -416,7 +402,7 @@ impl<T: RenderTreeStorage> LayoutTree for RenderTree<T> {
     fn perform_sliver_layout(
         &mut self,
         id: ElementId,
-        constraints: SliverConstraints,
+        _constraints: SliverConstraints,
     ) -> Result<SliverGeometry, RenderError> {
         // Get render object
         let _render_obj = self
@@ -429,27 +415,23 @@ impl<T: RenderTreeStorage> LayoutTree for RenderTree<T> {
     }
 
     fn set_offset(&mut self, id: ElementId, offset: Offset) {
-        if let Some(state) = self.storage.render_state(id) {
-            if let Some(box_state) = state.downcast_ref::<BoxRenderState>() {
-                box_state.set_offset(offset);
-            }
+        if let Some(box_state) = self.storage.render_state(id).and_then(|s| s.as_box_state()) {
+            box_state.set_offset(offset);
         }
     }
 
     fn get_offset(&self, id: ElementId) -> Option<Offset> {
         self.storage
             .render_state(id)
-            .and_then(|state| state.downcast_ref::<BoxRenderState>().map(|s| s.offset()))
+            .and_then(|state| state.offset())
     }
 
     fn mark_needs_layout(&mut self, id: ElementId) {
         self.needs_layout.insert(id);
 
         // Also mark the render state flag
-        if let Some(state) = self.storage.render_state(id) {
-            if let Some(box_state) = state.downcast_ref::<BoxRenderState>() {
-                box_state.flags().mark_needs_layout();
-            }
+        if let Some(flags) = self.storage.render_state(id).and_then(|s| s.render_flags()) {
+            flags.mark_needs_layout();
         }
     }
 
@@ -461,8 +443,7 @@ impl<T: RenderTreeStorage> LayoutTree for RenderTree<T> {
         // Also check render state flag
         self.storage
             .render_state(id)
-            .and_then(|state| state.downcast_ref::<BoxRenderState>())
-            .map(|s| s.needs_layout())
+            .map(|state| state.needs_layout())
             .unwrap_or(false)
     }
 
@@ -485,7 +466,7 @@ impl<T: RenderTreeStorage> LayoutTree for RenderTree<T> {
 // ============================================================================
 
 impl<T: RenderTreeStorage> PaintTree for RenderTree<T> {
-    fn perform_paint(&mut self, id: ElementId, offset: Offset) -> Result<Canvas, RenderError> {
+    fn perform_paint(&mut self, id: ElementId, _offset: Offset) -> Result<Canvas, RenderError> {
         // Get render object
         let _render_obj = self
             .storage
@@ -494,9 +475,7 @@ impl<T: RenderTreeStorage> PaintTree for RenderTree<T> {
 
         // Clear needs_paint flag
         if let Some(state) = self.storage.render_state(id) {
-            if let Some(box_state) = state.downcast_ref::<BoxRenderState>() {
-                box_state.clear_needs_paint();
-            }
+            state.clear_needs_paint();
         }
 
         // TODO: Actually call render_object.paint() with proper context
@@ -510,10 +489,8 @@ impl<T: RenderTreeStorage> PaintTree for RenderTree<T> {
         self.needs_paint.insert(id);
 
         // Also mark the render state flag
-        if let Some(state) = self.storage.render_state(id) {
-            if let Some(box_state) = state.downcast_ref::<BoxRenderState>() {
-                box_state.flags().mark_needs_paint();
-            }
+        if let Some(flags) = self.storage.render_state(id).and_then(|s| s.render_flags()) {
+            flags.mark_needs_paint();
         }
     }
 
@@ -524,8 +501,7 @@ impl<T: RenderTreeStorage> PaintTree for RenderTree<T> {
 
         self.storage
             .render_state(id)
-            .and_then(|state| state.downcast_ref::<BoxRenderState>())
-            .map(|s| s.needs_paint())
+            .map(|state| state.needs_paint())
             .unwrap_or(false)
     }
 

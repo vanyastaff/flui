@@ -92,7 +92,7 @@ pub use parent_data::{
 // ============================================================================
 
 pub use flags::{AtomicRenderFlags, RenderFlags};
-pub use state::{BoxRenderState, RenderState, SliverRenderState};
+pub use state::{BoxRenderState, RenderState, RenderStateExt, SliverRenderState};
 
 // ============================================================================
 // CONTEXTS (GAT-based)
