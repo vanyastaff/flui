@@ -44,7 +44,8 @@ use flui_painting::Canvas;
 use flui_tree::{RenderTreeAccess, TreeNav, TreeRead};
 use flui_types::{BoxConstraints, Offset, Size, SliverConstraints, SliverGeometry};
 
-use crate::core::{BoxRenderState, HitTestTree, LayoutTree, PaintTree};
+use crate::core::{BoxRenderState, HitTestTree, LayoutTree, PaintTree, SliverRenderState};
+use flui_types::Axis;
 use crate::error::RenderError;
 
 // ============================================================================
@@ -181,10 +182,51 @@ impl<T: RenderTreeStorage> RenderTree<T> {
 
 impl<T: RenderTreeStorage> RenderTree<T> {
     /// Gets the offset of an element (internal helper to avoid trait method ambiguity).
+    ///
+    /// Supports both Box and Sliver protocols.
     fn get_element_offset(&self, id: ElementId) -> Option<Offset> {
+        self.storage.render_state(id).and_then(|state| {
+            // Try Box protocol first (most common)
+            if let Some(box_state) = state.downcast_ref::<BoxRenderState>() {
+                return Some(box_state.offset());
+            }
+            // Try Sliver protocol
+            if let Some(sliver_state) = state.downcast_ref::<SliverRenderState>() {
+                return Some(sliver_state.offset());
+            }
+            None
+        })
+    }
+
+    /// Gets hit test bounds for an element based on its protocol type.
+    ///
+    /// Supports both Box and Sliver protocols:
+    /// - Box: Uses geometry (Size) directly
+    /// - Sliver: Computes bounds from hit_test_extent and cross_axis_extent
+    fn get_hit_test_bounds(&self, id: ElementId) -> flui_types::Rect {
         self.storage
             .render_state(id)
-            .and_then(|state| state.downcast_ref::<BoxRenderState>().map(|s| s.offset()))
+            .and_then(|state| {
+                // Try Box protocol first (most common)
+                if let Some(box_state) = state.downcast_ref::<BoxRenderState>() {
+                    let size = box_state.geometry().unwrap_or(Size::ZERO);
+                    return Some(flui_types::Rect::from_min_size(Offset::ZERO, size));
+                }
+
+                // Try Sliver protocol
+                if let Some(sliver_state) = state.downcast_ref::<SliverRenderState>() {
+                    let geometry = sliver_state.geometry().unwrap_or(SliverGeometry::zero());
+                    let bounds = compute_sliver_hit_bounds(
+                        &geometry,
+                        sliver_state.constraints(),
+                        Axis::Vertical,
+                    );
+                    return Some(bounds);
+                }
+
+                None
+            })
+            .unwrap_or(flui_types::Rect::ZERO)
     }
 
     /// Returns elements needing layout.
@@ -506,22 +548,16 @@ impl<T: RenderTreeStorage> PaintTree for RenderTree<T> {
 
 impl<T: RenderTreeStorage> HitTestTree for RenderTree<T> {
     fn hit_test(&self, id: ElementId, position: Offset, result: &mut HitTestResult) -> bool {
-        // Get render object
-        let render_obj = match self.storage.render_object(id) {
+        // Get render object - must exist for hit testing
+        let _render_obj = match self.storage.render_object(id) {
             Some(obj) => obj,
             None => return false,
         };
 
-        // Get geometry to check bounds
-        let size = self
-            .storage
-            .render_state(id)
-            .and_then(|state| state.downcast_ref::<BoxRenderState>())
-            .and_then(|s| s.geometry())
-            .unwrap_or(Size::ZERO);
+        // Get bounds based on protocol type (Box or Sliver)
+        let bounds = self.get_hit_test_bounds(id);
 
         // Check if position is within bounds
-        let bounds = flui_types::Rect::from_min_size(Offset::ZERO, size);
         if !bounds.contains(position) {
             return false;
         }
@@ -588,15 +624,168 @@ impl<T: RenderTreeStorage + Default> Default for RenderTree<T> {
 // TESTS
 // ============================================================================
 
+// ============================================================================
+// HELPER FUNCTIONS FOR HIT TESTING
+// ============================================================================
+
+/// Computes hit test bounds for a Sliver element.
+///
+/// # Arguments
+///
+/// * `geometry` - The sliver geometry containing hit_test_extent
+/// * `constraints` - Optional constraints for cross_axis_extent
+/// * `default_axis` - Default axis if constraints not available
+///
+/// # Returns
+///
+/// A `Rect` representing the hit testable area, or `Rect::ZERO` if not hit testable.
+#[inline]
+pub fn compute_sliver_hit_bounds(
+    geometry: &SliverGeometry,
+    constraints: Option<&SliverConstraints>,
+    default_axis: Axis,
+) -> flui_types::Rect {
+    if !geometry.is_hit_testable() {
+        return flui_types::Rect::ZERO;
+    }
+
+    let cross_axis_extent = constraints.map(|c| c.cross_axis_extent).unwrap_or(0.0);
+    let hit_extent = geometry.hit_test_extent();
+    let axis = constraints.map(|c| c.axis).unwrap_or(default_axis);
+
+    let size = match axis {
+        Axis::Vertical => Size::new(cross_axis_extent, hit_extent),
+        Axis::Horizontal => Size::new(hit_extent, cross_axis_extent),
+    };
+
+    flui_types::Rect::from_min_size(Offset::ZERO, size)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_types::constraints::GrowthDirection;
+    use flui_types::layout::AxisDirection;
 
     // Note: We cannot create a MockStorage that implements TreeRead/TreeNav
     // because they are sealed traits. Tests with actual storage (ElementTree)
     // should be in integration tests.
 
-    // For now, we test the dirty set management which doesn't require storage.
+    // ========================================================================
+    // SLIVER HIT TEST BOUNDS TESTS
+    // ========================================================================
+
+    #[test]
+    fn test_compute_sliver_hit_bounds_vertical() {
+        let geometry = SliverGeometry::new(200.0, 100.0, 0.0);
+        let constraints = SliverConstraints::new(
+            AxisDirection::TopToBottom,
+            GrowthDirection::Forward,
+            Axis::Vertical,
+            0.0,
+            100.0,
+            600.0,
+            300.0, // cross_axis_extent
+        );
+
+        let bounds = compute_sliver_hit_bounds(&geometry, Some(&constraints), Axis::Vertical);
+
+        // Vertical axis: width = cross_axis_extent, height = hit_test_extent
+        assert_eq!(bounds.width(), 300.0);
+        assert_eq!(bounds.height(), 100.0); // hit_test_extent defaults to paint_extent
+    }
+
+    #[test]
+    fn test_compute_sliver_hit_bounds_horizontal() {
+        let geometry = SliverGeometry::new(200.0, 100.0, 0.0);
+        let constraints = SliverConstraints::new(
+            AxisDirection::LeftToRight,
+            GrowthDirection::Forward,
+            Axis::Horizontal,
+            0.0,
+            100.0,
+            800.0,
+            400.0, // cross_axis_extent
+        );
+
+        let bounds = compute_sliver_hit_bounds(&geometry, Some(&constraints), Axis::Horizontal);
+
+        // Horizontal axis: width = hit_test_extent, height = cross_axis_extent
+        assert_eq!(bounds.width(), 100.0); // hit_test_extent defaults to paint_extent
+        assert_eq!(bounds.height(), 400.0);
+    }
+
+    #[test]
+    fn test_compute_sliver_hit_bounds_with_explicit_hit_extent() {
+        let geometry = SliverGeometry::new(200.0, 100.0, 0.0).with_hit_test_extent(80.0);
+        let constraints = SliverConstraints::new(
+            AxisDirection::TopToBottom,
+            GrowthDirection::Forward,
+            Axis::Vertical,
+            0.0,
+            100.0,
+            600.0,
+            300.0,
+        );
+
+        let bounds = compute_sliver_hit_bounds(&geometry, Some(&constraints), Axis::Vertical);
+
+        assert_eq!(bounds.width(), 300.0);
+        assert_eq!(bounds.height(), 80.0); // explicit hit_test_extent
+    }
+
+    #[test]
+    fn test_compute_sliver_hit_bounds_not_hit_testable() {
+        // Zero geometry is not hit testable
+        let geometry = SliverGeometry::zero();
+        let constraints = SliverConstraints::new(
+            AxisDirection::TopToBottom,
+            GrowthDirection::Forward,
+            Axis::Vertical,
+            0.0,
+            100.0,
+            600.0,
+            300.0,
+        );
+
+        let bounds = compute_sliver_hit_bounds(&geometry, Some(&constraints), Axis::Vertical);
+
+        assert_eq!(bounds, flui_types::Rect::ZERO);
+    }
+
+    #[test]
+    fn test_compute_sliver_hit_bounds_invisible() {
+        let geometry = SliverGeometry::new(200.0, 100.0, 0.0).with_visible(false);
+        let constraints = SliverConstraints::new(
+            AxisDirection::TopToBottom,
+            GrowthDirection::Forward,
+            Axis::Vertical,
+            0.0,
+            100.0,
+            600.0,
+            300.0,
+        );
+
+        let bounds = compute_sliver_hit_bounds(&geometry, Some(&constraints), Axis::Vertical);
+
+        // Invisible sliver is not hit testable
+        assert_eq!(bounds, flui_types::Rect::ZERO);
+    }
+
+    #[test]
+    fn test_compute_sliver_hit_bounds_no_constraints() {
+        let geometry = SliverGeometry::new(200.0, 100.0, 0.0);
+
+        // Without constraints, uses default axis and zero cross_axis_extent
+        let bounds = compute_sliver_hit_bounds(&geometry, None, Axis::Vertical);
+
+        assert_eq!(bounds.width(), 0.0); // no cross_axis_extent
+        assert_eq!(bounds.height(), 100.0);
+    }
+
+    // ========================================================================
+    // DIRTY SET TESTS
+    // ========================================================================
 
     #[test]
     fn test_dirty_set_operations() {
