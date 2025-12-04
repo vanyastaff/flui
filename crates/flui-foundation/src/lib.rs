@@ -162,7 +162,7 @@ pub mod serde_support;
 
 // Core types
 pub use element_id::ElementId;
-pub use key::{Key, KeyRef};
+pub use key::{GlobalKey, Key, KeyRef, Keyed, ObjectKey, UniqueKey, ValueKey, ViewKey, WithKey};
 pub use slot::Slot;
 
 // Change notification
@@ -201,8 +201,9 @@ pub use async_utils::{AsyncChangeNotifier, AsyncValueNotifier};
 /// ```
 pub mod prelude {
     pub use crate::{
-        ChangeNotifier, DiagnosticLevel, Diagnosticable, DynNotification, ElementId, Key, KeyRef,
-        Listenable, ListenerCallback, ListenerId, Notification, Slot, ValueNotifier,
+        ChangeNotifier, DiagnosticLevel, Diagnosticable, DynNotification, ElementId, GlobalKey,
+        Key, KeyRef, Keyed, Listenable, ListenerCallback, ListenerId, Notification, ObjectKey,
+        Slot, UniqueKey, ValueKey, ValueNotifier, ViewKey, WithKey,
     };
 
     #[cfg(feature = "async")]
