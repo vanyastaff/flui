@@ -130,8 +130,8 @@ use flui_foundation::ElementId;
 use flui_types::Offset;
 use once_cell::sync::OnceCell;
 
+use super::flags::{AtomicRenderFlags, RenderFlags};
 use super::protocol::{BoxProtocol, Protocol, SliverProtocol};
-use super::render_flags::{AtomicRenderFlags, RenderFlags};
 
 // ============================================================================
 // TYPE ALIASES

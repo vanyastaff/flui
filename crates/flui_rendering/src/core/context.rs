@@ -15,7 +15,7 @@ use tracing::{instrument, trace};
 
 use super::arity::{Arity, ChildrenAccess, Single};
 use super::protocol::{BoxProtocol, Protocol, SliverProtocol};
-use super::render_tree::{HitTestTree, LayoutTree, PaintTree};
+use super::tree::{HitTestTree, LayoutTree, PaintTree};
 use crate::core::RenderResult;
 
 // ============================================================================

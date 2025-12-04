@@ -6,7 +6,7 @@
 pub mod arity;
 
 // Rendering contexts with GAT integration
-mod contexts;
+mod context;
 
 // Protocol definitions (Box, Sliver)
 pub mod protocol;
@@ -15,35 +15,37 @@ pub mod protocol;
 mod parent_data;
 
 // Base render object trait
-mod render_object;
+mod object;
 
 // Atomic render flags for lock-free state management
-mod render_flags;
+mod flags;
 
 // Per-render state storage with atomic flags
-mod render_state;
+mod state;
 
 // Box protocol render trait
-mod render_box;
+mod box_render;
 
 // Sliver protocol render trait
-mod render_sliver;
+mod sliver;
 
-// Full render tree traits (combines LayoutTree + PaintTree + HitTestTree)
-// Note: tree_ops.rs was removed - all tree traits are now in render_tree.rs
-mod render_tree;
+// Render tree traits (LayoutTree, PaintTree, HitTestTree, FullRenderTree)
+mod tree;
+
+// RenderTree<T> - Wrapper that adds rendering capabilities to any tree storage
+mod tree_storage;
 
 // Proxy traits for pass-through render objects
-mod render_proxy;
+mod proxy;
 
-// Utility wrappers and proxies
-mod wrappers;
+// Utility wrappers for render objects
+mod wrapper;
 
 // Render lifecycle states
-mod render_lifecycle;
+mod lifecycle;
 
 // Render element - core element type for rendering
-mod render_element;
+mod element;
 
 // Semantics tree for accessibility
 mod semantics;
@@ -73,9 +75,9 @@ pub use flui_types::{
 // CORE RENDER TRAITS
 // ============================================================================
 
-pub use render_box::RenderBox;
-pub use render_object::{new_layer_handle, LayerHandle, LayerRef, RenderObject};
-pub use render_sliver::RenderSliver;
+pub use box_render::RenderBox;
+pub use object::{new_layer_handle, LayerHandle, LayerRef, RenderObject};
+pub use sliver::RenderSliver;
 
 // ============================================================================
 // PARENT DATA SYSTEM
@@ -89,14 +91,14 @@ pub use parent_data::{
 // RENDER FLAGS AND STATE
 // ============================================================================
 
-pub use render_flags::{AtomicRenderFlags, RenderFlags};
-pub use render_state::{BoxRenderState, RenderState, SliverRenderState};
+pub use flags::{AtomicRenderFlags, RenderFlags};
+pub use state::{BoxRenderState, RenderState, SliverRenderState};
 
 // ============================================================================
 // CONTEXTS (GAT-based)
 // ============================================================================
 
-pub use contexts::{
+pub use context::{
     BoxHitTestContext,
     BoxLayoutContext,
     BoxPaintContext,
@@ -123,7 +125,7 @@ pub type SliverPaintCtx<'a, A, T = Box<dyn PaintTree + Send + Sync>> = SliverPai
 // TREE OPERATIONS (dyn-compatible)
 // ============================================================================
 
-pub use render_tree::{
+pub use tree::{
     // Debug utilities
     debug_element_info,
     format_element_debug,
@@ -149,23 +151,29 @@ pub use render_tree::{
 };
 
 // ============================================================================
+// RENDER TREE WRAPPER
+// ============================================================================
+
+pub use tree_storage::{RenderTree, RenderTreeStorage};
+
+// ============================================================================
 // PROXY TRAITS
 // ============================================================================
 
-pub use render_proxy::{RenderProxyBox, RenderProxySliver};
+pub use proxy::{RenderProxyBox, RenderProxySliver};
 
 // ============================================================================
 // WRAPPERS AND UTILITIES
 // ============================================================================
 
-pub use wrappers::{BoxRenderWrapper, SliverRenderWrapper};
+pub use wrapper::{BoxRenderWrapper, SliverRenderWrapper};
 
 // ============================================================================
 // RENDER ELEMENT
 // ============================================================================
 
-pub use render_element::RenderElement;
-pub use render_lifecycle::RenderLifecycle;
+pub use element::RenderElement;
+pub use lifecycle::RenderLifecycle;
 
 // ============================================================================
 // SEMANTICS / ACCESSIBILITY
@@ -244,6 +252,9 @@ pub mod prelude {
 
     // Tree operations
     pub use super::{HitTestTree, LayoutTree, PaintTree, RenderTreeOps};
+
+    // RenderTree wrapper
+    pub use super::{RenderTree, RenderTreeStorage};
 
     // Foundation types
     pub use super::{Canvas, ElementId, HitTestResult, Paint};

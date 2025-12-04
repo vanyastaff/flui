@@ -288,5 +288,7 @@ fn convert_system_cursor(cursor: SystemMouseCursor) -> CursorIcon {
         SystemMouseCursor::ZoomIn => CursorIcon::ZoomIn,
         SystemMouseCursor::ZoomOut => CursorIcon::ZoomOut,
         SystemMouseCursor::Help => CursorIcon::Help,
+        // Fallback for any new cursor types
+        _ => CursorIcon::Default,
     }
 }

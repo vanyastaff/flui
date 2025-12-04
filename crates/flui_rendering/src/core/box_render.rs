@@ -27,8 +27,8 @@ use flui_interaction::HitTestResult;
 use flui_types::{BoxConstraints, Offset, Rect, Size};
 
 use super::arity::Arity;
-use super::contexts::{BoxHitTestContext, BoxLayoutContext, BoxPaintContext};
-use super::render_object::RenderObject;
+use super::context::{BoxHitTestContext, BoxLayoutContext, BoxPaintContext};
+use super::object::RenderObject;
 use crate::RenderResult;
 
 // ============================================================================

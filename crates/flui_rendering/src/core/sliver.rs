@@ -27,8 +27,8 @@ use flui_interaction::HitTestResult;
 use flui_types::{Rect, SliverConstraints, SliverGeometry};
 
 use super::arity::Arity;
-use super::contexts::{SliverHitTestContext, SliverLayoutContext, SliverPaintContext};
-use super::render_object::RenderObject;
+use super::context::{SliverHitTestContext, SliverLayoutContext, SliverPaintContext};
+use super::object::RenderObject;
 use super::RenderResult;
 
 // ============================================================================

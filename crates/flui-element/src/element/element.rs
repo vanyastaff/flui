@@ -19,8 +19,10 @@
 use std::any::Any;
 
 use flui_foundation::{ElementId, Key, Slot};
+use flui_tree::RuntimeArity;
 use flui_view::ViewMode;
 
+use super::render_element::ProtocolId;
 use super::{ElementBase, ElementLifecycle, RenderElement, ViewElement};
 use crate::ViewObject;
 
@@ -56,12 +58,22 @@ impl Element {
     }
 
     /// Creates a new Render element with render object and state.
-    pub fn render<RO, RS>(render_object: RO, render_state: RS, mode: ViewMode) -> Self
+    pub fn render<RO, RS>(
+        render_object: RO,
+        render_state: RS,
+        protocol: ProtocolId,
+        arity: RuntimeArity,
+    ) -> Self
     where
         RO: Any + Send + Sync + 'static,
         RS: Any + Send + Sync + 'static,
     {
-        Self::Render(RenderElement::new(render_object, render_state, mode))
+        Self::Render(RenderElement::new(
+            render_object,
+            render_state,
+            protocol,
+            arity,
+        ))
     }
 
     /// Creates an empty element (View variant).
@@ -156,11 +168,15 @@ impl Element {
     }
 
     /// Set the view mode.
+    ///
+    /// Note: For `Render` elements, view mode is derived from protocol and cannot be changed.
     #[inline]
     pub fn set_view_mode(&mut self, mode: ViewMode) {
         match self {
             Self::View(v) => v.set_view_mode(mode),
-            Self::Render(r) => r.set_view_mode(mode),
+            Self::Render(_) => {
+                // RenderElement's view_mode is derived from protocol, ignore
+            }
         }
     }
 

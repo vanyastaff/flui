@@ -76,7 +76,7 @@
 
 use std::fmt;
 
-use super::render_flags::AtomicRenderFlags;
+use super::flags::AtomicRenderFlags;
 
 // ============================================================================
 // RENDER LIFECYCLE STATE MACHINE
