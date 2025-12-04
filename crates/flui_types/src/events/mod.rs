@@ -15,11 +15,13 @@
 //! propagation control) that belongs in the interaction layer.
 
 pub mod keyboard;
+pub mod mouse_cursor;
 pub mod pointer;
 pub mod window;
 
 // Re-export all public types
 pub use keyboard::{KeyEvent, KeyEventData, KeyModifiers, LogicalKey, PhysicalKey};
+pub use mouse_cursor::{MouseCursor, SystemMouseCursor, SystemMouseCursors};
 pub use pointer::{PointerButton, PointerEvent, PointerEventData};
 pub use window::{ScrollDelta, ScrollEventData, Theme, WindowEvent};
 

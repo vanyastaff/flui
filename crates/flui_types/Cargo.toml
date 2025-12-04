@@ -13,7 +13,6 @@ tracing = { workspace = true }
 # Serialization support (optional)
 serde = { workspace = true, optional = true }
 
-
 # Stack-allocated Vec for small collections (animation curves, color stops)
 smallvec = { workspace = true }
 
