@@ -69,6 +69,7 @@
 
 pub mod children;
 pub mod context;
+pub mod element;
 pub mod into_view;
 pub mod state;
 pub mod traits;
@@ -117,6 +118,14 @@ pub use children::{Child, Children};
 // Re-export from flui-foundation for convenience
 pub use flui_foundation::ElementId;
 
+// Re-export key types from flui-foundation
+pub use flui_foundation::{
+    GlobalKey, Key, KeyRef, Keyed, ObjectKey, UniqueKey, ValueKey, ViewKey, WithKey,
+};
+
+// Element types (ViewElement, ViewLifecycle, ViewFlags)
+pub use element::{AtomicViewFlags, PendingChildren, ViewElement, ViewFlags, ViewLifecycle};
+
 // ============================================================================
 // PRELUDE
 // ============================================================================
@@ -128,6 +137,7 @@ pub use flui_foundation::ElementId;
 /// ```
 pub mod prelude {
     pub use crate::context::BuildContext;
+    pub use crate::element::{ViewElement, ViewLifecycle};
     pub use crate::empty::EmptyView;
     pub use crate::into_view::IntoView;
     pub use crate::traits::{
@@ -136,4 +146,9 @@ pub mod prelude {
     pub use crate::view_mode::ViewMode;
     pub use crate::view_object::ViewObject;
     pub use crate::wrappers::{Animated, Provider, Proxy, Stateful, Stateless};
+
+    // Re-export key types from flui-foundation
+    pub use flui_foundation::{
+        GlobalKey, Key, KeyRef, Keyed, ObjectKey, UniqueKey, ValueKey, ViewKey, WithKey,
+    };
 }

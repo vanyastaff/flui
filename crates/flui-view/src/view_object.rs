@@ -95,6 +95,12 @@ pub trait ViewObject: Send + Sync + 'static {
     /// Called when element is deactivated (moved to cache)
     fn deactivate(&mut self, _ctx: &dyn BuildContext) {}
 
+    /// Called when element is reactivated (moved from cache back to tree)
+    ///
+    /// Opposite of `deactivate()`. Called when a previously deactivated
+    /// element is reinserted into the tree.
+    fn activate(&mut self, _ctx: &dyn BuildContext) {}
+
     /// Called when element is permanently removed
     ///
     /// Clean up resources here.

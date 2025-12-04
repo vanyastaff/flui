@@ -68,6 +68,18 @@ impl<V: ProxyView> ViewObject for ProxyViewWrapper<V> {
         self.view.init(ctx);
     }
 
+    fn did_change_dependencies(&mut self, ctx: &dyn BuildContext) {
+        self.view.did_change_dependencies(ctx);
+    }
+
+    fn deactivate(&mut self, ctx: &dyn BuildContext) {
+        self.view.deactivate(ctx);
+    }
+
+    fn activate(&mut self, ctx: &dyn BuildContext) {
+        self.view.activate(ctx);
+    }
+
     fn dispose(&mut self, ctx: &dyn BuildContext) {
         self.view.dispose(ctx);
     }

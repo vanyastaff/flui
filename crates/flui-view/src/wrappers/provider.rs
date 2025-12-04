@@ -102,8 +102,14 @@ where
         Some(self.view.build(ctx).into_view())
     }
 
+    // ========== LIFECYCLE ==========
+
     fn init(&mut self, ctx: &dyn BuildContext) {
         self.view.init(ctx);
+    }
+
+    fn did_change_dependencies(&mut self, ctx: &dyn BuildContext) {
+        self.view.did_change_dependencies(ctx);
     }
 
     fn did_update(&mut self, old_view: &dyn Any, _ctx: &dyn BuildContext) {
@@ -122,10 +128,20 @@ where
         }
     }
 
+    fn deactivate(&mut self, ctx: &dyn BuildContext) {
+        self.view.deactivate(ctx);
+    }
+
+    fn activate(&mut self, ctx: &dyn BuildContext) {
+        self.view.activate(ctx);
+    }
+
     fn dispose(&mut self, ctx: &dyn BuildContext) {
         self.view.dispose(ctx);
         self.dependents.clear();
     }
+
+    // ========== DEBUG ==========
 
     fn debug_name(&self) -> &'static str {
         std::any::type_name::<V>()

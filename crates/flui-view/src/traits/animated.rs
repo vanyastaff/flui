@@ -1,6 +1,42 @@
 //! `AnimatedView` - Views that rebuild when animation values change
 //!
 //! For views that subscribe to animation changes and rebuild automatically.
+//!
+//! # Lifecycle
+//!
+//! `AnimatedView` follows Flutter-like lifecycle:
+//!
+//! ```text
+//! ┌─────────────────────────────────────────────────────────────┐
+//! │                     LIFECYCLE DIAGRAM                        │
+//! ├─────────────────────────────────────────────────────────────┤
+//! │                                                              │
+//! │  ┌──────────────┐                                           │
+//! │  │     init     │ ← Called once when element is mounted     │
+//! │  └──────┬───────┘   (subscribe to listenable here)          │
+//! │         │                                                    │
+//! │         ▼                                                    │
+//! │  ┌─────────────────────────┐                                │
+//! │  │ did_change_dependencies │ ← Called when dependencies     │
+//! │  └──────┬──────────────────┘   change (InheritedWidget)     │
+//! │         │                                                    │
+//! │         ▼                                                    │
+//! │  ┌──────────────┐                                           │
+//! │  │    build     │◄──────────────────┐                       │
+//! │  └──────┬───────┘                   │                       │
+//! │         │                           │                       │
+//! │         ▼                           │ (listenable.notify()) │
+//! │  ┌───────────────────┐              │                       │
+//! │  │ on_animation_tick │──────────────┘                       │
+//! │  └──────┬────────────┘                                      │
+//! │         │                                                    │
+//! │         ▼ (element unmounted)                               │
+//! │  ┌──────────────┐                                           │
+//! │  │   dispose    │ ← Unsubscribe from listenable             │
+//! │  └──────────────┘                                           │
+//! │                                                              │
+//! └─────────────────────────────────────────────────────────────┘
+//! ```
 
 use flui_foundation::ListenerId;
 
@@ -80,14 +116,48 @@ pub trait AnimatedView<L: Listenable>: Send + Sync + 'static {
     /// Framework subscribes to this listenable and triggers rebuild on notify.
     fn listenable(&self) -> &L;
 
-    /// Called on each animation tick (optional).
+    // ========== LIFECYCLE METHODS ==========
+
+    /// Initialize after element is mounted.
+    ///
+    /// Called once after the element has been inserted into the tree.
+    /// The framework automatically subscribes to the listenable after this.
+    ///
+    /// **Flutter equivalent:** `State.initState()`
+    #[allow(unused_variables)]
+    fn init(&mut self, ctx: &dyn BuildContext) {}
+
+    /// Called when an inherited widget dependency changes.
+    ///
+    /// **Flutter equivalent:** `State.didChangeDependencies()`
+    #[allow(unused_variables)]
+    fn did_change_dependencies(&mut self, ctx: &dyn BuildContext) {}
+
+    /// Called on each animation tick.
     ///
     /// Override for custom behavior on every animation frame.
-    fn on_animation_tick(&mut self, _ctx: &dyn BuildContext) {}
+    /// Called after listenable notifies but before rebuild.
+    #[allow(unused_variables)]
+    fn on_animation_tick(&mut self, ctx: &dyn BuildContext) {}
 
-    /// Initialize after element is mounted (optional).
-    fn init(&mut self, _ctx: &dyn BuildContext) {}
+    /// Called when the element is temporarily removed from the tree.
+    ///
+    /// **Flutter equivalent:** `State.deactivate()`
+    #[allow(unused_variables)]
+    fn deactivate(&mut self, ctx: &dyn BuildContext) {}
 
-    /// Called when element is disposed (optional).
-    fn dispose(&mut self, _ctx: &dyn BuildContext) {}
+    /// Called when the element is reinserted after being deactivated.
+    ///
+    /// **Flutter equivalent:** `State.activate()`
+    #[allow(unused_variables)]
+    fn activate(&mut self, ctx: &dyn BuildContext) {}
+
+    /// Called when element is permanently removed.
+    ///
+    /// The framework automatically unsubscribes from the listenable before this.
+    /// Clean up any additional resources here.
+    ///
+    /// **Flutter equivalent:** `State.dispose()`
+    #[allow(unused_variables)]
+    fn dispose(&mut self, ctx: &dyn BuildContext) {}
 }

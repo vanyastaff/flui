@@ -15,6 +15,7 @@ flui-tree = { path = "../flui-tree" }
 flui_types = { path = "../flui_types" }
 
 # Core dependencies
+bitflags.workspace = true
 parking_lot.workspace = true
 tracing.workspace = true
 
