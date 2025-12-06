@@ -1,4 +1,149 @@
-//! RenderSliverList - Scrollable list with lazy loading
+//! RenderSliverList - Lazy-loading scrollable list with viewport culling
+//!
+//! Implements Flutter's sliver list protocol for efficient scrolling through large
+//! lists. Uses lazy child building to only create visible and near-visible items,
+//! enabling smooth scrolling through thousands of items without performance issues.
+//! Fundamental building block for CustomScrollView, ListView, and infinite scrolling.
+//!
+//! # Flutter Equivalence
+//!
+//! | FLUI | Flutter |
+//! |------|---------|
+//! | `RenderSliverList` | `RenderSliverList` from `package:flutter/src/rendering/sliver_list.dart` |
+//! | `child_builder` | `childManager.createChild()` delegate pattern |
+//! | `item_extent` | `itemExtent` property (fixed extent optimization) |
+//! | `cross_axis_extent` | Cross-axis dimension from constraints |
+//! | `SliverChildBuilder` | `SliverChildDelegate` pattern |
+//! | `sliver_geometry` | `SliverGeometry` output |
+//!
+//! # Sliver Protocol
+//!
+//! Slivers use a specialized scroll-aware constraint/sizing model:
+//!
+//! **Input (SliverConstraints):**
+//! - `scroll_offset` - How far the viewport has scrolled
+//! - `remaining_paint_extent` - How much space left to paint in viewport
+//! - `cache_extent` - Extra space to build children for smooth scrolling
+//! - `viewport_main_axis_extent` - Total viewport size
+//!
+//! **Output (SliverGeometry):**
+//! - `scroll_extent` - Total scrollable extent of all children
+//! - `paint_extent` - How much actually painted in this frame
+//! - `max_paint_extent` - Maximum paint extent possible
+//! - `visible` - Whether any part is visible
+//!
+//! # Layout Protocol
+//!
+//! 1. **Calculate visible range**
+//!    - Determine which children are in viewport based on scroll_offset
+//!    - Expand range by cache_extent for smooth scrolling
+//!    - Use item_extent if fixed, otherwise measure children
+//!
+//! 2. **Lazy child building**
+//!    - Call child_builder for indices in visible + cache range
+//!    - Builder returns Some(true) to build, None to stop
+//!    - Children built lazily (not all at once)
+//!
+//! 3. **Layout visible children**
+//!    - Layout children in visible range with box constraints
+//!    - Fixed extent: all children get same height
+//!    - Variable extent: measure each child
+//!
+//! 4. **Calculate SliverGeometry**
+//!    - scroll_extent = total extent of all children
+//!    - paint_extent = extent of visible children
+//!    - max_paint_extent = scroll_extent (known or estimated)
+//!
+//! # Paint Protocol
+//!
+//! 1. **Paint only visible children**
+//!    - Skip children before visible range (culled)
+//!    - Paint children in visible range at calculated offsets
+//!    - Skip children after visible range (culled)
+//!
+//! 2. **Viewport culling optimization**
+//!    - Only paint what's actually visible
+//!    - Children outside viewport are not painted
+//!
+//! # Performance
+//!
+//! - **Layout**: O(v) where v = visible children - only layouts visible items
+//! - **Paint**: O(v) - only paints visible children
+//! - **Memory**: O(v + c) where c = cache extent children - not O(n) for all items!
+//! - **Child Building**: Lazy - children created on demand
+//!
+//! # Use Cases
+//!
+//! - **Large lists**: Scrollable lists with 1000s of items (contacts, feeds, chats)
+//! - **Infinite scroll**: Dynamically loading content as user scrolls
+//! - **Social feeds**: Twitter/Facebook style infinite scrolling feeds
+//! - **Message lists**: Chat histories with lazy loading
+//! - **Product catalogs**: E-commerce product listings
+//! - **Search results**: Paginated or infinite search results
+//!
+//! # Fixed vs Variable Extent
+//!
+//! ```text
+//! Fixed extent (item_extent = Some(50.0)):
+//! - All items same height (50px)
+//! - O(1) to calculate visible range
+//! - More efficient layout
+//! - Example: uniform list items, grid cells
+//!
+//! Variable extent (item_extent = None):
+//! - Items can have different heights
+//! - Must measure each item
+//! - More flexible but slower
+//! - Example: social media posts, chat bubbles
+//! ```
+//!
+//! # Viewport Culling Behavior
+//!
+//! ```text
+//! Scroll offset: 500px
+//! Viewport height: 600px
+//! Cache extent: 200px
+//!
+//! [0-500px]: Culled (before viewport)
+//! [500-1100px]: Visible (in viewport)
+//! [1100-1300px]: Cached (after viewport, prebuilt)
+//! [1300px+]: Not built (outside cache)
+//! ```
+//!
+//! # Comparison with Related Objects
+//!
+//! - **vs RenderColumn**: Column layouts all children, SliverList is lazy
+//! - **vs RenderListBody**: ListBody is simple sequential, SliverList is viewport-aware
+//! - **vs RenderSliverFixedExtentList**: SliverList allows variable extents
+//! - **vs RenderSliverGrid**: Grid is 2D layout, SliverList is 1D
+//!
+//! # Examples
+//!
+//! ```rust,ignore
+//! use flui_rendering::RenderSliverList;
+//!
+//! // Infinite list (lazy builder)
+//! let list = RenderSliverList::with_builder(|index| {
+//!     if index < 10000 {
+//!         Some(true) // Build item
+//!     } else {
+//!         None // Stop (reached end)
+//!     }
+//! });
+//!
+//! // Fixed extent list (optimized)
+//! let mut list = RenderSliverList::new();
+//! list.set_item_extent(50.0); // All items 50px tall
+//! list.child_builder = Some(Box::new(|index| {
+//!     (index < 1000).then_some(true)
+//! }));
+//!
+//! // Finite list with variable heights
+//! let data = vec![/* ... */];
+//! let list = RenderSliverList::with_builder(move |index| {
+//!     data.get(index).map(|_| true)
+//! });
+//! ```
 
 use flui_core::element::ElementTree;
 use crate::core::{RuntimeArity, SliverSliverBoxPaintCtx, LegacySliverRender};
@@ -11,32 +156,93 @@ use flui_types::{SliverConstraints, SliverGeometry};
 /// Returns None when no more children should be built.
 pub type SliverChildBuilder = Box<dyn Fn(usize) -> Option<bool> + Send + Sync>;
 
-/// RenderObject for scrollable lists with lazy loading
+/// RenderObject for lazy-loading scrollable lists with viewport culling.
 ///
-/// Unlike RenderColumn which lays out all children eagerly, RenderSliverList
-/// only builds and lays out children that are visible or near-visible (in cache).
-/// This enables efficient scrolling through large lists.
+/// Only builds and layouts children that are visible or near-visible (within cache
+/// extent), enabling efficient scrolling through thousands of items. Uses delegate
+/// pattern for lazy child building - children created on demand, not upfront.
 ///
-/// # Sliver Protocol
+/// # Arity
 ///
-/// Slivers use a different constraint/sizing model:
-/// - **Input**: SliverConstraints (scroll offset, remaining paint extent, cache extent)
-/// - **Output**: SliverGeometry (scroll extent, paint extent, visible)
+/// `RuntimeArity` (Variable) - Can have any number of children (0+), but only
+/// visible + cached children are actually built and laid out.
+///
+/// # Protocol
+///
+/// Sliver protocol - Uses `SliverConstraints` and returns `SliverGeometry`.
+///
+/// # Pattern
+///
+/// **Lazy Loading Viewport Container** - Builds children lazily via delegate,
+/// viewport culling (only visible children painted), cache extent for smooth
+/// scrolling, optional fixed extent optimization, scroll-aware layout.
+///
+/// # Use Cases
+///
+/// - **Large lists**: Contacts, feeds, chat histories with 1000s of items
+/// - **Infinite scroll**: Social media feeds, search results
+/// - **Product catalogs**: E-commerce listings with lazy loading
+/// - **Message lists**: Chat apps with dynamic loading
+/// - **Paginated content**: Dynamically loaded content as user scrolls
+///
+/// # Flutter Compliance
+///
+/// Matches Flutter's RenderSliverList behavior:
+/// - Lazy child building via delegate pattern
+/// - Viewport culling (only visible children laid out/painted)
+/// - Cache extent for smooth scrolling buffer
+/// - Fixed extent optimization (item_extent)
+/// - SliverGeometry output (scroll_extent, paint_extent, visible)
+/// - Uses SliverConstraints for scroll-aware layout
+///
+/// # Sliver Protocol Summary
+///
+/// **Input (SliverConstraints):**
+/// - scroll_offset - Current scroll position
+/// - remaining_paint_extent - Space available in viewport
+/// - cache_extent - Buffer for prebuilding children
+///
+/// **Output (SliverGeometry):**
+/// - scroll_extent - Total scrollable extent
+/// - paint_extent - Actually painted extent
+/// - visible - Whether any part is visible
+///
+/// # Fixed Extent Optimization
+///
+/// When `item_extent` is set, all children have uniform height:
+/// - O(1) to calculate which children are visible
+/// - More efficient layout and culling
+/// - Use for uniform list items
+///
+/// Without fixed extent, each child is measured individually:
+/// - More flexible (variable heights)
+/// - Slightly slower (must measure each)
+/// - Use for social media posts, chat bubbles
 ///
 /// # Example
 ///
 /// ```rust,ignore
 /// use flui_rendering::RenderSliverList;
 ///
-/// let list = RenderSliverList::new(
-///     |index| {
-///         if index < 1000 {
-///             Some(true) // Build child at this index
-///         } else {
-///             None // No more children
-///         }
+/// // Infinite lazy list
+/// let list = RenderSliverList::with_builder(|index| {
+///     if index < 10000 {
+///         Some(true) // Build item
+///     } else {
+///         None // End of list
 ///     }
-/// );
+/// });
+///
+/// // Fixed extent (optimized)
+/// let mut list = RenderSliverList::new();
+/// list.set_item_extent(50.0); // All items 50px
+/// list.child_builder = Some(Box::new(|i| (i < 1000).then_some(true)));
+///
+/// // Variable heights
+/// let items = vec![/* data */];
+/// let list = RenderSliverList::with_builder(move |i| {
+///     items.get(i).map(|_| true)
+/// });
 /// ```
 pub struct RenderSliverList {
     /// Optional child builder for lazy loading
