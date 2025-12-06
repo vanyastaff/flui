@@ -144,9 +144,10 @@
 //! // Header + grid treated as single unit
 //! ```
 
-use crate::core::{RuntimeArity, LegacySliverRender, SliverSliver};
+use crate::core::{RenderObject, RenderSliver, Variable, SliverLayoutContext, SliverPaintContext};
+use crate::RenderResult;
 use flui_painting::Canvas;
-use flui_types::{Offset, SliverGeometry};
+use flui_types::{Offset, SliverGeometry, Axis};
 
 /// RenderObject that groups multiple slivers along main axis (scroll direction).
 ///
@@ -217,22 +218,28 @@ impl RenderSliverMainAxisGroup {
         self.sliver_geometry
     }
 
-    /// Calculate sliver geometry by accumulating children
-    ///
-    /// Lays out children sequentially and accumulates their geometry
-    /// to compute the group's total geometry.
-    fn calculate_sliver_geometry(
-        &mut self,
-        ctx: &Sliver,
-    ) -> SliverGeometry {
-        let children = ctx.children.as_slice();
+}
+
+impl Default for RenderSliverMainAxisGroup {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl RenderObject for RenderSliverMainAxisGroup {}
+
+impl RenderSliver<Variable> for RenderSliverMainAxisGroup {
+    fn layout(&mut self, mut ctx: SliverLayoutContext<'_, Variable>) -> RenderResult<SliverGeometry> {
+        let children: Vec<_> = ctx.children().collect();
+        let constraints = ctx.constraints;
 
         if children.is_empty() {
             self.child_paint_offsets.clear();
-            return SliverGeometry::default();
+            self.sliver_geometry = SliverGeometry::default();
+            return Ok(self.sliver_geometry);
         }
 
-        // Step 1: Track offset as cumulative scrollExtent
+        // Track offset as cumulative scrollExtent
         let mut offset = 0.0;
         let mut total_scroll_extent = 0.0;
         let mut total_paint_extent = 0.0;
@@ -243,21 +250,21 @@ impl RenderSliverMainAxisGroup {
         self.child_paint_offsets.clear();
         self.child_paint_offsets.reserve(children.len());
 
-        for &child_id in children {
-            // Step 2: Calculate child constraints
+        for &child_id in &children {
+            // Calculate child constraints
             let remaining_paint_extent =
-                (ctx.constraints.remaining_paint_extent - total_paint_extent).max(0.0);
-            let scroll_offset = (ctx.constraints.scroll_offset - offset).max(0.0);
+                (constraints.remaining_paint_extent - total_paint_extent).max(0.0);
+            let scroll_offset = (constraints.scroll_offset - offset).max(0.0);
 
             // Create new constraints for child
             let child_constraints = flui_types::SliverConstraints {
                 scroll_offset,
                 remaining_paint_extent,
-                ..ctx.constraints
+                ..constraints
             };
 
             // Layout child
-            let child_geometry = ctx.tree.layout_sliver_child(child_id, child_constraints);
+            let child_geometry = ctx.tree_mut().perform_sliver_layout(child_id, child_constraints)?;
 
             // Store paint offset for this child
             self.child_paint_offsets.push(total_paint_extent);
@@ -281,65 +288,45 @@ impl RenderSliverMainAxisGroup {
             }
         }
 
-        // Step 4: Assign geometry
-        SliverGeometry {
+        // Calculate final geometry
+        self.sliver_geometry = SliverGeometry {
             scroll_extent: total_scroll_extent,
-            paint_extent: total_paint_extent.min(ctx.constraints.remaining_paint_extent),
+            paint_extent: total_paint_extent.min(constraints.remaining_paint_extent),
             paint_origin: 0.0,
-            layout_extent: total_paint_extent.min(ctx.constraints.remaining_paint_extent),
+            layout_extent: total_paint_extent.min(constraints.remaining_paint_extent),
             max_paint_extent,
             max_scroll_obsolescence: 0.0,
             visible_fraction: if any_visible { 1.0 } else { 0.0 },
-            cross_axis_extent: ctx.constraints.cross_axis_extent,
+            cross_axis_extent: constraints.cross_axis_extent,
             cache_extent: total_cache_extent,
             visible: any_visible,
-            has_visual_overflow: total_paint_extent > ctx.constraints.remaining_paint_extent,
+            has_visual_overflow: total_paint_extent > constraints.remaining_paint_extent,
             hit_test_extent: Some(total_paint_extent),
             scroll_offset_correction: None,
-        }
-    }
-}
+        };
 
-impl Default for RenderSliverMainAxisGroup {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl LegacySliverRender for RenderSliverMainAxisGroup {
-    fn layout(&mut self, ctx: &Sliver) -> SliverGeometry {
-        self.sliver_geometry = self.calculate_sliver_geometry(ctx);
-        self.sliver_geometry
+        Ok(self.sliver_geometry)
     }
 
-    fn paint(&self, ctx: &Sliver) -> Canvas {
-        let mut canvas = Canvas::new();
-        let children = ctx.children.as_slice();
+    fn paint(&self, ctx: &mut SliverPaintContext<'_, Variable>) {
+        let children: Vec<_> = ctx.children().collect();
 
         // Paint children with their respective offsets
         for (i, &child_id) in children.iter().enumerate() {
             if i < self.child_paint_offsets.len() {
                 let paint_offset = self.child_paint_offsets[i];
 
-                // Calculate child's offset along main axis
-                // For simplicity, assume vertical scrolling (TopToBottom)
-                // In a full implementation, would check axis direction
-                let child_offset = Offset::new(ctx.offset.dx, ctx.offset.dy + paint_offset);
+                // Calculate child's offset along main axis based on axis direction
+                let child_offset = match ctx.constraints.axis_direction.axis() {
+                    Axis::Vertical => Offset::new(ctx.offset.dx, ctx.offset.dy + paint_offset),
+                    Axis::Horizontal => Offset::new(ctx.offset.dx + paint_offset, ctx.offset.dy),
+                };
 
-                let child_canvas = ctx.tree.paint_child(child_id, child_offset);
-                canvas.append_canvas(child_canvas);
+                if let Ok(child_canvas) = ctx.tree().perform_paint(child_id, child_offset) {
+                    ctx.canvas.append_canvas(child_canvas);
+                }
             }
         }
-
-        canvas
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> RuntimeArity {
-        RuntimeArity::Variable // Multiple sliver children
     }
 }
 
@@ -364,11 +351,5 @@ mod tests {
         let group = RenderSliverMainAxisGroup::new();
         let geometry = group.geometry();
         assert_eq!(geometry.scroll_extent, 0.0);
-    }
-
-    #[test]
-    fn test_arity_multiple_children() {
-        let group = RenderSliverMainAxisGroup::new();
-        assert_eq!(group.arity(), RuntimeArity::Variable);
     }
 }
