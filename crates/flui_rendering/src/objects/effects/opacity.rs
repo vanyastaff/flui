@@ -166,7 +166,8 @@ use flui_types::Size;
 /// # Implementation Notes
 ///
 /// - **Input Validation**: Opacity clamped to [0.0, 1.0] in constructor and setter
-/// - **Layer Management**: TODO - Implement proper OpacityLayer support in Canvas API
+/// - **Layer Management**: ✅ Full OpacityLayer support using Canvas save_layer_opacity()
+/// - **Fast Paths**: Optimized for opacity = 0.0 (skip paint) and opacity = 1.0 (no layer)
 /// - **Hit Testing**: Fully transparent (opacity = 0.0) still participates in hit testing
 #[derive(Debug)]
 pub struct RenderOpacity {
@@ -199,15 +200,40 @@ impl RenderBox<Single> for RenderOpacity {
     }
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Single>) {
-        // If fully transparent, don't paint anything
+        // Fast path: If fully transparent, don't paint anything
         if self.opacity <= 0.0 {
             return;
         }
 
-        // TODO: Implement proper opacity layer support in Canvas API
-        // For now, just paint child directly - opacity effect is visual only
-        // In future: save layer with opacity, paint child, restore layer
-        ctx.paint_child(ctx.single_child(), ctx.offset);
+        // Fast path: If fully opaque, paint child directly (no layer overhead)
+        if self.opacity >= 1.0 {
+            ctx.paint_child(ctx.single_child(), ctx.offset);
+            return;
+        }
+
+        // Create opacity layer for partial transparency (0.0 < opacity < 1.0)
+        // This ensures proper alpha blending with the background
+
+        // Read offset before taking mutable borrow
+        let offset = ctx.offset;
+
+        // Save canvas state and create opacity layer
+        ctx.canvas_mut().save();
+
+        // Move to offset
+        ctx.canvas_mut().translate(offset.dx, offset.dy);
+
+        // Create opacity layer with alpha blending
+        ctx.canvas_mut().save_layer_opacity(None, self.opacity);
+
+        // Paint child at origin (already translated)
+        ctx.paint_child(ctx.single_child(), flui_types::Offset::ZERO);
+
+        // Restore opacity layer (applies alpha blending)
+        ctx.canvas_mut().restore();
+
+        // Restore original canvas state
+        ctx.canvas_mut().restore();
     }
 }
 
