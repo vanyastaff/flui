@@ -1,4 +1,96 @@
 //! RenderSliverOverlapAbsorber - Absorbs overlap for nested scroll views
+//!
+//! Implements Flutter's SliverOverlapAbsorber for coordinating overlapping headers in nested
+//! scroll views. Wraps a sliver and treats its obstruction extent (typically from pinned
+//! headers) as "absorbed overlap" that can be injected elsewhere via a handle.
+//!
+//! # Flutter Equivalence
+//!
+//! | FLUI | Flutter |
+//! |------|---------|
+//! | `RenderSliverOverlapAbsorber` | `RenderSliverOverlapAbsorber` from `package:flutter/src/rendering/sliver_persistent_header.dart` |
+//! | `SliverOverlapAbsorberHandle` | `SliverOverlapAbsorberHandle` |
+//! | `handle` property | `handle` property |
+//! | Shared Arc<Mutex<f32>> | ValueNotifier<double> pattern |
+//! | Obstruction calculation | `maxScrollObstructionExtent` logic |
+//!
+//! # Layout Protocol
+//!
+//! 1. **Layout child with unchanged constraints**
+//!    - Child receives identical constraints (proxy behavior)
+//!
+//! 2. **Calculate obstruction extent**
+//!    - `obstruction = min(max_paint_extent, hit_test_extent ?? paint_extent)`
+//!    - This is the "overlap" from pinned/sticky content
+//!
+//! 3. **Store obstruction in handle**
+//!    - Write to Arc<Mutex<f32>> for cross-widget communication
+//!    - Handle is shared with SliverOverlapInjector
+//!
+//! 4. **Modify child geometry**
+//!    - `scroll_extent -= obstruction` (reduce scrollable space)
+//!    - `layout_extent = max(0, paint_extent - obstruction)` (exclude overlap)
+//!    - `paint_extent` unchanged (visual appearance preserved)
+//!
+//! # Paint Protocol
+//!
+//! 1. **Paint child at current offset**
+//!    - Child painted unchanged
+//!    - Absorption only affects geometry, not visuals
+//!
+//! # Performance
+//!
+//! - **Layout**: O(1) + child layout - simple geometry modification
+//! - **Paint**: O(child) - pass-through proxy
+//! - **Memory**: 16 bytes (Arc pointer + SliverGeometry cache)
+//! - **Thread-safe**: Arc<Mutex<>> for safe cross-widget communication
+//!
+//! # Use Cases
+//!
+//! - **NestedScrollView**: Coordinate outer and inner scroll views
+//! - **Pinned headers**: Share overlap between viewports
+//! - **TabBarView + AppBar**: Absorb app bar overlap for tabs
+//! - **Complex scrollables**: Multi-viewport layouts with shared headers
+//! - **Collapsing toolbars**: Coordinate collapse across nested scrolls
+//!
+//! # Pattern: Absorber-Injector Pair
+//!
+//! ```text
+//! OuterScrollView:
+//!   SliverOverlapAbsorber(handle) ← Absorbs pinned header overlap
+//!     SliverAppBar(pinned: true)
+//!
+//! InnerScrollView:
+//!   SliverOverlapInjector(handle) ← Injects absorbed overlap as padding
+//!     SliverList(...)
+//! ```
+//!
+//! # Comparison with Related Objects
+//!
+//! - **vs SliverOverlapInjector**: Absorber stores overlap, Injector adds it back
+//! - **vs SliverPadding**: Padding is fixed, Absorber is dynamic from child
+//! - **vs SliverAppBar**: AppBar creates overlap, Absorber manages it
+//! - **vs SliverPersistentHeader**: PersistentHeader may create overlap, Absorber handles it
+//!
+//! # Examples
+//!
+//! ```rust,ignore
+//! use flui_rendering::{RenderSliverOverlapAbsorber, SliverOverlapAbsorberHandle};
+//!
+//! // Create shared handle
+//! let handle = SliverOverlapAbsorberHandle::new();
+//!
+//! // Outer scroll: absorb overlap from pinned app bar
+//! let absorber = RenderSliverOverlapAbsorber::new(handle.clone());
+//! // ... wrap app bar with absorber ...
+//!
+//! // Inner scroll: inject absorbed overlap
+//! let injector = RenderSliverOverlapInjector::new(handle.clone());
+//! // ... use injector in inner viewport ...
+//!
+//! // Handle automatically shares overlap between them
+//! let current_overlap = handle.get_extent();
+//! ```
 
 use crate::core::{RuntimeArity, LegacySliverRender, SliverSliver};
 use flui_painting::Canvas;
@@ -42,38 +134,70 @@ impl Default for SliverOverlapAbsorberHandle {
     }
 }
 
-/// RenderObject that absorbs overlap from a child sliver
+/// RenderObject that absorbs overlap from child sliver for cross-viewport coordination.
 ///
-/// This sliver wraps another sliver and treats its layout extent as overlap.
-/// The absorbed overlap is reported to a `SliverOverlapAbsorberHandle`, which
-/// can be used by a `RenderSliverOverlapInjector` to inject the overlap
-/// elsewhere in the scroll view.
+/// Wraps a sliver (typically with pinned/sticky content like SliverAppBar) and calculates
+/// its obstruction extent, then stores it in a shared handle for use by SliverOverlapInjector
+/// in a different viewport. Essential for NestedScrollView pattern.
+///
+/// # Arity
+///
+/// `RuntimeArity::Exact(1)` - Must have exactly 1 child sliver (optional in implementation).
+///
+/// # Protocol
+///
+/// Sliver protocol - Uses `SliverConstraints` and returns `SliverGeometry`.
+///
+/// # Pattern
+///
+/// **Overlap Coordinator** - Calculates child's obstruction extent (overlap from pinned
+/// content), stores in shared handle (Arc<Mutex<>>), modifies child geometry to exclude
+/// overlap from scroll_extent and layout_extent. Works in tandem with SliverOverlapInjector.
 ///
 /// # Use Cases
 ///
-/// - Nested scroll views with overlapping headers
-/// - Coordinating pinned headers across multiple scroll views
-/// - Managing overlap in complex scrollable layouts
-/// - SliverAppBar with NestedScrollView
+/// - **NestedScrollView**: Outer absorber + inner injector pattern
+/// - **Tabbed interfaces**: Share app bar overlap across tabs
+/// - **Complex headers**: Coordinate pinned headers between scroll views
+/// - **Collapsing toolbars**: Manage collapse overlap in nested contexts
+/// - **Multi-viewport UIs**: Share overlap state across viewports
 ///
-/// # Implementation Notes
+/// # Flutter Compliance
 ///
-/// The absorbed overlap is the difference between:
-/// - The child's `maxScrollObstructionExtent` (content that overlaps)
-/// - The overlap reported by this widget (zero)
+/// Matches Flutter's RenderSliverOverlapAbsorber behavior:
+/// - Calculates obstruction from child geometry ✅
+/// - Stores in shared handle (Arc<Mutex> vs ValueNotifier) ✅
+/// - Reduces scroll_extent by obstruction ✅
+/// - Sets layout_extent to exclude obstruction ✅
+/// - Preserves paint_extent (visual appearance) ✅
 ///
-/// This difference is stored in the handle for use by other widgets.
+/// # Absorber-Injector Pattern
+///
+/// ```text
+/// Outer Viewport:              Inner Viewport:
+/// ┌─────────────────┐          ┌─────────────────┐
+/// │ OverlapAbsorber │ ─handle─→│ OverlapInjector │
+/// │   ┌─────────┐   │          │   (adds padding)│
+/// │   │ AppBar  │   │          │   SliverList    │
+/// │   │(pinned) │   │          │   [item 1]      │
+/// │   └─────────┘   │          │   [item 2]      │
+/// │   Content       │          │   [item 3]      │
+/// └─────────────────┘          └─────────────────┘
+/// ```
 ///
 /// # Example
 ///
 /// ```rust,ignore
 /// use flui_rendering::{RenderSliverOverlapAbsorber, SliverOverlapAbsorberHandle};
 ///
+/// // Create shared handle
 /// let handle = SliverOverlapAbsorberHandle::new();
+///
+/// // Outer scroll: absorb app bar overlap
 /// let absorber = RenderSliverOverlapAbsorber::new(handle.clone());
 ///
-/// // Later, an injector can read the absorbed overlap
-/// let overlap = handle.get_extent();
+/// // Inner scroll: inject overlap as padding
+/// let injector = RenderSliverOverlapInjector::new(handle);
 /// ```
 #[derive(Debug)]
 pub struct RenderSliverOverlapAbsorber {
