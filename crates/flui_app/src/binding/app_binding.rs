@@ -1,15 +1,19 @@
 //! AppBinding - Combined application binding
 //!
 //! This is the main binding that combines all framework bindings:
-//! - GestureBinding (events)
+//! - EventRouter (event routing, exposed to platform layer)
 //! - SchedulerBinding (frame callbacks)
 //! - RendererBinding (rendering pipeline)
 //!
 //! It provides a global singleton accessed via `ensure_initialized()`.
+//!
+//! Note: GestureBinding is now part of flui-platform's EmbedderCore,
+//! not stored in AppBinding. AppBinding only manages the EventRouter.
 
-use super::{BindingBase, GestureBinding, RendererBinding, SchedulerBinding};
-use flui_core::{pipeline::PipelineOwner, view::StatelessView};
+use super::{BindingBase, RendererBinding, SchedulerBinding};
+use flui_core::pipeline::PipelineOwner;
 use flui_engine::Scene;
+use flui_interaction::EventRouter;
 use flui_types::constraints::BoxConstraints;
 use parking_lot::RwLock;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -23,7 +27,7 @@ use std::sync::{Arc, OnceLock, Weak};
 /// AppBinding (singleton)
 ///   ├─ pipeline_owner: Arc<RwLock<PipelineOwner>> - Single source of truth
 ///   ├─ needs_redraw: Arc<AtomicBool> - On-demand rendering flag
-///   ├─ GestureBinding (EventRouter)
+///   ├─ event_router: Arc<RwLock<EventRouter>> - Event routing (shared with platform layer)
 ///   ├─ SchedulerBinding (wraps flui-scheduler)
 ///   └─ RendererBinding (rendering)
 /// ```
@@ -46,8 +50,9 @@ pub struct AppBinding {
     /// On-demand rendering flag - set when redraw is needed
     needs_redraw: Arc<AtomicBool>,
 
-    /// Gesture binding (event routing)
-    pub gesture: GestureBinding,
+    /// Event router for dispatching events to gesture recognizers
+    /// Shared with platform layer (used by GestureBinding in EmbedderCore)
+    event_router: Arc<RwLock<EventRouter>>,
 
     /// Scheduler binding (wraps flui-scheduler for frame scheduling, task prioritization, vsync)
     pub scheduler: SchedulerBinding,
@@ -83,20 +88,20 @@ impl AppBinding {
             .get_or_init(|| {
                 let _span = tracing::info_span!("init_bindings").entered();
 
-                // Create shared pipeline_owner - single source of truth
+                // Create shared components - single sources of truth
                 let pipeline_owner = Arc::new(RwLock::new(PipelineOwner::new()));
                 let needs_redraw = Arc::new(AtomicBool::new(false));
+                let event_router = Arc::new(RwLock::new(EventRouter::new()));
 
                 let mut binding = Self {
                     pipeline_owner: pipeline_owner.clone(),
                     needs_redraw: needs_redraw.clone(),
-                    gesture: GestureBinding::new(),
+                    event_router,
                     scheduler: SchedulerBinding::new(),
                     renderer: RendererBinding::new(),
                 };
 
-                // Initialize all bindings
-                binding.gesture.init();
+                // Initialize bindings
                 binding.scheduler.init();
                 binding.renderer.init();
 
@@ -113,14 +118,39 @@ impl AppBinding {
     ///
     /// Connects the scheduler to pipeline for automatic rebuilds.
     /// Uses Weak reference to avoid circular references.
+    ///
+    /// # Why Weak References?
+    ///
+    /// We use `Weak<RwLock<PipelineOwner>>` instead of `Arc` to prevent a memory leak
+    /// from circular references:
+    ///
+    /// ```text
+    /// Without Weak (MEMORY LEAK):
+    /// AppBinding ──Arc──> PipelineOwner
+    ///     │                      ↑
+    ///     └──Arc──> Scheduler ───┘
+    ///               (via closure)
+    ///
+    /// With Weak (NO LEAK):
+    /// AppBinding ──Arc──> PipelineOwner
+    ///     │                      ↑
+    ///     └──Arc──> Scheduler ──Weak─
+    ///               (via closure)
+    /// ```
+    ///
+    /// When the closure captures a `Weak`, the `PipelineOwner` can be properly
+    /// dropped when `AppBinding` is destroyed, even though the `Scheduler` is still
+    /// holding callbacks. The `upgrade()` call returns `None` when the pipeline
+    /// is dropped, allowing graceful cleanup.
     fn wire_up(&self, pipeline_weak: Weak<RwLock<PipelineOwner>>, needs_redraw: Arc<AtomicBool>) {
         tracing::debug!("Wiring up scheduler callbacks to pipeline");
 
         // Add persistent frame callback to flush rebuild queue
-        // Uses Weak to avoid circular reference (AppBinding -> Scheduler -> callback -> PipelineOwner -> AppBinding)
+        // SAFETY: Uses Weak to break circular reference cycle and prevent memory leaks
         self.scheduler
             .scheduler()
             .add_persistent_frame_callback(Arc::new(move |_timing| {
+                // Try to upgrade Weak to Arc - succeeds if PipelineOwner still exists
                 if let Some(pipeline) = pipeline_weak.upgrade() {
                     let mut owner = pipeline.write();
                     // Only mark for redraw if there were actual changes
@@ -128,6 +158,7 @@ impl AppBinding {
                         needs_redraw.store(true, Ordering::Relaxed);
                     }
                 } else {
+                    // PipelineOwner was dropped - this is expected during shutdown
                     tracing::warn!("Pipeline dropped during frame callback");
                 }
             }));
@@ -211,6 +242,15 @@ impl AppBinding {
     #[must_use]
     pub fn needs_redraw_flag(&self) -> Arc<AtomicBool> {
         self.needs_redraw.clone()
+    }
+
+    /// Get the event router for use with EmbedderCore
+    ///
+    /// Returns Arc to the event router for sharing with platform layer.
+    /// The platform layer uses this to create a GestureBinding in EmbedderCore.
+    #[must_use]
+    pub fn event_router(&self) -> Arc<RwLock<EventRouter>> {
+        self.event_router.clone()
     }
 
     // ========================================================================

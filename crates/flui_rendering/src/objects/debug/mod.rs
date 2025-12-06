@@ -1,4 +1,11 @@
 pub mod error_box;
+// TODO: Re-enable once implemented
+// pub mod performance_overlay;
+pub mod placeholder;
+
+pub use error_box::RenderErrorBox;
+// TODO: Re-enable once implemented
+// pub use performance_overlay::RenderPerformanceOverlay;
 pub mod placeholder;
 
 pub use error_box::RenderErrorBox;
