@@ -99,7 +99,8 @@
 //! offstage.set_offstage(true); // Then hide to optimize
 //! ```
 
-use crate::core::{RuntimeArity, LegacySliverRender, SliverSliver};
+use crate::core::{RenderObject, RenderSliver, Single, SliverLayoutContext, SliverPaintContext};
+use crate::RenderResult;
 use flui_painting::Canvas;
 use flui_types::SliverGeometry;
 
@@ -212,42 +213,31 @@ impl Default for RenderSliverOffstage {
     }
 }
 
-impl LegacySliverRender for RenderSliverOffstage {
-    fn layout(&mut self, ctx: &Sliver) -> SliverGeometry {
+impl RenderObject for RenderSliverOffstage {}
+
+impl RenderSliver<Single> for RenderSliverOffstage {
+    fn layout(&mut self, mut ctx: SliverLayoutContext<'_, Single>) -> RenderResult<SliverGeometry> {
         if self.offstage {
-            // When offstage, report zero geometry
+            // When offstage, report zero geometry (skip child layout)
             self.sliver_geometry = SliverGeometry::default();
         } else {
             // Pass through to child when visible
-            if let Some(child_id) = ctx.children.try_single() {
-                self.sliver_geometry = ctx.tree.layout_sliver_child(child_id, ctx.constraints);
-            } else {
-                self.sliver_geometry = SliverGeometry::default();
-            }
+            let child_id = *ctx.children.single();
+            self.sliver_geometry = ctx.tree_mut().perform_sliver_layout(child_id, ctx.constraints)?;
         }
 
-        self.sliver_geometry
+        Ok(self.sliver_geometry)
     }
 
-    fn paint(&self, ctx: &Sliver) -> Canvas {
-        // Only paint if not offstage
-        if self.should_paint() {
-            if let Some(child_id) = ctx.children.try_single() {
-                if self.sliver_geometry.visible {
-                    return ctx.tree.paint_child(child_id, ctx.offset);
-                }
+    fn paint(&self, ctx: &mut SliverPaintContext<'_, Single>) {
+        // Only paint if not offstage and visible
+        if self.should_paint() && self.sliver_geometry.visible {
+            let child_id = *ctx.children.single();
+
+            if let Ok(child_canvas) = ctx.tree().perform_paint(child_id, ctx.offset) {
+                *ctx.canvas = child_canvas;
             }
         }
-
-        Canvas::new()
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> RuntimeArity {
-        RuntimeArity::Exact(1) // Single child sliver
     }
 }
 
@@ -300,11 +290,5 @@ mod tests {
         let offstage = RenderSliverOffstage::default();
 
         assert!(!offstage.offstage);
-    }
-
-    #[test]
-    fn test_arity_is_single_child() {
-        let offstage = RenderSliverOffstage::new(true);
-        assert_eq!(offstage.arity(), RuntimeArity::Exact(1));
     }
 }

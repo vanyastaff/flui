@@ -94,7 +94,8 @@
 //! opacity.set_always_include_semantics(true);
 //! ```
 
-use crate::core::{RuntimeArity, LegacySliverRender, SliverSliver};
+use crate::core::{RenderObject, RenderSliver, Single, SliverLayoutContext, SliverPaintContext};
+use crate::RenderResult;
 use flui_painting::Canvas;
 use flui_types::SliverGeometry;
 
@@ -218,42 +219,34 @@ impl Default for RenderSliverOpacity {
     }
 }
 
-impl LegacySliverRender for RenderSliverOpacity {
-    fn layout(&mut self, ctx: &Sliver) -> SliverGeometry {
-        // Pass through to child
-        if let Some(child_id) = ctx.children.try_single() {
-            self.sliver_geometry = ctx.tree.layout_sliver_child(child_id, ctx.constraints);
-        } else {
-            self.sliver_geometry = SliverGeometry::default();
-        }
+impl RenderObject for RenderSliverOpacity {}
 
-        self.sliver_geometry
+impl RenderSliver<Single> for RenderSliverOpacity {
+    fn layout(&mut self, mut ctx: SliverLayoutContext<'_, Single>) -> RenderResult<SliverGeometry> {
+        let child_id = *ctx.children.single();
+
+        // Pass through to child
+        self.sliver_geometry = ctx.tree_mut().perform_sliver_layout(child_id, ctx.constraints)?;
+
+        Ok(self.sliver_geometry)
     }
 
-    fn paint(&self, ctx: &Sliver) -> Canvas {
+    fn paint(&self, ctx: &mut SliverPaintContext<'_, Single>) {
         // If fully transparent, skip painting (unless semantics required)
         if !self.should_paint() && !self.always_include_semantics {
-            return Canvas::new();
+            return;
         }
 
-        // Paint child if present
-        if let Some(child_id) = ctx.children.try_single() {
-            if self.sliver_geometry.visible {
-                // TODO: Apply opacity using save_layer_alpha when implemented
-                // For now, just paint child directly
-                return ctx.tree.paint_child(child_id, ctx.offset);
+        // Paint child if visible
+        if self.sliver_geometry.visible {
+            let child_id = *ctx.children.single();
+
+            // TODO: Apply opacity using save_layer_alpha when implemented
+            // For now, just paint child directly
+            if let Ok(child_canvas) = ctx.tree().perform_paint(child_id, ctx.offset) {
+                *ctx.canvas = child_canvas;
             }
         }
-
-        Canvas::new()
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> RuntimeArity {
-        RuntimeArity::Exact(1) // Single child sliver
     }
 }
 
@@ -342,11 +335,5 @@ mod tests {
         assert_eq!(opacity_min.opacity, 0.0);
         assert_eq!(opacity_max.opacity, 1.0);
         assert_eq!(opacity_mid.opacity, 0.5);
-    }
-
-    #[test]
-    fn test_arity_is_single_child() {
-        let opacity = RenderSliverOpacity::new(0.5);
-        assert_eq!(opacity.arity(), RuntimeArity::Exact(1));
     }
 }
