@@ -484,15 +484,7 @@ mod tests {
         }
     }
 
-    impl RenderObject for TestRenderSliver {
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-
-        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-            self
-        }
-    }
+    impl RenderObject for TestRenderSliver {}
 
     #[test]
     fn test_calculate_paint_offset() {

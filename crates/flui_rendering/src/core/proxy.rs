@@ -564,15 +564,7 @@ mod tests {
 
     impl RenderProxyBox for TestProxyBox {}
 
-    impl RenderObject for TestProxyBox {
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-
-        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-            self
-        }
-    }
+    impl RenderObject for TestProxyBox {}
 
     // Simple test proxy sliver
     #[derive(Debug)]
@@ -582,15 +574,7 @@ mod tests {
 
     impl RenderProxySliver for TestProxySliver {}
 
-    impl RenderObject for TestProxySliver {
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-
-        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-            self
-        }
-    }
+    impl RenderObject for TestProxySliver {}
 
     #[test]
     fn test_proxy_box_is_render_box() {

@@ -120,6 +120,8 @@ mod tests {
         value: i32,
     }
 
+    impl RenderObject for TestRenderObject {}
+
     #[test]
     fn test_render_object_into_render() {
         let obj = TestRenderObject { value: 42 };
