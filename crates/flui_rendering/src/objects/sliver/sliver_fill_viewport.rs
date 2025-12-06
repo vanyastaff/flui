@@ -1,22 +1,181 @@
 //! RenderSliverFillViewport - Sliver where each child fills the viewport
+//!
+//! Implements Flutter's SliverFillViewport pattern for creating full-page scrollable content.
+//! Each child is sized to fill exactly viewport_fraction of the viewport's main axis extent.
+//! Commonly used for page views, carousels, onboarding flows, and full-screen image galleries.
+//!
+//! # Flutter Equivalence
+//!
+//! | FLUI | Flutter |
+//! |------|---------|
+//! | `RenderSliverFillViewport` | `RenderSliverFillViewport` from `package:flutter/src/rendering/sliver_fill.dart` |
+//! | `viewport_fraction` property | `viewportFraction` property (default 1.0) |
+//! | Geometry calculation | Flutter's scroll extent calculation |
+//! | Child sizing | Each child fills viewport_fraction * viewport_extent |
+//!
+//! # Layout Protocol (Intended)
+//!
+//! 1. **Calculate child extent**
+//!    - `child_extent = viewport_main_axis_extent * viewport_fraction`
+//!    - Typically viewport_fraction = 1.0 (full viewport)
+//!    - Can be < 1.0 for partial viewport children (e.g., 0.8 for peek effect)
+//!
+//! 2. **Determine visible range**
+//!    - Calculate which children are in viewport based on scroll_offset
+//!    - `first_visible_index = floor(scroll_offset / child_extent)`
+//!    - Layout visible children with BoxConstraints
+//!
+//! 3. **Layout each visible child**
+//!    - Convert to BoxConstraints: `width = cross_axis_extent, height = child_extent`
+//!    - Position child at `main_axis_offset = index * child_extent`
+//!
+//! 4. **Calculate sliver geometry**
+//!    - scroll_extent: `child_count * child_extent`
+//!    - paint_extent: min(total_extent - scroll_offset, remaining_paint_extent)
+//!
+//! # Paint Protocol (Intended)
+//!
+//! 1. **Determine visible children**
+//!    - Calculate index range within viewport
+//!
+//! 2. **Paint each visible child**
+//!    - Calculate child offset based on index
+//!    - Paint child at calculated position
+//!
+//! # Performance
+//!
+//! - **Layout**: O(visible_children) - only layout children in viewport (when implemented)
+//! - **Paint**: O(visible_children) - only paint children in viewport (when implemented)
+//! - **Memory**: 4 bytes (f32 viewport_fraction) + 48 bytes (SliverGeometry) = 52 bytes
+//! - **Viewport culling**: Automatically skips offscreen children (when implemented)
+//!
+//! # Use Cases
+//!
+//! - **Page views**: Full-screen page transitions (e.g., onboarding)
+//! - **Image carousels**: Full-viewport image galleries
+//! - **Story viewers**: Instagram/Snapchat-style story scrolling
+//! - **Tutorial slides**: Full-screen instructional content
+//! - **Partial viewport**: Set viewport_fraction < 1.0 for peek effect
+//! - **Calendar pages**: Month-by-month scrolling views
+//!
+//! # ⚠️ CRITICAL IMPLEMENTATION ISSUES
+//!
+//! This implementation has **MAJOR INCOMPLETE FUNCTIONALITY**:
+//!
+//! 1. **❌ Children are NEVER laid out** (line 109-142)
+//!    - No calls to `layout_child()` anywhere
+//!    - Child sizes are undefined
+//!    - Only geometry calculation, no actual layout
+//!
+//! 2. **❌ Paint not implemented** (line 144-153)
+//!    - Returns empty canvas
+//!    - TODO comment: "Paint visible children at their viewport-filling positions"
+//!    - Children are never painted
+//!
+//! 3. **❌ Duplicate code** (line 109-142 vs 53-99)
+//!    - `layout()` duplicates `calculate_sliver_geometry()` logic
+//!    - Unused method that should be called
+//!
+//! 4. **❌ Dead code** (line 53-99)
+//!    - `calculate_sliver_geometry()` method exists but is never called
+//!    - Should be used by `layout()`
+//!
+//! **This RenderObject is a STUB - geometry only, no layout or paint!**
+//!
+//! # Comparison with Related Objects
+//!
+//! - **vs SliverFillRemaining**: FillRemaining fills remaining space, FillViewport fills viewport per child
+//! - **vs SliverFixedExtentList**: FixedExtent has fixed child size, FillViewport sizes to viewport
+//! - **vs PageView (widget)**: PageView uses SliverFillViewport internally
+//! - **vs SliverList**: List has variable child sizes, FillViewport has uniform viewport-based sizing
+//!
+//! # Examples
+//!
+//! ```rust,ignore
+//! use flui_rendering::RenderSliverFillViewport;
+//!
+//! // Full-screen page view (each page fills viewport)
+//! let page_view = RenderSliverFillViewport::new(1.0);
+//! // Add pages as children - each will be sized to fill viewport
+//!
+//! // Partial viewport with peek effect (80% of viewport)
+//! let peek_carousel = RenderSliverFillViewport::new(0.8);
+//! // Users can see edges of adjacent items
+//!
+//! // Half-viewport children (2 items per screen)
+//! let half_page = RenderSliverFillViewport::new(0.5);
+//! ```
 
 use flui_core::element::ElementTree;
 use crate::core::{RuntimeArity, SliverSliverBoxPaintCtx, LegacySliverRender};
 use flui_painting::Canvas;
 use flui_types::{SliverConstraints, SliverGeometry};
 
-/// RenderObject where each child fills the entire viewport
+/// RenderObject where each child fills a fraction of the viewport.
 ///
-/// Each child is sized to exactly fill the viewport's main axis extent.
-/// This is commonly used for page views, carousels, or full-screen slides.
+/// Implements full-page scrolling where each child occupies viewport_fraction of the
+/// viewport's main axis extent. Commonly used for page views, carousels, onboarding
+/// flows, and image galleries.
+///
+/// # Arity
+///
+/// `RuntimeArity::Variable` - Supports multiple box children (N ≥ 0).
+///
+/// # Protocol
+///
+/// **Sliver-to-Box Adapter** - Uses `SliverConstraints`, but children use **BoxConstraints**
+/// and return **Size** (not sliver protocol). Similar to SliverFillRemaining.
+///
+/// # Pattern
+///
+/// **Viewport-Filling Multi-Child Layout** - Sizes each child to viewport_fraction * viewport_extent,
+/// positions children sequentially along main axis, and calculates total scroll extent as
+/// child_count * child_extent.
+///
+/// # Use Cases
+///
+/// - **Full-screen pages**: Onboarding flows with viewport_fraction = 1.0
+/// - **Image carousels**: Full-viewport photo galleries
+/// - **Peek carousels**: Set viewport_fraction = 0.8 to show edges of adjacent items
+/// - **Story viewers**: Instagram-style vertical story scrolling
+/// - **Tutorial slides**: Sequential instructional screens
+/// - **Calendar pages**: Monthly calendar with horizontal swipe
+///
+/// # Flutter Compliance
+///
+/// **INCOMPLETE IMPLEMENTATION** - Major features missing:
+/// - ❌ Child layout not implemented
+/// - ❌ Paint not implemented
+/// - ❌ Viewport culling not implemented
+/// - ✅ Geometry calculation correct
+///
+/// # Implementation Status
+///
+/// **Current State (STUB):**
+/// - ✅ Geometry calculation (scroll_extent, paint_extent)
+/// - ❌ Child layout (no layout_child calls)
+/// - ❌ Child paint (returns empty canvas)
+/// - ❌ Viewport culling optimization
+///
+/// **Missing from Flutter:**
+/// - Layout visible children with BoxConstraints
+/// - Paint children at calculated positions
+/// - Optimize by skipping offscreen children
+///
+/// **⚠️ WARNING**: This RenderObject currently only calculates geometry.
+/// Children are never laid out or painted!
 ///
 /// # Example
 ///
 /// ```rust,ignore
 /// use flui_rendering::RenderSliverFillViewport;
 ///
-/// // Each child will be sized to fill the viewport
-/// let viewport_filler = RenderSliverFillViewport::new(1.0);
+/// // Full-screen page view
+/// let page_view = RenderSliverFillViewport::new(1.0);
+/// // Note: Children won't actually render until layout/paint implemented!
+///
+/// // Peek effect carousel (80% viewport per item)
+/// let peek_carousel = RenderSliverFillViewport::new(0.8);
 /// ```
 #[derive(Debug)]
 pub struct RenderSliverFillViewport {
