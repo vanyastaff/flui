@@ -111,7 +111,7 @@ pub use special::{
 pub use text::{ParagraphData, RenderParagraph};
 
 // Debug objects (3 objects) ✅
-pub use debug::{RenderErrorBox, RenderPerformanceOverlay, RenderPlaceholder};
+pub use debug::{RenderErrorBox, RenderPlaceholder};
 
 // Media objects (2 objects) ✅
 pub use media::{FilterQuality, ImageFit, RenderImage, RenderTexture, TextureId};

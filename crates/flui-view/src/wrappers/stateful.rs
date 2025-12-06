@@ -49,6 +49,7 @@ impl<V: StatefulView> std::fmt::Debug for StatefulViewWrapper<V> {
 }
 
 impl<V: StatefulView> ViewObject for StatefulViewWrapper<V> {
+    #[inline]
     fn mode(&self) -> ViewMode {
         ViewMode::Stateful
     }
@@ -67,6 +68,7 @@ impl<V: StatefulView> ViewObject for StatefulViewWrapper<V> {
         }
     }
 
+    #[inline]
     fn init(&mut self, ctx: &dyn BuildContext) {
         // Call init_state after state is created and element is mounted
         if let Some(ref mut state) = self.state {
@@ -74,6 +76,7 @@ impl<V: StatefulView> ViewObject for StatefulViewWrapper<V> {
         }
     }
 
+    #[inline]
     fn did_change_dependencies(&mut self, ctx: &dyn BuildContext) {
         // Delegate to StatefulView
         if let Some(ref mut state) = self.state {
@@ -81,6 +84,7 @@ impl<V: StatefulView> ViewObject for StatefulViewWrapper<V> {
         }
     }
 
+    #[inline]
     fn did_update(&mut self, old_view: &dyn Any, _ctx: &dyn BuildContext) {
         // Notify view of configuration change
         if let Some(old) = old_view.downcast_ref::<V>() {
@@ -90,6 +94,7 @@ impl<V: StatefulView> ViewObject for StatefulViewWrapper<V> {
         }
     }
 
+    #[inline]
     fn deactivate(&mut self, ctx: &dyn BuildContext) {
         // Delegate to StatefulView - called when element is temporarily removed
         if let Some(ref mut state) = self.state {
@@ -97,6 +102,7 @@ impl<V: StatefulView> ViewObject for StatefulViewWrapper<V> {
         }
     }
 
+    #[inline]
     fn activate(&mut self, ctx: &dyn BuildContext) {
         // Delegate to StatefulView - called when element is reactivated
         if let Some(ref mut state) = self.state {
@@ -104,6 +110,7 @@ impl<V: StatefulView> ViewObject for StatefulViewWrapper<V> {
         }
     }
 
+    #[inline]
     fn dispose(&mut self, ctx: &dyn BuildContext) {
         // Call dispose on StatefulView before cleaning up state
         if let Some(ref mut state) = self.state {
@@ -113,14 +120,17 @@ impl<V: StatefulView> ViewObject for StatefulViewWrapper<V> {
         self.state = None;
     }
 
+    #[inline]
     fn debug_name(&self) -> &'static str {
         std::any::type_name::<V>()
     }
 
+    #[inline]
     fn as_any(&self) -> &dyn Any {
         self
     }
 
+    #[inline]
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }

@@ -883,8 +883,11 @@ impl BuildPipeline {
                 Ok(None) => return false,
                 Err(panic_info) => {
                     // Panic occurred during build - handle it
+                    #[allow(unused_imports)]
                     use crate::error_handling::{handle_build_panic, ErrorWidget};
+                    #[allow(unused_imports)]
                     use flui_element::IntoElement;
+                    #[allow(unused_imports)]
                     use flui_view::StatelessView;
 
                     let error = handle_build_panic(&*panic_info);

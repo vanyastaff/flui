@@ -296,38 +296,48 @@ impl ElementTree {
         }
     }
 
-    /// Stub: Layout a render object (returns None - not implemented).
+    /// Stub: Layout a render object (intentional design).
     ///
-    /// Actual layout should be performed through the pipeline system.
+    /// **Architectural Note:** This stub is intentional. ElementTree does not
+    /// handle layout directly - that's the responsibility of the pipeline layer.
+    /// Actual layout is performed by `flui_core`'s `LayoutPipeline` which has
+    /// access to the full rendering context and constraints.
     #[inline]
     pub fn layout_render_object(
         &mut self,
         _id: ElementId,
         _constraints: flui_types::constraints::BoxConstraints,
     ) -> Option<flui_types::Size> {
-        // TODO: Implement proper layout delegation
+        // Intentional stub: Layout delegation is handled by the pipeline layer.
+        // ElementTree remains independent of rendering implementation.
         None
     }
 
-    /// Stub: Paint a render object (returns None - not implemented).
+    /// Stub: Paint a render object (intentional design).
     ///
-    /// Actual painting should be performed through the pipeline system.
+    /// **Architectural Note:** This stub is intentional. ElementTree does not
+    /// handle rendering directly - that's the responsibility of the pipeline layer.
+    /// Actual painting is performed by `flui_core`'s `PaintPipeline` which has
+    /// access to the full rendering context (GPU surface, layers, etc).
+    ///
     /// Returns `true` if the element was painted, `false` otherwise.
     #[inline]
     pub fn paint_render_object(&self, _id: ElementId, _offset: flui_types::Offset) -> bool {
-        // TODO: Implement proper paint delegation
-        // This stub allows flui-element to remain independent of flui_engine
+        // Intentional stub: Keeps flui-element independent of flui_engine
         false
     }
 
-    /// Stub: Hit test at position (returns empty Vec).
+    /// Stub: Hit test at position (intentional design).
     ///
-    /// Actual hit testing should be performed through the interaction layer.
+    /// **Architectural Note:** This stub is intentional. ElementTree does not
+    /// handle hit testing directly - that's the responsibility of the interaction
+    /// layer. Actual hit testing is performed by components with access to
+    /// render objects, layout information, and transform matrices.
+    ///
     /// Returns element IDs that were hit, in front-to-back order.
     #[inline]
     pub fn hit_test(&self, _root_id: ElementId, _position: flui_types::Offset) -> Vec<ElementId> {
-        // TODO: Implement proper hit test delegation
-        // This stub allows flui-element to remain independent of flui_interaction
+        // Intentional stub: Keeps flui-element independent of flui_interaction
         Vec::new()
     }
 }

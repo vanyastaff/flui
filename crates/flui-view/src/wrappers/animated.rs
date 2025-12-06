@@ -11,10 +11,27 @@ use flui_foundation::ListenerId;
 use crate::traits::{AnimatedView, Listenable};
 use crate::{BuildContext, IntoView, ViewMode, ViewObject};
 
+/// Type alias for rebuild callback (wrapped in Arc for clonability)
+type RebuildCallback = Arc<dyn Fn() + Send + Sync>;
+
 /// Wrapper for `AnimatedView` that implements `ViewObject`
 ///
 /// Animated views subscribe to a Listenable and rebuild automatically
 /// when the listenable notifies (e.g., animation tick).
+///
+/// # Rebuild Mechanism
+///
+/// During `init()`, this wrapper obtains a rebuild callback from `BuildContext`
+/// using `create_rebuild_callback()`. When the animation ticks, this callback
+/// is invoked to schedule a rebuild of the element.
+///
+/// The callback is thread-safe and can be called from any thread, making it
+/// suitable for async animation controllers.
+///
+/// # Performance
+///
+/// Uses `Arc<AtomicBool>` for lock-free listener state management and caches
+/// the rebuild callback for O(1) rebuild scheduling on each animation tick.
 pub struct AnimatedViewWrapper<V, L>
 where
     V: AnimatedView<L>,
@@ -28,6 +45,9 @@ where
 
     /// The listener ID for removal
     listener_id: Option<ListenerId>,
+
+    /// Callback to trigger rebuild (captured from BuildContext during init)
+    rebuild_callback: Option<RebuildCallback>,
 
     /// Type marker for the listenable
     _marker: std::marker::PhantomData<L>,
@@ -44,6 +64,7 @@ where
             view,
             listening: Arc::new(AtomicBool::new(false)),
             listener_id: None,
+            rebuild_callback: None,
             _marker: std::marker::PhantomData,
         }
     }
@@ -68,6 +89,16 @@ where
         self.listening.load(Ordering::Relaxed)
     }
 
+    /// Create a rebuild callback from BuildContext
+    ///
+    /// Uses the `BuildContext::create_rebuild_callback()` method to obtain
+    /// a callback that can trigger rebuilds from async contexts.
+    #[inline]
+    fn create_rebuild_callback(ctx: &dyn BuildContext) -> Option<RebuildCallback> {
+        // Wrap the Box in Arc for clonability
+        Some(Arc::from(ctx.create_rebuild_callback()))
+    }
+
     /// Start listening to the listenable
     fn start_listening(&mut self) {
         if self.listening.swap(true, Ordering::SeqCst) {
@@ -75,13 +106,20 @@ where
         }
 
         // Subscribe to changes
-        // Note: In a real implementation, we'd need to capture the element ID
-        // and schedule a rebuild when the listenable notifies
         let listening = self.listening.clone();
+        let rebuild_callback = self.rebuild_callback.clone();
+
         let id = self.view.listenable().add_listener(Box::new(move || {
             if listening.load(Ordering::Relaxed) {
-                // TODO: Schedule rebuild via BuildContext or BuildOwner
-                tracing::trace!("Animation tick - would schedule rebuild");
+                // Trigger rebuild if callback is available
+                if let Some(ref callback) = rebuild_callback {
+                    tracing::trace!("Animation tick - scheduling rebuild");
+                    callback();
+                } else {
+                    tracing::trace!(
+                        "Animation tick - no rebuild callback available (test context?)"
+                    );
+                }
             }
         }));
         self.listener_id = Some(id);
@@ -116,10 +154,12 @@ where
     V: AnimatedView<L>,
     L: Listenable,
 {
+    #[inline]
     fn mode(&self) -> ViewMode {
         ViewMode::Animated
     }
 
+    #[inline]
     fn build(&mut self, ctx: &dyn BuildContext) -> Option<Box<dyn ViewObject>> {
         // Call animation tick hook
         self.view.on_animation_tick(ctx);
@@ -130,36 +170,48 @@ where
 
     fn init(&mut self, ctx: &dyn BuildContext) {
         self.view.init(ctx);
+
+        // Try to set up rebuild callback by accessing PipelineBuildContext
+        // This requires flui-pipeline to be available at runtime
+        self.rebuild_callback = Self::create_rebuild_callback(ctx);
+
         self.start_listening();
     }
 
+    #[inline]
     fn did_change_dependencies(&mut self, ctx: &dyn BuildContext) {
         self.view.did_change_dependencies(ctx);
     }
 
+    #[inline]
     fn deactivate(&mut self, ctx: &dyn BuildContext) {
         self.stop_listening();
         self.view.deactivate(ctx);
     }
 
+    #[inline]
     fn activate(&mut self, ctx: &dyn BuildContext) {
         self.view.activate(ctx);
         self.start_listening();
     }
 
+    #[inline]
     fn dispose(&mut self, ctx: &dyn BuildContext) {
         self.stop_listening();
         self.view.dispose(ctx);
     }
 
+    #[inline]
     fn debug_name(&self) -> &'static str {
         std::any::type_name::<V>()
     }
 
+    #[inline]
     fn as_any(&self) -> &dyn Any {
         self
     }
 
+    #[inline]
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }

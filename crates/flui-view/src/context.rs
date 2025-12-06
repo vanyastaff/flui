@@ -115,6 +115,30 @@ pub trait BuildContext: Send + Sync {
     /// trigger rebuilds of other elements.
     fn schedule_rebuild(&self, element_id: ElementId);
 
+    /// Create a rebuild callback for async operations.
+    ///
+    /// Returns a callback that can be called from async contexts (like
+    /// animation listeners) to trigger rebuilds of this element.
+    ///
+    /// The callback captures whatever state is needed to schedule rebuilds
+    /// (e.g., dirty set reference, element ID) and can be called from any
+    /// thread at any time.
+    ///
+    /// **Flutter equivalent:** Similar to `setState()` captured in closures
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// fn init(&mut self, ctx: &dyn BuildContext) {
+    ///     let rebuild = ctx.create_rebuild_callback();
+    ///
+    ///     animation.add_listener(Box::new(move || {
+    ///         rebuild();  // Triggers rebuild from animation thread
+    ///     }));
+    /// }
+    /// ```
+    fn create_rebuild_callback(&self) -> Box<dyn Fn() + Send + Sync>;
+
     // ========== TREE WALKING ==========
 
     /// Visit all ancestors from parent to root.
@@ -246,6 +270,11 @@ impl BuildContext for MockBuildContext {
 
     fn schedule_rebuild(&self, _element_id: ElementId) {
         // no-op for mock
+    }
+
+    fn create_rebuild_callback(&self) -> Box<dyn Fn() + Send + Sync> {
+        // no-op for mock
+        Box::new(|| {})
     }
 
     fn depend_on_raw(&self, _type_id: TypeId) -> Option<Arc<dyn Any + Send + Sync>> {

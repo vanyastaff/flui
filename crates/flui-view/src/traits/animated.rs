@@ -63,8 +63,16 @@ pub trait Listenable: Send + Sync + 'static {
 
 /// `AnimatedView` - Views that subscribe to animation changes.
 ///
-/// Similar to Flutter's `AnimatedWidget`. Automatically rebuilds when
+/// This is equivalent to Flutter's `AnimatedWidget`. Automatically rebuilds when
 /// the listenable (animation, controller, stream) notifies.
+///
+/// # Performance Tips
+///
+/// - Use `AnimatedView` for views driven by a single animation
+/// - The `build()` method is called on every animation frame - keep it fast!
+/// - Avoid allocations and expensive computations in `build()`
+/// - For multiple animations, consider using `StatefulView` with animation controllers
+/// - Cache child widgets that don't change between frames
 ///
 /// # Architecture
 ///

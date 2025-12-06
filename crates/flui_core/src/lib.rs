@@ -49,7 +49,9 @@ pub use flui_view::ViewMode;
 
 pub use flui_element::{Element, ElementLifecycle, ElementTree};
 
-// Element module for backward compatibility with widgets
+/// Element module for backward compatibility with widgets.
+///
+/// Re-exports core element types from `flui-element` crate.
 pub mod element {
     pub use flui_element::{Element, ElementLifecycle, ElementTree};
     pub use flui_foundation::ElementId;
@@ -62,7 +64,9 @@ pub mod element {
 pub use flui_element::IntoElement;
 pub use flui_view::{BuildContext, ViewObject};
 
-// View traits module for backward compatibility with widgets
+/// View traits module for backward compatibility with widgets.
+///
+/// Re-exports view traits and types from `flui-view` crate.
 pub mod view {
     pub use flui_element::IntoElement;
     pub use flui_view::{
@@ -76,10 +80,15 @@ pub mod view {
 // =============================================================================
 
 pub use flui_rendering::core::{Arity, RenderBox, RuntimeArity};
-// TODO: Re-enable after view module is fixed for typed protocols
-// pub use flui_rendering::view::{RenderObjectWrapper, RenderView, RenderViewObject, RenderViewWrapper, UpdateResult};
+// Re-export RenderView trait and UpdateResult from flui_rendering
+pub use flui_rendering::view::{RenderView, UpdateResult};
 
-// Render module for backward compatibility with widgets
+/// Render module for backward compatibility with widgets.
+///
+/// Re-exports rendering types from `flui_rendering` crate including:
+/// - RenderBox trait and render objects
+/// - Layout/paint/hit-test contexts
+/// - RenderState types
 pub mod render {
     pub use flui_rendering::prelude::*;
     // Additional re-exports for convenience

@@ -108,6 +108,97 @@ use flui_pipeline::PipelineError;
 /// - Easy to test (mock components)
 /// - SOLID principles (Single Responsibility)
 ///
+/// # Unified Pipeline Architecture (FLUI vs Flutter)
+///
+/// **Key Architectural Decision:** FLUI intentionally unifies Build + Layout + Paint
+/// in a single `PipelineOwner`, unlike Flutter's split architecture.
+///
+/// ## Flutter's Architecture
+///
+/// Flutter separates widget rebuilds from rendering:
+///
+/// ```text
+/// Flutter:
+///   BuildOwner (widgets layer)
+///     ├─ _dirtyElements: List<Element>
+///     ├─ scheduleBuildFor(Element)
+///     ├─ buildScope()
+///     └─ flushBuild()  ← Only handles widget rebuilds
+///
+///   PipelineOwner (rendering layer) - separate owner!
+///     ├─ _nodesNeedingLayout: List<RenderObject>
+///     ├─ _nodesNeedingPaint: List<RenderObject>
+///     ├─ flushLayout()
+///     └─ flushPaint()
+/// ```
+///
+/// ## FLUI's Unified Architecture
+///
+/// FLUI combines all three phases in one owner:
+///
+/// ```text
+/// FLUI:
+///   BuildOwner (lifecycle only - in flui-element)
+///     ├─ build_scope()    ← Just lifecycle coordination
+///     └─ lock_state()     ← No dirty list!
+///
+///   PipelineOwner (all phases - this struct)
+///     ├─ FrameCoordinator
+///     │   ├─ BuildPipeline   ← Contains dirty_elements
+///     │   ├─ LayoutPipeline  ← Contains dirty layout nodes
+///     │   └─ PaintPipeline   ← Contains dirty paint nodes
+///     ├─ flush_build()   ← Phase 1
+///     ├─ flush_layout()  ← Phase 2
+///     ├─ flush_paint()   ← Phase 3
+///     └─ build_frame()   ← All three phases atomically
+/// ```
+///
+/// ## Why Unified is Better for Rust
+///
+/// **1. Atomic Transactions**
+/// - Build→Layout→Paint is conceptually a single transaction
+/// - Clear ownership: PipelineOwner owns the entire pipeline
+/// - No need to coordinate between two owners with shared data
+///
+/// **2. Performance**
+/// - Cross-phase optimizations are straightforward (e.g., skip layout if no size changes)
+/// - No synchronization overhead between BuildOwner and PipelineOwner
+/// - Easier to implement frame budgeting (time limit for entire frame)
+///
+/// **3. Type Safety**
+/// - Phase ordering guaranteed at compile time
+/// - Cannot accidentally call flushPaint() before flushLayout()
+/// - Rust's type system enforces correct pipeline usage
+///
+/// **4. Simplicity**
+/// - Single API to learn: `PipelineOwner::build_frame()`
+/// - No confusion about which owner to use
+/// - Easier to understand: "PipelineOwner builds frames"
+///
+/// **5. Rust Ownership Semantics**
+/// - Flutter uses Dart's GC, so shared references are cheap
+/// - Rust requires explicit ownership, making split owners more complex
+/// - Unified pipeline avoids `Arc<RwLock<>>` between owners
+///
+/// **6. Testability**
+/// - Mock entire pipeline in one place
+/// - Easier to test cross-phase behavior
+/// - Less setup boilerplate in tests
+///
+/// ## What We Kept from Flutter
+///
+/// - **BuildOwner still exists** as a focused lifecycle coordinator
+/// - **Same phase ordering**: Build → Layout → Paint (constraints down, sizes up)
+/// - **Same dirty tracking concept**: Mark elements/nodes dirty, flush in batches
+/// - **Same phase semantics**: Each phase has same responsibilities as Flutter
+///
+/// ## Trade-offs
+///
+/// **Advantage:** Simpler, more performant, more Rust-idiomatic
+///
+/// **Consideration:** Less modular than Flutter's split (but we use composition
+/// via FrameCoordinator to maintain modularity internally)
+///
 /// # Critical Pattern: request_layout() Must Set Both Flags
 ///
 /// When requesting layout, you must set **both**:

@@ -1182,6 +1182,7 @@ dependencies = [
  "parking_lot",
  "serde",
  "slab",
+ "smallvec",
  "tracing",
 ]
 

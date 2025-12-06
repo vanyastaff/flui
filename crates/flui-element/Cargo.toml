@@ -25,6 +25,9 @@ tracing.workspace = true
 # Slab for efficient element storage
 slab = "0.4"
 
+# SmallVec for stack-optimized collections
+smallvec = "1.13"
+
 # Optional: serde support
 serde = { workspace = true, optional = true }
 

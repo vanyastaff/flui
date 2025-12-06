@@ -4,7 +4,7 @@
 
 use super::{ErrorInfo, ErrorWidget};
 use crate::{BuildContext, Element};
-use flui_view::{IntoView, StatefulView, StatelessView};
+use flui_view::{IntoView, StatefulView};
 use parking_lot::RwLock;
 use std::sync::Arc;
 
@@ -125,7 +125,7 @@ impl StatefulView for ErrorBoundary {
         ErrorBoundaryState::new()
     }
 
-    fn build(&self, state: &mut Self::State, ctx: &dyn BuildContext) -> impl IntoView {
+    fn build(&self, state: &mut Self::State, _ctx: &dyn BuildContext) -> impl IntoView {
         // Check if we have an error
         if let Some(error) = state.get_error() {
             // Call error handler if set

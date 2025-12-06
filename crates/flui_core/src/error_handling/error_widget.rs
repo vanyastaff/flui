@@ -3,7 +3,7 @@
 //! Analogous to Flutter's ErrorWidget, this widget displays error details
 //! when a build error occurs.
 
-use crate::{BuildContext, Element};
+use crate::BuildContext;
 use flui_view::{IntoView, StatelessView};
 
 /// Error information displayed by ErrorWidget
