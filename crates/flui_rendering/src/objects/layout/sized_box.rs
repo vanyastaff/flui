@@ -1,4 +1,55 @@
 //! RenderSizedBox - enforces exact size constraints
+//!
+//! Implements Flutter's sized box container that forces specific dimensions
+//! on its child or acts as a spacer when childless.
+//!
+//! # Flutter Equivalence
+//!
+//! | FLUI | Flutter |
+//! |------|---------|
+//! | `RenderSizedBox` | `RenderConstrainedBox` from `package:flutter/src/rendering/proxy_box.dart` |
+//! | `width` | `BoxConstraints.tightFor(width: ...)` |
+//! | `height` | `BoxConstraints.tightFor(height: ...)` |
+//!
+//! # Layout Protocol
+//!
+//! 1. **Check for child**
+//!    - If no child: return specified size (act as spacer)
+//!
+//! 2. **Determine layout strategy**
+//!    - Both dimensions specified: tight constraints (exact size)
+//!    - One or both unspecified: loose constraints for child's natural size
+//!
+//! 3. **Layout child**
+//!    - Tight: force child to exact width × height
+//!    - Loose: let child choose size, use for unspecified dimensions
+//!
+//! 4. **Return final size**
+//!    - Use specified dimensions or child's size for unspecified dimensions
+//!
+//! # Performance
+//!
+//! - **Layout**: O(1) - single child layout with constant-time constraint calculation
+//! - **Paint**: O(1) - direct child paint at offset (no transformation)
+//! - **Memory**: 16 bytes (2 × Option<f32>)
+//!
+//! # Examples
+//!
+//! ```rust,ignore
+//! use flui_rendering::RenderSizedBox;
+//!
+//! // Force child to be exactly 100x100
+//! let sized = RenderSizedBox::exact(100.0, 100.0);
+//!
+//! // Set width only, height flexible
+//! let wide = RenderSizedBox::width(200.0);
+//!
+//! // Set height only, width flexible
+//! let tall = RenderSizedBox::height(150.0);
+//!
+//! // Spacer (no child): 50px horizontal gap
+//! let spacer = RenderSizedBox::width(50.0);
+//! ```
 
 use crate::{RenderObject, RenderResult};
 
@@ -7,39 +58,31 @@ use crate::core::{Optional, RenderBox};
 use flui_types::constraints::BoxConstraints;
 use flui_types::Size;
 
-/// RenderObject that enforces exact size constraints
+/// RenderObject that enforces exact size constraints.
 ///
-/// This render object forces its child to have a specific width and/or height.
-/// If width or height is None, that dimension uses the constraint's max value.
+/// Forces its child to have specific width and/or height, or acts as
+/// a spacer when no child is present.
 ///
-/// # Layout Behavior
+/// # Arity
 ///
-/// - **Both specified**: Forces exact size (tight constraints)
-/// - **Width only**: Sets width, height fills constraint
-/// - **Height only**: Sets height, width fills constraint
-/// - **Neither specified**: Fills max constraints (same as unconstrained child)
+/// `Optional` - Can have 0 or 1 child.
 ///
-/// # Without Child (Spacer)
+/// # Protocol
 ///
-/// When no child is present, RenderSizedBox acts as a spacer, returning the specified size.
+/// Box protocol - Uses `BoxConstraints` and returns `Size`.
 ///
-/// # Example
+/// # Use Cases
 ///
-/// ```rust,ignore
-/// use flui_rendering::RenderSizedBox;
+/// - **Fixed sizing**: Force exact dimensions on child
+/// - **Partial sizing**: Set one dimension, let other be flexible
+/// - **Spacers**: Create empty space with specified dimensions
 ///
-/// // Force child to be exactly 100x100
-/// let sized = RenderSizedBox::exact(100.0, 100.0);
+/// # Flutter Compliance
 ///
-/// // Set width only, height flexible
-/// let wide = RenderSizedBox::width(200.0);
-///
-/// // Set height only, width flexible
-/// let tall = RenderSizedBox::height(150.0);
-///
-/// // Spacer (no child): 50px horizontal gap
-/// let spacer = RenderSizedBox::width(50.0);
-/// ```
+/// Matches Flutter's RenderConstrainedBox with tight constraints:
+/// - When both dimensions specified: uses tight constraints
+/// - When dimensions unspecified: uses loose constraints for natural size
+/// - Acts as spacer when no child present
 #[derive(Debug)]
 pub struct RenderSizedBox {
     /// Explicit width (None = unconstrained)
