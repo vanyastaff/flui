@@ -16,6 +16,7 @@
 use flui_foundation::{ElementId, Slot};
 use flui_tree::error::{TreeError, TreeResult};
 use flui_tree::{sealed, DepthTracking, Lifecycle, TreeNav, TreeRead, TreeWrite, TreeWriteNav};
+use smallvec::SmallVec;
 
 use super::ElementTree;
 use crate::Element;
@@ -28,13 +29,56 @@ impl sealed::TreeReadSealed for ElementTree {}
 impl sealed::TreeNavSealed for ElementTree {}
 
 // ============================================================================
+// Iterator Wrappers
+// ============================================================================
+
+/// Zero-cost wrapper for node ID iterator.
+///
+/// Wraps the internal Slab iterator without exposing private types.
+/// Performance: Same as direct iteration, no overhead.
+pub struct NodeIdIter<'a> {
+    inner: slab::Iter<'a, super::element_tree::ElementNode>,
+}
+
+impl<'a> NodeIdIter<'a> {
+    fn new(iter: slab::Iter<'a, super::element_tree::ElementNode>) -> Self {
+        Self { inner: iter }
+    }
+}
+
+impl Iterator for NodeIdIter<'_> {
+    type Item = ElementId;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next().map(|(idx, _)| ElementId::new(idx + 1))
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+}
+
+impl ExactSizeIterator for NodeIdIter<'_> {
+    #[inline]
+    fn len(&self) -> usize {
+        self.inner.len()
+    }
+}
+
+// ============================================================================
 // TreeRead Implementation
 // ============================================================================
 
 impl TreeRead for ElementTree {
     type Node = Element;
+
+    /// Zero-cost iterator over element IDs using GAT.
+    ///
+    /// Maps Slab indices (0-based) to ElementIds (1-based) without heap allocation.
     type NodeIter<'a>
-        = Box<dyn Iterator<Item = ElementId> + 'a>
+        = NodeIdIter<'a>
     where
         Self: 'a;
 
@@ -59,8 +103,11 @@ impl TreeRead for ElementTree {
         self.nodes.len()
     }
 
+    /// Returns zero-cost iterator over all element IDs.
+    ///
+    /// Performance: Wrapper around Slab iterator, no heap allocation.
     fn node_ids(&self) -> Self::NodeIter<'_> {
-        Box::new(self.nodes.iter().map(|(idx, _)| ElementId::new(idx + 1)))
+        NodeIdIter::new(self.nodes.iter())
     }
 }
 
@@ -69,18 +116,30 @@ impl TreeRead for ElementTree {
 // ============================================================================
 
 impl TreeNav for ElementTree {
+    /// Zero-cost iterator over children using GAT.
+    ///
+    /// Uses Flatten + Option to avoid heap allocation while supporting empty case.
     type ChildrenIter<'a>
-        = Box<dyn Iterator<Item = ElementId> + 'a>
+        = std::iter::Flatten<
+            std::option::IntoIter<std::iter::Copied<std::slice::Iter<'a, ElementId>>>,
+        >
     where
         Self: 'a;
+
     type AncestorsIter<'a>
         = AncestorIter<'a>
     where
         Self: 'a;
+
     type DescendantsIter<'a>
         = DescendantsIter<'a>
     where
         Self: 'a;
+
+    /// Siblings iterator.
+    ///
+    /// Note: Uses Box for now due to complex Filter type. Siblings are accessed
+    /// less frequently than children, so the allocation overhead is acceptable.
     type SiblingsIter<'a>
         = Box<dyn Iterator<Item = ElementId> + 'a>
     where
@@ -92,15 +151,17 @@ impl TreeNav for ElementTree {
         self.get(id)?.parent()
     }
 
-    /// Returns an iterator over the children of the given element.
+    /// Returns zero-cost iterator over children of the given element.
+    ///
+    /// Performance: Uses Flatten + Option pattern to avoid Box allocation.
+    /// The iterator is stack-allocated and has the same performance as direct
+    /// iteration over Vec<ElementId>.
     #[inline]
     fn children(&self, id: ElementId) -> Self::ChildrenIter<'_> {
-        Box::new(
-            self.get(id)
-                .map(|e| e.children().iter().copied())
-                .into_iter()
-                .flatten(),
-        )
+        self.get(id)
+            .map(|e| e.children().iter().copied())
+            .into_iter()
+            .flatten()
     }
 
     /// Returns an iterator over ancestors of the given element.
@@ -180,18 +241,32 @@ impl Iterator for AncestorIter<'_> {
 }
 
 /// Iterator over descendants of an element in depth-first order.
+///
+/// Uses SmallVec for stack-allocated traversal buffer. Typical UI trees
+/// are shallow (depth < 32), so this avoids heap allocation in most cases.
+///
+/// Performance:
+/// - Depth ≤ 32: Zero heap allocations (stack-only)
+/// - Depth > 32: Falls back to heap, same as Vec
 #[derive(Debug)]
 pub struct DescendantsIter<'a> {
     tree: &'a ElementTree,
-    stack: Vec<(ElementId, usize)>,
+    /// Stack buffer with 32 inline elements for typical tree depths.
+    ///
+    /// Each entry is (ElementId, depth). With 32 inline elements, this
+    /// supports trees up to depth 32 without any heap allocation.
+    stack: SmallVec<[(ElementId, usize); 32]>,
 }
 
 impl<'a> DescendantsIter<'a> {
+    /// Creates a new descendants iterator starting from root.
+    ///
+    /// Performance: Initializes with SmallVec, no heap allocation for
+    /// shallow trees (depth ≤ 32).
     fn new(tree: &'a ElementTree, root: ElementId) -> Self {
-        Self {
-            tree,
-            stack: vec![(root, 0)],
-        }
+        let mut stack = SmallVec::new();
+        stack.push((root, 0));
+        Self { tree, stack }
     }
 }
 
