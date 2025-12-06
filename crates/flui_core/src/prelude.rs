@@ -32,9 +32,8 @@
 /// View traits
 pub use flui_view::{AnimatedView, ProviderView, ProxyView, StatefulView, StatelessView};
 
-/// Render view trait
-// TODO: Re-enable after view module is fixed for typed protocols
-// pub use flui_rendering::view::RenderView;
+/// Render view trait and update result
+pub use flui_rendering::view::{RenderView, UpdateResult};
 
 /// Context for view building (abstract trait)
 pub use flui_view::BuildContext;
