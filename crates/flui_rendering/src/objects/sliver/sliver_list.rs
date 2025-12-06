@@ -9,6 +9,7 @@ use crate::core::{RenderObject, RenderSliver, SliverLayoutContext, SliverPaintCo
 use crate::RenderResult;
 use flui_painting::Canvas;
 use flui_types::{Axis, BoxConstraints, Offset, SliverConstraints, SliverGeometry, Size};
+use std::collections::HashMap;
 
 /// Child builder function for lazy loading
 ///
@@ -33,6 +34,12 @@ pub struct RenderSliverList {
     sliver_geometry: SliverGeometry,
     /// Cached child sizes from layout
     child_sizes: Vec<Size>,
+    /// Cached child extents (main axis size) for variable extent lists
+    /// Key: child index, Value: main axis extent (height for vertical)
+    extent_cache: HashMap<usize, f32>,
+    /// Cached child offsets (main axis position) for fast paint
+    /// Index: child index, Value: cumulative offset from start
+    offset_cache: Vec<f32>,
 }
 
 impl std::fmt::Debug for RenderSliverList {
@@ -58,6 +65,8 @@ impl RenderSliverList {
             cross_axis_extent: 0.0,
             sliver_geometry: SliverGeometry::default(),
             child_sizes: Vec::new(),
+            extent_cache: HashMap::new(),
+            offset_cache: Vec::new(),
         }
     }
 
@@ -72,6 +81,8 @@ impl RenderSliverList {
             cross_axis_extent: 0.0,
             sliver_geometry: SliverGeometry::default(),
             child_sizes: Vec::new(),
+            extent_cache: HashMap::new(),
+            offset_cache: Vec::new(),
         }
     }
 
@@ -118,8 +129,41 @@ impl RenderSliverList {
                 last_visible.min(child_count),
             )
         } else {
-            // Variable extent - layout all for now (TODO: optimize with caching)
-            (0, child_count)
+            // Variable extent - use extent cache for O(n) calculation
+            // This is much better than laying out all children
+            if self.extent_cache.is_empty() {
+                // First layout - need to layout all children to build cache
+                return (0, child_count);
+            }
+
+            let mut cumulative_extent = 0.0;
+            let mut first_visible = 0;
+            let mut last_visible = child_count;
+
+            // Find first visible child
+            for i in 0..child_count {
+                if let Some(&extent) = self.extent_cache.get(&i) {
+                    if cumulative_extent + extent > scroll_offset {
+                        first_visible = i;
+                        break;
+                    }
+                    cumulative_extent += extent;
+                }
+            }
+
+            // Find last visible child
+            cumulative_extent = 0.0;
+            for i in 0..child_count {
+                if let Some(&extent) = self.extent_cache.get(&i) {
+                    cumulative_extent += extent;
+                    if cumulative_extent >= scroll_offset + remaining_extent {
+                        last_visible = (i + 1).min(child_count);
+                        break;
+                    }
+                }
+            }
+
+            (first_visible, last_visible)
         }
     }
 }
@@ -139,13 +183,14 @@ impl RenderSliver<Variable> for RenderSliverList {
         // Store cross axis extent
         self.cross_axis_extent = constraints.cross_axis_extent;
 
-        // Get children count
-        let children: Vec<_> = ctx.children().collect();
-        let child_count = children.len();
+        // Count children without allocation
+        let child_count = ctx.children().count();
 
         if child_count == 0 {
             self.sliver_geometry = SliverGeometry::default();
             self.child_sizes.clear();
+            self.extent_cache.clear();
+            self.offset_cache.clear();
             return Ok(self.sliver_geometry);
         }
 
@@ -156,9 +201,11 @@ impl RenderSliver<Variable> for RenderSliverList {
             child_count,
         );
 
-        // Layout children
+        // Prepare caches
         self.child_sizes.clear();
         self.child_sizes.reserve(child_count);
+        self.offset_cache.clear();
+        self.offset_cache.reserve(child_count);
 
         let child_constraints = if let Some(item_extent) = self.item_extent {
             // Fixed extent - tight height constraints
@@ -175,18 +222,40 @@ impl RenderSliver<Variable> for RenderSliverList {
 
         let mut total_extent = 0.0;
 
-        for (i, child_id) in children.iter().enumerate() {
-            // Layout child
-            let child_size = ctx.tree_mut().perform_layout(*child_id, child_constraints)?;
-            self.child_sizes.push(child_size);
+        // Layout children (iterate without collecting into Vec)
+        for (i, child_id) in ctx.children().enumerate() {
+            // For variable extent with cache, only layout visible children after first frame
+            let should_layout = self.item_extent.is_some() || self.extent_cache.is_empty() || (i >= first_visible && i < last_visible);
 
-            // Use height for vertical scrolling (assuming vertical for now)
-            // TODO: Use axis_direction to determine which dimension
-            total_extent += child_size.height;
+            let child_extent = if should_layout {
+                // Layout child
+                let child_size = ctx.tree_mut().perform_layout(child_id, child_constraints)?;
+                let extent = child_size.height; // TODO: Use axis_direction
 
-            // Position child
-            let child_offset = Offset::new(0.0, total_extent - child_size.height);
-            ctx.set_child_offset(*child_id, child_offset);
+                // Update caches
+                self.child_sizes.push(child_size);
+                if self.item_extent.is_none() {
+                    self.extent_cache.insert(i, extent);
+                }
+
+                extent
+            } else {
+                // Use cached extent (for variable extent lists)
+                let extent = self.extent_cache.get(&i).copied().unwrap_or(0.0);
+                self.child_sizes.push(Size::new(constraints.cross_axis_extent, extent));
+                extent
+            };
+
+            // Cache offset before adding extent
+            self.offset_cache.push(total_extent);
+
+            total_extent += child_extent;
+
+            // Position child (only if we laid it out)
+            if should_layout {
+                let child_offset = Offset::new(0.0, total_extent - child_extent);
+                ctx.set_child_offset(child_id, child_offset);
+            }
         }
 
         // Calculate sliver geometry
@@ -220,24 +289,19 @@ impl RenderSliver<Variable> for RenderSliverList {
     fn paint(&self, ctx: &mut SliverPaintContext<'_, Variable>) {
         let mut canvas = Canvas::new();
 
-        // Paint visible children
+        // Calculate scroll offset once
+        let scroll_offset = ctx.geometry.scroll_extent - (ctx.geometry.scroll_extent - ctx.geometry.paint_extent);
+
+        // Paint visible children using cached offsets
         for (i, child_id) in ctx.children().enumerate() {
             if let Some(child_size) = self.child_sizes.get(i) {
-                // Calculate child offset from cached layout
-                let mut child_offset_y = 0.0;
-                for j in 0..i {
-                    if let Some(prev_size) = self.child_sizes.get(j) {
-                        child_offset_y += prev_size.height;
-                    }
-                }
+                // Use cached offset instead of recalculating
+                let child_offset_y = self.offset_cache.get(i).copied().unwrap_or(0.0);
 
                 // Only paint if visible
-                let child_scroll_offset = child_offset_y;
                 let child_end = child_offset_y + child_size.height;
 
-                let scroll_offset = ctx.geometry.scroll_extent - (ctx.geometry.scroll_extent - ctx.geometry.paint_extent);
-
-                if child_end > scroll_offset && child_scroll_offset < scroll_offset + ctx.geometry.paint_extent {
+                if child_end > scroll_offset && child_offset_y < scroll_offset + ctx.geometry.paint_extent {
                     // Child is visible, paint it
                     let child_offset = Offset::new(ctx.offset.dx, ctx.offset.dy + child_offset_y - scroll_offset);
 

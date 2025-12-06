@@ -23,12 +23,10 @@
 // TODO: Migrate to Render<A>
 // use crate::core::{RuntimeArity, BoxPaintCtx, LegacyRender};
 #[cfg(debug_assertions)]
-#[cfg(debug_assertions)]
-#[cfg(debug_assertions)]
-#[cfg(debug_assertions)]
-#[cfg(debug_assertions)]
-#[cfg(debug_assertions)]
 use flui_types::{Color, Offset, Rect, Size};
+
+#[cfg(debug_assertions)]
+use flui_painting::{DrawCommand, Paint};
 
 /// Paint overflow indicator with diagonal stripes (debug mode only)
 ///
