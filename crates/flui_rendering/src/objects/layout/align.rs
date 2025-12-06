@@ -1,36 +1,87 @@
 //! RenderAlign - aligns child within available space
+//!
+//! Implements Flutter's alignment container for positioning a child within
+//! available space with optional size factors.
+//!
+//! # Flutter Equivalence
+//!
+//! | FLUI | Flutter |
+//! |------|---------|
+//! | `RenderAlign` | `RenderPositionedBox` from `package:flutter/src/rendering/shifted_box.dart` |
+//! | `alignment` | `alignment` property |
+//! | `width_factor` | `widthFactor` property |
+//! | `height_factor` | `heightFactor` property |
+//!
+//! # Layout Protocol
+//!
+//! 1. **Layout child**
+//!    - Use loose constraints to get child's natural size
+//!
+//! 2. **Calculate container size**
+//!    - If `width_factor` is set: `width = child_width * width_factor` (clamped)
+//!    - If `width_factor` is None: `width = constraints.max_width` (expand)
+//!    - Same logic for height
+//!
+//! 3. **Calculate alignment offset**
+//!    - Use `Alignment::calculate_offset()` to position child within container
+//!    - Cache offset for paint phase
+//!
+//! 4. **Handle no child case**
+//!    - Return max constraints size (or min if max is infinite)
+//!
+//! # Performance
+//!
+//! - **Layout**: O(1) - single child layout with simple size calculation
+//! - **Paint**: O(1) - direct child paint with cached offset
+//! - **Memory**: 40 bytes (Alignment + 2 Option<f32> + Offset cache)
+//!
+//! # Examples
+//!
+//! ```rust,ignore
+//! use flui_rendering::RenderAlign;
+//! use flui_types::Alignment;
+//!
+//! // Center align with natural sizing
+//! let align = RenderAlign::new(Alignment::CENTER);
+//!
+//! // Top-left align with size factors
+//! let align = RenderAlign::with_factors(
+//!     Alignment::TOP_LEFT,
+//!     Some(2.0),   // Width = child_width * 2.0
+//!     Some(1.5),   // Height = child_height * 1.5
+//! );
+//! ```
 
 use crate::core::{BoxLayoutCtx, BoxPaintCtx, Optional, RenderBox};
 use crate::{RenderObject, RenderResult};
 use flui_types::{Alignment, Offset, Size};
 
-/// RenderObject that aligns its child within the available space
+/// RenderObject that aligns its child within available space.
 ///
-/// This render object positions its child according to the alignment parameter.
-/// If width_factor or height_factor are specified, the RenderAlign will
-/// size itself to be that factor times the child's size in that dimension.
+/// Positions child according to alignment parameter with optional size factors
+/// for constraining container dimensions.
 ///
-/// # Layout Behavior
+/// # Arity
 ///
-/// - **With factors**: Size is `child_size * factor` (clamped to constraints)
-/// - **Without factors**: Expands to fill available space (takes max constraints)
+/// `Optional` - Can have 0 or 1 child.
 ///
-/// # Example
+/// # Protocol
 ///
-/// ```rust,ignore
-/// use flui_rendering::RenderAlign;
-/// use flui_types::Alignment;
+/// Box protocol - Uses `BoxConstraints` and returns `Size`.
 ///
-/// // Center align with natural sizing
-/// let align = RenderAlign::new(Alignment::CENTER);
+/// # Use Cases
 ///
-/// // Top-left align with size factors
-/// let align = RenderAlign::with_factors(
-///     Alignment::TOP_LEFT,
-///     Some(2.0),   // Width = child_width * 2.0
-///     Some(1.5),   // Height = child_height * 1.5
-/// );
-/// ```
+/// - **Centering**: Position child at center of available space
+/// - **Corner alignment**: Align to edges (top-left, bottom-right, etc.)
+/// - **Sized alignment**: Control container size relative to child size
+///
+/// # Flutter Compliance
+///
+/// Matches Flutter's RenderPositionedBox behavior:
+/// - Layouts child with loose constraints
+/// - Respects width_factor and height_factor for sizing
+/// - Uses Alignment to calculate child offset
+/// - Expands to fill space when factors are None
 #[derive(Debug)]
 pub struct RenderAlign {
     /// The alignment within the available space
@@ -125,17 +176,8 @@ impl RenderBox<Optional> for RenderAlign {
 
             let size = Size::new(width, height);
 
-            // Calculate aligned offset in local coordinates
-            // Alignment uses normalized coordinates: -1.0 = left/top, 0.0 = center, 1.0 = right/bottom
-            let available_width = size.width - child_size.width;
-            let available_height = size.height - child_size.height;
-
-            // Convert normalized alignment to pixel offset
-            // Formula: offset = (available_space * (alignment + 1.0)) / 2.0
-            let aligned_x = (available_width * (self.alignment.x + 1.0)) / 2.0;
-            let aligned_y = (available_height * (self.alignment.y + 1.0)) / 2.0;
-
-            self.child_offset = Offset::new(aligned_x, aligned_y);
+            // Calculate aligned offset using Alignment's built-in method
+            self.child_offset = self.alignment.calculate_offset(child_size, size);
 
             Ok(size)
         } else {
