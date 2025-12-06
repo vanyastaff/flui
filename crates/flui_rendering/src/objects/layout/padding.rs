@@ -1,95 +1,147 @@
-//! RenderPadding - adds padding around a child
+//! RenderPadding - Adds empty space around child widget
 //!
-//! This module provides [`RenderPadding`], a render object that adds empty space
-//! around its child, following Flutter's RenderPadding protocol exactly.
+//! Implements Flutter's RenderPadding that adds padding (empty space) around its
+//! child. Deflates constraints before laying out the child, then adds padding to
+//! the final size. Extends RenderShiftedBox in Flutter's class hierarchy.
 //!
 //! # Flutter Equivalence
 //!
-//! This implementation matches Flutter's `RenderPadding` class from
-//! `package:flutter/src/rendering/shifted_box.dart`.
-//!
-//! **Flutter API:**
-//! ```dart
-//! class RenderPadding extends RenderShiftedBox {
-//!   RenderPadding({
-//!     EdgeInsetsGeometry? padding,
-//!     RenderBox? child,
-//!   });
-//! }
-//! ```
+//! | FLUI | Flutter |
+//! |------|---------|
+//! | `RenderPadding` | `RenderPadding` from `package:flutter/src/rendering/shifted_box.dart` |
+//! | `padding` | `padding` property (EdgeInsetsGeometry) |
+//! | `set_padding()` | `padding = value` setter |
 //!
 //! # Layout Protocol
 //!
-//! 1. **Constraints**: Deflates parent constraints by padding amount
-//! 2. **Child Layout**: Lays out child with deflated constraints
-//! 3. **Sizing**: Adds padding to child size
-//! 4. **Positioning**: Offsets child by `(left, top)` padding
+//! 1. **Deflate constraints**
+//!    - Reduce max width by padding.horizontal_total()
+//!    - Reduce max height by padding.vertical_total()
+//!    - Ensure constraints remain valid (min ≤ max)
+//!
+//! 2. **Layout child**
+//!    - Pass deflated constraints to child
+//!    - Child determines its size within available space
+//!
+//! 3. **Calculate final size**
+//!    - Add horizontal padding to child width
+//!    - Add vertical padding to child height
+//!    - Final size = child size + padding
+//!
+//! # Paint Protocol
+//!
+//! 1. **Calculate child offset**
+//!    - Offset = (padding.left, padding.top)
+//!    - Child painted inside padded area
+//!
+//! 2. **Paint child**
+//!    - Child painted at parent offset + padding offset
+//!    - Padding area remains empty (no fill)
 //!
 //! # Performance
 //!
 //! - **Layout**: O(1) - single child layout with constant-time constraint deflation
 //! - **Paint**: O(1) - direct child paint with offset
 //! - **Memory**: 32 bytes (EdgeInsets = 4 × f32)
+//!
+//! # Use Cases
+//!
+//! - **Spacing**: Add space around widgets (buttons, cards, containers)
+//! - **Layout margins**: Create outer margins for widgets
+//! - **Safe areas**: Respect device safe areas (notches, rounded corners)
+//! - **Breathing room**: Improve visual hierarchy with whitespace
+//! - **Touch targets**: Increase tap target size without changing visual size
+//! - **Grid spacing**: Add padding to grid cells
+//!
+//! # Examples
+//!
+//! ```rust,ignore
+//! use flui_rendering::RenderPadding;
+//! use flui_types::EdgeInsets;
+//!
+//! // Uniform padding (all sides equal)
+//! let padding = RenderPadding::new(EdgeInsets::all(10.0));
+//!
+//! // Symmetric padding (horizontal and vertical)
+//! let padding = RenderPadding::new(EdgeInsets::symmetric(20.0, 10.0));
+//!
+//! // Asymmetric padding (each side different)
+//! let padding = RenderPadding::new(EdgeInsets::ltrb(10.0, 20.0, 10.0, 20.0));
+//!
+//! // Common patterns
+//! let horizontal = RenderPadding::new(EdgeInsets::symmetric_h(20.0));
+//! let vertical = RenderPadding::new(EdgeInsets::symmetric_v(10.0));
+//! ```
 
 use crate::core::{BoxLayoutCtx, BoxPaintCtx, RenderBox, Single};
 use crate::{RenderObject, RenderResult};
 use flui_types::{EdgeInsets, Offset, Size};
 
-/// RenderObject that adds padding around its child.
+/// RenderObject that adds padding (empty space) around its child.
 ///
-/// Padding increases the size of the render object by the padding amount.
-/// The child is laid out with constraints deflated by the padding,
-/// then the final size includes the padding.
+/// Padding increases the final size by the padding amount. Constraints are
+/// deflated before passing to the child, ensuring the child fits within the
+/// available space minus padding.
+///
+/// # Arity
+///
+/// `Single` - Must have exactly 1 child.
+///
+/// # Protocol
+///
+/// Box protocol - Uses `BoxConstraints` and returns `Size`.
+///
+/// # Use Cases
+///
+/// - **Widget spacing**: Add space around buttons, cards, images
+/// - **Layout margins**: Create outer margins for containers
+/// - **Safe areas**: Respect device safe areas (notches, rounded corners)
+/// - **Visual hierarchy**: Improve readability with whitespace
+/// - **Touch targets**: Increase tap area without changing visual size
+/// - **Grid cells**: Add uniform spacing in grid layouts
 ///
 /// # Flutter Compliance
 ///
-/// This implementation follows Flutter's RenderPadding protocol:
+/// Matches Flutter's RenderPadding behavior:
+/// - Deflates constraints by padding amount before child layout
+/// - Adds padding to child size for final size
+/// - Child painted at offset (padding.left, padding.top)
+/// - Hit testing adjusted for padding offset
+/// - Extends RenderShiftedBox base class
 ///
-/// | Flutter Method | FLUI Equivalent | Behavior |
-/// |----------------|-----------------|----------|
-/// | `performLayout()` | `layout()` | Deflate constraints, layout child, add padding |
-/// | `paint()` | `paint()` | Paint child at padded offset |
-/// | `hitTestChildren()` | `hit_test()` | Transform position by padding |
+/// # Layout Algorithm Example
 ///
-/// # Examples
+/// ```text
+/// Input:
+///   Parent constraints: min=0×0, max=400×600
+///   Padding: left=10, top=20, right=10, bottom=20
+///
+/// Step 1 - Deflate constraints:
+///   horizontal = 10 + 10 = 20
+///   vertical = 20 + 20 = 40
+///   child_constraints = max=(400-20)×(600-40) = 380×560
+///
+/// Step 2 - Layout child:
+///   child_size = 300×400 (child determines size)
+///
+/// Step 3 - Add padding:
+///   final_size = (300+20)×(400+40) = 320×440
+/// ```
+///
+/// # Example
 ///
 /// ```rust,ignore
 /// use flui_rendering::RenderPadding;
 /// use flui_types::EdgeInsets;
 ///
-/// // Uniform padding
+/// // Uniform padding (all sides 10px)
 /// let padding = RenderPadding::new(EdgeInsets::all(10.0));
 ///
-/// // Asymmetric padding
-/// let padding = RenderPadding::new(EdgeInsets::only(
-///     left: 10.0,
-///     right: 20.0,
-///     top: 5.0,
-///     bottom: 15.0,
-/// ));
+/// // Asymmetric padding (different on each side)
+/// let padding = RenderPadding::new(EdgeInsets::ltrb(10.0, 20.0, 10.0, 20.0));
 ///
-/// // Horizontal/Vertical shortcuts
-/// let h_padding = RenderPadding::new(EdgeInsets::symmetric_h(20.0));
-/// let v_padding = RenderPadding::new(EdgeInsets::symmetric_v(10.0));
-/// ```
-///
-/// # Layout Algorithm
-///
-/// ```text
-/// Parent Constraints: min=0×0, max=400×600
-/// Padding: EdgeInsets(left: 10, top: 20, right: 10, bottom: 20)
-///
-/// Step 1: Deflate constraints
-///   child_constraints = BoxConstraints(
-///     min: 0×0,
-///     max: (400 - 20) × (600 - 40) = 380×560
-///   )
-///
-/// Step 2: Layout child
-///   child_size = child.layout(child_constraints) = 300×400
-///
-/// Step 3: Add padding
-///   size = (300 + 20) × (400 + 40) = 320×440
+/// // Symmetric padding (horizontal and vertical)
+/// let padding = RenderPadding::new(EdgeInsets::symmetric(20.0, 10.0));
 /// ```
 #[derive(Debug, Clone)]
 pub struct RenderPadding {
