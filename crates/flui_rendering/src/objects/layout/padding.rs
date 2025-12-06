@@ -81,7 +81,8 @@ use flui_types::{EdgeInsets, Offset, Size};
 ///
 /// Padding increases the final size by the padding amount. Constraints are
 /// deflated before passing to the child, ensuring the child fits within the
-/// available space minus padding.
+/// available space minus padding. Child is then painted at an offset
+/// corresponding to the padding's left and top values.
 ///
 /// # Arity
 ///
@@ -91,6 +92,11 @@ use flui_types::{EdgeInsets, Offset, Size};
 ///
 /// Box protocol - Uses `BoxConstraints` and returns `Size`.
 ///
+/// # Pattern
+///
+/// **Constraint Deflator with Offset** - Deflates constraints by padding amount,
+/// paints child at padding offset, inflates child size by padding for final size.
+///
 /// # Use Cases
 ///
 /// - **Widget spacing**: Add space around buttons, cards, images
@@ -99,6 +105,7 @@ use flui_types::{EdgeInsets, Offset, Size};
 /// - **Visual hierarchy**: Improve readability with whitespace
 /// - **Touch targets**: Increase tap area without changing visual size
 /// - **Grid cells**: Add uniform spacing in grid layouts
+/// - **Content insets**: Inset content from edges of containers
 ///
 /// # Flutter Compliance
 ///
@@ -108,6 +115,13 @@ use flui_types::{EdgeInsets, Offset, Size};
 /// - Child painted at offset (padding.left, padding.top)
 /// - Hit testing adjusted for padding offset
 /// - Extends RenderShiftedBox base class
+///
+/// # Comparison with Related Objects
+///
+/// - **vs RenderMargin**: Margin adds space outside, Padding adds space inside (same implementation)
+/// - **vs RenderSizedBox**: SizedBox forces size, Padding adjusts constraints
+/// - **vs RenderAlign**: Align positions child, Padding offsets child
+/// - **vs RenderConstrainedBox**: ConstrainedBox adds constraints, Padding deflates them
 ///
 /// # Layout Algorithm Example
 ///
