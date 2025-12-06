@@ -60,6 +60,18 @@ use flui_types::{geometry::Transform, Matrix4, Offset, Size};
 /// The transformation is applied during painting. It doesn't affect layout,
 /// so the child is laid out as if untransformed.
 ///
+/// # Arity
+///
+/// `Single` - Must have exactly 1 child.
+///
+/// # Protocol
+///
+/// Box protocol - Uses `BoxConstraints` and returns `Size`.
+///
+/// # Pattern
+///
+/// **Proxy** - Passes constraints unchanged to child, applies transform during paint only.
+///
 /// # Flutter Compliance
 ///
 /// This implementation follows Flutter's RenderTransform protocol:
@@ -288,7 +300,7 @@ impl RenderBox<Single> for RenderTransform {
         }
 
         // Paint child at origin (transform already applied)
-        let _ = ctx.paint_single_child(Offset::ZERO);
+        ctx.paint_single_child(Offset::ZERO);
 
         ctx.canvas_mut().restore();
     }
