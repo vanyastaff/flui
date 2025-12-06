@@ -114,7 +114,7 @@ impl RenderBox<Single> for RenderIntrinsicWidth {
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Single>) {
         let child_id = *ctx.children.single();
-        let _ = ctx.paint_child(child_id, ctx.offset);
+        ctx.paint_child(child_id, ctx.offset);
     }
 }
 

@@ -145,7 +145,7 @@ impl RenderBox<Variable> for RenderStack {
         // Paint children in order (first child in back, last child on top)
         for (i, child_id) in child_ids.into_iter().enumerate() {
             let child_offset = self.child_offsets.get(i).copied().unwrap_or(Offset::ZERO);
-            let _ = ctx.paint_child(*child_id, offset + child_offset);
+            ctx.paint_child(*child_id, offset + child_offset);
         }
     }
 }

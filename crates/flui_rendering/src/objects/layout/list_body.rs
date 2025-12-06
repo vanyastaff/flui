@@ -164,7 +164,7 @@ impl RenderBox<Variable> for RenderListBody {
             };
 
             // Paint child with combined offset
-            let _ = ctx.paint_child(*child_id, offset + child_offset);
+            ctx.paint_child(*child_id, offset + child_offset);
 
             current_offset += match self.main_axis {
                 Axis::Vertical => child_size.height + self.spacing,

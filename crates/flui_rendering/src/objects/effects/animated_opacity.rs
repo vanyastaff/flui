@@ -86,7 +86,7 @@ impl RenderBox<Single> for RenderAnimatedOpacity {
         // TODO: Implement proper opacity layer support in Canvas API
         // For now, just paint child directly - opacity effect is visual only
         // In future: save layer with opacity, paint child, restore layer
-        let _ = ctx.paint_child(child_id, ctx.offset);
+        ctx.paint_child(child_id, ctx.offset);
     }
 }
 

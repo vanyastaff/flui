@@ -189,7 +189,7 @@ impl RenderBox<Single> for RenderConstraintsTransformBox {
 
         // Paint child at calculated offset
         // Note: Child may overflow if transformed constraints allowed larger size
-        let _ = ctx.paint_child(child_id, ctx.offset + child_offset);
+        ctx.paint_child(child_id, ctx.offset + child_offset);
     }
 }
 

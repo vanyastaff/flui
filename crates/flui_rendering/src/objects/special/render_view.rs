@@ -155,7 +155,7 @@ impl RenderBox<Single> for RenderView {
         // Simply paint the child at origin (0, 0)
         // RenderView doesn't apply any transformations or effects
         let child_id = *ctx.children.single();
-        let _ = ctx.paint_child(child_id, ctx.offset);
+        ctx.paint_child(child_id, ctx.offset);
     }
 }
 

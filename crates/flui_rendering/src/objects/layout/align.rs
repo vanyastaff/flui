@@ -158,7 +158,7 @@ impl RenderBox<Optional> for RenderAlign {
         // If we have a child, paint it at aligned position
         if let Some(child_id) = ctx.children.get() {
             let child_offset = ctx.offset + self.child_offset;
-            let _ = ctx.paint_child(*child_id, child_offset);
+            ctx.paint_child(*child_id, child_offset);
         }
     }
 }

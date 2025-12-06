@@ -130,7 +130,7 @@ impl RenderBox<Single> for RenderPositionedBox {
         let child_offset = ctx.offset + position_offset;
 
         // Paint child at positioned offset
-        let _ = ctx.paint_child(child_id, child_offset);
+        ctx.paint_child(child_id, child_offset);
     }
 }
 

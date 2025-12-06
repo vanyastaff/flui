@@ -134,7 +134,7 @@ impl RenderBox<Single> for RenderPadding {
 
         // Apply padding offset and paint child
         let child_offset = Offset::new(self.padding.left, self.padding.top);
-        let _ = ctx.paint_child(child_id, ctx.offset + child_offset);
+        ctx.paint_child(child_id, ctx.offset + child_offset);
     }
 }
 

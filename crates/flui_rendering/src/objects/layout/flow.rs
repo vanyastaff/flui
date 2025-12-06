@@ -29,12 +29,9 @@ impl<'a, 'b> FlowPaintContext<'a, 'b> {
         // TODO: Apply transformation matrix when transform layers are supported
         // For now, just paint at offset
         let _ = transform; // Suppress warning
-        let _ = self.paint_ctx.paint_child(self.children[index], offset);
+        self.paint_ctx.paint_child(self.children[index], offset);
     }
 }
-
-// Type alias for backward compatibility
-type ChildId = ElementId;
 
 /// Delegate trait for custom Flow layout logic
 pub trait FlowDelegate: Debug + Send + Sync {

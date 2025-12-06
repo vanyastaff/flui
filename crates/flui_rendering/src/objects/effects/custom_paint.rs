@@ -168,7 +168,7 @@ impl RenderBox<Single> for RenderCustomPaint {
         }
 
         // Paint child
-        let _ = ctx.paint_child(child_id, ctx.offset);
+        ctx.paint_child(child_id, ctx.offset);
 
         // Paint foreground painter on top (if any)
         if let Some(fg_painter) = &self.foreground_painter {

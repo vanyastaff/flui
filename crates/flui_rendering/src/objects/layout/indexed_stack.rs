@@ -117,7 +117,7 @@ impl RenderBox<Variable> for RenderIndexedStack {
                 let child_offset = self.alignment.calculate_offset(child_size, self.size);
 
                 // Paint child
-                let _ = ctx.paint_child(*child_id, offset + child_offset);
+                ctx.paint_child(*child_id, offset + child_offset);
             }
         }
     }

@@ -55,7 +55,7 @@ impl RenderBox<Single> for RenderMergeSemantics {
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Single>) {
         let child_id = *ctx.children.single();
         // Paint child directly (pass-through)
-        let _ = ctx.paint_child(child_id, ctx.offset);
+        ctx.paint_child(child_id, ctx.offset);
     }
 }
 

@@ -303,7 +303,7 @@ impl RenderBox<Variable> for RenderTable {
                     TableCellVerticalAlignment::Fill => Offset::new(x, y),
                 };
 
-                let _ = ctx.paint_child(*child_ids[idx], cell_offset);
+                ctx.paint_child(*child_ids[idx], cell_offset);
 
                 x += col_width;
             }

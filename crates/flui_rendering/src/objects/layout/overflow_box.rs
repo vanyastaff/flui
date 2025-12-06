@@ -148,7 +148,7 @@ impl RenderBox<Single> for RenderOverflowBox {
         let child_offset = offset + Offset::new(aligned_x, aligned_y);
 
         // Paint child at aligned offset
-        let _ = ctx.paint_child(child_id, child_offset);
+        ctx.paint_child(child_id, child_offset);
     }
 }
 

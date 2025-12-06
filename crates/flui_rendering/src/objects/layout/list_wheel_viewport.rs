@@ -266,7 +266,7 @@ impl RenderBox<Variable> for RenderListWheelViewport {
             // For now, just using the calculated offsets for cylindrical positioning
             // Visibility culling would be done based on scroll position, but for now
             // we paint all children (could be optimized later)
-            let _ = ctx.paint_child(*child_id, offset + child_offset);
+            ctx.paint_child(*child_id, offset + child_offset);
         }
     }
 }

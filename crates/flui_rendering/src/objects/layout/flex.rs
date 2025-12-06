@@ -357,7 +357,7 @@ impl RenderBox<Variable> for RenderFlex {
 
         for (i, child_id) in child_ids.into_iter().enumerate() {
             let child_offset = self.child_offsets.get(i).copied().unwrap_or(Offset::ZERO);
-            let _ = ctx.paint_child(*child_id, offset + child_offset);
+            ctx.paint_child(*child_id, offset + child_offset);
         }
     }
 }

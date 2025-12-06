@@ -84,7 +84,7 @@ impl<T: Clone + Send + Sync + std::fmt::Debug + 'static> RenderBox<Single>
         let child_id = *ctx.children.single();
         // This is a pass-through - just paint child
         // The annotation value is used by ancestors, not painted
-        let _ = ctx.paint_child(child_id, ctx.offset);
+        ctx.paint_child(child_id, ctx.offset);
     }
 }
 

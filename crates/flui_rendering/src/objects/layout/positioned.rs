@@ -273,7 +273,7 @@ impl RenderBox<Single> for RenderPositioned {
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Single>) {
         let child_id = *ctx.children.single();
         // Pass-through: just paint child at same offset
-        let _ = ctx.paint_child(child_id, ctx.offset);
+        ctx.paint_child(child_id, ctx.offset);
     }
 }
 

@@ -245,7 +245,7 @@ impl RenderBox<Single> for RenderAnimatedSize {
 
         // Paint child at calculated offset
         // TODO: Add clipping if child exceeds current animated size
-        let _ = ctx.paint_child(child_id, child_offset);
+        ctx.paint_child(child_id, child_offset);
     }
 }
 

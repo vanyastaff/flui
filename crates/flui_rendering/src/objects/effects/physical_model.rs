@@ -190,7 +190,7 @@ impl RenderBox<Optional> for RenderPhysicalModel {
 
         // Paint child on top at same offset if present
         if let Some(child_id) = ctx.children.get() {
-            let _ = ctx.paint_child(*child_id, offset);
+            ctx.paint_child(*child_id, offset);
         }
     }
 }

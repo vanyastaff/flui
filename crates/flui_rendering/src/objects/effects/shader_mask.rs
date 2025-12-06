@@ -147,7 +147,7 @@ impl RenderBox<Single> for RenderShaderMask {
         //
         // TODO: Implement ShaderMaskLayer when compositor supports it
 
-        let _ = ctx.paint_child(child_id, ctx.offset);
+        ctx.paint_child(child_id, ctx.offset);
     }
 }
 
