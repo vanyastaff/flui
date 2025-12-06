@@ -123,14 +123,11 @@ impl RenderObject for RenderOpacity {}
 
 impl RenderBox<Single> for RenderOpacity {
     fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Single>) -> RenderResult<Size> {
-        let child_id = *ctx.children.single();
-        // Layout child with same constraints
-        Ok(ctx.layout_child(child_id, ctx.constraints)?)
+        // Layout child with same constraints (proxy behavior)
+        Ok(ctx.layout_child(ctx.single_child(), ctx.constraints)?)
     }
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Single>) {
-        let child_id = *ctx.children.single();
-
         // If fully transparent, don't paint anything
         if self.opacity <= 0.0 {
             return;
@@ -139,7 +136,7 @@ impl RenderBox<Single> for RenderOpacity {
         // TODO: Implement proper opacity layer support in Canvas API
         // For now, just paint child directly - opacity effect is visual only
         // In future: save layer with opacity, paint child, restore layer
-        ctx.paint_child(child_id, ctx.offset);
+        ctx.paint_child(ctx.single_child(), ctx.offset);
     }
 }
 
