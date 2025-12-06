@@ -1,4 +1,60 @@
-//! RenderSliverGrid - Scrollable grid with lazy loading
+//! RenderSliverGrid - Lazy-loading scrollable grid with viewport culling
+//!
+//! Implements Flutter's sliver grid protocol for efficient 2D grid layouts in scrollable
+//! viewports. Uses lazy child building and viewport culling to handle large grids (1000s
+//! of items) efficiently. Combines row/column layout with sliver scroll-awareness for
+//! photo grids, product catalogs, and tile-based interfaces.
+//!
+//! # Flutter Equivalence
+//!
+//! | FLUI | Flutter |
+//! |------|---------|
+//! | `RenderSliverGrid` | `RenderSliverGrid` from `package:flutter/src/rendering/sliver_grid.dart` |
+//! | `SliverGridDelegate` | `SliverGridDelegate` trait |
+//! | `SliverGridDelegateFixedCrossAxisCount` | `SliverGridDelegateWithFixedCrossAxisCount` |
+//! | `get_column_count()` | `getLayout().crossAxisCount` |
+//! | `get_main_axis_extent()` | Tile extent calculation |
+//! | `get_spacing()` | `mainAxisSpacing`, `crossAxisSpacing` |
+//!
+//! # Layout Protocol
+//!
+//! 1. **Calculate grid dimensions**: Delegate determines columns, item size, spacing
+//! 2. **Calculate visible range**: Which rows/cells are in viewport + cache
+//! 3. **Lazy child building**: Build only visible + cached cells via delegate
+//! 4. **Grid layout**: Position children in grid with spacing
+//! 5. **SliverGeometry**: Return scroll extent, paint extent, visible status
+//!
+//! # Paint Protocol
+//!
+//! - **Viewport culling**: Only paint visible cells (rows in viewport)
+//! - **Grid positioning**: Paint cells at grid coordinates with spacing
+//!
+//! # Performance
+//!
+//! - **Layout**: O(v) where v = visible cells - only layouts visible items
+//! - **Paint**: O(v) - only paints visible cells
+//! - **Memory**: O(v + c) where c = cached cells
+//!
+//! # Use Cases
+//!
+//! - **Photo grids**: Instagram-style photo galleries
+//! - **Product catalogs**: E-commerce product grids
+//! - **App launchers**: Icon grids with lazy loading
+//! - **Tile interfaces**: Dashboard tiles, menu grids
+//! - **Image galleries**: Large image collections
+//! - **Calendar grids**: Month/year calendar views
+//!
+//! # Examples
+//!
+//! ```rust,ignore
+//! use flui_rendering::{RenderSliverGrid, SliverGridDelegateFixedCrossAxisCount};
+//!
+//! // 3-column grid with 100px tall items
+//! let delegate = Box::new(SliverGridDelegateFixedCrossAxisCount::new(3, 100.0)
+//!     .with_main_axis_spacing(8.0)
+//!     .with_cross_axis_spacing(8.0));
+//! let grid = RenderSliverGrid::with_delegate(delegate);
+//! ```
 
 use flui_core::element::ElementTree;
 use crate::core::{RuntimeArity, SliverSliverBoxPaintCtx, LegacySliverRender};
@@ -90,21 +146,61 @@ impl SliverGridDelegate for SliverGridDelegateFixedCrossAxisCount {
     }
 }
 
-/// RenderObject for scrollable grids with lazy loading
+/// RenderObject for lazy-loading scrollable grids with viewport culling.
 ///
-/// Similar to RenderSliverList but arranges children in a 2D grid.
-/// Only builds and lays out children that are visible or near-visible.
+/// 2D grid layout with sliver scroll-awareness. Uses delegate pattern for grid
+/// configuration (columns, item size, spacing). Only builds and layouts cells
+/// that are visible or in cache extent, enabling efficient scrolling through
+/// thousands of grid items.
+///
+/// # Arity
+///
+/// `RuntimeArity` (Variable) - Variable number of children, but only visible +
+/// cached cells are built and laid out.
+///
+/// # Protocol
+///
+/// Sliver protocol - Uses `SliverConstraints` and returns `SliverGeometry`.
+///
+/// # Pattern
+///
+/// **Lazy Loading 2D Grid Viewport** - Delegate-based grid configuration, viewport
+/// culling (only visible rows/cells painted), lazy child building, fixed or variable
+/// cell sizing, scroll-aware layout with SliverGeometry.
+///
+/// # Use Cases
+///
+/// - **Photo grids**: Instagram/Pinterest style image grids
+/// - **Product catalogs**: E-commerce grids with lazy loading
+/// - **App launchers**: Icon grids with many apps
+/// - **Tile dashboards**: Dashboard with tile-based layout
+/// - **Image galleries**: Large collections with efficient scrolling
+/// - **Calendar grids**: Month views with many cells
+///
+/// # Flutter Compliance
+///
+/// Matches Flutter's RenderSliverGrid behavior:
+/// - Delegate pattern for grid configuration (SliverGridDelegate)
+/// - Lazy child building (only visible + cached cells)
+/// - Viewport culling (only paint visible rows)
+/// - Fixed or variable cell extents
+/// - SliverGeometry output with scroll_extent, paint_extent
+/// - Spacing support (main axis and cross axis)
 ///
 /// # Example
 ///
 /// ```rust,ignore
 /// use flui_rendering::{RenderSliverGrid, SliverGridDelegateFixedCrossAxisCount};
 ///
+/// // 3-column grid, 100px tall items, 10px spacing
 /// let delegate = SliverGridDelegateFixedCrossAxisCount::new(3, 100.0)
 ///     .with_main_axis_spacing(10.0)
 ///     .with_cross_axis_spacing(10.0);
-///
 /// let grid = RenderSliverGrid::new(Box::new(delegate));
+///
+/// // Photo grid with uniform cells
+/// let photo_grid_delegate = SliverGridDelegateFixedCrossAxisCount::new(3, 120.0);
+/// let photo_grid = RenderSliverGrid::new(Box::new(photo_grid_delegate));
 /// ```
 pub struct RenderSliverGrid {
     /// Grid layout delegate
