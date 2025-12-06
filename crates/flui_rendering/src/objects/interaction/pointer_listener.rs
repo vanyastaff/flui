@@ -1,7 +1,115 @@
-//! RenderPointerListener - handles pointer events
+//! RenderPointerListener - Detects and handles pointer events
 //!
-//! This RenderObject wraps a child and listens for pointer events,
-//! calling the appropriate callbacks when events occur.
+//! Implements Flutter's Listener widget for detecting low-level pointer events
+//! (mouse clicks, touches, pen input). Provides callbacks for down, up, move,
+//! and cancel events without gesture recognition.
+//!
+//! # Flutter Equivalence
+//!
+//! | FLUI | Flutter |
+//! |------|---------|
+//! | `RenderPointerListener` | `RenderPointerListener` from `package:flutter/src/rendering/proxy_box.dart` |
+//! | `PointerCallbacks` | Listener widget callbacks |
+//! | `on_pointer_down` | `onPointerDown` (PointerDownEvent) |
+//! | `on_pointer_up` | `onPointerUp` (PointerUpEvent) |
+//! | `on_pointer_move` | `onPointerMove` (PointerMoveEvent) |
+//! | `on_pointer_cancel` | `onPointerCancel` (PointerCancelEvent) |
+//!
+//! # Layout Protocol
+//!
+//! 1. **Pass constraints to child**
+//!    - Child receives same constraints (proxy behavior)
+//!
+//! 2. **Cache size**
+//!    - Store child size for hit region bounds calculation
+//!
+//! 3. **Return child size**
+//!    - Container size = child size (no size change)
+//!
+//! # Paint Protocol
+//!
+//! 1. **Calculate hit region bounds**
+//!    - Bounds = Rect from offset with cached size
+//!    - Used for pointer event hit testing
+//!
+//! 2. **Register hit region**
+//!    - Add hit region to canvas with unified event handler
+//!    - System routes pointer events to this region
+//!
+//! 3. **Paint child**
+//!    - Child painted at widget offset
+//!    - No visual changes from pointer detection
+//!
+//! # Event Handling Protocol
+//!
+//! 1. **Pointer down**
+//!    - Triggered when pointer pressed within bounds
+//!    - Calls `on_pointer_down` callback with event data
+//!    - Event contains position, device, button info
+//!
+//! 2. **Pointer move**
+//!    - Triggered when pointer moves within bounds
+//!    - Calls `on_pointer_move` callback with event data
+//!    - Provides position delta and velocity
+//!
+//! 3. **Pointer up**
+//!    - Triggered when pointer released
+//!    - Calls `on_pointer_up` callback with event data
+//!
+//! 4. **Pointer cancel**
+//!    - Triggered when pointer event cancelled (system interruption)
+//!    - Calls `on_pointer_cancel` callback with event data
+//!
+//! # Performance
+//!
+//! - **Layout**: O(1) - pass-through to child + size cache
+//! - **Paint**: O(1) - pass-through to child + hit region registration
+//! - **Event handling**: O(1) - callback invocation per event
+//! - **Memory**: ~64 bytes (4 Arc callbacks + cached size)
+//!
+//! # Use Cases
+//!
+//! - **Custom gestures**: Build custom gesture recognizers
+//! - **Drawing apps**: Track pointer movement for drawing
+//! - **Drag operations**: Implement drag-and-drop with pointer events
+//! - **Games**: Low-level input handling for game controls
+//! - **Signature capture**: Track precise pointer movement
+//! - **Interactive canvas**: Direct pointer manipulation
+//!
+//! # Difference from GestureDetector
+//!
+//! **RenderPointerListener (this):**
+//! - Low-level pointer events (down, up, move, cancel)
+//! - No gesture recognition (no tap, double-tap, long-press)
+//! - All pointer events captured
+//! - Simple callback-based API
+//!
+//! **GestureDetector:**
+//! - High-level gesture recognition
+//! - Recognizes taps, drags, scales, long presses
+//! - Complex gesture arena resolution
+//! - More user-friendly for common interactions
+//!
+//! # Examples
+//!
+//! ```rust,ignore
+//! use flui_rendering::{RenderPointerListener, PointerCallbacks};
+//!
+//! // Track pointer down events
+//! let callbacks = PointerCallbacks::new()
+//!     .with_on_pointer_down(|event| {
+//!         println!("Pointer down at: {:?}", event.position());
+//!     });
+//! let listener = RenderPointerListener::new(callbacks);
+//!
+//! // Track all pointer events
+//! let all_events = PointerCallbacks::new()
+//!     .with_on_pointer_down(|e| println!("Down: {:?}", e.position()))
+//!     .with_on_pointer_move(|e| println!("Move: {:?}", e.position()))
+//!     .with_on_pointer_up(|e| println!("Up: {:?}", e.position()))
+//!     .with_on_pointer_cancel(|e| println!("Cancel"));
+//! let tracker = RenderPointerListener::new(all_events);
+//! ```
 
 use crate::core::{BoxLayoutCtx, BoxPaintCtx, RenderBox, Single};
 use crate::{RenderObject, RenderResult};
@@ -97,22 +205,62 @@ impl std::fmt::Debug for PointerCallbacks {
 
 impl RenderObject for RenderPointerListener {}
 
-/// RenderObject that listens for pointer events
+/// RenderObject that detects and handles low-level pointer events.
 ///
-/// This widget detects pointer events (mouse clicks, touches) and
-/// calls the appropriate callbacks. It wraps a child and doesn't affect
-/// layout, but creates a PointerListenerLayer for hit testing.
+/// Listens for pointer events (mouse clicks, touches, pen input) and invokes
+/// callbacks for each event type. Provides direct access to pointer events
+/// without gesture recognition.
+///
+/// # Arity
+///
+/// `Single` - Must have exactly 1 child.
+///
+/// # Protocol
+///
+/// Box protocol - Uses `BoxConstraints` and returns `Size`.
+///
+/// # Pattern
+///
+/// **Proxy** - Passes constraints unchanged, only adds pointer event handling.
+///
+/// # Use Cases
+///
+/// - **Custom gestures**: Build custom gesture recognizers from raw events
+/// - **Drawing/painting**: Track continuous pointer movement
+/// - **Drag-and-drop**: Implement custom drag operations
+/// - **Game input**: Low-level control for games
+/// - **Signature capture**: Precise pointer tracking
+/// - **Direct manipulation**: Custom interactive behaviors
+///
+/// # Flutter Compliance
+///
+/// Matches Flutter's RenderPointerListener behavior:
+/// - Passes constraints unchanged to child (proxy for layout)
+/// - Size determined by child
+/// - Captures all pointer events within bounds
+/// - Provides callbacks for down, up, move, cancel
+/// - Events include position, device, button info
+/// - No gesture recognition (raw events only)
+/// - Registers hit region for event routing
 ///
 /// # Example
 ///
 /// ```rust,ignore
 /// use flui_rendering::{RenderPointerListener, PointerCallbacks};
-/// use std::sync::Arc;
 ///
+/// // Track pointer movement for drawing
 /// let callbacks = PointerCallbacks::new()
-///     .with_on_pointer_down(|event| println!("Pointer down: {:?}", event.position()));
+///     .with_on_pointer_down(|event| {
+///         println!("Start drawing at: {:?}", event.position());
+///     })
+///     .with_on_pointer_move(|event| {
+///         println!("Draw line to: {:?}", event.position());
+///     })
+///     .with_on_pointer_up(|event| {
+///         println!("Finish drawing at: {:?}", event.position());
+///     });
 ///
-/// let mut listener = RenderPointerListener::new(callbacks);
+/// let listener = RenderPointerListener::new(callbacks);
 /// ```
 #[derive(Debug)]
 pub struct RenderPointerListener {
@@ -175,19 +323,21 @@ impl RenderPointerListener {
 
 impl RenderBox<Single> for RenderPointerListener {
     fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Single>) -> RenderResult<Size> {
-        let child_id = *ctx.children.single();
+        // Single arity: use ctx.single_child() which returns ElementId directly
+        let child_id = ctx.single_child();
 
-        // Layout child with same constraints
+        // Proxy behavior: pass constraints unchanged to child
         let size = ctx.layout_child(child_id, ctx.constraints)?;
 
-        // Cache size for use in paint
+        // Cache size for hit region bounds calculation in paint
         self.size = size;
 
         Ok(size)
     }
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Single>) {
-        let child_id = *ctx.children.single();
+        // Single arity: use ctx.single_child() which returns ElementId directly
+        let child_id = ctx.single_child();
         let offset = ctx.offset;
 
         // Register hit region for pointer event handling

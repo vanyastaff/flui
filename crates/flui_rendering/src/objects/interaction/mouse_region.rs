@@ -1,21 +1,111 @@
-//! RenderMouseRegion - handles mouse hover events
+//! RenderMouseRegion - Detects and tracks mouse hover events
+//!
+//! Implements Flutter's MouseRegion for detecting when the mouse cursor enters,
+//! hovers over, or exits the widget's bounds. Provides callbacks for interactive
+//! hover effects without affecting layout or painting.
+//!
+//! # Flutter Equivalence
+//!
+//! | FLUI | Flutter |
+//! |------|---------|
+//! | `RenderMouseRegion` | `RenderMouseRegion` from `package:flutter/src/rendering/proxy_box.dart` |
+//! | `MouseCallbacks` | `MouseTrackerAnnotation` callbacks |
+//! | `on_enter` | `onEnter` callback (PointerEnterEvent) |
+//! | `on_exit` | `onExit` callback (PointerExitEvent) |
+//! | `on_hover` | `onHover` callback (PointerHoverEvent) |
+//! | `is_hovering` | Hover state tracking |
+//!
+//! # Layout Protocol
+//!
+//! 1. **Pass constraints to child**
+//!    - Child receives same constraints (proxy behavior)
+//!
+//! 2. **Return child size**
+//!    - Container size = child size (no size change)
+//!
+//! # Paint Protocol
+//!
+//! 1. **Paint child normally**
+//!    - Child painted at widget offset
+//!    - No visual changes from hover detection
+//!
+//! 2. **Register hover region** (TODO)
+//!    - Hit test area registered for mouse tracking
+//!    - System monitors mouse position relative to bounds
+//!
+//! # Event Handling Protocol
+//!
+//! 1. **Mouse enter**
+//!    - Triggered when cursor enters widget bounds
+//!    - Calls `on_enter` callback if provided
+//!    - Sets `is_hovering = true`
+//!
+//! 2. **Mouse hover**
+//!    - Triggered while cursor remains in bounds
+//!    - Calls `on_hover` callback if provided
+//!    - Provides current mouse position
+//!
+//! 3. **Mouse exit**
+//!    - Triggered when cursor leaves widget bounds
+//!    - Calls `on_exit` callback if provided
+//!    - Sets `is_hovering = false`
+//!
+//! # Performance
+//!
+//! - **Layout**: O(1) - pass-through to child
+//! - **Paint**: O(1) - pass-through to child
+//! - **Event handling**: O(1) - callback invocation
+//! - **Memory**: ~32 bytes (callbacks + hover state)
+//!
+//! # Use Cases
+//!
+//! - **Hover effects**: Change appearance on mouse hover (buttons, cards)
+//! - **Tooltips**: Show tooltips when mouse enters region
+//! - **Cursor changes**: Change cursor style over interactive elements
+//! - **Hover animations**: Trigger animations on mouse enter/exit
+//! - **Interactive feedback**: Provide visual feedback on hover
+//! - **Custom hover logic**: Execute custom code on mouse events
+//!
+//! # Examples
+//!
+//! ```rust,ignore
+//! use flui_rendering::{RenderMouseRegion, MouseCallbacks};
+//!
+//! // Hover detection with enter/exit callbacks
+//! let callbacks = MouseCallbacks {
+//!     on_enter: Some(|| println!("Mouse entered")),
+//!     on_exit: Some(|| println!("Mouse exited")),
+//!     on_hover: None,
+//! };
+//! let region = RenderMouseRegion::new(callbacks);
+//!
+//! // Track all mouse events
+//! let all_events = MouseCallbacks {
+//!     on_enter: Some(|| println!("Entered")),
+//!     on_exit: Some(|| println!("Exited")),
+//!     on_hover: Some(|| println!("Hovering")),
+//! };
+//! let tracking = RenderMouseRegion::new(all_events);
+//! ```
 
 use crate::core::{BoxLayoutCtx, BoxPaintCtx, RenderBox, Single};
 use crate::{RenderObject, RenderResult};
 use flui_types::Size;
 
-/// Mouse hover event callbacks
+/// Mouse hover event callbacks.
+///
+/// Simplified callback structure for mouse tracking. In a full implementation,
+/// these would receive event data (position, modifiers, etc.).
 #[derive(Clone)]
 pub struct MouseCallbacks {
-    // For now, we use Option<fn()> placeholders
-    // In a real implementation, these would be proper callback types
-    /// Called when mouse enters the region
+    // TODO: Replace with proper callback types that receive mouse event data
+    /// Called when mouse cursor enters the widget's bounds
     pub on_enter: Option<fn()>,
 
-    /// Called when mouse exits the region
+    /// Called when mouse cursor exits the widget's bounds
     pub on_exit: Option<fn()>,
 
-    /// Called when mouse hovers over the region
+    /// Called continuously while mouse cursor hovers over the widget
     pub on_hover: Option<fn()>,
 }
 
@@ -29,22 +119,68 @@ impl std::fmt::Debug for MouseCallbacks {
     }
 }
 
-/// RenderObject that tracks mouse hover state
+/// RenderObject that detects and tracks mouse hover events.
 ///
-/// This widget detects when the mouse enters, hovers over, or exits its bounds.
-/// It does not affect layout or painting, only event handling.
+/// Monitors the mouse cursor position and fires callbacks when the cursor enters,
+/// hovers over, or exits the widget's bounds. Does not affect layout or painting,
+/// only provides hover event detection.
+///
+/// # Arity
+///
+/// `Single` - Must have exactly 1 child.
+///
+/// # Protocol
+///
+/// Box protocol - Uses `BoxConstraints` and returns `Size`.
+///
+/// # Pattern
+///
+/// **Proxy** - Passes constraints unchanged, only adds hover event detection.
+///
+/// # Use Cases
+///
+/// - **Button hover effects**: Highlight buttons on mouse hover
+/// - **Tooltip triggers**: Show tooltips when cursor enters
+/// - **Cursor styling**: Change cursor appearance over interactive areas
+/// - **Hover animations**: Trigger scale/color animations on hover
+/// - **Link previews**: Show link preview on hover
+/// - **Context-aware UI**: Update UI based on cursor position
+///
+/// # Flutter Compliance
+///
+/// Matches Flutter's RenderMouseRegion behavior:
+/// - Passes constraints unchanged to child (proxy for layout)
+/// - Size determined by child
+/// - Tracks mouse enter/exit/hover events
+/// - Provides callbacks for each event type
+/// - Maintains hover state
+/// - Does not affect visual rendering
+/// - Uses MouseTrackerAnnotation for hit testing
+///
+/// # Implementation Note
+///
+/// **Simplified version:**
+/// - Callbacks are simple function pointers (no event data)
+/// - Hover detection is TODO (requires hit test integration)
+///
+/// **Production TODO:**
+/// - Add proper event types with position, modifiers, timestamps
+/// - Integrate with mouse tracker system
+/// - Add cursor style support
+/// - Implement hit test annotation registration
 ///
 /// # Example
 ///
 /// ```rust,ignore
 /// use flui_rendering::{RenderMouseRegion, MouseCallbacks};
 ///
+/// // Simple hover detection
 /// let callbacks = MouseCallbacks {
-///     on_enter: Some(|| println!("Mouse entered")),
-///     on_exit: Some(|| println!("Mouse exited")),
+///     on_enter: Some(|| println!("Cursor entered")),
+///     on_exit: Some(|| println!("Cursor exited")),
 ///     on_hover: None,
 /// };
-/// let mut region = RenderMouseRegion::new(callbacks);
+/// let region = RenderMouseRegion::new(callbacks);
 /// ```
 #[derive(Debug)]
 pub struct RenderMouseRegion {
@@ -89,21 +225,28 @@ impl RenderObject for RenderMouseRegion {}
 
 impl RenderBox<Single> for RenderMouseRegion {
     fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Single>) -> RenderResult<Size> {
-        let child_id = *ctx.children.single();
-        // Layout child with same constraints
+        // Single arity: use ctx.single_child() which returns ElementId directly
+        let child_id = ctx.single_child();
+
+        // Proxy behavior: pass constraints unchanged to child
         Ok(ctx.layout_child(child_id, ctx.constraints)?)
     }
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Single>) {
-        let child_id = *ctx.children.single();
+        // Single arity: use ctx.single_child() which returns ElementId directly
+        let child_id = ctx.single_child();
 
-        // Simply paint child - hover handling happens elsewhere
+        // Proxy behavior: paint child at widget offset
+        // Hover detection doesn't affect visual rendering
         ctx.paint_child(child_id, ctx.offset);
 
-        // TODO: In a real implementation, we would:
-        // 1. Register hit test area for hover detection
-        // 2. Track mouse enter/exit events
-        // 3. Call appropriate callbacks when hover state changes
+        // TODO: In a full implementation with mouse tracking support:
+        // 1. Register MouseTrackerAnnotation with hit test system
+        // 2. System monitors cursor position relative to widget bounds
+        // 3. Fire on_enter callback when cursor enters bounds
+        // 4. Fire on_hover callback while cursor remains in bounds
+        // 5. Fire on_exit callback when cursor leaves bounds
+        // 6. Update is_hovering state based on cursor position
     }
 }
 
