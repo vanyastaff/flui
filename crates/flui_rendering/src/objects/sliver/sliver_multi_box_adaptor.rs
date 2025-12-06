@@ -1,4 +1,113 @@
-//! RenderSliverMultiBoxAdaptor - Base for slivers with multiple box children
+//! RenderSliverMultiBoxAdaptor - Abstract base for lazy-loading multi-child slivers
+//!
+//! Defines common protocol for slivers containing multiple box children with lazy loading.
+//! Provides ParentData for tracking child indices and keep-alive state. Essential abstraction
+//! for SliverList, SliverFixedExtentList, SliverGrid. Enables viewport culling, lazy child
+//! creation, keep-alive mechanism, and scroll extent estimation.
+//!
+//! # Flutter Equivalence
+//!
+//! | FLUI | Flutter |
+//! |------|---------|
+//! | `RenderSliverMultiBoxAdaptor` | `RenderSliverMultiBoxAdaptor` trait from `package:flutter/src/rendering/sliver_multi_box_adaptor.dart` |
+//! | `SliverMultiBoxAdaptorParentData` | `SliverMultiBoxAdaptorParentData` class |
+//! | `index` field | Logical index in data source |
+//! | `keep_alive` field | Keep child in memory when offscreen |
+//! | `child_count()` | Total number of potential children |
+//! | `estimate_max_scroll_offset()` | Total scrollable extent estimation |
+//!
+//! # Architecture
+//!
+//! This is not a RenderObject itself, but an **abstract trait** implemented by:
+//! - `RenderSliverList` - Linear lazy-loading list
+//! - `RenderSliverFixedExtentList` - List with uniform item heights
+//! - `RenderSliverGrid` - 2D lazy-loading grid
+//! - `RenderSliverPrototypeExtentList` - List with prototype-based sizing
+//!
+//! # Lazy Loading Protocol
+//!
+//! 1. **child_count()** - Total logical children (not just instantiated)
+//! 2. **Viewport calculates visible range** - Based on scroll_offset and remaining_paint_extent
+//! 3. **Children created on-demand** - Only visible + cache extent children instantiated
+//! 4. **child_main_axis_position()** - Calculate where each child should be positioned
+//! 5. **estimate_max_scroll_offset()** - Estimate total scroll extent for scrollbar
+//!
+//! # Keep Alive Mechanism
+//!
+//! ```text
+//! WITHOUT keep_alive:
+//!   [visible children] → instantiated
+//!   [scrolled away] → disposed
+//!   [not yet visible] → not created
+//!
+//! WITH keep_alive:
+//!   [visible children] → instantiated
+//!   [scrolled away BUT keep_alive] → STAYS in memory
+//!   [not yet visible] → not created
+//! ```
+//!
+//! # Use Cases
+//!
+//! - **Lazy loading lists**: 1000s of items, only visible ones created
+//! - **Infinite scroll**: Dynamic child creation as user scrolls
+//! - **Keep-alive**: Preserve state of complex children (nested scrollables, forms)
+//! - **Grid layouts**: Multi-column lazy loading with cross-axis offset
+//! - **Variable heights**: Each child can have different size
+//!
+//! # Performance
+//!
+//! - **Memory**: O(visible + kept-alive) NOT O(all children)
+//! - **Layout**: O(visible children) with lazy creation
+//! - **Scroll estimate**: O(1) based on visible range
+//! - **Cache extent**: Prebuilds children slightly offscreen for smooth scroll
+//!
+//! # Parent Data Fields
+//!
+//! - **index**: Logical position in data source (0-based)
+//! - **keep_alive**: Whether to retain when scrolled offscreen
+//!
+//! # Trait Methods
+//!
+//! - **child_count()**: Total children count (data source length)
+//! - **child_main_axis_position()**: Position of child along scroll axis
+//! - **child_main_axis_extent()**: Size of child along scroll axis
+//! - **estimate_max_scroll_offset()**: Total scrollable extent estimate
+//! - **child_cross_axis_offset()**: Position perpendicular to scroll (for grids)
+//! - **should_keep_alive()**: Whether child should stay in memory
+//!
+//! # Examples
+//!
+//! ```rust,ignore
+//! use flui_rendering::{RenderSliverMultiBoxAdaptor, SliverMultiBoxAdaptorParentData};
+//!
+//! // Parent data tracking
+//! let data = SliverMultiBoxAdaptorParentData::new(42);  // Item at index 42
+//! let kept = SliverMultiBoxAdaptorParentData::with_keep_alive(10);  // Keep alive
+//!
+//! // Trait implementation (simplified)
+//! struct MyList {
+//!     items: Vec<Item>,
+//!     item_height: f32,
+//! }
+//!
+//! impl RenderSliverMultiBoxAdaptor for MyList {
+//!     fn child_count(&self) -> usize {
+//!         self.items.len()  // 1000 items, but only visible ones created!
+//!     }
+//!
+//!     fn child_main_axis_position(&self, _id: ElementId, index: usize) -> f32 {
+//!         index as f32 * self.item_height  // Position based on index
+//!     }
+//!
+//!     fn child_main_axis_extent(&self, size: Size) -> f32 {
+//!         size.height  // Vertical list
+//!     }
+//!
+//!     fn estimate_max_scroll_offset(&self, first: usize, _last: usize) -> f32 {
+//!         (self.child_count() - first) as f32 * self.item_height
+//!     }
+//! }
+//! ```
 
 use flui_core::element::ElementId;
 use flui_types::Size;
