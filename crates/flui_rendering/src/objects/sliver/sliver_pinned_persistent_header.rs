@@ -1,35 +1,219 @@
-//! RenderSliverPinnedPersistentHeader - Pinned header that stays visible
+//! RenderSliverPinnedPersistentHeader - Always-visible collapsible header
+//!
+//! Specialized persistent header that sticks to the top/leading edge once scrolled into view.
+//! Supports collapsing from a maximum extent down to a minimum extent as content scrolls,
+//! but never scrolls off-screen once pinned. This is the specialized variant - unlike the
+//! generic RenderSliverPersistentHeader, pinning is always enabled (not configurable).
+//!
+//! # Flutter Equivalence
+//!
+//! | FLUI | Flutter |
+//! |------|---------|
+//! | `RenderSliverPinnedPersistentHeader` | `RenderSliverPersistentHeader` with `pinned: true` from `package:flutter/src/rendering/sliver_persistent_header.dart` |
+//! | `min_extent` | Minimum height when fully collapsed |
+//! | `max_extent` | Maximum height when fully expanded |
+//! | Collapsing logic | scroll_extent = max - min, layout_extent = min |
+//!
+//! # Layout Protocol (Intended)
+//!
+//! 1. **Calculate collapse extent**
+//!    - scrolled_extent = scroll_offset.min(max_extent - min_extent)
+//!    - current_extent = max_extent - scrolled_extent
+//!    - Shrinks from max to min as we scroll
+//!
+//! 2. **Layout child with BoxConstraints** (NOT IMPLEMENTED)
+//!    - Convert current_extent to BoxConstraints
+//!    - Layout single child with header content
+//!
+//! 3. **Return geometry with pinning**
+//!    - scroll_extent: max_extent - min_extent (only collapsible part)
+//!    - paint_extent: current_extent.min(remaining)
+//!    - layout_extent: min_extent (THIS makes it pinned!)
+//!
+//! # Paint Protocol
+//!
+//! 1. **Check visibility**
+//!    - Only paint if geometry.visible
+//!
+//! 2. **Paint child**
+//!    - Paint header content at current offset
+//!
+//! # Performance
+//!
+//! - **Layout**: O(1) geometry + O(child) when implemented
+//! - **Paint**: O(child) when visible
+//! - **Memory**: 8 bytes (2×f32) + 48 bytes (SliverGeometry) = 56 bytes
+//!
+//! # Use Cases
+//!
+//! - **Material app bars**: Collapsing app bars that shrink on scroll
+//! - **Section headers**: Sticky category headers at minimum size
+//! - **Table headers**: Column headers that collapse but stay visible
+//! - **Search bars**: Search UI that shrinks but never hides
+//! - **Navigation headers**: Toolbars that minimize to icon-only mode
+//!
+//! # Collapsible Pinned Behavior
+//!
+//! ```text
+//! With min_extent=40, max_extent=120:
+//!
+//! scroll=0:    [████████████] (120px - full expanded)
+//!              layout_extent=40, paint_extent=120
+//!
+//! scroll=40:   [████████] (80px - collapsing)
+//!              layout_extent=40, paint_extent=80
+//!
+//! scroll=80:   [████] (40px - fully collapsed, PINNED)
+//!              layout_extent=40, paint_extent=40
+//!
+//! scroll=100+: [████] (40px - STAYS at minimum!)
+//!              layout_extent=40, paint_extent=40
+//!
+//! KEY INSIGHT: layout_extent ALWAYS = min_extent
+//! This reserves min_extent space at top, making it "pinned"
+//! ```
+//!
+//! # Fixed vs Collapsible Mode
+//!
+//! ```rust,ignore
+//! // Fixed extent (min == max) - no collapsing
+//! let fixed = RenderSliverPinnedPersistentHeader::new(56.0);
+//! // scroll_extent = 0 (nothing to collapse)
+//! // Always 56px visible
+//!
+//! // Collapsible (min < max) - shrinks as we scroll
+//! let collapsible = RenderSliverPinnedPersistentHeader::with_extents(40.0, 120.0);
+//! // scroll_extent = 80 (collapsible range)
+//! // Shrinks from 120px to 40px, then stays pinned
+//! ```
+//!
+//! # ⚠️ IMPLEMENTATION ISSUE
+//!
+//! This implementation has **ONE CRITICAL MISSING FEATURE**:
+//!
+//! 1. **❌ Child is NEVER laid out** (line 141-145)
+//!    - No calls to `layout_child()` anywhere
+//!    - Child size is undefined
+//!    - Only geometry calculation, no actual layout
+//!
+//! 2. **✅ Geometry calculation EXCELLENT** (line 94-131)
+//!    - Correctly implements collapsible pinned behavior
+//!    - scroll_extent = max - min (only collapsible part)
+//!    - layout_extent = min (THIS is the pinning mechanism!)
+//!    - Sophisticated and correct implementation
+//!
+//! 3. **✅ Paint works correctly**
+//!    - Paints child when visible using paint_child()
+//!
+//! **This is one of the BEST implementations - only missing child layout!**
+//!
+//! # Comparison with Related Objects
+//!
+//! - **vs SliverPersistentHeader**: Pinned is always pinned, Persistent is configurable
+//! - **vs SliverFloatingPersistentHeader**: Pinned stays visible, Floating can hide
+//! - **vs SliverAppBar**: AppBar has UI (title, actions), PinnedHeader is generic container
+//! - **vs SliverPadding**: PinnedHeader sticks and collapses, Padding just adds space
+//!
+//! # Examples
+//!
+//! ```rust,ignore
+//! use flui_rendering::RenderSliverPinnedPersistentHeader;
+//!
+//! // Fixed-height pinned header (Material Design standard)
+//! let fixed = RenderSliverPinnedPersistentHeader::new(56.0);
+//! // Always 56px, never collapses or scrolls away
+//!
+//! // Collapsible toolbar (like Material expanded app bar)
+//! let toolbar = RenderSliverPinnedPersistentHeader::with_extents(48.0, 200.0);
+//! // Starts at 200px, collapses to 48px, stays pinned
+//!
+//! // Tall hero header that minimizes
+//! let hero = RenderSliverPinnedPersistentHeader::with_extents(60.0, 300.0);
+//! // Large hero image that shrinks to small header
+//! ```
 
 use crate::core::{RuntimeArity, LegacySliverRender, SliverSliver};
 use flui_painting::Canvas;
 use flui_types::{SliverConstraints, SliverGeometry};
 
-/// RenderObject for a pinned persistent header
+/// RenderObject for a pinned persistent header that collapses but never hides.
 ///
-/// A pinned header stays visible at the top/leading edge of the viewport
-/// once it has been scrolled into view. Unlike floating headers, it doesn't
-/// scroll away even when scrolling forward past it.
+/// Specialized persistent header that always stays visible once scrolled into view.
+/// Supports collapsing from `max_extent` down to `min_extent` as content scrolls,
+/// but never scrolls off-screen. The key mechanism is that `layout_extent` is always
+/// set to `min_extent`, which reserves that space at the top of the viewport.
 ///
-/// # Differences from other headers
+/// # Arity
 ///
-/// - **Pinned**: Stays visible once reached (this one)
-/// - **Floating**: Can scroll off but reappears immediately on scroll up
-/// - **Normal**: Scrolls away naturally
+/// `RuntimeArity::Exact(1)` - Must have exactly 1 child (header content).
+///
+/// # Protocol
+///
+/// Sliver protocol - Uses `SliverConstraints` and returns `SliverGeometry`.
+///
+/// # Pattern
+///
+/// **Collapsible Pinned Header** - Always-visible header that shrinks from max to min
+/// extent as we scroll, then stays pinned at minimum size. Uses clever geometry with
+/// `layout_extent = min_extent` to reserve space at viewport top.
 ///
 /// # Use Cases
 ///
-/// - Section headers that should always be visible
-/// - Sticky table headers
-/// - Category separators in long lists
-/// - Navigation headers that pin to top
+/// - **Material app bars**: Collapsing app bars (Material Design pattern)
+/// - **Section headers**: Sticky category headers at minimum size
+/// - **Table headers**: Column headers that collapse but stay visible
+/// - **Search bars**: Search UI that shrinks but never disappears
+/// - **Navigation toolbars**: Toolbars that minimize to icon-only mode
+///
+/// # Flutter Compliance
+///
+/// **ALMOST COMPLETE** - Excellent geometry implementation:
+/// - ✅ Collapsible pinned behavior correct
+/// - ✅ Geometry calculation sophisticated and accurate
+/// - ✅ Paint works correctly
+/// - ❌ Child never laid out (only missing feature)
+///
+/// # Implementation Quality
+///
+/// | Feature | Status | Quality |
+/// |---------|--------|---------|
+/// | Collapse logic | ✅ Complete | **EXCELLENT** - correctly shrinks max→min |
+/// | Pinning mechanism | ✅ Complete | **EXCELLENT** - layout_extent = min |
+/// | Fixed vs collapsible | ✅ Complete | Supports both (min==max or min<max) |
+/// | Child layout | ❌ Missing | No layout_child() calls |
+/// | Paint | ✅ Works | Correctly paints when visible |
+///
+/// # Geometry Behavior
+///
+/// **Key Insight**: `layout_extent = min_extent` (always) makes it "pinned"
+///
+/// - `scroll_extent = max_extent - min_extent` (only collapsible part scrolls)
+/// - `paint_extent = (max_extent - scrolled).min(remaining)` (shrinks as we scroll)
+/// - `layout_extent = min_extent` (reserves space at top - THIS is the pinning!)
+///
+/// **Fixed mode** (min == max):
+/// - `scroll_extent = 0` (nothing to collapse)
+/// - `paint_extent = extent` (always same size)
+/// - `layout_extent = extent` (always takes same space)
+///
+/// **Collapsible mode** (min < max):
+/// - Starts at max_extent when scroll_offset = 0
+/// - Shrinks linearly as we scroll
+/// - Reaches min_extent when scroll_offset >= (max - min)
+/// - Stays pinned at min_extent forever after
 ///
 /// # Example
 ///
 /// ```rust,ignore
 /// use flui_rendering::RenderSliverPinnedPersistentHeader;
 ///
-/// // Pinned header that sticks once scrolled into view
-/// let header = RenderSliverPinnedPersistentHeader::new(60.0);
+/// // Fixed-height (Material Design standard)
+/// let fixed = RenderSliverPinnedPersistentHeader::new(56.0);
+/// // Always 56px, never changes
+///
+/// // Collapsible Material app bar
+/// let app_bar = RenderSliverPinnedPersistentHeader::with_extents(56.0, 200.0);
+/// // Starts at 200px (with hero image), collapses to 56px toolbar
 /// ```
 #[derive(Debug)]
 pub struct RenderSliverPinnedPersistentHeader {
