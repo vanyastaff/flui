@@ -1,24 +1,196 @@
-//! RenderSliverToBoxAdapter - Adapts box widget to sliver protocol
+//! RenderSliverToBoxAdapter - Adapts box protocol widgets to sliver protocol
+//!
+//! Implements Flutter's adapter pattern for inserting regular box widgets into sliver
+//! scroll contexts. Converts SliverConstraints to BoxConstraints, layouts child with box
+//! protocol, then converts result back to SliverGeometry. Essential bridge for using
+//! standard widgets (Container, Padding, Image, etc.) inside CustomScrollView.
+//!
+//! # Flutter Equivalence
+//!
+//! | FLUI | Flutter |
+//! |------|---------|
+//! | `RenderSliverToBoxAdapter` | `RenderSliverToBoxAdapter` from `package:flutter/src/rendering/sliver.dart` |
+//! | `child_constraints()` | Constraints conversion logic |
+//! | `calculate_sliver_geometry()` | SliverGeometry calculation from box size |
+//! | `child_size` | Cached box child size |
+//! | `sliver_geometry` | Output SliverGeometry |
+//!
+//! # Protocol Conversion
+//!
+//! **Input (Sliver Protocol):** SliverConstraints
+//! - `cross_axis_extent` - Width (vertical scroll) or height (horizontal scroll)
+//! - `remaining_paint_extent` - Available main axis space in viewport
+//! - `scroll_offset` - How far scrolled
+//!
+//! **Child (Box Protocol):** BoxConstraints
+//! - `max_width` = sliver cross_axis_extent
+//! - `max_height` = remaining_paint_extent (or infinite if unlimited)
+//! - `min_width` = 0 (loose constraints)
+//! - `min_height` = 0 (loose constraints)
+//!
+//! **Output (Sliver Protocol):** SliverGeometry
+//! - `scroll_extent` = child main axis extent (height for vertical)
+//! - `paint_extent` = visible portion in viewport
+//! - `layout_extent` = extent for layout purposes
+//!
+//! # Layout Protocol
+//!
+//! 1. **Convert SliverConstraints to BoxConstraints**
+//!    - cross_axis_extent → max_width
+//!    - remaining_paint_extent → max_height
+//!    - Loose constraints (min = 0)
+//!
+//! 2. **Layout box child**
+//!    - Child uses box protocol (standard widgets)
+//!    - Child returns Size
+//!    - Cache child size
+//!
+//! 3. **Calculate SliverGeometry from child size**
+//!    - scroll_extent = child main axis extent
+//!    - paint_extent = visible portion (accounting for scroll offset)
+//!    - Handle partially/fully scrolled off cases
+//!
+//! 4. **Return SliverGeometry**
+//!    - Viewport uses this for scroll calculations
+//!
+//! # Paint Protocol
+//!
+//! 1. **Calculate child offset**
+//!    - Account for scroll offset
+//!    - Position child relative to viewport
+//!
+//! 2. **Paint box child**
+//!    - Child paints using box protocol
+//!    - Only paint if visible (paint_extent > 0)
+//!
+//! # Performance
+//!
+//! - **Layout**: O(1) + child box layout - simple protocol conversion
+//! - **Paint**: O(1) + child box paint - pass-through painting
+//! - **Memory**: 40 bytes (cached Size + SliverGeometry)
+//!
+//! # Use Cases
+//!
+//! - **Headers in scroll views**: Non-scrolling headers (Image, Container, etc.)
+//! - **Spacers**: SizedBox for spacing in CustomScrollView
+//! - **Mixed content**: Mix slivers (List, Grid) with box widgets (Padding, Divider)
+//! - **Single box in sliver context**: One-off widgets in scrollable
+//! - **Banner ads**: Fixed-size banners between scrolling content
+//! - **Section headers**: Headers between sliver lists
+//!
+//! # Comparison with Related Objects
+//!
+//! - **vs RenderSliverList**: List has many children with lazy loading, Adapter has single box child
+//! - **vs RenderSliverPadding**: Padding wraps sliver child, Adapter wraps box child
+//! - **vs RenderSliverFillViewport**: FillViewport sizes to viewport, Adapter uses child's natural size
+//! - **vs RenderViewport**: Viewport contains slivers, Adapter IS a sliver wrapping box
+//!
+//! # Examples
+//!
+//! ```rust,ignore
+//! use flui_rendering::RenderSliverToBoxAdapter;
+//!
+//! // Wrap a box widget for use in CustomScrollView
+//! let adapter = RenderSliverToBoxAdapter::new();
+//! // Child would be RenderContainer, RenderPadding, RenderImage, etc.
+//!
+//! // Typical use in CustomScrollView:
+//! // - RenderSliverToBoxAdapter wrapping header Image
+//! // - RenderSliverList for scrolling list items
+//! // - RenderSliverToBoxAdapter wrapping footer Container
+//! ```
 
 use crate::core::{RuntimeArity, LegacySliverRender, SliverSliver};
 use flui_painting::Canvas;
 use flui_types::prelude::*;
 use flui_types::{SliverConstraints, SliverGeometry};
 
-/// RenderObject that adapts a box widget to the sliver protocol
+/// RenderObject that adapts box protocol widgets to sliver protocol.
 ///
-/// Allows inserting regular box widgets (like Container, Padding, etc.)
-/// into a sliver context (like CustomScrollView). The box widget is given
-/// loose constraints based on the sliver's available space.
+/// Protocol adapter allowing standard box widgets (Container, Image, Padding, etc.)
+/// to be used inside sliver scroll contexts (CustomScrollView). Converts SliverConstraints
+/// to BoxConstraints for child layout, then converts child Size back to SliverGeometry
+/// for viewport. Essential bridge between box and sliver protocols.
+///
+/// # Arity
+///
+/// `RuntimeArity` (Single) - Must have exactly one box protocol child.
+///
+/// # Protocol
+///
+/// Sliver protocol - Uses `SliverConstraints` and returns `SliverGeometry`.
+/// Child uses box protocol.
+///
+/// # Pattern
+///
+/// **Protocol Adapter (Sliver → Box → Sliver)** - Converts sliver constraints to box
+/// constraints, layouts box child, converts box size to sliver geometry, accounts for
+/// scroll offset and viewport visibility.
+///
+/// # Use Cases
+///
+/// - **Fixed headers**: Image/Container headers in CustomScrollView
+/// - **Spacers**: SizedBox spacing between slivers
+/// - **Mixed content**: Combine slivers (lists/grids) with boxes (headers/footers)
+/// - **Single widgets**: One-off widgets in scrollable contexts
+/// - **Section headers**: Non-scrolling headers between lists
+/// - **Banner ads**: Fixed banners between content sections
+///
+/// # Flutter Compliance
+///
+/// Matches Flutter's RenderSliverToBoxAdapter behavior:
+/// - Converts SliverConstraints to loose BoxConstraints
+/// - Child sized to natural size within sliver constraints
+/// - SliverGeometry calculated from child size
+/// - Handles scroll offset for visibility calculations
+/// - paint_extent accounts for partially scrolled-off content
+///
+/// # Protocol Conversion Details
+///
+/// **Sliver to Box (Layout):**
+/// ```text
+/// SliverConstraints:
+///   cross_axis_extent: 400px
+///   remaining_paint_extent: 600px
+///   scroll_offset: 0px
+///
+/// ↓ Converts to ↓
+///
+/// BoxConstraints:
+///   min_width: 0px, max_width: 400px
+///   min_height: 0px, max_height: 600px
+/// ```
+///
+/// **Box to Sliver (Result):**
+/// ```text
+/// Child Size: 400×200
+///
+/// ↓ Converts to ↓
+///
+/// SliverGeometry:
+///   scroll_extent: 200px (child height)
+///   paint_extent: 200px (fully visible)
+///   layout_extent: 200px
+/// ```
 ///
 /// # Example
 ///
 /// ```rust,ignore
 /// use flui_rendering::RenderSliverToBoxAdapter;
 ///
-/// // Wrap a box widget to use it in a sliver scroll view
+/// // Wrap box widget for CustomScrollView
 /// let adapter = RenderSliverToBoxAdapter::new();
-/// // Child would be something like RenderContainer, RenderPadding, etc.
+/// // Child: RenderImage (header), RenderContainer (banner), etc.
+///
+/// // Typical CustomScrollView structure:
+/// // CustomScrollView {
+/// //   slivers: [
+/// //     SliverToBoxAdapter { child: Image },  ← Header
+/// //     SliverList { ... },                    ← Scrolling list
+/// //     SliverToBoxAdapter { child: Divider }, ← Separator
+/// //     SliverGrid { ... },                    ← Scrolling grid
+/// //   ]
+/// // }
 /// ```
 #[derive(Debug)]
 pub struct RenderSliverToBoxAdapter {
