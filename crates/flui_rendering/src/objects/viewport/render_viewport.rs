@@ -1,6 +1,25 @@
-//! RenderViewport - Container for sliver content with scrolling
+//! RenderViewport - Scrollable container for sliver content with bidirectional support
+//!
+//! Implements Flutter's viewport protocol for managing scrollable sliver content. Acts
+//! as bridge between box protocol (viewport itself) and sliver protocol (children).
+//! Supports bidirectional scrolling via center sliver, cache extents for smooth scrolling,
+//! and viewport clipping. Fundamental building block for CustomScrollView, ListView, GridView.
 //!
 //! Flutter reference: <https://api.flutter.dev/flutter/rendering/RenderViewport-class.html>
+//!
+//! # Flutter Equivalence
+//!
+//! | FLUI | Flutter |
+//! |------|---------|
+//! | `RenderViewport` | `RenderViewport` from `package:flutter/src/rendering/viewport.dart` |
+//! | `axis_direction` | `axisDirection` property |
+//! | `cross_axis_direction` | `crossAxisDirection` property |
+//! | `scroll_offset` | `offset.pixels` (from ViewportOffset) |
+//! | `cache_extent` | `cacheExtent` property |
+//! | `cache_extent_style` | `cacheExtentStyle` property |
+//! | `clip_behavior` | `clipBehavior` property |
+//! | `anchor` | `anchor` property (0.0-1.0) |
+//! | `center_index` | `center` child (for bidirectional scrolling) |
 //!
 //! # Architecture
 //!
@@ -14,11 +33,129 @@
 //! │  ┌─────────────────────────────────┐ │
 //! │  │ reverse slivers (before center) │ │
 //! │  ├─────────────────────────────────┤ │
-//! │  │ center sliver                   │ │
+//! │  │ center sliver (scroll origin)   │ │
 //! │  ├─────────────────────────────────┤ │
 //! │  │ forward slivers (after center)  │ │
 //! │  └─────────────────────────────────┘ │
 //! └─────────────────────────────────────┘
+//! ```
+//!
+//! # Layout Protocol
+//!
+//! 1. **Calculate viewport dimensions**
+//!    - Use parent BoxConstraints to determine viewport size
+//!    - viewport_main_axis_extent = height (vertical) or width (horizontal)
+//!    - Cross axis extent from constraints
+//!
+//! 2. **Calculate cache extent**
+//!    - If Pixel style: use cache_extent directly
+//!    - If Viewport style: cache_extent × viewport_main_axis_extent
+//!    - Cache allows prebuilding off-screen content
+//!
+//! 3. **Layout center sliver first**
+//!    - Create SliverConstraints with scroll_offset and remaining_paint_extent
+//!    - Layout center sliver to get SliverGeometry
+//!    - Track paint extent and scroll extent
+//!
+//! 4. **Layout forward slivers** (after center)
+//!    - Accumulate scroll offset for each sliver
+//!    - Layout until remaining_paint_extent exhausted or no more children
+//!    - Cache extent allows layout beyond visible area
+//!
+//! 5. **Layout reverse slivers** (before center, if bidirectional)
+//!    - Layout in reverse growth direction
+//!    - Accumulate negative scroll extents
+//!    - Calculate min_scroll_extent (can be negative)
+//!
+//! 6. **Calculate scroll extents**
+//!    - min_scroll_extent = total extent of reverse slivers (≤ 0)
+//!    - max_scroll_extent = total extent of forward slivers (≥ 0)
+//!    - Used for scroll position clamping
+//!
+//! 7. **Check visual overflow**
+//!    - Set has_visual_overflow if content exceeds viewport
+//!
+//! # Paint Protocol
+//!
+//! 1. **Apply clipping** (if clip_behavior != Clip::None)
+//!    - Clip to viewport bounds
+//!    - Prevents sliver content from painting outside viewport
+//!
+//! 2. **Paint visible slivers**
+//!    - Paint only slivers with visible geometry
+//!    - Use cached paint_offset from layout
+//!    - Paint in order (reverse slivers, center, forward slivers)
+//!
+//! 3. **Skip invisible slivers**
+//!    - Slivers outside viewport not painted (culled)
+//!    - Cache extent slivers laid out but not painted if outside viewport
+//!
+//! # Performance
+//!
+//! - **Layout**: O(v) where v = visible slivers - only layouts visible + cached
+//! - **Paint**: O(v) - only paints visible slivers
+//! - **Memory**: O(v + c) where c = cached slivers - not O(total children)!
+//! - **Scrolling**: Incremental layout as content enters/exits viewport
+//!
+//! # Use Cases
+//!
+//! - **Scrollable lists**: CustomScrollView with SliverList
+//! - **Scrollable grids**: CustomScrollView with SliverGrid
+//! - **Mixed content**: Lists + grids + headers in single scrollable
+//! - **Bidirectional scroll**: Chat apps (scroll up for history, down for new)
+//! - **Infinite scroll**: Social feeds, news feeds
+//! - **Complex scrolling**: App bars, sticky headers, slivers with different behaviors
+//!
+//! # Coordinate System
+//!
+//! - scroll_offset: 0.0 means center sliver is at anchor position
+//! - Positive scroll_offset scrolls content in the main axis direction
+//! - Negative scroll_offset (bidirectional) scrolls in reverse direction
+//! - viewport_main_axis_extent: Height (vertical) or width (horizontal) of viewport
+//!
+//! # Bidirectional Scrolling
+//!
+//! The `center_index` field specifies which sliver acts as the origin for scrolling.
+//! Slivers before the center are laid out in reverse direction (grow towards
+//! main axis negative), while slivers after the center grow in the forward
+//! direction (towards main axis positive).
+//!
+//! ```text
+//! Unidirectional (center_index = None):
+//! scroll_offset: 0 → [sliver0][sliver1][sliver2]...
+//! scroll_offset: 100 → scroll forward ↓
+//!
+//! Bidirectional (center_index = Some(1)):
+//! scroll_offset: -50 → [sliver0] visible (reverse)
+//! scroll_offset: 0 → [sliver1] at anchor (center)
+//! scroll_offset: 100 → [sliver2][sliver3] visible (forward)
+//! ```
+//!
+//! # Comparison with Related Objects
+//!
+//! - **vs RenderSliverList**: Viewport contains slivers, SliverList is a sliver
+//! - **vs RenderBox scrollables**: Viewport uses sliver protocol for efficiency
+//! - **vs RenderShrinkWrappingViewport**: ShrinkWrapping sizes to content, Viewport sizes to constraints
+//! - **vs RenderListView**: ListView is widget-level, Viewport is render-level
+//!
+//! # Examples
+//!
+//! ```rust,ignore
+//! use flui_rendering::RenderViewport;
+//! use flui_types::layout::AxisDirection;
+//!
+//! // Vertical scrolling viewport
+//! let mut viewport = RenderViewport::new(AxisDirection::Down);
+//! viewport.set_scroll_offset(100.0);
+//! viewport.set_cache_extent(250.0);
+//!
+//! // Bidirectional scrolling (chat-style)
+//! let mut chat_viewport = RenderViewport::new(AxisDirection::Down);
+//! chat_viewport.set_center_index(Some(0)); // Center at first sliver
+//! chat_viewport.set_anchor(0.5); // Center in viewport
+//!
+//! // Horizontal scrolling
+//! let mut horizontal = RenderViewport::new(AxisDirection::Right);
 //! ```
 
 use crate::core::{
@@ -32,27 +169,82 @@ use flui_types::layout::{Axis, AxisDirection, CacheExtentStyle};
 use flui_types::painting::Clip;
 use flui_types::{Offset, Rect, Size, SliverConstraints, SliverGeometry};
 
-/// RenderObject that provides a viewport for sliver content
+/// RenderObject that provides a scrollable viewport for sliver content.
 ///
-/// A viewport is the visible portion of scrollable content. It manages:
-/// - Converting scroll offset into sliver constraints
-/// - Laying out sliver children with appropriate constraints
-/// - Clipping content to viewport bounds
-/// - Cache extent for smooth scrolling
-/// - Bidirectional scrolling via center sliver
+/// Bridge between box protocol (viewport itself) and sliver protocol (children).
+/// Manages scroll offset, viewport dimensions, cache extent, and bidirectional
+/// scrolling. Converts box constraints to sliver constraints for children, handles
+/// viewport clipping, and calculates scroll extents for scroll position management.
 ///
-/// # Coordinate System
+/// # Arity
 ///
-/// - scroll_offset: 0.0 means center sliver is at anchor position
-/// - Positive scroll_offset scrolls content in the main axis direction
-/// - viewport_main_axis_extent: Height (vertical) or width (horizontal) of viewport
+/// `Variable` - Can have any number of sliver children (0+). Only visible and
+/// cached slivers are laid out.
+///
+/// # Protocol
+///
+/// Box protocol - Uses `BoxConstraints` and returns `Size`. Children use sliver
+/// protocol (SliverConstraints → SliverGeometry).
+///
+/// # Pattern
+///
+/// **Box-to-Sliver Bridge Viewport** - Converts box constraints to sliver constraints,
+/// manages scroll offset and viewport dimensions, supports bidirectional scrolling via
+/// center sliver, cache extent for smooth scrolling, viewport clipping, incremental
+/// layout of visible+cached children.
+///
+/// # Use Cases
+///
+/// - **Scrollable lists**: Foundation for ListView, CustomScrollView
+/// - **Scrollable grids**: Foundation for GridView
+/// - **Mixed scrollables**: Lists + grids + headers in one scrollable
+/// - **Bidirectional scroll**: Chat apps (history up, new messages down)
+/// - **Infinite scroll**: Social feeds, news apps
+/// - **Complex scrolling**: App bars, sticky headers, nested slivers
+///
+/// # Flutter Compliance
+///
+/// Matches Flutter's RenderViewport behavior:
+/// - Box protocol viewport containing sliver protocol children
+/// - Converts scroll offset to SliverConstraints
+/// - Supports bidirectional scrolling via center_index
+/// - Cache extent for prebuilding off-screen content
+/// - Viewport clipping with configurable Clip behavior
+/// - Anchor position for scroll origin (0.0-1.0)
+/// - Calculates min/max scroll extents
+/// - Incremental layout (only visible + cached slivers)
 ///
 /// # Bidirectional Scrolling
 ///
-/// The `center` field specifies which sliver acts as the origin for scrolling.
-/// Slivers before the center are laid out in reverse direction (grow towards
-/// main axis negative), while slivers after the center grow in the forward
-/// direction (towards main axis positive).
+/// When `center_index` is set, viewport supports scrolling in both directions:
+/// - Slivers before center grow in reverse (negative scroll offsets)
+/// - Slivers after center grow forward (positive scroll offsets)
+/// - Used for chat interfaces (scroll up for history, down for new messages)
+///
+/// # Coordinate System
+///
+/// - **scroll_offset = 0.0**: Center sliver positioned at anchor
+/// - **Positive offset**: Content scrolls forward (down/right)
+/// - **Negative offset**: Content scrolls backward (up/left, if bidirectional)
+/// - **anchor**: Position in viewport (0.0=start, 0.5=middle, 1.0=end)
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use flui_rendering::RenderViewport;
+/// use flui_types::layout::AxisDirection;
+///
+/// // Vertical scrolling (unidirectional)
+/// let mut viewport = RenderViewport::new(AxisDirection::Down);
+/// viewport.set_scroll_offset(100.0);
+/// viewport.set_cache_extent(250.0);
+///
+/// // Bidirectional (chat-style)
+/// let mut chat = RenderViewport::new(AxisDirection::Down);
+/// chat.set_center_index(Some(0)); // First sliver is center
+/// chat.set_anchor(0.5); // Center in viewport
+/// chat.set_scroll_offset(-50.0); // Show history
+/// ```
 #[derive(Debug)]
 pub struct RenderViewport {
     /// Direction of the main axis
