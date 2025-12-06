@@ -49,7 +49,7 @@ use std::time::{Duration, Instant};
 
 use parking_lot::RwLock;
 
-use flui_element::{Element, ElementTree};
+use flui_element::{BuildOwner, Element, ElementTree};
 use flui_foundation::ElementId;
 use flui_pipeline::context::PipelineBuildContext;
 use flui_pipeline::DirtySet;
@@ -142,16 +142,25 @@ impl BuildBatcher {
 /// Each element is tracked with its depth in the tree (0 = root).
 /// This ensures parent widgets build before children, which is critical
 /// for correct widget tree construction.
+/// Build pipeline manages widget rebuild phase.
+///
+/// Tracks which elements need rebuilding (with their depths) and processes them
+/// in depth-first order (parents before children).
+///
+/// # Architecture (SOLID)
+///
+/// - `BuildOwner` (from flui-element): Manages build scope and state locking
+/// - `BuildPipeline` (this): Manages dirty tracking and rebuild execution
+///
+/// This separation follows Single Responsibility Principle.
 #[derive(Debug)]
 pub struct BuildPipeline {
     /// Elements that need rebuilding with their depths: (ElementId, depth)
     dirty_elements: Vec<(ElementId, usize)>,
-    /// Build count for tracking
+    /// Build count for tracking (local counter, BuildOwner has its own)
     build_count: usize,
-    /// Whether currently in a build scope
-    in_build_scope: bool,
-    /// Whether state changes are locked
-    build_locked: bool,
+    /// BuildOwner handles build scope and state locking
+    build_owner: BuildOwner,
     /// Optional batching system
     batcher: Option<BuildBatcher>,
     /// Rebuild queue for deferred rebuilds from signals
@@ -166,8 +175,7 @@ impl BuildPipeline {
         Self {
             dirty_elements: Vec::new(),
             build_count: 0,
-            in_build_scope: false,
-            build_locked: false,
+            build_owner: BuildOwner::new(),
             batcher: None,
             rebuild_queue,
             dirty_set: Arc::new(parking_lot::RwLock::new(DirtySet::new())),
@@ -177,6 +185,16 @@ impl BuildPipeline {
     /// Creates a new build pipeline.
     pub fn new() -> Self {
         Self::new_with_queue(super::RebuildQueue::new())
+    }
+
+    /// Get reference to the BuildOwner
+    pub fn build_owner(&self) -> &BuildOwner {
+        &self.build_owner
+    }
+
+    /// Get mutable reference to the BuildOwner
+    pub fn build_owner_mut(&mut self) -> &mut BuildOwner {
+        &mut self.build_owner
     }
 
     /// Get the dirty set for use with PipelineBuildContext
@@ -205,10 +223,10 @@ impl BuildPipeline {
             "schedule element={:?}, depth={}, build_locked={}",
             element_id,
             depth,
-            self.build_locked
+            self.build_owner.is_locked()
         );
 
-        if self.build_locked {
+        if self.build_owner.is_locked() {
             tracing::warn!(
                 element_id = ?element_id,
                 "Attempted to schedule build while state is locked. Build deferred."
@@ -264,7 +282,7 @@ impl BuildPipeline {
 
     /// Check if currently in build scope
     pub fn is_in_build_scope(&self) -> bool {
-        self.in_build_scope
+        self.build_owner.is_building()
     }
 
     // =========================================================================
@@ -377,17 +395,20 @@ impl BuildPipeline {
     where
         F: FnOnce(&mut Self) -> R,
     {
-        if self.in_build_scope {
+        // Check for nested builds
+        let was_building = self.build_owner.is_building();
+        if was_building {
             tracing::warn!("Nested build_scope detected! This may indicate incorrect usage.");
         }
 
-        self.in_build_scope = true;
+        // Set building flag
+        self.build_owner.set_building(true);
 
         // Execute callback
         let result = f(self);
 
-        // Clear flag
-        self.in_build_scope = false;
+        // Restore previous state
+        self.build_owner.set_building(was_building);
 
         result
     }
@@ -400,10 +421,12 @@ impl BuildPipeline {
     where
         F: FnOnce(&mut Self) -> R,
     {
-        let was_locked = self.build_locked;
-        self.build_locked = true;
+        let was_locked = self.build_owner.is_locked();
+        self.build_owner.set_locked(true);
+
         let result = f(self);
-        self.build_locked = was_locked;
+
+        self.build_owner.set_locked(was_locked);
         result
     }
 
@@ -521,16 +544,19 @@ impl BuildPipeline {
                 // Insert each child Element into tree
                 let child_depth = depth + 1;
                 for child_element in pending_children {
-                    let child_id = tree_guard.insert(child_element);
+                    // Downcast from Box<dyn Any + Send + Sync> to Element
+                    if let Ok(element_box) = child_element.downcast::<Element>() {
+                        let child_id = tree_guard.insert(*element_box);
 
-                    // Mount child
-                    if let Some(child) = tree_guard.get_mut(child_id) {
-                        child.mount(Some(new_id), None, child_depth);
-                    }
+                        // Mount child
+                        if let Some(child) = tree_guard.get_mut(child_id) {
+                            child.mount(Some(new_id), None, child_depth);
+                        }
 
-                    // Add child ID to parent's children list
-                    if let Some(parent) = tree_guard.get_mut(new_id) {
-                        parent.add_child(child_id);
+                        // Add child ID to parent's children list
+                        if let Some(parent) = tree_guard.get_mut(new_id) {
+                            parent.add_child(child_id);
+                        }
                     }
                 }
             }
@@ -1173,13 +1199,17 @@ impl BuildPipeline {
     // =========================================================================
 
     /// Set in_build_scope flag (internal use only)
+    ///
+    /// Note: This uses atomic operations on BuildOwner
     pub(super) fn set_build_scope(&mut self, value: bool) {
-        self.in_build_scope = value;
+        self.build_owner.set_building(value);
     }
 
     /// Set build_locked flag (internal use only)
+    ///
+    /// Note: This uses atomic operations on BuildOwner
     pub(super) fn set_build_locked(&mut self, value: bool) {
-        self.build_locked = value;
+        self.build_owner.set_locked(value);
     }
 }
 

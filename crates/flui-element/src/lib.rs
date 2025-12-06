@@ -119,6 +119,7 @@
 // MODULES
 // ============================================================================
 
+pub mod build_owner;
 pub mod element;
 pub mod into_element;
 pub mod tree;
@@ -152,6 +153,9 @@ pub use element::{AtomicViewFlags, ViewElement, ViewFlags, ViewLifecycle};
 // Tree types
 pub use tree::ElementTree;
 
+// BuildOwner
+pub use build_owner::BuildOwner;
+
 // IntoElement trait
 pub use into_element::IntoElement;
 
@@ -174,6 +178,9 @@ pub use flui_tree::{RenderTreeAccess, TreeNav, TreeRead, TreeWrite, TreeWriteNav
 pub mod prelude {
     // Core element types
     pub use crate::element::{Element, ElementLifecycle, RenderElement, ViewElement};
+
+    // BuildOwner
+    pub use crate::build_owner::BuildOwner;
 
     // Conversion trait
     pub use crate::into_element::IntoElement;
