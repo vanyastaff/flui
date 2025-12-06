@@ -92,7 +92,8 @@
 //! let current_overlap = handle.get_extent();
 //! ```
 
-use crate::core::{RuntimeArity, LegacySliverRender, SliverSliver};
+use crate::core::{RenderObject, RenderSliver, Single, SliverLayoutContext, SliverPaintContext};
+use crate::RenderResult;
 use flui_painting::Canvas;
 use flui_types::SliverGeometry;
 use std::sync::{Arc, Mutex};
@@ -272,38 +273,27 @@ impl Default for RenderSliverOverlapAbsorber {
     }
 }
 
-impl LegacySliverRender for RenderSliverOverlapAbsorber {
-    fn layout(&mut self, ctx: &Sliver) -> SliverGeometry {
-        // If no child, return zero geometry and clear handle
-        let Some(child_id) = ctx.children.try_single() else {
-            self.handle.set_extent(0.0);
-            self.sliver_geometry = SliverGeometry::default();
-            return self.sliver_geometry;
-        };
+impl RenderObject for RenderSliverOverlapAbsorber {}
+
+impl RenderSliver<Single> for RenderSliverOverlapAbsorber {
+    fn layout(&mut self, mut ctx: SliverLayoutContext<'_, Single>) -> RenderResult<SliverGeometry> {
+        let child_id = *ctx.children.single();
 
         // Layout child with unchanged constraints
-        let child_geometry = ctx.tree.layout_sliver_child(child_id, ctx.constraints);
+        let child_geometry = ctx.tree_mut().perform_sliver_layout(child_id, ctx.constraints)?;
 
         // Calculate our geometry by absorbing child's overlap
         self.sliver_geometry = self.calculate_sliver_geometry(child_geometry);
-        self.sliver_geometry
+        Ok(self.sliver_geometry)
     }
 
-    fn paint(&self, ctx: &Sliver) -> Canvas {
-        // Paint child if present
-        if let Some(child_id) = ctx.children.try_single() {
-            return ctx.tree.paint_child(child_id, ctx.offset);
+    fn paint(&self, ctx: &mut SliverPaintContext<'_, Single>) {
+        // Paint child
+        let child_id = *ctx.children.single();
+
+        if let Ok(child_canvas) = ctx.tree().perform_paint(child_id, ctx.offset) {
+            *ctx.canvas = child_canvas;
         }
-
-        Canvas::new()
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> RuntimeArity {
-        RuntimeArity::Exact(1) // Single child sliver
     }
 }
 
@@ -454,11 +444,5 @@ mod tests {
 
         // layout_extent = max(0, 180 - 180) = 0
         assert_eq!(geometry.layout_extent, 0.0);
-    }
-
-    #[test]
-    fn test_arity_is_single_child() {
-        let absorber = RenderSliverOverlapAbsorber::default();
-        assert_eq!(absorber.arity(), RuntimeArity::Exact(1));
     }
 }
