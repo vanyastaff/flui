@@ -1,51 +1,178 @@
-//! RenderConstrainedOverflowBox - Overflow box with custom constraints
+//! RenderConstrainedOverflowBox - Imposes custom constraints allowing child overflow
 //!
-//! Allows the child to overflow the parent's constraints by applying custom
-//! min/max width and height constraints to the child. The parent sizes itself
-//! according to its incoming constraints, ignoring the child's size.
+//! Implements Flutter's ConstrainedOverflowBox that applies custom constraints to
+//! its child independent of parent constraints, allowing the child to potentially
+//! overflow parent boundaries. Parent sizes itself according to incoming constraints,
+//! ignoring child's actual size.
 //!
-//! This is useful for:
-//! - Creating fixed-size widgets regardless of parent constraints
-//! - Allowing children to exceed parent boundaries with specific size limits
-//! - Transforming constraints passed to children
+//! # Flutter Equivalence
+//!
+//! | FLUI | Flutter |
+//! |------|---------|
+//! | `RenderConstrainedOverflowBox` | `RenderConstrainedBox` from `package:flutter/src/rendering/proxy_box.dart` (with overflow) |
+//! | `min_width` | `minWidth` property (overrides parent if set) |
+//! | `max_width` | `maxWidth` property (overrides parent if set) |
+//! | `min_height` | `minHeight` property (overrides parent if set) |
+//! | `max_height` | `maxHeight` property (overrides parent if set) |
+//! | `alignment` | `alignment` property (AlignmentGeometry) |
+//!
+//! # Layout Protocol
+//!
+//! 1. **Determine parent size**
+//!    - Parent size = parent constraints.biggest()
+//!    - Uses max width/height from parent constraints
+//!    - Parent ignores child size (key difference from normal layout)
+//!
+//! 2. **Create child constraints**
+//!    - Override parent constraints with custom min/max values
+//!    - If custom value None: use parent constraint value
+//!    - If custom value Some(v): use v instead
+//!    - Child constraints independent of parent size
+//!
+//! 3. **Layout child**
+//!    - Child laid out with custom constraints
+//!    - Child may be larger or smaller than parent
+//!    - Child size cached for paint alignment
+//!
+//! 4. **Return parent size**
+//!    - Size based on parent constraints only
+//!    - Child size completely ignored for parent sizing
+//!    - This allows child to overflow parent bounds
+//!
+//! # Paint Protocol
+//!
+//! 1. **Calculate alignment offset**
+//!    - If child size != parent size: apply alignment
+//!    - Offset = alignment.calculate_offset(child_size, parent_size)
+//!    - Centers or positions child within parent bounds
+//!
+//! 2. **Paint child at offset**
+//!    - Child painted at parent offset + alignment offset
+//!    - May paint outside parent bounds (overflow)
+//!    - No clipping applied (consider wrapping in RenderClipRect)
+//!
+//! # Performance
+//!
+//! - **Layout**: O(1) - single child layout with constraint override
+//! - **Paint**: O(1) - alignment calculation + child paint
+//! - **Memory**: 40 bytes (4 × Option<f32> + Alignment + 2 × Size cache)
+//!
+//! # Use Cases
+//!
+//! - **Fixed-size rendering**: Render at specific size regardless of parent
+//! - **Overflow scenarios**: Allow child to exceed parent boundaries
+//! - **Constraint override**: Apply constraints different from parent
+//! - **Debug layouts**: Force specific sizes for testing
+//! - **Custom constraint logic**: Implement business rules for sizing
+//! - **Modal overlays**: Render content larger than container
+//!
+//! # Comparison with Related Objects
+//!
+//! - **vs RenderConstrainedBox**: ConstrainedBox affects parent size, OverflowBox allows overflow
+//! - **vs RenderOverflowBox**: OverflowBox loosens constraints, this applies custom constraints
+//! - **vs RenderSizedBox**: SizedBox is tight constraints, this can be loose or custom
+//! - **vs RenderConstraintsTransformBox**: Transform uses callback, this uses fixed overrides
+//!
+//! # Important Note
+//!
+//! Consider wrapping in `RenderClipRect` to avoid confusing hit testing behavior
+//! when child overflows parent bounds. Without clipping, hit testing may register
+//! events outside visible parent area.
+//!
+//! # Examples
+//!
+//! ```rust,ignore
+//! use flui_rendering::RenderConstrainedOverflowBox;
+//! use flui_types::Alignment;
+//!
+//! // Child can be up to 200×200, parent sizes to constraints
+//! let overflow = RenderConstrainedOverflowBox::new()
+//!     .with_min_width(0.0)
+//!     .with_max_width(200.0)
+//!     .with_min_height(0.0)
+//!     .with_max_height(200.0);
+//!
+//! // Fixed size child (always 100×100)
+//! let fixed = RenderConstrainedOverflowBox::new()
+//!     .with_constraints(Some(100.0), Some(100.0), Some(100.0), Some(100.0));
+//!
+//! // With custom alignment
+//! let aligned = RenderConstrainedOverflowBox::new()
+//!     .with_max_width(300.0)
+//!     .with_alignment(Alignment::TOP_LEFT);
+//! ```
 
 use crate::core::{BoxLayoutCtx, BoxPaintCtx, RenderBox, Single};
 use crate::{RenderObject, RenderResult};
 use flui_types::{Alignment, BoxConstraints, Size};
 
-/// A render object that imposes different constraints on its child than it gets from its parent,
-/// possibly allowing the child to overflow the parent.
+/// RenderObject that imposes custom constraints on child, allowing overflow.
 ///
-/// The box sizes itself based on the parent's constraints, ignoring the child's dimensions.
-/// The child is laid out with custom constraints (minWidth, maxWidth, minHeight, maxHeight),
-/// which may allow it to be larger or smaller than the parent.
+/// Applies different constraints to child than received from parent,
+/// potentially allowing child to be larger or smaller than parent.
+/// Parent sizes itself based on incoming constraints, ignoring child size.
 ///
-/// # Layout Algorithm
+/// # Arity
 ///
-/// 1. Determine parent size from incoming constraints (uses maxWidth/maxHeight)
-/// 2. Create child constraints by overriding parent constraints with custom min/max values
-/// 3. Layout child with these custom constraints
-/// 4. Position child according to alignment
-/// 5. Return parent size (child size is ignored for parent sizing)
+/// `Single` - Must have exactly 1 child.
+///
+/// # Protocol
+///
+/// Box protocol - Uses `BoxConstraints` and returns `Size`.
+///
+/// # Pattern
+///
+/// **Constraint Modifier with Overflow** - Overrides constraints with custom
+/// values, parent ignores child size allowing overflow.
 ///
 /// # Use Cases
 ///
-/// - **Fixed-size rendering**: Always render at 50x50 regardless of parent
+/// - **Fixed-size rendering**: Always render at specific size
 /// - **Overflow scenarios**: Allow child to exceed parent boundaries
-/// - **Constraint transformation**: Apply custom constraints different from parent
+/// - **Constraint transformation**: Apply custom constraints
+/// - **Debug layouts**: Force specific sizes for testing
+/// - **Modal overlays**: Content larger than container
+/// - **Custom sizing logic**: Business-rule-based constraints
+///
+/// # Flutter Compliance
+///
+/// Matches Flutter's ConstrainedBox (with overflow) behavior:
+/// - Parent sizes to incoming constraints (biggest size)
+/// - Custom constraints override parent constraints
+/// - Child laid out with custom constraints
+/// - Child size ignored for parent sizing
+/// - Alignment applied when sizes differ
+/// - Extends RenderAligningShiftedBox base class
+///
+/// # Overflow Behavior
+///
+/// Child can overflow parent because:
+/// 1. Parent size determined by parent constraints only
+/// 2. Child constraints are custom, independent of parent size
+/// 3. No clipping applied during paint
+///
+/// Wrap in RenderClipRect if clipping is desired.
 ///
 /// # Example
 ///
 /// ```rust,ignore
-/// // Create a box that's always 100x100, but child can be any size up to 200x200
-/// let overflow = RenderConstrainedOverflowBox::new()
-///     .with_min_width(0.0)
-///     .with_max_width(200.0)
-///     .with_min_height(0.0)
-///     .with_max_height(200.0);
-/// ```
+/// use flui_rendering::RenderConstrainedOverflowBox;
+/// use flui_types::Alignment;
 ///
-/// **Note**: Consider wrapping in RenderClipRect to avoid confusing hit testing behavior.
+/// // Child can be up to 200×200
+/// let overflow = RenderConstrainedOverflowBox::new()
+///     .with_max_width(200.0)
+///     .with_max_height(200.0);
+///
+/// // Fixed 100×100 child
+/// let fixed = RenderConstrainedOverflowBox::new()
+///     .with_constraints(Some(100.0), Some(100.0), Some(100.0), Some(100.0));
+///
+/// // Top-left aligned overflow
+/// let aligned = RenderConstrainedOverflowBox::new()
+///     .with_max_width(300.0)
+///     .with_alignment(Alignment::TOP_LEFT);
+/// ```
 #[derive(Debug)]
 pub struct RenderConstrainedOverflowBox {
     /// Minimum width constraint for child (overrides parent if set)
@@ -144,26 +271,30 @@ impl RenderObject for RenderConstrainedOverflowBox {}
 
 impl RenderBox<Single> for RenderConstrainedOverflowBox {
     fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Single>) -> RenderResult<Size> {
-        let child_id = *ctx.children.single();
+        // Single arity: use ctx.single_child() which returns ElementId directly
+        let child_id = ctx.single_child();
 
-        // Parent sizes itself according to its incoming constraints
-        // (uses biggest size available from parent)
+        // Parent sizes itself according to incoming constraints
+        // Uses biggest size available from parent (key: ignores child size)
         let parent_size = ctx.constraints.biggest();
 
-        // Create custom constraints for child
+        // Create custom constraints for child (may allow overflow)
         let child_constraints = self.create_child_constraints(ctx.constraints);
 
-        // Layout child with custom constraints (may overflow parent)
+        // Layout child with custom constraints
+        // Child may be larger or smaller than parent
         let child_size = ctx.layout_child(child_id, child_constraints)?;
         self.cached_child_size = child_size;
         self.cached_parent_size = parent_size;
 
         // Return parent size (ignoring child size)
+        // This allows child to overflow parent bounds
         Ok(parent_size)
     }
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Single>) {
-        let child_id = *ctx.children.single();
+        // Single arity: use ctx.single_child() which returns ElementId directly
+        let child_id = ctx.single_child();
 
         // Calculate child offset based on alignment
         // Note: child may be larger than parent (overflow)
@@ -171,7 +302,8 @@ impl RenderBox<Single> for RenderConstrainedOverflowBox {
             .alignment
             .calculate_offset(self.cached_child_size, self.cached_parent_size);
 
-        // Paint child at aligned offset (may paint outside parent bounds)
+        // Paint child at aligned offset
+        // May paint outside parent bounds (no clipping)
         ctx.paint_child(child_id, ctx.offset + child_offset);
     }
 }
