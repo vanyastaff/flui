@@ -1,39 +1,88 @@
-//! RenderAlign - aligns child within available space
+//! RenderAlign - Aligns child within available space with optional size factors
 //!
 //! Implements Flutter's alignment container for positioning a child within
-//! available space with optional size factors.
+//! available space with optional size factors for controlling container dimensions.
 //!
 //! # Flutter Equivalence
 //!
 //! | FLUI | Flutter |
 //! |------|---------|
 //! | `RenderAlign` | `RenderPositionedBox` from `package:flutter/src/rendering/shifted_box.dart` |
-//! | `alignment` | `alignment` property |
-//! | `width_factor` | `widthFactor` property |
-//! | `height_factor` | `heightFactor` property |
+//! | `alignment` | `alignment` property (AlignmentGeometry) |
+//! | `width_factor` | `widthFactor` property (multiplier for child width) |
+//! | `height_factor` | `heightFactor` property (multiplier for child height) |
+//! | `set_alignment()` | `alignment = value` setter |
+//! | `set_width_factor()` | `widthFactor = value` setter |
+//! | `set_height_factor()` | `heightFactor = value` setter |
 //!
 //! # Layout Protocol
 //!
-//! 1. **Layout child**
-//!    - Use loose constraints to get child's natural size
+//! 1. **Layout child with loose constraints**
+//!    - Child receives loosened constraints (min=0, same max)
+//!    - Child determines its natural size
 //!
 //! 2. **Calculate container size**
-//!    - If `width_factor` is set: `width = child_width * width_factor` (clamped)
-//!    - If `width_factor` is None: `width = constraints.max_width` (expand)
+//!    - If `width_factor` is Some: `width = child_width × width_factor` (clamped)
+//!    - If `width_factor` is None: `width = constraints.max_width` (expand to fill)
 //!    - Same logic for height
 //!
 //! 3. **Calculate alignment offset**
-//!    - Use `Alignment::calculate_offset()` to position child within container
+//!    - Use `Alignment::calculate_offset(child_size, container_size)`
+//!    - Offset positions child within container according to alignment
 //!    - Cache offset for paint phase
 //!
 //! 4. **Handle no child case**
 //!    - Return max constraints size (or min if max is infinite)
+//!    - Reserves space even without child
+//!
+//! # Paint Protocol
+//!
+//! 1. **Paint child at aligned offset**
+//!    - Child painted at parent offset + cached alignment offset
+//!    - No clipping applied (child positioned within bounds by layout)
+//!
+//! 2. **No child case**
+//!    - Nothing painted (empty space reserved)
 //!
 //! # Performance
 //!
 //! - **Layout**: O(1) - single child layout with simple size calculation
 //! - **Paint**: O(1) - direct child paint with cached offset
-//! - **Memory**: 40 bytes (Alignment + 2 Option<f32> + Offset cache)
+//! - **Memory**: 40 bytes (Alignment + 2 × Option<f32> + Offset cache)
+//!
+//! # Use Cases
+//!
+//! - **Centering**: Position child at center of available space (most common)
+//! - **Corner alignment**: Align to edges (top-left, bottom-right, etc.)
+//! - **Sized containers**: Control container size relative to child size
+//! - **Flexible spacing**: Create containers that expand or shrink with content
+//! - **Modal dialogs**: Center dialog with size based on content
+//! - **Tooltips**: Position tooltips with alignment relative to anchor
+//!
+//! # Size Factor Behavior
+//!
+//! Size factors control container dimensions relative to child size:
+//!
+//! ```text
+//! width_factor = None:
+//!   Container width = max_width (expand to fill)
+//!
+//! width_factor = Some(1.0):
+//!   Container width = child_width (tight around child)
+//!
+//! width_factor = Some(2.0):
+//!   Container width = child_width × 2.0 (double child width)
+//!
+//! width_factor = Some(0.5):
+//!   Container width = child_width × 0.5 (half child width, may clip)
+//! ```
+//!
+//! # Comparison with Related Objects
+//!
+//! - **vs RenderCenter**: Center is Align with alignment=CENTER and no size factors
+//! - **vs RenderPositioned**: Positioned uses absolute coordinates, Align uses alignment
+//! - **vs RenderFlex**: Flex distributes space among children, Align positions single child
+//! - **vs RenderPadding**: Padding adds space around child, Align positions within space
 //!
 //! # Examples
 //!
@@ -41,14 +90,24 @@
 //! use flui_rendering::RenderAlign;
 //! use flui_types::Alignment;
 //!
-//! // Center align with natural sizing
-//! let align = RenderAlign::new(Alignment::CENTER);
+//! // Center align with natural sizing (expand to fill)
+//! let center = RenderAlign::new(Alignment::CENTER);
 //!
-//! // Top-left align with size factors
-//! let align = RenderAlign::with_factors(
-//!     Alignment::TOP_LEFT,
-//!     Some(2.0),   // Width = child_width * 2.0
-//!     Some(1.5),   // Height = child_height * 1.5
+//! // Top-left align
+//! let top_left = RenderAlign::new(Alignment::TOP_LEFT);
+//!
+//! // Center with size factors (tight around child × factor)
+//! let sized = RenderAlign::with_factors(
+//!     Alignment::CENTER,
+//!     Some(2.0),   // Width = child_width × 2.0
+//!     Some(1.5),   // Height = child_height × 1.5
+//! );
+//!
+//! // Right align with no vertical expansion
+//! let right = RenderAlign::with_factors(
+//!     Alignment::CENTER_RIGHT,
+//!     None,        // Expand to fill width
+//!     Some(1.0),   // Height matches child
 //! );
 //! ```
 
@@ -69,11 +128,19 @@ use flui_types::{Alignment, Offset, Size};
 ///
 /// Box protocol - Uses `BoxConstraints` and returns `Size`.
 ///
+/// # Pattern
+///
+/// **Alignment Container with Optional Sizing Factors** - Positions child using
+/// alignment, optionally scales container size based on child size.
+///
 /// # Use Cases
 ///
-/// - **Centering**: Position child at center of available space
+/// - **Centering**: Position child at center (most common use case)
 /// - **Corner alignment**: Align to edges (top-left, bottom-right, etc.)
-/// - **Sized alignment**: Control container size relative to child size
+/// - **Sized containers**: Control size relative to child (tight fit, doubled, etc.)
+/// - **Flexible spacing**: Expand to fill or shrink to child
+/// - **Modal dialogs**: Center with content-based sizing
+/// - **Tooltips**: Position with alignment relative to anchor
 ///
 /// # Flutter Compliance
 ///
@@ -82,6 +149,32 @@ use flui_types::{Alignment, Offset, Size};
 /// - Respects width_factor and height_factor for sizing
 /// - Uses Alignment to calculate child offset
 /// - Expands to fill space when factors are None
+/// - Extends RenderAligningShiftedBox base class
+///
+/// # Size Factor Behavior
+///
+/// - **None**: Expand to fill available space (max constraints)
+/// - **Some(1.0)**: Tight around child (container = child size)
+/// - **Some(2.0)**: Container = child size × 2.0
+/// - **Some(0.5)**: Container = child size × 0.5 (may clip child)
+///
+/// Result is clamped to parent constraints.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use flui_rendering::RenderAlign;
+/// use flui_types::Alignment;
+///
+/// // Center align (expand to fill)
+/// let center = RenderAlign::new(Alignment::CENTER);
+///
+/// // Center with tight fit around child
+/// let tight = RenderAlign::with_factors(Alignment::CENTER, Some(1.0), Some(1.0));
+///
+/// // Top-left with double width
+/// let wide = RenderAlign::with_factors(Alignment::TOP_LEFT, Some(2.0), Some(1.0));
+/// ```
 #[derive(Debug)]
 pub struct RenderAlign {
     /// The alignment within the available space
@@ -150,9 +243,8 @@ impl RenderBox<Optional> for RenderAlign {
     fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Optional>) -> RenderResult<Size> {
         let constraints = ctx.constraints;
 
-        // Check if we have a child
-        if let Some(child_id) = ctx.children.get() {
-            let child_id = *child_id;
+        // Optional arity: use ctx.children.get() which returns Option<&ElementId>
+        if let Some(&child_id) = ctx.children.get() {
             // Layout child with loose constraints to get its natural size
             let child_size = ctx.layout_child(child_id, constraints.loosen())?;
 
@@ -197,11 +289,13 @@ impl RenderBox<Optional> for RenderAlign {
     }
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Optional>) {
-        // If we have a child, paint it at aligned position
-        if let Some(child_id) = ctx.children.get() {
+        // Optional arity: use ctx.children.get() which returns Option<&ElementId>
+        if let Some(&child_id) = ctx.children.get() {
+            // Paint child at aligned position (parent offset + cached alignment offset)
             let child_offset = ctx.offset + self.child_offset;
-            ctx.paint_child(*child_id, child_offset);
+            ctx.paint_child(child_id, child_offset);
         }
+        // If no child, nothing to paint
     }
 }
 
