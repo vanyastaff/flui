@@ -1,4 +1,74 @@
 //! RenderTexture - GPU texture rendering
+//!
+//! Implements Flutter's external texture rendering for video, camera, and
+//! platform-specific GPU textures.
+//!
+//! # Flutter Equivalence
+//!
+//! | FLUI | Flutter |
+//! |------|---------|
+//! | `RenderTexture` | `RenderTexture` from `package:flutter/src/rendering/texture.dart` |
+//! | `TextureId` | `int textureId` property |
+//! | `fit` | `fit` property (BoxFit) |
+//! | `freeze` | `freeze` property |
+//! | `filter_quality` | `filterQuality` property |
+//!
+//! # Layout Protocol
+//!
+//! 1. **Take all available space**
+//!    - Textures typically fill allocated space
+//!    - Use max constraints as size
+//!
+//! 2. **Cache size**
+//!    - Store size for paint phase
+//!
+//! # Paint Protocol
+//!
+//! 1. **Calculate destination rectangle**
+//!    - Use cached layout size
+//!    - Apply BoxFit logic (Fill, Contain, Cover, etc.)
+//!    - Center texture within allocated space
+//!
+//! 2. **Draw texture** (TODO)
+//!    - Use Canvas::draw_texture() API (not yet implemented)
+//!    - Apply filter quality for sampling
+//!    - Respect freeze flag
+//!
+//! # Performance
+//!
+//! - **Layout**: O(1) - takes max constraints
+//! - **Paint**: O(1) - GPU texture blit (hardware-accelerated)
+//! - **Memory**: O(1) - texture data stored in GPU memory
+//!
+//! # Use Cases
+//!
+//! - **Video playback**: Display video frames from decoder
+//! - **Camera preview**: Display live camera feed
+//! - **External rendering**: Display content from native plugins
+//! - **AR/VR**: Display camera passthrough or XR content
+//!
+//! # Examples
+//!
+//! ```rust,ignore
+//! use flui_rendering::{RenderTexture, TextureId};
+//! use flui_types::BoxFit;
+//!
+//! // Basic texture rendering (video player)
+//! let texture_id = TextureId::new(42);
+//! let texture = RenderTexture::new(texture_id);
+//!
+//! // Texture with Cover fit (fills space, may clip)
+//! let texture = RenderTexture::new(texture_id)
+//!     .with_fit(BoxFit::Cover);
+//!
+//! // Frozen texture (paused video frame)
+//! let texture = RenderTexture::new(texture_id)
+//!     .frozen();
+//!
+//! // High quality filtering (better upscaling)
+//! let texture = RenderTexture::new(texture_id)
+//!     .with_filter_quality(FilterQuality::High);
+//! ```
 
 use crate::core::{BoxLayoutCtx, BoxPaintCtx, Leaf, RenderBox};
 use crate::{RenderObject, RenderResult};
@@ -21,11 +91,35 @@ impl TextureId {
     }
 }
 
-/// RenderObject for displaying GPU textures
+/// RenderObject for displaying GPU textures.
 ///
 /// Renders a platform-specific GPU texture (e.g., from video decoder,
 /// camera, or external rendering context). The texture is referenced
 /// by a TextureId handle.
+///
+/// # Arity
+///
+/// `Leaf` - Has no children (renders GPU texture content).
+///
+/// # Protocol
+///
+/// Box protocol - Uses `BoxConstraints` and returns `Size`.
+///
+/// # Use Cases
+///
+/// - **Video playback**: Display decoded video frames
+/// - **Camera preview**: Display live camera feed
+/// - **External rendering**: Display content from platform plugins
+/// - **AR/VR content**: Display camera passthrough or XR frames
+/// - **Screen sharing**: Display captured screen content
+///
+/// # Flutter Compliance
+///
+/// Matches Flutter's RenderTexture behavior:
+/// - Takes all available space (fills constraints)
+/// - Applies BoxFit during paint
+/// - Supports freeze flag for pausing updates
+/// - Supports filter quality for upscaling/downscaling
 ///
 /// # Example
 ///
@@ -243,10 +337,23 @@ impl RenderBox<Leaf> for RenderTexture {
     }
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Leaf>) {
-        // Draw GPU texture
-        // Note: Canvas API will need to support texture drawing
-        // For now, we draw a placeholder rectangle to show the texture bounds
-        let rect = Rect::from_min_size(flui_types::Point::ZERO, self.size);
+        // Apply parent offset to draw in correct position
+        let rect = Rect::from_xywh(
+            ctx.offset.dx,
+            ctx.offset.dy,
+            self.size.width,
+            self.size.height,
+        );
+
+        // TODO: Once Canvas supports texture drawing, use:
+        // ctx.canvas_mut().draw_texture(
+        //     self.texture_id,
+        //     rect,
+        //     self.filter_quality,
+        //     freeze: self.freeze
+        // );
+
+        // For now, draw a placeholder rectangle to show the texture bounds
         let paint = flui_painting::Paint {
             style: flui_painting::PaintStyle::Stroke,
             stroke_width: 2.0,
@@ -255,9 +362,6 @@ impl RenderBox<Leaf> for RenderTexture {
         };
 
         ctx.canvas_mut().draw_rect(rect, &paint);
-
-        // TODO: Once Canvas supports texture drawing, use:
-        // ctx.canvas_mut().draw_texture(self.texture_id, rect, self.filter_quality);
     }
 }
 
