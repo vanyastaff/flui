@@ -1,12 +1,100 @@
-//! RenderCustomSingleChildLayoutBox - Custom single-child layout with delegate
+//! RenderCustomSingleChildLayoutBox - Custom single-child layout with delegate pattern
 //!
-//! This RenderObject delegates all layout decisions to a `SingleChildLayoutDelegate`,
-//! allowing complete custom control over:
-//! - Parent size calculation
-//! - Child constraints
-//! - Child positioning
+//! Implements Flutter's custom single-child layout system using a delegate pattern
+//! for full control over parent sizing, child constraints, and child positioning.
+//! The delegate provides three-phase layout control without needing to subclass
+//! RenderBox. Ideal for custom layouts that don't fit standard patterns like
+//! Align, Padding, or FractionallySizedBox.
 //!
-//! Similar to Flutter's RenderCustomSingleChildLayoutBox.
+//! # Flutter Equivalence
+//!
+//! | FLUI | Flutter |
+//! |------|---------|
+//! | `RenderCustomSingleChildLayoutBox` | `RenderCustomSingleChildLayoutBox` from `package:flutter/src/rendering/custom_layout.dart` |
+//! | `SingleChildLayoutDelegate` | `SingleChildLayoutDelegate` trait |
+//! | `get_size()` | `getSize()` method |
+//! | `get_constraints_for_child()` | `getConstraintsForChild()` method |
+//! | `get_position_for_child()` | `getPositionForChild()` method |
+//! | `should_relayout()` | `shouldRelayout()` method |
+//! | `CenterDelegate` | Example implementation (not in Flutter) |
+//! | `FixedSizeDelegate` | Example implementation (not in Flutter) |
+//!
+//! # Layout Protocol
+//!
+//! 1. **Get parent size (independent of child)**
+//!    - Call `delegate.get_size(constraints)`
+//!    - IMPORTANT: Cannot depend on child size (child not yet laid out)
+//!    - Delegate returns size within parent constraints
+//!    - Cache size for paint phase
+//!
+//! 2. **Get child constraints**
+//!    - Call `delegate.get_constraints_for_child(constraints)`
+//!    - Delegate returns BoxConstraints for child
+//!    - Can loosen, tighten, or transform parent constraints
+//!
+//! 3. **Layout child**
+//!    - Layout child with delegate-provided constraints
+//!    - Get child's resulting size
+//!
+//! 4. **Get child position**
+//!    - Call `delegate.get_position_for_child(parent_size, child_size)`
+//!    - Delegate calculates child offset within parent
+//!    - Cache offset for paint phase
+//!
+//! 5. **Return parent size**
+//!    - Return size from step 1 (already computed)
+//!
+//! # Paint Protocol
+//!
+//! 1. **Paint child at cached offset**
+//!    - Use offset computed during layout phase
+//!    - Paint child at parent_offset + child_offset
+//!
+//! # Performance
+//!
+//! - **Layout**: O(1) + child layout - single delegate call, three method calls
+//! - **Paint**: O(1) - single child painted at cached offset
+//! - **Memory**: 48 bytes base (delegate + cached size + offset)
+//!
+//! # Use Cases
+//!
+//! - **Custom alignment**: Complex alignment rules not covered by Align
+//! - **Responsive sizing**: Parent size independent of child (opposite of SizedBox)
+//! - **Custom positioning**: Position calculations based on complex rules
+//! - **Conditional layouts**: Different behavior based on constraint breakpoints
+//! - **Aspect-aware positioning**: Position child based on aspect ratios
+//! - **Animation layouts**: Animated size/position without relayout
+//!
+//! # Delegate Pattern Benefits
+//!
+//! - **Three-phase control**: Separate parent sizing, child constraints, child positioning
+//! - **No subclassing**: Create custom layouts without RenderBox subclass
+//! - **Reusability**: Same delegate can be used with different instances
+//! - **Testability**: Delegates can be unit tested independently
+//! - **Optimization**: `should_relayout()` optimizes layout updates
+//! - **Clarity**: Explicit separation of sizing and positioning logic
+//!
+//! # Comparison with Related Objects
+//!
+//! - **vs RenderCustomMultiChildLayoutBox**: Single child vs multiple children
+//! - **vs RenderAlign**: Align has fixed algorithm, this is fully custom
+//! - **vs RenderPadding**: Padding adds insets, this has arbitrary logic
+//! - **vs RenderFractionalTranslation**: Translation is fixed formula, this is custom
+//! - **vs RenderFractionallySizedBox**: Size based on parent fraction, this is arbitrary
+//!
+//! # Important: Parent Size Independence
+//!
+//! **The parent size CANNOT depend on the child size.** This is a Flutter layout
+//! constraint enforced by calling `get_size()` before laying out the child.
+//!
+//! ```text
+//! ✅ Valid: Parent size = constraints.biggest()
+//! ✅ Valid: Parent size = Size(100, 100)
+//! ❌ Invalid: Parent size based on child_size (not yet available!)
+//! ```
+//!
+//! If you need parent size to depend on child, use standard RenderBox containers
+//! like RenderConstrainedBox or RenderSizedBox.
 
 use crate::core::{BoxLayoutCtx, BoxPaintCtx, RenderBox, Single};
 use crate::{RenderObject, RenderResult};
@@ -119,29 +207,104 @@ pub trait SingleChildLayoutDelegate: Debug + Send + Sync {
     fn as_any(&self) -> &dyn Any;
 }
 
-/// RenderObject that delegates layout to a SingleChildLayoutDelegate
+/// RenderObject that delegates layout to a SingleChildLayoutDelegate.
 ///
-/// This render object doesn't implement any layout logic itself.
-/// Instead, it calls methods on the provided delegate to:
-/// - Determine its own size
-/// - Calculate constraints for its child
-/// - Position the child
+/// Provides three-phase custom layout control via delegate pattern: parent sizing,
+/// child constraints, and child positioning. The delegate is called during layout
+/// with three separate methods for maximum flexibility without subclassing.
 ///
-/// This provides maximum flexibility for custom layouts that don't fit
-/// standard patterns like Padding, Align, etc.
+/// # Arity
 ///
-/// # Example Use Cases
+/// `Single` - Must have exactly one child. Delegate controls child's constraints
+/// and position.
 ///
-/// - Custom alignment logic that depends on complex rules
-/// - Layouts that need to size themselves independently of their child
-/// - Positioning logic that varies based on parent size
-/// - Responsive layouts with custom breakpoints
+/// # Protocol
+///
+/// Box protocol - Uses `BoxConstraints` and returns `Size`.
+///
+/// # Pattern
+///
+/// **Delegated Single-Child Layout** - Three-phase delegate pattern (parent size,
+/// child constraints, child position), parent size independent of child (computed
+/// first), sizes to delegate-computed size.
+///
+/// # Use Cases
+///
+/// - **Custom alignment**: Complex alignment rules not in RenderAlign
+/// - **Responsive sizing**: Parent size independent of child size
+/// - **Custom positioning**: Position based on complex calculations
+/// - **Conditional layouts**: Different behavior based on constraint breakpoints
+/// - **Aspect-aware positioning**: Position based on aspect ratios
+/// - **Animation layouts**: Animated size/position without relayout
+///
+/// # Flutter Compliance
+///
+/// Matches Flutter's RenderCustomSingleChildLayoutBox behavior:
+/// - Three-phase delegate pattern (size → constraints → position)
+/// - Parent size computed before child layout (cannot depend on child)
+/// - Delegate returns Size from get_size()
+/// - Delegate returns BoxConstraints from get_constraints_for_child()
+/// - Delegate returns Offset from get_position_for_child()
+/// - should_relayout() optimization for layout updates
 ///
 /// # Performance Note
 ///
-/// The delegate is called during every layout pass, so keep computations
-/// efficient. For simple cases, prefer specialized RenderObjects like
-/// RenderAlign, RenderPadding, etc.
+/// The delegate is called during every layout pass. Keep computations efficient.
+/// For simple cases (centering, padding, fixed sizing), prefer specialized
+/// RenderObjects like RenderAlign, RenderPadding, RenderSizedBox which are
+/// optimized for their specific use cases.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use flui_rendering::objects::layout::{
+///     RenderCustomSingleChildLayoutBox, CenterDelegate
+/// };
+///
+/// // Simple centering using delegate
+/// let render = RenderCustomSingleChildLayoutBox::new(Box::new(CenterDelegate));
+///
+/// // Custom responsive delegate
+/// #[derive(Debug)]
+/// struct ResponsiveDelegate {
+///     breakpoint: f32,
+/// }
+///
+/// impl SingleChildLayoutDelegate for ResponsiveDelegate {
+///     fn get_size(&self, constraints: BoxConstraints) -> Size {
+///         // Parent fills available space
+///         constraints.biggest()
+///     }
+///
+///     fn get_constraints_for_child(&self, constraints: BoxConstraints) -> BoxConstraints {
+///         // Below breakpoint: child can be any size
+///         // Above breakpoint: child limited to 50% width
+///         if constraints.max_width < self.breakpoint {
+///             constraints.loosen()
+///         } else {
+///             BoxConstraints::new(
+///                 0.0, constraints.max_width * 0.5,
+///                 0.0, constraints.max_height
+///             )
+///         }
+///     }
+///
+///     fn get_position_for_child(&self, size: Size, child_size: Size) -> Offset {
+///         // Below breakpoint: top-left
+///         // Above breakpoint: centered
+///         if size.width < self.breakpoint {
+///             Offset::ZERO
+///         } else {
+///             Offset::new(
+///                 (size.width - child_size.width) / 2.0,
+///                 (size.height - child_size.height) / 2.0
+///             )
+///         }
+///     }
+///
+///     // ... should_relayout, as_any
+/// }
+/// ```
 #[derive(Debug)]
 pub struct RenderCustomSingleChildLayoutBox {
     /// The layout delegate
