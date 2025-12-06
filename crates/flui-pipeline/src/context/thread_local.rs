@@ -183,6 +183,10 @@ mod tests {
 
         fn schedule_rebuild(&self, _element_id: ElementId) {}
 
+        fn create_rebuild_callback(&self) -> Box<dyn Fn() + Send + Sync> {
+            Box::new(|| {})
+        }
+
         fn depend_on_raw(
             &self,
             _type_id: std::any::TypeId,
