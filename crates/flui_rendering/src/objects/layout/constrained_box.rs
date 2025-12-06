@@ -1,4 +1,49 @@
 //! RenderConstrainedBox - applies additional constraints to a child
+//!
+//! Implements Flutter's constraint modification container that enforces
+//! additional min/max size constraints on top of parent constraints.
+//!
+//! # Flutter Equivalence
+//!
+//! | FLUI | Flutter |
+//! |------|---------|
+//! | `RenderConstrainedBox` | `RenderConstrainedBox` from `package:flutter/src/rendering/proxy_box.dart` |
+//! | `additional_constraints` | `additionalConstraints` property |
+//!
+//! # Layout Protocol
+//!
+//! 1. **Enforce constraints**
+//!    - Intersect incoming constraints with additional_constraints
+//!    - Uses `BoxConstraints::enforce()` for proper constraint composition
+//!
+//! 2. **Layout child**
+//!    - If child exists: layout with enforced constraints
+//!    - If no child: return min size from enforced constraints
+//!
+//! 3. **Return size**
+//!    - Child size (already satisfies enforced constraints)
+//!    - Or minimum size when childless
+//!
+//! # Performance
+//!
+//! - **Layout**: O(1) - single child layout with constant-time constraint enforcement
+//! - **Paint**: O(1) - direct child paint at offset (no transformation)
+//! - **Memory**: 16 bytes (BoxConstraints = 4 × f32)
+//!
+//! # Examples
+//!
+//! ```rust,ignore
+//! use flui_rendering::RenderConstrainedBox;
+//! use flui_types::constraints::BoxConstraints;
+//!
+//! // Enforce minimum size
+//! let min_size = BoxConstraints::new(100.0, f32::INFINITY, 50.0, f32::INFINITY);
+//! let constrained = RenderConstrainedBox::new(min_size);
+//!
+//! // Enforce exact size (tight constraints)
+//! let exact = BoxConstraints::tight_for(100.0, 100.0);
+//! let fixed = RenderConstrainedBox::new(exact);
+//! ```
 
 use crate::{RenderObject, RenderResult};
 
@@ -7,26 +52,32 @@ use crate::core::{Optional, RenderBox};
 use flui_types::constraints::BoxConstraints;
 use flui_types::Size;
 
-/// RenderObject that applies additional constraints to its child
+/// RenderObject that applies additional constraints to its child.
 ///
-/// This allows you to enforce minimum or maximum sizes on a child widget.
-/// The child is laid out with constraints that are the intersection of
-/// the incoming constraints and the additional constraints.
+/// Enforces minimum or maximum sizes by intersecting incoming constraints
+/// with additional constraints.
 ///
-/// # Without Child
+/// # Arity
 ///
-/// When no child is present, enforces the minimum size from additional constraints.
-/// This can be used to reserve space.
+/// `Optional` - Can have 0 or 1 child.
 ///
-/// # Example
+/// # Protocol
 ///
-/// ```rust,ignore
-/// use flui_rendering::RenderConstrainedBox;
-/// use flui_types::constraints::BoxConstraints;
+/// Box protocol - Uses `BoxConstraints` and returns `Size`.
 ///
-/// let constraints = BoxConstraints::tight_for(100.0, 100.0);
-/// let constrained = RenderConstrainedBox::new(constraints);
-/// ```
+/// # Use Cases
+///
+/// - **Minimum size**: Ensure child is at least a certain size
+/// - **Maximum size**: Cap child's size
+/// - **Exact size**: Force child to specific dimensions (tight constraints)
+/// - **Space reservation**: Reserve minimum space even without child
+///
+/// # Flutter Compliance
+///
+/// Matches Flutter's RenderConstrainedBox behavior:
+/// - Enforces constraints using proper intersection
+/// - Respects incoming constraints (doesn't violate parent rules)
+/// - Returns minimum size when childless
 #[derive(Debug)]
 pub struct RenderConstrainedBox {
     /// Additional constraints to apply
