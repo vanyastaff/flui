@@ -5,6 +5,180 @@
 //! This is a simplified placeholder for RenderShrinkWrappingViewport.
 //! A full implementation requires complex integration with the sliver protocol
 //! and layout system.
+//!
+//! # Flutter Equivalence
+//!
+//! | Aspect | Flutter | FLUI |
+//! |--------|---------|------|
+//! | **Class** | `RenderShrinkWrappingViewport` | `RenderShrinkWrappingViewport` |
+//! | **Protocol** | Box → Sliver children | Box → Sliver children (placeholder) |
+//! | **Sizing** | Shrink-wraps to content extent | Placeholder (returns min size) |
+//! | **Layout** | Measures all slivers, sizes to total | Not implemented |
+//! | **Paint** | Paints visible slivers with clipping | Not implemented (empty Canvas) |
+//! | **Scroll** | Supports ScrollPosition | Basic scroll_offset only |
+//! | **Cache** | RenderViewportBase cache_extent | Field exists, not used |
+//! | **Reveal** | `getOffsetToReveal()` | Placeholder (returns current offset) |
+//! | **Compliance** | Full implementation | 15% (structure only) |
+//!
+//! # Layout Protocol
+//!
+//! ## Input
+//! - `BoxConstraints` - Parent constraints
+//! - `scroll_offset` - Current scroll position
+//! - `cache_extent` - Pre-render distance (default: 250.0)
+//! - Sliver children via `ctx.children`
+//!
+//! ## Current Implementation (Placeholder)
+//! 1. **Ignore children** - No sliver layout performed
+//! 2. **Return min size** - `Size::new(min_width, min_height)`
+//! 3. **No extent measurement** - Cannot shrink-wrap
+//!
+//! ## Correct Implementation (Not Implemented)
+//! 1. **Calculate viewport extent**
+//!    - remaining_paint_extent = max_extent (unbounded for measurement)
+//!    - cross_axis_extent from constraints
+//! 2. **Layout all sliver children sequentially**
+//!    - Start with scroll_offset
+//!    - Accumulate scroll_extent from each child
+//!    - Track total content extent
+//! 3. **Size to content**
+//!    - main_extent = min(total_scroll_extent, max_constraint)
+//!    - cross_extent from constraints
+//! 4. **Handle scroll_offset changes**
+//!    - Size may change if content changes (e.g., collapsing header)
+//!    - This is why shrink-wrapping is expensive!
+//!
+//! ## Performance Characteristics
+//! - **Time**: O(n) where n = number of sliver children (must layout all)
+//! - **Space**: O(n) for child geometry storage
+//! - **Invalidation**: Size changes when:
+//!   - scroll_offset changes (collapsing content)
+//!   - Children rebuild
+//!   - Content extent changes
+//! - **Expense**: More expensive than RenderViewport (dynamic sizing)
+//!
+//! # Paint Protocol
+//!
+//! ## Current Implementation (Placeholder)
+//! Returns empty `Canvas` - no painting performed.
+//!
+//! ## Correct Implementation (Not Implemented)
+//! 1. **Clip to viewport bounds** - Prevent overflow
+//! 2. **Paint visible slivers** - Only those in viewport + cache_extent
+//! 3. **Apply scroll offset** - Translate children by -scroll_offset
+//! 4. **Respect cache_extent** - Pre-render for smooth scrolling
+//!
+//! # Use Cases
+//!
+//! ## When to Use
+//! - **Nested scrollables** - Inner scrollable should shrink-wrap
+//! - **Dialogs with scrollable content** - Size dialog to content
+//! - **Constrained scroll areas** - Content-sized scrolling
+//!
+//! ## When NOT to Use (Use RenderViewport instead)
+//! - **Full-screen scrolling** - Fill available space
+//! - **Fixed-size viewports** - Known size
+//! - **Performance-critical** - Avoid dynamic sizing cost
+//!
+//! # Critical Issues
+//!
+//! ⚠️ **PLACEHOLDER IMPLEMENTATION** - Core functionality missing:
+//!
+//! 1. **Children never laid out** (layout(), line 104-116)
+//!    - No sliver layout calls
+//!    - Cannot measure content extent
+//!    - Returns min_size instead of content size
+//!
+//! 2. **Paint not implemented** (paint(), line 118-121)
+//!    - Returns empty Canvas
+//!    - Children never painted
+//!
+//! 3. **get_offset_to_reveal() placeholder** (line 133-143)
+//!    - Returns current scroll_offset
+//!    - Cannot scroll to reveal targets
+//!
+//! 4. **cache_extent unused**
+//!    - Field exists but never used in layout/paint
+//!
+//! 5. **No scroll position integration**
+//!    - scroll_offset is manual field
+//!    - Missing ScrollPosition coordination
+//!
+//! # Comparison with Related Objects
+//!
+//! | Aspect | RenderShrinkWrappingViewport | RenderViewport |
+//! |--------|------------------------------|----------------|
+//! | **Sizing** | Shrinks to content | Fills available space |
+//! | **Protocol** | Box → Sliver | Box → Sliver |
+//! | **Performance** | More expensive (dynamic) | Cheaper (fixed size) |
+//! | **Use Case** | Nested scrollables, dialogs | Primary scrolling |
+//! | **Size Stability** | Changes with content | Stable |
+//! | **Implementation** | 15% (placeholder) | 30% (partial) |
+//!
+//! # Pattern: Content-Sized Viewport Container
+//!
+//! This object represents the **Content-Sized Viewport Container** pattern:
+//! - Receives BoxConstraints, provides SliverConstraints to children
+//! - Sizes to match content extent (vs filling space)
+//! - More expensive due to content-dependent sizing
+//! - Used for nested scrollables where size should match content
+//!
+//! # Examples
+//!
+//! ## Basic Shrink-Wrapping Viewport
+//!
+//! ```rust,ignore
+//! use flui_rendering::RenderShrinkWrappingViewport;
+//! use flui_types::layout::AxisDirection;
+//!
+//! // Create viewport that sizes to content
+//! let viewport = RenderShrinkWrappingViewport::new(
+//!     AxisDirection::TopToBottom,
+//!     0.0,  // Initial scroll offset
+//! );
+//!
+//! // CRITICAL: This is PLACEHOLDER - layout won't actually shrink-wrap!
+//! // Currently returns min_size from constraints
+//! ```
+//!
+//! ## With Custom Cache Extent
+//!
+//! ```rust,ignore
+//! // Larger cache for smoother scrolling
+//! let viewport = RenderShrinkWrappingViewport::new(
+//!     AxisDirection::TopToBottom,
+//!     100.0,
+//! )
+//! .with_cache_extent(500.0);  // Pre-render 500 pixels
+//!
+//! // WARNING: cache_extent field exists but is NOT used in current implementation!
+//! ```
+//!
+//! ## Future Complete Implementation
+//!
+//! ```rust,ignore
+//! // What a complete implementation would do:
+//! fn layout(&mut self, ctx: &BoxLayoutCtx) -> Size {
+//!     let children = ctx.children.as_variable();
+//!     let mut total_scroll_extent = 0.0;
+//!
+//!     // Layout all sliver children to measure total extent
+//!     for &child_id in children {
+//!         let constraints = SliverConstraints {
+//!             scroll_offset: (self.scroll_offset - total_scroll_extent).max(0.0),
+//!             remaining_paint_extent: f32::INFINITY,  // Unbounded for measurement
+//!             cross_axis_extent: ctx.constraints.max_width,
+//!             axis_direction: self.axis_direction,
+//!         };
+//!         let geometry = ctx.tree.layout_sliver_child(child_id, constraints);
+//!         total_scroll_extent += geometry.scroll_extent;
+//!     }
+//!
+//!     // Size to content (up to max constraints)
+//!     let main_extent = total_scroll_extent.min(ctx.constraints.max_height);
+//!     Size::new(ctx.constraints.max_width, main_extent)
+//! }
+//! ```
 
 use flui_core::element::{ElementId, ElementTree};
 // TODO: Migrate to Render<A>
@@ -24,6 +198,45 @@ use super::abstract_viewport::{RenderAbstractViewport, RevealedOffset};
 /// **Performance Warning**: This shrink-wrapping behavior is expensive
 /// because the viewport's size can change whenever the scroll offset
 /// changes (e.g., due to a collapsing header).
+///
+/// # Arity
+/// - **Children**: `Variable` (0+ sliver children)
+/// - **Type**: Multi-child viewport container
+/// - **Access**: Via `ctx.children` in LegacyRender
+///
+/// # Protocol
+/// - **Input**: `BoxConstraints` from parent
+/// - **Child Protocol**: `SliverProtocol` (provides SliverConstraints to children)
+/// - **Output**: `Size` (content extent, up to max constraints)
+/// - **Pattern**: Box-to-Sliver adapter with shrink-wrapping
+///
+/// # Pattern: Content-Sized Viewport Container
+/// This object represents the **Content-Sized Viewport Container** pattern:
+/// - Receives BoxConstraints from parent
+/// - Provides SliverConstraints to sliver children
+/// - Sizes to match total content extent (vs filling space)
+/// - More expensive due to content-dependent sizing
+///
+/// # Flutter Compliance
+/// - ✅ **API Surface**: Matches Flutter's RenderShrinkWrappingViewport
+/// - ✅ **Fields**: axis_direction, scroll_offset, cache_extent
+/// - ❌ **Layout**: Not implemented (placeholder returns min_size)
+/// - ❌ **Paint**: Not implemented (empty Canvas)
+/// - ❌ **Reveal**: Not implemented (placeholder)
+/// - **Overall**: ~15% compliant (structure only)
+///
+/// # Implementation Status
+///
+/// | Feature | Status | Notes |
+/// |---------|--------|-------|
+/// | **Structure** | ✅ Complete | Fields match Flutter |
+/// | **Constructor** | ✅ Complete | new() + with_cache_extent() |
+/// | **Arity** | ✅ Complete | RuntimeArity::Variable |
+/// | **Layout** | ❌ Placeholder | Returns min_size, doesn't measure children |
+/// | **Paint** | ❌ Placeholder | Returns empty Canvas |
+/// | **get_offset_to_reveal** | ❌ Placeholder | Returns current offset |
+/// | **axis()** | ✅ Complete | Derives from axis_direction |
+/// | **Overall** | 🟨 15% | Structure exists, core logic missing |
 ///
 /// # Differences from RenderViewport
 ///
