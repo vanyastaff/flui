@@ -94,10 +94,10 @@
 //! let catalog = RenderSliverGrid::new(catalog_delegate);
 //! ```
 
-use flui_core::element::ElementTree;
-use crate::core::{RuntimeArity, SliverSliverBoxPaintCtx, LegacySliverRender};
+use crate::core::{RenderObject, RenderSliver, Variable, SliverLayoutContext, SliverPaintContext};
+use crate::RenderResult;
 use flui_painting::Canvas;
-use flui_types::{SliverConstraints, SliverGeometry};
+use flui_types::{SliverConstraints, SliverGeometry, BoxConstraints, Offset, Axis};
 
 /// Grid delegate for calculating grid layout
 ///
@@ -299,16 +299,22 @@ impl RenderSliverGrid {
         self.sliver_geometry
     }
 
-    /// Calculate sliver geometry for grid layout
-    fn calculate_sliver_geometry(
-        &self,
-        constraints: &SliverConstraints,
-        _tree: &ElementTree,
-        children: &[flui_core::element::ElementId],
-    ) -> SliverGeometry {
+}
+
+impl RenderObject for RenderSliverGrid {}
+
+impl RenderSliver<Variable> for RenderSliverGrid {
+    fn layout(&mut self, mut ctx: SliverLayoutContext<'_, Variable>) -> RenderResult<SliverGeometry> {
+        let constraints = ctx.constraints;
+        let children: Vec<_> = ctx.children().collect();
+
+        // Store cross axis extent
+        self.cross_axis_extent = constraints.cross_axis_extent;
+
         // If no children, return zero geometry
         if children.is_empty() {
-            return SliverGeometry::default();
+            self.sliver_geometry = SliverGeometry::default();
+            return Ok(self.sliver_geometry);
         }
 
         let scroll_offset = constraints.scroll_offset;
@@ -318,32 +324,73 @@ impl RenderSliverGrid {
         // Get grid parameters from delegate
         let column_count = self.delegate.get_column_count(cross_axis_extent);
         if column_count == 0 {
-            return SliverGeometry::default();
+            self.sliver_geometry = SliverGeometry::default();
+            return Ok(self.sliver_geometry);
         }
 
-        let (main_spacing, _cross_spacing) = self.delegate.get_spacing();
+        let (main_spacing, cross_spacing) = self.delegate.get_spacing();
 
-        // Calculate total rows
+        // Calculate grid dimensions
         let child_count = children.len();
         let row_count = (child_count + column_count - 1) / column_count; // Ceiling division
+        let row_height = self.delegate.get_main_axis_extent(0, cross_axis_extent);
+
+        // Calculate column width
+        let total_cross_spacing = if column_count > 1 {
+            cross_spacing * (column_count - 1) as f32
+        } else {
+            0.0
+        };
+        let column_width = (cross_axis_extent - total_cross_spacing) / column_count as f32;
 
         // Calculate total extent
-        // For simplicity, assume all rows have same height (delegate returns same value)
-        let row_height = self.delegate.get_main_axis_extent(0, cross_axis_extent);
-        let total_spacing = if row_count > 1 {
+        let total_row_spacing = if row_count > 1 {
             main_spacing * (row_count - 1) as f32
         } else {
             0.0
         };
-        let total_extent = row_height * row_count as f32 + total_spacing;
+        let total_extent = row_height * row_count as f32 + total_row_spacing;
+
+        // Calculate visible row range (viewport culling)
+        let first_visible_row = (scroll_offset / (row_height + main_spacing)).floor() as usize;
+        let last_visible_row = ((scroll_offset + remaining_extent) / (row_height + main_spacing)).ceil() as usize;
+        let last_visible_row = last_visible_row.min(row_count);
+
+        // Layout visible children in grid
+        let box_constraints = BoxConstraints::new(
+            0.0,
+            column_width,
+            row_height,
+            row_height,
+        );
+
+        for (i, &child_id) in children.iter().enumerate() {
+            let row = i / column_count;
+            let col = i % column_count;
+
+            // Only layout visible children (viewport culling)
+            if row >= first_visible_row && row < last_visible_row {
+                ctx.tree_mut().perform_layout(child_id, box_constraints)?;
+
+                // Calculate child position
+                let x = col as f32 * (column_width + cross_spacing);
+                let y = row as f32 * (row_height + main_spacing) - scroll_offset;
+
+                let child_offset = match constraints.axis_direction.axis() {
+                    Axis::Vertical => Offset::new(x, y),
+                    Axis::Horizontal => Offset::new(y, x),
+                };
+
+                ctx.set_child_offset(child_id, child_offset);
+            }
+        }
 
         // Calculate what's visible
         let leading_scroll_offset = scroll_offset.max(0.0);
         let trailing_scroll_offset = (scroll_offset + remaining_extent).min(total_extent);
-
         let paint_extent = (trailing_scroll_offset - leading_scroll_offset).max(0.0);
 
-        SliverGeometry {
+        self.sliver_geometry = SliverGeometry {
             scroll_extent: total_extent,
             paint_extent,
             paint_origin: 0.0,
@@ -361,41 +408,26 @@ impl RenderSliverGrid {
             has_visual_overflow: total_extent > paint_extent,
             hit_test_extent: Some(paint_extent),
             scroll_offset_correction: None,
+        };
+
+        Ok(self.sliver_geometry)
+    }
+
+    fn paint(&self, ctx: &mut SliverPaintContext<'_, Variable>) {
+        if !self.sliver_geometry.visible {
+            return;
         }
-    }
-}
 
-impl LegacySliverRender for RenderSliverGrid {
-    fn layout(&mut self, ctx: &Sliver) -> SliverGeometry {
-        let constraints = &ctx.constraints;
+        let children: Vec<_> = ctx.children().collect();
 
-        // Store cross axis extent
-        self.cross_axis_extent = constraints.cross_axis_extent;
-
-        // Calculate and cache sliver geometry
-        let children_slice = ctx.children.as_slice();
-        self.sliver_geometry = self.calculate_sliver_geometry(constraints, ctx.tree, children_slice);
-        self.sliver_geometry
-    }
-
-    fn paint(&self, _ctx: &Sliver) -> Canvas {
-        let canvas = Canvas::new();
-
-        // Grid painting happens in viewport
-        // Children are painted in grid positions based on scroll offset
-
-        // TODO: Implement actual child painting with grid layout
-        // This would calculate grid positions and paint visible children
-
-        canvas
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> RuntimeArity {
-        RuntimeArity::Variable // Multiple children
+        // Paint visible children
+        for &child_id in &children {
+            if let Some(child_offset) = ctx.get_child_offset(child_id) {
+                if let Ok(child_canvas) = ctx.tree().perform_paint(child_id, ctx.offset + child_offset) {
+                    ctx.canvas.append_canvas(child_canvas);
+                }
+            }
+        }
     }
 }
 
