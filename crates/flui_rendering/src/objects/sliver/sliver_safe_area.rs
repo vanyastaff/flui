@@ -1,26 +1,180 @@
-//! RenderSliverSafeArea - Adds safe area insets to sliver content
+//! RenderSliverSafeArea - System UI safe area adapter for sliver scrolling
+//!
+//! Adds safe area padding to sliver content to avoid system UI elements (notches, status bars,
+//! navigation bars, home indicators, rounded corners). Wraps sliver child with safe area insets
+//! as additional scroll extent, ensuring scrollable content doesn't get obscured by system UI.
+//! Essential for edge-to-edge layouts on modern devices.
+//!
+//! # Flutter Equivalence
+//!
+//! | FLUI | Flutter |
+//! |------|---------|
+//! | `RenderSliverSafeArea` | `RenderSliverSafeArea` from `package:flutter/src/rendering/sliver.dart` |
+//! | `insets` | Safe area insets from MediaQuery.padding |
+//! | `minimum` | Minimum padding (fallback when insets are zero) |
+//! | `effective_padding()` | max(insets, minimum) calculation |
+//! | `main_axis_padding()` | Axis-aware leading/trailing extraction |
+//!
+//! # Layout Protocol (Intended)
+//!
+//! 1. **Calculate effective padding**
+//!    - effective = max(insets, minimum) for each edge
+//!    - Extract main axis leading/trailing based on axis direction
+//!
+//! 2. **Layout child with adjusted constraints** (NOT IMPLEMENTED)
+//!    - Reduce cross-axis extent by cross-axis padding
+//!    - Pass through scroll offset (child scrolls normally)
+//!
+//! 3. **Adjust child geometry**
+//!    - Add leading/trailing padding to scroll_extent
+//!    - Leading padding scrolls away, trailing padding at end
+//!
+//! 4. **Return adjusted geometry**
+//!    - scroll_extent = total padding (leading + trailing)
+//!    - paint_extent = visible portion of padding
+//!
+//! # Paint Protocol
+//!
+//! Safe area doesn't paint - it only adds spacing. Returns empty Canvas.
+//!
+//! # Performance
+//!
+//! - **Layout**: O(1) padding calculation + O(child) when implemented
+//! - **Paint**: O(1) - returns empty Canvas (no painting)
+//! - **Memory**: 52 bytes (3×EdgeInsets + bool + SliverGeometry)
+//!
+//! # Use Cases
+//!
+//! - **Edge-to-edge lists**: Content avoiding notch/status bar
+//! - **Full-screen scrollables**: GridView with safe area padding
+//! - **Bottom sheets**: Avoid home indicator overlap
+//! - **Landscape layouts**: Avoid rounded corner cutoff
+//! - **Dynamic insets**: Keyboard, toolbars, navigation
+//!
+//! # Safe Area Insets
+//!
+//! ```text
+//! ┌──────────────────────────┐
+//! │  Status Bar (top inset)  │ ← Safe area padding (scrolls away)
+//! ├──────────────────────────┤
+//! │                          │
+//! │   Scrollable Content     │ ← Child sliver
+//! │                          │
+//! ├──────────────────────────┤
+//! │ Home Indicator (bottom)  │ ← Safe area padding (at end)
+//! └──────────────────────────┘
+//! ```
+//!
+//! # Minimum Padding
+//!
+//! ```rust,ignore
+//! // Device without notch (insets = 0)
+//! let safe_area = RenderSliverSafeArea::new(EdgeInsets::ZERO)
+//!     .with_minimum(EdgeInsets::all(16.0));
+//! // Uses minimum (16px) since insets are zero
+//!
+//! // Device with notch (insets = 44px top)
+//! let safe_area = RenderSliverSafeArea::new(EdgeInsets::only_top(44.0))
+//!     .with_minimum(EdgeInsets::all(16.0));
+//! // Uses insets (44px) since it's > minimum
+//! ```
+//!
+//! # ⚠️ IMPLEMENTATION ISSUE
+//!
+//! This implementation has **ONE CRITICAL MISSING FEATURE**:
+//!
+//! 1. **❌ Child is NEVER laid out** (line 152-156)
+//!    - No calls to `layout_child()` anywhere
+//!    - Child size is undefined
+//!    - Only padding geometry, no actual child layout
+//!
+//! 2. **⚠️ maintain_bottom_view_padding NOT USED** (line 43)
+//!    - Field exists and can be set
+//!    - Never checked in geometry calculation
+//!    - Dead code - has no effect
+//!
+//! 3. **✅ Geometry calculation CORRECT** (line 104-142)
+//!    - Properly calculates effective padding (max of insets/minimum)
+//!    - Correctly extracts main axis leading/trailing
+//!    - Accurate scroll extent and paint extent
+//!
+//! 4. **✅ Paint correct** (line 158-161)
+//!    - Correctly returns empty Canvas
+//!    - Safe area doesn't paint anything (just spacing)
+//!
+//! **This RenderObject is MOSTLY CORRECT - only missing child layout!**
+//!
+//! # Comparison with Related Objects
+//!
+//! - **vs SliverPadding**: SafeArea uses system insets, Padding uses fixed EdgeInsets
+//! - **vs SliverEdgeInsetsPadding**: Identical in current implementation (both just add padding)
+//! - **vs SafeArea (box)**: SliverSafeArea is for slivers, SafeArea is for boxes
+//! - **vs MediaQuery**: MediaQuery provides insets, SliverSafeArea applies them to slivers
+//!
+//! # Examples
+//!
+//! ```rust,ignore
+//! use flui_rendering::RenderSliverSafeArea;
+//! use flui_types::EdgeInsets;
+//!
+//! // iPhone X notch + home indicator
+//! let insets = EdgeInsets::new(0.0, 44.0, 0.0, 34.0);
+//! let safe_area = RenderSliverSafeArea::new(insets);
+//! // Top 44px and bottom 34px safe area padding
+//!
+//! // With minimum padding fallback
+//! let safe_area = RenderSliverSafeArea::new(EdgeInsets::ZERO)
+//!     .with_minimum(EdgeInsets::all(16.0));
+//! // Ensures at least 16px padding on all sides
+//!
+//! // Landscape with rounded corners
+//! let insets = EdgeInsets::new(44.0, 0.0, 44.0, 21.0);
+//! let safe_area = RenderSliverSafeArea::new(insets);
+//! // Left/right 44px (rounded corners), bottom 21px (home indicator)
+//! ```
 
 use crate::core::{RuntimeArity, LegacySliverRender, SliverSliver};
 use flui_painting::Canvas;
 use flui_types::prelude::*;
 use flui_types::{SliverConstraints, SliverGeometry};
 
-/// RenderObject that adds safe area padding to sliver content
+/// RenderObject that adds system safe area padding to sliver scrollables.
 ///
-/// Safe areas account for system UI elements like:
-/// - Notches (iPhone X+)
-/// - Status bars
-/// - Navigation bars
-/// - Home indicators
-/// - Rounded corners
+/// Wraps sliver child with safe area insets (notch, status bar, nav bar, home indicator,
+/// rounded corners) as additional scroll extent. Leading padding scrolls away, trailing
+/// padding stays at end. Supports minimum padding fallback and max(insets, minimum) logic.
 ///
-/// This ensures content doesn't get obscured by system UI.
+/// # Arity
+///
+/// `RuntimeArity::Exact(1)` - Must have exactly 1 sliver child.
+///
+/// # Protocol
+///
+/// Sliver protocol - Uses `SliverConstraints` and returns `SliverGeometry`.
+///
+/// # Pattern
+///
+/// **System UI Safe Area Adapter** - Applies system UI insets to sliver, effective padding
+/// calculation (max of insets/minimum), axis-aware leading/trailing extraction, geometry
+/// adjustment for padding scroll extent.
 ///
 /// # Use Cases
 ///
-/// - Scrollable content that should avoid system UI
-/// - Lists and grids that need safe area padding
-/// - Content that extends edge-to-edge
+/// - **Edge-to-edge lists**: Avoid notch/status bar overlap
+/// - **Full-screen scrollables**: GridView with safe area
+/// - **Bottom sheets**: Avoid home indicator
+/// - **Landscape layouts**: Avoid rounded corner cutoff
+/// - **Dynamic insets**: Keyboard, toolbars, navigation
+///
+/// # Flutter Compliance
+///
+/// **ALMOST COMPLETE**:
+/// - ✅ Effective padding calculation correct (max of insets/minimum)
+/// - ✅ Main axis extraction correct (axis-aware)
+/// - ✅ Geometry calculation correct
+/// - ✅ Paint correct (returns empty Canvas)
+/// - ❌ Child never laid out (only missing feature)
+/// - ⚠️ maintain_bottom_view_padding unused (dead code)
 ///
 /// # Example
 ///
@@ -28,10 +182,10 @@ use flui_types::{SliverConstraints, SliverGeometry};
 /// use flui_rendering::RenderSliverSafeArea;
 /// use flui_types::EdgeInsets;
 ///
-/// // Add safe area padding
-/// let safe_area = RenderSliverSafeArea::new(
-///     EdgeInsets::new(20.0, 44.0, 20.0, 0.0), // left, top, right, bottom
-/// );
+/// // iPhone X safe area (notch + home indicator)
+/// let insets = EdgeInsets::new(0.0, 44.0, 0.0, 34.0);
+/// let safe_area = RenderSliverSafeArea::new(insets);
+/// // WARNING: child never laid out!
 /// ```
 #[derive(Debug)]
 pub struct RenderSliverSafeArea {
