@@ -1,4 +1,50 @@
 //! RenderAspectRatio - maintains aspect ratio
+//!
+//! Implements Flutter's aspect ratio container that sizes child to maintain
+//! a specific width-to-height ratio.
+//!
+//! # Flutter Equivalence
+//!
+//! | FLUI | Flutter |
+//! |------|---------|
+//! | `RenderAspectRatio` | `RenderAspectRatio` from `package:flutter/src/rendering/proxy_box.dart` |
+//! | `aspect_ratio` | `aspectRatio` property (width / height) |
+//!
+//! # Layout Protocol
+//!
+//! 1. **Determine target size**
+//!    - If constraints are tight: use exact constrained size
+//!    - Otherwise: calculate size to fill space while maintaining ratio
+//!
+//! 2. **Calculate dimensions**
+//!    - Try width-based: `width = max_width`, `height = width / aspect_ratio`
+//!    - If height exceeds max: use height-based sizing
+//!    - Constrain final size to parent constraints
+//!
+//! 3. **Layout child**
+//!    - Use tight constraints with calculated size
+//!    - Child must match exact dimensions
+//!
+//! # Performance
+//!
+//! - **Layout**: O(1) - single child layout with constant-time size calculation
+//! - **Paint**: O(1) - direct child paint at offset (no transformation)
+//! - **Memory**: 4 bytes (f32 aspect_ratio)
+//!
+//! # Examples
+//!
+//! ```rust,ignore
+//! use flui_rendering::RenderAspectRatio;
+//!
+//! // 16:9 aspect ratio (widescreen)
+//! let widescreen = RenderAspectRatio::new(16.0 / 9.0);
+//!
+//! // 4:3 aspect ratio (classic TV)
+//! let classic = RenderAspectRatio::new(4.0 / 3.0);
+//!
+//! // 1:1 aspect ratio (square)
+//! let square = RenderAspectRatio::new(1.0);
+//! ```
 
 use crate::core::{BoxLayoutCtx, BoxPaintCtx};
 use crate::core::{RenderBox, Single};
@@ -6,19 +52,32 @@ use crate::{RenderObject, RenderResult};
 use flui_types::constraints::BoxConstraints;
 use flui_types::Size;
 
-/// RenderObject that maintains an aspect ratio
+/// RenderObject that maintains an aspect ratio.
 ///
-/// Sizes the child to maintain the specified aspect ratio (width / height).
-/// For example, an aspect ratio of 16/9 = 1.777... will maintain a 16:9 ratio.
+/// Sizes child to maintain specified width-to-height ratio while
+/// fitting within parent constraints.
 ///
-/// # Example
+/// # Arity
 ///
-/// ```rust,ignore
-/// use flui_rendering::RenderAspectRatio;
+/// `Single` - Must have exactly 1 child.
 ///
-/// // 16:9 aspect ratio
-/// let aspect = RenderAspectRatio::new(16.0 / 9.0);
-/// ```
+/// # Protocol
+///
+/// Box protocol - Uses `BoxConstraints` and returns `Size`.
+///
+/// # Use Cases
+///
+/// - **Video/Image display**: Maintain 16:9, 4:3 ratios
+/// - **Responsive design**: Proportional sizing across devices
+/// - **Layout consistency**: Fixed proportions regardless of space
+///
+/// # Flutter Compliance
+///
+/// Matches Flutter's RenderAspectRatio behavior:
+/// - Calculates size to fill space while maintaining ratio
+/// - Handles tight constraints by using exact size
+/// - Prioritizes width-based sizing, falls back to height-based
+/// - Constrains final size to parent bounds
 #[derive(Debug)]
 pub struct RenderAspectRatio {
     /// The aspect ratio to maintain (width / height)
@@ -49,7 +108,6 @@ impl RenderObject for RenderAspectRatio {}
 
 impl RenderBox<Single> for RenderAspectRatio {
     fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Single>) -> RenderResult<Size> {
-        let child_id = *ctx.children.single();
         let constraints = ctx.constraints;
         let aspect_ratio = self.aspect_ratio;
 
@@ -77,16 +135,14 @@ impl RenderBox<Single> for RenderAspectRatio {
         let final_size = constraints.constrain(size);
 
         // Layout child with tight constraints
-        ctx.layout_child(child_id, BoxConstraints::tight(final_size))?;
+        ctx.layout_child(ctx.single_child(), BoxConstraints::tight(final_size))?;
 
         Ok(final_size)
     }
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Single>) {
-        let child_id = *ctx.children.single();
-        let offset = ctx.offset;
         // Simply paint child - no transformation needed
-        ctx.paint_child(child_id, offset);
+        ctx.paint_child(ctx.single_child(), ctx.offset);
     }
 }
 
