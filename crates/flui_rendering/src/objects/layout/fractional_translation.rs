@@ -1,29 +1,130 @@
 //! RenderFractionalTranslation - Translates child by fraction of its size
 //!
-//! Applies a translation transformation before painting, where the translation
-//! is specified as a fraction of the child's size rather than absolute pixels.
+//! Implements Flutter's FractionalTranslation that shifts a child's painted
+//! position using translation values specified as fractions of the child's size
+//! rather than absolute pixels.
+//!
+//! # Flutter Equivalence
+//!
+//! | FLUI | Flutter |
+//! |------|---------|
+//! | `RenderFractionalTranslation` | `RenderFractionalTranslation` from `package:flutter/src/rendering/shifted_box.dart` |
+//! | `translation` | `translation` property (Offset with fractions) |
+//! | `set_translation()` | `translation = value` setter |
+//!
+//! # Layout Protocol
+//!
+//! 1. **Pass constraints to child**
+//!    - Child receives same constraints (proxy behavior)
+//!    - Translation doesn't affect layout
+//!
+//! 2. **Cache child size**
+//!    - Store child size for calculating pixel offset during paint
+//!    - Pixel offset = child size × translation fraction
+//!
+//! 3. **Return child size**
+//!    - Container size = child size (translation doesn't change size)
+//!
+//! # Paint Protocol
+//!
+//! 1. **Calculate pixel offset**
+//!    - dx_pixels = child_width × translation.dx
+//!    - dy_pixels = child_height × translation.dy
+//!    - Translation is relative to child's dimensions
+//!
+//! 2. **Paint child at translated position**
+//!    - Child painted at parent offset + pixel offset
+//!    - No clipping applied (child can overflow)
+//!
+//! # Performance
+//!
+//! - **Layout**: O(1) - pass-through to child + size cache
+//! - **Paint**: O(1) - simple offset calculation + child paint
+//! - **Memory**: 24 bytes (Offset + Size cache)
+//!
+//! # Use Cases
+//!
+//! - **Responsive positioning**: Offsets that scale with content size
+//! - **Slide animations**: Position shifts relative to dimensions (slide 50%)
+//! - **Alignment tweaks**: Fine-tune positioning as percentage
+//! - **Parallax scrolling**: Different layers move at different fractional rates
+//! - **Drag indicators**: Show drag amount as fraction of widget size
+//! - **Ripple effects**: Center effects at fractional positions
+//!
+//! # Examples
+//!
+//! ```rust,ignore
+//! use flui_rendering::RenderFractionalTranslation;
+//! use flui_types::Offset;
+//!
+//! // Shift right by 25% of child width
+//! let translate = RenderFractionalTranslation::new(Offset::new(0.25, 0.0));
+//!
+//! // Shift down by 50% of child height
+//! let translate = RenderFractionalTranslation::new(Offset::new(0.0, 0.5));
+//!
+//! // Center alignment tweak (shift by -50% of size)
+//! let center = RenderFractionalTranslation::new(Offset::new(-0.5, -0.5));
+//!
+//! // Convenience constructors
+//! let horizontal = RenderFractionalTranslation::horizontal(0.25);
+//! let vertical = RenderFractionalTranslation::vertical(0.5);
+//! ```
 
 use crate::core::{BoxLayoutCtx, BoxPaintCtx, RenderBox, Single};
 use crate::{RenderObject, RenderResult};
 use flui_types::{Offset, Size};
 
-/// RenderObject that translates its child by a fraction of the child's size
+/// RenderObject that translates its child by a fraction of the child's size.
 ///
-/// RenderFractionalTranslation shifts a child's painted position without
-/// affecting layout. The translation is specified as fractions of the
-/// child's dimensions:
+/// Shifts a child's painted position without affecting layout. Translation
+/// is specified as fractions of the child's dimensions, allowing responsive
+/// positioning that scales with content size.
 ///
-/// - `translation.dx` = fraction of child width
-/// - `translation.dy` = fraction of child height
+/// # Arity
+///
+/// `Single` - Must have exactly 1 child.
+///
+/// # Protocol
+///
+/// Box protocol - Uses `BoxConstraints` and returns `Size`.
+///
+/// # Pattern
+///
+/// **Proxy** - Passes constraints unchanged, only affects painting position.
+///
+/// # Use Cases
+///
+/// - **Responsive positioning**: Offsets that scale with content size
+/// - **Slide animations**: Position shifts relative to dimensions (slide 50%)
+/// - **Alignment tweaks**: Fine-tune positioning as percentage
+/// - **Parallax scrolling**: Different layers move at fractional rates
+/// - **Drag indicators**: Show drag amount as fraction of size
+/// - **Centering**: Shift by -50% to center child
+///
+/// # Flutter Compliance
+///
+/// Matches Flutter's RenderFractionalTranslation behavior:
+/// - Passes constraints unchanged to child (proxy for layout)
+/// - Size determined by child (translation doesn't affect size)
+/// - Translation calculated as: offset = child_size × translation
+/// - Child painted at translated position
+/// - No clipping applied (can overflow)
+/// - Hit testing confined to original layout bounds
 ///
 /// # Translation Calculation
 ///
 /// ```text
-/// actual_offset.dx = child_size.width * translation.dx
-/// actual_offset.dy = child_size.height * translation.dy
+/// pixel_offset.dx = child_width × translation.dx
+/// pixel_offset.dy = child_height × translation.dy
 /// ```
 ///
-/// # Examples
+/// **Examples:**
+/// - translation = (0.5, 0.0), child = 100×200 → offset = (50, 0)
+/// - translation = (-0.5, -0.5), child = 100×200 → offset = (-50, -100)
+/// - translation = (1.0, 1.0), child = 100×200 → offset = (100, 200)
+///
+/// # Example
 ///
 /// ```rust,ignore
 /// use flui_rendering::RenderFractionalTranslation;
@@ -32,37 +133,13 @@ use flui_types::{Offset, Size};
 /// // Shift right by 25% of child width
 /// let translate = RenderFractionalTranslation::new(Offset::new(0.25, 0.0));
 ///
-/// // Shift down by 50% of child height
-/// let translate = RenderFractionalTranslation::new(Offset::new(0.0, 0.5));
+/// // Center child (shift by -50% of size)
+/// let center = RenderFractionalTranslation::new(Offset::new(-0.5, -0.5));
 ///
-/// // Shift diagonally
-/// let translate = RenderFractionalTranslation::new(Offset::new(0.5, 0.5));
+/// // Parallax effect (different layers, different fractions)
+/// let background = RenderFractionalTranslation::new(Offset::new(0.2, 0.0));
+/// let foreground = RenderFractionalTranslation::new(Offset::new(0.8, 0.0));
 /// ```
-///
-/// # Layout Behavior
-///
-/// - Child is laid out with parent's constraints unchanged
-/// - Returns child's size (translation doesn't affect layout size)
-/// - Translation only affects painting, not layout
-///
-/// # Paint Behavior
-///
-/// - Calculates actual offset: `child_size * translation`
-/// - Paints child at offset position
-/// - No clipping applied (child can overflow if translated)
-///
-/// # Hit Testing
-///
-/// Hit tests are confined to the original layout bounds, even if
-/// painted content overflows due to translation. This matches
-/// Flutter's behavior.
-///
-/// # Use Cases
-///
-/// - **Responsive positioning**: Offsets that scale with content size
-/// - **Subtle animations**: Position shifts relative to dimensions
-/// - **Alignment tweaks**: Fine-tune positioning as percentage
-/// - **Parallax effects**: Different layers move at different rates
 #[derive(Debug)]
 pub struct RenderFractionalTranslation {
     /// Translation as fraction of child size (dx = width fraction, dy = height fraction)
@@ -125,12 +202,13 @@ impl RenderObject for RenderFractionalTranslation {}
 
 impl RenderBox<Single> for RenderFractionalTranslation {
     fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Single>) -> RenderResult<Size> {
-        let child_id = *ctx.children.single();
+        // Single arity: use ctx.single_child() which returns ElementId directly
+        let child_id = ctx.single_child();
 
-        // Layout child with same constraints
+        // Proxy behavior: pass constraints unchanged to child
         let child_size = ctx.layout_child(child_id, ctx.constraints)?;
 
-        // Cache child size for paint phase
+        // Cache child size for calculating pixel offset during paint
         self.last_child_size = child_size;
 
         // Return child size (translation doesn't affect layout)
@@ -138,12 +216,15 @@ impl RenderBox<Single> for RenderFractionalTranslation {
     }
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Single>) {
-        let child_id = *ctx.children.single();
+        // Single arity: use ctx.single_child() which returns ElementId directly
+        let child_id = ctx.single_child();
 
         // Calculate actual pixel offset from fractional translation
+        // pixel_offset = child_size × translation
         let pixel_offset = self.calculate_pixel_offset(self.last_child_size);
 
         // Paint child at translated position
+        // Final offset = parent offset + fractional offset
         let translated_offset = ctx.offset + pixel_offset;
         ctx.paint_child(child_id, translated_offset);
     }
