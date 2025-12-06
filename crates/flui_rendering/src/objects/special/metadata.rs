@@ -92,17 +92,18 @@
 //! )
 //! ```
 //!
-//! # Critical Issues
+//! # Implementation Notes
 //!
-//! ⚠️ **Minor Missing Features** (90% complete):
+//! ✅ **Core Features Complete** (95% complete):
 //!
-//! 1. **No hit test integration** (Future)
-//!    - behavior field exists but not used in hit testing
-//!    - Should use Defer/Opaque/Translucent for hit test responses
-//!    - Requires hit test system integration
+//! 1. **Hit test integration** ✅
+//!    - behavior field (Defer/Opaque/Translucent) fully implemented
+//!    - Defer: delegates to children
+//!    - Opaque: always adds self to hit test result
+//!    - Translucent: adds self if pointer inside bounds
 //!
-//! 2. **No parent access API** (Future)
-//!    - Metadata stored but no tree traversal API
+//! 2. **No parent access API** ⚠️ (Future enhancement)
+//!    - Metadata stored but no tree traversal API yet
 //!    - Parents can't query up tree for metadata
 //!    - Needs ElementTree or Layer integration
 //!
@@ -117,7 +118,7 @@
 //! | **Paint** | Pass-through | Pass-through | Pass-through |
 //! | **Use Case** | General parent access | System UI styling | Accessibility |
 //! | **Type Safety** | Runtime (downcast) | Compile-time | Compile-time |
-//! | **Implementation** | 90% complete | 90% complete | 85% complete |
+//! | **Implementation** | 95% complete | 90% complete | 85% complete |
 //!
 //! # Pattern: Metadata Pass-Through Proxy
 //!
@@ -237,9 +238,10 @@
 //! // Parent can query metadata during hit tests to identify items
 //! ```
 
-use crate::core::{BoxLayoutCtx, BoxPaintCtx, RenderBox, Single};
+use crate::core::{BoxHitTestCtx, BoxLayoutCtx, BoxPaintCtx, RenderBox, Single};
 use crate::{RenderObject, RenderResult};
-use flui_types::Size;
+use flui_interaction::{HitTestEntry, HitTestResult};
+use flui_types::{Offset, Rect, Size};
 use std::any::Any;
 
 /// Hit test behavior for metadata
@@ -295,8 +297,8 @@ pub enum HitTestBehavior {
 /// - ✅ **Paint**: Pass-through (identical behavior)
 /// - ✅ **Methods**: Rich API (get/set/clear metadata)
 /// - ✅ **HitTestBehavior**: Enum matches Flutter
-/// - ❌ **Hit Testing**: No hit test integration
-/// - **Overall**: ~90% compliant (core complete, missing hit test)
+/// - ✅ **Hit Testing**: Full implementation using behavior field
+/// - **Overall**: ~95% compliant (core complete, hit test implemented)
 ///
 /// # Implementation Status
 ///
@@ -312,9 +314,9 @@ pub enum HitTestBehavior {
 /// | **set_metadata<T>()** | ✅ Complete | Update metadata |
 /// | **clear_metadata()** | ✅ Complete | Remove metadata |
 /// | **set_behavior()** | ✅ Complete | Update hit test behavior |
-/// | **Hit Test Integration** | ❌ Missing | Future: use behavior in hit tests |
+/// | **hit_test()** | ✅ Complete | Uses behavior (Defer/Opaque/Translucent) |
 /// | **Parent Query API** | ❌ Missing | Future: tree traversal for metadata |
-/// | **Overall** | 🟢 90% | Excellent implementation, rich API |
+/// | **Overall** | 🟢 95% | Excellent implementation, hit testing complete |
 ///
 /// # Example
 ///
@@ -415,6 +417,42 @@ impl RenderBox<Single> for RenderMetaData {
         let child_id = *ctx.children.single();
         // Paint child directly (pass-through)
         ctx.paint_child(child_id, ctx.offset);
+    }
+
+    fn hit_test(&self, ctx: &BoxHitTestCtx<'_, Single>, result: &mut HitTestResult) -> bool {
+        match self.behavior {
+            HitTestBehavior::Defer => {
+                // Defer: use child's hit test behavior (pass-through)
+                ctx.hit_test_children(result)
+            }
+            HitTestBehavior::Opaque => {
+                // Opaque: always respond to hit tests
+                // Add self to result and test children
+                let bounds = Rect::from_min_size(Offset::ZERO, ctx.size());
+                let entry = HitTestEntry::new(ctx.element_id(), ctx.position, bounds);
+                result.add(entry);
+
+                // Also test children
+                ctx.hit_test_children(result);
+                true // Always hit
+            }
+            HitTestBehavior::Translucent => {
+                // Translucent: respond if pointer inside bounds
+                let bounds = Rect::from_min_size(Offset::ZERO, ctx.size());
+                let inside = bounds.contains(ctx.position);
+
+                if inside {
+                    let entry = HitTestEntry::new(ctx.element_id(), ctx.position, bounds);
+                    result.add(entry);
+                }
+
+                // Always test children regardless
+                let child_hit = ctx.hit_test_children(result);
+
+                // Return true if either this widget or child was hit
+                inside || child_hit
+            }
+        }
     }
 }
 
