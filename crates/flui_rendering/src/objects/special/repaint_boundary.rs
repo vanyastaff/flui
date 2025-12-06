@@ -316,7 +316,7 @@ impl<T: FullRenderTree> RenderBox<T, Single> for RenderRepaintBoundary {
             #[cfg(debug_assertions)]
             tracing::trace!("RepaintBoundary cache miss - repainting child");
 
-            ctx.paint_child(child_id, offset);
+            let _ = ctx.paint_child(child_id, offset);
 
             // Mark as no longer needing repaint
             // Note: The actual cache update happens in paint_with_cache() or via framework
@@ -378,7 +378,7 @@ impl RenderRepaintBoundary {
                 );
             }
 
-            ctx.paint_child(child_id, offset);
+            let _ = ctx.paint_child(child_id, offset);
 
             // Note: To properly cache, we would need to capture the child's output.
             // This requires framework support to intercept the child's DisplayList.

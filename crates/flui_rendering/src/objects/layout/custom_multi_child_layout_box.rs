@@ -251,7 +251,7 @@ impl RenderBox<Variable> for RenderCustomMultiChildLayoutBox {
             }
 
             let child_offset = self.child_offsets[index];
-            ctx.paint_child(*child_id, offset + child_offset);
+            let _ = ctx.paint_child(*child_id, offset + child_offset);
         }
     }
 }

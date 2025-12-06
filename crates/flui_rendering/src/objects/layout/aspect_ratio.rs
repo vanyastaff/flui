@@ -86,7 +86,7 @@ impl RenderBox<Single> for RenderAspectRatio {
         let child_id = *ctx.children.single();
         let offset = ctx.offset;
         // Simply paint child - no transformation needed
-        ctx.paint_child(child_id, offset);
+        let _ = ctx.paint_child(child_id, offset);
     }
 }
 

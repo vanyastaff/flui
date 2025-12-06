@@ -102,7 +102,7 @@ impl RenderBox<Single> for RenderRotatedBox {
 
         // If no rotation, just paint child directly
         if self.quarter_turns == QuarterTurns::Zero {
-            ctx.paint_child(child_id, ctx.offset);
+            let _ = ctx.paint_child(child_id, ctx.offset);
             return;
         }
 
@@ -128,7 +128,7 @@ impl RenderBox<Single> for RenderRotatedBox {
         };
 
         // Paint child with rotated offset
-        ctx.paint_child(child_id, child_offset);
+        let _ = ctx.paint_child(child_id, child_offset);
 
         // Restore canvas state
         ctx.canvas_mut().restore();

@@ -234,7 +234,7 @@ impl RenderBox<Single> for RenderPointerListener {
         );
 
         // Paint child
-        ctx.paint_child(child_id, offset);
+        let _ = ctx.paint_child(child_id, offset);
     }
 }
 

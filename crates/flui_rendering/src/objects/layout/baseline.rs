@@ -85,7 +85,7 @@ impl RenderBox<Single> for RenderBaseline {
 
         // Apply baseline offset to child painting position
         let child_offset = offset + Offset::new(0.0, self.baseline);
-        ctx.paint_child(child_id, child_offset);
+        let _ = ctx.paint_child(child_id, child_offset);
     }
 }
 

@@ -218,7 +218,7 @@ impl RenderBox<Variable> for RenderWrap {
 
         for (i, child_id) in child_ids.into_iter().enumerate() {
             let child_offset = self.child_offsets.get(i).copied().unwrap_or(Offset::ZERO);
-            ctx.paint_child(*child_id, offset + child_offset);
+            let _ = ctx.paint_child(*child_id, offset + child_offset);
         }
     }
 }

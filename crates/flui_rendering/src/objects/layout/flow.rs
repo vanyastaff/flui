@@ -29,7 +29,7 @@ impl<'a, 'b> FlowPaintContext<'a, 'b> {
         // TODO: Apply transformation matrix when transform layers are supported
         // For now, just paint at offset
         let _ = transform; // Suppress warning
-        self.paint_ctx.paint_child(self.children[index], offset);
+        let _ = self.paint_ctx.paint_child(self.children[index], offset);
     }
 }
 

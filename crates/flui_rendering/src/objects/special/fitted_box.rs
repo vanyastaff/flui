@@ -190,7 +190,7 @@ impl RenderBox<Single> for RenderFittedBox {
         // For now, just paint child as-is
         // In a real implementation, we'd wrap in a TransformLayer
 
-        ctx.paint_child(child_id, ctx.offset);
+        let _ = ctx.paint_child(child_id, ctx.offset);
     }
 }
 

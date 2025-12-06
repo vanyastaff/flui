@@ -463,7 +463,7 @@ impl<T: FullRenderTree> RenderBox<T, Variable> for RenderViewport {
             if let Some(layout_data) = self.sliver_geometries.get(i) {
                 if layout_data.geometry.visible {
                     let paint_offset = ctx.offset + layout_data.paint_offset;
-                    ctx.paint_child(*child_id, paint_offset);
+                    let _ = ctx.paint_child(*child_id, paint_offset);
                 }
             }
         }

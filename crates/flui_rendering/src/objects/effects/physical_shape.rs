@@ -147,7 +147,7 @@ impl RenderBox<Optional> for RenderPhysicalShape {
 
         // Paint child on top if present
         if let Some(child_id) = ctx.children.get() {
-            ctx.paint_child(child_id, offset);
+            let _ = ctx.paint_child(child_id, offset);
         }
     }
 }

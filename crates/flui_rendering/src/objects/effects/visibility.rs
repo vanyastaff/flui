@@ -126,7 +126,7 @@ impl RenderBox<Single> for RenderVisibility {
         // Only paint if visible
         if self.visible {
             let child_id = *ctx.children.single();
-            ctx.paint_child(child_id, ctx.offset);
+            let _ = ctx.paint_child(child_id, ctx.offset);
         }
         // When not visible, don't paint anything
     }

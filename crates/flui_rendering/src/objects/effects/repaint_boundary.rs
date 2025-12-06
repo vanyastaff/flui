@@ -76,7 +76,7 @@ impl RenderBox<Single> for RenderRepaintBoundary {
         // repainting the child if only the parent changes
         //
         // For now, we just paint the child directly
-        ctx.paint_child(child_id, ctx.offset);
+        let _ = ctx.paint_child(child_id, ctx.offset);
     }
 }
 

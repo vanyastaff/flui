@@ -222,7 +222,7 @@ impl RenderBox<Single> for RenderCustomSingleChildLayoutBox {
 
         // Paint child at the offset calculated during layout
         let child_offset = ctx.offset + self.cached_child_offset;
-        ctx.paint_child(child_id, child_offset);
+        let _ = ctx.paint_child(child_id, child_offset);
     }
 }
 

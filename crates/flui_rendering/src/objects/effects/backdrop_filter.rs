@@ -106,7 +106,7 @@ impl RenderBox<Single> for RenderBackdropFilter {
         // For now, we just paint the child
         // TODO: Implement BackdropFilterLayer when compositor supports it
 
-        ctx.paint_child(child_id, ctx.offset);
+        let _ = ctx.paint_child(child_id, ctx.offset);
     }
 }
 

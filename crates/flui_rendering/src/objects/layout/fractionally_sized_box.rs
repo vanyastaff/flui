@@ -111,7 +111,7 @@ impl RenderBox<Single> for RenderFractionallySizedBox {
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Single>) {
         let child_id = *ctx.children.single();
-        ctx.paint_child(child_id, ctx.offset);
+        let _ = ctx.paint_child(child_id, ctx.offset);
     }
 }
 

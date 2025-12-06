@@ -276,7 +276,7 @@ impl<T: FullRenderTree> RenderBox<T, Single> for RenderTapRegion {
         let child_id = ctx.children.single();
 
         // Paint child normally
-        ctx.paint_child(child_id, ctx.offset);
+        let _ = ctx.paint_child(child_id, ctx.offset);
 
         // Note: Tap detection requires integration with the event system:
         // 1. TapRegionSurface (ancestor widget) manages global tap detection

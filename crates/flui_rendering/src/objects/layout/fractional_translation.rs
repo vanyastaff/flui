@@ -145,7 +145,7 @@ impl RenderBox<Single> for RenderFractionalTranslation {
 
         // Paint child at translated position
         let translated_offset = ctx.offset + pixel_offset;
-        ctx.paint_child(child_id, translated_offset);
+        let _ = ctx.paint_child(child_id, translated_offset);
     }
 }
 

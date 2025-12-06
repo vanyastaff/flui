@@ -121,7 +121,7 @@ impl RenderBox<Single> for RenderMetaData {
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Single>) {
         let child_id = *ctx.children.single();
         // Paint child directly (pass-through)
-        ctx.paint_child(child_id, ctx.offset);
+        let _ = ctx.paint_child(child_id, ctx.offset);
     }
 }
 

@@ -421,7 +421,7 @@ impl RenderBox<Variable> for RenderGrid {
             }
 
             let child_offset = Offset::new(x, y);
-            ctx.paint_child(*child_id, child_offset);
+            let _ = ctx.paint_child(*child_id, child_offset);
         }
     }
 }

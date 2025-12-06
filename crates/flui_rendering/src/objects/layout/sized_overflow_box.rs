@@ -159,7 +159,7 @@ impl RenderBox<Single> for RenderSizedOverflowBox {
         let child_offset = ctx.offset + align_offset;
 
         // Paint child at aligned offset
-        ctx.paint_child(child_id, child_offset);
+        let _ = ctx.paint_child(child_id, child_offset);
     }
 }
 

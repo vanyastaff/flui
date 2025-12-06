@@ -66,7 +66,7 @@ impl RenderBox<Single> for RenderOffstage {
         // Don't paint if offstage
         if !self.offstage {
             let child_id = *ctx.children.single();
-            ctx.paint_child(child_id, ctx.offset);
+            let _ = ctx.paint_child(child_id, ctx.offset);
         }
         // When offstage, don't paint anything (empty)
     }

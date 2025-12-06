@@ -324,7 +324,7 @@ impl RenderBox<Optional> for RenderDecoratedBox {
 
         // Paint child if present
         if let Some(child_id) = ctx.children.get() {
-            ctx.paint_child(*child_id, offset);
+            let _ = ctx.paint_child(*child_id, offset);
         }
 
         // Paint decoration in foreground position

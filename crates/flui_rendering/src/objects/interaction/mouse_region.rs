@@ -98,7 +98,7 @@ impl RenderBox<Single> for RenderMouseRegion {
         let child_id = *ctx.children.single();
 
         // Simply paint child - hover handling happens elsewhere
-        ctx.paint_child(child_id, ctx.offset);
+        let _ = ctx.paint_child(child_id, ctx.offset);
 
         // TODO: In a real implementation, we would:
         // 1. Register hit test area for hover detection

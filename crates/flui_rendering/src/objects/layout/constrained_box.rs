@@ -85,7 +85,7 @@ impl RenderBox<Optional> for RenderConstrainedBox {
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Optional>) {
         // If we have a child, paint it at our offset
         if let Some(child_id) = ctx.children.get() {
-            ctx.paint_child(*child_id, ctx.offset);
+            let _ = ctx.paint_child(*child_id, ctx.offset);
         }
         // If no child, nothing to paint
     }

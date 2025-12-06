@@ -102,7 +102,7 @@ impl RenderBox<Single> for RenderShiftedBox {
             ctx.offset.dy + self.offset.dy,
         );
 
-        ctx.paint_child(child_id, child_offset);
+        let _ = ctx.paint_child(child_id, child_offset);
     }
 }
 

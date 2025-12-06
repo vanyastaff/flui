@@ -236,7 +236,7 @@ impl<T: FullRenderTree> RenderBox<T, Single> for RenderSemanticsGestureHandler {
         let child_id = ctx.children.single();
 
         // Paint child normally
-        ctx.paint_child(child_id, ctx.offset);
+        let _ = ctx.paint_child(child_id, ctx.offset);
 
         // Note: Semantics gesture handling requires integration with accessibility:
         // 1. Semantics tree registers actions based on which callbacks are set

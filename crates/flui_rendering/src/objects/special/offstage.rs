@@ -116,7 +116,7 @@ impl<T: FullRenderTree> RenderBox<T, Single> for RenderOffstage {
         // Only paint child if not offstage
         if !self.offstage {
             let child_id = ctx.children.single();
-            ctx.paint_child(child_id, ctx.offset);
+            let _ = ctx.paint_child(child_id, ctx.offset);
         }
         // When offstage, we paint nothing - child is invisible
     }

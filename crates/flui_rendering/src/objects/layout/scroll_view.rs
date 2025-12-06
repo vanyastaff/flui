@@ -293,7 +293,7 @@ impl RenderBox<Single> for RenderScrollView {
         let paint_offset = ctx.offset + self.paint_offset();
 
         // Paint child at scrolled position
-        ctx.paint_child(child_id, paint_offset);
+        let _ = ctx.paint_child(child_id, paint_offset);
 
         ctx.canvas_mut().restore();
 

@@ -172,7 +172,7 @@ impl RenderBox<Single> for RenderConstrainedOverflowBox {
             .calculate_offset(self.cached_child_size, self.cached_parent_size);
 
         // Paint child at aligned offset (may paint outside parent bounds)
-        ctx.paint_child(child_id, ctx.offset + child_offset);
+        let _ = ctx.paint_child(child_id, ctx.offset + child_offset);
     }
 }
 
