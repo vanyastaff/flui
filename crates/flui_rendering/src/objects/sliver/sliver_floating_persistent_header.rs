@@ -128,8 +128,10 @@
 //! let custom = RenderSliverFloatingPersistentHeader::new(120.0);
 //! ```
 
-use crate::core::{RuntimeArity, LegacySliverRender, SliverSliver};
+use crate::core::{RenderObject, RenderSliver, Single, SliverLayoutContext, SliverPaintContext};
+use crate::RenderResult;
 use flui_painting::Canvas;
+use flui_types::prelude::*;
 use flui_types::{SliverConstraints, SliverGeometry};
 
 /// RenderObject for a scroll-direction-aware floating header.
@@ -297,30 +299,47 @@ impl Default for RenderSliverFloatingPersistentHeader {
     }
 }
 
-impl LegacySliverRender for RenderSliverFloatingPersistentHeader {
-    fn layout(&mut self, ctx: &Sliver) -> SliverGeometry {
+impl RenderObject for RenderSliverFloatingPersistentHeader {}
+
+impl RenderSliver<Single> for RenderSliverFloatingPersistentHeader {
+    fn layout(&mut self, mut ctx: SliverLayoutContext<'_, Single>) -> RenderResult<SliverGeometry> {
+        let child_id = *ctx.children.single();
+
+        // Calculate visible extent for child layout
+        let scroll_offset = ctx.constraints.scroll_offset;
+        let visible_extent = if scroll_offset < self.extent {
+            (self.extent - scroll_offset).max(0.0)
+        } else {
+            0.0
+        };
+
+        // Layout child with box constraints (height = visible_extent or extent)
+        // We layout with full extent even if partially visible so child maintains size
+        let layout_extent = if visible_extent > 0.0 { self.extent } else { 0.0 };
+
+        let box_constraints = BoxConstraints::new(
+            0.0,
+            ctx.constraints.cross_axis_extent,
+            layout_extent,
+            layout_extent,
+        );
+
+        ctx.tree_mut().perform_layout(child_id, box_constraints)?;
+
         // Calculate and cache sliver geometry
         self.sliver_geometry = self.calculate_sliver_geometry(&ctx.constraints);
-        self.sliver_geometry
+        Ok(self.sliver_geometry)
     }
 
-    fn paint(&self, ctx: &Sliver) -> Canvas {
-        // Paint child if present and visible
-        if let Some(child_id) = ctx.children.try_single() {
-            if self.sliver_geometry.visible {
-                return ctx.tree.paint_child(child_id, ctx.offset);
+    fn paint(&self, ctx: &mut SliverPaintContext<'_, Single>) {
+        // Paint child if visible
+        if self.sliver_geometry.visible {
+            let child_id = *ctx.children.single();
+
+            if let Ok(child_canvas) = ctx.tree().perform_paint(child_id, ctx.offset) {
+                *ctx.canvas = child_canvas;
             }
         }
-
-        Canvas::new()
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> RuntimeArity {
-        RuntimeArity::Exact(1) // Single child (header content)
     }
 }
 
@@ -433,11 +452,5 @@ mod tests {
         assert_eq!(geometry.paint_extent, 0.0);
         assert!(!geometry.visible);
         assert_eq!(geometry.visible_fraction, 0.0);
-    }
-
-    #[test]
-    fn test_arity_is_single_child() {
-        let header = RenderSliverFloatingPersistentHeader::new(80.0);
-        assert_eq!(header.arity(), RuntimeArity::Exact(1));
     }
 }

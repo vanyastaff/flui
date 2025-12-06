@@ -132,8 +132,10 @@
 //! // Large hero image that shrinks to small header
 //! ```
 
-use crate::core::{RuntimeArity, LegacySliverRender, SliverSliver};
+use crate::core::{RenderObject, RenderSliver, Single, SliverLayoutContext, SliverPaintContext};
+use crate::RenderResult;
 use flui_painting::Canvas;
+use flui_types::prelude::*;
 use flui_types::{SliverConstraints, SliverGeometry};
 
 /// RenderObject for a pinned persistent header that collapses but never hides.
@@ -321,30 +323,41 @@ impl Default for RenderSliverPinnedPersistentHeader {
     }
 }
 
-impl LegacySliverRender for RenderSliverPinnedPersistentHeader {
-    fn layout(&mut self, ctx: &Sliver) -> SliverGeometry {
+impl RenderObject for RenderSliverPinnedPersistentHeader {}
+
+impl RenderSliver<Single> for RenderSliverPinnedPersistentHeader {
+    fn layout(&mut self, mut ctx: SliverLayoutContext<'_, Single>) -> RenderResult<SliverGeometry> {
+        let child_id = *ctx.children.single();
+
+        // Calculate current extent (shrinks from max to min as we scroll)
+        let scroll_offset = ctx.constraints.scroll_offset;
+        let scrolled_extent = scroll_offset.min(self.max_extent - self.min_extent);
+        let current_extent = self.max_extent - scrolled_extent;
+
+        // Layout child with box constraints (height = current_extent)
+        let box_constraints = BoxConstraints::new(
+            0.0,
+            ctx.constraints.cross_axis_extent,
+            current_extent,
+            current_extent,
+        );
+
+        ctx.tree_mut().perform_layout(child_id, box_constraints)?;
+
         // Calculate and cache sliver geometry
         self.sliver_geometry = self.calculate_sliver_geometry(&ctx.constraints);
-        self.sliver_geometry
+        Ok(self.sliver_geometry)
     }
 
-    fn paint(&self, ctx: &Sliver) -> Canvas {
-        // Paint child if present and visible
-        if let Some(child_id) = ctx.children.try_single() {
-            if self.sliver_geometry.visible {
-                return ctx.tree.paint_child(child_id, ctx.offset);
+    fn paint(&self, ctx: &mut SliverPaintContext<'_, Single>) {
+        // Paint child if visible
+        if self.sliver_geometry.visible {
+            let child_id = *ctx.children.single();
+
+            if let Ok(child_canvas) = ctx.tree().perform_paint(child_id, ctx.offset) {
+                *ctx.canvas = child_canvas;
             }
         }
-
-        Canvas::new()
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> RuntimeArity {
-        RuntimeArity::Exact(1) // Single child (header content)
     }
 }
 
@@ -492,11 +505,5 @@ mod tests {
         assert_eq!(geometry.paint_extent, 60.0);
         assert_eq!(geometry.layout_extent, 60.0);
         assert!(geometry.visible);
-    }
-
-    #[test]
-    fn test_arity_is_single_child() {
-        let header = RenderSliverPinnedPersistentHeader::new(60.0);
-        assert_eq!(header.arity(), RuntimeArity::Exact(1));
     }
 }

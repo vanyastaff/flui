@@ -124,8 +124,10 @@
 //! // WARNING: only pinned works, floating is ignored!
 //! ```
 
-use crate::core::{RuntimeArity, LegacySliverRender, SliverSliver};
+use crate::core::{RenderObject, RenderSliver, Single, SliverLayoutContext, SliverPaintContext};
+use crate::RenderResult;
 use flui_painting::Canvas;
+use flui_types::prelude::*;
 use flui_types::{SliverConstraints, SliverGeometry};
 
 /// RenderObject for a generic persistent header with configurable behavior.
@@ -305,30 +307,36 @@ impl RenderSliverPersistentHeader {
     }
 }
 
-impl LegacySliverRender for RenderSliverPersistentHeader {
-    fn layout(&mut self, ctx: &Sliver) -> SliverGeometry {
+impl RenderObject for RenderSliverPersistentHeader {}
+
+impl RenderSliver<Single> for RenderSliverPersistentHeader {
+    fn layout(&mut self, mut ctx: SliverLayoutContext<'_, Single>) -> RenderResult<SliverGeometry> {
+        let child_id = *ctx.children.single();
+
+        // Layout child with box constraints (height = extent)
+        let box_constraints = BoxConstraints::new(
+            0.0,
+            ctx.constraints.cross_axis_extent,
+            self.extent,
+            self.extent,
+        );
+
+        ctx.tree_mut().perform_layout(child_id, box_constraints)?;
+
         // Calculate and cache sliver geometry
         self.sliver_geometry = self.calculate_sliver_geometry(&ctx.constraints);
-        self.sliver_geometry
+        Ok(self.sliver_geometry)
     }
 
-    fn paint(&self, ctx: &Sliver) -> Canvas {
-        // Paint child if present and visible
-        if let Some(child_id) = ctx.children.try_single() {
-            if self.sliver_geometry.visible {
-                return ctx.tree.paint_child(child_id, ctx.offset);
+    fn paint(&self, ctx: &mut SliverPaintContext<'_, Single>) {
+        // Paint child if visible
+        if self.sliver_geometry.visible {
+            let child_id = *ctx.children.single();
+
+            if let Ok(child_canvas) = ctx.tree().perform_paint(child_id, ctx.offset) {
+                *ctx.canvas = child_canvas;
             }
         }
-
-        Canvas::new()
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> RuntimeArity {
-        RuntimeArity::Exact(1) // Single child (header content)
     }
 }
 
@@ -497,11 +505,5 @@ mod tests {
         assert_eq!(geometry.scroll_extent, 50.0);
         assert_eq!(geometry.paint_extent, 25.0); // 50 - 25
         assert!(geometry.visible);
-    }
-
-    #[test]
-    fn test_arity_is_single_child() {
-        let header = RenderSliverPersistentHeader::new(50.0, true);
-        assert_eq!(header.arity(), RuntimeArity::Exact(1));
     }
 }
