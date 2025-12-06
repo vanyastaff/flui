@@ -107,7 +107,8 @@
 //! let responsive = RenderSliverEdgeInsetsPadding::new(responsive_padding);
 //! ```
 
-use crate::core::{RuntimeArity, LegacySliverRender, SliverSliver};
+use crate::core::{RenderObject, RenderSliver, Single, SliverLayoutContext, SliverPaintContext};
+use crate::RenderResult;
 use flui_painting::Canvas;
 use flui_types::prelude::*;
 use flui_types::{SliverConstraints, SliverGeometry};
@@ -283,44 +284,35 @@ impl Default for RenderSliverEdgeInsetsPadding {
     }
 }
 
-impl LegacySliverRender for RenderSliverEdgeInsetsPadding {
-    fn layout(&mut self, ctx: &Sliver) -> SliverGeometry {
-        let constraints = &ctx.constraints;
+impl RenderObject for RenderSliverEdgeInsetsPadding {}
+
+impl RenderSliver<Single> for RenderSliverEdgeInsetsPadding {
+    fn layout(&mut self, mut ctx: SliverLayoutContext<'_, Single>) -> RenderResult<SliverGeometry> {
+        let constraints = ctx.constraints;
+        let child_id = *ctx.children.single();
 
         // Adjust constraints for child
-        let child_constraints = self.child_constraints(constraints);
+        let child_constraints = self.child_constraints(&constraints);
 
         // Layout child
-        let child_geometry = if let Some(child_id) = ctx.children.try_single() {
-            ctx.tree.layout_sliver_child(child_id, child_constraints)
-        } else {
-            SliverGeometry::default()
-        };
+        let child_geometry = ctx.tree_mut().perform_sliver_layout(child_id, child_constraints)?;
 
         // Calculate and cache geometry with padding
-        self.sliver_geometry = self.calculate_sliver_geometry(constraints, child_geometry);
-        self.sliver_geometry
+        self.sliver_geometry = self.calculate_sliver_geometry(&constraints, child_geometry);
+        Ok(self.sliver_geometry)
     }
 
-    fn paint(&self, ctx: &Sliver) -> Canvas {
-        // Paint child if present and visible
-        if let Some(child_id) = ctx.children.try_single() {
-            if self.sliver_geometry.visible {
-                // Paint child with padding offset
-                let padding_offset = Offset::new(self.padding.left, self.padding.top);
-                return ctx.tree.paint_child(child_id, ctx.offset + padding_offset);
+    fn paint(&self, ctx: &mut SliverPaintContext<'_, Single>) {
+        // Paint child if visible
+        if self.sliver_geometry.visible {
+            let child_id = *ctx.children.single();
+
+            // Paint child with padding offset
+            let padding_offset = Offset::new(self.padding.left, self.padding.top);
+            if let Ok(child_canvas) = ctx.tree().perform_paint(child_id, ctx.offset + padding_offset) {
+                *ctx.canvas = child_canvas;
             }
         }
-
-        Canvas::new()
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> RuntimeArity {
-        RuntimeArity::Exact(1) // Single child sliver
     }
 }
 
@@ -458,11 +450,5 @@ mod tests {
         assert_eq!(geometry.scroll_extent, 260.0); // 200 + 40 + 20
         // Paint extent includes padding
         assert_eq!(geometry.paint_extent, 260.0); // 200 + 40 + 20
-    }
-
-    #[test]
-    fn test_arity_is_single_child() {
-        let sliver = RenderSliverEdgeInsetsPadding::new(EdgeInsets::ZERO);
-        assert_eq!(sliver.arity(), RuntimeArity::Exact(1));
     }
 }

@@ -109,7 +109,8 @@
 //! // If content is long: footer after scrolled content
 //! ```
 
-use crate::core::{RuntimeArity, SliverSliverBoxPaintCtx, LegacySliverRender};
+use crate::core::{RenderObject, RenderSliver, Single, SliverLayoutContext, SliverPaintContext};
+use crate::RenderResult;
 use flui_painting::Canvas;
 use flui_types::prelude::*;
 use flui_types::{SliverConstraints, SliverGeometry};
@@ -294,46 +295,37 @@ impl Default for RenderSliverFillRemaining {
     }
 }
 
-impl LegacySliverRender for RenderSliverFillRemaining {
-    fn layout(&mut self, ctx: &Sliver) -> SliverGeometry {
-        let constraints = &ctx.constraints;
+impl RenderObject for RenderSliverFillRemaining {}
+
+impl RenderSliver<Single> for RenderSliverFillRemaining {
+    fn layout(&mut self, mut ctx: SliverLayoutContext<'_, Single>) -> RenderResult<SliverGeometry> {
+        let constraints = ctx.constraints;
+        let child_id = *ctx.children.single();
 
         // Layout child with box constraints based on remaining viewport space
-        let child_size = if let Some(child_id) = ctx.children.try_single() {
-            let remaining_extent = constraints.remaining_paint_extent;
-            let box_constraints = BoxConstraints::new(
-                0.0,
-                constraints.cross_axis_extent,
-                0.0,
-                remaining_extent,
-            );
-            ctx.tree.layout_child(child_id, box_constraints)
-        } else {
-            Size::ZERO
-        };
+        let remaining_extent = constraints.remaining_paint_extent;
+        let box_constraints = BoxConstraints::new(
+            0.0,
+            constraints.cross_axis_extent,
+            0.0,
+            remaining_extent,
+        );
+        let child_size = ctx.tree_mut().perform_layout(child_id, box_constraints)?;
 
         // Calculate and cache sliver geometry
-        self.sliver_geometry = self.calculate_sliver_geometry(constraints, child_size);
-        self.sliver_geometry
+        self.sliver_geometry = self.calculate_sliver_geometry(&constraints, child_size);
+        Ok(self.sliver_geometry)
     }
 
-    fn paint(&self, ctx: &Sliver) -> Canvas {
-        // Paint child if present and visible
-        if let Some(child_id) = ctx.children.try_single() {
-            if self.sliver_geometry.visible {
-                return ctx.tree.paint_child(child_id, ctx.offset);
+    fn paint(&self, ctx: &mut SliverPaintContext<'_, Single>) {
+        // Paint child if visible
+        if self.sliver_geometry.visible {
+            let child_id = *ctx.children.single();
+
+            if let Ok(child_canvas) = ctx.tree().perform_paint(child_id, ctx.offset) {
+                *ctx.canvas = child_canvas;
             }
         }
-
-        Canvas::new()
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> RuntimeArity {
-        RuntimeArity::Exact(1) // Single child
     }
 }
 
@@ -528,11 +520,5 @@ mod tests {
         assert_eq!(geometry.scroll_extent, 500.0);
         assert_eq!(geometry.paint_extent, 300.0);
         assert!(geometry.visible);
-    }
-
-    #[test]
-    fn test_arity_is_single_child() {
-        let fill = RenderSliverFillRemaining::new();
-        assert_eq!(fill.arity(), RuntimeArity::Exact(1));
     }
 }
