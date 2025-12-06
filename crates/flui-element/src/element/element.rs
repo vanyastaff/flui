@@ -908,6 +908,13 @@ impl BuildContext for Element {
         );
     }
 
+    fn create_rebuild_callback(&self) -> Box<dyn Fn() + Send + Sync> {
+        // Element doesn't have access to dirty set, return no-op
+        // Real implementation is in PipelineBuildContext
+        tracing::trace!("BuildContext::create_rebuild_callback() - Element stub, use PipelineBuildContext");
+        Box::new(|| {})
+    }
+
     fn depend_on_raw(&self, _type_id: TypeId) -> Option<Arc<dyn Any + Send + Sync>> {
         // Element doesn't have tree access to walk ancestors and find providers.
         // This needs PipelineBuildContext which has tree access.

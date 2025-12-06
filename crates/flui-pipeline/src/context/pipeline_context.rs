@@ -151,6 +151,17 @@ impl BuildContext for PipelineBuildContext {
         tracing::trace!(element_id = ?element_id, "Rebuild scheduled");
     }
 
+    fn create_rebuild_callback(&self) -> Box<dyn Fn() + Send + Sync> {
+        // Capture dirty_set and element_id for rebuild scheduling
+        let dirty_set = self.dirty_set.clone();
+        let element_id = self.element_id;
+
+        Box::new(move || {
+            dirty_set.write().mark(element_id);
+            tracing::trace!(element_id = ?element_id, "Rebuild triggered from callback");
+        })
+    }
+
     fn depend_on_raw(&self, type_id: TypeId) -> Option<Arc<dyn Any + Send + Sync>> {
         // Walk up the parent chain to find a provider
         // Start from parent (not current element itself)
