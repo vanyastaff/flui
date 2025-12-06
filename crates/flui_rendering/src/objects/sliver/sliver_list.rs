@@ -117,6 +117,33 @@
 //! - **vs RenderSliverFixedExtentList**: SliverList allows variable extents
 //! - **vs RenderSliverGrid**: Grid is 2D layout, SliverList is 1D
 //!
+//! # ⚠️ CRITICAL IMPLEMENTATION ISSUES
+//!
+//! This implementation has **MAJOR INCOMPLETE FUNCTIONALITY**:
+//!
+//! 1. **❌ Children are NEVER laid out** (line 407-417)
+//!    - No calls to `layout_child()` anywhere
+//!    - Children sizes are undefined
+//!    - Only geometry calculation, no actual layout
+//!
+//! 2. **❌ child_builder NEVER USED** (line 250)
+//!    - Field exists and can be set via constructor/setter
+//!    - Never called in `layout()` method
+//!    - Dead code - has no effect on behavior
+//!    - Lazy loading is NOT implemented
+//!
+//! 3. **❌ Paint NOT IMPLEMENTED** (line 419-431)
+//!    - Returns empty Canvas
+//!    - TODO comment acknowledges missing implementation
+//!    - Children are never painted
+//!
+//! 4. **✅ Geometry calculation CORRECT** (line 317-397)
+//!    - Fixed extent mode works correctly
+//!    - Variable extent mode estimates (50px average)
+//!    - Viewport culling calculations accurate
+//!
+//! **This RenderObject is BROKEN - missing layout, lazy loading, and paint!**
+//!
 //! # Examples
 //!
 //! ```rust,ignore
@@ -130,6 +157,7 @@
 //!         None // Stop (reached end)
 //!     }
 //! });
+//! // WARNING: child_builder is never used - lazy loading not implemented!
 //!
 //! // Fixed extent list (optimized)
 //! let mut list = RenderSliverList::new();
@@ -137,12 +165,14 @@
 //! list.child_builder = Some(Box::new(|index| {
 //!     (index < 1000).then_some(true)
 //! }));
+//! // WARNING: geometry works, but children never laid out or painted!
 //!
 //! // Finite list with variable heights
 //! let data = vec![/* ... */];
 //! let list = RenderSliverList::with_builder(move |index| {
 //!     data.get(index).map(|_| true)
 //! });
+//! // WARNING: children never built - this is a stub implementation!
 //! ```
 
 use flui_core::element::ElementTree;
@@ -187,13 +217,24 @@ pub type SliverChildBuilder = Box<dyn Fn(usize) -> Option<bool> + Send + Sync>;
 ///
 /// # Flutter Compliance
 ///
-/// Matches Flutter's RenderSliverList behavior:
-/// - Lazy child building via delegate pattern
-/// - Viewport culling (only visible children laid out/painted)
-/// - Cache extent for smooth scrolling buffer
-/// - Fixed extent optimization (item_extent)
-/// - SliverGeometry output (scroll_extent, paint_extent, visible)
-/// - Uses SliverConstraints for scroll-aware layout
+/// **BROKEN IMPLEMENTATION**:
+/// - ❌ Lazy child building NOT implemented (child_builder unused)
+/// - ❌ Viewport culling NOT implemented (children never laid out)
+/// - ❌ Paint NOT implemented (returns empty Canvas)
+/// - ✅ Geometry calculation correct (both fixed and variable extents)
+/// - ⚠️ Stub implementation - only geometry works
+///
+/// # Implementation Status
+///
+/// | Feature | Status | Notes |
+/// |---------|--------|-------|
+/// | Geometry calculation | ✅ Complete | Fixed/variable extents both work |
+/// | Lazy child building | ❌ Missing | child_builder field exists but never used |
+/// | Child layout | ❌ Missing | No layout_child() calls |
+/// | Paint | ❌ Missing | Returns empty Canvas (line 419-431) |
+/// | Viewport culling | ❌ Missing | Would require child layout first |
+/// | Cache extent | ❌ Missing | No prebuilding of off-screen children |
+/// | Fixed extent optimization | ✅ Geometry only | Works for geometry, but children not laid out |
 ///
 /// # Sliver Protocol Summary
 ///
