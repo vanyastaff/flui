@@ -1,4 +1,54 @@
 //! RenderStack - layering container
+//!
+//! Implements Flutter's stack layout for positioning children on top of each other.
+//!
+//! # Flutter Equivalence
+//!
+//! | FLUI | Flutter |
+//! |------|---------|
+//! | `RenderStack` | `RenderStack` from `package:flutter/src/rendering/stack.dart` |
+//! | `alignment` | `alignment` property |
+//! | `fit` | `fit` property |
+//!
+//! # Layout Protocol
+//!
+//! 1. **Determine child constraints based on fit**
+//!    - `StackFit::Loose`: Loosen parent constraints (min=0)
+//!    - `StackFit::Expand`: Tight to parent's max size
+//!    - `StackFit::Passthrough`: Use parent constraints as-is
+//!
+//! 2. **Layout all children**
+//!    - Non-positioned: use fit-based constraints
+//!    - Positioned: TODO - use position metadata
+//!    - Track max width/height across all children
+//!
+//! 3. **Calculate stack size**
+//!    - `StackFit::Expand`: use parent's biggest size
+//!    - Otherwise: use max child size (clamped to parent constraints)
+//!
+//! 4. **Calculate child offsets**
+//!    - Apply alignment to position each child within stack bounds
+//!    - Cache offsets for efficient paint
+//!
+//! # Performance
+//!
+//! - **Layout**: O(n) - single pass through children
+//! - **Paint**: O(n) - paint each child in z-order
+//! - **Memory**: O(n) - stores size + offset per child
+//!
+//! # Examples
+//!
+//! ```rust,ignore
+//! use flui_rendering::RenderStack;
+//! use flui_types::{Alignment, StackFit};
+//!
+//! // Stack with centered children
+//! let stack = RenderStack::with_alignment(Alignment::CENTER);
+//!
+//! // Stack that expands to fill parent
+//! let mut stack = RenderStack::new();
+//! stack.set_fit(StackFit::Expand);
+//! ```
 
 use crate::core::{BoxLayoutCtx, BoxPaintCtx, ChildrenAccess, RenderBox, Variable};
 use crate::{RenderObject, RenderResult};
@@ -6,25 +56,32 @@ use flui_types::constraints::BoxConstraints;
 use flui_types::layout::StackFit;
 use flui_types::{Alignment, Offset, Size};
 
-/// RenderObject for stack layout (layering)
+/// RenderObject for stack layout (layering).
 ///
-/// Stack allows positioning children on top of each other. Children can be:
-/// - **Non-positioned**: Sized according to the stack's fit and aligned
-/// - **Positioned**: Placed at specific positions using StackParentData
+/// Positions children on top of each other with customizable alignment
+/// and sizing behavior.
 ///
-/// # Features
+/// # Arity
 ///
-/// - Alignment-based positioning for non-positioned children
-/// - StackFit control for child sizing
-/// - Offset caching for performance
+/// `Variable` - Can have any number of children (0+).
 ///
-/// # Example
+/// # Protocol
 ///
-/// ```rust,ignore
-/// use flui_rendering::objects::layout::RenderStack;
+/// Box protocol - Uses `BoxConstraints` and returns `Size`.
 ///
-/// let mut stack = RenderStack::new();
-/// ```
+/// # Use Cases
+///
+/// - **Layering**: Overlay widgets on top of each other
+/// - **Positioning**: Align children within bounds
+/// - **Z-order**: Paint order determines visual stacking
+///
+/// # Flutter Compliance
+///
+/// Matches Flutter's RenderStack behavior:
+/// - Respects StackFit for child sizing
+/// - Applies Alignment to position children
+/// - Paints in child order (first=back, last=front)
+/// - TODO: Support positioned children via ParentData
 #[derive(Debug)]
 pub struct RenderStack {
     /// How to align non-positioned children
@@ -80,9 +137,8 @@ impl RenderObject for RenderStack {}
 impl RenderBox<Variable> for RenderStack {
     fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Variable>) -> RenderResult<Size> {
         let constraints = ctx.constraints;
-        let children = ctx.children;
 
-        let child_count = children.as_slice().len();
+        let child_count = ctx.children.len();
         if child_count == 0 {
             self.child_sizes.clear();
             self.child_offsets.clear();
@@ -97,7 +153,7 @@ impl RenderBox<Variable> for RenderStack {
         let mut max_width: f32 = 0.0;
         let mut max_height: f32 = 0.0;
 
-        for child_id in children.iter() {
+        for child_id in ctx.children() {
             // For now, all children use fit-based constraints
             // TODO: Add PositionedMetadata support for positioned children
             let child_constraints = match self.fit {
@@ -106,7 +162,7 @@ impl RenderBox<Variable> for RenderStack {
                 StackFit::Passthrough => constraints,
             };
 
-            let child_size = ctx.layout_child(*child_id, child_constraints)?;
+            let child_size = ctx.layout_child(child_id, child_constraints)?;
             self.child_sizes.push(child_size);
             max_width = max_width.max(child_size.width);
             max_height = max_height.max(child_size.height);
@@ -140,12 +196,12 @@ impl RenderBox<Variable> for RenderStack {
         let offset = ctx.offset;
 
         // Collect child IDs first to avoid borrow checker issues
-        let child_ids: Vec<_> = ctx.children.iter().collect();
+        let child_ids: Vec<_> = ctx.children().collect();
 
         // Paint children in order (first child in back, last child on top)
         for (i, child_id) in child_ids.into_iter().enumerate() {
             let child_offset = self.child_offsets.get(i).copied().unwrap_or(Offset::ZERO);
-            ctx.paint_child(*child_id, offset + child_offset);
+            ctx.paint_child(child_id, offset + child_offset);
         }
     }
 }
