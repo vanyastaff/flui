@@ -3,7 +3,7 @@
 use crate::animation::{Animation, AnimationDirection, StatusCallback};
 use crate::error::AnimationError;
 use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
-use flui_scheduler::{Scheduler, Ticker};
+use flui_scheduler::{Scheduler, ScheduledTicker};
 use flui_types::animation::AnimationStatus;
 use parking_lot::Mutex;
 use std::fmt;
@@ -72,7 +72,7 @@ struct AnimationControllerInner {
     upper_bound: f32,
 
     /// Ticker for frame callbacks
-    ticker: Option<Ticker>,
+    ticker: Option<ScheduledTicker>,
 
     /// Scheduler reference for ticker coordination
     #[allow(dead_code)]
@@ -98,6 +98,12 @@ struct AnimationControllerInner {
 
     /// Next listener ID
     next_listener_id: usize,
+
+    /// Is animation in repeat mode?
+    is_repeating: bool,
+
+    /// Should repeat with reverse (bounce back and forth)?
+    repeat_reverse: bool,
 }
 
 impl AnimationController {
@@ -161,8 +167,8 @@ impl AnimationController {
 
         let notifier = Arc::new(ChangeNotifier::new());
 
-        // Create ticker (no callback needed - we'll handle ticking manually)
-        let ticker = Ticker::new();
+        // Create scheduled ticker that auto-integrates with scheduler
+        let ticker = ScheduledTicker::new(scheduler.clone());
 
         let inner = AnimationControllerInner {
             value: lower_bound,
@@ -180,6 +186,8 @@ impl AnimationController {
             target_value: upper_bound,
             disposed: false,
             next_listener_id: 0,
+            is_repeating: false,
+            repeat_reverse: false,
         };
 
         Ok(Self {
@@ -222,6 +230,9 @@ impl AnimationController {
             inner.value = start.clamp(inner.lower_bound, inner.upper_bound);
         }
 
+        // Disable repeat mode when explicitly starting forward
+        inner.is_repeating = false;
+
         inner.direction = AnimationDirection::Forward;
         inner.status = AnimationStatus::Forward;
         inner.animation_start_time = Some(Instant::now());
@@ -229,9 +240,9 @@ impl AnimationController {
         inner.target_value = inner.upper_bound;
 
         if let Some(ticker) = &mut inner.ticker {
-            let notifier = Arc::clone(&self.notifier);
+            let controller = self.clone();
             ticker.start(move |_elapsed| {
-                notifier.notify_listeners();
+                controller.tick();
             });
         }
 
@@ -267,6 +278,9 @@ impl AnimationController {
             inner.value = start.clamp(inner.lower_bound, inner.upper_bound);
         }
 
+        // Disable repeat mode when explicitly starting reverse
+        inner.is_repeating = false;
+
         inner.direction = AnimationDirection::Reverse;
         inner.status = AnimationStatus::Reverse;
         inner.animation_start_time = Some(Instant::now());
@@ -274,9 +288,9 @@ impl AnimationController {
         inner.target_value = inner.lower_bound;
 
         if let Some(ticker) = &mut inner.ticker {
-            let notifier = Arc::clone(&self.notifier);
+            let controller = self.clone();
             ticker.start(move |_elapsed| {
-                notifier.notify_listeners();
+                controller.tick();
             });
         }
 
@@ -297,6 +311,9 @@ impl AnimationController {
     pub fn stop(&self) -> Result<(), AnimationError> {
         let mut inner = self.inner.lock();
         self.check_disposed(&inner)?;
+
+        // Disable repeat mode when stopping
+        inner.is_repeating = false;
 
         if let Some(ticker) = &mut inner.ticker {
             ticker.stop();
@@ -399,10 +416,35 @@ impl AnimationController {
     /// Repeat the animation indefinitely.
     ///
     /// If `reverse` is true, the animation will bounce back and forth.
-    pub fn repeat(&self, _reverse: bool) -> Result<(), AnimationError> {
-        // TODO: Implement repeat logic with state tracking for reverse mode
-        // For now, just start forward
-        self.forward()
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AnimationError::Disposed`] if the controller has been disposed.
+    pub fn repeat(&self, reverse: bool) -> Result<(), AnimationError> {
+        let mut inner = self.inner.lock();
+        self.check_disposed(&inner)?;
+
+        // Enable repeat mode
+        inner.is_repeating = true;
+        inner.repeat_reverse = reverse;
+
+        // Reset to lower bound and start forward
+        inner.value = inner.lower_bound;
+        inner.direction = AnimationDirection::Forward;
+        inner.status = AnimationStatus::Forward;
+        inner.animation_start_time = Some(Instant::now());
+        inner.start_value = inner.value;
+        inner.target_value = inner.upper_bound;
+
+        if let Some(ticker) = &mut inner.ticker {
+            let controller = self.clone();
+            ticker.start(move |_elapsed| {
+                controller.tick();
+            });
+        }
+
+        self.notify_status_listeners(AnimationStatus::Forward, &inner);
+        Ok(())
     }
 
     /// Update the animation value based on elapsed time.
@@ -439,23 +481,66 @@ impl AnimationController {
         if t >= 1.0 {
             inner.value = inner.target_value;
 
-            if let Some(ticker) = &mut inner.ticker {
-                ticker.stop();
-            }
+            // Check if we should repeat
+            if inner.is_repeating {
+                if inner.repeat_reverse {
+                    // Bounce mode - reverse direction
+                    if inner.direction == AnimationDirection::Forward {
+                        inner.direction = AnimationDirection::Reverse;
+                        inner.status = AnimationStatus::Reverse;
+                        inner.start_value = inner.upper_bound;
+                        inner.target_value = inner.lower_bound;
+                    } else {
+                        inner.direction = AnimationDirection::Forward;
+                        inner.status = AnimationStatus::Forward;
+                        inner.start_value = inner.lower_bound;
+                        inner.target_value = inner.upper_bound;
+                    }
+                    inner.animation_start_time = Some(Instant::now());
 
-            let new_status = if (inner.value - inner.upper_bound).abs() < 1e-6 {
-                AnimationStatus::Completed
-            } else if (inner.value - inner.lower_bound).abs() < 1e-6 {
-                AnimationStatus::Dismissed
+                    // Ticker keeps running, no need to stop/restart
+                } else {
+                    // Simple repeat - restart from beginning
+                    inner.direction = AnimationDirection::Forward;
+                    inner.status = AnimationStatus::Forward;
+                    inner.value = inner.lower_bound;
+                    inner.start_value = inner.lower_bound;
+                    inner.target_value = inner.upper_bound;
+                    inner.animation_start_time = Some(Instant::now());
+
+                    // Ticker keeps running
+                }
+
+                drop(inner);
+                self.notifier.notify_listeners();
             } else {
-                inner.status
-            };
+                // Not repeating - stop the animation
+                if let Some(ticker) = &mut inner.ticker {
+                    ticker.stop();
+                }
 
-            inner.status = new_status;
+                let new_status = if (inner.value - inner.upper_bound).abs() < 1e-6 {
+                    AnimationStatus::Completed
+                } else if (inner.value - inner.lower_bound).abs() < 1e-6 {
+                    AnimationStatus::Dismissed
+                } else {
+                    inner.status
+                };
+
+                inner.status = new_status;
+
+                // Notify status listeners while still holding the lock
+                self.notify_status_listeners(new_status, &inner);
+
+                drop(inner);
+
+                // Notify value listeners about the final value
+                self.notifier.notify_listeners();
+            }
+        } else {
+            // Animation still in progress - notify value listeners
             drop(inner);
-
-            let inner = self.inner.lock();
-            self.notify_status_listeners(new_status, &inner);
+            self.notifier.notify_listeners();
         }
     }
 
