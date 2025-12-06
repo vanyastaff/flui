@@ -1,7 +1,68 @@
 //! RenderParagraph - Multi-line text rendering
 //!
-//! This is a Leaf RenderObject that renders multi-line text with styling,
-//! line breaks, and text wrapping.
+//! Implements Flutter's paragraph rendering for multi-line text with styling,
+//! wrapping, alignment, and overflow handling.
+//!
+//! # Flutter Equivalence
+//!
+//! | FLUI | Flutter |
+//! |------|---------|
+//! | `RenderParagraph` | `RenderParagraph` from `package:flutter/src/rendering/paragraph.dart` |
+//! | `text` | `text` property (InlineSpan in Flutter) |
+//! | `text_align` | `textAlign` property |
+//! | `text_direction` | `textDirection` property |
+//! | `soft_wrap` | `softWrap` property |
+//! | `overflow` | `overflow` property |
+//! | `max_lines` | `maxLines` property |
+//!
+//! # Layout Protocol
+//!
+//! 1. **Calculate text metrics**
+//!    - Estimate character width and line height from font size
+//!    - Determine characters per line based on max_width
+//!
+//! 2. **Handle text wrapping**
+//!    - If `soft_wrap`: calculate line breaks based on width
+//!    - If not wrapping: single line layout
+//!
+//! 3. **Apply line limits**
+//!    - Respect `max_lines` constraint if set
+//!    - Calculate number of visible lines
+//!
+//! 4. **Calculate final size**
+//!    - Width: intrinsic text width (doesn't expand to fill)
+//!    - Height: number of lines × line height
+//!    - Constrain to parent bounds
+//!
+//! # Performance
+//!
+//! - **Layout**: O(1) - simple character-based estimation (TODO: real text shaping)
+//! - **Paint**: O(1) - single Canvas draw_text call
+//! - **Memory**: O(n) where n = text length
+//!
+//! # Examples
+//!
+//! ```rust,ignore
+//! use flui_rendering::{RenderParagraph, ParagraphData};
+//! use flui_types::typography::TextAlign;
+//!
+//! // Basic text
+//! let data = ParagraphData::new("Hello, World!");
+//! let paragraph = RenderParagraph::new(data);
+//!
+//! // Styled and aligned text
+//! let data = ParagraphData::new("Centered Title")
+//!     .with_font_size(24.0)
+//!     .with_align(TextAlign::Center)
+//!     .with_color(Color::BLUE);
+//! let paragraph = RenderParagraph::new(data);
+//!
+//! // Multi-line with overflow handling
+//! let data = ParagraphData::new("Long text...")
+//!     .with_max_lines(3)
+//!     .with_overflow(TextOverflow::Ellipsis);
+//! let paragraph = RenderParagraph::new(data);
+//! ```
 
 use crate::core::{BoxLayoutCtx, BoxPaintCtx, Leaf, RenderBox};
 use crate::{RenderObject, RenderResult};
@@ -84,26 +145,33 @@ impl ParagraphData {
 
 // ===== RenderObject =====
 
-/// RenderParagraph - Multi-line text rendering
+/// RenderParagraph - Multi-line text rendering.
 ///
-/// This is a Leaf RenderObject (no children) that renders text.
-/// Supports:
-/// - Multi-line text with wrapping
-/// - Text alignment (left, right, center, justify)
-/// - Text direction (LTR, RTL)
-/// - Max lines and overflow handling
-/// - Text styling (size, color)
+/// Leaf RenderObject that renders styled multi-line text with wrapping,
+/// alignment, and overflow handling.
 ///
-/// # Example
+/// # Arity
 ///
-/// ```rust,ignore
-/// use flui_rendering::{RenderParagraph, ParagraphData};
+/// `Leaf` - Has no children (renders text content).
 ///
-/// let data = ParagraphData::new("Hello, World!")
-///     .with_font_size(16.0)
-///     .with_align(TextAlign::Center);
-/// let mut paragraph = RenderParagraph::new(data);
-/// ```
+/// # Protocol
+///
+/// Box protocol - Uses `BoxConstraints` and returns `Size`.
+///
+/// # Use Cases
+///
+/// - **Text display**: Labels, paragraphs, headings
+/// - **Multi-line content**: Descriptions, articles, messages
+/// - **Styled text**: Different sizes, colors, alignments
+/// - **Overflow handling**: Ellipsis, clipping for long text
+///
+/// # Flutter Compliance
+///
+/// Matches Flutter's RenderParagraph behavior:
+/// - Calculates intrinsic size based on text content
+/// - Respects soft_wrap, max_lines, and overflow settings
+/// - Supports all text alignment modes
+/// - Uses Canvas draw_text API for rendering
 #[derive(Debug)]
 pub struct RenderParagraph {
     /// The paragraph data
