@@ -71,7 +71,8 @@
 //! responsive.set_max_extent(1200.0);
 //! ```
 
-use crate::core::{RuntimeArity, LegacySliverRender, SliverSliver};
+use crate::core::{RenderObject, RenderSliver, Single, SliverLayoutContext, SliverPaintContext};
+use crate::RenderResult;
 use flui_painting::Canvas;
 use flui_types::{SliverConstraints, SliverGeometry};
 
@@ -224,42 +225,33 @@ impl Default for RenderSliverConstrainedCrossAxis {
     }
 }
 
-impl LegacySliverRender for RenderSliverConstrainedCrossAxis {
-    fn layout(&mut self, ctx: &Sliver) -> SliverGeometry {
-        let constraints = &ctx.constraints;
+impl RenderObject for RenderSliverConstrainedCrossAxis {}
+
+impl RenderSliver<Single> for RenderSliverConstrainedCrossAxis {
+    fn layout(&mut self, mut ctx: SliverLayoutContext<'_, Single>) -> RenderResult<SliverGeometry> {
+        let constraints = ctx.constraints;
+        let child_id = *ctx.children.single();
 
         // Constrain cross-axis for child
-        let child_constraints = self.child_constraints(constraints);
+        let child_constraints = self.child_constraints(&constraints);
 
         // Layout child
-        let child_geometry = if let Some(child_id) = ctx.children.try_single() {
-            ctx.tree.layout_sliver_child(child_id, child_constraints)
-        } else {
-            SliverGeometry::default()
-        };
+        let child_geometry = ctx.tree_mut().perform_sliver_layout(child_id, child_constraints)?;
 
         // Calculate and cache geometry with constrained cross-axis
-        self.sliver_geometry = self.calculate_sliver_geometry(constraints, child_geometry);
-        self.sliver_geometry
+        self.sliver_geometry = self.calculate_sliver_geometry(&constraints, child_geometry);
+        Ok(self.sliver_geometry)
     }
 
-    fn paint(&self, ctx: &Sliver) -> Canvas {
-        // Paint child if present and visible
-        if let Some(child_id) = ctx.children.try_single() {
-            if self.sliver_geometry.visible {
-                return ctx.tree.paint_child(child_id, ctx.offset);
+    fn paint(&self, ctx: &mut SliverPaintContext<'_, Single>) {
+        // Paint child if visible
+        if self.sliver_geometry.visible {
+            let child_id = *ctx.children.single();
+
+            if let Ok(child_canvas) = ctx.tree().perform_paint(child_id, ctx.offset) {
+                *ctx.canvas = child_canvas;
             }
         }
-
-        Canvas::new()
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> RuntimeArity {
-        RuntimeArity::Exact(1) // Single child sliver
     }
 }
 
@@ -433,11 +425,5 @@ mod tests {
 
         // Cross-axis should pass through unchanged
         assert_eq!(geometry.cross_axis_extent, 1000.0);
-    }
-
-    #[test]
-    fn test_arity_is_single_child() {
-        let constrained = RenderSliverConstrainedCrossAxis::new(600.0);
-        assert_eq!(constrained.arity(), RuntimeArity::Exact(1));
     }
 }

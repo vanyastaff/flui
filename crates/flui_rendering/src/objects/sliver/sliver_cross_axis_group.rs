@@ -103,9 +103,10 @@
 //! // Add 7 children, each gets 1/7 of width
 //! ```
 
-use crate::core::{RuntimeArity, LegacySliverRender, SliverSliver};
+use crate::core::{RenderObject, RenderSliver, Variable, SliverLayoutContext, SliverPaintContext};
+use crate::RenderResult;
 use flui_painting::Canvas;
-use flui_types::{Offset, SliverGeometry};
+use flui_types::{Offset, SliverConstraints, SliverGeometry};
 
 /// RenderObject that groups multiple slivers along the cross axis.
 ///
@@ -213,25 +214,57 @@ impl RenderSliverCrossAxisGroup {
         self.sliver_geometry
     }
 
-    /// Calculate sliver geometry by laying out children across cross axis
-    ///
-    /// Distributes cross-axis space among children and uses the maximum
-    /// scroll extent from all children.
-    fn calculate_sliver_geometry(
-        &mut self,
-        ctx: &Sliver,
+    /// Calculate aggregate geometry from multiple children
+    fn calculate_aggregate_geometry(
+        &self,
+        constraints: &SliverConstraints,
+        max_scroll_extent: f32,
+        max_paint_extent: f32,
+        max_max_paint_extent: f32,
+        total_cache_extent: f32,
+        any_visible: bool,
     ) -> SliverGeometry {
-        let children = ctx.children.as_slice();
+        SliverGeometry {
+            scroll_extent: max_scroll_extent,
+            paint_extent: max_paint_extent.min(constraints.remaining_paint_extent),
+            paint_origin: 0.0,
+            layout_extent: max_paint_extent.min(constraints.remaining_paint_extent),
+            max_paint_extent: max_max_paint_extent,
+            max_scroll_obsolescence: 0.0,
+            visible_fraction: if any_visible { 1.0 } else { 0.0 },
+            cross_axis_extent: constraints.cross_axis_extent,
+            cache_extent: total_cache_extent,
+            visible: any_visible,
+            has_visual_overflow: max_paint_extent > constraints.remaining_paint_extent,
+            hit_test_extent: Some(max_paint_extent),
+            scroll_offset_correction: None,
+        }
+    }
+}
+
+impl Default for RenderSliverCrossAxisGroup {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl RenderObject for RenderSliverCrossAxisGroup {}
+
+impl RenderSliver<Variable> for RenderSliverCrossAxisGroup {
+    fn layout(&mut self, mut ctx: SliverLayoutContext<'_, Variable>) -> RenderResult<SliverGeometry> {
+        let constraints = ctx.constraints;
+        let children: Vec<_> = ctx.children().collect();
 
         if children.is_empty() {
             self.child_cross_axis_offsets.clear();
             self.child_cross_axis_extents.clear();
-            return SliverGeometry::default();
+            self.sliver_geometry = SliverGeometry::default();
+            return Ok(self.sliver_geometry);
         }
 
         // For simplicity, divide cross-axis space equally among children
         // A full implementation would support flex factors
-        let child_cross_axis_extent = ctx.constraints.cross_axis_extent / children.len() as f32;
+        let child_cross_axis_extent = constraints.cross_axis_extent / children.len() as f32;
 
         self.child_cross_axis_offsets.clear();
         self.child_cross_axis_extents.clear();
@@ -249,13 +282,13 @@ impl RenderSliverCrossAxisGroup {
             let cross_axis_offset = i as f32 * child_cross_axis_extent;
 
             // Create child constraints with adjusted cross-axis extent
-            let child_constraints = flui_types::SliverConstraints {
+            let child_constraints = SliverConstraints {
                 cross_axis_extent: child_cross_axis_extent,
-                ..ctx.constraints
+                ..constraints
             };
 
             // Layout child
-            let child_geometry = ctx.tree.layout_sliver_child(child_id, child_constraints);
+            let child_geometry = ctx.tree_mut().perform_sliver_layout(child_id, child_constraints)?;
 
             // Store cross-axis position and extent
             self.child_cross_axis_offsets.push(cross_axis_offset);
@@ -272,43 +305,24 @@ impl RenderSliverCrossAxisGroup {
             }
         }
 
-        // Group geometry uses maximum scroll extent and sums cross-axis
-        SliverGeometry {
-            scroll_extent: max_scroll_extent,
-            paint_extent: max_paint_extent.min(ctx.constraints.remaining_paint_extent),
-            paint_origin: 0.0,
-            layout_extent: max_paint_extent.min(ctx.constraints.remaining_paint_extent),
-            max_paint_extent: max_max_paint_extent,
-            max_scroll_obsolescence: 0.0,
-            visible_fraction: if any_visible { 1.0 } else { 0.0 },
-            cross_axis_extent: ctx.constraints.cross_axis_extent,
-            cache_extent: total_cache_extent,
-            visible: any_visible,
-            has_visual_overflow: max_paint_extent > ctx.constraints.remaining_paint_extent,
-            hit_test_extent: Some(max_paint_extent),
-            scroll_offset_correction: None,
-        }
-    }
-}
+        // Calculate aggregate geometry
+        self.sliver_geometry = self.calculate_aggregate_geometry(
+            &constraints,
+            max_scroll_extent,
+            max_paint_extent,
+            max_max_paint_extent,
+            total_cache_extent,
+            any_visible,
+        );
 
-impl Default for RenderSliverCrossAxisGroup {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl LegacySliverRender for RenderSliverCrossAxisGroup {
-    fn layout(&mut self, ctx: &Sliver) -> SliverGeometry {
-        self.sliver_geometry = self.calculate_sliver_geometry(ctx);
-        self.sliver_geometry
+        Ok(self.sliver_geometry)
     }
 
-    fn paint(&self, ctx: &Sliver) -> Canvas {
+    fn paint(&self, ctx: &mut SliverPaintContext<'_, Variable>) {
         let mut canvas = Canvas::new();
-        let children = ctx.children.as_slice();
 
         // Paint children with their respective cross-axis offsets
-        for (i, &child_id) in children.iter().enumerate() {
+        for (i, child_id) in ctx.children().enumerate() {
             if i < self.child_cross_axis_offsets.len() {
                 let cross_axis_offset = self.child_cross_axis_offsets[i];
 
@@ -316,20 +330,13 @@ impl LegacySliverRender for RenderSliverCrossAxisGroup {
                 // For simplicity, assume vertical scrolling (cross axis = horizontal)
                 let child_offset = Offset::new(ctx.offset.dx + cross_axis_offset, ctx.offset.dy);
 
-                let child_canvas = ctx.tree.paint_child(child_id, child_offset);
-                canvas.append_canvas(child_canvas);
+                if let Ok(child_canvas) = ctx.tree().perform_paint(child_id, child_offset) {
+                    canvas.append_canvas(child_canvas);
+                }
             }
         }
 
-        canvas
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> RuntimeArity {
-        RuntimeArity::Variable // Multiple sliver children
+        *ctx.canvas = canvas;
     }
 }
 
@@ -355,11 +362,5 @@ mod tests {
         let group = RenderSliverCrossAxisGroup::new();
         let geometry = group.geometry();
         assert_eq!(geometry.scroll_extent, 0.0);
-    }
-
-    #[test]
-    fn test_arity_multiple_children() {
-        let group = RenderSliverCrossAxisGroup::new();
-        assert_eq!(group.arity(), RuntimeArity::Variable);
     }
 }
