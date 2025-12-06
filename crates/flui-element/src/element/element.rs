@@ -20,11 +20,38 @@ use std::any::Any;
 
 use flui_foundation::{ElementId, Key, Slot};
 use flui_tree::RuntimeArity;
-use flui_view::ViewMode;
+use flui_view::{PendingChildren, ViewLifecycle, ViewMode};
 
-use super::render_element::ProtocolId;
-use super::{ElementBase, ElementLifecycle, RenderElement, ViewElement};
+use flui_rendering::{ProtocolId, RenderElement, RenderLifecycle, RenderObject};
+
+use super::{ElementLifecycle, ViewElement};
 use crate::ViewObject;
+
+// ============================================================================
+// LIFECYCLE CONVERSION HELPERS
+// ============================================================================
+
+/// Converts ViewLifecycle to ElementLifecycle.
+fn view_to_element_lifecycle(lifecycle: ViewLifecycle) -> ElementLifecycle {
+    match lifecycle {
+        ViewLifecycle::Initial => ElementLifecycle::Initial,
+        ViewLifecycle::Active => ElementLifecycle::Active,
+        ViewLifecycle::Inactive => ElementLifecycle::Inactive,
+        ViewLifecycle::Defunct => ElementLifecycle::Defunct,
+    }
+}
+
+/// Converts RenderLifecycle to ElementLifecycle.
+fn render_to_element_lifecycle(lifecycle: RenderLifecycle) -> ElementLifecycle {
+    match lifecycle {
+        RenderLifecycle::Detached => ElementLifecycle::Initial,
+        RenderLifecycle::Attached
+        | RenderLifecycle::NeedsLayout
+        | RenderLifecycle::LaidOut
+        | RenderLifecycle::NeedsPaint
+        | RenderLifecycle::Painted => ElementLifecycle::Active,
+    }
+}
 
 /// Element - Unified element type
 ///
@@ -57,23 +84,18 @@ impl Element {
         Self::View(ViewElement::new(view_object, mode))
     }
 
-    /// Creates a new Render element with render object and state.
-    pub fn render<RO, RS>(
+    /// Creates a new Render element with render object.
+    pub fn render<RO: RenderObject>(render_object: RO, protocol: ProtocolId) -> Self {
+        Self::Render(RenderElement::new(render_object, protocol))
+    }
+
+    /// Creates a new Render element with render object and arity.
+    pub fn render_with_arity<RO: RenderObject>(
         render_object: RO,
-        render_state: RS,
         protocol: ProtocolId,
         arity: RuntimeArity,
-    ) -> Self
-    where
-        RO: Any + Send + Sync + 'static,
-        RS: Any + Send + Sync + 'static,
-    {
-        Self::Render(RenderElement::new(
-            render_object,
-            render_state,
-            protocol,
-            arity,
-        ))
+    ) -> Self {
+        Self::Render(RenderElement::with_arity(render_object, protocol, arity))
     }
 
     /// Creates an empty element (View variant).
@@ -82,8 +104,19 @@ impl Element {
     }
 
     /// Creates a container element with pending children.
-    pub fn container(children: Vec<Element>) -> Self {
+    ///
+    /// Note: Children are type-erased to `PendingChildren` (Vec<Box<dyn Any + Send + Sync>>).
+    /// Use `Element::boxed_children()` to convert `Vec<Element>` to `PendingChildren`.
+    pub fn container(children: PendingChildren) -> Self {
         Self::View(ViewElement::container(children))
+    }
+
+    /// Converts a Vec<Element> to PendingChildren for use with container().
+    pub fn boxed_children(children: Vec<Element>) -> PendingChildren {
+        children
+            .into_iter()
+            .map(|e| Box::new(e) as Box<dyn Any + Send + Sync>)
+            .collect()
     }
 
     /// Creates an element with mode (for backward compatibility).
@@ -97,6 +130,20 @@ impl Element {
     /// Creates a new view element (backward compatibility alias).
     pub fn new<V: ViewObject>(view_object: V) -> Self {
         Self::View(ViewElement::new(view_object, ViewMode::Empty))
+    }
+
+    // ========== Element ID ==========
+
+    /// Get the element's unique ID.
+    ///
+    /// Returns `None` if the element hasn't been mounted yet.
+    #[inline]
+    #[must_use]
+    pub fn id(&self) -> Option<ElementId> {
+        match self {
+            Self::View(v) => v.id(),
+            Self::Render(r) => r.id(),
+        }
     }
 
     // ========== Variant Checks ==========
@@ -163,7 +210,13 @@ impl Element {
     pub fn view_mode(&self) -> ViewMode {
         match self {
             Self::View(v) => v.view_mode(),
-            Self::Render(r) => r.view_mode(),
+            Self::Render(r) => {
+                // RenderElement uses ProtocolId, convert to ViewMode
+                match r.protocol() {
+                    ProtocolId::Box => ViewMode::RenderBox,
+                    ProtocolId::Sliver => ViewMode::RenderSliver,
+                }
+            }
         }
     }
 
@@ -204,21 +257,25 @@ impl Element {
     // ========== Key Access ==========
 
     /// Get the key.
+    ///
+    /// Note: RenderElement doesn't support keys, returns None.
     #[inline]
     #[must_use]
     pub fn key(&self) -> Option<Key> {
         match self {
             Self::View(v) => v.key(),
-            Self::Render(r) => r.key(),
+            Self::Render(_) => None, // RenderElement doesn't have key
         }
     }
 
     /// Set the key.
+    ///
+    /// Note: Has no effect on RenderElement.
     #[inline]
     pub fn set_key(&mut self, key: Option<Key>) {
         match self {
             Self::View(v) => v.set_key(key),
-            Self::Render(r) => r.set_key(key),
+            Self::Render(_) => {} // RenderElement doesn't support keys
         }
     }
 
@@ -231,11 +288,29 @@ impl Element {
     // ========== Pending Children ==========
 
     /// Take pending children for processing.
-    pub fn take_pending_children(&mut self) -> Option<Vec<Element>> {
+    ///
+    /// Returns type-erased children. Downcast each to `Element` using:
+    /// ```ignore
+    /// let elements: Vec<Element> = pending
+    ///     .into_iter()
+    ///     .filter_map(|b| b.downcast::<Element>().ok().map(|b| *b))
+    ///     .collect();
+    /// ```
+    pub fn take_pending_children(&mut self) -> Option<PendingChildren> {
         match self {
             Self::View(v) => v.take_pending_children(),
-            Self::Render(r) => r.take_pending_children(),
+            Self::Render(_) => None, // RenderElement doesn't support pending children
         }
+    }
+
+    /// Take pending children and downcast to Vec<Element>.
+    pub fn take_pending_children_as_elements(&mut self) -> Option<Vec<Element>> {
+        self.take_pending_children().map(|pending| {
+            pending
+                .into_iter()
+                .filter_map(|b| b.downcast::<Element>().ok().map(|b| *b))
+                .collect()
+        })
     }
 
     /// Check if element has pending children.
@@ -244,21 +319,24 @@ impl Element {
     pub fn has_pending_children(&self) -> bool {
         match self {
             Self::View(v) => v.has_pending_children(),
-            Self::Render(r) => r.has_pending_children(),
+            Self::Render(_) => false, // RenderElement doesn't support pending children
         }
     }
 
-    /// Builder: set pending children.
-    pub fn with_pending_children(mut self, children: Vec<Element>) -> Self {
-        match &mut self {
-            Self::View(v) => {
-                *v = std::mem::replace(v, ViewElement::empty()).with_pending_children(children);
-            }
-            Self::Render(r) => {
-                *r = std::mem::replace(r, RenderElement::empty()).with_pending_children(children);
-            }
+    /// Builder: set pending children (type-erased).
+    ///
+    /// Note: Only works for View elements. RenderElement doesn't support pending children.
+    pub fn with_pending_children(mut self, children: PendingChildren) -> Self {
+        if let Self::View(v) = &mut self {
+            *v = std::mem::replace(v, ViewElement::empty()).with_pending_children(children);
         }
+        // RenderElement doesn't support pending children - ignore silently
         self
+    }
+
+    /// Builder: set pending children from Vec<Element>.
+    pub fn with_element_children(self, children: Vec<Element>) -> Self {
+        self.with_pending_children(Self::boxed_children(children))
     }
 
     // ========== View Object Access (View variant only) ==========
@@ -359,31 +437,68 @@ impl Element {
     // ========== Render State Access (for RenderTreeAccess trait) ==========
 
     /// Returns the render state for this element.
+    ///
+    /// Note: ViewElement requires ViewObject to implement render_state().
+    /// RenderElement state access is through its specialized API.
     #[inline]
     pub fn render_state(&self) -> Option<&dyn Any> {
         match self {
             Self::View(v) => v.view_object()?.render_state(),
-            Self::Render(r) => r.render_state(),
+            Self::Render(_) => None, // RenderElement state is accessed via specialized API
         }
     }
 
     /// Returns a mutable reference to the render state.
+    ///
+    /// Note: ViewElement requires ViewObject to implement render_state_mut().
+    /// RenderElement state access is through its specialized API.
     #[inline]
     pub fn render_state_mut(&mut self) -> Option<&mut dyn Any> {
         match self {
             Self::View(v) => v.view_object_mut()?.render_state_mut(),
-            Self::Render(r) => r.render_state_mut(),
+            Self::Render(_) => None, // RenderElement state is accessed via specialized API
         }
     }
 
     // ========== Lifecycle Delegation ==========
 
     /// Mount element to tree.
+    ///
+    /// For View elements, an ElementId must be provided externally.
+    /// Use `mount_with_id` for View elements or call this after the ID is set.
     #[inline]
     pub fn mount(&mut self, parent: Option<ElementId>, slot: Option<Slot>, depth: usize) {
         match self {
-            Self::View(v) => v.mount(parent, slot, depth),
-            Self::Render(r) => r.mount(parent, slot, depth),
+            Self::View(v) => {
+                // ViewElement needs an ID - generate a placeholder if not set
+                // In practice, the tree should assign IDs before mounting
+                let id = v.id().unwrap_or_else(|| ElementId::new(1));
+                v.mount(id, parent, slot, depth);
+            }
+            Self::Render(r) => {
+                // RenderElement takes (id, parent) - generate placeholder ID
+                let id = r.id().unwrap_or_else(|| ElementId::new(1));
+                r.mount(id, parent);
+                r.set_depth(depth);
+            }
+        }
+    }
+
+    /// Mount element to tree with explicit ID (for View elements).
+    #[inline]
+    pub fn mount_with_id(
+        &mut self,
+        id: ElementId,
+        parent: Option<ElementId>,
+        slot: Option<Slot>,
+        depth: usize,
+    ) {
+        match self {
+            Self::View(v) => v.mount(id, parent, slot, depth),
+            Self::Render(r) => {
+                r.mount(id, parent);
+                r.set_depth(depth);
+            }
         }
     }
 
@@ -415,12 +530,15 @@ impl Element {
     }
 
     /// Get current lifecycle state.
+    ///
+    /// Note: Both ViewElement and RenderElement use their own lifecycle enums,
+    /// which are converted to ElementLifecycle for a unified API.
     #[inline]
     #[must_use]
     pub fn lifecycle(&self) -> ElementLifecycle {
         match self {
-            Self::View(v) => v.lifecycle(),
-            Self::Render(r) => r.lifecycle(),
+            Self::View(v) => view_to_element_lifecycle(v.lifecycle()),
+            Self::Render(r) => render_to_element_lifecycle(r.lifecycle()),
         }
     }
 
@@ -436,7 +554,7 @@ impl Element {
 
     /// Set cached depth.
     #[inline]
-    pub fn set_depth(&self, depth: usize) {
+    pub fn set_depth(&mut self, depth: usize) {
         match self {
             Self::View(v) => v.set_depth(depth),
             Self::Render(r) => r.set_depth(depth),
@@ -456,12 +574,23 @@ impl Element {
     }
 
     /// Get slot position.
+    ///
+    /// Note: RenderElement doesn't track slot position.
     #[inline]
     #[must_use]
     pub fn slot(&self) -> Option<Slot> {
         match self {
             Self::View(v) => v.slot(),
-            Self::Render(r) => r.slot(),
+            Self::Render(_) => None, // RenderElement doesn't track slot
+        }
+    }
+
+    /// Set parent element ID.
+    #[inline]
+    pub fn set_parent(&mut self, parent: Option<ElementId>) {
+        match self {
+            Self::View(v) => v.set_parent(parent),
+            Self::Render(r) => r.set_parent(parent),
         }
     }
 
@@ -478,20 +607,28 @@ impl Element {
     }
 
     /// Mark element as needing rebuild.
+    ///
+    /// Note: For RenderElement, this marks as needing layout.
     #[inline]
-    pub fn mark_dirty(&self) {
+    pub fn mark_dirty(&mut self) {
         match self {
             Self::View(v) => v.mark_dirty(),
-            Self::Render(r) => r.mark_dirty(),
+            Self::Render(r) => r.mark_needs_layout(), // RenderElement uses layout flags
         }
     }
 
     /// Clear dirty flag.
+    ///
+    /// Note: For RenderElement, dirty flags are cleared during pipeline phases.
     #[inline]
-    pub fn clear_dirty(&self) {
+    pub fn clear_dirty(&mut self) {
         match self {
             Self::View(v) => v.clear_dirty(),
-            Self::Render(r) => r.clear_dirty(),
+            Self::Render(r) => {
+                // RenderElement clears dirty via pipeline phases
+                r.clear_needs_layout();
+                r.clear_needs_paint();
+            }
         }
     }
 
@@ -507,7 +644,7 @@ impl Element {
 
     /// Mark needs layout.
     #[inline]
-    pub fn mark_needs_layout(&self) {
+    pub fn mark_needs_layout(&mut self) {
         if let Self::Render(r) = self {
             r.mark_needs_layout();
         }
@@ -515,7 +652,7 @@ impl Element {
 
     /// Clear needs layout.
     #[inline]
-    pub fn clear_needs_layout(&self) {
+    pub fn clear_needs_layout(&mut self) {
         if let Self::Render(r) = self {
             r.clear_needs_layout();
         }
@@ -533,7 +670,7 @@ impl Element {
 
     /// Mark needs paint.
     #[inline]
-    pub fn mark_needs_paint(&self) {
+    pub fn mark_needs_paint(&mut self) {
         if let Self::Render(r) = self {
             r.mark_needs_paint();
         }
@@ -541,7 +678,7 @@ impl Element {
 
     /// Clear needs paint.
     #[inline]
-    pub fn clear_needs_paint(&self) {
+    pub fn clear_needs_paint(&mut self) {
         if let Self::Render(r) = self {
             r.clear_needs_paint();
         }
@@ -553,7 +690,7 @@ impl Element {
     pub fn is_mounted(&self) -> bool {
         match self {
             Self::View(v) => v.is_mounted(),
-            Self::Render(r) => r.is_mounted(),
+            Self::Render(r) => r.is_attached(), // RenderElement uses is_attached()
         }
     }
 
@@ -602,7 +739,7 @@ impl Element {
     pub fn clear_children(&mut self) {
         match self {
             Self::View(v) => v.clear_children(),
-            Self::Render(r) => r.clear_children(),
+            Self::Render(r) => r.children_mut().clear(), // RenderElement doesn't have clear_children()
         }
     }
 
@@ -611,7 +748,12 @@ impl Element {
     pub fn set_children(&mut self, children: impl IntoIterator<Item = ElementId>) {
         match self {
             Self::View(v) => v.set_children(children),
-            Self::Render(r) => r.set_children(children),
+            Self::Render(r) => {
+                // RenderElement doesn't have set_children(), use children_mut()
+                let children_vec = r.children_mut();
+                children_vec.clear();
+                children_vec.extend(children);
+            }
         }
     }
 
@@ -631,7 +773,7 @@ impl Element {
     pub fn first_child(&self) -> Option<ElementId> {
         match self {
             Self::View(v) => v.first_child(),
-            Self::Render(r) => r.first_child(),
+            Self::Render(r) => r.children().first().copied(),
         }
     }
 
@@ -665,25 +807,8 @@ impl Element {
         }
     }
 
-    /// Access the internal ElementBase.
-    #[inline]
-    #[must_use]
-    pub fn base(&self) -> &ElementBase {
-        match self {
-            Self::View(v) => v.base(),
-            Self::Render(r) => r.base(),
-        }
-    }
-
-    /// Access the internal ElementBase mutably.
-    #[inline]
-    #[must_use]
-    pub fn base_mut(&mut self) -> &mut ElementBase {
-        match self {
-            Self::View(v) => v.base_mut(),
-            Self::Render(r) => r.base_mut(),
-        }
-    }
+    // Note: ElementBase accessors removed - RenderElement manages its own state internally.
+    // Use Element's delegate methods (parent(), depth(), lifecycle(), etc.) instead.
 
     // ========== Compatibility Stubs ==========
 
@@ -735,6 +860,76 @@ impl Element {
 }
 
 // ============================================================================
+// BUILD CONTEXT IMPLEMENTATION
+// ============================================================================
+
+use flui_view::context::BuildContext;
+use std::any::TypeId;
+use std::sync::Arc;
+
+/// Implements BuildContext for Element.
+///
+/// This provides a basic BuildContext implementation where:
+/// - Element identity methods work fully (element_id, depth, parent_id)
+/// - mark_dirty() works via Element's dirty flag
+/// - Tree-walking methods (visit_ancestors, depend_on_raw) return empty results
+///   because Element doesn't have direct tree access
+///
+/// For full BuildContext functionality with tree access, use PipelineBuildContext
+/// from the flui-pipeline crate.
+impl BuildContext for Element {
+    fn element_id(&self) -> ElementId {
+        self.id().expect("Element not mounted - no ID assigned")
+    }
+
+    fn depth(&self) -> usize {
+        self.depth()
+    }
+
+    fn parent_id(&self) -> Option<ElementId> {
+        self.parent()
+    }
+
+    fn mark_dirty(&self) {
+        // Note: Element.mark_dirty() requires &mut self, but BuildContext requires &self.
+        // This is a limitation - we can only read the dirty state, not set it through trait.
+        // Real dirty marking should go through the mutable Element reference or BuildOwner.
+        tracing::trace!(
+            "BuildContext::mark_dirty called on Element - use mutable access for actual marking"
+        );
+    }
+
+    fn schedule_rebuild(&self, element_id: ElementId) {
+        // Element alone doesn't have access to BuildOwner or dirty set.
+        // This needs to be handled by a higher-level context (PipelineBuildContext).
+        tracing::trace!(
+            "BuildContext::schedule_rebuild({:?}) - requires BuildOwner",
+            element_id
+        );
+    }
+
+    fn depend_on_raw(&self, _type_id: TypeId) -> Option<Arc<dyn Any + Send + Sync>> {
+        // Element doesn't have tree access to walk ancestors and find providers.
+        // This needs PipelineBuildContext which has tree access.
+        None
+    }
+
+    fn find_ancestor_widget(&self, _type_id: TypeId) -> Option<Arc<dyn Any + Send + Sync>> {
+        // Element doesn't have tree access.
+        None
+    }
+
+    fn visit_ancestors(&self, _visitor: &mut dyn FnMut(ElementId) -> bool) {
+        // Element only knows parent_id, not the actual parent Element.
+        // Full ancestor walking requires tree access (PipelineBuildContext).
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+// ============================================================================
 // TESTS
 // ============================================================================
 
@@ -772,9 +967,18 @@ mod tests {
         value: i32,
     }
 
-    #[derive(Debug)]
-    struct TestRenderState {
-        size: (f32, f32),
+    impl RenderObject for TestRenderObject {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn as_any_mut(&mut self) -> &mut dyn Any {
+            self
+        }
+
+        fn debug_name(&self) -> &'static str {
+            "TestRenderObject"
+        }
     }
 
     #[test]
@@ -790,13 +994,7 @@ mod tests {
 
     #[test]
     fn test_element_render_variant() {
-        let element = Element::render(
-            TestRenderObject { value: 42 },
-            TestRenderState {
-                size: (100.0, 50.0),
-            },
-            ViewMode::RenderBox,
-        );
+        let element = Element::render(TestRenderObject { value: 42 }, ProtocolId::Box);
 
         assert!(!element.is_view_element());
         assert!(element.is_render_element());
@@ -818,11 +1016,7 @@ mod tests {
         assert!(view.as_view().is_some());
         assert!(view.as_render().is_none());
 
-        let render = Element::render(
-            TestRenderObject { value: 1 },
-            TestRenderState { size: (10.0, 10.0) },
-            ViewMode::RenderBox,
-        );
+        let render = Element::render(TestRenderObject { value: 1 }, ProtocolId::Box);
         assert!(render.as_view().is_none());
         assert!(render.as_render().is_some());
     }

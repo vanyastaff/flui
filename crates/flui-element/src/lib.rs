@@ -54,7 +54,7 @@
 //!
 //! ```rust
 //! use flui_element::{Element, ViewElement, RenderElement, ElementTree, ElementLifecycle};
-//! use flui_foundation::{ElementId, ViewMode};
+//! use flui_foundation::ElementId;
 //!
 //! // Create a tree
 //! let mut tree = ElementTree::new();
@@ -69,7 +69,7 @@
 //!
 //! // Set up parent-child relationship
 //! if let Some(child) = tree.get_mut(child_id) {
-//!     child.base_mut().set_parent(Some(root_id));
+//!     child.set_parent(Some(root_id));
 //! }
 //! if let Some(root) = tree.get_mut(root_id) {
 //!     root.add_child(child_id);
@@ -127,8 +127,11 @@ pub mod tree;
 // RE-EXPORTS FROM flui-view
 // ============================================================================
 
-// ViewObject and BuildContext are now defined in flui-view
-pub use flui_view::{BuildContext, ViewObject};
+// ViewObject from flui-view
+pub use flui_view::ViewObject;
+
+// BuildContext and BuildContextExt from flui-view
+pub use flui_view::context::{BuildContext, BuildContextExt};
 
 // IntoView for convenience
 pub use flui_view::IntoView;
@@ -140,8 +143,11 @@ pub use flui_view::IntoView;
 // Element types - the new architecture
 pub use element::{
     AtomicElementFlags, Element, ElementBase, ElementFlags, ElementLifecycle, RenderElement,
-    RenderObjectTrait, ViewElement,
+    RenderObject,
 };
+
+// ViewElement types (re-exported from flui-view)
+pub use element::{AtomicViewFlags, ViewElement, ViewFlags, ViewLifecycle};
 
 // Tree types
 pub use tree::ElementTree;
@@ -183,5 +189,6 @@ pub mod prelude {
     pub use flui_tree::{RenderTreeAccess, TreeNav, TreeRead, TreeWrite};
 
     // From flui-view
-    pub use flui_view::{BuildContext, ViewObject};
+    pub use flui_view::context::{BuildContext, BuildContextExt};
+    pub use flui_view::ViewObject;
 }

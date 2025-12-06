@@ -1,166 +1,191 @@
-//! `BuildContext` - Abstract context trait for view building
+//! BuildContext trait - Gateway to framework services
 //!
-//! This module defines the `BuildContext` trait - an abstraction that allows
-//! views to access framework services during build without coupling to
-//! concrete implementation.
+//! Like Flutter's BuildContext, this provides access to:
+//! - Element tree navigation
+//! - Inherited data lookup (dependency injection)
+//! - Framework services (Theme, MediaQuery, etc.)
 //!
 //! # Architecture
 //!
 //! ```text
-//! flui-view (this crate)
-//! ├── BuildContext trait (abstraction)
-//! └── ViewObject uses &dyn BuildContext
-//!
-//!          ↓ depends on
-//!
-//! flui-pipeline
-//! └── PipelineBuildContext: BuildContext (concrete impl)
+//! BuildContext (trait) - defined here in flui-view
+//!     │
+//!     └── Element (impl BuildContext) - in flui-element
 //! ```
 //!
-//! This design avoids circular dependencies:
-//! - flui-view defines the trait
-//! - flui-pipeline implements it
-//! - No cycle!
+//! This follows Flutter's pattern where `BuildContext` is an abstract
+//! interface and `Element` is the concrete implementation.
 
+use flui_foundation::ElementId;
 use std::any::{Any, TypeId};
 use std::sync::Arc;
 
-use flui_foundation::ElementId;
-
 // ============================================================================
-// BuildContext TRAIT
+// BUILD CONTEXT TRAIT
 // ============================================================================
 
-/// `BuildContext` - Abstract context for view building
+/// BuildContext - Gateway to framework services
 ///
-/// Passed to `build()` methods to provide:
-/// - Current element's position in tree
-/// - Methods to look up inherited data
-/// - Ability to schedule rebuilds
+/// This is the primary interface through which views interact with the
+/// framework. It provides access to:
 ///
-/// # Implementors
+/// - **Element identity**: `element_id()`, `depth()`, `parent_id()`
+/// - **Dependency injection**: `depend_on<T>()` for inherited data
+/// - **Dirty tracking**: `mark_dirty()` to trigger rebuilds
+/// - **Tree walking**: `visit_ancestors()` for advanced use cases
 ///
-/// The concrete implementation `PipelineBuildContext` lives in `flui-pipeline`.
+/// # Design Philosophy
 ///
-/// # Example
+/// BuildContext is the ONLY interface views need to interact with the
+/// framework. All services are accessed through it using the Flutter-style
+/// `.of(context)` pattern:
 ///
 /// ```rust,ignore
-/// impl StatelessView for MyView {
-///     fn build(self, ctx: &dyn BuildContext) -> impl IntoView {
-///         let id = ctx.element_id();
-///         // ...
-///     }
+/// fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+///     let theme = ctx.depend_on::<ThemeData>()
+///         .expect("ThemeProvider not found");
+///
+///     Button::new("Click").color(theme.primary_color)
 /// }
 /// ```
 ///
-/// # Dyn Compatibility
+/// # Thread Safety
 ///
-/// This trait is dyn-compatible. All methods use concrete types or `&dyn`
-/// to ensure it can be used as `&dyn BuildContext`.
+/// BuildContext must be `Send + Sync` to enable concurrent access from
+/// different parts of the framework.
+///
+/// # Flutter Equivalent
+///
+/// This is equivalent to Flutter's `BuildContext` abstract class, which
+/// is implemented by `Element`.
 pub trait BuildContext: Send + Sync {
-    /// Get the current element's ID being built.
+    // ========== ELEMENT IDENTITY ==========
+
+    /// Get the current element's unique identifier.
+    ///
+    /// **Flutter equivalent:** `context.widget` (indirectly via element)
     fn element_id(&self) -> ElementId;
 
-    /// Get the parent element's ID, if any.
-    fn parent_id(&self) -> Option<ElementId>;
-
-    /// Get depth of current element in tree (0 = root).
+    /// Get the element's depth in the tree (0 = root).
+    ///
+    /// Useful for debugging and understanding tree structure.
     fn depth(&self) -> usize;
 
-    /// Mark current element as needing rebuild.
+    /// Get the parent element's ID.
     ///
-    /// Called by signals/state when value changes.
-    fn mark_dirty(&self);
+    /// Returns `None` if this is the root element.
+    fn parent_id(&self) -> Option<ElementId>;
 
-    /// Schedule a rebuild for a specific element.
-    fn schedule_rebuild(&self, element_id: ElementId);
+    // ========== DEPENDENCY INJECTION ==========
 
-    /// Look up inherited value by `TypeId` (low-level API).
+    /// Look up inherited data by TypeId (low-level API).
     ///
-    /// Walks up the tree to find the nearest provider element that provides
-    /// a value of the given type. Registers a dependency so that when the
-    /// provider updates, this element will be rebuilt.
+    /// This is the low-level method that powers the type-safe `depend_on<T>()`
+    /// helper. Most code should use `depend_on<T>()` instead.
     ///
-    /// Returns `Arc<dyn Any>` that can be downcast to the actual type.
+    /// When called, this method:
+    /// 1. Walks up the element tree to find a Provider<T>
+    /// 2. Registers a dependency so changes trigger rebuilds
+    /// 3. Returns `Arc<dyn Any>` that can be downcast to T
     ///
-    /// # Note
-    ///
-    /// Use the type-safe `depend_on<T>()` extension method instead of calling
-    /// this directly.
+    /// **Flutter equivalent:** `dependOnInheritedWidgetOfExactType<T>()`
     fn depend_on_raw(&self, type_id: TypeId) -> Option<Arc<dyn Any + Send + Sync>>;
 
-    /// Downcast to concrete type for advanced usage.
+    /// Find ancestor widget without registering dependency.
+    ///
+    /// Similar to `depend_on_raw`, but does NOT register a dependency.
+    /// Use when you need to read data but don't want rebuilds when it changes.
+    ///
+    /// **Flutter equivalent:** `findAncestorWidgetOfExactType<T>()`
+    fn find_ancestor_widget(&self, type_id: TypeId) -> Option<Arc<dyn Any + Send + Sync>>;
+
+    // ========== DIRTY TRACKING ==========
+
+    /// Mark the current element as needing rebuild.
+    ///
+    /// Call this when your view's state changes and you need to rebuild.
+    /// The rebuild will happen in the next frame.
+    ///
+    /// **Flutter equivalent:** `setState()` calls this internally
+    fn mark_dirty(&self);
+
+    /// Schedule rebuild for a specific element.
+    ///
+    /// Less common than `mark_dirty()`, but useful when you need to
+    /// trigger rebuilds of other elements.
+    fn schedule_rebuild(&self, element_id: ElementId);
+
+    // ========== TREE WALKING ==========
+
+    /// Visit all ancestors from parent to root.
+    ///
+    /// The visitor function is called for each ancestor, starting with the
+    /// immediate parent and moving up to the root. If the visitor returns
+    /// `false`, iteration stops.
+    ///
+    /// **Flutter equivalent:** `visitAncestorElements()`
+    fn visit_ancestors(&self, visitor: &mut dyn FnMut(ElementId) -> bool);
+
+    // ========== DOWNCASTING ==========
+
+    /// Downcast to concrete BuildContext implementation.
+    ///
+    /// Useful for advanced use cases where you need access to
+    /// implementation-specific methods.
     fn as_any(&self) -> &dyn Any;
 }
 
 // ============================================================================
-// HELPER METHODS
+// BUILD CONTEXT EXTENSION TRAIT
 // ============================================================================
 
-impl dyn BuildContext {
-    /// Try to downcast to a specific `BuildContext` implementation.
-    pub fn downcast_ref<T: BuildContext + 'static>(&self) -> Option<&T> {
-        self.as_any().downcast_ref::<T>()
-    }
-
-    /// Look up inherited value from nearest provider (type-safe API).
+/// Extension methods for BuildContext.
+///
+/// Provides type-safe, ergonomic wrappers around the low-level
+/// `depend_on_raw()` and `find_ancestor_widget()` methods.
+pub trait BuildContextExt: BuildContext {
+    /// Type-safe dependency lookup (registers dependency).
     ///
-    /// Walks up the element tree to find the nearest provider element that
-    /// provides a value of type `T`. Registers a dependency relationship so
-    /// that when the provider's value changes, the current element will be
-    /// automatically rebuilt.
+    /// This is the primary way to access inherited data:
+    /// 1. Looks up the nearest Provider<T> in the ancestor chain
+    /// 2. Registers a dependency so changes trigger rebuilds
+    /// 3. Returns `Arc<T>` with proper type
     ///
-    /// # Type Parameters
-    ///
-    /// - `T`: The type of value to look up. Must be `Send + Sync + 'static`.
-    ///
-    /// # Returns
-    ///
-    /// - `Some(Arc<T>)` if a provider is found
-    /// - `None` if no provider of type `T` exists in the ancestor chain
+    /// **Flutter equivalent:** `context.dependOnInheritedWidgetOfExactType<T>()`
     ///
     /// # Example
     ///
     /// ```rust,ignore
-    /// use std::sync::Arc;
-    ///
-    /// struct Theme {
-    ///     primary_color: Color,
-    /// }
-    ///
-    /// impl StatelessView for ThemedButton {
-    ///     fn build(self, ctx: &dyn BuildContext) -> impl IntoView {
-    ///         // Look up theme from provider
-    ///         let theme = ctx.depend_on::<Theme>()
-    ///             .expect("Theme provider not found");
-    ///
-    ///         Button::new("Click")
-    ///             .color(theme.primary_color)
-    ///     }
-    /// }
+    /// let theme = ctx.depend_on::<ThemeData>()
+    ///     .expect("ThemeProvider not found");
+    /// let color = theme.primary_color;
     /// ```
-    ///
-    /// # Architecture
-    ///
-    /// This method:
-    /// 1. Walks up the parent chain from current element
-    /// 2. Checks each ancestor to see if it's a `Provider<T>`
-    /// 3. When found, registers current element as dependent
-    /// 4. Returns `Arc<T>` to the provided value
-    ///
-    /// # Performance
-    ///
-    /// Tree walking is O(depth), but results can be cached in the element.
-    /// Dependency registration is O(1).
-    pub fn depend_on<T: Send + Sync + 'static>(&self) -> Option<Arc<T>> {
+    fn depend_on<T: Send + Sync + 'static>(&self) -> Option<Arc<T>> {
         let type_id = TypeId::of::<T>();
         let any_arc = self.depend_on_raw(type_id)?;
-
-        // Downcast Arc<dyn Any> to Arc<T>
-        // This is safe because depend_on_raw ensures type matches
         any_arc.downcast::<T>().ok()
     }
+
+    /// Type-safe ancestor lookup (no dependency).
+    ///
+    /// Like `depend_on<T>()`, but does NOT register a dependency.
+    /// Use when you need to read data but don't want rebuilds.
+    ///
+    /// **Flutter equivalent:** `context.findAncestorWidgetOfExactType<T>()`
+    fn find_ancestor<T: Send + Sync + 'static>(&self) -> Option<Arc<T>> {
+        let type_id = TypeId::of::<T>();
+        let any_arc = self.find_ancestor_widget(type_id)?;
+        any_arc.downcast::<T>().ok()
+    }
+
+    /// Try to downcast to specific BuildContext implementation.
+    fn downcast_ref<T: BuildContext + 'static>(&self) -> Option<&T> {
+        self.as_any().downcast_ref::<T>()
+    }
 }
+
+// Blanket implementation: all BuildContext implementations get these helpers
+impl<T: BuildContext + ?Sized> BuildContextExt for T {}
 
 // ============================================================================
 // MOCK FOR TESTING
@@ -224,8 +249,15 @@ impl BuildContext for MockBuildContext {
     }
 
     fn depend_on_raw(&self, _type_id: TypeId) -> Option<Arc<dyn Any + Send + Sync>> {
-        // Mock: no providers
         None
+    }
+
+    fn find_ancestor_widget(&self, _type_id: TypeId) -> Option<Arc<dyn Any + Send + Sync>> {
+        None
+    }
+
+    fn visit_ancestors(&self, _visitor: &mut dyn FnMut(ElementId) -> bool) {
+        // Mock: no ancestors
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -270,5 +302,12 @@ mod tests {
         let downcasted = ctx.downcast_ref::<MockBuildContext>();
         assert!(downcasted.is_some());
         assert_eq!(downcasted.unwrap().element_id, id);
+    }
+
+    #[test]
+    fn test_depend_on_returns_none() {
+        let ctx = MockBuildContext::new(ElementId::new(1));
+        let result = ctx.depend_on::<String>();
+        assert!(result.is_none());
     }
 }
