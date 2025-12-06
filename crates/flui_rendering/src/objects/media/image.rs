@@ -153,7 +153,7 @@ impl RenderImage {
 impl RenderObject for RenderImage {}
 
 impl RenderBox<Leaf> for RenderImage {
-    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Leaf>) -> RenderResult<Size> {
+    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Leaf>) -> RenderResult<Size> {
         let constraints = &ctx.constraints;
 
         // If we have specific size constraints, use them

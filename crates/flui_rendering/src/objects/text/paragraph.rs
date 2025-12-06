@@ -181,7 +181,7 @@ impl RenderParagraph {
 impl RenderObject for RenderParagraph {}
 
 impl RenderBox<Leaf> for RenderParagraph {
-    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Leaf>) -> RenderResult<Size> {
+    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Leaf>) -> RenderResult<Size> {
         let constraints = ctx.constraints;
         tracing::trace!(
             text = %self.data.text,

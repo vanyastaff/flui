@@ -15,7 +15,7 @@ pub struct RenderEmpty;
 impl RenderObject for RenderEmpty {}
 
 impl RenderBox<Leaf> for RenderEmpty {
-    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Leaf>) -> RenderResult<Size> {
+    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Leaf>) -> RenderResult<Size> {
         // Take minimum space
         let constraints = &ctx.constraints;
         Ok(flui_types::Size::new(

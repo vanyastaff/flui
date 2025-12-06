@@ -118,7 +118,7 @@ impl Default for RenderPlaceholder {
 impl RenderObject for RenderPlaceholder {}
 
 impl RenderBox<Leaf> for RenderPlaceholder {
-    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Leaf>) -> RenderResult<Size> {
+    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Leaf>) -> RenderResult<Size> {
         let constraints = ctx.constraints;
 
         // Use fallback size if unconstrained, otherwise use constraints

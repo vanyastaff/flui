@@ -140,7 +140,7 @@ impl Default for RenderColoredBox {
 impl RenderObject for RenderColoredBox {}
 
 impl RenderBox<Leaf> for RenderColoredBox {
-    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Leaf>) -> RenderResult<Size> {
+    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Leaf>) -> RenderResult<Size> {
         let constraints = ctx.constraints;
         // Leaf renders have no children - fill available space
         let size = Size::new(constraints.max_width, constraints.max_height);

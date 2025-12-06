@@ -231,7 +231,7 @@ impl RenderTexture {
 impl RenderObject for RenderTexture {}
 
 impl RenderBox<Leaf> for RenderTexture {
-    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Leaf>) -> RenderResult<Size> {
+    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Leaf>) -> RenderResult<Size> {
         let constraints = ctx.constraints;
 
         // Textures typically take up all available space
