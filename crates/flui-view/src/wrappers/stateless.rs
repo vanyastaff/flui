@@ -31,6 +31,7 @@ impl<V: StatelessView> std::fmt::Debug for StatelessViewWrapper<V> {
 }
 
 impl<V: StatelessView> ViewObject for StatelessViewWrapper<V> {
+    #[inline]
     fn mode(&self) -> ViewMode {
         ViewMode::Stateless
     }
@@ -44,14 +45,17 @@ impl<V: StatelessView> ViewObject for StatelessViewWrapper<V> {
         }
     }
 
+    #[inline]
     fn debug_name(&self) -> &'static str {
         std::any::type_name::<V>()
     }
 
+    #[inline]
     fn as_any(&self) -> &dyn Any {
         self
     }
 
+    #[inline]
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
