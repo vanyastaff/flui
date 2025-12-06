@@ -1,35 +1,190 @@
-//! RenderSliverPrototypeExtentList - List with prototype-based item sizing
+//! RenderSliverPrototypeExtentList - Lazy list with prototype-measured extent
+//!
+//! List where all items assumed to have same size as measured prototype. Measures ONE prototype
+//! item, caches its extent, uses that for ALL children. Combines benefits of FixedExtentList
+//! (O(1) calculations) with flexibility (actual measurement). More accurate than hardcoded extent,
+//! faster than measuring every item. Perfect for lists with consistent but unknown item sizes.
+//!
+//! # Flutter Equivalence
+//!
+//! | FLUI | Flutter |
+//! |------|---------|
+//! | `RenderSliverPrototypeExtentList` | `RenderSliverPrototypeExtentList` from `package:flutter/src/rendering/sliver_prototype_extent_list.dart` |
+//! | `prototype_extent` | Cached extent from prototype measurement |
+//! | `visible_range()` | Calculate first/last visible indices (O(1)) |
+//! | Prototype measurement | Measure once, use for all children |
+//!
+//! # Layout Protocol (Intended)
+//!
+//! 1. **Measure prototype** (NOT IMPLEMENTED)
+//!    - Layout first child or designated prototype
+//!    - Extract main axis extent
+//!    - Cache as prototype_extent
+//!
+//! 2. **Calculate visible range** (line 70-92 WORKS)
+//!    - first_index = floor(scroll_offset / extent)
+//!    - last_index = ceil((scroll_offset + remaining) / extent)
+//!    - O(1) calculation using cached extent
+//!
+//! 3. **Layout visible children** (NOT IMPLEMENTED)
+//!    - For each child in visible range
+//!    - Position = index * prototype_extent
+//!    - Layout child (assumed to match prototype extent)
+//!
+//! 4. **Return geometry** (line 95-140 WORKS)
+//!    - scroll_extent = child_count * prototype_extent
+//!    - paint_extent = visible portion
+//!
+//! # Paint Protocol (Intended)
+//!
+//! 1. **Paint visible children** (NOT IMPLEMENTED - line 187-196 TODO)
+//!    - For each child in visible range
+//!    - Offset = index * prototype_extent
+//!    - Paint child at calculated position
+//!
+//! # Performance
+//!
+//! - **Prototype measurement**: O(1) - measure once at startup
+//! - **Visible range**: O(1) - simple division/multiplication
+//! - **Layout**: O(v) where v = visible children (intended)
+//! - **Paint**: O(v) - only visible children (intended)
+//! - **Memory**: 16 bytes (Option<f32> + SliverGeometry)
+//!
+//! # Use Cases
+//!
+//! - **Uniform unknown sizes**: Cards with consistent but dynamic content
+//! - **Responsive lists**: Item size depends on screen width
+//! - **Themed lists**: Item size depends on theme settings
+//! - **Better than hardcoding**: Actual measurement vs magic numbers
+//! - **Faster than variable**: O(1) vs O(n) for full measurement
+//!
+//! # vs FixedExtentList vs Variable
+//!
+//! ```text
+//! FixedExtentList:
+//!   extent = 50.0 (hardcoded) ← FAST but INFLEXIBLE
+//!   Pro: No measurement needed
+//!   Con: Breaks with theme/screen changes
+//!
+//! PrototypeExtentList:
+//!   extent = measure(prototype) ← FAST and FLEXIBLE
+//!   Pro: Adapts to actual content
+//!   Con: Requires prototype measurement
+//!
+//! Variable extent list:
+//!   extent[i] = measure(child[i]) ← SLOW but ACCURATE
+//!   Pro: Each child can differ
+//!   Con: Must measure all children
+//! ```
+//!
+//! # ⚠️ CRITICAL IMPLEMENTATION ISSUES
+//!
+//! This implementation has **MAJOR INCOMPLETE FUNCTIONALITY**:
+//!
+//! 1. **❌ Prototype NEVER measured** (line 153-154 TODO)
+//!    - TODO comment says "Measure prototype if not yet measured"
+//!    - Currently uses fallback 50.0 (line 157)
+//!    - Defeats purpose of prototype approach!
+//!
+//! 2. **❌ Children NEVER laid out** (line 154 TODO)
+//!    - TODO comment says "Layout visible children"
+//!    - No layout_child() calls anywhere
+//!    - Children sizes undefined
+//!
+//! 3. **❌ Paint NOT IMPLEMENTED** (line 187-196)
+//!    - Returns empty Canvas
+//!    - TODO comment on line 193
+//!    - Children never painted
+//!
+//! 4. **✅ Geometry calculation CORRECT** (line 95-140, 150-185)
+//!    - Uses cached prototype_extent correctly
+//!    - Fallback to 50.0 when not measured
+//!    - Accurate scroll_extent and paint_extent
+//!
+//! 5. **✅ visible_range() EXCELLENT** (line 70-92)
+//!    - Correct O(1) calculation
+//!    - Proper floor/ceil logic
+//!    - Bounds checking for edge cases
+//!
+//! **This RenderObject is BROKEN - missing prototype measurement and child layout/paint!**
+//!
+//! # Comparison with Related Objects
+//!
+//! - **vs SliverFixedExtentList**: Prototype measures, Fixed uses hardcoded value
+//! - **vs SliverList**: Prototype O(1) extent, List measures each child
+//! - **vs SliverGrid**: Prototype is 1D list, Grid is 2D
+//! - **vs ListView (box)**: PrototypeExtentList is sliver, ListView is widget
+//!
+//! # Examples
+//!
+//! ```rust,ignore
+//! use flui_rendering::RenderSliverPrototypeExtentList;
+//!
+//! // Create list (prototype will be measured)
+//! let mut list = RenderSliverPrototypeExtentList::new();
+//! // WARNING: prototype never measured - uses fallback 50.0!
+//!
+//! // After prototype measurement (if implemented)
+//! list.set_prototype_extent(72.5);  // Measured from prototype
+//! // Now all children assume 72.5px height
+//!
+//! // Check visible range
+//! let (first, last) = list.visible_range(&constraints, 1000);
+//! // With scroll_offset=500, extent=50: first=10, last=22 (O(1)!)
+//! ```
 
 use flui_core::element::ElementTree;
 use crate::core::{RuntimeArity, SliverSliverBoxPaintCtx, LegacySliverRender};
 use flui_painting::Canvas;
 use flui_types::{SliverConstraints, SliverGeometry};
 
-/// RenderObject for lists where item size is determined by a prototype
+/// RenderObject for lazy-loading list with prototype-measured extent.
 ///
-/// Similar to RenderSliverFixedExtentList, but instead of providing a fixed
-/// extent value, you provide a prototype item. All items are assumed to have
-/// the same extent as this prototype after it's laid out.
+/// Measures ONE prototype item, assumes ALL children have same extent. Combines O(1) calculations
+/// of FixedExtentList with actual measurement flexibility. More accurate than hardcoded extent,
+/// faster than measuring every child. Perfect for uniform-sized lists with unknown dimensions.
+///
+/// # Arity
+///
+/// `RuntimeArity::Variable` - Can have multiple children (0+).
+///
+/// # Protocol
+///
+/// Sliver protocol - Uses `SliverConstraints` and returns `SliverGeometry`.
+///
+/// # Pattern
+///
+/// **Prototype-Based Uniform List** - Measure once (prototype), apply to all children,
+/// O(1) visible range calculation, lazy loading with viewport culling.
 ///
 /// # Use Cases
 ///
-/// - Lists where items have consistent but unknown size
-/// - Better than measuring every item individually
-/// - More flexible than hardcoding fixed extent
+/// - **Responsive lists**: Item size depends on screen width
+/// - **Themed lists**: Size depends on theme settings
+/// - **Dynamic content**: Uniform cards with variable content
+/// - **Better than hardcoding**: Actual measurement adapts to changes
+/// - **Faster than variable**: O(1) extent vs measuring each child
 ///
-/// # Performance
+/// # Flutter Compliance
 ///
-/// - O(1) layout after prototype measurement (vs O(n) for variable sizes)
-/// - Prototype measured once, then cached
-/// - Instant scroll position calculations
+/// **BROKEN IMPLEMENTATION**:
+/// - ❌ Prototype never measured (uses fallback 50.0)
+/// - ❌ Children never laid out (defeats lazy loading purpose)
+/// - ❌ Paint not implemented (empty Canvas)
+/// - ✅ Geometry calculation correct (with fallback extent)
+/// - ✅ visible_range() excellent (O(1) calculation)
 ///
 /// # Example
 ///
 /// ```rust,ignore
 /// use flui_rendering::RenderSliverPrototypeExtentList;
 ///
-/// // Prototype will be measured, all items use that extent
-/// let list = RenderSliverPrototypeExtentList::new();
+/// // Create list
+/// let mut list = RenderSliverPrototypeExtentList::new();
+/// // WARNING: prototype not measured - uses 50.0 fallback!
+///
+/// // Set extent manually (if measured elsewhere)
+/// list.set_prototype_extent(72.5);
 /// ```
 #[derive(Debug)]
 pub struct RenderSliverPrototypeExtentList {
