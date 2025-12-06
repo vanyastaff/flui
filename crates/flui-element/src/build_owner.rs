@@ -32,8 +32,21 @@
 //! | `BuildOwner.lockState()` | `BuildOwner::lock_state()` |
 //! | `BuildOwner._dirtyElements` | `BuildPipeline::dirty_elements` (in flui_core) |
 //!
-//! Note: In Flutter, `BuildOwner` owns the dirty list. In FLUI, dirty tracking
-//! is in `BuildPipeline` for better separation and threading flexibility.
+//! **Architectural Decision:** In Flutter, `BuildOwner` owns the dirty list and manages
+//! widget rebuilds separately from `PipelineOwner` (rendering). FLUI takes a different,
+//! more unified approach:
+//!
+//! - **BuildOwner** (this crate): Lifecycle coordination only (build_scope, lock_state)
+//! - **PipelineOwner** (flui_core): Unified Build + Layout + Paint pipeline
+//!   - Contains BuildPipeline with dirty_elements tracking
+//!   - Coordinates all three phases in one place
+//!
+//! This unified pipeline design is intentional and offers advantages for Rust:
+//! 1. **Cohesion**: Build→Layout→Paint is one atomic transaction
+//! 2. **Performance**: Easier cross-phase optimization
+//! 3. **Simplicity**: Single coordinator API vs coordinating two owners
+//! 4. **Type Safety**: Phase ordering guaranteed at compile time
+//! 5. **Ownership**: Avoids complex data sharing between multiple owners
 //!
 //! # Example
 //!
@@ -71,11 +84,29 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 ///
 /// # Design Notes
 ///
-/// Unlike Flutter's `BuildOwner`, FLUI's version does NOT own the dirty elements list.
-/// This separation allows:
-/// - Better Single Responsibility (BuildOwner = lifecycle, BuildPipeline = dirty tracking)
-/// - More flexible threading models
-/// - Easier testing
+/// ## Unified Pipeline Architecture
+///
+/// FLUI intentionally differs from Flutter's split BuildOwner/PipelineOwner design.
+/// Instead of separating widget rebuilds (BuildOwner) from rendering (PipelineOwner),
+/// FLUI unifies all three phases (Build + Layout + Paint) in a single `PipelineOwner`.
+///
+/// **This `BuildOwner` serves a focused role:**
+/// - Lifecycle coordination: `build_scope()`, `lock_state()`
+/// - State flags: `is_building()`, `is_locked()`
+/// - Build callbacks: `on_build_start`, `on_build_end`
+///
+/// **It does NOT:**
+/// - Own the dirty elements list (that's in `BuildPipeline` within `PipelineOwner`)
+/// - Manage layout or paint (those phases are also in `PipelineOwner`)
+/// - Coordinate cross-phase dependencies (handled by unified `PipelineOwner`)
+///
+/// This unified approach is **more suitable for Rust** because:
+/// - **Atomicity**: Build→Layout→Paint as single transaction with clear ownership
+/// - **Performance**: Cross-phase optimization without data synchronization overhead
+/// - **Type Safety**: Compile-time phase ordering guarantees
+/// - **Simplicity**: One coordinator API instead of coordinating two separate owners
+///
+/// See `flui_core::pipeline::PipelineOwner` for the unified pipeline implementation.
 pub struct BuildOwner {
     /// Whether currently in a build scope
     in_build_scope: AtomicBool,

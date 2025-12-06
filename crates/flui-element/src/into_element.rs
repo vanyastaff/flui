@@ -169,7 +169,9 @@ mod tests {
                 assert!(view_elem.has_view_object());
                 assert_eq!(view_elem.view_mode(), ViewMode::Stateless);
             }
-            _ => panic!("Expected View element"),
+            Element::Render(_) => {
+                panic!("Expected View element, got Render element")
+            }
         }
     }
 
@@ -185,11 +187,9 @@ mod tests {
         let elements = vec![Element::empty(), Element::empty()];
         let element = elements.into_element();
 
-        match element {
-            Element::View(view_elem) => {
-                assert!(view_elem.has_pending_children());
-            }
-            _ => panic!("Expected View element"),
-        }
+        let Element::View(view_elem) = element else {
+            panic!("Expected View element, got Render element")
+        };
+        assert!(view_elem.has_pending_children());
     }
 }

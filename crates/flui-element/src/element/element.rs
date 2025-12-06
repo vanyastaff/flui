@@ -908,6 +908,24 @@ impl BuildContext for Element {
         );
     }
 
+    fn create_rebuild_callback(&self) -> Box<dyn Fn() + Send + Sync> {
+        // Intentional stub: Element doesn't have access to dirty set or scheduling.
+        // This is by design - Element is a data holder, not a scheduler.
+        //
+        // Real implementation is in PipelineBuildContext which has access to
+        // the dirty set and can properly schedule rebuilds.
+        //
+        // This no-op callback is safe because:
+        // - Element is rarely used directly as BuildContext in production
+        // - PipelineBuildContext is the primary BuildContext implementation
+        // - Tests use MockBuildContext which also has a no-op implementation
+        tracing::trace!(
+            "BuildContext::create_rebuild_callback() called on Element - \
+             this is a stub. Use PipelineBuildContext for real rebuild scheduling."
+        );
+        Box::new(|| {})
+    }
+
     fn depend_on_raw(&self, _type_id: TypeId) -> Option<Arc<dyn Any + Send + Sync>> {
         // Element doesn't have tree access to walk ancestors and find providers.
         // This needs PipelineBuildContext which has tree access.

@@ -56,10 +56,13 @@ use crate::{BuildContext, ViewMode};
 pub trait ViewObject: Send + Sync + 'static {
     // ========== CORE METHODS (required) ==========
 
-    /// Get the view mode (Stateless, Stateful, `RenderBox`, etc.)
+    /// Get the view mode (Stateless, Stateful, `RenderBox`, etc.).
+    ///
+    /// This method is called frequently for view categorization.
+    /// Implementations should return a constant value efficiently.
     fn mode(&self) -> ViewMode;
 
-    /// Build this view, producing child view object(s)
+    /// Build this view, producing child view object(s).
     ///
     /// Called during the build phase to create/update children.
     ///
@@ -67,6 +70,11 @@ pub trait ViewObject: Send + Sync + 'static {
     ///
     /// For component views: Returns the child view object (wrapped in Option)
     /// For render views: Returns None (render views don't have logical children built this way)
+    ///
+    /// # Performance
+    ///
+    /// This method may be called frequently (every frame during animations).
+    /// Keep implementations fast and avoid side effects.
     ///
     /// # Note
     ///

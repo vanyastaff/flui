@@ -106,11 +106,21 @@ use crate::{BuildContext, IntoView};
 
 /// `StatefulView` - A view with internal mutable state
 ///
+/// This is equivalent to Flutter's `StatefulWidget` + `State<T>` pattern.
+///
 /// Use `StatefulView` when your view:
 /// - Needs to maintain state that persists across rebuilds
 /// - Has interactive behavior (buttons, forms, etc.)
 /// - Needs to trigger rebuilds via state changes
 /// - Needs to manage resources (streams, controllers, etc.)
+///
+/// # Performance Tips
+///
+/// - Prefer `Signal<T>` over manual `mark_dirty()` for fine-grained updates
+/// - Keep state types small - large states impact memory and clone performance
+/// - Use `const fn new()` for view constructors when possible
+/// - Avoid expensive computations in `build()` - cache in state instead
+/// - Consider `memo()` for derived state that's expensive to compute
 ///
 /// # Example (with Signals - Recommended)
 ///
@@ -181,6 +191,12 @@ pub trait StatefulView: Send + Sync + 'static {
     /// At this point, the element is not yet mounted, so you cannot access
     /// `BuildContext` or inherited widgets. Use [`init_state`](Self::init_state)
     /// for initialization that requires context.
+    ///
+    /// # Performance
+    ///
+    /// This method is called only once per element lifetime, so it's acceptable
+    /// to perform initialization work here. However, defer expensive operations
+    /// (like network requests) to `init_state()` where you can handle them asynchronously.
     fn create_state(&self) -> Self::State;
 
     /// Initialize state after element is mounted.
