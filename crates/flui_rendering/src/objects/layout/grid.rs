@@ -1,4 +1,120 @@
-//! RenderGrid - CSS Grid-inspired layout
+//! RenderGrid - CSS Grid-inspired layout container
+//!
+//! Implements a CSS Grid-inspired layout system with configurable rows and columns.
+//! Supports flexible track sizing (fr units), fixed sizes (px), auto-sizing based
+//! on content, and grid item placement with spanning. Provides powerful 2D layout
+//! control similar to CSS Grid.
+//!
+//! # Flutter Equivalence
+//!
+//! | FLUI | Flutter |
+//! |------|---------|
+//! | `RenderGrid` | Similar to GridView with custom delegate (not exact match) |
+//! | `GridTrackSize::Fixed` | Similar to fixed extent in GridView |
+//! | `GridTrackSize::Flex` | Similar to flex child sizing |
+//! | `GridTrackSize::Auto` | Content-based sizing |
+//! | `GridPlacement` | Grid positioning specification |
+//! | `column_gap` | Gap between columns |
+//! | `row_gap` | Gap between rows |
+//!
+//! # Layout Protocol
+//!
+//! 1. **Compute column widths**
+//!    - First pass: Calculate Fixed and Auto track sizes
+//!    - For Auto: Layout children with infinite width to get intrinsic size
+//!    - For Fixed: Use specified size
+//!    - Track total fixed width
+//!
+//! 2. **Distribute flex units**
+//!    - Calculate remaining width after fixed/auto tracks
+//!    - Divide remaining width by total flex factor
+//!    - Assign flex_unit × factor to each flex track
+//!
+//! 3. **Compute row heights**
+//!    - Same algorithm as columns but for rows
+//!    - For Auto: Layout children with column width to get height
+//!
+//! 4. **Layout each child in grid cell**
+//!    - Get GridPlacement for child (explicit or auto-placement)
+//!    - Calculate child constraints from spanned tracks
+//!    - If spanning multiple tracks: sum track sizes + gaps
+//!    - Layout child with tight constraints (fixed size)
+//!
+//! 5. **Calculate container size**
+//!    - Width = sum of column widths + column gaps
+//!    - Height = sum of row heights + row gaps
+//!    - Clamp to parent constraints
+//!
+//! # Paint Protocol
+//!
+//! 1. **Calculate grid cell positions**
+//!    - Accumulate column positions: x += column_width + column_gap
+//!    - Accumulate row positions: y += row_height + row_gap
+//!
+//! 2. **Paint each child**
+//!    - Get GridPlacement for child
+//!    - Calculate offset from column_start and row_start positions
+//!    - Paint child at calculated offset
+//!
+//! # Performance
+//!
+//! - **Layout**: O(n × m) - multiple passes for track sizing + child layout
+//! - **Paint**: O(n) - paint each child once with pre-computed offsets
+//! - **Memory**: 104 bytes base + O(rows + cols + n) for track sizes and placements
+//!
+//! # Use Cases
+//!
+//! - **Responsive grids**: Auto-flowing grid layouts
+//! - **Dashboard layouts**: Complex multi-column layouts
+//! - **Image galleries**: Grid with varying item sizes
+//! - **Form layouts**: Multi-column forms with aligned fields
+//! - **Card grids**: Responsive card layouts with gaps
+//! - **CSS Grid replacement**: Similar 2D layout control
+//!
+//! # Track Sizing Examples
+//!
+//! ```text
+//! Fixed(100.0): Always 100px wide/tall
+//! Flex(1.0): Takes 1 share of remaining space (1fr)
+//! Flex(2.0): Takes 2 shares of remaining space (2fr)
+//! Auto: Sized to content (intrinsic)
+//! MinContent: Minimum content size
+//! MaxContent: Maximum content size
+//! ```
+//!
+//! # Grid Placement
+//!
+//! ```text
+//! GridPlacement::new(1, 2): Column 1, Row 2
+//! GridPlacement::with_span(0, 2, 1, 3): Columns 0-1, Rows 1-3
+//! Auto-placement: Left-to-right, top-to-bottom filling
+//! ```
+//!
+//! # Comparison with Related Objects
+//!
+//! - **vs RenderFlex**: Flex is 1D (row or column), Grid is 2D (rows and columns)
+//! - **vs RenderWrap**: Wrap auto-wraps, Grid has explicit rows/columns
+//! - **vs RenderTable**: Table uses simpler column/row model, Grid has CSS Grid features
+//! - **vs RenderCustomMultiChildLayoutBox**: CustomLayout uses delegate, Grid uses declarative tracks
+//!
+//! # Examples
+//!
+//! ```rust,ignore
+//! use flui_rendering::{RenderGrid, GridTrackSize, GridPlacement};
+//!
+//! // 3 columns: 1fr, 2fr, 100px
+//! // 2 rows: auto (content-sized), 1fr (fills space)
+//! let grid = RenderGrid::new(
+//!     vec![GridTrackSize::Flex(1.0), GridTrackSize::Flex(2.0), GridTrackSize::Fixed(100.0)],
+//!     vec![GridTrackSize::Auto, GridTrackSize::Flex(1.0)],
+//! )
+//! .with_column_gap(16.0)
+//! .with_row_gap(16.0);
+//!
+//! // Explicit placement: span 2 columns
+//! let mut grid = RenderGrid::new(vec![GridTrackSize::Flex(1.0); 3], vec![GridTrackSize::Auto; 2]);
+//! grid.set_placement(0, GridPlacement::with_span(0, 2, 0, 1));
+//! ```
 
 use crate::core::{BoxLayoutCtx, BoxPaintCtx, RenderBox, Variable};
 use crate::{RenderObject, RenderResult};
@@ -85,22 +201,61 @@ impl Default for GridPlacement {
     }
 }
 
-/// RenderObject that implements CSS Grid-inspired layout
+/// RenderObject that implements CSS Grid-inspired 2D layout.
 ///
-/// Arranges children in a grid with configurable row and column sizing.
-/// Supports flexible (fr), fixed (px), and automatic (auto) track sizing.
+/// Arranges children in a grid with configurable row and column sizing using
+/// track-based layout. Supports flexible (fr units), fixed (px), and automatic
+/// (content-based) track sizing. Children can be explicitly placed with spanning
+/// or auto-placed left-to-right, top-to-bottom.
+///
+/// # Arity
+///
+/// `Variable` - Can have any number of children (0+).
+///
+/// # Protocol
+///
+/// Box protocol - Uses `BoxConstraints` and returns `Size`.
+///
+/// # Pattern
+///
+/// **CSS Grid Layout** - 2D grid with configurable tracks (rows/columns),
+/// flexible and fixed track sizing, grid item placement with spanning,
+/// content-based auto-sizing, gap support.
+///
+/// # Use Cases
+///
+/// - **Responsive grids**: Auto-flowing grid layouts
+/// - **Dashboard layouts**: Complex multi-column layouts
+/// - **Image galleries**: Grid with varying item sizes
+/// - **Form layouts**: Multi-column forms with aligned fields
+/// - **Card grids**: Responsive card layouts with gaps
+///
+/// # Flutter Compliance
+///
+/// Similar to Flutter's GridView but with CSS Grid semantics:
+/// - Track-based sizing (Fixed, Flex, Auto, MinContent, MaxContent)
+/// - Explicit grid placement with GridPlacement
+/// - Auto-placement for children without explicit placement
+/// - Gap support between tracks
+/// - NOTE: Flutter doesn't have exact CSS Grid equivalent
 ///
 /// # Example
 ///
 /// ```rust,ignore
-/// use flui_rendering::{RenderGrid, GridTrackSize};
+/// use flui_rendering::{RenderGrid, GridTrackSize, GridPlacement};
 ///
 /// // 3 columns: 1fr, 2fr, 100px
-/// // 2 rows: auto, 1fr
-/// let mut grid = RenderGrid::new(
+/// // 2 rows: auto (content-sized), 1fr (fills remaining)
+/// let grid = RenderGrid::new(
 ///     vec![GridTrackSize::Flex(1.0), GridTrackSize::Flex(2.0), GridTrackSize::Fixed(100.0)],
 ///     vec![GridTrackSize::Auto, GridTrackSize::Flex(1.0)],
-/// );
+/// )
+/// .with_column_gap(16.0)
+/// .with_row_gap(16.0);
+///
+/// // Explicit placement with spanning
+/// let mut grid = RenderGrid::new(vec![GridTrackSize::Flex(1.0); 3], vec![GridTrackSize::Auto; 2]);
+/// grid.set_placement(0, GridPlacement::with_span(0, 2, 0, 1)); // Spans 2 columns
 /// ```
 #[derive(Debug)]
 pub struct RenderGrid {
