@@ -1,4 +1,62 @@
 //! RenderWrap - arranges children with wrapping (like flexbox wrap)
+//!
+//! Implements Flutter's wrapping layout algorithm for arranging children
+//! that automatically wrap to new lines/columns when space runs out.
+//!
+//! # Flutter Equivalence
+//!
+//! | FLUI | Flutter |
+//! |------|---------|
+//! | `RenderWrap` | `RenderWrap` from `package:flutter/src/rendering/wrap.dart` |
+//! | `direction` | `direction` property |
+//! | `alignment` | `alignment` property |
+//! | `spacing` | `spacing` property |
+//! | `run_spacing` | `runSpacing` property |
+//! | `cross_alignment` | `crossAxisAlignment` property |
+//!
+//! # Layout Protocol
+//!
+//! 1. **Initialize run tracking**
+//!    - Track current position in main axis
+//!    - Track current run's cross-axis extent
+//!
+//! 2. **Layout children sequentially**
+//!    - Give each child remaining space in run
+//!    - Check if child fits in current run
+//!
+//! 3. **Handle wrapping**
+//!    - If child doesn't fit and not first in run: start new run
+//!    - Add run_spacing between runs
+//!    - Reset main-axis position
+//!
+//! 4. **Position children**
+//!    - Cache offsets based on current run position
+//!    - Add spacing between children in same run
+//!
+//! 5. **Calculate final size**
+//!    - Width/Height = maximum extent across all runs
+//!
+//! # Performance
+//!
+//! - **Layout**: O(n) - single pass through children
+//! - **Paint**: O(n) - paint each child once
+//! - **Memory**: O(n) - stores offset per child
+//!
+//! # Examples
+//!
+//! ```rust,ignore
+//! use flui_rendering::RenderWrap;
+//! use flui_types::Axis;
+//!
+//! // Horizontal wrap (like flexbox flex-wrap)
+//! let wrap = RenderWrap::horizontal()
+//!     .with_spacing(8.0)        // Space between items in run
+//!     .with_run_spacing(12.0);  // Space between lines
+//!
+//! // Vertical wrap (wraps to new columns)
+//! let vertical_wrap = RenderWrap::vertical()
+//!     .with_spacing(4.0);
+//! ```
 
 use crate::core::{BoxLayoutCtx, BoxPaintCtx, ChildrenAccess, RenderBox, Variable};
 use crate::{RenderObject, RenderResult};
@@ -33,19 +91,33 @@ pub enum WrapCrossAlignment {
     Center,
 }
 
-/// RenderObject that arranges children with wrapping
+/// RenderObject that arranges children with wrapping.
 ///
-/// Like Flex (Row/Column), but wraps to the next line when reaching
-/// the edge of the container.
+/// Like Flex (Row/Column), but automatically wraps children to new
+/// lines/columns when reaching container edge.
 ///
-/// # Example
+/// # Arity
 ///
-/// ```rust,ignore
-/// use flui_rendering::objects::layout::RenderWrap;
+/// `Variable` - Can have any number of children (0+).
 ///
-/// // Create horizontal wrap with spacing
-/// let mut wrap = RenderWrap::horizontal().with_spacing(8.0).with_run_spacing(4.0);
-/// ```
+/// # Protocol
+///
+/// Box protocol - Uses `BoxConstraints` and returns `Size`.
+///
+/// # Use Cases
+///
+/// - **Tag clouds**: Wrapping text tags
+/// - **Image galleries**: Grid with variable-sized items
+/// - **Chip lists**: Material Design chip wrapping
+/// - **Responsive layouts**: Automatic flow based on available space
+///
+/// # Flutter Compliance
+///
+/// Matches Flutter's RenderWrap behavior:
+/// - Wraps children when running out of space
+/// - Respects spacing and run_spacing
+/// - Handles both horizontal and vertical directions
+/// - Calculates size as maximum extent of all runs
 #[derive(Debug)]
 pub struct RenderWrap {
     /// Main axis direction (horizontal or vertical)
@@ -120,9 +192,8 @@ impl RenderObject for RenderWrap {}
 impl RenderBox<Variable> for RenderWrap {
     fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Variable>) -> RenderResult<Size> {
         let constraints = ctx.constraints;
-        let children = ctx.children;
 
-        if children.as_slice().is_empty() {
+        if ctx.children.len() == 0 {
             self.child_offsets.clear();
             return Ok(constraints.smallest());
         }
@@ -138,7 +209,7 @@ impl RenderBox<Variable> for RenderWrap {
                 let mut max_run_height = 0.0_f32;
                 let mut total_width = 0.0_f32;
 
-                for child_id in children.iter() {
+                for child_id in ctx.children() {
                     // Child gets unconstrained width, constrained height
                     let child_constraints = BoxConstraints::new(
                         0.0,
@@ -147,7 +218,7 @@ impl RenderBox<Variable> for RenderWrap {
                         constraints.max_height,
                     );
 
-                    let child_size = ctx.layout_child(*child_id, child_constraints)?;
+                    let child_size = ctx.layout_child(child_id, child_constraints)?;
 
                     // Check if we need to wrap
                     if current_x + child_size.width > max_width && current_x > 0.0 {
@@ -176,7 +247,7 @@ impl RenderBox<Variable> for RenderWrap {
                 let mut max_run_width = 0.0_f32;
                 let mut total_height = 0.0_f32;
 
-                for child_id in children.iter() {
+                for child_id in ctx.children() {
                     // Child gets constrained width, unconstrained height
                     let child_constraints = BoxConstraints::new(
                         0.0,
@@ -185,7 +256,7 @@ impl RenderBox<Variable> for RenderWrap {
                         max_height - current_y,
                     );
 
-                    let child_size = ctx.layout_child(*child_id, child_constraints)?;
+                    let child_size = ctx.layout_child(child_id, child_constraints)?;
 
                     // Check if we need to wrap
                     if current_y + child_size.height > max_height && current_y > 0.0 {
@@ -214,11 +285,11 @@ impl RenderBox<Variable> for RenderWrap {
         let offset = ctx.offset;
 
         // Collect child IDs first to avoid borrow checker issues
-        let child_ids: Vec<_> = ctx.children.iter().collect();
+        let child_ids: Vec<_> = ctx.children().collect();
 
         for (i, child_id) in child_ids.into_iter().enumerate() {
             let child_offset = self.child_offsets.get(i).copied().unwrap_or(Offset::ZERO);
-            ctx.paint_child(*child_id, offset + child_offset);
+            ctx.paint_child(child_id, offset + child_offset);
         }
     }
 }
