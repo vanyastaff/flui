@@ -1,7 +1,8 @@
-//! RenderSizedBox - enforces exact size constraints
+//! RenderSizedBox - Enforces exact size constraints or acts as spacer
 //!
-//! Implements Flutter's sized box container that forces specific dimensions
-//! on its child or acts as a spacer when childless.
+//! Implements Flutter's SizedBox container that forces specific dimensions
+//! on its child or acts as a spacer when childless. Essential building block
+//! for fixed-size layouts and spacing.
 //!
 //! # Flutter Equivalence
 //!
@@ -10,11 +11,14 @@
 //! | `RenderSizedBox` | `RenderConstrainedBox` from `package:flutter/src/rendering/proxy_box.dart` |
 //! | `width` | `BoxConstraints.tightFor(width: ...)` |
 //! | `height` | `BoxConstraints.tightFor(height: ...)` |
+//! | `set_width()` | `width = value` |
+//! | `set_height()` | `height = value` |
 //!
 //! # Layout Protocol
 //!
 //! 1. **Check for child**
 //!    - If no child: return specified size (act as spacer)
+//!    - Spacer reserves space without rendering anything
 //!
 //! 2. **Determine layout strategy**
 //!    - Both dimensions specified: tight constraints (exact size)
@@ -26,6 +30,16 @@
 //!
 //! 4. **Return final size**
 //!    - Use specified dimensions or child's size for unspecified dimensions
+//!    - Constrained to parent's bounds
+//!
+//! # Paint Protocol
+//!
+//! 1. **Paint child if present**
+//!    - Child painted at parent offset
+//!    - No transformation or clipping
+//!
+//! 2. **No child case (spacer)**
+//!    - Nothing painted (empty space reserved)
 //!
 //! # Performance
 //!
@@ -33,13 +47,45 @@
 //! - **Paint**: O(1) - direct child paint at offset (no transformation)
 //! - **Memory**: 16 bytes (2 × Option<f32>)
 //!
+//! # Use Cases
+//!
+//! - **Fixed sizing**: Force exact dimensions on child (100×100 box)
+//! - **Partial sizing**: Set one dimension, let other be flexible
+//! - **Spacers**: Create empty space with specified dimensions
+//! - **Layout gaps**: Horizontal/vertical spacing between widgets
+//! - **Aspect ratio helpers**: Size one dimension, other follows aspect ratio
+//! - **Button sizing**: Force consistent button dimensions
+//!
+//! # Sizing Behavior
+//!
+//! ```text
+//! Both dimensions specified:
+//!   SizedBox(width=100, height=50) → Tight 100×50 (exact size)
+//!
+//! Width only:
+//!   SizedBox(width=100, height=None) → Width=100, height from child
+//!
+//! Height only:
+//!   SizedBox(width=None, height=50) → Height=50, width from child
+//!
+//! No dimensions (unusual):
+//!   SizedBox(width=None, height=None) → Child's natural size
+//! ```
+//!
+//! # Comparison with Related Objects
+//!
+//! - **vs RenderConstrainedBox**: ConstrainedBox adds constraints, SizedBox forces exact size
+//! - **vs RenderAlign**: Align positions child, SizedBox sizes child
+//! - **vs RenderFractionallySizedBox**: FractionallySizedBox uses percentages, SizedBox uses pixels
+//! - **vs RenderPadding**: Padding adds space around, SizedBox forces dimensions
+//!
 //! # Examples
 //!
 //! ```rust,ignore
 //! use flui_rendering::RenderSizedBox;
 //!
-//! // Force child to be exactly 100x100
-//! let sized = RenderSizedBox::exact(100.0, 100.0);
+//! // Force child to be exactly 100×100
+//! let square = RenderSizedBox::exact(100.0, 100.0);
 //!
 //! // Set width only, height flexible
 //! let wide = RenderSizedBox::width(200.0);
@@ -49,6 +95,9 @@
 //!
 //! // Spacer (no child): 50px horizontal gap
 //! let spacer = RenderSizedBox::width(50.0);
+//!
+//! // Spacer: 20px vertical gap
+//! let gap = RenderSizedBox::height(20.0);
 //! ```
 
 use crate::{RenderObject, RenderResult};
@@ -71,18 +120,56 @@ use flui_types::Size;
 ///
 /// Box protocol - Uses `BoxConstraints` and returns `Size`.
 ///
+/// # Pattern
+///
+/// **Constraint Modifier with Exact Sizing** - Forces child to exact dimensions
+/// or acts as spacer reserving specified space.
+///
 /// # Use Cases
 ///
-/// - **Fixed sizing**: Force exact dimensions on child
+/// - **Fixed sizing**: Force exact dimensions on child (100×100 button)
 /// - **Partial sizing**: Set one dimension, let other be flexible
 /// - **Spacers**: Create empty space with specified dimensions
+/// - **Layout gaps**: Horizontal/vertical spacing between widgets
+/// - **Aspect ratio helpers**: Size one dimension explicitly
+/// - **Button sizing**: Force consistent button dimensions across UI
 ///
 /// # Flutter Compliance
 ///
-/// Matches Flutter's RenderConstrainedBox with tight constraints:
-/// - When both dimensions specified: uses tight constraints
+/// Matches Flutter's SizedBox (RenderConstrainedBox with tight constraints):
+/// - When both dimensions specified: uses tight constraints (exact size)
 /// - When dimensions unspecified: uses loose constraints for natural size
 /// - Acts as spacer when no child present
+/// - Extends RenderConstrainedBox base class
+///
+/// # Sizing Strategy
+///
+/// - **Both specified**: Tight constraints (child must be exactly that size)
+/// - **One specified**: Tight for that dimension, loose for other
+/// - **None specified**: Fully loose (child chooses size)
+///
+/// Common pattern: Use for spacers with one dimension specified.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use flui_rendering::RenderSizedBox;
+///
+/// // Fixed 100×100 square
+/// let square = RenderSizedBox::exact(100.0, 100.0);
+///
+/// // Width=200, height flexible
+/// let wide = RenderSizedBox::width(200.0);
+///
+/// // Height=150, width flexible
+/// let tall = RenderSizedBox::height(150.0);
+///
+/// // Spacer: 50px horizontal gap (no child)
+/// let h_spacer = RenderSizedBox::width(50.0);
+///
+/// // Spacer: 20px vertical gap (no child)
+/// let v_spacer = RenderSizedBox::height(20.0);
+/// ```
 #[derive(Debug)]
 pub struct RenderSizedBox {
     /// Explicit width (None = unconstrained)
@@ -144,9 +231,8 @@ impl RenderBox<Optional> for RenderSizedBox {
     fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Optional>) -> RenderResult<Size> {
         let constraints = ctx.constraints;
 
-        // Check if we have a child
-        if let Some(child_id) = ctx.children.get() {
-            let child_id = *child_id;
+        // Optional arity: use ctx.children.get() which returns Option<&ElementId>
+        if let Some(&child_id) = ctx.children.get() {
             // Layout child first if we need its size
             let child_size = if self.width.is_none() || self.height.is_none() {
                 // Need child's intrinsic size for unspecified dimensions
@@ -185,9 +271,10 @@ impl RenderBox<Optional> for RenderSizedBox {
     }
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Optional>) {
-        // If we have a child, paint it at our offset
-        if let Some(child_id) = ctx.children.get() {
-            ctx.paint_child(*child_id, ctx.offset);
+        // Optional arity: use ctx.children.get() which returns Option<&ElementId>
+        if let Some(&child_id) = ctx.children.get() {
+            // Paint child at parent offset (no transformation)
+            ctx.paint_child(child_id, ctx.offset);
         }
         // If no child, nothing to paint (spacer)
     }
