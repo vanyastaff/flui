@@ -124,9 +124,10 @@
 //! app_bar.set_collapsed_height(80.0);
 //! ```
 
-use crate::core::{RuntimeArity, LegacySliverRender, SliverSliver};
+use crate::core::{RenderObject, RenderSliver, Single, SliverLayoutContext, SliverPaintContext};
+use crate::RenderResult;
 use flui_painting::Canvas;
-use flui_types::{SliverConstraints, SliverGeometry};
+use flui_types::{SliverConstraints, SliverGeometry, BoxConstraints};
 
 /// RenderObject for Material Design app bar with scroll effects.
 ///
@@ -287,9 +288,25 @@ impl RenderSliverAppBar {
         self.sliver_geometry
     }
 
-    /// Calculate effective height based on scroll offset
-    fn calculate_effective_height(&self, scroll_offset: f32) -> f32 {
-        if self.pinned {
+}
+
+impl Default for RenderSliverAppBar {
+    fn default() -> Self {
+        Self::new(200.0) // Default expanded height
+    }
+}
+
+impl RenderObject for RenderSliverAppBar {}
+
+impl RenderSliver<Single> for RenderSliverAppBar {
+    fn layout(&mut self, mut ctx: SliverLayoutContext<'_, Single>) -> RenderResult<SliverGeometry> {
+        let child_id = *ctx.children.single();
+        let constraints = ctx.constraints;
+        let scroll_offset = constraints.scroll_offset;
+        let remaining_extent = constraints.remaining_paint_extent;
+
+        // Calculate effective height based on mode
+        let effective_height = if self.pinned {
             // Pinned: Always at collapsed height (minimum)
             self.collapsed_height
         } else if self.floating {
@@ -300,18 +317,16 @@ impl RenderSliverAppBar {
             // Normal: Shrinks as user scrolls
             let available = self.expanded_height - scroll_offset;
             available.max(0.0)
-        }
-    }
+        };
 
-    /// Calculate sliver geometry
-    fn calculate_sliver_geometry(
-        &self,
-        constraints: &SliverConstraints,
-    ) -> SliverGeometry {
-        let scroll_offset = constraints.scroll_offset;
-        let remaining_extent = constraints.remaining_paint_extent;
-
-        let _effective_height = self.calculate_effective_height(scroll_offset);
+        // Layout child with box constraints matching effective height
+        let box_constraints = BoxConstraints::new(
+            0.0,
+            constraints.cross_axis_extent,
+            effective_height,
+            effective_height,
+        );
+        ctx.tree_mut().perform_layout(child_id, box_constraints)?;
 
         // Calculate how much we actually paint
         let paint_extent = if self.pinned {
@@ -337,7 +352,7 @@ impl RenderSliverAppBar {
             paint_extent
         };
 
-        SliverGeometry {
+        self.sliver_geometry = SliverGeometry {
             scroll_extent,
             paint_extent,
             paint_origin: 0.0,
@@ -355,40 +370,19 @@ impl RenderSliverAppBar {
             has_visual_overflow: scroll_extent > paint_extent,
             hit_test_extent: Some(paint_extent),
             scroll_offset_correction: None,
-        }
-    }
-}
+        };
 
-impl Default for RenderSliverAppBar {
-    fn default() -> Self {
-        Self::new(200.0) // Default expanded height
-    }
-}
-
-impl LegacySliverRender for RenderSliverAppBar {
-    fn layout(&mut self, ctx: &Sliver) -> SliverGeometry {
-        // Calculate and cache sliver geometry
-        self.sliver_geometry = self.calculate_sliver_geometry(&ctx.constraints);
-        self.sliver_geometry
+        Ok(self.sliver_geometry)
     }
 
-    fn paint(&self, ctx: &Sliver) -> Canvas {
-        // Paint child if present and visible
-        if let Some(child_id) = ctx.children.try_single() {
-            if self.sliver_geometry.visible {
-                return ctx.tree.paint_child(child_id, ctx.offset);
+    fn paint(&self, ctx: &mut SliverPaintContext<'_, Single>) {
+        // Paint child if visible
+        if self.sliver_geometry.visible {
+            let child_id = *ctx.children.single();
+            if let Ok(child_canvas) = ctx.tree().perform_paint(child_id, ctx.offset) {
+                *ctx.canvas = child_canvas;
             }
         }
-
-        Canvas::new()
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> RuntimeArity {
-        RuntimeArity::Exact(1) // Single child (app bar content)
     }
 }
 
