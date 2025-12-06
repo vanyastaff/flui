@@ -1,46 +1,120 @@
-//! RenderWrap - arranges children with wrapping (like flexbox wrap)
+//! RenderWrap - Wrapping layout container (like CSS flexbox wrap)
 //!
 //! Implements Flutter's wrapping layout algorithm for arranging children
-//! that automatically wrap to new lines/columns when space runs out.
+//! that automatically wrap to new lines (horizontal) or columns (vertical)
+//! when space runs out. Similar to CSS flexbox with flex-wrap enabled.
+//! Supports alignment, spacing between items, and spacing between runs.
 //!
 //! # Flutter Equivalence
 //!
 //! | FLUI | Flutter |
 //! |------|---------|
 //! | `RenderWrap` | `RenderWrap` from `package:flutter/src/rendering/wrap.dart` |
-//! | `direction` | `direction` property |
-//! | `alignment` | `alignment` property |
-//! | `spacing` | `spacing` property |
-//! | `run_spacing` | `runSpacing` property |
+//! | `direction` | `direction` property (Axis enum) |
+//! | `alignment` | `alignment` property (WrapAlignment) |
+//! | `spacing` | `spacing` property (space between items in run) |
+//! | `run_spacing` | `runSpacing` property (space between runs) |
 //! | `cross_alignment` | `crossAxisAlignment` property |
+//! | `horizontal()` | Creates Axis.horizontal configuration |
+//! | `vertical()` | Creates Axis.vertical configuration |
+//! | `set_direction()` | `direction = value` setter |
+//! | `set_spacing()` | `spacing = value` setter |
+//! | `WrapAlignment::Start` | `WrapAlignment.start` |
+//! | `WrapAlignment::SpaceBetween` | `WrapAlignment.spaceBetween` |
 //!
 //! # Layout Protocol
 //!
 //! 1. **Initialize run tracking**
 //!    - Track current position in main axis
-//!    - Track current run's cross-axis extent
+//!    - Track current run's cross-axis extent (max height/width of run)
+//!    - Track total size across all runs
 //!
 //! 2. **Layout children sequentially**
-//!    - Give each child remaining space in run
+//!    - Give each child remaining space in current run
+//!    - Child gets:
+//!      - Main axis: remaining space in run
+//!      - Cross axis: parent's max constraint
 //!    - Check if child fits in current run
 //!
 //! 3. **Handle wrapping**
-//!    - If child doesn't fit and not first in run: start new run
-//!    - Add run_spacing between runs
-//!    - Reset main-axis position
+//!    - If child doesn't fit AND not first in run:
+//!      - Start new run (new line or column)
+//!      - Add run_spacing to cross position
+//!      - Reset main-axis position to 0
+//!      - Reset run's cross extent
 //!
 //! 4. **Position children**
 //!    - Cache offsets based on current run position
 //!    - Add spacing between children in same run
+//!    - Track max cross extent of run
 //!
 //! 5. **Calculate final size**
-//!    - Width/Height = maximum extent across all runs
+//!    - Main axis: max extent across all runs
+//!    - Cross axis: total of all run heights + run_spacing
+//!
+//! # Paint Protocol
+//!
+//! 1. **Paint children in order**
+//!    - Use cached offsets from layout phase
+//!    - Paint each child at parent offset + child offset
+//!    - Children painted in order (same as layout order)
 //!
 //! # Performance
 //!
-//! - **Layout**: O(n) - single pass through children
-//! - **Paint**: O(n) - paint each child once
-//! - **Memory**: O(n) - stores offset per child
+//! - **Layout**: O(n) - single pass through children with wrap detection
+//! - **Paint**: O(n) - paint each child once in order
+//! - **Memory**: 48 bytes base + O(n) for cached offsets (16 bytes per child)
+//!
+//! # Use Cases
+//!
+//! - **Tag clouds**: Wrapping text tags (hashtags, categories)
+//! - **Chip lists**: Material Design chips with automatic wrapping
+//! - **Image galleries**: Variable-sized images with wrapping
+//! - **Responsive layouts**: Automatic flow based on available space
+//! - **Button groups**: Groups of buttons that wrap on narrow screens
+//! - **Breadcrumbs**: Navigation breadcrumbs with wrapping
+//! - **Word wrapping**: Words in a sentence (with custom widgets)
+//!
+//! # Wrap Behavior
+//!
+//! ```text
+//! Horizontal direction (wraps to new lines):
+//!   Run 1: [Item1][Item2][Item3]
+//!   Run 2: [Item4][Item5]
+//!   Run 3: [Item6]
+//!
+//! Vertical direction (wraps to new columns):
+//!   Column 1: [Item1]
+//!             [Item2]
+//!             [Item3]
+//!   Column 2: [Item4]
+//!             [Item5]
+//!   Column 3: [Item6]
+//! ```
+//!
+//! # Spacing Behavior
+//!
+//! ```text
+//! spacing = 8.0 (between items in same run)
+//! run_spacing = 12.0 (between runs)
+//!
+//! [Item1]--8--[Item2]--8--[Item3]
+//!     |
+//!    12 (run_spacing)
+//!     |
+//! [Item4]--8--[Item5]
+//!     |
+//!    12
+//!     |
+//! [Item6]
+//! ```
+//!
+//! # Comparison with Related Objects
+//!
+//! - **vs RenderFlex**: Flex is single-line, Wrap wraps to multiple lines
+//! - **vs RenderListBody**: ListBody is simple sequential, Wrap handles wrapping
+//! - **vs RenderFlow**: Flow uses delegate for custom logic, Wrap uses standard wrapping
+//! - **vs RenderGrid**: Grid has fixed rows/columns, Wrap wraps dynamically
 //!
 //! # Examples
 //!
@@ -56,6 +130,11 @@
 //! // Vertical wrap (wraps to new columns)
 //! let vertical_wrap = RenderWrap::vertical()
 //!     .with_spacing(4.0);
+//!
+//! // Tag cloud with spacing
+//! let tags = RenderWrap::horizontal()
+//!     .with_spacing(6.0)
+//!     .with_run_spacing(10.0);
 //! ```
 
 use crate::core::{BoxLayoutCtx, BoxPaintCtx, ChildrenAccess, RenderBox, Variable};
@@ -91,10 +170,12 @@ pub enum WrapCrossAlignment {
     Center,
 }
 
-/// RenderObject that arranges children with wrapping.
+/// RenderObject that arranges children with automatic wrapping.
 ///
-/// Like Flex (Row/Column), but automatically wraps children to new
-/// lines/columns when reaching container edge.
+/// Like Flex (Row/Column) but wraps children to new lines (horizontal) or
+/// columns (vertical) when running out of space. Similar to CSS flexbox with
+/// flex-wrap enabled. Supports spacing between items in runs and spacing
+/// between runs themselves.
 ///
 /// # Arity
 ///
@@ -104,20 +185,40 @@ pub enum WrapCrossAlignment {
 ///
 /// Box protocol - Uses `BoxConstraints` and returns `Size`.
 ///
+/// # Pattern
+///
+/// **Wrapping Layout Container** - Arranges children sequentially with automatic
+/// wrapping to new lines/columns, configurable spacing between items and runs,
+/// sizes to max extent across runs.
+///
 /// # Use Cases
 ///
-/// - **Tag clouds**: Wrapping text tags
-/// - **Image galleries**: Grid with variable-sized items
-/// - **Chip lists**: Material Design chip wrapping
+/// - **Tag clouds**: Wrapping text tags, hashtags, categories
+/// - **Chip lists**: Material Design chips with automatic wrapping
+/// - **Image galleries**: Variable-sized images with wrapping
 /// - **Responsive layouts**: Automatic flow based on available space
+/// - **Button groups**: Buttons that wrap on narrow screens
+/// - **Breadcrumbs**: Navigation breadcrumbs with wrapping
 ///
 /// # Flutter Compliance
 ///
 /// Matches Flutter's RenderWrap behavior:
 /// - Wraps children when running out of space
-/// - Respects spacing and run_spacing
+/// - Respects spacing (between items) and run_spacing (between runs)
 /// - Handles both horizontal and vertical directions
-/// - Calculates size as maximum extent of all runs
+/// - Size = max extent across all runs
+/// - TODO: Support full WrapAlignment and WrapCrossAlignment
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use flui_rendering::RenderWrap;
+///
+/// // Tag cloud
+/// let tags = RenderWrap::horizontal()
+///     .with_spacing(8.0)
+///     .with_run_spacing(12.0);
+/// ```
 #[derive(Debug)]
 pub struct RenderWrap {
     /// Main axis direction (horizontal or vertical)

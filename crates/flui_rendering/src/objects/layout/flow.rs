@@ -1,4 +1,110 @@
-//! RenderFlow - Custom layout with delegate pattern
+//! RenderFlow - Custom layout container with delegate pattern
+//!
+//! Implements Flutter's Flow layout that uses a delegate pattern for custom
+//! layout logic. The FlowDelegate computes child constraints, container size,
+//! and child transformations. Optimized for repositioning children using
+//! transformation matrices without relayout.
+//!
+//! # Flutter Equivalence
+//!
+//! | FLUI | Flutter |
+//! |------|---------|
+//! | `RenderFlow` | `RenderFlow` from `package:flutter/src/rendering/flow.dart` |
+//! | `FlowDelegate` | `FlowDelegate` trait |
+//! | `get_size()` | `getSize()` method |
+//! | `get_constraints_for_child()` | `getConstraintsForChild()` method |
+//! | `paint_children()` | `paintChildren()` method |
+//! | `should_relayout()` | `shouldRelayout()` method |
+//! | `should_repaint()` | `shouldRepaint()` method |
+//! | `SimpleFlowDelegate` | Example implementation (not in Flutter) |
+//!
+//! # Layout Protocol
+//!
+//! 1. **Delegate determines container size**
+//!    - Call `delegate.get_size(constraints)`
+//!    - Delegate returns desired container size
+//!
+//! 2. **Layout each child with delegate constraints**
+//!    - For each child index:
+//!      - Call `delegate.get_constraints_for_child(index, parent_constraints)`
+//!      - Layout child with delegate-provided constraints
+//!      - Store child size for paint phase
+//!
+//! 3. **Return container size**
+//!    - Size determined by delegate in step 1
+//!
+//! # Paint Protocol
+//!
+//! 1. **Create FlowPaintContext**
+//!    - Provide paint context, child count, child sizes, child IDs
+//!
+//! 2. **Delegate paints children with transforms**
+//!    - Call `delegate.paint_children(context, offset)`
+//!    - Delegate calls `context.paint_child(index, transform, offset)` for each child
+//!    - TODO: Apply transformation matrices (currently only uses offset)
+//!
+//! # Performance
+//!
+//! - **Layout**: O(n) - layout each child with delegate constraints
+//! - **Paint**: O(n) - delegate paints each child (potentially with transforms)
+//! - **Memory**: 40 bytes base + O(n) for cached sizes (8 bytes per child)
+//!
+//! # Use Cases
+//!
+//! - **Custom layouts**: Complex layouts not supported by standard containers
+//! - **Animated repositioning**: Transform-based child repositioning without relayout
+//! - **Parallax effects**: Children moving at different speeds
+//! - **Carousel layouts**: Custom carousel with transformation effects
+//! - **3D transforms**: Perspective transforms on children (when supported)
+//! - **Performance optimization**: Repaint without relayout for position changes
+//!
+//! # Delegate Pattern Benefits
+//!
+//! - **Separation of concerns**: Layout logic in delegate, rendering in RenderObject
+//! - **Reusability**: Same delegate can be used with different instances
+//! - **Testability**: Delegates can be unit tested independently
+//! - **Flexibility**: Easy to create custom layouts without subclassing
+//! - **Performance**: `should_relayout()` and `should_repaint()` optimize updates
+//!
+//! # Comparison with Related Objects
+//!
+//! - **vs RenderFlex**: Flex has fixed layout algorithm, Flow uses custom delegate
+//! - **vs RenderStack**: Stack has simple layering, Flow has custom positioning
+//! - **vs RenderCustomMultiChildLayoutBox**: Similar delegate pattern, different protocol
+//! - **vs RenderTransform**: Transform applies to container, Flow transforms each child
+//!
+//! # Examples
+//!
+//! ```rust,ignore
+//! use flui_rendering::{RenderFlow, SimpleFlowDelegate};
+//!
+//! // Simple horizontal flow with spacing
+//! let delegate = Box::new(SimpleFlowDelegate::new(10.0));
+//! let flow = RenderFlow::new(delegate);
+//!
+//! // Custom delegate for complex layout
+//! struct MyFlowDelegate;
+//! impl FlowDelegate for MyFlowDelegate {
+//!     fn get_size(&self, constraints: BoxConstraints) -> Size {
+//!         Size::new(constraints.max_width, constraints.max_height)
+//!     }
+//!
+//!     fn get_constraints_for_child(&self, _index: usize, constraints: BoxConstraints) -> BoxConstraints {
+//!         constraints.loosen()
+//!     }
+//!
+//!     fn paint_children(&self, context: &mut FlowPaintContext, offset: Offset) {
+//!         for i in 0..context.child_count {
+//!             let transform = Matrix4::translation(offset.dx, offset.dy + i as f32 * 50.0, 0.0);
+//!             context.paint_child(i, transform, Offset::new(offset.dx, offset.dy + i as f32 * 50.0));
+//!         }
+//!     }
+//!
+//!     fn should_relayout(&self, _old: &dyn Any) -> bool { true }
+//!     fn should_repaint(&self, _old: &dyn Any) -> bool { true }
+//!     fn as_any(&self) -> &dyn Any { self }
+//! }
+//! ```
 
 use crate::core::{BoxLayoutCtx, BoxPaintCtx, RenderBox, Variable};
 use crate::{RenderObject, RenderResult};
@@ -119,16 +225,49 @@ impl FlowDelegate for SimpleFlowDelegate {
     }
 }
 
-/// RenderObject that implements custom layout via FlowDelegate
+/// RenderObject that implements custom layout via FlowDelegate.
 ///
-/// Uses a delegate pattern to allow custom layout logic without subclassing.
-/// Optimized for repositioning children using transformation matrices.
+/// Uses delegate pattern for custom layout logic without subclassing. The
+/// FlowDelegate determines child constraints, container size, and child
+/// transformations. Optimized for transform-based repositioning without relayout.
+///
+/// # Arity
+///
+/// `Variable` - Can have any number of children (0+).
+///
+/// # Protocol
+///
+/// Box protocol - Uses `BoxConstraints` and returns `Size`.
+///
+/// # Pattern
+///
+/// **Delegated Custom Layout** - Delegates layout logic to FlowDelegate trait,
+/// supports transformation matrices for efficient repositioning, optimizes
+/// with should_relayout/should_repaint checks.
+///
+/// # Use Cases
+///
+/// - **Custom layouts**: Complex layouts beyond standard containers
+/// - **Animated repositioning**: Transform-based child repositioning
+/// - **Parallax effects**: Children moving at different speeds
+/// - **Carousel**: Custom carousel with transformation effects
+/// - **Performance**: Repaint without relayout for position changes
+///
+/// # Flutter Compliance
+///
+/// Matches Flutter's RenderFlow behavior:
+/// - Uses FlowDelegate trait for custom layout logic
+/// - Delegate provides child constraints and container size
+/// - Delegate paints children with transformation matrices
+/// - Optimizes updates with should_relayout/should_repaint
+/// - TODO: Full transformation matrix support in paint
 ///
 /// # Example
 ///
 /// ```rust,ignore
 /// use flui_rendering::{RenderFlow, SimpleFlowDelegate};
 ///
+/// // Simple horizontal flow
 /// let delegate = Box::new(SimpleFlowDelegate::new(10.0));
 /// let flow = RenderFlow::new(delegate);
 /// ```
