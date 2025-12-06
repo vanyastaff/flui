@@ -1,31 +1,208 @@
-//! RenderSliverFloatingPersistentHeader - Header that floats and can scroll off
+//! RenderSliverFloatingPersistentHeader - Scroll-direction-aware floating header
+//!
+//! Implements Flutter's floating persistent header pattern where the header appears immediately
+//! when scrolling in reverse direction (scroll up), even if content hasn't scrolled far enough
+//! to naturally reveal it. Unlike pinned headers that stick, floating headers can fully scroll
+//! offscreen when scrolling forward.
+//!
+//! # Flutter Equivalence
+//!
+//! | FLUI | Flutter |
+//! |------|---------|
+//! | `RenderSliverFloatingPersistentHeader` | `RenderSliverFloatingPersistentHeader` from `package:flutter/src/rendering/sliver_persistent_header.dart` |
+//! | `extent` property | Fixed extent for header height |
+//! | `snap` property | `snapConfiguration` for full/hidden only |
+//! | Floating logic | Scroll direction tracking + immediate appearance |
+//!
+//! # Layout Protocol (Intended)
+//!
+//! 1. **Track scroll direction** (NOT IMPLEMENTED)
+//!    - Monitor scroll_offset changes to detect up/down
+//!    - Store previous scroll offset for comparison
+//!
+//! 2. **Calculate visibility based on direction**
+//!    - **Scroll down**: Header shrinks normally, can scroll offscreen
+//!    - **Scroll up**: Header appears immediately at full extent
+//!    - **Snap mode**: Transition only between 0 and full extent
+//!
+//! 3. **Layout child with calculated extent**
+//!    - Create BoxConstraints based on current visibility
+//!    - Layout child with header content
+//!
+//! 4. **Return geometry**
+//!    - scroll_extent: Fixed header extent
+//!    - paint_extent: Current visible extent
+//!    - layout_extent: Affects following slivers
+//!
+//! # Paint Protocol
+//!
+//! 1. **Check visibility**
+//!    - Only paint if geometry.visible
+//!
+//! 2. **Paint child**
+//!    - Paint header content at current offset
+//!
+//! # Performance
+//!
+//! - **Layout**: O(1) geometry + O(child) when implemented
+//! - **Paint**: O(child) when visible
+//! - **Memory**: 8 bytes (f32 + bool) + 48 bytes (SliverGeometry) = 56 bytes
+//! - **Scroll tracking**: Requires storing previous offset (when implemented)
+//!
+//! # Use Cases
+//!
+//! - **App bars**: Material Design floating app bars
+//! - **Search bars**: Hide on scroll down, appear on scroll up
+//! - **Toolbars**: Contextual toolbars that respond to scroll
+//! - **Navigation**: Quick-access navigation that hides/shows
+//! - **Action bars**: Floating action context on scroll
+//!
+//! # Floating vs Pinned Behavior
+//!
+//! ```text
+//! PINNED HEADER:
+//! scroll=0:    [████████] (full)
+//! scroll=50:   [███] (shrunk to minimum)
+//! scroll=100+: [███] (STAYS at minimum)
+//!
+//! FLOATING HEADER (intended):
+//! scroll=0:    [████████] (full)
+//! scroll down: [        ] (hides completely)
+//! scroll UP:   [████████] (APPEARS immediately!)
+//!
+//! CURRENT (simplified):
+//! scroll=0:    [████████] (full)
+//! scroll=50:   [████] (shrinks)
+//! scroll=80+:  [        ] (hidden - no floating back)
+//! ```
+//!
+//! # ⚠️ CRITICAL IMPLEMENTATION ISSUES
+//!
+//! This implementation has **MAJOR INCOMPLETE FUNCTIONALITY**:
+//!
+//! 1. **❌ Child is NEVER laid out** (line 124-128)
+//!    - No calls to `layout_child()` anywhere
+//!    - Child size is undefined
+//!    - Only geometry calculation, no actual layout
+//!
+//! 2. **❌ No scroll direction tracking** (line 79 comment)
+//!    - Current implementation doesn't track scroll direction
+//!    - Cannot detect "scroll up" to trigger floating behavior
+//!    - Comment admits: "Since we don't have scroll direction here"
+//!    - Floating behavior is thus IMPOSSIBLE without direction tracking
+//!
+//! 3. **❌ snap flag NOT USED** (line 35, 49, 55, 60)
+//!    - Flag exists and can be set
+//!    - Never checked in `calculate_sliver_geometry()`
+//!    - Dead code - has no effect on behavior
+//!
+//! 4. **⚠️ Simplified geometry** (line 74-114)
+//!    - Behaves like non-floating header (just shrinks with scroll)
+//!    - Doesn't implement actual floating behavior
+//!    - Missing the key "appear on scroll up" feature
+//!
+//! **This RenderObject is BROKEN - missing child layout, no floating behavior, unused snap flag!**
+//!
+//! # Comparison with Related Objects
+//!
+//! - **vs SliverPersistentHeader**: Floating is specialized, Persistent is generic
+//! - **vs SliverPinnedPersistentHeader**: Pinned stays visible, Floating can hide
+//! - **vs SliverAppBar**: AppBar is configurable, FloatingHeader is always floating (intended)
+//! - **vs BoxAppBar**: FloatingHeader is sliver protocol, BoxAppBar is static box
+//!
+//! # Examples
+//!
+//! ```rust,ignore
+//! use flui_rendering::RenderSliverFloatingPersistentHeader;
+//!
+//! // Basic floating header (Material Design app bar height)
+//! let floating = RenderSliverFloatingPersistentHeader::new(56.0);
+//! // Note: Won't actually float without direction tracking!
+//!
+//! // With snap behavior (full or hidden only)
+//! let snap = RenderSliverFloatingPersistentHeader::new(80.0)
+//!     .with_snap();
+//! // Note: snap flag currently has no effect!
+//!
+//! // Custom height
+//! let custom = RenderSliverFloatingPersistentHeader::new(120.0);
+//! ```
 
 use crate::core::{RuntimeArity, LegacySliverRender, SliverSliver};
 use flui_painting::Canvas;
 use flui_types::{SliverConstraints, SliverGeometry};
 
-/// RenderObject for a floating persistent header
+/// RenderObject for a scroll-direction-aware floating header.
 ///
-/// A floating header appears immediately when scrolling in reverse direction,
-/// even if the content hasn't scrolled far enough to reveal it naturally.
+/// Intended to implement floating behavior where the header appears immediately when
+/// scrolling in reverse direction (up), even if content hasn't scrolled far enough
+/// to naturally reveal it. The header can scroll completely offscreen when scrolling
+/// forward (down), but "floats" back into view on any upward scroll.
 ///
-/// This is different from a pinned header which stays visible once reached.
-/// A floating header can scroll completely off-screen when scrolling forward,
-/// but appears immediately when scrolling backward.
+/// # Arity
+///
+/// `RuntimeArity::Exact(1)` - Must have exactly 1 child (header content).
+///
+/// # Protocol
+///
+/// Sliver protocol - Uses `SliverConstraints` and returns `SliverGeometry`.
+///
+/// # Pattern
+///
+/// **Scroll-Responsive Floating Header** - Intended to track scroll direction
+/// and adjust visibility accordingly. On scroll down: hides. On scroll up: appears
+/// immediately at full extent. Currently simplified to just shrink/hide behavior.
 ///
 /// # Use Cases
 ///
-/// - App bars that appear on scroll up
-/// - Search bars that hide/show based on scroll direction
-/// - Toolbars that disappear when scrolling content
+/// - **Material app bars**: Standard Material Design floating behavior
+/// - **Search bars**: Hide when browsing, appear when searching
+/// - **Contextual toolbars**: Show on scroll up for quick actions
+/// - **Navigation bars**: Hide to maximize content, reveal on demand
+/// - **Action headers**: Floating action context that responds to scroll
+///
+/// # Flutter Compliance
+///
+/// **INCOMPLETE IMPLEMENTATION**:
+/// - ❌ No scroll direction tracking
+/// - ❌ Child never laid out
+/// - ❌ snap flag not used
+/// - ⚠️ Behaves like normal header, not floating
+///
+/// # Key Missing Features
+///
+/// | Feature | Status | Impact |
+/// |---------|--------|--------|
+/// | Scroll direction tracking | ❌ Missing | Cannot detect "scroll up" |
+/// | Floating on scroll up | ❌ Missing | Core behavior not implemented |
+/// | Child layout | ❌ Missing | Header content not sized |
+/// | Snap to full/hidden | ❌ Not used | Flag has no effect |
+///
+/// # Current Behavior vs Intended
+///
+/// **Current (Simplified):**
+/// - scroll_offset < extent: Partially visible, shrinks normally
+/// - scroll_offset >= extent: Hidden
+/// - No difference between scroll up/down
+///
+/// **Intended (Flutter):**
+/// - Scroll down: Header hides completely
+/// - Scroll up: Header appears at full extent immediately
+/// - Snap mode: Only full or hidden, no partial states
 ///
 /// # Example
 ///
 /// ```rust,ignore
 /// use flui_rendering::RenderSliverFloatingPersistentHeader;
 ///
-/// // Floating header that appears on scroll up
-/// let header = RenderSliverFloatingPersistentHeader::new(80.0);
+/// // Material Design floating app bar
+/// let app_bar = RenderSliverFloatingPersistentHeader::new(56.0);
+/// // WARNING: Won't actually float - missing direction tracking!
+///
+/// // With snap (no partial visibility)
+/// let snap_bar = RenderSliverFloatingPersistentHeader::new(80.0)
+///     .with_snap();
+/// // WARNING: snap has no effect in current implementation!
 /// ```
 #[derive(Debug)]
 pub struct RenderSliverFloatingPersistentHeader {
