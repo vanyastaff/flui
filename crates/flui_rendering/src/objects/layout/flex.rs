@@ -1,4 +1,65 @@
 //! RenderFlex - flex layout container (Row/Column)
+//!
+//! Implements Flutter's flex layout algorithm for arranging children along
+//! a main axis (horizontal for Row, vertical for Column).
+//!
+//! # Flutter Equivalence
+//!
+//! | FLUI | Flutter |
+//! |------|---------|
+//! | `RenderFlex` | `RenderFlex` from `package:flutter/src/rendering/flex.dart` |
+//! | `direction` | `direction` property |
+//! | `main_axis_alignment` | `mainAxisAlignment` property |
+//! | `cross_axis_alignment` | `crossAxisAlignment` property |
+//! | `main_axis_size` | `mainAxisSize` property |
+//! | `text_baseline` | `textBaseline` property |
+//!
+//! # Layout Protocol
+//!
+//! 1. **Determine cross-axis constraints**
+//!    - If `CrossAxisAlignment::Stretch`: use parent's min/max cross size
+//!    - Otherwise: use 0 to parent's max cross size
+//!
+//! 2. **Layout non-flexible children**
+//!    - Each gets unbounded main axis (0 to max)
+//!    - Respects cross-axis constraints from step 1
+//!
+//! 3. **Calculate main axis size**
+//!    - Sum child sizes on main axis
+//!    - `MainAxisSize::Min`: use sum (respecting parent min)
+//!    - `MainAxisSize::Max`: use parent's max constraint
+//!
+//! 4. **Apply main axis alignment**
+//!    - Calculate spacing between children
+//!    - `Start/End/Center`: simple offset calculation
+//!    - `SpaceBetween/Around/Evenly`: distribute free space
+//!
+//! 5. **Apply cross axis alignment per child**
+//!    - `Start/End/Center`: offset within available space
+//!    - `Stretch`: child already sized to fill
+//!    - `Baseline`: TODO - align by text baseline
+//!
+//! # Performance
+//!
+//! - **Layout**: O(n) - single pass through children
+//! - **Paint**: O(n) - paint each child once
+//! - **Memory**: O(n) - stores offset per child
+//!
+//! # Examples
+//!
+//! ```rust,ignore
+//! use flui_rendering::RenderFlex;
+//! use flui_types::{Axis, MainAxisAlignment, CrossAxisAlignment};
+//!
+//! // Row with space between
+//! let row = RenderFlex::row()
+//!     .with_main_axis_alignment(MainAxisAlignment::SpaceBetween);
+//!
+//! // Column centered both axes
+//! let column = RenderFlex::column()
+//!     .with_main_axis_alignment(MainAxisAlignment::Center)
+//!     .with_cross_axis_alignment(CrossAxisAlignment::Center);
+//! ```
 
 use crate::core::{BoxLayoutCtx, BoxPaintCtx, ChildrenAccess, RenderBox, Variable};
 use crate::{RenderObject, RenderResult};
@@ -9,26 +70,32 @@ use flui_types::{
     Axis, Offset, Size,
 };
 
-/// RenderObject for flex layout (Row/Column)
+/// RenderObject for flex layout (Row/Column).
 ///
-/// Flex layout arranges children along a main axis (horizontal for Row, vertical for Column)
-/// with support for flexible children that expand to fill available space.
+/// Arranges children along a main axis with flexible space distribution
+/// and alignment options.
 ///
-/// # Features
+/// # Arity
 ///
-/// - Main axis alignment (start, end, center, space between/around/evenly)
-/// - Cross axis alignment (start, end, center, stretch, baseline)
-/// - Main axis sizing (min or max)
-/// - TODO: Flexible/Expanded child support via parent_data
+/// `Variable` - Can have any number of children (0+).
 ///
-/// # Example
+/// # Protocol
 ///
-/// ```rust,ignore
-/// use flui_rendering::objects::layout::RenderFlex;
-/// use flui_types::Axis;
+/// Box protocol - Uses `BoxConstraints` and returns `Size`.
 ///
-/// let mut flex = RenderFlex::row();
-/// ```
+/// # Use Cases
+///
+/// - **Row**: Horizontal arrangement (Axis::Horizontal)
+/// - **Column**: Vertical arrangement (Axis::Vertical)
+/// - **Flexible layouts**: TODO - with Expanded/Flexible children
+///
+/// # Flutter Compliance
+///
+/// Matches Flutter's RenderFlex behavior:
+/// - Respects MainAxisAlignment for spacing
+/// - Respects CrossAxisAlignment per child
+/// - Handles MainAxisSize (min vs max)
+/// - Detects and warns about overflow (debug mode)
 #[derive(Debug)]
 pub struct RenderFlex {
     /// The direction to lay out children (horizontal for Row, vertical for Column)
@@ -163,12 +230,11 @@ impl RenderObject for RenderFlex {}
 impl RenderBox<Variable> for RenderFlex {
     fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Variable>) -> RenderResult<Size> {
         let constraints = ctx.constraints;
-        let children = ctx.children;
 
         // Clear cache
         self.child_offsets.clear();
 
-        let child_count = children.as_slice().len();
+        let child_count = ctx.children.len();
         if child_count == 0 {
             return Ok(constraints.smallest());
         }
@@ -207,7 +273,8 @@ impl RenderBox<Variable> for RenderFlex {
             Axis::Vertical => constraints.max_height,
         };
 
-        for child_id in children.iter() {
+        // Use ctx.children() which returns Iterator<Item = ElementId>
+        for child_id in ctx.children() {
             let child_constraints = match direction {
                 Axis::Horizontal => BoxConstraints::new(
                     0.0,
@@ -223,7 +290,7 @@ impl RenderBox<Variable> for RenderFlex {
                 ),
             };
 
-            let child_size = ctx.layout_child(*child_id, child_constraints)?;
+            let child_size = ctx.layout_child(child_id, child_constraints)?;
             child_sizes.push(child_size);
 
             let (child_main, child_cross) = match direction {
@@ -353,11 +420,11 @@ impl RenderBox<Variable> for RenderFlex {
         let offset = ctx.offset;
 
         // Collect child IDs first to avoid borrow checker issues
-        let child_ids: Vec<_> = ctx.children.iter().collect();
+        let child_ids: Vec<_> = ctx.children().collect();
 
         for (i, child_id) in child_ids.into_iter().enumerate() {
             let child_offset = self.child_offsets.get(i).copied().unwrap_or(Offset::ZERO);
-            ctx.paint_child(*child_id, offset + child_offset);
+            ctx.paint_child(child_id, offset + child_offset);
         }
     }
 }
