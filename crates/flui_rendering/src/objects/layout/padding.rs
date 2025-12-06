@@ -113,14 +113,13 @@ impl RenderObject for RenderPadding {}
 
 impl RenderBox<Single> for RenderPadding {
     fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Single>) -> RenderResult<Size> {
-        let child_id = *ctx.children.single();
         let padding = self.padding;
 
         // Deflate constraints by padding
         let child_constraints = ctx.constraints.deflate(&padding);
 
-        // Layout child with deflated constraints
-        let child_size = ctx.layout_child(child_id, child_constraints)?;
+        // Layout child with deflated constraints (using convenience method)
+        let child_size = ctx.layout_child(ctx.single_child(), child_constraints)?;
 
         // Add padding to child size
         Ok(Size::new(
@@ -130,11 +129,9 @@ impl RenderBox<Single> for RenderPadding {
     }
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Single>) {
-        let child_id = *ctx.children.single();
-
-        // Apply padding offset and paint child
+        // Apply padding offset and paint child (using convenience method)
         let child_offset = Offset::new(self.padding.left, self.padding.top);
-        ctx.paint_child(child_id, ctx.offset + child_offset);
+        ctx.paint_child(ctx.single_child(), ctx.offset + child_offset);
     }
 }
 
