@@ -2,6 +2,7 @@
 
 use crate::core::{BoxLayoutCtx, BoxPaintCtx};
 use crate::core::{RenderBox, Single};
+use crate::{RenderObject, RenderResult};
 use flui_types::constraints::BoxConstraints;
 use flui_types::Size;
 
@@ -44,9 +45,11 @@ impl Default for RenderAspectRatio {
     }
 }
 
+impl RenderObject for RenderAspectRatio {}
+
 impl RenderBox<Single> for RenderAspectRatio {
-    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Single>) -> Size {
-        let child_id = ctx.children.single();
+    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Single>) -> RenderResult<Size> {
+        let child_id = *ctx.children.single();
         let constraints = ctx.constraints;
         let aspect_ratio = self.aspect_ratio;
 
@@ -74,13 +77,13 @@ impl RenderBox<Single> for RenderAspectRatio {
         let final_size = constraints.constrain(size);
 
         // Layout child with tight constraints
-        ctx.layout_child(child_id, BoxConstraints::tight(final_size));
+        ctx.layout_child(child_id, BoxConstraints::tight(final_size))?;
 
-        final_size
+        Ok(final_size)
     }
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Single>) {
-        let child_id = ctx.children.single();
+        let child_id = *ctx.children.single();
         let offset = ctx.offset;
         // Simply paint child - no transformation needed
         ctx.paint_child(child_id, offset);

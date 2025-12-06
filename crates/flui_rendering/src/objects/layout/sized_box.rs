@@ -1,5 +1,7 @@
 //! RenderSizedBox - enforces exact size constraints
 
+use crate::{RenderObject, RenderResult};
+
 use crate::core::{BoxLayoutCtx, BoxPaintCtx};
 use crate::core::{Optional, RenderBox};
 use flui_types::constraints::BoxConstraints;
@@ -93,12 +95,15 @@ impl Default for RenderSizedBox {
     }
 }
 
+impl RenderObject for RenderSizedBox {}
+
 impl RenderBox<Optional> for RenderSizedBox {
-    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Optional>) -> Size {
+    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Optional>) -> RenderResult<Size> {
         let constraints = ctx.constraints;
 
         // Check if we have a child
         if let Some(child_id) = ctx.children.get() {
+            let child_id = *child_id;
             // Layout child first if we need its size
             let child_size = if self.width.is_none() || self.height.is_none() {
                 // Need child's intrinsic size for unspecified dimensions
@@ -109,7 +114,7 @@ impl RenderBox<Optional> for RenderSizedBox {
                     0.0,
                     self.height.unwrap_or(constraints.max_height),
                 );
-                ctx.layout_child(child_id, child_constraints)
+                ctx.layout_child(child_id, child_constraints)?
             } else {
                 // Both dimensions specified, we don't need child size yet
                 Size::ZERO
@@ -124,22 +129,22 @@ impl RenderBox<Optional> for RenderSizedBox {
             // Otherwise, force child to match our size
             if self.width.is_some() && self.height.is_some() {
                 let child_constraints = BoxConstraints::tight(size);
-                ctx.layout_child(child_id, child_constraints);
+                ctx.layout_child(child_id, child_constraints)?;
             }
 
-            size
+            Ok(size)
         } else {
             // No child - act as spacer with specified dimensions
             let width = self.width.unwrap_or(constraints.max_width);
             let height = self.height.unwrap_or(constraints.max_height);
-            Size::new(width, height)
+            Ok(Size::new(width, height))
         }
     }
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Optional>) {
         // If we have a child, paint it at our offset
         if let Some(child_id) = ctx.children.get() {
-            ctx.paint_child(child_id, ctx.offset);
+            ctx.paint_child(*child_id, ctx.offset);
         }
         // If no child, nothing to paint (spacer)
     }

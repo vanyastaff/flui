@@ -2,6 +2,7 @@
 
 use crate::core::{BoxLayoutCtx, BoxPaintCtx};
 use crate::core::{Leaf, RenderBox};
+use crate::{RenderObject, RenderResult};
 use flui_types::{Color, Rect, Size};
 
 /// RenderObject that paints a solid color background
@@ -50,13 +51,15 @@ impl Default for RenderColoredBox {
     }
 }
 
+impl RenderObject for RenderColoredBox {}
+
 impl RenderBox<Leaf> for RenderColoredBox {
-    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Leaf>) -> Size {
+    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Leaf>) -> RenderResult<Size> {
         let constraints = ctx.constraints;
         // Leaf renders have no children - fill available space
         let size = Size::new(constraints.max_width, constraints.max_height);
         self.size = size;
-        size
+        Ok(size)
     }
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Leaf>) {
@@ -68,7 +71,7 @@ impl RenderBox<Leaf> for RenderColoredBox {
             ..Default::default()
         };
 
-        ctx.canvas().draw_rect(rect, &paint);
+        ctx.canvas_mut().draw_rect(rect, &paint);
     }
 }
 

@@ -2,9 +2,8 @@
 //!
 //! More advanced than RenderOffstage, supports maintaining size, state, and other properties.
 
-use crate::core::{
-    RenderBox, Single, {BoxLayoutCtx, BoxPaintCtx},
-};
+use crate::core::{BoxLayoutCtx, BoxPaintCtx, RenderBox, Single};
+use crate::{RenderObject, RenderResult};
 use flui_types::Size;
 
 /// RenderObject that controls visibility with fine-grained options
@@ -94,37 +93,39 @@ impl Default for RenderVisibility {
     }
 }
 
+impl RenderObject for RenderVisibility {}
+
 impl RenderBox<Single> for RenderVisibility {
-    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Single>) -> Size {
-        let child_id = ctx.children.single();
+    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Single>) -> RenderResult<Size> {
+        let child_id = *ctx.children.single();
 
         // Layout child if visible OR if we need to maintain state/size
         let should_layout = self.visible || self.maintain_state || self.maintain_size;
 
         if should_layout {
-            let child_size = ctx.layout_child(child_id, ctx.constraints);
+            let child_size = ctx.layout_child(child_id, ctx.constraints)?;
 
             // Return child size if visible or maintaining size
             if self.visible || self.maintain_size {
                 if child_size != Size::ZERO {
-                    child_size
+                    Ok(child_size)
                 } else {
-                    ctx.constraints.smallest()
+                    Ok(ctx.constraints.smallest())
                 }
             } else {
                 // Not visible, not maintaining size: report zero
-                Size::ZERO
+                Ok(Size::ZERO)
             }
         } else {
             // Child completely removed: report zero size
-            Size::ZERO
+            Ok(Size::ZERO)
         }
     }
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Single>) {
         // Only paint if visible
         if self.visible {
-            let child_id = ctx.children.single();
+            let child_id = *ctx.children.single();
             ctx.paint_child(child_id, ctx.offset);
         }
         // When not visible, don't paint anything

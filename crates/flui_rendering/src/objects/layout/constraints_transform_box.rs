@@ -9,6 +9,7 @@
 //! The parent tries to match the child's size but respects its own constraints.
 
 use crate::core::{BoxLayoutCtx, BoxPaintCtx, RenderBox, Single};
+use crate::{RenderObject, RenderResult};
 use flui_types::{Alignment, BoxConstraints, Offset, Size};
 use std::fmt::Debug;
 
@@ -155,26 +156,28 @@ impl RenderConstraintsTransformBox {
     }
 }
 
+impl RenderObject for RenderConstraintsTransformBox {}
+
 impl RenderBox<Single> for RenderConstraintsTransformBox {
-    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Single>) -> Size {
-        let child_id = ctx.children.single();
+    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Single>) -> RenderResult<Size> {
+        let child_id = *ctx.children.single();
 
         // Apply transform to parent constraints
         let child_constraints = self.constraints_transform.apply(ctx.constraints);
 
         // Layout child with transformed constraints
-        let child_size = ctx.layout_child(child_id, child_constraints);
+        let child_size = ctx.layout_child(child_id, child_constraints)?;
         self.cached_child_size = child_size;
 
         // Parent tries to match child size, but respects its own constraints
         let parent_size = ctx.constraints.constrain(child_size);
         self.cached_parent_size = parent_size;
 
-        parent_size
+        Ok(parent_size)
     }
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Single>) {
-        let child_id = ctx.children.single();
+        let child_id = *ctx.children.single();
 
         // Calculate child offset based on alignment (if sizes differ)
         let child_offset = if self.cached_parent_size != self.cached_child_size {

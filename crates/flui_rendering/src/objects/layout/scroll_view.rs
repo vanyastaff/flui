@@ -4,6 +4,7 @@
 //! Used by SingleChildScrollView for straightforward scroll scenarios without slivers.
 
 use crate::core::{BoxLayoutCtx, BoxPaintCtx, RenderBox, Single};
+use crate::{RenderObject, RenderResult};
 use flui_types::layout::Axis;
 use flui_types::painting::Paint;
 use flui_types::prelude::*;
@@ -251,8 +252,10 @@ impl Default for RenderScrollView {
     }
 }
 
+impl RenderObject for RenderScrollView {}
+
 impl RenderBox<Single> for RenderScrollView {
-    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Single>) -> Size {
+    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Single>) -> RenderResult<Size> {
         let viewport_constraints = &ctx.constraints;
 
         // Store viewport size
@@ -262,9 +265,9 @@ impl RenderBox<Single> for RenderScrollView {
         );
 
         // Layout child with relaxed constraints
-        let child_id = ctx.children.single();
+        let child_id = *ctx.children.single();
         let child_constraints = self.child_constraints(viewport_constraints);
-        self.child_size = ctx.layout_child(child_id, child_constraints);
+        self.child_size = ctx.layout_child(child_id, child_constraints)?;
 
         // Calculate and update max scroll offset
         let max_offset = self.calculate_max_scroll_offset();
@@ -275,15 +278,15 @@ impl RenderBox<Single> for RenderScrollView {
         *self.scroll_offset.lock() = current_offset.max(0.0).min(max_offset);
 
         // Return viewport size (not child size!)
-        self.viewport_size
+        Ok(self.viewport_size)
     }
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Single>) {
-        let child_id = ctx.children.single();
+        let child_id = *ctx.children.single();
 
         // Apply clipping to viewport bounds
-        ctx.canvas().save();
-        ctx.canvas()
+        ctx.canvas_mut().save();
+        ctx.canvas_mut()
             .clip_rect(Rect::from_min_size(Point::ZERO, self.viewport_size));
 
         // Calculate paint offset
@@ -292,11 +295,11 @@ impl RenderBox<Single> for RenderScrollView {
         // Paint child at scrolled position
         ctx.paint_child(child_id, paint_offset);
 
-        ctx.canvas().restore();
+        ctx.canvas_mut().restore();
 
         // Paint scrollbar if enabled
         if self.show_scrollbar && self.max_scroll_offset() > 0.0 {
-            self.paint_scrollbar_on_canvas(ctx.canvas());
+            self.paint_scrollbar_on_canvas(ctx.canvas_mut());
         }
     }
 }

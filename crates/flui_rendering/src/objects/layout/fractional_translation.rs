@@ -4,6 +4,7 @@
 //! is specified as a fraction of the child's size rather than absolute pixels.
 
 use crate::core::{BoxLayoutCtx, BoxPaintCtx, RenderBox, Single};
+use crate::{RenderObject, RenderResult};
 use flui_types::{Offset, Size};
 
 /// RenderObject that translates its child by a fraction of the child's size
@@ -120,22 +121,24 @@ impl RenderFractionalTranslation {
     }
 }
 
+impl RenderObject for RenderFractionalTranslation {}
+
 impl RenderBox<Single> for RenderFractionalTranslation {
-    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Single>) -> Size {
-        let child_id = ctx.children.single();
+    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Single>) -> RenderResult<Size> {
+        let child_id = *ctx.children.single();
 
         // Layout child with same constraints
-        let child_size = ctx.layout_child(child_id, ctx.constraints);
+        let child_size = ctx.layout_child(child_id, ctx.constraints)?;
 
         // Cache child size for paint phase
         self.last_child_size = child_size;
 
         // Return child size (translation doesn't affect layout)
-        child_size
+        Ok(child_size)
     }
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Single>) {
-        let child_id = ctx.children.single();
+        let child_id = *ctx.children.single();
 
         // Calculate actual pixel offset from fractional translation
         let pixel_offset = self.calculate_pixel_offset(self.last_child_size);

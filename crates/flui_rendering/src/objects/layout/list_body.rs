@@ -1,8 +1,7 @@
 //! RenderListBody - simple scrollable list layout
 
-use crate::core::{
-    BoxLayoutCtx, ChildrenAccess, BoxPaintCtx, RenderBox, Variable,
-};
+use crate::core::{BoxLayoutCtx, BoxPaintCtx, ChildrenAccess, RenderBox, Variable};
+use crate::{RenderObject, RenderResult};
 use flui_types::constraints::BoxConstraints;
 use flui_types::{Axis, Offset, Size};
 
@@ -75,14 +74,16 @@ impl Default for RenderListBody {
     }
 }
 
+impl RenderObject for RenderListBody {}
+
 impl RenderBox<Variable> for RenderListBody {
-    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Variable>) -> Size {
+    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Variable>) -> RenderResult<Size> {
         let constraints = ctx.constraints;
         let children = ctx.children;
 
         if children.as_slice().is_empty() {
             self.child_sizes.clear();
-            return constraints.smallest();
+            return Ok(constraints.smallest());
         }
 
         // Layout children based on axis
@@ -102,7 +103,7 @@ impl RenderBox<Variable> for RenderListBody {
                         f32::INFINITY,
                     );
 
-                    let child_size = ctx.layout_child(child, child_constraints);
+                    let child_size = ctx.layout_child(*child, child_constraints)?;
                     self.child_sizes.push(child_size);
 
                     total_height += child_size.height;
@@ -114,7 +115,7 @@ impl RenderBox<Variable> for RenderListBody {
                     total_height += self.spacing * (children.as_slice().len() - 1) as f32;
                 }
 
-                constraints.constrain(Size::new(max_width, total_height))
+                Ok(constraints.constrain(Size::new(max_width, total_height)))
             }
             Axis::Horizontal => {
                 let mut total_width = 0.0_f32;
@@ -129,7 +130,7 @@ impl RenderBox<Variable> for RenderListBody {
                         constraints.max_height,
                     );
 
-                    let child_size = ctx.layout_child(child, child_constraints);
+                    let child_size = ctx.layout_child(*child, child_constraints)?;
                     self.child_sizes.push(child_size);
 
                     total_width += child_size.width;
@@ -141,7 +142,7 @@ impl RenderBox<Variable> for RenderListBody {
                     total_width += self.spacing * (children.as_slice().len() - 1) as f32;
                 }
 
-                constraints.constrain(Size::new(total_width, max_height))
+                Ok(constraints.constrain(Size::new(total_width, max_height)))
             }
         }
     }
@@ -163,7 +164,7 @@ impl RenderBox<Variable> for RenderListBody {
             };
 
             // Paint child with combined offset
-            ctx.paint_child(child_id, offset + child_offset);
+            ctx.paint_child(*child_id, offset + child_offset);
 
             current_offset += match self.main_axis {
                 Axis::Vertical => child_size.height + self.spacing,

@@ -1,6 +1,8 @@
 //! RenderEmpty - a render object that does nothing
 
-use crate::core::{BoxLayoutCtx, Leaf, BoxPaintCtx, RenderBox};
+use crate::{RenderObject, RenderResult};
+
+use crate::core::{BoxLayoutCtx, BoxPaintCtx, Leaf, RenderBox};
 use flui_types::Size;
 
 /// A render object that renders nothing
@@ -10,11 +12,16 @@ use flui_types::Size;
 #[derive(Debug, Clone, Copy, Default)]
 pub struct RenderEmpty;
 
+impl RenderObject for RenderEmpty {}
+
 impl RenderBox<Leaf> for RenderEmpty {
-    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Leaf>) -> Size {
+    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Leaf>) -> RenderResult<Size> {
         // Take minimum space
         let constraints = &ctx.constraints;
-        flui_types::Size::new(constraints.min_width, constraints.min_height)
+        Ok(flui_types::Size::new(
+            constraints.min_width,
+            constraints.min_height,
+        ))
     }
 
     fn paint(&self, _ctx: &mut BoxPaintCtx<'_, Leaf>) {

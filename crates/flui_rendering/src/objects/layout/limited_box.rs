@@ -1,5 +1,7 @@
 //! RenderLimitedBox - limits max width/height
 
+use crate::{RenderObject, RenderResult};
+
 use crate::core::{BoxLayoutCtx, BoxPaintCtx};
 use crate::core::{Optional, RenderBox};
 use flui_types::constraints::BoxConstraints;
@@ -59,8 +61,10 @@ impl Default for RenderLimitedBox {
     }
 }
 
+impl RenderObject for RenderLimitedBox {}
+
 impl RenderBox<Optional> for RenderLimitedBox {
-    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Optional>) -> Size {
+    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Optional>) -> RenderResult<Size> {
         let constraints = ctx.constraints;
 
         // Apply limits only if constraints are infinite
@@ -84,17 +88,17 @@ impl RenderBox<Optional> for RenderLimitedBox {
 
         if let Some(child_id) = ctx.children.get() {
             // Layout child with limited constraints
-            ctx.layout_child(child_id, limited_constraints)
+            Ok(ctx.layout_child(*child_id, limited_constraints)?)
         } else {
             // No child - return limited size
-            Size::new(max_width, max_height)
+            Ok(Size::new(max_width, max_height))
         }
     }
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Optional>) {
         // If we have a child, paint it at our offset
         if let Some(child_id) = ctx.children.get() {
-            ctx.paint_child(child_id, ctx.offset);
+            ctx.paint_child(*child_id, ctx.offset);
         }
         // If no child, nothing to paint
     }

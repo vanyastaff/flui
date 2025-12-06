@@ -1,9 +1,10 @@
 //! RenderGrid - CSS Grid-inspired layout
 
 use crate::core::{BoxLayoutCtx, BoxPaintCtx, RenderBox, Variable};
+use crate::{RenderObject, RenderResult};
+use flui_foundation::ElementId;
 use flui_types::{BoxConstraints, Offset, Size};
 use std::collections::HashMap;
-use std::num::NonZeroUsize;
 
 /// Track size specification for grid rows/columns
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -176,8 +177,8 @@ impl RenderGrid {
     /// Compute column widths based on track sizes
     fn compute_column_widths(
         &self,
-        children: &[NonZeroUsize],
-        ctx: &BoxLayoutCtx<'_, Variable>,
+        children: &[ElementId],
+        ctx: &mut BoxLayoutCtx<'_, Variable>,
         constraints: BoxConstraints,
     ) -> Vec<f32> {
         if self.column_sizes.is_empty() {
@@ -213,7 +214,9 @@ impl RenderGrid {
                                 0.0,
                                 constraints.max_height,
                             );
-                            let child_size = ctx.layout_child(child_id, child_constraints);
+                            let child_size = ctx
+                                .layout_child(child_id, child_constraints)
+                                .unwrap_or(Size::ZERO);
                             max_width = max_width.max(child_size.width);
                         }
                     }
@@ -241,8 +244,8 @@ impl RenderGrid {
     /// Compute row heights based on track sizes
     fn compute_row_heights(
         &self,
-        children: &[NonZeroUsize],
-        ctx: &BoxLayoutCtx<'_, Variable>,
+        children: &[ElementId],
+        ctx: &mut BoxLayoutCtx<'_, Variable>,
         column_widths: &[f32],
         constraints: BoxConstraints,
     ) -> Vec<f32> {
@@ -286,7 +289,9 @@ impl RenderGrid {
                                 0.0,
                                 constraints.max_height,
                             );
-                            let child_size = ctx.layout_child(child_id, child_constraints);
+                            let child_size = ctx
+                                .layout_child(child_id, child_constraints)
+                                .unwrap_or(Size::ZERO);
                             max_height = max_height.max(child_size.height);
                         }
                     }
@@ -312,28 +317,34 @@ impl RenderGrid {
     }
 }
 
+impl RenderObject for RenderGrid {}
+
 impl RenderBox<Variable> for RenderGrid {
-    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Variable>) -> Size {
+    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Variable>) -> RenderResult<Size> {
         let constraints = ctx.constraints;
         let children = ctx.children;
 
         // Collect children first for multiple passes
-        let child_ids: Vec<_> = children.iter().collect();
+        let child_ids: Vec<ElementId> = children.iter().map(|id| *id).collect();
 
         if self.column_sizes.is_empty() || self.row_sizes.is_empty() || child_ids.is_empty() {
             self.computed_column_widths.clear();
             self.computed_row_heights.clear();
             self.size = Size::ZERO;
-            return Size::ZERO;
+            return Ok(Size::ZERO);
         }
 
         // Compute track sizes
-        self.computed_column_widths = self.compute_column_widths(&child_ids, &ctx, constraints);
-        self.computed_row_heights =
-            self.compute_row_heights(&child_ids, &ctx, &self.computed_column_widths, constraints);
+        self.computed_column_widths = self.compute_column_widths(&child_ids, &mut ctx, constraints);
+        self.computed_row_heights = self.compute_row_heights(
+            &child_ids,
+            &mut ctx,
+            &self.computed_column_widths,
+            constraints,
+        );
 
         // Layout each child in its grid cell
-        for (idx, &child_id) in child_ids.iter().enumerate() {
+        for (idx, child_id) in child_ids.iter().enumerate() {
             let placement = self.get_placement(idx);
 
             // Calculate child constraints from spanned tracks
@@ -361,7 +372,7 @@ impl RenderBox<Variable> for RenderGrid {
 
             let child_constraints =
                 BoxConstraints::new(child_width, child_width, child_height, child_height);
-            ctx.layout_child(child_id, child_constraints);
+            ctx.layout_child(*child_id, child_constraints)?;
         }
 
         // Calculate total size
@@ -377,7 +388,7 @@ impl RenderBox<Variable> for RenderGrid {
         ));
         self.size = size;
 
-        size
+        Ok(size)
     }
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Variable>) {
@@ -410,7 +421,7 @@ impl RenderBox<Variable> for RenderGrid {
             }
 
             let child_offset = Offset::new(x, y);
-            ctx.paint_child(child_id, child_offset);
+            ctx.paint_child(*child_id, child_offset);
         }
     }
 }

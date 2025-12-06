@@ -9,6 +9,7 @@
 //! Similar to Flutter's RenderCustomSingleChildLayoutBox.
 
 use crate::core::{BoxLayoutCtx, BoxPaintCtx, RenderBox, Single};
+use crate::{RenderObject, RenderResult};
 use flui_types::{BoxConstraints, Offset, Size};
 use std::any::Any;
 use std::fmt::Debug;
@@ -190,9 +191,11 @@ impl RenderCustomSingleChildLayoutBox {
     }
 }
 
+impl RenderObject for RenderCustomSingleChildLayoutBox {}
+
 impl RenderBox<Single> for RenderCustomSingleChildLayoutBox {
-    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Single>) -> Size {
-        let child_id = ctx.children.single();
+    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Single>) -> RenderResult<Size> {
+        let child_id = *ctx.children.single();
 
         // 1. Get parent size from delegate (cannot depend on child size)
         let parent_size = self.delegate.get_size(ctx.constraints);
@@ -202,7 +205,7 @@ impl RenderBox<Single> for RenderCustomSingleChildLayoutBox {
         let child_constraints = self.delegate.get_constraints_for_child(ctx.constraints);
 
         // 3. Layout child with those constraints
-        let child_size = ctx.layout_child(child_id, child_constraints);
+        let child_size = ctx.layout_child(child_id, child_constraints)?;
 
         // 4. Get child position from delegate
         let child_offset = self
@@ -211,11 +214,11 @@ impl RenderBox<Single> for RenderCustomSingleChildLayoutBox {
         self.cached_child_offset = child_offset;
 
         // Return parent size
-        parent_size
+        Ok(parent_size)
     }
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Single>) {
-        let child_id = ctx.children.single();
+        let child_id = *ctx.children.single();
 
         // Paint child at the offset calculated during layout
         let child_offset = ctx.offset + self.cached_child_offset;

@@ -3,9 +3,8 @@
 //! This render object applies image filters (like blur) to the content that lies
 //! behind it in the paint order. Common use case is frosted glass effect.
 
-use crate::core::{
-    RenderBox, Single, {BoxLayoutCtx, BoxPaintCtx},
-};
+use crate::core::{BoxLayoutCtx, BoxPaintCtx, RenderBox, Single};
+use crate::{RenderObject, RenderResult};
 use flui_types::{painting::BlendMode, painting::ImageFilter, Size};
 
 // ===== RenderObject =====
@@ -85,15 +84,17 @@ impl RenderBackdropFilter {
 
 // ===== RenderObject Implementation =====
 
+impl RenderObject for RenderBackdropFilter {}
+
 impl RenderBox<Single> for RenderBackdropFilter {
-    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Single>) -> Size {
-        let child_id = ctx.children.single();
+    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Single>) -> RenderResult<Size> {
+        let child_id = *ctx.children.single();
         // Layout child with same constraints
-        ctx.layout_child(child_id, ctx.constraints)
+        Ok(ctx.layout_child(child_id, ctx.constraints)?)
     }
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Single>) {
-        let child_id = ctx.children.single();
+        let child_id = *ctx.children.single();
 
         // Note: Full backdrop filtering requires compositor support
         // In production, this would:

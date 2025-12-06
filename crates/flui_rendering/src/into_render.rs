@@ -120,20 +120,6 @@ mod tests {
         value: i32,
     }
 
-    impl RenderObject for TestRenderObject {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
-        fn as_any_mut(&mut self) -> &mut dyn Any {
-            self
-        }
-
-        fn debug_name(&self) -> &'static str {
-            "TestRenderObject"
-        }
-    }
-
     #[test]
     fn test_render_object_into_render() {
         let obj = TestRenderObject { value: 42 };

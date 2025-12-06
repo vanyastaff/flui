@@ -1,9 +1,10 @@
 //! RenderTable - Table layout with configurable column widths
 
 use crate::core::{BoxLayoutCtx, BoxPaintCtx, RenderBox, Variable};
+use crate::{RenderObject, RenderResult};
+use flui_foundation::ElementId;
 use flui_types::{BoxConstraints, Offset, Size};
 use std::collections::HashMap;
-use std::num::NonZeroUsize;
 
 /// Column width specification for table columns
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -112,8 +113,8 @@ impl RenderTable {
     #[allow(clippy::needless_range_loop)]
     fn compute_column_widths(
         &self,
-        children: &[NonZeroUsize],
-        ctx: &BoxLayoutCtx<'_, Variable>,
+        children: &[ElementId],
+        ctx: &mut BoxLayoutCtx<'_, Variable>,
         constraints: BoxConstraints,
     ) -> Vec<f32> {
         if self.columns == 0 {
@@ -150,7 +151,9 @@ impl RenderTable {
                                 0.0,
                                 constraints.max_height,
                             );
-                            let child_size = ctx.layout_child(children[idx], child_constraints);
+                            let child_size = ctx
+                                .layout_child(children[idx], child_constraints)
+                                .unwrap_or(Size::ZERO);
                             max_width = max_width.max(child_size.width);
                         }
                     }
@@ -183,8 +186,8 @@ impl RenderTable {
     #[allow(clippy::needless_range_loop)]
     fn compute_row_heights(
         &self,
-        children: &[NonZeroUsize],
-        ctx: &BoxLayoutCtx<'_, Variable>,
+        children: &[ElementId],
+        ctx: &mut BoxLayoutCtx<'_, Variable>,
         column_widths: &[f32],
         constraints: BoxConstraints,
     ) -> Vec<f32> {
@@ -207,7 +210,9 @@ impl RenderTable {
                         0.0,
                         constraints.max_height,
                     );
-                    let child_size = ctx.layout_child(children[idx], child_constraints);
+                    let child_size = ctx
+                        .layout_child(children[idx], child_constraints)
+                        .unwrap_or(Size::ZERO);
                     max_height = max_height.max(child_size.height);
                 }
             }
@@ -219,27 +224,33 @@ impl RenderTable {
     }
 }
 
+impl RenderObject for RenderTable {}
+
 impl RenderBox<Variable> for RenderTable {
-    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Variable>) -> Size {
+    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Variable>) -> RenderResult<Size> {
         let constraints = ctx.constraints;
         let children = ctx.children;
 
         // Collect children first for multiple passes
-        let child_ids: Vec<_> = children.iter().collect();
+        let child_ids: Vec<ElementId> = children.iter().map(|id| *id).collect();
 
         if self.columns == 0 || child_ids.is_empty() {
             self.computed_column_widths.clear();
             self.computed_row_heights.clear();
             self.size = Size::ZERO;
-            return Size::ZERO;
+            return Ok(Size::ZERO);
         }
 
         // Compute column widths
-        self.computed_column_widths = self.compute_column_widths(&child_ids, &ctx, constraints);
+        self.computed_column_widths = self.compute_column_widths(&child_ids, &mut ctx, constraints);
 
         // Compute row heights
-        self.computed_row_heights =
-            self.compute_row_heights(&child_ids, &ctx, &self.computed_column_widths, constraints);
+        self.computed_row_heights = self.compute_row_heights(
+            &child_ids,
+            &mut ctx,
+            &self.computed_column_widths,
+            constraints,
+        );
 
         // Calculate total size
         let total_width: f32 = self.computed_column_widths.iter().sum();
@@ -248,7 +259,7 @@ impl RenderBox<Variable> for RenderTable {
         let size = constraints.constrain(Size::new(total_width, total_height));
         self.size = size;
 
-        size
+        Ok(size)
     }
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Variable>) {
@@ -292,7 +303,7 @@ impl RenderBox<Variable> for RenderTable {
                     TableCellVerticalAlignment::Fill => Offset::new(x, y),
                 };
 
-                ctx.paint_child(child_ids[idx], cell_offset);
+                ctx.paint_child(*child_ids[idx], cell_offset);
 
                 x += col_width;
             }

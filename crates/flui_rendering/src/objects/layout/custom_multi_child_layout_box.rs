@@ -1,17 +1,18 @@
 //! RenderCustomMultiChildLayoutBox - Custom multi-child layout with delegate
 
 use crate::core::{BoxLayoutCtx, BoxPaintCtx, RenderBox, Variable};
+use crate::{RenderObject, RenderResult};
+use flui_foundation::ElementId;
 use flui_types::{BoxConstraints, Offset, Size};
 use std::any::Any;
 use std::fmt::Debug;
-use std::num::NonZeroUsize;
 
 /// Context provided to delegate during layout
 pub struct MultiChildLayoutContext<'a, 'b> {
     /// The layout context
-    ctx: &'a LayoutContext<'b, Variable, BoxProtocol>,
+    ctx: &'a mut BoxLayoutCtx<'b, Variable>,
     /// The children IDs
-    pub children: &'a [NonZeroUsize],
+    pub children: &'a [ElementId],
 }
 
 impl<'a, 'b> MultiChildLayoutContext<'a, 'b> {
@@ -23,11 +24,14 @@ impl<'a, 'b> MultiChildLayoutContext<'a, 'b> {
     ///
     /// # Returns
     /// The size of the laid out child
-    pub fn layout_child(&self, index: usize, constraints: BoxConstraints) -> Size {
+    pub fn layout_child(&mut self, index: usize, constraints: BoxConstraints) -> Size {
         if index >= self.children.len() {
             return Size::ZERO;
         }
-        self.ctx.layout_child(self.children[index], constraints)
+        // Note: This returns Size, unwrapping the Result for the delegate API
+        self.ctx
+            .layout_child(self.children[index], constraints)
+            .unwrap_or(Size::ZERO)
     }
 
     /// Get the number of children
@@ -60,7 +64,7 @@ pub trait MultiChildLayoutDelegate: Debug + Send + Sync {
     /// The final size of the container and child offsets
     fn perform_layout(
         &mut self,
-        context: &MultiChildLayoutContext,
+        context: &mut MultiChildLayoutContext,
         constraints: BoxConstraints,
     ) -> (Size, Vec<Offset>);
 
@@ -97,7 +101,7 @@ impl SimpleGridDelegate {
 impl MultiChildLayoutDelegate for SimpleGridDelegate {
     fn perform_layout(
         &mut self,
-        context: &MultiChildLayoutContext,
+        context: &mut MultiChildLayoutContext,
         constraints: BoxConstraints,
     ) -> (Size, Vec<Offset>) {
         let child_count = context.child_count();
@@ -208,28 +212,30 @@ impl RenderCustomMultiChildLayoutBox {
     }
 }
 
+impl RenderObject for RenderCustomMultiChildLayoutBox {}
+
 impl RenderBox<Variable> for RenderCustomMultiChildLayoutBox {
-    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Variable>) -> Size {
+    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Variable>) -> RenderResult<Size> {
         let constraints = ctx.constraints;
         let children = ctx.children;
 
         // Collect children for delegate
-        let child_ids: Vec<_> = children.iter().collect();
+        let child_ids: Vec<ElementId> = children.iter().map(|id| *id).collect();
 
         // Create layout context for delegate
-        let layout_ctx = MultiChildLayoutContext {
-            ctx: &ctx,
+        let mut layout_ctx = MultiChildLayoutContext {
+            ctx: &mut ctx,
             children: &child_ids,
         };
 
         // Let delegate perform layout
-        let (size, child_offsets) = self.delegate.perform_layout(&layout_ctx, constraints);
+        let (size, child_offsets) = self.delegate.perform_layout(&mut layout_ctx, constraints);
 
         // Cache offsets for paint
         self.child_offsets = child_offsets;
 
         // Constrain size to bounds
-        constraints.constrain(size)
+        Ok(constraints.constrain(size))
     }
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Variable>) {
@@ -245,7 +251,7 @@ impl RenderBox<Variable> for RenderCustomMultiChildLayoutBox {
             }
 
             let child_offset = self.child_offsets[index];
-            ctx.paint_child(child_id, offset + child_offset);
+            ctx.paint_child(*child_id, offset + child_offset);
         }
     }
 }

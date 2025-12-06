@@ -224,7 +224,7 @@ impl RenderEditableLine {
 }
 
 impl RenderBox<Leaf> for RenderEditableLine {
-    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Leaf>) -> Size {
+    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Leaf>) -> Size {
         let constraints = ctx.constraints;
 
         // Calculate text size

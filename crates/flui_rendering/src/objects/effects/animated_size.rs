@@ -5,6 +5,7 @@
 //! A full implementation would use AnimationController and TickerProvider.
 
 use crate::core::{BoxLayoutCtx, BoxPaintCtx, RenderBox, Single};
+use crate::{RenderObject, RenderResult};
 use flui_types::{Alignment, Size};
 use std::time::{Duration, Instant};
 
@@ -198,12 +199,14 @@ impl RenderAnimatedSize {
     }
 }
 
+impl RenderObject for RenderAnimatedSize {}
+
 impl RenderBox<Single> for RenderAnimatedSize {
-    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Single>) -> Size {
-        let child_id = ctx.children.single();
+    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Single>) -> RenderResult<Size> {
+        let child_id = *ctx.children.single();
 
         // Layout child with same constraints
-        let child_size = ctx.layout_child(child_id, ctx.constraints);
+        let child_size = ctx.layout_child(child_id, ctx.constraints)?;
 
         // Detect size change and start animation if needed
         if self.last_child_size != Some(child_size) {
@@ -223,11 +226,11 @@ impl RenderBox<Single> for RenderAnimatedSize {
         let animated_size = self.update_animation();
 
         // Constrain animated size to parent constraints
-        ctx.constraints.constrain(animated_size)
+        Ok(ctx.constraints.constrain(animated_size))
     }
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Single>) {
-        let child_id = ctx.children.single();
+        let child_id = *ctx.children.single();
 
         // Calculate child offset based on alignment
         let child_offset = if let Some(last_child_size) = self.last_child_size {

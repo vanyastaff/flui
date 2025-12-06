@@ -103,7 +103,7 @@ impl std::fmt::Debug for RenderPhysicalShape {
 }
 
 impl RenderBox<Optional> for RenderPhysicalShape {
-    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Optional>) -> Size {
+    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Optional>) -> Size {
         let constraints = ctx.constraints;
 
         let size = if let Some(child_id) = ctx.children.get() {

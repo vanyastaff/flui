@@ -1,7 +1,7 @@
 //! RenderPhysicalModel - Material Design elevation with shadow
 
-use crate::core::{BoxLayoutCtx, BoxPaintCtx};
-use crate::core::{Optional, RenderBox};
+use crate::core::{BoxLayoutCtx, BoxPaintCtx, Optional, RenderBox};
+use crate::{RenderObject, RenderResult};
 use flui_painting::Paint;
 use flui_types::{painting::Path, Color, Point, RRect, Rect, Size};
 
@@ -114,13 +114,15 @@ impl Default for RenderPhysicalModel {
     }
 }
 
+impl RenderObject for RenderPhysicalModel {}
+
 impl RenderBox<Optional> for RenderPhysicalModel {
-    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Optional>) -> Size {
+    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Optional>) -> RenderResult<Size> {
         let constraints = ctx.constraints;
 
         let size = if let Some(child_id) = ctx.children.get() {
             // Layout child and use its size
-            ctx.layout_child(child_id, constraints)
+            ctx.layout_child(*child_id, constraints)?
         } else {
             // No child - use max constraints for shape size
             Size::new(constraints.max_width, constraints.max_height)
@@ -129,7 +131,7 @@ impl RenderBox<Optional> for RenderPhysicalModel {
         // Store size for paint
         self.size = size;
 
-        size
+        Ok(size)
     }
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Optional>) {
@@ -158,7 +160,7 @@ impl RenderBox<Optional> for RenderPhysicalModel {
                 }
             };
 
-            ctx.canvas()
+            ctx.canvas_mut()
                 .draw_shadow(&shadow_path, self.shadow_color, self.elevation);
         }
 
@@ -168,7 +170,7 @@ impl RenderBox<Optional> for RenderPhysicalModel {
         match self.shape {
             PhysicalShape::Rectangle => {
                 let rect = Rect::from_xywh(offset.dx, offset.dy, size.width, size.height);
-                ctx.canvas().draw_rect(rect, &paint);
+                ctx.canvas_mut().draw_rect(rect, &paint);
             }
             PhysicalShape::RoundedRectangle => {
                 let radius = flui_types::styling::Radius::circular(self.border_radius);
@@ -176,19 +178,19 @@ impl RenderBox<Optional> for RenderPhysicalModel {
                     Rect::from_xywh(offset.dx, offset.dy, size.width, size.height),
                     radius,
                 );
-                ctx.canvas().draw_rrect(rrect, &paint);
+                ctx.canvas_mut().draw_rrect(rrect, &paint);
             }
             PhysicalShape::Circle => {
                 let radius = size.width.min(size.height) / 2.0;
                 let center =
                     Point::new(offset.dx + size.width / 2.0, offset.dy + size.height / 2.0);
-                ctx.canvas().draw_circle(center, radius, &paint);
+                ctx.canvas_mut().draw_circle(center, radius, &paint);
             }
         }
 
         // Paint child on top at same offset if present
         if let Some(child_id) = ctx.children.get() {
-            ctx.paint_child(child_id, offset);
+            ctx.paint_child(*child_id, offset);
         }
     }
 }

@@ -18,6 +18,8 @@ use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
 
+use downcast_rs::{impl_downcast, DowncastSync};
+
 use flui_foundation::{DiagnosticsProperty, ElementId};
 use flui_interaction::{HitTestEntry, HitTestResult};
 use flui_painting::Canvas;
@@ -205,10 +207,8 @@ pub fn new_layer_handle<T: Any + Send + Sync + 'static>(layer: T) -> LayerHandle
 ///     padding: EdgeInsets,
 /// }
 ///
+/// // With downcast-rs, no need to implement as_any/as_any_mut manually
 /// impl RenderObject for RenderPadding {
-///     fn as_any(&self) -> &dyn Any { self }
-///     fn as_any_mut(&mut self) -> &mut dyn Any { self }
-///
 ///     fn perform_layout(
 ///         &mut self,
 ///         element_id: ElementId,
@@ -243,17 +243,7 @@ pub fn new_layer_handle<T: Any + Send + Sync + 'static>(layer: T) -> LayerHandle
 ///     }
 /// }
 /// ```
-pub trait RenderObject: Send + Sync + fmt::Debug + 'static {
-    // ============================================================================
-    // TYPE ERASURE (Required)
-    // ============================================================================
-
-    /// Returns `&dyn Any` for safe downcasting.
-    fn as_any(&self) -> &dyn Any;
-
-    /// Returns `&mut dyn Any` for safe downcasting.
-    fn as_any_mut(&mut self) -> &mut dyn Any;
-
+pub trait RenderObject: DowncastSync + fmt::Debug {
     // ============================================================================
     // DYN-COMPATIBLE LAYOUT (Required for Box protocol)
     // ============================================================================
@@ -1631,6 +1621,8 @@ pub trait RenderObject: Send + Sync + fmt::Debug + 'static {
     }
 }
 
+impl_downcast!(sync RenderObject);
+
 // ============================================================================
 // TESTS
 // ============================================================================
@@ -1645,14 +1637,6 @@ mod tests {
     }
 
     impl RenderObject for TestRenderLeaf {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
-        fn as_any_mut(&mut self) -> &mut dyn Any {
-            self
-        }
-
         fn perform_layout(
             &mut self,
             _element_id: ElementId,
@@ -1678,14 +1662,6 @@ mod tests {
     }
 
     impl RenderObject for TestRenderContainer {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
-        fn as_any_mut(&mut self) -> &mut dyn Any {
-            self
-        }
-
         fn visit_children(&self, visitor: &mut dyn FnMut(ElementId)) {
             for &child_id in &self.children {
                 visitor(child_id);
@@ -1704,12 +1680,9 @@ mod tests {
         };
         let trait_obj: &dyn RenderObject = &obj;
 
-        // Use as_any() for downcasting (standard Rust pattern)
-        assert!(trait_obj
-            .as_any()
-            .downcast_ref::<TestRenderLeaf>()
-            .is_some());
-        assert!(trait_obj.as_any().is::<TestRenderLeaf>());
+        // Use downcast-rs for downcasting
+        assert!(trait_obj.downcast_ref::<TestRenderLeaf>().is_some());
+        assert!(trait_obj.is::<TestRenderLeaf>());
     }
 
     #[test]

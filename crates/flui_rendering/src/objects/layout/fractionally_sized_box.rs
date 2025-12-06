@@ -3,6 +3,7 @@
 use crate::core::{
     RenderBox, Single, {BoxLayoutCtx, BoxPaintCtx},
 };
+use crate::{RenderObject, RenderResult};
 use flui_types::Size;
 
 /// RenderObject that sizes child_id as a fraction of available space
@@ -91,9 +92,11 @@ impl Default for RenderFractionallySizedBox {
     }
 }
 
+impl RenderObject for RenderFractionallySizedBox {}
+
 impl RenderBox<Single> for RenderFractionallySizedBox {
-    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Single>) -> Size {
-        let child_id = ctx.children.single();
+    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Single>) -> RenderResult<Size> {
+        let child_id = *ctx.children.single();
 
         // Calculate target size based on factors
         let target_width = self.width_factor.map(|f| ctx.constraints.max_width * f);
@@ -103,11 +106,11 @@ impl RenderBox<Single> for RenderFractionallySizedBox {
         let child_constraints = ctx.constraints.tighten(target_width, target_height);
 
         // Single arity always has exactly one child
-        ctx.layout_child(child_id, child_constraints)
+        Ok(ctx.layout_child(child_id, child_constraints)?)
     }
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Single>) {
-        let child_id = ctx.children.single();
+        let child_id = *ctx.children.single();
         ctx.paint_child(child_id, ctx.offset);
     }
 }

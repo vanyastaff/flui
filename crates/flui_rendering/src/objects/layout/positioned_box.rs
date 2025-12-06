@@ -3,6 +3,7 @@
 use crate::core::{
     RenderBox, Single, {BoxLayoutCtx, BoxPaintCtx},
 };
+use crate::{RenderObject, RenderResult};
 use flui_types::{Offset, Size};
 
 /// RenderObject that positions child_id with explicit coordinates
@@ -85,9 +86,11 @@ impl Default for RenderPositionedBox {
     }
 }
 
+impl RenderObject for RenderPositionedBox {}
+
 impl RenderBox<Single> for RenderPositionedBox {
-    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Single>) -> Size {
-        let child_id = ctx.children.single();
+    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Single>) -> RenderResult<Size> {
+        let child_id = *ctx.children.single();
         let constraints = ctx.constraints;
 
         // Calculate child constraints based on positioning
@@ -116,11 +119,11 @@ impl RenderBox<Single> for RenderPositionedBox {
         };
 
         // Layout child (Single arity always has a child)
-        ctx.layout_child(child_id, child_constraints)
+        Ok(ctx.layout_child(child_id, child_constraints)?)
     }
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Single>) {
-        let child_id = ctx.children.single();
+        let child_id = *ctx.children.single();
 
         // Calculate paint offset based on positioning
         let position_offset = Offset::new(self.left.unwrap_or(0.0), self.top.unwrap_or(0.0));

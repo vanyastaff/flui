@@ -3,6 +3,7 @@
 use crate::core::{
     RenderBox, Single, {BoxLayoutCtx, BoxPaintCtx},
 };
+use crate::{RenderObject, RenderResult};
 use flui_types::Size;
 
 /// RenderObject that excludes its child from the semantics tree
@@ -50,15 +51,17 @@ impl RenderExcludeSemantics {
 
 // ===== RenderObject Implementation =====
 
+impl RenderObject for RenderExcludeSemantics {}
+
 impl RenderBox<Single> for RenderExcludeSemantics {
-    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Single>) -> Size {
-        let child_id = ctx.children.single();
+    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Single>) -> RenderResult<Size> {
+        let child_id = *ctx.children.single();
         // Layout child with same constraints (pass-through)
-        ctx.layout_child(child_id, ctx.constraints)
+        Ok(ctx.layout_child(child_id, ctx.constraints)?)
     }
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Single>) {
-        let child_id = ctx.children.single();
+        let child_id = *ctx.children.single();
         // Paint child directly (pass-through)
         ctx.paint_child(child_id, ctx.offset);
     }

@@ -1,5 +1,7 @@
 //! RenderConstrainedBox - applies additional constraints to a child
 
+use crate::{RenderObject, RenderResult};
+
 use crate::core::{BoxLayoutCtx, BoxPaintCtx};
 use crate::core::{Optional, RenderBox};
 use flui_types::constraints::BoxConstraints;
@@ -51,8 +53,10 @@ impl Default for RenderConstrainedBox {
     }
 }
 
+impl RenderObject for RenderConstrainedBox {}
+
 impl RenderBox<Optional> for RenderConstrainedBox {
-    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Optional>) -> Size {
+    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Optional>) -> RenderResult<Size> {
         let constraints = ctx.constraints;
 
         // Enforce additional constraints by intersecting with incoming constraints
@@ -67,7 +71,7 @@ impl RenderBox<Optional> for RenderConstrainedBox {
 
         let size = if let Some(child_id) = ctx.children.get() {
             // Layout child with combined constraints
-            ctx.layout_child(child_id, child_constraints)
+            ctx.layout_child(*child_id, child_constraints)?
         } else {
             // No child - return minimum size from additional constraints
             Size::new(child_constraints.min_width, child_constraints.min_height)
@@ -75,13 +79,13 @@ impl RenderBox<Optional> for RenderConstrainedBox {
 
         tracing::trace!(size = ?size, "RenderConstrainedBox::layout complete");
 
-        size
+        Ok(size)
     }
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Optional>) {
         // If we have a child, paint it at our offset
         if let Some(child_id) = ctx.children.get() {
-            ctx.paint_child(child_id, ctx.offset);
+            ctx.paint_child(*child_id, ctx.offset);
         }
         // If no child, nothing to paint
     }

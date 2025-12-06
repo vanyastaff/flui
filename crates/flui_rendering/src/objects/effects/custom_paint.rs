@@ -1,8 +1,7 @@
 //! RenderCustomPaint - custom painting with user-defined painters
 
-use crate::core::{
-    RenderBox, Single, {BoxLayoutCtx, BoxPaintCtx},
-};
+use crate::core::{BoxLayoutCtx, BoxPaintCtx, RenderBox, Single};
+use crate::{RenderObject, RenderResult};
 use flui_painting::Canvas;
 use flui_types::Size;
 
@@ -142,28 +141,30 @@ impl Default for RenderCustomPaint {
 
 // ===== RenderObject Implementation =====
 
+impl RenderObject for RenderCustomPaint {}
+
 impl RenderBox<Single> for RenderCustomPaint {
-    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Single>) -> Size {
-        let child_id = ctx.children.single();
+    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Single>) -> RenderResult<Size> {
+        let child_id = *ctx.children.single();
 
         // Single arity always has exactly one child
         // Layout child with our constraints
-        let size = ctx.layout_child(child_id, ctx.constraints);
+        let size = ctx.layout_child(child_id, ctx.constraints)?;
 
         // Store the laid out size for use during paint
         self.laid_out_size = size;
-        size
+        Ok(size)
     }
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Single>) {
-        let child_id = ctx.children.single();
+        let child_id = *ctx.children.single();
 
         // Use the size from layout phase
         let size = self.laid_out_size;
 
         // Paint background painter (if any)
         if let Some(bg_painter) = &self.painter {
-            bg_painter.paint(ctx.canvas(), size);
+            bg_painter.paint(ctx.canvas_mut(), size);
         }
 
         // Paint child
@@ -171,7 +172,7 @@ impl RenderBox<Single> for RenderCustomPaint {
 
         // Paint foreground painter on top (if any)
         if let Some(fg_painter) = &self.foreground_painter {
-            fg_painter.paint(ctx.canvas(), size);
+            fg_painter.paint(ctx.canvas_mut(), size);
         }
     }
 }

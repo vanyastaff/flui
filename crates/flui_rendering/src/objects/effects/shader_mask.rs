@@ -3,9 +3,8 @@
 //! This render object applies a shader (gradient, pattern, etc.) as a mask
 //! to its child, controlling which parts are visible.
 
-use crate::core::{
-    RenderBox, Single, {BoxLayoutCtx, BoxPaintCtx},
-};
+use crate::core::{BoxLayoutCtx, BoxPaintCtx, RenderBox, Single};
+use crate::{RenderObject, RenderResult};
 use flui_types::{painting::BlendMode, styling::Color32, Size};
 
 // ===== Data Structure =====
@@ -129,15 +128,17 @@ impl RenderShaderMask {
 
 // ===== RenderObject Implementation =====
 
+impl RenderObject for RenderShaderMask {}
+
 impl RenderBox<Single> for RenderShaderMask {
-    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Single>) -> Size {
-        let child_id = ctx.children.single();
+    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Single>) -> RenderResult<Size> {
+        let child_id = *ctx.children.single();
         // Layout child with same constraints
-        ctx.layout_child(child_id, ctx.constraints)
+        Ok(ctx.layout_child(child_id, ctx.constraints)?)
     }
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Single>) {
-        let child_id = ctx.children.single();
+        let child_id = *ctx.children.single();
 
         // Note: Full shader masking requires compositor support
         // For now, we'll paint child normally

@@ -1,5 +1,7 @@
 //! RenderBaseline - aligns child based on baseline
 
+use crate::{RenderObject, RenderResult};
+
 use crate::core::{BoxLayoutCtx, BoxPaintCtx};
 use crate::core::{RenderBox, Single};
 use flui_types::{typography::TextBaseline, Offset, Size};
@@ -59,24 +61,26 @@ impl RenderBaseline {
 
 // ===== RenderObject Implementation =====
 
+impl RenderObject for RenderBaseline {}
+
 impl RenderBox<Single> for RenderBaseline {
-    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Single>) -> Size {
-        let child_id = ctx.children.single();
+    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Single>) -> RenderResult<Size> {
+        let child_id = *ctx.children.single();
         let constraints = ctx.constraints;
 
         // Layout child with same constraints
-        let child_size = ctx.layout_child(child_id, constraints);
+        let child_size = ctx.layout_child(child_id, constraints)?;
 
         // Our height includes space above baseline and child height
         // For simplicity, we use child height + baseline offset
-        Size::new(
+        Ok(Size::new(
             child_size.width,
             (child_size.height + self.baseline).max(child_size.height),
-        )
+        ))
     }
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Single>) {
-        let child_id = ctx.children.single();
+        let child_id = *ctx.children.single();
         let offset = ctx.offset;
 
         // Apply baseline offset to child painting position

@@ -3,6 +3,7 @@
 use crate::core::{
     RenderBox, Single, {BoxLayoutCtx, BoxPaintCtx},
 };
+use crate::{RenderObject, RenderResult};
 use flui_types::{layout::BoxFit, painting::ClipBehavior, Alignment, Offset, Size};
 
 /// RenderObject that scales and positions its child_id according to BoxFit
@@ -165,9 +166,11 @@ impl Default for RenderFittedBox {
 
 // ===== RenderObject Implementation =====
 
+impl RenderObject for RenderFittedBox {}
+
 impl RenderBox<Single> for RenderFittedBox {
-    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Single>) -> Size {
-        let child_id = ctx.children.single();
+    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Single>) -> RenderResult<Size> {
+        let child_id = *ctx.children.single();
 
         // Our size is determined by constraints (we try to be as large as possible)
         let size = ctx.constraints.biggest();
@@ -175,13 +178,13 @@ impl RenderBox<Single> for RenderFittedBox {
         // Layout child with unbounded constraints to get natural size
         let child_constraints =
             flui_types::constraints::BoxConstraints::new(0.0, f32::INFINITY, 0.0, f32::INFINITY);
-        ctx.layout_child(child_id, child_constraints);
+        ctx.layout_child(child_id, child_constraints)?;
 
-        size
+        Ok(size)
     }
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Single>) {
-        let child_id = ctx.children.single();
+        let child_id = *ctx.children.single();
 
         // TODO: Apply transform for scaling based on self.calculate_fit()
         // For now, just paint child as-is

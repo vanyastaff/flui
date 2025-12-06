@@ -1,8 +1,7 @@
 //! RenderWrap - arranges children with wrapping (like flexbox wrap)
 
-use crate::core::{
-    BoxLayoutCtx, ChildrenAccess, BoxPaintCtx, RenderBox, Variable,
-};
+use crate::core::{BoxLayoutCtx, BoxPaintCtx, ChildrenAccess, RenderBox, Variable};
+use crate::{RenderObject, RenderResult};
 use flui_types::constraints::BoxConstraints;
 use flui_types::{Axis, Offset, Size};
 
@@ -116,14 +115,16 @@ impl Default for RenderWrap {
     }
 }
 
+impl RenderObject for RenderWrap {}
+
 impl RenderBox<Variable> for RenderWrap {
-    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Variable>) -> Size {
+    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Variable>) -> RenderResult<Size> {
         let constraints = ctx.constraints;
         let children = ctx.children;
 
         if children.as_slice().is_empty() {
             self.child_offsets.clear();
-            return constraints.smallest();
+            return Ok(constraints.smallest());
         }
 
         // Layout algorithm depends on direction
@@ -146,7 +147,7 @@ impl RenderBox<Variable> for RenderWrap {
                         constraints.max_height,
                     );
 
-                    let child_size = ctx.layout_child(child_id, child_constraints);
+                    let child_size = ctx.layout_child(*child_id, child_constraints)?;
 
                     // Check if we need to wrap
                     if current_x + child_size.width > max_width && current_x > 0.0 {
@@ -166,7 +167,7 @@ impl RenderBox<Variable> for RenderWrap {
                 }
 
                 let total_height = current_y + max_run_height;
-                Size::new(total_width.max(0.0), total_height.max(0.0))
+                Ok(Size::new(total_width.max(0.0), total_height.max(0.0)))
             }
             Axis::Vertical => {
                 let max_height = constraints.max_height;
@@ -184,7 +185,7 @@ impl RenderBox<Variable> for RenderWrap {
                         max_height - current_y,
                     );
 
-                    let child_size = ctx.layout_child(child_id, child_constraints);
+                    let child_size = ctx.layout_child(*child_id, child_constraints)?;
 
                     // Check if we need to wrap
                     if current_y + child_size.height > max_height && current_y > 0.0 {
@@ -204,7 +205,7 @@ impl RenderBox<Variable> for RenderWrap {
                 }
 
                 let total_width = current_x + max_run_width;
-                Size::new(total_width.max(0.0), total_height.max(0.0))
+                Ok(Size::new(total_width.max(0.0), total_height.max(0.0)))
             }
         }
     }
@@ -217,7 +218,7 @@ impl RenderBox<Variable> for RenderWrap {
 
         for (i, child_id) in child_ids.into_iter().enumerate() {
             let child_offset = self.child_offsets.get(i).copied().unwrap_or(Offset::ZERO);
-            ctx.paint_child(child_id, offset + child_offset);
+            ctx.paint_child(*child_id, offset + child_offset);
         }
     }
 }

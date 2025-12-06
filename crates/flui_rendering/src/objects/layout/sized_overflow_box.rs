@@ -3,6 +3,7 @@
 use crate::core::{
     RenderBox, Single, {BoxLayoutCtx, BoxPaintCtx},
 };
+use crate::{RenderObject, RenderResult};
 use flui_types::constraints::BoxConstraints;
 use flui_types::{Alignment, Size};
 
@@ -120,9 +121,11 @@ impl RenderSizedOverflowBox {
 
 // ===== RenderObject Implementation =====
 
+impl RenderObject for RenderSizedOverflowBox {}
+
 impl RenderBox<Single> for RenderSizedOverflowBox {
-    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Single>) -> Size {
-        let child_id = ctx.children.single();
+    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Single>) -> RenderResult<Size> {
+        let child_id = *ctx.children.single();
 
         // Build child constraints from override values
         let child_min_width = self.child_min_width.unwrap_or(ctx.constraints.min_width);
@@ -138,18 +141,18 @@ impl RenderBox<Single> for RenderSizedOverflowBox {
         );
 
         // Layout child with override constraints
-        self.child_size = ctx.layout_child(child_id, child_constraints);
+        self.child_size = ctx.layout_child(child_id, child_constraints)?;
 
         // Our size is the specified size (or constrained by parent)
         let width = self.width.unwrap_or(ctx.constraints.max_width);
         let height = self.height.unwrap_or(ctx.constraints.max_height);
 
         self.size = ctx.constraints.constrain(Size::new(width, height));
-        self.size
+        Ok(self.size)
     }
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Single>) {
-        let child_id = ctx.children.single();
+        let child_id = *ctx.children.single();
 
         // Calculate aligned position
         let align_offset = self.alignment.calculate_offset(self.child_size, self.size);

@@ -1,6 +1,7 @@
 //! RenderImage - Displays a raster image
 
-use crate::core::{BoxLayoutCtx, Leaf, BoxPaintCtx, RenderBox};
+use crate::core::{BoxLayoutCtx, BoxPaintCtx, Leaf, RenderBox};
+use crate::{RenderObject, RenderResult};
 use flui_painting::Paint;
 use flui_types::{painting::Image, Rect, Size};
 
@@ -149,8 +150,10 @@ impl RenderImage {
     }
 }
 
+impl RenderObject for RenderImage {}
+
 impl RenderBox<Leaf> for RenderImage {
-    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Leaf>) -> Size {
+    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Leaf>) -> RenderResult<Size> {
         let constraints = &ctx.constraints;
 
         // If we have specific size constraints, use them
@@ -158,7 +161,7 @@ impl RenderBox<Leaf> for RenderImage {
             && constraints.min_height == constraints.max_height;
 
         if is_tight {
-            Size::new(constraints.max_width, constraints.max_height)
+            Ok(Size::new(constraints.max_width, constraints.max_height))
         } else {
             // Otherwise, use image's intrinsic size within constraints
             let image_width = self.image.width() as f32;
@@ -167,7 +170,7 @@ impl RenderBox<Leaf> for RenderImage {
             let width = image_width.clamp(constraints.min_width, constraints.max_width);
             let height = image_height.clamp(constraints.min_height, constraints.max_height);
 
-            Size::new(width, height)
+            Ok(Size::new(width, height))
         }
     }
 
@@ -180,7 +183,7 @@ impl RenderBox<Leaf> for RenderImage {
 
         // Draw the image into the context's canvas
         let paint_opt = self.paint.as_ref();
-        ctx.canvas()
+        ctx.canvas_mut()
             .draw_image(self.image.clone(), dest_rect, paint_opt);
     }
 }

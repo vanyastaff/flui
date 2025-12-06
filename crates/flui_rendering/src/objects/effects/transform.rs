@@ -1,6 +1,7 @@
 //! RenderTransform - applies matrix transformation to child
 
-use crate::core::{BoxHitTestCtx, BoxLayoutCtx, BoxPaintCtx, BoxProtocol, RenderBox, Single};
+use crate::core::{BoxHitTestCtx, BoxLayoutCtx, BoxPaintCtx, RenderBox, Single};
+use crate::{RenderObject, RenderResult};
 use flui_interaction::HitTestResult;
 use flui_types::{geometry::Transform, Matrix4, Offset, Size};
 
@@ -132,11 +133,13 @@ impl RenderTransform {
     }
 }
 
+impl RenderObject for RenderTransform {}
+
 impl RenderBox<Single> for RenderTransform {
-    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Single>) -> Size {
+    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Single>) -> RenderResult<Size> {
         // Layout child with same constraints (transform doesn't affect layout)
         ctx.layout_single_child()
-            .unwrap_or_else(|_| ctx.constraints.smallest())
+            .map_err(|e| crate::RenderError::Layout(e.to_string()))
     }
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Single>) {

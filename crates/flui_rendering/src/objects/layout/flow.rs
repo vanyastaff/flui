@@ -1,10 +1,11 @@
 //! RenderFlow - Custom layout with delegate pattern
 
 use crate::core::{BoxLayoutCtx, BoxPaintCtx, RenderBox, Variable};
+use crate::{RenderObject, RenderResult};
+use flui_foundation::ElementId;
 use flui_types::{BoxConstraints, Matrix4, Offset, Size};
 use std::any::Any;
 use std::fmt::Debug;
-use std::num::NonZeroUsize;
 
 /// Context provided to FlowDelegate during paint
 pub struct FlowPaintContext<'a, 'b> {
@@ -15,7 +16,7 @@ pub struct FlowPaintContext<'a, 'b> {
     /// Size of each child (after layout)
     pub child_sizes: &'a [Size],
     /// Children IDs
-    pub children: &'a [NonZeroUsize],
+    pub children: &'a [ElementId],
 }
 
 impl<'a, 'b> FlowPaintContext<'a, 'b> {
@@ -31,6 +32,9 @@ impl<'a, 'b> FlowPaintContext<'a, 'b> {
         self.paint_ctx.paint_child(self.children[index], offset);
     }
 }
+
+// Type alias for backward compatibility
+type ChildId = ElementId;
 
 /// Delegate trait for custom Flow layout logic
 pub trait FlowDelegate: Debug + Send + Sync {
@@ -166,8 +170,10 @@ impl Debug for RenderFlow {
     }
 }
 
+impl RenderObject for RenderFlow {}
+
 impl RenderBox<Variable> for RenderFlow {
-    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Variable>) -> Size {
+    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Variable>) -> RenderResult<Size> {
         let constraints = ctx.constraints;
         let children = ctx.children;
 
@@ -178,19 +184,19 @@ impl RenderBox<Variable> for RenderFlow {
         self.child_sizes.clear();
         for (i, child_id) in children.iter().enumerate() {
             let child_constraints = self.delegate.get_constraints_for_child(i, constraints);
-            let child_size = ctx.layout_child(child_id, child_constraints);
+            let child_size = ctx.layout_child(*child_id, child_constraints)?;
             self.child_sizes.push(child_size);
         }
 
         self.size = size;
-        size
+        Ok(size)
     }
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Variable>) {
         let offset = ctx.offset;
 
         // Collect child IDs first to avoid borrow checker issues
-        let child_ids: Vec<_> = ctx.children.iter().collect();
+        let child_ids: Vec<ElementId> = ctx.children.iter().map(|id| *id).collect();
 
         // Create paint context for delegate
         let mut flow_paint_ctx = FlowPaintContext {

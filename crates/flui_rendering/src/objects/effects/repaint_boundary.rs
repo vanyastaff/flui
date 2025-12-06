@@ -1,8 +1,7 @@
 //! RenderRepaintBoundary - optimization boundary for repainting
 
-use crate::core::{
-    RenderBox, Single, {BoxLayoutCtx, BoxPaintCtx},
-};
+use crate::core::{BoxLayoutCtx, BoxPaintCtx, RenderBox, Single};
+use crate::{RenderObject, RenderResult};
 use flui_types::Size;
 
 /// RenderObject that creates a repaint boundary
@@ -55,15 +54,17 @@ impl Default for RenderRepaintBoundary {
     }
 }
 
+impl RenderObject for RenderRepaintBoundary {}
+
 impl RenderBox<Single> for RenderRepaintBoundary {
-    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Single>) -> Size {
-        let child_id = ctx.children.single();
+    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Single>) -> RenderResult<Size> {
+        let child_id = *ctx.children.single();
         // Single arity always has exactly one child
-        ctx.layout_child(child_id, ctx.constraints)
+        Ok(ctx.layout_child(child_id, ctx.constraints)?)
     }
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Single>) {
-        let child_id = ctx.children.single();
+        let child_id = *ctx.children.single();
 
         // Paint child
         // TODO: In a full implementation with layer caching support:

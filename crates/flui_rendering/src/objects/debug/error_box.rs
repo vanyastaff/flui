@@ -1,6 +1,7 @@
 //! RenderErrorBox - Debug error visualization
 
 use crate::core::{BoxLayoutCtx, BoxPaintCtx, Leaf, RenderBox};
+use crate::{RenderObject, RenderResult};
 use flui_painting::Paint;
 use flui_types::prelude::{Color, TextStyle};
 use flui_types::{Rect, Size};
@@ -90,15 +91,17 @@ impl Default for RenderErrorBox {
     }
 }
 
+impl RenderObject for RenderErrorBox {}
+
 impl RenderBox<Leaf> for RenderErrorBox {
-    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Leaf>) -> Size {
+    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Leaf>) -> RenderResult<Size> {
         let constraints = ctx.constraints;
 
         // Error box takes up all available space
         let size = Size::new(constraints.max_width, constraints.max_height);
 
         self.size = size;
-        size
+        Ok(size)
     }
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Leaf>) {
@@ -108,7 +111,7 @@ impl RenderBox<Leaf> for RenderErrorBox {
         // Draw background
         paint.color = self.background_color;
         paint.style = flui_painting::PaintStyle::Fill;
-        ctx.canvas().draw_rect(rect, &paint);
+        ctx.canvas_mut().draw_rect(rect, &paint);
 
         // Draw diagonal stripes if enabled
         if self.show_stripes {
@@ -119,7 +122,7 @@ impl RenderBox<Leaf> for RenderErrorBox {
             let stripe_spacing = 20.0;
             let mut x = 0.0;
             while x < self.size.width + self.size.height {
-                ctx.canvas().draw_line(
+                ctx.canvas_mut().draw_line(
                     flui_types::Point::new(x, 0.0),
                     flui_types::Point::new(x - self.size.height, self.size.height),
                     &paint,
@@ -139,7 +142,7 @@ impl RenderBox<Leaf> for RenderErrorBox {
             .with_font_size(14.0)
             .with_color(self.text_color);
 
-        ctx.canvas().draw_text(
+        ctx.canvas_mut().draw_text(
             &self.message,
             flui_types::Offset::new(text_x, text_y),
             &text_style,

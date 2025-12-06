@@ -75,6 +75,10 @@ pub enum RenderError {
         /// Found protocol
         found: &'static str,
     },
+
+    /// Generic layout error (for simple error messages)
+    #[error("Layout error: {0}")]
+    Layout(String),
 }
 
 /// Result type for rendering operations

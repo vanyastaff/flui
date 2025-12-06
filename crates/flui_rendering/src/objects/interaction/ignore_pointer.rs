@@ -1,6 +1,7 @@
 //! RenderIgnorePointer - makes widget ignore pointer events
 
 use crate::core::{BoxHitTestCtx, BoxLayoutCtx, BoxPaintCtx, RenderBox, Single};
+use crate::{RenderObject, RenderResult};
 use flui_interaction::HitTestResult;
 use flui_types::{Offset, Size};
 
@@ -48,11 +49,14 @@ impl Default for RenderIgnorePointer {
     }
 }
 
+impl RenderObject for RenderIgnorePointer {}
+
 impl RenderBox<Single> for RenderIgnorePointer {
-    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Single>) -> Size {
+    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Single>) -> RenderResult<Size> {
         // Layout child with same constraints
-        ctx.layout_single_child()
-            .unwrap_or_else(|_| ctx.constraints.smallest())
+        Ok(ctx
+            .layout_single_child()
+            .unwrap_or_else(|_| ctx.constraints.smallest()))
     }
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Single>) {

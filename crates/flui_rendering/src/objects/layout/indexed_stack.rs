@@ -1,8 +1,8 @@
 //! RenderIndexedStack - shows only one child by index
 
-use crate::core::{
-    BoxLayoutCtx, ChildrenAccess, BoxPaintCtx, RenderBox, Variable,
-};
+use crate::{RenderObject, RenderResult};
+
+use crate::core::{BoxLayoutCtx, BoxPaintCtx, ChildrenAccess, RenderBox, Variable};
 use flui_types::{Alignment, Size};
 
 /// RenderObject that shows only one child from a list
@@ -70,14 +70,16 @@ impl Default for RenderIndexedStack {
     }
 }
 
+impl RenderObject for RenderIndexedStack {}
+
 impl RenderBox<Variable> for RenderIndexedStack {
-    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Variable>) -> Size {
+    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Variable>) -> RenderResult<Size> {
         let constraints = ctx.constraints;
         let children = ctx.children;
 
         if children.as_slice().is_empty() {
             self.child_sizes.clear();
-            return constraints.smallest();
+            return Ok(constraints.smallest());
         }
 
         // Layout all children (to maintain their state)
@@ -86,7 +88,7 @@ impl RenderBox<Variable> for RenderIndexedStack {
         self.child_sizes.clear();
 
         for child in children.iter() {
-            let child_size = ctx.layout_child(child, constraints);
+            let child_size = ctx.layout_child(*child, constraints)?;
             self.child_sizes.push(child_size);
             max_width = max_width.max(child_size.width);
             max_height = max_height.max(child_size.height);
@@ -97,7 +99,7 @@ impl RenderBox<Variable> for RenderIndexedStack {
             max_width.clamp(constraints.min_width, constraints.max_width),
             max_height.clamp(constraints.min_height, constraints.max_height),
         );
-        self.size
+        Ok(self.size)
     }
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Variable>) {
@@ -115,7 +117,7 @@ impl RenderBox<Variable> for RenderIndexedStack {
                 let child_offset = self.alignment.calculate_offset(child_size, self.size);
 
                 // Paint child
-                ctx.paint_child(child_id, offset + child_offset);
+                ctx.paint_child(*child_id, offset + child_offset);
             }
         }
     }

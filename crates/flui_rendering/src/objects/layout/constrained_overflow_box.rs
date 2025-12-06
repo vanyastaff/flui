@@ -10,6 +10,7 @@
 //! - Transforming constraints passed to children
 
 use crate::core::{BoxLayoutCtx, BoxPaintCtx, RenderBox, Single};
+use crate::{RenderObject, RenderResult};
 use flui_types::{Alignment, BoxConstraints, Size};
 
 /// A render object that imposes different constraints on its child than it gets from its parent,
@@ -139,9 +140,11 @@ impl Default for RenderConstrainedOverflowBox {
     }
 }
 
+impl RenderObject for RenderConstrainedOverflowBox {}
+
 impl RenderBox<Single> for RenderConstrainedOverflowBox {
-    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Single>) -> Size {
-        let child_id = ctx.children.single();
+    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Single>) -> RenderResult<Size> {
+        let child_id = *ctx.children.single();
 
         // Parent sizes itself according to its incoming constraints
         // (uses biggest size available from parent)
@@ -151,16 +154,16 @@ impl RenderBox<Single> for RenderConstrainedOverflowBox {
         let child_constraints = self.create_child_constraints(ctx.constraints);
 
         // Layout child with custom constraints (may overflow parent)
-        let child_size = ctx.layout_child(child_id, child_constraints);
+        let child_size = ctx.layout_child(child_id, child_constraints)?;
         self.cached_child_size = child_size;
         self.cached_parent_size = parent_size;
 
         // Return parent size (ignoring child size)
-        parent_size
+        Ok(parent_size)
     }
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Single>) {
-        let child_id = ctx.children.single();
+        let child_id = *ctx.children.single();
 
         // Calculate child offset based on alignment
         // Note: child may be larger than parent (overflow)

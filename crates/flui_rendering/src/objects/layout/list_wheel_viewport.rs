@@ -1,8 +1,7 @@
 //! RenderListWheelViewport - 3D wheel picker viewport
 
-use crate::core::{
-    BoxLayoutCtx, ChildrenAccess, BoxPaintCtx, RenderBox, Variable,
-};
+use crate::core::{BoxLayoutCtx, BoxPaintCtx, ChildrenAccess, RenderBox, Variable};
+use crate::{RenderObject, RenderResult};
 use flui_types::constraints::BoxConstraints;
 use flui_types::prelude::*;
 use std::f32::consts::PI;
@@ -203,8 +202,10 @@ impl Default for RenderListWheelViewport {
     }
 }
 
+impl RenderObject for RenderListWheelViewport {}
+
 impl RenderBox<Variable> for RenderListWheelViewport {
-    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Variable>) -> Size {
+    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Variable>) -> RenderResult<Size> {
         let constraints = ctx.constraints;
         let children = ctx.children;
 
@@ -214,7 +215,7 @@ impl RenderBox<Variable> for RenderListWheelViewport {
         if children.as_slice().is_empty() {
             self.child_offsets.clear();
             self.child_transforms.clear();
-            return size;
+            return Ok(size);
         }
 
         // Clear cache
@@ -228,7 +229,7 @@ impl RenderBox<Variable> for RenderListWheelViewport {
         // Layout all children and calculate their transforms
         for (index, child_id) in children.iter().enumerate() {
             // Layout child with fixed constraints
-            let _child_size = ctx.layout_child(child_id, child_constraints);
+            let _child_size = ctx.layout_child(*child_id, child_constraints)?;
 
             // Calculate 3D transform and offset
             let (transform, offset, _scale) = self.calculate_item_transform(index, size.height);
@@ -238,7 +239,7 @@ impl RenderBox<Variable> for RenderListWheelViewport {
             self.child_transforms.push(Some(transform));
         }
 
-        size
+        Ok(size)
     }
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Variable>) {
@@ -265,7 +266,7 @@ impl RenderBox<Variable> for RenderListWheelViewport {
             // For now, just using the calculated offsets for cylindrical positioning
             // Visibility culling would be done based on scroll position, but for now
             // we paint all children (could be optimized later)
-            ctx.paint_child(child_id, offset + child_offset);
+            ctx.paint_child(*child_id, offset + child_offset);
         }
     }
 }

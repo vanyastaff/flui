@@ -213,14 +213,6 @@ impl<A: Arity> RenderBox<A> for BoxRenderWrapper<A> {
 // ============================================================================
 
 impl<A: Arity> RenderObject for BoxRenderWrapper<A> {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-        self
-    }
-
     fn debug_name(&self) -> &'static str {
         self.inner.as_ref().debug_name()
     }
@@ -316,14 +308,6 @@ impl<A: Arity> RenderSliver<A> for SliverRenderWrapper<A> {
 // ============================================================================
 
 impl<A: Arity> RenderObject for SliverRenderWrapper<A> {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-        self
-    }
-
     fn debug_name(&self) -> &'static str {
         self.inner.as_ref().debug_name()
     }
@@ -365,16 +349,6 @@ mod tests {
         }
 
         fn paint(&self, _ctx: &mut BoxPaintContext<'_, Leaf>) {}
-    }
-
-    impl RenderObject for MockRenderBox {
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-
-        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-            self
-        }
     }
 
     #[test]

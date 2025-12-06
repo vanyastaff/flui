@@ -1,7 +1,7 @@
 //! RenderDecoratedBox - paints decoration around a child
 
-use crate::core::{BoxLayoutCtx, BoxPaintCtx};
-use crate::core::{Optional, RenderBox};
+use crate::core::{BoxLayoutCtx, BoxPaintCtx, Optional, RenderBox};
+use crate::{RenderObject, RenderResult};
 use flui_painting::{Canvas, Paint};
 use flui_types::{
     styling::{BorderPosition, BoxDecoration, Radius},
@@ -280,13 +280,15 @@ impl RenderDecoratedBox {
 
 // ===== RenderObject Implementation =====
 
+impl RenderObject for RenderDecoratedBox {}
+
 impl RenderBox<Optional> for RenderDecoratedBox {
-    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Optional>) -> Size {
+    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Optional>) -> RenderResult<Size> {
         let constraints = ctx.constraints;
 
         let size = if let Some(child_id) = ctx.children.get() {
             // Layout child and use its size
-            ctx.layout_child(child_id, constraints)
+            ctx.layout_child(*child_id, constraints)?
         } else {
             // No child - use constrained size for decoration
             // Handle infinity by using min constraints as fallback
@@ -306,7 +308,7 @@ impl RenderBox<Optional> for RenderDecoratedBox {
         // Store size for paint
         self.size = size;
 
-        size
+        Ok(size)
     }
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Optional>) {
@@ -317,17 +319,17 @@ impl RenderBox<Optional> for RenderDecoratedBox {
 
         // Paint decoration in background position
         if self.position == DecorationPosition::Background {
-            self.paint_decoration(ctx.canvas(), rect);
+            self.paint_decoration(ctx.canvas_mut(), rect);
         }
 
         // Paint child if present
         if let Some(child_id) = ctx.children.get() {
-            ctx.paint_child(child_id, offset);
+            ctx.paint_child(*child_id, offset);
         }
 
         // Paint decoration in foreground position
         if self.position == DecorationPosition::Foreground {
-            self.paint_decoration(ctx.canvas(), rect);
+            self.paint_decoration(ctx.canvas_mut(), rect);
         }
     }
 }

@@ -136,7 +136,10 @@ pub struct LayoutContext<
     /// - For `BoxProtocol`: `BoxConstraints` (min/max width/height)
     /// - For `SliverProtocol`: `SliverConstraints` (scroll offset, viewport)
     pub constraints: P::Constraints,
-    children_accessor: A::Accessor<'a, ElementId>,
+    /// Children accessor for compile-time arity-checked access.
+    ///
+    /// Use methods like `.single()`, `.optional()`, or `.iter()` depending on arity.
+    pub children: A::Accessor<'a, ElementId>,
     _phantom: PhantomData<P>,
 }
 
@@ -148,7 +151,7 @@ where
         f.debug_struct("LayoutContext")
             .field("element_id", &self.element_id)
             .field("constraints", &self.constraints)
-            .field("children_count", &self.children_accessor.len())
+            .field("children_count", &self.children.len())
             .finish_non_exhaustive()
     }
 }
@@ -170,13 +173,13 @@ where
         tree: &'a mut T,
         element_id: ElementId,
         constraints: P::Constraints,
-        children_accessor: A::Accessor<'a, ElementId>,
+        children: A::Accessor<'a, ElementId>,
     ) -> Self {
         Self {
             tree,
             element_id,
             constraints,
-            children_accessor,
+            children,
             _phantom: PhantomData,
         }
     }
@@ -204,7 +207,7 @@ where
     /// This provides zero-cost iteration with proper lifetime management.
     #[inline]
     pub fn children(&self) -> impl Iterator<Item = ElementId> + 'a {
-        self.children_accessor.iter().copied()
+        self.children.iter().copied()
     }
 
     /// Returns children matching the given HRTB predicate.
@@ -338,7 +341,7 @@ impl<'a, T: LayoutTree> LayoutContext<'a, Single, BoxProtocol, T> {
     /// Gets the single child ID (convenience for Single arity).
     #[inline]
     pub fn single_child(&self) -> ElementId {
-        *self.children_accessor.single()
+        *self.children.single()
     }
 
     /// Layouts the single child with the current constraints.
@@ -449,7 +452,7 @@ impl<'a, T: LayoutTree> LayoutContext<'a, Single, SliverProtocol, T> {
     /// Gets the single child ID (convenience for Single arity).
     #[inline]
     pub fn single_child(&self) -> ElementId {
-        *self.children_accessor.single()
+        *self.children.single()
     }
 
     /// Layouts the single child with the current constraints.
@@ -538,7 +541,8 @@ pub struct PaintContext<
     /// - For `SliverProtocol`: `SliverGeometry` (paint/scroll extents)
     pub geometry: P::Geometry,
     canvas: &'a mut Canvas,
-    children_accessor: A::Accessor<'a, ElementId>,
+    /// Children accessor for compile-time arity-checked access.
+    pub children: A::Accessor<'a, ElementId>,
     _phantom: PhantomData<P>,
 }
 
@@ -551,7 +555,7 @@ where
             .field("element_id", &self.element_id)
             .field("offset", &self.offset)
             .field("geometry", &self.geometry)
-            .field("children_count", &self.children_accessor.len())
+            .field("children_count", &self.children.len())
             .finish_non_exhaustive()
     }
 }
@@ -575,7 +579,7 @@ where
         offset: Offset,
         geometry: P::Geometry,
         canvas: &'a mut Canvas,
-        children_accessor: A::Accessor<'a, ElementId>,
+        children: A::Accessor<'a, ElementId>,
     ) -> Self {
         Self {
             tree,
@@ -583,7 +587,7 @@ where
             offset,
             geometry,
             canvas,
-            children_accessor,
+            children,
             _phantom: PhantomData,
         }
     }
@@ -609,7 +613,7 @@ where
     /// Returns a GAT-based iterator over child ElementIds.
     #[inline]
     pub fn children(&self) -> impl Iterator<Item = ElementId> + 'a {
-        self.children_accessor.iter().copied()
+        self.children.iter().copied()
     }
 
     /// Paints a child element at the given offset.
@@ -679,7 +683,7 @@ impl<'a, T: PaintTree> PaintContext<'a, Single, BoxProtocol, T> {
     /// Gets the single child ID (convenience for Single arity).
     #[inline]
     pub fn single_child(&self) -> ElementId {
-        *self.children_accessor.single()
+        *self.children.single()
     }
 
     /// Paints the single child at the given offset.
@@ -726,7 +730,7 @@ impl<'a, T: PaintTree> PaintContext<'a, Single, SliverProtocol, T> {
     /// Gets the single child ID (convenience for Single arity).
     #[inline]
     pub fn single_child(&self) -> ElementId {
-        *self.children_accessor.single()
+        *self.children.single()
     }
 
     /// Paints the single child at the given offset.
@@ -790,7 +794,8 @@ pub struct HitTestContext<
     pub position: Offset,
     /// The computed geometry from layout (protocol-specific).
     pub geometry: P::Geometry,
-    children_accessor: A::Accessor<'a, ElementId>,
+    /// Children accessor for compile-time arity-checked access.
+    pub children: A::Accessor<'a, ElementId>,
     _phantom: PhantomData<P>,
 }
 
@@ -803,7 +808,7 @@ where
             .field("element_id", &self.element_id)
             .field("position", &self.position)
             .field("geometry", &self.geometry)
-            .field("children_count", &self.children_accessor.len())
+            .field("children_count", &self.children.len())
             .finish_non_exhaustive()
     }
 }
@@ -826,14 +831,14 @@ where
         element_id: ElementId,
         position: Offset,
         geometry: P::Geometry,
-        children_accessor: A::Accessor<'a, ElementId>,
+        children: A::Accessor<'a, ElementId>,
     ) -> Self {
         Self {
             tree,
             element_id,
             position,
             geometry,
-            children_accessor,
+            children,
             _phantom: PhantomData,
         }
     }
@@ -847,12 +852,12 @@ where
     /// Returns a GAT-based iterator over child ElementIds.
     #[inline]
     pub fn children(&self) -> impl Iterator<Item = ElementId> + 'a {
-        self.children_accessor.iter().copied()
+        self.children.iter().copied()
     }
 
     /// Returns children in reverse order (for z-order hit testing).
     pub fn children_reverse(&self) -> impl DoubleEndedIterator<Item = ElementId> + 'a {
-        self.children_accessor.as_slice().iter().copied().rev()
+        self.children.as_slice().iter().copied().rev()
     }
 
     /// Hit tests a child element.
@@ -889,7 +894,7 @@ where
             element_id: self.element_id,
             position: new_position,
             geometry: self.geometry.clone(),
-            children_accessor: self.children_accessor,
+            children: self.children,
             _phantom: PhantomData,
         }
     }
@@ -958,7 +963,7 @@ impl<'a, T: HitTestTree> HitTestContext<'a, Single, BoxProtocol, T> {
     /// Gets the single child ID (convenience for Single arity).
     #[inline]
     pub fn single_child(&self) -> ElementId {
-        *self.children_accessor.single()
+        *self.children.single()
     }
 
     /// Hit tests the single child at the given position.
@@ -1002,7 +1007,7 @@ impl<'a, T: HitTestTree> HitTestContext<'a, Single, SliverProtocol, T> {
     /// Gets the single child ID (convenience for Single arity).
     #[inline]
     pub fn single_child(&self) -> ElementId {
-        *self.children_accessor.single()
+        *self.children.single()
     }
 
     /// Hit tests the single child at the given position.

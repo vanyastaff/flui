@@ -1,5 +1,7 @@
 //! RenderShiftedBox - Shifts child position by an offset
 
+use crate::{RenderObject, RenderResult};
+
 use crate::core::{
     RenderBox, Single, {BoxLayoutCtx, BoxPaintCtx},
 };
@@ -75,22 +77,24 @@ impl Default for RenderShiftedBox {
     }
 }
 
+impl RenderObject for RenderShiftedBox {}
+
 impl RenderBox<Single> for RenderShiftedBox {
-    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Single>) -> Size {
-        let child_id = ctx.children.single();
+    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Single>) -> RenderResult<Size> {
+        let child_id = *ctx.children.single();
 
         // Layout child with full constraints
-        let size = ctx.layout_child(child_id, ctx.constraints);
+        let size = ctx.layout_child(child_id, ctx.constraints)?;
 
         // Store size for paint
         self.size = size;
 
         // Return child's size unchanged
-        size
+        Ok(size)
     }
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Single>) {
-        let child_id = ctx.children.single();
+        let child_id = *ctx.children.single();
 
         // Paint child at shifted position
         let child_offset = Offset::new(

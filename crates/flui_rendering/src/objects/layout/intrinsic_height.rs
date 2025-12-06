@@ -3,6 +3,7 @@
 use crate::core::{
     RenderBox, Single, {BoxLayoutCtx, BoxPaintCtx},
 };
+use crate::{RenderObject, RenderResult};
 use flui_types::constraints::BoxConstraints;
 use flui_types::Size;
 
@@ -78,9 +79,11 @@ impl Default for RenderIntrinsicHeight {
     }
 }
 
+impl RenderObject for RenderIntrinsicHeight {}
+
 impl RenderBox<Single> for RenderIntrinsicHeight {
-    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Single>) -> Size {
-        let child_id = ctx.children.single();
+    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Single>) -> RenderResult<Size> {
+        let child_id = *ctx.children.single();
 
         // Layout child with infinite height to get intrinsic height
         let intrinsic_constraints = BoxConstraints::new(
@@ -90,7 +93,7 @@ impl RenderBox<Single> for RenderIntrinsicHeight {
             f32::INFINITY,
         );
 
-        let child_size = ctx.layout_child(child_id, intrinsic_constraints);
+        let child_size = ctx.layout_child(child_id, intrinsic_constraints)?;
 
         // Apply step width/height if specified
         let width = if let Some(step) = self.step_width {
@@ -106,11 +109,11 @@ impl RenderBox<Single> for RenderIntrinsicHeight {
         };
 
         // Constrain to parent constraints
-        ctx.constraints.constrain(Size::new(width, height))
+        Ok(ctx.constraints.constrain(Size::new(width, height)))
     }
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Single>) {
-        let child_id = ctx.children.single();
+        let child_id = *ctx.children.single();
         ctx.paint_child(child_id, ctx.offset);
     }
 }

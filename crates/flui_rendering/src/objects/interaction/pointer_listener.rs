@@ -3,12 +3,14 @@
 //! This RenderObject wraps a child and listens for pointer events,
 //! calling the appropriate callbacks when events occur.
 
-use crate::core::{
-    RenderBox, Single, {BoxLayoutCtx, BoxPaintCtx},
-};
-use flui_types::events::{PointerEvent, PointerEventHandler};
+use crate::core::{BoxLayoutCtx, BoxPaintCtx, RenderBox, Single};
+use crate::{RenderObject, RenderResult};
+use flui_types::events::PointerEvent;
 use flui_types::Size;
 use std::sync::Arc;
+
+/// Handler type for pointer events
+pub type PointerEventHandler = Arc<dyn Fn(&PointerEvent) + Send + Sync>;
 
 /// Pointer event callbacks
 ///
@@ -93,6 +95,8 @@ impl std::fmt::Debug for PointerCallbacks {
     }
 }
 
+impl RenderObject for RenderPointerListener {}
+
 /// RenderObject that listens for pointer events
 ///
 /// This widget detects pointer events (mouse clicks, touches) and
@@ -170,20 +174,20 @@ impl RenderPointerListener {
 }
 
 impl RenderBox<Single> for RenderPointerListener {
-    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Single>) -> Size {
-        let child_id = ctx.children.single();
+    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Single>) -> RenderResult<Size> {
+        let child_id = *ctx.children.single();
 
         // Layout child with same constraints
-        let size = ctx.layout_child(child_id, ctx.constraints);
+        let size = ctx.layout_child(child_id, ctx.constraints)?;
 
         // Cache size for use in paint
         self.size = size;
 
-        size
+        Ok(size)
     }
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Single>) {
-        let child_id = ctx.children.single();
+        let child_id = *ctx.children.single();
         let offset = ctx.offset;
 
         // Register hit region for pointer event handling
@@ -219,7 +223,7 @@ impl RenderBox<Single> for RenderPointerListener {
             });
 
         // Add hit region to canvas
-        ctx.canvas()
+        ctx.canvas_mut()
             .add_hit_region(flui_painting::HitRegion::new(bounds, handler));
 
         tracing::trace!(

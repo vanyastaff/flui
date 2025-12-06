@@ -4,7 +4,8 @@
 //! compositor/window. It handles the initial frame setup and coordinates
 //! the output surface configuration.
 
-use crate::core::{BoxLayoutCtx, RenderBox, Single};
+use crate::core::{BoxLayoutCtx, BoxPaintCtx, RenderBox, Single};
+use crate::{RenderObject, RenderResult};
 use flui_types::{BoxConstraints, Size};
 
 /// Configuration for the RenderView's layout constraints
@@ -127,16 +128,18 @@ impl RenderView {
     }
 }
 
+impl RenderObject for RenderView {}
+
 impl RenderBox<Single> for RenderView {
-    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Single>) -> Size {
+    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Single>) -> RenderResult<Size> {
         // Get the single child
-        let child_id = ctx.children.single();
+        let child_id = *ctx.children.single();
 
         // Create tight constraints that exactly match the view size
         let constraints = self.configuration.to_constraints();
 
         // Layout child with tight constraints (fills entire surface)
-        let child_size = ctx.layout_child(child_id, constraints);
+        let child_size = ctx.layout_child(child_id, constraints)?;
 
         // RenderView always returns the configuration size, regardless of child
         // (child must conform to our constraints)
@@ -145,13 +148,13 @@ impl RenderBox<Single> for RenderView {
             "RenderView child must fill the entire surface"
         );
 
-        self.configuration.size
+        Ok(self.configuration.size)
     }
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Single>) {
         // Simply paint the child at origin (0, 0)
         // RenderView doesn't apply any transformations or effects
-        let child_id = ctx.children.single();
+        let child_id = *ctx.children.single();
         ctx.paint_child(child_id, ctx.offset);
     }
 }

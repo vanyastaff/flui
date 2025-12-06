@@ -1,8 +1,8 @@
 //! RenderAlign - aligns child within available space
 
 use crate::core::{BoxLayoutCtx, BoxPaintCtx, Optional, RenderBox};
+use crate::{RenderObject, RenderResult};
 use flui_types::{Alignment, Offset, Size};
-use std::any::Any;
 
 /// RenderObject that aligns its child within the available space
 ///
@@ -93,14 +93,17 @@ impl Default for RenderAlign {
     }
 }
 
+impl RenderObject for RenderAlign {}
+
 impl RenderBox<Optional> for RenderAlign {
-    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Optional>) -> Size {
+    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Optional>) -> RenderResult<Size> {
         let constraints = ctx.constraints;
 
         // Check if we have a child
         if let Some(child_id) = ctx.children.get() {
+            let child_id = *child_id;
             // Layout child with loose constraints to get its natural size
-            let child_size = ctx.layout_child(child_id, constraints.loosen());
+            let child_size = ctx.layout_child(child_id, constraints.loosen())?;
 
             // Calculate our size based on factors
             // Flutter-compatible behavior:
@@ -134,7 +137,7 @@ impl RenderBox<Optional> for RenderAlign {
 
             self.child_offset = Offset::new(aligned_x, aligned_y);
 
-            size
+            Ok(size)
         } else {
             // No child - take max size but handle infinity
             let width = if constraints.max_width.is_finite() {
@@ -147,7 +150,7 @@ impl RenderBox<Optional> for RenderAlign {
             } else {
                 constraints.min_height
             };
-            Size::new(width, height)
+            Ok(Size::new(width, height))
         }
     }
 
@@ -155,16 +158,8 @@ impl RenderBox<Optional> for RenderAlign {
         // If we have a child, paint it at aligned position
         if let Some(child_id) = ctx.children.get() {
             let child_offset = ctx.offset + self.child_offset;
-            ctx.paint_child(child_id, child_offset);
+            ctx.paint_child(*child_id, child_offset);
         }
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
     }
 }
 

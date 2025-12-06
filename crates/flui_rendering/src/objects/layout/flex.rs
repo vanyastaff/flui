@@ -1,8 +1,7 @@
 //! RenderFlex - flex layout container (Row/Column)
 
-use crate::core::{
-    BoxLayoutCtx, ChildrenAccess, BoxPaintCtx, RenderBox, Variable,
-};
+use crate::core::{BoxLayoutCtx, BoxPaintCtx, ChildrenAccess, RenderBox, Variable};
+use crate::{RenderObject, RenderResult};
 use flui_types::{
     constraints::BoxConstraints,
     layout::{CrossAxisAlignment, MainAxisAlignment, MainAxisSize},
@@ -159,8 +158,10 @@ impl Default for RenderFlex {
     }
 }
 
+impl RenderObject for RenderFlex {}
+
 impl RenderBox<Variable> for RenderFlex {
-    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Variable>) -> Size {
+    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Variable>) -> RenderResult<Size> {
         let constraints = ctx.constraints;
         let children = ctx.children;
 
@@ -169,7 +170,7 @@ impl RenderBox<Variable> for RenderFlex {
 
         let child_count = children.as_slice().len();
         if child_count == 0 {
-            return constraints.smallest();
+            return Ok(constraints.smallest());
         }
 
         // ========== SIMPLE FLEX LAYOUT (no flexible children yet) ==========
@@ -222,7 +223,7 @@ impl RenderBox<Variable> for RenderFlex {
                 ),
             };
 
-            let child_size = ctx.layout_child(child_id, child_constraints);
+            let child_size = ctx.layout_child(*child_id, child_constraints)?;
             child_sizes.push(child_size);
 
             let (child_main, child_cross) = match direction {
@@ -345,7 +346,7 @@ impl RenderBox<Variable> for RenderFlex {
             } + between_space;
         }
 
-        size
+        Ok(size)
     }
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Variable>) {
@@ -356,7 +357,7 @@ impl RenderBox<Variable> for RenderFlex {
 
         for (i, child_id) in child_ids.into_iter().enumerate() {
             let child_offset = self.child_offsets.get(i).copied().unwrap_or(Offset::ZERO);
-            ctx.paint_child(child_id, offset + child_offset);
+            ctx.paint_child(*child_id, offset + child_offset);
         }
     }
 }

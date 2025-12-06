@@ -1,6 +1,7 @@
 //! RenderAbsorbPointer - prevents pointer events from reaching children
 
 use crate::core::{BoxHitTestCtx, BoxLayoutCtx, BoxPaintCtx, RenderBox, Single};
+use crate::{RenderObject, RenderResult};
 use flui_interaction::{HitTestEntry, HitTestResult};
 use flui_types::{Offset, Rect, Size};
 
@@ -49,11 +50,14 @@ impl Default for RenderAbsorbPointer {
     }
 }
 
+impl RenderObject for RenderAbsorbPointer {}
+
 impl RenderBox<Single> for RenderAbsorbPointer {
-    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Single>) -> Size {
+    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Single>) -> RenderResult<Size> {
         // Layout child with same constraints
-        ctx.layout_single_child()
-            .unwrap_or_else(|_| ctx.constraints.smallest())
+        Ok(ctx
+            .layout_single_child()
+            .unwrap_or_else(|_| ctx.constraints.smallest()))
     }
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Single>) {

@@ -3,9 +3,8 @@
 //! This widget provides metadata about the region it covers that can be read by
 //! ancestors or the system (e.g., system UI overlay styling).
 
-use crate::core::{
-    RenderBox, Single, {BoxLayoutCtx, BoxPaintCtx},
-};
+use crate::core::{BoxLayoutCtx, BoxPaintCtx, RenderBox, Single};
+use crate::{RenderObject, RenderResult};
 use flui_types::Size;
 
 /// RenderAnnotatedRegion - Annotates a region with a value
@@ -70,17 +69,19 @@ impl<T: Clone + Send + Sync + std::fmt::Debug + 'static> RenderAnnotatedRegion<T
 
 // ===== RenderObject Implementation =====
 
+impl<T: Clone + Send + Sync + std::fmt::Debug + 'static> RenderObject for RenderAnnotatedRegion<T> {}
+
 impl<T: Clone + Send + Sync + std::fmt::Debug + 'static> RenderBox<Single>
     for RenderAnnotatedRegion<T>
 {
-    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Single>) -> Size {
-        let child_id = ctx.children.single();
+    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Single>) -> RenderResult<Size> {
+        let child_id = *ctx.children.single();
         // Layout child with same constraints (pass-through)
-        ctx.layout_child(child_id, ctx.constraints)
+        Ok(ctx.layout_child(child_id, ctx.constraints)?)
     }
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Single>) {
-        let child_id = ctx.children.single();
+        let child_id = *ctx.children.single();
         // This is a pass-through - just paint child
         // The annotation value is used by ancestors, not painted
         ctx.paint_child(child_id, ctx.offset);

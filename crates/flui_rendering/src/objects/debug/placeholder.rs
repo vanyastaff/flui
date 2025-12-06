@@ -1,6 +1,7 @@
 //! RenderPlaceholder - Debug placeholder visualization
 
 use crate::core::{BoxLayoutCtx, BoxPaintCtx, Leaf, RenderBox};
+use crate::{RenderObject, RenderResult};
 use flui_painting::{Canvas, Paint};
 use flui_types::prelude::{Color, TextStyle};
 use flui_types::{Rect, Size};
@@ -114,8 +115,10 @@ impl Default for RenderPlaceholder {
     }
 }
 
+impl RenderObject for RenderPlaceholder {}
+
 impl RenderBox<Leaf> for RenderPlaceholder {
-    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Leaf>) -> Size {
+    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Leaf>) -> RenderResult<Size> {
         let constraints = ctx.constraints;
 
         // Use fallback size if unconstrained, otherwise use constraints
@@ -133,7 +136,7 @@ impl RenderBox<Leaf> for RenderPlaceholder {
 
         let size = Size::new(width, height);
         self.size = size;
-        size
+        Ok(size)
     }
 
     fn paint(&self, _ctx: &mut BoxPaintCtx<'_, Leaf>) {

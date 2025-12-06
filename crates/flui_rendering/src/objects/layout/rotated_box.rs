@@ -3,6 +3,7 @@
 use crate::core::{
     RenderBox, Single, {BoxLayoutCtx, BoxPaintCtx},
 };
+use crate::{RenderObject, RenderResult};
 use flui_types::constraints::BoxConstraints;
 use flui_types::{geometry::QuarterTurns, Offset, Size};
 
@@ -62,9 +63,11 @@ impl RenderRotatedBox {
 
 // ===== RenderObject Implementation =====
 
+impl RenderObject for RenderRotatedBox {}
+
 impl RenderBox<Single> for RenderRotatedBox {
-    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Single>) -> Size {
-        let child_id = ctx.children.single();
+    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Single>) -> RenderResult<Size> {
+        let child_id = *ctx.children.single();
 
         // For odd quarter turns (90°, 270°), swap width and height constraints
         let child_constraints = if self.quarter_turns.swaps_dimensions() {
@@ -80,7 +83,7 @@ impl RenderBox<Single> for RenderRotatedBox {
         };
 
         // Layout child
-        let child_size = ctx.layout_child(child_id, child_constraints);
+        let child_size = ctx.layout_child(child_id, child_constraints)?;
 
         // Our size is child size with potentially swapped dimensions
         let size = if self.quarter_turns.swaps_dimensions() {
@@ -91,11 +94,11 @@ impl RenderBox<Single> for RenderRotatedBox {
 
         // Store size for paint phase
         self.size = size;
-        size
+        Ok(size)
     }
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Single>) {
-        let child_id = ctx.children.single();
+        let child_id = *ctx.children.single();
 
         // If no rotation, just paint child directly
         if self.quarter_turns == QuarterTurns::Zero {
@@ -107,14 +110,14 @@ impl RenderBox<Single> for RenderRotatedBox {
         let offset = ctx.offset;
 
         // Save canvas state
-        ctx.canvas().save();
+        ctx.canvas_mut().save();
 
         // Move to rotation origin (our top-left)
-        ctx.canvas().translate(offset.dx, offset.dy);
+        ctx.canvas_mut().translate(offset.dx, offset.dy);
 
         // Apply rotation transform
         let angle_radians = self.quarter_turns.radians();
-        ctx.canvas().rotate(angle_radians);
+        ctx.canvas_mut().rotate(angle_radians);
 
         // Calculate child offset in rotated space
         let child_offset = match self.quarter_turns {
@@ -128,7 +131,7 @@ impl RenderBox<Single> for RenderRotatedBox {
         ctx.paint_child(child_id, child_offset);
 
         // Restore canvas state
-        ctx.canvas().restore();
+        ctx.canvas_mut().restore();
     }
 }
 

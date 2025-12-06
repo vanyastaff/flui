@@ -28,6 +28,7 @@
 //! ```
 
 use crate::core::{BoxHitTestCtx, BoxLayoutCtx, BoxPaintCtx, RenderBox, Single};
+use crate::{RenderObject, RenderResult};
 use flui_interaction::HitTestResult;
 use flui_painting::Canvas;
 use flui_types::{painting::Clip, Offset, Size};
@@ -135,15 +136,17 @@ impl<S: ClipShape> RenderClip<S> {
     }
 }
 
+impl<S: ClipShape + 'static> RenderObject for RenderClip<S> {}
+
 impl<S: ClipShape + 'static> RenderBox<Single> for RenderClip<S> {
-    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Single>) -> Size {
+    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Single>) -> RenderResult<Size> {
         // Layout child with same constraints (pass-through)
         let size = ctx
             .layout_single_child()
             .unwrap_or_else(|_| ctx.constraints.smallest());
         // Cache size for paint
         self.size = size;
-        size
+        Ok(size)
     }
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Single>) {

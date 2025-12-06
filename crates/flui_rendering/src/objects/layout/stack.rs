@@ -1,8 +1,7 @@
 //! RenderStack - layering container
 
-use crate::core::{
-    BoxLayoutCtx, ChildrenAccess, BoxPaintCtx, RenderBox, Variable,
-};
+use crate::core::{BoxLayoutCtx, BoxPaintCtx, ChildrenAccess, RenderBox, Variable};
+use crate::{RenderObject, RenderResult};
 use flui_types::constraints::BoxConstraints;
 use flui_types::layout::StackFit;
 use flui_types::{Alignment, Offset, Size};
@@ -76,8 +75,10 @@ impl Default for RenderStack {
     }
 }
 
+impl RenderObject for RenderStack {}
+
 impl RenderBox<Variable> for RenderStack {
-    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Variable>) -> Size {
+    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Variable>) -> RenderResult<Size> {
         let constraints = ctx.constraints;
         let children = ctx.children;
 
@@ -85,7 +86,7 @@ impl RenderBox<Variable> for RenderStack {
         if child_count == 0 {
             self.child_sizes.clear();
             self.child_offsets.clear();
-            return constraints.smallest();
+            return Ok(constraints.smallest());
         }
 
         // Clear caches
@@ -105,7 +106,7 @@ impl RenderBox<Variable> for RenderStack {
                 StackFit::Passthrough => constraints,
             };
 
-            let child_size = ctx.layout_child(child_id, child_constraints);
+            let child_size = ctx.layout_child(*child_id, child_constraints)?;
             self.child_sizes.push(child_size);
             max_width = max_width.max(child_size.width);
             max_height = max_height.max(child_size.height);
@@ -132,7 +133,7 @@ impl RenderBox<Variable> for RenderStack {
             self.child_offsets.push(child_offset);
         }
 
-        size
+        Ok(size)
     }
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Variable>) {
@@ -144,7 +145,7 @@ impl RenderBox<Variable> for RenderStack {
         // Paint children in order (first child in back, last child on top)
         for (i, child_id) in child_ids.into_iter().enumerate() {
             let child_offset = self.child_offsets.get(i).copied().unwrap_or(Offset::ZERO);
-            ctx.paint_child(child_id, offset + child_offset);
+            ctx.paint_child(*child_id, offset + child_offset);
         }
     }
 }

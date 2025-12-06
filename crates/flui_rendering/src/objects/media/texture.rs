@@ -1,6 +1,7 @@
 //! RenderTexture - GPU texture rendering
 
-use crate::core::{BoxLayoutCtx, Leaf, BoxPaintCtx, RenderBox};
+use crate::core::{BoxLayoutCtx, BoxPaintCtx, Leaf, RenderBox};
+use crate::{RenderObject, RenderResult};
 use flui_types::styling::BoxFit;
 use flui_types::{Rect, Size};
 
@@ -227,8 +228,10 @@ impl RenderTexture {
     }
 }
 
+impl RenderObject for RenderTexture {}
+
 impl RenderBox<Leaf> for RenderTexture {
-    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Leaf>) -> Size {
+    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Leaf>) -> RenderResult<Size> {
         let constraints = ctx.constraints;
 
         // Textures typically take up all available space
@@ -236,7 +239,7 @@ impl RenderBox<Leaf> for RenderTexture {
         let size = Size::new(constraints.max_width, constraints.max_height);
 
         self.size = size;
-        size
+        Ok(size)
     }
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Leaf>) {
@@ -251,10 +254,10 @@ impl RenderBox<Leaf> for RenderTexture {
             ..Default::default()
         };
 
-        ctx.canvas().draw_rect(rect, &paint);
+        ctx.canvas_mut().draw_rect(rect, &paint);
 
         // TODO: Once Canvas supports texture drawing, use:
-        // ctx.canvas().draw_texture(self.texture_id, rect, self.filter_quality);
+        // ctx.canvas_mut().draw_texture(self.texture_id, rect, self.filter_quality);
     }
 }
 

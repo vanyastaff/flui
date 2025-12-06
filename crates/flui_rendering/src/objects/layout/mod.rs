@@ -90,7 +90,7 @@ pub use custom_multi_child_layout_box::{
     SimpleGridDelegate,
 };
 pub use flex::RenderFlex;
-pub use flow::{FlowDelegate, FlowRenderFlow, SimpleFlowDelegate};
+pub use flow::{FlowDelegate, RenderFlow, SimpleFlowDelegate};
 pub use grid::{GridPlacement, GridTrackSize, RenderGrid};
 pub use indexed_stack::RenderIndexedStack;
 pub use list_body::RenderListBody;
