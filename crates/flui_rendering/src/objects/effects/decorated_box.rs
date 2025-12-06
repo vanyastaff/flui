@@ -1,4 +1,87 @@
 //! RenderDecoratedBox - paints decoration around a child
+//!
+//! Implements Flutter's box decoration rendering with backgrounds, borders,
+//! shadows, and gradients.
+//!
+//! # Flutter Equivalence
+//!
+//! | FLUI | Flutter |
+//! |------|---------|
+//! | `RenderDecoratedBox` | `RenderDecoratedBox` from `package:flutter/src/rendering/proxy_box.dart` |
+//! | `BoxDecoration` | `BoxDecoration` class |
+//! | `DecorationPosition` | `DecorationPosition` enum |
+//! | `position` | `position` property (Background/Foreground) |
+//!
+//! # Layout Protocol
+//!
+//! 1. **If child exists**
+//!    - Layout child with same constraints
+//!    - Use child size as container size
+//!
+//! 2. **If no child**
+//!    - Use max constraints as size (for decoration-only boxes)
+//!    - Fallback to min constraints if max is infinite
+//!
+//! 3. **Cache size**
+//!    - Store size for painting decoration
+//!
+//! # Paint Protocol
+//!
+//! 1. **Background decoration** (if position = Background)
+//!    - Paint box shadows (behind box)
+//!    - Paint background (solid color or gradient)
+//!    - Paint border (on top of background)
+//!
+//! 2. **Paint child** (if present)
+//!    - Child painted at same offset
+//!
+//! 3. **Foreground decoration** (if position = Foreground)
+//!    - Paint decoration in front of child
+//!
+//! # Performance
+//!
+//! - **Layout**: O(1) - pass-through to child or simple size
+//! - **Paint**: O(n) - depends on shadow blur steps and border complexity
+//! - **Memory**: ~100 bytes (BoxDecoration + cached Size)
+//!
+//! # Use Cases
+//!
+//! - **Colored backgrounds**: Solid color boxes
+//! - **Bordered containers**: Cards with borders
+//! - **Rounded corners**: Border radius for smooth edges
+//! - **Shadows**: Elevation effects, Material Design shadows
+//! - **Gradient backgrounds**: Linear/radial gradients (TODO)
+//! - **Decorative boxes**: Empty boxes with just decoration
+//!
+//! # Examples
+//!
+//! ```rust,ignore
+//! use flui_rendering::{RenderDecoratedBox, DecorationPosition};
+//! use flui_types::styling::{BoxDecoration, Border, BorderSide, BorderRadius};
+//! use flui_types::Color;
+//!
+//! // Simple background color
+//! let decoration = BoxDecoration {
+//!     color: Some(Color::WHITE),
+//!     ..Default::default()
+//! };
+//! let decorated = RenderDecoratedBox::new(decoration);
+//!
+//! // Box with border and rounded corners
+//! let decoration = BoxDecoration {
+//!     color: Some(Color::WHITE),
+//!     border: Some(Border::all(BorderSide::new(Color::BLACK, 2.0))),
+//!     border_radius: Some(BorderRadius::circular(10.0)),
+//!     ..Default::default()
+//! };
+//! let decorated = RenderDecoratedBox::new(decoration);
+//!
+//! // Foreground decoration (painted on top of child)
+//! let decorated = RenderDecoratedBox::with_position(
+//!     decoration,
+//!     DecorationPosition::Foreground
+//! );
+//! ```
 
 use crate::core::{BoxLayoutCtx, BoxPaintCtx, Optional, RenderBox};
 use crate::{RenderObject, RenderResult};
@@ -17,9 +100,34 @@ pub enum DecorationPosition {
     Foreground,
 }
 
-/// RenderObject that paints a decoration around its child
+/// RenderObject that paints a decoration around its child.
 ///
 /// This renders backgrounds, borders, shadows, and gradients.
+///
+/// # Arity
+///
+/// `Optional` - Can have 0 or 1 child.
+///
+/// # Protocol
+///
+/// Box protocol - Uses `BoxConstraints` and returns `Size`.
+///
+/// # Use Cases
+///
+/// - **Backgrounds**: Solid colors, gradients (when implemented)
+/// - **Borders**: All sides, individual sides, with rounded corners
+/// - **Shadows**: Box shadows for elevation effects (Material Design)
+/// - **Material Design**: Cards, elevated surfaces, containers
+/// - **Decoration-only**: Empty boxes with just visual decoration
+///
+/// # Flutter Compliance
+///
+/// Matches Flutter's RenderDecoratedBox behavior:
+/// - Supports background and foreground decoration positions
+/// - Paints box shadows, background, and borders
+/// - Supports border radius for rounded corners
+/// - Handles decoration-only boxes (no child)
+/// - Uses Canvas draw_rect, draw_rrect, draw_line APIs
 ///
 /// # Without Child
 ///
@@ -28,7 +136,7 @@ pub enum DecorationPosition {
 /// # Example
 ///
 /// ```rust,ignore
-/// use flui_rendering::RenderDecoratedBox;
+/// use flui_rendering::{RenderDecoratedBox, DecorationPosition};
 /// use flui_types::styling::{BoxDecoration, Color};
 ///
 /// let decoration = BoxDecoration {
@@ -38,7 +146,7 @@ pub enum DecorationPosition {
 ///     box_shadow: None,
 ///     gradient: None,
 /// };
-/// let mut decorated = RenderDecoratedBox::new(decoration, DecorationPosition::Background);
+/// let mut decorated = RenderDecoratedBox::new(decoration);
 /// ```
 #[derive(Debug)]
 pub struct RenderDecoratedBox {

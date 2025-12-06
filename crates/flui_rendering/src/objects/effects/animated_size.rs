@@ -1,8 +1,89 @@
 //! RenderAnimatedSize - Animates size changes of its child
 //!
-//! NOTE: This is a simplified version without full animation infrastructure.
-//! It smoothly transitions between sizes using linear interpolation.
-//! A full implementation would use AnimationController and TickerProvider.
+//! Implements Flutter's animated size transitions with smooth interpolation between
+//! child size changes.
+//!
+//! # Flutter Equivalence
+//!
+//! | FLUI | Flutter |
+//! |------|---------|
+//! | `RenderAnimatedSize` | `RenderAnimatedSize` from `package:flutter/src/rendering/proxy_box.dart` |
+//! | `duration` | `duration` property (Duration) |
+//! | `alignment` | `alignment` property (AlignmentGeometry) |
+//! | `SizeAlignment` | `AlignmentGeometry` class |
+//! | `is_animating()` | Animation state check |
+//!
+//! # Layout Protocol
+//!
+//! 1. **Layout child**
+//!    - Child receives same constraints
+//!    - Get child's natural size
+//!
+//! 2. **Detect size change**
+//!    - Compare child size with previous size
+//!    - If changed: start size animation
+//!    - If first layout: set size immediately (no animation)
+//!
+//! 3. **Return animated size**
+//!    - If animating: return interpolated size between old and new
+//!    - If idle: return current stable size
+//!    - Constrain to parent constraints
+//!
+//! # Paint Protocol
+//!
+//! 1. **Calculate child alignment**
+//!    - Based on alignment property (Center, TopLeft, etc.)
+//!    - Child positioned within animated container
+//!
+//! 2. **Paint child at aligned offset**
+//!    - Child painted at calculated position
+//!    - May be clipped if exceeds animated bounds (TODO)
+//!
+//! # Performance
+//!
+//! - **Layout**: O(1) - child layout + size interpolation
+//! - **Paint**: O(1) - alignment calculation + child paint
+//! - **Memory**: ~56 bytes (Duration + state + sizes)
+//!
+//! # Use Cases
+//!
+//! - **Expand/collapse animations**: Smooth height changes for collapsible panels
+//! - **Responsive layouts**: Animate size changes on screen resize
+//! - **Dynamic content**: Smooth transitions when content size changes
+//! - **Cards/tiles**: Animate card expansion on selection
+//! - **Text expansion**: "Read more" with smooth height transition
+//! - **Image loading**: Smooth size adjustment as images load
+//!
+//! # Simplified Implementation Note
+//!
+//! **Current implementation:**
+//! - Uses linear interpolation based on elapsed time
+//! - Simple Instant-based timing (no Ticker/vsync)
+//! - No custom animation curves (linear easing only)
+//!
+//! **Production enhancements needed:**
+//! - AnimationController integration
+//! - Customizable curves (ease-in, ease-out, bounce, etc.)
+//! - Ticker synchronization with display refresh (vsync)
+//! - Reverse animation support
+//! - Animation completion callbacks
+//!
+//! # Examples
+//!
+//! ```rust,ignore
+//! use flui_rendering::{RenderAnimatedSize, SizeAlignment};
+//! use std::time::Duration;
+//!
+//! // Basic animated size (300ms, centered)
+//! let animated = RenderAnimatedSize::new(Duration::from_millis(300));
+//!
+//! // With custom alignment (top-left)
+//! let aligned = RenderAnimatedSize::new(Duration::from_millis(500))
+//!     .with_alignment(SizeAlignment::TopLeft);
+//!
+//! // Convenience constructor with milliseconds
+//! let quick = RenderAnimatedSize::with_millis(200);
+//! ```
 
 use crate::core::{BoxLayoutCtx, BoxPaintCtx, RenderBox, Single};
 use crate::{RenderObject, RenderResult};
@@ -56,38 +137,63 @@ enum AnimationState {
     },
 }
 
-/// RenderObject that smoothly animates size changes
+/// RenderObject that smoothly animates size changes of its child.
 ///
-/// RenderAnimatedSize automatically animates its size when its child's size
-/// changes. This creates smooth transitions instead of abrupt size changes.
+/// Automatically animates when child size changes, creating smooth transitions
+/// instead of abrupt jumps. Uses linear interpolation over specified duration.
 ///
-/// # Simplified Implementation Note
+/// # Arity
 ///
-/// This is a simplified version without full animation infrastructure
-/// (AnimationController, Ticker, vsync). It uses linear interpolation
-/// based on elapsed time since the size change began.
+/// `Single` - Must have exactly 1 child.
 ///
-/// **For production use**, this should be enhanced with:
-/// - Proper AnimationController integration
-/// - Customizable curves (ease-in, ease-out, etc.)
-/// - Ticker synchronization with display refresh
-/// - Reverse animation support
+/// # Protocol
 ///
-/// # Behavior
+/// Box protocol - Uses `BoxConstraints` and returns `Size`.
 ///
-/// - When child size changes, smoothly interpolates from old to new size
-/// - Uses linear easing (can be enhanced with custom curves)
-/// - Clips child content that exceeds current animated size
-/// - Centers child by default during animation
+/// # Use Cases
+///
+/// - **Expand/collapse UI**: Smooth panel/accordion animations
+/// - **Dynamic content**: Animate size when content loads or changes
+/// - **Card expansion**: Smooth card growth on hover/selection
+/// - **Text overflow**: "Read more" with smooth height transition
+/// - **Responsive design**: Animate layout changes on resize
+/// - **Image placeholders**: Smooth size adjustment as images load
+///
+/// # Flutter Compliance
+///
+/// Matches Flutter's RenderAnimatedSize behavior:
+/// - Automatically detects child size changes
+/// - Smoothly interpolates from old to new size
+/// - Uses duration property for animation timing
+/// - Supports alignment for child positioning during animation
+/// - First layout has no animation (immediate size)
+/// - Constrains animated size to parent constraints
+///
+/// # Implementation Note
+///
+/// **Simplified version:**
+/// - Linear interpolation (no custom curves)
+/// - Instant-based timing (no Ticker/vsync)
+/// - No AnimationController integration
+///
+/// **Production TODO:**
+/// - Add curve support (ease, bounce, etc.)
+/// - Integrate with animation framework
+/// - Add vsync for smooth refresh-rate-aligned animation
+/// - Add clipping when child exceeds animated bounds
 ///
 /// # Example
 ///
 /// ```rust,ignore
-/// use flui_rendering::RenderAnimatedSize;
+/// use flui_rendering::{RenderAnimatedSize, SizeAlignment};
 /// use std::time::Duration;
 ///
-/// // Create animated size with 300ms transition
-/// let animated_size = RenderAnimatedSize::new(Duration::from_millis(300));
+/// // Create with 300ms animation, centered
+/// let animated = RenderAnimatedSize::new(Duration::from_millis(300));
+///
+/// // With top-left alignment
+/// let aligned = RenderAnimatedSize::with_millis(500)
+///     .with_alignment(SizeAlignment::TopLeft);
 /// ```
 #[derive(Debug)]
 pub struct RenderAnimatedSize {
@@ -203,7 +309,8 @@ impl RenderObject for RenderAnimatedSize {}
 
 impl RenderBox<Single> for RenderAnimatedSize {
     fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Single>) -> RenderResult<Size> {
-        let child_id = *ctx.children.single();
+        // Single arity: use ctx.single_child() which returns ElementId directly
+        let child_id = ctx.single_child();
 
         // Layout child with same constraints
         let child_size = ctx.layout_child(child_id, ctx.constraints)?;
@@ -213,11 +320,11 @@ impl RenderBox<Single> for RenderAnimatedSize {
             self.last_child_size = Some(child_size);
 
             if self.current_size == Size::ZERO {
-                // First layout - don't animate, just set size
+                // First layout - don't animate, just set size immediately
                 self.current_size = child_size;
                 self.state = AnimationState::Idle;
             } else {
-                // Size changed - start animation
+                // Size changed - start smooth animation to new size
                 self.start_animation(child_size);
             }
         }
@@ -230,7 +337,8 @@ impl RenderBox<Single> for RenderAnimatedSize {
     }
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Single>) {
-        let child_id = *ctx.children.single();
+        // Single arity: use ctx.single_child() which returns ElementId directly
+        let child_id = ctx.single_child();
 
         // Calculate child offset based on alignment
         let child_offset = if let Some(last_child_size) = self.last_child_size {

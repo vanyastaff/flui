@@ -94,7 +94,7 @@ impl Default for RenderErrorBox {
 impl RenderObject for RenderErrorBox {}
 
 impl RenderBox<Leaf> for RenderErrorBox {
-    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Leaf>) -> RenderResult<Size> {
+    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Leaf>) -> RenderResult<Size> {
         let constraints = ctx.constraints;
 
         // Error box takes up all available space

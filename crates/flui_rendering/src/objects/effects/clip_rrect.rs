@@ -1,4 +1,68 @@
 //! RenderClipRRect - clips child to rounded rectangle
+//!
+//! Implements Flutter's rounded rectangle clipping container that clips child
+//! to a rectangle with rounded corners (RRect).
+//!
+//! # Flutter Equivalence
+//!
+//! | FLUI | Flutter |
+//! |------|---------|
+//! | `RenderClipRRect` | `RenderClipRRect` from `package:flutter/src/rendering/proxy_box.dart` |
+//! | `clip_behavior` | `clipBehavior` property |
+//! | `border_radius` | `borderRadius` property |
+//! | `RRectShape` | N/A - internal implementation detail |
+//!
+//! # Layout Protocol
+//!
+//! 1. **Pass constraints to child**
+//!    - Child receives same constraints (proxy behavior)
+//!
+//! 2. **Return child size**
+//!    - Container size = child size (no size change)
+//!    - Cache size for clipping during paint
+//!
+//! # Paint Protocol
+//!
+//! 1. **Apply rounded rectangle clip**
+//!    - Create RRect with specified border radius
+//!    - Apply clip using Canvas::clip_rrect()
+//!    - Supports circular (all corners same) or per-corner radii
+//!
+//! 2. **Paint child**
+//!    - Child content clipped to rounded rectangle
+//!    - Corner radii can be customized per corner
+//!
+//! 3. **Hit testing**
+//!    - Check if point is inside main rectangle
+//!    - For corner regions: use circle equation
+//!    - Blocks hits outside rounded rectangle region
+//!
+//! # Performance
+//!
+//! - **Layout**: O(1) - pass-through to child
+//! - **Paint**: O(1) - canvas clip operation + child paint
+//! - **Hit Test**: O(1) - bounds check + corner circle checks
+//! - **Memory**: ~32 bytes (RRectShape + BorderRadius + Clip + cached Size)
+//!
+//! # Examples
+//!
+//! ```rust,ignore
+//! use flui_rendering::RenderClipRRect;
+//! use flui_types::styling::BorderRadius;
+//! use flui_types::painting::Clip;
+//!
+//! // Circular corners (all corners same radius)
+//! let clip = RenderClipRRect::circular(10.0);
+//!
+//! // Custom border radius with different corners
+//! let border_radius = BorderRadius::only(
+//!     top_left: 10.0,
+//!     top_right: 20.0,
+//!     bottom_right: 10.0,
+//!     bottom_left: 0.0,
+//! );
+//! let clip = RenderClipRRect::with_border_radius(border_radius, Clip::AntiAlias);
+//! ```
 
 use flui_painting::Canvas;
 use flui_types::{
@@ -108,11 +172,41 @@ impl ClipShape for RRectShape {
     }
 }
 
-/// RenderObject that clips its child to a rounded rectangle
+/// RenderObject that clips its child to a rounded rectangle.
 ///
 /// The clipping is applied during painting with rounded corners.
 /// It doesn't affect layout, so the child is laid out normally
 /// and then clipped to its bounds with rounded corners.
+///
+/// # Arity
+///
+/// `Single` - Must have exactly 1 child.
+///
+/// # Protocol
+///
+/// Box protocol - Uses `BoxConstraints` and returns `Size`.
+///
+/// # Pattern
+///
+/// **Proxy** - Passes constraints unchanged, clips during paint only.
+///
+/// # Use Cases
+///
+/// - **Rounded cards**: Create cards with rounded corners
+/// - **Rounded images**: Clip images to rounded rectangles
+/// - **UI panels**: Create panels with customized corner radii
+/// - **Design system**: Match design specifications with specific corner radii
+/// - **Material Design**: Implement material cards with standard corner radii
+///
+/// # Flutter Compliance
+///
+/// Matches Flutter's RenderClipRRect behavior:
+/// - Passes constraints unchanged to child
+/// - Clips child during paint to rounded rectangle bounds
+/// - Uses Canvas::clip_rrect() API
+/// - Supports per-corner radius customization
+/// - Blocks hit testing outside rounded rectangle region
+/// - Supports both hard-edge and anti-aliased clipping
 ///
 /// # Example
 ///

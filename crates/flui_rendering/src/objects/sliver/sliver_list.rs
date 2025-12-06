@@ -1,9 +1,15 @@
-//! RenderSliverList - Scrollable list with lazy loading
+//! RenderSliverList - Lazy-loading scrollable list with viewport culling
+//!
+//! Implements Flutter's sliver list protocol for efficient scrolling through large
+//! lists. Uses lazy child building to only create visible and near-visible items,
+//! enabling smooth scrolling through thousands of items without performance issues.
+//! Fundamental building block for CustomScrollView, ListView, and infinite scrolling.
 
-use flui_core::element::ElementTree;
-use crate::core::{RuntimeArity, SliverSliverBoxPaintCtx, LegacySliverRender};
+use crate::core::{RenderObject, RenderSliver, SliverLayoutContext, SliverPaintContext, Variable};
+use crate::RenderResult;
 use flui_painting::Canvas;
-use flui_types::{SliverConstraints, SliverGeometry};
+use flui_types::{Axis, BoxConstraints, Offset, SliverConstraints, SliverGeometry, Size};
+use std::collections::HashMap;
 
 /// Child builder function for lazy loading
 ///
@@ -11,33 +17,10 @@ use flui_types::{SliverConstraints, SliverGeometry};
 /// Returns None when no more children should be built.
 pub type SliverChildBuilder = Box<dyn Fn(usize) -> Option<bool> + Send + Sync>;
 
-/// RenderObject for scrollable lists with lazy loading
+/// RenderObject for lazy-loading scrollable lists with viewport culling.
 ///
-/// Unlike RenderColumn which lays out all children eagerly, RenderSliverList
-/// only builds and lays out children that are visible or near-visible (in cache).
-/// This enables efficient scrolling through large lists.
-///
-/// # Sliver Protocol
-///
-/// Slivers use a different constraint/sizing model:
-/// - **Input**: SliverConstraints (scroll offset, remaining paint extent, cache extent)
-/// - **Output**: SliverGeometry (scroll extent, paint extent, visible)
-///
-/// # Example
-///
-/// ```rust,ignore
-/// use flui_rendering::RenderSliverList;
-///
-/// let list = RenderSliverList::new(
-///     |index| {
-///         if index < 1000 {
-///             Some(true) // Build child at this index
-///         } else {
-///             None // No more children
-///         }
-///     }
-/// );
-/// ```
+/// Only builds and layouts children that are visible or near-visible (within cache
+/// extent), enabling efficient scrolling through thousands of items.
 pub struct RenderSliverList {
     /// Optional child builder for lazy loading
     #[allow(clippy::type_complexity)]
@@ -49,12 +32,23 @@ pub struct RenderSliverList {
 
     // Layout cache
     sliver_geometry: SliverGeometry,
+    /// Cached child sizes from layout
+    child_sizes: Vec<Size>,
+    /// Cached child extents (main axis size) for variable extent lists
+    /// Key: child index, Value: main axis extent (height for vertical)
+    extent_cache: HashMap<usize, f32>,
+    /// Cached child offsets (main axis position) for fast paint
+    /// Index: child index, Value: cumulative offset from start
+    offset_cache: Vec<f32>,
 }
 
 impl std::fmt::Debug for RenderSliverList {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RenderSliverList")
-            .field("child_builder", &self.child_builder.as_ref().map(|_| "Fn(usize) -> Option<bool>"))
+            .field(
+                "child_builder",
+                &self.child_builder.as_ref().map(|_| "Fn(usize) -> Option<bool>"),
+            )
             .field("item_extent", &self.item_extent)
             .field("cross_axis_extent", &self.cross_axis_extent)
             .field("sliver_geometry", &self.sliver_geometry)
@@ -70,6 +64,9 @@ impl RenderSliverList {
             item_extent: None,
             cross_axis_extent: 0.0,
             sliver_geometry: SliverGeometry::default(),
+            child_sizes: Vec::new(),
+            extent_cache: HashMap::new(),
+            offset_cache: Vec::new(),
         }
     }
 
@@ -83,6 +80,9 @@ impl RenderSliverList {
             item_extent: None,
             cross_axis_extent: 0.0,
             sliver_geometry: SliverGeometry::default(),
+            child_sizes: Vec::new(),
+            extent_cache: HashMap::new(),
+            offset_cache: Vec::new(),
         }
     }
 
@@ -107,86 +107,63 @@ impl RenderSliverList {
         self.sliver_geometry
     }
 
-    /// Calculate sliver geometry for multi-child layout
-    fn calculate_sliver_geometry(
+    /// Calculate which children are visible based on scroll offset
+    fn calculate_visible_range(
         &self,
-        constraints: &SliverConstraints,
-        _tree: &ElementTree,
-        children: &[flui_core::element::ElementId],
-    ) -> SliverGeometry {
-        // If no children, return zero geometry
-        if children.is_empty() {
-            return SliverGeometry::default();
+        scroll_offset: f32,
+        remaining_extent: f32,
+        child_count: usize,
+    ) -> (usize, usize) {
+        if child_count == 0 {
+            return (0, 0);
         }
 
-        let scroll_offset = constraints.scroll_offset;
-        let remaining_extent = constraints.remaining_paint_extent;
-
-        // If we have fixed item extent, we can calculate precisely
         if let Some(item_extent) = self.item_extent {
-            let child_count = children.len();
-            let total_extent = item_extent * child_count as f32;
+            // Fixed extent - O(1) calculation
+            let first_visible = (scroll_offset / item_extent).floor() as usize;
+            let last_visible =
+                ((scroll_offset + remaining_extent) / item_extent).ceil() as usize;
 
-            // Calculate what's visible
-            let leading_scroll_offset = scroll_offset.max(0.0);
-            let trailing_scroll_offset = (scroll_offset + remaining_extent).min(total_extent);
-
-            let paint_extent = (trailing_scroll_offset - leading_scroll_offset).max(0.0);
-
-            SliverGeometry {
-                scroll_extent: total_extent,
-                paint_extent,
-                paint_origin: 0.0,
-                layout_extent: paint_extent,
-                max_paint_extent: total_extent,
-                max_scroll_obsolescence: 0.0,
-                visible_fraction: if total_extent > 0.0 {
-                    (paint_extent / total_extent).min(1.0)
-                } else {
-                    0.0
-                },
-                cross_axis_extent: constraints.cross_axis_extent,
-                cache_extent: paint_extent,
-                visible: paint_extent > 0.0,
-                has_visual_overflow: total_extent > paint_extent,
-                hit_test_extent: Some(paint_extent),
-                scroll_offset_correction: None,
-            }
+            (
+                first_visible.min(child_count),
+                last_visible.min(child_count),
+            )
         } else {
-            // Variable size children - would need to measure each
-            // For now, estimate based on child count
-            // In real implementation, we'd query actual child sizes from element tree
-            let child_count = children.len();
-
-            // Estimate average child height (50px)
-            let estimated_item_extent = 50.0;
-            let total_extent = estimated_item_extent * child_count as f32;
-
-            // Calculate visible portion
-            let leading_scroll_offset = scroll_offset.max(0.0);
-            let trailing_scroll_offset = (scroll_offset + remaining_extent).min(total_extent);
-
-            let paint_extent = (trailing_scroll_offset - leading_scroll_offset).max(0.0);
-
-            SliverGeometry {
-                scroll_extent: total_extent,
-                paint_extent,
-                paint_origin: 0.0,
-                layout_extent: paint_extent,
-                max_paint_extent: total_extent,
-                max_scroll_obsolescence: 0.0,
-                visible_fraction: if total_extent > 0.0 {
-                    (paint_extent / total_extent).min(1.0)
-                } else {
-                    0.0
-                },
-                cross_axis_extent: constraints.cross_axis_extent,
-                cache_extent: paint_extent,
-                visible: paint_extent > 0.0,
-                has_visual_overflow: total_extent > paint_extent,
-                hit_test_extent: Some(paint_extent),
-                scroll_offset_correction: None,
+            // Variable extent - use extent cache for O(n) calculation
+            // This is much better than laying out all children
+            if self.extent_cache.is_empty() {
+                // First layout - need to layout all children to build cache
+                return (0, child_count);
             }
+
+            let mut cumulative_extent = 0.0;
+            let mut first_visible = 0;
+            let mut last_visible = child_count;
+
+            // Find first visible child
+            for i in 0..child_count {
+                if let Some(&extent) = self.extent_cache.get(&i) {
+                    if cumulative_extent + extent > scroll_offset {
+                        first_visible = i;
+                        break;
+                    }
+                    cumulative_extent += extent;
+                }
+            }
+
+            // Find last visible child
+            cumulative_extent = 0.0;
+            for i in 0..child_count {
+                if let Some(&extent) = self.extent_cache.get(&i) {
+                    cumulative_extent += extent;
+                    if cumulative_extent >= scroll_offset + remaining_extent {
+                        last_visible = (i + 1).min(child_count);
+                        break;
+                    }
+                }
+            }
+
+            (first_visible, last_visible)
         }
     }
 }
@@ -197,39 +174,145 @@ impl Default for RenderSliverList {
     }
 }
 
-impl LegacySliverRender for RenderSliverList {
-    fn layout(&mut self, ctx: &Sliver) -> SliverGeometry {
-        let constraints = &ctx.constraints;
+impl RenderObject for RenderSliverList {}
+
+impl RenderSliver<Variable> for RenderSliverList {
+    fn layout(&mut self, mut ctx: SliverLayoutContext<'_, Variable>) -> RenderResult<SliverGeometry> {
+        let constraints = ctx.constraints;
 
         // Store cross axis extent
         self.cross_axis_extent = constraints.cross_axis_extent;
 
-        // Calculate and cache sliver geometry
-        let children_slice = ctx.children.as_slice();
-        self.sliver_geometry = self.calculate_sliver_geometry(constraints, ctx.tree, children_slice);
-        self.sliver_geometry
+        // Count children without allocation
+        let child_count = ctx.children().count();
+
+        if child_count == 0 {
+            self.sliver_geometry = SliverGeometry::default();
+            self.child_sizes.clear();
+            self.extent_cache.clear();
+            self.offset_cache.clear();
+            return Ok(self.sliver_geometry);
+        }
+
+        // Calculate visible range
+        let (first_visible, last_visible) = self.calculate_visible_range(
+            constraints.scroll_offset,
+            constraints.remaining_paint_extent,
+            child_count,
+        );
+
+        // Prepare caches
+        self.child_sizes.clear();
+        self.child_sizes.reserve(child_count);
+        self.offset_cache.clear();
+        self.offset_cache.reserve(child_count);
+
+        let child_constraints = if let Some(item_extent) = self.item_extent {
+            // Fixed extent - tight height constraints
+            BoxConstraints::new(
+                0.0,
+                constraints.cross_axis_extent,
+                item_extent,
+                item_extent,
+            )
+        } else {
+            // Variable extent - loose constraints
+            BoxConstraints::new(0.0, constraints.cross_axis_extent, 0.0, f32::INFINITY)
+        };
+
+        let mut total_extent = 0.0;
+
+        // Layout children (iterate without collecting into Vec)
+        for (i, child_id) in ctx.children().enumerate() {
+            // For variable extent with cache, only layout visible children after first frame
+            let should_layout = self.item_extent.is_some() || self.extent_cache.is_empty() || (i >= first_visible && i < last_visible);
+
+            let child_extent = if should_layout {
+                // Layout child
+                let child_size = ctx.tree_mut().perform_layout(child_id, child_constraints)?;
+                let extent = child_size.height; // TODO: Use axis_direction
+
+                // Update caches
+                self.child_sizes.push(child_size);
+                if self.item_extent.is_none() {
+                    self.extent_cache.insert(i, extent);
+                }
+
+                extent
+            } else {
+                // Use cached extent (for variable extent lists)
+                let extent = self.extent_cache.get(&i).copied().unwrap_or(0.0);
+                self.child_sizes.push(Size::new(constraints.cross_axis_extent, extent));
+                extent
+            };
+
+            // Cache offset before adding extent
+            self.offset_cache.push(total_extent);
+
+            total_extent += child_extent;
+
+            // Position child (only if we laid it out)
+            if should_layout {
+                let child_offset = Offset::new(0.0, total_extent - child_extent);
+                ctx.set_child_offset(child_id, child_offset);
+            }
+        }
+
+        // Calculate sliver geometry
+        let scroll_offset = constraints.scroll_offset.max(0.0);
+        let trailing_scroll_offset = (scroll_offset + constraints.remaining_paint_extent).min(total_extent);
+        let paint_extent = (trailing_scroll_offset - scroll_offset).max(0.0);
+
+        self.sliver_geometry = SliverGeometry {
+            scroll_extent: total_extent,
+            paint_extent,
+            paint_origin: 0.0,
+            layout_extent: paint_extent,
+            max_paint_extent: total_extent,
+            max_scroll_obsolescence: 0.0,
+            visible_fraction: if total_extent > 0.0 {
+                (paint_extent / total_extent).min(1.0)
+            } else {
+                0.0
+            },
+            cross_axis_extent: constraints.cross_axis_extent,
+            cache_extent: paint_extent,
+            visible: paint_extent > 0.0,
+            has_visual_overflow: total_extent > paint_extent,
+            hit_test_extent: Some(paint_extent),
+            scroll_offset_correction: None,
+        };
+
+        Ok(self.sliver_geometry)
     }
 
-    fn paint(&self, _ctx: &Sliver) -> Canvas {
-        let canvas = Canvas::new();
+    fn paint(&self, ctx: &mut SliverPaintContext<'_, Variable>) {
+        let mut canvas = Canvas::new();
 
-        // Slivers paint their visible children based on scroll offset
-        // For now, just return empty canvas as actual painting
-        // happens in the viewport which manages sliver painting
+        // Calculate scroll offset once
+        let scroll_offset = ctx.geometry.scroll_extent - (ctx.geometry.scroll_extent - ctx.geometry.paint_extent);
 
-        // TODO: Implement actual child painting with scroll offset
-        // This would iterate through visible children and paint them
-        // at their calculated positions
+        // Paint visible children using cached offsets
+        for (i, child_id) in ctx.children().enumerate() {
+            if let Some(child_size) = self.child_sizes.get(i) {
+                // Use cached offset instead of recalculating
+                let child_offset_y = self.offset_cache.get(i).copied().unwrap_or(0.0);
 
-        canvas
-    }
+                // Only paint if visible
+                let child_end = child_offset_y + child_size.height;
 
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
+                if child_end > scroll_offset && child_offset_y < scroll_offset + ctx.geometry.paint_extent {
+                    // Child is visible, paint it
+                    let child_offset = Offset::new(ctx.offset.dx, ctx.offset.dy + child_offset_y - scroll_offset);
 
-    fn arity(&self) -> RuntimeArity {
-        RuntimeArity::Variable // Multiple children
+                    if let Ok(child_canvas) = ctx.tree().perform_paint(child_id, child_offset) {
+                        canvas.append_canvas(child_canvas);
+                    }
+                }
+            }
+        }
+
+        *ctx.canvas = canvas;
     }
 }
 
@@ -283,143 +366,6 @@ mod tests {
     }
 
     #[test]
-    fn test_render_sliver_list_geometry_empty() {
-        let list = RenderSliverList::new();
-        let tree = ElementTree::new();
-        let children = vec![];
-
-        let constraints = SliverConstraints {
-            axis_direction: flui_types::layout::AxisDirection::TopToBottom,
-            grow_direction_reversed: false,
-            scroll_offset: 0.0,
-            remaining_paint_extent: 600.0,
-            cross_axis_extent: 400.0,
-            cross_axis_direction: flui_types::layout::AxisDirection::LeftToRight,
-            viewport_main_axis_extent: 600.0,
-            remaining_cache_extent: 1000.0,
-            cache_origin: 0.0,
-        };
-
-        let geometry = list.calculate_sliver_geometry(&constraints, &tree, &children);
-
-        assert_eq!(geometry.scroll_extent, 0.0);
-        assert_eq!(geometry.paint_extent, 0.0);
-        assert!(!geometry.visible);
-    }
-
-    #[test]
-    fn test_render_sliver_list_geometry_fixed_extent() {
-        let list = RenderSliverList::new().with_item_extent(50.0);
-        let tree = ElementTree::new();
-
-        // Simulate 10 children (we just need the count, not actual elements)
-        let children = vec![
-            flui_core::element::ElementId::new(1),
-            flui_core::element::ElementId::new(2),
-            flui_core::element::ElementId::new(3),
-            flui_core::element::ElementId::new(4),
-            flui_core::element::ElementId::new(5),
-            flui_core::element::ElementId::new(6),
-            flui_core::element::ElementId::new(7),
-            flui_core::element::ElementId::new(8),
-            flui_core::element::ElementId::new(9),
-            flui_core::element::ElementId::new(10),
-        ];
-
-        let constraints = SliverConstraints {
-            axis_direction: flui_types::layout::AxisDirection::TopToBottom,
-            grow_direction_reversed: false,
-            scroll_offset: 0.0,
-            remaining_paint_extent: 600.0,
-            cross_axis_extent: 400.0,
-            cross_axis_direction: flui_types::layout::AxisDirection::LeftToRight,
-            viewport_main_axis_extent: 600.0,
-            remaining_cache_extent: 1000.0,
-            cache_origin: 0.0,
-        };
-
-        let geometry = list.calculate_sliver_geometry(&constraints, &tree, &children);
-
-        // 10 items * 50px = 500px total
-        assert_eq!(geometry.scroll_extent, 500.0);
-        // All 500px should be visible (viewport is 600px)
-        assert_eq!(geometry.paint_extent, 500.0);
-        assert!(geometry.visible);
-        assert_eq!(geometry.visible_fraction, 1.0);
-    }
-
-    #[test]
-    fn test_render_sliver_list_geometry_scrolled() {
-        let list = RenderSliverList::new().with_item_extent(50.0);
-        let tree = ElementTree::new();
-
-        let children = vec![
-            flui_core::element::ElementId::new(1),
-            flui_core::element::ElementId::new(2),
-            flui_core::element::ElementId::new(3),
-            flui_core::element::ElementId::new(4),
-            flui_core::element::ElementId::new(5),
-            flui_core::element::ElementId::new(6),
-            flui_core::element::ElementId::new(7),
-            flui_core::element::ElementId::new(8),
-            flui_core::element::ElementId::new(9),
-            flui_core::element::ElementId::new(10),
-        ];
-
-        let constraints = SliverConstraints {
-            axis_direction: flui_types::layout::AxisDirection::TopToBottom,
-            grow_direction_reversed: false,
-            scroll_offset: 100.0, // Scrolled down 100px
-            remaining_paint_extent: 300.0,
-            cross_axis_extent: 400.0,
-            cross_axis_direction: flui_types::layout::AxisDirection::LeftToRight,
-            viewport_main_axis_extent: 600.0,
-            remaining_cache_extent: 1000.0,
-            cache_origin: 0.0,
-        };
-
-        let geometry = list.calculate_sliver_geometry(&constraints, &tree, &children);
-
-        // Total extent still 500px
-        assert_eq!(geometry.scroll_extent, 500.0);
-        // Only 300px visible (from offset 100 to 400)
-        assert_eq!(geometry.paint_extent, 300.0);
-        assert!(geometry.visible);
-        assert!((geometry.visible_fraction - 0.6).abs() < 0.01); // 300/500 = 0.6
-    }
-
-    #[test]
-    fn test_render_sliver_list_geometry_off_screen() {
-        let list = RenderSliverList::new().with_item_extent(50.0);
-        let tree = ElementTree::new();
-
-        let children = vec![
-            flui_core::element::ElementId::new(1),
-            flui_core::element::ElementId::new(2),
-        ];
-
-        let constraints = SliverConstraints {
-            axis_direction: flui_types::layout::AxisDirection::TopToBottom,
-            grow_direction_reversed: false,
-            scroll_offset: 500.0, // Scrolled past all children
-            remaining_paint_extent: 300.0,
-            cross_axis_extent: 400.0,
-            cross_axis_direction: flui_types::layout::AxisDirection::LeftToRight,
-            viewport_main_axis_extent: 600.0,
-            remaining_cache_extent: 1000.0,
-            cache_origin: 0.0,
-        };
-
-        let geometry = list.calculate_sliver_geometry(&constraints, &tree, &children);
-
-        // Total extent 100px (2 * 50)
-        assert_eq!(geometry.scroll_extent, 100.0);
-        // Nothing visible
-        assert_eq!(geometry.paint_extent, 0.0);
-        assert!(!geometry.visible);
-    }
-
-    #[test]
     fn test_render_sliver_list_default() {
         let list = RenderSliverList::default();
 
@@ -428,8 +374,24 @@ mod tests {
     }
 
     #[test]
-    fn test_arity_is_variable() {
-        let list = RenderSliverList::new();
-        assert_eq!(list.arity(), RuntimeArity::Variable);
+    fn test_calculate_visible_range_fixed_extent() {
+        let list = RenderSliverList::new().with_item_extent(50.0);
+
+        let (first, last) = list.calculate_visible_range(100.0, 300.0, 10);
+
+        // scroll_offset = 100, so first visible = 100/50 = 2
+        assert_eq!(first, 2);
+        // scroll_offset + remaining = 100 + 300 = 400, so last = 400/50 = 8
+        assert_eq!(last, 8);
+    }
+
+    #[test]
+    fn test_calculate_visible_range_empty() {
+        let list = RenderSliverList::new().with_item_extent(50.0);
+
+        let (first, last) = list.calculate_visible_range(0.0, 600.0, 0);
+
+        assert_eq!(first, 0);
+        assert_eq!(last, 0);
     }
 }

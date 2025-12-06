@@ -1,12 +1,131 @@
-//! RenderConstraintsTransformBox - Apply custom transform to constraints
+//! RenderConstraintsTransformBox - Apply custom transform to constraints via callback
 //!
-//! Allows transforming the constraints passed to the child via a callback function.
-//! This enables advanced constraint manipulation scenarios like:
-//! - Removing max height to allow infinite scrolling
-//! - Converting tight constraints to loose
-//! - Applying custom constraint logic based on parent constraints
+//! Implements Flutter's constraint transformation pattern that applies a custom
+//! function to transform parent constraints before passing to child. Enables
+//! advanced constraint manipulation like removing max constraints, loosening
+//! tight constraints, or applying business-rule-based constraint logic.
 //!
-//! The parent tries to match the child's size but respects its own constraints.
+//! # Flutter Equivalence
+//!
+//! | FLUI | Flutter |
+//! |------|---------|
+//! | `RenderConstraintsTransformBox` | Similar to `RenderConstraints` from `package:flutter/src/rendering/proxy_box.dart` |
+//! | `constraints_transform` | Transform function (BoxConstraints → BoxConstraints) |
+//! | `alignment` | `alignment` property (AlignmentGeometry) |
+//! | `unbounded_width()` | Remove max width constraint (infinite width) |
+//! | `unbounded_height()` | Remove max height constraint (infinite height) |
+//! | `loosen()` | Convert tight to loose constraints (min=0, same max) |
+//! | `tighten()` | Force child to biggest size (tight at max) |
+//!
+//! # Layout Protocol
+//!
+//! 1. **Apply constraint transform**
+//!    - Call transform function with parent constraints
+//!    - Function returns modified constraints for child
+//!    - Transform can do arbitrary constraint manipulation
+//!
+//! 2. **Layout child**
+//!    - Child laid out with transformed constraints
+//!    - Child determines size within transformed bounds
+//!    - Child size cached for alignment calculation
+//!
+//! 3. **Calculate parent size**
+//!    - Parent tries to match child size
+//!    - Parent size constrained to original parent constraints
+//!    - parent_size = parent_constraints.constrain(child_size)
+//!
+//! 4. **Return constrained size**
+//!    - If parent_size == child_size: perfect fit
+//!    - If parent_size != child_size: alignment needed during paint
+//!
+//! # Paint Protocol
+//!
+//! 1. **Calculate alignment offset** (if sizes differ)
+//!    - If parent_size != child_size: apply alignment
+//!    - Offset = alignment.calculate_offset(child_size, parent_size)
+//!    - Otherwise: offset = (0, 0)
+//!
+//! 2. **Paint child at offset**
+//!    - Child painted at parent offset + alignment offset
+//!    - May overflow if transform allowed larger child
+//!    - No clipping applied
+//!
+//! # Performance
+//!
+//! - **Layout**: O(1) - transform function call + single child layout
+//! - **Paint**: O(1) - conditional alignment + child paint
+//! - **Memory**: ~32 bytes (Box<dyn Fn> + Alignment + 2 × Size cache)
+//!
+//! # Use Cases
+//!
+//! - **Remove max constraints**: Allow unbounded scrolling (vertical/horizontal)
+//! - **Loosen tight constraints**: Give child sizing freedom
+//! - **Custom constraint logic**: Business rules for constraint transformation
+//! - **Viewport unbounding**: Remove constraints for scrollable areas
+//! - **Constraint debugging**: Log and analyze constraint flow
+//! - **Conditional transforms**: Apply rules based on constraint values
+//!
+//! # Common Transforms
+//!
+//! ## Unbounded Width
+//! ```text
+//! Input:  BoxConstraints(min: 0-400, max: 0-600)
+//! Output: BoxConstraints(min: 0-∞, max: 0-600)
+//! Use case: Horizontal scrolling
+//! ```
+//!
+//! ## Unbounded Height
+//! ```text
+//! Input:  BoxConstraints(min: 0-400, max: 0-600)
+//! Output: BoxConstraints(min: 0-400, max: 0-∞)
+//! Use case: Vertical scrolling
+//! ```
+//!
+//! ## Loosen
+//! ```text
+//! Input:  BoxConstraints(min: 100-100, max: 100-100) [tight]
+//! Output: BoxConstraints(min: 0-0, max: 100-100) [loose]
+//! Use case: Give child sizing freedom
+//! ```
+//!
+//! ## Tighten
+//! ```text
+//! Input:  BoxConstraints(min: 0-400, max: 0-600)
+//! Output: BoxConstraints(min: 400-400, max: 600-600) [tight at max]
+//! Use case: Force child to fill available space
+//! ```
+//!
+//! # Comparison with Related Objects
+//!
+//! - **vs RenderConstrainedOverflowBox**: OverflowBox uses fixed values, TransformBox uses callback
+//! - **vs RenderConstrainedBox**: ConstrainedBox adds constraints, TransformBox modifies them
+//! - **vs RenderIntrinsicWidth/Height**: Intrinsic uses infinite, TransformBox is flexible
+//! - **vs RenderLimitedBox**: LimitedBox caps infinite, TransformBox is arbitrary
+//!
+//! # Examples
+//!
+//! ```rust,ignore
+//! use flui_rendering::{RenderConstraintsTransformBox, BoxConstraintsTransform};
+//! use flui_types::{Alignment, BoxConstraints};
+//!
+//! // Remove max height for vertical scrolling
+//! let scrollable = RenderConstraintsTransformBox::unbounded_height();
+//!
+//! // Loosen tight constraints
+//! let flexible = RenderConstraintsTransformBox::loosen();
+//!
+//! // Custom transform: double max width
+//! let custom = RenderConstraintsTransformBox::new(
+//!     BoxConstraintsTransform::new(|c| {
+//!         BoxConstraints::new(
+//!             c.min_width,
+//!             c.max_width * 2.0,
+//!             c.min_height,
+//!             c.max_height,
+//!         )
+//!     })
+//! ).with_alignment(Alignment::TOP_LEFT);
+//! ```
 
 use crate::core::{BoxLayoutCtx, BoxPaintCtx, RenderBox, Single};
 use crate::{RenderObject, RenderResult};
@@ -39,36 +158,82 @@ impl Debug for BoxConstraintsTransform {
     }
 }
 
-/// A render object that applies a custom transformation to constraints before passing them to the child.
+/// RenderObject that applies custom transformation to constraints via callback.
 ///
-/// This is useful for advanced constraint manipulation scenarios where the child needs
-/// different constraints than what the parent provides.
+/// Transforms parent constraints using a callback function before passing to child.
+/// Enables advanced constraint manipulation for scrolling, dynamic sizing, and
+/// custom layout logic.
 ///
-/// # Layout Algorithm
+/// # Arity
 ///
-/// 1. Apply `constraints_transform` to incoming constraints
-/// 2. Layout child with transformed constraints
-/// 3. Parent tries to adopt child's size (within parent's original constraints)
-/// 4. If parent size != child size, align child using `alignment`
+/// `Single` - Must have exactly 1 child.
+///
+/// # Protocol
+///
+/// Box protocol - Uses `BoxConstraints` and returns `Size`.
+///
+/// # Pattern
+///
+/// **Constraint Modifier with Custom Transform** - Applies callback function
+/// to transform constraints, parent tries to match child size.
 ///
 /// # Use Cases
 ///
-/// - **Remove max constraints**: Allow child to be unbounded in one dimension
-/// - **Loosen tight constraints**: Convert exact size requirement to range
-/// - **Custom constraint logic**: Apply business rules to constraint transformation
+/// - **Remove max constraints**: Unbounded scrolling (vertical/horizontal)
+/// - **Loosen tight constraints**: Give child sizing freedom
+/// - **Custom logic**: Business rules for constraint transformation
+/// - **Viewport unbounding**: Remove constraints for scrollable areas
+/// - **Debug constraints**: Log and analyze constraint flow
+/// - **Conditional transforms**: Apply rules based on values
+///
+/// # Flutter Compliance
+///
+/// Similar to Flutter's constraint transformation patterns:
+/// - Applies custom transform to parent constraints
+/// - Lays out child with transformed constraints
+/// - Parent tries to match child size (within parent constraints)
+/// - Alignment applied when sizes differ
+/// - Common transforms: unbounded, loosen, tighten
+///
+/// # Transform Function
+///
+/// Transform function signature:
+/// ```rust,ignore
+/// Fn(BoxConstraints) -> BoxConstraints
+/// ```
+///
+/// The function receives parent constraints and returns child constraints.
+/// It can perform arbitrary transformations including:
+/// - Removing limits (infinite max)
+/// - Loosening tight constraints (min=0)
+/// - Tightening loose constraints (min=max)
+/// - Scaling constraint values
+/// - Conditional logic based on constraint values
+///
+/// # Overflow Potential
+///
+/// Child may overflow parent if transform allows larger size than parent
+/// constraints. Consider wrapping in RenderClipRect if clipping is needed.
 ///
 /// # Example
 ///
 /// ```rust,ignore
-/// // Remove max height constraint to allow vertical scrolling
-/// let transform = RenderConstraintsTransformBox::new(Box::new(|constraints| {
-///     BoxConstraints::new(
-///         constraints.min_width,
-///         constraints.max_width,
-///         constraints.min_height,
-///         f32::INFINITY, // Remove max height
-///     )
-/// }));
+/// use flui_rendering::{RenderConstraintsTransformBox, BoxConstraintsTransform};
+/// use flui_types::{Alignment, BoxConstraints};
+///
+/// // Vertical scrolling (remove max height)
+/// let vertical = RenderConstraintsTransformBox::unbounded_height();
+///
+/// // Flexible sizing (loosen constraints)
+/// let flexible = RenderConstraintsTransformBox::loosen();
+///
+/// // Custom transform
+/// let custom = RenderConstraintsTransformBox::new(
+///     BoxConstraintsTransform::new(|c| {
+///         // Remove both max constraints
+///         BoxConstraints::new(c.min_width, f32::INFINITY, c.min_height, f32::INFINITY)
+///     })
+/// ).with_alignment(Alignment::CENTER);
 /// ```
 #[derive(Debug)]
 pub struct RenderConstraintsTransformBox {
@@ -91,7 +256,7 @@ impl RenderConstraintsTransformBox {
     /// # Example
     ///
     /// ```rust,ignore
-    /// let transform = Box::new(|c: BoxConstraints| c.loosen());
+    /// let transform = BoxConstraintsTransform::new(|c| c.loosen());
     /// let box = RenderConstraintsTransformBox::new(transform);
     /// ```
     pub fn new(constraints_transform: BoxConstraintsTransform) -> Self {
@@ -160,7 +325,8 @@ impl RenderObject for RenderConstraintsTransformBox {}
 
 impl RenderBox<Single> for RenderConstraintsTransformBox {
     fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Single>) -> RenderResult<Size> {
-        let child_id = *ctx.children.single();
+        // Single arity: use ctx.single_child() which returns ElementId directly
+        let child_id = ctx.single_child();
 
         // Apply transform to parent constraints
         let child_constraints = self.constraints_transform.apply(ctx.constraints);
@@ -177,7 +343,8 @@ impl RenderBox<Single> for RenderConstraintsTransformBox {
     }
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Single>) {
-        let child_id = *ctx.children.single();
+        // Single arity: use ctx.single_child() which returns ElementId directly
+        let child_id = ctx.single_child();
 
         // Calculate child offset based on alignment (if sizes differ)
         let child_offset = if self.cached_parent_size != self.cached_child_size {

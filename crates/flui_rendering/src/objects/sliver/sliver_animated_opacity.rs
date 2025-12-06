@@ -1,38 +1,176 @@
-//! RenderSliverAnimatedOpacity - Animated opacity for sliver content
+//! RenderSliverAnimatedOpacity - Animated opacity transitions for sliver scrollables
+//!
+//! Applies animated opacity to sliver child, optimized for frequent opacity changes driven by
+//! animations. Skips painting when fully transparent (opacity = 0), uses compositing layers for
+//! partial transparency, maintains layer during animation to avoid layer creation/destruction
+//! overhead. Similar to RenderSliverOpacity but with animation-specific optimizations.
+//!
+//! # Flutter Equivalence
+//!
+//! | FLUI | Flutter |
+//! |------|---------|
+//! | `RenderSliverAnimatedOpacity` | `RenderAnimatedOpacity` adapted for slivers (sliver.dart) |
+//! | `opacity` | Animated opacity value (0.0-1.0) |
+//! | `animating` | Whether animation is active (for layer optimization) |
+//! | `needs_compositing()` | Determines when compositing layer needed |
+//! | `should_paint()` | Skip painting optimization when opacity = 0 |
+//!
+//! # Layout Protocol
+//!
+//! 1. **Pass constraints to child**
+//!    - Opacity doesn't affect layout (pure visual effect)
+//!    - Child layouts with original constraints
+//!
+//! 2. **Cache child geometry**
+//!    - Return child's SliverGeometry unchanged
+//!
+//! # Paint Protocol (Intended)
+//!
+//! 1. **Check opacity** (line 130)
+//!    - Skip painting if opacity = 0 (optimization)
+//!
+//! 2. **Paint child** (line 135-148)
+//!    - Get child canvas
+//!    - Apply opacity to canvas (NOT IMPLEMENTED - TODO)
+//!    - Return canvas
+//!
+//! 3. **Compositing layer** (line 142-145)
+//!    - Use layer when 0 < opacity < 1
+//!    - Keep layer during animation (even at opacity = 1)
+//!    - Avoids layer creation/destruction overhead
+//!
+//! # Performance
+//!
+//! - **Layout**: O(1) + O(child) - pass-through to child
+//! - **Paint**: O(child) when visible, O(1) when opacity = 0
+//! - **Memory**: 16 bytes (f32 + 2×bool + padding) + 48 bytes (SliverGeometry) = 64 bytes
+//! - **Animation**: Triggers repaint only, NOT relayout
+//! - **Compositing**: Layer reused during animation for efficiency
+//!
+//! # Use Cases
+//!
+//! - **Fade in/out**: Lists/grids appearing/disappearing
+//! - **Page transitions**: Opacity-based page navigation
+//! - **Loading states**: Fading content during loading
+//! - **Interactive feedback**: Dimming on touch
+//! - **Animated headers**: AppBar fade based on scroll
+//!
+//! # Opacity Optimization
+//!
+//! ```text
+//! opacity = 0.0:     [NO PAINT] ← Skip painting (optimization)
+//! opacity = 0.5:     [PAINT + LAYER] ← Compositing layer
+//! opacity = 1.0:     [PAINT] ← No layer (normal paint)
+//! opacity = 1.0 (animating): [PAINT + LAYER] ← Keep layer!
+//! ```
+//!
+//! # ⚠️ IMPLEMENTATION ISSUE
+//!
+//! This implementation has **ONE INCOMPLETE FEATURE**:
+//!
+//! 1. **✅ Child IS laid out** (line 115-126)
+//!    - Correctly uses layout_sliver_child()
+//!    - Child geometry properly cached
+//!    - GOOD IMPLEMENTATION!
+//!
+//! 2. **⚠️ Opacity NOT APPLIED** (line 128-152, TODO at line 140-145)
+//!    - Child painted normally without opacity
+//!    - TODO comment acknowledges missing opacity layer
+//!    - needs_compositing() calculated but not used
+//!
+//! 3. **⚠️ always_include_semantics NOT USED** (line 42)
+//!    - Field exists and can be set
+//!    - Never checked in layout/paint
+//!    - Dead code - has no effect
+//!
+//! 4. **✅ should_paint() optimization CORRECT** (line 95-97)
+//!    - Skips painting when opacity = 0
+//!    - Good performance optimization
+//!
+//! 5. **✅ needs_compositing() logic CORRECT** (line 103-105)
+//!    - Correctly keeps layer during animation
+//!    - Avoids layer creation/destruction overhead
+//!
+//! **This RenderObject is WELL STRUCTURED - only opacity layer missing!**
+//!
+//! # Comparison with Related Objects
+//!
+//! - **vs SliverOpacity**: AnimatedOpacity optimized for animation, Opacity is static
+//! - **vs AnimatedOpacity (box)**: SliverAnimatedOpacity for slivers, AnimatedOpacity for boxes
+//! - **vs FadeTransition**: AnimatedOpacity is render, FadeTransition is widget
+//! - **vs SliverIgnorePointer**: Opacity affects visuals, IgnorePointer affects hit testing
+//!
+//! # Examples
+//!
+//! ```rust,ignore
+//! use flui_rendering::RenderSliverAnimatedOpacity;
+//!
+//! // Fade in animation (0 → 1)
+//! let mut opacity = RenderSliverAnimatedOpacity::new(0.0);
+//! opacity.set_animating(true);
+//! // ... animation loop ...
+//! opacity.set_opacity(0.5); // Halfway through fade
+//! // WARNING: opacity not applied - child paints normally!
+//!
+//! // Fade out on scroll
+//! let mut opacity = RenderSliverAnimatedOpacity::new(1.0);
+//! // ... as user scrolls ...
+//! opacity.set_opacity(0.7); // Partially faded
+//! opacity.set_opacity(0.0); // Fully transparent (not painted)
+//! ```
 
-use crate::core::{RuntimeArity, LegacySliverRender, SliverSliver};
+use crate::core::{RenderObject, RenderSliver, Single, SliverLayoutContext, SliverPaintContext};
+use crate::RenderResult;
 use flui_painting::Canvas;
 use flui_types::SliverGeometry;
 
-/// RenderObject that applies animated opacity to a sliver child
+/// RenderObject that applies animated opacity to sliver child.
 ///
-/// Similar to RenderSliverOpacity but designed for animated transitions.
-/// The opacity value is expected to change over time (driven by an animation),
-/// and this render object handles the efficient rendering of those changes.
+/// Optimized for frequent opacity changes driven by animations. Skips painting when fully
+/// transparent (opacity = 0), maintains compositing layer during animation to avoid layer
+/// creation/destruction overhead. Child layout is pass-through (opacity is pure visual effect).
 ///
-/// # Differences from RenderSliverOpacity
+/// # Arity
 ///
-/// - **Animated**: Optimized for frequent opacity changes
-/// - **Implicit**: Can be controlled by animation controllers
-/// - **Performance**: May use different compositing strategies for smoother animation
+/// `RuntimeArity::Exact(1)` - Must have exactly 1 sliver child.
 ///
-/// # Performance
+/// # Protocol
 ///
-/// - Opacity = 0.0: Child is not painted (optimization)
-/// - Opacity = 1.0: Child painted normally (no layer)
-/// - 0.0 < Opacity < 1.0: Uses compositing layer
-/// - Animation triggers repaint, not relayout
+/// Sliver protocol - Uses `SliverConstraints` and returns `SliverGeometry`.
+///
+/// # Pattern
+///
+/// **Animated Visual Effect Proxy** - Pass-through layout, animated opacity application
+/// (intended), compositing layer optimization during animation, skip-paint optimization
+/// when opacity = 0.
+///
+/// # Use Cases
+///
+/// - **Fade transitions**: Lists/grids appearing/disappearing
+/// - **Page navigation**: Opacity-based page transitions
+/// - **Loading states**: Fading content during loading
+/// - **Interactive feedback**: Dimming on touch/hover
+/// - **Scroll effects**: AppBar fade based on scroll position
+///
+/// # Flutter Compliance
+///
+/// **WELL STRUCTURED** (opacity layer missing):
+/// - ✅ Child layout correct (uses layout_sliver_child)
+/// - ✅ should_paint() optimization correct
+/// - ✅ needs_compositing() logic correct
+/// - ⚠️ Opacity NOT applied (TODO at line 140-145)
+/// - ⚠️ always_include_semantics unused (dead code)
 ///
 /// # Example
 ///
 /// ```rust,ignore
 /// use flui_rendering::RenderSliverAnimatedOpacity;
 ///
-/// // Create with initial opacity
-/// let animated_opacity = RenderSliverAnimatedOpacity::new(1.0);
-///
-/// // Later, update opacity (typically from animation)
-/// // animated_opacity.set_opacity(0.5);
+/// // Fade in from transparent to opaque
+/// let mut opacity = RenderSliverAnimatedOpacity::new(0.0);
+/// opacity.set_animating(true);
+/// opacity.set_opacity(0.5); // Halfway
+/// // WARNING: opacity not applied - child paints normally!
 /// ```
 #[derive(Debug)]
 pub struct RenderSliverAnimatedOpacity {
@@ -111,52 +249,40 @@ impl Default for RenderSliverAnimatedOpacity {
     }
 }
 
-impl LegacySliverRender for RenderSliverAnimatedOpacity {
-    fn layout(&mut self, ctx: &Sliver) -> SliverGeometry {
-        // Pass constraints through to child
-        let child_geometry = if let Some(child_id) = ctx.children.try_single() {
-            ctx.tree.layout_sliver_child(child_id, ctx.constraints)
-        } else {
-            SliverGeometry::default()
-        };
+impl RenderObject for RenderSliverAnimatedOpacity {}
 
-        // Cache geometry (opacity doesn't affect layout)
-        self.sliver_geometry = child_geometry;
-        self.sliver_geometry
+impl RenderSliver<Single> for RenderSliverAnimatedOpacity {
+    fn layout(&mut self, mut ctx: SliverLayoutContext<'_, Single>) -> RenderResult<SliverGeometry> {
+        let child_id = *ctx.children.single();
+
+        // Pass constraints through to child (opacity doesn't affect layout)
+        self.sliver_geometry = ctx.tree_mut().perform_sliver_layout(child_id, ctx.constraints)?;
+
+        Ok(self.sliver_geometry)
     }
 
-    fn paint(&self, ctx: &Sliver) -> Canvas {
+    fn paint(&self, ctx: &mut SliverPaintContext<'_, Single>) {
         // Don't paint if completely transparent
         if !self.should_paint() {
-            return Canvas::new();
+            return;
         }
 
-        // Paint child if present
-        if let Some(child_id) = ctx.children.try_single() {
-            if self.sliver_geometry.visible {
-                let child_canvas = ctx.tree.paint_child(child_id, ctx.offset);
+        // Paint child if visible
+        if self.sliver_geometry.visible {
+            let child_id = *ctx.children.single();
 
-                // Apply opacity to canvas
-                // TODO: When opacity layer support is available, apply it here
-                // For now, we just paint normally (opacity would be applied by compositor)
+            // Apply opacity to canvas
+            // TODO: When opacity layer support is available, apply it here
+            // For now, we just paint normally (opacity would be applied by compositor)
+            if let Ok(child_canvas) = ctx.tree().perform_paint(child_id, ctx.offset) {
                 if self.needs_compositing() {
                     // Mark that this needs a compositing layer with opacity
                     // In full implementation, this would wrap in an OpacityLayer
                 }
 
-                return child_canvas;
+                *ctx.canvas = child_canvas;
             }
         }
-
-        Canvas::new()
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> RuntimeArity {
-        RuntimeArity::Exact(1) // Single child sliver
     }
 }
 
@@ -264,11 +390,5 @@ mod tests {
         let opacity = RenderSliverAnimatedOpacity::new(0.0);
 
         assert!(!opacity.needs_compositing());
-    }
-
-    #[test]
-    fn test_arity_is_single_child() {
-        let opacity = RenderSliverAnimatedOpacity::new(0.5);
-        assert_eq!(opacity.arity(), RuntimeArity::Exact(1));
     }
 }

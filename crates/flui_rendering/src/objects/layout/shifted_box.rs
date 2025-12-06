@@ -1,17 +1,111 @@
-//! RenderShiftedBox - Shifts child position by an offset
+//! RenderShiftedBox - Shifts child painted position by fixed offset
+//!
+//! Implements a simple positioning utility that shifts a child's painted position
+//! by a fixed pixel offset without affecting layout. Similar to absolute positioning
+//! in CSS but for the child's paint position only.
+//!
+//! # Flutter Equivalence
+//!
+//! | FLUI | Flutter |
+//! |------|---------|
+//! | `RenderShiftedBox` | Similar to `RenderTransform.translate()` from `package:flutter/src/widgets/basic.dart` |
+//! | `offset` | Translation offset (Offset) |
+//! | `set_offset()` | `offset = value` setter |
+//!
+//! # Layout Protocol
+//!
+//! 1. **Pass constraints to child**
+//!    - Child receives same constraints (proxy behavior)
+//!    - Shift doesn't affect layout
+//!
+//! 2. **Cache size**
+//!    - Store child size (not used in current impl, but available)
+//!
+//! 3. **Return child size**
+//!    - Container size = child size (shift doesn't change size)
+//!
+//! # Paint Protocol
+//!
+//! 1. **Calculate shifted offset**
+//!    - Shifted offset = parent offset + shift offset
+//!    - Child painted at shifted position
+//!
+//! 2. **Paint child**
+//!    - Child painted at shifted offset
+//!    - No clipping applied (child can overflow if shifted)
+//!
+//! # Performance
+//!
+//! - **Layout**: O(1) - pass-through to child + size cache
+//! - **Paint**: O(1) - simple offset addition + child paint
+//! - **Memory**: 24 bytes (Offset + Size cache)
+//!
+//! # Use Cases
+//!
+//! - **Fixed offsets**: Position child at specific pixel offset
+//! - **Stacking layers**: Overlay elements with pixel-perfect positioning
+//! - **Animation**: Animate position with absolute pixel offsets
+//! - **Manual layout**: Fine-tune positioning by exact pixels
+//! - **Tooltip positioning**: Position tooltips at fixed offsets
+//! - **Debugging**: Temporarily shift elements to see overlaps
+//!
+//! # Examples
+//!
+//! ```rust,ignore
+//! use flui_rendering::RenderShiftedBox;
+//! use flui_types::Offset;
+//!
+//! // Shift right 10px, down 20px
+//! let shifted = RenderShiftedBox::new(Offset::new(10.0, 20.0));
+//!
+//! // Shift horizontally only
+//! let right = RenderShiftedBox::shift_x(15.0);
+//!
+//! // Shift vertically only
+//! let down = RenderShiftedBox::shift_y(25.0);
+//!
+//! // No shift (identity)
+//! let identity = RenderShiftedBox::zero();
+//! ```
 
+use crate::core::{BoxLayoutCtx, BoxPaintCtx, RenderBox, Single};
 use crate::{RenderObject, RenderResult};
-
-use crate::core::{
-    RenderBox, Single, {BoxLayoutCtx, BoxPaintCtx},
-};
 use flui_types::{Offset, Size};
 
-/// RenderObject that shifts its child by a fixed offset
+/// RenderObject that shifts its child by a fixed pixel offset.
 ///
-/// This is a simple utility RenderObject that positions its child at a specific
-/// offset from its own origin. The child is laid out with the full constraints,
-/// and the resulting size is returned unchanged.
+/// Positions child at a specific offset from container's origin. Affects only
+/// painting, not layout. Child can overflow container if shifted.
+///
+/// # Arity
+///
+/// `Single` - Must have exactly 1 child.
+///
+/// # Protocol
+///
+/// Box protocol - Uses `BoxConstraints` and returns `Size`.
+///
+/// # Pattern
+///
+/// **Proxy** - Passes constraints unchanged, only affects painting position.
+///
+/// # Use Cases
+///
+/// - **Fixed positioning**: Shift child by exact pixels
+/// - **Layer stacking**: Overlay elements with precise positioning
+/// - **Position animation**: Animate with absolute pixel offsets
+/// - **Manual layout**: Fine-tune positioning manually
+/// - **Tooltip offsets**: Position tooltips precisely
+/// - **Debugging**: Temporarily shift to reveal overlaps
+///
+/// # Flutter Compliance
+///
+/// Similar to Flutter's Transform.translate behavior:
+/// - Passes constraints unchanged to child (proxy for layout)
+/// - Size determined by child (shift doesn't affect size)
+/// - Child painted at shifted position
+/// - No clipping applied (can overflow)
+/// - Affects only painting, not layout or hit testing
 ///
 /// # Example
 ///
@@ -19,8 +113,11 @@ use flui_types::{Offset, Size};
 /// use flui_rendering::RenderShiftedBox;
 /// use flui_types::Offset;
 ///
-/// // Shift child 10px right, 20px down
+/// // Shift down-right
 /// let shifted = RenderShiftedBox::new(Offset::new(10.0, 20.0));
+///
+/// // Shift left-up (negative offsets)
+/// let shifted_back = RenderShiftedBox::new(Offset::new(-5.0, -10.0));
 /// ```
 #[derive(Debug)]
 pub struct RenderShiftedBox {
@@ -81,26 +178,26 @@ impl RenderObject for RenderShiftedBox {}
 
 impl RenderBox<Single> for RenderShiftedBox {
     fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Single>) -> RenderResult<Size> {
-        let child_id = *ctx.children.single();
+        // Single arity: use ctx.single_child() which returns ElementId directly
+        let child_id = ctx.single_child();
 
-        // Layout child with full constraints
+        // Proxy behavior: pass constraints unchanged to child
         let size = ctx.layout_child(child_id, ctx.constraints)?;
 
-        // Store size for paint
+        // Store size for paint (available but not currently used)
         self.size = size;
 
-        // Return child's size unchanged
+        // Return child's size unchanged (shift doesn't affect layout)
         Ok(size)
     }
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Single>) {
-        let child_id = *ctx.children.single();
+        // Single arity: use ctx.single_child() which returns ElementId directly
+        let child_id = ctx.single_child();
 
         // Paint child at shifted position
-        let child_offset = Offset::new(
-            ctx.offset.dx + self.offset.dx,
-            ctx.offset.dy + self.offset.dy,
-        );
+        // shifted_offset = parent_offset + shift_offset
+        let child_offset = ctx.offset + self.offset;
 
         ctx.paint_child(child_id, child_offset);
     }

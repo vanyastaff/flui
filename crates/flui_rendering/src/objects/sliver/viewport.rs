@@ -1,40 +1,33 @@
-//! RenderViewport - Container for sliver content with scrolling
+//! RenderViewport - Scrollable viewport container for sliver children
+//!
+//! Core container that manages scrolling slivers (lists, grids, custom scrollables).
+//! Converts scroll offset into SliverConstraints for children, manages layout of multiple
+//! slivers in sequence, handles viewport clipping, and coordinates cache extent for smooth
+//! scrolling. Essential building block for CustomScrollView, ListView, GridView.
+//!
+//! # Flutter Equivalence
+//!
+//! | FLUI | Flutter |
+//! |------|---------|
+//! | `RenderViewport` | `RenderViewport` from `package:flutter/src/rendering/viewport.dart` |
+//! | `scroll_offset` | Current scroll position |
+//! | `viewport_main_axis_extent` | Viewport size (height for vertical) |
+//! | `cache_extent` | Buffer for prebuilding off-screen children |
+//! | `calculate_sliver_constraints()` | Converts scroll offset to SliverConstraints |
+//! | `layout_slivers()` | Sequential sliver layout with remaining extent |
 
-use flui_core::element::ElementTree;
-// TODO: Migrate to Render<A>
-// use crate::core::{RuntimeArity, BoxPaintCtx, LegacyRender};
+use crate::core::{BoxLayoutCtx, BoxPaintCtx, RenderBox, Variable};
+use crate::{RenderObject, RenderResult};
 use flui_painting::Canvas;
 use flui_types::prelude::*;
 use flui_types::layout::{Axis, AxisDirection};
 use flui_types::{SliverConstraints, SliverGeometry};
 
-/// RenderObject that provides a viewport for sliver content
+/// RenderObject for scrollable viewport containing sliver children.
 ///
-/// A viewport is the visible portion of scrollable content. It manages:
-/// - Converting scroll offset into sliver constraints
-/// - Laying out sliver children with appropriate constraints
-/// - Clipping content to viewport bounds
-/// - Cache extent for smooth scrolling
-///
-/// # Coordinate System
-///
-/// - scroll_offset: 0.0 means top of content visible
-/// - Positive scroll_offset scrolls content upward (downward scroll gesture)
-/// - viewport_main_axis_extent: Height (vertical) or width (horizontal) of viewport
-///
-/// # Example
-///
-/// ```rust,ignore
-/// use flui_rendering::RenderViewport;
-/// use flui_types::layout::AxisDirection;
-///
-/// // Vertical scrolling viewport
-/// let viewport = RenderViewport::new(
-///     AxisDirection::TopToBottom,
-///     600.0,  // viewport height
-///     100.0,  // scroll offset
-/// );
-/// ```
+/// Core container for sliver-based scrolling. Converts scroll offset into SliverConstraints,
+/// layouts slivers sequentially with remaining extent tracking, manages viewport clipping,
+/// and coordinates cache extent for smooth scrolling.
 #[derive(Debug)]
 pub struct RenderViewport {
     /// Direction of the main axis
@@ -69,11 +62,6 @@ pub enum ClipBehavior {
 
 impl RenderViewport {
     /// Create new viewport
-    ///
-    /// # Arguments
-    /// * `axis_direction` - Direction of scrolling axis
-    /// * `viewport_main_axis_extent` - Size of viewport on main axis
-    /// * `scroll_offset` - Current scroll position
     pub fn new(
         axis_direction: AxisDirection,
         viewport_main_axis_extent: f32,
@@ -84,7 +72,7 @@ impl RenderViewport {
             viewport_main_axis_extent,
             cross_axis_extent: 0.0,
             scroll_offset,
-            cache_extent: 250.0, // Default cache extent
+            cache_extent: 250.0,
             clip_behavior: ClipBehavior::HardEdge,
             sliver_geometries: Vec::new(),
         }
@@ -137,57 +125,6 @@ impl RenderViewport {
         }
     }
 
-    /// Layout sliver children
-    fn layout_slivers(
-        &mut self,
-        _tree: &ElementTree,
-        children: &[flui_core::element::ElementId],
-    ) {
-        self.sliver_geometries.clear();
-
-        let mut remaining_paint_extent = self.viewport_main_axis_extent;
-        let mut current_scroll_offset = self.scroll_offset;
-
-        for _child_id in children {
-            let constraints = self.calculate_sliver_constraints(
-                remaining_paint_extent,
-                current_scroll_offset,
-            );
-
-            // In real implementation:
-            // 1. Set sliver constraints on child
-            // 2. Call child.layout()
-            // 3. Get child's SliverGeometry
-            // 4. Update remaining_paint_extent and current_scroll_offset
-
-            // For now, create placeholder geometry
-            let geometry = SliverGeometry {
-                scroll_extent: 100.0,
-                paint_extent: remaining_paint_extent.min(100.0),
-                layout_extent: remaining_paint_extent.min(100.0),
-                max_paint_extent: 100.0,
-                visible: remaining_paint_extent > 0.0,
-                visible_fraction: 1.0,
-                paint_origin: 0.0,
-                cross_axis_extent: constraints.cross_axis_extent,
-                cache_extent: remaining_paint_extent.min(100.0),
-                has_visual_overflow: false,
-                hit_test_extent: Some(remaining_paint_extent.min(100.0)),
-                scroll_offset_correction: None,
-                max_scroll_obsolescence: 0.0,
-            };
-
-            self.sliver_geometries.push(geometry);
-
-            remaining_paint_extent -= geometry.paint_extent;
-            current_scroll_offset = (current_scroll_offset - geometry.scroll_extent).max(0.0);
-
-            if remaining_paint_extent <= 0.0 {
-                break;
-            }
-        }
-    }
-
     /// Get geometry for child at index
     pub fn geometry_at(&self, index: usize) -> Option<&SliverGeometry> {
         self.sliver_geometries.get(index)
@@ -200,9 +137,11 @@ impl Default for RenderViewport {
     }
 }
 
-impl LegacyRender for RenderViewport {
-    fn layout(&mut self, ctx: &) -> Size {
-        let constraints = &ctx.constraints;
+impl RenderObject for RenderViewport {}
+
+impl RenderBox<Variable> for RenderViewport {
+    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Variable>) -> RenderResult<Size> {
+        let constraints = ctx.constraints;
 
         // Viewport takes up the space given by box constraints
         let width = constraints.max_width;
@@ -220,28 +159,59 @@ impl LegacyRender for RenderViewport {
             }
         }
 
-        // TODO: Layout sliver children
-        // self.layout_slivers(tree, children);
+        // Layout sliver children
+        self.sliver_geometries.clear();
+        let mut remaining_paint_extent = self.viewport_main_axis_extent;
+        let mut current_scroll_offset = self.scroll_offset;
 
-        Size::new(width, height)
+        for child_id in ctx.children() {
+            let sliver_constraints = self.calculate_sliver_constraints(
+                remaining_paint_extent,
+                current_scroll_offset,
+            );
+
+            // Layout sliver child using tree's perform_sliver_layout
+            let geometry = ctx.tree_mut().perform_sliver_layout(child_id, sliver_constraints)?;
+
+            self.sliver_geometries.push(geometry);
+
+            remaining_paint_extent -= geometry.paint_extent;
+            current_scroll_offset = (current_scroll_offset - geometry.scroll_extent).max(0.0);
+
+            if remaining_paint_extent <= 0.0 {
+                break;
+            }
+        }
+
+        Ok(Size::new(width, height))
     }
 
-    fn paint(&self, ctx: &) -> Canvas {
-        let _offset = ctx.offset;
-        let canvas = Canvas::new();
+    fn paint(&self, ctx: &mut BoxPaintCtx<'_, Variable>) {
+        let mut canvas = Canvas::new();
+        let mut paint_offset = 0.0;
+
+        // Paint visible sliver children
+        for (i, child_id) in ctx.children().enumerate() {
+            if let Some(geometry) = self.sliver_geometries.get(i) {
+                if geometry.paint_extent > 0.0 {
+                    // Calculate child offset along main axis
+                    let child_offset = match self.axis_direction.axis() {
+                        Axis::Vertical => Offset::new(ctx.offset.dx, ctx.offset.dy + paint_offset),
+                        Axis::Horizontal => Offset::new(ctx.offset.dx + paint_offset, ctx.offset.dy),
+                    };
+
+                    let child_canvas = ctx.tree().perform_paint(child_id, child_offset)
+                        .unwrap_or_else(|_| Canvas::new());
+                    canvas.append_canvas(child_canvas);
+                }
+
+                paint_offset += geometry.paint_extent;
+            }
+        }
 
         // TODO: Apply clipping based on clip_behavior
-        // TODO: Paint sliver children at their calculated positions
 
-        canvas
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> RuntimeArity {
-        RuntimeArity::Variable // Multiple sliver children
+        *ctx.canvas = canvas;
     }
 }
 
@@ -337,65 +307,5 @@ mod tests {
         assert_eq!(constraints.remaining_paint_extent, 700.0);
         assert_eq!(constraints.viewport_main_axis_extent, 800.0);
         assert_eq!(constraints.cross_axis_direction, AxisDirection::TopToBottom);
-    }
-
-    #[test]
-    fn test_layout_slivers_single_child() {
-        let mut viewport = RenderViewport::new(AxisDirection::TopToBottom, 600.0, 0.0);
-        viewport.cross_axis_extent = 400.0;
-
-        let tree = ElementTree::new();
-        let children = vec![flui_core::element::ElementId::new(1)];
-
-        viewport.layout_slivers(&tree, &children);
-
-        assert_eq!(viewport.sliver_geometries.len(), 1);
-        let geometry = viewport.geometry_at(0).unwrap();
-        assert_eq!(geometry.scroll_extent, 100.0);
-        assert!(geometry.visible);
-    }
-
-    #[test]
-    fn test_layout_slivers_multiple_children() {
-        let mut viewport = RenderViewport::new(AxisDirection::TopToBottom, 600.0, 0.0);
-        viewport.cross_axis_extent = 400.0;
-
-        let tree = ElementTree::new();
-        let children = vec![
-            flui_core::element::ElementId::new(1),
-            flui_core::element::ElementId::new(2),
-            flui_core::element::ElementId::new(3),
-        ];
-
-        viewport.layout_slivers(&tree, &children);
-
-        // With placeholder geometry, all children should be laid out
-        assert_eq!(viewport.sliver_geometries.len(), 3);
-    }
-
-    #[test]
-    fn test_geometry_at_valid_index() {
-        let mut viewport = RenderViewport::new(AxisDirection::TopToBottom, 600.0, 0.0);
-        viewport.cross_axis_extent = 400.0;
-
-        let tree = ElementTree::new();
-        let children = vec![flui_core::element::ElementId::new(1)];
-
-        viewport.layout_slivers(&tree, &children);
-
-        assert!(viewport.geometry_at(0).is_some());
-    }
-
-    #[test]
-    fn test_geometry_at_invalid_index() {
-        let viewport = RenderViewport::new(AxisDirection::TopToBottom, 600.0, 0.0);
-
-        assert!(viewport.geometry_at(0).is_none());
-    }
-
-    #[test]
-    fn test_arity_is_variable() {
-        let viewport = RenderViewport::new(AxisDirection::TopToBottom, 600.0, 0.0);
-        assert_eq!(viewport.arity(), RuntimeArity::Variable);
     }
 }

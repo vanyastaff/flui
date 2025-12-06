@@ -1,24 +1,155 @@
-//! RenderListBody - simple scrollable list layout
+//! RenderListBody - Simple sequential list without alignment control
+//!
+//! Implements a simplified layout container for arranging children sequentially
+//! along a main axis without alignment options. Simpler than Flex - children get
+//! unbounded main axis (intrinsic sizing) and parent's cross axis constraints.
+//! Ideal for simple scrollable lists and sequential content.
+//!
+//! # Flutter Equivalence
+//!
+//! | FLUI | Flutter |
+//! |------|---------|
+//! | `RenderListBody` | `RenderListBody` from `package:flutter/src/rendering/list_body.dart` |
+//! | `main_axis` | `mainAxis` property (Axis enum) |
+//! | `spacing` | Custom extension (not in Flutter ListBody) |
+//! | `vertical()` | Creates Axis.vertical configuration |
+//! | `horizontal()` | Creates Axis.horizontal configuration |
+//! | `set_main_axis()` | `mainAxis = value` setter |
+//!
+//! # Layout Protocol
+//!
+//! 1. **Layout children sequentially**
+//!    - Give each child:
+//!      - Main axis: 0 to infinity (unbounded, intrinsic size)
+//!      - Cross axis: parent's constraints (min to max)
+//!    - Children determine their own main-axis size
+//!    - Store each child's size
+//!
+//! 2. **Calculate container size**
+//!    - Main axis: sum of all child main sizes + spacing
+//!    - Cross axis: max of all child cross sizes
+//!    - Clamp to parent constraints
+//!
+//! # Paint Protocol
+//!
+//! 1. **Paint children in order**
+//!    - Paint sequentially along main axis
+//!    - Accumulate offset: position + child_size + spacing
+//!    - No alignment (children at start of cross axis)
+//!
+//! # Performance
+//!
+//! - **Layout**: O(n) - single pass through children
+//! - **Paint**: O(n) - paint each child once in sequence
+//! - **Memory**: 32 bytes base + O(n) for cached sizes (8 bytes per child)
+//!
+//! # Use Cases
+//!
+//! - **Scrollable lists**: Simple vertical/horizontal scrolling lists
+//! - **Sequential content**: Basic sequential arrangement without alignment
+//! - **Chat messages**: Message bubbles in sequence
+//! - **Timeline items**: Sequential timeline entries
+//! - **Form fields**: Simple vertical form field stacking
+//! - **Menu items**: Simple menu item lists
+//! - **Debug layouts**: Quick sequential layouts for testing
+//!
+//! # Difference from RenderFlex
+//!
+//! **ListBody (simpler):**
+//! - No alignment control (always start-aligned)
+//! - Unbounded main axis (intrinsic sizing)
+//! - No MainAxisSize control
+//! - No flex factors
+//! - Lighter weight for simple lists
+//!
+//! **Flex (more features):**
+//! - Full MainAxisAlignment control
+//! - Full CrossAxisAlignment control
+//! - MainAxisSize (min vs max)
+//! - Flex factors (Expanded/Flexible)
+//! - Heavier for complex layouts
+//!
+//! # Comparison with Related Objects
+//!
+//! - **vs RenderFlex**: Flex has alignment/sizing control, ListBody is simpler
+//! - **vs RenderStack**: Stack overlaps children, ListBody arranges sequentially
+//! - **vs RenderWrap**: Wrap supports wrapping, ListBody is single-line only
+//! - **vs RenderColumn/Row**: Column/Row are Flex aliases, ListBody is simpler
+//!
+//! # Examples
+//!
+//! ```rust,ignore
+//! use flui_rendering::RenderListBody;
+//!
+//! // Vertical list (most common - chat, timeline, etc.)
+//! let vertical = RenderListBody::vertical();
+//!
+//! // Horizontal list
+//! let horizontal = RenderListBody::horizontal();
+//!
+//! // With spacing between items
+//! let spaced = RenderListBody::vertical().with_spacing(8.0);
+//!
+//! // Mutable updates
+//! let mut list = RenderListBody::default();
+//! list.set_spacing(12.0);
+//! list.set_main_axis(Axis::Horizontal);
+//! ```
 
 use crate::core::{BoxLayoutCtx, BoxPaintCtx, ChildrenAccess, RenderBox, Variable};
 use crate::{RenderObject, RenderResult};
 use flui_types::constraints::BoxConstraints;
 use flui_types::{Axis, Offset, Size};
 
-/// RenderObject that arranges children in a simple scrollable list
+/// RenderObject that arranges children in a simple sequential list.
 ///
-/// Unlike Flex, ListBody doesn't support flex factors. All children
-/// are sized to their intrinsic size along the main axis.
-/// Useful for simple scrollable lists.
+/// Simpler than Flex - no alignment control, unbounded main axis for intrinsic
+/// sizing, parent's cross axis constraints. Ideal for basic scrollable lists
+/// and sequential content where alignment isn't needed.
+///
+/// # Arity
+///
+/// `Variable` - Can have any number of children (0+).
+///
+/// # Protocol
+///
+/// Box protocol - Uses `BoxConstraints` and returns `Size`.
+///
+/// # Pattern
+///
+/// **Simple Sequential Container** - Arranges children in a line with unbounded
+/// main axis (intrinsic sizing), no alignment control, optional spacing between
+/// items, sizes to sum of children.
+///
+/// # Use Cases
+///
+/// - **Scrollable lists**: Vertical/horizontal simple scrolling lists
+/// - **Chat messages**: Message bubbles in sequence
+/// - **Timeline**: Sequential timeline entries
+/// - **Simple forms**: Basic vertical form field stacking
+/// - **Menu items**: Simple menu lists
+/// - **Sequential content**: Any basic sequential arrangement
+///
+/// # Flutter Compliance
+///
+/// Matches Flutter's RenderListBody behavior:
+/// - Unbounded main axis (children determine own main size)
+/// - Cross axis uses parent's constraints
+/// - No alignment control (implicit start alignment)
+/// - Size = sum of children + spacing
+/// - FLUI extension: spacing property (not in Flutter)
 ///
 /// # Example
 ///
 /// ```rust,ignore
-/// use flui_rendering::objects::layout::RenderListBody;
+/// use flui_rendering::RenderListBody;
 /// use flui_types::Axis;
 ///
-/// // Create vertical list with spacing
-/// let mut list = RenderListBody::vertical().with_spacing(8.0);
+/// // Vertical list with spacing
+/// let list = RenderListBody::vertical().with_spacing(8.0);
+///
+/// // Horizontal list
+/// let horizontal = RenderListBody::horizontal();
 /// ```
 #[derive(Debug)]
 pub struct RenderListBody {

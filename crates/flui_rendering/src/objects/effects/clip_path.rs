@@ -1,4 +1,76 @@
 //! RenderClipPath - clips child to an arbitrary path
+//!
+//! Implements Flutter's custom path clipping using the PathClipper trait
+//! for complex, non-standard shapes.
+//!
+//! # Flutter Equivalence
+//!
+//! | FLUI | Flutter |
+//! |------|---------|
+//! | `RenderClipPath` | `RenderClipPath` from `package:flutter/src/rendering/proxy_box.dart` |
+//! | `PathClipper` trait | `CustomClipper<Path>` abstract class |
+//! | `clip_behavior` | `clipBehavior` property |
+//! | `get_clip()` | `getClip()` method |
+//!
+//! # Layout Protocol
+//!
+//! 1. **Pass constraints to child**
+//!    - Child receives same constraints (proxy behavior)
+//!
+//! 2. **Return child size**
+//!    - Container size = child size (no size change)
+//!    - Cache size for clipping during paint
+//!
+//! # Paint Protocol
+//!
+//! 1. **Get custom clip path**
+//!    - Call `PathClipper::get_clip(size)` to generate path
+//!    - Path is size-dependent and can be any shape
+//!
+//! 2. **Apply path clip**
+//!    - Apply clip using Canvas::clip_path()
+//!    - Supports complex shapes (stars, polygons, bezier curves)
+//!
+//! 3. **Paint child**
+//!    - Child content clipped to custom path
+//!
+//! # Performance
+//!
+//! - **Layout**: O(1) - pass-through to child
+//! - **Paint**: O(n) - path complexity + clip operation + child paint
+//! - **Hit Test**: O(1) - uses default rectangular hit testing (override for custom)
+//! - **Memory**: Variable - depends on PathClipper implementation
+//!
+//! # Use Cases
+//!
+//! - **Custom shapes**: Stars, hexagons, triangles, irregular polygons
+//! - **Complex masks**: Wave patterns, cutouts, decorative borders
+//! - **Design effects**: Unique clip shapes matching brand identity
+//! - **Animations**: Dynamic clipping paths that change over time
+//!
+//! # Examples
+//!
+//! ```rust,ignore
+//! use flui_rendering::{RenderClipPath, PathClipper};
+//! use flui_types::painting::{Clip, Path};
+//! use flui_types::Size;
+//!
+//! // Create a custom star clipper
+//! #[derive(Debug)]
+//! struct StarClipper;
+//!
+//! impl PathClipper for StarClipper {
+//!     fn get_clip(&self, size: Size) -> Path {
+//!         let mut path = Path::new();
+//!         // Draw star shape using path commands
+//!         // ... (star drawing logic)
+//!         path
+//!     }
+//! }
+//!
+//! // Use the clipper
+//! let clip = RenderClipPath::with_clipper(Box::new(StarClipper));
+//! ```
 
 use flui_painting::Canvas;
 use flui_types::{
@@ -64,16 +136,47 @@ impl ClipShape for PathShape {
     }
 }
 
-/// RenderObject that clips its child to an arbitrary path
+/// RenderObject that clips its child to an arbitrary path.
 ///
 /// Unlike RenderClipRect/RenderClipOval which clip to simple shapes,
 /// RenderClipPath can clip to any arbitrary path defined by a PathClipper.
 ///
+/// # Arity
+///
+/// `Single` - Must have exactly 1 child.
+///
+/// # Protocol
+///
+/// Box protocol - Uses `BoxConstraints` and returns `Size`.
+///
+/// # Pattern
+///
+/// **Proxy** - Passes constraints unchanged, clips during paint only.
+///
+/// # Use Cases
+///
+/// - **Custom shapes**: Stars, hearts, badges with custom outlines
+/// - **Complex UI**: Non-standard shapes for unique designs
+/// - **Animated clipping**: Dynamic paths that change frame-by-frame
+/// - **Cutouts**: Negative space effects, punch-hole designs
+/// - **Brand identity**: Custom clip shapes matching logo/branding
+///
+/// # Flutter Compliance
+///
+/// Matches Flutter's RenderClipPath behavior:
+/// - Passes constraints unchanged to child
+/// - Clips child during paint to custom path
+/// - Uses PathClipper trait (Flutter: CustomClipper<Path>)
+/// - Path is regenerated per paint if size changes
+/// - Supports both hard-edge and anti-aliased clipping
+/// - Uses Canvas::clip_path() API
+///
 /// # Example
 ///
 /// ```rust,ignore
-/// use flui_rendering::RenderClipPath;
-/// use flui_types::painting::Clip;
+/// use flui_rendering::{RenderClipPath, PathClipper};
+/// use flui_types::painting::{Clip, Path};
+/// use flui_types::Size;
 ///
 /// // Create a custom clipper
 /// #[derive(Debug)]
@@ -86,7 +189,7 @@ impl ClipShape for PathShape {
 ///     }
 /// }
 ///
-/// let clip_path = RenderClipPath::new(Clip::AntiAlias, Box::new(MyClipper));
+/// let clip_path = RenderClipPath::with_clipper(Box::new(MyClipper));
 /// ```
 pub type RenderClipPath = RenderClip<PathShape>;
 

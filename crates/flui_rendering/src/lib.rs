@@ -121,6 +121,9 @@ pub use into_render::{IntoRender, IntoRenderState};
 // Foundation types
 pub use core::ElementId;
 
+// Re-export commonly used render objects
+pub use objects::{ParagraphData, RenderParagraph};
+
 // External dependencies
 pub use flui_interaction::{HitTestBehavior, HitTestResult, HitTestable};
 pub use flui_painting::{Canvas, Paint};

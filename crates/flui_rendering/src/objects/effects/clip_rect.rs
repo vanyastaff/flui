@@ -1,4 +1,46 @@
 //! RenderClipRect - clips child to a rectangle
+//!
+//! Implements Flutter's rectangular clipping container that clips child
+//! to its bounding box.
+//!
+//! # Flutter Equivalence
+//!
+//! | FLUI | Flutter |
+//! |------|---------|
+//! | `RenderClipRect` | `RenderClipRect` from `package:flutter/src/rendering/proxy_box.dart` |
+//! | `clip_behavior` | `clipBehavior` property |
+//!
+//! # Layout Protocol
+//!
+//! 1. **Pass constraints to child**
+//!    - Child receives same constraints (proxy behavior)
+//!
+//! 2. **Return child size**
+//!    - Container size = child size (no size change)
+//!    - Cache size for clipping during paint
+//!
+//! # Performance
+//!
+//! - **Layout**: O(1) - pass-through to child
+//! - **Paint**: O(1) - canvas clip operation + child paint
+//! - **Hit Test**: O(1) - bounds check + child hit test
+//! - **Memory**: 12 bytes (RectShape + Clip + cached Size)
+//!
+//! # Examples
+//!
+//! ```rust,ignore
+//! use flui_rendering::RenderClipRect;
+//! use flui_types::painting::Clip;
+//!
+//! // Hard edge clipping (default, faster)
+//! let clip = RenderClipRect::hard_edge();
+//!
+//! // Anti-aliased clipping (slower but smoother)
+//! let clip = RenderClipRect::anti_alias();
+//!
+//! // Custom clip behavior
+//! let clip = RenderClipRect::with_clip(Clip::AntiAlias);
+//! ```
 
 use flui_painting::Canvas;
 use flui_types::{painting::Clip, Rect, Size};
@@ -16,19 +58,28 @@ impl ClipShape for RectShape {
     }
 }
 
-/// RenderObject that clips its child to a rectangle
+/// RenderObject that clips its child to a rectangle.
 ///
-/// The clipping is applied during painting. It doesn't affect layout,
-/// so the child is laid out normally and then clipped to its bounds.
+/// Clips child content to rectangular bounds using Canvas clip API.
 ///
-/// # Example
+/// # Arity
 ///
-/// ```rust,ignore
-/// use flui_rendering::RenderClipRect;
-/// use flui_types::painting::Clip;
+/// `Single` - Must have exactly 1 child.
 ///
-/// let clip_rect = RenderClipRect::new(Clip::AntiAlias);
-/// ```
+/// # Protocol
+///
+/// Box protocol - Uses `BoxConstraints` and returns `Size`.
+///
+/// # Pattern
+///
+/// **Proxy** - Passes constraints unchanged, clips during paint only.
+///
+/// # Flutter Compliance
+///
+/// Matches Flutter's RenderClipRect behavior:
+/// - Passes constraints unchanged to child
+/// - Clips child during paint to rectangular bounds
+/// - Blocks hit testing outside clip region
 pub type RenderClipRect = RenderClip<RectShape>;
 
 impl RenderClipRect {

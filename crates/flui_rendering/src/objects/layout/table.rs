@@ -1,4 +1,117 @@
-//! RenderTable - Table layout with configurable column widths
+//! RenderTable - Table layout container with configurable column widths
+//!
+//! Implements a table layout system with configurable column widths and automatic
+//! row height calculation. Supports multiple column sizing modes (Fixed, Flex,
+//! Intrinsic, Fraction) and vertical cell alignment. Children are arranged in a
+//! grid with column-major ordering.
+//!
+//! # Flutter Equivalence
+//!
+//! | FLUI | Flutter |
+//! |------|---------|
+//! | `RenderTable` | `RenderTable` from `package:flutter/src/rendering/table.dart` |
+//! | `TableColumnWidth::Fixed` | `FixedColumnWidth` |
+//! | `TableColumnWidth::Flex` | `FlexColumnWidth` |
+//! | `TableColumnWidth::Intrinsic` | `IntrinsicColumnWidth` |
+//! | `TableColumnWidth::Fraction` | `FractionColumnWidth` |
+//! | `TableCellVerticalAlignment` | `TableCellVerticalAlignment` enum |
+//! | `set_column_width()` | Column width configuration |
+//! | `columns` | Number of columns |
+//!
+//! # Layout Protocol
+//!
+//! 1. **Compute column widths**
+//!    - First pass: Calculate Fixed, Intrinsic, and Fraction widths
+//!    - Fixed: Use specified width
+//!    - Intrinsic: Layout all cells in column with infinite width to get max
+//!    - Fraction: Calculate as percentage of parent width
+//!    - Track total fixed width
+//!
+//! 2. **Distribute flex units**
+//!    - Calculate remaining width after fixed/intrinsic/fraction columns
+//!    - Divide remaining width by total flex factor
+//!    - Assign flex_unit × factor to each flex column
+//!
+//! 3. **Compute row heights**
+//!    - For each row: find tallest cell
+//!    - Layout all cells in row with column width constraint
+//!    - Row height = max of all cell heights in that row
+//!
+//! 4. **Layout complete**
+//!    - All cells laid out during width/height computation
+//!    - Container size = sum of column widths × sum of row heights
+//!
+//! # Paint Protocol
+//!
+//! 1. **Iterate rows and columns**
+//!    - Accumulate row offset: y += row_height
+//!    - Accumulate column offset: x += column_width
+//!
+//! 2. **Paint each cell**
+//!    - Calculate cell index: row × columns + column
+//!    - Apply vertical alignment offset within cell
+//!    - Paint cell at calculated (x, y) position
+//!
+//! # Performance
+//!
+//! - **Layout**: O(rows × cols) - multiple passes for width/height computation
+//! - **Paint**: O(rows × cols) - paint each cell once
+//! - **Memory**: 80 bytes base + O(cols + rows) for cached widths/heights
+//!
+//! # Use Cases
+//!
+//! - **Data tables**: Tabular data display with aligned columns
+//! - **Forms**: Multi-column form layouts
+//! - **Grids with uniform columns**: Grid layouts with same-width columns
+//! - **Spreadsheets**: Simple spreadsheet-like layouts
+//! - **Calendars**: Month/week calendar grids
+//! - **Pricing tables**: Feature comparison tables
+//!
+//! # Column Width Modes
+//!
+//! ```text
+//! Fixed(100.0): Always 100px wide
+//! Flex(1.0): Takes 1 share of remaining space
+//! Flex(2.0): Takes 2 shares of remaining space
+//! Intrinsic: Sized to widest cell content
+//! Fraction(0.3): 30% of parent width
+//! ```
+//!
+//! # Vertical Alignment
+//!
+//! ```text
+//! Top:    [Cell]-----  (default)
+//! Middle: ---[Cell]---
+//! Bottom: -----[Cell]
+//! Fill:   [Cell fills entire row height]
+//! ```
+//!
+//! # Comparison with Related Objects
+//!
+//! - **vs RenderGrid**: Grid uses explicit track placement, Table uses row-column ordering
+//! - **vs RenderFlex**: Flex is 1D, Table is 2D with column alignment
+//! - **vs RenderWrap**: Wrap auto-wraps, Table has fixed column count
+//! - **vs RenderCustomMultiChildLayoutBox**: Table has standardized grid, Custom uses delegate
+//!
+//! # Examples
+//!
+//! ```rust,ignore
+//! use flui_rendering::{RenderTable, TableColumnWidth, TableCellVerticalAlignment};
+//!
+//! // 3 columns: fixed 100px, flex 2x, flex 1x
+//! let mut table = RenderTable::new(3);
+//! table.set_column_width(0, TableColumnWidth::Fixed(100.0));
+//! table.set_column_width(1, TableColumnWidth::Flex(2.0));
+//! table.set_column_width(2, TableColumnWidth::Flex(1.0));
+//!
+//! // Centered cell alignment
+//! table.set_vertical_alignment(TableCellVerticalAlignment::Middle);
+//!
+//! // Intrinsic width column (auto-sized to content)
+//! let mut table = RenderTable::new(2);
+//! table.set_column_width(0, TableColumnWidth::Intrinsic);
+//! table.set_column_width(1, TableColumnWidth::Flex(1.0));
+//! ```
 
 use crate::core::{BoxLayoutCtx, BoxPaintCtx, RenderBox, Variable};
 use crate::{RenderObject, RenderResult};
@@ -39,21 +152,65 @@ pub enum TableCellVerticalAlignment {
     Fill,
 }
 
-/// RenderObject that implements table layout
+/// RenderObject that implements table layout with configurable column widths.
 ///
-/// Arranges children in a grid with configurable column widths and row heights.
-/// Each row can have different height based on its tallest cell.
+/// Arranges children in a grid with fixed column count and automatic row creation.
+/// Supports multiple column sizing modes (Fixed, Flex, Intrinsic, Fraction) and
+/// vertical cell alignment. Each row's height is determined by its tallest cell.
+///
+/// # Arity
+///
+/// `Variable` - Can have any number of children (0+), arranged in rows based on
+/// column count. Children are added in row-major order (left-to-right, top-to-bottom).
+///
+/// # Protocol
+///
+/// Box protocol - Uses `BoxConstraints` and returns `Size`.
+///
+/// # Pattern
+///
+/// **Table Layout Container** - 2D grid with configurable column widths, automatic
+/// row heights based on tallest cell, multiple column sizing modes (Fixed/Flex/
+/// Intrinsic/Fraction), vertical cell alignment, sizes to sum of columns × rows.
+///
+/// # Use Cases
+///
+/// - **Data tables**: Tabular data with aligned columns and uniform formatting
+/// - **Forms**: Multi-column form layouts with label/field alignment
+/// - **Spreadsheets**: Simple spreadsheet-like layouts with cell-based data
+/// - **Calendars**: Month/week calendar grids with date cells
+/// - **Pricing tables**: Feature comparison tables with aligned columns
+/// - **Schedules**: Time-based schedules with aligned time slots
+///
+/// # Flutter Compliance
+///
+/// Matches Flutter's RenderTable behavior:
+/// - Children arranged in row-major order (row × columns + column)
+/// - Column widths computed with Fixed, Flex, Intrinsic, Fraction modes
+/// - Row heights determined by tallest cell in each row
+/// - Vertical alignment support (Top, Middle, Bottom, Fill)
+/// - Size = sum of column widths × sum of row heights
 ///
 /// # Example
 ///
 /// ```rust,ignore
-/// use flui_rendering::{RenderTable, TableColumnWidth};
+/// use flui_rendering::{RenderTable, TableColumnWidth, TableCellVerticalAlignment};
 ///
 /// // 3 columns: fixed 100px, flex 2x, flex 1x
 /// let mut table = RenderTable::new(3);
 /// table.set_column_width(0, TableColumnWidth::Fixed(100.0));
 /// table.set_column_width(1, TableColumnWidth::Flex(2.0));
 /// table.set_column_width(2, TableColumnWidth::Flex(1.0));
+///
+/// // Center cells vertically
+/// table.set_vertical_alignment(TableCellVerticalAlignment::Middle);
+///
+/// // Data table with intrinsic + flex columns
+/// let mut data_table = RenderTable::new(4);
+/// data_table.set_column_width(0, TableColumnWidth::Intrinsic); // ID column
+/// data_table.set_column_width(1, TableColumnWidth::Flex(2.0)); // Name (wider)
+/// data_table.set_column_width(2, TableColumnWidth::Flex(1.0)); // Email
+/// data_table.set_column_width(3, TableColumnWidth::Fixed(80.0)); // Actions
 /// ```
 #[derive(Debug)]
 pub struct RenderTable {

@@ -1,4 +1,116 @@
-//! RenderFittedBox - scales and positions child according to BoxFit
+//! RenderFittedBox - Scales and positions child according to BoxFit mode
+//!
+//! Implements Flutter's FittedBox for scaling children to fit within constrained
+//! spaces while maintaining aspect ratio. Supports multiple BoxFit modes (Fill, Cover,
+//! Contain, FitWidth, FitHeight, etc.) and alignment for precise positioning. Essential
+//! for responsive images, icons, and content that needs to adapt to available space.
+//!
+//! # Flutter Equivalence
+//!
+//! | FLUI | Flutter |
+//! |------|---------|
+//! | `RenderFittedBox` | `RenderFittedBox` from `package:flutter/src/rendering/proxy_box.dart` |
+//! | `fit` | `fit` property (BoxFit enum) |
+//! | `alignment` | `alignment` property (AlignmentGeometry) |
+//! | `clip_behavior` | `clipBehavior` property |
+//! | `BoxFit::Fill` | `BoxFit.fill` - stretch to fill (non-uniform scale) |
+//! | `BoxFit::Contain` | `BoxFit.contain` - fit inside (maintain aspect) |
+//! | `BoxFit::Cover` | `BoxFit.cover` - cover entirely (may clip) |
+//! | `BoxFit::FitWidth` | `BoxFit.fitWidth` - fit width, scale height |
+//! | `BoxFit::FitHeight` | `BoxFit.fitHeight` - fit height, scale width |
+//! | `BoxFit::None` | `BoxFit.none` - no scaling |
+//! | `BoxFit::ScaleDown` | `BoxFit.scaleDown` - contain or none (never scale up) |
+//!
+//! # Layout Protocol
+//!
+//! 1. **Layout child with loose constraints**
+//!    - Child receives loosened constraints (min=0)
+//!    - Child determines its natural size
+//!
+//! 2. **Calculate fit transform**
+//!    - Apply BoxFit algorithm to determine scale factors
+//!    - BoxFit::Fill: non-uniform scale to fill (scaleX, scaleY)
+//!    - BoxFit::Contain: uniform scale to fit inside (min scale)
+//!    - BoxFit::Cover: uniform scale to cover (max scale)
+//!    - BoxFit::FitWidth/FitHeight: scale one dimension, fit other
+//!    - BoxFit::None: no scaling (1.0, 1.0)
+//!    - BoxFit::ScaleDown: Contain or None (never enlarge)
+//!
+//! 3. **Calculate alignment offset**
+//!    - Use Alignment to position scaled child within container
+//!    - Alignment::CENTER: center child
+//!    - Alignment::TOP_LEFT: top-left corner
+//!    - etc.
+//!
+//! 4. **Return container size**
+//!    - Container size = parent's max constraints (fills available space)
+//!
+//! # Paint Protocol
+//!
+//! 1. **Apply clipping** (if clip_behavior != ClipBehavior::None)
+//!    - Clip to container bounds
+//!    - Prevents scaled child from painting outside box
+//!
+//! 2. **Apply transform and paint child**
+//!    - Transform: scale + alignment offset
+//!    - Paint child with transformation matrix
+//!    - Child painted at transformed position/scale
+//!
+//! # Performance
+//!
+//! - **Layout**: O(1) + child layout - simple scale calculation
+//! - **Paint**: O(1) + child paint - hardware-accelerated transform
+//! - **Memory**: 40 bytes (BoxFit + Alignment + ClipBehavior)
+//!
+//! # Use Cases
+//!
+//! - **Responsive images**: Scale images to fit containers while maintaining aspect
+//! - **Icons**: Fit icons within button/tile bounds
+//! - **Thumbnails**: Scale down large images to thumbnail size
+//! - **Avatars**: Fit profile pictures in circular/square containers
+//! - **Cover images**: Fill banner/hero areas with scaled images
+//! - **Logos**: Scale logos to fit various container sizes
+//!
+//! # BoxFit Modes Explained
+//!
+//! ```text
+//! Container: 200×100  Child: 100×100
+//!
+//! Fill:      200×100  (stretch both - aspect changed)
+//! Contain:   100×100  (fit inside - no scaling needed)
+//! Cover:     200×200  (cover entire - may clip)
+//! FitWidth:  200×200  (fit width, scale height proportionally)
+//! FitHeight: 100×100  (fit height, scale width proportionally)
+//! None:      100×100  (no scaling)
+//! ScaleDown: 100×100  (contain or none - no enlarge)
+//! ```
+//!
+//! # Comparison with Related Objects
+//!
+//! - **vs RenderTransform**: Transform is general transformation, FittedBox is aspect-aware scaling
+//! - **vs RenderAlign**: Align positions without scaling, FittedBox scales to fit
+//! - **vs RenderAspectRatio**: AspectRatio enforces ratio, FittedBox adapts to fit
+//! - **vs RenderFractionallySizedBox**: FractionalSize is percentage, FittedBox is content-aware
+//!
+//! # Examples
+//!
+//! ```rust,ignore
+//! use flui_rendering::RenderFittedBox;
+//! use flui_types::layout::BoxFit;
+//! use flui_types::Alignment;
+//!
+//! // Cover entire container (may clip)
+//! let cover = RenderFittedBox::new(BoxFit::Cover);
+//!
+//! // Fit inside maintaining aspect
+//! let contain = RenderFittedBox::with_alignment(BoxFit::Contain, Alignment::CENTER);
+//!
+//! // Fill container (stretch)
+//! let fill = RenderFittedBox::new(BoxFit::Fill);
+//!
+//! // Fit width, align top
+//! let fit_width = RenderFittedBox::with_alignment(BoxFit::FitWidth, Alignment::TOP_CENTER);
+//! ```
 
 use crate::core::{
     RenderBox, Single, {BoxLayoutCtx, BoxPaintCtx},
@@ -6,10 +118,55 @@ use crate::core::{
 use crate::{RenderObject, RenderResult};
 use flui_types::{layout::BoxFit, painting::ClipBehavior, Alignment, Offset, Size};
 
-/// RenderObject that scales and positions its child_id according to BoxFit
+/// RenderObject that scales and positions its child according to BoxFit mode.
 ///
-/// FittedBox is useful for scaling children to fit within constrained spaces
-/// while maintaining aspect ratio.
+/// Scales child to fit within container while optionally maintaining aspect ratio.
+/// Supports multiple BoxFit modes for different scaling behaviors (Cover, Contain,
+/// Fill, FitWidth, FitHeight, None, ScaleDown). Uses Alignment for positioning
+/// scaled child within container. Essential for responsive image/icon rendering.
+///
+/// # Arity
+///
+/// `Single` - Must have exactly one child to scale and position.
+///
+/// # Protocol
+///
+/// Box protocol - Uses `BoxConstraints` and returns `Size`.
+///
+/// # Pattern
+///
+/// **Content-Aware Scaler with Alignment** - Layouts child with loose constraints,
+/// calculates aspect-aware scale based on BoxFit mode, applies alignment for positioning,
+/// uses hardware-accelerated transform for painting, sizes to parent max constraints.
+///
+/// # Use Cases
+///
+/// - **Responsive images**: Scale images maintaining aspect ratio
+/// - **Icons**: Fit icons within button/tile bounds
+/// - **Thumbnails**: Scale down large images
+/// - **Avatars**: Fit profile pictures in containers
+/// - **Cover images**: Fill banner/hero areas
+/// - **Logos**: Scale logos for various sizes
+///
+/// # Flutter Compliance
+///
+/// Matches Flutter's RenderFittedBox behavior:
+/// - Layouts child with loose constraints (min=0)
+/// - Applies BoxFit algorithm for scaling
+/// - Uses Alignment for positioning
+/// - Optional clipping with ClipBehavior
+/// - Sizes to parent's max constraints
+/// - Hardware-accelerated transform during paint
+///
+/// # BoxFit Modes
+///
+/// - **Fill**: Stretch to fill (non-uniform scale, aspect may change)
+/// - **Contain**: Fit inside (uniform scale, maintains aspect)
+/// - **Cover**: Cover entirely (uniform scale, may clip, maintains aspect)
+/// - **FitWidth**: Fit width, scale height proportionally
+/// - **FitHeight**: Fit height, scale width proportionally
+/// - **None**: No scaling (1:1)
+/// - **ScaleDown**: Contain or None (never enlarges, only shrinks)
 ///
 /// # Example
 ///
@@ -18,8 +175,14 @@ use flui_types::{layout::BoxFit, painting::ClipBehavior, Alignment, Offset, Size
 /// use flui_types::layout::BoxFit;
 /// use flui_types::Alignment;
 ///
-/// // Scale child to cover the entire box
-/// let mut fitted = RenderFittedBox::with_alignment(BoxFit::Cover, Alignment::TOP_LEFT);
+/// // Scale to cover (may clip)
+/// let cover = RenderFittedBox::with_alignment(BoxFit::Cover, Alignment::CENTER);
+///
+/// // Fit inside maintaining aspect
+/// let contain = RenderFittedBox::new(BoxFit::Contain);
+///
+/// // Fill container (stretch)
+/// let fill = RenderFittedBox::new(BoxFit::Fill);
 /// ```
 #[derive(Debug)]
 pub struct RenderFittedBox {

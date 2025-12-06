@@ -1,25 +1,169 @@
 //! RenderSliverOffstage - Conditionally hides sliver without removing from tree
+//!
+//! Implements Flutter's Offstage pattern for slivers. Provides conditional visibility
+//! control that keeps the child in the element tree (preserving state) but removes it
+//! from layout and paint when hidden.
+//!
+//! # Flutter Equivalence
+//!
+//! | FLUI | Flutter |
+//! |------|---------|
+//! | `RenderSliverOffstage` | `RenderOffstage` adapted for sliver protocol |
+//! | `offstage` property | `offstage` property (bool) |
+//! | `should_paint()` | Paint condition check |
+//! | `should_hit_test()` | Hit test condition check |
+//! | Zero geometry when offstage | `size = Size.zero` equivalent |
+//!
+//! # Layout Protocol
+//!
+//! 1. **Check offstage flag**
+//!    - If offstage = true: return zero geometry (child not laid out)
+//!    - If offstage = false: proceed to layout child
+//!
+//! 2. **Layout child (if not offstage)**
+//!    - Pass constraints unchanged to child
+//!    - Return child's geometry directly
+//!
+//! 3. **Result**
+//!    - Offstage: SliverGeometry::default() (all zeros)
+//!    - Visible: child geometry (proxy)
+//!
+//! # Paint Protocol
+//!
+//! 1. **Check should_paint()**
+//!    - If offstage: return empty canvas (skip painting)
+//!    - Otherwise proceed to paint
+//!
+//! 2. **Check visibility**
+//!    - Only paint if geometry.visible
+//!
+//! 3. **Paint child**
+//!    - Paint child at current offset
+//!
+//! # Performance
+//!
+//! - **Layout**: O(1) when offstage (skip child), O(child) when visible
+//! - **Paint**: O(1) when offstage (skip child), O(child) when visible
+//! - **Memory**: 1 byte (bool flag) + 48 bytes (SliverGeometry cache) = 49 bytes
+//! - **Optimization**: Completely skips layout and paint when offstage
+//!
+//! # Use Cases
+//!
+//! - **Animated visibility**: Toggle visibility without rebuilding widget
+//! - **State preservation**: Hide content while preserving scroll position/state
+//! - **Conditional display**: Show/hide based on user settings
+//! - **Tabbed content**: Hide inactive tabs without destroying them
+//! - **Preloading**: Build content offstage before showing
+//! - **Lazy initialization**: Prepare complex content invisibly
+//!
+//! # Difference from Related Patterns
+//!
+//! **vs Conditional rendering (`if visible { child }`)**:
+//! - Offstage: Keeps element in tree, preserves state
+//! - Conditional: Removes/recreates element, loses state
+//!
+//! **vs Opacity(0.0)**:
+//! - Offstage: No layout or paint, zero geometry
+//! - Opacity: Full layout and paint (just invisible)
+//!
+//! **vs IgnorePointer**:
+//! - Offstage: No layout, paint, or hit testing
+//! - IgnorePointer: Full layout/paint, just blocks input
+//!
+//! # Comparison with Related Objects
+//!
+//! - **vs RenderOffstage**: SliverOffstage is sliver protocol, Offstage is box protocol
+//! - **vs SliverOpacity**: Opacity keeps layout, Offstage removes from layout
+//! - **vs SliverIgnorePointer**: IgnorePointer keeps layout/paint, Offstage hides all
+//! - **vs SliverVisibility**: Visibility offers multiple modes, Offstage is simple hide/show
+//!
+//! # Examples
+//!
+//! ```rust,ignore
+//! use flui_rendering::RenderSliverOffstage;
+//!
+//! // Hide sliver (zero geometry, no paint)
+//! let hidden = RenderSliverOffstage::new(true);
+//!
+//! // Show sliver (pass through to child)
+//! let visible = RenderSliverOffstage::new(false);
+//!
+//! // Toggle visibility dynamically
+//! let mut offstage = RenderSliverOffstage::new(false);
+//! offstage.set_offstage(true);  // Hide
+//! offstage.set_offstage(false); // Show
+//!
+//! // Animated transitions
+//! let mut offstage = RenderSliverOffstage::default(); // visible
+//! // ... animate opacity to 0 ...
+//! offstage.set_offstage(true); // Then hide to optimize
+//! ```
 
-use crate::core::{RuntimeArity, LegacySliverRender, SliverSliver};
+use crate::core::{RenderObject, RenderSliver, Single, SliverLayoutContext, SliverPaintContext};
+use crate::RenderResult;
 use flui_painting::Canvas;
 use flui_types::SliverGeometry;
 
-/// RenderObject that conditionally hides a sliver child
+/// RenderObject that conditionally hides a sliver child while preserving state.
 ///
-/// When offstage=true, the child is not painted and reports zero geometry,
-/// but remains in the element tree (unlike conditionally removing it).
-/// This is useful for:
-/// - Animated show/hide transitions
-/// - Maintaining scroll position when toggling visibility
-/// - Preloading content before showing it
+/// Controls visibility by toggling layout and paint participation. When offstage, the
+/// child remains in the element tree (preserving state) but returns zero geometry and
+/// skips painting. When visible, acts as transparent proxy to child.
+///
+/// # Arity
+///
+/// `RuntimeArity::Exact(1)` - Must have exactly 1 child sliver (optional in implementation).
+///
+/// # Protocol
+///
+/// Sliver protocol - Uses `SliverConstraints` and returns `SliverGeometry`.
+///
+/// # Pattern
+///
+/// **Conditional Visibility Proxy** - Binary on/off switch for layout and paint.
+/// When off: zero geometry, no layout, no paint. When on: pass-through proxy.
+/// State preservation distinguishes this from conditional rendering.
+///
+/// # Use Cases
+///
+/// - **State-preserving visibility**: Hide/show without losing scroll position
+/// - **Tab panels**: Keep inactive tabs built but hidden
+/// - **Animated transitions**: Prepare content before animating in
+/// - **Conditional UI**: Toggle features without rebuild overhead
+/// - **Preloading**: Build expensive content invisibly first
+/// - **Lazy reveal**: Prepare complex slivers before showing
+///
+/// # Flutter Compliance
+///
+/// Matches Flutter's RenderOffstage behavior (adapted for slivers):
+/// - Returns zero geometry when offstage ✅
+/// - Skips layout and paint when offstage ✅
+/// - Keeps child in element tree (state preserved) ✅
+/// - Acts as proxy when not offstage ✅
+/// - Affects hit testing based on offstage flag ✅
+///
+/// # Performance Benefits
+///
+/// | State | Layout | Paint | Hit Test | Geometry | Use Case |
+/// |-------|--------|-------|----------|----------|----------|
+/// | Offstage | Skipped | Skipped | Skipped | Zero | Hidden content |
+/// | Visible | O(child) | O(child) | O(child) | Child's | Active content |
+///
+/// When offstage, saves CPU cycles by completely avoiding child processing.
 ///
 /// # Example
 ///
 /// ```rust,ignore
 /// use flui_rendering::RenderSliverOffstage;
 ///
-/// // Child is hidden
-/// let offstage = RenderSliverOffstage::new(true);
+/// // Start visible (default)
+/// let mut visibility = RenderSliverOffstage::default();
+///
+/// // Hide (preserves state)
+/// visibility.set_offstage(true);
+///
+/// // Show again (state restored)
+/// visibility.set_offstage(false);
 /// ```
 #[derive(Debug)]
 pub struct RenderSliverOffstage {
@@ -69,42 +213,31 @@ impl Default for RenderSliverOffstage {
     }
 }
 
-impl LegacySliverRender for RenderSliverOffstage {
-    fn layout(&mut self, ctx: &Sliver) -> SliverGeometry {
+impl RenderObject for RenderSliverOffstage {}
+
+impl RenderSliver<Single> for RenderSliverOffstage {
+    fn layout(&mut self, mut ctx: SliverLayoutContext<'_, Single>) -> RenderResult<SliverGeometry> {
         if self.offstage {
-            // When offstage, report zero geometry
+            // When offstage, report zero geometry (skip child layout)
             self.sliver_geometry = SliverGeometry::default();
         } else {
             // Pass through to child when visible
-            if let Some(child_id) = ctx.children.try_single() {
-                self.sliver_geometry = ctx.tree.layout_sliver_child(child_id, ctx.constraints);
-            } else {
-                self.sliver_geometry = SliverGeometry::default();
-            }
+            let child_id = *ctx.children.single();
+            self.sliver_geometry = ctx.tree_mut().perform_sliver_layout(child_id, ctx.constraints)?;
         }
 
-        self.sliver_geometry
+        Ok(self.sliver_geometry)
     }
 
-    fn paint(&self, ctx: &Sliver) -> Canvas {
-        // Only paint if not offstage
-        if self.should_paint() {
-            if let Some(child_id) = ctx.children.try_single() {
-                if self.sliver_geometry.visible {
-                    return ctx.tree.paint_child(child_id, ctx.offset);
-                }
+    fn paint(&self, ctx: &mut SliverPaintContext<'_, Single>) {
+        // Only paint if not offstage and visible
+        if self.should_paint() && self.sliver_geometry.visible {
+            let child_id = *ctx.children.single();
+
+            if let Ok(child_canvas) = ctx.tree().perform_paint(child_id, ctx.offset) {
+                *ctx.canvas = child_canvas;
             }
         }
-
-        Canvas::new()
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> RuntimeArity {
-        RuntimeArity::Exact(1) // Single child sliver
     }
 }
 
@@ -157,11 +290,5 @@ mod tests {
         let offstage = RenderSliverOffstage::default();
 
         assert!(!offstage.offstage);
-    }
-
-    #[test]
-    fn test_arity_is_single_child() {
-        let offstage = RenderSliverOffstage::new(true);
-        assert_eq!(offstage.arity(), RuntimeArity::Exact(1));
     }
 }

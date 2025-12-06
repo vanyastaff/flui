@@ -1,26 +1,166 @@
 //! RenderSliverEdgeInsetsPadding - EdgeInsets-based padding for slivers
+//!
+//! Implements Flutter's SliverPadding pattern specifically optimized for EdgeInsets padding.
+//! Wraps sliver content with rectangular insets (left, top, right, bottom), adjusting both
+//! layout constraints and paint positioning to create visual spacing around the child.
+//!
+//! # Flutter Equivalence
+//!
+//! | FLUI | Flutter |
+//! |------|---------|
+//! | `RenderSliverEdgeInsetsPadding` | `RenderSliverPadding` specialized for EdgeInsets |
+//! | `padding` property | `padding` property (EdgeInsetsGeometry) |
+//! | `main_axis_padding()` | Axis-aware padding extraction |
+//! | `child_constraints()` | Constraint adjustment by padding |
+//! | `calculate_sliver_geometry()` | Geometry adjustment by padding |
+//! | Paint offset by (left, top) | Absolute direction offset ✅ |
+//!
+//! # Layout Protocol
+//!
+//! 1. **Calculate axis-relative padding**
+//!    - Extract main-axis padding (leading + trailing) based on scroll direction
+//!    - Extract cross-axis padding total
+//!    - Vertical scroll: main=(top, bottom), cross=(left + right)
+//!    - Horizontal scroll: main=(left, right), cross=(top + bottom)
+//!
+//! 2. **Create child constraints with padding removed**
+//!    - scroll_offset: `max(parent_offset - leading_padding, 0)`
+//!    - remaining_paint_extent: `max(parent_extent - total_padding, 0)`
+//!    - cross_axis_extent: `max(parent_cross - cross_padding, 0)`
+//!    - remaining_cache_extent: `max(parent_cache - total_padding, 0)`
+//!
+//! 3. **Layout child with reduced constraints**
+//!    - Child receives smaller constraint space
+//!    - Child determines its own geometry
+//!
+//! 4. **Add padding back to child geometry**
+//!    - scroll_extent: `child + total_padding`
+//!    - paint_extent: `min(child + total_padding, remaining_paint_extent)`
+//!    - max_paint_extent: `child + total_padding`
+//!    - cache_extent: `child + total_padding`
+//!    - hit_test_extent: `child.map(|e| e + total_padding)`
+//!
+//! # Paint Protocol
+//!
+//! 1. **Check visibility**
+//!    - Only paint if sliver_geometry.visible
+//!
+//! 2. **Calculate paint offset**
+//!    - Offset child by (padding.left, padding.top)
+//!    - Absolute directions work correctly for both axes
+//!    - Vertical scroll: left=cross, top=main-leading ✅
+//!    - Horizontal scroll: left=main-leading, top=cross ✅
+//!
+//! 3. **Paint child at offset position**
+//!    - Paint child with adjusted offset
+//!
+//! # Performance
+//!
+//! - **Layout**: O(child) - pass-through with constraint modification
+//! - **Paint**: O(child) - pass-through with offset adjustment
+//! - **Memory**: 16 bytes (EdgeInsets) + 48 bytes (SliverGeometry cache) = 64 bytes
+//! - **Optimization**: Axis-aware methods avoid redundant calculations
+//!
+//! # Use Cases
+//!
+//! - **List margins**: Add spacing around scrollable list content
+//! - **Material Design spacing**: 16dp/8dp standard margins
+//! - **Safe area insets**: Respect device notches and system UI
+//! - **Breathing room**: Visual separation from viewport edges
+//! - **Asymmetric padding**: Different insets on each side
+//! - **Responsive margins**: Adaptive spacing based on viewport size
+//!
+//! # Comparison with Related Objects
+//!
+//! - **vs RenderSliverPadding**: EdgeInsetsPadding is specialized, SliverPadding is generic
+//! - **vs RenderPadding (box)**: EdgeInsetsPadding is sliver protocol, Padding is box protocol
+//! - **vs SliverSafeArea**: SafeArea adds device insets, EdgeInsetsPadding adds explicit values
+//! - **vs SliverToBoxAdapter + Padding**: Adapter is protocol conversion, EdgeInsetsPadding is direct
+//!
+//! # Examples
+//!
+//! ```rust,ignore
+//! use flui_rendering::RenderSliverEdgeInsetsPadding;
+//! use flui_types::EdgeInsets;
+//!
+//! // Symmetric padding (Material Design standard)
+//! let list_padding = RenderSliverEdgeInsetsPadding::new(
+//!     EdgeInsets::all(16.0),
+//! );
+//!
+//! // Horizontal padding only
+//! let horizontal = RenderSliverEdgeInsetsPadding::new(
+//!     EdgeInsets::symmetric_horizontal(20.0),
+//! );
+//!
+//! // Asymmetric padding (more bottom for FAB clearance)
+//! let fab_clearance = RenderSliverEdgeInsetsPadding::new(
+//!     EdgeInsets::new(16.0, 16.0, 16.0, 80.0), // left, top, right, bottom
+//! );
+//!
+//! // Responsive padding based on screen width
+//! let responsive_padding = if screen_width > 600.0 {
+//!     EdgeInsets::symmetric_horizontal(48.0) // Desktop margins
+//! } else {
+//!     EdgeInsets::symmetric_horizontal(16.0) // Mobile margins
+//! };
+//! let responsive = RenderSliverEdgeInsetsPadding::new(responsive_padding);
+//! ```
 
-use crate::core::{RuntimeArity, LegacySliverRender, SliverSliver};
+use crate::core::{RenderObject, RenderSliver, Single, SliverLayoutContext, SliverPaintContext};
+use crate::RenderResult;
 use flui_painting::Canvas;
 use flui_types::prelude::*;
 use flui_types::{SliverConstraints, SliverGeometry};
 
-/// RenderObject that adds EdgeInsets padding to sliver content
+/// RenderObject that adds EdgeInsets padding to sliver content.
 ///
-/// Similar to RenderSliverPadding but specifically designed for EdgeInsets.
-/// This is a specialized, optimized version for the common case of uniform
-/// or asymmetric rectangular padding.
+/// Specialized version of SliverPadding optimized for EdgeInsets (rectangular insets
+/// with left, top, right, bottom values). Wraps a sliver child with visual spacing,
+/// adjusting layout constraints to reduce available space and paint offset to shift
+/// the child inward.
 ///
-/// # Difference from RenderSliverPadding
+/// # Arity
 ///
-/// - RenderSliverPadding: Generic padding (can be any value)
-/// - RenderSliverEdgeInsetsPadding: Specifically EdgeInsets (left/top/right/bottom)
+/// `RuntimeArity::Exact(1)` - Must have exactly 1 child sliver (optional in implementation).
+///
+/// # Protocol
+///
+/// Sliver protocol - Uses `SliverConstraints` and returns `SliverGeometry`.
+///
+/// # Pattern
+///
+/// **Padding Proxy** - Reduces child constraints by padding amounts, then adds padding
+/// back to child geometry. Paint shifts child by (left, top) offset. Axis-aware padding
+/// extraction ensures correct behavior for both vertical and horizontal scrolling.
 ///
 /// # Use Cases
 ///
-/// - Adding margin around list content
-/// - Creating breathing room in scrollable content
-/// - Implementing Material Design spacing
+/// - **List margins**: Standard 16dp spacing around Material lists
+/// - **Safe area insets**: Respect system UI and device notches
+/// - **Responsive spacing**: Larger margins on desktop, smaller on mobile
+/// - **Asymmetric padding**: Extra bottom padding for FAB clearance
+/// - **Visual breathing room**: Separation from viewport edges
+/// - **Content insets**: Padding for card-style scrollable content
+///
+/// # Flutter Compliance
+///
+/// Matches Flutter's RenderSliverPadding behavior for EdgeInsets:
+/// - Reduces constraints by padding values ✅
+/// - Adds padding to child geometry ✅
+/// - Offsets paint position by (left, top) ✅
+/// - Correctly handles axis direction for main/cross axis ✅
+/// - Clamps adjusted constraints to non-negative ✅
+///
+/// # Axis-Aware Padding
+///
+/// | Scroll Direction | Main-Axis Padding | Cross-Axis Padding |
+/// |------------------|-------------------|---------------------|
+/// | Vertical | (top, bottom) | left + right |
+/// | Horizontal | (left, right) | top + bottom |
+///
+/// The implementation uses absolute EdgeInsets directions (left/top/right/bottom)
+/// and correctly maps them to axis-relative positions based on scroll direction.
 ///
 /// # Example
 ///
@@ -28,14 +168,19 @@ use flui_types::{SliverConstraints, SliverGeometry};
 /// use flui_rendering::RenderSliverEdgeInsetsPadding;
 /// use flui_types::EdgeInsets;
 ///
-/// // Symmetric padding
-/// let padding = RenderSliverEdgeInsetsPadding::new(
-///     EdgeInsets::symmetric(16.0, 8.0), // horizontal, vertical
+/// // Material Design standard spacing
+/// let list_margin = RenderSliverEdgeInsetsPadding::new(
+///     EdgeInsets::all(16.0),
 /// );
 ///
-/// // Asymmetric padding
-/// let padding = RenderSliverEdgeInsetsPadding::new(
-///     EdgeInsets::new(20.0, 10.0, 20.0, 16.0), // left, top, right, bottom
+/// // Asymmetric for FAB clearance (extra bottom)
+/// let with_fab = RenderSliverEdgeInsetsPadding::new(
+///     EdgeInsets::new(16.0, 16.0, 16.0, 80.0), // left, top, right, bottom
+/// );
+///
+/// // Horizontal-only padding
+/// let horizontal = RenderSliverEdgeInsetsPadding::new(
+///     EdgeInsets::symmetric_horizontal(24.0),
 /// );
 /// ```
 #[derive(Debug)]
@@ -139,44 +284,35 @@ impl Default for RenderSliverEdgeInsetsPadding {
     }
 }
 
-impl LegacySliverRender for RenderSliverEdgeInsetsPadding {
-    fn layout(&mut self, ctx: &Sliver) -> SliverGeometry {
-        let constraints = &ctx.constraints;
+impl RenderObject for RenderSliverEdgeInsetsPadding {}
+
+impl RenderSliver<Single> for RenderSliverEdgeInsetsPadding {
+    fn layout(&mut self, mut ctx: SliverLayoutContext<'_, Single>) -> RenderResult<SliverGeometry> {
+        let constraints = ctx.constraints;
+        let child_id = *ctx.children.single();
 
         // Adjust constraints for child
-        let child_constraints = self.child_constraints(constraints);
+        let child_constraints = self.child_constraints(&constraints);
 
         // Layout child
-        let child_geometry = if let Some(child_id) = ctx.children.try_single() {
-            ctx.tree.layout_sliver_child(child_id, child_constraints)
-        } else {
-            SliverGeometry::default()
-        };
+        let child_geometry = ctx.tree_mut().perform_sliver_layout(child_id, child_constraints)?;
 
         // Calculate and cache geometry with padding
-        self.sliver_geometry = self.calculate_sliver_geometry(constraints, child_geometry);
-        self.sliver_geometry
+        self.sliver_geometry = self.calculate_sliver_geometry(&constraints, child_geometry);
+        Ok(self.sliver_geometry)
     }
 
-    fn paint(&self, ctx: &Sliver) -> Canvas {
-        // Paint child if present and visible
-        if let Some(child_id) = ctx.children.try_single() {
-            if self.sliver_geometry.visible {
-                // Paint child with padding offset
-                let padding_offset = Offset::new(self.padding.left, self.padding.top);
-                return ctx.tree.paint_child(child_id, ctx.offset + padding_offset);
+    fn paint(&self, ctx: &mut SliverPaintContext<'_, Single>) {
+        // Paint child if visible
+        if self.sliver_geometry.visible {
+            let child_id = *ctx.children.single();
+
+            // Paint child with padding offset
+            let padding_offset = Offset::new(self.padding.left, self.padding.top);
+            if let Ok(child_canvas) = ctx.tree().perform_paint(child_id, ctx.offset + padding_offset) {
+                *ctx.canvas = child_canvas;
             }
         }
-
-        Canvas::new()
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> RuntimeArity {
-        RuntimeArity::Exact(1) // Single child sliver
     }
 }
 
@@ -314,11 +450,5 @@ mod tests {
         assert_eq!(geometry.scroll_extent, 260.0); // 200 + 40 + 20
         // Paint extent includes padding
         assert_eq!(geometry.paint_extent, 260.0); // 200 + 40 + 20
-    }
-
-    #[test]
-    fn test_arity_is_single_child() {
-        let sliver = RenderSliverEdgeInsetsPadding::new(EdgeInsets::ZERO);
-        assert_eq!(sliver.arity(), RuntimeArity::Exact(1));
     }
 }

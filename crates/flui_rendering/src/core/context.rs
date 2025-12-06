@@ -617,10 +617,22 @@ where
     }
 
     /// Paints a child element at the given offset.
+    ///
+    /// # Error Handling
+    ///
+    /// Following Flutter's paint protocol, this method never returns errors.
+    /// Any paint failures are logged via tracing::error and execution continues.
+    /// This matches Flutter's behavior where paint() methods cannot throw exceptions.
     #[instrument(level = "trace", skip(self), fields(child = %child_id.get(), x = %offset.dx, y = %offset.dy))]
-    pub fn paint_child(&mut self, child_id: ElementId, offset: Offset) -> RenderResult<()> {
-        let _canvas = self.tree.perform_paint(child_id, offset)?;
-        Ok(())
+    pub fn paint_child(&mut self, child_id: ElementId, offset: Offset) {
+        if let Err(e) = self.tree.perform_paint(child_id, offset) {
+            tracing::error!(
+                child = %child_id.get(),
+                offset = ?offset,
+                error = %e,
+                "paint_child failed"
+            );
+        }
     }
 
     /// Paints all children using their stored offsets from layout.
@@ -628,17 +640,17 @@ where
     /// This method retrieves each child's offset that was set during the layout
     /// phase via `set_child_offset` and paints the child at that position.
     /// If a child has no stored offset, it defaults to `Offset::ZERO`.
+    ///
+    /// Following Flutter's paint protocol, this method never returns errors.
     #[instrument(level = "trace", skip(self), fields(element = %self.element_id.get()))]
-    pub fn paint_all_children(&mut self) -> RenderResult<()> {
+    pub fn paint_all_children(&mut self) {
         let children: Vec<_> = self.children().collect();
         trace!(child_count = children.len(), "painting all children");
 
         for child_id in children {
             let offset = self.tree.get_offset(child_id).unwrap_or(Offset::ZERO);
-            self.paint_child(child_id, offset)?;
+            self.paint_child(child_id, offset);
         }
-
-        Ok(())
     }
 }
 
@@ -687,9 +699,9 @@ impl<'a, T: PaintTree> PaintContext<'a, Single, BoxProtocol, T> {
     }
 
     /// Paints the single child at the given offset.
-    pub fn paint_single_child(&mut self, offset: Offset) -> RenderResult<()> {
+    pub fn paint_single_child(&mut self, offset: Offset) {
         let child_id = self.single_child();
-        self.paint_child(child_id, offset)
+        self.paint_child(child_id, offset);
     }
 }
 
@@ -734,9 +746,9 @@ impl<'a, T: PaintTree> PaintContext<'a, Single, SliverProtocol, T> {
     }
 
     /// Paints the single child at the given offset.
-    pub fn paint_single_child(&mut self, offset: Offset) -> RenderResult<()> {
+    pub fn paint_single_child(&mut self, offset: Offset) {
         let child_id = self.single_child();
-        self.paint_child(child_id, offset)
+        self.paint_child(child_id, offset);
     }
 }
 

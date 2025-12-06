@@ -1,4 +1,71 @@
 //! RenderImage - Displays a raster image
+//!
+//! Implements Flutter's image rendering with BoxFit, alignment, and optional
+//! tinting/opacity support.
+//!
+//! # Flutter Equivalence
+//!
+//! | FLUI | Flutter |
+//! |------|---------|
+//! | `RenderImage` | `RenderImage` from `package:flutter/src/rendering/image.dart` |
+//! | `ImageFit` | `BoxFit` enum |
+//! | `fit` property | `fit` property |
+//! | `alignment` | `alignment` property (Alignment in Flutter) |
+//! | `paint` | `color` and `colorBlendMode` (simplified in FLUI) |
+//!
+//! # Layout Protocol
+//!
+//! 1. **Check constraint type**
+//!    - If tight constraints: return constrained size
+//!    - If loose constraints: use image intrinsic size
+//!
+//! 2. **Calculate size**
+//!    - Start with image's intrinsic size (width × height in pixels)
+//!    - Clamp to parent constraints (min/max width/height)
+//!
+//! 3. **Cache size**
+//!    - Store size for use during paint phase
+//!
+//! # Paint Protocol
+//!
+//! 1. **Calculate destination rectangle**
+//!    - Use cached layout size (not image intrinsic size!)
+//!    - Apply BoxFit logic (Fill, Contain, Cover, None, ScaleDown)
+//!    - Apply alignment within allocated space
+//!
+//! 2. **Draw image**
+//!    - Use Canvas::draw_image() API
+//!    - Apply optional paint for tinting/opacity
+//!
+//! # Performance
+//!
+//! - **Layout**: O(1) - simple size calculation
+//! - **Paint**: O(1) - single Canvas draw_image call (GPU-accelerated)
+//! - **Memory**: O(1) + image data (image pixels stored separately)
+//!
+//! # Examples
+//!
+//! ```rust,ignore
+//! use flui_rendering::{RenderImage, ImageFit};
+//! use flui_types::painting::Image;
+//!
+//! // Basic image rendering
+//! let image = Image::from_rgba8(100, 100, vec![255; 100 * 100 * 4]);
+//! let render_image = RenderImage::new(image);
+//!
+//! // Image with Cover fit (fills space, may clip)
+//! let render_image = RenderImage::new(image)
+//!     .with_fit(ImageFit::Cover);
+//!
+//! // Image with custom alignment (top-left)
+//! let render_image = RenderImage::new(image)
+//!     .with_alignment(0.0, 0.0);
+//!
+//! // Image with tinting/opacity
+//! let paint = Paint { color: Color::rgba(255, 0, 0, 128), ..Default::default() };
+//! let render_image = RenderImage::new(image)
+//!     .with_paint(paint);
+//! ```
 
 use crate::core::{BoxLayoutCtx, BoxPaintCtx, Leaf, RenderBox};
 use crate::{RenderObject, RenderResult};
@@ -21,10 +88,35 @@ pub enum ImageFit {
     ScaleDown,
 }
 
-/// RenderObject that displays a raster image
+/// RenderObject that displays a raster image.
 ///
 /// Renders an image using Canvas::draw_image. The image is scaled
 /// according to the fit mode and aligned within the constraints.
+///
+/// # Arity
+///
+/// `Leaf` - Has no children (renders image content).
+///
+/// # Protocol
+///
+/// Box protocol - Uses `BoxConstraints` and returns `Size`.
+///
+/// # Use Cases
+///
+/// - **Asset images**: Display PNG, JPEG, WebP from assets
+/// - **Network images**: Display downloaded images
+/// - **Generated images**: Display procedurally generated graphics
+/// - **Icons**: Display icon images with tinting
+/// - **Thumbnails**: Display scaled-down previews
+///
+/// # Flutter Compliance
+///
+/// Matches Flutter's RenderImage behavior:
+/// - Uses image intrinsic size as preferred size
+/// - Respects tight constraints (fills allocated space)
+/// - Applies BoxFit logic during paint (not layout)
+/// - Supports alignment within allocated space
+/// - Uses Canvas draw_image API for GPU-accelerated rendering
 ///
 /// # Example
 ///
@@ -49,6 +141,9 @@ pub struct RenderImage {
 
     /// Optional paint for tinting or opacity
     pub paint: Option<Paint>,
+
+    /// Cached size from layout (used during paint)
+    size: Size,
 }
 
 impl RenderImage {
@@ -59,6 +154,7 @@ impl RenderImage {
             fit: ImageFit::default(),
             alignment: (0.5, 0.5), // Center by default
             paint: None,
+            size: Size::ZERO, // Set during layout
         }
     }
 
@@ -153,15 +249,15 @@ impl RenderImage {
 impl RenderObject for RenderImage {}
 
 impl RenderBox<Leaf> for RenderImage {
-    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Leaf>) -> RenderResult<Size> {
+    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Leaf>) -> RenderResult<Size> {
         let constraints = &ctx.constraints;
 
         // If we have specific size constraints, use them
         let is_tight = constraints.min_width == constraints.max_width
             && constraints.min_height == constraints.max_height;
 
-        if is_tight {
-            Ok(Size::new(constraints.max_width, constraints.max_height))
+        let size = if is_tight {
+            Size::new(constraints.max_width, constraints.max_height)
         } else {
             // Otherwise, use image's intrinsic size within constraints
             let image_width = self.image.width() as f32;
@@ -170,21 +266,32 @@ impl RenderBox<Leaf> for RenderImage {
             let width = image_width.clamp(constraints.min_width, constraints.max_width);
             let height = image_height.clamp(constraints.min_height, constraints.max_height);
 
-            Ok(Size::new(width, height))
-        }
+            Size::new(width, height)
+        };
+
+        // Cache size for paint phase (critical for correct BoxFit calculation!)
+        self.size = size;
+
+        Ok(size)
     }
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Leaf>) {
-        // Get the destination rectangle based on fit and alignment
-        let dest_rect = self.calculate_dest_rect(Size::new(
-            self.image.width() as f32,
-            self.image.height() as f32,
-        ));
+        // CRITICAL: Use layout size (self.size), NOT image intrinsic size!
+        // This ensures BoxFit calculations use the allocated space from layout.
+        let dest_rect = self.calculate_dest_rect(self.size);
 
-        // Draw the image into the context's canvas
+        // Apply parent offset to destination rectangle
+        let offset_rect = Rect::from_xywh(
+            ctx.offset.dx + dest_rect.left(),
+            ctx.offset.dy + dest_rect.top(),
+            dest_rect.width(),
+            dest_rect.height(),
+        );
+
+        // Draw the image using Canvas API
         let paint_opt = self.paint.as_ref();
         ctx.canvas_mut()
-            .draw_image(self.image.clone(), dest_rect, paint_opt);
+            .draw_image(self.image.clone(), offset_rect, paint_opt);
     }
 }
 

@@ -343,6 +343,8 @@ mod tests {
         value: i32,
     }
 
+    impl RenderObject for MockRenderBox {}
+
     impl RenderBox<Leaf> for MockRenderBox {
         fn layout(&mut self, ctx: BoxLayoutContext<'_, Leaf>) -> RenderResult<Size> {
             Ok(ctx.constraints.smallest())

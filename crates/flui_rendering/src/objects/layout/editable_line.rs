@@ -1,4 +1,122 @@
-//! RenderEditableLine - Single-line editable text
+//! RenderEditableLine - Single-line editable text with cursor and selection
+//!
+//! Implements a simplified single-line text input RenderObject with cursor
+//! positioning, text selection, and password obscuring. Handles text layout,
+//! cursor rendering, and selection highlighting for basic text input needs.
+//! This is a leaf node (no children) that directly renders text to canvas.
+//!
+//! # Flutter Equivalence
+//!
+//! | FLUI | Flutter |
+//! |------|---------|
+//! | `RenderEditableLine` | Simplified `RenderEditable` from `package:flutter/src/rendering/editable.dart` |
+//! | `TextSelection` | `TextSelection` class |
+//! | `text` | `text` property (String) |
+//! | `style` | `textStyle` property (TextStyle) |
+//! | `text_align` | `textAlign` property (TextAlign) |
+//! | `selection` | `selection` property (TextSelection) |
+//! | `show_cursor` | `showCursor` property |
+//! | `cursor_color` | `cursorColor` property |
+//! | `cursor_width` | `cursorWidth` property |
+//! | `selection_color` | `selectionColor` property |
+//! | `read_only` | `readOnly` property |
+//! | `obscure_text` | `obscureText` property |
+//!
+//! # Layout Protocol
+//!
+//! 1. **Calculate text layout**
+//!    - Measure text with current style
+//!    - Calculate text width and height
+//!    - Apply obscure_text if password field
+//!
+//! 2. **Calculate cursor position**
+//!    - Convert character index to pixel offset
+//!    - Cache cursor position for paint phase
+//!
+//! 3. **Return text size**
+//!    - Size = text bounds (or minimum size for empty text)
+//!    - Single-line only (no wrapping)
+//!
+//! # Paint Protocol
+//!
+//! 1. **Paint selection highlight (if any)**
+//!    - Calculate selection rectangles from character positions
+//!    - Fill selection area with selection_color
+//!    - Only if selection is not collapsed
+//!
+//! 2. **Paint text**
+//!    - Render text at calculated position
+//!    - Apply text_align for positioning
+//!    - Use obscure character (•) if obscure_text enabled
+//!
+//! 3. **Paint cursor (if shown)**
+//!    - Draw vertical line at cursor position
+//!    - Use cursor_color and cursor_width
+//!    - Only if show_cursor is true
+//!
+//! # Performance
+//!
+//! - **Layout**: O(n) - text measurement scales with text length
+//! - **Paint**: O(n) - text rendering + selection + cursor
+//! - **Memory**: 80 bytes base + text string allocation
+//!
+//! # Use Cases
+//!
+//! - **Text input fields**: Single-line text entry (usernames, emails, etc.)
+//! - **Password fields**: Obscured text input with bullets
+//! - **Search boxes**: Simple search input fields
+//! - **Form fields**: Single-line form data entry
+//! - **Chat input**: Message composition fields
+//! - **Command input**: Terminal-style command entry
+//!
+//! # Text Selection Behavior
+//!
+//! ```text
+//! TextSelection { base: 2, extent: 5 }
+//! "Hello World"
+//!   ^^^  (characters 2-5 selected)
+//!
+//! Collapsed: base == extent
+//! "Hello|World" (cursor at position 5)
+//!
+//! Selection direction:
+//! - base < extent: forward selection (left-to-right)
+//! - base > extent: backward selection (right-to-left)
+//! - start() = min(base, extent)
+//! - end() = max(base, extent)
+//! ```
+//!
+//! # Comparison with Related Objects
+//!
+//! - **vs RenderParagraph**: EditableLine is interactive, Paragraph is read-only
+//! - **vs RenderTextField**: TextField is multi-line, EditableLine is single-line
+//! - **vs RenderRichText**: EditableLine has uniform style, RichText has spans
+//!
+//! # Examples
+//!
+//! ```rust,ignore
+//! use flui_rendering::RenderEditableLine;
+//! use flui_painting::{TextStyle, Color};
+//!
+//! // Basic text input
+//! let style = TextStyle::default().with_color(Color::BLACK);
+//! let mut input = RenderEditableLine::new("Hello".to_string(), style);
+//! input.set_cursor_position(5);
+//!
+//! // Password field
+//! let mut password = RenderEditableLine::new(String::new(), style);
+//! password.obscure_text = true;
+//! password.show_cursor = true;
+//!
+//! // With selection
+//! let mut selected = RenderEditableLine::new("Select Me".to_string(), style);
+//! selected.set_selection(0, 6); // Select "Select"
+//!
+//! // Read-only display
+//! let mut readonly = RenderEditableLine::new("Read Only".to_string(), style);
+//! readonly.read_only = true;
+//! readonly.show_cursor = false;
+//! ```
 
 use crate::core::{BoxLayoutCtx, BoxPaintCtx};
 use crate::core::{Leaf, RenderBox};
@@ -56,10 +174,55 @@ impl Default for TextSelection {
     }
 }
 
-/// RenderObject for single-line editable text input
+/// RenderObject for single-line editable text input with cursor and selection.
 ///
-/// Displays text with cursor and selection support. This is a simplified
-/// implementation for basic text input needs.
+/// A leaf node that renders interactive text with cursor positioning, text
+/// selection highlighting, and password obscuring. Handles text layout, cursor
+/// rendering, and selection painting directly on canvas without children.
+///
+/// # Arity
+///
+/// `Leaf` - Has no children (renders text directly).
+///
+/// # Protocol
+///
+/// Box protocol - Uses `BoxConstraints` and returns `Size`.
+///
+/// # Pattern
+///
+/// **Interactive Text Leaf** - Directly renders text to canvas with cursor and
+/// selection, single-line only, supports text editing operations (insert, delete,
+/// select), password obscuring with bullets.
+///
+/// # Use Cases
+///
+/// - **Text input**: Single-line text entry fields (username, email, search)
+/// - **Password fields**: Obscured text input with bullet characters
+/// - **Form fields**: Single-line form data entry
+/// - **Chat input**: Message composition fields
+/// - **Search boxes**: Simple search input fields
+/// - **Command input**: Terminal-style command entry
+///
+/// # Flutter Compliance
+///
+/// Simplified version of Flutter's RenderEditable behavior:
+/// - TextSelection with base and extent for cursor/selection
+/// - Cursor rendering with configurable color and width
+/// - Selection highlighting with background color
+/// - Password obscuring with bullet character
+/// - Read-only mode for display-only text
+/// - Single-line only (no multi-line support)
+/// - Note: This is a simplified implementation; Flutter's RenderEditable
+///   has additional features like scrolling, text direction, and more
+///
+/// # Text Selection
+///
+/// Selection is represented by base and extent positions:
+/// - **Collapsed** (cursor): base == extent
+/// - **Range selection**: base != extent
+/// - **start()**: min(base, extent)
+/// - **end()**: max(base, extent)
+/// - **Direction**: base < extent (forward), base > extent (backward)
 ///
 /// # Example
 ///
@@ -67,9 +230,21 @@ impl Default for TextSelection {
 /// use flui_rendering::RenderEditableLine;
 /// use flui_painting::{TextStyle, Color};
 ///
+/// // Basic editable text
 /// let style = TextStyle::default().with_color(Color::BLACK);
-/// let mut editable = RenderEditableLine::new("Hello".to_string(), style);
-/// editable.set_cursor_position(5);
+/// let mut input = RenderEditableLine::new("Hello".to_string(), style);
+/// input.set_cursor_position(5);
+///
+/// // Password field
+/// let mut password = RenderEditableLine::empty(style);
+/// password.obscure_text = true;
+/// password.cursor_color = Color::rgba(0, 0, 0, 255);
+///
+/// // With selection
+/// input.set_selection(0, 5); // Select all "Hello"
+///
+/// // Insert text at cursor
+/// input.insert_text(" World");
 /// ```
 #[derive(Debug)]
 pub struct RenderEditableLine {

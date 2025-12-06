@@ -1,4 +1,62 @@
 //! RenderClipOval - clips child to an oval shape
+//!
+//! Implements Flutter's oval/circular clipping container that clips child
+//! to an ellipse or circle shape.
+//!
+//! # Flutter Equivalence
+//!
+//! | FLUI | Flutter |
+//! |------|---------||
+//! | `RenderClipOval` | `RenderClipOval` from `package:flutter/src/rendering/proxy_box.dart` |
+//! | `clip_behavior` | `clipBehavior` property |
+//! | `OvalShape` | N/A - internal implementation detail |
+//!
+//! # Layout Protocol
+//!
+//! 1. **Pass constraints to child**
+//!    - Child receives same constraints (proxy behavior)
+//!
+//! 2. **Return child size**
+//!    - Container size = child size (no size change)
+//!    - Cache size for clipping during paint
+//!
+//! # Paint Protocol
+//!
+//! 1. **Apply oval clip**
+//!    - Create Path with oval shape (fills bounding box)
+//!    - Apply clip using Canvas::clip_path()
+//!
+//! 2. **Paint child**
+//!    - Child content clipped to oval
+//!    - If bounds are square: creates circle
+//!    - If bounds are rectangular: creates ellipse
+//!
+//! 3. **Hit testing**
+//!    - Use ellipse equation to check if point is inside oval
+//!    - Blocks hits outside oval region
+//!
+//! # Performance
+//!
+//! - **Layout**: O(1) - pass-through to child
+//! - **Paint**: O(1) - canvas clip operation + child paint
+//! - **Hit Test**: O(1) - ellipse equation check
+//! - **Memory**: 12 bytes (OvalShape + Clip + cached Size)
+//!
+//! # Examples
+//!
+//! ```rust,ignore
+//! use flui_rendering::RenderClipOval;
+//! use flui_types::painting::Clip;
+//!
+//! // Anti-aliased clipping (default, smoother edges)
+//! let clip = RenderClipOval::anti_alias();
+//!
+//! // Hard edge clipping (faster, sharper edges)
+//! let clip = RenderClipOval::hard_edge();
+//!
+//! // Custom clip behavior
+//! let clip = RenderClipOval::with_clip(Clip::AntiAlias);
+//! ```
 
 use flui_painting::Canvas;
 use flui_types::{
@@ -49,10 +107,39 @@ impl ClipShape for OvalShape {
     }
 }
 
-/// RenderObject that clips its child to an oval shape
+/// RenderObject that clips its child to an oval shape.
 ///
 /// The oval fills the bounds of this RenderObject.
 /// If the bounds are square, this creates a circle.
+/// If the bounds are rectangular, this creates an ellipse.
+///
+/// # Arity
+///
+/// `Single` - Must have exactly 1 child.
+///
+/// # Protocol
+///
+/// Box protocol - Uses `BoxConstraints` and returns `Size`.
+///
+/// # Pattern
+///
+/// **Proxy** - Passes constraints unchanged, clips during paint only.
+///
+/// # Use Cases
+///
+/// - **Circular avatars**: Clip profile pictures to circles
+/// - **Rounded buttons**: Create circular or oval buttons
+/// - **Design effects**: Clip images or content to oval shapes
+/// - **Masking**: Create oval-shaped masks for content
+///
+/// # Flutter Compliance
+///
+/// Matches Flutter's RenderClipOval behavior:
+/// - Passes constraints unchanged to child
+/// - Clips child during paint to oval/circular bounds
+/// - Uses Path-based clipping with Canvas API
+/// - Blocks hit testing outside oval region using ellipse equation
+/// - Supports both hard-edge and anti-aliased clipping
 ///
 /// # Example
 ///
@@ -60,7 +147,7 @@ impl ClipShape for OvalShape {
 /// use flui_rendering::RenderClipOval;
 /// use flui_types::painting::Clip;
 ///
-/// let clip_oval = RenderClipOval::new(Clip::AntiAlias);
+/// let clip_oval = RenderClipOval::with_clip(Clip::AntiAlias);
 /// ```
 pub type RenderClipOval = RenderClip<OvalShape>;
 

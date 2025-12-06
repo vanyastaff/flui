@@ -152,7 +152,7 @@ impl<S: ClipShape + 'static> RenderBox<Single> for RenderClip<S> {
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Single>) {
         // If no clipping needed, just paint child directly
         if !self.clip_behavior.clips() {
-            let _ = ctx.paint_single_child(ctx.offset);
+            ctx.paint_single_child(ctx.offset);
             return;
         }
 
@@ -169,7 +169,7 @@ impl<S: ClipShape + 'static> RenderBox<Single> for RenderClip<S> {
         self.shape.apply_clip(ctx.canvas_mut(), self.size);
 
         // Paint child at origin (already translated)
-        let _ = ctx.paint_single_child(Offset::ZERO);
+        ctx.paint_single_child(Offset::ZERO);
 
         // Restore canvas state
         ctx.canvas_mut().restore();

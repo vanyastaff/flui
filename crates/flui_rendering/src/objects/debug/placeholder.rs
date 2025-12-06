@@ -1,4 +1,97 @@
-//! RenderPlaceholder - Debug placeholder visualization
+//! RenderPlaceholder - Debug placeholder visualization for prototyping
+//!
+//! Implements Flutter's Placeholder widget for visualizing widget boundaries during
+//! development. Displays a colored rectangle with optional border, fill, and text label.
+//! Essential for rapid prototyping, layout debugging, and marking unimplemented UI sections.
+//!
+//! # Flutter Equivalence
+//!
+//! | FLUI | Flutter |
+//! |------|---------|
+//! | `RenderPlaceholder` | `RenderConstrainedBox` with `Placeholder` widget semantics |
+//! | `fallback_width/height` | `fallbackWidth/fallbackHeight` properties |
+//! | `stroke_color` | `color` property (border color) |
+//! | `fill_color` | Background color (FLUI extension) |
+//! | `stroke_width` | `strokeWidth` property |
+//! | `label` | Text label (FLUI extension) |
+//!
+//! # Layout Protocol
+//!
+//! 1. **Calculate size from constraints and fallback**
+//!    - If max width is finite: use min(fallback_width, max_width)
+//!    - If max width is infinite: use fallback_width
+//!    - Same logic for height
+//!    - Ensures placeholder respects parent constraints
+//!
+//! 2. **Cache size for paint**
+//!    - Store calculated size for rectangle drawing
+//!
+//! # Paint Protocol
+//!
+//! 1. **Draw fill rectangle**
+//!    - Fill entire bounds with fill_color
+//!    - Semi-transparent by default for debugging
+//!
+//! 2. **Draw stroke border**
+//!    - Draw border with stroke_color and stroke_width
+//!    - Clearly marks placeholder boundaries
+//!
+//! 3. **Draw label text (if present)**
+//!    - Render label text inside placeholder
+//!    - Positioned at center-left with padding
+//!    - Helps identify placeholder purpose
+//!
+//! # Performance
+//!
+//! - **Layout**: O(1) - simple size calculation
+//! - **Paint**: O(1) - fill rect + stroke rect + optional text
+//! - **Memory**: 56 bytes (colors + dimensions + label string)
+//!
+//! # Use Cases
+//!
+//! - **Prototyping**: Mark unimplemented UI sections during development
+//! - **Layout debugging**: Visualize widget boundaries and sizes
+//! - **Design mockups**: Create quick UI mockups without assets
+//! - **Missing content**: Indicate where content should load
+//! - **Skeleton screens**: Placeholder UI while loading real content
+//! - **Test fixtures**: Generate predictable sizes for testing
+//!
+//! # Comparison with Related Objects
+//!
+//! - **vs RenderColoredBox**: Placeholder adds border + label, ColoredBox is just fill
+//! - **vs RenderContainer**: Container is production, Placeholder is debug/prototype
+//! - **vs RenderSizedBox**: SizedBox has no visual, Placeholder is visible
+//! - **vs RenderErrorBox**: ErrorBox indicates errors, Placeholder indicates "TODO"
+//!
+//! # Examples
+//!
+//! ```rust,ignore
+//! use flui_rendering::RenderPlaceholder;
+//! use flui_types::{Color, Size};
+//!
+//! // Basic placeholder (100×100, gray)
+//! let placeholder = RenderPlaceholder::default();
+//!
+//! // Custom size (200×150)
+//! let sized = RenderPlaceholder::with_size(200.0, 150.0);
+//!
+//! // Square placeholder (100×100)
+//! let square = RenderPlaceholder::square(100.0);
+//!
+//! // With label for identification
+//! let labeled = RenderPlaceholder::with_size(300.0, 200.0)
+//!     .with_label("Hero Image");
+//!
+//! // Custom colors (red border, yellow fill)
+//! let colored = RenderPlaceholder::with_size(150.0, 100.0)
+//!     .with_colors(Color::RED, Color::rgba(255, 255, 0, 128))
+//!     .with_label("Ad Banner");
+//!
+//! // Thick border for emphasis
+//! let thick = RenderPlaceholder::square(80.0)
+//!     .with_stroke_width(4.0)
+//!     .with_label("Avatar");
+//! ```
 
 use crate::core::{BoxLayoutCtx, BoxPaintCtx, Leaf, RenderBox};
 use crate::{RenderObject, RenderResult};
@@ -6,19 +99,68 @@ use flui_painting::{Canvas, Paint};
 use flui_types::prelude::{Color, TextStyle};
 use flui_types::{Rect, Size};
 
-/// RenderObject that displays a placeholder rectangle
+/// RenderObject that displays a debug placeholder rectangle with border and label.
 ///
-/// Used for debugging and prototyping to visualize widget boundaries
-/// and sizes. Shows a colored rectangle with optional text label.
+/// Visual debug aid showing colored rectangle with configurable border, fill, and text label.
+/// Uses fallback size when unconstrained, respects parent constraints otherwise. Essential
+/// for rapid prototyping and layout debugging during development.
+///
+/// # Arity
+///
+/// `Leaf` - Has no children (renders placeholder directly).
+///
+/// # Protocol
+///
+/// Box protocol - Uses `BoxConstraints` and returns `Size`.
+///
+/// # Pattern
+///
+/// **Debug Visualization Leaf** - Fallback sizing when unconstrained, respects parent
+/// constraints when constrained, draws fill + border + label, configurable colors
+/// and stroke width.
+///
+/// # Use Cases
+///
+/// - **Prototyping**: Mark unimplemented UI sections ("TODO: implement feature")
+/// - **Layout debugging**: Visualize widget sizes and boundaries
+/// - **Design mockups**: Quick mockups without real assets
+/// - **Missing content**: Indicate where images/data should load
+/// - **Skeleton screens**: Loading placeholders
+/// - **Test fixtures**: Predictable sizes for automated tests
+///
+/// # Flutter Compliance
+///
+/// Matches Flutter's Placeholder widget behavior:
+/// - Uses fallback size when unconstrained (default 100×100)
+/// - Respects parent constraints when present
+/// - Draws border with configurable color and width
+/// - Default gray colors for unobtrusive debugging
+///
+/// # Default Values
+///
+/// - Fallback size: 100×100 pixels
+/// - Stroke color: Gray (100, 100, 100, 255)
+/// - Fill color: Light gray semi-transparent (200, 200, 200, 128)
+/// - Stroke width: 2.0 pixels
+/// - Label: None
 ///
 /// # Example
 ///
 /// ```rust,ignore
 /// use flui_rendering::RenderPlaceholder;
-/// use flui_types::Size;
+/// use flui_types::{Color, Size};
 ///
-/// let placeholder = RenderPlaceholder::new(Size::new(100.0, 50.0))
-///     .with_label("Placeholder");
+/// // Basic placeholder for prototyping
+/// let placeholder = RenderPlaceholder::with_size(200.0, 150.0)
+///     .with_label("Hero Image");
+///
+/// // Skeleton screen element
+/// let skeleton = RenderPlaceholder::square(80.0)
+///     .with_colors(
+///         Color::rgba(220, 220, 220, 255),  // Border
+///         Color::rgba(240, 240, 240, 255)   // Fill
+///     )
+///     .with_label("Avatar");
 /// ```
 #[derive(Debug)]
 pub struct RenderPlaceholder {
@@ -118,7 +260,7 @@ impl Default for RenderPlaceholder {
 impl RenderObject for RenderPlaceholder {}
 
 impl RenderBox<Leaf> for RenderPlaceholder {
-    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Leaf>) -> RenderResult<Size> {
+    fn layout(&mut self, ctx: BoxLayoutCtx<'_, Leaf>) -> RenderResult<Size> {
         let constraints = ctx.constraints;
 
         // Use fallback size if unconstrained, otherwise use constraints

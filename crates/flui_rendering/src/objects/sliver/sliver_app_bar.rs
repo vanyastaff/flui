@@ -1,35 +1,202 @@
 //! RenderSliverAppBar - Floating and pinned app bar for scrollable content
+//!
+//! Implements Flutter's SliverAppBar that provides Material Design app bar behavior
+//! in scrollable viewports. Supports pinned (sticky), floating (appears on scroll up),
+//! and snap (full/hidden only) modes for rich scrolling interactions.
+//!
+//! # Flutter Equivalence
+//!
+//! | FLUI | Flutter |
+//! |------|---------|
+//! | `RenderSliverAppBar` | `RenderSliverPersistentHeader` + `FlexibleSpaceBar` logic |
+//! | `expanded_height` | `expandedHeight` property |
+//! | `collapsed_height` | `collapsedHeight` / `toolbarHeight` |
+//! | `pinned` | `pinned` property |
+//! | `floating` | `floating` property |
+//! | `snap` | `snap` property |
+//! | `stretch` | `stretch` property |
+//!
+//! # App Bar Behaviors
+//!
+//! ## Pinned Mode
+//! ```text
+//! scroll_offset = 0:    [████████████] (200px expanded)
+//! scroll_offset = 100:  [██████] (100px shrinking)
+//! scroll_offset = 200+: [███] (56px collapsed, STAYS VISIBLE)
+//! ```
+//!
+//! ## Floating Mode (simplified)
+//! ```text
+//! Scroll down:  [████████████] → [      ] (hides)
+//! Scroll up:    [      ] → [████████████] (appears immediately)
+//! ```
+//!
+//! ## Normal Mode
+//! ```text
+//! scroll_offset = 0:    [████████████] (200px)
+//! scroll_offset = 100:  [██████] (100px)
+//! scroll_offset = 200+: [      ] (0px, hidden)
+//! ```
+//!
+//! # Layout Protocol
+//!
+//! 1. **Calculate effective height based on mode**
+//!    - Pinned: Always collapsed_height (sticky)
+//!    - Floating: Full expanded_height (simplified)
+//!    - Normal: expanded_height - scroll_offset (shrinks)
+//!
+//! 2. **Calculate paint extent**
+//!    - Pinned: min(collapsed_height, remaining_extent)
+//!    - Normal: min(expanded_height - scroll_offset, remaining_extent)
+//!
+//! 3. **Calculate scroll extent**
+//!    - Pinned: expanded_height - collapsed_height
+//!    - Normal: expanded_height
+//!
+//! 4. **Calculate layout extent**
+//!    - Pinned: collapsed_height (affects following slivers)
+//!    - Normal: paint_extent (shrinks with scroll)
+//!
+//! # Paint Protocol
+//!
+//! 1. **Check visibility**
+//!    - Only paint if geometry.visible
+//!
+//! 2. **Paint child content**
+//!    - Child is app bar content (toolbar, title, flexible space)
+//!    - Painted at current offset
+//!
+//! # Performance
+//!
+//! - **Layout**: O(1) - geometry calculation only
+//! - **Paint**: O(1) + child paint - simple visibility check
+//! - **Memory**: 32 bytes (heights + flags + geometry cache)
+//!
+//! # Use Cases
+//!
+//! - **Material app bars**: Standard Material Design headers
+//! - **Collapsing toolbars**: Expand/collapse with scroll
+//! - **Search bars**: Appear on scroll up for easy access
+//! - **Navigation headers**: Persistent navigation with scroll
+//! - **Hero headers**: Large headers that shrink on scroll
+//! - **Sticky headers**: Pinned section headers
+//!
+//! # Comparison with Related Objects
+//!
+//! - **vs SliverPersistentHeader**: AppBar is specialized for toolbars, PersistentHeader is generic
+//! - **vs SliverPinnedPersistentHeader**: PinnedHeader is always pinned, AppBar is configurable
+//! - **vs SliverFloatingPersistentHeader**: FloatingHeader is always floating, AppBar is configurable
+//! - **vs BoxAppBar**: SliverAppBar integrates with viewport, BoxAppBar is static
+//!
+//! # Implementation Status
+//!
+//! **IMPORTANT**: Current implementation has issues:
+//! 1. **Child is never laid out** - layout() doesn't call layout_child(), so app bar content
+//!    is not sized or positioned. This is incomplete.
+//! 2. **Floating behavior is simplified** - doesn't track scroll direction or velocity
+//! 3. **Line 148**: _effective_height calculated but never used (dead code)
+//!
+//! # Examples
+//!
+//! ```rust,ignore
+//! use flui_rendering::RenderSliverAppBar;
+//!
+//! // Pinned app bar (always visible, collapses to 56px)
+//! let pinned = RenderSliverAppBar::new(200.0)
+//!     .with_pinned(true);
+//!
+//! // Floating app bar (appears on scroll up)
+//! let floating = RenderSliverAppBar::new(150.0)
+//!     .with_floating(true);
+//!
+//! // Pinned + Floating (Material Design standard)
+//! let material = RenderSliverAppBar::new(200.0)
+//!     .with_pinned(true)
+//!     .with_floating(true);
+//!
+//! // Snap behavior (no partial visibility)
+//! let snap = RenderSliverAppBar::new(200.0)
+//!     .with_floating(true)
+//!     .with_snap(true);
+//!
+//! // Custom collapsed height
+//! let mut app_bar = RenderSliverAppBar::new(250.0);
+//! app_bar.set_collapsed_height(80.0);
+//! ```
 
-use crate::core::{RuntimeArity, LegacySliverRender, SliverSliver};
+use crate::core::{RenderObject, RenderSliver, Single, SliverLayoutContext, SliverPaintContext};
+use crate::RenderResult;
 use flui_painting::Canvas;
-use flui_types::{SliverConstraints, SliverGeometry};
+use flui_types::{SliverConstraints, SliverGeometry, BoxConstraints};
 
-/// RenderObject for an app bar that can float, pin, or scroll away
+/// RenderObject for Material Design app bar with scroll effects.
 ///
-/// SliverAppBar provides three main behaviors:
-/// - **Pinned**: Always visible at the top (like a sticky header)
-/// - **Floating**: Appears immediately on scroll up
-/// - **Snap**: Snaps completely in/out (no partial visibility)
+/// Provides configurable scroll behaviors: pinned (sticky), floating (appears on scroll up),
+/// snap (full/hidden only), and stretch (overscroll). Supports expanding/collapsing toolbar
+/// with smooth transitions between expanded and collapsed states.
+///
+/// # Arity
+///
+/// `RuntimeArity::Exact(1)` - Must have exactly 1 child (app bar content).
+///
+/// # Protocol
+///
+/// Sliver protocol - Uses `SliverConstraints` and returns `SliverGeometry`.
+///
+/// # Pattern
+///
+/// **Scroll-Responsive Header** - Calculates own geometry based on scroll offset
+/// and mode flags, doesn't layout child (currently incomplete). Geometry changes
+/// affect viewport layout and paint behavior.
+///
+/// # Behavior Modes
+///
+/// | Mode | Scroll Down | Scroll Up | Always Visible | Notes |
+/// |------|-------------|-----------|----------------|-------|
+/// | Normal | Shrinks | Grows | No | Disappears when scrolled past |
+/// | Pinned | Shrinks to min | Grows | Yes (min height) | Sticky header |
+/// | Floating | Hides | Appears | No | Immediate response |
+/// | Snap | Hides | Shows | No | No partial states |
+/// | Pinned+Floating | Shrinks to min | Full height | Yes | Material standard |
 ///
 /// # Use Cases
 ///
-/// - Material Design app bars
-/// - Collapsing toolbars
-/// - Search bars that appear on scroll
-/// - Navigation headers
+/// - **Material app bars**: Standard Android/web app headers
+/// - **Collapsing toolbars**: Large headers with title/image
+/// - **Search bars**: Floating search that appears on scroll
+/// - **Navigation headers**: Sticky navigation with content below
+/// - **Hero sections**: Large hero images that collapse
+/// - **Section headers**: Pinned headers with rich content
+///
+/// # Flutter Compliance
+///
+/// Partially matches Flutter's SliverAppBar:
+/// - Calculates geometry based on scroll offset ✅
+/// - Supports pinned, floating, snap, stretch flags ✅
+/// - Expands/collapses between two heights ✅
+/// - **INCOMPLETE**: Doesn't layout child content ❌
+/// - **SIMPLIFIED**: Floating doesn't track scroll direction ⚠️
+///
+/// # Implementation Issues
+///
+/// **CRITICAL**: Child is never laid out! The layout() method only calculates
+/// this sliver's geometry but doesn't call layout_child() to size the app bar
+/// content. This means child size is undefined. Full implementation needs to
+/// layout child with BoxConstraints derived from current scroll state.
 ///
 /// # Example
 ///
 /// ```rust,ignore
 /// use flui_rendering::RenderSliverAppBar;
 ///
-/// // Pinned app bar (always visible)
-/// let pinned = RenderSliverAppBar::new(60.0)
-///     .with_pinned(true);
+/// // Material Design standard (pinned + floating)
+/// let app_bar = RenderSliverAppBar::new(200.0)
+///     .with_pinned(true)
+///     .with_floating(true)
+///     .with_snap(true);
 ///
-/// // Floating app bar (appears on scroll up)
-/// let floating = RenderSliverAppBar::new(60.0)
-///     .with_floating(true);
+/// // Large collapsing header
+/// let hero = RenderSliverAppBar::new(300.0);
 /// ```
 #[derive(Debug)]
 pub struct RenderSliverAppBar {
@@ -121,9 +288,25 @@ impl RenderSliverAppBar {
         self.sliver_geometry
     }
 
-    /// Calculate effective height based on scroll offset
-    fn calculate_effective_height(&self, scroll_offset: f32) -> f32 {
-        if self.pinned {
+}
+
+impl Default for RenderSliverAppBar {
+    fn default() -> Self {
+        Self::new(200.0) // Default expanded height
+    }
+}
+
+impl RenderObject for RenderSliverAppBar {}
+
+impl RenderSliver<Single> for RenderSliverAppBar {
+    fn layout(&mut self, mut ctx: SliverLayoutContext<'_, Single>) -> RenderResult<SliverGeometry> {
+        let child_id = *ctx.children.single();
+        let constraints = ctx.constraints;
+        let scroll_offset = constraints.scroll_offset;
+        let remaining_extent = constraints.remaining_paint_extent;
+
+        // Calculate effective height based on mode
+        let effective_height = if self.pinned {
             // Pinned: Always at collapsed height (minimum)
             self.collapsed_height
         } else if self.floating {
@@ -134,18 +317,16 @@ impl RenderSliverAppBar {
             // Normal: Shrinks as user scrolls
             let available = self.expanded_height - scroll_offset;
             available.max(0.0)
-        }
-    }
+        };
 
-    /// Calculate sliver geometry
-    fn calculate_sliver_geometry(
-        &self,
-        constraints: &SliverConstraints,
-    ) -> SliverGeometry {
-        let scroll_offset = constraints.scroll_offset;
-        let remaining_extent = constraints.remaining_paint_extent;
-
-        let _effective_height = self.calculate_effective_height(scroll_offset);
+        // Layout child with box constraints matching effective height
+        let box_constraints = BoxConstraints::new(
+            0.0,
+            constraints.cross_axis_extent,
+            effective_height,
+            effective_height,
+        );
+        ctx.tree_mut().perform_layout(child_id, box_constraints)?;
 
         // Calculate how much we actually paint
         let paint_extent = if self.pinned {
@@ -171,7 +352,7 @@ impl RenderSliverAppBar {
             paint_extent
         };
 
-        SliverGeometry {
+        self.sliver_geometry = SliverGeometry {
             scroll_extent,
             paint_extent,
             paint_origin: 0.0,
@@ -189,40 +370,19 @@ impl RenderSliverAppBar {
             has_visual_overflow: scroll_extent > paint_extent,
             hit_test_extent: Some(paint_extent),
             scroll_offset_correction: None,
-        }
-    }
-}
+        };
 
-impl Default for RenderSliverAppBar {
-    fn default() -> Self {
-        Self::new(200.0) // Default expanded height
-    }
-}
-
-impl LegacySliverRender for RenderSliverAppBar {
-    fn layout(&mut self, ctx: &Sliver) -> SliverGeometry {
-        // Calculate and cache sliver geometry
-        self.sliver_geometry = self.calculate_sliver_geometry(&ctx.constraints);
-        self.sliver_geometry
+        Ok(self.sliver_geometry)
     }
 
-    fn paint(&self, ctx: &Sliver) -> Canvas {
-        // Paint child if present and visible
-        if let Some(child_id) = ctx.children.try_single() {
-            if self.sliver_geometry.visible {
-                return ctx.tree.paint_child(child_id, ctx.offset);
+    fn paint(&self, ctx: &mut SliverPaintContext<'_, Single>) {
+        // Paint child if visible
+        if self.sliver_geometry.visible {
+            let child_id = *ctx.children.single();
+            if let Ok(child_canvas) = ctx.tree().perform_paint(child_id, ctx.offset) {
+                *ctx.canvas = child_canvas;
             }
         }
-
-        Canvas::new()
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> RuntimeArity {
-        RuntimeArity::Exact(1) // Single child (app bar content)
     }
 }
 

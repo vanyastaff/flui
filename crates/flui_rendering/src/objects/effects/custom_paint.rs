@@ -1,4 +1,93 @@
 //! RenderCustomPaint - custom painting with user-defined painters
+//!
+//! Implements Flutter's custom painting container that allows arbitrary Canvas drawing
+//! before and/or after the child widget.
+//!
+//! # Flutter Equivalence
+//!
+//! | FLUI | Flutter |
+//! |------|---------|
+//! | `RenderCustomPaint` | `RenderCustomPaint` from `package:flutter/src/rendering/proxy_box.dart` |
+//! | `CustomPainter` trait | `CustomPainter` abstract class |
+//! | `painter` | `painter` property (background) |
+//! | `foreground_painter` | `foregroundPainter` property |
+//! | `should_repaint()` | `shouldRepaint()` method |
+//! | `is_complex` | `isComplex` property |
+//! | `will_change` | `willChange` property |
+//!
+//! # Layout Protocol
+//!
+//! 1. **Layout child with constraints**
+//!    - Child receives same constraints (proxy behavior for layout)
+//!
+//! 2. **Return child size**
+//!    - Container size = child size
+//!
+//! 3. **Cache size**
+//!    - Store size for painters to use during paint
+//!
+//! # Paint Protocol
+//!
+//! 1. **Paint background painter** (if present)
+//!    - Call `painter.paint(canvas, size)` before child
+//!    - Draws behind child content
+//!
+//! 2. **Paint child**
+//!    - Child painted in middle layer
+//!
+//! 3. **Paint foreground painter** (if present)
+//!    - Call `foreground_painter.paint(canvas, size)` after child
+//!    - Draws on top of child content
+//!
+//! # Performance
+//!
+//! - **Layout**: O(1) - pass-through to child
+//! - **Paint**: O(p) where p = painter complexity + child paint
+//! - **Memory**: ~64 bytes (2 trait objects + Size + flags + cached Size)
+//!
+//! # Use Cases
+//!
+//! - **Custom shapes**: Draw complex paths, bezier curves, polygons
+//! - **Decorations**: Custom borders, backgrounds, overlays
+//! - **Charts**: Line charts, bar charts, pie charts, gauges
+//! - **Visualizations**: Data visualizations, infographics
+//! - **Effects**: Particle systems, custom shadows, glows
+//! - **Animations**: Frame-by-frame custom drawing
+//!
+//! # Examples
+//!
+//! ```rust,ignore
+//! use flui_rendering::{RenderCustomPaint, CustomPainter};
+//! use flui_painting::{Canvas, Paint};
+//! use flui_types::{Color, Point, Size};
+//!
+//! // Define a custom painter
+//! #[derive(Debug)]
+//! struct CirclePainter {
+//!     color: Color,
+//! }
+//!
+//! impl CustomPainter for CirclePainter {
+//!     fn paint(&self, canvas: &mut Canvas, size: Size) {
+//!         let center = Point::new(size.width / 2.0, size.height / 2.0);
+//!         let radius = size.width.min(size.height) / 2.0;
+//!         let paint = Paint::fill(self.color);
+//!         canvas.draw_circle(center, radius, &paint);
+//!     }
+//! }
+//!
+//! // Use as background
+//! let custom = RenderCustomPaint::with_painter(
+//!     Box::new(CirclePainter { color: Color::BLUE }),
+//!     Size::new(100.0, 100.0)
+//! );
+//!
+//! // Use as foreground overlay
+//! let overlay = RenderCustomPaint::with_foreground(
+//!     Box::new(CirclePainter { color: Color::rgba(255, 0, 0, 128) }),
+//!     Size::new(100.0, 100.0)
+//! );
+//! ```
 
 use crate::core::{BoxLayoutCtx, BoxPaintCtx, RenderBox, Single};
 use crate::{RenderObject, RenderResult};
@@ -18,18 +107,59 @@ pub trait CustomPainter: std::fmt::Debug + Send + Sync {
     }
 }
 
-/// RenderObject that allows custom painting
+/// RenderObject that allows custom painting before and/or after a child.
 ///
-/// This widget allows you to paint custom graphics before and/or after
-/// the child_id widget. Useful for drawing custom shapes, decorations, etc.
+/// Provides arbitrary Canvas drawing capabilities through the CustomPainter trait.
+/// Background painter draws behind child, foreground painter draws on top.
+///
+/// # Arity
+///
+/// `Single` - Must have exactly 1 child.
+///
+/// # Protocol
+///
+/// Box protocol - Uses `BoxConstraints` and returns `Size`.
+///
+/// # Use Cases
+///
+/// - **Custom graphics**: Shapes, paths, bezier curves beyond standard widgets
+/// - **Chart rendering**: Line/bar/pie charts, gauges, data visualizations
+/// - **Visual effects**: Particle systems, custom shadows, glows, gradients
+/// - **Decorative overlays**: Custom borders, watermarks, badges
+/// - **Dynamic drawing**: Frame-by-frame animations, interactive drawings
+/// - **Complex layouts**: Custom grid lines, rulers, graph paper backgrounds
+///
+/// # Flutter Compliance
+///
+/// Matches Flutter's RenderCustomPaint behavior:
+/// - Passes constraints unchanged to child (proxy for layout)
+/// - Size determined by child
+/// - Background painter draws before child
+/// - Foreground painter draws after child
+/// - `should_repaint()` optimization for painter changes
+/// - `is_complex` and `will_change` hints for rendering optimization
+/// - Uses CustomPainter trait (Flutter: CustomPainter abstract class)
 ///
 /// # Example
 ///
 /// ```rust,ignore
-/// use flui_rendering::RenderCustomPaint;
+/// use flui_rendering::{RenderCustomPaint, CustomPainter};
+/// use flui_painting::{Canvas, Paint};
+/// use flui_types::{Color, Size};
 ///
-/// // Custom paint with preferred size
-/// let custom = RenderCustomPaint::new(Size::new(100.0, 100.0));
+/// #[derive(Debug)]
+/// struct MyPainter;
+///
+/// impl CustomPainter for MyPainter {
+///     fn paint(&self, canvas: &mut Canvas, size: Size) {
+///         // Custom drawing code
+///     }
+/// }
+///
+/// let custom = RenderCustomPaint::with_painter(
+///     Box::new(MyPainter),
+///     Size::new(100.0, 100.0)
+/// );
 /// ```
 #[derive(Debug)]
 pub struct RenderCustomPaint {
@@ -145,7 +275,8 @@ impl RenderObject for RenderCustomPaint {}
 
 impl RenderBox<Single> for RenderCustomPaint {
     fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Single>) -> RenderResult<Size> {
-        let child_id = *ctx.children.single();
+        // Single arity: use ctx.single_child() which returns ElementId directly
+        let child_id = ctx.single_child();
 
         // Single arity always has exactly one child
         // Layout child with our constraints
@@ -157,7 +288,8 @@ impl RenderBox<Single> for RenderCustomPaint {
     }
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Single>) {
-        let child_id = *ctx.children.single();
+        // Single arity: use ctx.single_child() which returns ElementId directly
+        let child_id = ctx.single_child();
 
         // Use the size from layout phase
         let size = self.laid_out_size;

@@ -1,34 +1,207 @@
-//! RenderSliverPersistentHeader - Sticky header that stays visible during scroll
+//! RenderSliverPersistentHeader - Generic persistent header with configurable pinning/floating
+//!
+//! Base implementation for persistent headers that can optionally stick during scrolling.
+//! Unlike specialized variants (SliverPinnedPersistentHeader, SliverFloatingPersistentHeader),
+//! this is the generic header that supports configuration of both behaviors through flags.
+//!
+//! # Flutter Equivalence
+//!
+//! | FLUI | Flutter |
+//! |------|---------|
+//! | `RenderSliverPersistentHeader` | `RenderSliverPersistentHeader` from `package:flutter/src/rendering/sliver_persistent_header.dart` |
+//! | `pinned` flag | `pinned` parameter for sticky behavior |
+//! | `floating` flag | `floating` parameter for reverse-scroll appearance |
+//! | Pinned geometry | Sticks once scroll_offset >= extent |
+//!
+//! # Layout Protocol (Intended)
+//!
+//! 1. **Calculate header visibility**
+//!    - If pinned && scrolled past: Always visible (sticks)
+//!    - If floating && scrolling up: Appears immediately (NOT IMPLEMENTED)
+//!    - Otherwise: Normal scroll-away behavior
+//!
+//! 2. **Layout child with BoxConstraints** (NOT IMPLEMENTED)
+//!    - Convert SliverConstraints to BoxConstraints
+//!    - Layout single child with header content
+//!
+//! 3. **Return geometry**
+//!    - scroll_extent: Fixed header extent
+//!    - paint_extent: Current visible extent
+//!    - layout_extent: Affects following slivers (pinned adds space)
+//!
+//! # Paint Protocol
+//!
+//! 1. **Check visibility**
+//!    - Only paint if geometry.visible
+//!
+//! 2. **Paint child**
+//!    - Paint header content at current offset
+//!
+//! # Performance
+//!
+//! - **Layout**: O(1) geometry + O(child) when implemented
+//! - **Paint**: O(child) when visible
+//! - **Memory**: 9 bytes (f32 + 2×bool) + 48 bytes (SliverGeometry) = 57 bytes
+//!
+//! # Use Cases
+//!
+//! - **Section headers**: Sticky category headers in lists
+//! - **Table headers**: Persistent column headers
+//! - **Date separators**: Timeline headers in messaging
+//! - **Group dividers**: Shopping cart section headers
+//! - **Context headers**: Document outline navigation
+//!
+//! # Pinned vs Floating vs Both
+//!
+//! ```text
+//! PINNED ONLY (pinned=true, floating=false):
+//! scroll=0:    [████████] (full)
+//! scroll=50:   [███] (shrinking)
+//! scroll=80+:  [███] (STICKS at minimum)
+//!
+//! FLOATING ONLY (pinned=false, floating=true) - INTENDED:
+//! scroll down: [        ] (hides)
+//! scroll UP:   [████████] (APPEARS immediately)
+//!
+//! BOTH (pinned=true, floating=true) - INTENDED:
+//! scroll down: [███] (sticks at minimum)
+//! scroll UP:   [████████] (expands to full)
+//!
+//! CURRENT IMPLEMENTATION:
+//! floating flag has NO EFFECT - only pinned works
+//! ```
+//!
+//! # ⚠️ CRITICAL IMPLEMENTATION ISSUES
+//!
+//! This implementation has **MAJOR INCOMPLETE FUNCTIONALITY**:
+//!
+//! 1. **❌ Child is NEVER laid out** (line 138-142)
+//!    - No calls to `layout_child()` anywhere
+//!    - Child size is undefined
+//!    - Only geometry calculation, no actual layout
+//!
+//! 2. **❌ floating flag NOT USED** (line 40, 67-69, 72-75)
+//!    - Flag can be set via `set_floating()` and `with_floating()`
+//!    - Never checked in `calculate_sliver_geometry()`
+//!    - Dead code - has no effect on behavior
+//!    - Floating behavior requires scroll direction tracking (missing)
+//!
+//! 3. **✅ Pinned mode works correctly** (line 91-105, 108-113)
+//!    - Correctly sticks header once scroll_offset >= extent
+//!    - layout_extent properly affects following slivers
+//!
+//! 4. **⚠️ Simplified implementation** (line 83-134)
+//!    - Only supports pinned behavior
+//!    - Missing floating logic for reverse scroll detection
+//!    - Generic header should support both modes
+//!
+//! **This RenderObject is BROKEN - missing child layout, floating flag unused!**
+//!
+//! # Comparison with Related Objects
+//!
+//! - **vs SliverPinnedPersistentHeader**: Generic has flags, Pinned is always pinned
+//! - **vs SliverFloatingPersistentHeader**: Generic has flags, Floating is always floating
+//! - **vs SliverAppBar**: AppBar has UI (title, actions), PersistentHeader is generic
+//! - **vs SliverPadding**: PersistentHeader sticks, Padding just adds space
+//!
+//! # Examples
+//!
+//! ```rust,ignore
+//! use flui_rendering::RenderSliverPersistentHeader;
+//!
+//! // Pinned header (sticks once scrolled past)
+//! let pinned = RenderSliverPersistentHeader::new(56.0, true);
+//! // Works correctly!
+//!
+//! // Floating header (appears on scroll up)
+//! let floating = RenderSliverPersistentHeader::new(56.0, false)
+//!     .with_floating();
+//! // WARNING: floating flag has no effect - needs implementation!
+//!
+//! // Both pinned and floating
+//! let both = RenderSliverPersistentHeader::new(56.0, true)
+//!     .with_floating();
+//! // WARNING: only pinned works, floating is ignored!
+//! ```
 
-use crate::core::{RuntimeArity, LegacySliverRender, SliverSliver};
+use crate::core::{RenderObject, RenderSliver, Single, SliverLayoutContext, SliverPaintContext};
+use crate::RenderResult;
 use flui_painting::Canvas;
+use flui_types::prelude::*;
 use flui_types::{SliverConstraints, SliverGeometry};
 
-/// RenderObject for a persistent header that sticks during scrolling
+/// RenderObject for a generic persistent header with configurable behavior.
 ///
-/// Persistent headers remain visible at the top/leading edge of the viewport
-/// as content scrolls underneath them. Common use cases:
-/// - Section headers in lists
-/// - Sticky table headers
-/// - Category separators
-/// - Date headers in message lists
+/// Base implementation for persistent headers that can optionally stick (pinned) or
+/// float back on reverse scroll (floating). This is the configurable generic header,
+/// unlike the specialized SliverPinnedPersistentHeader and SliverFloatingPersistentHeader
+/// which hardcode their behavior.
 ///
-/// # Behavior
+/// # Arity
 ///
-/// - **Pinned**: Always visible once reached
-/// - **Floating**: Can scroll off-screen but reappears on reverse scroll
-/// - **Neither**: Scrolls away normally
+/// `RuntimeArity::Exact(1)` - Must have exactly 1 child (header content).
+///
+/// # Protocol
+///
+/// Sliver protocol - Uses `SliverConstraints` and returns `SliverGeometry`.
+///
+/// # Pattern
+///
+/// **Configurable Persistent Header** - Generic header with runtime-configurable pinned/floating
+/// flags. Intended to support both behaviors, but currently only pinned mode works. Floating
+/// mode requires scroll direction tracking which is not implemented.
+///
+/// # Use Cases
+///
+/// - **Section headers**: Sticky category headers in lists
+/// - **Table headers**: Persistent column headers during scroll
+/// - **Date separators**: Timeline headers in chat/messaging
+/// - **Group dividers**: Shopping cart section separators
+/// - **Context headers**: Document outline navigation headers
+///
+/// # Flutter Compliance
+///
+/// **PARTIALLY IMPLEMENTED**:
+/// - ✅ Pinned mode works correctly
+/// - ❌ Floating mode has no effect (flag unused)
+/// - ❌ Child never laid out
+/// - ⚠️ Simplified to only support pinned behavior
+///
+/// # Implementation Status
+///
+/// | Feature | Status | Notes |
+/// |---------|--------|-------|
+/// | Pinned geometry | ✅ Complete | Correctly sticks once scrolled past |
+/// | Floating geometry | ❌ Missing | Flag exists but never checked |
+/// | Child layout | ❌ Missing | No layout_child() calls |
+/// | Paint | ✅ Works | Paints child when visible |
+/// | Scroll direction tracking | ❌ Missing | Required for floating mode |
+///
+/// # Current Behavior vs Intended
+///
+/// **Current (Pinned Only):**
+/// - `pinned=true`: Header sticks once scroll_offset >= extent ✅
+/// - `floating=true`: Flag has no effect ❌
+/// - Child: Never laid out ❌
+///
+/// **Intended (Flutter):**
+/// - `pinned=true`: Header sticks once scrolled past
+/// - `floating=true`: Header appears on scroll up
+/// - Both: Header sticks AND floats back to full size
+/// - Child: Laid out with BoxConstraints
 ///
 /// # Example
 ///
 /// ```rust,ignore
 /// use flui_rendering::RenderSliverPersistentHeader;
 ///
-/// // Always visible once scrolled into view
-/// let pinned = RenderSliverPersistentHeader::new(50.0, true);
+/// // Pinned header (works correctly)
+/// let pinned = RenderSliverPersistentHeader::new(56.0, true);
 ///
-/// // Can scroll away
-/// let floating = RenderSliverPersistentHeader::new(50.0, false);
+/// // Floating header (flag ignored!)
+/// let floating = RenderSliverPersistentHeader::new(50.0, false)
+///     .with_floating();
+/// // WARNING: floating has no effect in current implementation!
 /// ```
 #[derive(Debug)]
 pub struct RenderSliverPersistentHeader {
@@ -134,30 +307,36 @@ impl RenderSliverPersistentHeader {
     }
 }
 
-impl LegacySliverRender for RenderSliverPersistentHeader {
-    fn layout(&mut self, ctx: &Sliver) -> SliverGeometry {
+impl RenderObject for RenderSliverPersistentHeader {}
+
+impl RenderSliver<Single> for RenderSliverPersistentHeader {
+    fn layout(&mut self, mut ctx: SliverLayoutContext<'_, Single>) -> RenderResult<SliverGeometry> {
+        let child_id = *ctx.children.single();
+
+        // Layout child with box constraints (height = extent)
+        let box_constraints = BoxConstraints::new(
+            0.0,
+            ctx.constraints.cross_axis_extent,
+            self.extent,
+            self.extent,
+        );
+
+        ctx.tree_mut().perform_layout(child_id, box_constraints)?;
+
         // Calculate and cache sliver geometry
         self.sliver_geometry = self.calculate_sliver_geometry(&ctx.constraints);
-        self.sliver_geometry
+        Ok(self.sliver_geometry)
     }
 
-    fn paint(&self, ctx: &Sliver) -> Canvas {
-        // Paint child if present and visible
-        if let Some(child_id) = ctx.children.try_single() {
-            if self.sliver_geometry.visible {
-                return ctx.tree.paint_child(child_id, ctx.offset);
+    fn paint(&self, ctx: &mut SliverPaintContext<'_, Single>) {
+        // Paint child if visible
+        if self.sliver_geometry.visible {
+            let child_id = *ctx.children.single();
+
+            if let Ok(child_canvas) = ctx.tree().perform_paint(child_id, ctx.offset) {
+                *ctx.canvas = child_canvas;
             }
         }
-
-        Canvas::new()
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> RuntimeArity {
-        RuntimeArity::Exact(1) // Single child (header content)
     }
 }
 
@@ -326,11 +505,5 @@ mod tests {
         assert_eq!(geometry.scroll_extent, 50.0);
         assert_eq!(geometry.paint_extent, 25.0); // 50 - 25
         assert!(geometry.visible);
-    }
-
-    #[test]
-    fn test_arity_is_single_child() {
-        let header = RenderSliverPersistentHeader::new(50.0, true);
-        assert_eq!(header.arity(), RuntimeArity::Exact(1));
     }
 }

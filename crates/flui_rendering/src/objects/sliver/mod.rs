@@ -21,6 +21,7 @@
 // pub mod sliver_offstage;
 // pub mod sliver_opacity;
 // pub mod sliver_overlap_absorber;
+// pub mod sliver_overlap_injector;
 // pub mod sliver_padding;
 // pub mod sliver_persistent_header;
 // pub mod sliver_pinned_persistent_header;
@@ -46,6 +47,7 @@
 // pub use sliver_offstage::RenderSliverOffstage;
 // pub use sliver_opacity::RenderSliverOpacity;
 // pub use sliver_overlap_absorber::{RenderSliverOverlapAbsorber, SliverOverlapAbsorberHandle};
+// pub use sliver_overlap_injector::RenderSliverOverlapInjector;
 // pub use sliver_padding::RenderSliverPadding;
 // pub use sliver_persistent_header::RenderSliverPersistentHeader;
 // pub use sliver_pinned_persistent_header::RenderSliverPinnedPersistentHeader;

@@ -1,4 +1,143 @@
-//! RenderCustomMultiChildLayoutBox - Custom multi-child layout with delegate
+//! RenderCustomMultiChildLayoutBox - Custom multi-child layout with delegate pattern
+//!
+//! Implements Flutter's custom multi-child layout system using a delegate pattern
+//! for full control over child positioning and sizing. Unlike FlowDelegate which
+//! uses transformation matrices, this delegate directly positions children with
+//! offsets. Ideal for complex layouts that don't fit standard containers.
+//!
+//! # Flutter Equivalence
+//!
+//! | FLUI | Flutter |
+//! |------|---------|
+//! | `RenderCustomMultiChildLayoutBox` | `RenderCustomMultiChildLayoutBox` from `package:flutter/src/rendering/custom_layout.dart` |
+//! | `MultiChildLayoutDelegate` | `MultiChildLayoutDelegate` trait |
+//! | `MultiChildLayoutContext` | `MultiChildLayoutContext` class |
+//! | `perform_layout()` | `performLayout()` method |
+//! | `should_relayout()` | `shouldRelayout()` method |
+//! | `layout_child()` | `layoutChild()` method (in context) |
+//! | `child_count()` | `childCount` getter (in context) |
+//! | `SimpleGridDelegate` | Example implementation (not in Flutter) |
+//!
+//! # Layout Protocol
+//!
+//! 1. **Create layout context**
+//!    - Wrap BoxLayoutCtx in MultiChildLayoutContext
+//!    - Provide child IDs array for delegate access
+//!    - Expose layout_child() for delegate
+//!
+//! 2. **Delegate performs layout**
+//!    - Call `delegate.perform_layout(context, constraints)`
+//!    - Delegate layouts each child with custom constraints
+//!    - Delegate calculates child positions (offsets)
+//!    - Delegate returns (container_size, child_offsets)
+//!
+//! 3. **Cache results**
+//!    - Store child offsets for paint phase
+//!    - Constrain returned size to parent constraints
+//!    - Return final container size
+//!
+//! # Paint Protocol
+//!
+//! 1. **Paint children with cached offsets**
+//!    - Iterate children in order
+//!    - Use cached offset from layout phase
+//!    - Paint each child at parent_offset + child_offset
+//!
+//! # Performance
+//!
+//! - **Layout**: O(n) + delegate complexity - single delegate call, delegate controls layout
+//! - **Paint**: O(n) - paint each child once at cached offset
+//! - **Memory**: 32 bytes base + O(n) for cached offsets (16 bytes per child)
+//!
+//! # Use Cases
+//!
+//! - **Custom grid layouts**: Grids with non-uniform cells or custom spacing
+//! - **Masonry layouts**: Pinterest-style variable-height grids
+//! - **Complex responsive**: Layouts that change based on available space
+//! - **Custom positioning**: Absolute positioning with custom logic
+//! - **Dynamic layouts**: Layouts computed at runtime based on data
+//! - **Overlay positioning**: Tooltips, popovers with calculated positions
+//!
+//! # Delegate Pattern Benefits
+//!
+//! - **Full control**: Complete control over child constraints and positions
+//! - **Separation of concerns**: Layout logic separate from render object
+//! - **Reusability**: Same delegate can be used with different instances
+//! - **Testability**: Delegates can be unit tested independently
+//! - **Flexibility**: Easy to create complex layouts without subclassing
+//! - **Optimization**: `should_relayout()` optimizes layout updates
+//!
+//! # Comparison with Related Objects
+//!
+//! - **vs RenderFlow**: Flow uses transforms, this uses direct offsets
+//! - **vs RenderGrid**: Grid has fixed track system, this is fully custom
+//! - **vs RenderTable**: Table has column/row structure, this is arbitrary
+//! - **vs RenderStack**: Stack has simple layering, this has custom positioning
+//!
+//! # Delegate Implementation Pattern
+//!
+//! ```rust,ignore
+//! use flui_rendering::objects::layout::{
+//!     MultiChildLayoutDelegate, MultiChildLayoutContext
+//! };
+//!
+//! #[derive(Debug)]
+//! struct MyCustomDelegate {
+//!     // Configuration fields
+//! }
+//!
+//! impl MultiChildLayoutDelegate for MyCustomDelegate {
+//!     fn perform_layout(
+//!         &mut self,
+//!         context: &mut MultiChildLayoutContext,
+//!         constraints: BoxConstraints,
+//!     ) -> (Size, Vec<Offset>) {
+//!         let mut offsets = Vec::new();
+//!
+//!         // Layout each child with custom logic
+//!         for i in 0..context.child_count() {
+//!             let child_constraints = /* custom constraints */;
+//!             let child_size = context.layout_child(i, child_constraints);
+//!
+//!             // Calculate position based on your logic
+//!             let offset = /* calculate offset */;
+//!             offsets.push(offset);
+//!         }
+//!
+//!         // Return container size and child offsets
+//!         let size = /* calculate container size */;
+//!         (size, offsets)
+//!     }
+//!
+//!     fn should_relayout(&self, old: &dyn Any) -> bool {
+//!         // Return true if configuration changed
+//!         true
+//!     }
+//!
+//!     fn as_any(&self) -> &dyn Any { self }
+//! }
+//! ```
+//!
+//! # Examples
+//!
+//! ```rust,ignore
+//! use flui_rendering::objects::layout::{
+//!     RenderCustomMultiChildLayoutBox, SimpleGridDelegate
+//! };
+//!
+//! // Simple grid with 3 columns and 10px spacing
+//! let delegate = SimpleGridDelegate::new(3, 10.0);
+//! let layout = RenderCustomMultiChildLayoutBox::new(Box::new(delegate));
+//!
+//! // Custom masonry layout
+//! struct MasonryDelegate {
+//!     column_count: usize,
+//!     column_heights: Vec<f32>,
+//! }
+//!
+//! // The delegate would track column heights and place each item
+//! // in the shortest column for Pinterest-style masonry effect
+//! ```
 
 use crate::core::{BoxLayoutCtx, BoxPaintCtx, RenderBox, Variable};
 use crate::{RenderObject, RenderResult};
@@ -168,25 +307,97 @@ impl MultiChildLayoutDelegate for SimpleGridDelegate {
     }
 }
 
-/// RenderObject for custom multi-child layout with delegate
+/// RenderObject for custom multi-child layout with delegate pattern.
 ///
-/// Provides full control over child layout and positioning through a delegate.
-/// Unlike RenderFlow which uses transforms, this uses direct positioning.
+/// Delegates all layout logic to a MultiChildLayoutDelegate trait, providing full
+/// control over child constraints, sizing, and positioning. The delegate computes
+/// child offsets directly (unlike FlowDelegate which uses transforms) and returns
+/// both container size and child positions.
+///
+/// # Arity
+///
+/// `Variable` - Can have any number of children (0+). Delegate controls how
+/// children are laid out and positioned.
+///
+/// # Protocol
+///
+/// Box protocol - Uses `BoxConstraints` and returns `Size`.
+///
+/// # Pattern
+///
+/// **Delegated Multi-Child Layout** - Delegates layout logic to trait, delegate
+/// provides full control over child constraints and positioning, direct offset
+/// positioning (not transforms), sizes to delegate-computed size.
 ///
 /// # Use Cases
 ///
-/// - Custom grid layouts
-/// - Masonry/Pinterest-style layouts
-/// - Complex responsive layouts
-/// - Any layout that doesn't fit standard containers
+/// - **Custom grids**: Non-uniform grids or grids with custom spacing rules
+/// - **Masonry layouts**: Pinterest-style variable-height column layouts
+/// - **Complex responsive**: Layouts that reorganize based on available space
+/// - **Absolute positioning**: Custom absolute positioning with computed logic
+/// - **Dynamic layouts**: Layouts computed at runtime based on data
+/// - **Overlay positioning**: Tooltips, popovers with calculated positions
+///
+/// # Flutter Compliance
+///
+/// Matches Flutter's RenderCustomMultiChildLayoutBox behavior:
+/// - Delegate pattern for custom layout logic
+/// - MultiChildLayoutContext provides layout_child() access
+/// - Delegate returns (Size, Vec<Offset>) from perform_layout()
+/// - should_relayout() optimization for layout updates
+/// - Direct offset positioning (not transformation matrices)
 ///
 /// # Example
 ///
 /// ```rust,ignore
-/// use flui_rendering::objects::layout::{RenderCustomMultiChildLayoutBox, SimpleGridDelegate};
+/// use flui_rendering::objects::layout::{
+///     RenderCustomMultiChildLayoutBox, SimpleGridDelegate
+/// };
 ///
-/// let delegate = SimpleGridDelegate::new(3, 10.0); // 3 columns, 10px spacing
+/// // Simple 3-column grid with 10px spacing
+/// let delegate = SimpleGridDelegate::new(3, 10.0);
 /// let layout = RenderCustomMultiChildLayoutBox::new(Box::new(delegate));
+///
+/// // Custom delegate for masonry layout
+/// struct MasonryDelegate {
+///     column_count: usize,
+///     spacing: f32,
+///     column_heights: Vec<f32>,
+/// }
+///
+/// impl MultiChildLayoutDelegate for MasonryDelegate {
+///     fn perform_layout(
+///         &mut self,
+///         context: &mut MultiChildLayoutContext,
+///         constraints: BoxConstraints,
+///     ) -> (Size, Vec<Offset>) {
+///         // Reset column heights
+///         self.column_heights = vec![0.0; self.column_count];
+///         let mut offsets = Vec::new();
+///
+///         // Layout each child in shortest column
+///         for i in 0..context.child_count() {
+///             // Find shortest column
+///             let col = self.shortest_column();
+///
+///             // Layout child
+///             let child_size = context.layout_child(i, /* constraints */);
+///
+///             // Position in column
+///             let offset = Offset::new(
+///                 col as f32 * (width + self.spacing),
+///                 self.column_heights[col]
+///             );
+///             offsets.push(offset);
+///
+///             // Update column height
+///             self.column_heights[col] += child_size.height + self.spacing;
+///         }
+///
+///         (container_size, offsets)
+///     }
+///     // ... should_relayout, as_any
+/// }
 /// ```
 #[derive(Debug)]
 pub struct RenderCustomMultiChildLayoutBox {
