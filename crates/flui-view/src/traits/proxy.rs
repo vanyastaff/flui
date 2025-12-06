@@ -50,8 +50,16 @@ use crate::{BuildContext, IntoView};
 
 /// `ProxyView` - Views that wrap a single child.
 ///
-/// Similar to `RenderProxyBox` in render system. Delegates layout to child
+/// Similar to `RenderProxyBox` in Flutter's render system. Delegates layout to child
 /// while adding behavior, metadata, or event handling.
+///
+/// # Performance Tips
+///
+/// - `ProxyView` is very lightweight - use it freely for single-child wrappers
+/// - Prefer `ProxyView` over `StatefulView` when you don't need state
+/// - The framework optimizes proxy views to minimize overhead
+/// - Event handling is called on every event - keep it fast
+/// - Consider caching compiled regexes or other expensive resources in the view struct
 ///
 /// # Purpose
 ///

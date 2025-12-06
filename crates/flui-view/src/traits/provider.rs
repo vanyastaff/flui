@@ -50,8 +50,16 @@ use crate::{BuildContext, IntoView};
 
 /// `ProviderView` - Views that provide data to descendants.
 ///
-/// Similar to Flutter's `InheritedWidget`. Provides typed data that
+/// This is equivalent to Flutter's `InheritedWidget`. Provides typed data that
 /// descendant widgets can access via `ctx.depend_on<T>()`.
+///
+/// # Performance Tips
+///
+/// - Override `should_notify()` to avoid unnecessary rebuilds of dependents
+/// - Use `Arc<T>` for provided values to avoid clones (already done in trait design)
+/// - Keep provided types small - they're cloned for each dependent
+/// - Consider fine-grained providers (multiple small providers) vs one large provider
+/// - Use structural comparison in `should_notify()` for better performance
 ///
 /// # Architecture
 ///
