@@ -1,4 +1,76 @@
 //! RenderPhysicalModel - Material Design elevation with shadow
+//!
+//! Implements Flutter's physical model rendering with elevation-based shadows
+//! for Material Design.
+//!
+//! # Flutter Equivalence
+//!
+//! | FLUI | Flutter |
+//! |------|---------|
+//! | `RenderPhysicalModel` | `RenderPhysicalModel` from `package:flutter/src/rendering/proxy_box.dart` |
+//! | `PhysicalShape` | `BoxShape` enum (Rectangle, RoundedRectangle, Circle) |
+//! | `elevation` | `elevation` property |
+//! | `shadow_color` | `shadowColor` property |
+//! | `border_radius` | `borderRadius` property (for RoundedRectangle) |
+//!
+//! # Layout Protocol
+//!
+//! 1. **If child exists**
+//!    - Layout child with same constraints
+//!    - Use child size as container size
+//!
+//! 2. **If no child**
+//!    - Use max constraints as size (for decorative shapes)
+//!
+//! 3. **Cache size**
+//!    - Store size for painting shape and shadow
+//!
+//! # Paint Protocol
+//!
+//! 1. **Paint shadow** (if elevation > 0)
+//!    - Create path matching shape (rect, rounded rect, circle)
+//!    - Use Canvas::draw_shadow() with elevation value
+//!    - Shadow size and softness based on elevation
+//!
+//! 2. **Paint background shape**
+//!    - Rectangle: Canvas::draw_rect()
+//!    - RoundedRectangle: Canvas::draw_rrect() with border_radius
+//!    - Circle: Canvas::draw_circle() at center
+//!
+//! 3. **Paint child** (if present)
+//!    - Child painted on top of background
+//!
+//! # Performance
+//!
+//! - **Layout**: O(1) - pass-through to child or use max constraints
+//! - **Paint**: O(1) - shadow + shape + child (GPU-accelerated)
+//! - **Memory**: ~40 bytes (PhysicalShape + elevation + colors + cached Size)
+//!
+//! # Use Cases
+//!
+//! - **Material Design cards**: Elevated surfaces with shadows
+//! - **Floating action buttons**: Circular elevated buttons
+//! - **App bars**: Elevated toolbars and headers
+//! - **Dialogs**: Elevated modal surfaces
+//! - **Snackbars**: Elevated notification bars
+//! - **Bottom sheets**: Elevated panels from bottom
+//!
+//! # Examples
+//!
+//! ```rust,ignore
+//! use flui_rendering::{RenderPhysicalModel, PhysicalShape};
+//! use flui_types::Color;
+//!
+//! // Material Design card (elevation 2dp)
+//! let card = RenderPhysicalModel::rounded_rectangle(2.0, 4.0, Color::WHITE);
+//!
+//! // Floating action button (elevation 6dp)
+//! let fab = RenderPhysicalModel::circle(6.0, Color::rgb(33, 150, 243));
+//!
+//! // Elevated surface with custom shadow color
+//! let surface = RenderPhysicalModel::rectangle(4.0, Color::WHITE)
+//!     .with_shadow_color(Color::rgba(0, 0, 0, 100));
+//! ```
 
 use crate::core::{BoxLayoutCtx, BoxPaintCtx, Optional, RenderBox};
 use crate::{RenderObject, RenderResult};
@@ -16,10 +88,49 @@ pub enum PhysicalShape {
     Circle,
 }
 
-/// RenderObject that renders Material Design elevation with shadow
+/// RenderObject that renders Material Design elevation with shadow.
 ///
 /// Creates a physical layer effect with shadow based on elevation.
 /// Higher elevation values create larger, softer shadows.
+///
+/// # Arity
+///
+/// `Optional` - Can have 0 or 1 child.
+///
+/// # Protocol
+///
+/// Box protocol - Uses `BoxConstraints` and returns `Size`.
+///
+/// # Use Cases
+///
+/// - **Material Design surfaces**: Cards, app bars, FABs
+/// - **Elevation effects**: Visual hierarchy through shadows
+/// - **Layering**: Stack surfaces at different elevations
+/// - **Shape containers**: Rounded rectangles, circles with shadows
+/// - **Decorative shapes**: Shadow effects without child content
+///
+/// # Flutter Compliance
+///
+/// Matches Flutter's RenderPhysicalModel behavior:
+/// - Supports Rectangle, RoundedRectangle, Circle shapes
+/// - Elevation-based shadow rendering
+/// - Configurable shadow color
+/// - Border radius for rounded shapes
+/// - Handles shape-only rendering (no child)
+/// - Uses Canvas shadow, rect, rrect, circle APIs
+///
+/// # Material Design Elevations
+///
+/// Standard Material Design elevation values:
+/// - 0dp: No elevation (flat surface)
+/// - 1dp: Card (resting)
+/// - 2dp: Raised button (resting)
+/// - 4dp: App bar
+/// - 6dp: FAB (resting)
+/// - 8dp: Menu, Card (picked up)
+/// - 12dp: FAB (pressed)
+/// - 16dp: Nav drawer, Modal bottom sheet
+/// - 24dp: Dialog, Picker
 ///
 /// # Without Child
 ///
@@ -31,7 +142,7 @@ pub enum PhysicalShape {
 /// use flui_rendering::RenderPhysicalModel;
 /// use flui_types::Color;
 ///
-/// // Create elevated card with rounded corners
+/// // Create elevated card with rounded corners (4dp elevation)
 /// let card = RenderPhysicalModel::rounded_rectangle(4.0, 8.0, Color::WHITE);
 /// ```
 #[derive(Debug)]
