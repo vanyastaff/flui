@@ -1,4 +1,167 @@
-//! RenderViewport - Container for sliver content with scrolling
+//! RenderViewport - Scrollable viewport container for sliver children
+//!
+//! Core container that manages scrolling slivers (lists, grids, custom scrollables).
+//! Converts scroll offset into SliverConstraints for children, manages layout of multiple
+//! slivers in sequence, handles viewport clipping, and coordinates cache extent for smooth
+//! scrolling. Essential building block for CustomScrollView, ListView, GridView.
+//!
+//! # Flutter Equivalence
+//!
+//! | FLUI | Flutter |
+//! |------|---------|
+//! | `RenderViewport` | `RenderViewport` from `package:flutter/src/rendering/viewport.dart` |
+//! | `scroll_offset` | Current scroll position |
+//! | `viewport_main_axis_extent` | Viewport size (height for vertical) |
+//! | `cache_extent` | Buffer for prebuilding off-screen children |
+//! | `calculate_sliver_constraints()` | Converts scroll offset to SliverConstraints |
+//! | `layout_slivers()` | Sequential sliver layout with remaining extent |
+//!
+//! # Layout Protocol (Intended)
+//!
+//! 1. **Calculate viewport size from box constraints**
+//!    - Extract width and height from BoxConstraints
+//!    - Determine main/cross axis based on axis_direction
+//!
+//! 2. **Layout slivers sequentially** (NOT IMPLEMENTED)
+//!    - Start with remaining_paint_extent = viewport_main_axis_extent
+//!    - For each child:
+//!      - Create SliverConstraints with current scroll_offset and remaining extent
+//!      - Layout sliver child
+//!      - Get SliverGeometry from child
+//!      - Reduce remaining_paint_extent by paint_extent
+//!      - Adjust scroll_offset for next child
+//!    - Stop when remaining_paint_extent <= 0 (viewport full)
+//!
+//! 3. **Return viewport size**
+//!    - Width and height from box constraints
+//!
+//! # Paint Protocol (Intended)
+//!
+//! 1. **Apply clipping** (NOT IMPLEMENTED)
+//!    - Clip to viewport bounds based on clip_behavior
+//!
+//! 2. **Paint sliver children** (NOT IMPLEMENTED)
+//!    - Paint each sliver at calculated offset
+//!    - Only visible slivers (paint_extent > 0)
+//!
+//! # Performance
+//!
+//! - **Layout**: O(s) where s = visible slivers - stops when viewport full
+//! - **Paint**: O(s) - only paints visible slivers
+//! - **Memory**: 32 bytes (fields) + Vec<SliverGeometry> for child geometries
+//! - **Scroll updates**: O(1) to update scroll_offset, then O(s) relayout
+//!
+//! # Use Cases
+//!
+//! - **CustomScrollView**: Generic scrollable with mixed sliver types
+//! - **ListView**: Scrollable list of items
+//! - **GridView**: Scrollable 2D grid
+//! - **PageView**: Swipeable pages
+//! - **NestedScrollView**: Nested scrolling with coordinated headers
+//!
+//! # Scroll Offset Behavior
+//!
+//! ```text
+//! scroll_offset = 0:      [VIEWPORT] ← Top of content visible
+//!                         [Content...]
+//!
+//! scroll_offset = 100:    [Content...] ← Scrolled down 100px
+//!                         [VIEWPORT]
+//!                         [Content...]
+//!
+//! scroll_offset = 500:    [Content...]
+//!                         [Content...]
+//!                         [VIEWPORT] ← Far down in content
+//! ```
+//!
+//! # Sequential Sliver Layout
+//!
+//! ```text
+//! Viewport height: 600px, scroll_offset: 0
+//!
+//! Sliver #1 (SliverAppBar):
+//!   SliverConstraints: { scroll_offset: 0, remaining: 600 }
+//!   SliverGeometry: { paint_extent: 100 }
+//!   → remaining = 500
+//!
+//! Sliver #2 (SliverList):
+//!   SliverConstraints: { scroll_offset: 0, remaining: 500 }
+//!   SliverGeometry: { paint_extent: 400 }
+//!   → remaining = 100
+//!
+//! Sliver #3 (SliverGrid):
+//!   SliverConstraints: { scroll_offset: 0, remaining: 100 }
+//!   SliverGeometry: { paint_extent: 100 }
+//!   → remaining = 0 (STOP - viewport full)
+//! ```
+//!
+//! # ⚠️ CRITICAL IMPLEMENTATION ISSUES
+//!
+//! This implementation has **MAJOR INCOMPLETE FUNCTIONALITY**:
+//!
+//! 1. **❌ Sliver children NEVER laid out** (line 151-161)
+//!    - layout_slivers() creates PLACEHOLDER geometry only (line 163-178)
+//!    - Comments say "In real implementation" (line 157-161)
+//!    - No actual child layout calls
+//!
+//! 2. **❌ layout() doesn't call layout_slivers** (line 204-227)
+//!    - TODO comment on line 223-224
+//!    - layout_slivers() method exists but never called!
+//!    - Children never laid out
+//!
+//! 3. **❌ Paint NOT IMPLEMENTED** (line 229-237)
+//!    - Returns empty Canvas
+//!    - TODO comments for clipping and child painting
+//!    - Slivers never painted
+//!
+//! 4. **❌ No clipping applied** (line 233 TODO)
+//!    - clip_behavior field exists but unused
+//!    - Content can overflow viewport bounds
+//!
+//! 5. **✅ calculate_sliver_constraints() CORRECT** (line 119-138)
+//!    - Properly converts scroll offset to SliverConstraints
+//!    - Correct cross-axis direction logic
+//!
+//! **This RenderObject is BROKEN - core viewport functionality missing!**
+//!
+//! # Comparison with Related Objects
+//!
+//! - **vs RenderBox**: Viewport IS a box containing slivers, Box contains boxes
+//! - **vs RenderSliverToBoxAdapter**: Adapter wraps box IN sliver, Viewport contains slivers
+//! - **vs RenderScrollView**: ScrollView is higher-level widget, Viewport is render object
+//! - **vs RenderSliverList**: List IS a sliver, Viewport CONTAINS slivers
+//!
+//! # Examples
+//!
+//! ```rust,ignore
+//! use flui_rendering::RenderViewport;
+//! use flui_types::layout::AxisDirection;
+//!
+//! // Vertical scrolling viewport (like ListView)
+//! let viewport = RenderViewport::new(
+//!     AxisDirection::TopToBottom,
+//!     600.0,  // viewport height
+//!     100.0,  // scrolled down 100px
+//! );
+//! // WARNING: children never laid out or painted!
+//!
+//! // Horizontal scrolling (like PageView)
+//! let horizontal = RenderViewport::new(
+//!     AxisDirection::LeftToRight,
+//!     800.0,  // viewport width
+//!     0.0,    // at start
+//! );
+//! // WARNING: stub implementation!
+//!
+//! // With custom cache extent
+//! let mut viewport = RenderViewport::new(
+//!     AxisDirection::TopToBottom,
+//!     600.0,
+//!     0.0,
+//! );
+//! viewport.set_cache_extent(500.0); // 500px buffer
+//! // WARNING: cache extent calculated but children never built!
+//! ```
 
 use flui_core::element::ElementTree;
 // TODO: Migrate to Render<A>
@@ -8,19 +171,63 @@ use flui_types::prelude::*;
 use flui_types::layout::{Axis, AxisDirection};
 use flui_types::{SliverConstraints, SliverGeometry};
 
-/// RenderObject that provides a viewport for sliver content
+/// RenderObject for scrollable viewport containing sliver children.
 ///
-/// A viewport is the visible portion of scrollable content. It manages:
-/// - Converting scroll offset into sliver constraints
-/// - Laying out sliver children with appropriate constraints
-/// - Clipping content to viewport bounds
-/// - Cache extent for smooth scrolling
+/// Core container for sliver-based scrolling. Converts scroll offset into SliverConstraints,
+/// layouts slivers sequentially with remaining extent tracking, manages viewport clipping,
+/// and coordinates cache extent for smooth scrolling. Essential for CustomScrollView,
+/// ListView, GridView, PageView.
+///
+/// # Arity
+///
+/// `RuntimeArity::Variable` - Can have multiple sliver children (0+).
+///
+/// # Protocol
+///
+/// Box protocol - Uses `BoxConstraints` and returns `Size`.
+/// **Children use sliver protocol** - Layouts children with `SliverConstraints`.
+///
+/// # Pattern
+///
+/// **Scroll-Aware Multi-Sliver Container** - Protocol bridge (box-to-sliver), sequential
+/// layout with remaining extent tracking, scroll offset to constraints conversion, viewport
+/// clipping, cache extent coordination for prebuilding off-screen content.
+///
+/// # Use Cases
+///
+/// - **CustomScrollView**: Mixed sliver types (lists, grids, headers, etc.)
+/// - **ListView**: Scrollable vertical/horizontal list
+/// - **GridView**: Scrollable 2D grid layout
+/// - **PageView**: Swipeable page navigation
+/// - **NestedScrollView**: Coordinated nested scrolling
+///
+/// # Flutter Compliance
+///
+/// **BROKEN IMPLEMENTATION**:
+/// - ❌ Sliver children never laid out (placeholder geometry only)
+/// - ❌ layout() doesn't call layout_slivers (TODO comment)
+/// - ❌ Paint not implemented (returns empty Canvas)
+/// - ❌ Clipping not applied (clip_behavior unused)
+/// - ✅ calculate_sliver_constraints() correct
+/// - ⚠️ Stub implementation - only constraint calculation works
+///
+/// # Implementation Status
+///
+/// | Feature | Status | Notes |
+/// |---------|--------|-------|
+/// | Constraint calculation | ✅ Complete | Correctly converts scroll to SliverConstraints |
+/// | Sequential layout | ❌ Missing | layout_slivers() exists but creates placeholders |
+/// | Layout integration | ❌ Missing | layout() doesn't call layout_slivers (TODO) |
+/// | Paint | ❌ Missing | Returns empty Canvas with TODO |
+/// | Clipping | ❌ Missing | clip_behavior field exists but unused |
+/// | Cache extent | ⚠️ Partial | Calculated but children not prebuilt |
+/// | Scroll offset | ✅ Works | Can update, but no relayout happens |
 ///
 /// # Coordinate System
 ///
-/// - scroll_offset: 0.0 means top of content visible
-/// - Positive scroll_offset scrolls content upward (downward scroll gesture)
-/// - viewport_main_axis_extent: Height (vertical) or width (horizontal) of viewport
+/// - `scroll_offset = 0` means top/left of content visible
+/// - Positive scroll_offset scrolls content upward/leftward
+/// - `viewport_main_axis_extent` is viewport size (height for vertical, width for horizontal)
 ///
 /// # Example
 ///
@@ -34,6 +241,7 @@ use flui_types::{SliverConstraints, SliverGeometry};
 ///     600.0,  // viewport height
 ///     100.0,  // scroll offset
 /// );
+/// // WARNING: children never laid out or painted!
 /// ```
 #[derive(Debug)]
 pub struct RenderViewport {
