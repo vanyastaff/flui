@@ -265,14 +265,18 @@ impl RenderObject for RenderPositioned {}
 
 impl RenderBox<Single> for RenderPositioned {
     fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Single>) -> RenderResult<Size> {
-        let child_id = *ctx.children.single();
+        // Single arity: use ctx.single_child() which returns ElementId directly
+        let child_id = ctx.single_child();
         // Pass-through: just layout child with same constraints
+        // The parent RenderStack will read our metadata to position us
         Ok(ctx.layout_child(child_id, ctx.constraints)?)
     }
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Single>) {
-        let child_id = *ctx.children.single();
+        // Single arity: use ctx.single_child() which returns ElementId directly
+        let child_id = ctx.single_child();
         // Pass-through: just paint child at same offset
+        // The parent RenderStack handles the actual positioning
         ctx.paint_child(child_id, ctx.offset);
     }
 }

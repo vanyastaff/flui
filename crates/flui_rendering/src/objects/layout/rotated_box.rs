@@ -97,7 +97,7 @@ use flui_types::{geometry::QuarterTurns, Offset, Size};
 ///
 /// Supports rotation by multiples of 90 degrees with proper layout constraint
 /// swapping for odd rotations. Unlike arbitrary transforms, quarter-turn rotations
-/// affect both layout and painting.
+/// affect both layout AND painting with proper constraint handling.
 ///
 /// # Arity
 ///
@@ -107,14 +107,20 @@ use flui_types::{geometry::QuarterTurns, Offset, Size};
 ///
 /// Box protocol - Uses `BoxConstraints` and returns `Size`.
 ///
+/// # Pattern
+///
+/// **Transform with Layout Integration** - Rotates using canvas transform,
+/// but also swaps layout constraints for odd quarter turns (90°, 270°).
+///
 /// # Use Cases
 ///
-/// - **Orientation changes**: Rotate UI for portrait/landscape
-/// - **Vertical text**: Rotate text 90° for vertical labels
-/// - **Icon rotation**: Rotate arrows, triangles by 90° increments
-/// - **Layout sections**: Rotate entire sections of UI
-/// - **Responsive rotation**: Different rotations per screen size
-/// - **Game elements**: Rotate sprites by 90° increments
+/// - **Orientation changes**: Rotate UI for portrait/landscape transitions
+/// - **Vertical text**: Rotate text 90° for vertical labels and headers
+/// - **Icon rotation**: Rotate arrows, triangles, indicators by 90° increments
+/// - **Layout sections**: Rotate entire UI sections for different layouts
+/// - **Responsive rotation**: Different rotations for different screen sizes
+/// - **Game elements**: Rotate sprites and tiles by 90° increments
+/// - **Media rotation**: Rotate images and videos by quarter turns
 ///
 /// # Flutter Compliance
 ///
@@ -123,7 +129,15 @@ use flui_types::{geometry::QuarterTurns, Offset, Size};
 /// - Odd turns (1, 3): Swaps width ↔ height constraints AND dimensions
 /// - Even turns (0, 2, 4): No constraint swapping
 /// - Affects both layout (constraint swap) and painting (rotation)
-/// - Uses canvas rotation for painting
+/// - Uses canvas rotation for painting (saves/restores state)
+/// - Extends RenderBox base class
+///
+/// # Comparison with Related Objects
+///
+/// - **vs RenderTransform**: RotatedBox affects layout + paint, Transform only affects paint
+/// - **vs RenderFractionalTranslation**: FractionalTranslation translates, RotatedBox rotates
+/// - **vs RenderShiftedBox**: ShiftedBox offsets, RotatedBox rotates with constraint swap
+/// - **vs arbitrary rotation**: RotatedBox limited to 90° but integrates with layout
 ///
 /// # Constraint Swapping Example
 ///
