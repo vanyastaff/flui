@@ -1,24 +1,169 @@
-//! RenderIndexedStack - shows only one child by index
+//! RenderIndexedStack - Selective display container for index-based view switching
+//!
+//! Implements Flutter's IndexedStack that displays only one child at a time
+//! based on an index. All children are laid out (to maintain state) but only
+//! the selected child is painted. Ideal for tab views, page views, and view
+//! switching where inactive views must preserve state.
+//!
+//! # Flutter Equivalence
+//!
+//! | FLUI | Flutter |
+//! |------|---------|
+//! | `RenderIndexedStack` | `RenderIndexedStack` from `package:flutter/src/rendering/stack.dart` |
+//! | `index` | `index` property (which child to show) |
+//! | `alignment` | `alignment` property (how to align selected child) |
+//! | `set_index()` | `index = value` setter |
+//! | `set_alignment()` | `alignment = value` setter |
+//!
+//! # Layout Protocol
+//!
+//! 1. **Layout ALL children**
+//!    - Pass parent constraints to each child
+//!    - Layout every child (not just selected one)
+//!    - This maintains state for all children
+//!    - Store all child sizes
+//!
+//! 2. **Calculate container size**
+//!    - Size = max of all child sizes (width, height)
+//!    - Clamp to parent constraints
+//!    - Even non-visible children affect size
+//!
+//! # Paint Protocol
+//!
+//! 1. **Paint ONLY selected child**
+//!    - Check if index is valid
+//!    - Get child at index
+//!    - Calculate aligned offset for selected child
+//!    - Paint only that child (others are invisible)
+//!
+//! 2. **If index is None**
+//!    - Paint nothing (all children invisible)
+//!    - Container still has size from layout
+//!
+//! # Performance
+//!
+//! - **Layout**: O(n) - layouts ALL children regardless of index
+//! - **Paint**: O(1) - paints only selected child
+//! - **Memory**: 40 bytes base + O(n) for cached sizes (8 bytes per child)
+//!
+//! # Use Cases
+//!
+//! - **Tab views**: Switch between tabs while preserving state
+//! - **Page views**: Navigate between pages with state retention
+//! - **View switching**: Toggle between views (e.g., list/grid)
+//! - **Wizard flows**: Multi-step forms with back/forward navigation
+//! - **Settings panels**: Different setting categories
+//! - **Dashboard views**: Switch between dashboard sections
+//! - **Game UI**: Switch between menu/play/settings screens
+//!
+//! # Layout vs Paint Difference
+//!
+//! **Key behavior**: All children are LAID OUT, but only one is PAINTED.
+//!
+//! ```text
+//! Layout phase (all children):
+//!   Child 0: Layout → Size 100×50
+//!   Child 1: Layout → Size 150×75  ← Selected (index = 1)
+//!   Child 2: Layout → Size 120×60
+//!   Container size: 150×75 (max of all)
+//!
+//! Paint phase (only selected):
+//!   Child 0: NOT painted
+//!   Child 1: Painted ← Only this one visible
+//!   Child 2: NOT painted
+//! ```
+//!
+//! # Why Layout All Children?
+//!
+//! - **State preservation**: Children maintain their state even when not visible
+//! - **Smooth transitions**: Switching is instant (no re-layout needed)
+//! - **Consistent sizing**: Container size doesn't change when switching
+//! - **Flutter compliance**: Matches Flutter's IndexedStack behavior
+//!
+//! # Comparison with Related Objects
+//!
+//! - **vs RenderStack**: Stack shows ALL children, IndexedStack shows ONE
+//! - **vs Conditional rendering**: IndexedStack preserves all child state
+//! - **vs RenderOpacity(0)**: IndexedStack doesn't paint at all (more efficient)
+//! - **vs RenderOffstage**: Offstage can optionally skip layout, IndexedStack always layouts
+//!
+//! # Example
+//!
+//! ```rust,ignore
+//! use flui_rendering::RenderIndexedStack;
+//! use flui_types::Alignment;
+//!
+//! // Show first child (index 0)
+//! let mut stack = RenderIndexedStack::new(Some(0));
+//!
+//! // Switch to second child
+//! stack.set_index(Some(1));
+//!
+//! // Hide all children
+//! stack.set_index(None);
+//!
+//! // Center the selected child
+//! let stack = RenderIndexedStack::with_alignment(Some(0), Alignment::CENTER);
+//! ```
 
 use crate::{RenderObject, RenderResult};
 
 use crate::core::{BoxLayoutCtx, BoxPaintCtx, ChildrenAccess, RenderBox, Variable};
 use flui_types::{Alignment, Size};
 
-/// RenderObject that shows only one child from a list
+/// RenderObject that displays only one child from multiple children by index.
 ///
-/// This is like a Stack, but only one child is visible at a time,
-/// determined by the index. All children are laid out, but only
-/// the selected one is painted.
+/// Lays out ALL children (to preserve state) but paints only the child at
+/// the specified index. Ideal for tab views and page navigation where
+/// inactive views must maintain state. Container size is max of all children.
 ///
-/// Useful for tab views, page views, etc.
+/// # Arity
+///
+/// `Variable` - Can have any number of children (0+).
+///
+/// # Protocol
+///
+/// Box protocol - Uses `BoxConstraints` and returns `Size`.
+///
+/// # Pattern
+///
+/// **Selective Display Container** - Layouts all children for state preservation,
+/// paints only selected child, sizes to largest child, applies alignment to
+/// selected child.
+///
+/// # Use Cases
+///
+/// - **Tab views**: Switch between tabs while preserving each tab's state
+/// - **Page views**: Navigate between pages with full state retention
+/// - **View switching**: Toggle between different views (list/grid/table)
+/// - **Wizard flows**: Multi-step forms with back/forward navigation
+/// - **Settings panels**: Switch between setting categories
+/// - **Dashboard**: Switch between dashboard sections
+/// - **Game UI**: Menu/play/settings screen switching
+///
+/// # Flutter Compliance
+///
+/// Matches Flutter's RenderIndexedStack behavior:
+/// - Layouts ALL children regardless of index (state preservation)
+/// - Paints only child at specified index
+/// - Size is max of all children (not just visible child)
+/// - index = None shows nothing
+/// - Applies alignment to selected child
 ///
 /// # Example
 ///
 /// ```rust,ignore
-/// use flui_rendering::objects::layout::RenderIndexedStack;
+/// use flui_rendering::RenderIndexedStack;
+/// use flui_types::Alignment;
 ///
-/// let mut indexed_stack = RenderIndexedStack::new(Some(0));
+/// // Tab view showing first tab
+/// let mut tabs = RenderIndexedStack::new(Some(0));
+///
+/// // Switch to second tab (first tab retains state)
+/// tabs.set_index(Some(1));
+///
+/// // Centered child
+/// let centered = RenderIndexedStack::with_alignment(Some(0), Alignment::CENTER);
 /// ```
 #[derive(Debug)]
 pub struct RenderIndexedStack {

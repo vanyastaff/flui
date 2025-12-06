@@ -1,57 +1,135 @@
-//! RenderFlex - flex layout container (Row/Column)
+//! RenderFlex - Sequential layout container (Row/Column)
 //!
-//! Implements Flutter's flex layout algorithm for arranging children along
-//! a main axis (horizontal for Row, vertical for Column).
+//! Implements Flutter's flex layout algorithm for arranging children sequentially
+//! along a main axis (horizontal for Row, vertical for Column) with alignment
+//! control on both axes. Supports MainAxisAlignment for spacing distribution and
+//! CrossAxisAlignment for perpendicular positioning.
 //!
 //! # Flutter Equivalence
 //!
 //! | FLUI | Flutter |
 //! |------|---------|
 //! | `RenderFlex` | `RenderFlex` from `package:flutter/src/rendering/flex.dart` |
-//! | `direction` | `direction` property |
+//! | `direction` | `direction` property (Axis enum) |
 //! | `main_axis_alignment` | `mainAxisAlignment` property |
 //! | `cross_axis_alignment` | `crossAxisAlignment` property |
-//! | `main_axis_size` | `mainAxisSize` property |
-//! | `text_baseline` | `textBaseline` property |
+//! | `main_axis_size` | `mainAxisSize` property (min vs max) |
+//! | `text_baseline` | `textBaseline` property (for baseline alignment) |
+//! | `with_direction()` | `direction = value` setter |
+//! | `with_main_axis_alignment()` | `mainAxisAlignment = value` setter |
+//! | `with_cross_axis_alignment()` | `crossAxisAlignment = value` setter |
+//! | `with_main_axis_size()` | `mainAxisSize = value` setter |
+//! | `with_text_baseline()` | `textBaseline = value` setter |
+//! | `row()` | Creates Row configuration (Axis.horizontal) |
+//! | `column()` | Creates Column configuration (Axis.vertical) |
 //!
 //! # Layout Protocol
 //!
 //! 1. **Determine cross-axis constraints**
-//!    - If `CrossAxisAlignment::Stretch`: use parent's min/max cross size
-//!    - Otherwise: use 0 to parent's max cross size
+//!    - If `CrossAxisAlignment::Stretch`: tight to parent (min = max = parent cross size)
+//!    - Otherwise: loose cross (0 to parent's max cross size)
 //!
-//! 2. **Layout non-flexible children**
-//!    - Each gets unbounded main axis (0 to max)
-//!    - Respects cross-axis constraints from step 1
+//! 2. **Layout all non-flexible children**
+//!    - Each child gets:
+//!      - Main axis: 0 to parent's max (unbounded in main direction)
+//!      - Cross axis: constraints from step 1
+//!    - TODO: Flexible/Expanded children via FlexItemMetadata
+//!    - Track total main size and max cross size
 //!
-//! 3. **Calculate main axis size**
-//!    - Sum child sizes on main axis
-//!    - `MainAxisSize::Min`: use sum (respecting parent min)
-//!    - `MainAxisSize::Max`: use parent's max constraint
+//! 3. **Calculate flex container size**
+//!    - Main axis size:
+//!      - `MainAxisSize::Min`: sum of child sizes (clamped to parent constraints)
+//!      - `MainAxisSize::Max`: parent's max constraint
+//!    - Cross axis size: max child cross size (clamped to parent constraints)
 //!
 //! 4. **Apply main axis alignment**
-//!    - Calculate spacing between children
-//!    - `Start/End/Center`: simple offset calculation
-//!    - `SpaceBetween/Around/Evenly`: distribute free space
+//!    - Calculate free space: container_main_size - total_child_size
+//!    - Distribute space based on MainAxisAlignment:
+//!      - `Start`: leading_space = 0, between_space = 0
+//!      - `End`: leading_space = free_space, between_space = 0
+//!      - `Center`: leading_space = free_space / 2, between_space = 0
+//!      - `SpaceBetween`: leading = 0, between = free / (n - 1)
+//!      - `SpaceAround`: leading = free / (2n), between = free / n
+//!      - `SpaceEvenly`: leading = free / (n + 1), between = free / (n + 1)
 //!
 //! 5. **Apply cross axis alignment per child**
-//!    - `Start/End/Center`: offset within available space
-//!    - `Stretch`: child already sized to fill
-//!    - `Baseline`: TODO - align by text baseline
+//!    - Calculate cross offset for each child:
+//!      - `Start`: offset = 0
+//!      - `End`: offset = container_cross_size - child_cross_size
+//!      - `Center`: offset = (container_cross_size - child_cross_size) / 2
+//!      - `Stretch`: offset = 0 (child already stretched in step 1)
+//!      - `Baseline`: offset = max_baseline - child_baseline
+//!    - Cache offsets for paint phase
+//!
+//! # Paint Protocol
+//!
+//! 1. **Paint children in order**
+//!    - Use cached offsets from layout phase
+//!    - Paint each child at parent offset + child offset
+//!    - Children painted sequentially (no z-order overlap like Stack)
 //!
 //! # Performance
 //!
-//! - **Layout**: O(n) - single pass through children
-//! - **Paint**: O(n) - paint each child once
-//! - **Memory**: O(n) - stores offset per child
+//! - **Layout**: O(n) - single pass through children for layout + offset calculation
+//! - **Paint**: O(n) - paint each child once in sequence
+//! - **Memory**: 64 bytes base + O(n) for cached offsets (16 bytes per child)
+//!
+//! # Use Cases
+//!
+//! - **Row layouts**: Horizontal arrangement (buttons, icons, labels in a row)
+//! - **Column layouts**: Vertical arrangement (forms, lists, stacked content)
+//! - **Toolbars**: Horizontal toolbars with buttons/icons
+//! - **Navigation bars**: Bottom nav bars with evenly spaced items
+//! - **Forms**: Vertical form fields with labels
+//! - **List items**: Horizontal layout within list items
+//! - **Card content**: Vertical content stacking in cards
+//! - **Spacing distribution**: SpaceBetween/Around/Evenly for complex layouts
+//!
+//! # MainAxisAlignment Behavior
+//!
+//! ```text
+//! Start (align to start):
+//!   [Child1][Child2][Child3]___________________
+//!
+//! End (align to end):
+//!   ___________________[Child1][Child2][Child3]
+//!
+//! Center (center all):
+//!   _________[Child1][Child2][Child3]__________
+//!
+//! SpaceBetween (space between items):
+//!   [Child1]_________[Child2]_________[Child3]
+//!
+//! SpaceAround (space around items):
+//!   ___[Child1]______[Child2]______[Child3]___
+//!
+//! SpaceEvenly (even spacing):
+//!   ____[Child1]____[Child2]____[Child3]____
+//! ```
+//!
+//! # CrossAxisAlignment Behavior
+//!
+//! ```text
+//! Start:    Center:   End:      Stretch:  Baseline:
+//! [Child]   -------   -------   -------   --------
+//! -------   [Child]   -------   [Child]   [Child]-
+//! -------   -------   [Child]   -------   ---[Ch]-
+//! ```
+//!
+//! # Comparison with Related Objects
+//!
+//! - **vs RenderStack**: Flex arranges sequentially, Stack overlaps children
+//! - **vs RenderWrap**: Wrap allows wrapping to next line, Flex is single-line
+//! - **vs RenderListBody**: ListBody is simpler (no alignment), Flex has full control
+//! - **vs RenderCustomMultiChild**: CustomMultiChild for custom algorithms, Flex is standard
 //!
 //! # Examples
 //!
 //! ```rust,ignore
 //! use flui_rendering::RenderFlex;
-//! use flui_types::{Axis, MainAxisAlignment, CrossAxisAlignment};
+//! use flui_types::{Axis, MainAxisAlignment, CrossAxisAlignment, MainAxisSize};
 //!
-//! // Row with space between
+//! // Row with space between items
 //! let row = RenderFlex::row()
 //!     .with_main_axis_alignment(MainAxisAlignment::SpaceBetween);
 //!
@@ -59,6 +137,14 @@
 //! let column = RenderFlex::column()
 //!     .with_main_axis_alignment(MainAxisAlignment::Center)
 //!     .with_cross_axis_alignment(CrossAxisAlignment::Center);
+//!
+//! // Row with min size (wrap content)
+//! let compact_row = RenderFlex::row()
+//!     .with_main_axis_size(MainAxisSize::Min);
+//!
+//! // Baseline-aligned row (for text)
+//! let baseline_row = RenderFlex::row()
+//!     .with_cross_axis_alignment(CrossAxisAlignment::Baseline);
 //! ```
 
 use crate::core::{BoxLayoutCtx, BoxPaintCtx, ChildrenAccess, RenderBox, Variable};
@@ -70,10 +156,12 @@ use flui_types::{
     Axis, Offset, Size,
 };
 
-/// RenderObject for flex layout (Row/Column).
+/// RenderObject that arranges children sequentially along a main axis.
 ///
-/// Arranges children along a main axis with flexible space distribution
-/// and alignment options.
+/// Arranges children in a line (Row: horizontal, Column: vertical) with
+/// comprehensive alignment control. Supports MainAxisAlignment for spacing
+/// distribution (Start/End/Center/SpaceBetween/SpaceAround/SpaceEvenly) and
+/// CrossAxisAlignment for perpendicular positioning (Start/End/Center/Stretch/Baseline).
 ///
 /// # Arity
 ///
@@ -83,19 +171,48 @@ use flui_types::{
 ///
 /// Box protocol - Uses `BoxConstraints` and returns `Size`.
 ///
+/// # Pattern
+///
+/// **Sequential Layout Container** - Arranges children in a line along main axis,
+/// applies MainAxisAlignment for spacing distribution, applies CrossAxisAlignment
+/// for perpendicular positioning, supports MainAxisSize for min vs max sizing.
+///
 /// # Use Cases
 ///
-/// - **Row**: Horizontal arrangement (Axis::Horizontal)
-/// - **Column**: Vertical arrangement (Axis::Vertical)
-/// - **Flexible layouts**: TODO - with Expanded/Flexible children
+/// - **Row layouts**: Horizontal arrangement (buttons, icons, labels)
+/// - **Column layouts**: Vertical arrangement (forms, lists, content)
+/// - **Toolbars**: Horizontal toolbars with evenly spaced items
+/// - **Navigation bars**: Bottom nav bars with SpaceEvenly/SpaceBetween
+/// - **Forms**: Vertical form fields with labels and inputs
+/// - **List items**: Horizontal content within list items
+/// - **Card content**: Vertical stacking in cards
+/// - **Spacing**: Complex spacing with SpaceBetween/Around/Evenly
 ///
 /// # Flutter Compliance
 ///
 /// Matches Flutter's RenderFlex behavior:
-/// - Respects MainAxisAlignment for spacing
-/// - Respects CrossAxisAlignment per child
-/// - Handles MainAxisSize (min vs max)
-/// - Detects and warns about overflow (debug mode)
+/// - Respects MainAxisAlignment for spacing distribution
+/// - Respects CrossAxisAlignment for perpendicular positioning
+/// - Handles MainAxisSize (min wraps content, max fills parent)
+/// - Detects and warns about overflow (debug mode with tracing)
+/// - Supports baseline alignment for text widgets
+/// - TODO: Support Flexible/Expanded children via FlexItemMetadata
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use flui_rendering::RenderFlex;
+/// use flui_types::{MainAxisAlignment, CrossAxisAlignment};
+///
+/// // Row with items spaced evenly
+/// let row = RenderFlex::row()
+///     .with_main_axis_alignment(MainAxisAlignment::SpaceEvenly)
+///     .with_cross_axis_alignment(CrossAxisAlignment::Center);
+///
+/// // Column with content at top
+/// let column = RenderFlex::column()
+///     .with_main_axis_alignment(MainAxisAlignment::Start);
+/// ```
 #[derive(Debug)]
 pub struct RenderFlex {
     /// The direction to lay out children (horizontal for Row, vertical for Column)

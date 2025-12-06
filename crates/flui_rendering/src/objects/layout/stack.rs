@@ -1,53 +1,137 @@
-//! RenderStack - layering container
+//! RenderStack - Layering container for overlapping widgets
 //!
-//! Implements Flutter's stack layout for positioning children on top of each other.
+//! Implements Flutter's Stack layout that positions children in z-order layers,
+//! allowing them to overlap. Supports both positioned children (with explicit
+//! coordinates via PositionedMetadata) and non-positioned children (aligned
+//! using alignment field).
 //!
 //! # Flutter Equivalence
 //!
 //! | FLUI | Flutter |
 //! |------|---------|
 //! | `RenderStack` | `RenderStack` from `package:flutter/src/rendering/stack.dart` |
-//! | `alignment` | `alignment` property |
-//! | `fit` | `fit` property |
+//! | `fit` | `fit` property (StackFit enum) |
+//! | `alignment` | `alignment` property (AlignmentGeometry) |
+//! | `set_fit()` | `fit = value` setter |
+//! | `set_alignment()` | `alignment = value` setter |
+//! | PositionedMetadata | Metadata from `Positioned` widget |
+//! | `StackFit::Loose` | `StackFit.loose` (children can be smaller) |
+//! | `StackFit::Expand` | `StackFit.expand` (children forced to max) |
+//! | `StackFit::Passthrough` | `StackFit.passthrough` (no modification) |
 //!
 //! # Layout Protocol
 //!
 //! 1. **Determine child constraints based on fit**
-//!    - `StackFit::Loose`: Loosen parent constraints (min=0)
-//!    - `StackFit::Expand`: Tight to parent's max size
-//!    - `StackFit::Passthrough`: Use parent constraints as-is
+//!    - `StackFit::Loose`: Loosen parent constraints (min → 0, max unchanged)
+//!    - `StackFit::Expand`: Tight to parent's max size (force expansion)
+//!    - `StackFit::Passthrough`: Use parent constraints unchanged
 //!
 //! 2. **Layout all children**
-//!    - Non-positioned: use fit-based constraints
-//!    - Positioned: TODO - use position metadata
+//!    - Non-positioned children: use fit-based constraints
+//!    - Positioned children: TODO - compute constraints from PositionedMetadata
 //!    - Track max width/height across all children
+//!    - Store child sizes for paint phase
 //!
 //! 3. **Calculate stack size**
 //!    - `StackFit::Expand`: use parent's biggest size
-//!    - Otherwise: use max child size (clamped to parent constraints)
+//!    - Otherwise: use max child size (width, height)
+//!    - Clamp final size to parent constraints
 //!
 //! 4. **Calculate child offsets**
-//!    - Apply alignment to position each child within stack bounds
+//!    - Non-positioned: apply alignment to position within stack bounds
+//!    - Positioned: TODO - compute offset from PositionedMetadata
 //!    - Cache offsets for efficient paint
+//!
+//! # Paint Protocol
+//!
+//! 1. **Paint in z-order**
+//!    - Paint children in order (first child = bottom layer)
+//!    - Last child paints on top (highest z-index)
+//!
+//! 2. **Apply cached offsets**
+//!    - Use pre-computed offsets from layout phase
+//!    - Paint each child at parent offset + child offset
+//!
+//! 3. **Allow overlap**
+//!    - Children can overlap (later children paint over earlier)
+//!    - No clipping by default (children can extend beyond stack)
 //!
 //! # Performance
 //!
-//! - **Layout**: O(n) - single pass through children
+//! - **Layout**: O(n) - single pass through children for layout + offset calculation
 //! - **Paint**: O(n) - paint each child in z-order
-//! - **Memory**: O(n) - stores size + offset per child
+//! - **Memory**: 48 bytes base + O(n) for cached sizes/offsets (16 bytes per child)
+//!
+//! # Use Cases
+//!
+//! - **Overlays**: Position overlays on top of content (modals, tooltips, dialogs)
+//! - **Layered UI**: Layer multiple widgets (backgrounds, content, badges)
+//! - **Absolute positioning**: Position widgets at specific coordinates
+//! - **Floating action buttons**: FABs positioned over scrollable content
+//! - **Badge indicators**: Notification badges on corners of widgets
+//! - **Image overlays**: Text, icons, or gradients over images
+//! - **Z-index layouts**: Control visual stacking order
+//! - **Card decorations**: Multiple decoration layers on cards
+//!
+//! # StackFit Behavior
+//!
+//! ```text
+//! Loose (allow children to be smaller):
+//!   Parent: min=0×0, max=400×600
+//!   → Child: min=0×0, max=400×600 (loosened constraints)
+//!   → Stack size: max of all child sizes
+//!
+//! Expand (force children to max):
+//!   Parent: min=0×0, max=400×600
+//!   → Child: tight 400×600 (forced to max size)
+//!   → Stack size: 400×600 (parent's max)
+//!
+//! Passthrough (no modification):
+//!   Parent: min=100×100, max=400×600
+//!   → Child: min=100×100, max=400×600 (unchanged)
+//!   → Stack size: max of all child sizes (clamped to parent)
+//! ```
+//!
+//! # Positioned vs Non-Positioned
+//!
+//! **Positioned children** (have PositionedMetadata):
+//! - Custom constraints computed from left/top/right/bottom
+//! - Positioned at explicit coordinates
+//! - Do not affect stack size by default
+//! - TODO: Not yet implemented
+//!
+//! **Non-positioned children** (current implementation):
+//! - Constraints from StackFit
+//! - Aligned using alignment field
+//! - Contribute to stack size (largest child determines size)
+//!
+//! # Comparison with Related Objects
+//!
+//! - **vs RenderFlex**: Flex arranges children sequentially, Stack overlaps them
+//! - **vs RenderPositionedBox**: PositionedBox is single-child, Stack is multi-child
+//! - **vs RenderAlign**: Align is single-child, Stack handles multiple layers
+//! - **vs RenderIndexedStack**: IndexedStack shows one child, Stack shows all
+//! - **vs RenderLayer**: Layer manages GPU layers, Stack manages layout overlap
 //!
 //! # Examples
 //!
 //! ```rust,ignore
 //! use flui_rendering::RenderStack;
-//! use flui_types::{Alignment, StackFit};
+//! use flui_types::{StackFit, Alignment};
 //!
-//! // Stack with centered children
-//! let stack = RenderStack::with_alignment(Alignment::CENTER);
+//! // Loose fit (children can be smaller than max)
+//! let stack = RenderStack::new();  // Default: Loose + TOP_LEFT
 //!
-//! // Stack that expands to fill parent
+//! // Expand fit (children forced to max size)
 //! let mut stack = RenderStack::new();
 //! stack.set_fit(StackFit::Expand);
+//!
+//! // Centered children
+//! let stack = RenderStack::with_alignment(Alignment::CENTER);
+//!
+//! // Bottom-right aligned (for FABs)
+//! let mut stack = RenderStack::new();
+//! stack.set_alignment(Alignment::BOTTOM_RIGHT);
 //! ```
 
 use crate::core::{BoxLayoutCtx, BoxPaintCtx, ChildrenAccess, RenderBox, Variable};
@@ -56,10 +140,12 @@ use flui_types::constraints::BoxConstraints;
 use flui_types::layout::StackFit;
 use flui_types::{Alignment, Offset, Size};
 
-/// RenderObject for stack layout (layering).
+/// RenderObject that layers children on top of each other.
 ///
-/// Positions children on top of each other with customizable alignment
-/// and sizing behavior.
+/// Positions children in z-order layers with customizable sizing (StackFit)
+/// and alignment. Supports both positioned children (with explicit coordinates
+/// via PositionedMetadata) and non-positioned children (aligned within bounds).
+/// Children paint in order - first child is bottom layer, last child is top.
 ///
 /// # Arity
 ///
@@ -69,19 +155,46 @@ use flui_types::{Alignment, Offset, Size};
 ///
 /// Box protocol - Uses `BoxConstraints` and returns `Size`.
 ///
+/// # Pattern
+///
+/// **Multi-child Layering Container** - Overlaps children with z-order control,
+/// applies StackFit to determine sizing, uses Alignment to position non-positioned
+/// children within bounds.
+///
 /// # Use Cases
 ///
-/// - **Layering**: Overlay widgets on top of each other
-/// - **Positioning**: Align children within bounds
-/// - **Z-order**: Paint order determines visual stacking
+/// - **Overlays**: Position modals, tooltips, dialogs over content
+/// - **Layered UI**: Layer backgrounds, content, badges, decorations
+/// - **Absolute positioning**: Position widgets at specific coordinates
+/// - **Floating buttons**: FABs positioned over scrollable content
+/// - **Badge indicators**: Notification badges on widget corners
+/// - **Image overlays**: Text, icons, gradients over images
+/// - **Z-index layouts**: Control visual stacking order
 ///
 /// # Flutter Compliance
 ///
 /// Matches Flutter's RenderStack behavior:
-/// - Respects StackFit for child sizing
-/// - Applies Alignment to position children
-/// - Paints in child order (first=back, last=front)
-/// - TODO: Support positioned children via ParentData
+/// - Respects StackFit for child sizing (Loose/Expand/Passthrough)
+/// - Applies Alignment to position non-positioned children
+/// - Paints in child order (first=back, last=front) for z-order
+/// - Size determined by largest child (or max for Expand fit)
+/// - TODO: Support positioned children via PositionedMetadata queries
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use flui_rendering::RenderStack;
+/// use flui_types::{StackFit, Alignment};
+///
+/// // Stack with loose fit and center alignment
+/// let mut stack = RenderStack::with_alignment(Alignment::CENTER);
+///
+/// // Expand to fill parent
+/// stack.set_fit(StackFit::Expand);
+///
+/// // Bottom-right alignment for FABs
+/// stack.set_alignment(Alignment::BOTTOM_RIGHT);
+/// ```
 #[derive(Debug)]
 pub struct RenderStack {
     /// How to align non-positioned children
