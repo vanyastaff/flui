@@ -421,7 +421,7 @@ mod tests {
 
         // Set up parent-child relationship
         if let Some(child) = tree.get_mut(child_id) {
-            child.base_mut().set_parent(Some(parent_id));
+            child.set_parent(Some(parent_id));
         }
         if let Some(parent) = tree.get_mut(parent_id) {
             parent.add_child(child_id);
@@ -442,10 +442,10 @@ mod tests {
 
         // Set up relationships
         if let Some(child) = tree.get_mut(child_id) {
-            child.base_mut().set_parent(Some(root_id));
+            child.set_parent(Some(root_id));
         }
         if let Some(grandchild) = tree.get_mut(grandchild_id) {
-            grandchild.base_mut().set_parent(Some(child_id));
+            grandchild.set_parent(Some(child_id));
         }
 
         assert_eq!(tree.depth(root_id), Some(0));
@@ -463,10 +463,10 @@ mod tests {
 
         // Set up relationships
         if let Some(child) = tree.get_mut(child_id) {
-            child.base_mut().set_parent(Some(root_id));
+            child.set_parent(Some(root_id));
         }
         if let Some(grandchild) = tree.get_mut(grandchild_id) {
-            grandchild.base_mut().set_parent(Some(child_id));
+            grandchild.set_parent(Some(child_id));
         }
 
         assert!(tree.is_ancestor(root_id, child_id));

@@ -204,7 +204,9 @@ pub use crate::cache::{AssetCache, AssetCacheCore, AssetCacheExt};
 pub use crate::core::{Asset, AssetLoader, AssetMetadata};
 pub use crate::error::{AssetError, Result};
 pub use crate::registry::{AssetRegistry, AssetRegistryBuilder, HasCapacity, NoCapacity};
-pub use crate::types::{AssetHandle, AssetHandleCore, AssetHandleExt, AssetKey, FontData, LoadState};
+pub use crate::types::{
+    AssetHandle, AssetHandleCore, AssetHandleExt, AssetKey, FontData, LoadState,
+};
 
 // Re-export loaders
 pub use crate::loaders::{BytesFileLoader, FileLoader, MemoryLoader, NetworkLoader};

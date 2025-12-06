@@ -20,11 +20,11 @@ fn main() {
     // Example 1: Horizontal fade (left opaque → right transparent)
     let horizontal_fade = RenderShaderMask {
         shader: ShaderSpec::LinearGradient {
-            start: (0.0, 0.5),  // Left center (normalized 0-1)
-            end: (1.0, 0.5),    // Right center
+            start: (0.0, 0.5), // Left center (normalized 0-1)
+            end: (1.0, 0.5),   // Right center
             colors: vec![
-                Color32::WHITE,        // Fully opaque (left)
-                Color32::TRANSPARENT,  // Fully transparent (right)
+                Color32::WHITE,       // Fully opaque (left)
+                Color32::TRANSPARENT, // Fully transparent (right)
             ],
         },
         blend_mode: BlendMode::SrcOver,
@@ -37,11 +37,11 @@ fn main() {
 
     // Example 2: Vertical fade (top opaque → bottom transparent)
     let vertical_fade = RenderShaderMask::linear_gradient(
-        (0.5, 0.0),  // Top center
-        (0.5, 1.0),  // Bottom center
+        (0.5, 0.0), // Top center
+        (0.5, 1.0), // Bottom center
         vec![
-            Color32::from_rgba_unmultiplied(255, 255, 255, 255),  // Opaque white
-            Color32::from_rgba_unmultiplied(255, 255, 255, 0),    // Transparent white
+            Color32::from_rgba_unmultiplied(255, 255, 255, 255), // Opaque white
+            Color32::from_rgba_unmultiplied(255, 255, 255, 0),   // Transparent white
         ],
     );
 
@@ -51,12 +51,9 @@ fn main() {
 
     // Example 3: Diagonal fade with custom blend mode
     let diagonal_fade = RenderShaderMask::linear_gradient(
-        (0.0, 0.0),  // Top-left
-        (1.0, 1.0),  // Bottom-right
-        vec![
-            Color32::RED,
-            Color32::BLUE,
-        ],
+        (0.0, 0.0), // Top-left
+        (1.0, 1.0), // Bottom-right
+        vec![Color32::RED, Color32::BLUE],
     )
     .with_blend_mode(BlendMode::Multiply);
 

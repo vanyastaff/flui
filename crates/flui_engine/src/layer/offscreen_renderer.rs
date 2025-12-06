@@ -7,7 +7,11 @@ use crate::layer::{
     shader_compiler::{ShaderCache, ShaderType},
     texture_pool::{PooledTexture, TexturePool},
 };
-use flui_types::{geometry::Rect, painting::{BlendMode, ShaderSpec}, Size};
+use flui_types::{
+    geometry::Rect,
+    painting::{BlendMode, ShaderSpec},
+    Size,
+};
 use std::collections::HashMap;
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
@@ -382,7 +386,10 @@ impl OffscreenRenderer {
             });
 
         // Get pipeline reference (exists from earlier get_or_create call)
-        let pipeline = self.pipelines.get(&shader_type).expect("Pipeline should exist");
+        let pipeline = self
+            .pipelines
+            .get(&shader_type)
+            .expect("Pipeline should exist");
 
         // Create render pass
         {

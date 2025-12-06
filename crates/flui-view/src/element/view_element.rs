@@ -42,7 +42,9 @@ use crate::view_object::ViewObject;
 ///
 /// This allows ViewElement to store pending children without depending
 /// on the concrete Element type from flui-element.
-pub type PendingChildren = Vec<Box<dyn Any + Send>>;
+///
+/// Uses `Send + Sync` to ensure ElementTree can implement TreeRead (requires Sync).
+pub type PendingChildren = Vec<Box<dyn Any + Send + Sync>>;
 
 /// ViewElement - Element for component views.
 ///

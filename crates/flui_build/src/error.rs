@@ -203,10 +203,7 @@ impl BuildError {
     ///     "rustup target add aarch64-linux-android"
     /// );
     /// ```
-    pub fn target_not_installed(
-        target: impl Into<String>,
-        install_cmd: impl Into<String>,
-    ) -> Self {
+    pub fn target_not_installed(target: impl Into<String>, install_cmd: impl Into<String>) -> Self {
         Self::TargetNotInstalled {
             target: target.into(),
             install_cmd: install_cmd.into(),

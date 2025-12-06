@@ -5,6 +5,7 @@
 
 use crate::element::{Element, ViewElement};
 use crate::ViewObject;
+use flui_rendering::{Arity, BoxRenderWrapper, ProtocolId, SliverRenderWrapper, RenderElement};
 
 /// Trait for types that can be converted into an Element.
 ///
@@ -69,8 +70,36 @@ impl IntoElement for Vec<Element> {
         if self.is_empty() {
             Element::empty()
         } else {
-            Element::View(ViewElement::container(self))
+            Element::container(Element::boxed_children(self))
         }
+    }
+}
+
+// ============================================================================
+// RENDER WRAPPER IMPLEMENTATIONS
+// ============================================================================
+
+/// BoxRenderWrapper converts to a RenderElement with Box protocol.
+impl<A: Arity> IntoElement for BoxRenderWrapper<A> {
+    fn into_element(self) -> Element {
+        // BoxRenderWrapper implements RenderObject, so we can box it directly
+        Element::Render(RenderElement::from_boxed(
+            Box::new(self),
+            ProtocolId::Box,
+            A::runtime_arity(),
+        ))
+    }
+}
+
+/// SliverRenderWrapper converts to a RenderElement with Sliver protocol.
+impl<A: Arity> IntoElement for SliverRenderWrapper<A> {
+    fn into_element(self) -> Element {
+        // SliverRenderWrapper implements RenderObject, so we can box it directly
+        Element::Render(RenderElement::from_boxed(
+            Box::new(self),
+            ProtocolId::Sliver,
+            A::runtime_arity(),
+        ))
     }
 }
 

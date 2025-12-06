@@ -4,7 +4,10 @@
 //! by rendering child content to an offscreen texture and applying a GPU shader as a mask.
 
 use crate::renderer::CommandRenderer;
-use flui_types::{geometry::Rect, painting::{BlendMode, ShaderSpec}};
+use flui_types::{
+    geometry::Rect,
+    painting::{BlendMode, ShaderSpec},
+};
 
 /// Layer that applies a shader as a mask to its child
 ///

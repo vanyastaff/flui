@@ -1270,6 +1270,7 @@ dependencies = [
 name = "flui-view"
 version = "0.1.0"
 dependencies = [
+ "bitflags 2.10.0",
  "flui-foundation",
  "flui-tree",
  "flui_types",

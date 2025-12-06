@@ -155,7 +155,12 @@ impl FrameCompletionFuture {
             completed: None,
             waker: None,
         }));
-        (Self { state: state.clone() }, state)
+        (
+            Self {
+                state: state.clone(),
+            },
+            state,
+        )
     }
 }
 

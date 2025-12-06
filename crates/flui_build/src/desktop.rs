@@ -70,9 +70,11 @@ impl PlatformBuilder for DesktopBuilder {
             crate::platform::Platform::Desktop { target } => {
                 target.clone().unwrap_or_else(Self::detect_host_target)
             }
-            _ => return Err(BuildError::InvalidPlatform {
-                reason: "Expected Desktop platform".to_string(),
-            }),
+            _ => {
+                return Err(BuildError::InvalidPlatform {
+                    reason: "Expected Desktop platform".to_string(),
+                })
+            }
         };
 
         tracing::info!("Building for desktop target: {}", target);

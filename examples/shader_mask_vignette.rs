@@ -20,14 +20,14 @@ fn main() {
     // Example 1: Classic vignette (bright center → dark edges)
     let classic_vignette = RenderShaderMask {
         shader: ShaderSpec::RadialGradient {
-            center: (0.5, 0.5),  // Center of viewport (normalized 0-1)
-            radius: 0.7,         // 70% of viewport size
+            center: (0.5, 0.5), // Center of viewport (normalized 0-1)
+            radius: 0.7,        // 70% of viewport size
             colors: vec![
-                Color32::WHITE,  // Bright center (fully opaque)
-                Color32::from_rgba_unmultiplied(0, 0, 0, 200),  // Dark edges (alpha = 200/255)
+                Color32::WHITE,                                // Bright center (fully opaque)
+                Color32::from_rgba_unmultiplied(0, 0, 0, 200), // Dark edges (alpha = 200/255)
             ],
         },
-        blend_mode: BlendMode::Multiply,  // Multiply darkens the content
+        blend_mode: BlendMode::Multiply, // Multiply darkens the content
     };
 
     tracing::info!("Created classic vignette:");
@@ -39,10 +39,10 @@ fn main() {
     // Example 2: Soft vignette (subtle effect)
     let soft_vignette = RenderShaderMask::radial_gradient(
         (0.5, 0.5),
-        1.0,  // Full viewport radius
+        1.0, // Full viewport radius
         vec![
             Color32::WHITE,
-            Color32::from_rgba_unmultiplied(0, 0, 0, 100),  // Very subtle darkening
+            Color32::from_rgba_unmultiplied(0, 0, 0, 100), // Very subtle darkening
         ],
     )
     .with_blend_mode(BlendMode::Multiply);
@@ -55,10 +55,10 @@ fn main() {
     // Example 3: Spotlight effect (inverted vignette)
     let spotlight = RenderShaderMask::radial_gradient(
         (0.5, 0.5),
-        0.5,  // Smaller radius for focused spotlight
+        0.5, // Smaller radius for focused spotlight
         vec![
-            Color32::WHITE,  // Bright spotlight
-            Color32::BLACK,  // Completely dark outside
+            Color32::WHITE, // Bright spotlight
+            Color32::BLACK, // Completely dark outside
         ],
     )
     .with_blend_mode(BlendMode::SrcOver);
@@ -67,7 +67,10 @@ fn main() {
     tracing::info!("  Center: (0.5, 0.5)");
     tracing::info!("  Radius: 0.5 (tight spotlight)");
     tracing::info!("  Colors: White → Black");
-    tracing::info!("  Blend mode: {:?} (standard compositing)", spotlight.blend_mode);
+    tracing::info!(
+        "  Blend mode: {:?} (standard compositing)",
+        spotlight.blend_mode
+    );
 
     // Example 4: Colored vignette (creative effect)
     let colored_vignette = RenderShaderMask::radial_gradient(
@@ -75,7 +78,7 @@ fn main() {
         0.8,
         vec![
             Color32::WHITE,
-            Color32::from_rgb(150, 100, 200),  // Purple tint on edges
+            Color32::from_rgb(150, 100, 200), // Purple tint on edges
         ],
     )
     .with_blend_mode(BlendMode::Multiply);

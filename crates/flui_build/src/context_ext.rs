@@ -422,7 +422,11 @@ mod tests {
     use super::*;
     use crate::BuilderContextBuilder;
 
-    fn create_context(profile: Profile, features: Vec<String>, platform: Platform) -> BuilderContext {
+    fn create_context(
+        profile: Profile,
+        features: Vec<String>,
+        platform: Platform,
+    ) -> BuilderContext {
         let mut builder = BuilderContextBuilder::new(PathBuf::from("."))
             .with_platform(platform)
             .with_profile(profile);
@@ -535,7 +539,8 @@ mod tests {
         assert!(!web_ctx.is_android());
         assert!(!web_ctx.is_desktop());
 
-        let desktop_ctx = create_context(Profile::Debug, vec![], Platform::Desktop { target: None });
+        let desktop_ctx =
+            create_context(Profile::Debug, vec![], Platform::Desktop { target: None });
         assert!(desktop_ctx.is_desktop());
         assert!(!desktop_ctx.is_android());
         assert!(!desktop_ctx.is_web());

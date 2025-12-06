@@ -33,11 +33,11 @@
 //! // Load trace.json in chrome://tracing
 //! ```
 
-use web_time::{Duration, Instant};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::Arc;
+use web_time::{Duration, Instant};
 
 /// Category for timeline events
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

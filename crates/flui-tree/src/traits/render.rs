@@ -762,14 +762,18 @@ impl<'a, T: RenderTreeAccess> RenderChildAccessor<'a, T, Single> {
                 #[cfg(debug_assertions)]
                 {
                     if iter.next().is_some() {
-                        panic!("Single arity accessor found multiple children - tree state changed");
+                        panic!(
+                            "Single arity accessor found multiple children - tree state changed"
+                        );
                     }
                 }
                 child
             }
             None => {
                 #[cfg(debug_assertions)]
-                panic!("Single arity accessor was constructed with no children - tree state changed");
+                panic!(
+                    "Single arity accessor was constructed with no children - tree state changed"
+                );
                 #[cfg(not(debug_assertions))]
                 panic!("Single arity accessor: expected exactly one child, found none");
             }

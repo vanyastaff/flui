@@ -587,6 +587,8 @@ mod _docs {}
 
 #[cfg(doc)]
 mod examples {
+    use std::any::Any;
+
     use super::super::arity::{Leaf, Single, Variable};
     use super::*;
 

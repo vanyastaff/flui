@@ -50,8 +50,8 @@ impl TextureFormat {
     /// Get bytes per pixel for this format
     pub fn bytes_per_pixel(&self) -> usize {
         match self {
-            TextureFormat::Rgba8 => 4,        // 4 bytes (8 bits × 4 channels)
-            TextureFormat::Rgba16Float => 8,  // 8 bytes (16 bits × 4 channels)
+            TextureFormat::Rgba8 => 4,       // 4 bytes (8 bits × 4 channels)
+            TextureFormat::Rgba16Float => 8, // 8 bytes (16 bits × 4 channels)
         }
     }
 }
@@ -170,7 +170,10 @@ impl TexturePoolInner {
         self.available.clear();
         self.total_allocated -= total_textures;
         self.total_memory_bytes = 0;
-        tracing::info!("Texture pool cleared ({} textures released)", total_textures);
+        tracing::info!(
+            "Texture pool cleared ({} textures released)",
+            total_textures
+        );
     }
 }
 

@@ -183,8 +183,22 @@ mod tests {
 
         fn schedule_rebuild(&self, _element_id: ElementId) {}
 
-        fn depend_on_raw(&self, _type_id: std::any::TypeId) -> Option<std::sync::Arc<dyn Any + Send + Sync>> {
+        fn depend_on_raw(
+            &self,
+            _type_id: std::any::TypeId,
+        ) -> Option<std::sync::Arc<dyn Any + Send + Sync>> {
             None
+        }
+
+        fn find_ancestor_widget(
+            &self,
+            _type_id: std::any::TypeId,
+        ) -> Option<std::sync::Arc<dyn Any + Send + Sync>> {
+            None
+        }
+
+        fn visit_ancestors(&self, _visitor: &mut dyn FnMut(ElementId) -> bool) {
+            // No ancestors in mock
         }
 
         fn as_any(&self) -> &dyn Any {

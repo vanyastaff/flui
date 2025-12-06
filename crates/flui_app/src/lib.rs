@@ -306,7 +306,7 @@ where
         let tree = owner.tree();
         let tree_guard = tree.read();
         tracing::info!(element_count = tree_guard.len(), "Element tree status");
-        if let Some(root_id) = owner.root_manager().root_id() {
+        if let Some(root_id) = owner.root_element_id() {
             tracing::info!(?root_id, "Root element found");
             if let Some(root) = tree_guard.get(root_id) {
                 tracing::info!(

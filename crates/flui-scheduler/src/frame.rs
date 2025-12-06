@@ -348,7 +348,7 @@ impl fmt::Display for AppLifecycleState {
 pub type LifecycleStateCallback = Box<dyn Fn(AppLifecycleState) + Send + Sync>;
 
 /// Frame phase - which part of the render pipeline is executing
-/// 
+///
 /// This is used within the PersistentCallbacks scheduler phase to track
 /// rendering pipeline progress.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]

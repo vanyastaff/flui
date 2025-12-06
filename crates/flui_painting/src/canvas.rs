@@ -450,10 +450,7 @@ impl Canvas {
             transform: self.transform,
         });
 
-        tracing::debug!(
-            layer_depth = self.save_stack.len(),
-            "Layer created"
-        );
+        tracing::debug!(layer_depth = self.save_stack.len(), "Layer created");
     }
 
     /// Saves the canvas state with a layer that applies alpha transparency

@@ -69,10 +69,19 @@ impl TreeRead for DemoTree {
 }
 
 impl TreeNav for DemoTree {
-    type ChildrenIter<'a> = std::iter::Flatten<std::option::IntoIter<std::iter::Copied<std::slice::Iter<'a, ElementId>>>>;
+    type ChildrenIter<'a> = std::iter::Flatten<
+        std::option::IntoIter<std::iter::Copied<std::slice::Iter<'a, ElementId>>>,
+    >;
     type AncestorsIter<'a> = flui_tree::iter::Ancestors<'a, Self>;
     type DescendantsIter<'a> = flui_tree::iter::Descendants<'a, Self>;
-    type SiblingsIter<'a> = std::iter::Flatten<std::option::IntoIter<std::iter::Filter<std::iter::Copied<std::slice::Iter<'a, ElementId>>, fn(&ElementId) -> bool>>>;
+    type SiblingsIter<'a> = std::iter::Flatten<
+        std::option::IntoIter<
+            std::iter::Filter<
+                std::iter::Copied<std::slice::Iter<'a, ElementId>>,
+                fn(&ElementId) -> bool,
+            >,
+        >,
+    >;
 
     fn parent(&self, id: ElementId) -> Option<ElementId> {
         self.get(id)?.parent

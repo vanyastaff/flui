@@ -209,6 +209,58 @@ impl BuildContext for PipelineBuildContext {
         }
     }
 
+    fn find_ancestor_widget(&self, type_id: TypeId) -> Option<Arc<dyn Any + Send + Sync>> {
+        // Similar to depend_on_raw, but doesn't register dependency
+        let mut current_id = {
+            let tree = self.tree.read();
+            let element = tree.get(self.element_id)?;
+            element.parent()?
+        };
+
+        loop {
+            let (provided_arc, next_parent) = {
+                let tree = self.tree.read();
+                let element = tree.get(current_id)?;
+
+                if !element.is_provider() {
+                    (None, element.parent())
+                } else {
+                    let view_object = element.view_object()?;
+                    let provided = view_object.provided_value()?;
+
+                    if (*provided).type_id() != type_id {
+                        (None, element.parent())
+                    } else {
+                        (Some(provided), None)
+                    }
+                }
+            };
+
+            if let Some(arc) = provided_arc {
+                return Some(arc);
+            }
+
+            current_id = next_parent?;
+        }
+    }
+
+    fn visit_ancestors(&self, visitor: &mut dyn FnMut(ElementId) -> bool) {
+        let mut current_id = {
+            let tree = self.tree.read();
+            tree.get(self.element_id).and_then(|e| e.parent())
+        };
+
+        while let Some(id) = current_id {
+            if !visitor(id) {
+                break;
+            }
+            current_id = {
+                let tree = self.tree.read();
+                tree.get(id).and_then(|e| e.parent())
+            };
+        }
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -221,6 +273,7 @@ impl BuildContext for PipelineBuildContext {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_element::BuildContextExt;
 
     fn create_test_context() -> PipelineBuildContext {
         let tree = Arc::new(RwLock::new(ElementTree::new()));

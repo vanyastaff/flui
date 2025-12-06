@@ -965,7 +965,7 @@ impl RenderElement {
 
 impl RenderElement {
     /// Returns debug name.
-    pub fn debug_name(&self) -> &str {
+    pub fn debug_name(&self) -> &'static str {
         self.debug_name
             .unwrap_or_else(|| self.render_object.debug_name())
     }

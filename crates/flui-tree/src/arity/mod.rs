@@ -730,13 +730,22 @@ impl<const N: usize> Arity for Exact<N> {
                 // But in release mode, we need to handle it
                 #[cfg(debug_assertions)]
                 {
-                    panic!("Exact<{}> expects {} children, got {}", N, N, children.len());
+                    panic!(
+                        "Exact<{}> expects {} children, got {}",
+                        N,
+                        N,
+                        children.len()
+                    );
                 }
                 #[cfg(not(debug_assertions))]
                 {
                     // In release, we can't safely convert, so we need to panic
                     // This is a programming error that should be caught in debug
-                    panic!("slice length mismatch: expected {}, got {}", N, children.len());
+                    panic!(
+                        "slice length mismatch: expected {}, got {}",
+                        N,
+                        children.len()
+                    );
                 }
             }
         };

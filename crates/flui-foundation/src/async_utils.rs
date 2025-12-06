@@ -181,9 +181,7 @@ where
         timeout_duration: Duration,
     ) -> Result<T, tokio::time::error::Elapsed> {
         let mut receiver = self.subscribe();
-        timeout(timeout_duration, receiver.changed())
-            .await?
-            .ok(); // Ignore RecvError, just care about timeout
+        timeout(timeout_duration, receiver.changed()).await?.ok(); // Ignore RecvError, just care about timeout
         let value = receiver.borrow().clone();
         Ok(value)
     }

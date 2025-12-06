@@ -119,7 +119,7 @@ impl BuilderContextBuilder<NoPlatform, NoProfile> {
     ///
     /// let builder = BuilderContextBuilder::new(PathBuf::from("."));
     /// ```
-    #[must_use] 
+    #[must_use]
     pub fn new(workspace_root: PathBuf) -> Self {
         Self {
             workspace_root,
@@ -284,7 +284,7 @@ impl BuilderContextBuilder<HasPlatform, HasProfile> {
     ///
     /// assert_eq!(ctx.profile, Profile::Release);
     /// ```
-    #[must_use] 
+    #[must_use]
     pub fn build(self) -> BuilderContext {
         let output_dir = self.output_dir.unwrap_or_else(|| {
             self.workspace_root

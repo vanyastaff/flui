@@ -4,8 +4,8 @@
 //! the framework to skip repainting when only the parent changes.
 
 use crate::renderer::CommandRenderer;
-use std::sync::Arc;
 use parking_lot::RwLock;
+use std::sync::Arc;
 
 /// Cached layer content
 ///

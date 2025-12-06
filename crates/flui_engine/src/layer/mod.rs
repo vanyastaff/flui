@@ -36,21 +36,21 @@
 //!
 //! All layer composition is handled by the paint pipeline in flui_core.
 
-pub mod picture;
-pub mod shader_mask;
 pub mod backdrop_filter;
-pub mod shader_compiler;
-pub mod texture_pool;
-pub mod offscreen_renderer;
 pub mod cached;
+pub mod offscreen_renderer;
+pub mod picture;
+pub mod shader_compiler;
+pub mod shader_mask;
+pub mod texture_pool;
 
-pub use picture::CanvasLayer;
-pub use shader_mask::ShaderMaskLayer;
 pub use backdrop_filter::BackdropFilterLayer;
-pub use shader_compiler::{ShaderCache, ShaderType};
-pub use texture_pool::{TexturePool, PooledTexture, TextureDesc};
-pub use offscreen_renderer::{OffscreenRenderer, MaskedRenderResult, PipelineManager};
 pub use cached::CachedLayer;
+pub use offscreen_renderer::{MaskedRenderResult, OffscreenRenderer, PipelineManager};
+pub use picture::CanvasLayer;
+pub use shader_compiler::{ShaderCache, ShaderType};
+pub use shader_mask::ShaderMaskLayer;
+pub use texture_pool::{PooledTexture, TextureDesc, TexturePool};
 
 use crate::renderer::CommandRenderer;
 

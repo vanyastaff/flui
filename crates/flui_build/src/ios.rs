@@ -141,9 +141,7 @@ impl PlatformBuilder for IOSBuilder {
         let xcodeproj = ios_dir.join("flui.xcodeproj");
         if !xcodeproj.exists() {
             tracing::warn!("Xcode project not found, skipping app build");
-            tracing::info!(
-                "Native libraries built successfully at: platforms/ios/Frameworks/"
-            );
+            tracing::info!("Native libraries built successfully at: platforms/ios/Frameworks/");
 
             // Return the .a file as the artifact
             let lib_file = artifacts
@@ -176,25 +174,15 @@ impl PlatformBuilder for IOSBuilder {
             "build",
         ];
 
-        pollster::block_on(process::run_command_in_dir(
-            "xcodebuild",
-            &args,
-            &ios_dir,
-        ))?;
+        pollster::block_on(process::run_command_in_dir("xcodebuild", &args, &ios_dir))?;
 
         // Find the .app bundle
-        let build_dir = ios_dir
-            .join("build")
-            .join(configuration)
-            .join("iphoneos");
+        let build_dir = ios_dir.join("build").join(configuration).join("iphoneos");
 
         let app_path = std::fs::read_dir(&build_dir)?
             .filter_map(std::result::Result::ok)
             .map(|entry| entry.path())
-            .find(|path| {
-                path.extension()
-                    .is_some_and(|ext| ext == "app")
-            })
+            .find(|path| path.extension().is_some_and(|ext| ext == "app"))
             .ok_or_else(|| BuildError::PathNotFound {
                 path: build_dir.clone(),
                 context: ".app bundle not found in build output".to_string(),

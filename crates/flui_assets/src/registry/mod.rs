@@ -541,9 +541,7 @@ mod tests {
 
     #[test]
     fn test_builder_with_default_capacity() {
-        let registry = AssetRegistryBuilder::new()
-            .with_default_capacity()
-            .build();
+        let registry = AssetRegistryBuilder::new().with_default_capacity().build();
 
         // Should use default capacity (100 MB)
         assert_eq!(registry.default_capacity, 100 * 1024 * 1024);

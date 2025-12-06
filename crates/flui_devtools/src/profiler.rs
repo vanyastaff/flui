@@ -47,10 +47,10 @@
 //! ```
 
 use crate::common::DevToolsConfig;
-use web_time::{Duration, Instant};
 use parking_lot::Mutex;
 use std::collections::VecDeque;
 use std::sync::Arc;
+use web_time::{Duration, Instant};
 
 /// Frame rendering phase
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

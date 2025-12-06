@@ -311,7 +311,7 @@ impl TreeWriteNav for ElementTree {
 
         // Update child's parent reference
         if let Some(child_elem) = self.get_mut(child) {
-            child_elem.base_mut().set_parent(new_parent);
+            child_elem.set_parent(new_parent);
         }
 
         // Add to new parent's children list

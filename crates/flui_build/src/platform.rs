@@ -32,28 +32,28 @@ pub enum Platform {
     /// Android platform with target architectures
     Android {
         /// Target architectures (e.g., "aarch64-linux-android")
-        targets: Vec<String>
+        targets: Vec<String>,
     },
     /// iOS platform with target architectures
     IOS {
         /// Target architectures (e.g., "aarch64-apple-ios", "x86_64-apple-ios")
-        targets: Vec<String>
+        targets: Vec<String>,
     },
     /// Web/WASM platform
     Web {
         /// Target identifier (e.g., "web")
-        target: String
+        target: String,
     },
     /// Desktop platform (Windows, macOS, Linux)
     Desktop {
         /// Optional target triple (auto-detected if None)
-        target: Option<String>
+        target: Option<String>,
     },
 }
 
 impl Platform {
     /// Returns the platform name as a string
-    #[must_use] 
+    #[must_use]
     pub fn name(&self) -> &str {
         match self {
             Platform::Android { .. } => "android",
@@ -78,7 +78,7 @@ impl Profile {
     /// Returns the cargo flag for this profile
     ///
     /// Returns `None` for Debug (default), `Some("--release")` for Release
-    #[must_use] 
+    #[must_use]
     pub fn cargo_flag(&self) -> Option<&'static str> {
         match self {
             Profile::Debug => None,
@@ -87,7 +87,7 @@ impl Profile {
     }
 
     /// Returns the profile name as a string
-    #[must_use] 
+    #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
             Profile::Debug => "debug",
@@ -95,7 +95,6 @@ impl Profile {
         }
     }
 }
-
 
 impl From<&str> for Profile {
     fn from(s: &str) -> Self {

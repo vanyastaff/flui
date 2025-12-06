@@ -32,17 +32,17 @@ mod element;
 mod element_base;
 mod element_flags;
 mod lifecycle;
-mod render_element;
-mod view_element;
 
 // Core element enum
 pub use element::Element;
 
-// Element variants
-pub use render_element::{RenderElement, RenderObjectTrait};
-pub use view_element::ViewElement;
+// ViewElement is now in flui-view
+pub use flui_view::{AtomicViewFlags, ViewElement, ViewFlags, ViewLifecycle};
 
-// Base types
+// RenderElement is now in flui_rendering
+pub use flui_rendering::{RenderElement, RenderLifecycle, RenderObject};
+
+// Base types (for backward compatibility)
 pub use element_base::ElementBase;
 pub use element_flags::{AtomicElementFlags, ElementFlags};
 pub use lifecycle::ElementLifecycle;
