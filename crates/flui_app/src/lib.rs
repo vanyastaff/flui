@@ -11,21 +11,23 @@
 //! runApp(root_widget)
 //!    ↓
 //! AppBinding::ensure_initialized()
-//!    ├─ GestureBinding (EventRouter integration)
+//!    ├─ EventRouter (shared with platform layer)
 //!    ├─ SchedulerBinding (wraps flui-scheduler)
 //!    │   ├─ TaskQueue (priority-based task execution)
 //!    │   ├─ FrameBudget (60fps timing, phase statistics)
 //!    │   └─ VSync coordination
 //!    ├─ RendererBinding (rendering)
-//!    └─ PipelineBinding (pipeline and element tree management)
+//!    └─ PipelineOwner (element tree management)
 //!    ↓
-//! WgpuEmbedder::new()
+//! DesktopEmbedder::new() (flui-platform)
 //!    ├─ Create winit window
 //!    ├─ Initialize GpuRenderer (encapsulates ALL wgpu resources)
+//!    ├─ EmbedderCore (shared cross-platform logic)
+//!    │   └─ GestureBinding (type-safe hit testing)
 //!    └─ Setup event routing
 //!    ↓
 //! Event Loop (winit)
-//!    ├─ Window events → GestureBinding → EventRouter
+//!    ├─ Window events → EmbedderCore → GestureBinding → EventRouter
 //!    ├─ VSync → begin_frame() → FrameCallbacks
 //!    ├─ Build → Layout → Paint → Scene (flui_engine)
 //!    ├─ Render → GpuRenderer → GPU
@@ -87,10 +89,6 @@
 
 pub mod binding;
 pub mod embedder;
-
-// Supporting modules for window event handling
-pub mod event_callbacks;
-pub mod window_state;
 
 // Re-exports for convenience
 pub use binding::AppBinding;
@@ -189,7 +187,7 @@ where
                     self.binding.pipeline(),
                     self.binding.needs_redraw_flag(),
                     self.binding.scheduler.scheduler_arc(),
-                    self.binding.gesture.event_router().clone(),
+                    self.binding.event_router(),
                     event_loop,
                 ))
                 .expect("Failed to create desktop embedder");
@@ -336,7 +334,7 @@ where
                     self.binding.pipeline(),
                     self.binding.needs_redraw_flag(),
                     self.binding.scheduler.scheduler_arc(),
-                    self.binding.gesture.event_router().clone(),
+                    self.binding.event_router(),
                     event_loop,
                 ))
                 .expect("Failed to create desktop embedder");

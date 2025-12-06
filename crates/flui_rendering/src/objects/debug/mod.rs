@@ -1,9 +1,11 @@
 pub mod error_box;
-pub mod performance_overlay;
+// TODO: Re-enable once implemented
+// pub mod performance_overlay;
 pub mod placeholder;
 
 pub use error_box::RenderErrorBox;
-pub use performance_overlay::RenderPerformanceOverlay;
+// TODO: Re-enable once implemented
+// pub use performance_overlay::RenderPerformanceOverlay;
 pub use placeholder::RenderPlaceholder;
 
 // TODO: Re-enable once migrated to flui_painting::Canvas API

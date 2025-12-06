@@ -153,10 +153,8 @@ impl DesktopEmbedder {
             }
 
             WindowEvent::MouseInput { state, button, .. } => {
-                let position = self.core.scene_cache().get().map_or(Offset::ZERO, |_| {
-                    // Use tracked position from pointer state
-                    Offset::ZERO // Would get from core.pointer_state
-                });
+                // Use tracked position from pointer state in core
+                let position = self.core.last_pointer_position();
 
                 self.core.handle_pointer_button(
                     position,

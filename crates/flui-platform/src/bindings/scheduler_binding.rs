@@ -70,7 +70,30 @@ impl SchedulerBinding {
     /// Adds a persistent frame callback that flushes the rebuild queue
     /// and sets the needs_redraw flag when changes occur.
     ///
-    /// Uses Weak reference to avoid circular references.
+    /// # Why Weak Reference?
+    ///
+    /// Uses `Weak<RwLock<PipelineOwner>>` to prevent circular reference memory leaks.
+    /// Without Weak, we'd have:
+    ///
+    /// ```text
+    /// EmbedderCore → Scheduler → Callback(Arc<PipelineOwner>) → PipelineOwner
+    ///        ↑                                                           │
+    ///        └───────────────────────────────────────────────────────────┘
+    ///                            (circular reference = memory leak)
+    /// ```
+    ///
+    /// With Weak, the cycle is broken:
+    ///
+    /// ```text
+    /// EmbedderCore → Scheduler → Callback(Weak<PipelineOwner>) ⇢ PipelineOwner
+    ///        ↑                                                           │
+    ///        └───────────────────────────────────────────────────────────┘
+    ///                            (weak link breaks cycle = no leak)
+    /// ```
+    ///
+    /// When `EmbedderCore` is dropped, `PipelineOwner` can be freed even though
+    /// the `Scheduler` still holds callbacks. The `upgrade()` returns `None` for
+    /// graceful cleanup.
     pub fn wire_up_pipeline(
         &self,
         pipeline_weak: Weak<RwLock<PipelineOwner>>,
@@ -80,6 +103,7 @@ impl SchedulerBinding {
 
         self.scheduler
             .add_persistent_frame_callback(Arc::new(move |_timing| {
+                // Attempt to upgrade Weak to Arc - succeeds if PipelineOwner still exists
                 if let Some(pipeline) = pipeline_weak.upgrade() {
                     let mut owner = pipeline.write();
                     // Only mark for redraw if there were actual changes
@@ -87,6 +111,7 @@ impl SchedulerBinding {
                         needs_redraw.store(true, Ordering::Relaxed);
                     }
                 } else {
+                    // PipelineOwner was dropped - this is expected during shutdown
                     tracing::warn!("Pipeline dropped during frame callback");
                 }
             }));
