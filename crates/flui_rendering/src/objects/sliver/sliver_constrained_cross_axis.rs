@@ -1,29 +1,147 @@
 //! RenderSliverConstrainedCrossAxis - Constrains cross-axis extent for slivers
+//!
+//! Implements cross-axis width/height limiting for slivers. While slivers scroll on their main
+//! axis, this widget constrains the perpendicular cross-axis (width for vertical scroll, height
+//! for horizontal scroll). Essential for responsive design and Material Design width constraints.
+//!
+//! # Flutter Equivalence
+//!
+//! | FLUI | Flutter |
+//! |------|---------|
+//! | `RenderSliverConstrainedCrossAxis` | `RenderSliverConstrainedCrossAxis` from `package:flutter/src/rendering/sliver.dart` |
+//! | `max_extent` property | `maxExtent` property |
+//! | Cross-axis clamping | `min(parentCrossAxis, maxExtent)` logic |
+//!
+//! # Layout Protocol
+//!
+//! 1. **Calculate constrained cross-axis**
+//!    - `constrained = min(parent_cross_axis_extent, max_extent)`
+//!
+//! 2. **Create child constraints with reduced cross-axis**
+//!    - All fields pass through unchanged except cross_axis_extent
+//!    - Main-axis constraints (scroll_offset, paint_extent) unchanged
+//!
+//! 3. **Layout child with constrained extent**
+//!    - Child receives reduced cross-axis constraint
+//!
+//! 4. **Return geometry with constrained cross-axis**
+//!    - All fields from child except cross_axis_extent
+//!    - cross_axis_extent set to constrained value
+//!
+//! # Paint Protocol
+//!
+//! 1. **Paint child at current offset**
+//!    - Child painted normally
+//!    - Constraint only affects layout, not paint
+//!
+//! # Performance
+//!
+//! - **Layout**: O(child) - pass-through with constraint modification
+//! - **Paint**: O(child) - pass-through proxy
+//! - **Memory**: 4 bytes (f32 max_extent) + 48 bytes (SliverGeometry cache)
+//!
+//! # Use Cases
+//!
+//! - **Responsive lists**: Limit list width on wide screens
+//! - **Centered content**: Narrow scrollable content in wide viewports
+//! - **Material Design**: Enforce maximum width constraints (600dp for lists)
+//! - **Multi-column layouts**: Control column widths in responsive grids
+//! - **Reading optimization**: Limit line length for readability
+//!
+//! # Comparison with Related Objects
+//!
+//! - **vs SliverPadding**: Padding adds insets, ConstrainedCrossAxis limits max width
+//! - **vs BoxConstrainedBox**: ConstrainedCrossAxis is for slivers, ConstrainedBox is for boxes
+//! - **vs SliverCrossAxisGroup**: Group manages multiple slivers, Constrained limits single one
+//!
+//! # Examples
+//!
+//! ```rust,ignore
+//! use flui_rendering::RenderSliverConstrainedCrossAxis;
+//!
+//! // Limit list to 600px width (Material Design)
+//! let constrained_list = RenderSliverConstrainedCrossAxis::new(600.0);
+//!
+//! // No constraint (infinite - default)
+//! let unconstrained = RenderSliverConstrainedCrossAxis::default();
+//!
+//! // Responsive: narrow on mobile, capped on desktop
+//! let mut responsive = RenderSliverConstrainedCrossAxis::new(800.0);
+//! // ... on screen resize ...
+//! responsive.set_max_extent(1200.0);
+//! ```
 
 use crate::core::{RuntimeArity, LegacySliverRender, SliverSliver};
 use flui_painting::Canvas;
 use flui_types::{SliverConstraints, SliverGeometry};
 
-/// RenderObject that constrains the cross-axis extent of sliver content
+/// RenderObject that constrains the cross-axis extent of sliver content.
 ///
-/// While slivers primarily deal with main-axis scrolling, they also have
-/// a cross-axis (width for vertical scrolling, height for horizontal).
-/// This widget allows you to constrain that cross-axis extent.
+/// While slivers primarily deal with main-axis scrolling (vertical or horizontal),
+/// they also have a perpendicular cross-axis (width for vertical scroll, height for
+/// horizontal scroll). This RenderObject constrains that cross-axis extent to a
+/// maximum value, enabling responsive layouts that adapt to wide viewports.
+///
+/// # Arity
+///
+/// `RuntimeArity::Exact(1)` - Must have exactly 1 child sliver (optional in implementation).
+///
+/// # Protocol
+///
+/// Sliver protocol - Uses `SliverConstraints` and returns `SliverGeometry`.
+///
+/// # Pattern
+///
+/// **Cross-Axis Constraint Proxy** - Passes constraints to child with reduced
+/// cross_axis_extent (clamped to max_extent), then returns child geometry with
+/// constrained cross-axis. Layout and paint are otherwise transparent.
 ///
 /// # Use Cases
 ///
-/// - Limiting list width in wide viewports
-/// - Creating narrow centered scrollable content
-/// - Responsive design that caps maximum width
-/// - Implementing material design width constraints
+/// - **Responsive lists**: Limit list width on desktop while full-width on mobile
+/// - **Centered content**: Narrow scrollable content in wide viewports (e.g., reading apps)
+/// - **Material Design**: Enforce maximum width constraints (600dp recommendation)
+/// - **Multi-column layouts**: Control column widths in responsive grid systems
+/// - **Reading optimization**: Limit line length for better readability
+/// - **Adaptive design**: Different max widths for different breakpoints
+///
+/// # Flutter Compliance
+///
+/// Matches Flutter's RenderSliverConstrainedCrossAxis behavior:
+/// - Clamps cross_axis_extent to min(parent, max_extent) ✅
+/// - Passes all other constraint fields unchanged ✅
+/// - Returns child geometry with constrained cross-axis ✅
+/// - Preserves child's main-axis geometry (scroll_extent, paint_extent) ✅
+/// - Paint is transparent proxy ✅
+///
+/// # Behavior Details
+///
+/// | Scenario | parent_cross_axis | max_extent | child_cross_axis | Result |
+/// |----------|-------------------|------------|------------------|--------|
+/// | No constraint | 1000.0 | ∞ | 1000.0 | Pass through |
+/// | Within limit | 400.0 | 600.0 | 400.0 | No change |
+/// | Exceeds limit | 1000.0 | 600.0 | 600.0 | Clamped to max |
+/// | Exact match | 600.0 | 600.0 | 600.0 | At limit |
 ///
 /// # Example
 ///
 /// ```rust,ignore
 /// use flui_rendering::RenderSliverConstrainedCrossAxis;
 ///
-/// // Limit cross-axis extent to 600px max
-/// let constrained = RenderSliverConstrainedCrossAxis::new(600.0);
+/// // Material Design: limit list to 600px width
+/// let constrained_list = RenderSliverConstrainedCrossAxis::new(600.0);
+///
+/// // Responsive design with breakpoints
+/// let mut responsive = RenderSliverConstrainedCrossAxis::new(800.0);
+/// // On screen resize...
+/// if viewport_width > 1200.0 {
+///     responsive.set_max_extent(1000.0); // Wide desktop
+/// } else {
+///     responsive.set_max_extent(600.0);  // Tablet/mobile
+/// }
+///
+/// // No constraint (pass through)
+/// let unconstrained = RenderSliverConstrainedCrossAxis::default(); // f32::INFINITY
 /// ```
 #[derive(Debug)]
 pub struct RenderSliverConstrainedCrossAxis {
