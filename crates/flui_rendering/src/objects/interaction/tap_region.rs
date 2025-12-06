@@ -1,12 +1,112 @@
-//! RenderTapRegion - detects taps inside or outside its bounds
+//! RenderTapRegion - Detects taps inside or outside widget bounds
 //!
-//! This RenderObject can detect when taps occur both inside and outside
-//! its boundaries, which is useful for implementing dismissible overlays,
-//! dropdown menus, and similar UI patterns.
+//! Implements Flutter's TapRegion that can detect when taps occur both inside
+//! and outside its boundaries, useful for implementing dismissible overlays,
+//! dropdown menus, and focus management.
 //!
-//! Flutter reference: https://api.flutter.dev/flutter/widgets/TapRegion-class.html
+//! # Flutter Equivalence
+//!
+//! | FLUI | Flutter |
+//! |------|---------|
+//! | `RenderTapRegion` | `RenderTapRegion` from `package:flutter/src/rendering/proxy_box.dart` |
+//! | `TapRegionCallbacks` | TapRegion callbacks |
+//! | `on_tap_inside` | `onTapInside` callback |
+//! | `on_tap_outside` | `onTapOutside` callback |
+//! | `on_tap_up_inside` | `onTapUpInside` callback (tap release inside) |
+//! | `on_tap_up_outside` | `onTapUpOutside` callback (tap release outside) |
+//! | `group_id` | `groupId` property (TapRegionGroup) |
+//! | `consume_outside_taps` | `consumeOutsideTaps` property |
+//!
+//! # Layout Protocol
+//!
+//! 1. **Pass constraints to child**
+//!    - Child receives same constraints (proxy behavior)
+//!
+//! 2. **Cache size**
+//!    - Store child size for hit region bounds calculation
+//!
+//! 3. **Return child size**
+//!    - Container size = child size (no size change)
+//!
+//! # Paint Protocol
+//!
+//! 1. **Paint child normally**
+//!    - Child painted at widget offset
+//!    - No visual changes from tap detection
+//!
+//! 2. **Register tap region** (framework integration)
+//!    - TapRegionSurface ancestor manages global tap detection
+//!    - Hit testing provides region bounds for inside/outside detection
+//!    - Event dispatcher invokes callbacks based on tap location
+//!
+//! # Event Handling Protocol
+//!
+//! 1. **Tap inside**
+//!    - Triggered when tap occurs within bounds (or any grouped region)
+//!    - Calls `on_tap_inside` callback if provided
+//!
+//! 2. **Tap outside**
+//!    - Triggered when tap occurs outside bounds (and its group)
+//!    - Calls `on_tap_outside` callback if provided
+//!    - Can consume event if `consume_outside_taps = true`
+//!
+//! 3. **Tap up inside**
+//!    - Triggered when tap is released inside bounds
+//!    - Calls `on_tap_up_inside` callback if provided
+//!
+//! 4. **Tap up outside**
+//!    - Triggered when tap is released outside bounds
+//!    - Calls `on_tap_up_outside` callback if provided
+//!
+//! # Performance
+//!
+//! - **Layout**: O(1) - pass-through to child + size cache
+//! - **Paint**: O(1) - pass-through to child
+//! - **Event handling**: O(1) - callback invocation per event
+//! - **Memory**: ~64 bytes (4 Arc callbacks + group ID + flags + size)
+//!
+//! # Use Cases
+//!
+//! - **Dismissible overlays**: Tap outside to close modal dialogs
+//! - **Dropdown menus**: Close menu when clicking outside
+//! - **Focus management**: Detect when user clicks elsewhere
+//! - **Tooltip dismissal**: Hide tooltip on outside click
+//! - **Context menus**: Close menu on outside interaction
+//! - **Autocomplete**: Dismiss suggestions on outside click
+//!
+//! # Grouping
+//!
+//! Multiple TapRegion widgets can be grouped using `group_id`. When grouped,
+//! they act as a single region - a tap inside any member is considered
+//! "inside" for all members. This is useful for:
+//!
+//! - **Split UI elements**: Button + dropdown menu as one region
+//! - **Toolbar groups**: Multiple buttons as single tap region
+//! - **Form sections**: Related inputs as single focus region
+//!
+//! # Examples
+//!
+//! ```rust,ignore
+//! use flui_rendering::{RenderTapRegion, TapRegionCallbacks};
+//!
+//! // Dismissible overlay - tap outside to close
+//! let callbacks = TapRegionCallbacks::new()
+//!     .with_on_tap_outside(|| println!("Closing overlay"));
+//! let overlay = RenderTapRegion::new(callbacks);
+//!
+//! // Grouped regions - button + dropdown act as one
+//! let group_id = TapRegionGroupId::new(1);
+//! let button_region = RenderTapRegion::with_group(callbacks.clone(), group_id);
+//! let dropdown_region = RenderTapRegion::with_group(callbacks, group_id);
+//! // Tapping dropdown won't trigger on_tap_outside for button
+//!
+//! // Consume outside taps (prevent propagation)
+//! let mut modal = RenderTapRegion::new(callbacks);
+//! modal.set_consume_outside_taps(true);
+//! ```
 
-use crate::core::{BoxLayoutCtx, BoxPaintCtx, FullRenderTree, RenderBox, Single};
+use crate::core::{BoxLayoutCtx, BoxPaintCtx, RenderBox, Single};
+use crate::{RenderObject, RenderResult};
 use flui_types::Size;
 use std::sync::Arc;
 
@@ -100,31 +200,65 @@ impl TapRegionGroupId {
     }
 }
 
-/// RenderObject that detects taps inside or outside its bounds
+/// RenderObject that detects taps inside or outside its bounds.
 ///
 /// Unlike standard gesture recognizers, TapRegion can detect taps that occur
-/// outside its boundaries. This is useful for implementing:
+/// outside its boundaries, enabling interaction patterns where outside clicks
+/// trigger actions (dismissal, focus loss, etc.).
 ///
-/// - Dismissible overlays (tap outside to close)
-/// - Dropdown menus (tap outside to close)
-/// - Modal dialogs (tap outside to dismiss)
-/// - Focus management (detect when user taps elsewhere)
+/// # Arity
+///
+/// `Single` - Must have exactly 1 child.
+///
+/// # Protocol
+///
+/// Box protocol - Uses `BoxConstraints` and returns `Size`.
+///
+/// # Pattern
+///
+/// **Proxy** - Passes constraints unchanged, only adds tap detection.
+///
+/// # Use Cases
+///
+/// - **Dismissible overlays**: Modal dialogs that close on outside tap
+/// - **Dropdown menus**: Menus that close when clicking outside
+/// - **Focus management**: Detect clicks outside focused element
+/// - **Tooltip dismissal**: Hide tooltips on outside interaction
+/// - **Context menus**: Close menus on outside click
+/// - **Autocomplete**: Dismiss suggestions when clicking away
+///
+/// # Flutter Compliance
+///
+/// Matches Flutter's RenderTapRegion behavior:
+/// - Passes constraints unchanged to child (proxy for layout)
+/// - Size determined by child
+/// - Detects taps both inside and outside bounds
+/// - Supports region grouping via `group_id`
+/// - Can consume outside taps with `consume_outside_taps`
+/// - Provides callbacks for tap/tap up inside/outside
+/// - Requires TapRegionSurface ancestor for tap coordination
 ///
 /// # Grouping
 ///
 /// Multiple TapRegion widgets can be grouped using `group_id`. When grouped,
 /// they act as a single region - a tap inside any member is considered
-/// "inside" for all members.
+/// "inside" for all members. Useful for split UI elements that should act
+/// as one tap region (e.g., button + attached dropdown).
 ///
 /// # Example
 ///
 /// ```rust,ignore
 /// use flui_rendering::{RenderTapRegion, TapRegionCallbacks};
 ///
+/// // Dismissible overlay
 /// let callbacks = TapRegionCallbacks::new()
-///     .with_on_tap_outside(|| println!("Tapped outside - closing overlay"));
-///
+///     .with_on_tap_outside(|| println!("Closing overlay"));
 /// let tap_region = RenderTapRegion::new(callbacks);
+///
+/// // Grouped regions (button + dropdown = one region)
+/// let group_id = TapRegionGroupId::new(1);
+/// let button = RenderTapRegion::with_group(callbacks.clone(), group_id);
+/// let dropdown = RenderTapRegion::with_group(callbacks, group_id);
 /// ```
 #[derive(Debug)]
 pub struct RenderTapRegion {
@@ -253,29 +387,28 @@ impl Default for RenderTapRegion {
     }
 }
 
-impl<T: FullRenderTree> RenderBox<T, Single> for RenderTapRegion {
-    fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Single, BoxProtocol>) -> Size
-    where
-        T: crate::core::LayoutTree,
-    {
-        let child_id = ctx.children.single();
+impl RenderObject for RenderTapRegion {}
 
-        // Layout child with same constraints
-        let size = ctx.layout_child(child_id, ctx.constraints);
+impl RenderBox<Single> for RenderTapRegion {
+    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Single>) -> RenderResult<Size> {
+        // Single arity: use ctx.single_child() which returns ElementId directly
+        let child_id = ctx.single_child();
 
-        // Cache size
+        // Proxy behavior: pass constraints unchanged to child
+        let size = ctx.layout_child(child_id, ctx.constraints)?;
+
+        // Cache size for hit region bounds calculation
         self.size = size;
 
-        size
+        Ok(size)
     }
 
-    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Single>)
-    where
-        T: crate::core::PaintTree,
-    {
-        let child_id = ctx.children.single();
+    fn paint(&self, ctx: &mut BoxPaintCtx<'_, Single>) {
+        // Single arity: use ctx.single_child() which returns ElementId directly
+        let child_id = ctx.single_child();
 
-        // Paint child normally
+        // Proxy behavior: paint child at widget offset
+        // Tap detection doesn't affect visual rendering
         ctx.paint_child(child_id, ctx.offset);
 
         // Note: Tap detection requires integration with the event system:
