@@ -14,19 +14,23 @@
 //!   ├─ depth: usize
 //!   ├─ lifecycle: ViewLifecycle
 //!   ├─ flags: AtomicViewFlags
-//!   ├─ view_id: Option<ViewId> (reference into ViewTree - new architecture)
-//!   ├─ view_object: Option<Box<dyn ViewObject>> (legacy - will be deprecated)
+//!   ├─ view_id: Option<ViewId> (reference into ViewTree)
 //!   ├─ view_mode: ViewMode
 //!   ├─ key: Option<Key>
 //!   └─ pending_children: Option<PendingChildren>
 //! ```
+//!
+//! # Four-Tree Architecture
+//!
+//! ViewElement only stores a ViewId reference. The actual ViewObject lives in ViewTree.
+//! To access the ViewObject, use: `view_tree.get(element.view_id())`
 //!
 //! # Differences from RenderElement
 //!
 //! - No render object or render state
 //! - No layout/paint flags (only DIRTY for rebuild)
 //! - Simpler lifecycle (no LaidOut/Painted states)
-//! - Stores ViewObject instead of RenderObject
+//! - References ViewTree via ViewId (RenderElement references RenderTree via RenderId)
 
 use std::any::Any;
 use std::fmt;
@@ -85,17 +89,11 @@ pub struct ViewElement {
     flags: AtomicViewFlags,
 
     // ========== View ==========
-    /// Reference into ViewTree (new four-tree architecture).
+    /// Reference into ViewTree (four-tree architecture).
     ///
-    /// This is the preferred way to reference ViewObjects. When set, the actual
-    /// ViewObject is stored in ViewTree, and this element just holds the ID.
+    /// The actual ViewObject is stored in ViewTree, this element just holds the ID.
+    /// Access the ViewObject through ViewTree.get(view_id).
     view_id: Option<ViewId>,
-
-    /// Type-erased view object storage (legacy).
-    ///
-    /// This is kept for backward compatibility. New code should use ViewTree + view_id.
-    /// Eventually this will be deprecated once all code migrates to the new architecture.
-    view_object: Option<Box<dyn ViewObject>>,
 
     /// View mode - categorizes the view type.
     view_mode: ViewMode,
@@ -119,7 +117,7 @@ impl fmt::Debug for ViewElement {
             .field("lifecycle", &self.lifecycle)
             .field("view_mode", &self.view_mode)
             .field("children_count", &self.children.len())
-            .field("has_view_object", &self.view_object.is_some())
+            .field("view_id", &self.view_id)
             .field("debug_name", &self.debug_name)
             .finish()
     }
@@ -130,15 +128,29 @@ impl fmt::Debug for ViewElement {
 // ============================================================================
 
 impl ViewElement {
-    /// Creates a new ViewElement with the given view object and mode.
-    pub fn new<V: ViewObject>(view_object: V, mode: ViewMode) -> Self {
+    /// Creates a new ViewElement with a ViewId reference.
+    ///
+    /// # Four-Tree Architecture
+    ///
+    /// The ViewObject should be inserted into ViewTree first to obtain the ViewId:
+    ///
+    /// ```rust,ignore
+    /// // 1. Insert ViewObject into ViewTree
+    /// let view_id = view_tree.insert(my_view_object, ViewMode::Stateless);
+    ///
+    /// // 2. Create ViewElement with the ViewId
+    /// let element = ViewElement::new(Some(view_id), ViewMode::Stateless);
+    /// ```
+    pub fn new(view_id: Option<ViewId>, mode: ViewMode) -> Self {
         debug_assert!(
             mode.is_component() || mode.is_empty(),
             "ViewElement should only be used for component views, got {mode:?}"
         );
 
         let flags = AtomicViewFlags::new();
-        flags.insert(ViewFlags::DIRTY); // Needs initial build
+        if view_id.is_some() {
+            flags.insert(ViewFlags::DIRTY); // Needs initial build
+        }
 
         Self {
             id: None,
@@ -148,8 +160,7 @@ impl ViewElement {
             depth: AtomicUsize::new(0),
             lifecycle: ViewLifecycle::Initial,
             flags,
-            view_id: None,
-            view_object: Some(Box::new(view_object)),
+            view_id,
             view_mode: mode,
             key: None,
             pending_children: None,
@@ -168,7 +179,6 @@ impl ViewElement {
             lifecycle: ViewLifecycle::Initial,
             flags: AtomicViewFlags::new(),
             view_id: None,
-            view_object: None,
             view_mode: ViewMode::Empty,
             key: None,
             pending_children: None,
@@ -188,7 +198,6 @@ impl ViewElement {
             lifecycle: ViewLifecycle::Initial,
             flags: AtomicViewFlags::new(),
             view_id: None,
-            view_object: None,
             view_mode: ViewMode::Empty,
             key: None,
             pending_children: Some(children),
@@ -466,78 +475,6 @@ impl ViewElement {
     }
 }
 
-// ============================================================================
-// VIEW OBJECT ACCESS (Legacy - will be deprecated)
-// ============================================================================
-
-impl ViewElement {
-    /// Returns true if this element has a view object.
-    ///
-    /// **Legacy**: Prefer using `has_view_id()` with ViewTree in new code.
-    #[inline]
-    #[must_use]
-    pub fn has_view_object(&self) -> bool {
-        self.view_object.is_some()
-    }
-
-    /// Get the view object as a reference.
-    #[inline]
-    #[must_use]
-    pub fn view_object(&self) -> Option<&dyn ViewObject> {
-        self.view_object.as_ref().map(|b| b.as_ref())
-    }
-
-    /// Get the view object as a mutable reference.
-    #[inline]
-    #[must_use]
-    pub fn view_object_mut(&mut self) -> Option<&mut dyn ViewObject> {
-        self.view_object.as_mut().map(|b| b.as_mut())
-    }
-
-    /// Get the view object as Any for downcasting.
-    #[inline]
-    #[must_use]
-    pub fn view_object_any(&self) -> Option<&dyn Any> {
-        self.view_object.as_ref().map(|b| b.as_any())
-    }
-
-    /// Get the view object as mutable Any for downcasting.
-    #[inline]
-    #[must_use]
-    pub fn view_object_any_mut(&mut self) -> Option<&mut dyn Any> {
-        self.view_object.as_mut().map(|b| b.as_any_mut())
-    }
-
-    /// Downcast view object to concrete type.
-    #[inline]
-    pub fn view_object_as<V: Any + Send + Sync + 'static>(&self) -> Option<&V> {
-        self.view_object.as_ref()?.as_any().downcast_ref::<V>()
-    }
-
-    /// Downcast view object to concrete type (mutable).
-    #[inline]
-    pub fn view_object_as_mut<V: Any + Send + Sync + 'static>(&mut self) -> Option<&mut V> {
-        self.view_object.as_mut()?.as_any_mut().downcast_mut::<V>()
-    }
-
-    /// Take the view object out.
-    #[inline]
-    pub fn take_view_object(&mut self) -> Option<Box<dyn ViewObject>> {
-        self.view_object.take()
-    }
-
-    /// Set a new view object.
-    #[inline]
-    pub fn set_view_object<V: ViewObject>(&mut self, view_object: V) {
-        self.view_object = Some(Box::new(view_object));
-    }
-
-    /// Set view object from boxed ViewObject.
-    #[inline]
-    pub fn set_view_object_boxed(&mut self, view_object: Box<dyn ViewObject>) {
-        self.view_object = Some(view_object);
-    }
-}
 
 // ============================================================================
 // CHILD MANAGEMENT
@@ -642,36 +579,15 @@ impl ViewElement {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::BuildContext;
-
-    // Test view object type
-    #[derive(Debug)]
-    struct TestViewObject {
-        value: i32,
-    }
-
-    impl ViewObject for TestViewObject {
-        fn mode(&self) -> ViewMode {
-            ViewMode::Stateless
-        }
-
-        fn build(&mut self, _ctx: &dyn BuildContext) -> Option<Box<dyn ViewObject>> {
-            None
-        }
-
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
-        fn as_any_mut(&mut self) -> &mut dyn Any {
-            self
-        }
-    }
 
     #[test]
-    fn test_view_element_creation() {
-        let element = ViewElement::new(TestViewObject { value: 42 }, ViewMode::Stateless);
-        assert!(element.has_view_object());
+    fn test_view_element_creation_with_view_id() {
+        // Mock ViewId (in real usage, this comes from ViewTree)
+        let view_id = ViewId::new(1);
+        let element = ViewElement::new(Some(view_id), ViewMode::Stateless);
+
+        assert!(element.has_view_id());
+        assert_eq!(element.view_id(), Some(view_id));
         assert_eq!(element.view_mode(), ViewMode::Stateless);
         assert!(element.is_component());
         assert!(!element.is_provider());
@@ -681,23 +597,15 @@ mod tests {
     #[test]
     fn test_view_element_empty() {
         let element = ViewElement::empty();
-        assert!(!element.has_view_object());
+        assert!(!element.has_view_id());
         assert_eq!(element.view_mode(), ViewMode::Empty);
         assert_eq!(element.debug_name(), "Empty");
     }
 
     #[test]
-    fn test_view_object_downcast() {
-        let element = ViewElement::new(TestViewObject { value: 42 }, ViewMode::Stateless);
-
-        let view_object = element.view_object_as::<TestViewObject>();
-        assert!(view_object.is_some());
-        assert_eq!(view_object.unwrap().value, 42);
-    }
-
-    #[test]
     fn test_lifecycle() {
-        let mut element = ViewElement::new(TestViewObject { value: 1 }, ViewMode::Stateless);
+        let view_id = ViewId::new(1);
+        let mut element = ViewElement::new(Some(view_id), ViewMode::Stateless);
 
         assert_eq!(element.lifecycle(), ViewLifecycle::Initial);
 
@@ -726,7 +634,8 @@ mod tests {
 
     #[test]
     fn test_children_management() {
-        let mut element = ViewElement::new(TestViewObject { value: 1 }, ViewMode::Stateless);
+        let view_id = ViewId::new(1);
+        let mut element = ViewElement::new(Some(view_id), ViewMode::Stateless);
 
         assert!(!element.has_children());
 
@@ -746,7 +655,8 @@ mod tests {
 
     #[test]
     fn test_dirty_tracking() {
-        let element = ViewElement::new(TestViewObject { value: 1 }, ViewMode::Stateless);
+        let view_id = ViewId::new(1);
+        let element = ViewElement::new(Some(view_id), ViewMode::Stateless);
 
         // Initially dirty
         assert!(element.is_dirty());
