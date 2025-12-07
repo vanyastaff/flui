@@ -79,23 +79,29 @@ pub enum Element {
 impl Element {
     // ========== Constructors ==========
 
-    /// Creates a new View element with the given view object and mode.
-    pub fn view<V: ViewObject>(view_object: V, mode: ViewMode) -> Self {
-        Self::View(ViewElement::new(view_object, mode))
+    /// Creates a new View element with the given view ID and mode.
+    ///
+    /// Note: In the four-tree architecture, view objects are stored in ViewTree.
+    /// This constructor creates an element that references a view by ID.
+    pub fn view(view_id: Option<flui_view::ViewId>, mode: ViewMode) -> Self {
+        Self::View(ViewElement::new(view_id, mode))
     }
 
-    /// Creates a new Render element with render object.
-    pub fn render<RO: RenderObject>(render_object: RO, protocol: ProtocolId) -> Self {
-        Self::Render(RenderElement::new(render_object, protocol))
+    /// Creates a new Render element with render ID and protocol.
+    ///
+    /// Note: In the four-tree architecture, render objects are stored in RenderTree.
+    /// This constructor creates an element that references a render object by ID.
+    pub fn render(render_id: Option<flui_rendering::RenderId>, protocol: ProtocolId) -> Self {
+        Self::Render(RenderElement::new(render_id, protocol, RuntimeArity::Variable))
     }
 
-    /// Creates a new Render element with render object and arity.
-    pub fn render_with_arity<RO: RenderObject>(
-        render_object: RO,
+    /// Creates a new Render element with render ID, protocol, and arity.
+    pub fn render_with_arity(
+        render_id: Option<flui_rendering::RenderId>,
         protocol: ProtocolId,
         arity: RuntimeArity,
     ) -> Self {
-        Self::Render(RenderElement::with_arity(render_object, protocol, arity))
+        Self::Render(RenderElement::new(render_id, protocol, arity))
     }
 
     /// Creates an empty element (View variant).
@@ -119,17 +125,18 @@ impl Element {
             .collect()
     }
 
-    /// Creates an element with mode (for backward compatibility).
+    /// Creates an element with view ID and mode (for backward compatibility).
     ///
-    /// Uses View variant for component modes, but callers should prefer
-    /// `Element::view()` or `Element::render()` for clarity.
-    pub fn with_mode<V: ViewObject>(view_object: V, mode: ViewMode) -> Self {
-        Self::View(ViewElement::new(view_object, mode))
+    /// Note: API changed - now takes ViewId instead of ViewObject.
+    pub fn with_mode(view_id: Option<flui_view::ViewId>, mode: ViewMode) -> Self {
+        Self::View(ViewElement::new(view_id, mode))
     }
 
-    /// Creates a new view element (backward compatibility alias).
-    pub fn new<V: ViewObject>(view_object: V) -> Self {
-        Self::View(ViewElement::new(view_object, ViewMode::Empty))
+    /// Creates a new view element with optional view ID (backward compatibility alias).
+    ///
+    /// Note: API changed - now takes ViewId instead of ViewObject.
+    pub fn new(view_id: Option<flui_view::ViewId>) -> Self {
+        Self::View(ViewElement::new(view_id, ViewMode::Empty))
     }
 
     // ========== Element ID ==========
@@ -339,156 +346,149 @@ impl Element {
         self.with_pending_children(Self::boxed_children(children))
     }
 
-    // ========== View Object Access (View variant only) ==========
+    // ========== View Object Access (DEPRECATED - objects now in ViewTree) ==========
+    //
+    // Note: In the four-tree architecture, ViewObjects are stored in ViewTree, not in ViewElement.
+    // ViewElement only holds a ViewId reference. To access view objects, use ViewTree.get(view_id).
+    //
+    // These methods are kept for API compatibility but always return None/false.
 
     /// Returns true if this element has a view object.
+    ///
+    /// **DEPRECATED**: Always returns false. View objects are stored in ViewTree.
+    /// Use `ViewElement::view_id()` to get the ID, then `ViewTree::get(id)` to access the object.
     #[inline]
     #[must_use]
+    #[deprecated(note = "View objects are now stored in ViewTree. Use ViewElement::view_id() and ViewTree::get()")]
     pub fn has_view_object(&self) -> bool {
-        match self {
-            Self::View(v) => v.has_view_object(),
-            Self::Render(_) => false,
-        }
+        false // ViewElement no longer stores objects
     }
 
     /// Get the view object as a reference.
+    ///
+    /// **DEPRECATED**: Always returns None. View objects are stored in ViewTree.
     #[inline]
     #[must_use]
+    #[deprecated(note = "View objects are now stored in ViewTree. Use ViewElement::view_id() and ViewTree::get()")]
     pub fn view_object(&self) -> Option<&dyn ViewObject> {
-        match self {
-            Self::View(v) => v.view_object(),
-            Self::Render(_) => None,
-        }
+        None // ViewElement no longer stores objects
     }
 
     /// Get the view object as a mutable reference.
+    ///
+    /// **DEPRECATED**: Always returns None. View objects are stored in ViewTree.
     #[inline]
     #[must_use]
+    #[deprecated(note = "View objects are now stored in ViewTree. Use ViewElement::view_id() and ViewTree::get_mut()")]
     pub fn view_object_mut(&mut self) -> Option<&mut dyn ViewObject> {
-        match self {
-            Self::View(v) => v.view_object_mut(),
-            Self::Render(_) => None,
-        }
+        None // ViewElement no longer stores objects
     }
 
     /// Get the view object as Any for downcasting.
+    ///
+    /// **DEPRECATED**: Always returns None. View objects are stored in ViewTree.
     #[inline]
     #[must_use]
+    #[deprecated(note = "View objects are now stored in ViewTree")]
     pub fn view_object_any(&self) -> Option<&dyn Any> {
-        match self {
-            Self::View(v) => v.view_object_any(),
-            Self::Render(_) => None,
-        }
+        None
     }
 
     /// Get the view object as mutable Any for downcasting.
+    ///
+    /// **DEPRECATED**: Always returns None. View objects are stored in ViewTree.
     #[inline]
     #[must_use]
+    #[deprecated(note = "View objects are now stored in ViewTree")]
     pub fn view_object_any_mut(&mut self) -> Option<&mut dyn Any> {
-        match self {
-            Self::View(v) => v.view_object_any_mut(),
-            Self::Render(_) => None,
-        }
+        None
     }
 
     /// Downcast view object to concrete type.
+    ///
+    /// **DEPRECATED**: Always returns None. View objects are stored in ViewTree.
     #[inline]
+    #[deprecated(note = "View objects are now stored in ViewTree")]
     pub fn view_object_as<V: Any + Send + Sync + 'static>(&self) -> Option<&V> {
-        match self {
-            Self::View(v) => v.view_object_as::<V>(),
-            Self::Render(_) => None,
-        }
+        None
     }
 
     /// Downcast view object to concrete type (mutable).
+    ///
+    /// **DEPRECATED**: Always returns None. View objects are stored in ViewTree.
     #[inline]
+    #[deprecated(note = "View objects are now stored in ViewTree")]
     pub fn view_object_as_mut<V: Any + Send + Sync + 'static>(&mut self) -> Option<&mut V> {
-        match self {
-            Self::View(v) => v.view_object_as_mut::<V>(),
-            Self::Render(_) => None,
-        }
+        None
     }
 
     /// Take the view object out.
+    ///
+    /// **DEPRECATED**: Always returns None. View objects are stored in ViewTree.
     #[inline]
+    #[deprecated(note = "View objects are now stored in ViewTree")]
     pub fn take_view_object(&mut self) -> Option<Box<dyn ViewObject>> {
-        match self {
-            Self::View(v) => v.take_view_object(),
-            Self::Render(_) => None,
-        }
+        None
     }
 
     /// Set a new view object (View variant only).
+    ///
+    /// **DEPRECATED**: No-op. View objects are stored in ViewTree.
     #[inline]
-    pub fn set_view_object<V: ViewObject>(&mut self, view_object: V) {
-        if let Self::View(v) = self {
-            v.set_view_object(view_object);
-        }
+    #[deprecated(note = "View objects are now stored in ViewTree. Use ViewTree::insert() or ViewTree::update()")]
+    pub fn set_view_object<V: ViewObject>(&mut self, _view_object: V) {
+        // No-op - ViewElement no longer stores objects
     }
 
     /// Set view object from boxed ViewObject.
+    ///
+    /// **DEPRECATED**: No-op. View objects are stored in ViewTree.
     #[inline]
-    pub fn set_view_object_boxed(&mut self, view_object: Box<dyn ViewObject>) {
-        if let Self::View(v) = self {
-            v.set_view_object_boxed(view_object);
-        }
+    #[deprecated(note = "View objects are now stored in ViewTree. Use ViewTree::insert() or ViewTree::update()")]
+    pub fn set_view_object_boxed(&mut self, _view_object: Box<dyn ViewObject>) {
+        // No-op - ViewElement no longer stores objects
     }
 
     // ========== Render State Access (for RenderTreeAccess trait) ==========
 
     /// Returns the render state for this element.
     ///
-    /// Note: ViewElement requires ViewObject to implement render_state().
-    /// RenderElement state access is through its specialized API.
+    /// **DEPRECATED**: Always returns None. View objects are in ViewTree, render state in RenderTree.
     #[inline]
+    #[deprecated(note = "State is now accessed via ViewTree and RenderTree")]
     pub fn render_state(&self) -> Option<&dyn Any> {
-        match self {
-            Self::View(v) => v.view_object()?.render_state(),
-            Self::Render(_) => None, // RenderElement state is accessed via specialized API
-        }
+        None // State access requires tree access
     }
 
     /// Returns a mutable reference to the render state.
     ///
-    /// Note: ViewElement requires ViewObject to implement render_state_mut().
-    /// RenderElement state access is through its specialized API.
+    /// **DEPRECATED**: Always returns None. View objects are in ViewTree, render state in RenderTree.
     #[inline]
+    #[deprecated(note = "State is now accessed via ViewTree and RenderTree")]
     pub fn render_state_mut(&mut self) -> Option<&mut dyn Any> {
-        match self {
-            Self::View(v) => v.view_object_mut()?.render_state_mut(),
-            Self::Render(_) => None, // RenderElement state is accessed via specialized API
-        }
+        None // State access requires tree access
     }
 
     // ========== Render Object Access (for RenderTreeAccess trait) ==========
 
     /// Returns the render object for this element.
     ///
-    /// - For `View` elements: Returns None (ViewObject doesn't expose RenderObject)
-    /// - For `Render` elements: Returns the RenderObject as `&dyn Any` for downcasting
-    ///
-    /// # Note
-    ///
-    /// This method is primarily for RenderElement. ViewElement may build RenderElements
-    /// internally, but doesn't expose them through this method.
+    /// **DEPRECATED**: Always returns None. Render objects are stored in RenderTree.
+    /// Use `RenderElement::render_id()` to get the ID, then `RenderTree::get(id)` to access the object.
     #[inline]
+    #[deprecated(note = "Render objects are now stored in RenderTree. Use RenderElement::render_id() and RenderTree::get()")]
     pub fn render_object(&self) -> Option<&dyn Any> {
-        match self {
-            Self::View(_) => None, // ViewElement doesn't expose RenderObject
-            Self::Render(r) => Some(r.render_object().as_any()),
-        }
+        None // RenderElement no longer stores objects
     }
 
     /// Returns a mutable reference to the render object.
     ///
-    /// - For `View` elements: Returns None (ViewObject doesn't expose RenderObject)
-    /// - For `Render` elements: Returns the RenderObject as `&mut dyn Any` for downcasting
+    /// **DEPRECATED**: Always returns None. Render objects are stored in RenderTree.
+    /// Use `RenderElement::render_id()` to get the ID, then `RenderTree::get_mut(id)` to access the object.
     #[inline]
+    #[deprecated(note = "Render objects are now stored in RenderTree. Use RenderElement::render_id() and RenderTree::get_mut()")]
     pub fn render_object_mut(&mut self) -> Option<&mut dyn Any> {
-        match self {
-            Self::View(_) => None, // ViewElement doesn't expose RenderObject
-            Self::Render(r) => Some(r.render_object_mut().as_any_mut()),
-        }
+        None // RenderElement no longer stores objects
     }
 
     // ========== Lifecycle Delegation ==========
@@ -1032,47 +1032,58 @@ mod tests {
 
     #[test]
     fn test_element_view_variant() {
-        let element = Element::view(TestViewObject { value: 42 }, ViewMode::Stateless);
+        // In four-tree architecture, create element with ViewId (None = not in tree yet)
+        let element = Element::view(None, ViewMode::Stateless);
 
         assert!(element.is_view_element());
         assert!(!element.is_render_element());
         assert!(element.is_component());
         assert!(!element.is_render());
-        assert!(element.has_view_object());
+        #[allow(deprecated)]
+        {
+            assert!(!element.has_view_object()); // Always false - objects in ViewTree
+        }
     }
 
     #[test]
     fn test_element_render_variant() {
-        let element = Element::render(TestRenderObject { value: 42 }, ProtocolId::Box);
+        // In four-tree architecture, create element with RenderId (None = not in tree yet)
+        let element = Element::render(None, ProtocolId::Box);
 
         assert!(!element.is_view_element());
         assert!(element.is_render_element());
         assert!(!element.is_component());
         assert!(element.is_render());
-        assert!(!element.has_view_object());
+        #[allow(deprecated)]
+        {
+            assert!(!element.has_view_object()); // Always false - not a view element
+        }
     }
 
     #[test]
     fn test_element_empty() {
         let element = Element::empty();
         assert!(element.is_view_element());
-        assert!(!element.has_view_object());
+        #[allow(deprecated)]
+        {
+            assert!(!element.has_view_object()); // Always false - objects in ViewTree
+        }
     }
 
     #[test]
     fn test_as_view_as_render() {
-        let view = Element::view(TestViewObject { value: 1 }, ViewMode::Stateless);
+        let view = Element::view(None, ViewMode::Stateless);
         assert!(view.as_view().is_some());
         assert!(view.as_render().is_none());
 
-        let render = Element::render(TestRenderObject { value: 1 }, ProtocolId::Box);
+        let render = Element::render(None, ProtocolId::Box);
         assert!(render.as_view().is_none());
         assert!(render.as_render().is_some());
     }
 
     #[test]
     fn test_lifecycle() {
-        let mut element = Element::view(TestViewObject { value: 1 }, ViewMode::Stateless);
+        let mut element = Element::view(None, ViewMode::Stateless);
 
         assert_eq!(element.lifecycle(), ElementLifecycle::Initial);
 
@@ -1092,7 +1103,7 @@ mod tests {
 
     #[test]
     fn test_children_management() {
-        let mut element = Element::view(TestViewObject { value: 1 }, ViewMode::Stateless);
+        let mut element = Element::view(None, ViewMode::Stateless);
 
         assert!(!element.has_children());
 
@@ -1112,11 +1123,17 @@ mod tests {
 
     #[test]
     fn test_backward_compatibility() {
-        // Test that old API still works
-        let element = Element::with_mode(TestViewObject { value: 42 }, ViewMode::Stateless);
-        assert!(element.has_view_object());
+        // Test that API works with ViewId (None = not in tree yet)
+        let element = Element::with_mode(None, ViewMode::Stateless);
+        #[allow(deprecated)]
+        {
+            assert!(!element.has_view_object()); // Always false - objects in ViewTree
+        }
 
-        let element2 = Element::new(TestViewObject { value: 42 });
-        assert!(element2.has_view_object());
+        let element2 = Element::new(None);
+        #[allow(deprecated)]
+        {
+            assert!(!element2.has_view_object()); // Always false - objects in ViewTree
+        }
     }
 }

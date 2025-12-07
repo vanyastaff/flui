@@ -113,6 +113,9 @@ pub use core::{BoxProtocol, Protocol, ProtocolId, SliverProtocol};
 // RenderElement and lifecycle
 pub use core::{RenderElement, RenderLifecycle};
 
+// Tree types (RenderTree, RenderNode, RenderId)
+pub use tree::{ConcreteRenderNode, RenderId, RenderNode, RenderTree};
+
 // Arity system (re-exported from flui-tree)
 pub use core::{Arity, AtLeast, ChildrenAccess, Exact, Leaf, Optional, Range, Single, Variable};
 
