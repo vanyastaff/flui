@@ -234,29 +234,6 @@ impl Row {
             .build()
     }
 
-    // ========================================================================
-    // Mutable API (Deprecated - use builder instead)
-    // ========================================================================
-
-    /// Adds a child widget to the row.
-    #[deprecated(note = "Use builder pattern with chainable .child() instead")]
-    pub fn add_child(&mut self, child: impl IntoElement) {
-        self.children.push(child);
-    }
-
-    /// Adds a child widget to the row.
-    ///
-    /// Alias for `add_child()` for better ergonomics.
-    pub fn child(&mut self, child: impl IntoElement) {
-        self.children.push(child);
-    }
-
-    /// Sets all children at once.
-    #[deprecated(note = "Use builder pattern with .children() instead")]
-    pub fn set_children(&mut self, children: impl Into<Children>) {
-        self.children = children.into();
-    }
-
     /// Validates row configuration.
     pub fn validate(&self) -> Result<(), String> {
         // No specific validation needed for Row
@@ -411,23 +388,6 @@ mod tests {
     fn test_row_builder_children() {
         let row = Row::builder().children(vec![MockView, MockView]).build();
 
-        assert_eq!(row.children.len(), 2);
-    }
-
-    #[test]
-    #[allow(deprecated)]
-    fn test_row_add_child() {
-        let mut row = Row::new();
-        row.add_child(MockView);
-        row.add_child(MockView);
-        assert_eq!(row.children.len(), 2);
-    }
-
-    #[test]
-    #[allow(deprecated)]
-    fn test_row_set_children() {
-        let mut row = Row::new();
-        row.set_children(vec![MockView, MockView]);
         assert_eq!(row.children.len(), 2);
     }
 

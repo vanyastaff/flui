@@ -240,7 +240,7 @@ where
 {
     /// Sets the children widgets (works in builder chain).
     pub fn children(self, children: impl Into<Children>) -> WrapBuilder<SetChildren<S>> {
-        self.children_internal(children.into().into_inner())
+        self.children_internal(children.into())
     }
 }
 

@@ -214,25 +214,6 @@ impl Stack {
         }
     }
 
-    /// Adds a child widget.
-    #[deprecated(note = "Use builder pattern with chainable .child() instead")]
-    pub fn add_child(&mut self, child: impl IntoElement) {
-        self.children.push(child);
-    }
-
-    /// Adds a child widget.
-    ///
-    /// Alias for `add_child()` for better ergonomics.
-    pub fn child(&mut self, child: impl IntoElement) {
-        self.children.push(child);
-    }
-
-    /// Sets the children widgets.
-    #[deprecated(note = "Use builder pattern with .children() instead")]
-    pub fn set_children(&mut self, children: impl Into<Children>) {
-        self.children = children.into();
-    }
-
     /// Validates Stack configuration.
     ///
     /// Currently always returns Ok, but may add validation in the future.
