@@ -190,8 +190,8 @@ impl FractionallySizedBox {
 }
 
 // Implement View for FractionallySizedBox - Simplified API
-impl StatelessView for FractionallySizedBox {
-    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
+impl IntoElement for FractionallySizedBox {
+    fn into_element(self) -> Element {
         RenderFractionallySizedBox::new(self.width_factor, self.height_factor).child_opt(self.child)
     }
 }
@@ -238,8 +238,8 @@ mod tests {
     #[derive()]
     struct MockView;
 
-    impl StatelessView for MockView {
-        fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
+    impl IntoElement for MockView {
+        fn into_element(self) -> Element {
             RenderEmpty.leaf()
         }
     }

@@ -270,8 +270,8 @@ macro_rules! center {
 }
 
 // Implement View for Center
-impl StatelessView for Center {
-    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
+impl IntoElement for Center {
+    fn into_element(self) -> Element {
         RenderAlign::with_factors(Alignment::CENTER, self.width_factor, self.height_factor)
             .maybe_child(self.child)
     }
@@ -286,8 +286,8 @@ mod tests {
     #[derive(Debug, Clone)]
     struct MockView;
 
-    impl StatelessView for MockView {
-        fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
+    impl IntoElement for MockView {
+        fn into_element(self) -> Element {
             RenderEmpty.leaf()
         }
     }

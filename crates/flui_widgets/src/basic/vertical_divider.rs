@@ -174,8 +174,8 @@ impl<S: State> VerticalDividerBuilder<S> {
 }
 
 // Implement View trait
-impl StatelessView for VerticalDivider {
-    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
+impl IntoElement for VerticalDivider {
+    fn into_element(self) -> Element {
         // Calculate effective width (use width if specified, otherwise thickness)
         let effective_width = self.width.unwrap_or(self.thickness);
 

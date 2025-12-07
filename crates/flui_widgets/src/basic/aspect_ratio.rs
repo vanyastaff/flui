@@ -209,8 +209,8 @@ impl Default for AspectRatio {
 }
 
 // Implement View for AspectRatio - New architecture
-impl StatelessView for AspectRatio {
-    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
+impl IntoElement for AspectRatio {
+    fn into_element(self) -> Element {
         RenderAspectRatio::new(self.aspect_ratio).child_opt(self.child)
     }
 }

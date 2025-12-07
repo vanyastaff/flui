@@ -181,8 +181,8 @@ impl<S: State> IntrinsicHeightBuilder<S> {
 }
 
 // Implement View trait - Simplified API
-impl StatelessView for IntrinsicHeight {
-    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
+impl IntoElement for IntrinsicHeight {
+    fn into_element(self) -> Element {
         let render = match (self.step_width, self.step_height) {
             (Some(w), Some(h)) => RenderIntrinsicHeight::with_steps(w, h),
             (Some(w), None) => RenderIntrinsicHeight::with_step_width(w),

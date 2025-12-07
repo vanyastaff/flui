@@ -221,8 +221,8 @@ mod tests {
     #[derive(Debug, Clone)]
     struct MockView;
 
-    impl StatelessView for MockView {
-        fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
+    impl IntoElement for MockView {
+        fn into_element(self) -> Element {
             RenderEmpty.leaf()
         }
     }

@@ -270,8 +270,8 @@ macro_rules! padding {
 }
 
 // Implement View for Padding
-impl StatelessView for Padding {
-    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
+impl IntoElement for Padding {
+    fn into_element(self) -> Element {
         // Child converts to Option<Element> via From trait
         RenderPadding::new(self.padding).maybe_child(self.child)
     }
@@ -286,8 +286,8 @@ mod tests {
     #[derive(Debug, Clone)]
     struct MockView;
 
-    impl StatelessView for MockView {
-        fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
+    impl IntoElement for MockView {
+        fn into_element(self) -> Element {
             RenderEmpty.leaf()
         }
     }

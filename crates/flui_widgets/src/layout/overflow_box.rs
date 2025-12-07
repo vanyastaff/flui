@@ -255,8 +255,8 @@ impl<S: State> OverflowBoxBuilder<S> {
 }
 
 // Implement View trait - Simplified API
-impl StatelessView for OverflowBox {
-    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
+impl IntoElement for OverflowBox {
+    fn into_element(self) -> Element {
         let render = RenderOverflowBox::with_constraints(
             self.min_width,
             self.max_width,

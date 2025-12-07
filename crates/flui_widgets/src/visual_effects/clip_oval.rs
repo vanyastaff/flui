@@ -163,7 +163,7 @@ impl Default for ClipOval {
 }
 
 // Implement View for ClipOval - New architecture
-impl StatelessView for ClipOval {
+impl IntoElement for ClipOval {
     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoElement {
         (RenderClipOval::with_clip(self.clip_behavior), self.child)
     }
@@ -199,7 +199,7 @@ mod tests {
     #[derive()]
     struct MockView;
 
-    impl StatelessView for MockView {
+    impl IntoElement for MockView {
         fn build(&self, _ctx: &dyn BuildContext) -> impl IntoElement {
             (RenderPadding::new(EdgeInsets::ZERO), ())
         }

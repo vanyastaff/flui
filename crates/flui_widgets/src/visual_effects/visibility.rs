@@ -310,7 +310,7 @@ impl<S: State> VisibilityBuilder<S> {
 }
 
 // Implement View trait
-impl StatelessView for Visibility {
+impl IntoElement for Visibility {
     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoElement {
         // Determine which child to show
         let child = if self.visible {

@@ -128,6 +128,12 @@ pub const VERSION_MINOR: &str = env!("CARGO_PKG_VERSION_MINOR");
 /// FLUI patch version
 pub const VERSION_PATCH: &str = env!("CARGO_PKG_VERSION_PATCH");
 
+// NOTE: Cannot implement IntoElement → IntoView bridge due to orphan rule
+// (cannot impl foreign trait for type parameter without local type).
+//
+// Instead, all widgets should implement IntoElement directly (like Text does).
+// Composite widgets can call .into_element() on child widgets.
+
 // =============================================================================
 // Tests
 // =============================================================================

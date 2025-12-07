@@ -136,7 +136,7 @@ impl<S: State> RepaintBoundaryBuilder<S> {
 }
 
 // Implement View trait
-impl StatelessView for RepaintBoundary {
+impl IntoElement for RepaintBoundary {
     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoElement {
         (RenderRepaintBoundary::new(), self.child)
     }

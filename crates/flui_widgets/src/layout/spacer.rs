@@ -220,8 +220,8 @@ impl Default for Spacer {
 }
 
 // Implement View trait - Simplified API
-impl StatelessView for Spacer {
-    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
+impl IntoElement for Spacer {
+    fn into_element(self) -> Element {
         // Build zero-sized SizedBox as child
         let sized_box = crate::SizedBox::builder().width(0.0).height(0.0).build();
 

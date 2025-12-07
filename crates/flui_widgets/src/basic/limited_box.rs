@@ -146,8 +146,8 @@ impl<S: State> LimitedBoxBuilder<S> {
 }
 
 // Implement View for LimitedBox - New architecture
-impl StatelessView for LimitedBox {
-    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
+impl IntoElement for LimitedBox {
+    fn into_element(self) -> Element {
         RenderLimitedBox::new(self.max_width, self.max_height).maybe_child(self.child)
     }
 }

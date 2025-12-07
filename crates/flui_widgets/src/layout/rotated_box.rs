@@ -206,8 +206,8 @@ impl<S: State> RotatedBoxBuilder<S> {
 }
 
 // Implement View trait - Simplified API
-impl StatelessView for RotatedBox {
-    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
+impl IntoElement for RotatedBox {
+    fn into_element(self) -> Element {
         RenderRotatedBox::new(self.quarter_turns).child_opt(self.child)
     }
 }

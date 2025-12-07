@@ -178,8 +178,8 @@ impl<S: State> ScaffoldBuilder<S> {
 }
 
 // Implement View trait
-impl StatelessView for Scaffold {
-    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
+impl IntoElement for Scaffold {
+    fn into_element(self) -> Element {
         use crate::{ColoredBox, Column, Stack};
 
         // Build the scaffold layout as a column

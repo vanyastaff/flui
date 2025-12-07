@@ -64,8 +64,8 @@ impl GestureDetector {
     }
 }
 
-impl StatelessView for GestureDetector {
-    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
+impl IntoElement for GestureDetector {
+    fn into_element(self) -> Element {
         // Create PointerCallbacks from our simpler callbacks
         let mut callbacks = PointerCallbacks::new();
 
@@ -245,8 +245,8 @@ mod tests {
     #[derive(Debug, Clone)]
     struct MockWidget;
 
-    impl StatelessView for MockWidget {
-        fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
+    impl IntoElement for MockWidget {
+        fn into_element(self) -> Element {
             RenderEmpty.leaf()
         }
     }

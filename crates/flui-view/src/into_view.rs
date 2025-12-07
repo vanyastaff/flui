@@ -128,23 +128,8 @@ pub trait StatefulIntoView: StatefulView {
 
 impl<V: StatefulView> StatefulIntoView for V {}
 
-// ============================================================================
-// BRIDGE: IntoElement → IntoView
-// ============================================================================
-
-/// Bridge implementation: Allow IntoElement types to be used where IntoView is expected.
-///
-/// This enables widgets that create Elements to be used in view composition contexts.
-/// The Element is wrapped in an ElementView that acts as a ViewObject wrapper.
-impl<T> IntoView for T
-where
-    T: flui_element::IntoElement + Send + 'static,
-{
-    fn into_view(self) -> Box<dyn ViewObject> {
-        // Wrap the Element in a ViewObject that just returns the element
-        Box::new(crate::wrappers::ElementViewWrapper::new(self.into_element()))
-    }
-}
+// NOTE: IntoElement → IntoView bridge is implemented in flui-element crate
+// to avoid circular dependency (flui-element already depends on flui-view)
 
 // ============================================================================
 // TESTS

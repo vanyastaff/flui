@@ -68,8 +68,8 @@ impl Debug for CustomPaint {
     }
 }
 
-impl StatelessView for CustomPaint {
-    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
+impl IntoElement for CustomPaint {
+    fn into_element(self) -> Element {
         RenderCustomPaintLeaf {
             painter: self.painter,
             size: self.size.unwrap_or(Size::ZERO),

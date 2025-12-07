@@ -239,8 +239,8 @@ mod tests {
         assert!(scroll_view.padding.is_some());
     }
 }
-impl StatelessView for SingleChildScrollView {
-    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
+impl IntoElement for SingleChildScrollView {
+    fn into_element(self) -> Element {
         // Apply padding if specified
         let child: Element = match self.padding {
             Some(padding) => crate::Padding::builder()

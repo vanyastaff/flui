@@ -136,7 +136,7 @@ impl Default for ClipRect {
 }
 
 // Implement View for ClipRect - New architecture
-impl StatelessView for ClipRect {
+impl IntoElement for ClipRect {
     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoElement {
         (
             RenderClipRect::new(RectShape, self.clip_behavior),

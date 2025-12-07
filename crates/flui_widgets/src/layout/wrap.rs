@@ -218,8 +218,8 @@ impl Default for Wrap {
 }
 
 // Implement View for Wrap - New architecture
-impl StatelessView for Wrap {
-    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
+impl IntoElement for Wrap {
+    fn into_element(self) -> Element {
         let mut render_wrap = RenderWrap::new(self.direction);
         render_wrap.alignment = self.alignment;
         render_wrap.spacing = self.spacing;
@@ -261,8 +261,8 @@ mod tests {
     #[derive()]
     struct MockView;
 
-    impl StatelessView for MockView {
-        fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
+    impl IntoElement for MockView {
+        fn into_element(self) -> Element {
             RenderEmpty.leaf()
         }
     }

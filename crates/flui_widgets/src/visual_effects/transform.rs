@@ -308,8 +308,8 @@ impl Default for Transform {
 }
 
 // Implement View for Transform - New architecture
-impl StatelessView for Transform {
-    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
+impl IntoElement for Transform {
+    fn into_element(self) -> Element {
         // Use from_matrix for backward compatibility
         RenderTransform::from_matrix(self.transform).child_opt(self.child.into_inner())
     }

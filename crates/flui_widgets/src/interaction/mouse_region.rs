@@ -266,8 +266,8 @@ mod tests {
 }
 
 // Implement View trait
-impl StatelessView for MouseRegion {
-    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
+impl IntoElement for MouseRegion {
+    fn into_element(self) -> Element {
         // Create RenderMouseRegion
         // TODO: RenderMouseRegion currently uses fn() callbacks as placeholders
         // The widget's Arc<dyn Fn> callbacks will be properly supported when

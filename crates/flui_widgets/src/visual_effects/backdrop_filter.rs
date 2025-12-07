@@ -211,7 +211,7 @@ impl<S: State> BackdropFilterBuilder<S> {
 }
 
 // Implement View trait
-impl StatelessView for BackdropFilter {
+impl IntoElement for BackdropFilter {
     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoElement {
         // Create RenderBackdropFilter with custom properties
         let mut render = RenderBackdropFilter::new(self.filter.clone());

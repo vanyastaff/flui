@@ -243,8 +243,8 @@ mod tests {
 }
 
 // Implement View trait
-impl StatelessView for AbsorbPointer {
-    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
+impl IntoElement for AbsorbPointer {
+    fn into_element(self) -> Element {
         RenderAbsorbPointer::new(self.absorbing).child_opt(self.child.into_inner())
     }
 }

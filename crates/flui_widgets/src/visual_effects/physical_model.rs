@@ -235,7 +235,7 @@ impl<S: State> PhysicalModelBuilder<S> {
 }
 
 // Implement View trait
-impl StatelessView for PhysicalModel {
+impl IntoElement for PhysicalModel {
     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoElement {
         // Create RenderPhysicalModel with custom properties
         let mut render = RenderPhysicalModel::new(self.shape, self.elevation, self.color);

@@ -362,8 +362,8 @@ impl Default for Flex {
 }
 
 // Implement View trait
-impl StatelessView for Flex {
-    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
+impl IntoElement for Flex {
+    fn into_element(self) -> Element {
         RenderFlex::new(self.direction)
             .with_main_axis_alignment(self.main_axis_alignment)
             .with_cross_axis_alignment(self.cross_axis_alignment)

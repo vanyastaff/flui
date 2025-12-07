@@ -202,8 +202,8 @@ impl<S: State> SafeAreaBuilder<S> {
 }
 
 // Implement View trait
-impl StatelessView for SafeArea {
-    fn build(self, ctx: &dyn BuildContext) -> impl IntoElement {
+impl IntoElement for SafeArea {
+    fn into_element(self) -> Element {
         let insets = self.calculate_insets(ctx);
 
         RenderPadding::new(insets).child_opt(self.child)

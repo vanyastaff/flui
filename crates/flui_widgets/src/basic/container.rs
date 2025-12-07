@@ -363,12 +363,12 @@ impl Default for Container {
     }
 }
 
-// NOTE: Container is a composite View (like in Flutter), NOT a RenderObjectWidget!
-//
-// Container composes other Views (Padding, Align, DecoratedBox, SizedBox, etc.) into a tree.
+// NOTE: Container is a composite widget that implements IntoElement.
+// It composes other widgets (Padding, Align, DecoratedBox, SizedBox, etc.) by calling
+// their .into_element() methods to build the element tree.
 
-impl StatelessView for Container {
-    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
+impl IntoElement for Container {
+    fn into_element(self) -> Element {
         // Build widget tree from inside out:
         // Flutter order: constraints -> margin -> decoration -> alignment -> padding -> child
         //
@@ -521,8 +521,8 @@ mod tests {
     #[derive(Debug, Clone)]
     struct MockView;
 
-    impl StatelessView for MockView {
-        fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
+    impl IntoElement for MockView {
+        fn into_element(self) -> Element {
             RenderEmpty.leaf()
         }
     }
