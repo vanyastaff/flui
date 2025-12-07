@@ -88,6 +88,9 @@ pub mod view;
 // Core rendering traits
 pub use core::{RenderBox, RenderObject, RenderSliver};
 
+// Re-export downcast-rs for downcasting RenderObject
+pub use downcast_rs::DowncastSync;
+
 // Context types for layout/paint/hit-test
 pub use core::{
     BoxHitTestContext, BoxLayoutContext, BoxPaintContext, HitTestContext, LayoutContext,

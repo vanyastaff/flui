@@ -57,18 +57,13 @@ use flui_types::Axis;
 /// This trait combines the necessary capabilities from `flui-tree`:
 /// - `TreeRead` - Access nodes by ID
 /// - `TreeNav` - Parent/child navigation
-/// - `RenderTreeAccess` - Access to render objects and state (includes `render_object_mut`)
+/// - `RenderTreeAccess` - Access to render objects and state
 ///
 /// Any type implementing these traits (like `ElementTree`) can be
 /// wrapped in `RenderTree<T>`.
 ///
-/// Note: `render_object_mut` and `render_state_mut` come from `RenderTreeAccess`.
-pub trait RenderTreeStorage: TreeRead + TreeNav + RenderTreeAccess {
-    /// Get children of an element as a Vec (needed for iteration during mutation).
-    fn children_vec(&self, id: ElementId) -> Vec<ElementId> {
-        self.children(id).collect()
-    }
-}
+/// All required functionality is provided by the composed traits.
+pub trait RenderTreeStorage: TreeRead + TreeNav + RenderTreeAccess {}
 
 // ============================================================================
 // RENDER TREE
@@ -539,7 +534,8 @@ impl<T: RenderTreeStorage> HitTestTree for RenderTree<T> {
         }
 
         // Hit test children first (front to back)
-        let children = self.storage.children_vec(id);
+        // Use TreeNav::children() instead of custom children_vec()
+        let children: Vec<_> = self.storage.children(id).collect();
         for child_id in children.into_iter().rev() {
             let child_offset = self.get_element_offset(child_id).unwrap_or(Offset::ZERO);
             let child_position = position - child_offset;

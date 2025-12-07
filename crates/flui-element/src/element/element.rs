@@ -460,6 +460,37 @@ impl Element {
         }
     }
 
+    // ========== Render Object Access (for RenderTreeAccess trait) ==========
+
+    /// Returns the render object for this element.
+    ///
+    /// - For `View` elements: Returns None (ViewObject doesn't expose RenderObject)
+    /// - For `Render` elements: Returns the RenderObject as `&dyn Any` for downcasting
+    ///
+    /// # Note
+    ///
+    /// This method is primarily for RenderElement. ViewElement may build RenderElements
+    /// internally, but doesn't expose them through this method.
+    #[inline]
+    pub fn render_object(&self) -> Option<&dyn Any> {
+        match self {
+            Self::View(_) => None, // ViewElement doesn't expose RenderObject
+            Self::Render(r) => Some(r.render_object().as_any()),
+        }
+    }
+
+    /// Returns a mutable reference to the render object.
+    ///
+    /// - For `View` elements: Returns None (ViewObject doesn't expose RenderObject)
+    /// - For `Render` elements: Returns the RenderObject as `&mut dyn Any` for downcasting
+    #[inline]
+    pub fn render_object_mut(&mut self) -> Option<&mut dyn Any> {
+        match self {
+            Self::View(_) => None, // ViewElement doesn't expose RenderObject
+            Self::Render(r) => Some(r.render_object_mut().as_any_mut()),
+        }
+    }
+
     // ========== Lifecycle Delegation ==========
 
     /// Mount element to tree.

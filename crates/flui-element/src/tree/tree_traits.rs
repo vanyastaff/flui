@@ -36,6 +36,7 @@ impl sealed::TreeNavSealed for ElementTree {}
 ///
 /// Wraps the internal Slab iterator without exposing private types.
 /// Performance: Same as direct iteration, no overhead.
+#[derive(Debug)]
 pub struct NodeIdIter<'a> {
     inner: slab::Iter<'a, super::element_tree::ElementNode>,
 }
@@ -405,23 +406,24 @@ impl TreeWriteNav for ElementTree {
 // ============================================================================
 
 impl flui_tree::RenderTreeAccess for ElementTree {
-    /// Returns the render object for an element (stub: always None).
+    /// Returns the render object for an element.
     ///
-    /// The actual render object is stored in ViewObject wrappers in flui-view.
-    /// This stub implementation keeps flui-element independent of render types.
+    /// Delegates to Element::render_object(), which:
+    /// - For View elements: returns ViewObject's render object (if it's a render view)
+    /// - For Render elements: returns the RenderElement's RenderObject directly
     #[inline]
     fn render_object(&self, id: ElementId) -> Option<&dyn std::any::Any> {
-        // Delegate to Element's stub method (always None)
-        // Phase 5 will implement proper delegation to ViewObject
-        let _ = id; // suppress unused warning
-        None
+        self.get(id)?.render_object()
     }
 
-    /// Returns a mutable render object (stub: always None).
+    /// Returns a mutable render object.
+    ///
+    /// Delegates to Element::render_object_mut(), which:
+    /// - For View elements: returns ViewObject's render object (if it's a render view)
+    /// - For Render elements: returns the RenderElement's RenderObject directly
     #[inline]
     fn render_object_mut(&mut self, id: ElementId) -> Option<&mut dyn std::any::Any> {
-        let _ = id;
-        None
+        self.get_mut(id)?.render_object_mut()
     }
 
     /// Returns the render state for an element (delegates to Element::render_state).
