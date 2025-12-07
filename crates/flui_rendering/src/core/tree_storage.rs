@@ -433,22 +433,36 @@ impl<T: RenderTreeStorage> LayoutTree for RenderTree<T> {
                 (*self_ptr).perform_layout(child_id, child_constraints)
             };
 
-            // Get RenderElement from storage
+            // Get RenderElement from storage to access RenderId
             let render_element = self
                 .storage
                 .render_object_mut(id)
                 .and_then(|obj| obj.downcast_mut::<crate::core::RenderElement>())
                 .ok_or_else(|| RenderError::not_render_element(id))?;
 
-            // TODO: Four-tree architecture - access RenderObject via RenderTree
-            // For now, use the render_object field directly (legacy)
-            // Once elements are updated to only hold RenderId, this will be:
-            //   let render_id = render_element.render_id()?;
-            //   let render_node = self.render_objects.get_mut(render_id)?;
-            //   let render_object = render_node.render_object_mut();
+            // Four-tree architecture: Access RenderObject via RenderTree
+            let render_id = render_element
+                .render_id()
+                .ok_or_else(|| {
+                    RenderError::Layout(format!(
+                        "Element {:?} has no RenderId - RenderObject not in RenderTree",
+                        id
+                    ))
+                })?;
 
-            // Call perform_layout with callback
-            let size = render_element
+            // Get RenderNode from separate RenderTree
+            let render_node = self
+                .render_objects
+                .get_mut(render_id)
+                .ok_or_else(|| {
+                    RenderError::Layout(format!(
+                        "RenderId {:?} not found in RenderTree for element {:?}",
+                        render_id, id
+                    ))
+                })?;
+
+            // Call perform_layout on the RenderObject
+            let size = render_node
                 .render_object_mut()
                 .perform_layout(id, constraints, &mut layout_child)?;
 
