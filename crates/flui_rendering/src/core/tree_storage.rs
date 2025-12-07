@@ -64,6 +64,9 @@ use flui_types::Axis;
 ///
 /// Note: `render_object_mut` and `render_state_mut` come from `RenderTreeAccess`.
 pub trait RenderTreeStorage: TreeRead + TreeNav + RenderTreeAccess {
+    /// Get children of an element as a slice.
+    fn children_slice(&self, id: ElementId) -> &[ElementId];
+
     /// Get children of an element as a Vec (needed for iteration during mutation).
     fn children_vec(&self, id: ElementId) -> Vec<ElementId> {
         self.children(id).collect()
@@ -445,6 +448,10 @@ impl<T: RenderTreeStorage> LayoutTree for RenderTree<T> {
             .render_state(id)
             .map(|state| state.needs_layout())
             .unwrap_or(false)
+    }
+
+    fn children(&self, id: ElementId) -> &[ElementId] {
+        self.storage.children_slice(id)
     }
 
     fn render_object(&self, id: ElementId) -> Option<&dyn Any> {

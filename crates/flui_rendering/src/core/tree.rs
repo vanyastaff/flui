@@ -168,6 +168,20 @@ pub trait LayoutTree {
     /// `true` if the element needs layout, `false` otherwise.
     fn needs_layout(&self, id: ElementId) -> bool;
 
+    /// Gets the children of an element.
+    ///
+    /// Returns a slice of child ElementIds for the given element.
+    /// Returns empty slice if the element has no children or doesn't exist.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - The element to query
+    ///
+    /// # Returns
+    ///
+    /// Slice of child ElementIds
+    fn children(&self, id: ElementId) -> &[ElementId];
+
     /// Gets a render object for type-erased access.
     ///
     /// Returns the render object as `dyn Any` for downcasting to concrete types.
@@ -458,6 +472,10 @@ impl LayoutTree for Box<dyn LayoutTree + Send + Sync> {
 
     fn needs_layout(&self, id: ElementId) -> bool {
         (**self).needs_layout(id)
+    }
+
+    fn children(&self, id: ElementId) -> &[ElementId] {
+        (**self).children(id)
     }
 
     fn render_object(&self, id: ElementId) -> Option<&dyn Any> {
