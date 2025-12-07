@@ -13,13 +13,16 @@ use flui_engine::GpuRenderer;
 use flui_interaction::EventRouter;
 use flui_scheduler::Scheduler;
 use flui_types::{
-    events::{MouseCursor, PointerButton, PointerDeviceKind, SystemMouseCursor},
+    events::{
+        MouseCursor, PointerButton, PointerDeviceKind, ScrollDelta, ScrollEventData,
+        SystemMouseCursor,
+    },
     Offset,
 };
 use parking_lot::RwLock;
 use std::sync::{atomic::AtomicBool, Arc};
 use winit::{
-    event::{ElementState, MouseButton, WindowEvent},
+    event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent},
     event_loop::ActiveEventLoop,
     keyboard::ModifiersState,
     window::{CursorIcon, Window},
@@ -181,6 +184,20 @@ impl DesktopEmbedder {
                 self.core.handle_key_event(flui_event);
             }
 
+            WindowEvent::MouseWheel { delta, .. } => {
+                let position = self.core.last_pointer_position();
+                let scroll_delta = convert_mouse_wheel_delta(delta);
+                let modifiers = crate::conversions::convert_modifiers(self.modifiers);
+
+                let scroll_event = ScrollEventData {
+                    position,
+                    delta: scroll_delta,
+                    modifiers,
+                };
+
+                self.core.handle_scroll_event(scroll_event);
+            }
+
             _ => {
                 // Other events not handled yet
             }
@@ -251,6 +268,25 @@ fn convert_mouse_button(button: MouseButton) -> PointerButton {
         MouseButton::Back => PointerButton::Other(3),
         MouseButton::Forward => PointerButton::Other(4),
         MouseButton::Other(n) => PointerButton::Other(n as u8),
+    }
+}
+
+/// Convert winit MouseScrollDelta to FLUI ScrollDelta
+///
+/// # Conversion Strategy
+///
+/// - `LineDelta`: Maps directly to `ScrollDelta::Lines` (typical mouse wheel)
+/// - `PixelDelta`: Maps to `ScrollDelta::Pixels` (high-precision trackpad)
+///
+/// winit provides physical coordinates for PixelDelta, which we convert to logical
+/// pixels assuming a scale factor of 1.0 (the embedder handles DPI scaling separately).
+fn convert_mouse_wheel_delta(delta: MouseScrollDelta) -> ScrollDelta {
+    match delta {
+        MouseScrollDelta::LineDelta(x, y) => ScrollDelta::Lines { x, y },
+        MouseScrollDelta::PixelDelta(pos) => ScrollDelta::Pixels {
+            x: pos.x as f32,
+            y: pos.y as f32,
+        },
     }
 }
 

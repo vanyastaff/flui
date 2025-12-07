@@ -214,6 +214,17 @@ impl EmbedderCore {
         self.route_event(event);
     }
 
+    /// Handle scroll event
+    ///
+    /// Routes scroll event through hit testing to find scroll targets.
+    pub fn handle_scroll_event(&mut self, scroll_event: flui_types::events::ScrollEventData) {
+        tracing::trace!(?scroll_event, "Scroll event");
+
+        // Wrap in Event enum and route
+        let event = Event::Scroll(scroll_event);
+        self.route_event(event);
+    }
+
     /// Route event through hit testing (SAFE)
     ///
     /// Uses InteractionBridge which eliminates unsafe code.
