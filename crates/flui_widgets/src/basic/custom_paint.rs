@@ -1,6 +1,6 @@
 //! CustomPaint widget for drawing custom graphics
 
-use flui_core::render::{BoxProtocol, LayoutContext, Leaf, PaintContext, RenderBox, RenderBoxExt};
+use flui_core::render::{BoxProtocol, LayoutContext, Leaf, PaintContext, RenderBox};
 use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
 use flui_painting::Canvas;

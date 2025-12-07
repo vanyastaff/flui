@@ -433,7 +433,7 @@ impl StatelessView for Container {
         // Apply width/height constraints
         if self.width.is_some() || self.height.is_some() {
             // Use RenderSizedBox directly with Option values to preserve None semantics
-            current = flui_rendering::RenderSizedBox::new(self.width, self.height)
+            current = flui_rendering::objects::RenderSizedBox::new(self.width, self.height)
                 .maybe_child(Some(current))
                 .into_element();
         }
