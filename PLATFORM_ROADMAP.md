@@ -295,7 +295,7 @@ impl iOSEmbedder {
             let phase = touch.phase();
 
             match phase {
-                UITouchPhaseBeegan => {
+                UITouchPhaseBegan => {
                     self.core.handle_pointer_down(
                         PointerId::new(touch.hash()),
                         Offset::new(position.x, position.y),

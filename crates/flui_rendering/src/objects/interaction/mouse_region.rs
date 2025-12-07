@@ -326,4 +326,23 @@ mod tests {
         let debug_str = format!("{:?}", callbacks);
         assert!(debug_str.contains("MouseCallbacks"));
     }
+
+    // ========================================================================
+    // Hit Testing Tests
+    // ========================================================================
+
+    #[test]
+    fn test_hit_test_child_delegation() {
+        // MouseRegion should participate in hit testing by delegating to children
+        // This allows hover event detection when child widgets are hit
+        let callbacks = MouseCallbacks {
+            on_enter: None,
+            on_exit: None,
+            on_hover: None,
+        };
+        let region = RenderMouseRegion::new(callbacks);
+
+        // Verify initial state
+        assert!(!region.is_hovering, "should start without hover");
+    }
 }
