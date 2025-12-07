@@ -46,39 +46,39 @@ use std::fmt;
 
 use slab::Slab;
 
-use flui_foundation::{ElementId, Key};
+use flui_foundation::Key;
 
 use crate::view_mode::ViewMode;
 use crate::view_object::ViewObject;
-use super::lifecycle::ViewLifecycle;
+use crate::ViewLifecycle;
 
 // ============================================================================
 // VIEW OBJECT ID
 // ============================================================================
 
-/// Unique identifier for ViewObject in ViewObjectTree.
+/// Unique identifier for ViewNode in ViewTree.
 ///
 /// Uses 1-based indexing (NonZeroUsize) for:
-/// - Niche optimization: Option<ViewObjectId> = 8 bytes
+/// - Niche optimization: Option<ViewId> = 8 bytes
 /// - 0 reserved for "null" semantics
 ///
 /// # Slab Offset Pattern
 ///
-/// ViewObjectId uses 1-based indexing while Slab uses 0-based:
-/// - `ViewObjectId(1)` → `nodes[0]`
-/// - `ViewObjectId(2)` → `nodes[1]`
+/// ViewId uses 1-based indexing while Slab uses 0-based:
+/// - `ViewId(1)` → `nodes[0]`
+/// - `ViewId(2)` → `nodes[1]`
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-pub struct ViewObjectId(std::num::NonZeroUsize);
+pub struct ViewId(std::num::NonZeroUsize);
 
-impl ViewObjectId {
-    /// Creates a new ViewObjectId from a 1-based index.
+impl ViewId {
+    /// Creates a new ViewId from a 1-based index.
     ///
     /// # Panics
     ///
     /// Panics if id is 0 (use NonZeroUsize for safety).
     #[inline]
     pub fn new(id: usize) -> Self {
-        Self(std::num::NonZeroUsize::new(id).expect("ViewObjectId cannot be 0"))
+        Self(std::num::NonZeroUsize::new(id).expect("ViewId cannot be 0"))
     }
 
     /// Gets the underlying 1-based index.
@@ -89,27 +89,29 @@ impl ViewObjectId {
 }
 
 // ============================================================================
-// VIEW NODE TRAIT (Type-erased interface)
+// VIEW NODE (Type-erased interface)
 // ============================================================================
 
-/// Type-erased trait for ViewNode operations.
+/// Type-erased interface for ViewNode operations.
 ///
-/// This trait enables storing different ViewNode<V> types in the same Slab
+/// This trait enables storing different ConcreteViewNode<V> types in the same Slab
 /// while preserving access to common operations.
 ///
 /// # Design
 ///
-/// Similar to how RenderObject trait works for RenderObjects, ViewNodeTrait
-/// provides a type-erased interface for ViewNodes of different concrete types.
-pub trait ViewNodeTrait: Send + Sync + fmt::Debug {
+/// Similar to how RenderObject trait works for RenderObjects, ViewNode
+/// provides a type-erased interface for view nodes of different concrete types.
+///
+/// Like Flutter's Widget, this is the base abstraction for all view nodes.
+pub trait ViewNode: Send + Sync + fmt::Debug {
     // ========== Tree Structure ==========
 
-    fn parent(&self) -> Option<ViewObjectId>;
-    fn set_parent(&mut self, parent: Option<ViewObjectId>);
+    fn parent(&self) -> Option<ViewId>;
+    fn set_parent(&mut self, parent: Option<ViewId>);
 
-    fn children(&self) -> &[ViewObjectId];
-    fn add_child(&mut self, child: ViewObjectId);
-    fn remove_child(&mut self, child: ViewObjectId);
+    fn children(&self) -> &[ViewId];
+    fn add_child(&mut self, child: ViewId);
+    fn remove_child(&mut self, child: ViewId);
 
     // ========== ViewObject Access ==========
 
@@ -136,10 +138,10 @@ pub trait ViewNodeTrait: Send + Sync + fmt::Debug {
 }
 
 // ============================================================================
-// VIEW NODE (Generic implementation)
+// CONCRETE VIEW NODE (Generic implementation)
 // ============================================================================
 
-/// Generic ViewNode - stores ViewObject inline for zero-cost abstraction.
+/// Concrete ViewNode - stores ViewObject inline for zero-cost abstraction.
 ///
 /// # Type Parameters
 ///
@@ -147,12 +149,12 @@ pub trait ViewNodeTrait: Send + Sync + fmt::Debug {
 ///
 /// # Design
 ///
-/// ViewNode is generic over the ViewObject type, enabling static dispatch
+/// ConcreteViewNode is generic over the ViewObject type, enabling static dispatch
 /// for all ViewObject operations until type erasure at storage boundary.
 ///
 /// ```rust,ignore
 /// // Concrete type - no vtable!
-/// let node = ViewNode {
+/// let node = ConcreteViewNode {
 ///     object: MyView { text: "Hello" },  // Inline storage
 ///     mode: ViewMode::Stateless,
 /// };
@@ -161,10 +163,10 @@ pub trait ViewNodeTrait: Send + Sync + fmt::Debug {
 /// node.object.build(ctx);  // Direct call, can inline!
 /// ```
 #[derive(Debug)]
-pub struct ViewNode<V: ViewObject> {
+pub struct ConcreteViewNode<V: ViewObject> {
     // ========== Tree Structure ==========
-    parent: Option<ViewObjectId>,
-    children: Vec<ViewObjectId>,
+    parent: Option<ViewId>,
+    children: Vec<ViewId>,
 
     // ========== ViewObject (Generic, inline!) ==========
     /// The ViewObject - stored inline, no Box!
@@ -189,8 +191,8 @@ pub struct ViewNode<V: ViewObject> {
     key: Option<Key>,
 }
 
-impl<V: ViewObject> ViewNode<V> {
-    /// Creates a new ViewNode with the given ViewObject and mode.
+impl<V: ViewObject> ConcreteViewNode<V> {
+    /// Creates a new ConcreteViewNode with the given ViewObject and mode.
     pub fn new(object: V, mode: ViewMode) -> Self {
         Self {
             parent: None,
@@ -202,7 +204,7 @@ impl<V: ViewObject> ViewNode<V> {
         }
     }
 
-    /// Creates a ViewNode with a key.
+    /// Creates a ConcreteViewNode with a key.
     pub fn with_key(mut self, key: Key) -> Self {
         self.key = Some(key);
         self
@@ -224,27 +226,27 @@ impl<V: ViewObject> ViewNode<V> {
 }
 
 // ============================================================================
-// VIEW NODE TRAIT IMPL (Generic → Type-erased)
+// VIEW NODE IMPL (Generic → Type-erased)
 // ============================================================================
 
-impl<V: ViewObject + 'static> ViewNodeTrait for ViewNode<V> {
-    fn parent(&self) -> Option<ViewObjectId> {
+impl<V: ViewObject + fmt::Debug + 'static> ViewNode for ConcreteViewNode<V> {
+    fn parent(&self) -> Option<ViewId> {
         self.parent
     }
 
-    fn set_parent(&mut self, parent: Option<ViewObjectId>) {
+    fn set_parent(&mut self, parent: Option<ViewId>) {
         self.parent = parent;
     }
 
-    fn children(&self) -> &[ViewObjectId] {
+    fn children(&self) -> &[ViewId] {
         &self.children
     }
 
-    fn add_child(&mut self, child: ViewObjectId) {
+    fn add_child(&mut self, child: ViewId) {
         self.children.push(child);
     }
 
-    fn remove_child(&mut self, child: ViewObjectId) {
+    fn remove_child(&mut self, child: ViewId) {
         self.children.retain(|&id| id != child);
     }
 
@@ -282,57 +284,57 @@ impl<V: ViewObject + 'static> ViewNodeTrait for ViewNode<V> {
 }
 
 // ============================================================================
-// VIEW NODE BOX (Type-erased wrapper)
+// TYPE-ERASED WRAPPER (Internal storage)
 // ============================================================================
 
 /// Type-erased wrapper for ViewNode storage.
 ///
-/// This is what actually gets stored in the Slab.
-struct ViewNodeBox {
-    inner: Box<dyn ViewNodeTrait>,
+/// This is what actually gets stored in the Slab - internal implementation detail.
+struct ViewNodeStorage {
+    inner: Box<dyn ViewNode>,
 }
 
-impl ViewNodeBox {
-    fn new<V: ViewObject + 'static>(node: ViewNode<V>) -> Self {
+impl ViewNodeStorage {
+    fn new<V: ViewObject + fmt::Debug + 'static>(node: ConcreteViewNode<V>) -> Self {
         Self {
             inner: Box::new(node),
         }
     }
 }
 
-impl fmt::Debug for ViewNodeBox {
+impl fmt::Debug for ViewNodeStorage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.inner.fmt(f)
     }
 }
 
 // ============================================================================
-// VIEW OBJECT TREE
+// VIEW TREE
 // ============================================================================
 
-/// ViewObjectTree - Slab-based storage for ViewObjects.
+/// ViewTree - Slab-based storage for view nodes.
 ///
 /// This is the first of FLUI's four trees, corresponding to Flutter's Widget tree.
 ///
 /// # Architecture
 ///
 /// ```text
-/// ViewObjectTree
-///   ├─ nodes: Slab<ViewNodeBox>  (type-erased storage)
-///   └─ root: Option<ViewObjectId>
+/// ViewTree
+///   ├─ nodes: Slab<ViewNodeStorage>  (type-erased storage)
+///   └─ root: Option<ViewId>
 /// ```
 ///
 /// # Thread Safety
 ///
-/// ViewObjectTree itself is not thread-safe. Use `Arc<RwLock<ViewObjectTree>>`
+/// ViewTree itself is not thread-safe. Use `Arc<RwLock<ViewTree>>`
 /// for multi-threaded access.
 ///
 /// # Example
 ///
 /// ```rust,ignore
-/// use flui_view::tree::ViewObjectTree;
+/// use flui_view::tree::ViewTree;
 ///
-/// let mut tree = ViewObjectTree::new();
+/// let mut tree = ViewTree::new();
 ///
 /// // Insert stateless view
 /// let view = MyStatelessView { text: "Hello" };
@@ -346,16 +348,16 @@ impl fmt::Debug for ViewNodeBox {
 /// node.view_object_mut().build(ctx);
 /// ```
 #[derive(Debug)]
-pub struct ViewObjectTree {
+pub struct ViewTree {
     /// Slab storage for ViewNodes (0-based indexing internally)
-    nodes: Slab<ViewNodeBox>,
+    nodes: Slab<ViewNodeStorage>,
 
-    /// Root ViewObject ID (None if tree is empty)
-    root: Option<ViewObjectId>,
+    /// Root ViewNode ID (None if tree is empty)
+    root: Option<ViewId>,
 }
 
-impl ViewObjectTree {
-    /// Creates a new empty ViewObjectTree.
+impl ViewTree {
+    /// Creates a new empty ViewTree.
     pub fn new() -> Self {
         Self {
             nodes: Slab::new(),
@@ -363,7 +365,7 @@ impl ViewObjectTree {
         }
     }
 
-    /// Creates a ViewObjectTree with pre-allocated capacity.
+    /// Creates a ViewTree with pre-allocated capacity.
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             nodes: Slab::with_capacity(capacity),
@@ -373,27 +375,27 @@ impl ViewObjectTree {
 
     // ========== Root Management ==========
 
-    /// Get the root ViewObject ID.
+    /// Get the root ViewNode ID.
     #[inline]
-    pub fn root(&self) -> Option<ViewObjectId> {
+    pub fn root(&self) -> Option<ViewId> {
         self.root
     }
 
-    /// Set the root ViewObject ID.
+    /// Set the root ViewNode ID.
     #[inline]
-    pub fn set_root(&mut self, root: Option<ViewObjectId>) {
+    pub fn set_root(&mut self, root: Option<ViewId>) {
         self.root = root;
     }
 
     // ========== Basic Operations ==========
 
-    /// Checks if a ViewObject exists in the tree.
+    /// Checks if a ViewNode exists in the tree.
     #[inline]
-    pub fn contains(&self, id: ViewObjectId) -> bool {
+    pub fn contains(&self, id: ViewId) -> bool {
         self.nodes.contains(id.get() - 1)
     }
 
-    /// Returns the number of ViewObjects in the tree.
+    /// Returns the number of ViewNodes in the tree.
     #[inline]
     pub fn len(&self) -> usize {
         self.nodes.len()
@@ -407,7 +409,7 @@ impl ViewObjectTree {
 
     /// Inserts a ViewObject into the tree.
     ///
-    /// Returns the ViewObjectId of the inserted object.
+    /// Returns the ViewId of the inserted node.
     ///
     /// # Generic
     ///
@@ -416,7 +418,7 @@ impl ViewObjectTree {
     ///
     /// # Slab Offset Pattern
     ///
-    /// Applies +1 offset: `nodes.insert()` returns 0 → `ViewObjectId(1)`
+    /// Applies +1 offset: `nodes.insert()` returns 0 → `ViewId(1)`
     ///
     /// # Example
     ///
@@ -424,35 +426,35 @@ impl ViewObjectTree {
     /// let view = MyView { text: "Hello" };
     /// let id = tree.insert(view, ViewMode::Stateless);
     /// ```
-    pub fn insert<V: ViewObject + 'static>(
+    pub fn insert<V: ViewObject + fmt::Debug + 'static>(
         &mut self,
         object: V,
         mode: ViewMode,
-    ) -> ViewObjectId {
-        let node = ViewNode::new(object, mode);
-        let boxed = ViewNodeBox::new(node);
-        let slab_index = self.nodes.insert(boxed);
-        ViewObjectId::new(slab_index + 1)  // +1 offset
+    ) -> ViewId {
+        let node = ConcreteViewNode::new(object, mode);
+        let storage = ViewNodeStorage::new(node);
+        let slab_index = self.nodes.insert(storage);
+        ViewId::new(slab_index + 1)  // +1 offset
     }
 
     /// Returns a reference to a ViewNode (type-erased).
     ///
     /// # Slab Offset Pattern
     ///
-    /// Applies -1 offset: `ViewObjectId(1)` → `nodes[0]`
+    /// Applies -1 offset: `ViewId(1)` → `nodes[0]`
     #[inline]
-    pub fn get(&self, id: ViewObjectId) -> Option<&dyn ViewNodeTrait> {
+    pub fn get(&self, id: ViewId) -> Option<&(dyn ViewNode + '_)> {
         self.nodes
             .get(id.get() - 1)
-            .map(|node| &*node.inner)
+            .map(|storage| &*storage.inner as &(dyn ViewNode + '_))
     }
 
     /// Returns a mutable reference to a ViewNode (type-erased).
     #[inline]
-    pub fn get_mut(&mut self, id: ViewObjectId) -> Option<&mut dyn ViewNodeTrait> {
+    pub fn get_mut(&mut self, id: ViewId) -> Option<&mut (dyn ViewNode + '_)> {
         self.nodes
             .get_mut(id.get() - 1)
-            .map(|node| &mut *node.inner)
+            .map(|storage| &mut *storage.inner as &mut (dyn ViewNode + '_))
     }
 
     /// Returns a reference to the concrete ViewNode type.
@@ -467,28 +469,28 @@ impl ViewObjectTree {
     ///     println!("Text: {}", node.object().text);
     /// }
     /// ```
-    pub fn get_concrete<V: ViewObject + 'static>(&self, id: ViewObjectId) -> Option<&ViewNode<V>> {
+    pub fn get_concrete<V: ViewObject + fmt::Debug + 'static>(&self, id: ViewId) -> Option<&ConcreteViewNode<V>> {
         self.get(id)?
             .as_any()
-            .downcast_ref::<ViewNode<V>>()
+            .downcast_ref::<ConcreteViewNode<V>>()
     }
 
     /// Returns a mutable reference to the concrete ViewNode type.
-    pub fn get_concrete_mut<V: ViewObject + 'static>(
+    pub fn get_concrete_mut<V: ViewObject + fmt::Debug + 'static>(
         &mut self,
-        id: ViewObjectId,
-    ) -> Option<&mut ViewNode<V>> {
+        id: ViewId,
+    ) -> Option<&mut ConcreteViewNode<V>> {
         self.get_mut(id)?
             .as_any_mut()
-            .downcast_mut::<ViewNode<V>>()
+            .downcast_mut::<ConcreteViewNode<V>>()
     }
 
-    /// Removes a ViewObject from the tree.
+    /// Removes a ViewNode from the tree.
     ///
     /// Returns the removed node, or None if it didn't exist.
     ///
     /// **Note:** This does NOT remove children. Caller must handle tree cleanup.
-    pub fn remove(&mut self, id: ViewObjectId) -> Option<Box<dyn ViewNodeTrait>> {
+    pub fn remove(&mut self, id: ViewId) -> Option<Box<dyn ViewNode>> {
         // Update root if removing root
         if self.root == Some(id) {
             self.root = None;
@@ -496,15 +498,15 @@ impl ViewObjectTree {
 
         self.nodes
             .try_remove(id.get() - 1)
-            .map(|node| node.inner)
+            .map(|storage| storage.inner)
     }
 
     // ========== Tree Operations ==========
 
-    /// Adds a child to a parent ViewObject.
+    /// Adds a child to a parent ViewNode.
     ///
     /// Updates both parent's children list and child's parent pointer.
-    pub fn add_child(&mut self, parent_id: ViewObjectId, child_id: ViewObjectId) {
+    pub fn add_child(&mut self, parent_id: ViewId, child_id: ViewId) {
         // Update parent's children
         if let Some(parent) = self.get_mut(parent_id) {
             parent.add_child(child_id);
@@ -516,8 +518,8 @@ impl ViewObjectTree {
         }
     }
 
-    /// Removes a child from a parent ViewObject.
-    pub fn remove_child(&mut self, parent_id: ViewObjectId, child_id: ViewObjectId) {
+    /// Removes a child from a parent ViewNode.
+    pub fn remove_child(&mut self, parent_id: ViewId, child_id: ViewId) {
         // Update parent's children
         if let Some(parent) = self.get_mut(parent_id) {
             parent.remove_child(child_id);
@@ -530,7 +532,7 @@ impl ViewObjectTree {
     }
 }
 
-impl Default for ViewObjectTree {
+impl Default for ViewTree {
     fn default() -> Self {
         Self::new()
     }
