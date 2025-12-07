@@ -5,9 +5,8 @@
 
 use bon::Builder;
 use flui_core::view::children::Child;
-use flui_core::view::{IntoElement, StatelessView};
-use flui_core::BuildContext;
-use flui_rendering::objects::{DecorationPosition, RenderDecoratedBox};
+use flui_core::IntoElement;
+use flui_rendering::objects::DecorationPosition;
 use flui_types::styling::BoxDecoration;
 use flui_types::Color;
 
@@ -139,10 +138,18 @@ impl Default for DecoratedBox {
     }
 }
 
-// Implement View for DecoratedBox
-impl StatelessView for DecoratedBox {
-    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
-        RenderDecoratedBox::with_position(self.decoration, self.position).maybe_child(self.child)
+// DecoratedBox is a RenderObjectWidget - implements IntoElement directly
+impl IntoElement for DecoratedBox {
+    fn into_element(self) -> flui_core::Element {
+        use flui_rendering::{BoxRenderWrapper, Optional};
+        use flui_rendering::objects::RenderDecoratedBox;
+
+        // Create render object
+        let render = RenderDecoratedBox::with_position(self.decoration, self.position);
+
+        // Wrap in BoxRenderWrapper and convert to Element
+        // TODO: Handle child - need to figure out proper API for this
+        BoxRenderWrapper::<Optional>::new(render).into_element()
     }
 }
 
