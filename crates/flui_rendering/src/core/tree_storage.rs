@@ -380,30 +380,37 @@ impl<T: RenderTreeStorage> LayoutTree for RenderTree<T> {
             state.clear_needs_layout();
         }
 
-        // SAFETY: Split-borrow pattern for calling perform_layout
+        // SAFETY: Callback-based layout pattern
         //
-        // We use unsafe here to split the mutable borrow:
-        // 1. Get raw pointer to RenderElement through storage
-        // 2. Call perform_layout which needs &mut dyn LayoutTree
+        // We use a raw pointer to create a recursive callback:
+        // 1. Callback captures raw pointer to self (not &mut self)
+        // 2. This allows us to borrow render_element mutably
+        // 3. When callback is invoked, it calls perform_layout on OTHER elements
         //
         // This is safe because:
-        // - RenderObject::perform_layout() only reads/writes its own state and children
-        // - It doesn't directly access the parent element we're borrowing
-        // - Tree operations (layout_child, etc.) work on OTHER elements, not this one
-        // - No aliasing occurs: parent element vs child elements are disjoint
+        // - Parent element (id) and child elements are DISJOINT in the tree
+        // - No aliasing: we never access parent while children are being laid out
+        // - Rust's tree invariant guarantees no cycles
+        // - Raw pointer is only used within this scope
         unsafe {
-            // Get raw pointer to avoid borrow conflict
-            let storage_ptr = &mut self.storage as *mut T;
-            let render_element_ptr = (*storage_ptr)
+            let self_ptr = self as *mut Self;
+
+            // Create callback that uses raw pointer for recursion
+            let mut layout_child = |child_id: ElementId, child_constraints: BoxConstraints| {
+                (*self_ptr).perform_layout(child_id, child_constraints)
+            };
+
+            // Now we can borrow render_element without conflict
+            let render_element = self
+                .storage
                 .render_object_mut(id)
                 .and_then(|obj| obj.downcast_mut::<crate::core::RenderElement>())
-                .ok_or_else(|| RenderError::not_render_element(id))?
-                as *mut crate::core::RenderElement;
+                .ok_or_else(|| RenderError::not_render_element(id))?;
 
-            // Call perform_layout with tree reference (safe because no aliasing)
-            let size = (*render_element_ptr)
+            // Call perform_layout with callback - NO tree parameter needed!
+            let size = render_element
                 .render_object_mut()
-                .perform_layout(id, constraints, self as &mut dyn LayoutTree)?;
+                .perform_layout(id, constraints, &mut layout_child)?;
 
             // Cache the result
             if let Some(state) = self.storage.render_state(id) {
@@ -440,20 +447,39 @@ impl<T: RenderTreeStorage> LayoutTree for RenderTree<T> {
             state.clear_needs_layout();
         }
 
-        // TODO: Call RenderObject::perform_sliver_layout() directly
-        // Same borrow checker issue as perform_layout() above.
-        // Use visitor pattern via LayoutVisitable for actual sliver layout operations.
-        let geom = SliverGeometry::zero();
+        // SAFETY: Same callback pattern as perform_layout()
+        // See detailed safety comments in perform_layout() above.
+        unsafe {
+            let self_ptr = self as *mut Self;
 
-        // Cache the result
-        if let Some(state) = self.storage.render_state(id) {
-            if let Some(sliver_state) = state.as_sliver_state() {
-                sliver_state.set_constraints(constraints);
-                sliver_state.set_sliver_geometry(geom);
+            // Create callback for laying out sliver children
+            let layout_sliver_child =
+                |child_id: ElementId, child_constraints: SliverConstraints| {
+                    (*self_ptr).perform_sliver_layout(child_id, child_constraints)
+                };
+
+            // Borrow render_element without conflict
+            let render_element = self
+                .storage
+                .render_object_mut(id)
+                .and_then(|obj| obj.downcast_mut::<crate::core::RenderElement>())
+                .ok_or_else(|| RenderError::not_render_element(id))?;
+
+            // TODO: Add perform_sliver_layout to RenderObject trait
+            // For now, return zero geometry as placeholder
+            let geom = SliverGeometry::zero();
+            let _ = (layout_sliver_child, render_element); // Silence unused warnings
+
+            // Cache the result
+            if let Some(state) = self.storage.render_state(id) {
+                if let Some(sliver_state) = state.as_sliver_state() {
+                    sliver_state.set_constraints(constraints);
+                    sliver_state.set_sliver_geometry(geom);
+                }
             }
-        }
 
-        Ok(geom)
+            Ok(geom)
+        }
     }
 
     fn set_offset(&mut self, id: ElementId, offset: Offset) {

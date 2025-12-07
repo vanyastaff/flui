@@ -780,8 +780,13 @@ impl RenderElement {
                 // Store constraints
                 self.set_constraints_box(box_c);
 
-                // Call Box protocol layout
-                let size = self.render_object.perform_layout(id, box_c, tree)?;
+                // Create callback wrapper for child layout
+                let mut layout_child = |child_id: ElementId, child_constraints: BoxConstraints| {
+                    tree.perform_layout(child_id, child_constraints)
+                };
+
+                // Call Box protocol layout with callback
+                let size = self.render_object.perform_layout(id, box_c, &mut layout_child)?;
 
                 // Store size
                 self.set_size(size);

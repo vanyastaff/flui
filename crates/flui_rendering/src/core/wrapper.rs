@@ -47,7 +47,7 @@ use super::context::{
 };
 use super::object::RenderObject;
 use super::sliver::RenderSliver;
-use super::{BoxConstraints, LayoutTree};
+use super::BoxConstraints;
 use crate::RenderResult;
 
 // ============================================================================
@@ -318,7 +318,7 @@ impl<A: Arity> RenderObject for SliverRenderWrapper<A> {
         &mut self,
         _element_id: ElementId,
         _constraints: BoxConstraints,
-        _tree: &mut dyn LayoutTree,
+        _layout_child: &mut dyn FnMut(ElementId, BoxConstraints) -> RenderResult<Size>,
     ) -> RenderResult<Size> {
         Err(crate::RenderError::UnsupportedProtocol {
             expected: "SliverProtocol",

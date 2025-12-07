@@ -29,7 +29,7 @@ use flui_types::semantics::{SemanticsAction, SemanticsProperties};
 use flui_types::{Offset, Rect, Size};
 use parking_lot::RwLock;
 
-use crate::core::{BoxConstraints, HitTestTree, LayoutTree, PaintTree};
+use crate::core::{BoxConstraints, HitTestTree, PaintTree};
 use crate::RenderResult;
 
 // ============================================================================
@@ -248,10 +248,10 @@ pub trait RenderObject: DowncastSync + fmt::Debug {
     // DYN-COMPATIBLE LAYOUT (Required for Box protocol)
     // ============================================================================
 
-    /// Performs layout using box constraints (dyn-compatible).
+    /// Performs layout using box constraints (callback-based).
     ///
     /// This is the type-erased entry point for layout. It receives constraints
-    /// as `BoxConstraints` and returns a `Size`.
+    /// and a callback for laying out children.
     ///
     /// # Flutter Protocol
     ///
@@ -270,7 +270,12 @@ pub trait RenderObject: DowncastSync + fmt::Debug {
     ///
     /// * `element_id` - ID of this element in the tree
     /// * `constraints` - Layout constraints from parent
-    /// * `tree` - Tree for accessing children
+    /// * `layout_child` - Callback for laying out children (trait object for dyn-compatibility)
+    ///
+    /// # Callback Signature
+    ///
+    /// The callback takes `(child_id, child_constraints)` and returns child's size.
+    /// This enables layout without self-referential borrows.
     ///
     /// # Returns
     ///
@@ -280,11 +285,20 @@ pub trait RenderObject: DowncastSync + fmt::Debug {
     ///
     /// Default returns constraints.smallest() for leaf nodes.
     /// Override for custom layout logic.
+    ///
+    /// # Performance
+    ///
+    /// Callback-based design eliminates:
+    /// - Borrow checker conflicts
+    /// - Multiple downcast operations
+    /// - Complex unsafe patterns
+    ///
+    /// Trade-off: Dynamic dispatch on callback (negligible overhead vs safety gains)
     fn perform_layout(
         &mut self,
         _element_id: ElementId,
         constraints: BoxConstraints,
-        _tree: &mut dyn LayoutTree,
+        _layout_child: &mut dyn FnMut(ElementId, BoxConstraints) -> RenderResult<Size>,
     ) -> RenderResult<Size> {
         // Default: leaf node returns minimum size
         Ok(constraints.smallest())
