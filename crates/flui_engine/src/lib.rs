@@ -50,6 +50,7 @@ pub mod painter;
 pub mod renderer;
 pub mod scene;
 pub mod text;
+pub mod tree;
 
 // Re-export GPU renderer (high-level abstraction)
 pub use gpu_renderer::{GpuRenderer, RenderError};

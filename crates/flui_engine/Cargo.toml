@@ -93,6 +93,7 @@ atlas-checks = ["guillotiere/checks"]
 flui_types = { path = "../flui_types" }
 flui_painting = { path = "../flui_painting" }
 flui_interaction = { path = "../flui_interaction" }
+flui-foundation = { path = "../flui-foundation" }
 flui_devtools = { path = "../flui_devtools", optional = true }
 
 # === Engine-specific dependencies (NOT from workspace) ===
@@ -126,6 +127,7 @@ image = { workspace = true, optional = true }
 parking_lot = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+slab = "0.4"
 
 # === Platform-specific dependencies ===
 
