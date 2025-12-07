@@ -7,7 +7,7 @@ use bon::Builder;
 use flui_core::BuildContext;
 
 use flui_core::view::{IntoElement, StatelessView};
-use flui_rendering::RenderOpacity;
+use flui_rendering::objects::RenderOpacity;
 
 /// A widget that makes its child partially transparent.
 ///
@@ -50,7 +50,7 @@ pub struct Opacity {
 
     /// The child widget.
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Box<dyn >>,
+    pub child: Option<Box<dyn IntoElement>>,
 }
 
 impl std::fmt::Debug for Opacity {

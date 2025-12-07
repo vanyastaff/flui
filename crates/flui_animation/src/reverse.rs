@@ -112,21 +112,21 @@ impl Animation<f32> for ReverseAnimation {
 }
 
 impl Listenable for ReverseAnimation {
-    fn add_listener(&mut self, callback: ListenerCallback) -> ListenerId {
-        Arc::get_mut(&mut self.notifier)
-            .unwrap()
+    fn add_listener(&self, callback: ListenerCallback) -> ListenerId {
+        self.notifier
+            
             .add_listener(callback)
     }
 
-    fn remove_listener(&mut self, id: ListenerId) {
-        Arc::get_mut(&mut self.notifier)
-            .unwrap()
+    fn remove_listener(&self, id: ListenerId) {
+        self.notifier
+            
             .remove_listener(id)
     }
 
-    fn remove_all_listeners(&mut self) {
-        Arc::get_mut(&mut self.notifier)
-            .unwrap()
+    fn remove_all_listeners(&self) {
+        self.notifier
+            
             .remove_all_listeners()
     }
 }
@@ -190,14 +190,14 @@ mod tests {
         assert_eq!(reversed.status(), AnimationStatus::Completed);
 
         // Forward → Reverse
-        controller.forward().unwrap();
+        controller.forward();
         assert_eq!(controller.status(), AnimationStatus::Forward);
         assert_eq!(reversed.status(), AnimationStatus::Reverse);
 
-        controller.stop().unwrap();
+        controller.stop();
 
         // Reverse → Forward
-        controller.reverse().unwrap();
+        controller.reverse();
         assert_eq!(controller.status(), AnimationStatus::Reverse);
         assert_eq!(reversed.status(), AnimationStatus::Forward);
 

@@ -105,21 +105,21 @@ impl<T> Listenable for ProxyAnimation<T>
 where
     T: Clone + Send + Sync + 'static,
 {
-    fn add_listener(&mut self, callback: ListenerCallback) -> ListenerId {
-        Arc::get_mut(&mut self.notifier)
-            .unwrap()
+    fn add_listener(&self, callback: ListenerCallback) -> ListenerId {
+        self.notifier
+            
             .add_listener(callback)
     }
 
-    fn remove_listener(&mut self, id: ListenerId) {
-        Arc::get_mut(&mut self.notifier)
-            .unwrap()
+    fn remove_listener(&self, id: ListenerId) {
+        self.notifier
+            
             .remove_listener(id)
     }
 
-    fn remove_all_listeners(&mut self) {
-        Arc::get_mut(&mut self.notifier)
-            .unwrap()
+    fn remove_all_listeners(&self) {
+        self.notifier
+            
             .remove_all_listeners()
     }
 }
@@ -182,7 +182,7 @@ mod tests {
 
         assert_eq!(proxy.status(), AnimationStatus::Dismissed);
 
-        controller.forward().unwrap();
+        controller.forward();
         assert_eq!(proxy.status(), AnimationStatus::Forward);
 
         controller.dispose();

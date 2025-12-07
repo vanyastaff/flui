@@ -18,6 +18,7 @@ workspace = true
 flui_types = { path = "../flui_types" }
 flui-foundation = { path = "../flui-foundation" }
 flui-scheduler = { path = "../flui-scheduler" }
+flui-view = { path = "../flui-view" }
 
 # Concurrency
 parking_lot.workspace = true

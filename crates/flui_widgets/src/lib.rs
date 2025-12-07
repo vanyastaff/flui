@@ -55,6 +55,7 @@
 
 #![warn(missing_docs)]
 
+pub mod animation;
 pub mod basic;
 // pub mod error;
 // pub mod gestures;
@@ -62,7 +63,7 @@ pub mod basic;
 // pub mod layout;
 // pub mod scrolling;
 // pub mod style;
-// pub mod visual_effects;
+pub mod visual_effects;
 
 // Re-export Text for convenient access
 pub use basic::Text;

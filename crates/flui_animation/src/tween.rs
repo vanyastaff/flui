@@ -120,22 +120,16 @@ where
     T: Clone + Send + Sync + 'static,
     A: Animatable<T> + Clone + Send + Sync + 'static,
 {
-    fn add_listener(&mut self, callback: ListenerCallback) -> ListenerId {
-        Arc::get_mut(&mut self.notifier)
-            .unwrap()
-            .add_listener(callback)
+    fn add_listener(&self, callback: ListenerCallback) -> ListenerId {
+        self.notifier.add_listener(callback)
     }
 
-    fn remove_listener(&mut self, id: ListenerId) {
-        Arc::get_mut(&mut self.notifier)
-            .unwrap()
-            .remove_listener(id)
+    fn remove_listener(&self, id: ListenerId) {
+        self.notifier.remove_listener(id)
     }
 
-    fn remove_all_listeners(&mut self) {
-        Arc::get_mut(&mut self.notifier)
-            .unwrap()
-            .remove_all_listeners()
+    fn remove_all_listeners(&self) {
+        self.notifier.remove_all_listeners()
     }
 }
 

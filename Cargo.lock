@@ -1291,6 +1291,7 @@ version = "0.1.0"
 dependencies = [
  "flui-foundation",
  "flui-scheduler",
+ "flui-view",
  "flui_types",
  "parking_lot",
  "serde",
@@ -1529,6 +1530,10 @@ name = "flui_widgets"
 version = "0.1.0"
 dependencies = [
  "bon",
+ "flui-foundation",
+ "flui-scheduler",
+ "flui-view",
+ "flui_animation",
  "flui_core",
  "flui_interaction",
  "flui_painting",

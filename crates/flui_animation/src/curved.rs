@@ -100,21 +100,21 @@ impl<C: Curve + Clone + Send + Sync + fmt::Debug + 'static> Animation<f32> for C
 }
 
 impl<C: Curve + Clone + Send + Sync> Listenable for CurvedAnimation<C> {
-    fn add_listener(&mut self, callback: ListenerCallback) -> ListenerId {
-        Arc::get_mut(&mut self.notifier)
-            .unwrap()
+    fn add_listener(&self, callback: ListenerCallback) -> ListenerId {
+        self.notifier
+            
             .add_listener(callback)
     }
 
-    fn remove_listener(&mut self, id: ListenerId) {
-        Arc::get_mut(&mut self.notifier)
-            .unwrap()
+    fn remove_listener(&self, id: ListenerId) {
+        self.notifier
+            
             .remove_listener(id)
     }
 
-    fn remove_all_listeners(&mut self) {
-        Arc::get_mut(&mut self.notifier)
-            .unwrap()
+    fn remove_all_listeners(&self) {
+        self.notifier
+            
             .remove_all_listeners()
     }
 }
@@ -176,7 +176,7 @@ mod tests {
 
         assert_eq!(curved.status(), AnimationStatus::Dismissed);
 
-        controller.forward().unwrap();
+        controller.forward();
         assert_eq!(curved.status(), AnimationStatus::Forward);
 
         controller.dispose();

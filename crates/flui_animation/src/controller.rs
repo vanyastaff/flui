@@ -613,22 +613,29 @@ impl Animation<f32> for AnimationController {
 }
 
 impl Listenable for AnimationController {
-    fn add_listener(&mut self, callback: ListenerCallback) -> ListenerId {
-        Arc::get_mut(&mut self.notifier)
-            .unwrap()
-            .add_listener(callback)
+    fn add_listener(&self, callback: ListenerCallback) -> ListenerId {
+        self.notifier.add_listener(callback)
     }
 
-    fn remove_listener(&mut self, id: ListenerId) {
-        Arc::get_mut(&mut self.notifier)
-            .unwrap()
-            .remove_listener(id)
+    fn remove_listener(&self, id: ListenerId) {
+        self.notifier.remove_listener(id)
     }
 
-    fn remove_all_listeners(&mut self) {
-        Arc::get_mut(&mut self.notifier)
-            .unwrap()
-            .remove_all_listeners()
+    fn remove_all_listeners(&self) {
+        self.notifier.remove_all_listeners()
+    }
+}
+
+// Implement flui_view::Listenable for use with AnimatedView
+// This version converts Box to Arc to match ChangeNotifier's requirements
+impl flui_view::Listenable for AnimationController {
+    fn add_listener(&self, callback: Box<dyn Fn() + Send + Sync>) -> ListenerId {
+        // Convert Box to Arc for ChangeNotifier
+        self.notifier.add_listener(Arc::from(callback))
+    }
+
+    fn remove_listener(&self, id: ListenerId) {
+        self.notifier.remove_listener(id)
     }
 }
 
