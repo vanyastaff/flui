@@ -1287,6 +1287,23 @@ impl RenderState<SliverProtocol> {
             .and_then(|g| g.max_paint_extent)
             .unwrap_or(0.0)
     }
+
+    /// Sets sliver geometry (convenience wrapper for `set_geometry()`).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let geom = SliverGeometry {
+    ///     scroll_extent: 1000.0,
+    ///     paint_extent: 500.0,
+    ///     ..Default::default()
+    /// };
+    /// state.set_sliver_geometry(geom);
+    /// ```
+    #[inline]
+    pub fn set_sliver_geometry(&self, geometry: flui_types::SliverGeometry) {
+        self.set_geometry(geometry);
+    }
 }
 
 // ============================================================================

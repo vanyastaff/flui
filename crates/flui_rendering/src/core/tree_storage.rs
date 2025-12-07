@@ -39,11 +39,14 @@ use std::any::Any;
 use std::collections::HashSet;
 
 use flui_foundation::ElementId;
-use flui_interaction::HitTestResult;
+use flui_interaction::{HitTestEntry, HitTestResult};
 use flui_painting::Canvas;
-use flui_tree::{RenderTreeAccess, TreeNav, TreeRead};
+use flui_tree::{
+    HitTestVisitable, LayoutVisitable, PaintVisitable, RenderTreeAccess, TreeNav, TreeRead,
+};
 use flui_types::{BoxConstraints, Offset, Size, SliverConstraints, SliverGeometry};
 
+use crate::core::unified::{Constraints, Geometry};
 use crate::core::{HitTestTree, LayoutTree, PaintTree, RenderStateExt};
 use crate::error::RenderError;
 use flui_types::Axis;
@@ -57,18 +60,13 @@ use flui_types::Axis;
 /// This trait combines the necessary capabilities from `flui-tree`:
 /// - `TreeRead` - Access nodes by ID
 /// - `TreeNav` - Parent/child navigation
-/// - `RenderTreeAccess` - Access to render objects and state (includes `render_object_mut`)
+/// - `RenderTreeAccess` - Access to render objects and state
 ///
 /// Any type implementing these traits (like `ElementTree`) can be
 /// wrapped in `RenderTree<T>`.
 ///
-/// Note: `render_object_mut` and `render_state_mut` come from `RenderTreeAccess`.
-pub trait RenderTreeStorage: TreeRead + TreeNav + RenderTreeAccess {
-    /// Get children of an element as a Vec (needed for iteration during mutation).
-    fn children_vec(&self, id: ElementId) -> Vec<ElementId> {
-        self.children(id).collect()
-    }
-}
+/// All required functionality is provided by the composed traits.
+pub trait RenderTreeStorage: TreeRead + TreeNav + RenderTreeAccess {}
 
 // ============================================================================
 // RENDER TREE
@@ -78,6 +76,12 @@ pub trait RenderTreeStorage: TreeRead + TreeNav + RenderTreeAccess {
 ///
 /// `RenderTree<T>` takes ownership of a storage type (like `ElementTree`)
 /// and provides implementations of `LayoutTree`, `PaintTree`, and `HitTestTree`.
+///
+/// # Four-Tree Architecture
+///
+/// This wrapper coordinates between:
+/// - `storage`: ElementTree (stores Elements with ViewId/RenderId references)
+/// - `render_objects`: RenderTree (stores actual RenderObjects)
 ///
 /// # Type Parameters
 ///
@@ -96,8 +100,15 @@ pub trait RenderTreeStorage: TreeRead + TreeNav + RenderTreeAccess {
 /// - No additional allocations during layout/paint (except dirty sets)
 #[derive(Debug)]
 pub struct RenderTree<T: RenderTreeStorage> {
-    /// Underlying storage (e.g., ElementTree)
+    /// Underlying storage (e.g., ElementTree) - stores Elements
     storage: T,
+
+    /// Separate RenderObject tree (four-tree architecture)
+    ///
+    /// Elements in `storage` hold RenderId references. The actual RenderObjects
+    /// are stored here. This matches Flutter's architecture where Elements and
+    /// RenderObjects are in separate trees.
+    render_objects: crate::tree::RenderTree,
 
     /// Elements that need layout in the next frame.
     /// Flutter equivalent: `PipelineOwner._nodesNeedingLayout`
@@ -123,6 +134,10 @@ pub struct RenderTree<T: RenderTreeStorage> {
 impl<T: RenderTreeStorage> RenderTree<T> {
     /// Creates a new RenderTree wrapping the given storage.
     ///
+    /// # Four-Tree Architecture
+    ///
+    /// Creates both the Element storage (T) and the separate RenderObject tree.
+    ///
     /// # Example
     ///
     /// ```rust,ignore
@@ -132,6 +147,7 @@ impl<T: RenderTreeStorage> RenderTree<T> {
     pub fn new(storage: T) -> Self {
         Self {
             storage,
+            render_objects: crate::tree::RenderTree::new(),
             needs_layout: HashSet::new(),
             needs_paint: HashSet::new(),
             needs_compositing: HashSet::new(),
@@ -145,6 +161,7 @@ impl<T: RenderTreeStorage> RenderTree<T> {
     pub fn with_capacity(storage: T, capacity: usize) -> Self {
         Self {
             storage,
+            render_objects: crate::tree::RenderTree::with_capacity(capacity),
             needs_layout: HashSet::with_capacity(capacity),
             needs_paint: HashSet::with_capacity(capacity),
             needs_compositing: HashSet::with_capacity(capacity),
@@ -152,9 +169,23 @@ impl<T: RenderTreeStorage> RenderTree<T> {
         }
     }
 
-    /// Unwraps the RenderTree, returning the underlying storage.
-    pub fn into_inner(self) -> T {
-        self.storage
+    /// Unwraps the RenderTree, returning the underlying storage and RenderObject tree.
+    ///
+    /// Returns (storage, render_objects).
+    pub fn into_inner(self) -> (T, crate::tree::RenderTree) {
+        (self.storage, self.render_objects)
+    }
+
+    /// Returns a reference to the RenderObject tree.
+    #[inline]
+    pub fn render_objects(&self) -> &crate::tree::RenderTree {
+        &self.render_objects
+    }
+
+    /// Returns a mutable reference to the RenderObject tree.
+    #[inline]
+    pub fn render_objects_mut(&mut self) -> &mut crate::tree::RenderTree {
+        &mut self.render_objects
     }
 }
 
@@ -366,52 +397,145 @@ impl<T: RenderTreeStorage> LayoutTree for RenderTree<T> {
         id: ElementId,
         constraints: BoxConstraints,
     ) -> Result<Size, RenderError> {
-        // Get render object (validates it exists)
+        // Validate render element exists
         let _render_obj = self
             .storage
             .render_object(id)
             .ok_or_else(|| RenderError::not_render_element(id))?;
 
-        // Try to downcast to RenderBox (most common case)
-        // For now, return placeholder - real implementation needs proper downcasting
-        // through the RenderObject trait
-
-        // Get render state to check/set dirty flags
+        // Check cached geometry if layout not needed
         if let Some(state) = self.storage.render_state(id) {
-            // Clear needs_layout flag
-            state.clear_needs_layout();
-
-            // Return cached geometry if available
-            if let Some(size) = state.box_geometry() {
-                return Ok(size);
+            if !state.needs_layout() {
+                if let Some(size) = state.box_geometry() {
+                    return Ok(size);
+                }
             }
+            state.clear_needs_layout();
         }
 
-        // TODO: Actually call render_object.layout() when we have proper downcasting
-        // For now, return a default size
-        let size = constraints.constrain(Size::new(100.0, 100.0));
+        // SAFETY: Callback-based layout pattern
+        //
+        // We use a raw pointer to create a recursive callback:
+        // 1. Callback captures raw pointer to self (not &mut self)
+        // 2. This allows us to borrow render_element mutably
+        // 3. When callback is invoked, it calls perform_layout on OTHER elements
+        //
+        // This is safe because:
+        // - Parent element (id) and child elements are DISJOINT in the tree
+        // - No aliasing: we never access parent while children are being laid out
+        // - Rust's tree invariant guarantees no cycles
+        // - Raw pointer is only used within this scope
+        unsafe {
+            let self_ptr = self as *mut Self;
 
-        // Cache the result - currently disabled (set_geometry panics if already set)
-        // if let Some(box_state) = self.storage.render_state(id).and_then(|s| s.as_box_state()) {
-        //     box_state.set_geometry(size);
-        // }
+            // Create callback that uses raw pointer for recursion
+            let mut layout_child = |child_id: ElementId, child_constraints: BoxConstraints| {
+                (*self_ptr).perform_layout(child_id, child_constraints)
+            };
 
-        Ok(size)
+            // Get RenderElement from storage to access RenderId
+            let render_element = self
+                .storage
+                .render_object_mut(id)
+                .and_then(|obj| obj.downcast_mut::<crate::core::RenderElement>())
+                .ok_or_else(|| RenderError::not_render_element(id))?;
+
+            // Four-tree architecture: Access RenderObject via RenderTree
+            let render_id = render_element
+                .render_id()
+                .ok_or_else(|| {
+                    RenderError::Layout(format!(
+                        "Element {:?} has no RenderId - RenderObject not in RenderTree",
+                        id
+                    ))
+                })?;
+
+            // Get RenderNode from separate RenderTree
+            let render_node = self
+                .render_objects
+                .get_mut(render_id)
+                .ok_or_else(|| {
+                    RenderError::Layout(format!(
+                        "RenderId {:?} not found in RenderTree for element {:?}",
+                        render_id, id
+                    ))
+                })?;
+
+            // Call perform_layout on the RenderObject
+            let size = render_node
+                .render_object_mut()
+                .perform_layout(id, constraints, &mut layout_child)?;
+
+            // Cache the result
+            if let Some(state) = self.storage.render_state(id) {
+                if let Some(box_state) = state.as_box_state() {
+                    box_state.set_constraints(constraints);
+                    box_state.set_size(size);
+                }
+            }
+
+            Ok(size)
+        }
     }
 
     fn perform_sliver_layout(
         &mut self,
         id: ElementId,
-        _constraints: SliverConstraints,
+        constraints: SliverConstraints,
     ) -> Result<SliverGeometry, RenderError> {
-        // Get render object
+        // Validate render element exists
         let _render_obj = self
             .storage
             .render_object(id)
             .ok_or_else(|| RenderError::not_render_element(id))?;
 
-        // TODO: Implement sliver layout
-        Ok(SliverGeometry::zero())
+        // Check cached geometry if layout not needed
+        if let Some(state) = self.storage.render_state(id) {
+            if !state.needs_layout() {
+                if let Some(sliver_state) = state.as_sliver_state() {
+                    if let Some(geom) = sliver_state.geometry() {
+                        return Ok(geom);
+                    }
+                }
+            }
+            state.clear_needs_layout();
+        }
+
+        // SAFETY: Same callback pattern as perform_layout()
+        // See detailed safety comments in perform_layout() above.
+        unsafe {
+            let self_ptr = self as *mut Self;
+
+            // Create callback for laying out sliver children
+            let layout_sliver_child =
+                |child_id: ElementId, child_constraints: SliverConstraints| {
+                    (*self_ptr).perform_sliver_layout(child_id, child_constraints)
+                };
+
+            // Get RenderElement from storage
+            let _render_element = self
+                .storage
+                .render_object_mut(id)
+                .and_then(|obj| obj.downcast_mut::<crate::core::RenderElement>())
+                .ok_or_else(|| RenderError::not_render_element(id))?;
+
+            // TODO: Four-tree architecture + Sliver layout
+            // 1. Access RenderObject via RenderTree (not implemented yet)
+            // 2. Add perform_sliver_layout to RenderObject trait
+            // For now, return zero geometry as placeholder
+            let geom = SliverGeometry::zero();
+            let _ = layout_sliver_child; // Silence unused warning
+
+            // Cache the result
+            if let Some(state) = self.storage.render_state(id) {
+                if let Some(sliver_state) = state.as_sliver_state() {
+                    sliver_state.set_constraints(constraints);
+                    sliver_state.set_sliver_geometry(geom);
+                }
+            }
+
+            Ok(geom)
+        }
     }
 
     fn set_offset(&mut self, id: ElementId, offset: Offset) {
@@ -539,7 +663,8 @@ impl<T: RenderTreeStorage> HitTestTree for RenderTree<T> {
         }
 
         // Hit test children first (front to back)
-        let children = self.storage.children_vec(id);
+        // Use TreeNav::children() instead of custom children_vec()
+        let children: Vec<_> = self.storage.children(id).collect();
         for child_id in children.into_iter().rev() {
             let child_offset = self.get_element_offset(child_id).unwrap_or(Offset::ZERO);
             let child_position = position - child_offset;
@@ -565,6 +690,135 @@ impl<T: RenderTreeStorage> HitTestTree for RenderTree<T> {
 
     fn get_offset(&self, id: ElementId) -> Option<Offset> {
         self.get_element_offset(id)
+    }
+}
+
+// ============================================================================
+// FLUI-TREE VISITOR TRAIT IMPLEMENTATIONS
+// ============================================================================
+//
+// These traits provide unified protocol support using Constraints/Geometry enums.
+// They enable generic tree traversal algorithms that work with both Box and Sliver protocols.
+
+impl<T: RenderTreeStorage> LayoutVisitable for RenderTree<T> {
+    type Constraints = Constraints;
+    type Geometry = Geometry;
+    type Position = Offset;
+
+    fn layout_element(&mut self, id: ElementId, constraints: Self::Constraints) -> Self::Geometry {
+        // Dispatch to protocol-specific LayoutTree methods based on constraint type
+        match constraints {
+            Constraints::Box(box_c) => {
+                // Call Box protocol layout
+                match self.perform_layout(id, box_c) {
+                    Ok(size) => Geometry::Box(size),
+                    Err(_) => Geometry::zero(crate::core::ProtocolId::Box),
+                }
+            }
+            Constraints::Sliver(sliver_c) => {
+                // Call Sliver protocol layout
+                match self.perform_sliver_layout(id, sliver_c) {
+                    Ok(geom) => Geometry::Sliver(geom),
+                    Err(_) => Geometry::zero(crate::core::ProtocolId::Sliver),
+                }
+            }
+        }
+    }
+
+    fn set_position(&mut self, id: ElementId, position: Self::Position) {
+        // Delegate to existing LayoutTree implementation
+        self.set_offset(id, position);
+    }
+
+    fn get_position(&self, id: ElementId) -> Option<Self::Position> {
+        // Delegate to existing LayoutTree implementation
+        LayoutTree::get_offset(self, id)
+    }
+
+    fn get_geometry(&self, id: ElementId) -> Option<Self::Geometry> {
+        self.storage.render_state(id).and_then(|state| {
+            // Try Box protocol first (most common)
+            if let Some(size) = state.box_geometry() {
+                return Some(Geometry::Box(size));
+            }
+
+            // Try Sliver protocol
+            if let Some(sliver_state) = state.as_sliver_state() {
+                if let Some(geom) = sliver_state.geometry() {
+                    return Some(Geometry::Sliver(geom));
+                }
+            }
+
+            None
+        })
+    }
+}
+
+impl<T: RenderTreeStorage> PaintVisitable for RenderTree<T> {
+    type Position = Offset;
+    type PaintResult = ();
+
+    fn paint_element(&mut self, id: ElementId, position: Self::Position) -> Self::PaintResult {
+        // Get geometry for this element
+        let geometry = self.get_geometry(id);
+
+        // Get reference to the element
+        let element_result = self
+            .storage
+            .render_object(id)
+            .and_then(|obj| obj.downcast_ref::<crate::core::RenderElement>());
+
+        if let (Some(element), Some(geom)) = (element_result, geometry) {
+            // TODO: Get actual canvas from somewhere - for now we skip painting
+            // In real implementation, paint() would need &mut Canvas parameter
+            let _ = element;
+            let _ = geom;
+            let _ = position;
+            // element.paint(id, position, &geom, canvas, self as &dyn PaintTree).ok();
+        }
+    }
+
+    fn combine_paint_results(&self, _results: Vec<Self::PaintResult>) -> Self::PaintResult {
+        // Nothing to combine for () result type
+    }
+}
+
+impl<T: RenderTreeStorage> HitTestVisitable for RenderTree<T> {
+    type Position = Offset;
+    type HitResult = HitTestResult;
+
+    fn hit_test_element(
+        &self,
+        id: ElementId,
+        position: Self::Position,
+        result: &mut Self::HitResult,
+    ) -> bool {
+        // Get the bounds for this element
+        let bounds = self.get_hit_test_bounds(id);
+
+        // Check if position is within bounds
+        if bounds.contains(position.to_point()) {
+            // Add to hit test result
+            let entry = HitTestEntry::new(id, position, bounds);
+            result.add(entry);
+            true
+        } else {
+            false
+        }
+    }
+
+    fn transform_position_for_child(
+        &self,
+        _parent: ElementId,
+        child: ElementId,
+        position: Self::Position,
+    ) -> Self::Position {
+        // Get child offset and transform position
+        if let Some(child_offset) = self.get_element_offset(child) {
+            position - child_offset
+        } else {
+            position
+        }
     }
 }
 

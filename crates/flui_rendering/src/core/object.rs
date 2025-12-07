@@ -29,7 +29,7 @@ use flui_types::semantics::{SemanticsAction, SemanticsProperties};
 use flui_types::{Offset, Rect, Size};
 use parking_lot::RwLock;
 
-use crate::core::{BoxConstraints, HitTestTree, LayoutTree, PaintTree};
+use crate::core::{BoxConstraints, HitTestTree};
 use crate::RenderResult;
 
 // ============================================================================
@@ -248,10 +248,10 @@ pub trait RenderObject: DowncastSync + fmt::Debug {
     // DYN-COMPATIBLE LAYOUT (Required for Box protocol)
     // ============================================================================
 
-    /// Performs layout using box constraints (dyn-compatible).
+    /// Performs layout using box constraints (callback-based).
     ///
     /// This is the type-erased entry point for layout. It receives constraints
-    /// as `BoxConstraints` and returns a `Size`.
+    /// and a callback for laying out children.
     ///
     /// # Flutter Protocol
     ///
@@ -270,7 +270,12 @@ pub trait RenderObject: DowncastSync + fmt::Debug {
     ///
     /// * `element_id` - ID of this element in the tree
     /// * `constraints` - Layout constraints from parent
-    /// * `tree` - Tree for accessing children
+    /// * `layout_child` - Callback for laying out children (trait object for dyn-compatibility)
+    ///
+    /// # Callback Signature
+    ///
+    /// The callback takes `(child_id, child_constraints)` and returns child's size.
+    /// This enables layout without self-referential borrows.
     ///
     /// # Returns
     ///
@@ -280,11 +285,20 @@ pub trait RenderObject: DowncastSync + fmt::Debug {
     ///
     /// Default returns constraints.smallest() for leaf nodes.
     /// Override for custom layout logic.
+    ///
+    /// # Performance
+    ///
+    /// Callback-based design eliminates:
+    /// - Borrow checker conflicts
+    /// - Multiple downcast operations
+    /// - Complex unsafe patterns
+    ///
+    /// Trade-off: Dynamic dispatch on callback (negligible overhead vs safety gains)
     fn perform_layout(
         &mut self,
         _element_id: ElementId,
         constraints: BoxConstraints,
-        _tree: &mut dyn LayoutTree,
+        _layout_child: &mut dyn FnMut(ElementId, BoxConstraints) -> RenderResult<Size>,
     ) -> RenderResult<Size> {
         // Default: leaf node returns minimum size
         Ok(constraints.smallest())
@@ -294,7 +308,7 @@ pub trait RenderObject: DowncastSync + fmt::Debug {
     // DYN-COMPATIBLE PAINT (Required)
     // ============================================================================
 
-    /// Paints this render object to canvas (dyn-compatible).
+    /// Paints this render object to canvas (callback-based).
     ///
     /// # Flutter Protocol
     ///
@@ -314,30 +328,49 @@ pub trait RenderObject: DowncastSync + fmt::Debug {
     /// * `offset` - Paint offset in global coordinates
     /// * `size` - Computed size from layout
     /// * `canvas` - Canvas to draw on
-    /// * `tree` - Tree for accessing children
+    /// * `paint_child` - Callback for painting children
+    ///
+    /// # Callback Signature
+    ///
+    /// The callback takes `(child_id, child_offset, canvas)` for painting children.
+    /// This enables painting without self-referential borrows.
     ///
     /// # Default Implementation
     ///
-    /// Default paints all children at their stored offsets.
+    /// Default is no-op. Override this method to paint content.
+    /// Child painting is handled via callback.
     fn paint(
         &self,
         _element_id: ElementId,
         _offset: Offset,
         _size: Size,
         _canvas: &mut Canvas,
-        _tree: &dyn PaintTree,
+        _paint_child: &mut dyn FnMut(ElementId, Offset, &mut Canvas),
     ) {
         // Default: no-op. Override this method to paint content.
-        // Child painting is coordinated by the pipeline, not by individual render objects.
+        // Child painting is coordinated via paint_child callback.
     }
 
     // ============================================================================
     // DYN-COMPATIBLE HIT TEST (Optional)
     // ============================================================================
 
-    /// Hit tests at position (dyn-compatible).
+    /// Hit tests at position (callback-based).
     ///
     /// Default: rectangular bounds check + test children.
+    ///
+    /// # Arguments
+    ///
+    /// * `element_id` - ID of this element
+    /// * `position` - Position to test in local coordinates
+    /// * `size` - Computed size from layout
+    /// * `result` - Hit test result accumulator
+    /// * `hit_test_child` - Callback for testing children
+    ///
+    /// # Callback Signature
+    ///
+    /// The callback takes `(child_id, child_position, result)` and returns bool.
+    /// This enables hit testing without self-referential borrows.
     ///
     /// # Returns
     ///
@@ -346,16 +379,10 @@ pub trait RenderObject: DowncastSync + fmt::Debug {
         &self,
         element_id: ElementId,
         position: Offset,
+        size: Size,
         result: &mut HitTestResult,
-        tree: &dyn HitTestTree,
+        hit_test_child: &mut dyn FnMut(ElementId, Offset, &mut HitTestResult) -> bool,
     ) -> bool {
-        // Get geometry
-        let size = tree
-            .render_object(element_id)
-            .and_then(|any| any.downcast_ref::<Size>())
-            .copied()
-            .unwrap_or(Size::ZERO);
-
         // Check bounds
         if position.dx < 0.0
             || position.dx > size.width
@@ -368,11 +395,10 @@ pub trait RenderObject: DowncastSync + fmt::Debug {
         // Test children (reverse order = front to back)
         let mut any_hit = false;
         self.visit_children(&mut |child_id| {
-            if let Some(child_offset) = tree.get_offset(child_id) {
-                let child_position = position - child_offset;
-                if tree.hit_test(child_id, child_position, result) {
-                    any_hit = true;
-                }
+            // Child offset will be provided by the callback
+            // The callback is responsible for position transformation
+            if hit_test_child(child_id, position, result) {
+                any_hit = true;
             }
         });
 

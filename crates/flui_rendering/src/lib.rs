@@ -79,6 +79,7 @@ pub mod core;
 pub mod error;
 pub mod into_render;
 pub mod objects;
+pub mod tree;  // Four-tree architecture: RenderTree for RenderObject storage
 pub mod view;
 
 // ============================================================================
@@ -87,6 +88,9 @@ pub mod view;
 
 // Core rendering traits
 pub use core::{RenderBox, RenderObject, RenderSliver};
+
+// Re-export downcast-rs for downcasting RenderObject
+pub use downcast_rs::DowncastSync;
 
 // Context types for layout/paint/hit-test
 pub use core::{
@@ -100,11 +104,17 @@ pub use core::{HitTestTree, HitTestTreeExt, LayoutTree, LayoutTreeExt, PaintTree
 // Geometry and constraints
 pub use core::BoxConstraints;
 
+// Unified protocol types
+pub use core::{Constraints, Geometry};
+
 // Protocol system
 pub use core::{BoxProtocol, Protocol, ProtocolId, SliverProtocol};
 
 // RenderElement and lifecycle
 pub use core::{RenderElement, RenderLifecycle};
+
+// Tree types (RenderTree, RenderNode, RenderId)
+pub use tree::{ConcreteRenderNode, RenderId, RenderNode, RenderTree};
 
 // Arity system (re-exported from flui-tree)
 pub use core::{Arity, AtLeast, ChildrenAccess, Exact, Leaf, Optional, Range, Single, Variable};

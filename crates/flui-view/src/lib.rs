@@ -73,6 +73,7 @@ pub mod element;
 pub mod into_view;
 pub mod state;
 pub mod traits;
+pub mod tree;
 pub mod view_mode;
 pub mod view_object;
 pub mod wrappers;
@@ -125,6 +126,9 @@ pub use flui_foundation::{
 
 // Element types (ViewElement, ViewLifecycle, ViewFlags)
 pub use element::{AtomicViewFlags, PendingChildren, ViewElement, ViewFlags, ViewLifecycle};
+
+// Tree types (ViewTree, ViewNode, ViewId)
+pub use tree::{ConcreteViewNode, ViewId, ViewNode, ViewTree};
 
 // ============================================================================
 // PRELUDE

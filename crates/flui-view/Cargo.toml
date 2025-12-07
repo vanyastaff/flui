@@ -14,10 +14,10 @@ flui-foundation = { path = "../flui-foundation" }
 flui-tree = { path = "../flui-tree" }
 flui_types = { path = "../flui_types" }
 
-
 # Core dependencies
 bitflags.workspace = true
 parking_lot.workspace = true
+slab = "0.4"
 tracing.workspace = true
 
 [dev-dependencies]

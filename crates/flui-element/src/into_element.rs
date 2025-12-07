@@ -36,13 +36,27 @@ impl IntoElement for Element {
 }
 
 /// Box<dyn ViewObject> converts to ViewElement wrapped in Element.
+///
+/// **DEPRECATED**: In the four-tree architecture, view objects must be inserted into
+/// ViewTree first to get a ViewId. This implementation now returns an empty element.
+///
+/// **Migration**:
+/// ```rust,ignore
+/// // Old way:
+/// let element = view_object.into_element();
+///
+/// // New way:
+/// let view_id = view_tree.insert(view_object);
+/// let element = Element::view(Some(view_id), mode);
+/// ```
 impl IntoElement for Box<dyn ViewObject> {
     fn into_element(self) -> Element {
-        let mode = self.mode();
-        let mut view_element = ViewElement::empty();
-        view_element.set_view_object_boxed(self);
-        view_element.set_view_mode(mode);
-        Element::View(view_element)
+        // Cannot create element without inserting into ViewTree first
+        tracing::warn!(
+            "IntoElement for Box<dyn ViewObject> is deprecated. \
+             View objects must be inserted into ViewTree first."
+        );
+        Element::empty()
     }
 }
 
@@ -80,26 +94,52 @@ impl IntoElement for Vec<Element> {
 // ============================================================================
 
 /// BoxRenderWrapper converts to a RenderElement with Box protocol.
+///
+/// **DEPRECATED**: In the four-tree architecture, render objects must be inserted into
+/// RenderTree first to get a RenderId. This implementation now returns an empty element.
+///
+/// **Migration**:
+/// ```rust,ignore
+/// // Old way:
+/// let element = box_render_wrapper.into_element();
+///
+/// // New way:
+/// let render_id = render_tree.insert(box_render_wrapper);
+/// let element = Element::render_with_arity(Some(render_id), ProtocolId::Box, arity);
+/// ```
 impl<A: Arity> IntoElement for BoxRenderWrapper<A> {
     fn into_element(self) -> Element {
-        // BoxRenderWrapper implements RenderObject, so we can box it directly
-        Element::Render(RenderElement::from_boxed(
-            Box::new(self),
-            ProtocolId::Box,
-            A::runtime_arity(),
-        ))
+        // Cannot create element without inserting into RenderTree first
+        tracing::warn!(
+            "IntoElement for BoxRenderWrapper is deprecated. \
+             Render objects must be inserted into RenderTree first."
+        );
+        Element::empty()
     }
 }
 
 /// SliverRenderWrapper converts to a RenderElement with Sliver protocol.
+///
+/// **DEPRECATED**: In the four-tree architecture, render objects must be inserted into
+/// RenderTree first to get a RenderId. This implementation now returns an empty element.
+///
+/// **Migration**:
+/// ```rust,ignore
+/// // Old way:
+/// let element = sliver_render_wrapper.into_element();
+///
+/// // New way:
+/// let render_id = render_tree.insert(sliver_render_wrapper);
+/// let element = Element::render_with_arity(Some(render_id), ProtocolId::Sliver, arity);
+/// ```
 impl<A: Arity> IntoElement for SliverRenderWrapper<A> {
     fn into_element(self) -> Element {
-        // SliverRenderWrapper implements RenderObject, so we can box it directly
-        Element::Render(RenderElement::from_boxed(
-            Box::new(self),
-            ProtocolId::Sliver,
-            A::runtime_arity(),
-        ))
+        // Cannot create element without inserting into RenderTree first
+        tracing::warn!(
+            "IntoElement for SliverRenderWrapper is deprecated. \
+             Render objects must be inserted into RenderTree first."
+        );
+        Element::empty()
     }
 }
 
@@ -160,14 +200,15 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_boxed_view_object_into_element() {
         let view_obj: Box<dyn ViewObject> = Box::new(TestViewObject);
         let element = view_obj.into_element();
 
+        // In four-tree architecture, this returns empty element (deprecated behavior)
         match element {
             Element::View(view_elem) => {
-                assert!(view_elem.has_view_object());
-                assert_eq!(view_elem.view_mode(), ViewMode::Stateless);
+                assert_eq!(view_elem.view_mode(), ViewMode::Empty);
             }
             Element::Render(_) => {
                 panic!("Expected View element, got Render element")

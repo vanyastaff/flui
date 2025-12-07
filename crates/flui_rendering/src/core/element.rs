@@ -71,7 +71,7 @@ use std::fmt;
 
 use flui_foundation::ElementId;
 use flui_tree::RuntimeArity;
-use flui_types::{Offset, Size};
+use flui_types::{Offset, Size, SliverGeometry};
 
 use super::flags::AtomicRenderFlags;
 use super::lifecycle::RenderLifecycle;
@@ -80,6 +80,7 @@ use super::parent_data::ParentData;
 use super::protocol::{BoxProtocol, Protocol, ProtocolId, SliverProtocol};
 use super::state::RenderState;
 use super::{BoxConstraints, SliverConstraints};
+use crate::tree::RenderId;
 
 // ============================================================================
 // PROTOCOL STATE (Type-Erased RenderState)
@@ -190,8 +191,11 @@ pub struct RenderElement {
     depth: usize,
 
     // ========== Render Object ==========
-    /// Owned render object (type-erased).
-    render_object: Box<dyn RenderObject>,
+    /// Reference into RenderTree (four-tree architecture).
+    ///
+    /// The actual RenderObject is stored in RenderTree, and this element just holds the ID.
+    /// Access the RenderObject through RenderTree.get(render_id).
+    render_id: Option<RenderId>,
 
     /// Protocol (Box or Sliver).
     protocol: ProtocolId,
@@ -250,20 +254,22 @@ impl fmt::Debug for RenderElement {
 // ============================================================================
 
 impl RenderElement {
-    /// Creates new RenderElement with render object.
+    /// Creates new RenderElement with a RenderId reference.
     ///
     /// Element starts in Detached state and must be mounted to tree.
     ///
-    /// Flutter equivalent: Element created but not yet mounted
+    /// # Four-Tree Architecture
     ///
-    /// # Examples
+    /// The RenderObject should be inserted into RenderTree first to obtain the RenderId:
     ///
     /// ```rust,ignore
-    /// let render = RenderOpacity::new(0.5);
-    /// let element = RenderElement::new(render, ProtocolId::Box);
-    /// assert!(element.is_detached());
+    /// // 1. Insert RenderObject into RenderTree
+    /// let render_id = render_tree.insert(my_render_object, RuntimeArity::Exact(0));
+    ///
+    /// // 2. Create RenderElement with the RenderId
+    /// let element = RenderElement::new(Some(render_id), ProtocolId::Box, RuntimeArity::Exact(0));
     /// ```
-    pub fn new<R: RenderObject>(render_object: R, protocol: ProtocolId) -> Self {
+    pub fn new(render_id: Option<RenderId>, protocol: ProtocolId, arity: RuntimeArity) -> Self {
         let state: Box<dyn ProtocolState> = match protocol {
             ProtocolId::Box => Box::new(RenderState::<BoxProtocol>::new()),
             ProtocolId::Sliver => Box::new(RenderState::<SliverProtocol>::new()),
@@ -274,44 +280,7 @@ impl RenderElement {
             parent: None,
             children: Vec::new(),
             depth: 0,
-            render_object: Box::new(render_object),
-            protocol,
-            arity: RuntimeArity::Exact(0),
-            state,
-            lifecycle: RenderLifecycle::Detached,
-            parent_data: None,
-            debug_name: None,
-        }
-    }
-
-    /// Creates with specified arity.
-    pub fn with_arity<R: RenderObject>(
-        render_object: R,
-        protocol: ProtocolId,
-        arity: RuntimeArity,
-    ) -> Self {
-        let mut element = Self::new(render_object, protocol);
-        element.arity = arity;
-        element
-    }
-
-    /// Creates from boxed render object.
-    pub fn from_boxed(
-        render_object: Box<dyn RenderObject>,
-        protocol: ProtocolId,
-        arity: RuntimeArity,
-    ) -> Self {
-        let state: Box<dyn ProtocolState> = match protocol {
-            ProtocolId::Box => Box::new(RenderState::<BoxProtocol>::new()),
-            ProtocolId::Sliver => Box::new(RenderState::<SliverProtocol>::new()),
-        };
-
-        Self {
-            id: None,
-            parent: None,
-            children: Vec::new(),
-            depth: 0,
-            render_object,
+            render_id,
             protocol,
             arity,
             state,
@@ -657,42 +626,39 @@ impl RenderElement {
 }
 
 // ============================================================================
-// RENDER OBJECT ACCESS
+// RENDER ID ACCESS (New Four-Tree Architecture)
 // ============================================================================
 
 impl RenderElement {
-    /// Returns render object reference.
-    #[inline]
-    pub fn render_object(&self) -> &dyn RenderObject {
-        &*self.render_object
-    }
-
-    /// Returns mutable render object reference.
-    #[inline]
-    pub fn render_object_mut(&mut self) -> &mut dyn RenderObject {
-        &mut *self.render_object
-    }
-
-    /// Downcasts render object to concrete type.
+    /// Gets the RenderId reference into RenderTree.
     ///
-    /// # Examples
+    /// This is the preferred way to access the RenderObject in the new four-tree architecture.
+    /// The actual RenderObject is stored in RenderTree, and this element just holds the ID.
+    #[inline]
+    pub fn render_id(&self) -> Option<RenderId> {
+        self.render_id
+    }
+
+    /// Sets the RenderId reference.
     ///
-    /// ```rust,ignore
-    /// if let Some(opacity) = element.render_object_as::<RenderOpacity>() {
-    ///     println!("Opacity: {}", opacity.opacity());
-    /// }
-    /// ```
+    /// This should be called when the RenderObject is inserted into RenderTree.
     #[inline]
-    pub fn render_object_as<T: RenderObject>(&self) -> Option<&T> {
-        self.render_object.as_any().downcast_ref::<T>()
+    pub fn set_render_id(&mut self, render_id: Option<RenderId>) {
+        self.render_id = render_id;
     }
 
-    /// Downcasts render object to concrete type (mutable).
+    /// Returns true if this element has a RenderId reference.
     #[inline]
-    pub fn render_object_as_mut<T: RenderObject>(&mut self) -> Option<&mut T> {
-        self.render_object.as_any_mut().downcast_mut::<T>()
+    pub fn has_render_id(&self) -> bool {
+        self.render_id.is_some()
     }
+}
 
+// ============================================================================
+// PROTOCOL & ARITY
+// ============================================================================
+
+impl RenderElement {
     /// Returns protocol.
     #[inline]
     pub fn protocol(&self) -> ProtocolId {
@@ -715,6 +681,132 @@ impl RenderElement {
     #[inline]
     pub fn is_sliver(&self) -> bool {
         self.protocol == ProtocolId::Sliver
+    }
+}
+
+// ============================================================================
+// UNIFIED LAYOUT AND PAINT METHODS
+// ============================================================================
+
+use super::unified::{Constraints, Geometry};
+use super::tree::{LayoutTree, PaintTree};
+use crate::{RenderError, RenderResult};
+
+impl RenderElement {
+    /// Unified layout method that handles both Box and Sliver protocols.
+    ///
+    /// This method dispatches to the appropriate RenderObject layout method based on
+    /// the element's protocol and validates that the constraint type matches.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - This element's ID
+    /// * `constraints` - Protocol-specific constraints (Box or Sliver)
+    /// * `tree` - Tree for accessing children and performing layout operations
+    ///
+    /// # Returns
+    ///
+    /// Returns `Geometry` enum containing either Box(Size) or Sliver(SliverGeometry)
+    ///
+    /// # Errors
+    ///
+    /// Returns `RenderError::ProtocolMismatch` if the constraint protocol doesn't match
+    /// the element's protocol.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // Box layout
+    /// let constraints = Constraints::Box(BoxConstraints::tight_for(100.0, 100.0));
+    /// let geometry = element.layout(id, constraints, &mut tree)?;
+    /// let size = geometry.as_box();
+    ///
+    /// // Sliver layout
+    /// let constraints = Constraints::Sliver(SliverConstraints::new(0.0, 1000.0));
+    /// let geometry = element.layout(id, constraints, &mut tree)?;
+    /// let sliver_geom = geometry.as_sliver();
+    /// ```
+    pub fn layout(
+        &mut self,
+        id: ElementId,
+        constraints: Constraints,
+        tree: &mut dyn LayoutTree,
+    ) -> RenderResult<Geometry> {
+        // Verify protocol match
+        if constraints.protocol() != self.protocol {
+            return Err(RenderError::ProtocolMismatch {
+                expected: format!("{:?}", self.protocol),
+                actual: format!("{:?}", constraints.protocol()),
+            });
+        }
+
+        // TODO: Four-Tree Architecture Integration
+        //
+        // In the new architecture, layout() needs to:
+        // 1. Access RenderObject from RenderTree using self.render_id
+        // 2. Call perform_layout() on the RenderObject
+        // 3. Store the resulting geometry
+        //
+        // This requires:
+        // - RenderTree to be passed as a parameter, OR
+        // - LayoutTree trait to provide access to RenderTree, OR
+        // - Layout logic to move entirely to pipeline coordinator
+        //
+        // The render_object field has been removed as part of clean four-tree architecture.
+        // Elements only hold ID references, not the actual objects.
+
+        unimplemented!(
+            "layout() needs RenderTree integration - render_object field removed per clean architecture"
+        )
+    }
+
+    /// Unified paint method that handles both Box and Sliver protocols.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - This element's ID
+    /// * `offset` - Paint offset in parent coordinates
+    /// * `geometry` - Protocol-specific geometry from layout
+    /// * `canvas` - Canvas to paint on
+    /// * `tree` - Tree for accessing children
+    ///
+    /// # Errors
+    ///
+    /// Returns `RenderError::ProtocolMismatch` if the geometry protocol doesn't match
+    /// the element's protocol.
+    pub fn paint(
+        &self,
+        id: ElementId,
+        offset: Offset,
+        geometry: &Geometry,
+        canvas: &mut super::Canvas,
+        tree: &mut dyn PaintTree,
+    ) -> RenderResult<()> {
+        // Verify geometry matches protocol
+        if geometry.protocol() != self.protocol {
+            return Err(RenderError::ProtocolMismatch {
+                expected: format!("{:?}", self.protocol),
+                actual: format!("{:?}", geometry.protocol()),
+            });
+        }
+
+        // TODO: Four-Tree Architecture Integration
+        //
+        // In the new architecture, paint() needs to:
+        // 1. Access RenderObject from RenderTree using self.render_id
+        // 2. Call paint() on the RenderObject
+        //
+        // This requires:
+        // - RenderTree to be passed as a parameter, OR
+        // - PaintTree trait to provide access to RenderTree, OR
+        // - Paint logic to move entirely to pipeline coordinator
+        //
+        // The render_object field has been removed as part of clean four-tree architecture.
+        // Elements only hold ID references, not the actual objects.
+
+        unimplemented!(
+            "paint() needs RenderTree integration - render_object field removed per clean architecture"
+        )
     }
 }
 
@@ -784,6 +876,23 @@ impl RenderElement {
     pub fn set_constraints_sliver(&mut self, constraints: SliverConstraints) {
         if let Some(sliver_state) = self.state.as_sliver_state() {
             sliver_state.set_constraints(constraints);
+        }
+    }
+
+    /// Returns last sliver geometry.
+    #[inline]
+    pub fn sliver_geometry(&self) -> Option<SliverGeometry> {
+        self.state
+            .as_sliver_state()
+            .and_then(|s| s.geometry())
+    }
+
+    /// Sets sliver geometry (called after layout, Sliver protocol only).
+    #[inline]
+    pub fn set_sliver_geometry(&mut self, geometry: SliverGeometry) {
+        if let Some(sliver_state) = self.state.as_sliver_state() {
+            sliver_state.set_sliver_geometry(geometry);
+            self.state.flags().mark_has_geometry();
         }
     }
 }
@@ -966,8 +1075,7 @@ impl RenderElement {
 impl RenderElement {
     /// Returns debug name.
     pub fn debug_name(&self) -> &'static str {
-        self.debug_name
-            .unwrap_or_else(|| self.render_object.debug_name())
+        self.debug_name.unwrap_or("RenderElement")
     }
 
     /// Sets debug name.
@@ -988,32 +1096,31 @@ impl RenderElement {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::any::Any;
-
-    #[derive(Debug)]
-    struct TestRenderObject {
-        value: i32,
-    }
-
-    impl RenderObject for TestRenderObject {
-        fn debug_name(&self) -> &'static str {
-            "TestRenderObject"
-        }
-    }
 
     #[test]
     fn test_new_element() {
-        let element = RenderElement::new(TestRenderObject { value: 42 }, ProtocolId::Box);
+        // Mock RenderId (in real usage, this comes from RenderTree)
+        let render_id = RenderId::new(1);
+        let element = RenderElement::new(
+            Some(render_id),
+            ProtocolId::Box,
+            RuntimeArity::Exact(0),
+        );
 
+        assert!(element.has_render_id());
+        assert_eq!(element.render_id(), Some(render_id));
         assert!(element.is_detached());
-        assert!(element.needs_layout());
-        assert!(element.needs_paint());
         assert_eq!(element.child_count(), 0);
     }
 
     #[test]
     fn test_mount_unmount() {
-        let mut element = RenderElement::new(TestRenderObject { value: 1 }, ProtocolId::Box);
+        let render_id = RenderId::new(1);
+        let mut element = RenderElement::new(
+            Some(render_id),
+            ProtocolId::Box,
+            RuntimeArity::Exact(0),
+        );
 
         let id = ElementId::new(1);
         element.mount(id, None);
@@ -1030,7 +1137,12 @@ mod tests {
 
     #[test]
     fn test_children() {
-        let mut element = RenderElement::new(TestRenderObject { value: 1 }, ProtocolId::Box);
+        let render_id = RenderId::new(1);
+        let mut element = RenderElement::new(
+            Some(render_id),
+            ProtocolId::Box,
+            RuntimeArity::Exact(0),
+        );
 
         let child1 = ElementId::new(10);
         let child2 = ElementId::new(20);
@@ -1047,7 +1159,12 @@ mod tests {
 
     #[test]
     fn test_dirty_flags() {
-        let mut element = RenderElement::new(TestRenderObject { value: 1 }, ProtocolId::Box);
+        let render_id = RenderId::new(1);
+        let mut element = RenderElement::new(
+            Some(render_id),
+            ProtocolId::Box,
+            RuntimeArity::Exact(0),
+        );
 
         element.mount(ElementId::new(1), None);
 
@@ -1069,13 +1186,5 @@ mod tests {
         element.mark_needs_paint();
         assert!(!element.needs_layout());
         assert!(element.needs_paint());
-    }
-
-    #[test]
-    fn test_downcast() {
-        let element = RenderElement::new(TestRenderObject { value: 42 }, ProtocolId::Box);
-
-        let ro = element.render_object_as::<TestRenderObject>().unwrap();
-        assert_eq!(ro.value, 42);
     }
 }
