@@ -364,52 +364,96 @@ impl<T: RenderTreeStorage> LayoutTree for RenderTree<T> {
         id: ElementId,
         constraints: BoxConstraints,
     ) -> Result<Size, RenderError> {
-        // Get render object (validates it exists)
+        // Validate render element exists
         let _render_obj = self
             .storage
             .render_object(id)
             .ok_or_else(|| RenderError::not_render_element(id))?;
 
-        // Try to downcast to RenderBox (most common case)
-        // For now, return placeholder - real implementation needs proper downcasting
-        // through the RenderObject trait
-
-        // Get render state to check/set dirty flags
+        // Check cached geometry if layout not needed
         if let Some(state) = self.storage.render_state(id) {
-            // Clear needs_layout flag
-            state.clear_needs_layout();
-
-            // Return cached geometry if available
-            if let Some(size) = state.box_geometry() {
-                return Ok(size);
+            if !state.needs_layout() {
+                if let Some(size) = state.box_geometry() {
+                    return Ok(size);
+                }
             }
+            state.clear_needs_layout();
         }
 
-        // TODO: Actually call render_object.layout() when we have proper downcasting
-        // For now, return a default size
-        let size = constraints.constrain(Size::new(100.0, 100.0));
+        // SAFETY: Split-borrow pattern for calling perform_layout
+        //
+        // We use unsafe here to split the mutable borrow:
+        // 1. Get raw pointer to RenderElement through storage
+        // 2. Call perform_layout which needs &mut dyn LayoutTree
+        //
+        // This is safe because:
+        // - RenderObject::perform_layout() only reads/writes its own state and children
+        // - It doesn't directly access the parent element we're borrowing
+        // - Tree operations (layout_child, etc.) work on OTHER elements, not this one
+        // - No aliasing occurs: parent element vs child elements are disjoint
+        unsafe {
+            // Get raw pointer to avoid borrow conflict
+            let storage_ptr = &mut self.storage as *mut T;
+            let render_element_ptr = (*storage_ptr)
+                .render_object_mut(id)
+                .and_then(|obj| obj.downcast_mut::<crate::core::RenderElement>())
+                .ok_or_else(|| RenderError::not_render_element(id))?
+                as *mut crate::core::RenderElement;
 
-        // Cache the result - currently disabled (set_geometry panics if already set)
-        // if let Some(box_state) = self.storage.render_state(id).and_then(|s| s.as_box_state()) {
-        //     box_state.set_geometry(size);
-        // }
+            // Call perform_layout with tree reference (safe because no aliasing)
+            let size = (*render_element_ptr)
+                .render_object_mut()
+                .perform_layout(id, constraints, self as &mut dyn LayoutTree)?;
 
-        Ok(size)
+            // Cache the result
+            if let Some(state) = self.storage.render_state(id) {
+                if let Some(box_state) = state.as_box_state() {
+                    box_state.set_constraints(constraints);
+                    box_state.set_size(size);
+                }
+            }
+
+            Ok(size)
+        }
     }
 
     fn perform_sliver_layout(
         &mut self,
         id: ElementId,
-        _constraints: SliverConstraints,
+        constraints: SliverConstraints,
     ) -> Result<SliverGeometry, RenderError> {
-        // Get render object
+        // Validate render element exists
         let _render_obj = self
             .storage
             .render_object(id)
             .ok_or_else(|| RenderError::not_render_element(id))?;
 
-        // TODO: Implement sliver layout
-        Ok(SliverGeometry::zero())
+        // Check cached geometry if layout not needed
+        if let Some(state) = self.storage.render_state(id) {
+            if !state.needs_layout() {
+                if let Some(sliver_state) = state.as_sliver_state() {
+                    if let Some(geom) = sliver_state.geometry() {
+                        return Ok(geom);
+                    }
+                }
+            }
+            state.clear_needs_layout();
+        }
+
+        // TODO: Call RenderObject::perform_sliver_layout() directly
+        // Same borrow checker issue as perform_layout() above.
+        // Use visitor pattern via LayoutVisitable for actual sliver layout operations.
+        let geom = SliverGeometry::zero();
+
+        // Cache the result
+        if let Some(state) = self.storage.render_state(id) {
+            if let Some(sliver_state) = state.as_sliver_state() {
+                sliver_state.set_constraints(constraints);
+                sliver_state.set_sliver_geometry(geom);
+            }
+        }
+
+        Ok(geom)
     }
 
     fn set_offset(&mut self, id: ElementId, offset: Offset) {
