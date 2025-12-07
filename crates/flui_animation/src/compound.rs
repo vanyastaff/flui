@@ -181,22 +181,16 @@ impl Animation<f32> for CompoundAnimation {
 }
 
 impl Listenable for CompoundAnimation {
-    fn add_listener(&mut self, callback: ListenerCallback) -> ListenerId {
-        Arc::get_mut(&mut self.notifier)
-            .unwrap()
-            .add_listener(callback)
+    fn add_listener(&self, callback: ListenerCallback) -> ListenerId {
+        self.notifier.add_listener(callback)
     }
 
-    fn remove_listener(&mut self, id: ListenerId) {
-        Arc::get_mut(&mut self.notifier)
-            .unwrap()
-            .remove_listener(id)
+    fn remove_listener(&self, id: ListenerId) {
+        self.notifier.remove_listener(id)
     }
 
-    fn remove_all_listeners(&mut self) {
-        Arc::get_mut(&mut self.notifier)
-            .unwrap()
-            .remove_all_listeners()
+    fn remove_all_listeners(&self) {
+        self.notifier.remove_all_listeners()
     }
 }
 
@@ -336,7 +330,7 @@ mod tests {
 
         assert_eq!(compound.status(), AnimationStatus::Dismissed);
 
-        controller1.forward().unwrap();
+        controller1.forward();
         assert_eq!(compound.status(), AnimationStatus::Forward);
 
         controller1.dispose();

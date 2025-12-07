@@ -6,9 +6,6 @@ pub mod placeholder;
 pub use error_box::RenderErrorBox;
 // TODO: Re-enable once implemented
 // pub use performance_overlay::RenderPerformanceOverlay;
-pub mod placeholder;
-
-pub use error_box::RenderErrorBox;
 pub use placeholder::RenderPlaceholder;
 
 // TODO: Implement PerformanceOverlay

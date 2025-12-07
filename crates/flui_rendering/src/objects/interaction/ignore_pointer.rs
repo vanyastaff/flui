@@ -91,7 +91,7 @@
 use crate::core::{BoxHitTestCtx, BoxLayoutCtx, BoxPaintCtx, RenderBox, Single};
 use crate::{RenderObject, RenderResult};
 use flui_interaction::HitTestResult;
-use flui_types::{Offset, Size};
+use flui_types::Size;
 
 /// RenderObject that makes its subtree transparent to pointer events.
 ///

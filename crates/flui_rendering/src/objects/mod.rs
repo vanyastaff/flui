@@ -113,8 +113,6 @@ pub use text::{ParagraphData, RenderParagraph};
 // Debug objects (2 objects) ✅
 // TODO: Re-enable RenderPerformanceOverlay once implemented
 pub use debug::{RenderErrorBox, /* RenderPerformanceOverlay, */ RenderPlaceholder};
-// Debug objects (3 objects) ✅
-pub use debug::{RenderErrorBox, RenderPlaceholder};
 
 // Media objects (2 objects) ✅
 pub use media::{FilterQuality, ImageFit, RenderImage, RenderTexture, TextureId};

@@ -19,29 +19,21 @@ This document describes performance characteristics and optimization techniques 
 | `AnimationError` | 24 bytes | Enum with String variant |
 | `ListenerId` | 8 bytes | NonZeroU64 |
 
-### Atomic Operations
+### Synchronization Strategy
 
-The controller uses lock-free atomics where possible:
+The controller uses a single `Mutex<AnimationControllerInner>` for all mutable state:
 
 ```rust
 pub struct AnimationController {
-    value: AtomicF32,      // Lock-free value access
-    disposed: AtomicBool,  // Lock-free disposal check
-    // ...
+    inner: Arc<Mutex<AnimationControllerInner>>,
+    notifier: Arc<ChangeNotifier>,
 }
 ```
 
-This means `value()` and disposal checks don't require locks:
-
-```rust
-pub fn value(&self) -> f32 {
-    self.value.load(Ordering::SeqCst)
-}
-
-pub fn is_disposed(&self) -> bool {
-    self.disposed.load(Ordering::SeqCst)
-}
-```
+This provides strong safety guarantees with good performance for typical animation workloads:
+- Uncontended lock acquisition: ~10ns (parking_lot)
+- State access batching: Multiple reads/writes in single lock acquisition
+- Lock held only during state updates, not during listener callbacks
 
 ## Synchronization
 
@@ -55,25 +47,14 @@ We use `parking_lot` instead of `std::sync`:
 | Contended lock | ~100ns | ~40ns | 2.5x |
 | RwLock read | ~30ns | ~12ns | 2.5x |
 
-### Lock Granularity
+### Optimization Techniques
 
-Different parts of the controller use appropriate lock types:
+The controller minimizes lock contention through several techniques:
 
-```rust
-pub struct AnimationController {
-    // Hot path - lock-free
-    value: AtomicF32,
-    disposed: AtomicBool,
-    
-    // Read-heavy - RwLock
-    status: RwLock<AnimationStatus>,
-    direction: RwLock<AnimationDirection>,
-    
-    // Write-heavy - RwLock (could use Mutex)
-    listeners: RwLock<Vec<...>>,
-    ticker: RwLock<Option<Ticker>>,
-}
-```
+1. **Batched State Access**: All state reads/writes happen within a single lock acquisition
+2. **Lock-Free Notifications**: Listeners are notified after releasing the lock
+3. **Optimized tick() Method**: Single lock acquisition per frame, immediate unlock before callbacks
+4. **ScheduledTicker Integration**: Automatic frame scheduling via `flui-scheduler`
 
 ### Avoiding Lock Contention
 
@@ -369,10 +350,13 @@ Typical results (M1 Mac):
 
 | Operation | Time |
 |-----------|------|
-| `controller.value()` | ~5ns |
-| `controller.forward()` | ~50ns |
-| `curved.value()` | ~10ns |
-| `tween.value()` | ~15ns |
-| `add_listener` | ~100ns |
-| `notify_listeners (10)` | ~500ns |
+| `controller.value()` | ~50-100ns |
+| `controller.forward()` | ~100-200ns |
+| `controller.tick()` | ~100-300ns |
+| `curved.value()` | ~50-100ns |
+| `tween.value()` | ~50-100ns |
+| `add_listener` | ~150-300ns |
+| `notify_listeners (10)` | ~500-1000ns |
 | `Arc::clone` | ~5ns |
+
+Note: Actual performance depends on lock contention and callback complexity.

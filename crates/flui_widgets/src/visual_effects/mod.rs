@@ -13,7 +13,7 @@
 // pub mod clip_rrect;
 // pub mod material;
 // pub mod offstage;
-// pub mod opacity;
+// pub mod opacity; // TODO: Fix Box<dyn IntoElement> issues
 // pub mod physical_model;
 // pub mod repaint_boundary;
 // pub mod transform;

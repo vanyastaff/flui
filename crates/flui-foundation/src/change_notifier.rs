@@ -4,6 +4,7 @@ use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::fmt;
 use std::ops::Deref;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 /// A listener callback function.
@@ -12,15 +13,16 @@ pub type ListenerCallback = Arc<dyn Fn() + Send + Sync>;
 /// An object that maintains a list of listeners.
 ///
 /// Similar to Flutter's `Listenable`.
+/// Uses interior mutability for thread-safe listener management.
 pub trait Listenable {
     /// Register a listener callback.
-    fn add_listener(&mut self, listener: ListenerCallback) -> ListenerId;
+    fn add_listener(&self, listener: ListenerCallback) -> ListenerId;
 
     /// Remove a previously registered listener.
-    fn remove_listener(&mut self, id: ListenerId);
+    fn remove_listener(&self, id: ListenerId);
 
     /// Remove all listeners.
-    fn remove_all_listeners(&mut self);
+    fn remove_all_listeners(&self);
 }
 
 /// Unique identifier for a listener.
@@ -82,10 +84,16 @@ impl From<ListenerId> for usize {
 /// A class that can be extended or mixed in that provides a change notification API.
 ///
 /// Similar to Flutter's `ChangeNotifier`.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct ChangeNotifier {
     listeners: Arc<Mutex<HashMap<ListenerId, ListenerCallback>>>,
-    next_id: usize,
+    next_id: Arc<AtomicUsize>,
+}
+
+impl Default for ChangeNotifier {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl fmt::Debug for ChangeNotifier {
@@ -103,15 +111,14 @@ impl ChangeNotifier {
     pub fn new() -> Self {
         Self {
             listeners: Arc::new(Mutex::new(HashMap::new())),
-            next_id: 0,
+            next_id: Arc::new(AtomicUsize::new(0)),
         }
     }
 
     /// Generate a new unique listener ID.
-    fn next_id(&mut self) -> ListenerId {
-        let id = ListenerId(self.next_id);
-        self.next_id += 1;
-        id
+    fn next_id(&self) -> ListenerId {
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        ListenerId(id)
     }
 
     /// Call all the registered listeners.
@@ -145,17 +152,17 @@ impl ChangeNotifier {
 }
 
 impl Listenable for ChangeNotifier {
-    fn add_listener(&mut self, listener: ListenerCallback) -> ListenerId {
+    fn add_listener(&self, listener: ListenerCallback) -> ListenerId {
         let id = self.next_id();
         self.listeners.lock().insert(id, listener);
         id
     }
 
-    fn remove_listener(&mut self, id: ListenerId) {
+    fn remove_listener(&self, id: ListenerId) {
         self.listeners.lock().remove(&id);
     }
 
-    fn remove_all_listeners(&mut self) {
+    fn remove_all_listeners(&self) {
         self.listeners.lock().clear();
     }
 }
@@ -335,15 +342,15 @@ impl<T: Clone> AsRef<T> for ValueNotifier<T> {
 }
 
 impl<T: Clone> Listenable for ValueNotifier<T> {
-    fn add_listener(&mut self, listener: ListenerCallback) -> ListenerId {
+    fn add_listener(&self, listener: ListenerCallback) -> ListenerId {
         self.notifier.add_listener(listener)
     }
 
-    fn remove_listener(&mut self, id: ListenerId) {
+    fn remove_listener(&self, id: ListenerId) {
         self.notifier.remove_listener(id)
     }
 
-    fn remove_all_listeners(&mut self) {
+    fn remove_all_listeners(&self) {
         self.notifier.remove_all_listeners()
     }
 }
@@ -426,15 +433,15 @@ impl Default for MergedListenable {
 }
 
 impl Listenable for MergedListenable {
-    fn add_listener(&mut self, listener: ListenerCallback) -> ListenerId {
+    fn add_listener(&self, listener: ListenerCallback) -> ListenerId {
         self.notifier.add_listener(listener)
     }
 
-    fn remove_listener(&mut self, id: ListenerId) {
+    fn remove_listener(&self, id: ListenerId) {
         self.notifier.remove_listener(id)
     }
 
-    fn remove_all_listeners(&mut self) {
+    fn remove_all_listeners(&self) {
         self.notifier.remove_all_listeners()
     }
 }
