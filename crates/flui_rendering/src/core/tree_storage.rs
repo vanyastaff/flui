@@ -77,6 +77,12 @@ pub trait RenderTreeStorage: TreeRead + TreeNav + RenderTreeAccess {}
 /// `RenderTree<T>` takes ownership of a storage type (like `ElementTree`)
 /// and provides implementations of `LayoutTree`, `PaintTree`, and `HitTestTree`.
 ///
+/// # Four-Tree Architecture
+///
+/// This wrapper coordinates between:
+/// - `storage`: ElementTree (stores Elements with ViewId/RenderId references)
+/// - `render_objects`: RenderTree (stores actual RenderObjects)
+///
 /// # Type Parameters
 ///
 /// - `T`: The underlying storage type, must implement `RenderTreeStorage`
@@ -94,8 +100,15 @@ pub trait RenderTreeStorage: TreeRead + TreeNav + RenderTreeAccess {}
 /// - No additional allocations during layout/paint (except dirty sets)
 #[derive(Debug)]
 pub struct RenderTree<T: RenderTreeStorage> {
-    /// Underlying storage (e.g., ElementTree)
+    /// Underlying storage (e.g., ElementTree) - stores Elements
     storage: T,
+
+    /// Separate RenderObject tree (four-tree architecture)
+    ///
+    /// Elements in `storage` hold RenderId references. The actual RenderObjects
+    /// are stored here. This matches Flutter's architecture where Elements and
+    /// RenderObjects are in separate trees.
+    render_objects: crate::tree::RenderTree,
 
     /// Elements that need layout in the next frame.
     /// Flutter equivalent: `PipelineOwner._nodesNeedingLayout`
@@ -121,6 +134,10 @@ pub struct RenderTree<T: RenderTreeStorage> {
 impl<T: RenderTreeStorage> RenderTree<T> {
     /// Creates a new RenderTree wrapping the given storage.
     ///
+    /// # Four-Tree Architecture
+    ///
+    /// Creates both the Element storage (T) and the separate RenderObject tree.
+    ///
     /// # Example
     ///
     /// ```rust,ignore
@@ -130,6 +147,7 @@ impl<T: RenderTreeStorage> RenderTree<T> {
     pub fn new(storage: T) -> Self {
         Self {
             storage,
+            render_objects: crate::tree::RenderTree::new(),
             needs_layout: HashSet::new(),
             needs_paint: HashSet::new(),
             needs_compositing: HashSet::new(),
@@ -143,6 +161,7 @@ impl<T: RenderTreeStorage> RenderTree<T> {
     pub fn with_capacity(storage: T, capacity: usize) -> Self {
         Self {
             storage,
+            render_objects: crate::tree::RenderTree::with_capacity(capacity),
             needs_layout: HashSet::with_capacity(capacity),
             needs_paint: HashSet::with_capacity(capacity),
             needs_compositing: HashSet::with_capacity(capacity),
@@ -150,9 +169,23 @@ impl<T: RenderTreeStorage> RenderTree<T> {
         }
     }
 
-    /// Unwraps the RenderTree, returning the underlying storage.
-    pub fn into_inner(self) -> T {
-        self.storage
+    /// Unwraps the RenderTree, returning the underlying storage and RenderObject tree.
+    ///
+    /// Returns (storage, render_objects).
+    pub fn into_inner(self) -> (T, crate::tree::RenderTree) {
+        (self.storage, self.render_objects)
+    }
+
+    /// Returns a reference to the RenderObject tree.
+    #[inline]
+    pub fn render_objects(&self) -> &crate::tree::RenderTree {
+        &self.render_objects
+    }
+
+    /// Returns a mutable reference to the RenderObject tree.
+    #[inline]
+    pub fn render_objects_mut(&mut self) -> &mut crate::tree::RenderTree {
+        &mut self.render_objects
     }
 }
 
@@ -400,14 +433,21 @@ impl<T: RenderTreeStorage> LayoutTree for RenderTree<T> {
                 (*self_ptr).perform_layout(child_id, child_constraints)
             };
 
-            // Now we can borrow render_element without conflict
+            // Get RenderElement from storage
             let render_element = self
                 .storage
                 .render_object_mut(id)
                 .and_then(|obj| obj.downcast_mut::<crate::core::RenderElement>())
                 .ok_or_else(|| RenderError::not_render_element(id))?;
 
-            // Call perform_layout with callback - NO tree parameter needed!
+            // TODO: Four-tree architecture - access RenderObject via RenderTree
+            // For now, use the render_object field directly (legacy)
+            // Once elements are updated to only hold RenderId, this will be:
+            //   let render_id = render_element.render_id()?;
+            //   let render_node = self.render_objects.get_mut(render_id)?;
+            //   let render_object = render_node.render_object_mut();
+
+            // Call perform_layout with callback
             let size = render_element
                 .render_object_mut()
                 .perform_layout(id, constraints, &mut layout_child)?;
@@ -458,17 +498,19 @@ impl<T: RenderTreeStorage> LayoutTree for RenderTree<T> {
                     (*self_ptr).perform_sliver_layout(child_id, child_constraints)
                 };
 
-            // Borrow render_element without conflict
-            let render_element = self
+            // Get RenderElement from storage
+            let _render_element = self
                 .storage
                 .render_object_mut(id)
                 .and_then(|obj| obj.downcast_mut::<crate::core::RenderElement>())
                 .ok_or_else(|| RenderError::not_render_element(id))?;
 
-            // TODO: Add perform_sliver_layout to RenderObject trait
+            // TODO: Four-tree architecture + Sliver layout
+            // 1. Access RenderObject via RenderTree (not implemented yet)
+            // 2. Add perform_sliver_layout to RenderObject trait
             // For now, return zero geometry as placeholder
             let geom = SliverGeometry::zero();
-            let _ = (layout_sliver_child, render_element); // Silence unused warnings
+            let _ = layout_sliver_child; // Silence unused warning
 
             // Cache the result
             if let Some(state) = self.storage.render_state(id) {

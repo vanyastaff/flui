@@ -79,7 +79,7 @@ pub mod core;
 pub mod error;
 pub mod into_render;
 pub mod objects;
-pub mod tree;
+pub mod tree;  // Four-tree architecture: RenderTree for RenderObject storage
 pub mod view;
 
 // ============================================================================

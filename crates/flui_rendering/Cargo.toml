@@ -21,7 +21,7 @@ serde = { workspace = true, optional = true }
 once_cell = { workspace = true }
 bitflags = { workspace = true }
 downcast-rs = "2.0"
-slab = "0.4"
+slab = "0.4"  # For RenderTree storage
 
 [dev-dependencies]
 criterion.workspace = true
