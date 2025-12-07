@@ -42,12 +42,12 @@ use flui_types::{Rect, Size, SliverGeometry};
 use super::arity::Arity;
 use super::box_render::RenderBox;
 use super::context::{
-    BoxHitTestContext, BoxLayoutContext, BoxPaintContext, SliverHitTestContext,
+    BoxHitTestContext, BoxLayoutContext, BoxPaintContext, LayoutContext, SliverHitTestContext,
     SliverLayoutContext, SliverPaintContext,
 };
 use super::object::RenderObject;
 use super::sliver::RenderSliver;
-use super::{BoxConstraints, LayoutTree};
+use super::{BoxConstraints, BoxProtocol, LayoutTree};
 use crate::RenderResult;
 
 // ============================================================================
@@ -215,6 +215,103 @@ impl<A: Arity> RenderBox<A> for BoxRenderWrapper<A> {
 impl<A: Arity> RenderObject for BoxRenderWrapper<A> {
     fn debug_name(&self) -> &'static str {
         self.inner.as_ref().debug_name()
+    }
+
+    /// Performs layout using box protocol.
+    ///
+    /// This overrides the default implementation to call the typed
+    /// `RenderBox::layout()` method with proper context.
+    fn perform_layout(
+        &mut self,
+        element_id: ElementId,
+        constraints: BoxConstraints,
+        tree: &mut dyn LayoutTree,
+    ) -> RenderResult<Size> {
+        // Get children from tree
+        // We need to use render_object to access the tree navigation
+        let children_vec: Vec<ElementId> = if let Some(_render_obj) = tree.render_object(element_id) {
+            // Try to get children - for now, return empty vec if not available
+            // TODO: Add a proper method to LayoutTree for getting children
+            Vec::new()
+        } else {
+            Vec::new()
+        };
+
+        // Create children accessor using Arity::from_slice
+        let children_accessor = A::from_slice(&children_vec);
+
+        // Create tree adapter that implements Send + Sync
+        // This is safe because LayoutTree operations don't require thread-safety at runtime
+        let mut tree_adapter = TreeAdapter(tree);
+
+        //  Create layout context for RenderBox::layout()
+        // Use TreeAdapter directly as T instead of boxing
+        let ctx = LayoutContext::<'_, A, BoxProtocol, TreeAdapter<'_>>::new(
+            &mut tree_adapter,
+            element_id,
+            constraints,
+            children_accessor,
+        );
+
+        // Call typed layout method
+        self.inner.layout(ctx)
+    }
+}
+
+/// Adapter to make &mut dyn LayoutTree work with BoxLayoutContext
+///
+/// This wrapper provides Send + Sync bounds required by BoxLayoutContext
+/// while delegating all operations to the underlying LayoutTree.
+struct TreeAdapter<'a>(&'a mut dyn LayoutTree);
+
+// SAFETY: LayoutTree operations are single-threaded at runtime
+// These markers are needed for type system compatibility
+unsafe impl Send for TreeAdapter<'_> {}
+unsafe impl Sync for TreeAdapter<'_> {}
+
+impl LayoutTree for TreeAdapter<'_> {
+    fn perform_layout(
+        &mut self,
+        id: ElementId,
+        constraints: BoxConstraints,
+    ) -> Result<flui_types::Size, crate::RenderError> {
+        self.0.perform_layout(id, constraints)
+    }
+
+    fn perform_sliver_layout(
+        &mut self,
+        id: ElementId,
+        constraints: crate::SliverConstraints,
+    ) -> Result<crate::SliverGeometry, crate::RenderError> {
+        self.0.perform_sliver_layout(id, constraints)
+    }
+
+    fn set_offset(&mut self, id: ElementId, offset: flui_types::Offset) {
+        self.0.set_offset(id, offset)
+    }
+
+    fn get_offset(&self, id: ElementId) -> Option<flui_types::Offset> {
+        self.0.get_offset(id)
+    }
+
+    fn mark_needs_layout(&mut self, id: ElementId) {
+        self.0.mark_needs_layout(id)
+    }
+
+    fn needs_layout(&self, id: ElementId) -> bool {
+        self.0.needs_layout(id)
+    }
+
+    fn render_object(&self, id: ElementId) -> Option<&dyn std::any::Any> {
+        self.0.render_object(id)
+    }
+
+    fn render_object_mut(&mut self, id: ElementId) -> Option<&mut dyn std::any::Any> {
+        self.0.render_object_mut(id)
+    }
+
+    fn setup_child_parent_data(&mut self, parent_id: ElementId, child_id: ElementId) {
+        self.0.setup_child_parent_data(parent_id, child_id)
     }
 }
 

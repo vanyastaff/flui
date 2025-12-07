@@ -296,21 +296,148 @@ impl ElementTree {
         }
     }
 
-    /// Stub: Layout a render object (intentional design).
+    /// Layout a render object and return its computed size.
     ///
-    /// **Architectural Note:** This stub is intentional. ElementTree does not
-    /// handle layout directly - that's the responsibility of the pipeline layer.
-    /// Actual layout is performed by `flui_core`'s `LayoutPipeline` which has
-    /// access to the full rendering context and constraints.
+    /// This method performs the following steps:
+    /// 1. Validates the element exists and is a RenderElement
+    /// 2. Calls ViewObject.layout_render() or RenderObject.perform_layout()
+    /// 3. Stores computed size in RenderState
+    /// 4. Clears needs_layout flag
+    /// 5. Marks element for paint
+    ///
+    /// # Returns
+    ///
+    /// `Some(size)` if layout succeeded, `None` if:
+    /// - Element doesn't exist
+    /// - Element is not a render element
+    /// - Layout failed
     #[inline]
     pub fn layout_render_object(
         &mut self,
-        _id: ElementId,
-        _constraints: flui_types::constraints::BoxConstraints,
+        id: ElementId,
+        constraints: flui_types::constraints::BoxConstraints,
     ) -> Option<flui_types::Size> {
-        // Intentional stub: Layout delegation is handled by the pipeline layer.
-        // ElementTree remains independent of rendering implementation.
-        None
+        use flui_rendering::RenderObject;
+
+        // Get element
+        let element = self.get_mut(id)?;
+
+        // Check if this is a RenderElement
+        let render_element = element.as_render_mut()?;
+
+        // Call perform_layout on the render object
+        // We need to create a temporary LayoutTree implementation
+        let element_id = id;
+        let size = {
+            let render_obj = render_element.render_object_mut();
+
+            // Create a minimal LayoutTree adapter for the perform_layout call
+            struct ElementTreeAdapter<'a> {
+                tree: &'a mut ElementTree,
+            }
+
+            impl<'a> flui_rendering::LayoutTree for ElementTreeAdapter<'a> {
+                fn perform_layout(
+                    &mut self,
+                    id: ElementId,
+                    constraints: flui_types::constraints::BoxConstraints,
+                ) -> Result<flui_types::Size, flui_rendering::RenderError> {
+                    // Recursive call for child layout
+                    self.tree
+                        .layout_render_object(id, constraints)
+                        .ok_or_else(|| flui_rendering::RenderError::not_render_element(id))
+                }
+
+                fn perform_sliver_layout(
+                    &mut self,
+                    _id: ElementId,
+                    _constraints: flui_rendering::SliverConstraints,
+                ) -> Result<flui_rendering::SliverGeometry, flui_rendering::RenderError> {
+                    // Not implemented yet
+                    Ok(flui_rendering::SliverGeometry::zero())
+                }
+
+                fn set_offset(&mut self, id: ElementId, offset: flui_types::Offset) {
+                    if let Some(element) = self.tree.get_mut(id) {
+                        if let Some(render_elem) = element.as_render_mut() {
+                            render_elem.set_offset(offset);
+                        }
+                    }
+                }
+
+                fn get_offset(&self, id: ElementId) -> Option<flui_types::Offset> {
+                    self.tree
+                        .get(id)
+                        .and_then(|e| e.as_render())
+                        .map(|r| r.offset())
+                }
+
+                fn mark_needs_layout(&mut self, id: ElementId) {
+                    if let Some(element) = self.tree.get_mut(id) {
+                        element.mark_needs_layout();
+                    }
+                }
+
+                fn needs_layout(&self, id: ElementId) -> bool {
+                    self.tree
+                        .get(id)
+                        .map(|e| e.needs_layout())
+                        .unwrap_or(false)
+                }
+
+                fn render_object(&self, id: ElementId) -> Option<&dyn std::any::Any> {
+                    self.tree
+                        .get(id)
+                        .and_then(|e| e.as_render())
+                        .map(|r| r.render_object() as &dyn std::any::Any)
+                }
+
+                fn render_object_mut(&mut self, id: ElementId) -> Option<&mut dyn std::any::Any> {
+                    self.tree
+                        .get_mut(id)
+                        .and_then(|e| e.as_render_mut())
+                        .map(|r| r.render_object_mut() as &mut dyn std::any::Any)
+                }
+
+                fn setup_child_parent_data(
+                    &mut self,
+                    _parent_id: ElementId,
+                    _child_id: ElementId,
+                ) {
+                    // TODO: Implement parent data setup
+                }
+            }
+
+            // SAFETY: We need to split the borrow to satisfy the borrow checker
+            // We're using raw pointers to avoid the mutable borrow conflict
+            // This is safe because:
+            // 1. We only access different elements during recursive layout
+            // 2. The adapter only lives during this scope
+            // 3. No concurrent access to the same element
+            let tree_ptr = self as *mut ElementTree;
+            let mut adapter = ElementTreeAdapter {
+                tree: unsafe { &mut *tree_ptr },
+            };
+
+            // Call perform_layout
+            render_obj
+                .perform_layout(element_id, constraints, &mut adapter)
+                .ok()?
+        };
+
+        // Re-borrow element after layout
+        let render_element = self.get_mut(id)?.as_render_mut()?;
+
+        // Store size in RenderState
+        render_element.set_size(size);
+
+        // Clear needs_layout flag
+        render_element.clear_needs_layout();
+
+        // Mark for paint
+        render_element.mark_needs_paint();
+
+        Some(size)
     }
 
     /// Stub: Paint a render object (intentional design).
