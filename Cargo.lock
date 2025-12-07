@@ -1396,6 +1396,7 @@ dependencies = [
  "flui-scheduler",
  "flui-tree",
  "flui-view",
+ "flui_engine",
  "flui_interaction",
  "flui_painting",
  "flui_rendering",
