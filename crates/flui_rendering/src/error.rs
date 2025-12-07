@@ -76,6 +76,15 @@ pub enum RenderError {
         found: &'static str,
     },
 
+    /// Protocol mismatch (dynamic protocol detection)
+    #[error("Protocol mismatch: expected {expected}, got {actual}")]
+    ProtocolMismatch {
+        /// Expected protocol
+        expected: String,
+        /// Actual protocol
+        actual: String,
+    },
+
     /// Generic layout error (for simple error messages)
     #[error("Layout error: {0}")]
     Layout(String),

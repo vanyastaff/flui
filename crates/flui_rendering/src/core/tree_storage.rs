@@ -39,11 +39,14 @@ use std::any::Any;
 use std::collections::HashSet;
 
 use flui_foundation::ElementId;
-use flui_interaction::HitTestResult;
+use flui_interaction::{HitTestEntry, HitTestResult};
 use flui_painting::Canvas;
-use flui_tree::{RenderTreeAccess, TreeNav, TreeRead};
+use flui_tree::{
+    HitTestVisitable, LayoutVisitable, PaintVisitable, RenderTreeAccess, TreeNav, TreeRead,
+};
 use flui_types::{BoxConstraints, Offset, Size, SliverConstraints, SliverGeometry};
 
+use crate::core::unified::{Constraints, Geometry};
 use crate::core::{HitTestTree, LayoutTree, PaintTree, RenderStateExt};
 use crate::error::RenderError;
 use flui_types::Axis;
@@ -561,6 +564,135 @@ impl<T: RenderTreeStorage> HitTestTree for RenderTree<T> {
 
     fn get_offset(&self, id: ElementId) -> Option<Offset> {
         self.get_element_offset(id)
+    }
+}
+
+// ============================================================================
+// FLUI-TREE VISITOR TRAIT IMPLEMENTATIONS
+// ============================================================================
+//
+// These traits provide unified protocol support using Constraints/Geometry enums.
+// They enable generic tree traversal algorithms that work with both Box and Sliver protocols.
+
+impl<T: RenderTreeStorage> LayoutVisitable for RenderTree<T> {
+    type Constraints = Constraints;
+    type Geometry = Geometry;
+    type Position = Offset;
+
+    fn layout_element(&mut self, id: ElementId, constraints: Self::Constraints) -> Self::Geometry {
+        // Dispatch to protocol-specific LayoutTree methods based on constraint type
+        match constraints {
+            Constraints::Box(box_c) => {
+                // Call Box protocol layout
+                match self.perform_layout(id, box_c) {
+                    Ok(size) => Geometry::Box(size),
+                    Err(_) => Geometry::zero(crate::core::ProtocolId::Box),
+                }
+            }
+            Constraints::Sliver(sliver_c) => {
+                // Call Sliver protocol layout
+                match self.perform_sliver_layout(id, sliver_c) {
+                    Ok(geom) => Geometry::Sliver(geom),
+                    Err(_) => Geometry::zero(crate::core::ProtocolId::Sliver),
+                }
+            }
+        }
+    }
+
+    fn set_position(&mut self, id: ElementId, position: Self::Position) {
+        // Delegate to existing LayoutTree implementation
+        self.set_offset(id, position);
+    }
+
+    fn get_position(&self, id: ElementId) -> Option<Self::Position> {
+        // Delegate to existing LayoutTree implementation
+        LayoutTree::get_offset(self, id)
+    }
+
+    fn get_geometry(&self, id: ElementId) -> Option<Self::Geometry> {
+        self.storage.render_state(id).and_then(|state| {
+            // Try Box protocol first (most common)
+            if let Some(size) = state.box_geometry() {
+                return Some(Geometry::Box(size));
+            }
+
+            // Try Sliver protocol
+            if let Some(sliver_state) = state.as_sliver_state() {
+                if let Some(geom) = sliver_state.geometry() {
+                    return Some(Geometry::Sliver(geom));
+                }
+            }
+
+            None
+        })
+    }
+}
+
+impl<T: RenderTreeStorage> PaintVisitable for RenderTree<T> {
+    type Position = Offset;
+    type PaintResult = ();
+
+    fn paint_element(&mut self, id: ElementId, position: Self::Position) -> Self::PaintResult {
+        // Get geometry for this element
+        let geometry = self.get_geometry(id);
+
+        // Get reference to the element
+        let element_result = self
+            .storage
+            .render_object(id)
+            .and_then(|obj| obj.downcast_ref::<crate::core::RenderElement>());
+
+        if let (Some(element), Some(geom)) = (element_result, geometry) {
+            // TODO: Get actual canvas from somewhere - for now we skip painting
+            // In real implementation, paint() would need &mut Canvas parameter
+            let _ = element;
+            let _ = geom;
+            let _ = position;
+            // element.paint(id, position, &geom, canvas, self as &dyn PaintTree).ok();
+        }
+    }
+
+    fn combine_paint_results(&self, _results: Vec<Self::PaintResult>) -> Self::PaintResult {
+        // Nothing to combine for () result type
+    }
+}
+
+impl<T: RenderTreeStorage> HitTestVisitable for RenderTree<T> {
+    type Position = Offset;
+    type HitResult = HitTestResult;
+
+    fn hit_test_element(
+        &self,
+        id: ElementId,
+        position: Self::Position,
+        result: &mut Self::HitResult,
+    ) -> bool {
+        // Get the bounds for this element
+        let bounds = self.get_hit_test_bounds(id);
+
+        // Check if position is within bounds
+        if bounds.contains(position.to_point()) {
+            // Add to hit test result
+            let entry = HitTestEntry::new(id, position, bounds);
+            result.add(entry);
+            true
+        } else {
+            false
+        }
+    }
+
+    fn transform_position_for_child(
+        &self,
+        _parent: ElementId,
+        child: ElementId,
+        position: Self::Position,
+    ) -> Self::Position {
+        // Get child offset and transform position
+        if let Some(child_offset) = self.get_element_offset(child) {
+            position - child_offset
+        } else {
+            position
+        }
     }
 }
 

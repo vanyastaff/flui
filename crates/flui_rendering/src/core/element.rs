@@ -71,7 +71,7 @@ use std::fmt;
 
 use flui_foundation::ElementId;
 use flui_tree::RuntimeArity;
-use flui_types::{Offset, Size};
+use flui_types::{Offset, Size, SliverGeometry};
 
 use super::flags::AtomicRenderFlags;
 use super::lifecycle::RenderLifecycle;
@@ -719,6 +719,139 @@ impl RenderElement {
 }
 
 // ============================================================================
+// UNIFIED LAYOUT AND PAINT METHODS
+// ============================================================================
+
+use super::unified::{Constraints, Geometry};
+use super::tree::{LayoutTree, PaintTree};
+use crate::{RenderError, RenderResult};
+
+impl RenderElement {
+    /// Unified layout method that handles both Box and Sliver protocols.
+    ///
+    /// This method dispatches to the appropriate RenderObject layout method based on
+    /// the element's protocol and validates that the constraint type matches.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - This element's ID
+    /// * `constraints` - Protocol-specific constraints (Box or Sliver)
+    /// * `tree` - Tree for accessing children and performing layout operations
+    ///
+    /// # Returns
+    ///
+    /// Returns `Geometry` enum containing either Box(Size) or Sliver(SliverGeometry)
+    ///
+    /// # Errors
+    ///
+    /// Returns `RenderError::ProtocolMismatch` if the constraint protocol doesn't match
+    /// the element's protocol.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // Box layout
+    /// let constraints = Constraints::Box(BoxConstraints::tight_for(100.0, 100.0));
+    /// let geometry = element.layout(id, constraints, &mut tree)?;
+    /// let size = geometry.as_box();
+    ///
+    /// // Sliver layout
+    /// let constraints = Constraints::Sliver(SliverConstraints::new(0.0, 1000.0));
+    /// let geometry = element.layout(id, constraints, &mut tree)?;
+    /// let sliver_geom = geometry.as_sliver();
+    /// ```
+    pub fn layout(
+        &mut self,
+        id: ElementId,
+        constraints: Constraints,
+        tree: &mut dyn LayoutTree,
+    ) -> RenderResult<Geometry> {
+        // Verify protocol match
+        if constraints.protocol() != self.protocol {
+            return Err(RenderError::ProtocolMismatch {
+                expected: format!("{:?}", self.protocol),
+                actual: format!("{:?}", constraints.protocol()),
+            });
+        }
+
+        // Dispatch based on protocol
+        match (constraints, self.protocol) {
+            (Constraints::Box(box_c), ProtocolId::Box) => {
+                // Store constraints
+                self.set_constraints_box(box_c);
+
+                // Call Box protocol layout
+                let size = self.render_object.perform_layout(id, box_c, tree)?;
+
+                // Store size
+                self.set_size(size);
+
+                Ok(Geometry::Box(size))
+            }
+            (Constraints::Sliver(sliver_c), ProtocolId::Sliver) => {
+                // Store constraints
+                self.set_constraints_sliver(sliver_c);
+
+                // Call Sliver protocol layout
+                let geom = tree.perform_sliver_layout(id, sliver_c)?;
+
+                // Store geometry
+                self.set_sliver_geometry(geom);
+
+                Ok(Geometry::Sliver(geom))
+            }
+            _ => unreachable!("Protocol mismatch already checked above"),
+        }
+    }
+
+    /// Unified paint method that handles both Box and Sliver protocols.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - This element's ID
+    /// * `offset` - Paint offset in parent coordinates
+    /// * `geometry` - Protocol-specific geometry from layout
+    /// * `canvas` - Canvas to paint on
+    /// * `tree` - Tree for accessing children
+    ///
+    /// # Errors
+    ///
+    /// Returns `RenderError::ProtocolMismatch` if the geometry protocol doesn't match
+    /// the element's protocol.
+    pub fn paint(
+        &self,
+        id: ElementId,
+        offset: Offset,
+        geometry: &Geometry,
+        canvas: &mut super::Canvas,
+        tree: &dyn PaintTree,
+    ) -> RenderResult<()> {
+        // Verify geometry matches protocol
+        if geometry.protocol() != self.protocol {
+            return Err(RenderError::ProtocolMismatch {
+                expected: format!("{:?}", self.protocol),
+                actual: format!("{:?}", geometry.protocol()),
+            });
+        }
+
+        // Paint with appropriate size/geometry
+        match geometry {
+            Geometry::Box(size) => {
+                self.render_object.paint(id, offset, *size, canvas, tree);
+                Ok(())
+            }
+            Geometry::Sliver(sliver_geom) => {
+                // For slivers, convert paint_extent to size for painting
+                // (Sliver painting might use different approach in future)
+                let size = Size::new(sliver_geom.paint_extent, sliver_geom.paint_extent);
+                self.render_object.paint(id, offset, size, canvas, tree);
+                Ok(())
+            }
+        }
+    }
+}
+
+// ============================================================================
 // LAYOUT CACHE
 // ============================================================================
 
@@ -784,6 +917,23 @@ impl RenderElement {
     pub fn set_constraints_sliver(&mut self, constraints: SliverConstraints) {
         if let Some(sliver_state) = self.state.as_sliver_state() {
             sliver_state.set_constraints(constraints);
+        }
+    }
+
+    /// Returns last sliver geometry.
+    #[inline]
+    pub fn sliver_geometry(&self) -> Option<SliverGeometry> {
+        self.state
+            .as_sliver_state()
+            .and_then(|s| s.geometry())
+    }
+
+    /// Sets sliver geometry (called after layout, Sliver protocol only).
+    #[inline]
+    pub fn set_sliver_geometry(&mut self, geometry: SliverGeometry) {
+        if let Some(sliver_state) = self.state.as_sliver_state() {
+            sliver_state.set_sliver_geometry(geometry);
+            self.state.flags().mark_has_geometry();
         }
     }
 }
