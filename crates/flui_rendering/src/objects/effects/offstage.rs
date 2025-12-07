@@ -89,8 +89,9 @@
 //! offstage.set_offstage(false); // Show
 //! ```
 
-use crate::core::{BoxLayoutCtx, BoxPaintCtx, RenderBox, Single};
+use crate::core::{BoxHitTestCtx, BoxLayoutCtx, BoxPaintCtx, RenderBox, Single};
 use crate::{RenderObject, RenderResult};
+use flui_interaction::HitTestResult;
 use flui_types::Size;
 
 /// RenderObject that conditionally hides its child while preserving state.
@@ -198,6 +199,17 @@ impl RenderBox<Single> for RenderOffstage {
             ctx.paint_child(child_id, ctx.offset);
         }
         // When offstage = true, skip painting entirely (no visual artifacts)
+    }
+
+    fn hit_test(&self, ctx: &BoxHitTestCtx<'_, Single>, result: &mut HitTestResult) -> bool {
+        if self.offstage {
+            // When offstage, don't register hits - widget is not interactive
+            // This prevents events from reaching the child or self
+            false
+        } else {
+            // When visible, delegate to child using default hit test behavior
+            ctx.hit_test_children(result)
+        }
     }
 }
 
