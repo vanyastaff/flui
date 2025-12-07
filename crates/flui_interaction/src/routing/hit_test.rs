@@ -44,6 +44,7 @@ use flui_types::{
     events::{MouseCursor, PointerEvent, ScrollEventData},
     geometry::{Matrix4, Offset, Rect},
 };
+use std::collections::VecDeque;
 use std::sync::Arc;
 
 // Re-export ElementId from flui-foundation
@@ -194,7 +195,8 @@ impl TransformGuard {
 #[derive(Debug, Clone, Default)]
 pub struct HitTestResult {
     /// Entries from front to back (topmost first).
-    entries: Vec<HitTestEntry>,
+    /// Uses VecDeque for O(1) push_front operations (was O(n) with Vec::insert(0)).
+    entries: VecDeque<HitTestEntry>,
 
     /// Transform stack for coordinate space management.
     /// Each transform converts from parent to child coordinate space.
@@ -214,7 +216,7 @@ impl HitTestResult {
     #[inline]
     pub fn with_capacity(entry_capacity: usize, transform_capacity: usize) -> Self {
         Self {
-            entries: Vec::with_capacity(entry_capacity),
+            entries: VecDeque::with_capacity(entry_capacity),
             transforms: Vec::with_capacity(transform_capacity),
         }
     }
@@ -312,31 +314,55 @@ impl HitTestResult {
     /// but will be stored front to back for dispatch.
     ///
     /// Automatically captures the current transform from the transform stack.
+    ///
+    /// # Performance
+    ///
+    /// O(1) amortized complexity with VecDeque (optimized from O(n) with Vec::insert(0)).
     pub fn add(&mut self, entry: HitTestEntry) {
         // Capture current transform
         let mut entry = entry;
         entry.transform = self.current_transform();
 
+        // Log before moving entry
+        tracing::trace!(
+            element_id = entry.element_id.get(),
+            has_handler = entry.handler.is_some(),
+            has_transform = entry.transform.is_some(),
+            "Added hit test entry"
+        );
+
         // Insert at front (reverse order from traversal)
-        self.entries.insert(0, entry);
+        // O(1) amortized with VecDeque (was O(n) with Vec::insert(0))
+        self.entries.push_front(entry);
     }
 
-    /// Get all entries.
+    /// Get all entries as a contiguous slice.
+    ///
+    /// This may need to rearrange the internal buffer (O(n) worst case,
+    /// but typically fast). Requires mutable access.
     #[inline]
-    pub fn entries(&self) -> &[HitTestEntry] {
-        &self.entries
+    pub fn entries(&mut self) -> &[HitTestEntry] {
+        self.entries.make_contiguous()
     }
 
-    /// Check if any entries were found.
+    /// Iterate over entries without requiring mutable access.
+    ///
+    /// Returns an iterator over all entries in order (front to back).
     #[inline]
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
+    pub fn iter(&self) -> impl Iterator<Item = &HitTestEntry> + '_ {
+        self.entries.iter()
     }
 
-    /// Returns the number of entries.
+    /// Get the number of entries.
     #[inline]
     pub fn len(&self) -> usize {
         self.entries.len()
+    }
+
+    /// Check if there are no entries.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
     }
 
     /// Clears all entries and transforms for reuse.
@@ -354,6 +380,11 @@ impl HitTestResult {
     ///
     /// If an entry has a transform, the event position is transformed to the entry's
     /// local coordinate space before dispatch.
+    ///
+    /// # Performance
+    ///
+    /// Emits trace-level events with `hit_test.dispatch` span for performance monitoring.
+    #[tracing::instrument(skip(self, event), fields(entry_count = self.entries.len()))]
     pub fn dispatch(&self, event: &PointerEvent) {
         for entry in &self.entries {
             if let Some(handler) = &entry.handler {
@@ -397,6 +428,11 @@ impl HitTestResult {
     /// local coordinate space before dispatch.
     ///
     /// Returns `true` if the event was handled (propagation stopped).
+    ///
+    /// # Performance
+    ///
+    /// Emits trace-level events with `hit_test.dispatch_scroll` span for performance monitoring.
+    #[tracing::instrument(skip(self, event), fields(entry_count = self.entries.len()))]
     pub fn dispatch_scroll(&self, event: &ScrollEventData) -> bool {
         for entry in &self.entries {
             if let Some(handler) = &entry.scroll_handler {
@@ -874,7 +910,7 @@ mod tests {
 
     #[test]
     fn test_hit_test_result_empty() {
-        let result = HitTestResult::new();
+        let mut result = HitTestResult::new();
         assert!(result.is_empty());
         assert_eq!(result.entries().len(), 0);
         assert_eq!(result.len(), 0);

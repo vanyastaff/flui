@@ -986,7 +986,7 @@ mod tests {
         assert!(canvas.is_ok());
 
         // Test hit test utility
-        let result = hit_test_subtree(&tree, id, Offset::ZERO);
+        let mut result = hit_test_subtree(&tree, id, Offset::ZERO);
         assert!(result.entries().is_empty());
     }
 }

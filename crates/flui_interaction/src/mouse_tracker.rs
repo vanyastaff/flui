@@ -239,7 +239,6 @@ impl MouseTracker {
 
         // Build new set of active regions from hit test
         let new_regions: HashSet<RegionId> = hit_test_result
-            .entries()
             .iter()
             .map(|entry| entry.element_id)
             .collect();

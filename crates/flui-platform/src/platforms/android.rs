@@ -16,14 +16,15 @@ use flui_engine::GpuRenderer;
 use flui_interaction::EventRouter;
 use flui_scheduler::Scheduler;
 use flui_types::{
-    events::{PointerButton, PointerDeviceKind},
+    events::{PointerButton, PointerDeviceKind, ScrollDelta, ScrollEventData},
     Offset,
 };
 use parking_lot::RwLock;
 use std::sync::{atomic::AtomicBool, Arc};
 use winit::{
-    event::{ElementState, MouseButton, WindowEvent},
+    event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent},
     event_loop::ActiveEventLoop,
+    keyboard::ModifiersState,
     window::Window,
 };
 
@@ -63,6 +64,9 @@ pub struct AndroidEmbedder {
 
     /// Android lifecycle state - true when app is in background
     is_suspended: bool,
+
+    /// Current keyboard modifiers state
+    modifiers: ModifiersState,
 }
 
 impl AndroidEmbedder {
@@ -110,6 +114,7 @@ impl AndroidEmbedder {
             renderer,
             capabilities: MobileCapabilities::android(),
             is_suspended: false,
+            modifiers: ModifiersState::empty(),
         })
     }
 
@@ -216,6 +221,33 @@ impl AndroidEmbedder {
                 }
             }
 
+            WindowEvent::ModifiersChanged(new_modifiers) => {
+                self.modifiers = new_modifiers.state();
+            }
+
+            WindowEvent::KeyboardInput {
+                event: key_event, ..
+            } => {
+                // Android hardware keyboard support (Bluetooth, USB)
+                let flui_event = crate::conversions::convert_key_event(&key_event, self.modifiers);
+                self.core.handle_key_event(flui_event);
+            }
+
+            WindowEvent::MouseWheel { delta, .. } => {
+                // Scroll events on Android (e.g., Bluetooth mouse, trackpad)
+                let position = self.core.last_pointer_position();
+                let scroll_delta = convert_mouse_wheel_delta(delta);
+                let modifiers = crate::conversions::convert_modifiers(self.modifiers);
+
+                let scroll_event = ScrollEventData {
+                    position,
+                    delta: scroll_delta,
+                    modifiers,
+                };
+
+                self.core.handle_scroll_event(scroll_event);
+            }
+
             _ => {}
         }
     }
@@ -292,5 +324,18 @@ fn convert_mouse_button(button: MouseButton) -> PointerButton {
         MouseButton::Back => PointerButton::Other(3),
         MouseButton::Forward => PointerButton::Other(4),
         MouseButton::Other(n) => PointerButton::Other(n as u8),
+    }
+}
+
+/// Convert winit MouseScrollDelta to FLUI ScrollDelta
+///
+/// Used for external input devices connected to Android (Bluetooth mouse, trackpad, etc.)
+fn convert_mouse_wheel_delta(delta: MouseScrollDelta) -> ScrollDelta {
+    match delta {
+        MouseScrollDelta::LineDelta(x, y) => ScrollDelta::Lines { x, y },
+        MouseScrollDelta::PixelDelta(pos) => ScrollDelta::Pixels {
+            x: pos.x as f32,
+            y: pos.y as f32,
+        },
     }
 }

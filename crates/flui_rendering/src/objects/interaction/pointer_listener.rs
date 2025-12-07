@@ -111,10 +111,11 @@
 //! let tracker = RenderPointerListener::new(all_events);
 //! ```
 
-use crate::core::{BoxLayoutCtx, BoxPaintCtx, RenderBox, Single};
+use crate::core::{BoxHitTestCtx, BoxLayoutCtx, BoxPaintCtx, RenderBox, Single};
 use crate::{RenderObject, RenderResult};
+use flui_interaction::{EventPropagation, HitTestEntry, HitTestResult};
 use flui_types::events::PointerEvent;
-use flui_types::Size;
+use flui_types::{Offset, Rect, Size};
 use std::sync::Arc;
 
 /// Handler type for pointer events
@@ -385,6 +386,53 @@ impl RenderBox<Single> for RenderPointerListener {
 
         // Paint child
         ctx.paint_child(child_id, offset);
+    }
+
+    fn hit_test(&self, ctx: &BoxHitTestCtx<'_, Single>, result: &mut HitTestResult) -> bool {
+        // Check if position is within bounds
+        let bounds = Rect::from_min_size(Offset::ZERO, ctx.size());
+        if !bounds.contains(ctx.position) {
+            return false;
+        }
+
+        // Create unified pointer event handler from callbacks
+        let callbacks = self.callbacks.clone();
+        let handler = Arc::new(move |event: &PointerEvent| -> EventPropagation {
+            match event {
+                PointerEvent::Down(_) => {
+                    if let Some(callback) = &callbacks.on_pointer_down {
+                        callback(event);
+                    }
+                }
+                PointerEvent::Up(_) => {
+                    if let Some(callback) = &callbacks.on_pointer_up {
+                        callback(event);
+                    }
+                }
+                PointerEvent::Move(_) => {
+                    if let Some(callback) = &callbacks.on_pointer_move {
+                        callback(event);
+                    }
+                }
+                PointerEvent::Cancel(_) => {
+                    if let Some(callback) = &callbacks.on_pointer_cancel {
+                        callback(event);
+                    }
+                }
+                _ => {}
+            }
+            // Continue propagation to allow other handlers to process
+            EventPropagation::Continue
+        });
+
+        // Add hit test entry with handler
+        let entry = HitTestEntry::with_handler(ctx.element_id(), ctx.position, bounds, handler);
+        result.add(entry);
+
+        // Also test children
+        ctx.hit_test_children(result);
+
+        true
     }
 }
 

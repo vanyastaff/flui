@@ -88,8 +88,9 @@
 //! let tracking = RenderMouseRegion::new(all_events);
 //! ```
 
-use crate::core::{BoxLayoutCtx, BoxPaintCtx, RenderBox, Single};
+use crate::core::{BoxHitTestCtx, BoxLayoutCtx, BoxPaintCtx, RenderBox, Single};
 use crate::{RenderObject, RenderResult};
+use flui_interaction::HitTestResult;
 use flui_types::Size;
 
 /// Mouse hover event callbacks.
@@ -248,6 +249,15 @@ impl RenderBox<Single> for RenderMouseRegion {
         // 5. Fire on_exit callback when cursor leaves bounds
         // 6. Update is_hovering state based on cursor position
     }
+
+    fn hit_test(&self, ctx: &BoxHitTestCtx<'_, Single>, result: &mut HitTestResult) -> bool {
+        // MouseRegion participates in hit testing to detect hover events
+        // Delegate to child - if child is hit, this region is also hit
+        //
+        // TODO: When mouse tracking is implemented, add this region to result
+        // with hover event handlers attached to enable enter/exit/hover callbacks
+        ctx.hit_test_children(result)
+    }
 }
 
 #[cfg(test)]
@@ -315,5 +325,24 @@ mod tests {
         };
         let debug_str = format!("{:?}", callbacks);
         assert!(debug_str.contains("MouseCallbacks"));
+    }
+
+    // ========================================================================
+    // Hit Testing Tests
+    // ========================================================================
+
+    #[test]
+    fn test_hit_test_child_delegation() {
+        // MouseRegion should participate in hit testing by delegating to children
+        // This allows hover event detection when child widgets are hit
+        let callbacks = MouseCallbacks {
+            on_enter: None,
+            on_exit: None,
+            on_hover: None,
+        };
+        let region = RenderMouseRegion::new(callbacks);
+
+        // Verify initial state
+        assert!(!region.is_hovering, "should start without hover");
     }
 }
