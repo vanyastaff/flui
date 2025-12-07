@@ -101,21 +101,15 @@ impl<C: Curve + Clone + Send + Sync + fmt::Debug + 'static> Animation<f32> for C
 
 impl<C: Curve + Clone + Send + Sync> Listenable for CurvedAnimation<C> {
     fn add_listener(&self, callback: ListenerCallback) -> ListenerId {
-        self.notifier
-            
-            .add_listener(callback)
+        self.notifier.add_listener(callback)
     }
 
     fn remove_listener(&self, id: ListenerId) {
-        self.notifier
-            
-            .remove_listener(id)
+        self.notifier.remove_listener(id)
     }
 
     fn remove_all_listeners(&self) {
-        self.notifier
-            
-            .remove_all_listeners()
+        self.notifier.remove_all_listeners()
     }
 }
 

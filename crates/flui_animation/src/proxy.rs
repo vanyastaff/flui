@@ -106,21 +106,15 @@ where
     T: Clone + Send + Sync + 'static,
 {
     fn add_listener(&self, callback: ListenerCallback) -> ListenerId {
-        self.notifier
-            
-            .add_listener(callback)
+        self.notifier.add_listener(callback)
     }
 
     fn remove_listener(&self, id: ListenerId) {
-        self.notifier
-            
-            .remove_listener(id)
+        self.notifier.remove_listener(id)
     }
 
     fn remove_all_listeners(&self) {
-        self.notifier
-            
-            .remove_all_listeners()
+        self.notifier.remove_all_listeners()
     }
 }
 

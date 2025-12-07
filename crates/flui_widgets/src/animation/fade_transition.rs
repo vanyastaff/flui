@@ -106,11 +106,9 @@ impl<C> std::fmt::Debug for FadeTransition<C> {
 
 impl<C: IntoView + Clone + Sync> AnimatedView<AnimationController> for FadeTransition<C> {
     fn build(&mut self, _ctx: &dyn BuildContext) -> impl IntoView {
-        // Get current animation value (0.0 to 1.0)
-        let _opacity_value = self.opacity.as_ref().value();
-
         // TODO: Need to create an Opacity widget wrapper that properly implements IntoView
         // For now, just return the child (opacity effect won't work until Opacity widget is fixed)
+        // Once Opacity is fixed, use: Opacity::new(self.opacity.as_ref().value(), self.child.clone())
         self.child.clone()
     }
 
