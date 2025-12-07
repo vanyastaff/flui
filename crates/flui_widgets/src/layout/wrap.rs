@@ -5,15 +5,15 @@
 
 use bon::Builder;
 use flui_core::element::Element;
-use flui_core::render::RenderBoxExt;
 use flui_core::BuildContext;
 
 use flui_core::view::children::Children;
 use flui_core::view::{IntoElement, StatelessView};
-use flui_rendering::{RenderWrap, WrapAlignment, WrapCrossAlignment};
+use flui_rendering::objects::RenderWrap;
+use flui_types::layout::{WrapAlignment, WrapCrossAlignment};
 use flui_types::Axis;
 
-pub use flui_rendering::{
+pub use flui_types::layout::{
     WrapAlignment as WrapAlignmentExport, WrapCrossAlignment as WrapCrossAlignmentExport,
 };
 
@@ -255,8 +255,7 @@ impl<S: State> WrapBuilder<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_core::render::RenderBoxExt;
-    use flui_rendering::RenderEmpty;
+    use flui_rendering::objects::RenderEmpty;
 
     // Mock view for testing
     #[derive()]

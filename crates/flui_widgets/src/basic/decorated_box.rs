@@ -4,7 +4,6 @@
 //! Similar to Flutter's DecoratedBox widget.
 
 use bon::Builder;
-use flui_core::render::RenderBoxExt;
 use flui_core::view::children::Child;
 use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
@@ -209,7 +208,7 @@ macro_rules! decorated_box {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_rendering::RenderEmpty;
+    use flui_rendering::objects::RenderEmpty;
 
     // Mock view for testing
     #[derive(Debug, Clone)]

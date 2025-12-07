@@ -37,7 +37,6 @@
 //! sized_box!(child: widget, width: 100.0, height: 50.0)
 //! ```
 use bon::Builder;
-use flui_core::render::RenderBoxExt;
 use flui_core::view::children::Child;
 use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
@@ -368,7 +367,7 @@ impl StatelessView for SizedBox {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_rendering::RenderEmpty;
+    use flui_rendering::objects::RenderEmpty;
 
     // Mock widget for testing
     #[derive(Debug, Clone)]

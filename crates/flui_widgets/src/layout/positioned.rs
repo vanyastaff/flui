@@ -34,11 +34,10 @@
 
 use bon::Builder;
 use flui_core::element::Element;
-use flui_core::render::RenderBoxExt;
 use flui_core::view::{IntoElement, StatelessView};
 
 use flui_core::BuildContext;
-use flui_rendering::{PositionedMetadata, RenderPositioned};
+use flui_rendering::objects::{PositionedMetadata, RenderPositioned};
 
 /// A widget that controls where a child of a Stack is positioned.
 ///
@@ -473,8 +472,7 @@ macro_rules! positioned {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_core::render::RenderBoxExt;
-    use flui_rendering::RenderEmpty;
+    use flui_rendering::objects::RenderEmpty;
 
     // Mock view for testing
     #[derive(Debug)]

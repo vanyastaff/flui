@@ -5,11 +5,10 @@
 
 use bon::Builder;
 use flui_core::element::Element;
-use flui_core::render::RenderBoxExt;
 use flui_core::view::children::Child;
 use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
-use flui_rendering::RenderColoredBox;
+use flui_rendering::objects::RenderColoredBox;
 use flui_types::Color;
 
 /// A widget that paints a box with a solid color.
@@ -153,7 +152,7 @@ impl StatelessView for ColoredBox {
         // If we have a child, we need to use a Stack to layer them
         if self.child.is_some() {
             // Use Stack to layer colored background with child
-            use flui_rendering::RenderStack;
+            use flui_rendering::objects::RenderStack;
             let child: Element = self.child.into_element();
             RenderStack::default()
                 .children(vec![
@@ -171,7 +170,7 @@ impl StatelessView for ColoredBox {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_rendering::RenderEmpty;
+    use flui_rendering::objects::RenderEmpty;
 
     // Mock view for testing
     #[derive(Debug, Clone)]

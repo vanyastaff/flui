@@ -29,11 +29,10 @@
 //! ```
 
 use bon::Builder;
-use flui_core::render::RenderBoxExt;
 use flui_core::view::children::Child;
 use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
-use flui_rendering::RenderAspectRatio;
+use flui_rendering::objects::RenderAspectRatio;
 
 /// A widget that sizes its child to a specific aspect ratio.
 ///

@@ -40,11 +40,10 @@
 
 use bon::Builder;
 use flui_core::element::Element;
-use flui_core::render::RenderBoxExt;
 use flui_core::view::children::Children;
 use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
-use flui_rendering::RenderFlex;
+use flui_rendering::objects::RenderFlex;
 use flui_types::layout::{Axis, CrossAxisAlignment, MainAxisAlignment, MainAxisSize};
 
 use crate::SizedBox;

@@ -31,11 +31,10 @@
 //! ```
 
 use bon::Builder;
-use flui_core::render::RenderBoxExt;
 use flui_core::view::children::Child;
 use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
-use flui_rendering::RenderPadding;
+use flui_rendering::objects::RenderPadding;
 use flui_types::EdgeInsets;
 
 /// A widget that insets its child by the given padding.
@@ -281,7 +280,7 @@ impl StatelessView for Padding {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_rendering::RenderEmpty;
+    use flui_rendering::objects::RenderEmpty;
 
     // Mock view for testing
     #[derive(Debug, Clone)]

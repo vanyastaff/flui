@@ -5,11 +5,10 @@
 
 use bon::Builder;
 use flui_core::element::Element;
-use flui_core::render::RenderBoxExt;
 use flui_core::BuildContext;
 
 use flui_core::view::{IntoElement, StatelessView};
-use flui_rendering::RenderFractionallySizedBox;
+use flui_rendering::objects::RenderFractionallySizedBox;
 
 /// A widget that sizes its child to a fraction of the total available space.
 ///
@@ -233,8 +232,7 @@ impl<S: State> FractionallySizedBoxBuilder<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_core::render::RenderBoxExt;
-    use flui_rendering::RenderEmpty;
+    use flui_rendering::objects::RenderEmpty;
 
     // Mock view for testing
     #[derive()]

@@ -5,10 +5,9 @@
 
 use bon::Builder;
 use flui_core::element::Element;
-use flui_core::render::RenderBoxExt;
 use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
-use flui_rendering::RenderBaseline;
+use flui_rendering::objects::RenderBaseline;
 use flui_types::typography::TextBaseline;
 
 /// A widget that positions its child according to the child's baseline.
@@ -227,8 +226,7 @@ impl<S: State> BaselineBuilder<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_core::render::RenderBoxExt;
-    use flui_rendering::RenderEmpty;
+    use flui_rendering::objects::RenderEmpty;
 
     // Mock view for testing
     #[derive()]

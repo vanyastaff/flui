@@ -32,11 +32,10 @@
 //! ```
 
 use bon::Builder;
-use flui_core::render::RenderBoxExt;
 use flui_core::view::children::Children;
 use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
-use flui_rendering::RenderFlex;
+use flui_rendering::objects::RenderFlex;
 use flui_types::layout::{CrossAxisAlignment, MainAxisAlignment, MainAxisSize};
 
 use crate::SizedBox;
@@ -292,7 +291,7 @@ macro_rules! column {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_rendering::RenderEmpty;
+    use flui_rendering::objects::RenderEmpty;
 
     // Mock view for testing
     #[derive(Clone)]

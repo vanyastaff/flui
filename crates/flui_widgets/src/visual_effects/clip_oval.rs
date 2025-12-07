@@ -7,7 +7,7 @@ use bon::Builder;
 use flui_core::BuildContext;
 
 use flui_core::view::{IntoElement, StatelessView};
-use flui_rendering::RenderClipOval;
+use flui_rendering::objects::RenderClipOval;
 use flui_types::painting::Clip;
 
 /// A widget that clips its child to an oval shape.

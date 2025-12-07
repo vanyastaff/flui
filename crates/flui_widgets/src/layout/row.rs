@@ -32,11 +32,10 @@
 //! ```
 
 use bon::Builder;
-use flui_core::render::RenderBoxExt;
 use flui_core::view::children::Children;
 use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
-use flui_rendering::RenderFlex;
+use flui_rendering::objects::RenderFlex;
 use flui_types::layout::{CrossAxisAlignment, MainAxisAlignment, MainAxisSize};
 
 use crate::SizedBox;
@@ -324,7 +323,7 @@ macro_rules! row {
     // With children only (using bracket syntax like vec!)
     [$($child:expr),* $(,)?] => {
         $crate::Row::builder()
-            .children(vec![$(Box::new($child) as Box<dyn $crate::>),*])
+            .children(vec![$($child.into_element()),*])
             .build()
     };
 
@@ -339,7 +338,7 @@ macro_rules! row {
     {$($field:ident : $value:expr),+ ; [$($child:expr),* $(,)?]} => {
         $crate::Row::builder()
             $(.$field($value))+
-            .children(vec![$(Box::new($child) as Box<dyn $crate::>),*])
+            .children(vec![$($child.into_element()),*])
             .build()
     };
 }
@@ -347,8 +346,7 @@ macro_rules! row {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_core::render::RenderBoxExt;
-    use flui_rendering::RenderEmpty;
+    use flui_rendering::objects::RenderEmpty;
 
     // Mock view for testing
     #[derive(Clone)]

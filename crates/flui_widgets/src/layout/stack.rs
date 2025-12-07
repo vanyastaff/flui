@@ -30,11 +30,10 @@
 //! ```
 
 use bon::Builder;
-use flui_core::render::RenderBoxExt;
 use flui_core::view::children::Children;
 use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
-use flui_rendering::RenderStack;
+use flui_rendering::objects::RenderStack;
 use flui_types::layout::{Alignment, StackFit};
 
 /// A widget that positions its children relative to the edges of its box.
@@ -333,8 +332,7 @@ macro_rules! stack {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_core::render::RenderBoxExt;
-    use flui_rendering::RenderEmpty;
+    use flui_rendering::objects::RenderEmpty;
 
     // Mock view for testing
     #[derive()]

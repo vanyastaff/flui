@@ -31,11 +31,10 @@
 //! ```
 
 use bon::Builder;
-use flui_core::render::RenderBoxExt;
 use flui_core::view::children::Child;
 use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
-use flui_rendering::RenderAlign;
+use flui_rendering::objects::RenderAlign;
 use flui_types::Alignment;
 
 /// A widget that centers its child within the available space.
@@ -281,7 +280,7 @@ impl StatelessView for Center {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_rendering::RenderEmpty;
+    use flui_rendering::objects::RenderEmpty;
 
     // Mock view for testing
     #[derive(Debug, Clone)]

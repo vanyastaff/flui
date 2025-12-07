@@ -5,10 +5,9 @@
 
 use bon::Builder;
 use flui_core::element::Element;
-use flui_core::render::RenderBoxExt;
 use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
-use flui_rendering::RenderIntrinsicWidth;
+use flui_rendering::objects::RenderIntrinsicWidth;
 
 /// A widget that sizes its child to the child's intrinsic width.
 ///

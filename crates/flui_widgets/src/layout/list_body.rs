@@ -6,11 +6,10 @@
 
 use bon::Builder;
 use flui_core::element::Element;
-use flui_core::render::RenderBoxExt;
 use flui_core::view::{IntoElement, StatelessView};
 
 use flui_core::BuildContext;
-use flui_rendering::RenderListBody;
+use flui_rendering::objects::RenderListBody;
 use flui_types::Axis;
 
 /// A widget that arranges children in a simple list.

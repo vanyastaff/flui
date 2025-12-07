@@ -139,7 +139,6 @@ impl StatelessView for GestureDetector {
         // Return RenderPointerListener with child
         // The RenderPointerListener will create PointerListenerLayer
         // which registers hit test handlers with EventRouter
-        use flui_core::render::RenderBoxExt;
         flui_rendering::objects::RenderPointerListener::new(callbacks).child(self.child)
     }
 }
@@ -240,8 +239,7 @@ impl Default for GestureDetectorBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_core::render::RenderBoxExt;
-    use flui_rendering::RenderEmpty;
+    use flui_rendering::objects::RenderEmpty;
 
     // Mock widget for testing
     #[derive(Debug, Clone)]

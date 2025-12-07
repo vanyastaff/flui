@@ -16,12 +16,12 @@
 //! ```
 
 use bon::Builder;
-use flui_core::render::RenderBoxExt;
 use flui_core::view::children::Child;
 use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
-use flui_rendering::{MouseCallbacks, RenderMouseRegion};
-use flui_types::events::{PointerEvent, PointerEventHandler};
+use flui_rendering::objects::{MouseCallbacks, RenderMouseRegion};
+use flui_types::events::PointerEvent;
+use flui_interaction::PointerEventHandler;
 
 /// A widget that tracks mouse pointer events.
 ///

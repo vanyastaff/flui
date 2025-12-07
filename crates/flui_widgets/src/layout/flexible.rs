@@ -31,11 +31,10 @@
 
 use bon::Builder;
 use flui_core::element::Element;
-use flui_core::render::RenderBoxExt;
 use flui_core::view::{IntoElement, StatelessView};
 
 use flui_core::BuildContext;
-use flui_rendering::{FlexItemMetadata, RenderFlexItem};
+use flui_rendering::objects::{FlexItemMetadata, RenderFlexItem};
 use flui_types::layout::FlexFit;
 
 /// A widget that controls how a child of a Row, Column, or Flex flexes.
