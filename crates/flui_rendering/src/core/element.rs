@@ -80,6 +80,7 @@ use super::parent_data::ParentData;
 use super::protocol::{BoxProtocol, Protocol, ProtocolId, SliverProtocol};
 use super::state::RenderState;
 use super::{BoxConstraints, SliverConstraints};
+use crate::tree::RenderId;
 
 // ============================================================================
 // PROTOCOL STATE (Type-Erased RenderState)
@@ -190,7 +191,16 @@ pub struct RenderElement {
     depth: usize,
 
     // ========== Render Object ==========
-    /// Owned render object (type-erased).
+    /// Reference into RenderTree (new four-tree architecture).
+    ///
+    /// This is the preferred way to reference RenderObjects. When set, the actual
+    /// RenderObject is stored in RenderTree, and this element just holds the ID.
+    render_id: Option<RenderId>,
+
+    /// Owned render object (type-erased, legacy).
+    ///
+    /// This is kept for backward compatibility. New code should use RenderTree + render_id.
+    /// Eventually this will be deprecated once all code migrates to the new architecture.
     render_object: Box<dyn RenderObject>,
 
     /// Protocol (Box or Sliver).
@@ -274,6 +284,7 @@ impl RenderElement {
             parent: None,
             children: Vec::new(),
             depth: 0,
+            render_id: None,
             render_object: Box::new(render_object),
             protocol,
             arity: RuntimeArity::Exact(0),
@@ -311,6 +322,7 @@ impl RenderElement {
             parent: None,
             children: Vec::new(),
             depth: 0,
+            render_id: None,
             render_object,
             protocol,
             arity,
@@ -657,11 +669,42 @@ impl RenderElement {
 }
 
 // ============================================================================
-// RENDER OBJECT ACCESS
+// RENDER ID ACCESS (New Four-Tree Architecture)
+// ============================================================================
+
+impl RenderElement {
+    /// Gets the RenderId reference into RenderTree.
+    ///
+    /// This is the preferred way to access the RenderObject in the new four-tree architecture.
+    /// The actual RenderObject is stored in RenderTree, and this element just holds the ID.
+    #[inline]
+    pub fn render_id(&self) -> Option<RenderId> {
+        self.render_id
+    }
+
+    /// Sets the RenderId reference.
+    ///
+    /// This should be called when the RenderObject is inserted into RenderTree.
+    #[inline]
+    pub fn set_render_id(&mut self, render_id: Option<RenderId>) {
+        self.render_id = render_id;
+    }
+
+    /// Returns true if this element has a RenderId reference.
+    #[inline]
+    pub fn has_render_id(&self) -> bool {
+        self.render_id.is_some()
+    }
+}
+
+// ============================================================================
+// RENDER OBJECT ACCESS (Legacy - will be deprecated)
 // ============================================================================
 
 impl RenderElement {
     /// Returns render object reference.
+    ///
+    /// **Legacy**: Prefer using `render_id()` with RenderTree in new code.
     #[inline]
     pub fn render_object(&self) -> &dyn RenderObject {
         &*self.render_object
