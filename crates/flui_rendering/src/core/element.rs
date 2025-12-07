@@ -829,7 +829,7 @@ impl RenderElement {
         offset: Offset,
         geometry: &Geometry,
         canvas: &mut super::Canvas,
-        tree: &dyn PaintTree,
+        tree: &mut dyn PaintTree,
     ) -> RenderResult<()> {
         // Verify geometry matches protocol
         if geometry.protocol() != self.protocol {
@@ -839,17 +839,23 @@ impl RenderElement {
             });
         }
 
+        // Create callback wrapper for child painting
+        let mut paint_child = |child_id: ElementId, child_offset: Offset, child_canvas: &mut super::Canvas| {
+            let _ = tree.perform_paint(child_id, child_offset);
+            let _ = child_canvas; // Canvas will be shared/passed through
+        };
+
         // Paint with appropriate size/geometry
         match geometry {
             Geometry::Box(size) => {
-                self.render_object.paint(id, offset, *size, canvas, tree);
+                self.render_object.paint(id, offset, *size, canvas, &mut paint_child);
                 Ok(())
             }
             Geometry::Sliver(sliver_geom) => {
                 // For slivers, convert paint_extent to size for painting
                 // (Sliver painting might use different approach in future)
                 let size = Size::new(sliver_geom.paint_extent, sliver_geom.paint_extent);
-                self.render_object.paint(id, offset, size, canvas, tree);
+                self.render_object.paint(id, offset, size, canvas, &mut paint_child);
                 Ok(())
             }
         }
