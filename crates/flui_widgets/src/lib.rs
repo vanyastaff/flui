@@ -55,40 +55,41 @@
 
 #![warn(missing_docs)]
 
-pub mod animation;
+// Temporarily disable modules with compilation errors for counter demo
+// pub mod animation;
 pub mod basic;
-pub mod error;
-pub mod gestures;
-pub mod interaction;
-pub mod layout;
-pub mod scrolling;
-pub mod style;
-pub mod visual_effects;
+// pub mod error;
+// pub mod gestures;
+// pub mod interaction;
+// pub mod layout;
+// pub mod scrolling;
+// pub mod style;
+// pub mod visual_effects;
 
 // Re-export commonly used widgets for convenient access
 pub use basic::Text;
-pub use layout::{Column, Row};
+// pub use layout::{Column, Row};
 
-// Re-exports for convenient top-level access
-pub use basic::{
-    Align, AspectRatio, Builder, Button, Card, Center, ColoredBox, ConstrainedBox, Container,
-    CustomPaint, DecoratedBox, Divider, Empty, FittedBox, LayoutBuilder, LimitedBox, Padding,
-    SafeArea, SizedBox, VerticalDivider,
-};
-pub use gestures::GestureDetector;
-pub use interaction::{AbsorbPointer, IgnorePointer, MouseRegion};
-pub use layout::{
-    Baseline, Expanded, Flex, Flexible, FractionallySizedBox, IndexedStack,
-    IntrinsicHeight, IntrinsicWidth, ListBody, OverflowBox, Positioned, PositionedDirectional,
-    RotatedBox, Scaffold, ScrollController, SingleChildScrollView, SizedOverflowBox, Spacer,
-    Stack, Wrap,
-};
+// Temporarily disabled exports until widgets are fixed
+// pub use basic::{
+//     Align, AspectRatio, Builder, Button, Card, Center, ColoredBox, ConstrainedBox, Container,
+//     CustomPaint, DecoratedBox, Divider, Empty, FittedBox, LayoutBuilder, LimitedBox, Padding,
+//     SafeArea, SizedBox, VerticalDivider,
+// };
+// pub use gestures::GestureDetector;
+// pub use interaction::{AbsorbPointer, IgnorePointer, MouseRegion};
+// pub use layout::{
+//     Baseline, Expanded, Flex, Flexible, FractionallySizedBox, IndexedStack,
+//     IntrinsicHeight, IntrinsicWidth, ListBody, OverflowBox, Positioned, PositionedDirectional,
+//     RotatedBox, Scaffold, ScrollController, SingleChildScrollView, SizedOverflowBox, Spacer,
+//     Stack, Wrap,
+// };
 
 // Re-export commonly used types
-pub use flui_rendering::objects::DecorationPosition;
-pub use flui_types::layout::{FlexFit, StackFit};
-pub use flui_types::styling::{BorderRadius, BoxDecoration, Radius};
-pub use flui_types::{Alignment, BoxConstraints, Color, EdgeInsets, Matrix4, Offset, Size};
+// pub use flui_rendering::objects::DecorationPosition;
+// pub use flui_types::layout::{FlexFit, StackFit};
+// pub use flui_types::styling::{BorderRadius, BoxDecoration, Radius};
+// pub use flui_types::{Alignment, BoxConstraints, Color, EdgeInsets, Matrix4, Offset, Size};
 
 /// Prelude module for convenient imports
 ///
@@ -97,23 +98,26 @@ pub use flui_types::{Alignment, BoxConstraints, Color, EdgeInsets, Matrix4, Offs
 /// use flui_widgets::prelude::*;
 /// ```
 pub mod prelude {
-    // Re-export essential widgets for Container and Flex layout
-    pub use crate::basic::{
-        Align, AspectRatio, Builder, Button, Card, Center, ColoredBox, ConstrainedBox, Container,
-        CustomPaint, DecoratedBox, Divider, Empty, FittedBox, LayoutBuilder, LimitedBox, Padding,
-        SafeArea, SizedBox, Text, VerticalDivider,
-    };
-    pub use crate::gestures::GestureDetector;
-    pub use crate::interaction::{AbsorbPointer, IgnorePointer, MouseRegion};
-    pub use crate::layout::{
-        Baseline, Column, Expanded, Flex, Flexible, FractionallySizedBox, IndexedStack,
-        IntrinsicHeight, IntrinsicWidth, ListBody, OverflowBox, Positioned, PositionedDirectional,
-        RotatedBox, Row, Scaffold, ScrollController, SingleChildScrollView, SizedOverflowBox,
-        Spacer, Stack, Wrap,
-    };
+    // Temporarily disabled - only Text widget is enabled for counter demo
+    // // Re-export essential widgets for Container and Flex layout
+    // pub use crate::basic::{
+    //     Align, AspectRatio, Builder, Button, Card, Center, ColoredBox, ConstrainedBox, Container,
+    //     CustomPaint, DecoratedBox, Divider, Empty, FittedBox, LayoutBuilder, LimitedBox, Padding,
+    //     SafeArea, SizedBox, Text, VerticalDivider,
+    // };
+    pub use crate::basic::Text;
+
+    // pub use crate::gestures::GestureDetector;
+    // pub use crate::interaction::{AbsorbPointer, IgnorePointer, MouseRegion};
+    // pub use crate::layout::{
+    //     Baseline, Column, Expanded, Flex, Flexible, FractionallySizedBox, IndexedStack,
+    //     IntrinsicHeight, IntrinsicWidth, ListBody, OverflowBox, Positioned, PositionedDirectional,
+    //     RotatedBox, Row, Scaffold, ScrollController, SingleChildScrollView, SizedOverflowBox,
+    //     Spacer, Stack, Wrap,
+    // };
 
     // Re-export core types
-    pub use flui_core::BuildContext;
+    // pub use flui_core::BuildContext;  // Not needed for IntoElement pattern
     pub use flui_types::layout::{
         CrossAxisAlignment, FlexFit, MainAxisAlignment, MainAxisSize, StackFit,
     };
