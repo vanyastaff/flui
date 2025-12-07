@@ -103,6 +103,9 @@ pub use core::{HitTestTree, HitTestTreeExt, LayoutTree, LayoutTreeExt, PaintTree
 // Geometry and constraints
 pub use core::BoxConstraints;
 
+// Unified protocol types
+pub use core::{Constraints, Geometry};
+
 // Protocol system
 pub use core::{BoxProtocol, Protocol, ProtocolId, SliverProtocol};
 

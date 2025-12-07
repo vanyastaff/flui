@@ -35,6 +35,9 @@ mod tree;
 // RenderTree<T> - Wrapper that adds rendering capabilities to any tree storage
 mod tree_storage;
 
+// Unified protocol types (Constraints, Geometry enums for multi-protocol support)
+mod unified;
+
 // Proxy traits for pass-through render objects
 mod proxy;
 
@@ -70,6 +73,9 @@ pub use protocol::*;
 pub use flui_types::{
     Axis, BoxConstraints, EdgeInsets, Offset, Rect, Size, SliverConstraints, SliverGeometry,
 };
+
+// Unified protocol types
+pub use unified::{Constraints, Geometry};
 
 // ============================================================================
 // CORE RENDER TRAITS
