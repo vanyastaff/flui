@@ -6,11 +6,10 @@
 
 use bon::Builder;
 use flui_core::element::Element;
-use flui_core::render::RenderBoxExt;
 use flui_core::view::{IntoElement, StatelessView};
 
 use flui_core::BuildContext;
-use flui_rendering::RenderOverflowBox;
+use flui_rendering::objects::RenderOverflowBox;
 use flui_types::Alignment;
 
 /// A widget that imposes different constraints on its child than it gets from its parent.
@@ -256,8 +255,8 @@ impl<S: State> OverflowBoxBuilder<S> {
 }
 
 // Implement View trait - Simplified API
-impl StatelessView for OverflowBox {
-    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
+impl IntoElement for OverflowBox {
+    fn into_element(self) -> Element {
         let render = RenderOverflowBox::with_constraints(
             self.min_width,
             self.max_width,

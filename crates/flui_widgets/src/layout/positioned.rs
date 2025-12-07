@@ -34,11 +34,10 @@
 
 use bon::Builder;
 use flui_core::element::Element;
-use flui_core::render::RenderBoxExt;
 use flui_core::view::{IntoElement, StatelessView};
 
 use flui_core::BuildContext;
-use flui_rendering::{PositionedMetadata, RenderPositioned};
+use flui_rendering::objects::{PositionedMetadata, RenderPositioned};
 
 /// A widget that controls where a child of a Stack is positioned.
 ///
@@ -389,8 +388,8 @@ impl Default for Positioned {
 }
 
 // Implement View trait - Simplified API
-impl StatelessView for Positioned {
-    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
+impl IntoElement for Positioned {
+    fn into_element(self) -> Element {
         let metadata = self.create_metadata();
 
         RenderPositioned::new(metadata).child_opt(self.child)
@@ -473,8 +472,7 @@ macro_rules! positioned {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_core::render::RenderBoxExt;
-    use flui_rendering::RenderEmpty;
+    use flui_rendering::objects::RenderEmpty;
 
     // Mock view for testing
     #[derive(Debug)]
@@ -489,8 +487,8 @@ mod tests {
         }
     }
 
-    impl StatelessView for MockView {
-        fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
+    impl IntoElement for MockView {
+        fn into_element(self) -> Element {
             RenderEmpty.leaf()
         }
     }

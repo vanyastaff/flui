@@ -32,11 +32,10 @@
 //! ```
 
 use bon::Builder;
-use flui_core::render::RenderBoxExt;
 use flui_core::view::children::Children;
 use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
-use flui_rendering::RenderFlex;
+use flui_rendering::objects::RenderFlex;
 use flui_types::layout::{CrossAxisAlignment, MainAxisAlignment, MainAxisSize};
 
 use crate::SizedBox;
@@ -247,8 +246,8 @@ impl Default for Column {
 }
 
 // Implement View for Column
-impl StatelessView for Column {
-    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
+impl IntoElement for Column {
+    fn into_element(self) -> Element {
         let render_flex = RenderFlex::column()
             .with_main_axis_alignment(self.main_axis_alignment)
             .with_cross_axis_alignment(self.cross_axis_alignment)
@@ -292,14 +291,14 @@ macro_rules! column {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_rendering::RenderEmpty;
+    use flui_rendering::objects::RenderEmpty;
 
     // Mock view for testing
     #[derive(Clone)]
     struct MockView;
 
-    impl StatelessView for MockView {
-        fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
+    impl IntoElement for MockView {
+        fn into_element(self) -> Element {
             RenderEmpty.leaf()
         }
     }

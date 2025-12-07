@@ -5,11 +5,10 @@
 
 use bon::Builder;
 use flui_core::element::Element;
-use flui_core::render::RenderBoxExt;
 use flui_core::view::{IntoElement, StatelessView};
 
 use flui_core::BuildContext;
-use flui_rendering::RenderRotatedBox;
+use flui_rendering::objects::RenderRotatedBox;
 use flui_types::geometry::QuarterTurns;
 
 // Re-export QuarterTurns for convenience
@@ -207,8 +206,8 @@ impl<S: State> RotatedBoxBuilder<S> {
 }
 
 // Implement View trait - Simplified API
-impl StatelessView for RotatedBox {
-    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
+impl IntoElement for RotatedBox {
+    fn into_element(self) -> Element {
         RenderRotatedBox::new(self.quarter_turns).child_opt(self.child)
     }
 }

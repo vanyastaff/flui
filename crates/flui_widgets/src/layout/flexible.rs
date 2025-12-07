@@ -31,11 +31,10 @@
 
 use bon::Builder;
 use flui_core::element::Element;
-use flui_core::render::RenderBoxExt;
 use flui_core::view::{IntoElement, StatelessView};
 
 use flui_core::BuildContext;
-use flui_rendering::{FlexItemMetadata, RenderFlexItem};
+use flui_rendering::objects::{FlexItemMetadata, RenderFlexItem};
 use flui_types::layout::FlexFit;
 
 /// A widget that controls how a child of a Row, Column, or Flex flexes.
@@ -287,8 +286,8 @@ impl Default for Flexible {
 }
 
 // Implement View trait - Simplified API
-impl StatelessView for Flexible {
-    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
+impl IntoElement for Flexible {
+    fn into_element(self) -> Element {
         RenderFlexItem::new(FlexItemMetadata {
             flex: self.flex,
             fit: self.fit,

@@ -5,10 +5,9 @@
 
 use bon::Builder;
 use flui_core::element::Element;
-use flui_core::render::RenderBoxExt;
 use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
-use flui_rendering::RenderIntrinsicHeight;
+use flui_rendering::objects::RenderIntrinsicHeight;
 
 /// A widget that sizes its child to the child's intrinsic height.
 ///
@@ -182,8 +181,8 @@ impl<S: State> IntrinsicHeightBuilder<S> {
 }
 
 // Implement View trait - Simplified API
-impl StatelessView for IntrinsicHeight {
-    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
+impl IntoElement for IntrinsicHeight {
+    fn into_element(self) -> Element {
         let render = match (self.step_width, self.step_height) {
             (Some(w), Some(h)) => RenderIntrinsicHeight::with_steps(w, h),
             (Some(w), None) => RenderIntrinsicHeight::with_step_width(w),

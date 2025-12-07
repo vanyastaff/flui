@@ -193,8 +193,8 @@ impl<S: State> CardBuilder<S> {
 }
 
 // Implement View trait
-impl StatelessView for Card {
-    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
+impl IntoElement for Card {
+    fn into_element(self) -> Element {
         // TODO: Add elevation/shadow support when Material widget is available
         // For now, create a simple card with color and border radius
         use flui_core::view::children::Child;

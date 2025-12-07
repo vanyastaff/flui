@@ -4,11 +4,10 @@
 //! Similar to Flutter's FittedBox widget.
 
 use bon::Builder;
-use flui_core::render::RenderBoxExt;
 use flui_core::view::children::Child;
 use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
-use flui_rendering::RenderFittedBox;
+use flui_rendering::objects::RenderFittedBox;
 use flui_types::Alignment;
 
 // Re-export BoxFit from types for convenience
@@ -171,8 +170,8 @@ impl Default for FittedBox {
 }
 
 // Implement View for FittedBox - New architecture
-impl StatelessView for FittedBox {
-    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
+impl IntoElement for FittedBox {
+    fn into_element(self) -> Element {
         RenderFittedBox::with_alignment(self.fit, self.alignment).child_opt(self.child)
     }
 }
@@ -202,14 +201,14 @@ impl<S: State> FittedBoxBuilder<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_rendering::RenderEmpty;
+    use flui_rendering::objects::RenderEmpty;
 
     // Mock view for testing
     #[derive(Debug, Clone)]
     struct MockView;
 
-    impl StatelessView for MockView {
-        fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
+    impl IntoElement for MockView {
+        fn into_element(self) -> Element {
             RenderEmpty.leaf()
         }
     }

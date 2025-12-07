@@ -15,11 +15,10 @@
 //! ```
 
 use bon::Builder;
-use flui_core::render::RenderBoxExt;
 use flui_core::view::children::Child;
 use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
-use flui_rendering::RenderPadding;
+use flui_rendering::objects::RenderPadding;
 use flui_types::EdgeInsets;
 
 /// A widget that insets its child by sufficient padding to avoid system UI intrusions.
@@ -203,8 +202,8 @@ impl<S: State> SafeAreaBuilder<S> {
 }
 
 // Implement View trait
-impl StatelessView for SafeArea {
-    fn build(self, ctx: &dyn BuildContext) -> impl IntoElement {
+impl IntoElement for SafeArea {
+    fn into_element(self) -> Element {
         let insets = self.calculate_insets(ctx);
 
         RenderPadding::new(insets).child_opt(self.child)

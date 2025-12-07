@@ -31,11 +31,10 @@
 //! ```
 
 use bon::Builder;
-use flui_core::render::RenderBoxExt;
 use flui_core::view::children::Child;
 use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
-use flui_rendering::RenderPadding;
+use flui_rendering::objects::RenderPadding;
 use flui_types::EdgeInsets;
 
 /// A widget that insets its child by the given padding.
@@ -271,8 +270,8 @@ macro_rules! padding {
 }
 
 // Implement View for Padding
-impl StatelessView for Padding {
-    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
+impl IntoElement for Padding {
+    fn into_element(self) -> Element {
         // Child converts to Option<Element> via From trait
         RenderPadding::new(self.padding).maybe_child(self.child)
     }
@@ -281,14 +280,14 @@ impl StatelessView for Padding {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_rendering::RenderEmpty;
+    use flui_rendering::objects::RenderEmpty;
 
     // Mock view for testing
     #[derive(Debug, Clone)]
     struct MockView;
 
-    impl StatelessView for MockView {
-        fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
+    impl IntoElement for MockView {
+        fn into_element(self) -> Element {
             RenderEmpty.leaf()
         }
     }

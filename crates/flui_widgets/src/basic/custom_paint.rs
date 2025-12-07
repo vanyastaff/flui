@@ -1,6 +1,6 @@
 //! CustomPaint widget for drawing custom graphics
 
-use flui_core::render::{BoxProtocol, LayoutContext, Leaf, PaintContext, RenderBox, RenderBoxExt};
+use flui_core::render::{BoxProtocol, LayoutContext, Leaf, PaintContext, RenderBox};
 use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
 use flui_painting::Canvas;
@@ -68,8 +68,8 @@ impl Debug for CustomPaint {
     }
 }
 
-impl StatelessView for CustomPaint {
-    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
+impl IntoElement for CustomPaint {
+    fn into_element(self) -> Element {
         RenderCustomPaintLeaf {
             painter: self.painter,
             size: self.size.unwrap_or(Size::ZERO),

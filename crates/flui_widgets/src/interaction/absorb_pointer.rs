@@ -23,11 +23,10 @@
 //! ```
 
 use bon::Builder;
-use flui_core::render::RenderBoxExt;
 use flui_core::view::children::Child;
 use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
-use flui_rendering::RenderAbsorbPointer;
+use flui_rendering::objects::RenderAbsorbPointer;
 
 /// A widget that absorbs pointer events during hit testing.
 ///
@@ -244,8 +243,8 @@ mod tests {
 }
 
 // Implement View trait
-impl StatelessView for AbsorbPointer {
-    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
+impl IntoElement for AbsorbPointer {
+    fn into_element(self) -> Element {
         RenderAbsorbPointer::new(self.absorbing).child_opt(self.child.into_inner())
     }
 }

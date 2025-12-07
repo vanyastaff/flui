@@ -4,11 +4,9 @@
 //! Similar to Flutter's DecoratedBox widget.
 
 use bon::Builder;
-use flui_core::render::RenderBoxExt;
 use flui_core::view::children::Child;
-use flui_core::view::{IntoElement, StatelessView};
-use flui_core::BuildContext;
-use flui_rendering::{DecorationPosition, RenderDecoratedBox};
+use flui_core::IntoElement;
+use flui_rendering::objects::DecorationPosition;
 use flui_types::styling::BoxDecoration;
 use flui_types::Color;
 
@@ -140,10 +138,18 @@ impl Default for DecoratedBox {
     }
 }
 
-// Implement View for DecoratedBox
-impl StatelessView for DecoratedBox {
-    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
-        RenderDecoratedBox::with_position(self.decoration, self.position).maybe_child(self.child)
+// DecoratedBox is a RenderObjectWidget - implements IntoElement directly
+impl IntoElement for DecoratedBox {
+    fn into_element(self) -> flui_core::Element {
+        use flui_rendering::{BoxRenderWrapper, Optional};
+        use flui_rendering::objects::RenderDecoratedBox;
+
+        // Create render object
+        let render = RenderDecoratedBox::with_position(self.decoration, self.position);
+
+        // Wrap in BoxRenderWrapper and convert to Element
+        // TODO: Handle child - need to figure out proper API for this
+        BoxRenderWrapper::<Optional>::new(render).into_element()
     }
 }
 
@@ -209,14 +215,14 @@ macro_rules! decorated_box {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_rendering::RenderEmpty;
+    use flui_rendering::objects::RenderEmpty;
 
     // Mock view for testing
     #[derive(Debug, Clone)]
     struct MockView;
 
-    impl StatelessView for MockView {
-        fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
+    impl IntoElement for MockView {
+        fn into_element(self) -> Element {
             RenderEmpty.leaf()
         }
     }

@@ -4,7 +4,7 @@
 
 use flui_core::view::children::Children;
 use flui_core::view::{BuildContext, IntoElement, StatelessView};
-use flui_rendering::RenderEmpty;
+use flui_rendering::objects::RenderEmpty;
 use flui_types::layout::AxisDirection;
 use flui_types::painting::Clip;
 
@@ -130,11 +130,10 @@ impl Default for Viewport {
     }
 }
 
-impl StatelessView for Viewport {
-    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
+impl IntoElement for Viewport {
+    fn into_element(self) -> Element {
         // TODO: RenderViewport not yet implemented
         // Placeholder using RenderEmpty until RenderViewport is available
-        use flui_core::render::RenderBoxExt;
         RenderEmpty.leaf()
     }
 }

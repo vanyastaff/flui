@@ -55,7 +55,6 @@
 
 use bon::Builder;
 use flui_core::element::Element;
-use flui_core::render::RenderBoxExt;
 use flui_core::view::children::Child;
 use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
@@ -364,12 +363,12 @@ impl Default for Container {
     }
 }
 
-// NOTE: Container is a composite View (like in Flutter), NOT a RenderObjectWidget!
-//
-// Container composes other Views (Padding, Align, DecoratedBox, SizedBox, etc.) into a tree.
+// NOTE: Container is a composite widget that implements IntoElement.
+// It composes other widgets (Padding, Align, DecoratedBox, SizedBox, etc.) by calling
+// their .into_element() methods to build the element tree.
 
-impl StatelessView for Container {
-    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
+impl IntoElement for Container {
+    fn into_element(self) -> Element {
         // Build widget tree from inside out:
         // Flutter order: constraints -> margin -> decoration -> alignment -> padding -> child
         //
@@ -434,7 +433,7 @@ impl StatelessView for Container {
         // Apply width/height constraints
         if self.width.is_some() || self.height.is_some() {
             // Use RenderSizedBox directly with Option values to preserve None semantics
-            current = flui_rendering::RenderSizedBox::new(self.width, self.height)
+            current = flui_rendering::objects::RenderSizedBox::new(self.width, self.height)
                 .maybe_child(Some(current))
                 .into_element();
         }
@@ -515,16 +514,15 @@ macro_rules! container {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_core::render::RenderBoxExt;
-    use flui_rendering::RenderEmpty;
+    use flui_rendering::objects::RenderEmpty;
     use flui_types::Size;
 
     // Mock view for testing
     #[derive(Debug, Clone)]
     struct MockView;
 
-    impl StatelessView for MockView {
-        fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
+    impl IntoElement for MockView {
+        fn into_element(self) -> Element {
             RenderEmpty.leaf()
         }
     }

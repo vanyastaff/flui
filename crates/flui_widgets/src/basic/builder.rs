@@ -105,8 +105,8 @@ impl Builder {
 }
 
 // Implement View trait
-impl StatelessView for Builder {
-    fn build(self, ctx: &dyn BuildContext) -> impl IntoElement {
+impl IntoElement for Builder {
+    fn into_element(self) -> Element {
         // Call the builder function with the context
         (self.builder)(ctx)
     }

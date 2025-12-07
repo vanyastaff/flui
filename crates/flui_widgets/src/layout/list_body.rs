@@ -6,11 +6,10 @@
 
 use bon::Builder;
 use flui_core::element::Element;
-use flui_core::render::RenderBoxExt;
 use flui_core::view::{IntoElement, StatelessView};
 
 use flui_core::BuildContext;
-use flui_rendering::RenderListBody;
+use flui_rendering::objects::RenderListBody;
 use flui_types::Axis;
 
 /// A widget that arranges children in a simple list.
@@ -191,8 +190,8 @@ impl<S: State> ListBodyBuilder<S> {
 }
 
 // Implement View trait
-impl StatelessView for ListBody {
-    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
+impl IntoElement for ListBody {
+    fn into_element(self) -> Element {
         let mut render = RenderListBody::new(self.main_axis);
         render.set_spacing(self.spacing);
 

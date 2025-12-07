@@ -128,6 +128,9 @@ pub trait StatefulIntoView: StatefulView {
 
 impl<V: StatefulView> StatefulIntoView for V {}
 
+// NOTE: IntoElement → IntoView bridge is implemented in flui-element crate
+// to avoid circular dependency (flui-element already depends on flui-view)
+
 // ============================================================================
 // TESTS
 // ============================================================================

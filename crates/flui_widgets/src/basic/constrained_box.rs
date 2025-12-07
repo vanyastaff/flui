@@ -4,11 +4,10 @@
 //! Similar to Flutter's ConstrainedBox widget.
 
 use bon::Builder;
-use flui_core::render::RenderBoxExt;
 use flui_core::view::children::Child;
 use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
-use flui_rendering::RenderConstrainedBox;
+use flui_rendering::objects::RenderConstrainedBox;
 use flui_types::BoxConstraints;
 
 /// A widget that imposes additional constraints on its child.
@@ -131,8 +130,8 @@ impl<S: State> ConstrainedBoxBuilder<S> {
 }
 
 // Implement View for ConstrainedBox - New architecture
-impl StatelessView for ConstrainedBox {
-    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
+impl IntoElement for ConstrainedBox {
+    fn into_element(self) -> Element {
         let constraints = self.constraints.unwrap_or(BoxConstraints::UNCONSTRAINED);
         RenderConstrainedBox::new(constraints).maybe_child(self.child)
     }

@@ -118,8 +118,8 @@ impl LayoutBuilder {
 }
 
 // Implement View trait
-impl StatelessView for LayoutBuilder {
-    fn build(self, ctx: &dyn BuildContext) -> impl IntoElement {
+impl IntoElement for LayoutBuilder {
+    fn into_element(self) -> Element {
         // In a simplified implementation, we call the builder with unconstrained constraints
         // A full implementation would need a special RenderObject that rebuilds during layout
         let constraints = BoxConstraints::UNCONSTRAINED;

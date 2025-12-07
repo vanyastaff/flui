@@ -16,7 +16,7 @@
 use bon::Builder;
 use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
-use flui_rendering::RenderOffstage;
+use flui_rendering::objects::RenderOffstage;
 
 /// A widget that lays out its child as if it was in the tree, but without painting or hit testing.
 ///
@@ -163,7 +163,7 @@ impl<S: State> OffstageBuilder<S> {
 }
 
 // Implement View trait
-impl StatelessView for Offstage {
+impl IntoElement for Offstage {
     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoElement {
         (RenderOffstage::new(self.offstage), self.child)
     }

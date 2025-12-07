@@ -6,7 +6,7 @@
 use bon::Builder;
 use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
-use flui_rendering::RenderRepaintBoundary;
+use flui_rendering::objects::RenderRepaintBoundary;
 
 /// A widget that creates a repaint boundary.
 ///
@@ -136,7 +136,7 @@ impl<S: State> RepaintBoundaryBuilder<S> {
 }
 
 // Implement View trait
-impl StatelessView for RepaintBoundary {
+impl IntoElement for RepaintBoundary {
     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoElement {
         (RenderRepaintBoundary::new(), self.child)
     }

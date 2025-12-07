@@ -23,11 +23,10 @@
 //! ```
 
 use bon::Builder;
-use flui_core::render::RenderBoxExt;
 use flui_core::view::children::Child;
 use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
-use flui_rendering::RenderIgnorePointer;
+use flui_rendering::objects::RenderIgnorePointer;
 
 /// A widget that is invisible to pointer events.
 ///
@@ -244,8 +243,8 @@ mod tests {
 }
 
 // Implement View trait
-impl StatelessView for IgnorePointer {
-    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
+impl IntoElement for IgnorePointer {
+    fn into_element(self) -> Element {
         RenderIgnorePointer::new(self.ignoring).child_opt(self.child.into_inner())
     }
 }

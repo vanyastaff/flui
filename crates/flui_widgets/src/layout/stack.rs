@@ -30,11 +30,10 @@
 //! ```
 
 use bon::Builder;
-use flui_core::render::RenderBoxExt;
 use flui_core::view::children::Children;
 use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
-use flui_rendering::RenderStack;
+use flui_rendering::objects::RenderStack;
 use flui_types::layout::{Alignment, StackFit};
 
 /// A widget that positions its children relative to the edges of its box.
@@ -215,25 +214,6 @@ impl Stack {
         }
     }
 
-    /// Adds a child widget.
-    #[deprecated(note = "Use builder pattern with chainable .child() instead")]
-    pub fn add_child(&mut self, child: impl IntoElement) {
-        self.children.push(child);
-    }
-
-    /// Adds a child widget.
-    ///
-    /// Alias for `add_child()` for better ergonomics.
-    pub fn child(&mut self, child: impl IntoElement) {
-        self.children.push(child);
-    }
-
-    /// Sets the children widgets.
-    #[deprecated(note = "Use builder pattern with .children() instead")]
-    pub fn set_children(&mut self, children: impl Into<Children>) {
-        self.children = children.into();
-    }
-
     /// Validates Stack configuration.
     ///
     /// Currently always returns Ok, but may add validation in the future.
@@ -249,8 +229,8 @@ impl Default for Stack {
 }
 
 // Implement View for Stack - New architecture
-impl StatelessView for Stack {
-    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
+impl IntoElement for Stack {
+    fn into_element(self) -> Element {
         let mut render_stack = RenderStack::with_alignment(self.alignment);
         render_stack.fit = self.fit;
 
@@ -333,8 +313,7 @@ macro_rules! stack {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_core::render::RenderBoxExt;
-    use flui_rendering::RenderEmpty;
+    use flui_rendering::objects::RenderEmpty;
 
     // Mock view for testing
     #[derive()]
@@ -349,8 +328,8 @@ mod tests {
         }
     }
 
-    impl StatelessView for MockView {
-        fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
+    impl IntoElement for MockView {
+        fn into_element(self) -> Element {
             RenderEmpty.leaf()
         }
     }

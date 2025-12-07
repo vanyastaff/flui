@@ -27,11 +27,10 @@
 
 use bon::Builder;
 use flui_core::element::Element;
-use flui_core::render::RenderBoxExt;
 use flui_core::view::{IntoElement, StatelessView};
 
 use flui_core::BuildContext;
-use flui_rendering::{FlexItemMetadata, RenderFlexItem};
+use flui_rendering::objects::{FlexItemMetadata, RenderFlexItem};
 
 /// A widget that expands a child of a Row, Column, or Flex to fill available space.
 ///
@@ -238,8 +237,8 @@ impl Expanded {
 }
 
 // Implement View trait - Simplified API
-impl StatelessView for Expanded {
-    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
+impl IntoElement for Expanded {
+    fn into_element(self) -> Element {
         RenderFlexItem::new(FlexItemMetadata::expanded_with_flex(self.flex)).child(self.child)
     }
 }

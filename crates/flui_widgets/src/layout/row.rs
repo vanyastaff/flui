@@ -32,11 +32,10 @@
 //! ```
 
 use bon::Builder;
-use flui_core::render::RenderBoxExt;
 use flui_core::view::children::Children;
 use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
-use flui_rendering::RenderFlex;
+use flui_rendering::objects::RenderFlex;
 use flui_types::layout::{CrossAxisAlignment, MainAxisAlignment, MainAxisSize};
 
 use crate::SizedBox;
@@ -235,29 +234,6 @@ impl Row {
             .build()
     }
 
-    // ========================================================================
-    // Mutable API (Deprecated - use builder instead)
-    // ========================================================================
-
-    /// Adds a child widget to the row.
-    #[deprecated(note = "Use builder pattern with chainable .child() instead")]
-    pub fn add_child(&mut self, child: impl IntoElement) {
-        self.children.push(child);
-    }
-
-    /// Adds a child widget to the row.
-    ///
-    /// Alias for `add_child()` for better ergonomics.
-    pub fn child(&mut self, child: impl IntoElement) {
-        self.children.push(child);
-    }
-
-    /// Sets all children at once.
-    #[deprecated(note = "Use builder pattern with .children() instead")]
-    pub fn set_children(&mut self, children: impl Into<Children>) {
-        self.children = children.into();
-    }
-
     /// Validates row configuration.
     pub fn validate(&self) -> Result<(), String> {
         // No specific validation needed for Row
@@ -273,8 +249,8 @@ impl Default for Row {
 }
 
 // Implement View for Row - New architecture
-impl StatelessView for Row {
-    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
+impl IntoElement for Row {
+    fn into_element(self) -> Element {
         let render_flex = RenderFlex::row()
             .with_main_axis_alignment(self.main_axis_alignment)
             .with_cross_axis_alignment(self.cross_axis_alignment)
@@ -324,7 +300,7 @@ macro_rules! row {
     // With children only (using bracket syntax like vec!)
     [$($child:expr),* $(,)?] => {
         $crate::Row::builder()
-            .children(vec![$(Box::new($child) as Box<dyn $crate::>),*])
+            .children(vec![$($child.into_element()),*])
             .build()
     };
 
@@ -339,7 +315,7 @@ macro_rules! row {
     {$($field:ident : $value:expr),+ ; [$($child:expr),* $(,)?]} => {
         $crate::Row::builder()
             $(.$field($value))+
-            .children(vec![$(Box::new($child) as Box<dyn $crate::>),*])
+            .children(vec![$($child.into_element()),*])
             .build()
     };
 }
@@ -347,15 +323,14 @@ macro_rules! row {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_core::render::RenderBoxExt;
-    use flui_rendering::RenderEmpty;
+    use flui_rendering::objects::RenderEmpty;
 
     // Mock view for testing
     #[derive(Clone)]
     struct MockView;
 
-    impl StatelessView for MockView {
-        fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
+    impl IntoElement for MockView {
+        fn into_element(self) -> Element {
             RenderEmpty.leaf()
         }
     }
@@ -413,23 +388,6 @@ mod tests {
     fn test_row_builder_children() {
         let row = Row::builder().children(vec![MockView, MockView]).build();
 
-        assert_eq!(row.children.len(), 2);
-    }
-
-    #[test]
-    #[allow(deprecated)]
-    fn test_row_add_child() {
-        let mut row = Row::new();
-        row.add_child(MockView);
-        row.add_child(MockView);
-        assert_eq!(row.children.len(), 2);
-    }
-
-    #[test]
-    #[allow(deprecated)]
-    fn test_row_set_children() {
-        let mut row = Row::new();
-        row.set_children(vec![MockView, MockView]);
         assert_eq!(row.children.len(), 2);
     }
 

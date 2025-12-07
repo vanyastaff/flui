@@ -29,11 +29,10 @@
 //! ```
 
 use bon::Builder;
-use flui_core::render::RenderBoxExt;
 use flui_core::view::children::Child;
 use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
-use flui_rendering::RenderAspectRatio;
+use flui_rendering::objects::RenderAspectRatio;
 
 /// A widget that sizes its child to a specific aspect ratio.
 ///
@@ -210,8 +209,8 @@ impl Default for AspectRatio {
 }
 
 // Implement View for AspectRatio - New architecture
-impl StatelessView for AspectRatio {
-    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
+impl IntoElement for AspectRatio {
+    fn into_element(self) -> Element {
         RenderAspectRatio::new(self.aspect_ratio).child_opt(self.child)
     }
 }

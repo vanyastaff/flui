@@ -5,15 +5,15 @@
 
 use bon::Builder;
 use flui_core::element::Element;
-use flui_core::render::RenderBoxExt;
 use flui_core::BuildContext;
 
 use flui_core::view::children::Children;
 use flui_core::view::{IntoElement, StatelessView};
-use flui_rendering::{RenderWrap, WrapAlignment, WrapCrossAlignment};
+use flui_rendering::objects::RenderWrap;
+use flui_types::layout::{WrapAlignment, WrapCrossAlignment};
 use flui_types::Axis;
 
-pub use flui_rendering::{
+pub use flui_types::layout::{
     WrapAlignment as WrapAlignmentExport, WrapCrossAlignment as WrapCrossAlignmentExport,
 };
 
@@ -218,8 +218,8 @@ impl Default for Wrap {
 }
 
 // Implement View for Wrap - New architecture
-impl StatelessView for Wrap {
-    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
+impl IntoElement for Wrap {
+    fn into_element(self) -> Element {
         let mut render_wrap = RenderWrap::new(self.direction);
         render_wrap.alignment = self.alignment;
         render_wrap.spacing = self.spacing;
@@ -240,7 +240,7 @@ where
 {
     /// Sets the children widgets (works in builder chain).
     pub fn children(self, children: impl Into<Children>) -> WrapBuilder<SetChildren<S>> {
-        self.children_internal(children.into().into_inner())
+        self.children_internal(children.into())
     }
 }
 
@@ -255,15 +255,14 @@ impl<S: State> WrapBuilder<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_core::render::RenderBoxExt;
-    use flui_rendering::RenderEmpty;
+    use flui_rendering::objects::RenderEmpty;
 
     // Mock view for testing
     #[derive()]
     struct MockView;
 
-    impl StatelessView for MockView {
-        fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
+    impl IntoElement for MockView {
+        fn into_element(self) -> Element {
             RenderEmpty.leaf()
         }
     }

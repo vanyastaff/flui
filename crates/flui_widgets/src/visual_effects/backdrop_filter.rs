@@ -6,7 +6,7 @@
 use bon::Builder;
 use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
-use flui_rendering::RenderBackdropFilter;
+use flui_rendering::objects::RenderBackdropFilter;
 use flui_types::painting::{BlendMode, ImageFilter};
 
 /// A widget that applies an image filter to the backdrop.
@@ -211,7 +211,7 @@ impl<S: State> BackdropFilterBuilder<S> {
 }
 
 // Implement View trait
-impl StatelessView for BackdropFilter {
+impl IntoElement for BackdropFilter {
     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoElement {
         // Create RenderBackdropFilter with custom properties
         let mut render = RenderBackdropFilter::new(self.filter.clone());

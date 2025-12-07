@@ -111,8 +111,8 @@ impl Scrollable {
     }
 }
 
-impl StatelessView for Scrollable {
-    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
+impl IntoElement for Scrollable {
+    fn into_element(self) -> Element {
         // TODO: Implement gesture detection and physics
         // For now, just pass through to child (Viewport)
         // In full implementation:

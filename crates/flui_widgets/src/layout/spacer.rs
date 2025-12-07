@@ -29,7 +29,7 @@ use bon::Builder;
 use flui_core::view::{IntoElement, StatelessView};
 
 use flui_core::BuildContext;
-use flui_rendering::{FlexItemMetadata, RenderFlexItem};
+use flui_rendering::objects::{FlexItemMetadata, RenderFlexItem};
 
 /// A widget that creates flexible empty space in a Row, Column, or Flex.
 ///
@@ -220,12 +220,11 @@ impl Default for Spacer {
 }
 
 // Implement View trait - Simplified API
-impl StatelessView for Spacer {
-    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
+impl IntoElement for Spacer {
+    fn into_element(self) -> Element {
         // Build zero-sized SizedBox as child
         let sized_box = crate::SizedBox::builder().width(0.0).height(0.0).build();
 
-        use flui_core::render::RenderBoxExt;
         RenderFlexItem::new(FlexItemMetadata::expanded_with_flex(self.flex))
             .child(sized_box.into_element())
     }

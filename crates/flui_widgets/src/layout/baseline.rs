@@ -5,10 +5,9 @@
 
 use bon::Builder;
 use flui_core::element::Element;
-use flui_core::render::RenderBoxExt;
 use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
-use flui_rendering::RenderBaseline;
+use flui_rendering::objects::RenderBaseline;
 use flui_types::typography::TextBaseline;
 
 /// A widget that positions its child according to the child's baseline.
@@ -176,8 +175,8 @@ impl Default for Baseline {
 }
 
 // Implement View for Baseline - New architecture
-impl StatelessView for Baseline {
-    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
+impl IntoElement for Baseline {
+    fn into_element(self) -> Element {
         let baseline = self.baseline.unwrap_or(0.0);
 
         RenderBaseline::new(baseline, self.baseline_type).child_opt(self.child)
@@ -227,15 +226,14 @@ impl<S: State> BaselineBuilder<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_core::render::RenderBoxExt;
-    use flui_rendering::RenderEmpty;
+    use flui_rendering::objects::RenderEmpty;
 
     // Mock view for testing
     #[derive()]
     struct MockView;
 
-    impl StatelessView for MockView {
-        fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
+    impl IntoElement for MockView {
+        fn into_element(self) -> Element {
             RenderEmpty.leaf()
         }
     }

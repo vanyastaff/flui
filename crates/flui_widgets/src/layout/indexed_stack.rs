@@ -31,12 +31,11 @@
 
 use bon::Builder;
 use flui_core::element::Element;
-use flui_core::render::RenderBoxExt;
 use flui_core::BuildContext;
 
 use flui_core::view::children::Children;
 use flui_core::view::{IntoElement, StatelessView};
-use flui_rendering::RenderIndexedStack;
+use flui_rendering::objects::RenderIndexedStack;
 use flui_types::layout::{Alignment, StackFit};
 
 /// A widget that shows only a single child from a list of children.
@@ -293,8 +292,8 @@ impl Default for IndexedStack {
 }
 
 // Implement View for IndexedStack - New architecture
-impl StatelessView for IndexedStack {
-    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
+impl IntoElement for IndexedStack {
+    fn into_element(self) -> Element {
         RenderIndexedStack::with_alignment(self.index, self.alignment).children(self.children)
     }
 }
@@ -371,10 +370,9 @@ macro_rules! indexed_stack {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_core::render::RenderBoxExt;
     use flui_core::testing::test_build_context;
     use flui_core::view::build_context::with_build_context;
-    use flui_rendering::RenderEmpty;
+    use flui_rendering::objects::RenderEmpty;
 
     // Mock view for testing
     #[derive()]
@@ -389,8 +387,8 @@ mod tests {
         }
     }
 
-    impl StatelessView for MockView {
-        fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
+    impl IntoElement for MockView {
+        fn into_element(self) -> Element {
             RenderEmpty.leaf()
         }
     }

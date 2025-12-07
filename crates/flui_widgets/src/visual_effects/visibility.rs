@@ -18,7 +18,7 @@
 use bon::Builder;
 use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
-use flui_rendering::RenderVisibility;
+use flui_rendering::objects::RenderVisibility;
 
 /// A widget that controls the visibility of its child.
 ///
@@ -310,7 +310,7 @@ impl<S: State> VisibilityBuilder<S> {
 }
 
 // Implement View trait
-impl StatelessView for Visibility {
+impl IntoElement for Visibility {
     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoElement {
         // Determine which child to show
         let child = if self.visible {
