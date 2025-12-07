@@ -14,7 +14,8 @@
 //!   ├─ depth: usize
 //!   ├─ lifecycle: ViewLifecycle
 //!   ├─ flags: AtomicViewFlags
-//!   ├─ view_object: Option<Box<dyn ViewObject>>
+//!   ├─ view_id: Option<ViewId> (reference into ViewTree - new architecture)
+//!   ├─ view_object: Option<Box<dyn ViewObject>> (legacy - will be deprecated)
 //!   ├─ view_mode: ViewMode
 //!   ├─ key: Option<Key>
 //!   └─ pending_children: Option<PendingChildren>
@@ -35,6 +36,7 @@ use flui_foundation::{ElementId, Key, Slot};
 
 use super::flags::{AtomicViewFlags, ViewFlags};
 use super::lifecycle::ViewLifecycle;
+use crate::tree::ViewId;
 use crate::view_mode::ViewMode;
 use crate::view_object::ViewObject;
 
@@ -83,7 +85,16 @@ pub struct ViewElement {
     flags: AtomicViewFlags,
 
     // ========== View ==========
-    /// Type-erased view object storage.
+    /// Reference into ViewTree (new four-tree architecture).
+    ///
+    /// This is the preferred way to reference ViewObjects. When set, the actual
+    /// ViewObject is stored in ViewTree, and this element just holds the ID.
+    view_id: Option<ViewId>,
+
+    /// Type-erased view object storage (legacy).
+    ///
+    /// This is kept for backward compatibility. New code should use ViewTree + view_id.
+    /// Eventually this will be deprecated once all code migrates to the new architecture.
     view_object: Option<Box<dyn ViewObject>>,
 
     /// View mode - categorizes the view type.
@@ -137,6 +148,7 @@ impl ViewElement {
             depth: AtomicUsize::new(0),
             lifecycle: ViewLifecycle::Initial,
             flags,
+            view_id: None,
             view_object: Some(Box::new(view_object)),
             view_mode: mode,
             key: None,
@@ -155,6 +167,7 @@ impl ViewElement {
             depth: AtomicUsize::new(0),
             lifecycle: ViewLifecycle::Initial,
             flags: AtomicViewFlags::new(),
+            view_id: None,
             view_object: None,
             view_mode: ViewMode::Empty,
             key: None,
@@ -174,6 +187,7 @@ impl ViewElement {
             depth: AtomicUsize::new(0),
             lifecycle: ViewLifecycle::Initial,
             flags: AtomicViewFlags::new(),
+            view_id: None,
             view_object: None,
             view_mode: ViewMode::Empty,
             key: None,
@@ -422,11 +436,44 @@ impl ViewElement {
 }
 
 // ============================================================================
-// VIEW OBJECT ACCESS
+// VIEW ID ACCESS (New Four-Tree Architecture)
+// ============================================================================
+
+impl ViewElement {
+    /// Gets the ViewId reference into ViewTree.
+    ///
+    /// This is the preferred way to access the ViewObject in the new four-tree architecture.
+    /// The actual ViewObject is stored in ViewTree, and this element just holds the ID.
+    #[inline]
+    #[must_use]
+    pub fn view_id(&self) -> Option<ViewId> {
+        self.view_id
+    }
+
+    /// Sets the ViewId reference.
+    ///
+    /// This should be called when the ViewObject is inserted into ViewTree.
+    #[inline]
+    pub fn set_view_id(&mut self, view_id: Option<ViewId>) {
+        self.view_id = view_id;
+    }
+
+    /// Returns true if this element has a ViewId reference.
+    #[inline]
+    #[must_use]
+    pub fn has_view_id(&self) -> bool {
+        self.view_id.is_some()
+    }
+}
+
+// ============================================================================
+// VIEW OBJECT ACCESS (Legacy - will be deprecated)
 // ============================================================================
 
 impl ViewElement {
     /// Returns true if this element has a view object.
+    ///
+    /// **Legacy**: Prefer using `has_view_id()` with ViewTree in new code.
     #[inline]
     #[must_use]
     pub fn has_view_object(&self) -> bool {
