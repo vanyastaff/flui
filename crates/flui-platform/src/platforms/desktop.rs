@@ -21,6 +21,7 @@ use std::sync::{atomic::AtomicBool, Arc};
 use winit::{
     event::{ElementState, MouseButton, WindowEvent},
     event_loop::ActiveEventLoop,
+    keyboard::ModifiersState,
     window::{CursorIcon, Window},
 };
 
@@ -65,6 +66,9 @@ pub struct DesktopEmbedder {
 
     /// Platform capabilities
     capabilities: DesktopCapabilities,
+
+    /// Current keyboard modifiers state
+    modifiers: ModifiersState,
 }
 
 impl DesktopEmbedder {
@@ -116,6 +120,7 @@ impl DesktopEmbedder {
             window: WinitWindow::new(window),
             renderer,
             capabilities: DesktopCapabilities,
+            modifiers: ModifiersState::empty(),
         })
     }
 
@@ -162,6 +167,18 @@ impl DesktopEmbedder {
                     convert_mouse_button(button),
                     state == ElementState::Pressed,
                 );
+            }
+
+            WindowEvent::ModifiersChanged(new_modifiers) => {
+                self.modifiers = new_modifiers.state();
+            }
+
+            WindowEvent::KeyboardInput {
+                event: key_event, ..
+            } => {
+                // Convert winit keyboard event to FLUI event
+                let flui_event = crate::conversions::convert_key_event(&key_event, self.modifiers);
+                self.core.handle_key_event(flui_event);
             }
 
             _ => {

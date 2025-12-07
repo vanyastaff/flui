@@ -50,6 +50,7 @@
 //! ```
 
 pub mod bindings;
+pub mod conversions;
 pub mod core;
 pub mod platforms;
 pub mod traits;
@@ -63,6 +64,8 @@ pub use traits::{
 pub use core::{EmbedderCore, FrameCoordinator, PointerState, SceneCache};
 
 pub use bindings::{GestureBinding, SchedulerBinding};
+
+pub use conversions::{convert_key_event, convert_modifiers};
 
 // Platform-specific re-exports
 #[cfg(all(

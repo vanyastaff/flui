@@ -203,6 +203,17 @@ impl EmbedderCore {
         self.route_event(event);
     }
 
+    /// Handle keyboard event
+    ///
+    /// Routes keyboard event through focus system and interaction system.
+    pub fn handle_key_event(&mut self, key_event: flui_types::events::KeyEvent) {
+        tracing::trace!(?key_event, "Keyboard event");
+
+        // Wrap in Event enum and route
+        let event = Event::Key(key_event);
+        self.route_event(event);
+    }
+
     /// Route event through hit testing (SAFE)
     ///
     /// Uses InteractionBridge which eliminates unsafe code.
