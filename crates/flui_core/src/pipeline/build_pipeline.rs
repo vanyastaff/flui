@@ -726,8 +726,11 @@ impl BuildPipeline {
                     );
 
                     // Create context for did_update() lifecycle hook
-                    let ctx =
-                        PipelineBuildContext::new(old_id, tree_arc.clone(), dirty_set.clone());
+                    let ctx = PipelineBuildContext::with_tree(
+                        old_id,
+                        tree_arc.clone(),
+                        dirty_set.clone(),
+                    );
 
                     Self::update_element(tree_guard, old_id, new_element, &ctx);
                     // Element ID stays the same, no parent reference update needed
@@ -743,7 +746,7 @@ impl BuildPipeline {
                     // Lifecycle: Call dispose() on old element before removing
                     if let Some(old_elem) = tree_guard.get_mut(old_id) {
                         if let Some(vo) = old_elem.view_object_mut() {
-                            let ctx = PipelineBuildContext::new(
+                            let ctx = PipelineBuildContext::with_tree(
                                 old_id,
                                 tree_arc.clone(),
                                 dirty_set.clone(),
@@ -758,7 +761,7 @@ impl BuildPipeline {
                     // Lifecycle: Call init() on new element
                     if let Some(new_elem) = tree_guard.get_mut(new_id) {
                         if let Some(vo) = new_elem.view_object_mut() {
-                            let ctx = PipelineBuildContext::new(
+                            let ctx = PipelineBuildContext::with_tree(
                                 new_id,
                                 tree_arc.clone(),
                                 dirty_set.clone(),
@@ -779,8 +782,11 @@ impl BuildPipeline {
                 // Lifecycle: Call init() on new element
                 if let Some(new_elem) = tree_guard.get_mut(new_id) {
                     if let Some(vo) = new_elem.view_object_mut() {
-                        let ctx =
-                            PipelineBuildContext::new(new_id, tree_arc.clone(), dirty_set.clone());
+                        let ctx = PipelineBuildContext::with_tree(
+                            new_id,
+                            tree_arc.clone(),
+                            dirty_set.clone(),
+                        );
                         vo.init(&ctx);
                     }
                 }
@@ -793,8 +799,11 @@ impl BuildPipeline {
                 // Lifecycle: Call dispose() on old element before removing
                 if let Some(old_elem) = tree_guard.get_mut(old_id) {
                     if let Some(vo) = old_elem.view_object_mut() {
-                        let ctx =
-                            PipelineBuildContext::new(old_id, tree_arc.clone(), dirty_set.clone());
+                        let ctx = PipelineBuildContext::with_tree(
+                            old_id,
+                            tree_arc.clone(),
+                            dirty_set.clone(),
+                        );
                         vo.dispose(&ctx);
                     }
                 }
@@ -846,7 +855,7 @@ impl BuildPipeline {
         };
 
         // Stage 2: Create context and build new child element
-        let ctx = PipelineBuildContext::new(element_id, tree.clone(), self.dirty_set.clone());
+        let ctx = PipelineBuildContext::with_tree(element_id, tree.clone(), self.dirty_set.clone());
 
         let new_element = {
             let mut tree_guard = tree.write();
