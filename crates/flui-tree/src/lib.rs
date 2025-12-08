@@ -127,8 +127,8 @@ pub use arity::{
 // ============================================================================
 
 pub use iter::{
-    Ancestors, AncestorsWithDepth, BreadthFirstIter, DepthFirstIter, DepthFirstOrder, Descendants,
-    DescendantsWithDepth, Siblings, SiblingsDirection,
+    AllSiblings, Ancestors, AncestorsWithDepth, BreadthFirstIter, DepthFirstIter, DepthFirstOrder,
+    Descendants, DescendantsWithDepth, Siblings, SiblingsDirection,
 };
 
 // ============================================================================

@@ -4,7 +4,7 @@
 //! enabling generic tree algorithms and visitors to work with LayerTree.
 
 use flui_foundation::LayerId;
-use flui_tree::iter::{Ancestors, DescendantsWithDepth};
+use flui_tree::iter::{AllSiblings, Ancestors, DescendantsWithDepth};
 use flui_tree::{TreeNav, TreeRead};
 
 use super::layer_tree::{LayerNode, LayerTree};
@@ -37,7 +37,7 @@ impl TreeRead<LayerId> for LayerTree {
 
     #[inline]
     fn node_ids(&self) -> Self::NodeIter<'_> {
-        LayerIdIter::new(self)
+        self.iter_slab().map(slab_index_to_layer_id)
     }
 }
 
@@ -49,7 +49,7 @@ impl TreeNav<LayerId> for LayerTree {
     type ChildrenIter<'a> = ChildrenIter<'a>;
     type AncestorsIter<'a> = Ancestors<'a, LayerId, Self>;
     type DescendantsIter<'a> = DescendantsWithDepth<'a, LayerId, Self>;
-    type SiblingsIter<'a> = SiblingsIter<'a>;
+    type SiblingsIter<'a> = AllSiblings<'a, LayerId, Self>;
 
     const MAX_DEPTH: usize = 32;
     const AVG_CHILDREN: usize = 4;
@@ -76,7 +76,7 @@ impl TreeNav<LayerId> for LayerTree {
 
     #[inline]
     fn siblings(&self, id: LayerId) -> Self::SiblingsIter<'_> {
-        SiblingsIter::new(self, id)
+        AllSiblings::new(self, id)
     }
 
     #[inline]
@@ -93,48 +93,20 @@ impl TreeNav<LayerId> for LayerTree {
 }
 
 // ============================================================================
-// CUSTOM ITERATORS
+// TYPE ALIASES FOR ITERATORS
 // ============================================================================
 
-/// Iterator over all LayerIds in the tree.
-pub struct LayerIdIter<'a> {
-    ids: Vec<LayerId>,
-    index: usize,
-    _marker: std::marker::PhantomData<&'a ()>,
+/// Zero-cost iterator over all LayerIds in the tree.
+///
+/// Uses `fn` pointer instead of closure for named type.
+pub type LayerIdIter<'a> =
+    std::iter::Map<slab::Iter<'a, LayerNode>, fn((usize, &LayerNode)) -> LayerId>;
+
+/// Converts slab index to LayerId (fn pointer for type alias).
+#[inline]
+fn slab_index_to_layer_id((index, _): (usize, &LayerNode)) -> LayerId {
+    LayerId::new(index + 1)
 }
-
-impl<'a> LayerIdIter<'a> {
-    fn new(tree: &'a LayerTree) -> Self {
-        // Collect all IDs upfront - simple and safe
-        let ids: Vec<LayerId> = tree.layer_ids().collect();
-        Self {
-            ids,
-            index: 0,
-            _marker: std::marker::PhantomData,
-        }
-    }
-}
-
-impl<'a> Iterator for LayerIdIter<'a> {
-    type Item = LayerId;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.index < self.ids.len() {
-            let id = self.ids[self.index];
-            self.index += 1;
-            Some(id)
-        } else {
-            None
-        }
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let remaining = self.ids.len().saturating_sub(self.index);
-        (remaining, Some(remaining))
-    }
-}
-
-impl ExactSizeIterator for LayerIdIter<'_> {}
 
 /// Iterator over children of a layer node.
 pub struct ChildrenIter<'a> {
@@ -175,45 +147,6 @@ impl<'a> Iterator for ChildrenIter<'a> {
 }
 
 impl ExactSizeIterator for ChildrenIter<'_> {}
-
-/// Iterator over siblings of a layer node.
-pub struct SiblingsIter<'a> {
-    tree: &'a LayerTree,
-    children: Option<&'a [LayerId]>,
-    index: usize,
-    exclude_id: LayerId,
-}
-
-impl<'a> SiblingsIter<'a> {
-    fn new(tree: &'a LayerTree, id: LayerId) -> Self {
-        let children = tree
-            .parent(id)
-            .and_then(|parent_id| tree.children(parent_id));
-
-        Self {
-            tree,
-            children,
-            index: 0,
-            exclude_id: id,
-        }
-    }
-}
-
-impl<'a> Iterator for SiblingsIter<'a> {
-    type Item = LayerId;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let children = self.children?;
-        while self.index < children.len() {
-            let id = children[self.index];
-            self.index += 1;
-            if id != self.exclude_id {
-                return Some(id);
-            }
-        }
-        None
-    }
-}
 
 // ============================================================================
 // TESTS

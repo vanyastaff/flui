@@ -394,6 +394,14 @@ impl LayerTree {
         self.nodes.iter().map(|(index, _)| LayerId::new(index + 1))
     }
 
+    /// Returns the raw slab iterator for zero-cost iteration.
+    ///
+    /// Used internally by tree trait implementations.
+    #[inline]
+    pub(crate) fn iter_slab(&self) -> slab::Iter<'_, LayerNode> {
+        self.nodes.iter()
+    }
+
     /// Returns an iterator over all (LayerId, &LayerNode) pairs.
     pub fn iter(&self) -> impl Iterator<Item = (LayerId, &LayerNode)> + '_ {
         self.nodes
