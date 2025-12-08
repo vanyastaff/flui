@@ -1,140 +1,171 @@
 //! Error types for tree operations.
 //!
-//! This module provides error types for tree operations that can fail,
+//! This module provides error types for generic tree operations that can fail,
 //! such as accessing non-existent nodes or detecting cycles.
+//!
+//! # Design Philosophy
+//!
+//! `flui-tree` provides ONLY generic tree errors. Domain-specific errors
+//! should be defined in their respective crates:
+//!
+//! - **flui_rendering**: `RenderError`, `LayoutError`, `PaintError`
+//! - **flui-element**: `ElementError`, `LifecycleError`
+//! - **flui-view**: `ViewError`, `BuildError`
+//!
+//! # Error Categories
+//!
+//! - **Structural errors**: `CycleDetected`, `InvalidParent`
+//! - **Lookup errors**: `NotFound`, `AlreadyExists`
+//! - **Constraint errors**: `MaxDepthExceeded`, `EmptyTree`
+//! - **Runtime errors**: `ConcurrentModification`, `Internal`
 
-use flui_foundation::ElementId;
+use flui_foundation::TreeId;
 use thiserror::Error;
 
 /// Result type for tree operations.
-pub type TreeResult<T> = Result<T, TreeError>;
+///
+/// Uses `ElementId` as the default ID type for backward compatibility.
+pub type TreeResult<T, Id = flui_foundation::ElementId> = Result<T, TreeError<Id>>;
 
-/// Errors that can occur during tree operations.
+/// Errors that can occur during generic tree operations.
+///
+/// This enum covers errors that apply to any tree structure,
+/// regardless of the specific domain (UI, rendering, etc.).
+///
+/// Generic over `Id` type to support any tree ID type (ElementId, RenderId, etc.).
+///
+/// # Non-exhaustive
+///
+/// This enum is marked `#[non_exhaustive]` to allow adding new
+/// error variants in future versions without breaking changes.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 #[non_exhaustive]
-pub enum TreeError {
+pub enum TreeError<Id: TreeId> {
     /// Element not found in tree.
+    ///
+    /// Returned when attempting to access, modify, or navigate
+    /// to an element that doesn't exist in the tree.
     #[error("element {0} not found in tree")]
-    NotFound(ElementId),
+    NotFound(Id),
 
     /// Element already exists in tree.
+    ///
+    /// Returned when attempting to insert an element with an ID
+    /// that's already present in the tree.
     #[error("element {0} already exists in tree")]
-    AlreadyExists(ElementId),
+    AlreadyExists(Id),
 
     /// Invalid parent reference.
+    ///
+    /// Returned when attempting to set a parent that would violate
+    /// tree invariants (e.g., parent doesn't exist).
     #[error("invalid parent {parent} for element {child}")]
     InvalidParent {
         /// The child element ID.
-        child: ElementId,
+        child: Id,
         /// The invalid parent ID.
-        parent: ElementId,
+        parent: Id,
     },
 
     /// Cycle detected in tree structure.
+    ///
+    /// Returned when an operation would create a cycle in the tree,
+    /// which would violate the fundamental tree invariant.
     #[error("cycle detected: {0} would create a cycle")]
-    CycleDetected(ElementId),
+    CycleDetected(Id),
 
     /// Maximum tree depth exceeded.
+    ///
+    /// Returned when traversal exceeds the configured maximum depth,
+    /// which may indicate infinite recursion or a corrupted structure.
     #[error("maximum tree depth {max} exceeded at element {element}")]
     MaxDepthExceeded {
         /// The element that exceeded depth.
-        element: ElementId,
+        element: Id,
         /// The maximum allowed depth.
         max: usize,
     },
 
     /// Tree is empty (no root).
+    ///
+    /// Returned when an operation requires a non-empty tree
+    /// but the tree has no elements.
     #[error("tree is empty")]
     EmptyTree,
 
-    /// Operation not supported for element type.
+    /// Operation not supported for this tree type.
+    ///
+    /// Returned when an operation is not implemented or not
+    /// applicable for the specific tree implementation.
     #[error("operation not supported for element {0}: {1}")]
-    NotSupported(ElementId, &'static str),
-
-    /// Element is not a render element.
-    #[error("element {0} is not a render element")]
-    NotRenderElement(ElementId),
-
-    /// Layout error during tree traversal.
-    #[error("layout error at element {element}: {message}")]
-    LayoutError {
-        /// The element where layout failed.
-        element: ElementId,
-        /// Error message.
-        message: String,
-    },
-
-    /// Paint error during tree traversal.
-    #[error("paint error at element {element}: {message}")]
-    PaintError {
-        /// The element where paint failed.
-        element: ElementId,
-        /// Error message.
-        message: String,
-    },
+    NotSupported(Id, &'static str),
 
     /// Concurrent modification detected.
+    ///
+    /// Returned when a traversal detects that the tree was
+    /// modified during iteration, which could lead to undefined behavior.
     #[error("concurrent modification detected during traversal")]
     ConcurrentModification,
 
     /// Internal error (should not happen).
+    ///
+    /// Indicates a bug in the tree implementation. If you encounter
+    /// this error, please report it as a bug.
     #[error("internal error: {0}")]
     Internal(String),
 }
 
-impl TreeError {
+impl<Id: TreeId> TreeError<Id> {
+    // ========================================================================
+    // CONSTRUCTORS
+    // ========================================================================
+
     /// Creates a `NotFound` error.
     #[inline]
-    pub fn not_found(id: ElementId) -> Self {
+    pub const fn not_found(id: Id) -> Self {
         Self::NotFound(id)
     }
 
     /// Creates an `AlreadyExists` error.
     #[inline]
-    pub fn already_exists(id: ElementId) -> Self {
+    pub const fn already_exists(id: Id) -> Self {
         Self::AlreadyExists(id)
     }
 
     /// Creates an `InvalidParent` error.
     #[inline]
-    pub fn invalid_parent(child: ElementId, parent: ElementId) -> Self {
+    pub const fn invalid_parent(child: Id, parent: Id) -> Self {
         Self::InvalidParent { child, parent }
     }
 
     /// Creates a `CycleDetected` error.
     #[inline]
-    pub fn cycle_detected(id: ElementId) -> Self {
+    pub const fn cycle_detected(id: Id) -> Self {
         Self::CycleDetected(id)
     }
 
     /// Creates a `MaxDepthExceeded` error.
     #[inline]
-    pub fn max_depth_exceeded(element: ElementId, max: usize) -> Self {
+    pub const fn max_depth_exceeded(element: Id, max: usize) -> Self {
         Self::MaxDepthExceeded { element, max }
     }
 
-    /// Creates a `NotRenderElement` error.
+    /// Creates an `EmptyTree` error.
     #[inline]
-    pub fn not_render_element(id: ElementId) -> Self {
-        Self::NotRenderElement(id)
+    pub const fn empty_tree() -> Self {
+        Self::EmptyTree
     }
 
-    /// Creates a `LayoutError`.
+    /// Creates a `NotSupported` error.
     #[inline]
-    pub fn layout_error(element: ElementId, message: impl Into<String>) -> Self {
-        Self::LayoutError {
-            element,
-            message: message.into(),
-        }
+    pub const fn not_supported(id: Id, reason: &'static str) -> Self {
+        Self::NotSupported(id, reason)
     }
 
-    /// Creates a `PaintError`.
+    /// Creates a `ConcurrentModification` error.
     #[inline]
-    pub fn paint_error(element: ElementId, message: impl Into<String>) -> Self {
-        Self::PaintError {
-            element,
-            message: message.into(),
-        }
+    pub const fn concurrent_modification() -> Self {
+        Self::ConcurrentModification
     }
 
     /// Creates an `Internal` error.
@@ -143,19 +174,24 @@ impl TreeError {
         Self::Internal(message.into())
     }
 
+    // ========================================================================
+    // ERROR CLASSIFICATION
+    // ========================================================================
+
     /// Returns the element ID associated with this error, if any.
-    pub fn element_id(&self) -> Option<ElementId> {
+    ///
+    /// Most tree errors are associated with a specific element.
+    /// This method extracts that element ID for logging, debugging,
+    /// or error recovery purposes.
+    pub const fn element_id(&self) -> Option<Id> {
         match self {
             Self::NotFound(id)
             | Self::AlreadyExists(id)
             | Self::CycleDetected(id)
-            | Self::NotRenderElement(id)
             | Self::NotSupported(id, _) => Some(*id),
 
             Self::InvalidParent { child, .. } => Some(*child),
-            Self::MaxDepthExceeded { element, .. }
-            | Self::LayoutError { element, .. }
-            | Self::PaintError { element, .. } => Some(*element),
+            Self::MaxDepthExceeded { element, .. } => Some(*element),
 
             Self::EmptyTree | Self::ConcurrentModification | Self::Internal(_) => None,
         }
@@ -164,12 +200,47 @@ impl TreeError {
     /// Returns `true` if this is a recoverable error.
     ///
     /// Recoverable errors are those that don't indicate corruption
-    /// or fundamental issues with the tree structure.
-    pub fn is_recoverable(&self) -> bool {
+    /// or fundamental issues with the tree structure. They typically
+    /// represent expected failure cases that can be handled gracefully.
+    ///
+    /// # Recoverable Errors
+    ///
+    /// - `NotFound` - Element doesn't exist (expected in some workflows)
+    /// - `NotSupported` - Operation not available (can use alternative)
+    ///
+    /// # Non-Recoverable Errors
+    ///
+    /// - `CycleDetected` - Tree invariant violated
+    /// - `ConcurrentModification` - Data race detected
+    /// - `Internal` - Implementation bug
+    pub const fn is_recoverable(&self) -> bool {
+        matches!(self, Self::NotFound(_) | Self::NotSupported(_, _))
+    }
+
+    /// Returns `true` if this error indicates a structural problem.
+    ///
+    /// Structural errors indicate that the tree's fundamental invariants
+    /// may be violated, requiring careful recovery or reconstruction.
+    pub const fn is_structural(&self) -> bool {
         matches!(
             self,
-            Self::NotFound(_) | Self::NotRenderElement(_) | Self::NotSupported(_, _)
+            Self::CycleDetected(_) | Self::InvalidParent { .. } | Self::ConcurrentModification
         )
+    }
+
+    /// Returns `true` if this error indicates a lookup failure.
+    ///
+    /// Lookup errors are typically benign and indicate that an
+    /// element simply doesn't exist in the tree.
+    pub const fn is_lookup_error(&self) -> bool {
+        matches!(self, Self::NotFound(_) | Self::AlreadyExists(_))
+    }
+
+    /// Returns `true` if this error indicates an internal bug.
+    ///
+    /// If this returns `true`, please report the error as a bug.
+    pub const fn is_internal(&self) -> bool {
+        matches!(self, Self::Internal(_))
     }
 }
 
@@ -180,34 +251,115 @@ impl TreeError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_foundation::ElementId;
 
     #[test]
     fn test_error_display() {
         let id = ElementId::new(42);
 
-        let err = TreeError::not_found(id);
+        let err: TreeError<ElementId> = TreeError::not_found(id);
         assert!(err.to_string().contains("42"));
         assert!(err.to_string().contains("not found"));
 
-        let err = TreeError::cycle_detected(id);
+        let err: TreeError<ElementId> = TreeError::cycle_detected(id);
         assert!(err.to_string().contains("cycle"));
+
+        let err: TreeError<ElementId> = TreeError::max_depth_exceeded(id, 100);
+        assert!(err.to_string().contains("100"));
+        assert!(err.to_string().contains("depth"));
     }
 
     #[test]
     fn test_element_id_extraction() {
         let id = ElementId::new(42);
+        let parent = ElementId::new(1);
 
         assert_eq!(TreeError::not_found(id).element_id(), Some(id));
-        assert_eq!(TreeError::EmptyTree.element_id(), None);
+        assert_eq!(TreeError::already_exists(id).element_id(), Some(id));
+        assert_eq!(TreeError::cycle_detected(id).element_id(), Some(id));
+        assert_eq!(TreeError::invalid_parent(id, parent).element_id(), Some(id));
+        assert_eq!(
+            TreeError::max_depth_exceeded(id, 100).element_id(),
+            Some(id)
+        );
+        assert_eq!(TreeError::<ElementId>::empty_tree().element_id(), None);
+        assert_eq!(
+            TreeError::<ElementId>::concurrent_modification().element_id(),
+            None
+        );
+        assert_eq!(TreeError::<ElementId>::internal("bug").element_id(), None);
     }
 
     #[test]
     fn test_is_recoverable() {
         let id = ElementId::new(1);
 
+        // Recoverable errors
         assert!(TreeError::not_found(id).is_recoverable());
-        assert!(TreeError::not_render_element(id).is_recoverable());
+        assert!(TreeError::not_supported(id, "test").is_recoverable());
+
+        // Non-recoverable errors
         assert!(!TreeError::cycle_detected(id).is_recoverable());
-        assert!(!TreeError::EmptyTree.is_recoverable());
+        assert!(!TreeError::<ElementId>::empty_tree().is_recoverable());
+        assert!(!TreeError::<ElementId>::concurrent_modification().is_recoverable());
+        assert!(!TreeError::<ElementId>::internal("bug").is_recoverable());
+    }
+
+    #[test]
+    fn test_is_structural() {
+        let id = ElementId::new(1);
+        let parent = ElementId::new(2);
+
+        // Structural errors
+        assert!(TreeError::cycle_detected(id).is_structural());
+        assert!(TreeError::invalid_parent(id, parent).is_structural());
+        assert!(TreeError::<ElementId>::concurrent_modification().is_structural());
+
+        // Non-structural errors
+        assert!(!TreeError::not_found(id).is_structural());
+        assert!(!TreeError::<ElementId>::empty_tree().is_structural());
+    }
+
+    #[test]
+    fn test_is_lookup_error() {
+        let id = ElementId::new(1);
+
+        // Lookup errors
+        assert!(TreeError::not_found(id).is_lookup_error());
+        assert!(TreeError::already_exists(id).is_lookup_error());
+
+        // Non-lookup errors
+        assert!(!TreeError::cycle_detected(id).is_lookup_error());
+        assert!(!TreeError::<ElementId>::empty_tree().is_lookup_error());
+    }
+
+    #[test]
+    fn test_is_internal() {
+        let id = ElementId::new(1);
+
+        assert!(TreeError::<ElementId>::internal("bug").is_internal());
+        assert!(!TreeError::not_found(id).is_internal());
+        assert!(!TreeError::<ElementId>::empty_tree().is_internal());
+    }
+
+    #[test]
+    fn test_const_constructors() {
+        let id = ElementId::new(1);
+        let parent = ElementId::new(2);
+
+        let not_found: TreeError<ElementId> = TreeError::not_found(id);
+        let already_exists: TreeError<ElementId> = TreeError::already_exists(id);
+        let invalid_parent: TreeError<ElementId> = TreeError::invalid_parent(id, parent);
+        let cycle: TreeError<ElementId> = TreeError::cycle_detected(id);
+        let max_depth: TreeError<ElementId> = TreeError::max_depth_exceeded(id, 100);
+        let not_supported: TreeError<ElementId> = TreeError::not_supported(id, "reason");
+
+        // Verify the errors were created correctly
+        assert!(matches!(not_found, TreeError::NotFound(_)));
+        assert!(matches!(already_exists, TreeError::AlreadyExists(_)));
+        assert!(matches!(invalid_parent, TreeError::InvalidParent { .. }));
+        assert!(matches!(cycle, TreeError::CycleDetected(_)));
+        assert!(matches!(max_depth, TreeError::MaxDepthExceeded { .. }));
+        assert!(matches!(not_supported, TreeError::NotSupported(_, _)));
     }
 }

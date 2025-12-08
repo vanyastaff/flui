@@ -155,7 +155,7 @@ pub mod error;
 // ============================================================================
 
 // Core types - IDs for all tree levels
-pub use id::{ElementId, LayerId, ListenerId, ObserverId, RenderId, SemanticsId, ViewId};
+pub use id::{ElementId, LayerId, ListenerId, ObserverId, RenderId, SemanticsId, TreeId, ViewId};
 pub use key::{GlobalKey, Key, KeyRef, Keyed, ObjectKey, UniqueKey, ValueKey, ViewKey, WithKey};
 pub use slot::Slot;
 
@@ -245,6 +245,8 @@ pub mod prelude {
         SyncObserverList,
         // Platform
         TargetPlatform,
+        // TreeId trait
+        TreeId,
         UniqueKey,
         ValueChanged,
         ValueGetter,

@@ -1,152 +1,83 @@
-//! # FLUI Tree - Advanced Type System Edition
+//! # FLUI Tree - Pure Tree Abstractions
 //!
-//! Tree abstraction traits for the FLUI UI framework using cutting-edge Rust
-//! type system features. This crate provides trait definitions that enable
-//! clean separation of concerns with advanced compile-time guarantees.
+//! Generic tree abstraction traits for the FLUI UI framework.
+//! This crate provides ONLY pure tree abstractions - domain-specific
+//! implementations live in their respective crates.
 //!
-//! ## Advanced Type System Features
+//! ## Design Philosophy
 //!
-//! This crate leverages the most advanced Rust type system capabilities:
-//!
-//! - **GAT (Generic Associated Types)** - Flexible iterators and accessors
-//! - **HRTB (Higher-Rank Trait Bounds)** - Universal predicates and visitors
-//! - **Associated Constants** - Performance tuning and optimization hints
-//! - **Const Generics** - Compile-time size optimization
-//! - **Sealed Traits** - Safe abstraction boundaries
-//! - **Typestate Pattern** - Compile-time state verification
-//! - **Never Type (`!`)** - Impossible operation safety
-//!
-//! ## Problem Solved
-//!
-//! In UI frameworks, element trees and render operations are tightly coupled.
-//! This creates circular dependencies:
+//! flui-tree defines abstract interfaces that break circular dependencies:
 //!
 //! ```text
-//! ❌ Before: element → render → pipeline → element (CIRCULAR!)
-//! ```
-//!
-//! `flui-tree` breaks this cycle by defining abstract interfaces with
-//! advanced type safety:
-//!
-//! ```text
-//! ✅ After (with advanced types):
 //!                     flui-foundation
 //!                           │
 //!            ┌──────────────┼──────────────┐
 //!            │              │              │
 //!            ▼              ▼              ▼
-//!       flui-tree     flui-element   flui-rendering
-//!    (GAT + HRTB)         │              │
+//!       flui-tree     flui-element   flui_rendering
+//!     (abstractions)       │              │
 //!            │              │              │
 //!            └──────────────┴──────────────┘
 //!                           │
 //!                           ▼
-//!                    flui-pipeline
-//!              (implements with type safety)
+//!                      flui_core
 //! ```
 //!
-//! ## Core Traits with Advanced Features
+//! ## What's in flui-tree
 //!
-//! ### Tree Access (Enhanced with GAT)
+//! - **Core Traits**: `TreeRead`, `TreeNav`, `TreeWrite`
+//! - **Generic Iterators**: Ancestors, Descendants, Siblings, DFS, BFS
+//! - **Arity System**: Compile-time child count validation
+//! - **Visitor Pattern**: Generic tree traversal
 //!
-//! - [`TreeRead`] - Immutable access with GAT iterators and HRTB predicates
-//! - [`TreeWrite`] - Mutable operations with const generic optimization
-//! - [`TreeNav`] - Navigation with flexible iterator types via GAT
-//! - [`TreeReadExt`] - Extension trait with HRTB-based operations
-//! - [`TreeNavExt`] - Extension trait with advanced traversal methods
+//! ## What's NOT in flui-tree
 //!
-//! ### Render Operations (Type-Safe)
+//! Domain-specific code lives in its own crate:
 //!
-//! - [`RenderTreeAccess`] - Access with compile-time guarantees
-//! - [`DirtyTracking`] - Atomic flag management with const optimization
-//! - [`RenderTreeExt`] - HRTB-compatible render operations
+//! - **flui_rendering**: RenderTree, DirtyTracking, render iterators
+//! - **flui-element**: ElementTree, lifecycle, reconciliation
+//! - **flui-view**: ViewTree, snapshots
 //!
-//! ### Visitor Pattern (HRTB + GAT)
-//!
-//! - [`TreeVisitor`] - Basic visitor with HRTB support
-//! - [`TreeVisitorMut`] - Mutable visitor with GAT return types
-//! - [`TypedVisitor`] - Flexible result collection using GAT
-//! - [`StatefulVisitor`] - Typestate pattern for compile-time safety
-//!
-//! ## Advanced Iterators
-//!
-//! The crate provides GAT-based iterators with const generic optimization:
-//!
-//! - [`Ancestors`] - GAT-based ancestor iteration with stack allocation
-//! - [`Descendants`] - Pre-order DFS with configurable buffering
-//! - [`DepthFirstIter`] - Const generic stack optimization
-//! - [`BreadthFirstIter`] - Configurable queue size via const generics
-//! - [`RenderAncestors`] - HRTB-compatible render-only traversal
-//!
-//! ## Enhanced Arity System
-//!
-//! Advanced compile-time arity validation with const generics:
-//!
-//! - [`Leaf`] - 0 children with never type for impossible operations
-//! - [`Optional`] - 0-1 children with Option-like API
-//! - [`Exact<N>`] - Exactly N children with const generic validation
-//! - [`AtLeast<N>`] - N+ children with HRTB predicate support
-//! - [`Variable`] - Any number with performance hints
-//! - [`Range<MIN, MAX>`] - Bounded ranges with compile-time limits
-//!
-//! ## HRTB Example
+//! ## Core Traits
 //!
 //! ```rust,ignore
-//! use flui_tree::{TreeNav, TreeReadExt, find_first};
-//! use flui_foundation::ElementId;
+//! use flui_tree::{TreeRead, TreeNav, TreeWrite};
 //!
-//! // HRTB predicate that works with any lifetime
-//! fn find_matching_node<T: TreeNav + TreeReadExt>(
-//!     tree: &T,
-//!     root: ElementId
-//! ) -> Option<ElementId>
-//! where
-//!     T::Node: HasName, // Hypothetical trait
-//! {
-//!     // This predicate works with any lifetime thanks to HRTB
-//!     tree.find_node_where(|node| node.name().contains("button"))
+//! // Read-only access
+//! fn count_nodes<T: TreeRead>(tree: &T) -> usize {
+//!     tree.len()
 //! }
 //!
-//! // GAT-based flexible iteration
-//! impl TreeNav for MyTree {
-//!     type ChildrenIter<'a> = impl Iterator<Item = ElementId> + 'a where Self: 'a;
-//!
-//!     fn children(&self, id: ElementId) -> Self::ChildrenIter<'_> {
-//!         // Return optimized iterator type based on internal storage
-//!         self.get_children(id).iter().copied()
-//!     }
+//! // Navigation
+//! fn find_root<T: TreeNav>(tree: &T, id: ElementId) -> ElementId {
+//!     tree.ancestors(id).last().unwrap_or(id)
 //! }
 //! ```
 //!
-//! ## Const Generic Example
+//! ## Iterators
 //!
 //! ```rust,ignore
-//! use flui_tree::{visit_depth_first, CollectVisitor};
+//! use flui_tree::{Ancestors, Descendants, DepthFirstIter};
 //!
-//! // Const generic optimization for typical tree depths
-//! fn traverse_optimized<T: TreeNav, const STACK_SIZE: usize = 64>(
-//!     tree: &T,
-//!     root: ElementId
-//! ) -> Vec<ElementId> {
-//!     let mut visitor = CollectVisitor::<32>::new(); // 32 inline elements
-//!     visit_depth_first::<T, _, STACK_SIZE>(tree, root, &mut visitor);
-//!     visitor.into_inner().into_vec()
+//! // Find all ancestors
+//! let path: Vec<_> = tree.ancestors(node).collect();
+//!
+//! // DFS traversal
+//! for id in tree.descendants(root) {
+//!     process(id);
 //! }
 //! ```
 //!
-//! ## Design Principles Enhanced
+//! ## Arity System
 //!
-//! 1. **Advanced Type Safety** - GAT, HRTB, sealed traits for correctness
-//! 2. **Zero-Cost Abstractions** - Const generics and associated constants
-//! 3. **Flexible Composition** - HRTB-compatible traits that compose well
-//! 4. **Thread Safety** - All traits require `Send + Sync` with atomic operations
-//! 5. **Compile-Time Optimization** - Const generics and typestate patterns
-//! 6. **Performance Tuning** - Associated constants for implementation hints
+//! ```rust,ignore
+//! use flui_tree::arity::{Leaf, Single, Optional, Variable};
 //!
-//! ## Feature Flags
-//!
-//! - `serde` - Enable serialization with GAT support
-//! - `full` - Enable all optional advanced features
+//! // Compile-time child count validation
+//! struct PaddingBox;  // Single child
+//! struct Container;   // Variable children
+//! struct Text;        // Leaf (no children)
+//! ```
 
 #![warn(rust_2018_idioms, clippy::all, clippy::pedantic)]
 #![allow(
@@ -157,9 +88,14 @@
     unreachable_pub,
     clippy::module_name_repetitions,
     clippy::must_use_candidate,
-    clippy::return_self_not_must_use
+    clippy::return_self_not_must_use,
+    clippy::doc_markdown,
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::too_many_lines,
+    clippy::if_not_else,
+    clippy::match_same_arms
 )]
-#![cfg_attr(docsrs, feature(doc_cfg))]
 
 // ============================================================================
 // MODULES
@@ -172,307 +108,96 @@ pub mod traits;
 pub mod visitor;
 
 // ============================================================================
-// RE-EXPORTS
+// RE-EXPORTS - Core Traits
 // ============================================================================
 
-// Core traits with advanced type features
-pub use traits::{
-    // Tree diffing
-    find_common_subtrees,
-    // Tree validation
-    find_orphans,
-    has_cycles,
-    // Pipeline traits with HRTB support
-    hit_test_with_callback,
-    layout_with_callback,
-    paint_with_callback,
-    tree_edit_distance,
-    validate_tree,
-    // TreeContext traits
-    AncestorLookup,
-    // Tree views
-    AncestorView,
-    AtomicDirtyFlags,
-    // Reconciliation traits
-    CanUpdate,
-    ChangeTracker,
-    // InheritedElement support
-    Dependencies,
-    DependencyTracker,
-    DepthLimitedView,
-    // Element lifecycle traits
-    DepthTracking,
-    DiffOptions,
-    DiffSummary,
-    DirtyTracking,
-    DirtyTrackingExt,
-    ElementTreeOps,
-    FilteredView,
-    // Combined traits with GAT
-    FullTreeAccess,
-    GlobalKeyRegistry,
-    HitTestVisitable,
-    HitTestVisitableExt,
-    IdMatcher,
-    InheritedData,
-    InheritedElement,
-    InheritedLookup,
-    InheritedRegistry,
-    InheritedScope,
-    InheritedState,
-    InsertAction,
-    LayoutVisitable,
-    LayoutVisitableExt,
-    Lifecycle,
-    LinearReconciler,
-    MoveAction,
-    NodeMatcher,
-    NotificationPolicy,
-    OwnerTracking,
-    PaintVisitable,
-    PaintVisitableExt,
-    PipelinePhaseCoordinator,
-    PredicateMatcher,
-    RebuildPriority,
-    RebuildScheduler,
-    Reconciler,
-    ReconciliationResult,
-    // Render child accessor (Type State pattern using unified Arity)
-    RenderChildAccessor,
-    // Render access with GAT
-    RenderTreeAccess,
-    RenderTreeAccessExt,
-    RenderTreeExt,
-    SiblingView,
-    SimpleTreeVisitor as PipelineSimpleVisitor,
-    SnapshotDiff,
-    SubtreeView,
-    TreeDiff,
-    TreeDiffResult,
-    TreeMut,
-    TreeNav,
-    TreeNavDyn,
-    TreeOperation,
-    // Tree access with GAT and HRTB
-    TreeRead,
-    // Object-safe variants
-    TreeReadDyn,
-    TreeSnapshot,
-    TreeValidator,
-    TreeViewExt,
-    TreeVisitor as PipelineTreeVisitor,
-    TreeWrite,
-    TreeWriteNav,
-    UpdateAction,
-    ValidationIssue,
-    ValidationIssues,
-    ValidationOptions,
-    ValidationReport,
-};
+pub use traits::{TreeNav, TreeRead, TreeWrite, TreeWriteNav};
 
 // Sealed trait markers for external implementations
 pub use traits::sealed;
 
-// Enhanced Arity system with advanced type features
+// ============================================================================
+// RE-EXPORTS - Arity System
+// ============================================================================
+
 pub use arity::{
-    // Core trait with GAT and HRTB
-    Arity,
-    // Arity markers with const generic support
-    AtLeast,
-    // Enhanced accessors with GAT
-    BoundedChildren, // New: Bounded range accessor
-    ChildrenAccess,
-    Copied,
-    Exact,
-    FixedChildren,
-    Leaf,
-    Never, // Never type for impossible operations
-    NoChildren,
-    Optional,
-    OptionalChild,
-    PerformanceHint, // New: Performance optimization hints
-    // New: Advanced arity types
-    Range, // Bounded range with const generics
-    RuntimeArity,
-    Single,
-    SliceChildren,
-    SmartChildren, // New: Smart allocation strategy
-    TypedChildren, // New: Type-aware accessor
-    Variable,
+    Arity, ArityError, AtLeast, ChildrenAccess, Exact, FixedChildren, Leaf, NoChildren, Optional,
+    OptionalChild, Range, RuntimeArity, Single, SliceChildren, Variable,
 };
 
-// Iterators
+// ============================================================================
+// RE-EXPORTS - Iterators
+// ============================================================================
+
 pub use iter::{
-    // Utility functions
-    collect_render_children,
-    count_render_children,
-    count_render_elements,
-    find_render_ancestor,
-    find_render_root,
-    first_render_child,
-    has_render_children,
-    is_render_descendant,
-    is_render_leaf,
-    last_render_child,
-    lowest_common_render_ancestor,
-    nth_render_child,
-    render_depth,
-    render_parent,
-    Ancestors,
-    AncestorsWithDepth,
-    BreadthFirstIter,
-    DepthFirstIter,
-    DepthFirstOrder,
-    Descendants,
-    DescendantsWithDepth,
-    RenderAncestors,
-    RenderChildren,
-    // Arity-aware collection
-    RenderChildrenCollector,
-    RenderChildrenWithIndex,
-    RenderDescendants,
-    RenderLeaves,
-    RenderPath,
-    RenderSiblings,
-    RenderSubtree,
-    RenderSubtreeItem,
-    SiblingDirection,
-    Siblings,
-    SiblingsDirection,
+    Ancestors, AncestorsWithDepth, BreadthFirstIter, DepthFirstIter, DepthFirstOrder, Descendants,
+    DescendantsWithDepth, Siblings, SiblingsDirection,
 };
 
-// Advanced visitor pattern with HRTB and GAT
+// ============================================================================
+// RE-EXPORTS - Visitor Pattern
+// ============================================================================
+
 pub use visitor::{
-    // Convenience functions with HRTB
-    collect_all,
-    // Statistics visitors
-    collect_statistics,
-    compare_statistics,
-    count_all,
-    count_with_limit,
-    find_first, // Enhanced with HRTB
-    for_each,   // Enhanced with HRTB
-    max_depth,
-    max_depth_with_threshold,
-    // Visitor states for typestate pattern
-    states,
-    tree_summary,
-    // Fallible visitors
-    try_collect,
-    try_for_each,
-    validate_depth,
-    // Enhanced traversal functions with const generics
-    visit_breadth_first,
-    visit_depth_first,
-    visit_depth_first_typed, // New: GAT-based typed visitor
-    visit_fallible,
-    visit_fallible_breadth_first,
-    visit_fallible_with_path,
-    visit_stateful, // New: Typestate pattern visitor
-    // Enhanced built-in visitors
-    CollectVisitor, // Now with const generics
-    // Visitor composition
-    ComposedVisitor,
-    ConditionalVisitor,
-    CountVisitor, // Enhanced with limits
-    DepthLimitExceeded,
-    DepthLimitVisitor,
-    DynVisitor,
-    FallibleVisitor,
-    FallibleVisitorMut,
-    FindVisitor,    // Now with HRTB support
-    ForEachVisitor, // Enhanced with HRTB
-    IterationHint,  // New: Performance optimization hints
-    MappedVisitor,
-    MaxDepthVisitor, // Enhanced with early termination
-    StatefulVisitor, // New: Typestate pattern
-    StatisticsComparison,
-    StatisticsVisitor,
-    StatisticsVisitorMut,
-    TreeStatistics,
-    // Visitor traits with advanced features
-    TreeVisitor,
-    TreeVisitorMut,
-    TripleComposedVisitor,
-    TryCollectVisitor,
-    TryForEachVisitor,
-    TypedVisitor, // New: GAT-based visitor
-    VisitorError,
-    VisitorExt,
-    VisitorResult,
-    VisitorVec,
+    collect_all, count_all, find_first, for_each, max_depth, visit_breadth_first,
+    visit_depth_first, CollectVisitor, CountVisitor, FindVisitor, ForEachVisitor, MaxDepthVisitor,
+    TreeVisitor, TreeVisitorMut, VisitorResult,
 };
 
-// Errors
+// ============================================================================
+// RE-EXPORTS - Errors
+// ============================================================================
+
 pub use error::{TreeError, TreeResult};
 
-// Re-export ElementId for convenience
-pub use flui_foundation::ElementId;
+// ============================================================================
+// RE-EXPORTS - Foundation Types
+// ============================================================================
 
-// Re-export geometry types used in traits
-pub use flui_types::{Offset, Size};
+pub use flui_foundation::{ElementId, TreeId};
 
 // ============================================================================
 // PRELUDE
 // ============================================================================
 
-/// The tree prelude - commonly used types and traits with advanced features.
+/// The tree prelude - commonly used types and traits.
 ///
 /// ```rust
 /// use flui_tree::prelude::*;
 /// ```
 pub mod prelude {
     pub use crate::{
-        // Convenience functions with HRTB
+        // Convenience functions
         collect_all,
         count_all,
-        find_first, // Enhanced with HRTB
-        for_each,   // Enhanced with HRTB
+        find_first,
+        for_each,
         max_depth,
-        // Advanced visitor functions
-        visit_depth_first_typed, // New: GAT-based traversal
-        visit_stateful,          // New: Typestate pattern
-        // Enhanced iterators with GAT
+        // Iterators
         Ancestors,
-        // Enhanced Arity system with const generics
+        // Arity
         Arity,
-        AtLeast,
-        AtomicDirtyFlags,
         ChildrenAccess,
         Descendants,
-        DirtyTracking,
-        DirtyTrackingExt,
-        Exact,
-        FullTreeAccess,
-        IterationHint, // New: Performance hints
         Leaf,
-        Never, // New: Never type
         Optional,
-        PerformanceHint, // New: Performance optimization
-        Range,           // New: Bounded range
-        RenderTreeAccess,
-        RenderTreeAccessExt,
-        RuntimeArity,
         Single,
-        // Types with advanced features
+        // Types
         TreeError,
-        TreeMut,
+        // Core traits
+        TreeId,
         TreeNav,
-        // Core traits with GAT and HRTB
         TreeRead,
         TreeResult,
-        // Enhanced visitor pattern
         TreeVisitor,
         TreeVisitorMut,
         TreeWrite,
         TreeWriteNav,
-        TypedVisitor, // New: GAT-based visitor
         Variable,
         VisitorResult,
     };
 
     pub use flui_foundation::ElementId;
-    pub use flui_types::{Offset, Size};
 }
 
 // ============================================================================
@@ -482,35 +207,9 @@ pub mod prelude {
 /// The version of the flui-tree crate.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// Returns a summary of enabled features with advanced type information.
-pub fn feature_summary() -> &'static str {
-    #[cfg(feature = "serde")]
-    {
-        "serde + GAT + HRTB + const_generics + sealed_traits"
-    }
-
-    #[cfg(not(feature = "serde"))]
-    {
-        "GAT + HRTB + const_generics + sealed_traits"
-    }
-}
-
-/// Returns information about advanced type system features used.
-pub fn type_system_features() -> &'static str {
-    concat!(
-        "GAT (Generic Associated Types), ",
-        "HRTB (Higher-Rank Trait Bounds), ",
-        "Const Generics, ",
-        "Associated Constants, ",
-        "Sealed Traits, ",
-        "Typestate Pattern, ",
-        "Never Type (!)"
-    )
-}
-
-/// Performance characteristics of this implementation.
-pub fn performance_info() -> &'static str {
-    "Zero-cost abstractions with compile-time optimization via const generics and GAT"
+/// Returns a summary of what this crate provides.
+pub fn crate_summary() -> &'static str {
+    "Pure tree abstractions: TreeRead, TreeNav, TreeWrite, iterators, arity system"
 }
 
 // ============================================================================
@@ -527,23 +226,8 @@ mod tests {
     }
 
     #[test]
-    fn test_feature_summary() {
-        let summary = feature_summary();
-        assert!(!summary.is_empty());
-        assert!(summary.contains("GAT"));
-        assert!(summary.contains("HRTB"));
-    }
-
-    #[test]
-    fn test_advanced_features() {
-        let type_features = type_system_features();
-        assert!(type_features.contains("GAT"));
-        assert!(type_features.contains("HRTB"));
-        assert!(type_features.contains("Const Generics"));
-        assert!(type_features.contains("Never Type"));
-
-        let perf_info = performance_info();
-        assert!(perf_info.contains("Zero-cost"));
-        assert!(perf_info.contains("compile-time"));
+    fn test_summary() {
+        let summary = crate_summary();
+        assert!(summary.contains("tree abstractions"));
     }
 }

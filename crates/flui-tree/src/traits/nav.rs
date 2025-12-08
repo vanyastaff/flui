@@ -3,7 +3,7 @@
 //! This module provides the [`TreeNav`] trait for tree navigation
 //! operations using advanced Rust type system features.
 
-use flui_foundation::{ElementId, Slot};
+use flui_foundation::Slot;
 use std::marker::PhantomData;
 
 /// Tree navigation with Generic Associated Types and HRTB support.
@@ -25,52 +25,12 @@ use std::marker::PhantomData;
 ///
 /// Navigation operations should be O(1) for parent/children access.
 /// Iterator operations use associated constants for optimal memory usage.
-///
-/// # Example
-///
-/// ```rust
-/// use flui_tree::{TreeNav, TreeRead};
-/// use flui_foundation::ElementId;
-///
-/// struct SimpleNode {
-///     parent: Option<ElementId>,
-///     children: Vec<ElementId>,
-/// }
-///
-/// struct SimpleTree {
-///     nodes: Vec<Option<SimpleNode>>,
-/// }
-///
-/// impl TreeNav for SimpleTree {
-///     type ChildrenIter<'a> = impl Iterator<Item = ElementId> + 'a where Self: 'a;
-///     type AncestorsIter<'a> = impl Iterator<Item = ElementId> + 'a where Self: 'a;
-///
-///     const MAX_DEPTH: usize = 64;
-///     const AVG_CHILDREN: usize = 4;
-///
-///     fn parent(&self, id: ElementId) -> Option<ElementId> {
-///         self.get_node(id)?.parent
-///     }
-///
-///     fn children(&self, id: ElementId) -> Self::ChildrenIter<'_> {
-///         if let Some(node) = self.get_node(id) {
-///             node.children.iter().copied()
-///         } else {
-///             [].iter().copied()
-///         }
-///     }
-///
-///     fn ancestors(&self, start: ElementId) -> Self::AncestorsIter<'_> {
-///         AncestorIterator::new(self, start)
-///     }
-/// }
-/// ```
 pub trait TreeNav: super::TreeRead + sealed::Sealed {
     /// Iterator type for children with GAT.
     ///
     /// This GAT allows implementations to return optimized iterator types
     /// while maintaining lifetime safety and zero-cost abstractions.
-    type ChildrenIter<'a>: Iterator<Item = ElementId> + 'a
+    type ChildrenIter<'a>: Iterator<Item = Self::Id> + 'a
     where
         Self: 'a;
 
@@ -78,17 +38,17 @@ pub trait TreeNav: super::TreeRead + sealed::Sealed {
     ///
     /// Enables different implementation strategies (recursive, iterative,
     /// stack-based) while maintaining a consistent interface.
-    type AncestorsIter<'a>: Iterator<Item = ElementId> + 'a
+    type AncestorsIter<'a>: Iterator<Item = Self::Id> + 'a
     where
         Self: 'a;
 
     /// Iterator type for descendants with depth information.
-    type DescendantsIter<'a>: Iterator<Item = (ElementId, usize)> + 'a
+    type DescendantsIter<'a>: Iterator<Item = (Self::Id, usize)> + 'a
     where
         Self: 'a;
 
     /// Iterator type for siblings.
-    type SiblingsIter<'a>: Iterator<Item = ElementId> + 'a
+    type SiblingsIter<'a>: Iterator<Item = Self::Id> + 'a
     where
         Self: 'a;
 
@@ -117,12 +77,12 @@ pub trait TreeNav: super::TreeRead + sealed::Sealed {
     ///
     /// # Returns
     ///
-    /// `Some(ElementId)` if the node has a parent, `None` if it's a root.
+    /// `Some(Id)` if the node has a parent, `None` if it's a root.
     ///
     /// # Performance
     ///
     /// Should be O(1) for most implementations.
-    fn parent(&self, id: ElementId) -> Option<ElementId>;
+    fn parent(&self, id: Self::Id) -> Option<Self::Id>;
 
     /// Returns an iterator over the immediate children of a node.
     ///
@@ -132,7 +92,7 @@ pub trait TreeNav: super::TreeRead + sealed::Sealed {
     ///
     /// # Returns
     ///
-    /// An iterator yielding child ElementIds in tree order.
+    /// An iterator yielding child IDs in tree order.
     ///
     /// # GAT Benefits
     ///
@@ -140,7 +100,7 @@ pub trait TreeNav: super::TreeRead + sealed::Sealed {
     /// - Zero-cost iteration for slice-based storage
     /// - Custom iterator types for complex tree structures
     /// - Lifetime-safe iteration without boxing
-    fn children(&self, id: ElementId) -> Self::ChildrenIter<'_>;
+    fn children(&self, id: Self::Id) -> Self::ChildrenIter<'_>;
 
     /// Returns an iterator from the given node to the root.
     ///
@@ -154,11 +114,11 @@ pub trait TreeNav: super::TreeRead + sealed::Sealed {
     /// # Performance
     ///
     /// Uses stack-allocated buffer up to MAX_DEPTH, then heap allocation.
-    fn ancestors(&self, start: ElementId) -> Self::AncestorsIter<'_>;
+    fn ancestors(&self, start: Self::Id) -> Self::AncestorsIter<'_>;
 
     /// Returns an iterator over all descendants in depth-first order.
     ///
-    /// Yields tuples of (ElementId, depth) where depth is relative
+    /// Yields tuples of (Id, depth) where depth is relative
     /// to the starting node (start node has depth 0).
     ///
     /// # Arguments
@@ -168,7 +128,7 @@ pub trait TreeNav: super::TreeRead + sealed::Sealed {
     /// # Performance
     ///
     /// Optimized for both shallow and deep trees using hybrid allocation.
-    fn descendants(&self, root: ElementId) -> Self::DescendantsIter<'_>;
+    fn descendants(&self, root: Self::Id) -> Self::DescendantsIter<'_>;
 
     /// Returns an iterator over the siblings of a node.
     ///
@@ -180,8 +140,8 @@ pub trait TreeNav: super::TreeRead + sealed::Sealed {
     ///
     /// # Returns
     ///
-    /// Iterator over sibling ElementIds, excluding the input node.
-    fn siblings(&self, id: ElementId) -> Self::SiblingsIter<'_>;
+    /// Iterator over sibling IDs, excluding the input node.
+    fn siblings(&self, id: Self::Id) -> Self::SiblingsIter<'_>;
 
     /// Returns the slot information for a node.
     ///
@@ -200,7 +160,7 @@ pub trait TreeNav: super::TreeRead + sealed::Sealed {
     ///
     /// Returns `None` - implementations can override for slot support.
     #[inline]
-    fn slot(&self, _id: ElementId) -> Option<Slot> {
+    fn slot(&self, _id: Self::Id) -> Option<Slot> {
         None
     }
 
@@ -211,7 +171,7 @@ pub trait TreeNav: super::TreeRead + sealed::Sealed {
     /// Default implementation uses iterator count, but implementations
     /// should provide O(1) versions when possible.
     #[inline]
-    fn child_count(&self, id: ElementId) -> usize {
+    fn child_count(&self, id: Self::Id) -> usize {
         self.children(id).count()
     }
 
@@ -221,19 +181,19 @@ pub trait TreeNav: super::TreeRead + sealed::Sealed {
     ///
     /// More efficient than `child_count() > 0` for some implementations.
     #[inline]
-    fn has_children(&self, id: ElementId) -> bool {
+    fn has_children(&self, id: Self::Id) -> bool {
         self.children(id).next().is_some()
     }
 
     /// Check if a node is a leaf (has no children).
     #[inline]
-    fn is_leaf(&self, id: ElementId) -> bool {
+    fn is_leaf(&self, id: Self::Id) -> bool {
         !self.has_children(id)
     }
 
     /// Check if a node is the root (has no parent).
     #[inline]
-    fn is_root(&self, id: ElementId) -> bool {
+    fn is_root(&self, id: Self::Id) -> bool {
         self.parent(id).is_none()
     }
 
@@ -244,7 +204,7 @@ pub trait TreeNav: super::TreeRead + sealed::Sealed {
     /// # Performance
     ///
     /// Uses stack allocation for typical tree depths.
-    fn find_root(&self, mut id: ElementId) -> ElementId {
+    fn find_root(&self, mut id: Self::Id) -> Self::Id {
         while let Some(parent) = self.parent(id) {
             id = parent;
         }
@@ -258,7 +218,7 @@ pub trait TreeNav: super::TreeRead + sealed::Sealed {
     /// # Performance
     ///
     /// Optimized path following with early termination.
-    fn depth(&self, id: ElementId) -> usize {
+    fn depth(&self, id: Self::Id) -> usize {
         self.ancestors(id).count().saturating_sub(1)
     }
 
@@ -272,7 +232,7 @@ pub trait TreeNav: super::TreeRead + sealed::Sealed {
     /// # Returns
     ///
     /// `true` if `ancestor` is in the path from `descendant` to root.
-    fn is_ancestor_of(&self, ancestor: ElementId, descendant: ElementId) -> bool {
+    fn is_ancestor_of(&self, ancestor: Self::Id, descendant: Self::Id) -> bool {
         if ancestor == descendant {
             return false; // Node is not its own ancestor
         }
@@ -289,19 +249,19 @@ pub trait TreeNav: super::TreeRead + sealed::Sealed {
     ///
     /// # Returns
     ///
-    /// `Some(ElementId)` of the LCA, or `None` if nodes are in different trees.
+    /// `Some(Id)` of the LCA, or `None` if nodes are in different trees.
     ///
     /// # Performance
     ///
     /// Uses optimized two-pointer technique with stack allocation.
-    fn lowest_common_ancestor(&self, a: ElementId, b: ElementId) -> Option<ElementId> {
+    fn lowest_common_ancestor(&self, a: Self::Id, b: Self::Id) -> Option<Self::Id> {
         if a == b {
             return Some(a);
         }
 
         // Collect ancestors of both nodes
-        let ancestors_a: Vec<ElementId> = self.ancestors(a).collect();
-        let ancestors_b: Vec<ElementId> = self.ancestors(b).collect();
+        let ancestors_a: Vec<Self::Id> = self.ancestors(a).collect();
+        let ancestors_b: Vec<Self::Id> = self.ancestors(b).collect();
 
         // Find first common ancestor from the root
         ancestors_a
@@ -329,7 +289,7 @@ pub trait TreeNavExt: TreeNav {
     /// # Returns
     ///
     /// First matching child ID, or `None` if no match found.
-    fn find_child_where<P>(&self, parent: ElementId, mut predicate: P) -> Option<ElementId>
+    fn find_child_where<P>(&self, parent: Self::Id, mut predicate: P) -> Option<Self::Id>
     where
         P: for<'a> FnMut(&'a Self::Node) -> bool,
     {
@@ -346,7 +306,7 @@ pub trait TreeNavExt: TreeNav {
     /// Find first descendant matching a predicate.
     ///
     /// Performs depth-first search with early termination.
-    fn find_descendant_where<P>(&self, root: ElementId, mut predicate: P) -> Option<ElementId>
+    fn find_descendant_where<P>(&self, root: Self::Id, mut predicate: P) -> Option<Self::Id>
     where
         P: for<'a> FnMut(&'a Self::Node) -> bool,
     {
@@ -366,9 +326,9 @@ pub trait TreeNavExt: TreeNav {
     ///
     /// * `root` - Root of subtree to visit
     /// * `visitor` - HRTB closure called for each node
-    fn visit_subtree<F>(&self, root: ElementId, mut visitor: F)
+    fn visit_subtree<F>(&self, root: Self::Id, mut visitor: F)
     where
-        F: for<'a> FnMut(ElementId, &'a Self::Node, usize),
+        F: for<'a> FnMut(Self::Id, &'a Self::Node, usize),
     {
         for (id, depth) in self.descendants(root) {
             if let Some(node) = self.get(id) {
@@ -378,7 +338,7 @@ pub trait TreeNavExt: TreeNav {
     }
 
     /// Count descendants matching a predicate.
-    fn count_descendants_where<P>(&self, root: ElementId, mut predicate: P) -> usize
+    fn count_descendants_where<P>(&self, root: Self::Id, mut predicate: P) -> usize
     where
         P: for<'a> FnMut(&'a Self::Node) -> bool,
     {
@@ -391,8 +351,8 @@ pub trait TreeNavExt: TreeNav {
     /// Collect path from root to target node.
     ///
     /// Returns the complete path including both root and target.
-    fn path_to_node(&self, target: ElementId) -> Vec<ElementId> {
-        let mut path: Vec<ElementId> = self.ancestors(target).collect();
+    fn path_to_node(&self, target: Self::Id) -> Vec<Self::Id> {
+        let mut path: Vec<Self::Id> = self.ancestors(target).collect();
         path.reverse();
         path
     }
@@ -407,7 +367,7 @@ pub trait TreeNavExt: TreeNav {
     /// # Returns
     ///
     /// The nth child, or `None` if index is out of bounds.
-    fn nth_child(&self, parent: ElementId, index: usize) -> Option<ElementId> {
+    fn nth_child(&self, parent: Self::Id, index: usize) -> Option<Self::Id> {
         self.children(parent).nth(index)
     }
 
@@ -416,7 +376,7 @@ pub trait TreeNavExt: TreeNav {
     /// # Returns
     ///
     /// `(first, last)` tuple, or `None` if no children.
-    fn first_and_last_child(&self, parent: ElementId) -> Option<(ElementId, ElementId)> {
+    fn first_and_last_child(&self, parent: Self::Id) -> Option<(Self::Id, Self::Id)> {
         let mut children = self.children(parent);
         let first = children.next()?;
         let last = children.last().unwrap_or(first);
@@ -450,9 +410,9 @@ pub(crate) mod sealed {
 /// for deeper trees. The buffer size is configurable via const generics.
 pub struct AncestorIterator<'a, T: TreeNav, const BUFFER_SIZE: usize = 32> {
     tree: &'a T,
-    current: Option<ElementId>,
+    current: Option<T::Id>,
     // Stack-allocated buffer for typical cases
-    _buffer: PhantomData<[ElementId; BUFFER_SIZE]>,
+    _buffer: PhantomData<[T::Id; BUFFER_SIZE]>,
 }
 
 impl<'a, T: TreeNav, const BUFFER_SIZE: usize> AncestorIterator<'a, T, BUFFER_SIZE> {
@@ -462,7 +422,7 @@ impl<'a, T: TreeNav, const BUFFER_SIZE: usize> AncestorIterator<'a, T, BUFFER_SI
     ///
     /// * `tree` - The tree to navigate
     /// * `start` - Starting node (included in iteration)
-    pub fn new(tree: &'a T, start: ElementId) -> Self {
+    pub fn new(tree: &'a T, start: T::Id) -> Self {
         Self {
             tree,
             current: Some(start),
@@ -471,8 +431,8 @@ impl<'a, T: TreeNav, const BUFFER_SIZE: usize> AncestorIterator<'a, T, BUFFER_SI
     }
 }
 
-impl<'a, T: TreeNav, const BUFFER_SIZE: usize> Iterator for AncestorIterator<'a, T, BUFFER_SIZE> {
-    type Item = ElementId;
+impl<T: TreeNav, const BUFFER_SIZE: usize> Iterator for AncestorIterator<'_, T, BUFFER_SIZE> {
+    type Item = T::Id;
 
     fn next(&mut self) -> Option<Self::Item> {
         let current = self.current?;
@@ -493,13 +453,13 @@ impl<'a, T: TreeNav, const BUFFER_SIZE: usize> Iterator for AncestorIterator<'a,
 /// Breadth-first descendants iterator with configurable buffering.
 pub struct DescendantsIterator<'a, T: TreeNav, const QUEUE_SIZE: usize = 64> {
     tree: &'a T,
-    queue: std::collections::VecDeque<(ElementId, usize)>,
-    _buffer: PhantomData<[(ElementId, usize); QUEUE_SIZE]>,
+    queue: std::collections::VecDeque<(T::Id, usize)>,
+    _buffer: PhantomData<[(T::Id, usize); QUEUE_SIZE]>,
 }
 
 impl<'a, T: TreeNav, const QUEUE_SIZE: usize> DescendantsIterator<'a, T, QUEUE_SIZE> {
     /// Create new descendants iterator.
-    pub fn new(tree: &'a T, root: ElementId) -> Self {
+    pub fn new(tree: &'a T, root: T::Id) -> Self {
         let mut queue = std::collections::VecDeque::with_capacity(QUEUE_SIZE);
         queue.push_back((root, 0));
 
@@ -511,8 +471,8 @@ impl<'a, T: TreeNav, const QUEUE_SIZE: usize> DescendantsIterator<'a, T, QUEUE_S
     }
 }
 
-impl<'a, T: TreeNav, const QUEUE_SIZE: usize> Iterator for DescendantsIterator<'a, T, QUEUE_SIZE> {
-    type Item = (ElementId, usize);
+impl<T: TreeNav, const QUEUE_SIZE: usize> Iterator for DescendantsIterator<'_, T, QUEUE_SIZE> {
+    type Item = (T::Id, usize);
 
     fn next(&mut self) -> Option<Self::Item> {
         let (current, depth) = self.queue.pop_front()?;
@@ -560,32 +520,32 @@ impl<T: TreeNav + ?Sized> TreeNav for &T {
     const AVG_CHILDREN: usize = T::AVG_CHILDREN;
 
     #[inline]
-    fn parent(&self, id: ElementId) -> Option<ElementId> {
+    fn parent(&self, id: Self::Id) -> Option<Self::Id> {
         (**self).parent(id)
     }
 
     #[inline]
-    fn children(&self, id: ElementId) -> Self::ChildrenIter<'_> {
+    fn children(&self, id: Self::Id) -> Self::ChildrenIter<'_> {
         (**self).children(id)
     }
 
     #[inline]
-    fn ancestors(&self, start: ElementId) -> Self::AncestorsIter<'_> {
+    fn ancestors(&self, start: Self::Id) -> Self::AncestorsIter<'_> {
         (**self).ancestors(start)
     }
 
     #[inline]
-    fn descendants(&self, root: ElementId) -> Self::DescendantsIter<'_> {
+    fn descendants(&self, root: Self::Id) -> Self::DescendantsIter<'_> {
         (**self).descendants(root)
     }
 
     #[inline]
-    fn siblings(&self, id: ElementId) -> Self::SiblingsIter<'_> {
+    fn siblings(&self, id: Self::Id) -> Self::SiblingsIter<'_> {
         (**self).siblings(id)
     }
 
     #[inline]
-    fn slot(&self, id: ElementId) -> Option<Slot> {
+    fn slot(&self, id: Self::Id) -> Option<Slot> {
         (**self).slot(id)
     }
 }
@@ -616,32 +576,32 @@ impl<T: TreeNav + ?Sized> TreeNav for &mut T {
     const AVG_CHILDREN: usize = T::AVG_CHILDREN;
 
     #[inline]
-    fn parent(&self, id: ElementId) -> Option<ElementId> {
+    fn parent(&self, id: Self::Id) -> Option<Self::Id> {
         (**self).parent(id)
     }
 
     #[inline]
-    fn children(&self, id: ElementId) -> Self::ChildrenIter<'_> {
+    fn children(&self, id: Self::Id) -> Self::ChildrenIter<'_> {
         (**self).children(id)
     }
 
     #[inline]
-    fn ancestors(&self, start: ElementId) -> Self::AncestorsIter<'_> {
+    fn ancestors(&self, start: Self::Id) -> Self::AncestorsIter<'_> {
         (**self).ancestors(start)
     }
 
     #[inline]
-    fn descendants(&self, root: ElementId) -> Self::DescendantsIter<'_> {
+    fn descendants(&self, root: Self::Id) -> Self::DescendantsIter<'_> {
         (**self).descendants(root)
     }
 
     #[inline]
-    fn siblings(&self, id: ElementId) -> Self::SiblingsIter<'_> {
+    fn siblings(&self, id: Self::Id) -> Self::SiblingsIter<'_> {
         (**self).siblings(id)
     }
 
     #[inline]
-    fn slot(&self, id: ElementId) -> Option<Slot> {
+    fn slot(&self, id: Self::Id) -> Option<Slot> {
         (**self).slot(id)
     }
 }
@@ -672,32 +632,32 @@ impl<T: TreeNav + ?Sized> TreeNav for Box<T> {
     const AVG_CHILDREN: usize = T::AVG_CHILDREN;
 
     #[inline]
-    fn parent(&self, id: ElementId) -> Option<ElementId> {
+    fn parent(&self, id: Self::Id) -> Option<Self::Id> {
         (**self).parent(id)
     }
 
     #[inline]
-    fn children(&self, id: ElementId) -> Self::ChildrenIter<'_> {
+    fn children(&self, id: Self::Id) -> Self::ChildrenIter<'_> {
         (**self).children(id)
     }
 
     #[inline]
-    fn ancestors(&self, start: ElementId) -> Self::AncestorsIter<'_> {
+    fn ancestors(&self, start: Self::Id) -> Self::AncestorsIter<'_> {
         (**self).ancestors(start)
     }
 
     #[inline]
-    fn descendants(&self, root: ElementId) -> Self::DescendantsIter<'_> {
+    fn descendants(&self, root: Self::Id) -> Self::DescendantsIter<'_> {
         (**self).descendants(root)
     }
 
     #[inline]
-    fn siblings(&self, id: ElementId) -> Self::SiblingsIter<'_> {
+    fn siblings(&self, id: Self::Id) -> Self::SiblingsIter<'_> {
         (**self).siblings(id)
     }
 
     #[inline]
-    fn slot(&self, id: ElementId) -> Option<Slot> {
+    fn slot(&self, id: Self::Id) -> Option<Slot> {
         (**self).slot(id)
     }
 }
@@ -709,6 +669,9 @@ impl<T: TreeNav + ?Sized> TreeNav for Box<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::iter::{Ancestors, DescendantsWithDepth};
+    use crate::traits::TreeRead;
+    use flui_foundation::ElementId;
 
     // Test implementation
     struct TestNode {
@@ -747,11 +710,9 @@ mod tests {
     }
 
     impl super::super::TreeRead for TestTree {
+        type Id = ElementId;
         type Node = TestNode;
-        type NodeIter<'a>
-            = impl Iterator<Item = ElementId> + 'a
-        where
-            Self: 'a;
+        type NodeIter<'a> = Box<dyn Iterator<Item = ElementId> + 'a>;
 
         fn get(&self, id: ElementId) -> Option<&TestNode> {
             self.nodes.get(&id)
@@ -762,21 +723,15 @@ mod tests {
         }
 
         fn node_ids(&self) -> Self::NodeIter<'_> {
-            self.nodes.keys().copied()
+            Box::new(self.nodes.keys().copied())
         }
     }
 
     impl TreeNav for TestTree {
-        type ChildrenIter<'a>
-            = impl Iterator<Item = ElementId> + 'a
-        where
-            Self: 'a;
-        type AncestorsIter<'a> = AncestorIterator<'a, Self>;
-        type DescendantsIter<'a> = DescendantsIterator<'a, Self>;
-        type SiblingsIter<'a>
-            = impl Iterator<Item = ElementId> + 'a
-        where
-            Self: 'a;
+        type ChildrenIter<'a> = Box<dyn Iterator<Item = ElementId> + 'a>;
+        type AncestorsIter<'a> = Ancestors<'a, Self>;
+        type DescendantsIter<'a> = DescendantsWithDepth<'a, Self>;
+        type SiblingsIter<'a> = Box<dyn Iterator<Item = ElementId> + 'a>;
 
         fn parent(&self, id: ElementId) -> Option<ElementId> {
             self.get(id)?.parent
@@ -784,26 +739,28 @@ mod tests {
 
         fn children(&self, id: ElementId) -> Self::ChildrenIter<'_> {
             if let Some(node) = self.get(id) {
-                node.children.iter().copied()
+                Box::new(node.children.iter().copied())
             } else {
-                [].iter().copied()
+                Box::new(std::iter::empty())
             }
         }
 
         fn ancestors(&self, start: ElementId) -> Self::AncestorsIter<'_> {
-            AncestorIterator::new(self, start)
+            Ancestors::new(self, start)
         }
 
         fn descendants(&self, root: ElementId) -> Self::DescendantsIter<'_> {
-            DescendantsIterator::new(self, root)
+            DescendantsWithDepth::new(self, root)
         }
 
         fn siblings(&self, id: ElementId) -> Self::SiblingsIter<'_> {
             if let Some(parent_id) = self.parent(id) {
-                self.children(parent_id)
-                    .filter(move |&child_id| child_id != id)
+                Box::new(
+                    self.children(parent_id)
+                        .filter(move |&child_id| child_id != id),
+                )
             } else {
-                [].iter().copied()
+                Box::new(std::iter::empty())
             }
         }
     }

@@ -1,7 +1,6 @@
 //! Configurable depth-first iterator.
 
 use crate::traits::TreeNav;
-use flui_foundation::ElementId;
 
 /// Depth-first traversal order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -51,12 +50,12 @@ pub struct DepthFirstIter<'a, T: TreeNav> {
     order: DepthFirstOrder,
     // For pre-order: stack of nodes to visit
     // For post-order: stack of (node, visited_children)
-    stack: Vec<StackEntry>,
+    stack: Vec<StackEntry<T::Id>>,
 }
 
 #[derive(Debug, Clone)]
-struct StackEntry {
-    id: ElementId,
+struct StackEntry<Id> {
+    id: Id,
     /// For post-order: index of next child to process
     child_index: usize,
 }
@@ -64,7 +63,7 @@ struct StackEntry {
 impl<'a, T: TreeNav> DepthFirstIter<'a, T> {
     /// Creates a new depth-first iterator.
     #[inline]
-    pub fn new(tree: &'a T, root: ElementId, order: DepthFirstOrder) -> Self {
+    pub fn new(tree: &'a T, root: T::Id, order: DepthFirstOrder) -> Self {
         let mut stack = Vec::with_capacity(16);
 
         if tree.contains(root) {
@@ -79,19 +78,19 @@ impl<'a, T: TreeNav> DepthFirstIter<'a, T> {
 
     /// Creates a pre-order iterator.
     #[inline]
-    pub fn pre_order(tree: &'a T, root: ElementId) -> Self {
+    pub fn pre_order(tree: &'a T, root: T::Id) -> Self {
         Self::new(tree, root, DepthFirstOrder::PreOrder)
     }
 
     /// Creates a post-order iterator.
     #[inline]
-    pub fn post_order(tree: &'a T, root: ElementId) -> Self {
+    pub fn post_order(tree: &'a T, root: T::Id) -> Self {
         Self::new(tree, root, DepthFirstOrder::PostOrder)
     }
 }
 
 impl<T: TreeNav> Iterator for DepthFirstIter<'_, T> {
-    type Item = ElementId;
+    type Item = T::Id;
 
     fn next(&mut self) -> Option<Self::Item> {
         match self.order {
@@ -106,7 +105,7 @@ impl<T: TreeNav> Iterator for DepthFirstIter<'_, T> {
 }
 
 impl<T: TreeNav> DepthFirstIter<'_, T> {
-    fn next_pre_order(&mut self) -> Option<ElementId> {
+    fn next_pre_order(&mut self) -> Option<T::Id> {
         let entry = self.stack.pop()?;
         let current = entry.id;
 
@@ -122,7 +121,7 @@ impl<T: TreeNav> DepthFirstIter<'_, T> {
         Some(current)
     }
 
-    fn next_post_order(&mut self) -> Option<ElementId> {
+    fn next_post_order(&mut self) -> Option<T::Id> {
         loop {
             let entry = self.stack.last_mut()?;
             let children: Vec<_> = self.tree.children(entry.id).collect();
@@ -154,8 +153,9 @@ impl<T: TreeNav> std::iter::FusedIterator for DepthFirstIter<'_, T> {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::iter::{Ancestors, DescendantsWithDepth};
     use crate::traits::TreeRead;
-    use flui_foundation::Slot;
+    use flui_foundation::ElementId;
 
     struct TestNode {
         parent: Option<ElementId>,
@@ -165,6 +165,9 @@ mod tests {
     struct TestTree {
         nodes: Vec<Option<TestNode>>,
     }
+
+    impl crate::traits::sealed::TreeReadSealed for TestTree {}
+    impl crate::traits::sealed::TreeNavSealed for TestTree {}
 
     impl TestTree {
         fn new() -> Self {
@@ -179,7 +182,7 @@ mod tests {
             }));
 
             if let Some(parent_id) = parent {
-                if let Some(Some(p)) = self.nodes.get_mut(parent_id.get() as usize - 1) {
+                if let Some(Some(p)) = self.nodes.get_mut(parent_id.get() - 1) {
                     p.children.push(id);
                 }
             }
@@ -189,28 +192,64 @@ mod tests {
     }
 
     impl TreeRead for TestTree {
+        type Id = ElementId;
         type Node = TestNode;
+        type NodeIter<'a> = Box<dyn Iterator<Item = ElementId> + 'a>;
 
         fn get(&self, id: ElementId) -> Option<&TestNode> {
-            self.nodes.get(id.get() as usize - 1)?.as_ref()
+            self.nodes.get(id.get() - 1)?.as_ref()
         }
 
         fn len(&self) -> usize {
             self.nodes.iter().filter(|n| n.is_some()).count()
         }
+
+        fn node_ids(&self) -> Self::NodeIter<'_> {
+            Box::new((0..self.nodes.len()).filter_map(|i| {
+                if self.nodes[i].is_some() {
+                    Some(ElementId::new(i + 1))
+                } else {
+                    None
+                }
+            }))
+        }
     }
 
     impl TreeNav for TestTree {
+        type ChildrenIter<'a> = Box<dyn Iterator<Item = ElementId> + 'a>;
+        type AncestorsIter<'a> = Ancestors<'a, Self>;
+        type DescendantsIter<'a> = DescendantsWithDepth<'a, Self>;
+        type SiblingsIter<'a> = Box<dyn Iterator<Item = ElementId> + 'a>;
+
         fn parent(&self, id: ElementId) -> Option<ElementId> {
             self.get(id)?.parent
         }
 
-        fn children(&self, id: ElementId) -> &[ElementId] {
-            self.get(id).map(|n| n.children.as_slice()).unwrap_or(&[])
+        fn children(&self, id: ElementId) -> Self::ChildrenIter<'_> {
+            if let Some(node) = self.get(id) {
+                Box::new(node.children.iter().copied())
+            } else {
+                Box::new(std::iter::empty())
+            }
         }
 
-        fn slot(&self, _id: ElementId) -> Option<Slot> {
-            None
+        fn ancestors(&self, start: ElementId) -> Self::AncestorsIter<'_> {
+            Ancestors::new(self, start)
+        }
+
+        fn descendants(&self, root: ElementId) -> Self::DescendantsIter<'_> {
+            DescendantsWithDepth::new(self, root)
+        }
+
+        fn siblings(&self, id: ElementId) -> Self::SiblingsIter<'_> {
+            if let Some(parent_id) = self.parent(id) {
+                Box::new(
+                    self.children(parent_id)
+                        .filter(move |&child_id| child_id != id),
+                )
+            } else {
+                Box::new(std::iter::empty())
+            }
         }
     }
 
@@ -220,6 +259,7 @@ mod tests {
     //   B(2) C(3)
     //  / \    \
     // D(4) E(5) F(6)
+    #[allow(clippy::many_single_char_names)]
     fn build_test_tree() -> (TestTree, [ElementId; 6]) {
         let mut tree = TestTree::new();
         let a = tree.insert(None);
@@ -233,6 +273,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::many_single_char_names)]
     fn test_pre_order() {
         let (tree, [a, b, c, d, e, f]) = build_test_tree();
 
@@ -241,6 +282,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::many_single_char_names)]
     fn test_post_order() {
         let (tree, [a, b, c, d, e, f]) = build_test_tree();
 

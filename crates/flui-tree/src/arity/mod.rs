@@ -135,7 +135,7 @@ pub enum RuntimeArity {
 
 impl RuntimeArity {
     /// Check if the count is valid for this arity.
-    #[inline(always)]
+    #[inline]
     pub const fn validate(&self, count: usize) -> bool {
         match self {
             Self::Exact(n) => count == *n,
@@ -152,32 +152,29 @@ impl RuntimeArity {
     }
 
     /// Check if this arity is impossible (Never type).
-    #[inline(always)]
+    #[inline]
     pub const fn is_impossible(&self) -> bool {
         matches!(self, Self::Never)
     }
 
     /// Get the minimum valid count for this arity.
-    #[inline(always)]
+    #[inline]
     pub const fn min_count(&self) -> usize {
         match self {
-            Self::Exact(n) => *n,
-            Self::Optional => 0,
-            Self::AtLeast(n) => *n,
-            Self::Variable => 0,
+            Self::Optional | Self::Variable => 0,
+            Self::Exact(n) | Self::AtLeast(n) => *n,
             Self::Range(min, _) => *min,
             Self::Never => usize::MAX, // Impossible
         }
     }
 
     /// Get the maximum valid count for this arity (None = unbounded).
-    #[inline(always)]
+    #[inline]
     pub const fn max_count(&self) -> Option<usize> {
         match self {
             Self::Exact(n) => Some(*n),
             Self::Optional => Some(1),
-            Self::AtLeast(_) => None,
-            Self::Variable => None,
+            Self::AtLeast(_) | Self::Variable => None,
             Self::Range(_, max) => Some(*max),
             Self::Never => Some(0), // Impossible but bounded
         }
@@ -188,10 +185,8 @@ impl RuntimeArity {
         let valid = self.validate(count);
         let hint = match self {
             Self::Exact(_) | Self::Optional => PerformanceHint::FixedSize,
-            Self::AtLeast(_) if count < 32 => PerformanceHint::SmallDynamic,
-            Self::AtLeast(_) => PerformanceHint::LargeDynamic,
-            Self::Variable if count < 16 => PerformanceHint::SmallDynamic,
-            Self::Variable => PerformanceHint::LargeDynamic,
+            Self::AtLeast(_) | Self::Variable if count < 16 => PerformanceHint::SmallDynamic,
+            Self::AtLeast(_) | Self::Variable => PerformanceHint::LargeDynamic,
             Self::Range(_, _) => PerformanceHint::Bounded,
             Self::Never => PerformanceHint::Impossible,
         };
@@ -204,11 +199,11 @@ impl std::fmt::Display for RuntimeArity {
         match self {
             Self::Exact(0) => write!(f, "Leaf (0 children)"),
             Self::Exact(1) => write!(f, "Single (1 child)"),
-            Self::Exact(n) => write!(f, "Exact({} children)", n),
+            Self::Exact(n) => write!(f, "Exact({n} children)"),
             Self::Optional => write!(f, "Optional (0 or 1 child)"),
-            Self::AtLeast(n) => write!(f, "AtLeast({} children)", n),
+            Self::AtLeast(n) => write!(f, "AtLeast({n} children)"),
             Self::Variable => write!(f, "Variable (any number)"),
-            Self::Range(min, max) => write!(f, "Range({}-{} children)", min, max),
+            Self::Range(min, max) => write!(f, "Range({min}-{max} children)"),
             Self::Never => write!(f, "Never (impossible)"),
         }
     }
@@ -413,7 +408,7 @@ impl<const MIN: usize, const MAX: usize> Arity for Range<MIN, MAX> {
 
     // Expected size is average of MIN and MAX
     // Note: If MIN > MAX, this will be incorrect, but validate_count will catch it
-    const EXPECTED_SIZE: usize = (MIN + MAX) / 2;
+    const EXPECTED_SIZE: usize = usize::midpoint(MIN, MAX);
     const INLINE_THRESHOLD: usize = MAX;
     const BATCH_SIZE: usize = MAX;
 
@@ -432,37 +427,27 @@ impl<const MIN: usize, const MAX: usize> Arity for Range<MIN, MAX> {
         count >= MIN && count <= MAX
     }
 
-    #[inline(always)]
+    #[inline]
     fn from_slice<T: Send + Sync>(children: &[T]) -> Self::Accessor<'_, T> {
         // Validate MIN <= MAX constraint
         debug_assert!(
             MIN <= MAX,
-            "Range<{}, {}> is invalid: MIN ({}) must be <= MAX ({})",
-            MIN,
-            MAX,
-            MIN,
-            MAX
+            "Range<{MIN}, {MAX}> is invalid: MIN ({MIN}) must be <= MAX ({MAX})"
         );
         debug_assert!(
             children.len() >= MIN,
-            "Range<{}, {}> expects >= {} children, got {}",
-            MIN,
-            MAX,
-            MIN,
+            "Range<{MIN}, {MAX}> expects >= {MIN} children, got {}",
             children.len()
         );
         debug_assert!(
             children.len() <= MAX,
-            "Range<{}, {}> expects <= {} children, got {}",
-            MIN,
-            MAX,
-            MAX,
+            "Range<{MIN}, {MAX}> expects <= {MAX} children, got {}",
             children.len()
         );
         SliceChildren { children }
     }
 
-    #[inline(always)]
+    #[inline]
     fn iter_slice<'a, T>(children: &'a [T]) -> Self::Iterator<'a, T>
     where
         T: 'a,
@@ -519,12 +504,12 @@ impl Arity for Never {
         false // Never valid
     }
 
-    #[inline(always)]
+    #[inline]
     fn from_slice<T: Send + Sync>(_children: &[T]) -> Self::Accessor<'_, T> {
         NeverAccessor(PhantomData)
     }
 
-    #[inline(always)]
+    #[inline]
     fn iter_slice<'a, T>(_children: &'a [T]) -> Self::Iterator<'a, T>
     where
         T: 'a,
@@ -575,17 +560,17 @@ impl Arity for Leaf {
     const BATCH_SIZE: usize = 0;
     const SUPPORTS_SIMD: bool = true; // Empty operations are SIMD-friendly
 
-    #[inline(always)]
+    #[inline]
     fn runtime_arity() -> RuntimeArity {
         RuntimeArity::Exact(0)
     }
 
-    #[inline(always)]
+    #[inline]
     fn validate_count(count: usize) -> bool {
         count == 0
     }
 
-    #[inline(always)]
+    #[inline]
     fn from_slice<T: Send + Sync>(children: &[T]) -> Self::Accessor<'_, T> {
         debug_assert!(
             children.is_empty(),
@@ -595,7 +580,7 @@ impl Arity for Leaf {
         NoChildren(PhantomData)
     }
 
-    #[inline(always)]
+    #[inline]
     fn iter_slice<'a, T>(children: &'a [T]) -> Self::Iterator<'a, T>
     where
         T: 'a,
@@ -610,6 +595,10 @@ impl Leaf {
     ///
     /// This method demonstrates the never type for impossible operations.
     /// It will never return because leaf nodes cannot have children.
+    ///
+    /// # Panics
+    ///
+    /// Always panics - leaf nodes cannot have children.
     pub fn first_impossible<T>(_children: &[T]) -> ! {
         panic!("Leaf nodes cannot have children - this operation is impossible")
     }
@@ -622,7 +611,7 @@ impl Leaf {
 /// Optional arity marker — 0 or 1 child.
 ///
 /// For nodes that can work with or without a child
-/// (e.g., SizedBox, Container, ColoredBox).
+/// (e.g., `SizedBox`, `Container`, `ColoredBox`).
 ///
 /// # Example
 ///
@@ -654,7 +643,7 @@ impl Arity for Optional {
         count <= 1
     }
 
-    #[inline(always)]
+    #[inline]
     fn from_slice<T: Send + Sync>(children: &[T]) -> Self::Accessor<'_, T> {
         debug_assert!(
             children.len() <= 1,
@@ -664,7 +653,7 @@ impl Arity for Optional {
         OptionalChild { children }
     }
 
-    #[inline(always)]
+    #[inline]
     fn iter_slice<'a, T>(children: &'a [T]) -> Self::Iterator<'a, T>
     where
         T: 'a,
@@ -711,50 +700,29 @@ impl<const N: usize> Arity for Exact<N> {
         count == N
     }
 
-    #[inline(always)]
+    #[inline]
     fn from_slice<T: Send + Sync>(children: &[T]) -> Self::Accessor<'_, T> {
         debug_assert!(
             children.len() == N,
-            "Exact<{}> expects {} children, got {}",
-            N,
-            N,
+            "Exact<{N}> expects {N} children, got {}",
             children.len()
         );
         // SAFETY: We've validated the length in debug mode.
         // In release mode, we trust the caller, but still need to handle the error
         // gracefully to avoid panics in production code.
-        let array_ref: &[T; N] = match children.try_into() {
-            Ok(arr) => arr,
-            Err(_) => {
-                // This should never happen if debug_assert above passed
-                // But in release mode, we need to handle it
-                #[cfg(debug_assertions)]
-                {
-                    panic!(
-                        "Exact<{}> expects {} children, got {}",
-                        N,
-                        N,
-                        children.len()
-                    );
-                }
-                #[cfg(not(debug_assertions))]
-                {
-                    // In release, we can't safely convert, so we need to panic
-                    // This is a programming error that should be caught in debug
-                    panic!(
-                        "slice length mismatch: expected {}, got {}",
-                        N,
-                        children.len()
-                    );
-                }
-            }
-        };
+        let array_ref: &[T; N] = children.try_into().unwrap_or_else(|_| {
+            // This is a programming error that should be caught in debug
+            panic!(
+                "slice length mismatch: expected {N}, got {}",
+                children.len()
+            );
+        });
         FixedChildren {
             children: array_ref,
         }
     }
 
-    #[inline(always)]
+    #[inline]
     fn iter_slice<'a, T>(children: &'a [T]) -> Self::Iterator<'a, T>
     where
         T: 'a,
@@ -782,7 +750,7 @@ pub type Single = Exact<1>;
 // AT_LEAST<N> (N or more children)
 // ============================================================================
 
-/// AtLeast arity marker — N or more children.
+/// `AtLeast` arity marker — N or more children.
 ///
 /// For nodes that require a minimum number of children.
 ///
@@ -814,19 +782,17 @@ impl<const N: usize> Arity for AtLeast<N> {
         count >= N
     }
 
-    #[inline(always)]
+    #[inline]
     fn from_slice<T: Send + Sync>(children: &[T]) -> Self::Accessor<'_, T> {
         debug_assert!(
             children.len() >= N,
-            "AtLeast<{}> expects >= {} children, got {}",
-            N,
-            N,
+            "AtLeast<{N}> expects >= {N} children, got {}",
             children.len()
         );
         SliceChildren { children }
     }
 
-    #[inline(always)]
+    #[inline]
     fn iter_slice<'a, T>(children: &'a [T]) -> Self::Iterator<'a, T>
     where
         T: 'a,
@@ -874,12 +840,12 @@ impl Arity for Variable {
         true
     }
 
-    #[inline(always)]
+    #[inline]
     fn from_slice<T: Send + Sync>(children: &[T]) -> Self::Accessor<'_, T> {
         SliceChildren { children }
     }
 
-    #[inline(always)]
+    #[inline]
     fn iter_slice<'a, T>(children: &'a [T]) -> Self::Iterator<'a, T>
     where
         T: 'a,
@@ -887,6 +853,62 @@ impl Arity for Variable {
         children.iter()
     }
 }
+
+// ============================================================================
+// CHILDREN MUTATION - NOW HANDLED BY ChildrenAccess
+// ============================================================================
+
+// All mutation capability is now handled by the ChildrenAccess trait
+// which provides can_add_child(), can_remove_child(), etc.
+// No need for separate mutation traits.
+
+// ============================================================================
+// ARITY ERROR TYPES
+// ============================================================================
+
+/// Errors that can occur during arity-validated operations.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ArityError {
+    /// Attempted to add too many children.
+    TooManyChildren {
+        arity: RuntimeArity,
+        attempted: usize,
+    },
+    /// Attempted to remove too many children.
+    TooFewChildren {
+        arity: RuntimeArity,
+        attempted: usize,
+    },
+    /// Invalid child count for arity.
+    InvalidChildCount { arity: RuntimeArity, actual: usize },
+}
+
+impl std::fmt::Display for ArityError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TooManyChildren { arity, attempted } => {
+                write!(
+                    f,
+                    "Too many children: arity {arity} does not allow {attempted} children"
+                )
+            }
+            Self::TooFewChildren { arity, attempted } => {
+                write!(
+                    f,
+                    "Too few children: arity {arity} requires more than {attempted} children"
+                )
+            }
+            Self::InvalidChildCount { arity, actual } => {
+                write!(
+                    f,
+                    "Invalid child count: arity {arity} does not allow {actual} children"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for ArityError {}
 
 // ============================================================================
 // TESTS
@@ -1037,5 +1059,71 @@ mod tests {
         assert!(!invalid_range.validate(3)); // Should always be false
         assert!(!invalid_range.validate(1));
         assert!(!invalid_range.validate(10));
+    }
+
+    #[test]
+    fn test_children_access_capability() {
+        // Test that ChildrenAccess provides mutation capability info
+        let empty: &[u32] = &[];
+        let one: &[u32] = &[42];
+        let two: &[u32] = &[1, 2];
+
+        // Leaf accessor
+        let leaf_accessor = Leaf::from_slice(empty);
+        assert!(!leaf_accessor.can_add_child());
+        assert!(!leaf_accessor.can_remove_child());
+        assert_eq!(leaf_accessor.max_children(), Some(0));
+        assert_eq!(leaf_accessor.min_children(), 0);
+
+        // Optional accessor - empty
+        let optional_empty = Optional::from_slice(empty);
+        assert!(optional_empty.can_add_child());
+        assert!(!optional_empty.can_remove_child());
+        assert_eq!(optional_empty.max_children(), Some(1));
+        assert_eq!(optional_empty.min_children(), 0);
+
+        // Optional accessor - with child
+        let optional_full = Optional::from_slice(one);
+        assert!(!optional_full.can_add_child());
+        assert!(optional_full.can_remove_child());
+
+        // Variable accessor
+        let variable_accessor = Variable::from_slice(two);
+        assert!(variable_accessor.can_add_child());
+        assert!(variable_accessor.can_remove_child());
+        assert_eq!(variable_accessor.max_children(), None);
+        assert_eq!(variable_accessor.min_children(), 0);
+    }
+
+    #[test]
+    fn test_arity_error_display() {
+        let error1 = ArityError::TooManyChildren {
+            arity: RuntimeArity::Exact(1),
+            attempted: 2,
+        };
+        let msg1 = format!("{error1}");
+        assert!(msg1.contains("Too many children"));
+        // RuntimeArity::Exact(1) displays as "Single (1 child)"
+        assert!(msg1.contains("Single"));
+        assert!(msg1.contains('2'));
+
+        let error2 = ArityError::TooFewChildren {
+            arity: RuntimeArity::AtLeast(2),
+            attempted: 1,
+        };
+        let msg2 = format!("{error2}");
+        assert!(msg2.contains("Too few children"));
+        // RuntimeArity::AtLeast(2) displays as "AtLeast(2 children)"
+        assert!(msg2.contains("AtLeast"));
+        assert!(msg2.contains('1'));
+
+        let error3 = ArityError::InvalidChildCount {
+            arity: RuntimeArity::Optional,
+            actual: 3,
+        };
+        let msg3 = format!("{error3}");
+        assert!(msg3.contains("Invalid child count"));
+        assert!(msg3.contains("Optional"));
+        assert!(msg3.contains('3'));
     }
 }

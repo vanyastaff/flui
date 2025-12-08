@@ -44,6 +44,7 @@ pub trait ChildrenAccess<'a, T: 'a>: Copy + Send + Sync {
 
     /// Expected access frequency for optimization.
     const ACCESS_FREQUENCY: AccessFrequency = AccessFrequency::Moderate;
+
     /// Returns the underlying slice of children.
     fn as_slice(&self) -> &'a [T];
 
@@ -94,6 +95,47 @@ pub trait ChildrenAccess<'a, T: 'a>: Copy + Send + Sync {
         for item in self.iter() {
             f(item);
         }
+    }
+
+    // ========== MUTATION CAPABILITY CHECKS ==========
+
+    /// Check if this accessor supports adding children.
+    ///
+    /// Returns `true` if the underlying arity allows adding children
+    /// for the current child count.
+    fn can_add_child(&self) -> bool {
+        false // Default: no mutation support
+    }
+
+    /// Check if this accessor supports removing children.
+    ///
+    /// Returns `true` if the underlying arity allows removing children
+    /// for the current child count.
+    fn can_remove_child(&self) -> bool {
+        false // Default: no mutation support
+    }
+
+    /// Get the maximum number of children this accessor allows.
+    fn max_children(&self) -> Option<usize> {
+        Some(self.len()) // Default: current count is max
+    }
+
+    /// Get the minimum number of children this accessor requires.
+    fn min_children(&self) -> usize {
+        self.len() // Default: current count is min
+    }
+
+    /// Check if the given child count would be valid for this arity.
+    fn is_valid_count(&self, count: usize) -> bool {
+        let min = self.min_children();
+        let max = self.max_children();
+
+        count >= min && max.is_none_or(|max| count <= max)
+    }
+
+    /// Get a descriptive name for this accessor type.
+    fn accessor_type_name(&self) -> &'static str {
+        "Unknown"
     }
 }
 
@@ -154,6 +196,10 @@ impl<'a, T: 'a + Send + Sync> ChildrenAccess<'a, T> for NeverAccessor<T> {
 
 impl<T: Send + Sync> NeverAccessor<T> {
     /// This operation is impossible and will never return.
+    ///
+    /// # Panics
+    ///
+    /// Always panics - this operation is impossible by design.
     pub fn impossible(&self) -> ! {
         panic!("This operation should never be called - it's impossible by design")
     }
@@ -190,14 +236,32 @@ impl<'a, T: 'a + Send + Sync> ChildrenAccess<'a, T> for NoChildren<T> {
     const ACCESS_PATTERN: AccessPattern = AccessPattern::Single;
     const ACCESS_FREQUENCY: AccessFrequency = AccessFrequency::Rare;
 
-    #[inline]
     fn as_slice(&self) -> &'a [T] {
         &[]
     }
 
-    #[inline]
     fn iter(&self) -> Self::Iter {
         std::iter::empty()
+    }
+
+    fn can_add_child(&self) -> bool {
+        false // Leaf arity: cannot add children
+    }
+
+    fn can_remove_child(&self) -> bool {
+        false // Leaf arity: cannot remove children
+    }
+
+    fn max_children(&self) -> Option<usize> {
+        Some(0) // Leaf arity: maximum 0 children
+    }
+
+    fn min_children(&self) -> usize {
+        0 // Leaf arity: minimum 0 children
+    }
+
+    fn accessor_type_name(&self) -> &'static str {
+        "NoChildren"
     }
 }
 
@@ -243,14 +307,32 @@ impl<'a, T: 'a + Send + Sync> ChildrenAccess<'a, T> for OptionalChild<'a, T> {
     const ACCESS_PATTERN: AccessPattern = AccessPattern::Single;
     const ACCESS_FREQUENCY: AccessFrequency = AccessFrequency::Frequent;
 
-    #[inline]
     fn as_slice(&self) -> &'a [T] {
         self.children
     }
 
-    #[inline]
     fn iter(&self) -> Self::Iter {
         self.children.iter()
+    }
+
+    fn can_add_child(&self) -> bool {
+        self.is_empty() // Optional arity: can add if empty
+    }
+
+    fn can_remove_child(&self) -> bool {
+        !self.is_empty() // Optional arity: can remove if has child
+    }
+
+    fn max_children(&self) -> Option<usize> {
+        Some(1) // Optional arity: maximum 1 child
+    }
+
+    fn min_children(&self) -> usize {
+        0 // Optional arity: minimum 0 children
+    }
+
+    fn accessor_type_name(&self) -> &'static str {
+        "OptionalChild"
     }
 }
 
@@ -307,7 +389,7 @@ impl<'a, T> OptionalChild<'a, T> {
     where
         F: FnOnce(&'a T) -> U,
     {
-        self.children.first().map(f).unwrap_or(default)
+        self.children.first().map_or(default, f)
     }
 
     /// Maps the child or computes a default value.
@@ -317,12 +399,12 @@ impl<'a, T> OptionalChild<'a, T> {
         D: FnOnce() -> U,
         F: FnOnce(&'a T) -> U,
     {
-        self.children.first().map(f).unwrap_or_else(default)
+        self.children.first().map_or_else(default, f)
     }
 }
 
 // Conversions for OptionalChild
-impl<'a, T: Copy> OptionalChild<'a, T> {
+impl<T: Copy> OptionalChild<'_, T> {
     /// Converts to `Option<T>`, copying the inner value if present.
     ///
     /// This is the idiomatic way to get a `Copy` value from an `OptionalChild`.
@@ -363,21 +445,42 @@ impl<T, const N: usize> Copy for FixedChildren<'_, T, N> {}
 impl<'a, T: 'a + Send + Sync, const N: usize> ChildrenAccess<'a, T> for FixedChildren<'a, T, N> {
     type Iter = std::slice::Iter<'a, T>;
 
-    const ACCESS_PATTERN: AccessPattern = if N <= 4 {
-        AccessPattern::Single
-    } else {
-        AccessPattern::Sequential
+    const ACCESS_PATTERN: AccessPattern = match N {
+        0 | 1 => AccessPattern::Single,
+        _ => AccessPattern::Sequential,
     };
     const ACCESS_FREQUENCY: AccessFrequency = AccessFrequency::Frequent;
 
-    #[inline]
     fn as_slice(&self) -> &'a [T] {
         self.children
     }
 
-    #[inline]
     fn iter(&self) -> Self::Iter {
         self.children.iter()
+    }
+
+    fn can_add_child(&self) -> bool {
+        self.len() < N // Fixed arity: can add if below target count
+    }
+
+    fn can_remove_child(&self) -> bool {
+        self.len() > N // Fixed arity: can remove if above target count
+    }
+
+    fn max_children(&self) -> Option<usize> {
+        Some(N) // Fixed arity: exact count required
+    }
+
+    fn min_children(&self) -> usize {
+        N // Fixed arity: exact count required
+    }
+
+    fn accessor_type_name(&self) -> &'static str {
+        match N {
+            0 => "NoChildren",
+            1 => "SingleChild",
+            _ => "FixedChildren",
+        }
     }
 }
 
@@ -503,14 +606,32 @@ impl<'a, T: 'a + Send + Sync> ChildrenAccess<'a, T> for SliceChildren<'a, T> {
     const ACCESS_PATTERN: AccessPattern = AccessPattern::Sequential;
     const ACCESS_FREQUENCY: AccessFrequency = AccessFrequency::Moderate;
 
-    #[inline]
     fn as_slice(&self) -> &'a [T] {
         self.children
     }
 
-    #[inline]
     fn iter(&self) -> Self::Iter {
         self.children.iter()
+    }
+
+    fn can_add_child(&self) -> bool {
+        true // Variable arity: can always add
+    }
+
+    fn can_remove_child(&self) -> bool {
+        !self.is_empty() // Can remove if has children
+    }
+
+    fn max_children(&self) -> Option<usize> {
+        None // Variable arity: no maximum
+    }
+
+    fn min_children(&self) -> usize {
+        0 // Variable arity: minimum 0 children
+    }
+
+    fn accessor_type_name(&self) -> &'static str {
+        "SliceChildren"
     }
 }
 
@@ -523,7 +644,7 @@ impl<'a, T> SliceChildren<'a, T> {
 
     /// Returns an iterator over the children.
     #[inline]
-    pub fn iter(&self) -> impl Iterator<Item = &'a T> + ExactSizeIterator + DoubleEndedIterator {
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = &'a T> + DoubleEndedIterator {
         self.children.iter()
     }
 
@@ -541,13 +662,13 @@ impl<'a, T> SliceChildren<'a, T> {
 
     /// Returns an iterator over (index, child) pairs.
     #[inline]
-    pub fn enumerate(&self) -> impl Iterator<Item = (usize, &'a T)> + ExactSizeIterator {
+    pub fn enumerate(&self) -> impl ExactSizeIterator<Item = (usize, &'a T)> {
         self.children.iter().enumerate()
     }
 
     /// Returns a reversed iterator over the children.
     #[inline]
-    pub fn rev(&self) -> impl Iterator<Item = &'a T> + ExactSizeIterator {
+    pub fn rev(&self) -> impl ExactSizeIterator<Item = &'a T> {
         self.children.iter().rev()
     }
 }
@@ -578,12 +699,21 @@ impl<'a, T> SliceChildren<'a, T> {
 ///     // id is ElementId (by value)
 /// }
 /// ```
+/// A wrapper that provides value iteration for `Copy` types.
+///
+/// This is the idiomatic Rust way to get values from accessors.
+/// Instead of `.iter_copy()`, use `.iter().copied()` or call `.copied()` on
+/// the accessor to get a `Copied` wrapper.
+///
+/// Note: This type implements `Iterator` on a `Copy` type intentionally
+/// to allow cheap iteration with value semantics.
 #[derive(Debug, Clone, Copy)]
 pub struct Copied<'a, T> {
     children: &'a [T],
 }
 
-impl<'a, T: Copy> Iterator for Copied<'a, T> {
+#[allow(clippy::copy_iterator)] // Intentional: cheap iterator with value semantics
+impl<T: Copy> Iterator for Copied<'_, T> {
     type Item = T;
 
     #[inline]
@@ -621,9 +751,9 @@ impl<'a, T: Copy> Iterator for Copied<'a, T> {
     }
 }
 
-impl<'a, T: Copy> ExactSizeIterator for Copied<'a, T> {}
+impl<T: Copy> ExactSizeIterator for Copied<'_, T> {}
 
-impl<'a, T: Copy> DoubleEndedIterator for Copied<'a, T> {
+impl<T: Copy> DoubleEndedIterator for Copied<'_, T> {
     #[inline]
     fn next_back(&mut self) -> Option<Self::Item> {
         if self.children.is_empty() {
@@ -637,7 +767,7 @@ impl<'a, T: Copy> DoubleEndedIterator for Copied<'a, T> {
     }
 }
 
-impl<'a, T: Copy> std::iter::FusedIterator for Copied<'a, T> {}
+impl<T: Copy> std::iter::FusedIterator for Copied<'_, T> {}
 
 // Add copied() method to SliceChildren for Copy types
 impl<'a, T: Copy> SliceChildren<'a, T> {
@@ -772,7 +902,7 @@ impl<'a, T> SmartChildren<'a, T> {
             }
             AllocationStrategy::Heap => {
                 // Use heap allocation with capacity hint
-                self.children.iter().map(|item| f(item)).collect()
+                self.children.iter().map(&mut f).collect()
             }
             AllocationStrategy::Simd => {
                 // Use chunked processing for SIMD optimization
@@ -809,17 +939,35 @@ impl<'a, T: 'a + Send + Sync, const MIN: usize, const MAX: usize> ChildrenAccess
 {
     type Iter = std::slice::Iter<'a, T>;
 
-    const ACCESS_PATTERN: AccessPattern = AccessPattern::Sequential;
+    const ACCESS_PATTERN: AccessPattern = AccessPattern::Bulk;
     const ACCESS_FREQUENCY: AccessFrequency = AccessFrequency::Moderate;
 
-    #[inline]
     fn as_slice(&self) -> &'a [T] {
         self.children
     }
 
-    #[inline]
     fn iter(&self) -> Self::Iter {
         self.children.iter()
+    }
+
+    fn can_add_child(&self) -> bool {
+        self.len() < MAX // Bounded arity: can add if below max
+    }
+
+    fn can_remove_child(&self) -> bool {
+        self.len() > MIN // Bounded arity: can remove if above min
+    }
+
+    fn max_children(&self) -> Option<usize> {
+        Some(MAX) // Bounded arity: has maximum
+    }
+
+    fn min_children(&self) -> usize {
+        MIN // Bounded arity: has minimum
+    }
+
+    fn accessor_type_name(&self) -> &'static str {
+        "BoundedChildren"
     }
 }
 

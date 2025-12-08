@@ -3,7 +3,7 @@
 //! This module provides the [`TreeRead`] trait for immutable access
 //! to tree nodes without navigation capabilities.
 
-use flui_foundation::ElementId;
+use flui_foundation::TreeId;
 
 /// Read-only access to tree nodes with Generic Associated Types.
 ///
@@ -30,8 +30,8 @@ use flui_foundation::ElementId;
 ///
 /// # Example
 ///
-/// ```rust
-/// use flui_tree::TreeRead;
+/// ```rust,ignore
+/// use flui_tree::{TreeRead, TreeId};
 /// use flui_foundation::ElementId;
 ///
 /// // A simple tree storing strings
@@ -39,28 +39,16 @@ use flui_foundation::ElementId;
 ///     nodes: Vec<Option<String>>,
 /// }
 ///
-/// impl SimpleTree {
-///     fn new() -> Self {
-///         Self { nodes: Vec::new() }
-///     }
-///
-///     fn insert(&mut self, value: String) -> ElementId {
-///         let id = ElementId::new(self.nodes.len() + 1);
-///         self.nodes.push(Some(value));
-///         id
-///     }
-/// }
+/// // Implement sealed trait first
+/// impl flui_tree::traits::sealed::TreeReadSealed for SimpleTree {}
 ///
 /// impl TreeRead for SimpleTree {
+///     type Id = ElementId;
 ///     type Node = String;
-///     type NodeIter<'a> = impl Iterator<Item = ElementId> + 'a where Self: 'a;
-///
-///     const DEFAULT_CAPACITY: usize = 64;
-///     const INLINE_THRESHOLD: usize = 8;
+///     type NodeIter<'a> = Box<dyn Iterator<Item = ElementId> + 'a>;
 ///
 ///     fn get(&self, id: ElementId) -> Option<&Self::Node> {
-///         let index = id.get() as usize - 1;
-///         self.nodes.get(index)?.as_ref()
+///         self.nodes.get(id.get() - 1)?.as_ref()
 ///     }
 ///
 ///     fn len(&self) -> usize {
@@ -68,26 +56,24 @@ use flui_foundation::ElementId;
 ///     }
 ///
 ///     fn node_ids(&self) -> Self::NodeIter<'_> {
-///         (0..self.nodes.len())
-///             .filter_map(move |i| {
-///                 if self.nodes[i].is_some() {
-///                     Some(ElementId::new(i + 1))
-///                 } else {
-///                     None
-///                 }
-///             })
+///         Box::new((0..self.nodes.len()).filter_map(|i| {
+///             if self.nodes[i].is_some() {
+///                 Some(ElementId::new(i + 1))
+///             } else {
+///                 None
+///             }
+///         }))
 ///     }
 /// }
-///
-/// // Usage
-/// let mut tree = SimpleTree::new();
-/// let id = tree.insert("hello".to_string());
-///
-/// assert!(tree.contains(id));
-/// assert_eq!(tree.get(id), Some(&"hello".to_string()));
-/// assert_eq!(tree.len(), 1);
 /// ```
 pub trait TreeRead: sealed::Sealed + Send + Sync {
+    /// The ID type used for node identification.
+    ///
+    /// This associated type allows implementations to use different
+    /// ID types (`ElementId`, `ViewId`, `RenderId`, etc.) while
+    /// maintaining type safety through the [`TreeId`] trait bound.
+    type Id: TreeId;
+
     /// The node type stored in the tree.
     ///
     /// This associated type allows implementations to define their
@@ -98,7 +84,7 @@ pub trait TreeRead: sealed::Sealed + Send + Sync {
     ///
     /// This GAT allows implementations to return different iterator types
     /// while maintaining lifetime safety and zero-cost abstractions.
-    type NodeIter<'a>: Iterator<Item = ElementId> + 'a
+    type NodeIter<'a>: Iterator<Item = Self::Id> + 'a
     where
         Self: 'a;
 
@@ -133,7 +119,7 @@ pub trait TreeRead: sealed::Sealed + Send + Sync {
     /// # Performance
     ///
     /// This should be O(1) for slab-based implementations.
-    fn get(&self, id: ElementId) -> Option<&Self::Node>;
+    fn get(&self, id: Self::Id) -> Option<&Self::Node>;
 
     /// Returns `true` if the tree contains a node with the given ID.
     ///
@@ -146,7 +132,7 @@ pub trait TreeRead: sealed::Sealed + Send + Sync {
     /// Default implementation calls `get()`. Implementations may
     /// provide a more efficient version using bitmap or other structures.
     #[inline]
-    fn contains(&self, id: ElementId) -> bool {
+    fn contains(&self, id: Self::Id) -> bool {
         self.get(id).is_some()
     }
 
@@ -185,7 +171,7 @@ pub trait TreeRead: sealed::Sealed + Send + Sync {
     ///
     /// Default implementation calls `get()` for each ID, but
     /// implementations may provide vectorized or cache-friendly versions.
-    fn get_many<'a, const N: usize>(&'a self, ids: [ElementId; N]) -> [Option<&'a Self::Node>; N] {
+    fn get_many<const N: usize>(&self, ids: [Self::Id; N]) -> [Option<&Self::Node>; N] {
         ids.map(|id| self.get(id))
     }
 
@@ -193,14 +179,14 @@ pub trait TreeRead: sealed::Sealed + Send + Sync {
     ///
     /// This is useful for validation and can be optimized using
     /// bitmap operations or SIMD instructions.
-    fn contains_all(&self, ids: &[ElementId]) -> bool {
+    fn contains_all(&self, ids: &[Self::Id]) -> bool {
         ids.iter().all(|&id| self.contains(id))
     }
 
     /// Check if any of the given IDs exist in the tree.
     ///
     /// Short-circuits on first found element.
-    fn contains_any(&self, ids: &[ElementId]) -> bool {
+    fn contains_any(&self, ids: &[Self::Id]) -> bool {
         ids.iter().any(|&id| self.contains(id))
     }
 }
@@ -239,7 +225,7 @@ pub trait TreeReadExt: TreeRead {
     ///
     /// This method uses Higher-Rank Trait Bounds to accept
     /// predicates that work with any lifetime.
-    fn find_node_where<P>(&self, mut predicate: P) -> Option<ElementId>
+    fn find_node_where<P>(&self, mut predicate: P) -> Option<Self::Id>
     where
         P: for<'a> FnMut(&'a Self::Node) -> bool,
     {
@@ -265,7 +251,7 @@ pub trait TreeReadExt: TreeRead {
     }
 
     /// Collect nodes matching a predicate with capacity optimization.
-    fn collect_nodes_where<P>(&self, mut predicate: P) -> Vec<ElementId>
+    fn collect_nodes_where<P>(&self, mut predicate: P) -> Vec<Self::Id>
     where
         P: for<'a> FnMut(&'a Self::Node) -> bool,
     {
@@ -285,7 +271,7 @@ pub trait TreeReadExt: TreeRead {
     /// Execute a closure for each node using HRTB for maximum flexibility.
     fn for_each_node<F>(&self, mut f: F)
     where
-        F: for<'a> FnMut(ElementId, &'a Self::Node),
+        F: for<'a> FnMut(Self::Id, &'a Self::Node),
     {
         for id in self.node_ids() {
             if let Some(node) = self.get(id) {
@@ -304,6 +290,7 @@ impl<T: TreeRead> TreeReadExt for T {}
 
 /// Blanket implementation for references to `TreeRead`.
 impl<T: TreeRead + ?Sized> TreeRead for &T {
+    type Id = T::Id;
     type Node = T::Node;
     type NodeIter<'a>
         = T::NodeIter<'a>
@@ -316,12 +303,12 @@ impl<T: TreeRead + ?Sized> TreeRead for &T {
     const CACHE_LINE_SIZE: usize = T::CACHE_LINE_SIZE;
 
     #[inline]
-    fn get(&self, id: ElementId) -> Option<&Self::Node> {
+    fn get(&self, id: Self::Id) -> Option<&Self::Node> {
         (**self).get(id)
     }
 
     #[inline]
-    fn contains(&self, id: ElementId) -> bool {
+    fn contains(&self, id: Self::Id) -> bool {
         (**self).contains(id)
     }
 
@@ -336,23 +323,24 @@ impl<T: TreeRead + ?Sized> TreeRead for &T {
     }
 
     #[inline]
-    fn get_many<'a, const N: usize>(&'a self, ids: [ElementId; N]) -> [Option<&'a Self::Node>; N] {
+    fn get_many<const N: usize>(&self, ids: [Self::Id; N]) -> [Option<&Self::Node>; N] {
         (**self).get_many(ids)
     }
 
     #[inline]
-    fn contains_all(&self, ids: &[ElementId]) -> bool {
+    fn contains_all(&self, ids: &[Self::Id]) -> bool {
         (**self).contains_all(ids)
     }
 
     #[inline]
-    fn contains_any(&self, ids: &[ElementId]) -> bool {
+    fn contains_any(&self, ids: &[Self::Id]) -> bool {
         (**self).contains_any(ids)
     }
 }
 
 /// Blanket implementation for mutable references to `TreeRead`.
 impl<T: TreeRead + ?Sized> TreeRead for &mut T {
+    type Id = T::Id;
     type Node = T::Node;
     type NodeIter<'a>
         = T::NodeIter<'a>
@@ -365,12 +353,12 @@ impl<T: TreeRead + ?Sized> TreeRead for &mut T {
     const CACHE_LINE_SIZE: usize = T::CACHE_LINE_SIZE;
 
     #[inline]
-    fn get(&self, id: ElementId) -> Option<&Self::Node> {
+    fn get(&self, id: Self::Id) -> Option<&Self::Node> {
         (**self).get(id)
     }
 
     #[inline]
-    fn contains(&self, id: ElementId) -> bool {
+    fn contains(&self, id: Self::Id) -> bool {
         (**self).contains(id)
     }
 
@@ -385,23 +373,24 @@ impl<T: TreeRead + ?Sized> TreeRead for &mut T {
     }
 
     #[inline]
-    fn get_many<'a, const N: usize>(&'a self, ids: [ElementId; N]) -> [Option<&'a Self::Node>; N] {
+    fn get_many<const N: usize>(&self, ids: [Self::Id; N]) -> [Option<&Self::Node>; N] {
         (**self).get_many(ids)
     }
 
     #[inline]
-    fn contains_all(&self, ids: &[ElementId]) -> bool {
+    fn contains_all(&self, ids: &[Self::Id]) -> bool {
         (**self).contains_all(ids)
     }
 
     #[inline]
-    fn contains_any(&self, ids: &[ElementId]) -> bool {
+    fn contains_any(&self, ids: &[Self::Id]) -> bool {
         (**self).contains_any(ids)
     }
 }
 
 /// Blanket implementation for Box<dyn TreeRead>.
 impl<T: TreeRead + ?Sized> TreeRead for Box<T> {
+    type Id = T::Id;
     type Node = T::Node;
     type NodeIter<'a>
         = T::NodeIter<'a>
@@ -414,12 +403,12 @@ impl<T: TreeRead + ?Sized> TreeRead for Box<T> {
     const CACHE_LINE_SIZE: usize = T::CACHE_LINE_SIZE;
 
     #[inline]
-    fn get(&self, id: ElementId) -> Option<&Self::Node> {
+    fn get(&self, id: Self::Id) -> Option<&Self::Node> {
         (**self).get(id)
     }
 
     #[inline]
-    fn contains(&self, id: ElementId) -> bool {
+    fn contains(&self, id: Self::Id) -> bool {
         (**self).contains(id)
     }
 
@@ -434,17 +423,17 @@ impl<T: TreeRead + ?Sized> TreeRead for Box<T> {
     }
 
     #[inline]
-    fn get_many<'a, const N: usize>(&'a self, ids: [ElementId; N]) -> [Option<&'a Self::Node>; N] {
+    fn get_many<const N: usize>(&self, ids: [Self::Id; N]) -> [Option<&Self::Node>; N] {
         (**self).get_many(ids)
     }
 
     #[inline]
-    fn contains_all(&self, ids: &[ElementId]) -> bool {
+    fn contains_all(&self, ids: &[Self::Id]) -> bool {
         (**self).contains_all(ids)
     }
 
     #[inline]
-    fn contains_any(&self, ids: &[ElementId]) -> bool {
+    fn contains_any(&self, ids: &[Self::Id]) -> bool {
         (**self).contains_any(ids)
     }
 }
@@ -459,13 +448,13 @@ impl<T: TreeRead + ?Sized> TreeRead for Box<T> {
 pub type NodePredicate<Node> = dyn for<'a> Fn(&'a Node) -> bool;
 
 /// Type alias for higher-rank visitor functions.
-pub type NodeVisitor<Node> = dyn for<'a> FnMut(ElementId, &'a Node);
+pub type NodeVisitor<Id, Node> = dyn for<'a> FnMut(Id, &'a Node);
 
 /// Collect all nodes from a tree that match a predicate.
 ///
 /// This is a convenience function that uses the tree's performance
 /// constants for optimal memory allocation.
-pub fn collect_matching_nodes<T, P>(tree: &T, predicate: P) -> Vec<ElementId>
+pub fn collect_matching_nodes<T, P>(tree: &T, predicate: P) -> Vec<T::Id>
 where
     T: TreeRead,
     P: for<'a> Fn(&'a T::Node) -> bool,
@@ -489,6 +478,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_foundation::ElementId;
 
     // Simple test implementation with sealed trait
     struct TestTree {
@@ -510,23 +500,23 @@ mod tests {
     }
 
     impl TreeRead for TestTree {
+        type Id = ElementId;
         type Node = String;
-        type NodeIter<'a>
-            = impl Iterator<Item = ElementId> + 'a
-        where
-            Self: 'a;
+        type NodeIter<'a> = Box<dyn Iterator<Item = ElementId> + 'a>;
 
         const DEFAULT_CAPACITY: usize = 64;
         const INLINE_THRESHOLD: usize = 8;
 
         fn get(&self, id: ElementId) -> Option<&String> {
-            let index = id.get() as usize - 1;
+            let index = id.get() - 1;
             self.nodes.get(index)?.as_ref()
         }
 
         fn contains(&self, id: ElementId) -> bool {
-            let index = id.get() as usize - 1;
-            self.nodes.get(index).map_or(false, |n| n.is_some())
+            let index = id.get() - 1;
+            self.nodes
+                .get(index)
+                .is_some_and(std::option::Option::is_some)
         }
 
         fn len(&self) -> usize {
@@ -534,13 +524,13 @@ mod tests {
         }
 
         fn node_ids(&self) -> Self::NodeIter<'_> {
-            (0..self.nodes.len()).filter_map(move |i| {
+            Box::new((0..self.nodes.len()).filter_map(move |i| {
                 if self.nodes[i].is_some() {
                     Some(ElementId::new(i + 1))
                 } else {
                     None
                 }
-            })
+            }))
         }
     }
 
@@ -569,8 +559,8 @@ mod tests {
         assert!(tree.is_empty());
         assert_eq!(tree.len(), 0);
 
-        tree.insert("one".to_string());
-        tree.insert("two".to_string());
+        let _ = tree.insert("one".to_string());
+        let _ = tree.insert("two".to_string());
 
         assert!(!tree.is_empty());
         assert_eq!(tree.len(), 2);

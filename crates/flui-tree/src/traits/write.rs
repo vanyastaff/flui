@@ -3,8 +3,6 @@
 //! This module provides the [`TreeWrite`] trait for modifying
 //! tree structure (insert, remove, reparent).
 
-use flui_foundation::ElementId;
-
 use super::TreeRead;
 use crate::error::{TreeError, TreeResult};
 
@@ -25,26 +23,6 @@ use crate::error::{TreeError, TreeResult};
 /// - `NotFound` - Node doesn't exist
 /// - `CycleDetected` - Reparenting would create a cycle
 /// - `AlreadyExists` - Node already in tree
-///
-/// # Example
-///
-/// ```rust,ignore
-/// use flui_tree::{TreeWrite, TreeRead};
-/// use flui_foundation::ElementId;
-///
-/// fn add_children<T: TreeWrite>(
-///     tree: &mut T,
-///     parent: ElementId,
-///     count: usize,
-/// ) -> Vec<ElementId> {
-///     (0..count)
-///         .map(|_| {
-///             let node = T::Node::default();
-///             tree.insert(node)
-///         })
-///         .collect()
-/// }
-/// ```
 pub trait TreeWrite: TreeRead {
     /// Returns a mutable reference to the node with the given ID.
     ///
@@ -55,12 +33,12 @@ pub trait TreeWrite: TreeRead {
     /// # Returns
     ///
     /// `Some(&mut Node)` if the node exists, `None` otherwise.
-    fn get_mut(&mut self, id: ElementId) -> Option<&mut Self::Node>;
+    fn get_mut(&mut self, id: Self::Id) -> Option<&mut Self::Node>;
 
     /// Inserts a new node into the tree.
     ///
     /// The node is inserted without a parent (as a potential root).
-    /// Use [`Self::set_parent`] to establish parent-child relationships.
+    /// Use [`TreeWriteNav::set_parent`] to establish parent-child relationships.
     ///
     /// # Arguments
     ///
@@ -73,7 +51,7 @@ pub trait TreeWrite: TreeRead {
     /// # Performance
     ///
     /// Should be O(1) amortized for slab-based implementations.
-    fn insert(&mut self, node: Self::Node) -> ElementId;
+    fn insert(&mut self, node: Self::Node) -> Self::Id;
 
     /// Removes a node from the tree.
     ///
@@ -92,7 +70,7 @@ pub trait TreeWrite: TreeRead {
     ///
     /// Implementations should update parent's children list when
     /// removing a node.
-    fn remove(&mut self, id: ElementId) -> Option<Self::Node>;
+    fn remove(&mut self, id: Self::Id) -> Option<Self::Node>;
 
     /// Removes a node and all its descendants.
     ///
@@ -108,12 +86,12 @@ pub trait TreeWrite: TreeRead {
     ///
     /// Collects descendants and removes them in reverse order.
     /// Implementations may provide more efficient versions.
-    fn remove_subtree(&mut self, id: ElementId) -> usize
+    fn remove_subtree(&mut self, id: Self::Id) -> usize
     where
         Self: super::TreeNav + Sized,
     {
         // Collect all descendants first (to avoid borrow issues)
-        // descendants() returns (ElementId, depth) tuples
+        // descendants() returns (Id, depth) tuples
         let to_remove: Vec<_> = self.descendants(id).map(|(id, _depth)| id).collect();
         let count = to_remove.len();
 
@@ -168,11 +146,6 @@ pub trait TreeWriteNav: TreeWrite + super::TreeNav {
     /// - `NotFound` - Child or parent doesn't exist
     /// - `CycleDetected` - New parent is a descendant of child
     ///
-    /// # Default Implementation
-    ///
-    /// Validates no cycle, updates old parent's children, updates
-    /// new parent's children, and sets child's parent.
-    ///
     /// # Note
     ///
     /// This method has no default implementation because it requires
@@ -183,7 +156,11 @@ pub trait TreeWriteNav: TreeWrite + super::TreeNav {
     /// 3. Updates old parent's children list
     /// 4. Updates new parent's children list
     /// 5. Updates child's parent reference
-    fn set_parent(&mut self, child: ElementId, new_parent: Option<ElementId>) -> TreeResult<()>;
+    fn set_parent(
+        &mut self,
+        child: Self::Id,
+        new_parent: Option<Self::Id>,
+    ) -> TreeResult<Self::Id, Self::Id>;
 
     /// Adds a child to a parent node.
     ///
@@ -197,7 +174,7 @@ pub trait TreeWriteNav: TreeWrite + super::TreeNav {
     /// - `NotFound` - Parent or child doesn't exist
     /// - `CycleDetected` - Child is an ancestor of parent
     #[inline]
-    fn add_child(&mut self, parent: ElementId, child: ElementId) -> TreeResult<()> {
+    fn add_child(&mut self, parent: Self::Id, child: Self::Id) -> TreeResult<Self::Id, Self::Id> {
         self.set_parent(child, Some(parent))
     }
 
@@ -213,7 +190,7 @@ pub trait TreeWriteNav: TreeWrite + super::TreeNav {
     ///
     /// - `NotFound` - Child doesn't exist
     #[inline]
-    fn detach(&mut self, child: ElementId) -> TreeResult<()> {
+    fn detach(&mut self, child: Self::Id) -> TreeResult<Self::Id, Self::Id> {
         self.set_parent(child, None)
     }
 
@@ -228,7 +205,7 @@ pub trait TreeWriteNav: TreeWrite + super::TreeNav {
     ///
     /// - `NotFound` - Source or destination doesn't exist
     /// - `CycleDetected` - Would create a cycle
-    fn move_children(&mut self, from: ElementId, to: ElementId) -> TreeResult<()>
+    fn move_children(&mut self, from: Self::Id, to: Self::Id) -> TreeResult<(), Self::Id>
     where
         Self: Sized,
     {
@@ -240,7 +217,6 @@ pub trait TreeWriteNav: TreeWrite + super::TreeNav {
         }
 
         // Check for cycles: 'to' can't be a descendant of 'from'
-        // is_ancestor_of(from, to) means 'from' is ancestor of 'to', i.e., 'to' is descendant of 'from'
         if self.is_ancestor_of(from, to) {
             return Err(TreeError::cycle_detected(to));
         }
@@ -275,8 +251,8 @@ pub trait TreeWriteNav: TreeWrite + super::TreeNav {
     fn insert_child(
         &mut self,
         node: Self::Node,
-        parent: Option<ElementId>,
-    ) -> TreeResult<ElementId> {
+        parent: Option<Self::Id>,
+    ) -> TreeResult<Self::Id, Self::Id> {
         let id = self.insert(node);
 
         if let Some(parent_id) = parent {
@@ -297,17 +273,17 @@ pub trait TreeWriteNav: TreeWrite + super::TreeNav {
 
 impl<T: TreeWrite + ?Sized> TreeWrite for &mut T {
     #[inline]
-    fn get_mut(&mut self, id: ElementId) -> Option<&mut Self::Node> {
+    fn get_mut(&mut self, id: Self::Id) -> Option<&mut Self::Node> {
         (**self).get_mut(id)
     }
 
     #[inline]
-    fn insert(&mut self, node: Self::Node) -> ElementId {
+    fn insert(&mut self, node: Self::Node) -> Self::Id {
         (**self).insert(node)
     }
 
     #[inline]
-    fn remove(&mut self, id: ElementId) -> Option<Self::Node> {
+    fn remove(&mut self, id: Self::Id) -> Option<Self::Node> {
         (**self).remove(id)
     }
 
@@ -324,17 +300,17 @@ impl<T: TreeWrite + ?Sized> TreeWrite for &mut T {
 
 impl<T: TreeWrite + ?Sized> TreeWrite for Box<T> {
     #[inline]
-    fn get_mut(&mut self, id: ElementId) -> Option<&mut Self::Node> {
+    fn get_mut(&mut self, id: Self::Id) -> Option<&mut Self::Node> {
         (**self).get_mut(id)
     }
 
     #[inline]
-    fn insert(&mut self, node: Self::Node) -> ElementId {
+    fn insert(&mut self, node: Self::Node) -> Self::Id {
         (**self).insert(node)
     }
 
     #[inline]
-    fn remove(&mut self, id: ElementId) -> Option<Self::Node> {
+    fn remove(&mut self, id: Self::Id) -> Option<Self::Node> {
         (**self).remove(id)
     }
 
@@ -356,8 +332,9 @@ impl<T: TreeWrite + ?Sized> TreeWrite for Box<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::iter::{Ancestors, DescendantsWithDepth};
     use crate::traits::{TreeNav, TreeRead};
-    use flui_foundation::Slot;
+    use flui_foundation::ElementId;
 
     // Test implementation
     #[derive(Default)]
@@ -371,6 +348,9 @@ mod tests {
         nodes: Vec<Option<TestNode>>,
     }
 
+    impl crate::traits::sealed::TreeReadSealed for TestTree {}
+    impl crate::traits::sealed::TreeNavSealed for TestTree {}
+
     impl TestTree {
         fn new() -> Self {
             Self { nodes: Vec::new() }
@@ -378,40 +358,70 @@ mod tests {
     }
 
     impl TreeRead for TestTree {
+        type Id = ElementId;
         type Node = TestNode;
+        type NodeIter<'a> = Box<dyn Iterator<Item = ElementId> + 'a>;
 
         fn get(&self, id: ElementId) -> Option<&TestNode> {
-            self.nodes.get(id.get() as usize - 1)?.as_ref()
+            self.nodes.get(id.get() - 1)?.as_ref()
         }
 
         fn len(&self) -> usize {
             self.nodes.iter().filter(|n| n.is_some()).count()
         }
 
-        fn node_ids(&self) -> Option<Box<dyn Iterator<Item = ElementId> + '_>> {
-            Some(Box::new(self.nodes.iter().enumerate().filter_map(
-                |(i, n)| n.as_ref().map(|_| ElementId::new(i + 1)),
-            )))
+        fn node_ids(&self) -> Self::NodeIter<'_> {
+            Box::new((0..self.nodes.len()).filter_map(|i| {
+                if self.nodes[i].is_some() {
+                    Some(ElementId::new(i + 1))
+                } else {
+                    None
+                }
+            }))
         }
     }
 
     impl TreeNav for TestTree {
+        type ChildrenIter<'a> = Box<dyn Iterator<Item = ElementId> + 'a>;
+        type AncestorsIter<'a> = Ancestors<'a, Self>;
+        type DescendantsIter<'a> = DescendantsWithDepth<'a, Self>;
+        type SiblingsIter<'a> = Box<dyn Iterator<Item = ElementId> + 'a>;
+
         fn parent(&self, id: ElementId) -> Option<ElementId> {
             self.get(id)?.parent
         }
 
-        fn children(&self, id: ElementId) -> &[ElementId] {
-            self.get(id).map(|n| n.children.as_slice()).unwrap_or(&[])
+        fn children(&self, id: ElementId) -> Self::ChildrenIter<'_> {
+            if let Some(node) = self.get(id) {
+                Box::new(node.children.iter().copied())
+            } else {
+                Box::new(std::iter::empty())
+            }
         }
 
-        fn slot(&self, _id: ElementId) -> Option<Slot> {
-            None
+        fn ancestors(&self, start: ElementId) -> Self::AncestorsIter<'_> {
+            Ancestors::new(self, start)
+        }
+
+        fn descendants(&self, root: ElementId) -> Self::DescendantsIter<'_> {
+            DescendantsWithDepth::new(self, root)
+        }
+
+        fn siblings(&self, id: ElementId) -> Self::SiblingsIter<'_> {
+            if let Some(parent_id) = self.parent(id) {
+                Box::new(
+                    self.children(parent_id)
+                        .filter(move |&child_id| child_id != id),
+                )
+            } else {
+                Box::new(std::iter::empty())
+            }
         }
     }
 
     impl TreeWrite for TestTree {
         fn get_mut(&mut self, id: ElementId) -> Option<&mut TestNode> {
-            self.nodes.get_mut(id.get() as usize - 1)?.as_mut()
+            self.nodes.get_mut(id.get() - 1)?.as_mut()
         }
 
         fn insert(&mut self, node: TestNode) -> ElementId {
@@ -421,12 +431,12 @@ mod tests {
         }
 
         fn remove(&mut self, id: ElementId) -> Option<TestNode> {
-            let index = id.get() as usize - 1;
+            let index = id.get() - 1;
 
             // Remove from parent's children
             if let Some(node) = self.nodes.get(index)?.as_ref() {
                 if let Some(parent_id) = node.parent {
-                    if let Some(Some(parent)) = self.nodes.get_mut(parent_id.get() as usize - 1) {
+                    if let Some(Some(parent)) = self.nodes.get_mut(parent_id.get() - 1) {
                         parent.children.retain(|&child| child != id);
                     }
                 }
@@ -449,7 +459,7 @@ mod tests {
             &mut self,
             child: ElementId,
             new_parent: Option<ElementId>,
-        ) -> TreeResult<()> {
+        ) -> TreeResult<ElementId, ElementId> {
             // Check child exists
             if !self.contains(child) {
                 return Err(TreeError::not_found(child));
@@ -462,7 +472,6 @@ mod tests {
                 }
 
                 // Check for cycles: new_parent must not be a descendant of child
-                // This prevents creating cycles like: child -> parent -> child
                 if self.is_ancestor_of(child, parent_id) || parent_id == child {
                     return Err(TreeError::cycle_detected(child));
                 }
@@ -470,26 +479,26 @@ mod tests {
 
             // Remove from old parent's children
             if let Some(old_parent) = self.parent(child) {
-                if let Some(Some(parent_node)) = self.nodes.get_mut(old_parent.get() as usize - 1) {
+                if let Some(Some(parent_node)) = self.nodes.get_mut(old_parent.get() - 1) {
                     parent_node.children.retain(|&c| c != child);
                 }
             }
 
             // Update child's parent
-            if let Some(Some(child_node)) = self.nodes.get_mut(child.get() as usize - 1) {
+            if let Some(Some(child_node)) = self.nodes.get_mut(child.get() - 1) {
                 child_node.parent = new_parent;
             }
 
             // Add to new parent's children
             if let Some(parent_id) = new_parent {
-                if let Some(Some(parent_node)) = self.nodes.get_mut(parent_id.get() as usize - 1) {
+                if let Some(Some(parent_node)) = self.nodes.get_mut(parent_id.get() - 1) {
                     if !parent_node.children.contains(&child) {
                         parent_node.children.push(child);
                     }
                 }
             }
 
-            Ok(())
+            Ok(child)
         }
     }
 
@@ -529,10 +538,11 @@ mod tests {
         let root = tree.insert(TestNode::default());
         let child = tree.insert(TestNode::default());
 
-        tree.set_parent(child, Some(root)).unwrap();
+        let _ = tree.set_parent(child, Some(root)).unwrap();
 
         assert_eq!(tree.parent(child), Some(root));
-        assert_eq!(tree.children(root), &[child]);
+        let children: Vec<_> = tree.children(root).collect();
+        assert_eq!(children, vec![child]);
     }
 
     #[test]
@@ -541,7 +551,7 @@ mod tests {
         let root = tree.insert(TestNode::default());
         let child = tree.insert(TestNode::default());
 
-        tree.set_parent(child, Some(root)).unwrap();
+        let _ = tree.set_parent(child, Some(root)).unwrap();
 
         // Trying to make root a child of child should fail
         let result = tree.set_parent(root, Some(child));
@@ -554,20 +564,20 @@ mod tests {
         let root = tree.insert(TestNode::default());
         let child = tree.insert(TestNode::default());
 
-        tree.set_parent(child, Some(root)).unwrap();
+        let _ = tree.set_parent(child, Some(root)).unwrap();
         assert_eq!(tree.parent(child), Some(root));
 
-        tree.detach(child).unwrap();
+        let _ = tree.detach(child).unwrap();
         assert_eq!(tree.parent(child), None);
-        assert!(tree.children(root).is_empty());
+        assert_eq!(tree.children(root).count(), 0);
     }
 
     #[test]
     fn test_clear() {
         let mut tree = TestTree::new();
-        tree.insert(TestNode::default());
-        tree.insert(TestNode::default());
-        tree.insert(TestNode::default());
+        let _ = tree.insert(TestNode::default());
+        let _ = tree.insert(TestNode::default());
+        let _ = tree.insert(TestNode::default());
 
         assert_eq!(tree.len(), 3);
         tree.clear();
@@ -582,9 +592,9 @@ mod tests {
         let child2 = tree.insert(TestNode::default());
         let grandchild = tree.insert(TestNode::default());
 
-        tree.set_parent(child1, Some(root)).unwrap();
-        tree.set_parent(child2, Some(root)).unwrap();
-        tree.set_parent(grandchild, Some(child1)).unwrap();
+        let _ = tree.set_parent(child1, Some(root)).unwrap();
+        let _ = tree.set_parent(child2, Some(root)).unwrap();
+        let _ = tree.set_parent(grandchild, Some(child1)).unwrap();
 
         assert_eq!(tree.len(), 4);
 

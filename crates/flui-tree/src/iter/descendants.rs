@@ -1,11 +1,13 @@
 //! Descendant iterators.
 
 use crate::traits::TreeNav;
-use flui_foundation::ElementId;
+use smallvec::SmallVec;
 
-/// Stack storage optimization.
-/// Uses inline array for shallow trees, heap for deep ones.
-const INLINE_STACK_SIZE: usize = 32;
+/// Stack type for descendants iterator.
+///
+/// Uses inline storage for up to 32 elements to avoid heap allocation
+/// for typical shallow UI trees.
+type DescendantStack<Id> = SmallVec<[Id; 32]>;
 
 /// Iterator over descendants of a node (pre-order depth-first).
 ///
@@ -22,18 +24,18 @@ const INLINE_STACK_SIZE: usize = 32;
 ///
 /// # Performance
 ///
-/// Uses a small inline stack for trees up to 32 levels deep, falling
-/// back to heap allocation for deeper trees.
+/// Uses `SmallVec` with inline storage for 32 elements. This avoids heap
+/// allocation for typical UI trees where traversal depth rarely exceeds 32.
 #[derive(Debug)]
 pub struct Descendants<'a, T: TreeNav> {
     tree: &'a T,
-    stack: DescendantStack,
+    stack: DescendantStack<T::Id>,
 }
 
 impl<'a, T: TreeNav> Descendants<'a, T> {
     /// Creates a new descendants iterator starting from the given root.
     #[inline]
-    pub fn new(tree: &'a T, root: ElementId) -> Self {
+    pub fn new(tree: &'a T, root: T::Id) -> Self {
         let mut stack = DescendantStack::new();
         stack.push(root);
 
@@ -54,7 +56,7 @@ impl<'a, T: TreeNav> Descendants<'a, T> {
 }
 
 impl<T: TreeNav> Iterator for Descendants<'_, T> {
-    type Item = ElementId;
+    type Item = T::Id;
 
     fn next(&mut self) -> Option<Self::Item> {
         let current = self.stack.pop()?;
@@ -65,7 +67,7 @@ impl<T: TreeNav> Iterator for Descendants<'_, T> {
         }
 
         // Push children in reverse order (so first child is processed first)
-        let children: Vec<_> = self.tree.children(current).collect();
+        let children: SmallVec<[T::Id; 8]> = self.tree.children(current).collect();
         for child in children.into_iter().rev() {
             self.stack.push(child);
         }
@@ -82,21 +84,24 @@ impl<T: TreeNav> Iterator for Descendants<'_, T> {
 
 impl<T: TreeNav> std::iter::FusedIterator for Descendants<'_, T> {}
 
+/// Stack type for descendants-with-depth iterator.
+type DescendantDepthStack<Id> = SmallVec<[(Id, usize); 32]>;
+
 /// Iterator over descendants with their depths.
 ///
-/// Yields `(ElementId, usize)` tuples where depth is relative to
+/// Yields `(Id, usize)` tuples where depth is relative to
 /// the starting root (root has depth 0).
 #[derive(Debug)]
 pub struct DescendantsWithDepth<'a, T: TreeNav> {
     tree: &'a T,
-    stack: DescendantStackWithDepth,
+    stack: DescendantDepthStack<T::Id>,
 }
 
 impl<'a, T: TreeNav> DescendantsWithDepth<'a, T> {
     /// Creates a new descendants-with-depth iterator.
     #[inline]
-    pub fn new(tree: &'a T, root: ElementId) -> Self {
-        let mut stack = DescendantStackWithDepth::new();
+    pub fn new(tree: &'a T, root: T::Id) -> Self {
+        let mut stack = DescendantDepthStack::new();
         stack.push((root, 0));
 
         Self { tree, stack }
@@ -104,7 +109,7 @@ impl<'a, T: TreeNav> DescendantsWithDepth<'a, T> {
 }
 
 impl<T: TreeNav> Iterator for DescendantsWithDepth<'_, T> {
-    type Item = (ElementId, usize);
+    type Item = (T::Id, usize);
 
     fn next(&mut self) -> Option<Self::Item> {
         let (current, depth) = self.stack.pop()?;
@@ -113,7 +118,7 @@ impl<T: TreeNav> Iterator for DescendantsWithDepth<'_, T> {
             return self.next();
         }
 
-        let children: Vec<_> = self.tree.children(current).collect();
+        let children: SmallVec<[T::Id; 8]> = self.tree.children(current).collect();
         for child in children.into_iter().rev() {
             self.stack.push((child, depth + 1));
         }
@@ -130,104 +135,15 @@ impl<T: TreeNav> Iterator for DescendantsWithDepth<'_, T> {
 impl<T: TreeNav> std::iter::FusedIterator for DescendantsWithDepth<'_, T> {}
 
 // ============================================================================
-// STACK IMPLEMENTATION
-// ============================================================================
-
-/// Stack with inline storage optimization.
-#[derive(Debug)]
-struct DescendantStack {
-    inline: [ElementId; INLINE_STACK_SIZE],
-    inline_len: usize,
-    overflow: Vec<ElementId>,
-}
-
-impl DescendantStack {
-    fn new() -> Self {
-        Self {
-            // Use dummy value (1) since inline_len tracks valid elements
-            inline: [ElementId::new(1); INLINE_STACK_SIZE],
-            inline_len: 0,
-            overflow: Vec::new(),
-        }
-    }
-
-    fn push(&mut self, id: ElementId) {
-        if self.inline_len < INLINE_STACK_SIZE {
-            self.inline[self.inline_len] = id;
-            self.inline_len += 1;
-        } else {
-            self.overflow.push(id);
-        }
-    }
-
-    fn pop(&mut self) -> Option<ElementId> {
-        if let Some(id) = self.overflow.pop() {
-            Some(id)
-        } else if self.inline_len > 0 {
-            self.inline_len -= 1;
-            Some(self.inline[self.inline_len])
-        } else {
-            None
-        }
-    }
-
-    fn len(&self) -> usize {
-        self.inline_len + self.overflow.len()
-    }
-}
-
-/// Stack with depth tracking.
-#[derive(Debug)]
-struct DescendantStackWithDepth {
-    inline: [(ElementId, usize); INLINE_STACK_SIZE],
-    inline_len: usize,
-    overflow: Vec<(ElementId, usize)>,
-}
-
-impl DescendantStackWithDepth {
-    fn new() -> Self {
-        Self {
-            // Use dummy value (1) since inline_len tracks valid elements
-            inline: [(ElementId::new(1), 0); INLINE_STACK_SIZE],
-            inline_len: 0,
-            overflow: Vec::new(),
-        }
-    }
-
-    fn push(&mut self, item: (ElementId, usize)) {
-        if self.inline_len < INLINE_STACK_SIZE {
-            self.inline[self.inline_len] = item;
-            self.inline_len += 1;
-        } else {
-            self.overflow.push(item);
-        }
-    }
-
-    fn pop(&mut self) -> Option<(ElementId, usize)> {
-        if let Some(item) = self.overflow.pop() {
-            Some(item)
-        } else if self.inline_len > 0 {
-            self.inline_len -= 1;
-            Some(self.inline[self.inline_len])
-        } else {
-            None
-        }
-    }
-
-    fn len(&self) -> usize {
-        self.inline_len + self.overflow.len()
-    }
-}
-
-// ============================================================================
 // TESTS
 // ============================================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::iter::Ancestors;
     use crate::traits::TreeRead;
-    use flui_foundation::Slot;
+    use flui_foundation::ElementId;
 
     struct TestNode {
         parent: Option<ElementId>,
@@ -237,6 +153,9 @@ mod tests {
     struct TestTree {
         nodes: Vec<Option<TestNode>>,
     }
+
+    impl crate::traits::sealed::TreeReadSealed for TestTree {}
+    impl crate::traits::sealed::TreeNavSealed for TestTree {}
 
     impl TestTree {
         fn new() -> Self {
@@ -251,7 +170,7 @@ mod tests {
             }));
 
             if let Some(parent_id) = parent {
-                if let Some(Some(p)) = self.nodes.get_mut(parent_id.get() as usize - 1) {
+                if let Some(Some(p)) = self.nodes.get_mut(parent_id.get() - 1) {
                     p.children.push(id);
                 }
             }
@@ -261,28 +180,64 @@ mod tests {
     }
 
     impl TreeRead for TestTree {
+        type Id = ElementId;
         type Node = TestNode;
+        type NodeIter<'a> = Box<dyn Iterator<Item = ElementId> + 'a>;
 
         fn get(&self, id: ElementId) -> Option<&TestNode> {
-            self.nodes.get(id.get() as usize - 1)?.as_ref()
+            self.nodes.get(id.get() - 1)?.as_ref()
         }
 
         fn len(&self) -> usize {
             self.nodes.iter().filter(|n| n.is_some()).count()
         }
+
+        fn node_ids(&self) -> Self::NodeIter<'_> {
+            Box::new((0..self.nodes.len()).filter_map(|i| {
+                if self.nodes[i].is_some() {
+                    Some(ElementId::new(i + 1))
+                } else {
+                    None
+                }
+            }))
+        }
     }
 
     impl TreeNav for TestTree {
+        type ChildrenIter<'a> = Box<dyn Iterator<Item = ElementId> + 'a>;
+        type AncestorsIter<'a> = Ancestors<'a, Self>;
+        type DescendantsIter<'a> = DescendantsWithDepth<'a, Self>;
+        type SiblingsIter<'a> = Box<dyn Iterator<Item = ElementId> + 'a>;
+
         fn parent(&self, id: ElementId) -> Option<ElementId> {
             self.get(id)?.parent
         }
 
-        fn children(&self, id: ElementId) -> &[ElementId] {
-            self.get(id).map(|n| n.children.as_slice()).unwrap_or(&[])
+        fn children(&self, id: ElementId) -> Self::ChildrenIter<'_> {
+            if let Some(node) = self.get(id) {
+                Box::new(node.children.iter().copied())
+            } else {
+                Box::new(std::iter::empty())
+            }
         }
 
-        fn slot(&self, _id: ElementId) -> Option<Slot> {
-            None
+        fn ancestors(&self, start: ElementId) -> Self::AncestorsIter<'_> {
+            Ancestors::new(self, start)
+        }
+
+        fn descendants(&self, root: ElementId) -> Self::DescendantsIter<'_> {
+            DescendantsWithDepth::new(self, root)
+        }
+
+        fn siblings(&self, id: ElementId) -> Self::SiblingsIter<'_> {
+            if let Some(parent_id) = self.parent(id) {
+                Box::new(
+                    self.children(parent_id)
+                        .filter(move |&child_id| child_id != id),
+                )
+            } else {
+                Box::new(std::iter::empty())
+            }
         }
     }
 

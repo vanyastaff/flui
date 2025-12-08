@@ -4,12 +4,16 @@
 //!
 //! Run with: cargo run --example basic_traversal
 
-use flui_foundation::{ElementId, Slot};
+use flui_foundation::ElementId;
 use flui_tree::{
-    iter::{BreadthFirstIter, DepthFirstIter, DepthFirstOrder},
+    iter::{Ancestors, BreadthFirstIter, DepthFirstIter, DescendantsWithDepth},
     prelude::*,
-    visitor::{visit_breadth_first, visit_depth_first, CollectVisitor, MaxDepthVisitor},
+    traits::sealed::{TreeNavSealed, TreeReadSealed},
+    visitor::{for_each, visit_depth_first, CollectVisitor, MaxDepthVisitor},
 };
+
+// Note: TreeVisitor and VisitorResult are not imported since TreeVisitor is sealed.
+// Use for_each() for custom visiting logic instead.
 
 // ============================================================================
 // EXAMPLE TREE IMPLEMENTATION
@@ -27,6 +31,10 @@ struct DemoNode {
 struct DemoTree {
     nodes: Vec<Option<DemoNode>>,
 }
+
+// Implement sealed traits for external usage
+impl TreeReadSealed for DemoTree {}
+impl TreeNavSealed for DemoTree {}
 
 impl DemoTree {
     fn new() -> Self {
@@ -57,66 +65,64 @@ impl DemoTree {
 }
 
 impl TreeRead for DemoTree {
+    type Id = ElementId;
     type Node = DemoNode;
+    type NodeIter<'a> = Box<dyn Iterator<Item = ElementId> + 'a>;
 
     fn get(&self, id: ElementId) -> Option<&DemoNode> {
-        self.nodes.get(id.get() as usize - 1)?.as_ref()
+        self.nodes.get(id.get() - 1)?.as_ref()
     }
 
     fn len(&self) -> usize {
         self.nodes.iter().filter(|n| n.is_some()).count()
     }
+
+    fn node_ids(&self) -> Self::NodeIter<'_> {
+        Box::new((0..self.nodes.len()).filter_map(|i| {
+            if self.nodes[i].is_some() {
+                Some(ElementId::new(i + 1))
+            } else {
+                None
+            }
+        }))
+    }
 }
 
 impl TreeNav for DemoTree {
-    type ChildrenIter<'a> = std::iter::Flatten<
-        std::option::IntoIter<std::iter::Copied<std::slice::Iter<'a, ElementId>>>,
-    >;
-    type AncestorsIter<'a> = flui_tree::iter::Ancestors<'a, Self>;
-    type DescendantsIter<'a> = flui_tree::iter::Descendants<'a, Self>;
-    type SiblingsIter<'a> = std::iter::Flatten<
-        std::option::IntoIter<
-            std::iter::Filter<
-                std::iter::Copied<std::slice::Iter<'a, ElementId>>,
-                fn(&ElementId) -> bool,
-            >,
-        >,
-    >;
+    type ChildrenIter<'a> = Box<dyn Iterator<Item = ElementId> + 'a>;
+    type AncestorsIter<'a> = Ancestors<'a, Self>;
+    type DescendantsIter<'a> = DescendantsWithDepth<'a, Self>;
+    type SiblingsIter<'a> = Box<dyn Iterator<Item = ElementId> + 'a>;
 
     fn parent(&self, id: ElementId) -> Option<ElementId> {
         self.get(id)?.parent
     }
 
     fn children(&self, id: ElementId) -> Self::ChildrenIter<'_> {
-        self.get(id)
-            .map(|n| n.children.iter().copied())
-            .into_iter()
-            .flatten()
+        if let Some(node) = self.get(id) {
+            Box::new(node.children.iter().copied())
+        } else {
+            Box::new(std::iter::empty())
+        }
     }
 
     fn ancestors(&self, start: ElementId) -> Self::AncestorsIter<'_> {
-        flui_tree::iter::Ancestors::new(self, start)
+        Ancestors::new(self, start)
     }
 
     fn descendants(&self, root: ElementId) -> Self::DescendantsIter<'_> {
-        flui_tree::iter::Descendants::new(self, root)
+        DescendantsWithDepth::new(self, root)
     }
 
     fn siblings(&self, id: ElementId) -> Self::SiblingsIter<'_> {
-        let parent = self.parent(id);
-        self.get(parent?)
-            .map(|p| {
-                p.children
-                    .iter()
-                    .copied()
-                    .filter(move |&child_id| child_id != id)
-            })
-            .into_iter()
-            .flatten()
-    }
-
-    fn slot(&self, _id: ElementId) -> Option<Slot> {
-        None
+        if let Some(parent_id) = self.parent(id) {
+            Box::new(
+                self.children(parent_id)
+                    .filter(move |&child_id| child_id != id),
+            )
+        } else {
+            Box::new(std::iter::empty())
+        }
     }
 }
 
@@ -142,7 +148,7 @@ fn main() {
     let app = tree.insert("App", None);
     let home = tree.insert("Home", Some(app));
     let feed = tree.insert("Feed", Some(app));
-    let profile = tree.insert("Profile", Some(app));
+    let _profile = tree.insert("Profile", Some(app));
     let hero = tree.insert("Hero", Some(home));
     let posts = tree.insert("Posts", Some(feed));
     let post1 = tree.insert("Post1", Some(posts));
@@ -177,13 +183,13 @@ fn main() {
     println!("📍 Descendants of App (pre-order DFS):");
     let descendants: Vec<_> = tree
         .descendants(app)
-        .map(|id| tree.name(id).unwrap())
+        .map(|(id, _depth)| tree.name(id).unwrap())
         .collect();
     println!("   {:?}", descendants);
     println!();
 
     println!("📍 Descendants with depth:");
-    for (id, depth) in tree.descendants_with_depth(app) {
+    for (id, depth) in tree.descendants(app) {
         let indent = "  ".repeat(depth);
         println!("   {}{}", indent, tree.name(id).unwrap());
     }
@@ -222,15 +228,18 @@ fn main() {
     // ========================================================================
 
     println!("📍 Navigation utilities:");
-    println!("   Root of Post1: {}", tree.name(tree.root(post1)).unwrap());
+    // Find root by walking ancestors
+    let root_of_post1 = tree.ancestors(post1).last().unwrap_or(post1);
+    println!("   Root of Post1: {}", tree.name(root_of_post1).unwrap());
     println!("   Depth of Post1: {}", tree.depth(post1));
     println!("   Is App a root? {}", tree.is_root(app));
     println!("   Is Post1 a leaf? {}", tree.is_leaf(post1));
-    println!(
-        "   Is Post1 descendant of Feed? {}",
-        tree.is_descendant(post1, feed)
-    );
-    println!("   Subtree size of Feed: {}", tree.subtree_size(feed));
+    // Check if post1 is a descendant of feed
+    let is_descendant = tree.ancestors(post1).any(|id| id == feed);
+    println!("   Is Post1 descendant of Feed? {}", is_descendant);
+    // Count subtree size
+    let subtree_size = tree.descendants(feed).count();
+    println!("   Subtree size of Feed: {}", subtree_size);
     println!();
 
     // ========================================================================
@@ -262,22 +271,12 @@ fn main() {
     visit_depth_first(&tree, app, &mut depth_finder);
     println!("   Maximum depth: {}", depth_finder.max_depth);
 
-    // Custom visitor
-    struct NamePrinter<'a> {
-        tree: &'a DemoTree,
-    }
-
-    impl TreeVisitor for NamePrinter<'_> {
-        fn visit(&mut self, id: ElementId, depth: usize) -> VisitorResult {
-            let indent = "  ".repeat(depth);
-            println!("   {}→ {}", indent, self.tree.name(id).unwrap());
-            VisitorResult::Continue
-        }
-    }
-
+    // Custom visitor using for_each
     println!("   Visiting with custom printer:");
-    let mut printer = NamePrinter { tree: &tree };
-    visit_depth_first(&tree, app, &mut printer);
+    for_each(&tree, app, |id, depth| {
+        let indent = "  ".repeat(depth);
+        println!("   {}→ {}", indent, tree.name(id).unwrap());
+    });
 
     println!();
     println!("✅ All traversals complete!");

@@ -1,24 +1,24 @@
 [package]
 name = "flui-tree"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
 description = "Tree abstraction traits for FLUI framework - enables separation of concerns between element management and rendering"
-license = "MIT OR Apache-2.0"
-repository = "https://github.com/flui-org/flui"
 documentation = "https://docs.rs/flui-tree"
 keywords = ["ui", "gui", "tree", "flui", "framework"]
 categories = ["gui", "data-structures"]
-authors = ["FLUI Contributors"]
 
 [dependencies]
 # Internal dependencies
 flui-foundation = { path = "../flui-foundation" }
-flui_types = { path = "../flui_types" }
 
 # Core dependencies
 thiserror = { workspace = true }
 tracing = { workspace = true }
-smallvec = "1.13"
+smallvec = { workspace = true }
 
 # Optional: serde support
 serde = { workspace = true, optional = true }
@@ -32,9 +32,6 @@ default = []
 
 # Serialization support for tree types
 serde = ["dep:serde", "flui-foundation/serde"]
-
-# Enable all features
-full = ["serde"]
 
 [package.metadata.docs.rs]
 all-features = true

@@ -1,59 +1,11 @@
 //! Advanced tree visitor patterns with HRTB and GAT support.
 //!
 //! This module provides visitor traits and implementations using advanced
-//! Rust type system features for maximum flexibility and performance:
-//!
-//! - **HRTB (Higher-Rank Trait Bounds)** for universal predicates
-//! - **GAT (Generic Associated Types)** for flexible return types
-//! - **Associated Constants** for performance tuning
-//! - **Const generics** for compile-time optimization
-//! - **Sealed traits** for safety
-//! - **Typestate patterns** for compile-time guarantees
-//!
-//! # Visitor Types
-//!
-//! - [`TreeVisitor`] - Basic visitor with HRTB support
-//! - [`TreeVisitorMut`] - Mutable visitor with node access
-//! - [`TypedVisitor`] - GAT-based visitor with flexible return types
-//! - [`StatefulVisitor`] - Visitor with compile-time state tracking
-//! - [`FallibleVisitor`] - Visitor that can return errors
-//! - [`StatisticsVisitor`] - Visitor for collecting tree statistics
-//!
-//! # Composition
-//!
-//! Visitors can be composed for efficiency:
-//! - [`ComposedVisitor`] - Combine two visitors
-//! - [`TripleComposedVisitor`] - Combine three visitors
-//! - [`VisitorVec`] - Dynamic collection of visitors
-//! - [`ConditionalVisitor`] - Filter visited nodes
-//!
-//! # Performance Features
-//!
-//! All visitors use associated constants and const generics for:
-//! - Stack-allocated buffers for typical tree depths
-//! - Optimized iteration strategies
-//! - Cache-friendly memory access patterns
-//!
-//! # Example
-//!
-//! ```rust,ignore
-//! use flui_tree::{TreeNav, visit_depth_first_typed};
-//!
-//! // HRTB visitor that works with any lifetime
-//! let mut visitor = FindVisitor::new(|node: &SomeNodeType| node.name == "target");
-//! let result = visit_depth_first_typed(&tree, root, &mut visitor);
-//!
-//! // Compose multiple visitors
-//! let count = CountVisitor::new();
-//! let depth = MaxDepthVisitor::new();
-//! let mut composed = count.and_then(depth);
-//! visit_depth_first(&tree, root, &mut composed);
-//! ```
+//! Rust type system features for maximum flexibility and performance.
 
 // Submodules
 pub mod composition;
 pub mod fallible;
-pub mod statistics;
 
 // Re-exports from submodules
 pub use composition::{
@@ -65,12 +17,7 @@ pub use fallible::{
     visit_fallible_with_path, DepthLimitExceeded, DepthLimitVisitor, FallibleVisitor,
     FallibleVisitorMut, TryCollectVisitor, TryForEachVisitor, VisitorError,
 };
-pub use statistics::{
-    collect_statistics, compare_statistics, tree_summary, StatisticsComparison, StatisticsVisitor,
-    StatisticsVisitorMut, TreeStatistics,
-};
 
-use flui_foundation::ElementId;
 use std::collections::VecDeque;
 use std::marker::PhantomData;
 
@@ -81,26 +28,18 @@ use super::TreeNav;
 // ============================================================================
 
 /// Enhanced visitor result with more granular control.
-///
-/// Provides fine-grained control over traversal behavior with
-/// performance hints for optimized iteration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum VisitorResult {
     /// Continue normal traversal.
     Continue,
-
     /// Skip this node's children but continue with siblings.
     SkipChildren,
-
     /// Skip remaining siblings at this level.
     SkipSiblings,
-
     /// Stop traversal completely.
     Stop,
-
     /// Continue but suggest depth-first optimization.
     ContinueDepthFirst,
-
     /// Continue but suggest breadth-first optimization.
     ContinueBreadthFirst,
 }
@@ -162,18 +101,14 @@ pub enum IterationHint {
 }
 
 // ============================================================================
-// CORE VISITOR TRAITS WITH HRTB AND GAT
+// CORE VISITOR TRAITS
 // ============================================================================
 
-/// Basic tree visitor trait with HRTB support.
+/// Basic tree visitor trait.
 ///
-/// This trait uses Higher-Rank Trait Bounds to allow visitors
-/// that work with any lifetime, enabling maximum flexibility.
-pub trait TreeVisitor: sealed::Sealed {
-    /// Visit a node with HRTB-compatible signature.
-    ///
-    /// The visitor method uses HRTB to accept any lifetime,
-    /// making it compatible with different data access patterns.
+/// Generic over the tree type to support any ID type.
+pub trait TreeVisitor<T: TreeNav>: sealed::Sealed {
+    /// Visit a node.
     ///
     /// # Arguments
     ///
@@ -183,23 +118,15 @@ pub trait TreeVisitor: sealed::Sealed {
     /// # Returns
     ///
     /// [`VisitorResult`] controlling further traversal
-    fn visit(&mut self, id: ElementId, depth: usize) -> VisitorResult;
+    fn visit(&mut self, id: T::Id, depth: usize) -> VisitorResult;
 
     /// Called before visiting children (optional hook).
-    ///
-    /// Only called if `visit` returned a result that allows children.
-    /// Default implementation does nothing.
     #[inline]
-    fn pre_children(&mut self, _id: ElementId, _depth: usize) {}
+    fn pre_children(&mut self, _id: T::Id, _depth: usize) {}
 
     /// Called after visiting all children (optional hook).
-    ///
-    /// Only called if `visit` returned a result that allows children
-    /// and all children have been processed.
     #[inline]
-    fn post_children(&mut self, _id: ElementId, _depth: usize) {}
-
-    /// Performance tuning constants.
+    fn post_children(&mut self, _id: T::Id, _depth: usize) {}
 
     /// Expected maximum tree depth for stack allocation.
     const MAX_STACK_DEPTH: usize = 64;
@@ -209,36 +136,18 @@ pub trait TreeVisitor: sealed::Sealed {
 }
 
 /// Mutable visitor with tree access and GAT support.
-///
-/// This trait provides access to the tree and nodes during visitation,
-/// using GAT for flexible return types and HRTB for universal compatibility.
 pub trait TreeVisitorMut<T: TreeNav>: sealed::Sealed {
     /// The result type returned by this visitor (GAT).
-    ///
-    /// Different visitors can return different types while maintaining
-    /// a consistent interface. The lifetime parameter allows for
-    /// borrowing from the tree or nodes.
     type Output<'a>
     where
         T: 'a,
         Self: 'a;
 
-    /// Visit a node with full tree access using HRTB.
-    ///
-    /// # Arguments
-    ///
-    /// * `tree` - The tree being traversed
-    /// * `id` - The element being visited
-    /// * `depth` - Depth from traversal root
-    ///
-    /// # Returns
-    ///
-    /// Tuple of (VisitorResult, Option<Output>) where Output can be
-    /// any type specified by the GAT.
+    /// Visit a node with full tree access.
     fn visit<'a>(
         &'a mut self,
         tree: &'a T,
-        id: ElementId,
+        id: T::Id,
         depth: usize,
     ) -> (VisitorResult, Option<Self::Output<'a>>)
     where
@@ -246,7 +155,7 @@ pub trait TreeVisitorMut<T: TreeNav>: sealed::Sealed {
 
     /// Pre-children hook with tree access.
     #[inline]
-    fn pre_children<'a>(&'a mut self, _tree: &'a T, _id: ElementId, _depth: usize)
+    fn pre_children<'a>(&'a mut self, _tree: &'a T, _id: T::Id, _depth: usize)
     where
         T: 'a,
     {
@@ -254,7 +163,7 @@ pub trait TreeVisitorMut<T: TreeNav>: sealed::Sealed {
 
     /// Post-children hook with tree access.
     #[inline]
-    fn post_children<'a>(&'a mut self, _tree: &'a T, _id: ElementId, _depth: usize)
+    fn post_children<'a>(&'a mut self, _tree: &'a T, _id: T::Id, _depth: usize)
     where
         T: 'a,
     {
@@ -265,9 +174,6 @@ pub trait TreeVisitorMut<T: TreeNav>: sealed::Sealed {
 }
 
 /// Typed visitor with flexible result collection using GAT.
-///
-/// This visitor type allows collecting results of different types
-/// while maintaining zero-cost abstractions and type safety.
 pub trait TypedVisitor<T: TreeNav>: sealed::Sealed {
     /// The item type collected by this visitor (GAT).
     type Item<'a>
@@ -276,31 +182,22 @@ pub trait TypedVisitor<T: TreeNav>: sealed::Sealed {
         Self: 'a;
 
     /// Collection type for results (GAT).
-    ///
-    /// Can be Vec, SmallVec, custom collections, etc.
     type Collection<'a>: Extend<Self::Item<'a>> + IntoIterator<Item = Self::Item<'a>>
     where
         T: 'a,
         Self: 'a;
 
     /// Visit and potentially collect an item.
-    ///
-    /// # Returns
-    ///
-    /// Tuple of (VisitorResult, Option<Item>) where Item is added
-    /// to the collection if Some.
     fn visit_typed<'a>(
         &'a mut self,
         tree: &'a T,
-        id: ElementId,
+        id: T::Id,
         depth: usize,
     ) -> (VisitorResult, Option<Self::Item<'a>>)
     where
         T: 'a;
 
     /// Create collection with appropriate capacity.
-    ///
-    /// Uses associated constants for optimal sizing.
     fn create_collection<'a>(&self) -> Self::Collection<'a>
     where
         T: 'a,
@@ -316,27 +213,14 @@ mod sealed {
 }
 
 // ============================================================================
-// TRAVERSAL FUNCTIONS WITH CONST GENERIC OPTIMIZATION
+// TRAVERSAL FUNCTIONS
 // ============================================================================
 
-/// Depth-first traversal optimized with const generics.
-///
-/// Uses stack-allocated buffer for typical tree depths,
-/// falling back to heap allocation for deeper trees.
-///
-/// # Type Parameters
-///
-/// * `T` - Tree type implementing TreeNav
-/// * `V` - Visitor type
-/// * `STACK_SIZE` - Stack buffer size (const generic)
-///
-/// # Returns
-///
-/// `true` if traversal completed, `false` if stopped early.
-pub fn visit_depth_first<T, V>(tree: &T, root: ElementId, visitor: &mut V) -> bool
+/// Depth-first traversal.
+pub fn visit_depth_first<T, V>(tree: &T, root: T::Id, visitor: &mut V) -> bool
 where
     T: TreeNav,
-    V: TreeVisitor,
+    V: TreeVisitor<T>,
 {
     visit_depth_first_impl::<T, V, 64>(tree, root, 0, visitor)
 }
@@ -344,15 +228,14 @@ where
 /// Internal depth-first implementation with stack optimization.
 fn visit_depth_first_impl<T, V, const STACK_SIZE: usize>(
     tree: &T,
-    node: ElementId,
+    node: T::Id,
     depth: usize,
     visitor: &mut V,
 ) -> bool
 where
     T: TreeNav,
-    V: TreeVisitor,
+    V: TreeVisitor<T>,
 {
-    // Visit current node
     let result = visitor.visit(node, depth);
 
     match result {
@@ -364,8 +247,7 @@ where
     if result.should_visit_children() {
         visitor.pre_children(node, depth);
 
-        // Use heap allocation for child counts (simplified for now)
-        let children: Vec<ElementId> = tree.children(node).collect();
+        let children: Vec<T::Id> = tree.children(node).collect();
 
         for child in children {
             if !visit_depth_first_impl::<T, V, STACK_SIZE>(tree, child, depth + 1, visitor) {
@@ -379,16 +261,13 @@ where
     true
 }
 
-/// Breadth-first traversal with configurable queue size.
-///
-/// Uses VecDeque with initial capacity based on const generics
-/// for optimal memory usage patterns.
-pub fn visit_breadth_first<T, V>(tree: &T, root: ElementId, visitor: &mut V) -> bool
+/// Breadth-first traversal.
+pub fn visit_breadth_first<T, V>(tree: &T, root: T::Id, visitor: &mut V) -> bool
 where
     T: TreeNav,
-    V: TreeVisitor,
+    V: TreeVisitor<T>,
 {
-    let mut queue: VecDeque<(ElementId, usize)> = VecDeque::with_capacity(128);
+    let mut queue: VecDeque<(T::Id, usize)> = VecDeque::with_capacity(128);
     queue.push_back((root, 0));
 
     while let Some((node, depth)) = queue.pop_front() {
@@ -403,7 +282,6 @@ where
         if result.should_visit_children() {
             visitor.pre_children(node, depth);
 
-            // Add children to queue
             for child in tree.children(node) {
                 queue.push_back((child, depth + 1));
             }
@@ -416,16 +294,7 @@ where
 }
 
 /// Typed visitor traversal with result collection.
-///
-/// Uses GAT to collect results of any type while maintaining
-/// zero-cost abstractions and optimal memory usage.
-///
-/// Note: Returns Vec<ElementId> for simplicity due to lifetime constraints.
-pub fn visit_depth_first_typed<'a, T, V>(
-    tree: &'a T,
-    root: ElementId,
-    visitor: &'a mut V,
-) -> Vec<ElementId>
+pub fn visit_depth_first_typed<'a, T, V>(tree: &'a T, root: T::Id, visitor: &'a mut V) -> Vec<T::Id>
 where
     T: TreeNav,
     V: TypedVisitor<T>,
@@ -436,31 +305,26 @@ where
 }
 
 /// Internal typed visitor implementation.
-///
-/// Uses an iterative approach to avoid lifetime issues with recursive mutable borrows.
-fn visit_typed_impl<'a, T, V>(
-    tree: &'a T,
-    root: ElementId,
+fn visit_typed_impl<T, V>(
+    tree: &T,
+    root: T::Id,
     initial_depth: usize,
     visitor: &mut V,
-    collection: &mut Vec<ElementId>,
+    collection: &mut Vec<T::Id>,
 ) where
     T: TreeNav,
     V: TypedVisitor<T>,
 {
-    // Use iterative approach with explicit stack to avoid lifetime issues
-    let mut stack: Vec<(ElementId, usize)> = vec![(root, initial_depth)];
+    let mut stack: Vec<(T::Id, usize)> = vec![(root, initial_depth)];
 
     while let Some((node, depth)) = stack.pop() {
         let (result, item) = visitor.visit_typed(tree, node, depth);
 
-        if let Some(_item) = item {
-            // Store just the ElementId to avoid lifetime issues
+        if item.is_some() {
             collection.push(node);
         }
 
         if result.should_visit_children() {
-            // Collect children first, then push in reverse for correct order
             let children: Vec<_> = tree.children(node).collect();
             for child in children.into_iter().rev() {
                 stack.push((child, depth + 1));
@@ -474,19 +338,16 @@ fn visit_typed_impl<'a, T, V>(
 }
 
 // ============================================================================
-// BUILT-IN VISITORS WITH ADVANCED FEATURES
+// BUILT-IN VISITORS
 // ============================================================================
 
 /// Collector visitor for gathering element IDs.
-///
-/// Collects element IDs with heap-allocated storage.
-/// Uses `Vec` for simplicity and broad compatibility.
-pub struct CollectVisitor {
+pub struct CollectVisitor<Id> {
     /// Collected element IDs.
-    pub collected: Vec<ElementId>,
+    pub collected: Vec<Id>,
 }
 
-impl CollectVisitor {
+impl<Id> CollectVisitor<Id> {
     /// Create new collector with default capacity.
     pub fn new() -> Self {
         Self {
@@ -502,21 +363,21 @@ impl CollectVisitor {
     }
 
     /// Consume visitor and return collected items.
-    pub fn into_inner(self) -> Vec<ElementId> {
+    pub fn into_inner(self) -> Vec<Id> {
         self.collected
     }
 }
 
-impl sealed::Sealed for CollectVisitor {}
+impl<Id> sealed::Sealed for CollectVisitor<Id> {}
 
-impl TreeVisitor for CollectVisitor {
-    fn visit(&mut self, id: ElementId, _depth: usize) -> VisitorResult {
+impl<T: TreeNav> TreeVisitor<T> for CollectVisitor<T::Id> {
+    fn visit(&mut self, id: T::Id, _depth: usize) -> VisitorResult {
         self.collected.push(id);
         VisitorResult::Continue
     }
 }
 
-impl Default for CollectVisitor {
+impl<Id> Default for CollectVisitor<Id> {
     fn default() -> Self {
         Self::new()
     }
@@ -547,16 +408,21 @@ impl CountVisitor {
         }
     }
 
+    /// Get current count.
+    pub fn count(&self) -> usize {
+        self.count
+    }
+
     /// Check if limit has been reached.
     pub fn is_at_limit(&self) -> bool {
-        self.max_count.map_or(false, |max| self.count >= max)
+        self.max_count.is_some_and(|max| self.count >= max)
     }
 }
 
 impl sealed::Sealed for CountVisitor {}
 
-impl TreeVisitor for CountVisitor {
-    fn visit(&mut self, _id: ElementId, _depth: usize) -> VisitorResult {
+impl<T: TreeNav> TreeVisitor<T> for CountVisitor {
+    fn visit(&mut self, _id: T::Id, _depth: usize) -> VisitorResult {
         if self.is_at_limit() {
             return VisitorResult::Stop;
         }
@@ -572,23 +438,16 @@ impl Default for CountVisitor {
     }
 }
 
-/// Find visitor with HRTB predicate support.
-///
-/// Uses Higher-Rank Trait Bounds to accept predicates that
-/// work with any lifetime, providing maximum flexibility.
-pub struct FindVisitor<P> {
+/// Find visitor with predicate support.
+pub struct FindVisitor<Id, P> {
     predicate: P,
-    pub found: Option<ElementId>,
-    /// Stop after first match for performance.
+    pub found: Option<Id>,
     stop_on_first: bool,
 }
 
-impl<P> FindVisitor<P> {
+impl<Id, P> FindVisitor<Id, P> {
     /// Create new finder that stops on first match.
-    pub fn new(predicate: P) -> Self
-    where
-        P: for<'a> Fn(ElementId, usize) -> bool,
-    {
+    pub fn new(predicate: P) -> Self {
         Self {
             predicate,
             found: None,
@@ -597,25 +456,31 @@ impl<P> FindVisitor<P> {
     }
 
     /// Create finder that continues after first match.
-    pub fn new_continue(predicate: P) -> Self
-    where
-        P: for<'a> Fn(ElementId, usize) -> bool,
-    {
+    pub fn new_continue(predicate: P) -> Self {
         Self {
             predicate,
             found: None,
             stop_on_first: false,
         }
     }
+
+    /// Get found element.
+    pub fn found(&self) -> Option<Id>
+    where
+        Id: Copy,
+    {
+        self.found
+    }
 }
 
-impl<P> sealed::Sealed for FindVisitor<P> {}
+impl<Id, P> sealed::Sealed for FindVisitor<Id, P> {}
 
-impl<P> TreeVisitor for FindVisitor<P>
+impl<T, P> TreeVisitor<T> for FindVisitor<T::Id, P>
 where
-    P: for<'a> Fn(ElementId, usize) -> bool,
+    T: TreeNav,
+    P: Fn(T::Id, usize) -> bool,
 {
-    fn visit(&mut self, id: ElementId, depth: usize) -> VisitorResult {
+    fn visit(&mut self, id: T::Id, depth: usize) -> VisitorResult {
         if (self.predicate)(id, depth) {
             self.found = Some(id);
             if self.stop_on_first {
@@ -629,9 +494,7 @@ where
 /// Max depth finder with early termination optimization.
 pub struct MaxDepthVisitor {
     pub max_depth: usize,
-    /// Current maximum seen.
     current_max: usize,
-    /// Early termination threshold.
     termination_threshold: Option<usize>,
 }
 
@@ -657,14 +520,13 @@ impl MaxDepthVisitor {
 
 impl sealed::Sealed for MaxDepthVisitor {}
 
-impl TreeVisitor for MaxDepthVisitor {
-    fn visit(&mut self, _id: ElementId, depth: usize) -> VisitorResult {
+impl<T: TreeNav> TreeVisitor<T> for MaxDepthVisitor {
+    fn visit(&mut self, _id: T::Id, depth: usize) -> VisitorResult {
         if depth > self.current_max {
             self.current_max = depth;
             self.max_depth = depth;
         }
 
-        // Early termination if we've reached threshold
         if let Some(threshold) = self.termination_threshold {
             if depth >= threshold {
                 return VisitorResult::Stop;
@@ -681,37 +543,36 @@ impl Default for MaxDepthVisitor {
     }
 }
 
-/// For-each visitor with HRTB closure support.
-pub struct ForEachVisitor<F> {
+/// For-each visitor with closure support.
+pub struct ForEachVisitor<Id, F> {
     callback: F,
+    _marker: PhantomData<Id>,
 }
 
-impl<F> ForEachVisitor<F> {
+impl<Id, F> ForEachVisitor<Id, F> {
     /// Create new for-each visitor.
-    pub fn new(callback: F) -> Self
-    where
-        F: for<'a> FnMut(ElementId, usize),
-    {
-        Self { callback }
+    pub fn new(callback: F) -> Self {
+        Self {
+            callback,
+            _marker: PhantomData,
+        }
     }
 }
 
-impl<F> sealed::Sealed for ForEachVisitor<F> {}
+impl<Id, F> sealed::Sealed for ForEachVisitor<Id, F> {}
 
-impl<F> TreeVisitor for ForEachVisitor<F>
+impl<T, F> TreeVisitor<T> for ForEachVisitor<T::Id, F>
 where
-    F: for<'a> FnMut(ElementId, usize),
+    T: TreeNav,
+    F: FnMut(T::Id, usize),
 {
-    fn visit(&mut self, id: ElementId, depth: usize) -> VisitorResult {
+    fn visit(&mut self, id: T::Id, depth: usize) -> VisitorResult {
         (self.callback)(id, depth);
         VisitorResult::Continue
     }
 }
 
 /// Stateful visitor with typestate pattern.
-///
-/// Uses phantom types to track visitor state at compile time,
-/// ensuring correct usage patterns.
 pub struct StatefulVisitor<State, Data> {
     data: Data,
     _state: PhantomData<State>,
@@ -774,21 +635,22 @@ impl<Data> StatefulVisitor<states::Finished, Data> {
 
 impl<Data> sealed::Sealed for StatefulVisitor<states::Started, Data> {}
 
-impl<Data> TreeVisitor for StatefulVisitor<states::Started, Data>
+impl<T, Data> TreeVisitor<T> for StatefulVisitor<states::Started, Data>
 where
-    Data: for<'a> FnMut(ElementId, usize) -> VisitorResult,
+    T: TreeNav,
+    Data: FnMut(T::Id, usize) -> VisitorResult,
 {
-    fn visit(&mut self, id: ElementId, depth: usize) -> VisitorResult {
+    fn visit(&mut self, id: T::Id, depth: usize) -> VisitorResult {
         (self.data)(id, depth)
     }
 }
 
 // ============================================================================
-// CONVENIENCE FUNCTIONS WITH HRTB SUPPORT
+// CONVENIENCE FUNCTIONS
 // ============================================================================
 
-/// Collect all nodes in a subtree using optimized visitor.
-pub fn collect_all<T>(tree: &T, root: ElementId) -> Vec<ElementId>
+/// Collect all nodes in a subtree.
+pub fn collect_all<T>(tree: &T, root: T::Id) -> Vec<T::Id>
 where
     T: TreeNav,
 {
@@ -797,8 +659,8 @@ where
     visitor.into_inner()
 }
 
-/// Count all nodes in a subtree with optional limit.
-pub fn count_all<T>(tree: &T, root: ElementId) -> usize
+/// Count all nodes in a subtree.
+pub fn count_all<T>(tree: &T, root: T::Id) -> usize
 where
     T: TreeNav,
 {
@@ -808,7 +670,7 @@ where
 }
 
 /// Count nodes up to a maximum limit.
-pub fn count_with_limit<T>(tree: &T, root: ElementId, limit: usize) -> usize
+pub fn count_with_limit<T>(tree: &T, root: T::Id, limit: usize) -> usize
 where
     T: TreeNav,
 {
@@ -817,8 +679,8 @@ where
     visitor.count
 }
 
-/// Find maximum depth in subtree with early termination.
-pub fn max_depth<T>(tree: &T, root: ElementId) -> usize
+/// Find maximum depth in subtree.
+pub fn max_depth<T>(tree: &T, root: T::Id) -> usize
 where
     T: TreeNav,
 {
@@ -828,7 +690,7 @@ where
 }
 
 /// Find maximum depth with threshold-based early termination.
-pub fn max_depth_with_threshold<T>(tree: &T, root: ElementId, threshold: usize) -> usize
+pub fn max_depth_with_threshold<T>(tree: &T, root: T::Id, threshold: usize) -> usize
 where
     T: TreeNav,
 {
@@ -837,39 +699,36 @@ where
     visitor.max_depth
 }
 
-/// Find first node matching HRTB predicate.
-pub fn find_first<T, P>(tree: &T, root: ElementId, predicate: P) -> Option<ElementId>
+/// Find first node matching predicate.
+pub fn find_first<T, P>(tree: &T, root: T::Id, predicate: P) -> Option<T::Id>
 where
     T: TreeNav,
-    P: for<'a> Fn(ElementId, usize) -> bool,
+    P: Fn(T::Id, usize) -> bool,
 {
     let mut visitor = FindVisitor::new(predicate);
     visit_depth_first(tree, root, &mut visitor);
     visitor.found
 }
 
-/// Execute HRTB closure for each node in subtree.
-pub fn for_each<T, F>(tree: &T, root: ElementId, callback: F)
+/// Execute closure for each node in subtree.
+pub fn for_each<T, F>(tree: &T, root: T::Id, callback: F)
 where
     T: TreeNav,
-    F: for<'a> FnMut(ElementId, usize),
+    F: FnMut(T::Id, usize),
 {
     let mut visitor = ForEachVisitor::new(callback);
     visit_depth_first(tree, root, &mut visitor);
 }
 
 /// Stateful traversal with typestate guarantees.
-///
-/// This function demonstrates the typestate pattern ensuring
-/// correct visitor lifecycle at compile time.
 pub fn visit_stateful<T, Data>(
     tree: &T,
-    root: ElementId,
+    root: T::Id,
     data: Data,
 ) -> StatefulVisitor<states::Finished, Data>
 where
     T: TreeNav,
-    Data: for<'a> FnMut(ElementId, usize) -> VisitorResult,
+    Data: FnMut(T::Id, usize) -> VisitorResult,
 {
     let mut visitor = StatefulVisitor::new(data).start();
     visit_depth_first(tree, root, &mut visitor);
@@ -884,6 +743,7 @@ where
 mod tests {
     use super::*;
     use crate::traits::TreeRead;
+    use flui_foundation::ElementId;
 
     // Test tree implementation
     struct TestNode {
@@ -922,11 +782,9 @@ mod tests {
     }
 
     impl TreeRead for TestTree {
+        type Id = ElementId;
         type Node = TestNode;
-        type NodeIter<'a>
-            = impl Iterator<Item = ElementId> + 'a
-        where
-            Self: 'a;
+        type NodeIter<'a> = Box<dyn Iterator<Item = ElementId> + 'a>;
 
         fn get(&self, id: ElementId) -> Option<&TestNode> {
             self.nodes.get(&id)
@@ -937,21 +795,15 @@ mod tests {
         }
 
         fn node_ids(&self) -> Self::NodeIter<'_> {
-            self.nodes.keys().copied()
+            Box::new(self.nodes.keys().copied())
         }
     }
 
     impl TreeNav for TestTree {
-        type ChildrenIter<'a>
-            = impl Iterator<Item = ElementId> + 'a
-        where
-            Self: 'a;
+        type ChildrenIter<'a> = Box<dyn Iterator<Item = ElementId> + 'a>;
         type AncestorsIter<'a> = crate::iter::Ancestors<'a, Self>;
-        type DescendantsIter<'a> = crate::iter::Descendants<'a, Self>;
-        type SiblingsIter<'a>
-            = impl Iterator<Item = ElementId> + 'a
-        where
-            Self: 'a;
+        type DescendantsIter<'a> = crate::iter::DescendantsWithDepth<'a, Self>;
+        type SiblingsIter<'a> = Box<dyn Iterator<Item = ElementId> + 'a>;
 
         fn parent(&self, id: ElementId) -> Option<ElementId> {
             self.get(id)?.parent
@@ -959,9 +811,9 @@ mod tests {
 
         fn children(&self, id: ElementId) -> Self::ChildrenIter<'_> {
             if let Some(node) = self.get(id) {
-                node.children.iter().copied()
+                Box::new(node.children.iter().copied())
             } else {
-                [].iter().copied()
+                Box::new(std::iter::empty())
             }
         }
 
@@ -970,15 +822,17 @@ mod tests {
         }
 
         fn descendants(&self, root: ElementId) -> Self::DescendantsIter<'_> {
-            crate::iter::Descendants::new(self, root)
+            crate::iter::DescendantsWithDepth::new(self, root)
         }
 
         fn siblings(&self, id: ElementId) -> Self::SiblingsIter<'_> {
             if let Some(parent_id) = self.parent(id) {
-                self.children(parent_id)
-                    .filter(move |&child_id| child_id != id)
+                Box::new(
+                    self.children(parent_id)
+                        .filter(move |&child_id| child_id != id),
+                )
             } else {
-                [].iter().copied()
+                Box::new(std::iter::empty())
             }
         }
     }
@@ -1023,7 +877,6 @@ mod tests {
         tree.insert(root, None);
         tree.insert(child, Some(root));
 
-        // HRTB predicate that works with any lifetime
         let found = find_first(&tree, root, |id, _depth| id == child);
         assert_eq!(found, Some(child));
 

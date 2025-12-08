@@ -10,10 +10,10 @@
 //!
 //! struct ValidationVisitor;
 //!
-//! impl FallibleVisitor for ValidationVisitor {
+//! impl<T: TreeNav> FallibleVisitor<T> for ValidationVisitor {
 //!     type Error = String;
 //!
-//!     fn visit(&mut self, id: ElementId, depth: usize) -> Result<VisitorResult, Self::Error> {
+//!     fn visit(&mut self, id: T::Id, depth: usize) -> Result<VisitorResult, Self::Error> {
 //!         if depth > 100 {
 //!             return Err("Tree too deep".to_string());
 //!         }
@@ -26,10 +26,11 @@
 
 use super::{sealed, VisitorResult};
 use crate::TreeNav;
-use flui_foundation::ElementId;
+use flui_foundation::TreeId;
 use std::collections::VecDeque;
 use std::error::Error;
 use std::fmt;
+use std::marker::PhantomData;
 
 // ============================================================================
 // FALLIBLE VISITOR TRAIT
@@ -39,7 +40,9 @@ use std::fmt;
 ///
 /// Unlike [`TreeVisitor`](super::TreeVisitor), this visitor returns
 /// `Result<VisitorResult, E>`, allowing proper error handling.
-pub trait FallibleVisitor: sealed::Sealed {
+///
+/// Generic over the tree type to support any ID type.
+pub trait FallibleVisitor<T: TreeNav>: sealed::Sealed {
     /// The error type returned by this visitor.
     type Error: Error + Send + Sync + 'static;
 
@@ -54,7 +57,7 @@ pub trait FallibleVisitor: sealed::Sealed {
     ///
     /// - `Ok(VisitorResult)` - Continue with the given traversal directive
     /// - `Err(error)` - Stop traversal and propagate the error
-    fn visit(&mut self, id: ElementId, depth: usize) -> Result<VisitorResult, Self::Error>;
+    fn visit(&mut self, id: T::Id, depth: usize) -> Result<VisitorResult, Self::Error>;
 
     /// Called before visiting children (optional hook).
     ///
@@ -63,13 +66,13 @@ pub trait FallibleVisitor: sealed::Sealed {
     /// - `Ok(())` - Continue to children
     /// - `Err(error)` - Stop traversal and propagate the error
     #[inline]
-    fn pre_children(&mut self, _id: ElementId, _depth: usize) -> Result<(), Self::Error> {
+    fn pre_children(&mut self, _id: T::Id, _depth: usize) -> Result<(), Self::Error> {
         Ok(())
     }
 
     /// Called after visiting all children (optional hook).
     #[inline]
-    fn post_children(&mut self, _id: ElementId, _depth: usize) -> Result<(), Self::Error> {
+    fn post_children(&mut self, _id: T::Id, _depth: usize) -> Result<(), Self::Error> {
         Ok(())
     }
 }
@@ -89,7 +92,7 @@ pub trait FallibleVisitorMut<T: TreeNav>: sealed::Sealed {
     fn visit<'a>(
         &'a mut self,
         tree: &'a T,
-        id: ElementId,
+        id: T::Id,
         depth: usize,
     ) -> Result<(VisitorResult, Option<Self::Output<'a>>), Self::Error>
     where
@@ -102,20 +105,20 @@ pub trait FallibleVisitorMut<T: TreeNav>: sealed::Sealed {
 
 /// Error wrapper for visitor errors with context.
 #[derive(Debug)]
-pub struct VisitorError<E: Error> {
+pub struct VisitorError<E: Error, Id: TreeId> {
     /// The underlying error.
     pub inner: E,
     /// The element where the error occurred.
-    pub element: ElementId,
+    pub element: Id,
     /// The depth at which the error occurred.
     pub depth: usize,
     /// Optional path from root to error location.
-    pub path: Option<Vec<ElementId>>,
+    pub path: Option<Vec<Id>>,
 }
 
-impl<E: Error> VisitorError<E> {
+impl<E: Error, Id: TreeId> VisitorError<E, Id> {
     /// Create a new visitor error.
-    pub fn new(inner: E, element: ElementId, depth: usize) -> Self {
+    pub fn new(inner: E, element: Id, depth: usize) -> Self {
         Self {
             inner,
             element,
@@ -125,7 +128,7 @@ impl<E: Error> VisitorError<E> {
     }
 
     /// Create with path information.
-    pub fn with_path(inner: E, element: ElementId, depth: usize, path: Vec<ElementId>) -> Self {
+    pub fn with_path(inner: E, element: Id, depth: usize, path: Vec<Id>) -> Self {
         Self {
             inner,
             element,
@@ -140,7 +143,7 @@ impl<E: Error> VisitorError<E> {
     }
 }
 
-impl<E: Error> fmt::Display for VisitorError<E> {
+impl<E: Error, Id: TreeId> fmt::Display for VisitorError<E, Id> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
@@ -152,7 +155,7 @@ impl<E: Error> fmt::Display for VisitorError<E> {
     }
 }
 
-impl<E: Error + 'static> Error for VisitorError<E> {
+impl<E: Error + 'static, Id: TreeId> Error for VisitorError<E, Id> {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         Some(&self.inner)
     }
@@ -167,25 +170,25 @@ impl<E: Error + 'static> Error for VisitorError<E> {
 /// Stops traversal on first error and returns it.
 pub fn visit_fallible<T, V>(
     tree: &T,
-    root: ElementId,
+    root: T::Id,
     visitor: &mut V,
-) -> Result<bool, VisitorError<V::Error>>
+) -> Result<bool, VisitorError<V::Error, T::Id>>
 where
     T: TreeNav,
-    V: FallibleVisitor,
+    V: FallibleVisitor<T>,
 {
     visit_fallible_impl(tree, root, 0, visitor)
 }
 
 fn visit_fallible_impl<T, V>(
     tree: &T,
-    node: ElementId,
+    node: T::Id,
     depth: usize,
     visitor: &mut V,
-) -> Result<bool, VisitorError<V::Error>>
+) -> Result<bool, VisitorError<V::Error, T::Id>>
 where
     T: TreeNav,
-    V: FallibleVisitor,
+    V: FallibleVisitor<T>,
 {
     // Visit current node
     let result = visitor
@@ -203,7 +206,7 @@ where
             .pre_children(node, depth)
             .map_err(|e| VisitorError::new(e, node, depth))?;
 
-        let children: Vec<ElementId> = tree.children(node).collect();
+        let children: Vec<T::Id> = tree.children(node).collect();
 
         for child in children {
             if !visit_fallible_impl(tree, child, depth + 1, visitor)? {
@@ -222,14 +225,14 @@ where
 /// Breadth-first traversal with a fallible visitor.
 pub fn visit_fallible_breadth_first<T, V>(
     tree: &T,
-    root: ElementId,
+    root: T::Id,
     visitor: &mut V,
-) -> Result<bool, VisitorError<V::Error>>
+) -> Result<bool, VisitorError<V::Error, T::Id>>
 where
     T: TreeNav,
-    V: FallibleVisitor,
+    V: FallibleVisitor<T>,
 {
-    let mut queue: VecDeque<(ElementId, usize)> = VecDeque::with_capacity(128);
+    let mut queue: VecDeque<(T::Id, usize)> = VecDeque::with_capacity(128);
     queue.push_back((root, 0));
 
     while let Some((node, depth)) = queue.pop_front() {
@@ -256,12 +259,12 @@ where
 /// Traverse with path tracking for detailed error context.
 pub fn visit_fallible_with_path<T, V>(
     tree: &T,
-    root: ElementId,
+    root: T::Id,
     visitor: &mut V,
-) -> Result<bool, VisitorError<V::Error>>
+) -> Result<bool, VisitorError<V::Error, T::Id>>
 where
     T: TreeNav,
-    V: FallibleVisitor,
+    V: FallibleVisitor<T>,
 {
     let mut path = vec![root];
     visit_fallible_with_path_impl(tree, root, 0, &mut path, visitor)
@@ -269,14 +272,14 @@ where
 
 fn visit_fallible_with_path_impl<T, V>(
     tree: &T,
-    node: ElementId,
+    node: T::Id,
     depth: usize,
-    path: &mut Vec<ElementId>,
+    path: &mut Vec<T::Id>,
     visitor: &mut V,
-) -> Result<bool, VisitorError<V::Error>>
+) -> Result<bool, VisitorError<V::Error, T::Id>>
 where
     T: TreeNav,
-    V: FallibleVisitor,
+    V: FallibleVisitor<T>,
 {
     let result = visitor
         .visit(node, depth)
@@ -289,7 +292,7 @@ where
     }
 
     if result.should_visit_children() {
-        let children: Vec<ElementId> = tree.children(node).collect();
+        let children: Vec<T::Id> = tree.children(node).collect();
 
         for child in children {
             path.push(child);
@@ -311,14 +314,18 @@ where
 // ============================================================================
 
 /// A fallible visitor that validates depth limits.
-pub struct DepthLimitVisitor {
+pub struct DepthLimitVisitor<Id> {
     max_depth: usize,
+    _marker: PhantomData<Id>,
 }
 
-impl DepthLimitVisitor {
+impl<Id: TreeId> DepthLimitVisitor<Id> {
     /// Create a new depth limit visitor.
     pub fn new(max_depth: usize) -> Self {
-        Self { max_depth }
+        Self {
+            max_depth,
+            _marker: PhantomData,
+        }
     }
 }
 
@@ -341,12 +348,12 @@ impl fmt::Display for DepthLimitExceeded {
 
 impl Error for DepthLimitExceeded {}
 
-impl sealed::Sealed for DepthLimitVisitor {}
+impl<Id: TreeId> sealed::Sealed for DepthLimitVisitor<Id> {}
 
-impl FallibleVisitor for DepthLimitVisitor {
+impl<T: TreeNav> FallibleVisitor<T> for DepthLimitVisitor<T::Id> {
     type Error = DepthLimitExceeded;
 
-    fn visit(&mut self, _id: ElementId, depth: usize) -> Result<VisitorResult, Self::Error> {
+    fn visit(&mut self, _id: T::Id, depth: usize) -> Result<VisitorResult, Self::Error> {
         if depth > self.max_depth {
             Err(DepthLimitExceeded {
                 actual_depth: depth,
@@ -359,82 +366,86 @@ impl FallibleVisitor for DepthLimitVisitor {
 }
 
 /// A fallible visitor that applies a fallible closure.
-pub struct TryForEachVisitor<F, E> {
+pub struct TryForEachVisitor<F, E, Id> {
     callback: F,
-    _marker: std::marker::PhantomData<E>,
+    _marker: PhantomData<(E, Id)>,
 }
 
-impl<F, E> TryForEachVisitor<F, E> {
+impl<F, E, Id> TryForEachVisitor<F, E, Id> {
     /// Create a new try-for-each visitor.
     pub fn new(callback: F) -> Self
     where
-        F: FnMut(ElementId, usize) -> Result<(), E>,
+        Id: TreeId,
+        F: FnMut(Id, usize) -> Result<(), E>,
         E: Error + Send + Sync + 'static,
     {
         Self {
             callback,
-            _marker: std::marker::PhantomData,
+            _marker: PhantomData,
         }
     }
 }
 
-impl<F, E> sealed::Sealed for TryForEachVisitor<F, E> {}
+impl<F, E, Id> sealed::Sealed for TryForEachVisitor<F, E, Id> {}
 
-impl<F, E> FallibleVisitor for TryForEachVisitor<F, E>
+impl<T, F, E> FallibleVisitor<T> for TryForEachVisitor<F, E, T::Id>
 where
-    F: FnMut(ElementId, usize) -> Result<(), E>,
+    T: TreeNav,
+    F: FnMut(T::Id, usize) -> Result<(), E>,
     E: Error + Send + Sync + 'static,
 {
     type Error = E;
 
-    fn visit(&mut self, id: ElementId, depth: usize) -> Result<VisitorResult, Self::Error> {
+    fn visit(&mut self, id: T::Id, depth: usize) -> Result<VisitorResult, Self::Error> {
         (self.callback)(id, depth)?;
         Ok(VisitorResult::Continue)
     }
 }
 
 /// A fallible visitor that collects with validation.
-pub struct TryCollectVisitor<F, E> {
+pub struct TryCollectVisitor<F, E, Id> {
     predicate: F,
-    collected: Vec<ElementId>,
-    _marker: std::marker::PhantomData<E>,
+    collected: Vec<Id>,
+    _marker: PhantomData<E>,
 }
 
-impl<F, E> TryCollectVisitor<F, E> {
+impl<F, E, Id> TryCollectVisitor<F, E, Id> {
     /// Create a new try-collect visitor.
     pub fn new(predicate: F) -> Self
     where
-        F: FnMut(ElementId, usize) -> Result<bool, E>,
+        Id: TreeId,
+        F: FnMut(Id, usize) -> Result<bool, E>,
         E: Error + Send + Sync + 'static,
     {
         Self {
             predicate,
             collected: Vec::new(),
-            _marker: std::marker::PhantomData,
+            _marker: PhantomData,
         }
     }
 
     /// Get collected elements.
-    pub fn collected(&self) -> &[ElementId] {
+    pub fn collected(&self) -> &[Id] {
         &self.collected
     }
 
     /// Consume and return collected elements.
-    pub fn into_collected(self) -> Vec<ElementId> {
+    pub fn into_collected(self) -> Vec<Id> {
         self.collected
     }
 }
 
-impl<F, E> sealed::Sealed for TryCollectVisitor<F, E> {}
+impl<F, E, Id> sealed::Sealed for TryCollectVisitor<F, E, Id> {}
 
-impl<F, E> FallibleVisitor for TryCollectVisitor<F, E>
+impl<T, F, E> FallibleVisitor<T> for TryCollectVisitor<F, E, T::Id>
 where
-    F: FnMut(ElementId, usize) -> Result<bool, E>,
+    T: TreeNav,
+    F: FnMut(T::Id, usize) -> Result<bool, E>,
     E: Error + Send + Sync + 'static,
 {
     type Error = E;
 
-    fn visit(&mut self, id: ElementId, depth: usize) -> Result<VisitorResult, Self::Error> {
+    fn visit(&mut self, id: T::Id, depth: usize) -> Result<VisitorResult, Self::Error> {
         if (self.predicate)(id, depth)? {
             self.collected.push(id);
         }
@@ -447,10 +458,14 @@ where
 // ============================================================================
 
 /// Execute a fallible closure for each node.
-pub fn try_for_each<T, F, E>(tree: &T, root: ElementId, callback: F) -> Result<(), VisitorError<E>>
+pub fn try_for_each<T, F, E>(
+    tree: &T,
+    root: T::Id,
+    callback: F,
+) -> Result<(), VisitorError<E, T::Id>>
 where
     T: TreeNav,
-    F: FnMut(ElementId, usize) -> Result<(), E>,
+    F: FnMut(T::Id, usize) -> Result<(), E>,
     E: Error + Send + Sync + 'static,
 {
     let mut visitor = TryForEachVisitor::new(callback);
@@ -461,12 +476,12 @@ where
 /// Collect nodes with validation, stopping on first error.
 pub fn try_collect<T, F, E>(
     tree: &T,
-    root: ElementId,
+    root: T::Id,
     predicate: F,
-) -> Result<Vec<ElementId>, VisitorError<E>>
+) -> Result<Vec<T::Id>, VisitorError<E, T::Id>>
 where
     T: TreeNav,
-    F: FnMut(ElementId, usize) -> Result<bool, E>,
+    F: FnMut(T::Id, usize) -> Result<bool, E>,
     E: Error + Send + Sync + 'static,
 {
     let mut visitor = TryCollectVisitor::new(predicate);
@@ -477,10 +492,10 @@ where
 /// Validate tree depth doesn't exceed limit.
 pub fn validate_depth<T: TreeNav>(
     tree: &T,
-    root: ElementId,
+    root: T::Id,
     max_depth: usize,
-) -> Result<(), VisitorError<DepthLimitExceeded>> {
-    let mut visitor = DepthLimitVisitor::new(max_depth);
+) -> Result<(), VisitorError<DepthLimitExceeded, T::Id>> {
+    let mut visitor: DepthLimitVisitor<T::Id> = DepthLimitVisitor::new(max_depth);
     visit_fallible(tree, root, &mut visitor)?;
     Ok(())
 }
@@ -492,6 +507,7 @@ pub fn validate_depth<T: TreeNav>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_foundation::ElementId;
 
     #[test]
     fn test_depth_limit_exceeded() {
@@ -511,7 +527,7 @@ mod tests {
             max_depth: 5,
         };
         let id = ElementId::new(42);
-        let error = VisitorError::new(inner, id, 10);
+        let error: VisitorError<_, ElementId> = VisitorError::new(inner, id, 10);
 
         assert_eq!(error.element, id);
         assert_eq!(error.depth, 10);
@@ -527,7 +543,8 @@ mod tests {
         };
         let id = ElementId::new(42);
         let path = vec![ElementId::new(1), ElementId::new(2), id];
-        let error = VisitorError::with_path(inner, id, 10, path.clone());
+        let error: VisitorError<_, ElementId> =
+            VisitorError::with_path(inner, id, 10, path.clone());
 
         assert!(error.path.is_some());
         assert_eq!(error.path.as_ref().unwrap().len(), 3);

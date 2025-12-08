@@ -1,7 +1,6 @@
 //! Ancestor iterators.
 
 use crate::traits::TreeNav;
-use flui_foundation::ElementId;
 
 /// Iterator over ancestors of a node.
 ///
@@ -18,13 +17,13 @@ use flui_foundation::ElementId;
 #[derive(Debug, Clone)]
 pub struct Ancestors<'a, T: TreeNav> {
     tree: &'a T,
-    current: Option<ElementId>,
+    current: Option<T::Id>,
 }
 
 impl<'a, T: TreeNav> Ancestors<'a, T> {
     /// Creates a new ancestors iterator starting from the given node.
     #[inline]
-    pub fn new(tree: &'a T, start: ElementId) -> Self {
+    pub fn new(tree: &'a T, start: T::Id) -> Self {
         Self {
             tree,
             current: Some(start),
@@ -39,7 +38,7 @@ impl<'a, T: TreeNav> Ancestors<'a, T> {
 }
 
 impl<T: TreeNav> Iterator for Ancestors<'_, T> {
-    type Item = ElementId;
+    type Item = T::Id;
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
@@ -73,7 +72,7 @@ impl<T: TreeNav> std::iter::FusedIterator for Ancestors<'_, T> {}
 
 /// Iterator over ancestors with their depths.
 ///
-/// Yields `(ElementId, usize)` tuples where the depth is relative
+/// Yields `(Id, usize)` tuples where the depth is relative
 /// to the starting node (starting node has depth 0).
 ///
 /// # Example
@@ -96,7 +95,7 @@ pub struct AncestorsWithDepth<'a, T: TreeNav> {
 impl<'a, T: TreeNav> AncestorsWithDepth<'a, T> {
     /// Creates a new ancestors-with-depth iterator.
     #[inline]
-    pub fn new(tree: &'a T, start: ElementId) -> Self {
+    pub fn new(tree: &'a T, start: T::Id) -> Self {
         Self {
             inner: Ancestors::new(tree, start),
             depth: 0,
@@ -105,7 +104,7 @@ impl<'a, T: TreeNav> AncestorsWithDepth<'a, T> {
 }
 
 impl<T: TreeNav> Iterator for AncestorsWithDepth<'_, T> {
-    type Item = (ElementId, usize);
+    type Item = (T::Id, usize);
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
@@ -130,8 +129,9 @@ impl<T: TreeNav> std::iter::FusedIterator for AncestorsWithDepth<'_, T> {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::iter::DescendantsWithDepth;
     use crate::traits::TreeRead;
-    use flui_foundation::Slot;
+    use flui_foundation::ElementId;
 
     struct TestNode {
         parent: Option<ElementId>,
@@ -141,6 +141,9 @@ mod tests {
     struct TestTree {
         nodes: Vec<Option<TestNode>>,
     }
+
+    impl crate::traits::sealed::TreeReadSealed for TestTree {}
+    impl crate::traits::sealed::TreeNavSealed for TestTree {}
 
     impl TestTree {
         fn new() -> Self {
@@ -155,7 +158,7 @@ mod tests {
             }));
 
             if let Some(parent_id) = parent {
-                if let Some(Some(p)) = self.nodes.get_mut(parent_id.get() as usize - 1) {
+                if let Some(Some(p)) = self.nodes.get_mut(parent_id.get() - 1) {
                     p.children.push(id);
                 }
             }
@@ -165,28 +168,64 @@ mod tests {
     }
 
     impl TreeRead for TestTree {
+        type Id = ElementId;
         type Node = TestNode;
+        type NodeIter<'a> = Box<dyn Iterator<Item = ElementId> + 'a>;
 
         fn get(&self, id: ElementId) -> Option<&TestNode> {
-            self.nodes.get(id.get() as usize - 1)?.as_ref()
+            self.nodes.get(id.get() - 1)?.as_ref()
         }
 
         fn len(&self) -> usize {
             self.nodes.iter().filter(|n| n.is_some()).count()
         }
+
+        fn node_ids(&self) -> Self::NodeIter<'_> {
+            Box::new((0..self.nodes.len()).filter_map(|i| {
+                if self.nodes[i].is_some() {
+                    Some(ElementId::new(i + 1))
+                } else {
+                    None
+                }
+            }))
+        }
     }
 
     impl TreeNav for TestTree {
+        type ChildrenIter<'a> = Box<dyn Iterator<Item = ElementId> + 'a>;
+        type AncestorsIter<'a> = Ancestors<'a, Self>;
+        type DescendantsIter<'a> = DescendantsWithDepth<'a, Self>;
+        type SiblingsIter<'a> = Box<dyn Iterator<Item = ElementId> + 'a>;
+
         fn parent(&self, id: ElementId) -> Option<ElementId> {
             self.get(id)?.parent
         }
 
-        fn children(&self, id: ElementId) -> &[ElementId] {
-            self.get(id).map(|n| n.children.as_slice()).unwrap_or(&[])
+        fn children(&self, id: ElementId) -> Self::ChildrenIter<'_> {
+            if let Some(node) = self.get(id) {
+                Box::new(node.children.iter().copied())
+            } else {
+                Box::new(std::iter::empty())
+            }
         }
 
-        fn slot(&self, _id: ElementId) -> Option<Slot> {
-            None
+        fn ancestors(&self, start: ElementId) -> Self::AncestorsIter<'_> {
+            Ancestors::new(self, start)
+        }
+
+        fn descendants(&self, root: ElementId) -> Self::DescendantsIter<'_> {
+            DescendantsWithDepth::new(self, root)
+        }
+
+        fn siblings(&self, id: ElementId) -> Self::SiblingsIter<'_> {
+            if let Some(parent_id) = self.parent(id) {
+                Box::new(
+                    self.children(parent_id)
+                        .filter(move |&child_id| child_id != id),
+                )
+            } else {
+                Box::new(std::iter::empty())
+            }
         }
     }
 

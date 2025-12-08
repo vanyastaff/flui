@@ -42,7 +42,83 @@
 //! let valid_id = ViewId::new_checked(1); // Some(ViewId(1))
 //! ```
 
+use std::hash::Hash;
 use std::num::NonZeroUsize;
+
+// =========================================================================
+// TreeId Trait - Common interface for all tree node identifiers
+// =========================================================================
+
+/// Common trait for all tree node identifiers.
+///
+/// This trait provides a unified interface for ID types used in tree structures,
+/// enabling generic tree algorithms to work with any ID type (`ViewId`, `ElementId`,
+/// `RenderId`, etc.).
+///
+/// # Design
+///
+/// Uses associated type pattern rather than generic parameters because:
+/// - Each tree implementation has exactly one ID type
+/// - Cleaner API: `impl TreeRead for MyTree` vs `impl TreeRead<MyId> for MyTree`
+/// - No turbofish needed: `tree.get(id)` vs `tree.get::<MyId>(id)`
+/// - Follows std patterns (`Iterator::Item`, `IntoIterator::Item`)
+///
+/// # Examples
+///
+/// ```rust
+/// use flui_foundation::{TreeId, ElementId, ViewId};
+///
+/// fn print_id<I: TreeId>(id: I) {
+///     println!("ID value: {}", id.get());
+/// }
+///
+/// print_id(ElementId::new(1));
+/// print_id(ViewId::new(2));
+/// ```
+///
+/// # Generic Tree Functions
+///
+/// ```rust
+/// use flui_foundation::TreeId;
+///
+/// fn validate_ids<I: TreeId>(ids: &[I]) -> bool {
+///     ids.iter().all(|id| id.get() > 0)
+/// }
+/// ```
+pub trait TreeId:
+    Copy
+    + Clone
+    + Eq
+    + PartialEq
+    + Ord
+    + PartialOrd
+    + Hash
+    + std::fmt::Debug
+    + std::fmt::Display
+    + Send
+    + Sync
+    + 'static
+{
+    /// Creates a new ID from a non-zero usize.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `value` is 0.
+    fn new(value: usize) -> Self;
+
+    /// Creates a new ID from a usize, returning `None` if 0.
+    fn new_checked(value: usize) -> Option<Self>;
+
+    /// Returns the inner usize value.
+    fn get(self) -> usize;
+
+    /// Creates an ID without checking if the value is non-zero.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that `value` is not 0.
+    unsafe fn new_unchecked(value: usize) -> Self;
+}
 
 // =========================================================================
 // Macro for defining ID types
@@ -204,6 +280,30 @@ macro_rules! define_id {
         impl From<usize> for $name {
             fn from(id: usize) -> Self {
                 Self::new(id)
+            }
+        }
+
+        // TreeId implementation for generic tree algorithms
+        impl TreeId for $name {
+            #[inline]
+            fn new(value: usize) -> Self {
+                Self::new(value)
+            }
+
+            #[inline]
+            fn new_checked(value: usize) -> Option<Self> {
+                Self::new_checked(value)
+            }
+
+            #[inline]
+            fn get(self) -> usize {
+                self.get()
+            }
+
+            #[inline]
+            unsafe fn new_unchecked(value: usize) -> Self {
+                // SAFETY: Caller ensures value is non-zero
+                unsafe { Self::new_unchecked(value) }
             }
         }
     };
