@@ -1,6 +1,7 @@
 //! Sibling iterators.
 
 use crate::traits::TreeNav;
+use flui_foundation::Identifier;
 
 /// Direction for sibling iteration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -30,10 +31,10 @@ pub enum SiblingsDirection {
 /// assert_eq!(siblings, vec![C, B, A]);
 /// ```
 #[derive(Debug)]
-pub struct Siblings<'a, T: TreeNav> {
+pub struct Siblings<'a, I: Identifier, T: TreeNav<I>> {
     _tree: &'a T,
     /// Parent's children list (owned)
-    children: Vec<T::Id>,
+    children: Vec<I>,
     /// Current index in siblings list
     current_index: Option<usize>,
     /// Direction of iteration
@@ -44,7 +45,7 @@ pub struct Siblings<'a, T: TreeNav> {
     include_self: bool,
 }
 
-impl<'a, T: TreeNav> Siblings<'a, T> {
+impl<'a, I: Identifier, T: TreeNav<I>> Siblings<'a, I, T> {
     /// Creates a new siblings iterator.
     ///
     /// # Arguments
@@ -53,12 +54,7 @@ impl<'a, T: TreeNav> Siblings<'a, T> {
     /// * `start` - The starting node
     /// * `direction` - Direction to iterate
     /// * `include_self` - Whether to include the starting node
-    pub fn new(
-        tree: &'a T,
-        start: T::Id,
-        direction: SiblingsDirection,
-        include_self: bool,
-    ) -> Self {
+    pub fn new(tree: &'a T, start: I, direction: SiblingsDirection, include_self: bool) -> Self {
         // Get parent and find index
         let (children, current_index) = if let Some(parent) = tree.parent(start) {
             let sibs: Vec<_> = tree.children(parent).collect();
@@ -81,19 +77,19 @@ impl<'a, T: TreeNav> Siblings<'a, T> {
 
     /// Creates a forward siblings iterator (not including self).
     #[inline]
-    pub fn forward(tree: &'a T, start: T::Id) -> Self {
+    pub fn forward(tree: &'a T, start: I) -> Self {
         Self::new(tree, start, SiblingsDirection::Forward, false)
     }
 
     /// Creates a backward siblings iterator (not including self).
     #[inline]
-    pub fn backward(tree: &'a T, start: T::Id) -> Self {
+    pub fn backward(tree: &'a T, start: I) -> Self {
         Self::new(tree, start, SiblingsDirection::Backward, false)
     }
 }
 
-impl<T: TreeNav> Iterator for Siblings<'_, T> {
-    type Item = T::Id;
+impl<I: Identifier, T: TreeNav<I>> Iterator for Siblings<'_, I, T> {
+    type Item = I;
 
     fn next(&mut self) -> Option<Self::Item> {
         let idx = self.current_index?;
@@ -164,8 +160,8 @@ impl<T: TreeNav> Iterator for Siblings<'_, T> {
     }
 }
 
-impl<T: TreeNav> std::iter::FusedIterator for Siblings<'_, T> {}
-impl<T: TreeNav> std::iter::ExactSizeIterator for Siblings<'_, T> {}
+impl<I: Identifier, T: TreeNav<I>> std::iter::FusedIterator for Siblings<'_, I, T> {}
+impl<I: Identifier, T: TreeNav<I>> std::iter::ExactSizeIterator for Siblings<'_, I, T> {}
 
 // ============================================================================
 // TESTS
@@ -212,8 +208,7 @@ mod tests {
         }
     }
 
-    impl TreeRead for TestTree {
-        type Id = ElementId;
+    impl TreeRead<ElementId> for TestTree {
         type Node = TestNode;
         type NodeIter<'a> = Box<dyn Iterator<Item = ElementId> + 'a>;
 
@@ -236,10 +231,10 @@ mod tests {
         }
     }
 
-    impl TreeNav for TestTree {
+    impl TreeNav<ElementId> for TestTree {
         type ChildrenIter<'a> = Box<dyn Iterator<Item = ElementId> + 'a>;
-        type AncestorsIter<'a> = Ancestors<'a, Self>;
-        type DescendantsIter<'a> = DescendantsWithDepth<'a, Self>;
+        type AncestorsIter<'a> = Ancestors<'a, ElementId, Self>;
+        type DescendantsIter<'a> = DescendantsWithDepth<'a, ElementId, Self>;
         type SiblingsIter<'a> = Box<dyn Iterator<Item = ElementId> + 'a>;
 
         fn parent(&self, id: ElementId) -> Option<ElementId> {

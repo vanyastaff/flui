@@ -64,8 +64,7 @@ impl DemoTree {
     }
 }
 
-impl TreeRead for DemoTree {
-    type Id = ElementId;
+impl TreeRead<ElementId> for DemoTree {
     type Node = DemoNode;
     type NodeIter<'a> = Box<dyn Iterator<Item = ElementId> + 'a>;
 
@@ -88,10 +87,10 @@ impl TreeRead for DemoTree {
     }
 }
 
-impl TreeNav for DemoTree {
+impl TreeNav<ElementId> for DemoTree {
     type ChildrenIter<'a> = Box<dyn Iterator<Item = ElementId> + 'a>;
-    type AncestorsIter<'a> = Ancestors<'a, Self>;
-    type DescendantsIter<'a> = DescendantsWithDepth<'a, Self>;
+    type AncestorsIter<'a> = Ancestors<'a, ElementId, Self>;
+    type DescendantsIter<'a> = DescendantsWithDepth<'a, ElementId, Self>;
     type SiblingsIter<'a> = Box<dyn Iterator<Item = ElementId> + 'a>;
 
     fn parent(&self, id: ElementId) -> Option<ElementId> {

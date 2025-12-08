@@ -1,6 +1,7 @@
 //! Descendant iterators.
 
 use crate::traits::TreeNav;
+use flui_foundation::Identifier;
 use smallvec::SmallVec;
 
 /// Stack type for descendants iterator.
@@ -27,15 +28,15 @@ type DescendantStack<Id> = SmallVec<[Id; 32]>;
 /// Uses `SmallVec` with inline storage for 32 elements. This avoids heap
 /// allocation for typical UI trees where traversal depth rarely exceeds 32.
 #[derive(Debug)]
-pub struct Descendants<'a, T: TreeNav> {
+pub struct Descendants<'a, I: Identifier, T: TreeNav<I>> {
     tree: &'a T,
-    stack: DescendantStack<T::Id>,
+    stack: DescendantStack<I>,
 }
 
-impl<'a, T: TreeNav> Descendants<'a, T> {
+impl<'a, I: Identifier, T: TreeNav<I>> Descendants<'a, I, T> {
     /// Creates a new descendants iterator starting from the given root.
     #[inline]
-    pub fn new(tree: &'a T, root: T::Id) -> Self {
+    pub fn new(tree: &'a T, root: I) -> Self {
         let mut stack = DescendantStack::new();
         stack.push(root);
 
@@ -55,8 +56,8 @@ impl<'a, T: TreeNav> Descendants<'a, T> {
     }
 }
 
-impl<T: TreeNav> Iterator for Descendants<'_, T> {
-    type Item = T::Id;
+impl<I: Identifier, T: TreeNav<I>> Iterator for Descendants<'_, I, T> {
+    type Item = I;
 
     fn next(&mut self) -> Option<Self::Item> {
         let current = self.stack.pop()?;
@@ -67,7 +68,7 @@ impl<T: TreeNav> Iterator for Descendants<'_, T> {
         }
 
         // Push children in reverse order (so first child is processed first)
-        let children: SmallVec<[T::Id; 8]> = self.tree.children(current).collect();
+        let children: SmallVec<[I; 8]> = self.tree.children(current).collect();
         for child in children.into_iter().rev() {
             self.stack.push(child);
         }
@@ -82,7 +83,7 @@ impl<T: TreeNav> Iterator for Descendants<'_, T> {
     }
 }
 
-impl<T: TreeNav> std::iter::FusedIterator for Descendants<'_, T> {}
+impl<I: Identifier, T: TreeNav<I>> std::iter::FusedIterator for Descendants<'_, I, T> {}
 
 /// Stack type for descendants-with-depth iterator.
 type DescendantDepthStack<Id> = SmallVec<[(Id, usize); 32]>;
@@ -92,15 +93,15 @@ type DescendantDepthStack<Id> = SmallVec<[(Id, usize); 32]>;
 /// Yields `(Id, usize)` tuples where depth is relative to
 /// the starting root (root has depth 0).
 #[derive(Debug)]
-pub struct DescendantsWithDepth<'a, T: TreeNav> {
+pub struct DescendantsWithDepth<'a, I: Identifier, T: TreeNav<I>> {
     tree: &'a T,
-    stack: DescendantDepthStack<T::Id>,
+    stack: DescendantDepthStack<I>,
 }
 
-impl<'a, T: TreeNav> DescendantsWithDepth<'a, T> {
+impl<'a, I: Identifier, T: TreeNav<I>> DescendantsWithDepth<'a, I, T> {
     /// Creates a new descendants-with-depth iterator.
     #[inline]
-    pub fn new(tree: &'a T, root: T::Id) -> Self {
+    pub fn new(tree: &'a T, root: I) -> Self {
         let mut stack = DescendantDepthStack::new();
         stack.push((root, 0));
 
@@ -108,8 +109,8 @@ impl<'a, T: TreeNav> DescendantsWithDepth<'a, T> {
     }
 }
 
-impl<T: TreeNav> Iterator for DescendantsWithDepth<'_, T> {
-    type Item = (T::Id, usize);
+impl<I: Identifier, T: TreeNav<I>> Iterator for DescendantsWithDepth<'_, I, T> {
+    type Item = (I, usize);
 
     fn next(&mut self) -> Option<Self::Item> {
         let (current, depth) = self.stack.pop()?;
@@ -118,7 +119,7 @@ impl<T: TreeNav> Iterator for DescendantsWithDepth<'_, T> {
             return self.next();
         }
 
-        let children: SmallVec<[T::Id; 8]> = self.tree.children(current).collect();
+        let children: SmallVec<[I; 8]> = self.tree.children(current).collect();
         for child in children.into_iter().rev() {
             self.stack.push((child, depth + 1));
         }
@@ -132,7 +133,7 @@ impl<T: TreeNav> Iterator for DescendantsWithDepth<'_, T> {
     }
 }
 
-impl<T: TreeNav> std::iter::FusedIterator for DescendantsWithDepth<'_, T> {}
+impl<I: Identifier, T: TreeNav<I>> std::iter::FusedIterator for DescendantsWithDepth<'_, I, T> {}
 
 // ============================================================================
 // TESTS
@@ -179,8 +180,7 @@ mod tests {
         }
     }
 
-    impl TreeRead for TestTree {
-        type Id = ElementId;
+    impl TreeRead<ElementId> for TestTree {
         type Node = TestNode;
         type NodeIter<'a> = Box<dyn Iterator<Item = ElementId> + 'a>;
 
@@ -203,10 +203,10 @@ mod tests {
         }
     }
 
-    impl TreeNav for TestTree {
+    impl TreeNav<ElementId> for TestTree {
         type ChildrenIter<'a> = Box<dyn Iterator<Item = ElementId> + 'a>;
-        type AncestorsIter<'a> = Ancestors<'a, Self>;
-        type DescendantsIter<'a> = DescendantsWithDepth<'a, Self>;
+        type AncestorsIter<'a> = Ancestors<'a, ElementId, Self>;
+        type DescendantsIter<'a> = DescendantsWithDepth<'a, ElementId, Self>;
         type SiblingsIter<'a> = Box<dyn Iterator<Item = ElementId> + 'a>;
 
         fn parent(&self, id: ElementId) -> Option<ElementId> {

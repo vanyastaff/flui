@@ -2,26 +2,10 @@
 //!
 //! This module provides utilities for composing multiple visitors
 //! into a single traversal pass, improving efficiency.
-//!
-//! # Example
-//!
-//! ```rust,ignore
-//! use flui_tree::{CountVisitor, MaxDepthVisitor, ComposedVisitor};
-//!
-//! let count = CountVisitor::new();
-//! let depth = MaxDepthVisitor::new();
-//!
-//! // Combine visitors - both run in single traversal
-//! let composed = ComposedVisitor::new(count, depth);
-//! visit_depth_first(&tree, root, &mut composed);
-//!
-//! let (count_visitor, depth_visitor) = composed.into_parts();
-//! println!("Count: {}, Max depth: {}", count_visitor.count, depth_visitor.max_depth);
-//! ```
 
 use super::{sealed, TreeVisitor, VisitorResult};
 use crate::TreeNav;
-use flui_foundation::TreeId;
+use flui_foundation::Identifier;
 use std::marker::PhantomData;
 
 // ============================================================================
@@ -63,13 +47,14 @@ impl<A, B> ComposedVisitor<A, B> {
 
 impl<A, B> sealed::Sealed for ComposedVisitor<A, B> {}
 
-impl<T, A, B> TreeVisitor<T> for ComposedVisitor<A, B>
+impl<I, T, A, B> TreeVisitor<I, T> for ComposedVisitor<A, B>
 where
-    T: TreeNav,
-    A: TreeVisitor<T>,
-    B: TreeVisitor<T>,
+    I: Identifier,
+    T: TreeNav<I>,
+    A: TreeVisitor<I, T>,
+    B: TreeVisitor<I, T>,
 {
-    fn visit(&mut self, id: T::Id, depth: usize) -> VisitorResult {
+    fn visit(&mut self, id: I, depth: usize) -> VisitorResult {
         let result_a = self.first.visit(id, depth);
         let result_b = self.second.visit(id, depth);
 
@@ -77,12 +62,12 @@ where
         combine_results(result_a, result_b)
     }
 
-    fn pre_children(&mut self, id: T::Id, depth: usize) {
+    fn pre_children(&mut self, id: I, depth: usize) {
         self.first.pre_children(id, depth);
         self.second.pre_children(id, depth);
     }
 
-    fn post_children(&mut self, id: T::Id, depth: usize) {
+    fn post_children(&mut self, id: I, depth: usize) {
         self.first.post_children(id, depth);
         self.second.post_children(id, depth);
     }
@@ -142,14 +127,15 @@ impl<A, B, C> TripleComposedVisitor<A, B, C> {
 
 impl<A, B, C> sealed::Sealed for TripleComposedVisitor<A, B, C> {}
 
-impl<T, A, B, C> TreeVisitor<T> for TripleComposedVisitor<A, B, C>
+impl<I, T, A, B, C> TreeVisitor<I, T> for TripleComposedVisitor<A, B, C>
 where
-    T: TreeNav,
-    A: TreeVisitor<T>,
-    B: TreeVisitor<T>,
-    C: TreeVisitor<T>,
+    I: Identifier,
+    T: TreeNav<I>,
+    A: TreeVisitor<I, T>,
+    B: TreeVisitor<I, T>,
+    C: TreeVisitor<I, T>,
 {
-    fn visit(&mut self, id: T::Id, depth: usize) -> VisitorResult {
+    fn visit(&mut self, id: I, depth: usize) -> VisitorResult {
         let result_a = self.first.visit(id, depth);
         let result_b = self.second.visit(id, depth);
         let result_c = self.third.visit(id, depth);
@@ -157,13 +143,13 @@ where
         combine_results(combine_results(result_a, result_b), result_c)
     }
 
-    fn pre_children(&mut self, id: T::Id, depth: usize) {
+    fn pre_children(&mut self, id: I, depth: usize) {
         self.first.pre_children(id, depth);
         self.second.pre_children(id, depth);
         self.third.pre_children(id, depth);
     }
 
-    fn post_children(&mut self, id: T::Id, depth: usize) {
+    fn post_children(&mut self, id: I, depth: usize) {
         self.first.post_children(id, depth);
         self.second.post_children(id, depth);
         self.third.post_children(id, depth);
@@ -178,29 +164,25 @@ where
 ///
 /// Useful when the number of visitors isn't known at compile time.
 /// This type is generic over the ID type for the tree.
-pub struct VisitorVec<Id: TreeId> {
-    visitors: Vec<Box<dyn DynVisitor<Id>>>,
+pub struct VisitorVec<I: Identifier> {
+    visitors: Vec<Box<dyn DynVisitor<I>>>,
 }
 
 /// Object-safe visitor trait for dynamic dispatch.
 ///
 /// Generic over ID type to support any tree.
-pub trait DynVisitor<Id: TreeId>: Send + Sync {
+pub trait DynVisitor<I: Identifier>: Send + Sync {
     /// Visit a node.
-    fn visit_dyn(&mut self, id: Id, depth: usize) -> VisitorResult;
+    fn visit_dyn(&mut self, id: I, depth: usize) -> VisitorResult;
 
     /// Pre-children hook.
-    fn pre_children_dyn(&mut self, id: Id, depth: usize);
+    fn pre_children_dyn(&mut self, id: I, depth: usize);
 
     /// Post-children hook.
-    fn post_children_dyn(&mut self, id: Id, depth: usize);
+    fn post_children_dyn(&mut self, id: I, depth: usize);
 }
 
-// Note: We cannot provide a blanket impl of DynVisitor for TreeVisitor
-// because the tree type T is not constrained. Users who need dynamic
-// dispatch should implement DynVisitor manually for their visitor types.
-
-impl<Id: TreeId> VisitorVec<Id> {
+impl<I: Identifier> VisitorVec<I> {
     /// Create an empty visitor collection.
     pub fn new() -> Self {
         Self {
@@ -216,7 +198,7 @@ impl<Id: TreeId> VisitorVec<Id> {
     }
 
     /// Add a visitor to the collection.
-    pub fn push(&mut self, visitor: Box<dyn DynVisitor<Id>>) {
+    pub fn push(&mut self, visitor: Box<dyn DynVisitor<I>>) {
         self.visitors.push(visitor);
     }
 
@@ -231,16 +213,16 @@ impl<Id: TreeId> VisitorVec<Id> {
     }
 }
 
-impl<Id: TreeId> Default for VisitorVec<Id> {
+impl<I: Identifier> Default for VisitorVec<I> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<Id: TreeId> sealed::Sealed for VisitorVec<Id> {}
+impl<I: Identifier> sealed::Sealed for VisitorVec<I> {}
 
-impl<T: TreeNav> TreeVisitor<T> for VisitorVec<T::Id> {
-    fn visit(&mut self, id: T::Id, depth: usize) -> VisitorResult {
+impl<I: Identifier, T: TreeNav<I>> TreeVisitor<I, T> for VisitorVec<I> {
+    fn visit(&mut self, id: I, depth: usize) -> VisitorResult {
         let mut result = VisitorResult::Continue;
 
         for visitor in &mut self.visitors {
@@ -256,13 +238,13 @@ impl<T: TreeNav> TreeVisitor<T> for VisitorVec<T::Id> {
         result
     }
 
-    fn pre_children(&mut self, id: T::Id, depth: usize) {
+    fn pre_children(&mut self, id: I, depth: usize) {
         for visitor in &mut self.visitors {
             visitor.pre_children_dyn(id, depth);
         }
     }
 
-    fn post_children(&mut self, id: T::Id, depth: usize) {
+    fn post_children(&mut self, id: I, depth: usize) {
         for visitor in &mut self.visitors {
             visitor.post_children_dyn(id, depth);
         }
@@ -274,18 +256,18 @@ impl<T: TreeNav> TreeVisitor<T> for VisitorVec<T::Id> {
 // ============================================================================
 
 /// A visitor that only visits nodes matching a predicate.
-pub struct ConditionalVisitor<V, P, Id> {
+pub struct ConditionalVisitor<V, P, I> {
     visitor: V,
     predicate: P,
-    _marker: PhantomData<Id>,
+    _marker: PhantomData<I>,
 }
 
-impl<V, P, Id> ConditionalVisitor<V, P, Id> {
+impl<V, P, I> ConditionalVisitor<V, P, I> {
     /// Create a new conditional visitor.
     pub fn new(visitor: V, predicate: P) -> Self
     where
-        Id: TreeId,
-        P: FnMut(Id, usize) -> bool,
+        I: Identifier,
+        P: FnMut(I, usize) -> bool,
     {
         Self {
             visitor,
@@ -310,15 +292,16 @@ impl<V, P, Id> ConditionalVisitor<V, P, Id> {
     }
 }
 
-impl<V, P, Id> sealed::Sealed for ConditionalVisitor<V, P, Id> {}
+impl<V, P, I> sealed::Sealed for ConditionalVisitor<V, P, I> {}
 
-impl<T, V, P> TreeVisitor<T> for ConditionalVisitor<V, P, T::Id>
+impl<I, T, V, P> TreeVisitor<I, T> for ConditionalVisitor<V, P, I>
 where
-    T: TreeNav,
-    V: TreeVisitor<T>,
-    P: FnMut(T::Id, usize) -> bool,
+    I: Identifier,
+    T: TreeNav<I>,
+    V: TreeVisitor<I, T>,
+    P: FnMut(I, usize) -> bool,
 {
-    fn visit(&mut self, id: T::Id, depth: usize) -> VisitorResult {
+    fn visit(&mut self, id: I, depth: usize) -> VisitorResult {
         if (self.predicate)(id, depth) {
             self.visitor.visit(id, depth)
         } else {
@@ -326,11 +309,11 @@ where
         }
     }
 
-    fn pre_children(&mut self, id: T::Id, depth: usize) {
+    fn pre_children(&mut self, id: I, depth: usize) {
         self.visitor.pre_children(id, depth);
     }
 
-    fn post_children(&mut self, id: T::Id, depth: usize) {
+    fn post_children(&mut self, id: I, depth: usize) {
         self.visitor.post_children(id, depth);
     }
 }
@@ -340,18 +323,18 @@ where
 // ============================================================================
 
 /// A visitor that transforms node IDs before visiting.
-pub struct MappedVisitor<V, F, Id> {
+pub struct MappedVisitor<V, F, I> {
     visitor: V,
     mapper: F,
-    _marker: PhantomData<Id>,
+    _marker: PhantomData<I>,
 }
 
-impl<V, F, Id> MappedVisitor<V, F, Id> {
+impl<V, F, I> MappedVisitor<V, F, I> {
     /// Create a new mapped visitor.
     pub fn new(visitor: V, mapper: F) -> Self
     where
-        Id: TreeId,
-        F: FnMut(Id, usize) -> Id,
+        I: Identifier,
+        F: FnMut(I, usize) -> I,
     {
         Self {
             visitor,
@@ -366,25 +349,26 @@ impl<V, F, Id> MappedVisitor<V, F, Id> {
     }
 }
 
-impl<V, F, Id> sealed::Sealed for MappedVisitor<V, F, Id> {}
+impl<V, F, I> sealed::Sealed for MappedVisitor<V, F, I> {}
 
-impl<T, V, F> TreeVisitor<T> for MappedVisitor<V, F, T::Id>
+impl<I, T, V, F> TreeVisitor<I, T> for MappedVisitor<V, F, I>
 where
-    T: TreeNav,
-    V: TreeVisitor<T>,
-    F: FnMut(T::Id, usize) -> T::Id,
+    I: Identifier,
+    T: TreeNav<I>,
+    V: TreeVisitor<I, T>,
+    F: FnMut(I, usize) -> I,
 {
-    fn visit(&mut self, id: T::Id, depth: usize) -> VisitorResult {
+    fn visit(&mut self, id: I, depth: usize) -> VisitorResult {
         let mapped_id = (self.mapper)(id, depth);
         self.visitor.visit(mapped_id, depth)
     }
 
-    fn pre_children(&mut self, id: T::Id, depth: usize) {
+    fn pre_children(&mut self, id: I, depth: usize) {
         let mapped_id = (self.mapper)(id, depth);
         self.visitor.pre_children(mapped_id, depth);
     }
 
-    fn post_children(&mut self, id: T::Id, depth: usize) {
+    fn post_children(&mut self, id: I, depth: usize) {
         let mapped_id = (self.mapper)(id, depth);
         self.visitor.post_children(mapped_id, depth);
     }
@@ -395,36 +379,36 @@ where
 // ============================================================================
 
 /// Extension trait for composing visitors.
-pub trait VisitorExt<T: TreeNav>: TreeVisitor<T> + Sized {
+pub trait VisitorExt<I: Identifier, T: TreeNav<I>>: TreeVisitor<I, T> + Sized {
     /// Compose with another visitor.
-    fn and_then<V: TreeVisitor<T>>(self, other: V) -> ComposedVisitor<Self, V> {
+    fn and_then<V: TreeVisitor<I, T>>(self, other: V) -> ComposedVisitor<Self, V> {
         ComposedVisitor::new(self, other)
     }
 
     /// Add a third visitor to composition.
-    fn and_also<V: TreeVisitor<T>>(self, other: V) -> ComposedVisitor<Self, V> {
+    fn and_also<V: TreeVisitor<I, T>>(self, other: V) -> ComposedVisitor<Self, V> {
         ComposedVisitor::new(self, other)
     }
 
     /// Only visit nodes matching predicate.
-    fn filter<P>(self, predicate: P) -> ConditionalVisitor<Self, P, T::Id>
+    fn filter<P>(self, predicate: P) -> ConditionalVisitor<Self, P, I>
     where
-        P: FnMut(T::Id, usize) -> bool,
+        P: FnMut(I, usize) -> bool,
     {
         ConditionalVisitor::new(self, predicate)
     }
 
     /// Transform IDs before visiting.
-    fn map_ids<F>(self, mapper: F) -> MappedVisitor<Self, F, T::Id>
+    fn map_ids<F>(self, mapper: F) -> MappedVisitor<Self, F, I>
     where
-        F: FnMut(T::Id, usize) -> T::Id,
+        F: FnMut(I, usize) -> I,
     {
         MappedVisitor::new(self, mapper)
     }
 }
 
 // Blanket implementation
-impl<T: TreeNav, V: TreeVisitor<T> + Sized> VisitorExt<T> for V {}
+impl<I: Identifier, T: TreeNav<I>, V: TreeVisitor<I, T> + Sized> VisitorExt<I, T> for V {}
 
 // ============================================================================
 // TESTS
@@ -473,8 +457,7 @@ mod tests {
         }
     }
 
-    impl TreeRead for TestTree {
-        type Id = ElementId;
+    impl TreeRead<ElementId> for TestTree {
         type Node = TestNode;
         type NodeIter<'a> = Box<dyn Iterator<Item = ElementId> + 'a>;
 
@@ -491,10 +474,10 @@ mod tests {
         }
     }
 
-    impl TreeNav for TestTree {
+    impl TreeNav<ElementId> for TestTree {
         type ChildrenIter<'a> = Box<dyn Iterator<Item = ElementId> + 'a>;
-        type AncestorsIter<'a> = crate::iter::Ancestors<'a, Self>;
-        type DescendantsIter<'a> = crate::iter::DescendantsWithDepth<'a, Self>;
+        type AncestorsIter<'a> = crate::iter::Ancestors<'a, ElementId, Self>;
+        type DescendantsIter<'a> = crate::iter::DescendantsWithDepth<'a, ElementId, Self>;
         type SiblingsIter<'a> = Box<dyn Iterator<Item = ElementId> + 'a>;
 
         fn parent(&self, id: ElementId) -> Option<ElementId> {
@@ -563,7 +546,7 @@ mod tests {
         let mut composed = ComposedVisitor::new(count, depth);
 
         // Test visit method
-        let result = <ComposedVisitor<_, _> as TreeVisitor<TestTree>>::visit(
+        let result = <ComposedVisitor<_, _> as TreeVisitor<ElementId, TestTree>>::visit(
             &mut composed,
             ElementId::new(1),
             0,
@@ -590,10 +573,10 @@ mod tests {
         let count = CountVisitor::new();
         let depth = MaxDepthVisitor::new();
 
-        // Test composition via extension trait - need to specify tree type
+        // Test composition via extension trait
         let mut composed: ComposedVisitor<CountVisitor, MaxDepthVisitor> =
-            <CountVisitor as VisitorExt<TestTree>>::and_then(count, depth);
-        <ComposedVisitor<_, _> as TreeVisitor<TestTree>>::visit(
+            <CountVisitor as VisitorExt<ElementId, TestTree>>::and_then(count, depth);
+        <ComposedVisitor<_, _> as TreeVisitor<ElementId, TestTree>>::visit(
             &mut composed,
             ElementId::new(1),
             5,
@@ -618,22 +601,22 @@ mod tests {
         let mut conditional: ConditionalVisitor<_, _, ElementId> =
             ConditionalVisitor::new(collector, |id: ElementId, _| id.get() % 2 == 0);
 
-        <ConditionalVisitor<_, _, _> as TreeVisitor<TestTree>>::visit(
+        <ConditionalVisitor<_, _, _> as TreeVisitor<ElementId, TestTree>>::visit(
             &mut conditional,
             ElementId::new(1),
             0,
         ); // Odd - skip
-        <ConditionalVisitor<_, _, _> as TreeVisitor<TestTree>>::visit(
+        <ConditionalVisitor<_, _, _> as TreeVisitor<ElementId, TestTree>>::visit(
             &mut conditional,
             ElementId::new(2),
             0,
         ); // Even - collect
-        <ConditionalVisitor<_, _, _> as TreeVisitor<TestTree>>::visit(
+        <ConditionalVisitor<_, _, _> as TreeVisitor<ElementId, TestTree>>::visit(
             &mut conditional,
             ElementId::new(3),
             0,
         ); // Odd - skip
-        <ConditionalVisitor<_, _, _> as TreeVisitor<TestTree>>::visit(
+        <ConditionalVisitor<_, _, _> as TreeVisitor<ElementId, TestTree>>::visit(
             &mut conditional,
             ElementId::new(4),
             0,

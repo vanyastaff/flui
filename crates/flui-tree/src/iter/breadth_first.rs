@@ -1,6 +1,7 @@
 //! Breadth-first (level-order) iterator.
 
 use crate::traits::TreeNav;
+use flui_foundation::Identifier;
 use std::collections::VecDeque;
 
 /// Breadth-first (level-order) iterator.
@@ -21,15 +22,15 @@ use std::collections::VecDeque;
 /// assert_eq!(bfs, vec![A, B, C, D, E]);
 /// ```
 #[derive(Debug)]
-pub struct BreadthFirstIter<'a, T: TreeNav> {
+pub struct BreadthFirstIter<'a, I: Identifier, T: TreeNav<I>> {
     tree: &'a T,
-    queue: VecDeque<T::Id>,
+    queue: VecDeque<I>,
 }
 
-impl<'a, T: TreeNav> BreadthFirstIter<'a, T> {
+impl<'a, I: Identifier, T: TreeNav<I>> BreadthFirstIter<'a, I, T> {
     /// Creates a new breadth-first iterator.
     #[inline]
-    pub fn new(tree: &'a T, root: T::Id) -> Self {
+    pub fn new(tree: &'a T, root: I) -> Self {
         let mut queue = VecDeque::with_capacity(16);
 
         if tree.contains(root) {
@@ -52,8 +53,8 @@ impl<'a, T: TreeNav> BreadthFirstIter<'a, T> {
     }
 }
 
-impl<T: TreeNav> Iterator for BreadthFirstIter<'_, T> {
-    type Item = T::Id;
+impl<I: Identifier, T: TreeNav<I>> Iterator for BreadthFirstIter<'_, I, T> {
+    type Item = I;
 
     fn next(&mut self) -> Option<Self::Item> {
         let current = self.queue.pop_front()?;
@@ -77,23 +78,23 @@ impl<T: TreeNav> Iterator for BreadthFirstIter<'_, T> {
     }
 }
 
-impl<T: TreeNav> std::iter::FusedIterator for BreadthFirstIter<'_, T> {}
+impl<I: Identifier, T: TreeNav<I>> std::iter::FusedIterator for BreadthFirstIter<'_, I, T> {}
 
 /// Breadth-first iterator with depth information.
 ///
 /// Yields `(Id, usize)` tuples.
 #[derive(Debug)]
 #[allow(dead_code)]
-pub(super) struct BreadthFirstIterWithDepth<'a, T: TreeNav> {
+pub(super) struct BreadthFirstIterWithDepth<'a, I: Identifier, T: TreeNav<I>> {
     tree: &'a T,
-    queue: VecDeque<(T::Id, usize)>,
+    queue: VecDeque<(I, usize)>,
 }
 
-impl<'a, T: TreeNav> BreadthFirstIterWithDepth<'a, T> {
+impl<'a, I: Identifier, T: TreeNav<I>> BreadthFirstIterWithDepth<'a, I, T> {
     /// Creates a new breadth-first iterator with depth tracking.
     #[inline]
     #[allow(dead_code)]
-    pub(super) fn new(tree: &'a T, root: T::Id) -> Self {
+    pub(super) fn new(tree: &'a T, root: I) -> Self {
         let mut queue = VecDeque::with_capacity(16);
 
         if tree.contains(root) {
@@ -104,8 +105,8 @@ impl<'a, T: TreeNav> BreadthFirstIterWithDepth<'a, T> {
     }
 }
 
-impl<T: TreeNav> Iterator for BreadthFirstIterWithDepth<'_, T> {
-    type Item = (T::Id, usize);
+impl<I: Identifier, T: TreeNav<I>> Iterator for BreadthFirstIterWithDepth<'_, I, T> {
+    type Item = (I, usize);
 
     fn next(&mut self) -> Option<Self::Item> {
         let (current, depth) = self.queue.pop_front()?;
@@ -127,7 +128,10 @@ impl<T: TreeNav> Iterator for BreadthFirstIterWithDepth<'_, T> {
     }
 }
 
-impl<T: TreeNav> std::iter::FusedIterator for BreadthFirstIterWithDepth<'_, T> {}
+impl<I: Identifier, T: TreeNav<I>> std::iter::FusedIterator
+    for BreadthFirstIterWithDepth<'_, I, T>
+{
+}
 
 // ============================================================================
 // TESTS
@@ -174,8 +178,7 @@ mod tests {
         }
     }
 
-    impl TreeRead for TestTree {
-        type Id = ElementId;
+    impl TreeRead<ElementId> for TestTree {
         type Node = TestNode;
         type NodeIter<'a> = Box<dyn Iterator<Item = ElementId> + 'a>;
 
@@ -198,10 +201,10 @@ mod tests {
         }
     }
 
-    impl TreeNav for TestTree {
+    impl TreeNav<ElementId> for TestTree {
         type ChildrenIter<'a> = Box<dyn Iterator<Item = ElementId> + 'a>;
-        type AncestorsIter<'a> = Ancestors<'a, Self>;
-        type DescendantsIter<'a> = DescendantsWithDepth<'a, Self>;
+        type AncestorsIter<'a> = Ancestors<'a, ElementId, Self>;
+        type DescendantsIter<'a> = DescendantsWithDepth<'a, ElementId, Self>;
         type SiblingsIter<'a> = Box<dyn Iterator<Item = ElementId> + 'a>;
 
         fn parent(&self, id: ElementId) -> Option<ElementId> {

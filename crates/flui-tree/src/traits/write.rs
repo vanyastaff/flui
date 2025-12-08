@@ -5,12 +5,18 @@
 
 use super::TreeRead;
 use crate::error::{TreeError, TreeResult};
+use flui_foundation::Identifier;
 
 /// Mutable access to tree nodes and structure.
 ///
 /// This trait extends [`TreeRead`] with operations that modify
 /// the tree structure. It provides both low-level node access
 /// and higher-level tree operations.
+///
+/// # Generic Parameter
+///
+/// The `I` parameter specifies the ID type used for node identification,
+/// matching the same type used in [`TreeRead<I>`].
 ///
 /// # Thread Safety
 ///
@@ -23,7 +29,7 @@ use crate::error::{TreeError, TreeResult};
 /// - `NotFound` - Node doesn't exist
 /// - `CycleDetected` - Reparenting would create a cycle
 /// - `AlreadyExists` - Node already in tree
-pub trait TreeWrite: TreeRead {
+pub trait TreeWrite<I: Identifier>: TreeRead<I> {
     /// Returns a mutable reference to the node with the given ID.
     ///
     /// # Arguments
@@ -33,7 +39,7 @@ pub trait TreeWrite: TreeRead {
     /// # Returns
     ///
     /// `Some(&mut Node)` if the node exists, `None` otherwise.
-    fn get_mut(&mut self, id: Self::Id) -> Option<&mut Self::Node>;
+    fn get_mut(&mut self, id: I) -> Option<&mut Self::Node>;
 
     /// Inserts a new node into the tree.
     ///
@@ -51,7 +57,7 @@ pub trait TreeWrite: TreeRead {
     /// # Performance
     ///
     /// Should be O(1) amortized for slab-based implementations.
-    fn insert(&mut self, node: Self::Node) -> Self::Id;
+    fn insert(&mut self, node: Self::Node) -> I;
 
     /// Removes a node from the tree.
     ///
@@ -70,7 +76,7 @@ pub trait TreeWrite: TreeRead {
     ///
     /// Implementations should update parent's children list when
     /// removing a node.
-    fn remove(&mut self, id: Self::Id) -> Option<Self::Node>;
+    fn remove(&mut self, id: I) -> Option<Self::Node>;
 
     /// Removes a node and all its descendants.
     ///
@@ -86,9 +92,9 @@ pub trait TreeWrite: TreeRead {
     ///
     /// Collects descendants and removes them in reverse order.
     /// Implementations may provide more efficient versions.
-    fn remove_subtree(&mut self, id: Self::Id) -> usize
+    fn remove_subtree(&mut self, id: I) -> usize
     where
-        Self: super::TreeNav + Sized,
+        Self: super::TreeNav<I> + Sized,
     {
         // Collect all descendants first (to avoid borrow issues)
         // descendants() returns (Id, depth) tuples
@@ -133,7 +139,7 @@ pub trait TreeWrite: TreeRead {
 ///
 /// This trait provides operations that need both write access and
 /// navigation capabilities.
-pub trait TreeWriteNav: TreeWrite + super::TreeNav {
+pub trait TreeWriteNav<I: Identifier>: TreeWrite<I> + super::TreeNav<I> {
     /// Sets the parent of a node.
     ///
     /// # Arguments
@@ -156,11 +162,7 @@ pub trait TreeWriteNav: TreeWrite + super::TreeNav {
     /// 3. Updates old parent's children list
     /// 4. Updates new parent's children list
     /// 5. Updates child's parent reference
-    fn set_parent(
-        &mut self,
-        child: Self::Id,
-        new_parent: Option<Self::Id>,
-    ) -> TreeResult<Self::Id, Self::Id>;
+    fn set_parent(&mut self, child: I, new_parent: Option<I>) -> TreeResult<I>;
 
     /// Adds a child to a parent node.
     ///
@@ -174,7 +176,7 @@ pub trait TreeWriteNav: TreeWrite + super::TreeNav {
     /// - `NotFound` - Parent or child doesn't exist
     /// - `CycleDetected` - Child is an ancestor of parent
     #[inline]
-    fn add_child(&mut self, parent: Self::Id, child: Self::Id) -> TreeResult<Self::Id, Self::Id> {
+    fn add_child(&mut self, parent: I, child: I) -> TreeResult<I> {
         self.set_parent(child, Some(parent))
     }
 
@@ -190,7 +192,7 @@ pub trait TreeWriteNav: TreeWrite + super::TreeNav {
     ///
     /// - `NotFound` - Child doesn't exist
     #[inline]
-    fn detach(&mut self, child: Self::Id) -> TreeResult<Self::Id, Self::Id> {
+    fn detach(&mut self, child: I) -> TreeResult<I> {
         self.set_parent(child, None)
     }
 
@@ -205,20 +207,21 @@ pub trait TreeWriteNav: TreeWrite + super::TreeNav {
     ///
     /// - `NotFound` - Source or destination doesn't exist
     /// - `CycleDetected` - Would create a cycle
-    fn move_children(&mut self, from: Self::Id, to: Self::Id) -> TreeResult<(), Self::Id>
+    fn move_children(&mut self, from: I, to: I) -> TreeResult<()>
     where
         Self: Sized,
+        I: Into<usize>,
     {
         if !self.contains(from) {
-            return Err(TreeError::not_found(from));
+            return Err(TreeError::not_found(from.into()));
         }
         if !self.contains(to) {
-            return Err(TreeError::not_found(to));
+            return Err(TreeError::not_found(to.into()));
         }
 
         // Check for cycles: 'to' can't be a descendant of 'from'
         if self.is_ancestor_of(from, to) {
-            return Err(TreeError::cycle_detected(to));
+            return Err(TreeError::cycle_detected(to.into()));
         }
 
         // Collect children first (to avoid borrow issues)
@@ -248,17 +251,16 @@ pub trait TreeWriteNav: TreeWrite + super::TreeNav {
     /// # Errors
     ///
     /// - `NotFound` - Parent doesn't exist
-    fn insert_child(
-        &mut self,
-        node: Self::Node,
-        parent: Option<Self::Id>,
-    ) -> TreeResult<Self::Id, Self::Id> {
+    fn insert_child(&mut self, node: Self::Node, parent: Option<I>) -> TreeResult<I>
+    where
+        I: Into<usize>,
+    {
         let id = self.insert(node);
 
         if let Some(parent_id) = parent {
             if !self.contains(parent_id) {
                 self.remove(id);
-                return Err(TreeError::not_found(parent_id));
+                return Err(TreeError::not_found(parent_id.into()));
             }
             self.set_parent(id, Some(parent_id))?;
         }
@@ -271,19 +273,19 @@ pub trait TreeWriteNav: TreeWrite + super::TreeNav {
 // BLANKET IMPLEMENTATIONS
 // ============================================================================
 
-impl<T: TreeWrite + ?Sized> TreeWrite for &mut T {
+impl<I: Identifier, T: TreeWrite<I> + ?Sized> TreeWrite<I> for &mut T {
     #[inline]
-    fn get_mut(&mut self, id: Self::Id) -> Option<&mut Self::Node> {
+    fn get_mut(&mut self, id: I) -> Option<&mut Self::Node> {
         (**self).get_mut(id)
     }
 
     #[inline]
-    fn insert(&mut self, node: Self::Node) -> Self::Id {
+    fn insert(&mut self, node: Self::Node) -> I {
         (**self).insert(node)
     }
 
     #[inline]
-    fn remove(&mut self, id: Self::Id) -> Option<Self::Node> {
+    fn remove(&mut self, id: I) -> Option<Self::Node> {
         (**self).remove(id)
     }
 
@@ -298,19 +300,19 @@ impl<T: TreeWrite + ?Sized> TreeWrite for &mut T {
     }
 }
 
-impl<T: TreeWrite + ?Sized> TreeWrite for Box<T> {
+impl<I: Identifier, T: TreeWrite<I> + ?Sized> TreeWrite<I> for Box<T> {
     #[inline]
-    fn get_mut(&mut self, id: Self::Id) -> Option<&mut Self::Node> {
+    fn get_mut(&mut self, id: I) -> Option<&mut Self::Node> {
         (**self).get_mut(id)
     }
 
     #[inline]
-    fn insert(&mut self, node: Self::Node) -> Self::Id {
+    fn insert(&mut self, node: Self::Node) -> I {
         (**self).insert(node)
     }
 
     #[inline]
-    fn remove(&mut self, id: Self::Id) -> Option<Self::Node> {
+    fn remove(&mut self, id: I) -> Option<Self::Node> {
         (**self).remove(id)
     }
 
@@ -357,8 +359,7 @@ mod tests {
         }
     }
 
-    impl TreeRead for TestTree {
-        type Id = ElementId;
+    impl TreeRead<ElementId> for TestTree {
         type Node = TestNode;
         type NodeIter<'a> = Box<dyn Iterator<Item = ElementId> + 'a>;
 
@@ -381,10 +382,10 @@ mod tests {
         }
     }
 
-    impl TreeNav for TestTree {
+    impl TreeNav<ElementId> for TestTree {
         type ChildrenIter<'a> = Box<dyn Iterator<Item = ElementId> + 'a>;
-        type AncestorsIter<'a> = Ancestors<'a, Self>;
-        type DescendantsIter<'a> = DescendantsWithDepth<'a, Self>;
+        type AncestorsIter<'a> = Ancestors<'a, ElementId, Self>;
+        type DescendantsIter<'a> = DescendantsWithDepth<'a, ElementId, Self>;
         type SiblingsIter<'a> = Box<dyn Iterator<Item = ElementId> + 'a>;
 
         fn parent(&self, id: ElementId) -> Option<ElementId> {
@@ -419,7 +420,7 @@ mod tests {
         }
     }
 
-    impl TreeWrite for TestTree {
+    impl TreeWrite<ElementId> for TestTree {
         fn get_mut(&mut self, id: ElementId) -> Option<&mut TestNode> {
             self.nodes.get_mut(id.get() - 1)?.as_mut()
         }
@@ -454,26 +455,26 @@ mod tests {
         }
     }
 
-    impl TreeWriteNav for TestTree {
+    impl TreeWriteNav<ElementId> for TestTree {
         fn set_parent(
             &mut self,
             child: ElementId,
             new_parent: Option<ElementId>,
-        ) -> TreeResult<ElementId, ElementId> {
+        ) -> TreeResult<ElementId> {
             // Check child exists
             if !self.contains(child) {
-                return Err(TreeError::not_found(child));
+                return Err(TreeError::not_found(child.get()));
             }
 
             // Check new parent exists (if provided)
             if let Some(parent_id) = new_parent {
                 if !self.contains(parent_id) {
-                    return Err(TreeError::not_found(parent_id));
+                    return Err(TreeError::not_found(parent_id.get()));
                 }
 
                 // Check for cycles: new_parent must not be a descendant of child
                 if self.is_ancestor_of(child, parent_id) || parent_id == child {
-                    return Err(TreeError::cycle_detected(child));
+                    return Err(TreeError::cycle_detected(child.get()));
                 }
             }
 

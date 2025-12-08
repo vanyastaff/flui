@@ -154,7 +154,7 @@ pub use error::{TreeError, TreeResult};
 // RE-EXPORTS - Foundation Types
 // ============================================================================
 
-pub use flui_foundation::{ElementId, TreeId};
+pub use flui_foundation::{ElementId, Identifier};
 
 // ============================================================================
 // PRELUDE
@@ -179,13 +179,13 @@ pub mod prelude {
         Arity,
         ChildrenAccess,
         Descendants,
+        // Core traits
+        Identifier,
         Leaf,
         Optional,
         Single,
         // Types
         TreeError,
-        // Core traits
-        TreeId,
         TreeNav,
         TreeRead,
         TreeResult,

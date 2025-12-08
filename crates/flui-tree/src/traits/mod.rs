@@ -6,17 +6,18 @@
 //! - **Minimal**: Each trait has a single responsibility
 //! - **Composable**: Traits can be combined for richer functionality
 //! - **Thread-Safe**: All traits require `Send + Sync`
+//! - **Generic over ID**: All traits use `I: Identifier` generic parameter
 //!
 //! # Trait Hierarchy
 //!
 //! ```text
-//! TreeRead (immutable access)
+//! TreeRead<I> (immutable access)
 //!     │
-//!     ├── TreeNav (navigation)
+//!     ├── TreeNav<I> (navigation)
 //!     │
-//!     └── TreeWrite (mutations)
+//!     └── TreeWrite<I> (mutations)
 //!             │
-//!             └── TreeWriteNav (combined)
+//!             └── TreeWriteNav<I> (combined)
 //! ```
 //!
 //! # Design Philosophy
@@ -27,6 +28,13 @@
 //! - **flui_rendering**: RenderTree, DirtyTracking, render iterators
 //! - **flui-element**: ElementTree, lifecycle, reconciliation
 //! - **flui-view**: ViewTree, snapshots
+//!
+//! # Generic ID Parameter
+//!
+//! All traits use `I: Identifier` as a generic parameter, allowing:
+//! - Clean trait bounds: `T: TreeNav<ElementId>`
+//! - Composable traits: `trait DirtyTracking<I>: TreeNav<I>`
+//! - Different ID types for different tree implementations
 
 mod nav;
 mod read;
@@ -39,10 +47,11 @@ mod write;
 ///
 /// # Usage
 ///
-/// To implement `TreeRead` for your type:
+/// To implement `TreeRead<I>` for your type:
 ///
 /// ```rust,ignore
 /// use flui_tree::sealed;
+/// use flui_foundation::ElementId;
 ///
 /// impl sealed::TreeReadSealed for MyTree {}
 /// impl sealed::TreeNavSealed for MyTree {}

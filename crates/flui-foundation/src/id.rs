@@ -57,18 +57,17 @@ use std::num::NonZeroUsize;
 ///
 /// # Design
 ///
-/// Uses associated type pattern rather than generic parameters because:
-/// - Each tree implementation has exactly one ID type
-/// - Cleaner API: `impl TreeRead for MyTree` vs `impl TreeRead<MyId> for MyTree`
-/// - No turbofish needed: `tree.get(id)` vs `tree.get::<MyId>(id)`
-/// - Follows std patterns (`Iterator::Item`, `IntoIterator::Item`)
+/// Uses generic parameter pattern for trait bounds:
+/// - Clean trait bounds: `TreeRead<I>` where `I: Identifier`
+/// - Composable: `trait DirtyTracking<I>: TreeNav<I>`
+/// - Flexible: same tree can work with different ID types
 ///
 /// # Examples
 ///
 /// ```rust
-/// use flui_foundation::{TreeId, ElementId, ViewId};
+/// use flui_foundation::{Identifier, ElementId, ViewId};
 ///
-/// fn print_id<I: TreeId>(id: I) {
+/// fn print_id<I: Identifier>(id: I) {
 ///     println!("ID value: {}", id.get());
 /// }
 ///
@@ -79,13 +78,13 @@ use std::num::NonZeroUsize;
 /// # Generic Tree Functions
 ///
 /// ```rust
-/// use flui_foundation::TreeId;
+/// use flui_foundation::Identifier;
 ///
-/// fn validate_ids<I: TreeId>(ids: &[I]) -> bool {
+/// fn validate_ids<I: Identifier>(ids: &[I]) -> bool {
 ///     ids.iter().all(|id| id.get() > 0)
 /// }
 /// ```
-pub trait TreeId:
+pub trait Identifier:
     Copy
     + Clone
     + Eq
@@ -283,8 +282,8 @@ macro_rules! define_id {
             }
         }
 
-        // TreeId implementation for generic tree algorithms
-        impl TreeId for $name {
+        // Identifier implementation for generic tree algorithms
+        impl Identifier for $name {
             #[inline]
             fn new(value: usize) -> Self {
                 Self::new(value)

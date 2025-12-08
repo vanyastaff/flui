@@ -1,6 +1,7 @@
 //! Configurable depth-first iterator.
 
 use crate::traits::TreeNav;
+use flui_foundation::Identifier;
 
 /// Depth-first traversal order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -45,25 +46,25 @@ pub enum DepthFirstOrder {
 ///     .collect();
 /// ```
 #[derive(Debug)]
-pub struct DepthFirstIter<'a, T: TreeNav> {
+pub struct DepthFirstIter<'a, I: Identifier, T: TreeNav<I>> {
     tree: &'a T,
     order: DepthFirstOrder,
     // For pre-order: stack of nodes to visit
     // For post-order: stack of (node, visited_children)
-    stack: Vec<StackEntry<T::Id>>,
+    stack: Vec<StackEntry<I>>,
 }
 
 #[derive(Debug, Clone)]
-struct StackEntry<Id> {
-    id: Id,
+struct StackEntry<I> {
+    id: I,
     /// For post-order: index of next child to process
     child_index: usize,
 }
 
-impl<'a, T: TreeNav> DepthFirstIter<'a, T> {
+impl<'a, I: Identifier, T: TreeNav<I>> DepthFirstIter<'a, I, T> {
     /// Creates a new depth-first iterator.
     #[inline]
-    pub fn new(tree: &'a T, root: T::Id, order: DepthFirstOrder) -> Self {
+    pub fn new(tree: &'a T, root: I, order: DepthFirstOrder) -> Self {
         let mut stack = Vec::with_capacity(16);
 
         if tree.contains(root) {
@@ -78,19 +79,19 @@ impl<'a, T: TreeNav> DepthFirstIter<'a, T> {
 
     /// Creates a pre-order iterator.
     #[inline]
-    pub fn pre_order(tree: &'a T, root: T::Id) -> Self {
+    pub fn pre_order(tree: &'a T, root: I) -> Self {
         Self::new(tree, root, DepthFirstOrder::PreOrder)
     }
 
     /// Creates a post-order iterator.
     #[inline]
-    pub fn post_order(tree: &'a T, root: T::Id) -> Self {
+    pub fn post_order(tree: &'a T, root: I) -> Self {
         Self::new(tree, root, DepthFirstOrder::PostOrder)
     }
 }
 
-impl<T: TreeNav> Iterator for DepthFirstIter<'_, T> {
-    type Item = T::Id;
+impl<I: Identifier, T: TreeNav<I>> Iterator for DepthFirstIter<'_, I, T> {
+    type Item = I;
 
     fn next(&mut self) -> Option<Self::Item> {
         match self.order {
@@ -104,8 +105,8 @@ impl<T: TreeNav> Iterator for DepthFirstIter<'_, T> {
     }
 }
 
-impl<T: TreeNav> DepthFirstIter<'_, T> {
-    fn next_pre_order(&mut self) -> Option<T::Id> {
+impl<I: Identifier, T: TreeNav<I>> DepthFirstIter<'_, I, T> {
+    fn next_pre_order(&mut self) -> Option<I> {
         let entry = self.stack.pop()?;
         let current = entry.id;
 
@@ -121,7 +122,7 @@ impl<T: TreeNav> DepthFirstIter<'_, T> {
         Some(current)
     }
 
-    fn next_post_order(&mut self) -> Option<T::Id> {
+    fn next_post_order(&mut self) -> Option<I> {
         loop {
             let entry = self.stack.last_mut()?;
             let children: Vec<_> = self.tree.children(entry.id).collect();
@@ -144,7 +145,7 @@ impl<T: TreeNav> DepthFirstIter<'_, T> {
     }
 }
 
-impl<T: TreeNav> std::iter::FusedIterator for DepthFirstIter<'_, T> {}
+impl<I: Identifier, T: TreeNav<I>> std::iter::FusedIterator for DepthFirstIter<'_, I, T> {}
 
 // ============================================================================
 // TESTS
@@ -191,8 +192,7 @@ mod tests {
         }
     }
 
-    impl TreeRead for TestTree {
-        type Id = ElementId;
+    impl TreeRead<ElementId> for TestTree {
         type Node = TestNode;
         type NodeIter<'a> = Box<dyn Iterator<Item = ElementId> + 'a>;
 
@@ -215,10 +215,10 @@ mod tests {
         }
     }
 
-    impl TreeNav for TestTree {
+    impl TreeNav<ElementId> for TestTree {
         type ChildrenIter<'a> = Box<dyn Iterator<Item = ElementId> + 'a>;
-        type AncestorsIter<'a> = Ancestors<'a, Self>;
-        type DescendantsIter<'a> = DescendantsWithDepth<'a, Self>;
+        type AncestorsIter<'a> = Ancestors<'a, ElementId, Self>;
+        type DescendantsIter<'a> = DescendantsWithDepth<'a, ElementId, Self>;
         type SiblingsIter<'a> = Box<dyn Iterator<Item = ElementId> + 'a>;
 
         fn parent(&self, id: ElementId) -> Option<ElementId> {
