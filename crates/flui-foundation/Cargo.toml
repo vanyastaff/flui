@@ -31,8 +31,6 @@ serde_json = { workspace = true }
 
 [features]
 default = []
-full = ["serde"]
-profile = []
 serde = ["dep:serde", "dep:serde_json"]
 
 [package.metadata.docs.rs]
