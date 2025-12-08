@@ -32,7 +32,7 @@ pub struct CancellationToken {
     /// Whether cancellation has been requested
     cancelled: AtomicBool,
 
-    /// Deadline timestamp (nanoseconds since epoch, 0 = no deadline)
+    /// Deadline timestamp (nanoseconds since start, 0 = no deadline)
     deadline_ns: AtomicU64,
 
     /// Start time for timeout calculation
@@ -41,6 +41,7 @@ pub struct CancellationToken {
 
 impl CancellationToken {
     /// Create a new cancellation token
+    #[must_use]
     pub fn new() -> Self {
         Self {
             cancelled: AtomicBool::new(false),
@@ -50,6 +51,7 @@ impl CancellationToken {
     }
 
     /// Create a token with a timeout
+    #[must_use]
     pub fn with_timeout(timeout: Duration) -> Self {
         let token = Self::new();
         token.set_timeout(timeout);
@@ -77,8 +79,9 @@ impl CancellationToken {
 
     /// Check if cancelled (manual or timeout)
     #[inline]
+    #[must_use]
     pub fn is_cancelled(&self) -> bool {
-        // Check manual cancellation first
+        // Check manual cancellation first (fast path)
         if self.cancelled.load(Ordering::Acquire) {
             return true;
         }
@@ -107,6 +110,7 @@ impl CancellationToken {
     /// Get remaining time before timeout
     ///
     /// Returns `None` if no timeout is set or already expired.
+    #[must_use]
     pub fn remaining(&self) -> Option<Duration> {
         let deadline_ns = self.deadline_ns.load(Ordering::Acquire);
         if deadline_ns == 0 {
@@ -122,11 +126,14 @@ impl CancellationToken {
     }
 
     /// Check if there's a timeout set
+    #[inline]
+    #[must_use]
     pub fn has_timeout(&self) -> bool {
         self.deadline_ns.load(Ordering::Acquire) > 0
     }
 
     /// Get the timeout duration (if set)
+    #[must_use]
     pub fn timeout(&self) -> Option<Duration> {
         let deadline_ns = self.deadline_ns.load(Ordering::Acquire);
         if deadline_ns == 0 {
@@ -134,6 +141,31 @@ impl CancellationToken {
         } else {
             Some(Duration::from_nanos(deadline_ns))
         }
+    }
+
+    /// Returns `true` if cancellation was manually requested.
+    #[inline]
+    #[must_use]
+    pub fn is_manually_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::Acquire)
+    }
+
+    /// Returns `true` if the timeout has expired.
+    #[must_use]
+    pub fn is_timed_out(&self) -> bool {
+        let deadline_ns = self.deadline_ns.load(Ordering::Acquire);
+        if deadline_ns == 0 {
+            return false;
+        }
+
+        let elapsed_ns = self.start.elapsed().as_nanos() as u64;
+        elapsed_ns >= deadline_ns
+    }
+
+    /// Get elapsed time since token creation
+    #[must_use]
+    pub fn elapsed(&self) -> Duration {
+        self.start.elapsed()
     }
 }
 
@@ -162,19 +194,24 @@ mod tests {
     fn test_manual_cancellation() {
         let token = CancellationToken::new();
         assert!(!token.is_cancelled());
+        assert!(!token.is_manually_cancelled());
 
         token.cancel();
         assert!(token.is_cancelled());
+        assert!(token.is_manually_cancelled());
     }
 
     #[test]
     fn test_timeout_cancellation() {
         let token = CancellationToken::with_timeout(Duration::from_millis(10));
         assert!(!token.is_cancelled());
+        assert!(!token.is_timed_out());
 
         // Wait for timeout
         thread::sleep(Duration::from_millis(20));
         assert!(token.is_cancelled());
+        assert!(token.is_timed_out());
+        assert!(!token.is_manually_cancelled());
     }
 
     #[test]
@@ -221,6 +258,13 @@ mod tests {
         // Clone should have same state at time of clone
         assert!(token1.is_cancelled());
         // But not affected by subsequent changes
-        assert!(!token2.cancelled.load(Ordering::Acquire));
+        assert!(!token2.is_manually_cancelled());
+    }
+
+    #[test]
+    fn test_elapsed() {
+        let token = CancellationToken::new();
+        thread::sleep(Duration::from_millis(10));
+        assert!(token.elapsed() >= Duration::from_millis(10));
     }
 }

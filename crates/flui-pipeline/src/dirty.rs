@@ -20,7 +20,7 @@
 //! use flui_pipeline::LockFreeDirtySet;
 //! use flui_foundation::ElementId;
 //!
-//! let dirty_set = LockFreeDirtySet::new(1000);
+//! let dirty_set = LockFreeDirtySet::<ElementId>::new(1000);
 //!
 //! // Mark element dirty (from any thread)
 //! let id = ElementId::new(42);
@@ -38,9 +38,10 @@
 //! assert!(!dirty_set.is_dirty(id));
 //! ```
 
-use flui_foundation::ElementId;
+use flui_tree::Identifier;
 use parking_lot::RwLock;
 use std::collections::HashSet;
+use std::marker::PhantomData;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 // ============================================================================
@@ -51,6 +52,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 ///
 /// Tracks which elements need processing (rebuild, layout, paint) using
 /// atomic bit operations. Each bit represents one element.
+///
+/// # Type Parameters
+///
+/// - `I`: The identifier type (must implement `Identifier`)
 ///
 /// # Capacity
 ///
@@ -74,15 +79,18 @@ use std::sync::atomic::{AtomicU64, Ordering};
 ///
 /// For 10,000 elements: 157 words × 8 bytes = ~1.2 KB
 #[derive(Debug)]
-pub struct LockFreeDirtySet {
+pub struct LockFreeDirtySet<I: Identifier> {
     /// Bitmap of dirty elements (64 elements per u64)
     bitmap: Vec<AtomicU64>,
 
     /// Total capacity (maximum number of elements)
     capacity: usize,
+
+    /// Phantom data for the identifier type
+    _marker: PhantomData<I>,
 }
 
-impl LockFreeDirtySet {
+impl<I: Identifier> LockFreeDirtySet<I> {
     /// Create dirty set with initial capacity
     ///
     /// # Parameters
@@ -93,6 +101,7 @@ impl LockFreeDirtySet {
         Self {
             bitmap: (0..num_words).map(|_| AtomicU64::new(0)).collect(),
             capacity,
+            _marker: PhantomData,
         }
     }
 
@@ -101,12 +110,12 @@ impl LockFreeDirtySet {
     /// Sets the bit corresponding to this element ID using atomic OR.
     /// If the element is already marked, this is a no-op.
     #[inline]
-    pub fn mark_dirty(&self, id: ElementId) {
+    pub fn mark_dirty(&self, id: I) {
         let id_val = id.get();
         if id_val > self.capacity {
             return; // Silently ignore out-of-bounds
         }
-        let index = id_val - 1; // ElementId is 1-based
+        let index = id_val - 1; // Identifier is 1-based
 
         let word_idx = index / 64;
         let bit_idx = index % 64;
@@ -117,7 +126,7 @@ impl LockFreeDirtySet {
 
     /// Check if element is dirty (lock-free!)
     #[inline]
-    pub fn is_dirty(&self, id: ElementId) -> bool {
+    pub fn is_dirty(&self, id: I) -> bool {
         let id_val = id.get();
         if id_val > self.capacity {
             return false;
@@ -134,7 +143,7 @@ impl LockFreeDirtySet {
 
     /// Clear dirty flag for element (lock-free!)
     #[inline]
-    pub fn clear_dirty(&self, id: ElementId) {
+    pub fn clear_dirty(&self, id: I) {
         let id_val = id.get();
         if id_val > self.capacity {
             return;
@@ -153,7 +162,7 @@ impl LockFreeDirtySet {
     /// # Performance
     ///
     /// O(capacity/64) - scans all bitmap words.
-    pub fn collect_dirty(&self) -> Vec<ElementId> {
+    pub fn collect_dirty(&self) -> Vec<I> {
         let mut dirty = Vec::new();
 
         for (word_idx, word) in self.bitmap.iter().enumerate() {
@@ -166,7 +175,7 @@ impl LockFreeDirtySet {
                 if (bits & (1u64 << bit_idx)) != 0 {
                     let index = word_idx * 64 + bit_idx;
                     if index < self.capacity {
-                        dirty.push(ElementId::new(index + 1));
+                        dirty.push(I::new(index + 1));
                     }
                 }
             }
@@ -213,7 +222,7 @@ impl LockFreeDirtySet {
     }
 
     /// Drain all dirty elements and clear
-    pub fn drain(&self) -> Vec<ElementId> {
+    pub fn drain(&self) -> Vec<I> {
         let dirty = self.collect_dirty();
         self.clear_all();
         dirty
@@ -238,7 +247,7 @@ impl LockFreeDirtySet {
     }
 }
 
-impl Default for LockFreeDirtySet {
+impl<I: Identifier> Default for LockFreeDirtySet<I> {
     fn default() -> Self {
         Self::new(10_000)
     }
@@ -252,12 +261,22 @@ impl Default for LockFreeDirtySet {
 ///
 /// Less memory-efficient than `LockFreeDirtySet` for large sets,
 /// but more flexible for dynamic element IDs.
-#[derive(Debug, Default)]
-pub struct DirtySet {
-    elements: RwLock<HashSet<ElementId>>,
+///
+/// # Type Parameters
+///
+/// - `I`: The identifier type (must implement `Identifier`)
+#[derive(Debug)]
+pub struct DirtySet<I: Identifier> {
+    elements: RwLock<HashSet<I>>,
 }
 
-impl DirtySet {
+impl<I: Identifier> Default for DirtySet<I> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<I: Identifier> DirtySet<I> {
     /// Creates a new empty dirty set.
     pub fn new() -> Self {
         Self {
@@ -266,12 +285,12 @@ impl DirtySet {
     }
 
     /// Marks an element as dirty.
-    pub fn mark(&self, id: ElementId) {
+    pub fn mark(&self, id: I) {
         self.elements.write().insert(id);
     }
 
     /// Marks multiple elements as dirty.
-    pub fn mark_many(&self, ids: impl IntoIterator<Item = ElementId>) {
+    pub fn mark_many(&self, ids: impl IntoIterator<Item = I>) {
         let mut set = self.elements.write();
         for id in ids {
             set.insert(id);
@@ -279,12 +298,12 @@ impl DirtySet {
     }
 
     /// Clears the dirty flag for an element.
-    pub fn clear(&self, id: ElementId) {
+    pub fn clear(&self, id: I) {
         self.elements.write().remove(&id);
     }
 
     /// Checks if an element is dirty.
-    pub fn is_dirty(&self, id: ElementId) -> bool {
+    pub fn is_dirty(&self, id: I) -> bool {
         self.elements.read().contains(&id)
     }
 
@@ -304,7 +323,7 @@ impl DirtySet {
     }
 
     /// Takes all dirty elements, clearing the set.
-    pub fn drain(&self) -> Vec<ElementId> {
+    pub fn drain(&self) -> Vec<I> {
         let mut set = self.elements.write();
         set.drain().collect()
     }
@@ -315,7 +334,7 @@ impl DirtySet {
     }
 
     /// Returns a copy of all dirty element IDs.
-    pub fn iter(&self) -> Vec<ElementId> {
+    pub fn iter(&self) -> Vec<I> {
         self.elements.read().iter().copied().collect()
     }
 }
@@ -323,6 +342,7 @@ impl DirtySet {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_foundation::ElementId;
     use std::sync::Arc;
     use std::thread;
 
@@ -330,7 +350,7 @@ mod tests {
 
     #[test]
     fn test_lock_free_basic() {
-        let set = LockFreeDirtySet::new(1000);
+        let set = LockFreeDirtySet::<ElementId>::new(1000);
 
         let id1 = ElementId::new(1);
         let id2 = ElementId::new(100);
@@ -358,7 +378,7 @@ mod tests {
 
     #[test]
     fn test_lock_free_out_of_bounds() {
-        let set = LockFreeDirtySet::new(100);
+        let set = LockFreeDirtySet::<ElementId>::new(100);
         let id = ElementId::new(200);
         set.mark_dirty(id);
         assert!(!set.is_dirty(id));
@@ -366,7 +386,7 @@ mod tests {
 
     #[test]
     fn test_lock_free_multi_thread() {
-        let set = Arc::new(LockFreeDirtySet::new(10000));
+        let set = Arc::new(LockFreeDirtySet::<ElementId>::new(10000));
         let mut handles = vec![];
 
         for thread_id in 0..8 {
@@ -389,7 +409,7 @@ mod tests {
 
     #[test]
     fn test_lock_free_bitmap_edges() {
-        let set = LockFreeDirtySet::new(200);
+        let set = LockFreeDirtySet::<ElementId>::new(200);
         let edges = [1, 64, 65, 128, 129];
 
         for &idx in &edges {
@@ -405,7 +425,7 @@ mod tests {
 
     #[test]
     fn test_dirty_set_basic() {
-        let set = DirtySet::new();
+        let set = DirtySet::<ElementId>::new();
         let id = ElementId::new(1);
 
         assert!(!set.is_dirty(id));
@@ -415,7 +435,7 @@ mod tests {
 
     #[test]
     fn test_dirty_set_drain() {
-        let set = DirtySet::new();
+        let set = DirtySet::<ElementId>::new();
         set.mark(ElementId::new(1));
         set.mark(ElementId::new(2));
 

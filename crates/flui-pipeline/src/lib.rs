@@ -22,7 +22,7 @@
 //! │    ├─ LayoutPhase                   - Size computation phase    │
 //! │    ├─ PaintPhase                    - Layer generation phase    │
 //! │    ├─ PipelineCoordinator           - Phase orchestration       │
-//! │    └─ SchedulerIntegration          - Scheduler bridge          │
+//! │    └─ DirtyTracking                 - Dirty flag management     │
 //! ├─────────────────────────────────────────────────────────────────┤
 //! │  utilities/                                                     │
 //! │    ├─ dirty (DirtySet, LockFreeDirtySet)                       │
@@ -42,6 +42,7 @@
 //! │    └─ FrameCoordinator: impl PipelineCoordinator               │
 //! └─────────────────────────────────────────────────────────────────┘
 //! ```
+//!
 //!
 //! ## Phase Traits
 //!
@@ -116,9 +117,6 @@
 // Abstract traits
 pub mod traits;
 
-// Build context
-pub mod context;
-
 // Utilities
 pub mod cancellation;
 pub mod dirty;
@@ -135,44 +133,22 @@ pub mod build;
 // =============================================================================
 
 pub use traits::{
-    // Visitor traits (from flui-tree)
-    hit_test_with_callback,
-    layout_with_callback,
-    paint_with_callback,
     // Execution strategies
     BatchedExecution,
     // Phase traits
     BuildPhase,
     // Coordinator
     CoordinatorConfig,
-    // Tree access traits (from flui-tree)
-    DirtyTracking,
-    DirtyTrackingExt,
     FrameResult,
-    // Scheduler integration (from flui-scheduler)
-    FrameTiming,
-    HitTestVisitable,
-    HitTestVisitableExt,
     LayoutPhase,
-    LayoutVisitable,
-    LayoutVisitableExt,
-    NoopScheduler,
     PaintPhase,
-    PaintVisitable,
-    PaintVisitableExt,
     ParallelExecution,
     // Common types
     PhaseContext,
     PhaseResult,
     PipelineCoordinator,
-    PipelineVisitor,
-    Priority,
-    RecordingScheduler,
-    RenderTreeAccess,
-    SchedulerIntegration,
-    SimpleTreeVisitor,
+    // Tree traits (from flui-tree)
     TreeNav,
-    TreeOperation,
     TreeRead,
 };
 
@@ -182,10 +158,6 @@ pub use traits::{
 
 pub use build::{BuildBatcher, BuildPipeline};
 pub use cancellation::CancellationToken;
-pub use context::{
-    current_build_context, has_build_context, try_current_build_context, with_build_context,
-    BuildContextGuard, PipelineBuildContext,
-};
 pub use dirty::{DirtySet, LockFreeDirtySet};
 pub use error::{PipelineError, PipelinePhase, PipelineResult};
 pub use metrics::PipelineMetrics;
@@ -207,14 +179,8 @@ pub mod prelude {
     // Coordinator
     pub use crate::traits::{CoordinatorConfig, FrameResult, PipelineCoordinator};
 
-    // Scheduler
-    pub use crate::traits::{FrameTiming, Priority, SchedulerIntegration};
-
-    // Build context
-    pub use crate::context::{
-        current_build_context, has_build_context, with_build_context, BuildContextGuard,
-        PipelineBuildContext,
-    };
+    // Tree traits (from flui-tree)
+    pub use crate::traits::{TreeNav, TreeRead};
 
     // Utilities
     pub use crate::cancellation::CancellationToken;
@@ -248,15 +214,15 @@ mod tests {
         // Verify types are accessible
         let _: PipelinePhase = PipelinePhase::Build;
         let _: RecoveryPolicy = RecoveryPolicy::SkipFrame;
-        let _: Priority = Priority::Build;
     }
 
     #[test]
     fn test_trait_imports() {
         use crate::traits::*;
+        use flui_foundation::ElementId;
 
         // Verify common types are accessible
-        let ctx = PhaseContext::default();
+        let ctx = PhaseContext::<ElementId>::default();
         assert!(ctx.root_id.is_none());
 
         let config = CoordinatorConfig::default();

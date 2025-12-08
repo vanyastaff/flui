@@ -12,9 +12,7 @@ categories = ["gui", "rendering"]
 [dependencies]
 # FLUI internal
 flui-foundation = { path = "../flui-foundation" }
-flui-scheduler = { path = "../flui-scheduler" }
 flui-tree = { path = "../flui-tree" }
-flui-element = { path = "../flui-element" }
 
 
 # Core dependencies

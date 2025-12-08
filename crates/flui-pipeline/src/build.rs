@@ -41,7 +41,7 @@
 //! use flui_pipeline::BuildPipeline;
 //! use flui_foundation::ElementId;
 //!
-//! fn rebuild_dirty(pipeline: &mut BuildPipeline) {
+//! fn rebuild_dirty(pipeline: &mut BuildPipeline<ElementId>) {
 //!     let dirty = pipeline.drain_dirty();
 //!     for (id, depth) in dirty {
 //!         // Rebuild component at this id...
@@ -50,8 +50,9 @@
 //! }
 //! ```
 
-use flui_foundation::ElementId;
+use flui_tree::Identifier;
 use std::collections::HashMap;
+use std::marker::PhantomData;
 use std::time::{Duration, Instant};
 
 /// Build batcher for coalescing multiple setState() calls.
@@ -59,15 +60,19 @@ use std::time::{Duration, Instant};
 /// When enabled, multiple rebuilds scheduled within a time window
 /// are combined into a single rebuild pass, reducing redundant work.
 ///
+/// # Type Parameters
+///
+/// - `I`: The identifier type (must implement `Identifier`)
+///
 /// # Performance Benefits
 ///
 /// - Animations triggering 60+ setState/second → batched to 60 rebuilds
 /// - User input updating multiple widgets → single rebuild
 /// - Computed values with cascading updates → deduplicated
 #[derive(Debug)]
-pub struct BuildBatcher {
-    /// Pending elements: ElementId → depth
-    pending: HashMap<ElementId, usize>,
+pub struct BuildBatcher<I: Identifier> {
+    /// Pending elements: Id → depth
+    pending: HashMap<I, usize>,
 
     /// When the current batch started
     batch_start: Option<Instant>,
@@ -82,7 +87,7 @@ pub struct BuildBatcher {
     builds_saved: u64,
 }
 
-impl BuildBatcher {
+impl<I: Identifier> BuildBatcher<I> {
     /// Create a new batcher with specified duration.
     pub fn new(batch_duration: Duration) -> Self {
         Self {
@@ -98,7 +103,7 @@ impl BuildBatcher {
     ///
     /// If element is already pending, this is a no-op (deduplication).
     /// Returns `true` if element was newly added, `false` if deduplicated.
-    pub fn schedule(&mut self, id: ElementId, depth: usize) -> bool {
+    pub fn schedule(&mut self, id: I, depth: usize) -> bool {
         // Start batch timer if first element
         if self.pending.is_empty() {
             self.batch_start = Some(Instant::now());
@@ -126,7 +131,7 @@ impl BuildBatcher {
     /// Take all pending elements, clearing the batch.
     ///
     /// Returns elements sorted by depth (parents before children).
-    pub fn drain(&mut self) -> Vec<(ElementId, usize)> {
+    pub fn drain(&mut self) -> Vec<(I, usize)> {
         self.batches_flushed += 1;
         self.batch_start = None;
 
@@ -172,6 +177,10 @@ impl BuildBatcher {
 /// Tracks which component elements need rebuilding with their depths,
 /// and supports batching for performance optimization.
 ///
+/// # Type Parameters
+///
+/// - `I`: The identifier type (must implement `Identifier`)
+///
 /// # Depth Tracking
 ///
 /// Each element is tracked with its depth (0 = root). This ensures
@@ -184,7 +193,7 @@ impl BuildBatcher {
 /// use flui_pipeline::BuildPipeline;
 /// use flui_foundation::ElementId;
 ///
-/// let mut pipeline = BuildPipeline::new();
+/// let mut pipeline = BuildPipeline::<ElementId>::new();
 ///
 /// // Schedule elements for rebuild
 /// pipeline.schedule(ElementId::new(1), 0);  // Root
@@ -196,21 +205,24 @@ impl BuildBatcher {
 /// assert_eq!(dirty[1].1, 1);  // Child second
 /// ```
 #[derive(Debug)]
-pub struct BuildPipeline {
-    /// Dirty elements with depths: (ElementId, depth)
-    dirty: Vec<(ElementId, usize)>,
+pub struct BuildPipeline<I: Identifier> {
+    /// Dirty elements with depths: (Id, depth)
+    dirty: Vec<(I, usize)>,
 
     /// Optional batcher for coalescing rebuilds
-    batcher: Option<BuildBatcher>,
+    batcher: Option<BuildBatcher<I>>,
 
     /// Build count for statistics
     build_count: u64,
 
     /// Whether state changes are locked (during build)
     locked: bool,
+
+    /// Phantom data for the identifier type
+    _marker: PhantomData<I>,
 }
 
-impl BuildPipeline {
+impl<I: Identifier> BuildPipeline<I> {
     /// Create a new build pipeline.
     pub fn new() -> Self {
         Self {
@@ -218,6 +230,7 @@ impl BuildPipeline {
             batcher: None,
             build_count: 0,
             locked: false,
+            _marker: PhantomData,
         }
     }
 
@@ -228,6 +241,7 @@ impl BuildPipeline {
             batcher: Some(BuildBatcher::new(batch_duration)),
             build_count: 0,
             locked: false,
+            _marker: PhantomData,
         }
     }
 
@@ -246,7 +260,7 @@ impl BuildPipeline {
     /// Otherwise, added directly to dirty list.
     ///
     /// Returns `false` if scheduling was blocked (locked state).
-    pub fn schedule(&mut self, id: ElementId, depth: usize) -> bool {
+    pub fn schedule(&mut self, id: I, depth: usize) -> bool {
         if self.locked {
             tracing::warn!(
                 element_id = ?id,
@@ -280,7 +294,7 @@ impl BuildPipeline {
     ///
     /// Returns elements sorted by depth (parents before children).
     /// Deduplicates elements that appear multiple times.
-    pub fn drain_dirty(&mut self) -> Vec<(ElementId, usize)> {
+    pub fn drain_dirty(&mut self) -> Vec<(I, usize)> {
         // Flush batch first if present
         if let Some(ref mut batcher) = self.batcher {
             let batched = batcher.drain();
@@ -290,7 +304,7 @@ impl BuildPipeline {
         // Take and deduplicate
         let mut elements = std::mem::take(&mut self.dirty);
 
-        // Deduplicate by ElementId (keep first occurrence)
+        // Deduplicate by Id (keep first occurrence)
         let mut seen = std::collections::HashSet::new();
         elements.retain(|(id, _)| seen.insert(*id));
 
@@ -410,7 +424,7 @@ impl BuildPipeline {
     }
 }
 
-impl Default for BuildPipeline {
+impl<I: Identifier> Default for BuildPipeline<I> {
     fn default() -> Self {
         Self::new()
     }
@@ -423,10 +437,11 @@ impl Default for BuildPipeline {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_foundation::ElementId;
 
     #[test]
     fn test_schedule_and_drain() {
-        let mut pipeline = BuildPipeline::new();
+        let mut pipeline = BuildPipeline::<ElementId>::new();
 
         pipeline.schedule(ElementId::new(1), 0);
         pipeline.schedule(ElementId::new(2), 1);
@@ -444,7 +459,7 @@ mod tests {
 
     #[test]
     fn test_deduplication() {
-        let mut pipeline = BuildPipeline::new();
+        let mut pipeline = BuildPipeline::<ElementId>::new();
 
         let id = ElementId::new(42);
         pipeline.schedule(id, 0);
@@ -457,7 +472,7 @@ mod tests {
 
     #[test]
     fn test_depth_sorting() {
-        let mut pipeline = BuildPipeline::new();
+        let mut pipeline = BuildPipeline::<ElementId>::new();
 
         // Add in reverse order
         pipeline.schedule(ElementId::new(3), 2);
@@ -473,7 +488,7 @@ mod tests {
 
     #[test]
     fn test_batching_deduplication() {
-        let mut pipeline = BuildPipeline::with_batching(Duration::from_millis(16));
+        let mut pipeline = BuildPipeline::<ElementId>::with_batching(Duration::from_millis(16));
 
         let id = ElementId::new(42);
         pipeline.schedule(id, 0);
@@ -492,7 +507,7 @@ mod tests {
 
     #[test]
     fn test_batching_timing() {
-        let mut pipeline = BuildPipeline::with_batching(Duration::from_millis(10));
+        let mut pipeline = BuildPipeline::<ElementId>::with_batching(Duration::from_millis(10));
 
         pipeline.schedule(ElementId::new(1), 0);
 
@@ -508,7 +523,7 @@ mod tests {
 
     #[test]
     fn test_enable_disable_batching() {
-        let mut pipeline = BuildPipeline::new();
+        let mut pipeline = BuildPipeline::<ElementId>::new();
         assert!(!pipeline.is_batching_enabled());
 
         pipeline.enable_batching(Duration::from_millis(16));
@@ -525,7 +540,7 @@ mod tests {
 
     #[test]
     fn test_locking() {
-        let mut pipeline = BuildPipeline::new();
+        let mut pipeline = BuildPipeline::<ElementId>::new();
 
         pipeline.schedule(ElementId::new(1), 0);
         assert_eq!(pipeline.dirty_count(), 1);
@@ -543,7 +558,7 @@ mod tests {
 
     #[test]
     fn test_with_lock() {
-        let mut pipeline = BuildPipeline::new();
+        let mut pipeline = BuildPipeline::<ElementId>::new();
 
         let result = pipeline.with_lock(|p| {
             assert!(p.is_locked());
@@ -556,7 +571,7 @@ mod tests {
 
     #[test]
     fn test_clear_dirty() {
-        let mut pipeline = BuildPipeline::new();
+        let mut pipeline = BuildPipeline::<ElementId>::new();
 
         pipeline.schedule(ElementId::new(1), 0);
         pipeline.schedule(ElementId::new(2), 1);
@@ -567,7 +582,7 @@ mod tests {
 
     #[test]
     fn test_build_count() {
-        let mut pipeline = BuildPipeline::new();
+        let mut pipeline = BuildPipeline::<ElementId>::new();
 
         pipeline.schedule(ElementId::new(1), 0);
         pipeline.schedule(ElementId::new(2), 1);
@@ -588,7 +603,7 @@ mod tests {
 
     #[test]
     fn test_batcher_schedule() {
-        let mut batcher = BuildBatcher::new(Duration::from_millis(16));
+        let mut batcher = BuildBatcher::<ElementId>::new(Duration::from_millis(16));
 
         assert!(!batcher.has_pending());
 
@@ -605,7 +620,7 @@ mod tests {
 
     #[test]
     fn test_batcher_drain_sorted() {
-        let mut batcher = BuildBatcher::new(Duration::from_millis(16));
+        let mut batcher = BuildBatcher::<ElementId>::new(Duration::from_millis(16));
 
         batcher.schedule(ElementId::new(3), 2);
         batcher.schedule(ElementId::new(1), 0);
@@ -623,7 +638,7 @@ mod tests {
 
     #[test]
     fn test_batcher_stats() {
-        let mut batcher = BuildBatcher::new(Duration::from_millis(16));
+        let mut batcher = BuildBatcher::<ElementId>::new(Duration::from_millis(16));
 
         let id = ElementId::new(1);
         batcher.schedule(id, 0);

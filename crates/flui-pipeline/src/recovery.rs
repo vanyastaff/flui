@@ -14,10 +14,9 @@
 //!
 //! ```rust
 //! use flui_pipeline::{ErrorRecovery, RecoveryPolicy, RecoveryAction, PipelineError, PipelinePhase};
-//! use flui_foundation::ElementId;
 //!
 //! let recovery = ErrorRecovery::new(RecoveryPolicy::SkipFrame);
-//! let error = PipelineError::layout_failed(ElementId::new(1), "test");
+//! let error = PipelineError::layout_failed(1, "test");
 //!
 //! match recovery.handle_error(error, PipelinePhase::Layout) {
 //!     RecoveryAction::SkipFrame => println!("Skipping frame"),
@@ -31,8 +30,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::error::{PipelineError, PipelinePhase};
 
+/// Default maximum errors before forced panic.
+const DEFAULT_MAX_ERRORS: usize = 100;
+
 /// Recovery policy for pipeline errors
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum RecoveryPolicy {
     /// Use last successfully rendered frame (production default)
@@ -49,8 +51,37 @@ pub enum RecoveryPolicy {
     Panic,
 }
 
+impl RecoveryPolicy {
+    /// Returns the policy name as a static string.
+    #[inline]
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::UseLastGoodFrame => "use_last_good_frame",
+            Self::ShowErrorWidget => "show_error_widget",
+            Self::SkipFrame => "skip_frame",
+            Self::Panic => "panic",
+        }
+    }
+
+    /// Returns `true` if this is a graceful recovery policy.
+    #[inline]
+    #[must_use]
+    pub const fn is_graceful(self) -> bool {
+        matches!(self, Self::UseLastGoodFrame | Self::SkipFrame)
+    }
+
+    /// Returns `true` if this policy shows errors to users.
+    #[inline]
+    #[must_use]
+    pub const fn shows_error(self) -> bool {
+        matches!(self, Self::ShowErrorWidget | Self::Panic)
+    }
+}
+
 /// Action to take after error recovery
 #[derive(Debug, Clone)]
+#[must_use]
 pub enum RecoveryAction {
     /// Use the last successfully rendered frame
     UseLastFrame,
@@ -63,6 +94,50 @@ pub enum RecoveryAction {
 
     /// Panic with the error (testing/debugging)
     Panic(PipelineError),
+}
+
+impl RecoveryAction {
+    /// Returns `true` if this action allows the pipeline to continue.
+    #[inline]
+    #[must_use]
+    pub const fn can_continue(&self) -> bool {
+        matches!(
+            self,
+            Self::UseLastFrame | Self::SkipFrame | Self::ShowError(_)
+        )
+    }
+
+    /// Returns `true` if this is a skip frame action.
+    #[inline]
+    #[must_use]
+    pub const fn is_skip(&self) -> bool {
+        matches!(self, Self::SkipFrame)
+    }
+
+    /// Returns `true` if this is a panic action.
+    #[inline]
+    #[must_use]
+    pub const fn is_panic(&self) -> bool {
+        matches!(self, Self::Panic(_))
+    }
+
+    /// Get the error if this action contains one.
+    #[must_use]
+    pub fn error(&self) -> Option<&PipelineError> {
+        match self {
+            Self::ShowError(e) | Self::Panic(e) => Some(e),
+            _ => None,
+        }
+    }
+
+    /// Consume self and return the error if present.
+    #[must_use]
+    pub fn into_error(self) -> Option<PipelineError> {
+        match self {
+            Self::ShowError(e) | Self::Panic(e) => Some(e),
+            _ => None,
+        }
+    }
 }
 
 /// Error recovery manager
@@ -83,15 +158,17 @@ pub struct ErrorRecovery {
 
 impl ErrorRecovery {
     /// Create new error recovery with specified policy
+    #[must_use]
     pub fn new(policy: RecoveryPolicy) -> Self {
         Self {
             policy,
             error_count: AtomicUsize::new(0),
-            max_errors: 100, // Default max errors
+            max_errors: DEFAULT_MAX_ERRORS,
         }
     }
 
     /// Create error recovery with custom max errors
+    #[must_use]
     pub fn with_max_errors(policy: RecoveryPolicy, max_errors: usize) -> Self {
         Self {
             policy,
@@ -149,6 +226,7 @@ impl ErrorRecovery {
 
     /// Get error count
     #[inline]
+    #[must_use]
     pub fn error_count(&self) -> usize {
         self.error_count.load(Ordering::Relaxed)
     }
@@ -161,7 +239,8 @@ impl ErrorRecovery {
 
     /// Get current policy
     #[inline]
-    pub fn policy(&self) -> RecoveryPolicy {
+    #[must_use]
+    pub const fn policy(&self) -> RecoveryPolicy {
         self.policy
     }
 
@@ -173,7 +252,8 @@ impl ErrorRecovery {
 
     /// Get max errors
     #[inline]
-    pub fn max_errors(&self) -> usize {
+    #[must_use]
+    pub const fn max_errors(&self) -> usize {
         self.max_errors
     }
 
@@ -181,6 +261,20 @@ impl ErrorRecovery {
     #[inline]
     pub fn set_max_errors(&mut self, max: usize) {
         self.max_errors = max;
+    }
+
+    /// Returns `true` if any errors have occurred.
+    #[inline]
+    #[must_use]
+    pub fn has_errors(&self) -> bool {
+        self.error_count.load(Ordering::Relaxed) > 0
+    }
+
+    /// Returns `true` if error count has reached the maximum.
+    #[inline]
+    #[must_use]
+    pub fn is_at_limit(&self) -> bool {
+        self.error_count.load(Ordering::Relaxed) >= self.max_errors
     }
 }
 
@@ -193,64 +287,65 @@ impl Default for ErrorRecovery {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_foundation::ElementId;
 
     #[test]
     fn test_error_recovery_creation() {
         let recovery = ErrorRecovery::new(RecoveryPolicy::UseLastGoodFrame);
         assert_eq!(recovery.policy(), RecoveryPolicy::UseLastGoodFrame);
         assert_eq!(recovery.error_count(), 0);
+        assert!(!recovery.has_errors());
     }
 
     #[test]
     fn test_error_count() {
         let mut recovery = ErrorRecovery::new(RecoveryPolicy::SkipFrame);
 
-        let error = PipelineError::layout_failed(ElementId::new(42), "test");
+        let error = PipelineError::layout_failed(42, "test");
 
-        recovery.handle_error(error.clone(), PipelinePhase::Layout);
+        let _ = recovery.handle_error(error.clone(), PipelinePhase::Layout);
         assert_eq!(recovery.error_count(), 1);
+        assert!(recovery.has_errors());
 
-        recovery.handle_error(error.clone(), PipelinePhase::Layout);
+        let _ = recovery.handle_error(error.clone(), PipelinePhase::Layout);
         assert_eq!(recovery.error_count(), 2);
 
         recovery.reset_error_count();
         assert_eq!(recovery.error_count(), 0);
+        assert!(!recovery.has_errors());
     }
 
     #[test]
     fn test_skip_frame_policy() {
         let recovery = ErrorRecovery::new(RecoveryPolicy::SkipFrame);
 
-        let error = PipelineError::layout_failed(ElementId::new(42), "test");
+        let error = PipelineError::layout_failed(42, "test");
+        let action = recovery.handle_error(error, PipelinePhase::Layout);
 
-        match recovery.handle_error(error, PipelinePhase::Layout) {
-            RecoveryAction::SkipFrame => {}
-            _ => panic!("Expected SkipFrame action"),
-        }
+        assert!(action.is_skip());
+        assert!(action.can_continue());
+        assert!(!action.is_panic());
     }
 
     #[test]
     fn test_show_error_policy() {
         let recovery = ErrorRecovery::new(RecoveryPolicy::ShowErrorWidget);
 
-        let error = PipelineError::paint_failed(ElementId::new(42), "test");
+        let error = PipelineError::paint_failed(42, "test");
+        let action = recovery.handle_error(error, PipelinePhase::Paint);
 
-        match recovery.handle_error(error, PipelinePhase::Paint) {
-            RecoveryAction::ShowError(e) => {
-                assert_eq!(e.phase(), PipelinePhase::Paint);
-            }
-            _ => panic!("Expected ShowError action"),
-        }
+        assert!(action.can_continue());
+        assert!(action.error().is_some());
+        assert_eq!(action.error().unwrap().phase(), PipelinePhase::Paint);
     }
 
     #[test]
     fn test_use_last_frame_policy() {
         let recovery = ErrorRecovery::new(RecoveryPolicy::UseLastGoodFrame);
 
-        let error = PipelineError::build_failed(ElementId::new(1), "test");
+        let error = PipelineError::build_failed(1, "test");
+        let action = recovery.handle_error(error, PipelinePhase::Build);
 
-        match recovery.handle_error(error, PipelinePhase::Build) {
+        match action {
             RecoveryAction::UseLastFrame => {}
             _ => panic!("Expected UseLastFrame action"),
         }
@@ -269,20 +364,40 @@ mod tests {
     fn test_max_errors_exceeded() {
         let recovery = ErrorRecovery::with_max_errors(RecoveryPolicy::SkipFrame, 3);
 
-        let error = PipelineError::layout_failed(ElementId::new(42), "test");
+        let error = PipelineError::layout_failed(42, "test");
 
         // First 3 should return SkipFrame
         for _ in 0..3 {
-            match recovery.handle_error(error.clone(), PipelinePhase::Layout) {
-                RecoveryAction::SkipFrame => {}
-                _ => panic!("Expected SkipFrame"),
-            }
+            let action = recovery.handle_error(error.clone(), PipelinePhase::Layout);
+            assert!(action.is_skip());
         }
 
+        assert!(recovery.is_at_limit());
+
         // 4th should return Panic
-        match recovery.handle_error(error, PipelinePhase::Layout) {
-            RecoveryAction::Panic(_) => {}
-            _ => panic!("Expected Panic after max errors"),
-        }
+        let action = recovery.handle_error(error, PipelinePhase::Layout);
+        assert!(action.is_panic());
+    }
+
+    #[test]
+    fn test_policy_predicates() {
+        assert!(RecoveryPolicy::UseLastGoodFrame.is_graceful());
+        assert!(RecoveryPolicy::SkipFrame.is_graceful());
+        assert!(!RecoveryPolicy::ShowErrorWidget.is_graceful());
+        assert!(!RecoveryPolicy::Panic.is_graceful());
+
+        assert!(RecoveryPolicy::ShowErrorWidget.shows_error());
+        assert!(RecoveryPolicy::Panic.shows_error());
+        assert!(!RecoveryPolicy::UseLastGoodFrame.shows_error());
+        assert!(!RecoveryPolicy::SkipFrame.shows_error());
+    }
+
+    #[test]
+    fn test_action_into_error() {
+        let error = PipelineError::build_failed(1, "test");
+        let action = RecoveryAction::ShowError(error);
+
+        let err = action.into_error().unwrap();
+        assert!(err.is_build_error());
     }
 }

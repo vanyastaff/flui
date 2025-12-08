@@ -16,15 +16,15 @@ FLUI Pipeline provides the infrastructure for coordinating build, layout, and pa
 │  (Abstract traits + utilities)                                  │
 ├─────────────────────────────────────────────────────────────────┤
 │  traits/                                                        │
-│    ├─ BuildPhase                    - Widget rebuild phase      │
-│    ├─ LayoutPhase                   - Size computation phase    │
-│    ├─ PaintPhase                    - Layer generation phase    │
-│    ├─ PipelineCoordinator           - Phase orchestration       │
-│    └─ SchedulerIntegration          - Scheduler bridge          │
+│    ├─ BuildPhase<I>                 - Widget rebuild phase      │
+│    ├─ LayoutPhase<I>                - Size computation phase    │
+│    ├─ PaintPhase<I>                 - Layer generation phase    │
+│    └─ PipelineCoordinator<I>        - Phase orchestration       │
 ├─────────────────────────────────────────────────────────────────┤
 │  utilities/                                                     │
-│    ├─ dirty (DirtySet, LockFreeDirtySet)                       │
+│    ├─ dirty (DirtySet<I>, LockFreeDirtySet<I>)                 │
 │    ├─ buffer (TripleBuffer)                                     │
+│    ├─ build (BuildPipeline<I>, BuildBatcher<I>)                │
 │    ├─ metrics (PipelineMetrics)                                │
 │    ├─ recovery (ErrorRecovery)                                  │
 │    └─ cancellation (CancellationToken)                         │
@@ -43,13 +43,14 @@ FLUI Pipeline provides the infrastructure for coordinating build, layout, and pa
 
 ## Features
 
-- **Phase Traits**: `BuildPhase`, `LayoutPhase`, `PaintPhase` for defining pipeline phases
-- **Coordinator**: `PipelineCoordinator` for orchestrating phase execution
-- **Dirty Tracking**: Lock-free bitmap (`LockFreeDirtySet`) and HashSet-based (`DirtySet`) implementations
+- **Generic Types**: All core types are generic over `I: Identifier` for flexibility
+- **Phase Traits**: `BuildPhase<I>`, `LayoutPhase<I>`, `PaintPhase<I>` for defining pipeline phases
+- **Coordinator**: `PipelineCoordinator<I>` for orchestrating phase execution
+- **Dirty Tracking**: Lock-free bitmap (`LockFreeDirtySet<I>`) and HashSet-based (`DirtySet<I>`) implementations
 - **Triple Buffer**: Lock-free frame exchange between producer and consumer threads
-- **Performance Metrics**: FPS tracking, frame timing, cache statistics
-- **Error Recovery**: Configurable policies (skip frame, use last good frame, show error)
-- **Cancellation**: Thread-safe cancellation tokens with timeout support
+- **Performance Metrics**: FPS tracking, frame timing, cache statistics with fixed-size ring buffer
+- **Error Recovery**: Configurable policies with helper methods for introspection
+- **Cancellation**: Thread-safe cancellation tokens with timeout support and status queries
 - **Parallel Execution**: Optional rayon-based parallel processing
 
 ## Quick Start
@@ -63,19 +64,21 @@ flui-pipeline = "0.1"
 
 ## Phase Traits
 
+All phase traits are generic over `I: Identifier`, defaulting to `ElementId`:
+
 ### BuildPhase
 
 Rebuilds dirty widgets with depth-aware scheduling:
 
 ```rust
 use flui_pipeline::{BuildPhase, PhaseContext, PhaseResult};
-use flui_foundation::ElementId;
+use flui_tree::Identifier;
 
-pub trait BuildPhase: Send {
+pub trait BuildPhase<I: Identifier = ElementId>: Send {
     type Tree;
     
     /// Schedule an element for rebuild at a specific depth
-    fn schedule(&mut self, element_id: ElementId, depth: usize);
+    fn schedule(&mut self, element_id: I, depth: usize);
     
     /// Rebuild all dirty elements, returns count of rebuilt
     fn rebuild_dirty(&mut self, tree: &Self::Tree) -> usize;
@@ -94,9 +97,9 @@ Computes sizes with constraint propagation:
 
 ```rust
 use flui_pipeline::{LayoutPhase, PhaseContext, PhaseResult, PipelineResult};
-use flui_foundation::ElementId;
+use flui_tree::Identifier;
 
-pub trait LayoutPhase: Send {
+pub trait LayoutPhase<I: Identifier = ElementId>: Send {
     type Tree;
     type Constraints;
     type Size;
@@ -106,10 +109,10 @@ pub trait LayoutPhase: Send {
         &mut self, 
         tree: &mut Self::Tree, 
         constraints: Self::Constraints
-    ) -> PipelineResult<Vec<ElementId>>;
+    ) -> PipelineResult<Vec<I>>;
     
     /// Mark element as needing layout
-    fn mark_dirty(&mut self, id: ElementId);
+    fn mark_dirty(&mut self, id: I);
     
     /// Check if layout is needed
     fn needs_layout(&self) -> bool;
@@ -122,15 +125,16 @@ Generates paint layers:
 
 ```rust
 use flui_pipeline::{PaintPhase, PhaseContext, PhaseResult, PipelineResult};
+use flui_tree::Identifier;
 
-pub trait PaintPhase: Send {
+pub trait PaintPhase<I: Identifier = ElementId>: Send {
     type Tree;
     
     /// Generate paint layers for dirty elements
     fn generate_layers(&mut self, tree: &mut Self::Tree) -> PipelineResult<usize>;
     
     /// Mark element as needing repaint
-    fn mark_dirty(&mut self, id: ElementId);
+    fn mark_dirty(&mut self, id: I);
     
     /// Check if paint is needed
     fn needs_paint(&self) -> bool;
@@ -143,8 +147,9 @@ Orchestrates phase execution:
 
 ```rust
 use flui_pipeline::{PipelineCoordinator, CoordinatorConfig, FrameResult};
+use flui_tree::Identifier;
 
-pub trait PipelineCoordinator: Send {
+pub trait PipelineCoordinator<I: Identifier = ElementId>: Send {
     type Tree;
     type Constraints;
     
@@ -162,12 +167,11 @@ pub trait PipelineCoordinator: Send {
     fn needs_frame(&self) -> bool;
 }
 
-// Configuration
-let config = CoordinatorConfig {
-    target_fps: 60,
-    budget_ms: 16.0,
-    parallel_threshold: 100,
-};
+// Configuration with builder pattern
+let config = CoordinatorConfig::default()
+    .with_target_fps(60)
+    .with_budget_ms(16.0)
+    .with_parallel_threshold(100);
 ```
 
 ## Dirty Tracking
@@ -181,10 +185,10 @@ use flui_pipeline::LockFreeDirtySet;
 use flui_foundation::ElementId;
 
 // Create with capacity for 10,000 elements
-let dirty_set = LockFreeDirtySet::new(10_000);
+let dirty_set: LockFreeDirtySet<ElementId> = LockFreeDirtySet::new(10_000);
 
 // Mark element dirty (lock-free, ~2ns)
-let id = ElementId::new(42);
+let id = ElementId::new(42).unwrap();
 dirty_set.mark_dirty(id);
 
 // Check if dirty (lock-free, ~2ns)
@@ -224,19 +228,50 @@ Simple thread-safe dirty set for smaller dynamic sets:
 use flui_pipeline::DirtySet;
 use flui_foundation::ElementId;
 
-let set = DirtySet::new();
+let set: DirtySet<ElementId> = DirtySet::new();
 
 // Mark dirty
-set.mark(ElementId::new(1));
-set.mark_many([ElementId::new(2), ElementId::new(3)]);
+set.mark(ElementId::new(1).unwrap());
+set.mark_many([ElementId::new(2).unwrap(), ElementId::new(3).unwrap()]);
 
 // Check and clear
-if set.is_dirty(ElementId::new(1)) {
-    set.clear(ElementId::new(1));
+if set.is_dirty(ElementId::new(1).unwrap()) {
+    set.clear(ElementId::new(1).unwrap());
 }
 
 // Drain all dirty elements
 let dirty: Vec<_> = set.drain();
+```
+
+## Build Pipeline
+
+Depth-aware build scheduling with optional batching:
+
+```rust
+use flui_pipeline::BuildPipeline;
+use flui_foundation::ElementId;
+
+// Create build pipeline
+let mut pipeline: BuildPipeline<ElementId> = BuildPipeline::new();
+
+// Schedule elements at their tree depths
+pipeline.schedule(ElementId::new(1).unwrap(), 0);  // root
+pipeline.schedule(ElementId::new(2).unwrap(), 1);  // child
+pipeline.schedule(ElementId::new(3).unwrap(), 1);  // sibling
+
+// Drain sorted by depth (parents before children)
+let sorted = pipeline.drain_sorted();
+assert_eq!(sorted[0].1, 0); // depth 0 first
+
+// Enable batching for coalescing rapid updates
+pipeline.enable_batching();
+pipeline.schedule(ElementId::new(1).unwrap(), 0);
+pipeline.schedule(ElementId::new(1).unwrap(), 0); // Deduplicated!
+
+// Locking for thread-safe access
+pipeline.with_lock(|inner| {
+    inner.schedule(ElementId::new(4).unwrap(), 2);
+});
 ```
 
 ## Triple Buffer
@@ -281,14 +316,9 @@ if buffer.has_new_data() {
 let current = buffer.peek();
 ```
 
-**Thread Safety:**
-- Write operations: exclusive (single producer)
-- Read operations: exclusive (single consumer)
-- Exchange: lock-free using atomic operations
-
 ## Performance Metrics
 
-Track frame times, phase durations, cache statistics:
+Track frame times, phase durations, cache statistics using a fixed-size ring buffer:
 
 ```rust
 use flui_pipeline::PipelineMetrics;
@@ -315,16 +345,16 @@ metrics.end_frame();
 metrics.record_cache_hit();
 metrics.record_cache_miss();
 
-// Query metrics
+// Query metrics (all return values are #[must_use])
 println!("FPS: {:.1}", metrics.fps());
 println!("Avg frame time: {:?}", metrics.avg_frame_time());
 println!("Drop rate: {:.1}%", metrics.drop_rate());
 println!("Cache hit rate: {:.1}%", metrics.cache_hit_rate());
 
-// Per-phase averages
-println!("Avg build time: {:?}", metrics.avg_build_time());
-println!("Avg layout time: {:?}", metrics.avg_layout_time());
-println!("Avg paint time: {:?}", metrics.avg_paint_time());
+// Getter methods for all fields
+println!("Total frames: {}", metrics.total_frames());
+println!("Dropped frames: {}", metrics.dropped_frames());
+println!("Target FPS: {}", metrics.target_fps());
 
 // Reset metrics
 metrics.reset();
@@ -340,8 +370,8 @@ metrics.reset();
 | `avg_layout_time()` | Average layout phase duration |
 | `avg_paint_time()` | Average paint phase duration |
 | `cache_hit_rate()` | Cache hit percentage |
-| `total_frames` | Total frames processed |
-| `dropped_frames` | Frames exceeding budget |
+| `total_frames()` | Total frames processed |
+| `dropped_frames()` | Frames exceeding budget |
 
 ## Error Recovery
 
@@ -349,7 +379,6 @@ Configurable strategies for handling pipeline errors:
 
 ```rust
 use flui_pipeline::{ErrorRecovery, RecoveryPolicy, RecoveryAction, PipelineError, PipelinePhase};
-use flui_foundation::ElementId;
 
 // Create recovery with policy
 let recovery = ErrorRecovery::new(RecoveryPolicy::SkipFrame);
@@ -357,8 +386,8 @@ let recovery = ErrorRecovery::new(RecoveryPolicy::SkipFrame);
 // Or with max errors before panic
 let recovery = ErrorRecovery::with_max_errors(RecoveryPolicy::SkipFrame, 100);
 
-// Handle an error
-let error = PipelineError::layout_failed(ElementId::new(1), "invalid constraints");
+// Handle an error (element_id is now usize for generic compatibility)
+let error = PipelineError::layout_failed(1, "invalid constraints");
 
 match recovery.handle_error(error, PipelinePhase::Layout) {
     RecoveryAction::SkipFrame => {
@@ -377,8 +406,21 @@ match recovery.handle_error(error, PipelinePhase::Layout) {
     }
 }
 
-// Check error count
+// Policy helper methods
+assert!(RecoveryPolicy::SkipFrame.is_graceful());
+assert!(RecoveryPolicy::ShowErrorWidget.shows_error());
+println!("Policy: {}", RecoveryPolicy::SkipFrame.as_str());
+
+// Action helper methods
+let action = RecoveryAction::SkipFrame;
+assert!(action.can_continue());
+assert!(action.is_skip());
+assert!(!action.is_panic());
+
+// Error count tracking
 println!("Errors: {}", recovery.error_count());
+assert!(!recovery.has_errors()); // After reset
+assert!(!recovery.is_at_limit());
 ```
 
 **Recovery Policies:**
@@ -415,14 +457,22 @@ fn process_elements(token: &CancellationToken) -> Result<(), PipelineError> {
     Ok(())
 }
 
-// Manual cancellation
-token.cancel();
-assert!(token.is_cancelled());
+// Query cancellation reason
+if token.is_manually_cancelled() {
+    println!("Cancelled by user");
+} else if token.is_timed_out() {
+    println!("Timed out");
+}
 
-// Query remaining time
+// Query timing
+println!("Elapsed: {:?}", token.elapsed());
 if let Some(remaining) = token.remaining() {
     println!("Time left: {:?}", remaining);
 }
+
+// Manual cancellation
+token.cancel();
+assert!(token.is_cancelled());
 
 // Reset for reuse
 let mut token = CancellationToken::new();
@@ -433,28 +483,37 @@ assert!(!token.is_cancelled());
 
 ## Pipeline Errors
 
-Comprehensive error types for all phases:
+Comprehensive error types for all phases (element IDs are `usize` for generic compatibility):
 
 ```rust
 use flui_pipeline::{PipelineError, PipelinePhase, PipelineResult};
-use flui_foundation::ElementId;
 
-// Create errors
-let build_err = PipelineError::build_failed(ElementId::new(1), "widget not found");
-let layout_err = PipelineError::layout_failed(ElementId::new(2), "invalid constraints");
-let paint_err = PipelineError::paint_failed(ElementId::new(3), "canvas error");
+// Create errors (element_id is usize)
+let build_err = PipelineError::build_failed(1, "widget not found");
+let layout_err = PipelineError::layout_failed(2, "invalid constraints");
+let paint_err = PipelineError::paint_failed(3, "canvas error");
 
 // Other error types
-let not_found = PipelineError::element_not_found(ElementId::new(4));
+let not_found = PipelineError::element_not_found(4);
 let invalid = PipelineError::invalid_state("unexpected phase order");
 let cancelled = PipelineError::cancelled("timeout exceeded");
 
 // Query error info
 let phase = build_err.phase(); // PipelinePhase::Build
-let element = build_err.element_id(); // Some(ElementId(1))
+let element = build_err.element_id(); // Some(1)
+
+// Error predicates
+assert!(build_err.is_build_error());
+assert!(build_err.is_recoverable());
+
+// Phase predicates and helpers
+assert!(PipelinePhase::Build.is_build());
+assert!(PipelinePhase::Layout.is_layout());
+assert!(PipelinePhase::Paint.is_paint());
+println!("Phase: {}", PipelinePhase::Build.as_str()); // "build"
 
 // Use in results
-fn do_layout(id: ElementId) -> PipelineResult<()> {
+fn do_layout(id: usize) -> PipelineResult<()> {
     if !valid_constraints() {
         return Err(PipelineError::layout_failed(id, "constraints out of bounds"));
     }
@@ -473,87 +532,6 @@ fn do_layout(id: ElementId) -> PipelineResult<()> {
 | `Cancelled` | Any | Operation cancelled/timeout |
 | `NoRoot` | Any | No root element attached |
 | `ConstraintViolation` | Layout | Constraint bounds exceeded |
-
-## Scheduler Integration
-
-Bridge to flui-scheduler for priority-based task scheduling:
-
-```rust
-use flui_pipeline::{SchedulerIntegration, Priority, FrameTiming};
-
-pub trait SchedulerIntegration: Send + Sync {
-    /// Schedule a callback at given priority
-    fn schedule(&self, priority: Priority, callback: Box<dyn FnOnce() + Send>);
-    
-    /// Get current frame timing info
-    fn frame_timing(&self) -> FrameTiming;
-    
-    /// Request vsync callback
-    fn request_vsync(&self, callback: Box<dyn FnOnce() + Send>);
-}
-
-// Priority levels (highest to lowest)
-// Priority::UserInput > Priority::Animation > Priority::Build > Priority::Idle
-```
-
-**Test Utilities:**
-```rust
-use flui_pipeline::{NoopScheduler, RecordingScheduler};
-
-// NoopScheduler - does nothing (for testing)
-let scheduler = NoopScheduler;
-
-// RecordingScheduler - records scheduled tasks
-let scheduler = RecordingScheduler::new();
-scheduler.schedule(Priority::Build, Box::new(|| {}));
-assert_eq!(scheduler.scheduled_count(), 1);
-```
-
-## Visitor Traits (Re-exported from flui-tree)
-
-Abstract patterns for phase operations:
-
-```rust
-use flui_pipeline::{
-    LayoutVisitable, LayoutVisitableExt,
-    PaintVisitable, PaintVisitableExt,
-    HitTestVisitable, HitTestVisitableExt,
-    layout_with_callback, paint_with_callback, hit_test_with_callback,
-};
-
-// Layout visitor
-impl LayoutVisitable for MyRenderObject {
-    fn layout_visit(
-        &mut self,
-        tree: &impl TreeNav,
-        constraints: BoxConstraints,
-    ) -> Size {
-        // Compute size
-    }
-}
-
-// Paint visitor
-impl PaintVisitable for MyRenderObject {
-    fn paint_visit(
-        &self,
-        tree: &impl TreeNav,
-        offset: Offset,
-    ) -> BoxedLayer {
-        // Generate paint commands
-    }
-}
-
-// Hit test visitor
-impl HitTestVisitable for MyRenderObject {
-    fn hit_test_visit(
-        &self,
-        tree: &impl TreeNav,
-        position: Point,
-    ) -> bool {
-        // Check if point is within bounds
-    }
-}
-```
 
 ## Feature Flags
 
@@ -576,17 +554,15 @@ flui-pipeline/
 │   ├── lib.rs              # Main entry, re-exports
 │   ├── traits/
 │   │   ├── mod.rs          # Trait module
-│   │   ├── phase.rs        # BuildPhase, LayoutPhase, PaintPhase
-│   │   ├── coordinator.rs  # PipelineCoordinator, CoordinatorConfig
-│   │   ├── scheduler_integration.rs # SchedulerIntegration
-│   │   └── visitor.rs      # Re-exports from flui-tree
-│   ├── dirty.rs            # LockFreeDirtySet, DirtySet
+│   │   ├── phase.rs        # BuildPhase<I>, LayoutPhase<I>, PaintPhase<I>
+│   │   └── coordinator.rs  # PipelineCoordinator<I>, CoordinatorConfig
+│   ├── dirty.rs            # LockFreeDirtySet<I>, DirtySet<I>
+│   ├── build.rs            # BuildPipeline<I>, BuildBatcher<I>
 │   ├── triple_buffer.rs    # TripleBuffer
 │   ├── metrics.rs          # PipelineMetrics
 │   ├── error.rs            # PipelineError, PipelinePhase
 │   ├── recovery.rs         # ErrorRecovery, RecoveryPolicy
-│   ├── cancellation.rs     # CancellationToken
-│   └── build.rs            # BuildPipeline, BuildBatcher
+│   └── cancellation.rs     # CancellationToken
 └── Cargo.toml
 ```
 
@@ -600,8 +576,9 @@ use flui_pipeline::prelude::*;
 // Includes:
 // - Phase traits: BuildPhase, LayoutPhase, PaintPhase
 // - Coordinator: PipelineCoordinator, CoordinatorConfig, FrameResult
-// - Scheduler: SchedulerIntegration, Priority, FrameTiming
+// - Tree traits: TreeNav, TreeRead
 // - Utilities: DirtySet, LockFreeDirtySet, TripleBuffer
+// - Build: BuildPipeline, BuildBatcher
 // - Metrics: PipelineMetrics
 // - Errors: PipelineError, PipelinePhase, PipelineResult
 // - Recovery: ErrorRecovery, RecoveryPolicy, RecoveryAction
@@ -635,8 +612,7 @@ at your option.
 ## Related Crates
 
 - [`flui-foundation`](../flui-foundation) - Foundation types (ElementId, Key, etc.)
-- [`flui-tree`](../flui-tree) - Tree abstraction traits
-- [`flui-scheduler`](../flui-scheduler) - Task scheduling system
+- [`flui-tree`](../flui-tree) - Tree abstraction traits (Identifier)
 - [`flui_core`](../flui_core) - Core framework with concrete implementations
 
 ---

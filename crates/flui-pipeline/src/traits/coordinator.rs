@@ -13,7 +13,7 @@
 //!   └─ execute_frame() → orchestrates all phases
 //! ```
 
-use flui_foundation::ElementId;
+use flui_tree::Identifier;
 use std::time::Duration;
 
 use crate::error::PipelineResult;
@@ -159,7 +159,7 @@ impl<Layer> Default for FrameResult<Layer> {
 ///     }
 /// }
 /// ```
-pub trait PipelineCoordinator: Send {
+pub trait PipelineCoordinator<I: Identifier = flui_foundation::ElementId>: Send {
     /// Tree type
     type Tree;
 
@@ -208,13 +208,13 @@ pub trait PipelineCoordinator: Send {
     // =========================================================================
 
     /// Schedule an element for build (rebuild)
-    fn schedule_build(&mut self, id: ElementId, depth: usize);
+    fn schedule_build(&mut self, id: I, depth: usize);
 
     /// Mark element for layout
-    fn mark_needs_layout(&mut self, id: ElementId);
+    fn mark_needs_layout(&mut self, id: I);
 
     /// Mark element for paint
-    fn mark_needs_paint(&mut self, id: ElementId);
+    fn mark_needs_paint(&mut self, id: I);
 
     // =========================================================================
     // Phase Execution

@@ -21,7 +21,7 @@
 //! A single generic trait would require complex type gymnastics.
 //! Three focused traits are simpler and more idiomatic.
 
-use flui_foundation::ElementId;
+use flui_tree::Identifier;
 use std::fmt::Debug;
 
 use crate::error::PipelineResult;
@@ -32,9 +32,9 @@ use crate::error::PipelineResult;
 
 /// Context passed to phase execution
 #[derive(Debug, Clone)]
-pub struct PhaseContext {
+pub struct PhaseContext<I: Identifier = flui_foundation::ElementId> {
     /// Root element ID (if any)
-    pub root_id: Option<ElementId>,
+    pub root_id: Option<I>,
 
     /// Current frame number
     pub frame_number: u64,
@@ -43,7 +43,7 @@ pub struct PhaseContext {
     pub max_iterations: usize,
 }
 
-impl Default for PhaseContext {
+impl<I: Identifier> Default for PhaseContext<I> {
     fn default() -> Self {
         Self {
             root_id: None,
@@ -53,9 +53,9 @@ impl Default for PhaseContext {
     }
 }
 
-impl PhaseContext {
+impl<I: Identifier> PhaseContext<I> {
     /// Create a new context with root ID
-    pub fn new(root_id: Option<ElementId>) -> Self {
+    pub fn new(root_id: Option<I>) -> Self {
         Self {
             root_id,
             ..Default::default()
@@ -162,12 +162,12 @@ impl<O> PhaseResult<O> {
 /// Build may require multiple iterations because:
 /// - Rebuilding widget A may mark widget B as dirty
 /// - Signals during build may schedule more rebuilds
-pub trait BuildPhase: Send {
+pub trait BuildPhase<I: Identifier = flui_foundation::ElementId>: Send {
     /// The tree type (usually `Arc<RwLock<ElementTree>>`)
     type Tree;
 
     /// Schedule an element for rebuild with its depth
-    fn schedule(&mut self, element_id: ElementId, depth: usize);
+    fn schedule(&mut self, element_id: I, depth: usize);
 
     /// Check if any elements are dirty
     fn has_dirty(&self) -> bool;
@@ -207,7 +207,7 @@ pub trait BuildPhase: Send {
 ///
 /// Layout receives constraints from parent and must compute
 /// a size that satisfies those constraints.
-pub trait LayoutPhase: Send {
+pub trait LayoutPhase<I: Identifier = flui_foundation::ElementId>: Send {
     /// The tree type (usually `&mut ElementTree`)
     type Tree;
 
@@ -218,7 +218,7 @@ pub trait LayoutPhase: Send {
     type Size;
 
     /// Mark an element as needing layout
-    fn mark_dirty(&self, element_id: ElementId);
+    fn mark_dirty(&self, element_id: I);
 
     /// Check if any elements need layout
     fn has_dirty(&self) -> bool;
@@ -227,7 +227,7 @@ pub trait LayoutPhase: Send {
     fn dirty_count(&self) -> usize;
 
     /// Check if specific element needs layout
-    fn is_dirty(&self, element_id: ElementId) -> bool;
+    fn is_dirty(&self, element_id: I) -> bool;
 
     /// Clear all dirty flags
     fn clear_dirty(&mut self);
@@ -239,7 +239,7 @@ pub trait LayoutPhase: Send {
         &mut self,
         tree: &mut Self::Tree,
         constraints: Self::Constraints,
-    ) -> PipelineResult<Vec<ElementId>>;
+    ) -> PipelineResult<Vec<I>>;
 
     /// Phase name for logging
     fn name(&self) -> &'static str {
@@ -257,12 +257,12 @@ pub trait LayoutPhase: Send {
 /// - Generating paint commands for RenderElements
 /// - Building layer tree for compositor
 /// - Optimizing paint operations
-pub trait PaintPhase: Send {
+pub trait PaintPhase<I: Identifier = flui_foundation::ElementId>: Send {
     /// The tree type (usually `&mut ElementTree`)
     type Tree;
 
     /// Mark an element as needing repaint
-    fn mark_dirty(&self, element_id: ElementId);
+    fn mark_dirty(&self, element_id: I);
 
     /// Check if any elements need repaint
     fn has_dirty(&self) -> bool;
@@ -271,7 +271,7 @@ pub trait PaintPhase: Send {
     fn dirty_count(&self) -> usize;
 
     /// Check if specific element needs repaint
-    fn is_dirty(&self, element_id: ElementId) -> bool;
+    fn is_dirty(&self, element_id: I) -> bool;
 
     /// Clear all dirty flags
     fn clear_dirty(&mut self);
@@ -326,10 +326,11 @@ pub trait BatchedExecution {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_foundation::ElementId;
 
     #[test]
     fn test_phase_context_default() {
-        let ctx = PhaseContext::default();
+        let ctx = PhaseContext::<ElementId>::default();
         assert!(ctx.root_id.is_none());
         assert_eq!(ctx.frame_number, 0);
         assert_eq!(ctx.max_iterations, 100);
