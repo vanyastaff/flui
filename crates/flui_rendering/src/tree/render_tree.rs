@@ -81,7 +81,29 @@ impl RenderId {
     /// Panics if id is 0 (use NonZeroUsize for safety).
     #[inline]
     pub fn new(id: usize) -> Self {
-        Self(std::num::NonZeroUsize::new(id).expect("RenderId cannot be 0"))
+        match std::num::NonZeroUsize::new(id) {
+            Some(non_zero) => Self(non_zero),
+            None => panic!("RenderId cannot be 0"),
+        }
+    }
+
+    /// Creates a new RenderId from a 1-based index, returning None if id is 0.
+    ///
+    /// This is the safe, non-panicking alternative to `new()`.
+    #[inline]
+    pub const fn try_new(id: usize) -> Option<Self> {
+        match std::num::NonZeroUsize::new(id) {
+            Some(non_zero) => Some(Self(non_zero)),
+            None => None,
+        }
+    }
+
+    /// Creates a new RenderId from a NonZeroUsize (infallible).
+    ///
+    /// This is the preferred way to create a RenderId when you already have a NonZeroUsize.
+    #[inline]
+    pub const fn from_nonzero(id: std::num::NonZeroUsize) -> Self {
+        Self(id)
     }
 
     /// Gets the underlying 1-based index.

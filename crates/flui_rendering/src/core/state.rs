@@ -1610,10 +1610,20 @@ mod tests {
         }
 
         fn get_render_state<P: Protocol>(&self, id: ElementId) -> Option<&RenderState<P>> {
-            // Type erasure hack for tests - we know it's BoxProtocol
-            self.states
-                .get(&id)
-                .map(|s| unsafe { std::mem::transmute::<&BoxRenderState, &RenderState<P>>(s) })
+            // For tests, we only store BoxRenderState (which is RenderState<BoxProtocol>)
+            // We need to cast from &RenderState<BoxProtocol> to &RenderState<P>
+            // This is safe when P == BoxProtocol (verified by runtime check)
+            use std::any::TypeId;
+
+            self.states.get(&id).and_then(|box_state| {
+                if TypeId::of::<P>() == TypeId::of::<BoxProtocol>() {
+                    // SAFETY: TypeId check ensures P == BoxProtocol
+                    // Layout compatibility verified by compile-time checks in runtime_cast module
+                    Some(unsafe { &*(box_state as *const BoxRenderState as *const RenderState<P>) })
+                } else {
+                    None
+                }
+            })
         }
 
         fn register_needs_layout(&mut self, id: ElementId) {

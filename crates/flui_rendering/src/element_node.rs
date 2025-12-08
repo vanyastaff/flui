@@ -293,12 +293,42 @@ impl ElementNodeStorage {
         self.node.as_any_mut().downcast_mut::<T>()
     }
 
-    /// Attempts to downcast, consuming self.
+    /// Attempts to downcast, consuming self and returning an owned Box<T>.
+    ///
+    /// This is the owned equivalent of `downcast_ref`/`downcast_mut`.
+    ///
+    /// # Safety
+    ///
+    /// This method uses `unsafe` internally but is sound because:
+    /// 1. We verify the type matches using `Any::is::<T>()` before casting
+    /// 2. The pointer cast from `*mut dyn RenderElementNode` to `*mut T` is valid
+    ///    when T is the concrete type (verified by the type check)
+    /// 3. Memory ownership is correctly transferred via `into_raw`/`from_raw`
+    /// 4. The trait object `dyn RenderElementNode` requires `Any`, ensuring type info
+    ///
+    /// # Returns
+    ///
+    /// - `Ok(Box<T>)` if the concrete type is T
+    /// - `Err(Self)` if the type doesn't match, returning ownership
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let storage: ElementNodeStorage = ...;
+    /// match storage.downcast::<MyElement>() {
+    ///     Ok(concrete) => { /* use concrete */ }
+    ///     Err(storage) => { /* type mismatch, got storage back */ }
+    /// }
+    /// ```
     pub fn downcast<T: Any>(self) -> Result<Box<T>, Self> {
         if self.node.as_any().is::<T>() {
-            // SAFETY: We just checked the type
-            let raw = Box::into_raw(self.node);
-            Ok(unsafe { Box::from_raw(raw as *mut T) })
+            // SAFETY:
+            // 1. Type check above guarantees the concrete type is T
+            // 2. Box::into_raw transfers ownership to raw pointer
+            // 3. Pointer cast is valid because we verified T is the actual type
+            // 4. Box::from_raw reconstructs Box<T> with correct ownership
+            let raw = Box::into_raw(self.node) as *mut T;
+            Ok(unsafe { Box::from_raw(raw) })
         } else {
             Err(self)
         }

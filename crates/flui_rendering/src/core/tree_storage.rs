@@ -413,23 +413,30 @@ impl<T: RenderTreeStorage> LayoutTree for RenderTree<T> {
             state.clear_needs_layout();
         }
 
-        // SAFETY: Callback-based layout pattern
+        // SAFETY: Self-referential callback pattern for recursive tree layout
         //
-        // We use a raw pointer to create a recursive callback:
-        // 1. Callback captures raw pointer to self (not &mut self)
-        // 2. This allows us to borrow render_element mutably
-        // 3. When callback is invoked, it calls perform_layout on OTHER elements
+        // PROBLEM: We need to recursively layout children while holding a mutable
+        // borrow to parent element data.
         //
-        // This is safe because:
-        // - Parent element (id) and child elements are DISJOINT in the tree
-        // - No aliasing: we never access parent while children are being laid out
-        // - Rust's tree invariant guarantees no cycles
-        // - Raw pointer is only used within this scope
+        // SOLUTION: Create a raw pointer to self, allowing the closure to call
+        // perform_layout on children (different elements).
+        //
+        // SAFETY INVARIANTS:
+        // 1. Tree structure guarantees parent (id) and children are DISJOINT
+        // 2. No aliasing: parent data is not accessed during child layout
+        // 3. Tree is acyclic by construction (verified during tree building)
+        // 4. Raw pointer lifetime is confined to this function scope
+        // 5. Callback only accesses OTHER elements, never the current element (id)
+        //
+        // This pattern matches Flutter's synchronous layout algorithm where parents
+        // can layout children without re-entrancy concerns.
         unsafe {
             let self_ptr = self as *mut Self;
 
             // Create callback that uses raw pointer for recursion
+            // SAFETY: Callback only layouts children, never re-layouts parent (id)
             let mut layout_child = |child_id: ElementId, child_constraints: BoxConstraints| {
+                debug_assert_ne!(child_id, id, "Self-layout detected! Tree invariant violated");
                 (*self_ptr).perform_layout(child_id, child_constraints)
             };
 
@@ -501,14 +508,21 @@ impl<T: RenderTreeStorage> LayoutTree for RenderTree<T> {
             state.clear_needs_layout();
         }
 
-        // SAFETY: Same callback pattern as perform_layout()
-        // See detailed safety comments in perform_layout() above.
+        // SAFETY: Same self-referential callback pattern as perform_layout()
+        // See detailed safety documentation in perform_layout() above.
+        //
+        // This follows the same safety invariants for sliver layout:
+        // - Parent (id) and children are disjoint in the tree
+        // - No re-entrant access to parent during child layout
+        // - Raw pointer lifetime confined to function scope
         unsafe {
             let self_ptr = self as *mut Self;
 
             // Create callback for laying out sliver children
+            // SAFETY: Callback only layouts children, never re-layouts parent (id)
             let layout_sliver_child =
                 |child_id: ElementId, child_constraints: SliverConstraints| {
+                    debug_assert_ne!(child_id, id, "Self-layout detected! Tree invariant violated");
                     (*self_ptr).perform_sliver_layout(child_id, child_constraints)
                 };
 

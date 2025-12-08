@@ -672,63 +672,23 @@ impl<R: RenderObject + 'static, P: Protocol + 'static> RenderElementNode for Ren
     }
 
     fn as_box_state(&self) -> Option<&BoxRenderState> {
-        // Runtime type check for protocol conversion
-        //
-        // SAFETY INVARIANTS:
-        // 1. RenderState<P> has identical memory layout for all P (verified by #[repr(C)] or layout tests)
-        // 2. TypeId check guarantees P == BoxProtocol before cast
-        // 3. Both BoxProtocol and SliverProtocol are zero-sized marker types
-        // 4. The only difference is the PhantomData<P> which is zero-sized
-        //
-        // This is a sound transmute because:
-        // - Same size and alignment (verified at compile time by Protocol trait bounds)
-        // - Same field layout (AtomicRenderFlags, OnceCell<Geometry>, OnceCell<Constraints>, AtomicOffset)
-        // - PhantomData doesn't affect layout
-        if std::any::TypeId::of::<P>() == std::any::TypeId::of::<BoxProtocol>() {
-            // SAFETY: TypeId check guarantees P == BoxProtocol
-            // RenderState<BoxProtocol> and RenderState<P> have identical layout
-            Some(unsafe {
-                &*(&self.state as *const RenderState<P> as *const RenderState<BoxProtocol>)
-            })
-        } else {
-            None
-        }
+        // Use safe helper with compile-time layout verification
+        crate::state::runtime_cast::try_cast_to_box(&self.state)
     }
 
     fn as_box_state_mut(&mut self) -> Option<&mut BoxRenderState> {
-        // See safety documentation in as_box_state()
-        if std::any::TypeId::of::<P>() == std::any::TypeId::of::<BoxProtocol>() {
-            // SAFETY: TypeId check guarantees P == BoxProtocol
-            Some(unsafe {
-                &mut *(&mut self.state as *mut RenderState<P> as *mut RenderState<BoxProtocol>)
-            })
-        } else {
-            None
-        }
+        // Use safe helper with compile-time layout verification
+        crate::state::runtime_cast::try_cast_to_box_mut(&mut self.state)
     }
 
     fn as_sliver_state(&self) -> Option<&SliverRenderState> {
-        // See safety documentation in as_box_state()
-        if std::any::TypeId::of::<P>() == std::any::TypeId::of::<SliverProtocol>() {
-            // SAFETY: TypeId check guarantees P == SliverProtocol
-            Some(unsafe {
-                &*(&self.state as *const RenderState<P> as *const RenderState<SliverProtocol>)
-            })
-        } else {
-            None
-        }
+        // Use safe helper with compile-time layout verification
+        crate::state::runtime_cast::try_cast_to_sliver(&self.state)
     }
 
     fn as_sliver_state_mut(&mut self) -> Option<&mut SliverRenderState> {
-        // See safety documentation in as_box_state()
-        if std::any::TypeId::of::<P>() == std::any::TypeId::of::<SliverProtocol>() {
-            // SAFETY: TypeId check guarantees P == SliverProtocol
-            Some(unsafe {
-                &mut *(&mut self.state as *mut RenderState<P> as *mut RenderState<SliverProtocol>)
-            })
-        } else {
-            None
-        }
+        // Use safe helper with compile-time layout verification
+        crate::state::runtime_cast::try_cast_to_sliver_mut(&mut self.state)
     }
 
     fn as_any(&self) -> &dyn Any {

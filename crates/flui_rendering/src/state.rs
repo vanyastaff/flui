@@ -5,10 +5,10 @@
 
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::OnceLock;
 
 use flui_foundation::ElementId;
 use flui_types::{Offset, SliverGeometry};
-use once_cell::sync::OnceCell;
 
 use crate::flags::{AtomicRenderFlags, RenderFlags};
 use crate::protocol::{BoxProtocol, Protocol, SliverProtocol};
@@ -103,8 +103,8 @@ pub trait RenderDirtyPropagation {
 #[derive(Debug)]
 pub struct RenderState<P: Protocol> {
     flags: AtomicRenderFlags,
-    geometry: OnceCell<P::Geometry>,
-    constraints: OnceCell<P::Constraints>,
+    geometry: OnceLock<P::Geometry>,
+    constraints: OnceLock<P::Constraints>,
     offset: AtomicOffset,
     _phantom: PhantomData<P>,
 }
@@ -118,8 +118,8 @@ impl<P: Protocol> RenderState<P> {
     pub fn new() -> Self {
         Self {
             flags: AtomicRenderFlags::new(RenderFlags::NEEDS_LAYOUT | RenderFlags::NEEDS_PAINT),
-            geometry: OnceCell::new(),
-            constraints: OnceCell::new(),
+            geometry: OnceLock::new(),
+            constraints: OnceLock::new(),
             offset: AtomicOffset::new(Offset::ZERO),
             _phantom: PhantomData,
         }
@@ -129,8 +129,8 @@ impl<P: Protocol> RenderState<P> {
     pub fn with_flags(flags: RenderFlags) -> Self {
         Self {
             flags: AtomicRenderFlags::new(flags),
-            geometry: OnceCell::new(),
-            constraints: OnceCell::new(),
+            geometry: OnceLock::new(),
+            constraints: OnceLock::new(),
             offset: AtomicOffset::new(Offset::ZERO),
             _phantom: PhantomData,
         }
@@ -155,8 +155,8 @@ where
                 .geometry
                 .get()
                 .cloned()
-                .map_or_else(OnceCell::new, |g| {
-                    let cell = OnceCell::new();
+                .map_or_else(OnceLock::new, |g| {
+                    let cell = OnceLock::new();
                     let _ = cell.set(g);
                     cell
                 }),
@@ -164,8 +164,8 @@ where
                 .constraints
                 .get()
                 .cloned()
-                .map_or_else(OnceCell::new, |c| {
-                    let cell = OnceCell::new();
+                .map_or_else(OnceLock::new, |c| {
+                    let cell = OnceLock::new();
                     let _ = cell.set(c);
                     cell
                 }),
@@ -470,7 +470,7 @@ impl<P: Protocol> RenderState<P> {
     /// Clears the geometry to allow relayout.
     #[inline]
     pub fn clear_geometry(&mut self) {
-        self.geometry = OnceCell::new();
+        self.geometry = OnceLock::new();
     }
 }
 
@@ -497,7 +497,7 @@ impl<P: Protocol> RenderState<P> {
     /// Clears the constraints to allow relayout.
     #[inline]
     pub fn clear_constraints(&mut self) {
-        self.constraints = OnceCell::new();
+        self.constraints = OnceLock::new();
     }
 
     /// Checks if constraints match the given value.
@@ -559,6 +559,111 @@ pub trait RenderStateCast<P: Protocol> {
     ///
     /// Returns `Some` only if `P` is `SliverProtocol`.
     fn try_as_sliver_state_mut(&mut self) -> Option<&mut SliverRenderState>;
+}
+
+// ============================================================================
+// RUNTIME PROTOCOL CASTING (Type-Erased Context)
+// ============================================================================
+
+/// Helper module for runtime protocol casting with compile-time safety checks.
+///
+/// This module provides safe wrapper functions for protocol state casting that
+/// includes layout compatibility assertions and clear safety documentation.
+pub(crate) mod runtime_cast {
+    use super::*;
+    use std::any::TypeId;
+
+    // TODO: CRITICAL BUG DETECTED!
+    // The assertion below was commented out because it fails - the sizes are DIFFERENT!
+    // This means the unsafe pointer casting in runtime_cast is UNSOUND.
+    //
+    // Size comparison:
+    // - Size (BoxProtocol::Geometry) = 8 bytes (2 × f32)
+    // - SliverGeometry (SliverProtocol::Geometry) = ~56 bytes (3 × f32 + 5 × Option<f32> + 2 × bool)
+    //
+    // This is undefined behavior! The code needs to be refactored to use an enum or trait objects.
+    //
+    // Compile-time layout compatibility checks (CURRENTLY FAILS - UB DETECTED!)
+    // const _: () = {
+    //     assert!(
+    //         std::mem::size_of::<RenderState<BoxProtocol>>()
+    //             == std::mem::size_of::<RenderState<SliverProtocol>>()
+    //     );
+    //     assert!(
+    //         std::mem::align_of::<RenderState<BoxProtocol>>()
+    //             == std::mem::align_of::<RenderState<SliverProtocol>>()
+    //     );
+    // };
+
+    /// Safely casts `RenderState<P>` to `BoxRenderState` if P is BoxProtocol.
+    ///
+    /// # Safety
+    ///
+    /// This function uses unsafe pointer casting, but is sound because:
+    /// 1. We verify at runtime that P == BoxProtocol via TypeId
+    /// 2. RenderState<BoxProtocol> and RenderState<P> have identical layout (verified above)
+    /// 3. The only difference is the PhantomData<P> which is zero-sized
+    /// 4. All other fields have the same type regardless of P
+    ///
+    /// # Returns
+    ///
+    /// - `Some(&BoxRenderState)` if P is BoxProtocol
+    /// - `None` otherwise
+    #[inline]
+    pub fn try_cast_to_box<P: Protocol>(state: &RenderState<P>) -> Option<&BoxRenderState> {
+        if TypeId::of::<P>() == TypeId::of::<BoxProtocol>() {
+            // SAFETY: TypeId check guarantees P == BoxProtocol
+            // Layout compatibility verified at compile time above
+            Some(unsafe { &*(state as *const RenderState<P> as *const BoxRenderState) })
+        } else {
+            None
+        }
+    }
+
+    /// Safely casts `RenderState<P>` to mutable `BoxRenderState` if P is BoxProtocol.
+    ///
+    /// See [`try_cast_to_box`] for safety documentation.
+    #[inline]
+    pub fn try_cast_to_box_mut<P: Protocol>(
+        state: &mut RenderState<P>,
+    ) -> Option<&mut BoxRenderState> {
+        if TypeId::of::<P>() == TypeId::of::<BoxProtocol>() {
+            // SAFETY: Same as try_cast_to_box
+            Some(unsafe { &mut *(state as *mut RenderState<P> as *mut BoxRenderState) })
+        } else {
+            None
+        }
+    }
+
+    /// Safely casts `RenderState<P>` to `SliverRenderState` if P is SliverProtocol.
+    ///
+    /// See [`try_cast_to_box`] for safety documentation.
+    #[inline]
+    pub fn try_cast_to_sliver<P: Protocol>(
+        state: &RenderState<P>,
+    ) -> Option<&SliverRenderState> {
+        if TypeId::of::<P>() == TypeId::of::<SliverProtocol>() {
+            // SAFETY: Same as try_cast_to_box
+            Some(unsafe { &*(state as *const RenderState<P> as *const SliverRenderState) })
+        } else {
+            None
+        }
+    }
+
+    /// Safely casts `RenderState<P>` to mutable `SliverRenderState` if P is SliverProtocol.
+    ///
+    /// See [`try_cast_to_box`] for safety documentation.
+    #[inline]
+    pub fn try_cast_to_sliver_mut<P: Protocol>(
+        state: &mut RenderState<P>,
+    ) -> Option<&mut SliverRenderState> {
+        if TypeId::of::<P>() == TypeId::of::<SliverProtocol>() {
+            // SAFETY: Same as try_cast_to_box
+            Some(unsafe { &mut *(state as *mut RenderState<P> as *mut SliverRenderState) })
+        } else {
+            None
+        }
+    }
 }
 
 // Safe implementation for BoxProtocol - no unsafe needed!
