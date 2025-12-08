@@ -20,6 +20,9 @@ tracing.workspace = true
 parking_lot.workspace = true
 thiserror.workspace = true
 
+# Compile-time assertions
+static_assertions = "1.1"
+
 # Optional features
 serde = { workspace = true, optional = true }
 rayon = { version = "1.10", optional = true }

@@ -122,6 +122,7 @@ pub mod cancellation;
 pub mod dirty;
 pub mod error;
 pub mod metrics;
+pub mod rebuild_handle;
 pub mod recovery;
 pub mod triple_buffer;
 
@@ -161,6 +162,7 @@ pub use cancellation::CancellationToken;
 pub use dirty::{DirtySet, LockFreeDirtySet};
 pub use error::{PipelineError, PipelinePhase, PipelineResult};
 pub use metrics::PipelineMetrics;
+pub use rebuild_handle::RebuildHandle;
 pub use recovery::{ErrorRecovery, RecoveryAction, RecoveryPolicy};
 pub use triple_buffer::TripleBuffer;
 
@@ -187,6 +189,7 @@ pub mod prelude {
     pub use crate::dirty::{DirtySet, LockFreeDirtySet};
     pub use crate::error::{PipelineError, PipelinePhase, PipelineResult};
     pub use crate::metrics::PipelineMetrics;
+    pub use crate::rebuild_handle::RebuildHandle;
     pub use crate::recovery::{ErrorRecovery, RecoveryAction, RecoveryPolicy};
     pub use crate::triple_buffer::TripleBuffer;
 }
