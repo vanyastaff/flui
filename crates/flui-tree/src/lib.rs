@@ -113,9 +113,6 @@ pub mod visitor;
 
 pub use traits::{TreeNav, TreeRead, TreeWrite, TreeWriteNav};
 
-// Sealed trait markers for external implementations
-pub use traits::sealed;
-
 // ============================================================================
 // RE-EXPORTS - Arity System
 // ============================================================================
@@ -130,8 +127,8 @@ pub use arity::{
 // ============================================================================
 
 pub use iter::{
-    Ancestors, AncestorsWithDepth, BreadthFirstIter, DepthFirstIter, DepthFirstOrder, Descendants,
-    DescendantsWithDepth, Siblings, SiblingsDirection,
+    AllSiblings, Ancestors, AncestorsWithDepth, BreadthFirstIter, DepthFirstIter, DepthFirstOrder,
+    Descendants, DescendantsWithDepth, Siblings, SiblingsDirection,
 };
 
 // ============================================================================

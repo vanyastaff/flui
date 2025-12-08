@@ -261,11 +261,11 @@ impl<const INLINE_SIZE: usize> RenderChildrenCollector<INLINE_SIZE> {
     ///
     /// This analyzes the child count and returns the most specific
     /// arity that matches.
-    pub fn runtime_arity(&self) -> crate::arity::RuntimeArity {
+    pub fn runtime_arity(&self) -> crate::core::arity::RuntimeArity {
         match self.len() {
-            0 => crate::arity::RuntimeArity::Exact(0),
-            1 => crate::arity::RuntimeArity::Exact(1),
-            n => crate::arity::RuntimeArity::AtLeast(n),
+            0 => crate::core::arity::RuntimeArity::Exact(0),
+            1 => crate::core::arity::RuntimeArity::Exact(1),
+            n => crate::core::arity::RuntimeArity::AtLeast(n),
         }
     }
 
@@ -631,7 +631,7 @@ mod tests {
     use super::*;
     use crate::tree::RenderTreeAccess;
     use flui_tree::iter::{Ancestors, DescendantsWithDepth};
-    use flui_tree::sealed::{TreeNavSealed, TreeReadSealed};
+
     use flui_tree::{TreeNav, TreeRead};
     use std::any::Any;
 
@@ -645,9 +645,6 @@ mod tests {
     struct TestTree {
         nodes: Vec<Option<TestNode>>,
     }
-
-    impl TreeReadSealed for TestTree {}
-    impl TreeNavSealed for TestTree {}
 
     impl TestTree {
         fn new() -> Self {
@@ -676,7 +673,6 @@ mod tests {
 
     impl TreeRead<ElementId> for TestTree {
         type Node = TestNode;
-        type NodeIter<'a> = Box<dyn Iterator<Item = ElementId> + 'a>;
 
         fn get(&self, id: ElementId) -> Option<&TestNode> {
             self.nodes.get(id.get() as usize - 1)?.as_ref()
@@ -686,52 +682,42 @@ mod tests {
             self.nodes.iter().filter(|n| n.is_some()).count()
         }
 
-        fn node_ids(&self) -> Self::NodeIter<'_> {
-            Box::new((0..self.nodes.len()).filter_map(|i| {
+        fn node_ids(&self) -> impl Iterator<Item = ElementId> + '_ {
+            (0..self.nodes.len()).filter_map(|i| {
                 if self.nodes[i].is_some() {
                     Some(ElementId::new(i + 1))
                 } else {
                     None
                 }
-            }))
+            })
         }
     }
 
     impl TreeNav<ElementId> for TestTree {
-        type ChildrenIter<'a> = Box<dyn Iterator<Item = ElementId> + 'a>;
-        type AncestorsIter<'a> = Ancestors<'a, ElementId, Self>;
-        type DescendantsIter<'a> = DescendantsWithDepth<'a, ElementId, Self>;
-        type SiblingsIter<'a> = Box<dyn Iterator<Item = ElementId> + 'a>;
-
         fn parent(&self, id: ElementId) -> Option<ElementId> {
             self.get(id)?.parent
         }
 
-        fn children(&self, id: ElementId) -> Self::ChildrenIter<'_> {
-            if let Some(node) = self.get(id) {
-                Box::new(node.children.iter().copied())
-            } else {
-                Box::new(std::iter::empty())
-            }
+        fn children(&self, id: ElementId) -> impl Iterator<Item = ElementId> + '_ {
+            self.get(id)
+                .map(|node| node.children.iter().copied())
+                .into_iter()
+                .flatten()
         }
 
-        fn ancestors(&self, start: ElementId) -> Self::AncestorsIter<'_> {
+        fn ancestors(&self, start: ElementId) -> impl Iterator<Item = ElementId> + '_ {
             Ancestors::new(self, start)
         }
 
-        fn descendants(&self, root: ElementId) -> Self::DescendantsIter<'_> {
+        fn descendants(&self, root: ElementId) -> impl Iterator<Item = (ElementId, usize)> + '_ {
             DescendantsWithDepth::new(self, root)
         }
 
-        fn siblings(&self, id: ElementId) -> Self::SiblingsIter<'_> {
-            if let Some(parent_id) = self.parent(id) {
-                Box::new(
-                    self.children(parent_id)
-                        .filter(move |&child_id| child_id != id),
-                )
-            } else {
-                Box::new(std::iter::empty())
-            }
+        fn siblings(&self, id: ElementId) -> impl Iterator<Item = ElementId> + '_ {
+            let parent = self.parent(id);
+            parent
+                .into_iter()
+                .flat_map(move |p| self.children(p).filter(move |&c| c != id))
         }
     }
 
@@ -744,12 +730,8 @@ mod tests {
             }
         }
 
-        fn render_object_mut(&mut self, id: ElementId) -> Option<&mut dyn Any> {
-            if self.get(id)?.is_render {
-                Some(&mut () as &mut dyn Any)
-            } else {
-                None
-            }
+        fn render_object_mut(&mut self, _id: ElementId) -> Option<&mut dyn Any> {
+            None
         }
 
         fn render_state(&self, _id: ElementId) -> Option<&dyn Any> {
@@ -899,7 +881,7 @@ mod tests {
         let collector: RenderChildrenCollector = RenderChildrenCollector::new(&tree, empty);
         assert_eq!(
             collector.runtime_arity(),
-            crate::arity::RuntimeArity::Exact(0)
+            crate::core::arity::RuntimeArity::Exact(0)
         );
 
         // Test single
@@ -908,7 +890,7 @@ mod tests {
         let collector: RenderChildrenCollector = RenderChildrenCollector::new(&tree, parent);
         assert_eq!(
             collector.runtime_arity(),
-            crate::arity::RuntimeArity::Exact(1)
+            crate::core::arity::RuntimeArity::Exact(1)
         );
 
         // Test multiple
@@ -916,7 +898,7 @@ mod tests {
         let collector: RenderChildrenCollector = RenderChildrenCollector::new(&tree, parent);
         assert_eq!(
             collector.runtime_arity(),
-            crate::arity::RuntimeArity::AtLeast(2)
+            crate::core::arity::RuntimeArity::AtLeast(2)
         );
     }
 

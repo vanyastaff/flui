@@ -101,10 +101,10 @@ pub mod render {
 }
 
 // =============================================================================
-// Re-exports from flui-pipeline
+// Re-exports from pipeline module
 // =============================================================================
 
-pub use pipeline::pipeline_context::PipelineBuildContext;
+pub use pipeline::PipelineBuildContext;
 
 // =============================================================================
 // Re-exports from this crate's pipeline module

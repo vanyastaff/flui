@@ -62,4 +62,4 @@ pub use ancestors::{Ancestors, AncestorsWithDepth};
 pub use breadth_first::BreadthFirstIter;
 pub use depth_first::{DepthFirstIter, DepthFirstOrder};
 pub use descendants::{Descendants, DescendantsWithDepth};
-pub use siblings::{Siblings, SiblingsDirection};
+pub use siblings::{AllSiblings, Siblings, SiblingsDirection};

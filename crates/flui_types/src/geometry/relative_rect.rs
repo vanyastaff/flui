@@ -25,8 +25,8 @@ use crate::{Offset, Rect, Size};
 /// // Convert to Rect given parent size
 /// let parent = Size::new(200.0, 300.0);
 /// let positioned = rect.to_rect(parent);
-/// assert_eq!(positioned.left, 10.0);
-/// assert_eq!(positioned.top, 20.0);
+/// assert_eq!(positioned.left(), 10.0);
+/// assert_eq!(positioned.top(), 20.0);
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -162,10 +162,10 @@ impl RelativeRect {
     /// let parent = Size::new(200.0, 300.0);
     /// let rect = relative.to_rect(parent);
     ///
-    /// assert_eq!(rect.left, 10.0);
-    /// assert_eq!(rect.top, 20.0);
-    /// assert_eq!(rect.right, 170.0); // 200 - 30
-    /// assert_eq!(rect.bottom, 260.0); // 300 - 40
+    /// assert_eq!(rect.left(), 10.0);
+    /// assert_eq!(rect.top(), 20.0);
+    /// assert_eq!(rect.right(), 170.0); // 200 - 30
+    /// assert_eq!(rect.bottom(), 260.0); // 300 - 40
     /// ```
     #[inline]
     #[must_use]

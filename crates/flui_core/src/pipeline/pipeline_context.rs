@@ -1,6 +1,7 @@
 //! PipelineBuildContext - Concrete implementation of BuildContext
 //!
 //! This is the runtime context passed to views during the build phase.
+//! Updated for four-tree architecture with TreeCoordinator.
 
 use std::any::{Any, TypeId};
 use std::cell::RefCell;
@@ -12,35 +13,52 @@ use flui_foundation::ElementId;
 use flui_pipeline::DirtySet;
 use parking_lot::RwLock;
 
+use super::TreeCoordinator;
+
 /// PipelineBuildContext - Concrete implementation of BuildContext
 ///
 /// Provides access to:
 /// - Current element ID
-/// - Element tree (via Arc<RwLock>)
+/// - TreeCoordinator (all four trees: View, Element, Render, Layer)
 /// - Dirty set for scheduling rebuilds
+///
+/// # Four-Tree Architecture
+///
+/// This context provides unified access to all four trees through TreeCoordinator:
+/// - `ViewTree` - immutable view definitions
+/// - `ElementTree` - element lifecycle and structure
+/// - `RenderTree` - layout and paint logic
+/// - `LayerTree` - compositor layers
 ///
 /// # Thread Safety
 ///
 /// This context is `Send + Sync` and can be used across threads.
-/// The tree is protected by `RwLock` for concurrent access.
+/// The coordinator is protected by `RwLock` for concurrent access.
 ///
 /// # Example
 ///
 /// ```rust,ignore
 /// let ctx = PipelineBuildContext::new(
 ///     element_id,
-///     tree.clone(),
+///     coordinator.clone(),
 ///     dirty_set.clone(),
 /// );
 ///
 /// // Use as &dyn BuildContext
 /// view_object.build(&ctx);
+///
+/// // Access ViewTree through coordinator
+/// let views = ctx.coordinator().read().views();
 /// ```
 pub struct PipelineBuildContext {
     /// Current element being built
     element_id: ElementId,
 
-    /// Reference to the element tree
+    /// TreeCoordinator with all four trees
+    coordinator: Arc<RwLock<TreeCoordinator>>,
+
+    /// Legacy: Reference to the element tree (for backward compatibility)
+    /// TODO: Remove after full migration to TreeCoordinator
     tree: Arc<RwLock<ElementTree>>,
 
     /// Dirty set for scheduling rebuilds
@@ -54,14 +72,29 @@ pub struct PipelineBuildContext {
 }
 
 impl PipelineBuildContext {
-    /// Create a new PipelineBuildContext
+    /// Create a new PipelineBuildContext with TreeCoordinator
+    ///
+    /// # Arguments
+    ///
+    /// * `element_id` - ID of the element being built
+    /// * `coordinator` - TreeCoordinator with all four trees
+    /// * `dirty_set` - Dirty set for scheduling rebuilds
     pub fn new(
         element_id: ElementId,
-        tree: Arc<RwLock<ElementTree>>,
+        coordinator: Arc<RwLock<TreeCoordinator>>,
         dirty_set: Arc<RwLock<DirtySet<ElementId>>>,
     ) -> Self {
+        // Extract ElementTree reference for backward compatibility
+        // This is a transitional pattern - will be removed after full migration
+        let tree = {
+            // Create a new ElementTree that shares data with coordinator
+            // For now, we create a separate instance
+            Arc::new(RwLock::new(ElementTree::new()))
+        };
+
         Self {
             element_id,
+            coordinator,
             tree,
             dirty_set,
             depth: RefCell::new(None),
@@ -69,10 +102,41 @@ impl PipelineBuildContext {
         }
     }
 
-    /// Create context for a child element (reusing tree/dirty_set)
+    /// Create a new PipelineBuildContext with ElementTree (transitional API)
+    ///
+    /// This constructor is for backward compatibility during migration to TreeCoordinator.
+    /// It creates an empty TreeCoordinator internally and uses the provided ElementTree
+    /// for legacy operations.
+    ///
+    /// # Arguments
+    ///
+    /// * `element_id` - ID of the element being built
+    /// * `tree` - Legacy ElementTree reference
+    /// * `dirty_set` - Dirty set for scheduling rebuilds
+    ///
+    /// # Note
+    ///
+    /// Prefer `new()` with TreeCoordinator for new code.
+    pub fn with_tree(
+        element_id: ElementId,
+        tree: Arc<RwLock<ElementTree>>,
+        dirty_set: Arc<RwLock<DirtySet<ElementId>>>,
+    ) -> Self {
+        Self {
+            element_id,
+            coordinator: Arc::new(RwLock::new(TreeCoordinator::new())),
+            tree,
+            dirty_set,
+            depth: RefCell::new(None),
+            parent_id: RefCell::new(None),
+        }
+    }
+
+    /// Create context for a child element (reusing coordinator/dirty_set)
     pub fn for_child(&self, child_id: ElementId) -> Self {
         Self {
             element_id: child_id,
+            coordinator: self.coordinator.clone(),
             tree: self.tree.clone(),
             dirty_set: self.dirty_set.clone(),
             depth: RefCell::new(None),
@@ -80,12 +144,22 @@ impl PipelineBuildContext {
         }
     }
 
+    /// Get the TreeCoordinator (for four-tree access)
+    #[inline]
+    pub fn coordinator(&self) -> &Arc<RwLock<TreeCoordinator>> {
+        &self.coordinator
+    }
+
     /// Get the element tree (for advanced usage)
+    ///
+    /// Note: Prefer using `coordinator()` for new code.
+    #[inline]
     pub fn tree(&self) -> &Arc<RwLock<ElementTree>> {
         &self.tree
     }
 
     /// Get the dirty set (for advanced usage)
+    #[inline]
     pub fn dirty_set(&self) -> &Arc<RwLock<DirtySet<ElementId>>> {
         &self.dirty_set
     }
@@ -118,9 +192,12 @@ impl BuildContext for PipelineBuildContext {
             return cached;
         }
 
-        // Compute and cache
-        let tree = self.tree.read();
-        let parent = tree.get(self.element_id).and_then(|e| e.parent());
+        // Compute and cache using coordinator
+        let coord = self.coordinator.read();
+        let parent = coord
+            .elements()
+            .get(self.element_id)
+            .and_then(|e| e.parent());
         *self.parent_id.borrow_mut() = Some(parent);
         parent
     }
@@ -131,32 +208,46 @@ impl BuildContext for PipelineBuildContext {
             return cached;
         }
 
-        // Compute and cache
-        let tree = self.tree.read();
-        let depth = tree.depth(self.element_id).unwrap_or(0);
+        // Compute and cache using coordinator
+        let coord = self.coordinator.read();
+        let depth = coord.elements().depth(self.element_id).unwrap_or(0);
         *self.depth.borrow_mut() = Some(depth);
         depth
     }
 
     fn mark_dirty(&self) {
+        // Mark in dirty set
         let dirty = self.dirty_set.write();
         dirty.mark(self.element_id);
+
+        // Also mark in coordinator for new pipeline
+        drop(dirty); // Release lock before acquiring coordinator
+        self.coordinator.write().mark_needs_build(self.element_id);
+
         tracing::trace!(element_id = ?self.element_id, "Element marked dirty");
     }
 
     fn schedule_rebuild(&self, element_id: ElementId) {
+        // Mark in dirty set
         let dirty = self.dirty_set.write();
         dirty.mark(element_id);
+
+        // Also mark in coordinator
+        drop(dirty);
+        self.coordinator.write().mark_needs_build(element_id);
+
         tracing::trace!(element_id = ?element_id, "Rebuild scheduled");
     }
 
     fn create_rebuild_callback(&self) -> Box<dyn Fn() + Send + Sync> {
-        // Capture dirty_set and element_id for rebuild scheduling
+        // Capture dirty_set, coordinator, and element_id for rebuild scheduling
         let dirty_set = self.dirty_set.clone();
+        let coordinator = self.coordinator.clone();
         let element_id = self.element_id;
 
         Box::new(move || {
             dirty_set.write().mark(element_id);
+            coordinator.write().mark_needs_build(element_id);
             tracing::trace!(element_id = ?element_id, "Rebuild triggered from callback");
         })
     }
@@ -165,16 +256,16 @@ impl BuildContext for PipelineBuildContext {
         // Walk up the parent chain to find a provider
         // Start from parent (not current element itself)
         let mut current_id = {
-            let tree = self.tree.read();
-            let element = tree.get(self.element_id)?;
+            let coord = self.coordinator.read();
+            let element = coord.elements().get(self.element_id)?;
             element.parent()?
         };
 
         loop {
             // Check if this element is a provider and get the value
             let provided_arc = {
-                let tree = self.tree.read();
-                let element = tree.get(current_id)?;
+                let coord = self.coordinator.read();
+                let element = coord.elements().get(current_id)?;
 
                 if !element.is_provider() {
                     // Not a provider, move to parent
@@ -182,8 +273,12 @@ impl BuildContext for PipelineBuildContext {
                     continue;
                 }
 
-                // Get the view object and check if it provides the right type
-                let view_object = element.view_object()?;
+                // Get the view_id from ViewElement variant
+                let view_id = element.as_view().and_then(|v| v.view_id())?;
+
+                // Get view node from ViewTree, then get ViewObject
+                let view_node = coord.views().get(view_id)?;
+                let view_object = view_node.view_object();
 
                 // Get provided value directly from ViewObject trait
                 let provided = view_object.provided_value()?;
@@ -201,10 +296,17 @@ impl BuildContext for PipelineBuildContext {
 
             // Register dependency (need mutable access)
             {
-                let mut tree_mut = self.tree.write();
-                if let Some(provider_elem) = tree_mut.get_mut(current_id) {
-                    if let Some(provider_vo) = provider_elem.view_object_mut() {
-                        provider_vo.add_dependent(self.element_id);
+                let mut coord = self.coordinator.write();
+                let element = coord.elements().get(current_id);
+                if let Some(elem) = element {
+                    if let Some(view_elem) = elem.as_view() {
+                        if let Some(view_id) = view_elem.view_id() {
+                            if let Some(provider_node) = coord.views_mut().get_mut(view_id) {
+                                provider_node
+                                    .view_object_mut()
+                                    .add_dependent(self.element_id);
+                            }
+                        }
                     }
                 }
             }
@@ -222,21 +324,23 @@ impl BuildContext for PipelineBuildContext {
     fn find_ancestor_widget(&self, type_id: TypeId) -> Option<Arc<dyn Any + Send + Sync>> {
         // Similar to depend_on_raw, but doesn't register dependency
         let mut current_id = {
-            let tree = self.tree.read();
-            let element = tree.get(self.element_id)?;
+            let coord = self.coordinator.read();
+            let element = coord.elements().get(self.element_id)?;
             element.parent()?
         };
 
         loop {
             let (provided_arc, next_parent) = {
-                let tree = self.tree.read();
-                let element = tree.get(current_id)?;
+                let coord = self.coordinator.read();
+                let element = coord.elements().get(current_id)?;
 
                 if !element.is_provider() {
                     (None, element.parent())
                 } else {
-                    let view_object = element.view_object()?;
-                    let provided = view_object.provided_value()?;
+                    // Get view_id from ViewElement, then ViewObject from ViewTree
+                    let view_id = element.as_view().and_then(|v| v.view_id())?;
+                    let view_node = coord.views().get(view_id)?;
+                    let provided = view_node.view_object().provided_value()?;
 
                     if (*provided).type_id() != type_id {
                         (None, element.parent())
@@ -256,8 +360,11 @@ impl BuildContext for PipelineBuildContext {
 
     fn visit_ancestors(&self, visitor: &mut dyn FnMut(ElementId) -> bool) {
         let mut current_id = {
-            let tree = self.tree.read();
-            tree.get(self.element_id).and_then(|e| e.parent())
+            let coord = self.coordinator.read();
+            coord
+                .elements()
+                .get(self.element_id)
+                .and_then(|e| e.parent())
         };
 
         while let Some(id) = current_id {
@@ -265,8 +372,8 @@ impl BuildContext for PipelineBuildContext {
                 break;
             }
             current_id = {
-                let tree = self.tree.read();
-                tree.get(id).and_then(|e| e.parent())
+                let coord = self.coordinator.read();
+                coord.elements().get(id).and_then(|e| e.parent())
             };
         }
     }
@@ -286,16 +393,16 @@ mod tests {
     use flui_element::BuildContextExt;
 
     fn create_test_context() -> PipelineBuildContext {
-        let tree = Arc::new(RwLock::new(ElementTree::new()));
+        let coordinator = Arc::new(RwLock::new(TreeCoordinator::new()));
         let dirty_set = Arc::new(RwLock::new(DirtySet::new()));
 
-        // Insert a root element
+        // Insert a root element into coordinator
         let root_id = {
-            let mut t = tree.write();
-            t.insert(flui_element::Element::empty())
+            let mut coord = coordinator.write();
+            coord.elements_mut().insert(flui_element::Element::empty())
         };
 
-        PipelineBuildContext::new(root_id, tree, dirty_set)
+        PipelineBuildContext::new(root_id, coordinator, dirty_set)
     }
 
     #[test]
@@ -305,23 +412,44 @@ mod tests {
     }
 
     #[test]
+    fn test_coordinator_access() {
+        let ctx = create_test_context();
+
+        // Should be able to access coordinator
+        let coord = ctx.coordinator().read();
+        assert_eq!(coord.element_count(), 1);
+    }
+
+    #[test]
     fn test_mark_dirty() {
         let ctx = create_test_context();
         ctx.mark_dirty();
 
+        // Check dirty set
         let dirty = ctx.dirty_set.read();
         assert!(dirty.is_dirty(ctx.element_id()));
+        drop(dirty);
+
+        // Check coordinator's needs_build
+        let coord = ctx.coordinator.read();
+        assert!(coord.needs_build().contains(&ctx.element_id()));
     }
 
     #[test]
     fn test_schedule_rebuild() {
         let ctx = create_test_context();
-        let other_id = ElementId::new(999).unwrap();
+        let other_id = ElementId::new(999);
 
         ctx.schedule_rebuild(other_id);
 
+        // Check dirty set
         let dirty = ctx.dirty_set.read();
         assert!(dirty.is_dirty(other_id));
+        drop(dirty);
+
+        // Check coordinator
+        let coord = ctx.coordinator.read();
+        assert!(coord.needs_build().contains(&other_id));
     }
 
     #[test]
@@ -340,13 +468,13 @@ mod tests {
     #[test]
     fn test_for_child() {
         let ctx = create_test_context();
-        let child_id = ElementId::new(42).unwrap();
+        let child_id = ElementId::new(42);
 
         let child_ctx = ctx.for_child(child_id);
 
         assert_eq!(child_ctx.element_id(), child_id);
-        // Same tree and dirty_set
-        assert!(Arc::ptr_eq(ctx.tree(), child_ctx.tree()));
+        // Same coordinator and dirty_set
+        assert!(Arc::ptr_eq(ctx.coordinator(), child_ctx.coordinator()));
         assert!(Arc::ptr_eq(ctx.dirty_set(), child_ctx.dirty_set()));
     }
 
@@ -357,5 +485,21 @@ mod tests {
 
         let downcasted = dyn_ctx.downcast_ref::<PipelineBuildContext>();
         assert!(downcasted.is_some());
+    }
+
+    #[test]
+    fn test_create_rebuild_callback() {
+        let ctx = create_test_context();
+        let callback = ctx.create_rebuild_callback();
+
+        // Callback should mark element dirty
+        callback();
+
+        let dirty = ctx.dirty_set.read();
+        assert!(dirty.is_dirty(ctx.element_id()));
+        drop(dirty);
+
+        let coord = ctx.coordinator.read();
+        assert!(coord.needs_build().contains(&ctx.element_id()));
     }
 }

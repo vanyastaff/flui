@@ -149,11 +149,9 @@ impl PaintPipeline {
                 continue;
             }
 
-            // TODO: Re-enable render_state checks once Element properly supports RenderViewObject
-            // Currently Element::render_state() returns None (stub) so we skip the check
-            // and paint all dirty render elements unconditionally.
-            //
-            // Future: Check render_state.needs_paint() for cache optimization
+            // NOTE: In four-tree architecture, RenderState is stored in RenderTree (accessed via
+            // element.as_render().render_id() + RenderTree::get()). Currently we paint all dirty
+            // render elements unconditionally. Future: check RenderTree for needs_paint flag.
 
             #[cfg(debug_assertions)]
             tracing::trace!("Paint: Processing render object {:?}", id);

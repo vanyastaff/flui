@@ -40,27 +40,6 @@ mod nav;
 mod read;
 mod write;
 
-/// Sealed trait markers for implementing core tree traits.
-///
-/// This module exports the internal sealed traits that are required
-/// to implement `TreeRead`, `TreeNav`, etc.
-///
-/// # Usage
-///
-/// To implement `TreeRead<I>` for your type:
-///
-/// ```rust,ignore
-/// use flui_tree::sealed;
-/// use flui_foundation::ElementId;
-///
-/// impl sealed::TreeReadSealed for MyTree {}
-/// impl sealed::TreeNavSealed for MyTree {}
-/// ```
-pub mod sealed {
-    pub use super::nav::sealed::Sealed as TreeNavSealed;
-    pub use super::read::sealed::Sealed as TreeReadSealed;
-}
-
 pub use nav::TreeNav;
 pub use read::TreeRead;
 pub use write::{TreeWrite, TreeWriteNav};

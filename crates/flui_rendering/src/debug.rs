@@ -322,7 +322,7 @@ pub fn debug_assert_not_in_paint_phase(_phase: ()) {}
 /// we cast `&RenderState<P>` to `&RenderState<P>` - a same-type identity cast.
 #[cfg(debug_assertions)]
 pub fn verify_protocol_type_safety() {
-    use crate::protocol::{BoxProtocol, SliverProtocol};
+    use crate::core::protocol::{BoxProtocol, SliverProtocol};
     use std::any::TypeId;
 
     // TypeId should be equal for the same type

@@ -11,10 +11,10 @@
 //!
 //! ```text
 //! TreeCoordinator
-//!   ├── views: ViewTree
-//!   ├── elements: ElementTree
-//!   ├── render_objects: RenderTree
-//!   └── layers: LayerTree
+//!   ├── views: ViewTree           (ViewObjects storage)
+//!   ├── elements: ElementTree     (Element storage with ID refs)
+//!   ├── render_objects: RenderTree (RenderObjects storage)
+//!   └── layers: LayerTree         (Compositor layers)
 //! ```
 //!
 //! # Flutter Analogy
@@ -34,18 +34,20 @@
 //! let view_id = coordinator.views_mut().insert(my_view);
 //!
 //! // Create element referencing the view
-//! let element = ViewElement::new(Some(view_id), ViewMode::Stateless);
+//! let element = Element::view(Some(view_id), ViewMode::Stateless);
 //! let element_id = coordinator.elements_mut().insert(element);
 //!
+//! // Set root
+//! coordinator.set_root(Some(element_id));
+//!
 //! // Perform build/layout/paint cycle
-//! coordinator.build_dirty_elements()?;
-//! coordinator.layout_dirty_render_objects()?;
-//! coordinator.paint_dirty_layers()?;
+//! coordinator.mark_needs_build(element_id);
 //! ```
 
 use std::collections::HashSet;
 
-use flui_engine::tree::LayerTree;
+use flui_element::ElementTree;
+use flui_engine::LayerTree;
 use flui_foundation::ElementId;
 use flui_rendering::tree::RenderTree;
 use flui_view::tree::ViewTree;
@@ -75,13 +77,13 @@ use flui_view::tree::ViewTree;
 /// TreeCoordinator is not thread-safe by default. For multi-threaded access,
 /// wrap in `Arc<RwLock<TreeCoordinator>>` or use `parking_lot::RwLock`.
 #[derive(Debug)]
-pub struct TreeCoordinator<E> {
+pub struct TreeCoordinator {
     // ========== Four Trees ==========
     /// ViewTree - stores immutable ViewObjects
     views: ViewTree,
 
-    /// ElementTree - stores Elements (can be generic over storage type)
-    elements: E,
+    /// ElementTree - stores Elements with ID references
+    elements: ElementTree,
 
     /// RenderTree - stores RenderObjects for layout/paint
     render_objects: RenderTree,
@@ -110,19 +112,18 @@ pub struct TreeCoordinator<E> {
 // CONSTRUCTION
 // ============================================================================
 
-impl<E> TreeCoordinator<E> {
-    /// Creates a new TreeCoordinator with the given element storage.
+impl TreeCoordinator {
+    /// Creates a new TreeCoordinator with empty trees.
     ///
     /// # Example
     ///
     /// ```rust,ignore
-    /// let element_tree = ElementTree::new();
-    /// let coordinator = TreeCoordinator::new(element_tree);
+    /// let coordinator = TreeCoordinator::new();
     /// ```
-    pub fn new(elements: E) -> Self {
+    pub fn new() -> Self {
         Self {
             views: ViewTree::new(),
-            elements,
+            elements: ElementTree::new(),
             render_objects: RenderTree::new(),
             layers: LayerTree::new(),
             needs_build: HashSet::new(),
@@ -133,11 +134,15 @@ impl<E> TreeCoordinator<E> {
         }
     }
 
-    /// Creates a TreeCoordinator with pre-allocated capacity for dirty sets.
-    pub fn with_capacity(elements: E, capacity: usize) -> Self {
+    /// Creates a TreeCoordinator with pre-allocated capacity.
+    ///
+    /// # Arguments
+    ///
+    /// * `capacity` - Initial capacity for trees and dirty sets
+    pub fn with_capacity(capacity: usize) -> Self {
         Self {
             views: ViewTree::with_capacity(capacity),
-            elements,
+            elements: ElementTree::with_capacity(capacity),
             render_objects: RenderTree::with_capacity(capacity),
             layers: LayerTree::with_capacity(capacity),
             needs_build: HashSet::with_capacity(capacity),
@@ -149,11 +154,17 @@ impl<E> TreeCoordinator<E> {
     }
 }
 
+impl Default for TreeCoordinator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 // ============================================================================
 // TREE ACCESS
 // ============================================================================
 
-impl<E> TreeCoordinator<E> {
+impl TreeCoordinator {
     /// Returns a reference to the ViewTree.
     #[inline]
     pub fn views(&self) -> &ViewTree {
@@ -168,13 +179,13 @@ impl<E> TreeCoordinator<E> {
 
     /// Returns a reference to the ElementTree.
     #[inline]
-    pub fn elements(&self) -> &E {
+    pub fn elements(&self) -> &ElementTree {
         &self.elements
     }
 
     /// Returns a mutable reference to the ElementTree.
     #[inline]
-    pub fn elements_mut(&mut self) -> &mut E {
+    pub fn elements_mut(&mut self) -> &mut ElementTree {
         &mut self.elements
     }
 
@@ -205,7 +216,7 @@ impl<E> TreeCoordinator<E> {
     /// Unwraps the coordinator, returning all four trees.
     ///
     /// Returns: (views, elements, render_objects, layers)
-    pub fn into_trees(self) -> (ViewTree, E, RenderTree, LayerTree) {
+    pub fn into_trees(self) -> (ViewTree, ElementTree, RenderTree, LayerTree) {
         (self.views, self.elements, self.render_objects, self.layers)
     }
 }
@@ -214,7 +225,7 @@ impl<E> TreeCoordinator<E> {
 // ROOT MANAGEMENT
 // ============================================================================
 
-impl<E> TreeCoordinator<E> {
+impl TreeCoordinator {
     /// Gets the root element ID.
     #[inline]
     pub fn root(&self) -> Option<ElementId> {
@@ -232,7 +243,7 @@ impl<E> TreeCoordinator<E> {
 // DIRTY TRACKING (Flutter PipelineOwner pattern)
 // ============================================================================
 
-impl<E> TreeCoordinator<E> {
+impl TreeCoordinator {
     /// Marks an element as needing build.
     ///
     /// This is called when a view's dependencies change or when
@@ -247,7 +258,7 @@ impl<E> TreeCoordinator<E> {
     /// intrinsic dimensions change.
     pub fn mark_needs_layout(&mut self, id: ElementId) {
         self.needs_layout.insert(id);
-        // Layout changes require repaint
+        // Layout changes require repaint (Flutter pattern)
         self.mark_needs_paint(id);
     }
 
@@ -291,6 +302,28 @@ impl<E> TreeCoordinator<E> {
         &self.needs_compositing
     }
 
+    /// Returns and clears elements needing build.
+    ///
+    /// This is useful for processing dirty elements in a frame.
+    pub fn take_needs_build(&mut self) -> HashSet<ElementId> {
+        std::mem::take(&mut self.needs_build)
+    }
+
+    /// Returns and clears elements needing layout.
+    pub fn take_needs_layout(&mut self) -> HashSet<ElementId> {
+        std::mem::take(&mut self.needs_layout)
+    }
+
+    /// Returns and clears elements needing paint.
+    pub fn take_needs_paint(&mut self) -> HashSet<ElementId> {
+        std::mem::take(&mut self.needs_paint)
+    }
+
+    /// Returns and clears elements needing compositing.
+    pub fn take_needs_compositing(&mut self) -> HashSet<ElementId> {
+        std::mem::take(&mut self.needs_compositing)
+    }
+
     /// Clears all dirty sets.
     ///
     /// This is typically called after a complete frame has been rendered.
@@ -308,6 +341,54 @@ impl<E> TreeCoordinator<E> {
             || !self.needs_paint.is_empty()
             || !self.needs_compositing.is_empty()
     }
+
+    /// Returns true if any element needs build.
+    #[inline]
+    pub fn has_needs_build(&self) -> bool {
+        !self.needs_build.is_empty()
+    }
+
+    /// Returns true if any element needs layout.
+    #[inline]
+    pub fn has_needs_layout(&self) -> bool {
+        !self.needs_layout.is_empty()
+    }
+
+    /// Returns true if any element needs paint.
+    #[inline]
+    pub fn has_needs_paint(&self) -> bool {
+        !self.needs_paint.is_empty()
+    }
+}
+
+// ============================================================================
+// STATISTICS
+// ============================================================================
+
+impl TreeCoordinator {
+    /// Returns the number of elements in the tree.
+    #[inline]
+    pub fn element_count(&self) -> usize {
+        self.elements.len()
+    }
+
+    /// Returns the number of view objects in the tree.
+    #[inline]
+    pub fn view_count(&self) -> usize {
+        self.views.len()
+    }
+
+    /// Returns the number of render objects in the tree.
+    #[inline]
+    pub fn render_object_count(&self) -> usize {
+        self.render_objects.len()
+    }
+
+    /// Returns the number of layers in the tree.
+    #[inline]
+    pub fn layer_count(&self) -> usize {
+        self.layers.len()
+    }
 }
 
 // ============================================================================
@@ -318,23 +399,28 @@ impl<E> TreeCoordinator<E> {
 mod tests {
     use super::*;
 
-    // Mock ElementTree for testing
-    #[derive(Debug)]
-    struct MockElementTree;
-
     #[test]
     fn test_coordinator_creation() {
-        let coordinator = TreeCoordinator::new(MockElementTree);
+        let coordinator = TreeCoordinator::new();
 
         assert!(coordinator.views().is_empty());
+        assert!(coordinator.elements().is_empty());
         assert!(coordinator.render_objects().is_empty());
         assert!(coordinator.layers().is_empty());
         assert_eq!(coordinator.root(), None);
     }
 
     #[test]
+    fn test_with_capacity() {
+        let coordinator = TreeCoordinator::with_capacity(100);
+
+        assert!(coordinator.views().is_empty());
+        assert_eq!(coordinator.root(), None);
+    }
+
+    #[test]
     fn test_dirty_tracking() {
-        let mut coordinator = TreeCoordinator::new(MockElementTree);
+        let mut coordinator = TreeCoordinator::new();
 
         let id1 = ElementId::new(1);
         let id2 = ElementId::new(2);
@@ -354,8 +440,29 @@ mod tests {
     }
 
     #[test]
+    fn test_take_needs_build() {
+        let mut coordinator = TreeCoordinator::new();
+
+        let id1 = ElementId::new(1);
+        let id2 = ElementId::new(2);
+
+        coordinator.mark_needs_build(id1);
+        coordinator.mark_needs_build(id2);
+
+        assert!(coordinator.has_needs_build());
+
+        let dirty = coordinator.take_needs_build();
+        assert_eq!(dirty.len(), 2);
+        assert!(dirty.contains(&id1));
+        assert!(dirty.contains(&id2));
+
+        // After take, set should be empty
+        assert!(!coordinator.has_needs_build());
+    }
+
+    #[test]
     fn test_root_management() {
-        let mut coordinator = TreeCoordinator::new(MockElementTree);
+        let mut coordinator = TreeCoordinator::new();
 
         assert_eq!(coordinator.root(), None);
 
@@ -367,27 +474,46 @@ mod tests {
 
     #[test]
     fn test_tree_access() {
-        let mut coordinator = TreeCoordinator::new(MockElementTree);
+        let mut coordinator = TreeCoordinator::new();
 
         // Mutable access
         let _views = coordinator.views_mut();
+        let _elements = coordinator.elements_mut();
         let _render_objects = coordinator.render_objects_mut();
         let _layers = coordinator.layers_mut();
 
         // Immutable access
         let _views = coordinator.views();
+        let _elements = coordinator.elements();
         let _render_objects = coordinator.render_objects();
         let _layers = coordinator.layers();
     }
 
     #[test]
     fn test_into_trees() {
-        let coordinator = TreeCoordinator::new(MockElementTree);
+        let coordinator = TreeCoordinator::new();
 
-        let (views, _elements, render_objects, layers) = coordinator.into_trees();
+        let (views, elements, render_objects, layers) = coordinator.into_trees();
 
         assert!(views.is_empty());
+        assert!(elements.is_empty());
         assert!(render_objects.is_empty());
         assert!(layers.is_empty());
+    }
+
+    #[test]
+    fn test_statistics() {
+        let coordinator = TreeCoordinator::new();
+
+        assert_eq!(coordinator.element_count(), 0);
+        assert_eq!(coordinator.view_count(), 0);
+        assert_eq!(coordinator.render_object_count(), 0);
+        assert_eq!(coordinator.layer_count(), 0);
+    }
+
+    #[test]
+    fn test_default() {
+        let coordinator = TreeCoordinator::default();
+        assert!(coordinator.views().is_empty());
     }
 }

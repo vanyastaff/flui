@@ -415,54 +415,6 @@ pub trait RenderTreeExt: RenderTreeAccess {
     }
 
     // ========================================================================
-    // LEGACY METHODS (for backwards compatibility)
-    // ========================================================================
-
-    /// Finds the nearest render ancestor of an element.
-    ///
-    /// This is an alias for `render_parent()` for backwards compatibility.
-    #[inline]
-    fn render_ancestor(&self, id: ElementId) -> Option<ElementId>
-    where
-        Self: Sized,
-    {
-        self.render_parent(id)
-    }
-
-    /// Finds all render children of an element (allocates).
-    ///
-    /// Prefer `render_children_iter()` when you don't need random access.
-    #[inline]
-    fn render_children(&self, id: ElementId) -> Vec<ElementId>
-    where
-        Self: Sized,
-    {
-        self.render_children_iter(id).collect()
-    }
-
-    /// Returns an iterator over render ancestors.
-    ///
-    /// Alias for `render_ancestors_iter()` for backwards compatibility.
-    #[inline]
-    fn render_ancestors(&self, id: ElementId) -> super::iter::RenderAncestors<'_, Self>
-    where
-        Self: Sized,
-    {
-        self.render_ancestors_iter(id)
-    }
-
-    /// Returns an iterator over render descendants.
-    ///
-    /// Alias for `render_descendants_iter()` for backwards compatibility.
-    #[inline]
-    fn render_descendants(&self, id: ElementId) -> super::iter::RenderDescendants<'_, Self>
-    where
-        Self: Sized,
-    {
-        self.render_descendants_iter(id)
-    }
-
-    // ========================================================================
     // BATCH OPERATIONS
     // ========================================================================
 
@@ -546,14 +498,6 @@ impl<T: RenderTreeAccess + ?Sized> RenderTreeExt for T {}
 // ============================================================================
 // RENDER CHILD ACCESSOR - TYPE STATE PATTERN
 // ============================================================================
-
-// Re-export Multi as alias for Variable for backwards compatibility
-/// Marker type for multi-child render objects (any number of children).
-///
-/// This is a deprecated alias for [`Variable`] from the unified arity system.
-/// Use [`Variable`] directly instead.
-#[deprecated(since = "0.2.0", note = "Use `Variable` directly instead of `Multi`")]
-pub type Multi = Variable;
 
 /// A typed accessor for render children with compile-time arity guarantees.
 ///
@@ -889,7 +833,7 @@ impl<'a, T: RenderTreeAccess> IntoIterator for &RenderChildAccessor<'a, T, Varia
 mod tests {
     use super::*;
     use flui_tree::iter::{Ancestors, DescendantsWithDepth};
-    use flui_tree::sealed::{TreeNavSealed, TreeReadSealed};
+
     use flui_tree::{TreeNav, TreeRead};
 
     // Mock render object
@@ -941,9 +885,6 @@ mod tests {
         nodes: Vec<Option<TestNode>>,
     }
 
-    impl TreeReadSealed for TestTree {}
-    impl TreeNavSealed for TestTree {}
-
     impl TestTree {
         fn new() -> Self {
             Self { nodes: Vec::new() }
@@ -974,7 +915,6 @@ mod tests {
 
     impl TreeRead<ElementId> for TestTree {
         type Node = TestNode;
-        type NodeIter<'a> = Box<dyn Iterator<Item = ElementId> + 'a>;
 
         fn get(&self, id: ElementId) -> Option<&TestNode> {
             self.nodes.get(id.get() as usize - 1)?.as_ref()
@@ -984,52 +924,42 @@ mod tests {
             self.nodes.iter().filter(|n| n.is_some()).count()
         }
 
-        fn node_ids(&self) -> Self::NodeIter<'_> {
-            Box::new((0..self.nodes.len()).filter_map(|i| {
+        fn node_ids(&self) -> impl Iterator<Item = ElementId> + '_ {
+            (0..self.nodes.len()).filter_map(|i| {
                 if self.nodes[i].is_some() {
                     Some(ElementId::new(i + 1))
                 } else {
                     None
                 }
-            }))
+            })
         }
     }
 
     impl TreeNav<ElementId> for TestTree {
-        type ChildrenIter<'a> = Box<dyn Iterator<Item = ElementId> + 'a>;
-        type AncestorsIter<'a> = Ancestors<'a, ElementId, Self>;
-        type DescendantsIter<'a> = DescendantsWithDepth<'a, ElementId, Self>;
-        type SiblingsIter<'a> = Box<dyn Iterator<Item = ElementId> + 'a>;
-
         fn parent(&self, id: ElementId) -> Option<ElementId> {
             self.get(id)?.parent
         }
 
-        fn children(&self, id: ElementId) -> Self::ChildrenIter<'_> {
-            if let Some(node) = self.get(id) {
-                Box::new(node.children.iter().copied())
-            } else {
-                Box::new(std::iter::empty())
-            }
+        fn children(&self, id: ElementId) -> impl Iterator<Item = ElementId> + '_ {
+            self.get(id)
+                .map(|node| node.children.iter().copied())
+                .into_iter()
+                .flatten()
         }
 
-        fn ancestors(&self, start: ElementId) -> Self::AncestorsIter<'_> {
+        fn ancestors(&self, start: ElementId) -> impl Iterator<Item = ElementId> + '_ {
             Ancestors::new(self, start)
         }
 
-        fn descendants(&self, root: ElementId) -> Self::DescendantsIter<'_> {
+        fn descendants(&self, root: ElementId) -> impl Iterator<Item = (ElementId, usize)> + '_ {
             DescendantsWithDepth::new(self, root)
         }
 
-        fn siblings(&self, id: ElementId) -> Self::SiblingsIter<'_> {
-            if let Some(parent_id) = self.parent(id) {
-                Box::new(
-                    self.children(parent_id)
-                        .filter(move |&child_id| child_id != id),
-                )
-            } else {
-                Box::new(std::iter::empty())
-            }
+        fn siblings(&self, id: ElementId) -> impl Iterator<Item = ElementId> + '_ {
+            let parent = self.parent(id);
+            parent
+                .into_iter()
+                .flat_map(move |p| self.children(p).filter(move |&c| c != id))
         }
     }
 

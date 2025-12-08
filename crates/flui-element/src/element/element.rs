@@ -25,7 +25,6 @@ use flui_view::{PendingChildren, ViewLifecycle, ViewMode};
 use flui_rendering::core::{ProtocolId, RenderElement, RenderLifecycle};
 
 use super::{ElementLifecycle, ViewElement};
-use crate::ViewObject;
 
 // ============================================================================
 // LIFECYCLE CONVERSION HELPERS
@@ -350,164 +349,14 @@ impl Element {
         self.with_pending_children(Self::boxed_children(children))
     }
 
-    // ========== View Object Access (DEPRECATED - objects now in ViewTree) ==========
+    // NOTE: View Object and Render Object access methods have been REMOVED.
     //
-    // Note: In the four-tree architecture, ViewObjects are stored in ViewTree, not in ViewElement.
-    // ViewElement only holds a ViewId reference. To access view objects, use ViewTree.get(view_id).
+    // In the four-tree architecture:
+    // - ViewObjects are stored in ViewTree (access via ViewElement::view_id() + ViewTree::get())
+    // - RenderObjects are stored in RenderTree (access via RenderElement::render_id() + RenderTree::get())
+    // - RenderState is stored in RenderTree nodes
     //
-    // These methods are kept for API compatibility but always return None/false.
-
-    /// Returns true if this element has a view object.
-    ///
-    /// **DEPRECATED**: Always returns false. View objects are stored in ViewTree.
-    /// Use `ViewElement::view_id()` to get the ID, then `ViewTree::get(id)` to access the object.
-    #[inline]
-    #[must_use]
-    #[deprecated(
-        note = "View objects are now stored in ViewTree. Use ViewElement::view_id() and ViewTree::get()"
-    )]
-    pub fn has_view_object(&self) -> bool {
-        false // ViewElement no longer stores objects
-    }
-
-    /// Get the view object as a reference.
-    ///
-    /// **DEPRECATED**: Always returns None. View objects are stored in ViewTree.
-    #[inline]
-    #[must_use]
-    #[deprecated(
-        note = "View objects are now stored in ViewTree. Use ViewElement::view_id() and ViewTree::get()"
-    )]
-    pub fn view_object(&self) -> Option<&dyn ViewObject> {
-        None // ViewElement no longer stores objects
-    }
-
-    /// Get the view object as a mutable reference.
-    ///
-    /// **DEPRECATED**: Always returns None. View objects are stored in ViewTree.
-    #[inline]
-    #[must_use]
-    #[deprecated(
-        note = "View objects are now stored in ViewTree. Use ViewElement::view_id() and ViewTree::get_mut()"
-    )]
-    pub fn view_object_mut(&mut self) -> Option<&mut dyn ViewObject> {
-        None // ViewElement no longer stores objects
-    }
-
-    /// Get the view object as Any for downcasting.
-    ///
-    /// **DEPRECATED**: Always returns None. View objects are stored in ViewTree.
-    #[inline]
-    #[must_use]
-    #[deprecated(note = "View objects are now stored in ViewTree")]
-    pub fn view_object_any(&self) -> Option<&dyn Any> {
-        None
-    }
-
-    /// Get the view object as mutable Any for downcasting.
-    ///
-    /// **DEPRECATED**: Always returns None. View objects are stored in ViewTree.
-    #[inline]
-    #[must_use]
-    #[deprecated(note = "View objects are now stored in ViewTree")]
-    pub fn view_object_any_mut(&mut self) -> Option<&mut dyn Any> {
-        None
-    }
-
-    /// Downcast view object to concrete type.
-    ///
-    /// **DEPRECATED**: Always returns None. View objects are stored in ViewTree.
-    #[inline]
-    #[deprecated(note = "View objects are now stored in ViewTree")]
-    pub fn view_object_as<V: Any + Send + Sync + 'static>(&self) -> Option<&V> {
-        None
-    }
-
-    /// Downcast view object to concrete type (mutable).
-    ///
-    /// **DEPRECATED**: Always returns None. View objects are stored in ViewTree.
-    #[inline]
-    #[deprecated(note = "View objects are now stored in ViewTree")]
-    pub fn view_object_as_mut<V: Any + Send + Sync + 'static>(&mut self) -> Option<&mut V> {
-        None
-    }
-
-    /// Take the view object out.
-    ///
-    /// **DEPRECATED**: Always returns None. View objects are stored in ViewTree.
-    #[inline]
-    #[deprecated(note = "View objects are now stored in ViewTree")]
-    pub fn take_view_object(&mut self) -> Option<Box<dyn ViewObject>> {
-        None
-    }
-
-    /// Set a new view object (View variant only).
-    ///
-    /// **DEPRECATED**: No-op. View objects are stored in ViewTree.
-    #[inline]
-    #[deprecated(
-        note = "View objects are now stored in ViewTree. Use ViewTree::insert() or ViewTree::update()"
-    )]
-    pub fn set_view_object<V: ViewObject>(&mut self, _view_object: V) {
-        // No-op - ViewElement no longer stores objects
-    }
-
-    /// Set view object from boxed ViewObject.
-    ///
-    /// **DEPRECATED**: No-op. View objects are stored in ViewTree.
-    #[inline]
-    #[deprecated(
-        note = "View objects are now stored in ViewTree. Use ViewTree::insert() or ViewTree::update()"
-    )]
-    pub fn set_view_object_boxed(&mut self, _view_object: Box<dyn ViewObject>) {
-        // No-op - ViewElement no longer stores objects
-    }
-
-    // ========== Render State Access (for RenderTreeAccess trait) ==========
-
-    /// Returns the render state for this element.
-    ///
-    /// **DEPRECATED**: Always returns None. View objects are in ViewTree, render state in RenderTree.
-    #[inline]
-    #[deprecated(note = "State is now accessed via ViewTree and RenderTree")]
-    pub fn render_state(&self) -> Option<&dyn Any> {
-        None // State access requires tree access
-    }
-
-    /// Returns a mutable reference to the render state.
-    ///
-    /// **DEPRECATED**: Always returns None. View objects are in ViewTree, render state in RenderTree.
-    #[inline]
-    #[deprecated(note = "State is now accessed via ViewTree and RenderTree")]
-    pub fn render_state_mut(&mut self) -> Option<&mut dyn Any> {
-        None // State access requires tree access
-    }
-
-    // ========== Render Object Access (for RenderTreeAccess trait) ==========
-
-    /// Returns the render object for this element.
-    ///
-    /// **DEPRECATED**: Always returns None. Render objects are stored in RenderTree.
-    /// Use `RenderElement::render_id()` to get the ID, then `RenderTree::get(id)` to access the object.
-    #[inline]
-    #[deprecated(
-        note = "Render objects are now stored in RenderTree. Use RenderElement::render_id() and RenderTree::get()"
-    )]
-    pub fn render_object(&self) -> Option<&dyn Any> {
-        None // RenderElement no longer stores objects
-    }
-
-    /// Returns a mutable reference to the render object.
-    ///
-    /// **DEPRECATED**: Always returns None. Render objects are stored in RenderTree.
-    /// Use `RenderElement::render_id()` to get the ID, then `RenderTree::get_mut(id)` to access the object.
-    #[inline]
-    #[deprecated(
-        note = "Render objects are now stored in RenderTree. Use RenderElement::render_id() and RenderTree::get_mut()"
-    )]
-    pub fn render_object_mut(&mut self) -> Option<&mut dyn Any> {
-        None // RenderElement no longer stores objects
-    }
+    // Element only holds ID references to the corresponding trees.
 
     // ========== Lifecycle Delegation ==========
 
@@ -1003,7 +852,7 @@ impl BuildContext for Element {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::BuildContext;
+    use crate::{BuildContext, ViewObject};
 
     // Test view object type
     #[derive(Debug)]
@@ -1029,24 +878,7 @@ mod tests {
         }
     }
 
-    #[derive(Debug)]
-    struct TestRenderObject {
-        value: i32,
-    }
-
-    impl RenderObject for TestRenderObject {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
-        fn as_any_mut(&mut self) -> &mut dyn Any {
-            self
-        }
-
-        fn debug_name(&self) -> &'static str {
-            "TestRenderObject"
-        }
-    }
+    // Note: TestRenderObject removed - render objects are now in RenderTree
 
     #[test]
     fn test_element_view_variant() {
@@ -1057,10 +889,8 @@ mod tests {
         assert!(!element.is_render_element());
         assert!(element.is_component());
         assert!(!element.is_render());
-        #[allow(deprecated)]
-        {
-            assert!(!element.has_view_object()); // Always false - objects in ViewTree
-        }
+        // Note: ViewObjects are now in ViewTree, accessed via view_id()
+        assert!(element.as_view().is_some());
     }
 
     #[test]
@@ -1072,20 +902,16 @@ mod tests {
         assert!(element.is_render_element());
         assert!(!element.is_component());
         assert!(element.is_render());
-        #[allow(deprecated)]
-        {
-            assert!(!element.has_view_object()); // Always false - not a view element
-        }
+        // Note: RenderObjects are now in RenderTree, accessed via render_id()
+        assert!(element.as_render().is_some());
     }
 
     #[test]
     fn test_element_empty() {
         let element = Element::empty();
         assert!(element.is_view_element());
-        #[allow(deprecated)]
-        {
-            assert!(!element.has_view_object()); // Always false - objects in ViewTree
-        }
+        // Note: ViewObjects are now in ViewTree
+        assert!(element.as_view().is_some());
     }
 
     #[test]
@@ -1143,15 +969,12 @@ mod tests {
     fn test_backward_compatibility() {
         // Test that API works with ViewId (None = not in tree yet)
         let element = Element::with_mode(None, ViewMode::Stateless);
-        #[allow(deprecated)]
-        {
-            assert!(!element.has_view_object()); // Always false - objects in ViewTree
-        }
+        // Note: ViewObjects are now in ViewTree
+        assert!(element.as_view().is_some());
+        assert!(element.as_view().unwrap().view_id().is_none()); // No view_id assigned yet
 
         let element2 = Element::new(None);
-        #[allow(deprecated)]
-        {
-            assert!(!element2.has_view_object()); // Always false - objects in ViewTree
-        }
+        assert!(element2.as_view().is_some());
+        assert!(element2.as_view().unwrap().view_id().is_none()); // No view_id assigned yet
     }
 }

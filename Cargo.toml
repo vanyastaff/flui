@@ -4,6 +4,8 @@ members = [
     "crates/flui_types",        # Base types - no dependencies
     "crates/flui-foundation",   # Foundation types and utilities
     "crates/flui-tree",         # Tree abstractions
+    "crates/flui-layer",        # Layer tree for compositor (5-tree architecture)
+    "crates/flui-semantics",    # Semantics tree for accessibility (5-tree architecture)
 
     "crates/flui-element",      # Element tree implementation
     "crates/flui-view",         # View traits and abstractions

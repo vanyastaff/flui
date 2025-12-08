@@ -47,21 +47,17 @@ pub use flui_pipeline::{
     FrameResult,
     LayoutPhase,
     LockFreeDirtySet,
-
     PaintPhase,
     ParallelExecution,
     PhaseContext,
     PhaseResult,
-
     PipelineCoordinator,
     // Errors (canonical location!)
     PipelineError,
     PipelineMetrics,
     PipelinePhase,
     PipelineResult,
-
     RecoveryAction,
-
     RecoveryPolicy,
     // Utilities
     TripleBuffer,
@@ -77,12 +73,16 @@ pub use layout_pipeline::LayoutPipeline;
 pub use paint_pipeline::PaintPipeline;
 pub use parallel_build::{partition_subtrees, rebuild_dirty_parallel, Subtree};
 pub use pipeline_builder::PipelineBuilder;
+pub use pipeline_context::PipelineBuildContext;
 pub use pipeline_features::{HitTestCache, PipelineFeatures};
 pub use pipeline_owner::PipelineOwner;
 pub use pipeline_trait::Pipeline;
 pub use rebuild_queue::RebuildQueue;
 pub use root_manager::RootManager;
 pub use tree_coordinator::TreeCoordinator; // Four-tree architecture coordinator
+
+// Alias for backward compatibility
+pub use pipeline_context::PipelineBuildContext as BuildContext;
 
 // Re-export ElementTree for convenience
 pub use flui_element::ElementTree;

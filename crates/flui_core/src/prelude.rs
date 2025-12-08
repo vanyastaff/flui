@@ -39,7 +39,7 @@ pub use flui_rendering::view::{RenderView, UpdateResult};
 pub use flui_view::BuildContext;
 
 /// Concrete BuildContext implementation
-pub use crate::pipeline::pipeline_context::PipelineBuildContext;
+pub use crate::pipeline::PipelineBuildContext;
 
 /// Trait for converting to elements
 pub use flui_element::IntoElement;
