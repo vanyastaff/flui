@@ -10,13 +10,16 @@ FLUI Foundation provides fundamental building blocks used throughout the FLUI UI
 
 ## Features
 
-- 🔑 **Core Types**: ElementId, Key, Slot for element identification and positioning
-- 📢 **Change Notification**: Observable patterns for reactive UI updates
-- 🐛 **Diagnostics**: Rich debugging and introspection utilities
-- ⚡ **Atomic Utilities**: Lock-free operations for performance-critical code
-- 🔒 **Thread Safety**: All types designed for multi-threaded contexts
-- 📦 **Minimal Dependencies**: Only essential external crates
-- 🚀 **Zero-Cost Abstractions**: Performance-critical paths have no overhead
+- **Tree IDs**: `ViewId`, `ElementId`, `RenderId`, `LayerId`, `SemanticsId` for the 5-tree architecture
+- **Keys**: `Key`, `ValueKey`, `ObjectKey`, `UniqueKey`, `GlobalKey` for widget identity
+- **Change Notification**: Observable patterns for reactive UI updates
+- **Observer Lists**: Efficient `ObserverList`, `SyncObserverList`, `HashedObserverList`
+- **Diagnostics**: Rich debugging and introspection utilities
+- **Error Handling**: Standardized `FoundationError` with context chaining
+- **Callbacks**: Type-safe callback aliases (`VoidCallback`, `ValueChanged`, etc.)
+- **Platform Detection**: `TargetPlatform` for cross-platform code
+- **Thread Safety**: All types designed for multi-threaded contexts
+- **Minimal Dependencies**: Only essential external crates
 
 ## Quick Start
 
@@ -30,192 +33,216 @@ flui-foundation = "0.1"
 Basic usage:
 
 ```rust
-use flui_foundation::prelude::*;
+use flui_foundation::{ElementId, Key, ChangeNotifier, Listenable};
+use std::sync::Arc;
 
 // Create unique identifiers
 let element_id = ElementId::new(1);
 let key = Key::new();
 
 // Observable values for reactive UI
-let mut notifier = ChangeNotifier::new();
-let listener_id = notifier.add_listener(std::sync::Arc::new(|| {
+let notifier = ChangeNotifier::new();
+let listener_id = notifier.add_listener(Arc::new(|| {
     println!("Value changed!");
 }));
 
 // Notify listeners of changes
-notifier.notify();
+notifier.notify_listeners();
 ```
 
 ## Core Types
 
-### Element Identification
+### Tree IDs (5-Tree Architecture)
 
 ```rust
-use flui_foundation::{ElementId, Key, Slot};
+use flui_foundation::{ViewId, ElementId, RenderId, LayerId, SemanticsId};
 
-// Unique element identifier with O(1) operations
-let element_id = ElementId::new(42);
-assert_eq!(element_id.get(), 42);
+// Each tree level has its own ID type
+let view_id = ViewId::new(1);
+let element_id = ElementId::new(1);
+let render_id = RenderId::new(1);
+let layer_id = LayerId::new(1);
+let semantics_id = SemanticsId::new(1);
 
-// Keys for element matching during rebuilds
+// IDs support arithmetic and comparison
+let next = element_id + 1;
+assert!(element_id < next);
+
+// Niche optimization: Option<ElementId> is 8 bytes
+assert_eq!(std::mem::size_of::<Option<ElementId>>(), 8);
+```
+
+### Keys for Widget Identity
+
+```rust
+use flui_foundation::{Key, ValueKey};
+
+// Auto-generated unique keys
 let key1 = Key::new();
 let key2 = Key::new();
 assert_ne!(key1, key2);
 
-// Slots for positioned elements
+// String-based keys (same string = same key)
+let header = Key::from_str("header");
+let header2 = Key::from_str("header");
+assert_eq!(header, header2);
+
+// Value keys for list items
+let item_key = ValueKey::new(42i64);
+```
+
+### Slots for Child Positioning
+
+```rust
+use flui_foundation::Slot;
+
+// Basic slot
 let slot = Slot::new(0);
+assert!(slot.is_first());
+
+// Slot with sibling tracking (for efficient insertion)
+let slot = Slot::with_previous_sibling(2, Some(1));
+assert_eq!(slot.previous_sibling(), Some(1));
+
+// Slot arithmetic
+let next = slot.next();
+let prev = slot.prev();
 ```
 
 ### Change Notification
 
 ```rust
-use flui_foundation::{ChangeNotifier, ValueNotifier};
+use flui_foundation::{ChangeNotifier, ValueNotifier, Listenable};
 use std::sync::Arc;
 
 // Basic change notification
-let mut notifier = ChangeNotifier::new();
-let listener = notifier.add_listener(Arc::new(|| println!("Changed!")));
+let notifier = ChangeNotifier::new();
+let id = notifier.add_listener(Arc::new(|| println!("Changed!")));
+notifier.notify_listeners();
+notifier.remove_listener(id);
 
 // Value-holding notifier
-let mut value_notifier = ValueNotifier::new(42);
-let value_listener = value_notifier.add_listener(Arc::new(|value| {
-    println!("New value: {}", value);
-}));
+let mut value = ValueNotifier::new(42);
+value.add_listener(Arc::new(|| println!("Value updated!")));
 
-// Update value and notify listeners
-value_notifier.set(100);
+value.set_value(100);        // Notifies only if value changed
+value.set_value_force(100);  // Always notifies
+value.update(|v| *v += 1);   // Update with closure
 ```
 
-### Atomic Flags
+### Observer Lists
 
 ```rust
-use flui_foundation::{AtomicElementFlags, ElementFlags};
+use flui_foundation::{ObserverList, SyncObserverList, HashedObserverList};
 
-// Thread-safe element state flags
-let flags = AtomicElementFlags::new();
+// Basic observer list (not thread-safe)
+let mut observers: ObserverList<i32> = ObserverList::new();
+let id = observers.add(42);
+observers.remove(id);
 
-// Set flags atomically
-flags.insert(ElementFlags::DIRTY);
-flags.insert(ElementFlags::NEEDS_LAYOUT);
+// Thread-safe observer list
+let sync_observers: SyncObserverList<i32> = SyncObserverList::new();
+sync_observers.add(42);
+sync_observers.for_each(|v| println!("{}", v));
 
-// Check flags
-assert!(flags.contains(ElementFlags::DIRTY));
-
-// Clear flags
-flags.remove(ElementFlags::DIRTY);
+// Hash-based for O(1) operations on large collections
+let hashed: HashedObserverList<String> = HashedObserverList::new();
+let id = hashed.add("observer".to_string());
+hashed.remove(id);
 ```
 
 ### Diagnostics
 
 ```rust
-use flui_foundation::{DiagnosticsNode, DiagnosticsTreeStyle};
+use flui_foundation::{DiagnosticsNode, DiagnosticsProperty, DiagnosticLevel};
 
-// Create diagnostic information
-let node = DiagnosticsNode::new("MyWidget")
-    .with_property("width", 100.0)
-    .with_property("height", 200.0)
-    .with_child(
+// Build diagnostic tree
+let tree = DiagnosticsNode::new("MyWidget")
+    .property("width", 100)
+    .property("height", 50)
+    .child(
         DiagnosticsNode::new("Child")
-            .with_property("text", "Hello World")
+            .property("text", "Hello")
     );
 
-// Print diagnostic tree
-println!("{}", node.to_string_deep(DiagnosticsTreeStyle::Sparse));
+println!("{}", tree);
+
+// Custom diagnosticable
+use flui_foundation::{Diagnosticable, DiagnosticsBuilder};
+
+#[derive(Debug)]
+struct MyWidget { width: f32 }
+
+impl Diagnosticable for MyWidget {
+    fn debug_fill_properties(&self, props: &mut Vec<DiagnosticsProperty>) {
+        props.push(DiagnosticsProperty::new("width", self.width));
+    }
+}
+```
+
+### Error Handling
+
+```rust
+use flui_foundation::{FoundationError, Result, error::ErrorContext};
+
+fn example() -> Result<i32> {
+    // Create specific errors
+    Err(FoundationError::invalid_id(0, "ID cannot be zero"))
+}
+
+fn with_context() -> Result<i32> {
+    example().with_context("in with_context function")
+}
+
+// Check error properties
+let err = FoundationError::listener_error("add", "limit reached");
+assert!(err.is_recoverable());
+assert_eq!(err.category(), "listener");
+```
+
+### Platform Detection
+
+```rust
+use flui_foundation::TargetPlatform;
+
+let platform = TargetPlatform::current();
+
+if platform.is_desktop() {
+    println!("Running on desktop: {}", platform.as_str());
+} else if platform.is_mobile() {
+    println!("Running on mobile");
+} else if platform.is_web() {
+    println!("Running in browser");
+}
 ```
 
 ## Feature Flags
 
 - `serde`: Enables serialization support for foundation types
-- `async`: Enables async utilities and notification patterns  
 - `full`: Enables all optional features
-
-### Serialization Support
-
-Enable the `serde` feature for serialization:
 
 ```toml
 [dependencies]
 flui-foundation = { version = "0.1", features = ["serde"] }
 ```
 
-```rust
-use flui_foundation::{ElementId, serde_support::*};
+## Examples
 
-// Serialize to JSON
-let element_id = ElementId::new(42);
-let json = to_json_string(&element_id).unwrap();
-assert_eq!(json, "42");
+Run the examples to see the types in action:
 
-// Deserialize from JSON
-let recovered: ElementId = from_json_string(&json).unwrap();
-assert_eq!(recovered.get(), 42);
+```bash
+# Basic ID usage
+cargo run -p flui-foundation --example basic_ids
 
-// Binary serialization
-let binary = to_binary(&element_id).unwrap();
-let recovered: ElementId = from_binary(&binary).unwrap();
+# Change notification patterns
+cargo run -p flui-foundation --example change_notification
+
+# Diagnostics and debugging
+cargo run -p flui-foundation --example diagnostics
+
+# Observer pattern implementations
+cargo run -p flui-foundation --example observer_pattern
 ```
-
-### Async Support
-
-Enable the `async` feature for async utilities:
-
-```toml
-[dependencies]
-flui-foundation = { version = "0.1", features = ["async"] }
-```
-
-```rust
-use flui_foundation::{AsyncChangeNotifier, AsyncValueNotifier};
-use tokio::time::Duration;
-
-#[tokio::main]
-async fn main() {
-    // Async change notification
-    let notifier = AsyncChangeNotifier::new();
-    let mut receiver = notifier.subscribe();
-    
-    // Notify asynchronously
-    notifier.notify().await;
-    
-    // Wait for changes with timeout
-    let result = notifier.wait_for_change(Duration::from_millis(100)).await;
-    
-    // Async value notifier
-    let value_notifier = AsyncValueNotifier::new(0);
-    value_notifier.set(42).await;
-    
-    let mut value_receiver = value_notifier.subscribe();
-    value_receiver.changed().await.unwrap();
-    assert_eq!(*value_receiver.borrow(), 42);
-}
-```
-
-## Design Principles
-
-1. **Minimal Dependencies**: Only essential external crates to reduce dependency tree
-2. **Zero-Cost Abstractions**: Performance-critical paths have no runtime overhead  
-3. **Thread Safety**: All types work correctly in multi-threaded environments
-4. **Composability**: Types work well together and with external code
-5. **Stability**: Strong backwards compatibility guarantees
-
-## Performance
-
-Foundation types are optimized for common UI patterns:
-
-- **ElementId**: Uses `NonZeroUsize` for niche optimization - `Option<ElementId>` is 8 bytes
-- **Key**: Atomic counter generation for O(1) creation with collision resistance
-- **AtomicElementFlags**: Lock-free atomic operations for high-performance state tracking
-- **ChangeNotifier**: Efficient listener storage with minimal allocation overhead
-
-## Thread Safety
-
-All foundation types are designed for multi-threaded use:
-
-- **ElementId**: `Send + Sync` (copy type, no shared state)
-- **Key**: `Send + Sync` (copy type, atomic generation)  
-- **ChangeNotifier**: `Send + Sync` with internal synchronization via `Arc`
-- **AtomicElementFlags**: Lock-free atomic operations safe across threads
-- **Diagnostics**: Immutable data structures safe to share
 
 ## Architecture
 
@@ -229,26 +256,32 @@ Foundation sits at the base of the FLUI architecture:
 ├─────────────────┤
 │   flui_core     │  ← Core framework
 ├─────────────────┤
-│ flui-foundation │  ← **Foundation types** (this crate)
+│ flui-foundation │  ← Foundation types (this crate)
 ├─────────────────┤
 │  flui_types     │  ← Basic geometry and math
 └─────────────────┘
 ```
 
-## Examples
+## Performance
 
-See the `examples/` directory for complete examples:
+Foundation types are optimized for common UI patterns:
 
-- **Basic Usage**: Core types and operations
-- **Reactive Programming**: Change notification patterns
-- **Diagnostics**: Debug tree construction and formatting
-- **Async Integration**: Using async features with tokio
+- **IDs**: Use `NonZeroUsize` for niche optimization (`Option<ElementId>` = 8 bytes)
+- **Keys**: Atomic counter for O(1) generation, FNV-1a hash for string keys
+- **Observer Lists**: O(1) add/remove with slot reuse, optional compaction
+- **Change Notifiers**: Efficient listener storage with `parking_lot` locks
 
-## Contributing
+## Thread Safety
 
-We welcome contributions! Please see [CONTRIBUTING.md](../../CONTRIBUTING.md) for guidelines.
+All foundation types are designed for multi-threaded use:
 
-### Development
+- **IDs**: `Send + Sync` (Copy types)
+- **Keys**: `Send + Sync` (Copy types with atomic generation)
+- **ChangeNotifier**: `Send + Sync` with `parking_lot::Mutex`
+- **SyncObserverList**: Thread-safe with `RwLock`
+- **HashedObserverList**: Lock-free with `DashMap`
+
+## Development
 
 ```bash
 # Run tests
@@ -257,11 +290,11 @@ cargo test -p flui-foundation
 # Run tests with all features
 cargo test -p flui-foundation --all-features
 
+# Run clippy with pedantic lints
+cargo clippy -p flui-foundation -- -W clippy::pedantic
+
 # Check documentation
 cargo doc -p flui-foundation --open
-
-# Run benchmarks
-cargo bench -p flui-foundation
 ```
 
 ## License
@@ -276,10 +309,8 @@ at your option.
 ## Related Crates
 
 - [`flui-types`](../flui_types): Basic geometry and mathematical types
-- [`flui-core`](../flui_core): Core FLUI framework with element tree and rendering
-- [`flui-widgets`](../flui_widgets): Widget library built on FLUI
-- [`flui-app`](../flui_app): Application framework for building FLUI apps
-
----
-
-**FLUI Foundation** - Building the foundation for fast, reliable UI frameworks in Rust.
+- [`flui-tree`](../flui-tree): Tree abstractions and visitor patterns
+- [`flui-view`](../flui-view): View traits and abstractions
+- [`flui-core`](../flui_core): Core FLUI framework
+- [`flui-widgets`](../flui_widgets): Widget library
+- [`flui-app`](../flui_app): Application framework

@@ -1,41 +1,39 @@
 [package]
 name = "flui-foundation"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
 description = "Foundation types and utilities for FLUI framework"
-license = "MIT OR Apache-2.0"
-repository = "https://github.com/flui-org/flui"
 documentation = "https://docs.rs/flui-foundation"
+readme = "README.md"
 keywords = ["ui", "gui", "foundation", "flui"]
 categories = ["gui", "data-structures"]
-authors = ["FLUI Contributors"]
+
+[lints]
+workspace = true
 
 [dependencies]
-# Core dependencies for foundation types
-parking_lot = { workspace = true }
-dashmap = { workspace = true }
-serde = { workspace = true, optional = true }
-serde_json = { workspace = true, optional = true }
-
-# Utility dependencies
 bitflags = { workspace = true }
+dashmap = { workspace = true }
+parking_lot = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+
+# Optional dependencies
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
 
 [features]
 default = []
-
-# Serialization support for foundation types
-serde = ["dep:serde", "dep:serde_json"]
-
-# Profile mode for performance profiling (enables K_PROFILE_MODE constant)
-profile = []
-
-# All features for comprehensive testing
 full = ["serde"]
+profile = []
+serde = ["dep:serde", "dep:serde_json"]
 
 [package.metadata.docs.rs]
 all-features = true
