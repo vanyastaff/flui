@@ -289,7 +289,6 @@ impl Default for SemanticsTree {
 
 impl TreeRead<SemanticsId> for SemanticsTree {
     type Node = SemanticsNode;
-    type NodeIter<'a> = SemanticsIdIter<'a>;
 
     const DEFAULT_CAPACITY: usize = 64;
     const INLINE_THRESHOLD: usize = 16;
@@ -310,8 +309,10 @@ impl TreeRead<SemanticsId> for SemanticsTree {
     }
 
     #[inline]
-    fn node_ids(&self) -> Self::NodeIter<'_> {
-        SemanticsIdIter::new(self)
+    fn node_ids(&self) -> impl Iterator<Item = SemanticsId> + '_ {
+        self.nodes
+            .iter()
+            .map(|(index, _)| SemanticsId::new(index + 1))
     }
 }
 
@@ -320,11 +321,6 @@ impl TreeRead<SemanticsId> for SemanticsTree {
 // ============================================================================
 
 impl TreeNav<SemanticsId> for SemanticsTree {
-    type ChildrenIter<'a> = ChildrenIter<'a>;
-    type AncestorsIter<'a> = Ancestors<'a, SemanticsId, Self>;
-    type DescendantsIter<'a> = DescendantsWithDepth<'a, SemanticsId, Self>;
-    type SiblingsIter<'a> = SiblingsIter<'a>;
-
     const MAX_DEPTH: usize = 64; // Accessibility trees can be deeper than layer trees
     const AVG_CHILDREN: usize = 4;
 
@@ -334,23 +330,33 @@ impl TreeNav<SemanticsId> for SemanticsTree {
     }
 
     #[inline]
-    fn children(&self, id: SemanticsId) -> Self::ChildrenIter<'_> {
-        ChildrenIter::new(self, id)
+    fn children(&self, id: SemanticsId) -> impl Iterator<Item = SemanticsId> + '_ {
+        self.get(id)
+            .map(|node| node.children().iter().copied())
+            .into_iter()
+            .flatten()
     }
 
     #[inline]
-    fn ancestors(&self, start: SemanticsId) -> Self::AncestorsIter<'_> {
+    fn ancestors(&self, start: SemanticsId) -> impl Iterator<Item = SemanticsId> + '_ {
         Ancestors::new(self, start)
     }
 
     #[inline]
-    fn descendants(&self, root: SemanticsId) -> Self::DescendantsIter<'_> {
+    fn descendants(&self, root: SemanticsId) -> impl Iterator<Item = (SemanticsId, usize)> + '_ {
         DescendantsWithDepth::new(self, root)
     }
 
     #[inline]
-    fn siblings(&self, id: SemanticsId) -> Self::SiblingsIter<'_> {
-        SiblingsIter::new(self, id)
+    fn siblings(&self, id: SemanticsId) -> impl Iterator<Item = SemanticsId> + '_ {
+        let parent = self.parent(id);
+        parent.into_iter().flat_map(move |p| {
+            self.get(p)
+                .map(|node| node.children().iter().copied())
+                .into_iter()
+                .flatten()
+                .filter(move |&c| c != id)
+        })
     }
 
     #[inline]
@@ -363,116 +369,6 @@ impl TreeNav<SemanticsId> for SemanticsTree {
         self.get(id)
             .map(|node| !node.children().is_empty())
             .unwrap_or(false)
-    }
-}
-
-// ============================================================================
-// CUSTOM ITERATORS
-// ============================================================================
-
-/// Iterator over all SemanticsIds in the tree.
-pub struct SemanticsIdIter<'a> {
-    inner: slab::Iter<'a, SemanticsNode>,
-}
-
-impl<'a> SemanticsIdIter<'a> {
-    fn new(tree: &'a SemanticsTree) -> Self {
-        Self {
-            inner: tree.slab().iter(),
-        }
-    }
-}
-
-impl<'a> Iterator for SemanticsIdIter<'a> {
-    type Item = SemanticsId;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.inner
-            .next()
-            .map(|(index, _)| SemanticsId::new(index + 1))
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        self.inner.size_hint()
-    }
-}
-
-impl ExactSizeIterator for SemanticsIdIter<'_> {}
-
-/// Iterator over children of a semantics node.
-pub struct ChildrenIter<'a> {
-    children: Option<&'a [SemanticsId]>,
-    index: usize,
-}
-
-impl<'a> ChildrenIter<'a> {
-    fn new(tree: &'a SemanticsTree, id: SemanticsId) -> Self {
-        Self {
-            children: tree.children(id),
-            index: 0,
-        }
-    }
-}
-
-impl<'a> Iterator for ChildrenIter<'a> {
-    type Item = SemanticsId;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let children = self.children?;
-        if self.index < children.len() {
-            let id = children[self.index];
-            self.index += 1;
-            Some(id)
-        } else {
-            None
-        }
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let remaining = self
-            .children
-            .map(|c| c.len().saturating_sub(self.index))
-            .unwrap_or(0);
-        (remaining, Some(remaining))
-    }
-}
-
-impl ExactSizeIterator for ChildrenIter<'_> {}
-
-/// Iterator over siblings of a semantics node.
-pub struct SiblingsIter<'a> {
-    children: Option<&'a [SemanticsId]>,
-    index: usize,
-    exclude_id: SemanticsId,
-}
-
-impl<'a> SiblingsIter<'a> {
-    fn new(tree: &'a SemanticsTree, id: SemanticsId) -> Self {
-        let children = tree
-            .parent(id)
-            .and_then(|parent_id| tree.children(parent_id));
-
-        Self {
-            children,
-            index: 0,
-            exclude_id: id,
-        }
-    }
-}
-
-impl<'a> Iterator for SiblingsIter<'a> {
-    type Item = SemanticsId;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let children = self.children?;
-        while self.index < children.len() {
-            let id = children[self.index];
-            self.index += 1;
-            if id != self.exclude_id {
-                return Some(id);
-            }
-        }
-        None
     }
 }
 

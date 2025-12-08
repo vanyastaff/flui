@@ -723,22 +723,12 @@ impl PipelineOwner {
         };
 
         // Get render state if this is a render element
-        // Note: Element::render_state() is currently a stub returning None.
-        // Full hit testing through element tree will be enabled when RenderState
-        // is properly accessible via ViewObject. For now, we use bounds from
-        // HitRegion in CanvasLayer (registered during paint phase).
-        let (size, offset) = if let Some(render_state_any) = element.render_state() {
-            // Try to downcast to RenderState
-            if let Some(rs) =
-                render_state_any.downcast_ref::<flui_rendering::core::BoxRenderState>()
-            {
-                (rs.size(), rs.offset())
-            } else {
-                (flui_types::Size::ZERO, flui_types::Offset::ZERO)
-            }
-        } else {
-            (flui_types::Size::ZERO, flui_types::Offset::ZERO)
-        };
+        // NOTE: In the four-tree architecture, render state is stored in RenderTree,
+        // not in Element. Element only holds render_id reference.
+        // Full hit testing through element tree will be enabled when RenderTree
+        // integration is complete. For now, we use bounds from HitRegion in
+        // CanvasLayer (registered during paint phase).
+        let (size, offset) = (flui_types::Size::ZERO, flui_types::Offset::ZERO);
 
         // Transform position to local coordinates
         let local_position =

@@ -24,59 +24,11 @@ use super::ElementTree;
 use crate::Element;
 
 // ============================================================================
-// Iterator Wrappers
-// ============================================================================
-
-/// Zero-cost wrapper for node ID iterator.
-///
-/// Wraps the internal Slab iterator without exposing private types.
-/// Performance: Same as direct iteration, no overhead.
-#[derive(Debug)]
-pub struct NodeIdIter<'a> {
-    inner: slab::Iter<'a, super::element_tree::ElementNode>,
-}
-
-impl<'a> NodeIdIter<'a> {
-    fn new(iter: slab::Iter<'a, super::element_tree::ElementNode>) -> Self {
-        Self { inner: iter }
-    }
-}
-
-impl Iterator for NodeIdIter<'_> {
-    type Item = ElementId;
-
-    #[inline]
-    fn next(&mut self) -> Option<Self::Item> {
-        self.inner.next().map(|(idx, _)| ElementId::new(idx + 1))
-    }
-
-    #[inline]
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        self.inner.size_hint()
-    }
-}
-
-impl ExactSizeIterator for NodeIdIter<'_> {
-    #[inline]
-    fn len(&self) -> usize {
-        self.inner.len()
-    }
-}
-
-// ============================================================================
 // TreeRead Implementation
 // ============================================================================
 
 impl TreeRead<ElementId> for ElementTree {
     type Node = Element;
-
-    /// Zero-cost iterator over element IDs using GAT.
-    ///
-    /// Maps Slab indices (0-based) to ElementIds (1-based) without heap allocation.
-    type NodeIter<'a>
-        = NodeIdIter<'a>
-    where
-        Self: 'a;
 
     /// Returns a reference to the element with the given ID.
     ///
@@ -101,9 +53,9 @@ impl TreeRead<ElementId> for ElementTree {
 
     /// Returns zero-cost iterator over all element IDs.
     ///
-    /// Performance: Wrapper around Slab iterator, no heap allocation.
-    fn node_ids(&self) -> Self::NodeIter<'_> {
-        NodeIdIter::new(self.nodes.iter())
+    /// Performance: Uses RPITIT, maps Slab indices to ElementIds without heap allocation.
+    fn node_ids(&self) -> impl Iterator<Item = ElementId> + '_ {
+        self.nodes.iter().map(|(idx, _)| ElementId::new(idx + 1))
     }
 }
 
@@ -112,35 +64,6 @@ impl TreeRead<ElementId> for ElementTree {
 // ============================================================================
 
 impl TreeNav<ElementId> for ElementTree {
-    /// Zero-cost iterator over children using GAT.
-    ///
-    /// Uses Flatten + Option to avoid heap allocation while supporting empty case.
-    type ChildrenIter<'a>
-        = std::iter::Flatten<
-        std::option::IntoIter<std::iter::Copied<std::slice::Iter<'a, ElementId>>>,
-    >
-    where
-        Self: 'a;
-
-    type AncestorsIter<'a>
-        = AncestorIter<'a>
-    where
-        Self: 'a;
-
-    type DescendantsIter<'a>
-        = DescendantsIter<'a>
-    where
-        Self: 'a;
-
-    /// Siblings iterator.
-    ///
-    /// Note: Uses Box for now due to complex Filter type. Siblings are accessed
-    /// less frequently than children, so the allocation overhead is acceptable.
-    type SiblingsIter<'a>
-        = Box<dyn Iterator<Item = ElementId> + 'a>
-    where
-        Self: 'a;
-
     /// Returns the parent of the given element.
     #[inline]
     fn parent(&self, id: ElementId) -> Option<ElementId> {
@@ -149,11 +72,9 @@ impl TreeNav<ElementId> for ElementTree {
 
     /// Returns zero-cost iterator over children of the given element.
     ///
-    /// Performance: Uses Flatten + Option pattern to avoid Box allocation.
-    /// The iterator is stack-allocated and has the same performance as direct
-    /// iteration over Vec<ElementId>.
+    /// Performance: Uses RPITIT with Flatten + Option pattern to avoid Box allocation.
     #[inline]
-    fn children(&self, id: ElementId) -> Self::ChildrenIter<'_> {
+    fn children(&self, id: ElementId) -> impl Iterator<Item = ElementId> + '_ {
         self.get(id)
             .map(|e| e.children().iter().copied())
             .into_iter()
@@ -161,7 +82,7 @@ impl TreeNav<ElementId> for ElementTree {
     }
 
     /// Returns an iterator over ancestors of the given element.
-    fn ancestors(&self, start: ElementId) -> Self::AncestorsIter<'_> {
+    fn ancestors(&self, start: ElementId) -> impl Iterator<Item = ElementId> + '_ {
         AncestorIter {
             tree: self,
             current: Some(start),
@@ -169,24 +90,16 @@ impl TreeNav<ElementId> for ElementTree {
     }
 
     /// Returns an iterator over descendants of the given element.
-    fn descendants(&self, root: ElementId) -> Self::DescendantsIter<'_> {
+    fn descendants(&self, root: ElementId) -> impl Iterator<Item = (ElementId, usize)> + '_ {
         DescendantsIter::new(self, root)
     }
 
     /// Returns an iterator over siblings of the given element.
-    fn siblings(&self, id: ElementId) -> Self::SiblingsIter<'_> {
+    fn siblings(&self, id: ElementId) -> impl Iterator<Item = ElementId> + '_ {
         let parent = self.parent(id);
-        Box::new(
-            parent
-                .map(|p| {
-                    self.get(p)
-                        .map(|e| e.children().iter().copied().filter(move |&c| c != id))
-                        .into_iter()
-                        .flatten()
-                })
-                .into_iter()
-                .flatten(),
-        )
+        parent
+            .into_iter()
+            .flat_map(move |p| self.children(p).iter().copied().filter(move |&c| c != id))
     }
 
     /// Returns the slot of the given element within its parent.
@@ -407,34 +320,42 @@ impl TreeWriteNav<ElementId> for ElementTree {
 impl flui_rendering::core::RenderTreeAccess for ElementTree {
     /// Returns the render object for an element.
     ///
-    /// Delegates to Element::render_object(), which:
-    /// - For View elements: returns ViewObject's render object (if it's a render view)
-    /// - For Render elements: returns the RenderElement's RenderObject directly
+    /// NOTE: In the four-tree architecture, render objects are stored in RenderTree,
+    /// not in Element. This method returns None. Use RenderTree::get(render_id) instead.
     #[inline]
-    fn render_object(&self, id: ElementId) -> Option<&dyn std::any::Any> {
-        self.get(id)?.render_object()
+    fn render_object(&self, _id: ElementId) -> Option<&dyn std::any::Any> {
+        // Render objects are now in RenderTree, accessed via element.as_render().render_id()
+        None
     }
 
     /// Returns a mutable render object.
     ///
-    /// Delegates to Element::render_object_mut(), which:
-    /// - For View elements: returns ViewObject's render object (if it's a render view)
-    /// - For Render elements: returns the RenderElement's RenderObject directly
+    /// NOTE: In the four-tree architecture, render objects are stored in RenderTree,
+    /// not in Element. This method returns None. Use RenderTree::get_mut(render_id) instead.
     #[inline]
-    fn render_object_mut(&mut self, id: ElementId) -> Option<&mut dyn std::any::Any> {
-        self.get_mut(id)?.render_object_mut()
+    fn render_object_mut(&mut self, _id: ElementId) -> Option<&mut dyn std::any::Any> {
+        // Render objects are now in RenderTree, accessed via element.as_render().render_id()
+        None
     }
 
-    /// Returns the render state for an element (delegates to Element::render_state).
+    /// Returns the render state for an element.
+    ///
+    /// NOTE: In the four-tree architecture, render state is stored in RenderTree nodes,
+    /// not in Element. This method returns None. Use RenderTree to access state.
     #[inline]
-    fn render_state(&self, id: ElementId) -> Option<&dyn std::any::Any> {
-        self.get(id)?.render_state()
+    fn render_state(&self, _id: ElementId) -> Option<&dyn std::any::Any> {
+        // Render state is now in RenderTree
+        None
     }
 
-    /// Returns a mutable render state (delegates to Element::render_state_mut).
+    /// Returns a mutable render state.
+    ///
+    /// NOTE: In the four-tree architecture, render state is stored in RenderTree nodes,
+    /// not in Element. This method returns None. Use RenderTree to access state.
     #[inline]
-    fn render_state_mut(&mut self, id: ElementId) -> Option<&mut dyn std::any::Any> {
-        self.get_mut(id)?.render_state_mut()
+    fn render_state_mut(&mut self, _id: ElementId) -> Option<&mut dyn std::any::Any> {
+        // Render state is now in RenderTree
+        None
     }
 
     /// Returns true if the element is a render element.

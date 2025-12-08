@@ -15,7 +15,6 @@ use super::layer_tree::{LayerNode, LayerTree};
 
 impl TreeRead<LayerId> for LayerTree {
     type Node = LayerNode;
-    type NodeIter<'a> = LayerIdIter<'a>;
 
     const DEFAULT_CAPACITY: usize = 64;
     const INLINE_THRESHOLD: usize = 16;
@@ -36,7 +35,7 @@ impl TreeRead<LayerId> for LayerTree {
     }
 
     #[inline]
-    fn node_ids(&self) -> Self::NodeIter<'_> {
+    fn node_ids(&self) -> impl Iterator<Item = LayerId> + '_ {
         self.iter_slab().map(slab_index_to_layer_id)
     }
 }
@@ -46,11 +45,6 @@ impl TreeRead<LayerId> for LayerTree {
 // ============================================================================
 
 impl TreeNav<LayerId> for LayerTree {
-    type ChildrenIter<'a> = ChildrenIter<'a>;
-    type AncestorsIter<'a> = Ancestors<'a, LayerId, Self>;
-    type DescendantsIter<'a> = DescendantsWithDepth<'a, LayerId, Self>;
-    type SiblingsIter<'a> = AllSiblings<'a, LayerId, Self>;
-
     const MAX_DEPTH: usize = 32;
     const AVG_CHILDREN: usize = 4;
 
@@ -60,22 +54,25 @@ impl TreeNav<LayerId> for LayerTree {
     }
 
     #[inline]
-    fn children(&self, id: LayerId) -> Self::ChildrenIter<'_> {
-        ChildrenIter::new(self, id)
+    fn children(&self, id: LayerId) -> impl Iterator<Item = LayerId> + '_ {
+        self.get(id)
+            .map(|node| node.children().iter().copied())
+            .into_iter()
+            .flatten()
     }
 
     #[inline]
-    fn ancestors(&self, start: LayerId) -> Self::AncestorsIter<'_> {
+    fn ancestors(&self, start: LayerId) -> impl Iterator<Item = LayerId> + '_ {
         Ancestors::new(self, start)
     }
 
     #[inline]
-    fn descendants(&self, root: LayerId) -> Self::DescendantsIter<'_> {
+    fn descendants(&self, root: LayerId) -> impl Iterator<Item = (LayerId, usize)> + '_ {
         DescendantsWithDepth::new(self, root)
     }
 
     #[inline]
-    fn siblings(&self, id: LayerId) -> Self::SiblingsIter<'_> {
+    fn siblings(&self, id: LayerId) -> impl Iterator<Item = LayerId> + '_ {
         AllSiblings::new(self, id)
     }
 
@@ -93,60 +90,14 @@ impl TreeNav<LayerId> for LayerTree {
 }
 
 // ============================================================================
-// TYPE ALIASES FOR ITERATORS
+// HELPER FUNCTIONS
 // ============================================================================
 
-/// Zero-cost iterator over all LayerIds in the tree.
-///
-/// Uses `fn` pointer instead of closure for named type.
-pub type LayerIdIter<'a> =
-    std::iter::Map<slab::Iter<'a, LayerNode>, fn((usize, &LayerNode)) -> LayerId>;
-
-/// Converts slab index to LayerId (fn pointer for type alias).
+/// Converts slab index to LayerId.
 #[inline]
 fn slab_index_to_layer_id((index, _): (usize, &LayerNode)) -> LayerId {
     LayerId::new(index + 1)
 }
-
-/// Iterator over children of a layer node.
-pub struct ChildrenIter<'a> {
-    children: Option<&'a [LayerId]>,
-    index: usize,
-}
-
-impl<'a> ChildrenIter<'a> {
-    fn new(tree: &'a LayerTree, id: LayerId) -> Self {
-        Self {
-            children: tree.children(id),
-            index: 0,
-        }
-    }
-}
-
-impl<'a> Iterator for ChildrenIter<'a> {
-    type Item = LayerId;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let children = self.children?;
-        if self.index < children.len() {
-            let id = children[self.index];
-            self.index += 1;
-            Some(id)
-        } else {
-            None
-        }
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let remaining = self
-            .children
-            .map(|c| c.len().saturating_sub(self.index))
-            .unwrap_or(0);
-        (remaining, Some(remaining))
-    }
-}
-
-impl ExactSizeIterator for ChildrenIter<'_> {}
 
 // ============================================================================
 // TESTS

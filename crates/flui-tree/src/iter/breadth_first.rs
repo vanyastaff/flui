@@ -153,7 +153,6 @@ mod tests {
         nodes: Vec<Option<TestNode>>,
     }
 
-
     impl TestTree {
         fn new() -> Self {
             Self { nodes: Vec::new() }
@@ -178,7 +177,6 @@ mod tests {
 
     impl TreeRead<ElementId> for TestTree {
         type Node = TestNode;
-        type NodeIter<'a> = Box<dyn Iterator<Item = ElementId> + 'a>;
 
         fn get(&self, id: ElementId) -> Option<&TestNode> {
             self.nodes.get(id.get() - 1)?.as_ref()
@@ -188,52 +186,42 @@ mod tests {
             self.nodes.iter().filter(|n| n.is_some()).count()
         }
 
-        fn node_ids(&self) -> Self::NodeIter<'_> {
-            Box::new((0..self.nodes.len()).filter_map(|i| {
+        fn node_ids(&self) -> impl Iterator<Item = ElementId> + '_ {
+            (0..self.nodes.len()).filter_map(|i| {
                 if self.nodes[i].is_some() {
                     Some(ElementId::new(i + 1))
                 } else {
                     None
                 }
-            }))
+            })
         }
     }
 
     impl TreeNav<ElementId> for TestTree {
-        type ChildrenIter<'a> = Box<dyn Iterator<Item = ElementId> + 'a>;
-        type AncestorsIter<'a> = Ancestors<'a, ElementId, Self>;
-        type DescendantsIter<'a> = DescendantsWithDepth<'a, ElementId, Self>;
-        type SiblingsIter<'a> = Box<dyn Iterator<Item = ElementId> + 'a>;
-
         fn parent(&self, id: ElementId) -> Option<ElementId> {
             self.get(id)?.parent
         }
 
-        fn children(&self, id: ElementId) -> Self::ChildrenIter<'_> {
-            if let Some(node) = self.get(id) {
-                Box::new(node.children.iter().copied())
-            } else {
-                Box::new(std::iter::empty())
-            }
+        fn children(&self, id: ElementId) -> impl Iterator<Item = ElementId> + '_ {
+            self.get(id)
+                .map(|node| node.children.iter().copied())
+                .into_iter()
+                .flatten()
         }
 
-        fn ancestors(&self, start: ElementId) -> Self::AncestorsIter<'_> {
+        fn ancestors(&self, start: ElementId) -> impl Iterator<Item = ElementId> + '_ {
             Ancestors::new(self, start)
         }
 
-        fn descendants(&self, root: ElementId) -> Self::DescendantsIter<'_> {
+        fn descendants(&self, root: ElementId) -> impl Iterator<Item = (ElementId, usize)> + '_ {
             DescendantsWithDepth::new(self, root)
         }
 
-        fn siblings(&self, id: ElementId) -> Self::SiblingsIter<'_> {
-            if let Some(parent_id) = self.parent(id) {
-                Box::new(
-                    self.children(parent_id)
-                        .filter(move |&child_id| child_id != id),
-                )
-            } else {
-                Box::new(std::iter::empty())
-            }
+        fn siblings(&self, id: ElementId) -> impl Iterator<Item = ElementId> + '_ {
+            let parent_id = self.parent(id);
+            parent_id
+                .into_iter()
+                .flat_map(move |pid| self.children(pid).filter(move |&cid| cid != id))
         }
     }
 

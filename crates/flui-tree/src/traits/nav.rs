@@ -6,12 +6,12 @@
 use flui_foundation::{Identifier, Slot};
 use std::marker::PhantomData;
 
-/// Tree navigation with Generic Associated Types and HRTB support.
+/// Tree navigation with RPITIT and HRTB support.
 ///
 /// This trait provides navigation capabilities (parent, children, ancestors)
 /// using advanced Rust type system features:
 ///
-/// - **GAT (Generic Associated Types)** for flexible iterators
+/// - **RPITIT (Return Position Impl Trait In Traits)** for zero-cost iterators
 /// - **HRTB (Higher-Rank Trait Bounds)** for universal predicates
 /// - **Associated Constants** for performance tuning
 /// - **Sealed trait** for safety
@@ -31,32 +31,6 @@ use std::marker::PhantomData;
 /// Navigation operations should be O(1) for parent/children access.
 /// Iterator operations use associated constants for optimal memory usage.
 pub trait TreeNav<I: Identifier>: super::TreeRead<I> {
-    /// Iterator type for children with GAT.
-    ///
-    /// This GAT allows implementations to return optimized iterator types
-    /// while maintaining lifetime safety and zero-cost abstractions.
-    type ChildrenIter<'a>: Iterator<Item = I> + 'a
-    where
-        Self: 'a;
-
-    /// Iterator type for ancestors with GAT.
-    ///
-    /// Enables different implementation strategies (recursive, iterative,
-    /// stack-based) while maintaining a consistent interface.
-    type AncestorsIter<'a>: Iterator<Item = I> + 'a
-    where
-        Self: 'a;
-
-    /// Iterator type for descendants with depth information.
-    type DescendantsIter<'a>: Iterator<Item = (I, usize)> + 'a
-    where
-        Self: 'a;
-
-    /// Iterator type for siblings.
-    type SiblingsIter<'a>: Iterator<Item = I> + 'a
-    where
-        Self: 'a;
-
     /// Maximum expected tree depth for stack allocation optimization.
     ///
     /// Iterators can use this to size internal buffers appropriately.
@@ -99,13 +73,13 @@ pub trait TreeNav<I: Identifier>: super::TreeRead<I> {
     ///
     /// An iterator yielding child IDs in tree order.
     ///
-    /// # GAT Benefits
+    /// # RPITIT Benefits
     ///
-    /// Using GAT allows:
-    /// - Zero-cost iteration for slice-based storage
-    /// - Custom iterator types for complex tree structures
+    /// Using RPITIT allows:
+    /// - Zero-cost iteration without GAT boilerplate
+    /// - Simple implementations without custom iterator types
     /// - Lifetime-safe iteration without boxing
-    fn children(&self, id: I) -> Self::ChildrenIter<'_>;
+    fn children(&self, id: I) -> impl Iterator<Item = I> + '_;
 
     /// Returns an iterator from the given node to the root.
     ///
@@ -119,7 +93,7 @@ pub trait TreeNav<I: Identifier>: super::TreeRead<I> {
     /// # Performance
     ///
     /// Uses stack-allocated buffer up to MAX_DEPTH, then heap allocation.
-    fn ancestors(&self, start: I) -> Self::AncestorsIter<'_>;
+    fn ancestors(&self, start: I) -> impl Iterator<Item = I> + '_;
 
     /// Returns an iterator over all descendants in depth-first order.
     ///
@@ -133,7 +107,7 @@ pub trait TreeNav<I: Identifier>: super::TreeRead<I> {
     /// # Performance
     ///
     /// Optimized for both shallow and deep trees using hybrid allocation.
-    fn descendants(&self, root: I) -> Self::DescendantsIter<'_>;
+    fn descendants(&self, root: I) -> impl Iterator<Item = (I, usize)> + '_;
 
     /// Returns an iterator over the siblings of a node.
     ///
@@ -146,7 +120,7 @@ pub trait TreeNav<I: Identifier>: super::TreeRead<I> {
     /// # Returns
     ///
     /// Iterator over sibling IDs, excluding the input node.
-    fn siblings(&self, id: I) -> Self::SiblingsIter<'_>;
+    fn siblings(&self, id: I) -> impl Iterator<Item = I> + '_;
 
     /// Returns the slot information for a node.
     ///
@@ -508,27 +482,6 @@ impl<I: Identifier, T: TreeNav<I>, const QUEUE_SIZE: usize> Iterator
 // ============================================================================
 
 impl<I: Identifier, T: TreeNav<I> + ?Sized> TreeNav<I> for &T {
-    type ChildrenIter<'a>
-        = T::ChildrenIter<'a>
-    where
-        Self: 'a,
-        T: 'a;
-    type AncestorsIter<'a>
-        = T::AncestorsIter<'a>
-    where
-        Self: 'a,
-        T: 'a;
-    type DescendantsIter<'a>
-        = T::DescendantsIter<'a>
-    where
-        Self: 'a,
-        T: 'a;
-    type SiblingsIter<'a>
-        = T::SiblingsIter<'a>
-    where
-        Self: 'a,
-        T: 'a;
-
     const MAX_DEPTH: usize = T::MAX_DEPTH;
     const AVG_CHILDREN: usize = T::AVG_CHILDREN;
 
@@ -538,22 +491,22 @@ impl<I: Identifier, T: TreeNav<I> + ?Sized> TreeNav<I> for &T {
     }
 
     #[inline]
-    fn children(&self, id: I) -> Self::ChildrenIter<'_> {
+    fn children(&self, id: I) -> impl Iterator<Item = I> + '_ {
         (**self).children(id)
     }
 
     #[inline]
-    fn ancestors(&self, start: I) -> Self::AncestorsIter<'_> {
+    fn ancestors(&self, start: I) -> impl Iterator<Item = I> + '_ {
         (**self).ancestors(start)
     }
 
     #[inline]
-    fn descendants(&self, root: I) -> Self::DescendantsIter<'_> {
+    fn descendants(&self, root: I) -> impl Iterator<Item = (I, usize)> + '_ {
         (**self).descendants(root)
     }
 
     #[inline]
-    fn siblings(&self, id: I) -> Self::SiblingsIter<'_> {
+    fn siblings(&self, id: I) -> impl Iterator<Item = I> + '_ {
         (**self).siblings(id)
     }
 
@@ -564,27 +517,6 @@ impl<I: Identifier, T: TreeNav<I> + ?Sized> TreeNav<I> for &T {
 }
 
 impl<I: Identifier, T: TreeNav<I> + ?Sized> TreeNav<I> for &mut T {
-    type ChildrenIter<'a>
-        = T::ChildrenIter<'a>
-    where
-        Self: 'a,
-        T: 'a;
-    type AncestorsIter<'a>
-        = T::AncestorsIter<'a>
-    where
-        Self: 'a,
-        T: 'a;
-    type DescendantsIter<'a>
-        = T::DescendantsIter<'a>
-    where
-        Self: 'a,
-        T: 'a;
-    type SiblingsIter<'a>
-        = T::SiblingsIter<'a>
-    where
-        Self: 'a,
-        T: 'a;
-
     const MAX_DEPTH: usize = T::MAX_DEPTH;
     const AVG_CHILDREN: usize = T::AVG_CHILDREN;
 
@@ -594,22 +526,22 @@ impl<I: Identifier, T: TreeNav<I> + ?Sized> TreeNav<I> for &mut T {
     }
 
     #[inline]
-    fn children(&self, id: I) -> Self::ChildrenIter<'_> {
+    fn children(&self, id: I) -> impl Iterator<Item = I> + '_ {
         (**self).children(id)
     }
 
     #[inline]
-    fn ancestors(&self, start: I) -> Self::AncestorsIter<'_> {
+    fn ancestors(&self, start: I) -> impl Iterator<Item = I> + '_ {
         (**self).ancestors(start)
     }
 
     #[inline]
-    fn descendants(&self, root: I) -> Self::DescendantsIter<'_> {
+    fn descendants(&self, root: I) -> impl Iterator<Item = (I, usize)> + '_ {
         (**self).descendants(root)
     }
 
     #[inline]
-    fn siblings(&self, id: I) -> Self::SiblingsIter<'_> {
+    fn siblings(&self, id: I) -> impl Iterator<Item = I> + '_ {
         (**self).siblings(id)
     }
 
@@ -620,27 +552,6 @@ impl<I: Identifier, T: TreeNav<I> + ?Sized> TreeNav<I> for &mut T {
 }
 
 impl<I: Identifier, T: TreeNav<I> + ?Sized> TreeNav<I> for Box<T> {
-    type ChildrenIter<'a>
-        = T::ChildrenIter<'a>
-    where
-        Self: 'a,
-        T: 'a;
-    type AncestorsIter<'a>
-        = T::AncestorsIter<'a>
-    where
-        Self: 'a,
-        T: 'a;
-    type DescendantsIter<'a>
-        = T::DescendantsIter<'a>
-    where
-        Self: 'a,
-        T: 'a;
-    type SiblingsIter<'a>
-        = T::SiblingsIter<'a>
-    where
-        Self: 'a,
-        T: 'a;
-
     const MAX_DEPTH: usize = T::MAX_DEPTH;
     const AVG_CHILDREN: usize = T::AVG_CHILDREN;
 
@@ -650,22 +561,22 @@ impl<I: Identifier, T: TreeNav<I> + ?Sized> TreeNav<I> for Box<T> {
     }
 
     #[inline]
-    fn children(&self, id: I) -> Self::ChildrenIter<'_> {
+    fn children(&self, id: I) -> impl Iterator<Item = I> + '_ {
         (**self).children(id)
     }
 
     #[inline]
-    fn ancestors(&self, start: I) -> Self::AncestorsIter<'_> {
+    fn ancestors(&self, start: I) -> impl Iterator<Item = I> + '_ {
         (**self).ancestors(start)
     }
 
     #[inline]
-    fn descendants(&self, root: I) -> Self::DescendantsIter<'_> {
+    fn descendants(&self, root: I) -> impl Iterator<Item = (I, usize)> + '_ {
         (**self).descendants(root)
     }
 
     #[inline]
-    fn siblings(&self, id: I) -> Self::SiblingsIter<'_> {
+    fn siblings(&self, id: I) -> impl Iterator<Item = I> + '_ {
         (**self).siblings(id)
     }
 
@@ -723,7 +634,6 @@ mod tests {
 
     impl super::super::TreeRead<ElementId> for TestTree {
         type Node = TestNode;
-        type NodeIter<'a> = Box<dyn Iterator<Item = ElementId> + 'a>;
 
         fn get(&self, id: ElementId) -> Option<&TestNode> {
             self.nodes.get(&id)
@@ -733,46 +643,36 @@ mod tests {
             self.nodes.len()
         }
 
-        fn node_ids(&self) -> Self::NodeIter<'_> {
-            Box::new(self.nodes.keys().copied())
+        fn node_ids(&self) -> impl Iterator<Item = ElementId> + '_ {
+            self.nodes.keys().copied()
         }
     }
 
     impl TreeNav<ElementId> for TestTree {
-        type ChildrenIter<'a> = Box<dyn Iterator<Item = ElementId> + 'a>;
-        type AncestorsIter<'a> = Ancestors<'a, ElementId, Self>;
-        type DescendantsIter<'a> = DescendantsWithDepth<'a, ElementId, Self>;
-        type SiblingsIter<'a> = Box<dyn Iterator<Item = ElementId> + 'a>;
-
         fn parent(&self, id: ElementId) -> Option<ElementId> {
             self.get(id)?.parent
         }
 
-        fn children(&self, id: ElementId) -> Self::ChildrenIter<'_> {
-            if let Some(node) = self.get(id) {
-                Box::new(node.children.iter().copied())
-            } else {
-                Box::new(std::iter::empty())
-            }
+        fn children(&self, id: ElementId) -> impl Iterator<Item = ElementId> + '_ {
+            self.get(id)
+                .map(|node| node.children.iter().copied())
+                .into_iter()
+                .flatten()
         }
 
-        fn ancestors(&self, start: ElementId) -> Self::AncestorsIter<'_> {
+        fn ancestors(&self, start: ElementId) -> impl Iterator<Item = ElementId> + '_ {
             Ancestors::new(self, start)
         }
 
-        fn descendants(&self, root: ElementId) -> Self::DescendantsIter<'_> {
+        fn descendants(&self, root: ElementId) -> impl Iterator<Item = (ElementId, usize)> + '_ {
             DescendantsWithDepth::new(self, root)
         }
 
-        fn siblings(&self, id: ElementId) -> Self::SiblingsIter<'_> {
-            if let Some(parent_id) = self.parent(id) {
-                Box::new(
-                    self.children(parent_id)
-                        .filter(move |&child_id| child_id != id),
-                )
-            } else {
-                Box::new(std::iter::empty())
-            }
+        fn siblings(&self, id: ElementId) -> impl Iterator<Item = ElementId> + '_ {
+            let parent_id = self.parent(id);
+            parent_id
+                .into_iter()
+                .flat_map(move |pid| self.children(pid).filter(move |&cid| cid != id))
         }
     }
 

@@ -5,7 +5,7 @@
 
 use flui_foundation::Identifier;
 
-/// Read-only access to tree nodes with Generic Associated Types.
+/// Read-only access to tree nodes.
 ///
 /// This is the most fundamental tree trait, providing only immutable
 /// access to nodes by their ID. It intentionally does not include
@@ -17,12 +17,10 @@ use flui_foundation::Identifier;
 /// This allows the same trait to work with different ID types
 /// (`ElementId`, `ViewId`, `RenderId`, etc.).
 ///
-/// # Advanced Type Features
+/// # Features
 ///
-/// This trait uses several advanced Rust type system features:
-/// - **GAT (Generic Associated Types)** for flexible iterators
+/// - **RPITIT** for zero-cost iterator returns without GAT boilerplate
 /// - **Associated Constants** for performance tuning
-/// - **Sealed trait** for safety
 /// - **HRTB-compatible** design for visitor composition
 ///
 /// # Thread Safety
@@ -40,17 +38,12 @@ use flui_foundation::Identifier;
 /// use flui_tree::TreeRead;
 /// use flui_foundation::ElementId;
 ///
-/// // A simple tree storing strings
 /// struct SimpleTree {
 ///     nodes: Vec<Option<String>>,
 /// }
 ///
-/// // Implement sealed trait first
-/// impl flui_tree::traits::sealed::TreeReadSealed for SimpleTree {}
-///
 /// impl TreeRead<ElementId> for SimpleTree {
 ///     type Node = String;
-///     type NodeIter<'a> = Box<dyn Iterator<Item = ElementId> + 'a>;
 ///
 ///     fn get(&self, id: ElementId) -> Option<&Self::Node> {
 ///         self.nodes.get(id.get() - 1)?.as_ref()
@@ -60,14 +53,14 @@ use flui_foundation::Identifier;
 ///         self.nodes.iter().filter(|n| n.is_some()).count()
 ///     }
 ///
-///     fn node_ids(&self) -> Self::NodeIter<'_> {
-///         Box::new((0..self.nodes.len()).filter_map(|i| {
+///     fn node_ids(&self) -> impl Iterator<Item = ElementId> + '_ {
+///         (0..self.nodes.len()).filter_map(|i| {
 ///             if self.nodes[i].is_some() {
 ///                 Some(ElementId::new(i + 1))
 ///             } else {
 ///                 None
 ///             }
-///         }))
+///         })
 ///     }
 /// }
 /// ```
@@ -77,14 +70,6 @@ pub trait TreeRead<I: Identifier>: Send + Sync {
     /// This associated type allows implementations to define their
     /// own node structure while maintaining type safety.
     type Node;
-
-    /// Iterator type for node IDs with Generic Associated Types.
-    ///
-    /// This GAT allows implementations to return different iterator types
-    /// while maintaining lifetime safety and zero-cost abstractions.
-    type NodeIter<'a>: Iterator<Item = I> + 'a
-    where
-        Self: 'a;
 
     /// Default capacity for internal collections.
     ///
@@ -152,13 +137,12 @@ pub trait TreeRead<I: Identifier>: Send + Sync {
     /// The order of iteration is implementation-defined but should
     /// be consistent for the same tree state.
     ///
-    /// # GAT Benefits
+    /// # RPITIT
     ///
-    /// Using GAT allows implementations to return:
-    /// - Zero-cost iterators with appropriate lifetimes
-    /// - Different iterator types based on internal structure
-    /// - Optimized implementations for specific use cases
-    fn node_ids(&self) -> Self::NodeIter<'_>;
+    /// Uses Return Position Impl Trait In Traits (Rust 1.75+) for:
+    /// - Zero-cost iterators without GAT boilerplate
+    /// - Simple implementations without custom iterator types
+    fn node_ids(&self) -> impl Iterator<Item = I> + '_;
 
     /// Get multiple nodes efficiently.
     ///
@@ -289,11 +273,6 @@ impl<I: Identifier, T: TreeRead<I>> TreeReadExt<I> for T {}
 /// Blanket implementation for references to `TreeRead`.
 impl<I: Identifier, T: TreeRead<I> + ?Sized> TreeRead<I> for &T {
     type Node = T::Node;
-    type NodeIter<'a>
-        = T::NodeIter<'a>
-    where
-        Self: 'a,
-        T: 'a;
 
     const DEFAULT_CAPACITY: usize = T::DEFAULT_CAPACITY;
     const INLINE_THRESHOLD: usize = T::INLINE_THRESHOLD;
@@ -315,7 +294,7 @@ impl<I: Identifier, T: TreeRead<I> + ?Sized> TreeRead<I> for &T {
     }
 
     #[inline]
-    fn node_ids(&self) -> Self::NodeIter<'_> {
+    fn node_ids(&self) -> impl Iterator<Item = I> + '_ {
         (**self).node_ids()
     }
 
@@ -338,11 +317,6 @@ impl<I: Identifier, T: TreeRead<I> + ?Sized> TreeRead<I> for &T {
 /// Blanket implementation for mutable references to `TreeRead`.
 impl<I: Identifier, T: TreeRead<I> + ?Sized> TreeRead<I> for &mut T {
     type Node = T::Node;
-    type NodeIter<'a>
-        = T::NodeIter<'a>
-    where
-        Self: 'a,
-        T: 'a;
 
     const DEFAULT_CAPACITY: usize = T::DEFAULT_CAPACITY;
     const INLINE_THRESHOLD: usize = T::INLINE_THRESHOLD;
@@ -364,7 +338,7 @@ impl<I: Identifier, T: TreeRead<I> + ?Sized> TreeRead<I> for &mut T {
     }
 
     #[inline]
-    fn node_ids(&self) -> Self::NodeIter<'_> {
+    fn node_ids(&self) -> impl Iterator<Item = I> + '_ {
         (**self).node_ids()
     }
 
@@ -387,11 +361,6 @@ impl<I: Identifier, T: TreeRead<I> + ?Sized> TreeRead<I> for &mut T {
 /// Blanket implementation for Box<dyn TreeRead>.
 impl<I: Identifier, T: TreeRead<I> + ?Sized> TreeRead<I> for Box<T> {
     type Node = T::Node;
-    type NodeIter<'a>
-        = T::NodeIter<'a>
-    where
-        Self: 'a,
-        T: 'a;
 
     const DEFAULT_CAPACITY: usize = T::DEFAULT_CAPACITY;
     const INLINE_THRESHOLD: usize = T::INLINE_THRESHOLD;
@@ -413,7 +382,7 @@ impl<I: Identifier, T: TreeRead<I> + ?Sized> TreeRead<I> for Box<T> {
     }
 
     #[inline]
-    fn node_ids(&self) -> Self::NodeIter<'_> {
+    fn node_ids(&self) -> impl Iterator<Item = I> + '_ {
         (**self).node_ids()
     }
 
@@ -482,7 +451,6 @@ mod tests {
         nodes: Vec<Option<String>>,
     }
 
-
     impl TestTree {
         fn new() -> Self {
             Self { nodes: Vec::new() }
@@ -497,7 +465,6 @@ mod tests {
 
     impl TreeRead<ElementId> for TestTree {
         type Node = String;
-        type NodeIter<'a> = Box<dyn Iterator<Item = ElementId> + 'a>;
 
         const DEFAULT_CAPACITY: usize = 64;
         const INLINE_THRESHOLD: usize = 8;
@@ -518,14 +485,14 @@ mod tests {
             self.nodes.iter().filter(|n| n.is_some()).count()
         }
 
-        fn node_ids(&self) -> Self::NodeIter<'_> {
-            Box::new((0..self.nodes.len()).filter_map(move |i| {
+        fn node_ids(&self) -> impl Iterator<Item = ElementId> + '_ {
+            (0..self.nodes.len()).filter_map(move |i| {
                 if self.nodes[i].is_some() {
                     Some(ElementId::new(i + 1))
                 } else {
                     None
                 }
-            }))
+            })
         }
     }
 

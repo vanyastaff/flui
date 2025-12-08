@@ -91,20 +91,10 @@ impl RendererBinding {
             }
         };
 
-        // Extract size from root element or use constraints as fallback
-        let size = owner
-            .root_element_id()
-            .and_then(|root_id| {
-                let tree = owner.tree();
-                let tree_guard = tree.read();
-                tree_guard
-                    .get(root_id)
-                    .and_then(|element| element.render_state())
-                    .and_then(|state| state.downcast_ref::<flui_core::render::BoxRenderState>())
-                    .map(|state| state.size())
-                    .filter(|size| size.width > 0.0 && size.height > 0.0)
-            })
-            .unwrap_or_else(|| Size::new(constraints.max_width, constraints.max_height));
+        // Extract size from constraints (render state is now in RenderTree)
+        // In the four-tree architecture, render state is accessed via RenderTree,
+        // but for frame size we use the constraints directly.
+        let size = Size::new(constraints.max_width, constraints.max_height);
 
         // Create scene using flui_engine::Scene API
         let scene = if let Some(canvas) = layer {
