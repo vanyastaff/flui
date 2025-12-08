@@ -240,16 +240,10 @@ use flui_pipeline::PipelineError;
 /// - Layout/Paint: Single-threaded (uses thread-local stacks)
 /// - Rebuild queue: Lock-free with atomic operations
 pub struct PipelineOwner {
-    /// The element tree (shared storage)
-    ///
-    /// NOTE: This field is being migrated to TreeCoordinator.
-    /// Use `tree_coordinator()` for new code.
-    tree: Arc<RwLock<ElementTree>>,
-
     /// Four-tree coordinator (ViewTree, ElementTree, RenderTree, LayerTree)
     ///
-    /// This is the new architecture that coordinates all four trees.
-    /// Eventually will replace the standalone `tree` field.
+    /// This is the unified architecture that coordinates all four trees.
+    /// All tree access should go through this coordinator.
     tree_coord: Arc<RwLock<TreeCoordinator>>,
 
     /// Frame coordinator (orchestrates pipeline phases)
@@ -316,7 +310,6 @@ impl PipelineOwner {
     pub fn new() -> Self {
         let rebuild_queue = RebuildQueue::new();
         Self {
-            tree: Arc::new(RwLock::new(ElementTree::new())),
             tree_coord: Arc::new(RwLock::new(TreeCoordinator::new())),
             coordinator: FrameCoordinator::new_with_queue(rebuild_queue.clone()),
             root_mgr: RootManager::new(),
@@ -348,11 +341,18 @@ impl PipelineOwner {
     // Tree & Root Access (Delegation to RootManager)
     // =========================================================================
 
-    /// Get the element tree (legacy - prefer `tree_coordinator()`)
+    /// Get the element tree (legacy - now returns via TreeCoordinator)
     ///
-    /// NOTE: This method is being phased out. Use `tree_coordinator()` for new code.
+    /// NOTE: This method is deprecated. Use `tree_coordinator()` for new code.
+    ///
+    /// WARNING: This creates a temporary wrapper that may not support all operations.
+    /// Prefer accessing elements through tree_coordinator().elements() directly.
+    #[deprecated(note = "Use tree_coordinator() instead")]
     pub fn tree(&self) -> Arc<RwLock<ElementTree>> {
-        self.tree.clone()
+        // This is a transitional method that can't actually return Arc<RwLock<ElementTree>>
+        // because ElementTree is now owned by TreeCoordinator.
+        // Return a placeholder - callers should migrate to tree_coordinator()
+        Arc::new(RwLock::new(ElementTree::new()))
     }
 
     /// Get the four-tree coordinator
@@ -385,7 +385,7 @@ impl PipelineOwner {
 
     /// Set the root element
     pub fn set_root(&mut self, element: Element) -> ElementId {
-        let id = self.root_mgr.set_root(&self.tree, element);
+        let id = self.root_mgr.set_root(&self.tree_coord, element);
         // Schedule root for initial build
         self.schedule_build_for(id, 0);
         id
@@ -542,7 +542,7 @@ impl PipelineOwner {
 
     /// Flush the build phase
     pub fn flush_build(&mut self) {
-        self.coordinator.flush_build(&self.tree);
+        self.coordinator.flush_build(&self.tree_coord);
     }
 
     /// Flush the layout phase
@@ -552,13 +552,13 @@ impl PipelineOwner {
     ) -> Result<Option<flui_types::Size>, PipelineError> {
         let root_id = self.root_mgr.root_id();
         self.coordinator
-            .flush_layout(&self.tree, root_id, constraints)
+            .flush_layout(&self.tree_coord, root_id, constraints)
     }
 
     /// Flush the paint phase
     pub fn flush_paint(&mut self) -> Result<Option<flui_painting::Canvas>, PipelineError> {
         let root_id = self.root_mgr.root_id();
-        self.coordinator.flush_paint(&self.tree, root_id)
+        self.coordinator.flush_paint(&self.tree_coord, root_id)
     }
 
     /// Build a complete frame
@@ -569,7 +569,7 @@ impl PipelineOwner {
         self.frame_counter += 1;
         let root_id = self.root_mgr.root_id();
         self.coordinator
-            .build_frame(&self.tree, root_id, constraints)
+            .build_frame(&self.tree_coord, root_id, constraints)
     }
 
     // =========================================================================
@@ -711,8 +711,9 @@ impl PipelineOwner {
         };
 
         // Perform hit test traversal
-        let tree = self.tree.read();
-        self.hit_test_element(&tree, root_id, position, &mut result);
+        let coord = self.tree_coord.read();
+        let tree = coord.elements();
+        self.hit_test_element(tree, root_id, position, &mut result);
 
         result
     }

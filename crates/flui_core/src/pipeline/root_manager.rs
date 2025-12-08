@@ -30,8 +30,10 @@
 use parking_lot::RwLock;
 use std::sync::Arc;
 
-use flui_element::{Element, ElementTree};
+use flui_element::Element;
 use flui_foundation::{ElementId, Slot};
+
+use super::TreeCoordinator;
 
 /// Manages the root element of the element tree
 ///
@@ -116,20 +118,20 @@ impl RootManager {
     /// ```
     pub fn set_root(
         &mut self,
-        tree: &Arc<RwLock<ElementTree>>,
+        tree_coord: &Arc<RwLock<TreeCoordinator>>,
         mut root_element: Element,
     ) -> ElementId {
-        let mut tree_guard = tree.write();
+        let mut coord_guard = tree_coord.write();
 
         // Mount the element (no parent, slot 0, depth 0 for root)
         root_element.mount(None, Some(Slot::new(0)), 0);
 
-        // Insert into tree
-        let id = tree_guard.insert(root_element);
+        // Insert into ElementTree via TreeCoordinator
+        let id = coord_guard.elements_mut().insert(root_element);
 
         // Note: Call view.build() to create child
 
-        drop(tree_guard);
+        drop(coord_guard);
 
         self.root_id = Some(id);
 

@@ -30,7 +30,7 @@
 //! let mock: Arc<dyn Pipeline> = Arc::new(MockPipeline::new());
 //! ```
 
-use super::RebuildQueue;
+use super::{RebuildQueue, TreeCoordinator};
 use flui_element::{Element, ElementTree};
 use flui_foundation::ElementId;
 use flui_painting::Canvas;
@@ -68,10 +68,18 @@ pub trait Pipeline: Send + Sync {
     // Tree & Root Management
     // =========================================================================
 
-    /// Get shared reference to element tree
+    /// Get shared reference to element tree (deprecated)
     ///
     /// The tree is wrapped in `Arc<RwLock<>>` for thread-safe access.
+    ///
+    /// **DEPRECATED**: Use `tree_coordinator()` instead for four-tree architecture.
+    #[deprecated(note = "Use tree_coordinator() instead")]
     fn tree(&self) -> Arc<RwLock<ElementTree>>;
+
+    /// Get shared reference to tree coordinator
+    ///
+    /// The coordinator manages all four trees (View, Element, Render, Layer).
+    fn tree_coordinator(&self) -> Arc<RwLock<TreeCoordinator>>;
 
     /// Get the root element ID (if any)
     fn root_element_id(&self) -> Option<ElementId>;
@@ -221,8 +229,13 @@ pub trait Pipeline: Send + Sync {
 use super::PipelineOwner;
 
 impl Pipeline for Arc<RwLock<PipelineOwner>> {
+    #[allow(deprecated)]
     fn tree(&self) -> Arc<RwLock<ElementTree>> {
-        self.read().tree().clone()
+        self.read().tree()
+    }
+
+    fn tree_coordinator(&self) -> Arc<RwLock<TreeCoordinator>> {
+        self.read().tree_coordinator().clone()
     }
 
     fn root_element_id(&self) -> Option<ElementId> {
