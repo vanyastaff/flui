@@ -98,18 +98,19 @@ impl TreeNav<LayerId> for LayerTree {
 
 /// Iterator over all LayerIds in the tree.
 pub struct LayerIdIter<'a> {
-    inner: slab::Iter<'a, ConcreteLayerNode>,
+    ids: Vec<LayerId>,
+    index: usize,
+    _marker: std::marker::PhantomData<&'a ()>,
 }
 
 impl<'a> LayerIdIter<'a> {
     fn new(tree: &'a LayerTree) -> Self {
-        // Access slab through tree's iter method
+        // Collect all IDs upfront - simple and safe
+        let ids: Vec<LayerId> = tree.layer_ids().collect();
         Self {
-            inner: unsafe {
-                // SAFETY: We're creating an iterator from the tree's internal slab
-                // The tree reference ensures the slab lives long enough
-                std::mem::transmute(tree.iter().map(|(id, _)| (id.get() - 1, ())))
-            },
+            ids,
+            index: 0,
+            _marker: std::marker::PhantomData,
         }
     }
 }
@@ -118,13 +119,22 @@ impl<'a> Iterator for LayerIdIter<'a> {
     type Item = LayerId;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.inner.next().map(|(index, _)| LayerId::new(index + 1))
+        if self.index < self.ids.len() {
+            let id = self.ids[self.index];
+            self.index += 1;
+            Some(id)
+        } else {
+            None
+        }
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        self.inner.size_hint()
+        let remaining = self.ids.len().saturating_sub(self.index);
+        (remaining, Some(remaining))
     }
 }
+
+impl ExactSizeIterator for LayerIdIter<'_> {}
 
 /// Iterator over children of a layer node.
 pub struct ChildrenIter<'a> {
