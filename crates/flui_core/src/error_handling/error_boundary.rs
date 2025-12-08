@@ -138,8 +138,8 @@ impl StatefulView for ErrorBoundary {
         }
 
         // No error - show child
-        // TODO: Properly handle child Element -> ViewObject conversion
-        // For now, return empty since Element is in flui-element, not flui-view
+        // NOTE: In four-tree architecture, Element only holds ID references. ViewObjects are
+        // in ViewTree, accessed via element.as_component().view_id() + ViewTree::get().
         if let Some(_child) = self.child.write().take() {
             tracing::debug!("ErrorBoundary: child taken but Element->ViewObject conversion needed");
         }

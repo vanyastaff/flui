@@ -251,8 +251,9 @@ impl FrameCoordinator {
             let mut tree_guard = tree.write();
 
             // Scan for RenderElements and mark them for layout
-            // TODO: Re-enable render_state.needs_layout() check once Element supports RenderViewObject
-            // Currently we mark ALL render elements for layout since render_state() returns None
+            // NOTE: In four-tree architecture, render_state is stored in RenderTree (accessed via
+            // element.as_render().render_id() + RenderTree::get()). Currently we mark ALL render
+            // elements for layout. Future optimization: check RenderTree for needs_layout flag.
             let all_ids: Vec<_> = tree_guard.all_element_ids().collect();
             let mut marked_count = 0usize;
             for id in all_ids.iter().copied() {
@@ -426,7 +427,7 @@ impl FrameCoordinator {
         let mut tree_guard = tree.write();
 
         // Scan for RenderElements and mark them for layout
-        // TODO: Re-enable render_state.needs_layout() check once Element supports RenderViewObject
+        // NOTE: In four-tree architecture, RenderState is in RenderTree. Mark all render elements.
         let all_ids: Vec<_> = tree_guard.all_element_ids().collect();
         let mut marked_count = 0usize;
         for id in all_ids.iter().copied() {
@@ -452,8 +453,8 @@ impl FrameCoordinator {
         }
 
         // Get root element's computed size
-        // TODO: Re-implement once Element properly supports RenderViewObject
-        // Currently we can't access render_state, so we return None
+        // NOTE: In four-tree architecture, size is stored in RenderTree (accessed via
+        // element.as_render().render_id() + RenderTree). Returns None until RenderTree integration.
         let size = Self::extract_root_size(&tree_guard, root_id);
 
         Ok(size)
@@ -478,8 +479,8 @@ impl FrameCoordinator {
         let _count = self.paint.generate_layers(&mut tree_guard)?;
 
         // Get root element's canvas
-        // TODO: Phase 5 - Re-implement once Element properly supports RenderViewObject
-        // Currently paint_render_object is a stub that returns false, so we return an empty canvas.
+        // NOTE: In four-tree architecture, paint happens through RenderTree. Currently
+        // paint_render_object is a stub. Returns empty canvas until full RenderTree integration.
         let canvas = match root_id {
             Some(id) => {
                 let offset = flui_types::Offset::ZERO;

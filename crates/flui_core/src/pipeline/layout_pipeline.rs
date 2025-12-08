@@ -181,11 +181,9 @@ impl LayoutPipeline {
                 continue;
             }
 
-            // TODO: Re-enable render_state checks once Element properly supports RenderViewObject
-            // Currently Element::render_state() returns None (stub) so we skip the check
-            // and layout all dirty render elements unconditionally.
-            //
-            // Future: Check render_state.needs_layout() for cache optimization
+            // NOTE: In four-tree architecture, RenderState is stored in RenderTree (accessed via
+            // element.as_render().render_id() + RenderTree::get()). Currently we layout all dirty
+            // render elements unconditionally. Future: check RenderTree for needs_layout flag.
             cache_misses += 1;
 
             #[cfg(debug_assertions)]
