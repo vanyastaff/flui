@@ -28,7 +28,7 @@ mod pipeline_owner;
 mod pipeline_trait;
 mod rebuild_queue;
 mod root_manager;
-mod tree_coordinator;  // Four-tree architecture coordinator
+mod tree_coordinator; // Four-tree architecture coordinator
 
 // =============================================================================
 // Re-exports from flui-pipeline (traits + utilities)
@@ -87,7 +87,7 @@ pub use pipeline_owner::PipelineOwner;
 pub use pipeline_trait::Pipeline;
 pub use rebuild_queue::RebuildQueue;
 pub use root_manager::RootManager;
-pub use tree_coordinator::TreeCoordinator;  // Four-tree architecture coordinator
+pub use tree_coordinator::TreeCoordinator; // Four-tree architecture coordinator
 
 // Re-export ElementTree for convenience
 pub use flui_element::ElementTree;

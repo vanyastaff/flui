@@ -37,7 +37,7 @@ use flui_core::element::Element;
 use flui_core::view::{IntoElement, StatelessView};
 
 use flui_core::BuildContext;
-use flui_rendering::objects::{PositionedMetadata, RenderPositioned};
+use flui_objects::{PositionedMetadata, RenderPositioned};
 
 /// A widget that controls where a child of a Stack is positioned.
 ///
@@ -472,7 +472,7 @@ macro_rules! positioned {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_rendering::objects::RenderEmpty;
+    use flui_objects::RenderEmpty;
 
     // Mock view for testing
     #[derive(Debug)]

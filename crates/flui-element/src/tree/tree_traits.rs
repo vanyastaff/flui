@@ -15,8 +15,10 @@
 
 use flui_foundation::{ElementId, Slot};
 use flui_tree::error::{TreeError, TreeResult};
-use flui_tree::{sealed, DepthTracking, Lifecycle, TreeNav, TreeRead, TreeWrite, TreeWriteNav};
+use flui_tree::{sealed, TreeNav, TreeRead, TreeWrite, TreeWriteNav};
 use smallvec::SmallVec;
+
+use super::lifecycle_traits::{DepthTracking, Lifecycle};
 
 use super::ElementTree;
 use crate::Element;
@@ -72,7 +74,7 @@ impl ExactSizeIterator for NodeIdIter<'_> {
 // TreeRead Implementation
 // ============================================================================
 
-impl TreeRead for ElementTree {
+impl TreeRead<ElementId> for ElementTree {
     type Node = Element;
 
     /// Zero-cost iterator over element IDs using GAT.
@@ -116,14 +118,14 @@ impl TreeRead for ElementTree {
 // TreeNav Implementation
 // ============================================================================
 
-impl TreeNav for ElementTree {
+impl TreeNav<ElementId> for ElementTree {
     /// Zero-cost iterator over children using GAT.
     ///
     /// Uses Flatten + Option to avoid heap allocation while supporting empty case.
     type ChildrenIter<'a>
         = std::iter::Flatten<
-            std::option::IntoIter<std::iter::Copied<std::slice::Iter<'a, ElementId>>>,
-        >
+        std::option::IntoIter<std::iter::Copied<std::slice::Iter<'a, ElementId>>>,
+    >
     where
         Self: 'a;
 
@@ -303,7 +305,7 @@ impl Iterator for DescendantsIter<'_> {
 // TreeWrite Implementation
 // ============================================================================
 
-impl TreeWrite for ElementTree {
+impl TreeWrite<ElementId> for ElementTree {
     /// Returns a mutable reference to the element with the given ID.
     #[inline]
     fn get_mut(&mut self, id: ElementId) -> Option<&mut Element> {
@@ -347,7 +349,7 @@ impl TreeWrite for ElementTree {
 // TreeWriteNav Implementation
 // ============================================================================
 
-impl TreeWriteNav for ElementTree {
+impl TreeWriteNav<ElementId> for ElementTree {
     /// Sets the parent of a child element.
     ///
     /// This method:
@@ -355,26 +357,30 @@ impl TreeWriteNav for ElementTree {
     /// 2. Removes child from old parent's children list
     /// 3. Updates child's parent reference
     /// 4. Adds child to new parent's children list
-    fn set_parent(&mut self, child: ElementId, new_parent: Option<ElementId>) -> TreeResult<()> {
+    fn set_parent(
+        &mut self,
+        child: ElementId,
+        new_parent: Option<ElementId>,
+    ) -> TreeResult<ElementId> {
         // Validate both elements exist
         if !self.contains(child) {
-            return Err(TreeError::not_found(child));
+            return Err(TreeError::not_found(child.get()));
         }
 
         if let Some(parent_id) = new_parent {
             if !self.contains(parent_id) {
-                return Err(TreeError::not_found(parent_id));
+                return Err(TreeError::not_found(parent_id.get()));
             }
 
             // Check for cycles
             if parent_id == child {
-                return Err(TreeError::cycle_detected(child));
+                return Err(TreeError::cycle_detected(child.get()));
             }
 
             // Check if new_parent is a descendant of child (would create cycle)
             // Use is_ancestor_of from TreeNav trait for efficient cycle detection
             if self.is_ancestor_of(child, parent_id) {
-                return Err(TreeError::cycle_detected(child));
+                return Err(TreeError::cycle_detected(child.get()));
             }
         }
 
@@ -397,7 +403,7 @@ impl TreeWriteNav for ElementTree {
             }
         }
 
-        Ok(())
+        Ok(child)
     }
 }
 
@@ -405,7 +411,7 @@ impl TreeWriteNav for ElementTree {
 // RenderTreeAccess Implementation
 // ============================================================================
 
-impl flui_tree::RenderTreeAccess for ElementTree {
+impl flui_rendering::core::RenderTreeAccess for ElementTree {
     /// Returns the render object for an element.
     ///
     /// Delegates to Element::render_object(), which:

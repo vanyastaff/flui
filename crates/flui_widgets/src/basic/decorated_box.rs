@@ -6,7 +6,7 @@
 use bon::Builder;
 use flui_core::view::children::Child;
 use flui_core::IntoElement;
-use flui_rendering::objects::DecorationPosition;
+use flui_objects::DecorationPosition;
 use flui_types::styling::BoxDecoration;
 use flui_types::Color;
 
@@ -142,7 +142,7 @@ impl Default for DecoratedBox {
 impl IntoElement for DecoratedBox {
     fn into_element(self) -> flui_core::Element {
         use flui_rendering::{BoxRenderWrapper, Optional};
-        use flui_rendering::objects::RenderDecoratedBox;
+        use flui_objects::RenderDecoratedBox;
 
         // Create render object
         let render = RenderDecoratedBox::with_position(self.decoration, self.position);
@@ -215,7 +215,7 @@ macro_rules! decorated_box {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_rendering::objects::RenderEmpty;
+    use flui_objects::RenderEmpty;
 
     // Mock view for testing
     #[derive(Debug, Clone)]

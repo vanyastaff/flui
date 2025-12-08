@@ -3,7 +3,7 @@
 use crate::animation::{Animation, AnimationDirection, StatusCallback};
 use crate::error::AnimationError;
 use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
-use flui_scheduler::{Scheduler, ScheduledTicker};
+use flui_scheduler::{ScheduledTicker, Scheduler};
 use flui_types::animation::AnimationStatus;
 use parking_lot::Mutex;
 use std::fmt;

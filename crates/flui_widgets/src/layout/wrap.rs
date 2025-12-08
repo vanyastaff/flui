@@ -9,7 +9,7 @@ use flui_core::BuildContext;
 
 use flui_core::view::children::Children;
 use flui_core::view::{IntoElement, StatelessView};
-use flui_rendering::objects::RenderWrap;
+use flui_objects::RenderWrap;
 use flui_types::layout::{WrapAlignment, WrapCrossAlignment};
 use flui_types::Axis;
 
@@ -255,7 +255,7 @@ impl<S: State> WrapBuilder<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_rendering::objects::RenderEmpty;
+    use flui_objects::RenderEmpty;
 
     // Mock view for testing
     #[derive()]

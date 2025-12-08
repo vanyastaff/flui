@@ -30,7 +30,7 @@ use flui_core::element::Element;
 use flui_core::view::{IntoElement, StatelessView};
 
 use flui_core::BuildContext;
-use flui_rendering::objects::{FlexItemMetadata, RenderFlexItem};
+use flui_objects::{FlexItemMetadata, RenderFlexItem};
 
 /// A widget that expands a child of a Row, Column, or Flex to fill available space.
 ///

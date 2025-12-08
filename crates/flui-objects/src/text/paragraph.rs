@@ -64,9 +64,9 @@
 //! let paragraph = RenderParagraph::new(data);
 //! ```
 
+use flui_painting::Paint;
 use flui_rendering::{BoxLayoutCtx, BoxPaintCtx, Leaf, RenderBox};
 use flui_rendering::{RenderObject, RenderResult};
-use flui_painting::Paint;
 use flui_types::{
     styling::Color,
     typography::{TextAlign, TextDirection, TextOverflow, TextStyle},

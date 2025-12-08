@@ -6,7 +6,7 @@
 use bon::Builder;
 use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
-use flui_rendering::objects::RenderRepaintBoundary;
+use flui_objects::RenderRepaintBoundary;
 
 /// A widget that creates a repaint boundary.
 ///

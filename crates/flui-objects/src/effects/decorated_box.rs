@@ -83,9 +83,9 @@
 //! );
 //! ```
 
+use flui_painting::{Canvas, Paint};
 use flui_rendering::{BoxLayoutCtx, BoxPaintCtx, Optional, RenderBox};
 use flui_rendering::{RenderObject, RenderResult};
-use flui_painting::{Canvas, Paint};
 use flui_types::{
     styling::{BorderPosition, BoxDecoration, Radius},
     Color, Point, RRect, Rect, Size,

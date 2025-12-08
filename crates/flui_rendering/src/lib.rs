@@ -201,7 +201,10 @@ pub use parent_data::{
 };
 
 // RenderElement and lifecycle
-pub use element::{BoxRenderElement, RenderElement, SliverRenderElement};
+pub use element::{
+    AnyRenderElement, BoxRenderElement, RenderElement, SliverRenderElement, TypedElementVisitor,
+    TypedElementVisitorMut,
+};
 pub use element_node::{ElementNodeStorage, RenderElementNode};
 pub use lifecycle::RenderLifecycle;
 

@@ -19,7 +19,7 @@ use bon::Builder;
 use flui_core::view::children::Child;
 use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
-use flui_rendering::objects::{MouseCallbacks, RenderMouseRegion};
+use flui_objects::{MouseCallbacks, RenderMouseRegion};
 use flui_types::events::PointerEvent;
 use flui_interaction::PointerEventHandler;
 

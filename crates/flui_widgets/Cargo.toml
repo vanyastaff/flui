@@ -13,6 +13,7 @@ categories = ["gui"]
 [dependencies]
 flui_core = { path = "../flui_core" }
 flui_rendering = { path = "../flui_rendering" }
+flui-objects = { path = "../flui-objects" }
 flui_painting = { path = "../flui_painting" }
 flui_types = { path = "../flui_types" }
 flui_interaction = { path = "../flui_interaction" }

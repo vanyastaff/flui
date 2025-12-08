@@ -29,7 +29,7 @@ use bon::Builder;
 use flui_core::view::{IntoElement, StatelessView};
 
 use flui_core::BuildContext;
-use flui_rendering::objects::{FlexItemMetadata, RenderFlexItem};
+use flui_objects::{FlexItemMetadata, RenderFlexItem};
 
 /// A widget that creates flexible empty space in a Row, Column, or Flex.
 ///

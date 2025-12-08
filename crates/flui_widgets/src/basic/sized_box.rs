@@ -40,7 +40,7 @@ use bon::Builder;
 use flui_core::view::children::Child;
 use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
-use flui_rendering::objects::RenderSizedBox;
+use flui_objects::RenderSizedBox;
 
 /// A box with a specified size.
 ///
@@ -367,7 +367,7 @@ impl IntoElement for SizedBox {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_rendering::objects::RenderEmpty;
+    use flui_objects::RenderEmpty;
 
     // Mock widget for testing
     #[derive(Debug, Clone)]

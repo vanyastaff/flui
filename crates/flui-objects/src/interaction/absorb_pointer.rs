@@ -86,9 +86,9 @@
 //! absorber.set_absorbing(false); // Re-enable interactions
 //! ```
 
+use flui_interaction::{HitTestEntry, HitTestResult};
 use flui_rendering::{BoxHitTestCtx, BoxLayoutCtx, BoxPaintCtx, RenderBox, Single};
 use flui_rendering::{RenderObject, RenderResult};
-use flui_interaction::{HitTestEntry, HitTestResult};
 use flui_types::{Offset, Rect, Size};
 
 /// RenderObject that blocks pointer events from reaching its child.

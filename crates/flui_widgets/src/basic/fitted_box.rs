@@ -7,7 +7,7 @@ use bon::Builder;
 use flui_core::view::children::Child;
 use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
-use flui_rendering::objects::RenderFittedBox;
+use flui_objects::RenderFittedBox;
 use flui_types::Alignment;
 
 // Re-export BoxFit from types for convenience
@@ -201,7 +201,7 @@ impl<S: State> FittedBoxBuilder<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_rendering::objects::RenderEmpty;
+    use flui_objects::RenderEmpty;
 
     // Mock view for testing
     #[derive(Debug, Clone)]

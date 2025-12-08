@@ -35,7 +35,7 @@ use flui_core::BuildContext;
 
 use flui_core::view::children::Children;
 use flui_core::view::{IntoElement, StatelessView};
-use flui_rendering::objects::RenderIndexedStack;
+use flui_objects::RenderIndexedStack;
 use flui_types::layout::{Alignment, StackFit};
 
 /// A widget that shows only a single child from a list of children.
@@ -372,7 +372,7 @@ mod tests {
     use super::*;
     use flui_core::testing::test_build_context;
     use flui_core::view::build_context::with_build_context;
-    use flui_rendering::objects::RenderEmpty;
+    use flui_objects::RenderEmpty;
 
     // Mock view for testing
     #[derive()]

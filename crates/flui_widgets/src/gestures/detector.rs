@@ -5,7 +5,7 @@
 
 use flui_core::element::Element;
 use flui_core::view::{BuildContext, IntoElement, StatelessView};
-use flui_rendering::objects::PointerCallbacks;
+use flui_objects::PointerCallbacks;
 use flui_types::events::{PointerEvent, PointerEventData};
 use std::sync::Arc;
 
@@ -139,7 +139,7 @@ impl IntoElement for GestureDetector {
         // Return RenderPointerListener with child
         // The RenderPointerListener will create PointerListenerLayer
         // which registers hit test handlers with EventRouter
-        flui_rendering::objects::RenderPointerListener::new(callbacks).child(self.child)
+        flui_objects::RenderPointerListener::new(callbacks).child(self.child)
     }
 }
 
@@ -239,7 +239,7 @@ impl Default for GestureDetectorBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_rendering::objects::RenderEmpty;
+    use flui_objects::RenderEmpty;
 
     // Mock widget for testing
     #[derive(Debug, Clone)]

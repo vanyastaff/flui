@@ -9,7 +9,7 @@ use flui_core::element::Element;
 use flui_core::view::{IntoElement, StatelessView};
 
 use flui_core::BuildContext;
-use flui_rendering::objects::RenderOverflowBox;
+use flui_objects::RenderOverflowBox;
 use flui_types::Alignment;
 
 /// A widget that imposes different constraints on its child than it gets from its parent.

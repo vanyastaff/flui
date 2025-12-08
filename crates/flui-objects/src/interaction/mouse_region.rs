@@ -88,9 +88,9 @@
 //! let tracking = RenderMouseRegion::new(all_events);
 //! ```
 
+use flui_interaction::HitTestResult;
 use flui_rendering::{BoxHitTestCtx, BoxLayoutCtx, BoxPaintCtx, RenderBox, Single};
 use flui_rendering::{RenderObject, RenderResult};
-use flui_interaction::HitTestResult;
 use flui_types::Size;
 
 /// Mouse hover event callbacks.

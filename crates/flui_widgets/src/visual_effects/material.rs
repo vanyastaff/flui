@@ -233,7 +233,7 @@ impl IntoElement for Material {
             // Rounded rectangle shape
             PhysicalModel {
                 key: None,
-                shape: flui_rendering::PhysicalShape::RoundedRectangle,
+                shape: flui_objects::PhysicalShape::RoundedRectangle,
                 border_radius: radius,
                 elevation: self.elevation,
                 color: self.color,
@@ -246,7 +246,7 @@ impl IntoElement for Material {
             // Rectangle shape
             PhysicalModel {
                 key: None,
-                shape: flui_rendering::PhysicalShape::Rectangle,
+                shape: flui_objects::PhysicalShape::Rectangle,
                 border_radius: 0.0,
                 elevation: self.elevation,
                 color: self.color,

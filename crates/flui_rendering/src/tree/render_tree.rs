@@ -275,7 +275,7 @@ impl<R: RenderObject + fmt::Debug + 'static> RenderNode for ConcreteRenderNode<R
     }
 
     fn render_object(&self) -> &dyn RenderObject {
-        &self.object  // ✅ Uses existing RenderObject trait
+        &self.object // ✅ Uses existing RenderObject trait
     }
 
     fn render_object_mut(&mut self) -> &mut dyn RenderObject {
@@ -458,14 +458,11 @@ impl RenderTree {
     /// let render = RenderPadding::new(EdgeInsets::all(8.0));
     /// let id = tree.insert(render);
     /// ```
-    pub fn insert<R: RenderObject + fmt::Debug + 'static>(
-        &mut self,
-        object: R,
-    ) -> RenderId {
+    pub fn insert<R: RenderObject + fmt::Debug + 'static>(&mut self, object: R) -> RenderId {
         let node = ConcreteRenderNode::new(object);
         let storage = RenderNodeStorage::new(node);
         let slab_index = self.nodes.insert(storage);
-        RenderId::new(slab_index + 1)  // +1 offset
+        RenderId::new(slab_index + 1) // +1 offset
     }
 
     /// Returns a reference to a RenderNode (type-erased).

@@ -22,7 +22,7 @@ use flui_foundation::{ElementId, Key, Slot};
 use flui_tree::RuntimeArity;
 use flui_view::{PendingChildren, ViewLifecycle, ViewMode};
 
-use flui_rendering::{ProtocolId, RenderElement, RenderLifecycle, RenderObject};
+use flui_rendering::core::{ProtocolId, RenderElement, RenderLifecycle};
 
 use super::{ElementLifecycle, ViewElement};
 use crate::ViewObject;
@@ -92,7 +92,11 @@ impl Element {
     /// Note: In the four-tree architecture, render objects are stored in RenderTree.
     /// This constructor creates an element that references a render object by ID.
     pub fn render(render_id: Option<flui_rendering::RenderId>, protocol: ProtocolId) -> Self {
-        Self::Render(RenderElement::new(render_id, protocol, RuntimeArity::Variable))
+        Self::Render(RenderElement::new(
+            render_id,
+            protocol,
+            RuntimeArity::Variable,
+        ))
     }
 
     /// Creates a new Render element with render ID, protocol, and arity.
@@ -359,7 +363,9 @@ impl Element {
     /// Use `ViewElement::view_id()` to get the ID, then `ViewTree::get(id)` to access the object.
     #[inline]
     #[must_use]
-    #[deprecated(note = "View objects are now stored in ViewTree. Use ViewElement::view_id() and ViewTree::get()")]
+    #[deprecated(
+        note = "View objects are now stored in ViewTree. Use ViewElement::view_id() and ViewTree::get()"
+    )]
     pub fn has_view_object(&self) -> bool {
         false // ViewElement no longer stores objects
     }
@@ -369,7 +375,9 @@ impl Element {
     /// **DEPRECATED**: Always returns None. View objects are stored in ViewTree.
     #[inline]
     #[must_use]
-    #[deprecated(note = "View objects are now stored in ViewTree. Use ViewElement::view_id() and ViewTree::get()")]
+    #[deprecated(
+        note = "View objects are now stored in ViewTree. Use ViewElement::view_id() and ViewTree::get()"
+    )]
     pub fn view_object(&self) -> Option<&dyn ViewObject> {
         None // ViewElement no longer stores objects
     }
@@ -379,7 +387,9 @@ impl Element {
     /// **DEPRECATED**: Always returns None. View objects are stored in ViewTree.
     #[inline]
     #[must_use]
-    #[deprecated(note = "View objects are now stored in ViewTree. Use ViewElement::view_id() and ViewTree::get_mut()")]
+    #[deprecated(
+        note = "View objects are now stored in ViewTree. Use ViewElement::view_id() and ViewTree::get_mut()"
+    )]
     pub fn view_object_mut(&mut self) -> Option<&mut dyn ViewObject> {
         None // ViewElement no longer stores objects
     }
@@ -435,7 +445,9 @@ impl Element {
     ///
     /// **DEPRECATED**: No-op. View objects are stored in ViewTree.
     #[inline]
-    #[deprecated(note = "View objects are now stored in ViewTree. Use ViewTree::insert() or ViewTree::update()")]
+    #[deprecated(
+        note = "View objects are now stored in ViewTree. Use ViewTree::insert() or ViewTree::update()"
+    )]
     pub fn set_view_object<V: ViewObject>(&mut self, _view_object: V) {
         // No-op - ViewElement no longer stores objects
     }
@@ -444,7 +456,9 @@ impl Element {
     ///
     /// **DEPRECATED**: No-op. View objects are stored in ViewTree.
     #[inline]
-    #[deprecated(note = "View objects are now stored in ViewTree. Use ViewTree::insert() or ViewTree::update()")]
+    #[deprecated(
+        note = "View objects are now stored in ViewTree. Use ViewTree::insert() or ViewTree::update()"
+    )]
     pub fn set_view_object_boxed(&mut self, _view_object: Box<dyn ViewObject>) {
         // No-op - ViewElement no longer stores objects
     }
@@ -476,7 +490,9 @@ impl Element {
     /// **DEPRECATED**: Always returns None. Render objects are stored in RenderTree.
     /// Use `RenderElement::render_id()` to get the ID, then `RenderTree::get(id)` to access the object.
     #[inline]
-    #[deprecated(note = "Render objects are now stored in RenderTree. Use RenderElement::render_id() and RenderTree::get()")]
+    #[deprecated(
+        note = "Render objects are now stored in RenderTree. Use RenderElement::render_id() and RenderTree::get()"
+    )]
     pub fn render_object(&self) -> Option<&dyn Any> {
         None // RenderElement no longer stores objects
     }
@@ -486,7 +502,9 @@ impl Element {
     /// **DEPRECATED**: Always returns None. Render objects are stored in RenderTree.
     /// Use `RenderElement::render_id()` to get the ID, then `RenderTree::get_mut(id)` to access the object.
     #[inline]
-    #[deprecated(note = "Render objects are now stored in RenderTree. Use RenderElement::render_id() and RenderTree::get_mut()")]
+    #[deprecated(
+        note = "Render objects are now stored in RenderTree. Use RenderElement::render_id() and RenderTree::get_mut()"
+    )]
     pub fn render_object_mut(&mut self) -> Option<&mut dyn Any> {
         None // RenderElement no longer stores objects
     }

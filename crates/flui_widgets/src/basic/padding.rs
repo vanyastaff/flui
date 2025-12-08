@@ -34,7 +34,7 @@ use bon::Builder;
 use flui_core::view::children::Child;
 use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
-use flui_rendering::objects::RenderPadding;
+use flui_objects::RenderPadding;
 use flui_types::EdgeInsets;
 
 /// A widget that insets its child by the given padding.
@@ -280,7 +280,7 @@ impl IntoElement for Padding {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_rendering::objects::RenderEmpty;
+    use flui_objects::RenderEmpty;
 
     // Mock view for testing
     #[derive(Debug, Clone)]

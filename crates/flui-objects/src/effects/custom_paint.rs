@@ -89,9 +89,9 @@
 //! );
 //! ```
 
+use flui_painting::Canvas;
 use flui_rendering::{BoxLayoutCtx, BoxPaintCtx, RenderBox, Single};
 use flui_rendering::{RenderObject, RenderResult};
-use flui_painting::Canvas;
 use flui_types::Size;
 
 /// Custom painter trait

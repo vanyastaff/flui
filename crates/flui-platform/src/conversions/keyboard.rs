@@ -141,15 +141,37 @@ fn convert_physical_key(key_code: winit::keyboard::PhysicalKey) -> PhysicalKey {
 
             // Symbols, numpad, and media keys not yet defined in PhysicalKey
             // Map to Unidentified for now - they can be accessed via LogicalKey
-            KeyCode::Minus | KeyCode::Equal | KeyCode::BracketLeft | KeyCode::BracketRight
-            | KeyCode::Backslash | KeyCode::Semicolon | KeyCode::Quote | KeyCode::Backquote
-            | KeyCode::Comma | KeyCode::Period | KeyCode::Slash | KeyCode::Numpad0
-            | KeyCode::Numpad1 | KeyCode::Numpad2 | KeyCode::Numpad3 | KeyCode::Numpad4
-            | KeyCode::Numpad5 | KeyCode::Numpad6 | KeyCode::Numpad7 | KeyCode::Numpad8
-            | KeyCode::Numpad9 | KeyCode::NumpadAdd | KeyCode::NumpadSubtract
-            | KeyCode::NumpadMultiply | KeyCode::NumpadDivide | KeyCode::NumpadDecimal
-            | KeyCode::NumpadEnter | KeyCode::NumpadEqual | KeyCode::AudioVolumeUp
-            | KeyCode::AudioVolumeDown | KeyCode::AudioVolumeMute => PhysicalKey::Unidentified,
+            KeyCode::Minus
+            | KeyCode::Equal
+            | KeyCode::BracketLeft
+            | KeyCode::BracketRight
+            | KeyCode::Backslash
+            | KeyCode::Semicolon
+            | KeyCode::Quote
+            | KeyCode::Backquote
+            | KeyCode::Comma
+            | KeyCode::Period
+            | KeyCode::Slash
+            | KeyCode::Numpad0
+            | KeyCode::Numpad1
+            | KeyCode::Numpad2
+            | KeyCode::Numpad3
+            | KeyCode::Numpad4
+            | KeyCode::Numpad5
+            | KeyCode::Numpad6
+            | KeyCode::Numpad7
+            | KeyCode::Numpad8
+            | KeyCode::Numpad9
+            | KeyCode::NumpadAdd
+            | KeyCode::NumpadSubtract
+            | KeyCode::NumpadMultiply
+            | KeyCode::NumpadDivide
+            | KeyCode::NumpadDecimal
+            | KeyCode::NumpadEnter
+            | KeyCode::NumpadEqual
+            | KeyCode::AudioVolumeUp
+            | KeyCode::AudioVolumeDown
+            | KeyCode::AudioVolumeMute => PhysicalKey::Unidentified,
 
             // Fallback for unmapped keys
             _ => PhysicalKey::Unidentified,

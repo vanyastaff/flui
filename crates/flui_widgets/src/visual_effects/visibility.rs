@@ -18,7 +18,7 @@
 use bon::Builder;
 use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
-use flui_rendering::objects::RenderVisibility;
+use flui_objects::RenderVisibility;
 
 /// A widget that controls the visibility of its child.
 ///

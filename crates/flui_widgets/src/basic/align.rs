@@ -7,7 +7,7 @@ use bon::Builder;
 use flui_core::view::children::Child;
 use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
-use flui_rendering::objects::RenderAlign;
+use flui_objects::RenderAlign;
 use flui_types::Alignment;
 
 /// A widget that aligns its child within the available space.
@@ -230,7 +230,7 @@ impl IntoElement for Align {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_rendering::objects::RenderEmpty;
+    use flui_objects::RenderEmpty;
 
     // Mock view for testing
     #[derive(Debug, Clone)]

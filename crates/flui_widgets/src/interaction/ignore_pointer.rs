@@ -26,7 +26,7 @@ use bon::Builder;
 use flui_core::view::children::Child;
 use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
-use flui_rendering::objects::RenderIgnorePointer;
+use flui_objects::RenderIgnorePointer;
 
 /// A widget that is invisible to pointer events.
 ///

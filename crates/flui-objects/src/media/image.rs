@@ -67,9 +67,9 @@
 //!     .with_paint(paint);
 //! ```
 
+use flui_painting::Paint;
 use flui_rendering::{BoxLayoutCtx, BoxPaintCtx, Leaf, RenderBox};
 use flui_rendering::{RenderObject, RenderResult};
-use flui_painting::Paint;
 use flui_types::{painting::Image, Rect, Size};
 
 /// How an image should be inscribed into the allocated space

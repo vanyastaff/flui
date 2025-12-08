@@ -86,7 +86,7 @@ pub use basic::Text;
 // };
 
 // Re-export commonly used types
-// pub use flui_rendering::objects::DecorationPosition;
+// pub use flui_objects::DecorationPosition;
 // pub use flui_types::layout::{FlexFit, StackFit};
 // pub use flui_types::styling::{BorderRadius, BoxDecoration, Radius};
 // pub use flui_types::{Alignment, BoxConstraints, Color, EdgeInsets, Matrix4, Offset, Size};

@@ -193,7 +193,7 @@ impl ConcreteLayerNode {
             parent: None,
             children: Vec::new(),
             layer,
-            needs_compositing: true,  // Default: layers need compositing
+            needs_compositing: true, // Default: layers need compositing
             offset: None,
             element_id: None,
         }
@@ -431,7 +431,7 @@ impl LayerTree {
         let node = ConcreteLayerNode::new(layer);
         let storage = LayerNodeStorage::new(node);
         let slab_index = self.nodes.insert(storage);
-        LayerId::new(slab_index + 1)  // +1 offset
+        LayerId::new(slab_index + 1) // +1 offset
     }
 
     /// Returns a reference to a LayerNode (type-erased).
@@ -464,9 +464,7 @@ impl LayerTree {
     /// }
     /// ```
     pub fn get_concrete(&self, id: LayerId) -> Option<&ConcreteLayerNode> {
-        self.get(id)?
-            .as_any()
-            .downcast_ref::<ConcreteLayerNode>()
+        self.get(id)?.as_any().downcast_ref::<ConcreteLayerNode>()
     }
 
     /// Returns a mutable reference to the concrete LayerNode.

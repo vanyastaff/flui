@@ -688,8 +688,8 @@ impl RenderElement {
 // UNIFIED LAYOUT AND PAINT METHODS
 // ============================================================================
 
-use super::unified::{Constraints, Geometry};
 use super::tree::{LayoutTree, PaintTree};
+use super::unified::{Constraints, Geometry};
 use crate::{RenderError, RenderResult};
 
 impl RenderElement {
@@ -882,9 +882,7 @@ impl RenderElement {
     /// Returns last sliver geometry.
     #[inline]
     pub fn sliver_geometry(&self) -> Option<SliverGeometry> {
-        self.state
-            .as_sliver_state()
-            .and_then(|s| s.geometry())
+        self.state.as_sliver_state().and_then(|s| s.geometry())
     }
 
     /// Sets sliver geometry (called after layout, Sliver protocol only).
@@ -1101,11 +1099,7 @@ mod tests {
     fn test_new_element() {
         // Mock RenderId (in real usage, this comes from RenderTree)
         let render_id = RenderId::new(1);
-        let element = RenderElement::new(
-            Some(render_id),
-            ProtocolId::Box,
-            RuntimeArity::Exact(0),
-        );
+        let element = RenderElement::new(Some(render_id), ProtocolId::Box, RuntimeArity::Exact(0));
 
         assert!(element.has_render_id());
         assert_eq!(element.render_id(), Some(render_id));
@@ -1116,11 +1110,8 @@ mod tests {
     #[test]
     fn test_mount_unmount() {
         let render_id = RenderId::new(1);
-        let mut element = RenderElement::new(
-            Some(render_id),
-            ProtocolId::Box,
-            RuntimeArity::Exact(0),
-        );
+        let mut element =
+            RenderElement::new(Some(render_id), ProtocolId::Box, RuntimeArity::Exact(0));
 
         let id = ElementId::new(1);
         element.mount(id, None);
@@ -1138,11 +1129,8 @@ mod tests {
     #[test]
     fn test_children() {
         let render_id = RenderId::new(1);
-        let mut element = RenderElement::new(
-            Some(render_id),
-            ProtocolId::Box,
-            RuntimeArity::Exact(0),
-        );
+        let mut element =
+            RenderElement::new(Some(render_id), ProtocolId::Box, RuntimeArity::Exact(0));
 
         let child1 = ElementId::new(10);
         let child2 = ElementId::new(20);
@@ -1160,11 +1148,8 @@ mod tests {
     #[test]
     fn test_dirty_flags() {
         let render_id = RenderId::new(1);
-        let mut element = RenderElement::new(
-            Some(render_id),
-            ProtocolId::Box,
-            RuntimeArity::Exact(0),
-        );
+        let mut element =
+            RenderElement::new(Some(render_id), ProtocolId::Box, RuntimeArity::Exact(0));
 
         element.mount(ElementId::new(1), None);
 

@@ -251,7 +251,7 @@ impl<V: ViewObject + fmt::Debug + 'static> ViewNode for ConcreteViewNode<V> {
     }
 
     fn view_object(&self) -> &dyn ViewObject {
-        &self.object  // ✅ Uses existing ViewObject trait
+        &self.object // ✅ Uses existing ViewObject trait
     }
 
     fn view_object_mut(&mut self) -> &mut dyn ViewObject {
@@ -434,7 +434,7 @@ impl ViewTree {
         let node = ConcreteViewNode::new(object, mode);
         let storage = ViewNodeStorage::new(node);
         let slab_index = self.nodes.insert(storage);
-        ViewId::new(slab_index + 1)  // +1 offset
+        ViewId::new(slab_index + 1) // +1 offset
     }
 
     /// Returns a reference to a ViewNode (type-erased).
@@ -469,10 +469,11 @@ impl ViewTree {
     ///     println!("Text: {}", node.object().text);
     /// }
     /// ```
-    pub fn get_concrete<V: ViewObject + fmt::Debug + 'static>(&self, id: ViewId) -> Option<&ConcreteViewNode<V>> {
-        self.get(id)?
-            .as_any()
-            .downcast_ref::<ConcreteViewNode<V>>()
+    pub fn get_concrete<V: ViewObject + fmt::Debug + 'static>(
+        &self,
+        id: ViewId,
+    ) -> Option<&ConcreteViewNode<V>> {
+        self.get(id)?.as_any().downcast_ref::<ConcreteViewNode<V>>()
     }
 
     /// Returns a mutable reference to the concrete ViewNode type.

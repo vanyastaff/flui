@@ -1,42 +1,4 @@
 {
-  "enableAllProjectMcpServers": true,
-  "enabledMcpjsonServers": [
-    "filesystem"
-  ],
-  "hooks": {
-    "PostToolUse": [
-      {
-        "hooks": [
-          {
-            "command": "claude-hook-advisor --hook",
-            "type": "command"
-          }
-        ],
-        "matcher": "Bash"
-      }
-    ],
-    "PreToolUse": [
-      {
-        "hooks": [
-          {
-            "command": "claude-hook-advisor --hook",
-            "type": "command"
-          }
-        ],
-        "matcher": "Bash"
-      }
-    ],
-    "UserPromptSubmit": [
-      {
-        "hooks": [
-          {
-            "command": "claude-hook-advisor --hook",
-            "type": "command"
-          }
-        ]
-      }
-    ]
-  },
   "permissions": {
     "allow": [
       "Bash(cargo run:*)",
@@ -90,9 +52,50 @@
       "WebFetch(domain:rust-lang.github.io)",
       "mcp__filesystem__directory_tree",
       "SlashCommand(/feature-dev:feature-dev Абстракция кроссплатформенного embedder слоя для flui_app с унификацией flui-scheduler и flui_interaction интеграции. Цели: устранить дублирование кода между Desktop/Android embedder, убрать unsafe код в hit testing, создать чистую абстракцию для поддержки новых платформ (iOS, Web, консоли))",
-      "SlashCommand(/feature-dev:feature-dev:*)"
+      "SlashCommand(/feature-dev:feature-dev:*)",
+      "SlashCommand(/openspec:proposal)",
+      "SlashCommand(/openspec:apply refactor-flui-tree-abstractions)",
+      "SlashCommand(/openspec:apply:*)"
     ],
-    "ask": [],
-    "deny": []
+    "deny": [],
+    "ask": []
+  },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "filesystem"
+  ],
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "claude-hook-advisor --hook"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "claude-hook-advisor --hook"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "claude-hook-advisor --hook"
+          }
+        ]
+      }
+    ]
   }
 }

@@ -38,12 +38,13 @@
 use std::any::Any;
 use std::collections::HashSet;
 
+use crate::tree::{
+    HitTestVisitable, LayoutVisitable, PaintVisitable, RenderTreeAccess, RenderTreeExt,
+};
 use flui_foundation::ElementId;
 use flui_interaction::{HitTestEntry, HitTestResult};
 use flui_painting::Canvas;
-use flui_tree::{
-    HitTestVisitable, LayoutVisitable, PaintVisitable, RenderTreeAccess, TreeNav, TreeRead,
-};
+use flui_tree::{TreeNav, TreeRead};
 use flui_types::{BoxConstraints, Offset, Size, SliverConstraints, SliverGeometry};
 
 use crate::core::unified::{Constraints, Geometry};
@@ -66,7 +67,7 @@ use flui_types::Axis;
 /// wrapped in `RenderTree<T>`.
 ///
 /// All required functionality is provided by the composed traits.
-pub trait RenderTreeStorage: TreeRead + TreeNav + RenderTreeAccess {}
+pub trait RenderTreeStorage: TreeRead<ElementId> + TreeNav<ElementId> + RenderTreeAccess {}
 
 // ============================================================================
 // RENDER TREE
@@ -441,30 +442,27 @@ impl<T: RenderTreeStorage> LayoutTree for RenderTree<T> {
                 .ok_or_else(|| RenderError::not_render_element(id))?;
 
             // Four-tree architecture: Access RenderObject via RenderTree
-            let render_id = render_element
-                .render_id()
-                .ok_or_else(|| {
-                    RenderError::Layout(format!(
-                        "Element {:?} has no RenderId - RenderObject not in RenderTree",
-                        id
-                    ))
-                })?;
+            let render_id = render_element.render_id().ok_or_else(|| {
+                RenderError::Layout(format!(
+                    "Element {:?} has no RenderId - RenderObject not in RenderTree",
+                    id
+                ))
+            })?;
 
             // Get RenderNode from separate RenderTree
-            let render_node = self
-                .render_objects
-                .get_mut(render_id)
-                .ok_or_else(|| {
-                    RenderError::Layout(format!(
-                        "RenderId {:?} not found in RenderTree for element {:?}",
-                        render_id, id
-                    ))
-                })?;
+            let render_node = self.render_objects.get_mut(render_id).ok_or_else(|| {
+                RenderError::Layout(format!(
+                    "RenderId {:?} not found in RenderTree for element {:?}",
+                    render_id, id
+                ))
+            })?;
 
             // Call perform_layout on the RenderObject
-            let size = render_node
-                .render_object_mut()
-                .perform_layout(id, constraints, &mut layout_child)?;
+            let size = render_node.render_object_mut().perform_layout(
+                id,
+                constraints,
+                &mut layout_child,
+            )?;
 
             // Cache the result
             if let Some(state) = self.storage.render_state(id) {

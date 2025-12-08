@@ -27,10 +27,10 @@
 //! pub type RenderClipRect = RenderClip<RectShape>;
 //! ```
 
-use flui_rendering::{BoxHitTestCtx, BoxLayoutCtx, BoxPaintCtx, RenderBox, Single};
-use flui_rendering::{RenderObject, RenderResult};
 use flui_interaction::HitTestResult;
 use flui_painting::Canvas;
+use flui_rendering::{BoxHitTestCtx, BoxLayoutCtx, BoxPaintCtx, RenderBox, Single};
+use flui_rendering::{RenderObject, RenderResult};
 use flui_types::{painting::Clip, Offset, Size};
 
 /// Trait for defining clip shapes

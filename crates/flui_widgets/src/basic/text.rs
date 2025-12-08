@@ -44,7 +44,8 @@
 use bon::Builder;
 use flui_core::element::Element;
 use flui_core::IntoElement;
-use flui_rendering::{BoxRenderWrapper, Leaf, ParagraphData, RenderParagraph};
+use flui_objects::{ParagraphData, RenderParagraph};
+use flui_rendering::{BoxRenderWrapper, Leaf};
 use flui_types::{
     typography::{TextAlign, TextDirection, TextOverflow},
     Color,

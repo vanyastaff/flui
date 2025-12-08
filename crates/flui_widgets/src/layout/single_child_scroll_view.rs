@@ -253,13 +253,13 @@ impl IntoElement for SingleChildScrollView {
 
         // Create render object with or without controller
         let mut render = match self.controller {
-            Some(controller) => flui_rendering::objects::RenderScrollView::with_controller_arcs(
+            Some(controller) => flui_objects::RenderScrollView::with_controller_arcs(
                 self.direction,
                 self.reverse,
                 controller.offset_arc(),
                 controller.max_offset_arc(),
             ),
-            None => flui_rendering::objects::RenderScrollView::new(self.direction, self.reverse),
+            None => flui_objects::RenderScrollView::new(self.direction, self.reverse),
         };
 
         // Configure scroll bar

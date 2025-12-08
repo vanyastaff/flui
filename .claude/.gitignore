@@ -1,0 +1,10 @@
+# Local settings (not shared with team)
+settings.local.json
+settings.local.json.backup_*
+
+# Session logs
+session-log.txt
+
+# Temporary files
+*.tmp
+*.bak

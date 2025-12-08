@@ -50,9 +50,9 @@
 //! - **Hit Testing**: O(1) - matrix inversion (cached)
 //! - **Memory**: 80 bytes (Matrix4 = 16 × f32 + metadata)
 
+use flui_interaction::HitTestResult;
 use flui_rendering::{BoxHitTestCtx, BoxLayoutCtx, BoxPaintCtx, RenderBox, Single};
 use flui_rendering::{RenderObject, RenderResult};
-use flui_interaction::HitTestResult;
 use flui_types::{geometry::Transform, Matrix4, Offset, Size};
 
 /// RenderObject that applies a transformation to its child.

@@ -12,6 +12,7 @@ members = [
     "crates/flui_log",          # Cross-platform logging
     "crates/flui_core",         # Core with foundation utilities
     "crates/flui_rendering",
+    "crates/flui-objects",      # Concrete RenderObject implementations
     "crates/flui_widgets",
     "crates/flui_app",
     "crates/flui_painting",
@@ -49,7 +50,7 @@ dashmap = "6.1"
 crossbeam = "0.8"
 
 # COLLECTIONS - Used by multiple crates
-smallvec = { version = "1.13", features = ["serde", "union"] }
+smallvec = { version = "1.13", features = ["serde", "union", "const_generics"] }
 
 # SERIALIZATION - Core functionality
 serde = { version = "1.0", features = ["derive", "rc"] }

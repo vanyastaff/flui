@@ -33,7 +33,7 @@ use bon::Builder;
 use flui_core::view::children::Children;
 use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
-use flui_rendering::objects::RenderStack;
+use flui_objects::RenderStack;
 use flui_types::layout::{Alignment, StackFit};
 
 /// A widget that positions its children relative to the edges of its box.
@@ -313,7 +313,7 @@ macro_rules! stack {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_rendering::objects::RenderEmpty;
+    use flui_objects::RenderEmpty;
 
     // Mock view for testing
     #[derive()]

@@ -25,12 +25,13 @@
 use std::any::Any;
 use std::collections::HashSet;
 
+use crate::tree::{
+    HitTestVisitable, LayoutVisitable, PaintVisitable, RenderTreeAccess, RenderTreeExt,
+};
 use flui_foundation::ElementId;
 use flui_interaction::{HitTestEntry, HitTestResult};
 use flui_painting::Canvas;
-use flui_tree::{
-    HitTestVisitable, LayoutVisitable, PaintVisitable, RenderTreeAccess, TreeNav, TreeRead,
-};
+use flui_tree::{TreeNav, TreeRead};
 use flui_types::{Axis, BoxConstraints, Offset, Size, SliverConstraints, SliverGeometry};
 
 use crate::error::RenderError;
@@ -51,7 +52,7 @@ use crate::unified::{Constraints, Geometry};
 /// - `TreeRead` - Access nodes by ID
 /// - `TreeNav` - Parent/child navigation
 /// - `RenderTreeAccess` - Access to render objects and state
-pub trait RenderTreeStorage: TreeRead + TreeNav + RenderTreeAccess {}
+pub trait RenderTreeStorage: TreeRead<ElementId> + TreeNav<ElementId> + RenderTreeAccess {}
 
 // ============================================================================
 // RENDER TREE WRAPPER

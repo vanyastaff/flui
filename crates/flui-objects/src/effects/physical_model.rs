@@ -72,9 +72,9 @@
 //!     .with_shadow_color(Color::rgba(0, 0, 0, 100));
 //! ```
 
+use flui_painting::Paint;
 use flui_rendering::{BoxLayoutCtx, BoxPaintCtx, Optional, RenderBox};
 use flui_rendering::{RenderObject, RenderResult};
-use flui_painting::Paint;
 use flui_types::{painting::Path, Color, Point, RRect, Rect, Size};
 
 /// Shape for physical model

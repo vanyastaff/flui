@@ -16,7 +16,7 @@
 use bon::Builder;
 use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
-use flui_rendering::objects::RenderOffstage;
+use flui_objects::RenderOffstage;
 
 /// A widget that lays out its child as if it was in the tree, but without painting or hit testing.
 ///

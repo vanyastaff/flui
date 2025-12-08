@@ -1,90 +1,194 @@
-//! Fully typed RenderElement - Element that owns and manages a RenderObject.
+//! Type-safe render elements with compile-time arity validation.
 //!
-//! This module provides a generic `RenderElement<R, P>` where:
-//! - `R: RenderObject` - The concrete render object type
-//! - `P: Protocol` - The layout protocol (BoxProtocol or SliverProtocol)
+//! This module provides the core `RenderElement<R, P, A>` type with full compile-time
+//! safety for child count validation through the Arity system from `flui-tree`.
 //!
 //! # Architecture
 //!
 //! ```text
-//! ┌─────────────────────────────────────────────────────────────────┐
-//! │                    Typed Layer (Compile-time)                    │
-//! │  RenderElement<RenderPadding, BoxProtocol>                       │
-//! │  RenderElement<RenderFlex, BoxProtocol>                          │
-//! │  RenderElement<RenderSliver, SliverProtocol>                     │
-//! └─────────────────────────────────────────────────────────────────┘
-//!                              │
-//!                              ▼ impl RenderElementNode
-//! ┌─────────────────────────────────────────────────────────────────┐
-//! │                  Type-Erased Layer (Runtime)                     │
-//! │  Box<dyn RenderElementNode>                                      │
-//! │  ElementNodeStorage                                              │
-//! └─────────────────────────────────────────────────────────────────┘
+//! RenderElement<R: RenderObject, P: Protocol, A: Arity>
+//!     ├── R: Specific render object type (RenderPadding, RenderFlex, etc.)
+//!     ├── P: Layout protocol (BoxProtocol, SliverProtocol)
+//!     └── A: Child count constraint (Leaf, Single, Optional, Variable, etc.)
 //! ```
 //!
-//! # Benefits
+//! # Compile-time Safety
 //!
-//! 1. **Compile-time type safety**: Protocol mismatch caught at compile time
-//! 2. **Direct state access**: No runtime downcasting for constraints/geometry
-//! 3. **Zero overhead**: No Box<dyn> for RenderState
-//! 4. **Heterogeneous storage**: Via RenderElementNode trait
+//! - **Child count validation**: Arity generic parameter prevents invalid child operations
+//! - **Type-safe accessors**: GAT-based accessors provide zero-cost child access
+//! - **Protocol safety**: Protocol generic ensures correct constraint/geometry types
+//! - **Zero runtime overhead**: All validation compiled away in release builds
+//!
+//! # Example
+//!
+//! ```rust,ignore
+//! // Padding can have exactly one child
+//! let padding: RenderElement<RenderPadding, BoxProtocol, Single> =
+//!     RenderElement::new(render_padding);
+//!
+//! // Access the single child with compile-time guarantee
+//! let child = padding.children().single(); // Returns &ElementId
+//!
+//! // Flex can have multiple children
+//! let flex: RenderElement<RenderFlex, BoxProtocol, Variable> =
+//!     RenderElement::new(render_flex);
+//!
+//! // Access children as slice
+//! let children = flex.children().as_slice(); // Returns &[ElementId]
+//! ```
 
-use std::any::Any;
 use std::fmt;
 use std::marker::PhantomData;
 
 use flui_foundation::ElementId;
-use flui_tree::RuntimeArity;
-use flui_types::{Offset, Size, SliverGeometry};
+use flui_types::{Offset, Size};
 
-use crate::element_node::RenderElementNode;
+use crate::arity::{Arity, ChildrenAccess, Leaf, Optional, Single, Variable};
 use crate::flags::AtomicRenderFlags;
 use crate::lifecycle::RenderLifecycle;
 use crate::object::RenderObject;
 use crate::parent_data::ParentData;
-use crate::protocol::{BoxProtocol, Protocol, ProtocolId, SliverProtocol};
-use crate::state::{BoxRenderState, RenderState, SliverRenderState};
+use crate::protocol::{BoxProtocol, Protocol, ProtocolCast, SliverProtocol};
+use crate::state::RenderState;
 use crate::tree::RenderId;
-use crate::{BoxConstraints, SliverConstraints};
+use crate::RenderResult;
 
 // ============================================================================
-// TYPE ALIASES
+// TYPE ALIASES FOR CONVENIENCE
 // ============================================================================
 
-/// RenderElement for Box protocol.
-pub type BoxRenderElement<R> = RenderElement<R, BoxProtocol>;
+/// Type alias for box render elements with specific arity.
+pub type BoxRenderElement<R, A> = RenderElement<R, BoxProtocol, A>;
 
-/// RenderElement for Sliver protocol.
-pub type SliverRenderElement<R> = RenderElement<R, SliverProtocol>;
+/// Type alias for sliver render elements with specific arity.
+pub type SliverRenderElement<R, A> = RenderElement<R, SliverProtocol, A>;
 
 // ============================================================================
-// RENDER ELEMENT (Fully Generic)
+// TYPE-ERASED STORAGE ENUM
 // ============================================================================
 
-/// Fully typed RenderElement with compile-time protocol safety.
+/// Type-erased render element for storage in trees.
 ///
-/// This is the bridge between the element tree and render tree, corresponding
-/// to Flutter's `RenderObjectElement`.
+/// This enum allows storage of different arity types in a unified tree structure
+/// while preserving type safety at API boundaries through pattern matching.
+#[derive(Debug)]
+pub enum AnyRenderElement<R: RenderObject, P: Protocol + ProtocolCast> {
+    /// Leaf element (no children).
+    Leaf(RenderElement<R, P, Leaf>),
+    /// Single child element.
+    Single(RenderElement<R, P, Single>),
+    /// Optional child element (0-1 children).
+    Optional(RenderElement<R, P, Optional>),
+    /// Variable children element (0+ children).
+    Variable(RenderElement<R, P, Variable>),
+}
+
+impl<R: RenderObject, P: Protocol + ProtocolCast> AnyRenderElement<R, P> {
+    /// Get the element ID regardless of arity.
+    pub fn id(&self) -> Option<ElementId> {
+        match self {
+            Self::Leaf(elem) => elem.id(),
+            Self::Single(elem) => elem.id(),
+            Self::Optional(elem) => elem.id(),
+            Self::Variable(elem) => elem.id(),
+        }
+    }
+
+    /// Get the parent ID regardless of arity.
+    pub fn parent(&self) -> Option<ElementId> {
+        match self {
+            Self::Leaf(elem) => elem.parent(),
+            Self::Single(elem) => elem.parent(),
+            Self::Optional(elem) => elem.parent(),
+            Self::Variable(elem) => elem.parent(),
+        }
+    }
+
+    /// Get the child count regardless of arity.
+    pub fn child_count(&self) -> usize {
+        match self {
+            Self::Leaf(elem) => elem.child_count(),
+            Self::Single(elem) => elem.child_count(),
+            Self::Optional(elem) => elem.child_count(),
+            Self::Variable(elem) => elem.child_count(),
+        }
+    }
+
+    /// Execute a closure with access to the typed element.
+    pub fn with_typed<F, T>(&self, f: F) -> T
+    where
+        F: TypedElementVisitor<R, P, Output = T>,
+    {
+        match self {
+            Self::Leaf(elem) => f.visit_leaf(elem),
+            Self::Single(elem) => f.visit_single(elem),
+            Self::Optional(elem) => f.visit_optional(elem),
+            Self::Variable(elem) => f.visit_variable(elem),
+        }
+    }
+
+    /// Execute a mutable closure with access to the typed element.
+    pub fn with_typed_mut<F, T>(&mut self, f: F) -> T
+    where
+        F: TypedElementVisitorMut<R, P, Output = T>,
+    {
+        match self {
+            Self::Leaf(elem) => f.visit_leaf_mut(elem),
+            Self::Single(elem) => f.visit_single_mut(elem),
+            Self::Optional(elem) => f.visit_optional_mut(elem),
+            Self::Variable(elem) => f.visit_variable_mut(elem),
+        }
+    }
+}
+
+/// Visitor trait for type-safe operations on any render element.
+pub trait TypedElementVisitor<R: RenderObject, P: Protocol + ProtocolCast> {
+    type Output;
+
+    fn visit_leaf(&self, element: &RenderElement<R, P, Leaf>) -> Self::Output;
+    fn visit_single(&self, element: &RenderElement<R, P, Single>) -> Self::Output;
+    fn visit_optional(&self, element: &RenderElement<R, P, Optional>) -> Self::Output;
+    fn visit_variable(&self, element: &RenderElement<R, P, Variable>) -> Self::Output;
+}
+
+/// Mutable visitor trait for type-safe operations on any render element.
+pub trait TypedElementVisitorMut<R: RenderObject, P: Protocol + ProtocolCast> {
+    type Output;
+
+    fn visit_leaf_mut(&self, element: &mut RenderElement<R, P, Leaf>) -> Self::Output;
+    fn visit_single_mut(&self, element: &mut RenderElement<R, P, Single>) -> Self::Output;
+    fn visit_optional_mut(&self, element: &mut RenderElement<R, P, Optional>) -> Self::Output;
+    fn visit_variable_mut(&self, element: &mut RenderElement<R, P, Variable>) -> Self::Output;
+}
+
+// ============================================================================
+// MAIN RENDER ELEMENT STRUCT
+// ============================================================================
+
+/// Type-safe render element with compile-time arity validation.
+///
+/// This struct represents a node in the render tree with full compile-time
+/// type safety for child count constraints, layout protocols, and render objects.
 ///
 /// # Type Parameters
 ///
-/// - `R: RenderObject` - The concrete render object type (e.g., RenderPadding)
-/// - `P: Protocol` - The layout protocol (BoxProtocol or SliverProtocol)
+/// - `R: RenderObject` - The specific render object type (e.g., `RenderPadding`)
+/// - `P: Protocol` - The layout protocol (`BoxProtocol` or `SliverProtocol`)
+/// - `A: Arity` - The child count constraint (`Leaf`, `Single`, `Optional`, `Variable`, etc.)
 ///
-/// # Example
+/// # Compile-time Guarantees
 ///
-/// ```rust,ignore
-/// // Create a typed element for RenderPadding
-/// let element: BoxRenderElement<RenderPadding> = RenderElement::new(
-///     Some(render_id),
-///     RuntimeArity::Exact(1),
-/// );
+/// - Child operations are validated at compile time based on arity
+/// - Protocol-specific state access is type-safe
+/// - Invalid operations (e.g., adding child to `Leaf`) are compilation errors
 ///
-/// // Direct access to typed state - no downcasting!
-/// let size: Size = element.state().size();
-/// let constraints: &BoxConstraints = element.state().constraints().unwrap();
-/// ```
-pub struct RenderElement<R: RenderObject, P: Protocol> {
+/// # Memory Layout
+///
+/// The struct is designed for efficient memory usage:
+/// - `PhantomData` has zero size
+/// - Child storage is optimized based on arity (inline for small counts)
+/// - Flags use atomic operations for thread safety
+pub struct RenderElement<R: RenderObject, P: Protocol, A: Arity> {
     // ========== Identity ==========
     /// This element's ID (set during mount).
     id: Option<ElementId>,
@@ -92,7 +196,7 @@ pub struct RenderElement<R: RenderObject, P: Protocol> {
     /// Parent element ID (None for root).
     parent: Option<ElementId>,
 
-    /// Child element IDs.
+    /// Child element IDs - stored as Vec but accessed through typed accessors.
     children: Vec<ElementId>,
 
     /// Depth in tree (0 for root).
@@ -101,9 +205,6 @@ pub struct RenderElement<R: RenderObject, P: Protocol> {
     // ========== Render Object ==========
     /// Reference into RenderTree (four-tree architecture).
     render_id: Option<RenderId>,
-
-    /// Runtime arity (child count validation).
-    arity: RuntimeArity,
 
     // ========== Render State (Typed!) ==========
     /// Protocol-specific state - DIRECT, not Box<dyn>!
@@ -122,42 +223,47 @@ pub struct RenderElement<R: RenderObject, P: Protocol> {
     debug_name: Option<&'static str>,
 
     // ========== PhantomData ==========
-    /// Marker for RenderObject type.
-    _phantom: PhantomData<R>,
+    /// Markers for RenderObject and Arity types.
+    _phantom: PhantomData<(R, A)>,
 }
 
-impl<R: RenderObject, P: Protocol> fmt::Debug for RenderElement<R, P> {
+impl<R: RenderObject, P: Protocol, A: Arity> fmt::Debug for RenderElement<R, P, A> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RenderElement")
-            .field("type", &std::any::type_name::<R>())
-            .field("protocol", &std::any::type_name::<P>())
             .field("id", &self.id)
             .field("parent", &self.parent)
-            .field("children_count", &self.children.len())
+            .field("children", &self.children)
             .field("depth", &self.depth)
-            .field("arity", &self.arity)
-            .field("offset", &self.state.offset())
+            .field("render_id", &self.render_id)
             .field("lifecycle", &self.lifecycle)
-            .field("flags", &self.state.flags().load())
-            .field("debug_name", &self.debug_name())
+            .field("debug_name", &self.debug_name)
+            .field("arity", &A::runtime_arity())
+            .field("protocol", &std::any::type_name::<P>())
             .finish()
     }
 }
 
 // ============================================================================
-// CONSTRUCTION
+// CORE CONSTRUCTORS
 // ============================================================================
 
-impl<R: RenderObject, P: Protocol> RenderElement<R, P> {
-    /// Creates new RenderElement with a RenderId reference.
-    pub fn new(render_id: Option<RenderId>, arity: RuntimeArity) -> Self {
+impl<R: RenderObject, P: Protocol, A: Arity> RenderElement<R, P, A> {
+    /// Create a new render element.
+    ///
+    /// # Compile-time Validation
+    ///
+    /// The arity type `A` determines what child operations are allowed.
+    /// Invalid operations will be caught at compile time.
+    pub fn new() -> Self
+    where
+        A: Default,
+    {
         Self {
             id: None,
             parent: None,
             children: Vec::new(),
             depth: 0,
-            render_id,
-            arity,
+            render_id: None,
             state: RenderState::new(),
             lifecycle: RenderLifecycle::Detached,
             parent_data: None,
@@ -166,13 +272,13 @@ impl<R: RenderObject, P: Protocol> RenderElement<R, P> {
         }
     }
 
-    /// Builder: set debug name.
+    /// Create element with debug name.
     pub fn with_debug_name(mut self, name: &'static str) -> Self {
         self.debug_name = Some(name);
         self
     }
 
-    /// Builder: set initial render id.
+    /// Create element with render ID.
     pub fn with_render_id(mut self, render_id: RenderId) -> Self {
         self.render_id = Some(render_id);
         self
@@ -180,299 +286,388 @@ impl<R: RenderObject, P: Protocol> RenderElement<R, P> {
 }
 
 // ============================================================================
-// TYPED STATE ACCESS (Zero-cost!)
+// STATE ACCESS
 // ============================================================================
 
-impl<R: RenderObject, P: Protocol> RenderElement<R, P> {
-    /// Returns reference to typed render state.
-    ///
-    /// This is the key benefit of generic RenderElement - direct access
-    /// to typed state without any downcasting or runtime checks!
-    #[inline]
+impl<R: RenderObject, P: Protocol, A: Arity> RenderElement<R, P, A> {
+    /// Get immutable reference to protocol-specific state.
     pub fn state(&self) -> &RenderState<P> {
         &self.state
     }
 
-    /// Returns mutable reference to typed render state.
-    #[inline]
+    /// Get mutable reference to protocol-specific state.
     pub fn state_mut(&mut self) -> &mut RenderState<P> {
         &mut self.state
     }
 
-    /// Returns protocol ID at runtime.
-    #[inline]
-    pub fn protocol_id(&self) -> ProtocolId {
-        if std::any::TypeId::of::<P>() == std::any::TypeId::of::<BoxProtocol>() {
-            ProtocolId::Box
-        } else {
-            ProtocolId::Sliver
-        }
+    /// Get the protocol ID for runtime identification.
+    pub fn protocol_id(&self) -> crate::protocol::ProtocolId
+    where
+        P: ProtocolCast,
+    {
+        P::id()
     }
 }
 
 // ============================================================================
-// BOX PROTOCOL CONVENIENCE METHODS
+// BOX PROTOCOL SPECIFIC METHODS
 // ============================================================================
 
-impl<R: RenderObject> RenderElement<R, BoxProtocol> {
-    /// Returns size (Box protocol only).
-    #[inline]
+impl<R: RenderObject, A: Arity> RenderElement<R, BoxProtocol, A> {
+    /// Get the computed size (Box protocol only).
     pub fn size(&self) -> Size {
         self.state.size()
     }
 
-    /// Sets size (Box protocol only).
-    #[inline]
-    pub fn set_size(&self, size: Size) {
+    /// Set the computed size (Box protocol only).
+    pub fn set_size(&mut self, size: Size) {
         self.state.set_size(size);
     }
 
-    /// Returns constraints (Box protocol only).
-    #[inline]
-    pub fn constraints(&self) -> Option<&BoxConstraints> {
+    /// Get the layout constraints (Box protocol only).
+    pub fn constraints(&self) -> Option<&flui_types::BoxConstraints> {
         self.state.constraints()
     }
 
-    /// Sets constraints (Box protocol only).
-    #[inline]
-    pub fn set_constraints(&self, constraints: BoxConstraints) {
+    /// Set the layout constraints (Box protocol only).
+    pub fn set_constraints(&mut self, constraints: flui_types::BoxConstraints) {
         self.state.set_constraints(constraints);
     }
 }
 
 // ============================================================================
-// SLIVER PROTOCOL CONVENIENCE METHODS
+// SLIVER PROTOCOL SPECIFIC METHODS
 // ============================================================================
 
-impl<R: RenderObject> RenderElement<R, SliverProtocol> {
-    /// Returns sliver geometry.
-    #[inline]
-    pub fn geometry(&self) -> Option<SliverGeometry> {
+impl<R: RenderObject, A: Arity> RenderElement<R, SliverProtocol, A> {
+    /// Get the computed geometry (Sliver protocol only).
+    pub fn geometry(&self) -> Option<flui_types::SliverGeometry> {
         self.state.geometry()
     }
 
-    /// Sets sliver geometry.
-    #[inline]
-    pub fn set_geometry(&self, geometry: SliverGeometry) {
-        self.state.set_sliver_geometry(geometry);
+    /// Set the computed geometry (Sliver protocol only).
+    pub fn set_geometry(&mut self, geometry: flui_types::SliverGeometry) {
+        self.state.set_geometry(geometry);
     }
 
-    /// Returns sliver constraints.
-    #[inline]
-    pub fn sliver_constraints(&self) -> Option<&SliverConstraints> {
+    /// Get the sliver constraints (Sliver protocol only).
+    pub fn sliver_constraints(&self) -> Option<&flui_types::SliverConstraints> {
         self.state.constraints()
     }
 
-    /// Sets sliver constraints.
-    #[inline]
-    pub fn set_sliver_constraints(&self, constraints: SliverConstraints) {
+    /// Set the sliver constraints (Sliver protocol only).
+    pub fn set_sliver_constraints(&mut self, constraints: flui_types::SliverConstraints) {
         self.state.set_constraints(constraints);
     }
 }
 
 // ============================================================================
-// LIFECYCLE
+// LIFECYCLE METHODS
 // ============================================================================
 
-impl<R: RenderObject, P: Protocol> RenderElement<R, P> {
-    /// Mounts element to tree.
+impl<R: RenderObject, P: Protocol, A: Arity> RenderElement<R, P, A> {
+    /// Mount the element (transition from Created to Mounted).
     pub fn mount(&mut self, id: ElementId, parent: Option<ElementId>) {
-        debug_assert!(
-            self.lifecycle.is_detached(),
-            "Cannot mount: already mounted (state: {:?})",
-            self.lifecycle
-        );
-
+        debug_assert!(self.lifecycle.is_detached());
         self.id = Some(id);
         self.parent = parent;
-        self.depth = if parent.is_some() { 0 } else { 0 };
-
-        self.lifecycle.attach();
-        self.state.flags().mark_needs_layout();
-        self.state.flags().mark_needs_paint();
+        self.lifecycle = RenderLifecycle::Attached;
     }
 
-    /// Unmounts element from tree.
+    /// Unmount the element (transition to Unmounted).
     pub fn unmount(&mut self) {
-        debug_assert!(
-            self.lifecycle.is_attached(),
-            "Cannot unmount: not attached (state: {:?})",
-            self.lifecycle
-        );
-
+        debug_assert!(self.lifecycle.is_attached());
         self.id = None;
         self.parent = None;
         self.children.clear();
-        self.depth = 0;
-
-        self.lifecycle.detach();
+        self.lifecycle = RenderLifecycle::Detached;
     }
 
-    /// Updates element when properties change.
-    pub fn update(&mut self) {
-        self.mark_needs_paint();
+    /// Update the element (keeps same ID, may change parent).
+    pub fn update(&mut self, parent: Option<ElementId>) {
+        self.parent = parent;
     }
 
-    /// Activates element (for reparenting).
+    /// Activate the element (mount to existing tree).
     pub fn activate(&mut self) {
-        self.lifecycle.attach();
+        self.lifecycle = RenderLifecycle::Attached;
     }
 
-    /// Deactivates element (for reparenting).
+    /// Deactivate the element (temporarily detach).
     pub fn deactivate(&mut self) {
-        self.lifecycle.detach();
+        self.lifecycle = RenderLifecycle::Detached;
     }
 }
 
 // ============================================================================
-// PARENT DATA MANAGEMENT
+// PARENT DATA METHODS
 // ============================================================================
 
-impl<R: RenderObject, P: Protocol> RenderElement<R, P> {
-    /// Sets up parent data for this child.
-    pub fn setup_parent_data(&mut self, parent_data: Box<dyn ParentData>) {
-        self.parent_data = Some(parent_data);
+impl<R: RenderObject, P: Protocol, A: Arity> RenderElement<R, P, A> {
+    /// Setup parent data (called by parent during child addition).
+    pub fn setup_parent_data(&mut self, data: Box<dyn ParentData>) {
+        self.parent_data = Some(data);
     }
 
-    /// Returns parent data (if set).
+    /// Get parent data reference.
     pub fn get_parent_data(&self) -> Option<&dyn ParentData> {
         self.parent_data.as_deref()
     }
 
-    /// Returns mutable parent data.
+    /// Get mutable parent data reference.
     pub fn get_parent_data_mut(&mut self) -> Option<&mut dyn ParentData> {
         self.parent_data.as_deref_mut()
     }
 
-    /// Downcasts parent data to specific type.
+    /// Get parent data as specific type.
     pub fn parent_data_as<T: ParentData>(&self) -> Option<&T> {
-        self.parent_data
-            .as_ref()
-            .and_then(|pd| pd.as_any().downcast_ref::<T>())
+        self.parent_data.as_ref()?.as_any().downcast_ref()
     }
 
-    /// Downcasts parent data to specific type (mutable).
+    /// Get mutable parent data as specific type.
     pub fn parent_data_as_mut<T: ParentData>(&mut self) -> Option<&mut T> {
-        self.parent_data
-            .as_mut()
-            .and_then(|pd| pd.as_any_mut().downcast_mut::<T>())
+        self.parent_data.as_mut()?.as_any_mut().downcast_mut()
     }
 }
 
 // ============================================================================
-// IDENTITY & TREE NAVIGATION
+// TREE STRUCTURE METHODS
 // ============================================================================
 
-impl<R: RenderObject, P: Protocol> RenderElement<R, P> {
-    #[inline]
+impl<R: RenderObject, P: Protocol, A: Arity> RenderElement<R, P, A> {
+    /// Get element ID.
     pub fn id(&self) -> Option<ElementId> {
         self.id
     }
 
-    #[inline]
+    /// Get parent element ID.
     pub fn parent(&self) -> Option<ElementId> {
         self.parent
     }
 
-    #[inline]
+    /// Set parent element ID.
     pub fn set_parent(&mut self, parent: Option<ElementId>) {
         self.parent = parent;
     }
 
-    #[inline]
-    pub fn children(&self) -> &[ElementId] {
+    /// Get type-safe children accessor.
+    ///
+    /// This method returns a compile-time validated accessor based on the arity type:
+    /// - `Leaf`: `NoChildren` - cannot access children (compilation error)
+    /// - `Single`: `FixedChildren<1>` - access via `.single()`
+    /// - `Optional`: `OptionalChild` - access via `.get()` returning `Option<&ElementId>`
+    /// - `Variable`: `SliceChildren` - access via `.as_slice()` returning `&[ElementId]`
+    pub fn children(&self) -> A::Accessor<'_, ElementId> {
+        A::from_slice(&self.children)
+    }
+
+    /// Get raw children slice (for internal use).
+    ///
+    /// Prefer using `children()` for type-safe access.
+    pub fn children_raw(&self) -> &[ElementId] {
         &self.children
     }
 
-    #[inline]
-    pub fn children_mut(&mut self) -> &mut Vec<ElementId> {
+    /// Get mutable raw children slice (for internal use).
+    pub fn children_raw_mut(&mut self) -> &mut Vec<ElementId> {
         &mut self.children
     }
 
-    #[inline]
+    /// Get tree depth.
     pub fn depth(&self) -> usize {
         self.depth
     }
 
-    #[inline]
+    /// Set tree depth.
     pub fn set_depth(&mut self, depth: usize) {
         self.depth = depth;
     }
 
-    #[inline]
-    pub fn add_child(&mut self, child: ElementId) {
-        self.children.push(child);
-    }
-
-    #[inline]
-    pub fn remove_child(&mut self, child: ElementId) {
-        self.children.retain(|&id| id != child);
-    }
-
-    #[inline]
+    /// Get child count.
     pub fn child_count(&self) -> usize {
         self.children.len()
     }
 
-    #[inline]
+    /// Check if element has children.
     pub fn has_children(&self) -> bool {
         !self.children.is_empty()
     }
 }
 
 // ============================================================================
-// RENDER ID ACCESS
+// CHILD MANIPULATION - COMPILE-TIME ARITY VALIDATION
 // ============================================================================
 
-impl<R: RenderObject, P: Protocol> RenderElement<R, P> {
-    #[inline]
+/// Extension trait for Vec<ElementId> that adds arity-validated operations.
+trait ArityValidatedVec<A: Arity> {
+    /// Push a child with arity validation - can use `?` operator!
+    fn push_validated(&mut self, child: ElementId) -> Result<(), flui_tree::ArityError>;
+
+    /// Remove a child with arity validation - can use `?` operator!
+    fn remove_validated(&mut self, child: ElementId) -> Result<bool, flui_tree::ArityError>;
+}
+
+impl<A: Arity> ArityValidatedVec<A> for Vec<ElementId> {
+    fn push_validated(&mut self, child: ElementId) -> Result<(), flui_tree::ArityError> {
+        // Check if adding a child would be valid for this arity
+        if !A::validate_count(self.len() + 1) {
+            return Err(flui_tree::ArityError::TooManyChildren {
+                arity: A::runtime_arity(),
+                attempted: self.len() + 1,
+            });
+        }
+        self.push(child);
+        Ok(())
+    }
+
+    fn remove_validated(&mut self, child: ElementId) -> Result<bool, flui_tree::ArityError> {
+        // Check if removing a child would be valid for this arity
+        if !A::validate_count(self.len().saturating_sub(1)) {
+            return Err(flui_tree::ArityError::TooFewChildren {
+                arity: A::runtime_arity(),
+                attempted: self.len().saturating_sub(1),
+            });
+        }
+
+        if let Some(pos) = self.iter().position(|&id| id == child) {
+            self.remove(pos);
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+}
+
+impl<R: RenderObject, P: Protocol, A: Arity> RenderElement<R, P, A> {
+    /// Add a child with compile-time arity validation.
+    ///
+    /// Uses the elegant `?` operator for error handling:
+    /// - `Single`: Can add one child if none exists
+    /// - `Optional`: Can add one child if none exists
+    /// - `Variable`: Can always add children
+    /// - `Leaf`: Cannot add children (runtime error)
+    pub fn add_child(&mut self, child: ElementId) -> RenderResult<()> {
+        ArityValidatedVec::<A>::push_validated(&mut self.children, child)?;
+        Ok(())
+    }
+
+    /// Remove a child with compile-time arity validation.
+    ///
+    /// Uses the elegant `?` operator for error handling:
+    /// - `Optional`: Can remove child if one exists
+    /// - `Variable`: Can remove children if any exist
+    /// - `Single` and `Leaf`: Cannot remove children (runtime error)
+    pub fn remove_child(&mut self, child: ElementId) -> RenderResult<bool> {
+        Ok(ArityValidatedVec::<A>::remove_validated(
+            &mut self.children,
+            child,
+        )?)
+    }
+
+    /// Try to add a child, returning whether it succeeded.
+    pub fn try_add_child(&mut self, child: ElementId) -> bool {
+        self.add_child(child).is_ok()
+    }
+
+    /// Try to remove a child, returning whether it was found and removed.
+    pub fn try_remove_child(&mut self, child: ElementId) -> bool {
+        self.remove_child(child).unwrap_or(false)
+    }
+
+    /// Check if adding a child is currently allowed.
+    pub fn can_add_child(&self) -> bool {
+        A::validate_count(self.children.len() + 1)
+    }
+
+    /// Check if removing a child is currently allowed.
+    pub fn can_remove_child(&self) -> bool {
+        self.children.len() > 0 && A::validate_count(self.children.len() - 1)
+    }
+
+    /// Get the maximum number of children allowed.
+    pub fn max_children(&self) -> Option<usize> {
+        match A::runtime_arity() {
+            flui_tree::RuntimeArity::Exact(n) => Some(n),
+            flui_tree::RuntimeArity::Optional => Some(1),
+            flui_tree::RuntimeArity::AtLeast(_) => None,
+            flui_tree::RuntimeArity::Variable => None,
+            flui_tree::RuntimeArity::Range(_, max) => Some(max),
+            flui_tree::RuntimeArity::Never => Some(0),
+        }
+    }
+
+    /// Get the minimum number of children required.
+    pub fn min_children(&self) -> usize {
+        match A::runtime_arity() {
+            flui_tree::RuntimeArity::Exact(n) => n,
+            flui_tree::RuntimeArity::Optional => 0,
+            flui_tree::RuntimeArity::AtLeast(min) => min,
+            flui_tree::RuntimeArity::Variable => 0,
+            flui_tree::RuntimeArity::Range(min, _) => min,
+            flui_tree::RuntimeArity::Never => 0,
+        }
+    }
+}
+
+// ============================================================================
+// RENDER ID METHODS
+// ============================================================================
+
+impl<R: RenderObject, P: Protocol, A: Arity> RenderElement<R, P, A> {
+    /// Get render ID.
     pub fn render_id(&self) -> Option<RenderId> {
         self.render_id
     }
 
-    #[inline]
+    /// Set render ID.
     pub fn set_render_id(&mut self, render_id: Option<RenderId>) {
         self.render_id = render_id;
     }
 
-    #[inline]
+    /// Check if element has render ID.
     pub fn has_render_id(&self) -> bool {
         self.render_id.is_some()
     }
 }
 
 // ============================================================================
-// ARITY
+// ARITY INTROSPECTION
 // ============================================================================
 
-impl<R: RenderObject, P: Protocol> RenderElement<R, P> {
-    #[inline]
-    pub fn arity(&self) -> RuntimeArity {
-        self.arity
+impl<R: RenderObject, P: Protocol, A: Arity> RenderElement<R, P, A> {
+    /// Get compile-time arity information.
+    pub fn arity() -> crate::arity::RuntimeArity {
+        A::runtime_arity()
     }
 
-    #[inline]
-    pub fn is_box(&self) -> bool {
-        std::any::TypeId::of::<P>() == std::any::TypeId::of::<BoxProtocol>()
+    /// Check if this is a box protocol element.
+    pub fn is_box() -> bool
+    where
+        P: ProtocolCast,
+    {
+        P::is_box()
     }
 
-    #[inline]
-    pub fn is_sliver(&self) -> bool {
-        std::any::TypeId::of::<P>() == std::any::TypeId::of::<SliverProtocol>()
+    /// Check if this is a sliver protocol element.
+    pub fn is_sliver() -> bool
+    where
+        P: ProtocolCast,
+    {
+        P::is_sliver()
     }
 }
 
 // ============================================================================
-// OFFSET (Common to all protocols)
+// OFFSET METHODS (Box Protocol Only)
 // ============================================================================
 
-impl<R: RenderObject, P: Protocol> RenderElement<R, P> {
-    #[inline]
+impl<R: RenderObject, A: Arity> RenderElement<R, BoxProtocol, A> {
+    /// Get the layout offset (Box protocol only).
     pub fn offset(&self) -> Offset {
         self.state.offset()
     }
 
-    #[inline]
+    /// Set the layout offset (Box protocol only).
     pub fn set_offset(&mut self, offset: Offset) {
         self.state.set_offset(offset);
     }
@@ -482,267 +677,130 @@ impl<R: RenderObject, P: Protocol> RenderElement<R, P> {
 // DIRTY FLAGS
 // ============================================================================
 
-impl<R: RenderObject, P: Protocol> RenderElement<R, P> {
-    #[inline]
+impl<R: RenderObject, P: Protocol, A: Arity> RenderElement<R, P, A> {
+    /// Get atomic render flags.
     pub fn flags(&self) -> &AtomicRenderFlags {
         self.state.flags()
     }
 
-    pub fn mark_needs_layout(&mut self) {
-        if self.flags().needs_layout() {
-            return;
-        }
-
-        self.state.flags().mark_needs_layout();
-        self.state.flags().mark_needs_paint();
-        self.lifecycle.mark_needs_layout();
+    /// Mark that layout is needed.
+    pub fn mark_needs_layout(&self) {
+        self.flags().mark_needs_layout();
+        // Note: In a full implementation, this would also propagate up the tree
+        // and schedule a layout pass with the scheduler.
     }
 
-    pub fn mark_needs_paint(&mut self) {
-        if self.flags().needs_paint() {
-            return;
-        }
-
-        self.state.flags().mark_needs_paint();
-
-        if self.lifecycle.is_laid_out() {
-            self.lifecycle.mark_needs_paint();
-        }
+    /// Mark that paint is needed.
+    pub fn mark_needs_paint(&self) {
+        self.flags().mark_needs_paint();
+        // Note: In a full implementation, this would also propagate up the tree
+        // and schedule a paint pass with the scheduler.
     }
 
-    pub fn mark_needs_compositing(&mut self) {
-        self.state.flags().mark_needs_compositing();
+    /// Mark that compositing is needed.
+    pub fn mark_needs_compositing(&self) {
+        self.flags().mark_needs_compositing();
     }
 
-    #[inline]
+    /// Check if layout is needed.
     pub fn needs_layout(&self) -> bool {
         self.flags().needs_layout()
     }
 
-    #[inline]
+    /// Check if paint is needed.
     pub fn needs_paint(&self) -> bool {
         self.flags().needs_paint()
     }
 
-    #[inline]
+    /// Check if compositing is needed.
     pub fn needs_compositing(&self) -> bool {
         self.flags().needs_compositing()
     }
 
-    pub fn clear_needs_layout(&mut self) {
-        self.state.flags().clear_needs_layout();
-
-        if self.lifecycle.is_attached() && !self.lifecycle.is_laid_out() {
-            self.lifecycle.mark_laid_out();
-        }
+    /// Clear layout needed flag.
+    pub fn clear_needs_layout(&self) {
+        self.flags().clear_needs_layout();
     }
 
-    pub fn clear_needs_paint(&mut self) {
-        self.state.flags().clear_needs_paint();
-
-        if self.lifecycle == RenderLifecycle::LaidOut {
-            self.lifecycle.mark_painted();
-        }
+    /// Clear paint needed flag.
+    pub fn clear_needs_paint(&self) {
+        self.flags().clear_needs_paint();
     }
 }
 
 // ============================================================================
-// LIFECYCLE STATE
+// LIFECYCLE QUERIES
 // ============================================================================
 
-impl<R: RenderObject, P: Protocol> RenderElement<R, P> {
-    #[inline]
+impl<R: RenderObject, P: Protocol, A: Arity> RenderElement<R, P, A> {
+    /// Get current lifecycle state.
     pub fn lifecycle(&self) -> RenderLifecycle {
         self.lifecycle
     }
 
-    #[inline]
+    /// Check if element is attached to tree.
     pub fn is_attached(&self) -> bool {
         self.lifecycle.is_attached()
     }
 
-    #[inline]
+    /// Check if element is detached from tree.
     pub fn is_detached(&self) -> bool {
         self.lifecycle.is_detached()
     }
 
-    #[inline]
+    /// Check if element has been laid out.
     pub fn is_laid_out(&self) -> bool {
-        self.lifecycle.is_laid_out()
+        !self.needs_layout()
     }
 
-    #[inline]
+    /// Check if element has been painted.
     pub fn is_painted(&self) -> bool {
-        self.lifecycle.is_painted()
+        !self.needs_paint()
     }
 
-    #[inline]
+    /// Check if element is clean (no layout/paint needed).
     pub fn is_clean(&self) -> bool {
-        self.lifecycle.is_clean() && self.flags().is_clean()
+        !self.needs_layout() && !self.needs_paint()
     }
 
-    #[inline]
+    /// Check if element is dirty (needs layout or paint).
     pub fn is_dirty(&self) -> bool {
-        !self.is_clean()
+        self.needs_layout() || self.needs_paint()
     }
 }
 
 // ============================================================================
-// DEBUG
+// DEBUG METHODS
 // ============================================================================
 
-impl<R: RenderObject, P: Protocol> RenderElement<R, P> {
-    pub fn debug_name(&self) -> &'static str {
+impl<R: RenderObject, P: Protocol, A: Arity> RenderElement<R, P, A> {
+    /// Get debug name.
+    pub fn debug_name(&self) -> Option<&'static str> {
         self.debug_name
-            .unwrap_or_else(|| std::any::type_name::<R>())
     }
 
-    pub fn set_debug_name(&mut self, name: &'static str) {
-        self.debug_name = Some(name);
+    /// Set debug name.
+    pub fn set_debug_name(&mut self, name: Option<&'static str>) {
+        self.debug_name = name;
     }
 
+    /// Get debug description.
     pub fn debug_description(&self) -> String {
-        format!("{}#{:?} ({})", self.debug_name(), self.id, self.lifecycle)
+        format!(
+            "{}({:?}, {:?}, {:?})",
+            self.debug_name.unwrap_or("RenderElement"),
+            std::any::type_name::<R>(),
+            std::any::type_name::<P>(),
+            A::runtime_arity()
+        )
     }
 }
 
 // ============================================================================
-// RENDER ELEMENT NODE IMPLEMENTATION
+// ERROR TYPES
 // ============================================================================
 
-impl<R: RenderObject + 'static, P: Protocol + 'static> RenderElementNode for RenderElement<R, P> {
-    fn id(&self) -> Option<ElementId> {
-        self.id
-    }
-
-    fn parent(&self) -> Option<ElementId> {
-        self.parent
-    }
-
-    fn children(&self) -> &[ElementId] {
-        &self.children
-    }
-
-    fn depth(&self) -> usize {
-        self.depth
-    }
-
-    fn protocol_id(&self) -> ProtocolId {
-        RenderElement::protocol_id(self)
-    }
-
-    fn arity(&self) -> RuntimeArity {
-        self.arity
-    }
-
-    fn render_id(&self) -> Option<RenderId> {
-        self.render_id
-    }
-
-    fn set_render_id(&mut self, render_id: Option<RenderId>) {
-        self.render_id = render_id;
-    }
-
-    fn offset(&self) -> Offset {
-        self.state.offset()
-    }
-
-    fn set_offset(&mut self, offset: Offset) {
-        self.state.set_offset(offset);
-    }
-
-    fn flags(&self) -> &AtomicRenderFlags {
-        self.state.flags()
-    }
-
-    fn lifecycle(&self) -> RenderLifecycle {
-        self.lifecycle
-    }
-
-    fn parent_data(&self) -> Option<&dyn ParentData> {
-        self.parent_data.as_deref()
-    }
-
-    fn parent_data_mut(&mut self) -> Option<&mut dyn ParentData> {
-        self.parent_data.as_deref_mut()
-    }
-
-    fn set_parent_data(&mut self, parent_data: Box<dyn ParentData>) {
-        self.parent_data = Some(parent_data);
-    }
-
-    fn as_box_state(&self) -> Option<&BoxRenderState> {
-        // Runtime type check for protocol conversion
-        //
-        // SAFETY INVARIANTS:
-        // 1. RenderState<P> has identical memory layout for all P (verified by #[repr(C)] or layout tests)
-        // 2. TypeId check guarantees P == BoxProtocol before cast
-        // 3. Both BoxProtocol and SliverProtocol are zero-sized marker types
-        // 4. The only difference is the PhantomData<P> which is zero-sized
-        //
-        // This is a sound transmute because:
-        // - Same size and alignment (verified at compile time by Protocol trait bounds)
-        // - Same field layout (AtomicRenderFlags, OnceCell<Geometry>, OnceCell<Constraints>, AtomicOffset)
-        // - PhantomData doesn't affect layout
-        if std::any::TypeId::of::<P>() == std::any::TypeId::of::<BoxProtocol>() {
-            // SAFETY: TypeId check guarantees P == BoxProtocol
-            // RenderState<BoxProtocol> and RenderState<P> have identical layout
-            Some(unsafe {
-                &*(&self.state as *const RenderState<P> as *const RenderState<BoxProtocol>)
-            })
-        } else {
-            None
-        }
-    }
-
-    fn as_box_state_mut(&mut self) -> Option<&mut BoxRenderState> {
-        // See safety documentation in as_box_state()
-        if std::any::TypeId::of::<P>() == std::any::TypeId::of::<BoxProtocol>() {
-            // SAFETY: TypeId check guarantees P == BoxProtocol
-            Some(unsafe {
-                &mut *(&mut self.state as *mut RenderState<P> as *mut RenderState<BoxProtocol>)
-            })
-        } else {
-            None
-        }
-    }
-
-    fn as_sliver_state(&self) -> Option<&SliverRenderState> {
-        // See safety documentation in as_box_state()
-        if std::any::TypeId::of::<P>() == std::any::TypeId::of::<SliverProtocol>() {
-            // SAFETY: TypeId check guarantees P == SliverProtocol
-            Some(unsafe {
-                &*(&self.state as *const RenderState<P> as *const RenderState<SliverProtocol>)
-            })
-        } else {
-            None
-        }
-    }
-
-    fn as_sliver_state_mut(&mut self) -> Option<&mut SliverRenderState> {
-        // See safety documentation in as_box_state()
-        if std::any::TypeId::of::<P>() == std::any::TypeId::of::<SliverProtocol>() {
-            // SAFETY: TypeId check guarantees P == SliverProtocol
-            Some(unsafe {
-                &mut *(&mut self.state as *mut RenderState<P> as *mut RenderState<SliverProtocol>)
-            })
-        } else {
-            None
-        }
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
-    }
-
-    fn debug_name(&self) -> &'static str {
-        RenderElement::debug_name(self)
-    }
-}
+// ArityError is converted to RenderError for consistency
 
 // ============================================================================
 // TESTS
@@ -752,11 +810,10 @@ impl<R: RenderObject + 'static, P: Protocol + 'static> RenderElementNode for Ren
 mod tests {
     use super::*;
     use crate::object::RenderObject;
-    use crate::BoxConstraints;
     use crate::RenderResult;
     use flui_painting::Canvas;
 
-    // Minimal test RenderObject
+    // Test render object
     #[derive(Debug)]
     struct TestRenderObject;
 
@@ -764,128 +821,221 @@ mod tests {
         fn perform_layout(
             &mut self,
             _element_id: ElementId,
-            constraints: BoxConstraints,
-            _layout_child: &mut dyn FnMut(ElementId, BoxConstraints) -> RenderResult<Size>,
-        ) -> RenderResult<Size> {
-            Ok(constraints.smallest())
+            _constraints: flui_types::BoxConstraints,
+            _layout_child: &mut dyn FnMut(
+                ElementId,
+                flui_types::BoxConstraints,
+            ) -> RenderResult<flui_types::Size>,
+        ) -> RenderResult<flui_types::Size> {
+            Ok(flui_types::Size::new(100.0, 100.0))
         }
 
         fn paint(
             &self,
             _element_id: ElementId,
-            _offset: Offset,
-            _size: Size,
+            _offset: flui_types::Offset,
+            _size: flui_types::Size,
             _canvas: &mut Canvas,
-            _paint_child: &mut dyn FnMut(ElementId, Offset, &mut Canvas),
+            _paint_child: &mut dyn FnMut(ElementId, flui_types::Offset, &mut Canvas),
         ) {
         }
     }
 
     #[test]
-    fn test_new_element() {
-        let render_id = RenderId::new(1);
-        let element: BoxRenderElement<TestRenderObject> =
-            RenderElement::new(Some(render_id), RuntimeArity::Exact(0));
+    fn test_leaf_element() {
+        let element: RenderElement<TestRenderObject, BoxProtocol, Leaf> = RenderElement::new();
 
-        assert!(element.has_render_id());
-        assert_eq!(element.render_id(), Some(render_id));
-        assert!(element.is_detached());
+        // Leaf elements cannot have children
         assert_eq!(element.child_count(), 0);
-        assert!(element.is_box());
-        assert!(!element.is_sliver());
+        assert!(!element.has_children());
+
+        // This would be a compile error:
+        // element.add_child(ElementId::new(1)); // CanAddChild not implemented for Leaf
+
+        let children = element.children();
+        assert_eq!(children.as_slice().len(), 0);
     }
 
     #[test]
-    fn test_typed_state_access() {
-        let element: BoxRenderElement<TestRenderObject> =
-            RenderElement::new(None, RuntimeArity::Exact(0));
+    fn test_single_element() {
+        let mut element: RenderElement<TestRenderObject, BoxProtocol, Single> =
+            RenderElement::new();
+        let child_id = ElementId::new(1);
 
-        // Direct typed access - no downcasting!
-        let state: &RenderState<BoxProtocol> = element.state();
-        assert_eq!(state.size(), Size::ZERO);
-
-        // Protocol-specific convenience methods
-        assert_eq!(element.size(), Size::ZERO);
-    }
-
-    #[test]
-    fn test_mount_unmount() {
-        let render_id = RenderId::new(1);
-        let mut element: BoxRenderElement<TestRenderObject> =
-            RenderElement::new(Some(render_id), RuntimeArity::Exact(0));
-
-        let id = ElementId::new(1);
-        element.mount(id, None);
-
-        assert!(element.is_attached());
-        assert_eq!(element.id(), Some(id));
-        assert_eq!(element.depth(), 0);
-
-        element.unmount();
-
-        assert!(element.is_detached());
-        assert_eq!(element.id(), None);
-    }
-
-    #[test]
-    fn test_children() {
-        let render_id = RenderId::new(1);
-        let mut element: BoxRenderElement<TestRenderObject> =
-            RenderElement::new(Some(render_id), RuntimeArity::Exact(0));
-
-        let child1 = ElementId::new(10);
-        let child2 = ElementId::new(20);
-
-        element.add_child(child1);
-        element.add_child(child2);
-
-        assert_eq!(element.child_count(), 2);
-        assert!(element.has_children());
-
-        element.remove_child(child1);
+        // Single elements can have exactly one child
+        assert!(element.add_child(child_id).is_ok());
         assert_eq!(element.child_count(), 1);
+
+        // Cannot add second child
+        let second_child = ElementId::new(2);
+        assert!(element.add_child(second_child).is_err());
+
+        // Access the single child
+        let children = element.children();
+        assert_eq!(*children.single(), child_id);
     }
 
     #[test]
-    fn test_dirty_flags() {
-        let render_id = RenderId::new(1);
-        let mut element: BoxRenderElement<TestRenderObject> =
-            RenderElement::new(Some(render_id), RuntimeArity::Exact(0));
+    fn test_optional_element() {
+        let mut element: RenderElement<TestRenderObject, BoxProtocol, Optional> =
+            RenderElement::new();
 
-        element.mount(ElementId::new(1), None);
+        // Optional starts with no children
+        assert_eq!(element.child_count(), 0);
+        let children = element.children();
+        assert!(children.get().is_none());
 
-        assert!(element.needs_layout());
-        assert!(element.needs_paint());
+        // Can add one child
+        let child_id = ElementId::new(1);
+        assert!(element.add_child(child_id).is_ok());
 
-        element.clear_needs_layout();
-        assert!(!element.needs_layout());
-        assert!(element.needs_paint());
+        let children = element.children();
+        assert_eq!(children.get(), Some(&child_id));
 
-        element.clear_needs_paint();
-        assert!(!element.needs_paint());
-        assert!(element.is_clean());
-
-        element.mark_needs_paint();
-        assert!(!element.needs_layout());
-        assert!(element.needs_paint());
+        // Can remove the child
+        assert!(element.remove_child(child_id).unwrap());
+        assert_eq!(element.child_count(), 0);
     }
 
     #[test]
-    fn test_render_element_node_trait() {
-        use crate::element_node::ElementNodeStorage;
+    fn test_variable_element() {
+        let mut element: RenderElement<TestRenderObject, BoxProtocol, Variable> =
+            RenderElement::new();
 
-        let element: BoxRenderElement<TestRenderObject> =
-            RenderElement::new(None, RuntimeArity::Exact(0));
+        // Variable can have multiple children
+        let child1 = ElementId::new(1);
+        let child2 = ElementId::new(2);
+        let child3 = ElementId::new(3);
 
-        // Store as type-erased
-        let storage = ElementNodeStorage::new(element);
+        assert!(element.add_child(child1).is_ok());
+        assert!(element.add_child(child2).is_ok());
+        assert!(element.add_child(child3).is_ok());
 
-        // Access via trait
-        assert_eq!(storage.protocol_id(), ProtocolId::Box);
-        assert!(storage.is_box());
+        assert_eq!(element.child_count(), 3);
 
-        // Downcast back
-        let typed = storage.downcast_ref::<BoxRenderElement<TestRenderObject>>();
-        assert!(typed.is_some());
+        let children = element.children();
+        let slice = children.as_slice();
+        assert_eq!(slice, &[child1, child2, child3]);
+
+        // Can remove children
+        assert!(element.remove_child(child2).unwrap());
+        assert_eq!(element.child_count(), 2);
+    }
+
+    #[test]
+    fn test_type_erased_storage() {
+        let leaf: AnyRenderElement<TestRenderObject, BoxProtocol> =
+            AnyRenderElement::Leaf(RenderElement::new());
+        let single: AnyRenderElement<TestRenderObject, BoxProtocol> =
+            AnyRenderElement::Single(RenderElement::new());
+
+        // Can access common properties
+        assert_eq!(leaf.child_count(), 0);
+        assert_eq!(single.child_count(), 0);
+
+        // Can use visitor pattern for type-safe operations
+        struct CountChildren;
+
+        impl TypedElementVisitor<TestRenderObject, BoxProtocol> for CountChildren {
+            type Output = usize;
+
+            fn visit_leaf(
+                &self,
+                element: &RenderElement<TestRenderObject, BoxProtocol, Leaf>,
+            ) -> usize {
+                element.child_count()
+            }
+
+            fn visit_single(
+                &self,
+                element: &RenderElement<TestRenderObject, BoxProtocol, Single>,
+            ) -> usize {
+                element.child_count()
+            }
+
+            fn visit_optional(
+                &self,
+                element: &RenderElement<TestRenderObject, BoxProtocol, Optional>,
+            ) -> usize {
+                element.child_count()
+            }
+
+            fn visit_variable(
+                &self,
+                element: &RenderElement<TestRenderObject, BoxProtocol, Variable>,
+            ) -> usize {
+                element.child_count()
+            }
+        }
+
+        let count1 = leaf.with_typed(CountChildren);
+        let count2 = single.with_typed(CountChildren);
+
+        assert_eq!(count1, 0);
+        assert_eq!(count2, 0);
+    }
+
+    #[test]
+    fn test_elegant_children_access_api() {
+        // Demonstrate the elegant ChildrenAccess-based mutation API
+        let child1 = ElementId::new(1);
+        let child2 = ElementId::new(2);
+        let child3 = ElementId::new(3);
+
+        // Leaf: Cannot add children - compile-time safety via accessor
+        let mut leaf: RenderElement<TestRenderObject, BoxProtocol, Leaf> = RenderElement::new();
+        assert!(!leaf.can_add_child());
+        assert!(leaf.add_child(child1).is_err()); // RenderError with ArityError inside
+
+        // Single: Can add exactly one child
+        let mut single: RenderElement<TestRenderObject, BoxProtocol, Single> = RenderElement::new();
+        // Note: Single starts empty but expects exactly 1 child when accessing
+        assert!(single.add_child(child1).is_ok()); // ✅ First child OK
+        assert!(!single.can_add_child());
+        assert!(single.add_child(child2).is_err()); // ❌ Second child fails
+
+        // Now we can safely access the single child
+        let children = single.children();
+        assert_eq!(*children.single(), child1);
+
+        // Optional: Can add/remove one child
+        let mut optional: RenderElement<TestRenderObject, BoxProtocol, Optional> =
+            RenderElement::new();
+        assert!(optional.can_add_child());
+        assert!(!optional.can_remove_child());
+
+        assert!(optional.add_child(child1).is_ok()); // ✅ Add child
+        assert!(!optional.can_add_child());
+        assert!(optional.can_remove_child());
+
+        assert!(optional.remove_child(child1).unwrap()); // ✅ Remove child
+        assert!(optional.can_add_child());
+        assert!(!optional.can_remove_child());
+
+        // Variable: Can add/remove multiple children
+        let mut variable: RenderElement<TestRenderObject, BoxProtocol, Variable> =
+            RenderElement::new();
+        assert!(variable.can_add_child());
+        assert!(!variable.can_remove_child()); // Empty
+
+        // Add multiple children with elegant ? syntax
+        assert!(variable.add_child(child1).is_ok());
+        assert!(variable.add_child(child2).is_ok());
+        assert!(variable.add_child(child3).is_ok());
+        assert_eq!(variable.child_count(), 3);
+
+        // Can always add more (Variable arity)
+        assert!(variable.can_add_child());
+        assert!(variable.can_remove_child());
+
+        // Remove children
+        assert!(variable.remove_child(child2).unwrap());
+        assert_eq!(variable.child_count(), 2);
+
+        // Check mutation capability through ChildrenAccess
+        assert_eq!(variable.max_children(), None); // Variable has no max
+        assert_eq!(variable.min_children(), 0); // Variable allows empty
+        assert_eq!(single.max_children(), Some(1)); // Single has max 1
+        assert_eq!(leaf.max_children(), Some(0)); // Leaf has max 0
     }
 }

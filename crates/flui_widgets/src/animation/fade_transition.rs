@@ -6,7 +6,7 @@ use flui_animation::{Animation, AnimationController};
 use flui_core::BuildContext;
 use flui_view::traits::AnimatedView;
 use flui_view::IntoView;
-use flui_rendering::objects::RenderOpacity;
+use flui_objects::RenderOpacity;
 use std::sync::Arc;
 
 /// A widget that animates the opacity of its child using an AnimationController.

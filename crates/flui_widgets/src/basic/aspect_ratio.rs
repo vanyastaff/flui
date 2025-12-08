@@ -32,7 +32,7 @@ use bon::Builder;
 use flui_core::view::children::Child;
 use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
-use flui_rendering::objects::RenderAspectRatio;
+use flui_objects::RenderAspectRatio;
 
 /// A widget that sizes its child to a specific aspect ratio.
 ///

@@ -7,7 +7,7 @@ use bon::Builder;
 use flui_core::view::children::Child;
 use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
-use flui_rendering::objects::RenderConstrainedBox;
+use flui_objects::RenderConstrainedBox;
 use flui_types::BoxConstraints;
 
 /// A widget that imposes additional constraints on its child.

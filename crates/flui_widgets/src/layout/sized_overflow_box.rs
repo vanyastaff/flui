@@ -8,7 +8,7 @@ use flui_core::element::Element;
 use flui_core::view::{IntoElement, StatelessView};
 
 use flui_core::BuildContext;
-use flui_rendering::objects::RenderSizedOverflowBox;
+use flui_objects::RenderSizedOverflowBox;
 use flui_types::Alignment;
 
 /// A widget with a specific size that allows its child to overflow.

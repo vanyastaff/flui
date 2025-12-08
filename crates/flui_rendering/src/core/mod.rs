@@ -191,28 +191,14 @@ pub use semantics::{SemanticsHandle, SemanticsNode, SemanticsNodeId, SemanticsOw
 // FLUI-TREE INTEGRATION
 // ============================================================================
 
-// Re-export commonly used flui-tree types for convenience
-pub use flui_tree::{
-    // Utility functions
-    collect_render_children,
-    count_render_children,
-    find_render_ancestor,
-    render_depth,
-    AtomicDirtyFlags,
-    // Dirty tracking
-    DirtyTracking,
-    DirtyTrackingExt,
-    RenderAncestors,
-    // Iterators
-    RenderChildren,
-    RenderDescendants,
-    // Render tree access
-    RenderTreeAccess,
-    RenderTreeAccessExt,
-    // Tree navigation
-    TreeNav,
-    TreeRead,
-    TreeWrite,
+// Re-export generic tree types from flui-tree
+pub use flui_tree::{TreeNav, TreeRead, TreeWrite};
+
+// Re-export render-specific types from our tree module
+pub use crate::tree::{
+    AtomicDirtyFlags, DirtyTracking, DirtyTrackingExt, RenderAncestors, RenderChildren,
+    RenderChildrenCollector, RenderDescendants, RenderTreeAccess, RenderTreeAccessExt,
+    RenderTreeExt,
 };
 
 // ============================================================================

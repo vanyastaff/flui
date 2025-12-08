@@ -6,7 +6,7 @@
 use bon::Builder;
 use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
-use flui_rendering::objects::RenderBackdropFilter;
+use flui_objects::RenderBackdropFilter;
 use flui_types::painting::{BlendMode, ImageFilter};
 
 /// A widget that applies an image filter to the backdrop.

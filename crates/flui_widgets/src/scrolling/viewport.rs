@@ -4,7 +4,7 @@
 
 use flui_core::view::children::Children;
 use flui_core::view::{BuildContext, IntoElement, StatelessView};
-use flui_rendering::objects::RenderEmpty;
+use flui_objects::RenderEmpty;
 use flui_types::layout::AxisDirection;
 use flui_types::painting::Clip;
 

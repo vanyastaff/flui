@@ -433,7 +433,7 @@ impl IntoElement for Container {
         // Apply width/height constraints
         if self.width.is_some() || self.height.is_some() {
             // Use RenderSizedBox directly with Option values to preserve None semantics
-            current = flui_rendering::objects::RenderSizedBox::new(self.width, self.height)
+            current = flui_objects::RenderSizedBox::new(self.width, self.height)
                 .maybe_child(Some(current))
                 .into_element();
         }
@@ -514,7 +514,7 @@ macro_rules! container {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_rendering::objects::RenderEmpty;
+    use flui_objects::RenderEmpty;
     use flui_types::Size;
 
     // Mock view for testing

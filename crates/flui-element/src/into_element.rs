@@ -5,7 +5,7 @@
 
 use crate::element::{Element, ViewElement};
 use crate::ViewObject;
-use flui_rendering::{Arity, BoxRenderWrapper, ProtocolId, SliverRenderWrapper, RenderElement};
+use flui_rendering::{Arity, BoxRenderWrapper, ProtocolId, RenderElement, SliverRenderWrapper};
 
 /// Trait for types that can be converted into an Element.
 ///

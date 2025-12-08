@@ -88,6 +88,10 @@ pub enum RenderError {
     /// Generic layout error (for simple error messages)
     #[error("Layout error: {0}")]
     Layout(String),
+
+    /// Arity validation error (child count constraints)
+    #[error("Arity error: {0}")]
+    Arity(#[from] flui_tree::ArityError),
 }
 
 /// Result type for rendering operations
@@ -187,13 +191,13 @@ impl RenderError {
 
     /// Returns true if this error is recoverable and should not abort rendering.
     ///
-    /// Recoverable errors include constraint violations and hit test failures,
-    /// which can often be handled gracefully by using fallback values.
+    /// Recoverable errors include constraint violations, hit test failures,
+    /// and arity errors, which can often be handled gracefully by using fallback values.
     #[must_use]
     pub fn is_recoverable(&self) -> bool {
         matches!(
             self,
-            Self::ConstraintViolation { .. } | Self::HitTestFailed { .. }
+            Self::ConstraintViolation { .. } | Self::HitTestFailed { .. } | Self::Arity(_)
         )
     }
 
