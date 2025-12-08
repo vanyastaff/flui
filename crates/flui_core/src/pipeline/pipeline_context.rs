@@ -316,7 +316,7 @@ mod tests {
     #[test]
     fn test_schedule_rebuild() {
         let ctx = create_test_context();
-        let other_id = ElementId::new(999).unwrap();
+        let other_id = ElementId::new(999);
 
         ctx.schedule_rebuild(other_id);
 
@@ -340,7 +340,7 @@ mod tests {
     #[test]
     fn test_for_child() {
         let ctx = create_test_context();
-        let child_id = ElementId::new(42).unwrap();
+        let child_id = ElementId::new(42);
 
         let child_ctx = ctx.for_child(child_id);
 

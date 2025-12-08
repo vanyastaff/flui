@@ -99,7 +99,7 @@ impl LayoutPipeline {
 
     /// Returns a reference to the dirty set.
     #[inline]
-    pub fn dirty_set(&self) -> &LockFreeDirtySet {
+    pub fn dirty_set(&self) -> &LockFreeDirtySet<ElementId> {
         self.dirty.inner()
     }
 

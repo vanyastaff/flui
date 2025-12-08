@@ -46,7 +46,7 @@ use parking_lot::RwLock;
 use std::sync::Arc;
 use std::time::Duration;
 
-use super::{FrameCoordinator, RebuildQueue, RootManager};
+use super::{FrameCoordinator, RebuildQueue, RootManager, TreeCoordinator};
 use flui_element::{Element, ElementTree};
 use flui_foundation::ElementId;
 use flui_pipeline::PipelineError;
@@ -240,7 +240,16 @@ use flui_pipeline::PipelineError;
 /// - Rebuild queue: Lock-free with atomic operations
 pub struct PipelineOwner {
     /// The element tree (shared storage)
+    ///
+    /// NOTE: This field is being migrated to TreeCoordinator.
+    /// Use `tree_coordinator()` for new code.
     tree: Arc<RwLock<ElementTree>>,
+
+    /// Four-tree coordinator (ViewTree, ElementTree, RenderTree, LayerTree)
+    ///
+    /// This is the new architecture that coordinates all four trees.
+    /// Eventually will replace the standalone `tree` field.
+    tree_coord: Arc<RwLock<TreeCoordinator>>,
 
     /// Frame coordinator (orchestrates pipeline phases)
     coordinator: FrameCoordinator,
@@ -307,6 +316,7 @@ impl PipelineOwner {
         let rebuild_queue = RebuildQueue::new();
         Self {
             tree: Arc::new(RwLock::new(ElementTree::new())),
+            tree_coord: Arc::new(RwLock::new(TreeCoordinator::new())),
             coordinator: FrameCoordinator::new_with_queue(rebuild_queue.clone()),
             root_mgr: RootManager::new(),
             rebuild_queue,
@@ -337,9 +347,34 @@ impl PipelineOwner {
     // Tree & Root Access (Delegation to RootManager)
     // =========================================================================
 
-    /// Get the element tree
+    /// Get the element tree (legacy - prefer `tree_coordinator()`)
+    ///
+    /// NOTE: This method is being phased out. Use `tree_coordinator()` for new code.
     pub fn tree(&self) -> Arc<RwLock<ElementTree>> {
         self.tree.clone()
+    }
+
+    /// Get the four-tree coordinator
+    ///
+    /// The TreeCoordinator manages all four trees:
+    /// - ViewTree (stores ViewObjects)
+    /// - ElementTree (stores Elements)
+    /// - RenderTree (stores RenderObjects)
+    /// - LayerTree (stores compositor layers)
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let coord = owner.tree_coordinator();
+    ///
+    /// // Access views
+    /// let views = coord.read().views();
+    ///
+    /// // Access elements
+    /// let elements = coord.read().elements();
+    /// ```
+    pub fn tree_coordinator(&self) -> &Arc<RwLock<TreeCoordinator>> {
+        &self.tree_coord
     }
 
     /// Get the root element ID
@@ -534,13 +569,27 @@ impl PipelineOwner {
     /// Request layout for an element
     pub fn request_layout(&mut self, node_id: ElementId) {
         self.coordinator.layout_mut().mark_dirty(node_id);
-        // Note: RenderState flags are managed by flui-rendering, not pipeline
+        // Also mark in TreeCoordinator for unified tracking
+        self.tree_coord.write().mark_needs_layout(node_id);
     }
 
     /// Request paint for an element
     pub fn request_paint(&mut self, node_id: ElementId) {
         self.coordinator.paint_mut().mark_dirty(node_id);
-        // Note: RenderState flags are managed by flui-rendering, not pipeline
+        // Also mark in TreeCoordinator for unified tracking
+        self.tree_coord.write().mark_needs_paint(node_id);
+    }
+
+    /// Mark element as needing build (via TreeCoordinator)
+    ///
+    /// This is the preferred method for new code.
+    pub fn mark_needs_build(&mut self, element_id: ElementId) {
+        self.tree_coord.write().mark_needs_build(element_id);
+    }
+
+    /// Check if any elements need build
+    pub fn has_needs_build(&self) -> bool {
+        self.tree_coord.read().has_needs_build()
     }
 
     // =========================================================================

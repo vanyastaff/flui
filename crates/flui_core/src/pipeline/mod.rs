@@ -23,6 +23,7 @@ mod layout_pipeline;
 mod paint_pipeline;
 mod parallel_build;
 mod pipeline_builder;
+mod pipeline_context;
 mod pipeline_features;
 mod pipeline_owner;
 mod pipeline_trait;
@@ -35,9 +36,6 @@ mod tree_coordinator; // Four-tree architecture coordinator
 // =============================================================================
 
 pub use flui_pipeline::{
-    current_build_context,
-    has_build_context,
-    with_build_context,
     BatchedExecution,
     // Phase traits
     BuildPhase,
@@ -49,24 +47,17 @@ pub use flui_pipeline::{
     FrameResult,
     LayoutPhase,
     LockFreeDirtySet,
-
     PaintPhase,
     ParallelExecution,
     PhaseContext,
     PhaseResult,
-
-    PipelineBuildContext as BuildContext,
-    // Build context
-    PipelineBuildContext,
     PipelineCoordinator,
     // Errors (canonical location!)
     PipelineError,
     PipelineMetrics,
     PipelinePhase,
     PipelineResult,
-
     RecoveryAction,
-
     RecoveryPolicy,
     // Utilities
     TripleBuffer,
@@ -82,12 +73,16 @@ pub use layout_pipeline::LayoutPipeline;
 pub use paint_pipeline::PaintPipeline;
 pub use parallel_build::{partition_subtrees, rebuild_dirty_parallel, Subtree};
 pub use pipeline_builder::PipelineBuilder;
+pub use pipeline_context::PipelineBuildContext;
 pub use pipeline_features::{HitTestCache, PipelineFeatures};
 pub use pipeline_owner::PipelineOwner;
 pub use pipeline_trait::Pipeline;
 pub use rebuild_queue::RebuildQueue;
 pub use root_manager::RootManager;
 pub use tree_coordinator::TreeCoordinator; // Four-tree architecture coordinator
+
+// Alias for backward compatibility
+pub use pipeline_context::PipelineBuildContext as BuildContext;
 
 // Re-export ElementTree for convenience
 pub use flui_element::ElementTree;
