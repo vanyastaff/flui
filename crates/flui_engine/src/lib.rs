@@ -1,85 +1,104 @@
-//! FLUI Rendering Engine - Modern GPU rendering
+//! FLUI Rendering Engine - GPU-accelerated rendering for FLUI
 //!
-//! This crate provides the core rendering engine for FLUI:
-//!
-//! - **WgpuPainter**: GPU-accelerated 2D rendering (wgpu + lyon + glyphon)
-//! - **CanvasLayer**: Modern compositor layer with CommandRenderer
-//! - **CommandRenderer**: Clean architecture command execution (visitor pattern)
+//! This crate provides GPU rendering backends for FLUI. The default backend
+//! uses wgpu (Vulkan/Metal/DX12/WebGPU).
 //!
 //! # Architecture
 //!
 //! ```text
-//! RenderObject.paint()
-//!     ↓ generates Canvas (flui_painting)
-//! CanvasLayer (stores DisplayList)
-//!     ↓ render() → CommandRenderer (visitor pattern)
-//! WgpuRenderer → WgpuPainter
-//!     ↓ tessellates & renders
+//! Scene (flui-layer)
+//!     │
+//!     ▼
+//! SceneRenderer
+//!     │ renders LayerTree
+//!     ▼
+//! Layer + LayerRender trait
+//!     │ dispatch commands
+//!     ▼
+//! CommandRenderer trait (abstract)
+//!     │
+//!     ▼
+//! Backend → Painter
+//!     │
+//!     ▼
 //! GPU (wgpu)
 //! ```
 //!
-//! # Modern Rendering Path
-//!
-//! - **CanvasLayer**: Stores Canvas → DisplayList → DrawCommands
-//! - **CommandRenderer**: Abstract interface for rendering backends
-//! - **WgpuRenderer**: GPU-accelerated implementation
-//!
-//! All layer effects (Transform, Opacity, Clip, Filter) are implemented
-//! as RenderObjects in `flui_rendering`, NOT here.
-//!
-//! # GPU Painter
-//!
-//! WgpuPainter provides hardware-accelerated 2D rendering:
+//! # Usage
 //!
 //! ```rust,ignore
-//! use flui_engine::painter::WgpuPainter;
+//! use flui_engine::wgpu::SceneRenderer;
+//! use flui_layer::{Scene, SceneBuilder, CanvasLayer, Layer};
+//! use flui_types::Size;
 //!
-//! let mut painter = WgpuPainter::new(device, queue, surface_format, size);
-//! painter.rect(rect, &Paint::fill(Color::RED));
-//! painter.render(&view, &mut encoder)?;
+//! // 1. Build a Scene (in framework layer)
+//! let scene = Scene::from_layer(
+//!     Size::new(800.0, 600.0),
+//!     Layer::Canvas(CanvasLayer::new()),
+//!     0,
+//! );
+//!
+//! // 2. Render Scene (in engine layer)
+//! let mut renderer = SceneRenderer::new(surface, 800, 600);
+//! renderer.render_scene(&scene)?;
 //! ```
+//!
+//! # Feature Flags
+//!
+//! - `wgpu` (default) - wgpu GPU backend
+//! - Future: `skia`, `vello`, `software`
 
-// DevTools integration - commented out until Compositor is implemented
-// TODO: Re-enable when crate::Compositor and crate::CompositorOptions are available
-// #[cfg(feature = "devtools")]
-// pub mod devtools;
+// ============================================================================
+// ABSTRACT LAYER (backend-agnostic)
+// ============================================================================
 
-pub mod gpu_renderer;
-pub mod layer;
-pub mod painter;
-pub mod renderer;
-pub mod scene;
-pub mod text;
-pub mod tree;
+/// Common error types for all rendering backends
+pub mod error;
 
-// Re-export GPU renderer (high-level abstraction)
-pub use gpu_renderer::{GpuRenderer, RenderError};
+/// Abstract rendering traits (CommandRenderer, Painter)
+pub mod traits;
 
-// Re-export modern layer types
-pub use layer::{CanvasLayer, Layer, ShaderMaskLayer};
+/// RenderCommand dispatch functions
+pub mod commands;
 
-// Re-export Scene (rendering snapshot)
-pub use scene::Scene;
+// ============================================================================
+// BACKENDS
+// ============================================================================
 
-// Re-export painter types
-// Note: Two painter systems coexist:
-// - compat::Painter trait (used by layer system)
-// - GpuPainter struct (new direct GPU rendering)
-pub use painter::{Paint, Painter};
+/// wgpu rendering backend (Vulkan/Metal/DX12/WebGPU)
+pub mod wgpu;
 
-// Re-export renderer types (Clean Architecture command execution)
-pub use renderer::{CommandRenderer, RenderBackend, WgpuRenderer};
+// ============================================================================
+// RE-EXPORTS (convenience)
+// ============================================================================
+
+// Abstract traits and errors
+pub use commands::{dispatch_command, dispatch_commands};
+pub use error::{RenderError, RenderResult};
+pub use traits::{CommandRenderer, Painter};
+
+// Default backend exports
+pub use wgpu::{Backend, LayerRender, SceneRenderer, WgpuPainter};
 
 #[cfg(debug_assertions)]
-pub use renderer::DebugRenderer;
+pub use wgpu::DebugBackend;
 
-// Re-export devtools integration (when feature enabled)
-#[cfg(feature = "devtools")]
-pub use devtools::{
-    DevToolsLayout, FramePhase, FrameStats, FrameTimelineGraph, OverlayCorner, PerformanceOverlay,
-    ProfiledCompositor, UnifiedDevToolsOverlay,
+// Re-export layer types from flui-layer
+pub use flui_layer::{
+    CanvasLayer, Layer, LayerId, LayerTree, LinkRegistry, Scene, SceneBuilder, SceneCompositor,
+    ShaderMaskLayer,
 };
 
-// TODO: Re-enable memory-profiler feature
-// #[cfg(all(feature = "devtools", feature = "memory-profiler"))]
-// pub use devtools::MemoryGraph;
+// Re-export Paint from flui_painting
+pub use flui_painting::Paint;
+
+// Legacy aliases for backwards compatibility
+#[deprecated(since = "0.2.0", note = "Use SceneRenderer instead")]
+pub type GpuRenderer = SceneRenderer;
+
+#[deprecated(since = "0.2.0", note = "Use Backend instead")]
+pub type WgpuRenderer = Backend;
+
+#[cfg(debug_assertions)]
+#[deprecated(since = "0.2.0", note = "Use DebugBackend instead")]
+pub type DebugRenderer = DebugBackend;

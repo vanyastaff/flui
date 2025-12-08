@@ -52,6 +52,7 @@ pub struct RectInstance {
 
 impl RectInstance {
     /// Create a simple rectangular instance
+    #[must_use]
     pub fn rect(rect: Rect, color: Color) -> Self {
         Self {
             bounds: [rect.left(), rect.top(), rect.width(), rect.height()],
@@ -62,6 +63,7 @@ impl RectInstance {
     }
 
     /// Create a rounded rectangular instance
+    #[must_use]
     pub fn rounded_rect(rect: Rect, color: Color, radius: f32) -> Self {
         Self {
             bounds: [rect.left(), rect.top(), rect.width(), rect.height()],
@@ -72,6 +74,7 @@ impl RectInstance {
     }
 
     /// Create an instance with per-corner radii
+    #[must_use]
     pub fn rounded_rect_corners(
         rect: Rect,
         color: Color,
@@ -89,6 +92,7 @@ impl RectInstance {
     }
 
     /// Create an instance with transform
+    #[must_use]
     pub fn with_transform(
         mut self,
         scale_x: f32,
@@ -101,6 +105,7 @@ impl RectInstance {
     }
 
     /// Get wgpu vertex buffer layout for instance data
+    #[must_use]
     pub fn desc() -> wgpu::VertexBufferLayout<'static> {
         const ATTRIBUTES: &[wgpu::VertexAttribute] = &wgpu::vertex_attr_array![
             // Bounds (location 2)
@@ -137,6 +142,7 @@ pub struct CircleInstance {
 
 impl CircleInstance {
     /// Create a circle instance
+    #[must_use]
     pub fn new(center: Point, radius: f32, color: Color) -> Self {
         Self {
             center_radius: [center.x, center.y, radius, 0.0],
@@ -146,6 +152,7 @@ impl CircleInstance {
     }
 
     /// Create an ellipse instance (stretched circle)
+    #[must_use]
     pub fn ellipse(center: Point, radius_x: f32, radius_y: f32, color: Color) -> Self {
         Self {
             center_radius: [center.x, center.y, radius_x.max(radius_y), 0.0],
@@ -160,6 +167,7 @@ impl CircleInstance {
     }
 
     /// Get wgpu vertex buffer layout for instance data
+    #[must_use]
     pub fn desc() -> wgpu::VertexBufferLayout<'static> {
         const ATTRIBUTES: &[wgpu::VertexAttribute] = &wgpu::vertex_attr_array![
             // Center + radius (location 2)
@@ -208,6 +216,7 @@ impl ArcInstance {
     /// * `start_angle` - Starting angle in radians (0 = right)
     /// * `sweep_angle` - Sweep angle in radians (positive = clockwise)
     /// * `color` - Arc color
+    #[must_use]
     pub fn new(
         center: Point,
         radius: f32,
@@ -224,6 +233,7 @@ impl ArcInstance {
     }
 
     /// Create an elliptical arc instance
+    #[must_use]
     pub fn ellipse(
         center: Point,
         radius_x: f32,
@@ -242,6 +252,7 @@ impl ArcInstance {
     }
 
     /// Get wgpu vertex buffer layout for instance data
+    #[must_use]
     pub fn desc() -> wgpu::VertexBufferLayout<'static> {
         const ATTRIBUTES: &[wgpu::VertexAttribute] = &wgpu::vertex_attr_array![
             // Center + radius (location 2)
@@ -293,6 +304,7 @@ impl TextureInstance {
     /// # Arguments
     /// * `dst_rect` - Destination rectangle in screen coordinates
     /// * `tint` - Color tint (use Color::WHITE for no tint)
+    #[must_use]
     pub fn new(dst_rect: flui_types::Rect, tint: Color) -> Self {
         Self {
             dst_rect: [
@@ -313,6 +325,7 @@ impl TextureInstance {
     /// * `dst_rect` - Destination rectangle in screen coordinates
     /// * `src_uv` - Source UV rectangle [u_min, v_min, u_max, v_max]
     /// * `tint` - Color tint
+    #[must_use]
     pub fn with_uv(dst_rect: flui_types::Rect, src_uv: [f32; 4], tint: Color) -> Self {
         Self {
             dst_rect: [
@@ -333,6 +346,7 @@ impl TextureInstance {
     /// * `dst_rect` - Destination rectangle in screen coordinates
     /// * `angle` - Rotation angle in radians
     /// * `tint` - Color tint
+    #[must_use]
     pub fn with_rotation(dst_rect: flui_types::Rect, angle: f32, tint: Color) -> Self {
         Self {
             dst_rect: [
@@ -348,6 +362,7 @@ impl TextureInstance {
     }
 
     /// Get wgpu vertex buffer layout for instance data
+    #[must_use]
     pub fn desc() -> wgpu::VertexBufferLayout<'static> {
         const ATTRIBUTES: &[wgpu::VertexAttribute] = &wgpu::vertex_attr_array![
             // Destination rect (location 2)
@@ -372,9 +387,6 @@ impl TextureInstance {
 // Gradient Instances (from effects.rs for API consistency)
 // =============================================================================
 
-/// A single color stop in a gradient
-pub use super::effects::GradientStop;
-
 /// Linear gradient instance data for GPU instancing
 ///
 /// See `crate::painter::effects::LinearGradientInstance` for full documentation.
@@ -382,6 +394,7 @@ pub use super::effects::LinearGradientInstance;
 
 impl LinearGradientInstance {
     /// Get wgpu vertex buffer layout for instance data
+    #[must_use]
     pub fn desc() -> wgpu::VertexBufferLayout<'static> {
         const ATTRIBUTES: &[wgpu::VertexAttribute] = &wgpu::vertex_attr_array![
             // Bounds (location 2)
@@ -409,6 +422,7 @@ pub use super::effects::RadialGradientInstance;
 
 impl RadialGradientInstance {
     /// Get wgpu vertex buffer layout for instance data
+    #[must_use]
     pub fn desc() -> wgpu::VertexBufferLayout<'static> {
         const ATTRIBUTES: &[wgpu::VertexAttribute] = &wgpu::vertex_attr_array![
             // Bounds (location 2)
@@ -435,14 +449,12 @@ impl RadialGradientInstance {
 // Shadow Instances
 // =============================================================================
 
-/// Shadow parameters for Material Design elevation levels
-pub use super::effects::ShadowParams;
-
 /// Shadow instance data for GPU instancing
 pub use super::effects::ShadowInstance;
 
 impl ShadowInstance {
     /// Get wgpu vertex buffer layout for instance data
+    #[must_use]
     pub fn desc() -> wgpu::VertexBufferLayout<'static> {
         const ATTRIBUTES: &[wgpu::VertexAttribute] = &wgpu::vertex_attr_array![
             // Shadow bounds (location 2)
@@ -486,6 +498,7 @@ pub struct InstanceBatch<T> {
 
 impl<T> InstanceBatch<T> {
     /// Create a new instance batch
+    #[must_use]
     pub fn new(max_instances: usize) -> Self {
         Self {
             instances: Vec::with_capacity(max_instances),
@@ -496,17 +509,20 @@ impl<T> InstanceBatch<T> {
     /// Add an instance to the batch
     ///
     /// Returns true if batch is full and should be flushed.
+    #[must_use]
     pub fn add(&mut self, instance: T) -> bool {
         self.instances.push(instance);
         self.instances.len() >= self.max_instances
     }
 
     /// Check if batch is empty
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.instances.is_empty()
     }
 
     /// Get number of instances
+    #[must_use]
     pub fn len(&self) -> usize {
         self.instances.len()
     }

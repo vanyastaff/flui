@@ -284,7 +284,6 @@ impl TextRenderer {
 
 #[cfg(test)]
 mod tests {
-    use super::TextRenderer;
 
     #[test]
     fn test_text_batching() {

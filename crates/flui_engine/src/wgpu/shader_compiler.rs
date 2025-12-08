@@ -1,12 +1,14 @@
-// Shader compilation and caching for shader mask effects
+//! Shader compilation and caching for shader mask effects
 //!
 //! This module provides shader compilation, caching, and uniform buffer management
 //! for ShaderMaskLayer rendering.
 
+use bytemuck::{Pod, Zeroable};
 use flui_types::painting::ShaderSpec;
 use flui_types::styling::Color32;
+use parking_lot::RwLock;
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 /// Shader type identifier
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -27,13 +29,15 @@ impl ShaderType {
     /// Get the WGSL source code for this shader type
     pub fn source_code(&self) -> &'static str {
         match self {
-            ShaderType::SolidMask => include_str!("shaders/solid_mask.wgsl"),
-            ShaderType::LinearGradientMask => include_str!("shaders/linear_gradient_mask.wgsl"),
-            ShaderType::RadialGradientMask => include_str!("shaders/radial_gradient_mask.wgsl"),
+            ShaderType::SolidMask => include_str!("shaders/masks/solid.wgsl"),
+            ShaderType::LinearGradientMask => include_str!("shaders/masks/linear_gradient.wgsl"),
+            ShaderType::RadialGradientMask => include_str!("shaders/masks/radial_gradient.wgsl"),
             ShaderType::GaussianBlurHorizontal => {
-                include_str!("shaders/gaussian_blur_horizontal.wgsl")
+                include_str!("shaders/effects/blur_horizontal.wgsl")
             }
-            ShaderType::GaussianBlurVertical => include_str!("shaders/gaussian_blur_vertical.wgsl"),
+            ShaderType::GaussianBlurVertical => {
+                include_str!("shaders/effects/blur_vertical.wgsl")
+            }
         }
     }
 
@@ -91,10 +95,11 @@ impl ShaderCache {
     /// Get or compile a shader
     ///
     /// Returns cached shader if available, otherwise compiles and caches it.
+    #[must_use]
     pub fn get_or_compile(&self, shader_type: ShaderType) -> Arc<CompiledShader> {
         // Try to get from cache first (read lock)
         {
-            let cache = self.cache.read().unwrap();
+            let cache = self.cache.read();
             if let Some(shader) = cache.get(&shader_type) {
                 tracing::debug!("Shader cache hit: {:?}", shader_type);
                 return Arc::clone(shader);
@@ -102,7 +107,7 @@ impl ShaderCache {
         }
 
         // Not in cache, compile it (write lock)
-        let mut cache = self.cache.write().unwrap();
+        let mut cache = self.cache.write();
 
         // Double-check in case another thread compiled it while we waited for the lock
         if let Some(shader) = cache.get(&shader_type) {
@@ -126,15 +131,15 @@ impl ShaderCache {
     /// Useful for avoiding frame time spikes on first use.
     pub fn precompile_all(&self) {
         tracing::info!("Pre-compiling all shader mask shaders");
-        self.get_or_compile(ShaderType::SolidMask);
-        self.get_or_compile(ShaderType::LinearGradientMask);
-        self.get_or_compile(ShaderType::RadialGradientMask);
+        let _ = self.get_or_compile(ShaderType::SolidMask);
+        let _ = self.get_or_compile(ShaderType::LinearGradientMask);
+        let _ = self.get_or_compile(ShaderType::RadialGradientMask);
         tracing::info!("All shaders pre-compiled");
     }
 
     /// Clear the cache
     pub fn clear(&self) {
-        let mut cache = self.cache.write().unwrap();
+        let mut cache = self.cache.write();
         cache.clear();
         tracing::info!("Shader cache cleared");
     }
@@ -148,7 +153,7 @@ impl Default for ShaderCache {
 
 /// Uniform data for solid mask shader
 #[repr(C)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
 pub struct SolidMaskUniforms {
     pub mask_color: [f32; 4], // RGBA
 }
@@ -168,7 +173,7 @@ impl SolidMaskUniforms {
 
 /// Uniform data for linear gradient mask shader
 #[repr(C)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
 pub struct LinearGradientUniforms {
     pub start: [f32; 2],
     pub end: [f32; 2],
@@ -204,7 +209,7 @@ impl LinearGradientUniforms {
 
 /// Uniform data for radial gradient mask shader
 #[repr(C)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
 pub struct RadialGradientUniforms {
     pub center: [f32; 2],
     pub radius: f32,
@@ -241,29 +246,20 @@ impl RadialGradientUniforms {
 }
 
 /// Create uniform buffer data from ShaderSpec
+///
+/// Uses `bytemuck` for safe type-to-bytes conversion without unsafe code.
+#[must_use]
 pub fn create_uniforms_from_spec(spec: &ShaderSpec) -> Vec<u8> {
     match spec {
         ShaderSpec::Solid(color) => {
             let uniforms = SolidMaskUniforms::from_color(*color);
-            unsafe {
-                std::slice::from_raw_parts(
-                    &uniforms as *const _ as *const u8,
-                    std::mem::size_of::<SolidMaskUniforms>(),
-                )
-                .to_vec()
-            }
+            bytemuck::bytes_of(&uniforms).to_vec()
         }
         ShaderSpec::LinearGradient { start, end, colors } => {
             let start_color = colors.first().copied().unwrap_or(Color32::WHITE);
             let end_color = colors.last().copied().unwrap_or(Color32::BLACK);
             let uniforms = LinearGradientUniforms::new(*start, *end, start_color, end_color);
-            unsafe {
-                std::slice::from_raw_parts(
-                    &uniforms as *const _ as *const u8,
-                    std::mem::size_of::<LinearGradientUniforms>(),
-                )
-                .to_vec()
-            }
+            bytemuck::bytes_of(&uniforms).to_vec()
         }
         ShaderSpec::RadialGradient {
             center,
@@ -273,24 +269,12 @@ pub fn create_uniforms_from_spec(spec: &ShaderSpec) -> Vec<u8> {
             let center_color = colors.first().copied().unwrap_or(Color32::WHITE);
             let edge_color = colors.last().copied().unwrap_or(Color32::BLACK);
             let uniforms = RadialGradientUniforms::new(*center, *radius, center_color, edge_color);
-            unsafe {
-                std::slice::from_raw_parts(
-                    &uniforms as *const _ as *const u8,
-                    std::mem::size_of::<RadialGradientUniforms>(),
-                )
-                .to_vec()
-            }
+            bytemuck::bytes_of(&uniforms).to_vec()
         }
         // Fallback for future ShaderSpec variants
         _ => {
             let uniforms = SolidMaskUniforms::from_color(Color32::WHITE);
-            unsafe {
-                std::slice::from_raw_parts(
-                    &uniforms as *const _ as *const u8,
-                    std::mem::size_of::<SolidMaskUniforms>(),
-                )
-                .to_vec()
-            }
+            bytemuck::bytes_of(&uniforms).to_vec()
         }
     }
 }

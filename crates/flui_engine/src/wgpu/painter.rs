@@ -16,8 +16,9 @@ use super::{
     text::TextRenderer,
     vertex::Vertex,
 };
+use crate::traits::Painter;
 use flui_painting::{Paint, PaintStyle};
-use flui_types::{geometry::RRect, painting::Path, Offset, Point, Rect};
+use flui_types::{geometry::RRect, painting::Path, painting::TextureId, Offset, Point, Rect};
 use wgpu::util::DeviceExt;
 
 /// GPU painter for hardware-accelerated 2D rendering
@@ -195,8 +196,7 @@ impl WgpuPainter {
         let queue = Arc::new(queue);
 
         // Create pipeline cache with shader
-        let pipeline_cache =
-            PipelineCache::new(&device, include_str!("shaders/shape.wgsl"), surface_format);
+        let pipeline_cache = PipelineCache::new(&device, super::shaders::SHAPE, surface_format);
 
         // ===== Instanced Rendering Setup =====
 
@@ -237,7 +237,7 @@ impl WgpuPainter {
         // Create instanced rectangle shader
         let instanced_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Instanced Rect Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/rect_instanced.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(super::shaders::RECT_INSTANCED.into()),
         });
 
         // Create instanced rectangle pipeline
@@ -331,7 +331,7 @@ impl WgpuPainter {
         // Create instanced circle shader
         let circle_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Instanced Circle Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/circle_instanced.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(super::shaders::CIRCLE_INSTANCED.into()),
         });
 
         // Create instanced circle pipeline (reuses viewport bind group layout)
@@ -391,7 +391,7 @@ impl WgpuPainter {
         // Create instanced arc shader
         let arc_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Instanced Arc Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/arc_instanced.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(super::shaders::ARC_INSTANCED.into()),
         });
 
         // Create instanced arc pipeline (reuses viewport bind group layout)
@@ -493,7 +493,7 @@ impl WgpuPainter {
         // Create instanced texture shader
         let texture_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Instanced Texture Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/texture_instanced.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(super::shaders::TEXTURE_INSTANCED.into()),
         });
 
         // Create texture pipeline layout
@@ -1220,478 +1220,6 @@ impl WgpuPainter {
 
 // ===== Painter Trait Implementation =====
 
-/// Painter trait for layer system compatibility
-pub trait Painter {
-    // Core drawing methods
-    fn rect(&mut self, rect: Rect, paint: &Paint);
-    fn rrect(&mut self, rrect: RRect, paint: &Paint);
-    fn circle(&mut self, center: Point, radius: f32, paint: &Paint);
-    fn line(&mut self, p1: Point, p2: Point, paint: &Paint);
-    fn text(&mut self, text: &str, position: Point, font_size: f32, paint: &Paint);
-    fn texture(&mut self, texture_id: &super::texture_cache::TextureId, dst_rect: Rect);
-
-    /// Sample a gradient shader at the center of a rect to get a representative color
-    ///
-    /// This is a fallback for when full GPU gradient rendering is not available.
-    /// Returns the color at the center position of the gradient.
-    fn sample_gradient_center(
-        shader: &flui_painting::Shader,
-        rect: Rect,
-    ) -> flui_types::styling::Color
-    where
-        Self: Sized,
-    {
-        use flui_painting::Shader;
-        use flui_types::styling::Color;
-
-        match shader {
-            Shader::LinearGradient {
-                from,
-                to,
-                colors,
-                stops,
-                ..
-            } => {
-                if colors.is_empty() {
-                    return Color::TRANSPARENT;
-                }
-                if colors.len() == 1 {
-                    return colors[0];
-                }
-
-                // Calculate center point relative to gradient line
-                let center_x = rect.left() + rect.width() / 2.0;
-                let center_y = rect.top() + rect.height() / 2.0;
-
-                // Project center onto gradient line to get t value
-                let dx = to.dx - from.dx;
-                let dy = to.dy - from.dy;
-                let len_sq = dx * dx + dy * dy;
-
-                let t = if len_sq > f32::EPSILON {
-                    let px = center_x - from.dx;
-                    let py = center_y - from.dy;
-                    ((px * dx + py * dy) / len_sq).clamp(0.0, 1.0)
-                } else {
-                    0.5
-                };
-
-                Self::interpolate_gradient_color(colors, stops.as_deref(), t)
-            }
-            Shader::RadialGradient {
-                center,
-                radius,
-                colors,
-                stops,
-                ..
-            } => {
-                if colors.is_empty() {
-                    return Color::TRANSPARENT;
-                }
-                if colors.len() == 1 {
-                    return colors[0];
-                }
-
-                // Calculate distance from gradient center to rect center
-                let rect_center_x = rect.left() + rect.width() / 2.0;
-                let rect_center_y = rect.top() + rect.height() / 2.0;
-
-                let dx = rect_center_x - center.dx;
-                let dy = rect_center_y - center.dy;
-                let dist = (dx * dx + dy * dy).sqrt();
-
-                let t = if *radius > f32::EPSILON {
-                    (dist / radius).clamp(0.0, 1.0)
-                } else {
-                    0.0
-                };
-
-                Self::interpolate_gradient_color(colors, stops.as_deref(), t)
-            }
-            Shader::SweepGradient {
-                center,
-                colors,
-                stops,
-                start_angle,
-                end_angle,
-                ..
-            } => {
-                if colors.is_empty() {
-                    return Color::TRANSPARENT;
-                }
-                if colors.len() == 1 {
-                    return colors[0];
-                }
-
-                // Calculate angle from gradient center to rect center
-                let rect_center_x = rect.left() + rect.width() / 2.0;
-                let rect_center_y = rect.top() + rect.height() / 2.0;
-
-                let dx = rect_center_x - center.dx;
-                let dy = rect_center_y - center.dy;
-                let angle = dy.atan2(dx);
-
-                // Normalize angle to t in [0, 1]
-                let angle_range = end_angle - start_angle;
-                let t = if angle_range.abs() > f32::EPSILON {
-                    ((angle - start_angle) / angle_range).clamp(0.0, 1.0)
-                } else {
-                    0.5
-                };
-
-                Self::interpolate_gradient_color(colors, stops.as_deref(), t)
-            }
-            Shader::Image(_) => Color::WHITE, // Fallback for image shader
-            _ => Color::WHITE,                // Fallback for future variants
-        }
-    }
-
-    /// Interpolate between gradient colors at a given t value
-    fn interpolate_gradient_color(
-        colors: &[flui_types::styling::Color],
-        stops: Option<&[f32]>,
-        t: f32,
-    ) -> flui_types::styling::Color
-    where
-        Self: Sized,
-    {
-        use flui_types::styling::Color;
-
-        if colors.is_empty() {
-            return Color::TRANSPARENT;
-        }
-        if colors.len() == 1 {
-            return colors[0];
-        }
-
-        // Generate default stops if not provided
-        let default_stops: Vec<f32> = (0..colors.len())
-            .map(|i| i as f32 / (colors.len() - 1) as f32)
-            .collect();
-        let stops = stops.unwrap_or(&default_stops);
-
-        // Find the two colors to interpolate between
-        let mut idx = 0;
-        for (i, &stop) in stops.iter().enumerate() {
-            if t <= stop {
-                idx = i;
-                break;
-            }
-            idx = i;
-        }
-
-        if idx == 0 {
-            return colors[0];
-        }
-
-        let prev_stop = stops[idx - 1];
-        let next_stop = stops[idx];
-        let local_t = if (next_stop - prev_stop).abs() > f32::EPSILON {
-            (t - prev_stop) / (next_stop - prev_stop)
-        } else {
-            0.5
-        };
-
-        let c1 = &colors[idx - 1];
-        let c2 = &colors[idx.min(colors.len() - 1)];
-
-        Color::rgba(
-            (c1.r as f32 + (c2.r as f32 - c1.r as f32) * local_t) as u8,
-            (c1.g as f32 + (c2.g as f32 - c1.g as f32) * local_t) as u8,
-            (c1.b as f32 + (c2.b as f32 - c1.b as f32) * local_t) as u8,
-            (c1.a as f32 + (c2.a as f32 - c1.a as f32) * local_t) as u8,
-        )
-    }
-
-    // Transform stack
-    fn save(&mut self);
-    fn restore(&mut self);
-    fn translate(&mut self, offset: Offset);
-    fn rotate(&mut self, angle: f32);
-    fn scale(&mut self, sx: f32, sy: f32);
-
-    // Clipping
-    fn clip_rect(&mut self, rect: Rect);
-    fn clip_rrect(&mut self, rrect: RRect);
-    fn clip_path(&mut self, path: &Path);
-
-    // Viewport information
-    fn viewport_bounds(&self) -> Rect;
-
-    // Advanced methods with default implementations (stubs for layers)
-    fn save_layer_backdrop(&mut self) {
-        self.save(); // Fallback to regular save
-    }
-
-    fn draw_path(&mut self, _path: &flui_types::painting::path::Path, _paint: &Paint) {
-        // No-op by default
-        #[cfg(debug_assertions)]
-        tracing::warn!("Painter::draw_path: not implemented");
-    }
-
-    fn oval(&mut self, _rect: Rect, _paint: &Paint) {
-        // No-op by default
-        #[cfg(debug_assertions)]
-        tracing::warn!("Painter::oval: not implemented");
-    }
-
-    fn draw_arc(
-        &mut self,
-        _rect: Rect,
-        _start_angle: f32,
-        _sweep_angle: f32,
-        _use_center: bool,
-        _paint: &Paint,
-    ) {
-        // No-op by default
-        #[cfg(debug_assertions)]
-        tracing::warn!("Painter::draw_arc: not implemented");
-    }
-
-    fn draw_drrect(&mut self, _outer: RRect, _inner: RRect, _paint: &Paint) {
-        // No-op by default
-        #[cfg(debug_assertions)]
-        tracing::warn!("Painter::draw_drrect: not implemented");
-    }
-
-    fn draw_shadow(
-        &mut self,
-        _path: &flui_types::painting::path::Path,
-        _color: flui_types::styling::Color,
-        _elevation: f32,
-    ) {
-        // No-op by default
-        #[cfg(debug_assertions)]
-        tracing::warn!("Painter::draw_shadow: not implemented");
-    }
-
-    fn draw_vertices(
-        &mut self,
-        _vertices: &[Point],
-        _colors: Option<&[flui_types::styling::Color]>,
-        _tex_coords: Option<&[Point]>,
-        _indices: &[u16],
-        _paint: &Paint,
-    ) {
-        // No-op by default
-        #[cfg(debug_assertions)]
-        tracing::warn!("Painter::draw_vertices: not implemented");
-    }
-
-    fn draw_atlas(
-        &mut self,
-        _image: &flui_types::painting::Image,
-        _sprites: &[Rect],
-        _transforms: &[flui_types::Matrix4],
-        _colors: Option<&[flui_types::styling::Color]>,
-    ) {
-        // No-op by default
-        #[cfg(debug_assertions)]
-        tracing::warn!("Painter::draw_atlas: not implemented");
-    }
-
-    fn text_styled(&mut self, text: &str, position: Point, font_size: f32, paint: &Paint) {
-        // Fallback to regular text() method
-        self.text(text, position, font_size, paint);
-    }
-
-    fn draw_image(&mut self, _image: &flui_types::painting::Image, _dst_rect: Rect) {
-        // No-op by default
-        #[cfg(debug_assertions)]
-        tracing::warn!("Painter::draw_image: not implemented");
-    }
-
-    /// Draw a GPU texture referenced by ID
-    ///
-    /// Renders an external GPU texture (video frame, camera preview, platform view)
-    /// to the destination rectangle. The texture must be registered with the
-    /// rendering engine's texture registry.
-    ///
-    /// # Arguments
-    ///
-    /// * `texture_id` - GPU texture identifier (from flui_types::painting::TextureId)
-    /// * `dst` - Destination rectangle
-    /// * `src` - Optional source rectangle within texture (None = entire texture)
-    /// * `filter_quality` - Quality of texture sampling
-    /// * `opacity` - Opacity (0.0 = transparent, 1.0 = opaque)
-    fn draw_texture(
-        &mut self,
-        _texture_id: flui_types::painting::TextureId,
-        _dst: Rect,
-        _src: Option<Rect>,
-        _filter_quality: flui_types::painting::FilterQuality,
-        _opacity: f32,
-    ) {
-        // No-op by default - subclasses should implement texture lookup and rendering
-        #[cfg(debug_assertions)]
-        tracing::warn!("Painter::draw_texture: not implemented - texture_id lookup not available");
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn text_with_shadow(
-        &mut self,
-        text: &str,
-        position: Point,
-        font_size: f32,
-        paint: &Paint,
-        _shadow_offset: Offset,
-        _shadow_blur: f32,
-        _shadow_color: flui_types::styling::Color,
-    ) {
-        // Fallback to regular text() method
-        self.text(text, position, font_size, paint);
-    }
-
-    fn rrect_with_shadow(
-        &mut self,
-        rrect: RRect,
-        paint: &Paint,
-        _shadow_offset: Offset,
-        _shadow_blur: f32,
-        _shadow_color: flui_types::styling::Color,
-    ) {
-        // Fallback to regular rrect() method
-        self.rrect(rrect, paint);
-    }
-
-    fn rect_with_shadow(
-        &mut self,
-        rect: Rect,
-        paint: &Paint,
-        _shadow_offset: Offset,
-        _shadow_blur: f32,
-        _shadow_color: flui_types::styling::Color,
-    ) {
-        // Fallback to regular rect() method
-        self.rect(rect, paint);
-    }
-
-    // ===== Gradient Drawing =====
-
-    // TODO: Gradient drawing should use ShaderMaskLayer instead of direct painter methods
-    //
-    // The methods below (draw_gradient and draw_gradient_rrect) were removed because they
-    // called sample_gradient_center, which is not implemented in the Painter trait.
-    //
-    // For proper gradient rendering, use the following approach:
-    // 1. Create a ShaderMaskLayer with the desired gradient shader
-    // 2. Use the layer system to compose gradients with other content
-    // 3. Leverage GPU-accelerated gradient rendering via WgpuPainter::gradient_rect()
-    //    or WgpuPainter::radial_gradient_rect()
-    //
-    // This architectural change ensures gradients are rendered efficiently through the
-    // layer pipeline rather than as fallback solid colors.
-
-    // /// Draw a gradient-filled rectangle
-    // fn draw_gradient(&mut self, rect: Rect, shader: &flui_painting::Shader)
-    // where
-    //     Self: Sized,
-    // {
-    //     // Default implementation: sample gradient at corners and draw with average color
-    //     // Full GPU implementation will use a gradient shader
-    //     let color = Self::sample_gradient_center(shader, rect);
-    //     let paint = Paint::fill(color);
-    //     self.rect(rect, &paint);
-    //
-    //     #[cfg(debug_assertions)]
-    //     tracing::debug!("Painter::draw_gradient: using fallback solid color (GPU gradient shader not yet implemented)");
-    // }
-
-    // /// Draw a gradient-filled rounded rectangle
-    // fn draw_gradient_rrect(&mut self, rrect: RRect, shader: &flui_painting::Shader)
-    // where
-    //     Self: Sized,
-    // {
-    //     // Default implementation: sample gradient at center and draw with that color
-    //     // Full GPU implementation will use a gradient shader
-    //     let color = Self::sample_gradient_center(shader, rrect.rect);
-    //     let paint = Paint::fill(color);
-    //     self.rrect(rrect, &paint);
-    //
-    //     #[cfg(debug_assertions)]
-    //     tracing::debug!("Painter::draw_gradient_rrect: using fallback solid color (GPU gradient shader not yet implemented)");
-    // }
-
-    // ===== DELETED: All deprecated methods removed in Clean Architecture refactor =====
-    // Use CommandRenderer trait instead of direct Painter calls
-    // Migrate to: PictureLayer::render(WgpuRenderer) for modern architecture
-
-    // ===== Image Extensions =====
-
-    /// Draw an image with repeat/tiling
-    ///
-    /// Tiles the image to fill the destination rectangle based on the repeat mode.
-    fn draw_image_repeat(
-        &mut self,
-        image: &flui_types::painting::Image,
-        dst: Rect,
-        repeat: flui_painting::display_list::ImageRepeat,
-    ) {
-        // Default implementation: just draw single image (no tiling)
-        // Full implementation should tile based on repeat mode
-        let _ = repeat; // Ignore repeat mode in fallback
-        self.draw_image(image, dst);
-
-        #[cfg(debug_assertions)]
-        tracing::debug!("Painter::draw_image_repeat: using fallback (no tiling)");
-    }
-
-    /// Draw an image with 9-slice/9-patch scaling
-    ///
-    /// Draws the image with a center slice that scales while corners and edges
-    /// maintain their natural size.
-    fn draw_image_nine_slice(
-        &mut self,
-        image: &flui_types::painting::Image,
-        _center_slice: Rect,
-        dst: Rect,
-    ) {
-        // Default implementation: just draw scaled image (no 9-slice)
-        self.draw_image(image, dst);
-
-        #[cfg(debug_assertions)]
-        tracing::debug!("Painter::draw_image_nine_slice: using fallback (no 9-slice)");
-    }
-
-    /// Draw an image with a color filter applied
-    fn draw_image_filtered(
-        &mut self,
-        image: &flui_types::painting::Image,
-        dst: Rect,
-        _filter: flui_painting::display_list::ColorFilter,
-    ) {
-        // Default implementation: just draw image without filter
-        self.draw_image(image, dst);
-
-        #[cfg(debug_assertions)]
-        tracing::debug!("Painter::draw_image_filtered: using fallback (no filter)");
-    }
-
-    // ===== Layer Operations =====
-
-    /// Save canvas state and create a new compositing layer with paint settings
-    ///
-    /// This creates an offscreen buffer for subsequent drawing commands.
-    /// When `restore_layer` is called, the layer is composited back with
-    /// the specified paint settings (opacity, blend mode, etc.).
-    fn save_layer(&mut self, _bounds: Option<Rect>, _paint: &Paint) {
-        // Default implementation: just do regular save (no compositing layer)
-        self.save();
-
-        #[cfg(debug_assertions)]
-        tracing::debug!("Painter::save_layer: using fallback (no offscreen compositing)");
-    }
-
-    /// Restore canvas state and composite the saved layer
-    fn restore_layer(&mut self) {
-        // Default implementation: just do regular restore
-        self.restore();
-
-        #[cfg(debug_assertions)]
-        tracing::debug!("Painter::restore_layer: using fallback restore");
-    }
-}
-
 impl Painter for WgpuPainter {
     fn rect(&mut self, rect: Rect, paint: &Paint) {
         #[cfg(debug_assertions)]
@@ -1700,7 +1228,7 @@ impl Painter for WgpuPainter {
         if paint.style == PaintStyle::Fill {
             // Use GPU instancing for filled rects (100x faster!)
             let instance = super::instancing::RectInstance::rect(rect, paint.color);
-            self.rect_batch.add(instance);
+            let _ = self.rect_batch.add(instance);
             // Note: Auto-flush happens in render() - no need to flush here
         } else {
             // Stroked rect - use tessellator (less common, fallback path)
@@ -1722,7 +1250,7 @@ impl Painter for WgpuPainter {
                 rrect.bottom_right.x.max(rrect.bottom_right.y),
                 rrect.bottom_left.x.max(rrect.bottom_left.y),
             );
-            self.rect_batch.add(instance);
+            let _ = self.rect_batch.add(instance);
         } else {
             // Stroked rounded rect - use tessellator (fallback)
             if let Ok((vertices, indices)) = self.tessellator.tessellate_rrect(rrect, paint) {
@@ -1743,7 +1271,7 @@ impl Painter for WgpuPainter {
         if paint.style == PaintStyle::Fill {
             // Use GPU instancing for filled circles (100x faster!)
             let instance = super::instancing::CircleInstance::new(center, radius, paint.color);
-            self.circle_batch.add(instance);
+            let _ = self.circle_batch.add(instance);
             // Note: Auto-flush happens in render() - no need to flush here
         } else {
             // Stroked circle - use tessellator (less common, fallback path)
@@ -1798,7 +1326,7 @@ impl Painter for WgpuPainter {
                 sweep_angle,
                 paint.color,
             );
-            self.arc_batch.add(instance);
+            let _ = self.arc_batch.add(instance);
         } else {
             // For stroked arcs or arcs without center, use tessellation
             // TODO: Implement proper arc tessellation in Tessellator
@@ -1811,7 +1339,7 @@ impl Painter for WgpuPainter {
                     sweep_angle,
                     paint.color,
                 );
-                self.arc_batch.add(instance);
+                let _ = self.arc_batch.add(instance);
             } else {
                 #[cfg(debug_assertions)]
                 tracing::warn!("WgpuPainter::draw_arc: stroked arcs not fully implemented yet");
@@ -1886,7 +1414,7 @@ impl Painter for WgpuPainter {
             .add_text(text, transformed_position, font_size, paint.color);
     }
 
-    fn texture(&mut self, texture_id: &super::texture_cache::TextureId, dst_rect: Rect) {
+    fn texture(&mut self, texture_id: TextureId, dst_rect: Rect) {
         #[cfg(debug_assertions)]
         tracing::debug!(
             "WgpuPainter::texture: id={:?}, dst_rect={:?}",
@@ -1894,15 +1422,15 @@ impl Painter for WgpuPainter {
             dst_rect
         );
 
-        // Load or get cached texture
-        let _cached_texture = match self.texture_cache.get_or_load(texture_id.clone()) {
-            Ok(texture) => texture,
-            Err(e) => {
-                #[cfg(debug_assertions)]
-                tracing::error!("Failed to load texture {:?}: {}", texture_id, e);
-                return;
-            }
-        };
+        // Look up texture in external texture registry
+        if self.external_texture_registry.get(texture_id).is_none() {
+            #[cfg(debug_assertions)]
+            tracing::warn!(
+                "WgpuPainter::texture: texture {:?} not found in registry",
+                texture_id
+            );
+            return;
+        }
 
         // Apply transform to rect
         let top_left = self.apply_transform(Point::new(dst_rect.left(), dst_rect.top()));
@@ -1918,12 +1446,10 @@ impl Painter for WgpuPainter {
         );
 
         // Add to texture batch
-        self.texture_batch.add(instance);
+        let _ = self.texture_batch.add(instance);
 
-        // NOTE: Actual rendering will happen in flush_all_instanced_batches()
-        // TODO: Need to create bind group for this specific texture
-        // For now, this adds the instance but won't render until we add
-        // per-texture bind group management
+        // NOTE: Actual rendering will happen in flush_texture_batch()
+        // The texture bind group is created per-batch with the actual texture
     }
 
     fn draw_path(&mut self, path: &flui_types::painting::path::Path, paint: &Paint) {
@@ -1978,7 +1504,7 @@ impl Painter for WgpuPainter {
                     dst_rect,
                     flui_types::styling::Color::WHITE, // No tint
                 );
-                self.texture_batch.add(instance);
+                let _ = self.texture_batch.add(instance);
             }
             Err(e) => {
                 #[cfg(debug_assertions)]
@@ -2201,7 +1727,7 @@ impl Painter for WgpuPainter {
                     // Create texture instance
                     let instance =
                         super::instancing::TextureInstance::with_uv(dst_rect, src_uv, tint);
-                    self.texture_batch.add(instance);
+                    let _ = self.texture_batch.add(instance);
                 }
             }
             Err(e) => {
@@ -2251,7 +1777,7 @@ impl Painter for WgpuPainter {
 
             // Create texture instance
             let instance = super::instancing::TextureInstance::with_uv(dst, src_uv, tint);
-            self.texture_batch.add(instance);
+            let _ = self.texture_batch.add(instance);
 
             // Note: The actual texture rendering happens in flush_all_instanced_batches()
             // which needs to use entry.bind_group for the texture binding.
@@ -2297,7 +1823,7 @@ impl Painter for WgpuPainter {
 
             let instance =
                 super::instancing::TextureInstance::with_uv(dst, src_uv, placeholder_color);
-            self.texture_batch.add(instance);
+            let _ = self.texture_batch.add(instance);
         }
     }
 
@@ -2612,7 +2138,6 @@ impl WgpuPainter {
 
 #[cfg(test)]
 mod tests {
-    use super::WgpuPainter;
 
     // Note: Full tests require wgpu device initialization
     // These would be integration tests with headless rendering

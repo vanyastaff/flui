@@ -40,6 +40,7 @@ pub struct Vertex {
 impl Vertex {
     /// Create a new vertex with position, color, and UV coordinates
     #[inline]
+    #[must_use]
     pub fn new(position: Point, color: Color, uv: [f32; 2]) -> Self {
         let (r, g, b, a) = color.to_rgba_f32();
         Self {
@@ -51,6 +52,7 @@ impl Vertex {
 
     /// Create a vertex with only position and color (UV defaults to [0.0, 0.0])
     #[inline]
+    #[must_use]
     pub fn with_color(position: Point, color: Color) -> Self {
         Self::new(position, color, [0.0, 0.0])
     }
@@ -58,6 +60,7 @@ impl Vertex {
     /// Get wgpu vertex buffer layout descriptor
     ///
     /// This describes the memory layout for the GPU pipeline.
+    #[must_use]
     pub fn desc() -> wgpu::VertexBufferLayout<'static> {
         wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,

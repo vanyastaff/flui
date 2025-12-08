@@ -3,10 +3,8 @@
 //! Manages GPU pipelines, render passes, and offscreen texture rendering
 //! for ShaderMaskLayer effects.
 
-use crate::layer::{
-    shader_compiler::{ShaderCache, ShaderType},
-    texture_pool::{PooledTexture, TexturePool},
-};
+use super::shader_compiler::{ShaderCache, ShaderType};
+use super::texture_pool::{PooledTexture, TexturePool};
 use flui_types::{
     geometry::Rect,
     painting::{BlendMode, ShaderSpec},
@@ -259,7 +257,12 @@ impl OffscreenRenderer {
             self.pipelines.insert(shader_type, Arc::new(pipeline));
         }
 
-        self.pipelines.get(&shader_type).unwrap().clone()
+        // SAFETY: We just inserted this key above, so it must exist
+        Arc::clone(
+            self.pipelines
+                .get(&shader_type)
+                .expect("Pipeline was just inserted"),
+        )
     }
 
     /// Render child with shader mask applied
@@ -435,7 +438,7 @@ impl OffscreenRenderer {
     }
 
     /// Get texture pool statistics
-    pub fn texture_pool_stats(&self) -> crate::layer::texture_pool::PoolStats {
+    pub fn texture_pool_stats(&self) -> super::texture_pool::PoolStats {
         self.texture_pool.stats()
     }
 
@@ -465,7 +468,7 @@ pub struct MaskedRenderResult {
 
 impl MaskedRenderResult {
     /// Get the texture descriptor
-    pub fn texture_desc(&self) -> &crate::layer::texture_pool::TextureDesc {
+    pub fn texture_desc(&self) -> &super::texture_pool::TextureDesc {
         self.texture.desc()
     }
 
@@ -598,7 +601,6 @@ impl FullscreenVertex {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_types::styling::Color32;
 
     // Note: OffscreenRenderer tests are ignored because they require wgpu Device/Queue
     // These would need GPU resources to run properly.

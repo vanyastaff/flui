@@ -2,8 +2,9 @@
 //!
 //! Production rendering backend executing drawing commands via GPU acceleration.
 
-use super::command_renderer::CommandRenderer;
-use crate::painter::{Painter, WgpuPainter};
+use super::commands::dispatch_command;
+use super::painter::WgpuPainter;
+use crate::traits::{CommandRenderer, Painter};
 use flui_painting::{BlendMode, DisplayListCore, Paint, PointMode};
 use flui_types::{
     geometry::{Matrix4, Offset, Point, RRect, Rect, Transform},
@@ -12,11 +13,12 @@ use flui_types::{
     typography::TextStyle,
 };
 
-pub struct WgpuRenderer {
+/// wgpu backend implementation of CommandRenderer.
+pub struct Backend {
     painter: WgpuPainter,
 }
 
-impl WgpuRenderer {
+impl Backend {
     pub fn new(painter: WgpuPainter) -> Self {
         Self { painter }
     }
@@ -64,7 +66,7 @@ impl WgpuRenderer {
     }
 }
 
-impl CommandRenderer for WgpuRenderer {
+impl CommandRenderer for Backend {
     fn render_rect(&mut self, rect: Rect, paint: &Paint, transform: &Matrix4) {
         self.with_transform(transform, |painter| {
             painter.rect(rect, paint);
@@ -281,7 +283,7 @@ impl CommandRenderer for WgpuRenderer {
 
         // Render child content without masking (fallback behavior)
         for command in child.commands() {
-            super::dispatch_command(command, self);
+            dispatch_command(command, self);
         }
     }
 
@@ -342,7 +344,7 @@ impl CommandRenderer for WgpuRenderer {
         // Render child content without filtering (fallback behavior)
         if let Some(child) = child {
             for command in child.commands() {
-                super::dispatch_command(command, self);
+                dispatch_command(command, self);
             }
         }
     }
@@ -391,5 +393,89 @@ impl CommandRenderer for WgpuRenderer {
 
     fn restore_layer(&mut self, _transform: &Matrix4) {
         self.painter.restore_layer();
+    }
+
+    // ===== Layer Tree Operations =====
+
+    fn push_clip_rect(&mut self, rect: &Rect, _clip_behavior: flui_types::painting::Clip) {
+        self.painter.save();
+        self.painter.clip_rect(*rect);
+    }
+
+    fn push_clip_rrect(&mut self, rrect: &RRect, _clip_behavior: flui_types::painting::Clip) {
+        self.painter.save();
+        self.painter.clip_rrect(*rrect);
+    }
+
+    fn push_clip_path(&mut self, path: &Path, _clip_behavior: flui_types::painting::Clip) {
+        self.painter.save();
+        self.painter.clip_path(path);
+    }
+
+    fn pop_clip(&mut self) {
+        self.painter.restore();
+    }
+
+    fn push_offset(&mut self, offset: Offset) {
+        self.painter.save();
+        self.painter.translate(offset);
+    }
+
+    fn push_transform(&mut self, transform: &Matrix4) {
+        self.painter.save();
+
+        // Decompose and apply transform components
+        let transform_enum = Transform::from(*transform);
+        let (tx, ty, rotation, sx, sy) = transform_enum.decompose();
+
+        if tx != 0.0 || ty != 0.0 {
+            self.painter.translate(Offset::new(tx, ty));
+        }
+        if rotation.abs() > f32::EPSILON {
+            self.painter.rotate(rotation);
+        }
+        if (sx - 1.0).abs() > f32::EPSILON || (sy - 1.0).abs() > f32::EPSILON {
+            self.painter.scale(sx, sy);
+        }
+    }
+
+    fn pop_transform(&mut self) {
+        self.painter.restore();
+    }
+
+    fn push_opacity(&mut self, alpha: f32) {
+        // Create a layer with opacity
+        let alpha_u8 = (alpha.clamp(0.0, 1.0) * 255.0) as u8;
+        let paint = Paint::fill(Color::WHITE).with_alpha(alpha_u8);
+        self.painter.save_layer(None, &paint);
+    }
+
+    fn pop_opacity(&mut self) {
+        self.painter.restore_layer();
+    }
+
+    fn push_color_filter(&mut self, _filter: &flui_types::painting::ColorMatrix) {
+        // TODO: Implement color filter via GPU shader
+        // For now, save state to maintain push/pop balance
+        self.painter.save();
+        tracing::trace!("push_color_filter: GPU color matrix filter not yet implemented");
+    }
+
+    fn pop_color_filter(&mut self) {
+        self.painter.restore();
+    }
+
+    fn push_image_filter(&mut self, filter: &flui_painting::display_list::ImageFilter) {
+        // TODO: Implement image filter via GPU compute shader
+        // For now, save state to maintain push/pop balance
+        self.painter.save();
+        tracing::trace!(
+            "push_image_filter: GPU image filter not yet implemented - filter={:?}",
+            filter
+        );
+    }
+
+    fn pop_image_filter(&mut self) {
+        self.painter.restore();
     }
 }

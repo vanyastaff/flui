@@ -4,8 +4,9 @@
 //! during shader mask rendering.
 
 use flui_types::Size;
+use parking_lot::Mutex;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 /// Texture descriptor for identifying pooled textures
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -98,8 +99,8 @@ impl PooledTexture {
 
 impl Drop for PooledTexture {
     fn drop(&mut self) {
-        // Return texture to pool
-        let mut pool = self.pool.lock().unwrap();
+        // Return texture to pool (parking_lot::Mutex never panics on lock)
+        let mut pool = self.pool.lock();
         pool.return_texture(self.desc);
         tracing::trace!("Returned texture to pool: {:?}", self.desc);
     }
@@ -218,9 +219,10 @@ impl TexturePool {
     ///
     /// Returns a pooled texture that will be automatically returned
     /// to the pool when dropped.
+    #[must_use]
     pub fn acquire(&self, size: Size) -> PooledTexture {
         let desc = TextureDesc::from_size(size);
-        let mut pool = self.inner.lock().unwrap();
+        let mut pool = self.inner.lock();
 
         // Try to get from pool first
         if pool.acquire_texture(desc).is_none() {
@@ -235,8 +237,9 @@ impl TexturePool {
     }
 
     /// Get pool statistics
+    #[must_use]
     pub fn stats(&self) -> PoolStats {
-        let pool = self.inner.lock().unwrap();
+        let pool = self.inner.lock();
         PoolStats {
             total_allocated: pool.total_allocated,
             total_memory_bytes: pool.total_memory_bytes,
@@ -246,7 +249,7 @@ impl TexturePool {
 
     /// Clear all textures from the pool
     pub fn clear(&self) {
-        let mut pool = self.inner.lock().unwrap();
+        let mut pool = self.inner.lock();
         pool.clear();
     }
 }

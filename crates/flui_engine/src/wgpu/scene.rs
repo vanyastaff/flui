@@ -1,33 +1,27 @@
-//! GPU Renderer - High-level GPU rendering abstraction
+//! Scene Renderer - High-level GPU rendering for Scene objects
 //!
-//! Encapsulates all wgpu resources and rendering logic, providing a clean
-//! interface for the application layer without exposing low-level GPU details.
+//! Manages all wgpu resources and provides a clean interface for rendering
+//! Scene objects from flui-layer.
 //!
 //! # Architecture
 //!
 //! ```text
-//! FluiApp (application layer)
-//!     ├─ winit::Window (window management)
-//!     ├─ wgpu::Instance (creates Surface from Window)
-//!     └─ GpuRenderer (rendering layer - NO window knowledge!)
-//!         ├─ wgpu::Surface (passed from app)
-//!         ├─ wgpu::Device
-//!         ├─ wgpu::Queue
-//!         ├─ SurfaceConfiguration
-//!         └─ WgpuPainter
+//! Scene (flui-layer)
+//!     │
+//!     ▼
+//! SceneRenderer
+//!     ├─ wgpu::Surface
+//!     ├─ wgpu::Device
+//!     ├─ wgpu::Queue
+//!     └─ Painter (WgpuPainter)
 //! ```
-//!
-//! # Benefits
-//!
-//! - **Encapsulation**: All GPU details hidden from app layer
-//! - **Separation of Concerns**: Engine doesn't know about windows/winit
-//! - **Testability**: Easy to mock surface for testing
-//! - **Future-proof**: Easy to add new rendering backends
 
-// CanvasLayer now accessed via Layer enum
-use crate::layer::LayerRender;
-use crate::painter::WgpuPainter;
-use crate::renderer::WgpuRenderer as WgpuRendererWrapper;
+use super::backend::Backend;
+use super::layer_render::LayerRender;
+use super::offscreen::OffscreenRenderer;
+use super::painter::WgpuPainter;
+use crate::error::RenderError;
+use flui_layer::{LayerId, LayerNode, LayerTree, Scene};
 
 /// High-level GPU rendering abstraction
 ///
@@ -37,7 +31,7 @@ use crate::renderer::WgpuRenderer as WgpuRendererWrapper;
 /// # Example
 ///
 /// ```rust,ignore
-/// use flui_engine::GpuRenderer;
+/// use flui_engine::SceneRenderer;
 /// use std::sync::Arc;
 ///
 /// // Create surface in app layer (flui_app)
@@ -46,7 +40,7 @@ use crate::renderer::WgpuRenderer as WgpuRendererWrapper;
 /// let size = window.inner_size();
 ///
 /// // Pass surface to engine (NO window reference!)
-/// let mut renderer = GpuRenderer::new(surface, size.width, size.height);
+/// let mut renderer = SceneRenderer::new(surface, size.width, size.height);
 ///
 /// // Resize on window resize
 /// renderer.resize(1920, 1080);
@@ -55,7 +49,7 @@ use crate::renderer::WgpuRenderer as WgpuRendererWrapper;
 /// let layer = /* your CanvasLayer */;
 /// renderer.render(&layer)?;
 /// ```
-pub struct GpuRenderer {
+pub struct SceneRenderer {
     /// wgpu surface (render target)
     surface: wgpu::Surface<'static>,
 
@@ -73,14 +67,14 @@ pub struct GpuRenderer {
     painter: Option<WgpuPainter>,
 
     /// Offscreen renderer for shader masks
-    offscreen_renderer: Option<crate::layer::offscreen_renderer::OffscreenRenderer>,
+    offscreen_renderer: Option<OffscreenRenderer>,
 }
 
-impl GpuRenderer {
+impl SceneRenderer {
     /// Create a new GPU renderer with a window (async version, PREFERRED)
     ///
     /// This method creates the surface internally from the window, ensuring that
-    /// the surface is created from the same wgpu::Instance that GpuRenderer uses.
+    /// the surface is created from the same wgpu::Instance that SceneRenderer uses.
     /// This avoids lifetime and instance mismatch issues.
     ///
     /// # Arguments
@@ -89,44 +83,67 @@ impl GpuRenderer {
     /// * `width` - Initial surface width in pixels
     /// * `height` - Initial surface height in pixels
     ///
+    /// # Errors
+    ///
+    /// Returns `RenderError` if GPU initialization fails.
+    pub async fn try_new_async_with_window<W>(
+        window: W,
+        width: u32,
+        height: u32,
+    ) -> Result<Self, RenderError>
+    where
+        W: Into<wgpu::SurfaceTarget<'static>>,
+    {
+        let instance = Self::create_instance();
+
+        let surface = instance
+            .create_surface(window)
+            .map_err(RenderError::surface_creation)?;
+
+        Self::try_new_async_impl(instance, surface, width, height).await
+    }
+
+    /// Create a new GPU renderer with a window (async version, PREFERRED)
+    ///
     /// # Panics
     ///
-    /// Panics if GPU initialization fails (no adapter, device creation fails, etc.)
+    /// Panics if GPU initialization fails. Use `try_new_async_with_window` for fallible version.
+    #[deprecated(
+        since = "0.2.0",
+        note = "Use try_new_async_with_window for proper error handling"
+    )]
     pub async fn new_async_with_window<W>(window: W, width: u32, height: u32) -> Self
     where
         W: Into<wgpu::SurfaceTarget<'static>>,
     {
-        // Create wgpu instance with platform-specific backends
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+        Self::try_new_async_with_window(window, width, height)
+            .await
+            .expect("Failed to create GPU renderer")
+    }
+
+    /// Create wgpu instance with platform-specific backends
+    fn create_instance() -> wgpu::Instance {
+        wgpu::Instance::new(&wgpu::InstanceDescriptor {
             #[cfg(feature = "webgpu")]
             backends: wgpu::Backends::GL | wgpu::Backends::BROWSER_WEBGPU,
             #[cfg(all(feature = "android", not(feature = "webgpu")))]
-            backends: wgpu::Backends::VULKAN, // Vulkan mandatory for Android
+            backends: wgpu::Backends::VULKAN,
             #[cfg(all(feature = "ios", not(feature = "webgpu")))]
-            backends: wgpu::Backends::METAL, // Metal mandatory for iOS
+            backends: wgpu::Backends::METAL,
             #[cfg(all(
                 feature = "desktop",
                 not(any(feature = "webgpu", feature = "android", feature = "ios"))
             ))]
-            backends: wgpu::Backends::all(), // Auto-detect on desktop
+            backends: wgpu::Backends::all(),
             #[cfg(not(any(
                 feature = "desktop",
                 feature = "android",
                 feature = "ios",
                 feature = "webgpu"
             )))]
-            backends: wgpu::Backends::all(), // Fallback
+            backends: wgpu::Backends::all(),
             ..Default::default()
-        });
-
-        // Create surface from window using raw_window_handle
-        // IMPORTANT: Surface is created from the SAME instance that we'll use for adapter/device
-        let surface = instance
-            .create_surface(window)
-            .expect("Failed to create surface from window");
-
-        // Delegate to existing new_async implementation
-        Self::new_async_impl(instance, surface, width, height).await
+        })
     }
 
     /// Create a new GPU renderer with an existing surface (async version for WASM)
@@ -175,13 +192,13 @@ impl GpuRenderer {
         Self::new_async_impl(instance, surface, width, height).await
     }
 
-    /// Internal implementation - creates renderer from instance and surface
-    async fn new_async_impl(
+    /// Internal implementation - creates renderer from instance and surface (fallible)
+    async fn try_new_async_impl(
         instance: wgpu::Instance,
         surface: wgpu::Surface<'static>,
         width: u32,
         height: u32,
-    ) -> Self {
+    ) -> Result<Self, RenderError> {
         // Request adapter (async)
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
@@ -190,7 +207,7 @@ impl GpuRenderer {
                 force_fallback_adapter: false,
             })
             .await
-            .expect("Failed to find suitable GPU adapter");
+            .map_err(|_| RenderError::NoAdapter)?;
 
         tracing::debug!(adapter_info = ?adapter.get_info(), "GPU Adapter initialized");
         tracing::debug!(backend = ?adapter.get_info().backend, "GPU Backend");
@@ -223,7 +240,7 @@ impl GpuRenderer {
                 trace: Default::default(),
             })
             .await
-            .expect("Failed to create GPU device");
+            .map_err(RenderError::device_creation)?;
 
         // Configure surface
         let config = wgpu::SurfaceConfiguration {
@@ -247,7 +264,7 @@ impl GpuRenderer {
         );
 
         // Create offscreen renderer for shader masks
-        let mut offscreen_renderer = crate::layer::offscreen_renderer::OffscreenRenderer::new(
+        let mut offscreen_renderer = OffscreenRenderer::new(
             std::sync::Arc::new(device.clone()),
             std::sync::Arc::new(queue.clone()),
             config.format,
@@ -263,14 +280,26 @@ impl GpuRenderer {
             "GPU renderer created with shader mask support"
         );
 
-        Self {
+        Ok(Self {
             surface,
             device,
             queue,
             config,
             painter: Some(painter),
             offscreen_renderer: Some(offscreen_renderer),
-        }
+        })
+    }
+
+    /// Internal implementation - creates renderer from instance and surface (panicking)
+    async fn new_async_impl(
+        instance: wgpu::Instance,
+        surface: wgpu::Surface<'static>,
+        width: u32,
+        height: u32,
+    ) -> Self {
+        Self::try_new_async_impl(instance, surface, width, height)
+            .await
+            .expect("Failed to create GPU renderer")
     }
 
     /// Create a new GPU renderer with an existing surface
@@ -341,7 +370,7 @@ impl GpuRenderer {
         );
 
         // Create offscreen renderer for shader masks
-        let mut offscreen_renderer = crate::layer::offscreen_renderer::OffscreenRenderer::new(
+        let mut offscreen_renderer = OffscreenRenderer::new(
             std::sync::Arc::new(device.clone()),
             std::sync::Arc::new(queue.clone()),
             config.format,
@@ -416,25 +445,219 @@ impl GpuRenderer {
     ///     }
     /// }
     /// ```
-    pub fn render(&mut self, layer: &crate::layer::Layer) -> Result<(), RenderError> {
-        use crate::layer::Layer;
+    pub fn render(&mut self, layer: &flui_layer::Layer) -> Result<(), RenderError> {
+        use flui_layer::Layer;
 
         // Dispatch to appropriate rendering method based on layer type
         match layer {
+            // Leaf layers
             Layer::Canvas(canvas_layer) => self.render_canvas_layer(canvas_layer),
+
+            // Clip layers - these modify the clip stack for children
+            Layer::ClipRect(_) | Layer::ClipRRect(_) | Layer::ClipPath(_) => {
+                // Clip layers don't render content themselves,
+                // they modify state for child rendering via LayerRender trait
+                Ok(())
+            }
+
+            // Transform layers - these modify the transform stack for children
+            Layer::Offset(_) | Layer::Transform(_) => {
+                // Transform layers don't render content themselves,
+                // they modify state for child rendering via LayerRender trait
+                Ok(())
+            }
+
+            // Effect layers
+            Layer::Opacity(_) | Layer::ColorFilter(_) | Layer::ImageFilter(_) => {
+                // Effect layers apply visual effects to children
+                // Currently handled via LayerRender trait during tree traversal
+                Ok(())
+            }
             Layer::ShaderMask(shader_mask_layer) => {
                 self.render_shader_mask_layer(shader_mask_layer)
             }
             Layer::BackdropFilter(backdrop_filter_layer) => {
                 self.render_backdrop_filter_layer(backdrop_filter_layer)
             }
-            Layer::Cached(cached_layer) => {
-                // Render the wrapped layer
-                // The CachedLayer handles its own caching logic
-                let inner = cached_layer.inner();
-                self.render(&inner)
+
+            // External content layers
+            Layer::Texture(_) | Layer::PlatformView(_) => {
+                // Texture and PlatformView layers are composited externally
+                // by the platform embedder, not by the GPU renderer directly
+                Ok(())
+            }
+
+            // Linking layers
+            Layer::Leader(_) | Layer::Follower(_) => {
+                // Linking layers handle coordinate transformations
+                // Actual transforms are calculated by the compositor
+                Ok(())
+            }
+
+            // Annotation layers
+            Layer::AnnotatedRegion(_) => {
+                // Annotation layers are metadata-only, no visual rendering
+                Ok(())
             }
         }
+    }
+
+    /// Render a Scene to the surface
+    ///
+    /// Traverses the layer tree depth-first and renders all layers.
+    ///
+    /// # Arguments
+    ///
+    /// * `scene` - The Scene containing LayerTree and root LayerId
+    ///
+    /// # Returns
+    ///
+    /// `Ok(())` on success, or `RenderError` if rendering fails
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use flui_engine::{SceneRenderer, Scene};
+    /// use flui_layer::{LayerTree, SceneBuilder, CanvasLayer};
+    /// use flui_types::Size;
+    ///
+    /// // Build scene
+    /// let mut tree = LayerTree::new();
+    /// let mut builder = SceneBuilder::new(&mut tree);
+    /// builder.add_canvas(CanvasLayer::new());
+    /// let root = builder.finish();
+    /// let scene = Scene::new(Size::new(800.0, 600.0), tree, root, 0);
+    ///
+    /// // Render
+    /// renderer.render_scene(&scene)?;
+    /// ```
+    pub fn render_scene(&mut self, scene: &Scene) -> Result<(), RenderError> {
+        if !scene.has_content() {
+            tracing::trace!("Scene is empty, skipping render");
+            return Ok(());
+        }
+
+        let root_id = scene.root().expect("Scene has content but no root");
+        self.render_layer_tree(scene.layer_tree(), root_id)
+    }
+
+    /// Render a LayerTree starting from a root LayerId
+    ///
+    /// Traverses the tree depth-first, applying transforms and effects
+    /// from parent layers before rendering children.
+    pub fn render_layer_tree(
+        &mut self,
+        tree: &LayerTree,
+        root_id: LayerId,
+    ) -> Result<(), RenderError> {
+        tracing::trace!("SceneRenderer::render_layer_tree() START");
+
+        // Get current frame
+        let frame = self.surface.get_current_texture().map_err(|e| match e {
+            wgpu::SurfaceError::Lost => {
+                tracing::warn!("Surface lost, reconfiguring...");
+                self.surface.configure(&self.device, &self.config);
+                RenderError::SurfaceLost
+            }
+            wgpu::SurfaceError::Outdated => {
+                tracing::warn!("Surface outdated, reconfiguring...");
+                self.surface.configure(&self.device, &self.config);
+                RenderError::SurfaceOutdated
+            }
+            wgpu::SurfaceError::OutOfMemory => {
+                tracing::error!("Out of GPU memory!");
+                RenderError::OutOfMemory
+            }
+            wgpu::SurfaceError::Timeout => {
+                tracing::warn!("Surface timeout");
+                RenderError::Timeout
+            }
+            wgpu::SurfaceError::Other => {
+                tracing::error!("Unknown surface error occurred");
+                RenderError::PainterError("Unknown surface error".to_string())
+            }
+        })?;
+
+        let view = frame
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+
+        // Create command encoder
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("FLUI Render Encoder"),
+            });
+
+        // Clear screen
+        {
+            let _render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Clear Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.1,
+                            g: 0.1,
+                            b: 0.1,
+                            a: 1.0,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+        }
+
+        // Take painter for rendering
+        let painter = self
+            .painter
+            .take()
+            .expect("Painter should always exist during render");
+
+        let mut renderer_wrapper = Backend::new(painter);
+
+        // Render layer tree depth-first
+        Self::render_layer_recursive(tree, root_id, &mut renderer_wrapper);
+
+        // Extract painter and render to GPU
+        let mut painter = renderer_wrapper.into_painter();
+
+        painter
+            .render(&view, &mut encoder)
+            .map_err(|e| RenderError::PainterError(e.to_string()))?;
+
+        // Put painter back
+        self.painter = Some(painter);
+
+        // Submit and present
+        self.queue.submit(std::iter::once(encoder.finish()));
+        frame.present();
+
+        Ok(())
+    }
+
+    /// Recursively render a layer and its children
+    fn render_layer_recursive(tree: &LayerTree, layer_id: LayerId, renderer: &mut Backend) {
+        // Get layer
+        let Some(node) = tree.get(layer_id) else {
+            tracing::warn!("Layer {:?} not found in tree", layer_id);
+            return;
+        };
+
+        // Render this layer (applies transforms, clips, effects)
+        node.layer().render(renderer);
+
+        // Render children
+        for &child_id in node.children() {
+            Self::render_layer_recursive(tree, child_id, renderer);
+        }
+
+        // TODO: Pop state for layers that pushed state (clips, transforms, effects)
+        // This requires tracking what was pushed in render() and popping after children
     }
 
     /// Render a ShaderMaskLayer (offscreen rendering + shader mask + composite)
@@ -531,7 +754,7 @@ impl GpuRenderer {
     ///    ```
     fn render_shader_mask_layer(
         &mut self,
-        shader_mask_layer: &crate::layer::ShaderMaskLayer,
+        shader_mask_layer: &flui_layer::ShaderMaskLayer,
     ) -> Result<(), RenderError> {
         tracing::debug!(
             bounds = ?shader_mask_layer.bounds(),
@@ -610,7 +833,7 @@ impl GpuRenderer {
     /// This is more efficient than 2D blur (O(n) vs O(n²) per pixel).
     fn render_backdrop_filter_layer(
         &mut self,
-        backdrop_filter_layer: &crate::layer::BackdropFilterLayer,
+        backdrop_filter_layer: &flui_layer::BackdropFilterLayer,
     ) -> Result<(), RenderError> {
         use flui_types::painting::ImageFilter;
 
@@ -693,11 +916,8 @@ impl GpuRenderer {
     }
 
     /// Internal method to render a CanvasLayer
-    fn render_canvas_layer(
-        &mut self,
-        layer: &crate::layer::CanvasLayer,
-    ) -> Result<(), RenderError> {
-        tracing::trace!("GpuRenderer::render() START");
+    fn render_canvas_layer(&mut self, layer: &flui_layer::CanvasLayer) -> Result<(), RenderError> {
+        tracing::trace!("SceneRenderer::render() START");
 
         // Get current frame
         let frame = self.surface.get_current_texture().map_err(|e| match e {
@@ -767,7 +987,7 @@ impl GpuRenderer {
             .expect("Painter should always exist during render");
 
         // Create renderer wrapper (stack allocation, just one pointer field)
-        let mut renderer_wrapper = WgpuRendererWrapper::new(painter);
+        let mut renderer_wrapper = Backend::new(painter);
 
         layer.render(&mut renderer_wrapper);
 
@@ -791,45 +1011,14 @@ impl GpuRenderer {
     /// Get current viewport size
     ///
     /// Returns (width, height) in pixels
+    #[must_use]
     pub fn size(&self) -> (u32, u32) {
         (self.config.width, self.config.height)
     }
 
     /// Get the surface texture format
+    #[must_use]
     pub fn format(&self) -> wgpu::TextureFormat {
         self.config.format
     }
 }
-
-/// GPU rendering errors
-#[derive(Debug)]
-pub enum RenderError {
-    /// Surface was lost and needs reconfiguration
-    SurfaceLost,
-
-    /// Surface is outdated and needs reconfiguration
-    SurfaceOutdated,
-
-    /// Out of GPU memory
-    OutOfMemory,
-
-    /// Surface acquisition timed out
-    Timeout,
-
-    /// Error from the painter during rendering
-    PainterError(String),
-}
-
-impl std::fmt::Display for RenderError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            RenderError::SurfaceLost => write!(f, "Surface was lost"),
-            RenderError::SurfaceOutdated => write!(f, "Surface is outdated"),
-            RenderError::OutOfMemory => write!(f, "Out of GPU memory"),
-            RenderError::Timeout => write!(f, "Surface acquisition timed out"),
-            RenderError::PainterError(msg) => write!(f, "Painter error: {}", msg),
-        }
-    }
-}
-
-impl std::error::Error for RenderError {}

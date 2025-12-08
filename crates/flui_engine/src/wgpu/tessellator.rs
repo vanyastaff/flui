@@ -3,7 +3,7 @@
 //! Converts vector paths (curves, lines, arcs) into triangle meshes
 //! suitable for GPU rendering.
 
-use crate::painter::vertex::Vertex;
+use super::vertex::Vertex;
 use flui_painting::{Paint, StrokeCap, StrokeJoin};
 use flui_types::{geometry::RRect, styling::Color, Point, Rect};
 use lyon::path::Path;

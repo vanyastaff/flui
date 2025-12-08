@@ -2,7 +2,7 @@
 //!
 //! Useful for development, debugging, and testing rendering without GPU.
 
-use super::command_renderer::CommandRenderer;
+use super::commands::CommandRenderer;
 use flui_painting::{BlendMode, DisplayListCore, Paint, PointMode};
 use flui_types::{
     geometry::{Matrix4, Offset, Point, RRect, Rect},
@@ -11,13 +11,13 @@ use flui_types::{
     typography::TextStyle,
 };
 
-/// Debug renderer that logs all commands to tracing
-pub struct DebugRenderer {
+/// Debug backend that logs all commands to tracing.
+pub struct DebugBackend {
     viewport: Rect,
     command_count: usize,
 }
 
-impl DebugRenderer {
+impl DebugBackend {
     pub fn new(viewport: Rect) -> Self {
         Self {
             viewport,
@@ -35,7 +35,7 @@ impl DebugRenderer {
     }
 }
 
-impl CommandRenderer for DebugRenderer {
+impl CommandRenderer for DebugBackend {
     fn render_rect(&mut self, rect: Rect, paint: &Paint, _transform: &Matrix4) {
         self.log_command(
             "render_rect",
@@ -323,5 +323,72 @@ impl CommandRenderer for DebugRenderer {
 
     fn restore_layer(&mut self, _transform: &Matrix4) {
         self.log_command("restore_layer", "");
+    }
+
+    // ===== Layer Tree Operations =====
+
+    fn push_clip_rect(&mut self, rect: &Rect, clip_behavior: flui_types::painting::Clip) {
+        self.log_command(
+            "push_clip_rect",
+            &format!("rect={:?}, behavior={:?}", rect, clip_behavior),
+        );
+    }
+
+    fn push_clip_rrect(&mut self, rrect: &RRect, clip_behavior: flui_types::painting::Clip) {
+        self.log_command(
+            "push_clip_rrect",
+            &format!("rrect={:?}, behavior={:?}", rrect, clip_behavior),
+        );
+    }
+
+    fn push_clip_path(&mut self, path: &Path, clip_behavior: flui_types::painting::Clip) {
+        self.log_command(
+            "push_clip_path",
+            &format!(
+                "commands={}, behavior={:?}",
+                path.commands().len(),
+                clip_behavior
+            ),
+        );
+    }
+
+    fn pop_clip(&mut self) {
+        self.log_command("pop_clip", "");
+    }
+
+    fn push_offset(&mut self, offset: Offset) {
+        self.log_command("push_offset", &format!("offset={:?}", offset));
+    }
+
+    fn push_transform(&mut self, transform: &Matrix4) {
+        self.log_command("push_transform", &format!("transform={:?}", transform));
+    }
+
+    fn pop_transform(&mut self) {
+        self.log_command("pop_transform", "");
+    }
+
+    fn push_opacity(&mut self, alpha: f32) {
+        self.log_command("push_opacity", &format!("alpha={}", alpha));
+    }
+
+    fn pop_opacity(&mut self) {
+        self.log_command("pop_opacity", "");
+    }
+
+    fn push_color_filter(&mut self, filter: &flui_types::painting::ColorMatrix) {
+        self.log_command("push_color_filter", &format!("filter={:?}", filter));
+    }
+
+    fn pop_color_filter(&mut self) {
+        self.log_command("pop_color_filter", "");
+    }
+
+    fn push_image_filter(&mut self, filter: &flui_painting::display_list::ImageFilter) {
+        self.log_command("push_image_filter", &format!("filter={:?}", filter));
+    }
+
+    fn pop_image_filter(&mut self) {
+        self.log_command("pop_image_filter", "");
     }
 }

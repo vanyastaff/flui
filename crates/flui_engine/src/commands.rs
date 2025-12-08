@@ -1,42 +1,22 @@
-//! Command dispatcher - Visitor pattern implementation
+//! RenderCommand dispatch
 //!
-//! This module implements the visitor dispatch logic for DrawCommands.
-//! It follows the **Visitor Pattern** to separate data (DrawCommand) from
-//! execution logic (CommandRenderer implementations).
+//! This module provides the dispatch functions that route DrawCommands to the
+//! appropriate CommandRenderer methods. It follows the Visitor pattern to
+//! separate command data from execution logic.
 //!
-//! # Visitor Pattern Architecture
+//! # Architecture
 //!
 //! ```text
-//! DrawCommand (Visitable)
-//!     ↓
-//! dispatch_command() (Accept)
-//!     ↓
-//! CommandRenderer (Visitor)
-//!     ↓
-//! WgpuRenderer / DebugRenderer (Concrete Visitors)
-//! ```
-//!
-//! # Benefits
-//!
-//! - **Open/Closed Principle**: Add new renderers without modifying DrawCommand
-//! - **Single Responsibility**: DrawCommand stores data, renderers handle execution
-//! - **Dependency Inversion**: High-level code depends on CommandRenderer abstraction
-//! - **Testability**: Easy to swap renderers for testing
-//!
-//! # Example
-//!
-//! ```rust,ignore
-//! use flui_painting::{DisplayList, DrawCommand};
-//! use flui_engine::renderer::{CommandRenderer, dispatch_command};
-//!
-//! fn render_display_list(display_list: &DisplayList, renderer: &mut dyn CommandRenderer) {
-//!     for command in display_list.commands() {
-//!         dispatch_command(command, renderer);
-//!     }
-//! }
+//! DrawCommand (flui_painting)
+//!     │
+//!     ▼
+//! dispatch_command() ─────► CommandRenderer.render_*()
+//!                                 │
+//!                                 ▼
+//!                           Backend (wgpu, skia, etc.)
 //! ```
 
-use super::command_renderer::CommandRenderer;
+use crate::traits::CommandRenderer;
 use flui_painting::DrawCommand;
 
 /// Dispatch a single DrawCommand to the appropriate CommandRenderer method
@@ -49,28 +29,12 @@ use flui_painting::DrawCommand;
 /// * `command` - The drawing command to execute
 /// * `renderer` - The renderer that will execute the command
 ///
-/// # Visitor Pattern Implementation
-///
-/// Traditional visitor pattern uses an `accept` method on visitable objects:
-///
-/// ```rust,ignore
-/// impl DrawCommand {
-///     fn accept(&self, visitor: &mut dyn CommandRenderer) {
-///         // dispatch logic here
-///     }
-/// }
-/// ```
-///
-/// However, we use a free function instead to avoid circular dependencies
-/// (flui_painting would need to import flui_engine). This is a valid
-/// variant of the visitor pattern called "external visitor" or "functional visitor".
-///
 /// # Performance
 ///
 /// The match statement compiles to a jump table, making dispatch O(1).
-/// No dynamic allocation or vtable lookups beyond the initial trait object call.
+/// Uses static dispatch via generics for zero-overhead renderer calls.
 #[inline]
-pub fn dispatch_command(command: &DrawCommand, renderer: &mut dyn CommandRenderer) {
+pub fn dispatch_command<R: CommandRenderer + ?Sized>(command: &DrawCommand, renderer: &mut R) {
     match command {
         // === Drawing Commands ===
         DrawCommand::DrawRect {
@@ -338,21 +302,12 @@ pub fn dispatch_command(command: &DrawCommand, renderer: &mut dyn CommandRendere
 /// It's more efficient than calling dispatch_command in a loop due to
 /// better optimization opportunities for the compiler.
 ///
-/// # Example
-///
-/// ```rust,ignore
-/// use flui_painting::DisplayList;
-/// use flui_engine::renderer::{WgpuRenderer, dispatch_commands};
-///
-/// let display_list = DisplayList::new();
-/// let mut renderer = WgpuRenderer::new(painter);
-///
-/// dispatch_commands(display_list.commands(), &mut renderer);
-/// ```
+/// Uses static dispatch via generics for zero-overhead renderer calls.
 #[inline]
-pub fn dispatch_commands<'a, I>(commands: I, renderer: &mut dyn CommandRenderer)
+pub fn dispatch_commands<'a, I, R>(commands: I, renderer: &mut R)
 where
     I: IntoIterator<Item = &'a DrawCommand>,
+    R: CommandRenderer + ?Sized,
 {
     for command in commands {
         dispatch_command(command, renderer);
