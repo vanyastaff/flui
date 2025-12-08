@@ -431,8 +431,6 @@ mod tests {
         nodes: std::collections::HashMap<ElementId, TestNode>,
     }
 
-    impl crate::traits::sealed::TreeReadSealed for TestTree {}
-    impl crate::traits::sealed::TreeNavSealed for TestTree {}
 
     impl TestTree {
         fn new() -> Self {

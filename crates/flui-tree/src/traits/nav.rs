@@ -30,7 +30,7 @@ use std::marker::PhantomData;
 ///
 /// Navigation operations should be O(1) for parent/children access.
 /// Iterator operations use associated constants for optimal memory usage.
-pub trait TreeNav<I: Identifier>: super::TreeRead<I> + sealed::Sealed {
+pub trait TreeNav<I: Identifier>: super::TreeRead<I> {
     /// Iterator type for children with GAT.
     ///
     /// This GAT allows implementations to return optimized iterator types
@@ -697,7 +697,6 @@ mod tests {
     }
 
     impl super::super::read::sealed::Sealed for TestTree {}
-    impl sealed::Sealed for TestTree {}
 
     impl TestTree {
         fn new() -> Self {

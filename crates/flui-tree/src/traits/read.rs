@@ -71,7 +71,7 @@ use flui_foundation::Identifier;
 ///     }
 /// }
 /// ```
-pub trait TreeRead<I: Identifier>: sealed::Sealed + Send + Sync {
+pub trait TreeRead<I: Identifier>: Send + Sync {
     /// The node type stored in the tree.
     ///
     /// This associated type allows implementations to define their
@@ -482,7 +482,6 @@ mod tests {
         nodes: Vec<Option<String>>,
     }
 
-    impl sealed::Sealed for TestTree {}
 
     impl TestTree {
         fn new() -> Self {

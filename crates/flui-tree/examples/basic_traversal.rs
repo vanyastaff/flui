@@ -8,12 +8,8 @@ use flui_foundation::ElementId;
 use flui_tree::{
     iter::{Ancestors, BreadthFirstIter, DepthFirstIter, DescendantsWithDepth},
     prelude::*,
-    traits::sealed::{TreeNavSealed, TreeReadSealed},
     visitor::{for_each, visit_depth_first, CollectVisitor, MaxDepthVisitor},
 };
-
-// Note: TreeVisitor and VisitorResult are not imported since TreeVisitor is sealed.
-// Use for_each() for custom visiting logic instead.
 
 // ============================================================================
 // EXAMPLE TREE IMPLEMENTATION
@@ -31,10 +27,6 @@ struct DemoNode {
 struct DemoTree {
     nodes: Vec<Option<DemoNode>>,
 }
-
-// Implement sealed traits for external usage
-impl TreeReadSealed for DemoTree {}
-impl TreeNavSealed for DemoTree {}
 
 impl DemoTree {
     fn new() -> Self {

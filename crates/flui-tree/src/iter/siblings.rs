@@ -183,8 +183,6 @@ mod tests {
         nodes: Vec<Option<TestNode>>,
     }
 
-    impl crate::traits::sealed::TreeReadSealed for TestTree {}
-    impl crate::traits::sealed::TreeNavSealed for TestTree {}
 
     impl TestTree {
         fn new() -> Self {
