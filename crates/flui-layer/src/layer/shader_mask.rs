@@ -3,7 +3,6 @@
 //! This layer type enables advanced masking effects like gradient fades and vignettes
 //! by rendering child content to an offscreen texture and applying a GPU shader as a mask.
 
-use crate::renderer::CommandRenderer;
 use flui_types::{
     geometry::Rect,
     painting::{BlendMode, ShaderSpec},
@@ -27,15 +26,14 @@ use flui_types::{
 ///
 /// # Example
 ///
-/// ```rust,ignore
-/// use flui_engine::layer::ShaderMaskLayer;
+/// ```rust
+/// use flui_layer::ShaderMaskLayer;
 /// use flui_types::painting::{BlendMode, ShaderSpec};
 /// use flui_types::styling::Color32;
 /// use flui_types::geometry::Rect;
 ///
 /// // Create gradient fade mask
 /// let mask_layer = ShaderMaskLayer::new(
-///     child_layer,
 ///     ShaderSpec::LinearGradient {
 ///         start: (0.0, 0.0),
 ///         end: (1.0, 0.0),
@@ -45,16 +43,16 @@ use flui_types::{
 ///     Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
 /// );
 /// ```
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ShaderMaskLayer {
     /// Shader specification (gradient, pattern, etc.)
-    pub shader: ShaderSpec,
+    shader: ShaderSpec,
 
     /// Blend mode for compositing masked result
-    pub blend_mode: BlendMode,
+    blend_mode: BlendMode,
 
     /// Bounds for rendering (pre-computed for performance)
-    pub bounds: Rect,
+    bounds: Rect,
 }
 
 impl ShaderMaskLayer {
@@ -73,28 +71,24 @@ impl ShaderMaskLayer {
         }
     }
 
-    /// Get the bounding rectangle of this layer
+    /// Get the shader specification.
+    pub fn shader(&self) -> &ShaderSpec {
+        &self.shader
+    }
+
+    /// Get the blend mode.
+    pub fn blend_mode(&self) -> BlendMode {
+        self.blend_mode
+    }
+
+    /// Get the bounding rectangle of this layer.
     pub fn bounds(&self) -> Rect {
         self.bounds
     }
 
-    /// Render this layer using the provided renderer
-    ///
-    /// This is a placeholder implementation. Full GPU rendering will be
-    /// implemented in Phase 1.3 (Offscreen Rendering).
-    ///
-    /// # TODO
-    ///
-    /// - Allocate offscreen texture
-    /// - Render child to texture (need child layer reference)
-    /// - Apply shader mask via GPU
-    /// - Composite to framebuffer
-    pub fn render(&self, _renderer: &mut dyn CommandRenderer) {
-        // TODO: Implement actual GPU rendering in Phase 1.3
-        // For now, this is a placeholder to establish the API
-        tracing::warn!(
-            "ShaderMaskLayer::render() called but not yet implemented (Phase 1.3 pending)"
-        );
+    /// Set new bounds for this layer.
+    pub fn set_bounds(&mut self, bounds: Rect) {
+        self.bounds = bounds;
     }
 }
 
@@ -116,7 +110,7 @@ mod tests {
         let layer = ShaderMaskLayer::new(shader, blend_mode, bounds);
 
         assert_eq!(layer.bounds(), bounds);
-        assert_eq!(layer.blend_mode, BlendMode::SrcOver);
+        assert_eq!(layer.blend_mode(), BlendMode::SrcOver);
     }
 
     #[test]
@@ -143,11 +137,11 @@ mod tests {
 
         let layer = ShaderMaskLayer::new(shader, BlendMode::Multiply, bounds);
 
-        assert_eq!(layer.blend_mode, BlendMode::Multiply);
-        match layer.shader {
+        assert_eq!(layer.blend_mode(), BlendMode::Multiply);
+        match layer.shader() {
             ShaderSpec::LinearGradient { start, end, .. } => {
-                assert_eq!(start, (0.0, 0.0));
-                assert_eq!(end, (1.0, 1.0));
+                assert_eq!(*start, (0.0, 0.0));
+                assert_eq!(*end, (1.0, 1.0));
             }
             _ => panic!("Expected LinearGradient"),
         }
@@ -164,11 +158,11 @@ mod tests {
 
         let layer = ShaderMaskLayer::new(shader, BlendMode::Screen, bounds);
 
-        assert_eq!(layer.blend_mode, BlendMode::Screen);
-        match layer.shader {
+        assert_eq!(layer.blend_mode(), BlendMode::Screen);
+        match layer.shader() {
             ShaderSpec::RadialGradient { center, radius, .. } => {
-                assert_eq!(center, (0.5, 0.5));
-                assert_eq!(radius, 1.0);
+                assert_eq!(*center, (0.5, 0.5));
+                assert_eq!(*radius, 1.0);
             }
             _ => panic!("Expected RadialGradient"),
         }
@@ -181,5 +175,16 @@ mod tests {
 
         assert_send::<ShaderMaskLayer>();
         assert_sync::<ShaderMaskLayer>();
+    }
+
+    #[test]
+    fn test_shader_mask_layer_clone() {
+        let shader = ShaderSpec::Solid(Color32::RED);
+        let bounds = Rect::from_xywh(0.0, 0.0, 50.0, 50.0);
+        let layer = ShaderMaskLayer::new(shader, BlendMode::SrcOver, bounds);
+
+        let cloned = layer.clone();
+        assert_eq!(cloned.bounds(), layer.bounds());
+        assert_eq!(cloned.blend_mode(), layer.blend_mode());
     }
 }

@@ -1158,6 +1158,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "flui-layer"
+version = "0.1.0"
+dependencies = [
+ "flui-foundation",
+ "flui-tree",
+ "flui_painting",
+ "flui_types",
+ "parking_lot",
+ "rayon",
+ "slab",
+ "tracing",
+]
+
+[[package]]
 name = "flui-objects"
 version = "0.1.0"
 dependencies = [
@@ -1229,6 +1243,18 @@ dependencies = [
  "parking_lot",
  "serde",
  "web-time",
+]
+
+[[package]]
+name = "flui-semantics"
+version = "0.1.0"
+dependencies = [
+ "flui-foundation",
+ "flui-tree",
+ "flui_types",
+ "parking_lot",
+ "slab",
+ "tracing",
 ]
 
 [[package]]
@@ -1404,6 +1430,7 @@ dependencies = [
  "cosmic-text 0.15.0",
  "env_logger 0.11.8",
  "flui-foundation",
+ "flui-layer",
  "flui_devtools",
  "flui_interaction",
  "flui_painting",

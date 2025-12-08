@@ -1,0 +1,42 @@
+[package]
+name = "flui-layer"
+version = "0.1.0"
+edition = "2021"
+description = "Layer tree for FLUI compositor - part of 5-tree architecture"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/anthropics/flui"
+keywords = ["ui", "gpu", "compositor", "layer", "rendering"]
+categories = ["gui", "graphics", "rendering"]
+
+[features]
+default = []
+# Enable parallel layer operations
+parallel = ["rayon"]
+
+[dependencies]
+# Foundation - canonical ID types
+flui-foundation = { path = "../flui-foundation" }
+
+# Tree abstractions - TreeRead, TreeNav, etc.
+flui-tree = { path = "../flui-tree" }
+
+# Types - geometry, painting types
+flui_types = { path = "../flui_types" }
+
+# Painting - Canvas, DisplayList
+flui_painting = { path = "../flui_painting" }
+
+# Slab storage for O(1) access
+slab = "0.4"
+
+# Thread-safe primitives
+parking_lot = "0.12"
+
+# Tracing for diagnostics
+tracing = "0.1"
+
+# Optional parallel processing
+rayon = { version = "1.10", optional = true }
+
+[dev-dependencies]
+# For tests

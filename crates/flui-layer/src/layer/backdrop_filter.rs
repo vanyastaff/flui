@@ -4,7 +4,6 @@
 //! behind a widget and applying blur or color filters before compositing the
 //! child content on top.
 
-use crate::renderer::CommandRenderer;
 use flui_types::{
     geometry::Rect,
     painting::{BlendMode, ImageFilter},
@@ -28,8 +27,8 @@ use flui_types::{
 ///
 /// # Example
 ///
-/// ```rust,ignore
-/// use flui_engine::layer::BackdropFilterLayer;
+/// ```rust
+/// use flui_layer::BackdropFilterLayer;
 /// use flui_types::painting::{BlendMode, ImageFilter};
 /// use flui_types::geometry::Rect;
 ///
@@ -40,16 +39,16 @@ use flui_types::{
 ///     Rect::from_xywh(0.0, 0.0, 400.0, 300.0),
 /// );
 /// ```
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct BackdropFilterLayer {
     /// Image filter to apply to backdrop
-    pub filter: ImageFilter,
+    filter: ImageFilter,
 
     /// Blend mode for compositing
-    pub blend_mode: BlendMode,
+    blend_mode: BlendMode,
 
     /// Bounds for backdrop capture (pre-computed for performance)
-    pub bounds: Rect,
+    bounds: Rect,
 }
 
 impl BackdropFilterLayer {
@@ -68,28 +67,24 @@ impl BackdropFilterLayer {
         }
     }
 
-    /// Get the bounding rectangle of this layer
+    /// Get the image filter.
+    pub fn filter(&self) -> &ImageFilter {
+        &self.filter
+    }
+
+    /// Get the blend mode.
+    pub fn blend_mode(&self) -> BlendMode {
+        self.blend_mode
+    }
+
+    /// Get the bounding rectangle of this layer.
     pub fn bounds(&self) -> Rect {
         self.bounds
     }
 
-    /// Render this layer using the provided renderer
-    ///
-    /// This is a placeholder implementation. Full GPU rendering will be
-    /// implemented in Phase 2.3 (Backdrop Capture and Filtering).
-    ///
-    /// # TODO
-    ///
-    /// - Capture framebuffer in bounds
-    /// - Apply image filter via GPU compute shader
-    /// - Render filtered result to framebuffer
-    /// - Render child content on top (if present)
-    pub fn render(&self, _renderer: &mut dyn CommandRenderer) {
-        // TODO: Implement actual GPU rendering in Phase 2.3
-        // For now, this is a placeholder to establish the API
-        tracing::warn!(
-            "BackdropFilterLayer::render() called but not yet implemented (Phase 2.3 pending)"
-        );
+    /// Set new bounds for this layer.
+    pub fn set_bounds(&mut self, bounds: Rect) {
+        self.bounds = bounds;
     }
 }
 
@@ -110,7 +105,7 @@ mod tests {
         let layer = BackdropFilterLayer::new(filter, blend_mode, bounds);
 
         assert_eq!(layer.bounds(), bounds);
-        assert_eq!(layer.blend_mode, BlendMode::SrcOver);
+        assert_eq!(layer.blend_mode(), BlendMode::SrcOver);
     }
 
     #[test]
@@ -136,11 +131,11 @@ mod tests {
 
         let layer = BackdropFilterLayer::new(filter, BlendMode::Multiply, bounds);
 
-        assert_eq!(layer.blend_mode, BlendMode::Multiply);
-        match layer.filter {
+        assert_eq!(layer.blend_mode(), BlendMode::Multiply);
+        match layer.filter() {
             ImageFilter::Blur { sigma_x, sigma_y } => {
-                assert_eq!(sigma_x, 5.0);
-                assert_eq!(sigma_y, 5.0);
+                assert_eq!(*sigma_x, 5.0);
+                assert_eq!(*sigma_y, 5.0);
             }
             _ => panic!("Expected Blur filter"),
         }
@@ -155,10 +150,10 @@ mod tests {
 
         let layer = BackdropFilterLayer::new(filter, BlendMode::Screen, bounds);
 
-        assert_eq!(layer.blend_mode, BlendMode::Screen);
-        match layer.filter {
+        assert_eq!(layer.blend_mode(), BlendMode::Screen);
+        match layer.filter() {
             ImageFilter::ColorAdjust(ColorAdjustment::Brightness(brightness)) => {
-                assert_eq!(brightness, 0.2);
+                assert_eq!(*brightness, 0.2);
             }
             _ => panic!("Expected ColorAdjust filter with Brightness"),
         }
@@ -171,5 +166,16 @@ mod tests {
 
         assert_send::<BackdropFilterLayer>();
         assert_sync::<BackdropFilterLayer>();
+    }
+
+    #[test]
+    fn test_backdrop_filter_layer_clone() {
+        let filter = ImageFilter::blur(5.0);
+        let bounds = Rect::from_xywh(0.0, 0.0, 50.0, 50.0);
+        let layer = BackdropFilterLayer::new(filter, BlendMode::SrcOver, bounds);
+
+        let cloned = layer.clone();
+        assert_eq!(cloned.bounds(), layer.bounds());
+        assert_eq!(cloned.blend_mode(), layer.blend_mode());
     }
 }

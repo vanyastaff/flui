@@ -94,6 +94,7 @@ flui_types = { path = "../flui_types" }
 flui_painting = { path = "../flui_painting" }
 flui_interaction = { path = "../flui_interaction" }
 flui-foundation = { path = "../flui-foundation" }
+flui-layer = { path = "../flui-layer" }
 flui_devtools = { path = "../flui_devtools", optional = true }
 
 # === Engine-specific dependencies (NOT from workspace) ===

@@ -3,9 +3,10 @@
 //! This layer provides efficient caching of painted content, allowing
 //! the framework to skip repainting when only the parent changes.
 
-use crate::renderer::CommandRenderer;
 use parking_lot::RwLock;
 use std::sync::Arc;
+
+use flui_types::geometry::Rect;
 
 /// Cached layer content
 ///
@@ -30,21 +31,22 @@ use std::sync::Arc;
 ///
 /// # Example
 ///
-/// ```rust,ignore
-/// use flui_engine::{CachedLayer, CanvasLayer, Layer};
+/// ```rust
+/// use flui_layer::{CachedLayer, CanvasLayer, Layer};
 ///
 /// let canvas = CanvasLayer::new();
 /// let cached = CachedLayer::new(Layer::Canvas(canvas));
 ///
-/// // First paint - renders child
-/// cached.render(&mut renderer);
+/// // Check if needs repaint
+/// assert!(cached.is_dirty()); // Starts dirty
 ///
-/// // Second paint - reuses cache (if not dirty)
-/// cached.render(&mut renderer);
+/// // Mark clean after rendering
+/// cached.mark_clean();
+/// assert!(!cached.is_dirty());
 ///
 /// // Mark dirty to force repaint
 /// cached.mark_dirty();
-/// cached.render(&mut renderer); // Repaints child
+/// assert!(cached.is_dirty());
 /// ```
 #[derive(Debug, Clone)]
 pub struct CachedLayer {
@@ -56,7 +58,7 @@ pub struct CachedLayer {
 }
 
 impl CachedLayer {
-    /// Create new cached layer wrapping another layer
+    /// Create new cached layer wrapping another layer.
     pub fn new(layer: super::Layer) -> Self {
         Self {
             inner: Arc::new(RwLock::new(layer)),
@@ -64,17 +66,22 @@ impl CachedLayer {
         }
     }
 
-    /// Mark the cache as dirty, forcing a repaint on next render
+    /// Mark the cache as dirty, forcing a repaint on next render.
     pub fn mark_dirty(&self) {
         *self.dirty.write() = true;
     }
 
-    /// Check if the cache is dirty
+    /// Mark the cache as clean (after rendering).
+    pub fn mark_clean(&self) {
+        *self.dirty.write() = false;
+    }
+
+    /// Check if the cache is dirty.
     pub fn is_dirty(&self) -> bool {
         *self.dirty.read()
     }
 
-    /// Update the wrapped layer
+    /// Update the wrapped layer.
     ///
     /// Automatically marks the cache as dirty.
     pub fn update_layer(&self, new_layer: super::Layer) {
@@ -82,32 +89,22 @@ impl CachedLayer {
         self.mark_dirty();
     }
 
-    /// Render the cached layer
-    ///
-    /// If dirty, renders the wrapped layer. Otherwise, reuses cached result.
-    ///
-    /// Note: Current implementation always renders since we don't have
-    /// GPU-level caching infrastructure yet. The dirty flag is tracked
-    /// for future optimization.
-    pub fn render(&self, renderer: &mut dyn CommandRenderer) {
-        // Note: Full caching optimization requires:
-        // - GPU texture cache for rendered content
-        // - Render target pooling
-        // - Texture atlas management
-        //
-        // For now, we always render but track dirty state for when
-        // the infrastructure is available.
-
-        let inner = self.inner.read();
-        inner.render(renderer);
-
-        // After rendering, mark as clean
-        *self.dirty.write() = false;
-    }
-
-    /// Get a reference to the wrapped layer
+    /// Get a read lock on the wrapped layer.
     pub fn inner(&self) -> parking_lot::RwLockReadGuard<'_, super::Layer> {
         self.inner.read()
+    }
+
+    /// Get a write lock on the wrapped layer.
+    ///
+    /// Automatically marks the cache as dirty.
+    pub fn inner_mut(&self) -> parking_lot::RwLockWriteGuard<'_, super::Layer> {
+        self.mark_dirty();
+        self.inner.write()
+    }
+
+    /// Returns the bounds of the wrapped layer.
+    pub fn bounds(&self) -> Option<Rect> {
+        self.inner.read().bounds()
     }
 }
 
@@ -129,12 +126,22 @@ mod tests {
         let canvas = CanvasLayer::new();
         let cached = CachedLayer::new(Layer::Canvas(canvas));
 
-        // Clear dirty flag manually for testing
-        *cached.dirty.write() = false;
+        // Clear dirty flag for testing
+        cached.mark_clean();
         assert!(!cached.is_dirty());
 
         cached.mark_dirty();
         assert!(cached.is_dirty());
+    }
+
+    #[test]
+    fn test_cached_layer_mark_clean() {
+        let canvas = CanvasLayer::new();
+        let cached = CachedLayer::new(Layer::Canvas(canvas));
+
+        assert!(cached.is_dirty());
+        cached.mark_clean();
+        assert!(!cached.is_dirty());
     }
 
     #[test]
@@ -143,7 +150,7 @@ mod tests {
         let cached = CachedLayer::new(Layer::Canvas(canvas1));
 
         // Clear dirty flag
-        *cached.dirty.write() = false;
+        cached.mark_clean();
         assert!(!cached.is_dirty());
 
         // Update layer should mark dirty
@@ -158,8 +165,33 @@ mod tests {
         let cached1 = CachedLayer::new(Layer::Canvas(canvas));
         let cached2 = cached1.clone();
 
-        // Both should share same dirty flag
+        // Both should share same dirty flag (Arc)
+        cached1.mark_clean();
+        assert!(!cached2.is_dirty());
+
         cached1.mark_dirty();
         assert!(cached2.is_dirty());
+    }
+
+    #[test]
+    fn test_cached_layer_inner_mut_marks_dirty() {
+        let canvas = CanvasLayer::new();
+        let cached = CachedLayer::new(Layer::Canvas(canvas));
+
+        cached.mark_clean();
+        assert!(!cached.is_dirty());
+
+        // Accessing inner_mut should mark dirty
+        let _guard = cached.inner_mut();
+        assert!(cached.is_dirty());
+    }
+
+    #[test]
+    fn test_cached_layer_send_sync() {
+        fn assert_send<T: Send>() {}
+        fn assert_sync<T: Sync>() {}
+
+        assert_send::<CachedLayer>();
+        assert_sync::<CachedLayer>();
     }
 }

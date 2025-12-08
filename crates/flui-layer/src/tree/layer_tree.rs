@@ -1,103 +1,26 @@
-//! LayerTree - Separate tree for Layer storage and compositing
+//! LayerTree - Slab-based storage for compositor layers
 //!
-//! This module implements the fourth of FLUI's four trees (View, Element, RenderObject, Layer).
-//! Following Flutter's architecture, Layers are stored in a separate tree for compositor operations.
-//!
-//! # Architecture
-//!
-//! ```text
-//! LayerTree (this file)
-//!   ├─ nodes: Slab<LayerNodeStorage>
-//!   └─ root: Option<LayerId>
-//!
-//! LayerNodeStorage (type-erased wrapper)
-//!   └─ Box<dyn LayerNode>
-//!
-//! LayerNode trait (type-erased interface)
-//!   └─ implemented by ConcreteLayerNode<Layer>
-//!
-//! ConcreteLayerNode<Layer> (concrete implementation)
-//!   ├─ layer: Layer  (Canvas, ShaderMask, BackdropFilter, Cached)
-//!   ├─ needs_compositing: bool
-//!   ├─ parent_data: Option<Offset>  (offset from parent)
-//!   └─ tree structure (parent, children)
-//! ```
-//!
-//! # Flutter Analogy
-//!
-//! This corresponds to Flutter's Layer tree used for composition. Unlike Flutter's
-//! immutable layers, FLUI layers can be mutable for efficiency while maintaining
-//! the same architectural separation.
-//!
-//! # Layer Types
-//!
-//! Currently supports:
-//! - **CanvasLayer**: Standard canvas drawing commands
-//! - **ShaderMaskLayer**: GPU shader masking effects
-//! - **BackdropFilterLayer**: Backdrop filtering (frosted glass, blur)
-//! - **CachedLayer**: Cached layer for RepaintBoundary optimization
-//!
-//! Future: Support for container layers (OffsetLayer, TransformLayer, ClipLayer).
+//! This module provides the LayerTree struct and LayerNode trait
+//! for managing the compositor layer hierarchy.
 
 use std::any::Any;
 use std::fmt;
 
 use slab::Slab;
 
-use flui_foundation::ElementId;
+use flui_foundation::{ElementId, LayerId};
 use flui_types::Offset;
 
 use crate::layer::Layer;
 
 // ============================================================================
-// LAYER ID
-// ============================================================================
-
-/// Unique identifier for LayerNode in LayerTree.
-///
-/// Uses 1-based indexing (NonZeroUsize) for:
-/// - Niche optimization: Option<LayerId> = 8 bytes
-/// - 0 reserved for "null" semantics
-///
-/// # Slab Offset Pattern
-///
-/// LayerId uses 1-based indexing while Slab uses 0-based:
-/// - `LayerId(1)` → `nodes[0]`
-/// - `LayerId(2)` → `nodes[1]`
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-pub struct LayerId(std::num::NonZeroUsize);
-
-impl LayerId {
-    /// Creates a new LayerId from a 1-based index.
-    ///
-    /// # Panics
-    ///
-    /// Panics if id is 0 (use NonZeroUsize for safety).
-    #[inline]
-    pub fn new(id: usize) -> Self {
-        Self(std::num::NonZeroUsize::new(id).expect("LayerId cannot be 0"))
-    }
-
-    /// Gets the underlying 1-based index.
-    #[inline]
-    pub fn get(&self) -> usize {
-        self.0.get()
-    }
-}
-
-// ============================================================================
-// LAYER NODE (Type-erased interface)
+// LAYER NODE TRAIT
 // ============================================================================
 
 /// Type-erased interface for LayerNode operations.
 ///
 /// This trait enables storing different layer types in the same Slab
 /// while preserving access to common operations.
-///
-/// # Design
-///
-/// Similar to ViewNode and RenderNode, LayerNode provides a type-erased
-/// interface for compositor layers.
 pub trait LayerNode: Send + Sync + fmt::Debug {
     // ========== Tree Structure ==========
 
@@ -115,6 +38,9 @@ pub trait LayerNode: Send + Sync + fmt::Debug {
 
     /// Removes a child from this layer node.
     fn remove_child(&mut self, child: LayerId);
+
+    /// Clears all children from this layer node.
+    fn clear_children(&mut self);
 
     // ========== Layer Access ==========
 
@@ -213,13 +139,13 @@ impl ConcreteLayerNode {
 
     /// Returns reference to the Layer.
     #[inline]
-    pub fn layer(&self) -> &Layer {
+    pub fn get_layer(&self) -> &Layer {
         &self.layer
     }
 
     /// Returns mutable reference to the Layer.
     #[inline]
-    pub fn layer_mut(&mut self) -> &mut Layer {
+    pub fn get_layer_mut(&mut self) -> &mut Layer {
         &mut self.layer
     }
 }
@@ -247,6 +173,10 @@ impl LayerNode for ConcreteLayerNode {
 
     fn remove_child(&mut self, child: LayerId) {
         self.children.retain(|&id| id != child);
+    }
+
+    fn clear_children(&mut self) {
+        self.children.clear();
     }
 
     fn layer(&self) -> &Layer {
@@ -291,44 +221,19 @@ impl LayerNode for ConcreteLayerNode {
 }
 
 // ============================================================================
-// TYPE-ERASED WRAPPER (Internal storage)
-// ============================================================================
-
-/// Type-erased wrapper for LayerNode storage.
-///
-/// This is what actually gets stored in the Slab - internal implementation detail.
-struct LayerNodeStorage {
-    inner: Box<dyn LayerNode>,
-}
-
-impl LayerNodeStorage {
-    fn new(node: ConcreteLayerNode) -> Self {
-        Self {
-            inner: Box::new(node),
-        }
-    }
-}
-
-impl fmt::Debug for LayerNodeStorage {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.inner.fmt(f)
-    }
-}
-
-// ============================================================================
 // LAYER TREE
 // ============================================================================
 
 /// LayerTree - Slab-based storage for compositor layers.
 ///
-/// This is the fourth of FLUI's four trees, corresponding to Flutter's Layer tree
+/// This is the fourth of FLUI's five trees, corresponding to Flutter's Layer tree
 /// used for composition and GPU rendering.
 ///
 /// # Architecture
 ///
 /// ```text
 /// LayerTree
-///   ├─ nodes: Slab<LayerNodeStorage>  (type-erased storage)
+///   ├─ nodes: Slab<ConcreteLayerNode>  (direct storage)
 ///   └─ root: Option<LayerId>
 /// ```
 ///
@@ -339,9 +244,9 @@ impl fmt::Debug for LayerNodeStorage {
 ///
 /// # Example
 ///
-/// ```rust,ignore
-/// use flui_engine::tree::LayerTree;
-/// use flui_engine::layer::{Layer, CanvasLayer};
+/// ```rust
+/// use flui_layer::{LayerTree, Layer, CanvasLayer, LayerNode};
+/// use flui_tree::TreeRead;
 ///
 /// let mut tree = LayerTree::new();
 ///
@@ -356,7 +261,7 @@ impl fmt::Debug for LayerNodeStorage {
 #[derive(Debug)]
 pub struct LayerTree {
     /// Slab storage for LayerNodes (0-based indexing internally)
-    nodes: Slab<LayerNodeStorage>,
+    nodes: Slab<ConcreteLayerNode>,
 
     /// Root LayerNode ID (None if tree is empty)
     root: Option<LayerId>,
@@ -423,55 +328,52 @@ impl LayerTree {
     ///
     /// # Example
     ///
-    /// ```rust,ignore
+    /// ```rust
+    /// use flui_layer::{LayerTree, Layer, CanvasLayer};
+    ///
+    /// let mut tree = LayerTree::new();
     /// let layer = Layer::Canvas(CanvasLayer::new());
     /// let id = tree.insert(layer);
     /// ```
     pub fn insert(&mut self, layer: Layer) -> LayerId {
         let node = ConcreteLayerNode::new(layer);
-        let storage = LayerNodeStorage::new(node);
-        let slab_index = self.nodes.insert(storage);
+        let slab_index = self.nodes.insert(node);
         LayerId::new(slab_index + 1) // +1 offset
     }
 
-    /// Returns a reference to a LayerNode (type-erased).
+    /// Inserts a Layer with an associated ElementId.
+    pub fn insert_with_element(&mut self, layer: Layer, element_id: ElementId) -> LayerId {
+        let node = ConcreteLayerNode::new(layer).with_element_id(element_id);
+        let slab_index = self.nodes.insert(node);
+        LayerId::new(slab_index + 1)
+    }
+
+    /// Returns a reference to a LayerNode.
     ///
     /// # Slab Offset Pattern
     ///
     /// Applies -1 offset: `LayerId(1)` → `nodes[0]`
     #[inline]
-    pub fn get(&self, id: LayerId) -> Option<&(dyn LayerNode + '_)> {
-        self.nodes
-            .get(id.get() - 1)
-            .map(|storage| &*storage.inner as &(dyn LayerNode + '_))
+    pub fn get(&self, id: LayerId) -> Option<&ConcreteLayerNode> {
+        self.nodes.get(id.get() - 1)
     }
 
-    /// Returns a mutable reference to a LayerNode (type-erased).
+    /// Returns a mutable reference to a LayerNode.
     #[inline]
-    pub fn get_mut(&mut self, id: LayerId) -> Option<&mut (dyn LayerNode + '_)> {
-        self.nodes
-            .get_mut(id.get() - 1)
-            .map(|storage| &mut *storage.inner as &mut (dyn LayerNode + '_))
+    pub fn get_mut(&mut self, id: LayerId) -> Option<&mut ConcreteLayerNode> {
+        self.nodes.get_mut(id.get() - 1)
     }
 
-    /// Returns a reference to the concrete LayerNode.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// if let Some(node) = tree.get_concrete(id) {
-    ///     println!("Layer: {:?}", node.layer());
-    /// }
-    /// ```
-    pub fn get_concrete(&self, id: LayerId) -> Option<&ConcreteLayerNode> {
-        self.get(id)?.as_any().downcast_ref::<ConcreteLayerNode>()
+    /// Returns a reference to the Layer directly.
+    #[inline]
+    pub fn get_layer(&self, id: LayerId) -> Option<&Layer> {
+        self.get(id).map(|node| node.layer())
     }
 
-    /// Returns a mutable reference to the concrete LayerNode.
-    pub fn get_concrete_mut(&mut self, id: LayerId) -> Option<&mut ConcreteLayerNode> {
-        self.get_mut(id)?
-            .as_any_mut()
-            .downcast_mut::<ConcreteLayerNode>()
+    /// Returns a mutable reference to the Layer directly.
+    #[inline]
+    pub fn get_layer_mut(&mut self, id: LayerId) -> Option<&mut Layer> {
+        self.get_mut(id).map(|node| node.layer_mut())
     }
 
     /// Removes a LayerNode from the tree.
@@ -479,15 +381,19 @@ impl LayerTree {
     /// Returns the removed node, or None if it didn't exist.
     ///
     /// **Note:** This does NOT remove children. Caller must handle tree cleanup.
-    pub fn remove(&mut self, id: LayerId) -> Option<Box<dyn LayerNode>> {
+    pub fn remove(&mut self, id: LayerId) -> Option<ConcreteLayerNode> {
         // Update root if removing root
         if self.root == Some(id) {
             self.root = None;
         }
 
-        self.nodes
-            .try_remove(id.get() - 1)
-            .map(|storage| storage.inner)
+        self.nodes.try_remove(id.get() - 1)
+    }
+
+    /// Clears all nodes from the tree.
+    pub fn clear(&mut self) {
+        self.nodes.clear();
+        self.root = None;
     }
 
     // ========== Tree Operations ==========
@@ -519,10 +425,210 @@ impl LayerTree {
             child.set_parent(None);
         }
     }
+
+    /// Returns the parent of a node.
+    pub fn parent(&self, id: LayerId) -> Option<LayerId> {
+        self.get(id)?.parent()
+    }
+
+    /// Returns the children of a node.
+    pub fn children(&self, id: LayerId) -> Option<&[LayerId]> {
+        self.get(id).map(|node| node.children())
+    }
+
+    // ========== Iteration ==========
+
+    /// Returns an iterator over all LayerIds in the tree.
+    pub fn layer_ids(&self) -> impl Iterator<Item = LayerId> + '_ {
+        self.nodes.iter().map(|(index, _)| LayerId::new(index + 1))
+    }
+
+    /// Returns an iterator over all (LayerId, &ConcreteLayerNode) pairs.
+    pub fn iter(&self) -> impl Iterator<Item = (LayerId, &ConcreteLayerNode)> + '_ {
+        self.nodes
+            .iter()
+            .map(|(index, node)| (LayerId::new(index + 1), node))
+    }
+
+    /// Returns a mutable iterator over all (LayerId, &mut ConcreteLayerNode) pairs.
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = (LayerId, &mut ConcreteLayerNode)> + '_ {
+        self.nodes
+            .iter_mut()
+            .map(|(index, node)| (LayerId::new(index + 1), node))
+    }
 }
 
 impl Default for LayerTree {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+// ============================================================================
+// TESTS
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::layer::CanvasLayer;
+
+    #[test]
+    fn test_layer_tree_new() {
+        let tree = LayerTree::new();
+        assert!(tree.is_empty());
+        assert_eq!(tree.len(), 0);
+        assert!(tree.root().is_none());
+    }
+
+    #[test]
+    fn test_layer_tree_with_capacity() {
+        let tree = LayerTree::with_capacity(100);
+        assert!(tree.is_empty());
+    }
+
+    #[test]
+    fn test_layer_tree_insert() {
+        let mut tree = LayerTree::new();
+        let layer = Layer::Canvas(CanvasLayer::new());
+        let id = tree.insert(layer);
+
+        assert!(!tree.is_empty());
+        assert_eq!(tree.len(), 1);
+        assert!(tree.contains(id));
+        assert_eq!(id.get(), 1); // First ID should be 1
+    }
+
+    #[test]
+    fn test_layer_tree_get() {
+        let mut tree = LayerTree::new();
+        let layer = Layer::Canvas(CanvasLayer::new());
+        let id = tree.insert(layer);
+
+        let node = tree.get(id);
+        assert!(node.is_some());
+        assert!(node.unwrap().layer().is_canvas());
+    }
+
+    #[test]
+    fn test_layer_tree_get_layer() {
+        let mut tree = LayerTree::new();
+        let layer = Layer::Canvas(CanvasLayer::new());
+        let id = tree.insert(layer);
+
+        let layer = tree.get_layer(id);
+        assert!(layer.is_some());
+        assert!(layer.unwrap().is_canvas());
+    }
+
+    #[test]
+    fn test_layer_tree_remove() {
+        let mut tree = LayerTree::new();
+        let layer = Layer::Canvas(CanvasLayer::new());
+        let id = tree.insert(layer);
+
+        assert!(tree.contains(id));
+
+        let removed = tree.remove(id);
+        assert!(removed.is_some());
+        assert!(!tree.contains(id));
+        assert!(tree.is_empty());
+    }
+
+    #[test]
+    fn test_layer_tree_parent_child() {
+        let mut tree = LayerTree::new();
+
+        let parent_layer = Layer::Canvas(CanvasLayer::new());
+        let child_layer = Layer::Canvas(CanvasLayer::new());
+
+        let parent_id = tree.insert(parent_layer);
+        let child_id = tree.insert(child_layer);
+
+        tree.add_child(parent_id, child_id);
+
+        // Check parent has child
+        let children = tree.children(parent_id).unwrap();
+        assert_eq!(children.len(), 1);
+        assert_eq!(children[0], child_id);
+
+        // Check child has parent
+        let parent = tree.parent(child_id);
+        assert_eq!(parent, Some(parent_id));
+    }
+
+    #[test]
+    fn test_layer_tree_remove_child() {
+        let mut tree = LayerTree::new();
+
+        let parent_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+        let child_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+
+        tree.add_child(parent_id, child_id);
+        assert_eq!(tree.children(parent_id).unwrap().len(), 1);
+
+        tree.remove_child(parent_id, child_id);
+        assert_eq!(tree.children(parent_id).unwrap().len(), 0);
+        assert!(tree.parent(child_id).is_none());
+    }
+
+    #[test]
+    fn test_layer_tree_set_root() {
+        let mut tree = LayerTree::new();
+        let id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+
+        assert!(tree.root().is_none());
+        tree.set_root(Some(id));
+        assert_eq!(tree.root(), Some(id));
+    }
+
+    #[test]
+    fn test_layer_tree_clear() {
+        let mut tree = LayerTree::new();
+        let id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+        tree.set_root(Some(id));
+
+        tree.clear();
+        assert!(tree.is_empty());
+        assert!(tree.root().is_none());
+    }
+
+    #[test]
+    fn test_layer_tree_iter() {
+        let mut tree = LayerTree::new();
+        let id1 = tree.insert(Layer::Canvas(CanvasLayer::new()));
+        let id2 = tree.insert(Layer::Canvas(CanvasLayer::new()));
+
+        let ids: Vec<_> = tree.layer_ids().collect();
+        assert_eq!(ids.len(), 2);
+        assert!(ids.contains(&id1));
+        assert!(ids.contains(&id2));
+    }
+
+    #[test]
+    fn test_concrete_layer_node_with_element_id() {
+        let element_id = ElementId::new(42);
+        let node =
+            ConcreteLayerNode::new(Layer::Canvas(CanvasLayer::new())).with_element_id(element_id);
+
+        assert_eq!(node.element_id(), Some(element_id));
+    }
+
+    #[test]
+    fn test_concrete_layer_node_with_offset() {
+        let offset = Offset::new(10.0, 20.0);
+        let node = ConcreteLayerNode::new(Layer::Canvas(CanvasLayer::new())).with_offset(offset);
+
+        assert_eq!(node.offset(), Some(offset));
+    }
+
+    #[test]
+    fn test_layer_node_needs_compositing() {
+        let mut node = ConcreteLayerNode::new(Layer::Canvas(CanvasLayer::new()));
+
+        assert!(node.needs_compositing()); // Default is true
+
+        node.set_needs_compositing(false);
+        assert!(!node.needs_compositing());
     }
 }

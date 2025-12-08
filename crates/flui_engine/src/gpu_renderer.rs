@@ -25,6 +25,7 @@
 //! - **Future-proof**: Easy to add new rendering backends
 
 // CanvasLayer now accessed via Layer enum
+use crate::layer::LayerRender;
 use crate::painter::WgpuPainter;
 use crate::renderer::WgpuRenderer as WgpuRendererWrapper;
 
@@ -534,7 +535,7 @@ impl GpuRenderer {
     ) -> Result<(), RenderError> {
         tracing::debug!(
             bounds = ?shader_mask_layer.bounds(),
-            shader = ?shader_mask_layer.shader,
+            shader = ?shader_mask_layer.shader(),
             "Rendering shader mask layer"
         );
 
@@ -575,8 +576,8 @@ impl GpuRenderer {
         // Call offscreen renderer with shader mask parameters
         let _masked_result = offscreen_renderer.render_masked(
             shader_mask_layer.bounds(),
-            &shader_mask_layer.shader,
-            shader_mask_layer.blend_mode,
+            shader_mask_layer.shader(),
+            shader_mask_layer.blend_mode(),
             &dummy_child_texture,
         );
 
@@ -615,7 +616,7 @@ impl GpuRenderer {
 
         tracing::debug!(
             bounds = ?backdrop_filter_layer.bounds(),
-            filter = ?backdrop_filter_layer.filter,
+            filter = ?backdrop_filter_layer.filter(),
             "Rendering backdrop filter layer"
         );
 
@@ -642,7 +643,7 @@ impl GpuRenderer {
         });
 
         // Phase 2.3: Apply image filter
-        match &backdrop_filter_layer.filter {
+        match backdrop_filter_layer.filter() {
             ImageFilter::Blur { sigma_x, sigma_y } => {
                 tracing::debug!(sigma_x, sigma_y, "Applying Gaussian blur filter");
 
@@ -684,7 +685,7 @@ impl GpuRenderer {
         // With blend mode applied
 
         tracing::debug!(
-            blend_mode = ?backdrop_filter_layer.blend_mode,
+            blend_mode = ?backdrop_filter_layer.blend_mode(),
             "Backdrop filter rendering complete (infrastructure ready, GPU compute pending)"
         );
 
