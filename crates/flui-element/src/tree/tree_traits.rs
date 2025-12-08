@@ -15,20 +15,13 @@
 
 use flui_foundation::{ElementId, Slot};
 use flui_tree::error::{TreeError, TreeResult};
-use flui_tree::{sealed, TreeNav, TreeRead, TreeWrite, TreeWriteNav};
+use flui_tree::{TreeNav, TreeRead, TreeWrite, TreeWriteNav};
 use smallvec::SmallVec;
 
 use super::lifecycle_traits::{DepthTracking, Lifecycle};
 
 use super::ElementTree;
 use crate::Element;
-
-// ============================================================================
-// Sealed Trait Implementations
-// ============================================================================
-
-impl sealed::TreeReadSealed for ElementTree {}
-impl sealed::TreeNavSealed for ElementTree {}
 
 // ============================================================================
 // Iterator Wrappers
