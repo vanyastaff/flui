@@ -34,7 +34,7 @@ struct FillVertexConstructor {
 }
 
 impl lyon::tessellation::FillVertexConstructor<Vertex> for FillVertexConstructor {
-    fn new_vertex(&mut self, vertex: FillVertex) -> Vertex {
+    fn new_vertex(&mut self, vertex: FillVertex<'_>) -> Vertex {
         Vertex::with_color(
             Point::new(vertex.position().x, vertex.position().y),
             self.color,
@@ -48,7 +48,7 @@ struct StrokeVertexConstructor {
 }
 
 impl lyon::tessellation::StrokeVertexConstructor<Vertex> for StrokeVertexConstructor {
-    fn new_vertex(&mut self, vertex: StrokeVertex) -> Vertex {
+    fn new_vertex(&mut self, vertex: StrokeVertex<'_, '_>) -> Vertex {
         Vertex::with_color(
             Point::new(vertex.position().x, vertex.position().y),
             self.color,

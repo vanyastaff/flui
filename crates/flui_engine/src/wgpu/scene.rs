@@ -121,29 +121,98 @@ impl SceneRenderer {
             .expect("Failed to create GPU renderer")
     }
 
-    /// Create wgpu instance with platform-specific backends
+    /// Create wgpu instance with configured backends
+    ///
+    /// Backend selection is determined by cargo features:
+    /// - `vulkan` - Vulkan backend (Linux, Windows, Android)
+    /// - `metal` - Metal backend (macOS, iOS)
+    /// - `dx12` - DirectX 12 backend (Windows)
+    /// - `webgpu` - WebGPU backend (Web browsers)
+    /// - `gles` - OpenGL ES backend (fallback)
+    ///
+    /// If no specific backend feature is enabled, all available backends are used.
     fn create_instance() -> wgpu::Instance {
+        let backends = Self::select_backends();
         wgpu::Instance::new(&wgpu::InstanceDescriptor {
-            #[cfg(feature = "webgpu")]
-            backends: wgpu::Backends::GL | wgpu::Backends::BROWSER_WEBGPU,
-            #[cfg(all(feature = "android", not(feature = "webgpu")))]
-            backends: wgpu::Backends::VULKAN,
-            #[cfg(all(feature = "ios", not(feature = "webgpu")))]
-            backends: wgpu::Backends::METAL,
-            #[cfg(all(
-                feature = "desktop",
-                not(any(feature = "webgpu", feature = "android", feature = "ios"))
-            ))]
-            backends: wgpu::Backends::all(),
-            #[cfg(not(any(
-                feature = "desktop",
-                feature = "android",
-                feature = "ios",
-                feature = "webgpu"
-            )))]
-            backends: wgpu::Backends::all(),
+            backends,
             ..Default::default()
         })
+    }
+
+    /// Select GPU backends based on enabled features
+    fn select_backends() -> wgpu::Backends {
+        #[allow(unused_mut)]
+        let mut backends = wgpu::Backends::empty();
+
+        #[cfg(feature = "vulkan")]
+        {
+            backends |= wgpu::Backends::VULKAN;
+        }
+
+        #[cfg(feature = "metal")]
+        {
+            backends |= wgpu::Backends::METAL;
+        }
+
+        #[cfg(feature = "dx12")]
+        {
+            backends |= wgpu::Backends::DX12;
+        }
+
+        #[cfg(feature = "webgpu")]
+        {
+            backends |= wgpu::Backends::BROWSER_WEBGPU;
+        }
+
+        #[cfg(feature = "gles")]
+        {
+            backends |= wgpu::Backends::GL;
+        }
+
+        // If no specific backend selected, use all available
+        if backends.is_empty() {
+            wgpu::Backends::all()
+        } else {
+            backends
+        }
+    }
+
+    /// Select GPU limits based on target platform
+    ///
+    /// - WebAssembly: WebGL2 compatible limits (most restrictive)
+    /// - Mobile (Android/iOS): Conservative mobile limits
+    /// - Desktop: Default limits (most permissive)
+    fn select_limits() -> wgpu::Limits {
+        #[cfg(target_arch = "wasm32")]
+        {
+            wgpu::Limits::downlevel_webgl2_defaults()
+        }
+
+        #[cfg(all(
+            any(target_os = "android", target_os = "ios"),
+            not(target_arch = "wasm32")
+        ))]
+        {
+            wgpu::Limits {
+                // Modern mobile GPUs (Adreno 6xx+, Mali G7x+, Apple A12+) support 8192x8192+
+                max_texture_dimension_2d: 8192,
+                max_texture_dimension_3d: 2048,
+                // Conservative buffer limits for broad compatibility
+                max_storage_buffers_per_shader_stage: 4,
+                max_uniform_buffer_binding_size: 16 << 10, // 16KB
+                max_storage_buffer_binding_size: 128 << 20, // 128MB
+                ..wgpu::Limits::default()
+            }
+        }
+
+        #[cfg(all(
+            not(target_arch = "wasm32"),
+            not(target_os = "android"),
+            not(target_os = "ios")
+        ))]
+        {
+            wgpu::Limits::default()
+        }
     }
 
     /// Create a new GPU renderer with an existing surface (async version for WASM)
@@ -166,29 +235,7 @@ impl SceneRenderer {
     /// DEPRECATED for desktop/mobile - use `new_async_with_window` instead to avoid
     /// instance mismatch issues. Only use this for WASM where surface lifetime is managed externally.
     pub async fn new_async(surface: wgpu::Surface<'static>, width: u32, height: u32) -> Self {
-        // Create wgpu instance with platform-specific backends
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-            #[cfg(feature = "webgpu")]
-            backends: wgpu::Backends::GL | wgpu::Backends::BROWSER_WEBGPU,
-            #[cfg(all(feature = "android", not(feature = "webgpu")))]
-            backends: wgpu::Backends::VULKAN, // Vulkan mandatory for Android
-            #[cfg(all(feature = "ios", not(feature = "webgpu")))]
-            backends: wgpu::Backends::METAL, // Metal mandatory for iOS
-            #[cfg(all(
-                feature = "desktop",
-                not(any(feature = "webgpu", feature = "android", feature = "ios"))
-            ))]
-            backends: wgpu::Backends::all(), // Auto-detect on desktop
-            #[cfg(not(any(
-                feature = "desktop",
-                feature = "android",
-                feature = "ios",
-                feature = "webgpu"
-            )))]
-            backends: wgpu::Backends::all(), // Fallback
-            ..Default::default()
-        });
-
+        let instance = Self::create_instance();
         Self::new_async_impl(instance, surface, width, height).await
     }
 
@@ -216,25 +263,7 @@ impl SceneRenderer {
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 required_features: wgpu::Features::empty(),
-                #[cfg(feature = "webgpu")]
-                required_limits: wgpu::Limits::downlevel_webgl2_defaults(),
-                #[cfg(all(feature = "mobile-gpu-limits", not(feature = "webgpu")))]
-                required_limits: wgpu::Limits {
-                    // Modern mobile GPUs (Adreno 6xx+, Mali G7x+, Apple A12+) support 8192x8192+
-                    // This covers all flagship and mid-range devices from 2018+
-                    max_texture_dimension_2d: 8192,
-                    max_texture_dimension_3d: 2048,
-
-                    // Conservative buffer limits for broad compatibility
-                    max_storage_buffers_per_shader_stage: 4,
-                    max_uniform_buffer_binding_size: 16 << 10, // 16KB
-                    max_storage_buffer_binding_size: 128 << 20, // 128MB
-
-                    // Use default limits for other parameters (more permissive than downlevel)
-                    ..wgpu::Limits::default()
-                },
-                #[cfg(not(any(feature = "webgpu", feature = "mobile-gpu-limits")))]
-                required_limits: wgpu::Limits::default(),
+                required_limits: Self::select_limits(),
                 label: Some("FLUI GPU Device"),
                 memory_hints: wgpu::MemoryHints::default(),
                 trace: Default::default(),

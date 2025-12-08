@@ -59,13 +59,6 @@ impl TextRenderer {
 
         if system_fonts_available {
             tracing::debug!("Loaded {} system fonts", fs.db().faces().count());
-
-            // Load embedded fonts as fallback even when system fonts are available
-            #[cfg(feature = "embedded-fonts-fallback")]
-            {
-                Self::load_embedded_fonts(&mut fs);
-                tracing::debug!("Total fonts after fallback: {}", fs.db().faces().count());
-            }
         } else {
             // No system fonts - load embedded fonts as primary
             tracing::warn!("No system fonts available, loading embedded fonts");
@@ -217,7 +210,7 @@ impl TextRenderer {
         );
 
         // Create text areas from batched buffers
-        let text_areas: Vec<TextArea> = self
+        let text_areas: Vec<TextArea<'_>> = self
             .text_buffers
             .iter()
             .map(|(buffer, position, color)| TextArea {

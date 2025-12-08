@@ -61,11 +61,15 @@ pub mod traits;
 /// RenderCommand dispatch functions
 pub mod commands;
 
+/// Utility modules (vector text, etc.)
+pub mod utils;
+
 // ============================================================================
 // BACKENDS
 // ============================================================================
 
 /// wgpu rendering backend (Vulkan/Metal/DX12/WebGPU)
+#[cfg(feature = "wgpu-backend")]
 pub mod wgpu;
 
 // ============================================================================
@@ -77,10 +81,11 @@ pub use commands::{dispatch_command, dispatch_commands};
 pub use error::{RenderError, RenderResult};
 pub use traits::{CommandRenderer, Painter};
 
-// Default backend exports
+// wgpu backend exports
+#[cfg(feature = "wgpu-backend")]
 pub use wgpu::{Backend, LayerRender, SceneRenderer, WgpuPainter};
 
-#[cfg(debug_assertions)]
+#[cfg(all(feature = "wgpu-backend", debug_assertions))]
 pub use wgpu::DebugBackend;
 
 // Re-export layer types from flui-layer
@@ -93,12 +98,14 @@ pub use flui_layer::{
 pub use flui_painting::Paint;
 
 // Legacy aliases for backwards compatibility
+#[cfg(feature = "wgpu-backend")]
 #[deprecated(since = "0.2.0", note = "Use SceneRenderer instead")]
 pub type GpuRenderer = SceneRenderer;
 
+#[cfg(feature = "wgpu-backend")]
 #[deprecated(since = "0.2.0", note = "Use Backend instead")]
 pub type WgpuRenderer = Backend;
 
-#[cfg(debug_assertions)]
+#[cfg(all(feature = "wgpu-backend", debug_assertions))]
 #[deprecated(since = "0.2.0", note = "Use DebugBackend instead")]
 pub type DebugRenderer = DebugBackend;

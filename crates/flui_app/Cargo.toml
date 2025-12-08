@@ -16,15 +16,15 @@ default = ["desktop", "images"]
 
 # === Platform Features ===
 # Desktop platforms (Windows, Linux, macOS)
-desktop = ["flui_engine/desktop"]
+desktop = []
 
 # Mobile platforms
-mobile = ["flui_engine/mobile"]
-android = ["mobile", "flui_engine/android"]
-ios = ["mobile", "flui_engine/ios"]
+mobile = []
+android = ["mobile"]
+ios = ["mobile"]
 
 # Web platform
-web = ["flui_engine/web"]
+web = []
 
 # === Optional Components ===
 # Widget library (basic widgets like Text, Button, etc.)

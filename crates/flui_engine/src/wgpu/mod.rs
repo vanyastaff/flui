@@ -51,19 +51,25 @@ pub mod shaders;
 // ============================================================================
 
 mod backend;
+#[allow(dead_code)]
 mod buffer_pool;
 mod commands;
 #[cfg(debug_assertions)]
 mod debug;
+#[allow(dead_code)]
 mod effects;
 mod effects_pipeline;
 mod external_texture_registry;
+#[allow(dead_code)]
 mod instancing;
+#[allow(dead_code)]
 mod multi_draw;
 mod offscreen;
 mod painter;
+#[allow(dead_code)]
 mod pipeline;
 mod scene;
+#[allow(dead_code)]
 mod shader_compiler;
 mod tessellator;
 mod text;
