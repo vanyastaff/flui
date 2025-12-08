@@ -7,12 +7,15 @@
 //! ## Overview
 //!
 //! FLUI Foundation contains:
-//! - **Core Types**: ElementId, Key, Slot for element identification and positioning
+//! - **Tree IDs**: `ViewId`, `ElementId`, `RenderId`, `LayerId`, `SemanticsId` for the 5-tree architecture
+//! - **Keys**: `Key`, `ValueKey`, `ObjectKey`, `UniqueKey`, `GlobalKey` for widget identity
 //! - **Change Notification**: Observable patterns for reactive UI updates
+//! - **Callbacks**: `VoidCallback`, `ValueChanged`, and other callback type aliases
+//! - **Platform**: `TargetPlatform` for platform detection
+//! - **Observer Lists**: Efficient observer/listener collections
 //! - **Diagnostics**: Debugging and introspection utilities
 //! - **Error Handling**: Standardized error types and utilities
-//! - **Atomic Utilities**: Lock-free operations for performance-critical code
-//! - **Notification System**: Base abstractions for event bubbling (traits only)
+//! - **Notification System**: Base abstractions for event bubbling
 //!
 //! ## Design Principles
 //!
@@ -45,7 +48,6 @@
 //! ## Feature Flags
 //!
 //! - `serde`: Enables serialization support for foundation types
-//! - `async`: Enables async utilities and notification patterns
 //! - `full`: Enables all optional features
 //!
 //! ## Architecture
@@ -118,7 +120,7 @@
 //! ## Performance
 //!
 //! Foundation types are optimized for common UI patterns:
-//! - ElementId uses `NonZeroUsize` for niche optimization
+//! - `ElementId` uses `NonZeroUsize` for niche optimization
 //! - Keys use atomic counters for O(1) generation
 //! - Change notifiers use efficient listener storage
 //! - Atomic flags provide lock-free state management
@@ -132,60 +134,66 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 // Core modules - fundamental types with minimal dependencies
-pub mod element_id;
+pub mod assert;
+pub mod callbacks;
+pub mod consts;
+pub mod id;
 pub mod key;
+pub mod observer;
+pub mod platform;
 pub mod slot;
 
 // Reactive programming - change notification and observables
-pub mod change_notifier;
+pub mod notifier;
 
 // Diagnostics and debugging
-pub mod diagnostics;
+pub mod debug;
 pub mod error;
-
-// Notification system - base abstractions for event bubbling
-pub mod notification;
-
-// Async utilities (feature gated)
-#[cfg(feature = "async")]
-#[cfg_attr(docsrs, doc(cfg(feature = "async")))]
-pub mod async_utils;
-
-// Serialization support (feature gated)
-#[cfg(feature = "serde")]
-#[cfg_attr(docsrs, doc(cfg(feature = "serde")))]
-pub mod serde_support;
 
 // ============================================================================
 // RE-EXPORTS
 // ============================================================================
 
-// Core types
-pub use element_id::ElementId;
+// Core types - IDs for all tree levels
+pub use id::{ElementId, LayerId, ListenerId, ObserverId, RenderId, SemanticsId, ViewId};
 pub use key::{GlobalKey, Key, KeyRef, Keyed, ObjectKey, UniqueKey, ValueKey, ViewKey, WithKey};
 pub use slot::Slot;
 
-// Change notification
-pub use change_notifier::{
-    ChangeNotifier, Listenable, ListenerCallback, ListenerId, MergedListenable, ValueNotifier,
+// Constants
+pub use consts::{
+    approx_equal, approx_equal_f32, is_near_zero, is_near_zero_f32, DEBUG_MODE, EPSILON,
+    EPSILON_F32, IS_DESKTOP, IS_MOBILE, IS_WEB, PROFILE_MODE, RELEASE_MODE,
 };
 
-// Notification system (base abstractions only)
-pub use notification::{DynNotification, Notification};
+// Assertions and error handling
+pub use assert::FluiError;
+
+// Callbacks
+pub use callbacks::{
+    FallibleCallback, Predicate, ValueChanged, ValueGetter, ValueSetter, ValueTransformer,
+    VoidCallback,
+};
+
+// Platform
+pub use platform::TargetPlatform;
+
+// Observer lists
+pub use observer::{HashedObserverList, ObserverList, SyncObserverList};
+
+// Change notification and event bubbling
+pub use notifier::{
+    ChangeNotifier, DynNotification, Listenable, ListenerCallback, MergedListenable, Notification,
+    ValueNotifier,
+};
 
 // Diagnostics
-pub use diagnostics::{
+pub use debug::{
     DiagnosticLevel, Diagnosticable, DiagnosticsBuilder, DiagnosticsNode, DiagnosticsProperty,
     DiagnosticsTreeStyle,
 };
 
 // Error handling
 pub use error::{FoundationError, Result};
-
-// Async utilities (feature gated)
-#[cfg(feature = "async")]
-#[cfg_attr(docsrs, doc(cfg(feature = "async")))]
-pub use async_utils::{AsyncChangeNotifier, AsyncValueNotifier};
 
 // ============================================================================
 // PRELUDE
@@ -201,52 +209,68 @@ pub use async_utils::{AsyncChangeNotifier, AsyncValueNotifier};
 /// ```
 pub mod prelude {
     pub use crate::{
-        ChangeNotifier, DiagnosticLevel, Diagnosticable, DynNotification, ElementId, GlobalKey,
-        Key, KeyRef, Keyed, Listenable, ListenerCallback, ListenerId, Notification, ObjectKey,
-        Slot, UniqueKey, ValueKey, ValueNotifier, ViewKey, WithKey,
+        // Change notification
+        ChangeNotifier,
+        // Diagnostics
+        DiagnosticLevel,
+        Diagnosticable,
+        // Notification system
+        DynNotification,
+        // IDs
+        ElementId,
+        // Callbacks
+        FallibleCallback,
+        // Assertions
+        FluiError,
+        // Keys
+        GlobalKey,
+        // Observer lists
+        HashedObserverList,
+        Key,
+        KeyRef,
+        Keyed,
+        LayerId,
+        Listenable,
+        ListenerCallback,
+        ListenerId,
+        Notification,
+        ObjectKey,
+        ObserverId,
+        ObserverList,
+        Predicate,
+        RenderId,
+        SemanticsId,
+        // Slot
+        Slot,
+        SyncObserverList,
+        // Platform
+        TargetPlatform,
+        UniqueKey,
+        ValueChanged,
+        ValueGetter,
+        ValueKey,
+        ValueNotifier,
+        ValueSetter,
+        ValueTransformer,
+        ViewId,
+        ViewKey,
+        VoidCallback,
+        WithKey,
+        // Constants
+        DEBUG_MODE,
+        EPSILON,
+        IS_DESKTOP,
+        IS_MOBILE,
+        IS_WEB,
+        PROFILE_MODE,
+        RELEASE_MODE,
     };
 
-    #[cfg(feature = "async")]
-    #[cfg_attr(docsrs, doc(cfg(feature = "async")))]
-    pub use crate::{AsyncChangeNotifier, AsyncValueNotifier};
-}
-
-// ============================================================================
-// VERSION INFO
-// ============================================================================
-
-/// The version of the flui-foundation crate.
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
-
-/// The version components (major, minor, patch).
-pub const VERSION_TUPLE: (u32, u32, u32) = (
-    0, // major
-    1, // minor
-    0, // patch
-);
-
-// ============================================================================
-// COMPILE-TIME FEATURE DETECTION
-// ============================================================================
-
-/// Returns true if the `serde` feature is enabled.
-pub const fn has_serde_support() -> bool {
-    cfg!(feature = "serde")
-}
-
-/// Returns true if the `async` feature is enabled.
-pub const fn has_async_support() -> bool {
-    cfg!(feature = "async")
-}
-
-/// Returns a string describing the enabled features.
-pub fn feature_summary() -> &'static str {
-    match (has_serde_support(), has_async_support()) {
-        (true, true) => "serde + async",
-        (true, false) => "serde",
-        (false, true) => "async",
-        (false, false) => "minimal",
-    }
+    // Re-export assertion macros
+    pub use crate::{
+        debug_assert_finite, debug_assert_not_nan, debug_assert_range, debug_assert_valid,
+        report_error, report_warning,
+    };
 }
 
 #[cfg(test)]
@@ -254,30 +278,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_version_info() {
-        assert_eq!(VERSION, "0.1.0");
-        assert_eq!(VERSION_TUPLE, (0, 1, 0));
-    }
-
-    #[test]
-    fn test_feature_detection() {
-        // These tests verify feature detection works
-        let _has_serde = has_serde_support();
-        let _has_async = has_async_support();
-        let _summary = feature_summary();
-    }
-
-    #[test]
     fn test_basic_types() {
-        // Test that basic types work
         let element_id = ElementId::new(1);
         assert_eq!(element_id.get(), 1);
 
-        let key = Key::new();
+        let _key = Key::new();
         let slot = Slot::new(0);
         assert_eq!(slot.index(), 0);
 
-        let mut notifier = ChangeNotifier::new();
+        let notifier = ChangeNotifier::new();
         let _listener = notifier.add_listener(std::sync::Arc::new(|| {}));
     }
 }

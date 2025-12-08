@@ -79,6 +79,7 @@ use crate::ElementId;
 /// - Creation: 0ns (compile-time) or ~5ns (runtime counter)
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Eq)]
+#[must_use = "keys should be used for widget identification"]
 pub struct Key(NonZeroU64);
 
 impl Key {
@@ -133,8 +134,8 @@ impl Key {
     ///
     /// # Panics
     ///
-    /// Panics if u64::MAX keys have been created (practically impossible).
-    /// This prevents undefined behavior from NonZeroU64::new_unchecked(0) after overflow.
+    /// Panics if `u64::MAX` keys have been created (practically impossible).
+    /// This prevents undefined behavior from `NonZeroU64::new_unchecked(0)` after overflow.
     #[inline]
     pub fn new() -> Self {
         static COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -142,13 +143,12 @@ impl Key {
 
         // Always check for overflow, even in release mode
         // UB is never acceptable, even in "impossible" cases
-        if id == u64::MAX {
-            panic!(
-                "Key counter overflow! Created {} keys. \
-                 This should never happen in practice, but UB is never acceptable.",
-                u64::MAX
-            );
-        }
+        assert!(
+            id != u64::MAX,
+            "Key counter overflow! Created {} keys. \
+             This should never happen in practice, but UB is never acceptable.",
+            u64::MAX
+        );
 
         // SAFETY: We just verified id != u64::MAX, and counter starts at 1
         Self(unsafe { NonZeroU64::new_unchecked(id) })
@@ -171,6 +171,7 @@ impl Key {
     /// assert_eq!(Key::from_u64(0), None);
     /// ```
     #[inline]
+    #[must_use]
     pub const fn from_u64(n: u64) -> Option<Self> {
         match NonZeroU64::new(n) {
             Some(nz) => Some(Self(nz)),
@@ -189,14 +190,15 @@ impl Key {
     /// assert_eq!(key.as_u64(), 42);
     /// ```
     #[inline]
+    #[must_use]
     pub const fn as_u64(&self) -> u64 {
         self.0.get()
     }
 
-    /// Get the inner NonZeroU64
+    /// Get the inner `NonZeroU64`
     #[inline]
     #[allow(dead_code)]
-    pub(crate) const fn inner(&self) -> NonZeroU64 {
+    pub(crate) const fn inner(self) -> NonZeroU64 {
         self.0
     }
 }
@@ -230,7 +232,7 @@ impl Hash for Key {
     }
 }
 
-/// Key reference for DynView trait
+/// Key reference for `DynView` trait
 ///
 /// This is a lightweight wrapper around `Key` that can be used
 /// in the object-safe `DynView` trait. It's essentially the same
@@ -242,12 +244,14 @@ pub struct KeyRef(Key);
 impl KeyRef {
     /// Create from Key
     #[inline]
+    #[must_use]
     pub const fn new(key: Key) -> Self {
         Self(key)
     }
 
     /// Convert to raw u64
     #[inline]
+    #[must_use]
     pub const fn as_u64(&self) -> u64 {
         self.0.as_u64()
     }
@@ -317,6 +321,10 @@ pub trait ViewKey: Send + Sync + 'static {
     fn clone_key(&self) -> Box<dyn ViewKey>;
 
     /// Debug representation.
+    ///
+    /// # Errors
+    ///
+    /// Returns `fmt::Error` if writing to the formatter fails.
     fn debug_fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result;
 }
 
@@ -374,12 +382,12 @@ pub struct ValueKey<T: Clone + Hash + Eq + Send + Sync + 'static> {
 
 impl<T: Clone + Hash + Eq + Send + Sync + 'static> ValueKey<T> {
     /// Create a new value key.
-    pub fn new(value: T) -> Self {
+    pub const fn new(value: T) -> Self {
         Self { value }
     }
 
     /// Get the value.
-    pub fn value(&self) -> &T {
+    pub const fn value(&self) -> &T {
         &self.value
     }
 }
@@ -401,11 +409,10 @@ impl<T: Clone + Hash + Eq + Send + Sync + fmt::Debug + 'static> ViewKey for Valu
     }
 
     fn key_eq(&self, other: &dyn ViewKey) -> bool {
-        if let Some(other) = other.as_any().downcast_ref::<Self>() {
-            self.value == other.value
-        } else {
-            false
-        }
+        other
+            .as_any()
+            .downcast_ref::<Self>()
+            .is_some_and(|other| self.value == other.value)
     }
 
     fn key_hash(&self) -> u64 {
@@ -456,15 +463,20 @@ pub struct ObjectKey {
     _holder: Arc<dyn Any + Send + Sync>,
 }
 
-// Safety: ObjectKey only uses the pointer for identity comparison,
-// and the Arc keeps the object alive.
+// SAFETY: ObjectKey is Send + Sync because:
+// 1. The raw pointer `ptr` is never dereferenced - it's only used for identity comparison
+//    via `std::ptr::eq()` which compares addresses, not values
+// 2. The `_holder` field is `Arc<dyn Any + Send + Sync>` which keeps the object alive
+//    and is itself Send + Sync
+// 3. The pointer value is derived from Arc::as_ptr() and remains valid as long as
+//    the Arc exists, which is guaranteed by the struct's lifetime
 unsafe impl Send for ObjectKey {}
 unsafe impl Sync for ObjectKey {}
 
 impl ObjectKey {
     /// Create a new object key from an Arc.
     pub fn new<T: Send + Sync + 'static>(object: Arc<T>) -> Self {
-        let ptr = Arc::as_ptr(&object) as *const ();
+        let ptr = Arc::as_ptr(&object).cast::<()>();
         Self {
             ptr,
             _holder: object,
@@ -474,7 +486,9 @@ impl ObjectKey {
 
 impl fmt::Debug for ObjectKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ObjectKey").field("ptr", &self.ptr).finish()
+        f.debug_struct("ObjectKey")
+            .field("ptr", &self.ptr)
+            .finish_non_exhaustive()
     }
 }
 
@@ -484,11 +498,10 @@ impl ViewKey for ObjectKey {
     }
 
     fn key_eq(&self, other: &dyn ViewKey) -> bool {
-        if let Some(other) = other.as_any().downcast_ref::<Self>() {
-            std::ptr::eq(self.ptr, other.ptr)
-        } else {
-            false
-        }
+        other
+            .as_any()
+            .downcast_ref::<Self>()
+            .is_some_and(|other| std::ptr::eq(self.ptr, other.ptr))
     }
 
     fn key_hash(&self) -> u64 {
@@ -538,7 +551,8 @@ impl UniqueKey {
     }
 
     /// Get the unique ID.
-    pub fn id(&self) -> u64 {
+    #[must_use]
+    pub const fn id(&self) -> u64 {
         self.id
     }
 }
@@ -561,11 +575,10 @@ impl ViewKey for UniqueKey {
     }
 
     fn key_eq(&self, other: &dyn ViewKey) -> bool {
-        if let Some(other) = other.as_any().downcast_ref::<Self>() {
-            self.id == other.id
-        } else {
-            false
-        }
+        other
+            .as_any()
+            .downcast_ref::<Self>()
+            .is_some_and(|other| self.id == other.id)
     }
 
     fn key_hash(&self) -> u64 {
@@ -635,14 +648,16 @@ impl<T: 'static> GlobalKey<T> {
     }
 
     /// Get the unique ID of this key.
-    pub fn id(&self) -> u64 {
+    #[must_use]
+    pub const fn id(&self) -> u64 {
         self.id
     }
 
     /// Get the current element ID associated with this key.
     ///
     /// Returns `None` if the element is not currently mounted.
-    pub fn current_element(&self) -> Option<ElementId> {
+    #[must_use]
+    pub const fn current_element(&self) -> Option<ElementId> {
         // TODO: Implement via GlobalKeyRegistry
         None
     }
@@ -650,7 +665,8 @@ impl<T: 'static> GlobalKey<T> {
     /// Get the current state associated with this key.
     ///
     /// Only works for `StatefulView` widgets.
-    pub fn current_state(&self) -> Option<Arc<T>>
+    #[must_use]
+    pub const fn current_state(&self) -> Option<Arc<T>>
     where
         T: Send + Sync,
     {
@@ -694,11 +710,10 @@ impl<T: 'static> ViewKey for GlobalKey<T> {
     }
 
     fn key_eq(&self, other: &dyn ViewKey) -> bool {
-        if let Some(other) = other.as_any().downcast_ref::<Self>() {
-            self.id == other.id
-        } else {
-            false
-        }
+        other
+            .as_any()
+            .downcast_ref::<Self>()
+            .is_some_and(|other| self.id == other.id)
     }
 
     fn key_hash(&self) -> u64 {
@@ -792,6 +807,58 @@ pub trait WithKey: Sized {
 // Blanket implementation for all types
 impl<T> WithKey for T {}
 
+// ============================================================================
+// SERDE SUPPORT
+// ============================================================================
+
+#[cfg(feature = "serde")]
+impl serde::Serialize for Key {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_u64(self.as_u64())
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserialize<'de> for Key {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let id = u64::deserialize(deserializer)?;
+        Self::from_u64(id).ok_or_else(|| {
+            serde::de::Error::custom("Key cannot be zero (uses NonZeroU64 internally)")
+        })
+    }
+}
+
+#[cfg(feature = "serde")]
+impl serde::Serialize for KeyRef {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.key().serialize(serializer)
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserialize<'de> for KeyRef {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let key = Key::deserialize(deserializer)?;
+        Ok(Self::new(key))
+    }
+}
+
+// ============================================================================
+// FNV-1A HASH
+// ============================================================================
+
 /// FNV-1a hash for compile-time evaluation
 ///
 /// This is a simple, fast hash function that can be evaluated at compile time.
@@ -806,10 +873,10 @@ impl<T> WithKey for T {}
 ///
 /// # References
 ///
-/// - http://www.isthe.com/chongo/tech/comp/fnv/
+/// - <http://www.isthe.com/chongo/tech/comp/fnv/>
 const fn const_fnv1a_hash(bytes: &[u8]) -> u64 {
-    const FNV_OFFSET: u64 = 14695981039346656037;
-    const FNV_PRIME: u64 = 1099511628211;
+    const FNV_OFFSET: u64 = 14_695_981_039_346_656_037;
+    const FNV_PRIME: u64 = 1_099_511_628_211;
 
     let mut hash = FNV_OFFSET;
     let mut i = 0;
@@ -965,5 +1032,34 @@ mod tests {
         assert_eq!(KEYS[0], Key::from_str("one"));
         assert_eq!(KEYS[1], Key::from_str("two"));
         assert_eq!(KEYS[2], Key::from_str("three"));
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn test_key_serde_roundtrip() {
+        let key = Key::new();
+        let json = serde_json::to_string(&key).unwrap();
+
+        let deserialized: Key = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.as_u64(), key.as_u64());
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn test_key_serde_zero_rejection() {
+        let json = "0";
+        let result: Result<Key, _> = serde_json::from_str(json);
+        assert!(result.is_err());
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn test_key_ref_serde_roundtrip() {
+        let key = Key::new();
+        let key_ref = KeyRef::from(key);
+        let json = serde_json::to_string(&key_ref).unwrap();
+
+        let deserialized: KeyRef = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.as_u64(), key_ref.as_u64());
     }
 }

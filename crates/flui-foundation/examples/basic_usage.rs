@@ -9,7 +9,7 @@
 //! Run with: cargo run --example basic_usage
 
 use flui_foundation::prelude::*;
-use flui_foundation::{DiagnosticsNode, DiagnosticsTreeStyle, FoundationError};
+use flui_foundation::{DiagnosticsNode, FoundationError};
 use std::sync::Arc;
 
 fn main() {
@@ -52,14 +52,14 @@ fn main() {
     println!("📢 Change Notification:");
 
     // Basic change notifier
-    let mut notifier = ChangeNotifier::new();
+    let notifier = ChangeNotifier::new();
 
     // Add listeners
     let listener1 = notifier.add_listener(Arc::new(|| {
         println!("  📨 Listener 1: Something changed!");
     }));
 
-    let listener2 = notifier.add_listener(Arc::new(|| {
+    let _listener2 = notifier.add_listener(Arc::new(|| {
         println!("  📨 Listener 2: I also noticed the change!");
     }));
 
@@ -155,28 +155,19 @@ fn main() {
     println!("  Recoverable: {}", listener_error.is_recoverable());
     println!();
 
-    // ========================================================================
-    // FEATURE DETECTION
-    // ========================================================================
-
-    println!("🔍 Feature Detection:");
-    println!("  Foundation version: {}", flui_foundation::VERSION);
-    println!("  Serde support: {}", flui_foundation::has_serde_support());
-    println!("  Async support: {}", flui_foundation::has_async_support());
-    println!("  Features: {}", flui_foundation::feature_summary());
-    println!();
-
     println!("✅ All examples completed successfully!");
 }
 
 // Example of a custom diagnostic provider
 #[derive(Debug)]
+#[allow(dead_code)]
 struct MyWidget {
     name: String,
     count: i32,
     enabled: bool,
 }
 
+#[allow(dead_code)]
 impl MyWidget {
     fn new(name: impl Into<String>) -> Self {
         Self {

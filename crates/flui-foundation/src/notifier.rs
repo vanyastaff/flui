@@ -1,11 +1,43 @@
-//! Listenable and notification types
+//! Listenable, change notification, and event bubbling types.
+//!
+//! This module provides:
+//! - **Listenable**: Observer pattern for change notification (like Flutter's `ChangeNotifier`)
+//! - **Notification**: Event bubbling up the view tree (like DOM event bubbling)
+//!
+//! # Change Notification
+//!
+//! ```rust
+//! use flui_foundation::notifier::{ChangeNotifier, Listenable};
+//! use std::sync::Arc;
+//!
+//! let notifier = ChangeNotifier::new();
+//! let id = notifier.add_listener(Arc::new(|| println!("Changed!")));
+//! notifier.notify_listeners();
+//! ```
+//!
+//! # Event Bubbling
+//!
+//! ```rust
+//! use flui_foundation::notifier::{Notification, DynNotification};
+//! use flui_foundation::ElementId;
+//!
+//! #[derive(Debug, Clone)]
+//! struct ButtonClicked { button_id: String }
+//! impl Notification for ButtonClicked {}
+//!
+//! let notification = ButtonClicked { button_id: "ok".into() };
+//! let dyn_notif: &dyn DynNotification = &notification;
+//! ```
 
 use parking_lot::Mutex;
+use std::any::Any;
 use std::collections::HashMap;
 use std::fmt;
 use std::ops::Deref;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+
+use crate::id::{ElementId, ListenerId};
 
 /// A listener callback function.
 pub type ListenerCallback = Arc<dyn Fn() + Send + Sync>;
@@ -23,62 +55,6 @@ pub trait Listenable {
 
     /// Remove all listeners.
     fn remove_all_listeners(&self);
-}
-
-/// Unique identifier for a listener.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "serde", serde(transparent))]
-pub struct ListenerId(usize);
-
-impl ListenerId {
-    /// Create a new listener ID
-    #[must_use]
-    #[inline]
-    pub const fn new(id: usize) -> Self {
-        Self(id)
-    }
-
-    /// Returns the raw ID value
-    #[must_use]
-    #[inline]
-    pub const fn as_usize(self) -> usize {
-        self.0
-    }
-}
-
-impl Default for ListenerId {
-    #[inline]
-    fn default() -> Self {
-        Self(0)
-    }
-}
-
-impl fmt::Display for ListenerId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Listener#{}", self.0)
-    }
-}
-
-impl AsRef<usize> for ListenerId {
-    #[inline]
-    fn as_ref(&self) -> &usize {
-        &self.0
-    }
-}
-
-impl From<usize> for ListenerId {
-    #[inline]
-    fn from(id: usize) -> Self {
-        Self(id)
-    }
-}
-
-impl From<ListenerId> for usize {
-    #[inline]
-    fn from(id: ListenerId) -> Self {
-        id.0
-    }
 }
 
 /// A class that can be extended or mixed in that provides a change notification API.
@@ -100,7 +76,7 @@ impl fmt::Debug for ChangeNotifier {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ChangeNotifier")
             .field("listeners_count", &self.listeners.lock().len())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -111,14 +87,14 @@ impl ChangeNotifier {
     pub fn new() -> Self {
         Self {
             listeners: Arc::new(Mutex::new(HashMap::new())),
-            next_id: Arc::new(AtomicUsize::new(0)),
+            next_id: Arc::new(AtomicUsize::new(1)),
         }
     }
 
     /// Generate a new unique listener ID.
     fn next_id(&self) -> ListenerId {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        ListenerId(id)
+        ListenerId::new(id)
     }
 
     /// Call all the registered listeners.
@@ -167,7 +143,7 @@ impl Listenable for ChangeNotifier {
     }
 }
 
-/// A ChangeNotifier that holds a single value.
+/// A `ChangeNotifier` that holds a single value.
 ///
 /// Similar to Flutter's `ValueNotifier`.
 #[derive(Clone)]
@@ -197,7 +173,7 @@ impl<T: Clone> ValueNotifier<T> {
     ///
     /// Note: This does NOT notify listeners. Call `notify()` manually if needed.
     #[inline]
-    pub fn value_mut(&mut self) -> &mut T {
+    pub const fn value_mut(&mut self) -> &mut T {
         &mut self.value
     }
 
@@ -347,11 +323,11 @@ impl<T: Clone> Listenable for ValueNotifier<T> {
     }
 
     fn remove_listener(&self, id: ListenerId) {
-        self.notifier.remove_listener(id)
+        self.notifier.remove_listener(id);
     }
 
     fn remove_all_listeners(&self) {
-        self.notifier.remove_all_listeners()
+        self.notifier.remove_all_listeners();
     }
 }
 
@@ -438,11 +414,72 @@ impl Listenable for MergedListenable {
     }
 
     fn remove_listener(&self, id: ListenerId) {
-        self.notifier.remove_listener(id)
+        self.notifier.remove_listener(id);
     }
 
     fn remove_all_listeners(&self) {
-        self.notifier.remove_all_listeners()
+        self.notifier.remove_all_listeners();
+    }
+}
+
+// ============================================================================
+// EVENT BUBBLING (Notification)
+// ============================================================================
+
+/// Base trait for notifications that bubble up the widget tree.
+///
+/// Notifications are events that propagate from child to parent through the element tree.
+/// Any widget can dispatch a notification, and ancestor widgets can listen for it.
+///
+/// # Thread Safety
+///
+/// All notifications must be `Send + Sync` to work in FLUI's multi-threaded environment.
+///
+/// # Example
+///
+/// ```rust
+/// use flui_foundation::notifier::Notification;
+/// use flui_foundation::ElementId;
+///
+/// #[derive(Debug, Clone)]
+/// struct MyNotification { data: String }
+///
+/// impl Notification for MyNotification {
+///     fn visit_ancestor(&self, element_id: ElementId) -> bool {
+///         false // continue bubbling
+///     }
+/// }
+/// ```
+pub trait Notification: Any + Send + Sync + fmt::Debug {
+    /// Called when visiting an ancestor element during bubbling.
+    ///
+    /// # Returns
+    ///
+    /// - `true`: Stop notification from bubbling further
+    /// - `false`: Allow notification to continue bubbling (default)
+    fn visit_ancestor(&self, _element_id: ElementId) -> bool {
+        false
+    }
+}
+
+/// Object-safe notification trait for type erasure.
+///
+/// Automatically implemented for all `Notification` types.
+pub trait DynNotification: Send + Sync + fmt::Debug {
+    /// Called when visiting an ancestor element during bubbling.
+    fn visit_ancestor(&self, element_id: ElementId) -> bool;
+
+    /// Get notification as Any for downcasting.
+    fn as_any(&self) -> &dyn Any;
+}
+
+impl<T: Notification> DynNotification for T {
+    fn visit_ancestor(&self, element_id: ElementId) -> bool {
+        Notification::visit_ancestor(self, element_id)
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }
 
@@ -457,14 +494,14 @@ mod tests {
         let id2 = ListenerId::new(2);
 
         assert!(id1 < id2);
-        assert_eq!(id1.as_usize(), 1);
-        assert_eq!(format!("{}", id1), "Listener#1");
+        assert_eq!(id1.get(), 1);
+        assert_eq!(format!("{}", id1), "ListenerId(1)");
     }
 
     #[test]
     fn test_listener_id_conversions() {
-        let id: ListenerId = 42.into();
-        assert_eq!(id.as_usize(), 42);
+        let id = ListenerId::new(42);
+        assert_eq!(id.get(), 42);
 
         let n: usize = id.into();
         assert_eq!(n, 42);
@@ -472,7 +509,7 @@ mod tests {
 
     #[test]
     fn test_change_notifier() {
-        let mut notifier = ChangeNotifier::new();
+        let notifier = ChangeNotifier::new();
         let counter = Arc::new(AtomicUsize::new(0));
 
         let counter_clone = Arc::clone(&counter);
@@ -500,7 +537,7 @@ mod tests {
 
     #[test]
     fn test_change_notifier_remove() {
-        let mut notifier = ChangeNotifier::new();
+        let notifier = ChangeNotifier::new();
         let counter = Arc::new(AtomicUsize::new(0));
 
         let counter_clone = Arc::clone(&counter);
@@ -525,7 +562,7 @@ mod tests {
         let counter = Arc::new(AtomicUsize::new(0));
 
         let counter_clone = Arc::clone(&counter);
-        notifier.add_listener(Arc::new(move || {
+        let _ = notifier.add_listener(Arc::new(move || {
             counter_clone.fetch_add(1, Ordering::SeqCst);
         }));
 
@@ -592,7 +629,7 @@ mod tests {
         let counter = Arc::new(AtomicUsize::new(0));
 
         let counter_clone = Arc::clone(&counter);
-        notifier.add_listener(Arc::new(move || {
+        let _ = notifier.add_listener(Arc::new(move || {
             counter_clone.fetch_add(1, Ordering::SeqCst);
         }));
 
@@ -608,7 +645,7 @@ mod tests {
         let counter = Arc::new(AtomicUsize::new(0));
 
         let counter_clone = Arc::clone(&counter);
-        notifier.add_listener(Arc::new(move || {
+        let _ = notifier.add_listener(Arc::new(move || {
             counter_clone.fetch_add(1, Ordering::SeqCst);
         }));
 
@@ -624,7 +661,7 @@ mod tests {
         let counter = Arc::new(AtomicUsize::new(0));
 
         let counter_clone = Arc::clone(&counter);
-        notifier.add_listener(Arc::new(move || {
+        let _ = notifier.add_listener(Arc::new(move || {
             counter_clone.fetch_add(1, Ordering::SeqCst);
         }));
 
@@ -642,7 +679,7 @@ mod tests {
         let counter = Arc::new(AtomicUsize::new(0));
 
         let counter_clone = Arc::clone(&counter);
-        notifier.add_listener(Arc::new(move || {
+        let _ = notifier.add_listener(Arc::new(move || {
             counter_clone.fetch_add(1, Ordering::SeqCst);
         }));
 
@@ -653,18 +690,18 @@ mod tests {
 
     #[test]
     fn test_multiple_listeners() {
-        let mut notifier = ChangeNotifier::new();
+        let notifier = ChangeNotifier::new();
         let counter1 = Arc::new(AtomicUsize::new(0));
         let counter2 = Arc::new(AtomicUsize::new(0));
 
         let c1 = Arc::clone(&counter1);
         let c2 = Arc::clone(&counter2);
 
-        notifier.add_listener(Arc::new(move || {
+        let _ = notifier.add_listener(Arc::new(move || {
             c1.fetch_add(1, Ordering::SeqCst);
         }));
 
-        notifier.add_listener(Arc::new(move || {
+        let _ = notifier.add_listener(Arc::new(move || {
             c2.fetch_add(2, Ordering::SeqCst);
         }));
 
@@ -679,7 +716,7 @@ mod tests {
         let notifier1 = ChangeNotifier::new();
         let notifier2 = ChangeNotifier::new();
 
-        let mut merged = MergedListenable::new(vec![Box::new(notifier1), Box::new(notifier2)]);
+        let merged = MergedListenable::new(vec![Box::new(notifier1), Box::new(notifier2)]);
 
         assert_eq!(merged.source_count(), 2);
         assert!(merged.is_empty());
@@ -687,7 +724,7 @@ mod tests {
         let counter = Arc::new(AtomicUsize::new(0));
         let counter_clone = Arc::clone(&counter);
 
-        merged.add_listener(Arc::new(move || {
+        let _ = merged.add_listener(Arc::new(move || {
             counter_clone.fetch_add(1, Ordering::SeqCst);
         }));
 
@@ -721,5 +758,64 @@ mod tests {
 
         let deserialized: ListenerId = serde_json::from_str(&json).unwrap();
         assert_eq!(id, deserialized);
+    }
+
+    // ========================================================================
+    // Notification tests
+    // ========================================================================
+
+    #[derive(Debug, Clone)]
+    struct TestNotification {
+        value: i32,
+    }
+
+    impl Notification for TestNotification {}
+
+    #[derive(Debug, Clone)]
+    struct CustomBubblingNotification {
+        stop_at: ElementId,
+    }
+
+    impl Notification for CustomBubblingNotification {
+        fn visit_ancestor(&self, element_id: ElementId) -> bool {
+            element_id == self.stop_at
+        }
+    }
+
+    #[test]
+    fn test_notification_trait() {
+        let notification = TestNotification { value: 42 };
+        let element_id = ElementId::new(1);
+        assert!(!Notification::visit_ancestor(&notification, element_id));
+    }
+
+    #[test]
+    fn test_custom_bubbling_logic() {
+        let stop_at = ElementId::new(10);
+        let other_element = ElementId::new(5);
+
+        let notification = CustomBubblingNotification { stop_at };
+
+        assert!(Notification::visit_ancestor(&notification, stop_at));
+        assert!(!Notification::visit_ancestor(&notification, other_element));
+    }
+
+    #[test]
+    fn test_dyn_notification_downcast() {
+        let notification = TestNotification { value: 42 };
+        let dyn_notification: &dyn DynNotification = &notification;
+
+        let downcasted = dyn_notification.as_any().downcast_ref::<TestNotification>();
+        assert!(downcasted.is_some());
+        assert_eq!(downcasted.unwrap().value, 42);
+    }
+
+    #[test]
+    fn test_notification_send_sync() {
+        fn assert_send<T: Send>() {}
+        fn assert_sync<T: Sync>() {}
+
+        assert_send::<TestNotification>();
+        assert_sync::<TestNotification>();
     }
 }

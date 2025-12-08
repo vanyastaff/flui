@@ -24,6 +24,7 @@ use thiserror::Error;
 /// }
 /// ```
 #[derive(Error, Debug, Clone)]
+#[must_use = "errors should be handled or propagated"]
 pub enum FoundationError {
     /// An invalid ID was provided.
     #[error("Invalid ID: {id} - {context}")]
@@ -80,16 +81,6 @@ pub enum FoundationError {
     #[error("Serialization error: {context}")]
     SerializationError {
         /// Context about the serialization failure
-        context: String,
-    },
-
-    /// An async operation failed.
-    #[cfg(feature = "async")]
-    #[error("Async error: {operation} - {context}")]
-    AsyncError {
-        /// The async operation that failed
-        operation: String,
-        /// Additional context
         context: String,
     },
 
@@ -159,15 +150,6 @@ impl FoundationError {
         }
     }
 
-    /// Creates a new async error.
-    #[cfg(feature = "async")]
-    pub fn async_error(operation: impl Into<String>, context: impl Into<String>) -> Self {
-        Self::AsyncError {
-            operation: operation.into(),
-            context: context.into(),
-        }
-    }
-
     /// Creates a new generic error.
     pub fn generic(message: impl Into<String>) -> Self {
         Self::Generic {
@@ -176,7 +158,8 @@ impl FoundationError {
     }
 
     /// Returns the error category as a string.
-    pub fn category(&self) -> &'static str {
+    #[must_use]
+    pub const fn category(&self) -> &'static str {
         match self {
             Self::InvalidId { .. } => "invalid_id",
             Self::InvalidKey { .. } => "invalid_key",
@@ -186,14 +169,13 @@ impl FoundationError {
             Self::AtomicError { .. } => "atomic",
             #[cfg(feature = "serde")]
             Self::SerializationError { .. } => "serialization",
-            #[cfg(feature = "async")]
-            Self::AsyncError { .. } => "async",
             Self::Generic { .. } => "generic",
         }
     }
 
     /// Returns whether this error is recoverable.
-    pub fn is_recoverable(&self) -> bool {
+    #[must_use]
+    pub const fn is_recoverable(&self) -> bool {
         match self {
             Self::InvalidId { .. } => false,        // Programming error
             Self::InvalidKey { .. } => false,       // Programming error
@@ -203,8 +185,6 @@ impl FoundationError {
             Self::AtomicError { .. } => true,       // Can retry atomic operations
             #[cfg(feature = "serde")]
             Self::SerializationError { .. } => false, // Data format issue
-            #[cfg(feature = "async")]
-            Self::AsyncError { .. } => true, // Can retry async operations
             Self::Generic { .. } => true,           // Depends on context, default to recoverable
         }
     }
@@ -232,9 +212,17 @@ pub type Result<T> = std::result::Result<T, FoundationError>;
 /// Provides convenient error conversion utilities.
 pub trait ErrorContext<T> {
     /// Adds context to an error result.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `FoundationError::Generic` with the context prepended to the original error.
     fn with_context(self, context: impl Into<String>) -> Result<T>;
 
     /// Adds context to an error result using a closure.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `FoundationError::Generic` with the context prepended to the original error.
     fn with_context_fn<F>(self, f: F) -> Result<T>
     where
         F: FnOnce() -> String;
@@ -339,13 +327,5 @@ mod tests {
         let err = FoundationError::serialization_error("failed to serialize");
         assert_eq!(err.category(), "serialization");
         assert!(!err.is_recoverable());
-    }
-
-    #[cfg(feature = "async")]
-    #[test]
-    fn test_async_error() {
-        let err = FoundationError::async_error("timeout", "operation took too long");
-        assert_eq!(err.category(), "async");
-        assert!(err.is_recoverable());
     }
 }

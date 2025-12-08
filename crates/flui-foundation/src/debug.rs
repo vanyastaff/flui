@@ -114,7 +114,7 @@ impl FromStr for DiagnosticLevel {
     }
 }
 
-/// Error type for parsing DiagnosticLevel
+/// Error type for parsing `DiagnosticLevel`
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParseDiagnosticLevelError(String);
 
@@ -213,7 +213,7 @@ impl FromStr for DiagnosticsTreeStyle {
     }
 }
 
-/// Error type for parsing DiagnosticsTreeStyle
+/// Error type for parsing `DiagnosticsTreeStyle`
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParseDiagnosticsTreeStyleError(String);
 
@@ -257,7 +257,7 @@ pub struct DiagnosticsProperty {
 }
 
 #[cfg(feature = "serde")]
-fn default_true() -> bool {
+const fn default_true() -> bool {
     true
 }
 
@@ -450,7 +450,7 @@ impl DiagnosticsNode {
 
     /// Create a node without a name
     #[must_use]
-    pub fn anonymous() -> Self {
+    pub const fn anonymous() -> Self {
         Self {
             name: None,
             properties: Vec::new(),
@@ -476,20 +476,20 @@ impl DiagnosticsNode {
 
     /// Returns mutable access to properties
     #[inline]
-    pub fn properties_mut(&mut self) -> &mut Vec<DiagnosticsProperty> {
+    pub const fn properties_mut(&mut self) -> &mut Vec<DiagnosticsProperty> {
         &mut self.properties
     }
 
     /// Returns the children
     #[must_use]
     #[inline]
-    pub fn children(&self) -> &[DiagnosticsNode] {
+    pub fn children(&self) -> &[Self] {
         &self.children
     }
 
     /// Returns mutable access to children
     #[inline]
-    pub fn children_mut(&mut self) -> &mut Vec<DiagnosticsNode> {
+    pub const fn children_mut(&mut self) -> &mut Vec<Self> {
         &mut self.children
     }
 
@@ -510,14 +510,14 @@ impl DiagnosticsNode {
     /// Checks if this node has any properties
     #[must_use]
     #[inline]
-    pub fn has_properties(&self) -> bool {
+    pub const fn has_properties(&self) -> bool {
         !self.properties.is_empty()
     }
 
     /// Checks if this node has any children
     #[must_use]
     #[inline]
-    pub fn has_children(&self) -> bool {
+    pub const fn has_children(&self) -> bool {
         !self.children.is_empty()
     }
 
@@ -527,7 +527,7 @@ impl DiagnosticsNode {
     }
 
     /// Add a child node
-    pub fn add_child(&mut self, child: DiagnosticsNode) {
+    pub fn add_child(&mut self, child: Self) {
         self.children.push(child);
     }
 
@@ -562,7 +562,7 @@ impl DiagnosticsNode {
         self
     }
 
-    /// Add a property with a custom DiagnosticsProperty (builder pattern)
+    /// Add a property with a custom `DiagnosticsProperty` (builder pattern)
     #[must_use]
     pub fn with_property(mut self, property: DiagnosticsProperty) -> Self {
         self.properties.push(property);
@@ -581,14 +581,14 @@ impl DiagnosticsNode {
     ///     .child(DiagnosticsNode::new("Child2"));
     /// ```
     #[must_use]
-    pub fn child(mut self, child: DiagnosticsNode) -> Self {
+    pub fn child(mut self, child: Self) -> Self {
         self.children.push(child);
         self
     }
 
     /// Add multiple children (builder pattern)
     #[must_use]
-    pub fn with_children(mut self, children: impl IntoIterator<Item = DiagnosticsNode>) -> Self {
+    pub fn with_children(mut self, children: impl IntoIterator<Item = Self>) -> Self {
         self.children.extend(children);
         self
     }
@@ -623,20 +623,19 @@ impl DiagnosticsNode {
     /// Convert to a deep string representation
     #[must_use]
     pub fn format_deep(&self, indent: usize) -> String {
+        use std::fmt::Write;
+
         let mut result = String::new();
         let prefix = "  ".repeat(indent);
 
         if let Some(ref name) = self.name {
-            result.push_str(&format!("{}{}\n", prefix, name));
+            let _ = writeln!(result, "{prefix}{name}");
         }
 
         for prop in &self.properties {
             if !prop.is_hidden() {
-                result.push_str(&format!(
-                    "{}  {}\n",
-                    prefix,
-                    prop.format_with_style(self.style)
-                ));
+                let formatted = prop.format_with_style(self.style);
+                let _ = writeln!(result, "{prefix}  {formatted}");
             }
         }
 
@@ -720,7 +719,7 @@ impl DiagnosticsBuilder {
     /// Create a new builder.
     #[must_use]
     #[inline]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             properties: Vec::new(),
         }
@@ -777,14 +776,14 @@ impl DiagnosticsBuilder {
     /// Returns the number of properties
     #[must_use]
     #[inline]
-    pub fn len(&self) -> usize {
+    pub const fn len(&self) -> usize {
         self.properties.len()
     }
 
     /// Checks if the builder is empty
     #[must_use]
     #[inline]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.properties.is_empty()
     }
 

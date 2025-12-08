@@ -13,32 +13,29 @@ authors = ["FLUI Contributors"]
 [dependencies]
 # Core dependencies for foundation types
 parking_lot = { workspace = true }
+dashmap = { workspace = true }
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
-bincode = { version = "2.0", features = ["serde"], optional = true }
 
 # Utility dependencies
 bitflags = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
-# Optional async support
-tokio = { workspace = true, optional = true }
-
 [dev-dependencies]
-tokio-test = "0.4"
+serde_json = { workspace = true }
 
 [features]
 default = []
 
 # Serialization support for foundation types
-serde = ["dep:serde", "dep:serde_json", "dep:bincode"]
+serde = ["dep:serde", "dep:serde_json"]
 
-# Async utilities and types
-async = ["dep:tokio"]
+# Profile mode for performance profiling (enables K_PROFILE_MODE constant)
+profile = []
 
 # All features for comprehensive testing
-full = ["serde", "async"]
+full = ["serde"]
 
 [package.metadata.docs.rs]
 all-features = true

@@ -7,7 +7,7 @@ use std::ops::{Add, AddAssign, Sub, SubAssign};
 
 /// Slot - position in parent's child list
 ///
-/// Similar to Flutter's IndexedSlot. Contains the child's index position
+/// Similar to Flutter's `IndexedSlot`. Contains the child's index position
 /// and optionally a reference to the previous sibling for efficient insertion.
 ///
 /// # Examples
@@ -26,12 +26,13 @@ use std::ops::{Add, AddAssign, Sub, SubAssign};
 /// assert!(Slot::new(0) < Slot::new(5));
 /// ```
 ///
-/// # IndexedSlot Enhancement
+/// # `IndexedSlot` Enhancement
 ///
 /// For efficient Render child insertion, slot can optionally store
-/// the previous sibling's ElementId.
+/// the previous sibling's `ElementId`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[must_use = "slots represent child positions and should be used"]
 pub struct Slot {
     /// Position in parent's child list (0-based)
     index: usize,
@@ -52,7 +53,6 @@ impl Slot {
     /// let slot = Slot::new(5);
     /// assert_eq!(slot.index(), 5);
     /// ```
-    #[must_use]
     #[inline]
     pub const fn new(index: usize) -> Self {
         Self {
@@ -63,7 +63,7 @@ impl Slot {
 
     /// Create a slot with previous sibling reference
     ///
-    /// This is the efficient version used by update_children() for
+    /// This is the efficient version used by `update_children()` for
     /// optimal Render child insertion.
     ///
     /// # Arguments
@@ -80,7 +80,6 @@ impl Slot {
     /// let slot = Slot::with_previous_sibling(2, Some(sibling_id));
     /// assert_eq!(slot.index(), 2);
     /// ```
-    #[must_use]
     #[inline]
     pub const fn with_previous_sibling(index: usize, previous_sibling: Option<usize>) -> Self {
         Self {
@@ -98,7 +97,7 @@ impl Slot {
 
     /// Returns the previous sibling
     ///
-    /// Returns the previous sibling's ElementId if tracked,
+    /// Returns the previous sibling's `ElementId` if tracked,
     /// None if this is the first child or tracking not enabled.
     #[must_use]
     #[inline]
@@ -133,7 +132,6 @@ impl Slot {
     /// let next = slot.next();
     /// assert_eq!(next.index(), 1);
     /// ```
-    #[must_use]
     #[inline]
     pub const fn next(self) -> Self {
         Self {
@@ -184,7 +182,6 @@ impl Slot {
     /// assert_eq!(updated.index(), 5);
     /// assert_eq!(updated.previous_sibling(), Some(sibling_id));
     /// ```
-    #[must_use]
     #[inline]
     pub const fn with_sibling(self, previous_sibling: Option<usize>) -> Self {
         Self {
@@ -194,7 +191,6 @@ impl Slot {
     }
 
     /// Returns a slot without sibling tracking
-    #[must_use]
     #[inline]
     pub const fn without_tracking(self) -> Self {
         Self {
@@ -237,8 +233,7 @@ impl Slot {
 
     /// Saturating addition
     ///
-    /// Adds rhs to index, saturating at usize::MAX.
-    #[must_use]
+    /// Adds rhs to index, saturating at `usize::MAX`.
     #[inline]
     pub const fn saturating_add(self, rhs: usize) -> Self {
         Self {
@@ -250,7 +245,6 @@ impl Slot {
     /// Saturating subtraction
     ///
     /// Subtracts rhs from index, saturating at 0.
-    #[must_use]
     #[inline]
     pub const fn saturating_sub(self, rhs: usize) -> Self {
         Self {
@@ -310,6 +304,7 @@ impl std::convert::TryFrom<isize> for Slot {
         if value < 0 {
             Err(SlotConversionError::NegativeI(value))
         } else {
+            #[allow(clippy::cast_sign_loss)]
             Ok(Self::new(value as usize))
         }
     }
@@ -322,6 +317,7 @@ impl std::convert::TryFrom<i32> for Slot {
         if value < 0 {
             Err(SlotConversionError::Negative32(value))
         } else {
+            #[allow(clippy::cast_sign_loss)]
             Ok(Self::new(value as usize))
         }
     }
@@ -334,6 +330,7 @@ impl std::convert::TryFrom<i64> for Slot {
         if value < 0 {
             Err(SlotConversionError::Negative64(value))
         } else {
+            #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
             Ok(Self::new(value as usize))
         }
     }
@@ -403,13 +400,13 @@ impl fmt::Display for SlotConversionError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::NegativeI(value) => {
-                write!(f, "cannot convert negative isize value {} to Slot", value)
+                write!(f, "cannot convert negative isize value {value} to Slot")
             }
             Self::Negative32(value) => {
-                write!(f, "cannot convert negative i32 value {} to Slot", value)
+                write!(f, "cannot convert negative i32 value {value} to Slot")
             }
             Self::Negative64(value) => {
-                write!(f, "cannot convert negative i64 value {} to Slot", value)
+                write!(f, "cannot convert negative i64 value {value} to Slot")
             }
         }
     }
