@@ -77,14 +77,23 @@ pub struct FrameCoordinator {
 }
 
 impl FrameCoordinator {
-    /// Create a new frame coordinator with a rebuild queue
+    /// Create a new frame coordinator with a rebuild queue and tree coordinator
     ///
     /// The rebuild queue is shared with the PipelineOwner for signal-triggered rebuilds.
-    pub fn new_with_queue(rebuild_queue: super::RebuildQueue) -> Self {
+    /// The tree coordinator is shared for unified dirty tracking.
+    ///
+    /// # Arguments
+    ///
+    /// * `rebuild_queue` - Shared rebuild queue for deferred rebuilds
+    /// * `tree_coord` - Shared tree coordinator for unified dirty tracking
+    pub fn new_with_queue(
+        rebuild_queue: super::RebuildQueue,
+        tree_coord: Arc<RwLock<TreeCoordinator>>,
+    ) -> Self {
         Self {
             build: BuildPipeline::new_with_queue(rebuild_queue),
-            layout: LayoutPipeline::new(),
-            paint: PaintPipeline::new(),
+            layout: LayoutPipeline::new(tree_coord.clone()),
+            paint: PaintPipeline::new(tree_coord),
             budget: Arc::new(Mutex::new(FrameBudget::new(60))), // Default 60 FPS
         }
     }
@@ -94,10 +103,11 @@ impl FrameCoordinator {
     /// # Example
     ///
     /// ```rust,ignore
-    /// let coordinator = FrameCoordinator::new();
+    /// let tree_coord = Arc::new(RwLock::new(TreeCoordinator::new()));
+    /// let coordinator = FrameCoordinator::new(tree_coord);
     /// ```
-    pub fn new() -> Self {
-        Self::new_with_queue(super::RebuildQueue::new())
+    pub fn new(tree_coord: Arc<RwLock<TreeCoordinator>>) -> Self {
+        Self::new_with_queue(super::RebuildQueue::new(), tree_coord)
     }
 
     /// Get reference to build pipeline
@@ -503,7 +513,8 @@ impl FrameCoordinator {
 
 impl Default for FrameCoordinator {
     fn default() -> Self {
-        Self::new()
+        let tree_coord = Arc::new(RwLock::new(TreeCoordinator::new()));
+        Self::new(tree_coord)
     }
 }
 

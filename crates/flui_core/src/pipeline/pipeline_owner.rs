@@ -307,9 +307,10 @@ impl PipelineOwner {
     /// [`PipelineBuilder`]: super::PipelineBuilder
     pub fn new() -> Self {
         let rebuild_queue = RebuildQueue::new();
+        let tree_coord = Arc::new(RwLock::new(TreeCoordinator::new()));
         Self {
-            tree_coord: Arc::new(RwLock::new(TreeCoordinator::new())),
-            coordinator: FrameCoordinator::new_with_queue(rebuild_queue.clone()),
+            coordinator: FrameCoordinator::new_with_queue(rebuild_queue.clone(), tree_coord.clone()),
+            tree_coord,
             rebuild_queue,
             on_build_scheduled: None,
             frame_counter: 0,
@@ -574,16 +575,18 @@ impl PipelineOwner {
     // =========================================================================
 
     /// Request layout for an element
+    ///
+    /// Delegates to TreeCoordinator for unified dirty tracking.
+    /// LayoutPipeline will read from TreeCoordinator during flush_layout.
     pub fn request_layout(&mut self, node_id: ElementId) {
-        self.coordinator.layout_mut().mark_dirty(node_id);
-        // Also mark in TreeCoordinator for unified tracking
         self.tree_coord.write().mark_needs_layout(node_id);
     }
 
     /// Request paint for an element
+    ///
+    /// Delegates to TreeCoordinator for unified dirty tracking.
+    /// PaintPipeline will read from TreeCoordinator during flush_paint.
     pub fn request_paint(&mut self, node_id: ElementId) {
-        self.coordinator.paint_mut().mark_dirty(node_id);
-        // Also mark in TreeCoordinator for unified tracking
         self.tree_coord.write().mark_needs_paint(node_id);
     }
 

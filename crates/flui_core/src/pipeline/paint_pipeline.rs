@@ -21,7 +21,10 @@
 //! let layers = paint.generate_layers(&tree);
 //! ```
 
-use super::dirty_tracker::DirtyTracker;
+use parking_lot::RwLock;
+use std::sync::Arc;
+
+use super::TreeCoordinator;
 use flui_element::ElementTree;
 use flui_foundation::ElementId;
 use flui_pipeline::PipelineError;
@@ -31,52 +34,58 @@ pub type PaintResult<T> = Result<T, PipelineError>;
 
 /// Paint pipeline manages layer generation phase.
 ///
-/// Tracks which render objects need repainting and generates
-/// the layer tree for the compositor.
-#[derive(Debug, Default)]
+/// Delegates dirty tracking to TreeCoordinator for unified state management.
+/// Generates the layer tree for the compositor.
+#[derive(Debug)]
 pub struct PaintPipeline {
-    /// Dirty tracking (composed)
-    dirty: DirtyTracker,
+    /// Reference to TreeCoordinator for unified dirty tracking
+    tree_coord: Arc<RwLock<TreeCoordinator>>,
 
     /// Whether to enable layer optimization.
     optimize_layers: bool,
 }
 
 impl PaintPipeline {
-    /// Creates a new paint pipeline.
+    /// Creates a new paint pipeline with reference to TreeCoordinator.
     ///
     /// Layer optimization is enabled by default.
-    pub fn new() -> Self {
+    ///
+    /// # Arguments
+    ///
+    /// * `tree_coord` - Shared reference to TreeCoordinator for dirty tracking
+    pub fn new(tree_coord: Arc<RwLock<TreeCoordinator>>) -> Self {
         Self {
-            dirty: DirtyTracker::new(),
+            tree_coord,
             optimize_layers: true,
         }
     }
 
     /// Creates a paint pipeline with layer optimization disabled.
-    pub fn new_unoptimized() -> Self {
+    pub fn new_unoptimized(tree_coord: Arc<RwLock<TreeCoordinator>>) -> Self {
         Self {
-            dirty: DirtyTracker::new(),
+            tree_coord,
             optimize_layers: false,
         }
     }
 
     /// Marks a render object as needing repaint.
+    ///
+    /// Delegates to TreeCoordinator for unified dirty tracking.
     #[inline]
     pub fn mark_dirty(&self, id: ElementId) {
-        self.dirty.mark_dirty(id);
+        self.tree_coord.write().mark_needs_paint(id);
     }
 
     /// Checks if any render objects are dirty.
     #[inline]
     pub fn has_dirty(&self) -> bool {
-        self.dirty.has_dirty()
+        self.tree_coord.read().has_needs_paint()
     }
 
     /// Checks if a specific render object is dirty.
     #[inline]
     pub fn is_dirty(&self, id: ElementId) -> bool {
-        self.dirty.is_dirty(id)
+        self.tree_coord.read().needs_paint().contains(&id)
     }
 
     /// Enables or disables layer optimization.
@@ -123,7 +132,8 @@ impl PaintPipeline {
     /// implemented in a future update. Currently, layers are generated but not optimized.
     #[tracing::instrument(skip(self, tree), fields(dirty_count = self.dirty_count()))]
     pub fn generate_layers(&mut self, tree: &mut ElementTree) -> PaintResult<usize> {
-        let dirty_ids = self.dirty.drain();
+        // Get dirty elements from TreeCoordinator
+        let dirty_ids: Vec<_> = self.tree_coord.write().take_needs_paint().into_iter().collect();
         let count = dirty_ids.len();
 
         if count == 0 {
@@ -183,13 +193,13 @@ impl PaintPipeline {
     /// Clears all dirty render objects without painting.
     #[inline]
     pub fn clear_dirty(&mut self) {
-        self.dirty.clear();
+        self.tree_coord.write().take_needs_paint();
     }
 
     /// Returns the number of dirty render objects.
     #[inline]
     pub fn dirty_count(&self) -> usize {
-        self.dirty.len()
+        self.tree_coord.read().needs_paint().len()
     }
 }
 
@@ -198,9 +208,14 @@ mod tests {
     use super::*;
     use flui_foundation::ElementId;
 
+    fn create_test_coordinator() -> Arc<RwLock<TreeCoordinator>> {
+        Arc::new(RwLock::new(TreeCoordinator::new()))
+    }
+
     #[test]
     fn test_mark_dirty() {
-        let paint = PaintPipeline::new();
+        let tree_coord = create_test_coordinator();
+        let paint = PaintPipeline::new(tree_coord);
 
         assert!(!paint.has_dirty());
 
@@ -213,7 +228,8 @@ mod tests {
 
     #[test]
     fn test_dirty_count() {
-        let paint = PaintPipeline::new();
+        let tree_coord = create_test_coordinator();
+        let paint = PaintPipeline::new(tree_coord);
 
         paint.mark_dirty(ElementId::new(1));
         paint.mark_dirty(ElementId::new(2));
@@ -223,19 +239,21 @@ mod tests {
 
     #[test]
     fn test_optimization_mode() {
-        let mut paint = PaintPipeline::new();
+        let tree_coord = create_test_coordinator();
+        let mut paint = PaintPipeline::new(tree_coord.clone());
         assert!(paint.is_optimized());
 
         paint.set_optimize_layers(false);
         assert!(!paint.is_optimized());
 
-        let unoptimized = PaintPipeline::new_unoptimized();
+        let unoptimized = PaintPipeline::new_unoptimized(tree_coord);
         assert!(!unoptimized.is_optimized());
     }
 
     #[test]
     fn test_clear_dirty() {
-        let mut paint = PaintPipeline::new();
+        let tree_coord = create_test_coordinator();
+        let mut paint = PaintPipeline::new(tree_coord);
 
         paint.mark_dirty(ElementId::new(1));
         paint.clear_dirty();

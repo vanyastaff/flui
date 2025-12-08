@@ -26,10 +26,13 @@
 //! layout.compute_layout(&tree, constraints);
 //! ```
 
-use super::dirty_tracker::DirtyTracker;
+use parking_lot::RwLock;
+use std::sync::Arc;
+
+use super::TreeCoordinator;
 use flui_element::ElementTree;
 use flui_foundation::ElementId;
-use flui_pipeline::{LockFreeDirtySet, PipelineError};
+use flui_pipeline::PipelineError;
 use flui_types::constraints::BoxConstraints;
 
 /// Result type for layout operations
@@ -37,52 +40,58 @@ pub type LayoutResult<T> = Result<T, PipelineError>;
 
 /// Layout pipeline manages size computation phase.
 ///
-/// Tracks which render objects need relayout and processes them
-/// with support for parallel execution.
-#[derive(Debug, Default)]
+/// Delegates dirty tracking to TreeCoordinator for unified state management.
+/// Processes render objects with support for parallel execution.
+#[derive(Debug)]
 pub struct LayoutPipeline {
-    /// Dirty tracking (composed)
-    dirty: DirtyTracker,
+    /// Reference to TreeCoordinator for unified dirty tracking
+    tree_coord: Arc<RwLock<TreeCoordinator>>,
 
     /// Whether to enable parallel layout.
     parallel_enabled: bool,
 }
 
 impl LayoutPipeline {
-    /// Creates a new layout pipeline.
+    /// Creates a new layout pipeline with reference to TreeCoordinator.
     ///
     /// Parallel layout is enabled by default.
-    pub fn new() -> Self {
+    ///
+    /// # Arguments
+    ///
+    /// * `tree_coord` - Shared reference to TreeCoordinator for dirty tracking
+    pub fn new(tree_coord: Arc<RwLock<TreeCoordinator>>) -> Self {
         Self {
-            dirty: DirtyTracker::new(),
+            tree_coord,
             parallel_enabled: true,
         }
     }
 
     /// Creates a layout pipeline with parallel execution disabled.
-    pub fn new_single_threaded() -> Self {
+    pub fn new_single_threaded(tree_coord: Arc<RwLock<TreeCoordinator>>) -> Self {
         Self {
-            dirty: DirtyTracker::new(),
+            tree_coord,
             parallel_enabled: false,
         }
     }
 
     /// Marks a render object as needing relayout.
+    ///
+    /// Delegates to TreeCoordinator for unified dirty tracking.
     #[inline]
     pub fn mark_dirty(&self, id: ElementId) {
-        self.dirty.mark_dirty(id);
+        self.tree_coord.write().mark_needs_layout(id);
     }
 
     /// Checks if any render objects are dirty.
     #[inline]
     pub fn has_dirty(&self) -> bool {
-        self.dirty.has_dirty()
+        self.tree_coord.read().has_needs_layout()
     }
 
     /// Checks if a specific render object is dirty.
     #[inline]
     pub fn is_dirty(&self, id: ElementId) -> bool {
-        self.dirty.is_dirty(id)
+        self.tree_coord.read().needs_layout().contains(&id)
     }
 
     /// Enables or disables parallel layout.
@@ -97,16 +106,16 @@ impl LayoutPipeline {
         self.parallel_enabled
     }
 
-    /// Returns a reference to the dirty set.
-    #[inline]
-    pub fn dirty_set(&self) -> &LockFreeDirtySet<ElementId> {
-        self.dirty.inner()
-    }
-
     /// Marks all elements as dirty.
+    ///
+    /// Note: This method is deprecated as it's rarely needed.
+    /// Prefer marking specific elements dirty instead.
     #[inline]
+    #[deprecated(note = "Use TreeCoordinator::mark_needs_layout for specific elements")]
     pub fn mark_all_dirty(&self) {
-        self.dirty.mark_all_dirty();
+        // TreeCoordinator doesn't have mark_all_layout - this is intentional
+        // as marking all elements is usually a sign of incorrect usage
+        tracing::warn!("mark_all_dirty is deprecated - mark specific elements instead");
     }
 
     /// Computes layout for all dirty render objects.
@@ -145,7 +154,8 @@ impl LayoutPipeline {
         tree: &mut ElementTree,
         constraints: BoxConstraints,
     ) -> LayoutResult<Vec<ElementId>> {
-        let dirty_ids = self.dirty.drain();
+        // Get dirty elements from TreeCoordinator
+        let dirty_ids: Vec<_> = self.tree_coord.write().take_needs_layout().into_iter().collect();
         let count = dirty_ids.len();
 
         if count == 0 {
@@ -243,13 +253,13 @@ impl LayoutPipeline {
     /// Clears all dirty render objects without laying out.
     #[inline]
     pub fn clear_dirty(&mut self) {
-        self.dirty.clear();
+        self.tree_coord.write().take_needs_layout();
     }
 
     /// Returns the number of dirty render objects.
     #[inline]
     pub fn dirty_count(&self) -> usize {
-        self.dirty.len()
+        self.tree_coord.read().needs_layout().len()
     }
 }
 
@@ -258,9 +268,14 @@ mod tests {
     use super::*;
     use flui_foundation::ElementId;
 
+    fn create_test_coordinator() -> Arc<RwLock<TreeCoordinator>> {
+        Arc::new(RwLock::new(TreeCoordinator::new()))
+    }
+
     #[test]
     fn test_mark_dirty() {
-        let layout = LayoutPipeline::new();
+        let tree_coord = create_test_coordinator();
+        let layout = LayoutPipeline::new(tree_coord);
 
         assert!(!layout.has_dirty());
 
@@ -273,7 +288,8 @@ mod tests {
 
     #[test]
     fn test_dirty_count() {
-        let layout = LayoutPipeline::new();
+        let tree_coord = create_test_coordinator();
+        let layout = LayoutPipeline::new(tree_coord);
 
         layout.mark_dirty(ElementId::new(1));
         layout.mark_dirty(ElementId::new(2));
@@ -283,19 +299,21 @@ mod tests {
 
     #[test]
     fn test_parallel_mode() {
-        let mut layout = LayoutPipeline::new();
+        let tree_coord = create_test_coordinator();
+        let mut layout = LayoutPipeline::new(tree_coord.clone());
         assert!(layout.is_parallel());
 
         layout.set_parallel(false);
         assert!(!layout.is_parallel());
 
-        let single_threaded = LayoutPipeline::new_single_threaded();
+        let single_threaded = LayoutPipeline::new_single_threaded(tree_coord);
         assert!(!single_threaded.is_parallel());
     }
 
     #[test]
     fn test_clear_dirty() {
-        let mut layout = LayoutPipeline::new();
+        let tree_coord = create_test_coordinator();
+        let mut layout = LayoutPipeline::new(tree_coord);
 
         layout.mark_dirty(ElementId::new(1));
         layout.clear_dirty();
