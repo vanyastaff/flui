@@ -48,6 +48,7 @@ use std::time::Duration;
 
 use super::{FrameCoordinator, RebuildQueue, RootManager, TreeCoordinator};
 use flui_element::{Element, ElementTree};
+use flui_view::tree::ViewNode;
 use flui_foundation::ElementId;
 use flui_pipeline::PipelineError;
 
@@ -408,11 +409,19 @@ impl PipelineOwner {
             return Err(PipelineError::RootAlreadyAttached);
         }
 
-        // TODO(four-tree): In the full four-tree architecture, we'd insert ViewObject into ViewTree
-        // and create Element with that ViewId. For now, create empty element as stub.
+        // Four-tree architecture: Insert ViewObject into ViewTree
         let view_object = flui_view::Stateless(widget).into_view();
         let mode = view_object.mode();
-        let element = Element::view(None, mode);
+
+        // Insert ViewObject into ViewTree via TreeCoordinator
+        let view_id = {
+            let mut coord = self.tree_coord.write();
+            let view_node = ViewNode::from_boxed(view_object, mode);
+            coord.views_mut().insert(view_node)
+        };
+
+        // Create Element with ViewId reference
+        let element = Element::view(Some(view_id), mode);
         Ok(self.set_root(element))
     }
 
