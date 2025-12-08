@@ -3,9 +3,9 @@
 //! This module provides unified enums that support both Box and Sliver protocols,
 //! allowing RenderTree to work with both protocols through a single API.
 
-use super::protocol::ProtocolId;
-use super::{BoxConstraints, SliverConstraints};
-use flui_types::{Size, SliverGeometry};
+use crate::protocol::ProtocolId;
+use crate::BoxConstraints;
+use flui_types::{Size, SliverConstraints, SliverGeometry};
 
 // ============================================================================
 // UNIFIED CONSTRAINTS
@@ -15,18 +15,6 @@ use flui_types::{Size, SliverGeometry};
 ///
 /// This enum allows RenderTree to work with both layout protocols through
 /// a single `layout_element()` method, with protocol dispatch handled internally.
-///
-/// # Example
-///
-/// ```rust,ignore
-/// // Box layout
-/// let constraints = Constraints::Box(BoxConstraints::tight(Size::new(100.0, 100.0)));
-/// let geometry = render_tree.layout_element(id, constraints);
-///
-/// // Sliver layout
-/// let constraints = Constraints::Sliver(SliverConstraints::new(0.0, 1000.0));
-/// let geometry = render_tree.layout_element(id, constraints);
-/// ```
 #[derive(Debug, Clone, PartialEq)]
 pub enum Constraints {
     /// Box protocol constraints (min/max width/height).
@@ -37,15 +25,6 @@ pub enum Constraints {
 
 impl Constraints {
     /// Returns the protocol ID for these constraints.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// use flui_rendering::{Constraints, ProtocolId, BoxConstraints};
-    ///
-    /// let constraints = Constraints::Box(BoxConstraints::tight_for(100.0, 100.0));
-    /// assert_eq!(constraints.protocol(), ProtocolId::Box);
-    /// ```
     #[inline]
     pub fn protocol(&self) -> ProtocolId {
         match self {
@@ -105,19 +84,6 @@ impl From<SliverConstraints> for Constraints {
 ///
 /// This enum represents the result of layout operations for both protocols,
 /// allowing uniform handling in RenderTree.
-///
-/// # Example
-///
-/// ```rust,ignore
-/// match geometry {
-///     Geometry::Box(size) => {
-///         println!("Box layout: {}x{}", size.width, size.height);
-///     }
-///     Geometry::Sliver(geom) => {
-///         println!("Sliver layout: paint_extent={}", geom.paint_extent);
-///     }
-/// }
-/// ```
 #[derive(Debug, Clone, PartialEq)]
 pub enum Geometry {
     /// Box protocol geometry (width, height).

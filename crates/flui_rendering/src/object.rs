@@ -29,8 +29,9 @@ use flui_types::semantics::{SemanticsAction, SemanticsProperties};
 use flui_types::{Offset, Rect, Size};
 use parking_lot::RwLock;
 
-use crate::core::{BoxConstraints, HitTestTree};
-use crate::RenderResult;
+use crate::hit_test_tree::HitTestTree;
+use crate::parent_data::{BoxParentData, ParentData};
+use crate::{BoxConstraints, RenderResult};
 
 // ============================================================================
 // LAYER HANDLE
@@ -1202,8 +1203,8 @@ pub trait RenderObject: DowncastSync + fmt::Debug {
     ///     Box::new(StackParentData::new())
     /// }
     /// ```
-    fn create_parent_data(&self) -> Box<dyn crate::core::ParentData> {
-        Box::new(crate::core::BoxParentData::default())
+    fn create_parent_data(&self) -> Box<dyn ParentData> {
+        Box::new(BoxParentData::default())
     }
 
     // ============================================================================
@@ -1505,6 +1506,74 @@ pub trait RenderObject: DowncastSync + fmt::Debug {
     /// Calls `drop_layer()` to release GPU resources.
     fn detach(&mut self) {
         self.drop_layer();
+    }
+
+    /// Called when this render object is being permanently disposed.
+    ///
+    /// This is the FLUI equivalent of Flutter's `RenderObject.dispose()`.
+    /// Override this to release resources that were acquired during the
+    /// lifetime of this render object.
+    ///
+    /// # Flutter Protocol
+    ///
+    /// ```dart
+    /// // Flutter equivalent:
+    /// @override
+    /// void dispose() {
+    ///   _controller?.dispose();
+    ///   _subscription?.cancel();
+    ///   super.dispose();
+    /// }
+    /// ```
+    ///
+    /// # When Called
+    ///
+    /// - After `detach()` when the render object is being permanently removed
+    /// - The render object will NOT be reused after dispose
+    /// - This is different from `detach()` which may be followed by `attach()`
+    ///
+    /// # Important
+    ///
+    /// - Always call `self.detach()` first if not already detached
+    /// - Release ALL resources (tickers, subscriptions, controllers)
+    /// - After dispose, the render object is in an invalid state
+    /// - Do NOT call any methods on self after dispose
+    ///
+    /// # Resource Cleanup Order
+    ///
+    /// 1. Stop animations and tickers
+    /// 2. Cancel subscriptions and listeners
+    /// 3. Release GPU resources (layers, textures)
+    /// 4. Clear references to prevent memory leaks
+    ///
+    /// # Default Implementation
+    ///
+    /// Ensures `detach()` has been called to release GPU resources.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// fn dispose(&mut self) {
+    ///     // Stop animation ticker
+    ///     if let Some(ticker) = self.ticker.take() {
+    ///         ticker.stop();
+    ///     }
+    ///
+    ///     // Cancel subscriptions
+    ///     if let Some(subscription) = self.subscription.take() {
+    ///         subscription.cancel();
+    ///     }
+    ///
+    ///     // Clear image cache
+    ///     self.image_cache.clear();
+    ///
+    ///     // Call parent dispose (releases layer)
+    ///     self.detach();
+    /// }
+    /// ```
+    fn dispose(&mut self) {
+        // Ensure GPU resources are released
+        self.detach();
     }
 
     /// Called when the render object should adopt a child.
