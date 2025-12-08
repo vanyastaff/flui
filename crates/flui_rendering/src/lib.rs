@@ -41,199 +41,142 @@
 //! - **LayoutContext/PaintContext**: Operation contexts with tree access
 //! - **Constraints/Geometry**: Type-erased layout types
 //!
-//! ## Flat Module Structure
-//!
-//! This crate uses a flat file structure for clarity:
+//! ## Module Structure
 //!
 //! ```text
 //! src/
-//! ├── lib.rs              # This file - crate entry point
-//! ├── object.rs           # RenderObject trait
-//! ├── box.rs              # RenderBox<A> trait
-//! ├── sliver.rs           # RenderSliver<A> trait
-//! ├── protocol.rs         # Protocol system (BoxProtocol, SliverProtocol)
-//! ├── arity.rs            # Arity re-exports from flui-tree
-//! ├── layout_context.rs   # Layout context types
-//! ├── paint_context.rs    # Paint context types
-//! ├── hit_test_context.rs # Hit test context types
-//! ├── layout_tree.rs      # LayoutTree trait
-//! ├── paint_tree.rs       # PaintTree trait
-//! ├── hit_test_tree.rs    # HitTestTree trait
-//! ├── render_tree.rs      # Combined FullRenderTree trait
-//! ├── flags.rs            # AtomicRenderFlags
-//! ├── state.rs            # RenderState<P>
-//! ├── parent_data.rs      # ParentData system
-//! ├── element.rs          # RenderElement
-//! ├── lifecycle.rs        # RenderLifecycle
-//! ├── proxy.rs            # RenderProxyBox, RenderProxySliver
-//! ├── wrapper.rs          # BoxRenderWrapper, SliverRenderWrapper
-//! ├── semantics.rs        # Accessibility tree
-//! ├── unified.rs          # Constraints/Geometry enums
-//! ├── storage.rs          # RenderTreeWrapper<T>
-//! ├── error.rs            # Error types
-//! ├── into_render.rs      # IntoRender trait
-//! └── tree/               # RenderTree storage
+//! ├── lib.rs       # Crate entry point with re-exports
+//! ├── core/        # Core rendering types and traits
+//! ├── tree/        # RenderTree storage
+//! ├── view/        # View-related rendering
+//! ├── error.rs     # Error types
+//! ├── debug.rs     # Debug utilities
+//! └── into_render.rs # IntoRender trait
 //! ```
 
 // ============================================================================
-// FLAT MODULE DECLARATIONS
+// MODULE DECLARATIONS
 // ============================================================================
 
-// Core traits
-#[path = "box.rs"]
-pub mod box_render;
-pub mod object;
-pub mod protocol;
-pub mod sliver;
-
-// Arity system
-pub mod arity;
-
-// Context types
-pub mod hit_test_context;
-pub mod layout_context;
-pub mod paint_context;
-
-// Tree operation traits
-pub mod hit_test_tree;
-pub mod layout_tree;
-pub mod paint_tree;
-pub mod render_tree;
-
-// State management
-pub mod flags;
-pub mod parent_data;
-pub mod state;
-
-// Element types
-pub mod element;
-pub mod element_node;
-pub mod lifecycle;
-
-// Proxy and wrapper types
-pub mod proxy;
-pub mod wrapper;
-
-// Semantics / accessibility
-pub mod semantics;
-
-// Unified protocol types
-pub mod unified;
-
-// Storage wrapper
-pub mod storage;
-
-// Error handling
-pub mod error;
-
-// IntoRender trait
-pub mod into_render;
-
-// Debug utilities and assertions
-pub mod debug;
-
-// RenderTree storage (kept as directory for now)
-pub mod tree;
-
-// Legacy core module (for backwards compatibility during transition)
+/// Core rendering types and traits
 pub mod core;
 
-// View module
+/// RenderTree storage and tree operations
+pub mod tree;
+
+/// View-related rendering
 pub mod view;
 
+/// Error handling
+pub mod error;
+
+/// Debug utilities and assertions
+pub mod debug;
+
+/// IntoRender trait
+pub mod into_render;
+
 // ============================================================================
-// RE-EXPORTS FROM FLAT MODULES
+// RE-EXPORTS FROM CORE MODULE
 // ============================================================================
 
 // Core rendering traits
-pub use box_render::RenderBox;
-pub use object::{new_layer_handle, LayerHandle, LayerRef, RenderObject};
-pub use sliver::RenderSliver;
+pub use core::RenderBox;
+pub use core::RenderSliver;
+pub use core::{new_layer_handle, LayerHandle, LayerRef, RenderObject};
 
 // Re-export downcast-rs for downcasting RenderObject
 pub use downcast_rs::DowncastSync;
 
 // Protocol system
-pub use protocol::{
-    BoxProtocol, IsBoxProtocol, IsSliverProtocol, Protocol, ProtocolCast, ProtocolId,
-    SliverProtocol,
-};
+pub use core::{BoxProtocol, Protocol, ProtocolId, SliverProtocol};
 
-// Arity system (re-exported from flui-tree)
-pub use arity::{
+// Arity system
+pub use core::{
     Arity, AtLeast, ChildrenAccess, Exact, FixedChildren, Leaf, NoChildren, Optional,
     OptionalChild, Range, RuntimeArity, Single, SliceChildren, Variable,
 };
 
 // Context types for layout/paint/hit-test
-pub use hit_test_context::{BoxHitTestContext, HitTestContext, SliverHitTestContext};
-pub use layout_context::{BoxLayoutContext, LayoutContext, SliverLayoutContext};
-pub use paint_context::{BoxPaintContext, PaintContext, SliverPaintContext};
+pub use core::{BoxHitTestContext, HitTestContext, SliverHitTestContext};
+pub use core::{BoxLayoutContext, LayoutContext, SliverLayoutContext};
+pub use core::{BoxPaintContext, PaintContext, SliverPaintContext};
 
 // Short context aliases
-pub type BoxLayoutCtx<'a, A, T = Box<dyn layout_tree::LayoutTree + Send + Sync>> =
-    BoxLayoutContext<'a, A, T>;
-pub type BoxPaintCtx<'a, A, T = Box<dyn paint_tree::PaintTree + Send + Sync>> =
-    BoxPaintContext<'a, A, T>;
-pub type BoxHitTestCtx<'a, A, T = Box<dyn hit_test_tree::HitTestTree + Send + Sync>> =
-    BoxHitTestContext<'a, A, T>;
-pub type SliverLayoutCtx<'a, A, T = Box<dyn layout_tree::LayoutTree + Send + Sync>> =
-    SliverLayoutContext<'a, A, T>;
-pub type SliverPaintCtx<'a, A, T = Box<dyn paint_tree::PaintTree + Send + Sync>> =
-    SliverPaintContext<'a, A, T>;
+pub type BoxLayoutCtx<'a, A, T = Box<dyn core::LayoutTree + Send + Sync>> =
+    core::BoxLayoutContext<'a, A, T>;
+pub type BoxPaintCtx<'a, A, T = Box<dyn core::PaintTree + Send + Sync>> =
+    core::BoxPaintContext<'a, A, T>;
+pub type BoxHitTestCtx<'a, A, T = Box<dyn core::HitTestTree + Send + Sync>> =
+    core::BoxHitTestContext<'a, A, T>;
+pub type SliverLayoutCtx<'a, A, T = Box<dyn core::LayoutTree + Send + Sync>> =
+    core::SliverLayoutContext<'a, A, T>;
+pub type SliverPaintCtx<'a, A, T = Box<dyn core::PaintTree + Send + Sync>> =
+    core::SliverPaintContext<'a, A, T>;
 
 // Tree operation traits (dyn-compatible)
-pub use hit_test_tree::{HitTestTree, HitTestTreeExt};
-pub use layout_tree::{LayoutTree, LayoutTreeExt};
-pub use paint_tree::{PaintTree, PaintTreeExt};
-pub use render_tree::{
+pub use core::{
     debug_element_info, format_element_debug, format_tree_node, FullRenderTree,
     RenderElementDebugInfo, RenderTreeOps,
 };
+pub use core::{HitTestTree, HitTestTreeExt};
+pub use core::{LayoutTree, LayoutTreeExt};
+pub use core::{PaintTree, PaintTreeExt};
 
 // Flags and state
-pub use flags::{AtomicRenderFlags, RenderFlags};
-pub use state::{BoxRenderState, RenderState, RenderStateExt, SliverRenderState};
+pub use core::{AtomicRenderFlags, RenderFlags};
+pub use core::{BoxRenderState, RenderState, RenderStateExt, SliverRenderState};
 
 // Parent data
-pub use parent_data::{
+pub use core::{
     BoxParentData, ContainerBoxParentData, ContainerParentData, ParentData, ParentDataWithOffset,
 };
 
 // RenderElement and lifecycle
-pub use element::{
-    AnyRenderElement, BoxRenderElement, RenderElement, SliverRenderElement, TypedElementVisitor,
-    TypedElementVisitorMut,
-};
-pub use element_node::{ElementNodeStorage, RenderElementNode};
-pub use lifecycle::RenderLifecycle;
+pub use core::RenderElement;
+pub use core::RenderLifecycle;
 
 // Proxy traits
-pub use proxy::{RenderProxyBox, RenderProxySliver};
+pub use core::{RenderProxyBox, RenderProxySliver};
 
 // Wrapper types
-pub use wrapper::{BoxRenderWrapper, SliverRenderWrapper};
+pub use core::{BoxRenderWrapper, SliverRenderWrapper};
 
 // Semantics / accessibility
-pub use semantics::{SemanticsHandle, SemanticsNode, SemanticsNodeId, SemanticsOwner};
+pub use core::{SemanticsHandle, SemanticsNode, SemanticsNodeId, SemanticsOwner};
 
 // Unified protocol types
-pub use unified::{Constraints, Geometry};
+pub use core::{Constraints, Geometry};
 
-// Storage wrapper
-pub use storage::{RenderTreeStorage, RenderTreeWrapper};
+// RenderTreeStorage from core
+pub use core::RenderTreeStorage;
 
-// Geometry and constraints
-pub use flui_types::BoxConstraints;
+// ============================================================================
+// RE-EXPORTS FROM TREE MODULE
+// ============================================================================
 
 // Tree types (RenderTree, RenderNode, RenderId)
-pub use tree::{ConcreteRenderNode, RenderId, RenderNode, RenderTree};
+pub use tree::{RenderId, RenderNode, RenderTree};
+
+// Tree access and iteration
+pub use tree::{
+    AtomicDirtyFlags, DirtyTracking, DirtyTrackingExt, RenderAncestors, RenderChildren,
+    RenderChildrenCollector, RenderDescendants, RenderTreeAccess, RenderTreeAccessExt,
+    RenderTreeExt,
+};
+
+// ============================================================================
+// RE-EXPORTS FROM OTHER MODULES
+// ============================================================================
 
 // Error handling
 pub use error::{RenderError, Result as RenderResult};
 
 // IntoRender trait
 pub use into_render::{IntoRender, IntoRenderState};
+
+// Geometry and constraints from flui_types
+pub use flui_types::BoxConstraints;
 
 // Foundation types
 pub use flui_foundation::ElementId;
@@ -250,34 +193,24 @@ pub use flui_types::{Offset, Rect, Size, SliverConstraints, SliverGeometry};
 
 /// The rendering prelude - commonly used types and traits.
 ///
-/// This brings the most commonly used rendering types and traits into scope.
-///
 /// ```rust,ignore
 /// use flui_rendering::prelude::*;
-///
-/// // Now you can use common types directly
-/// impl RenderBox<Single> for MyRenderObject {
-///     fn layout(&mut self, ctx: BoxLayoutContext<'_, Single>) -> RenderResult<Size> {
-///         // Implementation here
-///         Ok(Size::new(100.0, 100.0))
-///     }
-/// }
 /// ```
 pub mod prelude {
-    // Most commonly used traits
+    // Core traits
     pub use super::{RenderBox, RenderObject, RenderSliver};
 
-    // Most commonly used context types
+    // Context types
     pub use super::{BoxHitTestContext, BoxLayoutContext, BoxPaintContext};
     pub use super::{SliverHitTestContext, SliverLayoutContext, SliverPaintContext};
 
-    // Most commonly used arity types
+    // Arity types
     pub use super::{Arity, Leaf, Optional, Single, Variable};
 
     // Protocols
     pub use super::{BoxProtocol, Protocol, SliverProtocol};
 
-    // Most commonly used geometry types
+    // Geometry types
     pub use super::{BoxConstraints, Offset, Rect, Size};
 
     // Tree operations

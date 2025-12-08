@@ -261,11 +261,11 @@ impl<const INLINE_SIZE: usize> RenderChildrenCollector<INLINE_SIZE> {
     ///
     /// This analyzes the child count and returns the most specific
     /// arity that matches.
-    pub fn runtime_arity(&self) -> crate::arity::RuntimeArity {
+    pub fn runtime_arity(&self) -> crate::core::arity::RuntimeArity {
         match self.len() {
-            0 => crate::arity::RuntimeArity::Exact(0),
-            1 => crate::arity::RuntimeArity::Exact(1),
-            n => crate::arity::RuntimeArity::AtLeast(n),
+            0 => crate::core::arity::RuntimeArity::Exact(0),
+            1 => crate::core::arity::RuntimeArity::Exact(1),
+            n => crate::core::arity::RuntimeArity::AtLeast(n),
         }
     }
 
@@ -881,7 +881,7 @@ mod tests {
         let collector: RenderChildrenCollector = RenderChildrenCollector::new(&tree, empty);
         assert_eq!(
             collector.runtime_arity(),
-            crate::arity::RuntimeArity::Exact(0)
+            crate::core::arity::RuntimeArity::Exact(0)
         );
 
         // Test single
@@ -890,7 +890,7 @@ mod tests {
         let collector: RenderChildrenCollector = RenderChildrenCollector::new(&tree, parent);
         assert_eq!(
             collector.runtime_arity(),
-            crate::arity::RuntimeArity::Exact(1)
+            crate::core::arity::RuntimeArity::Exact(1)
         );
 
         // Test multiple
@@ -898,7 +898,7 @@ mod tests {
         let collector: RenderChildrenCollector = RenderChildrenCollector::new(&tree, parent);
         assert_eq!(
             collector.runtime_arity(),
-            crate::arity::RuntimeArity::AtLeast(2)
+            crate::core::arity::RuntimeArity::AtLeast(2)
         );
     }
 

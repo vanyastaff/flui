@@ -32,9 +32,6 @@ mod sliver;
 // Render tree traits (LayoutTree, PaintTree, HitTestTree, FullRenderTree)
 mod tree;
 
-// RenderTree<T> - Wrapper that adds rendering capabilities to any tree storage
-mod tree_storage;
-
 // Unified protocol types (Constraints, Geometry enums for multi-protocol support)
 mod unified;
 
@@ -160,7 +157,27 @@ pub use tree::{
 // RENDER TREE WRAPPER
 // ============================================================================
 
-pub use tree_storage::{RenderTree, RenderTreeStorage};
+// Note: RenderTreeStorage and RenderTreeWrapper are defined in tree module
+pub use crate::tree::{RenderTreeAccess, RenderTreeAccessExt, RenderTreeExt};
+
+/// Trait alias for storage that can be used with rendering operations.
+pub trait RenderTreeStorage:
+    flui_tree::TreeRead<flui_foundation::ElementId>
+    + flui_tree::TreeNav<flui_foundation::ElementId>
+    + RenderTreeAccess
+{
+}
+
+impl<T> RenderTreeStorage for T where
+    T: flui_tree::TreeRead<flui_foundation::ElementId>
+        + flui_tree::TreeNav<flui_foundation::ElementId>
+        + RenderTreeAccess
+{
+}
+
+/// Wrapper that adds rendering capabilities to any compatible storage.
+/// Re-exported from tree module for convenience.
+pub use crate::tree::visitable::{HitTestVisitable, LayoutVisitable, PaintVisitable};
 
 // ============================================================================
 // PROXY TRAITS
@@ -197,8 +214,7 @@ pub use flui_tree::{TreeNav, TreeRead, TreeWrite};
 // Re-export render-specific types from our tree module
 pub use crate::tree::{
     AtomicDirtyFlags, DirtyTracking, DirtyTrackingExt, RenderAncestors, RenderChildren,
-    RenderChildrenCollector, RenderDescendants, RenderTreeAccess, RenderTreeAccessExt,
-    RenderTreeExt,
+    RenderChildrenCollector, RenderDescendants,
 };
 
 // ============================================================================
@@ -245,8 +261,8 @@ pub mod prelude {
     // Tree operations
     pub use super::{HitTestTree, LayoutTree, PaintTree, RenderTreeOps};
 
-    // RenderTree wrapper
-    pub use super::{RenderTree, RenderTreeStorage};
+    // RenderTree storage
+    pub use super::RenderTreeStorage;
 
     // Foundation types
     pub use super::{Canvas, ElementId, HitTestResult, Paint};

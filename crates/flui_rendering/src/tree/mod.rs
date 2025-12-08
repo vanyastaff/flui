@@ -5,7 +5,8 @@
 //!
 //! # Modules
 //!
-//! - [`render_tree`] - The RenderTree data structure
+//! - [`render_tree`] - The RenderTree data structure with RenderNode
+//! - [`tree_traits`] - TreeRead/TreeWrite/TreeNav implementations
 //! - [`access`] - Traits for render-specific tree access (RenderTreeAccess)
 //! - [`dirty`] - Dirty tracking for layout and paint phases
 //! - [`iter`] - Render-specific iterators
@@ -13,14 +14,18 @@
 
 mod render_tree;
 
-// Render-specific traits and utilities (moved from flui-tree)
+// Render-specific traits and utilities
 pub mod access;
 pub mod collector;
 pub mod dirty;
 pub mod iter;
 pub mod visitable;
 
-pub use render_tree::{ConcreteRenderNode, RenderId, RenderNode, RenderTree};
+// Export RenderTree and RenderNode (no longer export RenderId - use flui_foundation::RenderId)
+pub use render_tree::{RenderNode, RenderTree};
+
+// Re-export RenderId from flui_foundation for convenience
+pub use flui_foundation::RenderId;
 
 // Re-export key types from access module
 pub use access::{RenderChildAccessor, RenderTreeAccess, RenderTreeAccessExt, RenderTreeExt};

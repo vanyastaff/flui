@@ -1251,7 +1251,7 @@ mod tests {
 
     #[test]
     fn test_render_children_collector() {
-        use crate::arity::{ChildrenAccess, Exact, Single};
+        use crate::core::arity::{ChildrenAccess, Exact, Single};
 
         let mut tree = TestTree::new();
 
@@ -1283,7 +1283,7 @@ mod tests {
 
     #[test]
     fn test_render_children_collector_single() {
-        use crate::arity::Single;
+        use crate::core::arity::Single;
 
         let mut tree = TestTree::new();
 
@@ -1301,7 +1301,7 @@ mod tests {
 
     #[test]
     fn test_render_children_collector_empty() {
-        use crate::arity::{Leaf, Optional};
+        use crate::core::arity::{Leaf, Optional};
 
         let mut tree = TestTree::new();
 
