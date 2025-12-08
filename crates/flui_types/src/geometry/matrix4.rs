@@ -129,6 +129,38 @@ pub struct Matrix4 {
 }
 
 impl Matrix4 {
+    /// Identity matrix constant (no transformation).
+    ///
+    /// This is a compile-time constant that can be used anywhere a `Matrix4` is needed.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use flui_types::Matrix4;
+    ///
+    /// let transform = Matrix4::IDENTITY;
+    /// assert!(transform.is_identity());
+    /// ```
+    pub const IDENTITY: Self = Self {
+        m: [
+            1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+        ],
+    };
+
+    /// Zero matrix constant (all elements are zero).
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use flui_types::Matrix4;
+    ///
+    /// let zero = Matrix4::ZERO;
+    /// assert_eq!(zero.determinant(), 0.0);
+    /// ```
+    pub const ZERO: Self = Self { m: [0.0; 16] };
+}
+
+impl Matrix4 {
     /// Creates a new matrix from 16 values in column-major order.
     ///
     /// # Arguments
@@ -274,6 +306,22 @@ impl Matrix4 {
         )
     }
 
+    /// Alias for [`skew_2d`](Self::skew_2d).
+    ///
+    /// Creates a 2D skew (shear) transformation matrix.
+    /// This is a convenience alias matching Flutter's naming convention.
+    ///
+    /// # Examples
+    /// ```
+    /// use flui_types::Matrix4;
+    ///
+    /// let skew = Matrix4::skew(0.3, 0.1);
+    /// ```
+    #[inline]
+    pub fn skew(skew_x: f32, skew_y: f32) -> Self {
+        Self::skew_2d(skew_x, skew_y)
+    }
+
     /// Returns whether this is an identity matrix.
     ///
     /// Uses epsilon comparison for floating-point tolerance.
@@ -291,6 +339,58 @@ impl Matrix4 {
             }
         }
         true
+    }
+
+    /// Returns whether this matrix represents only a translation (no rotation, scale, or skew).
+    ///
+    /// This is useful for optimization - translation-only transforms can be applied
+    /// more efficiently than full matrix transforms.
+    ///
+    /// # Examples
+    /// ```
+    /// use flui_types::Matrix4;
+    ///
+    /// let translate = Matrix4::translation(10.0, 20.0, 0.0);
+    /// assert!(translate.is_translation_only());
+    ///
+    /// let scale = Matrix4::scaling(2.0, 2.0, 1.0);
+    /// assert!(!scale.is_translation_only());
+    ///
+    /// let combined = Matrix4::translation(10.0, 20.0, 0.0) * Matrix4::rotation_z(0.5);
+    /// assert!(!combined.is_translation_only());
+    /// ```
+    #[inline]
+    pub fn is_translation_only(&self) -> bool {
+        self.is_translation_only_with_epsilon(f32::EPSILON)
+    }
+
+    /// Returns whether this matrix represents only a translation with custom epsilon.
+    ///
+    /// Checks that the 3x3 upper-left submatrix is identity (within epsilon)
+    /// and the perspective row is [0, 0, 0, 1].
+    pub fn is_translation_only_with_epsilon(&self, epsilon: f32) -> bool {
+        // Column-major layout:
+        // m[0..3]   = column 0 (should be [1, 0, 0, 0])
+        // m[4..7]   = column 1 (should be [0, 1, 0, 0])
+        // m[8..11]  = column 2 (should be [0, 0, 1, 0])
+        // m[12..15] = column 3 (translation: [tx, ty, tz, 1])
+
+        // Check diagonal elements (should be 1.0)
+        (self.m[0] - 1.0).abs() < epsilon
+            && (self.m[5] - 1.0).abs() < epsilon
+            && (self.m[10] - 1.0).abs() < epsilon
+            && (self.m[15] - 1.0).abs() < epsilon
+            // Check off-diagonal elements in upper-left 3x3 (should be 0.0)
+            && self.m[1].abs() < epsilon
+            && self.m[2].abs() < epsilon
+            && self.m[4].abs() < epsilon
+            && self.m[6].abs() < epsilon
+            && self.m[8].abs() < epsilon
+            && self.m[9].abs() < epsilon
+            // Check perspective row elements (should be 0.0)
+            && self.m[3].abs() < epsilon
+            && self.m[7].abs() < epsilon
+            && self.m[11].abs() < epsilon
     }
 
     /// Returns the translation component (tx, ty, tz).
@@ -1554,5 +1654,71 @@ mod tests {
         let transformed = combined.transform_rect(&rect);
         // Scale first: (0,0,10,10), then translate: (10,20,20,30)
         assert_eq!(transformed, Rect::from_ltrb(10.0, 20.0, 20.0, 30.0));
+    }
+
+    #[test]
+    fn test_matrix4_skew_alias() {
+        // Verify skew() is an alias for skew_2d()
+        let skew1 = Matrix4::skew(0.3, 0.2);
+        let skew2 = Matrix4::skew_2d(0.3, 0.2);
+        assert_eq!(skew1, skew2);
+    }
+
+    #[test]
+    fn test_matrix4_skew_transform() {
+        let skew = Matrix4::skew(0.5, 0.0);
+        let (x, y) = skew.transform_point(0.0, 10.0);
+        // With horizontal skew, y affects x: x = 0 + tan(0.5) * 10
+        assert!((x - 0.5_f32.tan() * 10.0).abs() < 0.001);
+        assert!((y - 10.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_matrix4_is_translation_only_identity() {
+        let identity = Matrix4::identity();
+        assert!(identity.is_translation_only());
+    }
+
+    #[test]
+    fn test_matrix4_is_translation_only_translate() {
+        let translate = Matrix4::translation(10.0, 20.0, 30.0);
+        assert!(translate.is_translation_only());
+    }
+
+    #[test]
+    fn test_matrix4_is_translation_only_scale() {
+        let scale = Matrix4::scaling(2.0, 3.0, 1.0);
+        assert!(!scale.is_translation_only());
+    }
+
+    #[test]
+    fn test_matrix4_is_translation_only_rotation() {
+        let rotate = Matrix4::rotation_z(0.5);
+        assert!(!rotate.is_translation_only());
+    }
+
+    #[test]
+    fn test_matrix4_is_translation_only_skew() {
+        let skew = Matrix4::skew(0.3, 0.2);
+        assert!(!skew.is_translation_only());
+    }
+
+    #[test]
+    fn test_matrix4_is_translation_only_combined() {
+        let combined = Matrix4::translation(10.0, 20.0, 0.0) * Matrix4::scaling(2.0, 2.0, 1.0);
+        assert!(!combined.is_translation_only());
+    }
+
+    #[test]
+    fn test_matrix4_is_translation_only_with_epsilon() {
+        // Create a matrix that's almost translation-only but with small errors
+        let mut m = Matrix4::translation(5.0, 10.0, 0.0);
+        m.m[1] = 1e-5; // Small rotation component (larger than default epsilon)
+
+        // Default epsilon (f32::EPSILON ~1.19e-7) should fail
+        assert!(!m.is_translation_only());
+
+        // Larger epsilon should pass
+        assert!(m.is_translation_only_with_epsilon(1e-4));
     }
 }
