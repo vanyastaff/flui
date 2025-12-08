@@ -143,7 +143,7 @@ pub use layer::{
 // RE-EXPORTS - Tree
 // ============================================================================
 
-pub use tree::{ConcreteLayerNode, LayerNode, LayerTree};
+pub use tree::{LayerNode, LayerTree};
 
 // ============================================================================
 // RE-EXPORTS - Compositor
@@ -210,7 +210,7 @@ pub mod prelude {
     pub use crate::{PlatformViewHitTestBehavior, PlatformViewId};
 
     // Core types
-    pub use crate::{ConcreteLayerNode, Layer, LayerBounds, LayerId, LayerNode, LayerTree};
+    pub use crate::{Layer, LayerBounds, LayerId, LayerNode, LayerTree};
 
     // Compositor
     pub use crate::{LinkRegistry, Scene, SceneBuilder, SceneCompositor};

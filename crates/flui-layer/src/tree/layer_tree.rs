@@ -1,10 +1,7 @@
 //! LayerTree - Slab-based storage for compositor layers
 //!
-//! This module provides the LayerTree struct and LayerNode trait
+//! This module provides the LayerTree struct and LayerNode
 //! for managing the compositor layer hierarchy.
-
-use std::any::Any;
-use std::fmt;
 
 use slab::Slab;
 
@@ -14,76 +11,10 @@ use flui_types::Offset;
 use crate::layer::Layer;
 
 // ============================================================================
-// LAYER NODE TRAIT
+// LAYER NODE
 // ============================================================================
 
-/// Type-erased interface for LayerNode operations.
-///
-/// This trait enables storing different layer types in the same Slab
-/// while preserving access to common operations.
-pub trait LayerNode: Send + Sync + fmt::Debug {
-    // ========== Tree Structure ==========
-
-    /// Gets the parent LayerId.
-    fn parent(&self) -> Option<LayerId>;
-
-    /// Sets the parent LayerId.
-    fn set_parent(&mut self, parent: Option<LayerId>);
-
-    /// Gets all children LayerIds.
-    fn children(&self) -> &[LayerId];
-
-    /// Adds a child to this layer node.
-    fn add_child(&mut self, child: LayerId);
-
-    /// Removes a child from this layer node.
-    fn remove_child(&mut self, child: LayerId);
-
-    /// Clears all children from this layer node.
-    fn clear_children(&mut self);
-
-    // ========== Layer Access ==========
-
-    /// Returns reference to the concrete Layer.
-    fn layer(&self) -> &Layer;
-
-    /// Returns mutable reference to the concrete Layer.
-    fn layer_mut(&mut self) -> &mut Layer;
-
-    // ========== Metadata ==========
-
-    /// Gets whether this layer needs compositing.
-    fn needs_compositing(&self) -> bool;
-
-    /// Sets whether this layer needs compositing.
-    fn set_needs_compositing(&mut self, needs: bool);
-
-    /// Gets the offset from parent (parent data).
-    fn offset(&self) -> Option<Offset>;
-
-    /// Sets the offset from parent.
-    fn set_offset(&mut self, offset: Option<Offset>);
-
-    /// Gets the associated ElementId (for cross-tree references).
-    fn element_id(&self) -> Option<ElementId>;
-
-    /// Sets the associated ElementId.
-    fn set_element_id(&mut self, element_id: Option<ElementId>);
-
-    // ========== Downcasting ==========
-
-    /// Downcast to Any for concrete type access.
-    fn as_any(&self) -> &dyn Any;
-
-    /// Downcast to Any (mutable) for concrete type access.
-    fn as_any_mut(&mut self) -> &mut dyn Any;
-}
-
-// ============================================================================
-// CONCRETE LAYER NODE
-// ============================================================================
-
-/// Concrete LayerNode - stores Layer directly.
+/// A node in the LayerTree that wraps a Layer with tree structure metadata.
 ///
 /// # Design
 ///
@@ -92,7 +23,7 @@ pub trait LayerNode: Send + Sync + fmt::Debug {
 /// all layer types. This simplifies the API while maintaining the same
 /// architectural pattern.
 #[derive(Debug)]
-pub struct ConcreteLayerNode {
+pub struct LayerNode {
     // ========== Tree Structure ==========
     parent: Option<LayerId>,
     children: Vec<LayerId>,
@@ -112,8 +43,8 @@ pub struct ConcreteLayerNode {
     element_id: Option<ElementId>,
 }
 
-impl ConcreteLayerNode {
-    /// Creates a new ConcreteLayerNode with the given Layer.
+impl LayerNode {
+    /// Creates a new LayerNode with the given Layer.
     pub fn new(layer: Layer) -> Self {
         Self {
             parent: None,
@@ -125,13 +56,13 @@ impl ConcreteLayerNode {
         }
     }
 
-    /// Creates a ConcreteLayerNode with an associated ElementId.
+    /// Creates a LayerNode with an associated ElementId.
     pub fn with_element_id(mut self, element_id: ElementId) -> Self {
         self.element_id = Some(element_id);
         self
     }
 
-    /// Creates a ConcreteLayerNode with an offset.
+    /// Creates a LayerNode with an offset.
     pub fn with_offset(mut self, offset: Offset) -> Self {
         self.offset = Some(offset);
         self
@@ -148,75 +79,95 @@ impl ConcreteLayerNode {
     pub fn get_layer_mut(&mut self) -> &mut Layer {
         &mut self.layer
     }
-}
 
-// ============================================================================
-// LAYER NODE IMPL
-// ============================================================================
+    // ========== Tree Structure ==========
 
-impl LayerNode for ConcreteLayerNode {
-    fn parent(&self) -> Option<LayerId> {
+    /// Gets the parent LayerId.
+    #[inline]
+    pub fn parent(&self) -> Option<LayerId> {
         self.parent
     }
 
-    fn set_parent(&mut self, parent: Option<LayerId>) {
+    /// Sets the parent LayerId.
+    #[inline]
+    pub fn set_parent(&mut self, parent: Option<LayerId>) {
         self.parent = parent;
     }
 
-    fn children(&self) -> &[LayerId] {
+    /// Gets all children LayerIds.
+    #[inline]
+    pub fn children(&self) -> &[LayerId] {
         &self.children
     }
 
-    fn add_child(&mut self, child: LayerId) {
+    /// Adds a child to this layer node.
+    #[inline]
+    pub fn add_child(&mut self, child: LayerId) {
         self.children.push(child);
     }
 
-    fn remove_child(&mut self, child: LayerId) {
+    /// Removes a child from this layer node.
+    #[inline]
+    pub fn remove_child(&mut self, child: LayerId) {
         self.children.retain(|&id| id != child);
     }
 
-    fn clear_children(&mut self) {
+    /// Clears all children from this layer node.
+    #[inline]
+    pub fn clear_children(&mut self) {
         self.children.clear();
     }
 
-    fn layer(&self) -> &Layer {
+    // ========== Layer Access ==========
+
+    /// Returns reference to the Layer.
+    #[inline]
+    pub fn layer(&self) -> &Layer {
         &self.layer
     }
 
-    fn layer_mut(&mut self) -> &mut Layer {
+    /// Returns mutable reference to the Layer.
+    #[inline]
+    pub fn layer_mut(&mut self) -> &mut Layer {
         &mut self.layer
     }
 
-    fn needs_compositing(&self) -> bool {
+    // ========== Metadata ==========
+
+    /// Gets whether this layer needs compositing.
+    #[inline]
+    pub fn needs_compositing(&self) -> bool {
         self.needs_compositing
     }
 
-    fn set_needs_compositing(&mut self, needs: bool) {
+    /// Sets whether this layer needs compositing.
+    #[inline]
+    pub fn set_needs_compositing(&mut self, needs: bool) {
         self.needs_compositing = needs;
     }
 
-    fn offset(&self) -> Option<Offset> {
+    /// Gets the offset from parent (parent data).
+    #[inline]
+    pub fn offset(&self) -> Option<Offset> {
         self.offset
     }
 
-    fn set_offset(&mut self, offset: Option<Offset>) {
+    /// Sets the offset from parent.
+    #[inline]
+    pub fn set_offset(&mut self, offset: Option<Offset>) {
         self.offset = offset;
     }
 
-    fn element_id(&self) -> Option<ElementId> {
+    /// Gets the associated ElementId (for cross-tree references).
+    #[inline]
+    pub fn element_id(&self) -> Option<ElementId> {
         self.element_id
     }
 
-    fn set_element_id(&mut self, element_id: Option<ElementId>) {
+    /// Sets the associated ElementId.
+    #[inline]
+    pub fn set_element_id(&mut self, element_id: Option<ElementId>) {
         self.element_id = element_id;
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
     }
 }
 
@@ -233,7 +184,7 @@ impl LayerNode for ConcreteLayerNode {
 ///
 /// ```text
 /// LayerTree
-///   ├─ nodes: Slab<ConcreteLayerNode>  (direct storage)
+///   ├─ nodes: Slab<LayerNode>  (direct storage)
 ///   └─ root: Option<LayerId>
 /// ```
 ///
@@ -261,7 +212,7 @@ impl LayerNode for ConcreteLayerNode {
 #[derive(Debug)]
 pub struct LayerTree {
     /// Slab storage for LayerNodes (0-based indexing internally)
-    nodes: Slab<ConcreteLayerNode>,
+    nodes: Slab<LayerNode>,
 
     /// Root LayerNode ID (None if tree is empty)
     root: Option<LayerId>,
@@ -336,14 +287,14 @@ impl LayerTree {
     /// let id = tree.insert(layer);
     /// ```
     pub fn insert(&mut self, layer: Layer) -> LayerId {
-        let node = ConcreteLayerNode::new(layer);
+        let node = LayerNode::new(layer);
         let slab_index = self.nodes.insert(node);
         LayerId::new(slab_index + 1) // +1 offset
     }
 
     /// Inserts a Layer with an associated ElementId.
     pub fn insert_with_element(&mut self, layer: Layer, element_id: ElementId) -> LayerId {
-        let node = ConcreteLayerNode::new(layer).with_element_id(element_id);
+        let node = LayerNode::new(layer).with_element_id(element_id);
         let slab_index = self.nodes.insert(node);
         LayerId::new(slab_index + 1)
     }
@@ -354,13 +305,13 @@ impl LayerTree {
     ///
     /// Applies -1 offset: `LayerId(1)` → `nodes[0]`
     #[inline]
-    pub fn get(&self, id: LayerId) -> Option<&ConcreteLayerNode> {
+    pub fn get(&self, id: LayerId) -> Option<&LayerNode> {
         self.nodes.get(id.get() - 1)
     }
 
     /// Returns a mutable reference to a LayerNode.
     #[inline]
-    pub fn get_mut(&mut self, id: LayerId) -> Option<&mut ConcreteLayerNode> {
+    pub fn get_mut(&mut self, id: LayerId) -> Option<&mut LayerNode> {
         self.nodes.get_mut(id.get() - 1)
     }
 
@@ -381,7 +332,7 @@ impl LayerTree {
     /// Returns the removed node, or None if it didn't exist.
     ///
     /// **Note:** This does NOT remove children. Caller must handle tree cleanup.
-    pub fn remove(&mut self, id: LayerId) -> Option<ConcreteLayerNode> {
+    pub fn remove(&mut self, id: LayerId) -> Option<LayerNode> {
         // Update root if removing root
         if self.root == Some(id) {
             self.root = None;
@@ -443,15 +394,15 @@ impl LayerTree {
         self.nodes.iter().map(|(index, _)| LayerId::new(index + 1))
     }
 
-    /// Returns an iterator over all (LayerId, &ConcreteLayerNode) pairs.
-    pub fn iter(&self) -> impl Iterator<Item = (LayerId, &ConcreteLayerNode)> + '_ {
+    /// Returns an iterator over all (LayerId, &LayerNode) pairs.
+    pub fn iter(&self) -> impl Iterator<Item = (LayerId, &LayerNode)> + '_ {
         self.nodes
             .iter()
             .map(|(index, node)| (LayerId::new(index + 1), node))
     }
 
-    /// Returns a mutable iterator over all (LayerId, &mut ConcreteLayerNode) pairs.
-    pub fn iter_mut(&mut self) -> impl Iterator<Item = (LayerId, &mut ConcreteLayerNode)> + '_ {
+    /// Returns a mutable iterator over all (LayerId, &mut LayerNode) pairs.
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = (LayerId, &mut LayerNode)> + '_ {
         self.nodes
             .iter_mut()
             .map(|(index, node)| (LayerId::new(index + 1), node))
@@ -606,25 +557,24 @@ mod tests {
     }
 
     #[test]
-    fn test_concrete_layer_node_with_element_id() {
+    fn test_layer_node_with_element_id() {
         let element_id = ElementId::new(42);
-        let node =
-            ConcreteLayerNode::new(Layer::Canvas(CanvasLayer::new())).with_element_id(element_id);
+        let node = LayerNode::new(Layer::Canvas(CanvasLayer::new())).with_element_id(element_id);
 
         assert_eq!(node.element_id(), Some(element_id));
     }
 
     #[test]
-    fn test_concrete_layer_node_with_offset() {
+    fn test_layer_node_with_offset() {
         let offset = Offset::new(10.0, 20.0);
-        let node = ConcreteLayerNode::new(Layer::Canvas(CanvasLayer::new())).with_offset(offset);
+        let node = LayerNode::new(Layer::Canvas(CanvasLayer::new())).with_offset(offset);
 
         assert_eq!(node.offset(), Some(offset));
     }
 
     #[test]
     fn test_layer_node_needs_compositing() {
-        let mut node = ConcreteLayerNode::new(Layer::Canvas(CanvasLayer::new()));
+        let mut node = LayerNode::new(Layer::Canvas(CanvasLayer::new()));
 
         assert!(node.needs_compositing()); // Default is true
 

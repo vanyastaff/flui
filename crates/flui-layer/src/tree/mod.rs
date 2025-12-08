@@ -7,11 +7,11 @@
 //!
 //! ```text
 //! LayerTree
-//!   ├─ nodes: Slab<LayerNodeStorage>
+//!   ├─ nodes: Slab<LayerNode>
 //!   └─ root: Option<LayerId>
 //!
-//! LayerNodeStorage
-//!   └─ ConcreteLayerNode (layer, parent, children, metadata)
+//! LayerNode
+//!   └─ layer, parent, children, metadata
 //! ```
 //!
 //! # Tree Trait Integration
@@ -36,4 +36,4 @@
 mod layer_tree;
 mod tree_traits;
 
-pub use layer_tree::{ConcreteLayerNode, LayerNode, LayerTree};
+pub use layer_tree::{LayerNode, LayerTree};

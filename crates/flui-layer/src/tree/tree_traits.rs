@@ -7,14 +7,14 @@ use flui_foundation::LayerId;
 use flui_tree::iter::{Ancestors, DescendantsWithDepth};
 use flui_tree::{TreeNav, TreeRead};
 
-use super::layer_tree::{ConcreteLayerNode, LayerNode, LayerTree};
+use super::layer_tree::{LayerNode, LayerTree};
 
 // ============================================================================
 // TREE READ IMPLEMENTATION
 // ============================================================================
 
 impl TreeRead<LayerId> for LayerTree {
-    type Node = ConcreteLayerNode;
+    type Node = LayerNode;
     type NodeIter<'a> = LayerIdIter<'a>;
 
     const DEFAULT_CAPACITY: usize = 64;
@@ -230,7 +230,7 @@ mod tests {
         let id = tree.insert(Layer::Canvas(CanvasLayer::new()));
 
         // Use TreeRead trait method
-        let node: Option<&ConcreteLayerNode> = TreeRead::get(&tree, id);
+        let node: Option<&LayerNode> = TreeRead::get(&tree, id);
         assert!(node.is_some());
     }
 
