@@ -402,16 +402,17 @@ impl PipelineOwner {
     where
         V: flui_view::StatelessView,
     {
-        use flui_element::IntoElement;
         use flui_view::IntoView;
 
         if self.root_mgr.root_id().is_some() {
             return Err(PipelineError::RootAlreadyAttached);
         }
 
-        // Convert StatelessView -> ViewObject -> Element
+        // TODO(four-tree): In the full four-tree architecture, we'd insert ViewObject into ViewTree
+        // and create Element with that ViewId. For now, create empty element as stub.
         let view_object = flui_view::Stateless(widget).into_view();
-        let element = view_object.into_element();
+        let mode = view_object.mode();
+        let element = Element::view(None, mode);
         Ok(self.set_root(element))
     }
 

@@ -1297,11 +1297,15 @@ impl BuildPipeline {
         };
 
         // Stage 3: Convert View to Element and reconcile
-        // For now we need to convert the View to Element
-        // In the full four-tree architecture, we'd insert into ViewTree directly
-        let new_element = {
-            use flui_element::IntoElement;
-            new_view.into_element()
+        // TODO(four-tree): In the full four-tree architecture, we'd insert ViewObject into ViewTree
+        // and create Element with that ViewId. For now, create empty element as stub.
+        let new_element = match new_view {
+            Some(view_obj) => {
+                // TEMPORARY: Create element with None view_id until ViewTree integration is complete
+                let mode = view_obj.mode();
+                Element::view(None, mode)
+            }
+            None => Element::empty(),
         };
 
         // Stage 4: Reconcile with old child
