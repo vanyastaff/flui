@@ -52,6 +52,7 @@ use parking_lot::RwLock;
 use flui_element::{BuildOwner, Element, ElementTree};
 use flui_foundation::ElementId;
 use flui_pipeline::DirtySet;
+use flui_view::tree::ViewNode;
 
 use super::pipeline_context::PipelineBuildContext;
 
@@ -1042,13 +1043,20 @@ impl BuildPipeline {
         };
 
         // Stage 3: Convert View to Element and reconcile
-        // TODO(four-tree): In the full four-tree architecture, we'd insert ViewObject into ViewTree
-        // and create Element with that ViewId. For now, create empty element as stub.
+        // Four-tree architecture: Insert ViewObject into ViewTree, then create Element with ViewId
         let new_element = match new_view {
             Some(view_obj) => {
-                // TEMPORARY: Create element with None view_id until ViewTree integration is complete
                 let mode = view_obj.mode();
-                Element::view(None, mode)
+
+                // Insert ViewObject into ViewTree
+                let view_id = {
+                    let mut coord = coordinator.write();
+                    let view_node = ViewNode::from_boxed(view_obj, mode);
+                    coord.views_mut().insert(view_node)
+                };
+
+                // Create Element with ViewId reference
+                Element::view(Some(view_id), mode)
             }
             None => Element::empty(),
         };
