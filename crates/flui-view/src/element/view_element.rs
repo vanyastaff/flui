@@ -42,7 +42,6 @@ use super::flags::{AtomicViewFlags, ViewFlags};
 use super::lifecycle::ViewLifecycle;
 use crate::tree::ViewId;
 use crate::view_mode::ViewMode;
-use crate::view_object::ViewObject;
 
 /// Type-erased pending children storage.
 ///

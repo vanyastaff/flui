@@ -24,7 +24,7 @@
 //! ```
 
 use flui_foundation::ElementId;
-use flui_tree::{TreeNav, TreeRead};
+use flui_tree::TreeNav;
 use std::collections::HashSet;
 
 /// Trait alias for trees that use ElementId.
@@ -404,6 +404,7 @@ impl SnapshotDiff {
 /// This is useful for displaying breadcrumbs or understanding
 /// the hierarchical position of a node.
 pub struct AncestorView<'a, T: TreeNav<ElementId>> {
+    #[allow(dead_code)]
     tree: &'a T,
     target: ElementId,
     path: Vec<ElementId>,
@@ -474,6 +475,7 @@ impl<T: TreeNav<ElementId>> std::fmt::Debug for AncestorView<'_, T> {
 
 /// A view of siblings (nodes with the same parent).
 pub struct SiblingView<'a, T: TreeNav<ElementId>> {
+    #[allow(dead_code)]
     tree: &'a T,
     element: ElementId,
     siblings: Vec<ElementId>,

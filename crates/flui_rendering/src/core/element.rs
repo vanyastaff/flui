@@ -75,7 +75,6 @@ use flui_types::{Offset, Size, SliverGeometry};
 
 use super::flags::AtomicRenderFlags;
 use super::lifecycle::RenderLifecycle;
-use super::object::RenderObject;
 use super::parent_data::ParentData;
 use super::protocol::{BoxProtocol, Protocol, ProtocolId, SliverProtocol};
 use super::state::RenderState;
@@ -728,9 +727,9 @@ impl RenderElement {
     /// ```
     pub fn layout(
         &mut self,
-        id: ElementId,
+        _id: ElementId,
         constraints: Constraints,
-        tree: &mut dyn LayoutTree,
+        _tree: &mut dyn LayoutTree,
     ) -> RenderResult<Geometry> {
         // Verify protocol match
         if constraints.protocol() != self.protocol {
@@ -776,11 +775,11 @@ impl RenderElement {
     /// the element's protocol.
     pub fn paint(
         &self,
-        id: ElementId,
-        offset: Offset,
+        _id: ElementId,
+        _offset: Offset,
         geometry: &Geometry,
-        canvas: &mut super::Canvas,
-        tree: &mut dyn PaintTree,
+        _canvas: &mut super::Canvas,
+        _tree: &mut dyn PaintTree,
     ) -> RenderResult<()> {
         // Verify geometry matches protocol
         if geometry.protocol() != self.protocol {

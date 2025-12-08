@@ -415,54 +415,6 @@ pub trait RenderTreeExt: RenderTreeAccess {
     }
 
     // ========================================================================
-    // LEGACY METHODS (for backwards compatibility)
-    // ========================================================================
-
-    /// Finds the nearest render ancestor of an element.
-    ///
-    /// This is an alias for `render_parent()` for backwards compatibility.
-    #[inline]
-    fn render_ancestor(&self, id: ElementId) -> Option<ElementId>
-    where
-        Self: Sized,
-    {
-        self.render_parent(id)
-    }
-
-    /// Finds all render children of an element (allocates).
-    ///
-    /// Prefer `render_children_iter()` when you don't need random access.
-    #[inline]
-    fn render_children(&self, id: ElementId) -> Vec<ElementId>
-    where
-        Self: Sized,
-    {
-        self.render_children_iter(id).collect()
-    }
-
-    /// Returns an iterator over render ancestors.
-    ///
-    /// Alias for `render_ancestors_iter()` for backwards compatibility.
-    #[inline]
-    fn render_ancestors(&self, id: ElementId) -> super::iter::RenderAncestors<'_, Self>
-    where
-        Self: Sized,
-    {
-        self.render_ancestors_iter(id)
-    }
-
-    /// Returns an iterator over render descendants.
-    ///
-    /// Alias for `render_descendants_iter()` for backwards compatibility.
-    #[inline]
-    fn render_descendants(&self, id: ElementId) -> super::iter::RenderDescendants<'_, Self>
-    where
-        Self: Sized,
-    {
-        self.render_descendants_iter(id)
-    }
-
-    // ========================================================================
     // BATCH OPERATIONS
     // ========================================================================
 
@@ -546,14 +498,6 @@ impl<T: RenderTreeAccess + ?Sized> RenderTreeExt for T {}
 // ============================================================================
 // RENDER CHILD ACCESSOR - TYPE STATE PATTERN
 // ============================================================================
-
-// Re-export Multi as alias for Variable for backwards compatibility
-/// Marker type for multi-child render objects (any number of children).
-///
-/// This is a deprecated alias for [`Variable`] from the unified arity system.
-/// Use [`Variable`] directly instead.
-#[deprecated(since = "0.2.0", note = "Use `Variable` directly instead of `Multi`")]
-pub type Multi = Variable;
 
 /// A typed accessor for render children with compile-time arity guarantees.
 ///

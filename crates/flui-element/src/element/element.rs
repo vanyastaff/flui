@@ -25,7 +25,6 @@ use flui_view::{PendingChildren, ViewLifecycle, ViewMode};
 use flui_rendering::core::{ProtocolId, RenderElement, RenderLifecycle};
 
 use super::{ElementLifecycle, ViewElement};
-use crate::ViewObject;
 
 // ============================================================================
 // LIFECYCLE CONVERSION HELPERS
@@ -853,7 +852,7 @@ impl BuildContext for Element {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::BuildContext;
+    use crate::{BuildContext, ViewObject};
 
     // Test view object type
     #[derive(Debug)]
