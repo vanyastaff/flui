@@ -4,12 +4,15 @@
 //!
 //! ```text
 //! PipelineOwner (facade)
-//!   ├─ tree: Arc<RwLock<ElementTree>>
-//!   ├─ coordinator: FrameCoordinator
-//!   │   ├─ build: BuildPipeline
-//!   │   ├─ layout: LayoutPipeline
-//!   │   └─ paint: PaintPipeline
-//!   └─ root_mgr: RootManager
+//!   ├─ tree_coord: TreeCoordinator (Four-tree architecture)
+//!   │   ├─ views: ViewTree
+//!   │   ├─ elements: ElementTree
+//!   │   ├─ render_objects: RenderTree
+//!   │   └─ layers: LayerTree
+//!   └─ coordinator: FrameCoordinator
+//!       ├─ build: BuildPipeline
+//!       ├─ layout: LayoutPipeline
+//!       └─ paint: PaintPipeline
 //! ```
 
 // =============================================================================
@@ -28,7 +31,6 @@ mod pipeline_owner;
 pub mod pipeline_context;
 mod pipeline_trait;
 mod rebuild_queue;
-mod root_manager;
 mod tree_coordinator; // Four-tree architecture coordinator
 
 // =============================================================================
@@ -78,7 +80,6 @@ pub use pipeline_features::{HitTestCache, PipelineFeatures};
 pub use pipeline_owner::PipelineOwner;
 pub use pipeline_trait::Pipeline;
 pub use rebuild_queue::RebuildQueue;
-pub use root_manager::RootManager;
 pub use tree_coordinator::TreeCoordinator; // Four-tree architecture coordinator
 
 // Alias for backward compatibility
