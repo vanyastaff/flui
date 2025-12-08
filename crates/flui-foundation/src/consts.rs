@@ -42,14 +42,6 @@ pub const DEBUG_MODE: bool = cfg!(debug_assertions);
 /// production-only optimizations.
 pub const RELEASE_MODE: bool = !cfg!(debug_assertions);
 
-/// True when compiling with the "profile" feature enabled.
-///
-/// Profile mode is typically used for performance profiling where
-/// some debug information is retained but optimizations are enabled.
-///
-/// Enable with: `cargo build --features profile`
-pub const PROFILE_MODE: bool = cfg!(feature = "profile");
-
 /// True when compiling for WebAssembly targets.
 ///
 /// Use this to gate web-specific code paths.

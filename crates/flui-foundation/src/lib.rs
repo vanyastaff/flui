@@ -162,7 +162,7 @@ pub use slot::Slot;
 // Constants
 pub use consts::{
     approx_equal, approx_equal_f32, is_near_zero, is_near_zero_f32, DEBUG_MODE, EPSILON,
-    EPSILON_F32, IS_DESKTOP, IS_MOBILE, IS_WEB, PROFILE_MODE, RELEASE_MODE,
+    EPSILON_F32, IS_DESKTOP, IS_MOBILE, IS_WEB, RELEASE_MODE,
 };
 
 // Assertions and error handling
@@ -262,7 +262,6 @@ pub mod prelude {
         IS_DESKTOP,
         IS_MOBILE,
         IS_WEB,
-        PROFILE_MODE,
         RELEASE_MODE,
     };
 

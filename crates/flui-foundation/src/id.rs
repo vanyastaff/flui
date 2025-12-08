@@ -1,5 +1,9 @@
 //! Type-safe IDs for all tree levels
 //!
+// Allow unsafe code in this module - it's required for NonZeroUsize::new_unchecked
+// which provides a const unsafe constructor for performance-critical ID creation.
+#![allow(unsafe_code)]
+//!
 //! Flui uses a 5-tree architecture similar to Flutter:
 //! - **View**: Immutable configuration (like Flutter's Widget)
 //! - **Element**: Mutable lifecycle management

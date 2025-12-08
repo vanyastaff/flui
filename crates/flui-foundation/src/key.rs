@@ -1,5 +1,9 @@
 //! View keys for element identity and reconciliation
 //!
+// Allow unsafe code in this module - it's required for NonZeroU64::new_unchecked
+// and unsafe Send/Sync implementations for ObjectKey.
+#![allow(unsafe_code)]
+//!
 //! This module provides key types for view identity tracking:
 //!
 //! # Simple Keys (Copy, lightweight)
