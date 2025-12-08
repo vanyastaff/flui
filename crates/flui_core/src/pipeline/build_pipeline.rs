@@ -51,7 +51,7 @@ use parking_lot::RwLock;
 
 use flui_element::{BuildOwner, Element, ElementTree};
 use flui_foundation::ElementId;
-use flui_pipeline::context::PipelineBuildContext;
+use super::pipeline_context::PipelineBuildContext;
 use flui_pipeline::DirtySet;
 
 /// Element type classification for rebuild dispatch
@@ -166,7 +166,7 @@ pub struct BuildPipeline {
     /// Rebuild queue for deferred rebuilds from signals
     rebuild_queue: super::RebuildQueue,
     /// Dirty set for scheduling rebuilds (shared with PipelineBuildContext)
-    dirty_set: Arc<parking_lot::RwLock<DirtySet>>,
+    dirty_set: Arc<parking_lot::RwLock<DirtySet<ElementId>>>,
 }
 
 impl BuildPipeline {
@@ -178,7 +178,7 @@ impl BuildPipeline {
             build_owner: BuildOwner::new(),
             batcher: None,
             rebuild_queue,
-            dirty_set: Arc::new(parking_lot::RwLock::new(DirtySet::new())),
+            dirty_set: Arc::new(parking_lot::RwLock::new(DirtySet::<ElementId>::new())),
         }
     }
 
@@ -198,7 +198,7 @@ impl BuildPipeline {
     }
 
     /// Get the dirty set for use with PipelineBuildContext
-    pub fn dirty_set(&self) -> Arc<parking_lot::RwLock<DirtySet>> {
+    pub fn dirty_set(&self) -> Arc<parking_lot::RwLock<DirtySet<ElementId>>> {
         self.dirty_set.clone()
     }
 
@@ -710,7 +710,7 @@ impl BuildPipeline {
         old_child_id: Option<ElementId>,
         new_element: Option<Element>,
         tree_arc: &Arc<RwLock<ElementTree>>,
-        dirty_set: &Arc<RwLock<DirtySet>>,
+        dirty_set: &Arc<RwLock<DirtySet<ElementId>>>,
     ) {
         match (old_child_id, new_element) {
             // Both old and new exist - check if we can reuse

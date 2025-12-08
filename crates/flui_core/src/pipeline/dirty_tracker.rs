@@ -12,7 +12,7 @@ use flui_pipeline::LockFreeDirtySet;
 /// LayoutPipeline and PaintPipeline to avoid code duplication.
 #[derive(Debug, Default)]
 pub struct DirtyTracker {
-    dirty: LockFreeDirtySet,
+    dirty: LockFreeDirtySet<ElementId>,
 }
 
 impl DirtyTracker {
@@ -73,7 +73,7 @@ impl DirtyTracker {
 
     /// Returns a reference to the underlying dirty set.
     #[inline]
-    pub fn inner(&self) -> &LockFreeDirtySet {
+    pub fn inner(&self) -> &LockFreeDirtySet<ElementId> {
         &self.dirty
     }
 }

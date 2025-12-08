@@ -25,6 +25,7 @@ mod parallel_build;
 mod pipeline_builder;
 mod pipeline_features;
 mod pipeline_owner;
+pub mod pipeline_context;
 mod pipeline_trait;
 mod rebuild_queue;
 mod root_manager;
@@ -35,9 +36,6 @@ mod tree_coordinator; // Four-tree architecture coordinator
 // =============================================================================
 
 pub use flui_pipeline::{
-    current_build_context,
-    has_build_context,
-    with_build_context,
     BatchedExecution,
     // Phase traits
     BuildPhase,
@@ -55,9 +53,6 @@ pub use flui_pipeline::{
     PhaseContext,
     PhaseResult,
 
-    PipelineBuildContext as BuildContext,
-    // Build context
-    PipelineBuildContext,
     PipelineCoordinator,
     // Errors (canonical location!)
     PipelineError,

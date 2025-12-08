@@ -104,7 +104,7 @@ pub mod render {
 // Re-exports from flui-pipeline
 // =============================================================================
 
-pub use flui_pipeline::context::PipelineBuildContext;
+pub use pipeline::pipeline_context::PipelineBuildContext;
 
 // =============================================================================
 // Re-exports from this crate's pipeline module
