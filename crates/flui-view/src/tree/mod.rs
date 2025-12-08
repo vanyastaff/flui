@@ -8,7 +8,10 @@ mod view_tree;
 // View-specific tree utilities (moved from flui-tree)
 pub mod snapshot;
 
-pub use view_tree::{ConcreteViewNode, ViewId, ViewNode, ViewTree};
+pub use view_tree::{ViewNode, ViewTree};
+
+// Re-export ViewId from flui-foundation for convenience
+pub use flui_foundation::ViewId;
 
 // Re-export snapshot types
 pub use snapshot::{

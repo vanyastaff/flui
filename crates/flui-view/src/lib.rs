@@ -128,7 +128,7 @@ pub use flui_foundation::{
 pub use element::{AtomicViewFlags, PendingChildren, ViewElement, ViewFlags, ViewLifecycle};
 
 // Tree types (ViewTree, ViewNode, ViewId)
-pub use tree::{ConcreteViewNode, ViewId, ViewNode, ViewTree};
+pub use tree::{ViewId, ViewNode, ViewTree};
 
 // ============================================================================
 // PRELUDE
