@@ -77,11 +77,11 @@ pub trait RenderTreeStorage: TreeRead + TreeNav + RenderTreeAccess {}
 /// `RenderTree<T>` takes ownership of a storage type (like `ElementTree`)
 /// and provides implementations of `LayoutTree`, `PaintTree`, and `HitTestTree`.
 ///
-/// # Four-Tree Architecture
+/// # Direct Ownership Architecture
 ///
-/// This wrapper coordinates between:
-/// - `storage`: ElementTree (stores Elements with ViewId/RenderId references)
-/// - `render_objects`: RenderTree (stores actual RenderObjects)
+/// Following Flutter's pattern, RenderElements directly own their RenderObjects:
+/// - `storage`: ElementTree (stores RenderElements which own Box<dyn RenderObject>)
+/// - No separate RenderTree needed - direct ownership is simpler and type-safe
 ///
 /// # Type Parameters
 ///
@@ -100,15 +100,12 @@ pub trait RenderTreeStorage: TreeRead + TreeNav + RenderTreeAccess {}
 /// - No additional allocations during layout/paint (except dirty sets)
 #[derive(Debug)]
 pub struct RenderTree<T: RenderTreeStorage> {
-    /// Underlying storage (e.g., ElementTree) - stores Elements
-    storage: T,
-
-    /// Separate RenderObject tree (four-tree architecture)
+    /// Underlying storage (e.g., ElementTree)
     ///
-    /// Elements in `storage` hold RenderId references. The actual RenderObjects
-    /// are stored here. This matches Flutter's architecture where Elements and
-    /// RenderObjects are in separate trees.
-    render_objects: crate::tree::RenderTree,
+    /// The storage T owns the RenderObjects! Access via `T::render_object()`
+    /// through the `RenderTreeAccess` trait. This makes RenderTree<T> fully
+    /// generic - it works with ANY storage that implements RenderTreeStorage.
+    storage: T,
 
     /// Elements that need layout in the next frame.
     /// Flutter equivalent: `PipelineOwner._nodesNeedingLayout`
@@ -134,20 +131,26 @@ pub struct RenderTree<T: RenderTreeStorage> {
 impl<T: RenderTreeStorage> RenderTree<T> {
     /// Creates a new RenderTree wrapping the given storage.
     ///
-    /// # Four-Tree Architecture
+    /// # Fully Generic Design
     ///
-    /// Creates both the Element storage (T) and the separate RenderObject tree.
+    /// `RenderTree<T>` is fully generic - it works with ANY storage type `T`
+    /// that implements `RenderTreeStorage`. The storage owns the RenderObjects,
+    /// accessed via `T::render_object()`.
     ///
     /// # Example
     ///
     /// ```rust,ignore
+    /// // With ElementTree (production)
     /// let element_tree = ElementTree::new();
     /// let render_tree = RenderTree::new(element_tree);
+    ///
+    /// // With MockTree (testing)
+    /// let mock_tree = MockTree::new();
+    /// let render_tree = RenderTree::new(mock_tree);  // Also works!
     /// ```
     pub fn new(storage: T) -> Self {
         Self {
             storage,
-            render_objects: crate::tree::RenderTree::new(),
             needs_layout: HashSet::new(),
             needs_paint: HashSet::new(),
             needs_compositing: HashSet::new(),
@@ -161,7 +164,6 @@ impl<T: RenderTreeStorage> RenderTree<T> {
     pub fn with_capacity(storage: T, capacity: usize) -> Self {
         Self {
             storage,
-            render_objects: crate::tree::RenderTree::with_capacity(capacity),
             needs_layout: HashSet::with_capacity(capacity),
             needs_paint: HashSet::with_capacity(capacity),
             needs_compositing: HashSet::with_capacity(capacity),
@@ -169,23 +171,11 @@ impl<T: RenderTreeStorage> RenderTree<T> {
         }
     }
 
-    /// Unwraps the RenderTree, returning the underlying storage and RenderObject tree.
+    /// Unwraps the RenderTree, returning the underlying storage.
     ///
-    /// Returns (storage, render_objects).
-    pub fn into_inner(self) -> (T, crate::tree::RenderTree) {
-        (self.storage, self.render_objects)
-    }
-
-    /// Returns a reference to the RenderObject tree.
-    #[inline]
-    pub fn render_objects(&self) -> &crate::tree::RenderTree {
-        &self.render_objects
-    }
-
-    /// Returns a mutable reference to the RenderObject tree.
-    #[inline]
-    pub fn render_objects_mut(&mut self) -> &mut crate::tree::RenderTree {
-        &mut self.render_objects
+    /// RenderObjects are owned by the storage, so they're returned with it.
+    pub fn into_inner(self) -> T {
+        self.storage
     }
 }
 
@@ -440,36 +430,15 @@ impl<T: RenderTreeStorage> LayoutTree for RenderTree<T> {
                 (*self_ptr).perform_layout(child_id, child_constraints)
             };
 
-            // Get RenderElement from storage to access RenderId
+            // Get RenderElement from storage - it directly owns the RenderObject
             let render_element = self
                 .storage
                 .render_object_mut(id)
                 .and_then(|obj| obj.downcast_mut::<crate::core::RenderElement>())
                 .ok_or_else(|| RenderError::not_render_element(id))?;
 
-            // Four-tree architecture: Access RenderObject via RenderTree
-            let render_id = render_element
-                .render_id()
-                .ok_or_else(|| {
-                    RenderError::Layout(format!(
-                        "Element {:?} has no RenderId - RenderObject not in RenderTree",
-                        id
-                    ))
-                })?;
-
-            // Get RenderNode from separate RenderTree
-            let render_node = self
-                .render_objects
-                .get_mut(render_id)
-                .ok_or_else(|| {
-                    RenderError::Layout(format!(
-                        "RenderId {:?} not found in RenderTree for element {:?}",
-                        render_id, id
-                    ))
-                })?;
-
-            // Call perform_layout on the RenderObject
-            let size = render_node
+            // Direct ownership: Call perform_layout on the owned RenderObject
+            let size = render_element
                 .render_object_mut()
                 .perform_layout(id, constraints, &mut layout_child)?;
 

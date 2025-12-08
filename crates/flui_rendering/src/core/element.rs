@@ -68,6 +68,7 @@
 //! ```
 
 use std::fmt;
+use std::marker::PhantomData;
 
 use flui_foundation::ElementId;
 use flui_tree::RuntimeArity;
@@ -80,7 +81,6 @@ use super::parent_data::ParentData;
 use super::protocol::{BoxProtocol, Protocol, ProtocolId, SliverProtocol};
 use super::state::RenderState;
 use super::{BoxConstraints, SliverConstraints};
-use crate::tree::RenderId;
 
 // ============================================================================
 // PROTOCOL STATE (Type-Erased RenderState)
@@ -176,7 +176,18 @@ impl<P: Protocol> ProtocolState for RenderState<P> {
 /// // Unmount when removed
 /// element.unmount(tree);
 /// ```
-pub struct RenderElement {
+/// Generic RenderElement - Zero-cost abstraction with compile-time type safety.
+///
+/// # Generic Parameters
+///
+/// - `R`: Concrete RenderObject type (no `dyn`!)
+/// - `P`: Protocol type (BoxProtocol or SliverProtocol)
+///
+/// Benefits of generic design:
+/// - **Zero-cost**: No vtable, fully monomorphized
+/// - **Type-safe**: Compile-time checking
+/// - **Fast**: Inlining and optimizations
+pub struct RenderElement<R: RenderObject, P: Protocol> {
     // ========== Identity ==========
     /// This element's ID (set during mount).
     id: Option<ElementId>,
@@ -190,56 +201,41 @@ pub struct RenderElement {
     /// Depth in tree (0 for root).
     depth: usize,
 
-    // ========== Render Object ==========
-    /// Reference into RenderTree (four-tree architecture).
+    // ========== Render Object (GENERIC - NO DYN!) ==========
+    /// The RenderObject owned by this element.
     ///
-    /// The actual RenderObject is stored in RenderTree, and this element just holds the ID.
-    /// Access the RenderObject through RenderTree.get(render_id).
-    render_id: Option<RenderId>,
-
-    /// Protocol (Box or Sliver).
-    protocol: ProtocolId,
+    /// Generic type R is known at compile time - zero-cost abstraction!
+    render_object: R,
 
     /// Runtime arity (child count validation).
     arity: RuntimeArity,
 
-    // ========== Render State (Protocol-specific) ==========
-    /// Protocol-specific state (geometry, constraints, flags, offset).
+    // ========== Render State (GENERIC - NO DYN!) ==========
+    /// Protocol-specific state.
     ///
-    /// This is Box<dyn ProtocolState> to allow Box or Sliver protocol.
-    /// Contains:
-    /// - AtomicRenderFlags (lock-free dirty tracking)
-    /// - OnceCell<Geometry> (Size or SliverGeometry)
-    /// - OnceCell<Constraints> (BoxConstraints or SliverConstraints)
-    /// - AtomicOffset (paint position)
-    ///
-    /// Why type-erased? RenderElement needs to work with both protocols
-    /// without being generic over Protocol (would infect entire tree).
-    state: Box<dyn ProtocolState>,
+    /// Generic type P determines state at compile time.
+    state: RenderState<P>,
 
     // ========== Lifecycle ==========
     /// Current lifecycle state.
     lifecycle: RenderLifecycle,
 
     // ========== ParentData ==========
-    /// Parent data set by parent (for positioning, flex, etc).
-    ///
-    /// Flutter: setupParentData() called by parent on child
+    /// Parent data set by parent.
     parent_data: Option<Box<dyn ParentData>>,
 
     // ========== Debug ==========
-    /// Debug name for diagnostics.
+    /// Debug name.
     debug_name: Option<&'static str>,
 }
 
-impl fmt::Debug for RenderElement {
+impl<R: RenderObject, P: Protocol> fmt::Debug for RenderElement<R, P> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RenderElement")
             .field("id", &self.id)
             .field("parent", &self.parent)
             .field("children_count", &self.children.len())
             .field("depth", &self.depth)
-            .field("protocol", &self.protocol)
             .field("arity", &self.arity)
             .field("offset", &self.state.offset())
             .field("lifecycle", &self.lifecycle)
@@ -253,37 +249,32 @@ impl fmt::Debug for RenderElement {
 // CONSTRUCTION
 // ============================================================================
 
-impl RenderElement {
-    /// Creates new RenderElement with a RenderId reference.
+impl<R: RenderObject, P: Protocol> RenderElement<R, P> {
+    /// Creates new generic RenderElement with zero-cost abstraction.
     ///
     /// Element starts in Detached state and must be mounted to tree.
     ///
-    /// # Four-Tree Architecture
+    /// # Generic Design
     ///
-    /// The RenderObject should be inserted into RenderTree first to obtain the RenderId:
+    /// Type parameters R and P are known at compile time - no runtime overhead!
     ///
     /// ```rust,ignore
-    /// // 1. Insert RenderObject into RenderTree
-    /// let render_id = render_tree.insert(my_render_object, RuntimeArity::Exact(0));
+    /// // Create concrete RenderObject
+    /// let render_object = RenderPadding::new(EdgeInsets::all(8.0));
     ///
-    /// // 2. Create RenderElement with the RenderId
-    /// let element = RenderElement::new(Some(render_id), ProtocolId::Box, RuntimeArity::Exact(0));
+    /// // Create generic RenderElement - types inferred!
+    /// let element: RenderElement<RenderPadding, BoxProtocol> =
+    ///     RenderElement::new(render_object, RuntimeArity::Exact(1));
     /// ```
-    pub fn new(render_id: Option<RenderId>, protocol: ProtocolId, arity: RuntimeArity) -> Self {
-        let state: Box<dyn ProtocolState> = match protocol {
-            ProtocolId::Box => Box::new(RenderState::<BoxProtocol>::new()),
-            ProtocolId::Sliver => Box::new(RenderState::<SliverProtocol>::new()),
-        };
-
+    pub fn new(render_object: R, arity: RuntimeArity) -> Self {
         Self {
             id: None,
             parent: None,
             children: Vec::new(),
             depth: 0,
-            render_id,
-            protocol,
+            render_object,
             arity,
-            state,
+            state: RenderState::<P>::new(),
             lifecycle: RenderLifecycle::Detached,
             parent_data: None,
             debug_name: None,
@@ -301,7 +292,7 @@ impl RenderElement {
 // LIFECYCLE (Flutter RenderObjectElement)
 // ============================================================================
 
-impl RenderElement {
+impl<R: RenderObject, P: Protocol> RenderElement<R, P> {
     /// Mounts element to tree.
     ///
     /// Flutter equivalent: `mount(Element? parent, Object? newSlot)`
@@ -450,7 +441,7 @@ impl RenderElement {
 // PARENT DATA MANAGEMENT (Flutter setupParentData)
 // ============================================================================
 
-impl RenderElement {
+impl<R: RenderObject, P: Protocol> RenderElement<R, P> {
     /// Sets up parent data for this child.
     ///
     /// Flutter equivalent: `RenderObject.setupParentData(RenderObject child)`
@@ -557,7 +548,7 @@ impl RenderElement {
 // IDENTITY & TREE NAVIGATION
 // ============================================================================
 
-impl RenderElement {
+impl<R: RenderObject, P: Protocol> RenderElement<R, P> {
     /// Returns element ID.
     #[inline]
     pub fn id(&self) -> Option<ElementId> {
@@ -626,31 +617,24 @@ impl RenderElement {
 }
 
 // ============================================================================
-// RENDER ID ACCESS (New Four-Tree Architecture)
+// RENDER OBJECT ACCESS (Direct Ownership Pattern)
 // ============================================================================
 
-impl RenderElement {
-    /// Gets the RenderId reference into RenderTree.
+impl<R: RenderObject, P: Protocol> RenderElement<R, P> {
+    /// Gets an immutable reference to the owned RenderObject.
     ///
-    /// This is the preferred way to access the RenderObject in the new four-tree architecture.
-    /// The actual RenderObject is stored in RenderTree, and this element just holds the ID.
+    /// Returns the concrete type R - zero-cost, no dynamic dispatch!
     #[inline]
-    pub fn render_id(&self) -> Option<RenderId> {
-        self.render_id
+    pub fn render_object(&self) -> &R {
+        &self.render_object
     }
 
-    /// Sets the RenderId reference.
+    /// Gets a mutable reference to the owned RenderObject.
     ///
-    /// This should be called when the RenderObject is inserted into RenderTree.
+    /// Returns the concrete type R - used during layout, paint, hit-testing.
     #[inline]
-    pub fn set_render_id(&mut self, render_id: Option<RenderId>) {
-        self.render_id = render_id;
-    }
-
-    /// Returns true if this element has a RenderId reference.
-    #[inline]
-    pub fn has_render_id(&self) -> bool {
-        self.render_id.is_some()
+    pub fn render_object_mut(&mut self) -> &mut R {
+        &mut self.render_object
     }
 }
 
@@ -658,11 +642,16 @@ impl RenderElement {
 // PROTOCOL & ARITY
 // ============================================================================
 
-impl RenderElement {
-    /// Returns protocol.
+impl<R: RenderObject, P: Protocol> RenderElement<R, P> {
+    /// Returns protocol ID.
+    ///
+    /// Protocol is now part of the type (P), so this is a compile-time constant!
     #[inline]
-    pub fn protocol(&self) -> ProtocolId {
-        self.protocol
+    pub fn protocol(&self) -> ProtocolId
+    where
+        P::Constraints: super::ProtocolIdentifier,
+    {
+        P::Constraints::protocol_id()
     }
 
     /// Returns runtime arity.
@@ -692,7 +681,7 @@ use super::unified::{Constraints, Geometry};
 use super::tree::{LayoutTree, PaintTree};
 use crate::{RenderError, RenderResult};
 
-impl RenderElement {
+impl<R: RenderObject, P: Protocol> RenderElement<R, P> {
     /// Unified layout method that handles both Box and Sliver protocols.
     ///
     /// This method dispatches to the appropriate RenderObject layout method based on
@@ -814,7 +803,7 @@ impl RenderElement {
 // LAYOUT CACHE
 // ============================================================================
 
-impl RenderElement {
+impl<R: RenderObject, P: Protocol> RenderElement<R, P> {
     /// Returns computed size (Box protocol).
     ///
     /// Returns `Size::ZERO` if not a Box protocol or not yet laid out.
@@ -901,7 +890,7 @@ impl RenderElement {
 // DIRTY FLAGS (Flutter-style)
 // ============================================================================
 
-impl RenderElement {
+impl<R: RenderObject, P: Protocol> RenderElement<R, P> {
     /// Returns the render flags.
     #[inline]
     fn flags(&self) -> &AtomicRenderFlags {
@@ -1024,7 +1013,7 @@ impl RenderElement {
 // LIFECYCLE STATE
 // ============================================================================
 
-impl RenderElement {
+impl<R: RenderObject, P: Protocol> RenderElement<R, P> {
     /// Returns current lifecycle state.
     #[inline]
     pub fn lifecycle(&self) -> RenderLifecycle {
@@ -1072,7 +1061,7 @@ impl RenderElement {
 // DEBUG
 // ============================================================================
 
-impl RenderElement {
+impl<R: RenderObject, P: Protocol> RenderElement<R, P> {
     /// Returns debug name.
     pub fn debug_name(&self) -> &'static str {
         self.debug_name.unwrap_or("RenderElement")
@@ -1096,28 +1085,80 @@ impl RenderElement {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_types::EdgeInsets;
+
+    // Mock RenderObject for testing
+    #[derive(Debug)]
+    struct MockRenderObject {
+        size: Size,
+    }
+
+    impl MockRenderObject {
+        fn new() -> Self {
+            Self {
+                size: Size::new(100.0, 100.0),
+            }
+        }
+    }
+
+    impl RenderObject for MockRenderObject {
+        fn perform_layout(
+            &mut self,
+            _id: ElementId,
+            _constraints: BoxConstraints,
+            _layout_child: &mut dyn FnMut(ElementId, BoxConstraints) -> Result<Size, crate::error::RenderError>,
+        ) -> Result<Size, crate::error::RenderError> {
+            Ok(self.size)
+        }
+
+        fn paint(
+            &self,
+            _id: ElementId,
+            _offset: Offset,
+            _canvas: &mut super::Canvas,
+            _paint_child: &mut dyn FnMut(ElementId),
+        ) {
+            // No-op for mock
+        }
+
+        fn hit_test(
+            &self,
+            _id: ElementId,
+            _result: &mut super::HitTestResult,
+            _position: Offset,
+        ) -> bool {
+            false
+        }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
+    }
 
     #[test]
     fn test_new_element() {
-        // Mock RenderId (in real usage, this comes from RenderTree)
-        let render_id = RenderId::new(1);
+        // Create mock RenderObject
+        let render_object: Box<dyn RenderObject> = Box::new(MockRenderObject::new());
         let element = RenderElement::new(
-            Some(render_id),
+            render_object,
             ProtocolId::Box,
             RuntimeArity::Exact(0),
         );
 
-        assert!(element.has_render_id());
-        assert_eq!(element.render_id(), Some(render_id));
         assert!(element.is_detached());
         assert_eq!(element.child_count(), 0);
+        assert_eq!(element.protocol(), ProtocolId::Box);
     }
 
     #[test]
     fn test_mount_unmount() {
-        let render_id = RenderId::new(1);
+        let render_object: Box<dyn RenderObject> = Box::new(MockRenderObject::new());
         let mut element = RenderElement::new(
-            Some(render_id),
+            render_object,
             ProtocolId::Box,
             RuntimeArity::Exact(0),
         );
@@ -1137,9 +1178,9 @@ mod tests {
 
     #[test]
     fn test_children() {
-        let render_id = RenderId::new(1);
+        let render_object: Box<dyn RenderObject> = Box::new(MockRenderObject::new());
         let mut element = RenderElement::new(
-            Some(render_id),
+            render_object,
             ProtocolId::Box,
             RuntimeArity::Exact(0),
         );
@@ -1159,9 +1200,9 @@ mod tests {
 
     #[test]
     fn test_dirty_flags() {
-        let render_id = RenderId::new(1);
+        let render_object: Box<dyn RenderObject> = Box::new(MockRenderObject::new());
         let mut element = RenderElement::new(
-            Some(render_id),
+            render_object,
             ProtocolId::Box,
             RuntimeArity::Exact(0),
         );
@@ -1186,5 +1227,27 @@ mod tests {
         element.mark_needs_paint();
         assert!(!element.needs_layout());
         assert!(element.needs_paint());
+    }
+
+    #[test]
+    fn test_render_object_access() {
+        let render_object: Box<dyn RenderObject> = Box::new(MockRenderObject::new());
+        let mut element = RenderElement::new(
+            render_object,
+            ProtocolId::Box,
+            RuntimeArity::Exact(0),
+        );
+
+        // Test immutable access
+        let _obj = element.render_object();
+
+        // Test mutable access and downcast
+        let obj_mut = element.render_object_mut();
+        let mock = obj_mut.as_any_mut().downcast_mut::<MockRenderObject>().unwrap();
+        mock.size = Size::new(200.0, 200.0);
+
+        // Verify the change
+        let mock_ref = element.render_object().as_any().downcast_ref::<MockRenderObject>().unwrap();
+        assert_eq!(mock_ref.size, Size::new(200.0, 200.0));
     }
 }
