@@ -1,0 +1,43 @@
+[package]
+name = "flui-objects"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Concrete RenderObject implementations for FLUI framework"
+repository.workspace = true
+
+[dependencies]
+# Core rendering traits
+flui_rendering = { path = "../flui_rendering" }
+
+# Types and geometry
+flui_types = { path = "../flui_types" }
+
+# Painting primitives
+flui_painting = { path = "../flui_painting" }
+
+# Interaction/hit testing
+flui_interaction = { path = "../flui_interaction" }
+
+# Foundation types (ElementId, etc.)
+flui-foundation = { path = "../flui-foundation" }
+
+# Tree abstractions (Arity system)
+flui-tree = { path = "../flui-tree" }
+
+# Sync primitives
+parking_lot = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+
+# Serialization (optional)
+serde = { workspace = true, optional = true }
+
+[dev-dependencies]
+criterion.workspace = true
+
+[features]
+default = []
+serde = ["dep:serde", "flui_types/serde", "flui_rendering/serde"]
