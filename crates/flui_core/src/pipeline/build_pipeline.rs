@@ -52,6 +52,7 @@ use parking_lot::RwLock;
 use flui_element::{BuildOwner, Element, ElementTree};
 use flui_foundation::ElementId;
 use flui_pipeline::DirtySet;
+use flui_view::tree::ViewNode;
 
 use super::pipeline_context::PipelineBuildContext;
 
@@ -179,7 +180,7 @@ impl BuildPipeline {
             build_owner: BuildOwner::new(),
             batcher: None,
             rebuild_queue,
-            dirty_set: Arc::new(parking_lot::RwLock::new(DirtySet::new())),
+            dirty_set: Arc::new(parking_lot::RwLock::new(DirtySet::<ElementId>::new())),
         }
     }
 
@@ -487,8 +488,12 @@ impl BuildPipeline {
             // Dispatch rebuild based on element type
             match element_type {
                 Some(ElementType::Component) => {
-                    if self.rebuild_component(tree, element_id, depth) {
-                        rebuilt_count += 1;
+                    // NOTE: rebuild_dirty() without coordinator cannot access ViewObjects.
+                    // Use rebuild_dirty_with_coordinator() for full functionality.
+                    // For now, just clear dirty flag.
+                    let mut tree_guard = tree.write();
+                    if let Some(element) = tree_guard.get_mut(element_id) {
+                        element.clear_dirty();
                     }
                 }
 
@@ -639,194 +644,7 @@ impl BuildPipeline {
         true
     }
 
-    /// Update an existing element with new view data (in-place reuse)
-    ///
-    /// This is called when `can_reuse()` returns true.
-    ///
-    /// # Steps
-    ///
-    /// 1. Call did_update() lifecycle hook on new view with old view as argument
-    /// 2. Replace old element's view_object with new one
-    /// 3. Mark element dirty for rebuild
-    ///
-    /// # Why replace view_object?
-    ///
-    /// Even though ViewMode matches, the view data (props) may have changed.
-    /// Example: `Text { text: "old" }` -> `Text { text: "new" }`
-    ///
-    /// NOTE: In the four-tree architecture, ViewObjects are stored in ViewTree.
-    /// This method updates Element metadata only (key, dirty flag).
-    /// ViewObject lifecycle hooks should be called via TreeCoordinator.
-    fn update_element(
-        tree_guard: &mut ElementTree,
-        element_id: ElementId,
-        new_element: Element,
-        _ctx: &PipelineBuildContext,
-    ) {
-        let old_element = match tree_guard.get_mut(element_id) {
-            Some(elem) => elem,
-            None => {
-                tracing::error!(?element_id, "Cannot update: element not found");
-                return;
-            }
-        };
-
-        #[cfg(debug_assertions)]
-        tracing::trace!(?element_id, "Updating element in-place (reuse)");
-
-        // NOTE: ViewObject lifecycle (did_update) is now handled via ViewTree.
-        // Element only stores view_id reference, not the actual ViewObject.
-        // Use rebuild_component_with_coordinator for full lifecycle support.
-
-        // Update key if changed
-        old_element.set_key(new_element.key());
-
-        // Mark dirty to trigger rebuild with new view data
-        old_element.mark_dirty();
-    }
-
-    /// Reconcile child element with element reuse support
-    ///
-    /// **Element Reuse**: If ViewMode and Key match, reuses existing element.
-    /// **Replacement**: If type/key mismatch, inserts new BEFORE removing old (prevents Slab ID reuse).
-    ///
-    /// # Cases
-    ///
-    /// 1. `(Some, Some)` - Check can_reuse:
-    ///    - If yes: Update old element in-place, reuse ElementId
-    ///    - If no: Insert new, remove old (Slab ID reuse prevention)
-    /// 2. `(None, Some)` - Insert new child
-    /// 3. `(Some, None)` - Remove old child
-    /// 4. `(None, None)` - No-op
-    fn reconcile_child(
-        tree_guard: &mut ElementTree,
-        parent_id: ElementId,
-        old_child_id: Option<ElementId>,
-        new_element: Option<Element>,
-        tree_arc: &Arc<RwLock<ElementTree>>,
-        dirty_set: &Arc<RwLock<DirtySet<ElementId>>>,
-    ) {
-        match (old_child_id, new_element) {
-            // Both old and new exist - check if we can reuse
-            (Some(old_id), Some(new_element)) => {
-                if Self::can_reuse(tree_guard, old_id, &new_element) {
-                    // REUSE PATH: Update existing element
-                    #[cfg(debug_assertions)]
-                    tracing::trace!(
-                        ?old_id,
-                        ?parent_id,
-                        "Reconcile: Reusing element (same type/key)"
-                    );
-
-                    // Create context for did_update() lifecycle hook
-                    let ctx = PipelineBuildContext::with_tree(
-                        old_id,
-                        tree_arc.clone(),
-                        dirty_set.clone(),
-                    );
-
-                    Self::update_element(tree_guard, old_id, new_element, &ctx);
-                    // Element ID stays the same, no parent reference update needed
-                } else {
-                    // REPLACE PATH: Insert new, remove old
-                    #[cfg(debug_assertions)]
-                    tracing::trace!(
-                        ?old_id,
-                        ?parent_id,
-                        "Reconcile: Replacing element (type/key mismatch)"
-                    );
-
-                    // NOTE: ViewObject lifecycle (dispose/init) is now handled via ViewTree.
-                    // Element only stores view_id reference. Use TreeCoordinator for lifecycle.
-
-                    // Insert-before-remove pattern prevents Slab ID reuse
-                    let new_id = Self::insert_and_mount_child(tree_guard, new_element, parent_id);
-
-                    Self::update_component_child_reference(tree_guard, parent_id, Some(new_id));
-                    let _ = tree_guard.remove(old_id);
-                }
-            }
-
-            // Add new child (no previous child)
-            (None, Some(new_element)) => {
-                let new_id = Self::insert_and_mount_child(tree_guard, new_element, parent_id);
-
-                // NOTE: ViewObject lifecycle (init) is now handled via ViewTree.
-                // Element only stores view_id reference. Use TreeCoordinator for lifecycle.
-
-                Self::update_component_child_reference(tree_guard, parent_id, Some(new_id));
-            }
-
-            // Remove old child (no new child)
-            (Some(old_id), None) => {
-                // NOTE: ViewObject lifecycle (dispose) is now handled via ViewTree.
-                // Element only stores view_id reference. Use TreeCoordinator for lifecycle.
-
-                let _ = tree_guard.remove(old_id);
-                Self::update_component_child_reference(tree_guard, parent_id, None);
-            }
-
-            // No child before or after - nothing to do
-            (None, None) => {}
-        }
-    }
-
     // ========== Component Rebuild ==========
-
-    /// Rebuild a ComponentElement
-    ///
-    /// Two-stage process:
-    /// 1. Check dirty flag and extract component data - minimize lock time
-    /// 2. Build new child element and reconcile tree atomically
-    ///
-    /// NOTE: This is a legacy method for backward compatibility.
-    /// In the four-tree architecture, use `rebuild_component_with_coordinator` instead,
-    /// which accesses ViewObjects via ViewTree.
-    #[tracing::instrument(skip(self, tree), level = "trace")]
-    fn rebuild_component(
-        &mut self,
-        tree: &Arc<parking_lot::RwLock<ElementTree>>,
-        element_id: ElementId,
-        _depth: usize,
-    ) -> bool {
-        // Stage 1: Check dirty flag and extract component data (write lock)
-        let mut tree_guard = tree.write();
-        let element = match tree_guard.get_mut(element_id) {
-            Some(e) => e,
-            None => return false,
-        };
-
-        // Check if it's a component
-        if !element.is_component() {
-            return false;
-        }
-
-        // Skip rebuild if not dirty
-        if !element.is_dirty() {
-            #[cfg(debug_assertions)]
-            tracing::trace!("Skipping rebuild for {:?} - not dirty", element_id);
-            return false;
-        }
-
-        // Clear dirty flag
-        element.clear_dirty();
-
-        // NOTE: In the four-tree architecture, ViewObjects are stored in ViewTree.
-        // This legacy method cannot access ViewObjects without TreeCoordinator.
-        // Use rebuild_dirty_with_coordinator() for full functionality.
-        //
-        // For now, just mark as rebuilt without actually calling build().
-        // The coordinator-based path (rebuild_component_with_coordinator) handles
-        // the actual build via ViewTree.
-
-        #[cfg(debug_assertions)]
-        tracing::trace!(
-            ?element_id,
-            "Legacy rebuild_component: ViewObject access requires TreeCoordinator"
-        );
-
-        true
-    }
 
     /// Rebuild a ProviderElement and notify dependents
     ///
@@ -912,82 +730,6 @@ impl BuildPipeline {
         depth
     }
 
-    /// Find the nearest ErrorBoundary ancestor
-    ///
-    /// Walks up the element tree looking for an element that is a StatefulView
-    /// with ErrorBoundary type.
-    ///
-    /// Returns the ElementId of the ErrorBoundary, or None if not found.
-    ///
-    /// NOTE: In the four-tree architecture, ViewObjects are stored in ViewTree.
-    /// This method requires TreeCoordinator to access ViewObjects for type checking.
-    /// Currently returns None as a stub - use coordinator-based error handling.
-    fn find_error_boundary(
-        &self,
-        tree: &Arc<parking_lot::RwLock<ElementTree>>,
-        element_id: ElementId,
-    ) -> Option<ElementId> {
-        // NOTE: ViewObjects are now in ViewTree, accessed via view_id.
-        // Finding ErrorBoundary requires TreeCoordinator to check view types.
-        // This is a stub implementation - proper error boundary support
-        // will be added when TreeCoordinator integration is complete.
-
-        let tree_guard = tree.read();
-        let mut current = element_id;
-
-        loop {
-            if let Some(element) = tree_guard.get(current) {
-                // TODO: With TreeCoordinator, check ViewTree for ErrorBoundary type
-                // For now, we can't identify ErrorBoundary without ViewObject access
-
-                // Move to parent
-                if let Some(parent_id) = element.parent() {
-                    current = parent_id;
-                } else {
-                    // Reached root, no ErrorBoundary found
-                    return None;
-                }
-            } else {
-                return None;
-            }
-        }
-    }
-
-    /// Set error in ErrorBoundary state and mark for rebuild
-    ///
-    /// NOTE: In the four-tree architecture, ViewObjects are stored in ViewTree.
-    /// This method requires TreeCoordinator to access and modify ViewObject state.
-    /// Currently a stub - use coordinator-based error handling.
-    fn set_boundary_error(
-        &mut self,
-        tree: &Arc<parking_lot::RwLock<ElementTree>>,
-        boundary_id: ElementId,
-        _error: crate::error_handling::ErrorInfo,
-    ) {
-        // NOTE: ViewObjects are now in ViewTree, accessed via view_id.
-        // Setting error in ErrorBoundary requires TreeCoordinator to access ViewTree.
-        // This is a stub implementation - proper error boundary support
-        // will be added when TreeCoordinator integration is complete.
-
-        let mut tree_guard = tree.write();
-
-        if let Some(element) = tree_guard.get_mut(boundary_id) {
-            // TODO: With TreeCoordinator, access ViewTree to set error in ErrorBoundary
-            // For now, just mark element dirty for rebuild
-            element.mark_dirty();
-
-            // Calculate depth for scheduling
-            drop(tree_guard);
-            let depth = self.calculate_depth(tree, boundary_id);
-            self.schedule(boundary_id, depth);
-
-            tracing::debug!(
-                boundary_id = ?boundary_id,
-                "Error boundary marked dirty (ViewObject access requires TreeCoordinator)"
-            );
-        }
-    }
-
     /// Rebuilds all dirty elements using parallel execution (when feature enabled)
     ///
     /// This is an alternative to `rebuild_dirty()` that works with `Arc<RwLock<ElementTree>>`
@@ -1052,8 +794,12 @@ impl BuildPipeline {
             // Dispatch rebuild based on element type
             match element_type {
                 Some(ElementType::Component) => {
-                    if self.rebuild_component(tree, element_id, depth) {
-                        rebuilt_count += 1;
+                    // NOTE: rebuild_dirty_parallel() without coordinator cannot access ViewObjects.
+                    // Use rebuild_dirty_with_coordinator() for full functionality.
+                    // For now, just clear dirty flag.
+                    let mut tree_guard = tree.write();
+                    if let Some(element) = tree_guard.get_mut(element_id) {
+                        element.clear_dirty();
                     }
                 }
 
@@ -1297,11 +1043,22 @@ impl BuildPipeline {
         };
 
         // Stage 3: Convert View to Element and reconcile
-        // For now we need to convert the View to Element
-        // In the full four-tree architecture, we'd insert into ViewTree directly
-        let new_element = {
-            use flui_element::IntoElement;
-            new_view.into_element()
+        // Four-tree architecture: Insert ViewObject into ViewTree, then create Element with ViewId
+        let new_element = match new_view {
+            Some(view_obj) => {
+                let mode = view_obj.mode();
+
+                // Insert ViewObject into ViewTree
+                let view_id = {
+                    let mut coord = coordinator.write();
+                    let view_node = ViewNode::from_boxed(view_obj, mode);
+                    coord.views_mut().insert(view_node)
+                };
+
+                // Create Element with ViewId reference
+                Element::view(Some(view_id), mode)
+            }
+            None => Element::empty(),
         };
 
         // Stage 4: Reconcile with old child

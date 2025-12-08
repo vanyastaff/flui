@@ -29,7 +29,7 @@
 use parking_lot::{Mutex, RwLock};
 use std::sync::Arc;
 
-use super::{BuildPipeline, LayoutPipeline, PaintPipeline};
+use super::{BuildPipeline, LayoutPipeline, PaintPipeline, TreeCoordinator};
 use flui_element::ElementTree;
 use flui_foundation::ElementId;
 use flui_pipeline::PipelineError;
@@ -77,14 +77,23 @@ pub struct FrameCoordinator {
 }
 
 impl FrameCoordinator {
-    /// Create a new frame coordinator with a rebuild queue
+    /// Create a new frame coordinator with a rebuild queue and tree coordinator
     ///
     /// The rebuild queue is shared with the PipelineOwner for signal-triggered rebuilds.
-    pub fn new_with_queue(rebuild_queue: super::RebuildQueue) -> Self {
+    /// The tree coordinator is shared for unified dirty tracking.
+    ///
+    /// # Arguments
+    ///
+    /// * `rebuild_queue` - Shared rebuild queue for deferred rebuilds
+    /// * `tree_coord` - Shared tree coordinator for unified dirty tracking
+    pub fn new_with_queue(
+        rebuild_queue: super::RebuildQueue,
+        tree_coord: Arc<RwLock<TreeCoordinator>>,
+    ) -> Self {
         Self {
             build: BuildPipeline::new_with_queue(rebuild_queue),
-            layout: LayoutPipeline::new(),
-            paint: PaintPipeline::new(),
+            layout: LayoutPipeline::new(tree_coord.clone()),
+            paint: PaintPipeline::new(tree_coord),
             budget: Arc::new(Mutex::new(FrameBudget::new(60))), // Default 60 FPS
         }
     }
@@ -94,10 +103,11 @@ impl FrameCoordinator {
     /// # Example
     ///
     /// ```rust,ignore
-    /// let coordinator = FrameCoordinator::new();
+    /// let tree_coord = Arc::new(RwLock::new(TreeCoordinator::new()));
+    /// let coordinator = FrameCoordinator::new(tree_coord);
     /// ```
-    pub fn new() -> Self {
-        Self::new_with_queue(super::RebuildQueue::new())
+    pub fn new(tree_coord: Arc<RwLock<TreeCoordinator>>) -> Self {
+        Self::new_with_queue(super::RebuildQueue::new(), tree_coord)
     }
 
     /// Get reference to build pipeline
@@ -171,7 +181,7 @@ impl FrameCoordinator {
     /// It's called by both `build_frame` and `build_frame_no_span`.
     fn build_frame_impl(
         &mut self,
-        tree: &Arc<RwLock<ElementTree>>,
+        tree_coord: &Arc<RwLock<TreeCoordinator>>,
         root_id: Option<ElementId>,
         constraints: BoxConstraints,
     ) -> Result<Option<flui_painting::Canvas>, PipelineError> {
@@ -202,8 +212,8 @@ impl FrameCoordinator {
             let build_span = tracing::info_span!("build_iteration", iteration = iterations);
             let _build_guard = build_span.enter();
 
-            // Use parallel build (automatically falls back to sequential if appropriate)
-            self.build.rebuild_dirty_parallel(tree);
+            // Use TreeCoordinator-based rebuild (supports ViewTree integration)
+            self.build.rebuild_dirty_with_coordinator(tree_coord);
             total_build_count += build_count;
 
             tracing::debug!(
@@ -248,7 +258,8 @@ impl FrameCoordinator {
             let layout_span = tracing::info_span!("layout");
             let _layout_guard = layout_span.enter();
 
-            let mut tree_guard = tree.write();
+            let mut coord_guard = tree_coord.write();
+            let tree_guard = coord_guard.elements_mut();
 
             // Scan for RenderElements and mark them for layout
             // NOTE: In four-tree architecture, render_state is stored in RenderTree (accessed via
@@ -270,7 +281,7 @@ impl FrameCoordinator {
                 "Marked all render elements for layout"
             );
 
-            let laid_out_ids = self.layout.compute_layout(&mut tree_guard, constraints)?;
+            let laid_out_ids = self.layout.compute_layout(tree_guard, constraints)?;
 
             // Mark all laid out elements for paint
             for id in &laid_out_ids {
@@ -282,7 +293,7 @@ impl FrameCoordinator {
             }
 
             // Get root element's computed size
-            Self::extract_root_size(&tree_guard, root_id)
+            Self::extract_root_size(tree_guard, root_id)
         };
 
         // Check if we're approaching deadline after layout phase
@@ -302,15 +313,16 @@ impl FrameCoordinator {
             let paint_span = tracing::info_span!("paint");
             let _paint_guard = paint_span.enter();
 
-            let mut tree_guard = tree.write();
-            let count = self.paint.generate_layers(&mut tree_guard)?;
+            let mut coord_guard = tree_coord.write();
+            let tree_guard = coord_guard.elements_mut();
+            let count = self.paint.generate_layers(tree_guard)?;
 
             if count > 0 {
                 tracing::debug!(count, "Paint complete");
             }
 
             // Get root element's canvas
-            Self::extract_root_canvas(&tree_guard, root_id)
+            Self::extract_root_canvas(tree_guard, root_id)
         };
 
         // Finish frame and update metrics
@@ -367,10 +379,10 @@ impl FrameCoordinator {
     ///     compositor.present(layer);
     /// }
     /// ```
-    #[tracing::instrument(skip(self, tree), level = "debug")]
+    #[tracing::instrument(skip(self, tree_coord), level = "debug")]
     pub fn build_frame(
         &mut self,
-        tree: &Arc<RwLock<ElementTree>>,
+        tree_coord: &Arc<RwLock<TreeCoordinator>>,
         root_id: Option<ElementId>,
         constraints: BoxConstraints,
     ) -> Result<Option<flui_painting::Canvas>, PipelineError> {
@@ -378,7 +390,7 @@ impl FrameCoordinator {
         let frame_span = tracing::info_span!("frame", ?constraints);
         let _frame_guard = frame_span.enter();
 
-        self.build_frame_impl(tree, root_id, constraints)
+        self.build_frame_impl(tree_coord, root_id, constraints)
     }
 
     /// Build a complete frame without creating frame span (for custom logging)
@@ -387,11 +399,11 @@ impl FrameCoordinator {
     /// Useful when you want to add render phase to the same span.
     pub fn build_frame_no_span(
         &mut self,
-        tree: &Arc<RwLock<ElementTree>>,
+        tree_coord: &Arc<RwLock<TreeCoordinator>>,
         root_id: Option<ElementId>,
         constraints: BoxConstraints,
     ) -> Result<Option<flui_painting::Canvas>, PipelineError> {
-        self.build_frame_impl(tree, root_id, constraints)
+        self.build_frame_impl(tree_coord, root_id, constraints)
     }
 
     /// Flush the build phase
@@ -404,10 +416,11 @@ impl FrameCoordinator {
     /// - Multiple independent subtrees exist
     ///
     /// Falls back to sequential execution otherwise.
-    #[tracing::instrument(skip(self, tree), level = "trace")]
-    pub fn flush_build(&mut self, tree: &Arc<RwLock<ElementTree>>) {
-        // Use parallel build (automatically falls back to sequential if appropriate)
-        self.build.rebuild_dirty_parallel(tree);
+    #[tracing::instrument(skip(self, tree_coord), level = "trace")]
+    pub fn flush_build(&mut self, tree_coord: &Arc<RwLock<TreeCoordinator>>) {
+        // Use TreeCoordinator-based rebuild (supports ViewTree integration)
+        // This is the modern path that properly handles four-tree architecture
+        self.build.rebuild_dirty_with_coordinator(tree_coord);
     }
 
     /// Flush the layout phase
@@ -417,14 +430,15 @@ impl FrameCoordinator {
     /// # Returns
     ///
     /// The size of the root render object, or None if no root element exists
-    #[tracing::instrument(skip(self, tree), level = "trace")]
+    #[tracing::instrument(skip(self, tree_coord), level = "trace")]
     pub fn flush_layout(
         &mut self,
-        tree: &Arc<RwLock<ElementTree>>,
+        tree_coord: &Arc<RwLock<TreeCoordinator>>,
         root_id: Option<ElementId>,
         constraints: BoxConstraints,
     ) -> Result<Option<flui_types::Size>, PipelineError> {
-        let mut tree_guard = tree.write();
+        let mut coord_guard = tree_coord.write();
+        let tree_guard = coord_guard.elements_mut();
 
         // Scan for RenderElements and mark them for layout
         // NOTE: In four-tree architecture, RenderState is in RenderTree. Mark all render elements.
@@ -445,7 +459,7 @@ impl FrameCoordinator {
         );
 
         // Process all dirty render objects
-        let laid_out_ids = self.layout.compute_layout(&mut tree_guard, constraints)?;
+        let laid_out_ids = self.layout.compute_layout(tree_guard, constraints)?;
 
         // Mark all laid out elements for paint
         for id in laid_out_ids {
@@ -455,7 +469,7 @@ impl FrameCoordinator {
         // Get root element's computed size
         // NOTE: In four-tree architecture, size is stored in RenderTree (accessed via
         // element.as_render().render_id() + RenderTree). Returns None until RenderTree integration.
-        let size = Self::extract_root_size(&tree_guard, root_id);
+        let size = Self::extract_root_size(tree_guard, root_id);
 
         Ok(size)
     }
@@ -467,16 +481,17 @@ impl FrameCoordinator {
     /// # Returns
     ///
     /// The root layer for composition, or None if no root element exists.
-    #[tracing::instrument(skip(self, tree), level = "trace")]
+    #[tracing::instrument(skip(self, tree_coord), level = "trace")]
     pub fn flush_paint(
         &mut self,
-        tree: &Arc<RwLock<ElementTree>>,
+        tree_coord: &Arc<RwLock<TreeCoordinator>>,
         root_id: Option<ElementId>,
     ) -> Result<Option<flui_painting::Canvas>, PipelineError> {
-        let mut tree_guard = tree.write();
+        let mut coord_guard = tree_coord.write();
+        let tree_guard = coord_guard.elements_mut();
 
         // Process all dirty render objects
-        let _count = self.paint.generate_layers(&mut tree_guard)?;
+        let _count = self.paint.generate_layers(tree_guard)?;
 
         // Get root element's canvas
         // NOTE: In four-tree architecture, paint happens through RenderTree. Currently
@@ -498,7 +513,8 @@ impl FrameCoordinator {
 
 impl Default for FrameCoordinator {
     fn default() -> Self {
-        Self::new()
+        let tree_coord = Arc::new(RwLock::new(TreeCoordinator::new()));
+        Self::new(tree_coord)
     }
 }
 
@@ -507,10 +523,10 @@ impl Default for FrameCoordinator {
 // =============================================================================
 
 /// Note: PipelineCoordinator trait requires mutable Tree access, but FrameCoordinator
-/// uses Arc<RwLock<ElementTree>>. This implementation provides a simplified adapter.
+/// uses Arc<RwLock<TreeCoordinator>>. This implementation provides a simplified adapter.
 /// For full trait compliance, consider using the direct methods on FrameCoordinator.
 impl flui_pipeline::PipelineCoordinator for FrameCoordinator {
-    type Tree = Arc<RwLock<ElementTree>>;
+    type Tree = Arc<RwLock<TreeCoordinator>>;
     type Constraints = BoxConstraints;
     type Size = flui_types::Size;
     type Layer = flui_painting::Canvas;
@@ -558,59 +574,60 @@ impl flui_pipeline::PipelineCoordinator for FrameCoordinator {
         self.paint.mark_dirty(id);
     }
 
-    fn flush_build(&mut self, tree: &mut Self::Tree) -> flui_pipeline::PipelineResult<usize> {
+    fn flush_build(&mut self, tree_coord: &mut Self::Tree) -> flui_pipeline::PipelineResult<usize> {
         // Flush queues first
         self.build.flush_rebuild_queue();
         self.build.flush_batch();
 
-        let count = self.build.rebuild_dirty_parallel(tree);
+        // Use TreeCoordinator-based rebuild
+        let count = self.build.rebuild_dirty_with_coordinator(tree_coord);
         Ok(count)
     }
 
     fn flush_layout(
         &mut self,
-        tree: &mut Self::Tree,
+        tree_coord: &mut Self::Tree,
         constraints: Self::Constraints,
     ) -> flui_pipeline::PipelineResult<Option<Self::Size>> {
-        // Get root_id from tree
+        // Get root_id from TreeCoordinator
         let root_id = {
-            let tree_guard = tree.read();
-            tree_guard.root_id()
+            let coord_guard = tree_coord.read();
+            coord_guard.root()
         };
 
-        FrameCoordinator::flush_layout(self, tree, root_id, constraints)
+        FrameCoordinator::flush_layout(self, tree_coord, root_id, constraints)
     }
 
     fn flush_paint(
         &mut self,
-        tree: &mut Self::Tree,
+        tree_coord: &mut Self::Tree,
     ) -> flui_pipeline::PipelineResult<Option<Self::Layer>> {
-        // Get root_id from tree
+        // Get root_id from TreeCoordinator
         let root_id = {
-            let tree_guard = tree.read();
-            tree_guard.root_id()
+            let coord_guard = tree_coord.read();
+            coord_guard.root()
         };
 
-        FrameCoordinator::flush_paint(self, tree, root_id)
+        FrameCoordinator::flush_paint(self, tree_coord, root_id)
     }
 
     fn execute_frame(
         &mut self,
-        tree: &mut Self::Tree,
+        tree_coord: &mut Self::Tree,
         constraints: Self::Constraints,
     ) -> flui_pipeline::PipelineResult<flui_pipeline::FrameResult<Self::Layer>> {
         use std::time::Instant;
 
         let start = Instant::now();
 
-        // Get root_id
+        // Get root_id from TreeCoordinator
         let root_id = {
-            let tree_guard = tree.read();
-            tree_guard.root_id()
+            let coord_guard = tree_coord.read();
+            coord_guard.root()
         };
 
         // Execute frame using existing method
-        let layer = self.build_frame(tree, root_id, constraints)?;
+        let layer = self.build_frame(tree_coord, root_id, constraints)?;
 
         let frame_time = start.elapsed();
         let budget = self.budget.lock();

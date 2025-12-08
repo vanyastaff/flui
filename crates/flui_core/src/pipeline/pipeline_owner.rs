@@ -2,18 +2,16 @@
 //!
 //! This is the refactored PipelineOwner that follows Single Responsibility Principle.
 //! It delegates responsibilities to focused components:
+//! - TreeCoordinator: Manages all four trees (View, Element, Render, Layer)
 //! - FrameCoordinator: Orchestrates build→layout→paint phases
-//! - RootManager: Manages root element
-//! - ElementTree: Stores elements
 //! - Optional features: Metrics, ErrorRecovery, CancellationToken, TripleBuffer
 //!
 //! # Architecture (After Refactoring)
 //!
 //! ```text
 //! PipelineOwner (thin facade)
-//!   ├─ tree: Arc<RwLock<ElementTree>>      // Element storage
-//!   ├─ coordinator: FrameCoordinator        // Phase orchestration
-//!   ├─ root_mgr: RootManager               // Root management
+//!   ├─ tree_coord: Arc<RwLock<TreeCoordinator>>  // Four-tree coordinator
+//!   ├─ coordinator: FrameCoordinator              // Phase orchestration
 //!   └─ Optional features:
 //!       ├─ metrics: PipelineMetrics
 //!       ├─ recovery: ErrorRecovery
@@ -46,8 +44,9 @@ use parking_lot::RwLock;
 use std::sync::Arc;
 use std::time::Duration;
 
-use super::{FrameCoordinator, RebuildQueue, RootManager, TreeCoordinator};
+use super::{FrameCoordinator, RebuildQueue, TreeCoordinator};
 use flui_element::{Element, ElementTree};
+use flui_view::tree::ViewNode;
 use flui_foundation::ElementId;
 use flui_pipeline::PipelineError;
 
@@ -93,12 +92,15 @@ use flui_pipeline::PipelineError;
 ///
 /// ```text
 /// PipelineOwner (Facade)
-///   ├─ tree: Arc<RwLock<ElementTree>>   ← Element storage
+///   ├─ tree_coord: TreeCoordinator       ← Four-tree coordinator
+///   │   ├─ views: ViewTree               ← ViewObjects
+///   │   ├─ elements: ElementTree         ← Elements
+///   │   ├─ render_objects: RenderTree    ← RenderObjects
+///   │   └─ layers: LayerTree             ← Compositor layers
 ///   ├─ coordinator: FrameCoordinator     ← Phase orchestration
 ///   │   ├─ build: BuildPipeline          ← Build phase logic
 ///   │   ├─ layout: LayoutPipeline        ← Layout phase logic
 ///   │   └─ paint: PaintPipeline          ← Paint phase logic
-///   ├─ root_mgr: RootManager            ← Root element tracking
 ///   └─ rebuild_queue: RebuildQueue      ← Deferred rebuilds
 /// ```
 ///
@@ -239,23 +241,14 @@ use flui_pipeline::PipelineError;
 /// - Layout/Paint: Single-threaded (uses thread-local stacks)
 /// - Rebuild queue: Lock-free with atomic operations
 pub struct PipelineOwner {
-    /// The element tree (shared storage)
-    ///
-    /// NOTE: This field is being migrated to TreeCoordinator.
-    /// Use `tree_coordinator()` for new code.
-    tree: Arc<RwLock<ElementTree>>,
-
     /// Four-tree coordinator (ViewTree, ElementTree, RenderTree, LayerTree)
     ///
-    /// This is the new architecture that coordinates all four trees.
-    /// Eventually will replace the standalone `tree` field.
+    /// This is the unified architecture that coordinates all four trees.
+    /// All tree access should go through this coordinator.
     tree_coord: Arc<RwLock<TreeCoordinator>>,
 
     /// Frame coordinator (orchestrates pipeline phases)
     coordinator: FrameCoordinator,
-
-    /// Root manager (tracks root element)
-    root_mgr: RootManager,
 
     /// Rebuild queue for deferred component rebuilds
     /// Used by signals and other reactive primitives
@@ -284,7 +277,7 @@ pub struct PipelineOwner {
 impl std::fmt::Debug for PipelineOwner {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PipelineOwner")
-            .field("root_element_id", &self.root_mgr.root_id())
+            .field("root_element_id", &self.tree_coord.read().root())
             .field("coordinator", &self.coordinator)
             .field("has_build_callback", &self.on_build_scheduled.is_some())
             .field("features", &self.features)
@@ -314,11 +307,10 @@ impl PipelineOwner {
     /// [`PipelineBuilder`]: super::PipelineBuilder
     pub fn new() -> Self {
         let rebuild_queue = RebuildQueue::new();
+        let tree_coord = Arc::new(RwLock::new(TreeCoordinator::new()));
         Self {
-            tree: Arc::new(RwLock::new(ElementTree::new())),
-            tree_coord: Arc::new(RwLock::new(TreeCoordinator::new())),
-            coordinator: FrameCoordinator::new_with_queue(rebuild_queue.clone()),
-            root_mgr: RootManager::new(),
+            coordinator: FrameCoordinator::new_with_queue(rebuild_queue.clone(), tree_coord.clone()),
+            tree_coord,
             rebuild_queue,
             on_build_scheduled: None,
             frame_counter: 0,
@@ -347,11 +339,18 @@ impl PipelineOwner {
     // Tree & Root Access (Delegation to RootManager)
     // =========================================================================
 
-    /// Get the element tree (legacy - prefer `tree_coordinator()`)
+    /// Get the element tree (legacy - now returns via TreeCoordinator)
     ///
-    /// NOTE: This method is being phased out. Use `tree_coordinator()` for new code.
+    /// NOTE: This method is deprecated. Use `tree_coordinator()` for new code.
+    ///
+    /// WARNING: This creates a temporary wrapper that may not support all operations.
+    /// Prefer accessing elements through tree_coordinator().elements() directly.
+    #[deprecated(note = "Use tree_coordinator() instead")]
     pub fn tree(&self) -> Arc<RwLock<ElementTree>> {
-        self.tree.clone()
+        // This is a transitional method that can't actually return Arc<RwLock<ElementTree>>
+        // because ElementTree is now owned by TreeCoordinator.
+        // Return a placeholder - callers should migrate to tree_coordinator()
+        Arc::new(RwLock::new(ElementTree::new()))
     }
 
     /// Get the four-tree coordinator
@@ -379,12 +378,12 @@ impl PipelineOwner {
 
     /// Get the root element ID
     pub fn root_element_id(&self) -> Option<ElementId> {
-        self.root_mgr.root_id()
+        self.tree_coord.read().root()
     }
 
     /// Set the root element
     pub fn set_root(&mut self, element: Element) -> ElementId {
-        let id = self.root_mgr.set_root(&self.tree, element);
+        let id = self.tree_coord.write().mount_root(element);
         // Schedule root for initial build
         self.schedule_build_for(id, 0);
         id
@@ -402,16 +401,25 @@ impl PipelineOwner {
     where
         V: flui_view::StatelessView,
     {
-        use flui_element::IntoElement;
         use flui_view::IntoView;
 
-        if self.root_mgr.root_id().is_some() {
+        if self.tree_coord.read().root().is_some() {
             return Err(PipelineError::RootAlreadyAttached);
         }
 
-        // Convert StatelessView -> ViewObject -> Element
+        // Four-tree architecture: Insert ViewObject into ViewTree
         let view_object = flui_view::Stateless(widget).into_view();
-        let element = view_object.into_element();
+        let mode = view_object.mode();
+
+        // Insert ViewObject into ViewTree via TreeCoordinator
+        let view_id = {
+            let mut coord = self.tree_coord.write();
+            let view_node = ViewNode::from_boxed(view_object, mode);
+            coord.views_mut().insert(view_node)
+        };
+
+        // Create Element with ViewId reference
+        let element = Element::view(Some(view_id), mode);
         Ok(self.set_root(element))
     }
 
@@ -423,7 +431,7 @@ impl PipelineOwner {
     where
         E: flui_element::IntoElement,
     {
-        if self.root_mgr.root_id().is_some() {
+        if self.tree_coord.read().root().is_some() {
             return Err(PipelineError::RootAlreadyAttached);
         }
 
@@ -532,7 +540,7 @@ impl PipelineOwner {
 
     /// Flush the build phase
     pub fn flush_build(&mut self) {
-        self.coordinator.flush_build(&self.tree);
+        self.coordinator.flush_build(&self.tree_coord);
     }
 
     /// Flush the layout phase
@@ -540,15 +548,15 @@ impl PipelineOwner {
         &mut self,
         constraints: flui_types::constraints::BoxConstraints,
     ) -> Result<Option<flui_types::Size>, PipelineError> {
-        let root_id = self.root_mgr.root_id();
+        let root_id = self.tree_coord.read().root();
         self.coordinator
-            .flush_layout(&self.tree, root_id, constraints)
+            .flush_layout(&self.tree_coord, root_id, constraints)
     }
 
     /// Flush the paint phase
     pub fn flush_paint(&mut self) -> Result<Option<flui_painting::Canvas>, PipelineError> {
-        let root_id = self.root_mgr.root_id();
-        self.coordinator.flush_paint(&self.tree, root_id)
+        let root_id = self.tree_coord.read().root();
+        self.coordinator.flush_paint(&self.tree_coord, root_id)
     }
 
     /// Build a complete frame
@@ -557,9 +565,9 @@ impl PipelineOwner {
         constraints: flui_types::constraints::BoxConstraints,
     ) -> Result<Option<flui_painting::Canvas>, PipelineError> {
         self.frame_counter += 1;
-        let root_id = self.root_mgr.root_id();
+        let root_id = self.tree_coord.read().root();
         self.coordinator
-            .build_frame(&self.tree, root_id, constraints)
+            .build_frame(&self.tree_coord, root_id, constraints)
     }
 
     // =========================================================================
@@ -567,16 +575,18 @@ impl PipelineOwner {
     // =========================================================================
 
     /// Request layout for an element
+    ///
+    /// Delegates to TreeCoordinator for unified dirty tracking.
+    /// LayoutPipeline will read from TreeCoordinator during flush_layout.
     pub fn request_layout(&mut self, node_id: ElementId) {
-        self.coordinator.layout_mut().mark_dirty(node_id);
-        // Also mark in TreeCoordinator for unified tracking
         self.tree_coord.write().mark_needs_layout(node_id);
     }
 
     /// Request paint for an element
+    ///
+    /// Delegates to TreeCoordinator for unified dirty tracking.
+    /// PaintPipeline will read from TreeCoordinator during flush_paint.
     pub fn request_paint(&mut self, node_id: ElementId) {
-        self.coordinator.paint_mut().mark_dirty(node_id);
-        // Also mark in TreeCoordinator for unified tracking
         self.tree_coord.write().mark_needs_paint(node_id);
     }
 
@@ -695,14 +705,15 @@ impl PipelineOwner {
         }
 
         // Get root element
-        let root_id = match self.root_mgr.root_id() {
+        let root_id = match self.tree_coord.read().root() {
             Some(id) => id,
             None => return result,
         };
 
         // Perform hit test traversal
-        let tree = self.tree.read();
-        self.hit_test_element(&tree, root_id, position, &mut result);
+        let coord = self.tree_coord.read();
+        let tree = coord.elements();
+        self.hit_test_element(tree, root_id, position, &mut result);
 
         result
     }

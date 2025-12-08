@@ -215,6 +215,7 @@ impl<T: TreeNav<ElementId>, U: TreeNav<ElementId>> NodeMatcher<T, U> for IdMatch
 }
 
 /// Matcher that uses a custom predicate.
+#[derive(Debug)]
 pub struct PredicateMatcher<F> {
     predicate: F,
 }
@@ -290,7 +291,7 @@ pub trait TreeDiff: TreeNav<ElementId> + Sized {
         self_root: ElementId,
         other_root: ElementId,
         options: &DiffOptions,
-        matcher: &M,
+        _matcher: &M,
     ) -> TreeDiffResult {
         let mut result = TreeDiffResult::new();
 

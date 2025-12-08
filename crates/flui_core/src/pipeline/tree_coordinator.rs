@@ -46,9 +46,9 @@
 
 use std::collections::HashSet;
 
-use flui_element::ElementTree;
+use flui_element::{Element, ElementTree};
 use flui_engine::LayerTree;
-use flui_foundation::ElementId;
+use flui_foundation::{ElementId, Slot};
 use flui_rendering::tree::RenderTree;
 use flui_view::tree::ViewTree;
 
@@ -236,6 +236,41 @@ impl TreeCoordinator {
     #[inline]
     pub fn set_root(&mut self, root: Option<ElementId>) {
         self.root = root;
+    }
+
+    /// Mount an element as the root of the tree.
+    ///
+    /// This is a convenience method that:
+    /// 1. Mounts the element (sets parent=None, slot=0, depth=0)
+    /// 2. Inserts it into the ElementTree
+    /// 3. Sets it as the root
+    ///
+    /// # Arguments
+    ///
+    /// * `element` - The element to mount as root
+    ///
+    /// # Returns
+    ///
+    /// The ElementId of the mounted root element
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let mut coordinator = TreeCoordinator::new();
+    /// let element = Element::new(Box::new(wrapper));
+    /// let root_id = coordinator.mount_root(element);
+    /// ```
+    pub fn mount_root(&mut self, mut element: Element) -> ElementId {
+        // Mount the element (no parent, slot 0, depth 0 for root)
+        element.mount(None, Some(Slot::new(0)), 0);
+
+        // Insert into ElementTree
+        let id = self.elements.insert(element);
+
+        // Set as root
+        self.root = Some(id);
+
+        id
     }
 }
 
