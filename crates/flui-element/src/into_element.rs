@@ -79,11 +79,11 @@ impl IntoElement for Vec<Element> {
 // RENDER VIEW IMPLEMENTATIONS
 // ============================================================================
 
-use flui_rendering::core::arity::Leaf;
+use flui_rendering::core::arity::{Leaf, Single};
 use flui_rendering::core::protocol::BoxProtocol;
-use flui_rendering::core::ProtocolId;
+use flui_rendering::core::{ProtocolId, RenderElement};
 use flui_tree::RuntimeArity;
-use flui_view::{RenderObjectFor, RenderView, RenderViewLeaf};
+use flui_view::{RenderObjectFor, RenderView, RenderViewLeaf, RenderViewWithChild};
 
 /// RenderViewLeaf converts to a Render element with pending render object.
 ///
@@ -100,6 +100,28 @@ where
             ProtocolId::Box,
             RuntimeArity::Exact(0),
         )
+    }
+}
+
+/// RenderViewWithChild converts to a Render element with pending render object and child.
+///
+/// This enables the pattern: `Padding::all(16.0).with_child(child).into_element()`
+impl<V, C> IntoElement for RenderViewWithChild<V, C>
+where
+    V: RenderView<BoxProtocol, Single>,
+    V::RenderObject: RenderObjectFor<BoxProtocol, Single> + 'static,
+    C: IntoElement,
+{
+    fn into_element(self) -> Element {
+        let render_object = self.view.create();
+        let child_element = self.child.into_element();
+
+        Element::Render(RenderElement::with_pending_and_children(
+            Box::new(render_object),
+            ProtocolId::Box,
+            RuntimeArity::Exact(1),
+            vec![Box::new(child_element)],
+        ))
     }
 }
 
@@ -173,6 +195,44 @@ where
             Box::new(wrapper),
             ViewMode::Animated,
         ))
+    }
+}
+
+// ============================================================================
+// CHILD IMPLEMENTATION
+// ============================================================================
+
+use flui_view::{Child, Children};
+
+/// Child converts to Element (for single-child widgets like Padding).
+impl IntoElement for Child {
+    fn into_element(self) -> Element {
+        match self.into_inner() {
+            Some(view_object) => {
+                let mode = view_object.mode();
+                Element::View(ViewElement::with_pending(view_object, mode))
+            }
+            None => Element::empty(),
+        }
+    }
+}
+
+/// Children converts to container Element with pending children.
+impl IntoElement for Children {
+    fn into_element(self) -> Element {
+        let view_objects = self.into_inner();
+        if view_objects.is_empty() {
+            Element::empty()
+        } else {
+            let child_elements: Vec<Element> = view_objects
+                .into_iter()
+                .map(|view_object| {
+                    let mode = view_object.mode();
+                    Element::View(ViewElement::with_pending(view_object, mode))
+                })
+                .collect();
+            child_elements.into_element()
+        }
     }
 }
 

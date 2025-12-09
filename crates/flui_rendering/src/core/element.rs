@@ -67,6 +67,7 @@
 //! └─────────────────────────────────┘
 //! ```
 
+use std::any::Any;
 use std::fmt;
 
 use flui_foundation::ElementId;
@@ -240,6 +241,13 @@ pub struct RenderElement {
     ///
     /// After mount, this field is None and render_id is Some.
     pending_render_object: Option<Box<dyn RenderObject>>,
+
+    // ========== Pending Children ==========
+    /// Pending child elements (before mount, processed during build phase).
+    ///
+    /// Type-erased to avoid circular dependency with flui-element.
+    /// During mount, these are converted to actual child Elements and added to children.
+    pending_children: Option<Vec<Box<dyn Any + Send + Sync>>>,
 }
 
 impl fmt::Debug for RenderElement {
@@ -255,7 +263,11 @@ impl fmt::Debug for RenderElement {
             .field("lifecycle", &self.lifecycle)
             .field("flags", &self.state.flags().load())
             .field("debug_name", &self.debug_name())
-            .field("has_pending_render_object", &self.pending_render_object.is_some())
+            .field(
+                "has_pending_render_object",
+                &self.pending_render_object.is_some(),
+            )
+            .field("has_pending_children", &self.pending_children.is_some())
             .finish()
     }
 }
@@ -299,6 +311,7 @@ impl RenderElement {
             parent_data: None,
             debug_name: None,
             pending_render_object: None,
+            pending_children: None,
         }
     }
 
@@ -341,6 +354,42 @@ impl RenderElement {
             parent_data: None,
             debug_name: None,
             pending_render_object: Some(render_object),
+            pending_children: None,
+        }
+    }
+
+    /// Creates new RenderElement with a pending RenderObject and pending children.
+    ///
+    /// Use this for RenderViews with children (Single, Optional, Variable arity).
+    pub fn with_pending_and_children(
+        render_object: Box<dyn RenderObject>,
+        protocol: ProtocolId,
+        arity: RuntimeArity,
+        children: Vec<Box<dyn Any + Send + Sync>>,
+    ) -> Self {
+        let state: Box<dyn ProtocolState> = match protocol {
+            ProtocolId::Box => Box::new(RenderState::<BoxProtocol>::new()),
+            ProtocolId::Sliver => Box::new(RenderState::<SliverProtocol>::new()),
+        };
+
+        Self {
+            id: None,
+            parent: None,
+            children: Vec::new(),
+            depth: 0,
+            render_id: None,
+            protocol,
+            arity,
+            state,
+            lifecycle: RenderLifecycle::Detached,
+            parent_data: None,
+            debug_name: None,
+            pending_render_object: Some(render_object),
+            pending_children: if children.is_empty() {
+                None
+            } else {
+                Some(children)
+            },
         }
     }
 
@@ -719,6 +768,18 @@ impl RenderElement {
     #[inline]
     pub fn has_render_id(&self) -> bool {
         self.render_id.is_some()
+    }
+
+    /// Returns true if there are pending children.
+    #[inline]
+    pub fn has_pending_children(&self) -> bool {
+        self.pending_children.is_some()
+    }
+
+    /// Takes the pending children for processing during mount.
+    #[inline]
+    pub fn take_pending_children(&mut self) -> Option<Vec<Box<dyn Any + Send + Sync>>> {
+        self.pending_children.take()
     }
 }
 

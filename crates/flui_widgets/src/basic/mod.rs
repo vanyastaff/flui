@@ -25,7 +25,7 @@
 // pub mod fitted_box;
 // pub mod layout_builder;
 // pub mod limited_box;
-// pub mod padding;
+pub mod padding;
 // pub mod safe_area;
 // pub mod sized_box;
 pub mod text;
@@ -49,7 +49,7 @@ pub mod text;
 // pub use fitted_box::FittedBox;
 // pub use layout_builder::LayoutBuilder;
 // pub use limited_box::LimitedBox;
-// pub use padding::Padding;
+pub use padding::Padding;
 // pub use safe_area::SafeArea;
 // pub use sized_box::SizedBox;
 pub use text::Text;

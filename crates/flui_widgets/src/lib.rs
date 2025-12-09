@@ -67,7 +67,7 @@ pub mod basic;
 // pub mod visual_effects;
 
 // Re-export commonly used widgets for convenient access
-pub use basic::Text;
+pub use basic::{Padding, Text};
 // pub use layout::{Column, Row};
 
 // Temporarily disabled exports until widgets are fixed

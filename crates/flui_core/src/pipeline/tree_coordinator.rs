@@ -292,8 +292,126 @@ impl TreeCoordinator {
         // Insert into ElementTree
         let id = self.elements.insert(element);
 
+        // Handle pending children (must be done after parent is inserted)
+        if let Some(element) = self.elements.get_mut(id) {
+            let pending_children = match element {
+                Element::View(v) => v.take_pending_children(),
+                Element::Render(r) => r.take_pending_children(),
+            };
+
+            if let Some(children) = pending_children {
+                for child_box in children {
+                    // Downcast to Element
+                    if let Ok(child_element) = child_box.downcast::<Element>() {
+                        let child_id = self.mount_child(*child_element, id);
+                        // Add child to parent's children list
+                        if let Some(parent) = self.elements.get_mut(id) {
+                            parent.add_child(child_id);
+                        }
+                    }
+                }
+            }
+        }
+
         // Set as root
         self.root = Some(id);
+
+        id
+    }
+
+    /// Mounts a child element with the given parent.
+    ///
+    /// This handles:
+    /// 1. Mounting the element with parent reference
+    /// 2. Registering pending ViewObject/RenderObject
+    /// 3. Linking children in RenderTree (for layout)
+    /// 4. Recursively mounting pending children
+    fn mount_child(&mut self, mut element: Element, parent_id: ElementId) -> ElementId {
+        // Get parent depth
+        let parent_depth = self.elements.get(parent_id).map(|e| e.depth()).unwrap_or(0);
+
+        // Get next slot index based on parent's current children count
+        let slot_index = self
+            .elements
+            .get(parent_id)
+            .map(|e| e.children().len())
+            .unwrap_or(0);
+
+        // Mount the element
+        element.mount(
+            Some(parent_id),
+            Some(Slot::new(slot_index)),
+            parent_depth + 1,
+        );
+
+        // Handle pending ViewObject
+        if let Some(view_elem) = element.as_view_mut() {
+            if let Some(view_object) = view_elem.take_pending_view_object() {
+                use flui_view::tree::ViewNode;
+                let mode = view_object.mode();
+                let node = ViewNode::from_boxed(view_object, mode);
+                let view_id = self.views.insert(node);
+                view_elem.set_view_id(Some(view_id));
+                tracing::debug!(?view_id, ?mode, "Child ViewObject registered");
+            }
+        }
+
+        // Handle pending RenderObject and link in RenderTree
+        let child_render_id = if let Some(render_elem) = element.as_render_mut() {
+            if let Some(render_object) = render_elem.take_pending_render_object() {
+                use flui_rendering::tree::RenderNode;
+                let node = RenderNode::from_boxed(render_object);
+                let render_id = self.render_objects.insert(node);
+                render_elem.set_render_id(Some(render_id));
+                tracing::debug!(?render_id, "Child RenderObject registered");
+                Some(render_id)
+            } else {
+                render_elem.render_id()
+            }
+        } else {
+            None
+        };
+
+        // Link child RenderObject to parent RenderObject in RenderTree
+        if let Some(child_rid) = child_render_id {
+            // Get parent's render_id
+            let parent_render_id = self
+                .elements
+                .get(parent_id)
+                .and_then(|e| e.as_render())
+                .and_then(|r| r.render_id());
+
+            if let Some(parent_rid) = parent_render_id {
+                self.render_objects.add_child(parent_rid, child_rid);
+                tracing::debug!(
+                    parent = ?parent_rid,
+                    child = ?child_rid,
+                    "RenderTree child linked"
+                );
+            }
+        }
+
+        // Insert into ElementTree
+        let id = self.elements.insert(element);
+
+        // Handle pending children recursively
+        if let Some(element) = self.elements.get_mut(id) {
+            let pending_children = match element {
+                Element::View(v) => v.take_pending_children(),
+                Element::Render(r) => r.take_pending_children(),
+            };
+
+            if let Some(children) = pending_children {
+                for child_box in children {
+                    if let Ok(child_element) = child_box.downcast::<Element>() {
+                        let child_id = self.mount_child(*child_element, id);
+                        if let Some(parent) = self.elements.get_mut(id) {
+                            parent.add_child(child_id);
+                        }
+                    }
+                }
+            }
+        }
 
         id
     }
@@ -432,7 +550,7 @@ impl TreeCoordinator {
     /// 1. Get Element from ElementTree using element_id
     /// 2. Get RenderId from RenderElement
     /// 3. Get RenderNode from RenderTree
-    /// 4. Call layout on the RenderObject
+    /// 4. Check arity and dispatch to appropriate layout method
     /// 5. Cache the computed size in RenderNode
     ///
     /// # Arguments
@@ -450,12 +568,15 @@ impl TreeCoordinator {
         element_id: flui_foundation::ElementId,
         constraints: flui_types::constraints::BoxConstraints,
     ) -> Option<flui_types::Size> {
+        use flui_rendering::core::RuntimeArity;
+
         // Step 1: Get Element from ElementTree
         let element = self.elements.get(element_id)?;
 
         // Step 2: Element must be a RenderElement with a render_id
         let render_elem = element.as_render()?;
         let render_id = render_elem.render_id()?;
+        let arity = render_elem.arity();
 
         // Step 3: Verify RenderNode exists in RenderTree
         if self.render_objects.get(render_id).is_none() {
@@ -463,8 +584,42 @@ impl TreeCoordinator {
             return None;
         }
 
-        // Step 4: Call layout on the RenderObject
-        let size = self.layout_leaf_render_object(render_id, constraints)?;
+        // Step 4: Dispatch based on arity
+        let size = match arity {
+            RuntimeArity::Exact(0) => {
+                // Leaf - no children
+                self.layout_leaf_render_object(render_id, constraints)?
+            }
+            RuntimeArity::Exact(1) => {
+                // Single - exactly one child
+                self.layout_single_render_object(render_id, constraints)?
+            }
+            RuntimeArity::Exact(n) => {
+                // Exact<N> - fixed number of children
+                self.layout_variable_render_object(render_id, constraints, Some(n))?
+            }
+            RuntimeArity::Optional => {
+                // Optional - 0 or 1 child
+                self.layout_optional_render_object(render_id, constraints)?
+            }
+            RuntimeArity::Variable => {
+                // Variable - any number of children
+                self.layout_variable_render_object(render_id, constraints, None)?
+            }
+            RuntimeArity::AtLeast(min) => {
+                // AtLeast<N> - minimum N children
+                self.layout_variable_render_object(render_id, constraints, Some(min))?
+            }
+            RuntimeArity::Range(_, _) => {
+                // Range<MIN, MAX> - between MIN and MAX children
+                self.layout_variable_render_object(render_id, constraints, None)?
+            }
+            RuntimeArity::Never => {
+                // Never - impossible, should not happen
+                tracing::error!(?render_id, "Never arity should not occur");
+                return None;
+            }
+        };
 
         tracing::trace!(?element_id, ?size, "Layout computed");
 
@@ -473,12 +628,7 @@ impl TreeCoordinator {
 
     /// Layout a Leaf RenderObject (no children).
     ///
-    /// This is a simplified layout path for Leaf elements like RenderParagraph
-    /// that don't need child layout context.
-    ///
-    /// For RenderParagraph specifically, we inline the layout algorithm since
-    /// the context-based approach is complex for Leaf nodes. This calculates
-    /// text size based on the constraints and caches the result.
+    /// This handles RenderObjects with Leaf arity like RenderParagraph.
     fn layout_leaf_render_object(
         &mut self,
         render_id: flui_rendering::tree::RenderId,
@@ -497,7 +647,6 @@ impl TreeCoordinator {
             (render_object as &mut dyn std::any::Any).downcast_mut::<RenderParagraph>()
         {
             // Inline the RenderParagraph layout logic since Leaf doesn't need children
-            // This mirrors the logic from RenderParagraph::layout but without the context
             let data = paragraph.data();
 
             // Calculate text size (simplified estimation)
@@ -553,6 +702,191 @@ impl TreeCoordinator {
         // For other Leaf types, return a default size
         tracing::warn!(?render_id, "Unknown Leaf type, using default 100x100 size");
         Some(flui_types::Size::new(100.0, 100.0))
+    }
+
+    /// Layout a Single RenderObject (exactly one child).
+    ///
+    /// This handles RenderObjects with Single arity like RenderPadding.
+    fn layout_single_render_object(
+        &mut self,
+        render_id: flui_rendering::tree::RenderId,
+        constraints: flui_types::constraints::BoxConstraints,
+    ) -> Option<flui_types::Size> {
+        use flui_objects::RenderPadding;
+        use flui_types::{Offset, Size};
+
+        // Get child RenderId from RenderTree
+        let child_render_id = {
+            let render_node = self.render_objects.get(render_id)?;
+            let children = render_node.children();
+            if children.is_empty() {
+                tracing::warn!(?render_id, "Single arity RenderObject has no children");
+                return None;
+            }
+            children[0]
+        };
+
+        // Try to downcast to RenderPadding
+        let render_node = self.render_objects.get_mut(render_id)?;
+        let render_object = render_node.render_object_mut();
+
+        if let Some(padding) =
+            (render_object as &mut dyn std::any::Any).downcast_mut::<RenderPadding>()
+        {
+            let edge_insets = padding.padding;
+
+            // Deflate constraints by padding
+            let child_constraints = constraints.deflate(&edge_insets);
+
+            // Layout child recursively
+            let child_size =
+                self.layout_render_object_recursive(child_render_id, child_constraints)?;
+
+            // Trace child offset (padding.left, padding.top)
+            // TODO: Store offset for paint phase
+            tracing::trace!(
+                child = ?child_render_id,
+                offset = ?Offset::new(edge_insets.left, edge_insets.top),
+                "Child offset set"
+            );
+
+            // Add padding to child size
+            let size = Size::new(
+                child_size.width + edge_insets.horizontal_total(),
+                child_size.height + edge_insets.vertical_total(),
+            );
+
+            tracing::trace!(?render_id, ?size, "RenderPadding layout");
+
+            // Cache the size in RenderNode
+            if let Some(node) = self.render_objects.get_mut(render_id) {
+                node.set_cached_size(Some(size));
+            }
+
+            return Some(size);
+        }
+
+        // Unknown Single arity type - layout child and return its size
+        tracing::warn!(
+            ?render_id,
+            "Unknown Single arity type, passing through to child"
+        );
+        let child_size = self.layout_render_object_recursive(child_render_id, constraints)?;
+
+        if let Some(node) = self.render_objects.get_mut(render_id) {
+            node.set_cached_size(Some(child_size));
+        }
+
+        Some(child_size)
+    }
+
+    /// Layout an Optional RenderObject (0 or 1 child).
+    fn layout_optional_render_object(
+        &mut self,
+        render_id: flui_rendering::tree::RenderId,
+        constraints: flui_types::constraints::BoxConstraints,
+    ) -> Option<flui_types::Size> {
+        // Get child RenderId from RenderTree (if exists)
+        let child_render_id = {
+            let render_node = self.render_objects.get(render_id)?;
+            let children = render_node.children();
+            children.first().copied()
+        };
+
+        if let Some(child_id) = child_render_id {
+            // Has child - layout it
+            let child_size = self.layout_render_object_recursive(child_id, constraints)?;
+
+            if let Some(node) = self.render_objects.get_mut(render_id) {
+                node.set_cached_size(Some(child_size));
+            }
+
+            Some(child_size)
+        } else {
+            // No child - return minimum size
+            let size = flui_types::Size::ZERO;
+
+            if let Some(node) = self.render_objects.get_mut(render_id) {
+                node.set_cached_size(Some(size));
+            }
+
+            Some(size)
+        }
+    }
+
+    /// Layout a Variable RenderObject (any number of children).
+    fn layout_variable_render_object(
+        &mut self,
+        render_id: flui_rendering::tree::RenderId,
+        constraints: flui_types::constraints::BoxConstraints,
+        _expected_count: Option<usize>,
+    ) -> Option<flui_types::Size> {
+        // Get all child RenderIds from RenderTree
+        let child_render_ids: Vec<_> = {
+            let render_node = self.render_objects.get(render_id)?;
+            render_node.children().to_vec()
+        };
+
+        // Layout all children and accumulate size
+        let mut total_width = 0.0f32;
+        let mut max_height = 0.0f32;
+
+        for child_id in child_render_ids {
+            if let Some(child_size) = self.layout_render_object_recursive(child_id, constraints) {
+                total_width += child_size.width;
+                max_height = max_height.max(child_size.height);
+            }
+        }
+
+        let size = flui_types::Size::new(total_width, max_height);
+
+        if let Some(node) = self.render_objects.get_mut(render_id) {
+            node.set_cached_size(Some(size));
+        }
+
+        Some(size)
+    }
+
+    /// Recursively layout a RenderObject by its RenderId.
+    ///
+    /// This is the core recursive layout method that dispatches based on
+    /// the RenderObject type.
+    fn layout_render_object_recursive(
+        &mut self,
+        render_id: flui_rendering::tree::RenderId,
+        constraints: flui_types::constraints::BoxConstraints,
+    ) -> Option<flui_types::Size> {
+        use flui_objects::{RenderPadding, RenderParagraph};
+
+        // Get the RenderNode to determine type
+        let render_node = self.render_objects.get(render_id)?;
+        let children_count = render_node.children().len();
+        let render_object = render_node.render_object();
+
+        // Determine arity based on type
+        let is_paragraph = (render_object as &dyn std::any::Any)
+            .downcast_ref::<RenderParagraph>()
+            .is_some();
+        let is_padding = (render_object as &dyn std::any::Any)
+            .downcast_ref::<RenderPadding>()
+            .is_some();
+
+        if is_paragraph {
+            // Leaf - no children
+            self.layout_leaf_render_object(render_id, constraints)
+        } else if is_padding {
+            // Single - exactly one child
+            self.layout_single_render_object(render_id, constraints)
+        } else if children_count == 0 {
+            // Unknown leaf type
+            self.layout_leaf_render_object(render_id, constraints)
+        } else if children_count == 1 {
+            // Unknown single child type
+            self.layout_single_render_object(render_id, constraints)
+        } else {
+            // Variable children
+            self.layout_variable_render_object(render_id, constraints, None)
+        }
     }
 }
 
@@ -613,10 +947,10 @@ impl TreeCoordinator {
         Some(canvas)
     }
 
-    /// Paints a single RenderObject to a canvas.
+    /// Paints a single RenderObject to a canvas recursively.
     ///
-    /// This is a simplified paint method that works for Leaf elements (no children).
-    /// For elements with children, a more complex context setup would be needed.
+    /// This method handles both Leaf elements (like RenderParagraph) and
+    /// container elements (like RenderPadding) by recursively painting children.
     #[instrument(level = "trace", skip(self, canvas, _size), fields(render = ?render_id))]
     fn paint_render_object_to_canvas(
         &mut self,
@@ -625,7 +959,7 @@ impl TreeCoordinator {
         _size: flui_types::Size,
         canvas: &mut flui_painting::Canvas,
     ) {
-        use flui_objects::RenderParagraph;
+        use flui_objects::{RenderPadding, RenderParagraph};
         use flui_painting::Paint;
         use flui_types::typography::TextStyle;
 
@@ -635,12 +969,14 @@ impl TreeCoordinator {
             return;
         };
 
-        // Try to downcast to RenderParagraph (the most common case for text)
+        // Get children before borrowing render_object
+        let children: Vec<_> = render_node.children().to_vec();
         let render_object = render_node.render_object();
+
+        // Try RenderParagraph first (Leaf - no children)
         if let Some(paragraph) =
             (render_object as &dyn std::any::Any).downcast_ref::<RenderParagraph>()
         {
-            // Direct paint for RenderParagraph
             let data = paragraph.data();
             let paint = Paint {
                 color: data.color,
@@ -653,6 +989,46 @@ impl TreeCoordinator {
 
             canvas.draw_text(&data.text, offset, &text_style, &paint);
             tracing::trace!(text = %data.text, "Text painted");
+            return;
+        }
+
+        // Try RenderPadding (Single child)
+        if let Some(padding) = (render_object as &dyn std::any::Any).downcast_ref::<RenderPadding>()
+        {
+            let edge_insets = padding.padding;
+
+            // Paint child with offset adjusted by padding
+            if let Some(&child_id) = children.first() {
+                let child_offset =
+                    offset + flui_types::Offset::new(edge_insets.left, edge_insets.top);
+                let child_size = self
+                    .render_objects
+                    .get(child_id)
+                    .and_then(|n| n.cached_size())
+                    .unwrap_or(flui_types::Size::ZERO);
+
+                self.paint_render_object_to_canvas(child_id, child_offset, child_size, canvas);
+            }
+
+            tracing::trace!(?render_id, "RenderPadding painted");
+            return;
+        }
+
+        // Unknown type - try to paint children anyway
+        if !children.is_empty() {
+            tracing::debug!(
+                ?render_id,
+                children_count = children.len(),
+                "Painting unknown container type"
+            );
+            for child_id in children {
+                let child_size = self
+                    .render_objects
+                    .get(child_id)
+                    .and_then(|n| n.cached_size())
+                    .unwrap_or(flui_types::Size::ZERO);
+                self.paint_render_object_to_canvas(child_id, offset, child_size, canvas);
+            }
         } else {
             tracing::warn!(?render_id, "Unknown RenderObject type, skipping paint");
         }
