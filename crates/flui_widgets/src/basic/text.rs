@@ -48,7 +48,7 @@ use flui_types::{
     typography::{TextAlign, TextDirection, TextOverflow},
     Color,
 };
-use flui_view::{RenderView, UpdateResult};
+use flui_view::{wrappers::RenderViewWrapper, IntoView, RenderView, UpdateResult, ViewObject};
 
 /// A widget that displays a string of text with a single style.
 ///
@@ -345,6 +345,18 @@ impl RenderView<BoxProtocol, Leaf> for Text {
         }
 
         result
+    }
+}
+
+/// IntoView implementation for Text.
+///
+/// Enables Text to be used directly in widget trees without `.leaf()`:
+/// ```ignore
+/// Padding::all(32.0).child(Text::headline("Hello"))
+/// ```
+impl IntoView for Text {
+    fn into_view(self) -> Box<dyn ViewObject> {
+        Box::new(RenderViewWrapper::new(self))
     }
 }
 
