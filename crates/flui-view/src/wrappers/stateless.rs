@@ -20,6 +20,18 @@ impl<V: StatelessView> StatelessViewWrapper<V> {
     pub fn new(view: V) -> Self {
         Self { view: Some(view) }
     }
+
+    /// Extract the inner view, consuming the wrapper.
+    ///
+    /// Returns `None` if the view has already been consumed by `build()`.
+    pub fn into_inner(self) -> V {
+        self.view.expect("View has been consumed by build()")
+    }
+
+    /// Get a reference to the inner view, if present.
+    pub fn inner(&self) -> Option<&V> {
+        self.view.as_ref()
+    }
 }
 
 impl<V: StatelessView> std::fmt::Debug for StatelessViewWrapper<V> {
