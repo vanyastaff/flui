@@ -38,6 +38,13 @@ impl<V: StatefulView> StatefulViewWrapper<V> {
     pub fn state_mut(&mut self) -> Option<&mut V::State> {
         self.state.as_mut()
     }
+
+    /// Extract the inner view, consuming the wrapper.
+    ///
+    /// Note: This discards any initialized state.
+    pub fn into_inner(self) -> V {
+        self.view
+    }
 }
 
 impl<V: StatefulView> std::fmt::Debug for StatefulViewWrapper<V> {

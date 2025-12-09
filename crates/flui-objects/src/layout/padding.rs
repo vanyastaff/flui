@@ -73,7 +73,7 @@
 //! let vertical = RenderPadding::new(EdgeInsets::symmetric_v(10.0));
 //! ```
 
-use flui_rendering::{BoxLayoutCtx, BoxPaintCtx, RenderBox, Single};
+use flui_rendering::{BoxLayoutCtx, BoxPaintCtx, Optional, RenderBox};
 use flui_rendering::{RenderObject, RenderResult};
 use flui_types::{EdgeInsets, Offset, Size};
 
@@ -177,27 +177,42 @@ impl RenderPadding {
 
 impl RenderObject for RenderPadding {}
 
-impl RenderBox<Single> for RenderPadding {
-    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Single>) -> RenderResult<Size> {
+impl RenderBox<Optional> for RenderPadding {
+    fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Optional>) -> RenderResult<Size> {
         let padding = self.padding;
+        let constraints = ctx.constraints;
 
-        // Deflate constraints by padding
-        let child_constraints = ctx.constraints.deflate(&padding);
+        // Optional arity: use ctx.children.get() which returns Option<&RenderId>
+        if let Some(&child_id) = ctx.children.get() {
+            // Deflate constraints by padding
+            let child_constraints = constraints.deflate(&padding);
 
-        // Layout child with deflated constraints (using convenience method)
-        let child_size = ctx.layout_child(ctx.single_child(), child_constraints)?;
+            // Layout child with deflated constraints
+            let child_size = ctx.layout_child(child_id, child_constraints)?;
 
-        // Add padding to child size
-        Ok(Size::new(
-            child_size.width + padding.horizontal_total(),
-            child_size.height + padding.vertical_total(),
-        ))
+            // Add padding to child size
+            Ok(Size::new(
+                child_size.width + padding.horizontal_total(),
+                child_size.height + padding.vertical_total(),
+            ))
+        } else {
+            // No child - use padding size as minimum
+            // This matches Flutter behavior where Padding with no child takes up padding space
+            Ok(Size::new(
+                padding.horizontal_total().max(constraints.min_width),
+                padding.vertical_total().max(constraints.min_height),
+            ))
+        }
     }
 
-    fn paint(&self, ctx: &mut BoxPaintCtx<'_, Single>) {
-        // Apply padding offset and paint child (using convenience method)
-        let child_offset = Offset::new(self.padding.left, self.padding.top);
-        ctx.paint_child(ctx.single_child(), ctx.offset + child_offset);
+    fn paint(&self, ctx: &mut BoxPaintCtx<'_, Optional>) {
+        // Optional arity: use ctx.children.get()
+        if let Some(&child_id) = ctx.children.get() {
+            // Apply padding offset and paint child
+            let child_offset = Offset::new(self.padding.left, self.padding.top);
+            ctx.paint_child(child_id, ctx.offset + child_offset);
+        }
+        // If no child, nothing to paint
     }
 }
 

@@ -8,8 +8,9 @@ use std::sync::Arc;
 
 use flui_foundation::ElementId;
 
+use crate::handle::ViewConfig;
 use crate::traits::ProviderView;
-use crate::{BuildContext, IntoView, ViewMode, ViewObject};
+use crate::{BuildContext, IntoView, IntoViewConfig, ViewMode, ViewObject};
 
 /// Wrapper for `ProviderView` that implements `ViewObject`
 ///
@@ -88,6 +89,12 @@ where
     #[inline]
     pub fn dependents_vec(&self) -> Vec<ElementId> {
         self.dependents.iter().copied().collect()
+    }
+
+    /// Extract the inner view, consuming the wrapper.
+    #[inline]
+    pub fn into_inner(self) -> V {
+        self.view
     }
 }
 
@@ -244,6 +251,51 @@ where
 {
     fn into_view(self) -> Box<dyn ViewObject> {
         Box::new(ProviderViewWrapper::<V, T>::new(self.0))
+    }
+}
+
+// ============================================================================
+// IntoViewConfig IMPLEMENTATION
+// ============================================================================
+
+/// Implementation for `ProviderViewWrapper`.
+///
+/// This allows provider views to be converted to `ViewConfig` when wrapped:
+///
+/// ```rust,ignore
+/// use flui_view::{Provider, ProviderView, IntoViewConfig};
+///
+/// let config = Provider::new(MyProvider { ... }).into_view_config();
+/// ```
+impl<V, T> IntoViewConfig for ProviderViewWrapper<V, T>
+where
+    V: ProviderView<T> + Clone + Send + Sync + 'static,
+    T: Send + Sync + 'static,
+{
+    fn into_view_config(self) -> ViewConfig {
+        let view = self.view;
+        ViewConfig::new_with_factory(view, |v: &V| {
+            Box::new(ProviderViewWrapper::<V, T>::new(v.clone()))
+        })
+    }
+}
+
+/// Implementation for `Provider` helper.
+///
+/// ```rust,ignore
+/// use flui_view::{Provider, IntoViewConfig};
+///
+/// let config = Provider::new(MyProvider { ... }).into_view_config();
+/// ```
+impl<V, T> IntoViewConfig for Provider<V, T>
+where
+    V: ProviderView<T> + Clone + Send + Sync + 'static,
+    T: Send + Sync + 'static,
+{
+    fn into_view_config(self) -> ViewConfig {
+        ViewConfig::new_with_factory(self.0, |v: &V| {
+            Box::new(ProviderViewWrapper::<V, T>::new(v.clone()))
+        })
     }
 }
 

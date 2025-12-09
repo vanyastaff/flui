@@ -1,0 +1,968 @@
+//! Node state markers for typestate pattern across all three trees.
+//!
+//! This module provides compile-time state tracking for:
+//! - **ViewTree**: ViewHandle<S> (view config vs live ViewObject)
+//! - **ElementTree**: ElementHandle<S> (unmounted vs mounted element)
+//! - **RenderTree**: RenderHandle<S> (unmounted vs mounted render object)
+//!
+//! # Philosophy
+//!
+//! flui-tree provides pure abstractions that work across all trees.
+//! Typestate is a fundamental pattern like [`Arity`](crate::arity::Arity) - it describes structure,
+//! not domain-specific behavior.
+//!
+//! # Design Principles
+//!
+//! Similar to the arity system, typestate follows these principles:
+//! - **Zero-cost**: PhantomData has no runtime overhead
+//! - **Sealed**: Only Unmounted and Mounted can implement NodeState
+//! - **Universal**: Works for View, Element, and Render trees
+//! - **Type-safe**: Invalid state transitions caught at compile time
+//!
+//! # Example
+//!
+//! ```rust,ignore
+//! use flui_tree::{Unmounted, Mounted, NodeState};
+//!
+//! // Node with unmounted state
+//! struct ViewHandle<S: NodeState> {
+//!     config: ViewConfig,
+//!     live_object: Option<ViewObject>,
+//!     tree_info: Option<TreeInfo>,
+//!     _state: PhantomData<S>,
+//! }
+//!
+//! impl ViewHandle<Unmounted> {
+//!     fn config(&self) -> &ViewConfig {
+//!         &self.config  // ✅ OK - config always present
+//!     }
+//!
+//!     fn mount(self, parent: Option<usize>) -> ViewHandle<Mounted> {
+//!         // Transition to mounted state
+//!     }
+//! }
+//!
+//! impl ViewHandle<Mounted> {
+//!     fn live_object(&self) -> &ViewObject {
+//!         self.live_object.as_ref().unwrap()  // ✅ Safe - always Some for Mounted
+//!     }
+//!
+//!     fn tree_info(&self) -> &TreeInfo {
+//!         self.tree_info.as_ref().unwrap()  // ✅ Safe - always Some for Mounted
+//!     }
+//! }
+//! ```
+
+use std::marker::PhantomData;
+
+// ============================================================================
+// STATE MARKERS
+// ============================================================================
+
+/// Sealed trait pattern - prevents external implementations.
+mod sealed {
+    pub trait Sealed {}
+    impl Sealed for super::Unmounted {}
+    impl Sealed for super::Mounted {}
+}
+
+/// Marker trait for node structural states.
+///
+/// Similar to how [`Arity`](crate::arity::Arity) marks compile-time child count constraints,
+/// `NodeState` marks compile-time **structural** constraints (whether node is in tree or not).
+///
+/// # Design Philosophy: Structural vs Lifecycle
+///
+/// **NodeState tracks STRUCTURAL state (compile-time):**
+/// - [`Unmounted`] - Not in tree (has config only)
+/// - [`Mounted`] - In tree (has config + live object + tree position)
+///
+/// **Lifecycle flags track RUNTIME state (in each crate):**
+/// - `needs_build` - Needs rebuild (runtime flag)
+/// - `needs_layout` - Needs layout (runtime flag in flui_rendering)
+/// - `needs_paint` - Needs paint (runtime flag in flui_rendering)
+/// - `is_reassembling` - Hot reload (runtime flag)
+///
+/// This separation follows Flutter's design:
+/// - Flutter Element has lifecycle (mounted/active) as structural
+/// - Flutter Element has `_dirty` as runtime flag
+/// - Flutter RenderObject has `_needsLayout`, `_needsPaint` as runtime flags
+///
+/// # State Transition (One-Way)
+///
+/// ```text
+/// Unmounted ──mount()→ Mounted ──unmount()→ Unmounted
+/// ```
+///
+/// Structural state is mostly one-way (unmounted → mounted when inserted,
+/// mounted → unmounted when removed). Lifecycle changes (dirty/clean) happen
+/// via runtime flags while staying Mounted.
+///
+/// # Design
+///
+/// Like Arity, NodeState is:
+/// - **Zero-cost**: PhantomData has no runtime overhead
+/// - **Sealed**: Only Unmounted and Mounted can implement it
+/// - **Universal**: Works for View, Element, and Render trees
+/// - **Copy**: Enables efficient passing and cloning
+/// - **Structural**: Tracks tree membership, not lifecycle
+pub trait NodeState: sealed::Sealed + Send + Sync + Copy + 'static {
+    /// Whether this state represents a mounted node (in tree).
+    ///
+    /// This is a const, enabling compile-time checks and optimizations.
+    /// - `false` for Unmounted (not in tree)
+    /// - `true` for Mounted (in tree)
+    const IS_MOUNTED: bool;
+
+    /// Get a human-readable name for this state.
+    ///
+    /// Used for debugging and error messages.
+    fn state_name() -> &'static str;
+}
+
+/// Unmounted state - node has configuration but is not in tree.
+///
+/// Similar to how [`Leaf`](crate::arity::Leaf) indicates "0 children", `Unmounted` indicates
+/// "not yet in tree". The node may have:
+/// - View config (for ViewHandle)
+/// - Element data (for ElementHandle)
+/// - RenderObject config (for RenderHandle)
+///
+/// But it does NOT have:
+/// - Parent reference
+/// - Child references
+/// - Tree position (depth, etc.)
+///
+/// # Compile-Time Guarantees
+///
+/// Methods that require tree position will not compile for `Unmounted` nodes:
+///
+/// ```rust,ignore
+/// let unmounted = ViewHandle::<Unmounted>::new(config);
+/// // unmounted.parent();  // ❌ Compile error - no parent() method for Unmounted!
+/// ```
+///
+/// # Example
+///
+/// ```rust,ignore
+/// // Create unmounted view
+/// let view = ViewHandle::<Unmounted>::new(Padding::all(16.0));
+///
+/// // Can access config
+/// let config = view.config();
+///
+/// // Cannot access tree info (compile error!)
+/// // let parent = view.parent();  // ❌ Doesn't compile!
+///
+/// // Must mount first
+/// let mounted = view.mount(Some(parent_id));
+/// let parent = mounted.parent();  // ✅ OK now!
+/// ```
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct Unmounted;
+
+impl NodeState for Unmounted {
+    const IS_MOUNTED: bool = false;
+
+    #[inline]
+    fn state_name() -> &'static str {
+        "Unmounted"
+    }
+}
+
+/// Mounted state - node is in tree with parent/children.
+///
+/// Similar to how [`Single`](crate::arity::Single) indicates "1 child", `Mounted` indicates
+/// "in tree with position". The node has:
+/// - Live object (ViewObject, Element, RenderObject)
+/// - Parent reference (if not root)
+/// - Child references
+/// - Tree position information
+///
+/// # Compile-Time Guarantees
+///
+/// Methods that require tree position will only compile for `Mounted` nodes:
+///
+/// ```rust,ignore
+/// impl ViewHandle<Mounted> {
+///     pub fn parent(&self) -> Option<usize> {
+///         self.tree_info().parent  // ✅ Safe - tree_info always present
+///     }
+/// }
+/// ```
+///
+/// # Example
+///
+/// ```rust,ignore
+/// // Mount the view
+/// let mounted = unmounted_view.mount(Some(parent_id));
+///
+/// // Can access tree info
+/// let parent = mounted.parent();
+/// let children = mounted.children();
+/// let depth = mounted.depth();
+///
+/// // Can access live object
+/// let view_obj = mounted.view_object();
+/// ```
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct Mounted;
+
+impl NodeState for Mounted {
+    const IS_MOUNTED: bool = true;
+
+    #[inline]
+    fn state_name() -> &'static str {
+        "Mounted"
+    }
+}
+
+// ============================================================================
+// TREE INFO (Present only when Mounted)
+// ============================================================================
+
+/// Tree position information for mounted nodes.
+///
+/// This struct is present when `NodeState::IS_MOUNTED = true`, which means the [`Mounted`] state.
+///
+/// Similar to how [`FixedChildren<N>`](crate::arity::FixedChildren) guarantees N children,
+/// `TreeInfo` guarantees tree position data exists for mounted nodes.
+///
+/// # Fields
+///
+/// - `parent`: Parent node ID (None for root)
+/// - `children`: List of child node IDs
+/// - `depth`: Distance from root (0 = root)
+///
+/// # Usage
+///
+/// ```rust,ignore
+/// impl ViewHandle<Mounted> {
+///     pub fn tree_info(&self) -> &TreeInfo {
+///         // Safe unwrap - TreeInfo is always Some for Mounted nodes
+///         self.tree_info.as_ref().unwrap()
+///     }
+/// }
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TreeInfo {
+    /// Parent node ID (None if root).
+    pub parent: Option<usize>,
+
+    /// Children node IDs.
+    pub children: Vec<usize>,
+
+    /// Depth in tree (0 = root).
+    pub depth: usize,
+}
+
+impl TreeInfo {
+    /// Create new tree info for a root node.
+    ///
+    /// Root nodes have:
+    /// - No parent (`parent = None`)
+    /// - Depth 0
+    /// - Empty children list
+    #[inline]
+    #[must_use]
+    pub const fn root() -> Self {
+        Self {
+            parent: None,
+            children: Vec::new(),
+            depth: 0,
+        }
+    }
+
+    /// Create new tree info with parent.
+    ///
+    /// # Parameters
+    ///
+    /// - `parent`: Parent node ID
+    /// - `depth`: Distance from root
+    #[inline]
+    #[must_use]
+    pub fn with_parent(parent: usize, depth: usize) -> Self {
+        Self {
+            parent: Some(parent),
+            children: Vec::new(),
+            depth,
+        }
+    }
+
+    /// Check if this is the root node.
+    #[inline]
+    #[must_use]
+    pub const fn is_root(&self) -> bool {
+        self.parent.is_none()
+    }
+
+    /// Get number of children.
+    #[inline]
+    #[must_use]
+    pub fn child_count(&self) -> usize {
+        self.children.len()
+    }
+
+    /// Add a child node ID.
+    #[inline]
+    pub fn add_child(&mut self, child: usize) {
+        self.children.push(child);
+    }
+
+    /// Remove a child node ID.
+    ///
+    /// Returns `true` if the child was found and removed.
+    #[inline]
+    pub fn remove_child(&mut self, child: usize) -> bool {
+        if let Some(pos) = self.children.iter().position(|&id| id == child) {
+            self.children.remove(pos);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Get the parent ID, panicking if this is a root node.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this node is the root (has no parent).
+    #[inline]
+    #[must_use]
+    pub fn parent_unchecked(&self) -> usize {
+        self.parent.expect("Cannot get parent of root node")
+    }
+}
+
+// ============================================================================
+// MOUNTABLE TRAIT (Like Arity trait)
+// ============================================================================
+
+/// Trait for nodes that can transition from Unmounted to Mounted state.
+///
+/// This is analogous to the [`Arity`](crate::arity::Arity) trait - it defines behavior that works
+/// across all node types (View, Element, Render).
+///
+/// # Type Safety
+///
+/// The trait enforces that mounting consumes the unmounted node and
+/// returns a new mounted node, preventing accidental reuse.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// impl Mountable for ViewHandle<Unmounted> {
+///     type Mounted = ViewHandle<Mounted>;
+///
+///     fn mount(self, parent: Option<usize>) -> Self::Mounted {
+///         // Create live ViewObject from config
+///         let view_object = self.config.create_view_object();
+///
+///         // Create tree info
+///         let tree_info = if let Some(parent_id) = parent {
+///             TreeInfo::with_parent(parent_id, 0)
+///         } else {
+///             TreeInfo::root()
+///         };
+///
+///         ViewHandle {
+///             config: self.config,
+///             view_object: Some(view_object),
+///             tree_info: Some(tree_info),
+///             _state: PhantomData,
+///         }
+///     }
+/// }
+/// ```
+pub trait Mountable: Sized {
+    /// The mounted version of this node type.
+    ///
+    /// This associated type ensures type-level connection between
+    /// unmounted and mounted states.
+    type Mounted: Unmountable<Unmounted = Self>;
+
+    /// Mount the node, transitioning from Unmounted to Mounted.
+    ///
+    /// This consumes the unmounted node and returns a new mounted node
+    /// with live objects and tree position information.
+    ///
+    /// # Parameters
+    ///
+    /// - `parent`: Parent node ID (None for root)
+    ///
+    /// # Returns
+    ///
+    /// A mounted version of this node with tree position info.
+    fn mount(self, parent: Option<usize>) -> Self::Mounted;
+}
+
+/// Trait for nodes that can be unmounted.
+///
+/// This trait is implemented by all mounted handles and provides:
+/// - Access to tree position information
+/// - Ability to unmount back to config-only state
+/// - Generic operations on mounted nodes
+///
+/// # Use Cases
+///
+/// - **Hot-reload**: Recreate views from config
+/// - **Serialization**: Save tree state
+/// - **Tree reconstruction**: Rebuild after changes
+/// - **Generic tree algorithms**: TreeCoordinator can work with any mounted handle
+///
+/// # Type Safety
+///
+/// Like [`Mountable`], this trait enforces that unmounting consumes
+/// the mounted node and returns a new unmounted node. The associated type
+/// guarantees bidirectional conversion.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// impl Unmountable for ViewHandle<Mounted> {
+///     type Unmounted = ViewHandle<Unmounted>;
+///
+///     fn unmount(self) -> Self::Unmounted {
+///         ViewHandle {
+///             config: self.config,  // Preserve config
+///             view_object: None,    // Discard live object
+///             tree_info: None,      // Discard tree info
+///             _state: PhantomData,
+///         }
+///     }
+///
+///     fn tree_info(&self) -> &TreeInfo {
+///         self.tree_info.as_ref().unwrap()
+///     }
+///
+///     fn tree_info_mut(&mut self) -> &mut TreeInfo {
+///         self.tree_info.as_mut().unwrap()
+///     }
+/// }
+/// ```
+pub trait Unmountable: Sized {
+    /// The unmounted version of this node type.
+    ///
+    /// This associated type ensures type-level connection between
+    /// mounted and unmounted states.
+    type Unmounted: Mountable<Mounted = Self>;
+
+    /// Unmount the node, transitioning from Mounted to Unmounted.
+    ///
+    /// This preserves the configuration but discards:
+    /// - Live objects (ViewObject, RenderObject, etc.)
+    /// - Tree position information
+    /// - Parent/child references
+    ///
+    /// # Returns
+    ///
+    /// An unmounted version with only the configuration.
+    fn unmount(self) -> Self::Unmounted;
+
+    /// Access tree position information.
+    ///
+    /// This is always safe to call for mounted handles as TreeInfo
+    /// is guaranteed to be present when mounted.
+    ///
+    /// # Returns
+    ///
+    /// Reference to TreeInfo containing parent/children/depth.
+    fn tree_info(&self) -> &TreeInfo;
+
+    /// Access mutable tree position information.
+    ///
+    /// This allows modifying the tree structure (adding/removing children,
+    /// changing parent, updating depth).
+    ///
+    /// # Returns
+    ///
+    /// Mutable reference to TreeInfo.
+    fn tree_info_mut(&mut self) -> &mut TreeInfo;
+}
+
+// ============================================================================
+// NAVIGABLE HANDLE (Extension trait - auto-implemented)
+// ============================================================================
+
+/// Extension trait for convenient tree navigation on mounted handles.
+///
+/// This trait is automatically implemented for all types that implement
+/// [`Unmountable`], providing convenient methods for accessing tree structure
+/// without directly calling `tree_info()`.
+///
+/// # Design Philosophy
+///
+/// Similar to how Rust's standard library provides extension traits
+/// (e.g., `IteratorExt`), `NavigableHandle` extends [`Unmountable`] with
+/// navigation-specific methods.
+///
+/// # Zero-Cost
+///
+/// All methods are inlined and delegate to [`TreeInfo`] methods, resulting
+/// in zero runtime overhead.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// fn traverse<H: Unmountable>(handle: &H) {
+///     // NavigableHandle methods available automatically!
+///     if handle.is_root() {
+///         println!("Root node at depth {}", handle.depth());
+///     }
+///
+///     for child_id in handle.children() {
+///         println!("Child: {}", child_id);
+///     }
+/// }
+/// ```
+pub trait NavigableHandle: Unmountable {
+    /// Get the parent node ID.
+    ///
+    /// Returns `None` if this is the root node.
+    #[inline]
+    fn parent(&self) -> Option<usize> {
+        self.tree_info().parent
+    }
+
+    /// Get the children node IDs.
+    ///
+    /// Returns a slice of all child IDs.
+    #[inline]
+    fn children(&self) -> &[usize] {
+        &self.tree_info().children
+    }
+
+    /// Get the depth of this node in the tree.
+    ///
+    /// Root nodes have depth 0, their children have depth 1, etc.
+    #[inline]
+    fn depth(&self) -> usize {
+        self.tree_info().depth
+    }
+
+    /// Check if this is the root node.
+    ///
+    /// Equivalent to `self.parent().is_none()`.
+    #[inline]
+    fn is_root(&self) -> bool {
+        self.tree_info().is_root()
+    }
+
+    /// Get the number of children.
+    ///
+    /// Equivalent to `self.children().len()`.
+    #[inline]
+    fn child_count(&self) -> usize {
+        self.tree_info().child_count()
+    }
+
+    /// Get the parent ID, panicking if this is the root node.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this node is the root (has no parent).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// if !handle.is_root() {
+    ///     let parent_id = handle.parent_unchecked();
+    /// }
+    /// ```
+    #[inline]
+    fn parent_unchecked(&self) -> usize {
+        self.tree_info().parent_unchecked()
+    }
+
+    /// Add a child to this node.
+    ///
+    /// This modifies the children list in TreeInfo.
+    ///
+    /// # Parameters
+    ///
+    /// - `child_id`: The ID of the child to add
+    #[inline]
+    fn add_child(&mut self, child_id: usize) {
+        self.tree_info_mut().add_child(child_id);
+    }
+
+    /// Remove a child from this node.
+    ///
+    /// # Parameters
+    ///
+    /// - `child_id`: The ID of the child to remove
+    ///
+    /// # Returns
+    ///
+    /// `true` if the child was found and removed, `false` otherwise.
+    #[inline]
+    fn remove_child(&mut self, child_id: usize) -> bool {
+        self.tree_info_mut().remove_child(child_id)
+    }
+}
+
+/// Auto-implement NavigableHandle for all Unmountable types.
+///
+/// This means any type that implements Unmountable automatically gets
+/// all the navigation convenience methods.
+impl<T: Unmountable> NavigableHandle for T {}
+
+// ============================================================================
+// MARKER TYPE FOR COMPILE-TIME CHECKS
+// ============================================================================
+
+/// Marker struct for nodes with state S.
+///
+/// This is similar to `PhantomData` but provides additional utility methods.
+/// Use this instead of raw `PhantomData<S>` for consistency.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// pub struct ViewHandle<S: NodeState> {
+///     config: ViewConfig,
+///     // ... other fields ...
+///     _state: StateMarker<S>,
+/// }
+/// ```
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct StateMarker<S: NodeState>(PhantomData<S>);
+
+impl<S: NodeState> StateMarker<S> {
+    /// Create a new state marker.
+    #[inline]
+    #[must_use]
+    pub const fn new() -> Self {
+        Self(PhantomData)
+    }
+
+    /// Check if this state is mounted (at compile time).
+    ///
+    /// Returns true for Mounted only.
+    /// This is a const function, enabling compile-time checks.
+    #[inline]
+    #[must_use]
+    pub const fn is_mounted() -> bool {
+        S::IS_MOUNTED
+    }
+
+    /// Get the state name.
+    ///
+    /// Useful for debugging and error messages.
+    #[inline]
+    #[must_use]
+    pub fn state_name() -> &'static str {
+        S::state_name()
+    }
+}
+
+// ============================================================================
+// TESTS
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_state_markers() {
+        // Test IS_MOUNTED
+        assert!(!Unmounted::IS_MOUNTED);
+        assert!(Mounted::IS_MOUNTED);
+
+        // Test state names
+        assert_eq!(Unmounted::state_name(), "Unmounted");
+        assert_eq!(Mounted::state_name(), "Mounted");
+    }
+
+    #[test]
+    fn test_tree_info_root() {
+        let root = TreeInfo::root();
+        assert!(root.is_root());
+        assert_eq!(root.depth, 0);
+        assert_eq!(root.child_count(), 0);
+        assert_eq!(root.parent, None);
+    }
+
+    #[test]
+    fn test_tree_info_with_parent() {
+        let child = TreeInfo::with_parent(1, 1);
+        assert!(!child.is_root());
+        assert_eq!(child.parent, Some(1));
+        assert_eq!(child.depth, 1);
+        assert_eq!(child.child_count(), 0);
+    }
+
+    #[test]
+    fn test_tree_info_children() {
+        let mut info = TreeInfo::root();
+        assert_eq!(info.child_count(), 0);
+
+        info.add_child(10);
+        info.add_child(20);
+        info.add_child(30);
+        assert_eq!(info.child_count(), 3);
+        assert_eq!(info.children, vec![10, 20, 30]);
+
+        assert!(info.remove_child(20));
+        assert_eq!(info.child_count(), 2);
+        assert_eq!(info.children, vec![10, 30]);
+
+        assert!(!info.remove_child(999));
+        assert_eq!(info.child_count(), 2);
+    }
+
+    #[test]
+    #[should_panic(expected = "Cannot get parent of root node")]
+    fn test_tree_info_parent_unchecked_panic() {
+        let root = TreeInfo::root();
+        let _ = root.parent_unchecked();
+    }
+
+    #[test]
+    fn test_tree_info_parent_unchecked_success() {
+        let child = TreeInfo::with_parent(42, 1);
+        assert_eq!(child.parent_unchecked(), 42);
+    }
+
+    #[test]
+    fn test_state_marker() {
+        // Unmounted
+        let marker_unmounted = StateMarker::<Unmounted>::new();
+        assert!(!StateMarker::<Unmounted>::is_mounted());
+        assert_eq!(StateMarker::<Unmounted>::state_name(), "Unmounted");
+
+        // Mounted
+        let marker_mounted = StateMarker::<Mounted>::new();
+        assert!(StateMarker::<Mounted>::is_mounted());
+        assert_eq!(StateMarker::<Mounted>::state_name(), "Mounted");
+
+        // StateMarker should be zero-sized
+        assert_eq!(std::mem::size_of_val(&marker_unmounted), 0);
+        assert_eq!(std::mem::size_of_val(&marker_mounted), 0);
+    }
+
+    #[test]
+    fn test_state_marker_copy() {
+        let marker1 = StateMarker::<Unmounted>::new();
+        let marker2 = marker1; // Should be Copy
+        assert_eq!(marker1, marker2);
+    }
+
+    #[test]
+    fn test_tree_info_clone() {
+        let mut info1 = TreeInfo::with_parent(5, 2);
+        info1.add_child(10);
+        info1.add_child(20);
+
+        let info2 = info1.clone();
+        assert_eq!(info1, info2);
+        assert_eq!(info2.parent, Some(5));
+        assert_eq!(info2.depth, 2);
+        assert_eq!(info2.children, vec![10, 20]);
+    }
+
+    // ============================================================================
+    // TESTS - Mountable/Unmountable traits
+    // ============================================================================
+
+    // Mock handle for testing
+    struct TestHandle<S: NodeState> {
+        config: u32,
+        tree_info: Option<TreeInfo>,
+        _state: PhantomData<S>,
+    }
+
+    impl Mountable for TestHandle<Unmounted> {
+        type Mounted = TestHandle<Mounted>;
+
+        fn mount(self, parent: Option<usize>) -> Self::Mounted {
+            let tree_info = if let Some(parent_id) = parent {
+                TreeInfo::with_parent(parent_id, 1)
+            } else {
+                TreeInfo::root()
+            };
+
+            TestHandle {
+                config: self.config,
+                tree_info: Some(tree_info),
+                _state: PhantomData,
+            }
+        }
+    }
+
+    impl Unmountable for TestHandle<Mounted> {
+        type Unmounted = TestHandle<Unmounted>;
+
+        fn unmount(self) -> Self::Unmounted {
+            TestHandle {
+                config: self.config,
+                tree_info: None,
+                _state: PhantomData,
+            }
+        }
+
+        fn tree_info(&self) -> &TreeInfo {
+            self.tree_info.as_ref().unwrap()
+        }
+
+        fn tree_info_mut(&mut self) -> &mut TreeInfo {
+            self.tree_info.as_mut().unwrap()
+        }
+    }
+
+    #[test]
+    fn test_mountable_trait() {
+        // Create unmounted handle
+        let unmounted = TestHandle::<Unmounted> {
+            config: 42,
+            tree_info: None,
+            _state: PhantomData,
+        };
+
+        // Mount as root
+        let mounted = unmounted.mount(None);
+        assert!(mounted.tree_info().is_root());
+        assert_eq!(mounted.tree_info().depth, 0);
+        assert_eq!(mounted.config, 42);
+    }
+
+    #[test]
+    fn test_unmountable_trait() {
+        // Create and mount
+        let unmounted = TestHandle::<Unmounted> {
+            config: 99,
+            tree_info: None,
+            _state: PhantomData,
+        };
+        let mounted = unmounted.mount(Some(5));
+
+        // Verify mounted state
+        assert_eq!(mounted.tree_info().parent, Some(5));
+        assert_eq!(mounted.tree_info().depth, 1);
+
+        // Unmount
+        let unmounted = mounted.unmount();
+        assert!(unmounted.tree_info.is_none());
+        assert_eq!(unmounted.config, 99);
+    }
+
+    #[test]
+    fn test_navigable_handle_parent() {
+        let unmounted = TestHandle::<Unmounted> {
+            config: 1,
+            tree_info: None,
+            _state: PhantomData,
+        };
+        let mounted = unmounted.mount(Some(10));
+
+        // NavigableHandle methods (auto-implemented)
+        assert_eq!(mounted.parent(), Some(10));
+        assert!(!mounted.is_root());
+    }
+
+    #[test]
+    fn test_navigable_handle_root() {
+        let unmounted = TestHandle::<Unmounted> {
+            config: 1,
+            tree_info: None,
+            _state: PhantomData,
+        };
+        let mounted = unmounted.mount(None);
+
+        // NavigableHandle methods
+        assert_eq!(mounted.parent(), None);
+        assert!(mounted.is_root());
+        assert_eq!(mounted.depth(), 0);
+    }
+
+    #[test]
+    fn test_navigable_handle_children() {
+        let unmounted = TestHandle::<Unmounted> {
+            config: 1,
+            tree_info: None,
+            _state: PhantomData,
+        };
+        let mut mounted = unmounted.mount(None);
+
+        // Initially no children
+        assert_eq!(mounted.child_count(), 0);
+        assert_eq!(mounted.children(), &[]);
+
+        // Add children using NavigableHandle
+        mounted.add_child(100);
+        mounted.add_child(200);
+        mounted.add_child(300);
+
+        assert_eq!(mounted.child_count(), 3);
+        assert_eq!(mounted.children(), &[100, 200, 300]);
+    }
+
+    #[test]
+    fn test_navigable_handle_remove_child() {
+        let unmounted = TestHandle::<Unmounted> {
+            config: 1,
+            tree_info: None,
+            _state: PhantomData,
+        };
+        let mut mounted = unmounted.mount(None);
+
+        mounted.add_child(10);
+        mounted.add_child(20);
+        mounted.add_child(30);
+
+        // Remove child using NavigableHandle
+        assert!(mounted.remove_child(20));
+        assert_eq!(mounted.children(), &[10, 30]);
+
+        // Try to remove non-existent child
+        assert!(!mounted.remove_child(999));
+        assert_eq!(mounted.child_count(), 2);
+    }
+
+    #[test]
+    fn test_navigable_handle_parent_unchecked() {
+        let unmounted = TestHandle::<Unmounted> {
+            config: 1,
+            tree_info: None,
+            _state: PhantomData,
+        };
+        let mounted = unmounted.mount(Some(42));
+
+        assert_eq!(mounted.parent_unchecked(), 42);
+    }
+
+    #[test]
+    #[should_panic(expected = "Cannot get parent of root node")]
+    fn test_navigable_handle_parent_unchecked_panic() {
+        let unmounted = TestHandle::<Unmounted> {
+            config: 1,
+            tree_info: None,
+            _state: PhantomData,
+        };
+        let mounted = unmounted.mount(None);
+
+        let _ = mounted.parent_unchecked(); // Should panic
+    }
+
+    #[test]
+    fn test_generic_traverse() {
+        // This demonstrates that TreeCoordinator can use generic bounds
+        fn collect_all_children<H: NavigableHandle>(handle: &H) -> Vec<usize> {
+            handle.children().to_vec()
+        }
+
+        let unmounted = TestHandle::<Unmounted> {
+            config: 1,
+            tree_info: None,
+            _state: PhantomData,
+        };
+        let mut mounted = unmounted.mount(None);
+        mounted.add_child(1);
+        mounted.add_child(2);
+        mounted.add_child(3);
+
+        let children = collect_all_children(&mounted);
+        assert_eq!(children, vec![1, 2, 3]);
+    }
+}

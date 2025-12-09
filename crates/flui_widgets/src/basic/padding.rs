@@ -26,11 +26,15 @@
 //! ```
 
 use bon::Builder;
+use flui_core::{view::IntoElement, Element};
 use flui_objects::RenderPadding;
 use flui_rendering::core::protocol::BoxProtocol;
-use flui_rendering::Single;
+use flui_rendering::Optional;
 use flui_types::EdgeInsets;
-use flui_view::{Child, IntoView, RenderView, UpdateResult};
+use flui_view::{
+    wrappers::RenderViewWrapper, Child, IntoView, IntoViewConfig, RenderView, UpdateResult,
+    ViewElement, ViewMode, ViewObject,
+};
 
 /// A widget that insets its child by the given padding.
 ///
@@ -174,7 +178,7 @@ impl Padding {
     }
 
     /// Sets the child widget.
-    pub fn child<V: IntoView>(mut self, view: V) -> Self {
+    pub fn child<V: IntoViewConfig>(mut self, view: V) -> Self {
         self.child = Child::new(view);
         self
     }
@@ -196,7 +200,7 @@ impl<S: State> PaddingBuilder<S> {
     }
 }
 
-impl RenderView<BoxProtocol, Single> for Padding {
+impl RenderView<BoxProtocol, Optional> for Padding {
     type RenderObject = RenderPadding;
 
     fn create(&self) -> RenderPadding {
@@ -210,6 +214,31 @@ impl RenderView<BoxProtocol, Single> for Padding {
         } else {
             UpdateResult::Unchanged
         }
+    }
+}
+
+/// IntoView implementation for Padding.
+///
+/// Enables Padding to be used in widget composition. Note: This only converts
+/// the Padding widget itself, not its child. The child is stored in the `child` field
+/// and will be mounted separately during the element tree construction.
+impl IntoView for Padding {
+    fn into_view(self) -> Box<dyn ViewObject> {
+        Box::new(RenderViewWrapper::new(self))
+    }
+}
+
+/// IntoElement implementation for Padding.
+///
+/// Converts Padding to Element. This is used when Padding is the root element.
+/// The child is converted from ViewObject to Element during this process.
+impl IntoElement for Padding {
+    fn into_element(self) -> Element {
+        let wrapper = RenderViewWrapper::new(self);
+        Element::View(ViewElement::with_pending(
+            Box::new(wrapper),
+            ViewMode::RenderBox,
+        ))
     }
 }
 

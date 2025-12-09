@@ -6,8 +6,9 @@ use std::any::Any;
 
 use flui_types::Event;
 
+use crate::handle::ViewConfig;
 use crate::traits::ProxyView;
-use crate::{BuildContext, IntoView, ViewMode, ViewObject};
+use crate::{BuildContext, IntoView, IntoViewConfig, ViewMode, ViewObject};
 
 /// Wrapper for `ProxyView` that implements `ViewObject`
 ///
@@ -37,6 +38,12 @@ impl<V: ProxyView> ProxyViewWrapper<V> {
     /// Handle an event, returning true if consumed
     pub fn handle_event(&mut self, event: &Event, ctx: &dyn BuildContext) -> bool {
         self.view.handle_event(event, ctx)
+    }
+
+    /// Extract the inner view, consuming the wrapper.
+    #[inline]
+    pub fn into_inner(self) -> V {
+        self.view
     }
 }
 
@@ -110,6 +117,49 @@ pub struct Proxy<V: ProxyView>(pub V);
 impl<V: ProxyView> IntoView for Proxy<V> {
     fn into_view(self) -> Box<dyn ViewObject> {
         Box::new(ProxyViewWrapper::new(self.0))
+    }
+}
+
+// ============================================================================
+// IntoViewConfig IMPLEMENTATION
+// ============================================================================
+
+/// Implementation for `ProxyViewWrapper`.
+///
+/// This allows proxy views to be converted to `ViewConfig` when wrapped:
+///
+/// ```rust,ignore
+/// use flui_view::{Proxy, ProxyView, IntoViewConfig};
+///
+/// let config = ProxyViewWrapper::new(MyProxy { ... }).into_view_config();
+/// ```
+impl<V> IntoViewConfig for ProxyViewWrapper<V>
+where
+    V: ProxyView + Clone + Send + Sync + 'static,
+{
+    fn into_view_config(self) -> ViewConfig {
+        let view = self.view;
+        ViewConfig::new_with_factory(view, |v: &V| {
+            Box::new(ProxyViewWrapper::new(v.clone()))
+        })
+    }
+}
+
+/// Implementation for `Proxy` helper.
+///
+/// ```rust,ignore
+/// use flui_view::{Proxy, IntoViewConfig};
+///
+/// let config = Proxy(MyProxy { ... }).into_view_config();
+/// ```
+impl<V> IntoViewConfig for Proxy<V>
+where
+    V: ProxyView + Clone + Send + Sync + 'static,
+{
+    fn into_view_config(self) -> ViewConfig {
+        ViewConfig::new_with_factory(self.0, |v: &V| {
+            Box::new(ProxyViewWrapper::new(v.clone()))
+        })
     }
 }
 

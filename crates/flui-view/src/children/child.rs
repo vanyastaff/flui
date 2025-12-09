@@ -1,39 +1,76 @@
-//! Optional single child wrapper.
+//! Optional single child wrapper using `ViewConfig` for deferred mounting.
+//!
+//! # Phase 5: Flutter-like Child Mounting API
+//!
+//! This is the new `Child` implementation that stores `ViewConfig` instead of
+//! `ViewObject`, enabling:
+//! - **Flutter-like API**: Pass views as config, not pre-created objects
+//! - **Hot-reload**: Recreate view objects from configuration
+//! - **Lazy mounting**: Delay state creation until mount time
+//!
+//! # Example
+//!
+//! ```rust,ignore
+//! pub struct Padding {
+//!     padding: EdgeInsets,
+//!     child: Child,
+//! }
+//!
+//! impl Padding {
+//!     pub fn new(padding: EdgeInsets) -> Self {
+//!         Self { padding, child: Child::none() }
+//!     }
+//!
+//!     pub fn child(mut self, child: impl IntoViewConfig) -> Self {
+//!         self.child = Child::new(child);
+//!         self
+//!     }
+//! }
+//!
+//! // Later, during mount:
+//! let child_handle = padding.child.mount(Some(parent_id));
+//! ```
 
-use crate::{IntoView, ViewObject};
+use crate::handle::{ViewConfig, ViewHandle};
+use crate::IntoViewConfig;
+use flui_tree::{Mountable, Mounted};
 
-/// Optional single child wrapper.
+/// Optional single child wrapper that stores view configuration.
 ///
-/// Provides a cleaner API than `Option<Box<dyn ViewObject>>` for single-child widgets.
+/// This provides a cleaner API than `Option<ViewConfig>` for single-child widgets.
+///
+/// # Key Differences from Old `Child`
+///
+/// | Old Child | New Child |
+/// |-----------|-----------|
+/// | Stores `ViewObject` (state) | Stores `ViewConfig` (config) |
+/// | Immediate object creation | Deferred until `mount()` |
+/// | No hot-reload support | Full hot-reload support |
+/// | `impl IntoView` | `impl IntoViewConfig` |
 ///
 /// # Examples
 ///
 /// ```rust,ignore
-/// pub struct Padding {
-///     padding: EdgeInsets,
+/// use flui_view::{Child, StatelessView, IntoViewConfig};
+///
+/// pub struct Container {
 ///     child: Child,
 /// }
 ///
-/// impl Padding {
-///     pub fn new(padding: EdgeInsets) -> Self {
-///         Self { padding, child: Child::none() }
+/// impl Container {
+///     pub fn new() -> Self {
+///         Self { child: Child::none() }
 ///     }
 ///
-///     pub fn child(mut self, child: impl IntoView) -> Self {
+///     pub fn child(mut self, child: impl IntoViewConfig) -> Self {
 ///         self.child = Child::new(child);
 ///         self
 ///     }
 /// }
 /// ```
-///
-/// # Comparison with Option
-///
-/// `Child` provides type-safe methods specific to view objects while
-/// maintaining `Option`-like semantics. It automatically converts
-/// `None` to `EmptyView` when building.
 #[derive(Default)]
 pub struct Child {
-    inner: Option<Box<dyn ViewObject>>,
+    inner: Option<ViewConfig>,
 }
 
 impl std::fmt::Debug for Child {
@@ -52,27 +89,35 @@ impl Child {
         Self { inner: None }
     }
 
-    /// Creates a child from a view.
+    /// Creates a child from a view configuration.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use flui_view::{Child, IntoViewConfig};
+    ///
+    /// let child = Child::new(Text::new("Hello"));
+    /// ```
     #[inline]
-    pub fn new<V: IntoView>(view: V) -> Self {
+    pub fn new<V: IntoViewConfig>(view: V) -> Self {
         Self {
-            inner: Some(view.into_view()),
+            inner: Some(view.into_view_config()),
         }
     }
 
-    /// Creates a child from a boxed `ViewObject`.
+    /// Creates a child from a `ViewConfig`.
     #[inline]
     #[must_use]
-    pub const fn from_view_object(view_object: Box<dyn ViewObject>) -> Self {
+    pub const fn from_view_config(config: ViewConfig) -> Self {
         Self {
-            inner: Some(view_object),
+            inner: Some(config),
         }
     }
 
-    /// Creates a child from an `Option<Box<dyn ViewObject>>`.
+    /// Creates a child from an `Option<ViewConfig>`.
     #[inline]
     #[must_use]
-    pub const fn from_option(option: Option<Box<dyn ViewObject>>) -> Self {
+    pub const fn from_option(option: Option<ViewConfig>) -> Self {
         Self { inner: option }
     }
 
@@ -90,69 +135,39 @@ impl Child {
         self.inner.is_some()
     }
 
-    /// Converts to `Option<Box<dyn ViewObject>>`.
+    /// Converts to `Option<ViewConfig>`.
     #[inline]
     #[must_use]
-    pub fn into_inner(self) -> Option<Box<dyn ViewObject>> {
+    pub fn into_inner(self) -> Option<ViewConfig> {
         self.inner
     }
 
-    /// Takes the view object out of Child, leaving None in its place.
+    /// Takes the view config out of Child, leaving None in its place.
     #[inline]
-    pub fn take(&mut self) -> Option<Box<dyn ViewObject>> {
+    pub fn take(&mut self) -> Option<ViewConfig> {
         self.inner.take()
     }
 
     /// Replaces the child, returning the old one if present.
     #[inline]
-    pub fn replace<V: IntoView>(&mut self, view: V) -> Option<Box<dyn ViewObject>> {
-        self.inner.replace(view.into_view())
+    pub fn replace<V: IntoViewConfig>(&mut self, view: V) -> Option<ViewConfig> {
+        self.inner.replace(view.into_view_config())
     }
 
-    /// Maps the view object if present.
+    /// Maps the view config if present.
     #[inline]
     pub fn map<F, U>(self, f: F) -> Option<U>
     where
-        F: FnOnce(Box<dyn ViewObject>) -> U,
+        F: FnOnce(ViewConfig) -> U,
     {
         self.inner.map(f)
     }
 
-    /// Maps the view object in place if present.
-    #[inline]
-    pub fn map_in_place<F>(&mut self, f: F)
-    where
-        F: FnOnce(&mut Box<dyn ViewObject>),
-    {
-        if let Some(ref mut view_obj) = self.inner {
-            f(view_obj);
-        }
-    }
-
-    /// Returns a reference to the inner view object if present.
+    /// Returns a reference to the inner view config if present.
     #[inline]
     #[must_use]
-    pub fn as_ref(&self) -> Option<&dyn ViewObject> {
-        self.inner.as_ref().map(AsRef::as_ref)
-    }
-
-    /// Returns a mutable reference to the inner view object if present.
-    #[inline]
-    #[must_use]
-    pub fn as_mut(&mut self) -> Option<&mut dyn ViewObject> {
-        self.inner.as_mut().map(AsMut::as_mut)
-    }
-
-    /// Tries to downcast the inner view object to a specific type.
-    #[inline]
-    pub fn downcast_ref<T: 'static>(&self) -> Option<&T> {
-        self.as_ref()?.as_any().downcast_ref::<T>()
-    }
-
-    /// Tries to downcast the inner view object to a specific type (mutable).
-    #[inline]
-    pub fn downcast_mut<T: 'static>(&mut self) -> Option<&mut T> {
-        self.as_mut()?.as_any_mut().downcast_mut::<T>()
+    pub fn as_ref(&self) -> Option<&ViewConfig> {
+        self.inner.as_ref()
     }
 
     /// Unwraps the child, panicking if None.
@@ -162,44 +177,88 @@ impl Child {
     /// Panics if the child is None.
     #[inline]
     #[must_use]
-    pub fn unwrap(self) -> Box<dyn ViewObject> {
+    pub fn unwrap(self) -> ViewConfig {
         self.inner.unwrap()
     }
 
     /// Returns the child or the provided default.
     #[inline]
     #[must_use]
-    pub fn unwrap_or<V: IntoView>(self, default: V) -> Box<dyn ViewObject> {
-        self.inner.unwrap_or_else(|| default.into_view())
+    pub fn unwrap_or<V: IntoViewConfig>(self, default: V) -> ViewConfig {
+        self.inner.unwrap_or_else(|| default.into_view_config())
     }
 
     /// Returns the child or computes it from a closure.
     #[inline]
-    pub fn unwrap_or_else<F>(self, f: F) -> Box<dyn ViewObject>
+    pub fn unwrap_or_else<F>(self, f: F) -> ViewConfig
     where
-        F: FnOnce() -> Box<dyn ViewObject>,
+        F: FnOnce() -> ViewConfig,
     {
         self.inner.unwrap_or_else(f)
     }
 }
 
-impl IntoView for Child {
-    fn into_view(self) -> Box<dyn ViewObject> {
-        match self.inner {
-            Some(view_object) => view_object,
-            None => crate::EmptyView.into_view(),
+// ============================================================================
+// MOUNTING API
+// ============================================================================
+
+impl Child {
+    /// Mount the child view, creating a `ViewHandle<Mounted>`.
+    ///
+    /// This converts the stored `ViewConfig` into a mounted view handle
+    /// with live `ViewObject` state.
+    ///
+    /// # Parameters
+    ///
+    /// - `parent`: Optional parent node ID (None for root)
+    ///
+    /// # Returns
+    ///
+    /// `Some(ViewHandle<Mounted>)` if child exists, `None` otherwise.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use flui_view::Child;
+    ///
+    /// let child = Child::new(Text::new("Hello"));
+    ///
+    /// // Later, during mount:
+    /// if let Some(mounted) = child.mount(Some(parent_id)) {
+    ///     println!("Mounted child: {:?}", mounted);
+    /// }
+    /// ```
+    pub fn mount(self, parent: Option<usize>) -> Option<ViewHandle<Mounted>> {
+        self.inner.map(|config| {
+            let handle = ViewHandle::from_config(config);
+            handle.mount(parent)
+        })
+    }
+
+    /// Check if the child config can update another config.
+    ///
+    /// Used during reconciliation to determine if views are compatible.
+    pub fn can_update(&self, other: &Self) -> bool {
+        match (&self.inner, &other.inner) {
+            (Some(a), Some(b)) => a.can_update(b),
+            (None, None) => true,
+            _ => false,
         }
     }
 }
 
-impl From<Child> for Option<Box<dyn ViewObject>> {
+// ============================================================================
+// CONVERSIONS
+// ============================================================================
+
+impl From<Child> for Option<ViewConfig> {
     #[inline]
     fn from(child: Child) -> Self {
         child.inner
     }
 }
 
-impl<V: IntoView> From<Option<V>> for Child {
+impl<V: IntoViewConfig> From<Option<V>> for Child {
     #[inline]
     fn from(option: Option<V>) -> Self {
         match option {
@@ -209,9 +268,27 @@ impl<V: IntoView> From<Option<V>> for Child {
     }
 }
 
+// ============================================================================
+// TESTS
+// ============================================================================
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::traits::StatelessView;
+    use crate::BuildContext;
+    use flui_tree::NavigableHandle;
+
+    #[derive(Clone)]
+    struct TestView {
+        value: i32,
+    }
+
+    impl StatelessView for TestView {
+        fn build(self, _ctx: &dyn BuildContext) -> impl crate::IntoView {
+            crate::EmptyView
+        }
+    }
 
     #[test]
     fn test_child_none() {
@@ -227,33 +304,27 @@ mod tests {
     }
 
     #[test]
-    fn test_child_into_view() {
-        let child = Child::none();
-        let view_obj = child.into_view();
-        assert_eq!(view_obj.mode(), crate::ViewMode::Empty);
-    }
-
-    #[test]
-    fn test_child_as_ref() {
-        let child = Child::none();
-        assert!(child.as_ref().is_none());
+    fn test_child_new() {
+        let child = Child::new(TestView { value: 42 });
+        assert!(child.is_some());
+        assert!(!child.is_none());
     }
 
     #[test]
     fn test_child_from_option() {
-        let child: Child = Some(crate::EmptyView).into();
+        let child: Child = Some(TestView { value: 1 }).into();
         assert!(child.is_some());
 
-        let child: Child = None::<crate::EmptyView>.into();
+        let child: Child = None::<TestView>.into();
         assert!(child.is_none());
     }
 
     #[test]
     fn test_child_replace() {
-        let mut child = Child::new(crate::EmptyView);
+        let mut child = Child::new(TestView { value: 1 });
         assert!(child.is_some());
 
-        let old = child.replace(crate::EmptyView);
+        let old = child.replace(TestView { value: 2 });
         assert!(old.is_some());
         assert!(child.is_some());
     }
@@ -261,7 +332,46 @@ mod tests {
     #[test]
     fn test_child_unwrap_or() {
         let child = Child::none();
-        let view = child.unwrap_or(crate::EmptyView);
-        assert_eq!(view.mode(), crate::ViewMode::Empty);
+        let config = child.unwrap_or(TestView { value: 99 });
+        // Config should be created
+        assert!(config.can_update(&TestView { value: 100 }.into_view_config()));
+    }
+
+    #[test]
+    fn test_child_mount() {
+        let child = Child::new(TestView { value: 42 });
+
+        // Mount as root
+        let mounted = child.mount(None);
+        assert!(mounted.is_some());
+
+        if let Some(handle) = mounted {
+            assert!(handle.is_root());
+            assert_eq!(handle.depth(), 0);
+        }
+    }
+
+    #[test]
+    fn test_child_mount_none() {
+        let child = Child::none();
+        let mounted = child.mount(None);
+        assert!(mounted.is_none());
+    }
+
+    #[test]
+    fn test_child_can_update() {
+        let child1 = Child::new(TestView { value: 1 });
+        let child2 = Child::new(TestView { value: 2 });
+        let child3 = Child::none();
+
+        // Same type, should be able to update
+        assert!(child1.can_update(&child2));
+
+        // None vs Some = cannot update
+        assert!(!child1.can_update(&child3));
+        assert!(!child3.can_update(&child1));
+
+        // None vs None = can update
+        assert!(child3.can_update(&Child::none()));
     }
 }
