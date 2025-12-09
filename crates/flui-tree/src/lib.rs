@@ -128,8 +128,7 @@ pub use arity::{
 // ============================================================================
 
 pub use state::{
-    Dirty, Mountable, Mounted, NodeState, Reassembling, StateMarker, TreeInfo, Unmountable,
-    Unmounted,
+    Mountable, Mounted, NodeState, StateMarker, TreeInfo, Unmountable, Unmounted,
 };
 
 // ============================================================================
@@ -190,12 +189,10 @@ pub mod prelude {
         Identifier,
         Leaf,
         // State types
-        Dirty,
         Mountable,
         Mounted,
         NodeState,
         Optional,
-        Reassembling,
         Single,
         StateMarker,
         TreeError,

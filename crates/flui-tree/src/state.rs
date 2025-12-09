@@ -64,61 +64,55 @@ mod sealed {
     pub trait Sealed {}
     impl Sealed for super::Unmounted {}
     impl Sealed for super::Mounted {}
-    impl Sealed for super::Dirty {}
-    impl Sealed for super::Reassembling {}
 }
 
-/// Marker trait for node lifecycle states.
+/// Marker trait for node structural states.
 ///
 /// Similar to how [`Arity`](crate::arity::Arity) marks compile-time child count constraints,
-/// `NodeState` marks compile-time lifecycle constraints.
+/// `NodeState` marks compile-time **structural** constraints (whether node is in tree or not).
 ///
-/// # States
+/// # Design Philosophy: Structural vs Lifecycle
 ///
-/// - [`Unmounted`] - Node has configuration but is not in tree
-/// - [`Mounted`] - Node is in tree, clean (no rebuild needed)
-/// - [`Dirty`] - Node is in tree but needs rebuild
-/// - [`Reassembling`] - Node is being hot-reloaded
+/// **NodeState tracks STRUCTURAL state (compile-time):**
+/// - [`Unmounted`] - Not in tree (has config only)
+/// - [`Mounted`] - In tree (has config + live object + tree position)
 ///
-/// # State Transitions
+/// **Lifecycle flags track RUNTIME state (in each crate):**
+/// - `needs_build` - Needs rebuild (runtime flag)
+/// - `needs_layout` - Needs layout (runtime flag in flui_rendering)
+/// - `needs_paint` - Needs paint (runtime flag in flui_rendering)
+/// - `is_reassembling` - Hot reload (runtime flag)
+///
+/// This separation follows Flutter's design:
+/// - Flutter Element has lifecycle (mounted/active) as structural
+/// - Flutter Element has `_dirty` as runtime flag
+/// - Flutter RenderObject has `_needsLayout`, `_needsPaint` as runtime flags
+///
+/// # State Transition (One-Way)
 ///
 /// ```text
-/// Unmounted ─mount()→ Mounted
-///     ↑                  ↓
-///     │            mark_dirty()
-///     │                  ↓
-///     │               Dirty ←─┐
-///     │                  ↓    │
-///     │              rebuild() │
-///     │                  ↓    │
-///     │               Mounted │
-///     │                  ↓    │
-///     │           reassemble() │
-///     │                  ↓    │
-///     └─unmount()─ Reassembling ─┘
+/// Unmounted ──mount()→ Mounted ──unmount()→ Unmounted
 /// ```
+///
+/// Structural state is mostly one-way (unmounted → mounted when inserted,
+/// mounted → unmounted when removed). Lifecycle changes (dirty/clean) happen
+/// via runtime flags while staying Mounted.
 ///
 /// # Design
 ///
 /// Like Arity, NodeState is:
 /// - **Zero-cost**: PhantomData has no runtime overhead
-/// - **Sealed**: Only predefined states can implement it
+/// - **Sealed**: Only Unmounted and Mounted can implement it
 /// - **Universal**: Works for View, Element, and Render trees
 /// - **Copy**: Enables efficient passing and cloning
+/// - **Structural**: Tracks tree membership, not lifecycle
 pub trait NodeState: sealed::Sealed + Send + Sync + Copy + 'static {
-    /// Whether this state represents a mounted node.
+    /// Whether this state represents a mounted node (in tree).
     ///
-    /// Mounted means the node is in the tree (Mounted, Dirty, Reassembling).
     /// This is a const, enabling compile-time checks and optimizations.
+    /// - `false` for Unmounted (not in tree)
+    /// - `true` for Mounted (in tree)
     const IS_MOUNTED: bool;
-
-    /// Whether this state needs rebuild.
-    ///
-    /// True for Dirty and Reassembling states.
-    const NEEDS_REBUILD: bool;
-
-    /// Whether this state is being reassembled (hot reload).
-    const IS_REASSEMBLING: bool;
 
     /// Get a human-readable name for this state.
     ///
@@ -169,8 +163,6 @@ pub struct Unmounted;
 
 impl NodeState for Unmounted {
     const IS_MOUNTED: bool = false;
-    const NEEDS_REBUILD: bool = false;
-    const IS_REASSEMBLING: bool = false;
 
     #[inline]
     fn state_name() -> &'static str {
@@ -218,8 +210,6 @@ pub struct Mounted;
 
 impl NodeState for Mounted {
     const IS_MOUNTED: bool = true;
-    const NEEDS_REBUILD: bool = false;
-    const IS_REASSEMBLING: bool = false;
 
     #[inline]
     fn state_name() -> &'static str {
@@ -227,122 +217,16 @@ impl NodeState for Mounted {
     }
 }
 
-/// Dirty state - node is in tree but needs rebuild.
-///
-/// This state indicates that the node's configuration has changed
-/// and needs to be rebuilt. Similar to Flutter's `markNeedsBuild()`.
-///
-/// # When to Use Dirty
-///
-/// - State changed (e.g., counter incremented)
-/// - Props changed from parent
-/// - Dependencies changed (context, inherited widget)
-/// - Manual `mark_dirty()` call
-///
-/// # Compile-Time Guarantees
-///
-/// Methods that require a clean state will not compile for `Dirty` nodes:
-///
-/// ```rust,ignore
-/// impl ViewHandle<Mounted> {
-///     pub fn paint(&self) { /* ... */ }  // ✅ OK for Mounted
-/// }
-///
-/// // let dirty: ViewHandle<Dirty> = ...;
-/// // dirty.paint();  // ❌ Compile error - paint() not available for Dirty!
-/// ```
-///
-/// # Example
-///
-/// ```rust,ignore
-/// // State changes - mark as dirty
-/// let mut mounted = view_handle;
-/// let dirty = mounted.mark_dirty();  // Mounted → Dirty
-///
-/// // Framework rebuilds
-/// let rebuilt = dirty.rebuild(ctx);  // Dirty → Mounted
-/// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Dirty;
-
-impl NodeState for Dirty {
-    const IS_MOUNTED: bool = true;  // Still in tree
-    const NEEDS_REBUILD: bool = true;  // Needs rebuild
-    const IS_REASSEMBLING: bool = false;
-
-    #[inline]
-    fn state_name() -> &'static str {
-        "Dirty"
-    }
-}
-
-/// Reassembling state - node is being hot-reloaded.
-///
-/// This state is entered during hot reload when the code changes
-/// and views need to be recreated. Similar to Flutter's `reassemble()`.
-///
-/// # Hot Reload Process
-///
-/// ```text
-/// 1. Code change detected
-/// 2. Mounted → reassemble() → Reassembling
-/// 3. Recreate ViewObject from updated config
-/// 4. Reassembling → finish_reassemble() → Mounted
-/// 5. Recursively reassemble children
-/// ```
-///
-/// # Compile-Time Guarantees
-///
-/// During reassembly, the node is in a transitional state.
-/// Only reassembly-related operations are available:
-///
-/// ```rust,ignore
-/// impl ViewHandle<Reassembling> {
-///     pub fn finish_reassemble(self) -> ViewHandle<Mounted> {
-///         // Complete the reassembly process
-///     }
-/// }
-/// ```
-///
-/// # Example
-///
-/// ```rust,ignore
-/// // Hot reload triggered
-/// let reassembling = mounted.reassemble();  // Mounted → Reassembling
-///
-/// // Framework recreates ViewObject from config
-/// // ...
-///
-/// // Finish reassembly
-/// let mounted = reassembling.finish_reassemble();  // Reassembling → Mounted
-/// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Reassembling;
-
-impl NodeState for Reassembling {
-    const IS_MOUNTED: bool = true;  // Still in tree
-    const NEEDS_REBUILD: bool = true;  // Will rebuild after reassembly
-    const IS_REASSEMBLING: bool = true;  // In reassembly process
-
-    #[inline]
-    fn state_name() -> &'static str {
-        "Reassembling"
-    }
-}
-
 // ============================================================================
-// TREE INFO (Present only when Mounted, Dirty, Reassembling)
+// TREE INFO (Present only when Mounted)
 // ============================================================================
 
 /// Tree position information for mounted nodes.
 ///
-/// This struct is present when `NodeState::IS_MOUNTED = true`, which includes:
-/// - [`Mounted`] - Clean state
-/// - [`Dirty`] - Needs rebuild
-/// - [`Reassembling`] - Hot reload in progress
+/// This struct is present when `NodeState::IS_MOUNTED = true`, which means the [`Mounted`] state.
 ///
 /// Similar to how [`FixedChildren<N>`](crate::arity::FixedChildren) guarantees N children,
-/// `TreeInfo` guarantees tree position data exists for all mounted states.
+/// `TreeInfo` guarantees tree position data exists for mounted nodes.
 ///
 /// # Fields
 ///
@@ -585,30 +469,12 @@ impl<S: NodeState> StateMarker<S> {
 
     /// Check if this state is mounted (at compile time).
     ///
-    /// Returns true for Mounted, Dirty, and Reassembling.
+    /// Returns true for Mounted only.
     /// This is a const function, enabling compile-time checks.
     #[inline]
     #[must_use]
     pub const fn is_mounted() -> bool {
         S::IS_MOUNTED
-    }
-
-    /// Check if this state needs rebuild (at compile time).
-    ///
-    /// Returns true for Dirty and Reassembling.
-    #[inline]
-    #[must_use]
-    pub const fn needs_rebuild() -> bool {
-        S::NEEDS_REBUILD
-    }
-
-    /// Check if this state is reassembling (at compile time).
-    ///
-    /// Returns true only for Reassembling.
-    #[inline]
-    #[must_use]
-    pub const fn is_reassembling() -> bool {
-        S::IS_REASSEMBLING
     }
 
     /// Get the state name.
@@ -634,26 +500,10 @@ mod tests {
         // Test IS_MOUNTED
         assert!(!Unmounted::IS_MOUNTED);
         assert!(Mounted::IS_MOUNTED);
-        assert!(Dirty::IS_MOUNTED);
-        assert!(Reassembling::IS_MOUNTED);
-
-        // Test NEEDS_REBUILD
-        assert!(!Unmounted::NEEDS_REBUILD);
-        assert!(!Mounted::NEEDS_REBUILD);
-        assert!(Dirty::NEEDS_REBUILD);
-        assert!(Reassembling::NEEDS_REBUILD);
-
-        // Test IS_REASSEMBLING
-        assert!(!Unmounted::IS_REASSEMBLING);
-        assert!(!Mounted::IS_REASSEMBLING);
-        assert!(!Dirty::IS_REASSEMBLING);
-        assert!(Reassembling::IS_REASSEMBLING);
 
         // Test state names
         assert_eq!(Unmounted::state_name(), "Unmounted");
         assert_eq!(Mounted::state_name(), "Mounted");
-        assert_eq!(Dirty::state_name(), "Dirty");
-        assert_eq!(Reassembling::state_name(), "Reassembling");
     }
 
     #[test]
@@ -711,36 +561,16 @@ mod tests {
         // Unmounted
         let marker_unmounted = StateMarker::<Unmounted>::new();
         assert!(!StateMarker::<Unmounted>::is_mounted());
-        assert!(!StateMarker::<Unmounted>::needs_rebuild());
-        assert!(!StateMarker::<Unmounted>::is_reassembling());
         assert_eq!(StateMarker::<Unmounted>::state_name(), "Unmounted");
 
         // Mounted
         let marker_mounted = StateMarker::<Mounted>::new();
         assert!(StateMarker::<Mounted>::is_mounted());
-        assert!(!StateMarker::<Mounted>::needs_rebuild());
-        assert!(!StateMarker::<Mounted>::is_reassembling());
         assert_eq!(StateMarker::<Mounted>::state_name(), "Mounted");
-
-        // Dirty
-        let marker_dirty = StateMarker::<Dirty>::new();
-        assert!(StateMarker::<Dirty>::is_mounted());
-        assert!(StateMarker::<Dirty>::needs_rebuild());
-        assert!(!StateMarker::<Dirty>::is_reassembling());
-        assert_eq!(StateMarker::<Dirty>::state_name(), "Dirty");
-
-        // Reassembling
-        let marker_reassembling = StateMarker::<Reassembling>::new();
-        assert!(StateMarker::<Reassembling>::is_mounted());
-        assert!(StateMarker::<Reassembling>::needs_rebuild());
-        assert!(StateMarker::<Reassembling>::is_reassembling());
-        assert_eq!(StateMarker::<Reassembling>::state_name(), "Reassembling");
 
         // StateMarker should be zero-sized
         assert_eq!(std::mem::size_of_val(&marker_unmounted), 0);
         assert_eq!(std::mem::size_of_val(&marker_mounted), 0);
-        assert_eq!(std::mem::size_of_val(&marker_dirty), 0);
-        assert_eq!(std::mem::size_of_val(&marker_reassembling), 0);
     }
 
     #[test]
