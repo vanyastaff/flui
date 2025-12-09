@@ -305,6 +305,192 @@ impl RenderHandle<Mounted> {
 }
 
 // ============================================================================
+// RENDER STATE ACCESS (Render-specific, Mounted only)
+// ============================================================================
+
+impl RenderHandle<Mounted> {
+    /// Get the render size (for Box protocol).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use flui_types::Size;
+    ///
+    /// let size = mounted.size();
+    /// println!("Render size: {:?}", size);
+    /// ```
+    pub fn size(&self) -> Option<flui_types::Size> {
+        self.render_element.as_ref().map(|elem| elem.size())
+    }
+
+    /// Set the render size (for Box protocol).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use flui_types::Size;
+    ///
+    /// mounted.set_size(Size::new(100.0, 50.0));
+    /// ```
+    pub fn set_size(&mut self, size: flui_types::Size) {
+        if let Some(elem) = self.render_element.as_mut() {
+            elem.set_size(size);
+        }
+    }
+
+    /// Get the render offset.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use flui_types::Offset;
+    ///
+    /// let offset = mounted.offset();
+    /// println!("Render offset: {:?}", offset);
+    /// ```
+    pub fn offset(&self) -> Option<flui_types::Offset> {
+        self.render_element.as_ref().map(|elem| elem.offset())
+    }
+
+    /// Set the render offset.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use flui_types::Offset;
+    ///
+    /// mounted.set_offset(Offset::new(10.0, 20.0));
+    /// ```
+    pub fn set_offset(&mut self, offset: flui_types::Offset) {
+        if let Some(elem) = self.render_element.as_mut() {
+            elem.set_offset(offset);
+        }
+    }
+
+    /// Get box constraints (for Box protocol).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use flui_types::BoxConstraints;
+    ///
+    /// if let Some(constraints) = mounted.constraints_box() {
+    ///     println!("Box constraints: {:?}", constraints);
+    /// }
+    /// ```
+    pub fn constraints_box(&self) -> Option<flui_types::BoxConstraints> {
+        self.render_element
+            .as_ref()
+            .and_then(|elem| elem.constraints_box())
+    }
+
+    /// Set box constraints (for Box protocol).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use flui_types::{BoxConstraints, Size};
+    ///
+    /// mounted.set_constraints_box(BoxConstraints::tight(Size::new(100.0, 50.0)));
+    /// ```
+    pub fn set_constraints_box(&mut self, constraints: flui_types::BoxConstraints) {
+        if let Some(elem) = self.render_element.as_mut() {
+            elem.set_constraints_box(constraints);
+        }
+    }
+
+    /// Get sliver constraints (for Sliver protocol).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use flui_types::SliverConstraints;
+    ///
+    /// if let Some(constraints) = mounted.constraints_sliver() {
+    ///     println!("Sliver constraints: {:?}", constraints);
+    /// }
+    /// ```
+    pub fn constraints_sliver(&self) -> Option<flui_types::SliverConstraints> {
+        self.render_element
+            .as_ref()
+            .and_then(|elem| elem.constraints_sliver())
+    }
+
+    /// Set sliver constraints (for Sliver protocol).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use flui_types::SliverConstraints;
+    ///
+    /// mounted.set_constraints_sliver(SliverConstraints::default());
+    /// ```
+    pub fn set_constraints_sliver(&mut self, constraints: flui_types::SliverConstraints) {
+        if let Some(elem) = self.render_element.as_mut() {
+            elem.set_constraints_sliver(constraints);
+        }
+    }
+
+    /// Get sliver geometry (for Sliver protocol).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use flui_types::SliverGeometry;
+    ///
+    /// if let Some(geometry) = mounted.sliver_geometry() {
+    ///     println!("Sliver geometry: {:?}", geometry);
+    /// }
+    /// ```
+    pub fn sliver_geometry(&self) -> Option<flui_types::SliverGeometry> {
+        self.render_element
+            .as_ref()
+            .and_then(|elem| elem.sliver_geometry())
+    }
+
+    /// Set sliver geometry (for Sliver protocol).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use flui_types::SliverGeometry;
+    ///
+    /// mounted.set_sliver_geometry(SliverGeometry::zero());
+    /// ```
+    pub fn set_sliver_geometry(&mut self, geometry: flui_types::SliverGeometry) {
+        if let Some(elem) = self.render_element.as_mut() {
+            elem.set_sliver_geometry(geometry);
+        }
+    }
+
+    /// Mark this render object as needing layout.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// mounted.mark_needs_layout();
+    /// ```
+    pub fn mark_needs_layout(&mut self) {
+        if let Some(elem) = self.render_element.as_mut() {
+            elem.mark_needs_layout();
+        }
+    }
+
+    /// Mark this render object as needing paint.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// mounted.mark_needs_paint();
+    /// ```
+    pub fn mark_needs_paint(&mut self) {
+        if let Some(elem) = self.render_element.as_mut() {
+            elem.mark_needs_paint();
+        }
+    }
+}
+
+// ============================================================================
 // TRAIT IMPLEMENTATIONS
 // ============================================================================
 
