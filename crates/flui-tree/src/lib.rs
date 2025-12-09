@@ -104,6 +104,7 @@
 pub mod arity;
 pub mod error;
 pub mod iter;
+pub mod state;
 pub mod traits;
 pub mod visitor;
 
@@ -121,6 +122,12 @@ pub use arity::{
     Arity, ArityError, AtLeast, ChildrenAccess, Exact, FixedChildren, Leaf, NoChildren, Optional,
     OptionalChild, Range, RuntimeArity, Single, SliceChildren, Variable,
 };
+
+// ============================================================================
+// RE-EXPORTS - State System
+// ============================================================================
+
+pub use state::{Mountable, Mounted, NodeState, StateMarker, TreeInfo, Unmountable, Unmounted};
 
 // ============================================================================
 // RE-EXPORTS - Iterators
@@ -179,10 +186,16 @@ pub mod prelude {
         // Core traits
         Identifier,
         Leaf,
+        // State types
+        Mountable,
+        Mounted,
+        NodeState,
         Optional,
         Single,
-        // Types
+        StateMarker,
         TreeError,
+        TreeInfo,
+        // Types
         TreeNav,
         TreeRead,
         TreeResult,
@@ -190,6 +203,8 @@ pub mod prelude {
         TreeVisitorMut,
         TreeWrite,
         TreeWriteNav,
+        Unmountable,
+        Unmounted,
         Variable,
         VisitorResult,
     };
@@ -206,7 +221,7 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Returns a summary of what this crate provides.
 pub fn crate_summary() -> &'static str {
-    "Pure tree abstractions: TreeRead, TreeNav, TreeWrite, iterators, arity system"
+    "Pure tree abstractions: TreeRead, TreeNav, TreeWrite, iterators, arity system, typestate markers"
 }
 
 // ============================================================================
