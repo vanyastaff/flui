@@ -266,6 +266,18 @@ impl TreeCoordinator {
         // Mount the element (no parent, slot 0, depth 0 for root)
         element.mount(None, Some(Slot::new(0)), 0);
 
+        // Handle pending ViewObject (four-tree architecture)
+        if let Some(view_elem) = element.as_view_mut() {
+            if let Some(view_object) = view_elem.take_pending_view_object() {
+                use flui_view::tree::ViewNode;
+                let mode = view_object.mode();
+                let node = ViewNode::from_boxed(view_object, mode);
+                let view_id = self.views.insert(node);
+                view_elem.set_view_id(Some(view_id));
+                tracing::debug!(?view_id, ?mode, "Root ViewObject registered");
+            }
+        }
+
         // Handle pending RenderObject (four-tree architecture)
         if let Some(render_elem) = element.as_render_mut() {
             if let Some(render_object) = render_elem.take_pending_render_object() {

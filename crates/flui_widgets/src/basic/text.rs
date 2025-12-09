@@ -42,13 +42,13 @@
 //! ```
 
 use bon::Builder;
-use flui_core::element::Element;
-use flui_core::IntoElement;
 use flui_objects::{ParagraphData, RenderParagraph};
+use flui_rendering::{core::protocol::BoxProtocol, Leaf};
 use flui_types::{
     typography::{TextAlign, TextDirection, TextOverflow},
     Color,
 };
+use flui_view::{RenderView, UpdateResult};
 
 /// A widget that displays a string of text with a single style.
 ///
@@ -297,33 +297,54 @@ impl<S: State> TextBuilder<S> {
     }
 }
 
-// Implement IntoElement for Text - converts directly to render element
-impl IntoElement for Text {
-    fn into_element(self) -> Element {
-        // Create paragraph data
-        let data = ParagraphData::new(&self.data)
+impl RenderView<BoxProtocol, Leaf> for Text {
+    type RenderObject = RenderParagraph;
+
+    fn create(&self) -> RenderParagraph {
+        let mut data = ParagraphData::new(&self.data)
             .with_font_size(self.size)
             .with_color(self.color)
-            .with_align(self.text_align)
-            .with_overflow(self.overflow);
+            .with_align(self.text_align);
 
-        let mut data = if let Some(max_lines) = self.max_lines {
-            data.with_max_lines(max_lines)
-        } else {
-            data
-        };
+        if let Some(max) = self.max_lines {
+            data = data.with_max_lines(max);
+        }
 
-        data.text_direction = self.text_direction;
-        data.soft_wrap = self.soft_wrap;
+        data = data.with_overflow(self.overflow);
 
-        // Create RenderParagraph and pass it as pending to Element
-        // In four-tree architecture, RenderParagraph will be registered in RenderTree during mount
-        let render_object = RenderParagraph::new(data);
-        Element::render_with_pending(
-            Box::new(render_object),
-            flui_rendering::core::ProtocolId::Box,
-            flui_rendering::RuntimeArity::Exact(0), // Leaf - no children
-        )
+        RenderParagraph::new(data)
+    }
+
+    fn update(&self, render: &mut RenderParagraph) -> UpdateResult {
+        let mut result = UpdateResult::Unchanged;
+
+        // Text/size changes require re-layout
+        if render.text() != self.data {
+            render.set_text(&self.data);
+            result = UpdateResult::NeedsLayout;
+        }
+
+        if render.font_size() != self.size {
+            render.set_font_size(self.size);
+            result = UpdateResult::NeedsLayout;
+        }
+
+        // Color/alignment changes only need repaint
+        if render.color() != self.color {
+            render.set_color(self.color);
+            if result == UpdateResult::Unchanged {
+                result = UpdateResult::NeedsPaint;
+            }
+        }
+
+        if render.text_align() != self.text_align {
+            render.set_text_align(self.text_align);
+            if result == UpdateResult::Unchanged {
+                result = UpdateResult::NeedsPaint;
+            }
+        }
+
+        result
     }
 }
 

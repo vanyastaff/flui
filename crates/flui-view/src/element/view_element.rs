@@ -42,6 +42,7 @@ use super::flags::{AtomicViewFlags, ViewFlags};
 use super::lifecycle::ViewLifecycle;
 use crate::tree::ViewId;
 use crate::view_mode::ViewMode;
+use crate::view_object::ViewObject;
 
 /// Type-erased pending children storage.
 ///
@@ -104,6 +105,10 @@ pub struct ViewElement {
     /// Type-erased to avoid dependency on flui-element::Element.
     pending_children: Option<PendingChildren>,
 
+    /// Pending ViewObject (before mount, inserted into ViewTree during mount).
+    /// This enables IntoElement pattern where ViewObject is created before tree access.
+    pending_view_object: Option<Box<dyn ViewObject>>,
+
     /// Debug name for diagnostics.
     debug_name: Option<&'static str>,
 }
@@ -163,6 +168,7 @@ impl ViewElement {
             view_mode: mode,
             key: None,
             pending_children: None,
+            pending_view_object: None,
             debug_name: None,
         }
     }
@@ -181,6 +187,7 @@ impl ViewElement {
             view_mode: ViewMode::Empty,
             key: None,
             pending_children: None,
+            pending_view_object: None,
             debug_name: Some("Empty"),
         }
     }
@@ -200,7 +207,41 @@ impl ViewElement {
             view_mode: ViewMode::Empty,
             key: None,
             pending_children: Some(children),
+            pending_view_object: None,
             debug_name: Some("Container"),
+        }
+    }
+
+    /// Creates a ViewElement with a pending ViewObject.
+    ///
+    /// Use this when creating elements from IntoElement where ViewTree is not accessible.
+    /// The pending ViewObject will be inserted into ViewTree during mount.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // In wrapper's into_element():
+    /// let view_obj = Box::new(StatelessViewWrapper::new(my_view));
+    /// Element::View(ViewElement::with_pending(view_obj, ViewMode::Stateless))
+    /// ```
+    pub fn with_pending(view_object: Box<dyn ViewObject>, mode: ViewMode) -> Self {
+        let flags = AtomicViewFlags::new();
+        flags.insert(ViewFlags::DIRTY); // Needs initial build
+
+        Self {
+            id: None,
+            parent: None,
+            slot: None,
+            children: Vec::new(),
+            depth: AtomicUsize::new(0),
+            lifecycle: ViewLifecycle::Initial,
+            flags,
+            view_id: None, // Will be set during mount
+            view_mode: mode,
+            key: None,
+            pending_children: None,
+            pending_view_object: Some(view_object),
+            debug_name: None,
         }
     }
 
@@ -471,6 +512,21 @@ impl ViewElement {
     #[must_use]
     pub fn has_view_id(&self) -> bool {
         self.view_id.is_some()
+    }
+
+    /// Returns true if this element has a pending ViewObject.
+    #[inline]
+    #[must_use]
+    pub fn has_pending_view_object(&self) -> bool {
+        self.pending_view_object.is_some()
+    }
+
+    /// Takes the pending ViewObject, leaving None in its place.
+    ///
+    /// This is called during mount to extract the ViewObject for insertion into ViewTree.
+    #[inline]
+    pub fn take_pending_view_object(&mut self) -> Option<Box<dyn ViewObject>> {
+        self.pending_view_object.take()
     }
 }
 

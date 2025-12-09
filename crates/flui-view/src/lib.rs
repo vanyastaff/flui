@@ -98,7 +98,8 @@ pub use state::ViewState;
 // View traits
 pub use traits::{
     AnimatedView, Listenable, ProviderView, ProxyView, RenderObjectFor, RenderView,
-    RenderViewConfig, RenderViewExt, StatefulView, StatelessView, UpdateResult,
+    RenderViewConfig, RenderViewExt, RenderViewLeaf, RenderViewWithChild, RenderViewWithChildren,
+    RenderViewWithOptionalChild, StatefulView, StatelessView, UpdateResult,
 };
 
 // ViewObject (defined in this crate)

@@ -76,6 +76,107 @@ impl IntoElement for Vec<Element> {
 }
 
 // ============================================================================
+// RENDER VIEW IMPLEMENTATIONS
+// ============================================================================
+
+use flui_rendering::core::arity::Leaf;
+use flui_rendering::core::protocol::BoxProtocol;
+use flui_rendering::core::ProtocolId;
+use flui_tree::RuntimeArity;
+use flui_view::{RenderObjectFor, RenderView, RenderViewLeaf};
+
+/// RenderViewLeaf converts to a Render element with pending render object.
+///
+/// This enables the pattern: `Text::headline("Hello").leaf().into_element()`
+impl<V> IntoElement for RenderViewLeaf<V>
+where
+    V: RenderView<BoxProtocol, Leaf>,
+    V::RenderObject: RenderObjectFor<BoxProtocol, Leaf> + 'static,
+{
+    fn into_element(self) -> Element {
+        let render_object = self.view.create();
+        Element::render_with_pending(
+            Box::new(render_object),
+            ProtocolId::Box,
+            RuntimeArity::Exact(0),
+        )
+    }
+}
+
+// ============================================================================
+// VIEW WRAPPER IMPLEMENTATIONS
+// ============================================================================
+
+use flui_view::{
+    Animated, AnimatedView, AnimatedViewWrapper, Listenable, Provider, ProviderView,
+    ProviderViewWrapper, Proxy, ProxyView, ProxyViewWrapper, Stateful, StatefulView,
+    StatefulViewWrapper, Stateless, StatelessView, StatelessViewWrapper, ViewElement, ViewMode,
+};
+
+/// Stateless wrapper converts to a View element with pending view object.
+impl<V: StatelessView> IntoElement for Stateless<V> {
+    fn into_element(self) -> Element {
+        let wrapper = StatelessViewWrapper::new(self.0);
+        Element::View(ViewElement::with_pending(
+            Box::new(wrapper),
+            ViewMode::Stateless,
+        ))
+    }
+}
+
+/// Stateful wrapper converts to a View element with pending view object.
+impl<V: StatefulView> IntoElement for Stateful<V> {
+    fn into_element(self) -> Element {
+        let wrapper = StatefulViewWrapper::new(self.0);
+        Element::View(ViewElement::with_pending(
+            Box::new(wrapper),
+            ViewMode::Stateful,
+        ))
+    }
+}
+
+/// Proxy wrapper converts to a View element with pending view object.
+impl<V: ProxyView> IntoElement for Proxy<V> {
+    fn into_element(self) -> Element {
+        let wrapper = ProxyViewWrapper::new(self.0);
+        Element::View(ViewElement::with_pending(
+            Box::new(wrapper),
+            ViewMode::Proxy,
+        ))
+    }
+}
+
+/// Provider wrapper converts to a View element with pending view object.
+impl<V, T> IntoElement for Provider<V, T>
+where
+    V: ProviderView<T>,
+    T: Send + Sync + 'static,
+{
+    fn into_element(self) -> Element {
+        let wrapper = ProviderViewWrapper::new(self.0);
+        Element::View(ViewElement::with_pending(
+            Box::new(wrapper),
+            ViewMode::Provider,
+        ))
+    }
+}
+
+/// Animated wrapper converts to a View element with pending view object.
+impl<V, L> IntoElement for Animated<V, L>
+where
+    V: AnimatedView<L>,
+    L: Listenable,
+{
+    fn into_element(self) -> Element {
+        let wrapper = AnimatedViewWrapper::new(self.0);
+        Element::View(ViewElement::with_pending(
+            Box::new(wrapper),
+            ViewMode::Animated,
+        ))
+    }
+}
+
+// ============================================================================
 // TESTS
 // ============================================================================
 
