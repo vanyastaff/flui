@@ -1,4 +1,17 @@
 # FLUI Architecture Refactoring Plan
+
+> **⚠️ STATUS UPDATE (2025-12-09)**: This document describes the **AnyView approach** which was explored but **not chosen**.
+>
+> **Current Approach**: **Typestate System** (see [docs/arch/TYPESTATE_DESIGN.md](docs/arch/TYPESTATE_DESIGN.md))
+> - Implemented structural states (Unmounted/Mounted) in `flui-tree`
+> - NavigableHandle extension trait for generic tree operations
+> - TreeInfo uses usize for universal abstraction
+> - Phase 1 complete (121 tests passing)
+>
+> **This document remains for historical context** showing the exploration process.
+
+---
+
 ## Goal: True Flutter-like View → Element → RenderObject separation
 
 ## Current Problems
