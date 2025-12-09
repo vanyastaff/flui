@@ -24,14 +24,14 @@
 //! - **Stateless Views** - Any type implementing `StatelessView + Clone + Send + Sync + 'static` (blanket impl)
 //! - **Stateful Views** - Via `StatefulViewWrapper<V>` where `V: StatefulView`
 //! - **Empty Views** - `EmptyView` and `()` unit type
-//! - **Wrapper Types** - `StatelessViewWrapper<V>` and `StatefulViewWrapper<V>`
+//! - **Wrapper Types** - `StatelessViewWrapper<V>`, `StatefulViewWrapper<V>`, `ProviderViewWrapper<V, T>`, `AnimatedViewWrapper<V, L>`, `ProxyViewWrapper<V>`, `RenderViewWrapper<V, P, A>`
+//! - **Helper Types** - `Provider<V, T>`, `Animated<V, L>`, `Proxy<V>`, `Render<V, P, A>`
 //!
 //! # Not Implemented
 //!
 //! The following types do NOT implement `IntoViewConfig` by design:
 //!
 //! - `Box<dyn ViewObject>` - Already has ViewObject, defeats lazy mounting
-//! - Complex wrappers (Provider, Animated, Proxy, Render) - Future consideration
 //!
 //! # Usage
 //!

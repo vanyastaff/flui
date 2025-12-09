@@ -11,8 +11,9 @@ use flui_rendering::core::{
     RenderObject,
 };
 
+use crate::handle::ViewConfig;
 use crate::traits::{RenderObjectFor, RenderView};
-use crate::{BuildContext, IntoView, ViewMode, ViewObject};
+use crate::{BuildContext, IntoView, IntoViewConfig, ViewMode, ViewObject};
 
 /// Wrapper for `RenderView` that implements `ViewObject`
 ///
@@ -68,6 +69,14 @@ where
     /// Get mutable render object (if created)
     pub fn render_object_mut(&mut self) -> Option<&mut dyn RenderObject> {
         self.render_object.as_mut().map(|r| r.as_mut())
+    }
+
+    /// Extract the inner view, consuming the wrapper.
+    ///
+    /// Returns `None` if the view has already been consumed to create the render object.
+    #[inline]
+    pub fn into_inner(self) -> Option<V> {
+        self.view
     }
 }
 
@@ -192,6 +201,57 @@ where
 {
     fn into_view(self) -> Box<dyn ViewObject> {
         Box::new(self)
+    }
+}
+
+// ============================================================================
+// IntoViewConfig IMPLEMENTATION
+// ============================================================================
+
+/// Implementation for `RenderViewWrapper`.
+///
+/// This allows render views to be converted to `ViewConfig` when wrapped:
+///
+/// ```rust,ignore
+/// use flui_view::{Render, RenderView, IntoViewConfig};
+///
+/// let config = RenderViewWrapper::new(MyRenderView { ... }).into_view_config();
+/// ```
+impl<V, P, A> IntoViewConfig for RenderViewWrapper<V, P, A>
+where
+    V: RenderView<P, A> + Clone + Send + Sync + 'static,
+    P: Protocol + 'static,
+    A: Arity + 'static,
+    V::RenderObject: RenderObjectFor<P, A> + 'static,
+{
+    fn into_view_config(self) -> ViewConfig {
+        let view = self
+            .view
+            .expect("View has been consumed to create render object");
+        ViewConfig::new_with_factory(view, |v: &V| {
+            Box::new(RenderViewWrapper::<V, P, A>::new(v.clone()))
+        })
+    }
+}
+
+/// Implementation for `Render` helper.
+///
+/// ```rust,ignore
+/// use flui_view::{Render, IntoViewConfig};
+///
+/// let config = Render::new(MyRenderView { ... }).into_view_config();
+/// ```
+impl<V, P, A> IntoViewConfig for Render<V, P, A>
+where
+    V: RenderView<P, A> + Clone + Send + Sync + 'static,
+    P: Protocol + 'static,
+    A: Arity + 'static,
+    V::RenderObject: RenderObjectFor<P, A> + 'static,
+{
+    fn into_view_config(self) -> ViewConfig {
+        ViewConfig::new_with_factory(self.0, |v: &V| {
+            Box::new(RenderViewWrapper::<V, P, A>::new(v.clone()))
+        })
     }
 }
 
