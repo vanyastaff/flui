@@ -1354,6 +1354,7 @@ dependencies = [
  "criterion",
  "flui-element",
  "flui-foundation",
+ "flui-objects",
  "flui-pipeline",
  "flui-reactivity",
  "flui-scheduler",

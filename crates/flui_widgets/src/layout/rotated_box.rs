@@ -158,12 +158,6 @@ impl RotatedBox {
     pub fn rotate_270(child: impl IntoElement) -> Self {
         Self::new(QuarterTurns::Three, child)
     }
-
-    /// Sets the child widget.
-    #[deprecated(note = "Use builder pattern with .child() instead")]
-    pub fn set_child(&mut self, child: Element) {
-        self.child = Some(child);
-    }
 }
 
 impl Default for RotatedBox {

@@ -76,7 +76,7 @@ impl EventRouter {
             }
             _ => {
                 // Other events not yet implemented
-                tracing::debug!("Unhandled event type: {:?}", event);
+                tracing::trace!("Unhandled event type: {:?}", event);
             }
         }
     }
@@ -92,7 +92,7 @@ impl EventRouter {
                 let mut result = HitTestResult::new();
                 root.hit_test(position, &mut result);
 
-                tracing::debug!(
+                tracing::trace!(
                     position = ?position,
                     hit_count = result.len(),
                     has_handlers = result.iter().any(|e| e.handler.is_some()),

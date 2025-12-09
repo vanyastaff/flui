@@ -37,6 +37,7 @@ use wgpu::util::DeviceExt;
 /// └──────────────────────────────────────────────────────────┘
 /// ```
 ///
+#[allow(missing_debug_implementations)]
 pub struct OffscreenRenderer {
     /// Texture pool for offscreen rendering
     texture_pool: Arc<TexturePool>,
@@ -152,15 +153,12 @@ impl OffscreenRenderer {
 
     /// Pre-compile all shaders (reduces first-use latency)
     pub fn warmup(&mut self) {
-        tracing::info!("Warming up offscreen renderer");
         self.shader_cache.precompile_all();
 
         // Pre-create all pipelines
         self.get_or_create_pipeline(ShaderType::SolidMask);
         self.get_or_create_pipeline(ShaderType::LinearGradientMask);
         self.get_or_create_pipeline(ShaderType::RadialGradientMask);
-
-        tracing::info!("All shader mask pipelines pre-created");
     }
 
     /// Get or create render pipeline for shader type
@@ -169,7 +167,7 @@ impl OffscreenRenderer {
     /// Pipelines are cached to avoid recreation.
     fn get_or_create_pipeline(&mut self, shader_type: ShaderType) -> Arc<wgpu::RenderPipeline> {
         if !self.pipelines.contains_key(&shader_type) {
-            tracing::debug!("Creating render pipeline for {:?}", shader_type);
+            tracing::trace!("Creating render pipeline for {:?}", shader_type);
 
             // Get compiled shader from cache
             let compiled_shader = self.shader_cache.get_or_compile(shader_type);
@@ -295,7 +293,7 @@ impl OffscreenRenderer {
         // Get shader type for this spec
         let shader_type = ShaderType::from_spec(shader_spec);
 
-        tracing::debug!(
+        tracing::trace!(
             "Rendering shader mask: {:?}, bounds: {:?}",
             shader_type,
             child_bounds
@@ -423,7 +421,7 @@ impl OffscreenRenderer {
         // Submit commands
         self.queue.submit(std::iter::once(encoder.finish()));
 
-        tracing::debug!(
+        tracing::trace!(
             "Shader mask rendering complete: {:?}, size: {}x{}",
             shader_type,
             size.width,
@@ -532,7 +530,7 @@ impl PipelineManager {
         // Ensure shader is compiled
         let _shader = self.shader_cache.get_or_compile(shader_type);
 
-        tracing::debug!("Getting pipeline for shader: {:?}", shader_type);
+        tracing::trace!("Getting pipeline for shader: {:?}", shader_type);
 
         // TODO: Create actual wgpu::RenderPipeline
 

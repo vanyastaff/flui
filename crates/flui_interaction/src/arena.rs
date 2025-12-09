@@ -576,7 +576,7 @@ impl GestureArena {
                 return false;
             }
 
-            tracing::debug!(
+            tracing::trace!(
                 pointer = pointer.get(),
                 elapsed_ms = entry.elapsed().as_millis(),
                 member_count = entry.members.len(),
@@ -620,7 +620,7 @@ impl GestureArena {
         }
 
         if resolved_count > 0 {
-            tracing::debug!(count = resolved_count, "Force resolved timed out arenas");
+            tracing::trace!(count = resolved_count, "Force resolved timed out arenas");
         }
 
         resolved_count

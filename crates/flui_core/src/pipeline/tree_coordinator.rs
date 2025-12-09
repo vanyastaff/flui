@@ -49,8 +49,10 @@ use std::collections::HashSet;
 use flui_element::{Element, ElementTree};
 use flui_engine::LayerTree;
 use flui_foundation::{ElementId, Slot};
+use flui_painting::DisplayListCore;
 use flui_rendering::tree::RenderTree;
 use flui_view::tree::ViewTree;
+use tracing::instrument;
 
 // ============================================================================
 // TREE COORDINATOR
@@ -264,6 +266,17 @@ impl TreeCoordinator {
         // Mount the element (no parent, slot 0, depth 0 for root)
         element.mount(None, Some(Slot::new(0)), 0);
 
+        // Handle pending RenderObject (four-tree architecture)
+        if let Some(render_elem) = element.as_render_mut() {
+            if let Some(render_object) = render_elem.take_pending_render_object() {
+                use flui_rendering::tree::RenderNode;
+                let node = RenderNode::from_boxed(render_object);
+                let render_id = self.render_objects.insert(node);
+                render_elem.set_render_id(Some(render_id));
+                tracing::debug!(?render_id, "Root RenderObject registered");
+            }
+        }
+
         // Insert into ElementTree
         let id = self.elements.insert(element);
 
@@ -393,6 +406,244 @@ impl TreeCoordinator {
     #[inline]
     pub fn has_needs_paint(&self) -> bool {
         !self.needs_paint.is_empty()
+    }
+}
+
+// ============================================================================
+// LAYOUT
+// ============================================================================
+
+impl TreeCoordinator {
+    /// Layout a single render element via its RenderTree entry.
+    ///
+    /// This method implements the four-tree layout flow:
+    /// 1. Get Element from ElementTree using element_id
+    /// 2. Get RenderId from RenderElement
+    /// 3. Get RenderNode from RenderTree
+    /// 4. Call layout on the RenderObject
+    /// 5. Cache the computed size in RenderNode
+    ///
+    /// # Arguments
+    ///
+    /// * `element_id` - The ElementId of a RenderElement
+    /// * `constraints` - Box constraints for layout
+    ///
+    /// # Returns
+    ///
+    /// - `Some(Size)` if layout succeeded
+    /// - `None` if element not found, not a RenderElement, or has no render_id
+    #[instrument(level = "trace", skip(self, constraints), fields(element = ?element_id))]
+    pub fn layout_element(
+        &mut self,
+        element_id: flui_foundation::ElementId,
+        constraints: flui_types::constraints::BoxConstraints,
+    ) -> Option<flui_types::Size> {
+        // Step 1: Get Element from ElementTree
+        let element = self.elements.get(element_id)?;
+
+        // Step 2: Element must be a RenderElement with a render_id
+        let render_elem = element.as_render()?;
+        let render_id = render_elem.render_id()?;
+
+        // Step 3: Verify RenderNode exists in RenderTree
+        if self.render_objects.get(render_id).is_none() {
+            tracing::warn!(?render_id, "RenderNode not found in tree");
+            return None;
+        }
+
+        // Step 4: Call layout on the RenderObject
+        let size = self.layout_leaf_render_object(render_id, constraints)?;
+
+        tracing::trace!(?element_id, ?size, "Layout computed");
+
+        Some(size)
+    }
+
+    /// Layout a Leaf RenderObject (no children).
+    ///
+    /// This is a simplified layout path for Leaf elements like RenderParagraph
+    /// that don't need child layout context.
+    ///
+    /// For RenderParagraph specifically, we inline the layout algorithm since
+    /// the context-based approach is complex for Leaf nodes. This calculates
+    /// text size based on the constraints and caches the result.
+    fn layout_leaf_render_object(
+        &mut self,
+        render_id: flui_rendering::tree::RenderId,
+        constraints: flui_types::constraints::BoxConstraints,
+    ) -> Option<flui_types::Size> {
+        use flui_objects::RenderParagraph;
+
+        // Get the RenderNode
+        let render_node = self.render_objects.get_mut(render_id)?;
+
+        // Try to downcast to RenderParagraph (the common Leaf case for Text)
+        let render_object = render_node.render_object_mut();
+
+        // Use Any to downcast
+        if let Some(paragraph) =
+            (render_object as &mut dyn std::any::Any).downcast_mut::<RenderParagraph>()
+        {
+            // Inline the RenderParagraph layout logic since Leaf doesn't need children
+            // This mirrors the logic from RenderParagraph::layout but without the context
+            let data = paragraph.data();
+
+            // Calculate text size (simplified estimation)
+            let char_width = data.font_size * 0.6;
+            let line_height = data.font_size * 1.2;
+            let text_len = data.text.len() as f32;
+            let max_width = constraints.max_width;
+
+            // Text wrapping simulation
+            let chars_per_line = if data.soft_wrap && max_width.is_finite() {
+                (max_width / char_width).max(1.0) as usize
+            } else {
+                data.text.len()
+            };
+
+            let num_lines = if chars_per_line > 0 {
+                ((text_len / chars_per_line as f32).ceil() as usize).max(1)
+            } else {
+                1
+            };
+
+            // Apply max_lines constraint
+            let actual_lines = if let Some(max_lines) = data.max_lines {
+                num_lines.min(max_lines)
+            } else {
+                num_lines
+            };
+
+            // Calculate actual text width (intrinsic size)
+            let actual_text_width = (text_len * char_width).min(max_width);
+
+            let width = if data.soft_wrap && max_width.is_finite() && actual_text_width > max_width
+            {
+                max_width
+            } else {
+                actual_text_width
+            };
+
+            let height = actual_lines as f32 * line_height;
+
+            let size = constraints.constrain(flui_types::Size::new(width, height));
+
+            tracing::trace!(?render_id, ?size, "RenderParagraph layout");
+
+            // Cache the size in RenderNode
+            if let Some(node) = self.render_objects.get_mut(render_id) {
+                node.set_cached_size(Some(size));
+            }
+
+            return Some(size);
+        }
+
+        // For other Leaf types, return a default size
+        tracing::warn!(?render_id, "Unknown Leaf type, using default 100x100 size");
+        Some(flui_types::Size::new(100.0, 100.0))
+    }
+}
+
+// ============================================================================
+// PAINTING
+// ============================================================================
+
+impl TreeCoordinator {
+    /// Paints the root element to a new canvas and returns it.
+    ///
+    /// This method traverses from the root Element to its RenderObject in RenderTree
+    /// and calls the paint method to generate a Canvas with draw commands.
+    ///
+    /// # Returns
+    ///
+    /// - `Some(Canvas)` if the root element exists and was painted successfully
+    /// - `None` if there's no root element or the element has no render object
+    ///
+    /// # Architecture
+    ///
+    /// This implements the four-tree paint flow:
+    /// 1. Get root ElementId from TreeCoordinator
+    /// 2. Get Element from ElementTree
+    /// 3. Get RenderId from RenderElement
+    /// 4. Get RenderNode from RenderTree
+    /// 5. Call paint on the RenderObject
+    #[instrument(level = "trace", skip(self))]
+    pub fn paint_root(&mut self) -> Option<flui_painting::Canvas> {
+        // Get root element
+        let root_id = self.root?;
+        let element = self.elements.get(root_id)?;
+
+        // Element must be a RenderElement with a render_id
+        let render_elem = element.as_render()?;
+        let render_id = render_elem.render_id()?;
+
+        // Get RenderNode from RenderTree
+        let render_node = self.render_objects.get(render_id)?;
+
+        // Get size from layout (use cached size or default)
+        let size = render_node
+            .cached_size()
+            .unwrap_or(flui_types::Size::new(800.0, 600.0));
+
+        // Create canvas and paint
+        let mut canvas = flui_painting::Canvas::new();
+
+        // For now, directly paint using the RenderObject
+        // This uses a simplified paint approach for Leaf elements
+        self.paint_render_object_to_canvas(render_id, flui_types::Offset::ZERO, size, &mut canvas);
+
+        tracing::trace!(
+            ?render_id,
+            commands = canvas.display_list().len(),
+            "Paint complete"
+        );
+
+        Some(canvas)
+    }
+
+    /// Paints a single RenderObject to a canvas.
+    ///
+    /// This is a simplified paint method that works for Leaf elements (no children).
+    /// For elements with children, a more complex context setup would be needed.
+    #[instrument(level = "trace", skip(self, canvas, _size), fields(render = ?render_id))]
+    fn paint_render_object_to_canvas(
+        &mut self,
+        render_id: flui_rendering::tree::RenderId,
+        offset: flui_types::Offset,
+        _size: flui_types::Size,
+        canvas: &mut flui_painting::Canvas,
+    ) {
+        use flui_objects::RenderParagraph;
+        use flui_painting::Paint;
+        use flui_types::typography::TextStyle;
+
+        // Get the RenderNode
+        let Some(render_node) = self.render_objects.get(render_id) else {
+            tracing::warn!(?render_id, "RenderNode not found during paint");
+            return;
+        };
+
+        // Try to downcast to RenderParagraph (the most common case for text)
+        let render_object = render_node.render_object();
+        if let Some(paragraph) =
+            (render_object as &dyn std::any::Any).downcast_ref::<RenderParagraph>()
+        {
+            // Direct paint for RenderParagraph
+            let data = paragraph.data();
+            let paint = Paint {
+                color: data.color,
+                ..Default::default()
+            };
+
+            let text_style = TextStyle::default()
+                .with_font_size(data.font_size as f64)
+                .with_color(data.color);
+
+            canvas.draw_text(&data.text, offset, &text_style, &paint);
+            tracing::trace!(text = %data.text, "Text painted");
+        } else {
+            tracing::warn!(?render_id, "Unknown RenderObject type, skipping paint");
+        }
     }
 }
 

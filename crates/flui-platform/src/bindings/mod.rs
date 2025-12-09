@@ -9,5 +9,5 @@
 mod gesture_binding;
 mod scheduler_binding;
 
-pub use gesture_binding::{EventRouterExt, GestureBinding};
+pub use gesture_binding::GestureBinding;
 pub use scheduler_binding::{SchedulerBinding, SchedulerStats};

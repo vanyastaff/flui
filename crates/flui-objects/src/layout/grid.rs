@@ -116,7 +116,7 @@
 //! grid.set_placement(0, GridPlacement::with_span(0, 2, 0, 1));
 //! ```
 
-use flui_foundation::ElementId;
+use flui_foundation::RenderId;
 use flui_rendering::{BoxLayoutCtx, BoxPaintCtx, RenderBox, Variable};
 use flui_rendering::{RenderObject, RenderResult};
 use flui_types::{BoxConstraints, Offset, Size};
@@ -332,7 +332,7 @@ impl RenderGrid {
     /// Compute column widths based on track sizes
     fn compute_column_widths(
         &self,
-        children: &[ElementId],
+        children: &[RenderId],
         ctx: &mut BoxLayoutCtx<'_, Variable>,
         constraints: BoxConstraints,
     ) -> Vec<f32> {
@@ -399,7 +399,7 @@ impl RenderGrid {
     /// Compute row heights based on track sizes
     fn compute_row_heights(
         &self,
-        children: &[ElementId],
+        children: &[RenderId],
         ctx: &mut BoxLayoutCtx<'_, Variable>,
         column_widths: &[f32],
         constraints: BoxConstraints,
@@ -480,7 +480,7 @@ impl RenderBox<Variable> for RenderGrid {
         let children = ctx.children;
 
         // Collect children first for multiple passes
-        let child_ids: Vec<ElementId> = children.iter().map(|id| *id).collect();
+        let child_ids: Vec<RenderId> = children.iter().map(|id| *id).collect();
 
         if self.column_sizes.is_empty() || self.row_sizes.is_empty() || child_ids.is_empty() {
             self.computed_column_widths.clear();

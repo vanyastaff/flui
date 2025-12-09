@@ -142,6 +142,7 @@ pub struct TextureCacheStats {
 /// // Next frame - reuse (cache hit, instant!)
 /// let texture = cache.get_or_load(texture_id).unwrap();
 /// ```
+#[allow(missing_debug_implementations)]
 pub struct TextureCache {
     /// Cached textures by ID
     textures: HashMap<TextureId, CachedTexture>,

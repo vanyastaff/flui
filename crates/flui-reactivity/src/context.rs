@@ -374,7 +374,7 @@ impl HookContext {
 
         #[cfg(debug_assertions)]
         if !hooks_to_cleanup.is_empty() {
-            tracing::debug!(
+            tracing::trace!(
                 "Cleaning up {} hooks for component {:?}",
                 hooks_to_cleanup.len(),
                 component_id

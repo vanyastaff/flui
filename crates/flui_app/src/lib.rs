@@ -156,20 +156,28 @@ where
     use winit::window::WindowId;
 
     // Initialize cross-platform logging
+    // Use RUST_LOG env var or default filter
+    let filter = std::env::var("RUST_LOG").unwrap_or_else(|_| {
+        "info,wgpu=warn,flui_core=debug,flui_app=debug,flui_platform=debug".to_string()
+    });
+    let level = if filter.contains("trace") {
+        tracing::Level::TRACE
+    } else {
+        tracing::Level::DEBUG
+    };
     flui_log::Logger::default()
-        .with_filter("info,wgpu=warn,flui_core=debug,flui_app=info,counter=debug")
+        .with_filter(&filter)
+        .with_level(level)
         .init();
 
-    let _app_span = tracing::info_span!("flui_app").entered();
-    tracing::info!("Starting FLUI app");
+    tracing::info!("FLUI application starting");
 
     // 1. Initialize bindings
     let binding = AppBinding::ensure_initialized();
+    tracing::debug!("Framework bindings initialized");
 
     // 2. Attach root widget
     binding.attach_root_widget(app);
-
-    tracing::info!("Entering event loop");
 
     // Application state for winit 0.30+ ApplicationHandler
     struct AppState {
@@ -180,9 +188,6 @@ where
     impl ApplicationHandler for AppState {
         fn resumed(&mut self, event_loop: &ActiveEventLoop) {
             if self.embedder.is_none() {
-                let _span = tracing::info_span!("create_embedder").entered();
-                // Safe to create window and surface now
-                // Pass individual components to flui_platform::DesktopEmbedder
                 let embedder = pollster::block_on(DesktopEmbedder::new(
                     self.binding.pipeline(),
                     self.binding.needs_redraw_flag(),
@@ -192,7 +197,6 @@ where
                 ))
                 .expect("Failed to create desktop embedder");
                 self.embedder = Some(embedder);
-                tracing::info!("Desktop embedder ready");
             }
         }
 
@@ -221,13 +225,10 @@ where
             if let Some(ref mut emb) = self.embedder {
                 match event {
                     WindowEvent::RedrawRequested => {
-                        tracing::trace!("RedrawRequested event, rendering frame");
                         emb.render_frame();
-                        // Clear dirty flag after rendering
                         self.binding.mark_rendered();
                     }
                     WindowEvent::CloseRequested => {
-                        tracing::info!("Window close requested");
                         event_loop.exit();
                     }
                     other => {
@@ -282,43 +283,37 @@ where
     use winit::window::WindowId;
 
     // Initialize cross-platform logging
+    // Use RUST_LOG env var or default filter
+    let filter = std::env::var("RUST_LOG").unwrap_or_else(|_| {
+        "info,wgpu=warn,flui_core=debug,flui_app=debug,flui_platform=debug".to_string()
+    });
+    let level = if filter.contains("trace") {
+        tracing::Level::TRACE
+    } else {
+        tracing::Level::DEBUG
+    };
     flui_log::Logger::default()
-        .with_filter("info,wgpu=warn,flui_core=debug,flui_app=info")
+        .with_filter(&filter)
+        .with_level(level)
         .init();
 
-    let _app_span = tracing::info_span!("flui_app").entered();
-    tracing::info!("Starting FLUI app (element mode)");
+    tracing::info!("FLUI application starting");
 
     // 1. Initialize bindings
     let binding = AppBinding::ensure_initialized();
-    tracing::debug!("Bindings initialized");
+    tracing::debug!("Framework bindings initialized");
 
     // 2. Attach root element
     binding.attach_root_element(element);
-    tracing::debug!("Root element attached");
 
-    // Check what's in the tree
+    // Verify tree initialization
     {
         let pipeline = binding.pipeline();
         let owner = pipeline.read();
-        let tree = owner.tree();
-        let tree_guard = tree.read();
-        tracing::info!(element_count = tree_guard.len(), "Element tree status");
-        if let Some(root_id) = owner.root_element_id() {
-            tracing::info!(?root_id, "Root element found");
-            if let Some(root) = tree_guard.get(root_id) {
-                tracing::info!(
-                    is_render = root.is_render(),
-                    view_mode = ?root.view_mode(),
-                    "Root element details"
-                );
-            }
-        } else {
-            tracing::warn!("No root element found!");
+        if owner.root_element_id().is_none() {
+            tracing::warn!("No root element found after attach!");
         }
     }
-
-    tracing::info!("Entering event loop");
 
     // Application state for winit 0.30+ ApplicationHandler
     struct AppState {
@@ -329,7 +324,6 @@ where
     impl ApplicationHandler for AppState {
         fn resumed(&mut self, event_loop: &ActiveEventLoop) {
             if self.embedder.is_none() {
-                let _span = tracing::info_span!("create_embedder").entered();
                 let embedder = pollster::block_on(DesktopEmbedder::new(
                     self.binding.pipeline(),
                     self.binding.needs_redraw_flag(),
@@ -339,7 +333,6 @@ where
                 ))
                 .expect("Failed to create desktop embedder");
                 self.embedder = Some(embedder);
-                tracing::info!("Desktop embedder ready");
             }
         }
 
@@ -366,12 +359,10 @@ where
             if let Some(ref mut emb) = self.embedder {
                 match event {
                     WindowEvent::RedrawRequested => {
-                        tracing::trace!("RedrawRequested event, rendering frame");
                         emb.render_frame();
                         self.binding.mark_rendered();
                     }
                     WindowEvent::CloseRequested => {
-                        tracing::info!("Window close requested");
                         event_loop.exit();
                     }
                     other => {

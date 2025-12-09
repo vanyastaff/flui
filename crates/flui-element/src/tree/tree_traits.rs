@@ -313,57 +313,12 @@ impl TreeWriteNav<ElementId> for ElementTree {
     }
 }
 
-// ============================================================================
-// RenderTreeAccess Implementation
-// ============================================================================
-
-impl flui_rendering::core::RenderTreeAccess for ElementTree {
-    /// Returns the render object for an element.
-    ///
-    /// NOTE: In the four-tree architecture, render objects are stored in RenderTree,
-    /// not in Element. This method returns None. Use RenderTree::get(render_id) instead.
-    #[inline]
-    fn render_object(&self, _id: ElementId) -> Option<&dyn std::any::Any> {
-        // Render objects are now in RenderTree, accessed via element.as_render().render_id()
-        None
-    }
-
-    /// Returns a mutable render object.
-    ///
-    /// NOTE: In the four-tree architecture, render objects are stored in RenderTree,
-    /// not in Element. This method returns None. Use RenderTree::get_mut(render_id) instead.
-    #[inline]
-    fn render_object_mut(&mut self, _id: ElementId) -> Option<&mut dyn std::any::Any> {
-        // Render objects are now in RenderTree, accessed via element.as_render().render_id()
-        None
-    }
-
-    /// Returns the render state for an element.
-    ///
-    /// NOTE: In the four-tree architecture, render state is stored in RenderTree nodes,
-    /// not in Element. This method returns None. Use RenderTree to access state.
-    #[inline]
-    fn render_state(&self, _id: ElementId) -> Option<&dyn std::any::Any> {
-        // Render state is now in RenderTree
-        None
-    }
-
-    /// Returns a mutable render state.
-    ///
-    /// NOTE: In the four-tree architecture, render state is stored in RenderTree nodes,
-    /// not in Element. This method returns None. Use RenderTree to access state.
-    #[inline]
-    fn render_state_mut(&mut self, _id: ElementId) -> Option<&mut dyn std::any::Any> {
-        // Render state is now in RenderTree
-        None
-    }
-
-    /// Returns true if the element is a render element.
-    #[inline]
-    fn is_render_element(&self, id: ElementId) -> bool {
-        self.get(id).map(|e| e.is_render()).unwrap_or(false)
-    }
-}
+// NOTE: RenderTreeAccess is NOT implemented for ElementTree.
+// In the four-tree architecture, render objects and render state are stored
+// in RenderTree, not in ElementTree. Use RenderTree::get(render_id) instead.
+//
+// ElementTree implements TreeNav<ElementId>, while RenderTreeAccess requires
+// TreeNav<RenderId>. These are fundamentally different ID types for different trees.
 
 // ============================================================================
 // Lifecycle Implementation for Element

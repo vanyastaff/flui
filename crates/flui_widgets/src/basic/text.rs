@@ -45,7 +45,6 @@ use bon::Builder;
 use flui_core::element::Element;
 use flui_core::IntoElement;
 use flui_objects::{ParagraphData, RenderParagraph};
-use flui_rendering::{BoxRenderWrapper, Leaf};
 use flui_types::{
     typography::{TextAlign, TextDirection, TextOverflow},
     Color,
@@ -317,8 +316,14 @@ impl IntoElement for Text {
         data.text_direction = self.text_direction;
         data.soft_wrap = self.soft_wrap;
 
-        // Create RenderParagraph and wrap in BoxRenderWrapper for IntoElement
-        BoxRenderWrapper::<Leaf>::new(RenderParagraph::new(data)).into_element()
+        // Create RenderParagraph and pass it as pending to Element
+        // In four-tree architecture, RenderParagraph will be registered in RenderTree during mount
+        let render_object = RenderParagraph::new(data);
+        Element::render_with_pending(
+            Box::new(render_object),
+            flui_rendering::core::ProtocolId::Box,
+            flui_rendering::RuntimeArity::Exact(0), // Leaf - no children
+        )
     }
 }
 

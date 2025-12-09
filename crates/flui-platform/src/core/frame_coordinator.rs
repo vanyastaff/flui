@@ -3,7 +3,8 @@
 //! Orchestrates the frame rendering pipeline and handles
 //! surface errors gracefully.
 
-use flui_engine::{GpuRenderer, RenderError, Scene};
+use flui_engine::{RenderError, Scene, SceneRenderer};
+use tracing::instrument;
 
 /// Frame rendering result
 #[derive(Debug)]
@@ -75,13 +76,14 @@ impl FrameCoordinator {
     /// Render a scene to the GPU
     ///
     /// Handles surface errors gracefully and tracks statistics.
-    pub fn render_scene(&mut self, renderer: &mut GpuRenderer, scene: &Scene) -> FrameResult {
+    #[instrument(level = "trace", skip_all, fields(frame = scene.frame_number()))]
+    pub fn render_scene(&mut self, renderer: &mut SceneRenderer, scene: &Scene) -> FrameResult {
         let Some(layer) = scene.root_layer() else {
             tracing::trace!("Empty scene, skipping render");
             return FrameResult::Empty;
         };
 
-        match renderer.render(layer.as_ref()) {
+        match renderer.render(layer) {
             Ok(()) => {
                 self.frames_rendered += 1;
                 tracing::trace!(

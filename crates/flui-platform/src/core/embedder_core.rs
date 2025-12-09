@@ -9,7 +9,7 @@ use crate::{
     traits::{DefaultLifecycle, PlatformLifecycle},
 };
 use flui_core::pipeline::PipelineOwner;
-use flui_engine::{CanvasLayer, GpuRenderer, Layer, Scene};
+use flui_engine::{CanvasLayer, Layer, Scene, SceneRenderer};
 use flui_types::{
     constraints::BoxConstraints,
     events::{PointerButton, PointerDeviceKind, PointerEventData},
@@ -20,6 +20,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
+use tracing::instrument;
 
 /// Shared embedder implementation
 ///
@@ -148,20 +149,14 @@ impl EmbedderCore {
     /// Handle window resize
     ///
     /// Reconfigures GPU surface and requests layout.
-    pub fn handle_resize(&mut self, renderer: &mut GpuRenderer, width: u32, height: u32) {
-        tracing::debug!(width, height, "Window resized");
-
-        // Reconfigure GPU surface
+    pub fn handle_resize(&mut self, renderer: &mut SceneRenderer, width: u32, height: u32) {
         renderer.resize(width, height);
 
-        // Request layout for entire tree
         let mut pipeline = self.pipeline_owner.write();
         if let Some(root_id) = pipeline.root_element_id() {
             pipeline.request_layout(root_id);
-            tracing::debug!("Requested layout for root after resize");
         }
 
-        // Request redraw
         self.request_redraw();
     }
 
@@ -172,9 +167,7 @@ impl EmbedderCore {
         self.pointer_state.update_position(position, device);
 
         // Schedule high-priority input task
-        self.scheduler.schedule_user_input(|| {
-            tracing::trace!("Pointer move task executed");
-        });
+        self.scheduler.schedule_user_input(|| {});
     }
 
     /// Handle pointer button (mouse click / touch)
@@ -197,9 +190,7 @@ impl EmbedderCore {
             Event::Pointer(PointerEvent::Up(data))
         };
 
-        tracing::trace!(?position, ?device, ?button, is_down, "Pointer button event");
-
-        // Route through interaction bridge (type-safe!)
+        // Route through interaction system
         self.route_event(event);
     }
 
@@ -207,9 +198,6 @@ impl EmbedderCore {
     ///
     /// Routes keyboard event through focus system and interaction system.
     pub fn handle_key_event(&mut self, key_event: flui_types::events::KeyEvent) {
-        tracing::trace!(?key_event, "Keyboard event");
-
-        // Wrap in Event enum and route
         let event = Event::Key(key_event);
         self.route_event(event);
     }
@@ -218,21 +206,14 @@ impl EmbedderCore {
     ///
     /// Routes scroll event through hit testing to find scroll targets.
     pub fn handle_scroll_event(&mut self, scroll_event: flui_types::events::ScrollEventData) {
-        tracing::trace!(?scroll_event, "Scroll event");
-
-        // Wrap in Event enum and route
         let event = Event::Scroll(scroll_event);
         self.route_event(event);
     }
 
-    /// Route event through hit testing (SAFE)
-    ///
-    /// Uses InteractionBridge which eliminates unsafe code.
+    /// Route event through hit testing
     fn route_event(&mut self, event: Event) {
         if let Some(scene) = self.scene_cache.get() {
             self.gesture.route_event(&scene, event);
-        } else {
-            tracing::trace!("Event dropped (no scene cached)");
         }
     }
 
@@ -278,7 +259,6 @@ impl EmbedderCore {
         let mut pipeline = self.pipeline_owner.write();
 
         // Execute pipeline: build → layout → paint
-        // build_frame returns Option<Canvas>, we need to convert to Layer
         let canvas_opt = match pipeline.build_frame(constraints) {
             Ok(canvas_opt) => canvas_opt,
             Err(e) => {
@@ -294,19 +274,20 @@ impl EmbedderCore {
         let frame_number = self.frame_coordinator.frames_rendered() + 1;
         match canvas_opt {
             Some(canvas) => {
-                // Convert Canvas → CanvasLayer → Layer → Arc<Layer>
+                // Convert Canvas → CanvasLayer → Layer
                 let canvas_layer = CanvasLayer::from_canvas(canvas);
-                let layer = Arc::new(Layer::Canvas(canvas_layer));
-                Scene::with_layer(size, layer, frame_number)
+                let layer = Layer::Canvas(canvas_layer);
+                Scene::from_layer(size, layer, frame_number)
             }
-            None => Scene::new(size),
+            None => Scene::empty(size),
         }
     }
 
     /// Render a complete frame
     ///
     /// Orchestrates: begin_frame → process_events → draw → render → end_frame
-    pub fn render_frame(&mut self, renderer: &mut GpuRenderer) -> Scene {
+    #[instrument(level = "debug", skip_all)]
+    pub fn render_frame(&mut self, renderer: &mut SceneRenderer) -> Arc<Scene> {
         // 1. Begin frame (scheduler callbacks)
         self.scheduler.begin_frame();
 
@@ -316,10 +297,10 @@ impl EmbedderCore {
         // 3. Draw frame (build + layout + paint → Scene)
         let (width, height) = renderer.size();
         let constraints = BoxConstraints::tight(Size::new(width as f32, height as f32));
-        let scene = self.draw_frame(constraints);
+        let scene = Arc::new(self.draw_frame(constraints));
 
         // 4. Cache scene for hit testing (Arc clone is cheap!)
-        self.scene_cache.update(scene.clone());
+        self.scene_cache.update(Arc::clone(&scene));
 
         // 5. Render scene to GPU
         let _result = self.frame_coordinator.render_scene(renderer, &scene);

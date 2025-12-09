@@ -106,7 +106,7 @@
 //! }
 //! ```
 
-use flui_foundation::ElementId;
+use flui_foundation::RenderId;
 use flui_rendering::{BoxLayoutCtx, BoxPaintCtx, RenderBox, Variable};
 use flui_rendering::{RenderObject, RenderResult};
 use flui_types::{BoxConstraints, Matrix4, Offset, Size};
@@ -122,7 +122,7 @@ pub struct FlowPaintContext<'a, 'b> {
     /// Size of each child (after layout)
     pub child_sizes: &'a [Size],
     /// Children IDs
-    pub children: &'a [ElementId],
+    pub children: &'a [RenderId],
 }
 
 impl<'a, 'b> FlowPaintContext<'a, 'b> {
@@ -332,7 +332,7 @@ impl RenderBox<Variable> for RenderFlow {
         let offset = ctx.offset;
 
         // Collect child IDs first to avoid borrow checker issues
-        let child_ids: Vec<ElementId> = ctx.children.iter().map(|id| *id).collect();
+        let child_ids: Vec<RenderId> = ctx.children.iter().map(|id| *id).collect();
 
         // Create paint context for delegate
         let mut flow_paint_ctx = FlowPaintContext {

@@ -247,12 +247,6 @@ impl Flexible {
         }
     }
 
-    /// Sets the child widget.
-    #[deprecated(note = "Use builder pattern with .child() instead")]
-    pub fn set_child(&mut self, child: Element) {
-        self.child = Some(child);
-    }
-
     /// Validates Flexible configuration.
     ///
     /// Returns an error if:

@@ -14,8 +14,11 @@ use thiserror::Error;
 /// Simple 2D vertex with position and color
 #[derive(Debug, Clone, Copy)]
 pub struct TextVertex {
+    /// X coordinate
     pub x: f32,
+    /// Y coordinate
     pub y: f32,
+    /// Vertex color
     pub color: Color,
 }
 
@@ -75,6 +78,9 @@ impl<'a> TextRenderParams<'a> {
 }
 
 /// Vector text renderer that converts glyphs to paths and tessellates them
+///
+/// Note: Debug is not derived because `FillTessellator` doesn't implement Debug.
+#[allow(missing_debug_implementations)]
 pub struct VectorTextRenderer {
     /// Cached font face data
     font_data: Arc<Vec<u8>>,

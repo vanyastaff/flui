@@ -99,24 +99,15 @@ impl SchedulerBinding {
         pipeline_weak: Weak<RwLock<PipelineOwner>>,
         needs_redraw: Arc<AtomicBool>,
     ) {
-        tracing::debug!("Wiring up scheduler callbacks to pipeline");
-
         self.scheduler
             .add_persistent_frame_callback(Arc::new(move |_timing| {
-                // Attempt to upgrade Weak to Arc - succeeds if PipelineOwner still exists
                 if let Some(pipeline) = pipeline_weak.upgrade() {
                     let mut owner = pipeline.write();
-                    // Only mark for redraw if there were actual changes
                     if owner.flush_rebuild_queue() {
                         needs_redraw.store(true, Ordering::Relaxed);
                     }
-                } else {
-                    // PipelineOwner was dropped - this is expected during shutdown
-                    tracing::warn!("Pipeline dropped during frame callback");
                 }
             }));
-
-        tracing::debug!("Scheduler wired up with Weak reference");
     }
 
     /// Begin a frame
@@ -127,7 +118,6 @@ impl SchedulerBinding {
     pub fn begin_frame(&mut self) -> u64 {
         let frame_id = self.scheduler.begin_frame();
         self.current_frame = frame_id.as_u64();
-        tracing::trace!(frame = self.current_frame, "Frame started");
         self.current_frame
     }
 
@@ -138,7 +128,6 @@ impl SchedulerBinding {
     /// - Update frame statistics
     pub fn end_frame(&self) {
         self.scheduler.end_frame();
-        tracing::trace!(frame = self.current_frame, "Frame ended");
     }
 
     /// Schedule a user input task (highest priority)

@@ -686,14 +686,6 @@ impl Canvas {
             .map(|clip_bounds| !clip_bounds.intersects(rect))
     }
 
-    /// Checks if the given rectangle is completely outside the current clip bounds.
-    #[deprecated(since = "0.2.0", note = "Use `would_be_clipped()` instead")]
-    #[inline]
-    #[must_use]
-    pub fn is_rect_outside_clip(&self, rect: &Rect) -> Option<bool> {
-        self.would_be_clipped(rect)
-    }
-
     // ===== Drawing Primitives =====
 
     /// Draws a line
@@ -1208,17 +1200,6 @@ impl Canvas {
             paint: paint.clone(),
             transform: self.transform,
         });
-    }
-
-    /// Draws a sequence of points with the specified mode.
-    #[deprecated(since = "0.2.0", note = "Use `draw_points_with_mode()` instead")]
-    pub fn draw_points_mode(
-        &mut self,
-        mode: crate::display_list::PointMode,
-        points: Vec<Point>,
-        paint: &Paint,
-    ) {
-        self.draw_points_with_mode(mode, points, paint);
     }
 
     /// Draws custom vertices with optional colors and texture coordinates

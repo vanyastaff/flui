@@ -14,19 +14,25 @@ use flui_types::{
 };
 
 /// wgpu backend implementation of CommandRenderer.
+///
+/// Note: Debug is not derived because `WgpuPainter` contains wgpu types that don't implement Debug.
+#[allow(missing_debug_implementations)]
 pub struct Backend {
     painter: WgpuPainter,
 }
 
 impl Backend {
+    /// Create a new Backend with the given painter.
     pub fn new(painter: WgpuPainter) -> Self {
         Self { painter }
     }
 
+    /// Get a reference to the underlying painter.
     pub fn painter(&self) -> &WgpuPainter {
         &self.painter
     }
 
+    /// Get a mutable reference to the underlying painter.
     pub fn painter_mut(&mut self) -> &mut WgpuPainter {
         &mut self.painter
     }

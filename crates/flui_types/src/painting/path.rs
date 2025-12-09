@@ -592,18 +592,6 @@ impl Path {
         bounds
     }
 
-    /// Computes and returns the bounding box of the path (legacy).
-    ///
-    /// This is cached after the first computation.
-    #[deprecated(
-        since = "0.2.0",
-        note = "Use `bounds()` for mutable or `compute_bounds()` for immutable access"
-    )]
-    #[must_use]
-    pub fn bounds_mut(&mut self) -> Rect {
-        self.bounds()
-    }
-
     /// Transforms the path by translating it.
     #[must_use]
     pub fn translate(&self, offset: Offset) -> Self {

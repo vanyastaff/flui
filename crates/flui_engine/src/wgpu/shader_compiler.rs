@@ -101,7 +101,7 @@ impl ShaderCache {
         {
             let cache = self.cache.read();
             if let Some(shader) = cache.get(&shader_type) {
-                tracing::debug!("Shader cache hit: {:?}", shader_type);
+                tracing::trace!("Shader cache hit: {:?}", shader_type);
                 return Arc::clone(shader);
             }
         }
@@ -115,7 +115,6 @@ impl ShaderCache {
         }
 
         // Compile the shader
-        tracing::info!("Compiling shader: {}", shader_type.label());
         let compiled = Arc::new(CompiledShader {
             shader_type,
             source: shader_type.source_code().to_string(),
@@ -130,18 +129,15 @@ impl ShaderCache {
     ///
     /// Useful for avoiding frame time spikes on first use.
     pub fn precompile_all(&self) {
-        tracing::info!("Pre-compiling all shader mask shaders");
         let _ = self.get_or_compile(ShaderType::SolidMask);
         let _ = self.get_or_compile(ShaderType::LinearGradientMask);
         let _ = self.get_or_compile(ShaderType::RadialGradientMask);
-        tracing::info!("All shaders pre-compiled");
     }
 
     /// Clear the cache
     pub fn clear(&self) {
         let mut cache = self.cache.write();
         cache.clear();
-        tracing::info!("Shader cache cleared");
     }
 }
 

@@ -70,12 +70,6 @@ impl ConstrainedBox {
         }
     }
 
-    /// Sets the child widget.
-    #[deprecated(note = "Use builder pattern with .child() instead")]
-    pub fn set_child(&mut self, child: impl IntoElement) {
-        self.child = Child::new(child);
-    }
-
     /// Validates ConstrainedBox configuration.
     pub fn validate(&self) -> Result<(), String> {
         if let Some(constraints) = &self.constraints {

@@ -204,12 +204,6 @@ impl PositionedDirectional {
             child: self.child,
         }
     }
-
-    /// Sets the child widget.
-    #[deprecated(note = "Use builder pattern with .child() instead")]
-    pub fn set_child(&mut self, child: Element) {
-        self.child = Some(child);
-    }
 }
 
 impl Default for PositionedDirectional {

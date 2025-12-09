@@ -69,6 +69,7 @@ pub struct ExternalTextureEntry {
 /// Registry for external GPU textures
 ///
 /// Maps `flui_types::painting::TextureId` to GPU textures that can be rendered.
+#[allow(missing_debug_implementations)]
 pub struct ExternalTextureRegistry {
     /// Registered textures by ID
     textures: HashMap<u64, ExternalTextureEntry>,
@@ -201,7 +202,7 @@ impl ExternalTextureRegistry {
 
         self.textures.insert(texture_id.get(), entry);
 
-        tracing::debug!(
+        tracing::trace!(
             "Registered external texture {}: {}x{}, dynamic={}",
             texture_id.get(),
             width,
@@ -256,7 +257,7 @@ impl ExternalTextureRegistry {
     pub fn unregister(&mut self, texture_id: TextureId) -> bool {
         let removed = self.textures.remove(&texture_id.get()).is_some();
         if removed {
-            tracing::debug!("Unregistered external texture {}", texture_id.get());
+            tracing::trace!("Unregistered external texture {}", texture_id.get());
         }
         removed
     }
@@ -284,7 +285,7 @@ impl ExternalTextureRegistry {
     /// Clear all registered textures
     pub fn clear(&mut self) {
         self.textures.clear();
-        tracing::debug!("Cleared all external textures");
+        tracing::trace!("Cleared all external textures");
     }
 
     /// Get iterator over all texture IDs

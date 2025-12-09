@@ -61,6 +61,7 @@ impl lyon::tessellation::StrokeVertexConstructor<Vertex> for StrokeVertexConstru
 /// Converts vector paths into triangle meshes using Lyon.
 /// Provides both fill and stroke tessellation.
 #[derive(Default)]
+#[allow(missing_debug_implementations)]
 pub struct Tessellator {
     /// Lyon fill tessellator
     fill_tessellator: FillTessellator,
@@ -490,7 +491,7 @@ impl Tessellator {
         paint: &Paint,
     ) -> Result<(Vec<Vertex>, Vec<u32>)> {
         #[cfg(debug_assertions)]
-        tracing::debug!(
+        tracing::trace!(
             "Tessellator::tessellate_line: p1={:?}, p2={:?}, stroke_width={}",
             p1,
             p2,
@@ -503,7 +504,7 @@ impl Tessellator {
 
         #[cfg(debug_assertions)]
         match &result {
-            Ok((verts, inds)) => tracing::debug!(
+            Ok((verts, inds)) => tracing::trace!(
                 "Tessellator::tessellate_line: SUCCESS - {} vertices, {} indices",
                 verts.len(),
                 inds.len()

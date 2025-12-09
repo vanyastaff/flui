@@ -275,23 +275,6 @@ impl HitTestResult {
         self.transforms.len()
     }
 
-    /// Pop the most recent transform from the stack.
-    ///
-    /// **Prefer using `push_transform()` which returns a guard for automatic cleanup.**
-    ///
-    /// # Panics
-    ///
-    /// Panics if the transform stack is empty (unbalanced push/pop).
-    #[deprecated(
-        since = "0.2.0",
-        note = "Use push_transform() which returns a guard for automatic cleanup"
-    )]
-    pub fn pop_transform(&mut self) {
-        self.transforms
-            .pop()
-            .expect("Unbalanced push/pop on HitTestResult transform stack");
-    }
-
     /// Get the current composed transform (all transforms multiplied).
     ///
     /// Returns `None` if no transforms are active.

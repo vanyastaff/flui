@@ -96,16 +96,3 @@ pub use flui_layer::{
 
 // Re-export Paint from flui_painting
 pub use flui_painting::Paint;
-
-// Legacy aliases for backwards compatibility
-#[cfg(feature = "wgpu-backend")]
-#[deprecated(since = "0.2.0", note = "Use SceneRenderer instead")]
-pub type GpuRenderer = SceneRenderer;
-
-#[cfg(feature = "wgpu-backend")]
-#[deprecated(since = "0.2.0", note = "Use Backend instead")]
-pub type WgpuRenderer = Backend;
-
-#[cfg(all(feature = "wgpu-backend", debug_assertions))]
-#[deprecated(since = "0.2.0", note = "Use DebugBackend instead")]
-pub type DebugRenderer = DebugBackend;

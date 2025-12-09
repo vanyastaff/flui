@@ -107,6 +107,30 @@ impl Element {
         Self::Render(RenderElement::new(render_id, protocol, arity))
     }
 
+    /// Creates a new Render element with a pending RenderObject.
+    ///
+    /// Use this when creating elements from IntoElement where RenderTree is not accessible.
+    /// The pending RenderObject will be registered in RenderTree during mount.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // In widget's into_element():
+    /// let render_obj = RenderParagraph::new(data);
+    /// Element::render_with_pending(
+    ///     Box::new(render_obj),
+    ///     ProtocolId::Box,
+    ///     RuntimeArity::Exact(0),
+    /// )
+    /// ```
+    pub fn render_with_pending(
+        render_object: Box<dyn flui_rendering::RenderObject>,
+        protocol: ProtocolId,
+        arity: RuntimeArity,
+    ) -> Self {
+        Self::Render(RenderElement::with_pending(render_object, protocol, arity))
+    }
+
     /// Creates an empty element (View variant).
     pub fn empty() -> Self {
         Self::View(ViewElement::empty())

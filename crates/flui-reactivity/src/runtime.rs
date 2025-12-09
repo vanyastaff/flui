@@ -515,7 +515,7 @@ impl SignalRuntime {
 impl Drop for SignalRuntime {
     fn drop(&mut self) {
         #[cfg(debug_assertions)]
-        tracing::debug!(
+        tracing::trace!(
             "[SIGNAL_RUNTIME] Dropping SignalRuntime with {} signals",
             self.signals.len()
         );
@@ -530,7 +530,7 @@ impl Drop for SignalRuntime {
         self.signals.clear();
 
         #[cfg(debug_assertions)]
-        tracing::debug!("[SIGNAL_RUNTIME] SignalRuntime dropped successfully");
+        tracing::trace!("[SIGNAL_RUNTIME] SignalRuntime dropped successfully");
     }
 }
 
@@ -539,7 +539,7 @@ impl Drop for SignalRuntime {
 /// All signals are stored in this single global instance.
 /// DashMap provides lock-free concurrent access for maximum performance.
 static SIGNAL_RUNTIME: Lazy<SignalRuntime> = Lazy::new(|| {
-    tracing::debug!("Initializing global SignalRuntime");
+    tracing::trace!("Initializing global SignalRuntime");
     SignalRuntime::new()
 });
 

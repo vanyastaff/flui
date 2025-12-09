@@ -187,12 +187,6 @@ impl OverflowBox {
         }
     }
 
-    /// Sets the child widget.
-    #[deprecated(note = "Use builder pattern with .child() instead")]
-    pub fn set_child(&mut self, child: Element) {
-        self.child = Some(child);
-    }
-
     /// Validates OverflowBox configuration.
     pub fn validate(&self) -> Result<(), String> {
         if let (Some(min), Some(max)) = (self.min_width, self.max_width) {

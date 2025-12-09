@@ -55,7 +55,8 @@
       "SlashCommand(/feature-dev:feature-dev:*)",
       "SlashCommand(/openspec:proposal)",
       "SlashCommand(/openspec:apply refactor-flui-tree-abstractions)",
-      "SlashCommand(/openspec:apply:*)"
+      "SlashCommand(/openspec:apply:*)",
+      "Bash(RUST_LOG=debug cargo run:*)"
     ],
     "deny": [],
     "ask": []

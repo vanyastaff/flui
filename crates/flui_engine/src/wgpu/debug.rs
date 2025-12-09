@@ -12,12 +12,14 @@ use flui_types::{
 };
 
 /// Debug backend that logs all commands to tracing.
+#[derive(Debug)]
 pub struct DebugBackend {
     viewport: Rect,
     command_count: usize,
 }
 
 impl DebugBackend {
+    /// Create a new debug backend with the given viewport.
     pub fn new(viewport: Rect) -> Self {
         Self {
             viewport,
@@ -25,13 +27,14 @@ impl DebugBackend {
         }
     }
 
+    /// Get the total number of commands processed.
     pub fn command_count(&self) -> usize {
         self.command_count
     }
 
     fn log_command(&mut self, name: &str, details: &str) {
         self.command_count += 1;
-        tracing::debug!("[{}] {}: {}", self.command_count, name, details);
+        tracing::trace!("[{}] {}: {}", self.command_count, name, details);
     }
 }
 

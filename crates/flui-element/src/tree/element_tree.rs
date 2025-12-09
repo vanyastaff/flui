@@ -238,6 +238,16 @@ impl ElementTree {
         self.is_ancestor(ancestor, descendant)
     }
 
+    /// Checks if an element is a render element.
+    ///
+    /// Render elements participate in layout and paint phases.
+    /// Non-render elements (like StatelessView) just compose other elements.
+    #[inline]
+    #[must_use]
+    pub fn is_render_element(&self, id: ElementId) -> bool {
+        self.get(id).map(|e| e.is_render()).unwrap_or(false)
+    }
+
     // ========== Iteration ==========
 
     /// Returns an iterator over all element IDs.

@@ -9,7 +9,7 @@ use crate::{
     PlatformError, Result,
 };
 use flui_core::pipeline::PipelineOwner;
-use flui_engine::GpuRenderer;
+use flui_engine::SceneRenderer;
 use flui_interaction::EventRouter;
 use flui_scheduler::Scheduler;
 use flui_types::{
@@ -65,7 +65,7 @@ pub struct DesktopEmbedder {
     window: WinitWindow,
 
     /// GPU renderer
-    renderer: GpuRenderer,
+    renderer: SceneRenderer,
 
     /// Platform capabilities
     capabilities: DesktopCapabilities,
@@ -91,29 +91,33 @@ impl DesktopEmbedder {
         event_router: Arc<RwLock<EventRouter>>,
         event_loop: &ActiveEventLoop,
     ) -> Result<Self> {
-        // 1. Create window using ActiveEventLoop (winit 0.30+ API)
-        let window_attributes = Window::default_attributes()
-            .with_title("FLUI App")
-            .with_inner_size(winit::dpi::PhysicalSize::new(800, 600));
+        let _init_span = tracing::info_span!("init_embedder").entered();
 
-        let window = Arc::new(
-            event_loop
-                .create_window(window_attributes)
-                .map_err(|e| PlatformError::WindowCreation(e.to_string()))?,
-        );
+        // 1. Create window using ActiveEventLoop (winit 0.30+ API)
+        let window = {
+            let _span = tracing::info_span!("create_window").entered();
+            let window_attributes = Window::default_attributes()
+                .with_title("FLUI App")
+                .with_inner_size(winit::dpi::PhysicalSize::new(800, 600));
+
+            Arc::new(
+                event_loop
+                    .create_window(window_attributes)
+                    .map_err(|e| PlatformError::WindowCreation(e.to_string()))?,
+            )
+        };
 
         let size = window.inner_size();
 
         // 2. Initialize GPU renderer
-        let renderer =
-            GpuRenderer::new_async_with_window(Arc::clone(&window), size.width, size.height).await;
+        let renderer = {
+            let _span = tracing::info_span!("init_gpu").entered();
+            SceneRenderer::with_window(Arc::clone(&window), size.width, size.height)
+                .await
+                .map_err(|e| PlatformError::GpuInitialization(format!("{:?}", e)))?
+        };
 
-        tracing::info!(
-            width = size.width,
-            height = size.height,
-            format = ?renderer.format(),
-            "Desktop embedder initialized"
-        );
+        tracing::info!(width = size.width, height = size.height, "Window created");
 
         // 3. Create embedder core (shared logic)
         let core = EmbedderCore::new(pipeline_owner, needs_redraw, scheduler, event_router);
@@ -145,7 +149,6 @@ impl DesktopEmbedder {
         // 2. Handle specific events
         match event {
             WindowEvent::CloseRequested => {
-                tracing::info!("Window close requested");
                 elwt.exit();
             }
 

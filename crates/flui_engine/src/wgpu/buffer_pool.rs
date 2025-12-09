@@ -291,7 +291,7 @@ impl BufferPool {
 
         #[cfg(debug_assertions)]
         if before != after {
-            tracing::debug!(
+            tracing::trace!(
                 "BufferPool::shrink: Removed {} unused buffers ({} → {})",
                 before - after,
                 before,

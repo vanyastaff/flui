@@ -174,7 +174,7 @@ pub mod prelude {
     // ============================================================
     // ENGINE (Scene, Layer - for advanced rendering)
     // ============================================================
-    pub use flui_engine::{CanvasLayer, GpuRenderer, Scene};
+    pub use flui_engine::{CanvasLayer, Scene, SceneRenderer};
 }
 
 /// Version information

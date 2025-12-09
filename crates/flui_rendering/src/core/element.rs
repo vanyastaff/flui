@@ -75,6 +75,7 @@ use flui_types::{Offset, Size, SliverGeometry};
 
 use super::flags::AtomicRenderFlags;
 use super::lifecycle::RenderLifecycle;
+use super::object::RenderObject;
 use super::parent_data::ParentData;
 use super::protocol::{BoxProtocol, Protocol, ProtocolId, SliverProtocol};
 use super::state::RenderState;
@@ -229,6 +230,16 @@ pub struct RenderElement {
     // ========== Debug ==========
     /// Debug name for diagnostics.
     debug_name: Option<&'static str>,
+
+    // ========== Pending RenderObject ==========
+    /// Pending RenderObject to be registered in RenderTree during mount.
+    ///
+    /// In the four-tree architecture, widgets create RenderObjects but don't have
+    /// access to RenderTree. This field allows widgets to "attach" a RenderObject
+    /// that will be registered in RenderTree when the Element is mounted.
+    ///
+    /// After mount, this field is None and render_id is Some.
+    pending_render_object: Option<Box<dyn RenderObject>>,
 }
 
 impl fmt::Debug for RenderElement {
@@ -244,6 +255,7 @@ impl fmt::Debug for RenderElement {
             .field("lifecycle", &self.lifecycle)
             .field("flags", &self.state.flags().load())
             .field("debug_name", &self.debug_name())
+            .field("has_pending_render_object", &self.pending_render_object.is_some())
             .finish()
     }
 }
@@ -286,6 +298,49 @@ impl RenderElement {
             lifecycle: RenderLifecycle::Detached,
             parent_data: None,
             debug_name: None,
+            pending_render_object: None,
+        }
+    }
+
+    /// Creates new RenderElement with a pending RenderObject.
+    ///
+    /// Use this when creating an element from IntoElement where RenderTree is not accessible.
+    /// The pending RenderObject will be registered in RenderTree during mount.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // In widget's into_element():
+    /// let render_obj = RenderParagraph::new(data);
+    /// let element = RenderElement::with_pending(
+    ///     Box::new(render_obj),
+    ///     ProtocolId::Box,
+    ///     RuntimeArity::Exact(0),
+    /// );
+    /// ```
+    pub fn with_pending(
+        render_object: Box<dyn RenderObject>,
+        protocol: ProtocolId,
+        arity: RuntimeArity,
+    ) -> Self {
+        let state: Box<dyn ProtocolState> = match protocol {
+            ProtocolId::Box => Box::new(RenderState::<BoxProtocol>::new()),
+            ProtocolId::Sliver => Box::new(RenderState::<SliverProtocol>::new()),
+        };
+
+        Self {
+            id: None,
+            parent: None,
+            children: Vec::new(),
+            depth: 0,
+            render_id: None,
+            protocol,
+            arity,
+            state,
+            lifecycle: RenderLifecycle::Detached,
+            parent_data: None,
+            debug_name: None,
+            pending_render_object: Some(render_object),
         }
     }
 
@@ -644,6 +699,20 @@ impl RenderElement {
     #[inline]
     pub fn set_render_id(&mut self, render_id: Option<RenderId>) {
         self.render_id = render_id;
+    }
+
+    /// Returns true if there is a pending RenderObject.
+    #[inline]
+    pub fn has_pending_render_object(&self) -> bool {
+        self.pending_render_object.is_some()
+    }
+
+    /// Takes the pending RenderObject for registration in RenderTree.
+    ///
+    /// After calling this, the element should have render_id set.
+    #[inline]
+    pub fn take_pending_render_object(&mut self) -> Option<Box<dyn RenderObject>> {
+        self.pending_render_object.take()
     }
 
     /// Returns true if this element has a RenderId reference.

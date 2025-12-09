@@ -108,7 +108,6 @@ impl AppBinding {
                 // Wire up frame callbacks with Weak reference to avoid circular refs
                 binding.wire_up(Arc::downgrade(&pipeline_owner), needs_redraw);
 
-                tracing::info!("Bindings initialized");
                 Arc::new(binding)
             })
             .clone()
@@ -207,7 +206,7 @@ impl AppBinding {
         V: flui_core::view::StatelessView + Clone + Sync,
     {
         let mut pipeline = self.pipeline_owner.write();
-        pipeline
+        let _ = pipeline
             .attach(widget)
             .expect("Failed to attach root widget");
         self.request_redraw();
@@ -222,7 +221,7 @@ impl AppBinding {
         E: flui_core::IntoElement,
     {
         let mut pipeline = self.pipeline_owner.write();
-        pipeline
+        let _ = pipeline
             .attach_element(element)
             .expect("Failed to attach root element");
         self.request_redraw();

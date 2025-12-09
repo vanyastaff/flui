@@ -142,7 +142,7 @@ impl TexturePoolInner {
     fn create_texture(&mut self, desc: TextureDesc) -> TextureDesc {
         self.total_allocated += 1;
         self.total_memory_bytes += desc.size_bytes();
-        tracing::debug!(
+        tracing::trace!(
             "Created new texture: {:?} (total: {}, memory: {} MB)",
             desc,
             self.total_allocated,

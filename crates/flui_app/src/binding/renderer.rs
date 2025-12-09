@@ -99,12 +99,12 @@ impl RendererBinding {
         // Create scene using flui_engine::Scene API
         let scene = if let Some(canvas) = layer {
             // Convert Canvas to Layer via CanvasLayer
-            use flui_engine::layer::{CanvasLayer, Layer};
+            use flui_engine::{CanvasLayer, Layer};
             let canvas_layer = CanvasLayer::from_canvas(canvas);
-            let layer: Layer = canvas_layer.into();
-            Scene::with_layer(size, Arc::new(layer), 0)
+            let layer: Layer = Layer::Canvas(canvas_layer);
+            Scene::from_layer(size, layer, 0)
         } else {
-            Scene::new(size)
+            Scene::empty(size)
         };
 
         tracing::trace!(

@@ -163,7 +163,7 @@ impl PipelineCache {
     /// Create a new specialized pipeline
     fn create_pipeline(&self, device: &wgpu::Device, key: PipelineKey) -> RenderPipeline {
         #[cfg(debug_assertions)]
-        tracing::debug!("PipelineCache::create_pipeline: key={:?}", key);
+        tracing::trace!("PipelineCache::create_pipeline: key={:?}", key);
 
         // Create layout
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {

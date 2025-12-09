@@ -30,14 +30,15 @@
 //! let mock: Arc<dyn Pipeline> = Arc::new(MockPipeline::new());
 //! ```
 
-use super::{RebuildQueue, TreeCoordinator};
-use flui_element::{Element, ElementTree};
+use flui_element::Element;
 use flui_foundation::ElementId;
 use flui_painting::Canvas;
 use flui_pipeline::PipelineError;
 use flui_types::{constraints::BoxConstraints, Size};
 use parking_lot::RwLock;
 use std::sync::Arc;
+
+use super::RebuildQueue;
 
 /// Pipeline trait - abstract interface for rendering pipeline
 ///
@@ -52,34 +53,16 @@ use std::sync::Arc;
 /// The trait exposes only the **essential** pipeline operations needed by
 /// bindings and embedders:
 ///
-/// - **Tree Management**: `tree()`, `root_element_id()`
-/// - **Widget Lifecycle**: `attach()`, `set_root()`
+/// - **Tree Management**: `root_element_id()`
+/// - **Widget Lifecycle**: `set_root()`
 /// - **Rebuild Scheduling**: `rebuild_queue()`, `schedule_build_for()`
 /// - **Pipeline Phases**: `flush_build()`, `flush_layout()`, `flush_paint()`
 /// - **Complete Frame**: `build_frame()` (all phases)
 /// - **Dirty Tracking**: `request_layout()`, `request_paint()`
-///
-/// # Optional Features
-///
-/// Optional production features (metrics, recovery, caching) are accessed
-/// via `as_pipeline_owner()` for backward compatibility.
 pub trait Pipeline: Send + Sync {
     // =========================================================================
     // Tree & Root Management
     // =========================================================================
-
-    /// Get shared reference to element tree (deprecated)
-    ///
-    /// The tree is wrapped in `Arc<RwLock<>>` for thread-safe access.
-    ///
-    /// **DEPRECATED**: Use `tree_coordinator()` instead for four-tree architecture.
-    #[deprecated(note = "Use tree_coordinator() instead")]
-    fn tree(&self) -> Arc<RwLock<ElementTree>>;
-
-    /// Get shared reference to tree coordinator
-    ///
-    /// The coordinator manages all four trees (View, Element, Render, Layer).
-    fn tree_coordinator(&self) -> Arc<RwLock<TreeCoordinator>>;
 
     /// Get the root element ID (if any)
     fn root_element_id(&self) -> Option<ElementId>;
@@ -89,10 +72,6 @@ pub trait Pipeline: Send + Sync {
     /// Returns the ElementId assigned to the root.
     /// Automatically schedules the root for initial build.
     fn set_root(&self, root_element: Element) -> ElementId;
-
-    // Note: attach<V: View>() is NOT in the trait because generic methods
-    // make traits non-dyn-compatible. Use the concrete method on PipelineOwner
-    // or convert View → Element first, then call set_root().
 
     // =========================================================================
     // Rebuild Scheduling
@@ -130,10 +109,8 @@ pub trait Pipeline: Send + Sync {
     ///
     /// # Returns
     ///
-    /// - `Ok(Some(size))`: Layout succeeded, returns root size
-    /// - `Ok(None)`: No root element or tree is empty
-    /// - `Err(e)`: Layout error occurred
-    fn flush_layout(&self, constraints: BoxConstraints) -> Result<Option<Size>, PipelineError>;
+    /// List of (ElementId, Size) pairs for laid out elements
+    fn flush_layout(&self, constraints: BoxConstraints) -> Vec<(ElementId, Size)>;
 
     /// Flush the paint phase
     ///
@@ -141,10 +118,9 @@ pub trait Pipeline: Send + Sync {
     ///
     /// # Returns
     ///
-    /// - `Ok(Some(canvas))`: Paint succeeded, returns root canvas
-    /// - `Ok(None)`: No root element or tree is empty
-    /// - `Err(e)`: Paint error occurred
-    fn flush_paint(&self) -> Result<Option<Canvas>, PipelineError>;
+    /// - `Some(canvas)`: Paint succeeded, returns root canvas
+    /// - `None`: No root element or tree is empty
+    fn flush_paint(&self) -> Option<Canvas>;
 
     // =========================================================================
     // Complete Frame (All Phases)
@@ -165,28 +141,9 @@ pub trait Pipeline: Send + Sync {
     ///
     /// # Returns
     ///
-    /// - `Ok(Some(layer))`: Frame rendered successfully
+    /// - `Ok(Some(canvas))`: Frame rendered successfully
     /// - `Ok(None)`: No root element or tree is empty
     /// - `Err(e)`: Pipeline error occurred
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// let constraints = BoxConstraints::tight(Size::new(800.0, 600.0));
-    /// match pipeline.build_frame(constraints) {
-    ///     Ok(Some(canvas)) => {
-    ///         // Wrap in CanvasLayer and render to GPU
-    ///         let layer = CanvasLayer::from_canvas(canvas);
-    ///         renderer.render(&layer);
-    ///     }
-    ///     Ok(None) => {
-    ///         // Empty tree, nothing to render
-    ///     }
-    ///     Err(e) => {
-    ///         eprintln!("Pipeline error: {:?}", e);
-    ///     }
-    /// }
-    /// ```
     fn build_frame(&self, constraints: BoxConstraints) -> Result<Option<Canvas>, PipelineError>;
 
     // =========================================================================
@@ -194,17 +151,9 @@ pub trait Pipeline: Send + Sync {
     // =========================================================================
 
     /// Mark a RenderElement as needing layout
-    ///
-    /// # Parameters
-    ///
-    /// - `node_id`: RenderElement to mark dirty
     fn request_layout(&self, node_id: ElementId);
 
     /// Mark a RenderElement as needing paint
-    ///
-    /// # Parameters
-    ///
-    /// - `node_id`: RenderElement to mark dirty
     fn request_paint(&self, node_id: ElementId);
 
     // =========================================================================
@@ -212,13 +161,9 @@ pub trait Pipeline: Send + Sync {
     // =========================================================================
 
     /// Get number of dirty elements waiting for rebuild
-    ///
-    /// Useful for debugging and testing.
     fn dirty_count(&self) -> usize;
 
     /// Get current frame number
-    ///
-    /// Increments with each `build_frame()` call.
     fn frame_number(&self) -> u64;
 }
 
@@ -229,15 +174,6 @@ pub trait Pipeline: Send + Sync {
 use super::PipelineOwner;
 
 impl Pipeline for Arc<RwLock<PipelineOwner>> {
-    #[allow(deprecated)]
-    fn tree(&self) -> Arc<RwLock<ElementTree>> {
-        self.read().tree()
-    }
-
-    fn tree_coordinator(&self) -> Arc<RwLock<TreeCoordinator>> {
-        self.read().tree_coordinator().clone()
-    }
-
     fn root_element_id(&self) -> Option<ElementId> {
         self.read().root_element_id()
     }
@@ -258,11 +194,11 @@ impl Pipeline for Arc<RwLock<PipelineOwner>> {
         self.write().flush_build();
     }
 
-    fn flush_layout(&self, constraints: BoxConstraints) -> Result<Option<Size>, PipelineError> {
+    fn flush_layout(&self, constraints: BoxConstraints) -> Vec<(ElementId, Size)> {
         self.write().flush_layout(constraints)
     }
 
-    fn flush_paint(&self) -> Result<Option<Canvas>, PipelineError> {
+    fn flush_paint(&self) -> Option<Canvas> {
         self.write().flush_paint()
     }
 

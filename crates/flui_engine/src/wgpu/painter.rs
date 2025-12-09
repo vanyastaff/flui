@@ -35,6 +35,7 @@ use wgpu::util::DeviceExt;
 ///
 /// painter.render(&view, &mut encoder)?;
 /// ```
+#[allow(missing_debug_implementations)]
 pub struct WgpuPainter {
     // ===== GPU State =====
     /// wgpu device (Arc for sharing with text renderer)
@@ -184,7 +185,7 @@ impl WgpuPainter {
         size: (u32, u32),
     ) -> Self {
         #[cfg(debug_assertions)]
-        tracing::debug!(
+        tracing::trace!(
             "WgpuPainter::new: format={:?}, size=({}, {})",
             surface_format,
             size.0,
@@ -672,6 +673,7 @@ impl WgpuPainter {
     /// # Arguments
     /// * `view` - Texture view to render to
     /// * `encoder` - Command encoder
+    #[tracing::instrument(level = "trace", skip_all)]
     pub fn render(
         &mut self,
         view: &wgpu::TextureView,
@@ -865,7 +867,7 @@ impl WgpuPainter {
         }
 
         #[cfg(debug_assertions)]
-        tracing::debug!(
+        tracing::trace!(
             "WgpuPainter::flush_all_instanced_batches (single pass): rects={}, circles={}, arcs={}, shadows={}",
             self.rect_batch.len(),
             self.circle_batch.len(),
@@ -1020,7 +1022,7 @@ impl WgpuPainter {
         }
 
         #[cfg(debug_assertions)]
-        tracing::debug!(
+        tracing::trace!(
             "WgpuPainter::flush_gradient_batches: linear={}, radial={}, stops={}",
             self.linear_gradient_batch.len(),
             self.radial_gradient_batch.len(),
@@ -1152,7 +1154,7 @@ impl WgpuPainter {
         }
 
         #[cfg(debug_assertions)]
-        tracing::debug!(
+        tracing::trace!(
             "WgpuPainter::flush_texture_batch: {} instances",
             self.texture_batch.len()
         );
@@ -1223,7 +1225,7 @@ impl WgpuPainter {
 impl Painter for WgpuPainter {
     fn rect(&mut self, rect: Rect, paint: &Paint) {
         #[cfg(debug_assertions)]
-        tracing::debug!("WgpuPainter::rect: rect={:?}, paint={:?}", rect, paint);
+        tracing::trace!("WgpuPainter::rect: rect={:?}, paint={:?}", rect, paint);
 
         if paint.style == PaintStyle::Fill {
             // Use GPU instancing for filled rects (100x faster!)
@@ -1261,7 +1263,7 @@ impl Painter for WgpuPainter {
 
     fn circle(&mut self, center: Point, radius: f32, paint: &Paint) {
         #[cfg(debug_assertions)]
-        tracing::debug!(
+        tracing::trace!(
             "WgpuPainter::circle: center={:?}, radius={}, paint={:?}",
             center,
             radius,
@@ -1285,7 +1287,7 @@ impl Painter for WgpuPainter {
 
     fn oval(&mut self, rect: Rect, paint: &Paint) {
         #[cfg(debug_assertions)]
-        tracing::debug!("WgpuPainter::oval: rect={:?}, paint={:?}", rect, paint);
+        tracing::trace!("WgpuPainter::oval: rect={:?}, paint={:?}", rect, paint);
 
         // Tessellate the oval/ellipse
         let center = rect.center();
@@ -1305,7 +1307,7 @@ impl Painter for WgpuPainter {
         paint: &Paint,
     ) {
         #[cfg(debug_assertions)]
-        tracing::debug!(
+        tracing::trace!(
             "WgpuPainter::draw_arc: rect={:?}, start={}, sweep={}, use_center={}, paint={:?}",
             rect,
             start_angle,
@@ -1349,7 +1351,7 @@ impl Painter for WgpuPainter {
 
     fn draw_drrect(&mut self, outer: RRect, inner: RRect, paint: &Paint) {
         #[cfg(debug_assertions)]
-        tracing::debug!(
+        tracing::trace!(
             "WgpuPainter::draw_drrect: outer={:?}, inner={:?}, paint={:?}",
             outer,
             inner,
@@ -1370,7 +1372,7 @@ impl Painter for WgpuPainter {
 
     fn line(&mut self, p1: Point, p2: Point, paint: &Paint) {
         #[cfg(debug_assertions)]
-        tracing::debug!(
+        tracing::trace!(
             "WgpuPainter::line: p1={:?}, p2={:?}, paint={:?}",
             p1,
             p2,
@@ -1382,7 +1384,7 @@ impl Painter for WgpuPainter {
         match self.tessellator.tessellate_line(p1, p2, paint) {
             Ok((vertices, indices)) => {
                 #[cfg(debug_assertions)]
-                tracing::debug!(
+                tracing::trace!(
                     "WgpuPainter::line: Adding {} vertices, {} indices to batch",
                     vertices.len(),
                     indices.len()
@@ -1398,7 +1400,7 @@ impl Painter for WgpuPainter {
 
     fn text(&mut self, text: &str, position: Point, font_size: f32, paint: &Paint) {
         #[cfg(debug_assertions)]
-        tracing::debug!(
+        tracing::trace!(
             "WgpuPainter::text: text='{}', position={:?}, size={}, color={:?}",
             text,
             position,
@@ -1416,7 +1418,7 @@ impl Painter for WgpuPainter {
 
     fn texture(&mut self, texture_id: TextureId, dst_rect: Rect) {
         #[cfg(debug_assertions)]
-        tracing::debug!(
+        tracing::trace!(
             "WgpuPainter::texture: id={:?}, dst_rect={:?}",
             texture_id,
             dst_rect
@@ -1454,7 +1456,7 @@ impl Painter for WgpuPainter {
 
     fn draw_path(&mut self, path: &flui_types::painting::path::Path, paint: &Paint) {
         #[cfg(debug_assertions)]
-        tracing::debug!(
+        tracing::trace!(
             "WgpuPainter::draw_path: commands={}, paint={:?}",
             path.commands().len(),
             paint
@@ -1481,7 +1483,7 @@ impl Painter for WgpuPainter {
 
     fn draw_image(&mut self, image: &flui_types::painting::Image, dst_rect: Rect) {
         #[cfg(debug_assertions)]
-        tracing::debug!(
+        tracing::trace!(
             "WgpuPainter::draw_image: size={}x{}, dst={:?}",
             image.width(),
             image.height(),
@@ -1520,7 +1522,7 @@ impl Painter for WgpuPainter {
         elevation: f32,
     ) {
         #[cfg(debug_assertions)]
-        tracing::debug!(
+        tracing::trace!(
             "WgpuPainter::draw_shadow: elevation={}, color={:?}",
             elevation,
             color
@@ -1592,7 +1594,7 @@ impl Painter for WgpuPainter {
         paint: &Paint,
     ) {
         #[cfg(debug_assertions)]
-        tracing::debug!(
+        tracing::trace!(
             "WgpuPainter::draw_vertices: vertices={}, indices={}",
             vertices.len(),
             indices.len()
@@ -1654,7 +1656,7 @@ impl Painter for WgpuPainter {
         colors: Option<&[flui_types::styling::Color]>,
     ) {
         #[cfg(debug_assertions)]
-        tracing::debug!(
+        tracing::trace!(
             "WgpuPainter::draw_atlas: image={}x{}, sprites={}",
             image.width(),
             image.height(),
@@ -1746,7 +1748,7 @@ impl Painter for WgpuPainter {
         opacity: f32,
     ) {
         #[cfg(debug_assertions)]
-        tracing::debug!(
+        tracing::trace!(
             "WgpuPainter::draw_texture: id={}, dst={:?}, src={:?}, opacity={}",
             texture_id.get(),
             dst,
@@ -1831,7 +1833,7 @@ impl Painter for WgpuPainter {
 
     fn save(&mut self) {
         #[cfg(debug_assertions)]
-        tracing::debug!(
+        tracing::trace!(
             "WgpuPainter::save: stack depth={}",
             self.transform_stack.len()
         );
@@ -1859,7 +1861,7 @@ impl Painter for WgpuPainter {
             }
 
             #[cfg(debug_assertions)]
-            tracing::debug!(
+            tracing::trace!(
                 "WgpuPainter::restore: stack depth={}",
                 self.transform_stack.len()
             );
@@ -1871,7 +1873,7 @@ impl Painter for WgpuPainter {
 
     fn translate(&mut self, offset: Offset) {
         #[cfg(debug_assertions)]
-        tracing::debug!("WgpuPainter::translate: offset={:?}", offset);
+        tracing::trace!("WgpuPainter::translate: offset={:?}", offset);
 
         let translation = glam::Mat4::from_translation(glam::vec3(offset.dx, offset.dy, 0.0));
         self.current_transform *= translation;
@@ -1879,7 +1881,7 @@ impl Painter for WgpuPainter {
 
     fn rotate(&mut self, angle: f32) {
         #[cfg(debug_assertions)]
-        tracing::debug!("WgpuPainter::rotate: angle={}", angle);
+        tracing::trace!("WgpuPainter::rotate: angle={}", angle);
 
         let rotation = glam::Mat4::from_rotation_z(angle);
         self.current_transform *= rotation;
@@ -1887,7 +1889,7 @@ impl Painter for WgpuPainter {
 
     fn scale(&mut self, sx: f32, sy: f32) {
         #[cfg(debug_assertions)]
-        tracing::debug!("WgpuPainter::scale: sx={}, sy={}", sx, sy);
+        tracing::trace!("WgpuPainter::scale: sx={}, sy={}", sx, sy);
 
         let scaling = glam::Mat4::from_scale(glam::vec3(sx, sy, 1.0));
         self.current_transform *= scaling;
@@ -1933,7 +1935,7 @@ impl Painter for WgpuPainter {
         self.current_scissor = Some(scissor);
 
         #[cfg(debug_assertions)]
-        tracing::debug!(
+        tracing::trace!(
             "WgpuPainter::clip_rect: rect={:?} → scissor=({}, {}, {}, {})",
             rect,
             scissor.0,
@@ -1977,7 +1979,7 @@ impl Painter for WgpuPainter {
         // in a future version with proper stencil buffer support.
 
         #[cfg(debug_assertions)]
-        tracing::debug!(
+        tracing::trace!(
             "WgpuPainter::clip_path: not implemented, use ClipRect or ClipRRect instead"
         );
     }

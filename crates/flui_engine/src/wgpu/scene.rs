@@ -21,7 +21,7 @@ use super::layer_render::LayerRender;
 use super::offscreen::OffscreenRenderer;
 use super::painter::WgpuPainter;
 use crate::error::RenderError;
-use flui_layer::{LayerId, LayerNode, LayerTree, Scene};
+use flui_layer::{LayerId, LayerTree, Scene};
 
 /// High-level GPU rendering abstraction
 ///
@@ -49,6 +49,7 @@ use flui_layer::{LayerId, LayerNode, LayerTree, Scene};
 /// let layer = /* your CanvasLayer */;
 /// renderer.render(&layer)?;
 /// ```
+#[allow(missing_debug_implementations)]
 pub struct SceneRenderer {
     /// wgpu surface (render target)
     surface: wgpu::Surface<'static>,
@@ -86,11 +87,7 @@ impl SceneRenderer {
     /// # Errors
     ///
     /// Returns `RenderError` if GPU initialization fails.
-    pub async fn try_new_async_with_window<W>(
-        window: W,
-        width: u32,
-        height: u32,
-    ) -> Result<Self, RenderError>
+    pub async fn with_window<W>(window: W, width: u32, height: u32) -> Result<Self, RenderError>
     where
         W: Into<wgpu::SurfaceTarget<'static>>,
     {
@@ -101,24 +98,6 @@ impl SceneRenderer {
             .map_err(RenderError::surface_creation)?;
 
         Self::try_new_async_impl(instance, surface, width, height).await
-    }
-
-    /// Create a new GPU renderer with a window (async version, PREFERRED)
-    ///
-    /// # Panics
-    ///
-    /// Panics if GPU initialization fails. Use `try_new_async_with_window` for fallible version.
-    #[deprecated(
-        since = "0.2.0",
-        note = "Use try_new_async_with_window for proper error handling"
-    )]
-    pub async fn new_async_with_window<W>(window: W, width: u32, height: u32) -> Self
-    where
-        W: Into<wgpu::SurfaceTarget<'static>>,
-    {
-        Self::try_new_async_with_window(window, width, height)
-            .await
-            .expect("Failed to create GPU renderer")
     }
 
     /// Create wgpu instance with configured backends
@@ -256,8 +235,8 @@ impl SceneRenderer {
             .await
             .map_err(|_| RenderError::NoAdapter)?;
 
-        tracing::debug!(adapter_info = ?adapter.get_info(), "GPU Adapter initialized");
-        tracing::debug!(backend = ?adapter.get_info().backend, "GPU Backend");
+        tracing::trace!(adapter_info = ?adapter.get_info(), "GPU Adapter initialized");
+        tracing::trace!(backend = ?adapter.get_info().backend, "GPU Backend");
 
         // Request device and queue (async)
         let (device, queue) = adapter
@@ -302,7 +281,7 @@ impl SceneRenderer {
         // Pre-warm shader pipelines for better first-frame performance
         offscreen_renderer.warmup();
 
-        tracing::debug!(
+        tracing::trace!(
             width = config.width,
             height = config.height,
             format = ?config.format,
@@ -408,7 +387,7 @@ impl SceneRenderer {
         // Pre-warm shader pipelines for better first-frame performance
         offscreen_renderer.warmup();
 
-        tracing::debug!(
+        tracing::trace!(
             width = config.width,
             height = config.height,
             format = ?config.format,
@@ -444,7 +423,7 @@ impl SceneRenderer {
                 painter.resize(width, height);
             }
 
-            tracing::debug!(width = width, height = height, "GPU renderer resized");
+            tracing::trace!(width = width, height = height, "GPU renderer resized");
         }
     }
 
@@ -560,6 +539,7 @@ impl SceneRenderer {
     /// // Render
     /// renderer.render_scene(&scene)?;
     /// ```
+    #[tracing::instrument(level = "trace", skip_all, err)]
     pub fn render_scene(&mut self, scene: &Scene) -> Result<(), RenderError> {
         if !scene.has_content() {
             tracing::trace!("Scene is empty, skipping render");
@@ -574,38 +554,40 @@ impl SceneRenderer {
     ///
     /// Traverses the tree depth-first, applying transforms and effects
     /// from parent layers before rendering children.
+    #[tracing::instrument(level = "trace", skip_all, err)]
     pub fn render_layer_tree(
         &mut self,
         tree: &LayerTree,
         root_id: LayerId,
     ) -> Result<(), RenderError> {
-        tracing::trace!("SceneRenderer::render_layer_tree() START");
-
         // Get current frame
-        let frame = self.surface.get_current_texture().map_err(|e| match e {
-            wgpu::SurfaceError::Lost => {
-                tracing::warn!("Surface lost, reconfiguring...");
-                self.surface.configure(&self.device, &self.config);
-                RenderError::SurfaceLost
-            }
-            wgpu::SurfaceError::Outdated => {
-                tracing::warn!("Surface outdated, reconfiguring...");
-                self.surface.configure(&self.device, &self.config);
-                RenderError::SurfaceOutdated
-            }
-            wgpu::SurfaceError::OutOfMemory => {
-                tracing::error!("Out of GPU memory!");
-                RenderError::OutOfMemory
-            }
-            wgpu::SurfaceError::Timeout => {
-                tracing::warn!("Surface timeout");
-                RenderError::Timeout
-            }
-            wgpu::SurfaceError::Other => {
-                tracing::error!("Unknown surface error occurred");
-                RenderError::PainterError("Unknown surface error".to_string())
-            }
-        })?;
+        let frame = {
+            let _span = tracing::trace_span!("acquire_frame").entered();
+            self.surface.get_current_texture().map_err(|e| match e {
+                wgpu::SurfaceError::Lost => {
+                    tracing::warn!("Surface lost, reconfiguring...");
+                    self.surface.configure(&self.device, &self.config);
+                    RenderError::SurfaceLost
+                }
+                wgpu::SurfaceError::Outdated => {
+                    tracing::warn!("Surface outdated, reconfiguring...");
+                    self.surface.configure(&self.device, &self.config);
+                    RenderError::SurfaceOutdated
+                }
+                wgpu::SurfaceError::OutOfMemory => {
+                    tracing::error!("Out of GPU memory!");
+                    RenderError::OutOfMemory
+                }
+                wgpu::SurfaceError::Timeout => {
+                    tracing::warn!("Surface timeout");
+                    RenderError::Timeout
+                }
+                wgpu::SurfaceError::Other => {
+                    tracing::error!("Unknown surface error occurred");
+                    RenderError::PainterError("Unknown surface error".to_string())
+                }
+            })?
+        };
 
         let view = frame
             .texture
@@ -620,6 +602,7 @@ impl SceneRenderer {
 
         // Clear screen
         {
+            let _span = tracing::trace_span!("clear_screen").entered();
             let _render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Clear Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -650,21 +633,30 @@ impl SceneRenderer {
         let mut renderer_wrapper = Backend::new(painter);
 
         // Render layer tree depth-first
-        Self::render_layer_recursive(tree, root_id, &mut renderer_wrapper);
+        {
+            let _span = tracing::trace_span!("traverse_layers").entered();
+            Self::render_layer_recursive(tree, root_id, &mut renderer_wrapper);
+        }
 
         // Extract painter and render to GPU
         let mut painter = renderer_wrapper.into_painter();
 
-        painter
-            .render(&view, &mut encoder)
-            .map_err(|e| RenderError::PainterError(e.to_string()))?;
+        {
+            let _span = tracing::trace_span!("gpu_render").entered();
+            painter
+                .render(&view, &mut encoder)
+                .map_err(|e| RenderError::PainterError(e.to_string()))?;
+        }
 
         // Put painter back
         self.painter = Some(painter);
 
         // Submit and present
-        self.queue.submit(std::iter::once(encoder.finish()));
-        frame.present();
+        {
+            let _span = tracing::trace_span!("submit_present").entered();
+            self.queue.submit(std::iter::once(encoder.finish()));
+            frame.present();
+        }
 
         Ok(())
     }
@@ -785,7 +777,7 @@ impl SceneRenderer {
         &mut self,
         shader_mask_layer: &flui_layer::ShaderMaskLayer,
     ) -> Result<(), RenderError> {
-        tracing::debug!(
+        tracing::trace!(
             bounds = ?shader_mask_layer.bounds(),
             shader = ?shader_mask_layer.shader(),
             "Rendering shader mask layer"
@@ -833,7 +825,7 @@ impl SceneRenderer {
             &dummy_child_texture,
         );
 
-        tracing::debug!("Shader mask rendering complete (with dummy child texture)");
+        tracing::trace!("Shader mask rendering complete (with dummy child texture)");
 
         // TODO: Composite masked_result to framebuffer
         // This requires access to current frame's texture view
@@ -866,7 +858,7 @@ impl SceneRenderer {
     ) -> Result<(), RenderError> {
         use flui_types::painting::ImageFilter;
 
-        tracing::debug!(
+        tracing::trace!(
             bounds = ?backdrop_filter_layer.bounds(),
             filter = ?backdrop_filter_layer.filter(),
             "Rendering backdrop filter layer"
@@ -897,7 +889,7 @@ impl SceneRenderer {
         // Phase 2.3: Apply image filter
         match backdrop_filter_layer.filter() {
             ImageFilter::Blur { sigma_x, sigma_y } => {
-                tracing::debug!(sigma_x, sigma_y, "Applying Gaussian blur filter");
+                tracing::trace!(sigma_x, sigma_y, "Applying Gaussian blur filter");
 
                 // Two-pass separable Gaussian blur
                 // Pass 1: Horizontal blur
@@ -912,23 +904,23 @@ impl SceneRenderer {
                 );
             }
             ImageFilter::Dilate { radius } => {
-                tracing::debug!(radius, "Dilate filter requested (not yet implemented)");
+                tracing::trace!(radius, "Dilate filter requested (not yet implemented)");
             }
             ImageFilter::Erode { radius } => {
-                tracing::debug!(radius, "Erode filter requested (not yet implemented)");
+                tracing::trace!(radius, "Erode filter requested (not yet implemented)");
             }
             ImageFilter::Matrix(_) => {
-                tracing::debug!("Matrix filter requested (not yet implemented)");
+                tracing::trace!("Matrix filter requested (not yet implemented)");
             }
             ImageFilter::ColorAdjust(_) => {
-                tracing::debug!("ColorAdjust filter requested (not yet implemented)");
+                tracing::trace!("ColorAdjust filter requested (not yet implemented)");
             }
             ImageFilter::Compose(_) => {
-                tracing::debug!("Compose filter requested (not yet implemented)");
+                tracing::trace!("Compose filter requested (not yet implemented)");
             }
             #[cfg(debug_assertions)]
             ImageFilter::OverflowIndicator { .. } => {
-                tracing::debug!("OverflowIndicator filter requested (not yet implemented)");
+                tracing::trace!("OverflowIndicator filter requested (not yet implemented)");
             }
         }
 
@@ -936,7 +928,7 @@ impl SceneRenderer {
         // The filtered backdrop would be rendered to the framebuffer here
         // With blend mode applied
 
-        tracing::debug!(
+        tracing::trace!(
             blend_mode = ?backdrop_filter_layer.blend_mode(),
             "Backdrop filter rendering complete (infrastructure ready, GPU compute pending)"
         );
@@ -945,34 +937,36 @@ impl SceneRenderer {
     }
 
     /// Internal method to render a CanvasLayer
+    #[tracing::instrument(level = "trace", skip_all, err)]
     fn render_canvas_layer(&mut self, layer: &flui_layer::CanvasLayer) -> Result<(), RenderError> {
-        tracing::trace!("SceneRenderer::render() START");
-
-        // Get current frame
-        let frame = self.surface.get_current_texture().map_err(|e| match e {
-            wgpu::SurfaceError::Lost => {
-                tracing::warn!("Surface lost, reconfiguring...");
-                self.surface.configure(&self.device, &self.config);
-                RenderError::SurfaceLost
-            }
-            wgpu::SurfaceError::Outdated => {
-                tracing::warn!("Surface outdated, reconfiguring...");
-                self.surface.configure(&self.device, &self.config);
-                RenderError::SurfaceOutdated
-            }
-            wgpu::SurfaceError::OutOfMemory => {
-                tracing::error!("Out of GPU memory!");
-                RenderError::OutOfMemory
-            }
-            wgpu::SurfaceError::Timeout => {
-                tracing::warn!("Surface timeout");
-                RenderError::Timeout
-            }
-            wgpu::SurfaceError::Other => {
-                tracing::error!("Unknown surface error occurred");
-                RenderError::PainterError("Unknown surface error".to_string())
-            }
-        })?;
+        // Get current frame (swapchain acquire)
+        let frame = {
+            let _span = tracing::trace_span!("acquire_frame").entered();
+            self.surface.get_current_texture().map_err(|e| match e {
+                wgpu::SurfaceError::Lost => {
+                    tracing::warn!("Surface lost, reconfiguring...");
+                    self.surface.configure(&self.device, &self.config);
+                    RenderError::SurfaceLost
+                }
+                wgpu::SurfaceError::Outdated => {
+                    tracing::warn!("Surface outdated, reconfiguring...");
+                    self.surface.configure(&self.device, &self.config);
+                    RenderError::SurfaceOutdated
+                }
+                wgpu::SurfaceError::OutOfMemory => {
+                    tracing::error!("Out of GPU memory!");
+                    RenderError::OutOfMemory
+                }
+                wgpu::SurfaceError::Timeout => {
+                    tracing::warn!("Surface timeout");
+                    RenderError::Timeout
+                }
+                wgpu::SurfaceError::Other => {
+                    tracing::error!("Unknown surface error occurred");
+                    RenderError::PainterError("Unknown surface error".to_string())
+                }
+            })?
+        };
 
         let view = frame
             .texture
@@ -987,6 +981,7 @@ impl SceneRenderer {
 
         // Clear screen
         {
+            let _span = tracing::trace_span!("clear_pass").entered();
             let _render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Clear Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -1018,21 +1013,31 @@ impl SceneRenderer {
         // Create renderer wrapper (stack allocation, just one pointer field)
         let mut renderer_wrapper = Backend::new(painter);
 
-        layer.render(&mut renderer_wrapper);
+        // Record draw commands from canvas layer
+        {
+            let _span = tracing::trace_span!("record_commands").entered();
+            layer.render(&mut renderer_wrapper);
+        }
 
         // Extract painter and render accumulated commands to GPU
         let mut painter = renderer_wrapper.into_painter();
 
-        painter
-            .render(&view, &mut encoder)
-            .map_err(|e| RenderError::PainterError(e.to_string()))?;
+        {
+            let _span = tracing::trace_span!("gpu_render").entered();
+            painter
+                .render(&view, &mut encoder)
+                .map_err(|e| RenderError::PainterError(e.to_string()))?;
+        }
 
         // Put painter back (zero allocation, just moves Option)
         self.painter = Some(painter);
 
         // Submit commands and present
-        self.queue.submit(std::iter::once(encoder.finish()));
-        frame.present();
+        {
+            let _span = tracing::trace_span!("submit_present").entered();
+            self.queue.submit(std::iter::once(encoder.finish()));
+            frame.present();
+        }
 
         Ok(())
     }

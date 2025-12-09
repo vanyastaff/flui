@@ -139,7 +139,7 @@
 //! // in the shortest column for Pinterest-style masonry effect
 //! ```
 
-use flui_foundation::ElementId;
+use flui_foundation::RenderId;
 use flui_rendering::{BoxLayoutCtx, BoxPaintCtx, RenderBox, Variable};
 use flui_rendering::{RenderObject, RenderResult};
 use flui_types::{BoxConstraints, Offset, Size};
@@ -151,7 +151,7 @@ pub struct MultiChildLayoutContext<'a, 'b> {
     /// The layout context
     ctx: &'a mut BoxLayoutCtx<'b, Variable>,
     /// The children IDs
-    pub children: &'a [ElementId],
+    pub children: &'a [RenderId],
 }
 
 impl<'a, 'b> MultiChildLayoutContext<'a, 'b> {
@@ -431,7 +431,7 @@ impl RenderBox<Variable> for RenderCustomMultiChildLayoutBox {
         let children = ctx.children;
 
         // Collect children for delegate
-        let child_ids: Vec<ElementId> = children.iter().map(|id| *id).collect();
+        let child_ids: Vec<RenderId> = children.iter().map(|id| *id).collect();
 
         // Create layout context for delegate
         let mut layout_ctx = MultiChildLayoutContext {

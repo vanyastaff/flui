@@ -15,6 +15,9 @@ flui_types = { path = "../../crates/flui_types" }
 flui-view = { path = "../../crates/flui-view" }
 flui_rendering = { path = "../../crates/flui_rendering" }
 
+# GPU backend - dx12 for Windows, vulkan as fallback
+flui_engine = { path = "../../crates/flui_engine", features = ["dx12", "vulkan"] }
+
 # Logging
 tracing = "0.1"
 

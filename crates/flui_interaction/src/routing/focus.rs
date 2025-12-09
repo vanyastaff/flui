@@ -172,7 +172,7 @@ impl FocusManager {
 
         *self.focused.write() = Some(node_id);
 
-        tracing::debug!(
+        tracing::trace!(
             previous = ?previous.map(|id| id.get()),
             new = node_id.get(),
             "Focus changed"
@@ -218,7 +218,7 @@ impl FocusManager {
         }
 
         *self.focused.write() = None;
-        tracing::debug!("Focus cleared");
+        tracing::trace!("Focus cleared");
 
         // Notify listeners
         self.notify_listeners(previous, None);

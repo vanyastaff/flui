@@ -24,17 +24,17 @@ use std::sync::Arc;
 /// let cache = SceneCache::new();
 ///
 /// // After rendering
-/// cache.update(scene);
+/// cache.update(Arc::new(scene));
 ///
 /// // For hit testing
 /// if let Some(scene) = cache.get() {
-///     // perform hit testing
+///     // perform hit testing on &Scene
 /// }
 /// ```
 #[derive(Clone)]
 pub struct SceneCache {
-    /// Most recent scene (shared ownership)
-    current: Arc<RwLock<Option<Scene>>>,
+    /// Most recent scene wrapped in Arc for zero-copy sharing
+    current: Arc<RwLock<Option<Arc<Scene>>>>,
 
     /// Frame number of cached scene
     frame_number: Arc<RwLock<u64>>,
@@ -52,22 +52,21 @@ impl SceneCache {
     /// Update the cached scene
     ///
     /// Called after each frame render to update hit testing cache.
-    /// Uses Arc::clone for zero-copy sharing.
-    pub fn update(&self, scene: Scene) {
+    /// Takes Arc<Scene> for zero-copy sharing.
+    pub fn update(&self, scene: Arc<Scene>) {
         if scene.has_content() {
             let frame_num = scene.frame_number();
 
             *self.current.write() = Some(scene);
             *self.frame_number.write() = frame_num;
-
-            tracing::trace!(frame = frame_num, "Scene cached for hit testing");
         }
     }
 
     /// Get the current scene for hit testing
     ///
     /// Returns `None` if no scene has been rendered yet.
-    pub fn get(&self) -> Option<Scene> {
+    /// Returns Arc<Scene> for zero-copy access.
+    pub fn get(&self) -> Option<Arc<Scene>> {
         self.current.read().clone()
     }
 
@@ -87,7 +86,6 @@ impl SceneCache {
     pub fn clear(&self) {
         *self.current.write() = None;
         *self.frame_number.write() = 0;
-        tracing::debug!("Scene cache cleared");
     }
 }
 

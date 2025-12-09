@@ -12,7 +12,7 @@ use crate::{
     PlatformError, Result,
 };
 use flui_core::pipeline::PipelineOwner;
-use flui_engine::GpuRenderer;
+use flui_engine::SceneRenderer;
 use flui_interaction::EventRouter;
 use flui_scheduler::Scheduler;
 use flui_types::{
@@ -57,7 +57,7 @@ pub struct AndroidEmbedder {
     window: WinitWindow,
 
     /// GPU renderer (Vulkan on Android)
-    renderer: GpuRenderer,
+    renderer: SceneRenderer,
 
     /// Platform capabilities
     capabilities: MobileCapabilities,
@@ -94,8 +94,9 @@ impl AndroidEmbedder {
         let size = window.inner_size();
 
         // 2. Initialize GPU renderer (Vulkan on Android)
-        let renderer =
-            GpuRenderer::new_async_with_window(Arc::clone(&window), size.width, size.height).await;
+        let renderer = SceneRenderer::with_window(Arc::clone(&window), size.width, size.height)
+            .await
+            .map_err(|e| PlatformError::GpuInitialization(format!("{:?}", e)))?;
 
         tracing::info!(
             width = size.width,
