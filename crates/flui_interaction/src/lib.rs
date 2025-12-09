@@ -172,11 +172,11 @@ pub use ids::{FocusNodeId, HandlerId, PointerId};
 // ============================================================================
 
 pub use routing::{
-    DirectionalFocusPolicy, ElementId, EventPropagation, EventRouter, FocusManager, FocusNode,
-    FocusScopeNode, FocusTraversalPolicy, GlobalPointerHandler, HitTestBehavior, HitTestEntry,
-    HitTestResult, HitTestable, KeyEventCallback, KeyEventHandler, KeyEventResult,
-    OrderedTraversalPolicy, PointerEventHandler, PointerRouteHandler, PointerRouter,
-    ReadingOrderPolicy, ScrollEventHandler, TransformGuard, TraversalDirection,
+    DirectionalFocusPolicy, EventPropagation, EventRouter, FocusManager, FocusNode, FocusScopeNode,
+    FocusTraversalPolicy, GlobalPointerHandler, HitTestBehavior, HitTestEntry, HitTestResult,
+    HitTestable, KeyEventCallback, KeyEventHandler, KeyEventResult, OrderedTraversalPolicy,
+    PointerEventHandler, PointerRouteHandler, PointerRouter, ReadingOrderPolicy, RenderId,
+    ScrollEventHandler, TransformGuard, TraversalDirection,
 };
 
 // ============================================================================
@@ -258,8 +258,8 @@ pub mod prelude {
 
     // Event routing
     pub use crate::routing::{
-        ElementId, EventPropagation, EventRouter, FocusManager, HitTestBehavior, HitTestEntry,
-        HitTestResult, HitTestable, PointerEventHandler, PointerRouter, TransformGuard,
+        EventPropagation, EventRouter, FocusManager, HitTestBehavior, HitTestEntry, HitTestResult,
+        HitTestable, PointerEventHandler, PointerRouter, RenderId, TransformGuard,
     };
 
     // Gesture recognition

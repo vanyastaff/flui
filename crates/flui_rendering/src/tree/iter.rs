@@ -41,7 +41,7 @@
 //! for stack-based iterators). Use `with_capacity` hints when known.
 
 use super::access::RenderTreeAccess;
-use flui_foundation::ElementId;
+use flui_foundation::RenderId;
 use flui_tree::arity::{Arity, SliceChildren, Variable};
 use smallvec::SmallVec;
 
@@ -69,13 +69,13 @@ use smallvec::SmallVec;
 #[derive(Debug)]
 pub struct RenderAncestors<'a, T: RenderTreeAccess + ?Sized> {
     tree: &'a T,
-    current: Option<ElementId>,
+    current: Option<RenderId>,
 }
 
 impl<'a, T: RenderTreeAccess + ?Sized> RenderAncestors<'a, T> {
     /// Creates a new render ancestors iterator.
     #[inline]
-    pub fn new(tree: &'a T, start: ElementId) -> Self {
+    pub fn new(tree: &'a T, start: RenderId) -> Self {
         Self {
             tree,
             current: Some(start),
@@ -84,7 +84,7 @@ impl<'a, T: RenderTreeAccess + ?Sized> RenderAncestors<'a, T> {
 
     /// Creates iterator starting from parent (skipping start element).
     #[inline]
-    pub fn from_parent(tree: &'a T, start: ElementId) -> Self {
+    pub fn from_parent(tree: &'a T, start: RenderId) -> Self {
         Self {
             tree,
             current: tree.parent(start),
@@ -93,7 +93,7 @@ impl<'a, T: RenderTreeAccess + ?Sized> RenderAncestors<'a, T> {
 }
 
 impl<T: RenderTreeAccess + ?Sized> Iterator for RenderAncestors<'_, T> {
-    type Item = ElementId;
+    type Item = RenderId;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
@@ -151,13 +151,13 @@ impl<T: RenderTreeAccess + ?Sized> std::iter::FusedIterator for RenderAncestors<
 #[derive(Debug)]
 pub struct RenderDescendants<'a, T: RenderTreeAccess + ?Sized> {
     tree: &'a T,
-    stack: SmallVec<[ElementId; 16]>,
+    stack: SmallVec<[RenderId; 16]>,
 }
 
 impl<'a, T: RenderTreeAccess + ?Sized> RenderDescendants<'a, T> {
     /// Creates a new render descendants iterator.
     #[inline]
-    pub fn new(tree: &'a T, root: ElementId) -> Self {
+    pub fn new(tree: &'a T, root: RenderId) -> Self {
         let mut stack = SmallVec::new();
 
         if tree.contains(root) {
@@ -171,7 +171,7 @@ impl<'a, T: RenderTreeAccess + ?Sized> RenderDescendants<'a, T> {
     ///
     /// Note: `SmallVec` will use inline storage for up to 16 elements regardless.
     #[inline]
-    pub fn with_capacity(tree: &'a T, root: ElementId, capacity: usize) -> Self {
+    pub fn with_capacity(tree: &'a T, root: RenderId, capacity: usize) -> Self {
         let mut stack = SmallVec::with_capacity(capacity);
 
         if tree.contains(root) {
@@ -183,7 +183,7 @@ impl<'a, T: RenderTreeAccess + ?Sized> RenderDescendants<'a, T> {
 }
 
 impl<T: RenderTreeAccess + ?Sized> Iterator for RenderDescendants<'_, T> {
-    type Item = ElementId;
+    type Item = RenderId;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
@@ -195,7 +195,7 @@ impl<T: RenderTreeAccess + ?Sized> Iterator for RenderDescendants<'_, T> {
 
             // Always push children (even from non-render elements)
             // Use SmallVec to avoid heap allocation for typical cases
-            let children: SmallVec<[ElementId; 8]> = self.tree.children(current).collect();
+            let children: SmallVec<[RenderId; 8]> = self.tree.children(current).collect();
             for child in children.into_iter().rev() {
                 self.stack.push(child);
             }
@@ -237,18 +237,18 @@ impl<T: RenderTreeAccess + ?Sized> std::iter::FusedIterator for RenderDescendant
 #[derive(Debug)]
 pub struct RenderChildren<'a, T: RenderTreeAccess + ?Sized> {
     tree: &'a T,
-    stack: SmallVec<[ElementId; 8]>,
+    stack: SmallVec<[RenderId; 8]>,
 }
 
 impl<'a, T: RenderTreeAccess + ?Sized> RenderChildren<'a, T> {
     /// Creates a new render children iterator.
     #[inline]
-    pub fn new(tree: &'a T, parent: ElementId) -> Self {
+    pub fn new(tree: &'a T, parent: RenderId) -> Self {
         let mut stack = SmallVec::new();
 
         // Start with direct children
         if tree.contains(parent) {
-            let children: SmallVec<[ElementId; 8]> = tree.children(parent).collect();
+            let children: SmallVec<[RenderId; 8]> = tree.children(parent).collect();
             for child in children.into_iter().rev() {
                 stack.push(child);
             }
@@ -261,11 +261,11 @@ impl<'a, T: RenderTreeAccess + ?Sized> RenderChildren<'a, T> {
     ///
     /// Note: `SmallVec` will use inline storage for up to 8 elements regardless.
     #[inline]
-    pub fn with_capacity(tree: &'a T, parent: ElementId, capacity: usize) -> Self {
+    pub fn with_capacity(tree: &'a T, parent: RenderId, capacity: usize) -> Self {
         let mut stack = SmallVec::with_capacity(capacity);
 
         if tree.contains(parent) {
-            let children: SmallVec<[ElementId; 8]> = tree.children(parent).collect();
+            let children: SmallVec<[RenderId; 8]> = tree.children(parent).collect();
             for child in children.into_iter().rev() {
                 stack.push(child);
             }
@@ -276,7 +276,7 @@ impl<'a, T: RenderTreeAccess + ?Sized> RenderChildren<'a, T> {
 }
 
 impl<T: RenderTreeAccess + ?Sized> Iterator for RenderChildren<'_, T> {
-    type Item = ElementId;
+    type Item = RenderId;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
@@ -293,7 +293,7 @@ impl<T: RenderTreeAccess + ?Sized> Iterator for RenderChildren<'_, T> {
 
             // Non-render element - look at its children
             // Use SmallVec to avoid heap allocation for typical cases
-            let children: SmallVec<[ElementId; 8]> = self.tree.children(current).collect();
+            let children: SmallVec<[RenderId; 8]> = self.tree.children(current).collect();
             for child in children.into_iter().rev() {
                 self.stack.push(child);
             }
@@ -328,7 +328,7 @@ pub struct RenderChildrenWithIndex<'a, T: RenderTreeAccess + ?Sized> {
 impl<'a, T: RenderTreeAccess + ?Sized> RenderChildrenWithIndex<'a, T> {
     /// Creates a new indexed render children iterator.
     #[inline]
-    pub fn new(tree: &'a T, parent: ElementId) -> Self {
+    pub fn new(tree: &'a T, parent: RenderId) -> Self {
         Self {
             inner: RenderChildren::new(tree, parent),
             index: 0,
@@ -337,7 +337,7 @@ impl<'a, T: RenderTreeAccess + ?Sized> RenderChildrenWithIndex<'a, T> {
 }
 
 impl<T: RenderTreeAccess + ?Sized> Iterator for RenderChildrenWithIndex<'_, T> {
-    type Item = (usize, ElementId);
+    type Item = (usize, RenderId);
 
     fn next(&mut self) -> Option<Self::Item> {
         let child = self.inner.next()?;
@@ -381,8 +381,8 @@ pub enum SiblingDirection {
 #[derive(Debug)]
 pub struct RenderSiblings<'a, T: RenderTreeAccess + ?Sized> {
     _tree: &'a T,
-    siblings: Vec<ElementId>,
-    self_id: ElementId,
+    siblings: Vec<RenderId>,
+    self_id: RenderId,
     current_idx: usize,
     direction: SiblingDirection,
     started: bool,
@@ -390,7 +390,7 @@ pub struct RenderSiblings<'a, T: RenderTreeAccess + ?Sized> {
 
 impl<'a, T: RenderTreeAccess + ?Sized> RenderSiblings<'a, T> {
     /// Creates a new render siblings iterator.
-    pub fn new(tree: &'a T, id: ElementId, direction: SiblingDirection) -> Self {
+    pub fn new(tree: &'a T, id: RenderId, direction: SiblingDirection) -> Self {
         // Find render parent
         let render_parent = RenderAncestors::from_parent(tree, id).next();
 
@@ -427,25 +427,25 @@ impl<'a, T: RenderTreeAccess + ?Sized> RenderSiblings<'a, T> {
 
     /// Creates iterator for previous siblings only.
     #[inline]
-    pub fn previous(tree: &'a T, id: ElementId) -> Self {
+    pub fn previous(tree: &'a T, id: RenderId) -> Self {
         Self::new(tree, id, SiblingDirection::Previous)
     }
 
     /// Creates iterator for next siblings only.
     #[inline]
-    pub fn next_siblings(tree: &'a T, id: ElementId) -> Self {
+    pub fn next_siblings(tree: &'a T, id: RenderId) -> Self {
         Self::new(tree, id, SiblingDirection::Next)
     }
 
     /// Creates iterator for all siblings.
     #[inline]
-    pub fn all(tree: &'a T, id: ElementId) -> Self {
+    pub fn all(tree: &'a T, id: RenderId) -> Self {
         Self::new(tree, id, SiblingDirection::All)
     }
 }
 
 impl<T: RenderTreeAccess + ?Sized> Iterator for RenderSiblings<'_, T> {
-    type Item = ElementId;
+    type Item = RenderId;
 
     fn next(&mut self) -> Option<Self::Item> {
         match self.direction {
@@ -519,7 +519,7 @@ impl<T: RenderTreeAccess + ?Sized> std::iter::FusedIterator for RenderSiblings<'
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RenderSubtreeItem {
     /// The element ID.
-    pub id: ElementId,
+    pub id: RenderId,
     /// Depth relative to root (root = 0).
     pub depth: usize,
 }
@@ -536,12 +536,12 @@ pub struct RenderSubtreeItem {
 #[derive(Debug)]
 pub struct RenderSubtree<'a, T: RenderTreeAccess + ?Sized> {
     tree: &'a T,
-    queue: std::collections::VecDeque<(ElementId, usize)>,
+    queue: std::collections::VecDeque<(RenderId, usize)>,
 }
 
 impl<'a, T: RenderTreeAccess + ?Sized> RenderSubtree<'a, T> {
     /// Creates a new BFS render subtree iterator.
-    pub fn new(tree: &'a T, root: ElementId) -> Self {
+    pub fn new(tree: &'a T, root: RenderId) -> Self {
         let mut queue = std::collections::VecDeque::with_capacity(16);
 
         if tree.contains(root) && tree.is_render_element(root) {
@@ -597,7 +597,7 @@ pub struct RenderLeaves<'a, T: RenderTreeAccess + ?Sized> {
 impl<'a, T: RenderTreeAccess + ?Sized> RenderLeaves<'a, T> {
     /// Creates a new render leaves iterator.
     #[inline]
-    pub fn new(tree: &'a T, root: ElementId) -> Self {
+    pub fn new(tree: &'a T, root: RenderId) -> Self {
         Self {
             inner: RenderDescendants::new(tree, root),
             tree,
@@ -606,7 +606,7 @@ impl<'a, T: RenderTreeAccess + ?Sized> RenderLeaves<'a, T> {
 }
 
 impl<T: RenderTreeAccess + ?Sized> Iterator for RenderLeaves<'_, T> {
-    type Item = ElementId;
+    type Item = RenderId;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
@@ -642,13 +642,13 @@ impl<T: RenderTreeAccess + ?Sized> std::iter::FusedIterator for RenderLeaves<'_,
 #[derive(Debug)]
 pub struct RenderPath<'a, T: RenderTreeAccess + ?Sized> {
     _tree: &'a T,
-    path: Vec<ElementId>,
+    path: Vec<RenderId>,
     current_idx: usize,
 }
 
 impl<'a, T: RenderTreeAccess + ?Sized> RenderPath<'a, T> {
     /// Creates a new render path iterator from root to target.
-    pub fn new(tree: &'a T, target: ElementId) -> Self {
+    pub fn new(tree: &'a T, target: RenderId) -> Self {
         // Collect path from target to root
         let path: Vec<_> = RenderAncestors::new(tree, target).collect();
         // Reverse to get root-to-target order
@@ -675,13 +675,13 @@ impl<'a, T: RenderTreeAccess + ?Sized> RenderPath<'a, T> {
 
     /// Returns the path as a slice.
     #[inline]
-    pub fn as_slice(&self) -> &[ElementId] {
+    pub fn as_slice(&self) -> &[RenderId] {
         &self.path
     }
 }
 
 impl<T: RenderTreeAccess + ?Sized> Iterator for RenderPath<'_, T> {
-    type Item = ElementId;
+    type Item = RenderId;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.current_idx < self.path.len() {
@@ -712,8 +712,8 @@ impl<T: RenderTreeAccess + ?Sized> std::iter::FusedIterator for RenderPath<'_, T
 #[inline]
 pub fn find_render_ancestor<T: RenderTreeAccess + ?Sized>(
     tree: &T,
-    id: ElementId,
-) -> Option<ElementId> {
+    id: RenderId,
+) -> Option<RenderId> {
     RenderAncestors::from_parent(tree, id).next()
 }
 
@@ -721,7 +721,7 @@ pub fn find_render_ancestor<T: RenderTreeAccess + ?Sized>(
 ///
 /// Same as `find_render_ancestor` but more semantic.
 #[inline]
-pub fn render_parent<T: RenderTreeAccess + ?Sized>(tree: &T, id: ElementId) -> Option<ElementId> {
+pub fn render_parent<T: RenderTreeAccess + ?Sized>(tree: &T, id: RenderId) -> Option<RenderId> {
     find_render_ancestor(tree, id)
 }
 
@@ -729,20 +729,20 @@ pub fn render_parent<T: RenderTreeAccess + ?Sized>(tree: &T, id: ElementId) -> O
 #[inline]
 pub fn collect_render_children<T: RenderTreeAccess + ?Sized>(
     tree: &T,
-    parent: ElementId,
-) -> Vec<ElementId> {
+    parent: RenderId,
+) -> Vec<RenderId> {
     RenderChildren::new(tree, parent).collect()
 }
 
 /// Counts render elements in a subtree.
 #[inline]
-pub fn count_render_elements<T: RenderTreeAccess + ?Sized>(tree: &T, root: ElementId) -> usize {
+pub fn count_render_elements<T: RenderTreeAccess + ?Sized>(tree: &T, root: RenderId) -> usize {
     RenderDescendants::new(tree, root).count()
 }
 
 /// Counts render children of an element.
 #[inline]
-pub fn count_render_children<T: RenderTreeAccess + ?Sized>(tree: &T, parent: ElementId) -> usize {
+pub fn count_render_children<T: RenderTreeAccess + ?Sized>(tree: &T, parent: RenderId) -> usize {
     RenderChildren::new(tree, parent).count()
 }
 
@@ -750,8 +750,8 @@ pub fn count_render_children<T: RenderTreeAccess + ?Sized>(tree: &T, parent: Ele
 #[inline]
 pub fn first_render_child<T: RenderTreeAccess + ?Sized>(
     tree: &T,
-    parent: ElementId,
-) -> Option<ElementId> {
+    parent: RenderId,
+) -> Option<RenderId> {
     RenderChildren::new(tree, parent).next()
 }
 
@@ -759,8 +759,8 @@ pub fn first_render_child<T: RenderTreeAccess + ?Sized>(
 #[inline]
 pub fn last_render_child<T: RenderTreeAccess + ?Sized>(
     tree: &T,
-    parent: ElementId,
-) -> Option<ElementId> {
+    parent: RenderId,
+) -> Option<RenderId> {
     RenderChildren::new(tree, parent).last()
 }
 
@@ -768,36 +768,33 @@ pub fn last_render_child<T: RenderTreeAccess + ?Sized>(
 #[inline]
 pub fn nth_render_child<T: RenderTreeAccess + ?Sized>(
     tree: &T,
-    parent: ElementId,
+    parent: RenderId,
     n: usize,
-) -> Option<ElementId> {
+) -> Option<RenderId> {
     RenderChildren::new(tree, parent).nth(n)
 }
 
 /// Checks if an element has any render children.
 #[inline]
-pub fn has_render_children<T: RenderTreeAccess + ?Sized>(tree: &T, parent: ElementId) -> bool {
+pub fn has_render_children<T: RenderTreeAccess + ?Sized>(tree: &T, parent: RenderId) -> bool {
     RenderChildren::new(tree, parent).next().is_some()
 }
 
 /// Checks if element is a render leaf (no render children).
 #[inline]
-pub fn is_render_leaf<T: RenderTreeAccess + ?Sized>(tree: &T, id: ElementId) -> bool {
+pub fn is_render_leaf<T: RenderTreeAccess + ?Sized>(tree: &T, id: RenderId) -> bool {
     tree.is_render_element(id) && !has_render_children(tree, id)
 }
 
 /// Finds the render root (topmost render ancestor).
 #[inline]
-pub fn find_render_root<T: RenderTreeAccess + ?Sized>(
-    tree: &T,
-    id: ElementId,
-) -> Option<ElementId> {
+pub fn find_render_root<T: RenderTreeAccess + ?Sized>(tree: &T, id: RenderId) -> Option<RenderId> {
     RenderAncestors::new(tree, id).last()
 }
 
 /// Calculates render depth (number of render ancestors including self).
 #[inline]
-pub fn render_depth<T: RenderTreeAccess + ?Sized>(tree: &T, id: ElementId) -> usize {
+pub fn render_depth<T: RenderTreeAccess + ?Sized>(tree: &T, id: RenderId) -> usize {
     RenderAncestors::new(tree, id).count()
 }
 
@@ -805,8 +802,8 @@ pub fn render_depth<T: RenderTreeAccess + ?Sized>(tree: &T, id: ElementId) -> us
 #[inline]
 pub fn is_render_descendant<T: RenderTreeAccess + ?Sized>(
     tree: &T,
-    descendant: ElementId,
-    ancestor: ElementId,
+    descendant: RenderId,
+    ancestor: RenderId,
 ) -> bool {
     RenderAncestors::new(tree, descendant).any(|id| id == ancestor)
 }
@@ -814,9 +811,9 @@ pub fn is_render_descendant<T: RenderTreeAccess + ?Sized>(
 /// Finds the lowest common render ancestor of two elements.
 pub fn lowest_common_render_ancestor<T: RenderTreeAccess + ?Sized>(
     tree: &T,
-    a: ElementId,
-    b: ElementId,
-) -> Option<ElementId> {
+    a: RenderId,
+    b: RenderId,
+) -> Option<RenderId> {
     // Collect ancestors of `a` into a set
     let a_ancestors: std::collections::HashSet<_> = RenderAncestors::new(tree, a).collect();
 
@@ -861,12 +858,12 @@ pub fn lowest_common_render_ancestor<T: RenderTreeAccess + ?Sized>(
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RenderChildrenCollector {
-    children: Vec<ElementId>,
+    children: Vec<RenderId>,
 }
 
 impl RenderChildrenCollector {
     /// Creates a new collector by eagerly collecting render children.
-    pub fn new<T: RenderTreeAccess + ?Sized>(tree: &T, parent: ElementId) -> Self {
+    pub fn new<T: RenderTreeAccess + ?Sized>(tree: &T, parent: RenderId) -> Self {
         Self {
             children: collect_render_children(tree, parent),
         }
@@ -875,7 +872,7 @@ impl RenderChildrenCollector {
     /// Creates a collector with a pre-allocated capacity.
     pub fn with_capacity<T: RenderTreeAccess + ?Sized>(
         tree: &T,
-        parent: ElementId,
+        parent: RenderId,
         capacity: usize,
     ) -> Self {
         let mut children = Vec::with_capacity(capacity);
@@ -897,7 +894,7 @@ impl RenderChildrenCollector {
 
     /// Returns the children as a slice.
     #[inline]
-    pub fn as_slice(&self) -> &[ElementId] {
+    pub fn as_slice(&self) -> &[RenderId] {
         &self.children
     }
 
@@ -905,7 +902,7 @@ impl RenderChildrenCollector {
     ///
     /// Returns `None` if the child count doesn't match the arity.
     #[inline]
-    pub fn try_into_arity<A: Arity>(&self) -> Option<A::Accessor<'_, ElementId>> {
+    pub fn try_into_arity<A: Arity>(&self) -> Option<A::Accessor<'_, RenderId>> {
         A::try_from_slice(&self.children)
     }
 
@@ -915,7 +912,7 @@ impl RenderChildrenCollector {
     ///
     /// Panics in debug builds if the child count doesn't match the arity.
     #[inline]
-    pub fn into_arity<A: Arity>(&self) -> A::Accessor<'_, ElementId> {
+    pub fn into_arity<A: Arity>(&self) -> A::Accessor<'_, RenderId> {
         A::from_slice(&self.children)
     }
 
@@ -924,13 +921,13 @@ impl RenderChildrenCollector {
     /// This is the most flexible conversion - use when you don't know
     /// the child count at compile time.
     #[inline]
-    pub fn into_variable(&self) -> SliceChildren<'_, ElementId> {
+    pub fn into_variable(&self) -> SliceChildren<'_, RenderId> {
         Variable::from_slice(&self.children)
     }
 
     /// Consumes the collector and returns the underlying `Vec`.
     #[inline]
-    pub fn into_vec(self) -> Vec<ElementId> {
+    pub fn into_vec(self) -> Vec<RenderId> {
         self.children
     }
 }
@@ -948,8 +945,8 @@ mod tests {
     use std::any::Any;
 
     struct TestNode {
-        parent: Option<ElementId>,
-        children: Vec<ElementId>,
+        parent: Option<RenderId>,
+        children: Vec<RenderId>,
         is_render: bool,
     }
 
@@ -962,8 +959,8 @@ mod tests {
             Self { nodes: Vec::new() }
         }
 
-        fn insert(&mut self, parent: Option<ElementId>, is_render: bool) -> ElementId {
-            let id = ElementId::new(self.nodes.len() + 1);
+        fn insert(&mut self, parent: Option<RenderId>, is_render: bool) -> RenderId {
+            let id = RenderId::new(self.nodes.len() + 1);
             self.nodes.push(Some(TestNode {
                 parent,
                 children: Vec::new(),
@@ -979,19 +976,19 @@ mod tests {
             id
         }
 
-        fn insert_render(&mut self, parent: Option<ElementId>) -> ElementId {
+        fn insert_render(&mut self, parent: Option<RenderId>) -> RenderId {
             self.insert(parent, true)
         }
 
-        fn insert_component(&mut self, parent: Option<ElementId>) -> ElementId {
+        fn insert_component(&mut self, parent: Option<RenderId>) -> RenderId {
             self.insert(parent, false)
         }
     }
 
-    impl TreeRead<ElementId> for TestTree {
+    impl TreeRead<RenderId> for TestTree {
         type Node = TestNode;
 
-        fn get(&self, id: ElementId) -> Option<&TestNode> {
+        fn get(&self, id: RenderId) -> Option<&TestNode> {
             self.nodes.get(id.get() as usize - 1)?.as_ref()
         }
 
@@ -999,10 +996,10 @@ mod tests {
             self.nodes.iter().filter(|n| n.is_some()).count()
         }
 
-        fn node_ids(&self) -> impl Iterator<Item = ElementId> + '_ {
+        fn node_ids(&self) -> impl Iterator<Item = RenderId> + '_ {
             (0..self.nodes.len()).filter_map(|i| {
                 if self.nodes[i].is_some() {
-                    Some(ElementId::new(i + 1))
+                    Some(RenderId::new(i + 1))
                 } else {
                     None
                 }
@@ -1010,27 +1007,27 @@ mod tests {
         }
     }
 
-    impl TreeNav<ElementId> for TestTree {
-        fn parent(&self, id: ElementId) -> Option<ElementId> {
+    impl TreeNav<RenderId> for TestTree {
+        fn parent(&self, id: RenderId) -> Option<RenderId> {
             self.get(id)?.parent
         }
 
-        fn children(&self, id: ElementId) -> impl Iterator<Item = ElementId> + '_ {
+        fn children(&self, id: RenderId) -> impl Iterator<Item = RenderId> + '_ {
             self.get(id)
                 .map(|node| node.children.iter().copied())
                 .into_iter()
                 .flatten()
         }
 
-        fn ancestors(&self, start: ElementId) -> impl Iterator<Item = ElementId> + '_ {
+        fn ancestors(&self, start: RenderId) -> impl Iterator<Item = RenderId> + '_ {
             Ancestors::new(self, start)
         }
 
-        fn descendants(&self, root: ElementId) -> impl Iterator<Item = (ElementId, usize)> + '_ {
+        fn descendants(&self, root: RenderId) -> impl Iterator<Item = (RenderId, usize)> + '_ {
             DescendantsWithDepth::new(self, root)
         }
 
-        fn siblings(&self, id: ElementId) -> impl Iterator<Item = ElementId> + '_ {
+        fn siblings(&self, id: RenderId) -> impl Iterator<Item = RenderId> + '_ {
             let parent = self.parent(id);
             parent
                 .into_iter()
@@ -1039,7 +1036,7 @@ mod tests {
     }
 
     impl RenderTreeAccess for TestTree {
-        fn render_object(&self, id: ElementId) -> Option<&dyn Any> {
+        fn render_object(&self, id: RenderId) -> Option<&dyn Any> {
             if self.get(id)?.is_render {
                 Some(&() as &dyn Any)
             } else {
@@ -1047,15 +1044,15 @@ mod tests {
             }
         }
 
-        fn render_object_mut(&mut self, id: ElementId) -> Option<&mut dyn Any> {
+        fn render_object_mut(&mut self, id: RenderId) -> Option<&mut dyn Any> {
             None
         }
 
-        fn render_state(&self, id: ElementId) -> Option<&dyn Any> {
+        fn render_state(&self, id: RenderId) -> Option<&dyn Any> {
             self.render_object(id)
         }
 
-        fn render_state_mut(&mut self, id: ElementId) -> Option<&mut dyn Any> {
+        fn render_state_mut(&mut self, id: RenderId) -> Option<&mut dyn Any> {
             None
         }
     }

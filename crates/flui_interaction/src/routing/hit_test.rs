@@ -47,8 +47,8 @@ use flui_types::{
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-// Re-export ElementId from flui-foundation
-pub use flui_foundation::ElementId;
+// Re-export RenderId from flui-foundation for hit testing
+pub use flui_foundation::RenderId;
 
 // ============================================================================
 // EventPropagation enum
@@ -519,7 +519,7 @@ impl HitTestResult {
 #[derive(Clone)]
 pub struct HitTestEntry {
     /// Element ID (for mouse tracking and region identification).
-    pub element_id: ElementId,
+    pub element_id: RenderId,
 
     /// Local position (relative to this element's coordinate space).
     pub local_position: Offset,
@@ -568,7 +568,7 @@ impl HitTestEntry {
     /// The transform will be captured automatically when added to HitTestResult.
     /// Cursor defaults to `MouseCursor::Defer`.
     #[inline]
-    pub fn new(element_id: ElementId, local_position: Offset, bounds: Rect) -> Self {
+    pub fn new(element_id: RenderId, local_position: Offset, bounds: Rect) -> Self {
         Self {
             element_id,
             local_position,
@@ -585,7 +585,7 @@ impl HitTestEntry {
     /// The transform will be captured automatically when added to HitTestResult.
     #[inline]
     pub fn with_handler(
-        element_id: ElementId,
+        element_id: RenderId,
         local_position: Offset,
         bounds: Rect,
         handler: PointerEventHandler,
@@ -606,7 +606,7 @@ impl HitTestEntry {
     /// The transform will be captured automatically when added to HitTestResult.
     #[inline]
     pub fn with_scroll_handler(
-        element_id: ElementId,
+        element_id: RenderId,
         local_position: Offset,
         bounds: Rect,
         scroll_handler: ScrollEventHandler,
@@ -625,7 +625,7 @@ impl HitTestEntry {
     /// Create entry with both pointer and scroll handlers.
     #[inline]
     pub fn with_handlers(
-        element_id: ElementId,
+        element_id: RenderId,
         local_position: Offset,
         bounds: Rect,
         handler: PointerEventHandler,
@@ -647,7 +647,7 @@ impl HitTestEntry {
     /// The transform will be captured automatically when added to HitTestResult.
     #[inline]
     pub fn with_cursor(
-        element_id: ElementId,
+        element_id: RenderId,
         local_position: Offset,
         bounds: Rect,
         cursor: MouseCursor,
@@ -716,7 +716,7 @@ impl HitTestEntry {
 ///
 /// struct MyLayer {
 ///     bounds: Rect,
-///     element_id: ElementId,
+///     element_id: RenderId,
 /// }
 ///
 /// impl CustomHitTestable for MyLayer {
@@ -927,7 +927,7 @@ mod tests {
         let mut result = HitTestResult::new();
 
         let entry1 = HitTestEntry::new(
-            ElementId::new(1),
+            RenderId::new(1),
             Offset::new(10.0, 10.0),
             Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
         );
@@ -943,12 +943,12 @@ mod tests {
 
         // Add back to front (as tree traversal would)
         result.add(HitTestEntry::new(
-            ElementId::new(1),
+            RenderId::new(1),
             Offset::new(1.0, 1.0),
             Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
         ));
         result.add(HitTestEntry::new(
-            ElementId::new(2),
+            RenderId::new(2),
             Offset::new(2.0, 2.0),
             Rect::from_xywh(0.0, 0.0, 20.0, 20.0),
         ));
@@ -973,7 +973,7 @@ mod tests {
         });
 
         let entry = HitTestEntry::with_handler(
-            ElementId::new(1),
+            RenderId::new(1),
             Offset::new(10.0, 10.0),
             Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
             handler,
@@ -1016,13 +1016,13 @@ mod tests {
 
         // Add in reverse order (last added = first dispatched due to insert(0))
         result.add(HitTestEntry::with_handler(
-            ElementId::new(2),
+            RenderId::new(2),
             Offset::ZERO,
             Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
             handler2,
         ));
         result.add(HitTestEntry::with_handler(
-            ElementId::new(1),
+            RenderId::new(1),
             Offset::ZERO,
             Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
             handler1,
@@ -1047,7 +1047,7 @@ mod tests {
         let depth = result.push_offset(Offset::new(10.0, 20.0));
 
         let entry = HitTestEntry::new(
-            ElementId::new(1),
+            RenderId::new(1),
             Offset::ZERO,
             Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
         );
@@ -1110,7 +1110,7 @@ mod tests {
     #[test]
     fn test_hit_test_entry_methods() {
         let entry = HitTestEntry::new(
-            ElementId::new(1),
+            RenderId::new(1),
             Offset::ZERO,
             Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
         );
@@ -1120,7 +1120,7 @@ mod tests {
 
         let handler = Arc::new(|_: &PointerEvent| EventPropagation::Continue);
         let entry_with_handler = HitTestEntry::with_handler(
-            ElementId::new(1),
+            RenderId::new(1),
             Offset::ZERO,
             Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
             handler,
@@ -1135,7 +1135,7 @@ mod tests {
 
         let _depth = result.push_offset(Offset::new(10.0, 10.0));
         result.add(HitTestEntry::new(
-            ElementId::new(1),
+            RenderId::new(1),
             Offset::ZERO,
             Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
         ));
@@ -1162,7 +1162,7 @@ mod tests {
         });
 
         let entry = HitTestEntry::with_scroll_handler(
-            ElementId::new(1),
+            RenderId::new(1),
             Offset::new(10.0, 10.0),
             Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
             scroll_handler,
@@ -1206,7 +1206,7 @@ mod tests {
 
         // Add outer first (will be at end of entries after insert)
         result.add(HitTestEntry::with_scroll_handler(
-            ElementId::new(1),
+            RenderId::new(1),
             Offset::ZERO,
             Rect::from_xywh(0.0, 0.0, 200.0, 200.0),
             outer_handler,
@@ -1214,7 +1214,7 @@ mod tests {
 
         // Add inner second (will be at start of entries)
         result.add(HitTestEntry::with_scroll_handler(
-            ElementId::new(2),
+            RenderId::new(2),
             Offset::ZERO,
             Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
             inner_handler,
@@ -1260,7 +1260,7 @@ mod tests {
 
         // Add outer first
         result.add(HitTestEntry::with_scroll_handler(
-            ElementId::new(1),
+            RenderId::new(1),
             Offset::ZERO,
             Rect::from_xywh(0.0, 0.0, 200.0, 200.0),
             outer_handler,
@@ -1268,7 +1268,7 @@ mod tests {
 
         // Add inner second
         result.add(HitTestEntry::with_scroll_handler(
-            ElementId::new(2),
+            RenderId::new(2),
             Offset::ZERO,
             Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
             inner_handler,
@@ -1311,7 +1311,7 @@ mod tests {
         let scroll_handler = Arc::new(|_: &ScrollEventData| EventPropagation::Continue);
 
         let entry = HitTestEntry::with_handlers(
-            ElementId::new(1),
+            RenderId::new(1),
             Offset::ZERO,
             Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
             pointer_handler,
@@ -1328,7 +1328,7 @@ mod tests {
 
         // Add entry without scroll handler
         result.add(HitTestEntry::new(
-            ElementId::new(1),
+            RenderId::new(1),
             Offset::ZERO,
             Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
         ));
@@ -1336,7 +1336,7 @@ mod tests {
         // Add entry with scroll handler
         let scroll_handler = Arc::new(|_: &ScrollEventData| EventPropagation::Continue);
         result.add(HitTestEntry::with_scroll_handler(
-            ElementId::new(2),
+            RenderId::new(2),
             Offset::ZERO,
             Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
             scroll_handler,

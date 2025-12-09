@@ -9,33 +9,10 @@
 //! - **Type erasure**: Store concrete render objects as trait objects
 //! - **Arity preservation**: Wrappers maintain arity information
 //! - **Protocol preservation**: Box/Sliver protocol is maintained
-//! - **Two-level API**: Typed (RenderBox<A>) + dyn-compatible (RenderObject)
-//!
-//! # Wrapper Types
-//!
-//! ## BoxRenderWrapper
-//!
-//! Type-erased wrapper for box protocol render objects:
-//! - Stores any `RenderBox<A>` as `Box<dyn RenderBox<A>>`
-//! - Preserves arity at compile time
-//! - Implements both typed and dyn-compatible APIs
-//!
-//! ## SliverRenderWrapper
-//!
-//! Type-erased wrapper for sliver protocol render objects:
-//! - Stores any `RenderSliver<A>` as `Box<dyn RenderSliver<A>>`
-//! - Preserves arity at compile time
-//!
-//! # Use Cases
-//!
-//! - **Collections**: Store heterogeneous render objects
-//! - **Dynamic dispatch**: Switch between different implementations
-//! - **API boundaries**: Pass render objects without exposing concrete types
-//! - **Type-erased rendering**: Use with `Box<dyn RenderObject>`
+//! - **Context-based API**: All operations use context objects
 
 use std::fmt;
 
-use flui_foundation::ElementId;
 use flui_interaction::HitTestResult;
 use flui_types::{Rect, Size, SliverGeometry};
 
@@ -47,7 +24,6 @@ use super::context::{
 };
 use super::object::RenderObject;
 use super::sliver::RenderSliver;
-use super::BoxConstraints;
 use crate::RenderResult;
 
 // ============================================================================
@@ -63,16 +39,7 @@ use crate::RenderResult;
 ///
 /// - `A`: Arity type (preserved at compile time)
 ///
-/// # Use Cases
-///
-/// - Store heterogeneous render objects in collections
-/// - Pass render objects across API boundaries
-/// - Dynamic dispatch based on runtime conditions
-/// - Plugin systems with external implementations
-///
 /// # Examples
-///
-/// ## Basic Usage
 ///
 /// ```rust,ignore
 /// use flui_rendering::core::{BoxRenderWrapper, Single};
@@ -83,36 +50,12 @@ use crate::RenderResult;
 /// // Use as RenderBox<Single>
 /// let size = wrapper.layout(ctx);
 /// ```
-///
-/// ## Collections
-///
-/// ```rust,ignore
-/// use flui_rendering::core::{BoxRenderWrapper, Variable};
-///
-/// let children: Vec<BoxRenderWrapper<Variable>> = vec![
-///     BoxRenderWrapper::new(RenderText::new("Title")),
-///     BoxRenderWrapper::new(RenderImage::new("icon.png")),
-///     BoxRenderWrapper::new(RenderButton::new()),
-/// ];
-///
-/// // All stored with same type, different implementations
-/// for child in &children {
-///     child.layout(ctx);
-/// }
-/// ```
 pub struct BoxRenderWrapper<A: Arity> {
     inner: Box<dyn RenderBox<A>>,
 }
 
 impl<A: Arity> BoxRenderWrapper<A> {
     /// Creates a new wrapper around a render object.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// let padding = RenderPadding::new(EdgeInsets::all(10.0));
-    /// let wrapper = BoxRenderWrapper::new(padding);
-    /// ```
     pub fn new<R: RenderBox<A> + 'static>(render: R) -> Self {
         Self {
             inner: Box::new(render),
@@ -120,13 +63,6 @@ impl<A: Arity> BoxRenderWrapper<A> {
     }
 
     /// Creates a wrapper from a boxed trait object.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// let boxed: Box<dyn RenderBox<Single>> = Box::new(RenderPadding::default());
-    /// let wrapper = BoxRenderWrapper::from_box(boxed);
-    /// ```
     pub fn from_box(inner: Box<dyn RenderBox<A>>) -> Self {
         Self { inner }
     }
@@ -142,8 +78,6 @@ impl<A: Arity> BoxRenderWrapper<A> {
     }
 
     /// Attempts to downcast to a specific render object type.
-    ///
-    /// Returns `Some(&R)` if the inner object is of type `R`, `None` otherwise.
     pub fn downcast_ref<R: RenderBox<A> + 'static>(&self) -> Option<&R> {
         (self.inner.as_ref() as &dyn RenderObject)
             .as_any()
@@ -151,8 +85,6 @@ impl<A: Arity> BoxRenderWrapper<A> {
     }
 
     /// Attempts to mutably downcast to a specific render object type.
-    ///
-    /// Returns `Some(&mut R)` if the inner object is of type `R`, `None` otherwise.
     pub fn downcast_mut<R: RenderBox<A> + 'static>(&mut self) -> Option<&mut R> {
         (self.inner.as_mut() as &mut dyn RenderObject)
             .as_any_mut()
@@ -177,7 +109,6 @@ impl<A: Arity> fmt::Debug for BoxRenderWrapper<A> {
 // TYPED API (RenderBox<A>)
 // ============================================================================
 
-// Implement RenderBox by delegating to inner
 impl<A: Arity> RenderBox<A> for BoxRenderWrapper<A> {
     fn layout(&mut self, ctx: BoxLayoutContext<'_, A>) -> RenderResult<Size> {
         self.inner.layout(ctx)
@@ -209,7 +140,7 @@ impl<A: Arity> RenderBox<A> for BoxRenderWrapper<A> {
 }
 
 // ============================================================================
-// DYN-COMPATIBLE API (RenderObject)
+// BASE TRAIT (RenderObject)
 // ============================================================================
 
 impl<A: Arity> RenderObject for BoxRenderWrapper<A> {
@@ -304,29 +235,13 @@ impl<A: Arity> RenderSliver<A> for SliverRenderWrapper<A> {
 }
 
 // ============================================================================
-// DYN-COMPATIBLE API (RenderObject) for Sliver
+// BASE TRAIT (RenderObject) for Sliver
 // ============================================================================
 
 impl<A: Arity> RenderObject for SliverRenderWrapper<A> {
     fn debug_name(&self) -> &'static str {
         self.inner.as_ref().debug_name()
     }
-
-    // Sliver protocol uses different constraints (SliverConstraints, not BoxConstraints)
-    // So perform_layout returns an error for box constraints
-    fn perform_layout(
-        &mut self,
-        _element_id: ElementId,
-        _constraints: BoxConstraints,
-        _layout_child: &mut dyn FnMut(ElementId, BoxConstraints) -> RenderResult<Size>,
-    ) -> RenderResult<Size> {
-        Err(crate::RenderError::UnsupportedProtocol {
-            expected: "SliverProtocol",
-            found: "BoxProtocol (use perform_sliver_layout instead)",
-        })
-    }
-
-    // TODO: Add perform_sliver_layout when we extend RenderObject trait
 }
 
 // ============================================================================
@@ -369,12 +284,10 @@ mod tests {
         let mock = MockRenderBox { value: 42 };
         let mut wrapper = BoxRenderWrapper::new(mock);
 
-        // Downcast to correct type
         let downcast = wrapper.downcast_ref::<MockRenderBox>();
         assert!(downcast.is_some());
         assert_eq!(downcast.unwrap().value, 42);
 
-        // Mutable downcast
         let downcast_mut = wrapper.downcast_mut::<MockRenderBox>();
         assert!(downcast_mut.is_some());
         downcast_mut.unwrap().value = 100;

@@ -243,9 +243,10 @@ pub fn debug_assert_valid_sliver_geometry(_geometry: &SliverGeometry) {}
 /// - Calling layout during paint
 /// - Recursive layout without proper dirty tracking
 #[cfg(debug_assertions)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LayoutPhase {
     /// Not in any phase
+    #[default]
     Idle,
     /// Currently performing layout
     Layout,
@@ -253,13 +254,6 @@ pub enum LayoutPhase {
     Paint,
     /// Currently performing hit test
     HitTest,
-}
-
-#[cfg(debug_assertions)]
-impl Default for LayoutPhase {
-    fn default() -> Self {
-        Self::Idle
-    }
 }
 
 /// Asserts that we are in layout phase (for operations that require it).

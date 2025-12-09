@@ -7,7 +7,7 @@
 use std::fmt;
 use std::marker::PhantomData;
 
-use flui_foundation::ElementId;
+use flui_foundation::RenderId;
 use flui_interaction::{HitTestEntry, HitTestResult};
 use flui_painting::Canvas;
 use flui_types::{BoxConstraints, Offset, Rect, Size, SliverConstraints, SliverGeometry};
@@ -127,10 +127,10 @@ pub struct LayoutContext<
     P: Protocol = BoxProtocol,
     T: LayoutTree = Box<dyn LayoutTree + Send + Sync>,
 > where
-    A::Accessor<'a, ElementId>: ChildrenAccess<'a, ElementId>,
+    A::Accessor<'a, RenderId>: ChildrenAccess<'a, RenderId>,
 {
     tree: &'a mut T,
-    element_id: ElementId,
+    element_id: RenderId,
     /// Layout constraints from the parent element (protocol-specific).
     ///
     /// - For `BoxProtocol`: `BoxConstraints` (min/max width/height)
@@ -139,13 +139,13 @@ pub struct LayoutContext<
     /// Children accessor for compile-time arity-checked access.
     ///
     /// Use methods like `.single()`, `.optional()`, or `.iter()` depending on arity.
-    pub children: A::Accessor<'a, ElementId>,
+    pub children: A::Accessor<'a, RenderId>,
     _phantom: PhantomData<P>,
 }
 
 impl<'a, A: Arity, P: Protocol, T: LayoutTree> fmt::Debug for LayoutContext<'a, A, P, T>
 where
-    A::Accessor<'a, ElementId>: ChildrenAccess<'a, ElementId>,
+    A::Accessor<'a, RenderId>: ChildrenAccess<'a, RenderId>,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LayoutContext")
@@ -162,7 +162,7 @@ where
 
 impl<'a, A: Arity, P: Protocol, T: LayoutTree> LayoutContext<'a, A, P, T>
 where
-    A::Accessor<'a, ElementId>: ChildrenAccess<'a, ElementId>,
+    A::Accessor<'a, RenderId>: ChildrenAccess<'a, RenderId>,
 {
     /// Creates a new layout context.
     ///
@@ -171,9 +171,9 @@ where
     /// - [`LayoutContext::for_sliver`] for Sliver protocol
     pub fn new(
         tree: &'a mut T,
-        element_id: ElementId,
+        element_id: RenderId,
         constraints: P::Constraints,
-        children: A::Accessor<'a, ElementId>,
+        children: A::Accessor<'a, RenderId>,
     ) -> Self {
         Self {
             tree,
@@ -186,7 +186,7 @@ where
 
     /// Gets the element ID this context is operating on.
     #[inline]
-    pub fn element_id(&self) -> ElementId {
+    pub fn element_id(&self) -> RenderId {
         self.element_id
     }
 
@@ -202,11 +202,11 @@ where
         self.tree
     }
 
-    /// Returns a GAT-based iterator over child ElementIds.
+    /// Returns a GAT-based iterator over child RenderIds.
     ///
     /// This provides zero-cost iteration with proper lifetime management.
     #[inline]
-    pub fn children(&self) -> impl Iterator<Item = ElementId> + 'a {
+    pub fn children(&self) -> impl Iterator<Item = RenderId> + 'a {
         self.children.iter().copied()
     }
 
@@ -214,9 +214,9 @@ where
     ///
     /// This method leverages Higher-Rank Trait Bounds for maximum flexibility
     /// while maintaining zero-cost abstractions.
-    pub fn children_where<F>(&self, predicate: F) -> Vec<ElementId>
+    pub fn children_where<F>(&self, predicate: F) -> Vec<RenderId>
     where
-        F: for<'b> Fn(&'b ElementId) -> bool,
+        F: for<'b> Fn(&'b RenderId) -> bool,
     {
         self.children().filter(|id| predicate(id)).collect()
     }
@@ -224,22 +224,22 @@ where
     /// Sets the offset of a child element.
     ///
     /// Called during parent's layout to position children.
-    pub fn set_child_offset(&mut self, child_id: ElementId, offset: Offset) {
+    pub fn set_child_offset(&mut self, child_id: RenderId, offset: Offset) {
         self.tree.set_offset(child_id, offset);
     }
 
     /// Gets the offset of a child element.
-    pub fn get_child_offset(&self, child_id: ElementId) -> Option<Offset> {
+    pub fn get_child_offset(&self, child_id: RenderId) -> Option<Offset> {
         self.tree.get_offset(child_id)
     }
 
     /// Marks a child as needing layout.
-    pub fn mark_child_needs_layout(&mut self, child_id: ElementId) {
+    pub fn mark_child_needs_layout(&mut self, child_id: RenderId) {
         self.tree.mark_needs_layout(child_id);
     }
 
     /// Checks if a child needs layout.
-    pub fn child_needs_layout(&self, child_id: ElementId) -> bool {
+    pub fn child_needs_layout(&self, child_id: RenderId) -> bool {
         self.tree.needs_layout(child_id)
     }
 }
@@ -250,7 +250,7 @@ where
 
 impl<'a, A: Arity, T: LayoutTree> LayoutContext<'a, A, BoxProtocol, T>
 where
-    A::Accessor<'a, ElementId>: ChildrenAccess<'a, ElementId>,
+    A::Accessor<'a, RenderId>: ChildrenAccess<'a, RenderId>,
 {
     /// Layouts a child box element.
     ///
@@ -258,7 +258,7 @@ where
     #[instrument(level = "trace", skip(self, constraints), fields(child = %child_id.get()))]
     pub fn layout_child(
         &mut self,
-        child_id: ElementId,
+        child_id: RenderId,
         constraints: BoxConstraints,
     ) -> RenderResult<Size> {
         let result = self.tree.perform_layout(child_id, constraints);
@@ -294,7 +294,7 @@ where
     #[instrument(level = "trace", skip(self, constraints), fields(child = %child_id.get()))]
     pub fn layout_child_if_needed(
         &mut self,
-        child_id: ElementId,
+        child_id: RenderId,
         constraints: BoxConstraints,
     ) -> RenderResult<Option<Size>> {
         if !self.tree.needs_layout(child_id) {
@@ -319,7 +319,7 @@ where
     pub fn layout_all_children(
         &mut self,
         constraints: BoxConstraints,
-    ) -> RenderResult<Vec<(ElementId, Size)>> {
+    ) -> RenderResult<Vec<(RenderId, Size)>> {
         let children: Vec<_> = self.children().collect();
         trace!(child_count = children.len(), "laying out all children");
         let mut results = Vec::with_capacity(children.len());
@@ -340,7 +340,7 @@ where
 impl<'a, T: LayoutTree> LayoutContext<'a, Single, BoxProtocol, T> {
     /// Gets the single child ID (convenience for Single arity).
     #[inline]
-    pub fn single_child(&self) -> ElementId {
+    pub fn single_child(&self) -> RenderId {
         *self.children.single()
     }
 
@@ -369,7 +369,7 @@ impl<'a, T: LayoutTree> LayoutContext<'a, Single, BoxProtocol, T> {
 
 impl<'a, A: Arity, T: LayoutTree> LayoutContext<'a, A, SliverProtocol, T>
 where
-    A::Accessor<'a, ElementId>: ChildrenAccess<'a, ElementId>,
+    A::Accessor<'a, RenderId>: ChildrenAccess<'a, RenderId>,
 {
     /// Layouts a child sliver element.
     ///
@@ -377,7 +377,7 @@ where
     #[instrument(level = "trace", skip(self, constraints), fields(child = %child_id.get()))]
     pub fn layout_child(
         &mut self,
-        child_id: ElementId,
+        child_id: RenderId,
         constraints: SliverConstraints,
     ) -> RenderResult<SliverGeometry> {
         let result = self.tree.perform_sliver_layout(child_id, constraints);
@@ -398,7 +398,7 @@ where
     #[instrument(level = "trace", skip(self, constraints), fields(child = %child_id.get()))]
     pub fn layout_child_if_needed(
         &mut self,
-        child_id: ElementId,
+        child_id: RenderId,
         constraints: SliverConstraints,
     ) -> RenderResult<Option<SliverGeometry>> {
         if !self.tree.needs_layout(child_id) {
@@ -427,7 +427,7 @@ where
     pub fn layout_all_children(
         &mut self,
         constraints: SliverConstraints,
-    ) -> RenderResult<Vec<(ElementId, SliverGeometry)>> {
+    ) -> RenderResult<Vec<(RenderId, SliverGeometry)>> {
         let children: Vec<_> = self.children().collect();
         trace!(
             child_count = children.len(),
@@ -451,7 +451,7 @@ where
 impl<'a, T: LayoutTree> LayoutContext<'a, Single, SliverProtocol, T> {
     /// Gets the single child ID (convenience for Single arity).
     #[inline]
-    pub fn single_child(&self) -> ElementId {
+    pub fn single_child(&self) -> RenderId {
         *self.children.single()
     }
 
@@ -529,10 +529,10 @@ pub struct PaintContext<
     P: Protocol = BoxProtocol,
     T: PaintTree = Box<dyn PaintTree + Send + Sync>,
 > where
-    A::Accessor<'a, ElementId>: ChildrenAccess<'a, ElementId>,
+    A::Accessor<'a, RenderId>: ChildrenAccess<'a, RenderId>,
 {
     tree: &'a mut T,
-    element_id: ElementId,
+    element_id: RenderId,
     /// The offset of this element in parent coordinates.
     pub offset: Offset,
     /// The computed geometry from layout (protocol-specific).
@@ -542,13 +542,13 @@ pub struct PaintContext<
     pub geometry: P::Geometry,
     canvas: &'a mut Canvas,
     /// Children accessor for compile-time arity-checked access.
-    pub children: A::Accessor<'a, ElementId>,
+    pub children: A::Accessor<'a, RenderId>,
     _phantom: PhantomData<P>,
 }
 
 impl<'a, A: Arity, P: Protocol, T: PaintTree> fmt::Debug for PaintContext<'a, A, P, T>
 where
-    A::Accessor<'a, ElementId>: ChildrenAccess<'a, ElementId>,
+    A::Accessor<'a, RenderId>: ChildrenAccess<'a, RenderId>,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PaintContext")
@@ -566,7 +566,7 @@ where
 
 impl<'a, A: Arity, P: Protocol, T: PaintTree> PaintContext<'a, A, P, T>
 where
-    A::Accessor<'a, ElementId>: ChildrenAccess<'a, ElementId>,
+    A::Accessor<'a, RenderId>: ChildrenAccess<'a, RenderId>,
 {
     /// Creates a new paint context.
     ///
@@ -575,11 +575,11 @@ where
     /// - [`PaintContext::for_sliver`] for Sliver protocol
     pub fn new(
         tree: &'a mut T,
-        element_id: ElementId,
+        element_id: RenderId,
         offset: Offset,
         geometry: P::Geometry,
         canvas: &'a mut Canvas,
-        children: A::Accessor<'a, ElementId>,
+        children: A::Accessor<'a, RenderId>,
     ) -> Self {
         Self {
             tree,
@@ -594,7 +594,7 @@ where
 
     /// Gets the element ID this context is painting.
     #[inline]
-    pub fn element_id(&self) -> ElementId {
+    pub fn element_id(&self) -> RenderId {
         self.element_id
     }
 
@@ -610,9 +610,9 @@ where
         self.canvas
     }
 
-    /// Returns a GAT-based iterator over child ElementIds.
+    /// Returns a GAT-based iterator over child RenderIds.
     #[inline]
-    pub fn children(&self) -> impl Iterator<Item = ElementId> + 'a {
+    pub fn children(&self) -> impl Iterator<Item = RenderId> + 'a {
         self.children.iter().copied()
     }
 
@@ -624,7 +624,7 @@ where
     /// Any paint failures are logged via tracing::error and execution continues.
     /// This matches Flutter's behavior where paint() methods cannot throw exceptions.
     #[instrument(level = "trace", skip(self), fields(child = %child_id.get(), x = %offset.dx, y = %offset.dy))]
-    pub fn paint_child(&mut self, child_id: ElementId, offset: Offset) {
+    pub fn paint_child(&mut self, child_id: RenderId, offset: Offset) {
         if let Err(e) = self.tree.perform_paint(child_id, offset) {
             tracing::error!(
                 child = %child_id.get(),
@@ -660,7 +660,7 @@ where
 
 impl<'a, A: Arity, T: PaintTree> PaintContext<'a, A, BoxProtocol, T>
 where
-    A::Accessor<'a, ElementId>: ChildrenAccess<'a, ElementId>,
+    A::Accessor<'a, RenderId>: ChildrenAccess<'a, RenderId>,
 {
     /// Returns the size of this element (convenience for Box protocol).
     ///
@@ -694,7 +694,7 @@ where
 impl<'a, T: PaintTree> PaintContext<'a, Single, BoxProtocol, T> {
     /// Gets the single child ID (convenience for Single arity).
     #[inline]
-    pub fn single_child(&self) -> ElementId {
+    pub fn single_child(&self) -> RenderId {
         *self.children.single()
     }
 
@@ -711,7 +711,7 @@ impl<'a, T: PaintTree> PaintContext<'a, Single, BoxProtocol, T> {
 
 impl<'a, A: Arity, T: PaintTree> PaintContext<'a, A, SliverProtocol, T>
 where
-    A::Accessor<'a, ElementId>: ChildrenAccess<'a, ElementId>,
+    A::Accessor<'a, RenderId>: ChildrenAccess<'a, RenderId>,
 {
     /// Returns the sliver geometry (convenience for Sliver protocol).
     ///
@@ -741,7 +741,7 @@ where
 impl<'a, T: PaintTree> PaintContext<'a, Single, SliverProtocol, T> {
     /// Gets the single child ID (convenience for Single arity).
     #[inline]
-    pub fn single_child(&self) -> ElementId {
+    pub fn single_child(&self) -> RenderId {
         *self.children.single()
     }
 
@@ -798,22 +798,22 @@ pub struct HitTestContext<
     P: Protocol = BoxProtocol,
     T: HitTestTree = Box<dyn HitTestTree + Send + Sync>,
 > where
-    A::Accessor<'a, ElementId>: ChildrenAccess<'a, ElementId>,
+    A::Accessor<'a, RenderId>: ChildrenAccess<'a, RenderId>,
 {
     tree: &'a T,
-    element_id: ElementId,
+    element_id: RenderId,
     /// The position to test (in parent coordinates).
     pub position: Offset,
     /// The computed geometry from layout (protocol-specific).
     pub geometry: P::Geometry,
     /// Children accessor for compile-time arity-checked access.
-    pub children: A::Accessor<'a, ElementId>,
+    pub children: A::Accessor<'a, RenderId>,
     _phantom: PhantomData<P>,
 }
 
 impl<'a, A: Arity, P: Protocol, T: HitTestTree> fmt::Debug for HitTestContext<'a, A, P, T>
 where
-    A::Accessor<'a, ElementId>: ChildrenAccess<'a, ElementId>,
+    A::Accessor<'a, RenderId>: ChildrenAccess<'a, RenderId>,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("HitTestContext")
@@ -831,7 +831,7 @@ where
 
 impl<'a, A: Arity, P: Protocol, T: HitTestTree> HitTestContext<'a, A, P, T>
 where
-    A::Accessor<'a, ElementId>: ChildrenAccess<'a, ElementId>,
+    A::Accessor<'a, RenderId>: ChildrenAccess<'a, RenderId>,
 {
     /// Creates a new hit test context.
     ///
@@ -840,10 +840,10 @@ where
     /// - [`HitTestContext::for_sliver`] for Sliver protocol
     pub fn new(
         tree: &'a T,
-        element_id: ElementId,
+        element_id: RenderId,
         position: Offset,
         geometry: P::Geometry,
-        children: A::Accessor<'a, ElementId>,
+        children: A::Accessor<'a, RenderId>,
     ) -> Self {
         Self {
             tree,
@@ -857,25 +857,25 @@ where
 
     /// Gets the element ID this context is testing.
     #[inline]
-    pub fn element_id(&self) -> ElementId {
+    pub fn element_id(&self) -> RenderId {
         self.element_id
     }
 
-    /// Returns a GAT-based iterator over child ElementIds.
+    /// Returns a GAT-based iterator over child RenderIds.
     #[inline]
-    pub fn children(&self) -> impl Iterator<Item = ElementId> + 'a {
+    pub fn children(&self) -> impl Iterator<Item = RenderId> + 'a {
         self.children.iter().copied()
     }
 
     /// Returns children in reverse order (for z-order hit testing).
-    pub fn children_reverse(&self) -> impl DoubleEndedIterator<Item = ElementId> + 'a {
+    pub fn children_reverse(&self) -> impl DoubleEndedIterator<Item = RenderId> + 'a {
         self.children.as_slice().iter().copied().rev()
     }
 
     /// Hit tests a child element.
     pub fn hit_test_child(
         &self,
-        child_id: ElementId,
+        child_id: RenderId,
         position: Offset,
         result: &mut HitTestResult,
     ) -> bool {
@@ -899,7 +899,7 @@ where
     /// ```
     pub fn with_position(&self, new_position: Offset) -> Self
     where
-        A::Accessor<'a, ElementId>: Clone,
+        A::Accessor<'a, RenderId>: Clone,
     {
         Self {
             tree: self.tree,
@@ -939,7 +939,7 @@ where
 
 impl<'a, A: Arity, T: HitTestTree> HitTestContext<'a, A, BoxProtocol, T>
 where
-    A::Accessor<'a, ElementId>: ChildrenAccess<'a, ElementId>,
+    A::Accessor<'a, RenderId>: ChildrenAccess<'a, RenderId>,
 {
     /// Returns the size of this element (convenience for Box protocol).
     #[inline]
@@ -974,7 +974,7 @@ where
 impl<'a, T: HitTestTree> HitTestContext<'a, Single, BoxProtocol, T> {
     /// Gets the single child ID (convenience for Single arity).
     #[inline]
-    pub fn single_child(&self) -> ElementId {
+    pub fn single_child(&self) -> RenderId {
         *self.children.single()
     }
 
@@ -991,7 +991,7 @@ impl<'a, T: HitTestTree> HitTestContext<'a, Single, BoxProtocol, T> {
 
 impl<'a, A: Arity, T: HitTestTree> HitTestContext<'a, A, SliverProtocol, T>
 where
-    A::Accessor<'a, ElementId>: ChildrenAccess<'a, ElementId>,
+    A::Accessor<'a, RenderId>: ChildrenAccess<'a, RenderId>,
 {
     /// Returns the sliver geometry (convenience for Sliver protocol).
     #[inline]
@@ -1018,7 +1018,7 @@ where
 impl<'a, T: HitTestTree> HitTestContext<'a, Single, SliverProtocol, T> {
     /// Gets the single child ID (convenience for Single arity).
     #[inline]
-    pub fn single_child(&self) -> ElementId {
+    pub fn single_child(&self) -> RenderId {
         *self.children.single()
     }
 

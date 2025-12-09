@@ -252,8 +252,9 @@ pub type DeviceId = i32;
 
 /// Unique identifier for a mouse-sensitive region.
 ///
-/// Re-exported from `flui_foundation::ElementId`.
-pub use flui_foundation::ElementId as RegionId;
+/// Re-exported from `flui_foundation::RenderId` since regions correspond to
+/// render objects (hit-testable visual elements).
+pub use flui_foundation::RenderId as RegionId;
 
 #[cfg(test)]
 mod tests {

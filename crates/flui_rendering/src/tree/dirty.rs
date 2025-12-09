@@ -21,7 +21,7 @@
 //! (not `&mut self`) to allow concurrent marking from callbacks.
 //! Implementations typically use atomic operations.
 
-use flui_foundation::ElementId;
+use flui_foundation::RenderId;
 use std::sync::atomic::{AtomicU8, Ordering};
 
 // ============================================================================
@@ -52,13 +52,13 @@ use std::sync::atomic::{AtomicU8, Ordering};
 ///
 /// ```rust
 /// use flui_rendering::DirtyTracking;
-/// use flui_foundation::ElementId;
+/// use flui_foundation::RenderId;
 /// use std::sync::Mutex;
 /// use std::collections::HashSet;
 ///
 /// struct SimpleDirtyTracker {
-///     layout_dirty: Mutex<HashSet<ElementId>>,
-///     paint_dirty: Mutex<HashSet<ElementId>>,
+///     layout_dirty: Mutex<HashSet<RenderId>>,
+///     paint_dirty: Mutex<HashSet<RenderId>>,
 /// }
 ///
 /// impl SimpleDirtyTracker {
@@ -71,34 +71,34 @@ use std::sync::atomic::{AtomicU8, Ordering};
 /// }
 ///
 /// impl DirtyTracking for SimpleDirtyTracker {
-///     fn mark_needs_layout(&self, id: ElementId) {
+///     fn mark_needs_layout(&self, id: RenderId) {
 ///         self.layout_dirty.lock().unwrap().insert(id);
 ///     }
 ///
-///     fn mark_needs_paint(&self, id: ElementId) {
+///     fn mark_needs_paint(&self, id: RenderId) {
 ///         self.paint_dirty.lock().unwrap().insert(id);
 ///     }
 ///
-///     fn clear_needs_layout(&self, id: ElementId) {
+///     fn clear_needs_layout(&self, id: RenderId) {
 ///         self.layout_dirty.lock().unwrap().remove(&id);
 ///     }
 ///
-///     fn clear_needs_paint(&self, id: ElementId) {
+///     fn clear_needs_paint(&self, id: RenderId) {
 ///         self.paint_dirty.lock().unwrap().remove(&id);
 ///     }
 ///
-///     fn needs_layout(&self, id: ElementId) -> bool {
+///     fn needs_layout(&self, id: RenderId) -> bool {
 ///         self.layout_dirty.lock().unwrap().contains(&id)
 ///     }
 ///
-///     fn needs_paint(&self, id: ElementId) -> bool {
+///     fn needs_paint(&self, id: RenderId) -> bool {
 ///         self.paint_dirty.lock().unwrap().contains(&id)
 ///     }
 /// }
 ///
 /// // Usage
 /// let tracker = SimpleDirtyTracker::new();
-/// let id = ElementId::new(1);
+/// let id = RenderId::new(1);
 ///
 /// tracker.mark_needs_layout(id);
 /// assert!(tracker.needs_layout(id));
@@ -122,7 +122,7 @@ pub trait DirtyTracking: Send + Sync {
     /// This method takes `&self` to allow concurrent marking.
     /// Implementations should use atomic operations or other
     /// synchronization.
-    fn mark_needs_layout(&self, id: ElementId);
+    fn mark_needs_layout(&self, id: RenderId);
 
     /// Marks an element as needing paint.
     ///
@@ -132,7 +132,7 @@ pub trait DirtyTracking: Send + Sync {
     /// # Arguments
     ///
     /// * `id` - The element to mark
-    fn mark_needs_paint(&self, id: ElementId);
+    fn mark_needs_paint(&self, id: RenderId);
 
     /// Clears the needs-layout flag for an element.
     ///
@@ -141,7 +141,7 @@ pub trait DirtyTracking: Send + Sync {
     /// # Arguments
     ///
     /// * `id` - The element to clear
-    fn clear_needs_layout(&self, id: ElementId);
+    fn clear_needs_layout(&self, id: RenderId);
 
     /// Clears the needs-paint flag for an element.
     ///
@@ -150,21 +150,21 @@ pub trait DirtyTracking: Send + Sync {
     /// # Arguments
     ///
     /// * `id` - The element to clear
-    fn clear_needs_paint(&self, id: ElementId);
+    fn clear_needs_paint(&self, id: RenderId);
 
     /// Returns `true` if the element needs layout.
     ///
     /// # Arguments
     ///
     /// * `id` - The element to check
-    fn needs_layout(&self, id: ElementId) -> bool;
+    fn needs_layout(&self, id: RenderId) -> bool;
 
     /// Returns `true` if the element needs paint.
     ///
     /// # Arguments
     ///
     /// * `id` - The element to check
-    fn needs_paint(&self, id: ElementId) -> bool;
+    fn needs_paint(&self, id: RenderId) -> bool;
 
     /// Returns `true` if the element needs either layout or paint.
     ///
@@ -172,7 +172,7 @@ pub trait DirtyTracking: Send + Sync {
     ///
     /// * `id` - The element to check
     #[inline]
-    fn is_dirty(&self, id: ElementId) -> bool {
+    fn is_dirty(&self, id: RenderId) -> bool {
         self.needs_layout(id) || self.needs_paint(id)
     }
 
@@ -184,7 +184,7 @@ pub trait DirtyTracking: Send + Sync {
     ///
     /// * `id` - The element to mark
     #[inline]
-    fn mark_needs_rebuild(&self, id: ElementId) {
+    fn mark_needs_rebuild(&self, id: RenderId) {
         self.mark_needs_layout(id);
         self.mark_needs_paint(id);
     }
@@ -195,7 +195,7 @@ pub trait DirtyTracking: Send + Sync {
     ///
     /// * `id` - The element to clear
     #[inline]
-    fn clear_dirty(&self, id: ElementId) {
+    fn clear_dirty(&self, id: RenderId) {
         self.clear_needs_layout(id);
         self.clear_needs_paint(id);
     }
@@ -209,7 +209,7 @@ pub trait DirtyTracking: Send + Sync {
     /// Default returns empty vector. Override in implementations
     /// that maintain dirty sets.
     #[inline]
-    fn elements_needing_layout(&self) -> Vec<ElementId> {
+    fn elements_needing_layout(&self) -> Vec<RenderId> {
         Vec::new()
     }
 
@@ -218,7 +218,7 @@ pub trait DirtyTracking: Send + Sync {
     /// Default returns empty vector. Override in implementations
     /// that maintain dirty sets.
     #[inline]
-    fn elements_needing_paint(&self) -> Vec<ElementId> {
+    fn elements_needing_paint(&self) -> Vec<RenderId> {
         Vec::new()
     }
 }
@@ -260,7 +260,7 @@ pub trait DirtyTrackingExt: DirtyTracking {
 
     /// Returns all dirty elements (needing layout or paint).
     #[inline]
-    fn elements_dirty(&self) -> Vec<ElementId> {
+    fn elements_dirty(&self) -> Vec<RenderId> {
         let mut result = DirtyTracking::elements_needing_layout(self);
         for id in DirtyTracking::elements_needing_paint(self) {
             if !result.contains(&id) {
@@ -320,7 +320,7 @@ pub trait DirtyTrackingExt: DirtyTracking {
     ///
     /// * `ids` - The elements to mark
     #[inline]
-    fn mark_many_needs_layout(&self, ids: impl IntoIterator<Item = ElementId>) {
+    fn mark_many_needs_layout(&self, ids: impl IntoIterator<Item = RenderId>) {
         for id in ids {
             self.mark_needs_layout(id);
         }
@@ -332,7 +332,7 @@ pub trait DirtyTrackingExt: DirtyTracking {
     ///
     /// * `ids` - The elements to mark
     #[inline]
-    fn mark_many_needs_paint(&self, ids: impl IntoIterator<Item = ElementId>) {
+    fn mark_many_needs_paint(&self, ids: impl IntoIterator<Item = RenderId>) {
         for id in ids {
             self.mark_needs_paint(id);
         }
@@ -340,7 +340,7 @@ pub trait DirtyTrackingExt: DirtyTracking {
 
     /// Marks multiple elements as needing rebuild (layout + paint).
     #[inline]
-    fn mark_many_needs_rebuild(&self, ids: impl IntoIterator<Item = ElementId>) {
+    fn mark_many_needs_rebuild(&self, ids: impl IntoIterator<Item = RenderId>) {
         for id in ids {
             self.mark_needs_rebuild(id);
         }
@@ -356,7 +356,7 @@ pub trait DirtyTrackingExt: DirtyTracking {
     ///
     /// * `ids` - The elements to clear
     #[inline]
-    fn clear_many_layout(&self, ids: impl IntoIterator<Item = ElementId>) {
+    fn clear_many_layout(&self, ids: impl IntoIterator<Item = RenderId>) {
         for id in ids {
             self.clear_needs_layout(id);
         }
@@ -368,7 +368,7 @@ pub trait DirtyTrackingExt: DirtyTracking {
     ///
     /// * `ids` - The elements to clear
     #[inline]
-    fn clear_many_paint(&self, ids: impl IntoIterator<Item = ElementId>) {
+    fn clear_many_paint(&self, ids: impl IntoIterator<Item = RenderId>) {
         for id in ids {
             self.clear_needs_paint(id);
         }
@@ -376,7 +376,7 @@ pub trait DirtyTrackingExt: DirtyTracking {
 
     /// Clears all flags for multiple elements.
     #[inline]
-    fn clear_many_dirty(&self, ids: impl IntoIterator<Item = ElementId>) {
+    fn clear_many_dirty(&self, ids: impl IntoIterator<Item = RenderId>) {
         for id in ids {
             self.clear_dirty(id);
         }
@@ -415,7 +415,7 @@ pub trait DirtyTrackingExt: DirtyTracking {
     /// This is more efficient than calling `elements_needing_layout()`
     /// followed by `clear_all_layout()`.
     #[inline]
-    fn drain_needing_layout(&self) -> Vec<ElementId> {
+    fn drain_needing_layout(&self) -> Vec<RenderId> {
         let elements = DirtyTracking::elements_needing_layout(self);
         self.clear_many_layout(elements.iter().copied());
         elements
@@ -423,7 +423,7 @@ pub trait DirtyTrackingExt: DirtyTracking {
 
     /// Returns and clears all elements needing paint.
     #[inline]
-    fn drain_needing_paint(&self) -> Vec<ElementId> {
+    fn drain_needing_paint(&self) -> Vec<RenderId> {
         let elements = DirtyTracking::elements_needing_paint(self);
         self.clear_many_paint(elements.iter().copied());
         elements
@@ -431,7 +431,7 @@ pub trait DirtyTrackingExt: DirtyTracking {
 
     /// Returns and clears all dirty elements.
     #[inline]
-    fn drain_dirty(&self) -> Vec<ElementId> {
+    fn drain_dirty(&self) -> Vec<RenderId> {
         let elements = self.elements_dirty();
         self.clear_many_dirty(elements.iter().copied());
         elements
@@ -443,7 +443,7 @@ pub trait DirtyTrackingExt: DirtyTracking {
 
     /// Marks an element as needing layout if a condition is met.
     #[inline]
-    fn mark_needs_layout_if(&self, id: ElementId, condition: bool) {
+    fn mark_needs_layout_if(&self, id: RenderId, condition: bool) {
         if condition {
             self.mark_needs_layout(id);
         }
@@ -451,7 +451,7 @@ pub trait DirtyTrackingExt: DirtyTracking {
 
     /// Marks an element as needing paint if a condition is met.
     #[inline]
-    fn mark_needs_paint_if(&self, id: ElementId, condition: bool) {
+    fn mark_needs_paint_if(&self, id: RenderId, condition: bool) {
         if condition {
             self.mark_needs_paint(id);
         }
@@ -459,7 +459,7 @@ pub trait DirtyTrackingExt: DirtyTracking {
 
     /// Marks an element as needing rebuild if a condition is met.
     #[inline]
-    fn mark_needs_rebuild_if(&self, id: ElementId, condition: bool) {
+    fn mark_needs_rebuild_if(&self, id: RenderId, condition: bool) {
         if condition {
             self.mark_needs_rebuild(id);
         }
@@ -471,9 +471,9 @@ pub trait DirtyTrackingExt: DirtyTracking {
 
     /// Filters elements needing layout by a predicate.
     #[inline]
-    fn filter_needing_layout<F>(&self, predicate: F) -> Vec<ElementId>
+    fn filter_needing_layout<F>(&self, predicate: F) -> Vec<RenderId>
     where
-        F: FnMut(&ElementId) -> bool,
+        F: FnMut(&RenderId) -> bool,
     {
         DirtyTracking::elements_needing_layout(self)
             .into_iter()
@@ -483,9 +483,9 @@ pub trait DirtyTrackingExt: DirtyTracking {
 
     /// Filters elements needing paint by a predicate.
     #[inline]
-    fn filter_needing_paint<F>(&self, predicate: F) -> Vec<ElementId>
+    fn filter_needing_paint<F>(&self, predicate: F) -> Vec<RenderId>
     where
-        F: FnMut(&ElementId) -> bool,
+        F: FnMut(&RenderId) -> bool,
     {
         DirtyTracking::elements_needing_paint(self)
             .into_iter()
@@ -1145,8 +1145,8 @@ mod tests {
 
     // Simple test implementation for DirtyTracking
     struct TestDirtyTracker {
-        layout_dirty: std::sync::Mutex<std::collections::HashSet<ElementId>>,
-        paint_dirty: std::sync::Mutex<std::collections::HashSet<ElementId>>,
+        layout_dirty: std::sync::Mutex<std::collections::HashSet<RenderId>>,
+        paint_dirty: std::sync::Mutex<std::collections::HashSet<RenderId>>,
     }
 
     impl TestDirtyTracker {
@@ -1159,35 +1159,35 @@ mod tests {
     }
 
     impl DirtyTracking for TestDirtyTracker {
-        fn mark_needs_layout(&self, id: ElementId) {
+        fn mark_needs_layout(&self, id: RenderId) {
             self.layout_dirty.lock().unwrap().insert(id);
         }
 
-        fn mark_needs_paint(&self, id: ElementId) {
+        fn mark_needs_paint(&self, id: RenderId) {
             self.paint_dirty.lock().unwrap().insert(id);
         }
 
-        fn clear_needs_layout(&self, id: ElementId) {
+        fn clear_needs_layout(&self, id: RenderId) {
             self.layout_dirty.lock().unwrap().remove(&id);
         }
 
-        fn clear_needs_paint(&self, id: ElementId) {
+        fn clear_needs_paint(&self, id: RenderId) {
             self.paint_dirty.lock().unwrap().remove(&id);
         }
 
-        fn needs_layout(&self, id: ElementId) -> bool {
+        fn needs_layout(&self, id: RenderId) -> bool {
             self.layout_dirty.lock().unwrap().contains(&id)
         }
 
-        fn needs_paint(&self, id: ElementId) -> bool {
+        fn needs_paint(&self, id: RenderId) -> bool {
             self.paint_dirty.lock().unwrap().contains(&id)
         }
 
-        fn elements_needing_layout(&self) -> Vec<ElementId> {
+        fn elements_needing_layout(&self) -> Vec<RenderId> {
             self.layout_dirty.lock().unwrap().iter().copied().collect()
         }
 
-        fn elements_needing_paint(&self) -> Vec<ElementId> {
+        fn elements_needing_paint(&self) -> Vec<RenderId> {
             self.paint_dirty.lock().unwrap().iter().copied().collect()
         }
     }
@@ -1197,7 +1197,7 @@ mod tests {
     #[test]
     fn test_dirty_tracking_ext_batch_mark() {
         let tracker = TestDirtyTracker::new();
-        let ids = vec![ElementId::new(1), ElementId::new(2), ElementId::new(3)];
+        let ids = vec![RenderId::new(1), RenderId::new(2), RenderId::new(3)];
 
         tracker.mark_many_needs_layout(ids.iter().copied());
         assert_eq!(tracker.layout_dirty_count(), 3);
@@ -1209,7 +1209,7 @@ mod tests {
     #[test]
     fn test_dirty_tracking_ext_batch_clear() {
         let tracker = TestDirtyTracker::new();
-        let ids = vec![ElementId::new(1), ElementId::new(2), ElementId::new(3)];
+        let ids = vec![RenderId::new(1), RenderId::new(2), RenderId::new(3)];
 
         tracker.mark_many_needs_layout(ids.iter().copied());
         tracker.clear_many_layout(ids[..2].iter().copied());
@@ -1219,8 +1219,8 @@ mod tests {
     #[test]
     fn test_dirty_tracking_ext_drain() {
         let tracker = TestDirtyTracker::new();
-        let id1 = ElementId::new(1);
-        let id2 = ElementId::new(2);
+        let id1 = RenderId::new(1);
+        let id2 = RenderId::new(2);
 
         tracker.mark_needs_layout(id1);
         tracker.mark_needs_layout(id2);
@@ -1233,7 +1233,7 @@ mod tests {
     #[test]
     fn test_dirty_tracking_ext_conditional() {
         let tracker = TestDirtyTracker::new();
-        let id = ElementId::new(1);
+        let id = RenderId::new(1);
 
         tracker.mark_needs_layout_if(id, false);
         assert!(!tracker.needs_layout(id));

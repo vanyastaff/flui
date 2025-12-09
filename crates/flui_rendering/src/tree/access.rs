@@ -30,7 +30,7 @@
 //! The arity markers (`Leaf`, `Single`, `Optional`, `Variable`) provide
 //! compile-time guarantees about child counts.
 
-use flui_foundation::ElementId;
+use flui_foundation::RenderId;
 use flui_tree::arity::{Arity, Leaf, Optional, Single, Variable};
 use flui_tree::TreeNav;
 use flui_types::{Offset, Size};
@@ -57,18 +57,18 @@ use std::any::Any;
 ///
 /// ```rust,ignore
 /// use flui_tree::RenderTreeAccess;
-/// use flui_foundation::ElementId;
+/// use flui_foundation::RenderId;
 ///
 /// fn collect_render_elements<T: RenderTreeAccess>(
 ///     tree: &T,
-///     root: ElementId,
-/// ) -> Vec<ElementId> {
+///     root: RenderId,
+/// ) -> Vec<RenderId> {
 ///     tree.descendants(root)
 ///         .filter(|&id| tree.is_render_element(id))
 ///         .collect()
 /// }
 /// ```
-pub trait RenderTreeAccess: TreeNav<ElementId> {
+pub trait RenderTreeAccess: TreeNav<RenderId> {
     /// Returns the `RenderObject` for an element, if it's a render element.
     ///
     /// # Arguments
@@ -83,7 +83,7 @@ pub trait RenderTreeAccess: TreeNav<ElementId> {
     /// # Type Safety
     ///
     /// Callers should downcast using `downcast_ref::<ConcreteType>()`.
-    fn render_object(&self, id: ElementId) -> Option<&dyn Any>;
+    fn render_object(&self, id: RenderId) -> Option<&dyn Any>;
 
     /// Returns a mutable reference to the `RenderObject`.
     ///
@@ -95,7 +95,7 @@ pub trait RenderTreeAccess: TreeNav<ElementId> {
     ///
     /// Mutable reference to the `RenderObject` as `dyn Any`, or `None`
     /// if the element is not a render element.
-    fn render_object_mut(&mut self, id: ElementId) -> Option<&mut dyn Any>;
+    fn render_object_mut(&mut self, id: RenderId) -> Option<&mut dyn Any>;
 
     /// Returns the `RenderState` for an element, if it's a render element.
     ///
@@ -107,14 +107,14 @@ pub trait RenderTreeAccess: TreeNav<ElementId> {
     ///
     /// Reference to the `RenderState` as `dyn Any`, or `None` if the
     /// element is not a render element.
-    fn render_state(&self, id: ElementId) -> Option<&dyn Any>;
+    fn render_state(&self, id: RenderId) -> Option<&dyn Any>;
 
     /// Returns a mutable reference to the `RenderState`.
     ///
     /// # Arguments
     ///
     /// * `id` - The element ID
-    fn render_state_mut(&mut self, id: ElementId) -> Option<&mut dyn Any>;
+    fn render_state_mut(&mut self, id: RenderId) -> Option<&mut dyn Any>;
 
     /// Returns `true` if the element is a render element.
     ///
@@ -125,7 +125,7 @@ pub trait RenderTreeAccess: TreeNav<ElementId> {
     ///
     /// * `id` - The element ID
     #[inline]
-    fn is_render_element(&self, id: ElementId) -> bool {
+    fn is_render_element(&self, id: RenderId) -> bool {
         self.render_object(id).is_some()
     }
 
@@ -146,7 +146,7 @@ pub trait RenderTreeAccess: TreeNav<ElementId> {
     /// Default implementation returns `None`. Concrete implementations
     /// should override to extract size from `RenderState`.
     #[inline]
-    fn size(&self, id: ElementId) -> Option<Size> {
+    fn size(&self, id: RenderId) -> Option<Size> {
         let _ = id;
         None
     }
@@ -162,7 +162,7 @@ pub trait RenderTreeAccess: TreeNav<ElementId> {
     /// Default implementation returns `None`. Concrete implementations
     /// should override to extract constraints from `RenderState`.
     #[inline]
-    fn constraints(&self, id: ElementId) -> Option<&dyn Any> {
+    fn constraints(&self, id: RenderId) -> Option<&dyn Any> {
         let _ = id;
         None
     }
@@ -175,7 +175,7 @@ pub trait RenderTreeAccess: TreeNav<ElementId> {
     ///
     /// * `id` - The element ID
     #[inline]
-    fn offset(&self, id: ElementId) -> Option<Offset> {
+    fn offset(&self, id: RenderId) -> Option<Offset> {
         let _ = id;
         None
     }
@@ -200,25 +200,25 @@ pub trait RenderTreeAccessExt: RenderTreeAccess {
     ///
     /// Reference to the `RenderObject` if it exists and has the correct type.
     #[inline]
-    fn render_object_typed<R: 'static>(&self, id: ElementId) -> Option<&R> {
+    fn render_object_typed<R: 'static>(&self, id: RenderId) -> Option<&R> {
         self.render_object(id)?.downcast_ref::<R>()
     }
 
     /// Gets the `RenderObject` mutably with a specific type.
     #[inline]
-    fn render_object_typed_mut<R: 'static>(&mut self, id: ElementId) -> Option<&mut R> {
+    fn render_object_typed_mut<R: 'static>(&mut self, id: RenderId) -> Option<&mut R> {
         self.render_object_mut(id)?.downcast_mut::<R>()
     }
 
     /// Gets the `RenderState` with a specific type.
     #[inline]
-    fn render_state_typed<S: 'static>(&self, id: ElementId) -> Option<&S> {
+    fn render_state_typed<S: 'static>(&self, id: RenderId) -> Option<&S> {
         self.render_state(id)?.downcast_ref::<S>()
     }
 
     /// Gets the `RenderState` mutably with a specific type.
     #[inline]
-    fn render_state_typed_mut<S: 'static>(&mut self, id: ElementId) -> Option<&mut S> {
+    fn render_state_typed_mut<S: 'static>(&mut self, id: RenderId) -> Option<&mut S> {
         self.render_state_mut(id)?.downcast_mut::<S>()
     }
 }
@@ -250,7 +250,7 @@ impl<T: RenderTreeAccess + ?Sized> RenderTreeAccessExt for T {}
 /// ```rust,ignore
 /// use flui_tree::RenderTreeExt;
 ///
-/// fn layout_children<T: RenderTreeExt>(tree: &T, parent: ElementId) {
+/// fn layout_children<T: RenderTreeExt>(tree: &T, parent: RenderId) {
 ///     // Zero-allocation iteration over render children
 ///     for child in tree.render_children_iter(parent) {
 ///         // Layout each child...
@@ -280,7 +280,7 @@ pub trait RenderTreeExt: RenderTreeAccess {
     /// }
     /// ```
     #[inline]
-    fn render_children_iter(&self, parent: ElementId) -> super::iter::RenderChildren<'_, Self>
+    fn render_children_iter(&self, parent: RenderId) -> super::iter::RenderChildren<'_, Self>
     where
         Self: Sized,
     {
@@ -291,7 +291,7 @@ pub trait RenderTreeExt: RenderTreeAccess {
     ///
     /// Useful for finding the render parent or propagating dirty flags up.
     #[inline]
-    fn render_ancestors_iter(&self, start: ElementId) -> super::iter::RenderAncestors<'_, Self>
+    fn render_ancestors_iter(&self, start: RenderId) -> super::iter::RenderAncestors<'_, Self>
     where
         Self: Sized,
     {
@@ -303,7 +303,7 @@ pub trait RenderTreeExt: RenderTreeAccess {
     /// Pre-order traversal that skips non-render elements but continues
     /// into their children.
     #[inline]
-    fn render_descendants_iter(&self, root: ElementId) -> super::iter::RenderDescendants<'_, Self>
+    fn render_descendants_iter(&self, root: RenderId) -> super::iter::RenderDescendants<'_, Self>
     where
         Self: Sized,
     {
@@ -319,7 +319,7 @@ pub trait RenderTreeExt: RenderTreeAccess {
     /// Returns the first render ancestor (excluding self), or None if
     /// there is no render parent.
     #[inline]
-    fn render_parent(&self, id: ElementId) -> Option<ElementId>
+    fn render_parent(&self, id: RenderId) -> Option<RenderId>
     where
         Self: Sized,
     {
@@ -332,7 +332,7 @@ pub trait RenderTreeExt: RenderTreeAccess {
     ///
     /// More efficient than collecting to Vec when you only need the count.
     #[inline]
-    fn render_child_count(&self, parent: ElementId) -> usize
+    fn render_child_count(&self, parent: RenderId) -> usize
     where
         Self: Sized,
     {
@@ -341,7 +341,7 @@ pub trait RenderTreeExt: RenderTreeAccess {
 
     /// Returns the first render child, if any.
     #[inline]
-    fn first_render_child(&self, parent: ElementId) -> Option<ElementId>
+    fn first_render_child(&self, parent: RenderId) -> Option<RenderId>
     where
         Self: Sized,
     {
@@ -352,7 +352,7 @@ pub trait RenderTreeExt: RenderTreeAccess {
     ///
     /// Useful for single-child render objects like Padding, Align, etc.
     #[inline]
-    fn single_render_child(&self, parent: ElementId) -> Option<ElementId>
+    fn single_render_child(&self, parent: RenderId) -> Option<RenderId>
     where
         Self: Sized,
     {
@@ -369,7 +369,7 @@ pub trait RenderTreeExt: RenderTreeAccess {
 
     /// Checks if an element has any render children.
     #[inline]
-    fn has_render_children(&self, parent: ElementId) -> bool
+    fn has_render_children(&self, parent: RenderId) -> bool
     where
         Self: Sized,
     {
@@ -380,7 +380,7 @@ pub trait RenderTreeExt: RenderTreeAccess {
     ///
     /// This counts only render ancestors, not all ancestors.
     #[inline]
-    fn render_depth(&self, id: ElementId) -> usize
+    fn render_depth(&self, id: RenderId) -> usize
     where
         Self: Sized,
     {
@@ -389,7 +389,7 @@ pub trait RenderTreeExt: RenderTreeAccess {
 
     /// Checks if `descendant` is a render descendant of `ancestor`.
     #[inline]
-    fn is_render_descendant(&self, descendant: ElementId, ancestor: ElementId) -> bool
+    fn is_render_descendant(&self, descendant: RenderId, ancestor: RenderId) -> bool
     where
         Self: Sized,
     {
@@ -402,7 +402,7 @@ pub trait RenderTreeExt: RenderTreeAccess {
     }
 
     /// Finds the lowest common render ancestor of two elements.
-    fn lowest_common_render_ancestor(&self, a: ElementId, b: ElementId) -> Option<ElementId>
+    fn lowest_common_render_ancestor(&self, a: RenderId, b: RenderId) -> Option<RenderId>
     where
         Self: Sized,
     {
@@ -423,7 +423,7 @@ pub trait RenderTreeExt: RenderTreeAccess {
     /// Use this when you need random access or multiple iterations.
     /// For single iteration, prefer `render_children_iter()`.
     #[inline]
-    fn collect_render_children(&self, parent: ElementId) -> Vec<ElementId>
+    fn collect_render_children(&self, parent: RenderId) -> Vec<RenderId>
     where
         Self: Sized,
     {
@@ -432,7 +432,7 @@ pub trait RenderTreeExt: RenderTreeAccess {
 
     /// Collects render descendants into a Vec.
     #[inline]
-    fn collect_render_descendants(&self, root: ElementId) -> Vec<ElementId>
+    fn collect_render_descendants(&self, root: RenderId) -> Vec<RenderId>
     where
         Self: Sized,
     {
@@ -443,10 +443,10 @@ pub trait RenderTreeExt: RenderTreeAccess {
     ///
     /// Returns early if the function returns `false`.
     #[inline]
-    fn for_each_render_child<F>(&self, parent: ElementId, mut f: F) -> bool
+    fn for_each_render_child<F>(&self, parent: RenderId, mut f: F) -> bool
     where
         Self: Sized,
-        F: FnMut(ElementId) -> bool,
+        F: FnMut(RenderId) -> bool,
     {
         for child in self.render_children_iter(parent) {
             if !f(child) {
@@ -458,20 +458,20 @@ pub trait RenderTreeExt: RenderTreeAccess {
 
     /// Maps render children with a function, collecting results.
     #[inline]
-    fn map_render_children<F, R>(&self, parent: ElementId, f: F) -> Vec<R>
+    fn map_render_children<F, R>(&self, parent: RenderId, f: F) -> Vec<R>
     where
         Self: Sized,
-        F: FnMut(ElementId) -> R,
+        F: FnMut(RenderId) -> R,
     {
         self.render_children_iter(parent).map(f).collect()
     }
 
     /// Filters render children that satisfy a predicate.
     #[inline]
-    fn filter_render_children<F>(&self, parent: ElementId, predicate: F) -> Vec<ElementId>
+    fn filter_render_children<F>(&self, parent: RenderId, predicate: F) -> Vec<RenderId>
     where
         Self: Sized,
-        F: FnMut(&ElementId) -> bool,
+        F: FnMut(&RenderId) -> bool,
     {
         self.render_children_iter(parent)
             .filter(predicate)
@@ -480,10 +480,10 @@ pub trait RenderTreeExt: RenderTreeAccess {
 
     /// Returns render children sorted by a key.
     #[inline]
-    fn sorted_render_children_by_key<F, K>(&self, parent: ElementId, f: F) -> Vec<ElementId>
+    fn sorted_render_children_by_key<F, K>(&self, parent: RenderId, f: F) -> Vec<RenderId>
     where
         Self: Sized,
-        F: FnMut(&ElementId) -> K,
+        F: FnMut(&RenderId) -> K,
         K: Ord,
     {
         let mut children: Vec<_> = self.render_children_iter(parent).collect();
@@ -537,7 +537,7 @@ impl<T: RenderTreeAccess + ?Sized> RenderTreeExt for T {}
 #[derive(Debug, Clone, Copy)]
 pub struct RenderChildAccessor<'a, T: RenderTreeAccess, A: Arity = Variable> {
     tree: &'a T,
-    parent: ElementId,
+    parent: RenderId,
     _arity: std::marker::PhantomData<A>,
 }
 
@@ -550,7 +550,7 @@ impl<'a, T: RenderTreeAccess> RenderChildAccessor<'a, T, Variable> {
     ///
     /// Use this for render objects with variable child count (Flex, Stack, etc.).
     #[inline]
-    pub const fn new(tree: &'a T, parent: ElementId) -> Self {
+    pub const fn new(tree: &'a T, parent: RenderId) -> Self {
         Self {
             tree,
             parent,
@@ -560,13 +560,13 @@ impl<'a, T: RenderTreeAccess> RenderChildAccessor<'a, T, Variable> {
 
     /// Alias for `new()` - creates a multi-child accessor.
     #[inline]
-    pub const fn multi(tree: &'a T, parent: ElementId) -> Self {
+    pub const fn multi(tree: &'a T, parent: RenderId) -> Self {
         Self::new(tree, parent)
     }
 
     /// Alias for `new()` - creates a variable-child accessor.
     #[inline]
-    pub const fn variable(tree: &'a T, parent: ElementId) -> Self {
+    pub const fn variable(tree: &'a T, parent: RenderId) -> Self {
         Self::new(tree, parent)
     }
 }
@@ -581,7 +581,7 @@ impl<'a, T: RenderTreeAccess> RenderChildAccessor<'a, T, Single> {
     ///
     /// Panics in debug mode if there are zero or multiple children.
     #[inline]
-    pub fn single(tree: &'a T, parent: ElementId) -> Self {
+    pub fn single(tree: &'a T, parent: RenderId) -> Self {
         #[cfg(debug_assertions)]
         {
             let count = super::iter::RenderChildren::new(tree, parent).count();
@@ -607,7 +607,7 @@ impl<'a, T: RenderTreeAccess> RenderChildAccessor<'a, T, Optional> {
     ///
     /// Panics in debug mode if there are multiple children.
     #[inline]
-    pub fn optional(tree: &'a T, parent: ElementId) -> Self {
+    pub fn optional(tree: &'a T, parent: RenderId) -> Self {
         #[cfg(debug_assertions)]
         {
             let count = super::iter::RenderChildren::new(tree, parent).count();
@@ -634,7 +634,7 @@ impl<'a, T: RenderTreeAccess> RenderChildAccessor<'a, T, Leaf> {
     ///
     /// Panics in debug mode if there are any children.
     #[inline]
-    pub fn leaf(tree: &'a T, parent: ElementId) -> Self {
+    pub fn leaf(tree: &'a T, parent: RenderId) -> Self {
         #[cfg(debug_assertions)]
         {
             let count = super::iter::RenderChildren::new(tree, parent).count();
@@ -661,7 +661,7 @@ impl<'a, T: RenderTreeAccess, A: Arity> RenderChildAccessor<'a, T, A> {
 
     /// Returns the parent element ID.
     #[inline]
-    pub const fn parent(&self) -> ElementId {
+    pub const fn parent(&self) -> RenderId {
         self.parent
     }
 
@@ -697,7 +697,7 @@ impl<T: RenderTreeAccess> RenderChildAccessor<'_, T, Single> {
     /// and there is no longer exactly one render child. This can happen if
     /// the tree was modified between accessor creation and this call.
     #[inline]
-    pub fn child(&self) -> ElementId {
+    pub fn child(&self) -> RenderId {
         let mut iter = super::iter::RenderChildren::new(self.tree, self.parent);
         match iter.next() {
             Some(child) => {
@@ -732,7 +732,7 @@ impl<T: RenderTreeAccess> RenderChildAccessor<'_, T, Optional> {
     ///
     /// This method is only available for `Optional` arity accessors.
     #[inline]
-    pub fn child(&self) -> Option<ElementId> {
+    pub fn child(&self) -> Option<RenderId> {
         super::iter::RenderChildren::new(self.tree, self.parent).next()
     }
 
@@ -768,19 +768,19 @@ impl<'a, T: RenderTreeAccess> RenderChildAccessor<'a, T, Variable> {
 
     /// Returns the first render child.
     #[inline]
-    pub fn first(&self) -> Option<ElementId> {
+    pub fn first(&self) -> Option<RenderId> {
         self.iter().next()
     }
 
     /// Returns the last render child.
     #[inline]
-    pub fn last(&self) -> Option<ElementId> {
+    pub fn last(&self) -> Option<RenderId> {
         self.iter().last()
     }
 
     /// Returns the nth render child.
     #[inline]
-    pub fn nth(&self, n: usize) -> Option<ElementId> {
+    pub fn nth(&self, n: usize) -> Option<RenderId> {
         self.iter().nth(n)
     }
 
@@ -788,25 +788,25 @@ impl<'a, T: RenderTreeAccess> RenderChildAccessor<'a, T, Variable> {
     ///
     /// Note: This allocates. For zero-allocation iteration, use [`iter()`](Self::iter).
     #[inline]
-    pub fn collect(&self) -> Vec<ElementId> {
+    pub fn collect(&self) -> Vec<RenderId> {
         self.iter().collect()
     }
 
     /// Checks if a specific element is a render child.
     #[inline]
-    pub fn contains(&self, id: ElementId) -> bool {
+    pub fn contains(&self, id: RenderId) -> bool {
         self.iter().any(|child| child == id)
     }
 
     /// Returns the index of a render child, if found.
     #[inline]
-    pub fn position(&self, id: ElementId) -> Option<usize> {
+    pub fn position(&self, id: RenderId) -> Option<usize> {
         self.iter().position(|child| child == id)
     }
 }
 
 impl<'a, T: RenderTreeAccess> IntoIterator for RenderChildAccessor<'a, T, Variable> {
-    type Item = ElementId;
+    type Item = RenderId;
     type IntoIter = super::iter::RenderChildren<'a, T>;
 
     #[inline]
@@ -816,7 +816,7 @@ impl<'a, T: RenderTreeAccess> IntoIterator for RenderChildAccessor<'a, T, Variab
 }
 
 impl<'a, T: RenderTreeAccess> IntoIterator for &RenderChildAccessor<'a, T, Variable> {
-    type Item = ElementId;
+    type Item = RenderId;
     type IntoIter = super::iter::RenderChildren<'a, T>;
 
     #[inline]
@@ -852,8 +852,8 @@ mod tests {
 
     // Test node
     struct TestNode {
-        parent: Option<ElementId>,
-        children: Vec<ElementId>,
+        parent: Option<RenderId>,
+        children: Vec<RenderId>,
         render_object: Option<MockRenderObject>,
         render_state: Option<MockRenderState>,
     }
@@ -890,8 +890,8 @@ mod tests {
             Self { nodes: Vec::new() }
         }
 
-        fn insert(&mut self, mut node: TestNode, parent: Option<ElementId>) -> ElementId {
-            let id = ElementId::new(self.nodes.len() + 1);
+        fn insert(&mut self, mut node: TestNode, parent: Option<RenderId>) -> RenderId {
+            let id = RenderId::new(self.nodes.len() + 1);
             node.parent = parent;
             self.nodes.push(Some(node));
 
@@ -904,19 +904,19 @@ mod tests {
             id
         }
 
-        fn insert_render(&mut self, parent: Option<ElementId>) -> ElementId {
+        fn insert_render(&mut self, parent: Option<RenderId>) -> RenderId {
             self.insert(TestNode::new_render(100.0, 50.0), parent)
         }
 
-        fn insert_component(&mut self, parent: Option<ElementId>) -> ElementId {
+        fn insert_component(&mut self, parent: Option<RenderId>) -> RenderId {
             self.insert(TestNode::new_component(), parent)
         }
     }
 
-    impl TreeRead<ElementId> for TestTree {
+    impl TreeRead<RenderId> for TestTree {
         type Node = TestNode;
 
-        fn get(&self, id: ElementId) -> Option<&TestNode> {
+        fn get(&self, id: RenderId) -> Option<&TestNode> {
             self.nodes.get(id.get() as usize - 1)?.as_ref()
         }
 
@@ -924,10 +924,10 @@ mod tests {
             self.nodes.iter().filter(|n| n.is_some()).count()
         }
 
-        fn node_ids(&self) -> impl Iterator<Item = ElementId> + '_ {
+        fn node_ids(&self) -> impl Iterator<Item = RenderId> + '_ {
             (0..self.nodes.len()).filter_map(|i| {
                 if self.nodes[i].is_some() {
-                    Some(ElementId::new(i + 1))
+                    Some(RenderId::new(i + 1))
                 } else {
                     None
                 }
@@ -935,27 +935,27 @@ mod tests {
         }
     }
 
-    impl TreeNav<ElementId> for TestTree {
-        fn parent(&self, id: ElementId) -> Option<ElementId> {
+    impl TreeNav<RenderId> for TestTree {
+        fn parent(&self, id: RenderId) -> Option<RenderId> {
             self.get(id)?.parent
         }
 
-        fn children(&self, id: ElementId) -> impl Iterator<Item = ElementId> + '_ {
+        fn children(&self, id: RenderId) -> impl Iterator<Item = RenderId> + '_ {
             self.get(id)
                 .map(|node| node.children.iter().copied())
                 .into_iter()
                 .flatten()
         }
 
-        fn ancestors(&self, start: ElementId) -> impl Iterator<Item = ElementId> + '_ {
+        fn ancestors(&self, start: RenderId) -> impl Iterator<Item = RenderId> + '_ {
             Ancestors::new(self, start)
         }
 
-        fn descendants(&self, root: ElementId) -> impl Iterator<Item = (ElementId, usize)> + '_ {
+        fn descendants(&self, root: RenderId) -> impl Iterator<Item = (RenderId, usize)> + '_ {
             DescendantsWithDepth::new(self, root)
         }
 
-        fn siblings(&self, id: ElementId) -> impl Iterator<Item = ElementId> + '_ {
+        fn siblings(&self, id: RenderId) -> impl Iterator<Item = RenderId> + '_ {
             let parent = self.parent(id);
             parent
                 .into_iter()
@@ -964,11 +964,11 @@ mod tests {
     }
 
     impl RenderTreeAccess for TestTree {
-        fn render_object(&self, id: ElementId) -> Option<&dyn Any> {
+        fn render_object(&self, id: RenderId) -> Option<&dyn Any> {
             self.get(id)?.render_object.as_ref().map(|r| r as &dyn Any)
         }
 
-        fn render_object_mut(&mut self, id: ElementId) -> Option<&mut dyn Any> {
+        fn render_object_mut(&mut self, id: RenderId) -> Option<&mut dyn Any> {
             self.nodes
                 .get_mut(id.get() as usize - 1)?
                 .as_mut()?
@@ -977,11 +977,11 @@ mod tests {
                 .map(|r| r as &mut dyn Any)
         }
 
-        fn render_state(&self, id: ElementId) -> Option<&dyn Any> {
+        fn render_state(&self, id: RenderId) -> Option<&dyn Any> {
             self.get(id)?.render_state.as_ref().map(|s| s as &dyn Any)
         }
 
-        fn render_state_mut(&mut self, id: ElementId) -> Option<&mut dyn Any> {
+        fn render_state_mut(&mut self, id: RenderId) -> Option<&mut dyn Any> {
             self.nodes
                 .get_mut(id.get() as usize - 1)?
                 .as_mut()?
@@ -990,7 +990,7 @@ mod tests {
                 .map(|s| s as &mut dyn Any)
         }
 
-        fn size(&self, id: ElementId) -> Option<Size> {
+        fn size(&self, id: RenderId) -> Option<Size> {
             self.get(id)?
                 .render_state
                 .as_ref()

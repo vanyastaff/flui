@@ -540,7 +540,7 @@ impl ParentData for () {}
 /// ## Creating BoxParentData
 ///
 /// ```rust
-/// use flui_rendering::core::BoxParentData;
+/// use flui_rendering::core::{BoxParentData, ParentDataWithOffset};
 /// use flui_types::Offset;
 ///
 /// // At origin
@@ -598,7 +598,7 @@ impl BoxParentData {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_rendering::core::BoxParentData;
+    /// use flui_rendering::core::{BoxParentData, ParentDataWithOffset};
     /// use flui_types::Offset;
     ///
     /// let data = BoxParentData::new();
@@ -615,7 +615,7 @@ impl BoxParentData {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_rendering::core::BoxParentData;
+    /// use flui_rendering::core::{BoxParentData, ParentDataWithOffset};
     /// use flui_types::Offset;
     ///
     /// let data = BoxParentData::with_offset(Offset::new(10.0, 20.0));
@@ -630,7 +630,7 @@ impl BoxParentData {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_rendering::core::BoxParentData;
+    /// use flui_rendering::core::{BoxParentData, ParentDataWithOffset};
     /// use flui_types::Offset;
     ///
     /// let data = BoxParentData::with_xy(15.0, 25.0);
@@ -647,7 +647,7 @@ impl BoxParentData {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_rendering::core::BoxParentData;
+    /// use flui_rendering::core::{BoxParentData, ParentDataWithOffset};
     /// use flui_types::Offset;
     ///
     /// let mut data = BoxParentData::new();
@@ -663,7 +663,7 @@ impl BoxParentData {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_rendering::core::BoxParentData;
+    /// use flui_rendering::core::{BoxParentData, ParentDataWithOffset};
     /// use flui_types::Offset;
     ///
     /// let mut data = BoxParentData::with_xy(10.0, 20.0);
@@ -679,7 +679,7 @@ impl BoxParentData {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_rendering::core::BoxParentData;
+    /// use flui_rendering::core::{BoxParentData, ParentDataWithOffset};
     /// use flui_types::Offset;
     ///
     /// let mut data = BoxParentData::with_xy(100.0, 200.0);

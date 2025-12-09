@@ -140,18 +140,6 @@ impl RenderNode {
         &mut *self.render_object
     }
 
-    /// Returns reference to the boxed RenderObject.
-    #[inline]
-    pub fn render_object_box(&self) -> &Box<dyn RenderObject> {
-        &self.render_object
-    }
-
-    /// Returns mutable reference to the boxed RenderObject.
-    #[inline]
-    pub fn render_object_box_mut(&mut self) -> &mut Box<dyn RenderObject> {
-        &mut self.render_object
-    }
-
     // ========== Metadata ==========
 
     /// Gets the current lifecycle state.
@@ -481,36 +469,16 @@ impl TreeNav<RenderId> for RenderTree {
 mod tests {
     use super::*;
     use crate::core::RenderObject;
-    use flui_foundation::ElementId;
-    use flui_types::{BoxConstraints, Offset};
 
-    // Simple test RenderObject
+    // Simple test RenderObject (minimal - no layout/paint methods needed)
     #[derive(Debug)]
     struct TestRenderObject {
         name: String,
     }
 
     impl RenderObject for TestRenderObject {
-        fn perform_layout(
-            &mut self,
-            _id: ElementId,
-            constraints: BoxConstraints,
-            _layout_child: &mut dyn FnMut(
-                ElementId,
-                BoxConstraints,
-            ) -> Result<Size, crate::error::RenderError>,
-        ) -> Result<Size, crate::error::RenderError> {
-            Ok(constraints.biggest())
-        }
-
-        fn paint(
-            &self,
-            _id: ElementId,
-            _offset: Offset,
-            _size: Size,
-            _canvas: &mut flui_painting::Canvas,
-            _paint_child: &mut dyn FnMut(ElementId, Offset, &mut flui_painting::Canvas),
-        ) {
+        fn debug_name(&self) -> &'static str {
+            "TestRenderObject"
         }
     }
 

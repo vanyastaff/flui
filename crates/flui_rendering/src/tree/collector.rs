@@ -14,7 +14,7 @@
 //! - **Performance optimized** - Uses const generics for stack allocation
 
 use super::access::{RenderTreeAccess, RenderTreeExt};
-use flui_foundation::ElementId;
+use flui_foundation::RenderId;
 use flui_tree::arity::{Arity, Leaf, Optional, Single, Variable};
 use smallvec::{IntoIter, SmallVec};
 use std::marker::PhantomData;
@@ -68,7 +68,7 @@ use std::marker::PhantomData;
 /// ```
 pub struct RenderChildrenCollector<const INLINE_SIZE: usize = 32> {
     /// Collected render children with inline storage optimization
-    children: SmallVec<[ElementId; INLINE_SIZE]>,
+    children: SmallVec<[RenderId; INLINE_SIZE]>,
 }
 
 impl<const INLINE_SIZE: usize> RenderChildrenCollector<INLINE_SIZE> {
@@ -83,7 +83,7 @@ impl<const INLINE_SIZE: usize> RenderChildrenCollector<INLINE_SIZE> {
     ///
     /// This method performs the collection immediately to release the
     /// tree borrow. Uses inline storage for up to `INLINE_SIZE` children.
-    pub fn new<T: RenderTreeAccess>(tree: &T, parent: ElementId) -> Self {
+    pub fn new<T: RenderTreeAccess>(tree: &T, parent: RenderId) -> Self {
         let children = tree.render_children_iter(parent).collect();
         Self { children }
     }
@@ -92,11 +92,7 @@ impl<const INLINE_SIZE: usize> RenderChildrenCollector<INLINE_SIZE> {
     ///
     /// Use this when you know the approximate number of children
     /// to optimize memory allocation.
-    pub fn with_capacity<T: RenderTreeAccess>(
-        tree: &T,
-        parent: ElementId,
-        capacity: usize,
-    ) -> Self {
+    pub fn with_capacity<T: RenderTreeAccess>(tree: &T, parent: RenderId, capacity: usize) -> Self {
         let mut children = SmallVec::with_capacity(capacity);
         children.extend(tree.render_children_iter(parent));
         Self { children }
@@ -116,19 +112,19 @@ impl<const INLINE_SIZE: usize> RenderChildrenCollector<INLINE_SIZE> {
 
     /// Returns a slice of the collected children.
     #[inline]
-    pub fn as_slice(&self) -> &[ElementId] {
+    pub fn as_slice(&self) -> &[RenderId] {
         &self.children
     }
 
     /// Consumes the collector and returns the collected children.
     #[inline]
-    pub fn into_vec(self) -> Vec<ElementId> {
+    pub fn into_vec(self) -> Vec<RenderId> {
         self.children.into_vec()
     }
 
     /// Consumes the collector and returns the SmallVec directly.
     #[inline]
-    pub fn into_inner(self) -> SmallVec<[ElementId; INLINE_SIZE]> {
+    pub fn into_inner(self) -> SmallVec<[RenderId; INLINE_SIZE]> {
         self.children
     }
 
@@ -282,9 +278,9 @@ impl<const INLINE_SIZE: usize> RenderChildrenCollector<INLINE_SIZE> {
     /// # Returns
     ///
     /// The first matching child ID, or `None` if no match found.
-    pub fn find_where<P>(&self, predicate: P) -> Option<ElementId>
+    pub fn find_where<P>(&self, predicate: P) -> Option<RenderId>
     where
-        P: for<'a> Fn(ElementId) -> bool,
+        P: for<'a> Fn(RenderId) -> bool,
     {
         self.children.iter().copied().find(|&id| predicate(id))
     }
@@ -300,7 +296,7 @@ impl<const INLINE_SIZE: usize> RenderChildrenCollector<INLINE_SIZE> {
     /// New collector containing only matching children.
     pub fn filter_where<P>(&self, predicate: P) -> Self
     where
-        P: for<'a> Fn(ElementId) -> bool,
+        P: for<'a> Fn(RenderId) -> bool,
     {
         let children = self
             .children
@@ -314,7 +310,7 @@ impl<const INLINE_SIZE: usize> RenderChildrenCollector<INLINE_SIZE> {
     /// Counts children matching an HRTB predicate.
     pub fn count_where<P>(&self, predicate: P) -> usize
     where
-        P: for<'a> Fn(ElementId) -> bool,
+        P: for<'a> Fn(RenderId) -> bool,
     {
         self.children
             .iter()
@@ -326,7 +322,7 @@ impl<const INLINE_SIZE: usize> RenderChildrenCollector<INLINE_SIZE> {
     /// Executes an HRTB closure for each child.
     pub fn for_each<F>(&self, mut f: F)
     where
-        F: for<'a> FnMut(ElementId),
+        F: for<'a> FnMut(RenderId),
     {
         for &id in &self.children {
             f(id);
@@ -366,7 +362,7 @@ impl<const INLINE_SIZE: usize> std::fmt::Debug for RenderChildrenCollector<INLIN
 /// * `A` - The arity type (`Single`, `Optional`, `Variable`, etc.)
 /// * `INLINE_SIZE` - Const generic for inline storage size
 pub struct CollectedChildren<A: Arity, const INLINE_SIZE: usize = 32> {
-    children: SmallVec<[ElementId; INLINE_SIZE]>,
+    children: SmallVec<[RenderId; INLINE_SIZE]>,
     _arity: PhantomData<A>,
 }
 
@@ -385,7 +381,7 @@ impl<A: Arity, const INLINE_SIZE: usize> CollectedChildren<A, INLINE_SIZE> {
 
     /// Returns a slice of the children.
     #[inline]
-    pub fn as_slice(&self) -> &[ElementId] {
+    pub fn as_slice(&self) -> &[RenderId] {
         &self.children
     }
 
@@ -405,13 +401,13 @@ impl<A: Arity, const INLINE_SIZE: usize> CollectedChildren<A, INLINE_SIZE> {
 
     /// Returns an iterator over the children.
     #[inline]
-    pub fn iter(&self) -> std::iter::Copied<std::slice::Iter<'_, ElementId>> {
+    pub fn iter(&self) -> std::iter::Copied<std::slice::Iter<'_, RenderId>> {
         self.children.iter().copied()
     }
 
     /// Consumes and returns the underlying collection.
     #[inline]
-    pub fn into_inner(self) -> SmallVec<[ElementId; INLINE_SIZE]> {
+    pub fn into_inner(self) -> SmallVec<[RenderId; INLINE_SIZE]> {
         self.children
     }
 }
@@ -432,7 +428,7 @@ impl<const INLINE_SIZE: usize> CollectedChildren<Single, INLINE_SIZE> {
     /// (not exactly 1). This can happen if the tree state changed or
     /// if `into_arity()` was used incorrectly.
     #[inline]
-    pub fn single(&self) -> ElementId {
+    pub fn single(&self) -> RenderId {
         #[cfg(debug_assertions)]
         {
             debug_assert_eq!(self.len(), 1, "Single arity must have exactly 1 child");
@@ -454,7 +450,7 @@ impl<const INLINE_SIZE: usize> CollectedChildren<Single, INLINE_SIZE> {
 
     /// Returns the single child (alternative name).
     #[inline]
-    pub fn child(&self) -> ElementId {
+    pub fn child(&self) -> RenderId {
         self.single()
     }
 }
@@ -468,13 +464,13 @@ impl<const INLINE_SIZE: usize> CollectedChildren<Optional, INLINE_SIZE> {
     ///
     /// This method is only available for `Optional` arity.
     #[inline]
-    pub fn get(&self) -> Option<ElementId> {
+    pub fn get(&self) -> Option<RenderId> {
         self.children.first().copied()
     }
 
     /// Returns the child if present (alternative name).
     #[inline]
-    pub fn child(&self) -> Option<ElementId> {
+    pub fn child(&self) -> Option<RenderId> {
         self.get()
     }
 
@@ -498,37 +494,37 @@ impl<const INLINE_SIZE: usize> CollectedChildren<Optional, INLINE_SIZE> {
 impl<const INLINE_SIZE: usize> CollectedChildren<Variable, INLINE_SIZE> {
     /// Returns the first child.
     #[inline]
-    pub fn first(&self) -> Option<ElementId> {
+    pub fn first(&self) -> Option<RenderId> {
         self.children.first().copied()
     }
 
     /// Returns the last child.
     #[inline]
-    pub fn last(&self) -> Option<ElementId> {
+    pub fn last(&self) -> Option<RenderId> {
         self.children.last().copied()
     }
 
     /// Returns the nth child.
     #[inline]
-    pub fn nth(&self, n: usize) -> Option<ElementId> {
+    pub fn nth(&self, n: usize) -> Option<RenderId> {
         self.children.get(n).copied()
     }
 
     /// Checks if a specific child is present.
     #[inline]
-    pub fn contains(&self, id: ElementId) -> bool {
+    pub fn contains(&self, id: RenderId) -> bool {
         self.children.contains(&id)
     }
 
     /// Returns the position of a child.
     #[inline]
-    pub fn position(&self, id: ElementId) -> Option<usize> {
+    pub fn position(&self, id: RenderId) -> Option<usize> {
         self.children.iter().position(|&child| child == id)
     }
 
     /// Returns all children as a Vec.
     #[inline]
-    pub fn collect(&self) -> Vec<ElementId> {
+    pub fn collect(&self) -> Vec<RenderId> {
         self.children.to_vec()
     }
 }
@@ -569,8 +565,8 @@ impl<const INLINE_SIZE: usize> CollectedChildren<Leaf, INLINE_SIZE> {
 // ============================================================================
 
 impl<A: Arity, const INLINE_SIZE: usize> IntoIterator for CollectedChildren<A, INLINE_SIZE> {
-    type Item = ElementId;
-    type IntoIter = IntoIter<[ElementId; INLINE_SIZE]>;
+    type Item = RenderId;
+    type IntoIter = IntoIter<[RenderId; INLINE_SIZE]>;
 
     #[inline]
     fn into_iter(self) -> Self::IntoIter {
@@ -581,8 +577,8 @@ impl<A: Arity, const INLINE_SIZE: usize> IntoIterator for CollectedChildren<A, I
 impl<'a, A: Arity, const INLINE_SIZE: usize> IntoIterator
     for &'a CollectedChildren<A, INLINE_SIZE>
 {
-    type Item = ElementId;
-    type IntoIter = std::iter::Copied<std::slice::Iter<'a, ElementId>>;
+    type Item = RenderId;
+    type IntoIter = std::iter::Copied<std::slice::Iter<'a, RenderId>>;
 
     #[inline]
     fn into_iter(self) -> Self::IntoIter {
@@ -637,8 +633,8 @@ mod tests {
 
     // Test tree implementation
     struct TestNode {
-        parent: Option<ElementId>,
-        children: Vec<ElementId>,
+        parent: Option<RenderId>,
+        children: Vec<RenderId>,
         is_render: bool,
     }
 
@@ -651,8 +647,8 @@ mod tests {
             Self { nodes: Vec::new() }
         }
 
-        fn insert(&mut self, is_render: bool, parent: Option<ElementId>) -> ElementId {
-            let id = ElementId::new(self.nodes.len() + 1);
+        fn insert(&mut self, is_render: bool, parent: Option<RenderId>) -> RenderId {
+            let id = RenderId::new(self.nodes.len() + 1);
             let mut node = TestNode {
                 parent,
                 children: Vec::new(),
@@ -671,10 +667,10 @@ mod tests {
         }
     }
 
-    impl TreeRead<ElementId> for TestTree {
+    impl TreeRead<RenderId> for TestTree {
         type Node = TestNode;
 
-        fn get(&self, id: ElementId) -> Option<&TestNode> {
+        fn get(&self, id: RenderId) -> Option<&TestNode> {
             self.nodes.get(id.get() as usize - 1)?.as_ref()
         }
 
@@ -682,10 +678,10 @@ mod tests {
             self.nodes.iter().filter(|n| n.is_some()).count()
         }
 
-        fn node_ids(&self) -> impl Iterator<Item = ElementId> + '_ {
+        fn node_ids(&self) -> impl Iterator<Item = RenderId> + '_ {
             (0..self.nodes.len()).filter_map(|i| {
                 if self.nodes[i].is_some() {
-                    Some(ElementId::new(i + 1))
+                    Some(RenderId::new(i + 1))
                 } else {
                     None
                 }
@@ -693,27 +689,27 @@ mod tests {
         }
     }
 
-    impl TreeNav<ElementId> for TestTree {
-        fn parent(&self, id: ElementId) -> Option<ElementId> {
+    impl TreeNav<RenderId> for TestTree {
+        fn parent(&self, id: RenderId) -> Option<RenderId> {
             self.get(id)?.parent
         }
 
-        fn children(&self, id: ElementId) -> impl Iterator<Item = ElementId> + '_ {
+        fn children(&self, id: RenderId) -> impl Iterator<Item = RenderId> + '_ {
             self.get(id)
                 .map(|node| node.children.iter().copied())
                 .into_iter()
                 .flatten()
         }
 
-        fn ancestors(&self, start: ElementId) -> impl Iterator<Item = ElementId> + '_ {
+        fn ancestors(&self, start: RenderId) -> impl Iterator<Item = RenderId> + '_ {
             Ancestors::new(self, start)
         }
 
-        fn descendants(&self, root: ElementId) -> impl Iterator<Item = (ElementId, usize)> + '_ {
+        fn descendants(&self, root: RenderId) -> impl Iterator<Item = (RenderId, usize)> + '_ {
             DescendantsWithDepth::new(self, root)
         }
 
-        fn siblings(&self, id: ElementId) -> impl Iterator<Item = ElementId> + '_ {
+        fn siblings(&self, id: RenderId) -> impl Iterator<Item = RenderId> + '_ {
             let parent = self.parent(id);
             parent
                 .into_iter()
@@ -722,7 +718,7 @@ mod tests {
     }
 
     impl RenderTreeAccess for TestTree {
-        fn render_object(&self, id: ElementId) -> Option<&dyn Any> {
+        fn render_object(&self, id: RenderId) -> Option<&dyn Any> {
             if self.get(id)?.is_render {
                 Some(&() as &dyn Any)
             } else {
@@ -730,15 +726,15 @@ mod tests {
             }
         }
 
-        fn render_object_mut(&mut self, _id: ElementId) -> Option<&mut dyn Any> {
+        fn render_object_mut(&mut self, _id: RenderId) -> Option<&mut dyn Any> {
             None
         }
 
-        fn render_state(&self, _id: ElementId) -> Option<&dyn Any> {
+        fn render_state(&self, _id: RenderId) -> Option<&dyn Any> {
             None
         }
 
-        fn render_state_mut(&mut self, _id: ElementId) -> Option<&mut dyn Any> {
+        fn render_state_mut(&mut self, _id: RenderId) -> Option<&mut dyn Any> {
             None
         }
     }

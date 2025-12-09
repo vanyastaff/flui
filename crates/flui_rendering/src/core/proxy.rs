@@ -250,7 +250,7 @@ pub trait RenderProxyBox: RenderObject + fmt::Debug + Send + Sync {
     /// ```
     fn proxy_paint(&self, ctx: &mut BoxPaintContext<'_, Single>) {
         // Paint child at origin
-        let _ = ctx.paint_single_child(Offset::ZERO);
+        ctx.paint_single_child(Offset::ZERO);
     }
 
     // ============================================================================
@@ -498,7 +498,7 @@ pub trait RenderProxySliver: RenderObject + fmt::Debug + Send + Sync {
     ///
     /// Default: paints child at offset (0, 0).
     fn proxy_paint(&self, ctx: &mut SliverPaintContext<'_, Single>) {
-        let _ = ctx.paint_single_child(Offset::ZERO);
+        ctx.paint_single_child(Offset::ZERO);
     }
 
     /// Performs hit testing by forwarding to the child.

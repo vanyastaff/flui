@@ -29,7 +29,7 @@
 //!
 //! ```rust,ignore
 //! // Type-erased render operations
-//! fn perform_layout_pass(tree: &mut dyn LayoutTree, root: ElementId) {
+//! fn perform_layout_pass(tree: &mut dyn LayoutTree, root: RenderId) {
 //!     if tree.needs_layout(root) {
 //!         let size = tree.perform_layout(root, BoxConstraints::tight(Size::new(800.0, 600.0)))?;
 //!         println!("Root size: {:?}", size);
@@ -37,7 +37,7 @@
 //! }
 //!
 //! // Combined operations with full render tree
-//! fn render_frame(tree: &mut dyn FullRenderTree, root: ElementId) -> Result<Canvas, RenderError> {
+//! fn render_frame(tree: &mut dyn FullRenderTree, root: RenderId) -> Result<Canvas, RenderError> {
 //!     // Layout phase
 //!     tree.perform_layout(root, constraints)?;
 //!
@@ -50,7 +50,7 @@
 
 use std::any::Any;
 
-use flui_foundation::ElementId;
+use flui_foundation::RenderId;
 use flui_interaction::HitTestResult;
 use flui_painting::Canvas;
 use flui_types::{Offset, Size, SliverConstraints, SliverGeometry};
@@ -98,7 +98,7 @@ pub trait LayoutTree {
     /// * `RenderError::UnsupportedProtocol` - Render object doesn't support box protocol
     fn perform_layout(
         &mut self,
-        id: ElementId,
+        id: RenderId,
         constraints: BoxConstraints,
     ) -> Result<Size, RenderError>;
 
@@ -120,7 +120,7 @@ pub trait LayoutTree {
     /// * `RenderError::UnsupportedProtocol` - Render object doesn't support sliver protocol
     fn perform_sliver_layout(
         &mut self,
-        id: ElementId,
+        id: RenderId,
         constraints: SliverConstraints,
     ) -> Result<SliverGeometry, RenderError>;
 
@@ -134,7 +134,7 @@ pub trait LayoutTree {
     /// # Notes
     ///
     /// This method should not fail - if the element doesn't exist, it's a no-op.
-    fn set_offset(&mut self, id: ElementId, offset: Offset);
+    fn set_offset(&mut self, id: RenderId, offset: Offset);
 
     /// Gets the offset of an element.
     ///
@@ -145,7 +145,7 @@ pub trait LayoutTree {
     /// # Returns
     ///
     /// The offset if the element exists and has been positioned, `None` otherwise.
-    fn get_offset(&self, id: ElementId) -> Option<Offset>;
+    fn get_offset(&self, id: RenderId) -> Option<Offset>;
 
     /// Marks an element as needing layout.
     ///
@@ -155,7 +155,7 @@ pub trait LayoutTree {
     /// # Arguments
     ///
     /// * `id` - The element to mark dirty
-    fn mark_needs_layout(&mut self, id: ElementId);
+    fn mark_needs_layout(&mut self, id: RenderId);
 
     /// Checks if an element needs layout.
     ///
@@ -166,7 +166,7 @@ pub trait LayoutTree {
     /// # Returns
     ///
     /// `true` if the element needs layout, `false` otherwise.
-    fn needs_layout(&self, id: ElementId) -> bool;
+    fn needs_layout(&self, id: RenderId) -> bool;
 
     /// Gets a render object for type-erased access.
     ///
@@ -181,7 +181,7 @@ pub trait LayoutTree {
     ///
     /// Reference to the render object as `dyn Any`, or `None` if the element
     /// doesn't exist or is not a render element.
-    fn render_object(&self, id: ElementId) -> Option<&dyn Any>;
+    fn render_object(&self, id: RenderId) -> Option<&dyn Any>;
 
     /// Gets a mutable render object for type-erased access.
     ///
@@ -193,7 +193,7 @@ pub trait LayoutTree {
     ///
     /// Mutable reference to the render object as `dyn Any`, or `None` if the
     /// element doesn't exist or is not a render element.
-    fn render_object_mut(&mut self, id: ElementId) -> Option<&mut dyn Any>;
+    fn render_object_mut(&mut self, id: RenderId) -> Option<&mut dyn Any>;
 
     /// Sets up ParentData for a child element.
     ///
@@ -220,7 +220,7 @@ pub trait LayoutTree {
     /// - Called automatically when adding children to a parent
     /// - Parent's `create_parent_data()` determines the ParentData type
     /// - Child's existing ParentData (if any) is replaced
-    fn setup_child_parent_data(&mut self, parent_id: ElementId, child_id: ElementId);
+    fn setup_child_parent_data(&mut self, parent_id: RenderId, child_id: RenderId);
 }
 
 // ============================================================================
@@ -248,7 +248,7 @@ pub trait PaintTree {
     /// * `RenderError::ElementNotFound` - Element doesn't exist
     /// * `RenderError::NotARenderElement` - Element has no render object
     /// * `RenderError::PaintFailed` - Painting operation failed
-    fn perform_paint(&mut self, id: ElementId, offset: Offset) -> Result<Canvas, RenderError>;
+    fn perform_paint(&mut self, id: RenderId, offset: Offset) -> Result<Canvas, RenderError>;
 
     /// Marks an element as needing paint.
     ///
@@ -258,7 +258,7 @@ pub trait PaintTree {
     /// # Arguments
     ///
     /// * `id` - The element to mark as needing paint
-    fn mark_needs_paint(&mut self, id: ElementId);
+    fn mark_needs_paint(&mut self, id: RenderId);
 
     /// Checks if an element needs paint.
     ///
@@ -269,7 +269,7 @@ pub trait PaintTree {
     /// # Returns
     ///
     /// `true` if the element needs paint, `false` otherwise.
-    fn needs_paint(&self, id: ElementId) -> bool;
+    fn needs_paint(&self, id: RenderId) -> bool;
 
     /// Gets a render object for type-erased access.
     ///
@@ -281,7 +281,7 @@ pub trait PaintTree {
     ///
     /// Reference to the render object as `dyn Any`, or `None` if the element
     /// doesn't exist or is not a render element.
-    fn render_object(&self, id: ElementId) -> Option<&dyn Any>;
+    fn render_object(&self, id: RenderId) -> Option<&dyn Any>;
 
     /// Gets a mutable render object for type-erased access.
     ///
@@ -293,7 +293,7 @@ pub trait PaintTree {
     ///
     /// Mutable reference to the render object as `dyn Any`, or `None` if the
     /// element doesn't exist or is not a render element.
-    fn render_object_mut(&mut self, id: ElementId) -> Option<&mut dyn Any>;
+    fn render_object_mut(&mut self, id: RenderId) -> Option<&mut dyn Any>;
 
     /// Gets the offset of an element (position relative to parent).
     ///
@@ -306,7 +306,7 @@ pub trait PaintTree {
     /// # Returns
     ///
     /// The offset if the element exists and has been positioned, `None` otherwise.
-    fn get_offset(&self, id: ElementId) -> Option<Offset>;
+    fn get_offset(&self, id: RenderId) -> Option<Offset>;
 }
 
 // ============================================================================
@@ -333,7 +333,7 @@ pub trait HitTestTree {
     /// # Returns
     ///
     /// `true` if any element was hit, `false` otherwise.
-    fn hit_test(&self, id: ElementId, position: Offset, result: &mut HitTestResult) -> bool;
+    fn hit_test(&self, id: RenderId, position: Offset, result: &mut HitTestResult) -> bool;
 
     /// Gets a render object for type-erased access.
     ///
@@ -345,17 +345,17 @@ pub trait HitTestTree {
     ///
     /// Reference to the render object as `dyn Any`, or `None` if the element
     /// doesn't exist or is not a render element.
-    fn render_object(&self, id: ElementId) -> Option<&dyn Any>;
+    fn render_object(&self, id: RenderId) -> Option<&dyn Any>;
 
     /// Returns an iterator over child element IDs.
     ///
     /// Used by default hit_test_children implementation to iterate over children.
-    fn children(&self, id: ElementId) -> Box<dyn Iterator<Item = ElementId> + '_>;
+    fn children(&self, id: RenderId) -> Box<dyn Iterator<Item = RenderId> + '_>;
 
     /// Gets the offset of an element relative to its parent.
     ///
     /// Used by hit testing to transform positions to child coordinates.
-    fn get_offset(&self, id: ElementId) -> Option<Offset>;
+    fn get_offset(&self, id: RenderId) -> Option<Offset>;
 }
 
 // ============================================================================
@@ -371,7 +371,7 @@ pub trait HitTestTree {
 /// # Usage
 ///
 /// ```rust,ignore
-/// fn render_element(tree: &mut dyn FullRenderTree, id: ElementId) -> Result<Canvas, RenderError> {
+/// fn render_element(tree: &mut dyn FullRenderTree, id: RenderId) -> Result<Canvas, RenderError> {
 ///     // Layout
 ///     let size = tree.perform_layout(id, constraints)?;
 ///
@@ -397,7 +397,7 @@ pub trait FullRenderTree: LayoutTree + PaintTree + HitTestTree {
     /// A tuple of (computed_size, canvas) or an error.
     fn render_element(
         &mut self,
-        id: ElementId,
+        id: RenderId,
         constraints: BoxConstraints,
         offset: Offset,
     ) -> Result<(Size, Canvas), RenderError> {
@@ -415,7 +415,7 @@ pub trait FullRenderTree: LayoutTree + PaintTree + HitTestTree {
     /// # Returns
     ///
     /// `true` if layout or paint is needed, `false` otherwise.
-    fn needs_update(&self, id: ElementId) -> bool {
+    fn needs_update(&self, id: RenderId) -> bool {
         self.needs_layout(id) || self.needs_paint(id)
     }
 }
@@ -430,7 +430,7 @@ impl<T> FullRenderTree for T where T: LayoutTree + PaintTree + HitTestTree {}
 impl LayoutTree for Box<dyn LayoutTree + Send + Sync> {
     fn perform_layout(
         &mut self,
-        id: ElementId,
+        id: RenderId,
         constraints: BoxConstraints,
     ) -> Result<Size, RenderError> {
         (**self).perform_layout(id, constraints)
@@ -438,81 +438,81 @@ impl LayoutTree for Box<dyn LayoutTree + Send + Sync> {
 
     fn perform_sliver_layout(
         &mut self,
-        id: ElementId,
+        id: RenderId,
         constraints: SliverConstraints,
     ) -> Result<SliverGeometry, RenderError> {
         (**self).perform_sliver_layout(id, constraints)
     }
 
-    fn set_offset(&mut self, id: ElementId, offset: Offset) {
+    fn set_offset(&mut self, id: RenderId, offset: Offset) {
         (**self).set_offset(id, offset)
     }
 
-    fn get_offset(&self, id: ElementId) -> Option<Offset> {
+    fn get_offset(&self, id: RenderId) -> Option<Offset> {
         (**self).get_offset(id)
     }
 
-    fn mark_needs_layout(&mut self, id: ElementId) {
+    fn mark_needs_layout(&mut self, id: RenderId) {
         (**self).mark_needs_layout(id)
     }
 
-    fn needs_layout(&self, id: ElementId) -> bool {
+    fn needs_layout(&self, id: RenderId) -> bool {
         (**self).needs_layout(id)
     }
 
-    fn render_object(&self, id: ElementId) -> Option<&dyn Any> {
+    fn render_object(&self, id: RenderId) -> Option<&dyn Any> {
         (**self).render_object(id)
     }
 
-    fn render_object_mut(&mut self, id: ElementId) -> Option<&mut dyn Any> {
+    fn render_object_mut(&mut self, id: RenderId) -> Option<&mut dyn Any> {
         (**self).render_object_mut(id)
     }
 
-    fn setup_child_parent_data(&mut self, parent_id: ElementId, child_id: ElementId) {
+    fn setup_child_parent_data(&mut self, parent_id: RenderId, child_id: RenderId) {
         (**self).setup_child_parent_data(parent_id, child_id)
     }
 }
 
 impl PaintTree for Box<dyn PaintTree + Send + Sync> {
-    fn perform_paint(&mut self, id: ElementId, offset: Offset) -> Result<Canvas, RenderError> {
+    fn perform_paint(&mut self, id: RenderId, offset: Offset) -> Result<Canvas, RenderError> {
         (**self).perform_paint(id, offset)
     }
 
-    fn mark_needs_paint(&mut self, id: ElementId) {
+    fn mark_needs_paint(&mut self, id: RenderId) {
         (**self).mark_needs_paint(id)
     }
 
-    fn needs_paint(&self, id: ElementId) -> bool {
+    fn needs_paint(&self, id: RenderId) -> bool {
         (**self).needs_paint(id)
     }
 
-    fn render_object(&self, id: ElementId) -> Option<&dyn Any> {
+    fn render_object(&self, id: RenderId) -> Option<&dyn Any> {
         (**self).render_object(id)
     }
 
-    fn render_object_mut(&mut self, id: ElementId) -> Option<&mut dyn Any> {
+    fn render_object_mut(&mut self, id: RenderId) -> Option<&mut dyn Any> {
         (**self).render_object_mut(id)
     }
 
-    fn get_offset(&self, id: ElementId) -> Option<Offset> {
+    fn get_offset(&self, id: RenderId) -> Option<Offset> {
         (**self).get_offset(id)
     }
 }
 
 impl HitTestTree for Box<dyn HitTestTree + Send + Sync> {
-    fn hit_test(&self, id: ElementId, position: Offset, result: &mut HitTestResult) -> bool {
+    fn hit_test(&self, id: RenderId, position: Offset, result: &mut HitTestResult) -> bool {
         (**self).hit_test(id, position, result)
     }
 
-    fn render_object(&self, id: ElementId) -> Option<&dyn Any> {
+    fn render_object(&self, id: RenderId) -> Option<&dyn Any> {
         (**self).render_object(id)
     }
 
-    fn children(&self, id: ElementId) -> Box<dyn Iterator<Item = ElementId> + '_> {
+    fn children(&self, id: RenderId) -> Box<dyn Iterator<Item = RenderId> + '_> {
         (**self).children(id)
     }
 
-    fn get_offset(&self, id: ElementId) -> Option<Offset> {
+    fn get_offset(&self, id: RenderId) -> Option<Offset> {
         (**self).get_offset(id)
     }
 }
@@ -553,9 +553,9 @@ pub trait LayoutTreeExt: LayoutTree {
     /// for better performance.
     fn layout_render_children(
         &mut self,
-        _parent: ElementId,
+        _parent: RenderId,
         _constraints: BoxConstraints,
-    ) -> Vec<(ElementId, Size)> {
+    ) -> Vec<(RenderId, Size)> {
         // Default implementation - override in concrete types for efficiency
         Vec::new()
     }
@@ -564,7 +564,7 @@ pub trait LayoutTreeExt: LayoutTree {
     ///
     /// Useful for layout algorithms that need to know the aggregate size
     /// of all children before positioning them.
-    fn total_children_size(&mut self, parent: ElementId, constraints: BoxConstraints) -> Size {
+    fn total_children_size(&mut self, parent: RenderId, constraints: BoxConstraints) -> Size {
         let children_sizes = self.layout_render_children(parent, constraints);
         children_sizes.iter().fold(Size::ZERO, |acc, (_, size)| {
             Size::new(acc.width + size.width, acc.height.max(size.height))
@@ -589,7 +589,7 @@ pub trait PaintTreeExt: PaintTree {
     /// A combined canvas containing all painted children.
     fn paint_render_children(
         &mut self,
-        parent: ElementId,
+        parent: RenderId,
         base_offset: Offset,
     ) -> Result<Canvas, RenderError> {
         // Default implementation - override in concrete types
@@ -612,7 +612,7 @@ pub trait HitTestTreeExt: HitTestTree {
     /// # Returns
     ///
     /// The first hit element ID, or `None` if no hit.
-    fn hit_test_first(&self, id: ElementId, position: Offset) -> Option<ElementId> {
+    fn hit_test_first(&self, id: RenderId, position: Offset) -> Option<RenderId> {
         let mut result = HitTestResult::new();
         if self.hit_test(id, position, &mut result) {
             result.entries().first().map(|entry| entry.element_id)
@@ -642,7 +642,7 @@ pub trait HitTestTreeExt: HitTestTree {
 /// The computed size of the root element.
 pub fn layout_subtree(
     tree: &mut dyn LayoutTree,
-    root: ElementId,
+    root: RenderId,
     constraints: BoxConstraints,
 ) -> Result<Size, RenderError> {
     // This is a simplified version - real implementation would traverse children
@@ -662,7 +662,7 @@ pub fn layout_subtree(
 /// A canvas containing the painted subtree.
 pub fn paint_subtree(
     tree: &mut dyn PaintTree,
-    root: ElementId,
+    root: RenderId,
     offset: Offset,
 ) -> Result<Canvas, RenderError> {
     // This is a simplified version - real implementation would traverse children
@@ -680,11 +680,7 @@ pub fn paint_subtree(
 /// # Returns
 ///
 /// Complete hit test results for the subtree.
-pub fn hit_test_subtree(
-    tree: &dyn HitTestTree,
-    root: ElementId,
-    position: Offset,
-) -> HitTestResult {
+pub fn hit_test_subtree(tree: &dyn HitTestTree, root: RenderId, position: Offset) -> HitTestResult {
     let mut result = HitTestResult::new();
     tree.hit_test(root, position, &mut result);
     result
@@ -705,7 +701,7 @@ pub fn hit_test_subtree(
 /// Vector of layout results in the same order as input.
 pub fn layout_batch(
     tree: &mut dyn LayoutTree,
-    elements: &[(ElementId, BoxConstraints)],
+    elements: &[(RenderId, BoxConstraints)],
 ) -> Vec<Result<Size, RenderError>> {
     tracing::trace!("Batch layout for {} elements", elements.len());
 
@@ -730,7 +726,7 @@ pub fn layout_batch(
 /// Vector of paint results in the same order as input.
 pub fn paint_batch(
     tree: &mut dyn PaintTree,
-    elements: &[(ElementId, Offset)],
+    elements: &[(RenderId, Offset)],
 ) -> Vec<Result<Canvas, RenderError>> {
     tracing::trace!("Batch paint for {} elements", elements.len());
 
@@ -748,7 +744,7 @@ pub fn paint_batch(
 #[derive(Debug, Clone)]
 pub struct RenderElementDebugInfo {
     /// Element ID
-    pub id: ElementId,
+    pub id: RenderId,
     /// Depth in the tree (0 = root)
     pub depth: usize,
     /// Whether the element needs layout
@@ -774,7 +770,7 @@ pub struct RenderElementDebugInfo {
 /// Debug information about the element.
 pub fn debug_element_info<T: LayoutTree + PaintTree>(
     tree: &T,
-    id: ElementId,
+    id: RenderId,
     depth: usize,
 ) -> RenderElementDebugInfo {
     RenderElementDebugInfo {
@@ -852,7 +848,7 @@ mod tests {
     impl LayoutTree for MockRenderTree {
         fn perform_layout(
             &mut self,
-            _id: ElementId,
+            _id: RenderId,
             constraints: BoxConstraints,
         ) -> Result<Size, RenderError> {
             Ok(constraints.biggest())
@@ -860,79 +856,75 @@ mod tests {
 
         fn perform_sliver_layout(
             &mut self,
-            _id: ElementId,
+            _id: RenderId,
             _constraints: SliverConstraints,
         ) -> Result<SliverGeometry, RenderError> {
             Ok(SliverGeometry::zero())
         }
 
-        fn set_offset(&mut self, _id: ElementId, _offset: Offset) {}
+        fn set_offset(&mut self, _id: RenderId, _offset: Offset) {}
 
-        fn get_offset(&self, _id: ElementId) -> Option<Offset> {
+        fn get_offset(&self, _id: RenderId) -> Option<Offset> {
             Some(Offset::ZERO)
         }
 
-        fn mark_needs_layout(&mut self, _id: ElementId) {}
+        fn mark_needs_layout(&mut self, _id: RenderId) {}
 
-        fn needs_layout(&self, _id: ElementId) -> bool {
+        fn needs_layout(&self, _id: RenderId) -> bool {
             false
         }
 
-        fn render_object(&self, _id: ElementId) -> Option<&dyn Any> {
+        fn render_object(&self, _id: RenderId) -> Option<&dyn Any> {
             None
         }
 
-        fn render_object_mut(&mut self, _id: ElementId) -> Option<&mut dyn Any> {
+        fn render_object_mut(&mut self, _id: RenderId) -> Option<&mut dyn Any> {
             None
         }
 
-        fn setup_child_parent_data(&mut self, _parent_id: ElementId, _child_id: ElementId) {
+        fn setup_child_parent_data(&mut self, _parent_id: RenderId, _child_id: RenderId) {
             // Mock: no-op
         }
     }
 
     impl PaintTree for MockRenderTree {
-        fn perform_paint(
-            &mut self,
-            _id: ElementId,
-            _offset: Offset,
-        ) -> Result<Canvas, RenderError> {
+        fn perform_paint(&mut self, _id: RenderId, _offset: Offset) -> Result<Canvas, RenderError> {
             Ok(Canvas::new())
         }
 
-        fn mark_needs_paint(&mut self, _id: ElementId) {}
+        fn mark_needs_paint(&mut self, _id: RenderId) {}
 
-        fn needs_paint(&self, _id: ElementId) -> bool {
+        fn needs_paint(&self, _id: RenderId) -> bool {
             false
         }
 
-        fn render_object(&self, _id: ElementId) -> Option<&dyn Any> {
+        fn render_object(&self, _id: RenderId) -> Option<&dyn Any> {
             None
         }
 
-        fn render_object_mut(&mut self, _id: ElementId) -> Option<&mut dyn Any> {
+        fn render_object_mut(&mut self, _id: RenderId) -> Option<&mut dyn Any> {
             None
         }
 
-        fn get_offset(&self, _id: ElementId) -> Option<Offset> {
+        fn get_offset(&self, _id: RenderId) -> Option<Offset> {
             None
         }
     }
 
     impl HitTestTree for MockRenderTree {
-        fn hit_test(&self, _id: ElementId, _position: Offset, _result: &mut HitTestResult) -> bool {
+        fn hit_test(&self, _id: RenderId, _position: Offset, _result: &mut HitTestResult) -> bool {
             false
         }
 
-        fn render_object(&self, _id: ElementId) -> Option<&dyn Any> {
+        fn render_object(&self, _id: RenderId) -> Option<&dyn Any> {
             None
         }
 
-        fn children(&self, _id: ElementId) -> Box<dyn Iterator<Item = ElementId> + '_> {
+        fn children(&self, _id: RenderId) -> Box<dyn Iterator<Item = RenderId> + '_> {
             Box::new(std::iter::empty())
         }
 
-        fn get_offset(&self, _id: ElementId) -> Option<Offset> {
+        fn get_offset(&self, _id: RenderId) -> Option<Offset> {
             None
         }
     }
@@ -940,7 +932,7 @@ mod tests {
     #[test]
     fn test_dyn_compatibility() {
         let mut tree = MockRenderTree;
-        let id = ElementId::new(1);
+        let id = RenderId::new(1);
 
         // Test as trait objects
         let layout_tree: &mut dyn LayoutTree = &mut tree;
@@ -960,7 +952,7 @@ mod tests {
     #[test]
     fn test_full_render_tree() {
         let mut tree = MockRenderTree;
-        let id = ElementId::new(1);
+        let id = RenderId::new(1);
 
         // Test combined operations
         let full_tree: &mut dyn FullRenderTree = &mut tree;
@@ -974,7 +966,7 @@ mod tests {
     #[test]
     fn test_utility_functions() {
         let mut tree = MockRenderTree;
-        let id = ElementId::new(1);
+        let id = RenderId::new(1);
         let constraints = BoxConstraints::tight(Size::new(100.0, 100.0));
 
         // Test layout utility

@@ -517,12 +517,11 @@ impl SemanticsOwner {
     {
         let nodes = self.nodes.read();
         if let Some(root_id) = *self.root.read() {
-            self.visit_node_recursive(&nodes, root_id, &mut f);
+            Self::visit_node_recursive(&nodes, root_id, &mut f);
         }
     }
 
     fn visit_node_recursive<F>(
-        &self,
         nodes: &HashMap<SemanticsNodeId, SemanticsNode>,
         id: SemanticsNodeId,
         f: &mut F,
@@ -532,7 +531,7 @@ impl SemanticsOwner {
         if let Some(node) = nodes.get(&id) {
             f(node);
             for &child_id in &node.children {
-                self.visit_node_recursive(nodes, child_id, f);
+                Self::visit_node_recursive(nodes, child_id, f);
             }
         }
     }

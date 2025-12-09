@@ -52,7 +52,7 @@ flui_types = "0.1"
 
 Here's a minimal example creating a custom RenderObject:
 
-```rust
+```rust,ignore
 use flui_rendering::core::{RenderBox, Leaf, LayoutContext, PaintContext, BoxProtocol};
 use flui_painting::Paint;
 use flui_types::{Size, Color, Rect};
@@ -107,7 +107,7 @@ impl RenderBox<Leaf> for RenderColoredBox {
 
 FLUI uses a proven three-tree architecture inspired by Flutter:
 
-```
+```text
 ┌──────────────────────────────────────────────────────┐
 │                  View Tree                           │
 │            (Immutable, Declarative)                  │
@@ -136,7 +136,7 @@ FLUI uses a proven three-tree architecture inspired by Flutter:
 
 Compile-time child count validation using Rust's type system:
 
-```rust
+```rust,ignore
 use flui_rendering::arity::{Leaf, Single, Optional, Variable};
 
 // Leaf - No children (9 objects: text, images, shapes)
@@ -165,7 +165,7 @@ Two complementary layout systems:
 #### Box Protocol
 Traditional CSS-like box model for most UI elements:
 
-```rust
+```rust,ignore
 use flui_types::BoxConstraints;
 
 // Parent passes down constraints
@@ -183,7 +183,7 @@ let size = render_object.layout(constraints);
 #### Sliver Protocol
 Specialized for infinite scrolling lists and grids:
 
-```rust
+```rust,ignore
 use flui_types::{SliverConstraints, SliverGeometry};
 
 // Scroll-aware constraints
@@ -212,7 +212,7 @@ Modern, fluent painting API with compile-time safety and excellent ergonomics.
 
 Use when painting children between save/restore:
 
-```rust
+```rust,ignore
 fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Single>)
 where
     T: crate::core::PaintTree,
@@ -240,7 +240,7 @@ where
 
 Use for self-contained drawing (no child painting):
 
-```rust
+```rust,ignore
 fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Leaf>)
 where
     T: crate::core::PaintTree,
@@ -258,7 +258,7 @@ where
 
 High-level APIs for common shapes:
 
-```rust
+```rust,ignore
 // Rounded rectangles
 ctx.canvas().draw_rounded_rect(rect, radius, &paint);
 
@@ -283,7 +283,7 @@ ctx.canvas().draw_rounded_rect_corners(
 
 Declarative conditional rendering:
 
-```rust
+```rust,ignore
 ctx.canvas()
     .when(self.show_border, |c| {
         c.rect(border_rect, &border_paint)
@@ -299,7 +299,7 @@ ctx.canvas()
 
 Optimize multiple shapes with batch operations:
 
-```rust
+```rust,ignore
 // Single GPU draw call for all rects
 ctx.canvas().draw_rects(&[rect1, rect2, rect3], &paint);
 
@@ -316,7 +316,7 @@ ctx.canvas().draw_lines(&line_segments, &paint);
 
 High-level layout helpers:
 
-```rust
+```rust,ignore
 // Grid pattern (chess board, calendar cells)
 ctx.canvas().draw_grid(8, 8, 50.0, 50.0, |c, col, row| {
     let color = if (col + row) % 2 == 0 { Color::WHITE } else { Color::BLACK };
@@ -356,7 +356,7 @@ Choose the right pattern for your use case:
 ### Layout Objects (36)
 
 **Container & Positioning:**
-```rust
+```rust,ignore
 RenderPadding::new(EdgeInsets::all(16.0))
 RenderAlign::new(Alignment::Center)
 RenderConstrainedBox::new(BoxConstraints::tight(Size::new(200.0, 100.0)))
@@ -365,14 +365,14 @@ RenderSizedBox::new(width, height)
 ```
 
 **Flex Layouts:**
-```rust
+```rust,ignore
 RenderFlex::new(Axis::Vertical)
     .main_axis_alignment(MainAxisAlignment::SpaceEvenly)
     .cross_axis_alignment(CrossAxisAlignment::Center)
 ```
 
 **Advanced Layouts:**
-```rust
+```rust,ignore
 RenderStack::new()                    // Overlapping layers
 RenderWrap::new(Axis::Horizontal)     // Flowing grid
 RenderTable::new(rows, columns)       // Table layout
@@ -383,7 +383,7 @@ RenderGrid::new(grid_delegate)        // CSS Grid-like
 ### Effects Objects (15)
 
 **Visual Effects:**
-```rust
+```rust,ignore
 RenderOpacity::new(0.5)                              // Transparency
 RenderTransform::new(transform)                      // 2D/3D transforms
 RenderPhysicalModel::new(shape, elevation, color)   // Material shadows
@@ -392,7 +392,7 @@ RenderShaderMask::new(shader, blend_mode)           // Gradient masks
 ```
 
 **Clipping:**
-```rust
+```rust,ignore
 RenderClipRect::new(clip_behavior)
 RenderClipRRect::new(border_radius)
 RenderClipOval::new(clip_behavior)
@@ -400,14 +400,14 @@ RenderClipPath::new(clipper)
 ```
 
 **Decoration:**
-```rust
+```rust,ignore
 RenderDecoratedBox::new(decoration)   // Backgrounds, borders, shadows
 RenderCustomPaint::new(painter)       // Custom painting
 ```
 
 ### Text Objects (2)
 
-```rust
+```rust,ignore
 // Rich text with styling
 RenderParagraph::new(text)
     .style(text_style)
@@ -421,7 +421,7 @@ RenderEditableLine::new(text, style)
 
 ### Media Objects (2)
 
-```rust
+```rust,ignore
 // Image rendering with BoxFit
 RenderImage::new(image_data)
     .fit(BoxFit::Cover)
@@ -434,7 +434,7 @@ RenderTexture::new(texture_id)
 
 ### Interaction Objects (4)
 
-```rust
+```rust,ignore
 // Mouse hover detection
 RenderMouseRegion::new()
     .on_enter(callback)
@@ -453,14 +453,14 @@ RenderIgnorePointer::new(ignoring)
 ### Sliver Objects (26)
 
 **Scrollable Layouts:**
-```rust
+```rust,ignore
 RenderSliverList::new()                // Infinite list
 RenderSliverGrid::new(grid_delegate)   // Infinite grid
 RenderSliverFixedExtentList::new(60.0) // Fixed-height items
 ```
 
 **Sticky Headers:**
-```rust
+```rust,ignore
 RenderSliverAppBar::new()
     .floating(true)
     .pinned(true)
@@ -470,7 +470,7 @@ RenderSliverPersistentHeader::new(min_extent, max_extent)
 ```
 
 **Scroll Effects:**
-```rust
+```rust,ignore
 RenderSliverOpacity::new(0.5)
 RenderSliverPadding::new(padding)
 RenderSliverFillViewport::new(viewport_fraction)
@@ -478,14 +478,14 @@ RenderSliverFillViewport::new(viewport_fraction)
 
 ### Viewport Objects (3)
 
-```rust
+```rust,ignore
 RenderViewport::new(offset, axis_direction)
 RenderShrinkWrappingViewport::new(offset, axis_direction)
 ```
 
 ### Special Objects (3)
 
-```rust
+```rust,ignore
 RenderFittedBox::new(BoxFit::Contain, alignment)  // Scale/fit child
 RenderRepaintBoundary::new()                      // Optimize repaints
 RenderMetadata::new(metadata)                     // Attach user data
@@ -497,7 +497,7 @@ RenderMetadata::new(metadata)                     // Attach user data
 
 ### Custom RenderObject with Intrinsic Sizing
 
-```rust
+```rust,ignore
 use flui_rendering::core::{RenderBox, Leaf, LayoutContext, PaintContext, BoxProtocol};
 use flui_types::{Size, BoxConstraints};
 
@@ -564,7 +564,7 @@ impl RenderBox<Leaf> for RenderProgressBar {
 
 ### Container with Multiple Effects
 
-```rust
+```rust,ignore
 use flui_rendering::core::{RenderBox, Single, LayoutContext, PaintContext, BoxProtocol};
 
 pub struct RenderCard {
@@ -631,7 +631,7 @@ impl RenderBox<Single> for RenderCard {
 
 ### Custom Sliver Implementation
 
-```rust
+```rust,ignore
 use flui_rendering::core::{SliverRender, Variable, LayoutContext, PaintContext, SliverProtocol};
 use flui_types::{SliverConstraints, SliverGeometry};
 
@@ -714,7 +714,7 @@ Measured on Apple M1 Pro (8P+2E cores, 16GB RAM):
 ### Optimization Tips
 
 **1. Use Batch Drawing:**
-```rust
+```rust,ignore
 // ❌ Slow - 100 GPU calls
 for rect in &rects {
     canvas.draw_rect(*rect, &paint);
@@ -725,7 +725,7 @@ canvas.draw_rects(&rects, &paint);
 ```
 
 **2. Cache Intrinsic Sizes:**
-```rust
+```rust,ignore
 impl RenderBox<Leaf> for MyRender {
     fn layout<T>(&mut self, ctx: LayoutContext<'_, T, Leaf, BoxProtocol>) -> Size {
         // ✅ Calculate once, cache result
@@ -739,14 +739,14 @@ impl RenderBox<Leaf> for MyRender {
 ```
 
 **3. Use Repaint Boundaries:**
-```rust
+```rust,ignore
 // Isolate expensive animations
 RenderRepaintBoundary::new()
     .child(RenderComplexAnimation::new())
 ```
 
 **4. Avoid Unnecessary Clipping:**
-```rust
+```rust,ignore
 // ✅ Only clip when needed
 if self.clip_behavior != ClipBehavior::None {
     canvas.saved().clipped_rect(bounds);
@@ -756,7 +756,7 @@ if self.clip_behavior != ClipBehavior::None {
 ```
 
 **5. Prefer Convenience Methods:**
-```rust
+```rust,ignore
 // ❌ Slower
 let rrect = RRect::from_rect_circular(rect, 8.0);
 canvas.draw_rrect(rrect, &paint);
@@ -769,7 +769,7 @@ canvas.draw_rounded_rect(rect, 8.0, &paint);
 
 ### Unit Tests
 
-```rust
+```rust,ignore
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -800,7 +800,7 @@ mod tests {
 
 ### Integration Tests
 
-```rust
+```rust,ignore
 #[test]
 fn test_flex_layout_vertical() {
     let mut flex = RenderFlex::new(Axis::Vertical);
@@ -875,7 +875,7 @@ cargo doc -p flui_rendering --open
 6. **Update catalog**: Add entry to RENDER_OBJECTS_CATALOG.md
 
 **Template:**
-```rust
+```rust,ignore
 pub struct RenderMyObject {
     // Configuration
     pub config: MyConfig,
@@ -901,7 +901,7 @@ impl RenderBox<Single> for RenderMyObject {
 
 **Arity System Changes:**
 
-```rust
+```rust,ignore
 // Before (v0.0.x)
 impl RenderObject for MyRender {
     fn child_count(&self) -> usize { 1 }
@@ -915,7 +915,7 @@ impl RenderBox<Single> for MyRender {
 
 **Canvas API Modernization:**
 
-```rust
+```rust,ignore
 // Before (v0.0.x)
 canvas.save();
 canvas.translate(x, y);
@@ -951,7 +951,7 @@ A: Yes, use `RenderSliverToBoxAdapter` to embed box layouts in slivers, or `Rend
 **Q: How do I debug rendering issues?**
 
 A: Enable debug visualization:
-```rust
+```rust,ignore
 #[cfg(debug_assertions)]
 {
     ctx.canvas()

@@ -34,7 +34,7 @@ pub use focus_scope::{
     TraversalDirection,
 };
 pub use hit_test::{
-    ElementId, EventPropagation, HitTestBehavior, HitTestEntry, HitTestResult, HitTestable,
-    PointerEventHandler, ScrollEventHandler, TransformGuard,
+    EventPropagation, HitTestBehavior, HitTestEntry, HitTestResult, HitTestable,
+    PointerEventHandler, RenderId, ScrollEventHandler, TransformGuard,
 };
 pub use pointer_router::{GlobalPointerHandler, PointerRouteHandler, PointerRouter};
