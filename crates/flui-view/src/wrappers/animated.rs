@@ -8,8 +8,9 @@ use std::sync::Arc;
 
 use flui_foundation::ListenerId;
 
+use crate::handle::ViewConfig;
 use crate::traits::{AnimatedView, Listenable};
-use crate::{BuildContext, IntoView, ViewMode, ViewObject};
+use crate::{BuildContext, IntoView, IntoViewConfig, ViewMode, ViewObject};
 
 /// Type alias for rebuild callback (wrapped in Arc for clonability)
 type RebuildCallback = Arc<dyn Fn() + Send + Sync>;
@@ -87,6 +88,14 @@ where
     /// Check if currently listening to animation
     pub fn is_listening(&self) -> bool {
         self.listening.load(Ordering::Relaxed)
+    }
+
+    /// Extract the inner view, consuming the wrapper.
+    pub fn into_inner(self) -> V
+    where
+        V: Clone,
+    {
+        self.view.clone()
     }
 
     /// Create a rebuild callback from BuildContext
@@ -258,6 +267,51 @@ where
 {
     fn into_view(self) -> Box<dyn ViewObject> {
         Box::new(AnimatedViewWrapper::<V, L>::new(self.0))
+    }
+}
+
+// ============================================================================
+// IntoViewConfig IMPLEMENTATION
+// ============================================================================
+
+/// Implementation for `AnimatedViewWrapper`.
+///
+/// This allows animated views to be converted to `ViewConfig` when wrapped:
+///
+/// ```rust,ignore
+/// use flui_view::{Animated, AnimatedView, IntoViewConfig};
+///
+/// let config = Animated::new(MyAnimatedView { ... }).into_view_config();
+/// ```
+impl<V, L> IntoViewConfig for AnimatedViewWrapper<V, L>
+where
+    V: AnimatedView<L> + Clone + Send + Sync + 'static,
+    L: Listenable,
+{
+    fn into_view_config(self) -> ViewConfig {
+        let view = self.view.clone();
+        ViewConfig::new_with_factory(view, |v: &V| {
+            Box::new(AnimatedViewWrapper::<V, L>::new(v.clone()))
+        })
+    }
+}
+
+/// Implementation for `Animated` helper.
+///
+/// ```rust,ignore
+/// use flui_view::{Animated, IntoViewConfig};
+///
+/// let config = Animated::new(MyAnimatedView { ... }).into_view_config();
+/// ```
+impl<V, L> IntoViewConfig for Animated<V, L>
+where
+    V: AnimatedView<L> + Clone + Send + Sync + 'static,
+    L: Listenable,
+{
+    fn into_view_config(self) -> ViewConfig {
+        ViewConfig::new_with_factory(self.0, |v: &V| {
+            Box::new(AnimatedViewWrapper::<V, L>::new(v.clone()))
+        })
     }
 }
 

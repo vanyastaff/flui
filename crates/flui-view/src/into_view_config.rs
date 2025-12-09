@@ -17,6 +17,22 @@
 //! | `IntoView` | `Box<dyn ViewObject>` | Immediate object creation |
 //! | `IntoViewConfig` | `ViewConfig` | Deferred mounting, hot-reload |
 //!
+//! # Supported Types
+//!
+//! The trait is implemented for:
+//!
+//! - **Stateless Views** - Any type implementing `StatelessView + Clone + Send + Sync + 'static` (blanket impl)
+//! - **Stateful Views** - Via `StatefulViewWrapper<V>` where `V: StatefulView`
+//! - **Empty Views** - `EmptyView` and `()` unit type
+//! - **Wrapper Types** - `StatelessViewWrapper<V>` and `StatefulViewWrapper<V>`
+//!
+//! # Not Implemented
+//!
+//! The following types do NOT implement `IntoViewConfig` by design:
+//!
+//! - `Box<dyn ViewObject>` - Already has ViewObject, defeats lazy mounting
+//! - Complex wrappers (Provider, Animated, Proxy, Render) - Future consideration
+//!
 //! # Usage
 //!
 //! ```rust,ignore
