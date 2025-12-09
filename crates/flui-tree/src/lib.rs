@@ -128,7 +128,7 @@ pub use arity::{
 // ============================================================================
 
 pub use state::{
-    Mountable, Mounted, NodeState, StateMarker, TreeInfo, Unmountable, Unmounted,
+    Mountable, Mounted, NavigableHandle, NodeState, StateMarker, TreeInfo, Unmountable, Unmounted,
 };
 
 // ============================================================================
@@ -191,6 +191,7 @@ pub mod prelude {
         // State types
         Mountable,
         Mounted,
+        NavigableHandle,
         NodeState,
         Optional,
         Single,

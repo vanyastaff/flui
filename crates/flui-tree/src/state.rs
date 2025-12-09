@@ -376,7 +376,10 @@ impl TreeInfo {
 /// ```
 pub trait Mountable: Sized {
     /// The mounted version of this node type.
-    type Mounted;
+    ///
+    /// This associated type ensures type-level connection between
+    /// unmounted and mounted states.
+    type Mounted: Unmountable<Unmounted = Self>;
 
     /// Mount the node, transitioning from Unmounted to Mounted.
     ///
@@ -395,15 +398,23 @@ pub trait Mountable: Sized {
 
 /// Trait for nodes that can be unmounted.
 ///
-/// This allows converting back to config-only state for:
-/// - Hot-reload (recreate views from config)
-/// - Serialization (save tree state)
-/// - Tree reconstruction (rebuild after changes)
+/// This trait is implemented by all mounted handles and provides:
+/// - Access to tree position information
+/// - Ability to unmount back to config-only state
+/// - Generic operations on mounted nodes
+///
+/// # Use Cases
+///
+/// - **Hot-reload**: Recreate views from config
+/// - **Serialization**: Save tree state
+/// - **Tree reconstruction**: Rebuild after changes
+/// - **Generic tree algorithms**: TreeCoordinator can work with any mounted handle
 ///
 /// # Type Safety
 ///
 /// Like [`Mountable`], this trait enforces that unmounting consumes
-/// the mounted node and returns a new unmounted node.
+/// the mounted node and returns a new unmounted node. The associated type
+/// guarantees bidirectional conversion.
 ///
 /// # Example
 ///
@@ -419,11 +430,22 @@ pub trait Mountable: Sized {
 ///             _state: PhantomData,
 ///         }
 ///     }
+///
+///     fn tree_info(&self) -> &TreeInfo {
+///         self.tree_info.as_ref().unwrap()
+///     }
+///
+///     fn tree_info_mut(&mut self) -> &mut TreeInfo {
+///         self.tree_info.as_mut().unwrap()
+///     }
 /// }
 /// ```
 pub trait Unmountable: Sized {
     /// The unmounted version of this node type.
-    type Unmounted;
+    ///
+    /// This associated type ensures type-level connection between
+    /// mounted and unmounted states.
+    type Unmounted: Mountable<Mounted = Self>;
 
     /// Unmount the node, transitioning from Mounted to Unmounted.
     ///
@@ -436,7 +458,154 @@ pub trait Unmountable: Sized {
     ///
     /// An unmounted version with only the configuration.
     fn unmount(self) -> Self::Unmounted;
+
+    /// Access tree position information.
+    ///
+    /// This is always safe to call for mounted handles as TreeInfo
+    /// is guaranteed to be present when mounted.
+    ///
+    /// # Returns
+    ///
+    /// Reference to TreeInfo containing parent/children/depth.
+    fn tree_info(&self) -> &TreeInfo;
+
+    /// Access mutable tree position information.
+    ///
+    /// This allows modifying the tree structure (adding/removing children,
+    /// changing parent, updating depth).
+    ///
+    /// # Returns
+    ///
+    /// Mutable reference to TreeInfo.
+    fn tree_info_mut(&mut self) -> &mut TreeInfo;
 }
+
+// ============================================================================
+// NAVIGABLE HANDLE (Extension trait - auto-implemented)
+// ============================================================================
+
+/// Extension trait for convenient tree navigation on mounted handles.
+///
+/// This trait is automatically implemented for all types that implement
+/// [`Unmountable`], providing convenient methods for accessing tree structure
+/// without directly calling `tree_info()`.
+///
+/// # Design Philosophy
+///
+/// Similar to how Rust's standard library provides extension traits
+/// (e.g., `IteratorExt`), `NavigableHandle` extends [`Unmountable`] with
+/// navigation-specific methods.
+///
+/// # Zero-Cost
+///
+/// All methods are inlined and delegate to [`TreeInfo`] methods, resulting
+/// in zero runtime overhead.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// fn traverse<H: Unmountable>(handle: &H) {
+///     // NavigableHandle methods available automatically!
+///     if handle.is_root() {
+///         println!("Root node at depth {}", handle.depth());
+///     }
+///
+///     for child_id in handle.children() {
+///         println!("Child: {}", child_id);
+///     }
+/// }
+/// ```
+pub trait NavigableHandle: Unmountable {
+    /// Get the parent node ID.
+    ///
+    /// Returns `None` if this is the root node.
+    #[inline]
+    fn parent(&self) -> Option<usize> {
+        self.tree_info().parent
+    }
+
+    /// Get the children node IDs.
+    ///
+    /// Returns a slice of all child IDs.
+    #[inline]
+    fn children(&self) -> &[usize] {
+        &self.tree_info().children
+    }
+
+    /// Get the depth of this node in the tree.
+    ///
+    /// Root nodes have depth 0, their children have depth 1, etc.
+    #[inline]
+    fn depth(&self) -> usize {
+        self.tree_info().depth
+    }
+
+    /// Check if this is the root node.
+    ///
+    /// Equivalent to `self.parent().is_none()`.
+    #[inline]
+    fn is_root(&self) -> bool {
+        self.tree_info().is_root()
+    }
+
+    /// Get the number of children.
+    ///
+    /// Equivalent to `self.children().len()`.
+    #[inline]
+    fn child_count(&self) -> usize {
+        self.tree_info().child_count()
+    }
+
+    /// Get the parent ID, panicking if this is the root node.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this node is the root (has no parent).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// if !handle.is_root() {
+    ///     let parent_id = handle.parent_unchecked();
+    /// }
+    /// ```
+    #[inline]
+    fn parent_unchecked(&self) -> usize {
+        self.tree_info().parent_unchecked()
+    }
+
+    /// Add a child to this node.
+    ///
+    /// This modifies the children list in TreeInfo.
+    ///
+    /// # Parameters
+    ///
+    /// - `child_id`: The ID of the child to add
+    #[inline]
+    fn add_child(&mut self, child_id: usize) {
+        self.tree_info_mut().add_child(child_id);
+    }
+
+    /// Remove a child from this node.
+    ///
+    /// # Parameters
+    ///
+    /// - `child_id`: The ID of the child to remove
+    ///
+    /// # Returns
+    ///
+    /// `true` if the child was found and removed, `false` otherwise.
+    #[inline]
+    fn remove_child(&mut self, child_id: usize) -> bool {
+        self.tree_info_mut().remove_child(child_id)
+    }
+}
+
+/// Auto-implement NavigableHandle for all Unmountable types.
+///
+/// This means any type that implements Unmountable automatically gets
+/// all the navigation convenience methods.
+impl<T: Unmountable> NavigableHandle for T {}
 
 // ============================================================================
 // MARKER TYPE FOR COMPILE-TIME CHECKS
@@ -591,5 +760,209 @@ mod tests {
         assert_eq!(info2.parent, Some(5));
         assert_eq!(info2.depth, 2);
         assert_eq!(info2.children, vec![10, 20]);
+    }
+
+    // ============================================================================
+    // TESTS - Mountable/Unmountable traits
+    // ============================================================================
+
+    // Mock handle for testing
+    struct TestHandle<S: NodeState> {
+        config: u32,
+        tree_info: Option<TreeInfo>,
+        _state: PhantomData<S>,
+    }
+
+    impl Mountable for TestHandle<Unmounted> {
+        type Mounted = TestHandle<Mounted>;
+
+        fn mount(self, parent: Option<usize>) -> Self::Mounted {
+            let tree_info = if let Some(parent_id) = parent {
+                TreeInfo::with_parent(parent_id, 1)
+            } else {
+                TreeInfo::root()
+            };
+
+            TestHandle {
+                config: self.config,
+                tree_info: Some(tree_info),
+                _state: PhantomData,
+            }
+        }
+    }
+
+    impl Unmountable for TestHandle<Mounted> {
+        type Unmounted = TestHandle<Unmounted>;
+
+        fn unmount(self) -> Self::Unmounted {
+            TestHandle {
+                config: self.config,
+                tree_info: None,
+                _state: PhantomData,
+            }
+        }
+
+        fn tree_info(&self) -> &TreeInfo {
+            self.tree_info.as_ref().unwrap()
+        }
+
+        fn tree_info_mut(&mut self) -> &mut TreeInfo {
+            self.tree_info.as_mut().unwrap()
+        }
+    }
+
+    #[test]
+    fn test_mountable_trait() {
+        // Create unmounted handle
+        let unmounted = TestHandle::<Unmounted> {
+            config: 42,
+            tree_info: None,
+            _state: PhantomData,
+        };
+
+        // Mount as root
+        let mounted = unmounted.mount(None);
+        assert!(mounted.tree_info().is_root());
+        assert_eq!(mounted.tree_info().depth, 0);
+        assert_eq!(mounted.config, 42);
+    }
+
+    #[test]
+    fn test_unmountable_trait() {
+        // Create and mount
+        let unmounted = TestHandle::<Unmounted> {
+            config: 99,
+            tree_info: None,
+            _state: PhantomData,
+        };
+        let mounted = unmounted.mount(Some(5));
+
+        // Verify mounted state
+        assert_eq!(mounted.tree_info().parent, Some(5));
+        assert_eq!(mounted.tree_info().depth, 1);
+
+        // Unmount
+        let unmounted = mounted.unmount();
+        assert!(unmounted.tree_info.is_none());
+        assert_eq!(unmounted.config, 99);
+    }
+
+    #[test]
+    fn test_navigable_handle_parent() {
+        let unmounted = TestHandle::<Unmounted> {
+            config: 1,
+            tree_info: None,
+            _state: PhantomData,
+        };
+        let mounted = unmounted.mount(Some(10));
+
+        // NavigableHandle methods (auto-implemented)
+        assert_eq!(mounted.parent(), Some(10));
+        assert!(!mounted.is_root());
+    }
+
+    #[test]
+    fn test_navigable_handle_root() {
+        let unmounted = TestHandle::<Unmounted> {
+            config: 1,
+            tree_info: None,
+            _state: PhantomData,
+        };
+        let mounted = unmounted.mount(None);
+
+        // NavigableHandle methods
+        assert_eq!(mounted.parent(), None);
+        assert!(mounted.is_root());
+        assert_eq!(mounted.depth(), 0);
+    }
+
+    #[test]
+    fn test_navigable_handle_children() {
+        let unmounted = TestHandle::<Unmounted> {
+            config: 1,
+            tree_info: None,
+            _state: PhantomData,
+        };
+        let mut mounted = unmounted.mount(None);
+
+        // Initially no children
+        assert_eq!(mounted.child_count(), 0);
+        assert_eq!(mounted.children(), &[]);
+
+        // Add children using NavigableHandle
+        mounted.add_child(100);
+        mounted.add_child(200);
+        mounted.add_child(300);
+
+        assert_eq!(mounted.child_count(), 3);
+        assert_eq!(mounted.children(), &[100, 200, 300]);
+    }
+
+    #[test]
+    fn test_navigable_handle_remove_child() {
+        let unmounted = TestHandle::<Unmounted> {
+            config: 1,
+            tree_info: None,
+            _state: PhantomData,
+        };
+        let mut mounted = unmounted.mount(None);
+
+        mounted.add_child(10);
+        mounted.add_child(20);
+        mounted.add_child(30);
+
+        // Remove child using NavigableHandle
+        assert!(mounted.remove_child(20));
+        assert_eq!(mounted.children(), &[10, 30]);
+
+        // Try to remove non-existent child
+        assert!(!mounted.remove_child(999));
+        assert_eq!(mounted.child_count(), 2);
+    }
+
+    #[test]
+    fn test_navigable_handle_parent_unchecked() {
+        let unmounted = TestHandle::<Unmounted> {
+            config: 1,
+            tree_info: None,
+            _state: PhantomData,
+        };
+        let mounted = unmounted.mount(Some(42));
+
+        assert_eq!(mounted.parent_unchecked(), 42);
+    }
+
+    #[test]
+    #[should_panic(expected = "Cannot get parent of root node")]
+    fn test_navigable_handle_parent_unchecked_panic() {
+        let unmounted = TestHandle::<Unmounted> {
+            config: 1,
+            tree_info: None,
+            _state: PhantomData,
+        };
+        let mounted = unmounted.mount(None);
+
+        let _ = mounted.parent_unchecked(); // Should panic
+    }
+
+    #[test]
+    fn test_generic_traverse() {
+        // This demonstrates that TreeCoordinator can use generic bounds
+        fn collect_all_children<H: NavigableHandle>(handle: &H) -> Vec<usize> {
+            handle.children().to_vec()
+        }
+
+        let unmounted = TestHandle::<Unmounted> {
+            config: 1,
+            tree_info: None,
+            _state: PhantomData,
+        };
+        let mut mounted = unmounted.mount(None);
+        mounted.add_child(1);
+        mounted.add_child(2);
+        mounted.add_child(3);
+
+        let children = collect_all_children(&mounted);
+        assert_eq!(children, vec![1, 2, 3]);
     }
 }
