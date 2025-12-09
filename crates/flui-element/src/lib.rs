@@ -121,6 +121,7 @@
 
 pub mod build_owner;
 pub mod element;
+pub mod handle;
 pub mod into_element;
 pub mod tree;
 
@@ -159,6 +160,9 @@ pub use build_owner::BuildOwner;
 // IntoElement trait
 pub use into_element::IntoElement;
 
+// Handle types (ElementConfig, ElementHandle with typestate)
+pub use handle::{ElementConfig, ElementHandle};
+
 // Re-export from flui-foundation for convenience
 pub use flui_foundation::{ElementId, Slot};
 pub use flui_view::ViewMode;
@@ -185,6 +189,9 @@ pub mod prelude {
 
     // Conversion trait
     pub use crate::into_element::IntoElement;
+
+    // Handle types
+    pub use crate::handle::{ElementConfig, ElementHandle};
 
     // Tree types
     pub use crate::tree::ElementTree;
