@@ -64,8 +64,8 @@ pub mod core;
 /// RenderTree storage and tree operations
 pub mod tree;
 
-/// View-related rendering
-pub mod view;
+// NOTE: RenderView and UpdateResult have been moved to flui-view crate.
+// Use `flui_view::{RenderView, UpdateResult}` instead.
 
 /// Error handling
 pub mod error;

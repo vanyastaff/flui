@@ -1243,6 +1243,7 @@ dependencies = [
  "bitflags 2.10.0",
  "flui-foundation",
  "flui-tree",
+ "flui_rendering",
  "flui_types",
  "parking_lot",
  "slab",

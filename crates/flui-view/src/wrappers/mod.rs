@@ -11,8 +11,7 @@
 //! | `ProxyView` | `ProxyViewWrapper` | `Proxy(view)` |
 //! | `ProviderView<T>` | `ProviderViewWrapper` | `Provider(view)` |
 //! | `AnimatedView<L>` | `AnimatedViewWrapper` | `Animated(view)` |
-//!
-//! Note: `RenderViewWrapper` is in `flui_rendering::view` to avoid circular deps.
+//! | `RenderView<P,A>` | `RenderViewWrapper` | `Render(view)` |
 //!
 //! # Architecture
 //!
@@ -29,6 +28,7 @@
 mod animated;
 mod provider;
 mod proxy;
+mod render;
 mod stateful;
 mod stateless;
 
@@ -36,6 +36,7 @@ mod stateless;
 pub use animated::AnimatedViewWrapper;
 pub use provider::ProviderViewWrapper;
 pub use proxy::ProxyViewWrapper;
+pub use render::RenderViewWrapper;
 pub use stateful::StatefulViewWrapper;
 pub use stateless::StatelessViewWrapper;
 
@@ -43,5 +44,6 @@ pub use stateless::StatelessViewWrapper;
 pub use animated::Animated;
 pub use provider::Provider;
 pub use proxy::Proxy;
+pub use render::Render;
 pub use stateful::Stateful;
 pub use stateless::Stateless;

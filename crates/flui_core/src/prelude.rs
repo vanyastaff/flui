@@ -33,7 +33,7 @@
 pub use flui_view::{AnimatedView, ProviderView, ProxyView, StatefulView, StatelessView};
 
 /// Render view trait and update result
-pub use flui_rendering::view::{RenderView, UpdateResult};
+pub use flui_view::{RenderView, UpdateResult};
 
 /// Context for view building (abstract trait)
 pub use flui_view::BuildContext;

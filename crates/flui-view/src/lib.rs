@@ -96,7 +96,10 @@ pub use view_mode::ViewMode;
 pub use state::ViewState;
 
 // View traits
-pub use traits::{AnimatedView, Listenable, ProviderView, ProxyView, StatefulView, StatelessView};
+pub use traits::{
+    AnimatedView, Listenable, ProviderView, ProxyView, RenderObjectFor, RenderView,
+    RenderViewConfig, RenderViewExt, StatefulView, StatelessView, UpdateResult,
+};
 
 // ViewObject (defined in this crate)
 pub use view_object::ViewObject;

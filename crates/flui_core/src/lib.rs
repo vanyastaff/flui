@@ -80,8 +80,8 @@ pub mod view {
 // =============================================================================
 
 pub use flui_rendering::core::{Arity, RenderBox, RuntimeArity};
-// Re-export RenderView trait and UpdateResult from flui_rendering
-pub use flui_rendering::view::{RenderView, UpdateResult};
+// Re-export RenderView trait and UpdateResult from flui-view
+pub use flui_view::{RenderView, UpdateResult};
 
 /// Render module for backward compatibility with widgets.
 ///

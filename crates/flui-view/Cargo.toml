@@ -13,6 +13,7 @@ categories = ["gui"]
 flui-foundation = { path = "../flui-foundation" }
 flui-tree = { path = "../flui-tree" }
 flui_types = { path = "../flui_types" }
+flui_rendering = { path = "../flui_rendering" }
 
 # Core dependencies
 bitflags.workspace = true
