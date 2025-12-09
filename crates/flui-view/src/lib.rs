@@ -70,6 +70,7 @@
 pub mod children;
 pub mod context;
 pub mod element;
+pub mod handle;
 pub mod into_view;
 pub mod state;
 pub mod traits;
@@ -134,6 +135,9 @@ pub use element::{AtomicViewFlags, PendingChildren, ViewElement, ViewFlags, View
 // Tree types (ViewTree, ViewNode, ViewId)
 pub use tree::{ViewId, ViewNode, ViewTree};
 
+// Handle types (ViewConfig, ViewHandle with typestate)
+pub use handle::{ViewConfig, ViewHandle};
+
 // ============================================================================
 // PRELUDE
 // ============================================================================
@@ -147,6 +151,7 @@ pub mod prelude {
     pub use crate::context::BuildContext;
     pub use crate::element::{ViewElement, ViewLifecycle};
     pub use crate::empty::EmptyView;
+    pub use crate::handle::{ViewConfig, ViewHandle};
     pub use crate::into_view::IntoView;
     pub use crate::traits::{
         AnimatedView, Listenable, ProviderView, ProxyView, StatefulView, StatelessView,
