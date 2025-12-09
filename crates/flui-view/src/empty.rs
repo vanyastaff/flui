@@ -4,7 +4,8 @@
 
 use std::any::Any;
 
-use crate::{BuildContext, IntoView, ViewMode, ViewObject};
+use crate::handle::ViewConfig;
+use crate::{BuildContext, IntoView, IntoViewConfig, ViewMode, ViewObject};
 
 /// A view that renders nothing
 ///
@@ -36,6 +37,13 @@ impl EmptyView {
 impl IntoView for EmptyView {
     fn into_view(self) -> Box<dyn ViewObject> {
         Box::new(EmptyViewObject)
+    }
+}
+
+impl IntoViewConfig for EmptyView {
+    fn into_view_config(self) -> ViewConfig {
+        // EmptyView is zero-sized, so we can use () as the data
+        ViewConfig::new_with_factory((), |_: &()| Box::new(EmptyViewObject))
     }
 }
 
@@ -76,6 +84,12 @@ impl IntoView for () {
     }
 }
 
+impl IntoViewConfig for () {
+    fn into_view_config(self) -> ViewConfig {
+        ViewConfig::new_with_factory((), |_: &()| Box::new(EmptyViewObject))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -109,5 +123,38 @@ mod tests {
         let ctx = MockBuildContext::new(ElementId::new(1));
         let result = view_obj.build(&ctx);
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_empty_view_into_view_config() {
+        let view = EmptyView::new();
+        let config = view.into_view_config();
+
+        // Create ViewObject from config
+        let view_obj = config.create_view_object();
+        assert_eq!(view_obj.mode(), ViewMode::Empty);
+    }
+
+    #[test]
+    fn test_unit_into_view_config() {
+        let config = ().into_view_config();
+
+        // Create ViewObject from config
+        let view_obj = config.create_view_object();
+        assert_eq!(view_obj.mode(), ViewMode::Empty);
+    }
+
+    #[test]
+    fn test_empty_config_can_update() {
+        let config1 = EmptyView.into_view_config();
+        let config2 = EmptyView.into_view_config();
+        let config3 = ().into_view_config();
+
+        // Same type, should be able to update
+        assert!(config1.can_update(&config2));
+
+        // EmptyView and () both create EmptyViewObject, should be compatible
+        assert!(config1.can_update(&config3));
+        assert!(config3.can_update(&config1));
     }
 }
