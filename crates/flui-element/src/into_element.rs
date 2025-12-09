@@ -208,7 +208,9 @@ use flui_view::{Child, Children};
 impl IntoElement for Child {
     fn into_element(self) -> Element {
         match self.into_inner() {
-            Some(view_object) => {
+            Some(view_config) => {
+                // Create ViewObject from ViewConfig
+                let view_object = view_config.create_view_object();
                 let mode = view_object.mode();
                 Element::View(ViewElement::with_pending(view_object, mode))
             }
@@ -220,13 +222,15 @@ impl IntoElement for Child {
 /// Children converts to container Element with pending children.
 impl IntoElement for Children {
     fn into_element(self) -> Element {
-        let view_objects = self.into_inner();
-        if view_objects.is_empty() {
+        let view_configs = self.into_inner();
+        if view_configs.is_empty() {
             Element::empty()
         } else {
-            let child_elements: Vec<Element> = view_objects
+            let child_elements: Vec<Element> = view_configs
                 .into_iter()
-                .map(|view_object| {
+                .map(|view_config| {
+                    // Create ViewObject from ViewConfig
+                    let view_object = view_config.create_view_object();
                     let mode = view_object.mode();
                     Element::View(ViewElement::with_pending(view_object, mode))
                 })

@@ -32,8 +32,8 @@ use flui_rendering::core::protocol::BoxProtocol;
 use flui_rendering::Optional;
 use flui_types::EdgeInsets;
 use flui_view::{
-    wrappers::RenderViewWrapper, Child, IntoView, RenderView, UpdateResult, ViewElement, ViewMode,
-    ViewObject,
+    wrappers::RenderViewWrapper, Child, IntoView, IntoViewConfig, RenderView, UpdateResult,
+    ViewElement, ViewMode, ViewObject,
 };
 
 /// A widget that insets its child by the given padding.
@@ -178,7 +178,7 @@ impl Padding {
     }
 
     /// Sets the child widget.
-    pub fn child<V: IntoView>(mut self, view: V) -> Self {
+    pub fn child<V: IntoViewConfig>(mut self, view: V) -> Self {
         self.child = Child::new(view);
         self
     }
