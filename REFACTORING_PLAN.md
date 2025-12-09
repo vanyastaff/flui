@@ -2,11 +2,15 @@
 
 > **⚠️ STATUS UPDATE (2025-12-09)**: This document describes the **AnyView approach** which was explored but **not chosen**.
 >
-> **Current Approach**: **Typestate System** (see [docs/arch/TYPESTATE_DESIGN.md](docs/arch/TYPESTATE_DESIGN.md))
-> - Implemented structural states (Unmounted/Mounted) in `flui-tree`
-> - NavigableHandle extension trait for generic tree operations
-> - TreeInfo uses usize for universal abstraction
-> - Phase 1 complete (121 tests passing)
+> **Current Approach**: **Typestate System + ViewConfig** (see [docs/arch/TYPESTATE_DESIGN.md](docs/arch/TYPESTATE_DESIGN.md))
+> - ✅ Phase 1-4: Typestate implemented (Unmounted/Mounted) in all tree layers
+> - ✅ Phase 5: **Flutter-like Child Mounting API COMPLETE** (uses ViewConfig instead of AnyView)
+> - ViewConfig provides same benefits as proposed AnyView:
+>   - Immutable view configuration storage
+>   - Deferred ViewObject creation
+>   - Hot-reload support via config recreation
+>   - Reconciliation with `can_update()`
+> - All 105+ tests passing
 >
 > **This document remains for historical context** showing the exploration process.
 
