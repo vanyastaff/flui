@@ -76,6 +76,9 @@ pub mod debug;
 /// IntoRender trait
 pub mod into_render;
 
+/// RenderHandle with typestate
+pub mod handle;
+
 // ============================================================================
 // RE-EXPORTS FROM CORE MODULE
 // ============================================================================
@@ -175,6 +178,9 @@ pub use error::{RenderError, Result as RenderResult};
 // IntoRender trait
 pub use into_render::{IntoRender, IntoRenderState};
 
+// Handle types (RenderConfig, RenderHandle with typestate)
+pub use handle::{RenderConfig, RenderHandle};
+
 // Geometry and constraints from flui_types
 pub use flui_types::BoxConstraints;
 
@@ -224,6 +230,9 @@ pub mod prelude {
 
     // IntoRender trait
     pub use super::{IntoRender, IntoRenderState};
+
+    // Handle types
+    pub use super::{RenderConfig, RenderHandle};
 }
 
 // ============================================================================
