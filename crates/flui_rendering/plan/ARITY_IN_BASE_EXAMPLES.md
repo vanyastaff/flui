@@ -1,197 +1,465 @@
-# Вариант 3: Arity в базовой структуре
+# RenderHandle + Deref Pattern
 
-Arity определяется в базовой структуре, trait `RenderBox` без generic параметра.
+Дети хранятся внутри RenderObject как `RenderHandle<Mounted>` (как Flutter).
+Через `Deref` получаем чистый API без boilerplate.
 
-## Базовые структуры
+## RenderHandle с Deref
 
 ```rust
-use flui_tree::{Arity, Children, Leaf, Single, Optional, Variable};
+use std::ops::{Deref, DerefMut};
+use flui_tree::{Mounted, Unmounted, NodeState, Depth};
 
-// ============================================================================
-// БАЗОВЫЕ СТРУКТУРЫ С ARITY
-// ============================================================================
-
-/// База для любого Box (хранит size + children)
-pub struct BoxBase<A: Arity> {
-    pub children: Children<RenderNodeId, A>,
-    pub size: Size,
+/// Handle для render object с typestate
+pub struct RenderHandle<S: NodeState> {
+    render_object: Box<dyn RenderObject>,
+    depth: Depth,
+    parent: Option<RenderId>,
+    _state: PhantomData<S>,
 }
 
-impl<A: Arity> BoxBase<A> {
-    pub fn new() -> Self {
+// Deref к RenderObject — вызываем методы напрямую!
+impl<S: NodeState> Deref for RenderHandle<S> {
+    type Target = dyn RenderObject;
+    fn deref(&self) -> &Self::Target {
+        self.render_object.as_ref()
+    }
+}
+
+impl<S: NodeState> DerefMut for RenderHandle<S> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.render_object.as_mut()
+    }
+}
+
+impl RenderHandle<Unmounted> {
+    pub fn new<R: RenderObject + 'static>(render_object: R) -> Self {
         Self {
-            children: Children::new(),
-            size: Size::ZERO,
+            render_object: Box::new(render_object),
+            depth: Depth::root(),
+            parent: None,
+            _state: PhantomData,
+        }
+    }
+    
+    pub fn mount(self, parent: Option<RenderId>, depth: Depth) -> RenderHandle<Mounted> {
+        RenderHandle {
+            render_object: self.render_object,
+            depth,
+            parent,
+            _state: PhantomData,
         }
     }
 }
 
-/// База для shifted box (single child + offset)
+impl RenderHandle<Mounted> {
+    pub fn parent(&self) -> Option<RenderId> {
+        self.parent
+    }
+    
+    pub fn depth(&self) -> Depth {
+        self.depth
+    }
+    
+    pub fn unmount(self) -> RenderHandle<Unmounted> {
+        RenderHandle {
+            render_object: self.render_object,
+            depth: Depth::root(),
+            parent: None,
+            _state: PhantomData,
+        }
+    }
+}
+```
+
+## Type Aliases
+
+```rust
+/// Single child (Optional)
+pub type Child = Option<RenderHandle<Mounted>>;
+
+/// Multiple children
+pub type Children = Vec<RenderHandle<Mounted>>;
+```
+
+---
+
+## Base Structs с Deref
+
+Иерархия через композицию + `Deref`:
+
+```
+SingleChildBase
+     ↑ Deref
+ShiftedBoxBase (+ offset, size)
+     ↑ Deref
+RenderPadding (+ padding)
+```
+
+### SingleChildBase
+
+```rust
+/// Base для single child render objects (Flutter's RenderObjectWithChildMixin)
+pub struct SingleChildBase {
+    child: Child,  // Option<RenderHandle<Mounted>>
+}
+
+impl SingleChildBase {
+    pub fn new() -> Self {
+        Self { child: None }
+    }
+    
+    pub fn with_child(child: RenderHandle<Mounted>) -> Self {
+        Self { child: Some(child) }
+    }
+    
+    pub fn child(&self) -> Option<&RenderHandle<Mounted>> {
+        self.child.as_ref()
+    }
+    
+    pub fn child_mut(&mut self) -> Option<&mut RenderHandle<Mounted>> {
+        self.child.as_mut()
+    }
+    
+    pub fn set_child(&mut self, child: Child) {
+        self.child = child;
+    }
+    
+    pub fn take_child(&mut self) -> Child {
+        self.child.take()
+    }
+}
+
+impl Default for SingleChildBase {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+```
+
+### ShiftedBoxBase
+
+```rust
+/// Base для shifted box (single child + offset + size)
+/// Flutter's RenderShiftedBox
 pub struct ShiftedBoxBase {
-    pub inner: BoxBase<Single>,
+    base: SingleChildBase,
     pub child_offset: Offset,
+    pub size: Size,
 }
 
 impl ShiftedBoxBase {
     pub fn new() -> Self {
         Self {
-            inner: BoxBase::new(),
+            base: SingleChildBase::new(),
             child_offset: Offset::ZERO,
-        }
-    }
-    
-    pub fn child(&self) -> Option<RenderNodeId> {
-        self.inner.children.get()
-    }
-    
-    pub fn paint_child(&self, ctx: &mut PaintingContext, offset: Offset) {
-        if let Some(child) = self.child() {
-            ctx.paint_child(child, offset + self.child_offset);
+            size: Size::ZERO,
         }
     }
 }
 
-/// База для optional shifted box (0-1 child + offset)
-pub struct OptionalShiftedBoxBase {
-    pub inner: BoxBase<Optional>,
-    pub child_offset: Offset,
-}
-
-impl OptionalShiftedBoxBase {
-    pub fn new() -> Self {
-        Self {
-            inner: BoxBase::new(),
-            child_offset: Offset::ZERO,
-        }
-    }
-    
-    pub fn child(&self) -> Option<RenderNodeId> {
-        self.inner.children.get()
-    }
-    
-    pub fn paint_child(&self, ctx: &mut PaintingContext, offset: Offset) {
-        if let Some(child) = self.child() {
-            ctx.paint_child(child, offset + self.child_offset);
-        }
+impl Default for ShiftedBoxBase {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
-/// База для aligning box (optional child + alignment)
+impl Deref for ShiftedBoxBase {
+    type Target = SingleChildBase;
+    fn deref(&self) -> &Self::Target { &self.base }
+}
+
+impl DerefMut for ShiftedBoxBase {
+    fn deref_mut(&mut self) -> &mut Self::Target { &mut self.base }
+}
+```
+
+### AligningBoxBase
+
+```rust
+/// Base для aligning box (shifted + alignment)
+/// Flutter's RenderAligningShiftedBox
 pub struct AligningBoxBase {
-    pub inner: OptionalShiftedBoxBase,
+    base: ShiftedBoxBase,
     pub alignment: Alignment,
 }
 
 impl AligningBoxBase {
     pub fn new(alignment: Alignment) -> Self {
         Self {
-            inner: OptionalShiftedBoxBase::new(),
+            base: ShiftedBoxBase::new(),
             alignment,
         }
     }
     
-    pub fn child(&self) -> Option<RenderNodeId> {
-        self.inner.child()
-    }
-    
     pub fn align_child(&mut self, child_size: Size, container_size: Size) {
-        self.inner.child_offset = self.alignment.compute_offset(child_size, container_size);
-    }
-    
-    pub fn paint_child(&self, ctx: &mut PaintingContext, offset: Offset) {
-        self.inner.paint_child(ctx, offset);
+        self.base.child_offset = self.alignment.compute_offset(child_size, container_size);
     }
 }
 
-/// База для proxy box (single child, делегирует всё)
+impl Deref for AligningBoxBase {
+    type Target = ShiftedBoxBase;
+    fn deref(&self) -> &Self::Target { &self.base }
+}
+
+impl DerefMut for AligningBoxBase {
+    fn deref_mut(&mut self) -> &mut Self::Target { &mut self.base }
+}
+```
+
+### ProxyBoxBase
+
+```rust
+/// Base для proxy box (делегирует всё ребёнку)
+/// Flutter's RenderProxyBox
 pub struct ProxyBoxBase {
-    pub inner: BoxBase<Single>,
+    base: SingleChildBase,
+    pub size: Size,
 }
 
 impl ProxyBoxBase {
     pub fn new() -> Self {
-        Self { inner: BoxBase::new() }
-    }
-    
-    pub fn child(&self) -> Option<RenderNodeId> {
-        self.inner.children.get()
-    }
-    
-    pub fn paint_child(&self, ctx: &mut PaintingContext, offset: Offset) {
-        if let Some(child) = self.child() {
-            ctx.paint_child(child, offset);
+        Self {
+            base: SingleChildBase::new(),
+            size: Size::ZERO,
         }
     }
 }
 
-/// База для контейнера (variable children)
-pub struct ContainerBoxBase {
-    pub inner: BoxBase<Variable>,
+impl Deref for ProxyBoxBase {
+    type Target = SingleChildBase;
+    fn deref(&self) -> &Self::Target { &self.base }
 }
 
-impl ContainerBoxBase {
-    pub fn new() -> Self {
-        Self { inner: BoxBase::new() }
-    }
-    
-    pub fn children(&self) -> impl Iterator<Item = RenderNodeId> + '_ {
-        self.inner.children.iter()
-    }
-    
-    pub fn child_count(&self) -> usize {
-        self.inner.children.len()
-    }
+impl DerefMut for ProxyBoxBase {
+    fn deref_mut(&mut self) -> &mut Self::Target { &mut self.base }
 }
 ```
 
-## Главный Trait (без Arity!)
+### ContainerBase
 
 ```rust
-// ============================================================================
-// ОДИН TRAIT БЕЗ GENERIC ПАРАМЕТРА
-// ============================================================================
+/// Base для multiple children (Flutter's ContainerRenderObjectMixin)
+pub struct ContainerBase {
+    children: Children,  // Vec<RenderHandle<Mounted>>
+    pub size: Size,
+}
 
-pub trait RenderBox: RenderObject {
-    /// Arity определяется через associated type
-    type Arity: Arity;
-    
-    /// Layout - обязательный
-    fn perform_layout(
-        &mut self,
-        constraints: &BoxConstraints,
-        layout: &mut LayoutHelper,
-    ) -> Size;
-    
-    /// Paint - обязательный  
-    fn paint(&self, ctx: &mut PaintingContext, offset: Offset);
-    
-    /// Hit test - с дефолтом
-    fn hit_test(&self, result: &mut BoxHitTestResult, position: Offset) -> bool {
-        // default implementation
-        true
+impl ContainerBase {
+    pub fn new() -> Self {
+        Self {
+            children: Vec::new(),
+            size: Size::ZERO,
+        }
     }
     
-    /// Intrinsics - опциональные
-    fn compute_min_intrinsic_width(&self, height: f32) -> f32 { 0.0 }
-    fn compute_max_intrinsic_width(&self, height: f32) -> f32 { 0.0 }
-    fn compute_min_intrinsic_height(&self, width: f32) -> f32 { 0.0 }
-    fn compute_max_intrinsic_height(&self, width: f32) -> f32 { 0.0 }
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            children: Vec::with_capacity(capacity),
+            size: Size::ZERO,
+        }
+    }
+    
+    pub fn children(&self) -> &[RenderHandle<Mounted>] {
+        &self.children
+    }
+    
+    pub fn children_mut(&mut self) -> &mut Vec<RenderHandle<Mounted>> {
+        &mut self.children
+    }
+    
+    pub fn add(&mut self, child: RenderHandle<Mounted>) {
+        self.children.push(child);
+    }
+    
+    pub fn insert(&mut self, index: usize, child: RenderHandle<Mounted>) {
+        self.children.insert(index, child);
+    }
+    
+    pub fn remove(&mut self, index: usize) -> RenderHandle<Mounted> {
+        self.children.remove(index)
+    }
+    
+    pub fn clear(&mut self) {
+        self.children.clear();
+    }
+    
+    pub fn len(&self) -> usize {
+        self.children.len()
+    }
+    
+    pub fn is_empty(&self) -> bool {
+        self.children.is_empty()
+    }
+    
+    pub fn iter(&self) -> impl Iterator<Item = &RenderHandle<Mounted>> {
+        self.children.iter()
+    }
+    
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut RenderHandle<Mounted>> {
+        self.children.iter_mut()
+    }
+}
+
+impl Default for ContainerBase {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 ```
 
 ---
 
-## Пример 1: RenderAlign (Optional child)
+## Traits (без LayoutHelper!)
 
 ```rust
-// ============================================================================
-// RENDER ALIGN - Optional child + alignment
-// ============================================================================
+/// Base trait для всех render objects
+pub trait RenderObject: Send + Sync + 'static {
+    fn debug_name(&self) -> &'static str;
+    
+    // ... другие базовые методы
+}
 
+/// Box protocol
+pub trait RenderBox: RenderObject {
+    fn perform_layout(&mut self, constraints: &BoxConstraints) -> Size;
+    fn paint(&self, ctx: &mut PaintingContext, offset: Offset);
+    fn hit_test(&self, result: &mut HitTestResult, position: Offset) -> bool;
+    
+    // Intrinsics (optional)
+    fn compute_min_intrinsic_width(&self, height: f32) -> f32 { 0.0 }
+    fn compute_max_intrinsic_width(&self, height: f32) -> f32 { 0.0 }
+    fn compute_min_intrinsic_height(&self, width: f32) -> f32 { 0.0 }
+    fn compute_max_intrinsic_height(&self, width: f32) -> f32 { 0.0 }
+}
+
+/// Sliver protocol
+pub trait RenderSliver: RenderObject {
+    fn perform_layout(&mut self, constraints: &SliverConstraints) -> SliverGeometry;
+    fn paint(&self, ctx: &mut PaintingContext, offset: Offset);
+    fn hit_test(&self, result: &mut SliverHitTestResult, position: SliverOffset) -> bool;
+}
+```
+
+---
+
+## Примеры
+
+### RenderView (root)
+
+```rust
+pub struct RenderView {
+    base: SingleChildBase,
+    pub configuration: ViewConfiguration,
+}
+
+impl RenderView {
+    pub fn new(configuration: ViewConfiguration) -> Self {
+        Self {
+            base: SingleChildBase::new(),
+            configuration,
+        }
+    }
+}
+
+impl Deref for RenderView {
+    type Target = SingleChildBase;
+    fn deref(&self) -> &Self::Target { &self.base }
+}
+
+impl DerefMut for RenderView {
+    fn deref_mut(&mut self) -> &mut Self::Target { &mut self.base }
+}
+
+impl RenderView {
+    pub fn layout(&mut self) {
+        let constraints = BoxConstraints::tight(self.configuration.size);
+        if let Some(child) = self.child_mut() {
+            // Deref на RenderHandle → вызываем perform_layout напрямую!
+            child.perform_layout(&constraints);
+        }
+    }
+    
+    pub fn paint(&self, ctx: &mut PaintingContext) {
+        if let Some(child) = self.child() {
+            child.paint(ctx, Offset::ZERO);
+        }
+    }
+}
+```
+
+### RenderPadding
+
+```rust
+pub struct RenderPadding {
+    base: ShiftedBoxBase,
+    pub padding: EdgeInsets,
+}
+
+impl RenderPadding {
+    pub fn new(padding: EdgeInsets) -> Self {
+        Self {
+            base: ShiftedBoxBase::new(),
+            padding,
+        }
+    }
+    
+    pub fn uniform(value: f32) -> Self {
+        Self::new(EdgeInsets::all(value))
+    }
+}
+
+impl Deref for RenderPadding {
+    type Target = ShiftedBoxBase;
+    fn deref(&self) -> &Self::Target { &self.base }
+}
+
+impl DerefMut for RenderPadding {
+    fn deref_mut(&mut self) -> &mut Self::Target { &mut self.base }
+}
+
+impl RenderBox for RenderPadding {
+    fn perform_layout(&mut self, constraints: &BoxConstraints) -> Size {
+        if let Some(child) = self.child_mut() {
+            let inner = constraints.deflate(&self.padding);
+            
+            // Напрямую через Deref!
+            let child_size = child.perform_layout(&inner);
+            
+            self.child_offset = Offset::new(self.padding.left, self.padding.top);
+            self.size = Size::new(
+                child_size.width + self.padding.horizontal(),
+                child_size.height + self.padding.vertical(),
+            );
+        } else {
+            self.size = constraints.smallest();
+        }
+        self.size
+    }
+    
+    fn paint(&self, ctx: &mut PaintingContext, offset: Offset) {
+        if let Some(child) = self.child() {
+            child.paint(ctx, offset + self.child_offset);
+        }
+    }
+    
+    fn hit_test(&self, result: &mut HitTestResult, position: Offset) -> bool {
+        if let Some(child) = self.child() {
+            let child_position = position - self.child_offset;
+            child.hit_test(result, child_position)
+        } else {
+            false
+        }
+    }
+}
+```
+
+### RenderAlign
+
+```rust
 pub struct RenderAlign {
     base: AligningBoxBase,
-    width_factor: Option<f32>,
-    height_factor: Option<f32>,
+    pub width_factor: Option<f32>,
+    pub height_factor: Option<f32>,
 }
 
 impl RenderAlign {
@@ -206,115 +474,57 @@ impl RenderAlign {
     pub fn centered() -> Self {
         Self::new(Alignment::CENTER)
     }
-    
-    pub fn with_factors(alignment: Alignment, wf: Option<f32>, hf: Option<f32>) -> Self {
-        Self {
-            base: AligningBoxBase::new(alignment),
-            width_factor: wf,
-            height_factor: hf,
-        }
-    }
+}
+
+impl Deref for RenderAlign {
+    type Target = AligningBoxBase;
+    fn deref(&self) -> &Self::Target { &self.base }
+}
+
+impl DerefMut for RenderAlign {
+    fn deref_mut(&mut self) -> &mut Self::Target { &mut self.base }
 }
 
 impl RenderBox for RenderAlign {
-    type Arity = Optional;
-    
-    fn perform_layout(&mut self, constraints: &BoxConstraints, layout: &mut LayoutHelper) -> Size {
-        if let Some(child) = self.base.child() {
-            let child_size = layout.layout_child(child, constraints.loosen());
+    fn perform_layout(&mut self, constraints: &BoxConstraints) -> Size {
+        if let Some(child) = self.child_mut() {
+            let child_size = child.perform_layout(&constraints.loosen());
             
-            let size = Size::new(
+            self.size = Size::new(
                 self.width_factor.map_or(constraints.max_width, |f| child_size.width * f),
                 self.height_factor.map_or(constraints.max_height, |f| child_size.height * f),
             );
-            let size = constraints.constrain(size);
+            self.size = constraints.constrain(self.size);
             
-            self.base.align_child(child_size, size);
-            self.base.inner.inner.size = size;
-            size
+            self.align_child(child_size, self.size);
         } else {
-            constraints.biggest()
+            self.size = constraints.biggest();
         }
+        self.size
     }
     
     fn paint(&self, ctx: &mut PaintingContext, offset: Offset) {
-        self.base.paint_child(ctx, offset);
+        if let Some(child) = self.child() {
+            child.paint(ctx, offset + self.child_offset);
+        }
+    }
+    
+    fn hit_test(&self, result: &mut HitTestResult, position: Offset) -> bool {
+        if let Some(child) = self.child() {
+            child.hit_test(result, position - self.child_offset)
+        } else {
+            false
+        }
     }
 }
 ```
 
----
-
-## Пример 2: RenderPadding (Single child)
+### RenderOpacity (Proxy)
 
 ```rust
-// ============================================================================
-// RENDER PADDING - Single child + EdgeInsets
-// ============================================================================
-
-pub struct RenderPadding {
-    base: ShiftedBoxBase,
-    padding: EdgeInsets,
-}
-
-impl RenderPadding {
-    pub fn new(padding: EdgeInsets) -> Self {
-        Self {
-            base: ShiftedBoxBase::new(),
-            padding,
-        }
-    }
-    
-    pub fn uniform(value: f32) -> Self {
-        Self::new(EdgeInsets::all(value))
-    }
-    
-    pub fn symmetric(horizontal: f32, vertical: f32) -> Self {
-        Self::new(EdgeInsets::symmetric(horizontal, vertical))
-    }
-}
-
-impl RenderBox for RenderPadding {
-    type Arity = Single;
-    
-    fn perform_layout(&mut self, constraints: &BoxConstraints, layout: &mut LayoutHelper) -> Size {
-        let child = self.base.child().expect("RenderPadding requires child");
-        
-        // Deflate constraints by padding
-        let inner_constraints = constraints.deflate(&self.padding);
-        let child_size = layout.layout_child(child, inner_constraints);
-        
-        // Position child at padding offset
-        self.base.child_offset = Offset::new(self.padding.left, self.padding.top);
-        
-        // Our size = child + padding
-        let size = Size::new(
-            child_size.width + self.padding.horizontal(),
-            child_size.height + self.padding.vertical(),
-        );
-        
-        self.base.inner.size = constraints.constrain(size);
-        self.base.inner.size
-    }
-    
-    fn paint(&self, ctx: &mut PaintingContext, offset: Offset) {
-        self.base.paint_child(ctx, offset);
-    }
-}
-```
-
----
-
-## Пример 3: RenderOpacity (Proxy - Single child)
-
-```rust
-// ============================================================================
-// RENDER OPACITY - Proxy pattern (delegates to child)
-// ============================================================================
-
 pub struct RenderOpacity {
     base: ProxyBoxBase,
-    opacity: f32,
+    pub opacity: f32,
 }
 
 impl RenderOpacity {
@@ -324,69 +534,73 @@ impl RenderOpacity {
             opacity: opacity.clamp(0.0, 1.0),
         }
     }
-    
-    pub fn set_opacity(&mut self, opacity: f32) {
-        self.opacity = opacity.clamp(0.0, 1.0);
-    }
+}
+
+impl Deref for RenderOpacity {
+    type Target = ProxyBoxBase;
+    fn deref(&self) -> &Self::Target { &self.base }
+}
+
+impl DerefMut for RenderOpacity {
+    fn deref_mut(&mut self) -> &mut Self::Target { &mut self.base }
 }
 
 impl RenderBox for RenderOpacity {
-    type Arity = Single;
-    
-    fn perform_layout(&mut self, constraints: &BoxConstraints, layout: &mut LayoutHelper) -> Size {
-        // Proxy: просто передаём constraints ребёнку
-        let child = self.base.child().expect("RenderOpacity requires child");
-        let size = layout.layout_child(child, constraints);
-        self.base.inner.size = size;
-        size
+    fn perform_layout(&mut self, constraints: &BoxConstraints) -> Size {
+        if let Some(child) = self.child_mut() {
+            self.size = child.perform_layout(constraints);
+        } else {
+            self.size = constraints.smallest();
+        }
+        self.size
     }
     
     fn paint(&self, ctx: &mut PaintingContext, offset: Offset) {
         if self.opacity == 0.0 {
-            return; // Полностью прозрачный - не рисуем
+            return;
         }
         
-        if self.opacity == 1.0 {
-            // Полностью непрозрачный - рисуем напрямую
-            self.base.paint_child(ctx, offset);
+        if let Some(child) = self.child() {
+            if self.opacity == 1.0 {
+                child.paint(ctx, offset);
+            } else {
+                ctx.push_opacity(self.opacity, offset, |ctx| {
+                    child.paint(ctx, Offset::ZERO);
+                });
+            }
+        }
+    }
+    
+    fn hit_test(&self, result: &mut HitTestResult, position: Offset) -> bool {
+        if let Some(child) = self.child() {
+            child.hit_test(result, position)
         } else {
-            // Частичная прозрачность - через layer
-            ctx.push_opacity(self.opacity, offset, |ctx| {
-                self.base.paint_child(ctx, Offset::ZERO);
-            });
+            false
         }
     }
 }
 ```
 
----
-
-## Пример 4: RenderFlex (Variable children)
+### RenderFlex (Container)
 
 ```rust
-// ============================================================================
-// RENDER FLEX - Variable children (Column, Row)
-// ============================================================================
-
 pub struct RenderFlex {
-    base: ContainerBoxBase,
-    direction: Axis,
-    main_axis_alignment: MainAxisAlignment,
-    cross_axis_alignment: CrossAxisAlignment,
-    main_axis_size: MainAxisSize,
+    base: ContainerBase,
+    pub direction: Axis,
+    pub main_axis_alignment: MainAxisAlignment,
+    pub cross_axis_alignment: CrossAxisAlignment,
     
-    // Кэш позиций детей для paint
+    // Cache
     child_offsets: Vec<Offset>,
 }
 
 impl RenderFlex {
     pub fn new(direction: Axis) -> Self {
         Self {
-            base: ContainerBoxBase::new(),
+            base: ContainerBase::new(),
             direction,
             main_axis_alignment: MainAxisAlignment::Start,
             cross_axis_alignment: CrossAxisAlignment::Center,
-            main_axis_size: MainAxisSize::Max,
             child_offsets: Vec::new(),
         }
     }
@@ -398,65 +612,66 @@ impl RenderFlex {
     pub fn column() -> Self {
         Self::new(Axis::Vertical)
     }
-    
-    pub fn main_axis_alignment(mut self, alignment: MainAxisAlignment) -> Self {
-        self.main_axis_alignment = alignment;
-        self
-    }
-    
-    pub fn cross_axis_alignment(mut self, alignment: CrossAxisAlignment) -> Self {
-        self.cross_axis_alignment = alignment;
-        self
-    }
+}
+
+impl Deref for RenderFlex {
+    type Target = ContainerBase;
+    fn deref(&self) -> &Self::Target { &self.base }
+}
+
+impl DerefMut for RenderFlex {
+    fn deref_mut(&mut self) -> &mut Self::Target { &mut self.base }
 }
 
 impl RenderBox for RenderFlex {
-    type Arity = Variable;
-    
-    fn perform_layout(&mut self, constraints: &BoxConstraints, layout: &mut LayoutHelper) -> Size {
-        let mut total_main_axis = 0.0;
-        let mut max_cross_axis = 0.0;
-        
+    fn perform_layout(&mut self, constraints: &BoxConstraints) -> Size {
         self.child_offsets.clear();
         
-        // Phase 1: Layout non-flex children
-        for child in self.base.children() {
+        let mut total_main = 0.0;
+        let mut max_cross = 0.0;
+        let mut child_sizes = Vec::new();
+        
+        // Phase 1: Layout children
+        for child in self.children_mut() {
             let child_constraints = match self.direction {
-                Axis::Horizontal => BoxConstraints::new(
-                    0.0, f32::INFINITY,
-                    0.0, constraints.max_height,
-                ),
-                Axis::Vertical => BoxConstraints::new(
-                    0.0, constraints.max_width,
-                    0.0, f32::INFINITY,
-                ),
+                Axis::Horizontal => BoxConstraints::new(0.0, f32::INFINITY, 0.0, constraints.max_height),
+                Axis::Vertical => BoxConstraints::new(0.0, constraints.max_width, 0.0, f32::INFINITY),
             };
             
-            let child_size = layout.layout_child(child, child_constraints);
+            let child_size = child.perform_layout(&child_constraints);
+            child_sizes.push(child_size);
             
-            // Accumulate sizes
             match self.direction {
                 Axis::Horizontal => {
-                    total_main_axis += child_size.width;
-                    max_cross_axis = max_cross_axis.max(child_size.height);
+                    total_main += child_size.width;
+                    max_cross = max_cross.max(child_size.height);
                 }
                 Axis::Vertical => {
-                    total_main_axis += child_size.height;
-                    max_cross_axis = max_cross_axis.max(child_size.width);
+                    total_main += child_size.height;
+                    max_cross = max_cross.max(child_size.width);
                 }
             }
         }
         
         // Phase 2: Position children
         let mut main_offset = 0.0;
-        
-        for child in self.base.children() {
-            let child_size = layout.child_size(child);
-            
+        for child_size in &child_sizes {
             let cross_offset = match self.cross_axis_alignment {
                 CrossAxisAlignment::Start => 0.0,
-                CrossAxisAlignment::Center => (max_cross_axis - child_size.cross(self.direction)) / 2.0,
-                CrossAxisAlignment::End => max_cross_axis - child_size.cross(self.direction),
+                CrossAxisAlignment::Center => {
+                    let child_cross = match self.direction {
+                        Axis::Horizontal => child_size.height,
+                        Axis::Vertical => child_size.width,
+                    };
+                    (max_cross - child_cross) / 2.0
+                }
+                CrossAxisAlignment::End => {
+                    let child_cross = match self.direction {
+                        Axis::Horizontal => child_size.height,
+                        Axis::Vertical => child_size.width,
+                    };
+                    max_cross - child_cross
+                }
                 _ => 0.0,
             };
             
@@ -464,163 +679,57 @@ impl RenderBox for RenderFlex {
                 Axis::Horizontal => Offset::new(main_offset, cross_offset),
                 Axis::Vertical => Offset::new(cross_offset, main_offset),
             };
-            
             self.child_offsets.push(offset);
-            main_offset += child_size.main(self.direction);
+            
+            main_offset += match self.direction {
+                Axis::Horizontal => child_size.width,
+                Axis::Vertical => child_size.height,
+            };
         }
         
-        // Compute final size
-        let size = match self.direction {
-            Axis::Horizontal => Size::new(total_main_axis, max_cross_axis),
-            Axis::Vertical => Size::new(max_cross_axis, total_main_axis),
+        self.size = match self.direction {
+            Axis::Horizontal => constraints.constrain(Size::new(total_main, max_cross)),
+            Axis::Vertical => constraints.constrain(Size::new(max_cross, total_main)),
         };
-        
-        self.base.inner.size = constraints.constrain(size);
-        self.base.inner.size
+        self.size
     }
     
     fn paint(&self, ctx: &mut PaintingContext, offset: Offset) {
-        for (i, child) in self.base.children().enumerate() {
+        for (i, child) in self.children().iter().enumerate() {
             let child_offset = self.child_offsets.get(i).copied().unwrap_or(Offset::ZERO);
-            ctx.paint_child(child, offset + child_offset);
-        }
-    }
-}
-```
-
----
-
-## Пример 5: RenderSliverList (Sliver protocol)
-
-```rust
-// ============================================================================
-// SLIVER - Отдельный trait для Sliver protocol
-// ============================================================================
-
-pub trait RenderSliver: RenderObject {
-    type Arity: Arity;
-    
-    fn perform_layout(
-        &mut self,
-        constraints: &SliverConstraints,
-        layout: &mut LayoutHelper,
-    ) -> SliverGeometry;
-    
-    fn paint(&self, ctx: &mut PaintingContext, offset: Offset);
-}
-
-/// База для sliver с variable children
-pub struct SliverListBase {
-    pub inner: BoxBase<Variable>,
-}
-
-impl SliverListBase {
-    pub fn new() -> Self {
-        Self { inner: BoxBase::new() }
-    }
-    
-    pub fn children(&self) -> impl Iterator<Item = RenderNodeId> + '_ {
-        self.inner.children.iter()
-    }
-}
-
-// ============================================================================
-// RENDER SLIVER LIST
-// ============================================================================
-
-pub struct RenderSliverList {
-    base: SliverListBase,
-    item_extent: Option<f32>,  // fixed height per item (optimization)
-    
-    // Cache
-    child_offsets: Vec<f32>,  // main axis offsets
-}
-
-impl RenderSliverList {
-    pub fn new() -> Self {
-        Self {
-            base: SliverListBase::new(),
-            item_extent: None,
-            child_offsets: Vec::new(),
+            child.paint(ctx, offset + child_offset);
         }
     }
     
-    pub fn with_fixed_extent(extent: f32) -> Self {
-        Self {
-            base: SliverListBase::new(),
-            item_extent: Some(extent),
-            child_offsets: Vec::new(),
-        }
-    }
-}
-
-impl RenderSliver for RenderSliverList {
-    type Arity = Variable;
-    
-    fn perform_layout(
-        &mut self,
-        constraints: &SliverConstraints,
-        layout: &mut LayoutHelper,
-    ) -> SliverGeometry {
-        self.child_offsets.clear();
-        
-        let mut scroll_offset = 0.0;
-        let mut paint_extent = 0.0;
-        
-        for child in self.base.children() {
-            // Layout child as Box
-            let child_constraints = BoxConstraints::tight_for(
-                Some(constraints.cross_axis_extent),
-                self.item_extent,
-            );
-            
-            let child_size = layout.layout_child(child, child_constraints);
-            let child_extent = child_size.height; // assuming vertical
-            
-            self.child_offsets.push(scroll_offset);
-            
-            // Check if visible
-            if scroll_offset + child_extent > constraints.scroll_offset &&
-               scroll_offset < constraints.scroll_offset + constraints.remaining_paint_extent {
-                paint_extent += child_extent;
+    fn hit_test(&self, result: &mut HitTestResult, position: Offset) -> bool {
+        for (i, child) in self.children().iter().enumerate().rev() {
+            let child_offset = self.child_offsets.get(i).copied().unwrap_or(Offset::ZERO);
+            if child.hit_test(result, position - child_offset) {
+                return true;
             }
-            
-            scroll_offset += child_extent;
         }
-        
-        SliverGeometry {
-            scroll_extent: scroll_offset,
-            paint_extent: paint_extent.min(constraints.remaining_paint_extent),
-            max_paint_extent: scroll_offset,
-            ..Default::default()
-        }
-    }
-    
-    fn paint(&self, ctx: &mut PaintingContext, offset: Offset) {
-        for (i, child) in self.base.children().enumerate() {
-            let main_axis_offset = self.child_offsets.get(i).copied().unwrap_or(0.0);
-            ctx.paint_child(child, offset + Offset::new(0.0, main_axis_offset));
-        }
+        false
     }
 }
 ```
 
 ---
 
-## Сравнение Подходов
+## Сравнение с Flutter
 
-| Аспект | `RenderBox<A>` (generic param) | `RenderBox` + `type Arity` (associated) |
-|--------|-------------------------------|----------------------------------------|
-| Объявление trait | `trait RenderBox<A: Arity>` | `trait RenderBox { type Arity: Arity; }` |
-| Impl | `impl RenderBox<Optional> for X` | `impl RenderBox for X { type Arity = Optional; }` |
-| Хранение в коллекции | `Vec<Box<dyn RenderBox<??>>>` - сложно | `Vec<Box<dyn RenderBox>>` - просто |
-| Arity виден | В сигнатуре типа | В associated type |
+| Flutter | Rust FLUI |
+|---------|-----------|
+| `child!.layout(constraints)` | `child.perform_layout(&constraints)` |
+| `child!.paint(context, offset)` | `child.paint(ctx, offset)` |
+| `class RenderPadding extends RenderShiftedBox` | `struct RenderPadding { base: ShiftedBoxBase }` + `Deref` |
+| `RenderObjectWithChildMixin` | `SingleChildBase` |
+| `ContainerRenderObjectMixin` | `ContainerBase` |
 
-## Вывод
+## Преимущества
 
-**Вариант 3** (Arity в base struct + associated type в trait):
-- ✅ Простой `impl RenderBox for X`
-- ✅ Легко хранить в коллекциях
-- ✅ Base структуры переиспользуют код
-- ✅ Конструкторы простые: `RenderAlign::new(alignment)`
-- ✅ Один trait для Box, один для Sliver
+- ✅ **Чистый API** — `child.perform_layout()` напрямую через Deref
+- ✅ **Нет boilerplate** — base structs с Deref дают методы бесплатно
+- ✅ **Как Flutter** — дети внутри RenderObject, не в отдельном tree
+- ✅ **Нет LayoutHelper** — layout напрямую на детях
+- ✅ **Typestate** — `RenderHandle<Unmounted>` / `RenderHandle<Mounted>`
+- ✅ **Композиция** — иерархия через Deref вместо наследования

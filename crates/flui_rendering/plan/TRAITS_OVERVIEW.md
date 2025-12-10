@@ -52,32 +52,146 @@ Based on analysis of Flutter rendering architecture and `impl/` documentation.
 └─────────────────────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────────────────────┐
-│                           CHILD MANAGEMENT                                       │
+│                           RENDER HANDLE                                          │
 ├─────────────────────────────────────────────────────────────────────────────────┤
 │                                                                                 │
-│  Uses Arity from flui-tree:                                                     │
+│  ┌──────────────────────────────────────────────────────────────────────────┐  │
+│  │  RenderHandle<P: Protocol, S: NodeState>                                 │  │
+│  │    - render_object: Box<dyn RenderProtocol<P>>                           │  │
+│  │    - depth: Depth                                                        │  │
+│  │    - parent: Option<RenderId>                                            │  │
+│  │                                                                          │  │
+│  │  Implements Deref → dyn RenderProtocol<P>                                │  │
+│  │  Allows: handle.perform_layout() directly (no .get() needed)             │  │
+│  └──────────────────────────────────────────────────────────────────────────┘  │
 │                                                                                 │
-│  ┌─────────────────┐   ┌─────────────────┐   ┌─────────────────┐               │
-│  │      Leaf       │   │     Single      │   │    Optional     │               │
-│  │   (0 children)  │   │   (1 child)     │   │  (0-1 child)    │               │
-│  └─────────────────┘   └─────────────────┘   └─────────────────┘               │
+│  Type Aliases:                                                                  │
+│  ┌─────────────────────────────────────────────────────────────────────────┐   │
+│  │ BoxHandle<S>    = RenderHandle<BoxProtocol, S>                          │   │
+│  │ SliverHandle<S> = RenderHandle<SliverProtocol, S>                       │   │
+│  └─────────────────────────────────────────────────────────────────────────┘   │
 │                                                                                 │
-│  ┌─────────────────┐   ┌─────────────────┐   ┌─────────────────┐               │
-│  │    Variable     │   │    Exact<N>     │   │  Range<MIN,MAX> │               │
-│  │  (N children)   │   │ (exactly N)     │   │  (MIN..MAX)     │               │
-│  └─────────────────┘   └─────────────────┘   └─────────────────┘               │
+└─────────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                           CHILD STORAGE TYPES                                    │
+├─────────────────────────────────────────────────────────────────────────────────┤
 │                                                                                 │
-│  Additional patterns:                                                           │
+│  Flutter-like types for storing children inside RenderObject:                   │
 │                                                                                 │
-│  ┌─────────────────┐   ┌─────────────────┐                                     │
-│  │   ProxyChild    │   │  ShiftedChild   │                                     │
-│  │ (delegate to 1) │   │ (offset child)  │                                     │
-│  └─────────────────┘   └─────────────────┘                                     │
+│  ┌─────────────────────────────────────────────────────────────────────────┐   │
+│  │  Child<P: Protocol>                                                     │   │
+│  │    Flutter: RenderObjectWithChildMixin                                  │   │
+│  │    Use for: Single child (Padding, Align, Transform)                    │   │
+│  │    inner: Option<RenderHandle<P, Mounted>>                              │   │
+│  └─────────────────────────────────────────────────────────────────────────┘   │
+│                                                                                 │
+│  ┌─────────────────────────────────────────────────────────────────────────┐   │
+│  │  Children<P: Protocol, PD: ParentData = ()>                             │   │
+│  │    Flutter: ContainerRenderObjectMixin                                  │   │
+│  │    Use for: Multiple children (Flex, Stack, Wrap)                       │   │
+│  │    items: Vec<(RenderHandle<P, Mounted>, ContainerParentData<PD>)>      │   │
+│  └─────────────────────────────────────────────────────────────────────────┘   │
+│                                                                                 │
+│  ┌─────────────────────────────────────────────────────────────────────────┐   │
+│  │  Slots<P: Protocol, S: SlotKey>                                         │   │
+│  │    Flutter: SlottedContainerRenderObjectMixin                           │   │
+│  │    Use for: Named slots (ListTile, InputDecorator)                      │   │
+│  │    items: HashMap<S, (RenderHandle<P, Mounted>, Offset)>                │   │
+│  └─────────────────────────────────────────────────────────────────────────┘   │
+│                                                                                 │
+│  Key difference from Arity:                                                     │
+│  - Children stored INSIDE RenderObject (like Flutter), not in separate tree    │
+│  - Enables: self.child.perform_layout() directly                               │
+│  - No need for tree lookup during layout                                       │
+│                                                                                 │
+└─────────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                           BASE STRUCT PATTERNS                                   │
+├─────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                 │
+│  Base structs use Deref chain for method delegation:                            │
+│                                                                                 │
+│  ┌───────────────────┐     ┌───────────────────┐     ┌───────────────────┐     │
+│  │  SingleChildBase  │ --> │  ShiftedBoxBase   │ --> │  AligningBoxBase  │     │
+│  │   child: Child<P> │     │   child_offset    │     │   alignment       │     │
+│  └───────────────────┘     └───────────────────┘     └───────────────────┘     │
+│          │                          │                          │               │
+│          │                          │                          │               │
+│          ▼                          ▼                          ▼               │
+│  ┌───────────────────┐     ┌───────────────────┐     ┌───────────────────┐     │
+│  │   RenderOpacity   │     │   RenderPadding   │     │   RenderAlign     │     │
+│  │    alpha: f32     │     │  padding: Insets  │     │  width_factor?    │     │
+│  └───────────────────┘     └───────────────────┘     └───────────────────┘     │
+│                                                                                 │
+│  Deref enables: self.child.perform_layout() without boilerplate                 │
+│                                                                                 │
+│  ┌───────────────────┐     ┌───────────────────┐                               │
+│  │   ProxyBoxBase    │     │   ContainerBase   │                               │
+│  │   extends Single  │     │ children: Children│                               │
+│  │   (delegates all) │     │  <P, PD>          │                               │
+│  └───────────────────┘     └───────────────────┘                               │
 │                                                                                 │
 └─────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## 1. Core Traits
+
+### RenderHandle
+
+Typestate handle for render objects with `Deref` for direct method calls:
+
+```rust
+use std::marker::PhantomData;
+use std::ops::{Deref, DerefMut};
+use flui_tree::{Depth, Mounted, Unmounted, NodeState};
+
+/// Handle for render object with Protocol + NodeState typestate.
+/// 
+/// Implements Deref to call methods directly:
+/// ```rust
+/// // Instead of: handle.render_object().perform_layout(...)
+/// // Just:       handle.perform_layout(...)
+/// ```
+pub struct RenderHandle<P: Protocol, S: NodeState> {
+    render_object: Box<dyn RenderProtocol<P>>,
+    depth: Depth,
+    parent: Option<RenderId>,
+    _marker: PhantomData<(P, S)>,
+}
+
+impl<P: Protocol, S: NodeState> Deref for RenderHandle<P, S> {
+    type Target = dyn RenderProtocol<P>;
+    fn deref(&self) -> &Self::Target {
+        self.render_object.as_ref()
+    }
+}
+
+impl<P: Protocol, S: NodeState> DerefMut for RenderHandle<P, S> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.render_object.as_mut()
+    }
+}
+
+// State transitions
+impl<P: Protocol> RenderHandle<P, Unmounted> {
+    pub fn new<R: RenderProtocol<P> + 'static>(render: R) -> Self { ... }
+    pub fn mount(self, parent: Option<RenderId>, depth: Depth) -> RenderHandle<P, Mounted> { ... }
+}
+
+impl<P: Protocol> RenderHandle<P, Mounted> {
+    pub fn parent(&self) -> Option<RenderId> { ... }
+    pub fn depth(&self) -> Depth { ... }
+    pub fn unmount(self) -> RenderHandle<P, Unmounted> { ... }
+    pub fn attach(&mut self) { ... }
+    pub fn detach(&mut self) { ... }
+}
+
+// Type aliases
+pub type BoxHandle<S> = RenderHandle<BoxProtocol, S>;
+pub type SliverHandle<S> = RenderHandle<SliverProtocol, S>;
+```
 
 ### RenderState (Typestate Markers)
 
@@ -358,92 +472,178 @@ pub trait SliverHitTest: HitTestProtocol<SliverProtocol> {
 }
 ```
 
-## 5. Child Pattern Traits
+## 5. Child Storage Types
 
-### ProxyChild (Delegates to Single Child)
+Children are stored **inside** RenderObject (like Flutter), not in a separate tree.
+This enables direct method calls: `self.child.perform_layout()`.
+
+### Child\<P\> — Single Child
+
+Flutter's `RenderObjectWithChildMixin`:
 
 ```rust
-/// A render object that delegates most behavior to its single child.
-/// Used for visual effects: opacity, transform, clip, etc.
-pub trait ProxyChild<P: Protocol>: LayoutProtocol<P> + PaintProtocol {
-    fn child(&self) -> Option<RenderNodeId>;
+/// Single child storage (optional).
+/// 
+/// # Usage
+/// ```rust
+/// pub struct RenderPadding {
+///     child: Child<BoxProtocol>,
+///     padding: EdgeInsets,
+/// }
+/// ```
+pub struct Child<P: Protocol> {
+    inner: Option<RenderHandle<P, Mounted>>,
+}
+
+impl<P: Protocol> Child<P> {
+    pub fn new() -> Self;
+    pub fn with(child: RenderHandle<P, Mounted>) -> Self;
     
-    // Default implementations delegate to child
+    pub fn get(&self) -> Option<&RenderHandle<P, Mounted>>;
+    pub fn get_mut(&mut self) -> Option<&mut RenderHandle<P, Mounted>>;
+    pub fn set(&mut self, child: Option<RenderHandle<P, Mounted>>);
+    pub fn take(&mut self) -> Option<RenderHandle<P, Mounted>>;
     
-    fn perform_layout(
-        &mut self,
-        constraints: &P::Constraints,
-        children: &mut dyn ChildLayouter<P>,
-    ) -> P::Geometry {
-        if let Some(child_id) = self.child() {
-            children.layout_child(child_id, constraints.clone())
-        } else {
-            P::Geometry::default()
-        }
-    }
+    pub fn is_some(&self) -> bool;
+    pub fn is_none(&self) -> bool;
     
-    fn paint(&self, context: &mut PaintingContext, offset: Offset) {
-        if let Some(child_id) = self.child() {
-            context.paint_child(child_id, offset);
-        }
-    }
+    // Lifecycle helpers
+    pub fn attach(&mut self);
+    pub fn detach(&mut self);
+    pub fn visit(&self, visitor: &mut dyn FnMut(&dyn RenderObject));
+}
+
+// Deref for ergonomic access
+impl<P: Protocol> Deref for Child<P> {
+    type Target = Option<RenderHandle<P, Mounted>>;
 }
 ```
 
-### ShiftedChild (Single Child at Offset)
+### Children\<P, PD\> — Multiple Children
+
+Flutter's `ContainerRenderObjectMixin`:
 
 ```rust
-/// A render object that positions its child at a non-zero offset.
-/// Used for layout: padding, alignment, positioning.
-pub trait ShiftedChild<P: Protocol>: LayoutProtocol<P> + PaintProtocol
-where
-    P::ParentData: HasOffset,
-{
-    fn child(&self) -> Option<RenderNodeId>;
-    fn child_offset(&self) -> Offset;
-    
-    fn paint(&self, context: &mut PaintingContext, offset: Offset) {
-        if let Some(child_id) = self.child() {
-            context.paint_child(child_id, offset + self.child_offset());
-        }
-    }
+/// Parent data wrapper with offset.
+#[derive(Debug, Clone)]
+pub struct ContainerParentData<PD: ParentData = ()> {
+    pub offset: Offset,
+    pub data: PD,
 }
 
-/// ParentData that has an offset field.
-pub trait HasOffset {
-    fn offset(&self) -> Offset;
-    fn set_offset(&mut self, offset: Offset);
+/// Multiple children storage with custom parent data.
+/// 
+/// # Type Parameters
+/// - `P: Protocol` — BoxProtocol or SliverProtocol
+/// - `PD: ParentData` — Custom data (e.g., FlexParentData)
+/// 
+/// # Usage
+/// ```rust
+/// pub struct RenderFlex {
+///     children: Children<BoxProtocol, FlexParentData>,
+///     direction: Axis,
+/// }
+/// ```
+pub struct Children<P: Protocol, PD: ParentData = ()> {
+    items: Vec<(RenderHandle<P, Mounted>, ContainerParentData<PD>)>,
+}
+
+impl<P: Protocol, PD: ParentData + Default> Children<P, PD> {
+    // Flutter-like properties
+    pub fn len(&self) -> usize;            // childCount
+    pub fn first(&self) -> Option<&RenderHandle<P, Mounted>>;   // firstChild
+    pub fn last(&self) -> Option<&RenderHandle<P, Mounted>>;    // lastChild
+    
+    // Flutter-like methods
+    pub fn add(&mut self, child: RenderHandle<P, Mounted>);     // add
+    pub fn add_with_data(&mut self, child: RenderHandle<P, Mounted>, data: PD);
+    pub fn add_all(&mut self, children: impl IntoIterator<Item = RenderHandle<P, Mounted>>);
+    pub fn insert(&mut self, index: usize, child: RenderHandle<P, Mounted>);
+    pub fn remove(&mut self, index: usize) -> Option<RenderHandle<P, Mounted>>;
+    pub fn clear(&mut self);               // removeAll
+    pub fn move_child(&mut self, from: usize, to: usize);
+    
+    // Access
+    pub fn get(&self, index: usize) -> Option<&RenderHandle<P, Mounted>>;
+    pub fn get_mut(&mut self, index: usize) -> Option<&mut RenderHandle<P, Mounted>>;
+    
+    // Parent data
+    pub fn parent_data(&self, index: usize) -> Option<&ContainerParentData<PD>>;
+    pub fn parent_data_mut(&mut self, index: usize) -> Option<&mut ContainerParentData<PD>>;
+    pub fn set_offset(&mut self, index: usize, offset: Offset);
+    pub fn offset(&self, index: usize) -> Option<Offset>;
+    
+    // Iteration
+    pub fn iter(&self) -> impl Iterator<Item = &RenderHandle<P, Mounted>>;
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut RenderHandle<P, Mounted>>;
+    pub fn iter_with_data(&self) -> impl Iterator<Item = (&RenderHandle<P, Mounted>, &ContainerParentData<PD>)>;
+    
+    // Lifecycle
+    pub fn attach_all(&mut self);
+    pub fn detach_all(&mut self);
+    pub fn visit_all(&self, visitor: &mut dyn FnMut(&dyn RenderObject));
 }
 ```
 
-### ContainerChild (Multiple Children)
+### Slots\<P, S\> — Named Slots
+
+Flutter's `SlottedContainerRenderObjectMixin`:
 
 ```rust
-/// A render object with multiple children.
-/// Uses linked list via ParentData sibling pointers.
-pub trait ContainerChild<P: Protocol>: LayoutProtocol<P> + PaintProtocol
-where
-    P::ParentData: ContainerParentDataTrait,
-{
-    fn first_child(&self) -> Option<RenderNodeId>;
-    fn last_child(&self) -> Option<RenderNodeId>;
-    fn child_count(&self) -> usize;
-    
-    fn child_before(&self, child: RenderNodeId) -> Option<RenderNodeId>;
-    fn child_after(&self, child: RenderNodeId) -> Option<RenderNodeId>;
-    
-    fn insert(&mut self, child: RenderNodeId, after: Option<RenderNodeId>);
-    fn remove(&mut self, child: RenderNodeId);
+/// Marker trait for slot keys (usually enums).
+pub trait SlotKey: Eq + Hash + Copy + 'static {}
+
+/// Named slots storage.
+/// 
+/// # Type Parameters
+/// - `P: Protocol` — BoxProtocol or SliverProtocol
+/// - `S: SlotKey` — Slot enum type
+/// 
+/// # Usage
+/// ```rust
+/// #[derive(Clone, Copy, PartialEq, Eq, Hash)]
+/// pub enum ListTileSlot { Leading, Title, Subtitle, Trailing }
+/// 
+/// pub struct RenderListTile {
+///     slots: Slots<BoxProtocol, ListTileSlot>,
+/// }
+/// ```
+pub struct Slots<P: Protocol, S: SlotKey> {
+    items: HashMap<S, (RenderHandle<P, Mounted>, Offset)>,
 }
 
-/// ParentData with sibling links.
-pub trait ContainerParentDataTrait: ParentData + HasOffset {
-    fn previous_sibling(&self) -> Option<RenderNodeId>;
-    fn next_sibling(&self) -> Option<RenderNodeId>;
-    fn set_previous_sibling(&mut self, id: Option<RenderNodeId>);
-    fn set_next_sibling(&mut self, id: Option<RenderNodeId>);
+impl<P: Protocol, S: SlotKey> Slots<P, S> {
+    // Flutter-like methods
+    pub fn get(&self, slot: S) -> Option<&RenderHandle<P, Mounted>>;  // childForSlot
+    pub fn get_mut(&mut self, slot: S) -> Option<&mut RenderHandle<P, Mounted>>;
+    pub fn set(&mut self, slot: S, child: Option<RenderHandle<P, Mounted>>);
+    pub fn has(&self, slot: S) -> bool;
+    pub fn remove(&mut self, slot: S) -> Option<RenderHandle<P, Mounted>>;
+    
+    // Offset
+    pub fn offset(&self, slot: S) -> Option<Offset>;
+    pub fn set_offset(&mut self, slot: S, offset: Offset);
+    
+    // Iteration
+    pub fn len(&self) -> usize;
+    pub fn children(&self) -> impl Iterator<Item = &RenderHandle<P, Mounted>>;
+    pub fn iter(&self) -> impl Iterator<Item = (&S, &RenderHandle<P, Mounted>)>;
+    pub fn iter_with_offset(&self) -> impl Iterator<Item = (&S, &RenderHandle<P, Mounted>, Offset)>;
+    
+    // Lifecycle
+    pub fn attach_all(&mut self);
+    pub fn detach_all(&mut self);
+    pub fn visit_all(&self, visitor: &mut dyn FnMut(&dyn RenderObject));
 }
 ```
+
+### Summary Table
+
+| Type | Flutter Equivalent | Use Case |
+|------|-------------------|----------|
+| `Child<P>` | `RenderObjectWithChildMixin` | Padding, Align, Transform, Clip |
+| `Children<P, PD>` | `ContainerRenderObjectMixin` | Flex, Stack, Wrap, Flow |
+| `Slots<P, S>` | `SlottedContainerRenderObjectMixin` | ListTile, InputDecorator |
 
 ## 6. Pipeline Traits
 
@@ -827,8 +1027,11 @@ pub trait Invalidatable {
 
 ## Summary Table
 
-| Category | Trait | Purpose |
-|----------|-------|---------|
+| Category | Trait/Type | Purpose |
+|----------|------------|---------|
+| **Handle** | `RenderHandle<P, S>` | Typestate handle with Deref |
+| **Handle** | `BoxHandle<S>` | Alias for `RenderHandle<BoxProtocol, S>` |
+| **Handle** | `SliverHandle<S>` | Alias for `RenderHandle<SliverProtocol, S>` |
 | **State** | `RenderState` | Lifecycle typestate markers |
 | **Protocol** | `Protocol` | Box vs Sliver layout system |
 | **Core** | `Constraints` | Layout input (parent → child) |
@@ -847,11 +1050,10 @@ pub trait Invalidatable {
 | **Sliver** | `SliverLayout` | Scroll positioning |
 | **Sliver** | `SliverHitTest` | Axis coordinate hit testing |
 | **Sliver** | **`RenderSliver`** | **Combined: all Sliver traits** |
-| **Child** | `ProxyChild` | Generic delegate pattern |
-| **Child** | `ShiftedChild` | Generic offset pattern |
-| **Child** | `ContainerChild` | Multiple children (linked list) |
+| **Children** | `Child<P>` | Single child storage |
+| **Children** | `Children<P, PD>` | Multiple children with parent data |
+| **Children** | `Slots<P, S>` | Named slots storage |
 | **Pipeline** | `PipelineOwnerTrait` | Phase coordination |
-| **Pipeline** | `ChildLayouter<P>` | Child layout helper |
 | **Context** | `PaintingContextTrait` | Canvas + layer management |
 | **Transition** | `Attachable` | Detached → Attached |
 | **Transition** | `Layoutable<P>` | Attached → LaidOut |
@@ -863,43 +1065,44 @@ pub trait Invalidatable {
 ```
 crates/flui_rendering/src/
 ├── lib.rs
-├── state/
-│   ├── mod.rs           # RenderState trait + markers
-│   └── transitions.rs   # Attachable, Layoutable, Paintable, Invalidatable
+├── handle.rs            # RenderHandle<P, S> with Deref
+├── state.rs             # RenderState trait + Mounted/Unmounted
 ├── protocol/
 │   ├── mod.rs           # Protocol trait
-│   ├── box_protocol.rs  # BoxProtocol, BoxConstraints, Size, BoxParentData
-│   └── sliver_protocol.rs
+│   ├── box_protocol.rs  # BoxProtocol, BoxConstraints, Size
+│   └── sliver_protocol.rs # SliverProtocol, SliverConstraints
+├── children/
+│   ├── mod.rs           # Re-exports
+│   ├── child.rs         # Child<P> — single child
+│   ├── children.rs      # Children<P, PD> — multiple children
+│   └── slots.rs         # Slots<P, S> — named slots
 ├── traits/
 │   ├── mod.rs           # Re-exports
 │   ├── constraints.rs   # Constraints trait
 │   ├── geometry.rs      # Geometry trait
-│   ├── parent_data.rs   # ParentData, HasOffset, ContainerParentDataTrait
+│   ├── parent_data.rs   # ParentData trait
 │   ├── hit_test.rs      # HitTestResultTrait, HitTestEntry
 │   ├── render_object.rs # RenderObject base trait
 │   ├── layout.rs        # LayoutProtocol, BoxLayout, SliverLayout
-│   ├── paint.rs         # PaintProtocol, PaintingContextTrait
+│   ├── paint.rs         # PaintProtocol, PaintingContext
 │   └── hit_test_protocol.rs # HitTestProtocol, BoxHitTest, SliverHitTest
+├── base/
+│   ├── mod.rs           # Re-exports
+│   ├── single_child.rs  # SingleChildBase
+│   ├── shifted_box.rs   # ShiftedBoxBase
+│   ├── aligning_box.rs  # AligningBoxBase
+│   ├── proxy_box.rs     # ProxyBoxBase
+│   └── container.rs     # ContainerBase
 ├── box/
 │   ├── mod.rs           # Re-exports
-│   ├── render_box.rs    # RenderBox combined trait
-│   ├── proxy_box.rs     # RenderProxyBox trait + defaults
-│   └── shifted_box.rs   # RenderShiftedBox trait + defaults
+│   └── render_box.rs    # RenderBox combined trait
 ├── sliver/
 │   ├── mod.rs           # Re-exports
-│   ├── render_sliver.rs # RenderSliver combined trait
-│   └── proxy_sliver.rs  # RenderProxySliver trait
-├── patterns/
-│   ├── mod.rs
-│   ├── proxy.rs         # Generic ProxyChild
-│   ├── shifted.rs       # Generic ShiftedChild
-│   └── container.rs     # ContainerChild
+│   └── render_sliver.rs # RenderSliver combined trait
 ├── pipeline/
 │   ├── mod.rs
-│   ├── owner.rs         # PipelineOwnerTrait, PipelineOwner
-│   └── child_layouter.rs # ChildLayouter
-└── node/
+│   └── owner.rs         # PipelineOwner
+└── context/
     ├── mod.rs
-    ├── render_node.rs   # RenderNode<P, A, S>
-    └── aliases.rs       # BoxLeaf, BoxSingle, etc.
+    └── painting.rs      # PaintingContext
 ```

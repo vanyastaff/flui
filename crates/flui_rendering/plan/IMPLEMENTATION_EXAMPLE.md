@@ -1,7 +1,13 @@
 # Implementation Example: RenderAlign (Flutter-like in Rust)
 
 This document shows how to implement RenderObjects following the plan
-in `RENDER_STATE_PROTOCOL.md` and `TRAITS_OVERVIEW.md`.
+in `RENDER_STATE_PROTOCOL.md`, `TRAITS_OVERVIEW.md`, and `CHILD_STORAGE.md`.
+
+## Key Architecture Changes
+
+1. **RenderHandle<P, S>** with `Deref` — call methods directly: `child.perform_layout()`
+2. **Child<P>** — children stored inside RenderObject (like Flutter)
+3. **Base structs** with Deref chain — avoid boilerplate trait implementations
 
 ## Flutter Hierarchy
 
@@ -13,187 +19,322 @@ RenderObject
                             └── RenderPositionedBox   // + width/height factors
 ```
 
-## Rust Translation Strategy
+## Rust Translation: Base Structs with Deref
 
-Flutter uses **class inheritance**. Rust uses **composition + traits**.
+Instead of traits for inheritance, we use **embedded structs with Deref**:
 
-### Key Insight
-
-Flutter's hierarchy is about **reusing code**:
-- `RenderShiftedBox` = single child + paint at offset
-- `RenderAligningShiftedBox` = + `alignChild()` method
-- `RenderPositionedBox` = + width/height factors
-
-In Rust we achieve the same with:
-1. **Structs** for data storage
-2. **Traits** for behavior contracts
-3. **Blanket impls** for shared behavior
-4. **Composition** for code reuse
+```
+SingleChildBase<P>     // child: Child<P>
+      │ Deref
+      ▼
+ShiftedBoxBase<P>      // + child_offset: Offset
+      │ Deref
+      ▼
+AligningBoxBase<P>     // + alignment: Alignment
+      │ Deref
+      ▼
+RenderPositionedBox    // + width_factor, height_factor
+```
 
 ---
 
-## Step 1: Base Structs (Data Storage)
+## Step 1: RenderHandle (from handle.rs)
 
 ```rust
 // ============================================================================
-// flui_rendering/src/box/shifted_box.rs
+// flui_rendering/src/handle.rs
 // ============================================================================
 
-use crate::{BoxProtocol, RenderNodeId, Single};
-use flui_types::{Offset, Size};
+use std::marker::PhantomData;
+use std::ops::{Deref, DerefMut};
+use flui_tree::{Depth, Mounted, Unmounted, NodeState};
 
-/// Base data for single-child render objects that position child at offset.
+/// Handle for render object with Protocol + NodeState typestate.
 /// 
-/// Equivalent to Flutter's RenderShiftedBox fields.
-#[derive(Debug)]
-pub struct ShiftedBoxData {
-    /// Cached child offset (set during layout, used during paint)
-    pub child_offset: Offset,
+/// Implements Deref so methods can be called directly:
+/// ```rust
+/// // Instead of: child.render_object_mut().perform_layout(...)
+/// // Just:       child.perform_layout(...)
+/// ```
+pub struct RenderHandle<P: Protocol, S: NodeState> {
+    render_object: Box<dyn RenderProtocol<P>>,
+    depth: Depth,
+    parent: Option<RenderId>,
+    _marker: PhantomData<(P, S)>,
+}
+
+impl<P: Protocol, S: NodeState> Deref for RenderHandle<P, S> {
+    type Target = dyn RenderProtocol<P>;
+    fn deref(&self) -> &Self::Target {
+        self.render_object.as_ref()
+    }
+}
+
+impl<P: Protocol, S: NodeState> DerefMut for RenderHandle<P, S> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.render_object.as_mut()
+    }
+}
+
+// === Unmounted State ===
+
+impl<P: Protocol> RenderHandle<P, Unmounted> {
+    pub fn new<R: RenderProtocol<P> + 'static>(render_object: R) -> Self {
+        Self {
+            render_object: Box::new(render_object),
+            depth: Depth::root(),
+            parent: None,
+            _marker: PhantomData,
+        }
+    }
     
-    /// Cached size from layout
+    pub fn mount(self, parent: Option<RenderId>, depth: Depth) -> RenderHandle<P, Mounted> {
+        RenderHandle {
+            render_object: self.render_object,
+            depth,
+            parent,
+            _marker: PhantomData,
+        }
+    }
+}
+
+// === Mounted State ===
+
+impl<P: Protocol> RenderHandle<P, Mounted> {
+    pub fn parent(&self) -> Option<RenderId> { self.parent }
+    pub fn depth(&self) -> Depth { self.depth }
+    
+    pub fn unmount(self) -> RenderHandle<P, Unmounted> {
+        RenderHandle {
+            render_object: self.render_object,
+            depth: Depth::root(),
+            parent: None,
+            _marker: PhantomData,
+        }
+    }
+    
+    pub fn attach(&mut self) { self.render_object.attach(); }
+    pub fn detach(&mut self) { self.render_object.detach(); }
+}
+
+// === Type Aliases ===
+
+pub type BoxHandle<S> = RenderHandle<BoxProtocol, S>;
+pub type SliverHandle<S> = RenderHandle<SliverProtocol, S>;
+```
+
+---
+
+## Step 2: Child Storage (from children/child.rs)
+
+```rust
+// ============================================================================
+// flui_rendering/src/children/child.rs
+// ============================================================================
+
+use std::ops::{Deref, DerefMut};
+use flui_tree::Mounted;
+
+/// Single child storage (Flutter's RenderObjectWithChildMixin).
+pub struct Child<P: Protocol> {
+    inner: Option<RenderHandle<P, Mounted>>,
+}
+
+impl<P: Protocol> Child<P> {
+    pub fn new() -> Self { Self { inner: None } }
+    
+    pub fn with(child: RenderHandle<P, Mounted>) -> Self {
+        Self { inner: Some(child) }
+    }
+    
+    pub fn get(&self) -> Option<&RenderHandle<P, Mounted>> { self.inner.as_ref() }
+    pub fn get_mut(&mut self) -> Option<&mut RenderHandle<P, Mounted>> { self.inner.as_mut() }
+    pub fn set(&mut self, child: Option<RenderHandle<P, Mounted>>) { self.inner = child; }
+    pub fn take(&mut self) -> Option<RenderHandle<P, Mounted>> { self.inner.take() }
+    
+    pub fn is_some(&self) -> bool { self.inner.is_some() }
+    pub fn is_none(&self) -> bool { self.inner.is_none() }
+    
+    // Lifecycle
+    pub fn attach(&mut self) {
+        if let Some(child) = &mut self.inner { child.attach(); }
+    }
+    
+    pub fn detach(&mut self) {
+        if let Some(child) = &mut self.inner { child.detach(); }
+    }
+    
+    pub fn visit(&self, visitor: &mut dyn FnMut(&dyn RenderObject)) {
+        if let Some(child) = &self.inner { visitor(child.deref()); }
+    }
+}
+
+impl<P: Protocol> Default for Child<P> {
+    fn default() -> Self { Self::new() }
+}
+
+impl<P: Protocol> Deref for Child<P> {
+    type Target = Option<RenderHandle<P, Mounted>>;
+    fn deref(&self) -> &Self::Target { &self.inner }
+}
+
+impl<P: Protocol> DerefMut for Child<P> {
+    fn deref_mut(&mut self) -> &mut Self::Target { &mut self.inner }
+}
+```
+
+---
+
+## Step 3: Base Structs with Deref Chain
+
+```rust
+// ============================================================================
+// flui_rendering/src/base/single_child.rs
+// ============================================================================
+
+/// Base for single-child render objects.
+/// 
+/// Provides child storage and lifecycle methods.
+pub struct SingleChildBase<P: Protocol> {
+    pub child: Child<P>,
     pub size: Size,
 }
 
-impl Default for ShiftedBoxData {
-    fn default() -> Self {
+impl<P: Protocol> SingleChildBase<P> {
+    pub fn new() -> Self {
         Self {
-            child_offset: Offset::ZERO,
+            child: Child::new(),
+            size: Size::ZERO,
+        }
+    }
+    
+    pub fn with_child(child: RenderHandle<P, Mounted>) -> Self {
+        Self {
+            child: Child::with(child),
             size: Size::ZERO,
         }
     }
 }
 
-impl ShiftedBoxData {
+impl<P: Protocol> RenderObject for SingleChildBase<P> {
+    fn attach(&mut self) { self.child.attach(); }
+    fn detach(&mut self) { self.child.detach(); }
+    fn visit_children(&self, v: &mut dyn FnMut(&dyn RenderObject)) { self.child.visit(v); }
+    fn child_count(&self) -> usize { if self.child.is_some() { 1 } else { 0 } }
+}
+```
+
+```rust
+// ============================================================================
+// flui_rendering/src/base/shifted_box.rs
+// ============================================================================
+
+use std::ops::{Deref, DerefMut};
+
+/// Base for single-child render objects that position child at offset.
+/// 
+/// Deref chain: ShiftedBoxBase → SingleChildBase
+pub struct ShiftedBoxBase<P: Protocol> {
+    base: SingleChildBase<P>,
+    pub child_offset: Offset,
+}
+
+impl<P: Protocol> ShiftedBoxBase<P> {
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            base: SingleChildBase::new(),
+            child_offset: Offset::ZERO,
+        }
+    }
+}
+
+// Deref to SingleChildBase — access child, size, lifecycle methods
+impl<P: Protocol> Deref for ShiftedBoxBase<P> {
+    type Target = SingleChildBase<P>;
+    fn deref(&self) -> &Self::Target { &self.base }
+}
+
+impl<P: Protocol> DerefMut for ShiftedBoxBase<P> {
+    fn deref_mut(&mut self) -> &mut Self::Target { &mut self.base }
+}
+
+// Default paint for shifted box
+impl<P: Protocol> ShiftedBoxBase<P> {
+    pub fn paint_child(&self, ctx: &mut PaintingContext, offset: Offset) {
+        if let Some(child) = self.child.get() {
+            child.paint(ctx, offset + self.child_offset);
+        }
     }
 }
 ```
 
 ```rust
 // ============================================================================
-// flui_rendering/src/box/aligning_shifted_box.rs
+// flui_rendering/src/base/aligning_box.rs
 // ============================================================================
 
-use flui_types::{Alignment, Offset, Size, TextDirection};
-
-/// Base data for aligning single-child render objects.
+/// Base for single-child render objects with alignment.
 /// 
-/// Equivalent to Flutter's RenderAligningShiftedBox fields.
-#[derive(Debug)]
-pub struct AligningShiftedBoxData {
-    /// Base shifted box data
-    pub base: ShiftedBoxData,
-    
-    /// Alignment within available space
+/// Deref chain: AligningBoxBase → ShiftedBoxBase → SingleChildBase
+pub struct AligningBoxBase<P: Protocol> {
+    base: ShiftedBoxBase<P>,
     pub alignment: Alignment,
-    
-    /// Text direction for resolving alignment
     pub text_direction: Option<TextDirection>,
 }
 
-impl AligningShiftedBoxData {
+impl<P: Protocol> AligningBoxBase<P> {
     pub fn new(alignment: Alignment) -> Self {
         Self {
-            base: ShiftedBoxData::new(),
+            base: ShiftedBoxBase::new(),
             alignment,
             text_direction: None,
         }
     }
     
-    /// Resolve alignment to concrete Alignment (handles RTL).
+    /// Calculate and set child offset based on alignment.
+    /// Flutter's alignChild() method.
+    pub fn align_child(&mut self, child_size: Size, container_size: Size) {
+        let resolved = self.resolved_alignment();
+        self.child_offset = resolved.compute_offset(child_size, container_size);
+    }
+    
     pub fn resolved_alignment(&self) -> Alignment {
-        // For now, just return alignment
-        // Full impl would handle AlignmentDirectional + TextDirection
+        // TODO: handle AlignmentDirectional + text_direction
         self.alignment
     }
-    
-    /// Calculate child offset for given child and container sizes.
-    /// 
-    /// This is Flutter's `alignChild()` method.
-    pub fn align_child(&mut self, child_size: Size, container_size: Size) {
-        let alignment = self.resolved_alignment();
-        self.base.child_offset = alignment.compute_offset(child_size, container_size);
-    }
+}
+
+// Deref to ShiftedBoxBase
+impl<P: Protocol> Deref for AligningBoxBase<P> {
+    type Target = ShiftedBoxBase<P>;
+    fn deref(&self) -> &Self::Target { &self.base }
+}
+
+impl<P: Protocol> DerefMut for AligningBoxBase<P> {
+    fn deref_mut(&mut self) -> &mut Self::Target { &mut self.base }
 }
 ```
 
 ---
 
-## Step 2: Behavior Traits
+## Step 4: Concrete Implementation (RenderPositionedBox / RenderAlign)
 
 ```rust
 // ============================================================================
-// flui_rendering/src/box/traits.rs
+// flui_objects/src/layout/positioned_box.rs
 // ============================================================================
 
-use crate::{BoxConstraints, BoxProtocol, PaintingContext, RenderNodeId, Size};
-use flui_types::Offset;
-
-/// Trait for render objects with a single child.
-/// 
-/// Provides child access methods.
-pub trait HasSingleChild {
-    fn child(&self) -> Option<RenderNodeId>;
-    fn child_mut(&mut self) -> Option<&mut RenderNodeId>;
-}
-
-/// Trait for render objects that position child at an offset.
-/// 
-/// Equivalent to Flutter's RenderShiftedBox behavior.
-pub trait ShiftedBox: HasSingleChild {
-    /// Get child offset (set during layout).
-    fn child_offset(&self) -> Offset;
-    
-    /// Set child offset (during layout).
-    fn set_child_offset(&mut self, offset: Offset);
-    
-    /// Get cached size.
-    fn size(&self) -> Size;
-    
-    /// Set size (during layout).
-    fn set_size(&mut self, size: Size);
-}
-
-/// Trait for render objects that align child within available space.
-/// 
-/// Equivalent to Flutter's RenderAligningShiftedBox behavior.
-pub trait AligningShiftedBox: ShiftedBox {
-    /// Get alignment.
-    fn alignment(&self) -> Alignment;
-    
-    /// Set alignment (marks needs layout).
-    fn set_alignment(&mut self, alignment: Alignment);
-    
-    /// Align child within container.
-    /// 
-    /// Calculates and stores child_offset based on alignment.
-    fn align_child(&mut self, child_size: Size, container_size: Size) {
-        let offset = self.alignment().compute_offset(child_size, container_size);
-        self.set_child_offset(offset);
-    }
-}
-```
-
----
-
-## Step 3: Concrete Implementation (RenderPositionedBox / RenderAlign)
-
-```rust
-// ============================================================================
-// flui_objects/src/layout/positioned_box.rs (or align.rs)
-// ============================================================================
-
+use std::ops::{Deref, DerefMut};
 use flui_rendering::{
-    AligningShiftedBox, AligningShiftedBoxData, BoxConstraints, BoxProtocol,
-    HasSingleChild, LayoutProtocol, PaintProtocol, PaintingContext,
-    RenderBox, RenderNodeId, RenderObject, ShiftedBox, Single,
+    AligningBoxBase, BoxConstraints, BoxProtocol, Child, PaintingContext,
+    Protocol, RenderHandle, RenderObject, RenderProtocol, Size,
 };
-use flui_types::{Alignment, Offset, Size};
+use flui_types::{Alignment, Offset, Rect};
+use flui_tree::Mounted;
 
 /// Positions its child using an Alignment.
 /// 
-/// Equivalent to Flutter's RenderPositionedBox.
+/// Equivalent to Flutter's RenderPositionedBox / Align widget's render object.
 /// 
 /// # Layout Behavior
 /// 
@@ -216,17 +357,27 @@ use flui_types::{Alignment, Offset, Size};
 /// ```
 #[derive(Debug)]
 pub struct RenderPositionedBox {
-    /// Base aligning data (alignment + child offset)
-    data: AligningShiftedBoxData,
+    /// Base struct providing child, child_offset, alignment, size
+    base: AligningBoxBase<BoxProtocol>,
     
     /// Optional width factor (None = expand to fill)
     width_factor: Option<f32>,
     
     /// Optional height factor (None = expand to fill)
     height_factor: Option<f32>,
-    
-    /// Child node ID (managed by tree)
-    child: Option<RenderNodeId>,
+}
+
+// ============================================================================
+// Deref to AligningBoxBase — inherit all base methods
+// ============================================================================
+
+impl Deref for RenderPositionedBox {
+    type Target = AligningBoxBase<BoxProtocol>;
+    fn deref(&self) -> &Self::Target { &self.base }
+}
+
+impl DerefMut for RenderPositionedBox {
+    fn deref_mut(&mut self) -> &mut Self::Target { &mut self.base }
 }
 
 // ============================================================================
@@ -236,10 +387,9 @@ pub struct RenderPositionedBox {
 impl RenderPositionedBox {
     pub fn new(alignment: Alignment) -> Self {
         Self {
-            data: AligningShiftedBoxData::new(alignment),
+            base: AligningBoxBase::new(alignment),
             width_factor: None,
             height_factor: None,
-            child: None,
         }
     }
     
@@ -249,10 +399,9 @@ impl RenderPositionedBox {
         height_factor: Option<f32>,
     ) -> Self {
         Self {
-            data: AligningShiftedBoxData::new(alignment),
+            base: AligningBoxBase::new(alignment),
             width_factor,
             height_factor,
-            child: None,
         }
     }
     
@@ -263,24 +412,20 @@ impl RenderPositionedBox {
 }
 
 // ============================================================================
-// Property Accessors (Flutter-style setters that mark needs layout)
+// Property Accessors
 // ============================================================================
 
 impl RenderPositionedBox {
-    pub fn width_factor(&self) -> Option<f32> {
-        self.width_factor
-    }
+    pub fn width_factor(&self) -> Option<f32> { self.width_factor }
     
     pub fn set_width_factor(&mut self, value: Option<f32>) {
         if self.width_factor != value {
             self.width_factor = value;
-            // mark_needs_layout() would be called by the tree/owner
+            // In real impl: self.mark_needs_layout();
         }
     }
     
-    pub fn height_factor(&self) -> Option<f32> {
-        self.height_factor
-    }
+    pub fn height_factor(&self) -> Option<f32> { self.height_factor }
     
     pub fn set_height_factor(&mut self, value: Option<f32>) {
         if self.height_factor != value {
@@ -290,171 +435,96 @@ impl RenderPositionedBox {
 }
 
 // ============================================================================
-// Trait Implementations (Delegation to data)
-// ============================================================================
-
-impl HasSingleChild for RenderPositionedBox {
-    fn child(&self) -> Option<RenderNodeId> {
-        self.child
-    }
-    
-    fn child_mut(&mut self) -> Option<&mut RenderNodeId> {
-        self.child.as_mut()
-    }
-}
-
-impl ShiftedBox for RenderPositionedBox {
-    fn child_offset(&self) -> Offset {
-        self.data.base.child_offset
-    }
-    
-    fn set_child_offset(&mut self, offset: Offset) {
-        self.data.base.child_offset = offset;
-    }
-    
-    fn size(&self) -> Size {
-        self.data.base.size
-    }
-    
-    fn set_size(&mut self, size: Size) {
-        self.data.base.size = size;
-    }
-}
-
-impl AligningShiftedBox for RenderPositionedBox {
-    fn alignment(&self) -> Alignment {
-        self.data.alignment
-    }
-    
-    fn set_alignment(&mut self, alignment: Alignment) {
-        if self.data.alignment != alignment {
-            self.data.alignment = alignment;
-        }
-    }
-}
-
-// ============================================================================
-// RenderObject Base Implementation
+// RenderObject (delegated via Deref to SingleChildBase)
 // ============================================================================
 
 impl RenderObject for RenderPositionedBox {
-    fn debug_name(&self) -> &'static str {
-        "RenderPositionedBox"
-    }
+    fn debug_name(&self) -> &'static str { "RenderPositionedBox" }
     
-    fn visit_children(&self, visitor: &mut dyn FnMut(RenderNodeId)) {
-        if let Some(child) = self.child {
-            visitor(child);
-        }
+    // These delegate through Deref chain to SingleChildBase
+    fn attach(&mut self) { self.base.attach(); }
+    fn detach(&mut self) { self.base.detach(); }
+    fn visit_children(&self, v: &mut dyn FnMut(&dyn RenderObject)) {
+        self.base.visit_children(v);
     }
-    
-    fn child_count(&self) -> usize {
-        if self.child.is_some() { 1 } else { 0 }
-    }
+    fn child_count(&self) -> usize { self.base.child_count() }
 }
 
 // ============================================================================
 // Layout Implementation
 // ============================================================================
 
-impl LayoutProtocol<BoxProtocol> for RenderPositionedBox {
+impl RenderProtocol<BoxProtocol> for RenderPositionedBox {
     fn sized_by_parent(&self) -> bool {
-        // Only sized by parent if BOTH factors are None (expand to fill)
         self.width_factor.is_none() && self.height_factor.is_none()
     }
     
-    fn perform_layout(
-        &mut self,
-        constraints: &BoxConstraints,
-        children: &mut dyn ChildLayouter<BoxProtocol>,
-    ) -> Size {
+    fn perform_layout(&mut self, constraints: &BoxConstraints) -> Size {
         let shrink_wrap_width = self.width_factor.is_some() || !constraints.has_bounded_width();
         let shrink_wrap_height = self.height_factor.is_some() || !constraints.has_bounded_height();
         
-        if let Some(child_id) = self.child {
+        // Access child through Deref chain: self → AligningBoxBase → ShiftedBoxBase → SingleChildBase → child
+        if let Some(child) = self.child.get_mut() {
             // Layout child with loosened constraints
-            let child_size = children.layout_child(child_id, constraints.loosen());
+            // Thanks to RenderHandle's Deref, we call perform_layout directly!
+            let child_size = child.perform_layout(&constraints.loosen());
             
             // Compute our size based on factors
             let width = if shrink_wrap_width {
-                let factor = self.width_factor.unwrap_or(1.0);
-                child_size.width * factor
+                child_size.width * self.width_factor.unwrap_or(1.0)
             } else {
                 constraints.max_width
             };
             
             let height = if shrink_wrap_height {
-                let factor = self.height_factor.unwrap_or(1.0);
-                child_size.height * factor
+                child_size.height * self.height_factor.unwrap_or(1.0)
             } else {
                 constraints.max_height
             };
             
             let size = constraints.constrain(Size::new(width, height));
             
-            // Align child within our size
+            // Align child (sets child_offset via AligningBoxBase)
             self.align_child(child_size, size);
             
-            // Store and return size
-            self.set_size(size);
+            // Store and return size (via ShiftedBoxBase → SingleChildBase)
+            self.size = size;
             size
         } else {
-            // No child - compute size from constraints
+            // No child
             let size = constraints.constrain(Size::new(
                 if shrink_wrap_width { 0.0 } else { constraints.max_width },
                 if shrink_wrap_height { 0.0 } else { constraints.max_height },
             ));
-            self.set_size(size);
+            self.size = size;
             size
         }
     }
-}
-
-// ============================================================================
-// Paint Implementation
-// ============================================================================
-
-impl PaintProtocol for RenderPositionedBox {
+    
     fn paint(&self, ctx: &mut PaintingContext, offset: Offset) {
-        if let Some(child_id) = self.child {
-            // Paint child at aligned offset
-            ctx.paint_child(child_id, offset + self.child_offset());
-        }
+        // Use ShiftedBoxBase's helper
+        self.paint_child(ctx, offset);
     }
     
     fn paint_bounds(&self) -> Rect {
-        Rect::from_size(self.size())
-    }
-}
-
-// ============================================================================
-// Hit Test Implementation (default from ShiftedBox pattern)
-// ============================================================================
-
-impl HitTestProtocol<BoxProtocol> for RenderPositionedBox {
-    fn hit_test_self(&self, position: Offset) -> bool {
-        let size = self.size();
-        position.x >= 0.0 && position.x < size.width &&
-        position.y >= 0.0 && position.y < size.height
+        Rect::from_size(self.size)
     }
     
-    fn hit_test_children(
-        &self,
-        result: &mut BoxHitTestResult,
-        position: Offset,
-    ) -> bool {
-        if let Some(child_id) = self.child {
-            // Transform position to child's coordinate space
-            let child_position = position - self.child_offset();
-            result.add_with_paint_offset(
-                Some(self.child_offset()),
-                position,
-                |result, pos| {
-                    // Delegate to child's hit test
-                    // This would be handled by the tree
-                    false
-                },
-            )
+    fn hit_test(&self, result: &mut BoxHitTestResult, position: Offset) -> bool {
+        // Default: hit if within bounds
+        let size = self.size;
+        if position.x >= 0.0 && position.x < size.width &&
+           position.y >= 0.0 && position.y < size.height {
+            // Test children first
+            if let Some(child) = self.child.get() {
+                let child_pos = position - self.child_offset;
+                if child.hit_test(result, child_pos) {
+                    return true;
+                }
+            }
+            // Add self
+            result.add(/* self id */);
+            true
         } else {
             false
         }
@@ -462,109 +532,230 @@ impl HitTestProtocol<BoxProtocol> for RenderPositionedBox {
 }
 
 // ============================================================================
-// Combined RenderBox trait (optional convenience)
+// Type Alias
 // ============================================================================
 
-impl RenderBox for RenderPositionedBox {
-    // All methods delegated to individual traits above
-}
-```
-
----
-
-## Step 4: Type Alias for Convenience
-
-```rust
-// flui_objects/src/layout/mod.rs
-
 /// Alias: RenderAlign = RenderPositionedBox
-/// 
-/// Common name used in Flutter widgets.
 pub type RenderAlign = RenderPositionedBox;
 ```
 
 ---
 
-## Comparison: Flutter vs Rust
-
-### Flutter (Dart)
-
-```dart
-class RenderPositionedBox extends RenderAligningShiftedBox {
-  double? _widthFactor;
-  double? _heightFactor;
-  
-  @override
-  void performLayout() {
-    final shrinkWrapWidth = _widthFactor != null || constraints.maxWidth == double.infinity;
-    final shrinkWrapHeight = _heightFactor != null || constraints.maxHeight == double.infinity;
-    
-    if (child != null) {
-      child!.layout(constraints.loosen(), parentUsesSize: true);
-      size = constraints.constrain(Size(
-        shrinkWrapWidth ? child!.size.width * (_widthFactor ?? 1.0) : double.infinity,
-        shrinkWrapHeight ? child!.size.height * (_heightFactor ?? 1.0) : double.infinity,
-      ));
-      alignChild();  // inherited from RenderAligningShiftedBox
-    } else {
-      size = constraints.constrain(Size(
-        shrinkWrapWidth ? 0.0 : double.infinity,
-        shrinkWrapHeight ? 0.0 : double.infinity,
-      ));
-    }
-  }
-}
-```
-
-### Rust (FLUI)
+## Step 5: ProxyBox Pattern (for effects like Opacity, Transform)
 
 ```rust
-impl LayoutProtocol<BoxProtocol> for RenderPositionedBox {
-    fn perform_layout(&mut self, constraints: &BoxConstraints, children: &mut dyn ChildLayouter<BoxProtocol>) -> Size {
-        let shrink_wrap_width = self.width_factor.is_some() || !constraints.has_bounded_width();
-        let shrink_wrap_height = self.height_factor.is_some() || !constraints.has_bounded_height();
-        
-        if let Some(child_id) = self.child {
-            let child_size = children.layout_child(child_id, constraints.loosen());
-            let size = constraints.constrain(Size::new(
-                if shrink_wrap_width { child_size.width * self.width_factor.unwrap_or(1.0) } else { constraints.max_width },
-                if shrink_wrap_height { child_size.height * self.height_factor.unwrap_or(1.0) } else { constraints.max_height },
-            ));
-            self.align_child(child_size, size);  // from AligningShiftedBox trait
-            self.set_size(size);
-            size
+// ============================================================================
+// flui_rendering/src/base/proxy_box.rs
+// ============================================================================
+
+/// Base for render objects that delegate everything to child.
+/// 
+/// Used for visual effects: Opacity, Transform, Clip, etc.
+/// 
+/// Deref chain: ProxyBoxBase → SingleChildBase
+pub struct ProxyBoxBase<P: Protocol> {
+    base: SingleChildBase<P>,
+}
+
+impl<P: Protocol> ProxyBoxBase<P> {
+    pub fn new() -> Self {
+        Self { base: SingleChildBase::new() }
+    }
+}
+
+impl<P: Protocol> Deref for ProxyBoxBase<P> {
+    type Target = SingleChildBase<P>;
+    fn deref(&self) -> &Self::Target { &self.base }
+}
+
+impl<P: Protocol> DerefMut for ProxyBoxBase<P> {
+    fn deref_mut(&mut self) -> &mut Self::Target { &mut self.base }
+}
+
+// Default layout: delegate to child
+impl<P: Protocol> ProxyBoxBase<P> {
+    pub fn proxy_layout(&mut self, constraints: &P::Constraints) -> P::Geometry 
+    where
+        P::Geometry: Default,
+    {
+        if let Some(child) = self.child.get_mut() {
+            let geometry = child.perform_layout(constraints);
+            // Store geometry if applicable
+            geometry
         } else {
-            let size = constraints.constrain(Size::new(
-                if shrink_wrap_width { 0.0 } else { constraints.max_width },
-                if shrink_wrap_height { 0.0 } else { constraints.max_height },
-            ));
-            self.set_size(size);
-            size
+            P::Geometry::default()
+        }
+    }
+    
+    pub fn proxy_paint(&self, ctx: &mut PaintingContext, offset: Offset) {
+        if let Some(child) = self.child.get() {
+            child.paint(ctx, offset);
         }
     }
 }
 ```
 
+### RenderOpacity Example
+
+```rust
+// flui_objects/src/effects/opacity.rs
+
+pub struct RenderOpacity {
+    base: ProxyBoxBase<BoxProtocol>,
+    alpha: f32,
+}
+
+impl Deref for RenderOpacity {
+    type Target = ProxyBoxBase<BoxProtocol>;
+    fn deref(&self) -> &Self::Target { &self.base }
+}
+
+impl DerefMut for RenderOpacity {
+    fn deref_mut(&mut self) -> &mut Self::Target { &mut self.base }
+}
+
+impl RenderOpacity {
+    pub fn new(alpha: f32) -> Self {
+        Self {
+            base: ProxyBoxBase::new(),
+            alpha: alpha.clamp(0.0, 1.0),
+        }
+    }
+    
+    pub fn alpha(&self) -> f32 { self.alpha }
+    
+    pub fn set_alpha(&mut self, value: f32) {
+        let value = value.clamp(0.0, 1.0);
+        if self.alpha != value {
+            self.alpha = value;
+            // mark_needs_paint();
+        }
+    }
+}
+
+impl RenderObject for RenderOpacity {
+    fn debug_name(&self) -> &'static str { "RenderOpacity" }
+    fn attach(&mut self) { self.base.attach(); }
+    fn detach(&mut self) { self.base.detach(); }
+    fn visit_children(&self, v: &mut dyn FnMut(&dyn RenderObject)) {
+        self.base.visit_children(v);
+    }
+    fn child_count(&self) -> usize { self.base.child_count() }
+}
+
+impl RenderProtocol<BoxProtocol> for RenderOpacity {
+    fn perform_layout(&mut self, constraints: &BoxConstraints) -> Size {
+        // Delegate to child (ProxyBox pattern)
+        if let Some(child) = self.child.get_mut() {
+            let size = child.perform_layout(constraints);
+            self.size = size;
+            size
+        } else {
+            let size = constraints.smallest();
+            self.size = size;
+            size
+        }
+    }
+    
+    fn paint(&self, ctx: &mut PaintingContext, offset: Offset) {
+        if self.alpha == 0.0 {
+            return; // Fully transparent, skip painting
+        }
+        
+        if self.alpha == 1.0 {
+            // Fully opaque, paint normally
+            self.proxy_paint(ctx, offset);
+        } else {
+            // Apply opacity via compositing layer
+            ctx.push_opacity(self.alpha, offset, |ctx| {
+                if let Some(child) = self.child.get() {
+                    child.paint(ctx, Offset::ZERO);
+                }
+            });
+        }
+    }
+    
+    fn paint_bounds(&self) -> Rect { Rect::from_size(self.size) }
+    
+    fn always_needs_compositing(&self) -> bool {
+        // Need compositing layer for partial opacity
+        self.alpha > 0.0 && self.alpha < 1.0
+    }
+}
+```
+
 ---
 
-## Key Differences
+## Summary: Deref Chain Benefits
 
-| Aspect | Flutter | Rust FLUI |
-|--------|---------|-----------|
-| Code reuse | Class inheritance | Composition + traits |
-| Base data | Fields in superclass | Embedded struct (data: AligningShiftedBoxData) |
-| Methods | Inherited methods | Trait methods + blanket impls |
-| Type safety | Runtime (dynamic dispatch) | Compile-time (generics + traits) |
-| Arity | Runtime child count check | Compile-time (Single, Optional, Variable) |
+### Without Deref (Old Approach)
+
+```rust
+// Verbose and repetitive
+impl RenderObject for RenderPositionedBox {
+    fn attach(&mut self) { self.data.base.base.child.attach(); }
+    fn detach(&mut self) { self.data.base.base.child.detach(); }
+    fn visit_children(&self, v: &mut dyn FnMut(&dyn RenderObject)) {
+        self.data.base.base.child.visit(v);
+    }
+}
+
+impl LayoutProtocol<BoxProtocol> for RenderPositionedBox {
+    fn perform_layout(&mut self, constraints: &BoxConstraints, helper: &mut LayoutHelper) -> Size {
+        if let Some(child_id) = self.data.base.base.child {
+            let child_size = helper.layout_child(child_id, constraints.loosen());
+            // ...
+        }
+    }
+}
+```
+
+### With Deref Chain (New Approach)
+
+```rust
+// Clean and intuitive
+impl RenderObject for RenderPositionedBox {
+    fn attach(&mut self) { self.base.attach(); }  // Deref handles delegation
+    // ...
+}
+
+impl RenderProtocol<BoxProtocol> for RenderPositionedBox {
+    fn perform_layout(&mut self, constraints: &BoxConstraints) -> Size {
+        if let Some(child) = self.child.get_mut() {
+            // Direct method call via RenderHandle's Deref!
+            let child_size = child.perform_layout(&constraints.loosen());
+            // ...
+        }
+    }
+}
+```
+
+### Access Pattern
+
+```rust
+// Through Deref chain: self → AligningBoxBase → ShiftedBoxBase → SingleChildBase → Child<P>
+
+self.child              // Child<P> (from SingleChildBase)
+self.child_offset       // Offset (from ShiftedBoxBase)  
+self.alignment          // Alignment (from AligningBoxBase)
+self.size               // Size (from SingleChildBase)
+self.width_factor       // Option<f32> (own field)
+
+// Child method calls via RenderHandle Deref
+if let Some(child) = self.child.get_mut() {
+    child.perform_layout(...)   // Direct call!
+    child.paint(...)            // Direct call!
+}
+```
 
 ---
 
-## Pattern Summary
+## Comparison Table
 
-1. **Data structs** (`ShiftedBoxData`, `AligningShiftedBoxData`) - hold state
-2. **Behavior traits** (`ShiftedBox`, `AligningShiftedBox`) - define interface
-3. **Concrete struct** (`RenderPositionedBox`) - compose data + implement traits
-4. **Protocol traits** (`LayoutProtocol`, `PaintProtocol`, `HitTestProtocol`) - rendering behavior
-5. **Combined trait** (`RenderBox`) - optional convenience super-trait
-
-This achieves Flutter's code reuse through Rust idioms!
+| Aspect | Flutter | Rust FLUI (Old) | Rust FLUI (New) |
+|--------|---------|-----------------|-----------------|
+| Code reuse | Class inheritance | Composition + traits | Deref chain + Child<P> |
+| Child access | `child.layout()` | `helper.layout_child(id)` | `child.perform_layout()` |
+| Child storage | Inside RenderObject | Separate tree (IDs) | Inside via Child<P> |
+| Base methods | Inherited | Boilerplate delegates | Auto via Deref |
+| Type safety | Runtime | Compile-time | Compile-time |
