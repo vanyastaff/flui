@@ -3,7 +3,8 @@
 //! This module provides layer types for the compositor:
 //!
 //! ## Leaf Layers
-//! - **CanvasLayer**: Standard canvas drawing commands
+//! - **CanvasLayer**: Standard canvas drawing commands (mutable)
+//! - **PictureLayer**: Recorded drawing commands (immutable, used by repaint boundaries)
 //! - **TextureLayer**: External GPU texture rendering
 //! - **PlatformViewLayer**: Native view embedding
 //!
@@ -46,6 +47,7 @@
 
 // Leaf layers
 mod canvas;
+mod picture;
 mod platform_view;
 mod texture;
 
@@ -78,6 +80,7 @@ pub use annotated_region::{
 };
 pub use backdrop_filter::BackdropFilterLayer;
 pub use canvas::CanvasLayer;
+pub use picture::PictureLayer;
 pub use clip_path::ClipPathLayer;
 pub use clip_rect::ClipRectLayer;
 pub use clip_rrect::ClipRRectLayer;
@@ -102,7 +105,8 @@ use flui_types::geometry::Rect;
 /// # Layer Categories
 ///
 /// ## Leaf Layers (no children, direct rendering)
-/// - `Canvas`: Standard drawing commands
+/// - `Canvas`: Standard drawing commands (mutable)
+/// - `Picture`: Recorded drawing commands (immutable, for repaint boundaries)
 /// - `Texture`: External GPU texture
 /// - `PlatformView`: Native platform view
 ///
@@ -153,8 +157,11 @@ use flui_types::geometry::Rect;
 #[derive(Debug)]
 pub enum Layer {
     // ========== Leaf Layers ==========
-    /// Canvas layer - standard drawing commands
+    /// Canvas layer - standard drawing commands (mutable)
     Canvas(CanvasLayer),
+
+    /// Picture layer - recorded drawing commands (immutable, for repaint boundaries)
+    Picture(PictureLayer),
 
     /// Texture layer - external GPU texture
     Texture(TextureLayer),
@@ -212,6 +219,7 @@ impl Layer {
     pub fn bounds(&self) -> Option<Rect> {
         match self {
             Layer::Canvas(layer) => Some(layer.bounds()),
+            Layer::Picture(layer) => Some(layer.bounds()),
             Layer::Texture(layer) => Some(layer.bounds()),
             Layer::PlatformView(layer) => Some(layer.bounds()),
             Layer::ClipRect(layer) => Some(layer.bounds()),
@@ -236,6 +244,7 @@ impl Layer {
     pub fn needs_compositing(&self) -> bool {
         match self {
             Layer::Canvas(_) => false,
+            Layer::Picture(_) => false, // Picture is immutable, doesn't need compositing
             Layer::Texture(layer) => !layer.is_opaque(), // Needs compositing if transparent
             Layer::PlatformView(_) => true,              // Platform views always need compositing
             Layer::ClipRect(layer) => layer.is_anti_aliased(),
@@ -260,6 +269,12 @@ impl Layer {
     #[inline]
     pub fn is_canvas(&self) -> bool {
         matches!(self, Layer::Canvas(_))
+    }
+
+    /// Returns true if this is a picture layer.
+    #[inline]
+    pub fn is_picture(&self) -> bool {
+        matches!(self, Layer::Picture(_))
     }
 
     /// Returns true if this is a clip rect layer.
@@ -383,6 +398,24 @@ impl Layer {
     pub fn as_canvas_mut(&mut self) -> Option<&mut CanvasLayer> {
         match self {
             Layer::Canvas(layer) => Some(layer),
+            _ => None,
+        }
+    }
+
+    /// Returns the picture layer if this is one.
+    #[inline]
+    pub fn as_picture(&self) -> Option<&PictureLayer> {
+        match self {
+            Layer::Picture(layer) => Some(layer),
+            _ => None,
+        }
+    }
+
+    /// Returns the picture layer mutably if this is one.
+    #[inline]
+    pub fn as_picture_mut(&mut self) -> Option<&mut PictureLayer> {
+        match self {
+            Layer::Picture(layer) => Some(layer),
             _ => None,
         }
     }
@@ -528,6 +561,12 @@ impl Layer {
 impl From<CanvasLayer> for Layer {
     fn from(layer: CanvasLayer) -> Self {
         Layer::Canvas(layer)
+    }
+}
+
+impl From<PictureLayer> for Layer {
+    fn from(layer: PictureLayer) -> Self {
+        Layer::Picture(layer)
     }
 }
 
