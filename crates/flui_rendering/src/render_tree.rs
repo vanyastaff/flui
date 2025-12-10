@@ -1854,6 +1854,164 @@ impl TreeNav<RenderId> for RenderTree {
 }
 
 // ============================================================================
+// LAYOUT TREE IMPLEMENTATION (Phase 6 - Relayout Boundary Integration)
+// ============================================================================
+
+use crate::tree::{LayoutTree, PaintTree, HitTestTree};
+use crate::error::RenderError;
+use flui_types::{BoxConstraints, SliverConstraints, SliverGeometry};
+use flui_interaction::HitTestResult;
+
+impl LayoutTree for RenderTree {
+    fn perform_layout(
+        &mut self,
+        id: RenderId,
+        constraints: BoxConstraints,
+        parent_uses_size: bool,
+    ) -> Result<flui_types::Size, RenderError> {
+        // Compute relayout boundary status (Flutter protocol - P0-2 Step 3)
+        // This integrates the boundary computation with the layout flow
+        let is_boundary = {
+            let node = self.get(id).ok_or_else(|| RenderError::LayoutFailed {
+                render_object: "RenderNode",
+                reason: "Node not found".into(),
+            })?;
+            node.compute_relayout_boundary(parent_uses_size, &constraints)
+        };
+
+        // Set the computed boundary status
+        if let Some(node) = self.get_mut(id) {
+            node.set_relayout_boundary(is_boundary);
+        }
+
+        // TODO: Full layout implementation requires:
+        // 1. Early return if clean and constraints unchanged
+        // 2. Set constraints in state
+        // 3. Call render object's layout method (requires downcasting infrastructure)
+        // 4. Store geometry result
+        // 5. Mark needs paint
+        //
+        // For now, return a placeholder to enable testing of boundary computation
+        Ok(constraints.biggest())
+    }
+
+    fn perform_sliver_layout(
+        &mut self,
+        id: RenderId,
+        constraints: SliverConstraints,
+        parent_uses_size: bool,
+    ) -> Result<SliverGeometry, RenderError> {
+        // Compute relayout boundary status for slivers
+        // Note: For slivers, similar logic applies (Flutter protocol)
+        let is_boundary = {
+            let node = self.get(id).ok_or_else(|| RenderError::LayoutFailed {
+                render_object: "RenderNode",
+                reason: "Node not found".into(),
+            })?;
+            // Sliver boundary: !parent_uses_size || sized_by_parent || !has_parent
+            !parent_uses_size
+                || node.render_object().sized_by_parent()
+                || node.parent().is_none()
+        };
+
+        // Set the computed boundary status
+        if let Some(node) = self.get_mut(id) {
+            node.set_relayout_boundary(is_boundary);
+        }
+
+        // TODO: Full sliver layout implementation
+        Ok(SliverGeometry::zero())
+    }
+
+    fn set_offset(&mut self, _id: RenderId, _offset: flui_types::Offset) {
+        // TODO: Implement offset storage in parent_data
+    }
+
+    fn get_offset(&self, _id: RenderId) -> Option<flui_types::Offset> {
+        // TODO: Implement offset retrieval from parent_data
+        None
+    }
+
+    fn mark_needs_layout(&mut self, id: RenderId) {
+        RenderTree::mark_needs_layout(self, id)
+    }
+
+    fn needs_layout(&self, id: RenderId) -> bool {
+        RenderTree::needs_layout(self, id)
+    }
+
+    fn render_object(&self, id: RenderId) -> Option<&dyn std::any::Any> {
+        self.get(id).map(|node| node.render_object().as_any())
+    }
+
+    fn render_object_mut(&mut self, id: RenderId) -> Option<&mut dyn std::any::Any> {
+        self.get_mut(id).map(|node| node.render_object_mut().as_any_mut())
+    }
+
+    fn setup_child_parent_data(&mut self, _parent_id: RenderId, _child_id: RenderId) {
+        // TODO: Implement parent data setup protocol
+        // This will call parent.render_object().setup_parent_data(child.render_object())
+    }
+}
+
+impl PaintTree for RenderTree {
+    fn perform_paint(&mut self, _id: RenderId, _offset: flui_types::Offset) -> Result<flui_painting::Canvas, RenderError> {
+        // TODO: Implement paint tree operations
+        Ok(flui_painting::Canvas::new())
+    }
+
+    fn mark_needs_paint(&mut self, id: RenderId) {
+        RenderTree::mark_needs_paint(self, id)
+    }
+
+    fn needs_paint(&self, id: RenderId) -> bool {
+        RenderTree::needs_paint(self, id)
+    }
+
+    fn render_object(&self, id: RenderId) -> Option<&dyn std::any::Any> {
+        self.get(id).map(|node| node.render_object().as_any())
+    }
+
+    fn render_object_mut(&mut self, id: RenderId) -> Option<&mut dyn std::any::Any> {
+        self.get_mut(id).map(|node| node.render_object_mut().as_any_mut())
+    }
+
+    fn get_offset(&self, _id: RenderId) -> Option<flui_types::Offset> {
+        // TODO: Implement offset retrieval from parent_data
+        None
+    }
+}
+
+impl HitTestTree for RenderTree {
+    fn hit_test(
+        &self,
+        _id: RenderId,
+        _position: flui_types::Offset,
+        _result: &mut HitTestResult,
+    ) -> bool {
+        // TODO: Implement hit test operations
+        false
+    }
+
+    fn render_object(&self, id: RenderId) -> Option<&dyn std::any::Any> {
+        self.get(id).map(|node| node.render_object().as_any())
+    }
+
+    fn children(&self, id: RenderId) -> Box<dyn Iterator<Item = RenderId> + '_> {
+        if let Some(node) = self.get(id) {
+            Box::new(node.children().iter().copied())
+        } else {
+            Box::new(std::iter::empty())
+        }
+    }
+
+    fn get_offset(&self, _id: RenderId) -> Option<flui_types::Offset> {
+        // TODO: Implement offset retrieval from parent_data
+        None
+    }
+}
+
+// ============================================================================
 // TESTS (Updated for Typestate Pattern)
 // ============================================================================
 
