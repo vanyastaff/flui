@@ -387,6 +387,135 @@ impl LayerTree {
         self.get(id).map(|node| node.children())
     }
 
+    /// Clears all children from a parent node.
+    ///
+    /// This is used by Flutter's `pushLayer` when reusing layers - old children
+    /// are removed before adding new content.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // Flutter pattern: reuse layer, clear old children
+    /// if let Some(old_layer) = reusable_layer {
+    ///     tree.clear_children(old_layer_id);
+    /// }
+    /// ```
+    pub fn clear_children(&mut self, parent_id: LayerId) {
+        // First, get the list of children to clear their parent references
+        let children_to_clear: Vec<LayerId> = if let Some(parent) = self.get(parent_id) {
+            parent.children().to_vec()
+        } else {
+            return;
+        };
+
+        // Clear parent's children list
+        if let Some(parent) = self.get_mut(parent_id) {
+            parent.clear_children();
+        }
+
+        // Clear parent reference from each child
+        for child_id in children_to_clear {
+            if let Some(child) = self.get_mut(child_id) {
+                child.set_parent(None);
+            }
+        }
+    }
+
+    // ========== Layer Composition (Flutter PaintingContext Pattern) ==========
+
+    /// Appends a layer as a child of a container layer.
+    ///
+    /// This is the core operation used by Flutter's PaintingContext when composing
+    /// layers during painting. It's typically called in two scenarios:
+    ///
+    /// 1. **After stopRecordingIfNeeded()**: Append the finished PictureLayer
+    /// 2. **In pushLayer()**: Append a container layer before painting into it
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// void _appendLayer(Layer layer) {
+    ///   _containerLayer.append(layer);
+    /// }
+    /// ```
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use flui_layer::{LayerTree, Layer, PictureLayer};
+    ///
+    /// let mut tree = LayerTree::new();
+    ///
+    /// // Create container layer (e.g., OffsetLayer)
+    /// let container = Layer::Offset(OffsetLayer::zero());
+    /// let container_id = tree.insert(container);
+    ///
+    /// // Record some drawing commands
+    /// let mut canvas = Canvas::new();
+    /// canvas.draw_rect(rect, &paint);
+    /// let picture = canvas.finish();
+    ///
+    /// // Create picture layer
+    /// let picture_layer = Layer::Picture(PictureLayer::new(picture));
+    /// let picture_id = tree.insert(picture_layer);
+    ///
+    /// // Append to container (Flutter: _containerLayer.append(layer))
+    /// tree.append_layer(container_id, picture_id);
+    /// ```
+    ///
+    /// # Usage in PaintingContext
+    ///
+    /// ```rust,ignore
+    /// impl PaintingContext {
+    ///     fn stop_recording_if_needed(&mut self) {
+    ///         if let Some(current_layer) = self.current_layer.take() {
+    ///             // Finish recording
+    ///             let picture = self.canvas.finish();
+    ///             let picture_layer = PictureLayer::new(picture);
+    ///             let layer_id = self.layer_tree.insert(Layer::Picture(picture_layer));
+    ///
+    ///             // Append to container (THIS METHOD)
+    ///             self.layer_tree.append_layer(self.container_layer, layer_id);
+    ///         }
+    ///     }
+    ///
+    ///     fn push_layer<F>(&mut self, layer: Layer, painter: F, offset: Offset)
+    ///     where
+    ///         F: FnOnce(&mut PaintingContext, Offset),
+    ///     {
+    ///         self.stop_recording_if_needed();
+    ///
+    ///         // Insert and append container layer (THIS METHOD)
+    ///         let layer_id = self.layer_tree.insert(layer);
+    ///         self.layer_tree.append_layer(self.container_layer, layer_id);
+    ///
+    ///         // Create child context and paint
+    ///         let mut child_context = PaintingContext::new(layer_id, ...);
+    ///         painter(&mut child_context, offset);
+    ///         child_context.stop_recording_if_needed();
+    ///     }
+    /// }
+    /// ```
+    pub fn append_layer(&mut self, container_id: LayerId, child_id: LayerId) {
+        self.add_child(container_id, child_id);
+    }
+
+    /// Appends multiple layers to a container in order.
+    ///
+    /// This is a convenience method for bulk appending, which is common when
+    /// building complex layer hierarchies.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// tree.append_layers(container_id, &[layer1_id, layer2_id, layer3_id]);
+    /// ```
+    pub fn append_layers(&mut self, container_id: LayerId, children: &[LayerId]) {
+        for &child_id in children {
+            self.append_layer(container_id, child_id);
+        }
+    }
+
     // ========== Iteration ==========
 
     /// Returns an iterator over all LayerIds in the tree.
@@ -588,5 +717,160 @@ mod tests {
 
         node.set_needs_compositing(false);
         assert!(!node.needs_compositing());
+    }
+
+    // ========== Layer Composition Tests ==========
+
+    #[test]
+    fn test_clear_children() {
+        let mut tree = LayerTree::new();
+
+        // Create parent with multiple children
+        let parent_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+        let child1_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+        let child2_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+        let child3_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+
+        tree.add_child(parent_id, child1_id);
+        tree.add_child(parent_id, child2_id);
+        tree.add_child(parent_id, child3_id);
+
+        // Verify children were added
+        assert_eq!(tree.children(parent_id).unwrap().len(), 3);
+
+        // Clear all children
+        tree.clear_children(parent_id);
+
+        // Verify children were cleared
+        assert_eq!(tree.children(parent_id).unwrap().len(), 0);
+
+        // Verify children still exist in tree (not removed, just unlinked)
+        assert!(tree.contains(child1_id));
+        assert!(tree.contains(child2_id));
+        assert!(tree.contains(child3_id));
+
+        // Verify children no longer have parent reference
+        assert!(tree.parent(child1_id).is_none());
+        assert!(tree.parent(child2_id).is_none());
+        assert!(tree.parent(child3_id).is_none());
+    }
+
+    #[test]
+    fn test_append_layer() {
+        let mut tree = LayerTree::new();
+
+        // Create container layer
+        let container_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+
+        // Create picture layer
+        let picture_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+
+        // Append to container (Flutter PaintingContext pattern)
+        tree.append_layer(container_id, picture_id);
+
+        // Verify layer was appended
+        let children = tree.children(container_id).unwrap();
+        assert_eq!(children.len(), 1);
+        assert_eq!(children[0], picture_id);
+
+        // Verify parent-child relationship
+        assert_eq!(tree.parent(picture_id), Some(container_id));
+    }
+
+    #[test]
+    fn test_append_layer_multiple_times() {
+        let mut tree = LayerTree::new();
+
+        let container_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+        let layer1_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+        let layer2_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+        let layer3_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+
+        // Append layers one by one
+        tree.append_layer(container_id, layer1_id);
+        tree.append_layer(container_id, layer2_id);
+        tree.append_layer(container_id, layer3_id);
+
+        // Verify all layers were appended in order
+        let children = tree.children(container_id).unwrap();
+        assert_eq!(children.len(), 3);
+        assert_eq!(children[0], layer1_id);
+        assert_eq!(children[1], layer2_id);
+        assert_eq!(children[2], layer3_id);
+    }
+
+    #[test]
+    fn test_append_layers_bulk() {
+        let mut tree = LayerTree::new();
+
+        let container_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+        let layer1_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+        let layer2_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+        let layer3_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+
+        // Append multiple layers at once
+        tree.append_layers(container_id, &[layer1_id, layer2_id, layer3_id]);
+
+        // Verify all layers were appended in order
+        let children = tree.children(container_id).unwrap();
+        assert_eq!(children.len(), 3);
+        assert_eq!(children[0], layer1_id);
+        assert_eq!(children[1], layer2_id);
+        assert_eq!(children[2], layer3_id);
+    }
+
+    #[test]
+    fn test_append_layers_empty() {
+        let mut tree = LayerTree::new();
+
+        let container_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+
+        // Append empty slice - should be no-op
+        tree.append_layers(container_id, &[]);
+
+        // Verify no children were added
+        let children = tree.children(container_id).unwrap();
+        assert_eq!(children.len(), 0);
+    }
+
+    #[test]
+    fn test_layer_composition_integration() {
+        // Simulate PaintingContext workflow:
+        // 1. Create container layer (e.g., OffsetLayer)
+        // 2. Record and append picture layers
+        // 3. Clear and rebuild
+
+        let mut tree = LayerTree::new();
+
+        // Step 1: Create container
+        let container_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+
+        // Step 2: Append some picture layers
+        let picture1_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+        let picture2_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+        tree.append_layers(container_id, &[picture1_id, picture2_id]);
+
+        assert_eq!(tree.children(container_id).unwrap().len(), 2);
+
+        // Step 3: Clear and rebuild (simulating repaint)
+        tree.clear_children(container_id);
+        assert_eq!(tree.children(container_id).unwrap().len(), 0);
+
+        // Append new layers
+        let new_picture1_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+        let new_picture2_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+        let new_picture3_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+        tree.append_layers(container_id, &[new_picture1_id, new_picture2_id, new_picture3_id]);
+
+        // Verify new structure
+        let children = tree.children(container_id).unwrap();
+        assert_eq!(children.len(), 3);
+        assert_eq!(children[0], new_picture1_id);
+        assert_eq!(children[1], new_picture2_id);
+        assert_eq!(children[2], new_picture3_id);
+
+        // Old picture layers should still exist (just unlinked)
+        assert!(tree.contains(picture1_id));
+        assert!(tree.contains(picture2_id));
     }
 }
