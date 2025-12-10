@@ -133,27 +133,32 @@ impl RenderPipelineOwner {
         &mut self.render_tree
     }
 
-    /// Inserts a render node into the tree.
+    /// Inserts a mounted render node into the tree.
+    ///
+    /// **Note**: Node must be in `Mounted` state. Use `node.mount()` first.
     #[inline]
-    pub fn insert(&mut self, node: RenderNode) -> RenderId {
+    pub fn insert(&mut self, node: RenderNode<flui_tree::Mounted>) -> RenderId {
         self.render_tree.insert(node)
     }
 
     /// Gets a render node by ID.
     #[inline]
-    pub fn get(&self, id: RenderId) -> Option<&RenderNode> {
+    pub fn get(&self, id: RenderId) -> Option<&RenderNode<flui_tree::Mounted>> {
         self.render_tree.get(id)
     }
 
     /// Gets a mutable render node by ID.
     #[inline]
-    pub fn get_mut(&mut self, id: RenderId) -> Option<&mut RenderNode> {
+    pub fn get_mut(&mut self, id: RenderId) -> Option<&mut RenderNode<flui_tree::Mounted>> {
         self.render_tree.get_mut(id)
     }
 
     /// Removes a render node from the tree.
+    ///
+    /// Returns the mounted node (still in `Mounted` state).
+    /// Call `.unmount()` on the result to transition to `Unmounted`.
     #[inline]
-    pub fn remove(&mut self, id: RenderId) -> Option<RenderNode> {
+    pub fn remove(&mut self, id: RenderId) -> Option<RenderNode<flui_tree::Mounted>> {
         // Also remove from dirty sets
         self.needs_layout.remove(&id);
         self.needs_paint.remove(&id);
@@ -385,9 +390,12 @@ mod tests {
 
     #[test]
     fn test_insert_and_mark_dirty() {
+        use flui_tree::MountableExt;
+
         let mut pipeline = RenderPipelineOwner::new();
 
-        let node = RenderNode::new(TestRenderObject);
+        // Must mount before inserting
+        let node = RenderNode::new(TestRenderObject).mount_root();
         let id = pipeline.insert(node);
         pipeline.set_root(Some(id));
 
@@ -406,9 +414,12 @@ mod tests {
 
     #[test]
     fn test_mark_needs_paint() {
+        use flui_tree::MountableExt;
+
         let mut pipeline = RenderPipelineOwner::new();
 
-        let node = RenderNode::new(TestRenderObject);
+        // Must mount before inserting
+        let node = RenderNode::new(TestRenderObject).mount_root();
         let id = pipeline.insert(node);
 
         pipeline.mark_needs_paint(id);
@@ -421,9 +432,12 @@ mod tests {
 
     #[test]
     fn test_remove_clears_dirty() {
+        use flui_tree::MountableExt;
+
         let mut pipeline = RenderPipelineOwner::new();
 
-        let node = RenderNode::new(TestRenderObject);
+        // Must mount before inserting
+        let node = RenderNode::new(TestRenderObject).mount_root();
         let id = pipeline.insert(node);
 
         pipeline.mark_needs_layout(id);
@@ -437,9 +451,12 @@ mod tests {
 
     #[test]
     fn test_flush_pipeline() {
+        use flui_tree::MountableExt;
+
         let mut pipeline = RenderPipelineOwner::new();
 
-        let node = RenderNode::new(TestRenderObject);
+        // Must mount before inserting
+        let node = RenderNode::new(TestRenderObject).mount_root();
         let id = pipeline.insert(node);
 
         pipeline.mark_needs_layout(id);

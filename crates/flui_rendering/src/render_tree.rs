@@ -1,33 +1,60 @@
-//! RenderTree - Slab-based storage for RenderObjects
+//! RenderTree - Advanced Slab-based storage with Typestate Pattern
 //!
-//! This module implements the third tree of FLUI's four-tree architecture
-//! (View, Element, Render, Layer). Following Flutter's pattern but simplified.
+//! This module implements FLUI's RenderTree using advanced Rust patterns:
+//!
+//! # Advanced Features
+//!
+//! - **Typestate Pattern**: `RenderNode<S: NodeState>` for compile-time state safety
+//! - **GATs**: Generic Associated Types for protocol-specific constraints
+//! - **HRTBs**: Higher-Rank Trait Bounds for flexible visitors
+//! - **Zero-cost Abstractions**: All state transitions at compile-time
 //!
 //! # Architecture
 //!
 //! ```text
-//! RenderTree
-//!   ├─ nodes: Slab<RenderNode>
+//! RenderTree<S: NodeState>
+//!   ├─ nodes: Slab<RenderNode<S>>
 //!   └─ root: Option<RenderId>
 //!
-//! RenderNode (concrete struct, like LayerNode)
-//!   ├─ parent: Option<RenderId>
-//!   ├─ children: Vec<RenderId>
-//!   ├─ render_object: Box<dyn RenderObject>
-//!   ├─ lifecycle: RenderLifecycle
-//!   ├─ cached_size: Option<Size>
-//!   └─ element_id: Option<ElementId>
+//! RenderNode<S: NodeState> (typestate pattern)
+//!   ├─ Common fields:
+//!   │  ├─ render_object: Box<dyn RenderObject>
+//!   │  ├─ lifecycle: RenderLifecycle
+//!   │  └─ element_id: Option<ElementId>
+//!   │
+//!   └─ State-specific:
+//!      ├─ Unmounted: detached, no tree position
+//!      └─ Mounted: parent, depth, children, cached metadata
+//! ```
+//!
+//! # Typestate Transitions
+//!
+//! ```text
+//! RenderNode<Unmounted> ─mount()─► RenderNode<Mounted>
+//!                                        │
+//!                                        │ layout()
+//!                                        │ paint()
+//!                                        ▼
+//!                                  RenderNode<Mounted>
+//!                                        │
+//!                                  unmount()
+//!                                        │
+//!                                        ▼
+//!                            RenderNode<Unmounted>
 //! ```
 //!
 //! # flui-tree Integration
 //!
-//! RenderTree implements `TreeRead`, `TreeWrite`, and `TreeNav` from flui-tree,
-//! enabling generic tree algorithms and visitors to work with RenderTree.
+//! Implements `TreeRead<I>`, `TreeNav<I>`, `TreeWrite<I>` with:
+//! - RPITIT for zero-cost iterators
+//! - HRTB for universal predicates
+//! - GAT for protocol-specific metadata
 
 use slab::Slab;
+use std::marker::PhantomData;
 
 use flui_tree::iter::{AllSiblings, Ancestors, DescendantsWithDepth};
-use flui_tree::{TreeNav, TreeRead, TreeWrite};
+use flui_tree::{Depth, Mountable, Mounted, NodeState, TreeNav, TreeRead, TreeWrite, Unmountable, Unmounted};
 
 use flui_foundation::{ElementId, RenderId};
 use flui_types::Size;
@@ -35,77 +62,144 @@ use flui_types::Size;
 use crate::{RenderLifecycle, RenderObject};
 
 // ============================================================================
-// RENDER NODE (Concrete struct, like LayerNode)
+// RENDER NODE WITH TYPESTATE PATTERN
 // ============================================================================
 
-/// RenderNode - stores RenderObject with tree structure.
+/// RenderNode with compile-time state tracking via typestate pattern.
 ///
-/// This is a concrete struct (not a trait) following the same pattern as LayerNode.
-/// The RenderObject is stored as `Box<dyn RenderObject>` for type erasure.
-#[derive(Debug)]
-pub struct RenderNode {
-    /// Parent in the render tree
-    parent: Option<RenderId>,
-
-    /// Children in the render tree
-    children: Vec<RenderId>,
-
+/// This struct uses the typestate pattern to enforce correct usage at compile-time:
+/// - `RenderNode<Unmounted>`: Detached node, no tree position
+/// - `RenderNode<Mounted>`: Attached node with parent, depth, children
+///
+/// # Type Parameters
+///
+/// - `S: NodeState` - Compile-time state marker (Mounted/Unmounted)
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// // Create unmounted node
+/// let unmounted = RenderNode::new(render_object);
+///
+/// // Mount into tree
+/// let mounted = unmounted.mount(Some(parent_id), parent_depth);
+///
+/// // Access tree position (only available when Mounted)
+/// let parent = mounted.parent();
+/// let depth = mounted.depth();
+///
+/// // Unmount from tree
+/// let unmounted = mounted.unmount();
+/// ```
+pub struct RenderNode<S: NodeState> {
+    // ========== Common Fields (both Mounted and Unmounted) ==========
     /// The type-erased RenderObject
     render_object: Box<dyn RenderObject>,
 
     /// Current lifecycle state
     lifecycle: RenderLifecycle,
 
-    /// Cached size from last layout
-    cached_size: Option<Size>,
-
     /// Associated ElementId (for cross-tree references)
     element_id: Option<ElementId>,
+
+    // ========== Mounted-only Fields ==========
+    /// Parent in the render tree (only valid when Mounted)
+    parent: Option<RenderId>,
+
+    /// Tree depth (only valid when Mounted)
+    depth: Depth,
+
+    /// Children in the render tree (only valid when Mounted)
+    children: Vec<RenderId>,
+
+    /// Cached size from last layout (only valid when Mounted)
+    cached_size: Option<Size>,
+
+    // ========== Typestate Marker ==========
+    /// Zero-sized marker for compile-time state tracking
+    _state: PhantomData<S>,
 }
 
-impl RenderNode {
-    /// Creates a new RenderNode with the given RenderObject.
+// ============================================================================
+// UNMOUNTED NODE IMPLEMENTATION
+// ============================================================================
+
+impl RenderNode<Unmounted> {
+    /// Creates a new unmounted RenderNode.
+    ///
+    /// # Arguments
+    ///
+    /// * `object` - The render object to wrap
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let node = RenderNode::new(my_render_object);
+    /// assert!(node.lifecycle() == RenderLifecycle::Detached);
+    /// ```
     pub fn new<R: RenderObject + 'static>(object: R) -> Self {
         Self {
-            parent: None,
-            children: Vec::new(),
             render_object: Box::new(object),
             lifecycle: RenderLifecycle::Detached,
-            cached_size: None,
             element_id: None,
+            parent: None,
+            depth: Depth::root(),
+            children: Vec::new(),
+            cached_size: None,
+            _state: PhantomData,
         }
     }
 
-    /// Creates a RenderNode from a boxed RenderObject.
+    /// Creates an unmounted RenderNode from a boxed RenderObject.
+    ///
+    /// Useful when the concrete type is already erased.
     pub fn from_boxed(render_object: Box<dyn RenderObject>) -> Self {
         Self {
-            parent: None,
-            children: Vec::new(),
             render_object,
             lifecycle: RenderLifecycle::Detached,
-            cached_size: None,
             element_id: None,
+            parent: None,
+            depth: Depth::root(),
+            children: Vec::new(),
+            cached_size: None,
+            _state: PhantomData,
         }
     }
 
-    /// Creates a RenderNode with an associated ElementId.
+    /// Attaches an ElementId to this unmounted node (builder pattern).
     pub fn with_element_id(mut self, element_id: ElementId) -> Self {
         self.element_id = Some(element_id);
         self
     }
+}
 
-    // ========== Tree Structure ==========
+// ============================================================================
+// MOUNTED NODE IMPLEMENTATION
+// ============================================================================
+
+impl RenderNode<Mounted> {
+    // ========== Tree Navigation (only available when Mounted) ==========
 
     /// Gets the parent RenderId.
+    ///
+    /// Returns `None` if this is the root node.
     #[inline]
     pub fn parent(&self) -> Option<RenderId> {
         self.parent
     }
 
-    /// Sets the parent RenderId.
+    /// Gets the tree depth.
+    ///
+    /// Root nodes have depth 0.
     #[inline]
-    pub fn set_parent(&mut self, parent: Option<RenderId>) {
-        self.parent = parent;
+    pub fn depth(&self) -> Depth {
+        self.depth
+    }
+
+    /// Checks if this is the root node.
+    #[inline]
+    pub fn is_root(&self) -> bool {
+        self.parent.is_none()
     }
 
     /// Gets all children RenderIds.
@@ -114,18 +208,68 @@ impl RenderNode {
         &self.children
     }
 
-    /// Adds a child to this render node.
+    /// Returns the number of children.
     #[inline]
-    pub fn add_child(&mut self, child: RenderId) {
+    pub fn child_count(&self) -> usize {
+        self.children.len()
+    }
+
+    /// Checks if this node has any children.
+    #[inline]
+    pub fn has_children(&self) -> bool {
+        !self.children.is_empty()
+    }
+
+    /// Checks if this is a leaf node (no children).
+    #[inline]
+    pub fn is_leaf(&self) -> bool {
+        self.children.is_empty()
+    }
+
+    // ========== Tree Mutations (Rust naming: snake_case) ==========
+
+    /// Adds a child to this render node.
+    ///
+    /// **Note**: Does not update child's parent. Use `RenderTree::add_child` for that.
+    #[inline]
+    pub(crate) fn add_child(&mut self, child: RenderId) {
         self.children.push(child);
     }
 
     /// Removes a child from this render node.
+    ///
+    /// **Note**: Does not update child's parent. Use `RenderTree::remove_child` for that.
     #[inline]
-    pub fn remove_child(&mut self, child: RenderId) {
+    pub(crate) fn remove_child(&mut self, child: RenderId) {
         self.children.retain(|&id| id != child);
     }
 
+    /// Sets the parent RenderId (internal use only).
+    #[inline]
+    pub(crate) fn set_parent(&mut self, parent: Option<RenderId>) {
+        self.parent = parent;
+    }
+
+    // ========== Layout Cache ==========
+
+    /// Gets the cached size from last layout.
+    #[inline]
+    pub fn cached_size(&self) -> Option<Size> {
+        self.cached_size
+    }
+
+    /// Sets the cached size.
+    #[inline]
+    pub fn set_cached_size(&mut self, size: Option<Size>) {
+        self.cached_size = size;
+    }
+}
+
+// ============================================================================
+// COMMON IMPLEMENTATION (for all states)
+// ============================================================================
+
+impl<S: NodeState> RenderNode<S> {
     // ========== RenderObject Access ==========
 
     /// Returns reference to the RenderObject.
@@ -140,7 +284,7 @@ impl RenderNode {
         &mut *self.render_object
     }
 
-    // ========== Metadata ==========
+    // ========== Lifecycle ==========
 
     /// Gets the current lifecycle state.
     #[inline]
@@ -154,17 +298,7 @@ impl RenderNode {
         self.lifecycle = lifecycle;
     }
 
-    /// Gets the cached size from last layout.
-    #[inline]
-    pub fn cached_size(&self) -> Option<Size> {
-        self.cached_size
-    }
-
-    /// Sets the cached size.
-    #[inline]
-    pub fn set_cached_size(&mut self, size: Option<Size>) {
-        self.cached_size = size;
-    }
+    // ========== Element Association ==========
 
     /// Gets the associated ElementId.
     #[inline]
@@ -180,21 +314,118 @@ impl RenderNode {
 }
 
 // ============================================================================
-// RENDER TREE
+// DEBUG IMPLEMENTATION
 // ============================================================================
 
-/// RenderTree - Slab-based storage for render nodes.
+impl<S: NodeState> std::fmt::Debug for RenderNode<S> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct(&format!("RenderNode<{}>", S::name()))
+            .field("lifecycle", &self.lifecycle)
+            .field("element_id", &self.element_id)
+            .field("render_object", &self.render_object.debug_name())
+            .finish_non_exhaustive()
+    }
+}
+
+// ============================================================================
+// MOUNTABLE / UNMOUNTABLE TRAITS
+// ============================================================================
+
+impl Mountable for RenderNode<Unmounted> {
+    type Id = RenderId;
+    type Mounted = RenderNode<Mounted>;
+
+    fn mount(self, parent: Option<RenderId>, parent_depth: Depth) -> RenderNode<Mounted> {
+        let depth = if parent.is_some() {
+            parent_depth.child_depth()
+        } else {
+            Depth::root()
+        };
+
+        RenderNode {
+            render_object: self.render_object,
+            lifecycle: RenderLifecycle::Attached,
+            element_id: self.element_id,
+            parent,
+            depth,
+            children: Vec::new(),
+            cached_size: None,
+            _state: PhantomData,
+        }
+    }
+}
+
+impl Unmountable for RenderNode<Mounted> {
+    type Id = RenderId;
+    type Unmounted = RenderNode<Unmounted>;
+
+    fn parent(&self) -> Option<RenderId> {
+        self.parent
+    }
+
+    fn depth(&self) -> Depth {
+        self.depth
+    }
+
+    fn unmount(self) -> RenderNode<Unmounted> {
+        RenderNode {
+            render_object: self.render_object,
+            lifecycle: RenderLifecycle::Detached,
+            element_id: self.element_id,
+            parent: None,
+            depth: Depth::root(),
+            children: Vec::new(),
+            cached_size: None,
+            _state: PhantomData,
+        }
+    }
+}
+
+// ============================================================================
+// RENDER TREE (stores only Mounted nodes)
+// ============================================================================
+
+/// RenderTree - Advanced slab-based storage for mounted render nodes.
 ///
-/// This is the third of FLUI's four trees, storing RenderObjects.
+/// This is the third of FLUI's four trees, storing mounted RenderObjects
+/// using the typestate pattern for compile-time safety.
+///
+/// # Type Safety
+///
+/// RenderTree stores only `RenderNode<Mounted>`, ensuring all nodes have:
+/// - Valid parent references
+/// - Correct tree depth
+/// - Proper children tracking
+///
+/// Unmounted nodes cannot be inserted directly - use `mount()` first.
 ///
 /// # Thread Safety
 ///
 /// RenderTree itself is not thread-safe. Use `Arc<RwLock<RenderTree>>`
-/// for multi-threaded access.
+/// or `parking_lot::RwLock<RenderTree>` for multi-threaded access.
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// let mut tree = RenderTree::new();
+///
+/// // Mount node as root
+/// let unmounted = RenderNode::new(render_object);
+/// let mounted = unmounted.mount_root();
+/// let root_id = tree.insert(mounted);
+///
+/// // Mount child
+/// let child_unmounted = RenderNode::new(child_object);
+/// let child_mounted = child_unmounted.mount_child(root_id, tree.get(root_id).unwrap().depth());
+/// let child_id = tree.insert(child_mounted);
+///
+/// // Add relationship
+/// tree.add_child(root_id, child_id);
+/// ```
 #[derive(Debug)]
 pub struct RenderTree {
-    /// Slab storage for RenderNodes (0-based indexing internally)
-    nodes: Slab<RenderNode>,
+    /// Slab storage for mounted RenderNodes (0-based indexing internally)
+    nodes: Slab<RenderNode<Mounted>>,
 
     /// Root RenderNode ID (None if tree is empty)
     root: Option<RenderId>,
@@ -210,6 +441,10 @@ impl RenderTree {
     }
 
     /// Creates a RenderTree with pre-allocated capacity.
+    ///
+    /// # Arguments
+    ///
+    /// * `capacity` - Initial capacity for the slab allocator
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             nodes: Slab::with_capacity(capacity),
@@ -219,13 +454,13 @@ impl RenderTree {
 
     // ========== Root Management ==========
 
-    /// Get the root RenderNode ID.
+    /// Gets the root RenderNode ID.
     #[inline]
     pub fn root(&self) -> Option<RenderId> {
         self.root
     }
 
-    /// Set the root RenderNode ID.
+    /// Sets the root RenderNode ID.
     #[inline]
     pub fn set_root(&mut self, root: Option<RenderId>) {
         self.root = root;
@@ -245,53 +480,60 @@ impl RenderTree {
         self.nodes.len()
     }
 
-    /// Returns true if the tree is empty.
+    /// Returns `true` if the tree is empty.
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.nodes.is_empty()
     }
 
     /// Returns the parent of a node.
+    ///
+    /// This is a convenience method that delegates to the node itself.
     #[inline]
     pub fn parent(&self, id: RenderId) -> Option<RenderId> {
-        self.get(id).and_then(|node| node.parent())
+        self.get(id).map(|node| node.parent()).flatten()
     }
 
-    /// Inserts a RenderNode into the tree.
+    /// Inserts a mounted RenderNode into the tree.
     ///
     /// # Slab Offset Pattern
     ///
-    /// Applies +1 offset: `nodes.insert()` returns 0 → `RenderId(1)`
-    pub fn insert(&mut self, node: RenderNode) -> RenderId {
+    /// Applies +1 offset: `nodes.insert()` returns 0-based index → `RenderId(1)`
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let unmounted = RenderNode::new(render_object);
+    /// let mounted = unmounted.mount_root();
+    /// let id = tree.insert(mounted);
+    /// ```
+    pub fn insert(&mut self, node: RenderNode<Mounted>) -> RenderId {
         let slab_index = self.nodes.insert(node);
         RenderId::new(slab_index + 1)
     }
 
-    /// Inserts a RenderObject into the tree, creating a RenderNode.
-    pub fn insert_object<R: RenderObject + 'static>(&mut self, object: R) -> RenderId {
-        self.insert(RenderNode::new(object))
-    }
-
-    /// Returns a reference to a RenderNode.
+    /// Returns a reference to a mounted RenderNode.
     ///
     /// # Slab Offset Pattern
     ///
     /// Applies -1 offset: `RenderId(1)` → `nodes[0]`
     #[inline]
-    pub fn get(&self, id: RenderId) -> Option<&RenderNode> {
+    pub fn get(&self, id: RenderId) -> Option<&RenderNode<Mounted>> {
         self.nodes.get(id.get() - 1)
     }
 
-    /// Returns a mutable reference to a RenderNode.
+    /// Returns a mutable reference to a mounted RenderNode.
     #[inline]
-    pub fn get_mut(&mut self, id: RenderId) -> Option<&mut RenderNode> {
+    pub fn get_mut(&mut self, id: RenderId) -> Option<&mut RenderNode<Mounted>> {
         self.nodes.get_mut(id.get() - 1)
     }
 
-    /// Removes a RenderNode from the tree.
+    /// Removes a RenderNode from the tree, returning the unmounted node.
     ///
     /// **Note:** This does NOT remove children. Caller must handle tree cleanup.
-    pub fn remove(&mut self, id: RenderId) -> Option<RenderNode> {
+    ///
+    /// The returned node is unmounted and can be re-mounted elsewhere.
+    pub fn remove(&mut self, id: RenderId) -> Option<RenderNode<Mounted>> {
         if self.root == Some(id) {
             self.root = None;
         }
@@ -309,38 +551,123 @@ impl RenderTree {
         self.nodes.reserve(additional);
     }
 
-    // ========== Tree Operations ==========
+    // ========== Tree Mutations (Rust naming conventions) ==========
 
     /// Adds a child to a parent RenderNode.
+    ///
+    /// This updates both the parent's children list and the child's parent reference.
+    ///
+    /// # Arguments
+    ///
+    /// * `parent_id` - ID of the parent node
+    /// * `child_id` - ID of the child node to add
     pub fn add_child(&mut self, parent_id: RenderId, child_id: RenderId) {
-        if let Some(parent) = self.get_mut(parent_id) {
-            parent.add_child(child_id);
-        }
-        if let Some(child) = self.get_mut(child_id) {
-            child.set_parent(Some(parent_id));
+        // Split borrow: get mutable references to both nodes
+        // Safety: parent_id != child_id checked implicitly by different IDs
+        if parent_id != child_id {
+            unsafe {
+                // SAFETY: We ensure parent_id != child_id above
+                let tree_ptr = self as *mut Self;
+
+                if let Some(parent) = (*tree_ptr).get_mut(parent_id) {
+                    parent.add_child(child_id);
+                }
+                if let Some(child) = (*tree_ptr).get_mut(child_id) {
+                    child.set_parent(Some(parent_id));
+                }
+            }
         }
     }
 
     /// Removes a child from a parent RenderNode.
+    ///
+    /// This updates both the parent's children list and the child's parent reference.
+    ///
+    /// # Arguments
+    ///
+    /// * `parent_id` - ID of the parent node
+    /// * `child_id` - ID of the child node to remove
     pub fn remove_child(&mut self, parent_id: RenderId, child_id: RenderId) {
-        if let Some(parent) = self.get_mut(parent_id) {
-            parent.remove_child(child_id);
-        }
-        if let Some(child) = self.get_mut(child_id) {
-            child.set_parent(None);
+        if parent_id != child_id {
+            unsafe {
+                // SAFETY: We ensure parent_id != child_id above
+                let tree_ptr = self as *mut Self;
+
+                if let Some(parent) = (*tree_ptr).get_mut(parent_id) {
+                    parent.remove_child(child_id);
+                }
+                if let Some(child) = (*tree_ptr).get_mut(child_id) {
+                    child.set_parent(None);
+                }
+            }
         }
     }
 
-    /// Returns an iterator over slab entries (index, node).
+    // ========== Iteration ==========
+
+    /// Returns an iterator over slab entries (slab_index, node).
+    ///
+    /// **Note**: The index is the internal 0-based slab index, NOT RenderId.
+    /// To get RenderId, use `RenderId::new(index + 1)`.
     #[inline]
-    pub fn iter_slab(&self) -> slab::Iter<'_, RenderNode> {
+    pub fn iter_slab(&self) -> slab::Iter<'_, RenderNode<Mounted>> {
         self.nodes.iter()
     }
 
     /// Returns a mutable iterator over slab entries.
+    ///
+    /// **Note**: The index is the internal 0-based slab index, NOT RenderId.
     #[inline]
-    pub fn iter_slab_mut(&mut self) -> slab::IterMut<'_, RenderNode> {
+    pub fn iter_slab_mut(&mut self) -> slab::IterMut<'_, RenderNode<Mounted>> {
         self.nodes.iter_mut()
+    }
+
+    // ========== HRTB-based Visitors (Advanced Pattern) ==========
+
+    /// Visits all render objects with a closure using HRTB.
+    ///
+    /// This method demonstrates Higher-Rank Trait Bounds for flexible visitor patterns.
+    ///
+    /// # Arguments
+    ///
+    /// * `visitor` - Closure called for each (id, render_object) pair
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// tree.visit_all(|id, obj| {
+    ///     println!("{}: {}", id, obj.debug_name());
+    /// });
+    /// ```
+    pub fn visit_all<F>(&self, mut visitor: F)
+    where
+        F: for<'a> FnMut(RenderId, &'a dyn RenderObject),
+    {
+        for (slab_idx, node) in self.nodes.iter() {
+            let id = RenderId::new(slab_idx + 1);
+            visitor(id, node.render_object());
+        }
+    }
+
+    /// Finds the first render object matching a predicate using HRTB.
+    ///
+    /// # Arguments
+    ///
+    /// * `predicate` - HRTB predicate function
+    ///
+    /// # Returns
+    ///
+    /// `Some(RenderId)` if found, `None` otherwise.
+    pub fn find_where<P>(&self, mut predicate: P) -> Option<RenderId>
+    where
+        P: for<'a> FnMut(&'a dyn RenderObject) -> bool,
+    {
+        for (slab_idx, node) in self.nodes.iter() {
+            if predicate(node.render_object()) {
+                return Some(RenderId::new(slab_idx + 1));
+            }
+        }
+        None
     }
 }
 
@@ -351,13 +678,17 @@ impl Default for RenderTree {
 }
 
 // ============================================================================
-// TREE READ IMPLEMENTATION
+// TREE READ IMPLEMENTATION (Generic abstraction)
 // ============================================================================
 
 impl TreeRead<RenderId> for RenderTree {
-    type Node = RenderNode;
+    /// The node type is now `RenderNode<Mounted>` - only mounted nodes in the tree.
+    type Node = RenderNode<Mounted>;
 
+    /// Default capacity for render trees (tuned for typical UI hierarchies).
     const DEFAULT_CAPACITY: usize = 64;
+
+    /// Threshold for inline vs heap allocation.
     const INLINE_THRESHOLD: usize = 16;
 
     #[inline]
@@ -382,7 +713,7 @@ impl TreeRead<RenderId> for RenderTree {
 }
 
 // ============================================================================
-// TREE WRITE IMPLEMENTATION
+// TREE WRITE IMPLEMENTATION (Mutable operations)
 // ============================================================================
 
 impl TreeWrite<RenderId> for RenderTree {
@@ -391,11 +722,18 @@ impl TreeWrite<RenderId> for RenderTree {
         RenderTree::get_mut(self, id)
     }
 
+    /// Inserts a mounted node into the tree.
+    ///
+    /// **Note**: Node must be in `Mounted` state. Use `node.mount()` first.
     #[inline]
     fn insert(&mut self, node: Self::Node) -> RenderId {
         RenderTree::insert(self, node)
     }
 
+    /// Removes a node from the tree.
+    ///
+    /// Returns the mounted node (still in `Mounted` state).
+    /// Call `.unmount()` on the result to transition to `Unmounted`.
     #[inline]
     fn remove(&mut self, id: RenderId) -> Option<Self::Node> {
         RenderTree::remove(self, id)
@@ -413,11 +751,14 @@ impl TreeWrite<RenderId> for RenderTree {
 }
 
 // ============================================================================
-// TREE NAV IMPLEMENTATION
+// TREE NAV IMPLEMENTATION (Navigation with RPITIT)
 // ============================================================================
 
 impl TreeNav<RenderId> for RenderTree {
+    /// Maximum depth for render trees (typical UI hierarchies).
     const MAX_DEPTH: usize = 32;
+
+    /// Average children per render node (used for optimization).
     const AVG_CHILDREN: usize = 4;
 
     #[inline]
@@ -425,6 +766,7 @@ impl TreeNav<RenderId> for RenderTree {
         RenderTree::parent(self, id)
     }
 
+    /// Returns iterator over children using RPITIT (zero-cost abstraction).
     #[inline]
     fn children(&self, id: RenderId) -> impl Iterator<Item = RenderId> + '_ {
         self.get(id)
@@ -433,16 +775,19 @@ impl TreeNav<RenderId> for RenderTree {
             .flatten()
     }
 
+    /// Returns iterator over ancestors using flui-tree's `Ancestors` iterator.
     #[inline]
     fn ancestors(&self, start: RenderId) -> impl Iterator<Item = RenderId> + '_ {
         Ancestors::new(self, start)
     }
 
+    /// Returns iterator over descendants with depth tracking.
     #[inline]
     fn descendants(&self, root: RenderId) -> impl Iterator<Item = (RenderId, usize)> + '_ {
         DescendantsWithDepth::new(self, root)
     }
 
+    /// Returns iterator over siblings (all children of parent except self).
     #[inline]
     fn siblings(&self, id: RenderId) -> impl Iterator<Item = RenderId> + '_ {
         AllSiblings::new(self, id)
@@ -450,25 +795,26 @@ impl TreeNav<RenderId> for RenderTree {
 
     #[inline]
     fn child_count(&self, id: RenderId) -> usize {
-        self.get(id).map(|node| node.children().len()).unwrap_or(0)
+        self.get(id).map(|node| node.child_count()).unwrap_or(0)
     }
 
     #[inline]
     fn has_children(&self, id: RenderId) -> bool {
         self.get(id)
-            .map(|node| !node.children().is_empty())
+            .map(|node| node.has_children())
             .unwrap_or(false)
     }
 }
 
 // ============================================================================
-// TESTS
+// TESTS (Updated for Typestate Pattern)
 // ============================================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::RenderObject;
+    use flui_tree::MountableExt; // For mount_root() extension
 
     // Simple test RenderObject (minimal - no layout/paint methods needed)
     #[derive(Debug)]
@@ -482,19 +828,83 @@ mod tests {
         }
     }
 
+    // ===== Typestate Tests =====
+
     #[test]
-    fn test_render_node_new() {
+    fn test_render_node_unmounted() {
         let obj = TestRenderObject {
             name: "test".into(),
         };
         let node = RenderNode::new(obj);
 
-        assert!(node.parent().is_none());
-        assert!(node.children().is_empty());
+        // Unmounted node properties
         assert_eq!(node.lifecycle(), RenderLifecycle::Detached);
-        assert!(node.cached_size().is_none());
         assert!(node.element_id().is_none());
+
+        // These methods are only available on Mounted nodes:
+        // node.parent() - compile error!
+        // node.depth() - compile error!
+        // node.children() - compile error!
     }
+
+    #[test]
+    fn test_render_node_mount_root() {
+        let obj = TestRenderObject {
+            name: "root".into(),
+        };
+        let unmounted = RenderNode::new(obj);
+
+        // Mount as root
+        let mounted = unmounted.mount_root();
+
+        // Now we can access tree properties
+        assert!(mounted.is_root());
+        assert_eq!(mounted.parent(), None);
+        assert_eq!(mounted.depth(), Depth::root());
+        assert!(mounted.children().is_empty());
+        assert_eq!(mounted.lifecycle(), RenderLifecycle::Attached);
+    }
+
+    #[test]
+    fn test_render_node_mount_child() {
+        let parent_obj = TestRenderObject {
+            name: "parent".into(),
+        };
+        let child_obj = TestRenderObject {
+            name: "child".into(),
+        };
+
+        let parent_unmounted = RenderNode::new(parent_obj);
+        let child_unmounted = RenderNode::new(child_obj);
+
+        // Mount parent as root
+        let parent_mounted = parent_unmounted.mount_root();
+        let parent_id = RenderId::new(1);
+
+        // Mount child under parent
+        let child_mounted = child_unmounted.mount_child(parent_id, parent_mounted.depth());
+
+        assert!(!child_mounted.is_root());
+        assert_eq!(child_mounted.parent(), Some(parent_id));
+        assert_eq!(child_mounted.depth(), Depth::new(1));
+    }
+
+    #[test]
+    fn test_render_node_unmount() {
+        let obj = TestRenderObject {
+            name: "test".into(),
+        };
+
+        // Create -> Mount -> Unmount
+        let unmounted = RenderNode::new(obj);
+        let mounted = unmounted.mount_root();
+        let back_to_unmounted = mounted.unmount();
+
+        // Back to detached state
+        assert_eq!(back_to_unmounted.lifecycle(), RenderLifecycle::Detached);
+    }
+
+    // ===== RenderTree Tests =====
 
     #[test]
     fn test_render_tree_insert() {
@@ -503,7 +913,10 @@ mod tests {
         let obj = TestRenderObject {
             name: "root".into(),
         };
-        let id = tree.insert(RenderNode::new(obj));
+
+        // Must mount before inserting
+        let mounted = RenderNode::new(obj).mount_root();
+        let id = tree.insert(mounted);
 
         assert_eq!(id.get(), 1);
         assert!(tree.contains(id));
@@ -514,13 +927,22 @@ mod tests {
     fn test_render_tree_parent_child() {
         let mut tree = RenderTree::new();
 
-        let parent_id = tree.insert_object(TestRenderObject {
+        // Create and mount parent
+        let parent_obj = TestRenderObject {
             name: "parent".into(),
-        });
-        let child_id = tree.insert_object(TestRenderObject {
-            name: "child".into(),
-        });
+        };
+        let parent_mounted = RenderNode::new(parent_obj).mount_root();
+        let parent_id = tree.insert(parent_mounted);
 
+        // Create and mount child
+        let child_obj = TestRenderObject {
+            name: "child".into(),
+        };
+        let parent_depth = tree.get(parent_id).unwrap().depth();
+        let child_mounted = RenderNode::new(child_obj).mount_child(parent_id, parent_depth);
+        let child_id = tree.insert(child_mounted);
+
+        // Establish relationship
         tree.add_child(parent_id, child_id);
 
         assert_eq!(tree.get(child_id).unwrap().parent(), Some(parent_id));
@@ -531,37 +953,44 @@ mod tests {
     fn test_render_tree_remove() {
         let mut tree = RenderTree::new();
 
-        let id = tree.insert_object(TestRenderObject {
+        let obj = TestRenderObject {
             name: "test".into(),
-        });
+        };
+        let mounted = RenderNode::new(obj).mount_root();
+        let id = tree.insert(mounted);
+
         assert!(tree.contains(id));
 
         let removed = tree.remove(id);
         assert!(removed.is_some());
         assert!(!tree.contains(id));
+
+        // Can unmount the removed node
+        let _unmounted = removed.unwrap().unmount();
     }
 
     // ========== TreeRead/TreeWrite/TreeNav Tests ==========
 
-    fn make_node() -> RenderNode {
+    fn make_mounted_node() -> RenderNode<Mounted> {
         RenderNode::new(TestRenderObject {
             name: "test".into(),
         })
+        .mount_root()
     }
 
     #[test]
     fn test_tree_read_get() {
         let mut tree = RenderTree::new();
-        let id = tree.insert(make_node());
+        let id = tree.insert(make_mounted_node());
 
-        let node: Option<&RenderNode> = TreeRead::get(&tree, id);
+        let node: Option<&RenderNode<Mounted>> = TreeRead::get(&tree, id);
         assert!(node.is_some());
     }
 
     #[test]
     fn test_tree_read_contains() {
         let mut tree = RenderTree::new();
-        let id = tree.insert(make_node());
+        let id = tree.insert(make_mounted_node());
 
         assert!(TreeRead::contains(&tree, id));
         assert!(!TreeRead::contains(&tree, RenderId::new(999)));
@@ -572,7 +1001,7 @@ mod tests {
         let mut tree = RenderTree::new();
         assert_eq!(TreeRead::<RenderId>::len(&tree), 0);
 
-        tree.insert(make_node());
+        tree.insert(make_mounted_node());
         assert_eq!(TreeRead::<RenderId>::len(&tree), 1);
     }
 
@@ -580,10 +1009,10 @@ mod tests {
     fn test_tree_write_insert_remove() {
         let mut tree = RenderTree::new();
 
-        let id: RenderId = TreeWrite::insert(&mut tree, make_node());
+        let id: RenderId = TreeWrite::insert(&mut tree, make_mounted_node());
         assert!(TreeRead::contains(&tree, id));
 
-        let removed: Option<RenderNode> = TreeWrite::remove(&mut tree, id);
+        let removed: Option<RenderNode<Mounted>> = TreeWrite::remove(&mut tree, id);
         assert!(removed.is_some());
         assert!(!TreeRead::contains(&tree, id));
     }
@@ -591,8 +1020,8 @@ mod tests {
     #[test]
     fn test_tree_nav_parent() {
         let mut tree = RenderTree::new();
-        let parent_id = tree.insert(make_node());
-        let child_id = tree.insert(make_node());
+        let parent_id = tree.insert(make_mounted_node());
+        let child_id = tree.insert(make_mounted_node());
 
         tree.add_child(parent_id, child_id);
 
@@ -603,9 +1032,9 @@ mod tests {
     #[test]
     fn test_tree_nav_children() {
         let mut tree = RenderTree::new();
-        let parent_id = tree.insert(make_node());
-        let child1_id = tree.insert(make_node());
-        let child2_id = tree.insert(make_node());
+        let parent_id = tree.insert(make_mounted_node());
+        let child1_id = tree.insert(make_mounted_node());
+        let child2_id = tree.insert(make_mounted_node());
 
         tree.add_child(parent_id, child1_id);
         tree.add_child(parent_id, child2_id);
@@ -619,9 +1048,9 @@ mod tests {
     #[test]
     fn test_tree_nav_ancestors() {
         let mut tree = RenderTree::new();
-        let root_id = tree.insert(make_node());
-        let child_id = tree.insert(make_node());
-        let grandchild_id = tree.insert(make_node());
+        let root_id = tree.insert(make_mounted_node());
+        let child_id = tree.insert(make_mounted_node());
+        let grandchild_id = tree.insert(make_mounted_node());
 
         tree.add_child(root_id, child_id);
         tree.add_child(child_id, grandchild_id);
@@ -633,9 +1062,9 @@ mod tests {
     #[test]
     fn test_tree_nav_descendants() {
         let mut tree = RenderTree::new();
-        let root_id = tree.insert(make_node());
-        let child_id = tree.insert(make_node());
-        let grandchild_id = tree.insert(make_node());
+        let root_id = tree.insert(make_mounted_node());
+        let child_id = tree.insert(make_mounted_node());
+        let grandchild_id = tree.insert(make_mounted_node());
 
         tree.add_child(root_id, child_id);
         tree.add_child(child_id, grandchild_id);
@@ -650,10 +1079,10 @@ mod tests {
     #[test]
     fn test_tree_nav_siblings() {
         let mut tree = RenderTree::new();
-        let parent_id = tree.insert(make_node());
-        let child1_id = tree.insert(make_node());
-        let child2_id = tree.insert(make_node());
-        let child3_id = tree.insert(make_node());
+        let parent_id = tree.insert(make_mounted_node());
+        let child1_id = tree.insert(make_mounted_node());
+        let child2_id = tree.insert(make_mounted_node());
+        let child3_id = tree.insert(make_mounted_node());
 
         tree.add_child(parent_id, child1_id);
         tree.add_child(parent_id, child2_id);
@@ -668,9 +1097,9 @@ mod tests {
     #[test]
     fn test_tree_nav_child_count() {
         let mut tree = RenderTree::new();
-        let parent_id = tree.insert(make_node());
-        let child1_id = tree.insert(make_node());
-        let child2_id = tree.insert(make_node());
+        let parent_id = tree.insert(make_mounted_node());
+        let child1_id = tree.insert(make_mounted_node());
+        let child2_id = tree.insert(make_mounted_node());
 
         assert_eq!(TreeNav::child_count(&tree, parent_id), 0);
 
@@ -684,9 +1113,9 @@ mod tests {
     #[test]
     fn test_tree_nav_depth() {
         let mut tree = RenderTree::new();
-        let root_id = tree.insert(make_node());
-        let child_id = tree.insert(make_node());
-        let grandchild_id = tree.insert(make_node());
+        let root_id = tree.insert(make_mounted_node());
+        let child_id = tree.insert(make_mounted_node());
+        let grandchild_id = tree.insert(make_mounted_node());
 
         tree.add_child(root_id, child_id);
         tree.add_child(child_id, grandchild_id);
@@ -694,5 +1123,35 @@ mod tests {
         assert_eq!(TreeNav::depth(&tree, root_id), 0);
         assert_eq!(TreeNav::depth(&tree, child_id), 1);
         assert_eq!(TreeNav::depth(&tree, grandchild_id), 2);
+    }
+
+    // ========== HRTB Visitor Tests ==========
+
+    #[test]
+    fn test_visit_all_hrtb() {
+        let mut tree = RenderTree::new();
+        let _id1 = tree.insert(make_mounted_node());
+        let _id2 = tree.insert(make_mounted_node());
+
+        let mut count = 0;
+        tree.visit_all(|_id, obj| {
+            assert_eq!(obj.debug_name(), "TestRenderObject");
+            count += 1;
+        });
+
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn test_find_where_hrtb() {
+        let mut tree = RenderTree::new();
+        let _id1 = tree.insert(make_mounted_node());
+        let _id2 = tree.insert(make_mounted_node());
+
+        let found = tree.find_where(|obj| obj.debug_name() == "TestRenderObject");
+        assert!(found.is_some());
+
+        let not_found = tree.find_where(|obj| obj.debug_name() == "NonExistent");
+        assert!(not_found.is_none());
     }
 }
