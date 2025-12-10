@@ -14,6 +14,7 @@ This folder contains detailed documentation of Flutter's rendering architecture,
 | [06_MIXINS.md](06_MIXINS.md) | Mixins | Child management and composition patterns |
 | [07_SEMANTICS.md](07_SEMANTICS.md) | Semantics | Accessibility tree and configuration |
 | [08_SLIVER.md](08_SLIVER.md) | Sliver Protocol | Scrollable content and viewport slivers |
+| [09_RUST_TYPESTATE.md](09_RUST_TYPESTATE.md) | **Rust Typestate** | **FLUI's typestate implementation with compile-time safety** |
 
 
 ## Architecture Summary
@@ -90,7 +91,33 @@ This folder contains detailed documentation of Flutter's rendering architecture,
 - Paint: Recording commands into layers
 - Semantics: Building accessibility tree
 
-## Rust Considerations
+## Rust Improvements Over Flutter
+
+### 🎯 Typestate Pattern (FLUI Innovation)
+
+FLUI introduces a **compile-time state tracking** system not present in Flutter:
+
+```rust
+// Unmounted node - no tree position
+let unmounted = RenderNode::new(render_object);
+
+// Mount into tree - explicit transition
+let mounted: RenderNode<Mounted> = unmounted.mount_root();
+
+// Type system guarantees valid tree operations
+let parent = mounted.parent();  // ✅ Only available when Mounted
+let depth = mounted.depth();    // ✅ Type-safe access
+
+// unmounted.parent();  // ❌ Compile error! Unmounted nodes have no parent
+```
+
+**Benefits:**
+- ✅ **Compile-time safety**: Invalid states are unrepresentable
+- ✅ **Zero-cost**: PhantomData<S> has no runtime overhead
+- ✅ **Explicit lifecycle**: mount()/unmount() make transitions clear
+- ✅ **Type-level guarantees**: RenderTree stores only `RenderNode<Mounted>`
+
+See [09_RUST_TYPESTATE.md](09_RUST_TYPESTATE.md) for detailed comparison with Flutter.
 
 ### Use Traits Instead of Mixins
 ```rust
@@ -111,15 +138,19 @@ pub struct RenderObjectBase {
 ### Arena Allocation for Trees
 ```rust
 pub struct RenderTree {
-    nodes: SlotMap<NodeKey, RenderNode>,
+    nodes: Slab<RenderNode<Mounted>>,  // Type-safe: only mounted nodes
+    root: Option<RenderId>,
 }
 ```
 
-### Type-Safe Parent Data
+### Higher-Rank Trait Bounds (HRTB)
 ```rust
-pub trait ParentDataFor<Parent>: ParentData {
-    // Associated type ensures type safety
-}
+// Lifetime-polymorphic visitors
+tree.visit_all(|id, obj| {
+    println!("{}: {}", id, obj.debug_name());
+});
+
+tree.find_where(|obj| obj.debug_name() == "MyWidget");
 ```
 
 ## Source Reference
