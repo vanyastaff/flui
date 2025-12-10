@@ -6,6 +6,8 @@
 use slab::Slab;
 
 use flui_foundation::{ElementId, LayerId};
+use flui_types::geometry::{RRect, Rect};
+use flui_types::painting::{Clip, Path};
 use flui_types::Offset;
 
 use crate::layer::Layer;
@@ -516,6 +518,200 @@ impl LayerTree {
         }
     }
 
+    // ========== Clip Layer Helpers (Flutter PaintingContext Pattern) ==========
+
+    /// Pushes a clip rect layer - convenience for Flutter's `pushClipRect` pattern.
+    ///
+    /// This is a convenience method that combines insert + append for clip rect layers.
+    /// It creates a ClipRectLayer, inserts it into the tree, appends it to the container,
+    /// and returns the LayerId for use as a new container.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// void pushClipRect(Rect clipRect, {Clip clipBehavior = Clip.hardEdge}) {
+    ///   stopRecordingIfNeeded();
+    ///   final clipLayer = ClipRectLayer(clipRect: clipRect, clipBehavior: clipBehavior);
+    ///   appendLayer(clipLayer);
+    ///   // clipLayer becomes new container for child painting
+    /// }
+    /// ```
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use flui_layer::{LayerTree, Layer, OffsetLayer};
+    /// use flui_types::{Rect, painting::Clip};
+    ///
+    /// let mut tree = LayerTree::new();
+    /// let root = tree.insert(Layer::Offset(OffsetLayer::zero()));
+    ///
+    /// // Push clip rect and get its ID as new container
+    /// let clip_id = tree.push_clip_rect(
+    ///     root,
+    ///     Rect::from_ltrb(0.0, 0.0, 100.0, 100.0),
+    ///     Clip::AntiAlias,
+    /// );
+    ///
+    /// // Now paint into clip_id as the container
+    /// // (children will be clipped to the rect)
+    /// ```
+    ///
+    /// # Usage in PaintingContext
+    ///
+    /// ```rust,ignore
+    /// impl PaintingContext {
+    ///     pub fn push_clip_rect<F>(&mut self, clip_rect: Rect, clip_behavior: Clip, painter: F)
+    ///     where
+    ///         F: FnOnce(&mut PaintingContext, Offset),
+    ///     {
+    ///         self.stop_recording_if_needed();
+    ///
+    ///         // One-liner to push clip layer (THIS METHOD)
+    ///         let clip_layer_id = self.layer_tree.push_clip_rect(
+    ///             self.container_layer,
+    ///             clip_rect,
+    ///             clip_behavior,
+    ///         );
+    ///
+    ///         // Create child context with clip layer as container
+    ///         let mut child_context = PaintingContext::new(clip_layer_id, ...);
+    ///         painter(&mut child_context, Offset::ZERO);
+    ///         child_context.stop_recording_if_needed();
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// # Returns
+    ///
+    /// The LayerId of the newly created clip layer, which can be used as a container
+    /// for painting clipped content.
+    pub fn push_clip_rect(
+        &mut self,
+        container_id: LayerId,
+        clip_rect: Rect,
+        clip_behavior: Clip,
+    ) -> LayerId {
+        use crate::layer::ClipRectLayer;
+
+        let layer = Layer::ClipRect(ClipRectLayer::new(clip_rect, clip_behavior));
+        let layer_id = self.insert(layer);
+        self.append_layer(container_id, layer_id);
+        layer_id
+    }
+
+    /// Pushes a clip rounded rect layer - convenience for Flutter's `pushClipRRect` pattern.
+    ///
+    /// This is a convenience method that combines insert + append for clip rounded rect layers.
+    /// It creates a ClipRRectLayer, inserts it into the tree, appends it to the container,
+    /// and returns the LayerId for use as a new container.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// void pushClipRRect(RRect clipRRect, {Clip clipBehavior = Clip.antiAlias}) {
+    ///   stopRecordingIfNeeded();
+    ///   final clipLayer = ClipRRectLayer(clipRRect: clipRRect, clipBehavior: clipBehavior);
+    ///   appendLayer(clipLayer);
+    /// }
+    /// ```
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use flui_layer::{LayerTree, Layer, OffsetLayer};
+    /// use flui_types::{Rect, RRect, painting::Clip};
+    ///
+    /// let mut tree = LayerTree::new();
+    /// let root = tree.insert(Layer::Offset(OffsetLayer::zero()));
+    ///
+    /// // Create rounded rect with 10px corner radius
+    /// let rrect = RRect::from_rect_circular(
+    ///     Rect::from_ltrb(0.0, 0.0, 100.0, 100.0),
+    ///     10.0,
+    /// );
+    ///
+    /// // Push clip rrect and get its ID as new container
+    /// let clip_id = tree.push_clip_rrect(root, rrect, Clip::AntiAlias);
+    ///
+    /// // Paint into clip_id (children will have rounded corners)
+    /// ```
+    ///
+    /// # Returns
+    ///
+    /// The LayerId of the newly created clip layer, which can be used as a container
+    /// for painting clipped content with rounded corners.
+    pub fn push_clip_rrect(
+        &mut self,
+        container_id: LayerId,
+        clip_rrect: RRect,
+        clip_behavior: Clip,
+    ) -> LayerId {
+        use crate::layer::ClipRRectLayer;
+
+        let layer = Layer::ClipRRect(ClipRRectLayer::new(clip_rrect, clip_behavior));
+        let layer_id = self.insert(layer);
+        self.append_layer(container_id, layer_id);
+        layer_id
+    }
+
+    /// Pushes a clip path layer - convenience for Flutter's `pushClipPath` pattern.
+    ///
+    /// This is a convenience method that combines insert + append for clip path layers.
+    /// It creates a ClipPathLayer, inserts it into the tree, appends it to the container,
+    /// and returns the LayerId for use as a new container.
+    ///
+    /// # Performance
+    ///
+    /// Path clipping is more expensive than rect or rounded rect clipping.
+    /// Use `push_clip_rect()` or `push_clip_rrect()` when possible.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// void pushClipPath(Path clipPath, {Clip clipBehavior = Clip.antiAlias}) {
+    ///   stopRecordingIfNeeded();
+    ///   final clipLayer = ClipPathLayer(clipPath: clipPath, clipBehavior: clipBehavior);
+    ///   appendLayer(clipLayer);
+    /// }
+    /// ```
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use flui_layer::{LayerTree, Layer, OffsetLayer};
+    /// use flui_types::{Point, painting::{Path, Clip}};
+    ///
+    /// let mut tree = LayerTree::new();
+    /// let root = tree.insert(Layer::Offset(OffsetLayer::zero()));
+    ///
+    /// // Create a circular clip path
+    /// let path = Path::circle(Point::new(50.0, 50.0), 50.0);
+    ///
+    /// // Push clip path and get its ID as new container
+    /// let clip_id = tree.push_clip_path(root, path, Clip::AntiAlias);
+    ///
+    /// // Paint into clip_id (children will be clipped to circle)
+    /// ```
+    ///
+    /// # Returns
+    ///
+    /// The LayerId of the newly created clip layer, which can be used as a container
+    /// for painting clipped content with an arbitrary shape.
+    pub fn push_clip_path(
+        &mut self,
+        container_id: LayerId,
+        clip_path: Path,
+        clip_behavior: Clip,
+    ) -> LayerId {
+        use crate::layer::ClipPathLayer;
+
+        let layer = Layer::ClipPath(ClipPathLayer::new(clip_path, clip_behavior));
+        let layer_id = self.insert(layer);
+        self.append_layer(container_id, layer_id);
+        layer_id
+    }
+
     // ========== Iteration ==========
 
     /// Returns an iterator over all LayerIds in the tree.
@@ -872,5 +1068,197 @@ mod tests {
         // Old picture layers should still exist (just unlinked)
         assert!(tree.contains(picture1_id));
         assert!(tree.contains(picture2_id));
+    }
+
+    // ========== Clip Layer Helper Tests ==========
+
+    #[test]
+    fn test_push_clip_rect() {
+        use crate::layer::OffsetLayer;
+        use flui_types::geometry::Rect;
+        use flui_types::painting::Clip;
+
+        let mut tree = LayerTree::new();
+
+        // Create root container
+        let root = tree.insert(Layer::Offset(OffsetLayer::zero()));
+
+        // Push clip rect and get its ID
+        let clip_id = tree.push_clip_rect(
+            root,
+            Rect::from_ltrb(0.0, 0.0, 100.0, 100.0),
+            Clip::AntiAlias,
+        );
+
+        // Verify clip layer was created
+        assert!(tree.contains(clip_id));
+
+        // Verify it's a ClipRect layer
+        let layer = tree.get_layer(clip_id).unwrap();
+        assert!(layer.is_clip_rect());
+
+        // Verify it was appended to root
+        let children = tree.children(root).unwrap();
+        assert_eq!(children.len(), 1);
+        assert_eq!(children[0], clip_id);
+
+        // Verify parent-child relationship
+        assert_eq!(tree.parent(clip_id), Some(root));
+
+        // Verify clip properties
+        if let Layer::ClipRect(clip_layer) = layer {
+            assert_eq!(clip_layer.clip_rect(), Rect::from_ltrb(0.0, 0.0, 100.0, 100.0));
+            assert_eq!(clip_layer.clip_behavior(), Clip::AntiAlias);
+        }
+    }
+
+    #[test]
+    fn test_push_clip_rrect() {
+        use crate::layer::OffsetLayer;
+        use flui_types::geometry::{RRect, Rect};
+        use flui_types::painting::Clip;
+
+        let mut tree = LayerTree::new();
+
+        // Create root container
+        let root = tree.insert(Layer::Offset(OffsetLayer::zero()));
+
+        // Create rounded rect with 10px corner radius
+        let rrect = RRect::from_rect_circular(Rect::from_ltrb(0.0, 0.0, 100.0, 100.0), 10.0);
+
+        // Push clip rrect and get its ID
+        let clip_id = tree.push_clip_rrect(root, rrect, Clip::AntiAlias);
+
+        // Verify clip layer was created
+        assert!(tree.contains(clip_id));
+
+        // Verify it's a ClipRRect layer
+        let layer = tree.get_layer(clip_id).unwrap();
+        assert!(layer.is_clip_rrect());
+
+        // Verify it was appended to root
+        let children = tree.children(root).unwrap();
+        assert_eq!(children.len(), 1);
+        assert_eq!(children[0], clip_id);
+
+        // Verify parent-child relationship
+        assert_eq!(tree.parent(clip_id), Some(root));
+
+        // Verify clip properties
+        if let Layer::ClipRRect(clip_layer) = layer {
+            assert_eq!(clip_layer.clip_rrect().width(), 100.0);
+            assert_eq!(clip_layer.clip_behavior(), Clip::AntiAlias);
+        }
+    }
+
+    #[test]
+    fn test_push_clip_path() {
+        use crate::layer::OffsetLayer;
+        use flui_types::geometry::Point;
+        use flui_types::painting::{Clip, Path};
+
+        let mut tree = LayerTree::new();
+
+        // Create root container
+        let root = tree.insert(Layer::Offset(OffsetLayer::zero()));
+
+        // Create a circular clip path
+        let path = Path::circle(Point::new(50.0, 50.0), 50.0);
+
+        // Push clip path and get its ID
+        let clip_id = tree.push_clip_path(root, path, Clip::AntiAlias);
+
+        // Verify clip layer was created
+        assert!(tree.contains(clip_id));
+
+        // Verify it's a ClipPath layer
+        let layer = tree.get_layer(clip_id).unwrap();
+        assert!(layer.is_clip_path());
+
+        // Verify it was appended to root
+        let children = tree.children(root).unwrap();
+        assert_eq!(children.len(), 1);
+        assert_eq!(children[0], clip_id);
+
+        // Verify parent-child relationship
+        assert_eq!(tree.parent(clip_id), Some(root));
+
+        // Verify clip properties
+        if let Layer::ClipPath(clip_layer) = layer {
+            assert_eq!(clip_layer.clip_behavior(), Clip::AntiAlias);
+        }
+    }
+
+    #[test]
+    fn test_clip_layers_as_containers() {
+        // Test that clip layers can act as containers for child layers
+        use crate::layer::{CanvasLayer, OffsetLayer};
+        use flui_types::geometry::Rect;
+        use flui_types::painting::Clip;
+
+        let mut tree = LayerTree::new();
+
+        // Create root
+        let root = tree.insert(Layer::Offset(OffsetLayer::zero()));
+
+        // Push clip rect
+        let clip_id = tree.push_clip_rect(
+            root,
+            Rect::from_ltrb(0.0, 0.0, 100.0, 100.0),
+            Clip::AntiAlias,
+        );
+
+        // Add children to the clip layer (simulating painting into clip)
+        let child1 = tree.insert(Layer::Canvas(CanvasLayer::new()));
+        let child2 = tree.insert(Layer::Canvas(CanvasLayer::new()));
+        tree.append_layers(clip_id, &[child1, child2]);
+
+        // Verify clip layer has children
+        let children = tree.children(clip_id).unwrap();
+        assert_eq!(children.len(), 2);
+        assert_eq!(children[0], child1);
+        assert_eq!(children[1], child2);
+
+        // Verify parent-child relationships
+        assert_eq!(tree.parent(child1), Some(clip_id));
+        assert_eq!(tree.parent(child2), Some(clip_id));
+    }
+
+    #[test]
+    fn test_nested_clip_layers() {
+        // Test Flutter's pattern of nested clip layers
+        use crate::layer::OffsetLayer;
+        use flui_types::geometry::{RRect, Rect};
+        use flui_types::painting::Clip;
+
+        let mut tree = LayerTree::new();
+
+        // Create root
+        let root = tree.insert(Layer::Offset(OffsetLayer::zero()));
+
+        // Push first clip rect (outer clip)
+        let outer_clip = tree.push_clip_rect(
+            root,
+            Rect::from_ltrb(0.0, 0.0, 200.0, 200.0),
+            Clip::HardEdge,
+        );
+
+        // Push second clip rrect inside first clip (inner clip)
+        let rrect = RRect::from_rect_circular(Rect::from_ltrb(10.0, 10.0, 190.0, 190.0), 20.0);
+        let inner_clip = tree.push_clip_rrect(outer_clip, rrect, Clip::AntiAlias);
+
+        // Verify hierarchy: root -> outer_clip -> inner_clip
+        assert_eq!(tree.parent(outer_clip), Some(root));
+        assert_eq!(tree.parent(inner_clip), Some(outer_clip));
+
+        // Verify outer clip has inner clip as child
+        let outer_children = tree.children(outer_clip).unwrap();
+        assert_eq!(outer_children.len(), 1);
+        assert_eq!(outer_children[0], inner_clip);
+
+        // Verify root has outer clip as child
+        let root_children = tree.children(root).unwrap();
+        assert_eq!(root_children.len(), 1);
+        assert_eq!(root_children[0], outer_clip);
     }
 }
