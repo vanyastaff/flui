@@ -8,7 +8,7 @@ use slab::Slab;
 use flui_foundation::{ElementId, LayerId};
 use flui_types::geometry::{RRect, Rect};
 use flui_types::painting::{Clip, Path};
-use flui_types::Offset;
+use flui_types::{Matrix4, Offset};
 
 use crate::layer::Layer;
 
@@ -712,6 +712,163 @@ impl LayerTree {
         layer_id
     }
 
+    // ========== Transform & Opacity Helpers (Flutter PaintingContext Pattern) ==========
+
+    /// Pushes a transform layer - convenience for Flutter's `pushTransform` pattern.
+    ///
+    /// This is a convenience method that combines insert + append for transform layers.
+    /// It creates a TransformLayer, inserts it into the tree, appends it to the container,
+    /// and returns the LayerId for use as a new container.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// void pushTransform(Matrix4 transform, {bool needsCompositing = false}) {
+    ///   stopRecordingIfNeeded();
+    ///   final transformLayer = TransformLayer(transform: transform);
+    ///   appendLayer(transformLayer);
+    /// }
+    /// ```
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use flui_layer::{LayerTree, Layer, OffsetLayer};
+    /// use flui_types::Matrix4;
+    /// use std::f32::consts::PI;
+    ///
+    /// let mut tree = LayerTree::new();
+    /// let root = tree.insert(Layer::Offset(OffsetLayer::zero()));
+    ///
+    /// // Push rotation transform
+    /// let matrix = Matrix4::rotation_z(PI / 4.0);
+    /// let transform_id = tree.push_transform(root, matrix);
+    ///
+    /// // Paint into transform_id (children will be rotated)
+    /// ```
+    ///
+    /// # Usage in PaintingContext
+    ///
+    /// ```rust,ignore
+    /// impl PaintingContext {
+    ///     pub fn push_transform<F>(&mut self, transform: Matrix4, painter: F)
+    ///     where
+    ///         F: FnOnce(&mut PaintingContext, Offset),
+    ///     {
+    ///         self.stop_recording_if_needed();
+    ///
+    ///         // One-liner to push transform layer (THIS METHOD)
+    ///         let transform_layer_id = self.layer_tree.push_transform(
+    ///             self.container_layer,
+    ///             transform,
+    ///         );
+    ///
+    ///         // Create child context with transform layer as container
+    ///         let mut child_context = PaintingContext::new(transform_layer_id, ...);
+    ///         painter(&mut child_context, Offset::ZERO);
+    ///         child_context.stop_recording_if_needed();
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// # Performance
+    ///
+    /// TransformLayer is more expensive than OffsetLayer. Use OffsetLayer for simple
+    /// translations when rotation, scaling, or other transformations are not needed.
+    ///
+    /// # Returns
+    ///
+    /// The LayerId of the newly created transform layer, which can be used as a container
+    /// for painting transformed content.
+    pub fn push_transform(&mut self, container_id: LayerId, transform: Matrix4) -> LayerId {
+        use crate::layer::TransformLayer;
+
+        let layer = Layer::Transform(TransformLayer::new(transform));
+        let layer_id = self.insert(layer);
+        self.append_layer(container_id, layer_id);
+        layer_id
+    }
+
+    /// Pushes an opacity layer - convenience for Flutter's `pushOpacity` pattern.
+    ///
+    /// This is a convenience method that combines insert + append for opacity layers.
+    /// It creates an OpacityLayer, inserts it into the tree, appends it to the container,
+    /// and returns the LayerId for use as a new container.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// void pushOpacity(int alpha, {Offset offset = Offset.zero}) {
+    ///   stopRecordingIfNeeded();
+    ///   final opacityLayer = OpacityLayer(alpha: alpha, offset: offset);
+    ///   appendLayer(opacityLayer);
+    /// }
+    /// ```
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use flui_layer::{LayerTree, Layer, OffsetLayer};
+    /// use flui_types::Offset;
+    ///
+    /// let mut tree = LayerTree::new();
+    /// let root = tree.insert(Layer::Offset(OffsetLayer::zero()));
+    ///
+    /// // Push 50% opacity layer
+    /// let opacity_id = tree.push_opacity(root, 0.5, Offset::ZERO);
+    ///
+    /// // Paint into opacity_id (children will be semi-transparent)
+    /// ```
+    ///
+    /// # Usage in PaintingContext
+    ///
+    /// ```rust,ignore
+    /// impl PaintingContext {
+    ///     pub fn push_opacity<F>(&mut self, alpha: f32, offset: Offset, painter: F)
+    ///     where
+    ///         F: FnOnce(&mut PaintingContext, Offset),
+    ///     {
+    ///         self.stop_recording_if_needed();
+    ///
+    ///         // One-liner to push opacity layer (THIS METHOD)
+    ///         let opacity_layer_id = self.layer_tree.push_opacity(
+    ///             self.container_layer,
+    ///             alpha,
+    ///             offset,
+    ///         );
+    ///
+    ///         // Create child context with opacity layer as container
+    ///         let mut child_context = PaintingContext::new(opacity_layer_id, ...);
+    ///         painter(&mut child_context, Offset::ZERO);
+    ///         child_context.stop_recording_if_needed();
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// # Performance
+    ///
+    /// Opacity layers require offscreen rendering, which has a performance cost.
+    /// For static opacity, consider using `Color.withOpacity()` directly on
+    /// paint operations when possible.
+    ///
+    /// # Optimization
+    ///
+    /// - If `alpha == 0.0`, children can be skipped entirely (fully transparent)
+    /// - If `alpha == 1.0`, the layer is a no-op and can be skipped (fully opaque)
+    ///
+    /// # Returns
+    ///
+    /// The LayerId of the newly created opacity layer, which can be used as a container
+    /// for painting content with transparency.
+    pub fn push_opacity(&mut self, container_id: LayerId, alpha: f32, offset: Offset) -> LayerId {
+        use crate::layer::OpacityLayer;
+
+        let layer = Layer::Opacity(OpacityLayer::with_offset(alpha, offset));
+        let layer_id = self.insert(layer);
+        self.append_layer(container_id, layer_id);
+        layer_id
+    }
+
     // ========== Iteration ==========
 
     /// Returns an iterator over all LayerIds in the tree.
@@ -1260,5 +1417,193 @@ mod tests {
         let root_children = tree.children(root).unwrap();
         assert_eq!(root_children.len(), 1);
         assert_eq!(root_children[0], outer_clip);
+    }
+
+    // ========== Transform & Opacity Helper Tests ==========
+
+    #[test]
+    fn test_push_transform() {
+        use crate::layer::OffsetLayer;
+        use flui_types::Matrix4;
+        use std::f32::consts::PI;
+
+        let mut tree = LayerTree::new();
+
+        // Create root container
+        let root = tree.insert(Layer::Offset(OffsetLayer::zero()));
+
+        // Push rotation transform
+        let matrix = Matrix4::rotation_z(PI / 4.0);
+        let transform_id = tree.push_transform(root, matrix);
+
+        // Verify transform layer was created
+        assert!(tree.contains(transform_id));
+
+        // Verify it's a Transform layer
+        let layer = tree.get_layer(transform_id).unwrap();
+        assert!(layer.is_transform());
+
+        // Verify it was appended to root
+        let children = tree.children(root).unwrap();
+        assert_eq!(children.len(), 1);
+        assert_eq!(children[0], transform_id);
+
+        // Verify parent-child relationship
+        assert_eq!(tree.parent(transform_id), Some(root));
+
+        // Verify transform properties
+        if let Layer::Transform(transform_layer) = layer {
+            assert_eq!(transform_layer.transform(), &matrix);
+        }
+    }
+
+    #[test]
+    fn test_push_opacity() {
+        use crate::layer::OffsetLayer;
+        use flui_types::Offset;
+
+        let mut tree = LayerTree::new();
+
+        // Create root container
+        let root = tree.insert(Layer::Offset(OffsetLayer::zero()));
+
+        // Push 50% opacity layer
+        let opacity_id = tree.push_opacity(root, 0.5, Offset::ZERO);
+
+        // Verify opacity layer was created
+        assert!(tree.contains(opacity_id));
+
+        // Verify it's an Opacity layer
+        let layer = tree.get_layer(opacity_id).unwrap();
+        assert!(layer.is_opacity());
+
+        // Verify it was appended to root
+        let children = tree.children(root).unwrap();
+        assert_eq!(children.len(), 1);
+        assert_eq!(children[0], opacity_id);
+
+        // Verify parent-child relationship
+        assert_eq!(tree.parent(opacity_id), Some(root));
+
+        // Verify opacity properties
+        if let Layer::Opacity(opacity_layer) = layer {
+            assert_eq!(opacity_layer.alpha(), 0.5);
+            assert_eq!(opacity_layer.offset(), Offset::ZERO);
+        }
+    }
+
+    #[test]
+    fn test_push_transform_translation() {
+        use crate::layer::OffsetLayer;
+        use flui_types::Matrix4;
+
+        let mut tree = LayerTree::new();
+        let root = tree.insert(Layer::Offset(OffsetLayer::zero()));
+
+        // Push translation transform
+        let matrix = Matrix4::translation(100.0, 50.0, 0.0);
+        let transform_id = tree.push_transform(root, matrix);
+
+        // Verify it's a Transform layer
+        let layer = tree.get_layer(transform_id).unwrap();
+        assert!(layer.is_transform());
+    }
+
+    #[test]
+    fn test_push_opacity_with_offset() {
+        use crate::layer::OffsetLayer;
+        use flui_types::Offset;
+
+        let mut tree = LayerTree::new();
+        let root = tree.insert(Layer::Offset(OffsetLayer::zero()));
+
+        // Push opacity layer with offset
+        let offset = Offset::new(10.0, 20.0);
+        let opacity_id = tree.push_opacity(root, 0.75, offset);
+
+        // Verify opacity properties
+        if let Layer::Opacity(opacity_layer) = tree.get_layer(opacity_id).unwrap() {
+            assert_eq!(opacity_layer.alpha(), 0.75);
+            assert_eq!(opacity_layer.offset(), offset);
+        }
+    }
+
+    #[test]
+    fn test_transform_opacity_as_containers() {
+        // Test that transform and opacity layers can act as containers
+        use crate::layer::{CanvasLayer, OffsetLayer};
+        use flui_types::{Matrix4, Offset};
+
+        let mut tree = LayerTree::new();
+
+        // Create root
+        let root = tree.insert(Layer::Offset(OffsetLayer::zero()));
+
+        // Push transform
+        let transform_id = tree.push_transform(root, Matrix4::identity());
+
+        // Push opacity inside transform
+        let opacity_id = tree.push_opacity(transform_id, 0.5, Offset::ZERO);
+
+        // Add children to the opacity layer (simulating painting)
+        let child1 = tree.insert(Layer::Canvas(CanvasLayer::new()));
+        let child2 = tree.insert(Layer::Canvas(CanvasLayer::new()));
+        tree.append_layers(opacity_id, &[child1, child2]);
+
+        // Verify hierarchy: root -> transform -> opacity -> children
+        assert_eq!(tree.parent(transform_id), Some(root));
+        assert_eq!(tree.parent(opacity_id), Some(transform_id));
+        assert_eq!(tree.parent(child1), Some(opacity_id));
+        assert_eq!(tree.parent(child2), Some(opacity_id));
+
+        // Verify opacity layer has children
+        let children = tree.children(opacity_id).unwrap();
+        assert_eq!(children.len(), 2);
+        assert_eq!(children[0], child1);
+        assert_eq!(children[1], child2);
+    }
+
+    #[test]
+    fn test_complex_layer_hierarchy() {
+        // Test Flutter's pattern: root -> transform -> clip -> opacity -> content
+        use crate::layer::{CanvasLayer, OffsetLayer};
+        use flui_types::geometry::Rect;
+        use flui_types::painting::Clip;
+        use flui_types::{Matrix4, Offset};
+        use std::f32::consts::PI;
+
+        let mut tree = LayerTree::new();
+
+        // Create root
+        let root = tree.insert(Layer::Offset(OffsetLayer::zero()));
+
+        // Push transform (rotation)
+        let transform_id = tree.push_transform(root, Matrix4::rotation_z(PI / 4.0));
+
+        // Push clip rect inside transform
+        let clip_id = tree.push_clip_rect(
+            transform_id,
+            Rect::from_ltrb(0.0, 0.0, 100.0, 100.0),
+            Clip::AntiAlias,
+        );
+
+        // Push opacity inside clip
+        let opacity_id = tree.push_opacity(clip_id, 0.75, Offset::ZERO);
+
+        // Add content
+        let content = tree.insert(Layer::Canvas(CanvasLayer::new()));
+        tree.append_layer(opacity_id, content);
+
+        // Verify full hierarchy
+        assert_eq!(tree.parent(transform_id), Some(root));
+        assert_eq!(tree.parent(clip_id), Some(transform_id));
+        assert_eq!(tree.parent(opacity_id), Some(clip_id));
+        assert_eq!(tree.parent(content), Some(opacity_id));
+
+        // Verify each layer has exactly one child
+        assert_eq!(tree.children(root).unwrap().len(), 1);
+        assert_eq!(tree.children(transform_id).unwrap().len(), 1);
+        assert_eq!(tree.children(clip_id).unwrap().len(), 1);
+        assert_eq!(tree.children(opacity_id).unwrap().len(), 1);
     }
 }
