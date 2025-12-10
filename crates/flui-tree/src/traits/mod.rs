@@ -37,9 +37,11 @@
 //! - Different ID types for different tree implementations
 
 mod nav;
+pub mod node;
 mod read;
 mod write;
 
 pub use nav::TreeNav;
+pub use node::{Node, NodeExt, NodeTypeInfo};
 pub use read::TreeRead;
 pub use write::{TreeWrite, TreeWriteNav};

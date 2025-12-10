@@ -1,82 +1,54 @@
 //! # FLUI Tree - Pure Tree Abstractions
 //!
 //! Generic tree abstraction traits for the FLUI UI framework.
-//! This crate provides ONLY pure tree abstractions - domain-specific
-//! implementations live in their respective crates.
 //!
-//! ## Design Philosophy
-//!
-//! flui-tree defines abstract interfaces that break circular dependencies:
+//! ## Architecture
 //!
 //! ```text
-//!                     flui-foundation
-//!                           │
-//!            ┌──────────────┼──────────────┐
-//!            │              │              │
-//!            ▼              ▼              ▼
-//!       flui-tree     flui-element   flui_rendering
-//!     (abstractions)       │              │
-//!            │              │              │
-//!            └──────────────┴──────────────┘
-//!                           │
-//!                           ▼
-//!                      flui_core
+//! ┌─────────────────────────────────────────────────────────────┐
+//! │                     Typestate Pattern                       │
+//! ├─────────────────────────────────────────────────────────────┤
+//! │  NodeState trait with two implementations:                  │
+//! │  • Unmounted - Node not in tree, can be mounted             │
+//! │  • Mounted   - Node in tree, has position info              │
+//! ├─────────────────────────────────────────────────────────────┤
+//! │  Each tree type (Element, RenderObject) implements          │
+//! │  depth, parent, owner fields directly - no shared base.     │
+//! └─────────────────────────────────────────────────────────────┘
+//!
+//! Typestate transitions:
+//!   Unmounted ──mount()──► Mounted ──unmount()──► Unmounted
 //! ```
-//!
-//! ## What's in flui-tree
-//!
-//! - **Core Traits**: `TreeRead`, `TreeNav`, `TreeWrite`
-//! - **Generic Iterators**: Ancestors, Descendants, Siblings, DFS, BFS
-//! - **Arity System**: Compile-time child count validation
-//! - **Visitor Pattern**: Generic tree traversal
-//!
-//! ## What's NOT in flui-tree
-//!
-//! Domain-specific code lives in its own crate:
-//!
-//! - **flui_rendering**: RenderTree, DirtyTracking, render iterators
-//! - **flui-element**: ElementTree, lifecycle, reconciliation
-//! - **flui-view**: ViewTree, snapshots
 //!
 //! ## Core Traits
 //!
-//! ```rust,ignore
-//! use flui_tree::{TreeRead, TreeNav, TreeWrite};
+//! - `TreeRead<I>` - Read-only access to nodes
+//! - `TreeNav<I>` - Navigation (parent, children, ancestors)
+//! - `TreeWrite<I>` - Mutations (insert, remove)
+//! - `NodeState` - Typestate marker trait (Mounted/Unmounted)
 //!
-//! // Read-only access
-//! fn count_nodes<T: TreeRead>(tree: &T) -> usize {
-//!     tree.len()
-//! }
-//!
-//! // Navigation
-//! fn find_root<T: TreeNav>(tree: &T, id: ElementId) -> ElementId {
-//!     tree.ancestors(id).last().unwrap_or(id)
-//! }
-//! ```
-//!
-//! ## Iterators
+//! ## Example
 //!
 //! ```rust,ignore
-//! use flui_tree::{Ancestors, Descendants, DepthFirstIter};
+//! use flui_tree::{Mounted, Unmounted, NodeState, Depth};
+//! use std::marker::PhantomData;
 //!
-//! // Find all ancestors
-//! let path: Vec<_> = tree.ancestors(node).collect();
-//!
-//! // DFS traversal
-//! for id in tree.descendants(root) {
-//!     process(id);
+//! struct MyNode<S: NodeState> {
+//!     depth: Depth,
+//!     parent: Option<NodeId>,
+//!     _state: PhantomData<S>,
 //! }
-//! ```
 //!
-//! ## Arity System
+//! impl MyNode<Unmounted> {
+//!     fn new() -> Self { /* ... */ }
+//!     fn mount(self, parent: Option<NodeId>, depth: Depth) -> MyNode<Mounted> { /* ... */ }
+//! }
 //!
-//! ```rust,ignore
-//! use flui_tree::arity::{Leaf, Single, Optional, Variable};
-//!
-//! // Compile-time child count validation
-//! struct PaddingBox;  // Single child
-//! struct Container;   // Variable children
-//! struct Text;        // Leaf (no children)
+//! impl MyNode<Mounted> {
+//!     fn parent(&self) -> Option<NodeId> { self.parent }
+//!     fn depth(&self) -> Depth { self.depth }
+//!     fn unmount(self) -> MyNode<Unmounted> { /* ... */ }
+//! }
 //! ```
 
 #![warn(rust_2018_idioms, clippy::all, clippy::pedantic)]
@@ -102,6 +74,8 @@
 // ============================================================================
 
 pub mod arity;
+pub mod depth;
+pub mod diff;
 pub mod error;
 pub mod iter;
 pub mod state;
@@ -115,6 +89,12 @@ pub mod visitor;
 pub use traits::{TreeNav, TreeRead, TreeWrite, TreeWriteNav};
 
 // ============================================================================
+// RE-EXPORTS - Node State & Lifecycle (Typestate)
+// ============================================================================
+
+pub use state::{Mountable, MountableExt, Mounted, NodeState, Unmountable, Unmounted};
+
+// ============================================================================
 // RE-EXPORTS - Arity System
 // ============================================================================
 
@@ -124,12 +104,46 @@ pub use arity::{
 };
 
 // ============================================================================
-// RE-EXPORTS - State System
+// RE-EXPORTS - Node System
 // ============================================================================
 
-pub use state::{
-    Mountable, Mounted, NavigableHandle, NodeState, StateMarker, TreeInfo, Unmountable, Unmounted,
-};
+pub use traits::{Node, NodeExt, NodeTypeInfo};
+
+// ============================================================================
+// RE-EXPORTS - Depth System
+// ============================================================================
+
+pub use depth::{AtomicDepth, Depth, DepthAware, DepthError, MAX_TREE_DEPTH, ROOT_DEPTH};
+
+// ============================================================================
+// RE-EXPORTS - Slot System
+// ============================================================================
+
+pub use iter::{IndexedSlot, Slot, SlotBuilder, SlotIter};
+
+// ============================================================================
+// RE-EXPORTS - Path System
+// ============================================================================
+
+pub use iter::{IndexPath, TreeNavPathExt, TreePath};
+
+// ============================================================================
+// RE-EXPORTS - Cursor System
+// ============================================================================
+
+pub use iter::TreeCursor;
+
+// ============================================================================
+// RE-EXPORTS - Diff System
+// ============================================================================
+
+pub use diff::{ChildDiff, ChildOp, DiffOp, DiffStats, TreeDiff};
+
+// ============================================================================
+// RE-EXPORTS - Children System
+// ============================================================================
+
+pub use arity::{ArityStorage, Children, LeafChildren, SingleChild, VariableChildren};
 
 // ============================================================================
 // RE-EXPORTS - Iterators
@@ -183,23 +197,49 @@ pub mod prelude {
         Ancestors,
         // Arity
         Arity,
+        ArityStorage,
+        // Depth system
+        AtomicDepth,
+        // Diff system
+        ChildDiff,
+        ChildOp,
+        // Children system
+        Children,
         ChildrenAccess,
+        Depth,
+        DepthAware,
         Descendants,
+        DiffOp,
+        DiffStats,
         // Core traits
         Identifier,
+        // Path system
+        IndexPath,
+        // Slot system
+        IndexedSlot,
         Leaf,
-        // State types
+        LeafChildren,
+        // State types & lifecycle (typestate)
         Mountable,
+        MountableExt,
         Mounted,
-        NavigableHandle,
+        // Node system
+        Node,
+        NodeExt,
         NodeState,
+        NodeTypeInfo,
         Optional,
         Single,
-        StateMarker,
+        SingleChild,
+        Slot,
+        SlotBuilder,
+        // Cursor system
+        TreeCursor,
+        TreeDiff,
         TreeError,
-        TreeInfo,
-        // Types
         TreeNav,
+        TreeNavPathExt,
+        TreePath,
         TreeRead,
         TreeResult,
         TreeVisitor,
@@ -209,6 +249,7 @@ pub mod prelude {
         Unmountable,
         Unmounted,
         Variable,
+        VariableChildren,
         VisitorResult,
     };
 
@@ -224,7 +265,7 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Returns a summary of what this crate provides.
 pub fn crate_summary() -> &'static str {
-    "Pure tree abstractions: TreeRead, TreeNav, TreeWrite, iterators, arity system, typestate markers"
+    "Tree abstractions with typestate: NodeState (Mounted/Unmounted), TreeRead, TreeNav, TreeWrite"
 }
 
 // ============================================================================
@@ -243,6 +284,6 @@ mod tests {
     #[test]
     fn test_summary() {
         let summary = crate_summary();
-        assert!(summary.contains("tree abstractions"));
+        assert!(summary.to_lowercase().contains("tree"));
     }
 }

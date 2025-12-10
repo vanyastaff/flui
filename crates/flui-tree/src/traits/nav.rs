@@ -3,8 +3,12 @@
 //! This module provides the [`TreeNav`] trait for tree navigation
 //! operations using advanced Rust type system features.
 
-use flui_foundation::{Identifier, Slot};
-use std::marker::PhantomData;
+use flui_foundation::Identifier;
+
+use crate::depth::Depth;
+use crate::iter::cursor::TreeCursor;
+use crate::iter::path::TreePath;
+use crate::iter::slot::Slot;
 
 /// Tree navigation with RPITIT and HRTB support.
 ///
@@ -122,10 +126,13 @@ pub trait TreeNav<I: Identifier>: super::TreeRead<I> {
     /// Iterator over sibling IDs, excluding the input node.
     fn siblings(&self, id: I) -> impl Iterator<Item = I> + '_;
 
-    /// Returns the slot information for a node.
+    /// Returns slot information for a node.
     ///
-    /// Slot represents the position/key of a child within its parent.
-    /// This is optional functionality for trees that track positioning.
+    /// Slot represents the position of a child within its parent with:
+    /// - Parent ID
+    /// - Index within parent
+    /// - Depth in tree
+    /// - Previous/next sibling references
     ///
     /// # Arguments
     ///
@@ -133,14 +140,32 @@ pub trait TreeNav<I: Identifier>: super::TreeRead<I> {
     ///
     /// # Returns
     ///
-    /// `Some(Slot)` if slot information is available, `None` otherwise.
+    /// `Some(Slot<I>)` with full position context, `None` if node is root or not found.
     ///
     /// # Default Implementation
     ///
-    /// Returns `None` - implementations can override for slot support.
-    #[inline]
-    fn slot(&self, _id: I) -> Option<Slot> {
-        None
+    /// Computes slot info from parent/children/depth.
+    fn slot(&self, id: I) -> Option<Slot<I>> {
+        let parent = self.parent(id)?;
+        let children: Vec<I> = self.children(parent).collect();
+        let index = children.iter().position(|&c| c == id)?;
+        let depth = Depth::new(self.depth(id));
+
+        let previous_sibling = if index > 0 {
+            Some(children[index - 1])
+        } else {
+            None
+        };
+
+        let next_sibling = children.get(index + 1).copied();
+
+        Some(Slot::with_siblings(
+            parent,
+            index,
+            depth,
+            previous_sibling,
+            next_sibling,
+        ))
     }
 
     /// Returns the number of immediate children.
@@ -329,11 +354,18 @@ pub trait TreeNavExt<I: Identifier>: TreeNav<I> {
 
     /// Collect path from root to target node.
     ///
-    /// Returns the complete path including both root and target.
-    fn path_to_node(&self, target: I) -> Vec<I> {
-        let mut path: Vec<I> = self.ancestors(target).collect();
-        path.reverse();
-        path
+    /// Returns a [`TreePath`] containing the complete path from root to target.
+    /// Use `TreePath` for rich path operations like comparison, truncation,
+    /// and validation.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let path = tree.path_to_node(grandchild);
+    /// assert!(path.is_ancestor_of(&tree.path_to_node(great_grandchild)));
+    /// ```
+    fn path_to_node(&self, target: I) -> TreePath<I> {
+        TreePath::from_node(self, target)
     }
 
     /// Get the nth child of a node.
@@ -361,6 +393,59 @@ pub trait TreeNavExt<I: Identifier>: TreeNav<I> {
         let last = children.last().unwrap_or(first);
         Some((first, last))
     }
+
+    // === CURSOR-BASED NAVIGATION ===
+
+    /// Creates a cursor at the given node for interactive navigation.
+    ///
+    /// Cursors provide stateful navigation with optional history support.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let mut cursor = tree.cursor_at(some_node);
+    /// while cursor.go_first_child() {
+    ///     println!("Descended to: {:?}", cursor.current());
+    /// }
+    /// ```
+    fn cursor_at(&self, position: I) -> TreeCursor<'_, Self, I>
+    where
+        Self: Sized,
+    {
+        TreeCursor::new(self, position)
+    }
+
+    /// Creates a cursor with history at the given node.
+    ///
+    /// History allows backtracking to previous positions.
+    ///
+    /// # Arguments
+    ///
+    /// * `position` - Starting node ID
+    /// * `max_history` - Maximum history stack size
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let mut cursor = tree.cursor_with_history(root, 10);
+    /// cursor.go_child(0);
+    /// cursor.go_child(1);
+    /// cursor.go_back();  // Returns to previous position
+    /// ```
+    fn cursor_with_history(&self, position: I, max_history: usize) -> TreeCursor<'_, Self, I>
+    where
+        Self: Sized,
+    {
+        TreeCursor::with_history(self, position, max_history)
+    }
+
+    /// Creates a cursor at the root of the subtree containing `node`.
+    fn cursor_at_root(&self, node: I) -> TreeCursor<'_, Self, I>
+    where
+        Self: Sized,
+    {
+        TreeCursor::at_root(self, node)
+    }
 }
 
 // Blanket implementation for all TreeNav types
@@ -377,104 +462,6 @@ pub(crate) mod sealed {
     impl<T: Sealed + ?Sized> Sealed for &T {}
     impl<T: Sealed + ?Sized> Sealed for &mut T {}
     impl<T: Sealed + ?Sized> Sealed for Box<T> {}
-}
-
-// ============================================================================
-// UTILITY ITERATORS WITH CONST GENERICS
-// ============================================================================
-
-/// Stack-optimized ancestor iterator using const generics.
-///
-/// Uses inline storage for typical tree depths, falling back to heap
-/// for deeper trees. The buffer size is configurable via const generics.
-pub struct AncestorIterator<'a, I: Identifier, T: TreeNav<I>, const BUFFER_SIZE: usize = 32> {
-    tree: &'a T,
-    current: Option<I>,
-    // Stack-allocated buffer for typical cases
-    _buffer: PhantomData<[I; BUFFER_SIZE]>,
-}
-
-impl<'a, I: Identifier, T: TreeNav<I>, const BUFFER_SIZE: usize>
-    AncestorIterator<'a, I, T, BUFFER_SIZE>
-{
-    /// Create a new ancestor iterator.
-    ///
-    /// # Arguments
-    ///
-    /// * `tree` - The tree to navigate
-    /// * `start` - Starting node (included in iteration)
-    pub fn new(tree: &'a T, start: I) -> Self {
-        Self {
-            tree,
-            current: Some(start),
-            _buffer: PhantomData,
-        }
-    }
-}
-
-impl<I: Identifier, T: TreeNav<I>, const BUFFER_SIZE: usize> Iterator
-    for AncestorIterator<'_, I, T, BUFFER_SIZE>
-{
-    type Item = I;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let current = self.current?;
-        self.current = self.tree.parent(current);
-        Some(current)
-    }
-
-    /// Size hint based on typical tree depth.
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        if self.current.is_some() {
-            (1, Some(T::MAX_DEPTH))
-        } else {
-            (0, Some(0))
-        }
-    }
-}
-
-/// Breadth-first descendants iterator with configurable buffering.
-pub struct DescendantsIterator<'a, I: Identifier, T: TreeNav<I>, const QUEUE_SIZE: usize = 64> {
-    tree: &'a T,
-    queue: std::collections::VecDeque<(I, usize)>,
-    _buffer: PhantomData<[(I, usize); QUEUE_SIZE]>,
-}
-
-impl<'a, I: Identifier, T: TreeNav<I>, const QUEUE_SIZE: usize>
-    DescendantsIterator<'a, I, T, QUEUE_SIZE>
-{
-    /// Create new descendants iterator.
-    pub fn new(tree: &'a T, root: I) -> Self {
-        let mut queue = std::collections::VecDeque::with_capacity(QUEUE_SIZE);
-        queue.push_back((root, 0));
-
-        Self {
-            tree,
-            queue,
-            _buffer: PhantomData,
-        }
-    }
-}
-
-impl<I: Identifier, T: TreeNav<I>, const QUEUE_SIZE: usize> Iterator
-    for DescendantsIterator<'_, I, T, QUEUE_SIZE>
-{
-    type Item = (I, usize);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let (current, depth) = self.queue.pop_front()?;
-
-        // Add children to queue
-        for child in self.tree.children(current) {
-            self.queue.push_back((child, depth + 1));
-        }
-
-        Some((current, depth))
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        (self.queue.len(), None)
-    }
 }
 
 // ============================================================================
@@ -511,7 +498,7 @@ impl<I: Identifier, T: TreeNav<I> + ?Sized> TreeNav<I> for &T {
     }
 
     #[inline]
-    fn slot(&self, id: I) -> Option<Slot> {
+    fn slot(&self, id: I) -> Option<Slot<I>> {
         (**self).slot(id)
     }
 }
@@ -546,7 +533,7 @@ impl<I: Identifier, T: TreeNav<I> + ?Sized> TreeNav<I> for &mut T {
     }
 
     #[inline]
-    fn slot(&self, id: I) -> Option<Slot> {
+    fn slot(&self, id: I) -> Option<Slot<I>> {
         (**self).slot(id)
     }
 }
@@ -581,7 +568,7 @@ impl<I: Identifier, T: TreeNav<I> + ?Sized> TreeNav<I> for Box<T> {
     }
 
     #[inline]
-    fn slot(&self, id: I) -> Option<Slot> {
+    fn slot(&self, id: I) -> Option<Slot<I>> {
         (**self).slot(id)
     }
 }
@@ -743,7 +730,7 @@ mod tests {
         assert!(found.is_some());
 
         let path = tree.path_to_node(child1);
-        assert_eq!(path, vec![root, child1]);
+        assert_eq!(path.as_slice(), &[root, child1]);
 
         let (first, last) = tree.first_and_last_child(root).unwrap();
         assert_eq!(first, child1);

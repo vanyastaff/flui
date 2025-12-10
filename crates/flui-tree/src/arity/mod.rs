@@ -87,6 +87,7 @@
 //! ```
 
 mod accessors;
+pub mod children;
 
 pub use accessors::{
     // Performance enums
@@ -105,6 +106,8 @@ pub use accessors::{
     TypeInfo,
     TypedChildren,
 };
+
+pub use children::{ArityStorage, Children, LeafChildren, SingleChild, VariableChildren};
 
 use std::fmt::Debug;
 use std::marker::PhantomData;

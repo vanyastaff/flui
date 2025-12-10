@@ -54,12 +54,18 @@
 
 mod ancestors;
 mod breadth_first;
+pub mod cursor;
 mod depth_first;
 mod descendants;
+pub mod path;
 mod siblings;
+pub mod slot;
 
 pub use ancestors::{Ancestors, AncestorsWithDepth};
 pub use breadth_first::BreadthFirstIter;
+pub use cursor::TreeCursor;
 pub use depth_first::{DepthFirstIter, DepthFirstOrder};
 pub use descendants::{Descendants, DescendantsWithDepth};
+pub use path::{IndexPath, TreeNavPathExt, TreePath};
 pub use siblings::{AllSiblings, Siblings, SiblingsDirection};
+pub use slot::{IndexedSlot, Slot, SlotBuilder, SlotIter};

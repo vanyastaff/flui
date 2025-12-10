@@ -36,3 +36,6 @@ serde = ["dep:serde", "flui-foundation/serde"]
 [package.metadata.docs.rs]
 all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
+
+[lints]
+workspace = true
