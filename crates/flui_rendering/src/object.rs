@@ -475,27 +475,151 @@ pub trait RenderObject: DowncastSync + fmt::Debug {
     }
 
     // ============================================================================
-    // LIFECYCLE
+    // LIFECYCLE (Flutter Protocol)
     // ============================================================================
 
     /// Called when this render object is attached to a render tree.
+    ///
+    /// This is called by `RenderTree::add_child()` when the node is added to the tree.
+    /// Override to perform initialization that requires being in the tree
+    /// (e.g., registering for dirty tracking with PipelineOwner).
+    ///
+    /// **Important**: This is called for both the node being added AND all its descendants.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// void attach(PipelineOwner owner) {
+    ///   _owner = owner;
+    ///
+    ///   // Re-register dirty flags with owner
+    ///   if (_needsLayout && _isRelayoutBoundary != null) {
+    ///     _needsLayout = false;
+    ///     markNeedsLayout();
+    ///   }
+    ///   if (_needsPaint && _layerHandle.layer != null) {
+    ///     _needsPaint = false;
+    ///     markNeedsPaint();
+    ///   }
+    ///   if (_needsCompositingBitsUpdate) {
+    ///     _needsCompositingBitsUpdate = false;
+    ///     markNeedsCompositingBitsUpdate();
+    ///   }
+    /// }
+    /// ```
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// fn attach(&mut self) {
+    ///     // Custom initialization logic
+    ///     tracing::debug!("RenderBox attached to tree");
+    /// }
+    /// ```
     fn attach(&mut self) {
         // Default: no-op
+        // Override to perform initialization when added to tree
     }
 
     /// Called when this render object is detached from the render tree.
+    ///
+    /// This is called by `RenderTree::remove_child()` when the node is removed from the tree.
+    /// Override to perform cleanup that requires being in the tree
+    /// (e.g., unregistering from PipelineOwner, releasing resources).
+    ///
+    /// **Important**: This is called for both the node being removed AND all its descendants.
+    ///
+    /// The default implementation calls `drop_layer()` to release GPU resources.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// void detach() {
+    ///   _owner = null;
+    ///   // Dirty flags remain set so they can be re-registered on re-attach
+    /// }
+    /// ```
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// fn detach(&mut self) {
+    ///     // Custom cleanup logic
+    ///     self.cancel_animations();
+    ///
+    ///     // Call default to drop layers
+    ///     self.drop_layer();
+    /// }
+    /// ```
     fn detach(&mut self) {
+        // Default: drop compositing layers to release GPU resources
         self.drop_layer();
     }
 
-    /// Called when the render object should adopt a child.
+    /// Called when the render object adopts a child.
+    ///
+    /// This is called by `RenderTree::add_child()` on the parent when a child is added.
+    /// Use this to perform parent-specific child setup or tracking.
+    ///
+    /// **Note**: Parent data setup is handled separately by `setup_parent_data()`.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// void adoptChild(RenderObject child) {
+    ///   setupParentData(child);
+    ///   markNeedsLayout();
+    ///   markNeedsCompositingBitsUpdate();
+    ///   markNeedsSemanticsUpdate();
+    ///   child._parent = this;
+    ///   if (attached) child.attach(_owner!);
+    ///   redepthChild(child);
+    /// }
+    /// ```
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// fn adopt_child(&mut self, child_id: RenderId) {
+    ///     // Track child in custom data structure
+    ///     self.child_ids.push(child_id);
+    /// }
+    /// ```
     fn adopt_child(&mut self, _child_id: RenderId) {
         // Default: no-op
+        // Override to track children or perform custom child setup
     }
 
-    /// Called when the render object should drop a child.
+    /// Called when the render object drops a child.
+    ///
+    /// This is called by `RenderTree::remove_child()` on the parent when a child is removed.
+    /// Use this to perform parent-specific child cleanup or tracking.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// void dropChild(RenderObject child) {
+    ///   child.parentData!.detach();
+    ///   child.parentData = null;
+    ///   child._parent = null;
+    ///   if (attached) child.detach();
+    ///   markNeedsLayout();
+    ///   markNeedsCompositingBitsUpdate();
+    ///   markNeedsSemanticsUpdate();
+    /// }
+    /// ```
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// fn drop_child(&mut self, child_id: RenderId) {
+    ///     // Remove child from tracking
+    ///     self.child_ids.retain(|&id| id != child_id);
+    /// }
+    /// ```
     fn drop_child(&mut self, _child_id: RenderId) {
         // Default: no-op
+        // Override to untrack children or perform custom child cleanup
     }
 }
 

@@ -297,6 +297,14 @@ impl RenderNode<Mounted> {
 
     // ========== Tree Mutations (Rust naming: snake_case) ==========
 
+    /// Sets the depth of this node.
+    ///
+    /// **Internal use only**. Called by `RenderTree::redepth_child()`.
+    #[inline]
+    pub(crate) fn set_depth(&mut self, depth: Depth) {
+        self.depth = depth;
+    }
+
     /// Adds a child to this render node.
     ///
     /// **Note**: Does not update child's parent. Use `RenderTree::add_child` for that.
@@ -875,52 +883,193 @@ impl RenderTree {
 
     // ========== Tree Mutations (Rust naming conventions) ==========
 
+    /// Updates the depth of a child node and its descendants.
+    ///
+    /// This implements Flutter's `redepthChild()` protocol:
+    /// - If child's depth <= parent's depth, update it to parent.depth + 1
+    /// - Recursively update all descendants
+    ///
+    /// This ensures correct depth ordering for pipeline flush operations
+    /// (layout shallowest first, paint deepest first).
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// void redepthChild(RenderObject child) {
+    ///   if (child._depth <= depth) {
+    ///     child._depth = depth + 1;
+    ///     child.redepthChildren();
+    ///   }
+    /// }
+    /// ```
+    ///
+    /// # Arguments
+    ///
+    /// * `parent_id` - ID of the parent node
+    /// * `child_id` - ID of the child node to redepth
+    pub fn redepth_child(&mut self, parent_id: RenderId, child_id: RenderId) {
+        // Get parent depth
+        let parent_depth = if let Some(parent) = self.get(parent_id) {
+            parent.depth()
+        } else {
+            return; // Parent not found
+        };
+
+        // Get child's current depth
+        let child_depth = if let Some(child) = self.get(child_id) {
+            child.depth()
+        } else {
+            return; // Child not found
+        };
+
+        // Only update if child depth <= parent depth (Flutter pattern)
+        if child_depth <= parent_depth {
+            let new_depth = parent_depth.child_depth();
+
+            // Set child's new depth
+            if let Some(child) = self.get_mut(child_id) {
+                child.set_depth(new_depth);
+            }
+
+            // Recursively update all descendants
+            self.redepth_children(child_id);
+        }
+    }
+
+    /// Recursively updates the depth of all descendants of a node.
+    ///
+    /// Called by `redepth_child()` to ensure all descendants have correct depth.
+    ///
+    /// # Arguments
+    ///
+    /// * `node_id` - ID of the node whose children should be redepthed
+    fn redepth_children(&mut self, node_id: RenderId) {
+        // Collect children IDs first to avoid borrow checker issues
+        let children: Vec<RenderId> = self
+            .get(node_id)
+            .map(|node| node.children().to_vec())
+            .unwrap_or_default();
+
+        // Recursively update each child
+        for child_id in children {
+            self.redepth_child(node_id, child_id);
+        }
+    }
+
     /// Adds a child to a parent RenderNode.
     ///
-    /// This updates both the parent's children list and the child's parent reference.
+    /// This implements Flutter's `adoptChild()` protocol:
+    /// 1. Setup parent data for the child
+    /// 2. Call parent's `adopt_child()` hook
+    /// 3. Update parent/child relationships
+    /// 4. Call child's `attach()` hook
+    /// 5. Update child's depth (`redepth_child()`)
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// void adoptChild(RenderObject child) {
+    ///   setupParentData(child);
+    ///   markNeedsLayout();
+    ///   markNeedsCompositingBitsUpdate();
+    ///   child._parent = this;
+    ///   if (attached) child.attach(_owner!);
+    ///   redepthChild(child);
+    /// }
+    /// ```
     ///
     /// # Arguments
     ///
     /// * `parent_id` - ID of the parent node
     /// * `child_id` - ID of the child node to add
     pub fn add_child(&mut self, parent_id: RenderId, child_id: RenderId) {
-        // Split borrow: get mutable references to both nodes
-        // Safety: parent_id != child_id checked implicitly by different IDs
-        if parent_id != child_id {
-            unsafe {
-                // SAFETY: We ensure parent_id != child_id above
-                let tree_ptr = self as *mut Self;
+        if parent_id == child_id {
+            return; // Cannot add node as its own child
+        }
 
-                if let Some(parent) = (*tree_ptr).get_mut(parent_id) {
-                    parent.add_child(child_id);
-                }
-                if let Some(child) = (*tree_ptr).get_mut(child_id) {
-                    child.set_parent(Some(parent_id));
+        unsafe {
+            // SAFETY: We ensure parent_id != child_id above
+            let tree_ptr = self as *mut Self;
+
+            // Step 1: Setup parent data
+            if let (Some(parent), Some(child)) = ((*tree_ptr).get(parent_id), (*tree_ptr).get_mut(child_id)) {
+                let current_parent_data = child.parent_data();
+                if let Some(new_parent_data) = parent.render_object().setup_parent_data(current_parent_data) {
+                    child.set_parent_data(Some(new_parent_data));
                 }
             }
+
+            // Step 2: Call parent's adopt_child() hook
+            if let Some(parent) = (*tree_ptr).get_mut(parent_id) {
+                parent.render_object_mut().adopt_child(child_id);
+                parent.add_child(child_id);
+            }
+
+            // Step 3: Update child's parent reference
+            if let Some(child) = (*tree_ptr).get_mut(child_id) {
+                child.set_parent(Some(parent_id));
+            }
+
+            // Step 4: Call child's attach() hook
+            if let Some(child) = (*tree_ptr).get_mut(child_id) {
+                child.render_object_mut().attach();
+            }
+
+            // Step 5: Update child depth
+            self.redepth_child(parent_id, child_id);
         }
     }
 
     /// Removes a child from a parent RenderNode.
     ///
-    /// This updates both the parent's children list and the child's parent reference.
+    /// This implements Flutter's `dropChild()` protocol:
+    /// 1. Call parent's `drop_child()` hook
+    /// 2. Update parent/child relationships
+    /// 3. Clear child's parent data
+    /// 4. Call child's `detach()` hook
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// void dropChild(RenderObject child) {
+    ///   child.parentData!.detach();
+    ///   child.parentData = null;
+    ///   child._parent = null;
+    ///   if (attached) child.detach();
+    ///   markNeedsLayout();
+    ///   markNeedsCompositingBitsUpdate();
+    /// }
+    /// ```
     ///
     /// # Arguments
     ///
     /// * `parent_id` - ID of the parent node
     /// * `child_id` - ID of the child node to remove
     pub fn remove_child(&mut self, parent_id: RenderId, child_id: RenderId) {
-        if parent_id != child_id {
-            unsafe {
-                // SAFETY: We ensure parent_id != child_id above
-                let tree_ptr = self as *mut Self;
+        if parent_id == child_id {
+            return; // Cannot remove node from itself
+        }
 
-                if let Some(parent) = (*tree_ptr).get_mut(parent_id) {
-                    parent.remove_child(child_id);
-                }
-                if let Some(child) = (*tree_ptr).get_mut(child_id) {
-                    child.set_parent(None);
-                }
+        unsafe {
+            // SAFETY: We ensure parent_id != child_id above
+            let tree_ptr = self as *mut Self;
+
+            // Step 1: Call parent's drop_child() hook
+            if let Some(parent) = (*tree_ptr).get_mut(parent_id) {
+                parent.render_object_mut().drop_child(child_id);
+                parent.remove_child(child_id);
+            }
+
+            // Step 2: Clear child's parent reference
+            // Step 3: Clear child's parent data
+            if let Some(child) = (*tree_ptr).get_mut(child_id) {
+                child.set_parent(None);
+                child.set_parent_data(None);
+            }
+
+            // Step 4: Call child's detach() hook
+            if let Some(child) = (*tree_ptr).get_mut(child_id) {
+                child.render_object_mut().detach();
             }
         }
     }
