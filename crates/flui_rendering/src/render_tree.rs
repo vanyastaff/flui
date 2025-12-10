@@ -115,6 +115,14 @@ pub struct RenderNode<S: NodeState> {
     /// Cached size from last layout (only valid when Mounted)
     cached_size: Option<Size>,
 
+    /// Whether this node is a relayout boundary (Flutter optimization)
+    ///
+    /// A relayout boundary isolates layout changes to its subtree.
+    /// Determined by: !parent_uses_size || sized_by_parent || constraints.is_tight || parent == null
+    ///
+    /// When true, `mark_needs_layout()` stops propagating up the tree.
+    is_relayout_boundary: bool,
+
     // ========== Typestate Marker ==========
     /// Zero-sized marker for compile-time state tracking
     _state: PhantomData<S>,
@@ -146,6 +154,7 @@ impl RenderNode<Unmounted> {
             depth: Depth::root(),
             children: Vec::new(),
             cached_size: None,
+            is_relayout_boundary: false,
             _state: PhantomData,
         }
     }
@@ -162,6 +171,7 @@ impl RenderNode<Unmounted> {
             depth: Depth::root(),
             children: Vec::new(),
             cached_size: None,
+            is_relayout_boundary: false,
             _state: PhantomData,
         }
     }
@@ -263,6 +273,62 @@ impl RenderNode<Mounted> {
     pub fn set_cached_size(&mut self, size: Option<Size>) {
         self.cached_size = size;
     }
+
+    // ========== Relayout Boundary (Flutter Protocol) ==========
+
+    /// Returns whether this node is a relayout boundary.
+    ///
+    /// A relayout boundary isolates layout changes to its subtree.
+    /// When a child of a relayout boundary marks itself as needing layout,
+    /// the invalidation stops at the boundary instead of propagating to the root.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// bool get isRelayoutBoundary => _isRelayoutBoundary ?? false;
+    /// ```
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// // Root nodes are always relayout boundaries
+    /// if node.is_root() {
+    ///     assert!(node.is_relayout_boundary());
+    /// }
+    ///
+    /// // Other nodes depend on layout constraints and properties
+    /// if node.is_relayout_boundary() {
+    ///     // Layout changes won't propagate to parent
+    /// }
+    /// ```
+    #[inline]
+    pub fn is_relayout_boundary(&self) -> bool {
+        self.is_relayout_boundary
+    }
+
+    /// Sets whether this node is a relayout boundary.
+    ///
+    /// This is typically computed during layout based on:
+    /// - Whether parent uses this node's size
+    /// - Whether node is sized by parent constraints only
+    /// - Whether constraints are tight
+    /// - Whether this is the root node
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// // Compute boundary status
+    /// let is_boundary = !parent_uses_size
+    ///     || render_object.sized_by_parent()
+    ///     || constraints.is_tight()
+    ///     || node.is_root();
+    ///
+    /// node.set_relayout_boundary(is_boundary);
+    /// ```
+    #[inline]
+    pub fn set_relayout_boundary(&mut self, is_boundary: bool) {
+        self.is_relayout_boundary = is_boundary;
+    }
 }
 
 // ============================================================================
@@ -342,6 +408,9 @@ impl Mountable for RenderNode<Unmounted> {
             Depth::root()
         };
 
+        // Root nodes are always relayout boundaries
+        let is_relayout_boundary = parent.is_none();
+
         RenderNode {
             render_object: self.render_object,
             lifecycle: RenderLifecycle::Attached,
@@ -350,6 +419,7 @@ impl Mountable for RenderNode<Unmounted> {
             depth,
             children: Vec::new(),
             cached_size: None,
+            is_relayout_boundary,
             _state: PhantomData,
         }
     }
@@ -376,6 +446,7 @@ impl Unmountable for RenderNode<Mounted> {
             depth: Depth::root(),
             children: Vec::new(),
             cached_size: None,
+            is_relayout_boundary: false,
             _state: PhantomData,
         }
     }

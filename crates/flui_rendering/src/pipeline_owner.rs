@@ -290,24 +290,56 @@ impl RenderPipelineOwner {
     ///
     /// # Algorithm
     ///
-    /// 1. Sort dirty nodes by depth (relayout boundary optimization)
-    /// 2. For each dirty node, call `performLayout()` if still dirty
-    /// 3. Clear the needs_layout set
+    /// 1. Collect dirty nodes with their depths
+    /// 2. Sort by depth (shallowest first = parents before children)
+    /// 3. For each dirty node, call layout if still dirty
+    /// 4. Clear the needs_layout set
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// void flushLayout() {
+    ///   while (_nodesNeedingLayout.isNotEmpty) {
+    ///     final dirtyNodes = _nodesNeedingLayout;
+    ///     _nodesNeedingLayout = [];
+    ///     // Sort shallowest first (parents before children)
+    ///     dirtyNodes.sort((a, b) => a.depth - b.depth);
+    ///     for (final node in dirtyNodes) {
+    ///       if (node._needsLayout && node.owner == this) {
+    ///         node._layoutWithoutResize();
+    ///       }
+    ///     }
+    ///   }
+    /// }
+    /// ```
     pub fn flush_layout(&mut self) {
         if self.needs_layout.is_empty() {
             return;
         }
 
-        // Take the dirty set
-        let dirty_nodes: Vec<RenderId> = self.needs_layout.drain().collect();
+        // Collect dirty nodes with their depths
+        let mut dirty_nodes: Vec<(RenderId, usize)> = self
+            .needs_layout
+            .iter()
+            .filter_map(|&id| {
+                self.render_tree
+                    .get(id)
+                    .map(|node| (id, node.depth().get()))
+            })
+            .collect();
 
-        // Sort by depth (parents first) - this is the relayout boundary optimization
-        // TODO: Implement proper depth sorting when RenderNode has depth info
-        for id in dirty_nodes {
+        // Clear the dirty set
+        self.needs_layout.clear();
+
+        // Sort by depth: SHALLOWEST FIRST (parents before children)
+        // This is critical for Flutter protocol compliance
+        dirty_nodes.sort_by_key(|(_, depth)| *depth);
+
+        for (id, _depth) in dirty_nodes {
             if let Some(_node) = self.render_tree.get_mut(id) {
                 // TODO: Call performLayout() with proper constraints
                 // This requires integration with the constraint system
-                tracing::trace!(?id, "flush_layout: processing node");
+                tracing::trace!(?id, depth = _depth, "flush_layout: processing node (shallowest first)");
             }
         }
     }
@@ -335,8 +367,33 @@ impl RenderPipelineOwner {
 
     /// Flushes the paint phase.
     ///
-    /// Processes all render objects marked as needing paint.
-    /// This matches Flutter's `flushPaint()`.
+    /// Processes all render objects marked as needing paint, in reverse depth order
+    /// (children before parents). This matches Flutter's `flushPaint()`.
+    ///
+    /// # Algorithm
+    ///
+    /// 1. Collect dirty nodes with their depths
+    /// 2. Sort by depth (deepest first = children before parents)
+    /// 3. For each dirty node, call paint if still dirty
+    /// 4. Clear the needs_paint set
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// void flushPaint() {
+    ///   final dirtyNodes = _nodesNeedingPaint;
+    ///   _nodesNeedingPaint = [];
+    ///   // Sort DEEPEST first (children before parents)
+    ///   for (final node in dirtyNodes..sort((a, b) => b.depth - a.depth)) {
+    ///     if ((node._needsPaint || node._needsCompositedLayerUpdate)
+    ///         && node.owner == this) {
+    ///       if (node._layerHandle.layer!.attached) {
+    ///         PaintingContext.repaintCompositedChild(node);
+    ///       }
+    ///     }
+    ///   }
+    /// }
+    /// ```
     ///
     /// # Returns
     ///
@@ -347,12 +404,28 @@ impl RenderPipelineOwner {
             return;
         }
 
-        let dirty_nodes: Vec<RenderId> = self.needs_paint.drain().collect();
+        // Collect dirty nodes with their depths
+        let mut dirty_nodes: Vec<(RenderId, usize)> = self
+            .needs_paint
+            .iter()
+            .filter_map(|&id| {
+                self.render_tree
+                    .get(id)
+                    .map(|node| (id, node.depth().get()))
+            })
+            .collect();
 
-        for id in dirty_nodes {
+        // Clear the dirty set
+        self.needs_paint.clear();
+
+        // Sort by depth: DEEPEST FIRST (children before parents)
+        // This is critical for correct painting order
+        dirty_nodes.sort_by_key(|(_, depth)| std::cmp::Reverse(*depth));
+
+        for (id, _depth) in dirty_nodes {
             if let Some(_node) = self.render_tree.get_mut(id) {
                 // TODO: Call paint() with proper PaintContext
-                tracing::trace!(?id, "flush_paint: processing node");
+                tracing::trace!(?id, depth = _depth, "flush_paint: processing node (deepest first)");
             }
         }
     }

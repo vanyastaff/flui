@@ -74,7 +74,7 @@ pub mod styling;
 pub mod typography;
 
 // Re-exports for convenience - Most commonly used types
-pub use constraints::{BoxConstraints, SliverConstraints, SliverGeometry};
+pub use constraints::{BoxConstraints, Constraints, SliverConstraints, SliverGeometry};
 pub use events::{Event, KeyEvent, PointerEvent, PointerEventData, Theme, WindowEvent};
 pub use geometry::{Matrix4, Offset, Point, RRect, Rect, Size};
 pub use gestures::PointerDeviceKind;
