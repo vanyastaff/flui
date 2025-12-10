@@ -963,6 +963,7 @@ impl<P: Protocol> RenderState<P> {
         self.flags.contains(RenderFlags::IS_RELAYOUT_BOUNDARY)
     }
 
+
     /// Checks if this render object is a repaint boundary.
     ///
     /// Repaint boundaries prevent paint propagation upward, enabling
@@ -1199,6 +1200,100 @@ impl<P: Protocol> RenderState<P> {
 // ============================================================================
 
 impl RenderState<BoxProtocol> {
+    /// Computes and updates the relayout boundary status based on layout parameters.
+    ///
+    /// This implements Flutter's exact relayout boundary detection logic for Box protocol:
+    ///
+    /// ```text
+    /// is_boundary = !parent_uses_size || sized_by_parent || constraints.is_tight() || has_no_parent
+    /// ```
+    ///
+    /// # Flutter Protocol
+    ///
+    /// From Flutter's `RenderObject.layout()`:
+    /// ```dart
+    /// void layout(Constraints constraints, { bool parentUsesSize = false }) {
+    ///   // ...
+    ///   _relayoutBoundary = _isRelayoutBoundary(constraints, parentUsesSize);
+    /// }
+    ///
+    /// bool _isRelayoutBoundary(Constraints constraints, bool parentUsesSize) {
+    ///   return !parentUsesSize || sizedByParent || constraints.isTight || parent == null;
+    /// }
+    /// ```
+    ///
+    /// # Parameters
+    ///
+    /// - `parent_uses_size`: Whether parent's layout depends on this element's size
+    /// - `sized_by_parent`: Whether size is determined purely by constraints
+    /// - `has_parent`: Whether this element has a parent (root is always a boundary)
+    ///
+    /// # When Each Condition Triggers
+    ///
+    /// 1. **`!parent_uses_size`** - Parent doesn't care about size changes
+    ///    - Example: Fixed-size container ignoring child size
+    ///    - Most powerful optimization case
+    ///
+    /// 2. **`sized_by_parent`** - Size determined by constraints alone
+    ///    - Example: Container that always fills available space
+    ///    - Size won't change even if children change
+    ///
+    /// 3. **`constraints.is_tight()`** - Only one valid size
+    ///    - Example: `BoxConstraints.tight(Size(100, 50))`
+    ///    - Size mathematically cannot change
+    ///
+    /// 4. **`!has_parent`** - Root of tree
+    ///    - No parent to propagate to
+    ///    - Always a boundary by definition
+    ///
+    /// # Performance Impact
+    ///
+    /// When this element becomes a relayout boundary:
+    /// - ✅ Layout changes stop here (don't propagate to parent)
+    /// - ✅ O(1) relayout instead of O(tree height)
+    /// - ✅ Massive performance win for deep trees
+    /// - ✅ Enables incremental layout updates
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // During layout, compute boundary status
+    /// state.compute_relayout_boundary(
+    ///     parent_uses_size,
+    ///     sized_by_parent,
+    ///     has_parent
+    /// );
+    ///
+    /// // Later, check if we're a boundary
+    /// if state.is_relayout_boundary() {
+    ///     // Don't propagate layout changes to parent
+    ///     owner.register_needs_layout(element_id);
+    /// }
+    /// ```
+    pub fn compute_relayout_boundary(
+        &self,
+        parent_uses_size: bool,
+        sized_by_parent: bool,
+        has_parent: bool,
+    ) {
+        use flui_types::Constraints;
+
+        // Flutter's exact logic:
+        // is_boundary = !parent_uses_size || sized_by_parent || constraints.is_tight() || !has_parent
+
+        let constraints_are_tight = self
+            .constraints()
+            .map(|c| c.is_tight())
+            .unwrap_or(false);
+
+        let is_boundary = !parent_uses_size  // Parent doesn't use size
+            || sized_by_parent                // Size determined by constraints
+            || constraints_are_tight          // Only one valid size
+            || !has_parent;                   // Root of tree
+
+        self.set_relayout_boundary(is_boundary);
+    }
+
     /// Returns `Size::ZERO` if geometry is not set.
     ///
     /// Convenience method for box protocol that provides a safe fallback.

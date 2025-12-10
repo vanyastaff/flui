@@ -70,7 +70,7 @@ pub mod error;
 
 // Core rendering traits
 pub use box_render::RenderBox;
-pub use object::{new_layer_handle, LayerHandle, LayerRef, RenderObject};
+pub use object::{LayerHandle, RenderObject};
 pub use sliver::RenderSliver;
 
 // Re-export downcast-rs for downcasting RenderObject

@@ -233,7 +233,7 @@ impl RenderBox<Variable> for RenderIndexedStack {
         self.child_sizes.clear();
 
         for child in children.iter() {
-            let child_size = ctx.layout_child(*child, constraints)?;
+            let child_size = ctx.layout_child(*child, constraints, true)?;
             self.child_sizes.push(child_size);
             max_width = max_width.max(child_size.width);
             max_height = max_height.max(child_size.height);

@@ -206,7 +206,7 @@ impl RenderBox<Single> for RenderFractionalTranslation {
         let child_id = ctx.single_child();
 
         // Proxy behavior: pass constraints unchanged to child
-        let child_size = ctx.layout_child(child_id, ctx.constraints)?;
+        let child_size = ctx.layout_child(child_id, ctx.constraints, true)?;
 
         // Cache child size for calculating pixel offset during paint
         self.last_child_size = child_size;

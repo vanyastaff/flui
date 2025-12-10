@@ -182,7 +182,7 @@ impl RenderBox<Single> for RenderShiftedBox {
         let child_id = ctx.single_child();
 
         // Proxy behavior: pass constraints unchanged to child
-        let size = ctx.layout_child(child_id, ctx.constraints)?;
+        let size = ctx.layout_child(child_id, ctx.constraints, true)?;
 
         // Store size for paint (available but not currently used)
         self.size = size;

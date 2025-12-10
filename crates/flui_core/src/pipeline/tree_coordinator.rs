@@ -51,6 +51,7 @@ use flui_engine::LayerTree;
 use flui_foundation::{ElementId, RenderId, Slot};
 use flui_painting::DisplayListCore;
 use flui_rendering::{RenderPipelineOwner, RenderTree};
+use flui_tree::{Depth, Mountable};
 use flui_view::tree::ViewTree;
 use tracing::instrument;
 
@@ -281,7 +282,8 @@ impl TreeCoordinator {
             if let Some(render_object) = render_elem.take_pending_render_object() {
                 use flui_rendering::RenderNode;
                 let node = RenderNode::from_boxed(render_object);
-                let render_id = self.render_objects_mut().insert(node);
+                let mounted_node = node.mount(None, Depth::root());
+                let render_id = self.render_objects_mut().insert(mounted_node);
                 render_elem.set_render_id(Some(render_id));
                 tracing::debug!(?render_id, "Root RenderObject registered");
             }
@@ -358,8 +360,22 @@ impl TreeCoordinator {
         let child_render_id = if let Some(render_elem) = element.as_render_mut() {
             if let Some(render_object) = render_elem.take_pending_render_object() {
                 use flui_rendering::RenderNode;
+                use flui_tree::TreeRead;
+
+                // Get parent's render_id and depth for mounting
+                let (parent_render_id, parent_render_depth) = self
+                    .elements
+                    .get(parent_id)
+                    .and_then(|e| e.as_render())
+                    .and_then(|r| r.render_id())
+                    .and_then(|rid| {
+                        self.render_objects().get(rid).map(|node| (Some(rid), node.depth()))
+                    })
+                    .unwrap_or((None, Depth::root()));
+
                 let node = RenderNode::from_boxed(render_object);
-                let render_id = self.render_objects_mut().insert(node);
+                let mounted_node = node.mount(parent_render_id, parent_render_depth);
+                let render_id = self.render_objects_mut().insert(mounted_node);
                 render_elem.set_render_id(Some(render_id));
                 tracing::debug!(?render_id, "Child RenderObject registered");
                 Some(render_id)

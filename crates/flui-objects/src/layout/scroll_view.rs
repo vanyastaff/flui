@@ -267,7 +267,7 @@ impl RenderBox<Single> for RenderScrollView {
         // Layout child with relaxed constraints
         let child_id = *ctx.children.single();
         let child_constraints = self.child_constraints(viewport_constraints);
-        self.child_size = ctx.layout_child(child_id, child_constraints)?;
+        self.child_size = ctx.layout_child(child_id, child_constraints, true)?;
 
         // Calculate and update max scroll offset
         let max_offset = self.calculate_max_scroll_offset();

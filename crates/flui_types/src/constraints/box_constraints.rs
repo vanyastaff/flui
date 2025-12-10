@@ -2,6 +2,7 @@
 //!
 //! This module provides BoxConstraints for constraining widget sizes.
 
+use crate::constraints::Constraints;
 use crate::geometry::Size;
 use crate::layout::EdgeInsets;
 use std::fmt;
@@ -1052,5 +1053,104 @@ mod tests {
         // Should not panic - result should be valid
         let result = constraints.inflate(&padding);
         result.assert_is_normalized();
+    }
+}
+
+// ============================================================================
+// CONSTRAINTS TRAIT IMPLEMENTATION
+// ============================================================================
+
+impl Constraints for BoxConstraints {
+    /// Returns whether exactly one size satisfies these constraints.
+    ///
+    /// For box constraints, this means both width and height are tight
+    /// (min == max for both dimensions).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::{BoxConstraints, Size, constraints::Constraints};
+    ///
+    /// let tight = BoxConstraints::tight(Size::new(100.0, 50.0));
+    /// assert!(tight.is_tight());
+    ///
+    /// let loose = BoxConstraints::loose(Size::new(100.0, 50.0));
+    /// assert!(!loose.is_tight());
+    /// ```
+    #[inline]
+    fn is_tight(&self) -> bool {
+        // Delegate to existing implementation
+        BoxConstraints::is_tight(self)
+    }
+
+    /// Returns whether constraints are in canonical form.
+    ///
+    /// Box constraints are normalized if:
+    /// - `min_width <= max_width`
+    /// - `min_height <= max_height`
+    /// - All values >= 0.0 (or INFINITY)
+    /// - No NaN values
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::{BoxConstraints, constraints::Constraints};
+    ///
+    /// // Valid constraints
+    /// let valid = BoxConstraints::new(50.0, 150.0, 30.0, 100.0);
+    /// assert!(valid.is_normalized());
+    ///
+    /// // Invalid constraints (min > max)
+    /// let invalid = BoxConstraints::new(150.0, 50.0, 30.0, 100.0);
+    /// assert!(!invalid.is_normalized());
+    /// ```
+    #[inline]
+    fn is_normalized(&self) -> bool {
+        // Delegate to existing implementation
+        BoxConstraints::is_normalized(self)
+    }
+
+    /// Validates box constraints (debug mode only).
+    ///
+    /// Performs comprehensive validation:
+    /// - All values must be non-negative or INFINITY
+    /// - min values must be <= max values
+    /// - No NaN values
+    /// - If `is_applied_constraint` is true, additionally checks that
+    ///   max values are finite (layout cannot handle infinite constraints)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::{BoxConstraints, constraints::Constraints};
+    ///
+    /// let constraints = BoxConstraints::new(50.0, 150.0, 30.0, 100.0);
+    ///
+    /// // Validate before applying to layout
+    /// constraints.debug_assert_is_valid(true);
+    ///
+    /// // General validation
+    /// constraints.debug_assert_is_valid(false);
+    /// ```
+    #[cfg(debug_assertions)]
+    fn debug_assert_is_valid(&self, is_applied_constraint: bool) -> bool {
+        // Call existing validation
+        self.assert_is_normalized();
+
+        // Additional validation when applying constraints
+        if is_applied_constraint {
+            debug_assert!(
+                self.max_width.is_finite(),
+                "BoxConstraints: max_width must be finite when applying constraints, got {}",
+                self.max_width
+            );
+            debug_assert!(
+                self.max_height.is_finite(),
+                "BoxConstraints: max_height must be finite when applying constraints, got {}",
+                self.max_height
+            );
+        }
+
+        true
     }
 }

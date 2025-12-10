@@ -236,7 +236,7 @@ impl RenderBox<Optional> for RenderLimitedBox {
         // Optional arity: use ctx.children.get() which returns Option<&ElementId>
         if let Some(&child_id) = ctx.children.get() {
             // Layout child with limited constraints
-            Ok(ctx.layout_child(child_id, limited_constraints)?)
+            Ok(ctx.layout_child(child_id, limited_constraints, true)?)
         } else {
             // No child - return limited size
             // This reserves bounded space even without child

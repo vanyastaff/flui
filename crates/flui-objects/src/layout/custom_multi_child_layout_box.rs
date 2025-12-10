@@ -169,7 +169,7 @@ impl<'a, 'b> MultiChildLayoutContext<'a, 'b> {
         }
         // Note: This returns Size, unwrapping the Result for the delegate API
         self.ctx
-            .layout_child(self.children[index], constraints)
+            .layout_child(self.children[index], constraints, true)
             .unwrap_or(Size::ZERO)
     }
 

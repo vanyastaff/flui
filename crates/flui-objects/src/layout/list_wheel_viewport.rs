@@ -229,7 +229,7 @@ impl RenderBox<Variable> for RenderListWheelViewport {
         // Layout all children and calculate their transforms
         for (index, child_id) in children.iter().enumerate() {
             // Layout child with fixed constraints
-            let _child_size = ctx.layout_child(*child_id, child_constraints)?;
+            let _child_size = ctx.layout_child(*child_id, child_constraints, true)?;
 
             // Calculate 3D transform and offset
             let (transform, offset, _scale) = self.calculate_item_transform(index, size.height);

@@ -86,6 +86,19 @@ pub trait LayoutTree {
     ///
     /// * `id` - The element to layout
     /// * `constraints` - Box constraints from parent
+    /// * `parent_uses_size` - Whether parent's layout depends on this child's size
+    ///
+    /// # Relayout Boundary Detection
+    ///
+    /// When `parent_uses_size = false`, the child becomes a **relayout boundary**:
+    /// - Layout changes in the child won't propagate to the parent
+    /// - Enables O(1) relayout instead of O(tree height)
+    /// - Massive performance win for deep trees
+    ///
+    /// The implementation should compute the relayout boundary status using:
+    /// ```text
+    /// is_boundary = !parent_uses_size || sized_by_parent || constraints.is_tight() || parent.is_none()
+    /// ```
     ///
     /// # Returns
     ///
@@ -100,6 +113,7 @@ pub trait LayoutTree {
         &mut self,
         id: RenderId,
         constraints: BoxConstraints,
+        parent_uses_size: bool,
     ) -> Result<Size, RenderError>;
 
     /// Performs layout on an element using sliver protocol constraints.
@@ -108,6 +122,12 @@ pub trait LayoutTree {
     ///
     /// * `id` - The element to layout
     /// * `constraints` - Sliver constraints from parent
+    /// * `parent_uses_size` - Whether parent's layout depends on this child's geometry
+    ///
+    /// # Relayout Boundary Detection
+    ///
+    /// Similar to box protocol, when `parent_uses_size = false`, the child becomes
+    /// a relayout boundary preventing layout propagation to the parent.
     ///
     /// # Returns
     ///
@@ -122,6 +142,7 @@ pub trait LayoutTree {
         &mut self,
         id: RenderId,
         constraints: SliverConstraints,
+        parent_uses_size: bool,
     ) -> Result<SliverGeometry, RenderError>;
 
     /// Sets the offset of an element (position relative to parent).
@@ -401,7 +422,9 @@ pub trait FullRenderTree: LayoutTree + PaintTree + HitTestTree {
         constraints: BoxConstraints,
         offset: Offset,
     ) -> Result<(Size, Canvas), RenderError> {
-        let size = self.perform_layout(id, constraints)?;
+        // Use parent_uses_size = true since this is a convenience method
+        // and we're returning the size
+        let size = self.perform_layout(id, constraints, true)?;
         let canvas = self.perform_paint(id, offset)?;
         Ok((size, canvas))
     }
@@ -432,16 +455,18 @@ impl LayoutTree for Box<dyn LayoutTree + Send + Sync> {
         &mut self,
         id: RenderId,
         constraints: BoxConstraints,
+        parent_uses_size: bool,
     ) -> Result<Size, RenderError> {
-        (**self).perform_layout(id, constraints)
+        (**self).perform_layout(id, constraints, parent_uses_size)
     }
 
     fn perform_sliver_layout(
         &mut self,
         id: RenderId,
         constraints: SliverConstraints,
+        parent_uses_size: bool,
     ) -> Result<SliverGeometry, RenderError> {
-        (**self).perform_sliver_layout(id, constraints)
+        (**self).perform_sliver_layout(id, constraints, parent_uses_size)
     }
 
     fn set_offset(&mut self, id: RenderId, offset: Offset) {
@@ -646,7 +671,8 @@ pub fn layout_subtree(
     constraints: BoxConstraints,
 ) -> Result<Size, RenderError> {
     // This is a simplified version - real implementation would traverse children
-    tree.perform_layout(root, constraints)
+    // Root has no parent, so parent_uses_size = false (root is a relayout boundary)
+    tree.perform_layout(root, constraints, false)
 }
 
 /// Performs a depth-first paint pass on a render tree.
@@ -707,7 +733,8 @@ pub fn layout_batch(
 
     elements
         .iter()
-        .map(|&(id, constraints)| tree.perform_layout(id, constraints))
+        // Use parent_uses_size = true (conservative) since we don't know the parent context
+        .map(|&(id, constraints)| tree.perform_layout(id, constraints, true))
         .collect()
 }
 
@@ -850,6 +877,7 @@ mod tests {
             &mut self,
             _id: RenderId,
             constraints: BoxConstraints,
+            _parent_uses_size: bool,
         ) -> Result<Size, RenderError> {
             Ok(constraints.biggest())
         }
@@ -858,6 +886,7 @@ mod tests {
             &mut self,
             _id: RenderId,
             _constraints: SliverConstraints,
+            _parent_uses_size: bool,
         ) -> Result<SliverGeometry, RenderError> {
             Ok(SliverGeometry::zero())
         }
@@ -938,7 +967,7 @@ mod tests {
         let layout_tree: &mut dyn LayoutTree = &mut tree;
         let constraints = BoxConstraints::tight(Size::new(100.0, 100.0));
 
-        assert!(layout_tree.perform_layout(id, constraints).is_ok());
+        assert!(layout_tree.perform_layout(id, constraints, true).is_ok());
         assert!(!layout_tree.needs_layout(id));
 
         let paint_tree: &mut dyn PaintTree = &mut tree;

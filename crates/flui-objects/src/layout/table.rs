@@ -309,7 +309,7 @@ impl RenderTable {
                                 constraints.max_height,
                             );
                             let child_size = ctx
-                                .layout_child(children[idx], child_constraints)
+                                .layout_child(children[idx], child_constraints, true)
                                 .unwrap_or(Size::ZERO);
                             max_width = max_width.max(child_size.width);
                         }
@@ -368,7 +368,7 @@ impl RenderTable {
                         constraints.max_height,
                     );
                     let child_size = ctx
-                        .layout_child(children[idx], child_constraints)
+                        .layout_child(children[idx], child_constraints, true)
                         .unwrap_or(Size::ZERO);
                     max_height = max_height.max(child_size.height);
                 }

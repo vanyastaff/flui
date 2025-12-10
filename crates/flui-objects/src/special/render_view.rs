@@ -139,7 +139,7 @@ impl RenderBox<Single> for RenderView {
         let constraints = self.configuration.to_constraints();
 
         // Layout child with tight constraints (fills entire surface)
-        let child_size = ctx.layout_child(child_id, constraints)?;
+        let child_size = ctx.layout_child(child_id, constraints, true)?;
 
         // RenderView always returns the configuration size, regardless of child
         // (child must conform to our constraints)

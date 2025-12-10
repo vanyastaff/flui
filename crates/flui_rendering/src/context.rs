@@ -136,6 +136,50 @@ pub struct LayoutContext<
     /// - For `BoxProtocol`: `BoxConstraints` (min/max width/height)
     /// - For `SliverProtocol`: `SliverConstraints` (scroll offset, viewport)
     pub constraints: P::Constraints,
+    /// Whether the parent's layout depends on this child's size.
+    ///
+    /// This is a critical optimization parameter from Flutter's RenderObject protocol.
+    /// When `false`, this child becomes a **relayout boundary** - layout changes won't
+    /// propagate to the parent, enabling O(1) relayout instead of O(tree height).
+    ///
+    /// # Flutter Protocol
+    ///
+    /// From Flutter's `RenderObject.layout()`:
+    /// ```dart
+    /// void layout(Constraints constraints, { bool parentUsesSize = false })
+    /// ```
+    ///
+    /// # Relayout Boundary Detection
+    ///
+    /// A RenderObject is a relayout boundary when:
+    /// - `!parent_uses_size` (parent doesn't care about size changes), OR
+    /// - `sized_by_parent` (size determined purely by constraints), OR
+    /// - `constraints.is_tight()` (only one valid size), OR
+    /// - No parent (root of tree)
+    ///
+    /// # Usage
+    ///
+    /// ```rust,ignore
+    /// // Parent doesn't use child size - child is relayout boundary
+    /// ctx.layout_child(child_id, constraints, false)?;
+    ///
+    /// // Parent uses child size - NOT a relayout boundary
+    /// let child_size = ctx.layout_child(child_id, constraints, true)?;
+    /// self_size = compute_size_from_child(child_size);
+    /// ```
+    ///
+    /// # Performance Impact
+    ///
+    /// When `false`:
+    /// - Child layout changes don't propagate to parent ✅
+    /// - Massive performance win for deep trees ✅
+    /// - Parent won't relayout when child changes ✅
+    ///
+    /// When `true`:
+    /// - Layout changes propagate upward ⚠️
+    /// - Parent will relayout if child size changes ⚠️
+    /// - Necessary when parent's size depends on child ⚠️
+    pub parent_uses_size: bool,
     /// Children accessor for compile-time arity-checked access.
     ///
     /// Use methods like `.single()`, `.optional()`, or `.iter()` depending on arity.
@@ -151,6 +195,7 @@ where
         f.debug_struct("LayoutContext")
             .field("element_id", &self.element_id)
             .field("constraints", &self.constraints)
+            .field("parent_uses_size", &self.parent_uses_size)
             .field("children_count", &self.children.len())
             .finish_non_exhaustive()
     }
@@ -169,16 +214,26 @@ where
     /// For more explicit construction, consider using:
     /// - [`LayoutContext::for_box`] for Box protocol
     /// - [`LayoutContext::for_sliver`] for Sliver protocol
+    ///
+    /// # Parameters
+    ///
+    /// - `tree`: Mutable reference to the layout tree
+    /// - `element_id`: ID of the element being laid out
+    /// - `constraints`: Layout constraints from parent
+    /// - `parent_uses_size`: Whether parent's layout depends on this child's size
+    /// - `children`: Arity-checked accessor for child elements
     pub fn new(
         tree: &'a mut T,
         element_id: RenderId,
         constraints: P::Constraints,
+        parent_uses_size: bool,
         children: A::Accessor<'a, RenderId>,
     ) -> Self {
         Self {
             tree,
             element_id,
             constraints,
+            parent_uses_size,
             children,
             _phantom: PhantomData,
         }
@@ -255,13 +310,39 @@ where
     /// Layouts a child box element.
     ///
     /// Returns the computed size that satisfies the given constraints.
-    #[instrument(level = "trace", skip(self, constraints), fields(child = %child_id.get()))]
+    ///
+    /// # Parameters
+    ///
+    /// - `child_id`: The child element to layout
+    /// - `constraints`: Box constraints for the child
+    /// - `parent_uses_size`: Whether this parent's layout depends on the child's size
+    ///
+    /// # Relayout Boundary
+    ///
+    /// When `parent_uses_size = false`, the child becomes a relayout boundary:
+    /// - Layout changes in the child won't propagate to this parent
+    /// - Huge performance win for deep trees
+    /// - Use when parent size doesn't depend on child size
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // Parent uses child size - child is NOT a boundary
+    /// let child_size = ctx.layout_child(child_id, constraints, true)?;
+    /// let my_size = Size::new(child_size.width + padding, child_size.height + padding);
+    ///
+    /// // Parent doesn't use size - child IS a boundary
+    /// ctx.layout_child(child_id, constraints, false)?;
+    /// let my_size = constraints.biggest(); // Fixed size, ignores child
+    /// ```
+    #[instrument(level = "trace", skip(self, constraints), fields(child = %child_id.get(), parent_uses_size))]
     pub fn layout_child(
         &mut self,
         child_id: RenderId,
         constraints: BoxConstraints,
+        parent_uses_size: bool,
     ) -> RenderResult<Size> {
-        let result = self.tree.perform_layout(child_id, constraints);
+        let result = self.tree.perform_layout(child_id, constraints, parent_uses_size);
         if let Ok(size) = &result {
             trace!(width = %size.width, height = %size.height, "child layout complete");
         }
@@ -283,7 +364,7 @@ where
     ///
     /// ```rust,ignore
     /// for child_id in ctx.children() {
-    ///     let size = if let Some(new_size) = ctx.layout_child_if_needed(child_id, constraints)? {
+    ///     let size = if let Some(new_size) = ctx.layout_child_if_needed(child_id, constraints, true)? {
     ///         new_size
     ///     } else {
     ///         ctx.get_child_cached_size(child_id).unwrap_or(Size::ZERO)
@@ -291,18 +372,19 @@ where
     ///     // ... use size
     /// }
     /// ```
-    #[instrument(level = "trace", skip(self, constraints), fields(child = %child_id.get()))]
+    #[instrument(level = "trace", skip(self, constraints), fields(child = %child_id.get(), parent_uses_size))]
     pub fn layout_child_if_needed(
         &mut self,
         child_id: RenderId,
         constraints: BoxConstraints,
+        parent_uses_size: bool,
     ) -> RenderResult<Option<Size>> {
         if !self.tree.needs_layout(child_id) {
             trace!("child layout skipped (not dirty)");
             return Ok(None);
         }
 
-        let size = self.tree.perform_layout(child_id, constraints)?;
+        let size = self.tree.perform_layout(child_id, constraints, parent_uses_size)?;
         trace!(width = %size.width, height = %size.height, "child layout complete");
         Ok(Some(size))
     }
@@ -312,20 +394,26 @@ where
     /// Returns a vector of (child_id, size) tuples on success.
     /// If any child layout fails, the error is propagated immediately.
     ///
+    /// # Parameters
+    ///
+    /// - `constraints`: Constraints to apply to all children
+    /// - `parent_uses_size`: Whether this parent's layout depends on children's sizes
+    ///
     /// # Errors
     ///
     /// Returns the first error encountered during child layout.
-    #[instrument(level = "trace", skip(self, constraints), fields(element = %self.element_id.get()))]
+    #[instrument(level = "trace", skip(self, constraints), fields(element = %self.element_id.get(), parent_uses_size))]
     pub fn layout_all_children(
         &mut self,
         constraints: BoxConstraints,
+        parent_uses_size: bool,
     ) -> RenderResult<Vec<(RenderId, Size)>> {
         let children: Vec<_> = self.children().collect();
         trace!(child_count = children.len(), "laying out all children");
         let mut results = Vec::with_capacity(children.len());
 
         for child_id in children {
-            let size = self.layout_child(child_id, constraints)?;
+            let size = self.layout_child(child_id, constraints, parent_uses_size)?;
             results.push((child_id, size));
         }
 
@@ -347,19 +435,37 @@ impl<'a, T: LayoutTree> LayoutContext<'a, Single, BoxProtocol, T> {
     /// Layouts the single child with the current constraints.
     ///
     /// This is a convenience method for simple wrapper render objects.
+    ///
+    /// By default, uses `parent_uses_size = true` since most single-child
+    /// wrappers (Padding, Transform, etc.) need the child's size to determine
+    /// their own size.
+    ///
+    /// For fixed-size wrappers that ignore child size, use `layout_child` directly
+    /// with `parent_uses_size = false`.
     pub fn layout_single_child(&mut self) -> RenderResult<Size> {
         let child_id = self.single_child();
-        self.layout_child(child_id, self.constraints)
+        self.layout_child(child_id, self.constraints, true)
     }
 
     /// Layouts the single child with transformed constraints.
+    ///
+    /// By default, uses `parent_uses_size = true` since most single-child
+    /// wrappers need the child's size.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // Padding deflates constraints and uses child size
+    /// let child_size = ctx.layout_single_child_with(|c| c.deflate(&padding))?;
+    /// Size::new(child_size.width + padding.horizontal(), child_size.height + padding.vertical())
+    /// ```
     pub fn layout_single_child_with<F>(&mut self, transform: F) -> RenderResult<Size>
     where
         F: FnOnce(BoxConstraints) -> BoxConstraints,
     {
         let child_id = self.single_child();
         let transformed_constraints = transform(self.constraints);
-        self.layout_child(child_id, transformed_constraints)
+        self.layout_child(child_id, transformed_constraints, true)
     }
 }
 
@@ -374,13 +480,14 @@ where
     /// Layouts a child sliver element.
     ///
     /// Returns the computed geometry with scroll/paint extents.
-    #[instrument(level = "trace", skip(self, constraints), fields(child = %child_id.get()))]
+    #[instrument(level = "trace", skip(self, constraints), fields(child = %child_id.get(), parent_uses_size))]
     pub fn layout_child(
         &mut self,
         child_id: RenderId,
         constraints: SliverConstraints,
+        parent_uses_size: bool,
     ) -> RenderResult<SliverGeometry> {
-        let result = self.tree.perform_sliver_layout(child_id, constraints);
+        let result = self.tree.perform_sliver_layout(child_id, constraints, parent_uses_size);
         if let Ok(geometry) = &result {
             trace!(
                 scroll_extent = %geometry.scroll_extent,
@@ -395,18 +502,19 @@ where
     ///
     /// This is an optimization that skips layout if the child's dirty flag is not set.
     /// Returns `None` if the child doesn't need layout (caller should use cached geometry).
-    #[instrument(level = "trace", skip(self, constraints), fields(child = %child_id.get()))]
+    #[instrument(level = "trace", skip(self, constraints), fields(child = %child_id.get(), parent_uses_size))]
     pub fn layout_child_if_needed(
         &mut self,
         child_id: RenderId,
         constraints: SliverConstraints,
+        parent_uses_size: bool,
     ) -> RenderResult<Option<SliverGeometry>> {
         if !self.tree.needs_layout(child_id) {
             trace!("sliver child layout skipped (not dirty)");
             return Ok(None);
         }
 
-        let geometry = self.tree.perform_sliver_layout(child_id, constraints)?;
+        let geometry = self.tree.perform_sliver_layout(child_id, constraints, parent_uses_size)?;
         trace!(
             scroll_extent = %geometry.scroll_extent,
             paint_extent = %geometry.paint_extent,
@@ -423,10 +531,11 @@ where
     /// # Errors
     ///
     /// Returns the first error encountered during child layout.
-    #[instrument(level = "trace", skip(self, constraints), fields(element = %self.element_id.get()))]
+    #[instrument(level = "trace", skip(self, constraints), fields(element = %self.element_id.get(), parent_uses_size))]
     pub fn layout_all_children(
         &mut self,
         constraints: SliverConstraints,
+        parent_uses_size: bool,
     ) -> RenderResult<Vec<(RenderId, SliverGeometry)>> {
         let children: Vec<_> = self.children().collect();
         trace!(
@@ -436,7 +545,7 @@ where
         let mut results = Vec::with_capacity(children.len());
 
         for child_id in children {
-            let geometry = self.layout_child(child_id, constraints)?;
+            let geometry = self.layout_child(child_id, constraints, parent_uses_size)?;
             results.push((child_id, geometry));
         }
 
@@ -456,19 +565,25 @@ impl<'a, T: LayoutTree> LayoutContext<'a, Single, SliverProtocol, T> {
     }
 
     /// Layouts the single child with the current constraints.
+    ///
+    /// By default, uses `parent_uses_size = true` since most single-child
+    /// sliver wrappers need the child's geometry.
     pub fn layout_single_child(&mut self) -> RenderResult<SliverGeometry> {
         let child_id = self.single_child();
-        self.layout_child(child_id, self.constraints)
+        self.layout_child(child_id, self.constraints, true)
     }
 
     /// Layouts the single child with transformed constraints.
+    ///
+    /// By default, uses `parent_uses_size = true` since most single-child
+    /// sliver wrappers need the child's geometry.
     pub fn layout_single_child_with<F>(&mut self, transform: F) -> RenderResult<SliverGeometry>
     where
         F: FnOnce(SliverConstraints) -> SliverConstraints,
     {
         let child_id = self.single_child();
         let transformed_constraints = transform(self.constraints);
-        self.layout_child(child_id, transformed_constraints)
+        self.layout_child(child_id, transformed_constraints, true)
     }
 }
 

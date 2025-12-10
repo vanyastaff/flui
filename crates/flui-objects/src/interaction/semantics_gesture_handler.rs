@@ -362,7 +362,7 @@ impl RenderBox<Single> for RenderSemanticsGestureHandler {
         let child_id = ctx.single_child();
 
         // Proxy behavior: pass constraints unchanged to child
-        let size = ctx.layout_child(child_id, ctx.constraints)?;
+        let size = ctx.layout_child(child_id, ctx.constraints, true)?;
 
         // Cache size for scroll delta calculations
         // Delta = direction × size × scroll_factor

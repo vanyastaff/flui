@@ -332,7 +332,7 @@ impl RenderBox<Single> for RenderConstraintsTransformBox {
         let child_constraints = self.constraints_transform.apply(ctx.constraints);
 
         // Layout child with transformed constraints
-        let child_size = ctx.layout_child(child_id, child_constraints)?;
+        let child_size = ctx.layout_child(child_id, child_constraints, true)?;
         self.cached_child_size = child_size;
 
         // Parent tries to match child size, but respects its own constraints

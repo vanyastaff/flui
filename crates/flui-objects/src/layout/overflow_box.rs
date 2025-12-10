@@ -274,7 +274,7 @@ impl RenderBox<Single> for RenderOverflowBox {
 
         // Layout child with custom (overridden) constraints
         // Child may be larger than parent will be (overflow scenario)
-        let child_size = ctx.layout_child(child_id, child_constraints)?;
+        let child_size = ctx.layout_child(child_id, child_constraints, true)?;
 
         // Parent size determined by parent constraints (ignores child size)
         // This allows child to overflow parent bounds

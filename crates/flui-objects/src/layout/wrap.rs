@@ -319,7 +319,7 @@ impl RenderBox<Variable> for RenderWrap {
                         constraints.max_height,
                     );
 
-                    let child_size = ctx.layout_child(child_id, child_constraints)?;
+                    let child_size = ctx.layout_child(child_id, child_constraints, true)?;
 
                     // Check if we need to wrap
                     if current_x + child_size.width > max_width && current_x > 0.0 {
@@ -357,7 +357,7 @@ impl RenderBox<Variable> for RenderWrap {
                         max_height - current_y,
                     );
 
-                    let child_size = ctx.layout_child(child_id, child_constraints)?;
+                    let child_size = ctx.layout_child(child_id, child_constraints, true)?;
 
                     // Check if we need to wrap
                     if current_y + child_size.height > max_height && current_y > 0.0 {
