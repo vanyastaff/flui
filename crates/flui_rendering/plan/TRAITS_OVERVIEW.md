@@ -529,7 +529,255 @@ pub trait PaintingContextTrait {
 }
 ```
 
-## 8. Transition Traits
+## 8. Combined Protocol Traits (Flutter-style)
+
+Flutter имеет `RenderBox` и `RenderSliver` как объединённые классы.
+Мы можем сделать то же самое через супер-трейты:
+
+### RenderBox
+
+```rust
+/// Combined trait for box layout render objects.
+/// Equivalent to Flutter's RenderBox class.
+pub trait RenderBox: 
+    RenderObject + 
+    LayoutProtocol<BoxProtocol> + 
+    PaintProtocol + 
+    HitTestProtocol<BoxProtocol> +
+    BoxLayout +
+    BoxHitTest
+{
+    // === Geometry Access ===
+    
+    /// Get computed size (valid after layout).
+    fn size(&self) -> Size;
+    
+    /// Set size during layout.
+    fn set_size(&mut self, size: Size);
+    
+    // === Constraints Access ===
+    
+    /// Get current constraints.
+    fn constraints(&self) -> &BoxConstraints;
+    
+    // === Intrinsic Dimensions (with caching) ===
+    
+    fn get_min_intrinsic_width(&mut self, height: f64) -> f64 {
+        // Caching wrapper around compute_min_intrinsic_width
+        self.compute_min_intrinsic_width(height)
+    }
+    
+    fn get_max_intrinsic_width(&mut self, height: f64) -> f64 {
+        self.compute_max_intrinsic_width(height)
+    }
+    
+    fn get_min_intrinsic_height(&mut self, width: f64) -> f64 {
+        self.compute_min_intrinsic_height(width)
+    }
+    
+    fn get_max_intrinsic_height(&mut self, width: f64) -> f64 {
+        self.compute_max_intrinsic_height(width)
+    }
+    
+    // === Dry Layout ===
+    
+    fn get_dry_layout(&mut self, constraints: BoxConstraints) -> Size {
+        self.compute_dry_layout(&constraints)
+    }
+    
+    // === Baseline ===
+    
+    fn get_distance_to_baseline(&mut self, baseline: TextBaseline) -> Option<f64> {
+        self.compute_distance_to_actual_baseline(baseline)
+    }
+    
+    // === Coordinate Conversion ===
+    
+    /// Convert local position to global.
+    fn local_to_global(&self, point: Offset) -> Offset;
+    
+    /// Convert global position to local.
+    fn global_to_local(&self, point: Offset) -> Offset;
+    
+    // === Default Hit Test ===
+    
+    /// Default implementation: hit if within bounds.
+    fn default_hit_test_self(&self, position: Offset) -> bool {
+        let size = self.size();
+        position.x >= 0.0 && position.x < size.width &&
+        position.y >= 0.0 && position.y < size.height
+    }
+}
+```
+
+### RenderSliver
+
+```rust
+/// Combined trait for sliver layout render objects.
+/// Equivalent to Flutter's RenderSliver class.
+pub trait RenderSliver:
+    RenderObject +
+    LayoutProtocol<SliverProtocol> +
+    PaintProtocol +
+    HitTestProtocol<SliverProtocol> +
+    SliverLayout +
+    SliverHitTest
+{
+    // === Geometry Access ===
+    
+    /// Get computed sliver geometry (valid after layout).
+    fn geometry(&self) -> &SliverGeometry;
+    
+    /// Set geometry during layout.
+    fn set_geometry(&mut self, geometry: SliverGeometry);
+    
+    // === Constraints Access ===
+    
+    /// Get current sliver constraints.
+    fn constraints(&self) -> &SliverConstraints;
+    
+    // === Scroll Helpers ===
+    
+    /// Calculate the paint offset for given scroll offset.
+    fn calculate_paint_offset(
+        &self,
+        constraints: &SliverConstraints,
+        from: f64,
+        to: f64,
+    ) -> f64 {
+        let a = constraints.scroll_offset;
+        let b = constraints.scroll_offset + constraints.remaining_paint_extent;
+        (to.min(b) - from.max(a)).max(0.0)
+    }
+    
+    /// Calculate the cache offset.
+    fn calculate_cache_offset(
+        &self,
+        constraints: &SliverConstraints,
+        from: f64,
+        to: f64,
+    ) -> f64 {
+        let a = constraints.scroll_offset + constraints.cache_origin;
+        let b = a + constraints.remaining_cache_extent;
+        (to.min(b) - from.max(a)).max(0.0)
+    }
+    
+    // === Child Positioning ===
+    
+    /// Get paint offset for child in main axis direction.
+    fn child_scroll_offset(&self, child: RenderNodeId) -> Option<f64>;
+    
+    // === Hit Test Helpers ===
+    
+    /// Transform main axis position to child's coordinate.
+    fn child_main_axis_position_for_hit_test(
+        &self,
+        child: RenderNodeId,
+        main_axis_position: f64,
+    ) -> f64 {
+        main_axis_position - self.child_main_axis_position(child)
+    }
+}
+```
+
+### RenderProxyBox
+
+```rust
+/// A RenderBox that delegates everything to a single child.
+/// Base for effects: opacity, transform, clip, etc.
+/// Equivalent to Flutter's RenderProxyBox.
+pub trait RenderProxyBox: RenderBox {
+    fn child(&self) -> Option<RenderNodeId>;
+    fn child_box(&self) -> Option<&dyn RenderBox>;
+    fn child_box_mut(&mut self) -> Option<&mut dyn RenderBox>;
+    
+    // All methods have default implementations that delegate to child
+}
+
+// Default implementations for RenderProxyBox
+impl<T: RenderProxyBox> LayoutProtocol<BoxProtocol> for T {
+    fn perform_layout(
+        &mut self,
+        constraints: &BoxConstraints,
+        children: &mut dyn ChildLayouter<BoxProtocol>,
+    ) -> Size {
+        if let Some(child_id) = self.child() {
+            let size = children.layout_child(child_id, constraints.clone());
+            size
+        } else {
+            constraints.smallest()
+        }
+    }
+}
+```
+
+### RenderShiftedBox
+
+```rust
+/// A RenderBox that positions child at a non-zero offset.
+/// Base for: Padding, Align, CustomSingleChildLayout.
+/// Equivalent to Flutter's RenderShiftedBox.
+pub trait RenderShiftedBox: RenderBox {
+    fn child(&self) -> Option<RenderNodeId>;
+    fn child_offset(&self) -> Offset;
+    fn set_child_offset(&mut self, offset: Offset);
+    
+    // Paint delegates to child at offset
+    // Hit test transforms position by offset
+}
+```
+
+### Trait Hierarchy Diagram (Updated)
+
+```
+                              RenderObject
+                                   │
+                    ┌──────────────┴──────────────┐
+                    │                             │
+                    ▼                             ▼
+              ┌───────────┐                 ┌───────────┐
+              │ RenderBox │                 │RenderSliver│
+              └─────┬─────┘                 └─────┬─────┘
+                    │                             │
+        ┌───────────┼───────────┐                 │
+        │           │           │                 │
+        ▼           ▼           ▼                 ▼
+   RenderProxy  RenderShifted  (custom)     RenderProxy
+      Box          Box                        Sliver
+        │           │
+        │           │
+        ▼           ▼
+   RenderOpacity  RenderPadding
+   RenderTransform RenderAlign
+   RenderClip*    RenderPositioned
+```
+
+### Why Combined Traits?
+
+| Approach | Pros | Cons |
+|----------|------|------|
+| **Small traits** | Flexible composition, clear responsibilities | Many trait bounds, verbose |
+| **Combined traits** | Familiar to Flutter devs, simpler bounds | Less flexible |
+| **Hybrid (recommended)** | Best of both | Need both |
+
+**Recommendation:** Use combined traits (`RenderBox`, `RenderSliver`) as the main API,
+but define them via super-traits so individual pieces can still be used:
+
+```rust
+// User implements the combined trait
+impl RenderBox for MyWidget {
+    fn size(&self) -> Size { ... }
+    fn set_size(&mut self, size: Size) { ... }
+    // etc.
+}
+
+// Or implements individual traits for more control
+impl LayoutProtocol<BoxProtocol> for AdvancedWidget { ... }
+impl PaintProtocol for AdvancedWidget { ... }
+impl HitTestProtocol<BoxProtocol> for AdvancedWidget { ... }
+```
+
+## 9. Transition Traits
 
 ### Attachable
 
@@ -593,10 +841,14 @@ pub trait Invalidatable {
 | **Node** | `HitTestProtocol<P>` | Protocol-specific hit testing |
 | **Box** | `BoxLayout` | Intrinsics, baseline |
 | **Box** | `BoxHitTest` | Box coordinate hit testing |
+| **Box** | **`RenderBox`** | **Combined: all Box traits** |
+| **Box** | `RenderProxyBox` | Delegate to single Box child |
+| **Box** | `RenderShiftedBox` | Box child at offset |
 | **Sliver** | `SliverLayout` | Scroll positioning |
 | **Sliver** | `SliverHitTest` | Axis coordinate hit testing |
-| **Child** | `ProxyChild` | Delegate to single child |
-| **Child** | `ShiftedChild` | Child at offset |
+| **Sliver** | **`RenderSliver`** | **Combined: all Sliver traits** |
+| **Child** | `ProxyChild` | Generic delegate pattern |
+| **Child** | `ShiftedChild` | Generic offset pattern |
 | **Child** | `ContainerChild` | Multiple children (linked list) |
 | **Pipeline** | `PipelineOwnerTrait` | Phase coordination |
 | **Pipeline** | `ChildLayouter<P>` | Child layout helper |
@@ -628,10 +880,19 @@ crates/flui_rendering/src/
 │   ├── layout.rs        # LayoutProtocol, BoxLayout, SliverLayout
 │   ├── paint.rs         # PaintProtocol, PaintingContextTrait
 │   └── hit_test_protocol.rs # HitTestProtocol, BoxHitTest, SliverHitTest
+├── box/
+│   ├── mod.rs           # Re-exports
+│   ├── render_box.rs    # RenderBox combined trait
+│   ├── proxy_box.rs     # RenderProxyBox trait + defaults
+│   └── shifted_box.rs   # RenderShiftedBox trait + defaults
+├── sliver/
+│   ├── mod.rs           # Re-exports
+│   ├── render_sliver.rs # RenderSliver combined trait
+│   └── proxy_sliver.rs  # RenderProxySliver trait
 ├── patterns/
 │   ├── mod.rs
-│   ├── proxy.rs         # ProxyChild
-│   ├── shifted.rs       # ShiftedChild
+│   ├── proxy.rs         # Generic ProxyChild
+│   ├── shifted.rs       # Generic ShiftedChild
 │   └── container.rs     # ContainerChild
 ├── pipeline/
 │   ├── mod.rs
