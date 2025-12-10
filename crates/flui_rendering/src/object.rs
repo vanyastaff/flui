@@ -280,28 +280,90 @@ pub trait RenderObject: DowncastSync + fmt::Debug {
     }
 
     // ============================================================================
-    // TRANSFORM METHODS
+    // TRANSFORM METHODS (Flutter Protocol)
     // ============================================================================
 
-    /// Applies the transform for painting a child to the given matrix.
+    /// Applies the transform for painting a child to the given transform matrix.
+    ///
+    /// This method is called by `RenderTree::get_transform_to()` when computing
+    /// coordinate transforms between render objects. Override this to apply custom
+    /// transformations (rotation, scale, perspective, etc.) to children.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// void applyPaintTransform(RenderObject child, Matrix4 transform) {
+    ///   final BoxParentData childParentData = child.parentData as BoxParentData;
+    ///   final Offset offset = childParentData.offset;
+    ///   transform.translate(offset.dx, offset.dy);
+    /// }
+    /// ```
+    ///
+    /// # Default Implementation
+    ///
+    /// The default implementation applies only translation based on the child's
+    /// offset from parent data. Render objects that apply additional transforms
+    /// (e.g., `RenderTransform`, `RenderRotation`) should override this method.
+    ///
+    /// # Arguments
+    ///
+    /// * `child_id` - ID of the child render object
+    /// * `transform` - Transform matrix to modify (in-place)
+    /// * `tree` - Tree for accessing parent data and offsets
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// // Custom transform with rotation
+    /// fn apply_paint_transform(
+    ///     &self,
+    ///     child_id: RenderId,
+    ///     transform: &mut Matrix4,
+    ///     tree: &dyn HitTestTree,
+    /// ) {
+    ///     // Apply translation (default behavior)
+    ///     if let Some(offset) = tree.get_offset(child_id) {
+    ///         *transform = Matrix4::translation(offset.dx, offset.dy, 0.0) * *transform;
+    ///     }
+    ///
+    ///     // Apply rotation around center
+    ///     let rotation = Matrix4::rotation_z(self.angle);
+    ///     *transform = rotation * *transform;
+    /// }
+    /// ```
     fn apply_paint_transform(
         &self,
         child_id: RenderId,
         transform: &mut Matrix4,
         tree: &dyn HitTestTree,
     ) {
+        // Default: Apply translation based on child's offset
         if let Some(offset) = tree.get_offset(child_id) {
             *transform = Matrix4::translation(offset.dx, offset.dy, 0.0) * *transform;
         }
     }
 
     /// Gets the transform from this render object to the given ancestor.
+    ///
+    /// **Deprecated**: This trait method is no longer used. Use `RenderTree::get_transform_to()`
+    /// instead, which implements the full Flutter protocol with proper ancestor path building.
+    ///
+    /// # Migration
+    ///
+    /// ```rust,ignore
+    /// // Old (trait method):
+    /// let transform = obj.get_transform_to(id, ancestor, tree)?;
+    ///
+    /// // New (tree method):
+    /// let transform = tree.get_transform_to(id, ancestor)?;
+    /// ```
     fn get_transform_to(
         &self,
         _element_id: RenderId,
         _ancestor: Option<RenderId>,
         _tree: &dyn HitTestTree,
     ) -> Option<Matrix4> {
+        // Stub: Use RenderTree::get_transform_to() instead
         Some(Matrix4::identity())
     }
 

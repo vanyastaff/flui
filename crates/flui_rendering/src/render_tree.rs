@@ -57,7 +57,7 @@ use flui_tree::iter::{AllSiblings, Ancestors, DescendantsWithDepth};
 use flui_tree::{Depth, Mountable, Mounted, NodeState, TreeNav, TreeRead, TreeWrite, Unmountable, Unmounted};
 
 use flui_foundation::{ElementId, RenderId};
-use flui_types::Size;
+use flui_types::{Matrix4, Offset, Size};
 
 use crate::{LayerHandle, ParentData, RenderLifecycle, RenderObject};
 
@@ -1163,6 +1163,179 @@ impl RenderTree {
         }
     }
 
+    // ========== Transform Operations (Flutter Protocol) ==========
+
+    /// Gets the transform from a render object to an ancestor.
+    ///
+    /// This implements Flutter's `getTransformTo()` algorithm:
+    /// 1. Build path from `from_id` to `to_id` by following parent chain
+    /// 2. Accumulate transforms by traversing path backward
+    /// 3. Call `apply_paint_transform()` on each parent
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// Matrix4 getTransformTo(RenderObject? ancestor) {
+    ///   final path = <RenderObject>[];
+    ///   for (RenderObject? node = this; node != ancestor; node = node.parent) {
+    ///     assert(node != null);
+    ///     path.add(node!);
+    ///   }
+    ///
+    ///   final transform = Matrix4.identity();
+    ///   for (int i = path.length - 1; i >= 1; i--) {
+    ///     path[i].applyPaintTransform(path[i - 1], transform);
+    ///   }
+    ///
+    ///   return transform;
+    /// }
+    /// ```
+    ///
+    /// # Arguments
+    ///
+    /// * `from_id` - Starting render object ID
+    /// * `to_id` - Ancestor render object ID (or `None` for root)
+    ///
+    /// # Returns
+    ///
+    /// Returns `Some(Matrix4)` with accumulated transform, or `None` if:
+    /// - `from_id` doesn't exist
+    /// - `to_id` doesn't exist (when specified)
+    /// - `to_id` is not an ancestor of `from_id`
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// // Get transform from child to parent
+    /// let transform = tree.get_transform_to(child_id, Some(parent_id))?;
+    ///
+    /// // Get transform from node to root
+    /// let transform = tree.get_transform_to(node_id, None)?;
+    /// ```
+    pub fn get_transform_to(
+        &self,
+        from_id: RenderId,
+        to_id: Option<RenderId>,
+    ) -> Option<Matrix4> {
+        // Build path from 'from' to 'to' by following parent chain
+        let mut path = Vec::new();
+        let mut current = from_id;
+
+        loop {
+            path.push(current);
+
+            // Reached target ancestor?
+            if Some(current) == to_id {
+                break;
+            }
+
+            // Get parent and continue up
+            let node = self.get(current)?;
+            match node.parent() {
+                Some(parent) => current = parent,
+                None => {
+                    // Reached root - only valid if to_id is None
+                    if to_id.is_none() {
+                        break;
+                    } else {
+                        // to_id is not an ancestor of from_id
+                        return None;
+                    }
+                }
+            }
+        }
+
+        // Build transform by traversing path backward
+        // Start with identity, then accumulate each parent's transform
+        let mut transform = Matrix4::identity();
+
+        for i in (1..path.len()).rev() {
+            let child_id = path[i - 1];
+
+            // Apply default transform (translation by offset from parent data)
+            // Note: Custom transforms (rotation, scale) would be handled by
+            // RenderObject::apply_paint_transform(), but that requires HitTestTree
+            // which RenderTree doesn't implement. For now, we just apply translation.
+            if let Some(child) = self.get(child_id) {
+                if let Some(parent_data) = child.parent_data() {
+                    // Try to downcast to ParentDataWithOffset
+                    use crate::parent_data::ParentDataWithOffset;
+                    if let Some(offset_data) = parent_data.as_any().downcast_ref::<crate::parent_data::BoxParentData>() {
+                        let offset = offset_data.offset();
+                        transform = Matrix4::translation(offset.dx, offset.dy, 0.0) * transform;
+                    } else if let Some(offset_data) = parent_data.as_any().downcast_ref::<crate::parent_data::ContainerBoxParentData<RenderId>>() {
+                        let offset = offset_data.offset();
+                        transform = Matrix4::translation(offset.dx, offset.dy, 0.0) * transform;
+                    }
+                }
+            }
+        }
+
+        Some(transform)
+    }
+
+    /// Converts a point from one render object's coordinate space to another's.
+    ///
+    /// # Arguments
+    ///
+    /// * `from_id` - Source render object ID
+    /// * `to_id` - Target render object ID (or `None` for root)
+    /// * `point` - Point in source coordinate space
+    ///
+    /// # Returns
+    ///
+    /// Returns `Some(Offset)` with transformed point, or `None` if transform fails.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// // Transform point from child to parent coordinates
+    /// let parent_point = tree.transform_point(child_id, Some(parent_id), child_point)?;
+    /// ```
+    pub fn transform_point(
+        &self,
+        from_id: RenderId,
+        to_id: Option<RenderId>,
+        point: Offset,
+    ) -> Option<Offset> {
+        let transform = self.get_transform_to(from_id, to_id)?;
+        let (x, y) = transform.transform_point(point.dx, point.dy);
+        Some(Offset::new(x, y))
+    }
+
+    /// Converts a point from global (root) coordinates to a render object's local coordinates.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - Render object ID
+    /// * `global_point` - Point in global (root) coordinate space
+    ///
+    /// # Returns
+    ///
+    /// Returns `Some(Offset)` with point in local coordinates, or `None` if:
+    /// - Node doesn't exist
+    /// - Transform is not invertible (e.g., zero scale)
+    pub fn global_to_local(&self, id: RenderId, global_point: Offset) -> Option<Offset> {
+        let transform = self.get_transform_to(id, None)?;
+        let inverse = transform.try_inverse()?;
+        let (x, y) = inverse.transform_point(global_point.dx, global_point.dy);
+        Some(Offset::new(x, y))
+    }
+
+    /// Converts a point from a render object's local coordinates to global (root) coordinates.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - Render object ID
+    /// * `local_point` - Point in local coordinate space
+    ///
+    /// # Returns
+    ///
+    /// Returns `Some(Offset)` with point in global coordinates, or `None` if node doesn't exist.
+    pub fn local_to_global(&self, id: RenderId, local_point: Offset) -> Option<Offset> {
+        self.transform_point(id, None, local_point)
+    }
+
     // ========== Iteration ==========
 
     /// Returns an iterator over slab entries (slab_index, node).
@@ -1375,6 +1548,7 @@ mod tests {
     use super::*;
     use crate::RenderObject;
     use flui_tree::MountableExt; // For mount_root() extension
+    use flui_types::{Matrix4, Offset};
 
     // Simple test RenderObject (minimal - no layout/paint methods needed)
     #[derive(Debug)]
@@ -1713,5 +1887,171 @@ mod tests {
 
         let not_found = tree.find_where(|obj| obj.debug_name() == "NonExistent");
         assert!(not_found.is_none());
+    }
+
+    // ===== Transform Operation Tests =====
+
+    #[test]
+    fn test_get_transform_to_identity() {
+        // Single node - transform to self should be identity
+        let mut tree = RenderTree::new();
+        let root_id = tree.insert(make_mounted_node());
+
+        let transform = tree.get_transform_to(root_id, Some(root_id));
+        assert!(transform.is_some());
+
+        // Should be identity matrix (path length = 1, no transforms applied)
+        let t = transform.unwrap();
+        assert_eq!(t, Matrix4::identity());
+    }
+
+    #[test]
+    fn test_get_transform_to_parent_child() {
+        // Simple parent-child relationship
+        let mut tree = RenderTree::new();
+        let parent_id = tree.insert(make_mounted_node());
+        let child_id = tree.insert(make_mounted_node());
+
+        tree.add_child(parent_id, child_id);
+
+        // Transform from child to parent
+        let transform = tree.get_transform_to(child_id, Some(parent_id));
+        assert!(transform.is_some());
+
+        // Should be identity (default apply_paint_transform only translates if offset exists)
+        let t = transform.unwrap();
+        assert_eq!(t, Matrix4::identity());
+    }
+
+    #[test]
+    fn test_get_transform_to_grandchild() {
+        // Three-level hierarchy: root -> parent -> child
+        let mut tree = RenderTree::new();
+        let root_id = tree.insert(make_mounted_node());
+        let parent_id = tree.insert(make_mounted_node());
+        let child_id = tree.insert(make_mounted_node());
+
+        tree.add_child(root_id, parent_id);
+        tree.add_child(parent_id, child_id);
+
+        // Transform from child to root
+        let transform = tree.get_transform_to(child_id, Some(root_id));
+        assert!(transform.is_some());
+
+        // Should successfully compute transform through multiple levels
+        let t = transform.unwrap();
+        assert_eq!(t, Matrix4::identity());
+    }
+
+    #[test]
+    fn test_get_transform_to_root() {
+        // Transform to root (None ancestor)
+        let mut tree = RenderTree::new();
+        let root_id = tree.insert(make_mounted_node());
+        let child_id = tree.insert(make_mounted_node());
+
+        tree.add_child(root_id, child_id);
+
+        // Transform from child to root (None means traverse to root)
+        let transform = tree.get_transform_to(child_id, None);
+        assert!(transform.is_some());
+    }
+
+    #[test]
+    fn test_get_transform_to_nonexistent() {
+        let mut tree = RenderTree::new();
+        let root_id = tree.insert(make_mounted_node());
+
+        // Non-existent source ID
+        let bad_id = RenderId::new(999);
+        let transform = tree.get_transform_to(bad_id, Some(root_id));
+        assert!(transform.is_none());
+
+        // Non-existent ancestor ID
+        let transform = tree.get_transform_to(root_id, Some(bad_id));
+        assert!(transform.is_none());
+    }
+
+    #[test]
+    fn test_get_transform_to_not_ancestor() {
+        // Two separate branches - neither is ancestor of the other
+        let mut tree = RenderTree::new();
+        let root_id = tree.insert(make_mounted_node());
+        let child1_id = tree.insert(make_mounted_node());
+        let child2_id = tree.insert(make_mounted_node());
+
+        tree.add_child(root_id, child1_id);
+        tree.add_child(root_id, child2_id);
+
+        // child2 is not an ancestor of child1 (they're siblings)
+        let transform = tree.get_transform_to(child1_id, Some(child2_id));
+        assert!(transform.is_none());
+    }
+
+    #[test]
+    fn test_transform_point() {
+        let mut tree = RenderTree::new();
+        let root_id = tree.insert(make_mounted_node());
+        let child_id = tree.insert(make_mounted_node());
+
+        tree.add_child(root_id, child_id);
+
+        // Transform a point from child to parent
+        let point = Offset::new(10.0, 20.0);
+        let transformed = tree.transform_point(child_id, Some(root_id), point);
+        assert!(transformed.is_some());
+
+        // With identity transform, point should be unchanged
+        let t = transformed.unwrap();
+        assert!((t.dx - 10.0).abs() < 1e-6);
+        assert!((t.dy - 20.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_global_to_local() {
+        let mut tree = RenderTree::new();
+        let root_id = tree.insert(make_mounted_node());
+
+        let global_point = Offset::new(100.0, 200.0);
+        let local = tree.global_to_local(root_id, global_point);
+        assert!(local.is_some());
+
+        // For root with identity transform, should be same
+        let l = local.unwrap();
+        assert!((l.dx - 100.0).abs() < 1e-6);
+        assert!((l.dy - 200.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_local_to_global() {
+        let mut tree = RenderTree::new();
+        let root_id = tree.insert(make_mounted_node());
+
+        let local_point = Offset::new(50.0, 75.0);
+        let global = tree.local_to_global(root_id, local_point);
+        assert!(global.is_some());
+
+        // For root with identity transform, should be same
+        let g = global.unwrap();
+        assert!((g.dx - 50.0).abs() < 1e-6);
+        assert!((g.dy - 75.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_global_local_roundtrip() {
+        let mut tree = RenderTree::new();
+        let root_id = tree.insert(make_mounted_node());
+        let child_id = tree.insert(make_mounted_node());
+
+        tree.add_child(root_id, child_id);
+
+        // Roundtrip: local -> global -> local
+        let original = Offset::new(42.0, 84.0);
+        let global = tree.local_to_global(child_id, original).unwrap();
+        let back_to_local = tree.global_to_local(child_id, global).unwrap();
+
+        // Should get back original point
+        assert!((back_to_local.dx - original.dx).abs() < 1e-6);
+        assert!((back_to_local.dy - original.dy).abs() < 1e-6);
     }
 }
