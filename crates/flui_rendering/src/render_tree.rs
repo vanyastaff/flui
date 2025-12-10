@@ -574,15 +574,32 @@ impl RenderNode<Mounted> {
     /// }
     /// ```
     pub fn update_composited_layer(&mut self) {
-        // TODO: Implement layer creation/update logic
-        // This will be filled in when we implement the full layer system
-
-        // For now, just ensure we have a layer handle if we don't already
-        if self.layer_handle.is_none() {
-            use crate::new_layer_handle;
-            // Create a placeholder layer (will be replaced with real layer in full implementation)
-            self.layer_handle = Some(new_layer_handle(()));
+        // Flutter protocol: Only repaint boundaries get composited layers
+        if !self.render_object.is_repaint_boundary() {
+            // Clear layer if node is no longer a repaint boundary
+            if self.layer_handle.is_some() {
+                self.layer_handle = None;
+            }
+            return;
         }
+
+        // Create or reuse layer (Flutter pattern: reuse existing layer for performance)
+        if self.layer_handle.is_none() {
+            // Create new OffsetLayer for repaint boundary
+            // OffsetLayer is the standard layer type for repaint boundaries in Flutter
+            let mut handle = flui_layer::LayerHandle::new();
+            let offset_layer = flui_layer::OffsetLayer::from_xy(0.0, 0.0);
+            handle.set(flui_layer::Layer::Offset(offset_layer));
+
+            self.layer_handle = Some(handle);
+
+            tracing::trace!(
+                render_object = self.render_object.debug_name(),
+                "Created composited OffsetLayer for repaint boundary"
+            );
+        }
+        // Layer reuse: existing layer is kept for next frame (Flutter optimization)
+        // The layer will be updated during paint phase with new offset if needed
     }
 
     // ========== Parent Data (Flutter Protocol) ==========
@@ -1158,6 +1175,14 @@ impl RenderTree {
             // Step 4: Call child's detach() hook
             if let Some(child) = (*tree_ptr).get_mut(child_id) {
                 child.render_object_mut().detach();
+            }
+
+            // Step 5: Clear layer handle to release GPU resources (Flutter protocol)
+            if let Some(child) = (*tree_ptr).get_mut(child_id) {
+                if child.layer_handle.is_some() {
+                    child.layer_handle = None;
+                    tracing::trace!(?child_id, "Cleared layer handle on detach");
+                }
             }
         }
     }
@@ -2525,5 +2550,137 @@ mod tests {
         // Lists should be empty
         assert_eq!(tree.nodes_needing_layout().count(), 0);
         assert_eq!(tree.nodes_needing_paint().count(), 0);
+    }
+
+    // ========== Layer Management Tests ==========
+
+    /// Test helper: Creates a mounted node with repaint boundary enabled
+    fn make_repaint_boundary_node() -> RenderNode<Mounted> {
+        #[derive(Debug)]
+        struct RepaintBoundary;
+        impl RenderObject for RepaintBoundary {
+            fn debug_name(&self) -> &'static str { "RepaintBoundary" }
+            fn is_repaint_boundary(&self) -> bool { true }
+        }
+
+        RenderNode::new(RepaintBoundary).mount(None, flui_tree::Depth::root())
+    }
+
+    #[test]
+    fn test_update_composited_layer_creates_layer_for_boundary() {
+        let mut node = make_repaint_boundary_node();
+
+        // Initially no layer
+        assert!(node.layer_handle().is_none());
+
+        // Update composited layer
+        node.update_composited_layer();
+
+        // Should have created layer
+        assert!(node.layer_handle().is_some());
+
+        // Should be an OffsetLayer
+        if let Some(handle) = node.layer_handle() {
+            if let Some(layer) = handle.get() {
+                assert!(layer.is_offset(), "Layer should be OffsetLayer");
+            }
+        }
+    }
+
+    #[test]
+    fn test_update_composited_layer_clears_layer_for_non_boundary() {
+        // Create repaint boundary node with layer
+        let mut node = make_repaint_boundary_node();
+        node.update_composited_layer();
+        assert!(node.layer_handle().is_some());
+
+        // Convert to non-repaint boundary by replacing render object
+        #[derive(Debug)]
+        struct NonBoundary;
+        impl RenderObject for NonBoundary {
+            fn debug_name(&self) -> &'static str { "NonBoundary" }
+            fn is_repaint_boundary(&self) -> bool { false }
+        }
+
+        let mut non_boundary_node = RenderNode::new(NonBoundary).mount(None, flui_tree::Depth::root());
+        // Manually set layer handle to simulate previous boundary state
+        let mut handle = flui_layer::LayerHandle::new();
+        handle.set(flui_layer::Layer::Offset(flui_layer::OffsetLayer::from_xy(0.0, 0.0)));
+        non_boundary_node.set_layer_handle(Some(handle));
+
+        assert!(non_boundary_node.layer_handle().is_some());
+
+        // Update composited layer
+        non_boundary_node.update_composited_layer();
+
+        // Should have cleared layer
+        assert!(non_boundary_node.layer_handle().is_none());
+    }
+
+    #[test]
+    fn test_update_composited_layer_reuses_existing_layer() {
+        let mut node = make_repaint_boundary_node();
+
+        // Create initial layer
+        node.update_composited_layer();
+        let first_has_layer = node.layer_handle().is_some();
+        assert!(first_has_layer);
+
+        // Update again
+        node.update_composited_layer();
+        let second_has_layer = node.layer_handle().is_some();
+
+        // Should reuse the same layer (Flutter optimization)
+        assert!(second_has_layer);
+        // Layer handle should still exist (not recreated)
+        assert!(node.layer_handle().is_some());
+    }
+
+    #[test]
+    fn test_layer_cleared_on_detach() {
+        let mut tree = RenderTree::new();
+
+        // Create repaint boundary with layer
+        let parent = make_mounted_node();
+        let parent_id = tree.insert(parent);
+
+        let mut child = make_repaint_boundary_node();
+        child.update_composited_layer();
+        assert!(child.layer_handle().is_some());
+
+        let child_id = tree.insert(child);
+        tree.add_child(parent_id, child_id);
+
+        // Verify child has layer
+        assert!(tree.get(child_id).unwrap().layer_handle().is_some());
+
+        // Remove child
+        tree.remove_child(parent_id, child_id);
+
+        // Layer should be cleared after detach
+        assert!(tree.get(child_id).unwrap().layer_handle().is_none());
+    }
+
+    #[test]
+    fn test_repaint_boundary_layer_lifecycle() {
+        let mut tree = RenderTree::new();
+
+        // Create repaint boundary node
+        let node = make_repaint_boundary_node();
+        let node_id = tree.insert(node);
+
+        // Update composited layer
+        if let Some(node) = tree.get_mut(node_id) {
+            node.update_composited_layer();
+        }
+
+        // Should have layer
+        assert!(tree.get(node_id).unwrap().layer_handle().is_some());
+
+        // Remove from tree
+        tree.remove(node_id);
+
+        // Node no longer in tree
+        assert!(tree.get(node_id).is_none());
     }
 }

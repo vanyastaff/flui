@@ -40,87 +40,50 @@ use parking_lot::RwLock;
 use crate::HitTestTree;
 
 // ============================================================================
-// LAYER HANDLE
+// LAYER HANDLE (Typed Layer Infrastructure from flui-layer)
 // ============================================================================
 
-/// Type alias for a shared layer reference.
+/// Handle to a compositor layer with reference counting and lifecycle management.
 ///
-/// This is used by repaint boundaries to cache their compositing layer.
-/// The layer is wrapped in `Arc<RwLock<_>>` to allow:
-/// - Shared ownership between render object and layer tree
-/// - Interior mutability for updates during paint
+/// This uses `flui_layer::AnyLayerHandle` which provides:
+/// - Type-safe layer management with polymorphic Layer enum
+/// - Reference counting for proper GPU resource lifecycle
 /// - Thread-safe access from multiple threads
-pub type LayerHandle = Arc<RwLock<LayerRef>>;
-
-/// Reference to a compositor layer.
+/// - Proper integration with compositor layer tree
 ///
-/// This wraps `flui_engine::Layer` to avoid direct dependency on
-/// flui_engine in flui_rendering. The actual layer types are defined
-/// in flui_engine and stored here as type-erased Any pointers.
-#[derive(Debug)]
-pub struct LayerRef {
-    /// Type-erased layer (actually `flui_engine::Layer`)
-    inner: Box<dyn Any + Send + Sync>,
-
-    /// Layer type identifier for debugging
-    layer_type: &'static str,
-
-    /// Whether this layer needs recompositing
-    needs_recomposite: bool,
-}
-
-impl LayerRef {
-    /// Creates a new layer reference.
-    pub fn new<T: Any + Send + Sync + 'static>(layer: T) -> Self {
-        Self {
-            layer_type: std::any::type_name::<T>(),
-            inner: Box::new(layer),
-            needs_recomposite: true,
-        }
-    }
-
-    /// Gets the inner layer as a concrete type.
-    pub fn get<T: Any + Send + Sync + 'static>(&self) -> Option<&T> {
-        self.inner.downcast_ref::<T>()
-    }
-
-    /// Gets the inner layer as a mutable concrete type.
-    pub fn get_mut<T: Any + Send + Sync + 'static>(&mut self) -> Option<&mut T> {
-        self.inner.downcast_mut::<T>()
-    }
-
-    /// Returns the layer type name for debugging.
-    pub fn layer_type(&self) -> &'static str {
-        self.layer_type
-    }
-
-    /// Marks the layer as needing recomposition.
-    pub fn mark_needs_recomposite(&mut self) {
-        self.needs_recomposite = true;
-    }
-
-    /// Returns whether the layer needs recomposition.
-    pub fn needs_recomposite(&self) -> bool {
-        self.needs_recomposite
-    }
-
-    /// Clears the needs_recomposite flag after compositing.
-    pub fn clear_needs_recomposite(&mut self) {
-        self.needs_recomposite = false;
-    }
-
-    /// Replaces the inner layer with a new one.
-    pub fn update<T: Any + Send + Sync + 'static>(&mut self, layer: T) {
-        self.inner = Box::new(layer);
-        self.layer_type = std::any::type_name::<T>();
-        self.needs_recomposite = true;
-    }
-}
-
-/// Creates a new `LayerHandle` wrapping the given layer.
-pub fn new_layer_handle<T: Any + Send + Sync + 'static>(layer: T) -> LayerHandle {
-    Arc::new(RwLock::new(LayerRef::new(layer)))
-}
+/// Repaint boundaries use this to cache their compositing layer, enabling
+/// Flutter's repaint optimization: unchanged subtrees skip repainting.
+///
+/// # Flutter Equivalence
+///
+/// ```dart
+/// class LayerHandle<T extends Layer> {
+///   T? _layer;
+///   T get layer => _layer!;
+///   set layer(T value) { _layer = value; }
+/// }
+/// ```
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// use flui_rendering::LayerHandle;
+/// use flui_layer::{Layer, OffsetLayer};
+///
+/// // Create handle
+/// let mut handle = LayerHandle::new();
+///
+/// // Set layer
+/// handle.set(Layer::Offset(OffsetLayer::from_xy(10.0, 20.0)));
+///
+/// // Get layer
+/// if let Some(layer) = handle.get() {
+///     if let Layer::Offset(offset_layer) = layer {
+///         println!("Offset: {:?}", offset_layer.offset());
+///     }
+/// }
+/// ```
+pub type LayerHandle = flui_layer::AnyLayerHandle;
 
 // ============================================================================
 // RENDER OBJECT TRAIT
@@ -727,11 +690,6 @@ mod tests {
         assert!(obj.as_any().downcast_ref::<TestRenderObject>().is_some());
     }
 
-    #[test]
-    fn test_layer_ref() {
-        let layer = LayerRef::new(42u32);
-        assert_eq!(layer.get::<u32>(), Some(&42));
-        assert_eq!(layer.get::<String>(), None);
-        assert!(layer.needs_recomposite());
-    }
+    // Test removed: LayerRef replaced with flui_layer::LayerHandle
 }
+
