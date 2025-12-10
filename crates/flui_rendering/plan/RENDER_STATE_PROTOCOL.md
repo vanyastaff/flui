@@ -234,6 +234,12 @@ pub trait PaintedNode: Sized {
 /// Layout protocol marker trait.
 ///
 /// Defines the constraint/geometry types for a layout system.
+/// 
+/// # Design Note
+/// 
+/// Flutter does NOT use LayoutContext or HitTestContext - constraints are
+/// passed directly to `layout()`, hit test uses protocol-specific result types.
+/// We follow the same approach for simplicity and type safety.
 pub trait Protocol: sealed::ProtocolSealed + Send + Sync + 'static {
     /// Constraints type passed from parent to child.
     type Constraints: Constraints + Clone + Debug;
@@ -243,6 +249,12 @@ pub trait Protocol: sealed::ProtocolSealed + Send + Sync + 'static {
     
     /// Parent data type for child positioning.
     type ParentData: ParentData + Default + Debug;
+    
+    /// Hit test result type (BoxHitTestResult or SliverHitTestResult).
+    type HitTestResult: HitTestResultTrait;
+    
+    /// Hit test position type (Offset for Box, (f64, f64) for Sliver).
+    type HitTestPosition: Copy + Debug;
     
     /// Protocol identifier for runtime checks.
     fn protocol_id() -> ProtocolId;
@@ -263,6 +275,21 @@ pub enum ProtocolId {
     Box,
     Sliver,
 }
+
+/// Base trait for hit test results.
+pub trait HitTestResultTrait {
+    /// Add entry to the hit path.
+    fn add(&mut self, target: RenderNodeId);
+    
+    /// Push transform for subsequent entries.
+    fn push_transform(&mut self, transform: Mat4);
+    
+    /// Pop most recent transform.
+    fn pop_transform(&mut self);
+    
+    /// Check if any targets were hit.
+    fn is_empty(&self) -> bool;
+}
 ```
 
 ### BoxProtocol
@@ -277,6 +304,8 @@ impl Protocol for BoxProtocol {
     type Constraints = BoxConstraints;
     type Geometry = Size;
     type ParentData = BoxParentData;
+    type HitTestResult = BoxHitTestResult;
+    type HitTestPosition = Offset;
     
     fn protocol_id() -> ProtocolId { ProtocolId::Box }
     fn name() -> &'static str { "Box" }
@@ -313,9 +342,18 @@ impl Protocol for SliverProtocol {
     type Constraints = SliverConstraints;
     type Geometry = SliverGeometry;
     type ParentData = SliverParentData;
+    type HitTestResult = SliverHitTestResult;
+    type HitTestPosition = SliverHitTestPosition;
     
     fn protocol_id() -> ProtocolId { ProtocolId::Sliver }
     fn name() -> &'static str { "Sliver" }
+}
+
+/// Sliver hit test position (main axis + cross axis).
+#[derive(Debug, Clone, Copy)]
+pub struct SliverHitTestPosition {
+    pub main_axis: f64,
+    pub cross_axis: f64,
 }
 
 /// Sliver constraints - scroll state and available space.
@@ -515,6 +553,21 @@ impl<P: Protocol, A: Arity> RenderNode<P, A, LaidOut> {
     /// Get constraints used for layout.
     pub fn constraints(&self) -> &P::Constraints {
         self.constraints.as_ref().unwrap()
+    }
+    
+    /// Hit test at given position.
+    /// 
+    /// Uses protocol-specific result and position types:
+    /// - Box: `BoxHitTestResult` + `Offset`
+    /// - Sliver: `SliverHitTestResult` + `SliverHitTestPosition`
+    /// 
+    /// No "HitTestContext" wrapper - types come from Protocol.
+    pub fn hit_test(
+        &self,
+        result: &mut P::HitTestResult,
+        position: P::HitTestPosition,
+    ) -> bool {
+        self.perform_hit_test(result, position)
     }
     
     /// Perform paint.

@@ -497,57 +497,77 @@ impl SliverHitTestResult {
 }
 ```
 
-## 5. Layout Context (Constraints)
+## 5. Layout - No Context Needed
 
-Layout doesn't use a separate "context" object in Flutter - instead, constraints
-flow as method parameters. However, we can define a layout context for Rust.
+Flutter does NOT use a separate `LayoutContext` - constraints are passed directly
+as method parameters and stored in the RenderObject itself.
 
 ### Flutter Model
 
 ```dart
-// Constraints are passed as parameters, not context
-void performLayout() {
-    final BoxConstraints constraints = this.constraints;
-    // Layout children
-    child.layout(constraints.loosen(), parentUsesSize: true);
-    size = constraints.constrain(child.size);
+// Constraints stored in object, passed as parameter
+abstract class RenderObject {
+  Constraints get constraints => _constraints!;
+  Constraints? _constraints;
+  
+  void layout(Constraints constraints, {bool parentUsesSize = false}) {
+    _constraints = constraints;
+    performLayout();
+  }
+  
+  // Override in subclass
+  void performLayout();
+}
+
+class RenderBox extends RenderObject {
+  @override
+  BoxConstraints get constraints => super.constraints as BoxConstraints;
+  
+  Size get size => _size!;
+  
+  @override
+  void performLayout() {
+    // Use this.constraints directly
+    child?.layout(constraints.loosen(), parentUsesSize: true);
+    size = constraints.constrain(child!.size);
+  }
 }
 ```
 
-### Rust Adaptation - LayoutContext
+### Rust Approach - Direct Parameters via Protocol
+
+Instead of creating wrapper contexts, use Protocol associated types directly:
 
 ```rust
-/// Context for layout phase operations.
-pub struct LayoutContext<'a, P: Protocol> {
-    /// The constraints to lay out within
-    pub constraints: &'a P::Constraints,
-    
-    /// Whether parent needs our size
-    pub parent_uses_size: bool,
-    
-    /// Depth in tree (for debug/relayout boundary)
-    pub depth: u32,
+impl<P: Protocol, A: Arity> RenderNode<P, A, Attached> {
+    /// Layout with constraints from Protocol.
+    /// No LayoutContext wrapper needed.
+    pub fn layout(mut self, constraints: P::Constraints) -> RenderNode<P, A, LaidOut> {
+        self.constraints = Some(constraints.clone());
+        let geometry = self.perform_layout(&constraints);
+        // ... transition to LaidOut
+    }
 }
 
-impl<'a, P: Protocol> LayoutContext<'a, P> {
-    pub fn new(constraints: &'a P::Constraints, parent_uses_size: bool) -> Self {
-        Self {
-            constraints,
-            parent_uses_size,
-            depth: 0,
-        }
-    }
-    
-    /// Create context for laying out a child.
-    pub fn for_child(&self, child_constraints: &'a P::Constraints) -> Self {
-        Self {
-            constraints: child_constraints,
-            parent_uses_size: true,
-            depth: self.depth + 1,
-        }
+impl<P: Protocol, A: Arity> RenderNode<P, A, LaidOut> {
+    /// Hit test with position/result from Protocol.
+    /// No HitTestContext wrapper needed.
+    pub fn hit_test(
+        &self,
+        result: &mut P::HitTestResult,
+        position: P::HitTestPosition,
+    ) -> bool {
+        self.perform_hit_test(result, position)
     }
 }
 ```
+
+### Why No Context Wrappers?
+
+1. **Flutter doesn't use them** - constraints are stored in object
+2. **Protocol provides types** - `P::Constraints`, `P::HitTestResult`, `P::HitTestPosition`
+3. **Simpler API** - fewer indirections
+4. **Type safety** - Protocol ensures Box gets BoxConstraints, Sliver gets SliverConstraints
 
 ## Integration with RenderNode
 
@@ -555,11 +575,8 @@ How contexts integrate with the RenderNode typestate system:
 
 ```rust
 impl<P: Protocol, A: Arity> RenderNode<P, A, Attached> {
-    /// Perform layout with context.
-    pub fn layout(
-        self,
-        ctx: LayoutContext<'_, P>,
-    ) -> RenderNode<P, A, LaidOut> {
+    /// Perform layout with constraints directly (no wrapper context).
+    pub fn layout(self, constraints: P::Constraints) -> RenderNode<P, A, LaidOut> {
         // Store constraints
         // Perform layout algorithm
         // Compute geometry
@@ -568,21 +585,17 @@ impl<P: Protocol, A: Arity> RenderNode<P, A, Attached> {
 }
 
 impl<P: Protocol, A: Arity> RenderNode<P, A, LaidOut> {
-    /// Paint with context.
-    pub fn paint(
-        &self,
-        ctx: &mut PaintContext,
-        offset: Offset,
-    ) {
+    /// Paint with PaintingContext (the only real context needed).
+    pub fn paint(&self, ctx: &mut PaintingContext, offset: Offset) {
         // Paint self
         // Paint children via ctx.paint_child()
     }
     
-    /// Hit test at position.
+    /// Hit test with protocol-specific types.
     pub fn hit_test(
         &self,
         result: &mut P::HitTestResult,
-        position: P::Position,
+        position: P::HitTestPosition,
     ) -> bool {
         // Test self
         // Test children with coordinate transforms
@@ -592,15 +605,15 @@ impl<P: Protocol, A: Arity> RenderNode<P, A, LaidOut> {
 
 ## Summary
 
-| Context | Mutable | Purpose |
-|---------|---------|---------|
-| `LayoutContext` | No | Carry constraints and metadata |
-| `PaintContext` | Yes | Canvas access, layer management |
-| `HitTestResult` | Yes | Record hit path and transforms |
+| Phase | Context Object | Why |
+|-------|---------------|-----|
+| Layout | None (direct params) | Constraints stored in node |
+| Paint | `PaintingContext` | Canvas ownership, layer management |
+| Hit Test | `*HitTestResult` | Transform stack, path recording |
 
 ### Key Patterns
 
-1. **PaintContext owns Canvas**: Canvas may change during child painting
+1. **PaintingContext owns Canvas**: Canvas may change during child painting - needs context
 2. **HitTestResult tracks transforms**: Stack-based transform management
-3. **Constraints are immutable**: Layout context carries read-only constraints
-4. **Protocol-specific results**: BoxHitTestResult vs SliverHitTestResult
+3. **Layout has no context**: Constraints passed directly, stored in node
+4. **Protocol provides types**: `P::Constraints`, `P::HitTestResult`, `P::HitTestPosition`
