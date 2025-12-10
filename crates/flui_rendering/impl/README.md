@@ -14,6 +14,11 @@ This folder contains detailed documentation of Flutter's rendering architecture,
 | [06_MIXINS.md](06_MIXINS.md) | Mixins | Child management and composition patterns |
 | [07_SEMANTICS.md](07_SEMANTICS.md) | Semantics | Accessibility tree and configuration |
 | [08_SLIVER.md](08_SLIVER.md) | Sliver Protocol | Scrollable content and viewport slivers |
+| [09_HIT_TESTING.md](09_HIT_TESTING.md) | Hit Testing | Pointer event detection and dispatch |
+| [10_INTRINSICS.md](10_INTRINSICS.md) | Intrinsic Sizing | Natural size queries and baseline computation |
+| [11_RELAYOUT_BOUNDARIES.md](11_RELAYOUT_BOUNDARIES.md) | Boundaries | Relayout and repaint boundary optimizations |
+| [12_PARENT_DATA.md](12_PARENT_DATA.md) | Parent Data | Parent-child data communication pattern |
+| [13_LIFECYCLE.md](13_LIFECYCLE.md) | Lifecycle | RenderObject lifecycle states and transitions |
 
 
 ## Architecture Summary
