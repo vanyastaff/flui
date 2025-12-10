@@ -397,6 +397,65 @@ impl RenderNode<Mounted> {
         self.is_relayout_boundary = is_boundary;
     }
 
+    /// Computes whether this node should be a relayout boundary (Flutter protocol).
+    ///
+    /// A node becomes a relayout boundary when ANY of these conditions is true:
+    /// - `!parent_uses_size` - Parent doesn't use child's computed size
+    /// - `sized_by_parent` - Size depends only on constraints, not children
+    /// - `constraints.is_tight()` - Constraints specify exact size
+    /// - `is_root` - Root of render tree
+    ///
+    /// When a node is a relayout boundary, `mark_needs_layout()` stops propagating
+    /// up the tree, limiting the scope of relayout work.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// void layout(Constraints constraints, {bool parentUsesSize = false}) {
+    ///   final bool isRelayoutBoundary = !parentUsesSize ||
+    ///                                    sizedByParent ||
+    ///                                    constraints.isTight ||
+    ///                                    parent == null;
+    ///   // ...
+    /// }
+    /// ```
+    ///
+    /// # Arguments
+    ///
+    /// * `parent_uses_size` - Whether parent reads child's size after layout
+    /// * `constraints` - Box constraints passed to child
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use flui_types::constraints::BoxConstraints;
+    /// use flui_types::Size;
+    ///
+    /// // During layout, compute boundary status
+    /// let parent_uses_size = true;
+    /// let constraints = BoxConstraints::tight(Size::new(100.0, 50.0));
+    ///
+    /// let is_boundary = node.compute_relayout_boundary(parent_uses_size, &constraints);
+    /// assert!(is_boundary); // true because constraints are tight
+    ///
+    /// node.set_relayout_boundary(is_boundary);
+    /// ```
+    pub fn compute_relayout_boundary(
+        &self,
+        parent_uses_size: bool,
+        constraints: &flui_types::constraints::BoxConstraints,
+    ) -> bool {
+        // Root nodes are always relayout boundaries
+        if self.parent.is_none() {
+            return true;
+        }
+
+        // Apply Flutter protocol conditions
+        !parent_uses_size
+            || self.render_object.sized_by_parent()
+            || constraints.is_tight()
+    }
+
     // ========== Compositing Bits (Flutter Protocol) ==========
 
     /// Returns whether this node or its subtree needs compositing.
@@ -759,6 +818,29 @@ pub struct RenderTree {
 
     /// Root RenderNode ID (None if tree is empty)
     root: Option<RenderId>,
+
+    /// Nodes needing layout (Flutter _nodesNeedingLayout)
+    ///
+    /// When `mark_needs_layout()` is called and a node is a relayout boundary,
+    /// it's added to this set instead of propagating to parent.
+    ///
+    /// Processed during layout phase in depth order (parents before children).
+    nodes_needing_layout: std::collections::HashSet<RenderId>,
+
+    /// Nodes needing paint (Flutter _nodesNeedingPaint)
+    ///
+    /// When `mark_needs_paint()` is called and a node is a repaint boundary,
+    /// it's added to this set instead of propagating to parent.
+    ///
+    /// Processed during paint phase.
+    nodes_needing_paint: std::collections::HashSet<RenderId>,
+
+    /// Nodes needing compositing bits update (Flutter _nodesNeedingCompositingBitsUpdate)
+    ///
+    /// When `mark_needs_compositing_bits_update()` is called, the node is added to this set.
+    ///
+    /// Processed before paint phase to determine which nodes need compositing layers.
+    nodes_needing_compositing_bits_update: std::collections::HashSet<RenderId>,
 }
 
 impl RenderTree {
@@ -767,6 +849,9 @@ impl RenderTree {
         Self {
             nodes: Slab::new(),
             root: None,
+            nodes_needing_layout: std::collections::HashSet::new(),
+            nodes_needing_paint: std::collections::HashSet::new(),
+            nodes_needing_compositing_bits_update: std::collections::HashSet::new(),
         }
     }
 
@@ -779,6 +864,9 @@ impl RenderTree {
         Self {
             nodes: Slab::with_capacity(capacity),
             root: None,
+            nodes_needing_layout: std::collections::HashSet::with_capacity(capacity / 4),
+            nodes_needing_paint: std::collections::HashSet::with_capacity(capacity / 4),
+            nodes_needing_compositing_bits_update: std::collections::HashSet::with_capacity(capacity / 8),
         }
     }
 
@@ -1401,6 +1489,207 @@ impl RenderTree {
             }
         }
         None
+    }
+
+    // ========== Dirty Flag Management (Flutter Protocol) ==========
+
+    /// Marks a node as needing layout with boundary-aware propagation (Flutter markNeedsLayout).
+    ///
+    /// This implements Flutter's relayout boundary optimization:
+    /// - If the node is NOT a relayout boundary, propagate to parent recursively
+    /// - If the node IS a relayout boundary, add to dirty list and stop propagation
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// void markNeedsLayout() {
+    ///   if (_needsLayout) return;
+    ///
+    ///   if (_relayoutBoundary != this) {
+    ///     markParentNeedsLayout();
+    ///   } else {
+    ///     _needsLayout = true;
+    ///     if (owner != null) {
+    ///       owner!._nodesNeedingLayout.add(this);
+    ///       owner!.requestVisualUpdate();
+    ///     }
+    ///   }
+    /// }
+    /// ```
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - Node ID to mark as needing layout
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// // Mark node as needing layout
+    /// tree.mark_needs_layout(node_id);
+    ///
+    /// // If node is relayout boundary, propagation stops here
+    /// assert!(tree.nodes_needing_layout.contains(&node_id));
+    ///
+    /// // If not boundary, parent is marked instead (recursively)
+    /// ```
+    pub fn mark_needs_layout(&mut self, id: RenderId) {
+        // Get the node to check if already dirty and if it's a boundary
+        let node = match self.get(id) {
+            Some(node) => node,
+            None => return, // Node doesn't exist
+        };
+
+        // Check if already needs layout (early exit optimization)
+        if node.lifecycle().in_needs_layout_phase() {
+            return;
+        }
+
+        let is_boundary = node.is_relayout_boundary();
+        let parent = node.parent();
+
+        // Mark lifecycle as needing layout
+        if let Some(node) = self.get_mut(id) {
+            let mut lifecycle = node.lifecycle();
+            lifecycle.mark_needs_layout();
+            node.set_lifecycle(lifecycle);
+        }
+
+        // Apply boundary-aware propagation
+        if is_boundary {
+            // We ARE the relayout boundary - add to dirty list
+            self.nodes_needing_layout.insert(id);
+            // Note: requestVisualUpdate() would go here in full implementation
+        } else if let Some(parent_id) = parent {
+            // NOT a boundary - propagate to parent recursively
+            self.mark_needs_layout(parent_id);
+        } else {
+            // Root node with no boundary - add to dirty list
+            self.nodes_needing_layout.insert(id);
+        }
+    }
+
+    /// Marks a node as needing paint with repaint boundary support (Flutter markNeedsPaint).
+    ///
+    /// This implements Flutter's repaint boundary optimization:
+    /// - If the node is NOT a repaint boundary, propagate to parent recursively
+    /// - If the node IS a repaint boundary, add to dirty list and stop propagation
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// void markNeedsPaint() {
+    ///   if (_needsPaint) return;
+    ///
+    ///   _needsPaint = true;
+    ///
+    ///   if (isRepaintBoundary) {
+    ///     if (owner != null) {
+    ///       owner!._nodesNeedingPaint.add(this);
+    ///       owner!.requestVisualUpdate();
+    ///     }
+    ///   } else if (parent is RenderObject) {
+    ///     parent.markNeedsPaint();
+    ///   } else {
+    ///     if (owner != null) {
+    ///       owner!.requestVisualUpdate();
+    ///     }
+    ///   }
+    /// }
+    /// ```
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - Node ID to mark as needing paint
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// // Mark node as needing paint
+    /// tree.mark_needs_paint(node_id);
+    ///
+    /// // If node is repaint boundary, propagation stops here
+    /// assert!(tree.nodes_needing_paint.contains(&node_id));
+    ///
+    /// // If not boundary, parent is marked instead (recursively)
+    /// ```
+    pub fn mark_needs_paint(&mut self, id: RenderId) {
+        // Get the node to check state
+        let node = match self.get(id) {
+            Some(node) => node,
+            None => return, // Node doesn't exist
+        };
+
+        let lifecycle = node.lifecycle();
+        let is_repaint_boundary = node.render_object().is_repaint_boundary();
+        let parent = node.parent();
+
+        // Check if already in NeedsPaint state AND already in dirty list (idempotent)
+        if lifecycle == RenderLifecycle::NeedsPaint && (
+            (is_repaint_boundary && self.nodes_needing_paint.contains(&id)) ||
+            (!is_repaint_boundary && parent.is_some())
+        ) {
+            return; // Already marked, skip
+        }
+
+        // Mark lifecycle as needing paint
+        if let Some(node) = self.get_mut(id) {
+            let mut lifecycle = node.lifecycle();
+            lifecycle.mark_needs_paint();
+            node.set_lifecycle(lifecycle);
+        }
+
+        // Apply repaint boundary-aware propagation
+        if is_repaint_boundary {
+            // We ARE a repaint boundary - add to dirty list
+            self.nodes_needing_paint.insert(id);
+            // Note: requestVisualUpdate() would go here in full implementation
+        } else if let Some(parent_id) = parent {
+            // NOT a repaint boundary - propagate to parent recursively
+            self.mark_needs_paint(parent_id);
+        } else {
+            // Root node - add to dirty list
+            self.nodes_needing_paint.insert(id);
+        }
+    }
+
+    /// Returns whether a node needs layout.
+    #[inline]
+    pub fn needs_layout(&self, id: RenderId) -> bool {
+        self.get(id)
+            .map(|node| node.lifecycle().in_needs_layout_phase())
+            .unwrap_or(false)
+    }
+
+    /// Returns whether a node needs paint.
+    #[inline]
+    pub fn needs_paint(&self, id: RenderId) -> bool {
+        self.get(id)
+            .map(|node| node.lifecycle().in_needs_paint_phase())
+            .unwrap_or(false)
+    }
+
+    /// Clears the dirty layout list (called after flushing layout).
+    #[inline]
+    pub fn clear_needs_layout_list(&mut self) {
+        self.nodes_needing_layout.clear();
+    }
+
+    /// Clears the dirty paint list (called after flushing paint).
+    #[inline]
+    pub fn clear_needs_paint_list(&mut self) {
+        self.nodes_needing_paint.clear();
+    }
+
+    /// Returns iterator over nodes needing layout (for flush_layout phase).
+    #[inline]
+    pub fn nodes_needing_layout(&self) -> impl Iterator<Item = RenderId> + '_ {
+        self.nodes_needing_layout.iter().copied()
+    }
+
+    /// Returns iterator over nodes needing paint (for flush_paint phase).
+    #[inline]
+    pub fn nodes_needing_paint(&self) -> impl Iterator<Item = RenderId> + '_ {
+        self.nodes_needing_paint.iter().copied()
     }
 }
 
@@ -2053,5 +2342,188 @@ mod tests {
         // Should get back original point
         assert!((back_to_local.dx - original.dx).abs() < 1e-6);
         assert!((back_to_local.dy - original.dy).abs() < 1e-6);
+    }
+
+    // ========== Dirty Flag Tests (Phase 6) ==========
+
+    #[test]
+    fn test_mark_needs_layout_simple() {
+        let mut tree = RenderTree::new();
+        let mut root = make_mounted_node();
+
+        // Start in Painted state (clean)
+        root.set_lifecycle(RenderLifecycle::Painted);
+        let root_id = tree.insert(root);
+
+        // Initially doesn't need layout (Painted state)
+        assert!(!tree.needs_layout(root_id));
+
+        // Mark as needing layout
+        tree.mark_needs_layout(root_id);
+
+        // Should now need layout
+        assert!(tree.needs_layout(root_id));
+
+        // Should be in the dirty list
+        assert!(tree.nodes_needing_layout().any(|id| id == root_id));
+    }
+
+    #[test]
+    fn test_mark_needs_layout_propagation() {
+        let mut tree = RenderTree::new();
+        let mut root = make_mounted_node();
+        let mut child = make_mounted_node();
+
+        // Start both in Painted state (clean)
+        root.set_lifecycle(RenderLifecycle::Painted);
+        child.set_lifecycle(RenderLifecycle::Painted);
+
+        let root_id = tree.insert(root);
+        let child_id = tree.insert(child);
+
+        tree.add_child(root_id, child_id);
+
+        // Ensure child is NOT a relayout boundary
+        if let Some(child_node) = tree.get_mut(child_id) {
+            child_node.set_relayout_boundary(false);
+        }
+
+        // Mark child as needing layout
+        tree.mark_needs_layout(child_id);
+
+        // Child should need layout
+        assert!(tree.needs_layout(child_id));
+
+        // Parent should ALSO need layout (propagation)
+        assert!(tree.needs_layout(root_id));
+
+        // Root should be in dirty list (as the boundary)
+        assert!(tree.nodes_needing_layout().any(|id| id == root_id));
+    }
+
+    #[test]
+    fn test_mark_needs_layout_boundary_stops_propagation() {
+        let mut tree = RenderTree::new();
+        let mut root = make_mounted_node();
+        let mut child = make_mounted_node();
+
+        // Start both in Painted state (clean)
+        root.set_lifecycle(RenderLifecycle::Painted);
+        child.set_lifecycle(RenderLifecycle::Painted);
+
+        let root_id = tree.insert(root);
+        let child_id = tree.insert(child);
+
+        tree.add_child(root_id, child_id);
+
+        // Make child a relayout boundary
+        if let Some(child_node) = tree.get_mut(child_id) {
+            child_node.set_relayout_boundary(true);
+        }
+
+        // Mark child as needing layout
+        tree.mark_needs_layout(child_id);
+
+        // Child should need layout
+        assert!(tree.needs_layout(child_id));
+
+        // Parent should NOT need layout (boundary stops propagation)
+        assert!(!tree.needs_layout(root_id));
+
+        // Child should be in dirty list (it's the boundary)
+        assert!(tree.nodes_needing_layout().any(|id| id == child_id));
+
+        // Root should NOT be in dirty list
+        assert!(!tree.nodes_needing_layout().any(|id| id == root_id));
+    }
+
+    #[test]
+    fn test_mark_needs_paint_simple() {
+        let mut tree = RenderTree::new();
+        let mut root = make_mounted_node();
+
+        // Set lifecycle to LaidOut first (paint only works on laid out nodes)
+        root.set_lifecycle(RenderLifecycle::LaidOut);
+        let root_id = tree.insert(root);
+
+        // Initially doesn't need paint
+        assert!(tree.needs_paint(root_id)); // LaidOut state means needs paint
+
+        // Mark as painted
+        if let Some(node) = tree.get_mut(root_id) {
+            node.set_lifecycle(RenderLifecycle::Painted);
+        }
+
+        assert!(!tree.needs_paint(root_id));
+
+        // Mark as needing paint
+        tree.mark_needs_paint(root_id);
+
+        // Should now need paint
+        assert!(tree.needs_paint(root_id));
+
+        // Should be in the dirty list
+        assert!(tree.nodes_needing_paint().any(|id| id == root_id));
+    }
+
+    #[test]
+    fn test_compute_relayout_boundary() {
+        use flui_types::constraints::BoxConstraints;
+        use flui_types::Size;
+
+        let mut tree = RenderTree::new();
+        let node = make_mounted_node();
+        let node_id = tree.insert(node);
+
+        let node = tree.get(node_id).unwrap();
+
+        // Root nodes are always relayout boundaries
+        assert!(node.compute_relayout_boundary(true, &BoxConstraints::loose(Size::new(100.0, 100.0))));
+
+        // Create a non-root node
+        let child = make_mounted_node();
+        let child_id = tree.insert(child);
+        tree.add_child(node_id, child_id);
+
+        let child_node = tree.get(child_id).unwrap();
+
+        // With parent_uses_size = false, should be boundary
+        assert!(child_node.compute_relayout_boundary(false, &BoxConstraints::loose(Size::new(100.0, 100.0))));
+
+        // With tight constraints, should be boundary
+        assert!(child_node.compute_relayout_boundary(true, &BoxConstraints::tight(Size::new(100.0, 100.0))));
+
+        // With parent_uses_size = true and loose constraints, should NOT be boundary
+        assert!(!child_node.compute_relayout_boundary(true, &BoxConstraints::loose(Size::new(100.0, 100.0))));
+    }
+
+    #[test]
+    fn test_clear_dirty_lists() {
+        let mut tree = RenderTree::new();
+        let mut root = make_mounted_node();
+
+        // Start in Painted state (clean)
+        root.set_lifecycle(RenderLifecycle::Painted);
+        let root_id = tree.insert(root);
+
+        // Mark as needing layout and paint
+        tree.mark_needs_layout(root_id);
+
+        if let Some(node) = tree.get_mut(root_id) {
+            node.set_lifecycle(RenderLifecycle::LaidOut);
+        }
+        tree.mark_needs_paint(root_id);
+
+        // Should be in both dirty lists
+        assert!(tree.nodes_needing_layout().count() > 0);
+        assert!(tree.nodes_needing_paint().count() > 0);
+
+        // Clear dirty lists
+        tree.clear_needs_layout_list();
+        tree.clear_needs_paint_list();
+
+        // Lists should be empty
+        assert_eq!(tree.nodes_needing_layout().count(), 0);
+        assert_eq!(tree.nodes_needing_paint().count(), 0);
     }
 }
