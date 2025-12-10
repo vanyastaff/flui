@@ -877,6 +877,7 @@ mod tests {
             &mut self,
             _id: RenderId,
             constraints: BoxConstraints,
+            _parent_uses_size: bool,
         ) -> Result<Size, RenderError> {
             Ok(constraints.biggest())
         }
@@ -885,6 +886,7 @@ mod tests {
             &mut self,
             _id: RenderId,
             _constraints: SliverConstraints,
+            _parent_uses_size: bool,
         ) -> Result<SliverGeometry, RenderError> {
             Ok(SliverGeometry::zero())
         }
@@ -965,7 +967,7 @@ mod tests {
         let layout_tree: &mut dyn LayoutTree = &mut tree;
         let constraints = BoxConstraints::tight(Size::new(100.0, 100.0));
 
-        assert!(layout_tree.perform_layout(id, constraints).is_ok());
+        assert!(layout_tree.perform_layout(id, constraints, true).is_ok());
         assert!(!layout_tree.needs_layout(id));
 
         let paint_tree: &mut dyn PaintTree = &mut tree;

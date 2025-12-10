@@ -2680,6 +2680,185 @@ mod tests {
         assert!(!child_node.compute_relayout_boundary(true, &BoxConstraints::loose(Size::new(100.0, 100.0))));
     }
 
+    // ========== P0-2: Relayout Boundary Integration Tests ==========
+
+    #[test]
+    fn test_perform_layout_sets_boundary_with_parent_uses_size_false() {
+        use flui_types::constraints::BoxConstraints;
+        use flui_types::Size;
+        use crate::tree::LayoutTree;
+
+        let mut tree = RenderTree::new();
+        let node = make_mounted_node();
+        let node_id = tree.insert(node);
+
+        // Create parent-child relationship
+        let child = make_mounted_node();
+        let child_id = tree.insert(child);
+        tree.add_child(node_id, child_id);
+
+        let constraints = BoxConstraints::loose(Size::new(100.0, 100.0));
+
+        // Perform layout with parent_uses_size = false
+        let _ = tree.perform_layout(child_id, constraints, false);
+
+        // After layout, child should be marked as boundary
+        let child_node = tree.get(child_id).unwrap();
+        assert!(child_node.is_relayout_boundary(),
+            "Child should be relayout boundary when parent_uses_size = false");
+    }
+
+    #[test]
+    fn test_perform_layout_sets_boundary_with_tight_constraints() {
+        use flui_types::constraints::BoxConstraints;
+        use flui_types::Size;
+        use crate::tree::LayoutTree;
+
+        let mut tree = RenderTree::new();
+        let node = make_mounted_node();
+        let node_id = tree.insert(node);
+
+        let child = make_mounted_node();
+        let child_id = tree.insert(child);
+        tree.add_child(node_id, child_id);
+
+        // Tight constraints = only one valid size
+        let tight_constraints = BoxConstraints::tight(Size::new(100.0, 50.0));
+
+        // Perform layout with parent_uses_size = true BUT tight constraints
+        let _ = tree.perform_layout(child_id, tight_constraints, true);
+
+        // Should still be boundary because constraints are tight
+        let child_node = tree.get(child_id).unwrap();
+        assert!(child_node.is_relayout_boundary(),
+            "Child should be relayout boundary with tight constraints");
+    }
+
+    #[test]
+    fn test_perform_layout_no_boundary_with_parent_uses_size_true() {
+        use flui_types::constraints::BoxConstraints;
+        use flui_types::Size;
+        use crate::tree::LayoutTree;
+
+        let mut tree = RenderTree::new();
+        let node = make_mounted_node();
+        let node_id = tree.insert(node);
+
+        let child = make_mounted_node();
+        let child_id = tree.insert(child);
+        tree.add_child(node_id, child_id);
+
+        let loose_constraints = BoxConstraints::loose(Size::new(100.0, 100.0));
+
+        // Perform layout with parent_uses_size = true and loose constraints
+        let _ = tree.perform_layout(child_id, loose_constraints, true);
+
+        // Should NOT be boundary
+        let child_node = tree.get(child_id).unwrap();
+        assert!(!child_node.is_relayout_boundary(),
+            "Child should NOT be relayout boundary when parent_uses_size = true with loose constraints");
+    }
+
+    #[test]
+    fn test_perform_layout_root_is_always_boundary() {
+        use flui_types::constraints::BoxConstraints;
+        use flui_types::Size;
+        use crate::tree::LayoutTree;
+
+        let mut tree = RenderTree::new();
+        let root = make_mounted_node();
+        let root_id = tree.insert(root);
+
+        let constraints = BoxConstraints::loose(Size::new(800.0, 600.0));
+
+        // Perform layout on root (no parent)
+        let _ = tree.perform_layout(root_id, constraints, true);
+
+        // Root should always be boundary
+        let root_node = tree.get(root_id).unwrap();
+        assert!(root_node.is_relayout_boundary(),
+            "Root node should always be a relayout boundary");
+    }
+
+    #[test]
+    fn test_perform_layout_boundary_affects_mark_needs_layout() {
+        use flui_types::constraints::BoxConstraints;
+        use flui_types::Size;
+        use crate::tree::LayoutTree;
+
+        let mut tree = RenderTree::new();
+
+        // Create root
+        let mut root = make_mounted_node();
+        root.set_lifecycle(RenderLifecycle::Painted);
+        let root_id = tree.insert(root);
+
+        // Create child
+        let mut child = make_mounted_node();
+        child.set_lifecycle(RenderLifecycle::Painted);
+        let child_id = tree.insert(child);
+        tree.add_child(root_id, child_id);
+
+        let constraints = BoxConstraints::loose(Size::new(100.0, 100.0));
+
+        // Perform layout with parent_uses_size = false to make child a boundary
+        let _ = tree.perform_layout(child_id, constraints, false);
+
+        // Verify child is boundary
+        let child_node = tree.get(child_id).unwrap();
+        assert!(child_node.is_relayout_boundary());
+
+        // Clear dirty lists
+        tree.clear_needs_layout_list();
+
+        // Mark child as needing layout
+        tree.mark_needs_layout(child_id);
+
+        // Child should be in dirty list (boundary stops propagation)
+        assert!(tree.nodes_needing_layout().any(|id| id == child_id),
+            "Child boundary should be in dirty list");
+
+        // Parent should NOT be in dirty list (propagation stopped at boundary)
+        assert!(!tree.nodes_needing_layout().any(|id| id == root_id),
+            "Parent should NOT be in dirty list when child is boundary");
+    }
+
+    #[test]
+    fn test_perform_sliver_layout_sets_boundary() {
+        use flui_types::{SliverConstraints, Axis};
+        use flui_types::constraints::GrowthDirection;
+        use flui_types::prelude::AxisDirection;
+        use crate::tree::LayoutTree;
+
+        let mut tree = RenderTree::new();
+        let node = make_mounted_node();
+        let node_id = tree.insert(node);
+
+        let child = make_mounted_node();
+        let child_id = tree.insert(child);
+        tree.add_child(node_id, child_id);
+
+        let sliver_constraints = SliverConstraints {
+            axis_direction: AxisDirection::TopToBottom,
+            growth_direction: GrowthDirection::Forward,
+            axis: Axis::Vertical,
+            scroll_offset: 0.0,
+            remaining_paint_extent: 600.0,
+            viewport_main_axis_extent: 600.0,
+            preceding_scroll_extent: 0.0,
+            cross_axis_extent: 400.0,
+            cross_axis_direction: AxisDirection::LeftToRight,
+        };
+
+        // Perform sliver layout with parent_uses_size = false
+        let _ = tree.perform_sliver_layout(child_id, sliver_constraints, false);
+
+        // Should be boundary
+        let child_node = tree.get(child_id).unwrap();
+        assert!(child_node.is_relayout_boundary(),
+            "Sliver child should be relayout boundary when parent_uses_size = false");
+    }
+
     #[test]
     fn test_clear_dirty_lists() {
         let mut tree = RenderTree::new();
