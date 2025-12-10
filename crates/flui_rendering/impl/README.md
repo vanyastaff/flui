@@ -23,6 +23,7 @@ This folder contains detailed documentation of Flutter's rendering architecture,
 | [15_RENDERBOX_PROTOCOL.md](15_RENDERBOX_PROTOCOL.md) | RenderBox Protocol | BoxConstraints, Size, layout algorithm |
 | [16_RENDERSLIVER_PROTOCOL.md](16_RENDERSLIVER_PROTOCOL.md) | RenderSliver Protocol | SliverConstraints, SliverGeometry |
 | [17_CHILD_MIXINS.md](17_CHILD_MIXINS.md) | Child Mixins | SingleChild, Container, Proxy, Shifted patterns |
+| [18_RENDERING_CONTEXTS.md](18_RENDERING_CONTEXTS.md) | Rendering Contexts | PaintingContext, HitTestResult, LayoutContext |
 
 
 ## Architecture Summary
