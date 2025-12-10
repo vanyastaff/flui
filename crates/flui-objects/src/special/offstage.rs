@@ -27,12 +27,12 @@
 //! - `offstage: bool` - Whether child is hidden
 //!
 //! ## Steps (when offstage = true)
-//! 1. **Layout child** - `ctx.layout_child(child_id, ctx.constraints)`
+//! 1. **Layout child** - `ctx.layout_child(child_id, ctx.constraints, true)`
 //! 2. **Cache size** - `self.cached_size = child_size`
 //! 3. **Return ZERO** - `Size::ZERO` (child doesn't take space!)
 //!
 //! ## Steps (when offstage = false)
-//! 1. **Layout child** - `ctx.layout_child(child_id, ctx.constraints)`
+//! 1. **Layout child** - `ctx.layout_child(child_id, ctx.constraints, true)`
 //! 2. **Cache size** - `self.cached_size = child_size`
 //! 3. **Return child size** - Pass-through
 //!
@@ -399,11 +399,11 @@ impl<T: FullRenderTree> RenderBox<T, Single> for RenderOffstage {
             // Layout child to get its size, but we report zero size
             // This matches Flutter's behavior where offstage widgets
             // don't take up space in their parent
-            self.cached_size = ctx.layout_child(child_id, ctx.constraints);
+            self.cached_size = ctx.layout_child(child_id, ctx.constraints, true);
             Size::ZERO
         } else {
             // Normal layout - pass through to child
-            let size = ctx.layout_child(child_id, ctx.constraints);
+            let size = ctx.layout_child(child_id, ctx.constraints, true);
             self.cached_size = size;
             size
         }

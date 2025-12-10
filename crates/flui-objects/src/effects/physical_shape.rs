@@ -276,7 +276,7 @@ impl RenderBox<Optional> for RenderPhysicalShape {
         // Dereference in pattern match to get ElementId
         let size = if let Some(&child_id) = ctx.children.get() {
             // With child: layout child with full constraints
-            ctx.layout_child(child_id, constraints)
+            ctx.layout_child(child_id, constraints, true)
         } else {
             // No child: use max constraints for decorative shape size
             Size::new(constraints.max_width, constraints.max_height)

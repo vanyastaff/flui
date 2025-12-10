@@ -209,7 +209,7 @@ impl RenderBox<Single> for RenderFractionallySizedBox {
         let child_constraints = ctx.constraints.tighten(target_width, target_height);
 
         // Layout child with fractional constraints
-        Ok(ctx.layout_child(child_id, child_constraints)?)
+        Ok(ctx.layout_child(child_id, child_constraints, true)?)
     }
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Single>) {

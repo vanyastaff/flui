@@ -368,7 +368,7 @@ impl RenderBox<Single> for RenderCustomSingleChildLayoutBox {
         let child_constraints = self.delegate.get_constraints_for_child(ctx.constraints);
 
         // 3. Layout child with those constraints
-        let child_size = ctx.layout_child(child_id, child_constraints)?;
+        let child_size = ctx.layout_child(child_id, child_constraints, true)?;
 
         // 4. Get child position from delegate
         let child_offset = self

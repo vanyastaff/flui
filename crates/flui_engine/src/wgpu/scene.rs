@@ -460,6 +460,7 @@ impl SceneRenderer {
         match layer {
             // Leaf layers
             Layer::Canvas(canvas_layer) => self.render_canvas_layer(canvas_layer),
+            Layer::Picture(picture_layer) => self.render_picture_layer(picture_layer),
 
             // Clip layers - these modify the clip stack for children
             Layer::ClipRect(_) | Layer::ClipRRect(_) | Layer::ClipPath(_) => {
@@ -1014,6 +1015,124 @@ impl SceneRenderer {
         let mut renderer_wrapper = Backend::new(painter);
 
         // Record draw commands from canvas layer
+        {
+            let _span = tracing::trace_span!("record_commands").entered();
+            layer.render(&mut renderer_wrapper);
+        }
+
+        // Extract painter and render accumulated commands to GPU
+        let mut painter = renderer_wrapper.into_painter();
+
+        {
+            let _span = tracing::trace_span!("gpu_render").entered();
+            painter
+                .render(&view, &mut encoder)
+                .map_err(|e| RenderError::PainterError(e.to_string()))?;
+        }
+
+        // Put painter back (zero allocation, just moves Option)
+        self.painter = Some(painter);
+
+        // Submit commands and present
+        {
+            let _span = tracing::trace_span!("submit_present").entered();
+            self.queue.submit(std::iter::once(encoder.finish()));
+            frame.present();
+        }
+
+        Ok(())
+    }
+
+    /// Render a picture layer to the screen.
+    ///
+    /// PictureLayer contains an immutable recorded Picture (DisplayList) that was
+    /// previously recorded, typically at a repaint boundary. This method is nearly
+    /// identical to render_canvas_layer but works with immutable Pictures.
+    ///
+    /// # Arguments
+    ///
+    /// * `layer` - The picture layer to render
+    ///
+    /// # Errors
+    ///
+    /// Returns `RenderError` if surface acquisition or rendering fails.
+    #[tracing::instrument(level = "trace", skip_all, err)]
+    fn render_picture_layer(&mut self, layer: &flui_layer::PictureLayer) -> Result<(), RenderError> {
+        // Get current frame (swapchain acquire)
+        let frame = {
+            let _span = tracing::trace_span!("acquire_frame").entered();
+            self.surface.get_current_texture().map_err(|e| match e {
+                wgpu::SurfaceError::Lost => {
+                    tracing::warn!("Surface lost, reconfiguring...");
+                    self.surface.configure(&self.device, &self.config);
+                    RenderError::SurfaceLost
+                }
+                wgpu::SurfaceError::Outdated => {
+                    tracing::warn!("Surface outdated, reconfiguring...");
+                    self.surface.configure(&self.device, &self.config);
+                    RenderError::SurfaceOutdated
+                }
+                wgpu::SurfaceError::OutOfMemory => {
+                    tracing::error!("Out of GPU memory!");
+                    RenderError::OutOfMemory
+                }
+                wgpu::SurfaceError::Timeout => {
+                    tracing::warn!("Surface timeout");
+                    RenderError::Timeout
+                }
+                wgpu::SurfaceError::Other => {
+                    tracing::error!("Unknown surface error occurred");
+                    RenderError::PainterError("Unknown surface error".to_string())
+                }
+            })?
+        };
+
+        let view = frame
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+
+        // Create command encoder
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("FLUI Render Encoder"),
+            });
+
+        // Clear screen
+        {
+            let _span = tracing::trace_span!("clear_pass").entered();
+            let _render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Clear Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.1,
+                            g: 0.1,
+                            b: 0.1,
+                            a: 1.0,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+        }
+
+        // CRITICAL: Zero-allocation rendering via painter reuse!
+        // Take ownership temporarily (field becomes None, zero allocation)
+        let painter = self
+            .painter
+            .take()
+            .expect("Painter should always exist during render");
+
+        // Create renderer wrapper (stack allocation, just one pointer field)
+        let mut renderer_wrapper = Backend::new(painter);
+
+        // Record draw commands from picture layer
         {
             let _span = tracing::trace_span!("record_commands").entered();
             layer.render(&mut renderer_wrapper);

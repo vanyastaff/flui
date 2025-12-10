@@ -275,7 +275,7 @@ impl RenderBox<Variable> for RenderStack {
                 StackFit::Passthrough => constraints,
             };
 
-            let child_size = ctx.layout_child(child_id, child_constraints)?;
+            let child_size = ctx.layout_child(child_id, child_constraints, true)?;
             self.child_sizes.push(child_size);
             max_width = max_width.max(child_size.width);
             max_height = max_height.max(child_size.height);

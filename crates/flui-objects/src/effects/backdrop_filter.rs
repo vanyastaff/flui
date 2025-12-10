@@ -224,7 +224,7 @@ impl RenderBox<Single> for RenderBackdropFilter {
     fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Single>) -> RenderResult<Size> {
         // Single arity: use ctx.single_child() which returns ElementId directly
         let child_id = ctx.single_child();
-        Ok(ctx.layout_child(child_id, ctx.constraints)?)
+        Ok(ctx.layout_child(child_id, ctx.constraints, true)?)
     }
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Single>) {

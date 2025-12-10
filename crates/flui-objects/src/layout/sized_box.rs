@@ -243,7 +243,7 @@ impl RenderBox<Optional> for RenderSizedBox {
                     0.0,
                     self.height.unwrap_or(constraints.max_height),
                 );
-                ctx.layout_child(child_id, child_constraints)?
+                ctx.layout_child(child_id, child_constraints, true)?
             } else {
                 // Both dimensions specified, we don't need child size yet
                 Size::ZERO
@@ -258,7 +258,7 @@ impl RenderBox<Optional> for RenderSizedBox {
             // Otherwise, force child to match our size
             if self.width.is_some() && self.height.is_some() {
                 let child_constraints = BoxConstraints::tight(size);
-                ctx.layout_child(child_id, child_constraints)?;
+                ctx.layout_child(child_id, child_constraints, true)?;
             }
 
             Ok(size)

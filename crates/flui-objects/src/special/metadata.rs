@@ -25,7 +25,7 @@
 //!
 //! ## Steps
 //! 1. **Get child** - `ctx.children.single()`
-//! 2. **Pass-through layout** - `ctx.layout_child(child_id, ctx.constraints)`
+//! 2. **Pass-through layout** - `ctx.layout_child(child_id, ctx.constraints, true)`
 //! 3. **Return child size** - No modification
 //!
 //! ## Output
@@ -410,7 +410,7 @@ impl RenderBox<Single> for RenderMetaData {
     fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Single>) -> RenderResult<Size> {
         let child_id = *ctx.children.single();
         // Layout child with same constraints (pass-through)
-        Ok(ctx.layout_child(child_id, ctx.constraints)?)
+        Ok(ctx.layout_child(child_id, ctx.constraints, true)?)
     }
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Single>) {

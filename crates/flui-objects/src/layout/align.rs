@@ -246,7 +246,7 @@ impl RenderBox<Optional> for RenderAlign {
         // Optional arity: use ctx.children.get() which returns Option<&ElementId>
         if let Some(&child_id) = ctx.children.get() {
             // Layout child with loose constraints to get its natural size
-            let child_size = ctx.layout_child(child_id, constraints.loosen())?;
+            let child_size = ctx.layout_child(child_id, constraints.loosen(), true)?;
 
             // Calculate our size based on factors
             // Flutter-compatible behavior:

@@ -214,7 +214,7 @@ impl RenderBox<Single> for RenderAspectRatio {
         let final_size = constraints.constrain(size);
 
         // Layout child with tight constraints
-        ctx.layout_child(ctx.single_child(), BoxConstraints::tight(final_size))?;
+        ctx.layout_child(ctx.single_child(), BoxConstraints::tight(final_size), true)?;
 
         Ok(final_size)
     }

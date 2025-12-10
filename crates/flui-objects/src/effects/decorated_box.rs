@@ -396,7 +396,7 @@ impl RenderBox<Optional> for RenderDecoratedBox {
 
         let size = if let Some(child_id) = ctx.children.get() {
             // Layout child and use its size
-            ctx.layout_child(*child_id, constraints)?
+            ctx.layout_child(*child_id, constraints, true)?
         } else {
             // No child - use constrained size for decoration
             // Handle infinity by using min constraints as fallback

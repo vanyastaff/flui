@@ -341,7 +341,7 @@ impl RenderBox<Single> for RenderFittedBox {
         // Layout child with unbounded constraints to get natural size
         let child_constraints =
             flui_types::constraints::BoxConstraints::new(0.0, f32::INFINITY, 0.0, f32::INFINITY);
-        ctx.layout_child(child_id, child_constraints)?;
+        ctx.layout_child(child_id, child_constraints, true)?;
 
         Ok(size)
     }

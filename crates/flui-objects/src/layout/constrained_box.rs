@@ -213,7 +213,7 @@ impl RenderBox<Optional> for RenderConstrainedBox {
         // Optional arity: use ctx.children.get() which returns Option<&ElementId>
         let size = if let Some(&child_id) = ctx.children.get() {
             // Layout child with enforced (intersected) constraints
-            ctx.layout_child(child_id, child_constraints)?
+            ctx.layout_child(child_id, child_constraints, true)?
         } else {
             // No child - return minimum size from enforced constraints
             // This reserves the minimum required space

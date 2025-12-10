@@ -313,7 +313,7 @@ impl RenderBox<Single> for RenderAnimatedSize {
         let child_id = ctx.single_child();
 
         // Layout child with same constraints
-        let child_size = ctx.layout_child(child_id, ctx.constraints)?;
+        let child_size = ctx.layout_child(child_id, ctx.constraints, true)?;
 
         // Detect size change and start animation if needed
         if self.last_child_size != Some(child_size) {

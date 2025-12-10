@@ -266,7 +266,7 @@ impl RenderBox<Single> for RenderPositionedBox {
         };
 
         // Layout child with calculated constraints
-        Ok(ctx.layout_child(child_id, child_constraints)?)
+        Ok(ctx.layout_child(child_id, child_constraints, true)?)
     }
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Single>) {

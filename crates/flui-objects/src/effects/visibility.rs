@@ -249,7 +249,7 @@ impl RenderBox<Single> for RenderVisibility {
 
         if should_layout {
             // Layout child with same constraints
-            let child_size = ctx.layout_child(child_id, ctx.constraints)?;
+            let child_size = ctx.layout_child(child_id, ctx.constraints, true)?;
 
             // Determine size to report
             // Return child size if visible OR maintaining size (reserve space)

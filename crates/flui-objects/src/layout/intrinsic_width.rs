@@ -238,7 +238,7 @@ impl RenderBox<Single> for RenderIntrinsicWidth {
             ctx.constraints.max_height,
         );
 
-        let child_size = ctx.layout_child(child_id, intrinsic_constraints)?;
+        let child_size = ctx.layout_child(child_id, intrinsic_constraints, true)?;
 
         // Apply step width/height if specified
         // Rounding uses ceiling to ensure child fits

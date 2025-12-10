@@ -208,7 +208,7 @@ impl RenderBox<Single> for RenderBaseline {
         let constraints = ctx.constraints;
 
         // Layout child with same constraints (proxy behavior)
-        let child_size = ctx.layout_child(child_id, constraints)?;
+        let child_size = ctx.layout_child(child_id, constraints, true)?;
 
         // Our height includes space for baseline offset
         // Container height = max(child_height, child_height + baseline)
