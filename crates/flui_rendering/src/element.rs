@@ -78,70 +78,185 @@ use super::flags::AtomicRenderFlags;
 use super::lifecycle::RenderLifecycle;
 use super::object::RenderObject;
 use super::parent_data::ParentData;
-use super::protocol::{BoxProtocol, Protocol, ProtocolId, SliverProtocol};
+use super::protocol::{BoxProtocol, ProtocolId, SliverProtocol};
 use super::state::RenderState;
 use super::{BoxConstraints, SliverConstraints};
 use flui_foundation::RenderId;
 
 // ============================================================================
-// PROTOCOL STATE (Type-Erased RenderState)
+// TYPED PROTOCOL STATE (Safe enum-based approach - NO UNSAFE!)
 // ============================================================================
 
-/// Type-erased protocol state for RenderElement.
+/// Type-safe protocol state storage using enum dispatch.
 ///
-/// This allows RenderElement to work with both Box and Sliver protocols
-/// without being generic over Protocol (which would infect entire tree).
+/// This replaces the previous `Box<dyn ProtocolState>` approach with unsafe
+/// downcasting. By using an enum, we get:
 ///
-/// Implemented by RenderState<P> via blanket impl.
-trait ProtocolState: fmt::Debug + Send + Sync {
-    /// Returns atomic render flags.
-    fn flags(&self) -> &AtomicRenderFlags;
+/// - **Zero unsafe code**: Pattern matching instead of pointer casts
+/// - **Exhaustive matching**: Compiler ensures all protocols are handled
+/// - **Better codegen**: No dynamic dispatch overhead for protocol checks
+/// - **Memory efficiency**: Inline storage, no extra allocation
+///
+/// # Design
+///
+/// ```text
+/// TypedProtocolState
+///  ├── Box(RenderState<BoxProtocol>)     - 2D rectangular layout
+///  └── Sliver(RenderState<SliverProtocol>) - Scrollable layout
+/// ```
+///
+/// # Why not trait objects?
+///
+/// The previous design used `Box<dyn ProtocolState>` which required unsafe
+/// downcasting via TypeId checks:
+///
+/// ```rust,ignore
+/// // Old approach (UNSAFE):
+/// fn as_box_state(&self) -> Option<&RenderState<BoxProtocol>> {
+///     if TypeId::of::<P>() == TypeId::of::<BoxProtocol>() {
+///         Some(unsafe { &*(self as *const RenderState<P> as *const RenderState<BoxProtocol>) })
+///     } else { None }
+/// }
+/// ```
+///
+/// The enum approach eliminates this entirely:
+///
+/// ```rust,ignore
+/// // New approach (SAFE):
+/// fn as_box_state(&self) -> Option<&RenderState<BoxProtocol>> {
+///     match self {
+///         TypedProtocolState::Box(state) => Some(state),
+///         TypedProtocolState::Sliver(_) => None,
+///     }
+/// }
+/// ```
+#[derive(Debug)]
+pub enum TypedProtocolState {
+    /// Box protocol state for 2D rectangular layout.
+    ///
+    /// Uses `BoxConstraints` for input and `Size` for output.
+    Box(RenderState<BoxProtocol>),
 
-    /// Returns current offset.
-    fn offset(&self) -> Offset;
-
-    /// Sets offset.
-    fn set_offset(&self, offset: Offset);
-
-    /// Downcasts to BoxRenderState (if Box protocol).
-    fn as_box_state(&self) -> Option<&RenderState<BoxProtocol>>;
-
-    /// Downcasts to SliverRenderState (if Sliver protocol).
-    fn as_sliver_state(&self) -> Option<&RenderState<SliverProtocol>>;
+    /// Sliver protocol state for scrollable content.
+    ///
+    /// Uses `SliverConstraints` for input and `SliverGeometry` for output.
+    Sliver(RenderState<SliverProtocol>),
 }
 
-// Blanket impl for RenderState<P>
-impl<P: Protocol> ProtocolState for RenderState<P> {
-    fn flags(&self) -> &AtomicRenderFlags {
-        RenderState::flags(self)
-    }
-
-    fn offset(&self) -> Offset {
-        self.offset()
-    }
-
-    fn set_offset(&self, offset: Offset) {
-        self.set_offset(offset)
-    }
-
-    fn as_box_state(&self) -> Option<&RenderState<BoxProtocol>> {
-        if std::any::TypeId::of::<P>() == std::any::TypeId::of::<BoxProtocol>() {
-            // SAFETY: We just checked TypeId matches
-            Some(unsafe { &*(self as *const RenderState<P> as *const RenderState<BoxProtocol>) })
-        } else {
-            None
+impl TypedProtocolState {
+    /// Creates a new typed state from a protocol ID.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let state = TypedProtocolState::from_protocol(ProtocolId::Box);
+    /// assert!(state.is_box());
+    /// ```
+    #[inline]
+    pub fn from_protocol(protocol: ProtocolId) -> Self {
+        match protocol {
+            ProtocolId::Box => Self::Box(RenderState::new()),
+            ProtocolId::Sliver => Self::Sliver(RenderState::new()),
         }
     }
 
-    fn as_sliver_state(&self) -> Option<&RenderState<SliverProtocol>> {
-        if std::any::TypeId::of::<P>() == std::any::TypeId::of::<SliverProtocol>() {
-            // SAFETY: We just checked TypeId matches
-            Some(unsafe { &*(self as *const RenderState<P> as *const RenderState<SliverProtocol>) })
-        } else {
-            None
+    /// Returns the protocol identifier.
+    #[inline]
+    pub fn protocol_id(&self) -> ProtocolId {
+        match self {
+            Self::Box(_) => ProtocolId::Box,
+            Self::Sliver(_) => ProtocolId::Sliver,
+        }
+    }
+
+    /// Returns true if this is a Box protocol state.
+    #[inline]
+    pub fn is_box(&self) -> bool {
+        matches!(self, Self::Box(_))
+    }
+
+    /// Returns true if this is a Sliver protocol state.
+    #[inline]
+    pub fn is_sliver(&self) -> bool {
+        matches!(self, Self::Sliver(_))
+    }
+
+    /// Returns the atomic render flags (works for all protocols).
+    #[inline]
+    pub fn flags(&self) -> &AtomicRenderFlags {
+        match self {
+            Self::Box(state) => state.flags(),
+            Self::Sliver(state) => state.flags(),
+        }
+    }
+
+    /// Returns the current offset (works for all protocols).
+    #[inline]
+    pub fn offset(&self) -> Offset {
+        match self {
+            Self::Box(state) => state.offset(),
+            Self::Sliver(state) => state.offset(),
+        }
+    }
+
+    /// Sets the offset (works for all protocols).
+    #[inline]
+    pub fn set_offset(&self, offset: Offset) {
+        match self {
+            Self::Box(state) => state.set_offset(offset),
+            Self::Sliver(state) => state.set_offset(offset),
+        }
+    }
+
+    /// Returns the Box protocol state, if this is a Box protocol.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// if let Some(box_state) = state.as_box() {
+    ///     let size = box_state.size();
+    /// }
+    /// ```
+    #[inline]
+    pub fn as_box(&self) -> Option<&RenderState<BoxProtocol>> {
+        match self {
+            Self::Box(state) => Some(state),
+            Self::Sliver(_) => None,
+        }
+    }
+
+    /// Returns the Sliver protocol state, if this is a Sliver protocol.
+    #[inline]
+    pub fn as_sliver(&self) -> Option<&RenderState<SliverProtocol>> {
+        match self {
+            Self::Box(_) => None,
+            Self::Sliver(state) => Some(state),
+        }
+    }
+
+    /// Returns a mutable reference to Box protocol state.
+    #[inline]
+    pub fn as_box_mut(&mut self) -> Option<&mut RenderState<BoxProtocol>> {
+        match self {
+            Self::Box(state) => Some(state),
+            Self::Sliver(_) => None,
+        }
+    }
+
+    /// Returns a mutable reference to Sliver protocol state.
+    #[inline]
+    pub fn as_sliver_mut(&mut self) -> Option<&mut RenderState<SliverProtocol>> {
+        match self {
+            Self::Box(_) => None,
+            Self::Sliver(state) => Some(state),
         }
     }
 }
+
+// Note: TypedProtocolState automatically implements Send + Sync
+// because both RenderState<BoxProtocol> and RenderState<SliverProtocol>
+// are Send + Sync (all their fields are Send + Sync types:
+// AtomicRenderFlags, OnceCell, AtomicOffset, PhantomData).
 
 // ============================================================================
 // RENDER ELEMENT
@@ -207,16 +322,16 @@ pub struct RenderElement {
     // ========== Render State (Protocol-specific) ==========
     /// Protocol-specific state (geometry, constraints, flags, offset).
     ///
-    /// This is Box<dyn ProtocolState> to allow Box or Sliver protocol.
+    /// Uses `TypedProtocolState` enum for type-safe protocol dispatch.
     /// Contains:
     /// - AtomicRenderFlags (lock-free dirty tracking)
     /// - OnceCell<Geometry> (Size or SliverGeometry)
     /// - OnceCell<Constraints> (BoxConstraints or SliverConstraints)
     /// - AtomicOffset (paint position)
     ///
-    /// Why type-erased? RenderElement needs to work with both protocols
-    /// without being generic over Protocol (would infect entire tree).
-    state: Box<dyn ProtocolState>,
+    /// The enum approach eliminates unsafe downcasting while allowing
+    /// RenderElement to work with multiple protocols without generics.
+    state: TypedProtocolState,
 
     // ========== Lifecycle ==========
     /// Current lifecycle state.
@@ -293,11 +408,6 @@ impl RenderElement {
     /// let element = RenderElement::new(Some(render_id), ProtocolId::Box, RuntimeArity::Exact(0));
     /// ```
     pub fn new(render_id: Option<RenderId>, protocol: ProtocolId, arity: RuntimeArity) -> Self {
-        let state: Box<dyn ProtocolState> = match protocol {
-            ProtocolId::Box => Box::new(RenderState::<BoxProtocol>::new()),
-            ProtocolId::Sliver => Box::new(RenderState::<SliverProtocol>::new()),
-        };
-
         Self {
             id: None,
             parent: None,
@@ -306,7 +416,7 @@ impl RenderElement {
             render_id,
             protocol,
             arity,
-            state,
+            state: TypedProtocolState::from_protocol(protocol),
             lifecycle: RenderLifecycle::Detached,
             parent_data: None,
             debug_name: None,
@@ -336,11 +446,6 @@ impl RenderElement {
         protocol: ProtocolId,
         arity: RuntimeArity,
     ) -> Self {
-        let state: Box<dyn ProtocolState> = match protocol {
-            ProtocolId::Box => Box::new(RenderState::<BoxProtocol>::new()),
-            ProtocolId::Sliver => Box::new(RenderState::<SliverProtocol>::new()),
-        };
-
         Self {
             id: None,
             parent: None,
@@ -349,7 +454,7 @@ impl RenderElement {
             render_id: None,
             protocol,
             arity,
-            state,
+            state: TypedProtocolState::from_protocol(protocol),
             lifecycle: RenderLifecycle::Detached,
             parent_data: None,
             debug_name: None,
@@ -367,11 +472,6 @@ impl RenderElement {
         arity: RuntimeArity,
         children: Vec<Box<dyn Any + Send + Sync>>,
     ) -> Self {
-        let state: Box<dyn ProtocolState> = match protocol {
-            ProtocolId::Box => Box::new(RenderState::<BoxProtocol>::new()),
-            ProtocolId::Sliver => Box::new(RenderState::<SliverProtocol>::new()),
-        };
-
         Self {
             id: None,
             parent: None,
@@ -380,7 +480,7 @@ impl RenderElement {
             render_id: None,
             protocol,
             arity,
-            state,
+            state: TypedProtocolState::from_protocol(protocol),
             lifecycle: RenderLifecycle::Detached,
             parent_data: None,
             debug_name: None,
@@ -823,16 +923,13 @@ impl RenderElement {
     /// Returns `Size::ZERO` if not a Box protocol or not yet laid out.
     #[inline]
     pub fn size(&self) -> Size {
-        self.state
-            .as_box_state()
-            .map(|s| s.size())
-            .unwrap_or(Size::ZERO)
+        self.state.as_box().map(|s| s.size()).unwrap_or(Size::ZERO)
     }
 
     /// Sets size (called after layout, Box protocol only).
     #[inline]
     pub fn set_size(&mut self, size: Size) {
-        if let Some(box_state) = self.state.as_box_state() {
+        if let Some(box_state) = self.state.as_box() {
             box_state.set_size(size);
             self.state.flags().mark_has_geometry();
         }
@@ -853,15 +950,13 @@ impl RenderElement {
     /// Returns last box constraints.
     #[inline]
     pub fn constraints_box(&self) -> Option<BoxConstraints> {
-        self.state
-            .as_box_state()
-            .and_then(|s| s.constraints().copied())
+        self.state.as_box().and_then(|s| s.constraints().copied())
     }
 
     /// Sets box constraints (called during layout).
     #[inline]
     pub fn set_constraints_box(&mut self, constraints: BoxConstraints) {
-        if let Some(box_state) = self.state.as_box_state() {
+        if let Some(box_state) = self.state.as_box() {
             box_state.set_constraints(constraints);
         }
     }
@@ -870,14 +965,14 @@ impl RenderElement {
     #[inline]
     pub fn constraints_sliver(&self) -> Option<SliverConstraints> {
         self.state
-            .as_sliver_state()
+            .as_sliver()
             .and_then(|s| s.constraints().copied())
     }
 
     /// Sets sliver constraints (called during layout).
     #[inline]
     pub fn set_constraints_sliver(&mut self, constraints: SliverConstraints) {
-        if let Some(sliver_state) = self.state.as_sliver_state() {
+        if let Some(sliver_state) = self.state.as_sliver() {
             sliver_state.set_constraints(constraints);
         }
     }
@@ -885,13 +980,13 @@ impl RenderElement {
     /// Returns last sliver geometry.
     #[inline]
     pub fn sliver_geometry(&self) -> Option<SliverGeometry> {
-        self.state.as_sliver_state().and_then(|s| s.geometry())
+        self.state.as_sliver().and_then(|s| s.geometry())
     }
 
     /// Sets sliver geometry (called after layout, Sliver protocol only).
     #[inline]
     pub fn set_sliver_geometry(&mut self, geometry: SliverGeometry) {
-        if let Some(sliver_state) = self.state.as_sliver_state() {
+        if let Some(sliver_state) = self.state.as_sliver() {
             sliver_state.set_sliver_geometry(geometry);
             self.state.flags().mark_has_geometry();
         }

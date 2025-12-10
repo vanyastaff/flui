@@ -120,8 +120,8 @@ pub use parent_data::{
     BoxParentData, ContainerBoxParentData, ContainerParentData, ParentData, ParentDataWithOffset,
 };
 
-// RenderElement and lifecycle
-pub use element::RenderElement;
+// RenderElement, lifecycle, and typed protocol state
+pub use element::{RenderElement, TypedProtocolState};
 pub use lifecycle::RenderLifecycle;
 
 // Proxy traits
