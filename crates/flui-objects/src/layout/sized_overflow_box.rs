@@ -295,7 +295,7 @@ impl RenderBox<Single> for RenderSizedOverflowBox {
 
         // Layout child with custom (overridden) constraints
         // Child may be larger or smaller than container
-        self.child_size = ctx.layout_child(child_id, child_constraints)?;
+        self.child_size = ctx.layout_child(child_id, child_constraints, true)?;
 
         // Container size is explicit (or defaults to parent's max)
         // Child size is IGNORED for container sizing

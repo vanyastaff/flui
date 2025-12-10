@@ -3,7 +3,7 @@
 //! Slivers are scrollable areas that can lay out their children in a scrollable viewport.
 //! This module provides constraint and geometry types for slivers.
 
-use super::direction::GrowthDirection;
+use super::{direction::GrowthDirection, Constraints};
 use crate::layout::{Axis, AxisDirection};
 
 /// Immutable layout constraints for slivers
@@ -665,5 +665,131 @@ mod tests {
         assert!(!geometry.visible);
         assert!(geometry.has_visual_overflow);
         assert_eq!(geometry.cache_extent, Some(200.0));
+    }
+}
+
+// ============================================================================
+// CONSTRAINTS TRAIT IMPLEMENTATION
+// ============================================================================
+
+impl Constraints for SliverConstraints {
+    /// Sliver constraints are never tight.
+    ///
+    /// Unlike box constraints which can force an exact size, sliver constraints
+    /// allow slivers to choose their extent based on content and scrolling.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// // In Flutter, SliverConstraints.isTight always returns false
+    /// @override
+    /// bool get isTight => false;
+    /// ```
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::{constraints::{SliverConstraints, GrowthDirection, Constraints}, layout::{Axis, AxisDirection}};
+    ///
+    /// let constraints = SliverConstraints::new(
+    ///     AxisDirection::TopToBottom,
+    ///     GrowthDirection::Forward,
+    ///     Axis::Vertical,
+    ///     0.0,
+    ///     400.0,
+    ///     800.0,
+    ///     300.0,
+    /// );
+    ///
+    /// // Sliver constraints are never tight
+    /// assert!(!constraints.is_tight());
+    /// ```
+    #[inline]
+    fn is_tight(&self) -> bool {
+        false
+    }
+
+    /// Returns whether sliver constraints are in canonical form.
+    ///
+    /// Sliver constraints are normalized if:
+    /// - `remaining_paint_extent >= 0.0`
+    /// - `viewport_main_axis_extent >= 0.0`
+    /// - `cross_axis_extent >= 0.0`
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::{constraints::{SliverConstraints, GrowthDirection, Constraints}, layout::{Axis, AxisDirection}};
+    ///
+    /// let valid = SliverConstraints::new(
+    ///     AxisDirection::TopToBottom,
+    ///     GrowthDirection::Forward,
+    ///     Axis::Vertical,
+    ///     0.0,
+    ///     400.0,
+    ///     800.0,
+    ///     300.0,
+    /// );
+    /// assert!(valid.is_normalized());
+    /// ```
+    #[inline]
+    fn is_normalized(&self) -> bool {
+        // Delegate to existing implementation
+        SliverConstraints::is_normalized(self)
+    }
+
+    /// Validates sliver constraints (debug mode only).
+    ///
+    /// Performs validation:
+    /// - All extent values must be non-negative
+    /// - No NaN values
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::{constraints::{SliverConstraints, GrowthDirection, Constraints}, layout::{Axis, AxisDirection}};
+    ///
+    /// let constraints = SliverConstraints::new(
+    ///     AxisDirection::TopToBottom,
+    ///     GrowthDirection::Forward,
+    ///     Axis::Vertical,
+    ///     0.0,
+    ///     400.0,
+    ///     800.0,
+    ///     300.0,
+    /// );
+    ///
+    /// constraints.debug_assert_is_valid(false);
+    /// ```
+    #[cfg(debug_assertions)]
+    fn debug_assert_is_valid(&self, _is_applied_constraint: bool) -> bool {
+        debug_assert!(
+            self.is_normalized(),
+            "SliverConstraints must be normalized: {:?}",
+            self
+        );
+
+        debug_assert!(
+            !self.remaining_paint_extent.is_nan(),
+            "SliverConstraints.remaining_paint_extent cannot be NaN"
+        );
+        debug_assert!(
+            !self.viewport_main_axis_extent.is_nan(),
+            "SliverConstraints.viewport_main_axis_extent cannot be NaN"
+        );
+        debug_assert!(
+            !self.cross_axis_extent.is_nan(),
+            "SliverConstraints.cross_axis_extent cannot be NaN"
+        );
+        debug_assert!(
+            !self.scroll_offset.is_nan(),
+            "SliverConstraints.scroll_offset cannot be NaN"
+        );
+        debug_assert!(
+            !self.preceding_scroll_extent.is_nan(),
+            "SliverConstraints.preceding_scroll_extent cannot be NaN"
+        );
+
+        true
     }
 }

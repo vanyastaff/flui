@@ -280,7 +280,7 @@ impl RenderBox<Single> for RenderCustomPaint {
 
         // Single arity always has exactly one child
         // Layout child with our constraints
-        let size = ctx.layout_child(child_id, ctx.constraints)?;
+        let size = ctx.layout_child(child_id, ctx.constraints, true)?;
 
         // Store the laid out size for use during paint
         self.laid_out_size = size;

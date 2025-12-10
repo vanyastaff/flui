@@ -192,7 +192,7 @@ impl RenderBox<Single> for RenderFlexItem {
     fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Single>) -> RenderResult<Size> {
         let child_id = *ctx.children.single();
         // Pass-through: just layout child with same constraints
-        Ok(ctx.layout_child(child_id, ctx.constraints)?)
+        Ok(ctx.layout_child(child_id, ctx.constraints, true)?)
     }
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Single>) {

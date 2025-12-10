@@ -395,7 +395,7 @@ impl RenderBox<Single> for RenderTapRegion {
         let child_id = ctx.single_child();
 
         // Proxy behavior: pass constraints unchanged to child
-        let size = ctx.layout_child(child_id, ctx.constraints)?;
+        let size = ctx.layout_child(child_id, ctx.constraints, true)?;
 
         // Cache size for hit region bounds calculation
         self.size = size;

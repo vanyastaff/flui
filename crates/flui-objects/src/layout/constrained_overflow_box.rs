@@ -283,7 +283,7 @@ impl RenderBox<Single> for RenderConstrainedOverflowBox {
 
         // Layout child with custom constraints
         // Child may be larger or smaller than parent
-        let child_size = ctx.layout_child(child_id, child_constraints)?;
+        let child_size = ctx.layout_child(child_id, child_constraints, true)?;
         self.cached_child_size = child_size;
         self.cached_parent_size = parent_size;
 

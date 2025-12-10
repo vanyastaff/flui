@@ -111,6 +111,7 @@ pub use layer::{
     BackdropFilterLayer,
     // Leaf layers
     CanvasLayer,
+    PictureLayer,
     // Clip layers
     ClipPathLayer,
     ClipRRectLayer,

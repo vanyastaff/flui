@@ -234,7 +234,7 @@ impl RenderBox<Single> for RenderRotatedBox {
         };
 
         // Layout child with potentially swapped constraints
-        let child_size = ctx.layout_child(child_id, child_constraints)?;
+        let child_size = ctx.layout_child(child_id, child_constraints, true)?;
 
         // Our size is child size with potentially swapped dimensions
         // Odd turns: swap dimensions back to parent coordinate space

@@ -234,7 +234,7 @@ impl RenderBox<Variable> for RenderListBody {
                         f32::INFINITY,
                     );
 
-                    let child_size = ctx.layout_child(*child, child_constraints)?;
+                    let child_size = ctx.layout_child(*child, child_constraints, true)?;
                     self.child_sizes.push(child_size);
 
                     total_height += child_size.height;
@@ -261,7 +261,7 @@ impl RenderBox<Variable> for RenderListBody {
                         constraints.max_height,
                     );
 
-                    let child_size = ctx.layout_child(*child, child_constraints)?;
+                    let child_size = ctx.layout_child(*child, child_constraints, true)?;
                     self.child_sizes.push(child_size);
 
                     total_width += child_size.width;

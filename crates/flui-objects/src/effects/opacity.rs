@@ -196,7 +196,7 @@ impl RenderObject for RenderOpacity {}
 impl RenderBox<Single> for RenderOpacity {
     fn layout(&mut self, mut ctx: BoxLayoutCtx<'_, Single>) -> RenderResult<Size> {
         // Layout child with same constraints (proxy behavior)
-        Ok(ctx.layout_child(ctx.single_child(), ctx.constraints)?)
+        Ok(ctx.layout_child(ctx.single_child(), ctx.constraints, true)?)
     }
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Single>) {

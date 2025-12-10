@@ -233,7 +233,7 @@ impl RenderBox<Optional> for RenderPhysicalModel {
 
         let size = if let Some(child_id) = ctx.children.get() {
             // Layout child and use its size
-            ctx.layout_child(*child_id, constraints)?
+            ctx.layout_child(*child_id, constraints, true)?
         } else {
             // No child - use max constraints for shape size
             Size::new(constraints.max_width, constraints.max_height)

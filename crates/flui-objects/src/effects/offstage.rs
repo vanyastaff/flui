@@ -176,7 +176,7 @@ impl RenderBox<Single> for RenderOffstage {
         let child_id = ctx.single_child();
 
         // ALWAYS layout child to maintain state (animations, controllers, scroll position, etc.)
-        let child_size = ctx.layout_child(child_id, ctx.constraints)?;
+        let child_size = ctx.layout_child(child_id, ctx.constraints, true)?;
 
         // Report size based on offstage flag
         if self.offstage {

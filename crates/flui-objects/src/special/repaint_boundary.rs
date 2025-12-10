@@ -288,7 +288,7 @@ impl<T: FullRenderTree> RenderBox<T, Single> for RenderRepaintBoundary {
     {
         let child_id = ctx.children.single();
         // Pass-through layout - we don't modify constraints
-        ctx.layout_child(child_id, ctx.constraints)
+        ctx.layout_child(child_id, ctx.constraints, true)
     }
 
     fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Single>)

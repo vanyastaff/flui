@@ -188,7 +188,7 @@ impl RenderBox<Optional> for RenderPadding {
             let child_constraints = constraints.deflate(&padding);
 
             // Layout child with deflated constraints
-            let child_size = ctx.layout_child(child_id, child_constraints)?;
+            let child_size = ctx.layout_child(child_id, child_constraints, true)?;
 
             // Add padding to child size
             Ok(Size::new(

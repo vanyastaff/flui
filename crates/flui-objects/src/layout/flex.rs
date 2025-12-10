@@ -407,7 +407,7 @@ impl RenderBox<Variable> for RenderFlex {
                 ),
             };
 
-            let child_size = ctx.layout_child(child_id, child_constraints)?;
+            let child_size = ctx.layout_child(child_id, child_constraints, true)?;
             child_sizes.push(child_size);
 
             let (child_main, child_cross) = match direction {

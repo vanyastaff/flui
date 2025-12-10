@@ -370,7 +370,7 @@ impl RenderGrid {
                                 constraints.max_height,
                             );
                             let child_size = ctx
-                                .layout_child(child_id, child_constraints)
+                                .layout_child(child_id, child_constraints, true)
                                 .unwrap_or(Size::ZERO);
                             max_width = max_width.max(child_size.width);
                         }
@@ -445,7 +445,7 @@ impl RenderGrid {
                                 constraints.max_height,
                             );
                             let child_size = ctx
-                                .layout_child(child_id, child_constraints)
+                                .layout_child(child_id, child_constraints, true)
                                 .unwrap_or(Size::ZERO);
                             max_height = max_height.max(child_size.height);
                         }
@@ -527,7 +527,7 @@ impl RenderBox<Variable> for RenderGrid {
 
             let child_constraints =
                 BoxConstraints::new(child_width, child_width, child_height, child_height);
-            ctx.layout_child(*child_id, child_constraints)?;
+            ctx.layout_child(*child_id, child_constraints, true)?;
         }
 
         // Calculate total size

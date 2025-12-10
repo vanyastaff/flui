@@ -40,87 +40,50 @@ use parking_lot::RwLock;
 use crate::HitTestTree;
 
 // ============================================================================
-// LAYER HANDLE
+// LAYER HANDLE (Typed Layer Infrastructure from flui-layer)
 // ============================================================================
 
-/// Type alias for a shared layer reference.
+/// Handle to a compositor layer with reference counting and lifecycle management.
 ///
-/// This is used by repaint boundaries to cache their compositing layer.
-/// The layer is wrapped in `Arc<RwLock<_>>` to allow:
-/// - Shared ownership between render object and layer tree
-/// - Interior mutability for updates during paint
+/// This uses `flui_layer::AnyLayerHandle` which provides:
+/// - Type-safe layer management with polymorphic Layer enum
+/// - Reference counting for proper GPU resource lifecycle
 /// - Thread-safe access from multiple threads
-pub type LayerHandle = Arc<RwLock<LayerRef>>;
-
-/// Reference to a compositor layer.
+/// - Proper integration with compositor layer tree
 ///
-/// This wraps `flui_engine::Layer` to avoid direct dependency on
-/// flui_engine in flui_rendering. The actual layer types are defined
-/// in flui_engine and stored here as type-erased Any pointers.
-#[derive(Debug)]
-pub struct LayerRef {
-    /// Type-erased layer (actually `flui_engine::Layer`)
-    inner: Box<dyn Any + Send + Sync>,
-
-    /// Layer type identifier for debugging
-    layer_type: &'static str,
-
-    /// Whether this layer needs recompositing
-    needs_recomposite: bool,
-}
-
-impl LayerRef {
-    /// Creates a new layer reference.
-    pub fn new<T: Any + Send + Sync + 'static>(layer: T) -> Self {
-        Self {
-            layer_type: std::any::type_name::<T>(),
-            inner: Box::new(layer),
-            needs_recomposite: true,
-        }
-    }
-
-    /// Gets the inner layer as a concrete type.
-    pub fn get<T: Any + Send + Sync + 'static>(&self) -> Option<&T> {
-        self.inner.downcast_ref::<T>()
-    }
-
-    /// Gets the inner layer as a mutable concrete type.
-    pub fn get_mut<T: Any + Send + Sync + 'static>(&mut self) -> Option<&mut T> {
-        self.inner.downcast_mut::<T>()
-    }
-
-    /// Returns the layer type name for debugging.
-    pub fn layer_type(&self) -> &'static str {
-        self.layer_type
-    }
-
-    /// Marks the layer as needing recomposition.
-    pub fn mark_needs_recomposite(&mut self) {
-        self.needs_recomposite = true;
-    }
-
-    /// Returns whether the layer needs recomposition.
-    pub fn needs_recomposite(&self) -> bool {
-        self.needs_recomposite
-    }
-
-    /// Clears the needs_recomposite flag after compositing.
-    pub fn clear_needs_recomposite(&mut self) {
-        self.needs_recomposite = false;
-    }
-
-    /// Replaces the inner layer with a new one.
-    pub fn update<T: Any + Send + Sync + 'static>(&mut self, layer: T) {
-        self.inner = Box::new(layer);
-        self.layer_type = std::any::type_name::<T>();
-        self.needs_recomposite = true;
-    }
-}
-
-/// Creates a new `LayerHandle` wrapping the given layer.
-pub fn new_layer_handle<T: Any + Send + Sync + 'static>(layer: T) -> LayerHandle {
-    Arc::new(RwLock::new(LayerRef::new(layer)))
-}
+/// Repaint boundaries use this to cache their compositing layer, enabling
+/// Flutter's repaint optimization: unchanged subtrees skip repainting.
+///
+/// # Flutter Equivalence
+///
+/// ```dart
+/// class LayerHandle<T extends Layer> {
+///   T? _layer;
+///   T get layer => _layer!;
+///   set layer(T value) { _layer = value; }
+/// }
+/// ```
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// use flui_rendering::LayerHandle;
+/// use flui_layer::{Layer, OffsetLayer};
+///
+/// // Create handle
+/// let mut handle = LayerHandle::new();
+///
+/// // Set layer
+/// handle.set(Layer::Offset(OffsetLayer::from_xy(10.0, 20.0)));
+///
+/// // Get layer
+/// if let Some(layer) = handle.get() {
+///     if let Layer::Offset(offset_layer) = layer {
+///         println!("Offset: {:?}", offset_layer.offset());
+///     }
+/// }
+/// ```
+pub type LayerHandle = flui_layer::AnyLayerHandle;
 
 // ============================================================================
 // RENDER OBJECT TRAIT
@@ -280,28 +243,90 @@ pub trait RenderObject: DowncastSync + fmt::Debug {
     }
 
     // ============================================================================
-    // TRANSFORM METHODS
+    // TRANSFORM METHODS (Flutter Protocol)
     // ============================================================================
 
-    /// Applies the transform for painting a child to the given matrix.
+    /// Applies the transform for painting a child to the given transform matrix.
+    ///
+    /// This method is called by `RenderTree::get_transform_to()` when computing
+    /// coordinate transforms between render objects. Override this to apply custom
+    /// transformations (rotation, scale, perspective, etc.) to children.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// void applyPaintTransform(RenderObject child, Matrix4 transform) {
+    ///   final BoxParentData childParentData = child.parentData as BoxParentData;
+    ///   final Offset offset = childParentData.offset;
+    ///   transform.translate(offset.dx, offset.dy);
+    /// }
+    /// ```
+    ///
+    /// # Default Implementation
+    ///
+    /// The default implementation applies only translation based on the child's
+    /// offset from parent data. Render objects that apply additional transforms
+    /// (e.g., `RenderTransform`, `RenderRotation`) should override this method.
+    ///
+    /// # Arguments
+    ///
+    /// * `child_id` - ID of the child render object
+    /// * `transform` - Transform matrix to modify (in-place)
+    /// * `tree` - Tree for accessing parent data and offsets
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// // Custom transform with rotation
+    /// fn apply_paint_transform(
+    ///     &self,
+    ///     child_id: RenderId,
+    ///     transform: &mut Matrix4,
+    ///     tree: &dyn HitTestTree,
+    /// ) {
+    ///     // Apply translation (default behavior)
+    ///     if let Some(offset) = tree.get_offset(child_id) {
+    ///         *transform = Matrix4::translation(offset.dx, offset.dy, 0.0) * *transform;
+    ///     }
+    ///
+    ///     // Apply rotation around center
+    ///     let rotation = Matrix4::rotation_z(self.angle);
+    ///     *transform = rotation * *transform;
+    /// }
+    /// ```
     fn apply_paint_transform(
         &self,
         child_id: RenderId,
         transform: &mut Matrix4,
         tree: &dyn HitTestTree,
     ) {
+        // Default: Apply translation based on child's offset
         if let Some(offset) = tree.get_offset(child_id) {
             *transform = Matrix4::translation(offset.dx, offset.dy, 0.0) * *transform;
         }
     }
 
     /// Gets the transform from this render object to the given ancestor.
+    ///
+    /// **Deprecated**: This trait method is no longer used. Use `RenderTree::get_transform_to()`
+    /// instead, which implements the full Flutter protocol with proper ancestor path building.
+    ///
+    /// # Migration
+    ///
+    /// ```rust,ignore
+    /// // Old (trait method):
+    /// let transform = obj.get_transform_to(id, ancestor, tree)?;
+    ///
+    /// // New (tree method):
+    /// let transform = tree.get_transform_to(id, ancestor)?;
+    /// ```
     fn get_transform_to(
         &self,
         _element_id: RenderId,
         _ancestor: Option<RenderId>,
         _tree: &dyn HitTestTree,
     ) -> Option<Matrix4> {
+        // Stub: Use RenderTree::get_transform_to() instead
         Some(Matrix4::identity())
     }
 
@@ -394,8 +419,60 @@ pub trait RenderObject: DowncastSync + fmt::Debug {
     // ============================================================================
 
     /// Creates default ParentData for a child of this render object.
+    ///
+    /// This is called by `setup_parent_data()` when the child has no parent data
+    /// or has parent data of the wrong type.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// ParentData createParentData() {
+    ///   return BoxParentData();
+    /// }
+    /// ```
     fn create_parent_data(&self) -> Box<dyn crate::ParentData> {
         Box::new(crate::BoxParentData::default())
+    }
+
+    /// Sets up the parent data for a child of this render object.
+    ///
+    /// This method is called when a child is adopted by this render object.
+    /// It ensures the child has the correct type of parent data for this parent.
+    ///
+    /// The default implementation:
+    /// 1. If child has no parent data, creates new parent data via `create_parent_data()`
+    /// 2. If child has wrong type of parent data, replaces it with correct type
+    /// 3. Otherwise, keeps existing parent data
+    ///
+    /// Override this method only if you need custom parent data setup logic.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// void setupParentData(covariant RenderObject child) {
+    ///   if (child.parentData is! BoxParentData) {
+    ///     child.parentData = BoxParentData();
+    ///   }
+    /// }
+    /// ```
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// // In RenderStack
+    /// fn setup_parent_data(&self, child_data: Option<&dyn ParentData>) -> Option<Box<dyn ParentData>> {
+    ///     match child_data {
+    ///         Some(data) if data.is::<StackParentData>() => None, // Already correct type
+    ///         _ => Some(Box::new(StackParentData::default())), // Need to create/replace
+    ///     }
+    /// }
+    /// ```
+    fn setup_parent_data(&self, child_data: Option<&dyn crate::ParentData>) -> Option<Box<dyn crate::ParentData>> {
+        // Default implementation: create new parent data if missing
+        match child_data {
+            Some(_) => None, // Keep existing parent data
+            None => Some(self.create_parent_data()), // Create new parent data
+        }
     }
 
     // ============================================================================
@@ -423,27 +500,151 @@ pub trait RenderObject: DowncastSync + fmt::Debug {
     }
 
     // ============================================================================
-    // LIFECYCLE
+    // LIFECYCLE (Flutter Protocol)
     // ============================================================================
 
     /// Called when this render object is attached to a render tree.
+    ///
+    /// This is called by `RenderTree::add_child()` when the node is added to the tree.
+    /// Override to perform initialization that requires being in the tree
+    /// (e.g., registering for dirty tracking with PipelineOwner).
+    ///
+    /// **Important**: This is called for both the node being added AND all its descendants.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// void attach(PipelineOwner owner) {
+    ///   _owner = owner;
+    ///
+    ///   // Re-register dirty flags with owner
+    ///   if (_needsLayout && _isRelayoutBoundary != null) {
+    ///     _needsLayout = false;
+    ///     markNeedsLayout();
+    ///   }
+    ///   if (_needsPaint && _layerHandle.layer != null) {
+    ///     _needsPaint = false;
+    ///     markNeedsPaint();
+    ///   }
+    ///   if (_needsCompositingBitsUpdate) {
+    ///     _needsCompositingBitsUpdate = false;
+    ///     markNeedsCompositingBitsUpdate();
+    ///   }
+    /// }
+    /// ```
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// fn attach(&mut self) {
+    ///     // Custom initialization logic
+    ///     tracing::debug!("RenderBox attached to tree");
+    /// }
+    /// ```
     fn attach(&mut self) {
         // Default: no-op
+        // Override to perform initialization when added to tree
     }
 
     /// Called when this render object is detached from the render tree.
+    ///
+    /// This is called by `RenderTree::remove_child()` when the node is removed from the tree.
+    /// Override to perform cleanup that requires being in the tree
+    /// (e.g., unregistering from PipelineOwner, releasing resources).
+    ///
+    /// **Important**: This is called for both the node being removed AND all its descendants.
+    ///
+    /// The default implementation calls `drop_layer()` to release GPU resources.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// void detach() {
+    ///   _owner = null;
+    ///   // Dirty flags remain set so they can be re-registered on re-attach
+    /// }
+    /// ```
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// fn detach(&mut self) {
+    ///     // Custom cleanup logic
+    ///     self.cancel_animations();
+    ///
+    ///     // Call default to drop layers
+    ///     self.drop_layer();
+    /// }
+    /// ```
     fn detach(&mut self) {
+        // Default: drop compositing layers to release GPU resources
         self.drop_layer();
     }
 
-    /// Called when the render object should adopt a child.
+    /// Called when the render object adopts a child.
+    ///
+    /// This is called by `RenderTree::add_child()` on the parent when a child is added.
+    /// Use this to perform parent-specific child setup or tracking.
+    ///
+    /// **Note**: Parent data setup is handled separately by `setup_parent_data()`.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// void adoptChild(RenderObject child) {
+    ///   setupParentData(child);
+    ///   markNeedsLayout();
+    ///   markNeedsCompositingBitsUpdate();
+    ///   markNeedsSemanticsUpdate();
+    ///   child._parent = this;
+    ///   if (attached) child.attach(_owner!);
+    ///   redepthChild(child);
+    /// }
+    /// ```
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// fn adopt_child(&mut self, child_id: RenderId) {
+    ///     // Track child in custom data structure
+    ///     self.child_ids.push(child_id);
+    /// }
+    /// ```
     fn adopt_child(&mut self, _child_id: RenderId) {
         // Default: no-op
+        // Override to track children or perform custom child setup
     }
 
-    /// Called when the render object should drop a child.
+    /// Called when the render object drops a child.
+    ///
+    /// This is called by `RenderTree::remove_child()` on the parent when a child is removed.
+    /// Use this to perform parent-specific child cleanup or tracking.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// void dropChild(RenderObject child) {
+    ///   child.parentData!.detach();
+    ///   child.parentData = null;
+    ///   child._parent = null;
+    ///   if (attached) child.detach();
+    ///   markNeedsLayout();
+    ///   markNeedsCompositingBitsUpdate();
+    ///   markNeedsSemanticsUpdate();
+    /// }
+    /// ```
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// fn drop_child(&mut self, child_id: RenderId) {
+    ///     // Remove child from tracking
+    ///     self.child_ids.retain(|&id| id != child_id);
+    /// }
+    /// ```
     fn drop_child(&mut self, _child_id: RenderId) {
         // Default: no-op
+        // Override to untrack children or perform custom child cleanup
     }
 }
 
@@ -489,11 +690,6 @@ mod tests {
         assert!(obj.as_any().downcast_ref::<TestRenderObject>().is_some());
     }
 
-    #[test]
-    fn test_layer_ref() {
-        let layer = LayerRef::new(42u32);
-        assert_eq!(layer.get::<u32>(), Some(&42));
-        assert_eq!(layer.get::<String>(), None);
-        assert!(layer.needs_recomposite());
-    }
+    // Test removed: LayerRef replaced with flui_layer::LayerHandle
 }
+

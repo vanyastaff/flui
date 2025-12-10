@@ -6,7 +6,9 @@
 use slab::Slab;
 
 use flui_foundation::{ElementId, LayerId};
-use flui_types::Offset;
+use flui_types::geometry::{RRect, Rect};
+use flui_types::painting::{Clip, Path};
+use flui_types::{Matrix4, Offset};
 
 use crate::layer::Layer;
 
@@ -387,6 +389,486 @@ impl LayerTree {
         self.get(id).map(|node| node.children())
     }
 
+    /// Clears all children from a parent node.
+    ///
+    /// This is used by Flutter's `pushLayer` when reusing layers - old children
+    /// are removed before adding new content.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // Flutter pattern: reuse layer, clear old children
+    /// if let Some(old_layer) = reusable_layer {
+    ///     tree.clear_children(old_layer_id);
+    /// }
+    /// ```
+    pub fn clear_children(&mut self, parent_id: LayerId) {
+        // First, get the list of children to clear their parent references
+        let children_to_clear: Vec<LayerId> = if let Some(parent) = self.get(parent_id) {
+            parent.children().to_vec()
+        } else {
+            return;
+        };
+
+        // Clear parent's children list
+        if let Some(parent) = self.get_mut(parent_id) {
+            parent.clear_children();
+        }
+
+        // Clear parent reference from each child
+        for child_id in children_to_clear {
+            if let Some(child) = self.get_mut(child_id) {
+                child.set_parent(None);
+            }
+        }
+    }
+
+    // ========== Layer Composition (Flutter PaintingContext Pattern) ==========
+
+    /// Appends a layer as a child of a container layer.
+    ///
+    /// This is the core operation used by Flutter's PaintingContext when composing
+    /// layers during painting. It's typically called in two scenarios:
+    ///
+    /// 1. **After stopRecordingIfNeeded()**: Append the finished PictureLayer
+    /// 2. **In pushLayer()**: Append a container layer before painting into it
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// void _appendLayer(Layer layer) {
+    ///   _containerLayer.append(layer);
+    /// }
+    /// ```
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use flui_layer::{LayerTree, Layer, PictureLayer};
+    ///
+    /// let mut tree = LayerTree::new();
+    ///
+    /// // Create container layer (e.g., OffsetLayer)
+    /// let container = Layer::Offset(OffsetLayer::zero());
+    /// let container_id = tree.insert(container);
+    ///
+    /// // Record some drawing commands
+    /// let mut canvas = Canvas::new();
+    /// canvas.draw_rect(rect, &paint);
+    /// let picture = canvas.finish();
+    ///
+    /// // Create picture layer
+    /// let picture_layer = Layer::Picture(PictureLayer::new(picture));
+    /// let picture_id = tree.insert(picture_layer);
+    ///
+    /// // Append to container (Flutter: _containerLayer.append(layer))
+    /// tree.append_layer(container_id, picture_id);
+    /// ```
+    ///
+    /// # Usage in PaintingContext
+    ///
+    /// ```rust,ignore
+    /// impl PaintingContext {
+    ///     fn stop_recording_if_needed(&mut self) {
+    ///         if let Some(current_layer) = self.current_layer.take() {
+    ///             // Finish recording
+    ///             let picture = self.canvas.finish();
+    ///             let picture_layer = PictureLayer::new(picture);
+    ///             let layer_id = self.layer_tree.insert(Layer::Picture(picture_layer));
+    ///
+    ///             // Append to container (THIS METHOD)
+    ///             self.layer_tree.append_layer(self.container_layer, layer_id);
+    ///         }
+    ///     }
+    ///
+    ///     fn push_layer<F>(&mut self, layer: Layer, painter: F, offset: Offset)
+    ///     where
+    ///         F: FnOnce(&mut PaintingContext, Offset),
+    ///     {
+    ///         self.stop_recording_if_needed();
+    ///
+    ///         // Insert and append container layer (THIS METHOD)
+    ///         let layer_id = self.layer_tree.insert(layer);
+    ///         self.layer_tree.append_layer(self.container_layer, layer_id);
+    ///
+    ///         // Create child context and paint
+    ///         let mut child_context = PaintingContext::new(layer_id, ...);
+    ///         painter(&mut child_context, offset);
+    ///         child_context.stop_recording_if_needed();
+    ///     }
+    /// }
+    /// ```
+    pub fn append_layer(&mut self, container_id: LayerId, child_id: LayerId) {
+        self.add_child(container_id, child_id);
+    }
+
+    /// Appends multiple layers to a container in order.
+    ///
+    /// This is a convenience method for bulk appending, which is common when
+    /// building complex layer hierarchies.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// tree.append_layers(container_id, &[layer1_id, layer2_id, layer3_id]);
+    /// ```
+    pub fn append_layers(&mut self, container_id: LayerId, children: &[LayerId]) {
+        for &child_id in children {
+            self.append_layer(container_id, child_id);
+        }
+    }
+
+    // ========== Clip Layer Helpers (Flutter PaintingContext Pattern) ==========
+
+    /// Pushes a clip rect layer - convenience for Flutter's `pushClipRect` pattern.
+    ///
+    /// This is a convenience method that combines insert + append for clip rect layers.
+    /// It creates a ClipRectLayer, inserts it into the tree, appends it to the container,
+    /// and returns the LayerId for use as a new container.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// void pushClipRect(Rect clipRect, {Clip clipBehavior = Clip.hardEdge}) {
+    ///   stopRecordingIfNeeded();
+    ///   final clipLayer = ClipRectLayer(clipRect: clipRect, clipBehavior: clipBehavior);
+    ///   appendLayer(clipLayer);
+    ///   // clipLayer becomes new container for child painting
+    /// }
+    /// ```
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use flui_layer::{LayerTree, Layer, OffsetLayer};
+    /// use flui_types::{Rect, painting::Clip};
+    ///
+    /// let mut tree = LayerTree::new();
+    /// let root = tree.insert(Layer::Offset(OffsetLayer::zero()));
+    ///
+    /// // Push clip rect and get its ID as new container
+    /// let clip_id = tree.push_clip_rect(
+    ///     root,
+    ///     Rect::from_ltrb(0.0, 0.0, 100.0, 100.0),
+    ///     Clip::AntiAlias,
+    /// );
+    ///
+    /// // Now paint into clip_id as the container
+    /// // (children will be clipped to the rect)
+    /// ```
+    ///
+    /// # Usage in PaintingContext
+    ///
+    /// ```rust,ignore
+    /// impl PaintingContext {
+    ///     pub fn push_clip_rect<F>(&mut self, clip_rect: Rect, clip_behavior: Clip, painter: F)
+    ///     where
+    ///         F: FnOnce(&mut PaintingContext, Offset),
+    ///     {
+    ///         self.stop_recording_if_needed();
+    ///
+    ///         // One-liner to push clip layer (THIS METHOD)
+    ///         let clip_layer_id = self.layer_tree.push_clip_rect(
+    ///             self.container_layer,
+    ///             clip_rect,
+    ///             clip_behavior,
+    ///         );
+    ///
+    ///         // Create child context with clip layer as container
+    ///         let mut child_context = PaintingContext::new(clip_layer_id, ...);
+    ///         painter(&mut child_context, Offset::ZERO);
+    ///         child_context.stop_recording_if_needed();
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// # Returns
+    ///
+    /// The LayerId of the newly created clip layer, which can be used as a container
+    /// for painting clipped content.
+    pub fn push_clip_rect(
+        &mut self,
+        container_id: LayerId,
+        clip_rect: Rect,
+        clip_behavior: Clip,
+    ) -> LayerId {
+        use crate::layer::ClipRectLayer;
+
+        let layer = Layer::ClipRect(ClipRectLayer::new(clip_rect, clip_behavior));
+        let layer_id = self.insert(layer);
+        self.append_layer(container_id, layer_id);
+        layer_id
+    }
+
+    /// Pushes a clip rounded rect layer - convenience for Flutter's `pushClipRRect` pattern.
+    ///
+    /// This is a convenience method that combines insert + append for clip rounded rect layers.
+    /// It creates a ClipRRectLayer, inserts it into the tree, appends it to the container,
+    /// and returns the LayerId for use as a new container.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// void pushClipRRect(RRect clipRRect, {Clip clipBehavior = Clip.antiAlias}) {
+    ///   stopRecordingIfNeeded();
+    ///   final clipLayer = ClipRRectLayer(clipRRect: clipRRect, clipBehavior: clipBehavior);
+    ///   appendLayer(clipLayer);
+    /// }
+    /// ```
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use flui_layer::{LayerTree, Layer, OffsetLayer};
+    /// use flui_types::{Rect, RRect, painting::Clip};
+    ///
+    /// let mut tree = LayerTree::new();
+    /// let root = tree.insert(Layer::Offset(OffsetLayer::zero()));
+    ///
+    /// // Create rounded rect with 10px corner radius
+    /// let rrect = RRect::from_rect_circular(
+    ///     Rect::from_ltrb(0.0, 0.0, 100.0, 100.0),
+    ///     10.0,
+    /// );
+    ///
+    /// // Push clip rrect and get its ID as new container
+    /// let clip_id = tree.push_clip_rrect(root, rrect, Clip::AntiAlias);
+    ///
+    /// // Paint into clip_id (children will have rounded corners)
+    /// ```
+    ///
+    /// # Returns
+    ///
+    /// The LayerId of the newly created clip layer, which can be used as a container
+    /// for painting clipped content with rounded corners.
+    pub fn push_clip_rrect(
+        &mut self,
+        container_id: LayerId,
+        clip_rrect: RRect,
+        clip_behavior: Clip,
+    ) -> LayerId {
+        use crate::layer::ClipRRectLayer;
+
+        let layer = Layer::ClipRRect(ClipRRectLayer::new(clip_rrect, clip_behavior));
+        let layer_id = self.insert(layer);
+        self.append_layer(container_id, layer_id);
+        layer_id
+    }
+
+    /// Pushes a clip path layer - convenience for Flutter's `pushClipPath` pattern.
+    ///
+    /// This is a convenience method that combines insert + append for clip path layers.
+    /// It creates a ClipPathLayer, inserts it into the tree, appends it to the container,
+    /// and returns the LayerId for use as a new container.
+    ///
+    /// # Performance
+    ///
+    /// Path clipping is more expensive than rect or rounded rect clipping.
+    /// Use `push_clip_rect()` or `push_clip_rrect()` when possible.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// void pushClipPath(Path clipPath, {Clip clipBehavior = Clip.antiAlias}) {
+    ///   stopRecordingIfNeeded();
+    ///   final clipLayer = ClipPathLayer(clipPath: clipPath, clipBehavior: clipBehavior);
+    ///   appendLayer(clipLayer);
+    /// }
+    /// ```
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use flui_layer::{LayerTree, Layer, OffsetLayer};
+    /// use flui_types::{Point, painting::{Path, Clip}};
+    ///
+    /// let mut tree = LayerTree::new();
+    /// let root = tree.insert(Layer::Offset(OffsetLayer::zero()));
+    ///
+    /// // Create a circular clip path
+    /// let path = Path::circle(Point::new(50.0, 50.0), 50.0);
+    ///
+    /// // Push clip path and get its ID as new container
+    /// let clip_id = tree.push_clip_path(root, path, Clip::AntiAlias);
+    ///
+    /// // Paint into clip_id (children will be clipped to circle)
+    /// ```
+    ///
+    /// # Returns
+    ///
+    /// The LayerId of the newly created clip layer, which can be used as a container
+    /// for painting clipped content with an arbitrary shape.
+    pub fn push_clip_path(
+        &mut self,
+        container_id: LayerId,
+        clip_path: Path,
+        clip_behavior: Clip,
+    ) -> LayerId {
+        use crate::layer::ClipPathLayer;
+
+        let layer = Layer::ClipPath(ClipPathLayer::new(clip_path, clip_behavior));
+        let layer_id = self.insert(layer);
+        self.append_layer(container_id, layer_id);
+        layer_id
+    }
+
+    // ========== Transform & Opacity Helpers (Flutter PaintingContext Pattern) ==========
+
+    /// Pushes a transform layer - convenience for Flutter's `pushTransform` pattern.
+    ///
+    /// This is a convenience method that combines insert + append for transform layers.
+    /// It creates a TransformLayer, inserts it into the tree, appends it to the container,
+    /// and returns the LayerId for use as a new container.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// void pushTransform(Matrix4 transform, {bool needsCompositing = false}) {
+    ///   stopRecordingIfNeeded();
+    ///   final transformLayer = TransformLayer(transform: transform);
+    ///   appendLayer(transformLayer);
+    /// }
+    /// ```
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use flui_layer::{LayerTree, Layer, OffsetLayer};
+    /// use flui_types::Matrix4;
+    /// use std::f32::consts::PI;
+    ///
+    /// let mut tree = LayerTree::new();
+    /// let root = tree.insert(Layer::Offset(OffsetLayer::zero()));
+    ///
+    /// // Push rotation transform
+    /// let matrix = Matrix4::rotation_z(PI / 4.0);
+    /// let transform_id = tree.push_transform(root, matrix);
+    ///
+    /// // Paint into transform_id (children will be rotated)
+    /// ```
+    ///
+    /// # Usage in PaintingContext
+    ///
+    /// ```rust,ignore
+    /// impl PaintingContext {
+    ///     pub fn push_transform<F>(&mut self, transform: Matrix4, painter: F)
+    ///     where
+    ///         F: FnOnce(&mut PaintingContext, Offset),
+    ///     {
+    ///         self.stop_recording_if_needed();
+    ///
+    ///         // One-liner to push transform layer (THIS METHOD)
+    ///         let transform_layer_id = self.layer_tree.push_transform(
+    ///             self.container_layer,
+    ///             transform,
+    ///         );
+    ///
+    ///         // Create child context with transform layer as container
+    ///         let mut child_context = PaintingContext::new(transform_layer_id, ...);
+    ///         painter(&mut child_context, Offset::ZERO);
+    ///         child_context.stop_recording_if_needed();
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// # Performance
+    ///
+    /// TransformLayer is more expensive than OffsetLayer. Use OffsetLayer for simple
+    /// translations when rotation, scaling, or other transformations are not needed.
+    ///
+    /// # Returns
+    ///
+    /// The LayerId of the newly created transform layer, which can be used as a container
+    /// for painting transformed content.
+    pub fn push_transform(&mut self, container_id: LayerId, transform: Matrix4) -> LayerId {
+        use crate::layer::TransformLayer;
+
+        let layer = Layer::Transform(TransformLayer::new(transform));
+        let layer_id = self.insert(layer);
+        self.append_layer(container_id, layer_id);
+        layer_id
+    }
+
+    /// Pushes an opacity layer - convenience for Flutter's `pushOpacity` pattern.
+    ///
+    /// This is a convenience method that combines insert + append for opacity layers.
+    /// It creates an OpacityLayer, inserts it into the tree, appends it to the container,
+    /// and returns the LayerId for use as a new container.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// void pushOpacity(int alpha, {Offset offset = Offset.zero}) {
+    ///   stopRecordingIfNeeded();
+    ///   final opacityLayer = OpacityLayer(alpha: alpha, offset: offset);
+    ///   appendLayer(opacityLayer);
+    /// }
+    /// ```
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use flui_layer::{LayerTree, Layer, OffsetLayer};
+    /// use flui_types::Offset;
+    ///
+    /// let mut tree = LayerTree::new();
+    /// let root = tree.insert(Layer::Offset(OffsetLayer::zero()));
+    ///
+    /// // Push 50% opacity layer
+    /// let opacity_id = tree.push_opacity(root, 0.5, Offset::ZERO);
+    ///
+    /// // Paint into opacity_id (children will be semi-transparent)
+    /// ```
+    ///
+    /// # Usage in PaintingContext
+    ///
+    /// ```rust,ignore
+    /// impl PaintingContext {
+    ///     pub fn push_opacity<F>(&mut self, alpha: f32, offset: Offset, painter: F)
+    ///     where
+    ///         F: FnOnce(&mut PaintingContext, Offset),
+    ///     {
+    ///         self.stop_recording_if_needed();
+    ///
+    ///         // One-liner to push opacity layer (THIS METHOD)
+    ///         let opacity_layer_id = self.layer_tree.push_opacity(
+    ///             self.container_layer,
+    ///             alpha,
+    ///             offset,
+    ///         );
+    ///
+    ///         // Create child context with opacity layer as container
+    ///         let mut child_context = PaintingContext::new(opacity_layer_id, ...);
+    ///         painter(&mut child_context, Offset::ZERO);
+    ///         child_context.stop_recording_if_needed();
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// # Performance
+    ///
+    /// Opacity layers require offscreen rendering, which has a performance cost.
+    /// For static opacity, consider using `Color.withOpacity()` directly on
+    /// paint operations when possible.
+    ///
+    /// # Optimization
+    ///
+    /// - If `alpha == 0.0`, children can be skipped entirely (fully transparent)
+    /// - If `alpha == 1.0`, the layer is a no-op and can be skipped (fully opaque)
+    ///
+    /// # Returns
+    ///
+    /// The LayerId of the newly created opacity layer, which can be used as a container
+    /// for painting content with transparency.
+    pub fn push_opacity(&mut self, container_id: LayerId, alpha: f32, offset: Offset) -> LayerId {
+        use crate::layer::OpacityLayer;
+
+        let layer = Layer::Opacity(OpacityLayer::with_offset(alpha, offset));
+        let layer_id = self.insert(layer);
+        self.append_layer(container_id, layer_id);
+        layer_id
+    }
+
     // ========== Iteration ==========
 
     /// Returns an iterator over all LayerIds in the tree.
@@ -588,5 +1070,540 @@ mod tests {
 
         node.set_needs_compositing(false);
         assert!(!node.needs_compositing());
+    }
+
+    // ========== Layer Composition Tests ==========
+
+    #[test]
+    fn test_clear_children() {
+        let mut tree = LayerTree::new();
+
+        // Create parent with multiple children
+        let parent_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+        let child1_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+        let child2_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+        let child3_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+
+        tree.add_child(parent_id, child1_id);
+        tree.add_child(parent_id, child2_id);
+        tree.add_child(parent_id, child3_id);
+
+        // Verify children were added
+        assert_eq!(tree.children(parent_id).unwrap().len(), 3);
+
+        // Clear all children
+        tree.clear_children(parent_id);
+
+        // Verify children were cleared
+        assert_eq!(tree.children(parent_id).unwrap().len(), 0);
+
+        // Verify children still exist in tree (not removed, just unlinked)
+        assert!(tree.contains(child1_id));
+        assert!(tree.contains(child2_id));
+        assert!(tree.contains(child3_id));
+
+        // Verify children no longer have parent reference
+        assert!(tree.parent(child1_id).is_none());
+        assert!(tree.parent(child2_id).is_none());
+        assert!(tree.parent(child3_id).is_none());
+    }
+
+    #[test]
+    fn test_append_layer() {
+        let mut tree = LayerTree::new();
+
+        // Create container layer
+        let container_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+
+        // Create picture layer
+        let picture_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+
+        // Append to container (Flutter PaintingContext pattern)
+        tree.append_layer(container_id, picture_id);
+
+        // Verify layer was appended
+        let children = tree.children(container_id).unwrap();
+        assert_eq!(children.len(), 1);
+        assert_eq!(children[0], picture_id);
+
+        // Verify parent-child relationship
+        assert_eq!(tree.parent(picture_id), Some(container_id));
+    }
+
+    #[test]
+    fn test_append_layer_multiple_times() {
+        let mut tree = LayerTree::new();
+
+        let container_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+        let layer1_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+        let layer2_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+        let layer3_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+
+        // Append layers one by one
+        tree.append_layer(container_id, layer1_id);
+        tree.append_layer(container_id, layer2_id);
+        tree.append_layer(container_id, layer3_id);
+
+        // Verify all layers were appended in order
+        let children = tree.children(container_id).unwrap();
+        assert_eq!(children.len(), 3);
+        assert_eq!(children[0], layer1_id);
+        assert_eq!(children[1], layer2_id);
+        assert_eq!(children[2], layer3_id);
+    }
+
+    #[test]
+    fn test_append_layers_bulk() {
+        let mut tree = LayerTree::new();
+
+        let container_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+        let layer1_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+        let layer2_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+        let layer3_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+
+        // Append multiple layers at once
+        tree.append_layers(container_id, &[layer1_id, layer2_id, layer3_id]);
+
+        // Verify all layers were appended in order
+        let children = tree.children(container_id).unwrap();
+        assert_eq!(children.len(), 3);
+        assert_eq!(children[0], layer1_id);
+        assert_eq!(children[1], layer2_id);
+        assert_eq!(children[2], layer3_id);
+    }
+
+    #[test]
+    fn test_append_layers_empty() {
+        let mut tree = LayerTree::new();
+
+        let container_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+
+        // Append empty slice - should be no-op
+        tree.append_layers(container_id, &[]);
+
+        // Verify no children were added
+        let children = tree.children(container_id).unwrap();
+        assert_eq!(children.len(), 0);
+    }
+
+    #[test]
+    fn test_layer_composition_integration() {
+        // Simulate PaintingContext workflow:
+        // 1. Create container layer (e.g., OffsetLayer)
+        // 2. Record and append picture layers
+        // 3. Clear and rebuild
+
+        let mut tree = LayerTree::new();
+
+        // Step 1: Create container
+        let container_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+
+        // Step 2: Append some picture layers
+        let picture1_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+        let picture2_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+        tree.append_layers(container_id, &[picture1_id, picture2_id]);
+
+        assert_eq!(tree.children(container_id).unwrap().len(), 2);
+
+        // Step 3: Clear and rebuild (simulating repaint)
+        tree.clear_children(container_id);
+        assert_eq!(tree.children(container_id).unwrap().len(), 0);
+
+        // Append new layers
+        let new_picture1_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+        let new_picture2_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+        let new_picture3_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+        tree.append_layers(container_id, &[new_picture1_id, new_picture2_id, new_picture3_id]);
+
+        // Verify new structure
+        let children = tree.children(container_id).unwrap();
+        assert_eq!(children.len(), 3);
+        assert_eq!(children[0], new_picture1_id);
+        assert_eq!(children[1], new_picture2_id);
+        assert_eq!(children[2], new_picture3_id);
+
+        // Old picture layers should still exist (just unlinked)
+        assert!(tree.contains(picture1_id));
+        assert!(tree.contains(picture2_id));
+    }
+
+    // ========== Clip Layer Helper Tests ==========
+
+    #[test]
+    fn test_push_clip_rect() {
+        use crate::layer::OffsetLayer;
+        use flui_types::geometry::Rect;
+        use flui_types::painting::Clip;
+
+        let mut tree = LayerTree::new();
+
+        // Create root container
+        let root = tree.insert(Layer::Offset(OffsetLayer::zero()));
+
+        // Push clip rect and get its ID
+        let clip_id = tree.push_clip_rect(
+            root,
+            Rect::from_ltrb(0.0, 0.0, 100.0, 100.0),
+            Clip::AntiAlias,
+        );
+
+        // Verify clip layer was created
+        assert!(tree.contains(clip_id));
+
+        // Verify it's a ClipRect layer
+        let layer = tree.get_layer(clip_id).unwrap();
+        assert!(layer.is_clip_rect());
+
+        // Verify it was appended to root
+        let children = tree.children(root).unwrap();
+        assert_eq!(children.len(), 1);
+        assert_eq!(children[0], clip_id);
+
+        // Verify parent-child relationship
+        assert_eq!(tree.parent(clip_id), Some(root));
+
+        // Verify clip properties
+        if let Layer::ClipRect(clip_layer) = layer {
+            assert_eq!(clip_layer.clip_rect(), Rect::from_ltrb(0.0, 0.0, 100.0, 100.0));
+            assert_eq!(clip_layer.clip_behavior(), Clip::AntiAlias);
+        }
+    }
+
+    #[test]
+    fn test_push_clip_rrect() {
+        use crate::layer::OffsetLayer;
+        use flui_types::geometry::{RRect, Rect};
+        use flui_types::painting::Clip;
+
+        let mut tree = LayerTree::new();
+
+        // Create root container
+        let root = tree.insert(Layer::Offset(OffsetLayer::zero()));
+
+        // Create rounded rect with 10px corner radius
+        let rrect = RRect::from_rect_circular(Rect::from_ltrb(0.0, 0.0, 100.0, 100.0), 10.0);
+
+        // Push clip rrect and get its ID
+        let clip_id = tree.push_clip_rrect(root, rrect, Clip::AntiAlias);
+
+        // Verify clip layer was created
+        assert!(tree.contains(clip_id));
+
+        // Verify it's a ClipRRect layer
+        let layer = tree.get_layer(clip_id).unwrap();
+        assert!(layer.is_clip_rrect());
+
+        // Verify it was appended to root
+        let children = tree.children(root).unwrap();
+        assert_eq!(children.len(), 1);
+        assert_eq!(children[0], clip_id);
+
+        // Verify parent-child relationship
+        assert_eq!(tree.parent(clip_id), Some(root));
+
+        // Verify clip properties
+        if let Layer::ClipRRect(clip_layer) = layer {
+            assert_eq!(clip_layer.clip_rrect().width(), 100.0);
+            assert_eq!(clip_layer.clip_behavior(), Clip::AntiAlias);
+        }
+    }
+
+    #[test]
+    fn test_push_clip_path() {
+        use crate::layer::OffsetLayer;
+        use flui_types::geometry::Point;
+        use flui_types::painting::{Clip, Path};
+
+        let mut tree = LayerTree::new();
+
+        // Create root container
+        let root = tree.insert(Layer::Offset(OffsetLayer::zero()));
+
+        // Create a circular clip path
+        let path = Path::circle(Point::new(50.0, 50.0), 50.0);
+
+        // Push clip path and get its ID
+        let clip_id = tree.push_clip_path(root, path, Clip::AntiAlias);
+
+        // Verify clip layer was created
+        assert!(tree.contains(clip_id));
+
+        // Verify it's a ClipPath layer
+        let layer = tree.get_layer(clip_id).unwrap();
+        assert!(layer.is_clip_path());
+
+        // Verify it was appended to root
+        let children = tree.children(root).unwrap();
+        assert_eq!(children.len(), 1);
+        assert_eq!(children[0], clip_id);
+
+        // Verify parent-child relationship
+        assert_eq!(tree.parent(clip_id), Some(root));
+
+        // Verify clip properties
+        if let Layer::ClipPath(clip_layer) = layer {
+            assert_eq!(clip_layer.clip_behavior(), Clip::AntiAlias);
+        }
+    }
+
+    #[test]
+    fn test_clip_layers_as_containers() {
+        // Test that clip layers can act as containers for child layers
+        use crate::layer::{CanvasLayer, OffsetLayer};
+        use flui_types::geometry::Rect;
+        use flui_types::painting::Clip;
+
+        let mut tree = LayerTree::new();
+
+        // Create root
+        let root = tree.insert(Layer::Offset(OffsetLayer::zero()));
+
+        // Push clip rect
+        let clip_id = tree.push_clip_rect(
+            root,
+            Rect::from_ltrb(0.0, 0.0, 100.0, 100.0),
+            Clip::AntiAlias,
+        );
+
+        // Add children to the clip layer (simulating painting into clip)
+        let child1 = tree.insert(Layer::Canvas(CanvasLayer::new()));
+        let child2 = tree.insert(Layer::Canvas(CanvasLayer::new()));
+        tree.append_layers(clip_id, &[child1, child2]);
+
+        // Verify clip layer has children
+        let children = tree.children(clip_id).unwrap();
+        assert_eq!(children.len(), 2);
+        assert_eq!(children[0], child1);
+        assert_eq!(children[1], child2);
+
+        // Verify parent-child relationships
+        assert_eq!(tree.parent(child1), Some(clip_id));
+        assert_eq!(tree.parent(child2), Some(clip_id));
+    }
+
+    #[test]
+    fn test_nested_clip_layers() {
+        // Test Flutter's pattern of nested clip layers
+        use crate::layer::OffsetLayer;
+        use flui_types::geometry::{RRect, Rect};
+        use flui_types::painting::Clip;
+
+        let mut tree = LayerTree::new();
+
+        // Create root
+        let root = tree.insert(Layer::Offset(OffsetLayer::zero()));
+
+        // Push first clip rect (outer clip)
+        let outer_clip = tree.push_clip_rect(
+            root,
+            Rect::from_ltrb(0.0, 0.0, 200.0, 200.0),
+            Clip::HardEdge,
+        );
+
+        // Push second clip rrect inside first clip (inner clip)
+        let rrect = RRect::from_rect_circular(Rect::from_ltrb(10.0, 10.0, 190.0, 190.0), 20.0);
+        let inner_clip = tree.push_clip_rrect(outer_clip, rrect, Clip::AntiAlias);
+
+        // Verify hierarchy: root -> outer_clip -> inner_clip
+        assert_eq!(tree.parent(outer_clip), Some(root));
+        assert_eq!(tree.parent(inner_clip), Some(outer_clip));
+
+        // Verify outer clip has inner clip as child
+        let outer_children = tree.children(outer_clip).unwrap();
+        assert_eq!(outer_children.len(), 1);
+        assert_eq!(outer_children[0], inner_clip);
+
+        // Verify root has outer clip as child
+        let root_children = tree.children(root).unwrap();
+        assert_eq!(root_children.len(), 1);
+        assert_eq!(root_children[0], outer_clip);
+    }
+
+    // ========== Transform & Opacity Helper Tests ==========
+
+    #[test]
+    fn test_push_transform() {
+        use crate::layer::OffsetLayer;
+        use flui_types::Matrix4;
+        use std::f32::consts::PI;
+
+        let mut tree = LayerTree::new();
+
+        // Create root container
+        let root = tree.insert(Layer::Offset(OffsetLayer::zero()));
+
+        // Push rotation transform
+        let matrix = Matrix4::rotation_z(PI / 4.0);
+        let transform_id = tree.push_transform(root, matrix);
+
+        // Verify transform layer was created
+        assert!(tree.contains(transform_id));
+
+        // Verify it's a Transform layer
+        let layer = tree.get_layer(transform_id).unwrap();
+        assert!(layer.is_transform());
+
+        // Verify it was appended to root
+        let children = tree.children(root).unwrap();
+        assert_eq!(children.len(), 1);
+        assert_eq!(children[0], transform_id);
+
+        // Verify parent-child relationship
+        assert_eq!(tree.parent(transform_id), Some(root));
+
+        // Verify transform properties
+        if let Layer::Transform(transform_layer) = layer {
+            assert_eq!(transform_layer.transform(), &matrix);
+        }
+    }
+
+    #[test]
+    fn test_push_opacity() {
+        use crate::layer::OffsetLayer;
+        use flui_types::Offset;
+
+        let mut tree = LayerTree::new();
+
+        // Create root container
+        let root = tree.insert(Layer::Offset(OffsetLayer::zero()));
+
+        // Push 50% opacity layer
+        let opacity_id = tree.push_opacity(root, 0.5, Offset::ZERO);
+
+        // Verify opacity layer was created
+        assert!(tree.contains(opacity_id));
+
+        // Verify it's an Opacity layer
+        let layer = tree.get_layer(opacity_id).unwrap();
+        assert!(layer.is_opacity());
+
+        // Verify it was appended to root
+        let children = tree.children(root).unwrap();
+        assert_eq!(children.len(), 1);
+        assert_eq!(children[0], opacity_id);
+
+        // Verify parent-child relationship
+        assert_eq!(tree.parent(opacity_id), Some(root));
+
+        // Verify opacity properties
+        if let Layer::Opacity(opacity_layer) = layer {
+            assert_eq!(opacity_layer.alpha(), 0.5);
+            assert_eq!(opacity_layer.offset(), Offset::ZERO);
+        }
+    }
+
+    #[test]
+    fn test_push_transform_translation() {
+        use crate::layer::OffsetLayer;
+        use flui_types::Matrix4;
+
+        let mut tree = LayerTree::new();
+        let root = tree.insert(Layer::Offset(OffsetLayer::zero()));
+
+        // Push translation transform
+        let matrix = Matrix4::translation(100.0, 50.0, 0.0);
+        let transform_id = tree.push_transform(root, matrix);
+
+        // Verify it's a Transform layer
+        let layer = tree.get_layer(transform_id).unwrap();
+        assert!(layer.is_transform());
+    }
+
+    #[test]
+    fn test_push_opacity_with_offset() {
+        use crate::layer::OffsetLayer;
+        use flui_types::Offset;
+
+        let mut tree = LayerTree::new();
+        let root = tree.insert(Layer::Offset(OffsetLayer::zero()));
+
+        // Push opacity layer with offset
+        let offset = Offset::new(10.0, 20.0);
+        let opacity_id = tree.push_opacity(root, 0.75, offset);
+
+        // Verify opacity properties
+        if let Layer::Opacity(opacity_layer) = tree.get_layer(opacity_id).unwrap() {
+            assert_eq!(opacity_layer.alpha(), 0.75);
+            assert_eq!(opacity_layer.offset(), offset);
+        }
+    }
+
+    #[test]
+    fn test_transform_opacity_as_containers() {
+        // Test that transform and opacity layers can act as containers
+        use crate::layer::{CanvasLayer, OffsetLayer};
+        use flui_types::{Matrix4, Offset};
+
+        let mut tree = LayerTree::new();
+
+        // Create root
+        let root = tree.insert(Layer::Offset(OffsetLayer::zero()));
+
+        // Push transform
+        let transform_id = tree.push_transform(root, Matrix4::identity());
+
+        // Push opacity inside transform
+        let opacity_id = tree.push_opacity(transform_id, 0.5, Offset::ZERO);
+
+        // Add children to the opacity layer (simulating painting)
+        let child1 = tree.insert(Layer::Canvas(CanvasLayer::new()));
+        let child2 = tree.insert(Layer::Canvas(CanvasLayer::new()));
+        tree.append_layers(opacity_id, &[child1, child2]);
+
+        // Verify hierarchy: root -> transform -> opacity -> children
+        assert_eq!(tree.parent(transform_id), Some(root));
+        assert_eq!(tree.parent(opacity_id), Some(transform_id));
+        assert_eq!(tree.parent(child1), Some(opacity_id));
+        assert_eq!(tree.parent(child2), Some(opacity_id));
+
+        // Verify opacity layer has children
+        let children = tree.children(opacity_id).unwrap();
+        assert_eq!(children.len(), 2);
+        assert_eq!(children[0], child1);
+        assert_eq!(children[1], child2);
+    }
+
+    #[test]
+    fn test_complex_layer_hierarchy() {
+        // Test Flutter's pattern: root -> transform -> clip -> opacity -> content
+        use crate::layer::{CanvasLayer, OffsetLayer};
+        use flui_types::geometry::Rect;
+        use flui_types::painting::Clip;
+        use flui_types::{Matrix4, Offset};
+        use std::f32::consts::PI;
+
+        let mut tree = LayerTree::new();
+
+        // Create root
+        let root = tree.insert(Layer::Offset(OffsetLayer::zero()));
+
+        // Push transform (rotation)
+        let transform_id = tree.push_transform(root, Matrix4::rotation_z(PI / 4.0));
+
+        // Push clip rect inside transform
+        let clip_id = tree.push_clip_rect(
+            transform_id,
+            Rect::from_ltrb(0.0, 0.0, 100.0, 100.0),
+            Clip::AntiAlias,
+        );
+
+        // Push opacity inside clip
+        let opacity_id = tree.push_opacity(clip_id, 0.75, Offset::ZERO);
+
+        // Add content
+        let content = tree.insert(Layer::Canvas(CanvasLayer::new()));
+        tree.append_layer(opacity_id, content);
+
+        // Verify full hierarchy
+        assert_eq!(tree.parent(transform_id), Some(root));
+        assert_eq!(tree.parent(clip_id), Some(transform_id));
+        assert_eq!(tree.parent(opacity_id), Some(clip_id));
+        assert_eq!(tree.parent(content), Some(opacity_id));
+
+        // Verify each layer has exactly one child
+        assert_eq!(tree.children(root).unwrap().len(), 1);
+        assert_eq!(tree.children(transform_id).unwrap().len(), 1);
+        assert_eq!(tree.children(clip_id).unwrap().len(), 1);
+        assert_eq!(tree.children(opacity_id).unwrap().len(), 1);
     }
 }

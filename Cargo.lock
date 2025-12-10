@@ -1463,6 +1463,7 @@ dependencies = [
  "criterion",
  "downcast-rs 2.0.2",
  "flui-foundation",
+ "flui-layer",
  "flui-tree",
  "flui_interaction",
  "flui_painting",

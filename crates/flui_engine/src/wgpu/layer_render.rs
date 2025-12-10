@@ -8,7 +8,7 @@ use super::commands::CommandRenderer;
 use flui_layer::{
     BackdropFilterLayer, CanvasLayer, ClipPathLayer, ClipRRectLayer, ClipRectLayer,
     ColorFilterLayer, FollowerLayer, ImageFilterLayer, Layer, LeaderLayer, OffsetLayer,
-    OpacityLayer, PlatformViewLayer, ShaderMaskLayer, TextureLayer, TransformLayer,
+    OpacityLayer, PictureLayer, PlatformViewLayer, ShaderMaskLayer, TextureLayer, TransformLayer,
 };
 use flui_painting::DisplayListCore;
 
@@ -43,6 +43,7 @@ impl<R: CommandRenderer + ?Sized> LayerRender<R> for Layer {
         match self {
             // Leaf layers
             Layer::Canvas(layer) => layer.render(renderer),
+            Layer::Picture(layer) => layer.render(renderer),
 
             // Clip layers
             Layer::ClipRect(layer) => layer.render(renderer),
@@ -83,6 +84,12 @@ impl<R: CommandRenderer + ?Sized> LayerRender<R> for Layer {
 impl<R: CommandRenderer + ?Sized> LayerRender<R> for CanvasLayer {
     fn render(&self, renderer: &mut R) {
         dispatch_commands(self.display_list().commands(), renderer);
+    }
+}
+
+impl<R: CommandRenderer + ?Sized> LayerRender<R> for PictureLayer {
+    fn render(&self, renderer: &mut R) {
+        dispatch_commands(self.picture().commands(), renderer);
     }
 }
 

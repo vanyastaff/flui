@@ -182,7 +182,7 @@ impl RenderBox<Single> for RenderIgnorePointer {
         let child_id = ctx.single_child();
 
         // Proxy behavior: pass constraints unchanged to child
-        Ok(ctx.layout_child(child_id, ctx.constraints)?)
+        Ok(ctx.layout_child(child_id, ctx.constraints, true)?)
     }
 
     fn paint(&self, ctx: &mut BoxPaintCtx<'_, Single>) {
