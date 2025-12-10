@@ -20,6 +20,9 @@ This folder contains detailed documentation of Flutter's rendering architecture,
 | [12_PARENT_DATA.md](12_PARENT_DATA.md) | Parent Data | Parent-child data communication pattern |
 | [13_LIFECYCLE.md](13_LIFECYCLE.md) | Lifecycle | RenderObject lifecycle states and transitions |
 | [14_ANIMATION_SUPPORT.md](14_ANIMATION_SUPPORT.md) | Animation Support | How RenderObject supports animations |
+| [15_RENDERBOX_PROTOCOL.md](15_RENDERBOX_PROTOCOL.md) | RenderBox Protocol | BoxConstraints, Size, layout algorithm |
+| [16_RENDERSLIVER_PROTOCOL.md](16_RENDERSLIVER_PROTOCOL.md) | RenderSliver Protocol | SliverConstraints, SliverGeometry |
+| [17_CHILD_MIXINS.md](17_CHILD_MIXINS.md) | Child Mixins | SingleChild, Container, Proxy, Shifted patterns |
 
 
 ## Architecture Summary
@@ -74,6 +77,31 @@ This folder contains detailed documentation of Flutter's rendering architecture,
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
+## Protocol Hierarchy
+
+```
+RenderObject (abstract base)
+    │
+    ├── RenderBox (2D box protocol)
+    │   │
+    │   │   BoxConstraints → Size
+    │   │
+    │   ├── Patterns (architectural building blocks):
+    │   │   ├── RenderProxyBox  - delegates to child
+    │   │   └── RenderShiftedBox - positions child at offset
+    │   │
+    │   └── Child Mixins:
+    │       ├── RenderObjectWithChildMixin<T>  - single child
+    │       └── ContainerRenderObjectMixin<T,P> - linked list
+    │
+    └── RenderSliver (scrolling protocol)
+        │
+        │   SliverConstraints → SliverGeometry
+        │
+        └── Patterns:
+            └── RenderProxySliver - delegates to child sliver
+```
+
 ## Key Patterns for FLUI Implementation
 
 ### 1. Dirty Flag Pattern
@@ -95,6 +123,10 @@ This folder contains detailed documentation of Flutter's rendering architecture,
 - Layout: Constraints down, sizes up
 - Paint: Recording commands into layers
 - Semantics: Building accessibility tree
+
+### 5. Proxy/Shifted Patterns
+- **Proxy**: Delegate all behavior to child (for effects)
+- **Shifted**: Position child at non-zero offset (for layout)
 
 ## Rust Considerations
 
@@ -132,14 +164,17 @@ pub trait ParentDataFor<Parent>: ParentData {
 
 All documentation is based on analysis of:
 - `flutter/packages/flutter/lib/src/rendering/object.dart`
+- `flutter/packages/flutter/lib/src/rendering/box.dart`
+- `flutter/packages/flutter/lib/src/rendering/sliver.dart`
 - Flutter Framework source code (2024 version)
 
 ## Related FLUI Components
 
 | Flutter | FLUI |
 |---------|------|
-| `RenderObject` | `flui_rendering::core::RenderObject` |
-| `PipelineOwner` | `flui-pipeline::PipelineOwner` |
-| `Constraints` | `flui_rendering::core::Constraints` |
+| `RenderObject` | `flui_rendering::RenderObject` |
+| `RenderBox` | `flui_rendering::RenderBox` |
+| `RenderSliver` | `flui_rendering::RenderSliver` |
+| `PipelineOwner` | `flui_rendering::PipelineOwner` |
+| `Constraints` | `flui_rendering::Constraints` |
 | `PaintingContext` | `flui_painting::PaintingContext` |
-| `SemanticsNode` | `flui_rendering::semantics::SemanticsNode` |
