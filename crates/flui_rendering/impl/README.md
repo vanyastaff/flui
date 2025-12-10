@@ -15,6 +15,7 @@ This folder contains detailed documentation of Flutter's rendering architecture,
 | [07_SEMANTICS.md](07_SEMANTICS.md) | Semantics | Accessibility tree and configuration |
 | [08_SLIVER.md](08_SLIVER.md) | Sliver Protocol | Scrollable content and viewport slivers |
 | [09_RUST_TYPESTATE.md](09_RUST_TYPESTATE.md) | **Rust Typestate** | **FLUI's typestate implementation with compile-time safety** |
+| [10_GAP_ANALYSIS.md](10_GAP_ANALYSIS.md) | **Gap Analysis** | **Comparison of FLUI vs Flutter implementation with roadmap** |
 
 
 ## Architecture Summary
