@@ -9,7 +9,7 @@
 //! ViewHandle<Unmounted>           ViewHandle<Mounted>
 //! ├─ ViewConfig (immutable)       ├─ ViewConfig (preserved)
 //! └─ PhantomData<Unmounted>       ├─ ViewObject (live state)
-//!                                 ├─ TreeInfo (tree position)
+//!                                 ├─ depth, parent (tree position)
 //!                                 └─ PhantomData<Mounted>
 //! ```
 //!
@@ -17,24 +17,19 @@
 //!
 //! ```rust,ignore
 //! use flui_view::prelude::*;
-//! use flui_tree::{Mountable, Unmountable, NavigableHandle};
 //!
 //! // Create unmounted view handle
 //! let unmounted = ViewHandle::new(Padding::all(16.0));
 //!
 //! // Mount it into tree
-//! let mut mounted = unmounted.mount(None);
-//!
-//! // NavigableHandle methods available automatically
-//! assert!(mounted.is_root());
-//! mounted.add_child(child_id);
+//! let mut mounted = unmounted.mount_as_root();
 //!
 //! // Access view object
 //! let view_obj = mounted.view_object();
 //!
 //! // Hot-reload: unmount preserves config
 //! let unmounted = mounted.unmount();
-//! let remounted = unmounted.mount(None);  // Recreates ViewObject
+//! let remounted = unmounted.mount_as_root();  // Recreates ViewObject
 //! ```
 
 use std::any::{Any, TypeId};
@@ -42,8 +37,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use flui_foundation::ViewId;
-use flui_tree::{Mountable, TreeInfo, Unmountable};
-use flui_tree::{Mounted, NodeState, Unmounted};
+use flui_tree::{Depth, Mountable, Mounted, NodeState, Unmountable, Unmounted};
 
 use crate::ViewObject;
 
@@ -205,11 +199,11 @@ impl std::fmt::Debug for ViewConfig {
 /// let config = unmounted.config();
 ///
 /// // Mount transitions to Mounted state
-/// let mounted: ViewHandle<Mounted> = unmounted.mount(None);
+/// let mounted: ViewHandle<Mounted> = unmounted.mount_as_root();
 ///
 /// // Can now access ViewObject and tree info
 /// let view_obj = mounted.view_object();
-/// let parent = mounted.parent();  // NavigableHandle method
+/// let parent = mounted.parent();
 /// ```
 pub struct ViewHandle<S: NodeState> {
     /// Immutable view configuration (always present)
@@ -222,10 +216,11 @@ pub struct ViewHandle<S: NodeState> {
     /// Created from config during mount, discarded during unmount.
     view_object: Option<Box<dyn ViewObject>>,
 
-    /// Tree position information (Some for Mounted, None for Unmounted)
-    ///
-    /// Contains parent/children IDs and depth.
-    tree_info: Option<TreeInfo>,
+    /// Tree position - depth in hierarchy (like Flutter's Element._depth)
+    depth: Depth,
+
+    /// Tree position - parent ID (like Flutter's Element._parent)
+    parent: Option<ViewId>,
 
     /// Typestate marker (zero-sized)
     _state: PhantomData<S>,
@@ -251,7 +246,8 @@ impl ViewHandle<Unmounted> {
         Self {
             config,
             view_object: None,
-            tree_info: None,
+            depth: Depth::root(),
+            parent: None,
             _state: PhantomData,
         }
     }
@@ -266,6 +262,49 @@ impl ViewHandle<Unmounted> {
     /// ```
     pub fn config(&self) -> &ViewConfig {
         &self.config
+    }
+
+    /// Mount as root node.
+    ///
+    /// Creates ViewObject and transitions to Mounted state.
+    pub fn mount_as_root(self) -> ViewHandle<Mounted> {
+        let view_object = Some(self.config.create_view_object());
+
+        ViewHandle {
+            config: self.config,
+            view_object,
+            depth: Depth::root(),
+            parent: None,
+            _state: PhantomData,
+        }
+    }
+
+    /// Mount as child of parent.
+    ///
+    /// Creates ViewObject and transitions to Mounted state.
+    pub fn mount_as_child(self, parent: ViewId, parent_depth: Depth) -> ViewHandle<Mounted> {
+        let view_object = Some(self.config.create_view_object());
+
+        ViewHandle {
+            config: self.config,
+            view_object,
+            depth: parent_depth.child_depth(),
+            parent: Some(parent),
+            _state: PhantomData,
+        }
+    }
+
+    /// Mount with explicit parent and depth.
+    pub fn mount(self, parent: Option<ViewId>, depth: Depth) -> ViewHandle<Mounted> {
+        let view_object = Some(self.config.create_view_object());
+
+        ViewHandle {
+            config: self.config,
+            view_object,
+            depth,
+            parent,
+            _state: PhantomData,
+        }
     }
 }
 
@@ -289,7 +328,7 @@ impl ViewHandle<Mounted> {
     /// # Example
     ///
     /// ```rust,ignore
-    /// let mounted = unmounted.mount(None);
+    /// let mounted = unmounted.mount_as_root();
     /// let view_obj = mounted.view_object();
     /// view_obj.build(ctx);
     /// ```
@@ -302,12 +341,52 @@ impl ViewHandle<Mounted> {
     /// # Example
     ///
     /// ```rust,ignore
-    /// let mut mounted = unmounted.mount(None);
+    /// let mut mounted = unmounted.mount_as_root();
     /// let view_obj = mounted.view_object_mut();
     /// view_obj.build(ctx);
     /// ```
     pub fn view_object_mut(&mut self) -> &mut dyn ViewObject {
         self.view_object.as_mut().unwrap().as_mut()
+    }
+
+    /// Unmount from tree.
+    ///
+    /// Discards ViewObject but preserves config for hot-reload.
+    pub fn unmount(self) -> ViewHandle<Unmounted> {
+        ViewHandle {
+            config: self.config, // Preserve config for hot-reload
+            view_object: None,   // Discard live ViewObject
+            depth: Depth::root(),
+            parent: None,
+            _state: PhantomData,
+        }
+    }
+
+    /// Get parent ViewId.
+    ///
+    /// Returns `None` if this is the root view.
+    #[inline]
+    pub fn parent(&self) -> Option<ViewId> {
+        self.parent
+    }
+
+    /// Check if this is the root view.
+    #[inline]
+    pub fn is_root(&self) -> bool {
+        self.parent.is_none()
+    }
+
+    /// Get depth in tree.
+    #[inline]
+    pub fn depth(&self) -> Depth {
+        self.depth
+    }
+
+    /// Redepth from parent (Flutter's redepthChild pattern).
+    pub fn redepth_from_parent(&mut self, parent_depth: Depth) {
+        if self.depth <= parent_depth {
+            self.depth = parent_depth.child_depth();
+        }
     }
 }
 
@@ -328,28 +407,7 @@ impl ViewHandle<Mounted> {
     /// }
     /// ```
     pub fn parent_view(&self) -> Option<ViewId> {
-        self.tree_info.as_ref()
-            .and_then(|info| info.parent)
-            .map(ViewId::new)
-    }
-
-    /// Get the children ViewIds.
-    ///
-    /// Returns an iterator over child IDs.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// for child_id in mounted.children_views() {
-    ///     println!("Child: {:?}", child_id);
-    /// }
-    /// ```
-    pub fn children_views(&self) -> impl Iterator<Item = ViewId> + '_ {
-        self.tree_info.as_ref()
-            .map(|info| info.children.as_slice())
-            .unwrap_or(&[])
-            .iter()
-            .map(|&id| ViewId::new(id))
+        self.parent
     }
 }
 
@@ -358,50 +416,49 @@ impl ViewHandle<Mounted> {
 // ============================================================================
 
 impl Mountable for ViewHandle<Unmounted> {
+    type Id = ViewId;
     type Mounted = ViewHandle<Mounted>;
 
-    fn mount(self, parent: Option<usize>) -> Self::Mounted {
-        // Create tree info
-        let tree_info = if let Some(parent_id) = parent {
-            TreeInfo::with_parent(parent_id, 0)  // Depth will be calculated by framework
-        } else {
-            TreeInfo::root()
-        };
-
-        // Create live ViewObject from config
+    fn mount(self, parent: Option<ViewId>, parent_depth: Depth) -> ViewHandle<Mounted> {
         let view_object = Some(self.config.create_view_object());
+        let depth = if parent.is_some() {
+            parent_depth.child_depth()
+        } else {
+            Depth::root()
+        };
 
         ViewHandle {
             config: self.config,
             view_object,
-            tree_info: Some(tree_info),
+            depth,
+            parent,
             _state: PhantomData,
         }
     }
 }
 
 impl Unmountable for ViewHandle<Mounted> {
+    type Id = ViewId;
     type Unmounted = ViewHandle<Unmounted>;
 
-    fn unmount(self) -> Self::Unmounted {
+    fn parent(&self) -> Option<ViewId> {
+        self.parent
+    }
+
+    fn depth(&self) -> Depth {
+        self.depth
+    }
+
+    fn unmount(self) -> ViewHandle<Unmounted> {
         ViewHandle {
-            config: self.config,  // Preserve config for hot-reload
-            view_object: None,     // Discard live ViewObject
-            tree_info: None,       // Discard tree position
+            config: self.config, // Preserve config for hot-reload
+            view_object: None,   // Discard live ViewObject
+            depth: Depth::root(),
+            parent: None,
             _state: PhantomData,
         }
     }
-
-    fn tree_info(&self) -> &TreeInfo {
-        self.tree_info.as_ref().unwrap()  // Safe - always Some for Mounted
-    }
-
-    fn tree_info_mut(&mut self) -> &mut TreeInfo {
-        self.tree_info.as_mut().unwrap()  // Safe - always Some for Mounted
-    }
 }
-
-// NavigableHandle is auto-implemented via blanket impl!
 
 // ============================================================================
 // DEBUG IMPLEMENTATIONS
@@ -410,10 +467,11 @@ impl Unmountable for ViewHandle<Mounted> {
 impl<S: NodeState> std::fmt::Debug for ViewHandle<S> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ViewHandle")
-            .field("state", &S::state_name())
+            .field("state", &S::name())
             .field("config", &self.config)
             .field("has_view_object", &self.view_object.is_some())
-            .field("has_tree_info", &self.tree_info.is_some())
+            .field("depth", &self.depth)
+            .field("parent", &self.parent)
             .finish()
     }
 }
@@ -425,7 +483,6 @@ impl<S: NodeState> std::fmt::Debug for ViewHandle<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_tree::NavigableHandle;
     use crate::ViewMode;
 
     // Mock ViewObject for testing
@@ -438,10 +495,7 @@ mod tests {
             ViewMode::Stateless
         }
 
-        fn build(
-            &mut self,
-            _ctx: &dyn crate::BuildContext,
-        ) -> Option<Box<dyn ViewObject>> {
+        fn build(&mut self, _ctx: &dyn crate::BuildContext) -> Option<Box<dyn ViewObject>> {
             None
         }
 
@@ -462,10 +516,9 @@ mod tests {
 
     #[test]
     fn test_view_config_creation() {
-        let config = ViewConfig::new_with_factory(
-            MockView { value: 42 },
-            |view| Box::new(MockViewObject { value: view.value }),
-        );
+        let config = ViewConfig::new_with_factory(MockView { value: 42 }, |view| {
+            Box::new(MockViewObject { value: view.value })
+        });
 
         assert_eq!(config.type_id(), TypeId::of::<MockView>());
         assert!(config.debug_name().contains("MockView"));
@@ -473,10 +526,9 @@ mod tests {
 
     #[test]
     fn test_view_config_create_multiple() {
-        let config = ViewConfig::new_with_factory(
-            MockView { value: 42 },
-            |view| Box::new(MockViewObject { value: view.value }),
-        );
+        let config = ViewConfig::new_with_factory(MockView { value: 42 }, |view| {
+            Box::new(MockViewObject { value: view.value })
+        });
 
         // Can create multiple ViewObjects
         let obj1 = config.create_view_object();
@@ -488,24 +540,21 @@ mod tests {
 
     #[test]
     fn test_view_config_can_update() {
-        let config1 = ViewConfig::new_with_factory(
-            MockView { value: 1 },
-            |view| Box::new(MockViewObject { value: view.value }),
-        );
-        let config2 = ViewConfig::new_with_factory(
-            MockView { value: 2 },
-            |view| Box::new(MockViewObject { value: view.value }),
-        );
+        let config1 = ViewConfig::new_with_factory(MockView { value: 1 }, |view| {
+            Box::new(MockViewObject { value: view.value })
+        });
+        let config2 = ViewConfig::new_with_factory(MockView { value: 2 }, |view| {
+            Box::new(MockViewObject { value: view.value })
+        });
 
         assert!(config1.can_update(&config2));
     }
 
     #[test]
     fn test_view_handle_unmounted() {
-        let config = ViewConfig::new_with_factory(
-            MockView { value: 42 },
-            |view| Box::new(MockViewObject { value: view.value }),
-        );
+        let config = ViewConfig::new_with_factory(MockView { value: 42 }, |view| {
+            Box::new(MockViewObject { value: view.value })
+        });
 
         let unmounted = ViewHandle::from_config(config);
 
@@ -513,30 +562,43 @@ mod tests {
     }
 
     #[test]
-    fn test_view_handle_mount() {
-        let config = ViewConfig::new_with_factory(
-            MockView { value: 42 },
-            |view| Box::new(MockViewObject { value: view.value }),
-        );
+    fn test_view_handle_mount_as_root() {
+        let config = ViewConfig::new_with_factory(MockView { value: 42 }, |view| {
+            Box::new(MockViewObject { value: view.value })
+        });
 
         let unmounted = ViewHandle::from_config(config);
-        let mounted = unmounted.mount(None);
+        let mounted = unmounted.mount_as_root();
 
         // Check mounted state
-        assert!(mounted.is_root());  // NavigableHandle method
-        assert_eq!(mounted.depth(), 0);
+        assert!(mounted.is_root());
+        assert_eq!(mounted.depth(), Depth::root());
         assert_eq!(mounted.view_object().mode(), ViewMode::Stateless);
     }
 
     #[test]
+    fn test_view_handle_mount_as_child() {
+        let config = ViewConfig::new_with_factory(MockView { value: 42 }, |view| {
+            Box::new(MockViewObject { value: view.value })
+        });
+
+        let parent_id = ViewId::new(10);
+        let unmounted = ViewHandle::from_config(config);
+        let mounted = unmounted.mount_as_child(parent_id, Depth::root());
+
+        assert!(!mounted.is_root());
+        assert_eq!(mounted.parent(), Some(parent_id));
+        assert_eq!(mounted.depth(), Depth::new(1)); // parent depth + 1
+    }
+
+    #[test]
     fn test_view_handle_unmount() {
-        let config = ViewConfig::new_with_factory(
-            MockView { value: 42 },
-            |view| Box::new(MockViewObject { value: view.value }),
-        );
+        let config = ViewConfig::new_with_factory(MockView { value: 42 }, |view| {
+            Box::new(MockViewObject { value: view.value })
+        });
 
         let unmounted = ViewHandle::from_config(config);
-        let mounted = unmounted.mount(None);
+        let mounted = unmounted.mount_as_root();
         let unmounted_again = mounted.unmount();
 
         // Config preserved
@@ -544,45 +606,36 @@ mod tests {
     }
 
     #[test]
-    fn test_navigable_handle_integration() {
-        let config = ViewConfig::new_with_factory(
-            MockView { value: 1 },
-            |view| Box::new(MockViewObject { value: view.value }),
-        );
-
-        let unmounted = ViewHandle::from_config(config);
-        let mut mounted = unmounted.mount(Some(10));
-
-        // NavigableHandle methods
-        assert_eq!(mounted.parent(), Some(10));
-        assert!(!mounted.is_root());
-
-        // Add children
-        mounted.add_child(100);
-        mounted.add_child(200);
-
-        assert_eq!(mounted.child_count(), 2);
-        assert_eq!(mounted.children(), &[100, 200]);
-    }
-
-    #[test]
     fn test_typed_navigation() {
-        let config = ViewConfig::new_with_factory(
-            MockView { value: 1 },
-            |view| Box::new(MockViewObject { value: view.value }),
-        );
+        let config = ViewConfig::new_with_factory(MockView { value: 1 }, |view| {
+            Box::new(MockViewObject { value: view.value })
+        });
 
+        let parent_id = ViewId::new(10);
         let unmounted = ViewHandle::from_config(config);
-        let mounted = unmounted.mount(Some(10));
+        let mounted = unmounted.mount_as_child(parent_id, Depth::root());
 
         // Typed ViewId methods
-        if let Some(parent_id) = mounted.parent_view() {
-            assert_eq!(parent_id.get(), 10);
+        if let Some(pid) = mounted.parent_view() {
+            assert_eq!(pid.get(), 10);
         } else {
             panic!("Expected parent");
         }
+    }
 
-        let children: Vec<_> = mounted.children_views().collect();
-        assert_eq!(children.len(), 0);
+    #[test]
+    fn test_redepth() {
+        let config = ViewConfig::new_with_factory(MockView { value: 42 }, |view| {
+            Box::new(MockViewObject { value: view.value })
+        });
+
+        let mut mounted = ViewHandle::from_config(config).mount_as_root();
+
+        // Initial depth is 0 (root)
+        assert_eq!(mounted.depth(), Depth::root());
+
+        // Redepth from deeper parent
+        mounted.redepth_from_parent(Depth::new(5));
+        assert_eq!(mounted.depth(), Depth::new(6));
     }
 }

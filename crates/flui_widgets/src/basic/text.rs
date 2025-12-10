@@ -43,12 +43,15 @@
 
 use bon::Builder;
 use flui_objects::{ParagraphData, RenderParagraph};
-use flui_rendering::{core::protocol::BoxProtocol, Leaf};
+use flui_rendering::{BoxProtocol, Leaf};
 use flui_types::{
     typography::{TextAlign, TextDirection, TextOverflow},
     Color,
 };
-use flui_view::{wrappers::RenderViewWrapper, IntoView, RenderView, UpdateResult, ViewObject};
+use flui_view::{
+    wrappers::RenderViewWrapper, IntoView, IntoViewConfig, RenderView, UpdateResult, ViewConfig,
+    ViewObject,
+};
 
 /// A widget that displays a string of text with a single style.
 ///
@@ -357,6 +360,18 @@ impl RenderView<BoxProtocol, Leaf> for Text {
 impl IntoView for Text {
     fn into_view(self) -> Box<dyn ViewObject> {
         Box::new(RenderViewWrapper::new(self))
+    }
+}
+
+/// IntoViewConfig implementation for Text.
+///
+/// Enables Text to be used with the Child API:
+/// ```ignore
+/// Padding::all(32.0).child(Text::headline("Hello"))
+/// ```
+impl IntoViewConfig for Text {
+    fn into_view_config(self) -> ViewConfig {
+        ViewConfig::new_with_factory(self, |v: &Text| Box::new(RenderViewWrapper::new(v.clone())))
     }
 }
 

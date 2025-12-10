@@ -55,7 +55,7 @@ use flui_interaction::HitTestResult;
 use flui_painting::Canvas;
 use flui_types::{Offset, Size, SliverConstraints, SliverGeometry};
 
-use crate::core::BoxConstraints;
+use crate::BoxConstraints;
 use crate::error::RenderError;
 
 // ============================================================================

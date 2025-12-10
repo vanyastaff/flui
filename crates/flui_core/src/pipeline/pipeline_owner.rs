@@ -324,12 +324,12 @@ impl PipelineOwner {
 
     /// Mark element as needing layout
     pub fn request_layout(&mut self, node_id: ElementId) {
-        self.tree_coord.mark_needs_layout(node_id);
+        self.tree_coord.mark_element_needs_layout(node_id);
     }
 
     /// Mark element as needing paint
     pub fn request_paint(&mut self, node_id: ElementId) {
-        self.tree_coord.mark_needs_paint(node_id);
+        self.tree_coord.mark_element_needs_paint(node_id);
     }
 
     // =========================================================================
@@ -715,10 +715,8 @@ impl PipelineOwner {
         &mut self,
         constraints: BoxConstraints,
     ) -> Vec<(ElementId, flui_types::Size)> {
-        // Get dirty IDs from TreeCoordinator
-        let dirty_ids: Vec<ElementId> = self.tree_coord.take_needs_layout().into_iter().collect();
-
-        if dirty_ids.is_empty() {
+        // Check if there are dirty render objects
+        if !self.tree_coord.has_needs_layout() {
             // If no dirty elements, scan for render elements and layout them
             let render_ids: Vec<ElementId> = self
                 .tree_coord
@@ -740,7 +738,12 @@ impl PipelineOwner {
             return self.layout_elements(&render_ids, constraints);
         }
 
-        self.layout_elements(&dirty_ids, constraints)
+        // Delegate flush to RenderPipelineOwner
+        self.tree_coord.flush_layout();
+
+        // Return empty for now - the actual layout results are in the render tree
+        // TODO: Return actual layout results by querying the render tree
+        Vec::new()
     }
 
     /// Layout a list of elements
@@ -772,7 +775,7 @@ impl PipelineOwner {
         for &id in ids {
             if let Some(size) = self.tree_coord.layout_element(id, constraints) {
                 results.push((id, size));
-                self.tree_coord.mark_needs_paint(id);
+                self.tree_coord.mark_element_needs_paint(id);
             }
         }
 
@@ -826,7 +829,7 @@ impl PipelineOwner {
             if let Some(node) = self.tree_coord.render_objects_mut().get_mut(render_id) {
                 node.set_cached_size(Some(size));
             }
-            self.tree_coord.mark_needs_paint(elem_id);
+            self.tree_coord.mark_element_needs_paint(elem_id);
             final_results.push((elem_id, size));
         }
 
@@ -842,19 +845,8 @@ impl PipelineOwner {
     /// Flush the paint phase - generate canvas with draw commands
     #[instrument(level = "debug", skip(self))]
     pub fn flush_paint(&mut self) -> Option<flui_painting::Canvas> {
-        // Get dirty IDs from TreeCoordinator
-        let dirty_ids: Vec<ElementId> = self.tree_coord.take_needs_paint().into_iter().collect();
-
-        // Process dirty elements (currently just clears the dirty state)
-        #[cfg(feature = "parallel")]
-        {
-            self.paint_elements_parallel(&dirty_ids);
-        }
-
-        #[cfg(not(feature = "parallel"))]
-        {
-            self.paint_elements_sequential(&dirty_ids);
-        }
+        // Delegate flush to RenderPipelineOwner
+        self.tree_coord.flush_paint();
 
         // Paint root to canvas
         self.tree_coord.paint_root()

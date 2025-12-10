@@ -5,11 +5,7 @@
 
 use std::any::Any;
 
-use flui_rendering::core::{
-    arity::{Arity, Leaf},
-    protocol::{BoxProtocol, Protocol},
-    RenderObject,
-};
+use flui_rendering::{Arity, BoxProtocol, Leaf, Protocol, RenderObject};
 
 use crate::handle::ViewConfig;
 use crate::traits::{RenderObjectFor, RenderView};

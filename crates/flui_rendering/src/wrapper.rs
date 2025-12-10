@@ -16,7 +16,6 @@ use std::fmt;
 use flui_interaction::HitTestResult;
 use flui_types::{Rect, Size, SliverGeometry};
 
-use super::arity::Arity;
 use super::box_render::RenderBox;
 use super::context::{
     BoxHitTestContext, BoxLayoutContext, BoxPaintContext, SliverHitTestContext,
@@ -25,6 +24,7 @@ use super::context::{
 use super::object::RenderObject;
 use super::sliver::RenderSliver;
 use crate::RenderResult;
+use flui_tree::arity::Arity;
 
 // ============================================================================
 // BOX RENDER WRAPPER
@@ -251,7 +251,7 @@ impl<A: Arity> RenderObject for SliverRenderWrapper<A> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::Leaf;
+    use crate::Leaf;
 
     #[derive(Debug)]
     struct MockRenderBox {

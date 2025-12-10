@@ -28,12 +28,12 @@
 use bon::Builder;
 use flui_core::{view::IntoElement, Element};
 use flui_objects::RenderPadding;
-use flui_rendering::core::protocol::BoxProtocol;
-use flui_rendering::Optional;
+use flui_rendering::BoxProtocol;
+use flui_rendering::{Optional, ProtocolId, RenderElement, RuntimeArity};
 use flui_types::EdgeInsets;
 use flui_view::{
     wrappers::RenderViewWrapper, Child, IntoView, IntoViewConfig, RenderView, UpdateResult,
-    ViewElement, ViewMode, ViewObject,
+    ViewObject,
 };
 
 /// A widget that insets its child by the given padding.
@@ -230,15 +230,34 @@ impl IntoView for Padding {
 
 /// IntoElement implementation for Padding.
 ///
-/// Converts Padding to Element. This is used when Padding is the root element.
-/// The child is converted from ViewObject to Element during this process.
+/// Converts Padding to Element with its child. The child is converted
+/// using `Child::into_element()` and attached as a pending child.
 impl IntoElement for Padding {
     fn into_element(self) -> Element {
-        let wrapper = RenderViewWrapper::new(self);
-        Element::View(ViewElement::with_pending(
-            Box::new(wrapper),
-            ViewMode::RenderBox,
-        ))
+        // Extract child before moving self into wrapper
+        let child = self.child;
+
+        // Create the Padding render object
+        let render_object = RenderPadding::new(self.padding);
+
+        // Check if child is present
+        if child.is_none() {
+            // No child - just create render element
+            Element::Render(RenderElement::with_pending(
+                Box::new(render_object),
+                ProtocolId::Box,
+                RuntimeArity::Exact(0),
+            ))
+        } else {
+            // Has child - convert and create with pending child
+            let child_element = child.into_element();
+            Element::Render(RenderElement::with_pending_and_children(
+                Box::new(render_object),
+                ProtocolId::Box,
+                RuntimeArity::Exact(1),
+                vec![Box::new(child_element)],
+            ))
+        }
     }
 }
 

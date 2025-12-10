@@ -74,19 +74,19 @@ pub use flui_reactivity::ComponentId;
 // ============================================================
 
 /// Trait for custom render objects
-pub use flui_rendering::core::RenderBox;
+pub use flui_rendering::RenderBox;
 
 /// Type-safe arity trait
-pub use flui_rendering::core::Arity;
+pub use flui_rendering::Arity;
 
 /// Runtime arity enum
-pub use flui_rendering::core::RuntimeArity;
+pub use flui_rendering::RuntimeArity;
 
 /// Arity types
-pub use flui_rendering::core::{AtLeast, Exact, Leaf, Optional, Single, Variable};
+pub use flui_rendering::{AtLeast, Exact, Leaf, Optional, Single, Variable};
 
 /// Children accessor types
-pub use flui_rendering::core::{
+pub use flui_rendering::{
     ChildrenAccess, FixedChildren, NoChildren, OptionalChild, SliceChildren,
 };
 

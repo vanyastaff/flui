@@ -28,12 +28,13 @@
 //! }
 //!
 //! // Later, during mount:
-//! let child_handle = padding.child.mount(Some(parent_id));
+//! let child_handle = padding.child.mount_as_root();
 //! ```
 
 use crate::handle::{ViewConfig, ViewHandle};
 use crate::IntoViewConfig;
-use flui_tree::{Mountable, Mounted};
+use flui_foundation::ViewId;
+use flui_tree::{Depth, Mounted};
 
 /// Optional single child wrapper that stores view configuration.
 ///
@@ -203,14 +204,7 @@ impl Child {
 // ============================================================================
 
 impl Child {
-    /// Mount the child view, creating a `ViewHandle<Mounted>`.
-    ///
-    /// This converts the stored `ViewConfig` into a mounted view handle
-    /// with live `ViewObject` state.
-    ///
-    /// # Parameters
-    ///
-    /// - `parent`: Optional parent node ID (None for root)
+    /// Mount the child view as root, creating a `ViewHandle<Mounted>`.
     ///
     /// # Returns
     ///
@@ -219,19 +213,62 @@ impl Child {
     /// # Example
     ///
     /// ```rust,ignore
-    /// use flui_view::Child;
-    ///
     /// let child = Child::new(Text::new("Hello"));
-    ///
-    /// // Later, during mount:
-    /// if let Some(mounted) = child.mount(Some(parent_id)) {
+    /// if let Some(mounted) = child.mount_as_root() {
     ///     println!("Mounted child: {:?}", mounted);
     /// }
     /// ```
-    pub fn mount(self, parent: Option<usize>) -> Option<ViewHandle<Mounted>> {
+    pub fn mount_as_root(self) -> Option<ViewHandle<Mounted>> {
         self.inner.map(|config| {
             let handle = ViewHandle::from_config(config);
-            handle.mount(parent)
+            handle.mount_as_root()
+        })
+    }
+
+    /// Mount the child view as child of parent.
+    ///
+    /// # Parameters
+    ///
+    /// - `parent`: Parent node ID
+    /// - `parent_depth`: Depth of the parent
+    ///
+    /// # Returns
+    ///
+    /// `Some(ViewHandle<Mounted>)` if child exists, `None` otherwise.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let child = Child::new(Text::new("Hello"));
+    /// if let Some(mounted) = child.mount_as_child(parent_id, parent_depth) {
+    ///     println!("Mounted child: {:?}", mounted);
+    /// }
+    /// ```
+    pub fn mount_as_child(
+        self,
+        parent: ViewId,
+        parent_depth: Depth,
+    ) -> Option<ViewHandle<Mounted>> {
+        self.inner.map(|config| {
+            let handle = ViewHandle::from_config(config);
+            handle.mount_as_child(parent, parent_depth)
+        })
+    }
+
+    /// Mount the child view with explicit parent and depth.
+    ///
+    /// # Parameters
+    ///
+    /// - `parent`: Optional parent node ID (None for root)
+    /// - `depth`: Depth in tree
+    ///
+    /// # Returns
+    ///
+    /// `Some(ViewHandle<Mounted>)` if child exists, `None` otherwise.
+    pub fn mount(self, parent: Option<ViewId>, depth: Depth) -> Option<ViewHandle<Mounted>> {
+        self.inner.map(|config| {
+            let handle = ViewHandle::from_config(config);
+            handle.mount(parent, depth)
         })
     }
 
@@ -277,7 +314,6 @@ mod tests {
     use super::*;
     use crate::traits::StatelessView;
     use crate::BuildContext;
-    use flui_tree::NavigableHandle;
 
     #[derive(Clone)]
     struct TestView {
@@ -338,23 +374,38 @@ mod tests {
     }
 
     #[test]
-    fn test_child_mount() {
+    fn test_child_mount_as_root() {
         let child = Child::new(TestView { value: 42 });
 
         // Mount as root
-        let mounted = child.mount(None);
+        let mounted = child.mount_as_root();
         assert!(mounted.is_some());
 
         if let Some(handle) = mounted {
             assert!(handle.is_root());
-            assert_eq!(handle.depth(), 0);
+            assert_eq!(handle.depth(), Depth::root());
+        }
+    }
+
+    #[test]
+    fn test_child_mount_as_child() {
+        let child = Child::new(TestView { value: 42 });
+        let parent_id = ViewId::new(10);
+
+        let mounted = child.mount_as_child(parent_id, Depth::root());
+        assert!(mounted.is_some());
+
+        if let Some(handle) = mounted {
+            assert!(!handle.is_root());
+            assert_eq!(handle.parent(), Some(parent_id));
+            assert_eq!(handle.depth(), Depth::new(1));
         }
     }
 
     #[test]
     fn test_child_mount_none() {
         let child = Child::none();
-        let mounted = child.mount(None);
+        let mounted = child.mount_as_root();
         assert!(mounted.is_none());
     }
 

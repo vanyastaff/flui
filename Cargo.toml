@@ -80,7 +80,9 @@ winit = "0.30.12"
 pollster = "0.4"
 
 # IMAGE PROCESSING - Used by flui_assets and flui_engine
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
+# TODO: Re-enable "webp" feature when image-webp is fixed for Rust 1.91+
+# See: https://github.com/image-rs/image-webp/issues/102
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif"] }
 
 # FONT PARSING - Used by flui_assets and flui_engine
 ttf-parser = "0.25"

@@ -96,7 +96,7 @@ impl Debug for RenderCustomPaintLeaf {
 impl RenderBox<Leaf> for RenderCustomPaintLeaf {
     fn layout<T>(&mut self, ctx: LayoutContext<'_, T, Leaf, BoxProtocol>) -> Size
     where
-        T: flui_rendering::core::LayoutTree,
+        T: flui_rendering::LayoutTree,
     {
         let constraints = ctx.constraints;
 
@@ -110,7 +110,7 @@ impl RenderBox<Leaf> for RenderCustomPaintLeaf {
 
     fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Leaf>)
     where
-        T: flui_rendering::core::PaintTree,
+        T: flui_rendering::PaintTree,
     {
         if let Some(ref painter) = self.painter {
             let offset = ctx.offset;

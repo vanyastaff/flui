@@ -4,10 +4,9 @@
 
 use std::fmt::Debug;
 
-use flui_rendering::core::{
-    arity::Arity,
-    protocol::{BoxProtocol, Protocol, SliverProtocol},
-    RenderBox, RenderObject, RenderSliver,
+use flui_rendering::{
+    Arity, BoxProtocol, Leaf, Optional, Protocol, RenderBox, RenderObject, RenderSliver, Single,
+    SliverProtocol, Variable,
 };
 
 use super::UpdateResult;
@@ -102,7 +101,7 @@ pub trait RenderViewExt: Sized {
     /// Wraps view as a leaf element (no children).
     fn leaf(self) -> RenderViewLeaf<Self>
     where
-        Self: RenderView<BoxProtocol, flui_rendering::core::arity::Leaf>,
+        Self: RenderView<BoxProtocol, Leaf>,
     {
         RenderViewLeaf { view: self }
     }
@@ -110,7 +109,7 @@ pub trait RenderViewExt: Sized {
     /// Wraps view with a single child.
     fn with_child<C>(self, child: C) -> RenderViewWithChild<Self, C>
     where
-        Self: RenderView<BoxProtocol, flui_rendering::core::arity::Single>,
+        Self: RenderView<BoxProtocol, Single>,
     {
         RenderViewWithChild { view: self, child }
     }
@@ -118,7 +117,7 @@ pub trait RenderViewExt: Sized {
     /// Wraps view with an optional child.
     fn with_optional_child<C>(self, child: Option<C>) -> RenderViewWithOptionalChild<Self, C>
     where
-        Self: RenderView<BoxProtocol, flui_rendering::core::arity::Optional>,
+        Self: RenderView<BoxProtocol, Optional>,
     {
         RenderViewWithOptionalChild { view: self, child }
     }
@@ -126,7 +125,7 @@ pub trait RenderViewExt: Sized {
     /// Wraps view with multiple children.
     fn with_children<C>(self, children: Vec<C>) -> RenderViewWithChildren<Self, C>
     where
-        Self: RenderView<BoxProtocol, flui_rendering::core::arity::Variable>,
+        Self: RenderView<BoxProtocol, Variable>,
     {
         RenderViewWithChildren {
             view: self,

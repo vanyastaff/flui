@@ -32,7 +32,7 @@ use flui_tree::{TreeNav, TreeRead, TreeWrite};
 use flui_foundation::{ElementId, RenderId};
 use flui_types::Size;
 
-use crate::core::{RenderLifecycle, RenderObject};
+use crate::{RenderLifecycle, RenderObject};
 
 // ============================================================================
 // RENDER NODE (Concrete struct, like LayerNode)
@@ -468,7 +468,7 @@ impl TreeNav<RenderId> for RenderTree {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::RenderObject;
+    use crate::RenderObject;
 
     // Simple test RenderObject (minimal - no layout/paint methods needed)
     #[derive(Debug)]

@@ -17,7 +17,6 @@ use std::fmt;
 use flui_foundation::{DiagnosticsProperty, ElementId};
 use flui_types::{prelude::TextBaseline, Matrix4, Offset, Rect, Size, SliverGeometry};
 
-use super::arity::Single;
 use super::box_render::RenderBox;
 use super::context::{
     BoxHitTestContext, BoxLayoutContext, BoxPaintContext, SliverHitTestContext,
@@ -28,6 +27,7 @@ use super::sliver::RenderSliver;
 use super::BoxConstraints;
 use crate::RenderResult;
 use flui_interaction::HitTestResult;
+use flui_tree::arity::Single;
 
 // ============================================================================
 // RENDER PROXY BOX

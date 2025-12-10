@@ -22,7 +22,7 @@ use flui_foundation::{ElementId, Key, Slot};
 use flui_tree::RuntimeArity;
 use flui_view::{PendingChildren, ViewLifecycle, ViewMode};
 
-use flui_rendering::core::{ProtocolId, RenderElement, RenderLifecycle};
+use flui_rendering::{ProtocolId, RenderElement, RenderLifecycle};
 
 use super::{ElementLifecycle, ViewElement};
 

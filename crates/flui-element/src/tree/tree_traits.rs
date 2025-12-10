@@ -104,8 +104,12 @@ impl TreeNav<ElementId> for ElementTree {
 
     /// Returns the slot of the given element within its parent.
     #[inline]
-    fn slot(&self, id: ElementId) -> Option<Slot> {
-        self.get(id)?.slot()
+    fn slot(&self, id: ElementId) -> Option<flui_tree::Slot<ElementId>> {
+        let element = self.get(id)?;
+        let parent = element.parent()?;
+        let slot = element.slot()?;
+        let depth = flui_tree::Depth::new(element.depth());
+        Some(flui_tree::Slot::new(parent, slot.index(), depth))
     }
 }
 

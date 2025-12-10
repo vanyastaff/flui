@@ -48,9 +48,9 @@ use std::collections::HashSet;
 
 use flui_element::{Element, ElementTree};
 use flui_engine::LayerTree;
-use flui_foundation::{ElementId, Slot};
+use flui_foundation::{ElementId, RenderId, Slot};
 use flui_painting::DisplayListCore;
-use flui_rendering::tree::RenderTree;
+use flui_rendering::{RenderPipelineOwner, RenderTree};
 use flui_view::tree::ViewTree;
 use tracing::instrument;
 
@@ -87,24 +87,16 @@ pub struct TreeCoordinator {
     /// ElementTree - stores Elements with ID references
     elements: ElementTree,
 
-    /// RenderTree - stores RenderObjects for layout/paint
-    render_objects: RenderTree,
+    /// RenderPipelineOwner - owns RenderTree and manages layout/paint dirty tracking
+    /// This follows Flutter's PipelineOwner pattern
+    render_pipeline: RenderPipelineOwner,
 
     /// LayerTree - stores compositor layers
     layers: LayerTree,
 
-    // ========== Dirty Tracking (Flutter PipelineOwner pattern) ==========
-    /// Elements that need build (view changed)
+    // ========== Build Dirty Tracking ==========
+    /// Elements that need build (view changed) - stays here because it's Element-level
     needs_build: HashSet<ElementId>,
-
-    /// Elements that need layout (constraints changed)
-    needs_layout: HashSet<ElementId>,
-
-    /// Elements that need paint (visual properties changed)
-    needs_paint: HashSet<ElementId>,
-
-    /// Elements that need compositing update (layer structure changed)
-    needs_compositing: HashSet<ElementId>,
 
     /// Root element ID
     root: Option<ElementId>,
@@ -126,12 +118,9 @@ impl TreeCoordinator {
         Self {
             views: ViewTree::new(),
             elements: ElementTree::new(),
-            render_objects: RenderTree::new(),
+            render_pipeline: RenderPipelineOwner::new(),
             layers: LayerTree::new(),
             needs_build: HashSet::new(),
-            needs_layout: HashSet::new(),
-            needs_paint: HashSet::new(),
-            needs_compositing: HashSet::new(),
             root: None,
         }
     }
@@ -145,12 +134,9 @@ impl TreeCoordinator {
         Self {
             views: ViewTree::with_capacity(capacity),
             elements: ElementTree::with_capacity(capacity),
-            render_objects: RenderTree::with_capacity(capacity),
+            render_pipeline: RenderPipelineOwner::with_capacity(capacity),
             layers: LayerTree::with_capacity(capacity),
             needs_build: HashSet::with_capacity(capacity),
-            needs_layout: HashSet::with_capacity(capacity),
-            needs_paint: HashSet::with_capacity(capacity),
-            needs_compositing: HashSet::with_capacity(capacity),
             root: None,
         }
     }
@@ -191,16 +177,28 @@ impl TreeCoordinator {
         &mut self.elements
     }
 
-    /// Returns a reference to the RenderTree.
+    /// Returns a reference to the RenderPipelineOwner.
     #[inline]
-    pub fn render_objects(&self) -> &RenderTree {
-        &self.render_objects
+    pub fn render_pipeline(&self) -> &RenderPipelineOwner {
+        &self.render_pipeline
     }
 
-    /// Returns a mutable reference to the RenderTree.
+    /// Returns a mutable reference to the RenderPipelineOwner.
+    #[inline]
+    pub fn render_pipeline_mut(&mut self) -> &mut RenderPipelineOwner {
+        &mut self.render_pipeline
+    }
+
+    /// Returns a reference to the RenderTree (convenience method).
+    #[inline]
+    pub fn render_objects(&self) -> &RenderTree {
+        self.render_pipeline.render_tree()
+    }
+
+    /// Returns a mutable reference to the RenderTree (convenience method).
     #[inline]
     pub fn render_objects_mut(&mut self) -> &mut RenderTree {
-        &mut self.render_objects
+        self.render_pipeline.render_tree_mut()
     }
 
     /// Returns a reference to the LayerTree.
@@ -215,11 +213,11 @@ impl TreeCoordinator {
         &mut self.layers
     }
 
-    /// Unwraps the coordinator, returning all four trees.
+    /// Unwraps the coordinator, returning all trees.
     ///
-    /// Returns: (views, elements, render_objects, layers)
-    pub fn into_trees(self) -> (ViewTree, ElementTree, RenderTree, LayerTree) {
-        (self.views, self.elements, self.render_objects, self.layers)
+    /// Returns: (views, elements, render_pipeline, layers)
+    pub fn into_trees(self) -> (ViewTree, ElementTree, RenderPipelineOwner, LayerTree) {
+        (self.views, self.elements, self.render_pipeline, self.layers)
     }
 }
 
@@ -281,9 +279,9 @@ impl TreeCoordinator {
         // Handle pending RenderObject (four-tree architecture)
         if let Some(render_elem) = element.as_render_mut() {
             if let Some(render_object) = render_elem.take_pending_render_object() {
-                use flui_rendering::tree::RenderNode;
+                use flui_rendering::RenderNode;
                 let node = RenderNode::from_boxed(render_object);
-                let render_id = self.render_objects.insert(node);
+                let render_id = self.render_objects_mut().insert(node);
                 render_elem.set_render_id(Some(render_id));
                 tracing::debug!(?render_id, "Root RenderObject registered");
             }
@@ -359,9 +357,9 @@ impl TreeCoordinator {
         // Handle pending RenderObject and link in RenderTree
         let child_render_id = if let Some(render_elem) = element.as_render_mut() {
             if let Some(render_object) = render_elem.take_pending_render_object() {
-                use flui_rendering::tree::RenderNode;
+                use flui_rendering::RenderNode;
                 let node = RenderNode::from_boxed(render_object);
-                let render_id = self.render_objects.insert(node);
+                let render_id = self.render_objects_mut().insert(node);
                 render_elem.set_render_id(Some(render_id));
                 tracing::debug!(?render_id, "Child RenderObject registered");
                 Some(render_id)
@@ -382,7 +380,7 @@ impl TreeCoordinator {
                 .and_then(|r| r.render_id());
 
             if let Some(parent_rid) = parent_render_id {
-                self.render_objects.add_child(parent_rid, child_rid);
+                self.render_objects_mut().add_child(parent_rid, child_rid);
                 tracing::debug!(
                     parent = ?parent_rid,
                     child = ?child_rid,
@@ -418,7 +416,7 @@ impl TreeCoordinator {
 }
 
 // ============================================================================
-// DIRTY TRACKING (Flutter PipelineOwner pattern)
+// DIRTY TRACKING
 // ============================================================================
 
 impl TreeCoordinator {
@@ -430,30 +428,24 @@ impl TreeCoordinator {
         self.needs_build.insert(id);
     }
 
-    /// Marks an element as needing layout.
+    /// Marks a render object as needing layout (by RenderId).
     ///
-    /// This is called when constraints change or when a render object's
-    /// intrinsic dimensions change.
-    pub fn mark_needs_layout(&mut self, id: ElementId) {
-        self.needs_layout.insert(id);
-        // Layout changes require repaint (Flutter pattern)
-        self.mark_needs_paint(id);
+    /// This delegates to RenderPipelineOwner, following Flutter's pattern
+    /// where layout/paint dirty tracking is on RenderObject, not Element.
+    pub fn mark_needs_layout(&mut self, id: RenderId) {
+        self.render_pipeline.mark_needs_layout(id);
     }
 
-    /// Marks an element as needing paint.
+    /// Marks a render object as needing paint (by RenderId).
     ///
-    /// This is called when visual properties change (color, opacity, etc.)
-    /// but layout remains the same.
-    pub fn mark_needs_paint(&mut self, id: ElementId) {
-        self.needs_paint.insert(id);
+    /// This delegates to RenderPipelineOwner.
+    pub fn mark_needs_paint(&mut self, id: RenderId) {
+        self.render_pipeline.mark_needs_paint(id);
     }
 
-    /// Marks an element as needing compositing update.
-    ///
-    /// This is called when layer properties change or when elements
-    /// are added/removed from the compositor.
-    pub fn mark_needs_compositing(&mut self, id: ElementId) {
-        self.needs_compositing.insert(id);
+    /// Marks a render object as needing compositing bits update (by RenderId).
+    pub fn mark_needs_compositing_bits_update(&mut self, id: RenderId) {
+        self.render_pipeline.mark_needs_compositing_bits_update(id);
     }
 
     /// Returns the set of elements that need build.
@@ -462,62 +454,20 @@ impl TreeCoordinator {
         &self.needs_build
     }
 
-    /// Returns the set of elements that need layout.
-    #[inline]
-    pub fn needs_layout(&self) -> &HashSet<ElementId> {
-        &self.needs_layout
-    }
-
-    /// Returns the set of elements that need paint.
-    #[inline]
-    pub fn needs_paint(&self) -> &HashSet<ElementId> {
-        &self.needs_paint
-    }
-
-    /// Returns the set of elements that need compositing.
-    #[inline]
-    pub fn needs_compositing(&self) -> &HashSet<ElementId> {
-        &self.needs_compositing
-    }
-
     /// Returns and clears elements needing build.
-    ///
-    /// This is useful for processing dirty elements in a frame.
     pub fn take_needs_build(&mut self) -> HashSet<ElementId> {
         std::mem::take(&mut self.needs_build)
     }
 
-    /// Returns and clears elements needing layout.
-    pub fn take_needs_layout(&mut self) -> HashSet<ElementId> {
-        std::mem::take(&mut self.needs_layout)
-    }
-
-    /// Returns and clears elements needing paint.
-    pub fn take_needs_paint(&mut self) -> HashSet<ElementId> {
-        std::mem::take(&mut self.needs_paint)
-    }
-
-    /// Returns and clears elements needing compositing.
-    pub fn take_needs_compositing(&mut self) -> HashSet<ElementId> {
-        std::mem::take(&mut self.needs_compositing)
-    }
-
-    /// Clears all dirty sets.
-    ///
-    /// This is typically called after a complete frame has been rendered.
+    /// Clears all dirty sets (build + render pipeline).
     pub fn clear_dirty(&mut self) {
         self.needs_build.clear();
-        self.needs_layout.clear();
-        self.needs_paint.clear();
-        self.needs_compositing.clear();
+        self.render_pipeline.clear_dirty();
     }
 
-    /// Returns true if there are any dirty elements.
+    /// Returns true if there are any dirty elements or render objects.
     pub fn has_dirty_elements(&self) -> bool {
-        !self.needs_build.is_empty()
-            || !self.needs_layout.is_empty()
-            || !self.needs_paint.is_empty()
-            || !self.needs_compositing.is_empty()
+        !self.needs_build.is_empty() || self.render_pipeline.has_dirty_nodes()
     }
 
     /// Returns true if any element needs build.
@@ -526,16 +476,78 @@ impl TreeCoordinator {
         !self.needs_build.is_empty()
     }
 
-    /// Returns true if any element needs layout.
+    /// Returns true if any render object needs layout.
     #[inline]
     pub fn has_needs_layout(&self) -> bool {
-        !self.needs_layout.is_empty()
+        self.render_pipeline.has_needs_layout()
     }
 
-    /// Returns true if any element needs paint.
+    /// Returns true if any render object needs paint.
     #[inline]
     pub fn has_needs_paint(&self) -> bool {
-        !self.needs_paint.is_empty()
+        self.render_pipeline.has_needs_paint()
+    }
+
+    // ========== Convenience methods using ElementId ==========
+
+    /// Marks a render object as needing layout, looking up RenderId from ElementId.
+    ///
+    /// Returns true if the element was found and had a render_id.
+    pub fn mark_element_needs_layout(&mut self, element_id: ElementId) -> bool {
+        if let Some(render_id) = self.get_render_id(element_id) {
+            self.render_pipeline.mark_needs_layout(render_id);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Marks a render object as needing paint, looking up RenderId from ElementId.
+    ///
+    /// Returns true if the element was found and had a render_id.
+    pub fn mark_element_needs_paint(&mut self, element_id: ElementId) -> bool {
+        if let Some(render_id) = self.get_render_id(element_id) {
+            self.render_pipeline.mark_needs_paint(render_id);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Gets the RenderId for an ElementId (if it's a RenderElement).
+    fn get_render_id(&self, element_id: ElementId) -> Option<RenderId> {
+        self.elements
+            .get(element_id)
+            .and_then(|e| e.as_render())
+            .and_then(|r| r.render_id())
+    }
+}
+
+// ============================================================================
+// FLUSH OPERATIONS (delegated to RenderPipelineOwner)
+// ============================================================================
+
+impl TreeCoordinator {
+    /// Flushes the layout phase.
+    ///
+    /// Delegates to RenderPipelineOwner::flush_layout().
+    pub fn flush_layout(&mut self) {
+        self.render_pipeline.flush_layout();
+    }
+
+    /// Flushes the compositing bits update phase.
+    pub fn flush_compositing_bits(&mut self) {
+        self.render_pipeline.flush_compositing_bits();
+    }
+
+    /// Flushes the paint phase.
+    pub fn flush_paint(&mut self) {
+        self.render_pipeline.flush_paint();
+    }
+
+    /// Performs a complete render pipeline flush: layout → compositing bits → paint.
+    pub fn flush_render_pipeline(&mut self) {
+        self.render_pipeline.flush_pipeline();
     }
 }
 
@@ -568,7 +580,7 @@ impl TreeCoordinator {
         element_id: flui_foundation::ElementId,
         constraints: flui_types::constraints::BoxConstraints,
     ) -> Option<flui_types::Size> {
-        use flui_rendering::core::RuntimeArity;
+        use flui_rendering::RuntimeArity;
 
         // Step 1: Get Element from ElementTree
         let element = self.elements.get(element_id)?;
@@ -579,7 +591,7 @@ impl TreeCoordinator {
         let arity = render_elem.arity();
 
         // Step 3: Verify RenderNode exists in RenderTree
-        if self.render_objects.get(render_id).is_none() {
+        if self.render_objects_mut().get(render_id).is_none() {
             tracing::warn!(?render_id, "RenderNode not found in tree");
             return None;
         }
@@ -631,13 +643,13 @@ impl TreeCoordinator {
     /// This handles RenderObjects with Leaf arity like RenderParagraph.
     fn layout_leaf_render_object(
         &mut self,
-        render_id: flui_rendering::tree::RenderId,
+        render_id: flui_rendering::RenderId,
         constraints: flui_types::constraints::BoxConstraints,
     ) -> Option<flui_types::Size> {
         use flui_objects::RenderParagraph;
 
         // Get the RenderNode
-        let render_node = self.render_objects.get_mut(render_id)?;
+        let render_node = self.render_objects_mut().get_mut(render_id)?;
 
         // Try to downcast to RenderParagraph (the common Leaf case for Text)
         let render_object = render_node.render_object_mut();
@@ -692,7 +704,7 @@ impl TreeCoordinator {
             tracing::trace!(?render_id, ?size, "RenderParagraph layout");
 
             // Cache the size in RenderNode
-            if let Some(node) = self.render_objects.get_mut(render_id) {
+            if let Some(node) = self.render_objects_mut().get_mut(render_id) {
                 node.set_cached_size(Some(size));
             }
 
@@ -709,7 +721,7 @@ impl TreeCoordinator {
     /// This handles RenderObjects with Single arity like RenderPadding.
     fn layout_single_render_object(
         &mut self,
-        render_id: flui_rendering::tree::RenderId,
+        render_id: flui_rendering::RenderId,
         constraints: flui_types::constraints::BoxConstraints,
     ) -> Option<flui_types::Size> {
         use flui_objects::RenderPadding;
@@ -717,7 +729,7 @@ impl TreeCoordinator {
 
         // Get child RenderId from RenderTree
         let child_render_id = {
-            let render_node = self.render_objects.get(render_id)?;
+            let render_node = self.render_objects_mut().get(render_id)?;
             let children = render_node.children();
             if children.is_empty() {
                 tracing::warn!(?render_id, "Single arity RenderObject has no children");
@@ -727,7 +739,7 @@ impl TreeCoordinator {
         };
 
         // Try to downcast to RenderPadding
-        let render_node = self.render_objects.get_mut(render_id)?;
+        let render_node = self.render_objects_mut().get_mut(render_id)?;
         let render_object = render_node.render_object_mut();
 
         if let Some(padding) =
@@ -759,7 +771,7 @@ impl TreeCoordinator {
             tracing::trace!(?render_id, ?size, "RenderPadding layout");
 
             // Cache the size in RenderNode
-            if let Some(node) = self.render_objects.get_mut(render_id) {
+            if let Some(node) = self.render_objects_mut().get_mut(render_id) {
                 node.set_cached_size(Some(size));
             }
 
@@ -773,7 +785,7 @@ impl TreeCoordinator {
         );
         let child_size = self.layout_render_object_recursive(child_render_id, constraints)?;
 
-        if let Some(node) = self.render_objects.get_mut(render_id) {
+        if let Some(node) = self.render_objects_mut().get_mut(render_id) {
             node.set_cached_size(Some(child_size));
         }
 
@@ -783,12 +795,12 @@ impl TreeCoordinator {
     /// Layout an Optional RenderObject (0 or 1 child).
     fn layout_optional_render_object(
         &mut self,
-        render_id: flui_rendering::tree::RenderId,
+        render_id: flui_rendering::RenderId,
         constraints: flui_types::constraints::BoxConstraints,
     ) -> Option<flui_types::Size> {
         // Get child RenderId from RenderTree (if exists)
         let child_render_id = {
-            let render_node = self.render_objects.get(render_id)?;
+            let render_node = self.render_objects_mut().get(render_id)?;
             let children = render_node.children();
             children.first().copied()
         };
@@ -797,7 +809,7 @@ impl TreeCoordinator {
             // Has child - layout it
             let child_size = self.layout_render_object_recursive(child_id, constraints)?;
 
-            if let Some(node) = self.render_objects.get_mut(render_id) {
+            if let Some(node) = self.render_objects_mut().get_mut(render_id) {
                 node.set_cached_size(Some(child_size));
             }
 
@@ -806,7 +818,7 @@ impl TreeCoordinator {
             // No child - return minimum size
             let size = flui_types::Size::ZERO;
 
-            if let Some(node) = self.render_objects.get_mut(render_id) {
+            if let Some(node) = self.render_objects_mut().get_mut(render_id) {
                 node.set_cached_size(Some(size));
             }
 
@@ -817,13 +829,13 @@ impl TreeCoordinator {
     /// Layout a Variable RenderObject (any number of children).
     fn layout_variable_render_object(
         &mut self,
-        render_id: flui_rendering::tree::RenderId,
+        render_id: flui_rendering::RenderId,
         constraints: flui_types::constraints::BoxConstraints,
         _expected_count: Option<usize>,
     ) -> Option<flui_types::Size> {
         // Get all child RenderIds from RenderTree
         let child_render_ids: Vec<_> = {
-            let render_node = self.render_objects.get(render_id)?;
+            let render_node = self.render_objects_mut().get(render_id)?;
             render_node.children().to_vec()
         };
 
@@ -840,7 +852,7 @@ impl TreeCoordinator {
 
         let size = flui_types::Size::new(total_width, max_height);
 
-        if let Some(node) = self.render_objects.get_mut(render_id) {
+        if let Some(node) = self.render_objects_mut().get_mut(render_id) {
             node.set_cached_size(Some(size));
         }
 
@@ -853,13 +865,13 @@ impl TreeCoordinator {
     /// the RenderObject type.
     fn layout_render_object_recursive(
         &mut self,
-        render_id: flui_rendering::tree::RenderId,
+        render_id: flui_rendering::RenderId,
         constraints: flui_types::constraints::BoxConstraints,
     ) -> Option<flui_types::Size> {
         use flui_objects::{RenderPadding, RenderParagraph};
 
         // Get the RenderNode to determine type
-        let render_node = self.render_objects.get(render_id)?;
+        let render_node = self.render_objects_mut().get(render_id)?;
         let children_count = render_node.children().len();
         let render_object = render_node.render_object();
 
@@ -924,7 +936,7 @@ impl TreeCoordinator {
         let render_id = render_elem.render_id()?;
 
         // Get RenderNode from RenderTree
-        let render_node = self.render_objects.get(render_id)?;
+        let render_node = self.render_objects_mut().get(render_id)?;
 
         // Get size from layout (use cached size or default)
         let size = render_node
@@ -954,7 +966,7 @@ impl TreeCoordinator {
     #[instrument(level = "trace", skip(self, canvas, _size), fields(render = ?render_id))]
     fn paint_render_object_to_canvas(
         &mut self,
-        render_id: flui_rendering::tree::RenderId,
+        render_id: flui_rendering::RenderId,
         offset: flui_types::Offset,
         _size: flui_types::Size,
         canvas: &mut flui_painting::Canvas,
@@ -964,7 +976,7 @@ impl TreeCoordinator {
         use flui_types::typography::TextStyle;
 
         // Get the RenderNode
-        let Some(render_node) = self.render_objects.get(render_id) else {
+        let Some(render_node) = self.render_objects_mut().get(render_id) else {
             tracing::warn!(?render_id, "RenderNode not found during paint");
             return;
         };
@@ -1002,7 +1014,7 @@ impl TreeCoordinator {
                 let child_offset =
                     offset + flui_types::Offset::new(edge_insets.left, edge_insets.top);
                 let child_size = self
-                    .render_objects
+                    .render_objects()
                     .get(child_id)
                     .and_then(|n| n.cached_size())
                     .unwrap_or(flui_types::Size::ZERO);
@@ -1023,7 +1035,7 @@ impl TreeCoordinator {
             );
             for child_id in children {
                 let child_size = self
-                    .render_objects
+                    .render_objects()
                     .get(child_id)
                     .and_then(|n| n.cached_size())
                     .unwrap_or(flui_types::Size::ZERO);
@@ -1055,7 +1067,7 @@ impl TreeCoordinator {
     /// Returns the number of render objects in the tree.
     #[inline]
     pub fn render_object_count(&self) -> usize {
-        self.render_objects.len()
+        self.render_objects().len()
     }
 
     /// Returns the number of layers in the tree.

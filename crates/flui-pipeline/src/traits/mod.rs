@@ -14,9 +14,9 @@
 //! │ PipelineCoordinator     │ ◄─── │ FrameCoordinator        │
 //! └─────────────────────────┘      └─────────────────────────┘
 //!
-//! flui_rendering (dirty tracking & context-based API)
+//! flui_rendering (flags & context-based API)
 //! ┌─────────────────────────┐
-//! │ DirtyTracking trait     │  ← Dirty flag management
+//! │ AtomicRenderFlags       │  ← Lock-free dirty flags
 //! │ LayoutTree trait        │
 //! │ PaintTree trait         │
 //! │ LayoutContext           │  ← Type-safe layout operations
@@ -48,8 +48,8 @@
 //!
 //! ## Dirty Tracking (from flui_rendering)
 //!
-//! For dirty tracking (`DirtyTracking`, `DirtyTrackingExt`, `AtomicDirtyFlags`),
-//! use `flui_rendering::DirtyTracking` directly.
+//! For dirty flags, use `flui_rendering::AtomicRenderFlags` (per-element) or
+//! `flui_rendering::RenderFlags` (bitflags enum).
 
 mod coordinator;
 mod phase;

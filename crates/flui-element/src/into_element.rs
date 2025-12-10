@@ -79,9 +79,9 @@ impl IntoElement for Vec<Element> {
 // RENDER VIEW IMPLEMENTATIONS
 // ============================================================================
 
-use flui_rendering::core::arity::{Leaf, Single};
-use flui_rendering::core::protocol::BoxProtocol;
-use flui_rendering::core::{ProtocolId, RenderElement};
+use flui_rendering::BoxProtocol;
+use flui_rendering::{Leaf, Single};
+use flui_rendering::{ProtocolId, RenderElement};
 use flui_tree::RuntimeArity;
 use flui_view::{RenderObjectFor, RenderView, RenderViewLeaf, RenderViewWithChild};
 

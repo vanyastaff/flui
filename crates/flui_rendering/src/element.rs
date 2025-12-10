@@ -81,7 +81,7 @@ use super::parent_data::ParentData;
 use super::protocol::{BoxProtocol, Protocol, ProtocolId, SliverProtocol};
 use super::state::RenderState;
 use super::{BoxConstraints, SliverConstraints};
-use crate::tree::RenderId;
+use flui_foundation::RenderId;
 
 // ============================================================================
 // PROTOCOL STATE (Type-Erased RenderState)
@@ -810,132 +810,6 @@ impl RenderElement {
     #[inline]
     pub fn is_sliver(&self) -> bool {
         self.protocol == ProtocolId::Sliver
-    }
-}
-
-// ============================================================================
-// UNIFIED LAYOUT AND PAINT METHODS
-// ============================================================================
-
-use super::tree::{LayoutTree, PaintTree};
-use super::unified::{Constraints, Geometry};
-use crate::{RenderError, RenderResult};
-
-impl RenderElement {
-    /// Unified layout method that handles both Box and Sliver protocols.
-    ///
-    /// This method dispatches to the appropriate RenderObject layout method based on
-    /// the element's protocol and validates that the constraint type matches.
-    ///
-    /// # Arguments
-    ///
-    /// * `id` - This element's ID
-    /// * `constraints` - Protocol-specific constraints (Box or Sliver)
-    /// * `tree` - Tree for accessing children and performing layout operations
-    ///
-    /// # Returns
-    ///
-    /// Returns `Geometry` enum containing either Box(Size) or Sliver(SliverGeometry)
-    ///
-    /// # Errors
-    ///
-    /// Returns `RenderError::ProtocolMismatch` if the constraint protocol doesn't match
-    /// the element's protocol.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// // Box layout
-    /// let constraints = Constraints::Box(BoxConstraints::tight_for(100.0, 100.0));
-    /// let geometry = element.layout(id, constraints, &mut tree)?;
-    /// let size = geometry.as_box();
-    ///
-    /// // Sliver layout
-    /// let constraints = Constraints::Sliver(SliverConstraints::new(0.0, 1000.0));
-    /// let geometry = element.layout(id, constraints, &mut tree)?;
-    /// let sliver_geom = geometry.as_sliver();
-    /// ```
-    pub fn layout(
-        &mut self,
-        _id: ElementId,
-        constraints: Constraints,
-        _tree: &mut dyn LayoutTree,
-    ) -> RenderResult<Geometry> {
-        // Verify protocol match
-        if constraints.protocol() != self.protocol {
-            return Err(RenderError::ProtocolMismatch {
-                expected: format!("{:?}", self.protocol),
-                actual: format!("{:?}", constraints.protocol()),
-            });
-        }
-
-        // TODO: Four-Tree Architecture Integration
-        //
-        // In the new architecture, layout() needs to:
-        // 1. Access RenderObject from RenderTree using self.render_id
-        // 2. Call perform_layout() on the RenderObject
-        // 3. Store the resulting geometry
-        //
-        // This requires:
-        // - RenderTree to be passed as a parameter, OR
-        // - LayoutTree trait to provide access to RenderTree, OR
-        // - Layout logic to move entirely to pipeline coordinator
-        //
-        // The render_object field has been removed as part of clean four-tree architecture.
-        // Elements only hold ID references, not the actual objects.
-
-        unimplemented!(
-            "layout() needs RenderTree integration - render_object field removed per clean architecture"
-        )
-    }
-
-    /// Unified paint method that handles both Box and Sliver protocols.
-    ///
-    /// # Arguments
-    ///
-    /// * `id` - This element's ID
-    /// * `offset` - Paint offset in parent coordinates
-    /// * `geometry` - Protocol-specific geometry from layout
-    /// * `canvas` - Canvas to paint on
-    /// * `tree` - Tree for accessing children
-    ///
-    /// # Errors
-    ///
-    /// Returns `RenderError::ProtocolMismatch` if the geometry protocol doesn't match
-    /// the element's protocol.
-    pub fn paint(
-        &self,
-        _id: ElementId,
-        _offset: Offset,
-        geometry: &Geometry,
-        _canvas: &mut super::Canvas,
-        _tree: &mut dyn PaintTree,
-    ) -> RenderResult<()> {
-        // Verify geometry matches protocol
-        if geometry.protocol() != self.protocol {
-            return Err(RenderError::ProtocolMismatch {
-                expected: format!("{:?}", self.protocol),
-                actual: format!("{:?}", geometry.protocol()),
-            });
-        }
-
-        // TODO: Four-Tree Architecture Integration
-        //
-        // In the new architecture, paint() needs to:
-        // 1. Access RenderObject from RenderTree using self.render_id
-        // 2. Call paint() on the RenderObject
-        //
-        // This requires:
-        // - RenderTree to be passed as a parameter, OR
-        // - PaintTree trait to provide access to RenderTree, OR
-        // - Paint logic to move entirely to pipeline coordinator
-        //
-        // The render_object field has been removed as part of clean four-tree architecture.
-        // Elements only hold ID references, not the actual objects.
-
-        unimplemented!(
-            "paint() needs RenderTree integration - render_object field removed per clean architecture"
-        )
     }
 }
 

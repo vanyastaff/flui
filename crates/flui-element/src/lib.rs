@@ -168,7 +168,6 @@ pub use flui_foundation::{ElementId, Slot};
 pub use flui_view::ViewMode;
 
 // Re-export tree traits for convenience
-pub use flui_rendering::core::RenderTreeAccess;
 pub use flui_tree::{TreeNav, TreeRead, TreeWrite, TreeWriteNav};
 
 // ============================================================================
@@ -201,7 +200,6 @@ pub mod prelude {
     pub use flui_view::ViewMode;
 
     // Tree traits
-    pub use flui_rendering::core::RenderTreeAccess;
     pub use flui_tree::{TreeNav, TreeRead, TreeWrite};
 
     // From flui-view

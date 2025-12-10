@@ -26,10 +26,10 @@ use std::fmt;
 use flui_interaction::HitTestResult;
 use flui_types::{BoxConstraints, Offset, Rect, Size};
 
-use super::arity::Arity;
 use super::context::{BoxHitTestContext, BoxLayoutContext, BoxPaintContext};
 use super::object::RenderObject;
 use crate::RenderResult;
+use flui_tree::arity::Arity;
 
 // ============================================================================
 // RENDER BOX TRAIT

@@ -26,10 +26,10 @@ use flui_foundation::{DiagnosticsProperty, ElementId};
 use flui_interaction::HitTestResult;
 use flui_types::{Rect, SliverConstraints, SliverGeometry};
 
-use super::arity::Arity;
 use super::context::{SliverHitTestContext, SliverLayoutContext, SliverPaintContext};
 use super::object::RenderObject;
 use super::RenderResult;
+use flui_tree::arity::Arity;
 
 // ============================================================================
 // CORE RENDER SLIVER TRAIT
@@ -451,7 +451,7 @@ pub trait RenderSliver<A: Arity>: RenderObject + fmt::Debug + Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::arity::Leaf;
+    use crate::Leaf;
 
     #[derive(Debug)]
     struct TestRenderSliver {

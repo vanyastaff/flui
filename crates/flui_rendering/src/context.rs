@@ -13,10 +13,10 @@ use flui_painting::Canvas;
 use flui_types::{BoxConstraints, Offset, Rect, Size, SliverConstraints, SliverGeometry};
 use tracing::{instrument, trace};
 
-use super::arity::{Arity, ChildrenAccess, Single};
 use super::protocol::{BoxProtocol, Protocol, SliverProtocol};
 use super::tree::{HitTestTree, LayoutTree, PaintTree};
-use crate::core::RenderResult;
+use crate::RenderResult;
+use flui_tree::arity::{Arity, ChildrenAccess, Single};
 
 // ============================================================================
 // TYPE ALIASES FOR ERGONOMICS

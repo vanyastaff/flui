@@ -27,12 +27,13 @@
 //! }
 //!
 //! // Later, during mount:
-//! let child_handles = column.children.mount_all(Some(parent_id));
+//! let child_handles = column.children.mount_all_as_children(parent_id, parent_depth);
 //! ```
 
 use crate::handle::{ViewConfig, ViewHandle};
 use crate::IntoViewConfig;
-use flui_tree::{Mountable, Mounted};
+use flui_foundation::ViewId;
+use flui_tree::{Depth, Mounted};
 
 /// Multiple children wrapper that stores view configurations.
 ///
@@ -192,14 +193,7 @@ impl Children {
 // ============================================================================
 
 impl Children {
-    /// Mount all children, creating `Vec<ViewHandle<Mounted>>`.
-    ///
-    /// This converts all stored `ViewConfig` instances into mounted view handles
-    /// with live `ViewObject` state.
-    ///
-    /// # Parameters
-    ///
-    /// - `parent`: Parent node ID for all children
+    /// Mount all children as roots, creating `Vec<ViewHandle<Mounted>>`.
     ///
     /// # Returns
     ///
@@ -208,27 +202,79 @@ impl Children {
     /// # Example
     ///
     /// ```rust,ignore
-    /// use flui_view::Children;
-    ///
     /// let mut children = Children::new();
     /// children.push(Text::new("A"));
     /// children.push(Text::new("B"));
     ///
-    /// // Later, during mount:
-    /// let mounted = children.mount_all(Some(parent_id));
+    /// let mounted = children.mount_all_as_roots();
     /// assert_eq!(mounted.len(), 2);
     /// ```
-    pub fn mount_all(self, parent: Option<usize>) -> Vec<ViewHandle<Mounted>> {
+    pub fn mount_all_as_roots(self) -> Vec<ViewHandle<Mounted>> {
         self.inner
             .into_iter()
             .map(|config| {
                 let handle = ViewHandle::from_config(config);
-                handle.mount(parent)
+                handle.mount_as_root()
             })
             .collect()
     }
 
-    /// Mount children at specific indices, creating handles for selected children.
+    /// Mount all children as children of parent, creating `Vec<ViewHandle<Mounted>>`.
+    ///
+    /// # Parameters
+    ///
+    /// - `parent`: Parent node ID for all children
+    /// - `parent_depth`: Depth of the parent
+    ///
+    /// # Returns
+    ///
+    /// A vector of mounted view handles, one for each child.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let mut children = Children::new();
+    /// children.push(Text::new("A"));
+    /// children.push(Text::new("B"));
+    ///
+    /// let mounted = children.mount_all_as_children(parent_id, parent_depth);
+    /// assert_eq!(mounted.len(), 2);
+    /// ```
+    pub fn mount_all_as_children(
+        self,
+        parent: ViewId,
+        parent_depth: Depth,
+    ) -> Vec<ViewHandle<Mounted>> {
+        self.inner
+            .into_iter()
+            .map(|config| {
+                let handle = ViewHandle::from_config(config);
+                handle.mount_as_child(parent, parent_depth)
+            })
+            .collect()
+    }
+
+    /// Mount all children with explicit parent and depth.
+    ///
+    /// # Parameters
+    ///
+    /// - `parent`: Optional parent node ID (None for root)
+    /// - `depth`: Depth in tree
+    ///
+    /// # Returns
+    ///
+    /// A vector of mounted view handles, one for each child.
+    pub fn mount_all(self, parent: Option<ViewId>, depth: Depth) -> Vec<ViewHandle<Mounted>> {
+        self.inner
+            .into_iter()
+            .map(|config| {
+                let handle = ViewHandle::from_config(config);
+                handle.mount(parent, depth)
+            })
+            .collect()
+    }
+
+    /// Mount children at specific indices as children of parent.
     ///
     /// This is useful for partial updates during reconciliation.
     ///
@@ -236,6 +282,7 @@ impl Children {
     ///
     /// - `indices`: Indices of children to mount
     /// - `parent`: Parent node ID for children
+    /// - `parent_depth`: Depth of the parent
     ///
     /// # Returns
     ///
@@ -250,20 +297,21 @@ impl Children {
     /// children.push(Text::new("C"));
     ///
     /// // Mount only children at indices 0 and 2
-    /// let mounted = children.mount_indices(&[0, 2], Some(parent_id));
+    /// let mounted = children.mount_indices(&[0, 2], parent_id, parent_depth);
     /// assert_eq!(mounted.len(), 2);
     /// ```
     pub fn mount_indices(
         &self,
         indices: &[usize],
-        parent: Option<usize>,
+        parent: ViewId,
+        parent_depth: Depth,
     ) -> Vec<(usize, ViewHandle<Mounted>)> {
         indices
             .iter()
             .filter_map(|&idx| {
                 self.get(idx).map(|config| {
                     let handle = ViewHandle::from_config(config.clone());
-                    (idx, handle.mount(parent))
+                    (idx, handle.mount_as_child(parent, parent_depth))
                 })
             })
             .collect()
@@ -328,7 +376,6 @@ mod tests {
     use super::*;
     use crate::traits::StatelessView;
     use crate::BuildContext;
-    use flui_tree::NavigableHandle;
 
     #[derive(Clone)]
     struct TestView {
@@ -398,36 +445,37 @@ mod tests {
     }
 
     #[test]
-    fn test_children_mount_all() {
+    fn test_children_mount_all_as_roots() {
         let mut children = Children::new();
         children.push(TestView { value: 1 });
         children.push(TestView { value: 2 });
         children.push(TestView { value: 3 });
 
-        // Mount all as root
-        let mounted = children.mount_all(None);
+        // Mount all as roots
+        let mounted = children.mount_all_as_roots();
         assert_eq!(mounted.len(), 3);
 
         // All should be roots
         for handle in mounted {
             assert!(handle.is_root());
-            assert_eq!(handle.depth(), 0);
+            assert_eq!(handle.depth(), Depth::root());
         }
     }
 
     #[test]
-    fn test_children_mount_all_with_parent() {
+    fn test_children_mount_all_as_children() {
         let mut children = Children::new();
         children.push(TestView { value: 1 });
         children.push(TestView { value: 2 });
 
-        // Mount with parent
-        let mounted = children.mount_all(Some(42));
+        let parent_id = ViewId::new(42);
+        let mounted = children.mount_all_as_children(parent_id, Depth::root());
 
         assert_eq!(mounted.len(), 2);
         for handle in mounted {
             assert!(!handle.is_root());
-            assert_eq!(handle.parent(), Some(42));
+            assert_eq!(handle.parent(), Some(parent_id));
+            assert_eq!(handle.depth(), Depth::new(1));
         }
     }
 
@@ -438,22 +486,23 @@ mod tests {
         children.push(TestView { value: 2 });
         children.push(TestView { value: 3 });
 
+        let parent_id = ViewId::new(10);
         // Mount only indices 0 and 2
-        let mounted = children.mount_indices(&[0, 2], Some(10));
+        let mounted = children.mount_indices(&[0, 2], parent_id, Depth::root());
         assert_eq!(mounted.len(), 2);
 
         let indices: Vec<_> = mounted.iter().map(|(idx, _)| *idx).collect();
         assert_eq!(indices, vec![0, 2]);
 
         for (_, handle) in mounted {
-            assert_eq!(handle.parent(), Some(10));
+            assert_eq!(handle.parent(), Some(parent_id));
         }
     }
 
     #[test]
     fn test_children_mount_empty() {
         let children = Children::new();
-        let mounted = children.mount_all(None);
+        let mounted = children.mount_all_as_roots();
         assert!(mounted.is_empty());
     }
 

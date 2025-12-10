@@ -10,14 +10,6 @@
 //! ## Architecture
 //!
 //! ```text
-//! flui-tree (unified abstractions)
-//!     │
-//!     ├── Arity system (GAT, HRTB, const generics)
-//!     ├── TreeRead, TreeNav, TreeWrite
-//!     ├── RenderTreeAccess, DirtyTracking
-//!     ├── Iterators (RenderChildren, RenderDescendants, etc.)
-//!     │
-//!     ▼
 //! flui_rendering (this crate)
 //!     │
 //!     ├── RenderObject (type-erased trait)
@@ -25,6 +17,7 @@
 //!     ├── RenderSliver<A> (sliver protocol with arity)
 //!     ├── LayoutTree, PaintTree, HitTestTree (concrete ops)
 //!     ├── Contexts (LayoutContext, PaintContext, HitTestContext)
+//!     ├── AtomicRenderFlags (lock-free dirty tracking)
 //!     │
 //!     ▼
 //! flui-objects (concrete implementations)
@@ -43,130 +36,112 @@
 //!
 //! ## Module Structure
 //!
-//! ```text
-//! src/
-//! ├── lib.rs       # Crate entry point with re-exports
-//! ├── core/        # Core rendering types and traits
-//! ├── tree/        # RenderTree storage
-//! ├── view/        # View-related rendering
-//! ├── error.rs     # Error types
-//! ├── debug.rs     # Debug utilities
-//! └── into_render.rs # IntoRender trait
-//! ```
+//! Flat crate structure - all modules at root level.
 
 // ============================================================================
 // MODULE DECLARATIONS
 // ============================================================================
 
-/// Core rendering types and traits
-pub mod core;
+// Core rendering types
+mod box_render;
+mod context;
+mod element;
+mod flags;
+mod lifecycle;
+mod object;
+mod parent_data;
+mod pipeline_owner;
+mod protocol;
+mod proxy;
+mod render_tree;
 
-/// RenderTree storage and tree operations
-pub mod tree;
+mod sliver;
+mod state;
+mod tree;
 
-// NOTE: RenderView and UpdateResult have been moved to flui-view crate.
-// Use `flui_view::{RenderView, UpdateResult}` instead.
+mod wrapper;
 
-/// Error handling
+// Other modules
 pub mod error;
 
-/// Debug utilities and assertions
-pub mod debug;
-
-/// IntoRender trait
-pub mod into_render;
-
-/// RenderHandle with typestate
-pub mod handle;
-
 // ============================================================================
-// RE-EXPORTS FROM CORE MODULE
+// RE-EXPORTS
 // ============================================================================
 
 // Core rendering traits
-pub use core::RenderBox;
-pub use core::RenderSliver;
-pub use core::{new_layer_handle, LayerHandle, LayerRef, RenderObject};
+pub use box_render::RenderBox;
+pub use object::{new_layer_handle, LayerHandle, LayerRef, RenderObject};
+pub use sliver::RenderSliver;
 
 // Re-export downcast-rs for downcasting RenderObject
 pub use downcast_rs::DowncastSync;
 
 // Protocol system
-pub use core::{BoxProtocol, Protocol, ProtocolId, SliverProtocol};
+pub use protocol::{BoxProtocol, Protocol, ProtocolId, SliverProtocol};
 
-// Arity system
-pub use core::{
+// Arity system (from flui-tree)
+pub use flui_tree::arity::{
     Arity, AtLeast, ChildrenAccess, Exact, FixedChildren, Leaf, NoChildren, Optional,
     OptionalChild, Range, RuntimeArity, Single, SliceChildren, Variable,
 };
 
 // Context types for layout/paint/hit-test
-pub use core::{BoxHitTestContext, HitTestContext, SliverHitTestContext};
-pub use core::{BoxLayoutContext, LayoutContext, SliverLayoutContext};
-pub use core::{BoxPaintContext, PaintContext, SliverPaintContext};
+pub use context::{BoxHitTestContext, HitTestContext, SliverHitTestContext};
+pub use context::{BoxLayoutContext, LayoutContext, SliverLayoutContext};
+pub use context::{BoxPaintContext, PaintContext, SliverPaintContext};
 
 // Short context aliases
-pub type BoxLayoutCtx<'a, A, T = Box<dyn core::LayoutTree + Send + Sync>> =
-    core::BoxLayoutContext<'a, A, T>;
-pub type BoxPaintCtx<'a, A, T = Box<dyn core::PaintTree + Send + Sync>> =
-    core::BoxPaintContext<'a, A, T>;
-pub type BoxHitTestCtx<'a, A, T = Box<dyn core::HitTestTree + Send + Sync>> =
-    core::BoxHitTestContext<'a, A, T>;
-pub type SliverLayoutCtx<'a, A, T = Box<dyn core::LayoutTree + Send + Sync>> =
-    core::SliverLayoutContext<'a, A, T>;
-pub type SliverPaintCtx<'a, A, T = Box<dyn core::PaintTree + Send + Sync>> =
-    core::SliverPaintContext<'a, A, T>;
+pub type BoxLayoutCtx<'a, A, T = Box<dyn LayoutTree + Send + Sync>> =
+    context::BoxLayoutContext<'a, A, T>;
+pub type BoxPaintCtx<'a, A, T = Box<dyn PaintTree + Send + Sync>> =
+    context::BoxPaintContext<'a, A, T>;
+pub type BoxHitTestCtx<'a, A, T = Box<dyn HitTestTree + Send + Sync>> =
+    context::BoxHitTestContext<'a, A, T>;
+pub type SliverLayoutCtx<'a, A, T = Box<dyn LayoutTree + Send + Sync>> =
+    context::SliverLayoutContext<'a, A, T>;
+pub type SliverPaintCtx<'a, A, T = Box<dyn PaintTree + Send + Sync>> =
+    context::SliverPaintContext<'a, A, T>;
 
 // Tree operation traits (dyn-compatible)
-pub use core::{
+pub use tree::{
     debug_element_info, format_element_debug, format_tree_node, FullRenderTree,
     RenderElementDebugInfo, RenderTreeOps,
 };
-pub use core::{HitTestTree, HitTestTreeExt};
-pub use core::{LayoutTree, LayoutTreeExt};
-pub use core::{PaintTree, PaintTreeExt};
+pub use tree::{HitTestTree, HitTestTreeExt};
+pub use tree::{LayoutTree, LayoutTreeExt};
+pub use tree::{PaintTree, PaintTreeExt};
 
 // Flags and state
-pub use core::{AtomicRenderFlags, RenderFlags};
-pub use core::{BoxRenderState, RenderState, RenderStateExt, SliverRenderState};
+pub use flags::{AtomicRenderFlags, RenderFlags};
+pub use state::{BoxRenderState, RenderState, RenderStateExt, SliverRenderState};
 
 // Parent data
-pub use core::{
+pub use parent_data::{
     BoxParentData, ContainerBoxParentData, ContainerParentData, ParentData, ParentDataWithOffset,
 };
 
 // RenderElement and lifecycle
-pub use core::RenderElement;
-pub use core::RenderLifecycle;
+pub use element::RenderElement;
+pub use lifecycle::RenderLifecycle;
 
 // Proxy traits
-pub use core::{RenderProxyBox, RenderProxySliver};
+pub use proxy::{RenderProxyBox, RenderProxySliver};
 
 // Wrapper types
-pub use core::{BoxRenderWrapper, SliverRenderWrapper};
+pub use wrapper::{BoxRenderWrapper, SliverRenderWrapper};
 
-// Semantics / accessibility
-pub use core::{SemanticsHandle, SemanticsNode, SemanticsNodeId, SemanticsOwner};
+// RenderTree and RenderNode
+pub use render_tree::{RenderNode, RenderTree};
 
-// Unified protocol types
-pub use core::{Constraints, Geometry};
-
-// RenderTreeStorage from core
-pub use core::RenderTreeStorage;
+// RenderPipelineOwner (Flutter's PipelineOwner equivalent)
+pub use pipeline_owner::RenderPipelineOwner;
 
 // ============================================================================
-// RE-EXPORTS FROM TREE MODULE
+// RE-EXPORTS FROM FOUNDATION
 // ============================================================================
 
-// Tree types (RenderTree, RenderNode, RenderId)
-pub use tree::{RenderId, RenderNode, RenderTree};
-
-// Tree access and iteration
-pub use tree::{
-    AtomicDirtyFlags, DirtyTracking, DirtyTrackingExt, RenderAncestors, RenderChildren,
-    RenderChildrenCollector, RenderDescendants, RenderTreeAccess, RenderTreeAccessExt,
-    RenderTreeExt,
-};
+// RenderId from foundation
+pub use flui_foundation::RenderId;
 
 // ============================================================================
 // RE-EXPORTS FROM OTHER MODULES
@@ -174,12 +149,6 @@ pub use tree::{
 
 // Error handling
 pub use error::{RenderError, Result as RenderResult};
-
-// IntoRender trait
-pub use into_render::{IntoRender, IntoRenderState};
-
-// Handle types (RenderConfig, RenderHandle with typestate)
-pub use handle::{RenderConfig, RenderHandle};
 
 // Geometry and constraints from flui_types
 pub use flui_types::BoxConstraints;
@@ -227,12 +196,6 @@ pub mod prelude {
 
     // Error handling
     pub use super::{RenderError, RenderResult};
-
-    // IntoRender trait
-    pub use super::{IntoRender, IntoRenderState};
-
-    // Handle types
-    pub use super::{RenderConfig, RenderHandle};
 }
 
 // ============================================================================

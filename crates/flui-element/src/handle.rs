@@ -48,11 +48,12 @@
 use std::marker::PhantomData;
 
 use flui_foundation::{ElementId, Key};
-use flui_tree::{Mountable, TreeInfo, Unmountable};
-use flui_tree::{Mounted, NodeState, Unmounted};
+#[cfg(test)]
+use flui_tree::MountableExt;
+use flui_tree::{Depth, Mountable, Mounted, NodeState, Unmountable, Unmounted};
 
+use flui_rendering::ProtocolId;
 use flui_view::ViewMode;
-use flui_rendering::core::ProtocolId;
 
 use crate::element::Element;
 
@@ -209,11 +210,11 @@ impl ElementConfig {
 ///     ElementHandle::view(ViewMode::Stateless, None);
 ///
 /// // Mount transitions to Mounted state
-/// let mounted: ElementHandle<Mounted> = unmounted.mount(None);
+/// let mounted: ElementHandle<Mounted> = unmounted.mount_root();
 ///
 /// // Can now access Element and tree info
 /// let element = mounted.element();
-/// let parent = mounted.parent();  // NavigableHandle method
+/// let parent = mounted.parent();  // Unmountable method
 /// ```
 pub struct ElementHandle<S: NodeState> {
     /// Immutable element configuration (always present)
@@ -226,10 +227,9 @@ pub struct ElementHandle<S: NodeState> {
     /// Created from config during mount, discarded during unmount.
     element: Option<Element>,
 
-    /// Tree position information (Some for Mounted, None for Unmounted)
-    ///
-    /// Contains parent/children IDs and depth.
-    tree_info: Option<TreeInfo>,
+    /// Tree position fields (Flutter-style, stored directly)
+    depth: Depth,
+    parent: Option<ElementId>,
 
     /// Typestate marker (zero-sized)
     _state: PhantomData<S>,
@@ -252,7 +252,8 @@ impl ElementHandle<Unmounted> {
         Self {
             config,
             element: None,
-            tree_info: None,
+            depth: Depth::root(),
+            parent: None,
             _state: PhantomData,
         }
     }
@@ -347,47 +348,11 @@ impl ElementHandle<Mounted> {
     pub fn is_render(&self) -> bool {
         matches!(self.element.as_ref().unwrap(), Element::Render(_))
     }
-}
 
-// ============================================================================
-// TYPED NAVIGATION (ElementId instead of usize)
-// ============================================================================
-
-impl ElementHandle<Mounted> {
-    /// Get the parent ElementId.
-    ///
-    /// Returns `None` if this is the root element.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// if let Some(parent_id) = mounted.parent_element() {
-    ///     println!("Parent: {:?}", parent_id);
-    /// }
-    /// ```
-    pub fn parent_element(&self) -> Option<ElementId> {
-        self.tree_info.as_ref()
-            .and_then(|info| info.parent)
-            .map(ElementId::new)
-    }
-
-    /// Get the children ElementIds.
-    ///
-    /// Returns an iterator over child IDs.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// for child_id in mounted.children_elements() {
-    ///     println!("Child: {:?}", child_id);
-    /// }
-    /// ```
-    pub fn children_elements(&self) -> impl Iterator<Item = ElementId> + '_ {
-        self.tree_info.as_ref()
-            .map(|info| info.children.as_slice())
-            .unwrap_or(&[])
-            .iter()
-            .map(|&id| ElementId::new(id))
+    /// Check if this is the root element.
+    #[inline]
+    pub fn is_root(&self) -> bool {
+        self.parent.is_none()
     }
 }
 
@@ -396,14 +361,14 @@ impl ElementHandle<Mounted> {
 // ============================================================================
 
 impl Mountable for ElementHandle<Unmounted> {
+    type Id = ElementId;
     type Mounted = ElementHandle<Mounted>;
 
-    fn mount(self, parent: Option<usize>) -> Self::Mounted {
-        // Create tree info
-        let tree_info = if let Some(parent_id) = parent {
-            TreeInfo::with_parent(parent_id, 0)  // Depth will be calculated by framework
+    fn mount(self, parent: Option<ElementId>, parent_depth: Depth) -> Self::Mounted {
+        let depth = if parent.is_some() {
+            parent_depth.child_depth()
         } else {
-            TreeInfo::root()
+            Depth::root()
         };
 
         // Create Element from config
@@ -423,34 +388,35 @@ impl Mountable for ElementHandle<Unmounted> {
         ElementHandle {
             config: self.config,
             element: Some(element),
-            tree_info: Some(tree_info),
+            depth,
+            parent,
             _state: PhantomData,
         }
     }
 }
 
 impl Unmountable for ElementHandle<Mounted> {
+    type Id = ElementId;
     type Unmounted = ElementHandle<Unmounted>;
+
+    fn parent(&self) -> Option<ElementId> {
+        self.parent
+    }
+
+    fn depth(&self) -> Depth {
+        self.depth
+    }
 
     fn unmount(self) -> Self::Unmounted {
         ElementHandle {
-            config: self.config,  // Preserve config for hot-reload
-            element: None,         // Discard live Element
-            tree_info: None,       // Discard tree position
+            config: self.config, // Preserve config for hot-reload
+            element: None,       // Discard live Element
+            depth: Depth::root(),
+            parent: None,
             _state: PhantomData,
         }
     }
-
-    fn tree_info(&self) -> &TreeInfo {
-        self.tree_info.as_ref().unwrap()  // Safe - always Some for Mounted
-    }
-
-    fn tree_info_mut(&mut self) -> &mut TreeInfo {
-        self.tree_info.as_mut().unwrap()  // Safe - always Some for Mounted
-    }
 }
-
-// NavigableHandle is auto-implemented via blanket impl!
 
 // ============================================================================
 // DEBUG IMPLEMENTATIONS
@@ -459,10 +425,11 @@ impl Unmountable for ElementHandle<Mounted> {
 impl<S: NodeState> std::fmt::Debug for ElementHandle<S> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ElementHandle")
-            .field("state", &S::state_name())
+            .field("state", &S::name())
             .field("config", &self.config)
             .field("has_element", &self.element.is_some())
-            .field("has_tree_info", &self.tree_info.is_some())
+            .field("depth", &self.depth)
+            .field("parent", &self.parent)
             .finish()
     }
 }
@@ -474,7 +441,6 @@ impl<S: NodeState> std::fmt::Debug for ElementHandle<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_tree::NavigableHandle;
 
     #[test]
     fn test_element_config_view() {
@@ -505,18 +471,18 @@ mod tests {
     #[test]
     fn test_element_handle_mount_view() {
         let unmounted = ElementHandle::view(ViewMode::Stateless, None);
-        let mounted = unmounted.mount(None);
+        let mounted = unmounted.mount_root();
 
         // Check mounted state
-        assert!(mounted.is_root());  // NavigableHandle method
-        assert_eq!(mounted.depth(), 0);
+        assert!(mounted.is_root());
+        assert_eq!(mounted.depth(), Depth::root());
         assert!(mounted.is_view());
     }
 
     #[test]
     fn test_element_handle_mount_render() {
         let unmounted = ElementHandle::render(ProtocolId::Box);
-        let mounted = unmounted.mount(None);
+        let mounted = unmounted.mount_root();
 
         assert!(mounted.is_render());
     }
@@ -524,7 +490,7 @@ mod tests {
     #[test]
     fn test_element_handle_unmount() {
         let unmounted = ElementHandle::view(ViewMode::Stateless, None);
-        let mounted = unmounted.mount(None);
+        let mounted = unmounted.mount_root();
         let unmounted_again = mounted.unmount();
 
         // Config preserved
@@ -532,36 +498,15 @@ mod tests {
     }
 
     #[test]
-    fn test_navigable_handle_integration() {
+    fn test_mount_as_child() {
+        let parent_id = ElementId::new(10);
         let unmounted = ElementHandle::view(ViewMode::Stateless, None);
-        let mut mounted = unmounted.mount(Some(10));
+        let mounted = unmounted.mount_child(parent_id, Depth::new(1));
 
-        // NavigableHandle methods
-        assert_eq!(mounted.parent(), Some(10));
+        // Unmountable methods
+        assert_eq!(mounted.parent(), Some(parent_id));
         assert!(!mounted.is_root());
-
-        // Add children
-        mounted.add_child(100);
-        mounted.add_child(200);
-
-        assert_eq!(mounted.child_count(), 2);
-        assert_eq!(mounted.children(), &[100, 200]);
-    }
-
-    #[test]
-    fn test_typed_navigation() {
-        let unmounted = ElementHandle::view(ViewMode::Stateless, None);
-        let mounted = unmounted.mount(Some(10));
-
-        // Typed ElementId methods
-        if let Some(parent_id) = mounted.parent_element() {
-            assert_eq!(parent_id.get(), 10);
-        } else {
-            panic!("Expected parent");
-        }
-
-        let children: Vec<_> = mounted.children_elements().collect();
-        assert_eq!(children.len(), 0);
+        assert_eq!(mounted.depth(), Depth::new(2)); // parent + 1
     }
 
     #[test]
@@ -569,10 +514,27 @@ mod tests {
         let key = Key::new();
         let config = ElementConfig::view(ViewMode::Stateful, Some(key));
 
-        if let ElementConfig::View { key: config_key, .. } = config {
+        if let ElementConfig::View {
+            key: config_key, ..
+        } = config
+        {
             assert_eq!(config_key.unwrap(), key);
         } else {
             panic!("Expected View config");
         }
+    }
+
+    #[test]
+    fn test_roundtrip() {
+        let unmounted = ElementHandle::view(ViewMode::Stateless, None);
+        let mounted = unmounted.mount_child(ElementId::new(5), Depth::new(2));
+
+        assert_eq!(mounted.depth(), Depth::new(3));
+
+        let unmounted = mounted.unmount();
+        let remounted = unmounted.mount_root();
+
+        assert!(remounted.is_root());
+        assert_eq!(remounted.depth(), Depth::root());
     }
 }

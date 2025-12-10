@@ -79,7 +79,7 @@ pub mod view {
 // Re-exports from flui-rendering
 // =============================================================================
 
-pub use flui_rendering::core::{Arity, RenderBox, RuntimeArity};
+pub use flui_rendering::{Arity, RenderBox, RuntimeArity};
 // Re-export RenderView trait and UpdateResult from flui-view
 pub use flui_view::{RenderView, UpdateResult};
 
@@ -97,7 +97,7 @@ pub mod render {
         PaintContext, SliverHitTestContext, SliverLayoutContext, SliverPaintContext,
     };
     // RenderState types
-    pub use flui_rendering::core::{BoxRenderState, RenderState, SliverRenderState};
+    pub use flui_rendering::{BoxRenderState, RenderState, SliverRenderState};
 }
 
 // =============================================================================

@@ -37,7 +37,7 @@ use flui_types::semantics::{SemanticsAction, SemanticsProperties};
 use flui_types::Offset;
 use parking_lot::RwLock;
 
-use crate::core::HitTestTree;
+use crate::HitTestTree;
 
 // ============================================================================
 // LAYER HANDLE
@@ -394,8 +394,8 @@ pub trait RenderObject: DowncastSync + fmt::Debug {
     // ============================================================================
 
     /// Creates default ParentData for a child of this render object.
-    fn create_parent_data(&self) -> Box<dyn crate::core::ParentData> {
-        Box::new(crate::core::BoxParentData::default())
+    fn create_parent_data(&self) -> Box<dyn crate::ParentData> {
+        Box::new(crate::BoxParentData::default())
     }
 
     // ============================================================================
