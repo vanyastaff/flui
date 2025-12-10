@@ -346,21 +346,66 @@ impl RenderPipelineOwner {
 
     /// Flushes the compositing bits update phase.
     ///
-    /// This updates the `needsCompositing` flag on render objects.
+    /// This updates the `needsCompositing` flag on render objects and their subtrees.
     /// Must be called before `flush_paint()`.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// void flushCompositingBits() {
+    ///   _nodesNeedingCompositingBitsUpdate.sort(
+    ///     (a, b) => a.depth - b.depth
+    ///   );
+    ///
+    ///   for (final node in _nodesNeedingCompositingBitsUpdate) {
+    ///     if (node._needsCompositingBitsUpdate) {
+    ///       node._updateCompositingBits();
+    ///     }
+    ///   }
+    ///
+    ///   _nodesNeedingCompositingBitsUpdate.clear();
+    /// }
+    /// ```
+    ///
+    /// # Algorithm
+    ///
+    /// 1. Collect all dirty nodes
+    /// 2. For each dirty node, call `update_compositing_bits()`
+    /// 3. `update_compositing_bits()` recursively processes the subtree
+    /// 4. Clear the dirty set
+    ///
+    /// # Note
+    ///
+    /// Unlike Flutter, we don't need to sort by depth because our
+    /// `update_compositing_bits()` recursively processes the entire subtree.
+    /// This avoids redundant processing when multiple nodes in the same
+    /// subtree are marked dirty.
     pub fn flush_compositing_bits(&mut self) {
         if self.needs_compositing_bits_update.is_empty() {
             return;
         }
 
+        // Collect dirty nodes (drain to clear the set)
         let dirty_nodes: Vec<RenderId> = self.needs_compositing_bits_update.drain().collect();
 
+        // Update compositing bits for each dirty node
+        // Note: update_compositing_bits() recursively processes the subtree
         for id in dirty_nodes {
-            if let Some(node) = self.render_tree.get_mut(id) {
-                // Update compositing bits
-                // TODO: Implement proper compositing bits calculation
-                tracing::trace!(?id, "flush_compositing_bits: processing node");
-                let _ = node; // Suppress unused warning for now
+            if self.render_tree.contains(id) {
+                let changed = self.render_tree.update_compositing_bits(id);
+
+                if changed {
+                    tracing::trace!(
+                        ?id,
+                        needs_compositing = self.render_tree.get(id)
+                            .map(|n| n.needs_compositing())
+                            .unwrap_or(false),
+                        "flush_compositing_bits: compositing changed, marking for repaint"
+                    );
+
+                    // If compositing needs changed, mark for repaint (Flutter pattern)
+                    self.mark_needs_paint(id);
+                }
             }
         }
     }

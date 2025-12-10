@@ -123,6 +123,33 @@ pub struct RenderNode<S: NodeState> {
     /// When true, `mark_needs_layout()` stops propagating up the tree.
     is_relayout_boundary: bool,
 
+    /// Whether this node or its subtree needs compositing (Flutter protocol)
+    ///
+    /// A node needs compositing if:
+    /// - It's a repaint boundary (`is_repaint_boundary()`)
+    /// - It always needs compositing (`always_needs_compositing()`)
+    /// - Any of its children need compositing
+    ///
+    /// This is updated during `flush_compositing_bits()` phase and determines
+    /// whether a compositing layer should be created for this node.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// bool _needsCompositing = false;
+    /// bool get needsCompositing => _needsCompositing;
+    /// ```
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// if node.needs_compositing() {
+    ///     // This node needs its own compositing layer
+    ///     painting_context.push_layer(layer);
+    /// }
+    /// ```
+    needs_compositing: bool,
+
     /// Compositing layer handle (only for repaint boundaries)
     ///
     /// Repaint boundaries create their own compositing layer to cache paint results.
@@ -181,6 +208,7 @@ impl RenderNode<Unmounted> {
             children: Vec::new(),
             cached_size: None,
             is_relayout_boundary: false,
+            needs_compositing: false,
             layer_handle: None,
             parent_data: None,
             _state: PhantomData,
@@ -200,6 +228,7 @@ impl RenderNode<Unmounted> {
             children: Vec::new(),
             cached_size: None,
             is_relayout_boundary: false,
+            needs_compositing: false,
             layer_handle: None,
             parent_data: None,
             _state: PhantomData,
@@ -358,6 +387,50 @@ impl RenderNode<Mounted> {
     #[inline]
     pub fn set_relayout_boundary(&mut self, is_boundary: bool) {
         self.is_relayout_boundary = is_boundary;
+    }
+
+    // ========== Compositing Bits (Flutter Protocol) ==========
+
+    /// Returns whether this node or its subtree needs compositing.
+    ///
+    /// A node needs compositing if:
+    /// - It's a repaint boundary
+    /// - It always needs compositing (e.g., video, platform views)
+    /// - Any of its children need compositing
+    ///
+    /// This value is computed during `update_compositing_bits()` and cached
+    /// until the next compositing bits update.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// bool get needsCompositing => _needsCompositing;
+    /// ```
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// if node.needs_compositing() {
+    ///     // Create/update compositing layer
+    ///     node.update_composited_layer();
+    /// }
+    /// ```
+    #[inline]
+    pub fn needs_compositing(&self) -> bool {
+        self.needs_compositing
+    }
+
+    /// Sets whether this node or its subtree needs compositing.
+    ///
+    /// **Internal use only**. This is called by `update_compositing_bits()`
+    /// during the compositing bits update phase.
+    ///
+    /// # Arguments
+    ///
+    /// * `needs_compositing` - Whether compositing is needed
+    #[inline]
+    pub(crate) fn set_needs_compositing(&mut self, needs_compositing: bool) {
+        self.needs_compositing = needs_compositing;
     }
 
     // ========== Layer Handle (Flutter Protocol) ==========
@@ -592,6 +665,7 @@ impl Mountable for RenderNode<Unmounted> {
             children: Vec::new(),
             cached_size: None,
             is_relayout_boundary,
+            needs_compositing: false,
             layer_handle: None,
             parent_data: None,
             _state: PhantomData,
@@ -621,6 +695,7 @@ impl Unmountable for RenderNode<Mounted> {
             children: Vec::new(),
             cached_size: None,
             is_relayout_boundary: false,
+            needs_compositing: false,
             layer_handle: None,
             parent_data: None,
             _state: PhantomData,
@@ -847,6 +922,95 @@ impl RenderTree {
                     child.set_parent(None);
                 }
             }
+        }
+    }
+
+    // ========== Compositing Bits Update (Flutter Protocol) ==========
+
+    /// Updates the compositing bits for a node and its subtree.
+    ///
+    /// This implements Flutter's `_updateCompositingBits()` logic:
+    /// 1. Recursively update children's compositing bits first (bottom-up)
+    /// 2. Set `needs_compositing = true` if:
+    ///    - This is a repaint boundary
+    ///    - Render object always needs compositing
+    ///    - Any child needs compositing
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// void _updateCompositingBits() {
+    ///   bool oldNeedsCompositing = _needsCompositing;
+    ///   _needsCompositing = false;
+    ///
+    ///   visitChildren((RenderObject child) {
+    ///     child._updateCompositingBits();
+    ///     if (child.needsCompositing)
+    ///       _needsCompositing = true;
+    ///   });
+    ///
+    ///   if (isRepaintBoundary || alwaysNeedsCompositing)
+    ///     _needsCompositing = true;
+    ///
+    ///   if (oldNeedsCompositing != _needsCompositing)
+    ///     markNeedsPaint();
+    ///
+    ///   _needsCompositingBitsUpdate = false;
+    /// }
+    /// ```
+    ///
+    /// # Algorithm
+    ///
+    /// 1. Collect children IDs
+    /// 2. Recursively update each child
+    /// 3. Check if any child needs compositing
+    /// 4. Set own needs_compositing based on repaint boundary + children
+    ///
+    /// # Returns
+    ///
+    /// Returns `true` if the node's `needs_compositing` changed.
+    pub fn update_compositing_bits(&mut self, id: RenderId) -> bool {
+        // Collect children IDs first (to avoid borrow checker issues)
+        let children: Vec<RenderId> = self
+            .get(id)
+            .map(|node| node.children().to_vec())
+            .unwrap_or_default();
+
+        // Recursively update children first (bottom-up traversal)
+        for child_id in &children {
+            self.update_compositing_bits(*child_id);
+        }
+
+        // Check if any child needs compositing (before borrowing node mutably)
+        let mut any_child_needs_compositing = false;
+        for child_id in &children {
+            if let Some(child) = self.get(*child_id) {
+                if child.needs_compositing() {
+                    any_child_needs_compositing = true;
+                    break;
+                }
+            }
+        }
+
+        // Now update this node's compositing bits
+        if let Some(node) = self.get_mut(id) {
+            let old_needs_compositing = node.needs_compositing();
+
+            // Check if this node is a repaint boundary or always needs compositing
+            let render_obj = node.render_object();
+            let self_needs_compositing =
+                render_obj.is_repaint_boundary() || render_obj.always_needs_compositing();
+
+            // Combine: needs compositing if this node or any child needs it
+            let new_needs_compositing = self_needs_compositing || any_child_needs_compositing;
+
+            // Update the flag
+            node.set_needs_compositing(new_needs_compositing);
+
+            // Return true if changed
+            old_needs_compositing != new_needs_compositing
+        } else {
+            false
         }
     }
 
