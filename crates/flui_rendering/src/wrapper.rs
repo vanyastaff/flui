@@ -275,7 +275,7 @@ mod tests {
 
         assert_eq!(
             wrapper.inner().debug_name(),
-            "flui_rendering::core::wrapper::tests::MockRenderBox"
+            "flui_rendering::wrapper::tests::MockRenderBox"
         );
     }
 

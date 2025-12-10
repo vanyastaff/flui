@@ -59,7 +59,7 @@ use flui_tree::{Depth, Mountable, Mounted, NodeState, TreeNav, TreeRead, TreeWri
 use flui_foundation::{ElementId, RenderId};
 use flui_types::Size;
 
-use crate::{RenderLifecycle, RenderObject};
+use crate::{LayerHandle, ParentData, RenderLifecycle, RenderObject};
 
 // ============================================================================
 // RENDER NODE WITH TYPESTATE PATTERN
@@ -123,6 +123,32 @@ pub struct RenderNode<S: NodeState> {
     /// When true, `mark_needs_layout()` stops propagating up the tree.
     is_relayout_boundary: bool,
 
+    /// Compositing layer handle (only for repaint boundaries)
+    ///
+    /// Repaint boundaries create their own compositing layer to cache paint results.
+    /// This field stores the layer handle when `is_repaint_boundary()` returns true.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// LayerHandle<ContainerLayer> _layerHandle = LayerHandle<ContainerLayer>();
+    /// ```
+    layer_handle: Option<LayerHandle>,
+
+    /// Parent-specific data set by parent via setup_parent_data()
+    ///
+    /// Different parent types store different data on their children:
+    /// - Stack stores offset
+    /// - Flex stores flex factor
+    /// - etc.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// ParentData? parentData;
+    /// ```
+    parent_data: Option<Box<dyn ParentData>>,
+
     // ========== Typestate Marker ==========
     /// Zero-sized marker for compile-time state tracking
     _state: PhantomData<S>,
@@ -155,6 +181,8 @@ impl RenderNode<Unmounted> {
             children: Vec::new(),
             cached_size: None,
             is_relayout_boundary: false,
+            layer_handle: None,
+            parent_data: None,
             _state: PhantomData,
         }
     }
@@ -172,6 +200,8 @@ impl RenderNode<Unmounted> {
             children: Vec::new(),
             cached_size: None,
             is_relayout_boundary: false,
+            layer_handle: None,
+            parent_data: None,
             _state: PhantomData,
         }
     }
@@ -329,6 +359,148 @@ impl RenderNode<Mounted> {
     pub fn set_relayout_boundary(&mut self, is_boundary: bool) {
         self.is_relayout_boundary = is_boundary;
     }
+
+    // ========== Layer Handle (Flutter Protocol) ==========
+
+    /// Returns the compositing layer handle if this node is a repaint boundary.
+    ///
+    /// Repaint boundaries create their own compositing layer to cache paint results.
+    /// This isolates paint invalidation to the subtree.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// LayerHandle<ContainerLayer> get layerHandle => _layerHandle;
+    /// ```
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// if let Some(layer) = node.layer_handle() {
+    ///     // This node has its own compositing layer
+    ///     painting_context.paint_child_with_layer(child, layer);
+    /// }
+    /// ```
+    #[inline]
+    pub fn layer_handle(&self) -> Option<&LayerHandle> {
+        self.layer_handle.as_ref()
+    }
+
+    /// Returns a mutable reference to the layer handle.
+    #[inline]
+    pub fn layer_handle_mut(&mut self) -> Option<&mut LayerHandle> {
+        self.layer_handle.as_mut()
+    }
+
+    /// Sets the compositing layer handle.
+    ///
+    /// This is typically called during paint when a repaint boundary
+    /// creates or updates its compositing layer.
+    ///
+    /// # Arguments
+    ///
+    /// * `handle` - The layer handle to set, or None to clear
+    #[inline]
+    pub fn set_layer_handle(&mut self, handle: Option<LayerHandle>) {
+        self.layer_handle = handle;
+    }
+
+    /// Updates the composited layer for this repaint boundary.
+    ///
+    /// This method is called during the paint phase for nodes that are repaint boundaries.
+    /// It ensures the layer handle is created if needed and updates the layer's properties.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// void updateCompositedLayer({required Offset offset}) {
+    ///   final ContainerLayer? oldLayer = _layerHandle.layer;
+    ///
+    ///   final OffsetLayer newLayer = updateCompositedLayerProperties(
+    ///     oldLayer: oldLayer,
+    ///     offset: offset,
+    ///   );
+    ///
+    ///   _layerHandle.layer = newLayer;
+    /// }
+    /// ```
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// // During paint phase for repaint boundary
+    /// if node.render_object().is_repaint_boundary() {
+    ///     node.update_composited_layer();
+    /// }
+    /// ```
+    pub fn update_composited_layer(&mut self) {
+        // TODO: Implement layer creation/update logic
+        // This will be filled in when we implement the full layer system
+
+        // For now, just ensure we have a layer handle if we don't already
+        if self.layer_handle.is_none() {
+            use crate::new_layer_handle;
+            // Create a placeholder layer (will be replaced with real layer in full implementation)
+            self.layer_handle = Some(new_layer_handle(()));
+        }
+    }
+
+    // ========== Parent Data (Flutter Protocol) ==========
+
+    /// Returns the parent-specific data set by the parent container.
+    ///
+    /// Different parent types store different data on their children:
+    /// - Stack stores offset position
+    /// - Flex stores flex factor and fit
+    /// - Table stores row/column indices
+    /// - etc.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// ParentData? get parentData => _parentData;
+    /// ```
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// if let Some(parent_data) = node.parent_data() {
+    ///     // Access parent-specific data
+    ///     if let Some(stack_data) = parent_data.downcast_ref::<StackParentData>() {
+    ///         let offset = stack_data.offset();
+    ///     }
+    /// }
+    /// ```
+    #[inline]
+    pub fn parent_data(&self) -> Option<&dyn ParentData> {
+        self.parent_data.as_ref().map(|boxed| &**boxed)
+    }
+
+    /// Returns a mutable reference to the parent data.
+    #[inline]
+    pub fn parent_data_mut(&mut self) -> Option<&mut dyn ParentData> {
+        self.parent_data.as_mut().map(|boxed| &mut **boxed)
+    }
+
+    /// Sets the parent data.
+    ///
+    /// This is typically called by the parent's `setup_parent_data()` method
+    /// when a child is added to ensure the child has the correct parent data type.
+    ///
+    /// # Arguments
+    ///
+    /// * `data` - The parent data to set, or None to clear
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// // Parent sets up child's parent data
+    /// child.set_parent_data(Some(Box::new(StackParentData::default())));
+    /// ```
+    #[inline]
+    pub fn set_parent_data(&mut self, data: Option<Box<dyn ParentData>>) {
+        self.parent_data = data;
+    }
 }
 
 // ============================================================================
@@ -420,6 +592,8 @@ impl Mountable for RenderNode<Unmounted> {
             children: Vec::new(),
             cached_size: None,
             is_relayout_boundary,
+            layer_handle: None,
+            parent_data: None,
             _state: PhantomData,
         }
     }
@@ -447,6 +621,8 @@ impl Unmountable for RenderNode<Mounted> {
             children: Vec::new(),
             cached_size: None,
             is_relayout_boundary: false,
+            layer_handle: None,
+            parent_data: None,
             _state: PhantomData,
         }
     }

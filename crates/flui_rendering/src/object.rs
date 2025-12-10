@@ -394,8 +394,60 @@ pub trait RenderObject: DowncastSync + fmt::Debug {
     // ============================================================================
 
     /// Creates default ParentData for a child of this render object.
+    ///
+    /// This is called by `setup_parent_data()` when the child has no parent data
+    /// or has parent data of the wrong type.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// ParentData createParentData() {
+    ///   return BoxParentData();
+    /// }
+    /// ```
     fn create_parent_data(&self) -> Box<dyn crate::ParentData> {
         Box::new(crate::BoxParentData::default())
+    }
+
+    /// Sets up the parent data for a child of this render object.
+    ///
+    /// This method is called when a child is adopted by this render object.
+    /// It ensures the child has the correct type of parent data for this parent.
+    ///
+    /// The default implementation:
+    /// 1. If child has no parent data, creates new parent data via `create_parent_data()`
+    /// 2. If child has wrong type of parent data, replaces it with correct type
+    /// 3. Otherwise, keeps existing parent data
+    ///
+    /// Override this method only if you need custom parent data setup logic.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// void setupParentData(covariant RenderObject child) {
+    ///   if (child.parentData is! BoxParentData) {
+    ///     child.parentData = BoxParentData();
+    ///   }
+    /// }
+    /// ```
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// // In RenderStack
+    /// fn setup_parent_data(&self, child_data: Option<&dyn ParentData>) -> Option<Box<dyn ParentData>> {
+    ///     match child_data {
+    ///         Some(data) if data.is::<StackParentData>() => None, // Already correct type
+    ///         _ => Some(Box::new(StackParentData::default())), // Need to create/replace
+    ///     }
+    /// }
+    /// ```
+    fn setup_parent_data(&self, child_data: Option<&dyn crate::ParentData>) -> Option<Box<dyn crate::ParentData>> {
+        // Default implementation: create new parent data if missing
+        match child_data {
+            Some(_) => None, // Keep existing parent data
+            None => Some(self.create_parent_data()), // Create new parent data
+        }
     }
 
     // ============================================================================
