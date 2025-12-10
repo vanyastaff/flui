@@ -19,6 +19,7 @@ This folder contains detailed documentation of Flutter's rendering architecture,
 | [11_RELAYOUT_BOUNDARIES.md](11_RELAYOUT_BOUNDARIES.md) | Boundaries | Relayout and repaint boundary optimizations |
 | [12_PARENT_DATA.md](12_PARENT_DATA.md) | Parent Data | Parent-child data communication pattern |
 | [13_LIFECYCLE.md](13_LIFECYCLE.md) | Lifecycle | RenderObject lifecycle states and transitions |
+| [14_ANIMATION_SUPPORT.md](14_ANIMATION_SUPPORT.md) | Animation Support | How RenderObject supports animations |
 
 
 ## Architecture Summary
