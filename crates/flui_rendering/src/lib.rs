@@ -146,13 +146,19 @@ pub use children::{BoxChild, BoxChildren, BoxSlots};
 pub use children::{SliverChild, SliverChildren, SliverSlots};
 pub use children::SlotKey;
 
-// Mixin-based render objects
+// Mixin-based render objects (Box Protocol)
 pub use mixins::{ProxyBox, ProxyBase, ProxyData};
 pub use mixins::{HasChild, HasBoxGeometry, RenderProxyBoxMixin};
 pub use mixins::{ShiftedBox, ShiftedBase, HasOffset, RenderShiftedBox};
 pub use mixins::{AligningShiftedBox, AligningBase, HasAlignment, RenderAligningShiftedBox};
 pub use mixins::{ContainerBox, ContainerBase, HasChildren, RenderContainerBox};
 pub use mixins::{LeafBox, LeafBase, RenderLeafBox};
+
+// Mixin-based render objects (Sliver Protocol)
+pub use mixins::{ProxySliver, HasSliverGeometry, RenderProxySliverMixin};
+pub use mixins::{ShiftedSliver, RenderShiftedSliver};
+pub use mixins::{ContainerSliver, RenderContainerSliver};
+pub use mixins::{LeafSliver, RenderLeafSliver};
 
 // ============================================================================
 // RE-EXPORTS FROM FOUNDATION

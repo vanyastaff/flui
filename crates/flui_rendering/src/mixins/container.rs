@@ -42,16 +42,16 @@
 use std::ops::{Deref, DerefMut};
 
 use ambassador::{delegatable_trait, Delegate};
-use flui_types::{BoxConstraints, Offset, Size};
+use flui_types::{BoxConstraints, Offset, Size, SliverConstraints, SliverGeometry};
 
-use crate::children::{Children, BoxChildren};
-use crate::protocol::{Protocol, BoxProtocol};
+use crate::children::{Children, BoxChildren, SliverChildren};
+use crate::protocol::{Protocol, BoxProtocol, SliverProtocol};
 
 // Re-export from proxy.rs
-use super::proxy::{HasBoxGeometry, ProxyData};
+use super::proxy::{HasBoxGeometry, HasSliverGeometry, ProxyData};
 
 // Import ambassador macros
-use super::proxy::ambassador_impl_HasBoxGeometry;
+use super::proxy::{ambassador_impl_HasBoxGeometry, ambassador_impl_HasSliverGeometry};
 
 // ============================================================================
 // Part 1: Delegatable Trait - HasChildren
@@ -118,6 +118,17 @@ impl<PD> HasBoxGeometry for ContainerBase<BoxProtocol, PD> {
 
     fn set_size(&mut self, size: Size) {
         self.geometry = size;
+    }
+}
+
+// Sliver specialization - implement HasSliverGeometry
+impl<PD> HasSliverGeometry for ContainerBase<SliverProtocol, PD> {
+    fn geometry(&self) -> &SliverGeometry {
+        &self.geometry
+    }
+
+    fn set_geometry(&mut self, geometry: SliverGeometry) {
+        self.geometry = geometry;
     }
 }
 
@@ -297,6 +308,57 @@ impl<T: ProxyData, PD> RenderContainerBox<PD> for ContainerBox<T, PD> {
             std::any::type_name::<T>(),
             std::any::type_name::<PD>()
         )
+    }
+}
+
+// ============================================================================
+// Part 5: ContainerSliver<T, PD>
+// ============================================================================
+
+/// Generic container sliver render object with automatic delegation
+#[derive(Debug, Delegate)]
+#[delegate(HasChildren<SliverProtocol, PD>, target = "base")]
+#[delegate(HasSliverGeometry, target = "base")]
+pub struct ContainerSliver<T: ProxyData, PD = ()> {
+    base: ContainerBase<SliverProtocol, PD>,
+    pub data: T,
+}
+
+impl<T: ProxyData, PD> ContainerSliver<T, PD>
+where
+    PD: Default,
+{
+    pub fn new(data: T) -> Self {
+        Self {
+            base: ContainerBase::default(),
+            data,
+        }
+    }
+}
+
+impl<T: ProxyData, PD> Deref for ContainerSliver<T, PD> {
+    type Target = T;
+    fn deref(&self) -> &T { &self.data }
+}
+
+impl<T: ProxyData, PD> DerefMut for ContainerSliver<T, PD> {
+    fn deref_mut(&mut self) -> &mut T { &mut self.data }
+}
+
+/// Mixin trait for container Sliver render objects
+pub trait RenderContainerSliver<PD = ()>: HasChildren<SliverProtocol, PD> + HasSliverGeometry {
+    fn perform_layout(&mut self, constraints: &SliverConstraints) -> SliverGeometry;
+
+    fn paint(&self, _ctx: &mut dyn std::any::Any, _offset: Offset) {}
+    fn hit_test(&self, _result: &mut dyn std::any::Any, _position: Offset) -> bool { false }
+    fn always_needs_compositing(&self) -> bool { false }
+    fn is_repaint_boundary(&self) -> bool { false }
+}
+
+impl<T: ProxyData, PD> RenderContainerSliver<PD> for ContainerSliver<T, PD> {
+    fn perform_layout(&mut self, _constraints: &SliverConstraints) -> SliverGeometry {
+        panic!("perform_layout must be overridden for ContainerSliver<{}, {}>",
+            std::any::type_name::<T>(), std::any::type_name::<PD>())
     }
 }
 

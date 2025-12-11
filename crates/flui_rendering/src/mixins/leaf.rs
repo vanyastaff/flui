@@ -37,15 +37,15 @@
 use std::ops::{Deref, DerefMut};
 
 use ambassador::Delegate;
-use flui_types::{BoxConstraints, Offset, Size};
+use flui_types::{BoxConstraints, Offset, Size, SliverConstraints, SliverGeometry};
 
-use crate::protocol::{Protocol, BoxProtocol};
+use crate::protocol::{Protocol, BoxProtocol, SliverProtocol};
 
 // Re-export from proxy.rs
-use super::proxy::{HasBoxGeometry, ProxyData};
+use super::proxy::{HasBoxGeometry, HasSliverGeometry, ProxyData};
 
 // Import ambassador macros
-use super::proxy::ambassador_impl_HasBoxGeometry;
+use super::proxy::{ambassador_impl_HasBoxGeometry, ambassador_impl_HasSliverGeometry};
 
 // ============================================================================
 // Part 1: Base Struct - LeafBase<P> (No delegatable traits needed)
@@ -78,6 +78,17 @@ impl HasBoxGeometry for LeafBase<BoxProtocol> {
 
     fn set_size(&mut self, size: Size) {
         self.geometry = size;
+    }
+}
+
+// Sliver specialization - implement HasSliverGeometry
+impl HasSliverGeometry for LeafBase<SliverProtocol> {
+    fn geometry(&self) -> &SliverGeometry {
+        &self.geometry
+    }
+
+    fn set_geometry(&mut self, geometry: SliverGeometry) {
+        self.geometry = geometry;
     }
 }
 
@@ -254,6 +265,151 @@ impl<T: ProxyData> RenderLeafBox for LeafBox<T> {
 }
 
 // ============================================================================
+// Part 4: LeafSliver<T> with Ambassador + Deref
+// ============================================================================
+
+/// Generic leaf sliver render object with automatic delegation
+///
+/// # Type Parameters
+///
+/// - `T`: Custom data type (must implement `ProxyData`)
+///
+/// # Automatic Features
+///
+/// - **HasSliverGeometry** via Ambassador delegation to `base`
+/// - **Deref to T** for direct field access
+///
+/// # Example
+///
+/// ```rust,ignore
+/// #[derive(Clone, Debug)]
+/// pub struct SliverColoredBoxData {
+///     pub color: Color,
+/// }
+///
+/// pub type RenderSliverColoredBox = LeafSliver<SliverColoredBoxData>;
+///
+/// impl RenderLeafSliver for RenderSliverColoredBox {
+///     fn perform_layout(&mut self, constraints: &SliverConstraints) -> SliverGeometry {
+///         // Calculate geometry
+///         let geometry = SliverGeometry { ... };
+///         self.set_geometry(geometry.clone());
+///         geometry
+///     }
+///
+///     fn paint(&self, ctx: &mut PaintingContext, offset: Offset) {
+///         // Paint using self.color (via Deref)
+///         ctx.canvas().draw_rect(...);
+///     }
+/// }
+/// ```
+#[derive(Debug, Delegate)]
+#[delegate(HasSliverGeometry, target = "base")]
+pub struct LeafSliver<T: ProxyData> {
+    base: LeafBase<SliverProtocol>,
+    pub data: T,
+}
+
+impl<T: ProxyData> LeafSliver<T> {
+    /// Create new LeafSliver with data
+    pub fn new(data: T) -> Self {
+        Self {
+            base: LeafBase::default(),
+            data,
+        }
+    }
+}
+
+// ✨ Deref for clean field access
+impl<T: ProxyData> Deref for LeafSliver<T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        &self.data
+    }
+}
+
+impl<T: ProxyData> DerefMut for LeafSliver<T> {
+    fn deref_mut(&mut self) -> &mut T {
+        &mut self.data
+    }
+}
+
+// ============================================================================
+// Part 5: RenderLeafSliver - Mixin Trait
+// ============================================================================
+
+/// Mixin trait for leaf Sliver render objects
+///
+/// Leaf sliver render objects have no children and paint themselves.
+///
+/// **IMPORTANT:** You MUST override both `perform_layout` AND `paint`!
+///
+/// # Example
+///
+/// ```rust,ignore
+/// impl RenderLeafSliver for RenderSliverColoredBox {
+///     fn perform_layout(&mut self, constraints: &SliverConstraints) -> SliverGeometry {
+///         let geometry = SliverGeometry::default();
+///         self.set_geometry(geometry.clone());
+///         geometry
+///     }
+///
+///     fn paint(&self, ctx: &mut PaintingContext, offset: Offset) {
+///         ctx.canvas().draw_rect(...);
+///     }
+/// }
+/// ```
+pub trait RenderLeafSliver: HasSliverGeometry {
+    /// Perform layout (NO DEFAULT - must override!)
+    ///
+    /// Your implementation should:
+    /// 1. Calculate geometry based on constraints
+    /// 2. Call `self.set_geometry()` with calculated geometry
+    /// 3. Return the geometry
+    fn perform_layout(&mut self, constraints: &SliverConstraints) -> SliverGeometry;
+
+    /// Paint this render object (NO DEFAULT - must override!)
+    ///
+    /// Your implementation should paint the visual representation
+    /// using the painting context.
+    fn paint(&self, ctx: &mut dyn std::any::Any, offset: Offset);
+
+    /// Hit test (default: no hit testing for slivers)
+    fn hit_test(&self, _result: &mut dyn std::any::Any, _position: Offset) -> bool {
+        false
+    }
+
+    /// Whether this render object always needs compositing
+    fn always_needs_compositing(&self) -> bool {
+        false
+    }
+
+    /// Whether this render object is a repaint boundary
+    fn is_repaint_boundary(&self) -> bool {
+        false
+    }
+}
+
+// Blanket impl: all LeafSliver<T> get RenderLeafSliver
+// BUT: perform_layout and paint panic by default - MUST be overridden!
+impl<T: ProxyData> RenderLeafSliver for LeafSliver<T> {
+    fn perform_layout(&mut self, _constraints: &SliverConstraints) -> SliverGeometry {
+        panic!(
+            "perform_layout must be overridden for LeafSliver<{}>",
+            std::any::type_name::<T>()
+        )
+    }
+
+    fn paint(&self, _ctx: &mut dyn std::any::Any, _offset: Offset) {
+        panic!(
+            "paint must be overridden for LeafSliver<{}>",
+            std::any::type_name::<T>()
+        )
+    }
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 
@@ -328,6 +484,65 @@ mod tests {
     #[should_panic(expected = "paint must be overridden")]
     fn test_leaf_box_paint_panics_by_default() {
         let leaf = LeafBox::new(TestData::default());
+        let mut ctx = ();
+
+        // Should panic because paint is not overridden
+        leaf.paint(&mut ctx, Offset::ZERO);
+    }
+
+    // ========== LeafSliver tests ==========
+
+    #[test]
+    fn test_leaf_sliver_creation() {
+        let leaf = LeafSliver::new(TestData { value: 42 });
+        assert_eq!(leaf.value, 42); // Deref works!
+    }
+
+    #[test]
+    fn test_leaf_sliver_deref() {
+        let mut leaf = LeafSliver::new(TestData { value: 1 });
+
+        // Read via Deref
+        assert_eq!(leaf.value, 1);
+
+        // Write via DerefMut
+        leaf.value = 100;
+        assert_eq!(leaf.value, 100);
+    }
+
+    #[test]
+    fn test_leaf_sliver_geometry() {
+        let mut leaf = LeafSliver::new(TestData::default());
+
+        // HasSliverGeometry trait methods work via Ambassador
+        let geometry = SliverGeometry::default();
+        leaf.set_geometry(geometry.clone());
+        assert_eq!(leaf.geometry(), &geometry);
+    }
+
+    #[test]
+    fn test_leaf_sliver_hit_test() {
+        let leaf = LeafSliver::new(TestData::default());
+        let mut result = ();
+
+        // Default implementation returns false for slivers
+        assert!(!leaf.hit_test(&mut result, Offset::new(0.0, 0.0)));
+    }
+
+    #[test]
+    #[should_panic(expected = "perform_layout must be overridden")]
+    fn test_leaf_sliver_perform_layout_panics_by_default() {
+        let mut leaf = LeafSliver::new(TestData::default());
+        let constraints = SliverConstraints::default();
+
+        // Should panic because perform_layout is not overridden
+        leaf.perform_layout(&constraints);
+    }
+
+    #[test]
+    #[should_panic(expected = "paint must be overridden")]
+    fn test_leaf_sliver_paint_panics_by_default() {
+        let leaf = LeafSliver::new(TestData::default());
         let mut ctx = ();
 
         // Should panic because paint is not overridden

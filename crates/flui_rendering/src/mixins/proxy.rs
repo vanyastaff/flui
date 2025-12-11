@@ -33,10 +33,10 @@
 use std::ops::{Deref, DerefMut};
 
 use ambassador::{delegatable_trait, Delegate};
-use flui_types::{BoxConstraints, Size};
+use flui_types::{BoxConstraints, Size, SliverGeometry, SliverConstraints};
 
-use crate::children::{Child, BoxChild};
-use crate::protocol::{Protocol, BoxProtocol};
+use crate::children::{Child, BoxChild, SliverChild};
+use crate::protocol::{Protocol, BoxProtocol, SliverProtocol};
 
 // ============================================================================
 // Part 1: Delegatable Traits
@@ -59,6 +59,13 @@ pub trait HasChild<P: Protocol> {
 pub trait HasBoxGeometry {
     fn size(&self) -> Size;
     fn set_size(&mut self, size: Size);
+}
+
+/// Trait for accessing sliver geometry (delegatable)
+#[delegatable_trait]
+pub trait HasSliverGeometry {
+    fn geometry(&self) -> &SliverGeometry;
+    fn set_geometry(&mut self, geometry: SliverGeometry);
 }
 
 // ============================================================================
@@ -103,6 +110,17 @@ impl HasBoxGeometry for ProxyBase<BoxProtocol> {
 
     fn set_size(&mut self, size: Size) {
         self.geometry = size;
+    }
+}
+
+// Sliver specialization
+impl HasSliverGeometry for ProxyBase<SliverProtocol> {
+    fn geometry(&self) -> &SliverGeometry {
+        &self.geometry
+    }
+
+    fn set_geometry(&mut self, geometry: SliverGeometry) {
+        self.geometry = geometry;
     }
 }
 
@@ -273,6 +291,117 @@ pub trait RenderProxyBoxMixin: HasChild<BoxProtocol> + HasBoxGeometry {
 impl<T: ProxyData> RenderProxyBoxMixin for ProxyBox<T> {}
 
 // ============================================================================
+// Part 6: ProxySliver<T> with Ambassador + Deref
+// ============================================================================
+
+/// Generic proxy sliver render object with automatic delegation
+///
+/// # Type Parameters
+///
+/// - `T`: Custom data type (must implement `ProxyData`)
+///
+/// # Automatic Features
+///
+/// - **HasChild** via Ambassador delegation to `base`
+/// - **HasSliverGeometry** via Ambassador delegation to `base`
+/// - **Deref to T** for direct field access
+///
+/// # Example
+///
+/// ```rust,ignore
+/// #[derive(Default, Clone, Debug)]
+/// pub struct SliverOpacityData {
+///     pub alpha: f32,
+/// }
+///
+/// pub type RenderSliverOpacity = ProxySliver<SliverOpacityData>;
+/// ```
+#[derive(Debug, Delegate)]
+#[delegate(HasChild<SliverProtocol>, target = "base")]
+#[delegate(HasSliverGeometry, target = "base")]
+pub struct ProxySliver<T: ProxyData> {
+    base: ProxyBase<SliverProtocol>,
+    pub data: T,
+}
+
+impl<T: ProxyData> ProxySliver<T> {
+    /// Create new ProxySliver with data
+    pub fn new(data: T) -> Self {
+        Self {
+            base: ProxyBase::default(),
+            data,
+        }
+    }
+}
+
+// ✨ Deref for clean field access
+impl<T: ProxyData> Deref for ProxySliver<T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        &self.data
+    }
+}
+
+impl<T: ProxyData> DerefMut for ProxySliver<T> {
+    fn deref_mut(&mut self) -> &mut T {
+        &mut self.data
+    }
+}
+
+// ============================================================================
+// Part 7: RenderProxySliverMixin - Default Behavior
+// ============================================================================
+
+/// Mixin trait for proxy Sliver render objects with default implementations
+///
+/// All methods delegate to child by default. Override to customize behavior.
+pub trait RenderProxySliverMixin: HasChild<SliverProtocol> + HasSliverGeometry {
+    /// Perform layout (default: delegate to child)
+    fn perform_layout(&mut self, constraints: &SliverConstraints) -> SliverGeometry {
+        if let Some(_id) = self.child_mut().get() {
+            // TODO: call child.layout(constraints) via RenderTree
+            // For now, return empty geometry
+            let geometry = SliverGeometry::default();
+            self.set_geometry(geometry.clone());
+            geometry
+        } else {
+            let geometry = SliverGeometry::default();
+            self.set_geometry(geometry.clone());
+            geometry
+        }
+    }
+
+    /// Paint this render object (default: do nothing if no child)
+    fn paint(&self, _ctx: &mut dyn std::any::Any, _offset: flui_types::Offset) {
+        // TODO: if let Some(id) = self.child().get() {
+        //     render_tree.paint(id, ctx, offset);
+        // }
+    }
+
+    /// Hit test (default: delegate to child)
+    fn hit_test(&self, _result: &mut dyn std::any::Any, _position: flui_types::Offset) -> bool {
+        // TODO: if let Some(id) = self.child().get() {
+        //     return render_tree.hit_test(id, result, position);
+        // }
+        false
+    }
+
+    /// Whether this render object always needs compositing
+    fn always_needs_compositing(&self) -> bool {
+        false
+    }
+
+    /// Whether this render object is a repaint boundary
+    fn is_repaint_boundary(&self) -> bool {
+        false
+    }
+}
+
+// Blanket impl: all ProxySliver<T> automatically get RenderProxySliverMixin
+impl<T: ProxyData> RenderProxySliverMixin for ProxySliver<T> {}
+
+// ============================================================================
 // Tests
 // ============================================================================
 
@@ -320,5 +449,44 @@ mod tests {
         let size = Size::new(100.0, 50.0);
         proxy.set_size(size);
         assert_eq!(proxy.size(), size);
+    }
+
+    // ========== ProxySliver tests ==========
+
+    #[test]
+    fn test_proxy_sliver_creation() {
+        let proxy = ProxySliver::new(TestData { value: 42.0 });
+        assert_eq!(proxy.value, 42.0); // Deref works!
+    }
+
+    #[test]
+    fn test_proxy_sliver_deref() {
+        let mut proxy = ProxySliver::new(TestData { value: 1.0 });
+
+        // Read via Deref
+        assert_eq!(proxy.value, 1.0);
+
+        // Write via DerefMut
+        proxy.value = 2.0;
+        assert_eq!(proxy.value, 2.0);
+    }
+
+    #[test]
+    fn test_proxy_sliver_child_access() {
+        let proxy = ProxySliver::new(TestData { value: 1.0 });
+
+        // HasChild trait methods work via Ambassador
+        assert!(!proxy.has_child());
+        assert!(proxy.child().is_none());
+    }
+
+    #[test]
+    fn test_proxy_sliver_geometry() {
+        let mut proxy = ProxySliver::new(TestData { value: 1.0 });
+
+        // HasSliverGeometry trait methods work via Ambassador
+        let geometry = SliverGeometry::default();
+        proxy.set_geometry(geometry.clone());
+        assert_eq!(proxy.geometry(), &geometry);
     }
 }
