@@ -61,6 +61,7 @@ pub mod shifted;
 pub mod aligning;
 pub mod container;
 pub mod leaf;
+pub mod integration;
 
 // Re-export key types and traits
 
