@@ -24,6 +24,7 @@ bitflags = { workspace = true }
 smallvec = { workspace = true }
 downcast-rs = "2.0"
 slab = "0.4"  # For RenderTree storage
+ambassador = "0.4.2"  # Trait delegation via procedural macros
 
 [dev-dependencies]
 criterion.workspace = true
