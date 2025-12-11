@@ -8,6 +8,10 @@
 //! | Mixin | Purpose | Flutter Equivalent |
 //! |-------|---------|-------------------|
 //! | `ProxyBox<T>` | Delegates all to child | `RenderProxyBox` |
+//! | `ShiftedBox<T>` | Applies offset transform | `RenderShiftedBox` |
+//! | `AligningShiftedBox<T>` | Adds alignment support | `RenderAligningShiftedBox` |
+//! | `ContainerBox<T, PD>` | Manages multiple children | `ContainerRenderObjectMixin` |
+//! | `LeafBox<T>` | No children (leaf node) | Leaf render objects |
 //!
 //! # Pattern Summary
 //!
@@ -42,10 +46,37 @@
 //! - **Minimal boilerplate**: ~30 lines instead of 200+
 
 pub mod proxy;
+pub mod shifted;
+pub mod aligning;
+pub mod container;
+pub mod leaf;
 
 // Re-export key types and traits
 pub use proxy::{
     ProxyBox, ProxyBase, ProxyData,
     HasChild, HasBoxGeometry,
     RenderProxyBoxMixin,
+};
+
+pub use shifted::{
+    ShiftedBox, ShiftedBase,
+    HasOffset,
+    RenderShiftedBox,
+};
+
+pub use aligning::{
+    AligningShiftedBox, AligningBase,
+    HasAlignment,
+    RenderAligningShiftedBox,
+};
+
+pub use container::{
+    ContainerBox, ContainerBase,
+    HasChildren,
+    RenderContainerBox,
+};
+
+pub use leaf::{
+    LeafBox, LeafBase,
+    RenderLeafBox,
 };

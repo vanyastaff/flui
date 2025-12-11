@@ -149,6 +149,10 @@ pub use children::SlotKey;
 // Mixin-based render objects
 pub use mixins::{ProxyBox, ProxyBase, ProxyData};
 pub use mixins::{HasChild, HasBoxGeometry, RenderProxyBoxMixin};
+pub use mixins::{ShiftedBox, ShiftedBase, HasOffset, RenderShiftedBox};
+pub use mixins::{AligningShiftedBox, AligningBase, HasAlignment, RenderAligningShiftedBox};
+pub use mixins::{ContainerBox, ContainerBase, HasChildren, RenderContainerBox};
+pub use mixins::{LeafBox, LeafBase, RenderLeafBox};
 
 // ============================================================================
 // RE-EXPORTS FROM FOUNDATION
