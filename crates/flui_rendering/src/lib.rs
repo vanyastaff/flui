@@ -61,6 +61,10 @@ mod tree;
 
 mod wrapper;
 
+// New modular architecture (ambassador-based mixins)
+pub mod children;  // Child storage types
+pub mod mixins;    // Mixin-based render objects
+
 // Other modules
 pub mod error;
 
@@ -135,6 +139,26 @@ pub use render_tree::{RenderNode, RenderTree};
 
 // RenderPipelineOwner (Flutter's PipelineOwner equivalent)
 pub use pipeline_owner::RenderPipelineOwner;
+
+// Child storage types
+pub use children::{Child, Children, Slots};
+pub use children::{BoxChild, BoxChildren, BoxSlots};
+pub use children::{SliverChild, SliverChildren, SliverSlots};
+pub use children::SlotKey;
+
+// Mixin-based render objects (Box Protocol)
+pub use mixins::{ProxyBox, ProxyBase, ProxyData};
+pub use mixins::{HasChild, HasBoxGeometry, RenderProxyBoxMixin};
+pub use mixins::{ShiftedBox, ShiftedBase, HasOffset, RenderShiftedBox};
+pub use mixins::{AligningShiftedBox, AligningBase, HasAlignment, RenderAligningShiftedBox};
+pub use mixins::{ContainerBox, ContainerBase, HasChildren, RenderContainerBox};
+pub use mixins::{LeafBox, LeafBase, RenderLeafBox};
+
+// Mixin-based render objects (Sliver Protocol)
+pub use mixins::{ProxySliver, HasSliverGeometry, RenderProxySliverMixin};
+pub use mixins::{ShiftedSliver, RenderShiftedSliver};
+pub use mixins::{ContainerSliver, RenderContainerSliver};
+pub use mixins::{LeafSliver, RenderLeafSliver};
 
 // ============================================================================
 // RE-EXPORTS FROM FOUNDATION
