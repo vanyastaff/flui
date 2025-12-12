@@ -20,6 +20,9 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 smallvec = { workspace = true }
 
+# Delegation support
+ambassador = { workspace = true }
+
 # Optional: serde support
 serde = { workspace = true, optional = true }
 

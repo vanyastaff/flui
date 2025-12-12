@@ -143,7 +143,17 @@ pub use diff::{ChildDiff, ChildOp, DiffOp, DiffStats, TreeDiff};
 // RE-EXPORTS - Children System
 // ============================================================================
 
-pub use arity::{ArityStorage, Children, LeafChildren, SingleChild, VariableChildren};
+pub use arity::{
+    ArityStorage,
+    ArityStorageView,
+    ChildrenStorage,
+    ChildrenStorageExt,
+    // Type aliases for common cases
+    LeafStorage,
+    OptionalChildStorage,
+    SingleChildStorage,
+    VariableChildrenStorage,
+};
 
 // ============================================================================
 // RE-EXPORTS - Iterators
@@ -195,17 +205,19 @@ pub mod prelude {
         max_depth,
         // Iterators
         Ancestors,
-        // Arity
+        // Arity types
         Arity,
         ArityStorage,
+        ArityStorageView,
         // Depth system
         AtomicDepth,
         // Diff system
         ChildDiff,
         ChildOp,
-        // Children system
-        Children,
+        // Children storage
         ChildrenAccess,
+        ChildrenStorage,
+        ChildrenStorageExt,
         Depth,
         DepthAware,
         Descendants,
@@ -218,7 +230,7 @@ pub mod prelude {
         // Slot system
         IndexedSlot,
         Leaf,
-        LeafChildren,
+        LeafStorage,
         // State types & lifecycle (typestate)
         Mountable,
         MountableExt,
@@ -229,11 +241,12 @@ pub mod prelude {
         NodeState,
         NodeTypeInfo,
         Optional,
+        OptionalChildStorage,
         Single,
-        SingleChild,
+        SingleChildStorage,
         Slot,
         SlotBuilder,
-        // Cursor system
+        // Tree traits
         TreeCursor,
         TreeDiff,
         TreeError,
@@ -249,7 +262,7 @@ pub mod prelude {
         Unmountable,
         Unmounted,
         Variable,
-        VariableChildren,
+        VariableChildrenStorage,
         VisitorResult,
     };
 
