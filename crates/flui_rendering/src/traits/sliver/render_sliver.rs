@@ -158,7 +158,7 @@ pub trait RenderSliver: RenderObject {
     /// The transform maps from the child's coordinate space to the sliver's.
     fn apply_paint_transform_for_box_child(
         &self,
-        _child: &dyn super::super::box::RenderBox,
+        _child: &dyn super::super::r#box::RenderBox,
         _transform: &mut Transform,
     ) {
         // Default: no transform

@@ -2,9 +2,9 @@
 
 use std::marker::PhantomData;
 
-use ambassador::Delegate;
-use flui_tree::arity::{Arity, ArityStorage, ChildrenStorage, Variable};
+use flui_tree::arity::{Arity, ChildrenStorage, Variable};
 
+use crate::containers::TypedChildren;
 use crate::parent_data::ParentData;
 use crate::protocol::Protocol;
 
@@ -37,18 +37,17 @@ use crate::protocol::Protocol;
 ///     let size = child.size();
 /// }
 /// ```
-#[derive(Debug, Delegate)]
-#[delegate(ChildrenStorage<Box<P::Object>, A>, target = "storage")]
-pub struct Children<P: Protocol, PD: ParentData = P::ParentData, A: Arity = Variable> {
-    storage: ArityStorage<Box<P::Object>, A>,
-    _phantom: PhantomData<(P, PD)>,
+#[derive(Debug)]
+pub struct Children<P: Protocol, PD: ParentData = <P as Protocol>::ParentData, A: Arity = Variable> {
+    children: TypedChildren<P, A>,
+    _phantom: PhantomData<PD>,
 }
 
 impl<P: Protocol, PD: ParentData, A: Arity> Children<P, PD, A> {
     /// Creates a new empty container
     pub fn new() -> Self {
         Self {
-            storage: ArityStorage::new(),
+            children: TypedChildren::new(),
             _phantom: PhantomData,
         }
     }
@@ -56,39 +55,46 @@ impl<P: Protocol, PD: ParentData, A: Arity> Children<P, PD, A> {
     /// Creates a container with the specified capacity
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
-            storage: ArityStorage::with_capacity(capacity),
+            children: TypedChildren::with_capacity(capacity),
             _phantom: PhantomData,
         }
     }
 
     /// Returns the number of children
     pub fn len(&self) -> usize {
-        self.storage.child_count()
+        self.children.len()
     }
 
     /// Returns whether the container is empty
     pub fn is_empty(&self) -> bool {
-        self.storage.child_count() == 0
+        self.children.is_empty()
     }
 
     /// Returns a reference to the child at the given index
     pub fn get(&self, index: usize) -> Option<&P::Object> {
-        self.storage.get_child(index).map(|b| &**b)
+        self.children.get(index)
     }
 
     /// Returns a mutable reference to the child at the given index
     pub fn get_mut(&mut self, index: usize) -> Option<&mut P::Object> {
-        self.storage.get_child_mut(index).map(|b| &mut **b)
+        self.children.get_mut(index)
     }
 
     /// Returns an iterator over references to the children
     pub fn iter(&self) -> impl Iterator<Item = &P::Object> + '_ {
-        self.storage.iter_children().map(|b| &**b)
+        (0..self.len()).filter_map(move |i| self.get(i))
     }
 
     /// Returns an iterator over mutable references to the children
     pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut P::Object> + '_ {
-        self.storage.iter_children_mut().map(|b| &mut **b)
+        let len = self.len();
+        (0..len).filter_map(move |i| {
+            // SAFETY: We're creating non-overlapping mutable references
+            unsafe {
+                let ptr = self as *mut Self;
+                (*ptr).get_mut(i)
+            }
+        })
     }
 
     /// Adds a child to the end of the container
@@ -97,8 +103,7 @@ impl<P: Protocol, PD: ParentData, A: Arity> Children<P, PD, A> {
     ///
     /// Panics if the arity constraint is violated
     pub fn push(&mut self, child: Box<P::Object>) {
-        self.storage
-            .add_child(child)
+        self.children.add_child(child)
             .expect("Arity constraint violated: cannot add child");
     }
 
@@ -108,8 +113,7 @@ impl<P: Protocol, PD: ParentData, A: Arity> Children<P, PD, A> {
     ///
     /// Panics if index > len or arity constraint is violated.
     pub fn insert(&mut self, index: usize, child: Box<P::Object>) {
-        self.storage
-            .insert_child(index, child)
+        self.children.insert_child(index, child)
             .expect("Arity constraint violated: cannot insert child");
     }
 
@@ -119,18 +123,13 @@ impl<P: Protocol, PD: ParentData, A: Arity> Children<P, PD, A> {
     ///
     /// Panics if index is out of bounds or arity constraint is violated.
     pub fn remove(&mut self, index: usize) -> Box<P::Object> {
-        self.storage
-            .remove_child(index)
+        self.children.remove_child(index)
             .expect("Arity constraint violated: cannot remove child")
     }
 
     /// Removes and returns the last child
     pub fn pop(&mut self) -> Option<Box<P::Object>> {
-        if self.storage.child_count() > 0 {
-            self.storage.remove_child(self.storage.child_count() - 1)
-        } else {
-            None
-        }
+        self.children.pop_child()
     }
 
     /// Clears all children
@@ -139,19 +138,18 @@ impl<P: Protocol, PD: ParentData, A: Arity> Children<P, PD, A> {
     ///
     /// Panics if arity constraint requires minimum children
     pub fn clear(&mut self) {
-        while self.storage.child_count() > 0 {
-            let _ = self.storage.remove_child(0);
-        }
+        let _ = self.children.clear_children();
     }
 
     /// Returns the current capacity (if backed by Vec)
     pub fn capacity(&self) -> usize {
-        self.storage.capacity().unwrap_or(0)
+        // ArityStorage doesn't have a capacity method, so we estimate
+        self.len()
     }
 
     /// Reserves capacity for at least `additional` more children
     pub fn reserve(&mut self, additional: usize) {
-        self.storage.reserve(additional);
+        self.children.reserve(additional);
     }
 
     /// Swaps two children
@@ -160,9 +158,27 @@ impl<P: Protocol, PD: ParentData, A: Arity> Children<P, PD, A> {
     ///
     /// Panics if either index is out of bounds
     pub fn swap(&mut self, a: usize, b: usize) {
-        self.storage
-            .swap_children(a, b)
-            .expect("Cannot swap children: index out of bounds");
+        if a < self.len() && b < self.len() {
+            // We need to temporarily remove both elements to swap
+            // This is a limitation of the current API
+            if a == b {
+                return;
+            }
+
+            let (first, second) = if a < b { (a, b) } else { (b, a) };
+
+            let elem_b = self.children.remove_child(second)
+                .expect("Cannot swap: index out of bounds");
+            let elem_a = self.children.remove_child(first)
+                .expect("Cannot swap: index out of bounds");
+
+            self.children.insert_child(first, elem_b)
+                .expect("Cannot swap: failed to reinsert");
+            self.children.insert_child(second, elem_a)
+                .expect("Cannot swap: failed to reinsert");
+        } else {
+            panic!("Cannot swap children: index out of bounds");
+        }
     }
 }
 

@@ -1,6 +1,6 @@
 //! Shifted box trait for custom child positioning
 
-use crate::traits::box::SingleChildRenderBox;
+use crate::traits::r#box::SingleChildRenderBox;
 use crate::traits::{BoxHitTestResult, PaintingContext, RenderBox};
 use flui_types::Offset;
 

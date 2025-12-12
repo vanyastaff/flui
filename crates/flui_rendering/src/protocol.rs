@@ -18,7 +18,9 @@ pub trait Protocol: Send + Sync + Debug + 'static {
     ///
     /// For BoxProtocol: `dyn RenderBox`
     /// For SliverProtocol: `dyn RenderSliver`
-    type Object: ?Sized;
+    ///
+    /// Must be Send + Sync for thread-safe child storage in ArityStorage.
+    type Object: ?Sized + Send + Sync;
 
     /// Layout input type (passed down from parent to child)
     ///

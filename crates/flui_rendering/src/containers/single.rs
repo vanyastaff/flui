@@ -2,10 +2,11 @@
 
 use std::marker::PhantomData;
 
-use ambassador::Delegate;
 use flui_tree::arity::{Arity, ArityStorage, ChildrenStorage, Optional};
 
 use crate::protocol::Protocol;
+
+// Import ChildrenStorage trait to use its methods
 
 /// Container for children of a specific protocol with arity validation
 ///
@@ -35,8 +36,7 @@ use crate::protocol::Protocol;
 ///     let size = child.size();
 /// }
 /// ```
-#[derive(Debug, Delegate)]
-#[delegate(ChildrenStorage<Box<P::Object>, A>, target = "storage")]
+#[derive(Debug)]
 pub struct Single<P: Protocol, A: Arity = Optional> {
     storage: ArityStorage<Box<P::Object>, A>,
     _phantom: PhantomData<P>,
@@ -53,12 +53,12 @@ impl<P: Protocol, A: Arity> Single<P, A> {
 
     /// Returns a reference to the child, if any
     pub fn child(&self) -> Option<&P::Object> {
-        self.storage.get_single().map(|b| &**b)
+        self.storage.single_child().map(|b| &**b)
     }
 
     /// Returns a mutable reference to the child, if any
     pub fn child_mut(&mut self) -> Option<&mut P::Object> {
-        self.storage.get_single_mut().map(|b| &mut **b)
+        self.storage.single_child_mut().map(|b| &mut **b)
     }
 
     /// Sets the child, replacing any existing child
@@ -67,14 +67,13 @@ impl<P: Protocol, A: Arity> Single<P, A> {
     ///
     /// Panics if the arity constraint doesn't allow a single child
     pub fn set_child(&mut self, child: Box<P::Object>) {
-        self.storage
-            .set_single_child(child)
+        self.storage.set_single_child(child)
             .expect("Arity constraint violated: cannot set single child");
     }
 
     /// Takes the child, leaving None in its place
     pub fn take_child(&mut self) -> Option<Box<P::Object>> {
-        self.storage.remove_child(0)
+        self.storage.take_single_child()
     }
 
     /// Returns whether this container has a child
@@ -84,9 +83,7 @@ impl<P: Protocol, A: Arity> Single<P, A> {
 
     /// Clears the child
     pub fn clear(&mut self) {
-        if self.storage.child_count() > 0 {
-            let _ = self.storage.remove_child(0);
-        }
+        let _ = self.storage.clear_children();
     }
 }
 

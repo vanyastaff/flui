@@ -1,6 +1,5 @@
 //! Shifted container for custom child positioning
 
-use ambassador::Delegate;
 use flui_tree::arity::{Arity, ChildrenStorage, Exact};
 use flui_types::Offset;
 
@@ -59,12 +58,24 @@ use crate::protocol::{BoxProtocol, Protocol};
 ///     }
 /// }
 /// ```
-#[derive(Debug, Delegate)]
-#[delegate(ChildrenStorage<Box<P::Object>, A>, target = "child")]
 pub struct Shifted<P: Protocol, A: Arity = Exact<1>> {
     child: Single<P, A>,
     geometry: P::Geometry,
     offset: Offset,
+}
+
+// Manual Debug impl since P::Object doesn't require Debug
+impl<P: Protocol, A: Arity> std::fmt::Debug for Shifted<P, A>
+where
+    P::Geometry: std::fmt::Debug,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Shifted")
+            .field("geometry", &self.geometry)
+            .field("offset", &self.offset)
+            .field("has_child", &self.child.has_child())
+            .finish()
+    }
 }
 
 impl<P: Protocol, A: Arity> Shifted<P, A> {

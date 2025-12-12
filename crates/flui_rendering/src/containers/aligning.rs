@@ -1,6 +1,5 @@
 //! Aligning container for alignment-based positioning
 
-use ambassador::Delegate;
 use flui_tree::arity::{Arity, ChildrenStorage, Exact};
 use flui_types::{Alignment, Offset};
 
@@ -59,8 +58,6 @@ use crate::protocol::{BoxProtocol, Protocol};
 ///     }
 /// }
 /// ```
-#[derive(Debug, Delegate)]
-#[delegate(ChildrenStorage<Box<P::Object>, A>, target = "child")]
 pub struct Aligning<P: Protocol, A: Arity = Exact<1>> {
     child: Single<P, A>,
     geometry: P::Geometry,
@@ -68,6 +65,23 @@ pub struct Aligning<P: Protocol, A: Arity = Exact<1>> {
     alignment: Alignment,
     width_factor: Option<f32>,
     height_factor: Option<f32>,
+}
+
+// Manual Debug impl since P::Object doesn't require Debug
+impl<P: Protocol, A: Arity> std::fmt::Debug for Aligning<P, A>
+where
+    P::Geometry: std::fmt::Debug,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Aligning")
+            .field("geometry", &self.geometry)
+            .field("offset", &self.offset)
+            .field("alignment", &self.alignment)
+            .field("width_factor", &self.width_factor)
+            .field("height_factor", &self.height_factor)
+            .field("has_child", &self.child.has_child())
+            .finish()
+    }
 }
 
 impl<P: Protocol, A: Arity> Aligning<P, A> {

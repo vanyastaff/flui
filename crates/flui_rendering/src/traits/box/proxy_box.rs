@@ -1,6 +1,6 @@
 //! Proxy box trait for pass-through render objects
 
-use crate::traits::box::SingleChildRenderBox;
+use crate::traits::r#box::SingleChildRenderBox;
 use crate::traits::{BoxHitTestResult, PaintingContext, RenderBox, TextBaseline};
 use crate::constraints::BoxConstraints;
 use crate::geometry::Size;

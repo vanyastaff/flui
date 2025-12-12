@@ -1,6 +1,7 @@
 //! Generic container types for child storage
 //!
 //! This module provides containers with integrated arity support from flui-tree:
+//! - `TypedChildren<P, A>` - Protocol-specific child storage with arity
 //! - `Single<P, A>` - Single child with arity constraint
 //! - `Children<P, PD, A>` - Multiple children with arity constraint
 //! - `Proxy<P, A>` - Pass-through container with geometry
@@ -8,6 +9,7 @@
 //! - `Aligning<P, A>` - Alignment-based positioning
 //! - `Adapter<C, ToProtocol>` - Cross-protocol composition
 
+mod typed_children;
 mod single;
 mod children;
 mod proxy;
@@ -15,6 +17,7 @@ mod shifted;
 mod aligning;
 mod adapter;
 
+pub use typed_children::TypedChildren;
 pub use single::Single;
 pub use children::Children;
 pub use proxy::{Proxy, ProxyBox};

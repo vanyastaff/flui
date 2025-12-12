@@ -1,6 +1,6 @@
 //! Aligning shifted box trait for alignment-based positioning
 
-use crate::traits::box::RenderShiftedBox;
+use crate::traits::r#box::RenderShiftedBox;
 use crate::geometry::Size;
 use flui_types::{Alignment, Offset};
 

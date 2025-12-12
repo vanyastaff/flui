@@ -1,6 +1,5 @@
 //! Proxy container for pass-through objects
 
-use ambassador::Delegate;
 use flui_tree::arity::{Arity, ChildrenStorage, Exact};
 
 use crate::containers::Single;
@@ -47,11 +46,22 @@ use crate::protocol::{BoxProtocol, Protocol};
 ///     }
 /// }
 /// ```
-#[derive(Debug, Delegate)]
-#[delegate(ChildrenStorage<Box<P::Object>, A>, target = "child")]
 pub struct Proxy<P: Protocol, A: Arity = Exact<1>> {
     child: Single<P, A>,
     geometry: P::Geometry,
+}
+
+// Manual Debug impl since P::Object doesn't require Debug
+impl<P: Protocol, A: Arity> std::fmt::Debug for Proxy<P, A>
+where
+    P::Geometry: std::fmt::Debug,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Proxy")
+            .field("geometry", &self.geometry)
+            .field("has_child", &self.child.has_child())
+            .finish()
+    }
 }
 
 impl<P: Protocol, A: Arity> Proxy<P, A> {
