@@ -61,6 +61,9 @@ serde_json = "1.0"
 # BUILDER UTILITIES - Used by widgets
 bon = "3.8"
 
+# DELEGATION - Used by flui-tree and flui_rendering
+ambassador = "0.4.2"
+
 # ERROR HANDLING & LOGGING - Used everywhere
 thiserror = "2.0"
 anyhow = "1.0"

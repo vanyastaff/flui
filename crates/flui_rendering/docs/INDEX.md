@@ -9,7 +9,10 @@
 ### Core System
 - **[[Protocol]]** - Protocol trait with Object, Geometry, Constraints, ParentData (core/Protocol.md)
 - **[[Containers]]** - Type-safe container implementations (Single, Children, Proxy, Shifted, Aligning) (core/Containers.md)
+- **[[Adapter]]** - Cross-protocol wrapper (Box ↔ Sliver conversion) (core/Adapter.md)
 - **[[Lifecycle]]** - Render object lifecycle states (Detached → Painted → Disposed) (core/Lifecycle.md)
+- **[[Arity Integration]]** - Compile-time arity system with Flutter-like API (core/Arity Integration.md)
+- **[[Safety Features]]** - Compile-time, type-safe, runtime safety guarantees (core/Safety Features.md)
 - **[[Delegation Pattern]]** - Ambassador-based trait delegation (core/Delegation Pattern.md)
 - **[[Render Tree]]** - Tree structure, attach/detach, parent-child relationships (core/Render Tree.md)
 

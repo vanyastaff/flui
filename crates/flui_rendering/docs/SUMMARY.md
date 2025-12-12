@@ -6,17 +6,20 @@
 
 ## 📦 Package Contents
 
-**13 comprehensive markdown documents (41KB compressed)**
+**18 comprehensive markdown documents (~68KB compressed)**
 
 ```
 flui-docs/
 ├── INDEX.md                             # Main navigation hub
 ├── README.md                            # Quick start guide
 │
-├── core/                                # Foundation (5 docs)
+├── core/                                # Foundation (8 docs)
 │   ├── Protocol.md                      # Protocol trait system
 │   ├── Containers.md                    # Type-safe containers
-│   ├── Lifecycle.md                     # ⭐ NEW: RenderLifecycle enum
+│   ├── Adapter.md                       # ⭐ NEW: Cross-protocol wrapper
+│   ├── Lifecycle.md                     # RenderLifecycle enum
+│   ├── Arity Integration.md             # Arity system + Flutter API
+│   ├── Safety Features.md               # Compile/runtime safety
 │   ├── Delegation Pattern.md            # Ambassador delegation
 │   └── Render Tree.md                   # Tree structure & lifecycle
 │
@@ -144,6 +147,81 @@ Complete project structure (~197 files):
 
 ---
 
+### 5. Arity Integration (12KB)
+
+**File:** `core/Arity Integration.md`
+
+How flui-tree's arity system integrates into flui-rendering:
+
+- **Architecture:** Arity as type parameter in containers
+- **Flutter-like API:** `set_child()`, `add()`, `remove()` (arity hidden)
+- **Container types:** ProxyBox, MultiChildren with Arity generic
+- **Usage examples:** RenderOpacity (Exact<1>), RenderSwitcher (Exact<2>), RenderFlex (Variable)
+- **Delegation pattern:** Automatic via Ambassador
+- **Error handling:** Debug assertions with clear messages
+- **Performance:** Zero overhead in release builds
+
+**Key Content:**
+- Single-child API (RenderProxyBox trait)
+- Multi-child API (MultiChildRenderBox trait)
+- ArityStorage enum (internal bridge)
+- 5 complete examples (Opacity, SizedBox, Switcher, Flex, TabBar)
+- Comparison with Flutter
+- Best practices and migration guide
+
+---
+
+### 6. Safety Features (15KB)
+
+**File:** `core/Safety Features.md`
+
+Compile-time, type-safe, and runtime safety guarantees:
+
+- **Branded IDs:** Prevent mixing ElementId and RenderId at compile-time
+- **Typestate Pattern:** Make invalid lifecycle states unrepresentable
+- **Protocol Compatibility:** Compile-time validation of protocol mixing
+- **Depth Limits:** Configurable const generic limits to prevent stack overflow
+- **Immutable Paint:** Prevent mutation during paint phase (immutable &self)
+- **Thread Safety:** Explicit Send/Sync bounds for thread-safe render objects
+- **Typestate Builder:** Enforce all required fields at compile-time
+- **NonZero Types:** Eliminate runtime zero checks with NonZeroUsize
+- **Const Assertions:** Validate invariants at compile-time
+- **Panic Safety:** Transaction log + checkpoints for recovery
+
+**Key Content:**
+- 10 safety features with implementations
+- Comparison with Flutter's runtime checking
+- Priority matrix (High/Medium/Low)
+- Best practices for layering safety
+- Zero runtime cost for compile-time features
+
+---
+
+### 6. Adapter Container (11KB)
+
+**File:** `core/Adapter.md`
+
+Cross-protocol wrapper for Box ↔ Sliver conversion:
+
+- **Architecture:** `Adapter<InnerContainer, TargetProtocol>` type
+- **Zero-cost:** PhantomData wrapper, no runtime overhead
+- **Type aliases:** BoxToSliver, SliverToBox, etc.
+- **Single API:** Only `add()` method - type system handles conversion
+- **Examples:** RenderSliverToBoxAdapter, RenderShrinkWrappingViewport
+- **Self-documenting:** Type signature shows protocol conversion
+- **Compile-time safety:** Protocol mismatch caught by compiler
+
+**Key Content:**
+- Complete Adapter<C, ToProtocol> implementation
+- SliverToBoxAdapter full example (Box child in Sliver context)
+- ShrinkWrappingViewport full example (Sliver children in Box context)
+- Protocol conversion flow diagram
+- API design benefits (single method vs multiple)
+- Comparison with Flutter's adapter pattern
+- Type aliases for common cases
+
+---
+
 ## 📊 Complete Statistics
 
 | Component | Count | Documentation |
@@ -158,7 +236,7 @@ Complete project structure (~197 files):
 | **Delegates** | 6 | Delegates.md |
 | **Layer Types** | 15 | Pipeline.md |
 | **Total Project Files** | ~197 | File Organization.md |
-| **Documentation Files** | 13 | All .md files |
+| **Documentation Files** | 18 | All .md files |
 
 ---
 
