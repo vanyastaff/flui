@@ -1,8 +1,6 @@
 //! Proxy container for pass-through objects
 
-use ambassador::Delegate;
 use flui_tree::arity::{Arity, ChildrenStorage, Exact};
-use crate::containers::delegation::{ambassador_impl_ChildrenStorage, DelegatableChildrenStorage as ChildrenStorage};
 
 use crate::containers::Single;
 use crate::protocol::{BoxProtocol, Protocol};
@@ -49,8 +47,6 @@ use crate::protocol::{BoxProtocol, Protocol};
 /// }
 /// ```
 
-#[derive(Delegate)]
-#[delegate(ChildrenStorage<Box<P::Object>>, target = "child")]
 pub struct Proxy<P: Protocol, A: Arity = Exact<1>> {
     child: Single<P, A>,
     geometry: P::Geometry,

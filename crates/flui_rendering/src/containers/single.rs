@@ -2,9 +2,7 @@
 
 use std::marker::PhantomData;
 
-use ambassador::Delegate;
 use flui_tree::arity::{Arity, ArityStorage, ChildrenStorage, Optional};
-use crate::containers::delegation::{ambassador_impl_ChildrenStorage, DelegatableChildrenStorage as ChildrenStorage};
 
 use crate::protocol::Protocol;
 
@@ -38,8 +36,6 @@ use crate::protocol::Protocol;
 ///     let size = child.size();
 /// }
 /// ```
-#[derive(Delegate)]
-#[delegate(ChildrenStorage<Box<P::Object>>, target = "storage")]
 pub struct Single<P: Protocol, A: Arity = Optional> {
     storage: ArityStorage<Box<P::Object>, A>,
     _phantom: PhantomData<P>,

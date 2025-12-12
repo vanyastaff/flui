@@ -1,6 +1,5 @@
 //! Adapter container for cross-protocol composition
 //!
-use ambassador::Delegate;
 //! This module provides the `Adapter` container that enables composing render objects
 //! from different protocols, such as wrapping a Box render object in a Sliver protocol.
 
