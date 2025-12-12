@@ -101,6 +101,8 @@
 //! - `serde` - Enable serialization support for constraints and geometry
 
 // Core modules
+#[doc(hidden)]
+
 pub mod protocol;
 pub mod constraints;
 pub mod geometry;

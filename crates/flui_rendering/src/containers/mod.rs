@@ -9,6 +9,10 @@
 //! - `Aligning<P, A>` - Alignment-based positioning
 //! - `Adapter<C, ToProtocol>` - Cross-protocol composition
 
+use ambassador::Delegate;
+
+mod delegation;
+
 mod typed_children;
 mod single;
 mod children;

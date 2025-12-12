@@ -5,7 +5,9 @@
 
 use std::marker::PhantomData;
 
+use ambassador::Delegate;
 use flui_tree::arity::{Arity, ArityStorage, ChildrenStorage};
+use crate::containers::delegation::{ambassador_impl_ChildrenStorage, DelegatableChildrenStorage as ChildrenStorage};
 
 use crate::protocol::Protocol;
 
@@ -37,6 +39,9 @@ use crate::protocol::Protocol;
 ///     // child is &Box<dyn RenderBox>
 /// }
 /// ```
+
+#[derive(Delegate)]
+#[delegate(ChildrenStorage<Box<P::Object>>, target = "storage")]
 pub struct TypedChildren<P: Protocol, A: Arity>
 where
     P::Object: Send + Sync,
@@ -202,6 +207,7 @@ mod tests {
     use super::*;
     use crate::protocol::BoxProtocol;
     use flui_tree::arity::{Exact, Optional, Variable};
+use crate::containers::delegation::{ambassador_impl_ChildrenStorage, DelegatableChildrenStorage as ChildrenStorage};
 
     #[test]
     fn test_new() {

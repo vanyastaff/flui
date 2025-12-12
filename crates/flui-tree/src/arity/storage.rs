@@ -40,7 +40,7 @@
 //! }
 //! ```
 
-use ambassador::delegatable_trait;
+
 
 use super::accessors::SliceChildren;
 use super::error::ArityError;
@@ -79,7 +79,7 @@ use super::runtime::RuntimeArity;
 /// For generic operations like `retain`, `find`, `any`, `all`, use the
 /// `ChildrenStorageExt` extension trait which provides these through
 /// the slice access.
-#[delegatable_trait]
+
 pub trait ChildrenStorage<T> {
     // ========================================================================
     // CORE ACCESS (immutable)

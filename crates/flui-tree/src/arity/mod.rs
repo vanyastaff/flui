@@ -47,6 +47,8 @@
 //! ```
 
 // ============================================================================
+// ============================================================================
+
 // MODULES
 // ============================================================================
 
@@ -111,6 +113,11 @@ pub use types::{AtLeast, Exact, Leaf, Never, Optional, Range, Single, Variable};
 
 pub use arity_storage::{ArityStorage, ArityStorageView};
 pub use storage::{ChildrenStorage, ChildrenStorageExt};
+
+// ============================================================================
+// Export the ambassador-generated delegation macro for ChildrenStorage
+// This allows external crates to use #[delegate(ChildrenStorage)]
+#[doc(hidden)]
 
 // ============================================================================
 // RE-EXPORTS - Aliases
