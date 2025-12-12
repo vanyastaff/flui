@@ -1,4 +1,4 @@
-//! Type-erasure wrappers and utility types for render objects.
+//! Type-erasure wrappers and utility types for render objects (Flutter Model).
 //!
 //! This module provides wrapper types for working with render objects in
 //! type-erased contexts, such as storing them in collections or passing
@@ -9,21 +9,21 @@
 //! - **Type erasure**: Store concrete render objects as trait objects
 //! - **Arity preservation**: Wrappers maintain arity information
 //! - **Protocol preservation**: Box/Sliver protocol is maintained
-//! - **Context-based API**: All operations use context objects
+//! - **Flutter model**: Uses constraints as parameters, PaintingContext for paint
 
 use std::fmt;
 
-use flui_interaction::HitTestResult;
-use flui_types::{Rect, Size, SliverGeometry};
+use crate::box_render::BoxHitTestResult;
+use crate::hit_test::SliverHitTestResult;
+use flui_foundation::{Diagnosticable, DiagnosticsProperty};
+use flui_interaction::{HitTestEntry, HitTestTarget};
+use flui_types::events::PointerEvent;
+use flui_types::{BoxConstraints, Offset, Rect, Size, SliverConstraints, SliverGeometry};
 
 use super::box_render::RenderBox;
-use super::context::{
-    BoxHitTestContext, BoxLayoutContext, BoxPaintContext, SliverHitTestContext,
-    SliverLayoutContext, SliverPaintContext,
-};
 use super::object::RenderObject;
+use super::painting_context::PaintingContext;
 use super::sliver::RenderSliver;
-use crate::RenderResult;
 use flui_tree::arity::Arity;
 
 // ============================================================================
@@ -48,7 +48,7 @@ use flui_tree::arity::Arity;
 /// let wrapper: BoxRenderWrapper<Single> = BoxRenderWrapper::new(padding);
 ///
 /// // Use as RenderBox<Single>
-/// let size = wrapper.layout(ctx);
+/// let size = wrapper.perform_layout(constraints);
 /// ```
 pub struct BoxRenderWrapper<A: Arity> {
     inner: Box<dyn RenderBox<A>>,
@@ -110,32 +110,75 @@ impl<A: Arity> fmt::Debug for BoxRenderWrapper<A> {
 // ============================================================================
 
 impl<A: Arity> RenderBox<A> for BoxRenderWrapper<A> {
-    fn layout(&mut self, ctx: BoxLayoutContext<'_, A>) -> RenderResult<Size> {
-        self.inner.layout(ctx)
+    fn perform_layout(&mut self, constraints: BoxConstraints) -> Size {
+        self.inner.perform_layout(constraints)
     }
 
-    fn paint(&self, ctx: &mut BoxPaintContext<'_, A>) {
-        RenderBox::paint(&*self.inner, ctx)
+    fn paint(&self, ctx: &mut PaintingContext, offset: Offset) {
+        self.inner.paint(ctx, offset)
     }
 
-    fn hit_test(&self, ctx: &BoxHitTestContext<'_, A>, result: &mut HitTestResult) -> bool {
-        RenderBox::hit_test(&*self.inner, ctx, result)
+    fn hit_test(&self, result: &mut BoxHitTestResult, position: Offset) -> bool {
+        self.inner.hit_test(result, position)
     }
 
-    fn intrinsic_width(&self, height: f32) -> Option<f32> {
-        self.inner.intrinsic_width(height)
+    fn hit_test_self(&self, position: Offset) -> bool {
+        self.inner.hit_test_self(position)
     }
 
-    fn intrinsic_height(&self, width: f32) -> Option<f32> {
-        self.inner.intrinsic_height(width)
+    fn hit_test_children(&self, result: &mut BoxHitTestResult, position: Offset) -> bool {
+        self.inner.hit_test_children(result, position)
     }
 
-    fn baseline_offset(&self) -> Option<f32> {
-        RenderBox::baseline_offset(self.inner.as_ref())
+    fn size(&self) -> Size {
+        self.inner.size()
     }
 
     fn local_bounds(&self) -> Rect {
-        RenderBox::local_bounds(self.inner.as_ref())
+        self.inner.local_bounds()
+    }
+
+    fn compute_min_intrinsic_width(&self, height: f32) -> f32 {
+        self.inner.compute_min_intrinsic_width(height)
+    }
+
+    fn compute_max_intrinsic_width(&self, height: f32) -> f32 {
+        self.inner.compute_max_intrinsic_width(height)
+    }
+
+    fn compute_min_intrinsic_height(&self, width: f32) -> f32 {
+        self.inner.compute_min_intrinsic_height(width)
+    }
+
+    fn compute_max_intrinsic_height(&self, width: f32) -> f32 {
+        self.inner.compute_max_intrinsic_height(width)
+    }
+
+    fn compute_distance_to_actual_baseline(
+        &self,
+        baseline: flui_types::layout::TextBaseline,
+    ) -> Option<f32> {
+        self.inner.compute_distance_to_actual_baseline(baseline)
+    }
+
+    fn compute_dry_layout(&self, constraints: BoxConstraints) -> Size {
+        self.inner.compute_dry_layout(constraints)
+    }
+}
+
+// ============================================================================
+// SUPERTRAIT IMPLEMENTATIONS
+// ============================================================================
+
+impl<A: Arity> Diagnosticable for BoxRenderWrapper<A> {
+    fn debug_fill_properties(&self, properties: &mut Vec<DiagnosticsProperty>) {
+        self.inner.as_ref().debug_fill_properties(properties);
+    }
+}
+
+impl<A: Arity> HitTestTarget for BoxRenderWrapper<A> {
+    fn handle_event(&self, event: &PointerEvent, entry: &HitTestEntry) {
+        self.inner.as_ref().handle_event(event, entry);
     }
 }
 
@@ -146,6 +189,35 @@ impl<A: Arity> RenderBox<A> for BoxRenderWrapper<A> {
 impl<A: Arity> RenderObject for BoxRenderWrapper<A> {
     fn debug_name(&self) -> &'static str {
         self.inner.as_ref().debug_name()
+    }
+
+    // ========================================================================
+    // BOX PROTOCOL IMPLEMENTATION
+    // ========================================================================
+
+    fn perform_box_layout(&mut self, constraints: BoxConstraints) -> Option<Size> {
+        Some(self.inner.perform_layout(constraints))
+    }
+
+    fn perform_box_paint(&self, ctx: &mut PaintingContext, offset: Offset) -> bool {
+        self.inner.paint(ctx, offset);
+        true
+    }
+
+    fn perform_box_hit_test(
+        &self,
+        result: &mut BoxHitTestResult,
+        position: Offset,
+    ) -> Option<bool> {
+        Some(self.inner.hit_test(result, position))
+    }
+
+    fn box_size(&self) -> Option<Size> {
+        Some(self.inner.size())
+    }
+
+    fn supports_box_protocol(&self) -> bool {
+        true
     }
 }
 
@@ -221,16 +293,56 @@ impl<A: Arity> fmt::Debug for SliverRenderWrapper<A> {
 // ============================================================================
 
 impl<A: Arity> RenderSliver<A> for SliverRenderWrapper<A> {
-    fn layout(&mut self, ctx: SliverLayoutContext<'_, A>) -> RenderResult<SliverGeometry> {
-        self.inner.layout(ctx)
+    fn perform_layout(&mut self, constraints: SliverConstraints) -> SliverGeometry {
+        self.inner.perform_layout(constraints)
     }
 
-    fn paint(&self, ctx: &mut SliverPaintContext<'_, A>) {
-        RenderSliver::paint(&*self.inner, ctx)
+    fn paint(&self, ctx: &mut PaintingContext, offset: Offset) {
+        self.inner.paint(ctx, offset)
     }
 
-    fn hit_test(&self, ctx: &SliverHitTestContext<'_, A>, result: &mut HitTestResult) -> bool {
-        RenderSliver::hit_test(&*self.inner, ctx, result)
+    fn hit_test(
+        &self,
+        result: &mut SliverHitTestResult,
+        main_axis_position: f32,
+        cross_axis_position: f32,
+    ) -> bool {
+        self.inner
+            .hit_test(result, main_axis_position, cross_axis_position)
+    }
+
+    fn hit_test_children(
+        &self,
+        result: &mut SliverHitTestResult,
+        main_axis_position: f32,
+        cross_axis_position: f32,
+    ) -> bool {
+        self.inner
+            .hit_test_children(result, main_axis_position, cross_axis_position)
+    }
+
+    fn geometry(&self) -> SliverGeometry {
+        self.inner.geometry()
+    }
+
+    fn local_bounds(&self) -> Rect {
+        self.inner.local_bounds()
+    }
+}
+
+// ============================================================================
+// SUPERTRAIT IMPLEMENTATIONS for Sliver
+// ============================================================================
+
+impl<A: Arity> Diagnosticable for SliverRenderWrapper<A> {
+    fn debug_fill_properties(&self, properties: &mut Vec<DiagnosticsProperty>) {
+        Diagnosticable::debug_fill_properties(self.inner.as_ref(), properties);
+    }
+}
+
+impl<A: Arity> HitTestTarget for SliverRenderWrapper<A> {
+    fn handle_event(&self, event: &PointerEvent, entry: &HitTestEntry) {
+        self.inner.as_ref().handle_event(event, entry);
     }
 }
 
@@ -241,6 +353,21 @@ impl<A: Arity> RenderSliver<A> for SliverRenderWrapper<A> {
 impl<A: Arity> RenderObject for SliverRenderWrapper<A> {
     fn debug_name(&self) -> &'static str {
         self.inner.as_ref().debug_name()
+    }
+
+    // ========================================================================
+    // SLIVER PROTOCOL IMPLEMENTATION
+    // ========================================================================
+
+    fn perform_sliver_layout(
+        &mut self,
+        constraints: flui_types::SliverConstraints,
+    ) -> Option<flui_types::SliverGeometry> {
+        Some(self.inner.perform_layout(constraints))
+    }
+
+    fn supports_sliver_protocol(&self) -> bool {
+        true
     }
 }
 
@@ -256,21 +383,41 @@ mod tests {
     #[derive(Debug)]
     struct MockRenderBox {
         value: i32,
+        cached_size: Size,
+    }
+
+    impl flui_foundation::Diagnosticable for MockRenderBox {}
+
+    impl flui_interaction::HitTestTarget for MockRenderBox {
+        fn handle_event(
+            &self,
+            _event: &flui_types::events::PointerEvent,
+            _entry: &flui_interaction::HitTestEntry,
+        ) {
+        }
     }
 
     impl RenderObject for MockRenderBox {}
 
     impl RenderBox<Leaf> for MockRenderBox {
-        fn layout(&mut self, ctx: BoxLayoutContext<'_, Leaf>) -> RenderResult<Size> {
-            Ok(ctx.constraints.smallest())
+        fn perform_layout(&mut self, constraints: BoxConstraints) -> Size {
+            self.cached_size = constraints.smallest();
+            self.cached_size
         }
 
-        fn paint(&self, _ctx: &mut BoxPaintContext<'_, Leaf>) {}
+        fn paint(&self, _ctx: &mut PaintingContext, _offset: Offset) {}
+
+        fn size(&self) -> Size {
+            self.cached_size
+        }
     }
 
     #[test]
     fn test_wrapper_creation() {
-        let mock = MockRenderBox { value: 42 };
+        let mock = MockRenderBox {
+            value: 42,
+            cached_size: Size::ZERO,
+        };
         let wrapper = BoxRenderWrapper::new(mock);
 
         assert_eq!(
@@ -281,7 +428,10 @@ mod tests {
 
     #[test]
     fn test_wrapper_downcast() {
-        let mock = MockRenderBox { value: 42 };
+        let mock = MockRenderBox {
+            value: 42,
+            cached_size: Size::ZERO,
+        };
         let mut wrapper = BoxRenderWrapper::new(mock);
 
         let downcast = wrapper.downcast_ref::<MockRenderBox>();
@@ -293,5 +443,19 @@ mod tests {
         downcast_mut.unwrap().value = 100;
 
         assert_eq!(wrapper.downcast_ref::<MockRenderBox>().unwrap().value, 100);
+    }
+
+    #[test]
+    fn test_wrapper_layout() {
+        let mock = MockRenderBox {
+            value: 42,
+            cached_size: Size::ZERO,
+        };
+        let mut wrapper = BoxRenderWrapper::new(mock);
+
+        let constraints = BoxConstraints::tight(Size::new(100.0, 50.0));
+        let size = wrapper.perform_layout(constraints);
+
+        assert_eq!(size, Size::new(100.0, 50.0));
     }
 }

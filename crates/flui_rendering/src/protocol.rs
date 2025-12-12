@@ -372,6 +372,7 @@ impl Protocol for SliverProtocol {
 /// assert_eq!(Size::protocol_id(), ProtocolId::Box);
 /// assert_eq!(BoxConstraints::protocol_id(), ProtocolId::Box);
 /// ```
+#[allow(dead_code)]
 pub trait ProtocolIdentifier {
     /// Returns the protocol identifier for this type.
     fn protocol_id() -> ProtocolId;
@@ -508,6 +509,7 @@ impl ProtocolId {
 ///
 /// For compile-time protocol usage, prefer the `Protocol` trait with type
 /// parameters (e.g., `RenderState<BoxProtocol>`) over this type.
+#[allow(dead_code)]
 pub type LayoutProtocol = ProtocolId;
 
 // ============================================================================

@@ -34,18 +34,18 @@
 use std::ops::{Deref, DerefMut};
 
 use ambassador::{delegatable_trait, Delegate};
-use flui_types::{Alignment, BoxConstraints, Offset, Size};
 use flui_types::prelude::TextDirection;
+use flui_types::{Alignment, BoxConstraints, Offset, Size};
 
-use crate::children::{Child, BoxChild};
-use crate::protocol::{Protocol, BoxProtocol};
+use crate::children::Child;
+use crate::protocol::{BoxProtocol, Protocol};
 
 // Re-export from proxy.rs and shifted.rs
-use super::proxy::{HasChild, HasBoxGeometry, ProxyData};
-use super::shifted::{HasOffset, ShiftedBase, RenderShiftedBox};
+use super::proxy::{HasBoxGeometry, HasChild, ProxyData};
+use super::shifted::{HasOffset, RenderShiftedBox, ShiftedBase};
 
 // Import ambassador macros
-use super::proxy::{ambassador_impl_HasChild, ambassador_impl_HasBoxGeometry};
+use super::proxy::{ambassador_impl_HasBoxGeometry, ambassador_impl_HasChild};
 use super::shifted::ambassador_impl_HasOffset;
 
 // ============================================================================
@@ -265,7 +265,9 @@ pub trait RenderAligningShiftedBox: RenderShiftedBox + HasAlignment {
     /// a child of `child_size` within a container of `container_size`
     /// according to the current alignment settings.
     fn align_child(&mut self, child_size: Size, container_size: Size) {
-        let offset = self.resolved_alignment().calculate_offset(child_size, container_size);
+        let offset = self
+            .resolved_alignment()
+            .calculate_offset(child_size, container_size);
         self.set_child_offset(offset);
     }
 }
@@ -298,7 +300,9 @@ mod tests {
 
     #[test]
     fn test_aligning_shifted_box_creation() {
-        let aligning = AligningShiftedBox::new(TestData { width_factor: Some(0.5) });
+        let aligning = AligningShiftedBox::new(TestData {
+            width_factor: Some(0.5),
+        });
         assert_eq!(aligning.width_factor, Some(0.5)); // Deref works!
     }
 

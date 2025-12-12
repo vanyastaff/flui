@@ -80,7 +80,6 @@ pub use annotated_region::{
 };
 pub use backdrop_filter::BackdropFilterLayer;
 pub use canvas::CanvasLayer;
-pub use picture::PictureLayer;
 pub use clip_path::ClipPathLayer;
 pub use clip_rect::ClipRectLayer;
 pub use clip_rrect::ClipRRectLayer;
@@ -90,6 +89,7 @@ pub use image_filter::ImageFilterLayer;
 pub use leader::{LayerLink, LeaderLayer};
 pub use offset::OffsetLayer;
 pub use opacity::OpacityLayer;
+pub use picture::PictureLayer;
 pub use platform_view::{PlatformViewHitTestBehavior, PlatformViewId, PlatformViewLayer};
 pub use shader_mask::ShaderMaskLayer;
 pub use texture::TextureLayer;
@@ -246,7 +246,7 @@ impl Layer {
             Layer::Canvas(_) => false,
             Layer::Picture(_) => false, // Picture is immutable, doesn't need compositing
             Layer::Texture(layer) => !layer.is_opaque(), // Needs compositing if transparent
-            Layer::PlatformView(_) => true,              // Platform views always need compositing
+            Layer::PlatformView(_) => true, // Platform views always need compositing
             Layer::ClipRect(layer) => layer.is_anti_aliased(),
             Layer::ClipRRect(layer) => layer.is_anti_aliased(),
             Layer::ClipPath(layer) => layer.is_anti_aliased(),
@@ -429,9 +429,27 @@ impl Layer {
         }
     }
 
+    /// Returns the clip rect layer mutably if this is one.
+    #[inline]
+    pub fn as_clip_rect_mut(&mut self) -> Option<&mut ClipRectLayer> {
+        match self {
+            Layer::ClipRect(layer) => Some(layer),
+            _ => None,
+        }
+    }
+
     /// Returns the clip rrect layer if this is one.
     #[inline]
     pub fn as_clip_rrect(&self) -> Option<&ClipRRectLayer> {
+        match self {
+            Layer::ClipRRect(layer) => Some(layer),
+            _ => None,
+        }
+    }
+
+    /// Returns the clip rrect layer mutably if this is one.
+    #[inline]
+    pub fn as_clip_rrect_mut(&mut self) -> Option<&mut ClipRRectLayer> {
         match self {
             Layer::ClipRRect(layer) => Some(layer),
             _ => None,
@@ -447,9 +465,27 @@ impl Layer {
         }
     }
 
+    /// Returns the clip path layer mutably if this is one.
+    #[inline]
+    pub fn as_clip_path_mut(&mut self) -> Option<&mut ClipPathLayer> {
+        match self {
+            Layer::ClipPath(layer) => Some(layer),
+            _ => None,
+        }
+    }
+
     /// Returns the offset layer if this is one.
     #[inline]
     pub fn as_offset(&self) -> Option<&OffsetLayer> {
+        match self {
+            Layer::Offset(layer) => Some(layer),
+            _ => None,
+        }
+    }
+
+    /// Returns the offset layer mutably if this is one.
+    #[inline]
+    pub fn as_offset_mut(&mut self) -> Option<&mut OffsetLayer> {
         match self {
             Layer::Offset(layer) => Some(layer),
             _ => None,
@@ -465,9 +501,27 @@ impl Layer {
         }
     }
 
+    /// Returns the transform layer mutably if this is one.
+    #[inline]
+    pub fn as_transform_mut(&mut self) -> Option<&mut TransformLayer> {
+        match self {
+            Layer::Transform(layer) => Some(layer),
+            _ => None,
+        }
+    }
+
     /// Returns the opacity layer if this is one.
     #[inline]
     pub fn as_opacity(&self) -> Option<&OpacityLayer> {
+        match self {
+            Layer::Opacity(layer) => Some(layer),
+            _ => None,
+        }
+    }
+
+    /// Returns the opacity layer mutably if this is one.
+    #[inline]
+    pub fn as_opacity_mut(&mut self) -> Option<&mut OpacityLayer> {
         match self {
             Layer::Opacity(layer) => Some(layer),
             _ => None,
@@ -483,9 +537,27 @@ impl Layer {
         }
     }
 
+    /// Returns the color filter layer mutably if this is one.
+    #[inline]
+    pub fn as_color_filter_mut(&mut self) -> Option<&mut ColorFilterLayer> {
+        match self {
+            Layer::ColorFilter(layer) => Some(layer),
+            _ => None,
+        }
+    }
+
     /// Returns the image filter layer if this is one.
     #[inline]
     pub fn as_image_filter(&self) -> Option<&ImageFilterLayer> {
+        match self {
+            Layer::ImageFilter(layer) => Some(layer),
+            _ => None,
+        }
+    }
+
+    /// Returns the image filter layer mutably if this is one.
+    #[inline]
+    pub fn as_image_filter_mut(&mut self) -> Option<&mut ImageFilterLayer> {
         match self {
             Layer::ImageFilter(layer) => Some(layer),
             _ => None,
@@ -501,9 +573,27 @@ impl Layer {
         }
     }
 
+    /// Returns the shader mask layer mutably if this is one.
+    #[inline]
+    pub fn as_shader_mask_mut(&mut self) -> Option<&mut ShaderMaskLayer> {
+        match self {
+            Layer::ShaderMask(layer) => Some(layer),
+            _ => None,
+        }
+    }
+
     /// Returns the backdrop filter layer if this is one.
     #[inline]
     pub fn as_backdrop_filter(&self) -> Option<&BackdropFilterLayer> {
+        match self {
+            Layer::BackdropFilter(layer) => Some(layer),
+            _ => None,
+        }
+    }
+
+    /// Returns the backdrop filter layer mutably if this is one.
+    #[inline]
+    pub fn as_backdrop_filter_mut(&mut self) -> Option<&mut BackdropFilterLayer> {
         match self {
             Layer::BackdropFilter(layer) => Some(layer),
             _ => None,
@@ -519,9 +609,27 @@ impl Layer {
         }
     }
 
+    /// Returns the texture layer mutably if this is one.
+    #[inline]
+    pub fn as_texture_mut(&mut self) -> Option<&mut TextureLayer> {
+        match self {
+            Layer::Texture(layer) => Some(layer),
+            _ => None,
+        }
+    }
+
     /// Returns the platform view layer if this is one.
     #[inline]
     pub fn as_platform_view(&self) -> Option<&PlatformViewLayer> {
+        match self {
+            Layer::PlatformView(layer) => Some(layer),
+            _ => None,
+        }
+    }
+
+    /// Returns the platform view layer mutably if this is one.
+    #[inline]
+    pub fn as_platform_view_mut(&mut self) -> Option<&mut PlatformViewLayer> {
         match self {
             Layer::PlatformView(layer) => Some(layer),
             _ => None,
@@ -537,6 +645,15 @@ impl Layer {
         }
     }
 
+    /// Returns the leader layer mutably if this is one.
+    #[inline]
+    pub fn as_leader_mut(&mut self) -> Option<&mut LeaderLayer> {
+        match self {
+            Layer::Leader(layer) => Some(layer),
+            _ => None,
+        }
+    }
+
     /// Returns the follower layer if this is one.
     #[inline]
     pub fn as_follower(&self) -> Option<&FollowerLayer> {
@@ -546,9 +663,27 @@ impl Layer {
         }
     }
 
+    /// Returns the follower layer mutably if this is one.
+    #[inline]
+    pub fn as_follower_mut(&mut self) -> Option<&mut FollowerLayer> {
+        match self {
+            Layer::Follower(layer) => Some(layer),
+            _ => None,
+        }
+    }
+
     /// Returns the annotated region layer if this is one.
     #[inline]
     pub fn as_annotated_region(&self) -> Option<&AnnotatedRegionLayer> {
+        match self {
+            Layer::AnnotatedRegion(layer) => Some(layer),
+            _ => None,
+        }
+    }
+
+    /// Returns the annotated region layer mutably if this is one.
+    #[inline]
+    pub fn as_annotated_region_mut(&mut self) -> Option<&mut AnnotatedRegionLayer> {
         match self {
             Layer::AnnotatedRegion(layer) => Some(layer),
             _ => None,

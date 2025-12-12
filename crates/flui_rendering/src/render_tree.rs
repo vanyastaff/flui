@@ -51,741 +51,17 @@
 //! - GAT for protocol-specific metadata
 
 use slab::Slab;
-use std::marker::PhantomData;
 
 use flui_tree::iter::{AllSiblings, Ancestors, DescendantsWithDepth};
-use flui_tree::{Depth, Mountable, Mounted, NodeState, TreeNav, TreeRead, TreeWrite, Unmountable, Unmounted};
+use flui_tree::{Mounted, TreeNav, TreeRead, TreeWrite};
 
-use flui_foundation::{ElementId, RenderId};
-use flui_types::{Matrix4, Offset, Size};
+use flui_foundation::RenderId;
+use flui_types::{Matrix4, Offset};
 
-use crate::{LayerHandle, ParentData, RenderLifecycle, RenderObject};
+// Re-export RenderNode from node module for backward compatibility
+pub use crate::node::RenderNode;
 
-// ============================================================================
-// RENDER NODE WITH TYPESTATE PATTERN
-// ============================================================================
-
-/// RenderNode with compile-time state tracking via typestate pattern.
-///
-/// This struct uses the typestate pattern to enforce correct usage at compile-time:
-/// - `RenderNode<Unmounted>`: Detached node, no tree position
-/// - `RenderNode<Mounted>`: Attached node with parent, depth, children
-///
-/// # Type Parameters
-///
-/// - `S: NodeState` - Compile-time state marker (Mounted/Unmounted)
-///
-/// # Examples
-///
-/// ```rust,ignore
-/// // Create unmounted node
-/// let unmounted = RenderNode::new(render_object);
-///
-/// // Mount into tree
-/// let mounted = unmounted.mount(Some(parent_id), parent_depth);
-///
-/// // Access tree position (only available when Mounted)
-/// let parent = mounted.parent();
-/// let depth = mounted.depth();
-///
-/// // Unmount from tree
-/// let unmounted = mounted.unmount();
-/// ```
-pub struct RenderNode<S: NodeState> {
-    // ========== Common Fields (both Mounted and Unmounted) ==========
-    /// The type-erased RenderObject
-    render_object: Box<dyn RenderObject>,
-
-    /// Current lifecycle state
-    lifecycle: RenderLifecycle,
-
-    /// Associated ElementId (for cross-tree references)
-    element_id: Option<ElementId>,
-
-    // ========== Mounted-only Fields ==========
-    /// Parent in the render tree (only valid when Mounted)
-    parent: Option<RenderId>,
-
-    /// Tree depth (only valid when Mounted)
-    depth: Depth,
-
-    /// Children in the render tree (only valid when Mounted)
-    children: Vec<RenderId>,
-
-    /// Cached size from last layout (only valid when Mounted)
-    cached_size: Option<Size>,
-
-    /// Whether this node is a relayout boundary (Flutter optimization)
-    ///
-    /// A relayout boundary isolates layout changes to its subtree.
-    /// Determined by: !parent_uses_size || sized_by_parent || constraints.is_tight || parent == null
-    ///
-    /// When true, `mark_needs_layout()` stops propagating up the tree.
-    is_relayout_boundary: bool,
-
-    /// Whether this node or its subtree needs compositing (Flutter protocol)
-    ///
-    /// A node needs compositing if:
-    /// - It's a repaint boundary (`is_repaint_boundary()`)
-    /// - It always needs compositing (`always_needs_compositing()`)
-    /// - Any of its children need compositing
-    ///
-    /// This is updated during `flush_compositing_bits()` phase and determines
-    /// whether a compositing layer should be created for this node.
-    ///
-    /// # Flutter Equivalence
-    ///
-    /// ```dart
-    /// bool _needsCompositing = false;
-    /// bool get needsCompositing => _needsCompositing;
-    /// ```
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// if node.needs_compositing() {
-    ///     // This node needs its own compositing layer
-    ///     painting_context.push_layer(layer);
-    /// }
-    /// ```
-    needs_compositing: bool,
-
-    /// Compositing layer handle (only for repaint boundaries)
-    ///
-    /// Repaint boundaries create their own compositing layer to cache paint results.
-    /// This field stores the layer handle when `is_repaint_boundary()` returns true.
-    ///
-    /// # Flutter Equivalence
-    ///
-    /// ```dart
-    /// LayerHandle<ContainerLayer> _layerHandle = LayerHandle<ContainerLayer>();
-    /// ```
-    layer_handle: Option<LayerHandle>,
-
-    /// Parent-specific data set by parent via setup_parent_data()
-    ///
-    /// Different parent types store different data on their children:
-    /// - Stack stores offset
-    /// - Flex stores flex factor
-    /// - etc.
-    ///
-    /// # Flutter Equivalence
-    ///
-    /// ```dart
-    /// ParentData? parentData;
-    /// ```
-    parent_data: Option<Box<dyn ParentData>>,
-
-    // ========== Typestate Marker ==========
-    /// Zero-sized marker for compile-time state tracking
-    _state: PhantomData<S>,
-}
-
-// ============================================================================
-// UNMOUNTED NODE IMPLEMENTATION
-// ============================================================================
-
-impl RenderNode<Unmounted> {
-    /// Creates a new unmounted RenderNode.
-    ///
-    /// # Arguments
-    ///
-    /// * `object` - The render object to wrap
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// let node = RenderNode::new(my_render_object);
-    /// assert!(node.lifecycle() == RenderLifecycle::Detached);
-    /// ```
-    pub fn new<R: RenderObject + 'static>(object: R) -> Self {
-        Self {
-            render_object: Box::new(object),
-            lifecycle: RenderLifecycle::Detached,
-            element_id: None,
-            parent: None,
-            depth: Depth::root(),
-            children: Vec::new(),
-            cached_size: None,
-            is_relayout_boundary: false,
-            needs_compositing: false,
-            layer_handle: None,
-            parent_data: None,
-            _state: PhantomData,
-        }
-    }
-
-    /// Creates an unmounted RenderNode from a boxed RenderObject.
-    ///
-    /// Useful when the concrete type is already erased.
-    pub fn from_boxed(render_object: Box<dyn RenderObject>) -> Self {
-        Self {
-            render_object,
-            lifecycle: RenderLifecycle::Detached,
-            element_id: None,
-            parent: None,
-            depth: Depth::root(),
-            children: Vec::new(),
-            cached_size: None,
-            is_relayout_boundary: false,
-            needs_compositing: false,
-            layer_handle: None,
-            parent_data: None,
-            _state: PhantomData,
-        }
-    }
-
-    /// Attaches an ElementId to this unmounted node (builder pattern).
-    pub fn with_element_id(mut self, element_id: ElementId) -> Self {
-        self.element_id = Some(element_id);
-        self
-    }
-}
-
-// ============================================================================
-// MOUNTED NODE IMPLEMENTATION
-// ============================================================================
-
-impl RenderNode<Mounted> {
-    // ========== Tree Navigation (only available when Mounted) ==========
-
-    /// Gets the parent RenderId.
-    ///
-    /// Returns `None` if this is the root node.
-    #[inline]
-    pub fn parent(&self) -> Option<RenderId> {
-        self.parent
-    }
-
-    /// Gets the tree depth.
-    ///
-    /// Root nodes have depth 0.
-    #[inline]
-    pub fn depth(&self) -> Depth {
-        self.depth
-    }
-
-    /// Checks if this is the root node.
-    #[inline]
-    pub fn is_root(&self) -> bool {
-        self.parent.is_none()
-    }
-
-    /// Gets all children RenderIds.
-    #[inline]
-    pub fn children(&self) -> &[RenderId] {
-        &self.children
-    }
-
-    /// Returns the number of children.
-    #[inline]
-    pub fn child_count(&self) -> usize {
-        self.children.len()
-    }
-
-    /// Checks if this node has any children.
-    #[inline]
-    pub fn has_children(&self) -> bool {
-        !self.children.is_empty()
-    }
-
-    /// Checks if this is a leaf node (no children).
-    #[inline]
-    pub fn is_leaf(&self) -> bool {
-        self.children.is_empty()
-    }
-
-    // ========== Tree Mutations (Rust naming: snake_case) ==========
-
-    /// Sets the depth of this node.
-    ///
-    /// **Internal use only**. Called by `RenderTree::redepth_child()`.
-    #[inline]
-    pub(crate) fn set_depth(&mut self, depth: Depth) {
-        self.depth = depth;
-    }
-
-    /// Adds a child to this render node.
-    ///
-    /// **Note**: Does not update child's parent. Use `RenderTree::add_child` for that.
-    #[inline]
-    pub(crate) fn add_child(&mut self, child: RenderId) {
-        self.children.push(child);
-    }
-
-    /// Removes a child from this render node.
-    ///
-    /// **Note**: Does not update child's parent. Use `RenderTree::remove_child` for that.
-    #[inline]
-    pub(crate) fn remove_child(&mut self, child: RenderId) {
-        self.children.retain(|&id| id != child);
-    }
-
-    /// Sets the parent RenderId (internal use only).
-    #[inline]
-    pub(crate) fn set_parent(&mut self, parent: Option<RenderId>) {
-        self.parent = parent;
-    }
-
-    // ========== Layout Cache ==========
-
-    /// Gets the cached size from last layout.
-    #[inline]
-    pub fn cached_size(&self) -> Option<Size> {
-        self.cached_size
-    }
-
-    /// Sets the cached size.
-    #[inline]
-    pub fn set_cached_size(&mut self, size: Option<Size>) {
-        self.cached_size = size;
-    }
-
-    // ========== Relayout Boundary (Flutter Protocol) ==========
-
-    /// Returns whether this node is a relayout boundary.
-    ///
-    /// A relayout boundary isolates layout changes to its subtree.
-    /// When a child of a relayout boundary marks itself as needing layout,
-    /// the invalidation stops at the boundary instead of propagating to the root.
-    ///
-    /// # Flutter Equivalence
-    ///
-    /// ```dart
-    /// bool get isRelayoutBoundary => _isRelayoutBoundary ?? false;
-    /// ```
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// // Root nodes are always relayout boundaries
-    /// if node.is_root() {
-    ///     assert!(node.is_relayout_boundary());
-    /// }
-    ///
-    /// // Other nodes depend on layout constraints and properties
-    /// if node.is_relayout_boundary() {
-    ///     // Layout changes won't propagate to parent
-    /// }
-    /// ```
-    #[inline]
-    pub fn is_relayout_boundary(&self) -> bool {
-        self.is_relayout_boundary
-    }
-
-    /// Sets whether this node is a relayout boundary.
-    ///
-    /// This is typically computed during layout based on:
-    /// - Whether parent uses this node's size
-    /// - Whether node is sized by parent constraints only
-    /// - Whether constraints are tight
-    /// - Whether this is the root node
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// // Compute boundary status
-    /// let is_boundary = !parent_uses_size
-    ///     || render_object.sized_by_parent()
-    ///     || constraints.is_tight()
-    ///     || node.is_root();
-    ///
-    /// node.set_relayout_boundary(is_boundary);
-    /// ```
-    #[inline]
-    pub fn set_relayout_boundary(&mut self, is_boundary: bool) {
-        self.is_relayout_boundary = is_boundary;
-    }
-
-    /// Computes whether this node should be a relayout boundary (Flutter protocol).
-    ///
-    /// A node becomes a relayout boundary when ANY of these conditions is true:
-    /// - `!parent_uses_size` - Parent doesn't use child's computed size
-    /// - `sized_by_parent` - Size depends only on constraints, not children
-    /// - `constraints.is_tight()` - Constraints specify exact size
-    /// - `is_root` - Root of render tree
-    ///
-    /// When a node is a relayout boundary, `mark_needs_layout()` stops propagating
-    /// up the tree, limiting the scope of relayout work.
-    ///
-    /// # Flutter Equivalence
-    ///
-    /// ```dart
-    /// void layout(Constraints constraints, {bool parentUsesSize = false}) {
-    ///   final bool isRelayoutBoundary = !parentUsesSize ||
-    ///                                    sizedByParent ||
-    ///                                    constraints.isTight ||
-    ///                                    parent == null;
-    ///   // ...
-    /// }
-    /// ```
-    ///
-    /// # Arguments
-    ///
-    /// * `parent_uses_size` - Whether parent reads child's size after layout
-    /// * `constraints` - Box constraints passed to child
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// use flui_types::constraints::BoxConstraints;
-    /// use flui_types::Size;
-    ///
-    /// // During layout, compute boundary status
-    /// let parent_uses_size = true;
-    /// let constraints = BoxConstraints::tight(Size::new(100.0, 50.0));
-    ///
-    /// let is_boundary = node.compute_relayout_boundary(parent_uses_size, &constraints);
-    /// assert!(is_boundary); // true because constraints are tight
-    ///
-    /// node.set_relayout_boundary(is_boundary);
-    /// ```
-    pub fn compute_relayout_boundary(
-        &self,
-        parent_uses_size: bool,
-        constraints: &flui_types::constraints::BoxConstraints,
-    ) -> bool {
-        // Root nodes are always relayout boundaries
-        if self.parent.is_none() {
-            return true;
-        }
-
-        // Apply Flutter protocol conditions
-        !parent_uses_size
-            || self.render_object.sized_by_parent()
-            || constraints.is_tight()
-    }
-
-    // ========== Compositing Bits (Flutter Protocol) ==========
-
-    /// Returns whether this node or its subtree needs compositing.
-    ///
-    /// A node needs compositing if:
-    /// - It's a repaint boundary
-    /// - It always needs compositing (e.g., video, platform views)
-    /// - Any of its children need compositing
-    ///
-    /// This value is computed during `update_compositing_bits()` and cached
-    /// until the next compositing bits update.
-    ///
-    /// # Flutter Equivalence
-    ///
-    /// ```dart
-    /// bool get needsCompositing => _needsCompositing;
-    /// ```
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// if node.needs_compositing() {
-    ///     // Create/update compositing layer
-    ///     node.update_composited_layer();
-    /// }
-    /// ```
-    #[inline]
-    pub fn needs_compositing(&self) -> bool {
-        self.needs_compositing
-    }
-
-    /// Sets whether this node or its subtree needs compositing.
-    ///
-    /// **Internal use only**. This is called by `update_compositing_bits()`
-    /// during the compositing bits update phase.
-    ///
-    /// # Arguments
-    ///
-    /// * `needs_compositing` - Whether compositing is needed
-    #[inline]
-    pub(crate) fn set_needs_compositing(&mut self, needs_compositing: bool) {
-        self.needs_compositing = needs_compositing;
-    }
-
-    // ========== Layer Handle (Flutter Protocol) ==========
-
-    /// Returns the compositing layer handle if this node is a repaint boundary.
-    ///
-    /// Repaint boundaries create their own compositing layer to cache paint results.
-    /// This isolates paint invalidation to the subtree.
-    ///
-    /// # Flutter Equivalence
-    ///
-    /// ```dart
-    /// LayerHandle<ContainerLayer> get layerHandle => _layerHandle;
-    /// ```
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// if let Some(layer) = node.layer_handle() {
-    ///     // This node has its own compositing layer
-    ///     painting_context.paint_child_with_layer(child, layer);
-    /// }
-    /// ```
-    #[inline]
-    pub fn layer_handle(&self) -> Option<&LayerHandle> {
-        self.layer_handle.as_ref()
-    }
-
-    /// Returns a mutable reference to the layer handle.
-    #[inline]
-    pub fn layer_handle_mut(&mut self) -> Option<&mut LayerHandle> {
-        self.layer_handle.as_mut()
-    }
-
-    /// Sets the compositing layer handle.
-    ///
-    /// This is typically called during paint when a repaint boundary
-    /// creates or updates its compositing layer.
-    ///
-    /// # Arguments
-    ///
-    /// * `handle` - The layer handle to set, or None to clear
-    #[inline]
-    pub fn set_layer_handle(&mut self, handle: Option<LayerHandle>) {
-        self.layer_handle = handle;
-    }
-
-    /// Updates the composited layer for this repaint boundary.
-    ///
-    /// This method is called during the paint phase for nodes that are repaint boundaries.
-    /// It ensures the layer handle is created if needed and updates the layer's properties.
-    ///
-    /// # Flutter Equivalence
-    ///
-    /// ```dart
-    /// void updateCompositedLayer({required Offset offset}) {
-    ///   final ContainerLayer? oldLayer = _layerHandle.layer;
-    ///
-    ///   final OffsetLayer newLayer = updateCompositedLayerProperties(
-    ///     oldLayer: oldLayer,
-    ///     offset: offset,
-    ///   );
-    ///
-    ///   _layerHandle.layer = newLayer;
-    /// }
-    /// ```
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// // During paint phase for repaint boundary
-    /// if node.render_object().is_repaint_boundary() {
-    ///     node.update_composited_layer();
-    /// }
-    /// ```
-    pub fn update_composited_layer(&mut self) {
-        // Flutter protocol: Only repaint boundaries get composited layers
-        if !self.render_object.is_repaint_boundary() {
-            // Clear layer if node is no longer a repaint boundary
-            if self.layer_handle.is_some() {
-                self.layer_handle = None;
-            }
-            return;
-        }
-
-        // Create or reuse layer (Flutter pattern: reuse existing layer for performance)
-        if self.layer_handle.is_none() {
-            // Create new OffsetLayer for repaint boundary
-            // OffsetLayer is the standard layer type for repaint boundaries in Flutter
-            let mut handle = flui_layer::LayerHandle::new();
-            let offset_layer = flui_layer::OffsetLayer::from_xy(0.0, 0.0);
-            handle.set(flui_layer::Layer::Offset(offset_layer));
-
-            self.layer_handle = Some(handle);
-
-            tracing::trace!(
-                render_object = self.render_object.debug_name(),
-                "Created composited OffsetLayer for repaint boundary"
-            );
-        }
-        // Layer reuse: existing layer is kept for next frame (Flutter optimization)
-        // The layer will be updated during paint phase with new offset if needed
-    }
-
-    // ========== Parent Data (Flutter Protocol) ==========
-
-    /// Returns the parent-specific data set by the parent container.
-    ///
-    /// Different parent types store different data on their children:
-    /// - Stack stores offset position
-    /// - Flex stores flex factor and fit
-    /// - Table stores row/column indices
-    /// - etc.
-    ///
-    /// # Flutter Equivalence
-    ///
-    /// ```dart
-    /// ParentData? get parentData => _parentData;
-    /// ```
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// if let Some(parent_data) = node.parent_data() {
-    ///     // Access parent-specific data
-    ///     if let Some(stack_data) = parent_data.downcast_ref::<StackParentData>() {
-    ///         let offset = stack_data.offset();
-    ///     }
-    /// }
-    /// ```
-    #[inline]
-    pub fn parent_data(&self) -> Option<&dyn ParentData> {
-        self.parent_data.as_ref().map(|boxed| &**boxed)
-    }
-
-    /// Returns a mutable reference to the parent data.
-    #[inline]
-    pub fn parent_data_mut(&mut self) -> Option<&mut dyn ParentData> {
-        self.parent_data.as_mut().map(|boxed| &mut **boxed)
-    }
-
-    /// Sets the parent data.
-    ///
-    /// This is typically called by the parent's `setup_parent_data()` method
-    /// when a child is added to ensure the child has the correct parent data type.
-    ///
-    /// # Arguments
-    ///
-    /// * `data` - The parent data to set, or None to clear
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// // Parent sets up child's parent data
-    /// child.set_parent_data(Some(Box::new(StackParentData::default())));
-    /// ```
-    #[inline]
-    pub fn set_parent_data(&mut self, data: Option<Box<dyn ParentData>>) {
-        self.parent_data = data;
-    }
-}
-
-// ============================================================================
-// COMMON IMPLEMENTATION (for all states)
-// ============================================================================
-
-impl<S: NodeState> RenderNode<S> {
-    // ========== RenderObject Access ==========
-
-    /// Returns reference to the RenderObject.
-    #[inline]
-    pub fn render_object(&self) -> &dyn RenderObject {
-        &*self.render_object
-    }
-
-    /// Returns mutable reference to the RenderObject.
-    #[inline]
-    pub fn render_object_mut(&mut self) -> &mut dyn RenderObject {
-        &mut *self.render_object
-    }
-
-    // ========== Lifecycle ==========
-
-    /// Gets the current lifecycle state.
-    #[inline]
-    pub fn lifecycle(&self) -> RenderLifecycle {
-        self.lifecycle
-    }
-
-    /// Sets the lifecycle state.
-    #[inline]
-    pub fn set_lifecycle(&mut self, lifecycle: RenderLifecycle) {
-        self.lifecycle = lifecycle;
-    }
-
-    // ========== Element Association ==========
-
-    /// Gets the associated ElementId.
-    #[inline]
-    pub fn element_id(&self) -> Option<ElementId> {
-        self.element_id
-    }
-
-    /// Sets the associated ElementId.
-    #[inline]
-    pub fn set_element_id(&mut self, element_id: Option<ElementId>) {
-        self.element_id = element_id;
-    }
-}
-
-// ============================================================================
-// DEBUG IMPLEMENTATION
-// ============================================================================
-
-impl<S: NodeState> std::fmt::Debug for RenderNode<S> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct(&format!("RenderNode<{}>", S::name()))
-            .field("lifecycle", &self.lifecycle)
-            .field("element_id", &self.element_id)
-            .field("render_object", &self.render_object.debug_name())
-            .finish_non_exhaustive()
-    }
-}
-
-// ============================================================================
-// MOUNTABLE / UNMOUNTABLE TRAITS
-// ============================================================================
-
-impl Mountable for RenderNode<Unmounted> {
-    type Id = RenderId;
-    type Mounted = RenderNode<Mounted>;
-
-    fn mount(self, parent: Option<RenderId>, parent_depth: Depth) -> RenderNode<Mounted> {
-        let depth = if parent.is_some() {
-            parent_depth.child_depth()
-        } else {
-            Depth::root()
-        };
-
-        // Root nodes are always relayout boundaries
-        let is_relayout_boundary = parent.is_none();
-
-        RenderNode {
-            render_object: self.render_object,
-            lifecycle: RenderLifecycle::Attached,
-            element_id: self.element_id,
-            parent,
-            depth,
-            children: Vec::new(),
-            cached_size: None,
-            is_relayout_boundary,
-            needs_compositing: false,
-            layer_handle: None,
-            parent_data: None,
-            _state: PhantomData,
-        }
-    }
-}
-
-impl Unmountable for RenderNode<Mounted> {
-    type Id = RenderId;
-    type Unmounted = RenderNode<Unmounted>;
-
-    fn parent(&self) -> Option<RenderId> {
-        self.parent
-    }
-
-    fn depth(&self) -> Depth {
-        self.depth
-    }
-
-    fn unmount(self) -> RenderNode<Unmounted> {
-        RenderNode {
-            render_object: self.render_object,
-            lifecycle: RenderLifecycle::Detached,
-            element_id: self.element_id,
-            parent: None,
-            depth: Depth::root(),
-            children: Vec::new(),
-            cached_size: None,
-            is_relayout_boundary: false,
-            needs_compositing: false,
-            layer_handle: None,
-            parent_data: None,
-            _state: PhantomData,
-        }
-    }
-}
+use crate::{LayerHandle, RenderLifecycle, RenderObject};
 
 // ============================================================================
 // RENDER TREE (stores only Mounted nodes)
@@ -857,6 +133,7 @@ pub struct RenderTree {
     /// When `mark_needs_compositing_bits_update()` is called, the node is added to this set.
     ///
     /// Processed before paint phase to determine which nodes need compositing layers.
+    #[allow(dead_code)]
     nodes_needing_compositing_bits_update: std::collections::HashSet<RenderId>,
 }
 
@@ -883,7 +160,9 @@ impl RenderTree {
             root: None,
             nodes_needing_layout: std::collections::HashSet::with_capacity(capacity / 4),
             nodes_needing_paint: std::collections::HashSet::with_capacity(capacity / 4),
-            nodes_needing_compositing_bits_update: std::collections::HashSet::with_capacity(capacity / 8),
+            nodes_needing_compositing_bits_update: std::collections::HashSet::with_capacity(
+                capacity / 8,
+            ),
         }
     }
 
@@ -926,7 +205,7 @@ impl RenderTree {
     /// This is a convenience method that delegates to the node itself.
     #[inline]
     pub fn parent(&self, id: RenderId) -> Option<RenderId> {
-        self.get(id).map(|node| node.parent()).flatten()
+        self.get(id).and_then(|node| node.parent())
     }
 
     /// Inserts a mounted RenderNode into the tree.
@@ -1097,9 +376,14 @@ impl RenderTree {
             let tree_ptr = self as *mut Self;
 
             // Step 1: Setup parent data
-            if let (Some(parent), Some(child)) = ((*tree_ptr).get(parent_id), (*tree_ptr).get_mut(child_id)) {
+            if let (Some(parent), Some(child)) =
+                ((*tree_ptr).get(parent_id), (*tree_ptr).get_mut(child_id))
+            {
                 let current_parent_data = child.parent_data();
-                if let Some(new_parent_data) = parent.render_object().setup_parent_data(current_parent_data) {
+                if let Some(new_parent_data) = parent
+                    .render_object()
+                    .setup_parent_data(current_parent_data)
+                {
                     child.set_parent_data(Some(new_parent_data));
                 }
             }
@@ -1179,8 +463,8 @@ impl RenderTree {
 
             // Step 5: Clear layer handle to release GPU resources (Flutter protocol)
             if let Some(child) = (*tree_ptr).get_mut(child_id) {
-                if child.layer_handle.is_some() {
-                    child.layer_handle = None;
+                if child.layer_handle().is_some() {
+                    child.set_layer_handle(None);
                     tracing::trace!(?child_id, "Cleared layer handle on detach");
                 }
             }
@@ -1325,11 +609,7 @@ impl RenderTree {
     /// // Get transform from node to root
     /// let transform = tree.get_transform_to(node_id, None)?;
     /// ```
-    pub fn get_transform_to(
-        &self,
-        from_id: RenderId,
-        to_id: Option<RenderId>,
-    ) -> Option<Matrix4> {
+    pub fn get_transform_to(&self, from_id: RenderId, to_id: Option<RenderId>) -> Option<Matrix4> {
         // Build path from 'from' to 'to' by following parent chain
         let mut path = Vec::new();
         let mut current = from_id;
@@ -1373,10 +653,17 @@ impl RenderTree {
                 if let Some(parent_data) = child.parent_data() {
                     // Try to downcast to ParentDataWithOffset
                     use crate::parent_data::ParentDataWithOffset;
-                    if let Some(offset_data) = parent_data.as_any().downcast_ref::<crate::parent_data::BoxParentData>() {
+                    if let Some(offset_data) = parent_data
+                        .as_any()
+                        .downcast_ref::<crate::parent_data::BoxParentData>()
+                    {
                         let offset = offset_data.offset();
                         transform = Matrix4::translation(offset.dx, offset.dy, 0.0) * transform;
-                    } else if let Some(offset_data) = parent_data.as_any().downcast_ref::<crate::parent_data::ContainerBoxParentData<RenderId>>() {
+                    } else if let Some(offset_data) =
+                        parent_data
+                            .as_any()
+                            .downcast_ref::<crate::parent_data::ContainerBoxParentData<RenderId>>()
+                    {
                         let offset = offset_data.offset();
                         transform = Matrix4::translation(offset.dx, offset.dy, 0.0) * transform;
                     }
@@ -1649,10 +936,10 @@ impl RenderTree {
         let parent = node.parent();
 
         // Check if already in NeedsPaint state AND already in dirty list (idempotent)
-        if lifecycle == RenderLifecycle::NeedsPaint && (
-            (is_repaint_boundary && self.nodes_needing_paint.contains(&id)) ||
-            (!is_repaint_boundary && parent.is_some())
-        ) {
+        if lifecycle == RenderLifecycle::NeedsPaint
+            && ((is_repaint_boundary && self.nodes_needing_paint.contains(&id))
+                || (!is_repaint_boundary && parent.is_some()))
+        {
             return; // Already marked, skip
         }
 
@@ -1715,6 +1002,253 @@ impl RenderTree {
     #[inline]
     pub fn nodes_needing_paint(&self) -> impl Iterator<Item = RenderId> + '_ {
         self.nodes_needing_paint.iter().copied()
+    }
+
+    /// Marks this render object's layout information as dirty and handles
+    /// the case where `sized_by_parent` has changed value.
+    ///
+    /// This should be called whenever `sized_by_parent` might have changed.
+    /// It marks both this node AND its parent as needing layout.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// void markNeedsLayoutForSizedByParentChange() {
+    ///   markNeedsLayout();
+    ///   markParentNeedsLayout();
+    /// }
+    /// ```
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - Node ID whose `sized_by_parent` changed
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// // When sized_by_parent property changes
+    /// render_object.set_sized_by_parent(true);
+    /// tree.mark_needs_layout_for_sized_by_parent_change(node_id);
+    /// ```
+    pub fn mark_needs_layout_for_sized_by_parent_change(&mut self, id: RenderId) {
+        // Mark self
+        self.mark_needs_layout(id);
+
+        // Also mark parent (Flutter protocol: always propagate when sized_by_parent changes)
+        if let Some(parent_id) = self.parent(id) {
+            self.mark_needs_layout(parent_id);
+        }
+    }
+
+    /// Marks this node as needing compositing bits update.
+    ///
+    /// This is called when `always_needs_compositing` or `is_repaint_boundary` changes.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// void markNeedsCompositingBitsUpdate() {
+    ///   if (_needsCompositingBitsUpdate) return;
+    ///   _needsCompositingBitsUpdate = true;
+    ///   // ... propagation logic
+    /// }
+    /// ```
+    pub fn mark_needs_compositing_bits_update(&mut self, id: RenderId) {
+        if !self.contains(id) {
+            return;
+        }
+
+        // Add to dirty set
+        self.nodes_needing_compositing_bits_update.insert(id);
+
+        // Propagate to parent if not a repaint boundary
+        let (is_repaint_boundary, parent) = {
+            let node = self.get(id).unwrap();
+            (node.render_object().is_repaint_boundary(), node.parent())
+        };
+
+        if !is_repaint_boundary {
+            if let Some(parent_id) = parent {
+                self.mark_needs_compositing_bits_update(parent_id);
+            }
+        }
+    }
+
+    /// Bootstrap the rendering pipeline by scheduling the very first layout.
+    ///
+    /// Requires this render object to be attached and that this render object
+    /// is the root of the render tree.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// void scheduleInitialLayout() {
+    ///   assert(attached);
+    ///   assert(parent is! RenderObject);
+    ///   assert(!owner!._debugDoingLayout);
+    ///   assert(_relayoutBoundary == null);
+    ///   _relayoutBoundary = this;
+    ///   owner!._nodesNeedingLayout.add(this);
+    /// }
+    /// ```
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - Root node ID to schedule initial layout for
+    ///
+    /// # Panics
+    ///
+    /// Panics if the node has a parent (is not root).
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// // After creating root render view
+    /// let root_id = tree.insert(root_node);
+    /// tree.set_root(Some(root_id));
+    /// tree.schedule_initial_layout(root_id);
+    /// ```
+    pub fn schedule_initial_layout(&mut self, id: RenderId) {
+        let node = self
+            .get_mut(id)
+            .expect("Node must exist for initial layout");
+
+        // Assert this is the root
+        assert!(
+            node.parent().is_none(),
+            "schedule_initial_layout called on non-root node"
+        );
+
+        // Mark as relayout boundary (root is always a boundary)
+        node.set_relayout_boundary(true);
+
+        // Add to dirty list
+        self.nodes_needing_layout.insert(id);
+
+        tracing::debug!(?id, "Scheduled initial layout for root render object");
+    }
+
+    /// Bootstrap the rendering pipeline by scheduling the very first paint.
+    ///
+    /// Requires that this render object is attached, is the root of the render
+    /// tree, and has a composited layer.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// void scheduleInitialPaint(ContainerLayer rootLayer) {
+    ///   assert(rootLayer.attached);
+    ///   assert(attached);
+    ///   assert(parent is! RenderObject);
+    ///   assert(!owner!._debugDoingPaint);
+    ///   assert(isRepaintBoundary);
+    ///   assert(_layerHandle.layer == null);
+    ///   _layerHandle.layer = rootLayer;
+    ///   assert(_needsPaint);
+    ///   owner!._nodesNeedingPaint.add(this);
+    /// }
+    /// ```
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - Root node ID to schedule initial paint for
+    /// * `root_layer` - The root compositing layer handle
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// // After creating root layer
+    /// let root_layer = LayerHandle::new();
+    /// root_layer.set(Layer::Offset(OffsetLayer::from_xy(0.0, 0.0)));
+    /// tree.schedule_initial_paint(root_id, root_layer);
+    /// ```
+    pub fn schedule_initial_paint(&mut self, id: RenderId, root_layer: LayerHandle) {
+        let node = self.get_mut(id).expect("Node must exist for initial paint");
+
+        // Assert this is the root
+        assert!(
+            node.parent().is_none(),
+            "schedule_initial_paint called on non-root node"
+        );
+
+        // Assert it's a repaint boundary
+        assert!(
+            node.render_object().is_repaint_boundary(),
+            "Root must be a repaint boundary for initial paint"
+        );
+
+        // Set the root layer
+        node.set_layer_handle(Some(root_layer));
+
+        // Add to dirty list
+        self.nodes_needing_paint.insert(id);
+
+        tracing::debug!(?id, "Scheduled initial paint for root render object");
+    }
+
+    /// Recursively calls reassemble on all nodes in the tree.
+    ///
+    /// This is expensive and should only be called during hot reload.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// void reassemble() {
+    ///   markNeedsLayout();
+    ///   markNeedsCompositingBitsUpdate();
+    ///   markNeedsPaint();
+    ///   visitChildren((RenderObject child) {
+    ///     child.reassemble();
+    ///   });
+    /// }
+    /// ```
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - Starting node ID (usually root)
+    pub fn reassemble(&mut self, id: RenderId) {
+        // Get children first to avoid borrow issues
+        let children = if let Some(node) = self.get_mut(id) {
+            node.reassemble()
+        } else {
+            return;
+        };
+
+        // Register in dirty lists
+        self.nodes_needing_layout.insert(id);
+        self.nodes_needing_paint.insert(id);
+        self.nodes_needing_compositing_bits_update.insert(id);
+
+        // Recursively reassemble children
+        for child_id in children {
+            self.reassemble(child_id);
+        }
+    }
+
+    /// Disposes a node and removes it from the tree.
+    ///
+    /// This properly cleans up resources before removal.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - Node ID to dispose
+    ///
+    /// # Returns
+    ///
+    /// Returns the disposed node if it existed.
+    pub fn dispose_and_remove(&mut self, id: RenderId) -> Option<RenderNode<Mounted>> {
+        // Remove from dirty lists
+        self.nodes_needing_layout.remove(&id);
+        self.nodes_needing_paint.remove(&id);
+        self.nodes_needing_compositing_bits_update.remove(&id);
+
+        // Dispose the node
+        if let Some(node) = self.get_mut(id) {
+            node.dispose();
+        }
+
+        // Remove from tree
+        self.remove(id)
     }
 }
 
@@ -1857,10 +1391,10 @@ impl TreeNav<RenderId> for RenderTree {
 // LAYOUT TREE IMPLEMENTATION (Phase 6 - Relayout Boundary Integration)
 // ============================================================================
 
-use crate::tree::{LayoutTree, PaintTree, HitTestTree};
 use crate::error::RenderError;
-use flui_types::{BoxConstraints, SliverConstraints, SliverGeometry};
+use crate::tree::{HitTestTree, LayoutTree, PaintTree};
 use flui_interaction::HitTestResult;
+use flui_types::{BoxConstraints, SliverConstraints, SliverGeometry};
 
 impl LayoutTree for RenderTree {
     fn perform_layout(
@@ -1871,17 +1405,15 @@ impl LayoutTree for RenderTree {
     ) -> Result<flui_types::Size, RenderError> {
         // Compute relayout boundary status (Flutter protocol - P0-2 Step 3)
         // This integrates the boundary computation with the layout flow
-        let is_boundary = {
-            let node = self.get(id).ok_or_else(|| RenderError::LayoutFailed {
+        // First set constraints so compute_relayout_boundary can check is_tight()
+        if let Some(node) = self.get_mut(id) {
+            node.set_constraints(constraints);
+            node.compute_relayout_boundary(parent_uses_size);
+        } else {
+            return Err(RenderError::LayoutFailed {
                 render_object: "RenderNode",
                 reason: "Node not found".into(),
-            })?;
-            node.compute_relayout_boundary(parent_uses_size, &constraints)
-        };
-
-        // Set the computed boundary status
-        if let Some(node) = self.get_mut(id) {
-            node.set_relayout_boundary(is_boundary);
+            });
         }
 
         // TODO: Full layout implementation requires:
@@ -1898,7 +1430,7 @@ impl LayoutTree for RenderTree {
     fn perform_sliver_layout(
         &mut self,
         id: RenderId,
-        constraints: SliverConstraints,
+        _constraints: SliverConstraints,
         parent_uses_size: bool,
     ) -> Result<SliverGeometry, RenderError> {
         // Compute relayout boundary status for slivers
@@ -1909,9 +1441,7 @@ impl LayoutTree for RenderTree {
                 reason: "Node not found".into(),
             })?;
             // Sliver boundary: !parent_uses_size || sized_by_parent || !has_parent
-            !parent_uses_size
-                || node.render_object().sized_by_parent()
-                || node.parent().is_none()
+            !parent_uses_size || node.render_object().sized_by_parent() || node.parent().is_none()
         };
 
         // Set the computed boundary status
@@ -1945,17 +1475,43 @@ impl LayoutTree for RenderTree {
     }
 
     fn render_object_mut(&mut self, id: RenderId) -> Option<&mut dyn std::any::Any> {
-        self.get_mut(id).map(|node| node.render_object_mut().as_any_mut())
+        self.get_mut(id)
+            .map(|node| node.render_object_mut().as_any_mut())
     }
 
     fn setup_child_parent_data(&mut self, _parent_id: RenderId, _child_id: RenderId) {
         // TODO: Implement parent data setup protocol
         // This will call parent.render_object().setup_parent_data(child.render_object())
     }
+
+    fn get_min_intrinsic_width(&self, _id: RenderId, _height: f32) -> f32 {
+        // TODO: Implement intrinsic dimension query via render object
+        // This requires downcasting to concrete type and calling compute_min_intrinsic_width
+        0.0
+    }
+
+    fn get_max_intrinsic_width(&self, _id: RenderId, _height: f32) -> f32 {
+        // TODO: Implement intrinsic dimension query via render object
+        0.0
+    }
+
+    fn get_min_intrinsic_height(&self, _id: RenderId, _width: f32) -> f32 {
+        // TODO: Implement intrinsic dimension query via render object
+        0.0
+    }
+
+    fn get_max_intrinsic_height(&self, _id: RenderId, _width: f32) -> f32 {
+        // TODO: Implement intrinsic dimension query via render object
+        0.0
+    }
 }
 
 impl PaintTree for RenderTree {
-    fn perform_paint(&mut self, _id: RenderId, _offset: flui_types::Offset) -> Result<flui_painting::Canvas, RenderError> {
+    fn perform_paint(
+        &mut self,
+        _id: RenderId,
+        _offset: flui_types::Offset,
+    ) -> Result<flui_painting::Canvas, RenderError> {
         // TODO: Implement paint tree operations
         Ok(flui_painting::Canvas::new())
     }
@@ -1973,7 +1529,8 @@ impl PaintTree for RenderTree {
     }
 
     fn render_object_mut(&mut self, id: RenderId) -> Option<&mut dyn std::any::Any> {
-        self.get_mut(id).map(|node| node.render_object_mut().as_any_mut())
+        self.get_mut(id)
+            .map(|node| node.render_object_mut().as_any_mut())
     }
 
     fn get_offset(&self, _id: RenderId) -> Option<flui_types::Offset> {
@@ -2019,13 +1576,25 @@ impl HitTestTree for RenderTree {
 mod tests {
     use super::*;
     use crate::RenderObject;
-    use flui_tree::MountableExt; // For mount_root() extension
+    use flui_tree::{Depth, Mountable, MountableExt, Unmountable};
     use flui_types::{Matrix4, Offset};
 
     // Simple test RenderObject (minimal - no layout/paint methods needed)
     #[derive(Debug)]
+    #[allow(dead_code)]
     struct TestRenderObject {
         name: String,
+    }
+
+    impl flui_foundation::Diagnosticable for TestRenderObject {}
+
+    impl flui_interaction::HitTestTarget for TestRenderObject {
+        fn handle_event(
+            &self,
+            _event: &flui_types::events::PointerEvent,
+            _entry: &flui_interaction::HitTestEntry,
+        ) {
+        }
     }
 
     impl RenderObject for TestRenderObject {
@@ -2207,7 +1776,7 @@ mod tests {
         let mut tree = RenderTree::new();
         assert_eq!(TreeRead::<RenderId>::len(&tree), 0);
 
-        tree.insert(make_mounted_node());
+        let _ = tree.insert(make_mounted_node());
         assert_eq!(TreeRead::<RenderId>::len(&tree), 1);
     }
 
@@ -2658,35 +2227,51 @@ mod tests {
         let node = make_mounted_node();
         let node_id = tree.insert(node);
 
-        let node = tree.get(node_id).unwrap();
-
         // Root nodes are always relayout boundaries
-        assert!(node.compute_relayout_boundary(true, &BoxConstraints::loose(Size::new(100.0, 100.0))));
+        {
+            let node = tree.get_mut(node_id).unwrap();
+            node.set_constraints(BoxConstraints::loose(Size::new(100.0, 100.0)));
+            node.compute_relayout_boundary(true);
+            assert!(node.is_relayout_boundary());
+        }
 
         // Create a non-root node
         let child = make_mounted_node();
         let child_id = tree.insert(child);
         tree.add_child(node_id, child_id);
 
-        let child_node = tree.get(child_id).unwrap();
-
         // With parent_uses_size = false, should be boundary
-        assert!(child_node.compute_relayout_boundary(false, &BoxConstraints::loose(Size::new(100.0, 100.0))));
+        {
+            let child_node = tree.get_mut(child_id).unwrap();
+            child_node.set_constraints(BoxConstraints::loose(Size::new(100.0, 100.0)));
+            child_node.compute_relayout_boundary(false);
+            assert!(child_node.is_relayout_boundary());
+        }
 
         // With tight constraints, should be boundary
-        assert!(child_node.compute_relayout_boundary(true, &BoxConstraints::tight(Size::new(100.0, 100.0))));
+        {
+            let child_node = tree.get_mut(child_id).unwrap();
+            child_node.set_constraints(BoxConstraints::tight(Size::new(100.0, 100.0)));
+            child_node.compute_relayout_boundary(true);
+            assert!(child_node.is_relayout_boundary());
+        }
 
         // With parent_uses_size = true and loose constraints, should NOT be boundary
-        assert!(!child_node.compute_relayout_boundary(true, &BoxConstraints::loose(Size::new(100.0, 100.0))));
+        {
+            let child_node = tree.get_mut(child_id).unwrap();
+            child_node.set_constraints(BoxConstraints::loose(Size::new(100.0, 100.0)));
+            child_node.compute_relayout_boundary(true);
+            assert!(!child_node.is_relayout_boundary());
+        }
     }
 
     // ========== P0-2: Relayout Boundary Integration Tests ==========
 
     #[test]
     fn test_perform_layout_sets_boundary_with_parent_uses_size_false() {
+        use crate::tree::LayoutTree;
         use flui_types::constraints::BoxConstraints;
         use flui_types::Size;
-        use crate::tree::LayoutTree;
 
         let mut tree = RenderTree::new();
         let node = make_mounted_node();
@@ -2704,15 +2289,17 @@ mod tests {
 
         // After layout, child should be marked as boundary
         let child_node = tree.get(child_id).unwrap();
-        assert!(child_node.is_relayout_boundary(),
-            "Child should be relayout boundary when parent_uses_size = false");
+        assert!(
+            child_node.is_relayout_boundary(),
+            "Child should be relayout boundary when parent_uses_size = false"
+        );
     }
 
     #[test]
     fn test_perform_layout_sets_boundary_with_tight_constraints() {
+        use crate::tree::LayoutTree;
         use flui_types::constraints::BoxConstraints;
         use flui_types::Size;
-        use crate::tree::LayoutTree;
 
         let mut tree = RenderTree::new();
         let node = make_mounted_node();
@@ -2730,15 +2317,17 @@ mod tests {
 
         // Should still be boundary because constraints are tight
         let child_node = tree.get(child_id).unwrap();
-        assert!(child_node.is_relayout_boundary(),
-            "Child should be relayout boundary with tight constraints");
+        assert!(
+            child_node.is_relayout_boundary(),
+            "Child should be relayout boundary with tight constraints"
+        );
     }
 
     #[test]
     fn test_perform_layout_no_boundary_with_parent_uses_size_true() {
+        use crate::tree::LayoutTree;
         use flui_types::constraints::BoxConstraints;
         use flui_types::Size;
-        use crate::tree::LayoutTree;
 
         let mut tree = RenderTree::new();
         let node = make_mounted_node();
@@ -2761,9 +2350,9 @@ mod tests {
 
     #[test]
     fn test_perform_layout_root_is_always_boundary() {
+        use crate::tree::LayoutTree;
         use flui_types::constraints::BoxConstraints;
         use flui_types::Size;
-        use crate::tree::LayoutTree;
 
         let mut tree = RenderTree::new();
         let root = make_mounted_node();
@@ -2776,15 +2365,17 @@ mod tests {
 
         // Root should always be boundary
         let root_node = tree.get(root_id).unwrap();
-        assert!(root_node.is_relayout_boundary(),
-            "Root node should always be a relayout boundary");
+        assert!(
+            root_node.is_relayout_boundary(),
+            "Root node should always be a relayout boundary"
+        );
     }
 
     #[test]
     fn test_perform_layout_boundary_affects_mark_needs_layout() {
+        use crate::tree::LayoutTree;
         use flui_types::constraints::BoxConstraints;
         use flui_types::Size;
-        use crate::tree::LayoutTree;
 
         let mut tree = RenderTree::new();
 
@@ -2815,20 +2406,24 @@ mod tests {
         tree.mark_needs_layout(child_id);
 
         // Child should be in dirty list (boundary stops propagation)
-        assert!(tree.nodes_needing_layout().any(|id| id == child_id),
-            "Child boundary should be in dirty list");
+        assert!(
+            tree.nodes_needing_layout().any(|id| id == child_id),
+            "Child boundary should be in dirty list"
+        );
 
         // Parent should NOT be in dirty list (propagation stopped at boundary)
-        assert!(!tree.nodes_needing_layout().any(|id| id == root_id),
-            "Parent should NOT be in dirty list when child is boundary");
+        assert!(
+            !tree.nodes_needing_layout().any(|id| id == root_id),
+            "Parent should NOT be in dirty list when child is boundary"
+        );
     }
 
     #[test]
     fn test_perform_sliver_layout_sets_boundary() {
-        use flui_types::{SliverConstraints, Axis};
+        use crate::tree::LayoutTree;
         use flui_types::constraints::GrowthDirection;
         use flui_types::prelude::AxisDirection;
-        use crate::tree::LayoutTree;
+        use flui_types::{Axis, SliverConstraints};
 
         let mut tree = RenderTree::new();
         let node = make_mounted_node();
@@ -2855,8 +2450,10 @@ mod tests {
 
         // Should be boundary
         let child_node = tree.get(child_id).unwrap();
-        assert!(child_node.is_relayout_boundary(),
-            "Sliver child should be relayout boundary when parent_uses_size = false");
+        assert!(
+            child_node.is_relayout_boundary(),
+            "Sliver child should be relayout boundary when parent_uses_size = false"
+        );
     }
 
     #[test]
@@ -2895,9 +2492,25 @@ mod tests {
     fn make_repaint_boundary_node() -> RenderNode<Mounted> {
         #[derive(Debug)]
         struct RepaintBoundary;
+
+        impl flui_foundation::Diagnosticable for RepaintBoundary {}
+
+        impl flui_interaction::HitTestTarget for RepaintBoundary {
+            fn handle_event(
+                &self,
+                _event: &flui_types::events::PointerEvent,
+                _entry: &flui_interaction::HitTestEntry,
+            ) {
+            }
+        }
+
         impl RenderObject for RepaintBoundary {
-            fn debug_name(&self) -> &'static str { "RepaintBoundary" }
-            fn is_repaint_boundary(&self) -> bool { true }
+            fn debug_name(&self) -> &'static str {
+                "RepaintBoundary"
+            }
+            fn is_repaint_boundary(&self) -> bool {
+                true
+            }
         }
 
         RenderNode::new(RepaintBoundary).mount(None, flui_tree::Depth::root())
@@ -2911,7 +2524,7 @@ mod tests {
         assert!(node.layer_handle().is_none());
 
         // Update composited layer
-        node.update_composited_layer();
+        node.update_composited_layer(Offset::ZERO);
 
         // Should have created layer
         assert!(node.layer_handle().is_some());
@@ -2928,27 +2541,46 @@ mod tests {
     fn test_update_composited_layer_clears_layer_for_non_boundary() {
         // Create repaint boundary node with layer
         let mut node = make_repaint_boundary_node();
-        node.update_composited_layer();
+        node.update_composited_layer(Offset::ZERO);
         assert!(node.layer_handle().is_some());
 
         // Convert to non-repaint boundary by replacing render object
         #[derive(Debug)]
         struct NonBoundary;
-        impl RenderObject for NonBoundary {
-            fn debug_name(&self) -> &'static str { "NonBoundary" }
-            fn is_repaint_boundary(&self) -> bool { false }
+
+        impl flui_foundation::Diagnosticable for NonBoundary {}
+
+        impl flui_interaction::HitTestTarget for NonBoundary {
+            fn handle_event(
+                &self,
+                _event: &flui_types::events::PointerEvent,
+                _entry: &flui_interaction::HitTestEntry,
+            ) {
+            }
         }
 
-        let mut non_boundary_node = RenderNode::new(NonBoundary).mount(None, flui_tree::Depth::root());
+        impl RenderObject for NonBoundary {
+            fn debug_name(&self) -> &'static str {
+                "NonBoundary"
+            }
+            fn is_repaint_boundary(&self) -> bool {
+                false
+            }
+        }
+
+        let mut non_boundary_node =
+            RenderNode::new(NonBoundary).mount(None, flui_tree::Depth::root());
         // Manually set layer handle to simulate previous boundary state
         let mut handle = flui_layer::LayerHandle::new();
-        handle.set(flui_layer::Layer::Offset(flui_layer::OffsetLayer::from_xy(0.0, 0.0)));
+        handle.set(flui_layer::Layer::Offset(flui_layer::OffsetLayer::from_xy(
+            0.0, 0.0,
+        )));
         non_boundary_node.set_layer_handle(Some(handle));
 
         assert!(non_boundary_node.layer_handle().is_some());
 
         // Update composited layer
-        non_boundary_node.update_composited_layer();
+        non_boundary_node.update_composited_layer(Offset::ZERO);
 
         // Should have cleared layer
         assert!(non_boundary_node.layer_handle().is_none());
@@ -2959,12 +2591,12 @@ mod tests {
         let mut node = make_repaint_boundary_node();
 
         // Create initial layer
-        node.update_composited_layer();
+        node.update_composited_layer(Offset::ZERO);
         let first_has_layer = node.layer_handle().is_some();
         assert!(first_has_layer);
 
         // Update again
-        node.update_composited_layer();
+        node.update_composited_layer(Offset::ZERO);
         let second_has_layer = node.layer_handle().is_some();
 
         // Should reuse the same layer (Flutter optimization)
@@ -2982,7 +2614,7 @@ mod tests {
         let parent_id = tree.insert(parent);
 
         let mut child = make_repaint_boundary_node();
-        child.update_composited_layer();
+        child.update_composited_layer(Offset::ZERO);
         assert!(child.layer_handle().is_some());
 
         let child_id = tree.insert(child);
@@ -3008,7 +2640,7 @@ mod tests {
 
         // Update composited layer
         if let Some(node) = tree.get_mut(node_id) {
-            node.update_composited_layer();
+            node.update_composited_layer(Offset::ZERO);
         }
 
         // Should have layer

@@ -369,7 +369,9 @@ impl TreeCoordinator {
                     .and_then(|e| e.as_render())
                     .and_then(|r| r.render_id())
                     .and_then(|rid| {
-                        self.render_objects().get(rid).map(|node| (Some(rid), node.depth()))
+                        self.render_objects()
+                            .get(rid)
+                            .map(|node| (Some(rid), node.depth()))
                     })
                     .unwrap_or((None, Depth::root()));
 
@@ -884,28 +886,13 @@ impl TreeCoordinator {
         render_id: flui_rendering::RenderId,
         constraints: flui_types::constraints::BoxConstraints,
     ) -> Option<flui_types::Size> {
-        use flui_objects::{RenderPadding, RenderParagraph};
-
         // Get the RenderNode to determine type
         let render_node = self.render_objects_mut().get(render_id)?;
         let children_count = render_node.children().len();
-        let render_object = render_node.render_object();
 
-        // Determine arity based on type
-        let is_paragraph = (render_object as &dyn std::any::Any)
-            .downcast_ref::<RenderParagraph>()
-            .is_some();
-        let is_padding = (render_object as &dyn std::any::Any)
-            .downcast_ref::<RenderPadding>()
-            .is_some();
-
-        if is_paragraph {
-            // Leaf - no children
-            self.layout_leaf_render_object(render_id, constraints)
-        } else if is_padding {
-            // Single - exactly one child
-            self.layout_single_render_object(render_id, constraints)
-        } else if children_count == 0 {
+        // Determine arity based on children count
+        // TODO: Use RenderObject trait method to report arity once flui-objects is updated
+        if children_count == 0 {
             // Unknown leaf type
             self.layout_leaf_render_object(render_id, constraints)
         } else if children_count == 1 {

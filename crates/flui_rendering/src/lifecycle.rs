@@ -137,6 +137,11 @@ pub enum RenderLifecycle {
     LaidOut = 3,
     NeedsPaint = 4,
     Painted = 5,
+    /// Resource has been disposed and should not be used.
+    ///
+    /// This is a terminal state - once disposed, the node cannot be reattached.
+    /// Corresponds to Flutter's `dispose()` method.
+    Disposed = 6,
 }
 
 // ============================================================================
@@ -154,6 +159,14 @@ impl RenderLifecycle {
     #[inline]
     pub const fn is_detached(self) -> bool {
         matches!(self, Self::Detached)
+    }
+
+    /// Returns whether element has been disposed.
+    ///
+    /// A disposed element should not be used for any operations.
+    #[inline]
+    pub const fn is_disposed(self) -> bool {
+        matches!(self, Self::Disposed)
     }
 
     /// Returns whether element has completed layout phase.
@@ -362,6 +375,10 @@ impl RenderLifecycle {
                 flags.clear_needs_paint();
                 flags.mark_has_geometry();
             }
+            Self::Disposed => {
+                // Disposed elements should have all flags cleared
+                flags.clear();
+            }
         }
     }
 }
@@ -380,6 +397,7 @@ impl RenderLifecycle {
             Self::LaidOut => "LaidOut",
             Self::NeedsPaint => "NeedsPaint",
             Self::Painted => "Painted",
+            Self::Disposed => "Disposed",
         };
 
         let mut flags = Vec::new();
@@ -440,6 +458,7 @@ impl fmt::Display for RenderLifecycle {
             Self::LaidOut => write!(f, "LaidOut"),
             Self::NeedsPaint => write!(f, "NeedsPaint"),
             Self::Painted => write!(f, "Painted"),
+            Self::Disposed => write!(f, "Disposed"),
         }
     }
 }

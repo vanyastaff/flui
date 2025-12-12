@@ -238,10 +238,8 @@ impl MouseTracker {
             });
 
         // Build new set of active regions from hit test
-        let new_regions: HashSet<RegionId> = hit_test_result
-            .iter()
-            .map(|entry| entry.element_id)
-            .collect();
+        let new_regions: HashSet<RegionId> =
+            hit_test_result.iter().map(|entry| entry.target).collect();
 
         // Find regions that were entered (new but not in old)
         let entered: Vec<RegionId> = new_regions
@@ -519,11 +517,7 @@ mod tests {
 
         // Move into region (simulate hit test finding region 1)
         let mut hit_result = HitTestResult::new();
-        hit_result.add(HitTestEntry::new(
-            RenderId::new(1), // render_id
-            Offset::ZERO,
-            Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
-        ));
+        hit_result.add(HitTestEntry::new(RenderId::new(1)));
 
         let mut data = PointerEventData::new(Offset::new(10.0, 10.0), PointerDeviceKind::Mouse);
         data.device = 0;

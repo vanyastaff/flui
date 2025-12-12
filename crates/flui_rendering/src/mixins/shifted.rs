@@ -39,16 +39,20 @@
 use std::ops::{Deref, DerefMut};
 
 use ambassador::{delegatable_trait, Delegate};
+use flui_interaction::HitTestResult;
 use flui_types::{BoxConstraints, Offset, Size, SliverConstraints, SliverGeometry};
 
-use crate::children::{Child, BoxChild, SliverChild};
-use crate::protocol::{Protocol, BoxProtocol, SliverProtocol};
+use crate::children::Child;
+use crate::protocol::{BoxProtocol, Protocol, SliverProtocol};
+use crate::PaintingContext;
 
 // Re-export from proxy.rs
-use super::proxy::{HasChild, HasBoxGeometry, HasSliverGeometry, ProxyBase, ProxyData};
+use super::proxy::{HasBoxGeometry, HasChild, HasSliverGeometry, ProxyBase, ProxyData};
 
 // Import ambassador macros from proxy module
-use super::proxy::{ambassador_impl_HasChild, ambassador_impl_HasBoxGeometry, ambassador_impl_HasSliverGeometry};
+use super::proxy::{
+    ambassador_impl_HasBoxGeometry, ambassador_impl_HasChild, ambassador_impl_HasSliverGeometry,
+};
 
 // ============================================================================
 // Part 1: Delegatable Trait - HasOffset
@@ -232,14 +236,14 @@ pub trait RenderShiftedBox: HasChild<BoxProtocol> + HasBoxGeometry + HasOffset {
     fn perform_layout(&mut self, constraints: &BoxConstraints) -> Size;
 
     /// Paint this render object (default: paint child with offset)
-    fn paint(&self, _ctx: &mut dyn std::any::Any, _offset: Offset) {
+    fn paint(&self, _ctx: &mut PaintingContext, _offset: Offset) {
         // TODO: if let Some(id) = self.child().get() {
-        //     render_tree.paint(id, ctx, offset + self.child_offset());
+        //     ctx.paint_child(id, offset + self.child_offset());
         // }
     }
 
     /// Hit test (default: test child with offset adjustment)
-    fn hit_test(&self, _result: &mut dyn std::any::Any, _position: Offset) -> bool {
+    fn hit_test(&self, _result: &mut HitTestResult, _position: Offset) -> bool {
         // TODO: if let Some(id) = self.child().get() {
         //     return render_tree.hit_test(id, result, position - self.child_offset());
         // }
@@ -341,14 +345,14 @@ pub trait RenderShiftedSliver: HasChild<SliverProtocol> + HasSliverGeometry + Ha
     fn perform_layout(&mut self, constraints: &SliverConstraints) -> SliverGeometry;
 
     /// Paint this render object (default: paint child with offset)
-    fn paint(&self, _ctx: &mut dyn std::any::Any, _offset: Offset) {
+    fn paint(&self, _ctx: &mut PaintingContext, _offset: Offset) {
         // TODO: if let Some(id) = self.child().get() {
-        //     render_tree.paint(id, ctx, offset + self.child_offset());
+        //     ctx.paint_child(id, offset + self.child_offset());
         // }
     }
 
     /// Hit test (default: test child with offset adjustment)
-    fn hit_test(&self, _result: &mut dyn std::any::Any, _position: Offset) -> bool {
+    fn hit_test(&self, _result: &mut HitTestResult, _position: Offset) -> bool {
         // TODO: if let Some(id) = self.child().get() {
         //     return render_tree.hit_test(id, result, position - self.child_offset());
         // }

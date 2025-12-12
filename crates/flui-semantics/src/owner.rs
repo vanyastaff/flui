@@ -236,6 +236,23 @@ impl SemanticsOwner {
         self.tree.clear();
     }
 
+    /// Disposes of the SemanticsOwner.
+    ///
+    /// This clears all nodes, removes the callback, and disables semantics.
+    /// After calling dispose, the owner should not be used.
+    ///
+    /// # Flutter Protocol
+    ///
+    /// Similar to Flutter's `SemanticsOwner.dispose()`:
+    /// - Clears the semantics tree
+    /// - Removes all listeners
+    /// - Releases resources
+    pub fn dispose(&mut self) {
+        self.tree.clear();
+        self.callback = None;
+        self.enabled = false;
+    }
+
     // ========== Tree Operations ==========
 
     /// Adds a child to a parent SemanticsNode.

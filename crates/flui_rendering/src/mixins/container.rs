@@ -42,10 +42,12 @@
 use std::ops::{Deref, DerefMut};
 
 use ambassador::{delegatable_trait, Delegate};
+use flui_interaction::HitTestResult;
 use flui_types::{BoxConstraints, Offset, Size, SliverConstraints, SliverGeometry};
 
-use crate::children::{Children, BoxChildren, SliverChildren};
-use crate::protocol::{Protocol, BoxProtocol, SliverProtocol};
+use crate::children::Children;
+use crate::protocol::{BoxProtocol, Protocol, SliverProtocol};
+use crate::PaintingContext;
 
 // Re-export from proxy.rs
 use super::proxy::{HasBoxGeometry, HasSliverGeometry, ProxyData};
@@ -250,16 +252,16 @@ pub trait RenderContainerBox<PD = ()>: HasChildren<BoxProtocol, PD> + HasBoxGeom
     ///
     /// Note: This assumes PD has an offset field. For custom parent data,
     /// override this method.
-    fn paint(&self, _ctx: &mut dyn std::any::Any, _offset: Offset) {
+    fn paint(&self, _ctx: &mut PaintingContext, _offset: Offset) {
         // TODO: for (child_id, parent_data) in self.children().iter_with_data() {
-        //     render_tree.paint(child_id, ctx, offset + parent_data.offset);
+        //     ctx.paint_child(child_id, offset + parent_data.offset);
         // }
     }
 
     /// Hit test (default: test children in reverse order)
     ///
     /// Returns true if any child was hit.
-    fn hit_test(&self, _result: &mut dyn std::any::Any, _position: Offset) -> bool {
+    fn hit_test(&self, _result: &mut HitTestResult, _position: Offset) -> bool {
         // TODO: for (child_id, parent_data) in self.children().iter_with_data().rev() {
         //     if render_tree.hit_test(child_id, result, position - parent_data.offset) {
         //         return true;
@@ -338,27 +340,42 @@ where
 
 impl<T: ProxyData, PD> Deref for ContainerSliver<T, PD> {
     type Target = T;
-    fn deref(&self) -> &T { &self.data }
+    fn deref(&self) -> &T {
+        &self.data
+    }
 }
 
 impl<T: ProxyData, PD> DerefMut for ContainerSliver<T, PD> {
-    fn deref_mut(&mut self) -> &mut T { &mut self.data }
+    fn deref_mut(&mut self) -> &mut T {
+        &mut self.data
+    }
 }
 
 /// Mixin trait for container Sliver render objects
-pub trait RenderContainerSliver<PD = ()>: HasChildren<SliverProtocol, PD> + HasSliverGeometry {
+pub trait RenderContainerSliver<PD = ()>:
+    HasChildren<SliverProtocol, PD> + HasSliverGeometry
+{
     fn perform_layout(&mut self, constraints: &SliverConstraints) -> SliverGeometry;
 
-    fn paint(&self, _ctx: &mut dyn std::any::Any, _offset: Offset) {}
-    fn hit_test(&self, _result: &mut dyn std::any::Any, _position: Offset) -> bool { false }
-    fn always_needs_compositing(&self) -> bool { false }
-    fn is_repaint_boundary(&self) -> bool { false }
+    fn paint(&self, _ctx: &mut PaintingContext, _offset: Offset) {}
+    fn hit_test(&self, _result: &mut HitTestResult, _position: Offset) -> bool {
+        false
+    }
+    fn always_needs_compositing(&self) -> bool {
+        false
+    }
+    fn is_repaint_boundary(&self) -> bool {
+        false
+    }
 }
 
 impl<T: ProxyData, PD> RenderContainerSliver<PD> for ContainerSliver<T, PD> {
     fn perform_layout(&mut self, _constraints: &SliverConstraints) -> SliverGeometry {
-        panic!("perform_layout must be overridden for ContainerSliver<{}, {}>",
-            std::any::type_name::<T>(), std::any::type_name::<PD>())
+        panic!(
+            "perform_layout must be overridden for ContainerSliver<{}, {}>",
+            std::any::type_name::<T>(),
+            std::any::type_name::<PD>()
+        )
     }
 }
 
@@ -377,6 +394,7 @@ mod tests {
     }
 
     #[derive(Default, Clone, Debug)]
+    #[allow(dead_code)]
     struct TestParentData {
         flex: f32,
     }
@@ -389,7 +407,8 @@ mod tests {
 
     #[test]
     fn test_container_box_deref() {
-        let mut container = ContainerBox::<TestData, TestParentData>::new(TestData { direction: 0 });
+        let mut container =
+            ContainerBox::<TestData, TestParentData>::new(TestData { direction: 0 });
 
         // Read via Deref
         assert_eq!(container.direction, 0);
@@ -416,8 +435,12 @@ mod tests {
         let child1 = RenderId::new(1);
         let child2 = RenderId::new(2);
 
-        container.children_mut().push(child1, TestParentData { flex: 1.0 });
-        container.children_mut().push(child2, TestParentData { flex: 2.0 });
+        container
+            .children_mut()
+            .push(child1, TestParentData { flex: 1.0 });
+        container
+            .children_mut()
+            .push(child2, TestParentData { flex: 2.0 });
 
         assert_eq!(container.child_count(), 2);
         assert!(container.has_children());

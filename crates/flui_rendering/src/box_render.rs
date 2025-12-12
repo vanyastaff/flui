@@ -1,11 +1,25 @@
-//! RenderBox - Box Protocol Render Trait with Arity System
+//! RenderBox - Box Protocol Render Trait (Flutter Model)
 //!
-//! This is the complete guide to RenderBox in FLUI, including:
-//! - Current implementation
-//! - Flutter compliance
-//! - Examples for each Arity type
-//! - Best practices
-//! - Common pitfalls
+//! This module provides the complete box protocol implementation following Flutter's
+//! exact architecture from `rendering/box.dart`:
+//!
+//! - **`RenderBox<A>`** - Core trait for box protocol render objects
+//! - **`BoxConstraints`** - Size constraints for box layout (re-exported)
+//! - **`BoxHitTestResult`** - Hit testing with paint transform support
+//! - **`BoxHitTestEntry`** - Hit entry with local position
+//!
+//! # Flutter Equivalence
+//!
+//! This module mirrors Flutter's `rendering/box.dart` which defines:
+//!
+//! ```dart
+//! // Flutter rendering/box.dart contains:
+//! class BoxConstraints extends Constraints { ... }
+//! class BoxHitTestResult extends HitTestResult { ... }
+//! class BoxHitTestEntry extends HitTestEntry<RenderBox> { ... }
+//! typedef BoxHitTest = bool Function(BoxHitTestResult result, Offset position);
+//! abstract class RenderBox extends RenderObject { ... }
+//! ```
 //!
 //! # Architecture
 //!
@@ -20,475 +34,692 @@
 //!  ├─ RenderFlex: RenderBox<Variable>
 //!  └─ RenderContainer: RenderBox<Optional>
 //! ```
+//!
+//! # Example
+//!
+//! ```rust,ignore
+//! use flui_rendering::box_render::{RenderBox, BoxConstraints, BoxHitTestResult};
+//! use flui_tree::arity::Leaf;
+//!
+//! struct MyBox { size: Size }
+//!
+//! impl RenderBox<Leaf> for MyBox {
+//!     fn perform_layout(&mut self, constraints: BoxConstraints) -> Size {
+//!         self.size = constraints.constrain(Size::new(100.0, 50.0));
+//!         self.size
+//!     }
+//!     // ... other methods
+//! }
+//! ```
 
 use std::fmt;
 
-use flui_interaction::HitTestResult;
-use flui_types::{BoxConstraints, Offset, Rect, Size};
+use flui_types::layout::TextBaseline;
+use flui_types::{Matrix4, Offset, Rect, Size};
 
-use super::context::{BoxHitTestContext, BoxLayoutContext, BoxPaintContext};
 use super::object::RenderObject;
-use crate::RenderResult;
+use super::painting_context::PaintingContext;
 use flui_tree::arity::Arity;
 
 // ============================================================================
-// RENDER BOX TRAIT
+// RE-EXPORTS (Flutter box.dart style)
+// ============================================================================
+
+/// Box constraints for layout.
+///
+/// Re-exported from `flui_types` to match Flutter's box.dart organization.
+///
+/// # Flutter Equivalence
+///
+/// ```dart
+/// class BoxConstraints extends Constraints {
+///   final double minWidth;
+///   final double maxWidth;
+///   final double minHeight;
+///   final double maxHeight;
+///   // ...
+/// }
+/// ```
+pub use flui_types::BoxConstraints;
+
+/// Hit test result for box protocol.
+///
+/// Defined in `flui_rendering` (like Flutter's `rendering/box.dart`). Provides:
+/// - `add_with_paint_offset()` - Test child with paint offset
+/// - `add_with_paint_transform()` - Test child with paint transform
+/// - `add_with_raw_transform()` - Test child with already-inverted transform
+///
+/// # Flutter Equivalence
+///
+/// ```dart
+/// class BoxHitTestResult extends HitTestResult {
+///   bool addWithPaintOffset({Offset? offset, required Offset position, required BoxHitTest hitTest});
+///   bool addWithPaintTransform({Matrix4? transform, required Offset position, required BoxHitTest hitTest});
+///   bool addWithRawTransform({Matrix4? transform, required Offset position, required BoxHitTest hitTest});
+/// }
+/// ```
+pub use crate::hit_test::BoxHitTestResult;
+
+/// Hit test entry for box protocol.
+///
+/// Defined in `flui_rendering`. Contains:
+/// - `target` - The RenderId of the hit render object
+/// - `local_position` - Position in target's local coordinates
+/// - `bounds` - Bounding rectangle of the target
+///
+/// # Flutter Equivalence
+///
+/// ```dart
+/// class BoxHitTestEntry extends HitTestEntry<RenderBox> {
+///   final Offset localPosition;
+/// }
+/// ```
+pub use crate::hit_test::BoxHitTestEntry;
+
+/// Hit test callback signature for box protocol.
+///
+/// Defined in `flui_rendering`.
+///
+/// # Flutter Equivalence
+///
+/// ```dart
+/// typedef BoxHitTest = bool Function(BoxHitTestResult result, Offset position);
+/// ```
+#[allow(unused_imports)]
+pub use crate::hit_test::BoxHitTest;
+
+// ============================================================================
+// RENDER BOX TRAIT (Flutter Model)
 // ============================================================================
 
 /// Render trait for box protocol with compile-time arity validation.
 ///
-/// # Flutter RenderBox Protocol
+/// This trait follows Flutter's `RenderBox` protocol:
 ///
-/// Flutter's RenderBox follows strict layout protocol:
-///
-/// 1. **Constraints go down**: Parent passes BoxConstraints to child
-/// 2. **Sizes come up**: Child returns Size that satisfies constraints
+/// 1. **Constraints go down**: Parent passes `BoxConstraints` to `perform_layout()`
+/// 2. **Sizes come up**: `perform_layout()` returns `Size` satisfying constraints
 /// 3. **Parent sets position**: Parent positions child after layout
 ///
-/// ```dart
-/// // Flutter RenderBox contract:
-/// abstract class RenderBox extends RenderObject {
-///   Size get size => _size!;
+/// # Type Parameter
 ///
-///   @override
-///   void performLayout() {
-///     // Child MUST return size that satisfies constraints
-///     size = computeSize(constraints);
-///   }
-/// }
-/// ```
-///
-/// # FLUI RenderBox<A>
-///
-/// FLUI adds compile-time arity validation:
-///
-/// ```text
-/// RenderBox<Leaf>      → 0 children (Text, Image)
-/// RenderBox<Optional>  → 0-1 child (Container, SizedBox)
-/// RenderBox<Single>    → 1 child (Padding, Transform)
-/// RenderBox<Variable>  → 0+ children (Flex, Stack, Column)
-/// ```
+/// - `A: Arity` - Compile-time child count validation:
+///   - `Leaf` - 0 children (Text, Image, ColoredBox)
+///   - `Single` - 1 child (Padding, Transform, Opacity)
+///   - `Optional` - 0-1 child (Container, SizedBox)
+///   - `Variable` - 0+ children (Flex, Stack, Column)
 ///
 /// # Required Methods
 ///
-/// ## layout() - REQUIRED
+/// - `perform_layout(constraints) -> Size` - Compute layout
+/// - `paint(ctx, offset)` - Paint to canvas
+/// - `size() -> Size` - Return cached size
 ///
-/// Computes size given constraints. **MUST** satisfy constraints.
+/// # Flutter Compliance
 ///
-/// ```rust,ignore
-/// fn layout(&mut self, ctx: BoxLayoutContext<'_, A>) -> RenderResult<Size>;
-/// ```
-///
-/// **Contract:**
-/// - Input: `BoxConstraints` from parent
-/// - Output: `Size` that satisfies constraints
-/// - Must be idempotent (same constraints → same size)
-///
-/// ## paint() - REQUIRED
-///
-/// Draws to canvas using geometry from layout.
-///
-/// ```rust,ignore
-/// fn paint(&self, ctx: &mut BoxPaintContext<'_, A>);
-/// ```
-///
-/// **Contract:**
-/// - Uses `ctx.geometry` (Size) from layout
-/// - Never calls layout during paint
-/// - Properly manages canvas state (save/restore)
-///
-/// # Optional Methods (with defaults)
-///
-/// ## hit_test() - Pointer detection
-///
-/// ```rust,ignore
-/// fn hit_test(&self, ctx: &BoxHitTestContext<'_, A>, result: &mut HitTestResult) -> bool {
-///     // Default: rectangular bounds check
-///     ctx.local_bounds().contains(ctx.position)
-/// }
-/// ```
-///
-/// ## intrinsic_width() / intrinsic_height() - Size queries
-///
-/// ```rust,ignore
-/// fn intrinsic_width(&self, height: f32) -> Option<f32> { None }
-/// fn intrinsic_height(&self, width: f32) -> Option<f32> { None }
-/// ```
-///
-/// ## baseline_offset() - Text baseline
-///
-/// ```rust,ignore
-/// fn baseline_offset(&self) -> Option<f32> { None }
-/// ```
-///
-/// ## local_bounds() - Bounding rectangle
-///
-/// ```rust,ignore
-/// fn local_bounds(&self) -> Rect {
-///     Rect::from_size(ctx.geometry)  // Default: full size
-/// }
-/// ```
-///
-/// # Flutter Compliance Checklist
-///
-/// ✅ **MUST** satisfy constraints:
-/// ```rust,ignore
-/// let size = desired_size;
-/// // WRONG:
-/// return size;  // May violate constraints
-///
-/// // CORRECT:
-/// return ctx.constraints.constrain(size);  // Guaranteed to satisfy constraints
-/// ```
-///
-/// ✅ **MUST** be idempotent:
-/// ```rust,ignore
-/// // Same constraints → same size every time
-/// fn layout(&mut self, ctx) -> Size {
-///     // ❌ WRONG: random size
-///     Size::new(rand(), rand())
-///
-///     // ✅ CORRECT: deterministic
-///     compute_stable_size(ctx.constraints)
-/// }
-/// ```
-///
-/// ✅ **MUST NOT** call layout during paint:
-/// ```rust,ignore
-/// fn paint(&self, ctx: &mut BoxPaintContext) {
-///     // ❌ WRONG: ctx is &mut, layout needs &mut tree
-///     // This won't even compile!
-///
-///     // ✅ CORRECT: use cached geometry
-///     let size = ctx.geometry;
-/// }
-/// ```
-///
-/// ✅ **MUST** layout children before querying size:
-/// ```rust,ignore
-/// fn layout(&mut self, mut ctx) -> Size {
-///     // ✅ CORRECT order:
-///     let child_size = ctx.layout_single_child()?;  // 1. Layout child
-///     compute_self_size(child_size)                  // 2. Use child size
-///
-///     // ❌ WRONG order:
-///     let size = compute_size();
-///     ctx.layout_single_child()?;  // Too late!
-/// }
-/// ```
+/// ✅ **MUST** satisfy constraints
+/// ✅ **MUST** be idempotent (same constraints → same size)
+/// ✅ **MUST NOT** call layout during paint
+/// ✅ **MUST** layout children before querying their size
 pub trait RenderBox<A: Arity>: RenderObject + fmt::Debug + Send + Sync {
+    // ========================================================================
+    // LAYOUT (Required)
+    // ========================================================================
+
     /// Computes size given constraints.
     ///
-    /// # Contract (Flutter RenderBox protocol)
+    /// This is called during the layout phase. The implementation must:
     ///
-    /// **MUST satisfy constraints:**
-    /// ```ignore
-    /// result.width >= constraints.min_width && result.width <= constraints.max_width
-    /// result.height >= constraints.min_height && result.height <= constraints.max_height
-    /// ```
-    ///
-    /// Debug builds verify this automatically.
-    ///
-    /// # Layout Protocol Steps
-    ///
-    /// 1. Receive constraints from parent
-    /// 2. Layout children (if any)
-    /// 3. Compute own size
-    /// 4. Position children (store offsets)
-    /// 5. Return size
-    ///
-    /// # Examples by Arity
-    ///
-    /// ## Leaf (0 children)
-    ///
-    /// ```rust,ignore
-    /// impl RenderBox<Leaf> for RenderText {
-    ///     fn layout(&mut self, ctx: BoxLayoutContext<'_, Leaf>) -> RenderResult<Size> {
-    ///         // Measure intrinsic size
-    ///         let intrinsic = self.measure_text();
-    ///
-    ///         // MUST constrain to satisfy constraints
-    ///         Ok(ctx.constraints.constrain(intrinsic))
-    ///     }
-    /// }
-    /// ```
-    ///
-    /// ## Single (1 child)
-    ///
-    /// ```rust,ignore
-    /// impl RenderBox<Single> for RenderPadding {
-    ///     fn layout(&mut self, mut ctx: BoxLayoutContext<'_, Single>) -> RenderResult<Size> {
-    ///         // 1. Deflate constraints by padding
-    ///         let inner_constraints = ctx.constraints.deflate(&self.padding);
-    ///
-    ///         // 2. Layout child with deflated constraints
-    ///         let child_size = ctx.layout_single_child_with(|_| inner_constraints)?;
-    ///
-    ///         // 3. Position child (offset by padding)
-    ///         let child_offset = Offset::new(self.padding.left, self.padding.top);
-    ///         ctx.set_child_offset(ctx.single_child(), child_offset);
-    ///
-    ///         // 4. Compute own size (child + padding)
-    ///         let size = Size::new(
-    ///             child_size.width + self.padding.horizontal(),
-    ///             child_size.height + self.padding.vertical(),
-    ///         );
-    ///
-    ///         Ok(ctx.constraints.constrain(size))
-    ///     }
-    /// }
-    /// ```
-    ///
-    /// ## Variable (0+ children)
-    ///
-    /// ```rust,ignore
-    /// impl RenderBox<Variable> for RenderFlex {
-    ///     fn layout(&mut self, mut ctx: BoxLayoutContext<'_, Variable>) -> RenderResult<Size> {
-    ///         let mut total_main = 0.0;
-    ///         let mut max_cross = 0.0;
-    ///
-    ///         // 1. Layout each child
-    ///         for child_id in ctx.children() {
-    ///             let child_constraints = self.compute_child_constraints(&ctx.constraints);
-    ///             let child_size = ctx.layout_child(child_id, child_constraints)?;
-    ///
-    ///             // 2. Position child
-    ///             let offset = self.compute_child_offset(total_main, child_size);
-    ///             ctx.set_child_offset(child_id, offset);
-    ///
-    ///             // 3. Accumulate sizes
-    ///             total_main += child_size.main_axis(self.direction);
-    ///             max_cross = max_cross.max(child_size.cross_axis(self.direction));
-    ///         }
-    ///
-    ///         // 4. Compute own size
-    ///         let size = match self.direction {
-    ///             Axis::Horizontal => Size::new(total_main, max_cross),
-    ///             Axis::Vertical => Size::new(max_cross, total_main),
-    ///         };
-    ///
-    ///         Ok(ctx.constraints.constrain(size))
-    ///     }
-    /// }
-    /// ```
-    fn layout(&mut self, ctx: BoxLayoutContext<'_, A>) -> RenderResult<Size>;
-
-    /// Paints to canvas using geometry from layout.
+    /// 1. Layout any children (using stored child references)
+    /// 2. Compute own size based on constraints and child sizes
+    /// 3. Return a size that satisfies the constraints
     ///
     /// # Contract
     ///
-    /// - **Never** call layout during paint
-    /// - Use `ctx.geometry` (Size) from layout phase
-    /// - Properly save/restore canvas state
-    /// - Paint children in correct order
+    /// - **MUST** return size satisfying constraints
+    /// - **MUST** be idempotent (same constraints → same size)
+    /// - **SHOULD** layout children before using their sizes
+    /// - **SHOULD** store computed size for paint/hit_test access
     ///
-    /// # Canvas State Management
+    /// # Flutter Equivalence
     ///
-    /// ```rust,ignore
-    /// fn paint(&self, ctx: &mut BoxPaintContext) {
-    ///     ctx.canvas_mut().save();           // Save state
-    ///     ctx.canvas_mut().set_opacity(0.5); // Modify
-    ///     ctx.paint_single_child(offset);    // Paint child
-    ///     ctx.canvas_mut().restore();        // Restore state
+    /// ```dart
+    /// @override
+    /// void performLayout() {
+    ///   size = constraints.constrain(Size(100, 50));
     /// }
     /// ```
-    ///
-    /// # Examples by Arity
-    ///
-    /// ## Leaf (draw content)
-    ///
-    /// ```rust,ignore
-    /// impl RenderBox<Leaf> for RenderText {
-    ///     fn paint(&self, ctx: &mut BoxPaintContext<'_, Leaf>) {
-    ///         let rect = Rect::from_min_size(ctx.offset, ctx.geometry);
-    ///         ctx.canvas_mut().draw_text(&self.text, rect, &self.style);
-    ///     }
-    /// }
-    /// ```
-    ///
-    /// ## Single (paint child)
-    ///
-    /// ```rust,ignore
-    /// impl RenderBox<Single> for RenderOpacity {
-    ///     fn paint(&self, ctx: &mut BoxPaintContext<'_, Single>) {
-    ///         if self.opacity < 0.01 {
-    ///             return;  // Don't paint if invisible
-    ///         }
-    ///
-    ///         if self.opacity < 1.0 {
-    ///             ctx.canvas_mut().save();
-    ///             ctx.canvas_mut().set_opacity(self.opacity);
-    ///         }
-    ///
-    ///         // Child offset set during layout
-    ///         ctx.paint_single_child(Offset::ZERO);
-    ///
-    ///         if self.opacity < 1.0 {
-    ///             ctx.canvas_mut().restore();
-    ///         }
-    ///     }
-    /// }
-    /// ```
-    ///
-    /// ## Variable (paint all children)
-    ///
-    /// ```rust,ignore
-    /// impl RenderBox<Variable> for RenderStack {
-    ///     fn paint(&self, ctx: &mut BoxPaintContext<'_, Variable>) {
-    ///         // Paint children in order (back to front)
-    ///         for child_id in ctx.children() {
-    ///             // Offset stored during layout
-    ///             ctx.paint_child(child_id);
-    ///         }
-    ///     }
-    /// }
-    /// ```
-    fn paint(&self, ctx: &mut BoxPaintContext<'_, A>);
+    fn perform_layout(&mut self, constraints: BoxConstraints) -> Size;
 
-    /// Hit tests for pointer events.
+    // ========================================================================
+    // PAINT (Required)
+    // ========================================================================
+
+    /// Paints this render object and its children.
     ///
-    /// Returns `true` if this element handled the hit test.
+    /// Called during the paint phase with a `PaintingContext` for canvas access
+    /// and layer composition, plus an offset for positioning.
     ///
-    /// # Default Implementation
+    /// # Arguments
     ///
-    /// Default checks if position is within rectangular bounds:
+    /// - `ctx` - Context for canvas access and child painting
+    /// - `offset` - Position of this object in parent coordinates
     ///
-    /// ```rust,ignore
-    /// fn hit_test(&self, ctx: &BoxHitTestContext<A>, result: &mut HitTestResult) -> bool {
-    ///     let local_bounds = self.local_bounds();
-    ///     if !local_bounds.contains(ctx.position) {
-    ///         return false;
-    ///     }
+    /// # Contract
     ///
-    ///     result.add(HitTestEntry::new(ctx.element_id));
-    ///     true
+    /// - **MUST NOT** call layout (use cached size from layout phase)
+    /// - **SHOULD** draw content at `offset`
+    /// - **SHOULD** paint children via `ctx.paint_child()`
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// @override
+    /// void paint(PaintingContext context, Offset offset) {
+    ///   context.canvas.drawRect(rect.shift(offset), paint);
+    ///   context.paintChild(child!, childOffset);
     /// }
     /// ```
+    fn paint(&self, ctx: &mut PaintingContext, offset: Offset);
+
+    // ========================================================================
+    // SIZE AND BOUNDS (Required)
+    // ========================================================================
+
+    /// Returns the computed size from layout.
     ///
-    /// # Override for Custom Shapes
+    /// This should return the size computed during `perform_layout()`.
+    /// Implementations must store the size during layout.
     ///
-    /// ```rust,ignore
-    /// impl RenderBox<Leaf> for RenderCircle {
-    ///     fn hit_test(&self, ctx: &BoxHitTestContext<Leaf>, result: &mut HitTestResult) -> bool {
-    ///         let center = ctx.geometry.center();
-    ///         let radius = ctx.geometry.width.min(ctx.geometry.height) / 2.0;
-    ///         let distance = (ctx.position - center).distance();
+    /// # Flutter Equivalence
     ///
-    ///         if distance <= radius {
-    ///             result.add(HitTestEntry::new(ctx.element_id));
-    ///             return true;
-    ///         }
-    ///
-    ///         false
-    ///     }
-    /// }
+    /// ```dart
+    /// Size get size => _size!;
     /// ```
-    fn hit_test(&self, ctx: &BoxHitTestContext<'_, A>, result: &mut HitTestResult) -> bool {
-        // Default: rectangular bounds check
-        let local_bounds = self.local_bounds();
-        if !local_bounds.contains(ctx.position) {
-            return false;
-        }
+    fn size(&self) -> Size;
 
-        // Add self to hit test result
-        let bounds = Rect::from_min_size(Offset::ZERO, ctx.geometry);
-        result.add(flui_interaction::HitTestEntry::new(
-            ctx.element_id(),
-            ctx.position,
-            bounds,
-        ));
-        true
-    }
-
-    /// Returns intrinsic width for given height.
+    /// Returns whether this render box has undergone layout and has a size.
     ///
-    /// This is the minimum width this render object would need if constrained
-    /// to the given height.
+    /// # Flutter Equivalence
     ///
-    /// # Flutter Semantics
-    ///
-    /// - Should not trigger layout
-    /// - Used for intrinsic size calculations
-    /// - Returns `None` if no meaningful intrinsic width
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// impl RenderBox<Leaf> for RenderText {
-    ///     fn intrinsic_width(&self, height: f32) -> Option<f32> {
-    ///         Some(self.measure_text_width(height))
-    ///     }
-    /// }
+    /// ```dart
+    /// bool get hasSize => _size != null;
     /// ```
-    fn intrinsic_width(&self, _height: f32) -> Option<f32> {
-        None
-    }
-
-    /// Returns intrinsic height for given width.
-    ///
-    /// This is the minimum height this render object would need if constrained
-    /// to the given width.
-    fn intrinsic_height(&self, _width: f32) -> Option<f32> {
-        None
-    }
-
-    /// Returns baseline offset for text alignment.
-    ///
-    /// Used by baseline alignment in Flex layouts.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// impl RenderBox<Leaf> for RenderText {
-    ///     fn baseline_offset(&self) -> Option<f32> {
-    ///         Some(self.font_metrics.ascent)
-    ///     }
-    /// }
-    /// ```
-    fn baseline_offset(&self) -> Option<f32> {
-        None
-    }
-
-    /// Computes size without side effects (dry layout).
-    ///
-    /// Used for intrinsic size calculations where full layout is too expensive.
-    ///
-    /// # Default
-    ///
-    /// Returns smallest size that satisfies constraints.
-    fn compute_dry_layout(&self, constraints: BoxConstraints) -> Size {
-        constraints.smallest()
+    fn has_size(&self) -> bool {
+        true // Default: assume size is always available after layout
     }
 
     /// Returns local bounding rectangle.
     ///
-    /// # Default
+    /// Default returns rectangle from origin to size.
     ///
-    /// Returns rectangle from (0, 0) to (width, height).
+    /// # Flutter Equivalence
     ///
-    /// Override for custom shapes:
-    ///
-    /// ```rust,ignore
-    /// impl RenderBox<Leaf> for RenderCircle {
-    ///     fn local_bounds(&self) -> Rect {
-    ///         // Circle inscribed in box
-    ///         let size = self.size();
-    ///         let radius = size.width.min(size.height) / 2.0;
-    ///         let center = size.center();
-    ///         Rect::from_center_and_radius(center, radius)
-    ///     }
-    /// }
+    /// ```dart
+    /// Rect get paintBounds => Offset.zero & size;
     /// ```
     fn local_bounds(&self) -> Rect {
-        Rect::ZERO // Default: will be set from geometry
+        Rect::from_min_size(Offset::ZERO, self.size())
+    }
+
+    /// Returns the bounding box for semantics/accessibility.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// Rect get semanticBounds => Offset.zero & size;
+    /// ```
+    fn semantic_bounds(&self) -> Rect {
+        self.local_bounds()
+    }
+
+    // ========================================================================
+    // HIT TESTING
+    // ========================================================================
+
+    /// Hit tests this render object at the given position.
+    ///
+    /// Returns `true` if this object or any descendant was hit.
+    ///
+    /// # Arguments
+    ///
+    /// - `result` - Accumulator for hit test entries (BoxHitTestResult)
+    /// - `position` - Position to test in local coordinates
+    ///
+    /// # Default Implementation
+    ///
+    /// The default implementation:
+    /// 1. Checks if position is within bounds
+    /// 2. Tests children via `hit_test_children()`
+    /// 3. Tests self via `hit_test_self()`
+    /// 4. Adds entry if hit
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// @override
+    /// bool hitTest(BoxHitTestResult result, {required Offset position}) {
+    ///   if (size.contains(position)) {
+    ///     if (hitTestChildren(result, position: position) || hitTestSelf(position)) {
+    ///       result.add(BoxHitTestEntry(this, position));
+    ///       return true;
+    ///     }
+    ///   }
+    ///   return false;
+    /// }
+    /// ```
+    fn hit_test(&self, result: &mut BoxHitTestResult, position: Offset) -> bool {
+        // Check bounds first (position must be within 0..size)
+        let size = self.size();
+        let in_bounds = position.dx >= 0.0
+            && position.dx < size.width
+            && position.dy >= 0.0
+            && position.dy < size.height;
+
+        if !in_bounds {
+            return false;
+        }
+
+        // Test children first (reverse z-order), then self
+        if self.hit_test_children(result, position) || self.hit_test_self(position) {
+            // Note: The tree layer is responsible for adding entries with IDs
+            return true;
+        }
+
+        false
+    }
+
+    /// Whether this render object should be considered hit at the given position.
+    ///
+    /// Override to control when this object registers as hit.
+    /// Default returns `false` (defer to children).
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// @protected
+    /// bool hitTestSelf(Offset position) => false;
+    /// ```
+    fn hit_test_self(&self, _position: Offset) -> bool {
+        false
+    }
+
+    /// Hit tests children in reverse paint order (front to back).
+    ///
+    /// Default implementation returns `false` (no children or leaf node).
+    /// Override for containers to test children.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// @protected
+    /// bool hitTestChildren(BoxHitTestResult result, {required Offset position}) => false;
+    /// ```
+    fn hit_test_children(&self, _result: &mut BoxHitTestResult, _position: Offset) -> bool {
+        false
+    }
+
+    /// Adds this render object to the hit test result.
+    ///
+    /// Called when hit test succeeds. The `id` parameter is the render ID
+    /// assigned by the tree, since render objects don't inherently know their ID.
+    fn add_to_hit_test_result(
+        &self,
+        result: &mut BoxHitTestResult,
+        id: flui_foundation::RenderId,
+        position: Offset,
+    ) {
+        let bounds = self.local_bounds();
+        result.add_box_entry(BoxHitTestEntry::new(id, position, bounds));
+    }
+
+    // ========================================================================
+    // INTRINSIC DIMENSIONS (Flutter-style)
+    // ========================================================================
+
+    /// Returns the minimum width that this box could be without failing to
+    /// correctly paint its contents within itself, without clipping.
+    ///
+    /// The `height` argument may give a specific height to assume. The given
+    /// height can be infinite, meaning that the intrinsic width in an
+    /// unconstrained environment is being requested.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// double getMinIntrinsicWidth(double height) {
+    ///   return _computeIntrinsics(..., computeMinIntrinsicWidth);
+    /// }
+    /// ```
+    fn get_min_intrinsic_width(&self, height: f32) -> f32 {
+        self.compute_min_intrinsic_width(height)
+    }
+
+    /// Returns the smallest width beyond which increasing the width never
+    /// decreases the preferred height.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// double getMaxIntrinsicWidth(double height) {
+    ///   return _computeIntrinsics(..., computeMaxIntrinsicWidth);
+    /// }
+    /// ```
+    fn get_max_intrinsic_width(&self, height: f32) -> f32 {
+        self.compute_max_intrinsic_width(height)
+    }
+
+    /// Returns the minimum height that this box could be without failing to
+    /// correctly paint its contents within itself, without clipping.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// double getMinIntrinsicHeight(double width) {
+    ///   return _computeIntrinsics(..., computeMinIntrinsicHeight);
+    /// }
+    /// ```
+    fn get_min_intrinsic_height(&self, width: f32) -> f32 {
+        self.compute_min_intrinsic_height(width)
+    }
+
+    /// Returns the smallest height beyond which increasing the height never
+    /// decreases the preferred width.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// double getMaxIntrinsicHeight(double width) {
+    ///   return _computeIntrinsics(..., computeMaxIntrinsicHeight);
+    /// }
+    /// ```
+    fn get_max_intrinsic_height(&self, width: f32) -> f32 {
+        self.compute_max_intrinsic_height(width)
+    }
+
+    /// Computes the minimum intrinsic width.
+    ///
+    /// Override this in subclasses. The default returns 0.0.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// @protected
+    /// double computeMinIntrinsicWidth(double height) => 0.0;
+    /// ```
+    fn compute_min_intrinsic_width(&self, _height: f32) -> f32 {
+        0.0
+    }
+
+    /// Computes the maximum intrinsic width.
+    ///
+    /// Override this in subclasses. The default returns 0.0.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// @protected
+    /// double computeMaxIntrinsicWidth(double height) => 0.0;
+    /// ```
+    fn compute_max_intrinsic_width(&self, _height: f32) -> f32 {
+        0.0
+    }
+
+    /// Computes the minimum intrinsic height.
+    ///
+    /// Override this in subclasses. The default returns 0.0.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// @protected
+    /// double computeMinIntrinsicHeight(double width) => 0.0;
+    /// ```
+    fn compute_min_intrinsic_height(&self, _width: f32) -> f32 {
+        0.0
+    }
+
+    /// Computes the maximum intrinsic height.
+    ///
+    /// Override this in subclasses. The default returns 0.0.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// @protected
+    /// double computeMaxIntrinsicHeight(double width) => 0.0;
+    /// ```
+    fn compute_max_intrinsic_height(&self, _width: f32) -> f32 {
+        0.0
+    }
+
+    // ========================================================================
+    // DRY LAYOUT
+    // ========================================================================
+
+    /// Returns the size this box would have if it were laid out with the
+    /// given constraints.
+    ///
+    /// This method does not change the state of the render object. It is
+    /// useful for computing intrinsic dimensions.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// Size getDryLayout(BoxConstraints constraints) {
+    ///   return _computeIntrinsics(..., computeDryLayout);
+    /// }
+    /// ```
+    fn get_dry_layout(&self, constraints: BoxConstraints) -> Size {
+        self.compute_dry_layout(constraints)
+    }
+
+    /// Computes the size this box would have if laid out with the given constraints.
+    ///
+    /// Override this in subclasses. The default returns the smallest size
+    /// satisfying the constraints.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// @protected
+    /// Size computeDryLayout(BoxConstraints constraints) {
+    ///   return Size.zero;
+    /// }
+    /// ```
+    fn compute_dry_layout(&self, constraints: BoxConstraints) -> Size {
+        constraints.smallest()
+    }
+
+    // ========================================================================
+    // BASELINES
+    // ========================================================================
+
+    /// Returns the distance from the y-coordinate of the position of the box
+    /// to the y-coordinate of the first given baseline in the box's contents.
+    ///
+    /// Used by certain layout models to align adjacent boxes on a common
+    /// baseline, regardless of padding, font size differences, etc.
+    ///
+    /// If there is no baseline, this function returns the distance from the
+    /// y-coordinate of the position of the box to the y-coordinate of the
+    /// bottom of the box (i.e., the height of the box) unless `only_real`
+    /// is true, in which case it returns `None`.
+    ///
+    /// # Arguments
+    ///
+    /// - `baseline` - The type of baseline to find
+    /// - `only_real` - If true, return None if no actual baseline exists
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// double? getDistanceToBaseline(TextBaseline baseline, {bool onlyReal = false}) {
+    ///   final double? result = getDistanceToActualBaseline(baseline);
+    ///   if (result == null && !onlyReal) {
+    ///     return size.height;
+    ///   }
+    ///   return result;
+    /// }
+    /// ```
+    fn get_distance_to_baseline(&self, baseline: TextBaseline, only_real: bool) -> Option<f32> {
+        let result = self.get_distance_to_actual_baseline(baseline);
+        if result.is_none() && !only_real {
+            return Some(self.size().height);
+        }
+        result
+    }
+
+    /// Calls `compute_distance_to_actual_baseline` and caches the result.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// @protected
+    /// @mustCallSuper
+    /// double? getDistanceToActualBaseline(TextBaseline baseline) {
+    ///   return _computeIntrinsics(..., computeDistanceToActualBaseline);
+    /// }
+    /// ```
+    fn get_distance_to_actual_baseline(&self, baseline: TextBaseline) -> Option<f32> {
+        self.compute_distance_to_actual_baseline(baseline)
+    }
+
+    /// Returns the distance from the y-coordinate of the position of the box
+    /// to the y-coordinate of the first given baseline in the box's contents,
+    /// if any, or `None` otherwise.
+    ///
+    /// Do not call this function directly. If you need to know the baseline
+    /// of a child from an invocation of `perform_layout` or `paint`, call
+    /// `get_distance_to_baseline`.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// @protected
+    /// double? computeDistanceToActualBaseline(TextBaseline baseline) => null;
+    /// ```
+    fn compute_distance_to_actual_baseline(&self, _baseline: TextBaseline) -> Option<f32> {
+        None
+    }
+
+    // ========================================================================
+    // COORDINATE TRANSFORMS
+    // ========================================================================
+
+    /// Converts the given point from the global coordinate system to the
+    /// local coordinate system of this render object.
+    ///
+    /// # Arguments
+    ///
+    /// - `point` - The point in global coordinates
+    /// - `ancestor` - Optional ancestor to use as the coordinate space origin.
+    ///   If `None`, uses the root of the render tree.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// Offset globalToLocal(Offset point, {RenderObject? ancestor}) {
+    ///   final Matrix4 transform = getTransformTo(ancestor);
+    ///   return MatrixUtils.transformPoint(transform, point);
+    /// }
+    /// ```
+    fn global_to_local(&self, point: Offset, transform: Option<&Matrix4>) -> Offset {
+        if let Some(t) = transform {
+            // Apply inverse transform
+            if let Some(inverse) = t.try_inverse() {
+                let (x, y) = inverse.transform_point(point.dx, point.dy);
+                return Offset::new(x, y);
+            }
+        }
+        point
+    }
+
+    /// Converts the given point from the local coordinate system of this
+    /// render object to the global coordinate system.
+    ///
+    /// # Arguments
+    ///
+    /// - `point` - The point in local coordinates
+    /// - `ancestor` - Optional ancestor to use as the coordinate space origin.
+    ///   If `None`, uses the root of the render tree.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// Offset localToGlobal(Offset point, {RenderObject? ancestor}) {
+    ///   return MatrixUtils.transformPoint(getTransformTo(ancestor), point);
+    /// }
+    /// ```
+    fn local_to_global(&self, point: Offset, transform: Option<&Matrix4>) -> Offset {
+        if let Some(t) = transform {
+            let (x, y) = t.transform_point(point.dx, point.dy);
+            return Offset::new(x, y);
+        }
+        point
+    }
+
+    /// Multiply the transform from the parent's coordinate system to this
+    /// box's coordinate system into the given transform.
+    ///
+    /// This function is used to convert coordinate systems between boxes.
+    /// Subclasses that apply transforms during painting should override this
+    /// function to factor those transforms into the calculation.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// @override
+    /// void applyPaintTransform(RenderObject child, Matrix4 transform) {
+    ///   final BoxParentData childParentData = child.parentData! as BoxParentData;
+    ///   final Offset offset = childParentData.offset;
+    ///   transform.translate(offset.dx, offset.dy);
+    /// }
+    /// ```
+    fn apply_paint_transform(&self, child_offset: Offset, transform: &mut Matrix4) {
+        transform.translate(child_offset.dx, child_offset.dy, 0.0);
+    }
+
+    // ========================================================================
+    // LEGACY COMPATIBILITY
+    // ========================================================================
+
+    /// Returns intrinsic width for given height (legacy API).
+    ///
+    /// Prefer using `get_min_intrinsic_width` or `get_max_intrinsic_width`.
+    #[deprecated(note = "Use get_min_intrinsic_width or get_max_intrinsic_width instead")]
+    fn intrinsic_width(&self, height: f32) -> Option<f32> {
+        let min = self.get_min_intrinsic_width(height);
+        if min > 0.0 {
+            Some(min)
+        } else {
+            None
+        }
+    }
+
+    /// Returns intrinsic height for given width (legacy API).
+    ///
+    /// Prefer using `get_min_intrinsic_height` or `get_max_intrinsic_height`.
+    #[deprecated(note = "Use get_min_intrinsic_height or get_max_intrinsic_height instead")]
+    fn intrinsic_height(&self, width: f32) -> Option<f32> {
+        let min = self.get_min_intrinsic_height(width);
+        if min > 0.0 {
+            Some(min)
+        } else {
+            None
+        }
+    }
+
+    /// Returns baseline offset for text alignment (legacy API).
+    ///
+    /// Prefer using `get_distance_to_baseline`.
+    #[deprecated(note = "Use get_distance_to_baseline instead")]
+    fn baseline_offset(&self) -> Option<f32> {
+        self.get_distance_to_actual_baseline(TextBaseline::Alphabetic)
     }
 }
 
-// Note: BoxConstraints methods (constrain, smallest, biggest, deflate, loosen, tight, loose, is_satisfied_by)
-// are defined in flui_types::BoxConstraints. See examples in the trait documentation above.
-
 // ============================================================================
-// COMMON PITFALLS AND SOLUTIONS
+// DOCUMENTATION
 // ============================================================================
 
 /// Common mistakes when implementing RenderBox
@@ -497,14 +728,13 @@ pub trait RenderBox<A: Arity>: RenderObject + fmt::Debug + Send + Sync {
 ///
 /// ```rust,ignore
 /// // WRONG:
-/// fn layout(&mut self, ctx) -> Size {
+/// fn perform_layout(&mut self, constraints: BoxConstraints) -> Size {
 ///     Size::new(100.0, 50.0)  // Ignores constraints!
 /// }
 ///
 /// // CORRECT:
-/// fn layout(&mut self, ctx) -> Size {
-///     let desired = Size::new(100.0, 50.0);
-///     ctx.constraints.constrain(desired)
+/// fn perform_layout(&mut self, constraints: BoxConstraints) -> Size {
+///     constraints.constrain(Size::new(100.0, 50.0))
 /// }
 /// ```
 ///
@@ -512,73 +742,56 @@ pub trait RenderBox<A: Arity>: RenderObject + fmt::Debug + Send + Sync {
 ///
 /// ```rust,ignore
 /// // WRONG:
-/// fn paint(&self, ctx: &mut BoxPaintContext) {
-///     // Won't compile - ctx is &mut, can't get &mut tree
-///     let size = ctx.layout_child(...)?;  // ERROR!
+/// fn paint(&self, ctx: &mut PaintingContext, offset: Offset) {
+///     let size = child.perform_layout(constraints);  // NO!
 /// }
 ///
 /// // CORRECT:
-/// fn paint(&self, ctx: &mut BoxPaintContext) {
-///     // Use cached geometry from layout
-///     let size = ctx.geometry;
+/// fn paint(&self, ctx: &mut PaintingContext, offset: Offset) {
+///     let size = self.size();  // Use cached size
 /// }
 /// ```
 ///
-/// # ❌ Pitfall 3: Not positioning children
+/// # ❌ Pitfall 3: Not storing size
 ///
 /// ```rust,ignore
 /// // WRONG:
-/// fn layout(&mut self, ctx) -> Size {
-///     let child_size = ctx.layout_single_child()?;
-///     // Forgot to set child offset!
-///     Size::new(100.0, child_size.height)
+/// fn perform_layout(&mut self, constraints: BoxConstraints) -> Size {
+///     constraints.biggest()  // Returns but doesn't store
+/// }
+///
+/// fn size(&self) -> Size {
+///     Size::ZERO  // Wrong!
 /// }
 ///
 /// // CORRECT:
-/// fn layout(&mut self, ctx) -> Size {
-///     let child_size = ctx.layout_single_child()?;
-///     ctx.set_child_offset(
-///         ctx.single_child(),
-///         Offset::new(10.0, 10.0)  // Position child
-///     );
-///     Size::new(100.0, child_size.height)
+/// fn perform_layout(&mut self, constraints: BoxConstraints) -> Size {
+///     self.cached_size = constraints.biggest();
+///     self.cached_size
+/// }
+///
+/// fn size(&self) -> Size {
+///     self.cached_size
 /// }
 /// ```
 ///
-/// # ❌ Pitfall 4: Non-idempotent layout
+/// # ❌ Pitfall 4: Wrong hit test order
 ///
 /// ```rust,ignore
-/// // WRONG:
-/// fn layout(&mut self, ctx) -> Size {
-///     let random = rand::random::<f32>();  // Different every time!
-///     Size::new(100.0 * random, 50.0)
+/// // WRONG: Tests back to front
+/// fn hit_test_children(&self, result, position) -> bool {
+///     for child in self.children.iter() {  // Wrong order!
+///         if child.hit_test(result, position) { return true; }
+///     }
+///     false
 /// }
 ///
-/// // CORRECT:
-/// fn layout(&mut self, ctx) -> Size {
-///     // Always same size for same constraints
-///     ctx.constraints.constrain(self.intrinsic_size)
-/// }
-/// ```
-///
-/// # ❌ Pitfall 5: Forgetting canvas save/restore
-///
-/// ```rust,ignore
-/// // WRONG:
-/// fn paint(&self, ctx: &mut BoxPaintContext) {
-///     ctx.canvas_mut().set_opacity(0.5);  // Modifies state
-///     ctx.paint_single_child(offset);
-///     // State leak! Next sibling will be semi-transparent
-/// }
-///
-/// // CORRECT:
-/// fn paint(&self, ctx: &mut BoxPaintContext) {
-///     ctx.canvas_mut().save();
-///     ctx.canvas_mut().set_opacity(0.5);
-///     ctx.paint_single_child(offset);
-///     ctx.canvas_mut().restore();  // Clean state
+/// // CORRECT: Tests front to back (reverse paint order)
+/// fn hit_test_children(&self, result, position) -> bool {
+///     for child in self.children.iter().rev() {  // Reverse!
+///         if child.hit_test(result, position) { return true; }
+///     }
+///     false
 /// }
 /// ```
-mod _docs {}
-
-// Implementation examples are in documentation comments above with `rust,ignore`
+mod _pitfalls {}

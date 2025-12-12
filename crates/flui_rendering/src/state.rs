@@ -963,7 +963,6 @@ impl<P: Protocol> RenderState<P> {
         self.flags.contains(RenderFlags::IS_RELAYOUT_BOUNDARY)
     }
 
-
     /// Checks if this render object is a repaint boundary.
     ///
     /// Repaint boundaries prevent paint propagation upward, enabling
@@ -1276,20 +1275,15 @@ impl RenderState<BoxProtocol> {
         sized_by_parent: bool,
         has_parent: bool,
     ) {
-        use flui_types::Constraints;
-
         // Flutter's exact logic:
         // is_boundary = !parent_uses_size || sized_by_parent || constraints.is_tight() || !has_parent
 
-        let constraints_are_tight = self
-            .constraints()
-            .map(|c| c.is_tight())
-            .unwrap_or(false);
+        let constraints_are_tight = self.constraints().map(|c| c.is_tight()).unwrap_or(false);
 
         let is_boundary = !parent_uses_size  // Parent doesn't use size
             || sized_by_parent                // Size determined by constraints
             || constraints_are_tight          // Only one valid size
-            || !has_parent;                   // Root of tree
+            || !has_parent; // Root of tree
 
         self.set_relayout_boundary(is_boundary);
     }

@@ -224,7 +224,9 @@ pub use signal_resolver::{PointerSignalResolver, SignalPriority};
 // Re-exports: Traits
 // ============================================================================
 
-pub use traits::{Disposable, DragAxis, GestureCallback, GestureRecognizerExt, PointerEventExt};
+pub use traits::{
+    Disposable, DragAxis, GestureCallback, GestureRecognizerExt, HitTestTarget, PointerEventExt,
+};
 
 // ============================================================================
 // Re-exports: Types from flui_types

@@ -14,6 +14,7 @@ flui_interaction = { path = "../flui_interaction" }
 flui-foundation = { path = "../flui-foundation" }
 flui-tree = { path = "../flui-tree" }
 flui-layer = { path = "../flui-layer" }
+flui-semantics = { path = "../flui-semantics" }
 
 parking_lot = { workspace = true }
 thiserror = { workspace = true }

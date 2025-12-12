@@ -1,46 +1,78 @@
-//! Core render object trait - minimal base for all render objects.
+//! Core render object trait - behavior interface for all render objects.
 //!
-//! This module provides the foundation for all render objects in FLUI:
-//! - [`RenderObject`] - Base trait for all render objects (metadata only)
+//! This module provides the behavior trait for all render objects in FLUI:
+//! - [`RenderObject`] - Behavior trait (configuration + callbacks)
 //!
 //! # Architecture
 //!
-//! FLUI uses a two-level API:
-//! - **RenderObject** - Minimal base trait (debug, flags, lifecycle)
-//! - **RenderBox<A>/RenderSliver<A>** - Typed traits with context-based operations
+//! FLUI separates render objects into two parts:
 //!
-//! Layout, paint, and hit-test operations are handled by the typed traits
-//! using context objects (BoxLayoutContext, BoxPaintContext, etc.).
+//! | Component | Role | Flutter Equivalent |
+//! |-----------|------|-------------------|
+//! | `RenderNode` | State container | `RenderObject` fields |
+//! | `RenderObject` trait | Behavior interface | `RenderObject` abstract methods |
+//!
+//! ```text
+//! ┌─────────────────────────────────────────────────────────────┐
+//! │                      RenderNode                              │
+//! │  (state: parent, depth, needs_layout, constraints, etc.)    │
+//! │                                                              │
+//! │  ┌─────────────────────────────────────────────────────┐    │
+//! │  │              Box<dyn RenderObject>                   │    │
+//! │  │  (behavior: sized_by_parent, is_repaint_boundary)   │    │
+//! │  └─────────────────────────────────────────────────────┘    │
+//! └─────────────────────────────────────────────────────────────┘
+//! ```
+//!
+//! # What Goes Where
+//!
+//! ## RenderObject trait (this file) - BEHAVIOR
+//! - Configuration flags: `sized_by_parent()`, `is_repaint_boundary()`, `always_needs_compositing()`
+//! - Lifecycle hooks: `attach()`, `detach()`, `adopt_child()`, `drop_child()`
+//! - Parent data: `create_parent_data()`, `setup_parent_data()`
+//! - Transforms: `apply_paint_transform()`
+//! - Debug: `debug_name()`, `debug_fill_properties()`
+//! - Semantics: `describe_semantics()`, `is_semantics_boundary()`
+//!
+//! ## RenderNode (node.rs) - STATE
+//! - Tree position: `parent`, `depth`, `children`
+//! - Dirty flags: `needs_layout`, `needs_paint`, `needs_compositing_bits_update`
+//! - Layout cache: `constraints`, `cached_size`, `relayout_boundary`
+//! - Compositing: `needs_compositing`, `was_repaint_boundary`, `layer_handle`
+//! - Parent data: `parent_data`
+//! - Lifecycle: `disposed`, `lifecycle`
 //!
 //! # Flutter Protocol Compliance
 //!
-//! | Flutter | FLUI | Notes |
-//! |---------|------|-------|
-//! | `RenderObject` | `RenderObject` | Base trait (minimal) |
-//! | `RenderBox` | `RenderBox<A>` | Box protocol + arity |
-//! | `RenderSliver` | `RenderSliver<A>` | Sliver protocol + arity |
-//! | `sizedByParent` | `sized_by_parent()` | Optimization flag |
-//! | `visitChildren()` | `visit_children()` | Tree traversal |
+//! | Flutter | FLUI | Location |
+//! |---------|------|----------|
+//! | `sizedByParent` getter | `sized_by_parent()` | RenderObject trait |
+//! | `isRepaintBoundary` getter | `is_repaint_boundary()` | RenderObject trait |
+//! | `alwaysNeedsCompositing` getter | `always_needs_compositing()` | RenderObject trait |
+//! | `_needsLayout` field | `needs_layout` | RenderNode |
+//! | `_needsPaint` field | `needs_paint` | RenderNode |
+//! | `_isRelayoutBoundary` field | `relayout_boundary` | RenderNode |
+//! | `_needsCompositing` field | `needs_compositing` | RenderNode |
+//! | `_constraints` field | `constraints` | RenderNode |
+//! | `_layerHandle` field | `layer_handle` | RenderNode |
+//! | `parentData` field | `parent_data` | RenderNode |
 
 use std::any::Any;
 use std::fmt;
-use std::sync::Arc;
 
 use downcast_rs::{impl_downcast, DowncastSync};
 
-use flui_foundation::{DiagnosticsProperty, RenderId};
-use flui_interaction::HitTestResult;
+use flui_foundation::{Diagnosticable, RenderId};
+use flui_interaction::HitTestTarget;
 use flui_painting::Canvas;
 use flui_types::events::MouseCursor;
 use flui_types::geometry::Matrix4;
 use flui_types::semantics::{SemanticsAction, SemanticsProperties};
-use flui_types::Offset;
-use parking_lot::RwLock;
 
 use crate::HitTestTree;
 
 // ============================================================================
-// LAYER HANDLE (Typed Layer Infrastructure from flui-layer)
+// LAYER HANDLE TYPE ALIAS
 // ============================================================================
 
 /// Handle to a compositor layer with reference counting and lifecycle management.
@@ -49,39 +81,10 @@ use crate::HitTestTree;
 /// - Type-safe layer management with polymorphic Layer enum
 /// - Reference counting for proper GPU resource lifecycle
 /// - Thread-safe access from multiple threads
-/// - Proper integration with compositor layer tree
-///
-/// Repaint boundaries use this to cache their compositing layer, enabling
-/// Flutter's repaint optimization: unchanged subtrees skip repainting.
 ///
 /// # Flutter Equivalence
-///
 /// ```dart
-/// class LayerHandle<T extends Layer> {
-///   T? _layer;
-///   T get layer => _layer!;
-///   set layer(T value) { _layer = value; }
-/// }
-/// ```
-///
-/// # Examples
-///
-/// ```rust,ignore
-/// use flui_rendering::LayerHandle;
-/// use flui_layer::{Layer, OffsetLayer};
-///
-/// // Create handle
-/// let mut handle = LayerHandle::new();
-///
-/// // Set layer
-/// handle.set(Layer::Offset(OffsetLayer::from_xy(10.0, 20.0)));
-///
-/// // Get layer
-/// if let Some(layer) = handle.get() {
-///     if let Layer::Offset(offset_layer) = layer {
-///         println!("Offset: {:?}", offset_layer.offset());
-///     }
-/// }
+/// final LayerHandle<ContainerLayer> _layerHandle = LayerHandle<ContainerLayer>();
 /// ```
 pub type LayerHandle = flui_layer::AnyLayerHandle;
 
@@ -89,28 +92,21 @@ pub type LayerHandle = flui_layer::AnyLayerHandle;
 // RENDER OBJECT TRAIT
 // ============================================================================
 
-/// Base trait for all render objects (metadata only).
+/// Behavior trait for render objects.
 ///
-/// This is a minimal trait that provides:
-/// - Debug information
-/// - Tree traversal
-/// - Lifecycle management
-/// - Boundary flags
+/// This trait defines the **behavior** of a render object - configuration
+/// and callbacks that are specific to each render object type.
 ///
-/// **Layout, paint, and hit-test operations are NOT part of this trait.**
-/// Those are handled by protocol-specific traits:
-/// - `RenderBox<A>` for box protocol
-/// - `RenderSliver<A>` for sliver protocol
+/// **State is stored in `RenderNode`**, not in the trait implementor.
 ///
-/// # Why Minimal?
+/// # Required vs Optional
 ///
-/// The previous design had callback-based `perform_layout()` and `paint()`
-/// methods here, but they were redundant with the typed `RenderBox<A>` API.
-/// This led to confusion about which API to use.
+/// All methods have default implementations. Override only what you need:
 ///
-/// Now:
-/// - `RenderObject` = metadata, flags, lifecycle
-/// - `RenderBox<A>` = context-based layout/paint/hit_test
+/// - **Usually override**: `debug_name()`, `create_parent_data()`
+/// - **Override for optimization**: `sized_by_parent()`
+/// - **Override for layers**: `is_repaint_boundary()`, `always_needs_compositing()`
+/// - **Override for transforms**: `apply_paint_transform()`
 ///
 /// # Examples
 ///
@@ -124,27 +120,29 @@ pub type LayerHandle = flui_layer::AnyLayerHandle;
 ///     fn debug_name(&self) -> &'static str {
 ///         "RenderPadding"
 ///     }
+///
+///     // This uses BoxParentData (default), so no override needed
 /// }
 ///
+/// // Layout/paint implemented via RenderBox<Single> trait
 /// impl RenderBox<Single> for RenderPadding {
-///     fn layout(&mut self, ctx: BoxLayoutContext<'_, Single>) -> RenderResult<Size> {
-///         let child_constraints = ctx.constraints.deflate(&self.padding);
-///         let child_size = ctx.layout_single_child_with(|_| child_constraints)?;
-///         Ok(child_size + self.padding.size())
-///     }
-///
-///     fn paint(&self, ctx: &mut BoxPaintContext<'_, Single>) {
-///         let offset = Offset::new(self.padding.left, self.padding.top);
-///         ctx.paint_single_child(offset);
-///     }
+///     fn perform_layout(&mut self, constraints: BoxConstraints) -> Size { ... }
+///     fn paint(&self, context: &mut PaintingContext, offset: Offset) { ... }
 /// }
 /// ```
-pub trait RenderObject: DowncastSync + fmt::Debug {
-    // ============================================================================
-    // DEBUG METHODS
-    // ============================================================================
+pub trait RenderObject: DowncastSync + fmt::Debug + Diagnosticable + HitTestTarget {
+    // ========================================================================
+    // DEBUG INFORMATION
+    // ========================================================================
 
     /// Returns human-readable debug name.
+    ///
+    /// Used in debug output and diagnostics.
+    ///
+    /// # Flutter Equivalence
+    /// ```dart
+    /// String get debugName => runtimeType.toString();
+    /// ```
     fn debug_name(&self) -> &'static str {
         std::any::type_name::<Self>()
     }
@@ -160,491 +158,380 @@ pub trait RenderObject: DowncastSync + fmt::Debug {
         full_name.rsplit("::").next().unwrap_or(full_name)
     }
 
-    /// Fills diagnostic properties (Flutter debugFillProperties).
-    #[cfg(debug_assertions)]
-    fn debug_fill_properties(&self, _properties: &mut Vec<DiagnosticsProperty>) {
-        // Override to add custom properties
-    }
+    // Note: debug_fill_properties() is inherited from Diagnosticable supertrait
 
-    /// Paints debug visualization (Flutter debugPaint).
+    /// Paints debug visualization overlay.
+    ///
+    /// Called when debug painting is enabled.
+    ///
+    /// # Flutter Equivalence
+    /// ```dart
+    /// void debugPaint(PaintingContext context, Offset offset) { }
+    /// ```
     #[cfg(debug_assertions)]
     fn debug_paint(&self, _canvas: &mut Canvas, _geometry: &dyn Any) {
         // Override for custom debug visualization
     }
 
-    // ============================================================================
-    // FLUTTER SIZED-BY-PARENT OPTIMIZATION
-    // ============================================================================
+    // ========================================================================
+    // LAYOUT CONFIGURATION
+    // ========================================================================
 
-    /// Whether size is determined solely by constraints (Flutter sizedByParent).
+    /// Whether size is determined solely by constraints.
     ///
-    /// If `true`, framework separates layout into:
-    /// 1. Resize phase: `perform_resize()` with constraints only
-    /// 2. Layout phase: position children
+    /// If `true`, the framework can optimize layout by:
+    /// 1. Computing size in `perform_resize()` using only constraints
+    /// 2. Skipping child layout if constraints unchanged
+    ///
+    /// Return `true` when:
+    /// - Size doesn't depend on children (e.g., `SizedBox`)
+    /// - Size is always `constraints.biggest()` or `constraints.smallest()`
+    ///
+    /// # Flutter Equivalence
+    /// ```dart
+    /// bool get sizedByParent => false;
+    /// ```
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// // SizedBox always returns true
+    /// fn sized_by_parent(&self) -> bool { true }
+    ///
+    /// // Container returns false (depends on child)
+    /// fn sized_by_parent(&self) -> bool { false }
+    /// ```
     fn sized_by_parent(&self) -> bool {
         false
     }
 
-    // ============================================================================
-    // TREE TRAVERSAL
-    // ============================================================================
+    // ========================================================================
+    // COMPOSITING CONFIGURATION
+    // ========================================================================
 
-    /// Visits all immediate children (Flutter visitChildren).
+    /// Whether this is a repaint boundary.
     ///
-    /// Note: This is for generic tree operations. Layout/paint use
-    /// the arity-based children accessor from contexts.
-    fn visit_children(&self, _visitor: &mut dyn FnMut(RenderId)) {
-        // Default: no children (Leaf)
-    }
-
-    /// Counts immediate children.
-    fn child_count(&self) -> usize {
-        let mut count = 0;
-        self.visit_children(&mut |_| count += 1);
-        count
-    }
-
-    // ============================================================================
-    // BOUNDARY FLAGS
-    // ============================================================================
-
-    /// Whether this is a relayout boundary (stops layout propagation).
-    fn is_relayout_boundary(&self) -> bool {
-        false
-    }
-
-    /// Whether this is a repaint boundary (enables layer caching).
+    /// Repaint boundaries create their own compositing layer, enabling:
+    /// - Paint caching (unchanged subtrees skip repainting)
+    /// - Isolated repainting (changes don't propagate to parent)
+    ///
+    /// Return `true` for:
+    /// - Root render objects
+    /// - Frequently animating content
+    /// - Expensive-to-paint subtrees
+    ///
+    /// # Flutter Equivalence
+    /// ```dart
+    /// bool get isRepaintBoundary => false;
+    /// ```
+    ///
+    /// # Performance Note
+    ///
+    /// Repaint boundaries have memory overhead (layer allocation).
+    /// Use sparingly - only where paint isolation provides real benefit.
     fn is_repaint_boundary(&self) -> bool {
         false
     }
 
     /// Whether this render object always needs compositing.
+    ///
+    /// Return `true` if this render object uses GPU features that require
+    /// a compositing layer regardless of children:
+    /// - Video playback
+    /// - Platform views
+    /// - Hardware-accelerated effects
+    ///
+    /// # Flutter Equivalence
+    /// ```dart
+    /// bool get alwaysNeedsCompositing => false;
+    /// ```
     fn always_needs_compositing(&self) -> bool {
         false
     }
 
-    /// Returns whether this render object currently needs compositing.
-    fn needs_compositing(&self) -> bool {
-        self.always_needs_compositing()
-    }
-
-    // ============================================================================
+    // ========================================================================
     // INTERACTION
-    // ============================================================================
+    // ========================================================================
+
+    // Note: handle_event() is inherited from HitTestTarget supertrait
 
     /// Whether this render object handles pointer events.
+    ///
+    /// If `true`, hit testing will consider this object for pointer events.
     fn handles_pointer_events(&self) -> bool {
         false
     }
 
     /// Returns the mouse cursor for this render object.
+    ///
+    /// # Flutter Equivalence
+    /// ```dart
+    /// MouseCursor get cursor => MouseCursor.defer;
+    /// ```
     fn cursor(&self) -> MouseCursor {
         MouseCursor::Defer
     }
 
-    // ============================================================================
-    // TRANSFORM METHODS (Flutter Protocol)
-    // ============================================================================
+    // ========================================================================
+    // TRANSFORMS
+    // ========================================================================
 
-    /// Applies the transform for painting a child to the given transform matrix.
+    /// Applies the transform for painting a child.
     ///
-    /// This method is called by `RenderTree::get_transform_to()` when computing
-    /// coordinate transforms between render objects. Override this to apply custom
-    /// transformations (rotation, scale, perspective, etc.) to children.
+    /// Override to apply custom transformations (rotation, scale, etc.).
+    /// The default implementation applies translation based on child's offset.
     ///
     /// # Flutter Equivalence
-    ///
     /// ```dart
     /// void applyPaintTransform(RenderObject child, Matrix4 transform) {
     ///   final BoxParentData childParentData = child.parentData as BoxParentData;
-    ///   final Offset offset = childParentData.offset;
-    ///   transform.translate(offset.dx, offset.dy);
+    ///   transform.translate(childParentData.offset.dx, childParentData.offset.dy);
     /// }
     /// ```
-    ///
-    /// # Default Implementation
-    ///
-    /// The default implementation applies only translation based on the child's
-    /// offset from parent data. Render objects that apply additional transforms
-    /// (e.g., `RenderTransform`, `RenderRotation`) should override this method.
     ///
     /// # Arguments
     ///
     /// * `child_id` - ID of the child render object
-    /// * `transform` - Transform matrix to modify (in-place)
-    /// * `tree` - Tree for accessing parent data and offsets
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// // Custom transform with rotation
-    /// fn apply_paint_transform(
-    ///     &self,
-    ///     child_id: RenderId,
-    ///     transform: &mut Matrix4,
-    ///     tree: &dyn HitTestTree,
-    /// ) {
-    ///     // Apply translation (default behavior)
-    ///     if let Some(offset) = tree.get_offset(child_id) {
-    ///         *transform = Matrix4::translation(offset.dx, offset.dy, 0.0) * *transform;
-    ///     }
-    ///
-    ///     // Apply rotation around center
-    ///     let rotation = Matrix4::rotation_z(self.angle);
-    ///     *transform = rotation * *transform;
-    /// }
-    /// ```
+    /// * `transform` - Transform matrix to modify in-place
+    /// * `tree` - Tree for accessing child's offset
     fn apply_paint_transform(
         &self,
         child_id: RenderId,
         transform: &mut Matrix4,
         tree: &dyn HitTestTree,
     ) {
-        // Default: Apply translation based on child's offset
         if let Some(offset) = tree.get_offset(child_id) {
             *transform = Matrix4::translation(offset.dx, offset.dy, 0.0) * *transform;
         }
     }
 
-    /// Gets the transform from this render object to the given ancestor.
-    ///
-    /// **Deprecated**: This trait method is no longer used. Use `RenderTree::get_transform_to()`
-    /// instead, which implements the full Flutter protocol with proper ancestor path building.
-    ///
-    /// # Migration
-    ///
-    /// ```rust,ignore
-    /// // Old (trait method):
-    /// let transform = obj.get_transform_to(id, ancestor, tree)?;
-    ///
-    /// // New (tree method):
-    /// let transform = tree.get_transform_to(id, ancestor)?;
-    /// ```
-    fn get_transform_to(
-        &self,
-        _element_id: RenderId,
-        _ancestor: Option<RenderId>,
-        _tree: &dyn HitTestTree,
-    ) -> Option<Matrix4> {
-        // Stub: Use RenderTree::get_transform_to() instead
-        Some(Matrix4::identity())
-    }
-
-    /// Converts a point from global coordinates to local coordinates.
-    fn global_to_local(&self, global_point: Offset, _tree: &dyn HitTestTree) -> Offset {
-        global_point
-    }
-
-    /// Converts a point from local coordinates to global coordinates.
-    fn local_to_global(&self, local_point: Offset, _tree: &dyn HitTestTree) -> Offset {
-        local_point
-    }
-
-    // ============================================================================
-    // HIT TEST HELPERS
-    // ============================================================================
-
-    /// Helper to hit test a child with proper transform handling.
-    fn hit_test_child(
-        &self,
-        child_id: RenderId,
-        position: Offset,
-        result: &mut HitTestResult,
-        tree: &dyn HitTestTree,
-    ) -> bool {
-        let mut transform = Matrix4::identity();
-        self.apply_paint_transform(child_id, &mut transform, tree);
-
-        let child_position = if let Some(inverse) = transform.try_inverse() {
-            let point = inverse.transform_point(position.dx, position.dy);
-            Offset::new(point.0, point.1)
-        } else {
-            return false;
-        };
-
-        let guard = result.push_transform(transform);
-        let hit = tree.hit_test(child_id, child_position, result);
-        result.pop_to_depth(guard);
-
-        hit
-    }
-
-    /// Helper to hit test a child with only offset (no rotation/scale).
-    fn hit_test_child_with_offset(
-        &self,
-        child_id: RenderId,
-        position: Offset,
-        child_offset: Offset,
-        result: &mut HitTestResult,
-        tree: &dyn HitTestTree,
-    ) -> bool {
-        let child_position = position - child_offset;
-        let guard = result.push_offset(child_offset);
-        let hit = tree.hit_test(child_id, child_position, result);
-        result.pop_to_depth(guard);
-        hit
-    }
-
-    // ============================================================================
-    // SEMANTICS / ACCESSIBILITY
-    // ============================================================================
-
-    /// Describes the semantic properties for accessibility.
-    fn describe_semantics(&self) -> Option<SemanticsProperties> {
-        None
-    }
-
-    /// Returns the set of semantic actions this render object supports.
-    fn semantics_actions(&self) -> &[SemanticsAction] {
-        &[]
-    }
-
-    /// Performs a semantic action triggered by accessibility services.
-    fn perform_semantics_action(&mut self, _action: SemanticsAction) -> bool {
-        false
-    }
-
-    /// Returns whether this render object is a semantics boundary.
-    fn is_semantics_boundary(&self) -> bool {
-        false
-    }
-
-    /// Returns whether this render object blocks semantics from its children.
-    fn blocks_child_semantics(&self) -> bool {
-        false
-    }
-
-    // ============================================================================
+    // ========================================================================
     // PARENT DATA
-    // ============================================================================
+    // ========================================================================
 
-    /// Creates default ParentData for a child of this render object.
+    /// Creates default parent data for children.
     ///
-    /// This is called by `setup_parent_data()` when the child has no parent data
-    /// or has parent data of the wrong type.
+    /// Override to return custom parent data type for your children.
     ///
     /// # Flutter Equivalence
-    ///
     /// ```dart
-    /// ParentData createParentData() {
-    ///   return BoxParentData();
+    /// void setupParentData(RenderObject child) {
+    ///   if (child.parentData is! BoxParentData)
+    ///     child.parentData = BoxParentData();
+    /// }
+    /// ```
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// // For Stack (uses StackParentData)
+    /// fn create_parent_data(&self) -> Box<dyn ParentData> {
+    ///     Box::new(StackParentData::default())
+    /// }
+    ///
+    /// // For Flex (uses FlexParentData)
+    /// fn create_parent_data(&self) -> Box<dyn ParentData> {
+    ///     Box::new(FlexParentData::default())
     /// }
     /// ```
     fn create_parent_data(&self) -> Box<dyn crate::ParentData> {
         Box::new(crate::BoxParentData::default())
     }
 
-    /// Sets up the parent data for a child of this render object.
+    /// Sets up parent data for a child.
     ///
-    /// This method is called when a child is adopted by this render object.
-    /// It ensures the child has the correct type of parent data for this parent.
+    /// Returns `Some(new_data)` if parent data needs to be replaced,
+    /// `None` if existing data is acceptable.
     ///
-    /// The default implementation:
-    /// 1. If child has no parent data, creates new parent data via `create_parent_data()`
-    /// 2. If child has wrong type of parent data, replaces it with correct type
-    /// 3. Otherwise, keeps existing parent data
+    /// # Arguments
     ///
-    /// Override this method only if you need custom parent data setup logic.
+    /// * `child_data` - Current parent data on the child (if any)
     ///
-    /// # Flutter Equivalence
+    /// # Returns
     ///
-    /// ```dart
-    /// void setupParentData(covariant RenderObject child) {
-    ///   if (child.parentData is! BoxParentData) {
-    ///     child.parentData = BoxParentData();
-    ///   }
-    /// }
-    /// ```
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// // In RenderStack
-    /// fn setup_parent_data(&self, child_data: Option<&dyn ParentData>) -> Option<Box<dyn ParentData>> {
-    ///     match child_data {
-    ///         Some(data) if data.is::<StackParentData>() => None, // Already correct type
-    ///         _ => Some(Box::new(StackParentData::default())), // Need to create/replace
-    ///     }
-    /// }
-    /// ```
-    fn setup_parent_data(&self, child_data: Option<&dyn crate::ParentData>) -> Option<Box<dyn crate::ParentData>> {
-        // Default implementation: create new parent data if missing
+    /// * `Some(Box<dyn ParentData>)` - Replace with this new data
+    /// * `None` - Keep existing data
+    fn setup_parent_data(
+        &self,
+        child_data: Option<&dyn crate::ParentData>,
+    ) -> Option<Box<dyn crate::ParentData>> {
         match child_data {
-            Some(_) => None, // Keep existing parent data
-            None => Some(self.create_parent_data()), // Create new parent data
+            Some(_) => None,                         // Keep existing
+            None => Some(self.create_parent_data()), // Create new
         }
     }
 
-    // ============================================================================
-    // LAYER MANAGEMENT
-    // ============================================================================
+    // ========================================================================
+    // LIFECYCLE HOOKS
+    // ========================================================================
 
-    /// Returns the compositing layer for this render object, if any.
-    fn layer(&self) -> Option<&LayerHandle> {
-        None
-    }
-
-    /// Sets the compositing layer for this render object.
-    fn set_layer(&mut self, _layer: Option<LayerHandle>) {
-        // Default: no-op
-    }
-
-    /// Called to update the composited layer before paint.
-    fn update_composited_layer(&mut self, _offset: Offset) {
-        // Default: no-op
-    }
-
-    /// Drops the layer and releases associated GPU resources.
-    fn drop_layer(&mut self) {
-        self.set_layer(None);
-    }
-
-    // ============================================================================
-    // LIFECYCLE (Flutter Protocol)
-    // ============================================================================
-
-    /// Called when this render object is attached to a render tree.
+    /// Called when this render object is attached to a tree.
     ///
-    /// This is called by `RenderTree::add_child()` when the node is added to the tree.
-    /// Override to perform initialization that requires being in the tree
-    /// (e.g., registering for dirty tracking with PipelineOwner).
-    ///
-    /// **Important**: This is called for both the node being added AND all its descendants.
+    /// Override to perform initialization that requires tree membership.
     ///
     /// # Flutter Equivalence
-    ///
     /// ```dart
     /// void attach(PipelineOwner owner) {
-    ///   _owner = owner;
-    ///
-    ///   // Re-register dirty flags with owner
-    ///   if (_needsLayout && _isRelayoutBoundary != null) {
-    ///     _needsLayout = false;
-    ///     markNeedsLayout();
-    ///   }
-    ///   if (_needsPaint && _layerHandle.layer != null) {
-    ///     _needsPaint = false;
-    ///     markNeedsPaint();
-    ///   }
-    ///   if (_needsCompositingBitsUpdate) {
-    ///     _needsCompositingBitsUpdate = false;
-    ///     markNeedsCompositingBitsUpdate();
-    ///   }
-    /// }
-    /// ```
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// fn attach(&mut self) {
-    ///     // Custom initialization logic
-    ///     tracing::debug!("RenderBox attached to tree");
+    ///   super.attach(owner);
+    ///   // custom initialization
     /// }
     /// ```
     fn attach(&mut self) {
-        // Default: no-op
-        // Override to perform initialization when added to tree
+        // Override for custom initialization
     }
 
-    /// Called when this render object is detached from the render tree.
+    /// Called when this render object is detached from a tree.
     ///
-    /// This is called by `RenderTree::remove_child()` when the node is removed from the tree.
-    /// Override to perform cleanup that requires being in the tree
-    /// (e.g., unregistering from PipelineOwner, releasing resources).
-    ///
-    /// **Important**: This is called for both the node being removed AND all its descendants.
-    ///
-    /// The default implementation calls `drop_layer()` to release GPU resources.
+    /// Override to perform cleanup when removed from tree.
     ///
     /// # Flutter Equivalence
-    ///
     /// ```dart
     /// void detach() {
-    ///   _owner = null;
-    ///   // Dirty flags remain set so they can be re-registered on re-attach
-    /// }
-    /// ```
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// fn detach(&mut self) {
-    ///     // Custom cleanup logic
-    ///     self.cancel_animations();
-    ///
-    ///     // Call default to drop layers
-    ///     self.drop_layer();
+    ///   // custom cleanup
+    ///   super.detach();
     /// }
     /// ```
     fn detach(&mut self) {
-        // Default: drop compositing layers to release GPU resources
-        self.drop_layer();
+        // Override for custom cleanup
     }
 
-    /// Called when the render object adopts a child.
+    /// Called when a child is adopted.
     ///
-    /// This is called by `RenderTree::add_child()` on the parent when a child is added.
-    /// Use this to perform parent-specific child setup or tracking.
-    ///
-    /// **Note**: Parent data setup is handled separately by `setup_parent_data()`.
+    /// Override to track children or perform custom setup.
     ///
     /// # Flutter Equivalence
-    ///
     /// ```dart
     /// void adoptChild(RenderObject child) {
-    ///   setupParentData(child);
-    ///   markNeedsLayout();
-    ///   markNeedsCompositingBitsUpdate();
-    ///   markNeedsSemanticsUpdate();
-    ///   child._parent = this;
-    ///   if (attached) child.attach(_owner!);
-    ///   redepthChild(child);
-    /// }
-    /// ```
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// fn adopt_child(&mut self, child_id: RenderId) {
-    ///     // Track child in custom data structure
-    ///     self.child_ids.push(child_id);
+    ///   // custom tracking
+    ///   super.adoptChild(child);
     /// }
     /// ```
     fn adopt_child(&mut self, _child_id: RenderId) {
-        // Default: no-op
-        // Override to track children or perform custom child setup
+        // Override for custom child tracking
     }
 
-    /// Called when the render object drops a child.
+    /// Called when a child is dropped.
     ///
-    /// This is called by `RenderTree::remove_child()` on the parent when a child is removed.
-    /// Use this to perform parent-specific child cleanup or tracking.
+    /// Override to untrack children or perform custom cleanup.
     ///
     /// # Flutter Equivalence
-    ///
     /// ```dart
     /// void dropChild(RenderObject child) {
-    ///   child.parentData!.detach();
-    ///   child.parentData = null;
-    ///   child._parent = null;
-    ///   if (attached) child.detach();
-    ///   markNeedsLayout();
-    ///   markNeedsCompositingBitsUpdate();
-    ///   markNeedsSemanticsUpdate();
-    /// }
-    /// ```
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// fn drop_child(&mut self, child_id: RenderId) {
-    ///     // Remove child from tracking
-    ///     self.child_ids.retain(|&id| id != child_id);
+    ///   // custom cleanup
+    ///   super.dropChild(child);
     /// }
     /// ```
     fn drop_child(&mut self, _child_id: RenderId) {
-        // Default: no-op
-        // Override to untrack children or perform custom child cleanup
+        // Override for custom child cleanup
+    }
+
+    // ========================================================================
+    // SEMANTICS / ACCESSIBILITY
+    // ========================================================================
+
+    /// Describes semantic properties for accessibility.
+    ///
+    /// Return semantic information (label, hint, actions) for screen readers.
+    fn describe_semantics(&self) -> Option<SemanticsProperties> {
+        None
+    }
+
+    /// Returns semantic actions this render object supports.
+    fn semantics_actions(&self) -> &[SemanticsAction] {
+        &[]
+    }
+
+    /// Performs a semantic action.
+    ///
+    /// Returns `true` if action was handled.
+    fn perform_semantics_action(&mut self, _action: SemanticsAction) -> bool {
+        false
+    }
+
+    /// Whether this is a semantics boundary.
+    ///
+    /// Semantics boundaries create new semantics nodes in the accessibility tree.
+    fn is_semantics_boundary(&self) -> bool {
+        false
+    }
+
+    /// Whether this blocks semantics from children.
+    fn blocks_child_semantics(&self) -> bool {
+        false
+    }
+
+    // ========================================================================
+    // BOX PROTOCOL (dyn-compatible)
+    // ========================================================================
+
+    /// Performs layout using box protocol constraints.
+    ///
+    /// Returns `Some(size)` if this render object supports box protocol,
+    /// `None` otherwise. This allows dyn-safe dispatch without generics.
+    ///
+    /// # Flutter Protocol
+    /// This corresponds to `performLayout()` in `RenderBox`.
+    fn perform_box_layout(
+        &mut self,
+        _constraints: crate::BoxConstraints,
+    ) -> Option<flui_types::Size> {
+        None // Default: not a box render object
+    }
+
+    /// Performs paint using box protocol.
+    ///
+    /// Returns `true` if paint was performed, `false` if not a box render object.
+    fn perform_box_paint(
+        &self,
+        _ctx: &mut crate::PaintingContext,
+        _offset: flui_types::Offset,
+    ) -> bool {
+        false // Default: not a box render object
+    }
+
+    /// Performs hit testing using box protocol.
+    ///
+    /// Returns `Some(hit)` if this render object supports box protocol,
+    /// `None` otherwise.
+    fn perform_box_hit_test(
+        &self,
+        _result: &mut crate::BoxHitTestResult,
+        _position: flui_types::Offset,
+    ) -> Option<bool> {
+        None // Default: not a box render object
+    }
+
+    /// Returns the size of a box render object.
+    ///
+    /// Returns `Some(size)` if this is a box render object that has been laid out,
+    /// `None` otherwise.
+    fn box_size(&self) -> Option<flui_types::Size> {
+        None
+    }
+
+    /// Returns whether this render object supports box protocol.
+    fn supports_box_protocol(&self) -> bool {
+        false
+    }
+
+    // ========================================================================
+    // SLIVER PROTOCOL (dyn-compatible)
+    // ========================================================================
+
+    /// Performs layout using sliver protocol constraints.
+    ///
+    /// Returns `Some(geometry)` if this render object supports sliver protocol,
+    /// `None` otherwise.
+    fn perform_sliver_layout(
+        &mut self,
+        _constraints: flui_types::SliverConstraints,
+    ) -> Option<flui_types::SliverGeometry> {
+        None // Default: not a sliver render object
+    }
+
+    /// Returns whether this render object supports sliver protocol.
+    fn supports_sliver_protocol(&self) -> bool {
+        false
     }
 }
 
@@ -660,36 +547,85 @@ mod tests {
     use super::*;
 
     #[derive(Debug)]
-    struct TestRenderObject;
+    struct TestRenderObject {
+        sized_by_parent: bool,
+        is_repaint_boundary: bool,
+    }
+
+    impl Default for TestRenderObject {
+        fn default() -> Self {
+            Self {
+                sized_by_parent: false,
+                is_repaint_boundary: false,
+            }
+        }
+    }
+
+    impl Diagnosticable for TestRenderObject {}
+
+    impl HitTestTarget for TestRenderObject {
+        fn handle_event(
+            &self,
+            _event: &flui_types::events::PointerEvent,
+            _entry: &flui_interaction::HitTestEntry,
+        ) {
+        }
+    }
 
     impl RenderObject for TestRenderObject {
         fn debug_name(&self) -> &'static str {
             "TestRenderObject"
         }
+
+        fn sized_by_parent(&self) -> bool {
+            self.sized_by_parent
+        }
+
+        fn is_repaint_boundary(&self) -> bool {
+            self.is_repaint_boundary
+        }
     }
 
     #[test]
     fn test_debug_name() {
-        let obj = TestRenderObject;
+        let obj = TestRenderObject::default();
         assert_eq!(obj.debug_name(), "TestRenderObject");
     }
 
     #[test]
-    fn test_default_flags() {
-        let obj = TestRenderObject;
+    fn test_default_configuration() {
+        let obj = TestRenderObject::default();
         assert!(!obj.sized_by_parent());
-        assert!(!obj.is_relayout_boundary());
         assert!(!obj.is_repaint_boundary());
         assert!(!obj.always_needs_compositing());
         assert!(!obj.handles_pointer_events());
+        assert!(!obj.is_semantics_boundary());
+    }
+
+    #[test]
+    fn test_custom_configuration() {
+        let obj = TestRenderObject {
+            sized_by_parent: true,
+            is_repaint_boundary: true,
+        };
+        assert!(obj.sized_by_parent());
+        assert!(obj.is_repaint_boundary());
     }
 
     #[test]
     fn test_downcast() {
-        let obj: Box<dyn RenderObject> = Box::new(TestRenderObject);
+        let obj: Box<dyn RenderObject> = Box::new(TestRenderObject::default());
         assert!(obj.as_any().downcast_ref::<TestRenderObject>().is_some());
     }
 
-    // Test removed: LayerRef replaced with flui_layer::LayerHandle
+    #[test]
+    fn test_create_parent_data() {
+        let obj = TestRenderObject::default();
+        let parent_data = obj.create_parent_data();
+        // Default creates BoxParentData
+        assert!(parent_data
+            .as_any()
+            .downcast_ref::<crate::BoxParentData>()
+            .is_some());
+    }
 }
-

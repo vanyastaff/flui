@@ -61,10 +61,10 @@
 //! ```
 
 mod child;
-mod children;
+mod multi;
 mod slots;
 
 // Re-export all types
-pub use child::{Child, BoxChild, SliverChild};
-pub use children::{Children, BoxChildren, SliverChildren};
-pub use slots::{Slots, BoxSlots, SliverSlots, SlotKey};
+pub use child::{BoxChild, Child, SliverChild};
+pub use multi::{BoxChildren, Children, SliverChildren};
+pub use slots::{BoxSlots, SliverSlots, SlotKey, Slots};

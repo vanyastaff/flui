@@ -161,6 +161,7 @@
 
 // Core modules
 pub mod canvas;
+pub mod clip_context;
 pub mod display_list;
 pub mod error;
 
@@ -172,6 +173,7 @@ pub mod error;
 
 // Primary API types
 pub use canvas::Canvas;
+pub use clip_context::ClipContext;
 pub use display_list::{
     DisplayList, DisplayListCore, DisplayListExt, DisplayListStats, DrawCommand, HitRegion,
     HitRegionHandler,

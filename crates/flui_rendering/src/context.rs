@@ -342,7 +342,9 @@ where
         constraints: BoxConstraints,
         parent_uses_size: bool,
     ) -> RenderResult<Size> {
-        let result = self.tree.perform_layout(child_id, constraints, parent_uses_size);
+        let result = self
+            .tree
+            .perform_layout(child_id, constraints, parent_uses_size);
         if let Ok(size) = &result {
             trace!(width = %size.width, height = %size.height, "child layout complete");
         }
@@ -384,7 +386,9 @@ where
             return Ok(None);
         }
 
-        let size = self.tree.perform_layout(child_id, constraints, parent_uses_size)?;
+        let size = self
+            .tree
+            .perform_layout(child_id, constraints, parent_uses_size)?;
         trace!(width = %size.width, height = %size.height, "child layout complete");
         Ok(Some(size))
     }
@@ -487,7 +491,9 @@ where
         constraints: SliverConstraints,
         parent_uses_size: bool,
     ) -> RenderResult<SliverGeometry> {
-        let result = self.tree.perform_sliver_layout(child_id, constraints, parent_uses_size);
+        let result = self
+            .tree
+            .perform_sliver_layout(child_id, constraints, parent_uses_size);
         if let Ok(geometry) = &result {
             trace!(
                 scroll_extent = %geometry.scroll_extent,
@@ -514,7 +520,9 @@ where
             return Ok(None);
         }
 
-        let geometry = self.tree.perform_sliver_layout(child_id, constraints, parent_uses_size)?;
+        let geometry = self
+            .tree
+            .perform_sliver_layout(child_id, constraints, parent_uses_size)?;
         trace!(
             scroll_extent = %geometry.scroll_extent,
             paint_extent = %geometry.paint_extent,
@@ -1064,8 +1072,7 @@ where
 
     /// Adds this element to the hit test result.
     pub fn hit_test_self(&self, result: &mut HitTestResult) -> bool {
-        let bounds = Rect::from_min_size(Offset::ZERO, self.geometry);
-        let entry = HitTestEntry::new(self.element_id, self.position, bounds);
+        let entry = HitTestEntry::new(self.element_id);
         result.add(entry);
         true
     }
@@ -1118,9 +1125,7 @@ where
     ///
     /// For slivers, uses the paint extent for bounds.
     pub fn hit_test_self(&self, result: &mut HitTestResult) -> bool {
-        // For slivers, use paint extent for bounds calculation
-        let bounds = Rect::from_ltwh(0.0, 0.0, 0.0, self.geometry.paint_extent);
-        let entry = HitTestEntry::new(self.element_id, self.position, bounds);
+        let entry = HitTestEntry::new(self.element_id);
         result.add(entry);
         true
     }

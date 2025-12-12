@@ -3,33 +3,41 @@
 //! This module provides the foundational traits for the interaction system,
 //! using Rust's advanced type features:
 //!
-//! - **Sealed traits**: External crates can use but not implement
 //! - **GATs**: Generic Associated Types for flexible callbacks
 //! - **Extension traits**: Add methods to foreign types
 //! - **Marker traits**: Compile-time constraints
 
 use crate::ids::PointerId;
+use crate::routing::HitTestEntry;
 use flui_types::events::PointerEvent;
 use flui_types::geometry::Offset;
 
 // ============================================================================
-// HitTestTarget trait with sealed pattern
+// HitTestTarget trait
 // ============================================================================
 
-/// Marker trait for types that can be hit test targets.
+/// Trait for types that can be hit test targets.
 ///
-/// This is a sealed trait - only types in this crate can implement it.
-/// External code can work with `dyn HitTestTarget` but cannot add new targets.
-pub trait HitTestTarget: sealed::HitTestTargetSealed + Send + Sync {
+/// Any render object that can receive pointer events should implement this trait.
+/// This follows Flutter's `HitTestTarget` interface exactly.
+///
+/// # Flutter Equivalence
+/// ```dart
+/// abstract interface class HitTestTarget {
+///   void handleEvent(PointerEvent event, HitTestEntry<HitTestTarget> entry);
+/// }
+/// ```
+pub trait HitTestTarget: Send + Sync {
     /// Handles a pointer event dispatched to this target.
     ///
-    /// Returns `true` if the event was handled and should not propagate further.
-    fn handle_event(&self, event: &PointerEvent) -> bool;
-
-    /// Returns the element ID of this target, if it has one.
-    fn element_id(&self) -> Option<flui_foundation::ElementId> {
-        None
-    }
+    /// Called when a pointer event should be delivered to this target.
+    /// The `entry` contains the hit test result including local position
+    /// and transform information.
+    ///
+    /// # Arguments
+    /// * `event` - The pointer event to handle
+    /// * `entry` - The hit test entry containing position and transform info
+    fn handle_event(&self, event: &PointerEvent, entry: &HitTestEntry);
 }
 
 // ============================================================================
@@ -189,26 +197,12 @@ pub trait Disposable {
 }
 
 // ============================================================================
-// Sealed trait implementations
+// HitTestTarget implementations for wrapper types
 // ============================================================================
 
-mod sealed {
-    /// Sealed trait for `HitTestTarget`.
-    pub trait HitTestTargetSealed {}
-
-    // Implement for standard library types if needed
-    // impl HitTestTargetSealed for MyTarget {}
-}
-
-// Allow implementing HitTestTarget for Box<dyn HitTestTarget>
-impl<T: HitTestTarget + ?Sized> sealed::HitTestTargetSealed for Box<T> {}
 impl<T: HitTestTarget + ?Sized> HitTestTarget for Box<T> {
-    fn handle_event(&self, event: &PointerEvent) -> bool {
-        (**self).handle_event(event)
-    }
-
-    fn element_id(&self) -> Option<flui_foundation::ElementId> {
-        (**self).element_id()
+    fn handle_event(&self, event: &PointerEvent, entry: &HitTestEntry) {
+        (**self).handle_event(event, entry)
     }
 }
 

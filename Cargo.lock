@@ -1151,22 +1151,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "flui-objects"
-version = "0.1.0"
-dependencies = [
- "criterion",
- "flui-foundation",
- "flui-tree",
- "flui_interaction",
- "flui_painting",
- "flui_rendering",
- "flui_types",
- "parking_lot",
- "serde",
- "tracing",
-]
-
-[[package]]
 name = "flui-pipeline"
 version = "0.1.0"
 dependencies = [
@@ -1367,7 +1351,6 @@ dependencies = [
  "criterion",
  "flui-element",
  "flui-foundation",
- "flui-objects",
  "flui-pipeline",
  "flui-reactivity",
  "flui-scheduler",
@@ -1477,6 +1460,7 @@ dependencies = [
  "downcast-rs 2.0.2",
  "flui-foundation",
  "flui-layer",
+ "flui-semantics",
  "flui-tree",
  "flui_interaction",
  "flui_painting",
@@ -1507,7 +1491,6 @@ version = "0.1.0"
 dependencies = [
  "bon",
  "flui-foundation",
- "flui-objects",
  "flui-scheduler",
  "flui-view",
  "flui_animation",

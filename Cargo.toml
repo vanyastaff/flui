@@ -14,8 +14,8 @@ members = [
     "crates/flui_log",          # Cross-platform logging
     "crates/flui_core",         # Core with foundation utilities
     "crates/flui_rendering",
-    "crates/flui-objects",      # Concrete RenderObject implementations
-    "crates/flui_widgets",
+    # "crates/flui-objects",      # Concrete RenderObject implementations (temporarily disabled)
+    # "crates/flui_widgets",      # (temporarily disabled - depends on flui-objects)
     "crates/flui_app",
     "crates/flui_painting",
     "crates/flui_engine",       # Rendering engine - Layer/Scene/Painter

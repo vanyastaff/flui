@@ -1,274 +1,212 @@
-//! Error types for flui_rendering
+//! Error types for the rendering system
 //!
-//! This module defines error types for rendering operations including layout failures,
-//! paint errors, and parent data issues.
-//!
-//! # Tracing Integration
-//!
-//! All error creation methods automatically emit tracing events at the appropriate level,
-//! providing observability without requiring manual logging at call sites.
+//! Provides structured error handling instead of panics for recoverable errors.
 
-use flui_foundation::ElementId;
-use std::borrow::Cow;
-use thiserror::Error;
-use tracing::{error, warn};
+use crate::RenderId;
+use std::fmt;
 
-/// Rendering-specific error type
-///
-/// All fallible rendering operations return `Result<T, RenderError>`.
-#[derive(Error, Debug, Clone)]
+/// Result type for rendering operations
+pub type RenderResult<T> = Result<T, RenderError>;
+
+/// Errors that can occur during rendering operations
+#[derive(Debug, Clone)]
 pub enum RenderError {
-    /// Layout computation failed
-    #[error("Layout failed for {render_object}: {reason}")]
+    /// Layout operation failed
     LayoutFailed {
-        /// Render object type name
+        /// Name of the render object type
         render_object: &'static str,
-        /// Failure reason
-        reason: Cow<'static, str>,
+        /// Reason for the failure
+        reason: String,
     },
 
     /// Paint operation failed
-    #[error("Paint failed for {render_object}: {reason}")]
     PaintFailed {
-        /// Render object type name
+        /// Name of the render object type
         render_object: &'static str,
-        /// Failure reason
-        reason: Cow<'static, str>,
+        /// Reason for the failure
+        reason: String,
     },
 
-    /// Invalid parent data
-    #[error("Invalid parent data: expected {expected}, got {actual}")]
-    InvalidParentData {
-        /// Expected parent data type
-        expected: &'static str,
-        /// Actual parent data type
-        actual: &'static str,
-    },
-
-    /// Constraint violation
-    #[error("Constraint violation: {details}")]
+    /// Layout constraints could not be satisfied
     ConstraintViolation {
-        /// Violation details
-        details: Cow<'static, str>,
-    },
-
-    /// Element not found
-    #[error("Element not found: {0:?}")]
-    ElementNotFound(ElementId),
-
-    /// Not a render element
-    #[error("Element {0:?} is not a render element")]
-    NotRenderElement(ElementId),
-
-    /// Hit test failed
-    #[error("Hit test failed: {reason}")]
-    HitTestFailed {
-        /// Failure reason
-        reason: Cow<'static, str>,
-    },
-
-    /// Unsupported protocol
-    #[error("Unsupported protocol: expected {expected}, found {found}")]
-    UnsupportedProtocol {
-        /// Expected protocol
-        expected: &'static str,
-        /// Found protocol
-        found: &'static str,
-    },
-
-    /// Protocol mismatch (dynamic protocol detection)
-    #[error("Protocol mismatch: expected {expected}, got {actual}")]
-    ProtocolMismatch {
-        /// Expected protocol
+        /// Description of what was expected
         expected: String,
-        /// Actual protocol
+        /// Description of what was actually received
         actual: String,
     },
 
-    /// Generic layout error (for simple error messages)
-    #[error("Layout error: {0}")]
-    Layout(String),
+    /// A child's layout failed
+    ChildLayoutFailed {
+        /// ID of the child that failed
+        child_id: RenderId,
+        /// The underlying error message
+        message: String,
+    },
 
-    /// Arity validation error (child count constraints)
-    #[error("Arity error: {0}")]
-    Arity(#[from] flui_tree::ArityError),
+    /// The render object is in an invalid state for the requested operation
+    InvalidState {
+        /// Description of the invalid state
+        message: String,
+    },
+
+    /// The requested node was not found in the tree
+    NodeNotFound {
+        /// ID of the missing node
+        id: RenderId,
+    },
+
+    /// Element was not found
+    ElementNotFound {
+        /// Description
+        message: String,
+    },
+
+    /// Element is not a render element
+    NotARenderElement {
+        /// Description
+        message: String,
+    },
+
+    /// Protocol not supported
+    UnsupportedProtocol {
+        /// Expected protocol
+        expected: &'static str,
+        /// Actual protocol (if known)
+        actual: String,
+    },
+
+    /// Parent data type mismatch
+    ParentDataMismatch {
+        /// Expected type name
+        expected: &'static str,
+        /// Actual type name (if known)
+        actual: String,
+    },
+
+    /// A layer operation failed
+    LayerError {
+        /// Description of the layer error
+        message: String,
+    },
 }
 
-/// Result type for rendering operations
-pub type Result<T> = std::result::Result<T, RenderError>;
+impl fmt::Display for RenderError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::LayoutFailed {
+                render_object,
+                reason,
+            } => {
+                write!(f, "Layout failed for {}: {}", render_object, reason)
+            }
+            Self::PaintFailed {
+                render_object,
+                reason,
+            } => {
+                write!(f, "Paint failed for {}: {}", render_object, reason)
+            }
+            Self::ConstraintViolation { expected, actual } => {
+                write!(
+                    f,
+                    "Constraint violation: expected {}, got {}",
+                    expected, actual
+                )
+            }
+            Self::ChildLayoutFailed { child_id, message } => {
+                write!(f, "Child layout failed (id={:?}): {}", child_id, message)
+            }
+            Self::InvalidState { message } => {
+                write!(f, "Invalid render state: {}", message)
+            }
+            Self::NodeNotFound { id } => {
+                write!(f, "Render node not found: {:?}", id)
+            }
+            Self::ElementNotFound { message } => {
+                write!(f, "Element not found: {}", message)
+            }
+            Self::NotARenderElement { message } => {
+                write!(f, "Not a render element: {}", message)
+            }
+            Self::UnsupportedProtocol { expected, actual } => {
+                write!(
+                    f,
+                    "Unsupported protocol: expected {}, got {}",
+                    expected, actual
+                )
+            }
+            Self::ParentDataMismatch { expected, actual } => {
+                write!(
+                    f,
+                    "Parent data type mismatch: expected {}, got {}",
+                    expected, actual
+                )
+            }
+            Self::LayerError { message } => {
+                write!(f, "Layer error: {}", message)
+            }
+        }
+    }
+}
+
+impl std::error::Error for RenderError {}
 
 impl RenderError {
     /// Create a layout failed error
-    ///
-    /// Accepts both static strings (zero-cost) and dynamic strings (allocated).
-    /// Automatically emits a tracing error event.
-    #[must_use]
-    pub fn layout_failed(
-        render_object: &'static str,
-        reason: impl Into<Cow<'static, str>>,
-    ) -> Self {
-        let reason = reason.into();
-        error!(
-            render_object = render_object,
-            reason = %reason,
-            "layout failed"
-        );
+    pub fn layout_failed(render_object: &'static str, reason: impl Into<String>) -> Self {
         Self::LayoutFailed {
             render_object,
-            reason,
+            reason: reason.into(),
         }
     }
 
     /// Create a paint failed error
-    ///
-    /// Accepts both static strings (zero-cost) and dynamic strings (allocated).
-    /// Automatically emits a tracing error event.
-    #[must_use]
-    pub fn paint_failed(render_object: &'static str, reason: impl Into<Cow<'static, str>>) -> Self {
-        let reason = reason.into();
-        error!(
-            render_object = render_object,
-            reason = %reason,
-            "paint failed"
-        );
+    pub fn paint_failed(render_object: &'static str, reason: impl Into<String>) -> Self {
         Self::PaintFailed {
             render_object,
-            reason,
+            reason: reason.into(),
         }
-    }
-
-    /// Create an invalid parent data error
-    ///
-    /// Automatically emits a tracing error event.
-    #[must_use]
-    pub fn invalid_parent_data(expected: &'static str, actual: &'static str) -> Self {
-        error!(
-            expected = expected,
-            actual = actual,
-            "invalid parent data type"
-        );
-        Self::InvalidParentData { expected, actual }
     }
 
     /// Create a constraint violation error
-    ///
-    /// Accepts both static strings (zero-cost) and dynamic strings (allocated).
-    /// Automatically emits a tracing warning event (violations may be recoverable).
-    #[must_use]
-    pub fn constraint_violation(details: impl Into<Cow<'static, str>>) -> Self {
-        let details = details.into();
-        warn!(details = %details, "constraint violation");
-        Self::ConstraintViolation { details }
-    }
-
-    /// Create an element not found error
-    ///
-    /// Automatically emits a tracing error event.
-    #[must_use]
-    pub fn element_not_found(id: ElementId) -> Self {
-        error!(element_id = %id.get(), "element not found");
-        Self::ElementNotFound(id)
-    }
-
-    /// Create a not render element error
-    ///
-    /// Automatically emits a tracing error event.
-    #[must_use]
-    pub fn not_render_element(id: ElementId) -> Self {
-        error!(element_id = %id.get(), "element is not a render element");
-        Self::NotRenderElement(id)
-    }
-
-    /// Create a hit test failed error
-    ///
-    /// Automatically emits a tracing warning event (hit test failures are often expected).
-    #[must_use]
-    pub fn hit_test_failed(reason: impl Into<Cow<'static, str>>) -> Self {
-        let reason = reason.into();
-        warn!(reason = %reason, "hit test failed");
-        Self::HitTestFailed { reason }
-    }
-
-    /// Returns true if this error is recoverable and should not abort rendering.
-    ///
-    /// Recoverable errors include constraint violations, hit test failures,
-    /// and arity errors, which can often be handled gracefully by using fallback values.
-    #[must_use]
-    pub fn is_recoverable(&self) -> bool {
-        matches!(
-            self,
-            Self::ConstraintViolation { .. } | Self::HitTestFailed { .. } | Self::Arity(_)
-        )
-    }
-
-    /// Returns the element ID associated with this error, if any.
-    #[must_use]
-    pub fn element_id(&self) -> Option<ElementId> {
-        match self {
-            Self::ElementNotFound(id) | Self::NotRenderElement(id) => Some(*id),
-            _ => None,
+    pub fn constraint_violation(expected: impl Into<String>, actual: impl Into<String>) -> Self {
+        Self::ConstraintViolation {
+            expected: expected.into(),
+            actual: actual.into(),
         }
     }
-}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_layout_failed() {
-        let err = RenderError::layout_failed("RenderFlex", "invalid constraints");
-        assert!(err.to_string().contains("RenderFlex"));
-        assert!(err.to_string().contains("invalid constraints"));
+    /// Create a child layout failed error
+    pub fn child_layout_failed(child_id: RenderId, message: impl Into<String>) -> Self {
+        Self::ChildLayoutFailed {
+            child_id,
+            message: message.into(),
+        }
     }
 
-    #[test]
-    fn test_paint_failed() {
-        let err = RenderError::paint_failed("RenderOpacity", "invalid alpha");
-        assert!(err.to_string().contains("RenderOpacity"));
-        assert!(err.to_string().contains("invalid alpha"));
+    /// Create an invalid state error
+    pub fn invalid_state(message: impl Into<String>) -> Self {
+        Self::InvalidState {
+            message: message.into(),
+        }
     }
 
-    #[test]
-    fn test_invalid_parent_data() {
-        let err = RenderError::invalid_parent_data("FlexParentData", "StackParentData");
-        assert!(err.to_string().contains("FlexParentData"));
-        assert!(err.to_string().contains("StackParentData"));
+    /// Create a node not found error
+    pub fn node_not_found(id: RenderId) -> Self {
+        Self::NodeNotFound { id }
     }
 
-    #[test]
-    fn test_constraint_violation() {
-        let err = RenderError::constraint_violation("min width exceeds max width");
-        assert!(err.to_string().contains("min width exceeds max width"));
+    /// Create a parent data mismatch error
+    pub fn parent_data_mismatch(expected: &'static str, actual: impl Into<String>) -> Self {
+        Self::ParentDataMismatch {
+            expected,
+            actual: actual.into(),
+        }
     }
 
-    #[test]
-    fn test_element_not_found() {
-        let err = RenderError::element_not_found(ElementId::new(42));
-        assert!(err.to_string().contains("42"));
-    }
-
-    #[test]
-    fn test_is_recoverable() {
-        // Recoverable errors
-        assert!(RenderError::constraint_violation("test").is_recoverable());
-        assert!(RenderError::hit_test_failed("test").is_recoverable());
-
-        // Non-recoverable errors
-        assert!(!RenderError::layout_failed("Test", "test").is_recoverable());
-        assert!(!RenderError::paint_failed("Test", "test").is_recoverable());
-        assert!(!RenderError::element_not_found(ElementId::new(1)).is_recoverable());
-    }
-
-    #[test]
-    fn test_element_id_extraction() {
-        let id = ElementId::new(42);
-
-        assert_eq!(RenderError::element_not_found(id).element_id(), Some(id));
-        assert_eq!(RenderError::not_render_element(id).element_id(), Some(id));
-        assert_eq!(
-            RenderError::layout_failed("Test", "test").element_id(),
-            None
-        );
+    /// Create a layer error
+    pub fn layer_error(message: impl Into<String>) -> Self {
+        Self::LayerError {
+            message: message.into(),
+        }
     }
 }

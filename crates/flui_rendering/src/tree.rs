@@ -55,8 +55,8 @@ use flui_interaction::HitTestResult;
 use flui_painting::Canvas;
 use flui_types::{Offset, Size, SliverConstraints, SliverGeometry};
 
-use crate::BoxConstraints;
 use crate::error::RenderError;
+use crate::BoxConstraints;
 
 // ============================================================================
 // LAYOUT TREE TRAIT
@@ -242,6 +242,64 @@ pub trait LayoutTree {
     /// - Parent's `create_parent_data()` determines the ParentData type
     /// - Child's existing ParentData (if any) is replaced
     fn setup_child_parent_data(&mut self, parent_id: RenderId, child_id: RenderId);
+
+    // ========================================================================
+    // INTRINSIC DIMENSIONS (Flutter RenderBox protocol)
+    // ========================================================================
+
+    /// Computes the minimum intrinsic width for a given height.
+    ///
+    /// # Flutter Protocol
+    ///
+    /// ```dart
+    /// double getMinIntrinsicWidth(double height) {
+    ///   return _computeIntrinsicDimension(
+    ///     _IntrinsicDimension.minWidth,
+    ///     height,
+    ///     computeMinIntrinsicWidth
+    ///   );
+    /// }
+    /// ```
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - The element to query
+    /// * `height` - The height constraint (use `f32::INFINITY` for unconstrained)
+    ///
+    /// # Returns
+    ///
+    /// The minimum width that the element can have while still being able to
+    /// paint itself without clipping.
+    fn get_min_intrinsic_width(&self, id: RenderId, height: f32) -> f32;
+
+    /// Computes the maximum intrinsic width for a given height.
+    ///
+    /// # Flutter Protocol
+    ///
+    /// The maximum width that this element could be without failing to correctly
+    /// paint its contents within itself, without clipping.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - The element to query
+    /// * `height` - The height constraint (use `f32::INFINITY` for unconstrained)
+    fn get_max_intrinsic_width(&self, id: RenderId, height: f32) -> f32;
+
+    /// Computes the minimum intrinsic height for a given width.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - The element to query
+    /// * `width` - The width constraint (use `f32::INFINITY` for unconstrained)
+    fn get_min_intrinsic_height(&self, id: RenderId, width: f32) -> f32;
+
+    /// Computes the maximum intrinsic height for a given width.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - The element to query
+    /// * `width` - The width constraint (use `f32::INFINITY` for unconstrained)
+    fn get_max_intrinsic_height(&self, id: RenderId, width: f32) -> f32;
 }
 
 // ============================================================================
@@ -496,6 +554,22 @@ impl LayoutTree for Box<dyn LayoutTree + Send + Sync> {
     fn setup_child_parent_data(&mut self, parent_id: RenderId, child_id: RenderId) {
         (**self).setup_child_parent_data(parent_id, child_id)
     }
+
+    fn get_min_intrinsic_width(&self, id: RenderId, height: f32) -> f32 {
+        (**self).get_min_intrinsic_width(id, height)
+    }
+
+    fn get_max_intrinsic_width(&self, id: RenderId, height: f32) -> f32 {
+        (**self).get_max_intrinsic_width(id, height)
+    }
+
+    fn get_min_intrinsic_height(&self, id: RenderId, width: f32) -> f32 {
+        (**self).get_min_intrinsic_height(id, width)
+    }
+
+    fn get_max_intrinsic_height(&self, id: RenderId, width: f32) -> f32 {
+        (**self).get_max_intrinsic_height(id, width)
+    }
 }
 
 impl PaintTree for Box<dyn PaintTree + Send + Sync> {
@@ -640,7 +714,7 @@ pub trait HitTestTreeExt: HitTestTree {
     fn hit_test_first(&self, id: RenderId, position: Offset) -> Option<RenderId> {
         let mut result = HitTestResult::new();
         if self.hit_test(id, position, &mut result) {
-            result.entries().first().map(|entry| entry.element_id)
+            result.path().first().map(|entry| entry.target)
         } else {
             None
         }
@@ -665,6 +739,7 @@ pub trait HitTestTreeExt: HitTestTree {
 /// # Returns
 ///
 /// The computed size of the root element.
+#[allow(dead_code)]
 pub fn layout_subtree(
     tree: &mut dyn LayoutTree,
     root: RenderId,
@@ -686,6 +761,7 @@ pub fn layout_subtree(
 /// # Returns
 ///
 /// A canvas containing the painted subtree.
+#[allow(dead_code)]
 pub fn paint_subtree(
     tree: &mut dyn PaintTree,
     root: RenderId,
@@ -706,6 +782,7 @@ pub fn paint_subtree(
 /// # Returns
 ///
 /// Complete hit test results for the subtree.
+#[allow(dead_code)]
 pub fn hit_test_subtree(tree: &dyn HitTestTree, root: RenderId, position: Offset) -> HitTestResult {
     let mut result = HitTestResult::new();
     tree.hit_test(root, position, &mut result);
@@ -725,6 +802,7 @@ pub fn hit_test_subtree(tree: &dyn HitTestTree, root: RenderId, position: Offset
 /// # Returns
 ///
 /// Vector of layout results in the same order as input.
+#[allow(dead_code)]
 pub fn layout_batch(
     tree: &mut dyn LayoutTree,
     elements: &[(RenderId, BoxConstraints)],
@@ -751,6 +829,7 @@ pub fn layout_batch(
 /// # Returns
 ///
 /// Vector of paint results in the same order as input.
+#[allow(dead_code)]
 pub fn paint_batch(
     tree: &mut dyn PaintTree,
     elements: &[(RenderId, Offset)],
@@ -914,6 +993,22 @@ mod tests {
         fn setup_child_parent_data(&mut self, _parent_id: RenderId, _child_id: RenderId) {
             // Mock: no-op
         }
+
+        fn get_min_intrinsic_width(&self, _id: RenderId, _height: f32) -> f32 {
+            0.0
+        }
+
+        fn get_max_intrinsic_width(&self, _id: RenderId, _height: f32) -> f32 {
+            0.0
+        }
+
+        fn get_min_intrinsic_height(&self, _id: RenderId, _width: f32) -> f32 {
+            0.0
+        }
+
+        fn get_max_intrinsic_height(&self, _id: RenderId, _width: f32) -> f32 {
+            0.0
+        }
     }
 
     impl PaintTree for MockRenderTree {
@@ -1008,6 +1103,6 @@ mod tests {
 
         // Test hit test utility
         let mut result = hit_test_subtree(&tree, id, Offset::ZERO);
-        assert!(result.entries().is_empty());
+        assert!(result.path().is_empty());
     }
 }

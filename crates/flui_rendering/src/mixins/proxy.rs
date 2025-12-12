@@ -33,10 +33,12 @@
 use std::ops::{Deref, DerefMut};
 
 use ambassador::{delegatable_trait, Delegate};
-use flui_types::{BoxConstraints, Size, SliverGeometry, SliverConstraints};
+use flui_interaction::HitTestResult;
+use flui_types::{BoxConstraints, Offset, Size, SliverConstraints, SliverGeometry};
 
-use crate::children::{Child, BoxChild, SliverChild};
-use crate::protocol::{Protocol, BoxProtocol, SliverProtocol};
+use crate::children::Child;
+use crate::protocol::{BoxProtocol, Protocol, SliverProtocol};
+use crate::PaintingContext;
 
 // ============================================================================
 // Part 1: Delegatable Traits
@@ -228,7 +230,7 @@ impl<T: ProxyData> DerefMut for ProxyBox<T> {
 pub trait RenderProxyBoxMixin: HasChild<BoxProtocol> + HasBoxGeometry {
     /// Perform layout (default: delegate to child)
     fn perform_layout(&mut self, constraints: &BoxConstraints) -> Size {
-        if let Some(id) = self.child_mut().get() {
+        if let Some(_id) = self.child_mut().get() {
             // TODO: call child.layout(constraints) via RenderTree
             // For now, return constraints.smallest()
             let size = constraints.smallest();
@@ -242,14 +244,14 @@ pub trait RenderProxyBoxMixin: HasChild<BoxProtocol> + HasBoxGeometry {
     }
 
     /// Paint this render object (default: do nothing if no child)
-    fn paint(&self, _ctx: &mut dyn std::any::Any, _offset: flui_types::Offset) {
+    fn paint(&self, _ctx: &mut PaintingContext, _offset: Offset) {
         // TODO: if let Some(id) = self.child().get() {
-        //     render_tree.paint(id, ctx, offset);
+        //     ctx.paint_child(id, offset);
         // }
     }
 
     /// Hit test (default: delegate to child)
-    fn hit_test(&self, _result: &mut dyn std::any::Any, _position: flui_types::Offset) -> bool {
+    fn hit_test(&self, _result: &mut HitTestResult, _position: Offset) -> bool {
         // TODO: if let Some(id) = self.child().get() {
         //     return render_tree.hit_test(id, result, position);
         // }
@@ -358,29 +360,29 @@ impl<T: ProxyData> DerefMut for ProxySliver<T> {
 /// All methods delegate to child by default. Override to customize behavior.
 pub trait RenderProxySliverMixin: HasChild<SliverProtocol> + HasSliverGeometry {
     /// Perform layout (default: delegate to child)
-    fn perform_layout(&mut self, constraints: &SliverConstraints) -> SliverGeometry {
+    fn perform_layout(&mut self, _constraints: &SliverConstraints) -> SliverGeometry {
         if let Some(_id) = self.child_mut().get() {
             // TODO: call child.layout(constraints) via RenderTree
             // For now, return empty geometry
             let geometry = SliverGeometry::default();
-            self.set_geometry(geometry.clone());
+            self.set_geometry(geometry);
             geometry
         } else {
             let geometry = SliverGeometry::default();
-            self.set_geometry(geometry.clone());
+            self.set_geometry(geometry);
             geometry
         }
     }
 
     /// Paint this render object (default: do nothing if no child)
-    fn paint(&self, _ctx: &mut dyn std::any::Any, _offset: flui_types::Offset) {
+    fn paint(&self, _ctx: &mut PaintingContext, _offset: Offset) {
         // TODO: if let Some(id) = self.child().get() {
-        //     render_tree.paint(id, ctx, offset);
+        //     ctx.paint_child(id, offset);
         // }
     }
 
     /// Hit test (default: delegate to child)
-    fn hit_test(&self, _result: &mut dyn std::any::Any, _position: flui_types::Offset) -> bool {
+    fn hit_test(&self, _result: &mut HitTestResult, _position: Offset) -> bool {
         // TODO: if let Some(id) = self.child().get() {
         //     return render_tree.hit_test(id, result, position);
         // }

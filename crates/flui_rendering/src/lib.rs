@@ -1,3 +1,7 @@
+// Allow duplicated_attributes - ambassador macro generates multiple #[delegate(..., target = "base")]
+// which clippy incorrectly flags as duplicates
+#![allow(clippy::duplicated_attributes)]
+
 //! # flui_rendering
 //!
 //! Rendering infrastructure for Flui using the Generic Four-Tree Architecture
@@ -47,8 +51,10 @@ mod box_render;
 mod context;
 mod element;
 mod flags;
+mod hit_test;
 mod lifecycle;
 mod object;
+mod painting_context;
 mod parent_data;
 mod pipeline_owner;
 mod protocol;
@@ -62,8 +68,10 @@ mod tree;
 mod wrapper;
 
 // New modular architecture (ambassador-based mixins)
-pub mod children;  // Child storage types
-pub mod mixins;    // Mixin-based render objects
+pub mod children; // Child storage types
+pub mod geometry; // RenderConstraints, RenderGeometry enums
+pub mod mixins; // Mixin-based render objects
+pub mod node; // RenderNode - Flutter RenderObject equivalent
 
 // Other modules
 pub mod error;
@@ -73,9 +81,13 @@ pub mod error;
 // ============================================================================
 
 // Core rendering traits
-pub use box_render::RenderBox;
+pub use box_render::{BoxHitTestResult, RenderBox};
+pub use hit_test::SliverHitTestResult;
 pub use object::{LayerHandle, RenderObject};
 pub use sliver::RenderSliver;
+
+// Error types
+pub use error::{RenderError, RenderResult};
 
 // Re-export downcast-rs for downcasting RenderObject
 pub use downcast_rs::DowncastSync;
@@ -93,6 +105,10 @@ pub use flui_tree::arity::{
 pub use context::{BoxHitTestContext, HitTestContext, SliverHitTestContext};
 pub use context::{BoxLayoutContext, LayoutContext, SliverLayoutContext};
 pub use context::{BoxPaintContext, PaintContext, SliverPaintContext};
+
+// Flutter-style PaintingContext (new API)
+pub use flui_painting::ClipContext;
+pub use painting_context::PaintingContext;
 
 // Short context aliases
 pub type BoxLayoutCtx<'a, A, T = Box<dyn LayoutTree + Send + Sync>> =
@@ -137,28 +153,38 @@ pub use wrapper::{BoxRenderWrapper, SliverRenderWrapper};
 // RenderTree and RenderNode
 pub use render_tree::{RenderNode, RenderTree};
 
-// RenderPipelineOwner (Flutter's PipelineOwner equivalent)
+// PipelineOwner (Flutter's PipelineOwner equivalent)
+pub use pipeline_owner::PipelineManifold;
+pub use pipeline_owner::PipelineOwner;
+pub use pipeline_owner::PipelineOwnerBuilder;
+pub use pipeline_owner::PipelineOwnerId;
+pub use pipeline_owner::PipelineOwnerVisitor;
+pub use pipeline_owner::{OnNeedVisualUpdate, OnSemanticsOwnerCreated, OnSemanticsOwnerDisposed};
+// Re-export semantics types from flui-semantics
+pub use pipeline_owner::{SemanticsOwner, SemanticsUpdate, SemanticsUpdateCallback};
+// Backward compatibility alias
+#[allow(deprecated)]
 pub use pipeline_owner::RenderPipelineOwner;
 
 // Child storage types
-pub use children::{Child, Children, Slots};
-pub use children::{BoxChild, BoxChildren, BoxSlots};
-pub use children::{SliverChild, SliverChildren, SliverSlots};
 pub use children::SlotKey;
+pub use children::{BoxChild, BoxChildren, BoxSlots};
+pub use children::{Child, Children, Slots};
+pub use children::{SliverChild, SliverChildren, SliverSlots};
 
 // Mixin-based render objects (Box Protocol)
-pub use mixins::{ProxyBox, ProxyBase, ProxyData};
-pub use mixins::{HasChild, HasBoxGeometry, RenderProxyBoxMixin};
-pub use mixins::{ShiftedBox, ShiftedBase, HasOffset, RenderShiftedBox};
-pub use mixins::{AligningShiftedBox, AligningBase, HasAlignment, RenderAligningShiftedBox};
-pub use mixins::{ContainerBox, ContainerBase, HasChildren, RenderContainerBox};
-pub use mixins::{LeafBox, LeafBase, RenderLeafBox};
+pub use mixins::{AligningBase, AligningShiftedBox, HasAlignment, RenderAligningShiftedBox};
+pub use mixins::{ContainerBase, ContainerBox, HasChildren, RenderContainerBox};
+pub use mixins::{HasBoxGeometry, HasChild, RenderProxyBoxMixin};
+pub use mixins::{HasOffset, RenderShiftedBox, ShiftedBase, ShiftedBox};
+pub use mixins::{LeafBase, LeafBox, RenderLeafBox};
+pub use mixins::{ProxyBase, ProxyBox, ProxyData};
 
 // Mixin-based render objects (Sliver Protocol)
-pub use mixins::{ProxySliver, HasSliverGeometry, RenderProxySliverMixin};
-pub use mixins::{ShiftedSliver, RenderShiftedSliver};
 pub use mixins::{ContainerSliver, RenderContainerSliver};
+pub use mixins::{HasSliverGeometry, ProxySliver, RenderProxySliverMixin};
 pub use mixins::{LeafSliver, RenderLeafSliver};
+pub use mixins::{RenderShiftedSliver, ShiftedSliver};
 
 // ============================================================================
 // RE-EXPORTS FROM FOUNDATION
@@ -170,9 +196,6 @@ pub use flui_foundation::RenderId;
 // ============================================================================
 // RE-EXPORTS FROM OTHER MODULES
 // ============================================================================
-
-// Error handling
-pub use error::{RenderError, Result as RenderResult};
 
 // Geometry and constraints from flui_types
 pub use flui_types::BoxConstraints;
@@ -199,9 +222,12 @@ pub mod prelude {
     // Core traits
     pub use super::{RenderBox, RenderObject, RenderSliver};
 
-    // Context types
+    // Context types (legacy GAT-based)
     pub use super::{BoxHitTestContext, BoxLayoutContext, BoxPaintContext};
     pub use super::{SliverHitTestContext, SliverLayoutContext, SliverPaintContext};
+
+    // Flutter-style PaintingContext (new API)
+    pub use super::{ClipContext, PaintingContext};
 
     // Arity types
     pub use super::{Arity, Leaf, Optional, Single, Variable};

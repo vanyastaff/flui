@@ -43,7 +43,7 @@ fn view_to_element_lifecycle(lifecycle: ViewLifecycle) -> ElementLifecycle {
 /// Converts RenderLifecycle to ElementLifecycle.
 fn render_to_element_lifecycle(lifecycle: RenderLifecycle) -> ElementLifecycle {
     match lifecycle {
-        RenderLifecycle::Detached => ElementLifecycle::Initial,
+        RenderLifecycle::Detached | RenderLifecycle::Disposed => ElementLifecycle::Initial,
         RenderLifecycle::Attached
         | RenderLifecycle::NeedsLayout
         | RenderLifecycle::LaidOut
