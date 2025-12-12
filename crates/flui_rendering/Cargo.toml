@@ -24,6 +24,7 @@ once_cell = { workspace = true }
 bitflags = { workspace = true }
 smallvec = { workspace = true }
 downcast-rs = "2.0"
+dyn-clone = "1.0"  # Trait object cloning
 slab = "0.4"  # For RenderTree storage
 ambassador = { workspace = true }  # Trait delegation via procedural macros
 
