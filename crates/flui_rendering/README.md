@@ -44,10 +44,20 @@ pub trait Protocol {
   - `Shifted<P>` - custom offset
   - `Aligning<P>` - alignment and size factors
 
-- **Traits** (`traits/`)
-  - `RenderObject` - base trait for all render objects
-  - `RenderBox` - 2D cartesian layout
-  - `RenderSliver` - scrollable content
+- **Trait Hierarchy** (`traits/`) with **Ambassador Delegation**
+  - `RenderObject` - base trait
+  - **Box Protocol:**
+    - `RenderBox` - 2D cartesian layout
+    - `SingleChildRenderBox` - one child accessor
+    - `RenderProxyBox` - pass-through (size = child size)
+    - `RenderShiftedBox` - custom positioning
+    - `RenderAligningShiftedBox` - alignment-based
+    - `MultiChildRenderBox` - multiple children
+  - **Sliver Protocol:**
+    - `RenderSliver` - scrollable content
+    - `RenderProxySliver` - pass-through sliver
+    - `RenderSliverSingleBoxAdapter` - sliver wrapping box
+    - `RenderSliverMultiBoxAdaptor` - sliver with boxes
 
 ## Key Benefits
 
@@ -58,22 +68,28 @@ pub trait Protocol {
 
 ## Usage
 
+### With Ambassador Delegation
+
 ```rust
 use flui_rendering::prelude::*;
+use ambassador::Delegate;
 
-struct RenderMyWidget {
-    proxy: ProxyBox,  // Uses BoxProtocol automatically
+// ProxyBox pattern - minimal boilerplate!
+#[derive(Delegate)]
+#[delegate(SingleChildRenderBox, target = "proxy")]
+#[delegate(RenderObject, target = "proxy")]
+struct RenderOpacity {
+    proxy: ProxyBox,
+    opacity: f32,
 }
 
-impl RenderBox for RenderMyWidget {
+// Just implement the marker trait!
+impl RenderProxyBox for RenderOpacity {}
+
+// Only override what you need to customize
+impl RenderBox for RenderOpacity {
     fn perform_layout(&mut self, constraints: BoxConstraints) -> Size {
-        let size = if let Some(child) = self.proxy.child_mut() {
-            child.perform_layout(constraints)  // Direct access, no downcast!
-        } else {
-            constraints.smallest()
-        };
-        self.proxy.set_geometry(size);
-        size
+        RenderProxyBox::perform_layout(self, constraints)
     }
 
     fn size(&self) -> Size {
@@ -81,7 +97,10 @@ impl RenderBox for RenderMyWidget {
     }
 
     fn paint(&self, context: &mut dyn PaintingContext, offset: Offset) {
-        // Paint implementation
+        if self.opacity < 1.0 {
+            // Apply opacity
+        }
+        RenderProxyBox::paint(self, context, offset);
     }
 }
 ```

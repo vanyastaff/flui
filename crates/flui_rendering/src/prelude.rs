@@ -20,10 +20,19 @@ pub use crate::containers::{
     Shifted, ShiftedBox, ShiftedSliver, Single, SliverChild, SliverChildren, SliverProxy,
 };
 
-// Re-export traits
+// Re-export base traits
+pub use crate::traits::{RenderObject, RenderObjectExt};
+
+// Re-export box traits
 pub use crate::traits::{
-    BoxHitTestResult, PaintingContext, RenderBox, RenderObject, RenderObjectExt, RenderSliver,
-    SliverHitTestResult, SliverPaintingContext, TextBaseline, Transform,
+    BoxHitTestResult, MultiChildRenderBox, PaintingContext, RenderAligningShiftedBox, RenderBox,
+    RenderProxyBox, RenderShiftedBox, SingleChildRenderBox, TextBaseline,
+};
+
+// Re-export sliver traits
+pub use crate::traits::{
+    RenderProxySliver, RenderSliver, RenderSliverMultiBoxAdaptor, RenderSliverSingleBoxAdapter,
+    SliverHitTestResult, SliverPaintingContext, Transform,
 };
 
 // Re-export common types from flui_types
