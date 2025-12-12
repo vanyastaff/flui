@@ -1,32 +1,38 @@
 [workspace]
 resolver = "2"
 members = [
+    # === Foundation Layer (required for flui_rendering) ===
     "crates/flui_types",        # Base types - no dependencies
     "crates/flui-foundation",   # Foundation types and utilities
-    "crates/flui-tree",         # Tree abstractions
-    "crates/flui-layer",        # Layer tree for compositor (5-tree architecture)
-    "crates/flui-semantics",    # Semantics tree for accessibility (5-tree architecture)
+    "crates/flui-tree",         # Tree abstractions with arity system
 
-    "crates/flui-element",      # Element tree implementation
-    "crates/flui-view",         # View traits and abstractions
-    "crates/flui-pipeline",     # Pipeline orchestration (build/layout/paint)
-    "crates/flui_assets",       # Asset management system
-    "crates/flui_log",          # Cross-platform logging
-    "crates/flui_core",         # Core with foundation utilities
-    "crates/flui_rendering",
-    # "crates/flui-objects",      # Concrete RenderObject implementations (temporarily disabled)
-    # "crates/flui_widgets",      # (temporarily disabled - depends on flui-objects)
-    "crates/flui_app",
-    "crates/flui_painting",
-    "crates/flui_engine",       # Rendering engine - Layer/Scene/Painter
-    "crates/flui_devtools",
-    "crates/flui_interaction",  # Event routing, interaction, and gesture recognition
-    "crates/flui_animation",    # Animation system
-    "crates/flui-scheduler",    # Frame scheduling and task prioritization
-    "crates/flui-reactivity",   # Reactive state management with hooks and signals
-    "crates/flui-platform",     # Cross-platform embedder abstraction
-    "crates/flui_cli",          # CLI tool for project management
-    "crates/flui_build",        # Build system library for cross-platform builds
+    # === Core Dependencies ===
+    "crates/flui-layer",        # Layer tree for compositor
+    "crates/flui-semantics",    # Semantics tree for accessibility
+    "crates/flui_interaction",  # Event routing and hit testing
+    "crates/flui_painting",     # Painting primitives
+
+    # === Target Crate ===
+    "crates/flui_rendering",    # Render tree implementation (ACTIVE DEVELOPMENT)
+
+    # === Temporarily disabled (not needed for flui_rendering development) ===
+    # "crates/flui-element",      # Element tree implementation
+    # "crates/flui-view",         # View traits and abstractions
+    # "crates/flui-pipeline",     # Pipeline orchestration (build/layout/paint)
+    # "crates/flui_assets",       # Asset management system
+    # "crates/flui_log",          # Cross-platform logging
+    # "crates/flui_core",         # Core with foundation utilities
+    # "crates/flui-objects",      # Concrete RenderObject implementations
+    # "crates/flui_widgets",      # Widget library
+    # "crates/flui_app",          # Application framework
+    # "crates/flui_engine",       # Rendering engine - Layer/Scene/Painter
+    # "crates/flui_devtools",     # Developer tools
+    # "crates/flui_animation",    # Animation system
+    # "crates/flui-scheduler",    # Frame scheduling and task prioritization
+    # "crates/flui-reactivity",   # Reactive state management with hooks and signals
+    # "crates/flui-platform",     # Cross-platform embedder abstraction
+    # "crates/flui_cli",          # CLI tool for project management
+    # "crates/flui_build",        # Build system library for cross-platform builds
 ]
 
 [workspace.package]
@@ -151,16 +157,16 @@ description = "Flutter-inspired declarative UI framework with wgpu rendering"
 keywords = ["gui", "ui", "wgpu", "flutter", "reactive"]
 
 [dependencies]
-# Flui crates - all included in workspace
+# Temporarily disabled - only core dependencies for flui_rendering development
 flui_types = { path = "crates/flui_types" }
-flui_core = { path = "crates/flui_core" }
-flui_painting = { path = "crates/flui_painting" }
-flui_engine = { path = "crates/flui_engine" }
 flui_rendering = { path = "crates/flui_rendering" }
-flui_animation = { path = "crates/flui_animation" }
-flui_interaction = { path = "crates/flui_interaction" }
-flui_app = { path = "crates/flui_app" }
-flui_widgets = { path = "crates/flui_widgets" }
+# flui_core = { path = "crates/flui_core" }
+# flui_painting = { path = "crates/flui_painting" }
+# flui_engine = { path = "crates/flui_engine" }
+# flui_animation = { path = "crates/flui_animation" }
+# flui_interaction = { path = "crates/flui_interaction" }
+# flui_app = { path = "crates/flui_app" }
+# flui_widgets = { path = "crates/flui_widgets" }
 tracing.workspace = true
 tracing-subscriber.workspace = true
 tracing-forest.workspace = true
@@ -174,14 +180,14 @@ default = []
 # === Core Features ===
 # Serialization support across all crates
 serde = [
-    "flui_core/serde",
+    # "flui_core/serde",  # Temporarily disabled
     "flui_types/serde",
     "flui_rendering/serde",
 ]
 
 # === Performance Features ===
-# Multi-threaded parallel processing
-parallel = ["flui_core/parallel"]
+# Multi-threaded parallel processing (temporarily disabled)
+# parallel = ["flui_core/parallel"]
 
 # === Profiling & Debug Features ===
 # TODO: Fix puffin dependencies before enabling
@@ -190,15 +196,15 @@ parallel = ["flui_core/parallel"]
 # full-profiling = ["profiling", "tracy"]
 
 # === DevTools Features ===
-# Developer tools integration
-devtools = ["flui_engine/devtools"]
+# Developer tools integration (temporarily disabled)
+# devtools = ["flui_engine/devtools"]
 
 # TODO: Re-enable when memory-profiler dependencies are fixed
 # memory-profiler = ["devtools", "flui_engine/memory-profiler"]
 
 # === Convenience Features ===
-# Enable all stable features (excludes experimental)
-full = ["serde", "parallel", "devtools"]
+# Enable all stable features (temporarily disabled)
+# full = ["serde", "parallel", "devtools"]
 
 [profile.release]
 opt-level = 3
