@@ -1,16 +1,21 @@
 //! Proxy container for pass-through objects
 
+use flui_tree::arity::{Arity, Exact};
+
 use crate::containers::Single;
 use crate::protocol::{BoxProtocol, Protocol};
 
 /// Container for single child where parent geometry equals child geometry
 ///
-/// `Proxy<P>` is used for render objects that pass their size through to their child.
+/// `Proxy<P, A>` is used for render objects that pass their size through to their child.
 /// It stores both the child and the geometry (Size or SliverGeometry).
+///
+/// By default, Proxy uses `Exact<1>` arity to ensure exactly one child is present.
 ///
 /// # Type Parameters
 ///
 /// - `P`: The protocol (BoxProtocol or SliverProtocol)
+/// - `A`: The arity constraint (Exact<1> by default for exactly one child)
 ///
 /// # Examples
 ///
@@ -40,12 +45,12 @@ use crate::protocol::{BoxProtocol, Protocol};
 /// }
 /// ```
 #[derive(Debug)]
-pub struct Proxy<P: Protocol> {
-    child: Single<P>,
+pub struct Proxy<P: Protocol, A: Arity = Exact<1>> {
+    child: Single<P, A>,
     geometry: P::Geometry,
 }
 
-impl<P: Protocol> Proxy<P> {
+impl<P: Protocol, A: Arity> Proxy<P, A> {
     /// Creates a new proxy container with default geometry
     pub fn new() -> Self {
         Self {
@@ -95,7 +100,7 @@ impl<P: Protocol> Proxy<P> {
     }
 }
 
-impl<P: Protocol> Default for Proxy<P> {
+impl<P: Protocol, A: Arity> Default for Proxy<P, A> {
     fn default() -> Self {
         Self::new()
     }

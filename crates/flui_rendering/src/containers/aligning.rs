@@ -1,5 +1,6 @@
 //! Aligning container for alignment-based positioning
 
+use flui_tree::arity::{Arity, Exact};
 use flui_types::{Alignment, Offset};
 
 use crate::containers::Single;
@@ -7,12 +8,15 @@ use crate::protocol::{BoxProtocol, Protocol};
 
 /// Container for single child with alignment and size factors
 ///
-/// `Aligning<P>` is used for render objects that position their child using alignment
+/// `Aligning<P, A>` is used for render objects that position their child using alignment
 /// and optional width/height factors (like Align, Center widgets).
+///
+/// By default, Aligning uses `Exact<1>` arity to ensure exactly one child is present.
 ///
 /// # Type Parameters
 ///
 /// - `P`: The protocol (BoxProtocol or SliverProtocol)
+/// - `A`: The arity constraint (Exact<1> by default for exactly one child)
 ///
 /// # Examples
 ///
@@ -53,8 +57,8 @@ use crate::protocol::{BoxProtocol, Protocol};
 /// }
 /// ```
 #[derive(Debug)]
-pub struct Aligning<P: Protocol> {
-    child: Single<P>,
+pub struct Aligning<P: Protocol, A: Arity = Exact<1>> {
+    child: Single<P, A>,
     geometry: P::Geometry,
     offset: Offset,
     alignment: Alignment,
@@ -62,7 +66,7 @@ pub struct Aligning<P: Protocol> {
     height_factor: Option<f32>,
 }
 
-impl<P: Protocol> Aligning<P> {
+impl<P: Protocol, A: Arity> Aligning<P, A> {
     /// Creates a new aligning container with center alignment
     pub fn new() -> Self {
         Self {
@@ -179,7 +183,7 @@ impl<P: Protocol> Aligning<P> {
     }
 }
 
-impl<P: Protocol> Default for Aligning<P> {
+impl<P: Protocol, A: Arity> Default for Aligning<P, A> {
     fn default() -> Self {
         Self::new()
     }

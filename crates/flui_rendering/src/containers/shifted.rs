@@ -1,5 +1,6 @@
 //! Shifted container for custom child positioning
 
+use flui_tree::arity::{Arity, Exact};
 use flui_types::Offset;
 
 use crate::containers::Single;
@@ -7,12 +8,15 @@ use crate::protocol::{BoxProtocol, Protocol};
 
 /// Container for single child with custom offset positioning
 ///
-/// `Shifted<P>` is used for render objects that position their child at a custom
+/// `Shifted<P, A>` is used for render objects that position their child at a custom
 /// offset. It stores the child, geometry, and the child's offset.
+///
+/// By default, Shifted uses `Exact<1>` arity to ensure exactly one child is present.
 ///
 /// # Type Parameters
 ///
 /// - `P`: The protocol (BoxProtocol or SliverProtocol)
+/// - `A`: The arity constraint (Exact<1> by default for exactly one child)
 ///
 /// # Examples
 ///
@@ -53,13 +57,13 @@ use crate::protocol::{BoxProtocol, Protocol};
 /// }
 /// ```
 #[derive(Debug)]
-pub struct Shifted<P: Protocol> {
-    child: Single<P>,
+pub struct Shifted<P: Protocol, A: Arity = Exact<1>> {
+    child: Single<P, A>,
     geometry: P::Geometry,
     offset: Offset,
 }
 
-impl<P: Protocol> Shifted<P> {
+impl<P: Protocol, A: Arity> Shifted<P, A> {
     /// Creates a new shifted container with default geometry and zero offset
     pub fn new() -> Self {
         Self {
@@ -125,7 +129,7 @@ impl<P: Protocol> Shifted<P> {
     }
 }
 
-impl<P: Protocol> Default for Shifted<P> {
+impl<P: Protocol, A: Arity> Default for Shifted<P, A> {
     fn default() -> Self {
         Self::new()
     }

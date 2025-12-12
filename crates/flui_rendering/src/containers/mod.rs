@@ -1,16 +1,26 @@
 //! Generic container types for child storage
+//!
+//! This module provides containers with integrated arity support from flui-tree:
+//! - `Single<P, A>` - Single child with arity constraint
+//! - `Children<P, PD, A>` - Multiple children with arity constraint
+//! - `Proxy<P, A>` - Pass-through container with geometry
+//! - `Shifted<P, A>` - Custom offset positioning
+//! - `Aligning<P, A>` - Alignment-based positioning
+//! - `Adapter<C, ToProtocol>` - Cross-protocol composition
 
 mod single;
 mod children;
 mod proxy;
 mod shifted;
 mod aligning;
+mod adapter;
 
 pub use single::Single;
 pub use children::Children;
 pub use proxy::{Proxy, ProxyBox};
 pub use shifted::{Shifted, ShiftedBox};
 pub use aligning::{Aligning, AligningBox};
+pub use adapter::{Adapter, BoxToSliver, SliverToBox, MultiBoxToSliver, MultiSliverToBox};
 
 // Type aliases for common use cases
 use crate::parent_data::{BoxParentData, SliverParentData};
