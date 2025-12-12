@@ -1,6 +1,7 @@
 //! Proxy container for pass-through objects
 
-use flui_tree::arity::{Arity, Exact};
+use ambassador::Delegate;
+use flui_tree::arity::{Arity, ChildrenStorage, Exact};
 
 use crate::containers::Single;
 use crate::protocol::{BoxProtocol, Protocol};
@@ -11,6 +12,8 @@ use crate::protocol::{BoxProtocol, Protocol};
 /// It stores both the child and the geometry (Size or SliverGeometry).
 ///
 /// By default, Proxy uses `Exact<1>` arity to ensure exactly one child is present.
+///
+/// Uses ambassador to delegate ChildrenStorage trait to internal Single container.
 ///
 /// # Type Parameters
 ///
@@ -44,7 +47,8 @@ use crate::protocol::{BoxProtocol, Protocol};
 ///     }
 /// }
 /// ```
-#[derive(Debug)]
+#[derive(Debug, Delegate)]
+#[delegate(ChildrenStorage<Box<P::Object>, A>, target = "child")]
 pub struct Proxy<P: Protocol, A: Arity = Exact<1>> {
     child: Single<P, A>,
     geometry: P::Geometry,

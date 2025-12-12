@@ -1,6 +1,7 @@
 //! Shifted container for custom child positioning
 
-use flui_tree::arity::{Arity, Exact};
+use ambassador::Delegate;
+use flui_tree::arity::{Arity, ChildrenStorage, Exact};
 use flui_types::Offset;
 
 use crate::containers::Single;
@@ -12,6 +13,8 @@ use crate::protocol::{BoxProtocol, Protocol};
 /// offset. It stores the child, geometry, and the child's offset.
 ///
 /// By default, Shifted uses `Exact<1>` arity to ensure exactly one child is present.
+///
+/// Uses ambassador to delegate ChildrenStorage trait to internal Single container.
 ///
 /// # Type Parameters
 ///
@@ -56,7 +59,8 @@ use crate::protocol::{BoxProtocol, Protocol};
 ///     }
 /// }
 /// ```
-#[derive(Debug)]
+#[derive(Debug, Delegate)]
+#[delegate(ChildrenStorage<Box<P::Object>, A>, target = "child")]
 pub struct Shifted<P: Protocol, A: Arity = Exact<1>> {
     child: Single<P, A>,
     geometry: P::Geometry,

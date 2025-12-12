@@ -1,6 +1,7 @@
 //! Aligning container for alignment-based positioning
 
-use flui_tree::arity::{Arity, Exact};
+use ambassador::Delegate;
+use flui_tree::arity::{Arity, ChildrenStorage, Exact};
 use flui_types::{Alignment, Offset};
 
 use crate::containers::Single;
@@ -12,6 +13,8 @@ use crate::protocol::{BoxProtocol, Protocol};
 /// and optional width/height factors (like Align, Center widgets).
 ///
 /// By default, Aligning uses `Exact<1>` arity to ensure exactly one child is present.
+///
+/// Uses ambassador to delegate ChildrenStorage trait to internal Single container.
 ///
 /// # Type Parameters
 ///
@@ -56,7 +59,8 @@ use crate::protocol::{BoxProtocol, Protocol};
 ///     }
 /// }
 /// ```
-#[derive(Debug)]
+#[derive(Debug, Delegate)]
+#[delegate(ChildrenStorage<Box<P::Object>, A>, target = "child")]
 pub struct Aligning<P: Protocol, A: Arity = Exact<1>> {
     child: Single<P, A>,
     geometry: P::Geometry,
