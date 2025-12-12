@@ -41,7 +41,6 @@ use crate::traits::{RenderBox, RenderSliver};
 ///     }
 /// }
 /// ```
-#[ambassador::delegatable_trait]
 pub trait RenderSliverMultiBoxAdaptor: RenderSliver {
     /// Returns an iterator over immutable references to box children
     fn children(&self) -> impl Iterator<Item = &dyn RenderBox>;

@@ -51,8 +51,14 @@ use flui_types::{Alignment, Offset};
 ///     }
 /// }
 /// ```
-#[ambassador::delegatable_trait]
 pub trait RenderAligningShiftedBox: RenderShiftedBox {
+    // Note: child(), child_mut(), and child_offset() are inherited from supertraits
+    // No need to duplicate them here to avoid ambiguity
+
+    // ============================================================
+    // SPECIFIC to RenderAligningShiftedBox
+    // ============================================================
+
     /// Returns the alignment to use for positioning the child
     fn alignment(&self) -> Alignment;
 
@@ -97,12 +103,5 @@ pub trait RenderAligningShiftedBox: RenderShiftedBox {
         let y = (parent_size.height - child_size.height) * ((alignment.y + 1.0) / 2.0);
 
         Offset::new(x, y)
-    }
-}
-
-// Blanket implementation: RenderAligningShiftedBox -> RenderShiftedBox
-impl<T: RenderAligningShiftedBox> RenderShiftedBox for T {
-    fn child_offset(&self) -> Offset {
-        RenderAligningShiftedBox::child_offset(self)
     }
 }

@@ -49,7 +49,6 @@ use crate::traits::RenderBox;
 /// 2. Layout each child with constraints
 /// 3. Store child positions in parent data
 /// 4. Compute final parent size
-#[ambassador::delegatable_trait]
 pub trait MultiChildRenderBox: RenderBox {
     /// Returns an iterator over immutable references to children
     fn children(&self) -> impl Iterator<Item = &dyn RenderBox>;

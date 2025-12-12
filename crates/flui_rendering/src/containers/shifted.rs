@@ -1,6 +1,6 @@
 //! Shifted container for custom child positioning
 
-use flui_tree::arity::{Arity, ChildrenStorage, Exact};
+use flui_tree::arity::{Arity, Exact};
 use flui_types::Offset;
 
 use crate::containers::Single;

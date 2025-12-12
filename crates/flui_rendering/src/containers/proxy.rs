@@ -1,6 +1,6 @@
 //! Proxy container for pass-through objects
 
-use flui_tree::arity::{Arity, ChildrenStorage, Exact};
+use flui_tree::arity::{Arity, Exact};
 
 use crate::containers::Single;
 use crate::protocol::{BoxProtocol, Protocol};
@@ -50,6 +50,11 @@ use crate::protocol::{BoxProtocol, Protocol};
 pub struct Proxy<P: Protocol, A: Arity = Exact<1>> {
     child: Single<P, A>,
     geometry: P::Geometry,
+    // RenderObject state (used when P = BoxProtocol)
+    depth: usize,
+    attached: bool,
+    needs_layout: bool,
+    needs_paint: bool,
 }
 
 // Manual Debug impl since P::Object doesn't require Debug
@@ -71,6 +76,10 @@ impl<P: Protocol, A: Arity> Proxy<P, A> {
         Self {
             child: Single::new(),
             geometry: P::default_geometry(),
+            depth: 0,
+            attached: false,
+            needs_layout: true,
+            needs_paint: true,
         }
     }
 
@@ -123,6 +132,99 @@ impl<P: Protocol, A: Arity> Default for Proxy<P, A> {
 
 /// Type alias for Box proxy container
 pub type ProxyBox = Proxy<BoxProtocol>;
+
+// ============================================================================
+// Trait Implementations for Proxy<BoxProtocol>
+// ============================================================================
+
+// Implement RenderObject
+impl<A: Arity> crate::traits::RenderObject for Proxy<BoxProtocol, A> {
+    fn depth(&self) -> usize {
+        self.depth
+    }
+
+    fn attached(&self) -> bool {
+        self.attached
+    }
+
+    fn attach(&mut self) {
+        self.attached = true;
+        if let Some(child) = self.child.child_mut() {
+            child.attach();
+        }
+    }
+
+    fn detach(&mut self) {
+        if let Some(child) = self.child.child_mut() {
+            child.detach();
+        }
+        self.attached = false;
+    }
+
+    fn mark_needs_layout(&mut self) {
+        self.needs_layout = true;
+    }
+
+    fn mark_needs_paint(&mut self) {
+        self.needs_paint = true;
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+}
+
+// Implement RenderBox
+impl<A: Arity> crate::traits::RenderBox for Proxy<BoxProtocol, A> {
+    fn perform_layout(
+        &mut self,
+        constraints: crate::constraints::BoxConstraints,
+    ) -> crate::geometry::Size {
+        if let Some(child) = self.child.child_mut() {
+            let size = child.perform_layout(constraints);
+            self.geometry = size;
+            size
+        } else {
+            constraints.smallest()
+        }
+    }
+
+    fn size(&self) -> crate::geometry::Size {
+        self.geometry
+    }
+
+    fn paint(&self, context: &mut dyn crate::traits::PaintingContext, offset: flui_types::Offset) {
+        if let Some(child) = self.child.child() {
+            context.paint_child(child, offset);
+        }
+    }
+
+    // Other RenderBox methods use defaults
+}
+
+// Implement SingleChildRenderBox
+impl<A: Arity> crate::traits::SingleChildRenderBox for Proxy<BoxProtocol, A> {
+    fn child(&self) -> Option<&dyn crate::traits::RenderBox> {
+        self.child.child()
+    }
+
+    fn child_mut(&mut self) -> Option<&mut dyn crate::traits::RenderBox> {
+        self.child.child_mut()
+    }
+
+    // Other SingleChildRenderBox methods use defaults from the trait
+}
+
+// Implement RenderProxyBox (marker trait, uses all defaults)
+impl<A: Arity> crate::traits::RenderProxyBox for Proxy<BoxProtocol, A> {
+    fn size(&self) -> crate::geometry::Size {
+        self.geometry
+    }
+}
 
 #[cfg(test)]
 mod tests {

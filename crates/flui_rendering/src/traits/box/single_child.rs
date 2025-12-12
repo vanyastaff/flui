@@ -25,7 +25,6 @@ use flui_types::Offset;
 ///     // ... other fields
 /// }
 /// ```
-#[ambassador::delegatable_trait]
 pub trait SingleChildRenderBox: RenderBox {
     /// Returns a reference to the child, if any
     fn child(&self) -> Option<&dyn RenderBox>;
@@ -90,7 +89,7 @@ pub trait SingleChildRenderBox: RenderBox {
 }
 
 // Implement painting context methods (placeholder implementations)
-impl dyn PaintingContext {
+impl dyn PaintingContext + '_ {
     /// Paints a child render box at the given offset
     pub fn paint_child(&mut self, _child: &dyn RenderBox, _offset: Offset) {
         // This will be implemented when we create the actual PaintingContext

@@ -1,6 +1,6 @@
 //! Aligning container for alignment-based positioning
 
-use flui_tree::arity::{Arity, ChildrenStorage, Exact};
+use flui_tree::arity::{Arity, Exact};
 use flui_types::{Alignment, Offset};
 
 use crate::containers::Single;

@@ -1,7 +1,7 @@
 //! Proxy box trait for pass-through render objects
 
 use crate::traits::r#box::SingleChildRenderBox;
-use crate::traits::{BoxHitTestResult, PaintingContext, RenderBox, TextBaseline};
+use crate::traits::{BoxHitTestResult, PaintingContext, TextBaseline};
 use crate::constraints::BoxConstraints;
 use crate::geometry::Size;
 use flui_types::Offset;
@@ -48,9 +48,13 @@ use flui_types::Offset;
 /// - Intrinsic dimensions (delegate to child)
 ///
 /// Override only what you need to customize (typically just `paint`).
-#[ambassador::delegatable_trait]
 pub trait RenderProxyBox: SingleChildRenderBox {
-    // All methods have default implementations
+    // Note: child() and child_mut() are inherited from SingleChildRenderBox
+    // No need to duplicate them here to avoid ambiguity
+
+    // ============================================================
+    // RenderBox methods with proxy-specific defaults
+    // ============================================================
 
     /// Layout by passing constraints to child and adopting its size
     fn perform_layout(&mut self, constraints: BoxConstraints) -> Size {
@@ -61,8 +65,18 @@ pub trait RenderProxyBox: SingleChildRenderBox {
         }
     }
 
-    /// Hit testing delegates to child at same position
-    fn hit_test_children(&self, result: &mut dyn BoxHitTestResult, position: Offset) -> bool {
+    /// Returns the current size of this render object
+    fn size(&self) -> Size;
+
+    /// Paint child at the same offset
+    fn paint(&self, context: &mut dyn PaintingContext, offset: Offset) {
+        if let Some(child) = self.child() {
+            context.paint_child(child, offset);
+        }
+    }
+
+    /// Hit test delegates to child
+    fn hit_test(&self, result: &mut dyn BoxHitTestResult, position: Offset) -> bool {
         if let Some(child) = self.child() {
             child.hit_test(result, position)
         } else {
@@ -70,10 +84,17 @@ pub trait RenderProxyBox: SingleChildRenderBox {
         }
     }
 
-    /// Paint child at the same offset
-    fn paint(&self, context: &mut dyn PaintingContext, offset: Offset) {
+    /// Hit test self (default: false)
+    fn hit_test_self(&self, _position: Offset) -> bool {
+        false
+    }
+
+    /// Hit testing delegates to child at same position
+    fn hit_test_children(&self, result: &mut dyn BoxHitTestResult, position: Offset) -> bool {
         if let Some(child) = self.child() {
-            context.paint_child(child, offset);
+            child.hit_test(result, position)
+        } else {
+            false
         }
     }
 
@@ -117,16 +138,8 @@ pub trait RenderProxyBox: SingleChildRenderBox {
             .map(|c| c.compute_dry_layout(constraints))
             .unwrap_or_else(|| constraints.smallest())
     }
-}
 
-// Blanket implementation: RenderProxyBox -> SingleChildRenderBox
-// This allows any RenderProxyBox to be used as a SingleChildRenderBox
-impl<T: RenderProxyBox> SingleChildRenderBox for T {
-    fn child(&self) -> Option<&dyn RenderBox> {
-        RenderProxyBox::child(self)
-    }
-
-    fn child_mut(&mut self) -> Option<&mut dyn RenderBox> {
-        RenderProxyBox::child_mut(self)
-    }
+    // Note: RenderObject methods (depth, attached, attach, detach, etc.)
+    // are inherited from the RenderBox -> RenderObject trait chain
+    // No need to duplicate them here
 }

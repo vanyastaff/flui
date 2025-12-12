@@ -31,7 +31,6 @@ use flui_types::Offset;
 ///
 /// impl RenderProxySliver for RenderSliverOpacity {}
 /// ```
-#[ambassador::delegatable_trait]
 pub trait RenderProxySliver: RenderSliver {
     /// Returns a reference to the child, if any
     fn child(&self) -> Option<&dyn RenderSliver>;

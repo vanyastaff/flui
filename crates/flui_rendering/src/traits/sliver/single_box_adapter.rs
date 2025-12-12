@@ -45,7 +45,6 @@ use crate::traits::{RenderBox, RenderSliver};
 ///     }
 /// }
 /// ```
-#[ambassador::delegatable_trait]
 pub trait RenderSliverSingleBoxAdapter: RenderSliver {
     /// Returns a reference to the box child, if any
     fn child(&self) -> Option<&dyn RenderBox>;

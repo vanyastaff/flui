@@ -1,7 +1,7 @@
 //! Shifted box trait for custom child positioning
 
 use crate::traits::r#box::SingleChildRenderBox;
-use crate::traits::{BoxHitTestResult, PaintingContext, RenderBox};
+use crate::traits::{BoxHitTestResult, PaintingContext};
 use flui_types::Offset;
 
 /// Trait for render boxes that position their child at a custom offset
@@ -38,14 +38,22 @@ use flui_types::Offset;
 /// # Required Implementation
 ///
 /// You must implement `child_offset()` to specify where the child is positioned.
-#[ambassador::delegatable_trait]
 pub trait RenderShiftedBox: SingleChildRenderBox {
+    // Note: child() and child_mut() are inherited from SingleChildRenderBox
+    // No need to duplicate them here to avoid ambiguity
+
+    // ============================================================
+    // SPECIFIC to RenderShiftedBox
+    // ============================================================
+
     /// Returns the offset at which the child is positioned
     ///
     /// This offset is relative to the parent's top-left corner.
     fn child_offset(&self) -> Offset;
 
-    // Default implementations using child_offset()
+    // ============================================================
+    // DUPLICATED from RenderBox (for delegation) with custom behavior
+    // ============================================================
 
     /// Hit testing accounts for child offset
     fn hit_test_children(&self, result: &mut dyn BoxHitTestResult, position: Offset) -> bool {
@@ -62,16 +70,5 @@ pub trait RenderShiftedBox: SingleChildRenderBox {
         if let Some(child) = self.child() {
             context.paint_child(child, offset + self.child_offset());
         }
-    }
-}
-
-// Blanket implementation: RenderShiftedBox -> SingleChildRenderBox
-impl<T: RenderShiftedBox> SingleChildRenderBox for T {
-    fn child(&self) -> Option<&dyn RenderBox> {
-        RenderShiftedBox::child(self)
-    }
-
-    fn child_mut(&mut self) -> Option<&mut dyn RenderBox> {
-        RenderShiftedBox::child_mut(self)
     }
 }

@@ -5,7 +5,7 @@
 
 use std::marker::PhantomData;
 
-use flui_tree::arity::{Arity, ChildrenStorage, Exact};
+use flui_tree::arity::Exact;
 
 use crate::protocol::Protocol;
 
