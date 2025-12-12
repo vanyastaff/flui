@@ -2,6 +2,7 @@
 
 use std::marker::PhantomData;
 
+use ambassador::Delegate;
 use flui_tree::arity::{Arity, ArityStorage, ChildrenStorage, Variable};
 
 use crate::parent_data::ParentData;
@@ -11,6 +12,8 @@ use crate::protocol::Protocol;
 ///
 /// `Children<P, PD, A>` stores children using ArityStorage from flui-tree, providing
 /// compile-time validation of child count constraints.
+///
+/// Uses ambassador to delegate ChildrenStorage trait to internal storage.
 ///
 /// # Type Parameters
 ///
@@ -34,7 +37,8 @@ use crate::protocol::Protocol;
 ///     let size = child.size();
 /// }
 /// ```
-#[derive(Debug)]
+#[derive(Debug, Delegate)]
+#[delegate(ChildrenStorage<Box<P::Object>, A>, target = "storage")]
 pub struct Children<P: Protocol, PD: ParentData = P::ParentData, A: Arity = Variable> {
     storage: ArityStorage<Box<P::Object>, A>,
     _phantom: PhantomData<(P, PD)>,
@@ -178,70 +182,7 @@ impl<P: Protocol, PD: ParentData, A: Arity> FromIterator<Box<P::Object>> for Chi
     }
 }
 
-// Implement ChildrenStorage to enable delegation
-impl<P: Protocol, PD: ParentData, A: Arity> ChildrenStorage<Box<P::Object>, A>
-    for Children<P, PD, A>
-{
-    fn child_count(&self) -> usize {
-        self.storage.child_count()
-    }
-
-    fn get_child(&self, index: usize) -> Option<&Box<P::Object>> {
-        self.storage.get_child(index)
-    }
-
-    fn get_child_mut(&mut self, index: usize) -> Option<&mut Box<P::Object>> {
-        self.storage.get_child_mut(index)
-    }
-
-    fn add_child(&mut self, child: Box<P::Object>) -> Result<(), Box<P::Object>> {
-        self.storage.add_child(child)
-    }
-
-    fn insert_child(
-        &mut self,
-        index: usize,
-        child: Box<P::Object>,
-    ) -> Result<(), Box<P::Object>> {
-        self.storage.insert_child(index, child)
-    }
-
-    fn remove_child(&mut self, index: usize) -> Option<Box<P::Object>> {
-        self.storage.remove_child(index)
-    }
-
-    fn set_single_child(&mut self, child: Box<P::Object>) -> Result<(), Box<P::Object>> {
-        self.storage.set_single_child(child)
-    }
-
-    fn get_single(&self) -> Option<&Box<P::Object>> {
-        self.storage.get_single()
-    }
-
-    fn get_single_mut(&mut self) -> Option<&mut Box<P::Object>> {
-        self.storage.get_single_mut()
-    }
-
-    fn iter_children(&self) -> impl Iterator<Item = &Box<P::Object>> {
-        self.storage.iter_children()
-    }
-
-    fn iter_children_mut(&mut self) -> impl Iterator<Item = &mut Box<P::Object>> {
-        self.storage.iter_children_mut()
-    }
-
-    fn capacity(&self) -> Option<usize> {
-        self.storage.capacity()
-    }
-
-    fn reserve(&mut self, additional: usize) {
-        self.storage.reserve(additional)
-    }
-
-    fn swap_children(&mut self, a: usize, b: usize) -> Result<(), &'static str> {
-        self.storage.swap_children(a, b)
-    }
-}
+// ChildrenStorage is automatically delegated to `storage` via ambassador
 
 #[cfg(test)]
 mod tests {
