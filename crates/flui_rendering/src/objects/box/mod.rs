@@ -5,14 +5,14 @@
 //!
 //! # Categories
 //!
-//! - [`basic`]: Simple single-child modifications
-//! - `effects`: Visual effects and transformations (TODO)
+//! - [`basic`]: Simple single-child modifications (Padding, Align, etc.)
+//! - [`effects`]: Visual effects and transformations (Opacity, Transform, Clip*, etc.)
 //! - `layout`: Multi-child layout algorithms (TODO)
 
 pub mod basic;
+pub mod effects;
 
 // TODO: Add remaining categories
-// pub mod effects;
 // pub mod layout;
 // pub mod animation;
 // pub mod interaction;
