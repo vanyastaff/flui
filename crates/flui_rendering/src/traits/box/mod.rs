@@ -1,0 +1,28 @@
+//! Box protocol traits for 2D cartesian layout.
+//!
+//! # Trait Hierarchy
+//!
+//! ```text
+//! RenderBox
+//!     ├── SingleChildRenderBox
+//!     │   ├── RenderProxyBox (size = child size)
+//!     │   │   ├── HitTestProxy
+//!     │   │   └── ClipProxy<T>
+//!     │   └── RenderShiftedBox (custom offset)
+//!     │       └── RenderAligningShiftedBox
+//!     └── MultiChildRenderBox
+//! ```
+
+mod aligning_shifted_box;
+mod multi_child;
+mod proxy_box;
+mod render_box;
+mod shifted_box;
+mod single_child;
+
+pub use aligning_shifted_box::*;
+pub use multi_child::*;
+pub use proxy_box::*;
+pub use render_box::*;
+pub use shifted_box::*;
+pub use single_child::*;

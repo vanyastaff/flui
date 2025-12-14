@@ -68,10 +68,11 @@ pub mod prelude {
     pub use crate::pipeline::{Canvas, Paint, PaintStyle, PaintingContext, PipelineOwner};
     pub use crate::protocol::{BoxProtocol, Protocol, SliverProtocol};
     pub use crate::traits::{
-        BoxHitTestEntry, BoxHitTestResult, MultiChildRenderBox, RenderBox, RenderObject,
-        RenderObjectExt, RenderProxySliver, RenderSliver, RenderSliverMultiBoxAdaptor,
-        RenderSliverSingleBoxAdapter, SingleChildRenderBox, SliverHitTestEntry,
-        SliverHitTestResult, TextBaseline,
+        BoxHitTestEntry, BoxHitTestResult, HitTestBehavior, MultiChildRenderBox,
+        RenderAligningShiftedBox, RenderBox, RenderObject, RenderObjectExt, RenderProxyBox,
+        RenderProxySliver, RenderShiftedBox, RenderSliver, RenderSliverMultiBoxAdaptor,
+        RenderSliverPersistentHeader, RenderSliverSingleBoxAdapter, SingleChildRenderBox,
+        SliverHitTestEntry, SliverHitTestResult, TextBaseline,
     };
 
     // Re-export commonly used types from flui_types

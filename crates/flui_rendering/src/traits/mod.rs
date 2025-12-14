@@ -8,16 +8,31 @@
 //!     │   ├── SingleChildRenderBox
 //!     │   │   ├── RenderProxyBox
 //!     │   │   └── RenderShiftedBox
+//!     │   │       └── RenderAligningShiftedBox
 //!     │   └── MultiChildRenderBox
 //!     └── RenderSliver (scrollable)
 //!         ├── RenderProxySliver
-//!         └── RenderSliverMultiBoxAdaptor
+//!         ├── RenderSliverSingleBoxAdapter
+//!         ├── RenderSliverMultiBoxAdaptor
+//!         └── RenderSliverPersistentHeader
 //! ```
 
-mod render_box;
+pub mod r#box;
 mod render_object;
-mod render_sliver;
+pub mod sliver;
 
-pub use render_box::*;
+// Re-export RenderObject at traits level
 pub use render_object::*;
-pub use render_sliver::*;
+
+// Re-export box traits
+pub use r#box::{
+    BoxHitTestEntry, BoxHitTestResult, HitTestBehavior, MultiChildRenderBox,
+    RenderAligningShiftedBox, RenderBox, RenderProxyBox, RenderShiftedBox, SingleChildRenderBox,
+    TextBaseline,
+};
+
+// Re-export sliver traits
+pub use sliver::{
+    RenderProxySliver, RenderSliver, RenderSliverMultiBoxAdaptor, RenderSliverPersistentHeader,
+    RenderSliverSingleBoxAdapter, SliverHitTestEntry, SliverHitTestResult,
+};
