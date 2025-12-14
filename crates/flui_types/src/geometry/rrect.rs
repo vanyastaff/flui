@@ -369,13 +369,13 @@ impl RRect {
         if x < self.left() + self.top_left.x && y < self.top() + self.top_left.y {
             let dx = x - (self.left() + self.top_left.x);
             let dy = y - (self.top() + self.top_left.y);
-            if self.top_left.x > 0.0 && self.top_left.y > 0.0 {
-                if dx * dx / (self.top_left.x * self.top_left.x)
+            if self.top_left.x > 0.0
+                && self.top_left.y > 0.0
+                && dx * dx / (self.top_left.x * self.top_left.x)
                     + dy * dy / (self.top_left.y * self.top_left.y)
                     > 1.0
-                {
-                    return false;
-                }
+            {
+                return false;
             }
         }
 
@@ -383,13 +383,13 @@ impl RRect {
         if x > self.right() - self.top_right.x && y < self.top() + self.top_right.y {
             let dx = x - (self.right() - self.top_right.x);
             let dy = y - (self.top() + self.top_right.y);
-            if self.top_right.x > 0.0 && self.top_right.y > 0.0 {
-                if dx * dx / (self.top_right.x * self.top_right.x)
+            if self.top_right.x > 0.0
+                && self.top_right.y > 0.0
+                && dx * dx / (self.top_right.x * self.top_right.x)
                     + dy * dy / (self.top_right.y * self.top_right.y)
                     > 1.0
-                {
-                    return false;
-                }
+            {
+                return false;
             }
         }
 
@@ -397,13 +397,13 @@ impl RRect {
         if x > self.right() - self.bottom_right.x && y > self.bottom() - self.bottom_right.y {
             let dx = x - (self.right() - self.bottom_right.x);
             let dy = y - (self.bottom() - self.bottom_right.y);
-            if self.bottom_right.x > 0.0 && self.bottom_right.y > 0.0 {
-                if dx * dx / (self.bottom_right.x * self.bottom_right.x)
+            if self.bottom_right.x > 0.0
+                && self.bottom_right.y > 0.0
+                && dx * dx / (self.bottom_right.x * self.bottom_right.x)
                     + dy * dy / (self.bottom_right.y * self.bottom_right.y)
                     > 1.0
-                {
-                    return false;
-                }
+            {
+                return false;
             }
         }
 
@@ -411,13 +411,13 @@ impl RRect {
         if x < self.left() + self.bottom_left.x && y > self.bottom() - self.bottom_left.y {
             let dx = x - (self.left() + self.bottom_left.x);
             let dy = y - (self.bottom() - self.bottom_left.y);
-            if self.bottom_left.x > 0.0 && self.bottom_left.y > 0.0 {
-                if dx * dx / (self.bottom_left.x * self.bottom_left.x)
+            if self.bottom_left.x > 0.0
+                && self.bottom_left.y > 0.0
+                && dx * dx / (self.bottom_left.x * self.bottom_left.x)
                     + dy * dy / (self.bottom_left.y * self.bottom_left.y)
                     > 1.0
-                {
-                    return false;
-                }
+            {
+                return false;
             }
         }
 

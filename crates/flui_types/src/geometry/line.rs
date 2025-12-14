@@ -275,7 +275,7 @@ impl Line {
         let t1 = d.cross(d2) / cross;
         let t2 = d.cross(d1) / cross;
 
-        if t1 >= 0.0 && t1 <= 1.0 && t2 >= 0.0 && t2 <= 1.0 {
+        if (0.0..=1.0).contains(&t1) && (0.0..=1.0).contains(&t2) {
             Some(self.eval(t1))
         } else {
             None
