@@ -24,6 +24,4 @@
 //! ```
 
 pub mod r#box;
-
-// TODO: Add sliver module when implementing sliver objects
-// pub mod sliver;
+pub mod sliver;

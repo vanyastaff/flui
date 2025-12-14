@@ -21,7 +21,7 @@ mod clip_path;
 mod clip_rect;
 mod clip_rrect;
 mod decorated_box;
-mod fitted_box;
+pub mod fitted_box;
 mod fractional_translation;
 mod opacity;
 mod rotated_box;

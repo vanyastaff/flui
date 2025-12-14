@@ -211,6 +211,29 @@ impl StackParentData {
 
 crate::impl_parent_data!(StackParentData);
 
+// ============================================================================
+// WrapParentData
+// ============================================================================
+
+/// Parent data for children of wrap render objects.
+///
+/// Extends [`ContainerBoxParentData`] with wrap-specific metadata.
+#[derive(Debug, Clone, Default)]
+pub struct WrapParentData {
+    /// The offset at which to paint the child.
+    pub offset: Offset,
+}
+
+impl WrapParentData {
+    /// Creates new WrapParentData with the given offset.
+    #[inline]
+    pub fn new(offset: Offset) -> Self {
+        Self { offset }
+    }
+}
+
+crate::impl_parent_data!(WrapParentData);
+
 #[cfg(test)]
 mod tests {
     use super::*;

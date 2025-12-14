@@ -7,13 +7,13 @@
 //!
 //! - [`basic`]: Simple single-child modifications (Padding, Align, etc.)
 //! - [`effects`]: Visual effects and transformations (Opacity, Transform, Clip*, etc.)
-//! - `layout`: Multi-child layout algorithms (TODO)
+//! - [`layout`]: Multi-child layout algorithms (Flex, Stack, Wrap)
 
 pub mod basic;
 pub mod effects;
+pub mod layout;
 
 // TODO: Add remaining categories
-// pub mod layout;
 // pub mod animation;
 // pub mod interaction;
 // pub mod gestures;
