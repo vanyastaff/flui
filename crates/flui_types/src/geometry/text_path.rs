@@ -35,7 +35,7 @@
 //! }
 //! ```
 
-use std::f32::consts::{PI, TAU};
+use std::f64::consts::{PI, TAU};
 
 use crate::Point;
 
@@ -45,7 +45,7 @@ pub struct CharTransform {
     /// Position of the character (center point or baseline)
     pub position: Point,
     /// Rotation angle in radians (0 = horizontal)
-    pub rotation: f32,
+    pub rotation: f64,
 }
 
 /// Calculates character position along an arc (circular path)
@@ -63,7 +63,7 @@ pub struct CharTransform {
 /// # Example
 /// ```
 /// use flui_types::geometry::text_path::arc_position;
-/// use std::f32::consts::TAU;
+/// use std::f64::consts::TAU;
 ///
 /// // Position character 3 out of 10 on a circle
 /// let transform = arc_position(3, 10, 100.0, 0.0, TAU);
@@ -73,15 +73,15 @@ pub struct CharTransform {
 pub fn arc_position(
     char_index: usize,
     total_chars: usize,
-    radius: f32,
-    start_angle: f32,
-    arc_length: f32,
+    radius: f64,
+    start_angle: f64,
+    arc_length: f64,
 ) -> CharTransform {
-    let t = char_index as f32 / (total_chars as f32).max(1.0);
+    let t = char_index as f64 / (total_chars as f64).max(1.0);
     let angle = start_angle + arc_length * t;
 
     CharTransform {
-        position: Point::new(radius * angle.cos(), radius * angle.sin()),
+        position: Point::new((radius * angle.cos()) as f32, (radius * angle.sin()) as f32),
         rotation: angle + PI / 2.0, // Rotate 90° to face outward
     }
 }
@@ -104,8 +104,8 @@ pub fn arc_position(
 /// // Apply offset_y to character Y position
 /// ```
 #[inline]
-pub fn wave_offset(char_index: usize, frequency: f32, amplitude: f32) -> f32 {
-    (char_index as f32 * frequency).sin() * amplitude
+pub fn wave_offset(char_index: usize, frequency: f64, amplitude: f64) -> f64 {
+    (char_index as f64 * frequency).sin() * amplitude
 }
 
 /// Calculates position along a spiral path
@@ -131,16 +131,16 @@ pub fn wave_offset(char_index: usize, frequency: f32, amplitude: f32) -> f32 {
 pub fn spiral_position(
     char_index: usize,
     total_chars: usize,
-    start_radius: f32,
-    radius_per_revolution: f32,
-    revolutions: f32,
+    start_radius: f64,
+    radius_per_revolution: f64,
+    revolutions: f64,
 ) -> CharTransform {
-    let t = char_index as f32 / (total_chars as f32).max(1.0);
+    let t = char_index as f64 / (total_chars as f64).max(1.0);
     let angle = revolutions * TAU * t;
     let radius = start_radius + (radius_per_revolution * revolutions * t);
 
     CharTransform {
-        position: Point::new(radius * angle.cos(), radius * angle.sin()),
+        position: Point::new((radius * angle.cos()) as f32, (radius * angle.sin()) as f32),
         rotation: angle + PI / 2.0,
     }
 }
@@ -162,8 +162,8 @@ pub fn spiral_position(
 /// let rotation = wave_rotation(7, 0.3, 0.5); // Max ±28.6 degrees
 /// ```
 #[inline]
-pub fn wave_rotation(char_index: usize, frequency: f32, max_angle: f32) -> f32 {
-    (char_index as f32 * frequency).sin() * max_angle
+pub fn wave_rotation(char_index: usize, frequency: f64, max_angle: f64) -> f64 {
+    (char_index as f64 * frequency).sin() * max_angle
 }
 
 /// Calculates scaling factor along a gradient (for pyramid/trapezoid effects)
@@ -184,7 +184,7 @@ pub fn wave_rotation(char_index: usize, frequency: f32, max_angle: f32) -> f32 {
 /// let scale_at_middle = vertical_scale(0.5, 0.5, 1.0); // Returns 0.75
 /// ```
 #[inline]
-pub fn vertical_scale(normalized_y: f32, top_scale: f32, bottom_scale: f32) -> f32 {
+pub fn vertical_scale(normalized_y: f64, top_scale: f64, bottom_scale: f64) -> f64 {
     top_scale + (bottom_scale - top_scale) * normalized_y.clamp(0.0, 1.0)
 }
 
@@ -211,13 +211,16 @@ pub fn vertical_scale(normalized_y: f32, top_scale: f32, bottom_scale: f32) -> f
 pub fn grid_position(
     char_index: usize,
     chars_per_row: usize,
-    char_width: f32,
-    char_height: f32,
+    char_width: f64,
+    char_height: f64,
 ) -> Point {
     let row = char_index / chars_per_row.max(1);
     let col = char_index % chars_per_row.max(1);
 
-    Point::new(col as f32 * char_width, row as f32 * char_height)
+    Point::new(
+        (col as f64 * char_width) as f32,
+        (row as f64 * char_height) as f32,
+    )
 }
 
 /// Calculates position along a Bezier curve (quadratic)
@@ -242,8 +245,8 @@ pub fn grid_position(
 /// let mid_point = bezier_point(0.5, start, control, end);
 /// ```
 #[inline]
-pub fn bezier_point(t: f32, p0: Point, p1: Point, p2: Point) -> Point {
-    let t = t.clamp(0.0, 1.0);
+pub fn bezier_point(t: f64, p0: Point, p1: Point, p2: Point) -> Point {
+    let t = t.clamp(0.0, 1.0) as f32;
     let mt = 1.0 - t;
     let mt2 = mt * mt;
     let t2 = t * t;
@@ -265,15 +268,15 @@ pub fn bezier_point(t: f32, p0: Point, p1: Point, p2: Point) -> Point {
 /// # Returns
 /// Rotation angle in radians tangent to the curve at t
 #[inline]
-pub fn bezier_tangent_rotation(t: f32, p0: Point, p1: Point, p2: Point) -> f32 {
-    let t = t.clamp(0.0, 1.0);
+pub fn bezier_tangent_rotation(t: f64, p0: Point, p1: Point, p2: Point) -> f64 {
+    let t = t.clamp(0.0, 1.0) as f32;
     let mt = 1.0 - t;
 
     // Derivative of quadratic Bezier
     let dx = 2.0 * mt * (p1.x - p0.x) + 2.0 * t * (p2.x - p1.x);
     let dy = 2.0 * mt * (p1.y - p0.y) + 2.0 * t * (p2.y - p1.y);
 
-    dy.atan2(dx)
+    (dy as f64).atan2(dx as f64)
 }
 
 /// Calculates character position along a custom parametric path
@@ -303,13 +306,13 @@ pub fn bezier_tangent_rotation(t: f32, p0: Point, p1: Point, p2: Point) -> f32 {
 #[inline]
 pub fn parametric_position<F>(char_index: usize, total_chars: usize, path_fn: F) -> CharTransform
 where
-    F: Fn(f32) -> (f32, f32, f32),
+    F: Fn(f64) -> (f64, f64, f64),
 {
-    let t = char_index as f32 / (total_chars as f32).max(1.0);
+    let t = char_index as f64 / (total_chars as f64).max(1.0);
     let (x, y, rotation) = path_fn(t);
 
     CharTransform {
-        position: Point::new(x, y),
+        position: Point::new(x as f32, y as f32),
         rotation,
     }
 }

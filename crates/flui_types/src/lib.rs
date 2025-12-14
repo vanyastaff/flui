@@ -86,7 +86,7 @@ pub use styling::{Color, Color32};
 /// Import with `use flui_types::prelude::*;` to get all commonly-used types.
 pub mod prelude {
     // Geometry - Essential types
-    pub use crate::geometry::{Matrix4, Offset, Point, RRect, Rect, Size};
+    pub use crate::geometry::{Matrix4, Offset, Point, RRect, Rect, Size, Vec2};
 
     // Layout - Common types
     pub use crate::layout::{

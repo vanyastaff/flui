@@ -10,11 +10,20 @@ repository.workspace = true
 [dependencies]
 tracing = { workspace = true }
 
+# Numeric traits for generic math (Float, Num, etc.)
+num-traits = "0.2"
+
 # Serialization support (optional)
 serde = { workspace = true, optional = true }
 
 # Stack-allocated Vec for small collections (animation curves, color stops)
 smallvec = { workspace = true }
+
+# Interoperability with other math libraries (optional)
+mint = { version = "0.5", optional = true }
+
+# Direct glam integration (optional)
+glam = { version = "0.30", optional = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
@@ -32,9 +41,16 @@ serde = ["dep:serde"]
 # Auto-detects SSE/AVX (x86_64) or NEON (ARM)
 simd = []
 
+# === Interoperability ===
+# mint: Zero-cost conversions with glam, nalgebra, cgmath, kurbo
+mint = ["dep:mint"]
+
+# glam: Direct integration with glam math library
+glam = ["dep:glam"]
+
 # === Convenience ===
 # Enable all features
-full = ["serde", "simd"]
+full = ["serde", "simd", "mint"]
 
 # NOTE: Image and font loading moved to flui_assets crate.
 # flui_types only provides type definitions!

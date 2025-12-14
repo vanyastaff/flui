@@ -515,7 +515,7 @@ impl Matrix4 {
             let remainder = chunks.remainder();
 
             for chunk in chunks {
-                // Load x and y coordinates
+                // Points are already f32, use directly
                 let x_vec = _mm_set_ps(chunk[3].x, chunk[2].x, chunk[1].x, chunk[0].x);
                 let y_vec = _mm_set_ps(chunk[3].y, chunk[2].y, chunk[1].y, chunk[0].y);
 
@@ -579,7 +579,7 @@ impl Matrix4 {
             let remainder = chunks.remainder();
 
             for chunk in chunks {
-                // Load x and y coordinates
+                // Points are already f32, use directly
                 let x_vec = vld1q_f32([chunk[0].x, chunk[1].x, chunk[2].x, chunk[3].x].as_ptr());
                 let y_vec = vld1q_f32([chunk[0].y, chunk[1].y, chunk[2].y, chunk[3].y].as_ptr());
 

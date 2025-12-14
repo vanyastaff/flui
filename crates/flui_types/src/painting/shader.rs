@@ -522,7 +522,7 @@ impl ShaderSpec {
                 let center_offset = Offset::new(center.0 * size.width, center.1 * size.height);
 
                 // Convert relative radius to absolute (use average of width/height for circular radius)
-                let absolute_radius = *radius * ((size.width + size.height) / 2.0);
+                let absolute_radius = *radius * (size.width + size.height) / 2.0;
 
                 // Convert Color32 to Color
                 let converted_colors: Vec<Color> = colors

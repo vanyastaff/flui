@@ -216,7 +216,9 @@ impl Offset {
     /// let point = offset.to_point();
     /// assert_eq!(point, Point::new(10.0, 20.0));
     /// ```
-    pub fn to_point(self) -> Point {
+    #[inline]
+    #[must_use]
+    pub const fn to_point(self) -> Point {
         Point::new(self.dx, self.dy)
     }
 
@@ -235,11 +237,8 @@ impl Offset {
     /// ```
     #[inline]
     #[must_use]
-    pub const fn to_size(self) -> Size {
-        Size::new(
-            if self.dx > 0.0 { self.dx } else { 0.0 },
-            if self.dy > 0.0 { self.dy } else { 0.0 },
-        )
+    pub fn to_size(self) -> Size {
+        Size::new(self.dx.max(0.0), self.dy.max(0.0))
     }
 
     // ===== Helper methods for rendering =====

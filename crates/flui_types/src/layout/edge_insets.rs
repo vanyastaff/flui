@@ -312,7 +312,7 @@ impl EdgeInsets {
     /// use flui_types::{EdgeInsets, Point, Rect, Size};
     ///
     /// let insets = EdgeInsets::all(10.0);
-    /// let rect = Rect::from_min_size(Point::ZERO, Size::new(100.0, 100.0));
+    /// let rect = Rect::from_origin_size(Point::ZERO, Size::new(100.0, 100.0));
     /// let inflated = insets.inflate_rect(rect);
     /// assert_eq!(inflated.min, Point::new(-10.0, -10.0));
     /// assert_eq!(inflated.max, Point::new(110.0, 110.0));
@@ -335,7 +335,7 @@ impl EdgeInsets {
     /// use flui_types::{EdgeInsets, Point, Rect, Size};
     ///
     /// let insets = EdgeInsets::all(10.0);
-    /// let rect = Rect::from_min_size(Point::ZERO, Size::new(100.0, 100.0));
+    /// let rect = Rect::from_origin_size(Point::ZERO, Size::new(100.0, 100.0));
     /// let deflated = insets.deflate_rect(rect);
     /// assert_eq!(deflated.min, Point::new(10.0, 10.0));
     /// assert_eq!(deflated.max, Point::new(90.0, 90.0));
@@ -570,7 +570,7 @@ mod tests {
     #[test]
     fn test_edge_insets_rect_operations() {
         let insets = EdgeInsets::all(10.0);
-        let rect = Rect::from_min_size(Point::new(0.0, 0.0), Size::new(100.0, 100.0));
+        let rect = Rect::from_origin_size(Point::new(0.0, 0.0), Size::new(100.0, 100.0));
 
         // Deflate (shrink)
         let deflated = insets.deflate_rect(rect);

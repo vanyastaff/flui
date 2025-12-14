@@ -2,7 +2,7 @@
 //!
 //! Provides Path structure for creating complex shapes with lines, curves, and arcs.
 
-use crate::geometry::{Offset, Point, Rect};
+use crate::geometry::{Offset, Point, Rect, Vec2};
 use crate::painting::PathFillType;
 use smallvec::SmallVec;
 
@@ -284,24 +284,28 @@ impl Path {
         }
 
         let rect = rrect.bounding_rect();
-        let tl = rrect.top_left;
-        let tr = rrect.top_right;
-        let br = rrect.bottom_right;
-        let bl = rrect.bottom_left;
+        let tl_x = rrect.top_left.x;
+        let tl_y = rrect.top_left.y;
+        let tr_x = rrect.top_right.x;
+        let tr_y = rrect.top_right.y;
+        let br_x = rrect.bottom_right.x;
+        let br_y = rrect.bottom_right.y;
+        let bl_x = rrect.bottom_left.x;
+        let bl_y = rrect.bottom_left.y;
 
         // Start at top-left, after the corner radius
-        path.move_to(Point::new(rect.left() + tl.x, rect.top()));
+        path.move_to(Point::new(rect.left() + tl_x, rect.top()));
 
         // Top edge
-        path.line_to(Point::new(rect.right() - tr.x, rect.top()));
+        path.line_to(Point::new(rect.right() - tr_x, rect.top()));
 
         // Top-right corner
-        if tr.x > 0.0 || tr.y > 0.0 {
+        if tr_x > 0.0 || tr_y > 0.0 {
             let corner_rect = Rect::from_xywh(
-                rect.right() - tr.x * 2.0,
+                rect.right() - tr_x * 2.0,
                 rect.top(),
-                tr.x * 2.0,
-                tr.y * 2.0,
+                tr_x * 2.0,
+                tr_y * 2.0,
             );
             path.add_arc(
                 corner_rect,
@@ -311,29 +315,29 @@ impl Path {
         }
 
         // Right edge
-        path.line_to(Point::new(rect.right(), rect.bottom() - br.y));
+        path.line_to(Point::new(rect.right(), rect.bottom() - br_y));
 
         // Bottom-right corner
-        if br.x > 0.0 || br.y > 0.0 {
+        if br_x > 0.0 || br_y > 0.0 {
             let corner_rect = Rect::from_xywh(
-                rect.right() - br.x * 2.0,
-                rect.bottom() - br.y * 2.0,
-                br.x * 2.0,
-                br.y * 2.0,
+                rect.right() - br_x * 2.0,
+                rect.bottom() - br_y * 2.0,
+                br_x * 2.0,
+                br_y * 2.0,
             );
             path.add_arc(corner_rect, 0.0, std::f32::consts::FRAC_PI_2);
         }
 
         // Bottom edge
-        path.line_to(Point::new(rect.left() + bl.x, rect.bottom()));
+        path.line_to(Point::new(rect.left() + bl_x, rect.bottom()));
 
         // Bottom-left corner
-        if bl.x > 0.0 || bl.y > 0.0 {
+        if bl_x > 0.0 || bl_y > 0.0 {
             let corner_rect = Rect::from_xywh(
                 rect.left(),
-                rect.bottom() - bl.y * 2.0,
-                bl.x * 2.0,
-                bl.y * 2.0,
+                rect.bottom() - bl_y * 2.0,
+                bl_x * 2.0,
+                bl_y * 2.0,
             );
             path.add_arc(
                 corner_rect,
@@ -343,11 +347,11 @@ impl Path {
         }
 
         // Left edge
-        path.line_to(Point::new(rect.left(), rect.top() + tl.y));
+        path.line_to(Point::new(rect.left(), rect.top() + tl_y));
 
         // Top-left corner
-        if tl.x > 0.0 || tl.y > 0.0 {
-            let corner_rect = Rect::from_xywh(rect.left(), rect.top(), tl.x * 2.0, tl.y * 2.0);
+        if tl_x > 0.0 || tl_y > 0.0 {
+            let corner_rect = Rect::from_xywh(rect.left(), rect.top(), tl_x * 2.0, tl_y * 2.0);
             path.add_arc(
                 corner_rect,
                 std::f32::consts::PI,
@@ -595,33 +599,24 @@ impl Path {
     /// Transforms the path by translating it.
     #[must_use]
     pub fn translate(&self, offset: Offset) -> Self {
+        let delta = Vec2::new(offset.dx, offset.dy);
         let commands = self
             .commands
             .iter()
             .map(|cmd| match *cmd {
-                PathCommand::MoveTo(p) => {
-                    PathCommand::MoveTo(Point::new(p.x + offset.dx, p.y + offset.dy))
+                PathCommand::MoveTo(p) => PathCommand::MoveTo(p + delta),
+                PathCommand::LineTo(p) => PathCommand::LineTo(p + delta),
+                PathCommand::QuadraticTo(c, e) => PathCommand::QuadraticTo(c + delta, e + delta),
+                PathCommand::CubicTo(c1, c2, e) => {
+                    PathCommand::CubicTo(c1 + delta, c2 + delta, e + delta)
                 }
-                PathCommand::LineTo(p) => {
-                    PathCommand::LineTo(Point::new(p.x + offset.dx, p.y + offset.dy))
+                PathCommand::AddRect(r) => PathCommand::AddRect(r.translate(delta)),
+                PathCommand::AddCircle(center, radius) => {
+                    PathCommand::AddCircle(center + delta, radius)
                 }
-                PathCommand::QuadraticTo(c, e) => PathCommand::QuadraticTo(
-                    Point::new(c.x + offset.dx, c.y + offset.dy),
-                    Point::new(e.x + offset.dx, e.y + offset.dy),
-                ),
-                PathCommand::CubicTo(c1, c2, e) => PathCommand::CubicTo(
-                    Point::new(c1.x + offset.dx, c1.y + offset.dy),
-                    Point::new(c2.x + offset.dx, c2.y + offset.dy),
-                    Point::new(e.x + offset.dx, e.y + offset.dy),
-                ),
-                PathCommand::AddRect(r) => PathCommand::AddRect(r.translate(offset.dx, offset.dy)),
-                PathCommand::AddCircle(center, radius) => PathCommand::AddCircle(
-                    Point::new(center.x + offset.dx, center.y + offset.dy),
-                    radius,
-                ),
-                PathCommand::AddOval(r) => PathCommand::AddOval(r.translate(offset.dx, offset.dy)),
+                PathCommand::AddOval(r) => PathCommand::AddOval(r.translate(delta)),
                 PathCommand::AddArc(r, start, sweep) => {
-                    PathCommand::AddArc(r.translate(offset.dx, offset.dy), start, sweep)
+                    PathCommand::AddArc(r.translate(delta), start, sweep)
                 }
                 PathCommand::Close => PathCommand::Close,
             })
@@ -678,8 +673,8 @@ impl Path {
     /// Ray casting algorithm for even-odd fill rule.
     fn contains_even_odd(&self, point: Point) -> bool {
         let mut crossings = 0;
-        let mut current_pos = Point::ZERO;
-        let mut subpath_start = Point::ZERO;
+        let mut current_pos = Point::new(0.0, 0.0);
+        let mut subpath_start = Point::new(0.0, 0.0);
 
         for cmd in &self.commands {
             match cmd {
@@ -748,8 +743,8 @@ impl Path {
     /// Winding number algorithm for non-zero fill rule.
     fn contains_non_zero(&self, point: Point) -> bool {
         let mut winding = 0;
-        let mut current_pos = Point::ZERO;
-        let mut subpath_start = Point::ZERO;
+        let mut current_pos = Point::new(0.0, 0.0);
+        let mut subpath_start = Point::new(0.0, 0.0);
 
         for cmd in &self.commands {
             match cmd {
@@ -844,7 +839,7 @@ impl Path {
     /// Count crossings for quadratic bezier curve (approximated).
     fn count_curve_crossings_quad(&self, point: Point, p0: Point, p1: Point, p2: Point) -> usize {
         // Simple approximation: subdivide into 4 line segments
-        let t_values = [0.0, 0.25, 0.5, 0.75, 1.0];
+        let t_values: [f32; 5] = [0.0, 0.25, 0.5, 0.75, 1.0];
         let mut crossings = 0;
 
         for i in 0..4 {
@@ -872,7 +867,7 @@ impl Path {
         p3: Point,
     ) -> usize {
         // Simple approximation: subdivide into 8 line segments
-        let t_values = [0.0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1.0];
+        let t_values: [f32; 9] = [0.0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1.0];
         let mut crossings = 0;
 
         for i in 0..8 {
@@ -892,7 +887,7 @@ impl Path {
 
     /// Winding number for quadratic curve.
     fn curve_winding_quad(&self, point: Point, p0: Point, p1: Point, p2: Point) -> i32 {
-        let t_values = [0.0, 0.25, 0.5, 0.75, 1.0];
+        let t_values: [f32; 5] = [0.0, 0.25, 0.5, 0.75, 1.0];
         let mut winding = 0;
 
         for i in 0..4 {
@@ -910,7 +905,7 @@ impl Path {
 
     /// Winding number for cubic curve.
     fn curve_winding_cubic(&self, point: Point, p0: Point, p1: Point, p2: Point, p3: Point) -> i32 {
-        let t_values = [0.0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1.0];
+        let t_values: [f32; 9] = [0.0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1.0];
         let mut winding = 0;
 
         for i in 0..8 {

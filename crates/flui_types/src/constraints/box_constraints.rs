@@ -688,11 +688,14 @@ impl BoxConstraints {
     pub fn deflate(&self, insets: &EdgeInsets) -> Self {
         self.assert_is_normalized();
 
+        let h_total = insets.horizontal_total();
+        let v_total = insets.vertical_total();
+
         let result = Self {
-            min_width: (self.min_width - insets.horizontal_total()).max(0.0),
-            max_width: (self.max_width - insets.horizontal_total()).max(0.0),
-            min_height: (self.min_height - insets.vertical_total()).max(0.0),
-            max_height: (self.max_height - insets.vertical_total()).max(0.0),
+            min_width: (self.min_width - h_total).max(0.0),
+            max_width: (self.max_width - h_total).max(0.0),
+            min_height: (self.min_height - v_total).max(0.0),
+            max_height: (self.max_height - v_total).max(0.0),
         };
 
         result.assert_is_normalized();
@@ -717,11 +720,14 @@ impl BoxConstraints {
     pub fn inflate(&self, insets: &EdgeInsets) -> Self {
         self.assert_is_normalized();
 
+        let h_total = insets.horizontal_total();
+        let v_total = insets.vertical_total();
+
         let result = Self {
-            min_width: self.min_width + insets.horizontal_total(),
-            max_width: self.max_width + insets.horizontal_total(),
-            min_height: self.min_height + insets.vertical_total(),
-            max_height: self.max_height + insets.vertical_total(),
+            min_width: self.min_width + h_total,
+            max_width: self.max_width + h_total,
+            min_height: self.min_height + v_total,
+            max_height: self.max_height + v_total,
         };
 
         result.assert_is_normalized();
@@ -845,7 +851,7 @@ mod tests {
         assert!(!constraints.is_tight());
         assert_eq!(constraints.min_width, 0.0);
         assert_eq!(constraints.max_width, 100.0);
-        assert_eq!(constraints.smallest(), Size::zero());
+        assert_eq!(constraints.smallest(), Size::ZERO);
     }
 
     #[test]

@@ -75,6 +75,7 @@ impl RelativeRect {
     /// Creates a RelativeRect from a Rect and a parent Size.
     ///
     /// The child rect's position is converted to offsets from the parent edges.
+    /// Note: Values are converted from f64 to f32.
     ///
     /// # Examples
     ///

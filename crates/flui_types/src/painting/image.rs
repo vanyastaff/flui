@@ -325,10 +325,8 @@ impl ImageConfiguration {
     #[must_use]
     pub fn physical_size(&self) -> Option<Size> {
         self.size.map(|s| {
-            Size::new(
-                s.width * self.effective_device_pixel_ratio(),
-                s.height * self.effective_device_pixel_ratio(),
-            )
+            let ratio = self.effective_device_pixel_ratio();
+            Size::new(s.width * ratio, s.height * ratio)
         })
     }
 }

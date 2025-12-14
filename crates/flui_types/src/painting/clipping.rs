@@ -1,7 +1,6 @@
 //! Clipping types for painting.
 
 use crate::geometry::{Offset, Rect, Size};
-use std::f32::consts::PI;
 
 /// Specifies how a new clip region combines with existing clips.
 ///
@@ -257,7 +256,7 @@ impl NotchedShape for CircularNotchedRectangle {
             // Create circular notch (simplified - in reality would use bezier curves)
             let steps = 16;
             for i in 0..=steps {
-                let angle = PI + (i as f32 / steps as f32) * PI;
+                let angle = std::f32::consts::PI + (i as f32 / steps as f32) * std::f32::consts::PI;
                 let x = guest_center_x + notch_radius * angle.cos();
                 let y = host.top() + notch_radius * (1.0 + angle.sin());
                 path.push(Offset::new(x, y));
