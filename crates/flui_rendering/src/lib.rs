@@ -48,6 +48,7 @@
 #![warn(missing_docs)]
 #![warn(clippy::all)]
 
+pub mod containers;
 pub mod parent_data;
 pub mod pipeline;
 pub mod protocol;
@@ -55,6 +56,10 @@ pub mod traits;
 
 /// Prelude module for convenient imports.
 pub mod prelude {
+    pub use crate::containers::{
+        Aligning, AligningBox, AligningSliver, BoxChild, BoxChildren, Children, Proxy, ProxyBox,
+        Shifted, ShiftedBox, ShiftedSliver, Single, SliverChild, SliverChildren, SliverProxy,
+    };
     pub use crate::parent_data::{
         BoxParentData, ContainerBoxParentData, FlexFit, FlexParentData, ParentData,
         SliverGridParentData, SliverMultiBoxAdaptorParentData, SliverParentData,

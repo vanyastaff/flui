@@ -331,6 +331,59 @@ impl Alignment {
         )
     }
 
+    /// Returns the offset that is this fraction in the direction of the given offset.
+    ///
+    /// This is the Flutter `alongOffset` method. It takes the available space as
+    /// an Offset (parent_size - child_size) and returns the position offset.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::{Alignment, Offset};
+    ///
+    /// let alignment = Alignment::CENTER;
+    /// // Available space: 50x30 (difference between parent and child)
+    /// let available = Offset::new(50.0, 30.0);
+    /// let offset = alignment.along_offset(available);
+    /// assert_eq!(offset.dx, 25.0); // 50 / 2
+    /// assert_eq!(offset.dy, 15.0); // 30 / 2
+    ///
+    /// let top_left = Alignment::TOP_LEFT;
+    /// let offset = top_left.along_offset(available);
+    /// assert_eq!(offset.dx, 0.0);
+    /// assert_eq!(offset.dy, 0.0);
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn along_offset(self, other: Offset) -> Offset {
+        let center_x = other.dx / 2.0;
+        let center_y = other.dy / 2.0;
+        Offset::new(center_x + self.x * center_x, center_y + self.y * center_y)
+    }
+
+    /// Returns the offset that is this fraction within the given size.
+    ///
+    /// This is the Flutter `alongSize` method.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::{Alignment, Size};
+    ///
+    /// let alignment = Alignment::CENTER;
+    /// let size = Size::new(100.0, 60.0);
+    /// let offset = alignment.along_size(size);
+    /// assert_eq!(offset.dx, 50.0); // 100 / 2
+    /// assert_eq!(offset.dy, 30.0); // 60 / 2
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn along_size(self, other: Size) -> Offset {
+        let center_x = other.width / 2.0;
+        let center_y = other.height / 2.0;
+        Offset::new(center_x + self.x * center_x, center_y + self.y * center_y)
+    }
+
     /// Linear interpolation between two alignments.
     ///
     /// # Examples
