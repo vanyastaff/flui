@@ -323,6 +323,15 @@ impl Rect {
             && self.max.y > other.min.y
             && self.min.y < other.max.y
     }
+
+    /// Returns whether this rectangle intersects another.
+    ///
+    /// This is an alias for [`overlaps`](Self::overlaps).
+    #[inline]
+    #[must_use]
+    pub fn intersects(&self, other: Self) -> bool {
+        self.overlaps(other)
+    }
 }
 
 // ============================================================================
@@ -402,6 +411,15 @@ impl Rect {
     #[must_use]
     pub fn inset(&self, amount: f32) -> Self {
         self.inflate(-amount, -amount)
+    }
+
+    /// Expands the rectangle by the given amount on all sides.
+    ///
+    /// This is equivalent to `inflate(amount, amount)`.
+    #[inline]
+    #[must_use]
+    pub fn expand(&self, amount: f32) -> Self {
+        self.inflate(amount, amount)
     }
 
     /// Contracts the rectangle by different amounts on each side.

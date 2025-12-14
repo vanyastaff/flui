@@ -527,7 +527,7 @@ impl DisplayList {
             if self.commands.is_empty() {
                 self.bounds = cmd_bounds;
             } else {
-                self.bounds = self.bounds.union(&cmd_bounds);
+                self.bounds = self.bounds.union(cmd_bounds);
             }
         }
         self.commands.push(command);
@@ -580,7 +580,7 @@ impl DisplayList {
                 if self.bounds == Rect::ZERO {
                     self.bounds = cmd_bounds;
                 } else {
-                    self.bounds = self.bounds.union(&cmd_bounds);
+                    self.bounds = self.bounds.union(cmd_bounds);
                 }
             }
         }
@@ -684,7 +684,7 @@ impl DisplayList {
 
             // Update bounds
             if !other.bounds.is_empty() {
-                self.bounds = self.bounds.union(&other.bounds);
+                self.bounds = self.bounds.union(other.bounds);
             }
         }
 
@@ -1874,7 +1874,7 @@ impl DrawCommand {
 
                     // Union with existing bounds
                     combined_bounds = match combined_bounds {
-                        Some(existing) => Some(existing.union(&screen_bounds)),
+                        Some(existing) => Some(existing.union(screen_bounds)),
                         None => Some(screen_bounds),
                     };
                 }

@@ -4,7 +4,7 @@
 //! Corresponds to Flutter's `OffsetLayer`, which is the base class
 //! for repaint boundary layers.
 
-use flui_types::geometry::Rect;
+use flui_types::geometry::{Rect, Vec2};
 use flui_types::Offset;
 
 /// Layer that applies a simple offset to its children.
@@ -107,7 +107,7 @@ impl OffsetLayer {
     /// Returns the bounds translated by the offset.
     #[inline]
     pub fn transform_bounds(&self, bounds: Rect) -> Rect {
-        bounds.translate(self.offset.dx, self.offset.dy)
+        bounds.translate(Vec2::new(self.offset.dx, self.offset.dy))
     }
 
     /// Computes the bounds for rendering to an image.

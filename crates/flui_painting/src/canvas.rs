@@ -683,7 +683,7 @@ impl Canvas {
     #[must_use]
     pub fn would_be_clipped(&self, rect: &Rect) -> Option<bool> {
         self.local_clip_bounds()
-            .map(|clip_bounds| !clip_bounds.intersects(rect))
+            .map(|clip_bounds| !clip_bounds.intersects(*rect))
     }
 
     // ===== Drawing Primitives =====
@@ -2641,7 +2641,7 @@ impl Canvas {
         bottom_left: f32,
         paint: &Paint,
     ) {
-        use flui_types::styling::Radius;
+        use flui_types::geometry::Radius;
         let rrect = RRect::from_rect_and_corners(
             rect,
             Radius::circular(top_left),
