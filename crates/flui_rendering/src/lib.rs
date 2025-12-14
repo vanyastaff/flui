@@ -50,6 +50,7 @@
 
 pub mod containers;
 pub mod delegates;
+pub mod objects;
 pub mod parent_data;
 pub mod pipeline;
 pub mod protocol;
