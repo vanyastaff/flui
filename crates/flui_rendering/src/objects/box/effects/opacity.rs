@@ -6,7 +6,6 @@
 use flui_types::{Offset, Size};
 
 use crate::constraints::BoxConstraints;
-
 use crate::containers::ProxyBox;
 use crate::pipeline::PaintingContext;
 use crate::traits::TextBaseline;

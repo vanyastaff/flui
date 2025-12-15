@@ -65,7 +65,7 @@
 //! }
 //! ```
 
-use ambassador::{delegatable_trait, Delegate};
+use ambassador::Delegate;
 use flui_tree::arity::storage::ambassador_impl_ChildrenStorage;
 use flui_tree::arity::{
     Arity, ArityError, ArityStorage, ChildrenStorage, Exact, Optional, RuntimeArity, Variable,
@@ -79,45 +79,107 @@ use crate::traits::{BoxHitTestResult, RenderBox};
 use flui_types::Offset;
 
 // ============================================================================
-// SingleChildContainer trait - for Ambassador delegation
+// SingleChildContainer trait - Generic single-child container
 // ============================================================================
 
-/// Trait for containers that hold a single optional child.
+/// Generic trait for containers that hold a single optional child.
 ///
-/// This trait enables Ambassador delegation for common single-child operations.
-/// Implement this trait to get automatic delegation of child access methods.
+/// This trait is parameterized by the child type `T`, enabling a single
+/// implementation to work with any protocol (Box, Sliver, etc.).
 ///
-/// # Ambassador Integration
+/// # Type Parameter
 ///
-/// Use with `#[delegate(SingleChildContainer<P>)]` to delegate child operations:
+/// - `T: ?Sized` - The child object type (e.g., `dyn RenderBox`, `dyn RenderSliver`)
+///
+/// # Example
 ///
 /// ```rust,ignore
-/// #[derive(Delegate)]
-/// #[delegate(SingleChildContainer<P>, target = "child")]
-/// pub struct MyContainer<P: Protocol> {
-///     child: Children<P, Optional>,
-///     // ... other fields
-/// }
+/// // Works for Box protocol
+/// impl SingleChildContainer<dyn RenderBox> for ProxyBox { ... }
+///
+/// // Works for Sliver protocol
+/// impl SingleChildContainer<dyn RenderSliver> for SliverProxy { ... }
 /// ```
-#[delegatable_trait]
-pub trait SingleChildContainer<P: Protocol> {
+pub trait SingleChildContainer<T: ?Sized> {
     /// Returns a reference to the child, if present.
-    fn child(&self) -> Option<&P::Object>;
+    fn child(&self) -> Option<&T>;
 
     /// Returns a mutable reference to the child, if present.
-    fn child_mut(&mut self) -> Option<&mut P::Object>;
+    fn child_mut(&mut self) -> Option<&mut T>;
 
     /// Sets the child, returning the previous child if any.
-    fn set_child(&mut self, child: Box<P::Object>) -> Option<Box<P::Object>>;
+    fn set_child(&mut self, child: Box<T>) -> Option<Box<T>>;
 
     /// Takes the child out of the container.
-    fn take_child(&mut self) -> Option<Box<P::Object>>;
+    fn take_child(&mut self) -> Option<Box<T>>;
 
     /// Returns `true` if the container has a child.
     fn has_child(&self) -> bool;
 }
 
-impl<P: Protocol> SingleChildContainer<P> for Children<P, Optional> {
+// ============================================================================
+// ProxyContainer trait - Generic proxy container (size = child size)
+// ============================================================================
+
+/// Generic trait for proxy containers that store geometry.
+///
+/// A proxy container passes through child's geometry unchanged.
+/// This is the base for effects like opacity, color filter, etc.
+///
+/// # Type Parameters
+///
+/// - `T: ?Sized` - The child object type
+/// - `G` - The geometry type (e.g., `Size` for Box, `SliverGeometry` for Sliver)
+///
+/// # Example
+///
+/// ```rust,ignore
+/// // Box proxy: child is RenderBox, geometry is Size
+/// impl ProxyContainer<dyn RenderBox, Size> for ProxyBox { ... }
+///
+/// // Sliver proxy: child is RenderSliver, geometry is SliverGeometry
+/// impl ProxyContainer<dyn RenderSliver, SliverGeometry> for SliverProxy { ... }
+/// ```
+pub trait ProxyContainer<T: ?Sized, G>: SingleChildContainer<T> {
+    /// Returns a reference to the cached geometry.
+    fn geometry(&self) -> &G;
+
+    /// Sets the cached geometry.
+    fn set_geometry(&mut self, geometry: G);
+}
+
+// ============================================================================
+// ShiftedContainer trait - Generic shifted container (child with offset)
+// ============================================================================
+
+/// Generic trait for shifted containers that store geometry and offset.
+///
+/// A shifted container positions its child at a computed offset.
+/// This is the base for padding, alignment, etc.
+///
+/// # Type Parameters
+///
+/// - `T: ?Sized` - The child object type
+/// - `G` - The geometry type
+pub trait ShiftedContainer<T: ?Sized, G>: SingleChildContainer<T> {
+    /// Returns a reference to the cached geometry.
+    fn geometry(&self) -> &G;
+
+    /// Sets the cached geometry.
+    fn set_geometry(&mut self, geometry: G);
+
+    /// Returns the child's offset within the parent.
+    fn offset(&self) -> flui_types::Offset;
+
+    /// Sets the child's offset within the parent.
+    fn set_offset(&mut self, offset: flui_types::Offset);
+}
+
+// ============================================================================
+// Implementation for Children<P, Optional>
+// ============================================================================
+
+impl<P: Protocol> SingleChildContainer<P::Object> for Children<P, Optional> {
     #[inline]
     fn child(&self) -> Option<&P::Object> {
         self.get()

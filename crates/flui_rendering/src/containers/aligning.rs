@@ -2,14 +2,14 @@
 //!
 //! This is the Rust equivalent of Flutter's `RenderAligningShiftedBox` pattern.
 
-use crate::constraints::SliverGeometry;
-use crate::protocol::{BoxProtocol, Protocol, SliverProtocol};
-use crate::traits::{BoxHitTestResult, RenderBox};
 use flui_tree::arity::Optional;
 use flui_types::{Alignment, Offset, Size};
 use std::fmt::Debug;
 
-use super::Children;
+use super::{Children, ShiftedContainer, SingleChildContainer};
+use crate::constraints::SliverGeometry;
+use crate::protocol::{BoxProtocol, Protocol, SliverProtocol};
+use crate::traits::{BoxHitTestResult, RenderBox};
 
 /// Container for single child with alignment and optional size factors.
 ///
@@ -20,6 +20,25 @@ use super::Children;
 /// # Flutter Equivalent
 ///
 /// This corresponds to `RenderAligningShiftedBox` in Flutter.
+///
+/// # Generic Traits
+///
+/// `Aligning<P>` implements generic traits that work with any protocol:
+///
+/// - [`SingleChildContainer<P::Object>`] - child access methods
+/// - [`ShiftedContainer<P::Object, P::Geometry>`] - geometry and offset storage
+///
+/// ```rust,ignore
+/// // Works for both AligningBox and AligningSliver
+/// fn use_aligning<T, G>(aligning: &mut T)
+/// where
+///     T: ShiftedContainer<dyn RenderBox, G>,
+/// {
+///     if let Some(child) = aligning.child() {
+///         println!("Offset: {:?}", aligning.offset());
+///     }
+/// }
+/// ```
 ///
 /// # Example
 ///
@@ -176,6 +195,59 @@ pub type AligningBox = Aligning<BoxProtocol>;
 
 /// Sliver aligning container.
 pub type AligningSliver = Aligning<SliverProtocol>;
+
+// ============================================================================
+// Generic trait implementations for Aligning<P>
+// ============================================================================
+
+impl<P: Protocol> SingleChildContainer<P::Object> for Aligning<P> {
+    #[inline]
+    fn child(&self) -> Option<&P::Object> {
+        self.child.get()
+    }
+
+    #[inline]
+    fn child_mut(&mut self) -> Option<&mut P::Object> {
+        self.child.get_mut()
+    }
+
+    #[inline]
+    fn set_child(&mut self, child: Box<P::Object>) -> Option<Box<P::Object>> {
+        self.child.set(child)
+    }
+
+    #[inline]
+    fn take_child(&mut self) -> Option<Box<P::Object>> {
+        self.child.take()
+    }
+
+    #[inline]
+    fn has_child(&self) -> bool {
+        self.child.has_child()
+    }
+}
+
+impl<P: Protocol> ShiftedContainer<P::Object, P::Geometry> for Aligning<P> {
+    #[inline]
+    fn geometry(&self) -> &P::Geometry {
+        &self.geometry
+    }
+
+    #[inline]
+    fn set_geometry(&mut self, geometry: P::Geometry) {
+        self.geometry = geometry;
+    }
+
+    #[inline]
+    fn offset(&self) -> Offset {
+        self.offset
+    }
+
+    #[inline]
+    fn set_offset(&mut self, offset: Offset) {
+        self.offset = offset;
+    }
+}
 
 impl AligningBox {
     /// Returns the cached size.

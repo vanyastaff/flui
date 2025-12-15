@@ -7,7 +7,7 @@ use flui_tree::arity::Optional;
 use flui_types::{Offset, Size};
 use std::fmt::Debug;
 
-use super::Children;
+use super::{Children, ProxyContainer, SingleChildContainer};
 use crate::constraints::SliverGeometry;
 use crate::protocol::{BoxProtocol, Protocol, SliverProtocol};
 use crate::traits::{BoxHitTestResult, RenderBox};
@@ -24,6 +24,31 @@ use crate::traits::{BoxHitTestResult, RenderBox};
 /// This corresponds to `RenderProxyBox` in Flutter, which uses:
 /// - `RenderObjectWithChildMixin<RenderBox>` for child storage
 /// - Size passthrough from child to parent
+///
+/// # Generic Traits
+///
+/// `Proxy<P>` implements generic traits that work with any protocol:
+///
+/// - [`SingleChildContainer<P::Object>`] - child access methods
+/// - [`ProxyContainer<P::Object, P::Geometry>`] - geometry storage
+///
+/// This enables a single implementation for both Box and Sliver protocols:
+///
+/// ```rust,ignore
+/// // Works for ProxyBox (BoxProtocol)
+/// fn use_proxy<T: ProxyContainer<dyn RenderBox, Size>>(proxy: &T) {
+///     if let Some(child) = proxy.child() {
+///         println!("Size: {:?}", proxy.geometry());
+///     }
+/// }
+///
+/// // Works for SliverProxy (SliverProtocol) too!
+/// fn use_sliver<T: ProxyContainer<dyn RenderSliver, SliverGeometry>>(proxy: &T) {
+///     if let Some(child) = proxy.child() {
+///         println!("Geometry: {:?}", proxy.geometry());
+///     }
+/// }
+/// ```
 ///
 /// # Example
 ///
@@ -154,6 +179,49 @@ pub type ProxyBox = Proxy<BoxProtocol>;
 ///
 /// Use for sliver render objects that pass through child's geometry.
 pub type SliverProxy = Proxy<SliverProtocol>;
+
+// ============================================================================
+// Generic trait implementations for Proxy<P>
+// ============================================================================
+
+impl<P: Protocol> SingleChildContainer<P::Object> for Proxy<P> {
+    #[inline]
+    fn child(&self) -> Option<&P::Object> {
+        self.child.get()
+    }
+
+    #[inline]
+    fn child_mut(&mut self) -> Option<&mut P::Object> {
+        self.child.get_mut()
+    }
+
+    #[inline]
+    fn set_child(&mut self, child: Box<P::Object>) -> Option<Box<P::Object>> {
+        self.child.set(child)
+    }
+
+    #[inline]
+    fn take_child(&mut self) -> Option<Box<P::Object>> {
+        self.child.take()
+    }
+
+    #[inline]
+    fn has_child(&self) -> bool {
+        self.child.has_child()
+    }
+}
+
+impl<P: Protocol> ProxyContainer<P::Object, P::Geometry> for Proxy<P> {
+    #[inline]
+    fn geometry(&self) -> &P::Geometry {
+        &self.geometry
+    }
+
+    #[inline]
+    fn set_geometry(&mut self, geometry: P::Geometry) {
+        self.geometry = geometry;
+    }
+}
 
 impl ProxyBox {
     /// Returns the cached size.

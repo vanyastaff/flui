@@ -3,14 +3,14 @@
 //! This is the Rust equivalent of Flutter's `RenderShiftedBox` pattern.
 //! Use when parent needs to position child at a specific offset.
 
-use crate::constraints::SliverGeometry;
-use crate::protocol::{BoxProtocol, Protocol, SliverProtocol};
-use crate::traits::{BoxHitTestResult, RenderBox};
 use flui_tree::arity::Optional;
 use flui_types::{Offset, Size};
 use std::fmt::Debug;
 
-use super::Children;
+use super::{Children, ShiftedContainer, SingleChildContainer};
+use crate::constraints::SliverGeometry;
+use crate::protocol::{BoxProtocol, Protocol, SliverProtocol};
+use crate::traits::{BoxHitTestResult, RenderBox};
 
 /// Container that stores a single child with custom offset positioning.
 ///
@@ -26,6 +26,25 @@ use super::Children;
 /// - Uses offset in `paint` and `hitTestChildren`
 ///
 /// In FLUI, we store the offset directly in the container for simplicity.
+///
+/// # Generic Traits
+///
+/// `Shifted<P>` implements generic traits that work with any protocol:
+///
+/// - [`SingleChildContainer<P::Object>`] - child access methods
+/// - [`ShiftedContainer<P::Object, P::Geometry>`] - geometry and offset storage
+///
+/// ```rust,ignore
+/// // Works for both ShiftedBox and ShiftedSliver
+/// fn use_shifted<T, G>(shifted: &T)
+/// where
+///     T: ShiftedContainer<dyn RenderBox, G>,
+/// {
+///     if let Some(child) = shifted.child() {
+///         println!("Offset: {:?}", shifted.offset());
+///     }
+/// }
+/// ```
 ///
 /// # Example
 ///
@@ -173,6 +192,59 @@ pub type ShiftedBox = Shifted<BoxProtocol>;
 
 /// Sliver shifted container.
 pub type ShiftedSliver = Shifted<SliverProtocol>;
+
+// ============================================================================
+// Generic trait implementations for Shifted<P>
+// ============================================================================
+
+impl<P: Protocol> SingleChildContainer<P::Object> for Shifted<P> {
+    #[inline]
+    fn child(&self) -> Option<&P::Object> {
+        self.child.get()
+    }
+
+    #[inline]
+    fn child_mut(&mut self) -> Option<&mut P::Object> {
+        self.child.get_mut()
+    }
+
+    #[inline]
+    fn set_child(&mut self, child: Box<P::Object>) -> Option<Box<P::Object>> {
+        self.child.set(child)
+    }
+
+    #[inline]
+    fn take_child(&mut self) -> Option<Box<P::Object>> {
+        self.child.take()
+    }
+
+    #[inline]
+    fn has_child(&self) -> bool {
+        self.child.has_child()
+    }
+}
+
+impl<P: Protocol> ShiftedContainer<P::Object, P::Geometry> for Shifted<P> {
+    #[inline]
+    fn geometry(&self) -> &P::Geometry {
+        &self.geometry
+    }
+
+    #[inline]
+    fn set_geometry(&mut self, geometry: P::Geometry) {
+        self.geometry = geometry;
+    }
+
+    #[inline]
+    fn offset(&self) -> Offset {
+        self.offset
+    }
+
+    #[inline]
+    fn set_offset(&mut self, offset: Offset) {
+        self.offset = offset;
+    }
+}
 
 impl ShiftedBox {
     /// Returns the cached size.
