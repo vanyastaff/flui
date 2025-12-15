@@ -234,6 +234,22 @@ impl<T: Send + Sync, A: Arity> ChildrenStorage<T> for ArityStorage<T, A> {
         self.inner_slice()
     }
 
+    fn children_slice_mut(&mut self) -> &mut [T] {
+        match self {
+            ArityStorage::Leaf(_) => &mut [],
+            ArityStorage::Optional(opt) => {
+                if let Some(ref mut child) = opt {
+                    std::slice::from_mut(child)
+                } else {
+                    &mut []
+                }
+            }
+            ArityStorage::Exact(vec) => vec.as_mut_slice(),
+            ArityStorage::Variable(vec) => vec.as_mut_slice(),
+            ArityStorage::Range(vec) => vec.as_mut_slice(),
+        }
+    }
+
     fn single_child(&self) -> Option<&T> {
         self.get_child(0)
     }

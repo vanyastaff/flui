@@ -68,8 +68,10 @@ pub mod view;
 pub mod prelude {
     pub use crate::binding::{HitTestDispatcher, PipelineManifold, RendererBinding};
     pub use crate::containers::{
-        Aligning, AligningBox, AligningSliver, BoxChild, BoxChildren, Children, Proxy, ProxyBox,
-        Shifted, ShiftedBox, ShiftedSliver, Single, SliverChild, SliverChildren, SliverProxy,
+        Aligning, AligningBox, AligningSliver, BoxChild, BoxChildList, BoxChildRequired,
+        BoxChildren, ChildList, ChildNode, Children, FlexChildren, HasOffset, Proxy, ProxyBox,
+        Shifted, ShiftedBox, ShiftedSliver, Single, SliverChild, SliverChildRequired,
+        SliverChildren, SliverProxy, StackChildren, WrapChildren,
     };
     pub use crate::delegates::{
         AspectRatioDelegate, CenterLayoutDelegate, CustomClipper, CustomPainter, FlowDelegate,

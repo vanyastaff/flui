@@ -15,7 +15,7 @@ use flui_types::prelude::AxisDirection;
 use flui_types::{Axis, Offset, Rect, Size};
 
 use crate::constraints::{BoxConstraints, GrowthDirection, SliverConstraints};
-use crate::containers::Children;
+use crate::containers::ChildList;
 use crate::lifecycle::BaseRenderObject;
 use crate::parent_data::SliverParentData;
 use crate::pipeline::{PaintingContext, PipelineOwner};
@@ -27,6 +27,7 @@ use crate::traits::{
 use crate::view::{
     CacheExtentStyle, RenderAbstractViewport, RevealedOffset, ScrollDirection, ViewportOffset,
 };
+use flui_tree::arity::Variable;
 
 // ============================================================================
 // RenderShrinkWrappingViewport
@@ -57,7 +58,7 @@ pub struct RenderShrinkWrappingViewport {
     base: BaseRenderObject,
 
     /// Sliver children with logical parent data.
-    children: Children<SliverProtocol, SliverParentData>,
+    children: ChildList<SliverProtocol, Variable, SliverParentData>,
 
     /// Direction of scroll offset increase.
     axis_direction: AxisDirection,
@@ -93,7 +94,7 @@ impl RenderShrinkWrappingViewport {
     pub fn new(axis_direction: AxisDirection) -> Self {
         Self {
             base: BaseRenderObject::new(),
-            children: Children::new(),
+            children: ChildList::new(),
             axis_direction,
             cross_axis_direction: Self::default_cross_axis(axis_direction),
             offset: None,
@@ -115,7 +116,7 @@ impl RenderShrinkWrappingViewport {
     ) -> Self {
         Self {
             base: BaseRenderObject::new(),
-            children: Children::new(),
+            children: ChildList::new(),
             axis_direction,
             cross_axis_direction,
             offset: Some(offset),
@@ -225,12 +226,12 @@ impl RenderShrinkWrappingViewport {
     }
 
     /// Returns the children container.
-    pub fn children(&self) -> &Children<SliverProtocol, SliverParentData> {
+    pub fn children(&self) -> &ChildList<SliverProtocol, Variable, SliverParentData> {
         &self.children
     }
 
     /// Returns the children container mutably.
-    pub fn children_mut(&mut self) -> &mut Children<SliverProtocol, SliverParentData> {
+    pub fn children_mut(&mut self) -> &mut ChildList<SliverProtocol, Variable, SliverParentData> {
         &mut self.children
     }
 
@@ -245,7 +246,7 @@ impl RenderShrinkWrappingViewport {
         if index < self.children.len() {
             let child = self.children.remove_child(index);
             self.mark_needs_layout();
-            Some(child)
+            child
         } else {
             None
         }
@@ -511,7 +512,7 @@ impl RenderBox for RenderShrinkWrappingViewport {
 
         // Hit test children in reverse order
         let mut hit = false;
-        let children_snapshot: Vec<_> = self.children.iter_with_data().collect();
+        let children_snapshot: Vec<_> = self.children.iter().collect();
 
         for (child, data) in children_snapshot.into_iter().rev() {
             if hit {

@@ -11,7 +11,8 @@ use flui_types::{Axis, Offset, Size};
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use super::Children;
+use super::ChildList;
+use flui_tree::arity::Variable;
 
 /// Container for viewport render objects that hold multiple sliver children.
 ///
@@ -48,7 +49,7 @@ use super::Children;
 /// ```
 pub struct Viewport {
     /// The sliver children with their paint offsets.
-    children: Children<SliverProtocol, SliverPhysicalParentData>,
+    children: ChildList<SliverProtocol, Variable, SliverPhysicalParentData>,
 
     /// The direction in which the scroll view scrolls.
     axis_direction: AxisDirection,
@@ -104,7 +105,7 @@ impl Viewport {
     /// Creates a new viewport with the given axis direction.
     pub fn new(axis_direction: AxisDirection) -> Self {
         Self {
-            children: Children::new(),
+            children: ChildList::new(),
             axis_direction,
             cross_axis_direction: Self::default_cross_axis_direction(axis_direction),
             offset: None,
@@ -125,7 +126,7 @@ impl Viewport {
         cache_extent_style: CacheExtentStyle,
     ) -> Self {
         Self {
-            children: Children::new(),
+            children: ChildList::new(),
             axis_direction,
             cross_axis_direction,
             offset: None,
@@ -150,12 +151,14 @@ impl Viewport {
     // ========================================================================
 
     /// Returns a reference to the children container.
-    pub fn children(&self) -> &Children<SliverProtocol, SliverPhysicalParentData> {
+    pub fn children(&self) -> &ChildList<SliverProtocol, Variable, SliverPhysicalParentData> {
         &self.children
     }
 
     /// Returns a mutable reference to the children container.
-    pub fn children_mut(&mut self) -> &mut Children<SliverProtocol, SliverPhysicalParentData> {
+    pub fn children_mut(
+        &mut self,
+    ) -> &mut ChildList<SliverProtocol, Variable, SliverPhysicalParentData> {
         &mut self.children
     }
 

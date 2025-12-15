@@ -1,227 +1,440 @@
-//! Multiple children container with parent data support.
+//! Protocol-aware children storage for render objects.
 //!
-//! This module provides the [`Children`] container which stores multiple
-//! render object children along with their parent data.
+//! This module provides two container types for managing child render objects:
 //!
-//! # Parent Data
+//! 1. **[`Children`]** - Simple children without parent data
+//! 2. **[`ChildList`]** - Children with per-child parent data
 //!
-//! Parent data is metadata that a parent render object stores for each child.
-//! Common examples include:
-//! - `BoxParentData`: stores the child's paint offset
-//! - `FlexParentData`: stores flex factor and fit mode
-//! - `StackParentData`: stores positioning constraints
+//! # Choosing the Right Container
 //!
-//! # Example
+//! Use **`Children`** for render objects that don't need layout info per child:
+//! - `RenderOpacity` - just needs opacity value
+//! - `RenderClipRect` - just needs clip shape
+//! - `RenderTransform` - just needs transform matrix
+//!
+//! Use **`ChildList`** for render objects that store layout info per child:
+//! - `RenderFlex` - needs flex factor, fit, offset per child
+//! - `RenderStack` - needs alignment, offset per child
+//! - `RenderWrap` - needs line break info per child
+//!
+//! # Examples
+//!
+//! ## Simple single child
 //!
 //! ```rust,ignore
-//! use flui_rendering::containers::Children;
-//! use flui_rendering::parent_data::FlexParentData;
-//! use flui_rendering::protocol::BoxProtocol;
+//! use flui_rendering::containers::BoxChild;
 //!
-//! struct RenderFlex {
-//!     children: Children<BoxProtocol, FlexParentData>,
+//! pub struct RenderOpacity {
+//!     child: BoxChild,  // Children<BoxProtocol, Optional>
+//!     opacity: f32,
 //! }
 //!
-//! impl RenderFlex {
-//!     fn layout(&mut self) {
-//!         // Iterate with parent data
-//!         for (child, data) in self.children.iter_with_data_mut() {
-//!             if let Some(flex) = data.flex {
-//!                 // Layout flexible child
-//!             }
+//! impl RenderOpacity {
+//!     fn paint(&self, ctx: &mut PaintingContext, offset: Offset) {
+//!         if let Some(child) = self.child.get() {
+//!             ctx.push_opacity(self.opacity);
+//!             child.paint(ctx, offset);
 //!         }
 //!     }
 //! }
 //! ```
+//!
+//! ## Multiple children with parent data
+//!
+//! ```rust,ignore
+//! use flui_rendering::containers::FlexChildren;
+//!
+//! pub struct RenderFlex {
+//!     children: FlexChildren,  // ChildList<BoxProtocol, Variable, FlexParentData>
+//! }
+//!
+//! impl RenderFlex {
+//!     fn layout(&mut self, constraints: BoxConstraints) -> Size {
+//!         for (child, data) in self.children.iter_mut() {
+//!             // Access flex factor, compute size, store offset
+//!             data.offset = computed_offset;
+//!         }
+//!         total_size
+//!     }
+//!
+//!     fn paint(&self, ctx: &mut PaintingContext, offset: Offset) {
+//!         self.children.paint_all(offset, |child, child_offset| {
+//!             child.paint(ctx, child_offset);
+//!         });
+//!     }
+//! }
+//! ```
+
+use ambassador::Delegate;
+use flui_tree::arity::storage::ambassador_impl_ChildrenStorage;
+use flui_tree::arity::{
+    Arity, ArityError, ArityStorage, ChildrenStorage, Exact, Optional, RuntimeArity, Variable,
+};
+use std::fmt::Debug;
+use std::marker::PhantomData;
 
 use crate::parent_data::BoxParentData;
 use crate::protocol::{BoxProtocol, Protocol, SliverProtocol};
 use crate::traits::{BoxHitTestResult, RenderBox};
 use flui_types::Offset;
-use std::fmt::Debug;
-use std::marker::PhantomData;
 
-/// A child entry storing both the render object and its parent data.
-#[derive(Debug)]
-pub struct ChildEntry<P: Protocol, PD> {
-    /// The child render object.
-    pub child: Box<P::Object>,
-    /// Parent data associated with this child.
-    pub data: PD,
+// ============================================================================
+// Children - Simple container without parent data
+// ============================================================================
+
+/// Protocol-aware children container without parent data.
+///
+/// Delegates storage to [`ArityStorage`] via Ambassador pattern.
+/// Use this when you don't need per-child layout information.
+///
+/// # Type Parameters
+///
+/// - `P` - Protocol marker ([`BoxProtocol`], [`SliverProtocol`])
+/// - `A` - Arity constraint ([`Optional`], [`Variable`], [`Exact<N>`])
+///
+/// # Type Aliases
+///
+/// For convenience, use the pre-defined type aliases:
+/// - [`BoxChild`] - Single optional box child
+/// - [`BoxChildren`] - Variable number of box children
+/// - [`SliverChild`] - Single optional sliver child
+/// - [`SliverChildren`] - Variable number of sliver children
+#[derive(Delegate)]
+#[delegate(ChildrenStorage<Box<P::Object>>, target = "storage")]
+pub struct Children<P: Protocol, A: Arity> {
+    storage: ArityStorage<Box<P::Object>, A>,
+    _protocol: PhantomData<P>,
 }
 
-impl<P: Protocol, PD> ChildEntry<P, PD> {
-    /// Creates a new child entry with the given child and parent data.
-    pub fn new(child: Box<P::Object>, data: PD) -> Self {
-        Self { child, data }
-    }
-}
-
-impl<P: Protocol, PD: Default> ChildEntry<P, PD> {
-    /// Creates a new child entry with default parent data.
-    pub fn with_default_data(child: Box<P::Object>) -> Self {
-        Self {
-            child,
-            data: PD::default(),
-        }
-    }
-}
-
-/// Container that stores multiple children of a protocol's object type.
-///
-/// Each child is stored alongside its parent data, allowing efficient
-/// access to both during layout and painting.
-///
-/// # Type Safety
-///
-/// Uses `Protocol::Object` to ensure type-safe child storage at compile time.
-/// The `PD` parameter specifies the parent data type for metadata storage.
-///
-/// # Flutter Equivalence
-///
-/// This corresponds to Flutter's `ContainerRenderObjectMixin` combined with
-/// `ContainerParentDataMixin`. In Flutter, parent data is stored on the child
-/// render object itself. In FLUI, we store it alongside the child for cleaner
-/// ownership semantics.
-///
-/// # Example
-///
-/// ```rust,ignore
-/// pub struct RenderFlex {
-///     children: BoxChildren<FlexParentData>,
-///     direction: Axis,
-/// }
-///
-/// impl RenderFlex {
-///     fn layout_children(&mut self, constraints: BoxConstraints) {
-///         for (child, data) in self.children.iter_with_data_mut() {
-///             // child is &mut dyn RenderBox
-///             // data is &mut FlexParentData
-///             let size = child.perform_layout(child_constraints);
-///             data.offset = computed_offset;
-///         }
-///     }
-/// }
-/// ```
-pub struct Children<P: Protocol, PD = <P as Protocol>::ParentData> {
-    entries: Vec<ChildEntry<P, PD>>,
-    _phantom: PhantomData<P>,
-}
-
-impl<P: Protocol, PD> Debug for Children<P, PD>
+impl<P: Protocol, A: Arity> Debug for Children<P, A>
 where
     P::Object: Debug,
-    PD: Debug,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Children")
-            .field("count", &self.entries.len())
+            .field("count", &self.child_count())
             .finish()
     }
 }
 
-impl<P: Protocol, PD: Default> Default for Children<P, PD> {
+impl<P: Protocol, A: Arity> Default for Children<P, A> {
+    #[inline]
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<P: Protocol, PD: Default> Children<P, PD> {
-    /// Creates a new empty children container.
+impl<P: Protocol, A: Arity> Children<P, A> {
+    /// Creates an empty container.
+    #[inline]
+    #[must_use]
     pub fn new() -> Self {
         Self {
-            entries: Vec::new(),
-            _phantom: PhantomData,
+            storage: ArityStorage::new(),
+            _protocol: PhantomData,
         }
     }
 
-    /// Creates a children container with the given capacity.
+    /// Creates a container with pre-allocated capacity.
+    #[inline]
+    #[must_use]
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
-            entries: Vec::with_capacity(capacity),
-            _phantom: PhantomData,
+            storage: ArityStorage::with_capacity(capacity),
+            _protocol: PhantomData,
         }
     }
 
-    /// Adds a child with default parent data to the end of the container.
-    pub fn push(&mut self, child: Box<P::Object>) {
-        self.entries.push(ChildEntry::with_default_data(child));
+    /// Creates a container with a single child.
+    #[inline]
+    #[must_use]
+    pub fn with_child(child: Box<P::Object>) -> Self {
+        let mut container = Self::new();
+        container.set(child);
+        container
     }
 
-    /// Inserts a child with default parent data at the given index.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `index > len`.
-    pub fn insert(&mut self, index: usize, child: Box<P::Object>) {
-        self.entries
-            .insert(index, ChildEntry::with_default_data(child));
+    // ========================================================================
+    // Single child API (for Optional/Exact<1> arities)
+    // ========================================================================
+
+    /// Returns a reference to the child.
+    #[inline]
+    pub fn get(&self) -> Option<&P::Object> {
+        self.single_child().map(|b| b.as_ref())
+    }
+
+    /// Returns a mutable reference to the child.
+    #[inline]
+    pub fn get_mut(&mut self) -> Option<&mut P::Object> {
+        self.single_child_mut().map(|b| b.as_mut())
+    }
+
+    /// Sets the child, returning the previous child if any.
+    #[inline]
+    pub fn set(&mut self, child: Box<P::Object>) -> Option<Box<P::Object>> {
+        self.set_single_child(child).ok().flatten()
+    }
+
+    /// Takes the child out of the container.
+    #[inline]
+    pub fn take(&mut self) -> Option<Box<P::Object>> {
+        self.take_single_child()
+    }
+
+    /// Returns `true` if the container has at least one child.
+    #[inline]
+    #[must_use]
+    pub fn has_child(&self) -> bool {
+        !self.is_empty()
+    }
+
+    /// Removes all children.
+    #[inline]
+    pub fn clear(&mut self) {
+        let _ = self.clear_children();
+    }
+
+    // ========================================================================
+    // Multi-child API (for Variable arity)
+    // ========================================================================
+
+    /// Returns the number of children.
+    #[inline]
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.child_count()
+    }
+
+    /// Returns a reference to the child at the given index.
+    #[inline]
+    pub fn get_at(&self, index: usize) -> Option<&P::Object> {
+        self.get_child(index).map(|b| b.as_ref())
+    }
+
+    /// Returns a mutable reference to the child at the given index.
+    #[inline]
+    pub fn get_at_mut(&mut self, index: usize) -> Option<&mut P::Object> {
+        self.get_child_mut(index).map(|b| b.as_mut())
+    }
+
+    /// Returns an iterator over the children.
+    #[inline]
+    pub fn iter(&self) -> impl Iterator<Item = &P::Object> {
+        self.children_slice().iter().map(|b| b.as_ref())
+    }
+
+    /// Returns a mutable iterator over the children.
+    #[inline]
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut P::Object> {
+        self.children_slice_mut().iter_mut().map(|b| b.as_mut())
     }
 }
 
-impl<P: Protocol, PD> Children<P, PD> {
-    /// Creates a new empty children container without requiring Default for PD.
+// ============================================================================
+// Type aliases for Children
+// ============================================================================
+
+/// Single optional child (generic over protocol).
+pub type Single<P> = Children<P, Optional>;
+
+/// Single optional box child.
+pub type BoxChild = Children<BoxProtocol, Optional>;
+
+/// Single required box child.
+pub type BoxChildRequired = Children<BoxProtocol, Exact<1>>;
+
+/// Variable number of box children.
+pub type BoxChildren = Children<BoxProtocol, Variable>;
+
+/// Single optional sliver child.
+pub type SliverChild = Children<SliverProtocol, Optional>;
+
+/// Single required sliver child.
+pub type SliverChildRequired = Children<SliverProtocol, Exact<1>>;
+
+/// Variable number of sliver children.
+pub type SliverChildren = Children<SliverProtocol, Variable>;
+
+// ============================================================================
+// ChildNode - Entry storing child + parent data
+// ============================================================================
+
+/// A child paired with its parent data.
+///
+/// Used internally by [`ChildList`] to store children alongside
+/// their layout metadata.
+#[derive(Debug)]
+pub struct ChildNode<P: Protocol, D: Send + Sync> {
+    /// The child render object.
+    pub child: Box<P::Object>,
+    /// Parent data for this child (offset, flex, alignment, etc.).
+    pub data: D,
+}
+
+impl<P: Protocol, D: Send + Sync> ChildNode<P, D> {
+    /// Creates a new child node.
+    #[inline]
+    pub fn new(child: Box<P::Object>, data: D) -> Self {
+        Self { child, data }
+    }
+}
+
+impl<P: Protocol, D: Default + Send + Sync> ChildNode<P, D> {
+    /// Creates a new child node with default parent data.
+    #[inline]
+    pub fn with_default(child: Box<P::Object>) -> Self {
+        Self {
+            child,
+            data: D::default(),
+        }
+    }
+}
+
+// ============================================================================
+// ChildList - Container with parent data per child
+// ============================================================================
+
+/// Children container with per-child parent data.
+///
+/// Stores children alongside their layout metadata (parent data).
+/// Provides methods for iteration, painting, and hit testing.
+///
+/// # Type Parameters
+///
+/// - `P` - Protocol marker ([`BoxProtocol`], [`SliverProtocol`])
+/// - `A` - Arity constraint (typically [`Variable`])
+/// - `D` - Parent data type (`FlexParentData`, `StackParentData`, etc.)
+///
+/// # Type Aliases
+///
+/// For convenience, use the pre-defined type aliases:
+/// - [`FlexChildren`] - For flex layouts
+/// - [`StackChildren`] - For stack layouts
+/// - [`WrapChildren`] - For wrap layouts
+pub struct ChildList<P: Protocol, A: Arity = Variable, D: Send + Sync = BoxParentData> {
+    storage: ArityStorage<ChildNode<P, D>, A>,
+    _protocol: PhantomData<P>,
+}
+
+impl<P: Protocol, A: Arity, D: Send + Sync + Debug> Debug for ChildList<P, A, D>
+where
+    P::Object: Debug,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ChildList")
+            .field("count", &self.storage.child_count())
+            .finish()
+    }
+}
+
+impl<P: Protocol, A: Arity, D: Default + Send + Sync> Default for ChildList<P, A, D> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// Methods requiring D: Default
+impl<P: Protocol, A: Arity, D: Default + Send + Sync> ChildList<P, A, D> {
+    /// Creates an empty container.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            storage: ArityStorage::new(),
+            _protocol: PhantomData,
+        }
+    }
+
+    /// Creates a container with pre-allocated capacity.
+    #[must_use]
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            storage: ArityStorage::with_capacity(capacity),
+            _protocol: PhantomData,
+        }
+    }
+
+    /// Adds a child with default parent data.
+    pub fn push(&mut self, child: Box<P::Object>) {
+        let _ = self.storage.add_child(ChildNode::with_default(child));
+    }
+
+    /// Inserts a child with default parent data at the given index.
+    pub fn insert(&mut self, index: usize, child: Box<P::Object>) -> Result<(), ArityError> {
+        self.storage
+            .insert_child(index, ChildNode::with_default(child))
+    }
+}
+
+// Methods not requiring D: Default
+impl<P: Protocol, A: Arity, D: Send + Sync> ChildList<P, A, D> {
+    /// Creates an empty container (does not require `D: Default`).
+    #[must_use]
     pub fn empty() -> Self {
         Self {
-            entries: Vec::new(),
-            _phantom: PhantomData,
+            storage: ArityStorage::new(),
+            _protocol: PhantomData,
         }
     }
 
     /// Returns the number of children.
     #[inline]
+    #[must_use]
     pub fn len(&self) -> usize {
-        self.entries.len()
+        self.storage.child_count()
     }
 
-    /// Returns `true` if the container has no children.
+    /// Returns `true` if the container is empty.
     #[inline]
+    #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
+        self.storage.is_empty()
     }
 
     // ========================================================================
-    // Child-only access (for backward compatibility)
+    // Child access (without parent data)
     // ========================================================================
 
     /// Returns a reference to the child at the given index.
     pub fn get(&self, index: usize) -> Option<&P::Object> {
-        self.entries.get(index).map(|e| &*e.child)
+        self.storage.get_child(index).map(|n| n.child.as_ref())
     }
 
     /// Returns a mutable reference to the child at the given index.
     pub fn get_mut(&mut self, index: usize) -> Option<&mut P::Object> {
-        self.entries.get_mut(index).map(|e| &mut *e.child)
+        self.storage.get_child_mut(index).map(|n| n.child.as_mut())
     }
 
-    /// Returns the first child, if any.
+    /// Returns the first child.
     pub fn first(&self) -> Option<&P::Object> {
-        self.entries.first().map(|e| &*e.child)
+        self.storage
+            .children_slice()
+            .first()
+            .map(|n| n.child.as_ref())
     }
 
-    /// Returns a mutable reference to the first child, if any.
-    pub fn first_mut(&mut self) -> Option<&mut P::Object> {
-        self.entries.first_mut().map(|e| &mut *e.child)
-    }
-
-    /// Returns the last child, if any.
+    /// Returns the last child.
     pub fn last(&self) -> Option<&P::Object> {
-        self.entries.last().map(|e| &*e.child)
-    }
-
-    /// Returns a mutable reference to the last child, if any.
-    pub fn last_mut(&mut self) -> Option<&mut P::Object> {
-        self.entries.last_mut().map(|e| &mut *e.child)
+        self.storage
+            .children_slice()
+            .last()
+            .map(|n| n.child.as_ref())
     }
 
     /// Returns an iterator over the children (without parent data).
-    pub fn iter(&self) -> impl Iterator<Item = &P::Object> {
-        self.entries.iter().map(|e| &*e.child)
+    pub fn children(&self) -> impl Iterator<Item = &P::Object> {
+        self.storage
+            .children_slice()
+            .iter()
+            .map(|n| n.child.as_ref())
     }
 
     /// Returns a mutable iterator over the children (without parent data).
-    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut P::Object> {
-        self.entries.iter_mut().map(|e| &mut *e.child)
+    pub fn children_mut(&mut self) -> impl Iterator<Item = &mut P::Object> {
+        self.storage
+            .children_slice_mut()
+            .iter_mut()
+            .map(|n| n.child.as_mut())
     }
 
     // ========================================================================
@@ -229,276 +442,163 @@ impl<P: Protocol, PD> Children<P, PD> {
     // ========================================================================
 
     /// Returns a reference to the parent data at the given index.
-    pub fn get_data(&self, index: usize) -> Option<&PD> {
-        self.entries.get(index).map(|e| &e.data)
+    pub fn data(&self, index: usize) -> Option<&D> {
+        self.storage.get_child(index).map(|n| &n.data)
     }
 
     /// Returns a mutable reference to the parent data at the given index.
-    pub fn get_data_mut(&mut self, index: usize) -> Option<&mut PD> {
-        self.entries.get_mut(index).map(|e| &mut e.data)
-    }
-
-    /// Returns the first child's parent data, if any.
-    pub fn first_data(&self) -> Option<&PD> {
-        self.entries.first().map(|e| &e.data)
-    }
-
-    /// Returns the last child's parent data, if any.
-    pub fn last_data(&self) -> Option<&PD> {
-        self.entries.last().map(|e| &e.data)
+    pub fn data_mut(&mut self, index: usize) -> Option<&mut D> {
+        self.storage.get_child_mut(index).map(|n| &mut n.data)
     }
 
     // ========================================================================
-    // Combined child + parent data access
+    // Combined access (child + parent data)
     // ========================================================================
 
-    /// Returns a reference to both child and parent data at the given index.
-    pub fn get_with_data(&self, index: usize) -> Option<(&P::Object, &PD)> {
-        self.entries.get(index).map(|e| (&*e.child, &e.data))
+    /// Returns references to both child and parent data at the given index.
+    pub fn get_with_data(&self, index: usize) -> Option<(&P::Object, &D)> {
+        self.storage
+            .get_child(index)
+            .map(|n| (n.child.as_ref(), &n.data))
     }
 
-    /// Returns a mutable reference to both child and parent data at the given index.
-    pub fn get_with_data_mut(&mut self, index: usize) -> Option<(&mut P::Object, &mut PD)> {
-        self.entries
-            .get_mut(index)
-            .map(|e| (&mut *e.child, &mut e.data))
+    /// Returns mutable references to both child and parent data.
+    pub fn get_with_data_mut(&mut self, index: usize) -> Option<(&mut P::Object, &mut D)> {
+        self.storage
+            .get_child_mut(index)
+            .map(|n| (n.child.as_mut(), &mut n.data))
     }
 
-    /// Returns an iterator over (child, parent_data) pairs.
-    pub fn iter_with_data(&self) -> impl Iterator<Item = (&P::Object, &PD)> {
-        self.entries.iter().map(|e| (&*e.child, &e.data))
+    /// Returns an iterator over (child, data) pairs.
+    pub fn iter(&self) -> impl Iterator<Item = (&P::Object, &D)> {
+        self.storage
+            .children_slice()
+            .iter()
+            .map(|n| (n.child.as_ref(), &n.data))
     }
 
-    /// Returns a mutable iterator over (child, parent_data) pairs.
-    pub fn iter_with_data_mut(&mut self) -> impl Iterator<Item = (&mut P::Object, &mut PD)> {
-        self.entries
+    /// Returns a mutable iterator over (child, data) pairs.
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = (&mut P::Object, &mut D)> {
+        self.storage
+            .children_slice_mut()
             .iter_mut()
-            .map(|e| (&mut *e.child, &mut e.data))
+            .map(|n| (n.child.as_mut(), &mut n.data))
     }
 
-    /// Returns an iterator over child entries.
-    pub fn entries(&self) -> impl Iterator<Item = &ChildEntry<P, PD>> {
-        self.entries.iter()
-    }
-
-    /// Returns a mutable iterator over child entries.
-    pub fn entries_mut(&mut self) -> impl Iterator<Item = &mut ChildEntry<P, PD>> {
-        self.entries.iter_mut()
+    /// Returns a reverse iterator over (child, data) pairs.
+    ///
+    /// Use this for hit testing (test topmost/last-painted child first).
+    pub fn iter_rev(&self) -> impl Iterator<Item = (&P::Object, &D)> {
+        self.storage
+            .children_slice()
+            .iter()
+            .rev()
+            .map(|n| (n.child.as_ref(), &n.data))
     }
 
     // ========================================================================
-    // Modification with parent data
+    // Modification with explicit parent data
     // ========================================================================
 
-    /// Adds a child with specified parent data to the end of the container.
-    pub fn push_with_data(&mut self, child: Box<P::Object>, data: PD) {
-        self.entries.push(ChildEntry::new(child, data));
+    /// Adds a child with the given parent data.
+    pub fn push_with(&mut self, child: Box<P::Object>, data: D) {
+        let _ = self.storage.add_child(ChildNode::new(child, data));
     }
 
-    /// Inserts a child with specified parent data at the given index.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `index > len`.
-    pub fn insert_with_data(&mut self, index: usize, child: Box<P::Object>, data: PD) {
-        self.entries.insert(index, ChildEntry::new(child, data));
+    /// Inserts a child with the given parent data at the specified index.
+    pub fn insert_with(
+        &mut self,
+        index: usize,
+        child: Box<P::Object>,
+        data: D,
+    ) -> Result<(), ArityError> {
+        self.storage
+            .insert_child(index, ChildNode::new(child, data))
     }
 
-    /// Removes and returns the child entry at the given index.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `index >= len`.
-    pub fn remove(&mut self, index: usize) -> ChildEntry<P, PD> {
-        self.entries.remove(index)
+    /// Removes and returns the child node at the given index.
+    pub fn remove(&mut self, index: usize) -> Option<ChildNode<P, D>> {
+        self.storage.remove_child(index)
     }
 
-    /// Removes and returns just the child at the given index, discarding parent data.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `index >= len`.
-    pub fn remove_child(&mut self, index: usize) -> Box<P::Object> {
-        self.entries.remove(index).child
+    /// Removes and returns just the child at the given index.
+    pub fn remove_child(&mut self, index: usize) -> Option<Box<P::Object>> {
+        self.storage.remove_child(index).map(|n| n.child)
     }
 
-    /// Removes the last child entry and returns it, or `None` if empty.
-    pub fn pop(&mut self) -> Option<ChildEntry<P, PD>> {
-        self.entries.pop()
-    }
-
-    /// Removes the last child and returns just the child, or `None` if empty.
-    pub fn pop_child(&mut self) -> Option<Box<P::Object>> {
-        self.entries.pop().map(|e| e.child)
+    /// Removes and returns the last child node.
+    pub fn pop(&mut self) -> Option<ChildNode<P, D>> {
+        self.storage.pop_child()
     }
 
     /// Removes all children.
     pub fn clear(&mut self) {
-        self.entries.clear();
-    }
-
-    /// Swaps two children by their indices.
-    ///
-    /// # Panics
-    ///
-    /// Panics if either index is out of bounds.
-    pub fn swap(&mut self, a: usize, b: usize) {
-        self.entries.swap(a, b);
-    }
-
-    /// Moves a child from one index to another.
-    ///
-    /// This is more efficient than removing and re-inserting.
-    ///
-    /// # Panics
-    ///
-    /// Panics if either index is out of bounds.
-    pub fn move_child(&mut self, from: usize, to: usize) {
-        if from == to {
-            return;
-        }
-        let entry = self.entries.remove(from);
-        let insert_idx = if to > from { to - 1 } else { to };
-        self.entries.insert(insert_idx, entry);
+        let _ = self.storage.clear_children();
     }
 
     // ========================================================================
-    // Enumeration helpers
+    // Visitor callbacks
     // ========================================================================
 
-    /// Returns an iterator with indices: (index, &child, &data).
-    pub fn enumerate_with_data(&self) -> impl Iterator<Item = (usize, &P::Object, &PD)> {
-        self.entries
-            .iter()
-            .enumerate()
-            .map(|(i, e)| (i, &*e.child, &e.data))
-    }
-
-    /// Returns a mutable iterator with indices: (index, &mut child, &mut data).
-    pub fn enumerate_with_data_mut(
-        &mut self,
-    ) -> impl Iterator<Item = (usize, &mut P::Object, &mut PD)> {
-        self.entries
-            .iter_mut()
-            .enumerate()
-            .map(|(i, e)| (i, &mut *e.child, &mut e.data))
-    }
-
-    // ========================================================================
-    // Reverse iteration (for hit testing - front to back)
-    // ========================================================================
-
-    /// Returns a reverse iterator over children.
-    pub fn iter_rev(&self) -> impl Iterator<Item = &P::Object> {
-        self.entries.iter().rev().map(|e| &*e.child)
-    }
-
-    /// Returns a reverse iterator over (child, parent_data) pairs.
-    ///
-    /// Useful for hit testing where you need to test front-to-back
-    /// (last painted child first).
-    pub fn iter_with_data_rev(&self) -> impl Iterator<Item = (&P::Object, &PD)> {
-        self.entries.iter().rev().map(|e| (&*e.child, &e.data))
-    }
-
-    /// Returns a reverse iterator with indices.
-    pub fn enumerate_rev(&self) -> impl Iterator<Item = (usize, &P::Object, &PD)> {
-        let len = self.entries.len();
-        self.entries
-            .iter()
-            .enumerate()
-            .rev()
-            .map(move |(i, e)| (len - 1 - i, &*e.child, &e.data))
-    }
-
-    // ========================================================================
-    // Visitors / Callbacks
-    // ========================================================================
-
-    /// Calls a closure for each child with its parent data.
-    ///
-    /// This is useful for operations like painting where you need to
-    /// apply an offset from parent data to each child.
+    /// Calls a closure for each (child, data) pair.
     pub fn for_each<F>(&self, mut f: F)
     where
-        F: FnMut(&P::Object, &PD),
+        F: FnMut(&P::Object, &D),
     {
-        for entry in &self.entries {
-            f(&entry.child, &entry.data);
+        for node in self.storage.children_slice() {
+            f(node.child.as_ref(), &node.data);
         }
     }
 
-    /// Calls a closure for each child with mutable parent data.
+    /// Calls a closure for each (child, data) pair with mutable access.
     pub fn for_each_mut<F>(&mut self, mut f: F)
     where
-        F: FnMut(&mut P::Object, &mut PD),
+        F: FnMut(&mut P::Object, &mut D),
     {
-        for entry in &mut self.entries {
-            f(&mut entry.child, &mut entry.data);
+        for node in self.storage.children_slice_mut() {
+            f(node.child.as_mut(), &mut node.data);
         }
     }
 
-    /// Calls a closure for each child in reverse order (front to back).
+    /// Calls a closure for each (child, data) pair in reverse order.
     ///
-    /// This is the correct order for hit testing, where you want to test
-    /// the topmost (last painted) child first.
+    /// Use this for hit testing (test topmost/last-painted child first).
     pub fn for_each_rev<F>(&self, mut f: F)
     where
-        F: FnMut(&P::Object, &PD),
+        F: FnMut(&P::Object, &D),
     {
-        for entry in self.entries.iter().rev() {
-            f(&entry.child, &entry.data);
+        for node in self.storage.children_slice().iter().rev() {
+            f(node.child.as_ref(), &node.data);
         }
-    }
-
-    /// Finds the first child (in reverse order) that satisfies a predicate.
-    ///
-    /// Useful for hit testing where you search from front to back.
-    pub fn find_rev<F>(&self, mut predicate: F) -> Option<(&P::Object, &PD)>
-    where
-        F: FnMut(&P::Object, &PD) -> bool,
-    {
-        for entry in self.entries.iter().rev() {
-            if predicate(&entry.child, &entry.data) {
-                return Some((&entry.child, &entry.data));
-            }
-        }
-        None
-    }
-
-    /// Finds the first child (in reverse order) where the closure returns Some.
-    ///
-    /// Similar to `Iterator::find_map` but in reverse order.
-    pub fn find_map_rev<F, T>(&self, mut f: F) -> Option<T>
-    where
-        F: FnMut(&P::Object, &PD) -> Option<T>,
-    {
-        for entry in self.entries.iter().rev() {
-            if let Some(result) = f(&entry.child, &entry.data) {
-                return Some(result);
-            }
-        }
-        None
     }
 }
 
-/// Type alias for multiple Box protocol children with default parent data.
-pub type BoxChildren<PD = BoxParentData> = Children<BoxProtocol, PD>;
+// ============================================================================
+// Type aliases for ChildList
+// ============================================================================
 
-/// Type alias for multiple Sliver protocol children.
-pub type SliverChildren<PD = <SliverProtocol as Protocol>::ParentData> =
-    Children<SliverProtocol, PD>;
+/// Children with flex parent data.
+pub type FlexChildren = ChildList<BoxProtocol, Variable, crate::parent_data::FlexParentData>;
+
+/// Children with stack parent data.
+pub type StackChildren = ChildList<BoxProtocol, Variable, crate::parent_data::StackParentData>;
+
+/// Children with wrap parent data.
+pub type WrapChildren = ChildList<BoxProtocol, Variable, crate::parent_data::WrapParentData>;
+
+/// Box children with custom parent data.
+pub type BoxChildList<D = BoxParentData> = ChildList<BoxProtocol, Variable, D>;
 
 // ============================================================================
-// Hit Testing Helpers for BoxChildren
+// Paint & Hit Test Helpers
 // ============================================================================
 
 /// Trait for parent data that contains an offset.
 ///
-/// This is used by hit testing helpers to extract the child offset
-/// from parent data.
+/// Implement this for your parent data type to enable
+/// [`paint_all`](ChildList::paint_all) and [`hit_test_all`](ChildList::hit_test_all).
 pub trait HasOffset {
-    /// Returns the offset stored in this parent data.
+    /// Returns the paint offset for this child.
     fn offset(&self) -> Offset;
 }
 
@@ -508,299 +608,72 @@ impl HasOffset for BoxParentData {
     }
 }
 
-// Implement HasOffset for other common parent data types
-impl HasOffset for crate::parent_data::ContainerBoxParentData {
-    fn offset(&self) -> Offset {
-        self.offset
-    }
-}
-
-impl HasOffset for crate::parent_data::FlexParentData {
-    fn offset(&self) -> Offset {
-        self.offset
-    }
-}
-
-impl HasOffset for crate::parent_data::StackParentData {
-    fn offset(&self) -> Offset {
-        self.offset
-    }
-}
-
-impl HasOffset for crate::parent_data::WrapParentData {
-    fn offset(&self) -> Offset {
-        self.offset
-    }
-}
-
-impl HasOffset for crate::parent_data::ListWheelParentData {
-    fn offset(&self) -> Offset {
-        self.offset
-    }
-}
-
-impl HasOffset for crate::parent_data::MultiChildLayoutParentData {
-    fn offset(&self) -> Offset {
-        self.offset
-    }
-}
-
-impl HasOffset for crate::parent_data::FlowParentData {
-    fn offset(&self) -> Offset {
-        self.offset
-    }
-}
-
-impl HasOffset for crate::parent_data::TextParentData {
-    fn offset(&self) -> Offset {
-        self.offset
-    }
-}
-
-impl HasOffset for crate::parent_data::TableCellParentData {
-    fn offset(&self) -> Offset {
-        self.offset
-    }
-}
-
-impl HasOffset for crate::parent_data::ListBodyParentData {
-    fn offset(&self) -> Offset {
-        self.offset
-    }
-}
-
-impl<PD: HasOffset> BoxChildren<PD> {
-    // ========================================================================
-    // Paint Helpers
-    // ========================================================================
-
-    /// Default paint implementation for box children.
-    ///
-    /// Paints each child at its offset from parent data. Children are painted
-    /// in order (back to front).
-    ///
-    /// # Flutter Equivalence
-    ///
-    /// This corresponds to Flutter's `RenderBoxContainerDefaultsMixin.defaultPaint`.
+impl<A: Arity, D: HasOffset + Send + Sync> ChildList<BoxProtocol, A, D> {
+    /// Paints all children using their parent data offsets.
     ///
     /// # Example
     ///
     /// ```rust,ignore
-    /// impl RenderBox for RenderFlex {
-    ///     fn paint(&self, context: &mut PaintingContext, offset: Offset) {
-    ///         self.children.paint_children(context, offset);
-    ///     }
+    /// fn paint(&self, ctx: &mut PaintingContext, offset: Offset) {
+    ///     self.children.paint_all(offset, |child, child_offset| {
+    ///         child.paint(ctx, child_offset);
+    ///     });
     /// }
     /// ```
-    pub fn paint_children<F>(&self, base_offset: Offset, mut paint_child: F)
+    pub fn paint_all<F>(&self, base_offset: Offset, mut paint_child: F)
     where
         F: FnMut(&dyn RenderBox, Offset),
     {
-        for (child, data) in self.iter_with_data() {
-            let child_offset = base_offset + data.offset();
-            paint_child(child, child_offset);
+        for (child, data) in self.iter() {
+            paint_child(child, base_offset + data.offset());
         }
     }
 
-    /// Paints children using a custom offset extractor.
-    ///
-    /// Use this when the offset is stored differently in your parent data,
-    /// or when you need to apply additional transformations.
-    pub fn paint_children_with<F, G>(
-        &self,
-        base_offset: Offset,
-        mut get_offset: G,
-        mut paint_child: F,
-    ) where
-        F: FnMut(&dyn RenderBox, Offset),
-        G: FnMut(&dyn RenderBox, &PD) -> Offset,
-    {
-        for (child, data) in self.iter_with_data() {
-            let child_offset = base_offset + get_offset(child, data);
-            paint_child(child, child_offset);
-        }
-    }
-
-    /// Visits each child for painting, providing the child and computed offset.
-    ///
-    /// This is a lower-level method that gives full control over the paint process.
-    /// Use this when you need to do additional work per child (e.g., check visibility).
-    pub fn visit_children_for_paint<F>(&self, base_offset: Offset, mut visitor: F)
-    where
-        F: FnMut(&dyn RenderBox, &PD, Offset),
-    {
-        for (child, data) in self.iter_with_data() {
-            let child_offset = base_offset + data.offset();
-            visitor(child, data, child_offset);
-        }
-    }
-
-    // ========================================================================
-    // Hit Testing Helpers
-    // ========================================================================
-
-    /// Default hit test implementation for box children.
-    ///
-    /// Tests children in reverse paint order (front to back) and returns
-    /// `true` if any child is hit.
-    ///
-    /// # Flutter Equivalence
-    ///
-    /// This corresponds to Flutter's `RenderBoxContainerDefaultsMixin.defaultHitTestChildren`.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// impl RenderBox for RenderFlex {
-    ///     fn hit_test_children(&self, result: &mut BoxHitTestResult, position: Offset) -> bool {
-    ///         self.children.hit_test_children(result, position)
-    ///     }
-    /// }
-    /// ```
-    pub fn hit_test_children(&self, result: &mut BoxHitTestResult, position: Offset) -> bool {
-        for (child, data) in self.iter_with_data_rev() {
-            let child_offset = data.offset();
-            let hit = result.add_with_paint_offset(
-                Some(child_offset),
-                position,
-                |result, transformed_position| child.hit_test(result, transformed_position),
-            );
-            if hit {
-                return true;
-            }
-        }
-        false
-    }
-
-    /// Hit tests children using a custom offset extractor.
-    ///
-    /// Use this when the offset is stored differently in your parent data,
-    /// or when you need to apply additional transformations.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// // For parent data where offset is computed differently
-    /// self.children.hit_test_children_with(result, position, |child, data| {
-    ///     data.computed_offset()
-    /// })
-    /// ```
-    pub fn hit_test_children_with<F>(
-        &self,
-        result: &mut BoxHitTestResult,
-        position: Offset,
-        mut get_offset: F,
-    ) -> bool
-    where
-        F: FnMut(&dyn RenderBox, &PD) -> Offset,
-    {
-        for (child, data) in self.iter_with_data_rev() {
-            let child_offset = get_offset(child, data);
-            let hit = result.add_with_paint_offset(
-                Some(child_offset),
-                position,
-                |result, transformed_position| child.hit_test(result, transformed_position),
-            );
-            if hit {
-                return true;
-            }
-        }
-        false
-    }
-
-    /// Hit tests children and collects all hits (not just the first).
-    ///
-    /// Unlike `hit_test_children`, this continues testing after finding
-    /// a hit, useful for overlapping children where multiple can be hit.
+    /// Hit tests all children in reverse order (front to back).
     ///
     /// Returns `true` if any child was hit.
-    pub fn hit_test_all_children(&self, result: &mut BoxHitTestResult, position: Offset) -> bool {
-        let mut any_hit = false;
-        for (child, data) in self.iter_with_data_rev() {
-            let child_offset = data.offset();
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// fn hit_test_children(&self, result: &mut BoxHitTestResult, position: Offset) -> bool {
+    ///     self.children.hit_test_all(result, position)
+    /// }
+    /// ```
+    pub fn hit_test_all(&self, result: &mut BoxHitTestResult, position: Offset) -> bool {
+        for (child, data) in self.iter_rev() {
             let hit = result.add_with_paint_offset(
-                Some(child_offset),
+                Some(data.offset()),
                 position,
-                |result, transformed_position| child.hit_test(result, transformed_position),
+                |result, transformed| child.hit_test(result, transformed),
             );
             if hit {
-                any_hit = true;
+                return true;
             }
         }
-        any_hit
+        false
     }
 }
+
+// ============================================================================
+// Tests
+// ============================================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parent_data::FlexParentData;
-    use flui_types::Offset;
 
     #[test]
-    fn test_children_default_is_empty() {
-        let children: BoxChildren = Children::new();
-        assert!(children.is_empty());
-        assert_eq!(children.len(), 0);
+    fn test_children_default() {
+        let container: BoxChild = BoxChild::new();
+        assert!(!container.has_child());
+        assert_eq!(container.len(), 0);
     }
 
     #[test]
-    fn test_children_with_capacity() {
-        let children: BoxChildren = Children::with_capacity(10);
-        assert!(children.is_empty());
-        assert_eq!(children.len(), 0);
-    }
-
-    #[test]
-    fn test_child_entry_new() {
-        // We can't easily create a dyn RenderBox in tests without a concrete type,
-        // so we just test the struct exists and compiles
-        let _entry_type: Option<ChildEntry<BoxProtocol, BoxParentData>> = None;
-    }
-
-    #[test]
-    fn test_children_empty() {
-        let children: Children<BoxProtocol, FlexParentData> = Children::empty();
-        assert!(children.is_empty());
-    }
-
-    #[test]
-    fn test_get_data() {
-        let children: BoxChildren = Children::new();
-        assert!(children.get_data(0).is_none());
-        assert!(children.first_data().is_none());
-        assert!(children.last_data().is_none());
-    }
-
-    #[test]
-    fn test_move_child_same_index() {
-        let mut children: BoxChildren = Children::new();
-        // Should not panic when from == to
-        children.move_child(0, 0);
-    }
-
-    #[test]
-    fn test_iter_with_data() {
-        let children: BoxChildren = Children::new();
-        assert_eq!(children.iter_with_data().count(), 0);
-    }
-
-    #[test]
-    fn test_iter_rev() {
-        let children: BoxChildren = Children::new();
-        assert_eq!(children.iter_rev().count(), 0);
-        assert_eq!(children.iter_with_data_rev().count(), 0);
-    }
-
-    #[test]
-    fn test_enumerate_with_data() {
-        let children: BoxChildren = Children::new();
-        assert_eq!(children.enumerate_with_data().count(), 0);
-    }
-
-    #[test]
-    fn test_enumerate_rev() {
-        let children: BoxChildren = Children::new();
-        assert_eq!(children.enumerate_rev().count(), 0);
+    fn test_child_list_default() {
+        let list: BoxChildList = ChildList::new();
+        assert!(list.is_empty());
+        assert_eq!(list.len(), 0);
     }
 }

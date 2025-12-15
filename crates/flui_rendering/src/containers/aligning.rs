@@ -5,10 +5,11 @@
 use crate::constraints::SliverGeometry;
 use crate::protocol::{BoxProtocol, Protocol, SliverProtocol};
 use crate::traits::{BoxHitTestResult, RenderBox};
+use flui_tree::arity::Optional;
 use flui_types::{Alignment, Offset, Size};
 use std::fmt::Debug;
 
-use super::Single;
+use super::Children;
 
 /// Container for single child with alignment and optional size factors.
 ///
@@ -36,7 +37,7 @@ use super::Single;
 /// }
 /// ```
 pub struct Aligning<P: Protocol> {
-    child: Single<P>,
+    child: Children<P, Optional>,
     geometry: P::Geometry,
     offset: Offset,
     alignment: Alignment,
@@ -71,7 +72,7 @@ impl<P: Protocol> Aligning<P> {
     /// Creates a new aligning container with the given alignment.
     pub fn new(alignment: Alignment) -> Self {
         Self {
-            child: Single::new(),
+            child: Children::new(),
             geometry: P::default_geometry(),
             offset: Offset::ZERO,
             alignment,
@@ -82,8 +83,10 @@ impl<P: Protocol> Aligning<P> {
 
     /// Creates an aligning container with the given child and alignment.
     pub fn with_child(child: Box<P::Object>, alignment: Alignment) -> Self {
+        let mut container = Children::new();
+        container.set(child);
         Self {
-            child: Single::with_child(child),
+            child: container,
             geometry: P::default_geometry(),
             offset: Offset::ZERO,
             alignment,
@@ -94,22 +97,22 @@ impl<P: Protocol> Aligning<P> {
 
     /// Returns a reference to the child, if present.
     pub fn child(&self) -> Option<&P::Object> {
-        self.child.child()
+        self.child.get()
     }
 
     /// Returns a mutable reference to the child, if present.
     pub fn child_mut(&mut self) -> Option<&mut P::Object> {
-        self.child.child_mut()
+        self.child.get_mut()
     }
 
     /// Sets the child, replacing any existing child.
     pub fn set_child(&mut self, child: Box<P::Object>) {
-        self.child.set_child(child);
+        self.child.set(child);
     }
 
     /// Takes the child out of the container, leaving it empty.
     pub fn take_child(&mut self) -> Option<Box<P::Object>> {
-        self.child.take_child()
+        self.child.take()
     }
 
     /// Returns `true` if the container has a child.

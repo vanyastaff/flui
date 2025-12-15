@@ -5,34 +5,40 @@
 //!
 //! # Container Types
 //!
-//! - [`Single`]: Zero or one child
-//! - [`Children`]: Multiple children with parent data
-//! - [`Proxy`]: Single child where size equals child's size
-//! - [`Shifted`]: Single child with custom offset positioning
-//! - [`Aligning`]: Single child with alignment and size factors
-//! - [`Adapter`]: Cross-protocol wrapper (zero-cost)
+//! ## Children Storage
+//!
+//! - [`Children`] - Simple children without parent data
+//! - [`ChildList`] - Children with per-child parent data
+//!
+//! ## Single-Child Wrappers
+//!
+//! - [`Proxy`] - Child where size equals child's size
+//! - [`Shifted`] - Child with custom offset positioning
+//! - [`Aligning`] - Child with alignment and size factors
+//!
+//! ## Cross-Protocol
+//!
+//! - [`Adapter`] - Zero-cost protocol wrapper
 //!
 //! # Type Aliases
 //!
-//! For ergonomics, each container has protocol-specific aliases:
-//!
 //! ```rust,ignore
-//! // Box protocol
-//! type BoxChild = Single<BoxProtocol>;
+//! // Simple children
+//! type BoxChild = Children<BoxProtocol, Optional>;
+//! type BoxChildren = Children<BoxProtocol, Variable>;
+//!
+//! // Children with parent data
+//! type FlexChildren = ChildList<BoxProtocol, Variable, FlexParentData>;
+//! type StackChildren = ChildList<BoxProtocol, Variable, StackParentData>;
+//!
+//! // Wrappers
 //! type ProxyBox = Proxy<BoxProtocol>;
 //! type ShiftedBox = Shifted<BoxProtocol>;
 //! type AligningBox = Aligning<BoxProtocol>;
-//! type BoxChildren<PD> = Children<BoxProtocol, PD>;
-//!
-//! // Sliver protocol
-//! type SliverChild = Single<SliverProtocol>;
-//! type SliverProxy = Proxy<SliverProtocol>;
-//! // ...
 //!
 //! // Cross-protocol adapters
-//! type BoxToSliver = Adapter<Single<BoxProtocol>, SliverProtocol>;
-//! type SliverToBox = Adapter<Single<SliverProtocol>, BoxProtocol>;
-//! type MultiSliverToBox = Adapter<Children<SliverProtocol>, BoxProtocol>;
+//! type BoxToSliver = Adapter<BoxChild, SliverProtocol>;
+//! type SliverToBox = Adapter<SliverChild, BoxProtocol>;
 //! ```
 
 mod adapter;
@@ -40,7 +46,6 @@ mod aligning;
 mod children;
 mod proxy;
 mod shifted;
-mod single;
 mod viewport;
 
 pub use adapter::{
@@ -48,8 +53,28 @@ pub use adapter::{
     OptionalSliverToBox, SliverToBox,
 };
 pub use aligning::*;
-pub use children::{BoxChildren, ChildEntry, Children, HasOffset, SliverChildren};
+pub use children::{
+    // Box protocol aliases
+    BoxChild,
+    BoxChildList,
+    BoxChildRequired,
+    BoxChildren,
+    ChildList,
+    ChildNode,
+    // Primary types
+    Children,
+    // Layout-specific aliases
+    FlexChildren,
+    HasOffset,
+    // Generic alias
+    Single,
+    // Sliver protocol aliases
+    SliverChild,
+    SliverChildRequired,
+    SliverChildren,
+    StackChildren,
+    WrapChildren,
+};
 pub use proxy::*;
 pub use shifted::*;
-pub use single::*;
 pub use viewport::{SliverViewport, Viewport};

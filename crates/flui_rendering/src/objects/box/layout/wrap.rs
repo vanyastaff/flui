@@ -6,12 +6,13 @@ use flui_types::{Offset, Point, Rect, Size};
 
 use crate::constraints::BoxConstraints;
 
-use crate::containers::Children;
+use crate::containers::ChildList;
 use crate::objects::r#box::layout::flex::{Axis, VerticalDirection};
 use crate::parent_data::WrapParentData;
 use crate::pipeline::PaintingContext;
 use crate::protocol::BoxProtocol;
 use crate::traits::TextBaseline;
+use flui_tree::arity::Variable;
 
 /// How runs are aligned within the wrap on the cross axis.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -57,7 +58,7 @@ pub enum WrapCrossAlignment {
 #[derive(Debug)]
 pub struct RenderWrap {
     /// Container for children.
-    children: Children<BoxProtocol, WrapParentData>,
+    children: ChildList<BoxProtocol, Variable, WrapParentData>,
 
     /// The direction to lay out runs.
     direction: Axis,
@@ -105,7 +106,7 @@ impl RenderWrap {
     /// Creates a new wrap layout.
     pub fn new() -> Self {
         Self {
-            children: Children::new(),
+            children: ChildList::new(),
             direction: Axis::Horizontal,
             alignment: WrapAlignment::Start,
             spacing: 0.0,

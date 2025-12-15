@@ -6,12 +6,13 @@ use flui_types::{Offset, Point, Rect, Size};
 
 use crate::constraints::BoxConstraints;
 
-use crate::containers::Children;
+use crate::containers::ChildList;
 use crate::objects::r#box::effects::fitted_box::FittedAlignment;
 use crate::parent_data::StackParentData;
 use crate::pipeline::PaintingContext;
 use crate::protocol::BoxProtocol;
 use crate::traits::TextBaseline;
+use flui_tree::arity::Variable;
 
 /// How to size the non-positioned children.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -54,7 +55,7 @@ pub enum StackClipBehavior {
 #[derive(Debug)]
 pub struct RenderStack {
     /// Container for children.
-    children: Children<BoxProtocol, StackParentData>,
+    children: ChildList<BoxProtocol, Variable, StackParentData>,
 
     /// Alignment for non-positioned children.
     alignment: FittedAlignment,
@@ -76,7 +77,7 @@ impl RenderStack {
     /// Creates a new stack.
     pub fn new() -> Self {
         Self {
-            children: Children::new(),
+            children: ChildList::new(),
             alignment: FittedAlignment::TOP_LEFT,
             fit: StackFit::Loose,
             clip_behavior: StackClipBehavior::AntiAlias,
@@ -88,7 +89,7 @@ impl RenderStack {
     /// Creates with custom alignment.
     pub fn with_alignment(alignment: FittedAlignment) -> Self {
         Self {
-            children: Children::new(),
+            children: ChildList::new(),
             alignment,
             fit: StackFit::Loose,
             clip_behavior: StackClipBehavior::AntiAlias,

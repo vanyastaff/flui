@@ -106,6 +106,11 @@ pub trait ChildrenStorage<T> {
     /// This is the primary way to iterate over children.
     fn children_slice(&self) -> &[T];
 
+    /// Get mutable slice of children.
+    ///
+    /// This provides direct mutable access to the children array.
+    fn children_slice_mut(&mut self) -> &mut [T];
+
     // ========================================================================
     // SINGLE CHILD ACCESS (for Exact<1>, Optional)
     // ========================================================================
@@ -277,6 +282,10 @@ impl<T: Send + Sync> ChildrenStorage<T> for Vec<T> {
         self.as_slice()
     }
 
+    fn children_slice_mut(&mut self) -> &mut [T] {
+        self.as_mut_slice()
+    }
+
     fn single_child(&self) -> Option<&T> {
         self.first()
     }
@@ -401,6 +410,13 @@ impl<T: Send + Sync> ChildrenStorage<T> for Option<T> {
         }
     }
 
+    fn children_slice_mut(&mut self) -> &mut [T] {
+        match self {
+            Some(ref mut child) => std::slice::from_mut(child),
+            None => &mut [],
+        }
+    }
+
     fn single_child(&self) -> Option<&T> {
         self.as_ref()
     }
@@ -506,6 +522,10 @@ impl<T: Send + Sync, const N: usize> ChildrenStorage<T> for [T; N] {
 
     fn children_slice(&self) -> &[T] {
         self.as_slice()
+    }
+
+    fn children_slice_mut(&mut self) -> &mut [T] {
+        self.as_mut_slice()
     }
 
     fn single_child(&self) -> Option<&T> {
@@ -616,6 +636,10 @@ impl ChildrenStorage<()> for () {
 
     fn children_slice(&self) -> &[()] {
         &[]
+    }
+
+    fn children_slice_mut(&mut self) -> &mut [()] {
+        &mut []
     }
 
     fn single_child(&self) -> Option<&()> {

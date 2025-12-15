@@ -35,11 +35,11 @@ use crate::traits::RenderSliver;
 ///
 /// ```ignore
 /// use flui_rendering::protocol::SliverProtocol;
-/// use flui_rendering::containers::Children;
+/// use flui_rendering::containers::ChildList;
 /// use flui_rendering::parent_data::SliverPhysicalParentData;
 ///
 /// // Create a container for sliver protocol children with physical parent data
-/// let children: Children<SliverProtocol, SliverPhysicalParentData> = Children::new();
+/// let children: ChildList<SliverProtocol, flui_tree::arity::Variable, SliverPhysicalParentData> = ChildList::new();
 /// ```
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SliverProtocol;

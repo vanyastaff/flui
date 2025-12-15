@@ -7,11 +7,12 @@ use flui_types::{Offset, Point, Rect, Size};
 
 use crate::constraints::BoxConstraints;
 
-use crate::containers::Children;
+use crate::containers::ChildList;
 use crate::parent_data::FlexParentData;
 use crate::pipeline::PaintingContext;
 use crate::protocol::BoxProtocol;
 use crate::traits::TextBaseline;
+use flui_tree::arity::Variable;
 
 /// The direction children are laid out.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -114,7 +115,7 @@ pub enum FlexFit {
 #[derive(Debug)]
 pub struct RenderFlex {
     /// Container for children.
-    children: Children<BoxProtocol, FlexParentData>,
+    children: ChildList<BoxProtocol, Variable, FlexParentData>,
 
     /// The direction to lay out children.
     direction: Axis,
@@ -158,7 +159,7 @@ impl RenderFlex {
     /// Creates a new flex layout with the given direction.
     pub fn new(direction: Axis) -> Self {
         Self {
-            children: Children::new(),
+            children: ChildList::new(),
             direction,
             main_axis_alignment: MainAxisAlignment::Start,
             main_axis_size: MainAxisSize::Max,

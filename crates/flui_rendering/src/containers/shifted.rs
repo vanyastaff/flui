@@ -6,10 +6,11 @@
 use crate::constraints::SliverGeometry;
 use crate::protocol::{BoxProtocol, Protocol, SliverProtocol};
 use crate::traits::{BoxHitTestResult, RenderBox};
+use flui_tree::arity::Optional;
 use flui_types::{Offset, Size};
 use std::fmt::Debug;
 
-use super::Single;
+use super::Children;
 
 /// Container that stores a single child with custom offset positioning.
 ///
@@ -58,7 +59,7 @@ use super::Single;
 /// }
 /// ```
 pub struct Shifted<P: Protocol> {
-    child: Single<P>,
+    child: Children<P, Optional>,
     geometry: P::Geometry,
     offset: Offset,
 }
@@ -87,7 +88,7 @@ impl<P: Protocol> Shifted<P> {
     /// Creates a new empty shifted container.
     pub fn new() -> Self {
         Self {
-            child: Single::new(),
+            child: Children::new(),
             geometry: P::default_geometry(),
             offset: Offset::ZERO,
         }
@@ -95,8 +96,10 @@ impl<P: Protocol> Shifted<P> {
 
     /// Creates a shifted container with the given child.
     pub fn with_child(child: Box<P::Object>) -> Self {
+        let mut container = Children::new();
+        container.set(child);
         Self {
-            child: Single::with_child(child),
+            child: container,
             geometry: P::default_geometry(),
             offset: Offset::ZERO,
         }
@@ -104,22 +107,22 @@ impl<P: Protocol> Shifted<P> {
 
     /// Returns a reference to the child, if present.
     pub fn child(&self) -> Option<&P::Object> {
-        self.child.child()
+        self.child.get()
     }
 
     /// Returns a mutable reference to the child, if present.
     pub fn child_mut(&mut self) -> Option<&mut P::Object> {
-        self.child.child_mut()
+        self.child.get_mut()
     }
 
     /// Sets the child, replacing any existing child.
     pub fn set_child(&mut self, child: Box<P::Object>) {
-        self.child.set_child(child);
+        self.child.set(child);
     }
 
     /// Takes the child out of the container, leaving it empty.
     pub fn take_child(&mut self) -> Option<Box<P::Object>> {
-        self.child.take_child()
+        self.child.take()
     }
 
     /// Returns `true` if the container has a child.

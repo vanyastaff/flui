@@ -53,7 +53,8 @@ pub trait Protocol: Send + Sync + Debug + Clone + Copy + 'static {
     /// The type of render objects this protocol contains.
     ///
     /// This is a trait object type like `dyn RenderBox` or `dyn RenderSliver`.
-    type Object: ?Sized;
+    /// Must be `Send + Sync` for thread-safe storage.
+    type Object: ?Sized + Send + Sync;
 
     /// Layout input type passed from parent to child.
     ///

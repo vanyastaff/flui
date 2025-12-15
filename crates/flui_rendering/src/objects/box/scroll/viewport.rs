@@ -241,7 +241,7 @@ impl RenderViewport {
         if index < self.viewport.children().len() {
             let child = self.viewport.children_mut().remove_child(index);
             self.mark_needs_layout();
-            Some(child)
+            child
         } else {
             None
         }

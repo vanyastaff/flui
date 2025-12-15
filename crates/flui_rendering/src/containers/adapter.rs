@@ -168,12 +168,9 @@ impl<C, ToProtocol: Protocol> Adapter<C, ToProtocol> {
 // Type Aliases - Box → Sliver adapters
 // ============================================================================
 
-use super::{Children, Single};
+use super::{ChildList, Single};
 use crate::protocol::{BoxProtocol, SliverProtocol};
-
-// Note: `Single` already stores Option<Box<P::Object>>, so it serves as Optional.
-// We define Optional as an alias for clarity in adapter type names.
-type Optional<P> = Single<P>;
+use flui_tree::arity::Variable;
 
 /// Single Box child exposed as Sliver protocol.
 ///
@@ -205,7 +202,7 @@ pub type BoxToSliver = Adapter<Single<BoxProtocol>, SliverProtocol>;
 ///     geometry: SliverGeometry,
 /// }
 /// ```
-pub type OptionalBoxToSliver = Adapter<Optional<BoxProtocol>, SliverProtocol>;
+pub type OptionalBoxToSliver = Adapter<Single<BoxProtocol>, SliverProtocol>;
 
 /// Multiple Box children exposed as Sliver protocol.
 ///
@@ -220,7 +217,7 @@ pub type OptionalBoxToSliver = Adapter<Optional<BoxProtocol>, SliverProtocol>;
 /// }
 /// ```
 pub type MultiBoxToSliver<PD = <BoxProtocol as Protocol>::ParentData> =
-    Adapter<Children<BoxProtocol, PD>, SliverProtocol>;
+    Adapter<ChildList<BoxProtocol, Variable, PD>, SliverProtocol>;
 
 // ============================================================================
 // Type Aliases - Sliver → Box adapters
@@ -250,7 +247,7 @@ pub type SliverToBox = Adapter<Single<SliverProtocol>, BoxProtocol>;
 ///     size: Size,
 /// }
 /// ```
-pub type OptionalSliverToBox = Adapter<Optional<SliverProtocol>, BoxProtocol>;
+pub type OptionalSliverToBox = Adapter<Single<SliverProtocol>, BoxProtocol>;
 
 /// Multiple Sliver children exposed as Box protocol.
 ///
@@ -269,7 +266,7 @@ pub type OptionalSliverToBox = Adapter<Optional<SliverProtocol>, BoxProtocol>;
 /// }
 /// ```
 pub type MultiSliverToBox<PD = <SliverProtocol as Protocol>::ParentData> =
-    Adapter<Children<SliverProtocol, PD>, BoxProtocol>;
+    Adapter<ChildList<SliverProtocol, Variable, PD>, BoxProtocol>;
 
 // ============================================================================
 // Convenience constructors for BoxToSliver
@@ -301,22 +298,22 @@ impl BoxToSliver {
 
     /// Returns a reference to the child, if present.
     pub fn child(&self) -> Option<&dyn crate::traits::RenderBox> {
-        self.inner.child()
+        self.inner.get()
     }
 
     /// Returns a mutable reference to the child, if present.
     pub fn child_mut(&mut self) -> Option<&mut dyn crate::traits::RenderBox> {
-        self.inner.child_mut()
+        self.inner.get_mut()
     }
 
     /// Sets the child, replacing any existing child.
     pub fn set_child(&mut self, child: Box<dyn crate::traits::RenderBox>) {
-        self.inner.set_child(child);
+        self.inner.set(child);
     }
 
     /// Takes the child out of the adapter.
     pub fn take_child(&mut self) -> Option<Box<dyn crate::traits::RenderBox>> {
-        self.inner.take_child()
+        self.inner.take()
     }
 
     /// Returns true if the adapter has a child.
@@ -342,22 +339,22 @@ impl SliverToBox {
 
     /// Returns a reference to the child, if present.
     pub fn child(&self) -> Option<&dyn crate::traits::RenderSliver> {
-        self.inner.child()
+        self.inner.get()
     }
 
     /// Returns a mutable reference to the child, if present.
     pub fn child_mut(&mut self) -> Option<&mut dyn crate::traits::RenderSliver> {
-        self.inner.child_mut()
+        self.inner.get_mut()
     }
 
     /// Sets the child, replacing any existing child.
     pub fn set_child(&mut self, child: Box<dyn crate::traits::RenderSliver>) {
-        self.inner.set_child(child);
+        self.inner.set(child);
     }
 
     /// Takes the child out of the adapter.
     pub fn take_child(&mut self) -> Option<Box<dyn crate::traits::RenderSliver>> {
-        self.inner.take_child()
+        self.inner.take()
     }
 
     /// Returns true if the adapter has a child.
@@ -370,15 +367,15 @@ impl SliverToBox {
 // Convenience methods for MultiSliverToBox
 // ============================================================================
 
-impl<PD: Default> MultiSliverToBox<PD> {
+impl<PD: Default + Send + Sync> MultiSliverToBox<PD> {
     /// Creates an empty MultiSliverToBox adapter.
-    pub fn empty() -> Self {
-        Self::new(Children::new())
+    pub fn new_empty() -> Self {
+        Self::new(ChildList::new())
     }
 
     /// Creates an adapter with the given capacity.
     pub fn with_capacity(capacity: usize) -> Self {
-        Self::new(Children::with_capacity(capacity))
+        Self::new(ChildList::with_capacity(capacity))
     }
 
     /// Adds a sliver child.
@@ -398,12 +395,12 @@ impl<PD: Default> MultiSliverToBox<PD> {
 
     /// Returns an iterator over the children.
     pub fn iter(&self) -> impl Iterator<Item = &dyn crate::traits::RenderSliver> {
-        self.inner.iter()
+        self.inner.children()
     }
 
     /// Returns a mutable iterator over the children.
     pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut dyn crate::traits::RenderSliver> {
-        self.inner.iter_mut()
+        self.inner.children_mut()
     }
 }
 
@@ -454,7 +451,7 @@ mod tests {
     fn test_multi_sliver_to_box_type_alias() {
         assert_eq!(
             std::mem::size_of::<MultiSliverToBox>(),
-            std::mem::size_of::<Adapter<Children<SliverProtocol>, BoxProtocol>>()
+            std::mem::size_of::<Adapter<ChildList<SliverProtocol, Variable>, BoxProtocol>>()
         );
     }
 
@@ -474,7 +471,7 @@ mod tests {
 
     #[test]
     fn test_multi_sliver_to_box_empty() {
-        let adapter = MultiSliverToBox::<()>::empty();
+        let adapter = MultiSliverToBox::<()>::new_empty();
         assert!(adapter.is_empty());
         assert_eq!(adapter.len(), 0);
     }

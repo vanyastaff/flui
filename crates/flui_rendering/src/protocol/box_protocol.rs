@@ -30,10 +30,10 @@ use crate::traits::RenderBox;
 ///
 /// ```ignore
 /// use flui_rendering::protocol::BoxProtocol;
-/// use flui_rendering::containers::Children;
+/// use flui_rendering::containers::ChildList;
 ///
 /// // Create a container for box protocol children
-/// let children: Children<BoxProtocol> = Children::new();
+/// let children: ChildList<BoxProtocol> = ChildList::new();
 /// ```
 #[derive(Debug, Clone, Copy, Default)]
 pub struct BoxProtocol;
