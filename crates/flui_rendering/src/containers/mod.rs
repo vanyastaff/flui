@@ -54,6 +54,8 @@ pub use adapter::{
 };
 pub use aligning::*;
 pub use children::{
+    // Ambassador delegation support
+    ambassador_impl_SingleChildContainer,
     // Box protocol aliases
     BoxChild,
     BoxChildList,
@@ -68,6 +70,8 @@ pub use children::{
     HasOffset,
     // Generic alias
     Single,
+    // Trait for single child containers
+    SingleChildContainer,
     // Sliver protocol aliases
     SliverChild,
     SliverChildRequired,

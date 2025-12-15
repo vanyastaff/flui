@@ -3,14 +3,14 @@
 //! This is the Rust equivalent of Flutter's `RenderProxyBox` pattern.
 //! Use when parent's geometry should match child's geometry (pass-through).
 
-use crate::constraints::SliverGeometry;
-use crate::protocol::{BoxProtocol, Protocol, SliverProtocol};
-use crate::traits::{BoxHitTestResult, RenderBox};
 use flui_tree::arity::Optional;
 use flui_types::{Offset, Size};
 use std::fmt::Debug;
 
 use super::Children;
+use crate::constraints::SliverGeometry;
+use crate::protocol::{BoxProtocol, Protocol, SliverProtocol};
+use crate::traits::{BoxHitTestResult, RenderBox};
 
 /// Container that stores a single child where parent size equals child size.
 ///

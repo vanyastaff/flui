@@ -1,5 +1,6 @@
 //! RenderProxyBox trait - single child where size equals child size.
 
+use ambassador::delegatable_trait;
 use flui_types::{Offset, Rect, Size};
 
 use crate::constraints::BoxConstraints;
@@ -27,6 +28,7 @@ use crate::pipeline::PaintingContext;
 /// - `paint`: Paints the child at the given offset
 /// - `hit_test_children`: Delegates to child
 /// - Intrinsic dimensions: Delegates to child
+#[delegatable_trait]
 pub trait RenderProxyBox: SingleChildRenderBox {
     // ========================================================================
     // Parent Data Setup

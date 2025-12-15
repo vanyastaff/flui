@@ -65,7 +65,7 @@
 //! }
 //! ```
 
-use ambassador::Delegate;
+use ambassador::{delegatable_trait, Delegate};
 use flui_tree::arity::storage::ambassador_impl_ChildrenStorage;
 use flui_tree::arity::{
     Arity, ArityError, ArityStorage, ChildrenStorage, Exact, Optional, RuntimeArity, Variable,
@@ -77,6 +77,72 @@ use crate::parent_data::BoxParentData;
 use crate::protocol::{BoxProtocol, Protocol, SliverProtocol};
 use crate::traits::{BoxHitTestResult, RenderBox};
 use flui_types::Offset;
+
+// ============================================================================
+// SingleChildContainer trait - for Ambassador delegation
+// ============================================================================
+
+/// Trait for containers that hold a single optional child.
+///
+/// This trait enables Ambassador delegation for common single-child operations.
+/// Implement this trait to get automatic delegation of child access methods.
+///
+/// # Ambassador Integration
+///
+/// Use with `#[delegate(SingleChildContainer<P>)]` to delegate child operations:
+///
+/// ```rust,ignore
+/// #[derive(Delegate)]
+/// #[delegate(SingleChildContainer<P>, target = "child")]
+/// pub struct MyContainer<P: Protocol> {
+///     child: Children<P, Optional>,
+///     // ... other fields
+/// }
+/// ```
+#[delegatable_trait]
+pub trait SingleChildContainer<P: Protocol> {
+    /// Returns a reference to the child, if present.
+    fn child(&self) -> Option<&P::Object>;
+
+    /// Returns a mutable reference to the child, if present.
+    fn child_mut(&mut self) -> Option<&mut P::Object>;
+
+    /// Sets the child, returning the previous child if any.
+    fn set_child(&mut self, child: Box<P::Object>) -> Option<Box<P::Object>>;
+
+    /// Takes the child out of the container.
+    fn take_child(&mut self) -> Option<Box<P::Object>>;
+
+    /// Returns `true` if the container has a child.
+    fn has_child(&self) -> bool;
+}
+
+impl<P: Protocol> SingleChildContainer<P> for Children<P, Optional> {
+    #[inline]
+    fn child(&self) -> Option<&P::Object> {
+        self.get()
+    }
+
+    #[inline]
+    fn child_mut(&mut self) -> Option<&mut P::Object> {
+        self.get_mut()
+    }
+
+    #[inline]
+    fn set_child(&mut self, child: Box<P::Object>) -> Option<Box<P::Object>> {
+        self.set(child)
+    }
+
+    #[inline]
+    fn take_child(&mut self) -> Option<Box<P::Object>> {
+        self.take()
+    }
+
+    #[inline]
+    fn has_child(&self) -> bool {
+        !self.is_empty()
+    }
+}
 
 // ============================================================================
 // Children - Simple container without parent data

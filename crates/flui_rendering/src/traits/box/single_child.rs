@@ -1,5 +1,7 @@
 //! SingleChildRenderBox trait.
 
+use ambassador::delegatable_trait;
+
 use super::RenderBox;
 
 /// Trait for render boxes with at most one child.
@@ -15,6 +17,7 @@ use super::RenderBox;
 /// 2. Adopt the new child (calls `attach` on it)
 ///
 /// This is handled automatically by the `set_child` implementation.
+#[delegatable_trait]
 pub trait SingleChildRenderBox: RenderBox {
     /// Returns the child, if any.
     ///

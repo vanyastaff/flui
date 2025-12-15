@@ -4,6 +4,7 @@
 //! Flutter's `RenderAligningShiftedBox` class - an abstract class for one-child-layout
 //! render boxes that use alignment to position their children.
 
+use ambassador::delegatable_trait;
 use flui_types::{Alignment, Offset, Size};
 
 use super::RenderShiftedBox;
@@ -69,6 +70,7 @@ pub enum TextDirection {
 ///     // ... other methods
 /// }
 /// ```
+#[delegatable_trait]
 pub trait RenderAligningShiftedBox: RenderShiftedBox {
     // ===== Alignment Properties =====
 

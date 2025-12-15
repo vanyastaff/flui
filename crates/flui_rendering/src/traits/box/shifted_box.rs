@@ -4,6 +4,7 @@
 //! Flutter's `RenderShiftedBox` class - an abstract class for one-child-layout
 //! render boxes that provide control over the child's position.
 
+use ambassador::delegatable_trait;
 use flui_types::Offset;
 
 use super::{BoxHitTestResult, SingleChildRenderBox, TextBaseline};
@@ -35,6 +36,7 @@ use crate::pipeline::PaintingContext;
 /// - Baseline calculations: delegate to child and add vertical offset
 /// - Paint: paint child at the child offset
 /// - Hit testing: test child with position adjusted by offset
+#[delegatable_trait]
 pub trait RenderShiftedBox: SingleChildRenderBox {
     /// Returns the offset at which the child is positioned.
     ///
