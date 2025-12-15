@@ -1,5 +1,10 @@
 //! Proxy container - single child where size equals child's size.
 //!
+//! This module provides:
+//! - [`SingleChildContainer`] - Generic trait for single-child containers
+//! - [`ProxyContainer`] - Generic trait for proxy containers with geometry
+//! - [`Proxy`] - Concrete proxy container implementation
+//!
 //! This is the Rust equivalent of Flutter's `RenderProxyBox` pattern.
 //! Use when parent's geometry should match child's geometry (pass-through).
 
@@ -7,10 +12,80 @@ use flui_tree::arity::Optional;
 use flui_types::{Offset, Size};
 use std::fmt::Debug;
 
-use super::{Children, ProxyContainer, SingleChildContainer};
+use super::Children;
 use crate::constraints::SliverGeometry;
 use crate::protocol::{BoxProtocol, Protocol, SliverProtocol};
 use crate::traits::{BoxHitTestResult, RenderBox};
+
+// ============================================================================
+// SingleChildContainer trait - Generic single-child container
+// ============================================================================
+
+/// Generic trait for containers that hold a single optional child.
+///
+/// This trait is parameterized by the child type `T`, enabling a single
+/// implementation to work with any protocol (Box, Sliver, etc.).
+///
+/// # Type Parameter
+///
+/// - `T: ?Sized` - The child object type (e.g., `dyn RenderBox`, `dyn RenderSliver`)
+///
+/// # Example
+///
+/// ```rust,ignore
+/// // Works for Box protocol
+/// impl SingleChildContainer<dyn RenderBox> for ProxyBox { ... }
+///
+/// // Works for Sliver protocol
+/// impl SingleChildContainer<dyn RenderSliver> for SliverProxy { ... }
+/// ```
+pub trait SingleChildContainer<T: ?Sized> {
+    /// Returns a reference to the child, if present.
+    fn child(&self) -> Option<&T>;
+
+    /// Returns a mutable reference to the child, if present.
+    fn child_mut(&mut self) -> Option<&mut T>;
+
+    /// Sets the child, returning the previous child if any.
+    fn set_child(&mut self, child: Box<T>) -> Option<Box<T>>;
+
+    /// Takes the child out of the container.
+    fn take_child(&mut self) -> Option<Box<T>>;
+
+    /// Returns `true` if the container has a child.
+    fn has_child(&self) -> bool;
+}
+
+// ============================================================================
+// ProxyContainer trait - Generic proxy container (size = child size)
+// ============================================================================
+
+/// Generic trait for proxy containers that store geometry.
+///
+/// A proxy container passes through child's geometry unchanged.
+/// This is the base for effects like opacity, color filter, etc.
+///
+/// # Type Parameters
+///
+/// - `T: ?Sized` - The child object type
+/// - `G` - The geometry type (e.g., `Size` for Box, `SliverGeometry` for Sliver)
+///
+/// # Example
+///
+/// ```rust,ignore
+/// // Box proxy: child is RenderBox, geometry is Size
+/// impl ProxyContainer<dyn RenderBox, Size> for ProxyBox { ... }
+///
+/// // Sliver proxy: child is RenderSliver, geometry is SliverGeometry
+/// impl ProxyContainer<dyn RenderSliver, SliverGeometry> for SliverProxy { ... }
+/// ```
+pub trait ProxyContainer<T: ?Sized, G>: SingleChildContainer<T> {
+    /// Returns a reference to the cached geometry.
+    fn geometry(&self) -> &G;
+
+    /// Sets the cached geometry.
+    fn set_geometry(&mut self, geometry: G);
+}
 
 /// Container that stores a single child where parent size equals child size.
 ///

@@ -69,13 +69,8 @@ pub use children::{
     // Generic multi-child traits
     MultiChildContainer,
     MultiChildContainerWithData,
-    // Generic container traits
-    ProxyContainer,
-    ShiftedContainer,
     // Generic alias
     Single,
-    // Generic single-child trait
-    SingleChildContainer,
     // Sliver protocol aliases
     SliverChild,
     SliverChildRequired,
@@ -83,6 +78,10 @@ pub use children::{
     StackChildren,
     WrapChildren,
 };
+// Re-export generic traits from their respective modules
+pub use proxy::{ProxyContainer, SingleChildContainer};
+pub use shifted::ShiftedContainer;
+// Re-export concrete types
 pub use proxy::*;
 pub use shifted::*;
 pub use viewport::{SliverViewport, Viewport};

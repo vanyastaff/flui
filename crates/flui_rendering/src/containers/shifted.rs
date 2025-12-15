@@ -1,5 +1,9 @@
 //! Shifted container - single child with custom offset positioning.
 //!
+//! This module provides:
+//! - [`ShiftedContainer`] - Generic trait for shifted containers with offset
+//! - [`Shifted`] - Concrete shifted container implementation
+//!
 //! This is the Rust equivalent of Flutter's `RenderShiftedBox` pattern.
 //! Use when parent needs to position child at a specific offset.
 
@@ -7,10 +11,37 @@ use flui_tree::arity::Optional;
 use flui_types::{Offset, Size};
 use std::fmt::Debug;
 
-use super::{Children, ShiftedContainer, SingleChildContainer};
+use super::{Children, SingleChildContainer};
 use crate::constraints::SliverGeometry;
 use crate::protocol::{BoxProtocol, Protocol, SliverProtocol};
 use crate::traits::{BoxHitTestResult, RenderBox};
+
+// ============================================================================
+// ShiftedContainer trait - Generic shifted container (child with offset)
+// ============================================================================
+
+/// Generic trait for shifted containers that store geometry and offset.
+///
+/// A shifted container positions its child at a computed offset.
+/// This is the base for padding, alignment, etc.
+///
+/// # Type Parameters
+///
+/// - `T: ?Sized` - The child object type
+/// - `G` - The geometry type
+pub trait ShiftedContainer<T: ?Sized, G>: SingleChildContainer<T> {
+    /// Returns a reference to the cached geometry.
+    fn geometry(&self) -> &G;
+
+    /// Sets the cached geometry.
+    fn set_geometry(&mut self, geometry: G);
+
+    /// Returns the child's offset within the parent.
+    fn offset(&self) -> flui_types::Offset;
+
+    /// Sets the child's offset within the parent.
+    fn set_offset(&mut self, offset: flui_types::Offset);
+}
 
 /// Container that stores a single child with custom offset positioning.
 ///
