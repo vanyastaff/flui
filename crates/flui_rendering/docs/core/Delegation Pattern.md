@@ -16,7 +16,7 @@ FLUI uses the `ambassador` crate to delegate trait implementations to container 
 
 ```toml
 [dependencies]
-ambassador = "0.3"
+ambassador = "0.4"
 ```
 
 ### Macro Usage

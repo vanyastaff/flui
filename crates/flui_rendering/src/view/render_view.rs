@@ -6,11 +6,11 @@ use std::fmt::Debug;
 use flui_types::{Offset, Rect, Size};
 
 use crate::constraints::{BoxConstraints, Constraints};
+use crate::lifecycle::BaseRenderObject;
 
 use super::ViewConfiguration;
 use crate::hit_testing::{HitTestEntry, HitTestResult};
 use crate::layer::TransformLayer;
-use crate::parent_data::ParentData;
 use crate::pipeline::{PaintingContext, PipelineOwner};
 use crate::traits::BoxHitTestResult;
 use crate::traits::{RenderBox, RenderObject};
@@ -33,6 +33,9 @@ use crate::traits::{RenderBox, RenderObject};
 ///
 /// Corresponds to Flutter's `RenderView` class from `rendering/view.dart`.
 pub struct RenderView {
+    /// Base render object state (lifecycle, dirty flags, parent data, debug info).
+    base: BaseRenderObject,
+
     /// The view configuration.
     configuration: Option<ViewConfiguration>,
 
@@ -51,29 +54,8 @@ pub struct RenderView {
     /// Whether automatic system UI adjustment is enabled.
     automatic_system_ui_adjustment: bool,
 
-    /// The pipeline owner.
+    /// The pipeline owner (raw pointer for direct access).
     owner: Option<*const PipelineOwner>,
-
-    /// The depth in the tree (always 0 for root).
-    depth: usize,
-
-    /// Parent data (always None for root).
-    parent_data: Option<Box<dyn ParentData>>,
-
-    /// Whether layout is needed.
-    needs_layout: bool,
-
-    /// Whether paint is needed.
-    needs_paint: bool,
-
-    /// Whether compositing bits update is needed.
-    needs_compositing_bits_update: bool,
-
-    /// Whether semantics update is needed.
-    needs_semantics_update: bool,
-
-    /// Whether this render object or descendants need compositing.
-    needs_compositing: bool,
 }
 
 impl Debug for RenderView {
@@ -103,7 +85,13 @@ impl RenderView {
     /// The view starts without a configuration. You must call
     /// [`set_configuration`](Self::set_configuration) before using the view.
     pub fn new() -> Self {
+        let mut base = BaseRenderObject::new();
+        // RenderView is always a repaint boundary and needs compositing
+        base.state_mut().set_repaint_boundary(true);
+        base.state_mut().set_needs_compositing(true);
+
         Self {
+            base,
             configuration: None,
             child: None,
             size: Size::ZERO,
@@ -111,13 +99,6 @@ impl RenderView {
             layer: None,
             automatic_system_ui_adjustment: true,
             owner: None,
-            depth: 0,
-            parent_data: None,
-            needs_layout: true,
-            needs_paint: true,
-            needs_compositing_bits_update: true,
-            needs_semantics_update: true,
-            needs_compositing: true, // RenderView always needs compositing (is repaint boundary)
         }
     }
 
@@ -176,7 +157,7 @@ impl RenderView {
         self.configuration = Some(configuration);
 
         if self.root_transform.is_some() {
-            self.needs_layout = true;
+            self.base.mark_needs_layout();
         }
     }
 
@@ -215,7 +196,7 @@ impl RenderView {
     /// Sets the child render box.
     pub fn set_child(&mut self, child: Option<Box<dyn RenderBox>>) {
         self.child = child;
-        self.needs_layout = true;
+        self.base.mark_needs_layout();
     }
 
     // ========================================================================
@@ -292,19 +273,19 @@ impl RenderView {
             "set a configuration before calling prepare_initial_frame"
         );
 
-        self.schedule_initial_layout();
-        self.schedule_initial_paint();
+        self.schedule_initial_layout_internal();
+        self.schedule_initial_paint_internal();
     }
 
     /// Schedules the initial layout.
-    fn schedule_initial_layout(&mut self) {
-        self.needs_layout = true;
+    fn schedule_initial_layout_internal(&mut self) {
+        self.base.mark_needs_layout();
     }
 
     /// Schedules the initial paint and creates the root layer.
-    fn schedule_initial_paint(&mut self) {
+    fn schedule_initial_paint_internal(&mut self) {
         self.layer = Some(self.update_matrices_and_create_new_root_layer());
-        self.needs_paint = true;
+        self.base.mark_needs_paint();
     }
 
     // ========================================================================
@@ -341,7 +322,7 @@ impl RenderView {
             constraints
         );
 
-        self.needs_layout = false;
+        self.base.clear_needs_layout();
     }
 
     // ========================================================================
@@ -464,16 +445,16 @@ impl RenderView {
 // ============================================================================
 
 impl RenderObject for RenderView {
+    fn base(&self) -> &BaseRenderObject {
+        &self.base
+    }
+
+    fn base_mut(&mut self) -> &mut BaseRenderObject {
+        &mut self.base
+    }
+
     fn parent(&self) -> Option<&dyn RenderObject> {
         None // RenderView is the root
-    }
-
-    fn depth(&self) -> usize {
-        self.depth
-    }
-
-    fn set_depth(&mut self, depth: usize) {
-        self.depth = depth;
     }
 
     fn owner(&self) -> Option<&PipelineOwner> {
@@ -508,51 +489,11 @@ impl RenderObject for RenderView {
         self.child = None;
     }
 
-    fn mark_needs_layout(&mut self) {
-        self.needs_layout = true;
-    }
-
-    fn mark_needs_paint(&mut self) {
-        self.needs_paint = true;
-    }
-
-    fn mark_needs_compositing_bits_update(&mut self) {
-        self.needs_compositing_bits_update = true;
-    }
-
-    fn mark_needs_semantics_update(&mut self) {
-        self.needs_semantics_update = true;
-    }
-
-    fn needs_layout(&self) -> bool {
-        self.needs_layout
-    }
-
-    fn needs_paint(&self) -> bool {
-        self.needs_paint
-    }
-
-    fn needs_compositing_bits_update(&self) -> bool {
-        self.needs_compositing_bits_update
-    }
-
-    fn clear_needs_layout(&mut self) {
-        self.needs_layout = false;
-    }
-
-    fn clear_needs_paint(&mut self) {
-        self.needs_paint = false;
-    }
-
-    fn clear_needs_compositing_bits_update(&mut self) {
-        self.needs_compositing_bits_update = false;
-    }
-
     fn adopt_child(&mut self, child: &mut dyn RenderObject) {
         self.setup_parent_data(child);
-        self.mark_needs_layout();
-        self.mark_needs_compositing_bits_update();
-        self.mark_needs_semantics_update();
+        self.base.mark_needs_layout();
+        self.base.mark_needs_compositing_bits_update();
+        self.base.mark_needs_semantics_update();
         child.set_parent(Some(self as *const dyn RenderObject));
         if let Some(owner) = self.owner() {
             child.attach(owner);
@@ -565,42 +506,27 @@ impl RenderObject for RenderView {
         if self.attached() {
             child.detach();
         }
-        self.mark_needs_layout();
-        self.mark_needs_compositing_bits_update();
-        self.mark_needs_semantics_update();
+        self.base.mark_needs_layout();
+        self.base.mark_needs_compositing_bits_update();
+        self.base.mark_needs_semantics_update();
     }
 
     fn redepth_child(&mut self, child: &mut dyn RenderObject) {
-        if child.depth() <= self.depth {
-            child.set_depth(self.depth + 1);
+        let my_depth = self.base.depth();
+        if child.depth() <= my_depth {
+            child.set_depth(my_depth + 1);
             child.redepth_children();
         }
     }
 
     fn redepth_children(&mut self) {
         if let Some(child) = self.child.as_mut() {
-            let my_depth = self.depth;
+            let my_depth = self.base.depth();
             if child.depth() <= my_depth {
                 child.set_depth(my_depth + 1);
                 child.redepth_children();
             }
         }
-    }
-
-    fn is_repaint_boundary(&self) -> bool {
-        true // RenderView is always a repaint boundary
-    }
-
-    fn parent_data(&self) -> Option<&dyn ParentData> {
-        self.parent_data.as_ref().map(|p| p.as_ref())
-    }
-
-    fn parent_data_mut(&mut self) -> Option<&mut dyn ParentData> {
-        self.parent_data.as_mut().map(|p| p.as_mut())
-    }
-
-    fn set_parent_data(&mut self, data: Box<dyn ParentData>) {
-        self.parent_data = Some(data);
     }
 
     fn visit_children(&self, visitor: &mut dyn FnMut(&dyn RenderObject)) {
@@ -626,7 +552,7 @@ impl RenderObject for RenderView {
     fn mark_parent_needs_layout(&mut self) {
         // RenderView is the root, so no parent to mark
         // Just mark self as needing layout
-        self.needs_layout = true;
+        self.base.mark_needs_layout();
     }
 
     fn schedule_initial_layout(&mut self) {
@@ -638,7 +564,7 @@ impl RenderObject for RenderView {
             self.parent().is_none(),
             "RenderView must be root to schedule initial layout"
         );
-        self.needs_layout = true;
+        self.base.mark_needs_layout();
         // In a real implementation, this would add to owner's nodes needing layout
     }
 
@@ -651,16 +577,8 @@ impl RenderObject for RenderView {
             self.is_repaint_boundary(),
             "RenderView must be a repaint boundary"
         );
-        self.needs_paint = true;
+        self.base.mark_needs_paint();
         // In a real implementation, this would add to owner's nodes needing paint
-    }
-
-    fn needs_compositing(&self) -> bool {
-        self.needs_compositing
-    }
-
-    fn set_needs_compositing(&mut self, value: bool) {
-        self.needs_compositing = value;
     }
 
     fn paint_bounds(&self) -> Rect {

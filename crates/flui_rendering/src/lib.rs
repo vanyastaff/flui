@@ -55,6 +55,7 @@ pub mod delegates;
 pub mod hit_testing;
 pub mod input;
 pub mod layer;
+pub mod lifecycle;
 pub mod objects;
 pub mod parent_data;
 pub mod pipeline;
@@ -111,6 +112,11 @@ pub mod prelude {
 
     // Constraints from this crate
     pub use crate::constraints::{BoxConstraints, Constraints, SliverConstraints, SliverGeometry};
+
+    // Lifecycle types
+    pub use crate::lifecycle::{
+        BaseRenderObject, DirtyFlags, RenderLifecycle, RenderObjectState, RenderState,
+    };
 
     // Re-export commonly used types from flui_types
     pub use flui_types::{Offset, Point, RRect, Rect, Size};

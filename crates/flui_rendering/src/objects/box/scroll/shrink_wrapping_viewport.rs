@@ -16,7 +16,8 @@ use flui_types::{Axis, Offset, Rect, Size};
 
 use crate::constraints::{BoxConstraints, GrowthDirection, SliverConstraints};
 use crate::containers::Children;
-use crate::parent_data::{ParentData, SliverParentData};
+use crate::lifecycle::BaseRenderObject;
+use crate::parent_data::SliverParentData;
 use crate::pipeline::{PaintingContext, PipelineOwner};
 use crate::protocol::SliverProtocol;
 use crate::traits::sliver::SliverHitTestResult;
@@ -52,6 +53,9 @@ use crate::view::{
 /// This corresponds to Flutter's `RenderShrinkWrappingViewport` class.
 #[derive(Debug)]
 pub struct RenderShrinkWrappingViewport {
+    /// Base render object state (lifecycle, parent data, etc.).
+    base: BaseRenderObject,
+
     /// Sliver children with logical parent data.
     children: Children<SliverProtocol, SliverParentData>,
 
@@ -76,32 +80,8 @@ pub struct RenderShrinkWrappingViewport {
     /// Cached constraints from parent.
     constraints: Option<BoxConstraints>,
 
-    /// Whether this render object is attached.
-    attached: bool,
-
-    /// The pipeline owner.
+    /// The pipeline owner (kept for owner() reference return).
     owner: Option<*const PipelineOwner>,
-
-    /// Parent render object.
-    parent: Option<*const dyn RenderObject>,
-
-    /// Depth in the render tree.
-    depth: usize,
-
-    /// Parent data set by our parent.
-    parent_data: Option<Box<dyn ParentData>>,
-
-    /// Whether layout is needed.
-    needs_layout: bool,
-
-    /// Whether paint is needed.
-    needs_paint: bool,
-
-    /// Whether compositing bits need update.
-    needs_compositing_bits_update: bool,
-
-    /// Whether compositing is needed.
-    needs_compositing: bool,
 }
 
 // Safety: Uses raw pointers only for parent/owner references
@@ -112,6 +92,7 @@ impl RenderShrinkWrappingViewport {
     /// Creates a new shrink-wrapping viewport with the given axis direction.
     pub fn new(axis_direction: AxisDirection) -> Self {
         Self {
+            base: BaseRenderObject::new(),
             children: Children::new(),
             axis_direction,
             cross_axis_direction: Self::default_cross_axis(axis_direction),
@@ -120,15 +101,7 @@ impl RenderShrinkWrappingViewport {
             cache_extent_style: CacheExtentStyle::Pixel,
             size: Size::ZERO,
             constraints: None,
-            attached: false,
             owner: None,
-            parent: None,
-            depth: 0,
-            parent_data: None,
-            needs_layout: true,
-            needs_paint: true,
-            needs_compositing_bits_update: true,
-            needs_compositing: false,
         }
     }
 
@@ -141,6 +114,7 @@ impl RenderShrinkWrappingViewport {
         cache_extent_style: CacheExtentStyle,
     ) -> Self {
         Self {
+            base: BaseRenderObject::new(),
             children: Children::new(),
             axis_direction,
             cross_axis_direction,
@@ -149,15 +123,7 @@ impl RenderShrinkWrappingViewport {
             cache_extent_style,
             size: Size::ZERO,
             constraints: None,
-            attached: false,
             owner: None,
-            parent: None,
-            depth: 0,
-            parent_data: None,
-            needs_layout: true,
-            needs_paint: true,
-            needs_compositing_bits_update: true,
-            needs_compositing: false,
         }
     }
 
@@ -327,29 +293,20 @@ impl RenderShrinkWrappingViewport {
 // ============================================================================
 
 impl RenderObject for RenderShrinkWrappingViewport {
-    fn parent(&self) -> Option<&dyn RenderObject> {
-        self.parent.map(|p| unsafe { &*p })
+    fn base(&self) -> &BaseRenderObject {
+        &self.base
     }
 
-    fn depth(&self) -> usize {
-        self.depth
-    }
-
-    fn set_depth(&mut self, depth: usize) {
-        self.depth = depth;
+    fn base_mut(&mut self) -> &mut BaseRenderObject {
+        &mut self.base
     }
 
     fn owner(&self) -> Option<&PipelineOwner> {
         self.owner.map(|p| unsafe { &*p })
     }
 
-    fn set_parent(&mut self, parent: Option<*const dyn RenderObject>) {
-        self.parent = parent;
-    }
-
     fn attach(&mut self, owner: &PipelineOwner) {
         self.owner = Some(owner as *const PipelineOwner);
-        self.attached = true;
 
         self.children.for_each_mut(|child, _data| {
             child.attach(owner);
@@ -358,7 +315,6 @@ impl RenderObject for RenderShrinkWrappingViewport {
 
     fn detach(&mut self) {
         self.owner = None;
-        self.attached = false;
 
         self.children.for_each_mut(|child, _data| {
             child.detach();
@@ -374,56 +330,18 @@ impl RenderObject for RenderShrinkWrappingViewport {
     }
 
     fn redepth_child(&mut self, child: &mut dyn RenderObject) {
-        if child.depth() <= self.depth {
-            child.set_depth(self.depth + 1);
+        if child.depth() <= self.depth() {
+            child.set_depth(self.depth() + 1);
             child.redepth_children();
         }
     }
 
-    fn needs_layout(&self) -> bool {
-        self.needs_layout
-    }
-
-    fn needs_paint(&self) -> bool {
-        self.needs_paint
-    }
-
-    fn needs_compositing_bits_update(&self) -> bool {
-        self.needs_compositing_bits_update
-    }
-
-    fn mark_needs_layout(&mut self) {
-        self.needs_layout = true;
-    }
-
-    fn mark_needs_paint(&mut self) {
-        self.needs_paint = true;
-    }
-
-    fn mark_needs_compositing_bits_update(&mut self) {
-        self.needs_compositing_bits_update = true;
-    }
-
-    fn mark_needs_semantics_update(&mut self) {
-        // Would mark semantics dirty
-    }
-
-    fn clear_needs_layout(&mut self) {
-        self.needs_layout = false;
-    }
-
-    fn clear_needs_paint(&mut self) {
-        self.needs_paint = false;
-    }
-
-    fn clear_needs_compositing_bits_update(&mut self) {
-        self.needs_compositing_bits_update = false;
-    }
-
     fn mark_parent_needs_layout(&mut self) {
-        if let Some(parent) = self.parent {
+        if let Some(parent_ptr) = self.base.state().parent_ptr() {
             unsafe {
-                let parent_mut = parent as *mut dyn RenderObject;
+                // Safety: parent_ptr is a wide pointer (*const dyn RenderObject)
+                // that was set during adopt_child and is valid while attached.
+                let parent_mut = parent_ptr as *mut dyn RenderObject;
                 (*parent_mut).mark_needs_layout();
             }
         }
@@ -437,28 +355,8 @@ impl RenderObject for RenderShrinkWrappingViewport {
         self.mark_needs_paint();
     }
 
-    fn needs_compositing(&self) -> bool {
-        self.needs_compositing
-    }
-
-    fn set_needs_compositing(&mut self, value: bool) {
-        self.needs_compositing = value;
-    }
-
     fn is_repaint_boundary(&self) -> bool {
-        true
-    }
-
-    fn parent_data(&self) -> Option<&dyn ParentData> {
-        self.parent_data.as_ref().map(|d| d.as_ref())
-    }
-
-    fn parent_data_mut(&mut self) -> Option<&mut dyn ParentData> {
-        self.parent_data.as_mut().map(|d| d.as_mut())
-    }
-
-    fn set_parent_data(&mut self, data: Box<dyn ParentData>) {
-        self.parent_data = Some(data);
+        true // Viewports are always repaint boundaries
     }
 
     fn visit_children(&self, visitor: &mut dyn FnMut(&dyn RenderObject)) {

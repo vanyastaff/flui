@@ -10,6 +10,7 @@
 //! - [`Proxy`]: Single child where size equals child's size
 //! - [`Shifted`]: Single child with custom offset positioning
 //! - [`Aligning`]: Single child with alignment and size factors
+//! - [`Adapter`]: Cross-protocol wrapper (zero-cost)
 //!
 //! # Type Aliases
 //!
@@ -27,8 +28,14 @@
 //! type SliverChild = Single<SliverProtocol>;
 //! type SliverProxy = Proxy<SliverProtocol>;
 //! // ...
+//!
+//! // Cross-protocol adapters
+//! type BoxToSliver = Adapter<Single<BoxProtocol>, SliverProtocol>;
+//! type SliverToBox = Adapter<Single<SliverProtocol>, BoxProtocol>;
+//! type MultiSliverToBox = Adapter<Children<SliverProtocol>, BoxProtocol>;
 //! ```
 
+mod adapter;
 mod aligning;
 mod children;
 mod proxy;
@@ -36,6 +43,10 @@ mod shifted;
 mod single;
 mod viewport;
 
+pub use adapter::{
+    Adapter, BoxToSliver, MultiBoxToSliver, MultiSliverToBox, OptionalBoxToSliver,
+    OptionalSliverToBox, SliverToBox,
+};
 pub use aligning::*;
 pub use children::{BoxChildren, ChildEntry, Children, HasOffset, SliverChildren};
 pub use proxy::*;

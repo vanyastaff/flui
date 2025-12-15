@@ -5,6 +5,7 @@
 use std::any::Any;
 use std::fmt::Debug;
 
+use crate::lifecycle::BaseRenderObject;
 use crate::parent_data::ParentData;
 use crate::pipeline::PipelineOwner;
 use crate::semantics::{SemanticsConfiguration, SemanticsEvent, SemanticsNode};
@@ -164,11 +165,49 @@ pub struct DiagnosticsNode {
 /// and rendering operations.
 pub trait RenderObject: Debug + Send + Sync + 'static {
     // ========================================================================
+    // Base State Access
+    // ========================================================================
+
+    /// Returns the base render object state.
+    ///
+    /// This provides access to the unified lifecycle state management.
+    /// Implementations should return a reference to their embedded
+    /// [`BaseRenderObject`] instance.
+    ///
+    /// # Example Implementation
+    ///
+    /// ```ignore
+    /// struct MyRenderBox {
+    ///     base: BaseRenderObject,
+    ///     // ... other fields
+    /// }
+    ///
+    /// impl RenderObject for MyRenderBox {
+    ///     fn base(&self) -> &BaseRenderObject {
+    ///         &self.base
+    ///     }
+    ///
+    ///     fn base_mut(&mut self) -> &mut BaseRenderObject {
+    ///         &mut self.base
+    ///     }
+    ///     // ...
+    /// }
+    /// ```
+    fn base(&self) -> &BaseRenderObject;
+
+    /// Returns mutable access to the base render object state.
+    fn base_mut(&mut self) -> &mut BaseRenderObject;
+
+    // ========================================================================
     // Tree Structure
     // ========================================================================
 
     /// Returns the parent render object, if any.
-    fn parent(&self) -> Option<&dyn RenderObject>;
+    ///
+    /// Default implementation returns `None`. Override if you track parent.
+    fn parent(&self) -> Option<&dyn RenderObject> {
+        None
+    }
 
     /// Returns the depth of this node in the render tree.
     ///
@@ -177,15 +216,27 @@ pub trait RenderObject: Debug + Send + Sync + 'static {
     /// There's no guarantee regarding depth between siblings.
     ///
     /// The root has depth 0, its children have depth 1, etc.
-    fn depth(&self) -> usize;
+    ///
+    /// Default implementation delegates to `base().depth()`.
+    fn depth(&self) -> usize {
+        self.base().depth()
+    }
 
     /// Sets the depth of this node.
     ///
     /// This is called internally by `adopt_child` and `redepth_child`.
     /// Users should not call this directly.
-    fn set_depth(&mut self, depth: usize);
+    ///
+    /// Default implementation delegates to `base_mut().set_depth()`.
+    fn set_depth(&mut self, depth: usize) {
+        self.base_mut().set_depth(depth);
+    }
 
     /// Returns the pipeline owner that manages this render object.
+    ///
+    /// Implementations should return a reference to their pipeline owner.
+    /// Note: The default implementations of dirty marking methods use
+    /// `base()` which stores `Arc<RwLock<PipelineOwner>>` internally.
     fn owner(&self) -> Option<&PipelineOwner>;
 
     /// Sets the parent of this render object.
@@ -194,7 +245,11 @@ pub trait RenderObject: Debug + Send + Sync + 'static {
     /// Users should not call this directly.
     ///
     /// Pass `None` to clear the parent reference.
-    fn set_parent(&mut self, parent: Option<*const dyn RenderObject>);
+    ///
+    /// Default implementation delegates to `base_mut().state_mut().set_parent_ptr()`.
+    fn set_parent(&mut self, parent: Option<*const dyn RenderObject>) {
+        self.base_mut().state_mut().set_parent_ptr(parent);
+    }
 
     // ========================================================================
     // Lifecycle
@@ -320,7 +375,11 @@ pub trait RenderObject: Debug + Send + Sync + 'static {
     /// # Flutter Equivalence
     ///
     /// This corresponds to Flutter's `RenderObject.debugNeedsLayout` getter.
-    fn needs_layout(&self) -> bool;
+    ///
+    /// Default implementation delegates to `base().needs_layout()`.
+    fn needs_layout(&self) -> bool {
+        self.base().needs_layout()
+    }
 
     /// Alias for `needs_layout()` to match Flutter's debug naming.
     ///
@@ -339,7 +398,11 @@ pub trait RenderObject: Debug + Send + Sync + 'static {
     /// # Flutter Equivalence
     ///
     /// This corresponds to Flutter's `RenderObject.debugNeedsPaint` getter.
-    fn needs_paint(&self) -> bool;
+    ///
+    /// Default implementation delegates to `base().needs_paint()`.
+    fn needs_paint(&self) -> bool {
+        self.base().needs_paint()
+    }
 
     /// Alias for `needs_paint()` to match Flutter's debug naming.
     ///
@@ -354,7 +417,11 @@ pub trait RenderObject: Debug + Send + Sync + 'static {
     ///
     /// This returns true if `mark_needs_compositing_bits_update()` has been
     /// called since the last time the compositing bits were updated.
-    fn needs_compositing_bits_update(&self) -> bool;
+    ///
+    /// Default implementation delegates to `base().needs_compositing_bits_update()`.
+    fn needs_compositing_bits_update(&self) -> bool {
+        self.base().needs_compositing_bits_update()
+    }
 
     /// Returns whether this render object is a relayout boundary.
     ///
@@ -365,8 +432,10 @@ pub trait RenderObject: Debug + Send + Sync + 'static {
     /// # Flutter Equivalence
     ///
     /// This corresponds to Flutter's `RenderObject._isRelayoutBoundary` field.
+    ///
+    /// Default implementation delegates to `base().is_relayout_boundary()`.
     fn is_relayout_boundary(&self) -> bool {
-        false
+        self.base().is_relayout_boundary()
     }
 
     // ========================================================================
@@ -448,8 +517,10 @@ pub trait RenderObject: Debug + Send + Sync + 'static {
     /// # Flutter Equivalence
     ///
     /// This corresponds to Flutter's `RenderObject.debugCreator` field.
+    ///
+    /// Default implementation delegates to `base().debug_creator()`.
     fn debug_creator(&self) -> Option<&str> {
-        None
+        self.base().debug_creator()
     }
 
     /// Sets the creator of this render object for debugging purposes.
@@ -457,8 +528,10 @@ pub trait RenderObject: Debug + Send + Sync + 'static {
     /// # Flutter Equivalence
     ///
     /// This corresponds to Flutter's `RenderObject.debugCreator` setter.
-    fn set_debug_creator(&mut self, _creator: Option<String>) {
-        // Default: do nothing
+    ///
+    /// Default implementation delegates to `base_mut().set_debug_creator()`.
+    fn set_debug_creator(&mut self, creator: Option<String>) {
+        self.base_mut().set_debug_creator(creator);
     }
 
     // ========================================================================
@@ -469,42 +542,70 @@ pub trait RenderObject: Debug + Send + Sync + 'static {
     ///
     /// Call this when something changes that affects the layout of this
     /// object or its descendants.
-    fn mark_needs_layout(&mut self);
+    ///
+    /// Default implementation delegates to `base_mut().mark_needs_layout()`.
+    fn mark_needs_layout(&mut self) {
+        self.base_mut().mark_needs_layout();
+    }
 
     /// Marks this render object as needing paint.
     ///
     /// Call this when something changes that affects the visual appearance
     /// of this object but not its layout.
-    fn mark_needs_paint(&mut self);
+    ///
+    /// Default implementation delegates to `base_mut().mark_needs_paint()`.
+    fn mark_needs_paint(&mut self) {
+        self.base_mut().mark_needs_paint();
+    }
 
     /// Marks this render object as needing compositing bits update.
     ///
     /// Call this when something changes that affects whether this object
     /// or its descendants need compositing.
-    fn mark_needs_compositing_bits_update(&mut self);
+    ///
+    /// Default implementation delegates to `base_mut().mark_needs_compositing_bits_update()`.
+    fn mark_needs_compositing_bits_update(&mut self) {
+        self.base_mut().mark_needs_compositing_bits_update();
+    }
 
     /// Marks this render object as needing semantics update.
     ///
     /// Call this when something changes that affects the semantics
     /// (accessibility) of this object.
-    fn mark_needs_semantics_update(&mut self);
+    ///
+    /// Default implementation delegates to `base_mut().mark_needs_semantics_update()`.
+    fn mark_needs_semantics_update(&mut self) {
+        self.base_mut().mark_needs_semantics_update();
+    }
 
     /// Clears the needs_layout flag after layout is complete.
     ///
     /// This is called by the layout system after a render object has been laid out.
     /// Implementations should set their internal `needs_layout` flag to false.
-    fn clear_needs_layout(&mut self);
+    ///
+    /// Default implementation delegates to `base_mut().clear_needs_layout()`.
+    fn clear_needs_layout(&mut self) {
+        self.base_mut().clear_needs_layout();
+    }
 
     /// Clears the needs_paint flag after painting is complete.
     ///
     /// This is called by the paint system after a render object has been painted.
     /// Implementations should set their internal `needs_paint` flag to false.
-    fn clear_needs_paint(&mut self);
+    ///
+    /// Default implementation delegates to `base_mut().clear_needs_paint()`.
+    fn clear_needs_paint(&mut self) {
+        self.base_mut().clear_needs_paint();
+    }
 
     /// Clears the needs_compositing_bits_update flag.
     ///
     /// This is called after compositing bits have been updated.
-    fn clear_needs_compositing_bits_update(&mut self);
+    ///
+    /// Default implementation delegates to `base_mut().clear_needs_compositing_bits_update()`.
+    fn clear_needs_compositing_bits_update(&mut self) {
+        self.base_mut().clear_needs_compositing_bits_update();
+    }
 
     // ========================================================================
     // Layout
@@ -761,12 +862,20 @@ pub trait RenderObject: Debug + Send + Sync + 'static {
     /// # Flutter Equivalence
     ///
     /// This corresponds to Flutter's `RenderObject.needsCompositing` getter.
-    fn needs_compositing(&self) -> bool;
+    ///
+    /// Default implementation delegates to `base().needs_compositing()`.
+    fn needs_compositing(&self) -> bool {
+        self.base().needs_compositing()
+    }
 
     /// Sets whether this render object needs compositing.
     ///
     /// This is called internally during `update_compositing_bits`.
-    fn set_needs_compositing(&mut self, value: bool);
+    ///
+    /// Default implementation delegates to `base_mut().set_needs_compositing()`.
+    fn set_needs_compositing(&mut self, value: bool) {
+        self.base_mut().set_needs_compositing(value);
+    }
 
     /// Updates the compositing bits for this render object.
     ///
@@ -899,9 +1008,9 @@ pub trait RenderObject: Debug + Send + Sync + 'static {
     /// If true, this render object will be painted into its own layer,
     /// which can improve performance when parts of the UI change frequently.
     ///
-    /// Default is `false`.
+    /// Default implementation delegates to `base().is_repaint_boundary()`.
     fn is_repaint_boundary(&self) -> bool {
-        false
+        self.base().is_repaint_boundary()
     }
 
     /// Whether this render object always needs compositing.
@@ -958,13 +1067,25 @@ pub trait RenderObject: Debug + Send + Sync + 'static {
     }
 
     /// Returns the parent data for this render object.
-    fn parent_data(&self) -> Option<&dyn ParentData>;
+    ///
+    /// Default implementation delegates to `base().parent_data()`.
+    fn parent_data(&self) -> Option<&dyn ParentData> {
+        self.base().parent_data()
+    }
 
     /// Returns mutable parent data for this render object.
-    fn parent_data_mut(&mut self) -> Option<&mut dyn ParentData>;
+    ///
+    /// Default implementation delegates to `base_mut().parent_data_mut()`.
+    fn parent_data_mut(&mut self) -> Option<&mut dyn ParentData> {
+        self.base_mut().parent_data_mut()
+    }
 
     /// Sets the parent data for this render object.
-    fn set_parent_data(&mut self, data: Box<dyn ParentData>);
+    ///
+    /// Default implementation delegates to `base_mut().set_parent_data()`.
+    fn set_parent_data(&mut self, data: Box<dyn ParentData>) {
+        self.base_mut().set_parent_data(data);
+    }
 
     // ========================================================================
     // Children
