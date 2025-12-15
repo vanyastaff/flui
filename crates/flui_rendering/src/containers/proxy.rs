@@ -409,6 +409,7 @@ impl ProxyBox {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::traits::RenderSliver;
 
     #[test]
     fn test_proxy_box_default() {
@@ -422,5 +423,68 @@ mod tests {
         let mut proxy: ProxyBox = Proxy::new();
         proxy.set_geometry(Size::new(100.0, 200.0));
         assert_eq!(proxy.size(), Size::new(100.0, 200.0));
+    }
+
+    // ========================================================================
+    // Generic trait tests - verify traits work with any Protocol
+    // ========================================================================
+
+    /// Helper function that works with any SingleChildContainer
+    fn use_single_child<T: ?Sized, C: SingleChildContainer<T>>(container: &C) -> bool {
+        container.has_child()
+    }
+
+    /// Helper function that works with any ProxyContainer
+    fn get_geometry<T: ?Sized, G: Clone, C: ProxyContainer<T, G>>(container: &C) -> G {
+        container.geometry().clone()
+    }
+
+    #[test]
+    fn test_single_child_container_box_protocol() {
+        let proxy: Proxy<BoxProtocol> = Proxy::new();
+        // Verify generic function works with BoxProtocol
+        assert!(!use_single_child::<dyn RenderBox, _>(&proxy));
+    }
+
+    #[test]
+    fn test_single_child_container_sliver_protocol() {
+        let proxy: Proxy<SliverProtocol> = Proxy::new();
+        // Verify generic function works with SliverProtocol
+        assert!(!use_single_child::<dyn RenderSliver, _>(&proxy));
+    }
+
+    #[test]
+    fn test_proxy_container_box_protocol() {
+        let mut proxy: Proxy<BoxProtocol> = Proxy::new();
+        proxy.set_geometry(Size::new(100.0, 50.0));
+
+        // Verify ProxyContainer trait works with BoxProtocol
+        let size: Size = get_geometry::<dyn RenderBox, Size, _>(&proxy);
+        assert_eq!(size, Size::new(100.0, 50.0));
+    }
+
+    #[test]
+    fn test_proxy_container_sliver_protocol() {
+        let mut proxy: Proxy<SliverProtocol> = Proxy::new();
+        let geom = SliverGeometry::default();
+        proxy.set_geometry(geom.clone());
+
+        // Verify ProxyContainer trait works with SliverProtocol
+        let retrieved: SliverGeometry = get_geometry::<dyn RenderSliver, SliverGeometry, _>(&proxy);
+        assert_eq!(retrieved.scroll_extent, geom.scroll_extent);
+    }
+
+    // ========================================================================
+    // Type alias tests
+    // ========================================================================
+
+    #[test]
+    fn test_proxy_box_alias() {
+        let _: ProxyBox = Proxy::new();
+    }
+
+    #[test]
+    fn test_sliver_proxy_alias() {
+        let _: SliverProxy = Proxy::new();
     }
 }

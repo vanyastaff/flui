@@ -902,6 +902,7 @@ impl<A: Arity, D: HasOffset + Send + Sync> ChildList<BoxProtocol, A, D> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::traits::RenderSliver;
 
     #[test]
     fn test_children_default() {
@@ -915,5 +916,152 @@ mod tests {
         let list: BoxChildList = ChildList::new();
         assert!(list.is_empty());
         assert_eq!(list.len(), 0);
+    }
+
+    // ========================================================================
+    // Generic trait tests - verify traits work with any Protocol
+    // ========================================================================
+
+    /// Helper function that works with any SingleChildContainer
+    fn use_single_child_container<T: ?Sized, C: SingleChildContainer<T>>(container: &C) -> bool {
+        container.has_child()
+    }
+
+    /// Helper function that works with any MultiChildContainer
+    fn use_multi_child_container<T: ?Sized, C: MultiChildContainer<T>>(container: &C) -> usize {
+        container.len()
+    }
+
+    /// Helper function that works with any MultiChildContainerWithData
+    fn count_with_data<T: ?Sized, D, C: MultiChildContainerWithData<T, D>>(container: &C) -> usize {
+        let mut count = 0;
+        for i in 0..container.len() {
+            if container.get_with_data(i).is_some() {
+                count += 1;
+            }
+        }
+        count
+    }
+
+    #[test]
+    fn test_single_child_container_with_box_protocol() {
+        let container: Children<BoxProtocol, Optional> = Children::new();
+        // Verify generic function works with BoxProtocol
+        assert!(!use_single_child_container::<dyn RenderBox, _>(&container));
+    }
+
+    #[test]
+    fn test_single_child_container_with_sliver_protocol() {
+        let container: Children<SliverProtocol, Optional> = Children::new();
+        // Verify generic function works with SliverProtocol
+        assert!(!use_single_child_container::<dyn RenderSliver, _>(
+            &container
+        ));
+    }
+
+    #[test]
+    fn test_multi_child_container_with_box_protocol() {
+        let container: Children<BoxProtocol, Variable> = Children::new();
+        // Verify generic function works with BoxProtocol
+        assert_eq!(use_multi_child_container::<dyn RenderBox, _>(&container), 0);
+    }
+
+    #[test]
+    fn test_multi_child_container_with_sliver_protocol() {
+        let container: Children<SliverProtocol, Variable> = Children::new();
+        // Verify generic function works with SliverProtocol
+        assert_eq!(
+            use_multi_child_container::<dyn RenderSliver, _>(&container),
+            0
+        );
+    }
+
+    #[test]
+    fn test_child_list_multi_child_container_box() {
+        let list: ChildList<BoxProtocol, Variable, BoxParentData> = ChildList::new();
+        // ChildList also implements MultiChildContainer
+        assert_eq!(use_multi_child_container::<dyn RenderBox, _>(&list), 0);
+    }
+
+    #[test]
+    fn test_child_list_with_data_box() {
+        let list: ChildList<BoxProtocol, Variable, BoxParentData> = ChildList::new();
+        // Verify MultiChildContainerWithData works
+        assert_eq!(count_with_data::<dyn RenderBox, BoxParentData, _>(&list), 0);
+    }
+
+    // ========================================================================
+    // Arity-specific tests
+    // ========================================================================
+
+    #[test]
+    fn test_children_optional_arity() {
+        // Optional arity: 0 or 1 child
+        let container: Children<BoxProtocol, Optional> = Children::new();
+        assert!(!container.has_child());
+
+        // SingleChildContainer trait is implemented for Optional
+        assert!(!use_single_child_container::<dyn RenderBox, _>(&container));
+    }
+
+    #[test]
+    fn test_children_variable_arity() {
+        // Variable arity: 0..N children
+        let container: Children<BoxProtocol, Variable> = Children::new();
+        // Use MultiChildContainer::is_empty explicitly to avoid ambiguity
+        assert!(MultiChildContainer::is_empty(&container));
+
+        // MultiChildContainer trait is implemented for Variable
+        assert_eq!(use_multi_child_container::<dyn RenderBox, _>(&container), 0);
+    }
+
+    #[test]
+    fn test_child_list_variable_arity() {
+        // ChildList with Variable arity
+        let list: ChildList<BoxProtocol, Variable, BoxParentData> = ChildList::new();
+        assert!(list.is_empty());
+
+        // Both MultiChildContainer and MultiChildContainerWithData work
+        assert_eq!(use_multi_child_container::<dyn RenderBox, _>(&list), 0);
+        assert_eq!(count_with_data::<dyn RenderBox, BoxParentData, _>(&list), 0);
+    }
+
+    // ========================================================================
+    // Type alias tests - verify type aliases work correctly
+    // ========================================================================
+
+    #[test]
+    fn test_box_child_alias() {
+        let _: BoxChild = Children::new();
+    }
+
+    #[test]
+    fn test_box_children_alias() {
+        let _: BoxChildren = Children::new();
+    }
+
+    #[test]
+    fn test_sliver_child_alias() {
+        let _: SliverChild = Children::new();
+    }
+
+    #[test]
+    fn test_sliver_children_alias() {
+        let _: SliverChildren = Children::new();
+    }
+
+    #[test]
+    fn test_flex_children_alias() {
+        let _: FlexChildren = ChildList::new();
+    }
+
+    #[test]
+    fn test_stack_children_alias() {
+        let _: StackChildren = ChildList::new();
+    }
+
+    #[test]
+    fn test_wrap_children_alias() {
+        let _: WrapChildren = ChildList::new();
     }
 }

@@ -386,6 +386,7 @@ impl ShiftedBox {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::traits::RenderSliver;
 
     #[test]
     fn test_shifted_box_default() {
@@ -400,5 +401,92 @@ mod tests {
         let mut shifted: ShiftedBox = Shifted::new();
         shifted.set_offset(Offset::new(10.0, 20.0));
         assert_eq!(shifted.offset(), Offset::new(10.0, 20.0));
+    }
+
+    // ========================================================================
+    // Generic trait tests - verify traits work with any Protocol
+    // ========================================================================
+
+    /// Helper function that works with any SingleChildContainer
+    fn use_single_child<T: ?Sized, C: SingleChildContainer<T>>(container: &C) -> bool {
+        container.has_child()
+    }
+
+    /// Helper function that works with any ShiftedContainer - set and get offset
+    fn set_and_get_offset<T: ?Sized, G, C: ShiftedContainer<T, G>>(
+        container: &mut C,
+        offset: Offset,
+    ) -> Offset {
+        container.set_offset(offset);
+        container.offset()
+    }
+
+    #[test]
+    fn test_single_child_container_box_protocol() {
+        let shifted: Shifted<BoxProtocol> = Shifted::new();
+        // Verify generic function works with BoxProtocol
+        assert!(!use_single_child::<dyn RenderBox, _>(&shifted));
+    }
+
+    #[test]
+    fn test_single_child_container_sliver_protocol() {
+        let shifted: Shifted<SliverProtocol> = Shifted::new();
+        // Verify generic function works with SliverProtocol
+        assert!(!use_single_child::<dyn RenderSliver, _>(&shifted));
+    }
+
+    #[test]
+    fn test_shifted_container_box_protocol() {
+        let mut shifted: Shifted<BoxProtocol> = Shifted::new();
+
+        // Verify ShiftedContainer trait works with BoxProtocol
+        let offset =
+            set_and_get_offset::<dyn RenderBox, Size, _>(&mut shifted, Offset::new(15.0, 25.0));
+        assert_eq!(offset, Offset::new(15.0, 25.0));
+    }
+
+    #[test]
+    fn test_shifted_container_sliver_protocol() {
+        let mut shifted: Shifted<SliverProtocol> = Shifted::new();
+
+        // Verify ShiftedContainer trait works with SliverProtocol
+        let offset = set_and_get_offset::<dyn RenderSliver, SliverGeometry, _>(
+            &mut shifted,
+            Offset::new(30.0, 40.0),
+        );
+        assert_eq!(offset, Offset::new(30.0, 40.0));
+    }
+
+    #[test]
+    fn test_shifted_container_geometry_box() {
+        let mut shifted: Shifted<BoxProtocol> = Shifted::new();
+        shifted.set_geometry(Size::new(200.0, 100.0));
+
+        // Access geometry through ShiftedContainer trait
+        assert_eq!(*shifted.geometry(), Size::new(200.0, 100.0));
+    }
+
+    #[test]
+    fn test_shifted_container_geometry_sliver() {
+        let mut shifted: Shifted<SliverProtocol> = Shifted::new();
+        let geom = SliverGeometry::default();
+        shifted.set_geometry(geom.clone());
+
+        // Access geometry through ShiftedContainer trait
+        assert_eq!(shifted.geometry().scroll_extent, geom.scroll_extent);
+    }
+
+    // ========================================================================
+    // Type alias tests
+    // ========================================================================
+
+    #[test]
+    fn test_shifted_box_alias() {
+        let _: ShiftedBox = Shifted::new();
+    }
+
+    #[test]
+    fn test_shifted_sliver_alias() {
+        let _: ShiftedSliver = Shifted::new();
     }
 }
