@@ -17,11 +17,16 @@
 //!
 //! - RenderAnimatedOpacityMixin: Animated opacity support
 //! - RenderBoxContainerDefaultsMixin: Default container implementations
+//!
+//! # Delegatable Traits (Ambassador)
+//!
+//! - [`ProxyBoxBehavior`]: Delegatable trait for proxy box pattern
 //! ```
 
 mod aligning_shifted_box;
 mod animated_opacity;
 mod container_defaults;
+mod delegatable;
 mod multi_child;
 mod proxy_box;
 mod render_box;
@@ -31,6 +36,7 @@ mod single_child;
 pub use aligning_shifted_box::*;
 pub use animated_opacity::*;
 pub use container_defaults::*;
+pub use delegatable::*;
 pub use multi_child::*;
 pub use proxy_box::*;
 pub use render_box::*;

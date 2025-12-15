@@ -24,6 +24,7 @@ mod decorated_box;
 pub mod fitted_box;
 mod fractional_translation;
 mod opacity;
+mod opacity_delegated;
 mod rotated_box;
 mod transform;
 
@@ -35,6 +36,7 @@ pub use decorated_box::*;
 pub use fitted_box::*;
 pub use fractional_translation::*;
 pub use opacity::*;
+pub use opacity_delegated::*;
 pub use rotated_box::*;
 pub use transform::*;
 
