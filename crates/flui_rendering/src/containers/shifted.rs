@@ -7,13 +7,16 @@
 //! This is the Rust equivalent of Flutter's `RenderShiftedBox` pattern.
 //! Use when parent needs to position child at a specific offset.
 
-use ambassador::delegatable_trait;
-use flui_tree::arity::{ChildrenStorage, Optional};
+use ambassador::{delegatable_trait, Delegate};
+
 use flui_types::{Offset, Size};
 use std::fmt::Debug;
 
-use super::{Children, SingleChildContainer};
+use super::base::{ambassador_impl_BaseContainer, BaseContainer};
+use super::single_child::SingleChild;
+use super::SingleChildContainer;
 use crate::constraints::SliverGeometry;
+use crate::lifecycle::RenderObjectState;
 use crate::protocol::{BoxProtocol, Protocol, SliverProtocol};
 use crate::traits::{BoxHitTestResult, RenderBox};
 
@@ -21,7 +24,7 @@ use crate::traits::{BoxHitTestResult, RenderBox};
 // ShiftedContainer trait - Generic shifted container (child with offset)
 // ============================================================================
 
-/// Generic trait for shifted containers that store geometry and offset.
+/// Generic trait for shifted containers that store offset.
 ///
 /// A shifted container positions its child at a computed offset.
 /// This is the base for padding, alignment, etc.
@@ -29,33 +32,30 @@ use crate::traits::{BoxHitTestResult, RenderBox};
 /// # Type Parameters
 ///
 /// - `T` - The boxed child type (e.g., `Box<dyn RenderBox>`)
-/// - `G` - The geometry type
 ///
 /// # Why `T: Sized`?
 ///
 /// We use `T` as the boxed type (not `T: ?Sized`) to enable Ambassador delegation.
 /// This means `T = Box<dyn RenderBox>` rather than `T = dyn RenderBox`.
 #[delegatable_trait]
-pub trait ShiftedContainer<T, G>: SingleChildContainer<T> {
-    /// Returns a reference to the cached geometry.
-    fn geometry(&self) -> &G;
-
-    /// Sets the cached geometry.
-    fn set_geometry(&mut self, geometry: G);
-
+pub trait ShiftedContainer<T>: SingleChildContainer<T> {
     /// Returns the child's offset within the parent.
-    fn offset(&self) -> flui_types::Offset;
+    fn offset(&self) -> Offset;
 
     /// Sets the child's offset within the parent.
-    fn set_offset(&mut self, offset: flui_types::Offset);
+    fn set_offset(&mut self, offset: Offset);
 }
+
+// ============================================================================
+// Shifted struct - uses SingleChild<P> internally
+// ============================================================================
 
 /// Container that stores a single child with custom offset positioning.
 ///
-/// This is the storage pattern for render objects that:
-/// - Position child at a non-zero offset (padding, margins)
-/// - Compute child position during layout
-/// - Need to adjust hit testing by the offset
+/// This is the third level of the compositional hierarchy:
+/// - `Base<P>` → state + geometry
+/// - `SingleChild<P>` → base + child
+/// - `Shifted<P>` → single_child + offset
 ///
 /// # Flutter Equivalent
 ///
@@ -65,30 +65,11 @@ pub trait ShiftedContainer<T, G>: SingleChildContainer<T> {
 ///
 /// In FLUI, we store the offset directly in the container for simplicity.
 ///
-/// # Generic Traits
-///
-/// `Shifted<P>` implements generic traits that work with any protocol:
-///
-/// - [`SingleChildContainer<P::Object>`] - child access methods
-/// - [`ShiftedContainer<P::Object, P::Geometry>`] - geometry and offset storage
-///
-/// ```rust,ignore
-/// // Works for both ShiftedBox and ShiftedSliver
-/// fn use_shifted<T, G>(shifted: &T)
-/// where
-///     T: ShiftedContainer<dyn RenderBox, G>,
-/// {
-///     if let Some(child) = shifted.child() {
-///         println!("Offset: {:?}", shifted.offset());
-///     }
-/// }
-/// ```
-///
 /// # Example
 ///
 /// ```rust,ignore
 /// pub struct RenderPadding {
-///     shifted: ShiftedBox,
+///     shifted: Shifted<BoxProtocol>,
 ///     padding: EdgeInsets,
 /// }
 ///
@@ -115,9 +96,13 @@ pub trait ShiftedContainer<T, G>: SingleChildContainer<T> {
 ///     }
 /// }
 /// ```
+#[derive(Delegate)]
+#[delegate(BaseContainer<P::Geometry>, target = "inner")]
 pub struct Shifted<P: Protocol> {
-    child: Children<P, Optional>,
-    geometry: P::Geometry,
+    /// Inner single child container (base + child).
+    inner: SingleChild<P>,
+
+    /// Child's offset within the parent.
     offset: Offset,
 }
 
@@ -128,8 +113,7 @@ where
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Shifted")
-            .field("has_child", &self.child.has_child())
-            .field("geometry", &self.geometry)
+            .field("inner", &self.inner)
             .field("offset", &self.offset)
             .finish()
     }
@@ -145,56 +129,59 @@ impl<P: Protocol> Shifted<P> {
     /// Creates a new empty shifted container.
     pub fn new() -> Self {
         Self {
-            child: Children::new(),
-            geometry: P::default_geometry(),
+            inner: SingleChild::new(),
             offset: Offset::ZERO,
         }
     }
 
     /// Creates a shifted container with the given child.
     pub fn with_child(child: Box<P::Object>) -> Self {
-        let mut container = Children::new();
-        container.set(child);
         Self {
-            child: container,
-            geometry: P::default_geometry(),
+            inner: SingleChild::with_child(child),
             offset: Offset::ZERO,
         }
     }
 
+    /// Returns a reference to the inner single child container.
+    #[inline]
+    pub fn inner(&self) -> &SingleChild<P> {
+        &self.inner
+    }
+
+    /// Returns a mutable reference to the inner single child container.
+    #[inline]
+    pub fn inner_mut(&mut self) -> &mut SingleChild<P> {
+        &mut self.inner
+    }
+
     /// Returns a reference to the child, if present.
+    #[inline]
     pub fn child(&self) -> Option<&P::Object> {
-        self.child.get()
+        self.inner.child()
     }
 
     /// Returns a mutable reference to the child, if present.
+    #[inline]
     pub fn child_mut(&mut self) -> Option<&mut P::Object> {
-        self.child.get_mut()
+        self.inner.child_mut()
     }
 
     /// Sets the child, replacing any existing child.
-    pub fn set_child(&mut self, child: Box<P::Object>) {
-        self.child.set(child);
+    #[inline]
+    pub fn set_child(&mut self, child: Box<P::Object>) -> Option<Box<P::Object>> {
+        self.inner.set_child(child)
     }
 
     /// Takes the child out of the container, leaving it empty.
+    #[inline]
     pub fn take_child(&mut self) -> Option<Box<P::Object>> {
-        self.child.take()
+        self.inner.take_child()
     }
 
     /// Returns `true` if the container has a child.
+    #[inline]
     pub fn has_child(&self) -> bool {
-        self.child.has_child()
-    }
-
-    /// Returns a reference to the geometry.
-    pub fn geometry(&self) -> &P::Geometry {
-        &self.geometry
-    }
-
-    /// Sets the geometry.
-    pub fn set_geometry(&mut self, geometry: P::Geometry) {
-        self.geometry = geometry;
+        self.inner.has_child()
     }
 
     /// Returns the child's offset within the parent.
@@ -203,6 +190,7 @@ impl<P: Protocol> Shifted<P> {
     ///
     /// In Flutter, this is stored in `BoxParentData.offset`.
     /// We store it directly for simpler access.
+    #[inline]
     pub fn offset(&self) -> Offset {
         self.offset
     }
@@ -210,10 +198,69 @@ impl<P: Protocol> Shifted<P> {
     /// Sets the child's offset within the parent.
     ///
     /// This should be called during layout to position the child.
+    #[inline]
     pub fn set_offset(&mut self, offset: Offset) {
         self.offset = offset;
     }
+
+    /// Returns a reference to the cached geometry.
+    #[inline]
+    pub fn geometry(&self) -> &P::Geometry {
+        self.inner.base().geometry()
+    }
+
+    /// Sets the cached geometry.
+    #[inline]
+    pub fn set_geometry(&mut self, geometry: P::Geometry) {
+        self.inner.base_mut().set_geometry(geometry);
+    }
 }
+
+// ============================================================================
+// SingleChildContainer trait implementation (manual, not delegated)
+// ============================================================================
+
+impl<P: Protocol> SingleChildContainer<Box<P::Object>> for Shifted<P> {
+    #[inline]
+    fn child(&self) -> Option<&Box<P::Object>> {
+        self.inner.child_box()
+    }
+
+    #[inline]
+    fn child_mut(&mut self) -> Option<&mut Box<P::Object>> {
+        self.inner.child_box_mut()
+    }
+
+    #[inline]
+    fn set_child(&mut self, child: Box<P::Object>) -> Option<Box<P::Object>> {
+        self.inner.set_child(child)
+    }
+
+    #[inline]
+    fn take_child(&mut self) -> Option<Box<P::Object>> {
+        self.inner.take_child()
+    }
+}
+
+// ============================================================================
+// ShiftedContainer trait implementation
+// ============================================================================
+
+impl<P: Protocol> ShiftedContainer<Box<P::Object>> for Shifted<P> {
+    #[inline]
+    fn offset(&self) -> Offset {
+        self.offset
+    }
+
+    #[inline]
+    fn set_offset(&mut self, offset: Offset) {
+        self.offset = offset;
+    }
+}
+
+// ============================================================================
+// Type aliases
+// ============================================================================
 
 /// Box shifted container (geometry is `Size`, with offset).
 ///
@@ -232,72 +279,22 @@ pub type ShiftedBox = Shifted<BoxProtocol>;
 pub type ShiftedSliver = Shifted<SliverProtocol>;
 
 // ============================================================================
-// Generic trait implementations for Shifted<P>
+// Convenience methods for ShiftedBox
 // ============================================================================
-
-impl<P: Protocol> SingleChildContainer<Box<P::Object>> for Shifted<P> {
-    #[inline]
-    fn child(&self) -> Option<&Box<P::Object>> {
-        self.child.single_child()
-    }
-
-    #[inline]
-    fn child_mut(&mut self) -> Option<&mut Box<P::Object>> {
-        self.child.single_child_mut()
-    }
-
-    #[inline]
-    fn set_child(&mut self, child: Box<P::Object>) -> Option<Box<P::Object>> {
-        self.child.set(child)
-    }
-
-    #[inline]
-    fn take_child(&mut self) -> Option<Box<P::Object>> {
-        self.child.take()
-    }
-}
-
-impl<P: Protocol> ShiftedContainer<Box<P::Object>, P::Geometry> for Shifted<P> {
-    #[inline]
-    fn geometry(&self) -> &P::Geometry {
-        &self.geometry
-    }
-
-    #[inline]
-    fn set_geometry(&mut self, geometry: P::Geometry) {
-        self.geometry = geometry;
-    }
-
-    #[inline]
-    fn offset(&self) -> Offset {
-        self.offset
-    }
-
-    #[inline]
-    fn set_offset(&mut self, offset: Offset) {
-        self.offset = offset;
-    }
-}
 
 impl ShiftedBox {
     /// Returns the cached size.
+    #[inline]
     pub fn size(&self) -> Size {
-        self.geometry
+        *self.inner.base().geometry()
     }
-}
 
-impl ShiftedSliver {
-    /// Returns the cached sliver geometry.
-    pub fn sliver_geometry(&self) -> &SliverGeometry {
-        &self.geometry
+    /// Sets the cached size.
+    #[inline]
+    pub fn set_size(&mut self, size: Size) {
+        self.inner.base_mut().set_geometry(size);
     }
-}
 
-// ============================================================================
-// Paint and Hit Testing Helpers for ShiftedBox
-// ============================================================================
-
-impl ShiftedBox {
     /// Paints the child at the stored offset.
     ///
     /// This is the default paint implementation for shifted box containers.
@@ -305,18 +302,6 @@ impl ShiftedBox {
     /// # Flutter Equivalence
     ///
     /// This corresponds to Flutter's `RenderShiftedBox.paint`.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// impl RenderBox for RenderPadding {
-    ///     fn paint(&self, context: &mut PaintingContext, offset: Offset) {
-    ///         self.shifted.paint_child(offset, |child, child_offset| {
-    ///             child.paint(context, child_offset);
-    ///         });
-    ///     }
-    /// }
-    /// ```
     pub fn paint_child<F>(&self, base_offset: Offset, mut paint_fn: F)
     where
         F: FnMut(&dyn RenderBox, Offset),
@@ -345,16 +330,6 @@ impl ShiftedBox {
     /// # Flutter Equivalence
     ///
     /// This corresponds to Flutter's `RenderShiftedBox.hitTestChildren`.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// impl RenderBox for RenderPadding {
-    ///     fn hit_test_children(&self, result: &mut BoxHitTestResult, position: Offset) -> bool {
-    ///         self.shifted.hit_test_child(result, position)
-    ///     }
-    /// }
-    /// ```
     pub fn hit_test_child(&self, result: &mut BoxHitTestResult, position: Offset) -> bool {
         if let Some(child) = self.child() {
             result.add_with_paint_offset(Some(self.offset), position, |result, transformed| {
@@ -385,6 +360,24 @@ impl ShiftedBox {
     }
 }
 
+impl ShiftedSliver {
+    /// Returns the cached sliver geometry.
+    #[inline]
+    pub fn sliver_geometry(&self) -> &SliverGeometry {
+        self.inner.base().geometry()
+    }
+
+    /// Sets the cached sliver geometry.
+    #[inline]
+    pub fn set_sliver_geometry(&mut self, geometry: SliverGeometry) {
+        self.inner.base_mut().set_geometry(geometry);
+    }
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -405,6 +398,22 @@ mod tests {
         assert_eq!(shifted.offset(), Offset::new(10.0, 20.0));
     }
 
+    #[test]
+    fn test_shifted_box_set_size() {
+        let mut shifted: ShiftedBox = Shifted::new();
+        shifted.set_size(Size::new(100.0, 50.0));
+        assert_eq!(shifted.size(), Size::new(100.0, 50.0));
+    }
+
+    #[test]
+    fn test_shifted_uses_single_child() {
+        let shifted: ShiftedBox = Shifted::new();
+        // Access inner SingleChild
+        assert!(!shifted.inner().has_child());
+        // Access base through inner (not attached initially)
+        assert!(!shifted.inner().base().state().is_attached());
+    }
+
     // ========================================================================
     // Generic trait tests - verify traits work with any Protocol
     // ========================================================================
@@ -414,11 +423,8 @@ mod tests {
         container.has_child()
     }
 
-    /// Helper function that works with any ShiftedContainer - set and get offset
-    fn set_and_get_offset<T, G, C: ShiftedContainer<T, G>>(
-        container: &mut C,
-        offset: Offset,
-    ) -> Offset {
+    /// Helper function that works with any ShiftedContainer
+    fn set_and_get_offset<T, C: ShiftedContainer<T>>(container: &mut C, offset: Offset) -> Offset {
         container.set_offset(offset);
         container.offset()
     }
@@ -442,10 +448,8 @@ mod tests {
         let mut shifted: Shifted<BoxProtocol> = Shifted::new();
 
         // Verify ShiftedContainer trait works with BoxProtocol
-        let offset = set_and_get_offset::<Box<dyn RenderBox>, Size, _>(
-            &mut shifted,
-            Offset::new(15.0, 25.0),
-        );
+        let offset =
+            set_and_get_offset::<Box<dyn RenderBox>, _>(&mut shifted, Offset::new(15.0, 25.0));
         assert_eq!(offset, Offset::new(15.0, 25.0));
     }
 
@@ -454,30 +458,21 @@ mod tests {
         let mut shifted: Shifted<SliverProtocol> = Shifted::new();
 
         // Verify ShiftedContainer trait works with SliverProtocol
-        let offset = set_and_get_offset::<Box<dyn RenderSliver>, SliverGeometry, _>(
-            &mut shifted,
-            Offset::new(30.0, 40.0),
-        );
+        let offset =
+            set_and_get_offset::<Box<dyn RenderSliver>, _>(&mut shifted, Offset::new(30.0, 40.0));
         assert_eq!(offset, Offset::new(30.0, 40.0));
     }
 
     #[test]
-    fn test_shifted_container_geometry_box() {
-        let mut shifted: Shifted<BoxProtocol> = Shifted::new();
+    fn test_base_container_delegation() {
+        let mut shifted: ShiftedBox = Shifted::new();
+
+        // Access through BaseContainer trait (delegated to inner)
         shifted.set_geometry(Size::new(200.0, 100.0));
+        assert_eq!(shifted.geometry(), &Size::new(200.0, 100.0));
 
-        // Access geometry through ShiftedContainer trait
-        assert_eq!(*shifted.geometry(), Size::new(200.0, 100.0));
-    }
-
-    #[test]
-    fn test_shifted_container_geometry_sliver() {
-        let mut shifted: Shifted<SliverProtocol> = Shifted::new();
-        let geom = SliverGeometry::default();
-        shifted.set_geometry(geom.clone());
-
-        // Access geometry through ShiftedContainer trait
-        assert_eq!(shifted.geometry().scroll_extent, geom.scroll_extent);
+        // State should be accessible (not attached initially)
+        assert!(!shifted.state().is_attached());
     }
 
     // ========================================================================

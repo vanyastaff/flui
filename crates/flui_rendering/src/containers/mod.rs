@@ -43,9 +43,11 @@
 
 mod adapter;
 mod aligning;
+mod base;
 mod children;
 mod proxy;
 mod shifted;
+mod single_child;
 mod viewport;
 
 pub use adapter::{
@@ -85,3 +87,6 @@ pub use shifted::ShiftedContainer;
 pub use proxy::*;
 pub use shifted::*;
 pub use viewport::{SliverViewport, Viewport};
+// Base and SingleChild containers
+pub use base::{Base, BaseBox, BaseContainer, BaseSliver};
+pub use single_child::{SingleChild, SingleChildBox, SingleChildSliver};

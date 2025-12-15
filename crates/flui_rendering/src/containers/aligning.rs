@@ -222,17 +222,7 @@ impl<P: Protocol> SingleChildContainer<Box<P::Object>> for Aligning<P> {
     }
 }
 
-impl<P: Protocol> ShiftedContainer<Box<P::Object>, P::Geometry> for Aligning<P> {
-    #[inline]
-    fn geometry(&self) -> &P::Geometry {
-        &self.geometry
-    }
-
-    #[inline]
-    fn set_geometry(&mut self, geometry: P::Geometry) {
-        self.geometry = geometry;
-    }
-
+impl<P: Protocol> ShiftedContainer<Box<P::Object>> for Aligning<P> {
     #[inline]
     fn offset(&self) -> Offset {
         self.offset
