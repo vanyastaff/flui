@@ -65,7 +65,7 @@
 //! }
 //! ```
 
-use ambassador::Delegate;
+use ambassador::{delegatable_trait, Delegate};
 use flui_tree::arity::storage::ambassador_impl_ChildrenStorage;
 use flui_tree::arity::{
     Arity, ArityError, ArityStorage, ChildrenStorage, Exact, Optional, RuntimeArity, Variable,
@@ -85,23 +85,24 @@ use flui_types::Offset;
 
 /// Generic trait for containers that hold multiple children.
 ///
-/// This trait is parameterized by the child type `T`, enabling a single
+/// This trait is parameterized by the boxed child type `T`, enabling a single
 /// implementation to work with any protocol (Box, Sliver, etc.).
 ///
 /// # Type Parameter
 ///
-/// - `T: ?Sized` - The child object type (e.g., `dyn RenderBox`, `dyn RenderSliver`)
+/// - `T` - The boxed child type (e.g., `Box<dyn RenderBox>`, `Box<dyn RenderSliver>`)
 ///
 /// # Example
 ///
 /// ```rust,ignore
 /// // Works for Box protocol
-/// impl MultiChildContainer<dyn RenderBox> for BoxChildren { ... }
+/// impl MultiChildContainer<Box<dyn RenderBox>> for BoxChildren { ... }
 ///
 /// // Works for Sliver protocol
-/// impl MultiChildContainer<dyn RenderSliver> for SliverChildren { ... }
+/// impl MultiChildContainer<Box<dyn RenderSliver>> for SliverChildren { ... }
 /// ```
-pub trait MultiChildContainer<T: ?Sized> {
+#[delegatable_trait]
+pub trait MultiChildContainer<T> {
     /// Returns the number of children.
     fn len(&self) -> usize;
 
@@ -131,10 +132,10 @@ pub trait MultiChildContainer<T: ?Sized> {
     }
 
     /// Adds a child to the end.
-    fn push(&mut self, child: Box<T>);
+    fn push(&mut self, child: T);
 
     /// Removes and returns the child at the given index.
-    fn remove(&mut self, index: usize) -> Option<Box<T>>;
+    fn remove(&mut self, index: usize) -> Option<T>;
 
     /// Removes all children.
     fn clear(&mut self);
@@ -151,19 +152,20 @@ pub trait MultiChildContainer<T: ?Sized> {
 ///
 /// # Type Parameters
 ///
-/// - `T: ?Sized` - The child object type
+/// - `T` - The boxed child type (e.g., `Box<dyn RenderBox>`)
 /// - `D` - The parent data type (e.g., `FlexParentData`, `StackParentData`)
 ///
 /// # Example
 ///
 /// ```rust,ignore
 /// // Flex children with FlexParentData
-/// impl MultiChildContainerWithData<dyn RenderBox, FlexParentData> for FlexChildren { ... }
+/// impl MultiChildContainerWithData<Box<dyn RenderBox>, FlexParentData> for FlexChildren { ... }
 ///
 /// // Stack children with StackParentData
-/// impl MultiChildContainerWithData<dyn RenderBox, StackParentData> for StackChildren { ... }
+/// impl MultiChildContainerWithData<Box<dyn RenderBox>, StackParentData> for StackChildren { ... }
 /// ```
-pub trait MultiChildContainerWithData<T: ?Sized, D>: MultiChildContainer<T> {
+#[delegatable_trait]
+pub trait MultiChildContainerWithData<T, D>: MultiChildContainer<T> {
     /// Returns a reference to the parent data at the given index.
     fn data(&self, index: usize) -> Option<&D>;
 
@@ -177,22 +179,22 @@ pub trait MultiChildContainerWithData<T: ?Sized, D>: MultiChildContainer<T> {
     fn get_with_data_mut(&mut self, index: usize) -> Option<(&mut T, &mut D)>;
 
     /// Adds a child with the given parent data.
-    fn push_with_data(&mut self, child: Box<T>, data: D);
+    fn push_with_data(&mut self, child: T, data: D);
 }
 
 // ============================================================================
 // Implementation for Children<P, Optional> - SingleChildContainer
 // ============================================================================
 
-impl<P: Protocol> SingleChildContainer<P::Object> for Children<P, Optional> {
+impl<P: Protocol> SingleChildContainer<Box<P::Object>> for Children<P, Optional> {
     #[inline]
-    fn child(&self) -> Option<&P::Object> {
-        self.get()
+    fn child(&self) -> Option<&Box<P::Object>> {
+        self.single_child()
     }
 
     #[inline]
-    fn child_mut(&mut self) -> Option<&mut P::Object> {
-        self.get_mut()
+    fn child_mut(&mut self) -> Option<&mut Box<P::Object>> {
+        self.single_child_mut()
     }
 
     #[inline]
@@ -204,31 +206,26 @@ impl<P: Protocol> SingleChildContainer<P::Object> for Children<P, Optional> {
     fn take_child(&mut self) -> Option<Box<P::Object>> {
         self.take()
     }
-
-    #[inline]
-    fn has_child(&self) -> bool {
-        !self.is_empty()
-    }
 }
 
 // ============================================================================
 // Implementation for Children<P, Variable> - MultiChildContainer
 // ============================================================================
 
-impl<P: Protocol> MultiChildContainer<P::Object> for Children<P, Variable> {
+impl<P: Protocol> MultiChildContainer<Box<P::Object>> for Children<P, Variable> {
     #[inline]
     fn len(&self) -> usize {
         self.child_count()
     }
 
     #[inline]
-    fn get(&self, index: usize) -> Option<&P::Object> {
-        self.get_at(index)
+    fn get(&self, index: usize) -> Option<&Box<P::Object>> {
+        self.get_child(index)
     }
 
     #[inline]
-    fn get_mut(&mut self, index: usize) -> Option<&mut P::Object> {
-        self.get_at_mut(index)
+    fn get_mut(&mut self, index: usize) -> Option<&mut Box<P::Object>> {
+        self.get_child_mut(index)
     }
 
     #[inline]
@@ -251,7 +248,7 @@ impl<P: Protocol> MultiChildContainer<P::Object> for Children<P, Variable> {
 // Implementation for ChildList - MultiChildContainer
 // ============================================================================
 
-impl<P: Protocol, A: Arity, D: Default + Send + Sync> MultiChildContainer<P::Object>
+impl<P: Protocol, A: Arity, D: Default + Send + Sync> MultiChildContainer<Box<P::Object>>
     for ChildList<P, A, D>
 {
     #[inline]
@@ -260,13 +257,13 @@ impl<P: Protocol, A: Arity, D: Default + Send + Sync> MultiChildContainer<P::Obj
     }
 
     #[inline]
-    fn get(&self, index: usize) -> Option<&P::Object> {
-        ChildList::get(self, index)
+    fn get(&self, index: usize) -> Option<&Box<P::Object>> {
+        self.storage.get_child(index).map(|n| &n.child)
     }
 
     #[inline]
-    fn get_mut(&mut self, index: usize) -> Option<&mut P::Object> {
-        ChildList::get_mut(self, index)
+    fn get_mut(&mut self, index: usize) -> Option<&mut Box<P::Object>> {
+        self.storage.get_child_mut(index).map(|n| &mut n.child)
     }
 
     #[inline]
@@ -289,7 +286,7 @@ impl<P: Protocol, A: Arity, D: Default + Send + Sync> MultiChildContainer<P::Obj
 // Implementation for ChildList - MultiChildContainerWithData
 // ============================================================================
 
-impl<P: Protocol, A: Arity, D: Default + Send + Sync> MultiChildContainerWithData<P::Object, D>
+impl<P: Protocol, A: Arity, D: Default + Send + Sync> MultiChildContainerWithData<Box<P::Object>, D>
     for ChildList<P, A, D>
 {
     #[inline]
@@ -303,13 +300,15 @@ impl<P: Protocol, A: Arity, D: Default + Send + Sync> MultiChildContainerWithDat
     }
 
     #[inline]
-    fn get_with_data(&self, index: usize) -> Option<(&P::Object, &D)> {
-        ChildList::get_with_data(self, index)
+    fn get_with_data(&self, index: usize) -> Option<(&Box<P::Object>, &D)> {
+        self.storage.get_child(index).map(|n| (&n.child, &n.data))
     }
 
     #[inline]
-    fn get_with_data_mut(&mut self, index: usize) -> Option<(&mut P::Object, &mut D)> {
-        ChildList::get_with_data_mut(self, index)
+    fn get_with_data_mut(&mut self, index: usize) -> Option<(&mut Box<P::Object>, &mut D)> {
+        self.storage
+            .get_child_mut(index)
+            .map(|n| (&mut n.child, &mut n.data))
     }
 
     #[inline]
@@ -923,17 +922,17 @@ mod tests {
     // ========================================================================
 
     /// Helper function that works with any SingleChildContainer
-    fn use_single_child_container<T: ?Sized, C: SingleChildContainer<T>>(container: &C) -> bool {
+    fn use_single_child_container<T, C: SingleChildContainer<T>>(container: &C) -> bool {
         container.has_child()
     }
 
     /// Helper function that works with any MultiChildContainer
-    fn use_multi_child_container<T: ?Sized, C: MultiChildContainer<T>>(container: &C) -> usize {
+    fn use_multi_child_container<T, C: MultiChildContainer<T>>(container: &C) -> usize {
         container.len()
     }
 
     /// Helper function that works with any MultiChildContainerWithData
-    fn count_with_data<T: ?Sized, D, C: MultiChildContainerWithData<T, D>>(container: &C) -> usize {
+    fn count_with_data<T, D, C: MultiChildContainerWithData<T, D>>(container: &C) -> usize {
         let mut count = 0;
         for i in 0..container.len() {
             if container.get_with_data(i).is_some() {
@@ -947,14 +946,16 @@ mod tests {
     fn test_single_child_container_with_box_protocol() {
         let container: Children<BoxProtocol, Optional> = Children::new();
         // Verify generic function works with BoxProtocol
-        assert!(!use_single_child_container::<dyn RenderBox, _>(&container));
+        assert!(!use_single_child_container::<Box<dyn RenderBox>, _>(
+            &container
+        ));
     }
 
     #[test]
     fn test_single_child_container_with_sliver_protocol() {
         let container: Children<SliverProtocol, Optional> = Children::new();
         // Verify generic function works with SliverProtocol
-        assert!(!use_single_child_container::<dyn RenderSliver, _>(
+        assert!(!use_single_child_container::<Box<dyn RenderSliver>, _>(
             &container
         ));
     }
@@ -963,7 +964,10 @@ mod tests {
     fn test_multi_child_container_with_box_protocol() {
         let container: Children<BoxProtocol, Variable> = Children::new();
         // Verify generic function works with BoxProtocol
-        assert_eq!(use_multi_child_container::<dyn RenderBox, _>(&container), 0);
+        assert_eq!(
+            use_multi_child_container::<Box<dyn RenderBox>, _>(&container),
+            0
+        );
     }
 
     #[test]
@@ -971,7 +975,7 @@ mod tests {
         let container: Children<SliverProtocol, Variable> = Children::new();
         // Verify generic function works with SliverProtocol
         assert_eq!(
-            use_multi_child_container::<dyn RenderSliver, _>(&container),
+            use_multi_child_container::<Box<dyn RenderSliver>, _>(&container),
             0
         );
     }
@@ -980,14 +984,17 @@ mod tests {
     fn test_child_list_multi_child_container_box() {
         let list: ChildList<BoxProtocol, Variable, BoxParentData> = ChildList::new();
         // ChildList also implements MultiChildContainer
-        assert_eq!(use_multi_child_container::<dyn RenderBox, _>(&list), 0);
+        assert_eq!(use_multi_child_container::<Box<dyn RenderBox>, _>(&list), 0);
     }
 
     #[test]
     fn test_child_list_with_data_box() {
         let list: ChildList<BoxProtocol, Variable, BoxParentData> = ChildList::new();
         // Verify MultiChildContainerWithData works
-        assert_eq!(count_with_data::<dyn RenderBox, BoxParentData, _>(&list), 0);
+        assert_eq!(
+            count_with_data::<Box<dyn RenderBox>, BoxParentData, _>(&list),
+            0
+        );
     }
 
     // ========================================================================
@@ -1001,7 +1008,9 @@ mod tests {
         assert!(!container.has_child());
 
         // SingleChildContainer trait is implemented for Optional
-        assert!(!use_single_child_container::<dyn RenderBox, _>(&container));
+        assert!(!use_single_child_container::<Box<dyn RenderBox>, _>(
+            &container
+        ));
     }
 
     #[test]
@@ -1012,7 +1021,10 @@ mod tests {
         assert!(MultiChildContainer::is_empty(&container));
 
         // MultiChildContainer trait is implemented for Variable
-        assert_eq!(use_multi_child_container::<dyn RenderBox, _>(&container), 0);
+        assert_eq!(
+            use_multi_child_container::<Box<dyn RenderBox>, _>(&container),
+            0
+        );
     }
 
     #[test]
@@ -1022,8 +1034,11 @@ mod tests {
         assert!(list.is_empty());
 
         // Both MultiChildContainer and MultiChildContainerWithData work
-        assert_eq!(use_multi_child_container::<dyn RenderBox, _>(&list), 0);
-        assert_eq!(count_with_data::<dyn RenderBox, BoxParentData, _>(&list), 0);
+        assert_eq!(use_multi_child_container::<Box<dyn RenderBox>, _>(&list), 0);
+        assert_eq!(
+            count_with_data::<Box<dyn RenderBox>, BoxParentData, _>(&list),
+            0
+        );
     }
 
     // ========================================================================

@@ -7,7 +7,8 @@
 //! This is the Rust equivalent of Flutter's `RenderShiftedBox` pattern.
 //! Use when parent needs to position child at a specific offset.
 
-use flui_tree::arity::Optional;
+use ambassador::delegatable_trait;
+use flui_tree::arity::{ChildrenStorage, Optional};
 use flui_types::{Offset, Size};
 use std::fmt::Debug;
 
@@ -27,9 +28,15 @@ use crate::traits::{BoxHitTestResult, RenderBox};
 ///
 /// # Type Parameters
 ///
-/// - `T: ?Sized` - The child object type
+/// - `T` - The boxed child type (e.g., `Box<dyn RenderBox>`)
 /// - `G` - The geometry type
-pub trait ShiftedContainer<T: ?Sized, G>: SingleChildContainer<T> {
+///
+/// # Why `T: Sized`?
+///
+/// We use `T` as the boxed type (not `T: ?Sized`) to enable Ambassador delegation.
+/// This means `T = Box<dyn RenderBox>` rather than `T = dyn RenderBox`.
+#[delegatable_trait]
+pub trait ShiftedContainer<T, G>: SingleChildContainer<T> {
     /// Returns a reference to the cached geometry.
     fn geometry(&self) -> &G;
 
@@ -228,15 +235,15 @@ pub type ShiftedSliver = Shifted<SliverProtocol>;
 // Generic trait implementations for Shifted<P>
 // ============================================================================
 
-impl<P: Protocol> SingleChildContainer<P::Object> for Shifted<P> {
+impl<P: Protocol> SingleChildContainer<Box<P::Object>> for Shifted<P> {
     #[inline]
-    fn child(&self) -> Option<&P::Object> {
-        self.child.get()
+    fn child(&self) -> Option<&Box<P::Object>> {
+        self.child.single_child()
     }
 
     #[inline]
-    fn child_mut(&mut self) -> Option<&mut P::Object> {
-        self.child.get_mut()
+    fn child_mut(&mut self) -> Option<&mut Box<P::Object>> {
+        self.child.single_child_mut()
     }
 
     #[inline]
@@ -248,14 +255,9 @@ impl<P: Protocol> SingleChildContainer<P::Object> for Shifted<P> {
     fn take_child(&mut self) -> Option<Box<P::Object>> {
         self.child.take()
     }
-
-    #[inline]
-    fn has_child(&self) -> bool {
-        self.child.has_child()
-    }
 }
 
-impl<P: Protocol> ShiftedContainer<P::Object, P::Geometry> for Shifted<P> {
+impl<P: Protocol> ShiftedContainer<Box<P::Object>, P::Geometry> for Shifted<P> {
     #[inline]
     fn geometry(&self) -> &P::Geometry {
         &self.geometry
@@ -408,12 +410,12 @@ mod tests {
     // ========================================================================
 
     /// Helper function that works with any SingleChildContainer
-    fn use_single_child<T: ?Sized, C: SingleChildContainer<T>>(container: &C) -> bool {
+    fn use_single_child<T, C: SingleChildContainer<T>>(container: &C) -> bool {
         container.has_child()
     }
 
     /// Helper function that works with any ShiftedContainer - set and get offset
-    fn set_and_get_offset<T: ?Sized, G, C: ShiftedContainer<T, G>>(
+    fn set_and_get_offset<T, G, C: ShiftedContainer<T, G>>(
         container: &mut C,
         offset: Offset,
     ) -> Offset {
@@ -425,14 +427,14 @@ mod tests {
     fn test_single_child_container_box_protocol() {
         let shifted: Shifted<BoxProtocol> = Shifted::new();
         // Verify generic function works with BoxProtocol
-        assert!(!use_single_child::<dyn RenderBox, _>(&shifted));
+        assert!(!use_single_child::<Box<dyn RenderBox>, _>(&shifted));
     }
 
     #[test]
     fn test_single_child_container_sliver_protocol() {
         let shifted: Shifted<SliverProtocol> = Shifted::new();
         // Verify generic function works with SliverProtocol
-        assert!(!use_single_child::<dyn RenderSliver, _>(&shifted));
+        assert!(!use_single_child::<Box<dyn RenderSliver>, _>(&shifted));
     }
 
     #[test]
@@ -440,8 +442,10 @@ mod tests {
         let mut shifted: Shifted<BoxProtocol> = Shifted::new();
 
         // Verify ShiftedContainer trait works with BoxProtocol
-        let offset =
-            set_and_get_offset::<dyn RenderBox, Size, _>(&mut shifted, Offset::new(15.0, 25.0));
+        let offset = set_and_get_offset::<Box<dyn RenderBox>, Size, _>(
+            &mut shifted,
+            Offset::new(15.0, 25.0),
+        );
         assert_eq!(offset, Offset::new(15.0, 25.0));
     }
 
@@ -450,7 +454,7 @@ mod tests {
         let mut shifted: Shifted<SliverProtocol> = Shifted::new();
 
         // Verify ShiftedContainer trait works with SliverProtocol
-        let offset = set_and_get_offset::<dyn RenderSliver, SliverGeometry, _>(
+        let offset = set_and_get_offset::<Box<dyn RenderSliver>, SliverGeometry, _>(
             &mut shifted,
             Offset::new(30.0, 40.0),
         );

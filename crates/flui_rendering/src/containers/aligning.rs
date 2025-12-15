@@ -2,7 +2,7 @@
 //!
 //! This is the Rust equivalent of Flutter's `RenderAligningShiftedBox` pattern.
 
-use flui_tree::arity::Optional;
+use flui_tree::arity::{ChildrenStorage, Optional};
 use flui_types::{Alignment, Offset, Size};
 use std::fmt::Debug;
 
@@ -200,15 +200,15 @@ pub type AligningSliver = Aligning<SliverProtocol>;
 // Generic trait implementations for Aligning<P>
 // ============================================================================
 
-impl<P: Protocol> SingleChildContainer<P::Object> for Aligning<P> {
+impl<P: Protocol> SingleChildContainer<Box<P::Object>> for Aligning<P> {
     #[inline]
-    fn child(&self) -> Option<&P::Object> {
-        self.child.get()
+    fn child(&self) -> Option<&Box<P::Object>> {
+        self.child.single_child()
     }
 
     #[inline]
-    fn child_mut(&mut self) -> Option<&mut P::Object> {
-        self.child.get_mut()
+    fn child_mut(&mut self) -> Option<&mut Box<P::Object>> {
+        self.child.single_child_mut()
     }
 
     #[inline]
@@ -220,14 +220,9 @@ impl<P: Protocol> SingleChildContainer<P::Object> for Aligning<P> {
     fn take_child(&mut self) -> Option<Box<P::Object>> {
         self.child.take()
     }
-
-    #[inline]
-    fn has_child(&self) -> bool {
-        self.child.has_child()
-    }
 }
 
-impl<P: Protocol> ShiftedContainer<P::Object, P::Geometry> for Aligning<P> {
+impl<P: Protocol> ShiftedContainer<Box<P::Object>, P::Geometry> for Aligning<P> {
     #[inline]
     fn geometry(&self) -> &P::Geometry {
         &self.geometry

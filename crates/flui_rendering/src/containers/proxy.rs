@@ -8,6 +8,7 @@
 //! This is the Rust equivalent of Flutter's `RenderProxyBox` pattern.
 //! Use when parent's geometry should match child's geometry (pass-through).
 
+use ambassador::{delegatable_trait, Delegate};
 use flui_tree::arity::Optional;
 use flui_types::{Offset, Size};
 use std::fmt::Debug;
@@ -23,23 +24,29 @@ use crate::traits::{BoxHitTestResult, RenderBox};
 
 /// Generic trait for containers that hold a single optional child.
 ///
-/// This trait is parameterized by the child type `T`, enabling a single
+/// This trait is parameterized by the boxed child type `T`, enabling a single
 /// implementation to work with any protocol (Box, Sliver, etc.).
 ///
 /// # Type Parameter
 ///
-/// - `T: ?Sized` - The child object type (e.g., `dyn RenderBox`, `dyn RenderSliver`)
+/// - `T` - The boxed child type (e.g., `Box<dyn RenderBox>`, `Box<dyn RenderSliver>`)
+///
+/// # Why `T: Sized`?
+///
+/// We use `T` as the boxed type (not `T: ?Sized`) to enable Ambassador delegation.
+/// This means `T = Box<dyn RenderBox>` rather than `T = dyn RenderBox`.
 ///
 /// # Example
 ///
 /// ```rust,ignore
 /// // Works for Box protocol
-/// impl SingleChildContainer<dyn RenderBox> for ProxyBox { ... }
+/// impl SingleChildContainer<Box<dyn RenderBox>> for ProxyBox { ... }
 ///
 /// // Works for Sliver protocol
-/// impl SingleChildContainer<dyn RenderSliver> for SliverProxy { ... }
+/// impl SingleChildContainer<Box<dyn RenderSliver>> for SliverProxy { ... }
 /// ```
-pub trait SingleChildContainer<T: ?Sized> {
+#[delegatable_trait]
+pub trait SingleChildContainer<T> {
     /// Returns a reference to the child, if present.
     fn child(&self) -> Option<&T>;
 
@@ -47,13 +54,15 @@ pub trait SingleChildContainer<T: ?Sized> {
     fn child_mut(&mut self) -> Option<&mut T>;
 
     /// Sets the child, returning the previous child if any.
-    fn set_child(&mut self, child: Box<T>) -> Option<Box<T>>;
+    fn set_child(&mut self, child: T) -> Option<T>;
 
     /// Takes the child out of the container.
-    fn take_child(&mut self) -> Option<Box<T>>;
+    fn take_child(&mut self) -> Option<T>;
 
     /// Returns `true` if the container has a child.
-    fn has_child(&self) -> bool;
+    fn has_child(&self) -> bool {
+        self.child().is_some()
+    }
 }
 
 // ============================================================================
@@ -67,25 +76,34 @@ pub trait SingleChildContainer<T: ?Sized> {
 ///
 /// # Type Parameters
 ///
-/// - `T: ?Sized` - The child object type
+/// - `T` - The boxed child type (e.g., `Box<dyn RenderBox>`)
 /// - `G` - The geometry type (e.g., `Size` for Box, `SliverGeometry` for Sliver)
 ///
 /// # Example
 ///
 /// ```rust,ignore
-/// // Box proxy: child is RenderBox, geometry is Size
-/// impl ProxyContainer<dyn RenderBox, Size> for ProxyBox { ... }
+/// // Box proxy: child is Box<dyn RenderBox>, geometry is Size
+/// impl ProxyContainer<Box<dyn RenderBox>, Size> for ProxyBox { ... }
 ///
-/// // Sliver proxy: child is RenderSliver, geometry is SliverGeometry
-/// impl ProxyContainer<dyn RenderSliver, SliverGeometry> for SliverProxy { ... }
+/// // Sliver proxy: child is Box<dyn RenderSliver>, geometry is SliverGeometry
+/// impl ProxyContainer<Box<dyn RenderSliver>, SliverGeometry> for SliverProxy { ... }
 /// ```
-pub trait ProxyContainer<T: ?Sized, G>: SingleChildContainer<T> {
+#[delegatable_trait]
+pub trait ProxyContainer<T, G>: SingleChildContainer<T> {
     /// Returns a reference to the cached geometry.
     fn geometry(&self) -> &G;
 
     /// Sets the cached geometry.
     fn set_geometry(&mut self, geometry: G);
 }
+
+// ============================================================================
+// Children implementation of SingleChildContainer
+// ============================================================================
+
+// ============================================================================
+// Proxy struct with Ambassador delegation
+// ============================================================================
 
 /// Container that stores a single child where parent size equals child size.
 ///
@@ -100,30 +118,10 @@ pub trait ProxyContainer<T: ?Sized, G>: SingleChildContainer<T> {
 /// - `RenderObjectWithChildMixin<RenderBox>` for child storage
 /// - Size passthrough from child to parent
 ///
-/// # Generic Traits
+/// # Ambassador Delegation
 ///
-/// `Proxy<P>` implements generic traits that work with any protocol:
-///
-/// - [`SingleChildContainer<P::Object>`] - child access methods
-/// - [`ProxyContainer<P::Object, P::Geometry>`] - geometry storage
-///
-/// This enables a single implementation for both Box and Sliver protocols:
-///
-/// ```rust,ignore
-/// // Works for ProxyBox (BoxProtocol)
-/// fn use_proxy<T: ProxyContainer<dyn RenderBox, Size>>(proxy: &T) {
-///     if let Some(child) = proxy.child() {
-///         println!("Size: {:?}", proxy.geometry());
-///     }
-/// }
-///
-/// // Works for SliverProxy (SliverProtocol) too!
-/// fn use_sliver<T: ProxyContainer<dyn RenderSliver, SliverGeometry>>(proxy: &T) {
-///     if let Some(child) = proxy.child() {
-///         println!("Geometry: {:?}", proxy.geometry());
-///     }
-/// }
-/// ```
+/// `Proxy<P>` uses `#[derive(Delegate)]` to automatically delegate
+/// `SingleChildContainer` methods to the inner `Children` storage.
 ///
 /// # Example
 ///
@@ -149,6 +147,8 @@ pub trait ProxyContainer<T: ?Sized, G>: SingleChildContainer<T> {
 ///     }
 /// }
 /// ```
+#[derive(Delegate)]
+#[delegate(SingleChildContainer<Box<P::Object>>, target = "child")]
 pub struct Proxy<P: Protocol> {
     child: Children<P, Optional>,
     geometry: P::Geometry,
@@ -184,58 +184,44 @@ impl<P: Protocol> Proxy<P> {
 
     /// Creates a proxy container with the given child.
     pub fn with_child(child: Box<P::Object>) -> Self {
-        let mut container = Children::new();
-        container.set(child);
         Self {
-            child: container,
+            child: Children::with_child(child),
             geometry: P::default_geometry(),
         }
     }
 
-    /// Returns a reference to the child, if present.
-    pub fn child(&self) -> Option<&P::Object> {
-        self.child.get()
-    }
-
-    /// Returns a mutable reference to the child, if present.
-    pub fn child_mut(&mut self) -> Option<&mut P::Object> {
-        self.child.get_mut()
-    }
-
-    /// Sets the child, replacing any existing child.
-    ///
-    /// # Flutter Equivalent
-    ///
-    /// In Flutter, this is handled by the `child` setter in
-    /// `RenderObjectWithChildMixin`, which calls `dropChild` for the
-    /// old child and `adoptChild` for the new child.
-    pub fn set_child(&mut self, child: Box<P::Object>) {
-        self.child.set(child);
-    }
-
-    /// Takes the child out of the container, leaving it empty.
-    pub fn take_child(&mut self) -> Option<Box<P::Object>> {
-        self.child.take()
-    }
-
-    /// Returns `true` if the container has a child.
-    pub fn has_child(&self) -> bool {
-        self.child.has_child()
-    }
-
-    /// Returns a reference to the geometry.
+    /// Returns a reference to the cached geometry.
+    #[inline]
     pub fn geometry(&self) -> &P::Geometry {
         &self.geometry
     }
 
-    /// Sets the geometry.
-    ///
-    /// This should typically be called after layout to cache the
-    /// computed size/geometry.
+    /// Sets the cached geometry.
+    #[inline]
     pub fn set_geometry(&mut self, geometry: P::Geometry) {
         self.geometry = geometry;
     }
 }
+
+// ============================================================================
+// ProxyContainer implementation for Proxy<P>
+// ============================================================================
+
+impl<P: Protocol> ProxyContainer<Box<P::Object>, P::Geometry> for Proxy<P> {
+    #[inline]
+    fn geometry(&self) -> &P::Geometry {
+        &self.geometry
+    }
+
+    #[inline]
+    fn set_geometry(&mut self, geometry: P::Geometry) {
+        self.geometry = geometry;
+    }
+}
+
+// ============================================================================
+// Type aliases
+// ============================================================================
 
 /// Box proxy container (geometry is `Size`).
 ///
@@ -256,52 +242,27 @@ pub type ProxyBox = Proxy<BoxProtocol>;
 pub type SliverProxy = Proxy<SliverProtocol>;
 
 // ============================================================================
-// Generic trait implementations for Proxy<P>
+// Convenience methods for ProxyBox
 // ============================================================================
-
-impl<P: Protocol> SingleChildContainer<P::Object> for Proxy<P> {
-    #[inline]
-    fn child(&self) -> Option<&P::Object> {
-        self.child.get()
-    }
-
-    #[inline]
-    fn child_mut(&mut self) -> Option<&mut P::Object> {
-        self.child.get_mut()
-    }
-
-    #[inline]
-    fn set_child(&mut self, child: Box<P::Object>) -> Option<Box<P::Object>> {
-        self.child.set(child)
-    }
-
-    #[inline]
-    fn take_child(&mut self) -> Option<Box<P::Object>> {
-        self.child.take()
-    }
-
-    #[inline]
-    fn has_child(&self) -> bool {
-        self.child.has_child()
-    }
-}
-
-impl<P: Protocol> ProxyContainer<P::Object, P::Geometry> for Proxy<P> {
-    #[inline]
-    fn geometry(&self) -> &P::Geometry {
-        &self.geometry
-    }
-
-    #[inline]
-    fn set_geometry(&mut self, geometry: P::Geometry) {
-        self.geometry = geometry;
-    }
-}
 
 impl ProxyBox {
     /// Returns the cached size.
     pub fn size(&self) -> Size {
         self.geometry
+    }
+
+    /// Returns a reference to the child as `&dyn RenderBox`.
+    ///
+    /// This is a convenience method that dereferences the Box.
+    pub fn child_ref(&self) -> Option<&dyn RenderBox> {
+        self.child().map(|boxed| &**boxed)
+    }
+
+    /// Returns a mutable reference to the child as `&mut dyn RenderBox`.
+    ///
+    /// This is a convenience method that dereferences the Box.
+    pub fn child_mut_ref(&mut self) -> Option<&mut dyn RenderBox> {
+        self.child_mut().map(|boxed| &mut **boxed)
     }
 }
 
@@ -325,37 +286,21 @@ impl ProxyBox {
     /// # Flutter Equivalence
     ///
     /// This corresponds to Flutter's `RenderProxyBox.paint`.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// impl RenderBox for RenderOpacity {
-    ///     fn paint(&self, context: &mut PaintingContext, offset: Offset) {
-    ///         context.push_opacity(self.opacity);
-    ///         self.proxy.paint_child(offset, |child, child_offset| {
-    ///             child.paint(context, child_offset);
-    ///         });
-    ///     }
-    /// }
-    /// ```
     pub fn paint_child<F>(&self, offset: Offset, mut paint_fn: F)
     where
         F: FnMut(&dyn RenderBox, Offset),
     {
-        if let Some(child) = self.child() {
+        if let Some(child) = self.child_ref() {
             paint_fn(child, offset);
         }
     }
 
     /// Paints the child with a custom offset.
-    ///
-    /// Use this when the proxy needs to apply an offset for some reason,
-    /// such as for scroll effects or animations.
     pub fn paint_child_at<F>(&self, base_offset: Offset, child_offset: Offset, mut paint_fn: F)
     where
         F: FnMut(&dyn RenderBox, Offset),
     {
-        if let Some(child) = self.child() {
+        if let Some(child) = self.child_ref() {
             paint_fn(child, base_offset + child_offset);
         }
     }
@@ -368,18 +313,8 @@ impl ProxyBox {
     /// # Flutter Equivalence
     ///
     /// This corresponds to Flutter's `RenderProxyBox.hitTestChildren`.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// impl RenderBox for RenderOpacity {
-    ///     fn hit_test_children(&self, result: &mut BoxHitTestResult, position: Offset) -> bool {
-    ///         self.proxy.hit_test_child(result, position)
-    ///     }
-    /// }
-    /// ```
     pub fn hit_test_child(&self, result: &mut BoxHitTestResult, position: Offset) -> bool {
-        if let Some(child) = self.child() {
+        if let Some(child) = self.child_ref() {
             child.hit_test(result, position)
         } else {
             false
@@ -387,16 +322,13 @@ impl ProxyBox {
     }
 
     /// Hit tests the child with a custom offset.
-    ///
-    /// Use this when the proxy needs to apply an offset for some reason,
-    /// such as for scroll effects or animations.
     pub fn hit_test_child_at(
         &self,
         result: &mut BoxHitTestResult,
         position: Offset,
         child_offset: Offset,
     ) -> bool {
-        if let Some(child) = self.child() {
+        if let Some(child) = self.child_ref() {
             result.add_with_paint_offset(Some(child_offset), position, |result, transformed| {
                 child.hit_test(result, transformed)
             })
@@ -430,12 +362,12 @@ mod tests {
     // ========================================================================
 
     /// Helper function that works with any SingleChildContainer
-    fn use_single_child<T: ?Sized, C: SingleChildContainer<T>>(container: &C) -> bool {
+    fn use_single_child<T, C: SingleChildContainer<T>>(container: &C) -> bool {
         container.has_child()
     }
 
     /// Helper function that works with any ProxyContainer
-    fn get_geometry<T: ?Sized, G: Clone, C: ProxyContainer<T, G>>(container: &C) -> G {
+    fn get_geometry<T, G: Clone, C: ProxyContainer<T, G>>(container: &C) -> G {
         container.geometry().clone()
     }
 
@@ -443,14 +375,14 @@ mod tests {
     fn test_single_child_container_box_protocol() {
         let proxy: Proxy<BoxProtocol> = Proxy::new();
         // Verify generic function works with BoxProtocol
-        assert!(!use_single_child::<dyn RenderBox, _>(&proxy));
+        assert!(!use_single_child::<Box<dyn RenderBox>, _>(&proxy));
     }
 
     #[test]
     fn test_single_child_container_sliver_protocol() {
         let proxy: Proxy<SliverProtocol> = Proxy::new();
         // Verify generic function works with SliverProtocol
-        assert!(!use_single_child::<dyn RenderSliver, _>(&proxy));
+        assert!(!use_single_child::<Box<dyn RenderSliver>, _>(&proxy));
     }
 
     #[test]
@@ -459,7 +391,7 @@ mod tests {
         proxy.set_geometry(Size::new(100.0, 50.0));
 
         // Verify ProxyContainer trait works with BoxProtocol
-        let size: Size = get_geometry::<dyn RenderBox, Size, _>(&proxy);
+        let size: Size = get_geometry::<Box<dyn RenderBox>, Size, _>(&proxy);
         assert_eq!(size, Size::new(100.0, 50.0));
     }
 
@@ -470,7 +402,8 @@ mod tests {
         proxy.set_geometry(geom.clone());
 
         // Verify ProxyContainer trait works with SliverProtocol
-        let retrieved: SliverGeometry = get_geometry::<dyn RenderSliver, SliverGeometry, _>(&proxy);
+        let retrieved: SliverGeometry =
+            get_geometry::<Box<dyn RenderSliver>, SliverGeometry, _>(&proxy);
         assert_eq!(retrieved.scroll_extent, geom.scroll_extent);
     }
 
@@ -486,5 +419,19 @@ mod tests {
     #[test]
     fn test_sliver_proxy_alias() {
         let _: SliverProxy = Proxy::new();
+    }
+
+    // ========================================================================
+    // Ambassador delegation test
+    // ========================================================================
+
+    #[test]
+    fn test_delegation_works() {
+        let mut proxy: ProxyBox = Proxy::new();
+
+        // These methods are delegated to Children via Ambassador
+        assert!(!proxy.has_child());
+        assert!(proxy.child().is_none());
+        assert!(proxy.take_child().is_none());
     }
 }
