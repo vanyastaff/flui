@@ -27,7 +27,7 @@ use crate::view::ScrollDirection;
 ///
 /// ```
 /// use flui_rendering::constraints::SliverConstraints;
-/// use flui_types::layout::AxisDirection;
+/// use flui_types::layout::{Axis, AxisDirection};
 /// use flui_rendering::constraints::GrowthDirection;
 /// use flui_rendering::view::ScrollDirection;
 ///

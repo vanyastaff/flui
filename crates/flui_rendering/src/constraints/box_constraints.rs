@@ -33,7 +33,7 @@ use std::fmt;
 /// # Examples
 ///
 /// ```
-/// use flui_rendering::constraints::BoxConstraints;
+/// use flui_rendering::constraints::{BoxConstraints, Constraints};
 /// use flui_types::Size;
 ///
 /// // Tight constraints force exact size
@@ -701,7 +701,7 @@ impl From<Size> for BoxConstraints {
     /// # Example
     ///
     /// ```
-    /// use flui_rendering::constraints::BoxConstraints;
+    /// use flui_rendering::constraints::{BoxConstraints, Constraints};
     /// use flui_types::Size;
     ///
     /// let c: BoxConstraints = Size::new(100.0, 50.0).into();
