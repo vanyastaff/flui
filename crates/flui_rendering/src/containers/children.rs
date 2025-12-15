@@ -176,7 +176,108 @@ pub trait ShiftedContainer<T: ?Sized, G>: SingleChildContainer<T> {
 }
 
 // ============================================================================
-// Implementation for Children<P, Optional>
+// MultiChildContainer trait - Generic multi-child container
+// ============================================================================
+
+/// Generic trait for containers that hold multiple children.
+///
+/// This trait is parameterized by the child type `T`, enabling a single
+/// implementation to work with any protocol (Box, Sliver, etc.).
+///
+/// # Type Parameter
+///
+/// - `T: ?Sized` - The child object type (e.g., `dyn RenderBox`, `dyn RenderSliver`)
+///
+/// # Example
+///
+/// ```rust,ignore
+/// // Works for Box protocol
+/// impl MultiChildContainer<dyn RenderBox> for BoxChildren { ... }
+///
+/// // Works for Sliver protocol
+/// impl MultiChildContainer<dyn RenderSliver> for SliverChildren { ... }
+/// ```
+pub trait MultiChildContainer<T: ?Sized> {
+    /// Returns the number of children.
+    fn len(&self) -> usize;
+
+    /// Returns `true` if the container is empty.
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Returns a reference to the child at the given index.
+    fn get(&self, index: usize) -> Option<&T>;
+
+    /// Returns a mutable reference to the child at the given index.
+    fn get_mut(&mut self, index: usize) -> Option<&mut T>;
+
+    /// Returns a reference to the first child.
+    fn first(&self) -> Option<&T> {
+        self.get(0)
+    }
+
+    /// Returns a reference to the last child.
+    fn last(&self) -> Option<&T> {
+        if self.is_empty() {
+            None
+        } else {
+            self.get(self.len() - 1)
+        }
+    }
+
+    /// Adds a child to the end.
+    fn push(&mut self, child: Box<T>);
+
+    /// Removes and returns the child at the given index.
+    fn remove(&mut self, index: usize) -> Option<Box<T>>;
+
+    /// Removes all children.
+    fn clear(&mut self);
+}
+
+// ============================================================================
+// MultiChildContainerWithData trait - Multi-child with parent data
+// ============================================================================
+
+/// Generic trait for containers that hold multiple children with parent data.
+///
+/// This extends [`MultiChildContainer`] with per-child data storage,
+/// used for layout information like offset, flex factor, alignment, etc.
+///
+/// # Type Parameters
+///
+/// - `T: ?Sized` - The child object type
+/// - `D` - The parent data type (e.g., `FlexParentData`, `StackParentData`)
+///
+/// # Example
+///
+/// ```rust,ignore
+/// // Flex children with FlexParentData
+/// impl MultiChildContainerWithData<dyn RenderBox, FlexParentData> for FlexChildren { ... }
+///
+/// // Stack children with StackParentData
+/// impl MultiChildContainerWithData<dyn RenderBox, StackParentData> for StackChildren { ... }
+/// ```
+pub trait MultiChildContainerWithData<T: ?Sized, D>: MultiChildContainer<T> {
+    /// Returns a reference to the parent data at the given index.
+    fn data(&self, index: usize) -> Option<&D>;
+
+    /// Returns a mutable reference to the parent data at the given index.
+    fn data_mut(&mut self, index: usize) -> Option<&mut D>;
+
+    /// Returns references to both child and parent data at the given index.
+    fn get_with_data(&self, index: usize) -> Option<(&T, &D)>;
+
+    /// Returns mutable references to both child and parent data.
+    fn get_with_data_mut(&mut self, index: usize) -> Option<(&mut T, &mut D)>;
+
+    /// Adds a child with the given parent data.
+    fn push_with_data(&mut self, child: Box<T>, data: D);
+}
+
+// ============================================================================
+// Implementation for Children<P, Optional> - SingleChildContainer
 // ============================================================================
 
 impl<P: Protocol> SingleChildContainer<P::Object> for Children<P, Optional> {
@@ -203,6 +304,113 @@ impl<P: Protocol> SingleChildContainer<P::Object> for Children<P, Optional> {
     #[inline]
     fn has_child(&self) -> bool {
         !self.is_empty()
+    }
+}
+
+// ============================================================================
+// Implementation for Children<P, Variable> - MultiChildContainer
+// ============================================================================
+
+impl<P: Protocol> MultiChildContainer<P::Object> for Children<P, Variable> {
+    #[inline]
+    fn len(&self) -> usize {
+        self.child_count()
+    }
+
+    #[inline]
+    fn get(&self, index: usize) -> Option<&P::Object> {
+        self.get_at(index)
+    }
+
+    #[inline]
+    fn get_mut(&mut self, index: usize) -> Option<&mut P::Object> {
+        self.get_at_mut(index)
+    }
+
+    #[inline]
+    fn push(&mut self, child: Box<P::Object>) {
+        let _ = self.add_child(child);
+    }
+
+    #[inline]
+    fn remove(&mut self, index: usize) -> Option<Box<P::Object>> {
+        self.remove_child(index)
+    }
+
+    #[inline]
+    fn clear(&mut self) {
+        Children::clear(self);
+    }
+}
+
+// ============================================================================
+// Implementation for ChildList - MultiChildContainer
+// ============================================================================
+
+impl<P: Protocol, A: Arity, D: Default + Send + Sync> MultiChildContainer<P::Object>
+    for ChildList<P, A, D>
+{
+    #[inline]
+    fn len(&self) -> usize {
+        ChildList::len(self)
+    }
+
+    #[inline]
+    fn get(&self, index: usize) -> Option<&P::Object> {
+        ChildList::get(self, index)
+    }
+
+    #[inline]
+    fn get_mut(&mut self, index: usize) -> Option<&mut P::Object> {
+        ChildList::get_mut(self, index)
+    }
+
+    #[inline]
+    fn push(&mut self, child: Box<P::Object>) {
+        ChildList::push(self, child);
+    }
+
+    #[inline]
+    fn remove(&mut self, index: usize) -> Option<Box<P::Object>> {
+        ChildList::remove_child(self, index)
+    }
+
+    #[inline]
+    fn clear(&mut self) {
+        ChildList::clear(self);
+    }
+}
+
+// ============================================================================
+// Implementation for ChildList - MultiChildContainerWithData
+// ============================================================================
+
+impl<P: Protocol, A: Arity, D: Default + Send + Sync> MultiChildContainerWithData<P::Object, D>
+    for ChildList<P, A, D>
+{
+    #[inline]
+    fn data(&self, index: usize) -> Option<&D> {
+        ChildList::data(self, index)
+    }
+
+    #[inline]
+    fn data_mut(&mut self, index: usize) -> Option<&mut D> {
+        ChildList::data_mut(self, index)
+    }
+
+    #[inline]
+    fn get_with_data(&self, index: usize) -> Option<(&P::Object, &D)> {
+        ChildList::get_with_data(self, index)
+    }
+
+    #[inline]
+    fn get_with_data_mut(&mut self, index: usize) -> Option<(&mut P::Object, &mut D)> {
+        ChildList::get_with_data_mut(self, index)
+    }
+
+    #[inline]
+    fn push_with_data(&mut self, child: Box<P::Object>, data: D) {
+        self.push_with(child, data);
     }
 }
 

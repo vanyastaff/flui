@@ -66,6 +66,9 @@ pub use children::{
     // Layout-specific aliases
     FlexChildren,
     HasOffset,
+    // Generic multi-child traits
+    MultiChildContainer,
+    MultiChildContainerWithData,
     // Generic container traits
     ProxyContainer,
     ShiftedContainer,
