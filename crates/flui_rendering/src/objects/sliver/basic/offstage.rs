@@ -2,7 +2,9 @@
 //!
 //! When offstage, the sliver is not painted and takes no space.
 
-use flui_types::{Offset, SliverConstraints, SliverGeometry};
+use flui_types::Offset;
+
+use crate::constraints::{SliverConstraints, SliverGeometry};
 
 use crate::pipeline::PaintingContext;
 
@@ -129,7 +131,7 @@ impl RenderSliverOffstage {
         let constraints = &self.constraints;
 
         main_axis_position >= 0.0
-            && main_axis_position < geometry.hit_test_extent()
+            && main_axis_position < geometry.hit_test_extent
             && cross_axis_position >= 0.0
             && cross_axis_position < constraints.cross_axis_extent
     }
@@ -138,19 +140,15 @@ impl RenderSliverOffstage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_types::constraints::GrowthDirection;
-    use flui_types::layout::{Axis, AxisDirection};
 
     fn make_constraints(scroll_offset: f32, remaining: f32) -> SliverConstraints {
-        SliverConstraints::new(
-            AxisDirection::TopToBottom,
-            GrowthDirection::Forward,
-            Axis::Vertical,
+        SliverConstraints {
             scroll_offset,
-            remaining,
-            600.0,
-            400.0,
-        )
+            remaining_paint_extent: remaining,
+            viewport_main_axis_extent: 600.0,
+            cross_axis_extent: 400.0,
+            ..Default::default()
+        }
     }
 
     #[test]

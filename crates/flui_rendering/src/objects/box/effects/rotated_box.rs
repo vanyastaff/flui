@@ -3,7 +3,9 @@
 //! This render object rotates its child by 90-degree increments.
 //! For arbitrary rotations, use RenderTransform instead.
 
-use flui_types::{BoxConstraints, Offset, Point, Rect, Size};
+use flui_types::{Offset, Point, Rect, Size};
+
+use crate::constraints::BoxConstraints;
 
 use crate::containers::Single;
 use crate::pipeline::PaintingContext;

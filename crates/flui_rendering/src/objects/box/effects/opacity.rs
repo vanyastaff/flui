@@ -3,7 +3,9 @@
 //! This render object multiplies its child's opacity by a given value,
 //! creating transparency effects.
 
-use flui_types::{BoxConstraints, Offset, Size};
+use flui_types::{Offset, Size};
+
+use crate::constraints::BoxConstraints;
 
 use crate::containers::ProxyBox;
 use crate::pipeline::PaintingContext;

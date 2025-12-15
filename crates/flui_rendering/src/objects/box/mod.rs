@@ -12,6 +12,7 @@
 pub mod basic;
 pub mod effects;
 pub mod layout;
+pub mod scroll;
 
 // TODO: Add remaining categories
 // pub mod animation;
@@ -21,5 +22,4 @@ pub mod layout;
 // pub mod text;
 // pub mod accessibility;
 // pub mod platform;
-// pub mod scroll;
 // pub mod debug;

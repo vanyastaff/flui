@@ -314,6 +314,16 @@ impl Rect {
             && self.max.y >= other.max.y
     }
 
+    /// Returns `true` if the offset is inside the rectangle.
+    #[inline]
+    #[must_use]
+    pub fn contains_offset(&self, offset: crate::Offset) -> bool {
+        offset.dx >= self.min.x
+            && offset.dx <= self.max.x
+            && offset.dy >= self.min.y
+            && offset.dy <= self.max.y
+    }
+
     /// Returns `true` if this rectangle overlaps with another.
     #[inline]
     #[must_use]
@@ -442,6 +452,46 @@ impl Rect {
             min: self.min + offset,
             max: self.max + offset,
         }
+    }
+
+    /// Translates the rectangle by an offset.
+    #[inline]
+    #[must_use]
+    pub fn translate_offset(&self, offset: crate::Offset) -> Self {
+        self.translate(Vec2::new(offset.dx, offset.dy))
+    }
+
+    /// Returns a rectangle expanded to include another rectangle.
+    #[inline]
+    #[must_use]
+    pub fn expand_to_include(&self, other: &Self) -> Self {
+        Self::new(
+            self.min.x.min(other.min.x),
+            self.min.y.min(other.min.y),
+            self.max.x.max(other.max.x),
+            self.max.y.max(other.max.y),
+        )
+    }
+
+    /// Creates a rectangle from center point with width and height.
+    #[inline]
+    #[must_use]
+    pub fn from_center(center: crate::Offset, width: f32, height: f32) -> Self {
+        let half_width = width / 2.0;
+        let half_height = height / 2.0;
+        Self::new(
+            center.dx - half_width,
+            center.dy - half_height,
+            center.dx + half_width,
+            center.dy + half_height,
+        )
+    }
+
+    /// Creates a rectangle from left, top, width, and height (Flutter-style).
+    #[inline]
+    #[must_use]
+    pub fn from_ltwh(left: f32, top: f32, width: f32, height: f32) -> Self {
+        Self::new(left, top, left + width, top + height)
     }
 
     /// Scales the rectangle from origin.

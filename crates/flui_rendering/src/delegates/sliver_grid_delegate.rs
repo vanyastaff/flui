@@ -6,7 +6,7 @@
 use std::any::Any;
 use std::fmt::Debug;
 
-use flui_types::SliverConstraints;
+use crate::constraints::SliverConstraints;
 
 /// The layout of a grid in a sliver.
 ///
@@ -313,19 +313,15 @@ impl SliverGridDelegate for SliverGridDelegateWithMaxCrossAxisExtent {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_types::constraints::GrowthDirection;
-    use flui_types::layout::{Axis, AxisDirection};
 
     fn make_constraints(cross_axis_extent: f32) -> SliverConstraints {
-        SliverConstraints::new(
-            AxisDirection::TopToBottom,
-            GrowthDirection::Forward,
-            Axis::Vertical,
-            0.0,               // scroll_offset
-            1000.0,            // remaining_paint_extent
-            1000.0,            // viewport_main_axis_extent
-            cross_axis_extent, // cross_axis_extent
-        )
+        SliverConstraints {
+            scroll_offset: 0.0,
+            remaining_paint_extent: 1000.0,
+            viewport_main_axis_extent: 1000.0,
+            cross_axis_extent,
+            ..Default::default()
+        }
     }
 
     #[test]

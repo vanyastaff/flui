@@ -2,7 +2,9 @@
 //!
 //! Children can be positioned absolutely or sized to fit the stack.
 
-use flui_types::{BoxConstraints, Offset, Point, Rect, Size};
+use flui_types::{Offset, Point, Rect, Size};
+
+use crate::constraints::BoxConstraints;
 
 use crate::containers::Children;
 use crate::objects::r#box::effects::fitted_box::FittedAlignment;

@@ -48,16 +48,24 @@
 #![warn(missing_docs)]
 #![warn(clippy::all)]
 
+pub mod binding;
+pub mod constraints;
 pub mod containers;
 pub mod delegates;
+pub mod hit_testing;
+pub mod input;
+pub mod layer;
 pub mod objects;
 pub mod parent_data;
 pub mod pipeline;
 pub mod protocol;
+pub mod semantics;
 pub mod traits;
+pub mod view;
 
 /// Prelude module for convenient imports.
 pub mod prelude {
+    pub use crate::binding::{HitTestDispatcher, PipelineManifold, RendererBinding};
     pub use crate::containers::{
         Aligning, AligningBox, AligningSliver, BoxChild, BoxChildren, Children, Proxy, ProxyBox,
         Shifted, ShiftedBox, ShiftedSliver, Single, SliverChild, SliverChildren, SliverProxy,
@@ -69,6 +77,15 @@ pub mod prelude {
         SliverGridDelegateWithFixedCrossAxisCount, SliverGridDelegateWithMaxCrossAxisExtent,
         SliverGridLayout,
     };
+    pub use crate::hit_testing::{
+        BoxHitTestEntry, BoxHitTestResult, HitTestBehavior, HitTestEntry, HitTestResult,
+        HitTestTarget, MatrixTransformPart, PointerEvent, PointerEventKind, SliverHitTestEntry,
+        SliverHitTestResult,
+    };
+    pub use crate::input::{
+        MouseCursor, MouseCursorSession, MouseTracker, MouseTrackerAnnotation, MouseTrackerHitTest,
+        PointerEnterEvent, PointerExitEvent, PointerHoverEvent, SystemMouseCursor,
+    };
     pub use crate::parent_data::{
         BoxParentData, ContainerBoxParentData, FlexFit, FlexParentData, ParentData,
         SliverGridParentData, SliverMultiBoxAdaptorParentData, SliverParentData,
@@ -76,18 +93,27 @@ pub mod prelude {
     };
     pub use crate::pipeline::{Canvas, Paint, PaintStyle, PaintingContext, PipelineOwner};
     pub use crate::protocol::{BoxProtocol, Protocol, SliverProtocol};
+    pub use crate::semantics::{
+        SemanticsAction, SemanticsConfiguration, SemanticsNode, SemanticsNodeId, SemanticsOwner,
+        SemanticsUpdate,
+    };
     pub use crate::traits::{
-        BoxHitTestEntry, BoxHitTestResult, HitTestBehavior, MultiChildRenderBox,
-        RenderAligningShiftedBox, RenderBox, RenderObject, RenderObjectExt, RenderProxyBox,
-        RenderProxySliver, RenderShiftedBox, RenderSliver, RenderSliverMultiBoxAdaptor,
-        RenderSliverPersistentHeader, RenderSliverSingleBoxAdapter, SingleChildRenderBox,
-        SliverHitTestEntry, SliverHitTestResult, TextBaseline,
+        MultiChildRenderBox, RenderAligningShiftedBox, RenderBox, RenderObject, RenderObjectExt,
+        RenderProxyBox, RenderProxySliver, RenderShiftedBox, RenderSliver,
+        RenderSliverMultiBoxAdaptor, RenderSliverPersistentHeader, RenderSliverSingleBoxAdapter,
+        SingleChildRenderBox, TextBaseline,
+    };
+    pub use crate::view::{
+        CacheExtentStyle, CompositeResult, FixedViewportOffset, RenderAbstractViewport, RenderView,
+        RevealedOffset, ScrollDirection, ScrollableViewportOffset, SliverPaintOrder,
+        ViewConfiguration, ViewportOffset,
     };
 
+    // Constraints from this crate
+    pub use crate::constraints::{BoxConstraints, Constraints, SliverConstraints, SliverGeometry};
+
     // Re-export commonly used types from flui_types
-    pub use flui_types::{
-        BoxConstraints, Offset, Point, RRect, Rect, Size, SliverConstraints, SliverGeometry,
-    };
+    pub use flui_types::{Offset, Point, RRect, Rect, Size};
 }
 
 // Re-export key types at crate root

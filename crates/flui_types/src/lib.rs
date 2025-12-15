@@ -7,7 +7,6 @@
 //! - **Typography**: TextStyle, TextAlign, TextDecoration, TextSpan, and more
 //! - **Painting**: BlendMode, BoxFit, ImageRepeat, Clip, TileMode, Shader, and more
 //! - **Animation**: Curves, Tweens, AnimationStatus
-//! - **Constraints**: SliverConstraints, SliverGeometry, ScrollMetrics, GrowthDirection
 //! - **Gestures**: TapDetails, DragDetails, ScaleDetails, Velocity, PointerData
 //! - **Physics**: SpringSimulation, FrictionSimulation, GravitySimulation, Tolerance
 //! - **Semantics**: SemanticsData, SemanticsAction, SemanticsRole, SemanticsEvent
@@ -58,10 +57,15 @@
 //! - **Interoperability** - Compatible with egui, glam, mint (via feature flags)
 //!
 //! This is the base crate with NO dependencies on other flui crates.
+//!
+//! # Note on Constraints
+//!
+//! Layout constraints (`BoxConstraints`, `SliverConstraints`, `SliverGeometry`, etc.)
+//! have been moved to `flui_rendering::constraints` as they are part of the rendering
+//! protocol rather than basic types.
 
 #![warn(missing_docs)]
 pub mod animation;
-pub mod constraints;
 pub mod events;
 pub mod geometry;
 pub mod gestures;
@@ -74,7 +78,6 @@ pub mod styling;
 pub mod typography;
 
 // Re-exports for convenience - Most commonly used types
-pub use constraints::{BoxConstraints, Constraints, SliverConstraints, SliverGeometry};
 pub use events::{Event, KeyEvent, PointerEvent, PointerEventData, Theme, WindowEvent};
 pub use geometry::{Matrix4, Offset, Point, RRect, Rect, Size};
 pub use gestures::PointerDeviceKind;
@@ -96,9 +99,6 @@ pub mod prelude {
 
     // Styling - Essential
     pub use crate::styling::{Color, Color32, HSLColor, HSVColor};
-
-    // Constraints - Common
-    pub use crate::constraints::BoxConstraints;
 
     // Animation - Frequently used
     pub use crate::animation::{Curve, Curves, Linear, Tween};

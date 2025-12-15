@@ -3,7 +3,9 @@
 //! This render object applies a 4x4 transformation matrix to its child,
 //! enabling rotation, scaling, translation, and perspective effects.
 
-use flui_types::{BoxConstraints, Matrix4, Offset, Point, Rect, Size};
+use flui_types::{Matrix4, Offset, Point, Rect, Size};
+
+use crate::constraints::BoxConstraints;
 
 use crate::containers::ProxyBox;
 use crate::pipeline::PaintingContext;

@@ -2,7 +2,9 @@
 //!
 //! Insets its sliver child by the given padding on each side.
 
-use flui_types::{EdgeInsets, Offset, SliverConstraints, SliverGeometry};
+use flui_types::{EdgeInsets, Offset};
+
+use crate::constraints::{SliverConstraints, SliverGeometry};
 
 use crate::pipeline::PaintingContext;
 
@@ -213,19 +215,15 @@ impl RenderSliverPadding {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_types::constraints::GrowthDirection;
-    use flui_types::layout::{Axis, AxisDirection};
 
     fn make_constraints(scroll_offset: f32, remaining: f32) -> SliverConstraints {
-        SliverConstraints::new(
-            AxisDirection::TopToBottom,
-            GrowthDirection::Forward,
-            Axis::Vertical,
+        SliverConstraints {
             scroll_offset,
-            remaining,
-            600.0,
-            400.0,
-        )
+            remaining_paint_extent: remaining,
+            viewport_main_axis_extent: 600.0,
+            cross_axis_extent: 400.0,
+            ..Default::default()
+        }
     }
 
     #[test]

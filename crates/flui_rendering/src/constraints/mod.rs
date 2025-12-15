@@ -1,23 +1,44 @@
-//! Constraint types for layout
+//! Layout constraints for the rendering layer.
 //!
-//! This module provides constraint types for box layout, slivers (scrollable areas),
-//! scroll metrics, and direction types for scroll and layout.
+//! This module provides constraint types used in the rendering pipeline.
+//! Constraints flow down from parent to child during layout, describing
+//! the space available for the child.
+//!
+//! # Constraint Types
+//!
+//! - [`BoxConstraints`]: 2D rectangular constraints (min/max width/height)
+//! - [`SliverConstraints`]: Scrollable viewport constraints
+//! - [`SliverGeometry`]: Layout output for slivers
+//!
+//! # Direction Types
+//!
+//! - [`GrowthDirection`]: Direction in which content grows in scrollable areas
+//!
+//! # Scroll Metrics
+//!
+//! - [`FixedScrollMetrics`]: Scroll metrics with fixed boundaries
+//! - [`FixedExtentMetrics`]: Scroll metrics with fixed item extent
+//!
+//! # Flutter Equivalence
+//!
+//! - `BoxConstraints` → Flutter's `BoxConstraints`
+//! - `SliverConstraints` → Flutter's `SliverConstraints`
+//! - `SliverGeometry` → Flutter's `SliverGeometry`
+//! - `GrowthDirection` → Flutter's `GrowthDirection`
 
-use std::fmt;
-
-pub mod box_constraints;
-pub mod direction;
-pub mod scroll_metrics;
-pub mod sliver;
+mod box_constraints;
+mod direction;
+mod scroll_metrics;
+mod sliver_constraints;
+mod sliver_geometry;
 
 pub use box_constraints::BoxConstraints;
-pub use direction::{AxisDirection, GrowthDirection, ScrollDirection};
+pub use direction::GrowthDirection;
 pub use scroll_metrics::{FixedExtentMetrics, FixedScrollMetrics};
-pub use sliver::{SliverConstraints, SliverGeometry};
+pub use sliver_constraints::SliverConstraints;
+pub use sliver_geometry::SliverGeometry;
 
-// ============================================================================
-// CONSTRAINTS TRAIT (Flutter Protocol)
-// ============================================================================
+use std::fmt;
 
 /// Abstract constraints trait following Flutter's protocol.
 ///
@@ -46,20 +67,6 @@ pub use sliver::{SliverConstraints, SliverGeometry};
 /// - All min values are non-negative
 /// - All min values <= max values
 /// - No NaN or invalid values
-///
-/// # Examples
-///
-/// ```rust,ignore
-/// use flui_types::{BoxConstraints, Constraints};
-///
-/// let tight = BoxConstraints::tight(Size::new(100.0, 50.0));
-/// assert!(tight.is_tight());
-/// assert!(tight.is_normalized());
-///
-/// let loose = BoxConstraints::loose(Size::new(200.0, 100.0));
-/// assert!(!loose.is_tight());
-/// assert!(loose.is_normalized());
-/// ```
 pub trait Constraints: Clone + PartialEq + fmt::Debug + Send + Sync + 'static {
     /// Whether exactly one size satisfies these constraints.
     ///
@@ -105,18 +112,6 @@ pub trait Constraints: Clone + PartialEq + fmt::Debug + Send + Sync + 'static {
     ///   bool isAppliedConstraint = false,
     ///   InformationCollector? informationCollector,
     /// });
-    /// ```
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// let constraints = BoxConstraints::new(50.0, 150.0, 30.0, 100.0);
-    ///
-    /// // Validate before applying
-    /// constraints.debug_assert_is_valid(true);
-    ///
-    /// // General validation
-    /// constraints.debug_assert_is_valid(false);
     /// ```
     #[cfg(debug_assertions)]
     fn debug_assert_is_valid(&self, is_applied_constraint: bool) -> bool {

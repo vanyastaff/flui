@@ -4,7 +4,9 @@
 //! Unlike ConstrainedBox, it always uses tight constraints for the specified
 //! dimensions.
 
-use flui_types::{BoxConstraints, Offset, Size};
+use flui_types::{Offset, Size};
+
+use crate::constraints::BoxConstraints;
 
 use crate::containers::ProxyBox;
 use crate::pipeline::PaintingContext;

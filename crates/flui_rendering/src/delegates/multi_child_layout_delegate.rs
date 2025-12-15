@@ -6,7 +6,9 @@
 use std::any::Any;
 use std::fmt::Debug;
 
-use flui_types::{BoxConstraints, Offset, Size};
+use flui_types::{Offset, Size};
+
+use crate::constraints::BoxConstraints;
 
 /// A delegate that provides custom layout behavior for multiple children.
 ///

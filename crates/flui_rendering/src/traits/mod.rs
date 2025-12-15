@@ -25,6 +25,8 @@ pub mod sliver;
 pub use render_object::*;
 
 // Re-export box traits
+// Note: BoxHitTestEntry, BoxHitTestResult, HitTestBehavior are also available from hit_testing module
+// The versions here are kept for backward compatibility with existing code
 pub use r#box::{
     BoxHitTestEntry, BoxHitTestResult, HitTestBehavior, MultiChildRenderBox,
     RenderAligningShiftedBox, RenderBox, RenderProxyBox, RenderShiftedBox, SingleChildRenderBox,
@@ -32,6 +34,7 @@ pub use r#box::{
 };
 
 // Re-export sliver traits
+// Note: SliverHitTestEntry, SliverHitTestResult are also available from hit_testing module
 pub use sliver::{
     RenderProxySliver, RenderSliver, RenderSliverMultiBoxAdaptor, RenderSliverPersistentHeader,
     RenderSliverSingleBoxAdapter, SliverHitTestEntry, SliverHitTestResult,

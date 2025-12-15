@@ -6,7 +6,9 @@
 use std::any::Any;
 use std::fmt::Debug;
 
-use flui_types::{BoxConstraints, Matrix4, Size};
+use flui_types::{Matrix4, Size};
+
+use crate::constraints::BoxConstraints;
 
 /// A delegate that provides custom flow layout behavior.
 ///

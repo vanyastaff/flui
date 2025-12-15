@@ -34,9 +34,11 @@ mod children;
 mod proxy;
 mod shifted;
 mod single;
+mod viewport;
 
 pub use aligning::*;
-pub use children::*;
+pub use children::{BoxChildren, ChildEntry, Children, HasOffset, SliverChildren};
 pub use proxy::*;
 pub use shifted::*;
 pub use single::*;
+pub use viewport::{SliverViewport, Viewport};

@@ -11,9 +11,17 @@
 //!     │   └── RenderShiftedBox (custom offset)
 //!     │       └── RenderAligningShiftedBox
 //!     └── MultiChildRenderBox
+//!         └── RenderBoxContainerDefaultsMixin
+//!
+//! # Mixins
+//!
+//! - RenderAnimatedOpacityMixin: Animated opacity support
+//! - RenderBoxContainerDefaultsMixin: Default container implementations
 //! ```
 
 mod aligning_shifted_box;
+mod animated_opacity;
+mod container_defaults;
 mod multi_child;
 mod proxy_box;
 mod render_box;
@@ -21,6 +29,8 @@ mod shifted_box;
 mod single_child;
 
 pub use aligning_shifted_box::*;
+pub use animated_opacity::*;
+pub use container_defaults::*;
 pub use multi_child::*;
 pub use proxy_box::*;
 pub use render_box::*;

@@ -2,7 +2,9 @@
 //!
 //! Arranges children in a 2D grid with scrollable main axis.
 
-use flui_types::{BoxConstraints, Offset, Size, SliverConstraints, SliverGeometry};
+use flui_types::{Offset, Size};
+
+use crate::constraints::{BoxConstraints, SliverConstraints, SliverGeometry};
 
 use crate::delegates::{SliverGridDelegate, SliverGridLayout};
 use crate::parent_data::SliverGridParentData;
@@ -173,7 +175,7 @@ impl RenderSliverGrid {
     pub fn paint_offset_for_child(&self, layout_offset: f32, cross_axis_offset: f32) -> Offset {
         let main_offset = layout_offset - self.constraints.scroll_offset;
 
-        match self.constraints.axis {
+        match self.constraints.axis() {
             flui_types::layout::Axis::Vertical => Offset::new(cross_axis_offset, main_offset),
             flui_types::layout::Axis::Horizontal => Offset::new(main_offset, cross_axis_offset),
         }
@@ -196,11 +198,11 @@ impl RenderSliverGrid {
             if let (Some(layout_offset), Some(cross_offset)) =
                 (parent_data.layout_offset, parent_data.cross_axis_offset)
             {
-                let child_main_extent = match self.constraints.axis {
+                let child_main_extent = match self.constraints.axis() {
                     flui_types::layout::Axis::Vertical => size.height,
                     flui_types::layout::Axis::Horizontal => size.width,
                 };
-                let child_cross_extent = match self.constraints.axis {
+                let child_cross_extent = match self.constraints.axis() {
                     flui_types::layout::Axis::Vertical => size.width,
                     flui_types::layout::Axis::Horizontal => size.height,
                 };
@@ -223,19 +225,15 @@ impl RenderSliverGrid {
 mod tests {
     use super::*;
     use crate::delegates::SliverGridDelegateWithFixedCrossAxisCount;
-    use flui_types::constraints::GrowthDirection;
-    use flui_types::layout::{Axis, AxisDirection};
 
     fn make_constraints(scroll_offset: f32, remaining: f32, cross_axis: f32) -> SliverConstraints {
-        SliverConstraints::new(
-            AxisDirection::TopToBottom,
-            GrowthDirection::Forward,
-            Axis::Vertical,
+        SliverConstraints {
             scroll_offset,
-            remaining,
-            600.0,
-            cross_axis,
-        )
+            remaining_paint_extent: remaining,
+            viewport_main_axis_extent: 600.0,
+            cross_axis_extent: cross_axis,
+            ..Default::default()
+        }
     }
 
     fn make_delegate() -> Box<dyn SliverGridDelegate> {

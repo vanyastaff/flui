@@ -162,6 +162,13 @@ impl RRect {
         Self::from_rect_and_radius(rect, Radius::elliptical(radius_x, radius_y))
     }
 
+    /// Creates a rounded rectangle from rect and x/y radii (Flutter-style alias).
+    #[inline]
+    #[must_use]
+    pub const fn from_rect_xy(rect: Rect, radius_x: f32, radius_y: f32) -> Self {
+        Self::from_rect_elliptical(rect, radius_x, radius_y)
+    }
+
     /// Creates a rounded rectangle with individual corner radii.
     #[inline]
     #[must_use]

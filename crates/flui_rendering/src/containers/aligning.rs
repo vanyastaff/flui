@@ -2,8 +2,10 @@
 //!
 //! This is the Rust equivalent of Flutter's `RenderAligningShiftedBox` pattern.
 
+use crate::constraints::SliverGeometry;
 use crate::protocol::{BoxProtocol, Protocol, SliverProtocol};
-use flui_types::{Alignment, Offset, Size, SliverGeometry};
+use crate::traits::{BoxHitTestResult, RenderBox};
+use flui_types::{Alignment, Offset, Size};
 use std::fmt::Debug;
 
 use super::Single;
@@ -195,6 +197,99 @@ impl AligningSliver {
     /// Returns the cached sliver geometry.
     pub fn sliver_geometry(&self) -> &SliverGeometry {
         &self.geometry
+    }
+}
+
+// ============================================================================
+// Paint and Hit Testing Helpers for AligningBox
+// ============================================================================
+
+impl AligningBox {
+    /// Paints the child at the computed alignment offset.
+    ///
+    /// Uses the stored offset that was computed by `align_child()`.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// This corresponds to Flutter's `RenderAligningShiftedBox.paint`,
+    /// which is inherited from `RenderShiftedBox`.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// impl RenderBox for RenderAlign {
+    ///     fn paint(&self, context: &mut PaintingContext, offset: Offset) {
+    ///         self.aligning.paint_child(offset, |child, child_offset| {
+    ///             child.paint(context, child_offset);
+    ///         });
+    ///     }
+    /// }
+    /// ```
+    pub fn paint_child<F>(&self, base_offset: Offset, mut paint_fn: F)
+    where
+        F: FnMut(&dyn RenderBox, Offset),
+    {
+        if let Some(child) = self.child() {
+            let child_offset = base_offset + self.offset;
+            paint_fn(child, child_offset);
+        }
+    }
+
+    /// Paints the child with a custom offset (ignoring computed alignment offset).
+    pub fn paint_child_at<F>(&self, base_offset: Offset, child_offset: Offset, mut paint_fn: F)
+    where
+        F: FnMut(&dyn RenderBox, Offset),
+    {
+        if let Some(child) = self.child() {
+            paint_fn(child, base_offset + child_offset);
+        }
+    }
+
+    /// Hit tests the child at the computed alignment offset.
+    ///
+    /// Uses the stored offset that was computed by `align_child()`.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// This corresponds to Flutter's `RenderAligningShiftedBox.hitTestChildren`,
+    /// which is inherited from `RenderShiftedBox`.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// impl RenderBox for RenderAlign {
+    ///     fn hit_test_children(&self, result: &mut BoxHitTestResult, position: Offset) -> bool {
+    ///         self.aligning.hit_test_child(result, position)
+    ///     }
+    /// }
+    /// ```
+    pub fn hit_test_child(&self, result: &mut BoxHitTestResult, position: Offset) -> bool {
+        if let Some(child) = self.child() {
+            result.add_with_paint_offset(Some(self.offset), position, |result, transformed| {
+                child.hit_test(result, transformed)
+            })
+        } else {
+            false
+        }
+    }
+
+    /// Hit tests the child with a custom offset (ignoring computed alignment offset).
+    ///
+    /// Use this when you need to apply a different offset than what's computed,
+    /// such as for animated alignment transitions.
+    pub fn hit_test_child_at(
+        &self,
+        result: &mut BoxHitTestResult,
+        position: Offset,
+        child_offset: Offset,
+    ) -> bool {
+        if let Some(child) = self.child() {
+            result.add_with_paint_offset(Some(child_offset), position, |result, transformed| {
+                child.hit_test(result, transformed)
+            })
+        } else {
+            false
+        }
     }
 }
 

@@ -2,7 +2,9 @@
 //!
 //! Allows a single RenderBox child to be placed inside a scrollable area.
 
-use flui_types::{BoxConstraints, Offset, Size, SliverConstraints, SliverGeometry};
+use flui_types::{Offset, Size};
+
+use crate::constraints::{BoxConstraints, SliverConstraints, SliverGeometry};
 
 use crate::pipeline::PaintingContext;
 
@@ -49,7 +51,7 @@ impl RenderSliverToBoxAdapter {
     /// Returns box constraints for the child based on sliver constraints.
     pub fn constraints_for_child(&self, constraints: &SliverConstraints) -> BoxConstraints {
         // Child gets infinite extent in main axis, constrained in cross axis
-        match constraints.axis {
+        match constraints.axis() {
             flui_types::layout::Axis::Vertical => {
                 BoxConstraints::new(0.0, constraints.cross_axis_extent, 0.0, f32::INFINITY)
             }
@@ -89,7 +91,7 @@ impl RenderSliverToBoxAdapter {
 
     /// Gets the main axis extent of the child.
     fn get_child_extent(&self, child_size: Size, constraints: &SliverConstraints) -> f32 {
-        match constraints.axis {
+        match constraints.axis() {
             flui_types::layout::Axis::Vertical => child_size.height,
             flui_types::layout::Axis::Horizontal => child_size.width,
         }
@@ -114,7 +116,7 @@ impl RenderSliverToBoxAdapter {
             .scroll_offset
             .min(self.get_child_extent(self.child_size, &self.constraints));
 
-        match self.constraints.axis {
+        match self.constraints.axis() {
             flui_types::layout::Axis::Vertical => Offset::new(0.0, -scroll_offset),
             flui_types::layout::Axis::Horizontal => Offset::new(-scroll_offset, 0.0),
         }
@@ -144,19 +146,15 @@ impl RenderSliverToBoxAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_types::constraints::GrowthDirection;
-    use flui_types::layout::{Axis, AxisDirection};
 
     fn make_constraints(scroll_offset: f32, remaining: f32) -> SliverConstraints {
-        SliverConstraints::new(
-            AxisDirection::TopToBottom,
-            GrowthDirection::Forward,
-            Axis::Vertical,
+        SliverConstraints {
             scroll_offset,
-            remaining,
-            600.0,
-            400.0,
-        )
+            remaining_paint_extent: remaining,
+            viewport_main_axis_extent: 600.0,
+            cross_axis_extent: 400.0,
+            ..Default::default()
+        }
     }
 
     #[test]

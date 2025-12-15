@@ -3,8 +3,10 @@
 //! This is the Rust equivalent of Flutter's `RenderProxyBox` pattern.
 //! Use when parent's geometry should match child's geometry (pass-through).
 
+use crate::constraints::SliverGeometry;
 use crate::protocol::{BoxProtocol, Protocol, SliverProtocol};
-use flui_types::{Size, SliverGeometry};
+use crate::traits::{BoxHitTestResult, RenderBox};
+use flui_types::{Offset, Size};
 use std::fmt::Debug;
 
 use super::Single;
@@ -161,6 +163,100 @@ impl SliverProxy {
     /// Returns the cached sliver geometry.
     pub fn sliver_geometry(&self) -> &SliverGeometry {
         &self.geometry
+    }
+}
+
+// ============================================================================
+// Paint and Hit Testing Helpers for ProxyBox
+// ============================================================================
+
+impl ProxyBox {
+    /// Paints the child at the same offset (pass-through).
+    ///
+    /// For proxy boxes, the child is always painted at the same position
+    /// since the proxy's size equals the child's size.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// This corresponds to Flutter's `RenderProxyBox.paint`.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// impl RenderBox for RenderOpacity {
+    ///     fn paint(&self, context: &mut PaintingContext, offset: Offset) {
+    ///         context.push_opacity(self.opacity);
+    ///         self.proxy.paint_child(offset, |child, child_offset| {
+    ///             child.paint(context, child_offset);
+    ///         });
+    ///     }
+    /// }
+    /// ```
+    pub fn paint_child<F>(&self, offset: Offset, mut paint_fn: F)
+    where
+        F: FnMut(&dyn RenderBox, Offset),
+    {
+        if let Some(child) = self.child() {
+            paint_fn(child, offset);
+        }
+    }
+
+    /// Paints the child with a custom offset.
+    ///
+    /// Use this when the proxy needs to apply an offset for some reason,
+    /// such as for scroll effects or animations.
+    pub fn paint_child_at<F>(&self, base_offset: Offset, child_offset: Offset, mut paint_fn: F)
+    where
+        F: FnMut(&dyn RenderBox, Offset),
+    {
+        if let Some(child) = self.child() {
+            paint_fn(child, base_offset + child_offset);
+        }
+    }
+
+    /// Hit tests the child at zero offset (pass-through).
+    ///
+    /// For proxy boxes, the child is always at offset (0, 0) since the
+    /// proxy's size equals the child's size.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// This corresponds to Flutter's `RenderProxyBox.hitTestChildren`.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// impl RenderBox for RenderOpacity {
+    ///     fn hit_test_children(&self, result: &mut BoxHitTestResult, position: Offset) -> bool {
+    ///         self.proxy.hit_test_child(result, position)
+    ///     }
+    /// }
+    /// ```
+    pub fn hit_test_child(&self, result: &mut BoxHitTestResult, position: Offset) -> bool {
+        if let Some(child) = self.child() {
+            child.hit_test(result, position)
+        } else {
+            false
+        }
+    }
+
+    /// Hit tests the child with a custom offset.
+    ///
+    /// Use this when the proxy needs to apply an offset for some reason,
+    /// such as for scroll effects or animations.
+    pub fn hit_test_child_at(
+        &self,
+        result: &mut BoxHitTestResult,
+        position: Offset,
+        child_offset: Offset,
+    ) -> bool {
+        if let Some(child) = self.child() {
+            result.add_with_paint_offset(Some(child_offset), position, |result, transformed| {
+                child.hit_test(result, transformed)
+            })
+        } else {
+            false
+        }
     }
 }
 

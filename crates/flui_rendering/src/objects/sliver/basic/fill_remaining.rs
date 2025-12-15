@@ -2,7 +2,9 @@
 //!
 //! A sliver that fills all remaining space in the viewport.
 
-use flui_types::{BoxConstraints, Offset, Size, SliverConstraints, SliverGeometry};
+use flui_types::{Offset, Size};
+
+use crate::constraints::{BoxConstraints, SliverConstraints, SliverGeometry};
 
 use crate::pipeline::PaintingContext;
 
@@ -94,7 +96,7 @@ impl RenderSliverFillRemaining {
     pub fn constraints_for_child(&self, constraints: &SliverConstraints) -> BoxConstraints {
         let extent = constraints.remaining_paint_extent;
 
-        match constraints.axis {
+        match constraints.axis() {
             flui_types::layout::Axis::Vertical => {
                 if self.has_scroll_body {
                     BoxConstraints::new(0.0, constraints.cross_axis_extent, extent, f32::INFINITY)
@@ -133,7 +135,7 @@ impl RenderSliverFillRemaining {
         self.constraints = constraints;
         self.child_size = child_size;
 
-        let child_extent = match constraints.axis {
+        let child_extent = match constraints.axis() {
             flui_types::layout::Axis::Vertical => child_size.height,
             flui_types::layout::Axis::Horizontal => child_size.width,
         };
@@ -162,7 +164,7 @@ impl RenderSliverFillRemaining {
     pub fn child_paint_offset(&self) -> Offset {
         if self.fill_overscroll && self.constraints.scroll_offset < 0.0 {
             // During overscroll, shift child down
-            match self.constraints.axis {
+            match self.constraints.axis() {
                 flui_types::layout::Axis::Vertical => {
                     Offset::new(0.0, -self.constraints.scroll_offset)
                 }
@@ -184,19 +186,15 @@ impl RenderSliverFillRemaining {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_types::constraints::GrowthDirection;
-    use flui_types::layout::{Axis, AxisDirection};
 
     fn make_constraints(scroll_offset: f32, remaining: f32) -> SliverConstraints {
-        SliverConstraints::new(
-            AxisDirection::TopToBottom,
-            GrowthDirection::Forward,
-            Axis::Vertical,
+        SliverConstraints {
             scroll_offset,
-            remaining,
-            600.0,
-            400.0,
-        )
+            remaining_paint_extent: remaining,
+            viewport_main_axis_extent: 600.0,
+            cross_axis_extent: 400.0,
+            ..Default::default()
+        }
     }
 
     #[test]

@@ -2,7 +2,9 @@
 //!
 //! This render object paints backgrounds, borders, and shadows.
 
-use flui_types::{BoxConstraints, Color, Offset, Point, Rect, Size};
+use flui_types::{Color, Offset, Point, Rect, Size};
+
+use crate::constraints::BoxConstraints;
 
 use crate::containers::ProxyBox;
 use crate::objects::r#box::effects::clip_rrect::BorderRadius;

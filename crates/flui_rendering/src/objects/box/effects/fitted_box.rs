@@ -2,7 +2,9 @@
 //!
 //! This render object scales its child to fit within itself according to a BoxFit mode.
 
-use flui_types::{BoxConstraints, Matrix4, Offset, Point, Rect, Size};
+use flui_types::{Matrix4, Offset, Point, Rect, Size};
+
+use crate::constraints::BoxConstraints;
 
 use crate::containers::ProxyBox;
 use crate::pipeline::PaintingContext;

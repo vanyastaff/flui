@@ -3,7 +3,9 @@
 //! This render object attempts to size itself to a specific aspect ratio,
 //! respecting the constraints from its parent.
 
-use flui_types::{BoxConstraints, Offset, Size};
+use flui_types::{Offset, Size};
+
+use crate::constraints::BoxConstraints;
 
 use crate::containers::ProxyBox;
 use crate::pipeline::PaintingContext;

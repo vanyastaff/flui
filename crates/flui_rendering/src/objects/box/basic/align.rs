@@ -4,7 +4,9 @@
 //! `Alignment` coordinates. It can optionally scale the child's size
 //! using width and height factors.
 
-use flui_types::{Alignment, BoxConstraints, Offset, Size};
+use flui_types::{Alignment, Offset, Size};
+
+use crate::constraints::BoxConstraints;
 
 use crate::containers::AligningBox;
 use crate::pipeline::PaintingContext;

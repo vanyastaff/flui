@@ -144,6 +144,15 @@ impl Size {
         self.width.abs() < f32::EPSILON && self.height.abs() < f32::EPSILON
     }
 
+    /// Returns `true` if either dimension is zero or negative.
+    ///
+    /// This is equivalent to `is_zero_area` and matches Flutter's `Size.isEmpty`.
+    #[inline]
+    #[must_use]
+    pub fn is_empty(self) -> bool {
+        self.width <= 0.0 || self.height <= 0.0
+    }
+
     /// Returns the smaller dimension.
     #[inline]
     #[must_use]

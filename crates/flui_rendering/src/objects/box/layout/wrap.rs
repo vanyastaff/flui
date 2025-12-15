@@ -2,7 +2,9 @@
 //!
 //! When children exceed the main axis extent, they wrap to a new run.
 
-use flui_types::{BoxConstraints, Offset, Point, Rect, Size};
+use flui_types::{Offset, Point, Rect, Size};
+
+use crate::constraints::BoxConstraints;
 
 use crate::containers::Children;
 use crate::objects::r#box::layout::flex::{Axis, VerticalDirection};

@@ -2,7 +2,9 @@
 //!
 //! This render object translates its child by a fraction of the child's own dimensions.
 
-use flui_types::{BoxConstraints, Offset, Point, Rect, Size};
+use flui_types::{Offset, Point, Rect, Size};
+
+use crate::constraints::BoxConstraints;
 
 use crate::containers::ProxyBox;
 use crate::pipeline::PaintingContext;

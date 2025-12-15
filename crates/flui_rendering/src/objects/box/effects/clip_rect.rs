@@ -2,7 +2,9 @@
 //!
 //! This render object clips its child to a rectangular region.
 
-use flui_types::{BoxConstraints, Offset, Point, Rect, Size};
+use flui_types::{Offset, Point, Rect, Size};
+
+use crate::constraints::BoxConstraints;
 
 use crate::containers::ProxyBox;
 use crate::delegates::CustomClipper;

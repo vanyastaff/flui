@@ -5,7 +5,9 @@
 //! size. Padding then sizes itself to its child's size, inflated by the
 //! padding, effectively creating empty space around the child.
 
-use flui_types::{BoxConstraints, EdgeInsets, Offset, Size};
+use flui_types::{EdgeInsets, Offset, Size};
+
+use crate::constraints::BoxConstraints;
 
 use crate::containers::ShiftedBox;
 use crate::pipeline::PaintingContext;
@@ -120,7 +122,7 @@ impl RenderPadding {
 
     /// Returns constraints for the child.
     pub fn constraints_for_child(&self, constraints: BoxConstraints) -> BoxConstraints {
-        constraints.deflate(&self.padding)
+        constraints.deflate(self.padding)
     }
 
     /// Paints this render object.

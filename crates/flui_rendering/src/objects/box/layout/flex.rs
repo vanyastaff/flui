@@ -3,7 +3,9 @@
 //! This render object arranges children in a single row or column,
 //! with flexible sizing based on flex factors.
 
-use flui_types::{BoxConstraints, Offset, Point, Rect, Size};
+use flui_types::{Offset, Point, Rect, Size};
+
+use crate::constraints::BoxConstraints;
 
 use crate::containers::Children;
 use crate::parent_data::FlexParentData;

@@ -2,7 +2,9 @@
 //!
 //! This render object clips its child to a rounded rectangular region.
 
-use flui_types::{geometry::Radius, BoxConstraints, Offset, Point, RRect, Rect, Size};
+use flui_types::{geometry::Radius, Offset, Point, RRect, Rect, Size};
+
+use crate::constraints::BoxConstraints;
 
 use crate::containers::ProxyBox;
 use crate::delegates::CustomClipper;
