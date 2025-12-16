@@ -6,15 +6,19 @@
 use flui_types::{Offset, Size};
 
 use crate::constraints::BoxConstraints;
-
-use crate::containers::ProxyBox;
+use crate::containers::BoxChild;
 use crate::pipeline::PaintingContext;
-use crate::traits::TextBaseline;
+use crate::traits::{RenderBox, TextBaseline};
 
 /// A render object that attempts to size itself to a specific aspect ratio.
 ///
 /// The aspect ratio is expressed as width / height. For example, a 16:9
 /// aspect ratio would be 16.0 / 9.0 ≈ 1.78.
+///
+/// # Flutter Equivalent
+///
+/// This corresponds to Flutter's `RenderAspectRatio` which extends `RenderProxyBox`.
+/// Like Flutter, this stores child directly and delegates size to child.
 ///
 /// # Example
 ///
@@ -29,8 +33,11 @@ use crate::traits::TextBaseline;
 /// ```
 #[derive(Debug)]
 pub struct RenderAspectRatio {
-    /// Container holding the child and geometry.
-    proxy: ProxyBox,
+    /// The child render object using type-safe container.
+    child: BoxChild,
+
+    /// Cached size from layout.
+    size: Size,
 
     /// The aspect ratio (width / height).
     aspect_ratio: f32,
@@ -46,10 +53,42 @@ impl RenderAspectRatio {
             "Aspect ratio must be positive and finite"
         );
         Self {
-            proxy: ProxyBox::new(),
+            child: BoxChild::new(),
+            size: Size::ZERO,
             aspect_ratio,
         }
     }
+
+    // ========================================================================
+    // Child access (using type-safe BoxChild container)
+    // ========================================================================
+
+    /// Returns a reference to the child, if present.
+    pub fn child(&self) -> Option<&dyn RenderBox> {
+        self.child.get()
+    }
+
+    /// Returns a mutable reference to the child, if present.
+    pub fn child_mut(&mut self) -> Option<&mut dyn RenderBox> {
+        self.child.get_mut()
+    }
+
+    /// Sets the child.
+    pub fn set_child(&mut self, child: Option<Box<dyn RenderBox>>) {
+        self.child.clear();
+        if let Some(c) = child {
+            self.child.set(c);
+        }
+    }
+
+    /// Takes the child out of the container.
+    pub fn take_child(&mut self) -> Option<Box<dyn RenderBox>> {
+        self.child.take()
+    }
+
+    // ========================================================================
+    // Aspect ratio configuration
+    // ========================================================================
 
     /// Returns the aspect ratio.
     pub fn aspect_ratio(&self) -> f32 {
@@ -70,7 +109,7 @@ impl RenderAspectRatio {
 
     /// Returns the current size.
     pub fn size(&self) -> Size {
-        *self.proxy.geometry()
+        self.size
     }
 
     /// Computes the size that satisfies the aspect ratio within constraints.
@@ -117,9 +156,8 @@ impl RenderAspectRatio {
 
     /// Performs layout.
     pub fn perform_layout(&mut self, constraints: BoxConstraints) -> Size {
-        let size = self.apply_aspect_ratio(constraints);
-        self.proxy.set_geometry(size);
-        size
+        self.size = self.apply_aspect_ratio(constraints);
+        self.size
     }
 
     /// Returns constraints for the child (tight to computed size).

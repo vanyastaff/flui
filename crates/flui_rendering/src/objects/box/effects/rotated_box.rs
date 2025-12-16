@@ -6,11 +6,9 @@
 use flui_types::{Offset, Point, Rect, Size};
 
 use crate::constraints::BoxConstraints;
-
-use crate::containers::Single;
+use crate::containers::BoxChild;
 use crate::pipeline::PaintingContext;
-use crate::protocol::BoxProtocol;
-use crate::traits::TextBaseline;
+use crate::traits::{RenderBox, TextBaseline};
 
 /// Number of clockwise quarter turns.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -73,13 +71,13 @@ impl QuarterTurns {
 /// ```
 #[derive(Debug)]
 pub struct RenderRotatedBox {
-    /// Container for the child.
-    single: Single<BoxProtocol>,
+    /// The child render object.
+    child: BoxChild,
 
     /// Number of quarter turns.
     quarter_turns: QuarterTurns,
 
-    /// Cached size.
+    /// Cached size from layout.
     size: Size,
 }
 
@@ -87,7 +85,7 @@ impl RenderRotatedBox {
     /// Creates a new rotated box.
     pub fn new(quarter_turns: QuarterTurns) -> Self {
         Self {
-            single: Single::new(),
+            child: BoxChild::new(),
             quarter_turns,
             size: Size::ZERO,
         }
@@ -113,6 +111,37 @@ impl RenderRotatedBox {
         Self::new(QuarterTurns::Three)
     }
 
+    // ========================================================================
+    // Child access
+    // ========================================================================
+
+    /// Returns a reference to the child render object.
+    pub fn child(&self) -> Option<&dyn RenderBox> {
+        self.child.get()
+    }
+
+    /// Returns a mutable reference to the child render object.
+    pub fn child_mut(&mut self) -> Option<&mut dyn RenderBox> {
+        self.child.get_mut()
+    }
+
+    /// Sets the child render object.
+    pub fn set_child(&mut self, child: Option<Box<dyn RenderBox>>) {
+        self.child.clear();
+        if let Some(c) = child {
+            self.child.set(c);
+        }
+    }
+
+    /// Takes the child render object.
+    pub fn take_child(&mut self) -> Option<Box<dyn RenderBox>> {
+        self.child.take()
+    }
+
+    // ========================================================================
+    // Configuration
+    // ========================================================================
+
     /// Returns the number of quarter turns.
     pub fn quarter_turns(&self) -> QuarterTurns {
         self.quarter_turns
@@ -129,6 +158,10 @@ impl RenderRotatedBox {
     pub fn size(&self) -> Size {
         self.size
     }
+
+    // ========================================================================
+    // Layout helpers
+    // ========================================================================
 
     /// Transforms constraints for the child based on rotation.
     fn transform_constraints(&self, constraints: BoxConstraints) -> BoxConstraints {
@@ -374,5 +407,17 @@ mod tests {
 
         assert!((child_point.x - 90.0).abs() < f32::EPSILON);
         assert!((child_point.y - 80.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_child_access() {
+        let mut rotated = RenderRotatedBox::clockwise();
+
+        // Initially no child
+        assert!(rotated.child().is_none());
+
+        // Can set child to None
+        rotated.set_child(None);
+        assert!(rotated.child().is_none());
     }
 }

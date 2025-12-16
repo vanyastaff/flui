@@ -17,7 +17,7 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use flui_rendering::containers::{BoxToSliver, Single};
+//! use flui_rendering::containers::{BoxToSliver, Child};
 //! use flui_rendering::protocol::BoxProtocol;
 //!
 //! // Sliver that wraps a single Box child
@@ -29,7 +29,7 @@
 //!
 //! impl RenderSliverToBoxAdapter {
 //!     pub fn child(&self) -> Option<&dyn RenderBox> {
-//!         self.child.inner().child()
+//!         self.child.child()
 //!     }
 //! }
 //! ```
@@ -97,8 +97,8 @@ impl<C, ToProtocol: Protocol> Adapter<C, ToProtocol> {
     /// # Example
     ///
     /// ```rust,ignore
-    /// let single = Single::<BoxProtocol>::new();
-    /// let adapter: BoxToSliver = Adapter::new(single);
+    /// let child = Child::<BoxProtocol>::new();
+    /// let adapter: BoxToSliver = Adapter::new(child);
     /// ```
     #[inline]
     pub const fn new(inner: C) -> Self {
@@ -142,7 +142,7 @@ impl<C, ToProtocol: Protocol> Adapter<C, ToProtocol> {
     ///
     /// ```rust,ignore
     /// let adapter: BoxToSliver = /* ... */;
-    /// let single: Single<BoxProtocol> = adapter.into_inner();
+    /// let child: Child<BoxProtocol> = adapter.into_inner();
     /// ```
     #[inline]
     pub fn into_inner(self) -> C {
@@ -168,8 +168,9 @@ impl<C, ToProtocol: Protocol> Adapter<C, ToProtocol> {
 // Type Aliases - Box → Sliver adapters
 // ============================================================================
 
-use super::{ChildList, Single};
+use super::{Child, ChildList};
 use crate::protocol::{BoxProtocol, SliverProtocol};
+use flui_tree::arity::Optional;
 use flui_tree::arity::Variable;
 
 /// Single Box child exposed as Sliver protocol.
@@ -188,7 +189,7 @@ use flui_tree::arity::Variable;
 ///     geometry: SliverGeometry,
 /// }
 /// ```
-pub type BoxToSliver = Adapter<Single<BoxProtocol>, SliverProtocol>;
+pub type BoxToSliver = Adapter<Child<BoxProtocol, Optional>, SliverProtocol>;
 
 /// Optional Box child exposed as Sliver protocol.
 ///
@@ -202,7 +203,7 @@ pub type BoxToSliver = Adapter<Single<BoxProtocol>, SliverProtocol>;
 ///     geometry: SliverGeometry,
 /// }
 /// ```
-pub type OptionalBoxToSliver = Adapter<Single<BoxProtocol>, SliverProtocol>;
+pub type OptionalBoxToSliver = Adapter<Child<BoxProtocol, Optional>, SliverProtocol>;
 
 /// Multiple Box children exposed as Sliver protocol.
 ///
@@ -235,7 +236,7 @@ pub type MultiBoxToSliver<PD = <BoxProtocol as Protocol>::ParentData> =
 ///     size: Size,
 /// }
 /// ```
-pub type SliverToBox = Adapter<Single<SliverProtocol>, BoxProtocol>;
+pub type SliverToBox = Adapter<Child<SliverProtocol, Optional>, BoxProtocol>;
 
 /// Optional Sliver child exposed as Box protocol.
 ///
@@ -247,7 +248,7 @@ pub type SliverToBox = Adapter<Single<SliverProtocol>, BoxProtocol>;
 ///     size: Size,
 /// }
 /// ```
-pub type OptionalSliverToBox = Adapter<Single<SliverProtocol>, BoxProtocol>;
+pub type OptionalSliverToBox = Adapter<Child<SliverProtocol, Optional>, BoxProtocol>;
 
 /// Multiple Sliver children exposed as Box protocol.
 ///
@@ -282,7 +283,7 @@ impl BoxToSliver {
     /// assert!(!adapter.inner().has_child());
     /// ```
     pub fn empty() -> Self {
-        Self::new(Single::new())
+        Self::new(Child::new())
     }
 
     /// Creates a BoxToSliver adapter with the given child.
@@ -293,7 +294,7 @@ impl BoxToSliver {
     /// let adapter = BoxToSliver::with_child(Box::new(my_box_widget));
     /// ```
     pub fn with_child(child: Box<dyn crate::traits::RenderBox>) -> Self {
-        Self::new(Single::with_child(child))
+        Self::new(Child::with(child))
     }
 
     /// Returns a reference to the child, if present.
@@ -329,12 +330,12 @@ impl BoxToSliver {
 impl SliverToBox {
     /// Creates an empty SliverToBox adapter.
     pub fn empty() -> Self {
-        Self::new(Single::new())
+        Self::new(Child::new())
     }
 
     /// Creates a SliverToBox adapter with the given child.
     pub fn with_child(child: Box<dyn crate::traits::RenderSliver>) -> Self {
-        Self::new(Single::with_child(child))
+        Self::new(Child::with(child))
     }
 
     /// Returns a reference to the child, if present.
@@ -416,13 +417,13 @@ mod tests {
     fn test_adapter_zero_cost() {
         // Adapter should add no size overhead
         assert_eq!(
-            std::mem::size_of::<Adapter<Single<BoxProtocol>, SliverProtocol>>(),
-            std::mem::size_of::<Single<BoxProtocol>>()
+            std::mem::size_of::<Adapter<Child<BoxProtocol, Optional>, SliverProtocol>>(),
+            std::mem::size_of::<Child<BoxProtocol, Optional>>()
         );
 
         assert_eq!(
-            std::mem::size_of::<Adapter<Single<SliverProtocol>, BoxProtocol>>(),
-            std::mem::size_of::<Single<SliverProtocol>>()
+            std::mem::size_of::<Adapter<Child<SliverProtocol, Optional>, BoxProtocol>>(),
+            std::mem::size_of::<Child<SliverProtocol, Optional>>()
         );
 
         // PhantomData is zero-sized
@@ -435,7 +436,7 @@ mod tests {
         // Type alias should be the same as explicit type
         assert_eq!(
             std::mem::size_of::<BoxToSliver>(),
-            std::mem::size_of::<Adapter<Single<BoxProtocol>, SliverProtocol>>()
+            std::mem::size_of::<Adapter<Child<BoxProtocol, Optional>, SliverProtocol>>()
         );
     }
 
@@ -443,7 +444,7 @@ mod tests {
     fn test_sliver_to_box_type_alias() {
         assert_eq!(
             std::mem::size_of::<SliverToBox>(),
-            std::mem::size_of::<Adapter<Single<SliverProtocol>, BoxProtocol>>()
+            std::mem::size_of::<Adapter<Child<SliverProtocol, Optional>, BoxProtocol>>()
         );
     }
 
@@ -481,13 +482,13 @@ mod tests {
         let adapter = BoxToSliver::empty();
 
         // Can access inner container
-        let _inner: &Single<BoxProtocol> = adapter.inner();
+        let _inner: &Child<BoxProtocol, Optional> = adapter.inner();
     }
 
     #[test]
     fn test_adapter_into_inner() {
         let adapter = BoxToSliver::empty();
-        let _inner: Single<BoxProtocol> = adapter.into_inner();
+        let _inner: Child<BoxProtocol, Optional> = adapter.into_inner();
     }
 
     #[test]
@@ -496,7 +497,7 @@ mod tests {
         assert!(!adapter.has_child());
     }
 
-    // Note: Clone test removed because Single<P> doesn't implement Clone
+    // Note: Clone test removed because Child<P> doesn't implement Clone
     // (it contains Box<dyn RenderBox> which is not Clone)
 
     #[test]

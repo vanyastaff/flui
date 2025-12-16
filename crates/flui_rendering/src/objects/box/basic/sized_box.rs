@@ -7,15 +7,19 @@
 use flui_types::{Offset, Size};
 
 use crate::constraints::BoxConstraints;
-
-use crate::containers::ProxyBox;
+use crate::containers::BoxChild;
 use crate::pipeline::PaintingContext;
-use crate::traits::TextBaseline;
+use crate::traits::{RenderBox, TextBaseline};
 
 /// A render object that forces a specific size.
 ///
 /// If width or height is None, that dimension uses the child's size
 /// (or 0 if there's no child).
+///
+/// # Flutter Equivalent
+///
+/// This corresponds to Flutter's `RenderConstrainedBox` with tight constraints.
+/// Like Flutter, this stores child directly and delegates size to child.
 ///
 /// # Example
 ///
@@ -30,8 +34,11 @@ use crate::traits::TextBaseline;
 /// ```
 #[derive(Debug)]
 pub struct RenderSizedBox {
-    /// Container holding the child and geometry.
-    proxy: ProxyBox,
+    /// The child render object using type-safe container.
+    child: BoxChild,
+
+    /// Cached size from layout.
+    size: Size,
 
     /// The fixed width, if any.
     width: Option<f32>,
@@ -44,7 +51,8 @@ impl RenderSizedBox {
     /// Creates a new sized box with optional fixed dimensions.
     pub fn new(width: Option<f32>, height: Option<f32>) -> Self {
         Self {
-            proxy: ProxyBox::new(),
+            child: BoxChild::new(),
+            size: Size::ZERO,
             width,
             height,
         }
@@ -64,6 +72,37 @@ impl RenderSizedBox {
     pub fn shrink() -> Self {
         Self::new(Some(0.0), Some(0.0))
     }
+
+    // ========================================================================
+    // Child access (using type-safe BoxChild container)
+    // ========================================================================
+
+    /// Returns a reference to the child, if present.
+    pub fn child(&self) -> Option<&dyn RenderBox> {
+        self.child.get()
+    }
+
+    /// Returns a mutable reference to the child, if present.
+    pub fn child_mut(&mut self) -> Option<&mut dyn RenderBox> {
+        self.child.get_mut()
+    }
+
+    /// Sets the child.
+    pub fn set_child(&mut self, child: Option<Box<dyn RenderBox>>) {
+        self.child.clear();
+        if let Some(c) = child {
+            self.child.set(c);
+        }
+    }
+
+    /// Takes the child out of the container.
+    pub fn take_child(&mut self) -> Option<Box<dyn RenderBox>> {
+        self.child.take()
+    }
+
+    // ========================================================================
+    // Size configuration
+    // ========================================================================
 
     /// Returns the fixed width, if any.
     pub fn width(&self) -> Option<f32> {
@@ -93,7 +132,7 @@ impl RenderSizedBox {
 
     /// Returns the current size.
     pub fn size(&self) -> Size {
-        *self.proxy.geometry()
+        self.size
     }
 
     /// Computes the effective constraints.
@@ -126,12 +165,11 @@ impl RenderSizedBox {
     /// Performs layout without a child.
     pub fn perform_layout(&mut self, constraints: BoxConstraints) -> Size {
         let effective = self.get_effective_constraints(constraints);
-        let size = effective.constrain(Size::new(
+        self.size = effective.constrain(Size::new(
             self.width.unwrap_or(0.0),
             self.height.unwrap_or(0.0),
         ));
-        self.proxy.set_geometry(size);
-        size
+        self.size
     }
 
     /// Performs layout with a child size.
@@ -141,12 +179,11 @@ impl RenderSizedBox {
         child_size: Size,
     ) -> Size {
         let effective = self.get_effective_constraints(constraints);
-        let size = effective.constrain(Size::new(
+        self.size = effective.constrain(Size::new(
             self.width.unwrap_or(child_size.width),
             self.height.unwrap_or(child_size.height),
         ));
-        self.proxy.set_geometry(size);
-        size
+        self.size
     }
 
     /// Returns constraints for the child.

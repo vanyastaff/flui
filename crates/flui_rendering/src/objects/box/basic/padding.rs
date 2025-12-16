@@ -4,18 +4,31 @@
 //! constraints by the given padding, causing the child to layout at a smaller
 //! size. Padding then sizes itself to its child's size, inflated by the
 //! padding, effectively creating empty space around the child.
+//!
+//! # Flutter Equivalence
+//!
+//! This corresponds to Flutter's `RenderPadding` class in `rendering/shifted_box.dart`.
+//!
+//! # Architecture
+//!
+//! Following Flutter's architecture exactly:
+//! - `RenderPadding` extends `RenderShiftedBox`
+//! - Child offset is stored in `child.parentData.offset` (BoxParentData)
+//! - `performLayout()` sets `child.parentData.offset = Offset(padding.left, padding.top)`
+//! - `paint()` and `hitTestChildren()` read offset from child.parentData
 
 use std::any::Any;
 
 use flui_types::{EdgeInsets, Offset, Size};
 
 use crate::constraints::BoxConstraints;
-use crate::containers::{ShiftedBox, SingleChildContainer};
+use crate::containers::BoxChild;
 use crate::lifecycle::BaseRenderObject;
+use crate::parent_data::BoxParentData;
 use crate::pipeline::{PaintingContext, PipelineOwner};
 use crate::traits::{
-    BoxHitTestResult, DiagnosticPropertiesBuilder, RenderBox, RenderObject, RenderShiftedBox,
-    SingleChildRenderBox, TextBaseline,
+    set_child_offset, BoxHitTestResult, DiagnosticPropertiesBuilder, RenderBox, RenderObject,
+    RenderShiftedBox, SingleChildRenderBox, TextBaseline,
 };
 
 /// A render object that insets its child by the given padding.
@@ -35,8 +48,15 @@ use crate::traits::{
 ///
 /// # Flutter Equivalence
 ///
-/// This corresponds to Flutter's `RenderPadding` class which extends
-/// `RenderShiftedBox`.
+/// This corresponds to Flutter's `RenderPadding` class:
+/// ```dart
+/// class RenderPadding extends RenderShiftedBox {
+///   EdgeInsetsGeometry _padding;
+///   TextDirection? _textDirection;
+///   EdgeInsets? _resolvedPaddingCache;
+///   // ...
+/// }
+/// ```
 ///
 /// # Example
 ///
@@ -51,8 +71,11 @@ use crate::traits::{
 /// ```
 #[derive(Debug)]
 pub struct RenderPadding {
-    /// Container holding the child, geometry, offset, and lifecycle state.
-    shifted: ShiftedBox,
+    /// The child render box (from RenderObjectWithChildMixin).
+    child: BoxChild,
+
+    /// The cached size from last layout.
+    size: Size,
 
     /// The amount to pad the child in each dimension.
     padding: EdgeInsets,
@@ -68,7 +91,8 @@ impl RenderPadding {
             "Padding must have non-negative insets"
         );
         Self {
-            shifted: ShiftedBox::new(),
+            child: BoxChild::new(),
+            size: Size::ZERO,
             padding,
         }
     }
@@ -79,8 +103,14 @@ impl RenderPadding {
             padding.is_non_negative(),
             "Padding must have non-negative insets"
         );
+
+        // Setup BoxParentData on the child
+        let mut child = child;
+        Self::setup_child_parent_data(&mut *child);
+
         Self {
-            shifted: ShiftedBox::with_child(child),
+            child: BoxChild::with(child),
+            size: Size::ZERO,
             padding,
         }
     }
@@ -100,17 +130,36 @@ impl RenderPadding {
         );
         if self.padding != padding {
             self.padding = padding;
-            self.shifted
-                .inner_mut()
-                .base_mut()
-                .state_mut()
-                .mark_needs_layout();
+            self.mark_needs_layout();
         }
     }
 
     /// Returns constraints for the child.
     pub fn constraints_for_child(&self, constraints: BoxConstraints) -> BoxConstraints {
         constraints.deflate(self.padding)
+    }
+
+    /// Sets up BoxParentData on a child.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// This corresponds to Flutter's `setupParentData`:
+    /// ```dart
+    /// void setupParentData(RenderObject child) {
+    ///   if (child.parentData is! BoxParentData)
+    ///     child.parentData = BoxParentData();
+    /// }
+    /// ```
+    fn setup_child_parent_data(child: &mut dyn RenderBox) {
+        // Only set if not already BoxParentData
+        let needs_setup = child
+            .parent_data()
+            .map(|pd| pd.as_any().downcast_ref::<BoxParentData>().is_none())
+            .unwrap_or(true);
+
+        if needs_setup {
+            child.set_parent_data(Box::new(BoxParentData::default()));
+        }
     }
 }
 
@@ -120,26 +169,31 @@ impl RenderPadding {
 
 impl RenderObject for RenderPadding {
     fn base(&self) -> &BaseRenderObject {
-        // Note: We don't have BaseRenderObject in Shifted, we have RenderObjectState
-        // This is a design mismatch - for now return a stub
-        // TODO: Refactor to store BaseRenderObject or adapt the trait
-        unimplemented!("RenderPadding::base() - need to adapt architecture")
+        // Note: This is a simplified implementation
+        // In a full implementation, RenderPadding would store BaseRenderObject
+        unimplemented!("RenderPadding::base() - need BaseRenderObject storage")
     }
 
     fn base_mut(&mut self) -> &mut BaseRenderObject {
-        unimplemented!("RenderPadding::base_mut() - need to adapt architecture")
+        unimplemented!("RenderPadding::base_mut() - need BaseRenderObject storage")
     }
 
     fn owner(&self) -> Option<&PipelineOwner> {
         None // TODO: implement when pipeline is connected
     }
 
-    fn attach(&mut self, _owner: &PipelineOwner) {
-        // TODO: implement proper attach
+    fn attach(&mut self, owner: &PipelineOwner) {
+        // Attach children
+        if let Some(child) = self.child.get_mut() {
+            child.attach(owner);
+        }
     }
 
     fn detach(&mut self) {
-        // TODO: implement proper detach
+        // Detach children
+        if let Some(child) = self.child.get_mut() {
+            child.detach();
+        }
     }
 
     fn adopt_child(&mut self, _child: &mut dyn RenderObject) {
@@ -167,22 +221,18 @@ impl RenderObject for RenderPadding {
     }
 
     fn paint_bounds(&self) -> flui_types::Rect {
-        flui_types::Rect::from_ltwh(0.0, 0.0, self.size().width, self.size().height)
+        flui_types::Rect::from_ltwh(0.0, 0.0, self.size.width, self.size.height)
     }
 
     fn visit_children(&self, visitor: &mut dyn FnMut(&dyn RenderObject)) {
-        if let Some(child) = SingleChildContainer::child(&self.shifted) {
-            // child is &Box<dyn RenderBox>, need &dyn RenderObject
-            // RenderBox: RenderObject, so we can upcast
-            let child_ref: &dyn RenderBox = child.as_ref();
-            visitor(child_ref);
+        if let Some(child) = self.child.get() {
+            visitor(child);
         }
     }
 
     fn visit_children_mut(&mut self, visitor: &mut dyn FnMut(&mut dyn RenderObject)) {
-        if let Some(child) = SingleChildContainer::child_mut(&mut self.shifted) {
-            let child_ref: &mut dyn RenderBox = child.as_mut();
-            visitor(child_ref);
+        if let Some(child) = self.child.get_mut() {
+            visitor(child);
         }
     }
 
@@ -204,43 +254,73 @@ impl RenderObject for RenderPadding {
 // ============================================================================
 
 impl RenderBox for RenderPadding {
+    /// Performs layout following Flutter's RenderPadding.performLayout exactly.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// void performLayout() {
+    ///   final BoxConstraints constraints = this.constraints;
+    ///   final EdgeInsets padding = _resolvedPadding;
+    ///   if (child == null) {
+    ///     size = constraints.constrain(Size(padding.horizontal, padding.vertical));
+    ///     return;
+    ///   }
+    ///   final BoxConstraints innerConstraints = constraints.deflate(padding);
+    ///   child!.layout(innerConstraints, parentUsesSize: true);
+    ///   final BoxParentData childParentData = child!.parentData! as BoxParentData;
+    ///   childParentData.offset = Offset(padding.left, padding.top);
+    ///   size = constraints.constrain(Size(
+    ///     padding.horizontal + child!.size.width,
+    ///     padding.vertical + child!.size.height,
+    ///   ));
+    /// }
+    /// ```
     fn perform_layout(&mut self, constraints: BoxConstraints) -> Size {
         let padding = self.padding;
 
-        // Layout child if present
-        let child_size = if let Some(child) = self.shifted.child_mut() {
-            let child_constraints = constraints.deflate(padding);
-            child.perform_layout(child_constraints)
-        } else {
-            Size::ZERO
-        };
+        if !self.child.has_child() {
+            let size = constraints.constrain(Size::new(
+                padding.horizontal_total(),
+                padding.vertical_total(),
+            ));
+            self.size = size;
+            return size;
+        }
 
-        // Position child at padding offset
-        self.shifted
-            .set_offset(Offset::new(padding.left, padding.top));
+        // Layout child with deflated constraints
+        let inner_constraints = constraints.deflate(padding);
+        let child = self.child.get_mut().unwrap();
+        let child_size = child.perform_layout(inner_constraints);
 
-        // Size is child size plus padding
-        let size = Size::new(
-            child_size.width + padding.horizontal_total(),
-            child_size.height + padding.vertical_total(),
-        );
-        let size = constraints.constrain(size);
-        self.shifted.set_geometry(size);
+        // Set child offset in child's parentData (Flutter style!)
+        set_child_offset(child, Offset::new(padding.left, padding.top));
+
+        // Size is child size + padding
+        let size = constraints.constrain(Size::new(
+            padding.horizontal_total() + child_size.width,
+            padding.vertical_total() + child_size.height,
+        ));
+        self.size = size;
         size
     }
 
     fn size(&self) -> Size {
-        self.shifted.size()
+        self.size
     }
 
     fn set_size(&mut self, size: Size) {
-        self.shifted.set_size(size);
+        self.size = size;
     }
 
+    /// Paints the child at the offset from child.parentData.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// Uses inherited `RenderShiftedBox.paint` which reads from child.parentData.offset.
     fn paint(&self, context: &mut PaintingContext, offset: Offset) {
-        self.shifted.paint_child(offset, |child, child_offset| {
-            child.paint(context, child_offset);
-        });
+        // Use RenderShiftedBox default implementation
+        self.shifted_paint(context, offset);
     }
 
     fn hit_test(&self, result: &mut BoxHitTestResult, position: Offset) -> bool {
@@ -256,16 +336,21 @@ impl RenderBox for RenderPadding {
         }
     }
 
+    /// Hit tests children using offset from child.parentData.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// Uses inherited `RenderShiftedBox.hitTestChildren`.
     fn hit_test_children(&self, result: &mut BoxHitTestResult, position: Offset) -> bool {
-        self.shifted.hit_test_child(result, position)
+        self.shifted_hit_test_children(result, position)
     }
 
     fn compute_min_intrinsic_width(&self, height: f32) -> f32 {
         let padding = self.padding;
         let inner_height = (height - padding.vertical_total()).max(0.0);
         let child_width = self
-            .shifted
-            .child()
+            .child
+            .get()
             .map(|c| c.get_min_intrinsic_width(inner_height))
             .unwrap_or(0.0);
         child_width + padding.horizontal_total()
@@ -275,8 +360,8 @@ impl RenderBox for RenderPadding {
         let padding = self.padding;
         let inner_height = (height - padding.vertical_total()).max(0.0);
         let child_width = self
-            .shifted
-            .child()
+            .child
+            .get()
             .map(|c| c.get_max_intrinsic_width(inner_height))
             .unwrap_or(0.0);
         child_width + padding.horizontal_total()
@@ -286,8 +371,8 @@ impl RenderBox for RenderPadding {
         let padding = self.padding;
         let inner_width = (width - padding.horizontal_total()).max(0.0);
         let child_height = self
-            .shifted
-            .child()
+            .child
+            .get()
             .map(|c| c.get_min_intrinsic_height(inner_width))
             .unwrap_or(0.0);
         child_height + padding.vertical_total()
@@ -297,18 +382,30 @@ impl RenderBox for RenderPadding {
         let padding = self.padding;
         let inner_width = (width - padding.horizontal_total()).max(0.0);
         let child_height = self
-            .shifted
-            .child()
+            .child
+            .get()
             .map(|c| c.get_max_intrinsic_height(inner_width))
             .unwrap_or(0.0);
         child_height + padding.vertical_total()
     }
 
+    /// Computes baseline distance following Flutter's RenderPadding.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// double? computeDryBaseline(BoxConstraints constraints, TextBaseline baseline) {
+    ///   if (child == null) return null;
+    ///   final EdgeInsets padding = _resolvedPadding;
+    ///   final BoxConstraints innerConstraints = constraints.deflate(padding);
+    ///   final double? childBaseline = child!.getDryBaseline(innerConstraints, baseline);
+    ///   if (childBaseline == null) return null;
+    ///   return childBaseline + padding.top;
+    /// }
+    /// ```
     fn compute_distance_to_actual_baseline(&self, baseline: TextBaseline) -> Option<f32> {
-        self.shifted
-            .child()
-            .and_then(|c| c.get_distance_to_actual_baseline(baseline))
-            .map(|distance| distance + self.padding.top)
+        // Use RenderShiftedBox implementation which reads offset from child.parentData
+        self.shifted_compute_distance_to_actual_baseline(baseline)
     }
 }
 
@@ -318,19 +415,28 @@ impl RenderBox for RenderPadding {
 
 impl SingleChildRenderBox for RenderPadding {
     fn child(&self) -> Option<&dyn RenderBox> {
-        SingleChildContainer::child(&self.shifted).map(|b| b.as_ref())
+        self.child.get()
     }
 
     fn child_mut(&mut self) -> Option<&mut dyn RenderBox> {
-        SingleChildContainer::child_mut(&mut self.shifted).map(|b| b.as_mut())
+        self.child.get_mut()
     }
 
     fn set_child(&mut self, child: Option<Box<dyn RenderBox>>) {
-        if let Some(c) = child {
-            self.shifted.set_child(c);
-        } else {
-            self.shifted.take_child();
+        // Clear old child
+        self.child.clear();
+
+        // Setup new child
+        if let Some(mut new_child) = child {
+            Self::setup_child_parent_data(&mut *new_child);
+            self.child.set(new_child);
         }
+
+        self.mark_needs_layout();
+    }
+
+    fn take_child(&mut self) -> Option<Box<dyn RenderBox>> {
+        self.child.take()
     }
 }
 
@@ -339,9 +445,8 @@ impl SingleChildRenderBox for RenderPadding {
 // ============================================================================
 
 impl RenderShiftedBox for RenderPadding {
-    fn child_offset(&self) -> Offset {
-        self.shifted.offset()
-    }
+    // All methods use default implementations from the trait which read
+    // offset from child.parentData.offset
 }
 
 // ============================================================================
@@ -371,15 +476,16 @@ mod tests {
     }
 
     #[test]
-    fn test_padding_child_offset() {
+    fn test_padding_child_offset_in_parent_data() {
         let mut padding = RenderPadding::new(EdgeInsets::new(10.0, 20.0, 30.0, 40.0));
         let constraints = BoxConstraints::new(0.0, 200.0, 0.0, 200.0);
 
         padding.perform_layout(constraints);
 
-        let offset = padding.child_offset();
-        assert_eq!(offset.dx, 10.0);
-        assert_eq!(offset.dy, 20.0);
+        // Child offset should be read from child.parentData
+        // Since no child, offset is zero
+        let offset = padding.child_parent_data_offset();
+        assert_eq!(offset, Offset::ZERO);
     }
 
     #[test]
@@ -418,8 +524,7 @@ mod tests {
         padding.perform_layout(BoxConstraints::tight(Size::new(100.0, 100.0)));
 
         // Should compile - RenderPadding implements RenderShiftedBox
-        let shifted: &dyn RenderShiftedBox = &padding;
-        assert_eq!(shifted.child_offset(), Offset::new(10.0, 10.0));
+        let _: &dyn RenderShiftedBox = &padding;
     }
 
     #[test]

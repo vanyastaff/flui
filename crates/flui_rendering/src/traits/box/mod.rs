@@ -40,5 +40,7 @@ pub use single_child::*;
 // Re-export Ambassador delegation macros for these traits
 pub use aligning_shifted_box::ambassador_impl_RenderAligningShiftedBox;
 pub use proxy_box::ambassador_impl_RenderProxyBox;
-pub use shifted_box::ambassador_impl_RenderShiftedBox;
 pub use single_child::ambassador_impl_SingleChildRenderBox;
+
+// Re-export helper functions
+pub use shifted_box::{get_child_offset, set_child_offset};

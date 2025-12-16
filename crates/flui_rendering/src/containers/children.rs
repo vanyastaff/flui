@@ -1,67 +1,39 @@
-//! Protocol-aware children storage for render objects.
+//! Type-safe children storage for render objects.
 //!
-//! This module provides two container types for managing child render objects:
+//! This module provides Arity-based containers for managing child render objects
+//! with compile-time guarantees about child count.
 //!
-//! 1. **[`Children`]** - Simple children without parent data
-//! 2. **[`ChildList`]** - Children with per-child parent data
+//! # Architecture
 //!
-//! # Choosing the Right Container
+//! ```text
+//! Arity System (compile-time guarantees)
+//! ├── Leaf        → 0 children      (RenderColoredBox, RenderImage)
+//! ├── Optional    → 0 or 1 child    (RenderPadding, RenderOpacity)
+//! ├── Exact<1>    → exactly 1       (RenderConstrainedBox)
+//! ├── Exact<N>    → exactly N       (RenderSplitView)
+//! └── Variable    → 0..N children   (RenderFlex, RenderStack)
+//! ```
 //!
-//! Use **`Children`** for render objects that don't need layout info per child:
-//! - `RenderOpacity` - just needs opacity value
-//! - `RenderClipRect` - just needs clip shape
-//! - `RenderTransform` - just needs transform matrix
+//! # Container Types
 //!
-//! Use **`ChildList`** for render objects that store layout info per child:
-//! - `RenderFlex` - needs flex factor, fit, offset per child
-//! - `RenderStack` - needs alignment, offset per child
-//! - `RenderWrap` - needs line break info per child
+//! | Container | Use Case | Example |
+//! |-----------|----------|---------|
+//! | [`Child`] | Single child without parentData | `RenderOpacity`, `RenderClipRect` |
+//! | [`ChildList`] | Multiple children with parentData | `RenderFlex`, `RenderStack` |
 //!
-//! # Examples
-//!
-//! ## Simple single child
+//! # Quick Reference
 //!
 //! ```rust,ignore
-//! use flui_rendering::containers::BoxChild;
-//!
-//! pub struct RenderOpacity {
-//!     child: BoxChild,  // Children<BoxProtocol, Optional>
+//! // Single optional child (most common for proxy-like objects)
+//! struct RenderOpacity {
+//!     child: BoxChild,  // = Child<BoxProtocol, Optional>
 //!     opacity: f32,
 //! }
 //!
-//! impl RenderOpacity {
-//!     fn paint(&self, ctx: &mut PaintingContext, offset: Offset) {
-//!         if let Some(child) = self.child.get() {
-//!             ctx.push_opacity(self.opacity);
-//!             child.paint(ctx, offset);
-//!         }
-//!     }
-//! }
-//! ```
-//!
-//! ## Multiple children with parent data
-//!
-//! ```rust,ignore
-//! use flui_rendering::containers::FlexChildren;
-//!
-//! pub struct RenderFlex {
-//!     children: FlexChildren,  // ChildList<BoxProtocol, Variable, FlexParentData>
-//! }
-//!
-//! impl RenderFlex {
-//!     fn layout(&mut self, constraints: BoxConstraints) -> Size {
-//!         for (child, data) in self.children.iter_mut() {
-//!             // Access flex factor, compute size, store offset
-//!             data.offset = computed_offset;
-//!         }
-//!         total_size
-//!     }
-//!
-//!     fn paint(&self, ctx: &mut PaintingContext, offset: Offset) {
-//!         self.children.paint_all(offset, |child, child_offset| {
-//!             child.paint(ctx, child_offset);
-//!         });
-//!     }
+//! // Multiple children with layout data
+//! struct RenderFlex {
+//!     children: FlexChildren,  // = ChildList<BoxProtocol, Variable, FlexParentData>
+//!     direction: Axis,
 //! }
 //! ```
 
@@ -73,297 +45,65 @@ use flui_tree::arity::{
 use std::fmt::Debug;
 use std::marker::PhantomData;
 
-use super::SingleChildContainer;
 use crate::parent_data::BoxParentData;
 use crate::protocol::{BoxProtocol, Protocol, SliverProtocol};
 use crate::traits::{BoxHitTestResult, RenderBox};
 use flui_types::Offset;
 
 // ============================================================================
-// MultiChildContainer trait - Generic multi-child container
+// Child - Type-safe single/optional child container
 // ============================================================================
 
-/// Generic trait for containers that hold multiple children.
+/// Type-safe child container with Arity-based compile-time guarantees.
 ///
-/// This trait is parameterized by the boxed child type `T`, enabling a single
-/// implementation to work with any protocol (Box, Sliver, etc.).
-///
-/// # Type Parameter
-///
-/// - `T` - The boxed child type (e.g., `Box<dyn RenderBox>`, `Box<dyn RenderSliver>`)
-///
-/// # Example
-///
-/// ```rust,ignore
-/// // Works for Box protocol
-/// impl MultiChildContainer<Box<dyn RenderBox>> for BoxChildren { ... }
-///
-/// // Works for Sliver protocol
-/// impl MultiChildContainer<Box<dyn RenderSliver>> for SliverChildren { ... }
-/// ```
-#[delegatable_trait]
-pub trait MultiChildContainer<T> {
-    /// Returns the number of children.
-    fn len(&self) -> usize;
-
-    /// Returns `true` if the container is empty.
-    fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    /// Returns a reference to the child at the given index.
-    fn get(&self, index: usize) -> Option<&T>;
-
-    /// Returns a mutable reference to the child at the given index.
-    fn get_mut(&mut self, index: usize) -> Option<&mut T>;
-
-    /// Returns a reference to the first child.
-    fn first(&self) -> Option<&T> {
-        self.get(0)
-    }
-
-    /// Returns a reference to the last child.
-    fn last(&self) -> Option<&T> {
-        if self.is_empty() {
-            None
-        } else {
-            self.get(self.len() - 1)
-        }
-    }
-
-    /// Adds a child to the end.
-    fn push(&mut self, child: T);
-
-    /// Removes and returns the child at the given index.
-    fn remove(&mut self, index: usize) -> Option<T>;
-
-    /// Removes all children.
-    fn clear(&mut self);
-}
-
-// ============================================================================
-// MultiChildContainerWithData trait - Multi-child with parent data
-// ============================================================================
-
-/// Generic trait for containers that hold multiple children with parent data.
-///
-/// This extends [`MultiChildContainer`] with per-child data storage,
-/// used for layout information like offset, flex factor, alignment, etc.
+/// This is the primary container for render objects that have a single child
+/// (or optionally no child). The Arity parameter enforces child count at compile time.
 ///
 /// # Type Parameters
 ///
-/// - `T` - The boxed child type (e.g., `Box<dyn RenderBox>`)
-/// - `D` - The parent data type (e.g., `FlexParentData`, `StackParentData`)
+/// - `P` - Protocol ([`BoxProtocol`] or [`SliverProtocol`])
+/// - `A` - Arity constraint ([`Optional`], [`Exact<1>`], [`Leaf`])
 ///
-/// # Example
+/// # Examples
 ///
 /// ```rust,ignore
-/// // Flex children with FlexParentData
-/// impl MultiChildContainerWithData<Box<dyn RenderBox>, FlexParentData> for FlexChildren { ... }
+/// use flui_rendering::containers::{BoxChild, BoxChildRequired};
 ///
-/// // Stack children with StackParentData
-/// impl MultiChildContainerWithData<Box<dyn RenderBox>, StackParentData> for StackChildren { ... }
+/// // Optional child (0 or 1)
+/// struct RenderOpacity {
+///     child: BoxChild,  // Child<BoxProtocol, Optional>
+/// }
+///
+/// // Required child (exactly 1)
+/// struct RenderConstrainedBox {
+///     child: BoxChildRequired,  // Child<BoxProtocol, Exact<1>>
+/// }
 /// ```
-#[delegatable_trait]
-pub trait MultiChildContainerWithData<T, D>: MultiChildContainer<T> {
-    /// Returns a reference to the parent data at the given index.
-    fn data(&self, index: usize) -> Option<&D>;
-
-    /// Returns a mutable reference to the parent data at the given index.
-    fn data_mut(&mut self, index: usize) -> Option<&mut D>;
-
-    /// Returns references to both child and parent data at the given index.
-    fn get_with_data(&self, index: usize) -> Option<(&T, &D)>;
-
-    /// Returns mutable references to both child and parent data.
-    fn get_with_data_mut(&mut self, index: usize) -> Option<(&mut T, &mut D)>;
-
-    /// Adds a child with the given parent data.
-    fn push_with_data(&mut self, child: T, data: D);
-}
-
-// ============================================================================
-// Implementation for Children<P, Optional> - SingleChildContainer
-// ============================================================================
-
-impl<P: Protocol> SingleChildContainer<Box<P::Object>> for Children<P, Optional> {
-    #[inline]
-    fn child(&self) -> Option<&Box<P::Object>> {
-        self.single_child()
-    }
-
-    #[inline]
-    fn child_mut(&mut self) -> Option<&mut Box<P::Object>> {
-        self.single_child_mut()
-    }
-
-    #[inline]
-    fn set_child(&mut self, child: Box<P::Object>) -> Option<Box<P::Object>> {
-        self.set(child)
-    }
-
-    #[inline]
-    fn take_child(&mut self) -> Option<Box<P::Object>> {
-        self.take()
-    }
-}
-
-// ============================================================================
-// Implementation for Children<P, Variable> - MultiChildContainer
-// ============================================================================
-
-impl<P: Protocol> MultiChildContainer<Box<P::Object>> for Children<P, Variable> {
-    #[inline]
-    fn len(&self) -> usize {
-        self.child_count()
-    }
-
-    #[inline]
-    fn get(&self, index: usize) -> Option<&Box<P::Object>> {
-        self.get_child(index)
-    }
-
-    #[inline]
-    fn get_mut(&mut self, index: usize) -> Option<&mut Box<P::Object>> {
-        self.get_child_mut(index)
-    }
-
-    #[inline]
-    fn push(&mut self, child: Box<P::Object>) {
-        let _ = self.add_child(child);
-    }
-
-    #[inline]
-    fn remove(&mut self, index: usize) -> Option<Box<P::Object>> {
-        self.remove_child(index)
-    }
-
-    #[inline]
-    fn clear(&mut self) {
-        Children::clear(self);
-    }
-}
-
-// ============================================================================
-// Implementation for ChildList - MultiChildContainer
-// ============================================================================
-
-impl<P: Protocol, A: Arity, D: Default + Send + Sync> MultiChildContainer<Box<P::Object>>
-    for ChildList<P, A, D>
-{
-    #[inline]
-    fn len(&self) -> usize {
-        ChildList::len(self)
-    }
-
-    #[inline]
-    fn get(&self, index: usize) -> Option<&Box<P::Object>> {
-        self.storage.get_child(index).map(|n| &n.child)
-    }
-
-    #[inline]
-    fn get_mut(&mut self, index: usize) -> Option<&mut Box<P::Object>> {
-        self.storage.get_child_mut(index).map(|n| &mut n.child)
-    }
-
-    #[inline]
-    fn push(&mut self, child: Box<P::Object>) {
-        ChildList::push(self, child);
-    }
-
-    #[inline]
-    fn remove(&mut self, index: usize) -> Option<Box<P::Object>> {
-        ChildList::remove_child(self, index)
-    }
-
-    #[inline]
-    fn clear(&mut self) {
-        ChildList::clear(self);
-    }
-}
-
-// ============================================================================
-// Implementation for ChildList - MultiChildContainerWithData
-// ============================================================================
-
-impl<P: Protocol, A: Arity, D: Default + Send + Sync> MultiChildContainerWithData<Box<P::Object>, D>
-    for ChildList<P, A, D>
-{
-    #[inline]
-    fn data(&self, index: usize) -> Option<&D> {
-        ChildList::data(self, index)
-    }
-
-    #[inline]
-    fn data_mut(&mut self, index: usize) -> Option<&mut D> {
-        ChildList::data_mut(self, index)
-    }
-
-    #[inline]
-    fn get_with_data(&self, index: usize) -> Option<(&Box<P::Object>, &D)> {
-        self.storage.get_child(index).map(|n| (&n.child, &n.data))
-    }
-
-    #[inline]
-    fn get_with_data_mut(&mut self, index: usize) -> Option<(&mut Box<P::Object>, &mut D)> {
-        self.storage
-            .get_child_mut(index)
-            .map(|n| (&mut n.child, &mut n.data))
-    }
-
-    #[inline]
-    fn push_with_data(&mut self, child: Box<P::Object>, data: D) {
-        self.push_with(child, data);
-    }
-}
-
-// ============================================================================
-// Children - Simple container without parent data
-// ============================================================================
-
-/// Protocol-aware children container without parent data.
-///
-/// Delegates storage to [`ArityStorage`] via Ambassador pattern.
-/// Use this when you don't need per-child layout information.
-///
-/// # Type Parameters
-///
-/// - `P` - Protocol marker ([`BoxProtocol`], [`SliverProtocol`])
-/// - `A` - Arity constraint ([`Optional`], [`Variable`], [`Exact<N>`])
-///
-/// # Type Aliases
-///
-/// For convenience, use the pre-defined type aliases:
-/// - [`BoxChild`] - Single optional box child
-/// - [`BoxChildren`] - Variable number of box children
-/// - [`SliverChild`] - Single optional sliver child
-/// - [`SliverChildren`] - Variable number of sliver children
 #[derive(Delegate)]
 #[delegate(ChildrenStorage<Box<P::Object>>, target = "storage")]
-pub struct Children<P: Protocol, A: Arity> {
+pub struct Child<P: Protocol, A: Arity = Optional> {
     storage: ArityStorage<Box<P::Object>, A>,
     _protocol: PhantomData<P>,
 }
 
-impl<P: Protocol, A: Arity> Debug for Children<P, A>
+impl<P: Protocol, A: Arity> Debug for Child<P, A>
 where
     P::Object: Debug,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Children")
-            .field("count", &self.child_count())
+        f.debug_struct("Child")
+            .field("has_child", &self.has_child())
             .finish()
     }
 }
 
-impl<P: Protocol, A: Arity> Default for Children<P, A> {
-    #[inline]
+impl<P: Protocol, A: Arity> Default for Child<P, A> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<P: Protocol, A: Arity> Children<P, A> {
+impl<P: Protocol, A: Arity> Child<P, A> {
     /// Creates an empty container.
     #[inline]
     #[must_use]
@@ -374,155 +114,127 @@ impl<P: Protocol, A: Arity> Children<P, A> {
         }
     }
 
-    /// Creates a container with pre-allocated capacity.
+    /// Creates a container with the given child.
     #[inline]
     #[must_use]
-    pub fn with_capacity(capacity: usize) -> Self {
-        Self {
-            storage: ArityStorage::with_capacity(capacity),
-            _protocol: PhantomData,
-        }
-    }
-
-    /// Creates a container with a single child.
-    #[inline]
-    #[must_use]
-    pub fn with_child(child: Box<P::Object>) -> Self {
+    pub fn with(child: Box<P::Object>) -> Self {
         let mut container = Self::new();
-        container.set(child);
+        let _ = container.storage.set_single_child(child);
         container
     }
 
-    // ========================================================================
-    // Single child API (for Optional/Exact<1> arities)
-    // ========================================================================
-
-    /// Returns a reference to the child.
+    /// Returns the child as a trait object reference.
     #[inline]
     pub fn get(&self) -> Option<&P::Object> {
-        self.single_child().map(|b| b.as_ref())
+        self.storage.single_child().map(|b| b.as_ref())
     }
 
-    /// Returns a mutable reference to the child.
+    /// Returns the child as a mutable trait object reference.
     #[inline]
     pub fn get_mut(&mut self) -> Option<&mut P::Object> {
-        self.single_child_mut().map(|b| b.as_mut())
+        self.storage.single_child_mut().map(|b| b.as_mut())
+    }
+
+    /// Returns the child as a boxed reference.
+    #[inline]
+    pub fn get_boxed(&self) -> Option<&Box<P::Object>> {
+        self.storage.single_child()
+    }
+
+    /// Returns the child as a mutable boxed reference.
+    #[inline]
+    pub fn get_boxed_mut(&mut self) -> Option<&mut Box<P::Object>> {
+        self.storage.single_child_mut()
     }
 
     /// Sets the child, returning the previous child if any.
     #[inline]
     pub fn set(&mut self, child: Box<P::Object>) -> Option<Box<P::Object>> {
-        self.set_single_child(child).ok().flatten()
+        self.storage.set_single_child(child).ok().flatten()
     }
 
     /// Takes the child out of the container.
     #[inline]
     pub fn take(&mut self) -> Option<Box<P::Object>> {
-        self.take_single_child()
+        self.storage.take_single_child()
     }
 
-    /// Returns `true` if the container has at least one child.
+    /// Returns `true` if the container has a child.
     #[inline]
     #[must_use]
     pub fn has_child(&self) -> bool {
-        !self.is_empty()
+        !self.storage.is_empty()
     }
 
-    /// Removes all children.
+    /// Clears the child.
     #[inline]
     pub fn clear(&mut self) {
-        let _ = self.clear_children();
-    }
-
-    // ========================================================================
-    // Multi-child API (for Variable arity)
-    // ========================================================================
-
-    /// Returns the number of children.
-    #[inline]
-    #[must_use]
-    pub fn len(&self) -> usize {
-        self.child_count()
-    }
-
-    /// Returns a reference to the child at the given index.
-    #[inline]
-    pub fn get_at(&self, index: usize) -> Option<&P::Object> {
-        self.get_child(index).map(|b| b.as_ref())
-    }
-
-    /// Returns a mutable reference to the child at the given index.
-    #[inline]
-    pub fn get_at_mut(&mut self, index: usize) -> Option<&mut P::Object> {
-        self.get_child_mut(index).map(|b| b.as_mut())
-    }
-
-    /// Returns an iterator over the children.
-    #[inline]
-    pub fn iter(&self) -> impl Iterator<Item = &P::Object> {
-        self.children_slice().iter().map(|b| b.as_ref())
-    }
-
-    /// Returns a mutable iterator over the children.
-    #[inline]
-    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut P::Object> {
-        self.children_slice_mut().iter_mut().map(|b| b.as_mut())
+        let _ = self.storage.clear_children();
     }
 }
 
 // ============================================================================
-// Type aliases for Children
+// Type Aliases - Single Child
 // ============================================================================
 
-/// Single optional child (generic over protocol).
-pub type Single<P> = Children<P, Optional>;
-
-/// Single optional box child.
-pub type BoxChild = Children<BoxProtocol, Optional>;
-
-/// Single required box child.
-pub type BoxChildRequired = Children<BoxProtocol, Exact<1>>;
-
-/// Variable number of box children.
-pub type BoxChildren = Children<BoxProtocol, Variable>;
-
-/// Single optional sliver child.
-pub type SliverChild = Children<SliverProtocol, Optional>;
-
-/// Single required sliver child.
-pub type SliverChildRequired = Children<SliverProtocol, Exact<1>>;
-
-/// Variable number of sliver children.
-pub type SliverChildren = Children<SliverProtocol, Variable>;
-
-// ============================================================================
-// ChildNode - Entry storing child + parent data
-// ============================================================================
-
-/// A child paired with its parent data.
+/// Single optional Box child (0 or 1).
 ///
-/// Used internally by [`ChildList`] to store children alongside
-/// their layout metadata.
+/// Use for render objects that may or may not have a child.
+///
+/// ```rust,ignore
+/// struct RenderOpacity {
+///     child: BoxChild,
+///     opacity: f32,
+/// }
+/// ```
+pub type BoxChild = Child<BoxProtocol, Optional>;
+
+/// Single required Box child (exactly 1).
+///
+/// Use for render objects that must have exactly one child.
+///
+/// ```rust,ignore
+/// struct RenderConstrainedBox {
+///     child: BoxChildRequired,
+///     constraints: BoxConstraints,
+/// }
+/// ```
+pub type BoxChildRequired = Child<BoxProtocol, Exact<1>>;
+
+/// Single optional Sliver child (0 or 1).
+pub type SliverChild = Child<SliverProtocol, Optional>;
+
+/// Single required Sliver child (exactly 1).
+pub type SliverChildRequired = Child<SliverProtocol, Exact<1>>;
+
+// ============================================================================
+// ChildList - Multiple children with parent data
+// ============================================================================
+
+/// A child entry with associated parent data.
+///
+/// Parent data stores layout information like offset, flex factor, etc.
+/// This is set by the parent during layout and read during paint/hit-test.
 #[derive(Debug)]
-pub struct ChildNode<P: Protocol, D: Send + Sync> {
+pub struct ChildEntry<P: Protocol, D: Send + Sync> {
     /// The child render object.
     pub child: Box<P::Object>,
-    /// Parent data for this child (offset, flex, alignment, etc.).
+    /// Parent data for this child.
     pub data: D,
 }
 
-impl<P: Protocol, D: Send + Sync> ChildNode<P, D> {
-    /// Creates a new child node.
+impl<P: Protocol, D: Send + Sync> ChildEntry<P, D> {
+    /// Creates a new entry with the given child and data.
     #[inline]
     pub fn new(child: Box<P::Object>, data: D) -> Self {
         Self { child, data }
     }
 }
 
-impl<P: Protocol, D: Default + Send + Sync> ChildNode<P, D> {
-    /// Creates a new child node with default parent data.
+impl<P: Protocol, D: Default + Send + Sync> ChildEntry<P, D> {
+    /// Creates a new entry with default parent data.
     #[inline]
-    pub fn with_default(child: Box<P::Object>) -> Self {
+    pub fn with_default_data(child: Box<P::Object>) -> Self {
         Self {
             child,
             data: D::default(),
@@ -530,29 +242,38 @@ impl<P: Protocol, D: Default + Send + Sync> ChildNode<P, D> {
     }
 }
 
-// ============================================================================
-// ChildList - Container with parent data per child
-// ============================================================================
-
-/// Children container with per-child parent data.
+/// Multiple children container with per-child parent data.
 ///
-/// Stores children alongside their layout metadata (parent data).
-/// Provides methods for iteration, painting, and hit testing.
+/// This is the container for render objects with variable children count,
+/// where each child has associated layout data (offset, flex factor, etc.).
 ///
 /// # Type Parameters
 ///
-/// - `P` - Protocol marker ([`BoxProtocol`], [`SliverProtocol`])
+/// - `P` - Protocol ([`BoxProtocol`] or [`SliverProtocol`])
 /// - `A` - Arity constraint (typically [`Variable`])
 /// - `D` - Parent data type (`FlexParentData`, `StackParentData`, etc.)
 ///
-/// # Type Aliases
+/// # Examples
 ///
-/// For convenience, use the pre-defined type aliases:
-/// - [`FlexChildren`] - For flex layouts
-/// - [`StackChildren`] - For stack layouts
-/// - [`WrapChildren`] - For wrap layouts
+/// ```rust,ignore
+/// use flui_rendering::containers::FlexChildren;
+///
+/// struct RenderFlex {
+///     children: FlexChildren,
+///     direction: Axis,
+/// }
+///
+/// impl RenderFlex {
+///     fn layout(&mut self) {
+///         for (child, data) in self.children.iter_mut() {
+///             // Layout child, then set offset in data
+///             data.offset = computed_offset;
+///         }
+///     }
+/// }
+/// ```
 pub struct ChildList<P: Protocol, A: Arity = Variable, D: Send + Sync = BoxParentData> {
-    storage: ArityStorage<ChildNode<P, D>, A>,
+    storage: ArityStorage<ChildEntry<P, D>, A>,
     _protocol: PhantomData<P>,
 }
 
@@ -562,7 +283,7 @@ where
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ChildList")
-            .field("count", &self.storage.child_count())
+            .field("len", &self.len())
             .finish()
     }
 }
@@ -573,7 +294,6 @@ impl<P: Protocol, A: Arity, D: Default + Send + Sync> Default for ChildList<P, A
     }
 }
 
-// Methods requiring D: Default
 impl<P: Protocol, A: Arity, D: Default + Send + Sync> ChildList<P, A, D> {
     /// Creates an empty container.
     #[must_use]
@@ -595,17 +315,16 @@ impl<P: Protocol, A: Arity, D: Default + Send + Sync> ChildList<P, A, D> {
 
     /// Adds a child with default parent data.
     pub fn push(&mut self, child: Box<P::Object>) {
-        let _ = self.storage.add_child(ChildNode::with_default(child));
+        let _ = self.storage.add_child(ChildEntry::with_default_data(child));
     }
 
     /// Inserts a child with default parent data at the given index.
     pub fn insert(&mut self, index: usize, child: Box<P::Object>) -> Result<(), ArityError> {
         self.storage
-            .insert_child(index, ChildNode::with_default(child))
+            .insert_child(index, ChildEntry::with_default_data(child))
     }
 }
 
-// Methods not requiring D: Default
 impl<P: Protocol, A: Arity, D: Send + Sync> ChildList<P, A, D> {
     /// Creates an empty container (does not require `D: Default`).
     #[must_use]
@@ -631,17 +350,17 @@ impl<P: Protocol, A: Arity, D: Send + Sync> ChildList<P, A, D> {
     }
 
     // ========================================================================
-    // Child access (without parent data)
+    // Child Access
     // ========================================================================
 
-    /// Returns a reference to the child at the given index.
-    pub fn get(&self, index: usize) -> Option<&P::Object> {
-        self.storage.get_child(index).map(|n| n.child.as_ref())
+    /// Returns the child at the given index.
+    pub fn child(&self, index: usize) -> Option<&P::Object> {
+        self.storage.get_child(index).map(|e| e.child.as_ref())
     }
 
     /// Returns a mutable reference to the child at the given index.
-    pub fn get_mut(&mut self, index: usize) -> Option<&mut P::Object> {
-        self.storage.get_child_mut(index).map(|n| n.child.as_mut())
+    pub fn child_mut(&mut self, index: usize) -> Option<&mut P::Object> {
+        self.storage.get_child_mut(index).map(|e| e.child.as_mut())
     }
 
     /// Returns the first child.
@@ -649,7 +368,7 @@ impl<P: Protocol, A: Arity, D: Send + Sync> ChildList<P, A, D> {
         self.storage
             .children_slice()
             .first()
-            .map(|n| n.child.as_ref())
+            .map(|e| e.child.as_ref())
     }
 
     /// Returns the last child.
@@ -657,94 +376,108 @@ impl<P: Protocol, A: Arity, D: Send + Sync> ChildList<P, A, D> {
         self.storage
             .children_slice()
             .last()
-            .map(|n| n.child.as_ref())
-    }
-
-    /// Returns an iterator over the children (without parent data).
-    pub fn children(&self) -> impl Iterator<Item = &P::Object> {
-        self.storage
-            .children_slice()
-            .iter()
-            .map(|n| n.child.as_ref())
-    }
-
-    /// Returns a mutable iterator over the children (without parent data).
-    pub fn children_mut(&mut self) -> impl Iterator<Item = &mut P::Object> {
-        self.storage
-            .children_slice_mut()
-            .iter_mut()
-            .map(|n| n.child.as_mut())
+            .map(|e| e.child.as_ref())
     }
 
     // ========================================================================
-    // Parent data access
+    // Parent Data Access
     // ========================================================================
 
-    /// Returns a reference to the parent data at the given index.
+    /// Returns the parent data at the given index.
     pub fn data(&self, index: usize) -> Option<&D> {
-        self.storage.get_child(index).map(|n| &n.data)
+        self.storage.get_child(index).map(|e| &e.data)
     }
 
     /// Returns a mutable reference to the parent data at the given index.
     pub fn data_mut(&mut self, index: usize) -> Option<&mut D> {
-        self.storage.get_child_mut(index).map(|n| &mut n.data)
+        self.storage.get_child_mut(index).map(|e| &mut e.data)
     }
 
     // ========================================================================
-    // Combined access (child + parent data)
+    // Combined Access
     // ========================================================================
 
-    /// Returns references to both child and parent data at the given index.
-    pub fn get_with_data(&self, index: usize) -> Option<(&P::Object, &D)> {
+    /// Returns both child and data at the given index.
+    pub fn get(&self, index: usize) -> Option<(&P::Object, &D)> {
         self.storage
             .get_child(index)
-            .map(|n| (n.child.as_ref(), &n.data))
+            .map(|e| (e.child.as_ref(), &e.data))
     }
 
-    /// Returns mutable references to both child and parent data.
-    pub fn get_with_data_mut(&mut self, index: usize) -> Option<(&mut P::Object, &mut D)> {
+    /// Returns mutable references to both child and data at the given index.
+    pub fn get_mut(&mut self, index: usize) -> Option<(&mut P::Object, &mut D)> {
         self.storage
             .get_child_mut(index)
-            .map(|n| (n.child.as_mut(), &mut n.data))
+            .map(|e| (e.child.as_mut(), &mut e.data))
     }
 
-    /// Returns an iterator over (child, data) pairs.
+    /// Alias for [`get`] - returns both child and data.
+    #[inline]
+    pub fn get_with_data(&self, index: usize) -> Option<(&P::Object, &D)> {
+        self.get(index)
+    }
+
+    /// Alias for [`get_mut`] - returns mutable child and data.
+    #[inline]
+    pub fn get_with_data_mut(&mut self, index: usize) -> Option<(&mut P::Object, &mut D)> {
+        self.get_mut(index)
+    }
+
+    // ========================================================================
+    // Iteration
+    // ========================================================================
+
+    /// Iterates over (child, data) pairs.
     pub fn iter(&self) -> impl Iterator<Item = (&P::Object, &D)> {
         self.storage
             .children_slice()
             .iter()
-            .map(|n| (n.child.as_ref(), &n.data))
+            .map(|e| (e.child.as_ref(), &e.data))
     }
 
-    /// Returns a mutable iterator over (child, data) pairs.
+    /// Iterates mutably over (child, data) pairs.
     pub fn iter_mut(&mut self) -> impl Iterator<Item = (&mut P::Object, &mut D)> {
         self.storage
             .children_slice_mut()
             .iter_mut()
-            .map(|n| (n.child.as_mut(), &mut n.data))
+            .map(|e| (e.child.as_mut(), &mut e.data))
     }
 
-    /// Returns a reverse iterator over (child, data) pairs.
-    ///
-    /// Use this for hit testing (test topmost/last-painted child first).
+    /// Iterates over children only.
+    pub fn children(&self) -> impl Iterator<Item = &P::Object> {
+        self.storage
+            .children_slice()
+            .iter()
+            .map(|e| e.child.as_ref())
+    }
+
+    /// Iterates mutably over children only.
+    pub fn children_mut(&mut self) -> impl Iterator<Item = &mut P::Object> {
+        self.storage
+            .children_slice_mut()
+            .iter_mut()
+            .map(|e| e.child.as_mut())
+    }
+
+    /// Iterates in reverse order (for hit testing - front to back).
     pub fn iter_rev(&self) -> impl Iterator<Item = (&P::Object, &D)> {
         self.storage
             .children_slice()
             .iter()
             .rev()
-            .map(|n| (n.child.as_ref(), &n.data))
+            .map(|e| (e.child.as_ref(), &e.data))
     }
 
     // ========================================================================
-    // Modification with explicit parent data
+    // Modification
     // ========================================================================
 
     /// Adds a child with the given parent data.
     pub fn push_with(&mut self, child: Box<P::Object>, data: D) {
-        let _ = self.storage.add_child(ChildNode::new(child, data));
+        let _ = self.storage.add_child(ChildEntry::new(child, data));
     }
 
-    /// Inserts a child with the given parent data at the specified index.
+    /// Inserts a child with data at the specified index.
     pub fn insert_with(
         &mut self,
         index: usize,
@@ -752,21 +485,21 @@ impl<P: Protocol, A: Arity, D: Send + Sync> ChildList<P, A, D> {
         data: D,
     ) -> Result<(), ArityError> {
         self.storage
-            .insert_child(index, ChildNode::new(child, data))
+            .insert_child(index, ChildEntry::new(child, data))
     }
 
-    /// Removes and returns the child node at the given index.
-    pub fn remove(&mut self, index: usize) -> Option<ChildNode<P, D>> {
+    /// Removes and returns the entry at the given index.
+    pub fn remove(&mut self, index: usize) -> Option<ChildEntry<P, D>> {
         self.storage.remove_child(index)
     }
 
-    /// Removes and returns just the child at the given index.
+    /// Removes and returns only the child at the given index.
     pub fn remove_child(&mut self, index: usize) -> Option<Box<P::Object>> {
-        self.storage.remove_child(index).map(|n| n.child)
+        self.storage.remove_child(index).map(|e| e.child)
     }
 
-    /// Removes and returns the last child node.
-    pub fn pop(&mut self) -> Option<ChildNode<P, D>> {
+    /// Removes and returns the last entry.
+    pub fn pop(&mut self) -> Option<ChildEntry<P, D>> {
         self.storage.pop_child()
     }
 
@@ -776,7 +509,7 @@ impl<P: Protocol, A: Arity, D: Send + Sync> ChildList<P, A, D> {
     }
 
     // ========================================================================
-    // Visitor callbacks
+    // Visitor Callbacks
     // ========================================================================
 
     /// Calls a closure for each (child, data) pair.
@@ -784,58 +517,65 @@ impl<P: Protocol, A: Arity, D: Send + Sync> ChildList<P, A, D> {
     where
         F: FnMut(&P::Object, &D),
     {
-        for node in self.storage.children_slice() {
-            f(node.child.as_ref(), &node.data);
+        for entry in self.storage.children_slice() {
+            f(entry.child.as_ref(), &entry.data);
         }
     }
 
-    /// Calls a closure for each (child, data) pair with mutable access.
+    /// Calls a closure for each (child, data) pair mutably.
     pub fn for_each_mut<F>(&mut self, mut f: F)
     where
         F: FnMut(&mut P::Object, &mut D),
     {
-        for node in self.storage.children_slice_mut() {
-            f(node.child.as_mut(), &mut node.data);
+        for entry in self.storage.children_slice_mut() {
+            f(entry.child.as_mut(), &mut entry.data);
         }
     }
 
-    /// Calls a closure for each (child, data) pair in reverse order.
-    ///
-    /// Use this for hit testing (test topmost/last-painted child first).
+    /// Calls a closure for each pair in reverse order.
     pub fn for_each_rev<F>(&self, mut f: F)
     where
         F: FnMut(&P::Object, &D),
     {
-        for node in self.storage.children_slice().iter().rev() {
-            f(node.child.as_ref(), &node.data);
+        for entry in self.storage.children_slice().iter().rev() {
+            f(entry.child.as_ref(), &entry.data);
         }
     }
 }
 
 // ============================================================================
-// Type aliases for ChildList
+// Type Aliases - Multiple Children
 // ============================================================================
 
-/// Children with flex parent data.
+/// Variable number of Box children (no parent data).
+pub type BoxChildren = ChildList<BoxProtocol, Variable, ()>;
+
+/// Variable number of Sliver children (no parent data).
+pub type SliverChildren = ChildList<SliverProtocol, Variable, ()>;
+
+/// Flex layout children with FlexParentData.
 pub type FlexChildren = ChildList<BoxProtocol, Variable, crate::parent_data::FlexParentData>;
 
-/// Children with stack parent data.
+/// Stack layout children with StackParentData.
 pub type StackChildren = ChildList<BoxProtocol, Variable, crate::parent_data::StackParentData>;
 
-/// Children with wrap parent data.
+/// Wrap layout children with WrapParentData.
 pub type WrapChildren = ChildList<BoxProtocol, Variable, crate::parent_data::WrapParentData>;
 
-/// Box children with custom parent data.
+/// Generic Box children with custom parent data.
 pub type BoxChildList<D = BoxParentData> = ChildList<BoxProtocol, Variable, D>;
+
+/// Generic Sliver children with custom parent data.
+pub type SliverChildList<D = crate::parent_data::SliverPhysicalParentData> =
+    ChildList<SliverProtocol, Variable, D>;
 
 // ============================================================================
 // Paint & Hit Test Helpers
 // ============================================================================
 
-/// Trait for parent data that contains an offset.
+/// Trait for parent data that contains a paint offset.
 ///
-/// Implement this for your parent data type to enable
-/// [`paint_all`](ChildList::paint_all) and [`hit_test_all`](ChildList::hit_test_all).
+/// Implement this to enable [`ChildList::paint_all`] and [`ChildList::hit_test_all`].
 pub trait HasOffset {
     /// Returns the paint offset for this child.
     fn offset(&self) -> Offset;
@@ -847,10 +587,26 @@ impl HasOffset for BoxParentData {
     }
 }
 
+impl HasOffset for crate::parent_data::FlexParentData {
+    fn offset(&self) -> Offset {
+        self.offset
+    }
+}
+
+impl HasOffset for crate::parent_data::StackParentData {
+    fn offset(&self) -> Offset {
+        self.offset
+    }
+}
+
+impl HasOffset for crate::parent_data::WrapParentData {
+    fn offset(&self) -> Offset {
+        self.offset
+    }
+}
+
 impl<A: Arity, D: HasOffset + Send + Sync> ChildList<BoxProtocol, A, D> {
-    /// Paints all children using their parent data offsets.
-    ///
-    /// # Example
+    /// Paints all children at their parent data offsets.
     ///
     /// ```rust,ignore
     /// fn paint(&self, ctx: &mut PaintingContext, offset: Offset) {
@@ -871,8 +627,6 @@ impl<A: Arity, D: HasOffset + Send + Sync> ChildList<BoxProtocol, A, D> {
     /// Hit tests all children in reverse order (front to back).
     ///
     /// Returns `true` if any child was hit.
-    ///
-    /// # Example
     ///
     /// ```rust,ignore
     /// fn hit_test_children(&self, result: &mut BoxHitTestResult, position: Offset) -> bool {
@@ -895,6 +649,135 @@ impl<A: Arity, D: HasOffset + Send + Sync> ChildList<BoxProtocol, A, D> {
 }
 
 // ============================================================================
+// Delegation Traits (for Ambassador)
+// ============================================================================
+
+/// Trait for single-child containers (used by Ambassador delegation).
+#[delegatable_trait]
+pub trait SingleChildContainer<T> {
+    /// Returns the child if present.
+    fn child(&self) -> Option<&T>;
+    /// Returns mutable child if present.
+    fn child_mut(&mut self) -> Option<&mut T>;
+    /// Sets the child.
+    fn set_child(&mut self, child: T) -> Option<T>;
+    /// Takes the child.
+    fn take_child(&mut self) -> Option<T>;
+    /// Returns true if has child.
+    fn has_child(&self) -> bool {
+        self.child().is_some()
+    }
+}
+
+impl<P: Protocol> SingleChildContainer<Box<P::Object>> for Child<P, Optional> {
+    fn child(&self) -> Option<&Box<P::Object>> {
+        self.get_boxed()
+    }
+
+    fn child_mut(&mut self) -> Option<&mut Box<P::Object>> {
+        self.get_boxed_mut()
+    }
+
+    fn set_child(&mut self, child: Box<P::Object>) -> Option<Box<P::Object>> {
+        self.set(child)
+    }
+
+    fn take_child(&mut self) -> Option<Box<P::Object>> {
+        self.take()
+    }
+}
+
+/// Trait for multi-child containers (used by Ambassador delegation).
+#[delegatable_trait]
+pub trait MultiChildContainer<T> {
+    /// Returns the number of children.
+    fn len(&self) -> usize;
+    /// Returns true if empty.
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+    /// Returns child at index.
+    fn get(&self, index: usize) -> Option<&T>;
+    /// Returns mutable child at index.
+    fn get_mut(&mut self, index: usize) -> Option<&mut T>;
+    /// Adds a child.
+    fn push(&mut self, child: T);
+    /// Removes child at index.
+    fn remove(&mut self, index: usize) -> Option<T>;
+    /// Clears all children.
+    fn clear(&mut self);
+}
+
+/// Trait for multi-child containers with parent data.
+#[delegatable_trait]
+pub trait MultiChildContainerWithData<T, D>: MultiChildContainer<T> {
+    /// Returns data at index.
+    fn data(&self, index: usize) -> Option<&D>;
+    /// Returns mutable data at index.
+    fn data_mut(&mut self, index: usize) -> Option<&mut D>;
+    /// Returns both child and data.
+    fn get_with_data(&self, index: usize) -> Option<(&T, &D)>;
+    /// Returns mutable child and data.
+    fn get_with_data_mut(&mut self, index: usize) -> Option<(&mut T, &mut D)>;
+    /// Adds child with data.
+    fn push_with_data(&mut self, child: T, data: D);
+}
+
+impl<P: Protocol, A: Arity, D: Default + Send + Sync> MultiChildContainer<Box<P::Object>>
+    for ChildList<P, A, D>
+{
+    fn len(&self) -> usize {
+        ChildList::len(self)
+    }
+
+    fn get(&self, index: usize) -> Option<&Box<P::Object>> {
+        self.storage.get_child(index).map(|e| &e.child)
+    }
+
+    fn get_mut(&mut self, index: usize) -> Option<&mut Box<P::Object>> {
+        self.storage.get_child_mut(index).map(|e| &mut e.child)
+    }
+
+    fn push(&mut self, child: Box<P::Object>) {
+        ChildList::push(self, child);
+    }
+
+    fn remove(&mut self, index: usize) -> Option<Box<P::Object>> {
+        ChildList::remove_child(self, index)
+    }
+
+    fn clear(&mut self) {
+        ChildList::clear(self);
+    }
+}
+
+impl<P: Protocol, A: Arity, D: Default + Send + Sync> MultiChildContainerWithData<Box<P::Object>, D>
+    for ChildList<P, A, D>
+{
+    fn data(&self, index: usize) -> Option<&D> {
+        ChildList::data(self, index)
+    }
+
+    fn data_mut(&mut self, index: usize) -> Option<&mut D> {
+        ChildList::data_mut(self, index)
+    }
+
+    fn get_with_data(&self, index: usize) -> Option<(&Box<P::Object>, &D)> {
+        self.storage.get_child(index).map(|e| (&e.child, &e.data))
+    }
+
+    fn get_with_data_mut(&mut self, index: usize) -> Option<(&mut Box<P::Object>, &mut D)> {
+        self.storage
+            .get_child_mut(index)
+            .map(|e| (&mut e.child, &mut e.data))
+    }
+
+    fn push_with_data(&mut self, child: Box<P::Object>, data: D) {
+        self.push_with(child, data);
+    }
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 
@@ -904,179 +787,54 @@ mod tests {
     use crate::traits::RenderSliver;
 
     #[test]
-    fn test_children_default() {
-        let container: BoxChild = BoxChild::new();
-        assert!(!container.has_child());
-        assert_eq!(container.len(), 0);
+    fn test_box_child_default() {
+        let child: BoxChild = BoxChild::new();
+        assert!(!child.has_child());
     }
 
     #[test]
     fn test_child_list_default() {
-        let list: BoxChildList = ChildList::new();
+        let list: FlexChildren = ChildList::new();
         assert!(list.is_empty());
         assert_eq!(list.len(), 0);
     }
 
-    // ========================================================================
-    // Generic trait tests - verify traits work with any Protocol
-    // ========================================================================
-
-    /// Helper function that works with any SingleChildContainer
-    fn use_single_child_container<T, C: SingleChildContainer<T>>(container: &C) -> bool {
-        container.has_child()
-    }
-
-    /// Helper function that works with any MultiChildContainer
-    fn use_multi_child_container<T, C: MultiChildContainer<T>>(container: &C) -> usize {
-        container.len()
-    }
-
-    /// Helper function that works with any MultiChildContainerWithData
-    fn count_with_data<T, D, C: MultiChildContainerWithData<T, D>>(container: &C) -> usize {
-        let mut count = 0;
-        for i in 0..container.len() {
-            if container.get_with_data(i).is_some() {
-                count += 1;
-            }
-        }
-        count
+    #[test]
+    fn test_box_child_type_alias() {
+        let _: BoxChild = Child::new();
+        let _: BoxChildRequired = Child::new();
     }
 
     #[test]
-    fn test_single_child_container_with_box_protocol() {
-        let container: Children<BoxProtocol, Optional> = Children::new();
-        // Verify generic function works with BoxProtocol
-        assert!(!use_single_child_container::<Box<dyn RenderBox>, _>(
-            &container
-        ));
+    fn test_sliver_child_type_alias() {
+        let _: SliverChild = Child::new();
+        let _: SliverChildRequired = Child::new();
     }
 
     #[test]
-    fn test_single_child_container_with_sliver_protocol() {
-        let container: Children<SliverProtocol, Optional> = Children::new();
-        // Verify generic function works with SliverProtocol
-        assert!(!use_single_child_container::<Box<dyn RenderSliver>, _>(
-            &container
-        ));
-    }
-
-    #[test]
-    fn test_multi_child_container_with_box_protocol() {
-        let container: Children<BoxProtocol, Variable> = Children::new();
-        // Verify generic function works with BoxProtocol
-        assert_eq!(
-            use_multi_child_container::<Box<dyn RenderBox>, _>(&container),
-            0
-        );
-    }
-
-    #[test]
-    fn test_multi_child_container_with_sliver_protocol() {
-        let container: Children<SliverProtocol, Variable> = Children::new();
-        // Verify generic function works with SliverProtocol
-        assert_eq!(
-            use_multi_child_container::<Box<dyn RenderSliver>, _>(&container),
-            0
-        );
-    }
-
-    #[test]
-    fn test_child_list_multi_child_container_box() {
-        let list: ChildList<BoxProtocol, Variable, BoxParentData> = ChildList::new();
-        // ChildList also implements MultiChildContainer
-        assert_eq!(use_multi_child_container::<Box<dyn RenderBox>, _>(&list), 0);
-    }
-
-    #[test]
-    fn test_child_list_with_data_box() {
-        let list: ChildList<BoxProtocol, Variable, BoxParentData> = ChildList::new();
-        // Verify MultiChildContainerWithData works
-        assert_eq!(
-            count_with_data::<Box<dyn RenderBox>, BoxParentData, _>(&list),
-            0
-        );
-    }
-
-    // ========================================================================
-    // Arity-specific tests
-    // ========================================================================
-
-    #[test]
-    fn test_children_optional_arity() {
-        // Optional arity: 0 or 1 child
-        let container: Children<BoxProtocol, Optional> = Children::new();
-        assert!(!container.has_child());
-
-        // SingleChildContainer trait is implemented for Optional
-        assert!(!use_single_child_container::<Box<dyn RenderBox>, _>(
-            &container
-        ));
-    }
-
-    #[test]
-    fn test_children_variable_arity() {
-        // Variable arity: 0..N children
-        let container: Children<BoxProtocol, Variable> = Children::new();
-        // Use MultiChildContainer::is_empty explicitly to avoid ambiguity
-        assert!(MultiChildContainer::is_empty(&container));
-
-        // MultiChildContainer trait is implemented for Variable
-        assert_eq!(
-            use_multi_child_container::<Box<dyn RenderBox>, _>(&container),
-            0
-        );
-    }
-
-    #[test]
-    fn test_child_list_variable_arity() {
-        // ChildList with Variable arity
-        let list: ChildList<BoxProtocol, Variable, BoxParentData> = ChildList::new();
-        assert!(list.is_empty());
-
-        // Both MultiChildContainer and MultiChildContainerWithData work
-        assert_eq!(use_multi_child_container::<Box<dyn RenderBox>, _>(&list), 0);
-        assert_eq!(
-            count_with_data::<Box<dyn RenderBox>, BoxParentData, _>(&list),
-            0
-        );
-    }
-
-    // ========================================================================
-    // Type alias tests - verify type aliases work correctly
-    // ========================================================================
-
-    #[test]
-    fn test_box_child_alias() {
-        let _: BoxChild = Children::new();
-    }
-
-    #[test]
-    fn test_box_children_alias() {
-        let _: BoxChildren = Children::new();
-    }
-
-    #[test]
-    fn test_sliver_child_alias() {
-        let _: SliverChild = Children::new();
-    }
-
-    #[test]
-    fn test_sliver_children_alias() {
-        let _: SliverChildren = Children::new();
-    }
-
-    #[test]
-    fn test_flex_children_alias() {
+    fn test_child_list_type_aliases() {
         let _: FlexChildren = ChildList::new();
-    }
-
-    #[test]
-    fn test_stack_children_alias() {
         let _: StackChildren = ChildList::new();
+        let _: WrapChildren = ChildList::new();
     }
 
     #[test]
-    fn test_wrap_children_alias() {
-        let _: WrapChildren = ChildList::new();
+    fn test_single_child_container_trait() {
+        fn accepts_single<T, C: SingleChildContainer<T>>(c: &C) -> bool {
+            c.has_child()
+        }
+
+        let child: BoxChild = Child::new();
+        assert!(!accepts_single::<Box<dyn RenderBox>, _>(&child));
+    }
+
+    #[test]
+    fn test_multi_child_container_trait() {
+        fn accepts_multi<T, C: MultiChildContainer<T>>(c: &C) -> usize {
+            c.len()
+        }
+
+        let list: FlexChildren = ChildList::new();
+        assert_eq!(accepts_multi::<Box<dyn RenderBox>, _>(&list), 0);
     }
 }

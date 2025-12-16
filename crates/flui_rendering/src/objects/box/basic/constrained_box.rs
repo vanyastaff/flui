@@ -7,15 +7,19 @@
 use flui_types::{Offset, Size};
 
 use crate::constraints::BoxConstraints;
-
-use crate::containers::ProxyBox;
+use crate::containers::BoxChild;
 use crate::pipeline::PaintingContext;
-use crate::traits::TextBaseline;
+use crate::traits::{RenderBox, TextBaseline};
 
 /// A render object that imposes additional constraints on its child.
 ///
 /// The `additional_constraints` are applied on top of constraints from
 /// the parent. The effective constraints are the intersection of both.
+///
+/// # Flutter Equivalent
+///
+/// This corresponds to Flutter's `RenderConstrainedBox` which extends `RenderProxyBox`.
+/// Like Flutter, this stores child directly and delegates size to child.
 ///
 /// # Example
 ///
@@ -29,8 +33,11 @@ use crate::traits::TextBaseline;
 /// ```
 #[derive(Debug)]
 pub struct RenderConstrainedBox {
-    /// Container holding the child and geometry.
-    proxy: ProxyBox,
+    /// The child render object using type-safe container.
+    child: BoxChild,
+
+    /// Cached size from layout.
+    size: Size,
 
     /// Additional constraints to apply.
     additional_constraints: BoxConstraints,
@@ -40,10 +47,42 @@ impl RenderConstrainedBox {
     /// Creates a new render constrained box with the given constraints.
     pub fn new(additional_constraints: BoxConstraints) -> Self {
         Self {
-            proxy: ProxyBox::new(),
+            child: BoxChild::new(),
+            size: Size::ZERO,
             additional_constraints,
         }
     }
+
+    // ========================================================================
+    // Child access (using type-safe BoxChild container)
+    // ========================================================================
+
+    /// Returns a reference to the child, if present.
+    pub fn child(&self) -> Option<&dyn RenderBox> {
+        self.child.get()
+    }
+
+    /// Returns a mutable reference to the child, if present.
+    pub fn child_mut(&mut self) -> Option<&mut dyn RenderBox> {
+        self.child.get_mut()
+    }
+
+    /// Sets the child.
+    pub fn set_child(&mut self, child: Option<Box<dyn RenderBox>>) {
+        self.child.clear();
+        if let Some(c) = child {
+            self.child.set(c);
+        }
+    }
+
+    /// Takes the child out of the container.
+    pub fn take_child(&mut self) -> Option<Box<dyn RenderBox>> {
+        self.child.take()
+    }
+
+    // ========================================================================
+    // Constraint configuration
+    // ========================================================================
 
     /// Returns the additional constraints.
     pub fn additional_constraints(&self) -> BoxConstraints {
@@ -60,7 +99,7 @@ impl RenderConstrainedBox {
 
     /// Returns the current size.
     pub fn size(&self) -> Size {
-        *self.proxy.geometry()
+        self.size
     }
 
     /// Computes the effective constraints by enforcing additional constraints.
@@ -71,9 +110,8 @@ impl RenderConstrainedBox {
     /// Performs layout without a child.
     pub fn perform_layout(&mut self, constraints: BoxConstraints) -> Size {
         let effective = self.effective_constraints(constraints);
-        let size = effective.smallest();
-        self.proxy.set_geometry(size);
-        size
+        self.size = effective.smallest();
+        self.size
     }
 
     /// Performs layout with a child size.
@@ -83,9 +121,8 @@ impl RenderConstrainedBox {
         child_size: Size,
     ) -> Size {
         let effective = self.effective_constraints(constraints);
-        let size = effective.constrain(child_size);
-        self.proxy.set_geometry(size);
-        size
+        self.size = effective.constrain(child_size);
+        self.size
     }
 
     /// Returns constraints for the child.

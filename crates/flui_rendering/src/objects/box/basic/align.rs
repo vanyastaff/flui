@@ -3,20 +3,66 @@
 //! This render object aligns its child within its own bounds using
 //! `Alignment` coordinates. It can optionally scale the child's size
 //! using width and height factors.
+//!
+//! # Flutter Hierarchy
+//!
+//! ```text
+//! RenderObject
+//!     └── RenderBox
+//!         └── SingleChildRenderBox
+//!             └── RenderShiftedBox
+//!                 └── RenderAligningShiftedBox
+//!                     └── RenderPositionedBox (this is RenderAlign in FLUI)
+//! ```
+//!
+//! # Architecture
+//!
+//! Following Flutter's pattern:
+//! - Child offset is stored in `child.parentData.offset` (not locally)
+//! - Parent sets offset via `set_child_offset(child, offset)` during layout
+//! - `paint()` and `hitTestChildren()` read offset from child.parentData
+
+use std::any::Any;
 
 use flui_types::{Alignment, Offset, Size};
 
 use crate::constraints::BoxConstraints;
-
-use crate::containers::AligningBox;
-use crate::pipeline::PaintingContext;
-use crate::traits::TextBaseline;
+use crate::containers::BoxChild;
+use crate::lifecycle::BaseRenderObject;
+use crate::parent_data::BoxParentData;
+use crate::pipeline::{PaintingContext, PipelineOwner};
+use crate::traits::{
+    set_child_offset, BoxHitTestResult, DiagnosticPropertiesBuilder, RenderAligningShiftedBox,
+    RenderBox, RenderObject, RenderShiftedBox, SingleChildRenderBox, TextBaseline,
+};
+// TextDirection is defined in aligning_shifted_box.rs
+pub use crate::traits::r#box::TextDirection;
 
 /// A render object that aligns its child within itself.
 ///
 /// The child is positioned according to the alignment property.
 /// If width/height factors are provided, the child is given those
 /// factors of the available space.
+///
+/// # Flutter Equivalence
+///
+/// This corresponds to Flutter's `RenderPositionedBox` which extends
+/// `RenderAligningShiftedBox`. The key difference from Flutter:
+/// - In Flutter: `RenderPositionedBox extends RenderAligningShiftedBox`
+/// - In FLUI: `RenderAlign` implements all traits in the chain
+///
+/// # Trait Chain
+///
+/// RenderObject → RenderBox → SingleChildRenderBox → RenderShiftedBox → RenderAligningShiftedBox
+///
+/// # Polymorphism
+///
+/// `RenderAlign` can be used as:
+/// - `Box<dyn RenderObject>` - for generic render tree operations
+/// - `Box<dyn RenderBox>` - for box layout operations
+/// - `Box<dyn SingleChildRenderBox>` - for single child operations
+/// - `Box<dyn RenderShiftedBox>` - for shifted box operations
+/// - `Box<dyn RenderAligningShiftedBox>` - for alignment operations
 ///
 /// # Example
 ///
@@ -33,151 +79,74 @@ use crate::traits::TextBaseline;
 /// ```
 #[derive(Debug)]
 pub struct RenderAlign {
-    /// Container holding the child, alignment, and geometry.
-    aligning: AligningBox,
+    /// Single child using type-safe container.
+    child: BoxChild,
+
+    /// Cached size from layout.
+    size: Size,
+
+    /// Alignment used to position the child.
+    alignment: Alignment,
+
+    /// Text direction for resolving directional alignments.
+    text_direction: Option<TextDirection>,
+
+    /// Width factor - if set, width = child_width * factor.
+    width_factor: Option<f32>,
+
+    /// Height factor - if set, height = child_height * factor.
+    height_factor: Option<f32>,
+}
+
+impl Default for RenderAlign {
+    fn default() -> Self {
+        Self::new(Alignment::CENTER)
+    }
 }
 
 impl RenderAlign {
     /// Creates a new render align with the given alignment.
     pub fn new(alignment: Alignment) -> Self {
         Self {
-            aligning: AligningBox::new(alignment),
+            child: BoxChild::new(),
+            size: Size::ZERO,
+            alignment,
+            text_direction: None,
+            width_factor: None,
+            height_factor: None,
         }
     }
 
-    /// Returns the current alignment.
-    pub fn alignment(&self) -> Alignment {
-        self.aligning.alignment()
-    }
-
-    /// Sets the alignment.
-    pub fn set_alignment(&mut self, alignment: Alignment) {
-        self.aligning.set_alignment(alignment);
-        // In real implementation: self.mark_needs_layout();
-    }
-
-    /// Returns the width factor, if any.
-    pub fn width_factor(&self) -> Option<f32> {
-        self.aligning.width_factor()
-    }
-
-    /// Sets the width factor.
-    ///
-    /// If non-null, the child is given this fraction of the available width.
-    pub fn set_width_factor(&mut self, factor: Option<f32>) {
-        self.aligning.set_width_factor(factor);
-        // In real implementation: self.mark_needs_layout();
-    }
-
-    /// Returns the height factor, if any.
-    pub fn height_factor(&self) -> Option<f32> {
-        self.aligning.height_factor()
-    }
-
-    /// Sets the height factor.
-    ///
-    /// If non-null, the child is given this fraction of the available height.
-    pub fn set_height_factor(&mut self, factor: Option<f32>) {
-        self.aligning.set_height_factor(factor);
-        // In real implementation: self.mark_needs_layout();
+    /// Creates a new render align with a child.
+    pub fn with_child(alignment: Alignment, child: Box<dyn RenderBox>) -> Self {
+        let mut child = child;
+        Self::setup_child_parent_data(&mut *child);
+        Self {
+            child: BoxChild::with(child),
+            size: Size::ZERO,
+            alignment,
+            text_direction: None,
+            width_factor: None,
+            height_factor: None,
+        }
     }
 
     /// Builder method to set width factor.
     pub fn with_width_factor(mut self, factor: f32) -> Self {
-        self.set_width_factor(Some(factor));
+        self.width_factor = Some(factor);
         self
     }
 
     /// Builder method to set height factor.
     pub fn with_height_factor(mut self, factor: f32) -> Self {
-        self.set_height_factor(Some(factor));
+        self.height_factor = Some(factor);
         self
     }
 
-    /// Returns the current size.
-    pub fn size(&self) -> Size {
-        *self.aligning.geometry()
-    }
-
-    /// Returns the child offset.
-    pub fn child_offset(&self) -> Offset {
-        self.aligning.offset()
-    }
-
-    /// Computes the aligned offset for a child of the given size.
-    pub fn compute_aligned_offset(&self, my_size: Size, child_size: Size) -> Offset {
-        let alignment = self.alignment();
-
-        // Convert alignment (-1 to 1) to offset
-        let half_width_delta = (my_size.width - child_size.width) / 2.0;
-        let half_height_delta = (my_size.height - child_size.height) / 2.0;
-
-        Offset::new(
-            half_width_delta + alignment.x * half_width_delta,
-            half_height_delta + alignment.y * half_height_delta,
-        )
-    }
-
-    /// Performs layout without a child.
-    pub fn perform_layout(&mut self, constraints: BoxConstraints) -> Size {
-        let shrink_wrap_width =
-            self.width_factor().is_some() || constraints.max_width == f32::INFINITY;
-        let shrink_wrap_height =
-            self.height_factor().is_some() || constraints.max_height == f32::INFINITY;
-
-        let size = constraints.constrain(Size::new(
-            if shrink_wrap_width {
-                0.0
-            } else {
-                constraints.max_width
-            },
-            if shrink_wrap_height {
-                0.0
-            } else {
-                constraints.max_height
-            },
-        ));
-        self.aligning.set_geometry(size);
-        size
-    }
-
-    /// Performs layout with a child size.
-    pub fn perform_layout_with_child(
-        &mut self,
-        constraints: BoxConstraints,
-        child_size: Size,
-    ) -> Size {
-        let shrink_wrap_width =
-            self.width_factor().is_some() || constraints.max_width == f32::INFINITY;
-        let shrink_wrap_height =
-            self.height_factor().is_some() || constraints.max_height == f32::INFINITY;
-
-        // Compute our size
-        let my_size = Size::new(
-            if shrink_wrap_width {
-                self.width_factor()
-                    .map(|f| child_size.width * f)
-                    .unwrap_or(child_size.width)
-            } else {
-                constraints.max_width
-            },
-            if shrink_wrap_height {
-                self.height_factor()
-                    .map(|f| child_size.height * f)
-                    .unwrap_or(child_size.height)
-            } else {
-                constraints.max_height
-            },
-        );
-
-        let my_size = constraints.constrain(my_size);
-
-        // Position child using alignment
-        let offset = self.compute_aligned_offset(my_size, child_size);
-        self.aligning.set_offset(offset);
-        self.aligning.set_geometry(my_size);
-
-        my_size
+    /// Builder method to set text direction.
+    pub fn with_text_direction(mut self, direction: TextDirection) -> Self {
+        self.text_direction = Some(direction);
+        self
     }
 
     /// Returns constraints for the child (loosened).
@@ -185,46 +154,335 @@ impl RenderAlign {
         constraints.loosen()
     }
 
-    /// Paints this render object.
-    pub fn paint(&self, context: &mut PaintingContext, offset: Offset) {
-        // Child would be painted at offset + child_offset
-        let _ = (context, offset);
+    /// Sets up BoxParentData on a child.
+    fn setup_child_parent_data(child: &mut dyn RenderBox) {
+        let needs_setup = child
+            .parent_data()
+            .map(|pd| pd.as_any().downcast_ref::<BoxParentData>().is_none())
+            .unwrap_or(true);
+
+        if needs_setup {
+            child.set_parent_data(Box::new(BoxParentData::default()));
+        }
+    }
+}
+
+// ============================================================================
+// RenderObject trait implementation
+// ============================================================================
+
+impl RenderObject for RenderAlign {
+    fn base(&self) -> &BaseRenderObject {
+        unimplemented!("RenderAlign::base() - need BaseRenderObject storage")
     }
 
-    /// Computes intrinsic width.
-    pub fn compute_min_intrinsic_width(&self, _height: f32, child_width: Option<f32>) -> f32 {
-        child_width.unwrap_or(0.0)
+    fn base_mut(&mut self) -> &mut BaseRenderObject {
+        unimplemented!("RenderAlign::base_mut() - need BaseRenderObject storage")
     }
 
-    /// Computes maximum intrinsic width.
-    pub fn compute_max_intrinsic_width(&self, height: f32, child_width: Option<f32>) -> f32 {
-        self.compute_min_intrinsic_width(height, child_width)
+    fn owner(&self) -> Option<&PipelineOwner> {
+        None
     }
 
-    /// Computes minimum intrinsic height.
-    pub fn compute_min_intrinsic_height(&self, _width: f32, child_height: Option<f32>) -> f32 {
-        child_height.unwrap_or(0.0)
+    fn attach(&mut self, owner: &PipelineOwner) {
+        if let Some(child) = self.child.get_mut() {
+            child.attach(owner);
+        }
     }
 
-    /// Computes maximum intrinsic height.
-    pub fn compute_max_intrinsic_height(&self, width: f32, child_height: Option<f32>) -> f32 {
-        self.compute_min_intrinsic_height(width, child_height)
+    fn detach(&mut self) {
+        if let Some(child) = self.child.get_mut() {
+            child.detach();
+        }
     }
 
-    /// Computes distance to baseline.
-    pub fn compute_distance_to_baseline(
-        &self,
-        _baseline: TextBaseline,
-        child_baseline: Option<f32>,
-    ) -> Option<f32> {
-        let child_offset = self.child_offset();
-        child_baseline.map(|distance| distance + child_offset.dy)
+    fn adopt_child(&mut self, _child: &mut dyn RenderObject) {}
+
+    fn drop_child(&mut self, _child: &mut dyn RenderObject) {}
+
+    fn redepth_child(&mut self, _child: &mut dyn RenderObject) {}
+
+    fn mark_parent_needs_layout(&mut self) {}
+
+    fn schedule_initial_layout(&mut self) {}
+
+    fn schedule_initial_paint(&mut self) {}
+
+    fn paint_bounds(&self) -> flui_types::Rect {
+        flui_types::Rect::from_ltwh(0.0, 0.0, self.size.width, self.size.height)
+    }
+
+    fn visit_children(&self, visitor: &mut dyn FnMut(&dyn RenderObject)) {
+        if let Some(child) = self.child.get() {
+            visitor(child);
+        }
+    }
+
+    fn visit_children_mut(&mut self, visitor: &mut dyn FnMut(&mut dyn RenderObject)) {
+        if let Some(child) = self.child.get_mut() {
+            visitor(child);
+        }
+    }
+
+    fn debug_fill_properties(&self, properties: &mut DiagnosticPropertiesBuilder) {
+        properties.add_string("alignment", format!("{:?}", self.alignment));
+        if let Some(wf) = self.width_factor {
+            properties.add_string("widthFactor", format!("{}", wf));
+        }
+        if let Some(hf) = self.height_factor {
+            properties.add_string("heightFactor", format!("{}", hf));
+        }
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+}
+
+// ============================================================================
+// RenderBox trait implementation
+// ============================================================================
+
+impl RenderBox for RenderAlign {
+    fn size(&self) -> Size {
+        self.size
+    }
+
+    fn set_size(&mut self, size: Size) {
+        self.size = size;
+    }
+
+    /// Performs layout following Flutter's RenderPositionedBox.performLayout.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// void performLayout() {
+    ///   final bool shrinkWrapWidth = _widthFactor != null || constraints.maxWidth == double.infinity;
+    ///   final bool shrinkWrapHeight = _heightFactor != null || constraints.maxHeight == double.infinity;
+    ///   if (child != null) {
+    ///     child!.layout(constraints.loosen(), parentUsesSize: true);
+    ///     size = constraints.constrain(Size(
+    ///       shrinkWrapWidth ? child!.size.width * (_widthFactor ?? 1.0) : double.infinity,
+    ///       shrinkWrapHeight ? child!.size.height * (_heightFactor ?? 1.0) : double.infinity,
+    ///     ));
+    ///     alignChild();
+    ///   } else {
+    ///     size = constraints.constrain(Size(
+    ///       shrinkWrapWidth ? 0.0 : double.infinity,
+    ///       shrinkWrapHeight ? 0.0 : double.infinity,
+    ///     ));
+    ///   }
+    /// }
+    /// ```
+    fn perform_layout(&mut self, constraints: BoxConstraints) -> Size {
+        let shrink_wrap_width =
+            self.width_factor.is_some() || constraints.max_width == f32::INFINITY;
+        let shrink_wrap_height =
+            self.height_factor.is_some() || constraints.max_height == f32::INFINITY;
+
+        // Copy alignment before borrowing child mutably
+        let resolved_alignment = self.resolved_alignment();
+        let width_factor = self.width_factor;
+        let height_factor = self.height_factor;
+
+        if let Some(child) = self.child.get_mut() {
+            // Layout child with loosened constraints
+            let child_constraints = constraints.loosen();
+            let child_size = child.perform_layout(child_constraints);
+
+            // Compute our size
+            let my_size = Size::new(
+                if shrink_wrap_width {
+                    child_size.width * width_factor.unwrap_or(1.0)
+                } else {
+                    f32::INFINITY
+                },
+                if shrink_wrap_height {
+                    child_size.height * height_factor.unwrap_or(1.0)
+                } else {
+                    f32::INFINITY
+                },
+            );
+
+            let constrained_size = constraints.constrain(my_size);
+            self.size = constrained_size;
+
+            // alignChild() - computes and sets child offset in child's parentData
+            // Use resolved_alignment directly to avoid borrowing self
+            let offset = resolved_alignment.along_offset(Offset::new(
+                constrained_size.width - child_size.width,
+                constrained_size.height - child_size.height,
+            ));
+            set_child_offset(child, offset);
+        } else {
+            // No child
+            self.size = constraints.constrain(Size::new(
+                if shrink_wrap_width {
+                    0.0
+                } else {
+                    f32::INFINITY
+                },
+                if shrink_wrap_height {
+                    0.0
+                } else {
+                    f32::INFINITY
+                },
+            ));
+        }
+
+        self.size
+    }
+
+    fn paint(&self, context: &mut PaintingContext, offset: Offset) {
+        // Use RenderShiftedBox default implementation which reads from child.parentData.offset
+        self.shifted_paint(context, offset);
+    }
+
+    fn hit_test(&self, result: &mut BoxHitTestResult, position: Offset) -> bool {
+        let size = self.size();
+        if position.dx >= 0.0
+            && position.dy >= 0.0
+            && position.dx < size.width
+            && position.dy < size.height
+        {
+            self.hit_test_children(result, position) || self.hit_test_self(position)
+        } else {
+            false
+        }
+    }
+
+    fn hit_test_children(&self, result: &mut BoxHitTestResult, position: Offset) -> bool {
+        // Use RenderShiftedBox implementation which reads offset from child.parentData
+        self.shifted_hit_test_children(result, position)
+    }
+
+    fn compute_min_intrinsic_width(&self, height: f32) -> f32 {
+        if let Some(child) = self.child.get() {
+            child.compute_min_intrinsic_width(height) * self.width_factor.unwrap_or(1.0)
+        } else {
+            0.0
+        }
+    }
+
+    fn compute_max_intrinsic_width(&self, height: f32) -> f32 {
+        if let Some(child) = self.child.get() {
+            child.compute_max_intrinsic_width(height) * self.width_factor.unwrap_or(1.0)
+        } else {
+            0.0
+        }
+    }
+
+    fn compute_min_intrinsic_height(&self, width: f32) -> f32 {
+        if let Some(child) = self.child.get() {
+            child.compute_min_intrinsic_height(width) * self.height_factor.unwrap_or(1.0)
+        } else {
+            0.0
+        }
+    }
+
+    fn compute_max_intrinsic_height(&self, width: f32) -> f32 {
+        if let Some(child) = self.child.get() {
+            child.compute_max_intrinsic_height(width) * self.height_factor.unwrap_or(1.0)
+        } else {
+            0.0
+        }
+    }
+
+    fn compute_distance_to_actual_baseline(&self, baseline: TextBaseline) -> Option<f32> {
+        // Use RenderShiftedBox implementation which reads offset from child.parentData
+        self.shifted_compute_distance_to_actual_baseline(baseline)
+    }
+}
+
+// ============================================================================
+// SingleChildRenderBox trait implementation
+// ============================================================================
+
+impl SingleChildRenderBox for RenderAlign {
+    fn child(&self) -> Option<&dyn RenderBox> {
+        self.child.get()
+    }
+
+    fn child_mut(&mut self) -> Option<&mut dyn RenderBox> {
+        self.child.get_mut()
+    }
+
+    fn set_child(&mut self, child: Option<Box<dyn RenderBox>>) {
+        self.child.clear();
+
+        if let Some(mut new_child) = child {
+            Self::setup_child_parent_data(&mut *new_child);
+            self.child.set(new_child);
+        }
+
+        self.mark_needs_layout();
+    }
+
+    fn take_child(&mut self) -> Option<Box<dyn RenderBox>> {
+        self.child.take()
+    }
+}
+
+// ============================================================================
+// RenderShiftedBox trait implementation
+// ============================================================================
+
+impl RenderShiftedBox for RenderAlign {
+    // All methods use default implementations from the trait which read
+    // offset from child.parentData.offset
+}
+
+// ============================================================================
+// RenderAligningShiftedBox trait implementation
+// ============================================================================
+
+impl RenderAligningShiftedBox for RenderAlign {
+    fn alignment(&self) -> Alignment {
+        self.alignment
+    }
+
+    fn set_alignment(&mut self, alignment: Alignment) {
+        if self.alignment != alignment {
+            self.alignment = alignment;
+            self.mark_needs_layout();
+        }
+    }
+
+    fn text_direction(&self) -> Option<TextDirection> {
+        self.text_direction
+    }
+
+    fn set_text_direction(&mut self, direction: Option<TextDirection>) {
+        if self.text_direction != direction {
+            self.text_direction = direction;
+            self.mark_needs_layout();
+        }
+    }
+
+    fn width_factor(&self) -> Option<f32> {
+        self.width_factor
+    }
+
+    fn height_factor(&self) -> Option<f32> {
+        self.height_factor
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_align_default() {
+        let align = RenderAlign::default();
+        assert_eq!(align.alignment(), Alignment::CENTER);
+        assert!(align.child().is_none());
+    }
 
     #[test]
     fn test_align_center() {
@@ -288,17 +546,25 @@ mod tests {
     }
 
     #[test]
-    fn test_layout_with_child() {
-        let mut align = RenderAlign::new(Alignment::CENTER);
-        let constraints = BoxConstraints::new(0.0, 200.0, 0.0, 200.0);
-        let child_size = Size::new(50.0, 50.0);
+    fn test_trait_polymorphism() {
+        let align = RenderAlign::new(Alignment::CENTER);
 
-        let size = align.perform_layout_with_child(constraints, child_size);
+        // Should compile - RenderAlign implements all these traits
+        let _: &dyn RenderObject = &align;
+        let _: &dyn RenderBox = &align;
+        let _: &dyn SingleChildRenderBox = &align;
+        let _: &dyn RenderShiftedBox = &align;
+        let _: &dyn RenderAligningShiftedBox = &align;
+    }
 
-        assert_eq!(size, Size::new(200.0, 200.0));
+    #[test]
+    fn test_rtl_alignment() {
+        let align = RenderAlign::new(Alignment::new(1.0, 0.0)) // Right aligned
+            .with_text_direction(TextDirection::Rtl);
 
-        let child_offset = align.child_offset();
-        assert_eq!(child_offset.dx, 75.0);
-        assert_eq!(child_offset.dy, 75.0);
+        // RTL flips the x alignment
+        let resolved = align.resolved_alignment();
+        assert_eq!(resolved.x, -1.0); // Flipped to left
+        assert_eq!(resolved.y, 0.0);
     }
 }

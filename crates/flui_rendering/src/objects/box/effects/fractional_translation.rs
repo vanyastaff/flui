@@ -5,16 +5,20 @@
 use flui_types::{Offset, Point, Rect, Size};
 
 use crate::constraints::BoxConstraints;
-
-use crate::containers::ProxyBox;
+use crate::containers::BoxChild;
 use crate::pipeline::PaintingContext;
-use crate::traits::TextBaseline;
+use crate::traits::{RenderBox, TextBaseline};
 
 /// A render object that translates its child by a fraction of the child's size.
 ///
 /// Unlike regular translation which uses absolute pixels, this uses the child's
 /// dimensions. For example, a translation of (1.0, 0.0) moves the child to the
 /// right by its own width.
+///
+/// # Flutter Equivalent
+///
+/// This corresponds to Flutter's `RenderFractionalTranslation` which extends `RenderProxyBox`.
+/// Like Flutter, this stores child directly and delegates size to child.
 ///
 /// # Example
 ///
@@ -30,8 +34,11 @@ use crate::traits::TextBaseline;
 /// ```
 #[derive(Debug)]
 pub struct RenderFractionalTranslation {
-    /// Container holding the child and geometry.
-    proxy: ProxyBox,
+    /// The child render object.
+    child: BoxChild,
+
+    /// Cached size from layout.
+    size: Size,
 
     /// The translation as a fraction of child size.
     translation: Offset,
@@ -44,7 +51,8 @@ impl RenderFractionalTranslation {
     /// Creates a new fractional translation.
     pub fn new(translation: Offset) -> Self {
         Self {
-            proxy: ProxyBox::new(),
+            child: BoxChild::new(),
+            size: Size::ZERO,
             translation,
             transform_hit_tests: true,
         }
@@ -54,6 +62,37 @@ impl RenderFractionalTranslation {
     pub fn none() -> Self {
         Self::new(Offset::ZERO)
     }
+
+    // ========================================================================
+    // Child access
+    // ========================================================================
+
+    /// Returns a reference to the child, if present.
+    pub fn child(&self) -> Option<&dyn RenderBox> {
+        self.child.get()
+    }
+
+    /// Returns a mutable reference to the child, if present.
+    pub fn child_mut(&mut self) -> Option<&mut dyn RenderBox> {
+        self.child.get_mut()
+    }
+
+    /// Sets the child.
+    pub fn set_child(&mut self, child: Option<Box<dyn RenderBox>>) {
+        self.child.clear();
+        if let Some(c) = child {
+            self.child.set(c);
+        }
+    }
+
+    /// Takes the child.
+    pub fn take_child(&mut self) -> Option<Box<dyn RenderBox>> {
+        self.child.take()
+    }
+
+    // ========================================================================
+    // Translation configuration
+    // ========================================================================
 
     /// Returns the translation fraction.
     pub fn translation(&self) -> Offset {
@@ -79,7 +118,7 @@ impl RenderFractionalTranslation {
 
     /// Returns the current size.
     pub fn size(&self) -> Size {
-        *self.proxy.geometry()
+        self.size
     }
 
     /// Computes the actual pixel offset for the current size.
@@ -93,9 +132,8 @@ impl RenderFractionalTranslation {
 
     /// Performs layout without a child.
     pub fn perform_layout(&mut self, constraints: BoxConstraints) -> Size {
-        let size = constraints.smallest();
-        self.proxy.set_geometry(size);
-        size
+        self.size = constraints.smallest();
+        self.size
     }
 
     /// Performs layout with a child size.
@@ -104,8 +142,8 @@ impl RenderFractionalTranslation {
         _constraints: BoxConstraints,
         child_size: Size,
     ) -> Size {
-        self.proxy.set_geometry(child_size);
-        child_size
+        self.size = child_size;
+        self.size
     }
 
     /// Returns constraints for the child.

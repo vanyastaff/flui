@@ -1,92 +1,70 @@
 //! Type-safe container system for render objects.
 //!
-//! Containers use Protocol associated types to store protocol-specific children
-//! at compile time, eliminating runtime type checks and downcasts.
+//! Containers use Protocol associated types and Arity markers to provide
+//! compile-time guarantees about child count and type safety.
 //!
 //! # Container Types
 //!
-//! ## Children Storage
-//!
-//! - [`Children`] - Simple children without parent data
-//! - [`ChildList`] - Children with per-child parent data
-//!
-//! ## Single-Child Wrappers
-//!
-//! - [`Proxy`] - Child where size equals child's size
-//! - [`Shifted`] - Child with custom offset positioning
-//! - [`Aligning`] - Child with alignment and size factors
-//!
-//! ## Cross-Protocol
-//!
-//! - [`Adapter`] - Zero-cost protocol wrapper
+//! | Container | Use Case | Example |
+//! |-----------|----------|---------|
+//! | [`Child`] | Single child (0 or 1) | `RenderOpacity`, `RenderClipRect` |
+//! | [`ChildList`] | Multiple children with parentData | `RenderFlex`, `RenderStack` |
+//! | [`Adapter`] | Cross-protocol wrapper | `BoxToSliver`, `SliverToBox` |
 //!
 //! # Type Aliases
 //!
 //! ```rust,ignore
-//! // Simple children
-//! type BoxChild = Children<BoxProtocol, Optional>;
-//! type BoxChildren = Children<BoxProtocol, Variable>;
+//! // Single child
+//! type BoxChild = Child<BoxProtocol, Optional>;      // 0 or 1
+//! type BoxChildRequired = Child<BoxProtocol, Exact<1>>;  // exactly 1
 //!
-//! // Children with parent data
+//! // Multiple children with parent data
 //! type FlexChildren = ChildList<BoxProtocol, Variable, FlexParentData>;
 //! type StackChildren = ChildList<BoxProtocol, Variable, StackParentData>;
 //!
-//! // Wrappers
-//! type ProxyBox = Proxy<BoxProtocol>;
-//! type ShiftedBox = Shifted<BoxProtocol>;
-//! type AligningBox = Aligning<BoxProtocol>;
-//!
 //! // Cross-protocol adapters
-//! type BoxToSliver = Adapter<BoxChild, SliverProtocol>;
-//! type SliverToBox = Adapter<SliverChild, BoxProtocol>;
+//! type BoxToSliver = Adapter<Child<BoxProtocol>, SliverProtocol>;
+//! type SliverToBox = Adapter<Child<SliverProtocol>, BoxProtocol>;
 //! ```
 
 mod adapter;
-mod aligning;
-mod base;
 mod children;
-mod proxy;
-mod shifted;
-mod single_child;
 mod viewport;
 
 pub use adapter::{
     Adapter, BoxToSliver, MultiBoxToSliver, MultiSliverToBox, OptionalBoxToSliver,
     OptionalSliverToBox, SliverToBox,
 };
-pub use aligning::*;
 pub use children::{
-    // Box protocol aliases
+    // Box protocol - single child
     BoxChild,
+    // Box protocol - multiple children
     BoxChildList,
     BoxChildRequired,
+
     BoxChildren,
+
+    // Primary container types
+    Child,
+    ChildEntry,
     ChildList,
-    ChildNode,
-    // Primary types
-    Children,
+
     // Layout-specific aliases
     FlexChildren,
+    // Helper traits
     HasOffset,
-    // Generic multi-child traits
     MultiChildContainer,
     MultiChildContainerWithData,
-    // Generic alias
-    Single,
-    // Sliver protocol aliases
+    SingleChildContainer,
+    // Sliver protocol - single child
     SliverChild,
+    // Sliver protocol - multiple children
+    SliverChildList,
     SliverChildRequired,
+
     SliverChildren,
+
     StackChildren,
     WrapChildren,
 };
-// Re-export generic traits from their respective modules
-pub use proxy::{ProxyContainer, SingleChildContainer};
-pub use shifted::ShiftedContainer;
-// Re-export concrete types
-pub use proxy::*;
-pub use shifted::*;
 pub use viewport::{SliverViewport, Viewport};
-// Base and SingleChild containers
-pub use base::{Base, BaseBox, BaseContainer, BaseSliver};
-pub use single_child::{SingleChild, SingleChildBox, SingleChildSliver};

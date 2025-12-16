@@ -5,11 +5,10 @@
 use flui_types::{Color, Offset, Point, Rect, Size};
 
 use crate::constraints::BoxConstraints;
-
-use crate::containers::ProxyBox;
+use crate::containers::BoxChild;
 use crate::objects::r#box::effects::clip_rrect::BorderRadius;
 use crate::pipeline::PaintingContext;
-use crate::traits::TextBaseline;
+use crate::traits::{RenderBox, TextBaseline};
 
 /// Position of the decoration relative to the child.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -209,6 +208,11 @@ impl Default for BoxDecoration {
 
 /// A render object that paints decoration around its child.
 ///
+/// # Flutter Equivalent
+///
+/// This corresponds to Flutter's `RenderDecoratedBox` which extends `RenderProxyBox`.
+/// Like Flutter, this stores child directly and delegates size to child.
+///
 /// # Example
 ///
 /// ```ignore
@@ -220,8 +224,11 @@ impl Default for BoxDecoration {
 /// ```
 #[derive(Debug)]
 pub struct RenderDecoratedBox {
-    /// Container holding the child and geometry.
-    proxy: ProxyBox,
+    /// The child render object.
+    child: BoxChild,
+
+    /// Cached size from layout.
+    size: Size,
 
     /// The decoration to paint.
     decoration: BoxDecoration,
@@ -234,7 +241,8 @@ impl RenderDecoratedBox {
     /// Creates a new decorated box.
     pub fn new(decoration: BoxDecoration) -> Self {
         Self {
-            proxy: ProxyBox::new(),
+            child: BoxChild::new(),
+            size: Size::ZERO,
             decoration,
             position: DecorationPosition::Background,
         }
@@ -243,11 +251,43 @@ impl RenderDecoratedBox {
     /// Creates with position specified.
     pub fn with_position(decoration: BoxDecoration, position: DecorationPosition) -> Self {
         Self {
-            proxy: ProxyBox::new(),
+            child: BoxChild::new(),
+            size: Size::ZERO,
             decoration,
             position,
         }
     }
+
+    // ========================================================================
+    // Child access
+    // ========================================================================
+
+    /// Returns a reference to the child, if present.
+    pub fn child(&self) -> Option<&dyn RenderBox> {
+        self.child.get()
+    }
+
+    /// Returns a mutable reference to the child, if present.
+    pub fn child_mut(&mut self) -> Option<&mut dyn RenderBox> {
+        self.child.get_mut()
+    }
+
+    /// Sets the child.
+    pub fn set_child(&mut self, child: Option<Box<dyn RenderBox>>) {
+        self.child.clear();
+        if let Some(c) = child {
+            self.child.set(c);
+        }
+    }
+
+    /// Takes the child.
+    pub fn take_child(&mut self) -> Option<Box<dyn RenderBox>> {
+        self.child.take()
+    }
+
+    // ========================================================================
+    // Decoration configuration
+    // ========================================================================
 
     /// Returns the decoration.
     pub fn decoration(&self) -> &BoxDecoration {
@@ -275,14 +315,13 @@ impl RenderDecoratedBox {
 
     /// Returns the current size.
     pub fn size(&self) -> Size {
-        *self.proxy.geometry()
+        self.size
     }
 
     /// Performs layout without a child.
     pub fn perform_layout(&mut self, constraints: BoxConstraints) -> Size {
-        let size = constraints.smallest();
-        self.proxy.set_geometry(size);
-        size
+        self.size = constraints.smallest();
+        self.size
     }
 
     /// Performs layout with a child size.
@@ -291,8 +330,8 @@ impl RenderDecoratedBox {
         _constraints: BoxConstraints,
         child_size: Size,
     ) -> Size {
-        self.proxy.set_geometry(child_size);
-        child_size
+        self.size = child_size;
+        self.size
     }
 
     /// Returns constraints for the child.

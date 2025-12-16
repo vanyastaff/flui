@@ -5,10 +5,9 @@
 use flui_types::{Matrix4, Offset, Point, Rect, Size};
 
 use crate::constraints::BoxConstraints;
-
-use crate::containers::ProxyBox;
+use crate::containers::BoxChild;
 use crate::pipeline::PaintingContext;
-use crate::traits::TextBaseline;
+use crate::traits::{RenderBox, TextBaseline};
 
 /// How a box should be inscribed into another box.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -142,6 +141,11 @@ impl Default for FittedAlignment {
 
 /// A render object that scales its child to fit.
 ///
+/// # Flutter Equivalent
+///
+/// This corresponds to Flutter's `RenderFittedBox` which extends `RenderProxyBox`.
+/// Like Flutter, this stores child directly and delegates size to child.
+///
 /// # Example
 ///
 /// ```ignore
@@ -155,8 +159,11 @@ impl Default for FittedAlignment {
 /// ```
 #[derive(Debug)]
 pub struct RenderFittedBox {
-    /// Container holding the child and geometry.
-    proxy: ProxyBox,
+    /// The child render object.
+    child: BoxChild,
+
+    /// Cached size from layout.
+    size: Size,
 
     /// How to inscribe the child in the parent.
     fit: BoxFit,
@@ -172,7 +179,8 @@ impl RenderFittedBox {
     /// Creates a new fitted box.
     pub fn new(fit: BoxFit) -> Self {
         Self {
-            proxy: ProxyBox::new(),
+            child: BoxChild::new(),
+            size: Size::ZERO,
             fit,
             alignment: FittedAlignment::CENTER,
             child_size: Size::ZERO,
@@ -182,12 +190,44 @@ impl RenderFittedBox {
     /// Creates with fit and alignment.
     pub fn with_alignment(fit: BoxFit, alignment: FittedAlignment) -> Self {
         Self {
-            proxy: ProxyBox::new(),
+            child: BoxChild::new(),
+            size: Size::ZERO,
             fit,
             alignment,
             child_size: Size::ZERO,
         }
     }
+
+    // ========================================================================
+    // Child access
+    // ========================================================================
+
+    /// Returns a reference to the child, if present.
+    pub fn child(&self) -> Option<&dyn RenderBox> {
+        self.child.get()
+    }
+
+    /// Returns a mutable reference to the child, if present.
+    pub fn child_mut(&mut self) -> Option<&mut dyn RenderBox> {
+        self.child.get_mut()
+    }
+
+    /// Sets the child.
+    pub fn set_child(&mut self, child: Option<Box<dyn RenderBox>>) {
+        self.child.clear();
+        if let Some(c) = child {
+            self.child.set(c);
+        }
+    }
+
+    /// Takes the child.
+    pub fn take_child(&mut self) -> Option<Box<dyn RenderBox>> {
+        self.child.take()
+    }
+
+    // ========================================================================
+    // Fit configuration
+    // ========================================================================
 
     /// Returns the fit mode.
     pub fn fit(&self) -> BoxFit {
@@ -215,7 +255,7 @@ impl RenderFittedBox {
 
     /// Returns the current size.
     pub fn size(&self) -> Size {
-        *self.proxy.geometry()
+        self.size
     }
 
     /// Computes the transform for painting the child.
@@ -240,9 +280,8 @@ impl RenderFittedBox {
 
     /// Performs layout without a child.
     pub fn perform_layout(&mut self, constraints: BoxConstraints) -> Size {
-        let size = constraints.smallest();
-        self.proxy.set_geometry(size);
-        size
+        self.size = constraints.smallest();
+        self.size
     }
 
     /// Performs layout with a child size.
@@ -253,9 +292,8 @@ impl RenderFittedBox {
     ) -> Size {
         self.child_size = child_size;
         // FittedBox takes whatever size it's given
-        let size = constraints.biggest();
-        self.proxy.set_geometry(size);
-        size
+        self.size = constraints.biggest();
+        self.size
     }
 
     /// Returns constraints for the child (unconstrained).

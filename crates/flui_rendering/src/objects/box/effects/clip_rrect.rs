@@ -5,17 +5,21 @@
 use flui_types::{geometry::Radius, Offset, Point, RRect, Rect, Size};
 
 use crate::constraints::BoxConstraints;
-
-use crate::containers::ProxyBox;
+use crate::containers::BoxChild;
 use crate::delegates::CustomClipper;
 use crate::objects::r#box::effects::clip_rect::Clip;
 use crate::pipeline::PaintingContext;
-use crate::traits::TextBaseline;
+use crate::traits::{RenderBox, TextBaseline};
 
 /// A render object that clips its child to a rounded rectangle.
 ///
 /// By default, clips to the bounds with the specified border radius.
 /// A custom clipper can be provided for different rounded shapes.
+///
+/// # Flutter Equivalent
+///
+/// This corresponds to Flutter's `RenderClipRRect` which extends `RenderProxyBox`.
+/// Like Flutter, this stores child directly and delegates size to child.
 ///
 /// # Example
 ///
@@ -31,8 +35,11 @@ use crate::traits::TextBaseline;
 /// ```
 #[derive(Debug)]
 pub struct RenderClipRRect {
-    /// Container holding the child and geometry.
-    proxy: ProxyBox,
+    /// The child render object.
+    child: BoxChild,
+
+    /// Cached size from layout.
+    size: Size,
 
     /// The border radius.
     border_radius: BorderRadius,
@@ -138,7 +145,8 @@ impl RenderClipRRect {
     /// Creates a new clip rrect with zero border radius.
     pub fn new() -> Self {
         Self {
-            proxy: ProxyBox::new(),
+            child: BoxChild::new(),
+            size: Size::ZERO,
             border_radius: BorderRadius::ZERO,
             clipper: None,
             clip_behavior: Clip::AntiAlias,
@@ -148,7 +156,8 @@ impl RenderClipRRect {
     /// Creates with a uniform radius.
     pub fn with_radius(radius: Radius) -> Self {
         Self {
-            proxy: ProxyBox::new(),
+            child: BoxChild::new(),
+            size: Size::ZERO,
             border_radius: BorderRadius::all(radius),
             clipper: None,
             clip_behavior: Clip::AntiAlias,
@@ -163,7 +172,8 @@ impl RenderClipRRect {
     /// Creates with a border radius.
     pub fn with_border_radius(border_radius: BorderRadius) -> Self {
         Self {
-            proxy: ProxyBox::new(),
+            child: BoxChild::new(),
+            size: Size::ZERO,
             border_radius,
             clipper: None,
             clip_behavior: Clip::AntiAlias,
@@ -173,12 +183,44 @@ impl RenderClipRRect {
     /// Creates with a custom clipper.
     pub fn with_clipper(clipper: Box<dyn CustomClipper<RRect>>) -> Self {
         Self {
-            proxy: ProxyBox::new(),
+            child: BoxChild::new(),
+            size: Size::ZERO,
             border_radius: BorderRadius::ZERO,
             clipper: Some(clipper),
             clip_behavior: Clip::AntiAlias,
         }
     }
+
+    // ========================================================================
+    // Child access
+    // ========================================================================
+
+    /// Returns a reference to the child, if present.
+    pub fn child(&self) -> Option<&dyn RenderBox> {
+        self.child.get()
+    }
+
+    /// Returns a mutable reference to the child, if present.
+    pub fn child_mut(&mut self) -> Option<&mut dyn RenderBox> {
+        self.child.get_mut()
+    }
+
+    /// Sets the child.
+    pub fn set_child(&mut self, child: Option<Box<dyn RenderBox>>) {
+        self.child.clear();
+        if let Some(c) = child {
+            self.child.set(c);
+        }
+    }
+
+    /// Takes the child.
+    pub fn take_child(&mut self) -> Option<Box<dyn RenderBox>> {
+        self.child.take()
+    }
+
+    // ========================================================================
+    // Clip configuration
+    // ========================================================================
 
     /// Returns the border radius.
     pub fn border_radius(&self) -> BorderRadius {
@@ -225,14 +267,13 @@ impl RenderClipRRect {
 
     /// Returns the current size.
     pub fn size(&self) -> Size {
-        *self.proxy.geometry()
+        self.size
     }
 
     /// Performs layout without a child.
     pub fn perform_layout(&mut self, constraints: BoxConstraints) -> Size {
-        let size = constraints.smallest();
-        self.proxy.set_geometry(size);
-        size
+        self.size = constraints.smallest();
+        self.size
     }
 
     /// Performs layout with a child size.
@@ -241,8 +282,8 @@ impl RenderClipRRect {
         _constraints: BoxConstraints,
         child_size: Size,
     ) -> Size {
-        self.proxy.set_geometry(child_size);
-        child_size
+        self.size = child_size;
+        self.size
     }
 
     /// Returns constraints for the child.

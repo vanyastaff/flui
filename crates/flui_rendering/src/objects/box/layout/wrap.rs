@@ -131,6 +131,53 @@ impl RenderWrap {
         wrap
     }
 
+    // ========================================================================
+    // Children access (Flutter-style with parentData)
+    // ========================================================================
+
+    /// Returns the number of children.
+    pub fn child_count(&self) -> usize {
+        self.children.len()
+    }
+
+    /// Returns whether there are any children.
+    pub fn has_children(&self) -> bool {
+        !self.children.is_empty()
+    }
+
+    /// Returns a reference to the children container.
+    pub fn children(&self) -> &ChildList<BoxProtocol, Variable, WrapParentData> {
+        &self.children
+    }
+
+    /// Returns a mutable reference to the children container.
+    pub fn children_mut(&mut self) -> &mut ChildList<BoxProtocol, Variable, WrapParentData> {
+        &mut self.children
+    }
+
+    /// Adds a child with default parent data.
+    pub fn add_child(&mut self, child: Box<dyn crate::traits::RenderBox>) {
+        self.children.push(child);
+    }
+
+    /// Adds a child with specific wrap parent data.
+    pub fn add_child_with_data(
+        &mut self,
+        child: Box<dyn crate::traits::RenderBox>,
+        data: WrapParentData,
+    ) {
+        self.children.push_with(child, data);
+    }
+
+    /// Removes all children.
+    pub fn clear_children(&mut self) {
+        self.children.clear();
+    }
+
+    // ========================================================================
+    // Configuration
+    // ========================================================================
+
     /// Returns the direction.
     pub fn direction(&self) -> Axis {
         self.direction
