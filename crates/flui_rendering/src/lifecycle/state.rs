@@ -1,14 +1,22 @@
 //! Unified render object state storage.
 //!
 //! This module provides [`RenderObjectState`] - a compact struct that stores
-//! all common state for render objects, replacing scattered fields with a
-//! unified, memory-efficient representation.
+//! all common state for render objects, following Flutter's pattern where
+//! attach state is determined by owner presence.
+//!
+//! # Flutter Approach
+//!
+//! In Flutter, render objects determine attachment via `owner != null`:
+//! - `bool get attached => _owner != null;`
+//!
+//! Dirty flags are separate boolean fields. We use `RenderObjectFlags` to
+//! pack these efficiently.
 
 use std::sync::Arc;
 
 use parking_lot::RwLock;
 
-use super::{DirtyFlags, RenderLifecycle, RenderState};
+use super::{DirtyFlags, RelayoutBoundary, RenderObjectFlags};
 use crate::pipeline::PipelineOwner;
 use crate::traits::RenderObject;
 
@@ -18,29 +26,29 @@ use crate::traits::RenderObject;
 
 /// Unified state storage for render objects.
 ///
-/// This struct combines lifecycle state with tree position information,
+/// This struct combines dirty flags with tree position information,
 /// providing a single source of truth for render object state.
+///
+/// # Flutter Approach
+///
+/// Attachment is determined by owner presence (`owner != null`), not a
+/// separate lifecycle flag. This matches Flutter exactly:
+///
+/// ```dart
+/// bool get attached => _owner != null;
+/// ```
 ///
 /// # Memory Layout
 ///
 /// ```text
 /// RenderObjectState (48 bytes on 64-bit):
-/// - render_state: RenderState (2 bytes)
+/// - flags: RenderObjectFlags (2 bytes)
 /// - depth: u16 (2 bytes)
 /// - padding: 4 bytes
 /// - owner: Option<Arc<RwLock<PipelineOwner>>> (8 bytes)
 /// - parent: Option<*const dyn RenderObject> (16 bytes - wide pointer)
 /// - node_id: usize (8 bytes)
 /// ```
-///
-/// Compare to storing these fields separately with individual booleans:
-/// - needs_layout: bool (1 byte + padding)
-/// - needs_paint: bool (1 byte + padding)
-/// - needs_compositing_bits_update: bool (1 byte + padding)
-/// - needs_semantics_update: bool (1 byte + padding)
-/// - is_relayout_boundary: bool (1 byte + padding)
-/// - is_repaint_boundary: bool (1 byte + padding)
-/// - ... many more fields
 ///
 /// # Usage
 ///
@@ -57,14 +65,15 @@ use crate::traits::RenderObject;
 /// }
 /// ```
 pub struct RenderObjectState {
-    /// Combined lifecycle and dirty flags (2 bytes).
-    render_state: RenderState,
+    /// Combined dirty flags and relayout boundary (2 bytes).
+    flags: RenderObjectFlags,
 
     /// Depth in the render tree (root = 0).
     /// Using u16 allows trees up to 65535 levels deep.
     depth: u16,
 
     /// The pipeline owner that manages this render object.
+    /// Attachment is determined by `owner.is_some()`.
     owner: Option<Arc<RwLock<PipelineOwner>>>,
 
     /// Pointer to parent render object (wide pointer with vtable).
@@ -74,26 +83,31 @@ pub struct RenderObjectState {
 
     /// Unique identifier for this node in the pipeline owner's dirty lists.
     node_id: usize,
+
+    /// Whether this object has been disposed.
+    disposed: bool,
 }
 
 impl std::fmt::Debug for RenderObjectState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RenderObjectState")
-            .field("render_state", &self.render_state)
+            .field("flags", &self.flags)
             .field("depth", &self.depth)
             .field("owner", &self.owner.as_ref().map(|_| "..."))
             .field("parent", &self.parent.map(|p| p as *const ()))
             .field("node_id", &self.node_id)
+            .field("disposed", &self.disposed)
             .finish()
     }
 }
 
 // Safety: RenderObjectState is Send + Sync because:
-// - RenderState is Copy and contains no pointers
+// - RenderObjectFlags is Copy and contains no pointers
 // - depth is Copy
 // - Arc<RwLock<PipelineOwner>> is Send + Sync
 // - parent is only dereferenced while attached (single-threaded tree ops)
 // - node_id is Copy
+// - disposed is Copy
 unsafe impl Send for RenderObjectState {}
 unsafe impl Sync for RenderObjectState {}
 
@@ -108,11 +122,12 @@ impl RenderObjectState {
     #[inline]
     pub fn new() -> Self {
         Self {
-            render_state: RenderState::new(),
+            flags: RenderObjectFlags::new(),
             depth: 0,
             owner: None,
             parent: None,
             node_id: 0,
+            disposed: false,
         }
     }
 
@@ -120,11 +135,12 @@ impl RenderObjectState {
     #[inline]
     pub fn with_node_id(node_id: usize) -> Self {
         Self {
-            render_state: RenderState::new(),
+            flags: RenderObjectFlags::new(),
             depth: 0,
             owner: None,
             parent: None,
             node_id,
+            disposed: false,
         }
     }
 
@@ -168,6 +184,9 @@ impl RenderObjectState {
     }
 
     /// Returns whether this object is attached to a pipeline owner.
+    ///
+    /// # Flutter Equivalence
+    /// `bool get attached => _owner != null;`
     #[inline]
     pub fn is_attached(&self) -> bool {
         self.owner.is_some()
@@ -193,83 +212,104 @@ impl RenderObjectState {
     }
 
     // ========================================================================
-    // Lifecycle Access
+    // Flags Access
     // ========================================================================
-
-    /// Returns the current lifecycle state.
-    #[inline]
-    pub fn lifecycle(&self) -> RenderLifecycle {
-        self.render_state.lifecycle()
-    }
 
     /// Returns the dirty flags.
     #[inline]
-    pub fn flags(&self) -> DirtyFlags {
-        self.render_state.flags()
+    pub fn dirty_flags(&self) -> DirtyFlags {
+        self.flags.dirty()
     }
 
-    /// Returns the underlying render state.
+    /// Returns the underlying render object flags.
     #[inline]
-    pub fn render_state(&self) -> &RenderState {
-        &self.render_state
+    pub fn flags(&self) -> &RenderObjectFlags {
+        &self.flags
     }
 
-    /// Returns mutable access to render state.
+    /// Returns mutable access to render object flags.
     #[inline]
-    pub fn render_state_mut(&mut self) -> &mut RenderState {
-        &mut self.render_state
+    pub fn flags_mut(&mut self) -> &mut RenderObjectFlags {
+        &mut self.flags
     }
 
     // ========================================================================
-    // Lifecycle Queries (Delegated)
+    // Dirty State Queries (Delegated to flags)
     // ========================================================================
 
     /// Returns whether layout is needed.
+    ///
+    /// # Flutter Equivalence
+    /// `_needsLayout`
     #[inline]
     pub fn needs_layout(&self) -> bool {
-        self.render_state.needs_layout()
+        self.flags.needs_layout()
     }
 
     /// Returns whether paint is needed.
+    ///
+    /// # Flutter Equivalence
+    /// `_needsPaint`
     #[inline]
     pub fn needs_paint(&self) -> bool {
-        self.render_state.needs_paint()
+        self.flags.needs_paint()
     }
 
     /// Returns whether compositing bits update is needed.
+    ///
+    /// # Flutter Equivalence
+    /// `_needsCompositingBitsUpdate`
     #[inline]
     pub fn needs_compositing_bits_update(&self) -> bool {
-        self.render_state.needs_compositing_bits_update()
+        self.flags.needs_compositing_bits_update()
     }
 
     /// Returns whether semantics update is needed.
+    ///
+    /// # Flutter Equivalence
+    /// Part of semantics system
     #[inline]
     pub fn needs_semantics_update(&self) -> bool {
-        self.render_state.needs_semantics_update()
+        self.flags.needs_semantics_update()
     }
 
     /// Returns whether this is a relayout boundary.
+    ///
+    /// # Flutter Equivalence
+    /// `_isRelayoutBoundary`
     #[inline]
     pub fn is_relayout_boundary(&self) -> bool {
-        self.render_state.is_relayout_boundary()
+        self.flags.is_relayout_boundary()
     }
 
     /// Returns whether this is a repaint boundary.
+    ///
+    /// # Flutter Equivalence
+    /// `isRepaintBoundary`
     #[inline]
     pub fn is_repaint_boundary(&self) -> bool {
-        self.render_state.is_repaint_boundary()
+        self.flags.is_repaint_boundary()
     }
 
     /// Returns whether compositing is needed.
+    ///
+    /// # Flutter Equivalence
+    /// `_needsCompositing`
     #[inline]
     pub fn needs_compositing(&self) -> bool {
-        self.render_state.needs_compositing()
+        self.flags.needs_compositing()
+    }
+
+    /// Returns the relayout boundary state.
+    #[inline]
+    pub fn relayout_boundary(&self) -> RelayoutBoundary {
+        self.flags.relayout_boundary()
     }
 
     /// Returns whether the object is disposed.
     #[inline]
     pub fn is_disposed(&self) -> bool {
-        self.render_state.is_disposed()
+        self.disposed
     }
 
     // ========================================================================
@@ -278,22 +318,33 @@ impl RenderObjectState {
 
     /// Attaches this render object to a pipeline owner.
     ///
-    /// This transitions the lifecycle to Attached, then NeedsLayout,
-    /// and schedules initial layout/paint if needed.
+    /// # Flutter Equivalence
+    /// `attach(PipelineOwner owner)` sets `_owner = owner`
     pub fn attach(&mut self, owner: Arc<RwLock<PipelineOwner>>) {
         debug_assert!(
             self.owner.is_none(),
             "Cannot attach: already attached to a pipeline owner"
         );
+        debug_assert!(!self.disposed, "Cannot attach: object is disposed");
 
         self.owner = Some(owner);
-        self.render_state.attach();
 
-        // Schedule initial layout
-        self.schedule_layout_with_owner();
+        // Schedule initial layout if needed
+        if self.needs_layout() {
+            self.schedule_layout_with_owner();
+        }
+        if self.needs_paint() {
+            self.schedule_paint_with_owner();
+        }
+        if self.needs_compositing_bits_update() {
+            self.schedule_compositing_bits_with_owner();
+        }
     }
 
     /// Detaches this render object from its pipeline owner.
+    ///
+    /// # Flutter Equivalence
+    /// `detach()` sets `_owner = null`
     pub fn detach(&mut self) {
         debug_assert!(
             self.owner.is_some(),
@@ -301,12 +352,16 @@ impl RenderObjectState {
         );
 
         self.owner = None;
-        self.render_state.detach();
+        // Clear relayout boundary on detach (Flutter does this in dropChild)
+        self.flags.clear_relayout_boundary();
     }
 
     /// Disposes this render object.
+    ///
+    /// # Flutter Equivalence
+    /// `dispose()` - marks object as disposed
     pub fn dispose(&mut self) {
-        self.render_state.dispose();
+        self.disposed = true;
         self.owner = None;
         self.parent = None;
     }
@@ -318,28 +373,40 @@ impl RenderObjectState {
     /// Marks this object as needing layout.
     ///
     /// If attached, also schedules with the pipeline owner.
+    ///
+    /// # Flutter Equivalence
+    /// `markNeedsLayout()`
     pub fn mark_needs_layout(&mut self) {
-        self.render_state.mark_needs_layout();
+        self.flags.mark_needs_layout();
         self.schedule_layout_with_owner();
     }
 
     /// Marks this object as needing paint.
     ///
     /// If attached, also schedules with the pipeline owner.
+    ///
+    /// # Flutter Equivalence
+    /// `markNeedsPaint()`
     pub fn mark_needs_paint(&mut self) {
-        self.render_state.mark_needs_paint();
+        self.flags.mark_needs_paint();
         self.schedule_paint_with_owner();
     }
 
     /// Marks compositing bits as needing update.
+    ///
+    /// # Flutter Equivalence
+    /// `markNeedsCompositingBitsUpdate()`
     pub fn mark_needs_compositing_bits_update(&mut self) {
-        self.render_state.mark_needs_compositing_bits_update();
+        self.flags.mark_needs_compositing_bits_update();
         self.schedule_compositing_bits_with_owner();
     }
 
     /// Marks semantics as needing update.
+    ///
+    /// # Flutter Equivalence
+    /// Part of semantics system
     pub fn mark_needs_semantics_update(&mut self) {
-        self.render_state.mark_needs_semantics();
+        self.flags.mark_needs_semantics_update();
         self.schedule_semantics_with_owner();
     }
 
@@ -350,47 +417,71 @@ impl RenderObjectState {
     /// Clears the needs_layout state after layout completes.
     #[inline]
     pub fn clear_needs_layout(&mut self) {
-        self.render_state.clear_needs_layout();
+        self.flags.clear_needs_layout();
     }
 
     /// Clears the needs_paint state after paint completes.
     #[inline]
     pub fn clear_needs_paint(&mut self) {
-        self.render_state.clear_needs_paint();
+        self.flags.clear_needs_paint();
     }
 
     /// Clears the needs_compositing_bits_update flag.
     #[inline]
     pub fn clear_needs_compositing_bits_update(&mut self) {
-        self.render_state.clear_needs_compositing_bits_update();
+        self.flags.clear_needs_compositing_bits_update();
     }
 
     /// Clears the needs_semantics_update flag.
     #[inline]
     pub fn clear_needs_semantics_update(&mut self) {
-        self.render_state.clear_needs_semantics();
+        self.flags.clear_needs_semantics_update();
     }
 
     // ========================================================================
     // Boundary Configuration
     // ========================================================================
 
-    /// Sets whether this is a relayout boundary.
+    /// Sets the relayout boundary state.
+    ///
+    /// # Flutter Equivalence
+    /// `_isRelayoutBoundary = ...`
     #[inline]
     pub fn set_relayout_boundary(&mut self, is_boundary: bool) {
-        self.render_state.set_relayout_boundary(is_boundary);
+        self.flags.set_relayout_boundary(if is_boundary {
+            RelayoutBoundary::Yes
+        } else {
+            RelayoutBoundary::No
+        });
     }
 
     /// Sets whether this is a repaint boundary.
+    ///
+    /// # Flutter Equivalence
+    /// `isRepaintBoundary` (typically overridden)
     #[inline]
     pub fn set_repaint_boundary(&mut self, is_boundary: bool) {
-        self.render_state.set_repaint_boundary(is_boundary);
+        self.flags.set_repaint_boundary(is_boundary);
     }
 
     /// Sets whether compositing is needed.
+    ///
+    /// # Flutter Equivalence
+    /// `_needsCompositing = ...`
     #[inline]
     pub fn set_needs_compositing(&mut self, needs: bool) {
-        self.render_state.set_needs_compositing(needs);
+        self.flags.set_needs_compositing(needs);
+    }
+
+    /// Syncs was_repaint_boundary to match current repaint_boundary.
+    ///
+    /// Called at the end of paint.
+    ///
+    /// # Flutter Equivalence
+    /// `_wasRepaintBoundary = isRepaintBoundary;`
+    #[inline]
+    pub fn sync_was_repaint_boundary(&mut self) {
+        self.flags.sync_was_repaint_boundary();
     }
 
     // ========================================================================
@@ -444,9 +535,9 @@ mod tests {
 
     #[test]
     fn test_render_object_state_size() {
-        // Verify size is reasonable (should be around 32-40 bytes on 64-bit)
+        // Verify size is reasonable (should be around 40-48 bytes on 64-bit)
         let size = std::mem::size_of::<RenderObjectState>();
-        assert!(size <= 48, "RenderObjectState is too large: {} bytes", size);
+        assert!(size <= 56, "RenderObjectState is too large: {} bytes", size);
     }
 
     #[test]
@@ -456,7 +547,9 @@ mod tests {
         assert!(state.owner().is_none());
         assert!(state.parent_ptr().is_none());
         assert!(!state.is_attached());
-        assert!(state.lifecycle().is_detached());
+        // New objects need layout and paint
+        assert!(state.needs_layout());
+        assert!(state.needs_paint());
     }
 
     #[test]
@@ -479,6 +572,9 @@ mod tests {
     fn test_render_object_state_attach_detach() {
         let mut state = RenderObjectState::with_node_id(1);
         let owner = Arc::new(RwLock::new(PipelineOwner::new()));
+
+        // Initially detached
+        assert!(!state.is_attached());
 
         // Attach
         state.attach(owner.clone());
@@ -519,8 +615,8 @@ mod tests {
         state.attach(owner.clone());
         state.clear_needs_layout();
 
-        // Transition to LaidOut first
-        state.render_state_mut().clear_needs_layout();
+        // Clear initial paint request
+        owner.write().flush_paint();
 
         // Mark needs paint
         state.mark_needs_paint();
@@ -554,6 +650,22 @@ mod tests {
         assert!(state.is_disposed());
         assert!(state.owner().is_none());
         assert!(state.parent_ptr().is_none());
+    }
+
+    #[test]
+    fn test_render_object_state_repaint_boundary_sync() {
+        let mut state = RenderObjectState::new();
+
+        state.set_repaint_boundary(true);
+        assert!(state.is_repaint_boundary());
+        assert!(!state.flags().was_repaint_boundary());
+
+        state.sync_was_repaint_boundary();
+        assert!(state.flags().was_repaint_boundary());
+
+        state.set_repaint_boundary(false);
+        assert!(!state.is_repaint_boundary());
+        assert!(state.flags().was_repaint_boundary()); // Still true until next sync
     }
 
     #[test]

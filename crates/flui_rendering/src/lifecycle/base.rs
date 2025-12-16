@@ -48,11 +48,11 @@ use crate::pipeline::PipelineOwner;
 /// # Memory Layout
 ///
 /// `BaseRenderObject` is designed to be compact:
-/// - `state`: RenderObjectState (~32-40 bytes)
+/// - `state`: RenderObjectState (~48 bytes)
 /// - `parent_data`: Option<Box<dyn ParentData>> (16 bytes)
 /// - `debug_creator`: Option<String> (24 bytes)
 ///
-/// Total: ~72-80 bytes base overhead per render object.
+/// Total: ~88 bytes base overhead per render object.
 #[derive(Debug)]
 pub struct BaseRenderObject {
     /// Unified lifecycle and tree state.
@@ -321,7 +321,7 @@ mod tests {
     fn test_base_render_object_size() {
         let size = std::mem::size_of::<BaseRenderObject>();
         // Should be reasonably compact
-        assert!(size <= 96, "BaseRenderObject is too large: {} bytes", size);
+        assert!(size <= 104, "BaseRenderObject is too large: {} bytes", size);
     }
 
     #[test]
@@ -331,6 +331,9 @@ mod tests {
         assert!(!base.is_attached());
         assert!(base.parent_data().is_none());
         assert!(base.debug_creator().is_none());
+        // New objects need layout and paint
+        assert!(base.needs_layout());
+        assert!(base.needs_paint());
     }
 
     #[test]
@@ -368,7 +371,6 @@ mod tests {
 
         // Clear and mark needs paint
         base.clear_needs_layout();
-        base.state_mut().render_state_mut().clear_needs_layout();
         base.mark_needs_paint();
         assert!(base.needs_paint());
     }

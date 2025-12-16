@@ -1,408 +1,99 @@
-//! Render object lifecycle management.
+//! Render object dirty flags and state tracking.
 //!
-//! This module provides [`RenderLifecycle`] enum that replaces multiple boolean
-//! flags from Flutter (`_needsLayout`, `_needsPaint`, etc.) with a single
-//! type-safe state machine.
+//! This module provides dirty flag tracking for render objects, matching
+//! Flutter's approach of using separate boolean flags for each dirty state.
 //!
-//! # Benefits over Flutter's approach
+//! # Flutter Equivalence
 //!
-//! - **Memory efficiency**: 1 byte enum vs 3-4 bytes of booleans
-//! - **Type safety**: Compile-time state transition validation
-//! - **Clarity**: Single source of truth for lifecycle state
-//! - **Debug**: Clear state names in error messages
+//! In Flutter, render objects track dirty state with separate boolean fields:
+//! - `_needsLayout`
+//! - `_needsPaint`
+//! - `_needsCompositingBitsUpdate`
+//! - `_needsSemanticsUpdate`
+//! - `_needsCompositedLayerUpdate`
+//! - `isRepaintBoundary` (getter)
+//! - `_wasRepaintBoundary`
+//! - `_isRelayoutBoundary` (nullable)
+//!
+//! We pack these into a single byte using bitflags for memory efficiency.
+//!
+//! # Memory Layout
+//!
+//! - `DirtyFlags`: 1 byte (vs 8+ bytes of separate booleans in Flutter)
 //!
 //! # Example
 //!
 //! ```
-//! use flui_rendering::lifecycle::{RenderLifecycle, DirtyFlags};
+//! use flui_rendering::lifecycle::DirtyFlags;
 //!
-//! let mut lifecycle = RenderLifecycle::Detached;
-//! assert!(lifecycle.can_transition_to(RenderLifecycle::Attached));
+//! let mut flags = DirtyFlags::empty();
+//! flags.insert(DirtyFlags::NEEDS_LAYOUT);
+//! assert!(flags.needs_layout());
 //!
-//! lifecycle = RenderLifecycle::Attached;
-//! assert!(lifecycle.can_transition_to(RenderLifecycle::NeedsLayout));
+//! flags.remove(DirtyFlags::NEEDS_LAYOUT);
+//! assert!(!flags.needs_layout());
 //! ```
 
 use bitflags::bitflags;
 
 // ============================================================================
-// RenderLifecycle Enum
-// ============================================================================
-
-/// Lifecycle state of a render object.
-///
-/// This enum represents the state machine for render object lifecycle,
-/// replacing Flutter's multiple boolean flags with a single byte.
-///
-/// # State Machine
-///
-/// ```text
-///                     ┌──────────────┐
-///                     │   Detached   │ (initial)
-///                     └──────┬───────┘
-///                            │ attach()
-///                            ▼
-///                     ┌──────────────┐
-///                     │   Attached   │
-///                     └──────┬───────┘
-///                            │ mark_needs_layout()
-///                            ▼
-///         ┌──────────┬───────────────┐
-///         │          │  NeedsLayout  │
-///         │          └───────┬───────┘
-///         │                  │ perform_layout()
-///         │                  ▼
-///         │          ┌───────────────┐
-///         │          │    LaidOut    │◀─────────┐
-///         │          └───────┬───────┘          │
-///         │                  │ mark_needs_paint()│
-///         │                  ▼                   │
-///         │          ┌───────────────┐          │
-///         │          │  NeedsPaint   │          │
-///         │          └───────┬───────┘          │
-///         │                  │ paint()          │
-///         │                  ▼                  │
-///         │          ┌───────────────┐          │
-///         │          │    Painted    │          │
-///         │          └───────┬───────┘          │
-///         │                  │                  │
-///         │                  └──────────────────┘
-///         │                     mark_needs_layout()
-///         │
-///         └─────────────────────────────────────▶ Disposed
-///                            (terminal)
-/// ```
-///
-/// # Flutter Equivalence
-///
-/// | Flutter | FLUI |
-/// |---------|------|
-/// | `owner == null` | `Detached` |
-/// | `owner != null` (initial) | `Attached` |
-/// | `_needsLayout == true` | `NeedsLayout` |
-/// | `_needsLayout == false` | `LaidOut` |
-/// | `_needsPaint == true` | `NeedsPaint` |
-/// | `_needsPaint == false` | `Painted` |
-/// | `_debugDisposed == true` | `Disposed` |
-///
-/// # Memory Layout
-///
-/// Size: 1 byte (`#[repr(u8)]`)
-///
-/// Flutter uses 3-4 boolean flags = 3-4 bytes + padding = 4-8 bytes.
-/// FLUI uses 1 byte enum = **75-87% memory savings per node**.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u8)]
-pub enum RenderLifecycle {
-    /// Not attached to pipeline.
-    ///
-    /// This is the initial state when a render object is created.
-    /// The object has no owner and cannot participate in layout or paint.
-    ///
-    /// # Flutter Equivalence
-    /// `owner == null`
-    #[default]
-    Detached = 0,
-
-    /// Attached to pipeline but not yet laid out.
-    ///
-    /// The object has an owner but needs its first layout pass.
-    /// Automatically transitions to `NeedsLayout` when attached.
-    ///
-    /// # Flutter Equivalence
-    /// `owner != null` (initial state after attach)
-    Attached = 1,
-
-    /// Needs layout.
-    ///
-    /// The object's layout information is stale and needs to be recomputed.
-    /// This is set by `mark_needs_layout()`.
-    ///
-    /// # Flutter Equivalence
-    /// `_needsLayout == true`
-    NeedsLayout = 2,
-
-    /// Layout complete, ready for paint.
-    ///
-    /// The object has valid layout information but may need painting.
-    /// This is set after `perform_layout()` completes.
-    ///
-    /// # Flutter Equivalence
-    /// `_needsLayout == false`
-    LaidOut = 3,
-
-    /// Needs paint.
-    ///
-    /// The object's visual appearance is stale and needs to be repainted.
-    /// This is set by `mark_needs_paint()`.
-    ///
-    /// # Flutter Equivalence
-    /// `_needsPaint == true`
-    NeedsPaint = 4,
-
-    /// Paint complete.
-    ///
-    /// The object has been painted and is visually up-to-date.
-    /// This is the normal "clean" state for an attached object.
-    ///
-    /// # Flutter Equivalence
-    /// `_needsPaint == false`
-    Painted = 5,
-
-    /// Resource has been disposed (terminal state).
-    ///
-    /// The object has been disposed and cannot be used again.
-    /// This is a terminal state - no transitions out of this state are valid.
-    ///
-    /// # Flutter Equivalence
-    /// `dispose()` called, `_debugDisposed = true`
-    Disposed = 6,
-}
-
-impl RenderLifecycle {
-    // ========================================================================
-    // State Transition Validation
-    // ========================================================================
-
-    /// Check if transition to another state is valid.
-    ///
-    /// This encodes the state machine rules for render object lifecycle.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use flui_rendering::lifecycle::RenderLifecycle;
-    ///
-    /// let state = RenderLifecycle::Attached;
-    /// assert!(state.can_transition_to(RenderLifecycle::NeedsLayout));
-    /// assert!(!state.can_transition_to(RenderLifecycle::Painted));
-    /// ```
-    #[inline]
-    #[must_use]
-    pub const fn can_transition_to(self, next: Self) -> bool {
-        use RenderLifecycle::*;
-        matches!(
-            (self, next),
-            // From Detached
-            (Detached, Attached)
-                | (Detached, Disposed)
-
-                // From Attached
-                | (Attached, NeedsLayout)
-                | (Attached, Disposed)
-
-                // From NeedsLayout
-                | (NeedsLayout, LaidOut)
-                | (NeedsLayout, Disposed)
-
-                // From LaidOut
-                | (LaidOut, NeedsPaint)
-                | (LaidOut, NeedsLayout) // Relayout
-                | (LaidOut, Disposed)
-
-                // From NeedsPaint
-                | (NeedsPaint, Painted)
-                | (NeedsPaint, NeedsLayout) // Relayout during paint
-                | (NeedsPaint, Disposed)
-
-                // From Painted
-                | (Painted, NeedsLayout) // Relayout
-                | (Painted, NeedsPaint) // Repaint
-                | (Painted, Disposed)
-        )
-    }
-
-    /// Transition to a new state, panicking if the transition is invalid.
-    ///
-    /// In debug builds, this validates the transition. In release builds,
-    /// validation is skipped for performance.
-    ///
-    /// # Panics
-    ///
-    /// Panics in debug builds if the transition is not valid.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use flui_rendering::lifecycle::RenderLifecycle;
-    ///
-    /// let mut state = RenderLifecycle::Detached;
-    /// state = state.transition_to(RenderLifecycle::Attached);
-    /// assert_eq!(state, RenderLifecycle::Attached);
-    /// ```
-    #[inline]
-    #[must_use]
-    pub fn transition_to(self, next: Self) -> Self {
-        debug_assert!(
-            self.can_transition_to(next),
-            "Invalid lifecycle transition: {:?} -> {:?}",
-            self,
-            next
-        );
-        next
-    }
-
-    // ========================================================================
-    // State Queries
-    // ========================================================================
-
-    /// Can perform layout in this state?
-    ///
-    /// Returns `true` if the object can have `perform_layout` called.
-    #[inline]
-    #[must_use]
-    pub const fn can_layout(self) -> bool {
-        matches!(self, Self::Attached | Self::NeedsLayout)
-    }
-
-    /// Can perform paint in this state?
-    ///
-    /// Returns `true` if the object can have `paint` called.
-    #[inline]
-    #[must_use]
-    pub const fn can_paint(self) -> bool {
-        matches!(self, Self::LaidOut | Self::NeedsPaint)
-    }
-
-    /// Is node attached to pipeline?
-    ///
-    /// Returns `true` if the object has an owner and is part of the render tree.
-    #[inline]
-    #[must_use]
-    pub const fn is_attached(self) -> bool {
-        matches!(
-            self,
-            Self::Attached | Self::NeedsLayout | Self::LaidOut | Self::NeedsPaint | Self::Painted
-        )
-    }
-
-    /// Is node usable (not detached or disposed)?
-    ///
-    /// Returns `true` if the object can participate in the rendering pipeline.
-    #[inline]
-    #[must_use]
-    pub const fn is_usable(self) -> bool {
-        !matches!(self, Self::Detached | Self::Disposed)
-    }
-
-    /// Needs layout?
-    ///
-    /// Returns `true` if `mark_needs_layout` has been called and layout
-    /// has not yet been performed.
-    #[inline]
-    #[must_use]
-    pub const fn needs_layout(self) -> bool {
-        matches!(self, Self::Attached | Self::NeedsLayout)
-    }
-
-    /// Needs paint?
-    ///
-    /// Returns `true` if `mark_needs_paint` has been called and paint
-    /// has not yet been performed.
-    #[inline]
-    #[must_use]
-    pub const fn needs_paint(self) -> bool {
-        matches!(self, Self::NeedsPaint)
-    }
-
-    /// Is in clean state (painted)?
-    ///
-    /// Returns `true` if the object is fully laid out and painted.
-    #[inline]
-    #[must_use]
-    pub const fn is_clean(self) -> bool {
-        matches!(self, Self::Painted)
-    }
-
-    /// Is disposed (terminal state)?
-    ///
-    /// Returns `true` if the object has been disposed and cannot be used.
-    #[inline]
-    #[must_use]
-    pub const fn is_disposed(self) -> bool {
-        matches!(self, Self::Disposed)
-    }
-
-    /// Is detached (not in tree)?
-    ///
-    /// Returns `true` if the object is not attached to a pipeline owner.
-    #[inline]
-    #[must_use]
-    pub const fn is_detached(self) -> bool {
-        matches!(self, Self::Detached)
-    }
-
-    // ========================================================================
-    // Display
-    // ========================================================================
-
-    /// Returns a human-readable name for this state.
-    #[inline]
-    #[must_use]
-    pub const fn name(self) -> &'static str {
-        match self {
-            Self::Detached => "Detached",
-            Self::Attached => "Attached",
-            Self::NeedsLayout => "NeedsLayout",
-            Self::LaidOut => "LaidOut",
-            Self::NeedsPaint => "NeedsPaint",
-            Self::Painted => "Painted",
-            Self::Disposed => "Disposed",
-        }
-    }
-}
-
-impl std::fmt::Display for RenderLifecycle {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.name())
-    }
-}
-
-// ============================================================================
-// DirtyFlags Bitflags
+// DirtyFlags
 // ============================================================================
 
 bitflags! {
     /// Dirty flags for render objects.
     ///
-    /// These flags track what needs to be updated, independent of
-    /// lifecycle state. This matches Flutter's approach where dirty
-    /// flags can be set regardless of attach/detach state.
+    /// These flags track what needs to be updated. This matches Flutter's
+    /// approach where dirty flags work independently of attach/detach state.
     ///
     /// # Memory Layout
     ///
     /// Size: 1 byte (`u8`)
     ///
-    /// Combined with `RenderLifecycle` (1 byte), total lifecycle state
-    /// is 2 bytes vs Flutter's 4-8 bytes.
+    /// Flutter uses 6-8 separate boolean fields = 6-8 bytes + padding.
+    /// We use 1 byte bitflags = **85-90% memory savings per node**.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// | Flutter Field | FLUI Flag |
+    /// |---------------|-----------|
+    /// | `_needsLayout` | `NEEDS_LAYOUT` |
+    /// | `_needsPaint` | `NEEDS_PAINT` |
+    /// | `_needsCompositingBitsUpdate` | `NEEDS_COMPOSITING_BITS_UPDATE` |
+    /// | `_needsSemanticsUpdate` | `NEEDS_SEMANTICS_UPDATE` |
+    /// | `_needsCompositedLayerUpdate` | `NEEDS_COMPOSITED_LAYER_UPDATE` |
+    /// | `_needsCompositing` | `NEEDS_COMPOSITING` |
+    /// | `isRepaintBoundary` | `IS_REPAINT_BOUNDARY` |
+    /// | `_wasRepaintBoundary` | `WAS_REPAINT_BOUNDARY` |
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
     pub struct DirtyFlags: u8 {
         /// Needs layout.
         ///
-        /// Set when something changes that affects the layout of this
-        /// object. This flag works independently of attach state.
+        /// Set when something changes that affects the layout of this object.
+        /// Initially `true` - new render objects need their first layout.
         ///
         /// # Flutter Equivalence
-        /// `_needsLayout`
+        /// `bool _needsLayout = true;`
         const NEEDS_LAYOUT = 1 << 0;
 
         /// Needs paint.
         ///
         /// Set when something changes that affects the visual appearance
         /// of this object but not its layout.
+        /// Initially `true` - new render objects need their first paint.
         ///
         /// # Flutter Equivalence
-        /// `_needsPaint`
+        /// `bool _needsPaint = true;`
         const NEEDS_PAINT = 1 << 1;
 
         /// Needs compositing bits update.
         ///
-        /// Set when something changes that affects whether this object
-        /// or its descendants need compositing layers.
+        /// Set when a child is added or when something changes that affects
+        /// whether this object or its descendants need compositing layers.
         ///
         /// # Flutter Equivalence
-        /// `_needsCompositingBitsUpdate`
-        const NEEDS_COMPOSITING_BITS = 1 << 2;
+        /// `bool _needsCompositingBitsUpdate = false;`
+        const NEEDS_COMPOSITING_BITS_UPDATE = 1 << 2;
 
         /// Needs semantics update.
         ///
@@ -410,8 +101,8 @@ bitflags! {
         /// tree for this object.
         ///
         /// # Flutter Equivalence
-        /// `_needsSemanticsUpdate`
-        const NEEDS_SEMANTICS = 1 << 3;
+        /// `bool _needsSemanticsUpdate` (managed via semantics system)
+        const NEEDS_SEMANTICS_UPDATE = 1 << 3;
 
         /// Needs composited layer update.
         ///
@@ -419,377 +110,444 @@ bitflags! {
         /// the children don't need to be repainted.
         ///
         /// # Flutter Equivalence
-        /// Part of `_needsCompositedLayerUpdate` logic
+        /// `bool _needsCompositedLayerUpdate = false;`
         const NEEDS_COMPOSITED_LAYER_UPDATE = 1 << 4;
-
-        /// Is a relayout boundary.
-        ///
-        /// Set when this object's parent doesn't use its size,
-        /// meaning layout changes don't propagate upward.
-        ///
-        /// # Flutter Equivalence
-        /// `_relayoutBoundary == this`
-        const IS_RELAYOUT_BOUNDARY = 1 << 5;
-
-        /// Is a repaint boundary.
-        ///
-        /// Set when this object creates its own compositing layer.
-        ///
-        /// # Flutter Equivalence
-        /// `isRepaintBoundary == true`
-        const IS_REPAINT_BOUNDARY = 1 << 6;
 
         /// Needs compositing.
         ///
         /// Set when this object or a descendant requires compositing.
+        /// Initialized based on `isRepaintBoundary || alwaysNeedsCompositing`.
         ///
         /// # Flutter Equivalence
-        /// `_needsCompositing`
-        const NEEDS_COMPOSITING = 1 << 7;
+        /// `late bool _needsCompositing;`
+        const NEEDS_COMPOSITING = 1 << 5;
+
+        /// Is a repaint boundary.
+        ///
+        /// Set when this object creates its own compositing layer.
+        /// This is typically a constant property of a render object class.
+        ///
+        /// # Flutter Equivalence
+        /// `bool get isRepaintBoundary => false;` (overridable getter)
+        const IS_REPAINT_BOUNDARY = 1 << 6;
+
+        /// Was a repaint boundary in the previous frame.
+        ///
+        /// Used to detect when `isRepaintBoundary` changes between frames,
+        /// which requires special handling of the layer.
+        ///
+        /// # Flutter Equivalence
+        /// `late bool _wasRepaintBoundary;`
+        const WAS_REPAINT_BOUNDARY = 1 << 7;
     }
 }
 
 impl DirtyFlags {
-    /// Returns whether layout is needed.
+    /// Initial flags for a new render object.
+    ///
+    /// New objects need layout and paint, matching Flutter's initialization:
+    /// - `_needsLayout = true`
+    /// - `_needsPaint = true`
     #[inline]
-    #[must_use]
+    pub const fn initial() -> Self {
+        Self::NEEDS_LAYOUT.union(Self::NEEDS_PAINT)
+    }
+
+    // ========================================================================
+    // Dirty State Queries
+    // ========================================================================
+
+    /// Returns whether layout is needed.
+    ///
+    /// # Flutter Equivalence
+    /// `_needsLayout`
+    #[inline]
     pub const fn needs_layout(self) -> bool {
         self.contains(Self::NEEDS_LAYOUT)
     }
 
     /// Returns whether paint is needed.
+    ///
+    /// # Flutter Equivalence
+    /// `_needsPaint`
     #[inline]
-    #[must_use]
     pub const fn needs_paint(self) -> bool {
         self.contains(Self::NEEDS_PAINT)
     }
 
-    /// Returns whether compositing bits need to be updated.
+    /// Returns whether compositing bits need update.
+    ///
+    /// # Flutter Equivalence
+    /// `_needsCompositingBitsUpdate`
     #[inline]
-    #[must_use]
     pub const fn needs_compositing_bits_update(self) -> bool {
-        self.contains(Self::NEEDS_COMPOSITING_BITS)
+        self.contains(Self::NEEDS_COMPOSITING_BITS_UPDATE)
     }
 
-    /// Returns whether semantics need to be updated.
+    /// Returns whether semantics need update.
+    ///
+    /// # Flutter Equivalence
+    /// Part of semantics system
     #[inline]
-    #[must_use]
     pub const fn needs_semantics_update(self) -> bool {
-        self.contains(Self::NEEDS_SEMANTICS)
+        self.contains(Self::NEEDS_SEMANTICS_UPDATE)
     }
 
-    /// Returns whether the composited layer needs to be updated.
+    /// Returns whether the composited layer needs update.
+    ///
+    /// # Flutter Equivalence
+    /// `_needsCompositedLayerUpdate`
     #[inline]
-    #[must_use]
     pub const fn needs_composited_layer_update(self) -> bool {
         self.contains(Self::NEEDS_COMPOSITED_LAYER_UPDATE)
     }
 
-    /// Returns whether this is a relayout boundary.
+    /// Returns whether compositing is needed.
+    ///
+    /// # Flutter Equivalence
+    /// `_needsCompositing`
     #[inline]
-    #[must_use]
-    pub const fn is_relayout_boundary(self) -> bool {
-        self.contains(Self::IS_RELAYOUT_BOUNDARY)
+    pub const fn needs_compositing(self) -> bool {
+        self.contains(Self::NEEDS_COMPOSITING)
     }
 
     /// Returns whether this is a repaint boundary.
+    ///
+    /// # Flutter Equivalence
+    /// `isRepaintBoundary`
     #[inline]
-    #[must_use]
     pub const fn is_repaint_boundary(self) -> bool {
         self.contains(Self::IS_REPAINT_BOUNDARY)
     }
 
-    /// Returns whether compositing is needed.
+    /// Returns whether this was a repaint boundary.
+    ///
+    /// # Flutter Equivalence
+    /// `_wasRepaintBoundary`
     #[inline]
-    #[must_use]
-    pub const fn needs_compositing(self) -> bool {
-        self.contains(Self::NEEDS_COMPOSITING)
+    pub const fn was_repaint_boundary(self) -> bool {
+        self.contains(Self::WAS_REPAINT_BOUNDARY)
     }
 }
 
 // ============================================================================
-// RenderState - Combined Lifecycle + Flags
+// RelayoutBoundary
 // ============================================================================
 
-/// Combined render object state (lifecycle + dirty flags).
+/// Relayout boundary state.
 ///
-/// This struct combines `RenderLifecycle` and `DirtyFlags` into a single
-/// 2-byte state representation, providing a complete picture of render
-/// object state with minimal memory usage.
+/// In Flutter, `_isRelayoutBoundary` is a nullable boolean:
+/// - `null`: layout has never been called
+/// - `true`: this is a relayout boundary
+/// - `false`: this is not a relayout boundary
 ///
-/// # Memory Layout
+/// We represent this as an enum for type safety.
 ///
-/// - `lifecycle`: 1 byte
-/// - `flags`: 1 byte
-/// - **Total: 2 bytes**
-///
-/// Compare to Flutter's approach:
-/// - `_needsLayout`: 1 byte
-/// - `_needsPaint`: 1 byte
-/// - `_needsCompositingBitsUpdate`: 1 byte
-/// - `_needsSemanticsUpdate`: 1 byte
-/// - `_relayoutBoundary`: pointer (8 bytes on 64-bit)
-/// - Other flags...
-/// - **Total: 8+ bytes**
-///
-/// # Example
-///
-/// ```
-/// use flui_rendering::lifecycle::{RenderState, RenderLifecycle, DirtyFlags};
-///
-/// let mut state = RenderState::new();
-/// assert!(state.lifecycle().is_detached());
-///
-/// state.set_lifecycle(RenderLifecycle::Attached);
-/// state.mark_needs_semantics();
-/// assert!(state.flags().needs_semantics_update());
-/// ```
+/// # Flutter Equivalence
+/// `bool? _isRelayoutBoundary;`
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub struct RenderState {
-    lifecycle: RenderLifecycle,
-    flags: DirtyFlags,
+#[repr(u8)]
+pub enum RelayoutBoundary {
+    /// Layout has never been called on this object.
+    ///
+    /// # Flutter Equivalence
+    /// `_isRelayoutBoundary == null`
+    #[default]
+    Unknown = 0,
+
+    /// This object is a relayout boundary.
+    ///
+    /// The parent does not depend on this object's size, so layout
+    /// changes do not propagate upward.
+    ///
+    /// # Flutter Equivalence
+    /// `_isRelayoutBoundary == true`
+    Yes = 1,
+
+    /// This object is not a relayout boundary.
+    ///
+    /// The parent depends on this object's size, so layout changes
+    /// propagate upward.
+    ///
+    /// # Flutter Equivalence
+    /// `_isRelayoutBoundary == false`
+    No = 2,
 }
 
-impl RenderState {
-    /// Creates a new render state in detached state with no flags set.
+impl RelayoutBoundary {
+    /// Returns whether this is a known relayout boundary.
+    ///
+    /// Returns `true` only if explicitly set to `Yes`.
     #[inline]
-    #[must_use]
-    pub const fn new() -> Self {
-        Self {
-            lifecycle: RenderLifecycle::Detached,
-            flags: DirtyFlags::empty(),
+    pub const fn is_boundary(self) -> bool {
+        matches!(self, Self::Yes)
+    }
+
+    /// Returns whether layout has been called at least once.
+    #[inline]
+    pub const fn is_known(self) -> bool {
+        !matches!(self, Self::Unknown)
+    }
+
+    /// Converts from Option<bool> for Flutter compatibility.
+    #[inline]
+    pub const fn from_option(value: Option<bool>) -> Self {
+        match value {
+            None => Self::Unknown,
+            Some(true) => Self::Yes,
+            Some(false) => Self::No,
         }
     }
 
-    /// Creates a new render state with the given lifecycle and flags.
+    /// Converts to Option<bool> for Flutter compatibility.
     #[inline]
-    #[must_use]
-    pub const fn with_lifecycle_and_flags(lifecycle: RenderLifecycle, flags: DirtyFlags) -> Self {
-        Self { lifecycle, flags }
+    pub const fn to_option(self) -> Option<bool> {
+        match self {
+            Self::Unknown => None,
+            Self::Yes => Some(true),
+            Self::No => Some(false),
+        }
     }
+}
 
-    // ========================================================================
-    // Lifecycle Access
-    // ========================================================================
+// ============================================================================
+// RenderObjectFlags
+// ============================================================================
 
-    /// Returns the current lifecycle state.
-    #[inline]
-    #[must_use]
-    pub const fn lifecycle(&self) -> RenderLifecycle {
-        self.lifecycle
-    }
+/// Combined render object flags (dirty flags + relayout boundary).
+///
+/// This struct packs all render object flags into 2 bytes:
+/// - `dirty`: DirtyFlags (1 byte)
+/// - `relayout_boundary`: RelayoutBoundary (1 byte)
+///
+/// # Memory Layout
+///
+/// Total: 2 bytes
+///
+/// Compare to Flutter's approach with separate fields:
+/// - 6-8 boolean fields = 6-8 bytes
+/// - `_isRelayoutBoundary` nullable bool = 2 bytes (Dart nullable)
+/// - **Total: 8-10 bytes**
+///
+/// We use **2 bytes** = **75-80% memory savings**.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct RenderObjectFlags {
+    /// Dirty flags.
+    dirty: DirtyFlags,
 
-    /// Sets the lifecycle state.
+    /// Relayout boundary state.
+    relayout_boundary: RelayoutBoundary,
+}
+
+impl RenderObjectFlags {
+    /// Creates new flags with initial dirty state.
     ///
-    /// In debug builds, validates that the transition is legal.
+    /// Matches Flutter's initialization:
+    /// - `_needsLayout = true`
+    /// - `_needsPaint = true`
+    /// - `_isRelayoutBoundary = null`
     #[inline]
-    pub fn set_lifecycle(&mut self, lifecycle: RenderLifecycle) {
-        self.lifecycle = self.lifecycle.transition_to(lifecycle);
+    pub const fn new() -> Self {
+        Self {
+            dirty: DirtyFlags::initial(),
+            relayout_boundary: RelayoutBoundary::Unknown,
+        }
     }
 
-    /// Sets the lifecycle state without validation.
-    ///
-    /// # Safety
-    ///
-    /// Caller must ensure the transition is valid.
+    /// Creates flags with specific dirty flags.
     #[inline]
-    pub fn set_lifecycle_unchecked(&mut self, lifecycle: RenderLifecycle) {
-        self.lifecycle = lifecycle;
-    }
-
-    // ========================================================================
-    // Flags Access
-    // ========================================================================
-
-    /// Returns the current dirty flags.
-    #[inline]
-    #[must_use]
-    pub const fn flags(&self) -> DirtyFlags {
-        self.flags
-    }
-
-    /// Returns mutable reference to dirty flags.
-    #[inline]
-    pub fn flags_mut(&mut self) -> &mut DirtyFlags {
-        &mut self.flags
-    }
-
-    /// Sets the dirty flags.
-    #[inline]
-    pub fn set_flags(&mut self, flags: DirtyFlags) {
-        self.flags = flags;
+    pub const fn with_dirty(dirty: DirtyFlags) -> Self {
+        Self {
+            dirty,
+            relayout_boundary: RelayoutBoundary::Unknown,
+        }
     }
 
     // ========================================================================
-    // Lifecycle Shortcuts
+    // Dirty Flags Access
     // ========================================================================
 
-    /// Returns whether the object is attached.
+    /// Returns the dirty flags.
     #[inline]
-    #[must_use]
-    pub const fn is_attached(&self) -> bool {
-        self.lifecycle.is_attached()
+    pub const fn dirty(&self) -> DirtyFlags {
+        self.dirty
     }
 
-    /// Returns whether the object is disposed.
+    /// Returns mutable access to dirty flags.
     #[inline]
-    #[must_use]
-    pub const fn is_disposed(&self) -> bool {
-        self.lifecycle.is_disposed()
+    pub fn dirty_mut(&mut self) -> &mut DirtyFlags {
+        &mut self.dirty
     }
 
     // ========================================================================
-    // Flag Shortcuts (Dirty State)
+    // Dirty State Queries (delegated)
     // ========================================================================
 
-    /// Returns whether the object needs layout.
-    ///
-    /// This is a flag-based check that works regardless of attach state.
+    /// Returns whether layout is needed.
     #[inline]
-    #[must_use]
     pub const fn needs_layout(&self) -> bool {
-        self.flags.needs_layout()
+        self.dirty.needs_layout()
     }
 
-    /// Returns whether the object needs paint.
-    ///
-    /// This is a flag-based check that works regardless of attach state.
+    /// Returns whether paint is needed.
     #[inline]
-    #[must_use]
     pub const fn needs_paint(&self) -> bool {
-        self.flags.needs_paint()
+        self.dirty.needs_paint()
     }
 
     /// Returns whether compositing bits need update.
     #[inline]
-    #[must_use]
     pub const fn needs_compositing_bits_update(&self) -> bool {
-        self.flags.needs_compositing_bits_update()
+        self.dirty.needs_compositing_bits_update()
     }
 
     /// Returns whether semantics need update.
     #[inline]
-    #[must_use]
     pub const fn needs_semantics_update(&self) -> bool {
-        self.flags.needs_semantics_update()
-    }
-
-    /// Returns whether this is a relayout boundary.
-    #[inline]
-    #[must_use]
-    pub const fn is_relayout_boundary(&self) -> bool {
-        self.flags.is_relayout_boundary()
-    }
-
-    /// Returns whether this is a repaint boundary.
-    #[inline]
-    #[must_use]
-    pub const fn is_repaint_boundary(&self) -> bool {
-        self.flags.is_repaint_boundary()
+        self.dirty.needs_semantics_update()
     }
 
     /// Returns whether compositing is needed.
     #[inline]
-    #[must_use]
     pub const fn needs_compositing(&self) -> bool {
-        self.flags.needs_compositing()
+        self.dirty.needs_compositing()
+    }
+
+    /// Returns whether this is a repaint boundary.
+    #[inline]
+    pub const fn is_repaint_boundary(&self) -> bool {
+        self.dirty.is_repaint_boundary()
+    }
+
+    /// Returns whether this was a repaint boundary.
+    #[inline]
+    pub const fn was_repaint_boundary(&self) -> bool {
+        self.dirty.was_repaint_boundary()
     }
 
     // ========================================================================
-    // Marking Methods
+    // Dirty State Marking
     // ========================================================================
 
-    /// Marks the object as needing layout.
-    ///
-    /// This sets the NEEDS_LAYOUT flag regardless of attach state.
-    /// The flag will be used by the pipeline owner when attached.
+    /// Marks as needing layout.
     #[inline]
     pub fn mark_needs_layout(&mut self) {
-        self.flags.insert(DirtyFlags::NEEDS_LAYOUT);
+        self.dirty.insert(DirtyFlags::NEEDS_LAYOUT);
     }
 
-    /// Marks the object as needing paint.
-    ///
-    /// This sets the NEEDS_PAINT flag regardless of attach state.
-    /// The flag will be used by the pipeline owner when attached.
+    /// Marks as needing paint.
     #[inline]
     pub fn mark_needs_paint(&mut self) {
-        self.flags.insert(DirtyFlags::NEEDS_PAINT);
+        self.dirty.insert(DirtyFlags::NEEDS_PAINT);
     }
 
-    /// Marks compositing bits as needing update.
+    /// Marks as needing compositing bits update.
     #[inline]
     pub fn mark_needs_compositing_bits_update(&mut self) {
-        self.flags.insert(DirtyFlags::NEEDS_COMPOSITING_BITS);
+        self.dirty.insert(DirtyFlags::NEEDS_COMPOSITING_BITS_UPDATE);
     }
 
-    /// Marks semantics as needing update.
+    /// Marks as needing semantics update.
     #[inline]
-    pub fn mark_needs_semantics(&mut self) {
-        self.flags.insert(DirtyFlags::NEEDS_SEMANTICS);
+    pub fn mark_needs_semantics_update(&mut self) {
+        self.dirty.insert(DirtyFlags::NEEDS_SEMANTICS_UPDATE);
     }
 
-    /// Marks composited layer as needing update.
+    /// Marks as needing composited layer update.
     #[inline]
     pub fn mark_needs_composited_layer_update(&mut self) {
-        self.flags.insert(DirtyFlags::NEEDS_COMPOSITED_LAYER_UPDATE);
+        self.dirty.insert(DirtyFlags::NEEDS_COMPOSITED_LAYER_UPDATE);
     }
 
     // ========================================================================
-    // Clearing Methods
+    // Dirty State Clearing
     // ========================================================================
 
-    /// Clears the needs_layout flag after layout completes.
+    /// Clears the needs_layout flag.
     #[inline]
     pub fn clear_needs_layout(&mut self) {
-        self.flags.remove(DirtyFlags::NEEDS_LAYOUT);
+        self.dirty.remove(DirtyFlags::NEEDS_LAYOUT);
     }
 
-    /// Clears the needs_paint flag after paint completes.
+    /// Clears the needs_paint flag.
     #[inline]
     pub fn clear_needs_paint(&mut self) {
-        self.flags.remove(DirtyFlags::NEEDS_PAINT);
+        self.dirty.remove(DirtyFlags::NEEDS_PAINT);
     }
 
     /// Clears the needs_compositing_bits_update flag.
     #[inline]
     pub fn clear_needs_compositing_bits_update(&mut self) {
-        self.flags.remove(DirtyFlags::NEEDS_COMPOSITING_BITS);
+        self.dirty.remove(DirtyFlags::NEEDS_COMPOSITING_BITS_UPDATE);
     }
 
     /// Clears the needs_semantics_update flag.
     #[inline]
-    pub fn clear_needs_semantics(&mut self) {
-        self.flags.remove(DirtyFlags::NEEDS_SEMANTICS);
+    pub fn clear_needs_semantics_update(&mut self) {
+        self.dirty.remove(DirtyFlags::NEEDS_SEMANTICS_UPDATE);
     }
 
     /// Clears the needs_composited_layer_update flag.
     #[inline]
     pub fn clear_needs_composited_layer_update(&mut self) {
-        self.flags.remove(DirtyFlags::NEEDS_COMPOSITED_LAYER_UPDATE);
+        self.dirty.remove(DirtyFlags::NEEDS_COMPOSITED_LAYER_UPDATE);
     }
 
     // ========================================================================
-    // Boundary Methods
+    // Boundary Configuration
     // ========================================================================
 
-    /// Sets whether this is a relayout boundary.
+    /// Returns the relayout boundary state.
     #[inline]
-    pub fn set_relayout_boundary(&mut self, is_boundary: bool) {
-        if is_boundary {
-            self.flags.insert(DirtyFlags::IS_RELAYOUT_BOUNDARY);
-        } else {
-            self.flags.remove(DirtyFlags::IS_RELAYOUT_BOUNDARY);
-        }
+    pub const fn relayout_boundary(&self) -> RelayoutBoundary {
+        self.relayout_boundary
+    }
+
+    /// Returns whether this is a relayout boundary.
+    #[inline]
+    pub const fn is_relayout_boundary(&self) -> bool {
+        self.relayout_boundary.is_boundary()
+    }
+
+    /// Sets the relayout boundary state.
+    #[inline]
+    pub fn set_relayout_boundary(&mut self, boundary: RelayoutBoundary) {
+        self.relayout_boundary = boundary;
+    }
+
+    /// Clears the relayout boundary (sets to Unknown).
+    ///
+    /// Called when a child is dropped from its parent.
+    ///
+    /// # Flutter Equivalence
+    /// `_isRelayoutBoundary = null` in `dropChild`
+    #[inline]
+    pub fn clear_relayout_boundary(&mut self) {
+        self.relayout_boundary = RelayoutBoundary::Unknown;
     }
 
     /// Sets whether this is a repaint boundary.
     #[inline]
     pub fn set_repaint_boundary(&mut self, is_boundary: bool) {
         if is_boundary {
-            self.flags.insert(DirtyFlags::IS_REPAINT_BOUNDARY);
+            self.dirty.insert(DirtyFlags::IS_REPAINT_BOUNDARY);
         } else {
-            self.flags.remove(DirtyFlags::IS_REPAINT_BOUNDARY);
+            self.dirty.remove(DirtyFlags::IS_REPAINT_BOUNDARY);
+        }
+    }
+
+    /// Updates was_repaint_boundary to match current repaint_boundary.
+    ///
+    /// Called at the end of paint.
+    ///
+    /// # Flutter Equivalence
+    /// `_wasRepaintBoundary = isRepaintBoundary;` at end of `_paintWithContext`
+    #[inline]
+    pub fn sync_was_repaint_boundary(&mut self) {
+        if self.dirty.is_repaint_boundary() {
+            self.dirty.insert(DirtyFlags::WAS_REPAINT_BOUNDARY);
+        } else {
+            self.dirty.remove(DirtyFlags::WAS_REPAINT_BOUNDARY);
         }
     }
 
@@ -797,55 +555,10 @@ impl RenderState {
     #[inline]
     pub fn set_needs_compositing(&mut self, needs: bool) {
         if needs {
-            self.flags.insert(DirtyFlags::NEEDS_COMPOSITING);
+            self.dirty.insert(DirtyFlags::NEEDS_COMPOSITING);
         } else {
-            self.flags.remove(DirtyFlags::NEEDS_COMPOSITING);
+            self.dirty.remove(DirtyFlags::NEEDS_COMPOSITING);
         }
-    }
-
-    // ========================================================================
-    // Lifecycle Transitions
-    // ========================================================================
-
-    /// Attaches the object to a pipeline owner.
-    ///
-    /// Transitions from `Detached` to `Attached` and marks needs_layout.
-    #[inline]
-    pub fn attach(&mut self) {
-        debug_assert!(
-            self.lifecycle == RenderLifecycle::Detached,
-            "Can only attach detached objects, current state: {:?}",
-            self.lifecycle
-        );
-        self.lifecycle = RenderLifecycle::Attached;
-        // Mark needs layout on attach (Flutter behavior)
-        self.flags.insert(DirtyFlags::NEEDS_LAYOUT);
-    }
-
-    /// Detaches the object from its pipeline owner.
-    ///
-    /// Transitions to `Detached` state. Dirty flags are preserved.
-    #[inline]
-    pub fn detach(&mut self) {
-        debug_assert!(
-            self.lifecycle.is_attached(),
-            "Can only detach attached objects, current state: {:?}",
-            self.lifecycle
-        );
-        self.lifecycle = RenderLifecycle::Detached;
-    }
-
-    /// Disposes the object.
-    ///
-    /// Transitions to terminal `Disposed` state and clears all flags.
-    #[inline]
-    pub fn dispose(&mut self) {
-        debug_assert!(
-            self.lifecycle != RenderLifecycle::Disposed,
-            "Object already disposed"
-        );
-        self.lifecycle = RenderLifecycle::Disposed;
-        self.flags = DirtyFlags::empty();
     }
 }
 
@@ -858,112 +571,6 @@ mod tests {
     use super::*;
 
     // ========================================================================
-    // RenderLifecycle Tests
-    // ========================================================================
-
-    #[test]
-    fn test_lifecycle_size() {
-        assert_eq!(std::mem::size_of::<RenderLifecycle>(), 1);
-    }
-
-    #[test]
-    fn test_lifecycle_default() {
-        let lifecycle = RenderLifecycle::default();
-        assert_eq!(lifecycle, RenderLifecycle::Detached);
-    }
-
-    #[test]
-    fn test_lifecycle_transitions_from_detached() {
-        let state = RenderLifecycle::Detached;
-        assert!(state.can_transition_to(RenderLifecycle::Attached));
-        assert!(state.can_transition_to(RenderLifecycle::Disposed));
-        assert!(!state.can_transition_to(RenderLifecycle::NeedsLayout));
-        assert!(!state.can_transition_to(RenderLifecycle::LaidOut));
-        assert!(!state.can_transition_to(RenderLifecycle::Painted));
-    }
-
-    #[test]
-    fn test_lifecycle_transitions_from_attached() {
-        let state = RenderLifecycle::Attached;
-        assert!(state.can_transition_to(RenderLifecycle::NeedsLayout));
-        assert!(state.can_transition_to(RenderLifecycle::Disposed));
-        assert!(!state.can_transition_to(RenderLifecycle::Detached));
-        assert!(!state.can_transition_to(RenderLifecycle::Painted));
-    }
-
-    #[test]
-    fn test_lifecycle_transitions_from_needs_layout() {
-        let state = RenderLifecycle::NeedsLayout;
-        assert!(state.can_transition_to(RenderLifecycle::LaidOut));
-        assert!(state.can_transition_to(RenderLifecycle::Disposed));
-        assert!(!state.can_transition_to(RenderLifecycle::Attached));
-        assert!(!state.can_transition_to(RenderLifecycle::Painted));
-    }
-
-    #[test]
-    fn test_lifecycle_transitions_from_laid_out() {
-        let state = RenderLifecycle::LaidOut;
-        assert!(state.can_transition_to(RenderLifecycle::NeedsPaint));
-        assert!(state.can_transition_to(RenderLifecycle::NeedsLayout)); // Relayout
-        assert!(state.can_transition_to(RenderLifecycle::Disposed));
-        assert!(!state.can_transition_to(RenderLifecycle::Attached));
-    }
-
-    #[test]
-    fn test_lifecycle_transitions_from_needs_paint() {
-        let state = RenderLifecycle::NeedsPaint;
-        assert!(state.can_transition_to(RenderLifecycle::Painted));
-        assert!(state.can_transition_to(RenderLifecycle::NeedsLayout)); // Relayout during paint
-        assert!(state.can_transition_to(RenderLifecycle::Disposed));
-        assert!(!state.can_transition_to(RenderLifecycle::Attached));
-    }
-
-    #[test]
-    fn test_lifecycle_transitions_from_painted() {
-        let state = RenderLifecycle::Painted;
-        assert!(state.can_transition_to(RenderLifecycle::NeedsLayout)); // Relayout
-        assert!(state.can_transition_to(RenderLifecycle::NeedsPaint)); // Repaint
-        assert!(state.can_transition_to(RenderLifecycle::Disposed));
-        assert!(!state.can_transition_to(RenderLifecycle::Attached));
-    }
-
-    #[test]
-    fn test_lifecycle_disposed_is_terminal() {
-        let state = RenderLifecycle::Disposed;
-        assert!(!state.can_transition_to(RenderLifecycle::Detached));
-        assert!(!state.can_transition_to(RenderLifecycle::Attached));
-        assert!(!state.can_transition_to(RenderLifecycle::NeedsLayout));
-        assert!(!state.can_transition_to(RenderLifecycle::Disposed));
-    }
-
-    #[test]
-    fn test_lifecycle_queries() {
-        assert!(RenderLifecycle::Attached.can_layout());
-        assert!(RenderLifecycle::NeedsLayout.can_layout());
-        assert!(!RenderLifecycle::LaidOut.can_layout());
-
-        assert!(RenderLifecycle::LaidOut.can_paint());
-        assert!(RenderLifecycle::NeedsPaint.can_paint());
-        assert!(!RenderLifecycle::NeedsLayout.can_paint());
-
-        assert!(RenderLifecycle::Attached.is_attached());
-        assert!(RenderLifecycle::Painted.is_attached());
-        assert!(!RenderLifecycle::Detached.is_attached());
-        assert!(!RenderLifecycle::Disposed.is_attached());
-
-        assert!(RenderLifecycle::Attached.is_usable());
-        assert!(!RenderLifecycle::Detached.is_usable());
-        assert!(!RenderLifecycle::Disposed.is_usable());
-    }
-
-    #[test]
-    fn test_lifecycle_display() {
-        assert_eq!(RenderLifecycle::Detached.to_string(), "Detached");
-        assert_eq!(RenderLifecycle::NeedsLayout.to_string(), "NeedsLayout");
-        assert_eq!(RenderLifecycle::Painted.to_string(), "Painted");
-    }
-
-    // ========================================================================
     // DirtyFlags Tests
     // ========================================================================
 
@@ -973,151 +580,154 @@ mod tests {
     }
 
     #[test]
-    fn test_dirty_flags_default() {
-        let flags = DirtyFlags::default();
-        assert!(flags.is_empty());
+    fn test_dirty_flags_initial() {
+        let flags = DirtyFlags::initial();
+        assert!(flags.needs_layout());
+        assert!(flags.needs_paint());
+        assert!(!flags.needs_compositing_bits_update());
+        assert!(!flags.needs_semantics_update());
     }
 
     #[test]
     fn test_dirty_flags_operations() {
         let mut flags = DirtyFlags::empty();
 
-        flags.insert(DirtyFlags::NEEDS_COMPOSITING_BITS);
-        assert!(flags.needs_compositing_bits_update());
-        assert!(!flags.needs_semantics_update());
+        flags.insert(DirtyFlags::NEEDS_LAYOUT);
+        assert!(flags.needs_layout());
+        assert!(!flags.needs_paint());
 
-        flags.insert(DirtyFlags::NEEDS_SEMANTICS);
-        assert!(flags.needs_semantics_update());
+        flags.insert(DirtyFlags::NEEDS_PAINT);
+        assert!(flags.needs_paint());
 
-        flags.remove(DirtyFlags::NEEDS_COMPOSITING_BITS);
-        assert!(!flags.needs_compositing_bits_update());
-        assert!(flags.needs_semantics_update());
+        flags.remove(DirtyFlags::NEEDS_LAYOUT);
+        assert!(!flags.needs_layout());
+        assert!(flags.needs_paint());
     }
 
     #[test]
-    fn test_dirty_flags_boundaries() {
+    fn test_dirty_flags_repaint_boundary() {
         let mut flags = DirtyFlags::empty();
-
-        flags.insert(DirtyFlags::IS_RELAYOUT_BOUNDARY);
-        assert!(flags.is_relayout_boundary());
 
         flags.insert(DirtyFlags::IS_REPAINT_BOUNDARY);
         assert!(flags.is_repaint_boundary());
+        assert!(!flags.was_repaint_boundary());
+
+        flags.insert(DirtyFlags::WAS_REPAINT_BOUNDARY);
+        assert!(flags.was_repaint_boundary());
     }
 
     // ========================================================================
-    // RenderState Tests
+    // RelayoutBoundary Tests
     // ========================================================================
 
     #[test]
-    fn test_render_state_size() {
-        assert_eq!(std::mem::size_of::<RenderState>(), 2);
+    fn test_relayout_boundary_size() {
+        assert_eq!(std::mem::size_of::<RelayoutBoundary>(), 1);
     }
 
     #[test]
-    fn test_render_state_default() {
-        let state = RenderState::new();
-        assert_eq!(state.lifecycle(), RenderLifecycle::Detached);
-        assert!(state.flags().is_empty());
-        assert!(!state.needs_layout());
-        assert!(!state.needs_paint());
+    fn test_relayout_boundary_default() {
+        let boundary = RelayoutBoundary::default();
+        assert_eq!(boundary, RelayoutBoundary::Unknown);
+        assert!(!boundary.is_boundary());
+        assert!(!boundary.is_known());
     }
 
     #[test]
-    fn test_render_state_attach_flow() {
-        let mut state = RenderState::new();
+    fn test_relayout_boundary_states() {
+        assert!(RelayoutBoundary::Yes.is_boundary());
+        assert!(RelayoutBoundary::Yes.is_known());
 
-        // Attach - lifecycle becomes Attached, needs_layout flag is set
-        state.attach();
-        assert_eq!(state.lifecycle(), RenderLifecycle::Attached);
-        assert!(state.needs_layout());
+        assert!(!RelayoutBoundary::No.is_boundary());
+        assert!(RelayoutBoundary::No.is_known());
 
-        // Layout complete - clear needs_layout flag
-        state.clear_needs_layout();
-        assert!(!state.needs_layout());
-
-        // Mark needs paint
-        state.mark_needs_paint();
-        assert!(state.needs_paint());
-
-        // Paint complete - clear needs_paint flag
-        state.clear_needs_paint();
-        assert!(!state.needs_paint());
+        assert!(!RelayoutBoundary::Unknown.is_boundary());
+        assert!(!RelayoutBoundary::Unknown.is_known());
     }
 
     #[test]
-    fn test_render_state_dirty_flags_independent_of_attach() {
-        let mut state = RenderState::new();
+    fn test_relayout_boundary_option_conversion() {
+        assert_eq!(
+            RelayoutBoundary::from_option(None),
+            RelayoutBoundary::Unknown
+        );
+        assert_eq!(
+            RelayoutBoundary::from_option(Some(true)),
+            RelayoutBoundary::Yes
+        );
+        assert_eq!(
+            RelayoutBoundary::from_option(Some(false)),
+            RelayoutBoundary::No
+        );
 
-        // Dirty flags work even when detached (unlike lifecycle-based approach)
-        assert!(!state.needs_layout());
-        state.mark_needs_layout();
-        assert!(state.needs_layout());
+        assert_eq!(RelayoutBoundary::Unknown.to_option(), None);
+        assert_eq!(RelayoutBoundary::Yes.to_option(), Some(true));
+        assert_eq!(RelayoutBoundary::No.to_option(), Some(false));
+    }
 
-        state.mark_needs_paint();
-        assert!(state.needs_paint());
+    // ========================================================================
+    // RenderObjectFlags Tests
+    // ========================================================================
 
-        // Clear and verify
-        state.clear_needs_layout();
-        assert!(!state.needs_layout());
-        assert!(state.needs_paint()); // paint flag still set
+    #[test]
+    fn test_render_object_flags_size() {
+        assert_eq!(std::mem::size_of::<RenderObjectFlags>(), 2);
     }
 
     #[test]
-    fn test_render_state_compositing_flags() {
-        let mut state = RenderState::new();
-
-        state.mark_needs_compositing_bits_update();
-        assert!(state.needs_compositing_bits_update());
-
-        state.mark_needs_semantics();
-        assert!(state.needs_semantics_update());
-
-        state.clear_needs_compositing_bits_update();
-        assert!(!state.needs_compositing_bits_update());
-        assert!(state.needs_semantics_update());
+    fn test_render_object_flags_new() {
+        let flags = RenderObjectFlags::new();
+        assert!(flags.needs_layout());
+        assert!(flags.needs_paint());
+        assert!(!flags.needs_compositing_bits_update());
+        assert_eq!(flags.relayout_boundary(), RelayoutBoundary::Unknown);
     }
 
     #[test]
-    fn test_render_state_boundaries() {
-        let mut state = RenderState::new();
+    fn test_render_object_flags_marking() {
+        let mut flags = RenderObjectFlags::new();
 
-        state.set_relayout_boundary(true);
-        assert!(state.is_relayout_boundary());
+        flags.clear_needs_layout();
+        assert!(!flags.needs_layout());
 
-        state.set_repaint_boundary(true);
-        assert!(state.is_repaint_boundary());
+        flags.mark_needs_layout();
+        assert!(flags.needs_layout());
 
-        state.set_relayout_boundary(false);
-        assert!(!state.is_relayout_boundary());
-        assert!(state.is_repaint_boundary());
+        flags.clear_needs_paint();
+        assert!(!flags.needs_paint());
+
+        flags.mark_needs_paint();
+        assert!(flags.needs_paint());
     }
 
     #[test]
-    fn test_render_state_dispose() {
-        let mut state = RenderState::new();
-        state.attach();
-        state.mark_needs_semantics();
-        state.mark_needs_layout();
+    fn test_render_object_flags_relayout_boundary() {
+        let mut flags = RenderObjectFlags::new();
 
-        state.dispose();
-        assert!(state.is_disposed());
-        assert!(state.flags().is_empty()); // All flags cleared
-        assert!(!state.needs_layout());
-        assert!(!state.needs_paint());
+        flags.set_relayout_boundary(RelayoutBoundary::Yes);
+        assert!(flags.is_relayout_boundary());
+
+        flags.set_relayout_boundary(RelayoutBoundary::No);
+        assert!(!flags.is_relayout_boundary());
+
+        flags.clear_relayout_boundary();
+        assert_eq!(flags.relayout_boundary(), RelayoutBoundary::Unknown);
     }
 
     #[test]
-    fn test_render_state_detach_preserves_flags() {
-        let mut state = RenderState::new();
-        state.attach();
-        state.mark_needs_paint();
+    fn test_render_object_flags_repaint_boundary() {
+        let mut flags = RenderObjectFlags::new();
 
-        // Detach preserves dirty flags (object may be reattached)
-        state.detach();
-        assert!(state.lifecycle().is_detached());
-        assert!(state.needs_layout()); // Set on attach
-        assert!(state.needs_paint()); // Explicitly set
+        flags.set_repaint_boundary(true);
+        assert!(flags.is_repaint_boundary());
+        assert!(!flags.was_repaint_boundary());
+
+        flags.sync_was_repaint_boundary();
+        assert!(flags.was_repaint_boundary());
+
+        flags.set_repaint_boundary(false);
+        assert!(!flags.is_repaint_boundary());
+        assert!(flags.was_repaint_boundary()); // Still true until sync
     }
 
     // ========================================================================
@@ -1127,8 +737,8 @@ mod tests {
     #[test]
     fn test_send_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
-        assert_send_sync::<RenderLifecycle>();
         assert_send_sync::<DirtyFlags>();
-        assert_send_sync::<RenderState>();
+        assert_send_sync::<RelayoutBoundary>();
+        assert_send_sync::<RenderObjectFlags>();
     }
 }

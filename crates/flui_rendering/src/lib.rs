@@ -62,16 +62,35 @@ pub mod pipeline;
 pub mod protocol;
 pub mod semantics;
 pub mod traits;
+pub mod tree;
 pub mod view;
 
 /// Prelude module for convenient imports.
 pub mod prelude {
     pub use crate::binding::{HitTestDispatcher, PipelineManifold, RendererBinding};
     pub use crate::containers::{
-        Aligning, AligningBox, AligningSliver, BoxChild, BoxChildList, BoxChildRequired,
-        BoxChildren, ChildList, ChildNode, Children, FlexChildren, HasOffset, Proxy, ProxyBox,
-        Shifted, ShiftedBox, ShiftedSliver, Single, SliverChild, SliverChildRequired,
-        SliverChildren, SliverProxy, StackChildren, WrapChildren,
+        // Box protocol
+        BoxChild,
+        BoxChildList,
+        BoxChildRequired,
+        BoxChildren,
+        // Primary types
+        Child,
+        ChildEntry,
+        ChildList,
+        // Layout aliases
+        FlexChildren,
+        // Traits
+        HasOffset,
+        MultiChildContainer,
+        MultiChildContainerWithData,
+        SingleChildContainer,
+        // Sliver protocol
+        SliverChild,
+        SliverChildRequired,
+        SliverChildren,
+        StackChildren,
+        WrapChildren,
     };
     pub use crate::delegates::{
         AspectRatioDelegate, CenterLayoutDelegate, CustomClipper, CustomPainter, FlowDelegate,
@@ -117,11 +136,17 @@ pub mod prelude {
 
     // Lifecycle types
     pub use crate::lifecycle::{
-        BaseRenderObject, DirtyFlags, RenderLifecycle, RenderObjectState, RenderState,
+        BaseRenderObject, DirtyFlags, RelayoutBoundary, RenderObjectFlags, RenderObjectState,
     };
+
+    // Tree types
+    pub use crate::tree::{RenderNode, RenderTree};
 
     // Re-export commonly used types from flui_types
     pub use flui_types::{Offset, Point, RRect, Rect, Size};
+
+    // Re-export RenderId from flui_foundation
+    pub use flui_foundation::RenderId;
 }
 
 // Re-export key types at crate root
