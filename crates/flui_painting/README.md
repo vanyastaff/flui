@@ -15,6 +15,8 @@ FLUI Painting provides a high-level Canvas API that records drawing operations i
 - **Paint Objects** - Configurable styling (colors, strokes, blend modes)
 - **Path Operations** - Complex shapes with Bezier curves and arcs
 - **Image Drawing** - Images, textures, 9-slice, tiling, and filtering
+- **Text Painting** - Rich text layout with cosmic-text, cursor positioning, and hit testing
+- **Bidirectional Text** - Full RTL/LTR support with automatic direction detection
 - **Zero-Copy Composition** - Efficient parent-child canvas merging
 - **Transform Stack** - Hierarchical coordinate transformations (translate, rotate, scale, skew)
 - **Clipping** - Rectangle, rounded rectangle, and path clipping with ClipOp support
@@ -222,10 +224,98 @@ canvas.draw_paint(&background);
 
 ## Text and Images
 
-### Text
+### Simple Text
 
 ```rust
 canvas.draw_text("Hello", offset, &text_style, &paint);
+```
+
+### Rich Text with TextPainter
+
+For advanced text layout with multiple styles, cursor positioning, and hit testing:
+
+```rust
+use flui_painting::{TextPainter, Canvas};
+use flui_types::typography::{TextSpan, TextStyle, TextDirection, TextPosition};
+use flui_types::geometry::Offset;
+
+// Create styled text span
+let span = TextSpan::new("Hello, World!")
+    .with_style(TextStyle::new()
+        .with_font_size(16.0)
+        .with_color(Color::BLACK));
+
+// Create text painter
+let mut painter = TextPainter::new()
+    .with_text(span)
+    .with_text_direction(TextDirection::Ltr);
+
+// Layout with width constraints
+painter.layout(0.0, 200.0);
+
+// Get metrics
+println!("Size: {:?}", painter.size());
+println!("Width: {}", painter.width());
+println!("Height: {}", painter.height());
+
+// Paint to canvas
+let mut canvas = Canvas::new();
+painter.paint(&mut canvas, Offset::ZERO);
+```
+
+### Cursor Positioning
+
+```rust
+use flui_types::typography::TextPosition;
+
+// Get screen position for cursor at text offset
+let caret_pos = painter.get_offset_for_caret(TextPosition::upstream(5));
+// Draw cursor at caret_pos
+
+// Hit testing: convert mouse click to text position
+let click_pos = Offset::new(50.0, 10.0);
+let text_position = painter.get_position_for_offset(click_pos);
+println!("Clicked at character: {}", text_position.offset);
+```
+
+### Text Selection
+
+```rust
+// Get bounding boxes for selection highlight
+let selection_boxes = painter.get_boxes_for_selection(5, 15);
+for text_box in selection_boxes {
+    canvas.draw_rect(text_box.rect, &selection_paint);
+}
+
+// Get word boundary for double-click selection
+let word_range = painter.get_word_boundary(TextPosition::upstream(7));
+println!("Word: {} to {}", word_range.start, word_range.end);
+```
+
+### Line Metrics
+
+```rust
+// Get metrics for each line
+for line in painter.get_line_metrics() {
+    println!("Line {}: height={}, width={}", 
+        line.line_number, line.height, line.width);
+}
+```
+
+### RTL and Bidirectional Text
+
+```rust
+use flui_painting::text_layout::detect_text_direction;
+
+// Auto-detect text direction
+let direction = detect_text_direction("مرحبا"); // Returns Some(TextDirection::Rtl)
+
+// Create RTL text painter
+let mut painter = TextPainter::new()
+    .with_text(TextSpan::new("مرحبا بالعالم"))
+    .with_text_direction(TextDirection::Rtl);
+
+painter.layout(0.0, 200.0);
 ```
 
 ### Images
@@ -747,6 +837,31 @@ std::thread::spawn(move || {
 | `clip_rect_ext(rect, op, behavior)` | Clip with ClipOp and anti-alias |
 | `clip_rrect_ext(rrect, op, behavior)` | Clip with ClipOp and anti-alias |
 | `clip_path_ext(path, op, behavior)` | Clip with ClipOp and anti-alias |
+
+### TextPainter Methods
+
+| Method | Description |
+|--------|-------------|
+| `new()` | Create empty TextPainter |
+| `with_text(span)` | Set text to paint |
+| `with_text_direction(dir)` | Set text direction (LTR/RTL) |
+| `with_text_align(align)` | Set text alignment |
+| `with_text_scale_factor(factor)` | Set accessibility scale |
+| `with_max_lines(n)` | Set maximum lines |
+| `layout(min, max)` | Compute layout with width constraints |
+| `paint(canvas, offset)` | Paint text to canvas |
+| `size()` / `width()` / `height()` | Get computed dimensions |
+| `get_offset_for_caret(pos)` | Get screen position for cursor |
+| `get_position_for_offset(offset)` | Hit test: screen to text position |
+| `get_line_metrics()` | Get metrics for each line |
+| `get_boxes_for_selection(start, end)` | Get selection highlight boxes |
+| `get_word_boundary(pos)` | Get word range at position |
+
+### Text Direction Detection
+
+| Function | Description |
+|----------|-------------|
+| `detect_text_direction(text)` | Auto-detect LTR/RTL from content |
 
 ### Query Methods
 
