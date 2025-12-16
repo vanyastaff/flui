@@ -87,21 +87,33 @@ SemanticsNodeId::from_index(5)  // Internal: 6
 SemanticsId::new(6)  // Same pattern as other IDs
 ```
 
-### Decision 5: AccessKit as optional feature
+### Decision 5: AccessKit in flui-platform, not flui-semantics
 
-**What**: Add accesskit integration behind a feature flag.
+**What**: AccessKit integration belongs in `flui-platform`, not `flui-semantics`.
 
 **Why**:
-- Not all platforms need native accessibility
-- Reduces compile time when not needed
-- AccessKit handles platform-specific protocols
+- `flui-semantics` = abstract semantic model (types, tree, configuration)
+- `flui-platform` = platform integrations (windows, GPU, input, accessibility)
+- AccessKit requires platform-specific code (Windows/macOS/Linux have different APIs)
+- Follows Flutter pattern: semantics is abstract, embedder handles platform conversion
 
-**Feature configuration**:
-```toml
-[features]
-default = []
-accesskit = ["dep:accesskit"]
+**Architecture**:
 ```
+flui-semantics/           # Abstract model
+  SemanticsNode
+  SemanticsTree
+  SemanticsNodeData       # Serialization format
+
+flui-platform/            # Platform integration
+  accessibility/
+    accesskit_adapter.rs  # SemanticsTree → accesskit::TreeUpdate
+    action_handler.rs     # accesskit::Action → SemanticsAction
+```
+
+**Benefits**:
+- flui-semantics stays pure, no platform dependencies
+- Platform-specific accessibility code is colocated with other platform code
+- Easier to add alternative accessibility backends if needed
 
 ### Decision 6: Keep SemanticsConfiguration pattern
 
@@ -199,27 +211,39 @@ flui-semantics/
    - `FxHashSet` for tags
 
 3. **Integration** ✅
-   - `flui_rendering` depends on and re-exports from `flui-semantics`
+   - `flui_rendering` re-exports `flui_semantics as semantics`
    - `SemanticsNode.to_node_data()` creates proper `SemanticsNodeData`
-   - All 438 workspace tests passing
+   - All 409 workspace tests passing
 
-### Remaining Work
+4. **Cleanup** ✅
+   - Removed `flui_rendering/src/semantics/` directory entirely
+   - Removed `flui_types/src/semantics/` directory entirely
+   - ~4400 lines of duplicate code removed
 
-1. **AccessKit Integration** (7.2-7.7)
-   - Platform module structure
-   - Type conversions to accesskit
-   - Action/flag mappings
+### Remaining Work (this proposal)
 
-2. **Cleanup** (10.2-10.3)
-   - Deprecate/remove duplicates from `flui_types::semantics`
-
-3. **Documentation** (12.2-12.3)
+1. **Documentation** (12.2-12.3)
    - Usage examples
    - Migration guide
 
-## Open Questions
+2. **Quality**
+   - Run clippy on workspace
 
-1. Should `flui_types/src/semantics/` be completely removed or kept for shared enums?
-   - **Current decision**: Keep for now, deprecate gradually
-2. Should we implement `From<SemanticsNode>` for `accesskit::Node` or require explicit conversion?
-3. Should `SemanticsOwner` manage the accesskit `TreeUpdate` directly?
+### Future Work (separate proposal)
+
+**AccessKit Integration in flui-platform**
+- Moved from this proposal to flui-platform scope
+- Location: `flui-platform/src/accessibility/`
+- Converts `SemanticsTree` → `accesskit::TreeUpdate`
+- Handles platform-specific accessibility APIs
+
+## Open Questions (Resolved)
+
+1. ~~Should `flui_types/src/semantics/` be completely removed or kept for shared enums?~~
+   - **Resolved**: Removed entirely. All types now in flui-semantics.
+
+2. ~~Should we implement `From<SemanticsNode>` for `accesskit::Node` or require explicit conversion?~~
+   - **Resolved**: Conversion will be in flui-platform, not flui-semantics. Explicit adapter pattern.
+
+3. ~~Should `SemanticsOwner` manage the accesskit `TreeUpdate` directly?~~
+   - **Resolved**: No. SemanticsOwner stays abstract. flui-platform handles TreeUpdate creation.
