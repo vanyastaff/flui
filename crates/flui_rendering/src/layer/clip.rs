@@ -518,7 +518,7 @@ mod tests {
     #[test]
     fn test_clip_rrect_layer() {
         let rrect = RRect::from_rect_xy(Rect::from_ltwh(0.0, 0.0, 100.0, 100.0), 10.0, 10.0);
-        let layer = ClipRRectLayer::new(rrect.clone(), Clip::AntiAlias);
+        let layer = ClipRRectLayer::new(rrect, Clip::AntiAlias);
         assert_eq!(layer.clip_rrect(), &rrect);
         assert_eq!(layer.clip_behavior(), Clip::AntiAlias);
     }

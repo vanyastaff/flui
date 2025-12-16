@@ -4,11 +4,63 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 
+use flui_interaction::CursorIcon;
 use flui_types::{Matrix4, Offset};
 use parking_lot::RwLock;
 
-use super::mouse_cursor::{MouseCursor, MouseCursorSession};
 use crate::hit_testing::HitTestResult;
+
+// ============================================================================
+// MouseCursorSession (rendering-specific)
+// ============================================================================
+
+/// A session for managing cursor state on a device.
+///
+/// This tracks the active cursor for a specific pointer device.
+#[derive(Debug)]
+pub struct MouseCursorSession {
+    /// The device ID this session is for.
+    device: i32,
+
+    /// The currently active cursor.
+    cursor: CursorIcon,
+}
+
+impl MouseCursorSession {
+    /// Creates a new cursor session for a device.
+    pub fn new(device: i32) -> Self {
+        Self {
+            device,
+            cursor: CursorIcon::Default,
+        }
+    }
+
+    /// Returns the device ID.
+    pub fn device(&self) -> i32 {
+        self.device
+    }
+
+    /// Returns the current cursor.
+    pub fn cursor(&self) -> CursorIcon {
+        self.cursor
+    }
+
+    /// Activates a new cursor.
+    ///
+    /// Returns `true` if the cursor changed.
+    pub fn activate(&mut self, cursor: CursorIcon) -> bool {
+        if self.cursor != cursor {
+            self.cursor = cursor;
+            true
+        } else {
+            false
+        }
+    }
+}
+
+// ============================================================================
+// MouseTrackerAnnotation
+// ============================================================================
 
 /// Signature for hit testing at a given position in a specific view.
 ///
@@ -40,8 +92,8 @@ pub trait MouseTrackerAnnotation: Debug + Send + Sync {
     }
 
     /// The mouse cursor to use when hovering over this annotation.
-    fn cursor(&self) -> MouseCursor {
-        MouseCursor::Defer
+    fn cursor(&self) -> CursorIcon {
+        CursorIcon::Default
     }
 
     /// Whether this annotation is still valid for mouse tracking.
@@ -413,11 +465,11 @@ impl MouseTracker {
     }
 
     /// Returns the active cursor for a device (for debugging).
-    pub fn debug_device_active_cursor(&self, device: i32) -> Option<MouseCursor> {
+    pub fn debug_device_active_cursor(&self, device: i32) -> Option<CursorIcon> {
         self.mouse_states
             .read()
             .get(&device)
-            .map(|state| state.cursor_session.cursor().clone())
+            .map(|state| state.cursor_session.cursor())
     }
 
     /// Disposes of the mouse tracker.
@@ -439,12 +491,12 @@ mod tests {
 
     #[derive(Debug)]
     struct TestAnnotation {
-        cursor: MouseCursor,
+        cursor: CursorIcon,
     }
 
     impl MouseTrackerAnnotation for TestAnnotation {
-        fn cursor(&self) -> MouseCursor {
-            self.cursor.clone()
+        fn cursor(&self) -> CursorIcon {
+            self.cursor
         }
     }
 
@@ -458,7 +510,7 @@ mod tests {
     fn test_mouse_tracker_register_annotation() {
         let tracker = create_test_tracker();
         let annotation = Arc::new(TestAnnotation {
-            cursor: MouseCursor::CLICK,
+            cursor: CursorIcon::Pointer,
         });
 
         let id = tracker.register_annotation(annotation);
@@ -470,7 +522,7 @@ mod tests {
     fn test_mouse_tracker_unregister_annotation() {
         let tracker = create_test_tracker();
         let annotation = Arc::new(TestAnnotation {
-            cursor: MouseCursor::CLICK,
+            cursor: CursorIcon::Pointer,
         });
 
         let id = tracker.register_annotation(annotation);
@@ -557,7 +609,7 @@ mod tests {
         tracker.update_with_event(Offset::new(100.0, 200.0), 0, 0, true);
         let cursor = tracker.debug_device_active_cursor(0);
         assert!(cursor.is_some());
-        assert_eq!(cursor.unwrap(), MouseCursor::BASIC);
+        assert_eq!(cursor.unwrap(), CursorIcon::Default);
     }
 
     #[test]
@@ -566,7 +618,7 @@ mod tests {
 
         tracker.update_with_event(Offset::new(100.0, 200.0), 0, 0, true);
         let annotation = Arc::new(TestAnnotation {
-            cursor: MouseCursor::CLICK,
+            cursor: CursorIcon::Pointer,
         });
         tracker.register_annotation(annotation);
 

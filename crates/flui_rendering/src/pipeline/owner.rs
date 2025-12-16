@@ -528,8 +528,7 @@ impl PipelineOwner {
 
         // Filter out nodes that still need layout (they're not ready for semantics)
         // Flutter: .where((object) => !object._needsLayout && object.owner == this)
-        let nodes_to_process: Vec<DirtyNode> =
-            self.nodes_needing_semantics.iter().copied().collect();
+        let nodes_to_process: Vec<DirtyNode> = self.nodes_needing_semantics.to_vec();
 
         self.nodes_needing_semantics.clear();
 

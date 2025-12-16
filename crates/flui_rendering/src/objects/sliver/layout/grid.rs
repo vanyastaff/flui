@@ -139,10 +139,12 @@ impl RenderSliverGrid {
                 layout.child_main_axis_extent,
             );
 
-            let mut parent_data = SliverGridParentData::default();
-            parent_data.index = Some(index);
-            parent_data.layout_offset = Some(scroll_offset);
-            parent_data.cross_axis_offset = Some(cross_axis_offset);
+            let parent_data = SliverGridParentData {
+                index: Some(index),
+                layout_offset: Some(scroll_offset),
+                cross_axis_offset: Some(cross_axis_offset),
+                ..Default::default()
+            };
 
             self.children.push((tile_size, parent_data));
         }
@@ -161,7 +163,7 @@ impl RenderSliverGrid {
             return 0.0;
         }
 
-        let row_count = (item_count + layout.cross_axis_count - 1) / layout.cross_axis_count;
+        let row_count = item_count.div_ceil(layout.cross_axis_count);
         row_count as f32 * layout.main_axis_stride
             - (layout.main_axis_stride - layout.child_main_axis_extent)
     }

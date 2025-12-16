@@ -213,13 +213,7 @@ impl<T: Send + Sync, A: Arity> ChildrenStorage<T> for ArityStorage<T, A> {
     fn child_count(&self) -> usize {
         match self {
             ArityStorage::Leaf(_) => 0,
-            ArityStorage::Optional(opt) => {
-                if opt.is_some() {
-                    1
-                } else {
-                    0
-                }
-            }
+            ArityStorage::Optional(opt) => usize::from(opt.is_some()),
             ArityStorage::Exact(vec) => vec.len(),
             ArityStorage::Variable(vec) => vec.len(),
             ArityStorage::Range(vec) => vec.len(),
@@ -610,6 +604,7 @@ impl<'a, T: 'a> ArityStorageView<'a, T> {
     }
 
     /// Iterate over children.
+    #[allow(clippy::iter_without_into_iter)] // IntoIterator requires different lifetime bounds
     pub fn iter(&self) -> std::slice::Iter<'a, T> {
         self.as_slice().iter()
     }
@@ -647,6 +642,7 @@ impl<T, A: Arity> ArityStorage<T, A> {
 
 impl<T, A: Arity> ArityStorage<T, A> {
     /// Create storage from iterator (for Variable, Range).
+    #[allow(clippy::should_implement_trait)] // Different semantics than std::iter::FromIterator
     pub fn from_iter<I>(iter: I) -> Self
     where
         I: IntoIterator<Item = T>,

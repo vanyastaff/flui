@@ -47,6 +47,14 @@
 
 #![warn(missing_docs)]
 #![warn(clippy::all)]
+// Active development - many incomplete features
+#![allow(dead_code)]
+#![allow(unused_variables)]
+#![allow(unused_mut)]
+#![allow(unused_assignments)]
+#![allow(clippy::too_many_arguments)]
+#![allow(clippy::type_complexity)]
+#![allow(clippy::large_enum_variant)]
 
 pub mod binding;
 pub mod constraints;
@@ -106,8 +114,8 @@ pub mod prelude {
         SliverHitTestResult,
     };
     pub use crate::input::{
-        MouseCursor, MouseCursorSession, MouseTracker, MouseTrackerAnnotation, MouseTrackerHitTest,
-        PointerEnterEvent, PointerExitEvent, PointerHoverEvent, SystemMouseCursor,
+        CursorIcon, MouseCursorSession, MouseTracker, MouseTrackerAnnotation, MouseTrackerHitTest,
+        PointerEnterEvent, PointerExitEvent, PointerHoverEvent,
     };
     pub use crate::parent_data::{
         BoxParentData, ContainerBoxParentData, FlexFit, FlexParentData, ParentData,

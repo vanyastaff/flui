@@ -175,18 +175,13 @@ unsafe impl Sync for AnnotatedRegionLayer {}
 // ============================================================================
 
 /// System UI overlay style for status bar appearance.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum SystemUiOverlayStyle {
     /// Light icons on dark background
+    #[default]
     Light,
     /// Dark icons on light background
     Dark,
-}
-
-impl Default for SystemUiOverlayStyle {
-    fn default() -> Self {
-        Self::Light
-    }
 }
 
 /// Semantic label for accessibility.

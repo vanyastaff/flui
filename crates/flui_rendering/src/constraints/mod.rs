@@ -131,7 +131,7 @@ pub trait Constraints: Clone + PartialEq + fmt::Debug + Send + Sync + 'static {
 
     /// Validates constraints (no-op in release mode).
     #[cfg(not(debug_assertions))]
-    #[inline(always)]
+    #[inline]
     fn debug_assert_is_valid(&self, _is_applied_constraint: bool) -> bool {
         true
     }

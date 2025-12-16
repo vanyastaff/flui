@@ -320,13 +320,13 @@ impl LayerTree {
     /// Returns a reference to the Layer directly.
     #[inline]
     pub fn get_layer(&self, id: LayerId) -> Option<&Layer> {
-        self.get(id).map(|node| node.layer())
+        self.get(id).map(LayerNode::layer)
     }
 
     /// Returns a mutable reference to the Layer directly.
     #[inline]
     pub fn get_layer_mut(&mut self, id: LayerId) -> Option<&mut Layer> {
-        self.get_mut(id).map(|node| node.layer_mut())
+        self.get_mut(id).map(LayerNode::layer_mut)
     }
 
     /// Removes a LayerNode from the tree.
@@ -386,7 +386,7 @@ impl LayerTree {
 
     /// Returns the children of a node.
     pub fn children(&self, id: LayerId) -> Option<&[LayerId]> {
-        self.get(id).map(|node| node.children())
+        self.get(id).map(LayerNode::children)
     }
 
     /// Clears all children from a parent node.

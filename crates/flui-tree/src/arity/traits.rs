@@ -128,6 +128,7 @@ pub trait Arity: sealed::Sealed + Send + Sync + Debug + Copy + Default + 'static
     /// HRTB-compatible find operation.
     ///
     /// Find first child matching a predicate that works with any lifetime.
+    #[allow(clippy::redundant_closure)]
     fn find_in_slice<'a, T, P>(children: &'a [T], predicate: P) -> Option<&'a T>
     where
         T: 'a,
@@ -139,6 +140,7 @@ pub trait Arity: sealed::Sealed + Send + Sync + Debug + Copy + Default + 'static
     /// HRTB-compatible filter operation.
     ///
     /// Filter children with a predicate that works with any lifetime.
+    #[allow(clippy::redundant_closure)]
     fn filter_slice<'a, T, P>(children: &'a [T], predicate: P) -> Vec<&'a T>
     where
         T: 'a,
@@ -155,7 +157,7 @@ pub trait Arity: sealed::Sealed + Send + Sync + Debug + Copy + Default + 'static
 // ============================================================================
 
 pub(crate) mod sealed {
-    use super::super::types::*;
+    use super::super::types::{AtLeast, Exact, Leaf, Never, Optional, Range, Variable};
 
     pub trait Sealed {}
 

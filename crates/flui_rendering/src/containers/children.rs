@@ -1,3 +1,5 @@
+#![allow(unused_imports)] // Ambassador generates imports for delegatable traits
+
 //! Type-safe children storage for render objects.
 //!
 //! This module provides Arity-based containers for managing child render objects
@@ -137,12 +139,14 @@ impl<P: Protocol, A: Arity> Child<P, A> {
 
     /// Returns the child as a boxed reference.
     #[inline]
+    #[allow(clippy::borrowed_box)] // Intentional - allows access to Box for ownership operations
     pub fn get_boxed(&self) -> Option<&Box<P::Object>> {
         self.storage.single_child()
     }
 
     /// Returns the child as a mutable boxed reference.
     #[inline]
+    #[allow(clippy::borrowed_box)] // Intentional - allows access to Box for ownership operations
     pub fn get_boxed_mut(&mut self) -> Option<&mut Box<P::Object>> {
         self.storage.single_child_mut()
     }

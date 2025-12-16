@@ -97,7 +97,7 @@ pub trait ClipContext {
     where
         F: FnOnce(&mut Self),
     {
-        self._clip_and_paint(
+        self.clip_and_paint_impl(
             |canvas, do_anti_alias| {
                 canvas.clip_rect_ext(
                     rect,
@@ -142,7 +142,7 @@ pub trait ClipContext {
     ) where
         F: FnOnce(&mut Self),
     {
-        self._clip_and_paint(
+        self.clip_and_paint_impl(
             |canvas, do_anti_alias| {
                 canvas.clip_rrect_ext(
                     rrect,
@@ -182,7 +182,7 @@ pub trait ClipContext {
     where
         F: FnOnce(&mut Self),
     {
-        self._clip_and_paint(
+        self.clip_and_paint_impl(
             |canvas, do_anti_alias| {
                 canvas.clip_path_ext(
                     path,
@@ -220,7 +220,7 @@ pub trait ClipContext {
     /// ) { ... }
     /// ```
     #[doc(hidden)]
-    fn _clip_and_paint<C, F>(
+    fn clip_and_paint_impl<C, F>(
         &mut self,
         canvas_clip_call: C,
         clip_behavior: Clip,

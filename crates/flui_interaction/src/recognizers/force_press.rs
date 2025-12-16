@@ -310,7 +310,7 @@ impl ForcePressGestureRecognizer {
                     drop(state);
 
                     if let Some(callback) = self.callbacks.lock().on_peak.clone() {
-                        callback(details.clone());
+                        callback(details);
                     }
                 } else {
                     drop(state);

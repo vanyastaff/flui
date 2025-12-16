@@ -155,6 +155,7 @@ use flui_types::geometry::Rect;
 /// let opacity_layer = Layer::Opacity(OpacityLayer::new(0.5));
 /// ```
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum Layer {
     // ========== Leaf Layers ==========
     /// Canvas layer - standard drawing commands (mutable)
@@ -216,6 +217,7 @@ pub enum Layer {
 
 impl Layer {
     /// Returns the bounds of this layer.
+    #[allow(clippy::match_same_arms)] // Each arm is documented separately for clarity
     pub fn bounds(&self) -> Option<Rect> {
         match self {
             Layer::Canvas(layer) => Some(layer.bounds()),
@@ -241,6 +243,7 @@ impl Layer {
     /// Returns true if this layer needs compositing.
     ///
     /// Compositing requires offscreen rendering and is more expensive.
+    #[allow(clippy::match_same_arms)] // Each arm is documented separately for clarity
     pub fn needs_compositing(&self) -> bool {
         match self {
             Layer::Canvas(_) => false,

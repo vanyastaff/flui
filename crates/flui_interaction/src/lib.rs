@@ -155,6 +155,12 @@ pub mod processing;
 pub mod testing;
 
 // ============================================================================
+// Events (W3C-compliant types from ui-events and cursor-icon)
+// ============================================================================
+
+pub mod events;
+
+// ============================================================================
 // Other modules
 // ============================================================================
 
@@ -229,11 +235,17 @@ pub use traits::{
 };
 
 // ============================================================================
-// Re-exports: Types from flui_types
+// Re-exports: Geometry from flui_types
 // ============================================================================
 
-pub use flui_types::events::{Event, KeyEvent, PointerEvent};
 pub use flui_types::geometry::{Offset, Rect};
+
+// ============================================================================
+// Re-exports: Events (W3C-compliant types)
+// ============================================================================
+
+// Re-export commonly used event types at crate root
+pub use events::{CursorIcon, KeyboardEvent, PointerEvent};
 
 // ============================================================================
 // Prelude
@@ -284,8 +296,10 @@ pub mod prelude {
     pub use crate::mouse_tracker::{MouseTracker, MouseTrackerAnnotation};
     pub use crate::signal_resolver::{PointerSignalResolver, SignalPriority};
 
-    // Common types from flui_types
-    pub use flui_types::events::{Event, KeyEvent, PointerEvent};
+    // Events (W3C-compliant)
+    pub use crate::events::{CursorIcon, KeyboardEvent, PointerEvent};
+
+    // Geometry from flui_types
     pub use flui_types::geometry::{Offset, Rect};
 }
 

@@ -974,6 +974,7 @@ pub(crate) struct FocusManagerInner {
     primary_focus: RwLock<Option<FocusNodeId>>,
 
     /// Focus change listeners.
+    #[allow(clippy::type_complexity)]
     listeners: RwLock<Vec<Arc<dyn Fn(Option<FocusNodeId>, Option<FocusNodeId>) + Send + Sync>>>,
 }
 
@@ -1043,12 +1044,10 @@ impl FocusManagerInner {
             return Some(self.root_scope.inner.clone());
         }
 
-        for node in self.root_scope.inner.descendants() {
-            if node.id() == id {
-                return Some(node);
-            }
-        }
-        None
+        self.root_scope
+            .inner
+            .descendants()
+            .find(|node| node.id() == id)
     }
 }
 

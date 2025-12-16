@@ -78,14 +78,12 @@ impl TreeNav<LayerId> for LayerTree {
 
     #[inline]
     fn child_count(&self, id: LayerId) -> usize {
-        self.get(id).map(|node| node.children().len()).unwrap_or(0)
+        self.get(id).map_or(0, |node| node.children().len())
     }
 
     #[inline]
     fn has_children(&self, id: LayerId) -> bool {
-        self.get(id)
-            .map(|node| !node.children().is_empty())
-            .unwrap_or(false)
+        self.get(id).is_some_and(|node| !node.children().is_empty())
     }
 }
 

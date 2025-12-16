@@ -29,7 +29,7 @@ pub enum RuntimeArity {
 
 impl RuntimeArity {
     /// Check if the count is valid for this arity.
-    #[inline(always)]
+    #[inline]
     pub const fn validate(&self, count: usize) -> bool {
         match self {
             Self::Exact(n) => count == *n,
@@ -42,13 +42,13 @@ impl RuntimeArity {
     }
 
     /// Check if this arity is impossible (Never type).
-    #[inline(always)]
+    #[inline]
     pub const fn is_impossible(&self) -> bool {
         matches!(self, Self::Never)
     }
 
     /// Get the minimum valid count for this arity.
-    #[inline(always)]
+    #[inline]
     pub const fn min_count(&self) -> usize {
         match self {
             Self::Exact(n) => *n,
@@ -61,7 +61,7 @@ impl RuntimeArity {
     }
 
     /// Get the maximum valid count for this arity (None = unbounded).
-    #[inline(always)]
+    #[inline]
     pub const fn max_count(&self) -> Option<usize> {
         match self {
             Self::Exact(n) => Some(*n),
@@ -94,11 +94,11 @@ impl std::fmt::Display for RuntimeArity {
         match self {
             Self::Exact(0) => write!(f, "Leaf (0 children)"),
             Self::Exact(1) => write!(f, "Single (1 child)"),
-            Self::Exact(n) => write!(f, "Exact({} children)", n),
+            Self::Exact(n) => write!(f, "Exact({n} children)"),
             Self::Optional => write!(f, "Optional (0 or 1 child)"),
-            Self::AtLeast(n) => write!(f, "AtLeast({} children)", n),
+            Self::AtLeast(n) => write!(f, "AtLeast({n} children)"),
             Self::Variable => write!(f, "Variable (any number)"),
-            Self::Range(min, max) => write!(f, "Range({}-{} children)", min, max),
+            Self::Range(min, max) => write!(f, "Range({min}-{max} children)"),
             Self::Never => write!(f, "Never (impossible)"),
         }
     }

@@ -7,17 +7,19 @@
 //!
 //! - [`MouseTracker`]: Tracks mouse devices and manages hover notifications
 //! - [`MouseTrackerAnnotation`]: Marker trait for render objects that want hover events
-//! - [`MouseCursor`]: Represents a mouse cursor type
+//! - [`CursorIcon`]: Represents a cursor type (re-exported from flui_interaction)
 //!
 //! # Flutter Equivalence
 //!
 //! This corresponds to Flutter's `rendering/mouse_tracker.dart`.
 
-mod mouse_cursor;
 mod mouse_tracker;
 
-pub use mouse_cursor::{MouseCursor, MouseCursorSession, SystemMouseCursor};
+// Re-export CursorIcon from flui_interaction (W3C CSS compliant)
+pub use flui_interaction::CursorIcon;
+
+// Export MouseCursorSession from mouse_tracker (rendering-specific)
 pub use mouse_tracker::{
-    MouseTracker, MouseTrackerAnnotation, MouseTrackerHitTest, PointerEnterEvent, PointerExitEvent,
-    PointerHoverEvent,
+    MouseCursorSession, MouseTracker, MouseTrackerAnnotation, MouseTrackerHitTest,
+    PointerEnterEvent, PointerExitEvent, PointerHoverEvent,
 };

@@ -324,7 +324,7 @@ impl PaintingContext {
             self.stop_recording_if_needed();
 
             let offset_clip = clip_rrect.translate_offset(offset);
-            let mut clip_layer = ClipRRectLayer::new(offset_clip.clone(), Clip::AntiAlias);
+            let mut clip_layer = ClipRRectLayer::new(offset_clip, Clip::AntiAlias);
 
             let mut child_context = PaintingContext::new(ContainerLayer::new(), offset_clip.rect);
 
@@ -758,6 +758,7 @@ impl CanvasState {
 
 /// A recorded drawing command.
 #[derive(Debug, Clone)]
+#[allow(missing_docs)] // Fields are self-explanatory from variant name
 pub enum DrawCommand {
     /// Draw a rectangle.
     DrawRect { rect: Rect, paint: Paint },

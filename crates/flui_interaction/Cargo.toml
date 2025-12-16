@@ -14,6 +14,10 @@ keywords = ["gui", "ui", "events", "gestures", "interaction"]
 flui_types = { path = "../flui_types" }
 flui-foundation = { path = "../flui-foundation" }
 
+# UI Events - Cross-platform input event abstraction (W3C compliant)
+ui-events = { workspace = true }
+cursor-icon = { workspace = true }
+
 # Synchronization & Concurrency
 parking_lot = { workspace = true }
 once_cell = { workspace = true }

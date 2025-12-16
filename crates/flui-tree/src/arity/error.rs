@@ -80,22 +80,19 @@ impl std::fmt::Display for ArityError {
             Self::TooManyChildren { arity, attempted } => {
                 write!(
                     f,
-                    "Too many children: {} does not allow {} children",
-                    arity, attempted
+                    "Too many children: {arity} does not allow {attempted} children"
                 )
             }
             Self::TooFewChildren { arity, attempted } => {
                 write!(
                     f,
-                    "Too few children: {} requires more than {} children",
-                    arity, attempted
+                    "Too few children: {arity} requires more than {attempted} children"
                 )
             }
             Self::InvalidChildCount { arity, actual } => {
                 write!(
                     f,
-                    "Invalid child count: {} does not allow {} children",
-                    arity, actual
+                    "Invalid child count: {arity} does not allow {actual} children"
                 )
             }
         }

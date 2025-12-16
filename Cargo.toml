@@ -110,6 +110,10 @@ moka = { version = "0.12", features = ["future"] }
 # NETWORKING - Used by flui_assets
 reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls"] }
 
+# UI EVENTS - Cross-platform input event abstraction (W3C compliant)
+ui-events = "0.2"
+cursor-icon = "1.2"
+
 # UTILITIES - Used by multiple crates
 ahash = "0.8"
 bitflags = "2.10"

@@ -144,6 +144,7 @@ impl OpacityLayer {
     ///
     /// Useful for GPU operations that expect integer alpha.
     #[inline]
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     pub fn alpha_byte(&self) -> u8 {
         (self.alpha * 255.0).round() as u8
     }

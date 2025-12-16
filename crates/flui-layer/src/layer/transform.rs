@@ -196,7 +196,7 @@ impl TransformLayer {
     /// The result is equivalent to applying `other` first, then `self`.
     #[inline]
     pub fn concat(&mut self, other: &Matrix4) {
-        self.transform = self.transform * *other;
+        self.transform *= *other;
     }
 
     /// Pre-concatenates another transform to this one.

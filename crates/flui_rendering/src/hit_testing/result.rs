@@ -106,7 +106,7 @@ impl HitTestResult {
             // Combine all transforms
             let mut result = Matrix4::IDENTITY;
             for t in &self.transforms {
-                result = result * t.to_matrix();
+                result *= t.to_matrix();
             }
             MatrixTransformPart::Matrix(result)
         }

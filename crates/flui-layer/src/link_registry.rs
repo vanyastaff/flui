@@ -233,8 +233,7 @@ impl LinkRegistry {
     pub fn followers_for_link(&self, link: &LayerLink) -> &[LayerId] {
         self.leaders
             .get(link)
-            .map(|info| info.followers.as_slice())
-            .unwrap_or(&[])
+            .map_or(&[], |info| info.followers.as_slice())
     }
 
     /// Returns the leader LayerId for a given link.

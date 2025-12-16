@@ -9,7 +9,12 @@
 //! - [`HitTestResult`]: Accumulates hit test entries during traversal
 //! - [`HitTestEntry`]: An entry in the hit test path
 //! - [`HitTestTarget`]: Trait for objects that can handle hit test events
-//! - [`HitTestBehavior`]: Controls how hit testing proceeds
+//! - [`HitTestBehavior`]: Controls how hit testing proceeds (from flui_interaction)
+//!
+//! # Protocol-Specific Types
+//!
+//! - [`BoxHitTestResult`], [`BoxHitTestEntry`]: For RenderBox hit testing
+//! - [`SliverHitTestResult`], [`SliverHitTestEntry`]: For RenderSliver hit testing
 //!
 //! # Flutter Equivalence
 //!
@@ -29,13 +34,15 @@
 //! }
 //! ```
 
-mod behavior;
 mod entry;
 mod result;
 mod target;
 mod transform;
 
-pub use behavior::HitTestBehavior;
+// Re-export HitTestBehavior from flui_interaction (base type)
+pub use flui_interaction::routing::HitTestBehavior;
+
+// Protocol-specific types defined in this crate
 pub use entry::{BoxHitTestEntry, HitTestEntry, SliverHitTestEntry};
 pub use result::{BoxHitTestResult, HitTestResult, SliverHitTestResult};
 pub use target::{HitTestTarget, PointerDeviceKind, PointerEvent, PointerEventKind};

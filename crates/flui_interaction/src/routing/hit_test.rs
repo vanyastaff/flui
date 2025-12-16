@@ -487,7 +487,7 @@ fn transform_scroll_event(event: &ScrollEventData, transform: &Matrix4) -> Scrol
 
     ScrollEventData {
         position: Offset::new(x, y),
-        delta: event.delta.clone(),
+        delta: event.delta,
         modifiers: event.modifiers,
     }
 }

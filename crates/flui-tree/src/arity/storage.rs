@@ -223,6 +223,7 @@ pub trait ChildrenStorageExt<T>: ChildrenStorage<T> {
     }
 
     /// Find first child matching predicate.
+    #[allow(clippy::redundant_closure)]
     fn find<P>(&self, mut predicate: P) -> Option<&T>
     where
         P: FnMut(&T) -> bool,
@@ -231,6 +232,7 @@ pub trait ChildrenStorageExt<T>: ChildrenStorage<T> {
     }
 
     /// Check if any child matches predicate.
+    #[allow(clippy::redundant_closure)]
     fn any<P>(&self, mut predicate: P) -> bool
     where
         P: FnMut(&T) -> bool,
@@ -239,6 +241,7 @@ pub trait ChildrenStorageExt<T>: ChildrenStorage<T> {
     }
 
     /// Check if all children match predicate.
+    #[allow(clippy::redundant_closure)]
     fn all<P>(&self, mut predicate: P) -> bool
     where
         P: FnMut(&T) -> bool,
@@ -392,11 +395,7 @@ impl<T: Send + Sync> ChildrenStorage<T> for Option<T> {
     }
 
     fn child_count(&self) -> usize {
-        if self.is_some() {
-            1
-        } else {
-            0
-        }
+        usize::from(self.is_some())
     }
 
     fn is_empty(&self) -> bool {

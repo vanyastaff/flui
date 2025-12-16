@@ -64,6 +64,7 @@ pub trait ChildrenAccess<'a, T: 'a>: Copy + Send + Sync {
     }
 
     /// Find first child matching HRTB predicate.
+    #[allow(clippy::redundant_closure)]
     fn find_where<P>(&self, predicate: P) -> Option<&'a T>
     where
         P: for<'b> Fn(&'b T) -> bool,
@@ -72,6 +73,7 @@ pub trait ChildrenAccess<'a, T: 'a>: Copy + Send + Sync {
     }
 
     /// Filter children with HRTB predicate.
+    #[allow(clippy::redundant_closure)]
     fn filter_where<P>(&self, predicate: P) -> Vec<&'a T>
     where
         P: for<'b> Fn(&'b T) -> bool,
@@ -80,6 +82,7 @@ pub trait ChildrenAccess<'a, T: 'a>: Copy + Send + Sync {
     }
 
     /// Count children matching HRTB predicate.
+    #[allow(clippy::redundant_closure)]
     fn count_where<P>(&self, predicate: P) -> usize
     where
         P: for<'b> Fn(&'b T) -> bool,

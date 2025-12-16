@@ -47,17 +47,17 @@ impl Arity for Leaf {
     const BATCH_SIZE: usize = 0;
     const SUPPORTS_SIMD: bool = true;
 
-    #[inline(always)]
+    #[inline]
     fn runtime_arity() -> RuntimeArity {
         RuntimeArity::Exact(0)
     }
 
-    #[inline(always)]
+    #[inline]
     fn validate_count(count: usize) -> bool {
         count == 0
     }
 
-    #[inline(always)]
+    #[inline]
     fn from_slice<T: Send + Sync>(children: &[T]) -> Self::Accessor<'_, T> {
         debug_assert!(
             children.is_empty(),
@@ -67,7 +67,7 @@ impl Arity for Leaf {
         NoChildren(PhantomData)
     }
 
-    #[inline(always)]
+    #[inline]
     fn iter_slice<'a, T>(children: &'a [T]) -> Self::Iterator<'a, T>
     where
         T: 'a,
@@ -123,7 +123,7 @@ impl Arity for Optional {
         count <= 1
     }
 
-    #[inline(always)]
+    #[inline]
     fn from_slice<T: Send + Sync>(children: &[T]) -> Self::Accessor<'_, T> {
         debug_assert!(
             children.len() <= 1,
@@ -133,7 +133,7 @@ impl Arity for Optional {
         OptionalChild { children }
     }
 
-    #[inline(always)]
+    #[inline]
     fn iter_slice<'a, T>(children: &'a [T]) -> Self::Iterator<'a, T>
     where
         T: 'a,
@@ -180,7 +180,7 @@ impl<const N: usize> Arity for Exact<N> {
         count == N
     }
 
-    #[inline(always)]
+    #[inline]
     fn from_slice<T: Send + Sync>(children: &[T]) -> Self::Accessor<'_, T> {
         debug_assert!(
             children.len() == N,
@@ -195,7 +195,7 @@ impl<const N: usize> Arity for Exact<N> {
         }
     }
 
-    #[inline(always)]
+    #[inline]
     fn iter_slice<'a, T>(children: &'a [T]) -> Self::Iterator<'a, T>
     where
         T: 'a,
@@ -246,7 +246,7 @@ impl<const N: usize> Arity for AtLeast<N> {
         count >= N
     }
 
-    #[inline(always)]
+    #[inline]
     fn from_slice<T: Send + Sync>(children: &[T]) -> Self::Accessor<'_, T> {
         debug_assert!(
             children.len() >= N,
@@ -258,7 +258,7 @@ impl<const N: usize> Arity for AtLeast<N> {
         SliceChildren { children }
     }
 
-    #[inline(always)]
+    #[inline]
     fn iter_slice<'a, T>(children: &'a [T]) -> Self::Iterator<'a, T>
     where
         T: 'a,
@@ -306,12 +306,12 @@ impl Arity for Variable {
         true
     }
 
-    #[inline(always)]
+    #[inline]
     fn from_slice<T: Send + Sync>(children: &[T]) -> Self::Accessor<'_, T> {
         SliceChildren { children }
     }
 
-    #[inline(always)]
+    #[inline]
     fn iter_slice<'a, T>(children: &'a [T]) -> Self::Iterator<'a, T>
     where
         T: 'a,
@@ -346,6 +346,7 @@ impl<const MIN: usize, const MAX: usize> Arity for Range<MIN, MAX> {
     where
         T: 'a;
 
+    #[allow(clippy::manual_midpoint)] // midpoint() not available in const context for usize
     const EXPECTED_SIZE: usize = (MIN + MAX) / 2;
     const INLINE_THRESHOLD: usize = MAX;
     const BATCH_SIZE: usize = MAX;
@@ -360,7 +361,7 @@ impl<const MIN: usize, const MAX: usize> Arity for Range<MIN, MAX> {
         count >= MIN && count <= MAX
     }
 
-    #[inline(always)]
+    #[inline]
     fn from_slice<T: Send + Sync>(children: &[T]) -> Self::Accessor<'_, T> {
         debug_assert!(
             children.len() >= MIN,
@@ -381,7 +382,7 @@ impl<const MIN: usize, const MAX: usize> Arity for Range<MIN, MAX> {
         SliceChildren { children }
     }
 
-    #[inline(always)]
+    #[inline]
     fn iter_slice<'a, T>(children: &'a [T]) -> Self::Iterator<'a, T>
     where
         T: 'a,
@@ -429,12 +430,12 @@ impl Arity for Never {
         false
     }
 
-    #[inline(always)]
+    #[inline]
     fn from_slice<T: Send + Sync>(_children: &[T]) -> Self::Accessor<'_, T> {
         NeverAccessor(PhantomData)
     }
 
-    #[inline(always)]
+    #[inline]
     fn iter_slice<'a, T>(_children: &'a [T]) -> Self::Iterator<'a, T>
     where
         T: 'a,
