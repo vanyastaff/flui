@@ -115,6 +115,20 @@ pub use child::{Child, Children};
 // Element types
 pub use element::Lifecycle;
 
+// Notification system
+pub use element::{
+    BoxedNotification, DragEndNotification, DragStartNotification, FocusNotification,
+    KeepAliveNotification, LayoutChangedNotification, NotifiableElement, Notification,
+    NotificationCallback, NotificationHandler, NotificationNode, ScrollNotification,
+    SizeChangedNotification,
+};
+
+// Root element
+pub use element::{RootElement, RootElementImpl};
+
+// Slot types for multi-child elements
+pub use element::{ElementSlot, IndexedSlot, IndexedSlotBuilder};
+
 // Context
 pub use context::{BuildContext, BuildContextExt};
 
@@ -137,7 +151,10 @@ pub use flui_foundation::{ElementId, RenderId};
 pub mod prelude {
     pub use crate::child::{Child, Children};
     pub use crate::context::{BuildContext, BuildContextExt};
-    pub use crate::element::Lifecycle;
+    pub use crate::element::{
+        ElementSlot, IndexedSlot, IndexedSlotBuilder, LayoutChangedNotification, Lifecycle,
+        NotifiableElement, Notification, NotificationNode, RootElement,
+    };
     pub use crate::key::{GlobalKey, GlobalKeyId, ObjectKey, ValueKey};
     pub use crate::owner::BuildOwner;
     pub use crate::tree::{reconcile_children, ElementNode, ElementTree};

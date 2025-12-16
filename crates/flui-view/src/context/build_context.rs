@@ -175,6 +175,33 @@ pub trait BuildContext: Send + Sync {
     ///
     /// The Element will be rebuilt in the next build phase.
     fn mark_needs_build(&self);
+
+    // ========================================================================
+    // Notification Dispatch
+    // ========================================================================
+
+    /// Dispatch a notification up the element tree.
+    ///
+    /// The notification bubbles up from this context until a
+    /// NotifiableElement handles it (returns true) or the root is reached.
+    ///
+    /// # Arguments
+    ///
+    /// * `notification` - The notification to dispatch
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use flui_view::{Notification, LayoutChangedNotification};
+    ///
+    /// // Dispatch from inside a View's build method
+    /// ctx.dispatch_notification(&LayoutChangedNotification);
+    /// ```
+    ///
+    /// # Flutter Equivalent
+    ///
+    /// Corresponds to Flutter's `BuildContext.dispatchNotification()`.
+    fn dispatch_notification(&self, notification: &dyn crate::element::Notification);
 }
 
 /// Extension trait for typed InheritedView lookups.
