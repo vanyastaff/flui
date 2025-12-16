@@ -293,12 +293,14 @@ impl ForcePressGestureRecognizer {
 
     /// Handle pointer move event (pressure may change)
     fn handle_move(&self, position: Offset, pressure: f32) {
+        // Cache settings to avoid nested locks
+        let settings = self.settings.lock().clone();
         let mut state = self.gesture_state.lock();
 
         // Check slop - if moved too far, cancel
         if let Some(initial_pos) = self.state.initial_position() {
             let delta = position - initial_pos;
-            if self.settings.lock().exceeds_touch_slop(delta.distance()) {
+            if settings.exceeds_touch_slop(delta.distance()) {
                 // Moved too far, end the gesture
                 if state.phase == ForcePressPhase::Started || state.phase == ForcePressPhase::Peaked
                 {

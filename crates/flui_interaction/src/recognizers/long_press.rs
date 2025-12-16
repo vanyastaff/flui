@@ -284,23 +284,27 @@ impl LongPressGestureRecognizer {
 
     /// Handle pointer move event
     fn handle_move(&self, position: Offset, kind: PointerType) {
+        // Cache settings to avoid multiple locks
+        let settings = self.settings.lock().clone();
         let mut state = self.gesture_state.lock();
 
         match state.phase {
             LongPressPhase::Possible => {
                 // Check if moved too far (slop detection)
-                if self.check_slop(position) {
-                    // Moved too far, cancel
-                    drop(state); // Release lock before calling handle_cancel
-
-                    self.handle_cancel(position, kind);
-                    return;
+                if let Some(initial_pos) = self.state.initial_position() {
+                    let delta = position - initial_pos;
+                    if settings.exceeds_touch_slop(delta.distance()) {
+                        // Moved too far, cancel
+                        drop(state); // Release lock before calling handle_cancel
+                        self.handle_cancel(position, kind);
+                        return;
+                    }
                 }
 
                 // Check if timer elapsed
                 if let Some(down_time) = state.down_time {
                     let elapsed = Instant::now().duration_since(down_time);
-                    if elapsed >= self.long_press_duration() {
+                    if elapsed >= settings.long_press_timeout() {
                         // Timer elapsed! Start long press
                         state.phase = LongPressPhase::Started;
                         state.current_position = Some(position);
@@ -399,19 +403,6 @@ impl LongPressGestureRecognizer {
 
             self.state.reject();
         }
-    }
-
-    /// Check if pointer moved too far (beyond slop tolerance)
-    fn check_slop(&self, current_position: Offset) -> bool {
-        if let Some(initial_pos) = self.state.initial_position() {
-            let delta = current_position - initial_pos;
-            let distance = delta.distance();
-
-            if self.settings.lock().exceeds_touch_slop(distance) {
-                return true; // Moved too far
-            }
-        }
-        false
     }
 
     /// Check if long press timer has elapsed

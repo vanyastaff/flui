@@ -267,6 +267,8 @@ impl MultiTapGestureRecognizer {
 
     /// Handle pointer move
     fn handle_pointer_move(&self, pointer: PointerId, position: Offset) {
+        // Cache settings to avoid nested locks
+        let settings = self.settings.lock().clone();
         let mut state = self.gesture_state.lock();
 
         if let Some(info) = state.pointers.get_mut(&pointer) {
@@ -276,7 +278,7 @@ impl MultiTapGestureRecognizer {
             let delta = position - info.initial_position;
             let distance = delta.distance();
 
-            if self.settings.lock().exceeds_touch_slop(distance) {
+            if settings.exceeds_touch_slop(distance) {
                 // Moved too far - cancel
                 state.phase = MultiTapPhase::Cancelled;
                 drop(state);

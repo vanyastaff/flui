@@ -155,11 +155,6 @@ impl DoubleTapGestureRecognizer {
         self.settings.lock().double_tap_timeout()
     }
 
-    /// Get the double tap slop from settings
-    fn double_tap_slop(&self) -> f32 {
-        self.settings.lock().double_tap_slop()
-    }
-
     /// Set the double tap callback
     pub fn with_on_double_tap(
         self: Arc<Self>,
@@ -192,10 +187,13 @@ impl DoubleTapGestureRecognizer {
             }
             DoubleTapPhase::WaitingForSecond => {
                 // Second tap down - check timing and distance
+                // Cache settings to avoid multiple locks
+                let settings = self.settings.lock().clone();
+
                 if let Some(first_time) = state.first_tap_time {
                     let elapsed = Instant::now().duration_since(first_time);
 
-                    if elapsed > self.double_tap_timeout() {
+                    if elapsed > settings.double_tap_timeout() {
                         // Too slow - start over as first tap
                         state.phase = DoubleTapPhase::FirstDown;
                         state.first_tap_position = Some(position);
@@ -207,7 +205,7 @@ impl DoubleTapGestureRecognizer {
                     // Check distance from first tap
                     if let Some(first_pos) = state.first_tap_position {
                         let distance = (position - first_pos).distance();
-                        if distance > self.double_tap_slop() {
+                        if distance > settings.double_tap_slop() {
                             // Too far - start over as first tap
                             state.phase = DoubleTapPhase::FirstDown;
                             state.first_tap_position = Some(position);

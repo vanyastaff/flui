@@ -102,7 +102,7 @@ impl TapGestureRecognizer {
         })
     }
 
-    /// Create with specific settings
+    /// Create a new tap recognizer with custom settings
     pub fn with_settings(
         arena: crate::arena::GestureArena,
         settings: GestureSettings,
@@ -115,14 +115,19 @@ impl TapGestureRecognizer {
         })
     }
 
-    /// Get current settings
+    /// Get the current gesture settings
     pub fn settings(&self) -> GestureSettings {
         self.settings.lock().clone()
     }
 
-    /// Update settings
+    /// Update gesture settings
     pub fn set_settings(&self, settings: GestureSettings) {
         *self.settings.lock() = settings;
+    }
+
+    /// Check if distance exceeds touch slop from settings
+    fn exceeds_touch_slop(&self, distance: f32) -> bool {
+        self.settings.lock().exceeds_touch_slop(distance)
     }
 
     /// Set the tap down callback
@@ -263,7 +268,7 @@ impl TapGestureRecognizer {
             let delta = current_position - initial_pos;
             let distance = delta.distance();
 
-            if self.settings.lock().exceeds_touch_slop(distance) {
+            if self.exceeds_touch_slop(distance) {
                 return true; // Moved too far
             }
         }
