@@ -7,6 +7,7 @@
 //! - **PictureLayer**: Recorded drawing commands (immutable, used by repaint boundaries)
 //! - **TextureLayer**: External GPU texture rendering
 //! - **PlatformViewLayer**: Native view embedding
+//! - **PerformanceOverlayLayer**: Performance metrics display
 //!
 //! ## Clip Layers
 //! - **ClipRectLayer**: Rectangular clipping
@@ -31,6 +32,13 @@
 //! ## Annotation Layers
 //! - **AnnotatedRegionLayer**: Metadata regions for system UI integration
 //!
+//! ## Annotation Search
+//! - **AnnotationEntry**: Single annotation with local position
+//! - **AnnotationResult**: Collection of found annotations
+//!
+//! ## Composition Callbacks
+//! - **CompositionCallbackRegistry**: Registry for compositing event callbacks
+//!
 //! ## Architecture
 //!
 //! ```text
@@ -47,6 +55,7 @@
 
 // Leaf layers
 mod canvas;
+mod performance_overlay;
 mod picture;
 mod platform_view;
 mod texture;
@@ -74,6 +83,12 @@ mod image_filter;
 mod opacity;
 mod shader_mask;
 
+// Annotation search system
+pub mod annotation;
+
+// Composition callbacks
+pub mod composition_callback;
+
 // Re-exports
 pub use annotated_region::{
     AnnotatedRegionLayer, AnnotationValue, SemanticLabel, SystemUiOverlayStyle,
@@ -89,6 +104,7 @@ pub use image_filter::ImageFilterLayer;
 pub use leader::{LayerLink, LeaderLayer};
 pub use offset::OffsetLayer;
 pub use opacity::OpacityLayer;
+pub use performance_overlay::{PerformanceOverlayLayer, PerformanceOverlayOption};
 pub use picture::PictureLayer;
 pub use platform_view::{PlatformViewHitTestBehavior, PlatformViewId, PlatformViewLayer};
 pub use shader_mask::ShaderMaskLayer;
@@ -170,6 +186,9 @@ pub enum Layer {
     /// Platform view layer - native platform view embedding
     PlatformView(PlatformViewLayer),
 
+    /// Performance overlay layer - displays performance statistics
+    PerformanceOverlay(PerformanceOverlayLayer),
+
     // ========== Clip Layers ==========
     /// Clip to rectangle
     ClipRect(ClipRectLayer),
@@ -224,6 +243,7 @@ impl Layer {
             Layer::Picture(layer) => Some(layer.bounds()),
             Layer::Texture(layer) => Some(layer.bounds()),
             Layer::PlatformView(layer) => Some(layer.bounds()),
+            Layer::PerformanceOverlay(layer) => Some(layer.bounds()),
             Layer::ClipRect(layer) => Some(layer.bounds()),
             Layer::ClipRRect(layer) => Some(layer.bounds()),
             Layer::ClipPath(layer) => Some(layer.bounds()),
@@ -250,6 +270,7 @@ impl Layer {
             Layer::Picture(_) => false, // Picture is immutable, doesn't need compositing
             Layer::Texture(layer) => !layer.is_opaque(), // Needs compositing if transparent
             Layer::PlatformView(_) => true, // Platform views always need compositing
+            Layer::PerformanceOverlay(_) => true, // Performance overlay always needs compositing
             Layer::ClipRect(layer) => layer.is_anti_aliased(),
             Layer::ClipRRect(layer) => layer.is_anti_aliased(),
             Layer::ClipPath(layer) => layer.is_anti_aliased(),
@@ -359,6 +380,12 @@ impl Layer {
     #[inline]
     pub fn is_platform_view(&self) -> bool {
         matches!(self, Layer::PlatformView(_))
+    }
+
+    /// Returns true if this is a performance overlay layer.
+    #[inline]
+    pub fn is_performance_overlay(&self) -> bool {
+        matches!(self, Layer::PerformanceOverlay(_))
     }
 
     /// Returns true if this is a leader layer.
@@ -635,6 +662,24 @@ impl Layer {
     pub fn as_platform_view_mut(&mut self) -> Option<&mut PlatformViewLayer> {
         match self {
             Layer::PlatformView(layer) => Some(layer),
+            _ => None,
+        }
+    }
+
+    /// Returns the performance overlay layer if this is one.
+    #[inline]
+    pub fn as_performance_overlay(&self) -> Option<&PerformanceOverlayLayer> {
+        match self {
+            Layer::PerformanceOverlay(layer) => Some(layer),
+            _ => None,
+        }
+    }
+
+    /// Returns the performance overlay layer mutably if this is one.
+    #[inline]
+    pub fn as_performance_overlay_mut(&mut self) -> Option<&mut PerformanceOverlayLayer> {
+        match self {
+            Layer::PerformanceOverlay(layer) => Some(layer),
             _ => None,
         }
     }

@@ -127,6 +127,9 @@ pub use layer::{
     // Transform layers
     OffsetLayer,
     OpacityLayer,
+    // Performance overlay
+    PerformanceOverlayLayer,
+    PerformanceOverlayOption,
     PictureLayer,
     // Platform layers
     PlatformViewHitTestBehavior,
@@ -138,6 +141,15 @@ pub use layer::{
     SystemUiOverlayStyle,
     TextureLayer,
     TransformLayer,
+};
+
+// Re-export annotation search types
+pub use layer::annotation::{AnnotationEntry, AnnotationResult, AnnotationSearchOptions};
+
+// Re-export composition callback types
+pub use layer::composition_callback::{
+    CompositionCallbackHandle, CompositionCallbackId, CompositionCallbackRegistry,
+    HasCompositionCallbacks,
 };
 
 // ============================================================================
@@ -188,7 +200,10 @@ pub use flui_foundation::LayerId;
 /// ```
 pub mod prelude {
     // Leaf layers
-    pub use crate::{CanvasLayer, PlatformViewLayer, TextureLayer};
+    pub use crate::{
+        CanvasLayer, PerformanceOverlayLayer, PerformanceOverlayOption, PlatformViewLayer,
+        TextureLayer,
+    };
 
     // Clip layers
     pub use crate::{ClipPathLayer, ClipRRectLayer, ClipRectLayer};
@@ -206,6 +221,12 @@ pub mod prelude {
 
     // Annotation layers
     pub use crate::{AnnotatedRegionLayer, SemanticLabel, SystemUiOverlayStyle};
+
+    // Annotation search
+    pub use crate::{AnnotationEntry, AnnotationResult, AnnotationSearchOptions};
+
+    // Composition callbacks
+    pub use crate::{CompositionCallbackRegistry, HasCompositionCallbacks};
 
     // Platform types
     pub use crate::{PlatformViewHitTestBehavior, PlatformViewId};
