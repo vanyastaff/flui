@@ -1,8 +1,9 @@
-//! TweenAnimation - maps f32 animations to any type T.
+//! `TweenAnimation` - maps f32 animations to any type T.
 
 use crate::animation::{Animation, StatusCallback};
+use crate::status::AnimationStatus;
+use crate::tween_types::Animatable;
 use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
-use flui_types::animation::{Animatable, AnimationStatus};
 use parking_lot::Mutex;
 use std::fmt;
 use std::sync::Arc;
@@ -21,7 +22,7 @@ use std::sync::Arc;
 ///
 /// ```
 /// use flui_animation::{AnimationController, TweenAnimation, Animation};
-/// use flui_types::animation::FloatTween;
+/// use flui_animation::FloatTween;
 /// use flui_scheduler::Scheduler;
 /// use std::sync::Arc;
 /// use std::time::Duration;
@@ -111,7 +112,7 @@ where
     }
 
     fn remove_status_listener(&self, id: ListenerId) {
-        self.parent.remove_status_listener(id)
+        self.parent.remove_status_listener(id);
     }
 }
 
@@ -125,11 +126,11 @@ where
     }
 
     fn remove_listener(&self, id: ListenerId) {
-        self.notifier.remove_listener(id)
+        self.notifier.remove_listener(id);
     }
 
     fn remove_all_listeners(&self) {
-        self.notifier.remove_all_listeners()
+        self.notifier.remove_all_listeners();
     }
 }
 
@@ -143,11 +144,11 @@ where
             .field("value", &self.value())
             .field("status", &self.status())
             .field("tween", &self.tween)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
-/// Helper function to create a TweenAnimation from a Tween and parent animation.
+/// Helper function to create a `TweenAnimation` from a Tween and parent animation.
 ///
 /// This is a convenience function for the common case.
 pub fn animate<T, A>(tween: A, parent: Arc<dyn Animation<f32>>) -> TweenAnimation<T, A>
@@ -161,9 +162,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tween_types::FloatTween;
     use crate::AnimationController;
     use flui_scheduler::Scheduler;
-    use flui_types::animation::FloatTween;
     use std::time::Duration;
 
     #[test]

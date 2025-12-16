@@ -1,15 +1,16 @@
-//! CurvedAnimation - applies easing curves to animations.
+//! `CurvedAnimation` - applies easing curves to animations.
 
 use crate::animation::{Animation, StatusCallback};
+use crate::curve::Curve;
+use crate::status::AnimationStatus;
 use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
-use flui_types::animation::{AnimationStatus, Curve};
 use parking_lot::Mutex;
 use std::fmt;
 use std::sync::Arc;
 
 /// An animation that applies a curve to another animation.
 ///
-/// Takes an `Animation<f32>` (typically an AnimationController) and applies
+/// Takes an `Animation<f32>` (typically an `AnimationController`) and applies
 /// an easing curve to transform the linear 0.0..1.0 progression into a
 /// non-linear progression.
 ///
@@ -17,7 +18,7 @@ use std::sync::Arc;
 ///
 /// ```
 /// use flui_animation::{AnimationController, CurvedAnimation};
-/// use flui_types::animation::Curves;
+/// use flui_animation::Curves;
 /// use flui_scheduler::Scheduler;
 /// use std::sync::Arc;
 /// use std::time::Duration;
@@ -95,7 +96,7 @@ impl<C: Curve + Clone + Send + Sync + fmt::Debug + 'static> Animation<f32> for C
     }
 
     fn remove_status_listener(&self, id: ListenerId) {
-        self.parent.remove_status_listener(id)
+        self.parent.remove_status_listener(id);
     }
 }
 
@@ -105,11 +106,11 @@ impl<C: Curve + Clone + Send + Sync> Listenable for CurvedAnimation<C> {
     }
 
     fn remove_listener(&self, id: ListenerId) {
-        self.notifier.remove_listener(id)
+        self.notifier.remove_listener(id);
     }
 
     fn remove_all_listeners(&self) {
-        self.notifier.remove_all_listeners()
+        self.notifier.remove_all_listeners();
     }
 }
 
@@ -121,16 +122,16 @@ impl<C: Curve + Clone + Send + Sync + fmt::Debug + 'static> fmt::Debug for Curve
             .field("status", &self.status())
             .field("curve", &self.curve)
             .field("has_reverse_curve", &self.reverse_curve.is_some())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::curve::Curves;
     use crate::AnimationController;
     use flui_scheduler::Scheduler;
-    use flui_types::animation::Curves;
     use std::time::Duration;
 
     #[test]
@@ -170,7 +171,7 @@ mod tests {
 
         assert_eq!(curved.status(), AnimationStatus::Dismissed);
 
-        controller.forward();
+        let _ = controller.forward();
         assert_eq!(curved.status(), AnimationStatus::Forward);
 
         controller.dispose();

@@ -1,51 +1,38 @@
-# Animation Design Patterns
+# Design Patterns
 
-This document describes the design patterns used in `flui_animation` and their rationale.
-
-## Table of Contents
-
-- [Persistent Object Pattern](#persistent-object-pattern)
-- [Composition Pattern](#composition-pattern)
-- [Builder Pattern](#builder-pattern)
-- [Extension Trait Pattern](#extension-trait-pattern)
-- [Type-Erased Trait Objects](#type-erased-trait-objects)
-- [Callback Pattern](#callback-pattern)
-- [Disposal Pattern](#disposal-pattern)
+Patterns used in `flui_animation` and their rationale.
 
 ## Persistent Object Pattern
 
 ### Problem
 
-React-style hooks recreate state each render, which doesn't work for animations that need to maintain continuous state across rebuilds.
+React-style hooks recreate state each render. Animations need continuous state across rebuilds.
 
 ### Solution
 
-Animations are persistent objects created once and used across widget rebuilds:
+Animations are long-lived objects with explicit lifecycle:
 
 ```rust
-// Created once (outside widget build)
+// Created once
 let controller = AnimationController::new(duration, scheduler);
 
-// Used many times (in widget build)
-let value = controller.value();
+// Used across rebuilds
+controller.forward()?;
+controller.reverse()?;
 
 // Explicit cleanup
 controller.dispose();
 ```
 
-### Flutter Comparison
-
-This matches Flutter's approach where `AnimationController` is created in `initState()` and disposed in `dispose()`:
+### Flutter Equivalent
 
 ```dart
-// Flutter
-class _MyWidgetState extends State<MyWidget> with SingleTickerProviderStateMixin {
+class _State extends State<W> with SingleTickerProviderStateMixin {
   late AnimationController _controller;
   
   @override
   void initState() {
-    super.initState();
-    _controller = AnimationController(duration: Duration(milliseconds: 300), vsync: this);
+    _controller = AnimationController(duration: Duration(ms: 300), vsync: this);
   }
   
   @override
@@ -59,9 +46,10 @@ class _MyWidgetState extends State<MyWidget> with SingleTickerProviderStateMixin
 ### Benefits
 
 - Animations survive widget rebuilds
-- Explicit control over lifecycle
+- Explicit control over timing
 - Predictable memory management
-- Easy to reason about animation state
+
+---
 
 ## Composition Pattern
 
@@ -71,18 +59,17 @@ Inheritance hierarchies are rigid and don't fit Rust's ownership model.
 
 ### Solution
 
-Build complex animations by composing simple ones:
+Build complex animations by wrapping simpler ones:
 
 ```rust
-// Each layer wraps the previous
-let controller = Arc::new(AnimationController::new(duration, scheduler));
-let curved = Arc::new(CurvedAnimation::new(controller, Curves::EaseInOut));
-let tween = TweenAnimation::new(ColorTween::new(RED, BLUE), curved);
+let controller = Arc::new(AnimationController::new(...));
+let curved = Arc::new(CurvedAnimation::new(controller, curve));
+let color = TweenAnimation::new(curved, ColorTween::new(RED, BLUE));
 ```
 
 ### Implementation
 
-All composed animations store `Arc<dyn Animation<T>>`:
+Composed animations store `Arc<dyn Animation<T>>`:
 
 ```rust
 pub struct CurvedAnimation<C: Curve> {
@@ -91,8 +78,8 @@ pub struct CurvedAnimation<C: Curve> {
 }
 
 pub struct TweenAnimation<T, A: Animatable<T>> {
-    tween: A,
     parent: Arc<dyn Animation<f32>>,
+    tween: A,
 }
 ```
 
@@ -100,99 +87,71 @@ pub struct TweenAnimation<T, A: Animatable<T>> {
 
 - Type-safe composition
 - No inheritance hierarchies
-- Easy to add new animation types
-- Clear ownership semantics
+- Clear ownership via Arc
+
+---
 
 ## Builder Pattern
 
 ### Problem
 
-`AnimationController` has many optional configuration parameters. Multiple constructors or method chains become unwieldy.
+Many optional configuration parameters. Multiple constructors become unwieldy.
 
 ### Solution
 
-Use a builder with type-safe validation:
+Builder with validation at each step:
 
 ```rust
 let controller = AnimationController::builder(duration, scheduler)
-    .bounds(0.0, 100.0)?      // Returns Result
+    .bounds(0.0, 100.0)?      // Validates immediately
     .reverse_duration(Duration::from_millis(500))
-    .initial_value(50.0)
-    .build()?;                 // Returns Result
+    .initial_value(50.0)?
+    .build()?;
 ```
 
-### Implementation
+### Why Result in Builder Methods?
+
+Unlike builders that defer validation to `build()`, we validate immediately:
 
 ```rust
-pub struct AnimationControllerBuilder {
-    duration: Duration,
-    scheduler: Arc<Scheduler>,
-    lower_bound: f32,
-    upper_bound: f32,
-    reverse_duration: Option<Duration>,
-    initial_value: Option<f32>,
-}
-
-impl AnimationControllerBuilder {
-    pub fn bounds(mut self, lower: f32, upper: f32) -> Result<Self, AnimationError> {
-        if lower >= upper {
-            return Err(AnimationError::InvalidBounds(...));
-        }
-        self.lower_bound = lower;
-        self.upper_bound = upper;
-        Ok(self)
+pub fn bounds(mut self, lower: f32, upper: f32) -> Result<Self, AnimationError> {
+    if lower >= upper {
+        return Err(AnimationError::InvalidBounds);
     }
-    
-    pub fn build(self) -> Result<AnimationController, AnimationError> {
-        // Construct with validated parameters
-    }
+    self.lower_bound = lower;
+    self.upper_bound = upper;
+    Ok(self)
 }
 ```
 
-### Why Result in Builder?
+Benefits:
+- Fail fast — errors caught at misconfiguration point
+- Better context — error location preserved
+- No silent failures
 
-Unlike some builders that defer validation to `build()`, we validate immediately in `bounds()`:
-
-- **Fail fast** - Errors caught at the point of misconfiguration
-- **Better error messages** - Context preserved where error occurs
-- **No silent failures** - Can't accidentally create invalid bounds
-
-### Benefits
-
-- Fluent, readable API
-- Compile-time required parameters (in `new()`)
-- Runtime validation with clear errors
-- Immutable after construction
+---
 
 ## Extension Trait Pattern
 
 ### Problem
 
-Adding convenience methods to core types bloats their API and creates coupling.
+Adding convenience methods to core types bloats their API.
 
 ### Solution
 
-Use extension traits for fluent composition:
+Extension traits for fluent composition:
 
 ```rust
-// Core type stays minimal
-pub struct CurvedAnimation<C: Curve> { ... }
-
-// Extension trait adds fluent methods
 pub trait AnimationExt: Animation<f32> + Sized + 'static {
-    fn curved<C>(self: Arc<Self>, curve: C) -> CurvedAnimation<C>
-    where
-        C: Curve + Clone + Send + Sync + Debug + 'static,
-    {
-        CurvedAnimation::new(self as Arc<dyn Animation<f32>>, curve)
+    fn curved<C: Curve>(self: Arc<Self>, curve: C) -> Arc<CurvedAnimation<C>> {
+        Arc::new(CurvedAnimation::new(self, curve))
     }
     
-    fn reversed(self: Arc<Self>) -> ReverseAnimation {
-        ReverseAnimation::new(self as Arc<dyn Animation<f32>>)
+    fn reversed(self: Arc<Self>) -> Arc<ReverseAnimation> {
+        Arc::new(ReverseAnimation::new(self))
     }
 }
 
-// Blanket implementation
 impl<A: Animation<f32> + 'static> AnimationExt for A {}
 ```
 
@@ -201,53 +160,44 @@ impl<A: Animation<f32> + 'static> AnimationExt for A {}
 ```rust
 use flui_animation::AnimationExt;
 
-// Fluent chaining
 let animation = Arc::new(controller)
     .curved(Curves::EaseInOut)
     .reversed();
 ```
 
-### Rust API Guidelines
-
-This follows [C-CONV-SPECIFIC](https://rust-lang.github.io/api-guidelines/predictability.html#c-conv-specific):
-
-> Conversions should live on the most specific type involved.
-
-Extension traits let us add conversions without modifying core types.
-
 ### Benefits
 
 - Core types stay focused
-- Optional import (users choose fluency vs explicitness)
-- Easy to add new composition methods
-- No trait object overhead
+- Optional import
+- Easy to extend
 
-## Type-Erased Trait Objects
+---
+
+## Type Erasure Pattern
 
 ### Problem
 
-Generic animations need to be stored and passed uniformly.
+Generic animations need uniform storage and handling.
 
 ### Solution
 
-Use `Arc<dyn Animation<T>>` for type erasure:
+Use `Arc<dyn Animation<T>>`:
 
 ```rust
-pub struct TweenAnimation<T, A: Animatable<T>> {
-    tween: A,
-    parent: Arc<dyn Animation<f32>>,  // Type-erased
+pub struct Container {
+    animations: Vec<Arc<dyn Animation<f32>>>,
+}
+
+impl Container {
+    fn add<A: Animation<f32> + 'static>(&mut self, anim: A) {
+        self.animations.push(Arc::new(anim));
+    }
 }
 ```
 
-### Why Arc?
-
-- **Shared ownership** - Multiple animations can reference same parent
-- **Thread-safe** - Works across threads
-- **Cheap cloning** - Just pointer copy
-
 ### DynAnimation Trait
 
-For storing animations in collections:
+For collections requiring both Animation and Listenable:
 
 ```rust
 pub trait DynAnimation<T>: Animation<T> + Listenable {}
@@ -257,29 +207,19 @@ where
     T: Clone + Send + Sync + 'static,
     A: Animation<T> + Listenable + ?Sized,
 {}
-
-// Usage
-let animations: Vec<Arc<dyn DynAnimation<f32>>> = vec![
-    Arc::new(controller1),
-    Arc::new(controller2),
-];
 ```
 
-### Benefits
-
-- Uniform storage and handling
-- Maintains type safety for value type T
-- Zero-cost when not using trait objects
+---
 
 ## Callback Pattern
 
 ### Problem
 
-Animations need to notify listeners when values or status changes.
+Animations need to notify listeners on changes.
 
 ### Solution
 
-Use closures with `Send + Sync` bounds:
+Closures with `Send + Sync`:
 
 ```rust
 pub type StatusCallback = Arc<dyn Fn(AnimationStatus) + Send + Sync>;
@@ -287,7 +227,7 @@ pub type StatusCallback = Arc<dyn Fn(AnimationStatus) + Send + Sync>;
 impl AnimationController {
     pub fn add_status_listener(&self, callback: StatusCallback) -> ListenerId {
         let id = ListenerId::new();
-        self.status_listeners.write().push((id, callback));
+        // Store (id, callback)
         id
     }
 }
@@ -295,59 +235,43 @@ impl AnimationController {
 
 ### Why Arc<dyn Fn>?
 
-- **Shared** - Callback can be stored and called multiple times
-- **Thread-safe** - `Send + Sync` enables multi-threaded UI
-- **Flexible** - Closures can capture environment
+- **Shared** — stored and called multiple times
+- **Thread-safe** — `Send + Sync` for multi-threaded UI
+- **Flexible** — closures capture environment
 
 ### Listener IDs
 
-Listeners return IDs for removal:
+Return IDs for later removal:
 
 ```rust
 let id = controller.add_status_listener(callback);
-// ... later
 controller.remove_status_listener(id);
 ```
 
-### Benefits
-
-- Idiomatic Rust (closures vs inheritance)
-- Thread-safe by default
-- No lifetime issues with callbacks
-- Clean removal API
+---
 
 ## Disposal Pattern
 
 ### Problem
 
-Animation controllers hold resources (tickers) that must be cleaned up.
+Controllers hold resources (tickers) requiring cleanup.
 
 ### Solution
 
-Explicit `dispose()` method with atomic flag:
+Explicit `dispose()` with guard flag:
 
 ```rust
-pub struct AnimationController {
-    disposed: AtomicBool,
-    ticker: RwLock<Option<Ticker>>,
-    // ...
-}
-
-impl AnimationController {
-    pub fn dispose(&self) {
-        if self.disposed.swap(true, Ordering::SeqCst) {
-            return; // Already disposed
-        }
-        
-        // Stop ticker
-        if let Some(ticker) = self.ticker.write().take() {
-            ticker.stop();
-        }
-        
-        // Clear listeners
-        self.listeners.write().clear();
-        self.status_listeners.write().clear();
+pub fn dispose(&self) {
+    let mut inner = self.inner.lock();
+    if inner.disposed {
+        return;
     }
+    inner.disposed = true;
+    
+    if let Some(ticker) = inner.ticker.take() {
+        ticker.stop();
+    }
+    inner.status_listeners.clear();
 }
 ```
 
@@ -355,35 +279,77 @@ impl AnimationController {
 
 ```rust
 pub fn forward(&self) -> Result<(), AnimationError> {
-    if self.disposed.load(Ordering::SeqCst) {
-        return Err(AnimationError::Disposed);
+    let inner = self.inner.lock();
+    if inner.disposed {
+        return Err(AnimationError::AlreadyDisposed);
     }
-    // ... proceed
+    // ...
 }
 ```
 
 ### Why Not Drop?
 
-`Drop` can't return errors or take `&self`. Explicit disposal:
-- Returns immediately if already disposed
-- Can be called multiple times safely
-- Errors returned from operations after disposal
+- `Drop` can't return errors
+- `Drop` takes `&mut self`, incompatible with `Arc<Self>`
+- Explicit disposal is idempotent (safe to call multiple times)
 
-### Benefits
+---
 
-- Explicit resource cleanup
-- Thread-safe (atomic flag)
-- Idempotent (safe to call multiple times)
-- Clear error on use after dispose
+## Validated Construction Pattern
+
+### Problem
+
+Invalid parameters (zero mass, negative duration) cause runtime failures.
+
+### Solution
+
+Validate in constructors, panic on violation:
+
+```rust
+impl SpringDescription {
+    pub fn new(mass: f32, stiffness: f32, damping: f32) -> Self {
+        assert!(mass > 0.0, "Mass must be positive");
+        assert!(stiffness > 0.0, "Stiffness must be positive");
+        assert!(damping >= 0.0, "Damping must be non-negative");
+        Self { mass, stiffness, damping }
+    }
+}
+
+impl FrictionSimulation {
+    pub fn new(drag: f32, position: f32, velocity: f32) -> Self {
+        assert!(drag > 0.0, "Drag must be positive");
+        assert!((drag - 1.0).abs() > 1e-6, "Drag cannot be 1.0");
+        // ...
+    }
+}
+```
+
+### Boundary Guarantees
+
+Curves guarantee exact boundary values:
+
+```rust
+impl Curve for ElasticInCurve {
+    fn transform(&self, t: f32) -> f32 {
+        let t = t.clamp(0.0, 1.0);
+        if t == 0.0 { return 0.0; }
+        if t == 1.0 { return 1.0; }
+        // ... elastic formula
+    }
+}
+```
+
+---
 
 ## Summary
 
 | Pattern | Problem | Solution |
 |---------|---------|----------|
 | Persistent Object | Hooks don't work for animations | Long-lived objects with explicit lifecycle |
-| Composition | Inheritance doesn't fit Rust | Wrap animations via Arc |
-| Builder | Many optional parameters | Fluent builder with validation |
-| Extension Trait | API bloat | Optional fluent methods |
-| Type-Erased Trait Objects | Uniform handling | `Arc<dyn Animation<T>>` |
+| Composition | Inheritance doesn't fit Rust | Wrap via `Arc<dyn Animation>` |
+| Builder | Many optional parameters | Fluent builder with immediate validation |
+| Extension Trait | API bloat | Optional fluent methods via traits |
+| Type Erasure | Uniform handling | `Arc<dyn Animation<T>>` |
 | Callback | Change notification | `Arc<dyn Fn + Send + Sync>` |
-| Disposal | Resource cleanup | Explicit dispose() with atomic guard |
+| Disposal | Resource cleanup | Explicit `dispose()` with guard |
+| Validated Construction | Invalid parameters | Assert in constructors, guarantee boundaries |

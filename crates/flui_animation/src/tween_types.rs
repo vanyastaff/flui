@@ -13,7 +13,7 @@
 //! # Examples
 //!
 //! ```
-//! use flui_types::animation::{FloatTween, Animatable, AnimatableExt};
+//! use flui_animation::{FloatTween, Animatable, TweenAnimatableExt};
 //!
 //! let tween = FloatTween::new(0.0, 100.0);
 //!
@@ -25,10 +25,10 @@
 //! assert_eq!(reversed.transform(0.0), 100.0);
 //! ```
 
-use crate::animation::curve::Curve;
-use crate::geometry::{Offset, Rect, Size};
-use crate::layout::{Alignment, EdgeInsets};
-use crate::styling::{BorderRadius, Color};
+use crate::curve::Curve;
+use flui_types::geometry::{Offset, Rect, Size};
+use flui_types::layout::{Alignment, EdgeInsets};
+use flui_types::styling::{BorderRadius, Color};
 
 /// A value that can be animated.
 ///
@@ -63,7 +63,7 @@ pub trait Tween<T>: Animatable<T> {
 /// # Examples
 ///
 /// ```
-/// use flui_types::animation::{FloatTween, Animatable};
+/// use flui_animation::{FloatTween, Animatable};
 ///
 /// let tween = FloatTween::new(0.0, 100.0);
 /// assert_eq!(tween.transform(0.0), 0.0);
@@ -143,6 +143,7 @@ impl Tween<i32> for IntTween {
         &self.end
     }
 
+    #[allow(clippy::cast_possible_truncation)]
     fn lerp(&self, t: f32) -> i32 {
         let t = t.clamp(0.0, 1.0);
         (self.begin as f32 + (self.end - self.begin) as f32 * t).round() as i32
@@ -185,6 +186,7 @@ impl Tween<i32> for StepTween {
         &self.end
     }
 
+    #[allow(clippy::cast_possible_truncation)]
     fn lerp(&self, t: f32) -> i32 {
         let t = t.clamp(0.0, 1.0);
         (self.begin as f32 + (self.end - self.begin) as f32 * t).floor() as i32
@@ -392,7 +394,7 @@ impl Tween<Rect> for RectTween {
 
 /// A tween that linearly interpolates between two offsets.
 ///
-/// Similar to Flutter's `OffsetTween` (but Offset::lerp is used directly in Flutter).
+/// Similar to Flutter's `OffsetTween` (but `Offset::lerp` is used directly in Flutter).
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct OffsetTween {
@@ -573,7 +575,7 @@ impl Tween<BorderRadius> for BorderRadiusTween {
 /// # Examples
 ///
 /// ```
-/// use flui_types::animation::{TweenSequence, TweenSequenceItem, FloatTween, Animatable};
+/// use flui_animation::{TweenSequence, TweenSequenceItem, FloatTween, Animatable};
 ///
 /// let items = vec![
 ///     TweenSequenceItem::new(FloatTween::new(0.0, 50.0), 1.0),
@@ -589,7 +591,7 @@ impl Tween<BorderRadius> for BorderRadiusTween {
 /// # Example with Colors
 ///
 /// ```
-/// use flui_types::animation::{TweenSequence, TweenSequenceItem, ColorTween, Animatable};
+/// use flui_animation::{TweenSequence, TweenSequenceItem, Animatable, ColorTween};
 /// use flui_types::styling::Color;
 ///
 /// let items = vec![
@@ -707,10 +709,11 @@ impl<T, A: Animatable<T>> TweenSequenceItem<T, A> {
     ///
     /// # Panics
     ///
-    /// Panics if `weight` is negative.
+    /// Panics if `weight` is not positive (must be > 0).
     #[must_use]
     pub fn new(tween: A, weight: f32) -> Self {
-        assert!(weight >= 0.0, "Weight must be non-negative");
+        assert!(weight > 0.0, "Weight must be positive");
+        assert!(weight.is_finite(), "Weight must be finite");
         Self {
             tween,
             weight,
@@ -733,7 +736,7 @@ impl<T, A: Animatable<T>> TweenSequenceItem<T, A> {
 /// # Examples
 ///
 /// ```
-/// use flui_types::animation::{CurveTween, Animatable, Curves};
+/// use flui_animation::{CurveTween, Animatable, Curves};
 ///
 /// // Apply ease-in curve to progress
 /// let curve_tween = CurveTween::new(Curves::EaseIn);
@@ -742,7 +745,7 @@ impl<T, A: Animatable<T>> TweenSequenceItem<T, A> {
 /// assert!((curve_tween.transform(1.0) - 1.0).abs() < 0.001); // ~1
 /// ```
 ///
-/// [`CurvedAnimation`]: crate::animation::CurvedAnimation
+/// [`CurvedAnimation`]: crate::curved::CurvedAnimation
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CurveTween<C: Curve> {
     /// The curve to apply.
@@ -779,7 +782,7 @@ impl<C: Curve> Animatable<f32> for CurveTween<C> {
 /// # Examples
 ///
 /// ```
-/// use flui_types::animation::{ChainedTween, CurveTween, FloatTween, Animatable, Curves};
+/// use flui_animation::{ChainedTween, CurveTween, FloatTween, Animatable, Curves};
 ///
 /// // Chain a curve with a float tween
 /// let chained = ChainedTween::new(
@@ -831,7 +834,7 @@ where
 /// # Examples
 ///
 /// ```
-/// use flui_types::animation::{FloatTween, Animatable, AnimatableExt, Curves};
+/// use flui_animation::{FloatTween, Animatable, TweenAnimatableExt, Curves};
 ///
 /// let tween = FloatTween::new(0.0, 100.0);
 ///
@@ -891,7 +894,7 @@ impl<T, A: Animatable<T>> AnimatableExt<T> for A {}
 /// # Examples
 ///
 /// ```
-/// use flui_types::animation::{Curves, CurveExt, FloatTween, Animatable};
+/// use flui_animation::{Curves, CurveExt, FloatTween, Animatable};
 ///
 /// // Convert curve to tween
 /// let tween = Curves::EaseIn.into_tween();
@@ -925,7 +928,7 @@ impl<C: Curve> CurveExt for C {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::animation::Curves;
+    use crate::curve::Curves;
 
     #[test]
     fn test_float_tween() {
@@ -1151,7 +1154,7 @@ mod tests {
 
     #[test]
     fn test_tween_sequence_generic_with_color() {
-        use crate::styling::Color;
+        use flui_types::styling::Color;
 
         let items = vec![
             TweenSequenceItem::new(ColorTween::new(Color::RED, Color::GREEN), 1.0),

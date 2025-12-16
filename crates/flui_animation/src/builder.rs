@@ -1,4 +1,4 @@
-//! Builder pattern for AnimationController.
+//! Builder pattern for `AnimationController`.
 //!
 //! This module provides a fluent builder API for constructing [`AnimationController`]
 //! instances with various configuration options.
@@ -127,8 +127,7 @@ impl AnimationControllerBuilder {
     pub fn bounds(mut self, lower: f32, upper: f32) -> Result<Self, AnimationError> {
         if lower >= upper {
             return Err(AnimationError::InvalidBounds(format!(
-                "lower_bound ({}) must be less than upper_bound ({})",
-                lower, upper
+                "lower_bound ({lower}) must be less than upper_bound ({upper})"
             )));
         }
         self.lower_bound = lower;

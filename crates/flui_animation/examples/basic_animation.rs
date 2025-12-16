@@ -1,8 +1,8 @@
 //! Basic animation example demonstrating core animation concepts.
 
 use flui_animation::prelude::*;
+use flui_animation::{ColorTween, FloatTween};
 use flui_scheduler::Scheduler;
-use flui_types::animation::{ColorTween, FloatTween};
 use flui_types::styling::Color;
 use std::sync::Arc;
 use std::time::Duration;

@@ -1,18 +1,18 @@
-//! ReverseAnimation - inverts another animation's values.
+//! `ReverseAnimation` - inverts another animation's values.
 
 use crate::animation::{Animation, StatusCallback};
+use crate::status::AnimationStatus;
 use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
-use flui_types::animation::AnimationStatus;
 use parking_lot::Mutex;
 use std::fmt;
 use std::sync::Arc;
 
 /// An animation that inverts another animation.
 ///
-/// ReverseAnimation runs in the opposite direction from its parent:
-/// - When parent = 0.0, ReverseAnimation = 1.0
-/// - When parent = 0.5, ReverseAnimation = 0.5
-/// - When parent = 1.0, ReverseAnimation = 0.0
+/// `ReverseAnimation` runs in the opposite direction from its parent:
+/// - When parent = 0.0, `ReverseAnimation` = 1.0
+/// - When parent = 0.5, `ReverseAnimation` = 0.5
+/// - When parent = 1.0, `ReverseAnimation` = 0.0
 ///
 /// The status is also reversed:
 /// - Forward becomes Reverse
@@ -84,8 +84,6 @@ impl Animation<f32> for ReverseAnimation {
             AnimationStatus::Reverse => AnimationStatus::Forward,
             AnimationStatus::Dismissed => AnimationStatus::Completed,
             AnimationStatus::Completed => AnimationStatus::Dismissed,
-            // Handle future variants (AnimationStatus is #[non_exhaustive])
-            _ => self.parent.status(),
         }
     }
 
@@ -97,8 +95,6 @@ impl Animation<f32> for ReverseAnimation {
                 AnimationStatus::Reverse => AnimationStatus::Forward,
                 AnimationStatus::Dismissed => AnimationStatus::Completed,
                 AnimationStatus::Completed => AnimationStatus::Dismissed,
-                // Handle future variants (AnimationStatus is #[non_exhaustive])
-                _ => status,
             };
             callback(reversed_status);
         });
@@ -107,7 +103,7 @@ impl Animation<f32> for ReverseAnimation {
     }
 
     fn remove_status_listener(&self, id: ListenerId) {
-        self.parent.remove_status_listener(id)
+        self.parent.remove_status_listener(id);
     }
 }
 
@@ -117,11 +113,11 @@ impl Listenable for ReverseAnimation {
     }
 
     fn remove_listener(&self, id: ListenerId) {
-        self.notifier.remove_listener(id)
+        self.notifier.remove_listener(id);
     }
 
     fn remove_all_listeners(&self) {
-        self.notifier.remove_all_listeners()
+        self.notifier.remove_all_listeners();
     }
 }
 
@@ -184,14 +180,14 @@ mod tests {
         assert_eq!(reversed.status(), AnimationStatus::Completed);
 
         // Forward → Reverse
-        controller.forward();
+        let _ = controller.forward();
         assert_eq!(controller.status(), AnimationStatus::Forward);
         assert_eq!(reversed.status(), AnimationStatus::Reverse);
 
-        controller.stop();
+        let _ = controller.stop();
 
         // Reverse → Forward
-        controller.reverse();
+        let _ = controller.reverse();
         assert_eq!(controller.status(), AnimationStatus::Reverse);
         assert_eq!(reversed.status(), AnimationStatus::Forward);
 

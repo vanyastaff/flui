@@ -1,15 +1,15 @@
-//! ProxyAnimation - wraps another animation, allowing hot-swapping.
+//! `ProxyAnimation` - wraps another animation, allowing hot-swapping.
 
 use crate::animation::{Animation, StatusCallback};
+use crate::status::AnimationStatus;
 use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
-use flui_types::animation::AnimationStatus;
 use parking_lot::RwLock;
 use std::fmt;
 use std::sync::Arc;
 
 /// An animation that can be hot-swapped for another animation.
 ///
-/// ProxyAnimation forwards all calls to its parent animation, but allows
+/// `ProxyAnimation` forwards all calls to its parent animation, but allows
 /// the parent to be changed dynamically. This is useful when you need to
 /// change the animation being used without recreating the entire widget tree.
 ///
@@ -97,7 +97,7 @@ where
     }
 
     fn remove_status_listener(&self, id: ListenerId) {
-        self.parent.read().remove_status_listener(id)
+        self.parent.read().remove_status_listener(id);
     }
 }
 
@@ -110,11 +110,11 @@ where
     }
 
     fn remove_listener(&self, id: ListenerId) {
-        self.notifier.remove_listener(id)
+        self.notifier.remove_listener(id);
     }
 
     fn remove_all_listeners(&self) {
-        self.notifier.remove_all_listeners()
+        self.notifier.remove_all_listeners();
     }
 }
 
@@ -176,7 +176,7 @@ mod tests {
 
         assert_eq!(proxy.status(), AnimationStatus::Dismissed);
 
-        controller.forward();
+        let _ = controller.forward();
         assert_eq!(proxy.status(), AnimationStatus::Forward);
 
         controller.dispose();

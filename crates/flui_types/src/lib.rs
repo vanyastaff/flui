@@ -6,11 +6,12 @@
 //! - **Styling**: Color, HSLColor, HSVColor, Border, Shadow, Gradient, Decoration
 //! - **Typography**: TextStyle, TextAlign, TextDecoration, TextSpan, and more
 //! - **Painting**: BlendMode, BoxFit, ImageRepeat, Clip, TileMode, Shader, and more
-//! - **Animation**: Curves, Tweens, AnimationStatus
 //! - **Gestures**: TapDetails, DragDetails, ScaleDetails, Velocity, PointerData
 //! - **Physics**: SpringSimulation, FrictionSimulation, GravitySimulation, Tolerance
 //! - **Semantics**: SemanticsData, SemanticsAction, SemanticsRole, SemanticsEvent
 //! - **Platform**: TargetPlatform, Brightness, DeviceOrientation, Locale
+//!
+//! Note: Animation types (Curves, Tweens, AnimationStatus) have been moved to `flui_animation`.
 //!
 //! # Design Philosophy
 //!
@@ -65,7 +66,6 @@
 //! protocol rather than basic types.
 
 #![warn(missing_docs)]
-pub mod animation;
 pub mod geometry;
 pub mod gestures;
 pub mod layout;
@@ -99,11 +99,10 @@ pub mod prelude {
     // Styling - Essential
     pub use crate::styling::{Color, Color32, HSLColor, HSVColor};
 
-    // Animation - Frequently used
-    pub use crate::animation::{Curve, Curves, Linear, Tween};
-
     // Typography - Common
     pub use crate::typography::{
         FontStyle, FontWeight, TextAlign, TextBaseline, TextDirection, TextStyle,
     };
+
+    // Note: Animation types (Curve, Curves, Tween) moved to flui_animation::prelude
 }

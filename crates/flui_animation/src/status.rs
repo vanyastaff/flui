@@ -7,7 +7,7 @@
 /// # Examples
 ///
 /// ```
-/// use flui_types::animation::AnimationStatus;
+/// use flui_animation::AnimationStatus;
 ///
 /// let status = AnimationStatus::Forward;
 /// assert!(status.is_running());
@@ -101,7 +101,7 @@ impl AnimationStatus {
 /// # Examples
 ///
 /// ```
-/// use flui_types::animation::AnimationBehavior;
+/// use flui_animation::AnimationBehavior;
 ///
 /// let behavior = AnimationBehavior::Normal;
 /// assert!(!behavior.should_preserve());
@@ -201,5 +201,19 @@ mod tests {
     fn test_animation_behavior_is_normal() {
         assert!(AnimationBehavior::Normal.is_normal());
         assert!(!AnimationBehavior::Preserve.is_normal());
+    }
+
+    #[test]
+    fn test_animation_status_flip() {
+        assert_eq!(AnimationStatus::Forward.flip(), AnimationStatus::Reverse);
+        assert_eq!(AnimationStatus::Reverse.flip(), AnimationStatus::Forward);
+        assert_eq!(
+            AnimationStatus::Dismissed.flip(),
+            AnimationStatus::Dismissed
+        );
+        assert_eq!(
+            AnimationStatus::Completed.flip(),
+            AnimationStatus::Completed
+        );
     }
 }

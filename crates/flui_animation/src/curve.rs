@@ -11,7 +11,7 @@ use std::f32::consts::PI;
 /// # Examples
 ///
 /// ```
-/// use flui_types::animation::Curve;
+/// use flui_animation::curve::Curve;
 ///
 /// struct MyCurve;
 ///
@@ -261,17 +261,18 @@ impl Cubic {
     pub const fn new(a: f32, b: f32, c: f32, d: f32) -> Self {
         Self { a, b, c, d }
     }
+}
 
-    /// Evaluates the cubic bezier curve at t.
-    fn evaluate_cubic(&self, t: f32, p0: f32, p1: f32, p2: f32, p3: f32) -> f32 {
-        let t2 = t * t;
-        let t3 = t2 * t;
-        let one_minus_t = 1.0 - t;
-        let one_minus_t2 = one_minus_t * one_minus_t;
-        let one_minus_t3 = one_minus_t2 * one_minus_t;
+/// Evaluates the cubic bezier curve at t.
+#[inline]
+fn evaluate_cubic(t: f32, p0: f32, p1: f32, p2: f32, p3: f32) -> f32 {
+    let t2 = t * t;
+    let t3 = t2 * t;
+    let one_minus_t = 1.0 - t;
+    let one_minus_t2 = one_minus_t * one_minus_t;
+    let one_minus_t3 = one_minus_t2 * one_minus_t;
 
-        one_minus_t3 * p0 + 3.0 * one_minus_t2 * t * p1 + 3.0 * one_minus_t * t2 * p2 + t3 * p3
-    }
+    one_minus_t3 * p0 + 3.0 * one_minus_t2 * t * p1 + 3.0 * one_minus_t * t2 * p2 + t3 * p3
 }
 
 impl Curve for Cubic {
@@ -283,11 +284,11 @@ impl Curve for Cubic {
         let mut end = 1.0;
 
         for _ in 0..8 {
-            let mid = (start + end) / 2.0;
-            let x = self.evaluate_cubic(mid, 0.0, self.a, self.c, 1.0);
+            let mid = f32::midpoint(start, end);
+            let x = evaluate_cubic(mid, 0.0, self.a, self.c, 1.0);
 
             if (x - t).abs() < 1e-6 {
-                return self.evaluate_cubic(mid, 0.0, self.b, self.d, 1.0);
+                return evaluate_cubic(mid, 0.0, self.b, self.d, 1.0);
             }
 
             if x < t {
@@ -297,8 +298,8 @@ impl Curve for Cubic {
             }
         }
 
-        let mid = (start + end) / 2.0;
-        self.evaluate_cubic(mid, 0.0, self.b, self.d, 1.0)
+        let mid = f32::midpoint(start, end);
+        evaluate_cubic(mid, 0.0, self.b, self.d, 1.0)
     }
 }
 
@@ -331,8 +332,16 @@ impl Default for ElasticInCurve {
 }
 
 impl Curve for ElasticInCurve {
+    #[allow(clippy::float_cmp)] // Intentional exact comparison after clamp
     fn transform(&self, t: f32) -> f32 {
         let t = t.clamp(0.0, 1.0);
+        // Guarantee exact boundary values per Curve contract
+        if t == 0.0 {
+            return 0.0;
+        }
+        if t == 1.0 {
+            return 1.0;
+        }
         let s = self.period / 4.0;
         let t = t - 1.0;
         -((2.0_f32).powf(10.0 * t) * ((t - s) * (2.0 * PI) / self.period).sin())
@@ -364,8 +373,16 @@ impl Default for ElasticOutCurve {
 }
 
 impl Curve for ElasticOutCurve {
+    #[allow(clippy::float_cmp)] // Intentional exact comparison after clamp
     fn transform(&self, t: f32) -> f32 {
         let t = t.clamp(0.0, 1.0);
+        // Guarantee exact boundary values per Curve contract
+        if t == 0.0 {
+            return 0.0;
+        }
+        if t == 1.0 {
+            return 1.0;
+        }
         let s = self.period / 4.0;
         (2.0_f32).powf(-10.0 * t) * ((t - s) * (2.0 * PI) / self.period).sin() + 1.0
     }
@@ -397,8 +414,16 @@ impl Default for ElasticInOutCurve {
 }
 
 impl Curve for ElasticInOutCurve {
+    #[allow(clippy::float_cmp)] // Intentional exact comparison after clamp
     fn transform(&self, t: f32) -> f32 {
         let t = t.clamp(0.0, 1.0);
+        // Guarantee exact boundary values per Curve contract
+        if t == 0.0 {
+            return 0.0;
+        }
+        if t == 1.0 {
+            return 1.0;
+        }
         let s = self.period / 4.0;
         let t = 2.0 * t - 1.0;
 
@@ -476,7 +501,7 @@ fn bounce_out(t: f32) -> f32 {
         N1 * t * t + 0.9375
     } else {
         let t = t - 2.625 / D1;
-        N1 * t * t + 0.984375
+        N1 * t * t + 0.984_375
     }
 }
 
@@ -537,6 +562,7 @@ impl CatmullRomCurve {
 }
 
 impl Curve for CatmullRomCurve {
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     fn transform(&self, t: f32) -> f32 {
         let t = t.clamp(0.0, 1.0);
 
@@ -603,6 +629,7 @@ impl CatmullRomSpline {
 }
 
 impl Curve2D for CatmullRomSpline {
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     fn transform(&self, t: f32) -> Curve2DSample {
         let t = t.clamp(0.0, 1.0);
 
@@ -721,6 +748,7 @@ impl<C: Curve> Curve for ReverseCurve<C> {
 /// A collection of commonly used curves.
 ///
 /// Similar to Flutter's `Curves` class.
+#[derive(Debug)]
 pub struct Curves;
 
 #[allow(non_upper_case_globals)]

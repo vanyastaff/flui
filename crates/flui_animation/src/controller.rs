@@ -1,18 +1,31 @@
-//! AnimationController - The primary animation driver.
+//! `AnimationController` - The primary animation driver.
 
 use crate::animation::{Animation, AnimationDirection, StatusCallback};
 use crate::error::AnimationError;
+use crate::simulation::{Simulation, SpringDescription, SpringSimulation, SpringType, Tolerance};
+use crate::status::AnimationStatus;
 use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
 use flui_scheduler::{ScheduledTicker, Scheduler};
-use flui_types::animation::AnimationStatus;
 use parking_lot::Mutex;
 use std::fmt;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+/// Default spring for fling animations.
+fn default_fling_spring() -> SpringDescription {
+    SpringDescription::with_damping_ratio(1.0, 500.0, 1.0)
+}
+
+/// Default tolerance for fling animations.
+const FLING_TOLERANCE: Tolerance = Tolerance {
+    distance: 0.01,
+    velocity: f32::INFINITY,
+    time: 1e-3,
+};
+
 /// Controls an animation, driving it forward/backward.
 ///
-/// AnimationController is a **PERSISTENT OBJECT** that survives widget rebuilds.
+/// `AnimationController` is a **PERSISTENT OBJECT** that survives widget rebuilds.
 /// It must be disposed when no longer needed to prevent resource leaks.
 ///
 /// The controller generates values from `lower_bound` to `upper_bound` (typically 0.0 to 1.0)
@@ -21,7 +34,7 @@ use std::time::{Duration, Instant};
 ///
 /// # Thread Safety
 ///
-/// AnimationController is fully thread-safe using `Arc` and `Mutex`.
+/// `AnimationController` is fully thread-safe using `Arc` and `Mutex`.
 ///
 /// # Examples
 ///
@@ -104,6 +117,12 @@ struct AnimationControllerInner {
 
     /// Should repeat with reverse (bounce back and forth)?
     repeat_reverse: bool,
+
+    /// Active physics simulation (if using fling/animateWith)
+    simulation: Option<Box<dyn Simulation>>,
+
+    /// Time when simulation started
+    simulation_start_time: Option<Instant>,
 }
 
 impl AnimationController {
@@ -160,8 +179,7 @@ impl AnimationController {
     ) -> Result<Self, AnimationError> {
         if lower_bound >= upper_bound {
             return Err(AnimationError::InvalidBounds(format!(
-                "lower_bound ({}) must be less than upper_bound ({})",
-                lower_bound, upper_bound
+                "lower_bound ({lower_bound}) must be less than upper_bound ({upper_bound})"
             )));
         }
 
@@ -185,9 +203,11 @@ impl AnimationController {
             start_value: lower_bound,
             target_value: upper_bound,
             disposed: false,
-            next_listener_id: 0,
+            next_listener_id: 1,
             is_repeating: false,
             repeat_reverse: false,
+            simulation: None,
+            simulation_start_time: None,
         };
 
         Ok(Self {
@@ -224,7 +244,7 @@ impl AnimationController {
     /// Returns [`AnimationError::Disposed`] if the controller has been disposed.
     pub fn forward_from(&self, from: Option<f32>) -> Result<(), AnimationError> {
         let mut inner = self.inner.lock();
-        self.check_disposed(&inner)?;
+        Self::check_disposed(&inner)?;
 
         if let Some(start) = from {
             inner.value = start.clamp(inner.lower_bound, inner.upper_bound);
@@ -246,7 +266,7 @@ impl AnimationController {
             });
         }
 
-        self.notify_status_listeners(AnimationStatus::Forward, &inner);
+        Self::notify_status_listeners(AnimationStatus::Forward, &inner);
         Ok(())
     }
 
@@ -272,7 +292,7 @@ impl AnimationController {
     /// Returns [`AnimationError::Disposed`] if the controller has been disposed.
     pub fn reverse_from(&self, from: Option<f32>) -> Result<(), AnimationError> {
         let mut inner = self.inner.lock();
-        self.check_disposed(&inner)?;
+        Self::check_disposed(&inner)?;
 
         if let Some(start) = from {
             inner.value = start.clamp(inner.lower_bound, inner.upper_bound);
@@ -294,7 +314,7 @@ impl AnimationController {
             });
         }
 
-        self.notify_status_listeners(AnimationStatus::Reverse, &inner);
+        Self::notify_status_listeners(AnimationStatus::Reverse, &inner);
         Ok(())
     }
 
@@ -310,7 +330,7 @@ impl AnimationController {
     /// Returns [`AnimationError::Disposed`] if the controller has been disposed.
     pub fn stop(&self) -> Result<(), AnimationError> {
         let mut inner = self.inner.lock();
-        self.check_disposed(&inner)?;
+        Self::check_disposed(&inner)?;
 
         // Disable repeat mode when stopping
         inner.is_repeating = false;
@@ -344,7 +364,7 @@ impl AnimationController {
     /// Returns [`AnimationError::Disposed`] if the controller has been disposed.
     pub fn reset(&self) -> Result<(), AnimationError> {
         let mut inner = self.inner.lock();
-        self.check_disposed(&inner)?;
+        Self::check_disposed(&inner)?;
 
         inner.value = inner.lower_bound;
         inner.status = AnimationStatus::Dismissed;
@@ -357,7 +377,7 @@ impl AnimationController {
         self.notifier.notify_listeners();
 
         let inner = self.inner.lock();
-        self.notify_status_listeners(AnimationStatus::Dismissed, &inner);
+        Self::notify_status_listeners(AnimationStatus::Dismissed, &inner);
 
         Ok(())
     }
@@ -378,7 +398,7 @@ impl AnimationController {
         duration: Option<Duration>,
     ) -> Result<(), AnimationError> {
         let mut inner = self.inner.lock();
-        self.check_disposed(&inner)?;
+        Self::check_disposed(&inner)?;
 
         let target = target.clamp(inner.lower_bound, inner.upper_bound);
         inner.animation_start_time = Some(Instant::now());
@@ -409,7 +429,7 @@ impl AnimationController {
             });
         }
 
-        self.notify_status_listeners(inner.status, &inner);
+        Self::notify_status_listeners(inner.status, &inner);
         Ok(())
     }
 
@@ -422,7 +442,7 @@ impl AnimationController {
     /// Returns [`AnimationError::Disposed`] if the controller has been disposed.
     pub fn repeat(&self, reverse: bool) -> Result<(), AnimationError> {
         let mut inner = self.inner.lock();
-        self.check_disposed(&inner)?;
+        Self::check_disposed(&inner)?;
 
         // Enable repeat mode
         inner.is_repeating = true;
@@ -443,8 +463,243 @@ impl AnimationController {
             });
         }
 
-        self.notify_status_listeners(AnimationStatus::Forward, &inner);
+        Self::notify_status_listeners(AnimationStatus::Forward, &inner);
         Ok(())
+    }
+
+    /// Drive the animation with a spring (fling) and initial velocity.
+    ///
+    /// If velocity is positive, the animation will complete (move to upper bound).
+    /// If velocity is negative, the animation will dismiss (move to lower bound).
+    ///
+    /// # Arguments
+    ///
+    /// * `velocity` - Initial velocity in units per second. Positive = forward, negative = reverse.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AnimationError::Disposed`] if the controller has been disposed.
+    /// Returns [`AnimationError::InvalidSpring`] if the spring is underdamped (would oscillate).
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use flui_animation::AnimationController;
+    /// # use flui_scheduler::Scheduler;
+    /// # use std::sync::Arc;
+    /// # use std::time::Duration;
+    /// # let scheduler = Arc::new(Scheduler::new());
+    /// let controller = AnimationController::new(Duration::from_millis(300), scheduler);
+    /// controller.fling(1.0).unwrap(); // Fling forward
+    /// ```
+    pub fn fling(&self, velocity: f32) -> Result<(), AnimationError> {
+        self.fling_with(velocity, None)
+    }
+
+    /// Drive the animation with a custom spring and initial velocity.
+    ///
+    /// # Arguments
+    ///
+    /// * `velocity` - Initial velocity in units per second.
+    /// * `spring` - Optional custom spring description. Uses default critically-damped spring if `None`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AnimationError::Disposed`] if the controller has been disposed.
+    /// Returns [`AnimationError::InvalidSpring`] if the spring is underdamped.
+    pub fn fling_with(
+        &self,
+        velocity: f32,
+        spring: Option<SpringDescription>,
+    ) -> Result<(), AnimationError> {
+        let mut inner = self.inner.lock();
+        Self::check_disposed(&inner)?;
+
+        let spring = spring.unwrap_or_else(default_fling_spring);
+
+        // Determine direction based on velocity
+        inner.direction = if velocity < 0.0 {
+            AnimationDirection::Reverse
+        } else {
+            AnimationDirection::Forward
+        };
+
+        // Target slightly beyond bounds to ensure we reach them
+        let target = if velocity < 0.0 {
+            inner.lower_bound - FLING_TOLERANCE.distance
+        } else {
+            inner.upper_bound + FLING_TOLERANCE.distance
+        };
+
+        // Create spring simulation
+        let mut sim = SpringSimulation::new(spring, inner.value, target, velocity);
+        sim = sim.with_snap_to_end(true);
+
+        // Check that spring won't oscillate
+        if sim.spring_type() == SpringType::Underdamped {
+            return Err(AnimationError::InvalidSpring(
+                "Underdamped springs oscillate and cannot be used for fling. \
+                 Use animate_with() for oscillating springs."
+                    .to_string(),
+            ));
+        }
+
+        // Clear any existing animation state
+        inner.is_repeating = false;
+        inner.animation_start_time = None;
+
+        // Set up simulation
+        inner.simulation = Some(Box::new(sim));
+        inner.simulation_start_time = Some(Instant::now());
+        inner.status = match inner.direction {
+            AnimationDirection::Forward => AnimationStatus::Forward,
+            AnimationDirection::Reverse => AnimationStatus::Reverse,
+        };
+
+        if let Some(ticker) = &mut inner.ticker {
+            let controller = self.clone();
+            ticker.start(move |_elapsed| {
+                controller.tick();
+            });
+        }
+
+        Self::notify_status_listeners(inner.status, &inner);
+        Ok(())
+    }
+
+    /// Drive the animation according to a custom simulation.
+    ///
+    /// This allows using any physics simulation (spring, friction, gravity, etc.)
+    /// to drive the animation. Values are clamped to the controller's bounds.
+    ///
+    /// # Arguments
+    ///
+    /// * `simulation` - The simulation to drive the animation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AnimationError::Disposed`] if the controller has been disposed.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use flui_animation::{AnimationController, simulation::SpringSimulation};
+    /// # use flui_animation::simulation::SpringDescription;
+    /// # use flui_scheduler::Scheduler;
+    /// # use std::sync::Arc;
+    /// # use std::time::Duration;
+    /// # let scheduler = Arc::new(Scheduler::new());
+    /// let controller = AnimationController::new(Duration::from_millis(300), scheduler);
+    /// let spring = SpringDescription::with_damping_ratio(1.0, 300.0, 0.5);
+    /// let sim = SpringSimulation::new(spring, 0.0, 1.0, 0.0);
+    /// controller.animate_with(sim).unwrap();
+    /// ```
+    pub fn animate_with<S: Simulation + 'static>(
+        &self,
+        simulation: S,
+    ) -> Result<(), AnimationError> {
+        let mut inner = self.inner.lock();
+        Self::check_disposed(&inner)?;
+
+        // Clear any existing animation state
+        inner.is_repeating = false;
+        inner.animation_start_time = None;
+
+        // Set direction to forward (status will track forward during simulation)
+        inner.direction = AnimationDirection::Forward;
+        inner.status = AnimationStatus::Forward;
+
+        // Set up simulation
+        inner.simulation = Some(Box::new(simulation));
+        inner.simulation_start_time = Some(Instant::now());
+
+        // Set initial value from simulation
+        if let Some(sim) = &inner.simulation {
+            inner.value = sim.x(0.0).clamp(inner.lower_bound, inner.upper_bound);
+        }
+
+        if let Some(ticker) = &mut inner.ticker {
+            let controller = self.clone();
+            ticker.start(move |_elapsed| {
+                controller.tick();
+            });
+        }
+
+        Self::notify_status_listeners(AnimationStatus::Forward, &inner);
+        Ok(())
+    }
+
+    /// Drive the animation according to a custom simulation in reverse.
+    ///
+    /// Same as [`animate_with`](Self::animate_with) but reports status as reverse.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AnimationError::Disposed`] if the controller has been disposed.
+    pub fn animate_back_with<S: Simulation + 'static>(
+        &self,
+        simulation: S,
+    ) -> Result<(), AnimationError> {
+        let mut inner = self.inner.lock();
+        Self::check_disposed(&inner)?;
+
+        // Clear any existing animation state
+        inner.is_repeating = false;
+        inner.animation_start_time = None;
+
+        // Set direction to reverse
+        inner.direction = AnimationDirection::Reverse;
+        inner.status = AnimationStatus::Reverse;
+
+        // Set up simulation
+        inner.simulation = Some(Box::new(simulation));
+        inner.simulation_start_time = Some(Instant::now());
+
+        // Set initial value from simulation
+        if let Some(sim) = &inner.simulation {
+            inner.value = sim.x(0.0).clamp(inner.lower_bound, inner.upper_bound);
+        }
+
+        if let Some(ticker) = &mut inner.ticker {
+            let controller = self.clone();
+            ticker.start(move |_elapsed| {
+                controller.tick();
+            });
+        }
+
+        Self::notify_status_listeners(AnimationStatus::Reverse, &inner);
+        Ok(())
+    }
+
+    /// Get the current velocity of the animation.
+    ///
+    /// Returns 0.0 if no animation is running.
+    #[must_use]
+    pub fn velocity(&self) -> f32 {
+        let inner = self.inner.lock();
+
+        if inner.status != AnimationStatus::Forward && inner.status != AnimationStatus::Reverse {
+            return 0.0;
+        }
+
+        // If using simulation, get velocity from it
+        if let (Some(sim), Some(start_time)) = (&inner.simulation, inner.simulation_start_time) {
+            let elapsed = Instant::now().duration_since(start_time).as_secs_f32();
+            return sim.dx(elapsed);
+        }
+
+        // For time-based animations, calculate velocity from duration
+        let duration = match inner.direction {
+            AnimationDirection::Forward => inner.duration,
+            AnimationDirection::Reverse => inner.reverse_duration.unwrap_or(inner.duration),
+        };
+
+        if duration.is_zero() {
+            return 0.0;
+        }
+
+        let range = inner.upper_bound - inner.lower_bound;
+        range / duration.as_secs_f32()
     }
 
     /// Update the animation value based on elapsed time.
@@ -457,6 +712,53 @@ impl AnimationController {
             return;
         }
 
+        // Handle simulation-driven animations
+        if inner.simulation.is_some() {
+            let Some(start_time) = inner.simulation_start_time else {
+                return;
+            };
+
+            let elapsed = Instant::now().duration_since(start_time).as_secs_f32();
+
+            // Get values from simulation before modifying inner
+            let sim = inner.simulation.as_ref().unwrap();
+            let new_value = sim.x(elapsed).clamp(inner.lower_bound, inner.upper_bound);
+            let is_done = sim.is_done(elapsed);
+
+            inner.value = new_value;
+
+            if is_done {
+                // Simulation complete
+                inner.simulation = None;
+                inner.simulation_start_time = None;
+
+                if let Some(ticker) = &mut inner.ticker {
+                    ticker.stop();
+                }
+
+                let new_status = if (inner.value - inner.upper_bound).abs() < 1e-6 {
+                    AnimationStatus::Completed
+                } else if (inner.value - inner.lower_bound).abs() < 1e-6 {
+                    AnimationStatus::Dismissed
+                } else {
+                    match inner.direction {
+                        AnimationDirection::Forward => AnimationStatus::Completed,
+                        AnimationDirection::Reverse => AnimationStatus::Dismissed,
+                    }
+                };
+
+                inner.status = new_status;
+                Self::notify_status_listeners(new_status, &inner);
+                drop(inner);
+                self.notifier.notify_listeners();
+            } else {
+                drop(inner);
+                self.notifier.notify_listeners();
+            }
+            return;
+        }
+
+        // Handle time-based animations
         let Some(start_time) = inner.animation_start_time else {
             return;
         };
@@ -530,7 +832,7 @@ impl AnimationController {
                 inner.status = new_status;
 
                 // Notify status listeners while still holding the lock
-                self.notify_status_listeners(new_status, &inner);
+                Self::notify_status_listeners(new_status, &inner);
 
                 drop(inner);
 
@@ -570,7 +872,7 @@ impl AnimationController {
         inner.disposed = true;
     }
 
-    fn check_disposed(&self, inner: &AnimationControllerInner) -> Result<(), AnimationError> {
+    fn check_disposed(inner: &AnimationControllerInner) -> Result<(), AnimationError> {
         if inner.disposed {
             Err(AnimationError::Disposed)
         } else {
@@ -578,7 +880,7 @@ impl AnimationController {
         }
     }
 
-    fn notify_status_listeners(&self, status: AnimationStatus, inner: &AnimationControllerInner) {
+    fn notify_status_listeners(status: AnimationStatus, inner: &AnimationControllerInner) {
         for (_, callback) in &inner.status_listeners {
             callback(status);
         }
@@ -618,24 +920,11 @@ impl Listenable for AnimationController {
     }
 
     fn remove_listener(&self, id: ListenerId) {
-        self.notifier.remove_listener(id)
+        self.notifier.remove_listener(id);
     }
 
     fn remove_all_listeners(&self) {
-        self.notifier.remove_all_listeners()
-    }
-}
-
-// Implement flui_view::Listenable for use with AnimatedView
-// This version converts Box to Arc to match ChangeNotifier's requirements
-impl flui_view::Listenable for AnimationController {
-    fn add_listener(&self, callback: Box<dyn Fn() + Send + Sync>) -> ListenerId {
-        // Convert Box to Arc for ChangeNotifier
-        self.notifier.add_listener(Arc::from(callback))
-    }
-
-    fn remove_listener(&self, id: ListenerId) {
-        self.notifier.remove_listener(id)
+        self.notifier.remove_all_listeners();
     }
 }
 
@@ -649,7 +938,7 @@ impl fmt::Debug for AnimationController {
             .field("lower_bound", &inner.lower_bound)
             .field("upper_bound", &inner.upper_bound)
             .field("disposed", &inner.disposed)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

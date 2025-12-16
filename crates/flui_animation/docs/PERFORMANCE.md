@@ -1,6 +1,6 @@
-# Animation Performance
+# Performance
 
-This document describes performance characteristics and optimization techniques in `flui_animation`.
+Performance characteristics of `flui_animation`.
 
 ## Memory Layout
 
@@ -8,123 +8,138 @@ This document describes performance characteristics and optimization techniques 
 
 | Type | Size | Notes |
 |------|------|-------|
-| `AnimationController` | ~256 bytes | Main struct with all state |
-| `Arc<AnimationController>` | 8 bytes | Pointer only |
-| `CurvedAnimation<C>` | 16 + size_of::<C>() | Arc + curve |
-| `TweenAnimation<T, A>` | 8 + size_of::<A>() | Arc + tween |
+| `AnimationController` | ~64 bytes | Arc + Arc (inner + notifier) |
+| `Arc<AnimationController>` | 8 bytes | Pointer |
+| `CurvedAnimation<C>` | 16 + sizeof(C) | Arc + curve + option |
+| `TweenAnimation<T, A>` | 8 + sizeof(A) | Arc + tween |
 | `ReverseAnimation` | 8 bytes | Single Arc |
 | `CompoundAnimation` | 24 bytes | Two Arcs + operator |
-| `AnimationDirection` | 1 byte | Enum with 2 variants |
-| `AnimationOperator` | 1 byte | Enum with 4 variants |
-| `AnimationError` | 24 bytes | Enum with String variant |
+| `ConstantAnimation<T>` | 24 + sizeof(T) | Value + status + notifier |
+| `AnimationStatus` | 1 byte | 4-variant enum |
+| `AnimationOperator` | 1 byte | 6-variant enum |
+| `AnimationError` | 1 byte | Simple enum |
 | `ListenerId` | 8 bytes | NonZeroU64 |
 
-### Synchronization Strategy
+### Curve Sizes
 
-The controller uses a single `Mutex<AnimationControllerInner>` for all mutable state:
+| Curve | Size | Notes |
+|-------|------|-------|
+| `Linear` | 0 bytes | Unit struct |
+| `Cubic` | 16 bytes | 4 × f32 |
+| `ElasticInCurve` | 4 bytes | period: f32 |
+| `Interval<C>` | 8 + sizeof(C) | begin, end + curve |
+| `CatmullRomCurve` | 32 bytes | SmallVec (8 points inline) |
 
-```rust
-pub struct AnimationController {
-    inner: Arc<Mutex<AnimationControllerInner>>,
-    notifier: Arc<ChangeNotifier>,
-}
-```
+### Tween Sizes
 
-This provides strong safety guarantees with good performance for typical animation workloads:
-- Uncontended lock acquisition: ~10ns (parking_lot)
-- State access batching: Multiple reads/writes in single lock acquisition
-- Lock held only during state updates, not during listener callbacks
+| Tween | Size | Notes |
+|-------|------|-------|
+| `FloatTween` | 8 bytes | 2 × f32 |
+| `IntTween` | 8 bytes | 2 × i32 |
+| `ColorTween` | 32 bytes | 2 × Color |
+| `SizeTween` | 16 bytes | 2 × Size |
+| `TweenSequence<T, A>` | 24 bytes | Vec + total_weight |
+
+---
 
 ## Synchronization
 
 ### parking_lot vs std
 
-We use `parking_lot` instead of `std::sync`:
-
 | Operation | std::sync | parking_lot | Improvement |
 |-----------|-----------|-------------|-------------|
-| Uncontended lock | ~25ns | ~10ns | 2.5x |
-| Contended lock | ~100ns | ~40ns | 2.5x |
-| RwLock read | ~30ns | ~12ns | 2.5x |
+| Uncontended Mutex lock | ~25ns | ~10ns | 2.5× |
+| Contended Mutex lock | ~100ns | ~40ns | 2.5× |
+| RwLock read | ~30ns | ~12ns | 2.5× |
 
-### Optimization Techniques
+### Controller Lock Strategy
 
-The controller minimizes lock contention through several techniques:
-
-1. **Batched State Access**: All state reads/writes happen within a single lock acquisition
-2. **Lock-Free Notifications**: Listeners are notified after releasing the lock
-3. **Optimized tick() Method**: Single lock acquisition per frame, immediate unlock before callbacks
-4. **ScheduledTicker Integration**: Automatic frame scheduling via `flui-scheduler`
-
-### Avoiding Lock Contention
-
-The animation loop avoids holding locks during callbacks:
+Single `Mutex<Inner>` for all state:
 
 ```rust
-fn notify_listeners(&self) {
-    // Clone listeners under lock
-    let listeners: Vec<_> = self.listeners.read().clone();
+struct AnimationController {
+    inner: Arc<Mutex<AnimationControllerInner>>,
+    notifier: Arc<ChangeNotifier>,
+}
+```
+
+Benefits:
+- Simple reasoning about state consistency
+- Batched updates in single lock acquisition
+- Lock released before listener callbacks
+
+### Tick Cycle
+
+```rust
+fn tick(&self) {
+    let should_notify = {
+        let mut inner = self.inner.lock();
+        // Update value, status
+        // ...
+        status_changed
+    };
+    // Lock released
     
-    // Call callbacks outside lock
-    for (_, callback) in listeners {
-        callback();
+    self.notifier.notify_listeners();  // Value listeners
+    
+    if should_notify {
+        // Status listeners called outside lock
     }
 }
 ```
 
+---
+
 ## Arc Overhead
 
-### Cloning Cost
+### Cloning
 
-`Arc::clone` is a single atomic increment (~5ns):
+`Arc::clone` is atomic increment (~5ns):
 
 ```rust
-// Very cheap
-let controller2 = controller.clone();
+let controller2 = controller.clone();  // Very cheap
 ```
 
-### Dereferencing Cost
+### Dereferencing
 
-Accessing through Arc adds one pointer indirection:
+One pointer indirection per access:
 
 ```rust
-// One indirection
 let value = controller.value();
-
-// Same as
-let value = (*controller).value();
+// Equivalent to: (*controller).value()
 ```
 
-For hot paths, consider caching the reference:
+For hot paths, cache the reference:
 
 ```rust
-// If calling many methods
 let ctrl = &*controller;
 ctrl.value();
 ctrl.status();
 ctrl.is_animating();
 ```
 
+---
+
 ## Trait Object Overhead
 
 ### Virtual Dispatch
 
-Using `Arc<dyn Animation<f32>>` adds vtable lookup (~2ns per call):
+`Arc<dyn Animation<f32>>` adds vtable lookup (~2ns per call):
 
 ```rust
 // Virtual dispatch
-let value = (parent as &dyn Animation<f32>).value();
+let value = animation.value();
 
-// vs direct call (if type known)
+// Direct (if concrete type known)
 let value = controller.value();
 ```
 
 ### When to Use Generics
 
-For performance-critical code, use generics instead of trait objects:
+For performance-critical paths:
 
 ```rust
-// Trait object (virtual dispatch)
+// Trait object (virtual dispatch each call)
 pub struct SlowAnimation {
     parent: Arc<dyn Animation<f32>>,
 }
@@ -135,228 +150,175 @@ pub struct FastAnimation<A: Animation<f32>> {
 }
 ```
 
-However, generics increase code size and compilation time. The vtable overhead is usually negligible for animations.
+Trade-off: Generics increase binary size and compile time.
 
-## Callback Performance
+---
 
-### Allocation
+## Curve Evaluation Cost
 
-`StatusCallback = Arc<dyn Fn(AnimationStatus) + Send + Sync>` involves:
-- One allocation for the closure
+| Curve | Operations | Cost |
+|-------|------------|------|
+| `Linear` | 1 clamp | ~1ns |
+| `EaseIn/Out` | 2-3 muls | ~2ns |
+| `Cubic` | 8 iterations binary search | ~50ns |
+| `EaseInOutSine` | 1 trig | ~10ns |
+| `ElasticIn/Out` | pow + sin | ~20ns |
+| `BounceOut` | 3-4 branches + muls | ~5ns |
+| `CatmullRomCurve` | Spline interpolation | ~30ns |
+
+All curves are fast enough for 60fps (~16ms frame budget).
+
+---
+
+## Tween Evaluation Cost
+
+| Tween | Operations | Cost |
+|-------|------------|------|
+| `FloatTween` | 1 lerp | ~1ns |
+| `IntTween` | 1 lerp + round | ~2ns |
+| `ColorTween` | 4 lerps | ~4ns |
+| `SizeTween` | 2 lerps | ~2ns |
+| `TweenSequence` | Segment lookup + lerp | ~10ns |
+
+---
+
+## Listener Overhead
+
+### Storage
+
+Listeners stored in `Vec<(ListenerId, Callback)>`:
+
+| Operation | Complexity |
+|-----------|------------|
+| Add listener | O(1) amortized |
+| Remove listener | O(n) |
+| Notify all | O(n) |
+
+For many listeners, consider `HashMap<ListenerId, Callback>`.
+
+### Callback Allocation
+
+`Arc<dyn Fn() + Send + Sync>` requires:
+- One heap allocation for closure
 - One allocation for Arc control block
 
-Create callbacks once and reuse:
+Reuse callbacks:
 
 ```rust
-// Good - single allocation
-let callback = Arc::new(|status| println!("{:?}", status));
-controller.add_status_listener(callback.clone());
-other_controller.add_status_listener(callback);
+// Good: single allocation
+let callback = Arc::new(|| println!("changed"));
+controller.add_listener(callback.clone());
+other.add_listener(callback);
 
-// Bad - multiple allocations
-controller.add_status_listener(Arc::new(|s| println!("{:?}", s)));
-other_controller.add_status_listener(Arc::new(|s| println!("{:?}", s)));
+// Bad: allocation per add
+controller.add_listener(Arc::new(|| println!("changed")));
+other.add_listener(Arc::new(|| println!("changed")));
 ```
 
-### Listener Removal
+---
 
-Listeners are stored in a `Vec`, so removal is O(n):
+## Frame Budget
 
-```rust
-pub fn remove_status_listener(&self, id: ListenerId) {
-    self.status_listeners.write().retain(|(lid, _)| *lid != id);
-}
-```
+At 60fps, ~16.6ms per frame:
 
-For many listeners, consider using a `HashMap<ListenerId, Callback>` instead.
-
-## Curve Evaluation
-
-### Polynomial Curves
-
-Most curves use polynomial evaluation, which is very fast:
-
-```rust
-// EaseIn: t^2 (one multiply)
-fn transform(&self, t: f32) -> f32 {
-    t * t
-}
-
-// EaseInOut: cubic (few operations)
-fn transform(&self, t: f32) -> f32 {
-    if t < 0.5 {
-        4.0 * t * t * t
-    } else {
-        1.0 - (-2.0 * t + 2.0).powi(3) / 2.0
-    }
-}
-```
-
-### Expensive Curves
-
-Some curves are more expensive:
-
-| Curve | Operations | Notes |
-|-------|------------|-------|
-| `Linear` | 0 | Identity |
-| `EaseIn/Out` | 1-3 | Polynomial |
-| `EaseInOutSine` | 1 trig | `cos()` call |
-| `ElasticIn/Out` | 2 trig + pow | `sin()`, `pow()` |
-| `EaseInBack` | 3-4 | Polynomial with overshoot |
-
-For smooth 60fps, even elastic curves are fast enough (<1μs).
-
-## Tween Evaluation
-
-### Simple Tweens
-
-Linear interpolation is very fast:
-
-```rust
-impl Animatable<f32> for FloatTween {
-    fn transform(&self, t: f32) -> f32 {
-        self.begin + (self.end - self.begin) * t
-    }
-}
-```
-
-### Complex Tweens
-
-Color tweens may involve color space conversion:
-
-```rust
-impl Animatable<Color> for ColorTween {
-    fn transform(&self, t: f32) -> Color {
-        // RGB interpolation (fast)
-        Color::rgba(
-            lerp(self.begin.r, self.end.r, t),
-            lerp(self.begin.g, self.end.g, t),
-            lerp(self.begin.b, self.end.b, t),
-            lerp(self.begin.a, self.end.a, t),
-        )
-    }
-}
-```
-
-For perceptually uniform color interpolation, consider HSL or LAB space (more expensive).
-
-## Frame Timing
-
-### Target Frame Rate
-
-At 60fps, each frame has ~16.6ms budget:
-
-| Phase | Target | Notes |
+| Phase | Budget | Notes |
 |-------|--------|-------|
-| Animation tick | <0.1ms | All controllers |
+| Animation tick | <0.5ms | All controllers |
 | Layout | <5ms | Tree traversal |
 | Paint | <10ms | GPU commands |
-| Buffer | ~1.5ms | Headroom |
+| Headroom | ~1ms | Jitter buffer |
 
-Animation updates are typically <0.1ms even with many controllers.
+Typical animation overhead: <0.1ms for 10 active animations.
 
-### Batching Updates
-
-Multiple animations should batch their updates:
-
-```rust
-// Scheduler batches all ticker callbacks
-scheduler.on_frame(|delta| {
-    // All animations update together
-    for controller in &controllers {
-        controller.tick(delta);
-    }
-    
-    // Single notification pass
-    notify_all_listeners();
-});
-```
+---
 
 ## Optimization Tips
 
 ### 1. Reuse Controllers
 
 ```rust
-// Bad - new allocation each animation
+// Bad: new allocation per animation
 fn animate() {
     let controller = AnimationController::new(...);
-    // ...
+    controller.forward()?;
     controller.dispose();
 }
 
-// Good - reuse existing controller
-controller.reset()?;
+// Good: reuse
+controller.reset();
 controller.forward()?;
 ```
 
 ### 2. Avoid Unnecessary Clones
 
 ```rust
-// Bad - clone on every access
+// Bad: clone on every access
 fn render(&self) {
     let ctrl = self.controller.clone();
     let value = ctrl.value();
 }
 
-// Good - borrow
+// Good: borrow
 fn render(&self) {
     let value = self.controller.value();
 }
 ```
 
-### 3. Use Status Listeners Sparingly
+### 3. Use Status Listeners
 
 ```rust
-// Bad - check status every frame
+// Bad: poll every frame
 fn on_frame(&self) {
-    if self.controller.status() == AnimationStatus::Completed {
-        // ...
-    }
+    if self.controller.status() == Completed { ... }
 }
 
-// Good - use status listener
-self.controller.add_status_listener(Arc::new(|status| {
-    if status == AnimationStatus::Completed {
-        // ...
-    }
-}));
+// Good: react to changes
+controller.add_status_listener(|status| {
+    if status == Completed { ... }
+});
 ```
 
-### 4. Prefer Curves Over Custom Interpolation
+### 4. Batch Animations
 
 ```rust
-// Bad - custom easing in tween
-impl Animatable<f32> for CustomTween {
-    fn transform(&self, t: f32) -> f32 {
-        let eased = t * t; // Duplicates curve logic
-        self.begin + (self.end - self.begin) * eased
-    }
-}
-
-// Good - compose curve and linear tween
-let curved = controller.curved(Curves::EaseIn);
-let animation = FloatTween::new(0.0, 100.0).animate(curved);
+// Good: single scheduler drives all
+let scheduler = Arc::new(Scheduler::new());
+let ctrl1 = AnimationController::new(d, scheduler.clone());
+let ctrl2 = AnimationController::new(d, scheduler.clone());
+// Both tick on same frame callback
 ```
+
+### 5. Prefer Built-in Curves
+
+```rust
+// Good: optimized implementations
+Curves::EaseInOut
+
+// Slower: custom cubic requires binary search
+Cubic::new(0.42, 0.0, 0.58, 1.0)
+```
+
+---
 
 ## Benchmarks
 
-Run benchmarks with:
+Run with:
 
 ```bash
 cargo bench -p flui_animation
 ```
 
-Typical results (M1 Mac):
+Typical results (Apple M1):
 
 | Operation | Time |
 |-----------|------|
-| `controller.value()` | ~50-100ns |
-| `controller.forward()` | ~100-200ns |
-| `controller.tick()` | ~100-300ns |
-| `curved.value()` | ~50-100ns |
-| `tween.value()` | ~50-100ns |
-| `add_listener` | ~150-300ns |
-| `notify_listeners (10)` | ~500-1000ns |
+| `controller.value()` | ~50ns |
+| `controller.forward()` | ~150ns |
+| `controller.tick()` | ~200ns |
+| `curved.value()` | ~60ns |
+| `tween.transform()` | ~5ns |
 | `Arc::clone` | ~5ns |
+| `add_listener` | ~200ns |
+| `notify (10 listeners)` | ~800ns |
 
-Note: Actual performance depends on lock contention and callback complexity.
+Note: Times include lock acquisition. Uncontended locks dominate.

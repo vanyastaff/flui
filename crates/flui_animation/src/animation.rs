@@ -1,7 +1,7 @@
 //! Core animation trait and types.
 
+use crate::status::AnimationStatus;
 use flui_foundation::{Listenable, ListenerId};
-use flui_types::animation::AnimationStatus;
 use std::fmt;
 use std::sync::Arc;
 
@@ -54,7 +54,7 @@ impl AnimationDirection {
 ///
 /// ```
 /// use flui_animation::Animation;
-/// use flui_types::animation::AnimationStatus;
+/// use flui_animation::AnimationStatus;
 ///
 /// fn use_animation<T: Clone + Send + Sync + 'static>(animation: &dyn Animation<T>) {
 ///     let value = animation.value();

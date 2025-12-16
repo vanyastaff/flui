@@ -1,8 +1,8 @@
-//! CompoundAnimation - combines multiple animations with operators.
+//! `CompoundAnimation` - combines multiple animations with operators.
 
 use crate::animation::{Animation, StatusCallback};
+use crate::status::AnimationStatus;
 use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
-use flui_types::animation::AnimationStatus;
 use parking_lot::Mutex;
 use std::fmt;
 use std::sync::Arc;
@@ -29,6 +29,8 @@ pub enum AnimationOperator {
     Min,
     /// Return the maximum of the two values.
     Max,
+    /// Return the mean (average) of the two values: `(first + next) / 2`.
+    Mean,
 }
 
 /// An animation that combines two animations with an operator.
@@ -141,6 +143,43 @@ impl CompoundAnimation {
         Self::new(first, next, AnimationOperator::Max)
     }
 
+    /// Create a compound animation that returns the mean (average) of two animations.
+    ///
+    /// Similar to Flutter's `AnimationMean`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_animation::{CompoundAnimation, AnimationController, Animation};
+    /// use flui_scheduler::Scheduler;
+    /// use std::sync::Arc;
+    /// use std::time::Duration;
+    ///
+    /// let scheduler = Arc::new(Scheduler::new());
+    /// let controller1 = Arc::new(AnimationController::new(
+    ///     Duration::from_millis(300),
+    ///     scheduler.clone(),
+    /// ));
+    /// let controller2 = Arc::new(AnimationController::new(
+    ///     Duration::from_millis(300),
+    ///     scheduler,
+    /// ));
+    ///
+    /// controller1.set_value(0.4);
+    /// controller2.set_value(0.8);
+    ///
+    /// let mean = CompoundAnimation::mean(
+    ///     controller1 as Arc<dyn Animation<f32>>,
+    ///     controller2 as Arc<dyn Animation<f32>>,
+    /// );
+    ///
+    /// assert_eq!(mean.value(), 0.6);  // (0.4 + 0.8) / 2
+    /// ```
+    #[must_use]
+    pub fn mean(first: Arc<dyn Animation<f32>>, next: Arc<dyn Animation<f32>>) -> Self {
+        Self::new(first, next, AnimationOperator::Mean)
+    }
+
     /// Apply the operator to two values.
     #[inline]
     fn apply_operator(&self, a: f32, b: f32) -> f32 {
@@ -151,6 +190,7 @@ impl CompoundAnimation {
             AnimationOperator::Divide => a / b,
             AnimationOperator::Min => a.min(b),
             AnimationOperator::Max => a.max(b),
+            AnimationOperator::Mean => f32::midpoint(a, b),
         }
     }
 }
@@ -176,7 +216,7 @@ impl Animation<f32> for CompoundAnimation {
     }
 
     fn remove_status_listener(&self, id: ListenerId) {
-        self.first.remove_status_listener(id)
+        self.first.remove_status_listener(id);
     }
 }
 
@@ -186,11 +226,11 @@ impl Listenable for CompoundAnimation {
     }
 
     fn remove_listener(&self, id: ListenerId) {
-        self.notifier.remove_listener(id)
+        self.notifier.remove_listener(id);
     }
 
     fn remove_all_listeners(&self) {
-        self.notifier.remove_all_listeners()
+        self.notifier.remove_all_listeners();
     }
 }
 
@@ -201,7 +241,7 @@ impl fmt::Debug for CompoundAnimation {
             .field("operator", &self.operator)
             .field("first_status", &self.first.status())
             .field("next_status", &self.next.status())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -330,8 +370,47 @@ mod tests {
 
         assert_eq!(compound.status(), AnimationStatus::Dismissed);
 
-        controller1.forward();
+        let _ = controller1.forward();
         assert_eq!(compound.status(), AnimationStatus::Forward);
+
+        controller1.dispose();
+        controller2.dispose();
+    }
+
+    #[test]
+    fn test_compound_animation_mean() {
+        let controller1 = create_controller(0.4);
+        let controller2 = create_controller(0.8);
+
+        let compound = CompoundAnimation::mean(
+            controller1.clone() as Arc<dyn Animation<f32>>,
+            controller2.clone() as Arc<dyn Animation<f32>>,
+        );
+
+        assert!((compound.value() - 0.6).abs() < 1e-6);
+
+        controller1.dispose();
+        controller2.dispose();
+    }
+
+    #[test]
+    fn test_compound_animation_mean_symmetric() {
+        let controller1 = create_controller(0.2);
+        let controller2 = create_controller(0.8);
+
+        let mean1 = CompoundAnimation::mean(
+            controller1.clone() as Arc<dyn Animation<f32>>,
+            controller2.clone() as Arc<dyn Animation<f32>>,
+        );
+
+        let mean2 = CompoundAnimation::mean(
+            controller2.clone() as Arc<dyn Animation<f32>>,
+            controller1.clone() as Arc<dyn Animation<f32>>,
+        );
+
+        // Mean should be symmetric
+        assert!((mean1.value() - mean2.value()).abs() < 1e-6);
+        assert!((mean1.value() - 0.5).abs() < 1e-6);
 
         controller1.dispose();
         controller2.dispose();

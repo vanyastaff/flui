@@ -47,6 +47,15 @@ pub enum AnimationError {
     /// a ticker for frame synchronization.
     #[error("Ticker not available")]
     TickerNotAvailable,
+
+    /// Invalid spring configuration for fling animation.
+    ///
+    /// This error occurs when an underdamped spring (which oscillates)
+    /// is used with [`AnimationController::fling()`](crate::AnimationController::fling).
+    /// Use [`AnimationController::animate_with()`](crate::AnimationController::animate_with)
+    /// for oscillating springs.
+    #[error("Invalid spring configuration: {0}")]
+    InvalidSpring(String),
 }
 
 #[cfg(test)]

@@ -5,10 +5,11 @@
 
 use crate::animation::Animation;
 use crate::compound::{AnimationOperator, CompoundAnimation};
+use crate::curve::Curve;
 use crate::curved::CurvedAnimation;
 use crate::reverse::ReverseAnimation;
 use crate::tween::TweenAnimation;
-use flui_types::animation::{Animatable, Curve};
+use crate::tween_types::Animatable;
 use std::fmt;
 use std::sync::Arc;
 
@@ -22,7 +23,7 @@ use std::sync::Arc;
 /// ```
 /// use flui_animation::{AnimationController, Animation};
 /// use flui_animation::ext::AnimatableExt;
-/// use flui_types::animation::FloatTween;
+/// use flui_animation::FloatTween;
 /// use flui_scheduler::Scheduler;
 /// use std::sync::Arc;
 /// use std::time::Duration;
@@ -57,7 +58,7 @@ where
     /// ```
     /// use flui_animation::{AnimationController, Animation};
     /// use flui_animation::ext::AnimatableExt;
-    /// use flui_types::animation::FloatTween;
+    /// use flui_animation::FloatTween;
     /// use flui_scheduler::Scheduler;
     /// use std::sync::Arc;
     /// use std::time::Duration;
@@ -97,7 +98,7 @@ where
 /// ```
 /// use flui_animation::{AnimationController, Animation};
 /// use flui_animation::ext::AnimationExt;
-/// use flui_types::animation::Curves;
+/// use flui_animation::Curves;
 /// use flui_scheduler::Scheduler;
 /// use std::sync::Arc;
 /// use std::time::Duration;
@@ -126,7 +127,7 @@ pub trait AnimationExt: Animation<f32> + Sized + 'static {
     /// ```
     /// use flui_animation::{AnimationController, Animation};
     /// use flui_animation::ext::AnimationExt;
-    /// use flui_types::animation::Curves;
+    /// use flui_animation::Curves;
     /// use flui_scheduler::Scheduler;
     /// use std::sync::Arc;
     /// use std::time::Duration;
@@ -352,9 +353,10 @@ impl<A: Animation<f32> + 'static> AnimationExt for A {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::curve::Curves;
+    use crate::tween_types::FloatTween;
     use crate::AnimationController;
     use flui_scheduler::Scheduler;
-    use flui_types::animation::{Curves, FloatTween};
     use std::time::Duration;
 
     #[test]
