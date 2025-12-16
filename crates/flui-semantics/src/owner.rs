@@ -19,15 +19,21 @@ use crate::update::SemanticsNodeData;
 ///
 /// Called when the semantics tree changes and needs to be sent to the platform.
 /// The callback receives a list of changed semantics nodes with their data.
-pub type SemanticsUpdateCallback = Arc<dyn Fn(&[SemanticsUpdate]) + Send + Sync>;
+pub type SemanticsUpdateCallback = Arc<dyn Fn(&[SemanticsNodeUpdate]) + Send + Sync>;
 
 // ============================================================================
-// SEMANTICS UPDATE
+// SEMANTICS NODE UPDATE
 // ============================================================================
 
-/// A single semantics update to send to the platform.
+/// A single semantics node update to send to the platform.
+///
+/// This represents an update for one node in the semantics tree,
+/// including its data, parent reference, and children.
+///
+/// See also [`SemanticsTreeUpdate`](crate::update::SemanticsTreeUpdate) for
+/// batched tree-level updates.
 #[derive(Debug, Clone)]
-pub struct SemanticsUpdate {
+pub struct SemanticsNodeUpdate {
     /// The semantics node ID.
     pub id: SemanticsId,
 
@@ -41,8 +47,8 @@ pub struct SemanticsUpdate {
     pub children: Vec<SemanticsId>,
 }
 
-impl SemanticsUpdate {
-    /// Creates a new semantics update.
+impl SemanticsNodeUpdate {
+    /// Creates a new semantics node update.
     pub fn new(id: SemanticsId, data: SemanticsNodeData) -> Self {
         Self {
             id,
@@ -90,7 +96,7 @@ impl SemanticsUpdate {
 /// use std::sync::Arc;
 ///
 /// // Create owner with platform callback
-/// let callback = Arc::new(|updates: &[SemanticsUpdate]| {
+/// let callback = Arc::new(|updates: &[SemanticsNodeUpdate]| {
 ///     for update in updates {
 ///         println!("Semantics update: {:?}", update.id);
 ///     }
@@ -300,7 +306,7 @@ impl SemanticsOwner {
         }
 
         // Build updates
-        let updates: Vec<SemanticsUpdate> = dirty_ids
+        let updates: Vec<SemanticsNodeUpdate> = dirty_ids
             .iter()
             .filter_map(|&id| self.build_update(id))
             .collect();
@@ -315,11 +321,11 @@ impl SemanticsOwner {
     }
 
     /// Builds an update for a single node.
-    fn build_update(&self, id: SemanticsId) -> Option<SemanticsUpdate> {
+    fn build_update(&self, id: SemanticsId) -> Option<SemanticsNodeUpdate> {
         let node = self.tree.get(id)?;
 
         Some(
-            SemanticsUpdate::new(id, node.to_node_data(id))
+            SemanticsNodeUpdate::new(id, node.to_node_data(id))
                 .with_parent(node.parent())
                 .with_children(node.children().to_vec()),
         )
@@ -554,13 +560,13 @@ mod tests {
     }
 
     #[test]
-    fn test_semantics_update() {
+    fn test_semantics_node_update() {
         let data = SemanticsNodeData {
             label: Some("Test".into()),
             ..Default::default()
         };
 
-        let update = SemanticsUpdate::new(SemanticsId::new(1), data)
+        let update = SemanticsNodeUpdate::new(SemanticsId::new(1), data)
             .with_parent(Some(SemanticsId::new(2)))
             .with_children(vec![SemanticsId::new(3), SemanticsId::new(4)]);
 

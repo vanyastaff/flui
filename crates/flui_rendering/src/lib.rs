@@ -117,7 +117,8 @@ pub mod prelude {
     pub use crate::pipeline::{Canvas, Paint, PaintStyle, PaintingContext, PipelineOwner};
     pub use crate::protocol::{BoxProtocol, Protocol, SliverProtocol};
     pub use crate::semantics::{
-        SemanticsAction, SemanticsConfiguration, SemanticsNode, SemanticsOwner, SemanticsUpdate,
+        SemanticsAction, SemanticsConfiguration, SemanticsNode, SemanticsNodeUpdate,
+        SemanticsOwner, SemanticsTreeUpdate,
     };
     pub use crate::traits::{
         MultiChildRenderBox, RenderAligningShiftedBox, RenderBox, RenderObject, RenderObjectExt,

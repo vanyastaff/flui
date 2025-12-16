@@ -172,13 +172,16 @@ impl Default for PictureLayer {
 mod tests {
     use super::*;
     use flui_painting::Canvas;
-    use flui_types::{Color, Point, Rect};
     use flui_types::painting::Paint;
+    use flui_types::{Color, Point, Rect};
 
     #[test]
     fn test_picture_layer_creation() {
         let mut canvas = Canvas::new();
-        canvas.draw_rect(Rect::from_ltrb(0.0, 0.0, 100.0, 100.0), &Paint::fill(Color::RED));
+        canvas.draw_rect(
+            Rect::from_ltrb(0.0, 0.0, 100.0, 100.0),
+            &Paint::fill(Color::RED),
+        );
         let picture = canvas.finish();
 
         let layer = PictureLayer::new(picture);
@@ -189,7 +192,10 @@ mod tests {
     #[test]
     fn test_picture_layer_bounds() {
         let mut canvas = Canvas::new();
-        canvas.draw_rect(Rect::from_ltrb(10.0, 20.0, 100.0, 200.0), &Paint::fill(Color::BLUE));
+        canvas.draw_rect(
+            Rect::from_ltrb(10.0, 20.0, 100.0, 200.0),
+            &Paint::fill(Color::BLUE),
+        );
         let picture = canvas.finish();
 
         let layer = PictureLayer::new(picture);
@@ -203,7 +209,10 @@ mod tests {
     #[test]
     fn test_picture_layer_with_custom_bounds() {
         let mut canvas = Canvas::new();
-        canvas.draw_rect(Rect::from_ltrb(0.0, 0.0, 50.0, 50.0), &Paint::fill(Color::GREEN));
+        canvas.draw_rect(
+            Rect::from_ltrb(0.0, 0.0, 50.0, 50.0),
+            &Paint::fill(Color::GREEN),
+        );
         let picture = canvas.finish();
 
         let custom_bounds = Rect::from_ltrb(0.0, 0.0, 200.0, 200.0);

@@ -109,7 +109,7 @@ pub use node::SemanticsNode;
 // RE-EXPORTS - Owner Types
 // ============================================================================
 
-pub use owner::{SemanticsOwner, SemanticsUpdateCallback};
+pub use owner::{SemanticsNodeUpdate, SemanticsOwner, SemanticsUpdateCallback};
 
 // ============================================================================
 // RE-EXPORTS - Property Types
@@ -130,7 +130,7 @@ pub use tree::SemanticsTree;
 // RE-EXPORTS - Update Types
 // ============================================================================
 
-pub use update::{SemanticsNodeData, SemanticsUpdate, SemanticsUpdateBuilder};
+pub use update::{SemanticsNodeData, SemanticsTreeUpdate, SemanticsTreeUpdateBuilder};
 
 // ============================================================================
 // RE-EXPORTS - Foundation Types
@@ -152,8 +152,9 @@ pub mod prelude {
     pub use crate::{
         ActionArgs, AttributedString, SemanticsAction, SemanticsActionHandler,
         SemanticsConfiguration, SemanticsEvent, SemanticsEventType, SemanticsFlag, SemanticsFlags,
-        SemanticsId, SemanticsNode, SemanticsNodeData, SemanticsOwner, SemanticsProperties,
-        SemanticsTag, SemanticsTree, SemanticsUpdate, SemanticsUpdateBuilder, TextDirection,
+        SemanticsId, SemanticsNode, SemanticsNodeData, SemanticsNodeUpdate, SemanticsOwner,
+        SemanticsProperties, SemanticsTag, SemanticsTree, SemanticsTreeUpdate,
+        SemanticsTreeUpdateBuilder, TextDirection,
     };
 
     // Re-export tree traits for convenience

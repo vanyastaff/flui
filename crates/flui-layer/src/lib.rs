@@ -111,7 +111,6 @@ pub use layer::{
     BackdropFilterLayer,
     // Leaf layers
     CanvasLayer,
-    PictureLayer,
     // Clip layers
     ClipPathLayer,
     ClipRRectLayer,
@@ -128,6 +127,7 @@ pub use layer::{
     // Transform layers
     OffsetLayer,
     OpacityLayer,
+    PictureLayer,
     // Platform layers
     PlatformViewHitTestBehavior,
     PlatformViewId,

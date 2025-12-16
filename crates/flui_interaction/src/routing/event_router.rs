@@ -246,7 +246,7 @@ pub(crate) mod tests {
 
     impl HitTestable for MockLayer {
         fn hit_test(&self, position: Offset, result: &mut HitTestResult) -> bool {
-            if self.bounds.contains(position) {
+            if self.bounds.contains(position.into()) {
                 result.add(HitTestEntry::new(RenderId::new(1)));
                 true
             } else {

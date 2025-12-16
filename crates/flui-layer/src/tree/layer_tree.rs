@@ -1213,7 +1213,10 @@ mod tests {
         let new_picture1_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
         let new_picture2_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
         let new_picture3_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
-        tree.append_layers(container_id, &[new_picture1_id, new_picture2_id, new_picture3_id]);
+        tree.append_layers(
+            container_id,
+            &[new_picture1_id, new_picture2_id, new_picture3_id],
+        );
 
         // Verify new structure
         let children = tree.children(container_id).unwrap();
@@ -1264,7 +1267,10 @@ mod tests {
 
         // Verify clip properties
         if let Layer::ClipRect(clip_layer) = layer {
-            assert_eq!(clip_layer.clip_rect(), Rect::from_ltrb(0.0, 0.0, 100.0, 100.0));
+            assert_eq!(
+                clip_layer.clip_rect(),
+                Rect::from_ltrb(0.0, 0.0, 100.0, 100.0)
+            );
             assert_eq!(clip_layer.clip_behavior(), Clip::AntiAlias);
         }
     }

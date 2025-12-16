@@ -97,15 +97,19 @@ impl Default for SemanticsNodeData {
 }
 
 // ============================================================================
-// SemanticsUpdate
+// SemanticsTreeUpdate
 // ============================================================================
 
-/// An update to the semantics tree to be sent to the platform.
+/// A batched update to the semantics tree to be sent to the platform.
 ///
 /// This contains all the information needed to update the platform's
-/// accessibility tree.
+/// accessibility tree in a single batch, including added/updated nodes
+/// and removed node IDs.
+///
+/// See also [`SemanticsNodeUpdate`](crate::owner::SemanticsNodeUpdate) for
+/// individual node updates.
 #[derive(Debug, Clone, Default)]
-pub struct SemanticsUpdate {
+pub struct SemanticsTreeUpdate {
     /// Nodes that have been added or updated.
     pub nodes: Vec<SemanticsNodeData>,
 
@@ -113,7 +117,7 @@ pub struct SemanticsUpdate {
     pub removed_node_ids: SmallVec<[u64; 8]>,
 }
 
-impl SemanticsUpdate {
+impl SemanticsTreeUpdate {
     /// Creates a new empty update.
     pub fn new() -> Self {
         Self::default()
@@ -142,14 +146,14 @@ impl SemanticsUpdate {
 // SemanticsUpdateBuilder
 // ============================================================================
 
-/// Builder for constructing semantics updates.
+/// Builder for constructing semantics tree updates.
 #[derive(Debug, Default)]
-pub struct SemanticsUpdateBuilder {
+pub struct SemanticsTreeUpdateBuilder {
     nodes: Vec<SemanticsNodeData>,
     removed_node_ids: SmallVec<[u64; 8]>,
 }
 
-impl SemanticsUpdateBuilder {
+impl SemanticsTreeUpdateBuilder {
     /// Creates a new builder.
     pub fn new() -> Self {
         Self::default()
@@ -184,8 +188,8 @@ impl SemanticsUpdateBuilder {
     }
 
     /// Builds the update.
-    pub fn build(self) -> SemanticsUpdate {
-        SemanticsUpdate {
+    pub fn build(self) -> SemanticsTreeUpdate {
+        SemanticsTreeUpdate {
             nodes: self.nodes,
             removed_node_ids: self.removed_node_ids,
         }
@@ -197,16 +201,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_semantics_update_empty() {
-        let update = SemanticsUpdate::new();
+    fn test_semantics_tree_update_empty() {
+        let update = SemanticsTreeUpdate::new();
         assert!(update.is_empty());
         assert_eq!(update.node_count(), 0);
         assert_eq!(update.removed_count(), 0);
     }
 
     #[test]
-    fn test_semantics_update_builder() {
-        let mut builder = SemanticsUpdateBuilder::new();
+    fn test_semantics_tree_update_builder() {
+        let mut builder = SemanticsTreeUpdateBuilder::new();
 
         builder.add_node(SemanticsNodeData {
             id: 0,

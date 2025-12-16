@@ -264,13 +264,10 @@ impl SemanticsNode {
             increased_value: self.config.increased_value().map(|v| v.string.clone()),
             decreased_value: self.config.decreased_value().map(|v| v.string.clone()),
             hint: self.config.hint().map(|h| h.string.clone()),
-            tooltip: self.config.tooltip().map(|t| t.into()),
+            tooltip: self.config.tooltip().map(Into::into),
             text_direction: self.config.text_direction(),
             rect: self.rect,
-            transform: self
-                .transform
-                .map(Matrix4::from)
-                .unwrap_or(Matrix4::IDENTITY),
+            transform: self.transform.map_or(Matrix4::IDENTITY, Matrix4::from),
             children: self.children.iter().map(|c| (c.get() - 1) as u64).collect(),
             elevation: self.config.elevation(),
             thickness: self.config.thickness(),

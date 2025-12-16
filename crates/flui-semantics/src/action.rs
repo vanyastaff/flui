@@ -168,9 +168,10 @@ impl SemanticsAction {
 pub type SemanticsActionHandler = Arc<dyn Fn(SemanticsAction, Option<ActionArgs>) + Send + Sync>;
 
 /// Arguments for semantics actions.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub enum ActionArgs {
     /// No arguments.
+    #[default]
     None,
 
     /// Text selection arguments.
@@ -198,12 +199,6 @@ pub enum ActionArgs {
         /// Whether to extend selection.
         extend_selection: bool,
     },
-}
-
-impl Default for ActionArgs {
-    fn default() -> Self {
-        Self::None
-    }
 }
 
 #[cfg(test)]

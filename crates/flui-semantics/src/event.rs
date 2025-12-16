@@ -72,7 +72,7 @@ impl SemanticsEvent {
     /// Sent when a semantics node gains accessibility focus.
     pub fn focus(node_id: u64) -> Self {
         let mut event = Self::new(SemanticsEventType::Focus);
-        event.set_int("nodeId", node_id as i64);
+        event.set_int("nodeId", node_id.cast_signed());
         event
     }
 
@@ -241,10 +241,10 @@ pub enum SemanticsEventData {
 impl std::fmt::Display for SemanticsEventData {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::String(s) => write!(f, "{}", s),
-            Self::Int(i) => write!(f, "{}", i),
-            Self::Float(fl) => write!(f, "{}", fl),
-            Self::Bool(b) => write!(f, "{}", b),
+            Self::String(s) => write!(f, "{s}"),
+            Self::Int(i) => write!(f, "{i}"),
+            Self::Float(fl) => write!(f, "{fl}"),
+            Self::Bool(b) => write!(f, "{b}"),
         }
     }
 }

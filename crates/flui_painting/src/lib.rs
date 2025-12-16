@@ -197,7 +197,7 @@ pub use error::{PaintingError, Result};
 /// final picture = recorder.endRecording();
 /// ```
 ///
-/// ```rust
+/// ```rust,ignore
 /// // FLUI
 /// let mut canvas = Canvas::new();
 /// canvas.draw_rect(rect, &paint);

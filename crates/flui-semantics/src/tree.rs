@@ -217,7 +217,7 @@ impl SemanticsTree {
 
     /// Returns the children of a node.
     pub fn children(&self, id: SemanticsId) -> Option<&[SemanticsId]> {
-        self.get(id).map(|node| node.children())
+        self.get(id).map(SemanticsNode::children)
     }
 
     // ========== Dirty Tracking ==========
@@ -232,7 +232,7 @@ impl SemanticsTree {
 
     /// Marks all nodes as clean.
     pub fn mark_all_clean(&mut self) {
-        for (_, node) in self.nodes.iter_mut() {
+        for (_, node) in &mut self.nodes {
             node.mark_clean();
         }
     }
@@ -358,14 +358,12 @@ impl TreeNav<SemanticsId> for SemanticsTree {
 
     #[inline]
     fn child_count(&self, id: SemanticsId) -> usize {
-        self.get(id).map(|node| node.children().len()).unwrap_or(0)
+        self.get(id).map_or(0, |node| node.children().len())
     }
 
     #[inline]
     fn has_children(&self, id: SemanticsId) -> bool {
-        self.get(id)
-            .map(|node| !node.children().is_empty())
-            .unwrap_or(false)
+        self.get(id).is_some_and(|node| !node.children().is_empty())
     }
 }
 
