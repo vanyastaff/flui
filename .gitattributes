@@ -1,0 +1,46 @@
+# Auto detect text files and normalize line endings to LF
+* text=auto eol=lf
+
+# Rust sources
+*.rs text eol=lf diff=rust
+*.toml text eol=lf
+
+# Documentation
+*.md text eol=lf diff=markdown
+*.txt text eol=lf
+
+# Config files
+*.json text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.xml text eol=lf
+
+# Shell scripts
+*.sh text eol=lf
+*.bash text eol=lf
+
+# Windows scripts (keep CRLF)
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Binary files (don't touch)
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
+*.zip binary
+*.tar binary
+*.gz binary
+*.wasm binary
+
+# Lock files (exact match, no diff)
+Cargo.lock text eol=lf -diff linguist-generated=true
+
+# Generated files
+*.generated.* linguist-generated=true
