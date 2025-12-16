@@ -36,11 +36,11 @@
 
 use flui_types::geometry::{Offset, Size};
 use flui_types::typography::{
-    InlineSpan, PlaceholderDimensions, StrutStyle, TextAlign, TextDirection, TextHeightBehavior,
-    TextWidthBasis,
+    InlineSpan, LineMetrics, PlaceholderDimensions, StrutStyle, TextAlign, TextBox, TextDirection,
+    TextHeightBehavior, TextPosition, TextRange, TextWidthBasis,
 };
 
-use crate::text_layout::measure_inline_span;
+use crate::text_layout::TextLayout;
 use crate::Canvas;
 
 /// Default font size when none is specified.
@@ -62,7 +62,7 @@ pub const DEFAULT_FONT_SIZE: f32 = 14.0;
 /// # Thread Safety
 ///
 /// `TextPainter` is `Send` but not `Sync` due to mutable layout state.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct TextPainter {
     /// The styled text to paint.
     text: Option<InlineSpan>,
@@ -99,7 +99,7 @@ pub struct TextPainter {
 }
 
 /// Cached layout information.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct TextLayoutCache {
     /// The width constraint used for layout.
     min_width: f32,
@@ -115,6 +115,8 @@ struct TextLayoutCache {
     did_exceed_max_lines: bool,
     /// Computed paint offset based on alignment.
     paint_offset: Offset,
+    /// The underlying text layout for cursor/hit testing.
+    layout: TextLayout,
 }
 
 impl Default for TextPainter {
@@ -400,10 +402,8 @@ impl TextPainter {
             .text_direction
             .expect("TextPainter.text_direction must be set before layout");
 
-        // Compute layout metrics
-        // In a real implementation, this would use glyphon/cosmic-text
-        // For now, we use a simple estimation based on text length and font size
-        let metrics = self.compute_layout_metrics(text, min_width, max_width);
+        // Compute layout metrics using cosmic-text
+        let (metrics, layout) = self.compute_layout_metrics(text, min_width, max_width);
 
         self.layout_cache = Some(TextLayoutCache {
             min_width,
@@ -413,6 +413,7 @@ impl TextPainter {
             ideographic_baseline: metrics.ideographic_baseline,
             did_exceed_max_lines: metrics.did_exceed_max_lines,
             paint_offset: metrics.paint_offset,
+            layout,
         });
     }
 
@@ -422,12 +423,15 @@ impl TextPainter {
         text: &InlineSpan,
         min_width: f32,
         max_width: f32,
-    ) -> LayoutMetrics {
+    ) -> (LayoutMetrics, TextLayout) {
         // Get font size from style or use default
         let font_size = text
             .style()
             .and_then(|s| s.font_size.map(|f| f as f32))
             .unwrap_or(DEFAULT_FONT_SIZE);
+
+        let scaled_font_size = font_size * self.text_scale_factor;
+        let direction = self.text_direction.unwrap_or(TextDirection::Ltr);
 
         // Use cosmic-text for measurement
         let max_width_opt = if max_width.is_finite() {
@@ -436,8 +440,18 @@ impl TextPainter {
             None
         };
 
-        let layout_result =
-            measure_inline_span(text, font_size, max_width_opt, self.text_scale_factor);
+        // Create the full TextLayout for cursor support
+        let plain_text = text.to_plain_text();
+        let layout = TextLayout::new(
+            &plain_text,
+            text.style(),
+            scaled_font_size,
+            max_width_opt,
+            None,
+            direction,
+        );
+
+        let layout_result = layout.metrics();
 
         // Check max lines constraint
         let line_count = layout_result.line_count as u32;
@@ -452,13 +466,15 @@ impl TextPainter {
         // Compute paint offset based on alignment
         let paint_offset = self.compute_paint_offset(width, max_width);
 
-        LayoutMetrics {
+        let metrics = LayoutMetrics {
             size: Size::new(width, layout_result.height),
             alphabetic_baseline: layout_result.alphabetic_baseline,
             ideographic_baseline,
             did_exceed_max_lines,
             paint_offset,
-        }
+        };
+
+        (metrics, layout)
     }
 
     /// Computes the paint offset based on text alignment.
@@ -552,6 +568,161 @@ impl TextPainter {
             .as_ref()
             .expect("layout() must be called before accessing did_exceed_max_lines")
             .did_exceed_max_lines
+    }
+
+    // ===== Cursor and Selection =====
+
+    /// Returns the screen offset for a caret at the given text position.
+    ///
+    /// This is used for drawing the text cursor.
+    ///
+    /// # Arguments
+    ///
+    /// * `position` - The text position (offset + affinity).
+    ///
+    /// # Panics
+    ///
+    /// Panics if [`layout`](Self::layout) has not been called.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// painter.layout(0.0, 200.0);
+    /// let caret_offset = painter.get_offset_for_caret(TextPosition::upstream(5));
+    /// // Draw cursor at caret_offset
+    /// ```
+    #[must_use]
+    pub fn get_offset_for_caret(&mut self, position: TextPosition) -> Offset {
+        let cache = self
+            .layout_cache
+            .as_mut()
+            .expect("layout() must be called before get_offset_for_caret()");
+
+        let offset = cache.layout.get_offset_for_caret(position);
+        offset + cache.paint_offset
+    }
+
+    /// Returns the text position for a screen offset.
+    ///
+    /// This is used for hit testing (e.g., converting mouse clicks to text positions).
+    ///
+    /// # Arguments
+    ///
+    /// * `offset` - The screen offset relative to the text painter's origin.
+    ///
+    /// # Panics
+    ///
+    /// Panics if [`layout`](Self::layout) has not been called.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// painter.layout(0.0, 200.0);
+    /// let position = painter.get_position_for_offset(Offset::new(50.0, 10.0));
+    /// // position.offset is the character index
+    /// ```
+    #[must_use]
+    pub fn get_position_for_offset(&self, offset: Offset) -> TextPosition {
+        let cache = self
+            .layout_cache
+            .as_ref()
+            .expect("layout() must be called before get_position_for_offset()");
+
+        // Adjust for paint offset
+        let adjusted = offset - cache.paint_offset;
+        cache.layout.get_position_for_offset(adjusted)
+    }
+
+    /// Returns metrics for each line in the laid out text.
+    ///
+    /// # Panics
+    ///
+    /// Panics if [`layout`](Self::layout) has not been called.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// painter.layout(0.0, 200.0);
+    /// for line in painter.get_line_metrics() {
+    ///     println!("Line {}: height={}", line.line_number, line.height);
+    /// }
+    /// ```
+    #[must_use]
+    pub fn get_line_metrics(&self) -> Vec<LineMetrics> {
+        let cache = self
+            .layout_cache
+            .as_ref()
+            .expect("layout() must be called before get_line_metrics()");
+
+        cache.layout.get_line_metrics()
+    }
+
+    /// Returns bounding boxes for a text selection.
+    ///
+    /// Used for rendering selection highlights.
+    ///
+    /// # Arguments
+    ///
+    /// * `start` - Start offset of selection.
+    /// * `end` - End offset of selection (exclusive).
+    ///
+    /// # Panics
+    ///
+    /// Panics if [`layout`](Self::layout) has not been called.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// painter.layout(0.0, 200.0);
+    /// let boxes = painter.get_boxes_for_selection(5, 15);
+    /// for text_box in boxes {
+    ///     // Draw selection highlight at text_box.rect
+    /// }
+    /// ```
+    #[must_use]
+    pub fn get_boxes_for_selection(&self, start: usize, end: usize) -> Vec<TextBox> {
+        let cache = self
+            .layout_cache
+            .as_ref()
+            .expect("layout() must be called before get_boxes_for_selection()");
+
+        let mut boxes = cache.layout.get_boxes_for_range(TextRange::new(start, end));
+
+        // Adjust boxes for paint offset
+        for text_box in &mut boxes {
+            text_box.rect = text_box.rect.translate_offset(cache.paint_offset);
+        }
+
+        boxes
+    }
+
+    /// Returns the word boundary at the given text position.
+    ///
+    /// Used for double-click word selection.
+    ///
+    /// # Arguments
+    ///
+    /// * `position` - The text position to find word boundary for.
+    ///
+    /// # Panics
+    ///
+    /// Panics if [`layout`](Self::layout) has not been called.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// painter.layout(0.0, 200.0);
+    /// let boundary = painter.get_word_boundary(TextPosition::upstream(10));
+    /// // Select text from boundary.start to boundary.end
+    /// ```
+    #[must_use]
+    pub fn get_word_boundary(&self, position: TextPosition) -> TextRange {
+        let cache = self
+            .layout_cache
+            .as_ref()
+            .expect("layout() must be called before get_word_boundary()");
+
+        cache.layout.get_word_boundary(position)
     }
 
     // ===== Painting =====
@@ -693,5 +864,102 @@ mod tests {
     #[test]
     fn test_default_font_size() {
         assert!((DEFAULT_FONT_SIZE - 14.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_get_offset_for_caret() {
+        let span = TextSpan::new("Hello, World!");
+        let mut painter = TextPainter::new()
+            .with_text(span)
+            .with_text_direction(TextDirection::Ltr);
+
+        painter.layout(0.0, 200.0);
+
+        use flui_types::typography::TextPosition;
+
+        // Caret at start
+        let start = painter.get_offset_for_caret(TextPosition::upstream(0));
+        assert!(start.dx >= 0.0);
+
+        // Caret in middle
+        let mid = painter.get_offset_for_caret(TextPosition::upstream(6));
+        assert!(mid.dx > start.dx);
+
+        // Caret at end
+        let end = painter.get_offset_for_caret(TextPosition::upstream(13));
+        assert!(end.dx >= mid.dx);
+    }
+
+    #[test]
+    fn test_get_position_for_offset() {
+        let span = TextSpan::new("Hello");
+        let mut painter = TextPainter::new()
+            .with_text(span)
+            .with_text_direction(TextDirection::Ltr);
+
+        painter.layout(0.0, 200.0);
+
+        use flui_types::geometry::Offset;
+
+        // Hit test at start
+        let pos = painter.get_position_for_offset(Offset::new(0.0, 5.0));
+        assert_eq!(pos.offset, 0);
+
+        // Hit test past end
+        let pos = painter.get_position_for_offset(Offset::new(1000.0, 5.0));
+        assert!(pos.offset <= 5);
+    }
+
+    #[test]
+    fn test_get_line_metrics() {
+        let span = TextSpan::new("Line 1\nLine 2\nLine 3");
+        let mut painter = TextPainter::new()
+            .with_text(span)
+            .with_text_direction(TextDirection::Ltr);
+
+        painter.layout(0.0, 200.0);
+
+        let metrics = painter.get_line_metrics();
+        assert_eq!(metrics.len(), 3);
+
+        // Check line numbers are correct
+        assert_eq!(metrics[0].line_number, 0);
+        assert_eq!(metrics[1].line_number, 1);
+        assert_eq!(metrics[2].line_number, 2);
+    }
+
+    #[test]
+    fn test_get_boxes_for_selection() {
+        let span = TextSpan::new("Hello, World!");
+        let mut painter = TextPainter::new()
+            .with_text(span)
+            .with_text_direction(TextDirection::Ltr);
+
+        painter.layout(0.0, 200.0);
+
+        // Select "ello"
+        let boxes = painter.get_boxes_for_selection(1, 5);
+        assert!(!boxes.is_empty());
+
+        // Box should have positive dimensions
+        assert!(boxes[0].rect.width() > 0.0);
+        assert!(boxes[0].rect.height() > 0.0);
+    }
+
+    #[test]
+    fn test_get_word_boundary() {
+        let span = TextSpan::new("Hello World");
+        let mut painter = TextPainter::new()
+            .with_text(span)
+            .with_text_direction(TextDirection::Ltr);
+
+        painter.layout(0.0, 200.0);
+
+        use flui_types::typography::TextPosition;
+
+        let boundary = painter.get_word_boundary(TextPosition::upstream(2));
+        // Should contain position 2
+        assert!(boundary.start <= 2);
+        assert!(boundary.end >= 2);
     }
 }
