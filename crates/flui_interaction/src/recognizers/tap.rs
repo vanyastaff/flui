@@ -4,15 +4,16 @@
 //!
 //! A tap is defined as:
 //! - Pointer down
-//! - Pointer stays within TAP_SLOP (18px) of initial position
+//! - Pointer stays within touch_slop of initial position
 //! - Pointer up within timeout
 //!
 //! Flutter reference: https://api.flutter.dev/flutter/gestures/TapGestureRecognizer-class.html
 
-use super::recognizer::{constants, GestureRecognizer, GestureRecognizerState};
+use super::recognizer::{GestureRecognizer, GestureRecognizerState};
 use crate::arena::GestureArenaMember;
 use crate::events::{PointerEvent, PointerType};
 use crate::ids::PointerId;
+use crate::settings::GestureSettings;
 use flui_types::Offset;
 use parking_lot::Mutex;
 use std::sync::Arc;
@@ -60,6 +61,9 @@ pub struct TapGestureRecognizer {
 
     /// Current gesture state
     gesture_state: Arc<Mutex<TapState>>,
+
+    /// Gesture settings (device-specific tolerances)
+    settings: Arc<Mutex<GestureSettings>>,
 }
 
 impl std::fmt::Debug for TapGestureRecognizer {
@@ -94,7 +98,31 @@ impl TapGestureRecognizer {
             state: GestureRecognizerState::new(arena),
             callbacks: Arc::new(Mutex::new(TapCallbacks::default())),
             gesture_state: Arc::new(Mutex::new(TapState::Ready)),
+            settings: Arc::new(Mutex::new(GestureSettings::default())),
         })
+    }
+
+    /// Create with specific settings
+    pub fn with_settings(
+        arena: crate::arena::GestureArena,
+        settings: GestureSettings,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            state: GestureRecognizerState::new(arena),
+            callbacks: Arc::new(Mutex::new(TapCallbacks::default())),
+            gesture_state: Arc::new(Mutex::new(TapState::Ready)),
+            settings: Arc::new(Mutex::new(settings)),
+        })
+    }
+
+    /// Get current settings
+    pub fn settings(&self) -> GestureSettings {
+        self.settings.lock().clone()
+    }
+
+    /// Update settings
+    pub fn set_settings(&self, settings: GestureSettings) {
+        *self.settings.lock() = settings;
     }
 
     /// Set the tap down callback
@@ -235,7 +263,7 @@ impl TapGestureRecognizer {
             let delta = current_position - initial_pos;
             let distance = delta.distance();
 
-            if distance > constants::TAP_SLOP as f32 {
+            if self.settings.lock().exceeds_touch_slop(distance) {
                 return true; // Moved too far
             }
         }

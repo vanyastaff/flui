@@ -9,10 +9,11 @@
 //!
 //! Flutter reference: https://api.flutter.dev/flutter/gestures/MultiTapGestureRecognizer-class.html
 
-use super::recognizer::{constants, GestureRecognizer, GestureRecognizerState};
+use super::recognizer::{GestureRecognizer, GestureRecognizerState};
 use crate::arena::GestureArenaMember;
 use crate::events::{PointerEvent, PointerType};
 use crate::ids::PointerId;
+use crate::settings::GestureSettings;
 use flui_types::Offset;
 use parking_lot::Mutex;
 use std::collections::HashMap;
@@ -71,6 +72,9 @@ pub struct MultiTapGestureRecognizer {
 
     /// Current gesture state
     gesture_state: Arc<Mutex<MultiTapState>>,
+
+    /// Gesture settings (device-specific tolerances)
+    settings: Arc<Mutex<GestureSettings>>,
 
     /// Maximum time window for all pointers to go down (ms)
     max_time_window: Duration,
@@ -153,8 +157,40 @@ impl MultiTapGestureRecognizer {
             required_pointer_count,
             callbacks: Arc::new(Mutex::new(MultiTapCallbacks::default())),
             gesture_state: Arc::new(Mutex::new(MultiTapState::default())),
+            settings: Arc::new(Mutex::new(GestureSettings::default())),
             max_time_window: Duration::from_millis(100), // 100ms to get all pointers down
         })
+    }
+
+    /// Create a new multi-tap recognizer with custom settings
+    pub fn with_settings(
+        arena: crate::arena::GestureArena,
+        required_pointer_count: usize,
+        settings: GestureSettings,
+    ) -> Arc<Self> {
+        assert!(
+            required_pointer_count >= 2,
+            "MultiTapGestureRecognizer requires at least 2 pointers, got {}",
+            required_pointer_count
+        );
+        Arc::new(Self {
+            state: GestureRecognizerState::new(arena),
+            required_pointer_count,
+            callbacks: Arc::new(Mutex::new(MultiTapCallbacks::default())),
+            gesture_state: Arc::new(Mutex::new(MultiTapState::default())),
+            settings: Arc::new(Mutex::new(settings)),
+            max_time_window: Duration::from_millis(100),
+        })
+    }
+
+    /// Get the current gesture settings
+    pub fn settings(&self) -> GestureSettings {
+        self.settings.lock().clone()
+    }
+
+    /// Update gesture settings
+    pub fn set_settings(&self, settings: GestureSettings) {
+        *self.settings.lock() = settings;
     }
 
     /// Set the multi-tap callback
@@ -240,7 +276,7 @@ impl MultiTapGestureRecognizer {
             let delta = position - info.initial_position;
             let distance = delta.distance();
 
-            if distance > constants::TAP_SLOP as f32 {
+            if self.settings.lock().exceeds_touch_slop(distance) {
                 // Moved too far - cancel
                 state.phase = MultiTapPhase::Cancelled;
                 drop(state);
@@ -438,6 +474,7 @@ impl std::fmt::Debug for MultiTapGestureRecognizer {
             .field("state", &self.state)
             .field("required_pointer_count", &self.required_pointer_count)
             .field("gesture_state", &self.gesture_state.lock())
+            .field("settings", &self.settings.lock())
             .finish()
     }
 }

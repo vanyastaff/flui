@@ -9,11 +9,12 @@
 //!
 //! Flutter reference: https://api.flutter.dev/flutter/gestures/DragGestureRecognizer-class.html
 
-use super::recognizer::{constants, GestureRecognizer, GestureRecognizerState};
+use super::recognizer::{GestureRecognizer, GestureRecognizerState};
 use crate::arena::GestureArenaMember;
 use crate::events::{PointerEvent, PointerEventExt, PointerType};
 use crate::ids::PointerId;
 use crate::processing::VelocityTracker;
+use crate::settings::GestureSettings;
 use flui_types::Offset;
 use parking_lot::Mutex;
 use std::sync::Arc;
@@ -130,11 +131,8 @@ pub struct DragGestureRecognizer {
     /// Current drag state
     drag_state: Arc<Mutex<DragState>>,
 
-    /// Minimum distance to start drag
-    min_drag_distance: f32,
-
-    /// Minimum velocity to trigger fling (pixels per second)
-    min_fling_velocity: f32,
+    /// Gesture settings (device-specific tolerances)
+    settings: Arc<Mutex<GestureSettings>>,
 }
 
 impl std::fmt::Debug for DragGestureRecognizer {
@@ -143,8 +141,7 @@ impl std::fmt::Debug for DragGestureRecognizer {
             .field("state", &self.state)
             .field("axis", &self.axis)
             .field("drag_state", &*self.drag_state.lock())
-            .field("min_drag_distance", &self.min_drag_distance)
-            .field("min_fling_velocity", &self.min_fling_velocity)
+            .field("settings", &self.settings.lock())
             .finish_non_exhaustive()
     }
 }
@@ -203,9 +200,43 @@ impl DragGestureRecognizer {
             axis,
             callbacks: Arc::new(Mutex::new(DragCallbacks::default())),
             drag_state: Arc::new(Mutex::new(DragState::default())),
-            min_drag_distance: constants::DRAG_SLOP as f32,
-            min_fling_velocity: constants::MIN_FLING_VELOCITY as f32,
+            settings: Arc::new(Mutex::new(GestureSettings::default())),
         })
+    }
+
+    /// Create a new drag recognizer with custom settings
+    pub fn with_settings(
+        arena: crate::arena::GestureArena,
+        axis: DragAxis,
+        settings: GestureSettings,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            state: GestureRecognizerState::new(arena),
+            axis,
+            callbacks: Arc::new(Mutex::new(DragCallbacks::default())),
+            drag_state: Arc::new(Mutex::new(DragState::default())),
+            settings: Arc::new(Mutex::new(settings)),
+        })
+    }
+
+    /// Get the current gesture settings
+    pub fn settings(&self) -> GestureSettings {
+        self.settings.lock().clone()
+    }
+
+    /// Update gesture settings
+    pub fn set_settings(&self, settings: GestureSettings) {
+        *self.settings.lock() = settings;
+    }
+
+    /// Get the minimum drag distance from settings
+    fn min_drag_distance(&self) -> f32 {
+        self.settings.lock().pan_slop()
+    }
+
+    /// Get the minimum fling velocity from settings
+    fn min_fling_velocity(&self) -> f32 {
+        self.settings.lock().min_fling_velocity()
     }
 
     /// Set the drag down callback (called on pointer contact before drag starts)
@@ -293,7 +324,7 @@ impl DragGestureRecognizer {
                     let delta = position - initial_pos;
                     let distance = self.calculate_primary_delta(delta);
 
-                    if distance.abs() > self.min_drag_distance {
+                    if distance.abs() > self.min_drag_distance() {
                         // Start drag!
                         state.state = DragPhase::Started;
                         drop(state); // Release lock before calling callback
@@ -407,7 +438,7 @@ impl DragGestureRecognizer {
     /// Check if velocity is sufficient for a fling gesture
     pub fn is_fling(&self, velocity: &Velocity) -> bool {
         let speed = velocity.pixels_per_second.distance();
-        speed >= self.min_fling_velocity
+        speed >= self.min_fling_velocity()
     }
 
     /// Extract position and pointer type from a PointerEvent

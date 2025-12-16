@@ -10,10 +10,11 @@
 //!
 //! Flutter reference: https://api.flutter.dev/flutter/gestures/ForcePressGestureRecognizer-class.html
 
-use super::recognizer::{constants, GestureRecognizer, GestureRecognizerState};
+use super::recognizer::{GestureRecognizer, GestureRecognizerState};
 use crate::arena::GestureArenaMember;
 use crate::events::PointerEvent;
 use crate::ids::PointerId;
+use crate::settings::GestureSettings;
 use flui_types::gestures::ForcePressDetails;
 use flui_types::Offset;
 use parking_lot::Mutex;
@@ -80,6 +81,9 @@ pub struct ForcePressGestureRecognizer {
     /// Current gesture state
     gesture_state: Arc<Mutex<ForcePressState>>,
 
+    /// Gesture settings (device-specific tolerances)
+    settings: Arc<Mutex<GestureSettings>>,
+
     /// Pressure threshold to start force press (0.0 to 1.0)
     start_pressure: f32,
 
@@ -142,9 +146,35 @@ impl ForcePressGestureRecognizer {
             state: GestureRecognizerState::new(arena),
             callbacks: Arc::new(Mutex::new(ForcePressCallbacks::default())),
             gesture_state: Arc::new(Mutex::new(ForcePressState::default())),
+            settings: Arc::new(Mutex::new(GestureSettings::default())),
             start_pressure: FORCE_PRESS_START_PRESSURE,
             peak_pressure: FORCE_PRESS_PEAK_PRESSURE,
         })
+    }
+
+    /// Create a new force press recognizer with custom settings
+    pub fn with_settings(
+        arena: crate::arena::GestureArena,
+        settings: GestureSettings,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            state: GestureRecognizerState::new(arena),
+            callbacks: Arc::new(Mutex::new(ForcePressCallbacks::default())),
+            gesture_state: Arc::new(Mutex::new(ForcePressState::default())),
+            settings: Arc::new(Mutex::new(settings)),
+            start_pressure: FORCE_PRESS_START_PRESSURE,
+            peak_pressure: FORCE_PRESS_PEAK_PRESSURE,
+        })
+    }
+
+    /// Get the current gesture settings
+    pub fn settings(&self) -> GestureSettings {
+        self.settings.lock().clone()
+    }
+
+    /// Update gesture settings
+    pub fn set_settings(&self, settings: GestureSettings) {
+        *self.settings.lock() = settings;
     }
 
     /// Set the start pressure threshold (0.0 to 1.0)
@@ -268,7 +298,7 @@ impl ForcePressGestureRecognizer {
         // Check slop - if moved too far, cancel
         if let Some(initial_pos) = self.state.initial_position() {
             let delta = position - initial_pos;
-            if delta.distance() > constants::TAP_SLOP as f32 {
+            if self.settings.lock().exceeds_touch_slop(delta.distance()) {
                 // Moved too far, end the gesture
                 if state.phase == ForcePressPhase::Started || state.phase == ForcePressPhase::Peaked
                 {
@@ -500,6 +530,7 @@ impl std::fmt::Debug for ForcePressGestureRecognizer {
         f.debug_struct("ForcePressGestureRecognizer")
             .field("state", &self.state)
             .field("gesture_state", &self.gesture_state.lock())
+            .field("settings", &self.settings.lock())
             .field("start_pressure", &self.start_pressure)
             .field("peak_pressure", &self.peak_pressure)
             .finish()
@@ -510,7 +541,6 @@ impl std::fmt::Debug for ForcePressGestureRecognizer {
 mod tests {
     use super::*;
     use crate::arena::GestureArena;
-    
 
     #[test]
     fn test_force_press_recognizer_creation() {

@@ -10,10 +10,11 @@
 //!
 //! Flutter reference: https://api.flutter.dev/flutter/gestures/DoubleTapGestureRecognizer-class.html
 
-use super::recognizer::{constants, GestureRecognizer, GestureRecognizerState};
+use super::recognizer::{GestureRecognizer, GestureRecognizerState};
 use crate::arena::GestureArenaMember;
 use crate::events::{PointerEvent, PointerEventExt, PointerType};
 use crate::ids::PointerId;
+use crate::settings::GestureSettings;
 use flui_types::Offset;
 use parking_lot::Mutex;
 use std::sync::Arc;
@@ -63,11 +64,8 @@ pub struct DoubleTapGestureRecognizer {
     /// Current gesture state
     gesture_state: Arc<Mutex<DoubleTapState>>,
 
-    /// Maximum time between taps
-    double_tap_timeout: Duration,
-
-    /// Maximum distance between taps
-    double_tap_slop: f32,
+    /// Gesture settings (device-specific tolerances)
+    settings: Arc<Mutex<GestureSettings>>,
 }
 
 #[derive(Default)]
@@ -125,9 +123,41 @@ impl DoubleTapGestureRecognizer {
             state: GestureRecognizerState::new(arena),
             callbacks: Arc::new(Mutex::new(DoubleTapCallbacks::default())),
             gesture_state: Arc::new(Mutex::new(DoubleTapState::default())),
-            double_tap_timeout: Duration::from_millis(constants::DOUBLE_TAP_TIMEOUT_MS),
-            double_tap_slop: constants::DOUBLE_TAP_SLOP as f32,
+            settings: Arc::new(Mutex::new(GestureSettings::default())),
         })
+    }
+
+    /// Create a new double tap recognizer with custom settings
+    pub fn with_settings(
+        arena: crate::arena::GestureArena,
+        settings: GestureSettings,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            state: GestureRecognizerState::new(arena),
+            callbacks: Arc::new(Mutex::new(DoubleTapCallbacks::default())),
+            gesture_state: Arc::new(Mutex::new(DoubleTapState::default())),
+            settings: Arc::new(Mutex::new(settings)),
+        })
+    }
+
+    /// Get the current gesture settings
+    pub fn settings(&self) -> GestureSettings {
+        self.settings.lock().clone()
+    }
+
+    /// Update gesture settings
+    pub fn set_settings(&self, settings: GestureSettings) {
+        *self.settings.lock() = settings;
+    }
+
+    /// Get the double tap timeout from settings
+    fn double_tap_timeout(&self) -> Duration {
+        self.settings.lock().double_tap_timeout()
+    }
+
+    /// Get the double tap slop from settings
+    fn double_tap_slop(&self) -> f32 {
+        self.settings.lock().double_tap_slop()
     }
 
     /// Set the double tap callback
@@ -165,7 +195,7 @@ impl DoubleTapGestureRecognizer {
                 if let Some(first_time) = state.first_tap_time {
                     let elapsed = Instant::now().duration_since(first_time);
 
-                    if elapsed > self.double_tap_timeout {
+                    if elapsed > self.double_tap_timeout() {
                         // Too slow - start over as first tap
                         state.phase = DoubleTapPhase::FirstDown;
                         state.first_tap_position = Some(position);
@@ -177,7 +207,7 @@ impl DoubleTapGestureRecognizer {
                     // Check distance from first tap
                     if let Some(first_pos) = state.first_tap_position {
                         let distance = (position - first_pos).distance();
-                        if distance > self.double_tap_slop {
+                        if distance > self.double_tap_slop() {
                             // Too far - start over as first tap
                             state.phase = DoubleTapPhase::FirstDown;
                             state.first_tap_position = Some(position);
@@ -281,7 +311,7 @@ impl DoubleTapGestureRecognizer {
             let delta = current_position - initial_pos;
             let distance = delta.distance();
 
-            if distance > constants::TAP_SLOP as f32 {
+            if self.settings.lock().exceeds_touch_slop(distance) {
                 return true; // Moved too far
             }
         }
@@ -296,7 +326,7 @@ impl DoubleTapGestureRecognizer {
         if state.phase == DoubleTapPhase::WaitingForSecond {
             if let Some(first_time) = state.first_tap_time {
                 let elapsed = Instant::now().duration_since(first_time);
-                if elapsed > self.double_tap_timeout {
+                if elapsed > self.double_tap_timeout() {
                     // Timeout - reset to ready
                     state.phase = DoubleTapPhase::Ready;
                     state.first_tap_position = None;
@@ -392,8 +422,7 @@ impl std::fmt::Debug for DoubleTapGestureRecognizer {
         f.debug_struct("DoubleTapGestureRecognizer")
             .field("state", &self.state)
             .field("gesture_state", &self.gesture_state.lock())
-            .field("timeout", &self.double_tap_timeout)
-            .field("slop", &self.double_tap_slop)
+            .field("settings", &self.settings.lock())
             .finish()
     }
 }

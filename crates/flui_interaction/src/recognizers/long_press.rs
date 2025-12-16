@@ -4,17 +4,18 @@
 //!
 //! A long press is defined as:
 //! - Pointer down
-//! - Pointer stays within TAP_SLOP (18px) of initial position
-//! - Pointer held for LONG_PRESS_DURATION_MS (500ms)
+//! - Pointer stays within touch_slop of initial position
+//! - Pointer held for long_press_timeout (default 500ms)
 //! - Optional move updates while pressed
 //! - Pointer up
 //!
 //! Flutter reference: https://api.flutter.dev/flutter/gestures/LongPressGestureRecognizer-class.html
 
-use super::recognizer::{constants, GestureRecognizer, GestureRecognizerState};
+use super::recognizer::{GestureRecognizer, GestureRecognizerState};
 use crate::arena::GestureArenaMember;
 use crate::events::{PointerEvent, PointerType};
 use crate::ids::PointerId;
+use crate::settings::GestureSettings;
 use flui_types::Offset;
 use parking_lot::Mutex;
 use std::sync::Arc;
@@ -99,8 +100,8 @@ pub struct LongPressGestureRecognizer {
     /// Current gesture state
     gesture_state: Arc<Mutex<LongPressState>>,
 
-    /// Minimum duration for long press
-    long_press_duration: Duration,
+    /// Gesture settings (device-specific tolerances)
+    settings: Arc<Mutex<GestureSettings>>,
 }
 
 #[derive(Default)]
@@ -156,8 +157,36 @@ impl LongPressGestureRecognizer {
             state: GestureRecognizerState::new(arena),
             callbacks: Arc::new(Mutex::new(LongPressCallbacks::default())),
             gesture_state: Arc::new(Mutex::new(LongPressState::default())),
-            long_press_duration: Duration::from_millis(constants::LONG_PRESS_DURATION_MS),
+            settings: Arc::new(Mutex::new(GestureSettings::default())),
         })
+    }
+
+    /// Create a new long press recognizer with custom settings
+    pub fn with_settings(
+        arena: crate::arena::GestureArena,
+        settings: GestureSettings,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            state: GestureRecognizerState::new(arena),
+            callbacks: Arc::new(Mutex::new(LongPressCallbacks::default())),
+            gesture_state: Arc::new(Mutex::new(LongPressState::default())),
+            settings: Arc::new(Mutex::new(settings)),
+        })
+    }
+
+    /// Get the current gesture settings
+    pub fn settings(&self) -> GestureSettings {
+        self.settings.lock().clone()
+    }
+
+    /// Update gesture settings
+    pub fn set_settings(&self, settings: GestureSettings) {
+        *self.settings.lock() = settings;
+    }
+
+    /// Get the long press duration from settings
+    fn long_press_duration(&self) -> Duration {
+        self.settings.lock().long_press_timeout()
     }
 
     /// Set the long press down callback (called on initial contact)
@@ -271,7 +300,7 @@ impl LongPressGestureRecognizer {
                 // Check if timer elapsed
                 if let Some(down_time) = state.down_time {
                     let elapsed = Instant::now().duration_since(down_time);
-                    if elapsed >= self.long_press_duration {
+                    if elapsed >= self.long_press_duration() {
                         // Timer elapsed! Start long press
                         state.phase = LongPressPhase::Started;
                         state.current_position = Some(position);
@@ -378,7 +407,7 @@ impl LongPressGestureRecognizer {
             let delta = current_position - initial_pos;
             let distance = delta.distance();
 
-            if distance > constants::TAP_SLOP as f32 {
+            if self.settings.lock().exceeds_touch_slop(distance) {
                 return true; // Moved too far
             }
         }
@@ -393,7 +422,7 @@ impl LongPressGestureRecognizer {
         if state.phase == LongPressPhase::Possible {
             if let Some(down_time) = state.down_time {
                 let elapsed = Instant::now().duration_since(down_time);
-                if elapsed >= self.long_press_duration {
+                if elapsed >= self.long_press_duration() {
                     // Timer elapsed! Start long press
                     state.phase = LongPressPhase::Started;
 
@@ -505,7 +534,7 @@ impl std::fmt::Debug for LongPressGestureRecognizer {
         f.debug_struct("LongPressGestureRecognizer")
             .field("state", &self.state)
             .field("gesture_state", &self.gesture_state.lock())
-            .field("duration", &self.long_press_duration)
+            .field("settings", &self.settings.lock())
             .finish()
     }
 }
