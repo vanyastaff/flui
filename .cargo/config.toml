@@ -1,5 +1,78 @@
 # Cargo configuration for FLUI workspace
+# https://doc.rust-lang.org/cargo/reference/config.html
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# Build settings
+# ═══════════════════════════════════════════════════════════════════════════════
 [build]
-# Use all available CPU cores for parallel compilation
-jobs = 4
+# Use all available CPU cores
+jobs = 8
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Linker configuration - faster linking
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Windows - use native MSVC linker (faster than GNU ld)
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "link-arg=/DEBUG:NONE"]  # Faster release builds
+
+# Linux - use mold linker if available (10x faster than ld)
+[target.x86_64-unknown-linux-gnu]
+linker = "clang"
+rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+
+# macOS - use lld linker
+[target.x86_64-apple-darwin]
+rustflags = ["-C", "link-arg=-fuse-ld=lld"]
+
+[target.aarch64-apple-darwin]
+rustflags = ["-C", "link-arg=-fuse-ld=lld"]
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Android NDK targets
+# ═══════════════════════════════════════════════════════════════════════════════
+[target.aarch64-linux-android]
+# linker = "path/to/ndk/toolchains/llvm/prebuilt/windows-x86_64/bin/aarch64-linux-android21-clang"
+
+[target.armv7-linux-androideabi]
+# linker = "path/to/ndk/toolchains/llvm/prebuilt/windows-x86_64/bin/armv7a-linux-androideabi21-clang"
+
+[target.x86_64-linux-android]
+# linker = "path/to/ndk/toolchains/llvm/prebuilt/windows-x86_64/bin/x86_64-linux-android21-clang"
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# WASM target
+# ═══════════════════════════════════════════════════════════════════════════════
+[target.wasm32-unknown-unknown]
+rustflags = ["-C", "target-feature=+atomics,+bulk-memory,+mutable-globals"]
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Profile-specific rustflags
+# ═══════════════════════════════════════════════════════════════════════════════
+[profile.dev]
+# Split debug info for faster incremental builds (Linux/macOS)
+# split-debuginfo = "unpacked"
+
+[profile.release]
+# LTO for release builds (better optimization, slower compile)
+# lto = "thin"
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Registry settings
+# ═══════════════════════════════════════════════════════════════════════════════
+[registries.crates-io]
+protocol = "sparse"  # Faster index updates
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Network settings
+# ═══════════════════════════════════════════════════════════════════════════════
+[net]
+retry = 3
+git-fetch-with-cli = false
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Environment variables for build scripts
+# ═══════════════════════════════════════════════════════════════════════════════
+[env]
+# Faster shader compilation for wgpu
+# WGPU_BACKEND = "vulkan"  # or "dx12" on Windows
