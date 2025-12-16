@@ -30,6 +30,7 @@
 //! ### Clip Layers
 //! - **ClipRectLayer**: Rectangular clipping
 //! - **ClipRRectLayer**: Rounded rectangle clipping
+//! - **ClipSuperellipseLayer**: iOS-style squircle clipping
 //! - **ClipPathLayer**: Arbitrary path clipping
 //!
 //! ### Transform Layers
@@ -115,6 +116,7 @@ pub use layer::{
     ClipPathLayer,
     ClipRRectLayer,
     ClipRectLayer,
+    ClipSuperellipseLayer,
     ColorFilterLayer,
     // Linking layers
     FollowerLayer,
@@ -206,7 +208,7 @@ pub mod prelude {
     };
 
     // Clip layers
-    pub use crate::{ClipPathLayer, ClipRRectLayer, ClipRectLayer};
+    pub use crate::{ClipPathLayer, ClipRRectLayer, ClipRectLayer, ClipSuperellipseLayer};
 
     // Transform layers
     pub use crate::{OffsetLayer, TransformLayer};

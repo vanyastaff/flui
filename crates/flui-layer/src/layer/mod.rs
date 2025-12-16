@@ -12,6 +12,7 @@
 //! ## Clip Layers
 //! - **ClipRectLayer**: Rectangular clipping
 //! - **ClipRRectLayer**: Rounded rectangle clipping
+//! - **ClipSuperellipseLayer**: iOS-style squircle clipping
 //! - **ClipPathLayer**: Arbitrary path clipping
 //!
 //! ## Transform Layers
@@ -64,6 +65,7 @@ mod texture;
 mod clip_path;
 mod clip_rect;
 mod clip_rrect;
+mod clip_superellipse;
 
 // Transform layers
 mod offset;
@@ -98,6 +100,7 @@ pub use canvas::CanvasLayer;
 pub use clip_path::ClipPathLayer;
 pub use clip_rect::ClipRectLayer;
 pub use clip_rrect::ClipRRectLayer;
+pub use clip_superellipse::ClipSuperellipseLayer;
 pub use color_filter::ColorFilterLayer;
 pub use follower::FollowerLayer;
 pub use image_filter::ImageFilterLayer;
@@ -199,6 +202,9 @@ pub enum Layer {
     /// Clip to arbitrary path
     ClipPath(ClipPathLayer),
 
+    /// Clip to superellipse (iOS-style squircle)
+    ClipSuperellipse(ClipSuperellipseLayer),
+
     // ========== Transform Layers ==========
     /// Simple offset/translation
     Offset(OffsetLayer),
@@ -247,6 +253,7 @@ impl Layer {
             Layer::ClipRect(layer) => Some(layer.bounds()),
             Layer::ClipRRect(layer) => Some(layer.bounds()),
             Layer::ClipPath(layer) => Some(layer.bounds()),
+            Layer::ClipSuperellipse(layer) => Some(layer.bounds()),
             Layer::Offset(_) => None,      // Offset doesn't define bounds
             Layer::Transform(_) => None,   // Transform doesn't define bounds
             Layer::Opacity(_) => None,     // Opacity doesn't define bounds
@@ -274,6 +281,7 @@ impl Layer {
             Layer::ClipRect(layer) => layer.is_anti_aliased(),
             Layer::ClipRRect(layer) => layer.is_anti_aliased(),
             Layer::ClipPath(layer) => layer.is_anti_aliased(),
+            Layer::ClipSuperellipse(layer) => layer.is_anti_aliased(),
             Layer::Offset(_) => false, // Simple translation, no compositing
             Layer::Transform(layer) => !layer.is_translation_only(),
             Layer::Opacity(layer) => layer.needs_compositing(),
@@ -319,12 +327,21 @@ impl Layer {
         matches!(self, Layer::ClipPath(_))
     }
 
+    /// Returns true if this is a clip superellipse layer.
+    #[inline]
+    pub fn is_clip_superellipse(&self) -> bool {
+        matches!(self, Layer::ClipSuperellipse(_))
+    }
+
     /// Returns true if this is any clip layer.
     #[inline]
     pub fn is_clip(&self) -> bool {
         matches!(
             self,
-            Layer::ClipRect(_) | Layer::ClipRRect(_) | Layer::ClipPath(_)
+            Layer::ClipRect(_)
+                | Layer::ClipRRect(_)
+                | Layer::ClipPath(_)
+                | Layer::ClipSuperellipse(_)
         )
     }
 
@@ -500,6 +517,24 @@ impl Layer {
     pub fn as_clip_path_mut(&mut self) -> Option<&mut ClipPathLayer> {
         match self {
             Layer::ClipPath(layer) => Some(layer),
+            _ => None,
+        }
+    }
+
+    /// Returns the clip superellipse layer if this is one.
+    #[inline]
+    pub fn as_clip_superellipse(&self) -> Option<&ClipSuperellipseLayer> {
+        match self {
+            Layer::ClipSuperellipse(layer) => Some(layer),
+            _ => None,
+        }
+    }
+
+    /// Returns the clip superellipse layer mutably if this is one.
+    #[inline]
+    pub fn as_clip_superellipse_mut(&mut self) -> Option<&mut ClipSuperellipseLayer> {
+        match self {
+            Layer::ClipSuperellipse(layer) => Some(layer),
             _ => None,
         }
     }
@@ -771,6 +806,12 @@ impl From<ClipPathLayer> for Layer {
     }
 }
 
+impl From<ClipSuperellipseLayer> for Layer {
+    fn from(layer: ClipSuperellipseLayer) -> Self {
+        Layer::ClipSuperellipse(layer)
+    }
+}
+
 impl From<OffsetLayer> for Layer {
     fn from(layer: OffsetLayer) -> Self {
         Layer::Offset(layer)
@@ -872,6 +913,12 @@ impl LayerBounds for ClipRRectLayer {
 }
 
 impl LayerBounds for ClipPathLayer {
+    fn bounds(&self) -> Rect {
+        self.bounds()
+    }
+}
+
+impl LayerBounds for ClipSuperellipseLayer {
     fn bounds(&self) -> Rect {
         self.bounds()
     }
