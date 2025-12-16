@@ -1,30 +1,70 @@
-# cargo-deny configuration for v0.16.x
+# cargo-deny configuration
 # https://embarkstudios.github.io/cargo-deny/
+#
+# Run: cargo deny check
+# Or:  cargo deny check advisories
+#      cargo deny check bans
+#      cargo deny check licenses
+#      cargo deny check sources
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# Advisories - Security vulnerability database checks
+# ═══════════════════════════════════════════════════════════════════════════════
 [advisories]
 db-path = "~/.cargo/advisory-db"
 db-urls = ["https://github.com/rustsec/advisory-db"]
+# Warn on yanked crates
 yanked = "warn"
+# Fail CI on any vulnerability
+vulnerability = "deny"
+# Warn on unmaintained crates
+unmaintained = "warn"
+# Warn on crates with unsound code
+unsound = "warn"
+# Ignore specific advisories (add IDs here if needed)
+ignore = []
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# Licenses - Allowed open source licenses
+# ═══════════════════════════════════════════════════════════════════════════════
 [licenses]
+# Confidence threshold for license detection
 confidence-threshold = 0.8
+# List of allowed licenses (SPDX identifiers)
 allow = [
+    # Permissive licenses
     "MIT",
     "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
     "BSD-2-Clause",
     "BSD-3-Clause",
+    "BSL-1.0",          # Boost
     "ISC",
-    "Unlicense",
     "Zlib",
     "0BSD",
+
+    # Public domain
+    "Unlicense",
     "CC0-1.0",
+
+    # Copyleft (weak) - OK for libraries
     "MPL-2.0",
+
+    # Unicode/Font licenses
     "Unicode-3.0",
     "Unicode-DFS-2016",
-    "BSL-1.0",
-    "OFL-1.1",
+    "OFL-1.1",          # Open Font License
+]
+# Deny copyleft licenses that would require source disclosure
+deny = [
+    "GPL-2.0",
+    "GPL-3.0",
+    "AGPL-3.0",
+    "LGPL-2.0",
+    "LGPL-3.0",
 ]
 
+# Clarifications for crates with non-standard license files
 [[licenses.clarify]]
 name = "ring"
 expression = "MIT AND ISC AND OpenSSL"
@@ -35,12 +75,55 @@ name = "encoding_rs"
 expression = "(Apache-2.0 OR MIT) AND BSD-3-Clause"
 license-files = [{ path = "COPYRIGHT", hash = 0x39f8ad31 }]
 
-[bans]
-multiple-versions = "warn"
-wildcards = "allow"
-highlight = "all"
+[[licenses.clarify]]
+name = "webpki"
+expression = "ISC"
+license-files = [{ path = "LICENSE", hash = 0x001c7e6c }]
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# Bans - Crate restrictions and duplicate detection
+# ═══════════════════════════════════════════════════════════════════════════════
+[bans]
+# Warn on multiple versions of the same crate
+multiple-versions = "warn"
+# Allow wildcard dependencies (common in workspace)
+wildcards = "allow"
+# Highlight all duplicates in output
+highlight = "all"
+# Workspace crate handling
+workspace-default-features = "allow"
+external-default-features = "allow"
+
+# Deny specific crates (unmaintained, insecure, or problematic)
+deny = [
+    # Unmaintained crates with better alternatives
+    { name = "atty", wrappers = ["is-terminal"] },           # Use is-terminal
+    { name = "instant", wrappers = ["web-time"] },           # Use web-time
+
+    # Security concerns
+    { name = "openssl" },                   # Prefer rustls
+    { name = "native-tls" },                # Prefer rustls
+]
+
+# Skip duplicate checks for specific crates (if unavoidable)
+skip = []
+
+# Tree-skip: skip checking duplicates in specific dependency trees
+skip-tree = []
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Sources - Allowed crate registries and git sources
+# ═══════════════════════════════════════════════════════════════════════════════
 [sources]
-unknown-registry = "warn"
+# Deny crates from unknown registries
+unknown-registry = "deny"
+# Warn on git dependencies (prefer published crates)
 unknown-git = "warn"
+# Allowed registries
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+# Allowed git sources (add trusted repos here if needed)
+allow-git = []
+
+# Organization-level git allowances
+[sources.allow-org]
+# github = ["anthropics", "ArroyoSystems"]
