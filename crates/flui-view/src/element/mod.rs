@@ -1,30 +1,14 @@
-//! Element types for the view layer.
+//! Element system - mutable tree nodes that manage View lifecycle.
 //!
-//! This module provides ViewElement and related types for managing
-//! component views in the element tree.
-//!
-//! # Key Types
-//!
-//! - [`ViewElement`] - Element for component views (Stateless, Stateful, Provider)
-//! - [`ViewLifecycle`] - Lifecycle states (Initial, Active, Inactive, Defunct)
-//! - [`ViewFlags`] / [`AtomicViewFlags`] - Lock-free dirty tracking
-//!
-//! # Architecture
-//!
-//! ViewElement is independent of flui-element's Element type, allowing
-//! flui-view to be a lower-level dependency. The element tree in flui-element
-//! can wrap ViewElement in its Element enum.
-//!
-//! ```text
-//! flui-view (ViewElement, ViewLifecycle, ViewFlags)
-//!     ↓
-//! flui-element (Element enum wraps ViewElement)
-//! ```
+//! Elements are the retained, mutable counterparts to immutable Views.
+//! They manage:
+//! - View lifecycle (mount, build, update, unmount)
+//! - State persistence (for StatefulViews)
+//! - Child element relationships
+//! - RenderObject connections
 
-mod flags;
 mod lifecycle;
-mod view_element;
 
-pub use flags::{AtomicViewFlags, ViewFlags};
-pub use lifecycle::ViewLifecycle;
-pub use view_element::{PendingChildren, ViewElement};
+pub use lifecycle::Lifecycle;
+
+// Element trait and implementations will be added in later phases

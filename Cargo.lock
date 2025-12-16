@@ -443,6 +443,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "flui-view"
+version = "0.1.0"
+dependencies = [
+ "bitflags",
+ "flui-foundation",
+ "flui-tree",
+ "flui_interaction",
+ "flui_rendering",
+ "flui_types",
+ "parking_lot",
+ "slab",
+ "tracing",
+]
+
+[[package]]
 name = "flui_animation"
 version = "0.1.0"
 dependencies = [
