@@ -5,6 +5,8 @@
 use std::any::Any;
 use std::fmt::Debug;
 
+use flui_foundation::SemanticsId;
+
 use crate::lifecycle::BaseRenderObject;
 use crate::parent_data::ParentData;
 use crate::pipeline::PipelineOwner;
@@ -789,12 +791,12 @@ pub trait RenderObject: Debug + Send + Sync + 'static {
         &self,
         node: &mut SemanticsNode,
         config: &SemanticsConfiguration,
-        children: Vec<SemanticsNode>,
+        children: Vec<SemanticsId>,
     ) {
         // Default implementation: copy config to node and add children
         node.set_config(config.clone());
-        for child in children {
-            node.add_child(child.id());
+        for child_id in children {
+            node.add_child(child_id);
         }
     }
 

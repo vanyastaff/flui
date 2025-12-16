@@ -73,9 +73,10 @@ pub mod layout;
 pub mod painting;
 pub mod physics;
 pub mod platform;
-pub mod semantics;
 pub mod styling;
 pub mod typography;
+
+// Note: Semantics types are in flui-semantics crate
 
 // Re-exports for convenience - Most commonly used types
 pub use events::{Event, KeyEvent, PointerEvent, PointerEventData, Theme, WindowEvent};

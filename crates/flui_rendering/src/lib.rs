@@ -60,7 +60,8 @@ pub mod objects;
 pub mod parent_data;
 pub mod pipeline;
 pub mod protocol;
-pub mod semantics;
+/// Re-export semantics from flui-semantics crate.
+pub use flui_semantics as semantics;
 pub mod traits;
 pub mod tree;
 pub mod view;
@@ -116,8 +117,7 @@ pub mod prelude {
     pub use crate::pipeline::{Canvas, Paint, PaintStyle, PaintingContext, PipelineOwner};
     pub use crate::protocol::{BoxProtocol, Protocol, SliverProtocol};
     pub use crate::semantics::{
-        SemanticsAction, SemanticsConfiguration, SemanticsNode, SemanticsNodeId, SemanticsOwner,
-        SemanticsUpdate,
+        SemanticsAction, SemanticsConfiguration, SemanticsNode, SemanticsOwner, SemanticsUpdate,
     };
     pub use crate::traits::{
         MultiChildRenderBox, RenderAligningShiftedBox, RenderBox, RenderObject, RenderObjectExt,
@@ -130,6 +130,7 @@ pub mod prelude {
         RevealedOffset, ScrollDirection, ScrollableViewportOffset, SliverPaintOrder,
         ViewConfiguration, ViewportOffset,
     };
+    pub use flui_foundation::SemanticsId;
 
     // Constraints from this crate
     pub use crate::constraints::{BoxConstraints, Constraints, SliverConstraints, SliverGeometry};
