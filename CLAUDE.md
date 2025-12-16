@@ -23,421 +23,340 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## AI Assistant Guidelines
 
-### Context7 MCP Integration
+### MCP Servers
 
-**ALWAYS use Context7 MCP tools** when you need:
-- Code generation involving external libraries
-- Setup or configuration steps for dependencies
-- Library or API documentation
-- Understanding how to use a specific crate or API
+**Context7** - Library documentation (wgpu, lyon, glam, etc.):
+- `mcp__context7__resolve_library_id(libraryName)` - Get library ID
+- `mcp__context7__get_library_docs(context7CompatibleLibraryID, topic, mode)` - Fetch docs
+- Use proactively when external library is mentioned
 
-**Automatically use Context7 tools to:**
-1. Resolve library IDs using `mcp__context7__resolve_library_id`
-2. Get library documentation using `mcp__context7__get_library_docs`
+**Filesystem MCP** - Advanced operations:
+- `mcp__filesystem__read_multiple_files` - Batch read (preferred for multiple files)
+- `mcp__filesystem__directory_tree` - JSON directory structure
+- `mcp__filesystem__search_files` - Glob-based search
 
-**You should do this proactively** without waiting for the user to explicitly ask. When the user mentions a library, crate, or API, immediately fetch its documentation.
+**Sequential Thinking** - Complex problem solving:
+- `mcp__sequential_thinking__sequentialthinking` - Multi-step reasoning
+- Use for architecture decisions, refactorings, debugging
 
 ## Project Overview
 
-FLUI is a modular, Flutter-inspired declarative UI framework for Rust, featuring the proven three-tree architecture (View → Element → Render) with modern Rust idioms. Built with wgpu for high-performance GPU-accelerated rendering and structured as a collection of focused, composable crates.
+FLUI is a modular, Flutter-inspired declarative UI framework for Rust, featuring the proven three-tree architecture (View → Element → Render) with modern Rust idioms. Built with wgpu for high-performance GPU-accelerated rendering.
 
 **Key Architecture:**
 ```
 View Tree (immutable) → Element Tree (mutable) → Render Tree (layout/paint)
 ```
 
-**Modular Design:** FLUI is organized into 20+ specialized crates:
-- **Foundation Layer:** `flui_types`, `flui-foundation`, `flui-tree`
-- **Framework Layer:** `flui-view`, `flui-pipeline`, `flui-reactivity`, `flui-scheduler`, `flui_core`
-- **Rendering Layer:** `flui_painting`, `flui_engine`, `flui_rendering`
-- **Widget Layer:** `flui_widgets`, `flui_animation`, `flui_interaction`
-- **Application Layer:** `flui_app`, `flui_assets`
-- **Development Tools:** `flui_devtools`, `flui_cli`, `flui_build`
+**Modular Design:** 20+ specialized crates organized in layers:
+- **Foundation:** `flui_types`, `flui-foundation`, `flui-tree`
+- **Framework:** `flui-view`, `flui-pipeline`, `flui-reactivity`, `flui-scheduler`, `flui_core`
+- **Rendering:** `flui_painting`, `flui_engine`, `flui_rendering`
+- **Widget:** `flui_widgets`, `flui_animation`, `flui_interaction`
+- **Application:** `flui_app`, `flui_assets`
+- **Tools:** `flui_devtools`, `flui_cli`, `flui_build`
 
-**Thread-Safety:** FLUI is fully thread-safe with reactive state management using Copy-based signals and parking_lot synchronization.
+### Flutter Reference Sources
+
+`.flutter/` directory contains Flutter framework source code for reference:
+- `.flutter/src/rendering/` - RenderObject implementations
+- `.flutter/src/widgets/` - Widget and Element implementations
+- `.flutter/rendering.dart`, `widgets.dart`, `animation.dart` - API overview
+
+**Usage:** Check Flutter's approach before implementing new features, then adapt to Rust idioms (type-safe arity, Ambassador delegation, no nullability).
+
+### Current Development Focus
+
+**IMPORTANT:** Workspace focused on `flui_rendering` development. Many crates temporarily disabled in `Cargo.toml`.
+
+**Active crates:**
+- Foundation: `flui_types`, `flui-foundation`, `flui-tree`
+- Core: `flui-layer`, `flui-semantics`, `flui_interaction`, `flui_painting`
+- Target: `flui_rendering` (ACTIVE DEVELOPMENT)
 
 ## Essential Build Commands
 
-### Quick Commands
-
 ```bash
-# Build entire workspace
+# Quick commands
 cargo build --workspace
-
-# Run tests
 cargo test --workspace
-
-# Run specific example
-cargo run --example counter_reactive
-
-# Lint and format
 cargo clippy --workspace -- -D warnings
 cargo fmt --all
+cargo check -p flui_rendering
 
-# Cross-platform builds (Android, Web, Desktop)
-cargo xtask build android --release
-cargo xtask build web --release
-cargo xtask build desktop --release
-```
-
-### Building Individual Crates (Dependency Order)
-
-When making structural changes, build crates in dependency order:
-
-```bash
-# Foundation Layer (no dependencies)
+# Dependency order (Foundation → Core → Rendering)
 cargo build -p flui_types
 cargo build -p flui-foundation
 cargo build -p flui-tree
-
-# Framework Layer (depends on foundation)
-cargo build -p flui-view
-cargo build -p flui-pipeline
-cargo build -p flui-reactivity
-cargo build -p flui-scheduler
-cargo build -p flui_core
-
-# Rendering Layer (depends on framework)
-cargo build -p flui_painting
-cargo build -p flui_engine
 cargo build -p flui_rendering
 
-# Widget & Application Layer (depends on rendering)
-cargo build -p flui_widgets
-cargo build -p flui_app
-```
-
-### Running Tests
-
-```bash
-# Test all crates
-cargo test --workspace
-
 # Test specific crate
-cargo test -p flui-foundation
-cargo test -p flui-reactivity
-cargo test -p flui_core
-
-# Run a single test by name
 cargo test -p flui_rendering test_layout_constraints
-
-# Run tests with output (nocapture)
-cargo test -p flui_core -- --nocapture
-
-# Run with logging
-RUST_LOG=debug cargo test -p flui_core
+cargo test -p flui_rendering -- --nocapture
+RUST_LOG=debug cargo test -p flui_rendering
 ```
 
-### Useful Cargo Aliases
-
-Defined in `.cargo/config.toml`:
+### Slash Commands
 
 ```bash
-# Cross-platform builds
-cargo build-android-release
-cargo build-web-release
-cargo build-desktop-release
+/flui:build-crate <name>    # Build crate with deps
+/flui:test-crate <name>     # Test specific crate
+/flui:run-example <name>    # Run example with timeout
+/flui:check-tree            # Verify three-tree architecture
+/flui:deps                  # Analyze dependencies
+/flui:lint                  # Lint workspace
+/flui:new-widget <name>     # Create new widget
+/flui:profile               # Profile performance
+/flui:android               # Build for Android
 
-# Development
-cargo dev-android --logcat
-cargo dev-web
-
-# Quality
-cargo lint                    # Run clippy
-cargo lint-fix               # Auto-fix clippy warnings
-cargo fmt-check              # Check formatting
+/openspec:proposal          # Create change proposal
+/openspec:apply <name>      # Apply approved change
+/openspec:archive <name>    # Archive deployed change
 ```
-
-For complete build instructions including cross-platform builds, see **[BUILD.md](BUILD.md)**.
 
 ## Code Architecture
 
 ### Three-Tree System
 
-**View Tree (Immutable):**
-- Views implement traits from `flui-view` crate
-- Single `build()` method returns `impl IntoElement`
-- Views must be `'static` but NOT necessarily `Clone`
+**View Tree:** Immutable configuration, implements `View` trait, single `build()` method
+**Element Tree:** Mutable state, stored in Slab, `ElementId` uses NonZeroUsize (Option<ElementId> = 8 bytes)
+**Render Tree:** Layout/paint, arity-based type safety: `Leaf`, `Single`, `Optional`, `Variable`
 
-**Element Tree (Mutable):**
-- Stored using tree abstractions from `flui-tree` crate
-- Element identification and lifecycle managed by `flui-foundation`
-- ElementId uses `NonZeroUsize` for niche optimization (Option<ElementId> = 8 bytes)
+### Render Tree Architecture
 
-**Render Tree (Layout/Paint):**
-- Arity system for compile-time child count validation: `Leaf` (0), `Single` (1), `Optional` (0-1), `Variable` (N)
-- `RenderBox<A>` trait parameterized by arity type for type-safe child access
-- Uses GAT (Generic Associated Types) for type-safe metadata
-- Pipeline coordination handled by `flui-pipeline` crate
-
-### Element Architecture (v0.7.0)
-
-**Unified Element Struct:**
 ```rust
-pub struct Element {
-    // Tree position
-    parent: Option<ElementId>,
-    children: Vec<ElementId>,
+pub trait RenderObject {
+    fn attach(&mut self, owner: PipelineOwner);
+    fn detach(&mut self);
+    fn mark_needs_layout(&mut self);
+    fn layout(&mut self, constraints: Constraints);
+    fn paint(&self, context: &mut PaintContext);
+}
 
-    // Lifecycle
-    lifecycle: ElementLifecycle,
-
-    // Type-erased behavior
-    view_object: Box<dyn ViewObject>,
+pub trait RenderBox<A: Arity>: RenderObject {
+    fn perform_layout(&mut self);
+    fn compute_intrinsic_size(&self, axis: Axis) -> f32;
 }
 ```
 
-**Key Benefits:**
-- ✅ Single struct instead of enum - no dispatch overhead
-- ✅ All type-specific behavior in ViewObject trait
-- ✅ Extensible - add new view types without changing Element
-- ✅ Flutter-like architecture with Rust idioms
+**Arity System:**
+- `Leaf` - No children (Text, Image)
+- `Single` - Exactly one child (Center, Padding)
+- `Optional` - Zero or one child (Container)
+- `Variable` - N children (Row, Column, Stack)
+
+**BoxChild Container:**
+```rust
+pub struct RenderPadding {
+    child: BoxChild<Single>,  // Type-safe single child
+}
+
+pub struct RenderFlex {
+    children: BoxChild<Variable>,  // Type-safe variable children
+}
+```
 
 ### Pipeline Architecture
 
-The rendering pipeline has three phases coordinated by abstract traits from `flui-pipeline`:
+Three phases: **Build** → **Layout** → **Paint**
 
-1. **Build Phase:** Implements `BuildPhase` trait for widget rebuilds
-2. **Layout Phase:** Implements `LayoutPhase` trait for size computation
-3. **Paint Phase:** Implements `PaintPhase` trait for layer generation
-
-**Architecture Benefits:**
-- **Extensible:** Implement custom pipeline phases
-- **Testable:** Abstract traits enable easy mocking
-- **Flexible:** Different coordinators for different use cases
-- **Thread-safe:** Built-in support for parallel processing
-
-For detailed architecture documentation, see **[docs/arch/](docs/arch/)**.
+Coordinated by abstract traits from `flui-pipeline`:
+- `BuildPhase` - Widget rebuilds
+- `LayoutPhase` - Size computation
+- `PaintPhase` - Layer generation
 
 ## Logging and Debugging
 
-### Always Use Tracing
-
-**IMPORTANT:** Always use `tracing` for logging, NEVER use `println!` or `eprintln!`.
-
-FLUI uses **tracing-forest** for hierarchical logging with automatic timing:
+**CRITICAL:** Always use `tracing`, NEVER `println!` or `eprintln!`.
 
 ```rust
-// Initialize at program start (Development mode)
-use flui_core::logging::{init_logging, LogConfig, LogMode};
+// Initialize
+use tracing_forest::ForestLayer;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-init_logging(LogConfig::new(LogMode::Development));
+tracing_subscriber::registry()
+    .with(ForestLayer::default())
+    .init();
 
-// Use throughout code with #[instrument] for automatic timing
+// Use #[instrument] for automatic timing
 #[tracing::instrument]
 fn render_frame(num: u32) {
     tracing::info!("Starting frame");
-    // Spans automatically show [ duration | percentage ]
 }
 
-// Or use manual logging
+// Manual logging
 tracing::debug!(count = 1, "Layout complete");
-tracing::warn!("Layout phase skipped: needs_layout() returned false");
+tracing::warn!("Layout phase skipped");
 ```
-
-**Output example:**
-```
-INFO    render_frame [ 11.2ms | 100.00% ] num: 0
-INFO    ┝━ build_phase [ 5.18ms | 46.26% ]
-DEBUG   │  ┕━ Build complete count: 1
-INFO    ┝━ layout_phase [ 3.49ms | 31.16% ]
-DEBUG   │  ┕━ Layout complete count: 1
-INFO    ┕━ paint_phase [ 2.51ms | 22.40% ]
-```
-
-### Cross-Platform Logging (flui_log)
-
-FLUI provides platform-specific logging through the `flui_log` crate:
-
-```rust
-use flui_log::{init_logger, LogConfig};
-
-// Initialize platform-specific logger
-init_logger(LogConfig::default().with_app_name("MyApp"));
-
-// Use standard tracing macros
-tracing::info!("Application started");
-```
-
-**Platform Support:**
-- **Android**: Redirects to logcat
-- **iOS**: Redirects to NSLog/OSLog
-- **Desktop/Web**: Uses tracing-subscriber
 
 ## Important Codebase Conventions
 
-### BuildContext is Read-Only
+### ID Offset Pattern
 
-`BuildContext` is intentionally read-only during build to enable parallel builds:
+**CRITICAL:** Slab uses 0-based indices, IDs use 1-based (NonZeroUsize):
 
 ```rust
-// ✅ Correct - Signal handles rebuild scheduling internally
-let signal = use_signal(ctx, 0);
-signal.set(42);  // Triggers rebuild via callback
+// Inserting into Slab:
+let slab_index = self.nodes.insert(node);
+let id = ElementId::new(slab_index + 1)  // +1 for NonZeroUsize
 
-// ❌ Wrong - Don't schedule rebuilds during build
-// ctx.schedule_rebuild();  // This method doesn't exist!
+// Accessing from Slab:
+self.nodes.get(element_id.get() - 1)  // -1 to get slab index
 ```
 
-### Clone is Cheap
+Applies to: `ViewId`, `ElementId`, `RenderId`, `LayerId`, `SemanticsId`.
 
-Views should be cheap to work with:
+### Ambassador Delegation Pattern
 
 ```rust
-// ✅ Good - cheap to use
-struct GoodView {
-    text: String,  // String is cheap to move
-    data: Arc<Vec<i32>>,  // Arc for shared data
+use ambassador::delegatable_trait;
+
+#[delegatable_trait]
+pub trait RenderObject {
+    fn mark_needs_layout(&mut self);
 }
 
-// ❌ Bad - expensive clone if derived
-#[derive(Clone)]
-struct BadView {
-    data: Vec<ComplexStruct>,  // Deep clone every frame!
+#[derive(Delegate)]
+#[delegate(RenderObject, target = "child")]
+pub struct RenderPadding {
+    child: BoxChild<Single>,  // Delegates through BoxChild
 }
 ```
 
-### ElementId Offset Pattern
+### RenderTree Lifecycle
 
-**CRITICAL:** Slab uses 0-based indices but ElementId uses 1-based (NonZeroUsize):
+**Setup:** Create → `attach(owner)` → Set `parent_data`
+**Layout:** Check `needs_layout()` → `layout(constraints)` → `perform_layout()` → Clear flag
+**Paint:** `paint(context)` → Generate layers → Compositor
+**Teardown:** `detach()` → Drop
+
+### Constraints and Sizing
 
 ```rust
-// In element_tree.rs insert():
-let id = self.nodes.insert(node);
-ElementId::new(id + 1)  // +1 because ElementId uses NonZeroUsize
+// Tight constraints (exact size)
+let tight = Constraints::tight(Size::new(100.0, 100.0));
 
-// In element_tree.rs get():
-self.nodes.get(element_id.get() - 1).map(|node| &node.element)  // -1 to access slab
+// Loose constraints (max size)
+let loose = Constraints::loose(Size::new(200.0, 200.0));
+
+// Box constraints
+let box_constraints = BoxConstraints::new(
+    min_width: 0.0,
+    max_width: 100.0,
+    min_height: 0.0,
+    max_height: 100.0,
+);
 ```
 
 ## Common Development Patterns
 
-For common development patterns including:
-- Creating Views and RenderObjects
-- Using reactive state with hooks
-- Working with the Transform API
-- Advanced visual effects (ShaderMask, BackdropFilter)
-- Generic patterns that improve on Flutter's design
+### Creating a RenderObject
 
-See **[docs/arch/PATTERNS.md](docs/arch/PATTERNS.md)**.
+```rust
+use flui_rendering::{RenderObject, RenderBox, BoxChild, Arity};
+use flui_types::{Size, Constraints};
 
-## Feature Flags
+pub struct RenderCustom {
+    child: BoxChild<Single>,
+    size: Size,
+    needs_layout: bool,
+}
 
-### Reactive System
+impl RenderObject for RenderCustom {
+    fn attach(&mut self, owner: PipelineOwner) {
+        self.child.attach(owner);
+    }
 
-```toml
-flui-reactivity = { version = "0.1", features = ["hooks", "async"] }
+    fn mark_needs_layout(&mut self) {
+        self.needs_layout = true;
+    }
+
+    fn layout(&mut self, constraints: Constraints) {
+        if !self.needs_layout { return; }
+        self.perform_layout();
+        self.needs_layout = false;
+    }
+}
+
+impl RenderBox<Single> for RenderCustom {
+    fn perform_layout(&mut self) {
+        let child_size = self.child.layout(constraints);
+        self.size = constraints.constrain(child_size);
+    }
+}
 ```
 
-**Features:**
-- `hooks` - Enable React-style hooks (use_signal, use_effect, etc.)
-- `async` - Enable async utilities and resources
+### Hit Testing
 
-### Pipeline System
+```rust
+use flui_interaction::{HitTestResult, HitTestEntry};
 
-```toml
-flui-pipeline = { version = "0.1", features = ["parallel"] }
+impl RenderCustom {
+    pub fn hit_test(&self, result: &mut HitTestResult, position: Offset) -> bool {
+        if !self.size.contains(position) { return false; }
+
+        // Test children first (reverse paint order)
+        if let Some(child) = &self.child {
+            if child.hit_test(result, position) { return true; }
+        }
+
+        result.add(HitTestEntry::new(self.id()));
+        true
+    }
+}
 ```
-
-**Features:**
-- `parallel` - Enable rayon-based parallel processing
-
-### Rendering Backend
-
-FLUI uses **wgpu** as its only rendering backend for GPU-accelerated graphics:
-
-```toml
-flui = { version = "0.1", features = ["devtools"] }
-```
-
-**Features:**
-- `devtools` - Enable development and debugging tools
-- `full` - Enable all stable features
-
-## Documentation Structure
-
-### Foundation Layer
-- **[flui-foundation/README.md](crates/flui-foundation/README.md)** - Core types and change notification
-- **[flui-tree/README.md](crates/flui-tree/README.md)** - Tree abstractions and visitor patterns
-- **[flui_types/README.md](crates/flui_types/README.md)** - Basic geometry and math
-
-### Framework Layer
-- **[flui-view/README.md](crates/flui-view/README.md)** - View traits and abstractions
-- **[flui-pipeline/README.md](crates/flui-pipeline/README.md)** - Pipeline coordination system
-- **[flui-reactivity/README.md](crates/flui-reactivity/README.md)** - Reactive state management
-- **[flui_core/README.md](crates/flui_core/README.md)** - Core framework implementation
-
-### Architecture Documentation
-- **[docs/arch/README.md](docs/arch/README.md)** - Overall architecture overview
-- **[docs/arch/CORE_ARCHITECTURE.md](docs/arch/CORE_ARCHITECTURE.md)** - Core framework design
-- **[docs/arch/RENDERING_ARCHITECTURE.md](docs/arch/RENDERING_ARCHITECTURE.md)** - Rendering system
-
-### Development Tools
-- **[crates/flui_cli/README.md](crates/flui_cli/README.md)** - CLI tool documentation
-- **[crates/flui_assets/README.md](crates/flui_assets/README.md)** - Asset management system
-
-## Git Workflow
-
-### Commit Message Format
-
-Use conventional commits:
-
-```bash
-git commit -m "feat: Add new widget for user profiles
-
-- Implement ProfileCard view
-- Add avatar support with image loading
-- Add responsive layout for mobile/desktop"
-```
-
-### Branch Structure
-
-- `main` - Primary development branch
-- Feature branches as needed
 
 ## Key Dependencies
 
-- **wgpu 25.x** - Cross-platform GPU API (Vulkan/Metal/DX12/WebGPU). **Note:** Stay on 25.x; wgpu 26.0+ has compilation issues with codespan-reporting
-- **parking_lot 0.12** - High-performance RwLock/Mutex (2-3x faster than std)
+- **wgpu 25.x** - GPU API (stay on 25.x, 26.0+ has codespan-reporting issues)
+- **parking_lot 0.12** - High-performance sync primitives (2-3x faster than std)
 - **tokio 1.43** - Async runtime (LTS until March 2026)
-- **tracing** - Structured logging (always use this, never println!)
-- **glam 0.30** - Math and geometry
-- **lyon** - Path tessellation
-- **glyphon** - GPU text rendering
+- **tracing** - Structured logging (required, never println!)
+- **ambassador 0.4.2** - Trait delegation
+- **slab** - Tree node storage
 
-## Performance Considerations
+**Engine only:** glam 0.30, lyon, glyphon, cosmic-text
 
-- **GPU-Accelerated Rendering**: wgpu provides native GPU performance on all platforms
-- **Copy-based Signals**: Zero-cost reactive primitives with DashMap for lock-free access
-- **Niche Optimization**: Option<ElementId> = 8 bytes (NonZeroUsize)
-- **parking_lot**: 2-3x faster than std sync primitives
-- **Slab**: O(1) insertion/removal with cache-friendly contiguous storage
+## Git Workflow
 
-## Known Issues
+Use conventional commits:
+```bash
+git commit -m "feat: Add new widget
+- Implementation details
+- Additional changes"
+```
 
-### Text Rendering Not Visible
-
-If application runs but text doesn't appear:
-1. Verify layout phase executes (check `needs_layout()` flag)
-2. Ensure `request_layout()` sets both dirty set AND RenderState flag
-3. Add tracing to paint pipeline to verify egui shapes are created
-4. Check for coordinate system issues (text drawn offscreen)
-
-### Hook Panics
-
-If you get "Hook state type mismatch" panics:
-1. Check that hooks are called in the same order every render
-2. Never call hooks conditionally (no `if` around hooks)
-3. Never call hooks in loops with variable iterations
+Types: `feat`, `fix`, `refactor`, `test`, `docs`, `chore`
 
 ## Troubleshooting
 
-### wgpu Compilation Issues
+```bash
+# Clean build
+cargo clean && cargo build --workspace
 
-If you see errors related to `codespan-reporting` or feature flags when upgrading wgpu:
-- Stay on wgpu 25.x (configured in workspace Cargo.toml)
-- See: https://github.com/gfx-rs/wgpu/issues/7915
+# Check workspace
+cargo metadata --format-version 1 | grep -A 5 "workspace_members"
 
-### Build Order Issues
+# Verify crate
+cargo check -p flui_rendering
+cargo clippy -p flui_rendering -- -D warnings
+```
 
-If you encounter confusing type errors after making changes, rebuild crates in dependency order (Foundation → Framework → Rendering → Widget layers) as shown in "Building Individual Crates" section.
+**Common errors:**
+- "package not found" → Check `Cargo.toml` `[workspace.members]`
+- "trait not in scope" → Check prelude: `use flui_rendering::prelude::*;`
+- "mismatched types" with Arity → Verify `BoxChild<Single>` matches `impl RenderBox<Single>`
+
+**wgpu issues:** Stay on 25.x (see https://github.com/gfx-rs/wgpu/issues/7915)
+
+## Development Workflow Tips
+
+1. **Check workspace state** - Use `cargo metadata` or check `Cargo.toml`
+2. **Use slash commands** - Faster than cargo commands
+3. **Enable logging** - `RUST_LOG=debug` catches issues early
+4. **Build in dependency order** - Foundation → Core → Rendering
+5. **Use tracing, not println** - Essential for debugging
+6. **Check OpenSpec** - Large changes need proposals
+7. **Reference Flutter first** - Check `.flutter/` before implementing
+8. **Use Context7 proactively** - Fetch docs for external libraries
+9. **Batch file operations** - `read_multiple_files` for efficiency

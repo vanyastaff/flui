@@ -1,102 +1,102 @@
 {
   "permissions": {
     "allow": [
-      "Bash(cargo run:*)",
+      // === Cargo Commands ===
       "Bash(cargo build:*)",
-      "Bash(grep:*)",
-      "Bash(timeout 5 cargo run:*)",
       "Bash(cargo check:*)",
       "Bash(cargo clippy:*)",
       "Bash(cargo test:*)",
-      "Bash(git add:*)",
-      "Bash(git commit:*)",
-      "Bash(find:*)",
-      "Bash(timeout 5 ./target/debug/examples/counter.exe:*)",
+      "Bash(cargo run:*)",
       "Bash(cargo clean:*)",
-      "Bash(timeout 3 cargo run:*)",
-      "WebSearch",
-      "WebFetch(domain:api.flutter.dev)",
-      "Bash(timeout 60 cargo run:*)",
-      "Bash(git restore:*)",
-      "Bash(timeout 10 cargo run:*)",
-      "Bash(RUST_LOG=debug timeout 5 cargo run:*)",
-      "mcp__context7__resolve-library-id",
-      "mcp__context7__get-library-docs",
-      "mcp__ide__getDiagnostics",
-      "Bash(mkdir:*)",
-      "Bash(cargo doc:*)",
       "Bash(cargo fmt:*)",
+      "Bash(cargo doc:*)",
       "Bash(cargo tree:*)",
-      "Bash(cat:*)",
-      "Bash(tar:*)",
-      "Bash(mv:*)",
-      "Bash(curl:*)",
-      "Bash(\"C:\\Users\\vanya\\AppData\\Local\\Android\\Sdk\\platform-tools\\adb.exe\" shell am start -n com.vanya.flui.counter.debug/android.app.NativeActivity)",
-      "Bash(\"C:\\Users\\vanya\\AppData\\Local\\Android\\Sdk\\platform-tools\\adb.exe\" install -r platformsandroidappbuildoutputsapkdebugapp-debug.apk)",
-      "mcp__filesystem__list_directory",
-      "Bash(./target/release/flui.exe create:*)",
-      "Bash(./gradlew.bat assembleDebug:*)",
-      "Bash(adb:*)",
-      "Bash(cp:*)",
-      "mcp__filesystem__create_directory",
-      "mcp__filesystem__write_file",
-      "mcp__filesystem__read_multiple_files",
-      "WebFetch(domain:flutter.dev)",
-      "mcp__filesystem__edit_file",
-      "mcp__filesystem__read_text_file",
       "Bash(cargo nextest run:*)",
       "Bash(cargo hack check:*)",
+
+      // === Cargo with RUST_LOG ===
+      "Bash(RUST_LOG=debug cargo run:*)",
+      "Bash(RUST_LOG=debug cargo test:*)",
+
+      // === Cargo with timeout ===
+      "Bash(timeout 3 cargo run:*)",
+      "Bash(timeout 5 cargo run:*)",
+      "Bash(timeout 10 cargo run:*)",
+      "Bash(timeout 60 cargo run:*)",
+      "Bash(RUST_LOG=debug timeout 5 cargo run:*)",
+
+      // === Git Commands ===
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git restore:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+
+      // === File Operations ===
+      "Bash(mkdir:*)",
+      "Bash(cp:*)",
+      "Bash(mv:*)",
+      "Bash(cat:*)",
+      "Bash(grep:*)",
+      "Bash(find:*)",
+      "Bash(ls:*)",
+      "Bash(wc:*)",
+
+      // === Network & Downloads ===
+      "Bash(curl:*)",
+      "WebSearch",
+      "WebFetch(domain:api.flutter.dev)",
+      "WebFetch(domain:flutter.dev)",
+      "WebFetch(domain:rust-lang.github.io)",
+      "WebFetch(domain:docs.rs)",
+      "WebFetch(domain:crates.io)",
+
+      // === Android Development ===
+      "Bash(adb:*)",
+      "Bash(./gradlew.bat assembleDebug:*)",
+      "Bash(\"C:\\Users\\vanya\\AppData\\Local\\Android\\Sdk\\platform-tools\\adb.exe\" shell am start -n com.vanya.flui.counter.debug/android.app.NativeActivity)",
+      "Bash(\"C:\\Users\\vanya\\AppData\\Local\\Android\\Sdk\\platform-tools\\adb.exe\" install -r platformsandroidappbuildoutputsapkdebugapp-debug.apk)",
+
+      // === FLUI Executables ===
+      "Bash(./target/debug/examples/counter.exe:*)",
+      "Bash(timeout 5 ./target/debug/examples/counter.exe:*)",
+      "Bash(./target/release/flui.exe create:*)",
+
+      // === MCP Tools: Context7 ===
+      "mcp__context7__resolve-library-id",
+      "mcp__context7__get-library-docs",
+
+      // === MCP Tools: Filesystem ===
+      "mcp__filesystem__read_text_file",
+      "mcp__filesystem__read_multiple_files",
+      "mcp__filesystem__write_file",
+      "mcp__filesystem__edit_file",
+      "mcp__filesystem__list_directory",
+      "mcp__filesystem__directory_tree",
+      "mcp__filesystem__create_directory",
+      "mcp__filesystem__search_files",
+
+      // === MCP Tools: Sequential Thinking ===
+      "mcp__sequential-thinking__sequentialthinking",
+
+      // === Slash Commands: OpenSpec ===
+      "SlashCommand(/openspec:proposal)",
       "SlashCommand(/openspec:apply)",
+      "SlashCommand(/openspec:apply:*)",
       "SlashCommand(/openspec:archive)",
       "SlashCommand(/openspec:archive:*)",
-      "WebFetch(domain:rust-lang.github.io)",
-      "mcp__filesystem__directory_tree",
-      "SlashCommand(/feature-dev:feature-dev Абстракция кроссплатформенного embedder слоя для flui_app с унификацией flui-scheduler и flui_interaction интеграции. Цели: устранить дублирование кода между Desktop/Android embedder, убрать unsafe код в hit testing, создать чистую абстракцию для поддержки новых платформ (iOS, Web, консоли))",
-      "SlashCommand(/feature-dev:feature-dev:*)",
-      "SlashCommand(/openspec:proposal)",
-      "SlashCommand(/openspec:apply refactor-flui-tree-abstractions)",
-      "SlashCommand(/openspec:apply:*)",
-      "Bash(RUST_LOG=debug cargo run:*)"
+
+      // === Slash Commands: FLUI ===
+      "SlashCommand(/flui:*)"
     ],
     "deny": [],
     "ask": []
   },
   "enableAllProjectMcpServers": true,
   "enabledMcpjsonServers": [
-    "filesystem"
-  ],
-  "hooks": {
-    "PostToolUse": [
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "claude-hook-advisor --hook"
-          }
-        ]
-      }
-    ],
-    "PreToolUse": [
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "claude-hook-advisor --hook"
-          }
-        ]
-      }
-    ],
-    "UserPromptSubmit": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "claude-hook-advisor --hook"
-          }
-        ]
-      }
-    ]
-  }
+    "filesystem",
+    "sequential-thinking",
+    "context7"
+  ]
 }
