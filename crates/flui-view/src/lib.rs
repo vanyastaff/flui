@@ -1,50 +1,65 @@
 //! # FLUI View
 //!
-//! View traits and abstractions for the FLUI UI framework.
+//! Flutter-inspired View and Element system for FLUI.
 //!
-//! This crate provides the view layer of FLUI's three-tree architecture,
-//! defining how declarative UI components are structured and built.
-//!
-//! ## Architecture
+//! This crate implements the View layer of FLUI's three-tree architecture:
 //!
 //! ```text
-//! View (immutable config) → Element (mutable state) → RenderObject (layout/paint)
-//! ^^^^^^^^^^^^^^^^^^^^
+//! View (immutable config) → Element (mutable lifecycle) → RenderObject (layout/paint)
+//! ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 //! This crate!
 //! ```
 //!
-//! ## Key Types
+//! ## Architecture
+//!
+//! ### Views (Immutable)
+//!
+//! Views are declarative UI descriptions. They are:
+//! - **Short-lived**: Created each build cycle, used for diffing, then dropped
+//! - **Immutable**: Never mutated after creation
+//! - **Composable**: Build trees of nested Views
+//!
+//! ### Elements (Mutable)
+//!
+//! Elements are the retained tree nodes that manage View lifecycle:
+//! - **Long-lived**: Persist across builds
+//! - **Mutable**: Hold state and manage children
+//! - **Lifecycle**: Handle mount, build, update, unmount
+//!
+//! ## View Types
 //!
 //! - [`StatelessView`] - Views without internal state
 //! - [`StatefulView`] - Views with persistent mutable state
-//! - [`ViewObject`] - Dynamic dispatch interface for all views
-//! - [`BuildContext`] - Context passed during view building
+//! - [`InheritedView`] - Views that provide data to descendants
+//! - [`RenderView`] - Views that create RenderObjects
+//! - [`ProxyView`] - Single-child wrapper Views
 //!
 //! ## Example
 //!
 //! ```rust,ignore
-//! use flui_view::{StatelessView, BuildContext, IntoView};
+//! use flui_view::prelude::*;
 //!
-//! struct Greeting {
-//!     name: String,
+//! struct Counter {
+//!     initial: i32,
 //! }
 //!
-//! impl StatelessView for Greeting {
-//!     fn build(self, ctx: &dyn BuildContext) -> impl IntoView {
-//!         Text::new(format!("Hello, {}!", self.name))
+//! struct CounterState {
+//!     count: i32,
+//! }
+//!
+//! impl StatefulView for Counter {
+//!     type State = CounterState;
+//!
+//!     fn create_state(&self) -> Self::State {
+//!         CounterState { count: self.initial }
 //!     }
 //! }
 //!
-//! // Use the view
-//! let view_obj = Greeting { name: "World".into() }.into_view_wrapped();
-//! ```
-//!
-//! ## Crate Dependencies
-//!
-//! ```text
-//! flui-foundation → flui-tree → flui-view
-//!                                   ↓
-//!                             flui-element (depends on flui-view)
+//! impl ViewState<Counter> for CounterState {
+//!     fn build(&self, view: &Counter, ctx: &dyn BuildContext) -> Box<dyn View> {
+//!         Text::new(format!("Count: {}", self.count)).boxed()
+//!     }
+//! }
 //! ```
 
 #![warn(
@@ -57,93 +72,58 @@
 #![allow(
     clippy::module_name_repetitions,
     clippy::must_use_candidate,
-    clippy::return_self_not_must_use,
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::doc_markdown,
     clippy::module_inception,
     clippy::missing_fields_in_debug,
-    clippy::no_effect
+    clippy::bool_to_int_with_if
 )]
 
 // ============================================================================
-// MODULES
+// Modules
 // ============================================================================
 
-pub mod children;
+pub mod child;
 pub mod context;
 pub mod element;
-pub mod handle;
-pub mod into_view;
-pub mod into_view_config;
-pub mod state;
-pub mod traits;
+pub mod key;
+pub mod owner;
 pub mod tree;
-pub mod view_mode;
-pub mod view_object;
-pub mod wrappers;
-
-mod empty;
+pub mod view;
 
 // ============================================================================
-// RE-EXPORTS
+// Re-exports
 // ============================================================================
-
-// Context (defined in this crate)
-pub use context::BuildContext;
-#[cfg(any(test, feature = "test-utils"))]
-pub use context::MockBuildContext;
-
-// ViewMode (defined in this crate)
-pub use view_mode::ViewMode;
-
-// State
-pub use state::ViewState;
 
 // View traits
-pub use traits::{
-    AnimatedView, Listenable, ProviderView, ProxyView, RenderObjectFor, RenderView,
-    RenderViewConfig, RenderViewExt, RenderViewLeaf, RenderViewWithChild, RenderViewWithChildren,
-    RenderViewWithOptionalChild, StatefulView, StatelessView, UpdateResult,
+pub use view::{
+    BoxedView, ElementBase, InheritedElement, InheritedView, IntoView, ProxyElement, ProxyView,
+    RenderElement, RenderView, StatefulElement, StatefulView, StatelessElement, StatelessView,
+    View, ViewExt, ViewKey, ViewState,
 };
 
-// ViewObject (defined in this crate)
-pub use view_object::ViewObject;
+// Keys
+pub use key::{GlobalKey, GlobalKeyId, ObjectKey, ValueKey};
 
-// Wrappers
-pub use wrappers::{
-    Animated, AnimatedViewWrapper, Provider, ProviderViewWrapper, Proxy, ProxyViewWrapper,
-    Stateful, StatefulViewWrapper, Stateless, StatelessViewWrapper,
-};
+// Child helpers
+pub use child::{Child, Children};
 
-// Empty view
-pub use empty::EmptyView;
+// Element types
+pub use element::Lifecycle;
 
-// IntoView trait
-pub use into_view::IntoView;
+// Context
+pub use context::{BuildContext, BuildContextExt};
 
-// IntoViewConfig trait
-pub use into_view_config::IntoViewConfig;
+// Tree management
+pub use owner::BuildOwner;
+pub use tree::{reconcile_children, ElementNode, ElementTree};
 
-// Children
-pub use children::{Child, Children};
-
-// Re-export from flui-foundation for convenience
+// Re-export from flui-foundation
 pub use flui_foundation::ElementId;
 
-// Re-export key types from flui-foundation
-pub use flui_foundation::{
-    GlobalKey, Key, KeyRef, Keyed, ObjectKey, UniqueKey, ValueKey, ViewKey, WithKey,
-};
-
-// Element types (ViewElement, ViewLifecycle, ViewFlags)
-pub use element::{AtomicViewFlags, PendingChildren, ViewElement, ViewFlags, ViewLifecycle};
-
-// Tree types (ViewTree, ViewNode, ViewId)
-pub use tree::{ViewId, ViewNode, ViewTree};
-
-// Handle types (ViewConfig, ViewHandle with typestate)
-pub use handle::{ViewConfig, ViewHandle};
-
 // ============================================================================
-// PRELUDE
+// Prelude
 // ============================================================================
 
 /// Commonly used types for convenient importing.
@@ -152,21 +132,15 @@ pub use handle::{ViewConfig, ViewHandle};
 /// use flui_view::prelude::*;
 /// ```
 pub mod prelude {
-    pub use crate::context::BuildContext;
-    pub use crate::element::{ViewElement, ViewLifecycle};
-    pub use crate::empty::EmptyView;
-    pub use crate::handle::{ViewConfig, ViewHandle};
-    pub use crate::into_view::IntoView;
-    pub use crate::into_view_config::IntoViewConfig;
-    pub use crate::traits::{
-        AnimatedView, Listenable, ProviderView, ProxyView, StatefulView, StatelessView,
+    pub use crate::child::{Child, Children};
+    pub use crate::context::{BuildContext, BuildContextExt};
+    pub use crate::element::Lifecycle;
+    pub use crate::key::{GlobalKey, GlobalKeyId, ObjectKey, ValueKey};
+    pub use crate::owner::BuildOwner;
+    pub use crate::tree::{reconcile_children, ElementNode, ElementTree};
+    pub use crate::view::{
+        BoxedView, InheritedView, IntoView, ProxyView, RenderView, StatefulView, StatelessView,
+        View, ViewExt, ViewState,
     };
-    pub use crate::view_mode::ViewMode;
-    pub use crate::view_object::ViewObject;
-    pub use crate::wrappers::{Animated, Provider, Proxy, Stateful, Stateless};
-
-    // Re-export key types from flui-foundation
-    pub use flui_foundation::{
-        GlobalKey, Key, KeyRef, Keyed, ObjectKey, UniqueKey, ValueKey, ViewKey, WithKey,
-    };
+    pub use flui_foundation::ElementId;
 }

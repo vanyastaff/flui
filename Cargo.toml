@@ -15,6 +15,9 @@ members = [
     # === Target Crate ===
     "crates/flui_rendering",    # Render tree implementation (ACTIVE DEVELOPMENT)
 
+    # === View Layer ===
+    "crates/flui-view",         # View and Element system (ACTIVE DEVELOPMENT)
+
     # === Animation (for testing) ===
     "crates/flui-scheduler",    # Frame scheduling
     "crates/flui_animation",    # Animation system
