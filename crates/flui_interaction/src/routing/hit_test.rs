@@ -15,8 +15,9 @@
 //! - HitTestResult: gestures/hit_test.dart
 //! - HitTestEntry: gestures/hit_test.dart
 
+use crate::events::CursorIcon;
 use flui_types::{
-    events::{MouseCursor, PointerEvent, ScrollEventData},
+    events::{PointerEvent, ScrollEventData},
     geometry::{Matrix4, Offset},
 };
 use std::sync::Arc;
@@ -105,7 +106,7 @@ pub struct HitTestEntry {
     pub scroll_handler: Option<ScrollEventHandler>,
 
     /// Mouse cursor for this target.
-    pub cursor: MouseCursor,
+    pub cursor: CursorIcon,
 }
 
 impl std::fmt::Debug for HitTestEntry {
@@ -127,7 +128,7 @@ impl HitTestEntry {
             transform: None,
             handler: None,
             scroll_handler: None,
-            cursor: MouseCursor::Defer,
+            cursor: CursorIcon::Default,
         }
     }
 
@@ -138,12 +139,12 @@ impl HitTestEntry {
             transform: None,
             handler: Some(handler),
             scroll_handler: None,
-            cursor: MouseCursor::Defer,
+            cursor: CursorIcon::Default,
         }
     }
 
     /// Builder: set cursor.
-    pub fn cursor(mut self, cursor: MouseCursor) -> Self {
+    pub fn cursor(mut self, cursor: CursorIcon) -> Self {
         self.cursor = cursor;
         self
     }
@@ -354,13 +355,15 @@ impl HitTestResult {
     }
 
     /// Resolves the active mouse cursor.
-    pub fn resolve_cursor(&self) -> MouseCursor {
+    ///
+    /// Returns the first non-default cursor in the path, or `CursorIcon::Default`.
+    pub fn resolve_cursor(&self) -> CursorIcon {
         for entry in &self.path {
-            if !entry.cursor.is_defer() {
+            if entry.cursor != CursorIcon::Default {
                 return entry.cursor;
             }
         }
-        MouseCursor::BASIC
+        CursorIcon::Default
     }
 }
 

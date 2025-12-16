@@ -128,7 +128,7 @@ mod tests {
 
     #[test]
     fn test_key_state() {
-        assert_ne!(KeyState::Pressed, KeyState::Released);
+        assert_ne!(KeyState::Down, KeyState::Up);
     }
 
     #[test]

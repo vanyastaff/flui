@@ -46,7 +46,8 @@ use parking_lot::Mutex;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use flui_types::events::{MouseCursor, PointerEvent};
+use crate::events::CursorIcon;
+use flui_types::events::PointerEvent;
 use flui_types::geometry::Offset;
 
 use crate::ids::{DeviceId, RegionId};
@@ -124,7 +125,7 @@ struct DeviceState {
     /// Set of regions currently under this device
     active_regions: HashSet<RegionId>,
     /// Current mouse cursor for this device
-    current_cursor: MouseCursor,
+    current_cursor: CursorIcon,
 }
 
 /// Global mouse tracker
@@ -137,7 +138,7 @@ pub struct MouseTracker {
 }
 
 /// Callback for cursor changes.
-pub type CursorChangeCallback = Arc<dyn Fn(DeviceId, MouseCursor) + Send + Sync>;
+pub type CursorChangeCallback = Arc<dyn Fn(DeviceId, CursorIcon) + Send + Sync>;
 
 struct MouseTrackerInner {
     /// State for each mouse device
@@ -214,7 +215,7 @@ impl MouseTracker {
                     DeviceState {
                         last_position: Offset::ZERO,
                         active_regions: HashSet::new(),
-                        current_cursor: MouseCursor::BASIC,
+                        current_cursor: CursorIcon::Default,
                     },
                 );
                 return;
@@ -234,7 +235,7 @@ impl MouseTracker {
             .or_insert_with(|| DeviceState {
                 last_position: position,
                 active_regions: HashSet::new(),
-                current_cursor: MouseCursor::BASIC,
+                current_cursor: CursorIcon::Default,
             });
 
         // Build new set of active regions from hit test
@@ -364,14 +365,14 @@ impl MouseTracker {
 
     /// Gets the current cursor for a device.
     ///
-    /// Returns `MouseCursor::BASIC` if the device is not tracked.
-    pub fn device_cursor(&self, device_id: DeviceId) -> MouseCursor {
+    /// Returns `CursorIcon::Default` if the device is not tracked.
+    pub fn device_cursor(&self, device_id: DeviceId) -> CursorIcon {
         self.inner
             .lock()
             .devices
             .get(&device_id)
             .map(|state| state.current_cursor)
-            .unwrap_or(MouseCursor::BASIC)
+            .unwrap_or(CursorIcon::Default)
     }
 
     /// Sets the callback for cursor changes.
@@ -399,7 +400,7 @@ impl MouseTracker {
     /// Gets the current cursor for the primary mouse device (device 0).
     ///
     /// This is a convenience method for single-mouse scenarios.
-    pub fn current_cursor(&self) -> MouseCursor {
+    pub fn current_cursor(&self) -> CursorIcon {
         self.device_cursor(0)
     }
 }
