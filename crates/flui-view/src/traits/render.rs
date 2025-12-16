@@ -5,9 +5,9 @@
 use std::fmt::Debug;
 
 use flui_rendering::{
-    Arity, BoxProtocol, Leaf, Optional, Protocol, RenderBox, RenderObject, RenderSliver, Single,
-    SliverProtocol, Variable,
+    BoxProtocol, Protocol, RenderBox, RenderObject, RenderSliver, SliverProtocol,
 };
+use flui_tree::{Arity, Leaf, Optional, Single, Variable};
 
 use super::UpdateResult;
 

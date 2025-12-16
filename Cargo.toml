@@ -15,9 +15,12 @@ members = [
     # === Target Crate ===
     "crates/flui_rendering",    # Render tree implementation (ACTIVE DEVELOPMENT)
 
+    # === Animation (for testing) ===
+    "crates/flui-scheduler",    # Frame scheduling
+    "crates/flui_animation",    # Animation system
+
     # === Temporarily disabled (not needed for flui_rendering development) ===
     # "crates/flui-element",      # Element tree implementation
-    # "crates/flui-view",         # View traits and abstractions
     # "crates/flui-pipeline",     # Pipeline orchestration (build/layout/paint)
     # "crates/flui_assets",       # Asset management system
     # "crates/flui_log",          # Cross-platform logging
@@ -27,8 +30,6 @@ members = [
     # "crates/flui_app",          # Application framework
     # "crates/flui_engine",       # Rendering engine - Layer/Scene/Painter
     # "crates/flui_devtools",     # Developer tools
-    # "crates/flui_animation",    # Animation system
-    # "crates/flui-scheduler",    # Frame scheduling and task prioritization
     # "crates/flui-reactivity",   # Reactive state management with hooks and signals
     # "crates/flui-platform",     # Cross-platform embedder abstraction
     # "crates/flui_cli",          # CLI tool for project management

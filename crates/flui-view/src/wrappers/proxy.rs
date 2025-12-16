@@ -4,11 +4,10 @@
 
 use std::any::Any;
 
-use flui_types::Event;
-
 use crate::handle::ViewConfig;
 use crate::traits::ProxyView;
 use crate::{BuildContext, IntoView, IntoViewConfig, ViewMode, ViewObject};
+use flui_interaction::events::Event;
 
 /// Wrapper for `ProxyView` that implements `ViewObject`
 ///
@@ -139,9 +138,7 @@ where
 {
     fn into_view_config(self) -> ViewConfig {
         let view = self.view;
-        ViewConfig::new_with_factory(view, |v: &V| {
-            Box::new(ProxyViewWrapper::new(v.clone()))
-        })
+        ViewConfig::new_with_factory(view, |v: &V| Box::new(ProxyViewWrapper::new(v.clone())))
     }
 }
 
@@ -157,9 +154,7 @@ where
     V: ProxyView + Clone + Send + Sync + 'static,
 {
     fn into_view_config(self) -> ViewConfig {
-        ViewConfig::new_with_factory(self.0, |v: &V| {
-            Box::new(ProxyViewWrapper::new(v.clone()))
-        })
+        ViewConfig::new_with_factory(self.0, |v: &V| Box::new(ProxyViewWrapper::new(v.clone())))
     }
 }
 

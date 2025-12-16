@@ -11,13 +11,61 @@
 //! ```
 
 use flui_types::{
-    events::PointerEvent,
     geometry::{Matrix4, Offset, Point, RRect, Rect, Size},
     painting::{Image, Path},
     styling::Color,
     typography::TextStyle,
 };
 use std::sync::Arc;
+use std::time::Duration;
+
+/// A pointer event for hit testing in display lists.
+///
+/// This is a minimal event type used for hit region handlers.
+/// The full event system is in `flui_interaction`.
+#[derive(Debug, Clone)]
+pub struct PointerEvent {
+    /// The type of pointer event.
+    pub kind: PointerEventKind,
+    /// The position of the event in local coordinates.
+    pub position: Offset,
+    /// The pointer ID.
+    pub pointer: i32,
+    /// The button state (for mouse events).
+    pub buttons: i32,
+    /// Time of the event.
+    pub time_stamp: Duration,
+}
+
+/// The kind of pointer event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PointerEventKind {
+    /// Pointer entered a region.
+    Enter,
+    /// Pointer exited a region.
+    Exit,
+    /// Pointer button pressed.
+    Down,
+    /// Pointer moved.
+    Move,
+    /// Pointer button released.
+    Up,
+    /// Pointer interaction cancelled.
+    Cancel,
+}
+
+impl PointerEvent {
+    /// Create a new pointer event.
+    pub fn new(kind: PointerEventKind, position: Offset, pointer: i32) -> Self {
+        Self {
+            kind,
+            position,
+            pointer,
+            buttons: 0,
+            time_stamp: Duration::ZERO,
+        }
+    }
+}
 
 // Re-export types that are part of the public API
 pub use flui_types::painting::{

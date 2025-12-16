@@ -1,204 +1,397 @@
 # flui_interaction
 
-Event routing and interaction handling for FLUI.
+Event routing, hit testing, focus management, and gesture recognition for FLUI.
 
-## Overview
+## Core Concepts
 
-This crate provides the event handling infrastructure for FLUI, separate from rendering (`flui_engine`):
-
-- **EventRouter**: Routes pointer/keyboard events via hit testing
-- **HitTest**: Determines which UI elements are under cursor/touch
-- **FocusManager**: Manages keyboard focus (global singleton)
-
-## Architecture
+### Event Flow
 
 ```
-Platform (winit, Win32, etc.)
+Platform (winit, etc.)
     ↓
-PointerEvent/KeyEvent (flui_types)
+PointerEvent / KeyboardEvent
     ↓
-EventRouter (this crate)
-    ├─ Hit Testing (spatial)
-    └─ Focus Management (keyboard)
+EventRouter
+    ├─ HitTestResult (spatial dispatch)
+    └─ FocusManager (keyboard routing)
         ↓
-Handlers (closures in Layers)
-    ↓
-GestureRecognizers (flui_gestures)
-    ↓
-User code (Signal::update, etc.)
-```
-
-## Why Separate from flui_engine?
-
-**flui_engine** is for RENDERING (GPU, shaders, paint)
-**flui_interaction** is for EVENTS (input, hit test, focus)
-
-Benefits:
-- ✅ Test event logic without GPU
-- ✅ Use rendering without event handling (headless)
-- ✅ Clear separation of concerns (SOLID)
-- ✅ Smaller compile times
-
-## Usage
-
-### Basic Event Routing
-
-```rust
-use flui_interaction::{EventRouter, HitTestable};
-use flui_types::events::{Event, PointerEvent};
-
-let mut router = EventRouter::new();
-
-// Route pointer event
-let event = PointerEvent::Down { position: Offset::new(50.0, 50.0), ... };
-router.route_event(&mut root_layer, &Event::Pointer(event));
+GestureRecognizers
+    ├─ GestureArena (conflict resolution)
+    └─ TapRecognizer, DragRecognizer, etc.
+        ↓
+User callbacks
 ```
 
 ### Hit Testing
 
-Implement `HitTestable` on your layer:
+Determines which UI elements are under a point. Follows Flutter's pattern with full transform support.
 
 ```rust
-use flui_interaction::{HitTestable, HitTestResult, HitTestEntry};
+use flui_interaction::prelude::*;
 
-impl HitTestable for MyLayer {
+impl HitTestable for MyWidget {
     fn hit_test(&self, position: Offset, result: &mut HitTestResult) -> bool {
-        // Check if position is within bounds
         if !self.bounds.contains(position) {
             return false;
         }
-
-        // Add entry with handler
-        let entry = HitTestEntry::with_handler(
-            position - self.offset,
-            self.bounds,
-            self.event_handler.clone(),  // Arc<dyn Fn(&PointerEvent)>
-        );
-        result.add(entry);
-
+        
+        // Push transform for children
+        result.push_offset(self.offset);
+        for child in &self.children {
+            child.hit_test(position, result);
+        }
+        result.pop_transform();
+        
+        // Add self
+        result.add(HitTestEntry::new(self.id, position, self.bounds));
         true
+    }
+    
+    fn hit_test_behavior(&self) -> HitTestBehavior {
+        HitTestBehavior::Opaque
     }
 }
 ```
 
-### Keyboard Focus
+### Focus Management
+
+Keyboard focus with scopes and traversal policies.
 
 ```rust
 use flui_interaction::{FocusManager, FocusNodeId};
 
-let my_text_field = FocusNodeId::new(42);
+let node_id = FocusNodeId::new(42);
 
 // Request focus
-FocusManager::global().request_focus(my_text_field);
+FocusManager::global().request_focus(node_id);
 
 // Check focus
-if FocusManager::global().has_focus(my_text_field) {
-    println!("We have focus!");
+if FocusManager::global().has_focus(node_id) {
+    // Handle keyboard input
 }
 
-// Clear focus
-FocusManager::global().unfocus();
+// Tab traversal
+FocusManager::global().next_focus();  // Tab
+FocusManager::global().previous_focus();  // Shift+Tab
 ```
 
-### Event Helpers
+### Gesture Recognition
+
+High-level gesture detection with arena-based conflict resolution.
 
 ```rust
-use flui_interaction::input::{pointer_down, KeyEventBuilder, ModifiersBuilder};
+use flui_interaction::prelude::*;
 
-// Create pointer events
-let event = pointer_down(Offset::new(100.0, 200.0), PointerDeviceKind::Mouse);
+// Create recognizer
+let tap = TapGestureRecognizer::new();
+tap.on_tap(|| println!("Tapped!"));
 
-// Create key events
-let key_event = KeyEventBuilder::new(PhysicalKey::Enter)
-    .ctrl(true)
-    .logical_key("Enter")
-    .build();
-
-// Create modifiers
-let modifiers = ModifiersBuilder::new()
-    .ctrl(true)
-    .shift(true)
-    .build();
+// Handle events
+tap.add_pointer(pointer_id, event);
 ```
 
-## Integration with flui_app
+---
 
-In `flui_app`, `GestureBinding` uses `EventRouter`:
+## Event Types
+
+Uses W3C-compliant event types from `ui-events`:
+
+### PointerEvent
 
 ```rust
-// flui_app/src/binding/gesture.rs
+use flui_interaction::PointerEvent;
 
-use flui_interaction::EventRouter;
-
-pub struct GestureBinding {
-    event_router: Arc<RwLock<EventRouter>>,
-}
-
-impl GestureBinding {
-    pub fn handle_pointer_event(&self, event: PointerEvent, root: &mut dyn HitTestable) {
-        let mut router = self.event_router.write();
-        router.route_event(root, &Event::Pointer(event));
+match event {
+    PointerEvent::Down(data) => {
+        let pos = data.position;
+        let pointer_id = data.pointer_id;
+        let pointer_type = data.pointer_type;  // Mouse, Touch, Pen
     }
+    PointerEvent::Move(data) => { /* ... */ }
+    PointerEvent::Up(data) => { /* ... */ }
+    PointerEvent::Cancel(data) => { /* ... */ }
 }
 ```
 
-## Event Flow
-
-### Pointer Events (Mouse, Touch)
-
-1. Platform generates event (winit::WindowEvent::CursorMoved)
-2. `flui_app` converts to `PointerEvent`
-3. `GestureBinding` calls `EventRouter::route_event()`
-4. `EventRouter` performs hit testing
-5. `HitTestResult` dispatches to handlers
-6. Handlers call `TapGestureRecognizer`, etc.
-7. Recognizers fire user callbacks
-8. User code updates `Signal`
-9. Framework rebuilds affected widgets
-
-### Keyboard Events
-
-1. Platform generates event (winit::WindowEvent::KeyboardInput)
-2. `flui_app` converts to `KeyEvent`
-3. `GestureBinding` calls `EventRouter::route_event()`
-4. `EventRouter` gets focused element from `FocusManager`
-5. Event dispatched to focused element's handler
-6. Handler processes key (e.g., insert character in TextField)
-
-## Testing
+### KeyboardEvent
 
 ```rust
-use flui_interaction::{EventRouter, HitTestable, HitTestResult};
+use flui_interaction::KeyboardEvent;
 
-#[test]
-fn test_hit_testing() {
-    let mut router = EventRouter::new();
-    let mut layer = MockLayer { bounds: Rect::from_xywh(0.0, 0.0, 100.0, 100.0) };
-
-    let event = pointer_down(Offset::new(50.0, 50.0), PointerDeviceKind::Mouse);
-    router.route_event(&mut layer, &Event::Pointer(event));
-
-    // Verify event was routed
+match event {
+    KeyboardEvent::KeyDown(data) => {
+        let key = &data.key;
+        let code = &data.code;
+        let modifiers = &data.modifiers;
+    }
+    KeyboardEvent::KeyUp(data) => { /* ... */ }
 }
 ```
 
-## Performance
+---
 
-- **Hit testing**: O(tree depth), typically 5-20 layers
-- **Focus lookup**: O(1), single RwLock read
-- **Event dispatch**: O(hit count), typically 1-3 elements
+## Gesture Recognizers
 
-All hot paths use lock-free or minimal locking for 60+ FPS.
+### TapGestureRecognizer
 
-## Future Work
+Single tap detection.
 
-- [ ] Focus traversal (Tab navigation)
-- [ ] Focus scopes (modal dialogs)
-- [ ] Event bubbling control (stopPropagation)
-- [ ] Event capture phase
-- [ ] Touch gesture disambiguation
-- [ ] Accessibility integration
+```rust
+let tap = TapGestureRecognizer::new();
+tap.on_tap_down(|details| { /* pointer down */ });
+tap.on_tap_up(|details| { /* pointer up, tap confirmed */ });
+tap.on_tap(|| { /* complete tap */ });
+tap.on_tap_cancel(|| { /* tap cancelled */ });
+```
 
-## License
+### DoubleTapGestureRecognizer
 
-MIT OR Apache-2.0
+Two taps in quick succession.
+
+```rust
+let double_tap = DoubleTapGestureRecognizer::new();
+double_tap.on_double_tap(|| println!("Double tapped!"));
+double_tap.on_double_tap_down(|details| { /* first tap */ });
+```
+
+### LongPressGestureRecognizer
+
+Press and hold.
+
+```rust
+let long_press = LongPressGestureRecognizer::new();
+long_press.on_long_press_start(|details| { /* hold started */ });
+long_press.on_long_press_move_update(|details| { /* moved while holding */ });
+long_press.on_long_press_end(|details| { /* released */ });
+```
+
+### DragGestureRecognizer
+
+Pan/drag gestures.
+
+```rust
+let drag = DragGestureRecognizer::new();
+drag.on_drag_start(|details| { /* drag started */ });
+drag.on_drag_update(|details| {
+    let delta = details.delta;
+    let velocity = details.velocity;
+});
+drag.on_drag_end(|details| { /* drag ended */ });
+```
+
+### ScaleGestureRecognizer
+
+Pinch-to-zoom and rotation.
+
+```rust
+let scale = ScaleGestureRecognizer::new();
+scale.on_scale_start(|details| { /* scale started */ });
+scale.on_scale_update(|details| {
+    let scale = details.scale;
+    let rotation = details.rotation;
+    let focal_point = details.focal_point;
+});
+scale.on_scale_end(|details| { /* scale ended */ });
+```
+
+### ForcePressGestureRecognizer
+
+Pressure-sensitive input (3D Touch, Force Touch).
+
+```rust
+let force = ForcePressGestureRecognizer::new();
+force.on_force_press_start(|details| { /* force threshold reached */ });
+force.on_force_press_peak(|details| { /* max pressure */ });
+force.on_force_press_update(|details| { /* pressure changed */ });
+force.on_force_press_end(|details| { /* released */ });
+```
+
+---
+
+## Gesture Arena
+
+Resolves conflicts when multiple recognizers compete for the same pointer.
+
+```rust
+use flui_interaction::{GestureArena, GestureDisposition};
+
+let arena = GestureArena::new();
+
+// Recognizers join arena
+arena.add(pointer_id, tap_recognizer);
+arena.add(pointer_id, drag_recognizer);
+
+// Arena resolves winner based on:
+// 1. First to accept wins
+// 2. Last remaining after others reject
+// 3. Timeout forces resolution
+```
+
+### Disambiguation
+
+- **Tap vs Drag**: Drag wins if movement > slop threshold
+- **Tap vs Long Press**: Long press wins after timeout
+- **Tap vs Double Tap**: Waits for possible second tap
+
+---
+
+## Hit Test Behaviors
+
+| Behavior | Hit Self | Block Events Below |
+|----------|----------|-------------------|
+| `Opaque` | Always | Yes |
+| `Translucent` | Always | No |
+| `DeferToChild` | Only if child hit | Only if child hit |
+
+---
+
+## Input Processing
+
+### VelocityTracker
+
+Estimates pointer velocity for fling gestures.
+
+```rust
+use flui_interaction::VelocityTracker;
+
+let mut tracker = VelocityTracker::new();
+tracker.add_position(timestamp, position);
+// ... more positions ...
+
+let velocity = tracker.velocity();
+// velocity.x, velocity.y in logical pixels per second
+```
+
+### PointerEventResampler
+
+Synchronizes pointer events with frame timing.
+
+```rust
+use flui_interaction::PointerEventResampler;
+
+let mut resampler = PointerEventResampler::new();
+resampler.add_event(event);
+
+// At frame time
+let resampled = resampler.sample(frame_timestamp);
+```
+
+### InputPredictor
+
+Predicts future pointer positions to reduce latency.
+
+```rust
+use flui_interaction::InputPredictor;
+
+let mut predictor = InputPredictor::new();
+predictor.add_sample(timestamp, position);
+
+let predicted = predictor.predict(future_timestamp);
+```
+
+---
+
+## Testing Utilities
+
+### GestureRecorder
+
+Record gestures for replay.
+
+```rust
+use flui_interaction::testing::{GestureRecorder, GesturePlayer};
+
+// Record
+let mut recorder = GestureRecorder::new();
+recorder.start();
+// ... user performs gesture ...
+recorder.stop();
+let recording = recorder.recording();
+
+// Replay
+let player = GesturePlayer::new(recording);
+player.play(&mut hit_testable);
+```
+
+### GestureBuilder
+
+Programmatically create gesture sequences.
+
+```rust
+use flui_interaction::testing::GestureBuilder;
+
+let tap = GestureBuilder::tap(Offset::new(100.0, 100.0));
+let drag = GestureBuilder::drag(
+    Offset::new(0.0, 0.0),
+    Offset::new(100.0, 0.0),
+    Duration::from_millis(200),
+);
+```
+
+---
+
+## Type-Safe IDs
+
+Newtype pattern prevents mixing ID types:
+
+```rust
+use flui_interaction::{PointerId, FocusNodeId, HandlerId};
+
+let pointer = PointerId::new(0);
+let focus = FocusNodeId::new(42);
+
+// fn process(id: PointerId) { ... }
+// process(focus);  // Compile error - wrong type!
+```
+
+---
+
+## Configuration
+
+### GestureSettings
+
+```rust
+use flui_interaction::GestureSettings;
+
+let settings = GestureSettings {
+    touch_slop: 18.0,           // Movement before drag starts
+    pan_slop: 36.0,             // Movement for pan gesture
+    double_tap_timeout: 300,     // ms between double tap
+    long_press_timeout: 500,     // ms to trigger long press
+    min_fling_velocity: 50.0,    // Minimum fling velocity
+    max_fling_velocity: 8000.0,  // Maximum fling velocity
+    ..Default::default()
+};
+```
+
+---
+
+## Thread Safety
+
+All types are `Send + Sync`:
+
+- `FocusManager` uses `RwLock` for global state
+- `GestureArena` uses `Mutex` for entry management
+- Recognizers are individually thread-safe
+
+---
+
+## Module Summary
+
+| Module | Description |
+|--------|-------------|
+| `routing` | Hit testing, event dispatch, focus management |
+| `recognizers` | Tap, drag, scale, long press, etc. |
+| `arena` | Gesture conflict resolution |
+| `processing` | Velocity tracking, resampling, prediction |
+| `testing` | Recording, playback, builders |
+| `mouse_tracker` | Mouse enter/exit/hover detection |
+| `ids` | Type-safe identifiers |
+
+---
+
+## See Also
+
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — Internal design
+- [docs/HIT_TESTING.md](docs/HIT_TESTING.md) — Hit testing guide
+- [docs/GESTURES.md](docs/GESTURES.md) — Gesture recognition details
+- [docs/INTEGRATION.md](docs/INTEGRATION.md) — Integration with other crates

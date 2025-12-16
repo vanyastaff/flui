@@ -44,9 +44,8 @@
 //! └─────────────────────────────────────────────────────────────┘
 //! ```
 
-use flui_types::Event;
-
 use crate::{BuildContext, IntoView};
+use flui_interaction::events::Event;
 
 /// `ProxyView` - Views that wrap a single child.
 ///
