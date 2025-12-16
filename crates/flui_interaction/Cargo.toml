@@ -35,6 +35,9 @@ futures = { workspace = true }
 tracing = { workspace = true }
 dpi = "0.1.2"
 
+# Async runtime
+tokio = { workspace = true, features = ["time", "sync", "macros", "rt"] }
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }
 

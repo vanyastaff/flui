@@ -141,6 +141,8 @@ pub mod routing;
 
 pub mod arena;
 pub mod recognizers;
+pub mod team;
+pub mod timer;
 
 // ============================================================================
 // Input processing
@@ -192,8 +194,13 @@ pub use routing::{
 // ============================================================================
 
 pub use arena::{
-    GestureArena, GestureArenaMember, GestureDisposition, DEFAULT_DISAMBIGUATION_TIMEOUT,
+    GestureArena, GestureArenaEntry, GestureArenaMember, GestureDisposition,
+    DEFAULT_DISAMBIGUATION_TIMEOUT,
 };
+
+pub use team::{GestureArenaTeam, TeamEntry};
+
+pub use timer::{global_timer_service, GestureTimer, GestureTimerService, TimerId};
 
 pub use recognizers::{
     DoubleTapGestureRecognizer, DragGestureRecognizer, ForcePressGestureRecognizer,

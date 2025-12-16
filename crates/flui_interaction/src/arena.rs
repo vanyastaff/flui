@@ -19,6 +19,20 @@
 //! 8. Pointer Up → Sweep (cleanup)
 //! ```
 //!
+//! # GestureArenaEntry Handle Pattern
+//!
+//! When adding a member to the arena, you receive a [`GestureArenaEntry`] handle.
+//! This handle is the preferred way for recognizers to resolve themselves:
+//!
+//! ```rust,ignore
+//! let entry = arena.add(pointer, my_recognizer.clone());
+//! // Later, when the recognizer decides:
+//! entry.resolve(GestureDisposition::Accepted);
+//! ```
+//!
+//! This pattern allows recognizers to resolve themselves without needing
+//! a reference back to the arena.
+//!
 //! # Type System Features
 //!
 //! - **Newtype IDs**: Type-safe `PointerId` prevents mixing with other IDs
@@ -97,7 +111,8 @@ impl GestureDisposition {
 ///
 /// // MyRecognizer now implements GestureArenaMember automatically!
 /// let arena = GestureArena::new();
-/// arena.add(pointer, Arc::new(MyRecognizer { /* ... */ }));
+/// let entry = arena.add(pointer, Arc::new(MyRecognizer { /* ... */ }));
+/// // Later: entry.resolve(GestureDisposition::Accepted);
 /// ```
 ///
 /// [`CustomGestureRecognizer`]: crate::sealed::CustomGestureRecognizer
@@ -133,7 +148,80 @@ impl<T: crate::sealed::CustomGestureRecognizer> GestureArenaMember for T {
 }
 
 // ============================================================================
-// ArenaEntry
+// GestureArenaEntry - Handle pattern for resolving gestures
+// ============================================================================
+
+/// A handle to an arena entry for a specific member.
+///
+/// This is returned by [`GestureArena::add`] and provides a convenient way
+/// for gesture recognizers to resolve themselves without needing a reference
+/// back to the arena.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// let entry = arena.add(pointer, recognizer.clone());
+///
+/// // Later, when the recognizer decides:
+/// entry.resolve(GestureDisposition::Accepted);
+/// ```
+///
+/// # Thread Safety
+///
+/// `GestureArenaEntry` is `Send + Sync` and can be safely shared across threads.
+/// Multiple calls to `resolve` are safe (subsequent calls are no-ops if the
+/// arena is already resolved).
+#[derive(Clone)]
+pub struct GestureArenaEntry {
+    arena: GestureArena,
+    pointer: PointerId,
+    member: Arc<dyn GestureArenaMember>,
+}
+
+impl GestureArenaEntry {
+    /// Create a new arena entry handle.
+    fn new(arena: GestureArena, pointer: PointerId, member: Arc<dyn GestureArenaMember>) -> Self {
+        Self {
+            arena,
+            pointer,
+            member,
+        }
+    }
+
+    /// Resolve this entry with the given disposition.
+    ///
+    /// Call with [`GestureDisposition::Accepted`] to claim victory, or
+    /// [`GestureDisposition::Rejected`] to admit defeat.
+    ///
+    /// It's safe to call this on an arena that has already been resolved.
+    pub fn resolve(&self, disposition: GestureDisposition) {
+        self.arena
+            .resolve_entry(self.pointer, &self.member, disposition);
+    }
+
+    /// Get the pointer ID for this entry.
+    #[inline]
+    pub fn pointer(&self) -> PointerId {
+        self.pointer
+    }
+
+    /// Get the member for this entry.
+    #[inline]
+    pub fn member(&self) -> &Arc<dyn GestureArenaMember> {
+        &self.member
+    }
+}
+
+impl std::fmt::Debug for GestureArenaEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GestureArenaEntry")
+            .field("pointer", &self.pointer)
+            .finish_non_exhaustive()
+    }
+}
+
+// ============================================================================
+// ArenaEntryData (internal)
 // ============================================================================
 
 /// Arena entry for a single pointer.
@@ -145,13 +233,10 @@ impl<T: crate::sealed::CustomGestureRecognizer> GestureArenaMember for T {
 /// Uses SmallVec with inline capacity of 4 to avoid heap allocations
 /// for typical gesture scenarios (tap, drag, long-press, double-tap).
 /// Most interactions have 2-3 competing recognizers.
-struct ArenaEntry {
+struct ArenaEntryData {
     /// Members competing in this arena.
     /// Inline capacity: 4 (avoids heap for most cases).
     members: SmallVec<[Arc<dyn GestureArenaMember>; 4]>,
-    /// Team members that should all win together.
-    /// Members in the same team are not mutually exclusive.
-    team: SmallVec<[Arc<dyn GestureArenaMember>; 2]>,
     /// Whether the arena is still open for new members.
     /// When open, accepts are stored as eager_winner instead of resolving immediately.
     is_open: bool,
@@ -170,11 +255,10 @@ struct ArenaEntry {
     created_at: Instant,
 }
 
-impl std::fmt::Debug for ArenaEntry {
+impl std::fmt::Debug for ArenaEntryData {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ArenaEntry")
+        f.debug_struct("ArenaEntryData")
             .field("member_count", &self.members.len())
-            .field("team_count", &self.team.len())
             .field("is_open", &self.is_open)
             .field("is_held", &self.is_held)
             .field("is_resolved", &self.is_resolved)
@@ -186,11 +270,10 @@ impl std::fmt::Debug for ArenaEntry {
     }
 }
 
-impl ArenaEntry {
+impl ArenaEntryData {
     fn new() -> Self {
         Self {
             members: SmallVec::new(),
-            team: SmallVec::new(),
             is_open: true,
             is_held: false,
             is_resolved: false,
@@ -264,6 +347,26 @@ impl ArenaEntry {
         }
     }
 
+    /// Try to resolve the arena if conditions are met.
+    /// Called after close or reject operations.
+    fn try_to_resolve(&mut self, pointer: PointerId) {
+        if self.is_resolved || self.is_open {
+            return;
+        }
+
+        if self.members.len() == 1 {
+            // Single member wins automatically
+            let winner = self.members[0].clone();
+            self.resolve(Some(winner), pointer);
+        } else if self.members.is_empty() {
+            // No members left - resolve with no winner
+            self.is_resolved = true;
+        } else if let Some(eager) = self.eager_winner.take() {
+            // Eager winner wins
+            self.resolve(Some(eager), pointer);
+        }
+    }
+
     /// Check if this arena has exceeded the given timeout.
     #[inline]
     fn has_timed_out(&self, timeout: Duration) -> bool {
@@ -279,15 +382,6 @@ impl ArenaEntry {
     /// Add a member to this arena.
     fn add(&mut self, member: Arc<dyn GestureArenaMember>) {
         if !self.is_resolved {
-            self.members.push(member);
-        }
-    }
-
-    /// Add a member to the team (will win together with other team members).
-    fn add_to_team(&mut self, member: Arc<dyn GestureArenaMember>) {
-        if !self.is_resolved {
-            self.team.push(member.clone());
-            // Also add to regular members for tracking
             self.members.push(member);
         }
     }
@@ -310,15 +404,9 @@ impl ArenaEntry {
 
         self.is_resolved = true;
 
-        // Build winners list: primary winner + all team members
+        // Build winners list
         if let Some(w) = winner.clone() {
             self.winners.push(w);
-        }
-        // Team members always win together
-        for team_member in &self.team {
-            if !self.winners.iter().any(|w| Arc::ptr_eq(w, team_member)) {
-                self.winners.push(team_member.clone());
-            }
         }
 
         // Notify all members
@@ -346,12 +434,6 @@ impl ArenaEntry {
         for winner in winners {
             if !self.winners.iter().any(|w| Arc::ptr_eq(w, winner)) {
                 self.winners.push(winner.clone());
-            }
-        }
-        // Team members always win together
-        for team_member in &self.team {
-            if !self.winners.iter().any(|w| Arc::ptr_eq(w, team_member)) {
-                self.winners.push(team_member.clone());
             }
         }
 
@@ -383,22 +465,25 @@ impl ArenaEntry {
 /// # Example
 ///
 /// ```rust,ignore
-/// use flui_interaction::arena::{GestureArena, PointerId};
+/// use flui_interaction::arena::{GestureArena, GestureDisposition, PointerId};
 ///
 /// let arena = GestureArena::new();
 /// let pointer = PointerId::new(0);
 ///
-/// // Add recognizers to arena
-/// arena.add(pointer, tap_recognizer);
-/// arena.add(pointer, drag_recognizer);
+/// // Add recognizers to arena - returns entry handle
+/// let tap_entry = arena.add(pointer, tap_recognizer);
+/// let drag_entry = arena.add(pointer, drag_recognizer);
 ///
-/// // Later: resolve with winner
-/// arena.resolve(pointer, Some(tap_recognizer));
+/// // Close the arena after pointer down dispatch
+/// arena.close(pointer);
+///
+/// // Later: recognizers resolve themselves via entry handle
+/// tap_entry.resolve(GestureDisposition::Accepted);
 /// ```
 #[derive(Clone)]
 pub struct GestureArena {
     /// Map from pointer ID to arena entry (lock-free concurrent HashMap).
-    entries: Arc<DashMap<PointerId, Mutex<ArenaEntry>>>,
+    entries: Arc<DashMap<PointerId, Mutex<ArenaEntryData>>>,
 }
 
 impl GestureArena {
@@ -420,16 +505,35 @@ impl GestureArena {
 
     /// Add a member to the arena for a specific pointer.
     ///
+    /// Returns a [`GestureArenaEntry`] handle that can be used to resolve
+    /// the gesture later. This is the preferred pattern for recognizers.
+    ///
     /// Creates a new arena entry if one doesn't exist for this pointer.
-    pub fn add(&self, pointer: PointerId, member: Arc<dyn GestureArenaMember>) {
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let entry = arena.add(pointer, recognizer.clone());
+    /// // Store entry in recognizer, use later to resolve
+    /// entry.resolve(GestureDisposition::Accepted);
+    /// ```
+    pub fn add(
+        &self,
+        pointer: PointerId,
+        member: Arc<dyn GestureArenaMember>,
+    ) -> GestureArenaEntry {
         self.entries
             .entry(pointer)
-            .or_insert_with(|| Mutex::new(ArenaEntry::new()))
+            .or_insert_with(|| Mutex::new(ArenaEntryData::new()))
             .lock()
-            .add(member);
+            .add(member.clone());
+
+        GestureArenaEntry::new(self.clone(), pointer, member)
     }
 
     /// Close the arena for a pointer (no more members can be added).
+    ///
+    /// Called after the framework finishes dispatching the pointer down event.
     ///
     /// If there's an eager winner, they win immediately.
     /// If there's only one member, it wins automatically.
@@ -446,10 +550,40 @@ impl GestureArena {
         }
     }
 
+    /// Internal method: resolve an entry with given disposition.
+    ///
+    /// Called by [`GestureArenaEntry::resolve`].
+    fn resolve_entry(
+        &self,
+        pointer: PointerId,
+        member: &Arc<dyn GestureArenaMember>,
+        disposition: GestureDisposition,
+    ) {
+        if let Some(entry_ref) = self.entries.get(&pointer) {
+            let mut entry = entry_ref.lock();
+
+            match disposition {
+                GestureDisposition::Accepted => {
+                    entry.accept(member.clone(), pointer);
+                }
+                GestureDisposition::Rejected => {
+                    entry.reject(member, pointer);
+                    if !entry.is_open {
+                        entry.try_to_resolve(pointer);
+                    }
+                }
+            }
+        }
+    }
+
     /// Accept gesture for a member - the member wants to handle this gesture.
     ///
     /// If arena is open, stores as eager winner (wins when arena closes).
     /// If arena is closed, resolves immediately in favor of this member.
+    ///
+    /// # Note
+    ///
+    /// Prefer using [`GestureArenaEntry::resolve`] instead of this method.
     pub fn accept(&self, pointer: PointerId, member: Arc<dyn GestureArenaMember>) {
         if let Some(entry_ref) = self.entries.get(&pointer) {
             entry_ref.lock().accept(member, pointer);
@@ -460,9 +594,17 @@ impl GestureArena {
     ///
     /// Removes the member from the arena and notifies them.
     /// If only one member remains and arena is closed, they win.
+    ///
+    /// # Note
+    ///
+    /// Prefer using [`GestureArenaEntry::resolve`] instead of this method.
     pub fn reject(&self, pointer: PointerId, member: &Arc<dyn GestureArenaMember>) {
         if let Some(entry_ref) = self.entries.get(&pointer) {
-            entry_ref.lock().reject(member, pointer);
+            let mut entry = entry_ref.lock();
+            entry.reject(member, pointer);
+            if !entry.is_open {
+                entry.try_to_resolve(pointer);
+            }
         }
     }
 
@@ -511,7 +653,10 @@ impl GestureArena {
     /// Resolve the arena with a specific winner.
     ///
     /// Winner receives `accept_gesture()`, all others receive `reject_gesture()`.
-    /// If team members exist, they also receive `accept_gesture()`.
+    ///
+    /// # Note
+    ///
+    /// Prefer using [`GestureArenaEntry::resolve`] instead of this method.
     pub fn resolve(&self, pointer: PointerId, winner: Option<Arc<dyn GestureArenaMember>>) {
         if let Some(entry_ref) = self.entries.get(&pointer) {
             entry_ref.lock().resolve(winner, pointer);
@@ -520,7 +665,7 @@ impl GestureArena {
 
     /// Resolve the arena with multiple winners.
     ///
-    /// All specified winners (and team members) receive `accept_gesture()`.
+    /// All specified winners receive `accept_gesture()`.
     /// This is useful when multiple gestures should be recognized simultaneously.
     ///
     /// # Example
@@ -535,37 +680,25 @@ impl GestureArena {
         }
     }
 
-    /// Add a member to a team for a specific pointer.
-    ///
-    /// Team members are not mutually exclusive - they all win together
-    /// when the arena resolves. This is useful for composite gestures.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// // Long press and drag can work together
-    /// arena.add_to_team(pointer, long_press_recognizer);
-    /// arena.add_to_team(pointer, drag_recognizer);
-    /// ```
-    pub fn add_to_team(&self, pointer: PointerId, member: Arc<dyn GestureArenaMember>) {
-        self.entries
-            .entry(pointer)
-            .or_insert_with(|| Mutex::new(ArenaEntry::new()))
-            .lock()
-            .add_to_team(member);
-    }
-
     /// Sweep - remove resolved arenas for a pointer.
     ///
     /// Called when pointer is released to clean up.
+    /// Forces resolution if arena is still open (first member wins).
     /// If arena is held, sweep is deferred until release().
     pub fn sweep(&self, pointer: PointerId) {
         // Check if held - if so, mark pending sweep
         if let Some(entry_ref) = self.entries.get(&pointer) {
             let mut entry = entry_ref.lock();
+
             if entry.is_held {
                 entry.has_pending_sweep = true;
                 return;
+            }
+
+            // Force resolve if not resolved yet (first member wins)
+            if !entry.is_resolved && !entry.members.is_empty() {
+                let winner = entry.members[0].clone();
+                entry.resolve(Some(winner), pointer);
             }
         }
 
@@ -833,11 +966,58 @@ mod tests {
         let pointer = PointerId::new(0);
         let member = Arc::new(MockMember::new());
 
-        arena.add(pointer, member.clone());
+        let _entry = arena.add(pointer, member.clone());
         arena.close(pointer);
 
         assert!(member.was_accepted());
         assert!(!member.was_rejected());
+    }
+
+    #[test]
+    fn test_arena_entry_resolve_accepted() {
+        let arena = GestureArena::new();
+        let pointer = PointerId::new(0);
+
+        let member1 = Arc::new(MockMember::new());
+        let member2 = Arc::new(MockMember::new());
+
+        let entry1 = arena.add(pointer, member1.clone());
+        let _entry2 = arena.add(pointer, member2.clone());
+
+        arena.close(pointer);
+
+        // member1 resolves via entry handle
+        entry1.resolve(GestureDisposition::Accepted);
+
+        assert!(member1.was_accepted());
+        assert!(!member1.was_rejected());
+
+        assert!(!member2.was_accepted());
+        assert!(member2.was_rejected());
+    }
+
+    #[test]
+    fn test_arena_entry_resolve_rejected() {
+        let arena = GestureArena::new();
+        let pointer = PointerId::new(0);
+
+        let member1 = Arc::new(MockMember::new());
+        let member2 = Arc::new(MockMember::new());
+
+        let entry1 = arena.add(pointer, member1.clone());
+        let _entry2 = arena.add(pointer, member2.clone());
+
+        arena.close(pointer);
+
+        // member1 rejects via entry handle
+        entry1.resolve(GestureDisposition::Rejected);
+
+        assert!(!member1.was_accepted());
+        assert!(member1.was_rejected());
+
+        // member2 wins by default (only one left)
+        assert!(member2.was_accepted());
+        assert!(!member2.was_rejected());
     }
 
     #[test]
@@ -887,10 +1067,13 @@ mod tests {
         let pointer = PointerId::new(0);
         let member = Arc::new(MockMember::new());
 
-        arena.add(pointer, member);
+        arena.add(pointer, member.clone());
         assert!(arena.contains(pointer));
 
         arena.sweep(pointer);
+
+        // Member should win (first member wins on sweep)
+        assert!(member.was_accepted());
         assert!(!arena.contains(pointer));
     }
 
@@ -930,33 +1113,6 @@ mod tests {
 
         assert!(GestureDisposition::Rejected.is_rejected());
         assert!(!GestureDisposition::Rejected.is_accepted());
-    }
-
-    #[test]
-    fn test_arena_team_all_win() {
-        let arena = GestureArena::new();
-        let pointer = PointerId::new(0);
-
-        let member1 = Arc::new(MockMember::new());
-        let member2 = Arc::new(MockMember::new());
-        let member3 = Arc::new(MockMember::new());
-
-        // Add member1 and member2 to team, member3 as regular
-        arena.add_to_team(pointer, member1.clone());
-        arena.add_to_team(pointer, member2.clone());
-        arena.add(pointer, member3.clone());
-
-        // Resolve with member1 as primary winner
-        arena.resolve(pointer, Some(member1.clone()));
-
-        // Both team members should win
-        assert!(member1.was_accepted());
-        assert!(member2.was_accepted());
-        // Non-team member loses
-        assert!(member3.was_rejected());
-
-        // Should have 2 winners
-        assert_eq!(arena.winner_count(pointer), 2);
     }
 
     #[test]
@@ -1227,12 +1383,12 @@ mod tests {
         let member1 = Arc::new(MockMember::new());
         let member2 = Arc::new(MockMember::new());
 
-        arena.add(pointer, member1.clone());
-        arena.add(pointer, member2.clone());
+        let entry1 = arena.add(pointer, member1.clone());
+        let _entry2 = arena.add(pointer, member2.clone());
 
         // Arena is open, accept stores as eager winner
         assert!(arena.is_open(pointer));
-        arena.accept(pointer, member1.clone());
+        entry1.resolve(GestureDisposition::Accepted);
         assert!(arena.has_eager_winner(pointer));
 
         // Close arena - eager winner should win
@@ -1251,12 +1407,12 @@ mod tests {
         let member1 = Arc::new(MockMember::new());
         let member2 = Arc::new(MockMember::new());
 
-        arena.add(pointer, member1.clone());
-        arena.add(pointer, member2.clone());
+        let entry1 = arena.add(pointer, member1.clone());
+        let entry2 = arena.add(pointer, member2.clone());
 
         // Both accept while arena is open - first wins
-        arena.accept(pointer, member1.clone());
-        arena.accept(pointer, member2.clone()); // Ignored, already have eager winner
+        entry1.resolve(GestureDisposition::Accepted);
+        entry2.resolve(GestureDisposition::Accepted); // Ignored, already have eager winner
 
         arena.close(pointer);
 
@@ -1272,8 +1428,8 @@ mod tests {
         let member1 = Arc::new(MockMember::new());
         let member2 = Arc::new(MockMember::new());
 
-        arena.add(pointer, member1.clone());
-        arena.add(pointer, member2.clone());
+        let entry1 = arena.add(pointer, member1.clone());
+        let _entry2 = arena.add(pointer, member2.clone());
 
         // Close arena first (no eager winner, no single member - stays unresolved)
         arena.close(pointer);
@@ -1281,7 +1437,7 @@ mod tests {
         assert!(!arena.is_resolved(pointer));
 
         // Accept after close resolves immediately
-        arena.accept(pointer, member1.clone());
+        entry1.resolve(GestureDisposition::Accepted);
 
         assert!(member1.was_accepted());
         assert!(member2.was_rejected());
@@ -1296,19 +1452,15 @@ mod tests {
         let member1 = Arc::new(MockMember::new());
         let member2 = Arc::new(MockMember::new());
 
-        // Need to cast to dyn trait for reject()
-        let member1_dyn: Arc<dyn GestureArenaMember> = member1.clone();
-        let member2_dyn: Arc<dyn GestureArenaMember> = member2.clone();
-
-        arena.add(pointer, member1_dyn.clone());
-        arena.add(pointer, member2_dyn.clone());
+        let entry1 = arena.add(pointer, member1.clone());
+        let _entry2 = arena.add(pointer, member2.clone());
 
         // member1 accepts (becomes eager winner)
-        arena.accept(pointer, member1_dyn.clone());
+        entry1.resolve(GestureDisposition::Accepted);
         assert!(arena.has_eager_winner(pointer));
 
         // member1 rejects (removes eager winner)
-        arena.reject(pointer, &member1_dyn);
+        entry1.resolve(GestureDisposition::Rejected);
         assert!(!arena.has_eager_winner(pointer));
         assert!(member1.was_rejected());
 
@@ -1340,7 +1492,7 @@ mod tests {
         let pointer = PointerId::new(0);
 
         let member = Arc::new(MockMember::new());
-        arena.add(pointer, member);
+        arena.add(pointer, member.clone());
         arena.hold(pointer);
 
         // Sweep while held - should be deferred
@@ -1359,11 +1511,12 @@ mod tests {
         let pointer = PointerId::new(0);
 
         let member = Arc::new(MockMember::new());
-        arena.add(pointer, member);
+        arena.add(pointer, member.clone());
 
         // Sweep when not held - immediate
         arena.sweep(pointer);
         assert!(!arena.contains(pointer));
+        assert!(member.was_accepted()); // First member wins on sweep
     }
 
     #[test]
@@ -1401,5 +1554,63 @@ mod tests {
         // Release should close and resolve single member
         assert!(member.was_accepted());
         assert!(arena.is_resolved(pointer));
+    }
+
+    // ========================================================================
+    // GestureArenaEntry tests
+    // ========================================================================
+
+    #[test]
+    fn test_entry_pointer_accessor() {
+        let arena = GestureArena::new();
+        let pointer = PointerId::new(42);
+        let member = Arc::new(MockMember::new());
+
+        let entry = arena.add(pointer, member);
+
+        assert_eq!(entry.pointer(), pointer);
+    }
+
+    #[test]
+    fn test_entry_member_accessor() {
+        let arena = GestureArena::new();
+        let pointer = PointerId::new(0);
+        let member = Arc::new(MockMember::new());
+        let member_dyn: Arc<dyn GestureArenaMember> = member.clone();
+
+        let entry = arena.add(pointer, member_dyn.clone());
+
+        assert!(Arc::ptr_eq(entry.member(), &member_dyn));
+    }
+
+    #[test]
+    fn test_entry_debug_impl() {
+        let arena = GestureArena::new();
+        let pointer = PointerId::new(123);
+        let member = Arc::new(MockMember::new());
+
+        let entry = arena.add(pointer, member);
+        let debug = format!("{:?}", entry);
+
+        assert!(debug.contains("GestureArenaEntry"));
+        assert!(debug.contains("pointer"));
+    }
+
+    #[test]
+    fn test_entry_resolve_multiple_times_is_safe() {
+        let arena = GestureArena::new();
+        let pointer = PointerId::new(0);
+
+        let member = Arc::new(MockMember::new());
+        let entry = arena.add(pointer, member.clone());
+
+        arena.close(pointer);
+
+        // Resolve multiple times should be safe
+        entry.resolve(GestureDisposition::Accepted);
+        entry.resolve(GestureDisposition::Accepted);
+        entry.resolve(GestureDisposition::Rejected); // Should be ignored
+
+        assert!(member.was_accepted());
     }
 }

@@ -209,24 +209,55 @@ impl PointerRouter {
     /// 2. Per-pointer handlers (in registration order)
     ///
     /// All handlers receive the event regardless of what others do.
+    ///
+    /// # Reentrancy Safety
+    ///
+    /// Handlers can safely add or remove routes during dispatch:
+    /// - Routes added during dispatch take effect on the next event
+    /// - Routes removed during dispatch take effect immediately
+    ///
+    /// This is achieved by copying the route lists before dispatch and
+    /// checking if routes still exist before calling each handler.
     pub fn route(&self, event: &PointerEvent) {
         let pointer = get_pointer_id(event);
 
-        // Call global handlers first
-        {
-            let global = self.global_handlers.read();
-            for handler in global.iter() {
+        // Copy global handlers (for reentrancy safety)
+        let global_handlers: Vec<GlobalPointerHandler> =
+            self.global_handlers.read().iter().cloned().collect();
+
+        // Dispatch to global handlers, checking they still exist
+        for handler in global_handlers {
+            // Check if still registered (may have been removed by previous handler)
+            let still_registered = self
+                .global_handlers
+                .read()
+                .iter()
+                .any(|h| Arc::ptr_eq(h, &handler));
+
+            if still_registered {
                 handler(event);
             }
         }
 
-        // Call per-pointer handlers
-        {
-            let routes = self.routes.read();
-            if let Some(handlers) = routes.get(&pointer) {
-                for handler in handlers {
-                    handler(event);
-                }
+        // Copy per-pointer handlers (for reentrancy safety)
+        let pointer_handlers: Vec<PointerRouteHandler> = self
+            .routes
+            .read()
+            .get(&pointer)
+            .map(|h| h.iter().cloned().collect())
+            .unwrap_or_default();
+
+        // Dispatch to per-pointer handlers, checking they still exist
+        for handler in pointer_handlers {
+            // Check if still registered (may have been removed by previous handler)
+            let still_registered = self
+                .routes
+                .read()
+                .get(&pointer)
+                .is_some_and(|handlers| handlers.iter().any(|h| Arc::ptr_eq(h, &handler)));
+
+            if still_registered {
+                handler(event);
             }
         }
     }
@@ -505,5 +536,96 @@ mod tests {
         let router1 = PointerRouter::global();
         let router2 = PointerRouter::global();
         assert!(std::ptr::eq(router1, router2));
+    }
+
+    #[test]
+    fn test_reentrancy_remove_self() {
+        // Test that a handler can remove itself during dispatch
+        let router = Arc::new(PointerRouter::new());
+        let pointer = PointerId::new(0);
+
+        let call_count = Arc::new(AtomicUsize::new(0));
+        let count_clone = call_count.clone();
+
+        let router_clone = router.clone();
+        let handler: PointerRouteHandler = Arc::new(move |_: &PointerEvent| {
+            count_clone.fetch_add(1, Ordering::Relaxed);
+            // Remove self during dispatch - this should work without deadlock
+            // Note: We can't easily remove self here because we don't have the handler Arc
+            // But we can remove all routes which exercises the same code path
+            router_clone.remove_all_routes(PointerId::new(0));
+        });
+
+        router.add_route(pointer, handler);
+
+        let event = make_event(0, Offset::new(50.0, 50.0));
+        router.route(&event); // Should not deadlock
+
+        assert_eq!(call_count.load(Ordering::Relaxed), 1);
+        assert!(!router.has_routes(pointer));
+    }
+
+    #[test]
+    fn test_reentrancy_add_handler() {
+        // Test that a handler can add new handlers during dispatch
+        let router = Arc::new(PointerRouter::new());
+        let pointer = PointerId::new(0);
+
+        let second_called = Arc::new(AtomicUsize::new(0));
+        let second_called_clone = second_called.clone();
+
+        let router_clone = router.clone();
+        let handler1: PointerRouteHandler = Arc::new(move |_: &PointerEvent| {
+            // Add a new handler during dispatch
+            let called = second_called_clone.clone();
+            let new_handler: PointerRouteHandler = Arc::new(move |_: &PointerEvent| {
+                called.fetch_add(1, Ordering::Relaxed);
+            });
+            router_clone.add_route(PointerId::new(0), new_handler);
+        });
+
+        router.add_route(pointer, handler1);
+
+        let event = make_event(0, Offset::new(50.0, 50.0));
+        router.route(&event); // Should not deadlock
+
+        // The new handler should NOT be called during this dispatch
+        // (it takes effect on the next event)
+        assert_eq!(second_called.load(Ordering::Relaxed), 0);
+
+        // But should be called on the next event
+        router.route(&event);
+        assert_eq!(second_called.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn test_reentrancy_remove_other_handler() {
+        // Test that a handler can remove another handler during dispatch
+        let router = Arc::new(PointerRouter::new());
+        let pointer = PointerId::new(0);
+
+        let handler2_called = Arc::new(AtomicUsize::new(0));
+        let handler2_called_clone = handler2_called.clone();
+
+        let handler2: PointerRouteHandler = Arc::new(move |_: &PointerEvent| {
+            handler2_called_clone.fetch_add(1, Ordering::Relaxed);
+        });
+        let handler2_for_remove = handler2.clone();
+
+        let router_clone = router.clone();
+        let handler1: PointerRouteHandler = Arc::new(move |_: &PointerEvent| {
+            // Remove handler2 during dispatch
+            router_clone.remove_route(PointerId::new(0), &handler2_for_remove);
+        });
+
+        // Add handler1 first, then handler2
+        router.add_route(pointer, handler1);
+        router.add_route(pointer, handler2);
+
+        let event = make_event(0, Offset::new(50.0, 50.0));
+        router.route(&event); // Should not deadlock
+
+        // handler2 should NOT be called because handler1 removed it
+        assert_eq!(handler2_called.load(Ordering::Relaxed), 0);
     }
 }
