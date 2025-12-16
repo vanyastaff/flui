@@ -152,10 +152,18 @@ struct ArenaEntry {
     /// Team members that should all win together.
     /// Members in the same team are not mutually exclusive.
     team: SmallVec<[Arc<dyn GestureArenaMember>; 2]>,
+    /// Whether the arena is still open for new members.
+    /// When open, accepts are stored as eager_winner instead of resolving immediately.
+    is_open: bool,
     /// Whether this entry is held open (waiting for more information).
     is_held: bool,
     /// Whether arena has been resolved.
     is_resolved: bool,
+    /// Eager winner - first recognizer to accept while arena is open.
+    /// When arena closes, eager winner wins immediately.
+    eager_winner: Option<Arc<dyn GestureArenaMember>>,
+    /// Whether sweep is pending (requested while held).
+    has_pending_sweep: bool,
     /// Winners of the arena (if resolved). Multiple winners possible with teams.
     winners: SmallVec<[Arc<dyn GestureArenaMember>; 2]>,
     /// When this arena entry was created (for timeout calculation).
@@ -167,8 +175,11 @@ impl std::fmt::Debug for ArenaEntry {
         f.debug_struct("ArenaEntry")
             .field("member_count", &self.members.len())
             .field("team_count", &self.team.len())
+            .field("is_open", &self.is_open)
             .field("is_held", &self.is_held)
             .field("is_resolved", &self.is_resolved)
+            .field("has_eager_winner", &self.eager_winner.is_some())
+            .field("has_pending_sweep", &self.has_pending_sweep)
             .field("winner_count", &self.winners.len())
             .field("age_ms", &self.created_at.elapsed().as_millis())
             .finish()
@@ -180,10 +191,76 @@ impl ArenaEntry {
         Self {
             members: SmallVec::new(),
             team: SmallVec::new(),
+            is_open: true,
             is_held: false,
             is_resolved: false,
+            eager_winner: None,
+            has_pending_sweep: false,
             winners: SmallVec::new(),
             created_at: Instant::now(),
+        }
+    }
+
+    /// Close the arena - no more members can be added.
+    /// If there's an eager winner, resolve immediately.
+    fn close(&mut self, pointer: PointerId) {
+        if !self.is_open || self.is_resolved {
+            return;
+        }
+        self.is_open = false;
+
+        // If we have an eager winner, resolve in their favor
+        if let Some(winner) = self.eager_winner.take() {
+            self.resolve(Some(winner), pointer);
+        } else if self.members.len() == 1 {
+            // Single member wins automatically
+            let winner = self.members[0].clone();
+            self.resolve(Some(winner), pointer);
+        }
+    }
+
+    /// Accept gesture for a member.
+    /// If arena is open, store as eager winner. If closed, resolve immediately.
+    fn accept(&mut self, member: Arc<dyn GestureArenaMember>, pointer: PointerId) {
+        if self.is_resolved {
+            return;
+        }
+
+        if self.is_open {
+            // Store as eager winner - will win when arena closes
+            if self.eager_winner.is_none() {
+                self.eager_winner = Some(member);
+            }
+            // If already have eager winner, ignore subsequent accepts
+        } else {
+            // Arena closed, resolve immediately
+            self.resolve(Some(member), pointer);
+        }
+    }
+
+    /// Reject gesture for a member.
+    fn reject(&mut self, member: &Arc<dyn GestureArenaMember>, pointer: PointerId) {
+        if self.is_resolved {
+            return;
+        }
+
+        // Remove from members
+        self.members.retain(|m| !Arc::ptr_eq(m, member));
+
+        // Remove from eager winner if it was this member
+        if let Some(ref eager) = self.eager_winner {
+            if Arc::ptr_eq(eager, member) {
+                self.eager_winner = None;
+            }
+        }
+
+        // Notify the member
+        member.reject_gesture(pointer);
+
+        // If only one member left and arena is closed, they win
+        if !self.is_open && self.members.len() == 1 {
+            let winner = self.members[0].clone();
+            self.resolve(Some(winner), pointer);
         }
     }
 
@@ -354,7 +431,8 @@ impl GestureArena {
 
     /// Close the arena for a pointer (no more members can be added).
     ///
-    /// If there's only one member, it wins immediately.
+    /// If there's an eager winner, they win immediately.
+    /// If there's only one member, it wins automatically.
     /// Otherwise, waits for members to accept/reject.
     pub fn close(&self, pointer: PointerId) {
         if let Some(entry_ref) = self.entries.get(&pointer) {
@@ -364,11 +442,27 @@ impl GestureArena {
                 return; // Arena is held open
             }
 
-            // If only one member, it wins automatically
-            if entry.members.len() == 1 {
-                let winner = entry.members[0].clone();
-                entry.resolve(Some(winner), pointer);
-            }
+            entry.close(pointer);
+        }
+    }
+
+    /// Accept gesture for a member - the member wants to handle this gesture.
+    ///
+    /// If arena is open, stores as eager winner (wins when arena closes).
+    /// If arena is closed, resolves immediately in favor of this member.
+    pub fn accept(&self, pointer: PointerId, member: Arc<dyn GestureArenaMember>) {
+        if let Some(entry_ref) = self.entries.get(&pointer) {
+            entry_ref.lock().accept(member, pointer);
+        }
+    }
+
+    /// Reject gesture for a member - the member doesn't want this gesture.
+    ///
+    /// Removes the member from the arena and notifies them.
+    /// If only one member remains and arena is closed, they win.
+    pub fn reject(&self, pointer: PointerId, member: &Arc<dyn GestureArenaMember>) {
+        if let Some(entry_ref) = self.entries.get(&pointer) {
+            entry_ref.lock().reject(member, pointer);
         }
     }
 
@@ -384,20 +478,33 @@ impl GestureArena {
     /// Release the hold on an arena.
     ///
     /// If arena was waiting to close, it will close now.
+    /// If sweep was pending, it will execute now.
     pub fn release(&self, pointer: PointerId) {
-        if let Some(entry_ref) = self.entries.get(&pointer) {
-            let mut entry = entry_ref.lock();
-            entry.release();
+        let should_sweep = {
+            if let Some(entry_ref) = self.entries.get(&pointer) {
+                let mut entry = entry_ref.lock();
+                entry.release();
 
-            // If arena was waiting to close, close it now
-            if !entry.is_held && !entry.is_resolved {
-                if entry.members.len() == 1 {
-                    let winner = entry.members[0].clone();
-                    entry.resolve(Some(winner), pointer);
-                } else if entry.members.is_empty() {
-                    entry.resolve(None, pointer);
+                // If arena was waiting to close, close it now
+                if !entry.is_held && !entry.is_resolved {
+                    entry.close(pointer);
                 }
+
+                // Check if sweep was pending
+                if entry.has_pending_sweep {
+                    entry.has_pending_sweep = false;
+                    true
+                } else {
+                    false
+                }
+            } else {
+                false
             }
+        };
+
+        // Execute pending sweep outside the lock
+        if should_sweep {
+            self.entries.remove(&pointer);
         }
     }
 
@@ -451,7 +558,17 @@ impl GestureArena {
     /// Sweep - remove resolved arenas for a pointer.
     ///
     /// Called when pointer is released to clean up.
+    /// If arena is held, sweep is deferred until release().
     pub fn sweep(&self, pointer: PointerId) {
+        // Check if held - if so, mark pending sweep
+        if let Some(entry_ref) = self.entries.get(&pointer) {
+            let mut entry = entry_ref.lock();
+            if entry.is_held {
+                entry.has_pending_sweep = true;
+                return;
+            }
+        }
+
         self.entries.remove(&pointer);
     }
 
@@ -513,6 +630,27 @@ impl GestureArena {
         self.entries
             .get(&pointer)
             .is_some_and(|entry_ref| entry_ref.lock().is_held)
+    }
+
+    /// Check if an arena is open (accepting new members).
+    pub fn is_open(&self, pointer: PointerId) -> bool {
+        self.entries
+            .get(&pointer)
+            .is_some_and(|entry_ref| entry_ref.lock().is_open)
+    }
+
+    /// Check if an arena has an eager winner.
+    pub fn has_eager_winner(&self, pointer: PointerId) -> bool {
+        self.entries
+            .get(&pointer)
+            .is_some_and(|entry_ref| entry_ref.lock().eager_winner.is_some())
+    }
+
+    /// Check if sweep is pending for an arena.
+    pub fn has_pending_sweep(&self, pointer: PointerId) -> bool {
+        self.entries
+            .get(&pointer)
+            .is_some_and(|entry_ref| entry_ref.lock().has_pending_sweep)
     }
 
     /// Get the number of members in an arena.
@@ -1075,5 +1213,193 @@ mod tests {
         let resolved = arena.force_resolve_if_default_timeout(pointer);
         assert!(!resolved);
         assert!(!arena.is_resolved(pointer));
+    }
+
+    // ========================================================================
+    // Eager Winner tests
+    // ========================================================================
+
+    #[test]
+    fn test_eager_winner_wins_on_close() {
+        let arena = GestureArena::new();
+        let pointer = PointerId::new(0);
+
+        let member1 = Arc::new(MockMember::new());
+        let member2 = Arc::new(MockMember::new());
+
+        arena.add(pointer, member1.clone());
+        arena.add(pointer, member2.clone());
+
+        // Arena is open, accept stores as eager winner
+        assert!(arena.is_open(pointer));
+        arena.accept(pointer, member1.clone());
+        assert!(arena.has_eager_winner(pointer));
+
+        // Close arena - eager winner should win
+        arena.close(pointer);
+
+        assert!(member1.was_accepted());
+        assert!(member2.was_rejected());
+        assert!(arena.is_resolved(pointer));
+    }
+
+    #[test]
+    fn test_first_eager_winner_wins() {
+        let arena = GestureArena::new();
+        let pointer = PointerId::new(0);
+
+        let member1 = Arc::new(MockMember::new());
+        let member2 = Arc::new(MockMember::new());
+
+        arena.add(pointer, member1.clone());
+        arena.add(pointer, member2.clone());
+
+        // Both accept while arena is open - first wins
+        arena.accept(pointer, member1.clone());
+        arena.accept(pointer, member2.clone()); // Ignored, already have eager winner
+
+        arena.close(pointer);
+
+        assert!(member1.was_accepted());
+        assert!(member2.was_rejected());
+    }
+
+    #[test]
+    fn test_accept_after_close_resolves_immediately() {
+        let arena = GestureArena::new();
+        let pointer = PointerId::new(0);
+
+        let member1 = Arc::new(MockMember::new());
+        let member2 = Arc::new(MockMember::new());
+
+        arena.add(pointer, member1.clone());
+        arena.add(pointer, member2.clone());
+
+        // Close arena first (no eager winner, no single member - stays unresolved)
+        arena.close(pointer);
+        assert!(!arena.is_open(pointer));
+        assert!(!arena.is_resolved(pointer));
+
+        // Accept after close resolves immediately
+        arena.accept(pointer, member1.clone());
+
+        assert!(member1.was_accepted());
+        assert!(member2.was_rejected());
+        assert!(arena.is_resolved(pointer));
+    }
+
+    #[test]
+    fn test_reject_removes_eager_winner() {
+        let arena = GestureArena::new();
+        let pointer = PointerId::new(0);
+
+        let member1 = Arc::new(MockMember::new());
+        let member2 = Arc::new(MockMember::new());
+
+        // Need to cast to dyn trait for reject()
+        let member1_dyn: Arc<dyn GestureArenaMember> = member1.clone();
+        let member2_dyn: Arc<dyn GestureArenaMember> = member2.clone();
+
+        arena.add(pointer, member1_dyn.clone());
+        arena.add(pointer, member2_dyn.clone());
+
+        // member1 accepts (becomes eager winner)
+        arena.accept(pointer, member1_dyn.clone());
+        assert!(arena.has_eager_winner(pointer));
+
+        // member1 rejects (removes eager winner)
+        arena.reject(pointer, &member1_dyn);
+        assert!(!arena.has_eager_winner(pointer));
+        assert!(member1.was_rejected());
+
+        // Close - member2 is only one left, wins
+        arena.close(pointer);
+        assert!(member2.was_accepted());
+    }
+
+    #[test]
+    fn test_is_open_false_after_close() {
+        let arena = GestureArena::new();
+        let pointer = PointerId::new(0);
+
+        let member = Arc::new(MockMember::new());
+        arena.add(pointer, member);
+
+        assert!(arena.is_open(pointer));
+        arena.close(pointer);
+        assert!(!arena.is_open(pointer));
+    }
+
+    // ========================================================================
+    // Pending Sweep tests
+    // ========================================================================
+
+    #[test]
+    fn test_sweep_deferred_when_held() {
+        let arena = GestureArena::new();
+        let pointer = PointerId::new(0);
+
+        let member = Arc::new(MockMember::new());
+        arena.add(pointer, member);
+        arena.hold(pointer);
+
+        // Sweep while held - should be deferred
+        arena.sweep(pointer);
+        assert!(arena.contains(pointer)); // Still there
+        assert!(arena.has_pending_sweep(pointer));
+
+        // Release triggers deferred sweep
+        arena.release(pointer);
+        assert!(!arena.contains(pointer)); // Now removed
+    }
+
+    #[test]
+    fn test_sweep_immediate_when_not_held() {
+        let arena = GestureArena::new();
+        let pointer = PointerId::new(0);
+
+        let member = Arc::new(MockMember::new());
+        arena.add(pointer, member);
+
+        // Sweep when not held - immediate
+        arena.sweep(pointer);
+        assert!(!arena.contains(pointer));
+    }
+
+    #[test]
+    fn test_pending_sweep_cleared_on_release() {
+        let arena = GestureArena::new();
+        let pointer = PointerId::new(0);
+
+        let member = Arc::new(MockMember::new());
+        arena.add(pointer, member);
+        arena.hold(pointer);
+        arena.sweep(pointer);
+
+        assert!(arena.has_pending_sweep(pointer));
+
+        arena.release(pointer);
+        // Arena should be removed, can't check pending_sweep anymore
+        assert!(!arena.contains(pointer));
+    }
+
+    #[test]
+    fn test_release_closes_arena_if_open() {
+        let arena = GestureArena::new();
+        let pointer = PointerId::new(0);
+
+        let member = Arc::new(MockMember::new());
+        arena.add(pointer, member.clone());
+        arena.hold(pointer);
+
+        // Arena still open and held
+        assert!(arena.is_open(pointer));
+        assert!(arena.is_held(pointer));
+
+        arena.release(pointer);
+
+        // Release should close and resolve single member
+        assert!(member.was_accepted());
+        assert!(arena.is_resolved(pointer));
     }
 }

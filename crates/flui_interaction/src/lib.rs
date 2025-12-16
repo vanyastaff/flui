@@ -164,7 +164,9 @@ pub mod events;
 // Other modules
 // ============================================================================
 
+pub mod binding;
 pub mod mouse_tracker;
+pub mod settings;
 pub mod signal_resolver;
 
 // ============================================================================
@@ -222,8 +224,14 @@ pub use testing::{
 // Re-exports: Other
 // ============================================================================
 
+pub use binding::GestureBinding;
 pub use mouse_tracker::{CursorChangeCallback, MouseTracker, MouseTrackerAnnotation};
 pub use sealed::{CustomGestureRecognizer, CustomHitTestable};
+pub use settings::{
+    GestureSettings, DEFAULT_DOUBLE_TAP_SLOP, DEFAULT_DOUBLE_TAP_TIMEOUT,
+    DEFAULT_LONG_PRESS_TIMEOUT, DEFAULT_MAX_FLING_VELOCITY, DEFAULT_MIN_FLING_VELOCITY,
+    DEFAULT_MOUSE_SLOP, DEFAULT_PAN_SLOP, DEFAULT_PEN_SLOP, DEFAULT_SCALE_SLOP, DEFAULT_TOUCH_SLOP,
+};
 pub use signal_resolver::{PointerSignalResolver, SignalPriority};
 
 // ============================================================================
