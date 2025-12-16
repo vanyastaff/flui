@@ -1,15 +1,26 @@
+# Rust toolchain configuration
+# https://rust-lang.github.io/rustup/overrides.html#the-toolchain-file
+
 [toolchain]
 channel = "stable"
-targets = ["x86_64-pc-windows-msvc"]
 profile = "default"
 
-# FLUI Project Toolchain Configuration
-#
-# Platform: x86_64-pc-windows-msvc (Tier 1)
-# - Best performance for wgpu/egui on Windows
-# - DirectX 12 backend support
-# - Native Windows APIs and ABI
-# - Optimal for Windows 11 x86_64 development
-#
-# To add additional targets:
-# rustup target add <target-triple>
+# Components to install
+components = [
+    "rustfmt",      # Code formatting
+    "clippy",       # Linting
+    "rust-src",     # Source for rust-analyzer
+    "rust-analyzer" # LSP server
+]
+
+# Build targets
+targets = [
+    # Primary development (Windows)
+    "x86_64-pc-windows-msvc",
+
+    # Cross-compilation targets (uncomment as needed)
+    # "wasm32-unknown-unknown",         # WebAssembly
+    # "aarch64-linux-android",          # Android ARM64
+    # "x86_64-unknown-linux-gnu",       # Linux
+    # "aarch64-apple-darwin",           # macOS ARM64
+]
