@@ -33,6 +33,7 @@
 //! - [`InheritedView`] - Views that provide data to descendants
 //! - [`RenderView`] - Views that create RenderObjects
 //! - [`ProxyView`] - Single-child wrapper Views
+//! - [`ParentDataView`] - Views that configure parent data on RenderObjects
 //!
 //! ## Example
 //!
@@ -98,9 +99,11 @@ pub mod view;
 
 // View traits
 pub use view::{
-    BoxedView, ElementBase, InheritedElement, InheritedView, IntoView, ProxyElement, ProxyView,
-    RenderElement, RenderView, StatefulElement, StatefulView, StatelessElement, StatelessView,
-    View, ViewExt, ViewKey, ViewState,
+    clear_error_view_builder, set_error_view_builder, BoxedView, ElementBase, ErrorElement,
+    ErrorView, ErrorViewBuilder, FlutterError, InheritedElement, InheritedView, IntoView,
+    ParentData, ParentDataElement, ParentDataView, ProxyElement, ProxyView, RenderElement,
+    RenderView, StatefulElement, StatefulView, StatelessElement, StatelessView, View, ViewExt,
+    ViewKey, ViewState,
 };
 
 // Keys
@@ -120,7 +123,7 @@ pub use owner::BuildOwner;
 pub use tree::{reconcile_children, ElementNode, ElementTree};
 
 // Re-export from flui-foundation
-pub use flui_foundation::ElementId;
+pub use flui_foundation::{ElementId, RenderId};
 
 // ============================================================================
 // Prelude
@@ -139,8 +142,8 @@ pub mod prelude {
     pub use crate::owner::BuildOwner;
     pub use crate::tree::{reconcile_children, ElementNode, ElementTree};
     pub use crate::view::{
-        BoxedView, InheritedView, IntoView, ProxyView, RenderView, StatefulView, StatelessView,
-        View, ViewExt, ViewState,
+        BoxedView, InheritedView, IntoView, ParentData, ParentDataView, ProxyView, RenderView,
+        StatefulView, StatelessView, View, ViewExt, ViewState,
     };
-    pub use flui_foundation::ElementId;
+    pub use flui_foundation::{ElementId, RenderId};
 }

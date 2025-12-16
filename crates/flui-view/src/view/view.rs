@@ -113,44 +113,164 @@ pub trait ViewKey: Send + Sync + std::fmt::Debug {
 /// This is the object-safe version of Element for dynamic dispatch.
 /// Specific Element types (StatelessElement, StatefulElement, etc.)
 /// implement the full Element trait.
+///
+/// # Flutter Equivalent
+///
+/// This corresponds to Flutter's `Element` abstract class. Key methods:
+/// - `mount()` / `unmount()` - lifecycle
+/// - `update()` - update with new widget
+/// - `rebuild()` / `performRebuild()` - rebuild children
+/// - `activate()` / `deactivate()` - temporary removal
+/// - `didChangeDependencies()` - inherited widget changed
 pub trait ElementBase: Send + Sync + 'static {
+    // ========================================================================
+    // Identity
+    // ========================================================================
+
     /// Get the TypeId of the View that created this Element.
     fn view_type_id(&self) -> TypeId;
+
+    /// Get the depth in the element tree (root = 0).
+    fn depth(&self) -> usize;
+
+    /// Get the slot position in parent's child list.
+    fn slot(&self) -> usize {
+        0
+    }
+
+    // ========================================================================
+    // Lifecycle State
+    // ========================================================================
 
     /// Get the current lifecycle state.
     fn lifecycle(&self) -> crate::element::Lifecycle;
 
+    /// Check if this Element is currently mounted.
+    fn mounted(&self) -> bool {
+        matches!(
+            self.lifecycle(),
+            crate::element::Lifecycle::Active | crate::element::Lifecycle::Inactive
+        )
+    }
+
+    // ========================================================================
+    // Lifecycle Methods
+    // ========================================================================
+
+    /// Mount this Element into the tree.
+    ///
+    /// Called when the Element is first inserted. Sets up parent relationship
+    /// and initializes state.
+    fn mount(&mut self, parent: Option<flui_foundation::ElementId>, slot: usize);
+
+    /// Unmount this Element (permanently removed).
+    ///
+    /// Called when the Element is removed from the tree permanently.
+    /// Resources should be released.
+    fn unmount(&mut self);
+
+    /// Activate this Element (re-inserted into tree).
+    ///
+    /// Called when a previously deactivated Element is reinserted.
+    fn activate(&mut self);
+
+    /// Deactivate this Element (temporarily removed from tree).
+    ///
+    /// Called when the Element is removed but may be reinserted.
+    /// State is preserved.
+    fn deactivate(&mut self);
+
+    // ========================================================================
+    // Update & Rebuild
+    // ========================================================================
+
     /// Update this Element with a new View of the same type.
     ///
-    /// # Safety
-    ///
-    /// Caller must ensure `new_view` is the same concrete type as the View
-    /// that created this Element.
+    /// Called when the parent rebuilds and provides a new View configuration.
+    /// The Element should update its internal state to match the new View.
     fn update(&mut self, new_view: &dyn View);
 
     /// Mark this Element as needing a rebuild.
+    ///
+    /// The Element will be rebuilt in the next build phase.
     fn mark_needs_build(&mut self);
 
-    /// Perform the build phase.
+    /// Rebuild this Element.
+    ///
+    /// Called by the framework when this Element is dirty.
+    /// Calls `perform_build()` if needed.
+    fn rebuild(&mut self, force: bool) {
+        if force || self.lifecycle() == crate::element::Lifecycle::Active {
+            self.perform_build();
+        }
+    }
+
+    /// Perform the actual build phase.
+    ///
+    /// Subclasses override this to rebuild their children.
     fn perform_build(&mut self);
 
-    /// Mount this Element into the tree.
-    fn mount(&mut self, parent: Option<flui_foundation::ElementId>, slot: usize);
+    // ========================================================================
+    // Dependency Notifications
+    // ========================================================================
 
-    /// Deactivate this Element (temporarily removed from tree).
-    fn deactivate(&mut self);
+    /// Called when a dependency (InheritedView) changes.
+    ///
+    /// Override this to respond to inherited data changes.
+    /// Default implementation marks the element for rebuild.
+    fn did_change_dependencies(&mut self) {
+        self.mark_needs_build();
+    }
 
-    /// Activate this Element (re-inserted into tree).
-    fn activate(&mut self);
+    // ========================================================================
+    // Slot Management
+    // ========================================================================
 
-    /// Unmount this Element (permanently removed).
-    fn unmount(&mut self);
+    /// Update the slot position of this Element.
+    ///
+    /// Called when the Element's position in the parent's child list changes.
+    fn update_slot(&mut self, _new_slot: usize) {
+        // Default: no-op. Subclasses can override.
+    }
+
+    // ========================================================================
+    // Child Management
+    // ========================================================================
 
     /// Visit all child Elements.
     fn visit_children(&self, visitor: &mut dyn FnMut(flui_foundation::ElementId));
 
-    /// Get the depth in the element tree.
-    fn depth(&self) -> usize;
+    /// Get the first child Element, if any.
+    fn first_child(&self) -> Option<flui_foundation::ElementId> {
+        let mut first = None;
+        self.visit_children(&mut |id| {
+            if first.is_none() {
+                first = Some(id);
+            }
+        });
+        first
+    }
+
+    /// Deactivate a child Element.
+    ///
+    /// Removes the child from the tree but preserves its state.
+    fn deactivate_child(&mut self, _child: flui_foundation::ElementId) {
+        // Default: no-op. Subclasses should implement.
+    }
+
+    // ========================================================================
+    // Debug
+    // ========================================================================
+
+    /// Get a debug description of this Element.
+    fn debug_description(&self) -> String {
+        format!(
+            "Element(type={:?}, lifecycle={:?}, depth={})",
+            self.view_type_id(),
+            self.lifecycle(),
+            self.depth()
+        )
+    }
 }
 
 #[cfg(test)]
