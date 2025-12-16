@@ -1,10 +1,13 @@
 //! RenderTree - Slab-based render object storage.
 //!
 //! This module provides efficient storage and tree operations for render objects.
+//! Implements `flui-tree` traits for unified tree interface.
 
 use std::sync::Arc;
 
 use flui_foundation::RenderId;
+use flui_tree::iter::{AllSiblings, Ancestors, DescendantsWithDepth};
+use flui_tree::traits::{TreeNav, TreeRead, TreeWrite};
 use parking_lot::RwLock;
 use slab::Slab;
 
@@ -580,6 +583,120 @@ unsafe impl Send for RenderTree {}
 unsafe impl Sync for RenderTree {}
 
 // ============================================================================
+// flui-tree Trait Implementations
+// ============================================================================
+
+impl TreeRead<RenderId> for RenderTree {
+    type Node = RenderNode;
+
+    const DEFAULT_CAPACITY: usize = 64;
+    const INLINE_THRESHOLD: usize = 16;
+
+    #[inline]
+    fn get(&self, id: RenderId) -> Option<&Self::Node> {
+        RenderTree::get(self, id)
+    }
+
+    #[inline]
+    fn contains(&self, id: RenderId) -> bool {
+        RenderTree::contains(self, id)
+    }
+
+    #[inline]
+    fn len(&self) -> usize {
+        RenderTree::len(self)
+    }
+
+    #[inline]
+    fn node_ids(&self) -> impl Iterator<Item = RenderId> + '_ {
+        self.nodes.iter().map(|(idx, _)| RenderId::new(idx + 1))
+    }
+}
+
+impl TreeWrite<RenderId> for RenderTree {
+    #[inline]
+    fn get_mut(&mut self, id: RenderId) -> Option<&mut Self::Node> {
+        RenderTree::get_mut(self, id)
+    }
+
+    fn insert(&mut self, node: Self::Node) -> RenderId {
+        let slab_index = self.nodes.insert(node);
+        RenderId::new(slab_index + 1)
+    }
+
+    fn remove(&mut self, id: RenderId) -> Option<Self::Node> {
+        // Update root if removing root
+        if self.root == Some(id) {
+            self.root = None;
+        }
+
+        // Get parent and remove from parent's children
+        if let Some(parent_id) = self.get(id).and_then(|n| n.parent()) {
+            if let Some(parent) = self.nodes.get_mut(parent_id.get() - 1) {
+                parent.remove_child(id);
+            }
+        }
+
+        self.nodes.try_remove(id.get() - 1)
+    }
+
+    #[inline]
+    fn clear(&mut self) {
+        RenderTree::clear(self);
+    }
+
+    #[inline]
+    fn reserve(&mut self, additional: usize) {
+        RenderTree::reserve(self, additional);
+    }
+}
+
+impl TreeNav<RenderId> for RenderTree {
+    const MAX_DEPTH: usize = 64;
+    const AVG_CHILDREN: usize = 4;
+
+    #[inline]
+    fn parent(&self, id: RenderId) -> Option<RenderId> {
+        RenderTree::parent(self, id)
+    }
+
+    #[inline]
+    fn children(&self, id: RenderId) -> impl Iterator<Item = RenderId> + '_ {
+        self.get(id)
+            .map(|node| node.children().iter().copied())
+            .into_iter()
+            .flatten()
+    }
+
+    #[inline]
+    fn ancestors(&self, start: RenderId) -> impl Iterator<Item = RenderId> + '_ {
+        Ancestors::new(self, start)
+    }
+
+    #[inline]
+    fn descendants(&self, root: RenderId) -> impl Iterator<Item = (RenderId, usize)> + '_ {
+        DescendantsWithDepth::new(self, root)
+    }
+
+    #[inline]
+    fn siblings(&self, id: RenderId) -> impl Iterator<Item = RenderId> + '_ {
+        AllSiblings::new(self, id)
+    }
+
+    #[inline]
+    fn child_count(&self, id: RenderId) -> usize {
+        self.get(id).map(|node| node.children().len()).unwrap_or(0)
+    }
+
+    #[inline]
+    fn has_children(&self, id: RenderId) -> bool {
+        self.get(id)
+            .map(|node| !node.children().is_empty())
+            .unwrap_or(false)
+    }
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 
@@ -784,5 +901,150 @@ mod tests {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<RenderTree>();
         assert_send_sync::<RenderNode>();
+    }
+
+    // ========================================================================
+    // flui-tree Trait Tests
+    // ========================================================================
+
+    #[test]
+    fn test_tree_read_trait() {
+        let mut tree = RenderTree::new();
+
+        let id1 = TreeWrite::insert(&mut tree, RenderNode::new(test_render_box()));
+        let id2 = TreeWrite::insert(&mut tree, RenderNode::new(test_render_box()));
+
+        // TreeRead::get
+        assert!(TreeRead::get(&tree, id1).is_some());
+        assert!(TreeRead::get(&tree, id2).is_some());
+
+        // TreeRead::contains
+        assert!(TreeRead::contains(&tree, id1));
+        assert!(TreeRead::contains(&tree, id2));
+
+        // TreeRead::len
+        assert_eq!(TreeRead::len(&tree), 2);
+
+        // TreeRead::node_ids
+        let ids: Vec<_> = TreeRead::node_ids(&tree).collect();
+        assert_eq!(ids.len(), 2);
+        assert!(ids.contains(&id1));
+        assert!(ids.contains(&id2));
+    }
+
+    #[test]
+    fn test_tree_write_trait() {
+        let mut tree = RenderTree::new();
+
+        // TreeWrite::insert
+        let id = TreeWrite::insert(&mut tree, RenderNode::new(test_render_box()));
+        assert!(TreeRead::contains(&tree, id));
+
+        // TreeWrite::get_mut
+        assert!(TreeWrite::get_mut(&mut tree, id).is_some());
+
+        // TreeWrite::remove
+        let removed = TreeWrite::remove(&mut tree, id);
+        assert!(removed.is_some());
+        assert!(!TreeRead::contains(&tree, id));
+
+        // TreeWrite::clear
+        TreeWrite::insert(&mut tree, RenderNode::new(test_render_box()));
+        TreeWrite::insert(&mut tree, RenderNode::new(test_render_box()));
+        assert_eq!(TreeRead::len(&tree), 2);
+        TreeWrite::clear(&mut tree);
+        assert_eq!(TreeRead::len(&tree), 0);
+    }
+
+    #[test]
+    fn test_tree_nav_trait_parent_children() {
+        let mut tree = RenderTree::new();
+
+        let root_id = tree.insert(test_render_box());
+        tree.set_root(Some(root_id));
+
+        let child_id = tree.insert_child(root_id, test_render_box()).unwrap();
+
+        // TreeNav::parent
+        assert_eq!(TreeNav::parent(&tree, child_id), Some(root_id));
+        assert_eq!(TreeNav::parent(&tree, root_id), None);
+
+        // TreeNav::children
+        let children: Vec<_> = TreeNav::children(&tree, root_id).collect();
+        assert_eq!(children, vec![child_id]);
+
+        // TreeNav::child_count
+        assert_eq!(TreeNav::child_count(&tree, root_id), 1);
+        assert_eq!(TreeNav::child_count(&tree, child_id), 0);
+
+        // TreeNav::has_children
+        assert!(TreeNav::has_children(&tree, root_id));
+        assert!(!TreeNav::has_children(&tree, child_id));
+    }
+
+    #[test]
+    fn test_tree_nav_trait_ancestors() {
+        let mut tree = RenderTree::new();
+
+        let root_id = tree.insert(test_render_box());
+        tree.set_root(Some(root_id));
+
+        let child_id = tree.insert_child(root_id, test_render_box()).unwrap();
+        let grandchild_id = tree.insert_child(child_id, test_render_box()).unwrap();
+
+        // TreeNav::ancestors (includes self)
+        let ancestors: Vec<_> = TreeNav::ancestors(&tree, grandchild_id).collect();
+        assert_eq!(ancestors, vec![grandchild_id, child_id, root_id]);
+
+        let ancestors_from_child: Vec<_> = TreeNav::ancestors(&tree, child_id).collect();
+        assert_eq!(ancestors_from_child, vec![child_id, root_id]);
+
+        let ancestors_from_root: Vec<_> = TreeNav::ancestors(&tree, root_id).collect();
+        assert_eq!(ancestors_from_root, vec![root_id]);
+    }
+
+    #[test]
+    fn test_tree_nav_trait_descendants() {
+        let mut tree = RenderTree::new();
+
+        let root_id = tree.insert(test_render_box());
+        tree.set_root(Some(root_id));
+
+        let child1 = tree.insert_child(root_id, test_render_box()).unwrap();
+        let child2 = tree.insert_child(root_id, test_render_box()).unwrap();
+        let grandchild = tree.insert_child(child1, test_render_box()).unwrap();
+
+        // TreeNav::descendants returns (id, depth) pairs
+        let descendants: Vec<_> = TreeNav::descendants(&tree, root_id).collect();
+
+        assert_eq!(descendants.len(), 4);
+        assert!(descendants.contains(&(root_id, 0)));
+        assert!(descendants.contains(&(child1, 1)));
+        assert!(descendants.contains(&(child2, 1)));
+        assert!(descendants.contains(&(grandchild, 2)));
+    }
+
+    #[test]
+    fn test_tree_nav_trait_siblings() {
+        let mut tree = RenderTree::new();
+
+        let root_id = tree.insert(test_render_box());
+        tree.set_root(Some(root_id));
+
+        let child1 = tree.insert_child(root_id, test_render_box()).unwrap();
+        let child2 = tree.insert_child(root_id, test_render_box()).unwrap();
+        let child3 = tree.insert_child(root_id, test_render_box()).unwrap();
+
+        // TreeNav::siblings (excludes self, as per AllSiblings behavior)
+        let siblings: Vec<_> = TreeNav::siblings(&tree, child2).collect();
+        assert_eq!(siblings.len(), 2);
+        assert!(siblings.contains(&child1));
+        assert!(siblings.contains(&child3));
+        // child2 should NOT be in its own siblings list
+        assert!(!siblings.contains(&child2));
+
+        // Root has no siblings
+        let root_siblings: Vec<_> = TreeNav::siblings(&tree, root_id).collect();
+        assert!(root_siblings.is_empty());
     }
 }

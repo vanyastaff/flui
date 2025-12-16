@@ -6,6 +6,60 @@ use super::RenderObject;
 use crate::pipeline::PaintingContext;
 
 // ============================================================================
+// Hit Test Behavior
+// ============================================================================
+
+/// How a render object behaves during hit testing.
+///
+/// This enum determines when a render object is considered "hit" and whether
+/// it prevents objects behind it from receiving hits.
+///
+/// # Flutter Equivalence
+///
+/// This corresponds to Flutter's `HitTestBehavior` enum from `rendering/proxy_box.dart`.
+///
+/// # Examples
+///
+/// ```ignore
+/// // A button that should absorb all hits within its bounds
+/// struct MyButton {
+///     behavior: HitTestBehavior,
+/// }
+///
+/// impl MyButton {
+///     fn new() -> Self {
+///         Self {
+///             behavior: HitTestBehavior::Opaque, // Absorb hits
+///         }
+///     }
+/// }
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum HitTestBehavior {
+    /// Targets that defer to their children receive events within their bounds
+    /// only if one of their children is hit by the hit test.
+    ///
+    /// This is the default behavior for containers that don't need to handle
+    /// hits themselves (like Padding, Align).
+    #[default]
+    DeferToChild,
+
+    /// Opaque targets can be hit even if their children have not been hit.
+    ///
+    /// A target that is opaque intercepts hit tests and prevents objects below
+    /// it from being hit. This is useful for buttons and other interactive
+    /// elements that should absorb all hits within their bounds.
+    Opaque,
+
+    /// Translucent targets both receive events within their bounds and permit
+    /// targets visually behind them to also receive events.
+    ///
+    /// This is useful for objects that want to be notified of hits but don't
+    /// want to prevent other objects from also being hit.
+    Translucent,
+}
+
+// ============================================================================
 // RenderBox Trait
 // ============================================================================
 
@@ -160,19 +214,42 @@ pub trait RenderBox: RenderObject {
     // Hit Testing
     // ========================================================================
 
+    /// Returns the hit test behavior for this render object.
+    ///
+    /// The default is [`HitTestBehavior::Opaque`], meaning if the position is
+    /// within bounds, this render object is considered hit. Override to use
+    /// different behavior like `DeferToChild` or `Translucent`.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// In Flutter, this is a property on `RenderProxyBoxWithHitTestBehavior`.
+    /// We make it part of the trait for simpler API.
+    fn hit_test_behavior(&self) -> HitTestBehavior {
+        HitTestBehavior::Opaque
+    }
+
     /// Hit tests this render object.
     ///
     /// Returns true if the given position hits this render object or
     /// any of its children.
+    ///
+    /// The behavior depends on [`hit_test_behavior`](Self::hit_test_behavior):
+    ///
+    /// - [`HitTestBehavior::Opaque`]: Returns true if position is within bounds,
+    ///   regardless of whether children are hit.
+    /// - [`HitTestBehavior::DeferToChild`]: Returns true only if a child is hit.
+    /// - [`HitTestBehavior::Translucent`]: Always adds self to result if within
+    ///   bounds, but returns the child hit result.
     ///
     /// # Arguments
     ///
     /// * `result` - The hit test result to add entries to
     /// * `position` - The position to test, in local coordinates
     ///
-    /// # Default Implementation
+    /// # Flutter Equivalence
     ///
-    /// Tests if position is within bounds, then delegates to children.
+    /// This corresponds to Flutter's `RenderBox.hitTest` and
+    /// `RenderProxyBoxWithHitTestBehavior.hitTest` methods.
     fn hit_test(&self, result: &mut BoxHitTestResult, position: Offset) -> bool {
         let size = self.size();
         if position.dx >= 0.0
@@ -180,7 +257,28 @@ pub trait RenderBox: RenderObject {
             && position.dx < size.width
             && position.dy < size.height
         {
-            self.hit_test_children(result, position) || self.hit_test_self(position)
+            let child_hit = self.hit_test_children(result, position);
+            let self_hit = self.hit_test_self(position);
+
+            match self.hit_test_behavior() {
+                HitTestBehavior::DeferToChild => {
+                    // Only hit if a child was hit
+                    if child_hit {
+                        result.add(BoxHitTestEntry::new(position));
+                    }
+                    child_hit
+                }
+                HitTestBehavior::Opaque => {
+                    // Hit if within bounds (children or self doesn't matter for return value)
+                    result.add(BoxHitTestEntry::new(position));
+                    true
+                }
+                HitTestBehavior::Translucent => {
+                    // Always add to result, but return child hit status
+                    result.add(BoxHitTestEntry::new(position));
+                    child_hit || self_hit
+                }
+            }
         } else {
             false
         }
@@ -188,7 +286,9 @@ pub trait RenderBox: RenderObject {
 
     /// Hit tests just this render object (not children).
     ///
-    /// Override to make this object respond to hits.
+    /// Override to make this object respond to hits independently of behavior.
+    /// This is called as part of hit testing and affects `Translucent` behavior.
+    ///
     /// Default returns `false`.
     fn hit_test_self(&self, _position: Offset) -> bool {
         false
@@ -198,6 +298,7 @@ pub trait RenderBox: RenderObject {
     ///
     /// Override to test children. Should iterate children in reverse
     /// paint order (front to back).
+    ///
     /// Default returns `false`.
     fn hit_test_children(&self, _result: &mut BoxHitTestResult, _position: Offset) -> bool {
         false
@@ -429,6 +530,83 @@ impl BoxHitTestResult {
     /// Returns whether this result has any entries.
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
+    }
+
+    /// Transforms the position by subtracting the paint offset, then calls the
+    /// hit test callback with the transformed position.
+    ///
+    /// This is used when hit testing children that are painted at an offset
+    /// from the parent's origin.
+    ///
+    /// # Arguments
+    ///
+    /// * `offset` - The paint offset to subtract from position, or `None` for no offset
+    /// * `position` - The position to transform
+    /// * `hit_test` - Callback to perform the actual hit test with transformed position
+    ///
+    /// # Returns
+    ///
+    /// Returns true if the callback returns true.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// This corresponds to Flutter's `BoxHitTestResult.addWithPaintOffset` method.
+    pub fn add_with_paint_offset<F>(
+        &mut self,
+        offset: Option<Offset>,
+        position: Offset,
+        hit_test: F,
+    ) -> bool
+    where
+        F: FnOnce(&mut BoxHitTestResult, Offset) -> bool,
+    {
+        let transformed = match offset {
+            Some(off) => Offset::new(position.dx - off.dx, position.dy - off.dy),
+            None => position,
+        };
+        hit_test(self, transformed)
+    }
+
+    /// Transforms the position by applying a transform matrix, then calls the
+    /// hit test callback with the transformed position.
+    ///
+    /// # Arguments
+    ///
+    /// * `transform` - The transform to apply (inverted internally)
+    /// * `position` - The position to transform
+    /// * `hit_test` - Callback to perform the actual hit test with transformed position
+    ///
+    /// # Returns
+    ///
+    /// Returns true if the callback returns true.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// This corresponds to Flutter's `BoxHitTestResult.addWithPaintTransform` method.
+    pub fn add_with_paint_transform<F>(
+        &mut self,
+        transform: Option<glam::Mat4>,
+        position: Offset,
+        hit_test: F,
+    ) -> bool
+    where
+        F: FnOnce(&mut BoxHitTestResult, Offset) -> bool,
+    {
+        let transformed = match transform {
+            Some(t) => {
+                // Invert the transform to go from parent coords to child coords
+                if let Some(inv) = t.inverse().try_into().ok() {
+                    let inv: glam::Mat4 = inv;
+                    let p = inv.transform_point3(glam::Vec3::new(position.dx, position.dy, 0.0));
+                    Offset::new(p.x, p.y)
+                } else {
+                    // Transform is not invertible, position cannot be mapped
+                    return false;
+                }
+            }
+            None => position,
+        };
+        hit_test(self, transformed)
     }
 }
 

@@ -30,8 +30,8 @@ use crate::lifecycle::BaseRenderObject;
 use crate::parent_data::ParentData;
 use crate::pipeline::{PaintingContext, PipelineOwner};
 use crate::traits::{
-    BoxHitTestResult, DiagnosticPropertiesBuilder, RenderBox, RenderObject, RenderProxyBox,
-    SingleChildRenderBox, TextBaseline,
+    BoxHitTestEntry, BoxHitTestResult, DiagnosticPropertiesBuilder, HitTestBehavior, RenderBox,
+    RenderObject, RenderProxyBox, SingleChildRenderBox, TextBaseline,
 };
 
 /// Simple parent data for proxy boxes.
@@ -312,13 +312,32 @@ impl RenderBox for RenderOpacity {
             return false;
         }
 
+        // Delegate to default implementation from trait
         let size = self.size();
         if position.dx >= 0.0
             && position.dy >= 0.0
             && position.dx < size.width
             && position.dy < size.height
         {
-            self.hit_test_children(result, position) || self.hit_test_self(position)
+            let child_hit = self.hit_test_children(result, position);
+            let self_hit = self.hit_test_self(position);
+
+            match self.hit_test_behavior() {
+                HitTestBehavior::DeferToChild => {
+                    if child_hit {
+                        result.add(BoxHitTestEntry::new(position));
+                    }
+                    child_hit
+                }
+                HitTestBehavior::Opaque => {
+                    result.add(BoxHitTestEntry::new(position));
+                    true
+                }
+                HitTestBehavior::Translucent => {
+                    result.add(BoxHitTestEntry::new(position));
+                    child_hit || self_hit
+                }
+            }
         } else {
             false
         }

@@ -71,6 +71,9 @@ use crate::traits::{
 /// ```
 #[derive(Debug)]
 pub struct RenderPadding {
+    /// Base render object for lifecycle management.
+    base: BaseRenderObject,
+
     /// The child render box (from RenderObjectWithChildMixin).
     child: BoxChild,
 
@@ -91,6 +94,7 @@ impl RenderPadding {
             "Padding must have non-negative insets"
         );
         Self {
+            base: BaseRenderObject::new(),
             child: BoxChild::new(),
             size: Size::ZERO,
             padding,
@@ -109,6 +113,7 @@ impl RenderPadding {
         Self::setup_child_parent_data(&mut *child);
 
         Self {
+            base: BaseRenderObject::new(),
             child: BoxChild::with(child),
             size: Size::ZERO,
             padding,
@@ -169,13 +174,11 @@ impl RenderPadding {
 
 impl RenderObject for RenderPadding {
     fn base(&self) -> &BaseRenderObject {
-        // Note: This is a simplified implementation
-        // In a full implementation, RenderPadding would store BaseRenderObject
-        unimplemented!("RenderPadding::base() - need BaseRenderObject storage")
+        &self.base
     }
 
     fn base_mut(&mut self) -> &mut BaseRenderObject {
-        unimplemented!("RenderPadding::base_mut() - need BaseRenderObject storage")
+        &mut self.base
     }
 
     fn owner(&self) -> Option<&PipelineOwner> {
@@ -321,19 +324,6 @@ impl RenderBox for RenderPadding {
     fn paint(&self, context: &mut PaintingContext, offset: Offset) {
         // Use RenderShiftedBox default implementation
         self.shifted_paint(context, offset);
-    }
-
-    fn hit_test(&self, result: &mut BoxHitTestResult, position: Offset) -> bool {
-        let size = self.size();
-        if position.dx >= 0.0
-            && position.dy >= 0.0
-            && position.dx < size.width
-            && position.dy < size.height
-        {
-            self.hit_test_children(result, position) || self.hit_test_self(position)
-        } else {
-            false
-        }
     }
 
     /// Hit tests children using offset from child.parentData.

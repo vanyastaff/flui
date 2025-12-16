@@ -79,6 +79,9 @@ pub use crate::traits::r#box::TextDirection;
 /// ```
 #[derive(Debug)]
 pub struct RenderAlign {
+    /// Base render object for lifecycle management.
+    base: BaseRenderObject,
+
     /// Single child using type-safe container.
     child: BoxChild,
 
@@ -108,6 +111,7 @@ impl RenderAlign {
     /// Creates a new render align with the given alignment.
     pub fn new(alignment: Alignment) -> Self {
         Self {
+            base: BaseRenderObject::new(),
             child: BoxChild::new(),
             size: Size::ZERO,
             alignment,
@@ -122,6 +126,7 @@ impl RenderAlign {
         let mut child = child;
         Self::setup_child_parent_data(&mut *child);
         Self {
+            base: BaseRenderObject::new(),
             child: BoxChild::with(child),
             size: Size::ZERO,
             alignment,
@@ -173,11 +178,11 @@ impl RenderAlign {
 
 impl RenderObject for RenderAlign {
     fn base(&self) -> &BaseRenderObject {
-        unimplemented!("RenderAlign::base() - need BaseRenderObject storage")
+        &self.base
     }
 
     fn base_mut(&mut self) -> &mut BaseRenderObject {
-        unimplemented!("RenderAlign::base_mut() - need BaseRenderObject storage")
+        &mut self.base
     }
 
     fn owner(&self) -> Option<&PipelineOwner> {
@@ -341,19 +346,6 @@ impl RenderBox for RenderAlign {
     fn paint(&self, context: &mut PaintingContext, offset: Offset) {
         // Use RenderShiftedBox default implementation which reads from child.parentData.offset
         self.shifted_paint(context, offset);
-    }
-
-    fn hit_test(&self, result: &mut BoxHitTestResult, position: Offset) -> bool {
-        let size = self.size();
-        if position.dx >= 0.0
-            && position.dy >= 0.0
-            && position.dx < size.width
-            && position.dy < size.height
-        {
-            self.hit_test_children(result, position) || self.hit_test_self(position)
-        } else {
-            false
-        }
     }
 
     fn hit_test_children(&self, result: &mut BoxHitTestResult, position: Offset) -> bool {

@@ -6,6 +6,9 @@ use crate::constraints::BoxConstraints;
 use crate::pipeline::PaintingContext;
 use crate::traits::RenderObject;
 
+// Re-export HitTestBehavior from proxy_box for use in RenderBox trait
+pub use super::proxy_box::HitTestBehavior;
+
 /// Trait for render objects that use 2D cartesian coordinates.
 ///
 /// RenderBox is the primary layout protocol for most UI widgets. It:
@@ -121,14 +124,37 @@ pub trait RenderBox: RenderObject {
     // Hit Testing
     // ========================================================================
 
+    /// Returns the hit test behavior for this render object.
+    ///
+    /// The default is [`HitTestBehavior::Opaque`], meaning if the position is
+    /// within bounds, this render object is considered hit. Override to use
+    /// different behavior like `DeferToChild` or `Translucent`.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// In Flutter, this is a property on `RenderProxyBoxWithHitTestBehavior`.
+    /// We make it part of the trait for simpler API.
+    fn hit_test_behavior(&self) -> HitTestBehavior {
+        HitTestBehavior::Opaque
+    }
+
     /// Hit tests this render object.
     ///
     /// Returns true if the given position hits this render object or
     /// any of its children.
     ///
+    /// The behavior depends on [`hit_test_behavior`](Self::hit_test_behavior):
+    ///
+    /// - [`HitTestBehavior::Opaque`]: Returns true if position is within bounds,
+    ///   regardless of whether children are hit.
+    /// - [`HitTestBehavior::DeferToChild`]: Returns true only if a child is hit.
+    /// - [`HitTestBehavior::Translucent`]: Always adds self to result if within
+    ///   bounds, but returns the child hit result.
+    ///
     /// # Flutter Equivalence
     ///
-    /// This corresponds to Flutter's `RenderBox.hitTest` method.
+    /// This corresponds to Flutter's `RenderBox.hitTest` and
+    /// `RenderProxyBoxWithHitTestBehavior.hitTest` methods.
     fn hit_test(&self, result: &mut BoxHitTestResult, position: Offset) -> bool {
         let size = self.size();
         if position.dx >= 0.0
@@ -136,13 +162,37 @@ pub trait RenderBox: RenderObject {
             && position.dx < size.width
             && position.dy < size.height
         {
-            self.hit_test_children(result, position) || self.hit_test_self(position)
+            let child_hit = self.hit_test_children(result, position);
+            let self_hit = self.hit_test_self(position);
+
+            match self.hit_test_behavior() {
+                HitTestBehavior::DeferToChild => {
+                    // Only hit if a child was hit
+                    if child_hit {
+                        result.add(BoxHitTestEntry::new(position));
+                    }
+                    child_hit
+                }
+                HitTestBehavior::Opaque => {
+                    // Hit if within bounds (children or self doesn't matter for return value)
+                    result.add(BoxHitTestEntry::new(position));
+                    true
+                }
+                HitTestBehavior::Translucent => {
+                    // Always add to result, but return based on child/self
+                    result.add(BoxHitTestEntry::new(position));
+                    child_hit || self_hit
+                }
+            }
         } else {
             false
         }
     }
 
     /// Hit tests just this render object (not children).
+    ///
+    /// Override to make this object respond to hits independently of behavior.
+    /// This is called as part of hit testing and affects `Translucent` behavior.
     ///
     /// # Flutter Equivalence
     ///
@@ -152,6 +202,9 @@ pub trait RenderBox: RenderObject {
     }
 
     /// Hit tests children of this render object.
+    ///
+    /// Override to test children. Should iterate children in reverse
+    /// paint order (front to back).
     ///
     /// # Flutter Equivalence
     ///
