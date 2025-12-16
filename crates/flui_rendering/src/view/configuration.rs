@@ -1,6 +1,6 @@
 //! View configuration for the root render object.
 
-use flui_types::Size;
+use flui_types::{Matrix4, Size};
 
 use crate::constraints::BoxConstraints;
 
@@ -134,14 +134,8 @@ impl ViewConfiguration {
     /// The matrix translates points from the local coordinate system of the
     /// app (in logical pixels) to the global coordinate system of the
     /// output surface (in physical pixels).
-    pub fn to_matrix(&self) -> [f32; 16] {
-        let dpr = self.device_pixel_ratio;
-        [
-            dpr, 0.0, 0.0, 0.0, // col 0
-            0.0, dpr, 0.0, 0.0, // col 1
-            0.0, 0.0, 1.0, 0.0, // col 2
-            0.0, 0.0, 0.0, 1.0, // col 3
-        ]
+    pub fn to_matrix(&self) -> Matrix4 {
+        Matrix4::scaling(self.device_pixel_ratio, self.device_pixel_ratio, 1.0)
     }
 
     /// Returns whether `to_matrix` would return a different value for this

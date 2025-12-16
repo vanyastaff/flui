@@ -937,27 +937,27 @@ pub trait RenderObject: Debug + Send + Sync + 'static {
         false
     }
 
-    /// Returns the compositing layer for this render object, if any.
+    /// Returns the compositing layer ID for this render object, if any.
     ///
     /// Repaint boundaries typically have their own layer. This getter
-    /// provides access to that layer for compositing operations.
+    /// provides access to that layer ID for compositing operations.
     ///
     /// # Flutter Equivalence
     ///
     /// This corresponds to Flutter's `RenderObject.layer` getter.
-    fn layer(&self) -> Option<&dyn crate::layer::Layer> {
+    fn layer_id(&self) -> Option<flui_foundation::LayerId> {
         None
     }
 
-    /// Returns the compositing layer for debug purposes.
+    /// Returns the compositing layer ID for debug purposes.
     ///
-    /// This is the same as `layer()` but available for debug assertions.
+    /// This is the same as `layer_id()` but available for debug assertions.
     ///
     /// # Flutter Equivalence
     ///
     /// This corresponds to Flutter's `RenderObject.debugLayer` getter.
-    fn debug_layer(&self) -> Option<&dyn crate::layer::Layer> {
-        self.layer()
+    fn debug_layer_id(&self) -> Option<flui_foundation::LayerId> {
+        self.layer_id()
     }
 
     /// Replaces the root layer for this render object.

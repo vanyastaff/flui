@@ -9,7 +9,7 @@ use std::fmt::Debug;
 
 use flui_types::{Offset, Size};
 
-use crate::pipeline::Canvas;
+use flui_painting::Canvas;
 
 /// Builder for semantics information.
 ///

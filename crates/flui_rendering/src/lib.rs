@@ -62,7 +62,6 @@ pub mod containers;
 pub mod delegates;
 pub mod hit_testing;
 pub mod input;
-pub mod layer;
 pub mod lifecycle;
 pub mod objects;
 pub mod parent_data;
@@ -73,6 +72,11 @@ pub use flui_semantics as semantics;
 pub mod traits;
 pub mod tree;
 pub mod view;
+
+/// Re-export layer types from flui-layer crate for convenience.
+pub mod layer {
+    pub use flui_layer::*;
+}
 
 /// Prelude module for convenient imports.
 pub mod prelude {

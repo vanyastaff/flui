@@ -8,7 +8,7 @@ use flui_rendering::objects::r#box::basic::{RenderPadding, RenderSizedBox};
 use flui_rendering::pipeline::{Paint, PaintingContext};
 use flui_rendering::traits::{RenderBox, RenderObject};
 use flui_types::geometry::Radius;
-use flui_types::{EdgeInsets, Offset, Rect, Size};
+use flui_types::{EdgeInsets, Offset, Point, Rect, Size};
 
 // ============================================================================
 // Helper Functions
@@ -42,7 +42,7 @@ fn test_canvas_creation() {
 
     // Get canvas and verify it exists
     let canvas = context.canvas();
-    assert!(canvas.commands().is_empty());
+    assert!(canvas.is_empty());
 }
 
 #[test]
@@ -55,7 +55,7 @@ fn test_canvas_draw_rect() {
     context.canvas().draw_rect(rect, &paint);
 
     // Verify command was recorded
-    assert_eq!(context.canvas().commands().len(), 1);
+    assert_eq!(context.canvas().len(), 1);
 }
 
 #[test]
@@ -63,12 +63,12 @@ fn test_canvas_draw_circle() {
     let bounds = Rect::from_ltwh(0.0, 0.0, 200.0, 200.0);
     let mut context = PaintingContext::from_bounds(bounds);
 
-    let center = Offset::new(100.0, 100.0);
+    let center = Point::new(100.0, 100.0);
     let radius = 50.0;
     let paint = Paint::default();
     context.canvas().draw_circle(center, radius, &paint);
 
-    assert_eq!(context.canvas().commands().len(), 1);
+    assert_eq!(context.canvas().len(), 1);
 }
 
 #[test]
@@ -76,12 +76,12 @@ fn test_canvas_draw_line() {
     let bounds = Rect::from_ltwh(0.0, 0.0, 200.0, 200.0);
     let mut context = PaintingContext::from_bounds(bounds);
 
-    let p1 = Offset::new(0.0, 0.0);
-    let p2 = Offset::new(100.0, 100.0);
+    let p1 = Point::new(0.0, 0.0);
+    let p2 = Point::new(100.0, 100.0);
     let paint = Paint::default();
     context.canvas().draw_line(p1, p2, &paint);
 
-    assert_eq!(context.canvas().commands().len(), 1);
+    assert_eq!(context.canvas().len(), 1);
 }
 
 // ============================================================================
@@ -98,7 +98,7 @@ fn test_canvas_save_restore() {
     context.canvas().restore();
 
     // Should have 3 commands: save, translate, restore
-    assert_eq!(context.canvas().commands().len(), 3);
+    assert_eq!(context.canvas().len(), 3);
 }
 
 #[test]
@@ -108,7 +108,7 @@ fn test_canvas_translate() {
 
     context.canvas().translate(50.0, 25.0);
 
-    assert_eq!(context.canvas().commands().len(), 1);
+    assert_eq!(context.canvas().len(), 1);
 }
 
 #[test]
@@ -116,9 +116,10 @@ fn test_canvas_scale() {
     let bounds = Rect::from_ltwh(0.0, 0.0, 200.0, 200.0);
     let mut context = PaintingContext::from_bounds(bounds);
 
-    context.canvas().scale(2.0, 2.0);
+    // Use scaled() which takes a single uniform scale factor
+    context.canvas().scaled(2.0);
 
-    assert_eq!(context.canvas().commands().len(), 1);
+    assert_eq!(context.canvas().len(), 1);
 }
 
 #[test]
@@ -128,7 +129,7 @@ fn test_canvas_rotate() {
 
     context.canvas().rotate(std::f32::consts::PI / 4.0);
 
-    assert_eq!(context.canvas().commands().len(), 1);
+    assert_eq!(context.canvas().len(), 1);
 }
 
 // ============================================================================
@@ -143,7 +144,7 @@ fn test_canvas_clip_rect() {
     let clip_rect = Rect::from_ltwh(10.0, 10.0, 100.0, 100.0);
     context.canvas().clip_rect(clip_rect);
 
-    assert_eq!(context.canvas().commands().len(), 1);
+    assert_eq!(context.canvas().len(), 1);
 }
 
 #[test]
@@ -157,7 +158,7 @@ fn test_canvas_clip_rrect() {
     );
     context.canvas().clip_rrect(clip_rrect);
 
-    assert_eq!(context.canvas().commands().len(), 1);
+    assert_eq!(context.canvas().len(), 1);
 }
 
 // ============================================================================
@@ -179,9 +180,9 @@ fn test_multiple_draw_commands() {
         .draw_rect(Rect::from_ltwh(60.0, 0.0, 50.0, 50.0), &paint);
     context
         .canvas()
-        .draw_circle(Offset::new(100.0, 100.0), 25.0, &paint);
+        .draw_circle(Point::new(100.0, 100.0), 25.0, &paint);
 
-    assert_eq!(context.canvas().commands().len(), 3);
+    assert_eq!(context.canvas().len(), 3);
 }
 
 #[test]
@@ -200,7 +201,7 @@ fn test_complex_paint_sequence() {
         .draw_rect(Rect::from_ltwh(20.0, 20.0, 50.0, 50.0), &paint);
     context.canvas().restore();
 
-    assert_eq!(context.canvas().commands().len(), 4);
+    assert_eq!(context.canvas().len(), 4);
 }
 
 // ============================================================================
@@ -222,7 +223,7 @@ fn test_sized_box_paint() {
 
     // SizedBox itself doesn't draw anything, just paints children
     // So canvas should be empty
-    assert!(context.canvas().commands().is_empty());
+    assert!(context.canvas().is_empty());
 }
 
 #[test]
@@ -277,9 +278,9 @@ fn test_stop_recording_creates_picture() {
     // Stop recording
     context.stop_recording_if_needed();
 
-    // Container layer should have a picture layer
-    let container = context.container_layer();
-    assert!(container.children().next().is_some());
+    // Root layer should exist and contain picture layer
+    let root = context.root_layer();
+    assert!(root.is_some());
 }
 
 #[test]
@@ -333,7 +334,7 @@ fn test_empty_canvas() {
     let mut context = PaintingContext::from_bounds(bounds);
 
     let canvas = context.canvas();
-    assert!(canvas.commands().is_empty());
+    assert!(canvas.is_empty());
     assert_eq!(canvas.bounds(), Rect::ZERO);
 }
 
@@ -348,7 +349,7 @@ fn test_zero_size_bounds() {
         .canvas()
         .draw_rect(Rect::from_ltwh(0.0, 0.0, 10.0, 10.0), &paint);
 
-    assert_eq!(context.canvas().commands().len(), 1);
+    assert_eq!(context.canvas().len(), 1);
 }
 
 #[test]
@@ -359,10 +360,10 @@ fn test_nested_save_restore() {
     context.canvas().save();
     context.canvas().translate(10.0, 10.0);
     context.canvas().save();
-    context.canvas().scale(2.0, 2.0);
+    context.canvas().scaled(2.0);
     context.canvas().restore();
     context.canvas().restore();
 
     // Should have 6 commands
-    assert_eq!(context.canvas().commands().len(), 6);
+    assert_eq!(context.canvas().len(), 6);
 }

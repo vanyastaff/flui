@@ -6,8 +6,8 @@
 use flui_types::painting::Path;
 use flui_types::{RRect, Rect};
 
-use super::{Canvas, Paint};
-use crate::layer::Clip;
+use flui_painting::Canvas;
+use flui_types::painting::{Clip, ClipOp, Paint};
 
 /// Clip utilities used by [`PaintingContext`](super::PaintingContext).
 ///
@@ -87,7 +87,12 @@ pub trait ClipContext {
         let path_clone = path.clone();
         self.clip_and_paint(
             move |canvas, do_anti_alias| {
-                canvas.clip_path_with_options(&path_clone, do_anti_alias);
+                let clip_behavior = if do_anti_alias {
+                    Clip::AntiAlias
+                } else {
+                    Clip::HardEdge
+                };
+                canvas.clip_path_ext(&path_clone, ClipOp::Intersect, clip_behavior);
             },
             clip_behavior,
             bounds,
@@ -116,7 +121,12 @@ pub trait ClipContext {
     {
         self.clip_and_paint(
             move |canvas, do_anti_alias| {
-                canvas.clip_rrect_with_options(rrect, do_anti_alias);
+                let clip_behavior = if do_anti_alias {
+                    Clip::AntiAlias
+                } else {
+                    Clip::HardEdge
+                };
+                canvas.clip_rrect_ext(rrect, ClipOp::Intersect, clip_behavior);
             },
             clip_behavior,
             bounds,
@@ -140,7 +150,12 @@ pub trait ClipContext {
     {
         self.clip_and_paint(
             move |canvas, do_anti_alias| {
-                canvas.clip_rect_with_options(rect, super::ClipOp::Intersect, do_anti_alias);
+                let clip_behavior = if do_anti_alias {
+                    Clip::AntiAlias
+                } else {
+                    Clip::HardEdge
+                };
+                canvas.clip_rect_ext(rect, ClipOp::Intersect, clip_behavior);
             },
             clip_behavior,
             bounds,
@@ -156,32 +171,32 @@ mod tests {
     #[test]
     fn test_clip_none() {
         let clip = Clip::None;
-        assert!(!clip.is_anti_alias());
-        assert!(!clip.uses_save_layer());
+        assert!(!clip.is_anti_aliased());
+        assert!(!clip.saves_layer());
         assert!(!clip.clips());
     }
 
     #[test]
     fn test_clip_hard_edge() {
         let clip = Clip::HardEdge;
-        assert!(!clip.is_anti_alias());
-        assert!(!clip.uses_save_layer());
+        assert!(!clip.is_anti_aliased());
+        assert!(!clip.saves_layer());
         assert!(clip.clips());
     }
 
     #[test]
     fn test_clip_anti_alias() {
         let clip = Clip::AntiAlias;
-        assert!(clip.is_anti_alias());
-        assert!(!clip.uses_save_layer());
+        assert!(clip.is_anti_aliased());
+        assert!(!clip.saves_layer());
         assert!(clip.clips());
     }
 
     #[test]
     fn test_clip_anti_alias_with_save_layer() {
         let clip = Clip::AntiAliasWithSaveLayer;
-        assert!(clip.is_anti_alias());
-        assert!(clip.uses_save_layer());
+        assert!(clip.is_anti_aliased());
+        assert!(clip.saves_layer());
         assert!(clip.clips());
     }
 
@@ -214,7 +229,7 @@ mod tests {
         });
 
         // Should have: Save, DrawRect, Restore
-        assert_eq!(ctx.canvas.commands().len(), 3);
+        assert_eq!(ctx.canvas.len(), 3);
     }
 
     #[test]
@@ -229,7 +244,7 @@ mod tests {
         });
 
         // Should have: Save, ClipRect(do_anti_alias=false), DrawRect, Restore
-        assert_eq!(ctx.canvas.commands().len(), 4);
+        assert_eq!(ctx.canvas.len(), 4);
     }
 
     #[test]
@@ -244,7 +259,7 @@ mod tests {
         });
 
         // Should have: Save, ClipRect(do_anti_alias=true), DrawRect, Restore
-        assert_eq!(ctx.canvas.commands().len(), 4);
+        assert_eq!(ctx.canvas.len(), 4);
     }
 
     #[test]
@@ -259,7 +274,7 @@ mod tests {
         });
 
         // Should have: Save, ClipRect, SaveLayer, DrawRect, Restore, Restore
-        assert_eq!(ctx.canvas.commands().len(), 6);
+        assert_eq!(ctx.canvas.len(), 6);
     }
 
     #[test]
@@ -275,7 +290,7 @@ mod tests {
         });
 
         // Should have: Save, ClipRRect, DrawRect, Restore
-        assert_eq!(ctx.canvas.commands().len(), 4);
+        assert_eq!(ctx.canvas.len(), 4);
     }
 
     #[test]
@@ -298,6 +313,6 @@ mod tests {
         });
 
         // Should have: Save, ClipPath, DrawRect, Restore
-        assert_eq!(ctx.canvas.commands().len(), 4);
+        assert_eq!(ctx.canvas.len(), 4);
     }
 }

@@ -3,17 +3,17 @@
 use std::any::Any;
 use std::fmt::Debug;
 
-use flui_types::{Offset, Rect, Size};
+use flui_types::{Matrix4, Offset, Rect, Size};
 
 use crate::constraints::{BoxConstraints, Constraints};
 use crate::lifecycle::BaseRenderObject;
 
 use super::ViewConfiguration;
 use crate::hit_testing::{HitTestEntry, HitTestResult};
-use crate::layer::TransformLayer;
 use crate::pipeline::{PaintingContext, PipelineOwner};
 use crate::traits::BoxHitTestResult;
 use crate::traits::{RenderBox, RenderObject};
+use flui_layer::TransformLayer;
 
 /// The root of the render tree.
 ///
@@ -46,7 +46,7 @@ pub struct RenderView {
     size: Size,
 
     /// The root transformation matrix.
-    root_transform: Option<[f32; 16]>,
+    root_transform: Option<Matrix4>,
 
     /// The root layer.
     layer: Option<TransformLayer>,
@@ -288,6 +288,14 @@ impl RenderView {
         self.base.mark_needs_paint();
     }
 
+    /// Internal method to prepare initial frame without requiring a PipelineOwner.
+    /// Used for testing.
+    #[cfg(test)]
+    fn prepare_initial_frame_internal(&mut self) {
+        self.schedule_initial_layout_internal();
+        self.schedule_initial_paint_internal();
+    }
+
     // ========================================================================
     // Layout
     // ========================================================================
@@ -379,12 +387,14 @@ impl RenderView {
         if let Some(transform) = &self.root_transform {
             // Apply the root transform to the logical bounds
             let bounds = Rect::from_ltwh(0.0, 0.0, self.size.width, self.size.height);
-            // Simplified: just scale by DPR (transform is diagonal)
+            // Get scale factors from the matrix diagonal (column-major: [0]=m00, [5]=m11)
+            let scale_x = transform[0];
+            let scale_y = transform[5];
             Rect::from_ltwh(
-                bounds.min.x * transform[0],
-                bounds.min.y * transform[5],
-                bounds.width() * transform[0],
-                bounds.height() * transform[5],
+                bounds.min.x * scale_x,
+                bounds.min.y * scale_y,
+                bounds.width() * scale_x,
+                bounds.height() * scale_y,
             )
         } else {
             Rect::from_ltwh(0.0, 0.0, self.size.width, self.size.height)
@@ -432,10 +442,9 @@ impl RenderView {
     // ========================================================================
 
     /// Applies the paint transform for a child.
-    pub fn apply_paint_transform(&self, transform: &mut [f32; 16]) {
+    pub fn apply_paint_transform(&self, transform: &mut Matrix4) {
         if let Some(root_transform) = &self.root_transform {
-            // Multiply transform by root_transform
-            multiply_matrices(transform, root_transform);
+            *transform = *root_transform * *transform;
         }
     }
 }
@@ -603,33 +612,6 @@ pub struct CompositeResult {
     pub device_pixel_ratio: f32,
 }
 
-// ============================================================================
-// Helper Functions
-// ============================================================================
-
-/// Multiplies two 4x4 matrices (column-major order).
-fn multiply_matrices(a: &mut [f32; 16], b: &[f32; 16]) {
-    let result = [
-        a[0] * b[0] + a[4] * b[1] + a[8] * b[2] + a[12] * b[3],
-        a[1] * b[0] + a[5] * b[1] + a[9] * b[2] + a[13] * b[3],
-        a[2] * b[0] + a[6] * b[1] + a[10] * b[2] + a[14] * b[3],
-        a[3] * b[0] + a[7] * b[1] + a[11] * b[2] + a[15] * b[3],
-        a[0] * b[4] + a[4] * b[5] + a[8] * b[6] + a[12] * b[7],
-        a[1] * b[4] + a[5] * b[5] + a[9] * b[6] + a[13] * b[7],
-        a[2] * b[4] + a[6] * b[5] + a[10] * b[6] + a[14] * b[7],
-        a[3] * b[4] + a[7] * b[5] + a[11] * b[6] + a[15] * b[7],
-        a[0] * b[8] + a[4] * b[9] + a[8] * b[10] + a[12] * b[11],
-        a[1] * b[8] + a[5] * b[9] + a[9] * b[10] + a[13] * b[11],
-        a[2] * b[8] + a[6] * b[9] + a[10] * b[10] + a[14] * b[11],
-        a[3] * b[8] + a[7] * b[9] + a[11] * b[10] + a[15] * b[11],
-        a[0] * b[12] + a[4] * b[13] + a[8] * b[14] + a[12] * b[15],
-        a[1] * b[12] + a[5] * b[13] + a[9] * b[14] + a[13] * b[15],
-        a[2] * b[12] + a[6] * b[13] + a[10] * b[14] + a[14] * b[15],
-        a[3] * b[12] + a[7] * b[13] + a[11] * b[14] + a[15] * b[15],
-    ];
-    *a = result;
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -686,25 +668,16 @@ mod tests {
     }
 
     #[test]
-    fn test_multiply_matrices_identity() {
-        let identity = [
-            1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
-        ];
-        let mut a = identity;
-        multiply_matrices(&mut a, &identity);
-        assert_eq!(a, identity);
-    }
+    fn test_apply_paint_transform() {
+        let config = ViewConfiguration::from_size(Size::new(800.0, 600.0), 2.0);
+        let mut view = RenderView::with_configuration(config);
+        view.prepare_initial_frame_internal();
 
-    #[test]
-    fn test_multiply_matrices_scale() {
-        let mut a = [
-            1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
-        ];
-        let scale = [
-            2.0, 0.0, 0.0, 0.0, 0.0, 3.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
-        ];
-        multiply_matrices(&mut a, &scale);
-        assert!((a[0] - 2.0).abs() < 1e-6);
-        assert!((a[5] - 3.0).abs() < 1e-6);
+        let mut transform = Matrix4::identity();
+        view.apply_paint_transform(&mut transform);
+
+        // Should have DPR scaling applied (column-major: [0] = scale_x, [5] = scale_y)
+        assert!((transform[0] - 2.0).abs() < 1e-6);
+        assert!((transform[5] - 2.0).abs() < 1e-6);
     }
 }
