@@ -875,6 +875,259 @@ std::thread::spawn(move || {
 | `device_clip_bounds()` | Clip bounds in device coordinates |
 | `would_be_clipped(rect)` | Check if rect would be clipped |
 
+## RenderParagraph Integration Guide
+
+This section describes how to integrate `TextPainter` with `RenderParagraph` in `flui_rendering`.
+
+### Architecture Overview
+
+```text
+RenderParagraph (flui_rendering)
+    │
+    ├─ owns TextPainter (flui_painting)
+    │      │
+    │      └─ owns TextLayout (cosmic-text Buffer)
+    │
+    └─ manages inline WidgetSpan children
+           │
+           └─ PlaceholderDimensions for sizing
+```
+
+### Implementing RenderParagraph
+
+```rust
+use flui_painting::{TextPainter, Canvas};
+use flui_rendering::prelude::*;
+use flui_types::typography::{TextSpan, TextDirection, TextAlign};
+use flui_types::geometry::{Size, Offset};
+
+/// Renders a paragraph of text with optional inline widgets.
+pub struct RenderParagraph {
+    /// The text painter that handles layout and painting.
+    text_painter: TextPainter,
+    /// Cached layout constraints for relayout detection.
+    last_max_width: Option<f32>,
+    /// Inline widget children (for WidgetSpan).
+    children: BoxChildList<Variable>,
+}
+
+impl RenderParagraph {
+    pub fn new(text: TextSpan, text_direction: TextDirection) -> Self {
+        Self {
+            text_painter: TextPainter::new()
+                .with_text(text)
+                .with_text_direction(text_direction),
+            last_max_width: None,
+            children: BoxChildList::new(),
+        }
+    }
+
+    /// Updates the text span and marks for relayout.
+    pub fn set_text(&mut self, text: TextSpan) {
+        self.text_painter = self.text_painter.clone().with_text(text);
+        self.last_max_width = None; // Force relayout
+        self.mark_needs_layout();
+    }
+
+    /// Updates text alignment.
+    pub fn set_text_align(&mut self, align: TextAlign) {
+        self.text_painter = self.text_painter.clone().with_text_align(align);
+        self.mark_needs_paint(); // Alignment only affects painting
+    }
+}
+```
+
+### Layout Integration
+
+```rust
+impl RenderBox<Variable> for RenderParagraph {
+    fn perform_layout(&mut self, constraints: BoxConstraints) -> Size {
+        // 1. Layout inline children first (WidgetSpans)
+        let placeholder_dimensions = self.layout_inline_children(&constraints);
+        
+        // 2. Set placeholder dimensions on text painter
+        self.text_painter.set_placeholder_dimensions(placeholder_dimensions);
+        
+        // 3. Layout text with width constraints
+        let max_width = constraints.max_width;
+        if self.last_max_width != Some(max_width) {
+            self.text_painter.layout(0.0, max_width);
+            self.last_max_width = Some(max_width);
+        }
+        
+        // 4. Position inline children based on text layout
+        self.position_inline_children();
+        
+        // 5. Return computed size
+        let text_size = self.text_painter.size();
+        constraints.constrain(text_size)
+    }
+
+    fn compute_min_intrinsic_width(&self, height: f32) -> f32 {
+        self.text_painter.min_intrinsic_width()
+    }
+
+    fn compute_max_intrinsic_width(&self, height: f32) -> f32 {
+        self.text_painter.max_intrinsic_width()
+    }
+
+    fn compute_min_intrinsic_height(&self, width: f32) -> f32 {
+        // Layout at given width and return height
+        let mut painter = self.text_painter.clone();
+        painter.layout(0.0, width);
+        painter.height()
+    }
+}
+```
+
+### Inline Children (WidgetSpan)
+
+```rust
+impl RenderParagraph {
+    /// Layouts inline widget children and returns their dimensions.
+    fn layout_inline_children(&mut self, constraints: &BoxConstraints) -> Vec<PlaceholderDimensions> {
+        self.children.iter_mut()
+            .map(|child| {
+                // Get constraints from PlaceholderSpan
+                let child_constraints = BoxConstraints::tight_for(
+                    child.parent_data().span_width,
+                    child.parent_data().span_height,
+                );
+                
+                // Layout child
+                let child_size = child.layout(child_constraints);
+                
+                PlaceholderDimensions {
+                    size: child_size,
+                    baseline_offset: child.get_distance_to_baseline(TextBaseline::Alphabetic),
+                    alignment: child.parent_data().alignment,
+                }
+            })
+            .collect()
+    }
+
+    /// Positions inline children at their computed offsets.
+    fn position_inline_children(&mut self) {
+        let boxes = self.text_painter.inline_placeholder_boxes();
+        
+        for (child, text_box) in self.children.iter_mut().zip(boxes.iter()) {
+            child.set_offset(Offset::new(text_box.left, text_box.top));
+        }
+    }
+}
+```
+
+### Paint Integration
+
+```rust
+impl RenderParagraph {
+    fn paint(&self, context: &mut PaintingContext, offset: Offset) {
+        // 1. Paint text
+        self.text_painter.paint(context.canvas(), offset);
+        
+        // 2. Paint inline children at their positioned offsets
+        for child in self.children.iter() {
+            if let Some(child_offset) = child.offset() {
+                context.paint_child(child, offset + child_offset);
+            }
+        }
+    }
+}
+```
+
+### Hit Testing
+
+```rust
+impl RenderParagraph {
+    fn hit_test_self(&self, position: Offset) -> bool {
+        true // Text is always hit-testable
+    }
+
+    fn hit_test_children(&self, result: &mut HitTestResult, position: Offset) -> bool {
+        // 1. Test inline children first (in reverse paint order)
+        for child in self.children.iter().rev() {
+            if let Some(child_offset) = child.offset() {
+                let local_position = position - child_offset;
+                if child.hit_test(result, local_position) {
+                    return true;
+                }
+            }
+        }
+        
+        // 2. Check if position is within text bounds
+        let text_position = self.text_painter.get_position_for_offset(position);
+        
+        // 3. Check for gesture recognizers on TextSpan at this position
+        if let Some(recognizer) = self.get_span_recognizer_at(text_position) {
+            result.add(HitTestEntry::new(self.id()));
+            return true;
+        }
+        
+        false
+    }
+}
+```
+
+### Selection Support
+
+```rust
+impl RenderParagraph {
+    /// Gets selection highlight rects for the given range.
+    pub fn get_boxes_for_selection(&self, selection: TextSelection) -> Vec<Rect> {
+        self.text_painter.get_boxes_for_selection(
+            selection.start,
+            selection.end,
+        ).iter().map(|tb| tb.rect).collect()
+    }
+
+    /// Gets caret rect at the given position.
+    pub fn get_caret_rect(&mut self, position: TextPosition) -> Rect {
+        let offset = self.text_painter.get_offset_for_caret(position);
+        let height = self.text_painter.get_full_height_for_caret(position);
+        Rect::from_xywh(offset.dx, offset.dy, 1.0, height)
+    }
+
+    /// Gets text position from screen offset (for tap handling).
+    pub fn get_position_for_offset(&self, offset: Offset) -> TextPosition {
+        self.text_painter.get_position_for_offset(offset)
+    }
+
+    /// Gets word boundary for double-tap selection.
+    pub fn get_word_boundary(&self, position: TextPosition) -> TextRange {
+        self.text_painter.get_word_boundary(position)
+    }
+}
+```
+
+### Semantics Integration
+
+```rust
+use flui_semantics::{SemanticsConfiguration, AttributedString};
+
+impl RenderParagraph {
+    fn describe_semantics_configuration(&self, config: &mut SemanticsConfiguration) {
+        // Extract semantic label from text span
+        let label = self.text_painter.text()
+            .map(|span| span.to_plain_text())
+            .unwrap_or_default();
+        
+        config.set_label(AttributedString::new(label));
+        
+        // Set text direction for screen readers
+        if let Some(direction) = self.text_painter.text_direction() {
+            config.set_text_direction(direction.into());
+        }
+    }
+}
+```
+
+### Performance Tips
+
+1. **Cache layout results**: Only call `layout()` when constraints change
+2. **Use `min_intrinsic_width`**: For text wrapping calculations
+3. **Batch paint operations**: TextPainter records to DisplayList efficiently
+4. **Lazy semantics**: Only compute semantics when accessibility is enabled
+
 ## Documentation
 
 ### Guides

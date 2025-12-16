@@ -50,8 +50,8 @@
 
 - [x] 6.1 Implement `TextScaler` application in layout
 - [x] 6.2 Add semantic label extraction from TextSpan
-- [ ] 6.3 Implement `compute_semantics_information()`
-- [ ] 6.4 Handle `PlaceholderSpan` semantics
+- [x] 6.3 Implement `compute_semantics_information()` (in flui-semantics crate)
+- [x] 6.4 Handle `PlaceholderSpan` semantics (in flui-semantics crate)
 
 ## 7. Tests
 
@@ -69,7 +69,7 @@
 - [x] 8.1 Document TextPainter usage with examples
 - [x] 8.2 Document TextSpan rich text patterns
 - [x] 8.3 Document accessibility features (TextScaler)
-- [ ] 8.4 Add integration guide for RenderParagraph
+- [x] 8.4 Add integration guide for RenderParagraph
 - [x] 8.5 Update flui_painting README
 
 ## 9. Integration
@@ -77,7 +77,7 @@
 - [x] 9.1 Update flui_painting lib.rs exports
 - [x] 9.2 Add to flui_painting prelude
 - [x] 9.3 Verify cosmic-text integration works
-- [ ] 9.4 Create example demonstrating rich text
+- [x] 9.4 Create example demonstrating rich text
 
 ## Dependencies
 
@@ -87,12 +87,9 @@
 
 ## Summary
 
-**Completed:** 46/51 tasks (90%)
+**Completed:** 50/51 tasks (98%)
 
 **Remaining:**
-- 6.3, 6.4: Full semantics support (for screen readers)
-- 7.8: Performance benchmarks
-- 8.4: RenderParagraph integration guide
-- 9.4: Rich text example
+- 7.8: Performance benchmarks (optional, skipped per user request)
 
-The text painting system is feature-complete for basic use. Remaining tasks are enhancements for accessibility and documentation.
+The text painting system is feature-complete. All core functionality, documentation, and examples are done. Semantics integration leverages existing `flui-semantics` crate.
