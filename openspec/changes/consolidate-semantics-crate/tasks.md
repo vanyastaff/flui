@@ -63,8 +63,8 @@
 
 ## 10. Clean Up flui_types
 - [x] 10.1 Evaluate which types in flui_types/src/semantics/ are duplicates
-- [ ] 10.2 Remove duplicates or deprecate in favor of flui-semantics
-- [ ] 10.3 Keep only shared primitive types if needed
+- [x] 10.2 Remove duplicates or deprecate in favor of flui-semantics
+- [x] 10.3 Keep only shared primitive types if needed (none needed)
 
 ## 11. Testing
 - [x] 11.1 Migrate tests from flui_rendering/src/semantics/ to flui-semantics
@@ -83,7 +83,7 @@
 
 ## Progress Summary
 
-**Completed:** 42/52 tasks (81%)
+**Completed:** 45/52 tasks (87%)
 
 ### Phase 1: Core Migration ✅
 All core types migrated from flui_rendering to flui-semantics with optimizations applied.
