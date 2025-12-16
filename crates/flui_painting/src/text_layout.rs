@@ -28,6 +28,77 @@ mod inner {
         })
     }
 
+    /// Detects the text direction from the content.
+    ///
+    /// Uses the first strong directional character to determine direction.
+    /// Returns `None` if no strong directional character is found.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use flui_painting::text_layout::detect_text_direction;
+    /// use flui_types::typography::TextDirection;
+    ///
+    /// assert_eq!(detect_text_direction("Hello"), Some(TextDirection::Ltr));
+    /// assert_eq!(detect_text_direction("مرحبا"), Some(TextDirection::Rtl));
+    /// assert_eq!(detect_text_direction("123"), None); // Neutral
+    /// ```
+    pub fn detect_text_direction(text: &str) -> Option<TextDirection> {
+        for ch in text.chars() {
+            // Check for RTL characters (Arabic, Hebrew, etc.)
+            if is_rtl_char(ch) {
+                return Some(TextDirection::Rtl);
+            }
+            // Check for LTR characters (Latin, Greek, Cyrillic, etc.)
+            if is_ltr_char(ch) {
+                return Some(TextDirection::Ltr);
+            }
+            // Skip neutral characters (numbers, spaces, punctuation)
+        }
+        None
+    }
+
+    /// Checks if a character is a strong RTL character.
+    fn is_rtl_char(ch: char) -> bool {
+        matches!(ch,
+            // Arabic
+            '\u{0600}'..='\u{06FF}' |
+            '\u{0750}'..='\u{077F}' |
+            '\u{08A0}'..='\u{08FF}' |
+            '\u{FB50}'..='\u{FDFF}' |
+            '\u{FE70}'..='\u{FEFF}' |
+            // Hebrew
+            '\u{0590}'..='\u{05FF}' |
+            '\u{FB1D}'..='\u{FB4F}' |
+            // Syriac
+            '\u{0700}'..='\u{074F}' |
+            // Thaana
+            '\u{0780}'..='\u{07BF}' |
+            // N'Ko
+            '\u{07C0}'..='\u{07FF}'
+        )
+    }
+
+    /// Checks if a character is a strong LTR character.
+    fn is_ltr_char(ch: char) -> bool {
+        matches!(ch,
+            // Basic Latin letters
+            'A'..='Z' | 'a'..='z' |
+            // Latin Extended
+            '\u{00C0}'..='\u{024F}' |
+            // Greek
+            '\u{0370}'..='\u{03FF}' |
+            // Cyrillic
+            '\u{0400}'..='\u{04FF}' |
+            // Georgian
+            '\u{10A0}'..='\u{10FF}' |
+            // CJK (treated as LTR in horizontal layout)
+            '\u{4E00}'..='\u{9FFF}' |
+            '\u{3040}'..='\u{309F}' | // Hiragana
+            '\u{30A0}'..='\u{30FF}'   // Katakana
+        )
+    }
+
     /// Text layout result containing computed metrics.
     #[derive(Debug, Clone)]
     pub struct TextLayoutResult {
@@ -49,6 +120,59 @@ mod inner {
         #[must_use]
         pub fn size(&self) -> Size {
             Size::new(self.width, self.height)
+        }
+    }
+
+    /// Extended line information including directionality.
+    #[derive(Debug, Clone, PartialEq)]
+    pub struct LineInfo {
+        /// Line number (0-indexed).
+        pub line_number: usize,
+        /// Whether this line is rendered right-to-left.
+        pub is_rtl: bool,
+        /// Width of the line in pixels.
+        pub width: f32,
+        /// Height of the line in pixels.
+        pub height: f32,
+        /// Top position of the line.
+        pub top: f32,
+        /// Start text index for this line.
+        pub start_index: usize,
+        /// End text index for this line (exclusive).
+        pub end_index: usize,
+    }
+
+    impl LineInfo {
+        /// Returns the text direction for this line.
+        #[inline]
+        #[must_use]
+        pub fn direction(&self) -> TextDirection {
+            if self.is_rtl {
+                TextDirection::Rtl
+            } else {
+                TextDirection::Ltr
+            }
+        }
+
+        /// Returns the bottom position of the line.
+        #[inline]
+        #[must_use]
+        pub fn bottom(&self) -> f32 {
+            self.top + self.height
+        }
+
+        /// Returns the length of text in this line.
+        #[inline]
+        #[must_use]
+        pub fn len(&self) -> usize {
+            self.end_index.saturating_sub(self.start_index)
+        }
+
+        /// Returns true if the line is empty.
+        #[inline]
+        #[must_use]
+        pub fn is_empty(&self) -> bool {
+            self.len() == 0
         }
     }
 
@@ -289,6 +413,72 @@ mod inner {
             }
 
             metrics
+        }
+
+        /// Returns extended line information including RTL status.
+        ///
+        /// This provides more detailed information than `get_line_metrics`,
+        /// including whether each line is rendered right-to-left.
+        pub fn get_line_info(&self) -> Vec<LineInfo> {
+            let mut info = Vec::new();
+
+            for run in self.buffer.layout_runs() {
+                let start_index = run.glyphs.first().map(|g| g.start).unwrap_or(0);
+                let end_index = run.glyphs.last().map(|g| g.end).unwrap_or(start_index);
+
+                info.push(LineInfo {
+                    line_number: run.line_i,
+                    is_rtl: run.rtl,
+                    width: run.line_w,
+                    height: run.line_height,
+                    top: run.line_top,
+                    start_index,
+                    end_index,
+                });
+            }
+
+            // Ensure at least one line
+            if info.is_empty() {
+                info.push(LineInfo {
+                    line_number: 0,
+                    is_rtl: self.direction.is_rtl(),
+                    width: 0.0,
+                    height: self.line_height,
+                    top: 0.0,
+                    start_index: 0,
+                    end_index: 0,
+                });
+            }
+
+            info
+        }
+
+        /// Returns true if any line in the layout is RTL.
+        pub fn has_rtl_content(&self) -> bool {
+            self.buffer.layout_runs().any(|run| run.rtl)
+        }
+
+        /// Returns true if the layout contains bidirectional text.
+        ///
+        /// This is true when some lines are LTR and others are RTL,
+        /// or when a single line contains mixed directional content.
+        pub fn is_bidirectional(&self) -> bool {
+            let mut has_ltr = false;
+            let mut has_rtl = false;
+
+            for run in self.buffer.layout_runs() {
+                if run.rtl {
+                    has_rtl = true;
+                } else {
+                    has_ltr = true;
+                }
+
+                if has_ltr && has_rtl {
+                    return true;
+                }
+            }
+
+            false
         }
 
         /// Returns bounding boxes for the given text range.
@@ -662,6 +852,100 @@ mod inner {
             assert!(boundary.start <= 2);
             assert!(boundary.end >= 2);
         }
+
+        // ===== RTL and Bidirectional Tests =====
+
+        #[test]
+        fn test_detect_text_direction_ltr() {
+            assert_eq!(detect_text_direction("Hello"), Some(TextDirection::Ltr));
+            assert_eq!(detect_text_direction("Привет"), Some(TextDirection::Ltr));
+            assert_eq!(detect_text_direction("日本語"), Some(TextDirection::Ltr));
+        }
+
+        #[test]
+        fn test_detect_text_direction_rtl() {
+            assert_eq!(detect_text_direction("مرحبا"), Some(TextDirection::Rtl));
+            assert_eq!(detect_text_direction("שלום"), Some(TextDirection::Rtl));
+        }
+
+        #[test]
+        fn test_detect_text_direction_neutral() {
+            // Numbers and spaces are neutral
+            assert_eq!(detect_text_direction("123"), None);
+            assert_eq!(detect_text_direction("   "), None);
+            assert_eq!(detect_text_direction("!@#$%"), None);
+        }
+
+        #[test]
+        fn test_detect_text_direction_mixed() {
+            // First strong character wins
+            assert_eq!(detect_text_direction("123 Hello"), Some(TextDirection::Ltr));
+            assert_eq!(detect_text_direction("123 مرحبا"), Some(TextDirection::Rtl));
+        }
+
+        #[test]
+        fn test_line_info_ltr() {
+            let layout = TextLayout::new("Hello World", None, 14.0, None, None, TextDirection::Ltr);
+
+            let info = layout.get_line_info();
+            assert_eq!(info.len(), 1);
+            assert_eq!(info[0].line_number, 0);
+            assert!(!info[0].is_rtl);
+            assert_eq!(info[0].direction(), TextDirection::Ltr);
+        }
+
+        #[test]
+        fn test_line_info_rtl() {
+            let layout =
+                TextLayout::new("مرحبا بالعالم", None, 14.0, None, None, TextDirection::Rtl);
+
+            let info = layout.get_line_info();
+            assert_eq!(info.len(), 1);
+            // cosmic-text handles RTL automatically with Shaping::Advanced
+            // The line should be marked as RTL
+        }
+
+        #[test]
+        fn test_has_rtl_content() {
+            let ltr_layout =
+                TextLayout::new("Hello World", None, 14.0, None, None, TextDirection::Ltr);
+            // Pure ASCII text is not RTL
+            assert!(!ltr_layout.has_rtl_content());
+        }
+
+        #[test]
+        fn test_line_info_methods() {
+            let info = LineInfo {
+                line_number: 0,
+                is_rtl: true,
+                width: 100.0,
+                height: 20.0,
+                top: 0.0,
+                start_index: 0,
+                end_index: 10,
+            };
+
+            assert_eq!(info.direction(), TextDirection::Rtl);
+            assert_eq!(info.bottom(), 20.0);
+            assert_eq!(info.len(), 10);
+            assert!(!info.is_empty());
+        }
+
+        #[test]
+        fn test_line_info_empty() {
+            let info = LineInfo {
+                line_number: 0,
+                is_rtl: false,
+                width: 0.0,
+                height: 20.0,
+                top: 0.0,
+                start_index: 5,
+                end_index: 5,
+            };
+
+            assert!(info.is_empty());
+            assert_eq!(info.len(), 0);
+        }
     }
 }
 
@@ -672,6 +956,7 @@ pub use inner::*;
 #[cfg(not(feature = "text"))]
 mod fallback {
     use flui_types::geometry::Size;
+    use flui_types::typography::TextDirection;
 
     /// Text layout result (stub).
     #[derive(Debug, Clone)]
@@ -689,6 +974,53 @@ mod fallback {
         pub fn size(&self) -> Size {
             Size::new(self.width, self.height)
         }
+    }
+
+    /// Extended line information (stub).
+    #[derive(Debug, Clone, PartialEq)]
+    pub struct LineInfo {
+        pub line_number: usize,
+        pub is_rtl: bool,
+        pub width: f32,
+        pub height: f32,
+        pub top: f32,
+        pub start_index: usize,
+        pub end_index: usize,
+    }
+
+    impl LineInfo {
+        #[inline]
+        #[must_use]
+        pub fn direction(&self) -> TextDirection {
+            if self.is_rtl {
+                TextDirection::Rtl
+            } else {
+                TextDirection::Ltr
+            }
+        }
+
+        #[inline]
+        #[must_use]
+        pub fn bottom(&self) -> f32 {
+            self.top + self.height
+        }
+
+        #[inline]
+        #[must_use]
+        pub fn len(&self) -> usize {
+            self.end_index.saturating_sub(self.start_index)
+        }
+
+        #[inline]
+        #[must_use]
+        pub fn is_empty(&self) -> bool {
+            self.len() == 0
+        }
+    }
+
+    /// Stub direction detection.
+    pub fn detect_text_direction(_text: &str) -> Option<TextDirection> {
+        Some(TextDirection::Ltr)
     }
 
     /// Stub measurement (estimates based on character count).

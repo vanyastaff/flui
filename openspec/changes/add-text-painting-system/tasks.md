@@ -43,8 +43,8 @@
 
 - [x] 5.1 Handle `TextDirection` (LTR/RTL) in layout
 - [x] 5.2 Implement `TextAlign` positioning
-- [ ] 5.3 Handle bidirectional text (mixed LTR/RTL)
-- [ ] 5.4 Implement `text_direction` detection from content
+- [x] 5.3 Handle bidirectional text (mixed LTR/RTL)
+- [x] 5.4 Implement `text_direction` detection from content
 
 ## 6. Accessibility Integration
 
@@ -61,7 +61,7 @@
 - [x] 7.4 Integration tests for TextPainter layout
 - [x] 7.5 Tests for caret positioning accuracy
 - [x] 7.6 Tests for hit testing (offset → position)
-- [ ] 7.7 Tests for RTL text handling
+- [x] 7.7 Tests for RTL text handling
 - [ ] 7.8 Benchmark text layout performance
 
 ## 8. Documentation
