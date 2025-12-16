@@ -110,6 +110,148 @@ pub use pointer::{
 // Keyboard types from ui-events
 pub use keyboard::{Code, Key, KeyState, KeyboardEvent, Modifiers, NamedKey};
 
+/// Alias for KeyboardEvent for compatibility
+pub type KeyEvent = KeyboardEvent;
+
+/// Generic event enum covering all input types
+#[derive(Debug, Clone)]
+pub enum Event {
+    /// Pointer event (mouse, touch, pen)
+    Pointer(PointerEvent),
+    /// Keyboard event
+    Keyboard(KeyboardEvent),
+    /// Key event (alias for Keyboard)
+    Key(KeyboardEvent),
+    /// Scroll event
+    Scroll(ScrollEventData),
+}
+
+// ============================================================================
+// Compatibility PointerEventData struct
+// ============================================================================
+
+/// Base pointer event data for gesture recognition.
+///
+/// This struct provides compatibility with legacy gesture recognizers
+/// while wrapping W3C-compliant ui-events underneath.
+#[derive(Debug, Clone)]
+pub struct PointerEventData {
+    /// Position in global coordinates
+    pub position: Offset,
+    /// Position in local widget coordinates (set during hit testing)
+    pub local_position: Offset,
+    /// Device that generated the event
+    pub device_kind: PointerType,
+    /// Pointer device ID
+    pub device: i32,
+    /// Buttons currently pressed
+    pub buttons: PointerButtons,
+    /// Pressure of the touch (0.0 to 1.0)
+    pub pressure: f32,
+    /// Time stamp in nanoseconds
+    pub time_stamp: u64,
+}
+
+impl PointerEventData {
+    /// Create new pointer event data
+    pub fn new(position: Offset, device_kind: PointerType) -> Self {
+        Self {
+            position,
+            local_position: position,
+            device_kind,
+            device: 0,
+            buttons: PointerButtons::new(),
+            pressure: 0.0,
+            time_stamp: 0,
+        }
+    }
+
+    /// Create with device ID
+    pub fn with_device(mut self, device: i32) -> Self {
+        self.device = device;
+        self
+    }
+
+    /// Create with pressure
+    pub fn with_pressure(mut self, pressure: f32) -> Self {
+        self.pressure = pressure.clamp(0.0, 1.0);
+        self
+    }
+
+    /// Create with buttons
+    pub fn with_buttons(mut self, buttons: PointerButtons) -> Self {
+        self.buttons = buttons;
+        self
+    }
+
+    /// Create with time stamp
+    pub fn with_time_stamp(mut self, time_stamp: u64) -> Self {
+        self.time_stamp = time_stamp;
+        self
+    }
+
+    /// Returns the normalized pressure (0.0 to 1.0)
+    pub fn normalized_pressure(&self) -> f32 {
+        self.pressure
+    }
+
+    /// Returns true if the device supports pressure sensing
+    pub fn supports_pressure(&self) -> bool {
+        self.pressure > 0.0
+    }
+
+    /// Returns true if this is a force press (pressure > threshold)
+    ///
+    /// Default threshold is 0.4 (40% of max pressure).
+    pub fn is_force_press(&self) -> bool {
+        self.is_force_press_at(0.4)
+    }
+
+    /// Returns true if pressure exceeds the given threshold (0.0 to 1.0)
+    pub fn is_force_press_at(&self, threshold: f32) -> bool {
+        self.normalized_pressure() >= threshold
+    }
+
+    /// Create from a ui-events PointerEvent
+    pub fn from_pointer_event(event: &PointerEvent) -> Option<Self> {
+        let info = get_pointer_info(event)?;
+        let state = get_pointer_state(event);
+
+        let (position, time_stamp, buttons) = if let Some(s) = state {
+            let pos = s.position;
+            (
+                Offset::new(pos.x as f32, pos.y as f32),
+                s.time, // time is already u64 nanoseconds
+                s.buttons,
+            )
+        } else {
+            (Offset::ZERO, 0, PointerButtons::new())
+        };
+
+        // Convert pointer ID: 0 for primary, hash for others
+        let device = match info.pointer_id {
+            Some(id) if id.is_primary_pointer() => 0,
+            Some(id) => {
+                use std::hash::{Hash, Hasher};
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                id.hash(&mut hasher);
+                (hasher.finish() & 0x7FFFFFFF) as i32
+            }
+            None => 0,
+        };
+
+        Some(Self {
+            position,
+            local_position: position,
+            device_kind: info.pointer_type,
+            device,
+            buttons,
+            pressure: state.map(|s| s.pressure).unwrap_or(0.0),
+            time_stamp,
+        })
+    }
+}
+
 // ============================================================================
 // Extended Input Event (wraps ui-events + device lifecycle)
 // ============================================================================
@@ -360,6 +502,207 @@ impl From<&PointerScrollEvent> for ScrollEventData {
             delta: Self::delta_to_offset(&event.delta),
             modifiers: event.state.modifiers,
         }
+    }
+}
+
+// ============================================================================
+// Test helper functions
+// ============================================================================
+
+/// Create a PointerEvent::Down for testing
+pub fn make_down_event(position: Offset, pointer_type: PointerType) -> PointerEvent {
+    use ui_events::pointer::{
+        ContactGeometry, PointerButtonEvent, PointerOrientation, PointerState,
+    };
+
+    PointerEvent::Down(PointerButtonEvent {
+        button: Some(PointerButton::Primary),
+        pointer: PointerInfo {
+            pointer_id: Some(PointerId::PRIMARY),
+            pointer_type,
+            persistent_device_id: None,
+        },
+        state: PointerState {
+            time: 0,
+            position: dpi::PhysicalPosition::new(position.dx as f64, position.dy as f64),
+            buttons: PointerButtons::from(PointerButton::Primary),
+            modifiers: Modifiers::empty(),
+            count: 1,
+            contact_geometry: ContactGeometry {
+                width: 1.0,
+                height: 1.0,
+            },
+            orientation: PointerOrientation::default(),
+            pressure: 1.0,
+            tangential_pressure: 0.0,
+            scale_factor: 1.0,
+        },
+    })
+}
+
+/// Create a PointerEvent::Up for testing
+pub fn make_up_event(position: Offset, pointer_type: PointerType) -> PointerEvent {
+    use ui_events::pointer::{
+        ContactGeometry, PointerButtonEvent, PointerOrientation, PointerState,
+    };
+
+    PointerEvent::Up(PointerButtonEvent {
+        button: Some(PointerButton::Primary),
+        pointer: PointerInfo {
+            pointer_id: Some(PointerId::PRIMARY),
+            pointer_type,
+            persistent_device_id: None,
+        },
+        state: PointerState {
+            time: 0,
+            position: dpi::PhysicalPosition::new(position.dx as f64, position.dy as f64),
+            buttons: PointerButtons::new(),
+            modifiers: Modifiers::empty(),
+            count: 1,
+            contact_geometry: ContactGeometry {
+                width: 1.0,
+                height: 1.0,
+            },
+            orientation: PointerOrientation::default(),
+            pressure: 0.0,
+            tangential_pressure: 0.0,
+            scale_factor: 1.0,
+        },
+    })
+}
+
+/// Create a PointerEvent::Move for testing
+pub fn make_move_event(position: Offset, pointer_type: PointerType) -> PointerEvent {
+    use ui_events::pointer::{ContactGeometry, PointerOrientation, PointerState, PointerUpdate};
+
+    PointerEvent::Move(PointerUpdate {
+        pointer: PointerInfo {
+            pointer_id: Some(PointerId::PRIMARY),
+            pointer_type,
+            persistent_device_id: None,
+        },
+        current: PointerState {
+            time: 0,
+            position: dpi::PhysicalPosition::new(position.dx as f64, position.dy as f64),
+            buttons: PointerButtons::from(PointerButton::Primary),
+            modifiers: Modifiers::empty(),
+            count: 0,
+            contact_geometry: ContactGeometry {
+                width: 1.0,
+                height: 1.0,
+            },
+            orientation: PointerOrientation::default(),
+            pressure: 1.0,
+            tangential_pressure: 0.0,
+            scale_factor: 1.0,
+        },
+        coalesced: vec![],
+        predicted: vec![],
+    })
+}
+
+/// Create a PointerEvent::Cancel for testing
+pub fn make_cancel_event(pointer_type: PointerType) -> PointerEvent {
+    PointerEvent::Cancel(PointerInfo {
+        pointer_id: Some(PointerId::PRIMARY),
+        pointer_type,
+        persistent_device_id: None,
+    })
+}
+
+/// Create a PointerEvent::Scroll for testing
+pub fn make_scroll_event(position: Offset, delta: Offset) -> PointerEvent {
+    use ui_events::pointer::{
+        ContactGeometry, PointerOrientation, PointerScrollEvent, PointerState,
+    };
+
+    PointerEvent::Scroll(PointerScrollEvent {
+        pointer: PointerInfo {
+            pointer_id: Some(PointerId::PRIMARY),
+            pointer_type: PointerType::Mouse,
+            persistent_device_id: None,
+        },
+        delta: ScrollDelta::PixelDelta(dpi::PhysicalPosition::new(
+            delta.dx as f64,
+            delta.dy as f64,
+        )),
+        state: PointerState {
+            time: 0,
+            position: dpi::PhysicalPosition::new(position.dx as f64, position.dy as f64),
+            buttons: PointerButtons::new(),
+            modifiers: Modifiers::empty(),
+            count: 0,
+            contact_geometry: ContactGeometry {
+                width: 1.0,
+                height: 1.0,
+            },
+            orientation: PointerOrientation::default(),
+            pressure: 0.0,
+            tangential_pressure: 0.0,
+            scale_factor: 1.0,
+        },
+    })
+}
+
+/// Kind of pointer event for event construction
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PointerEventKind {
+    /// Pointer down
+    Down,
+    /// Pointer move
+    Move,
+    /// Pointer up
+    Up,
+    /// Pointer cancel
+    Cancel,
+}
+
+/// Create a PointerEvent from PointerEventData
+pub fn make_pointer_event(kind: PointerEventKind, data: PointerEventData) -> PointerEvent {
+    use ui_events::pointer::{
+        ContactGeometry, PointerButtonEvent, PointerOrientation, PointerState, PointerUpdate,
+    };
+
+    let pointer_info = PointerInfo {
+        pointer_id: Some(PointerId::PRIMARY),
+        pointer_type: data.device_kind,
+        persistent_device_id: None,
+    };
+
+    let state = PointerState {
+        time: data.time_stamp,
+        position: dpi::PhysicalPosition::new(data.position.dx as f64, data.position.dy as f64),
+        buttons: data.buttons,
+        modifiers: Modifiers::empty(),
+        count: 1,
+        contact_geometry: ContactGeometry {
+            width: 1.0,
+            height: 1.0,
+        },
+        orientation: PointerOrientation::default(),
+        pressure: data.pressure,
+        tangential_pressure: 0.0,
+        scale_factor: 1.0,
+    };
+
+    match kind {
+        PointerEventKind::Down => PointerEvent::Down(PointerButtonEvent {
+            button: Some(PointerButton::Primary),
+            pointer: pointer_info,
+            state,
+        }),
+        PointerEventKind::Up => PointerEvent::Up(PointerButtonEvent {
+            button: Some(PointerButton::Primary),
+            pointer: pointer_info,
+            state,
+        }),
+        PointerEventKind::Move => PointerEvent::Move(PointerUpdate {
+            pointer: pointer_info,
+            current: state,
+            coalesced: vec![],
+            predicted: vec![],
+        }),
+        PointerEventKind::Cancel => PointerEvent::Cancel(pointer_info),
     }
 }
 

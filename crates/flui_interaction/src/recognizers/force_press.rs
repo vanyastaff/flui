@@ -12,9 +12,10 @@
 
 use super::recognizer::{constants, GestureRecognizer, GestureRecognizerState};
 use crate::arena::GestureArenaMember;
+use crate::events::PointerEvent;
 use crate::ids::PointerId;
 use flui_types::gestures::ForcePressDetails;
-use flui_types::{events::PointerEvent, Offset};
+use flui_types::Offset;
 use parking_lot::Mutex;
 use std::sync::Arc;
 
@@ -116,7 +117,7 @@ struct ForcePressState {
     current_position: Offset,
     /// Current pressure (0.0 to 1.0)
     current_pressure: f32,
-    /// Maximum pressure for the device
+    /// Maximum pressure for the device (always 1.0 for ui-events)
     max_pressure: f32,
     /// Whether peak callback has been called
     peak_triggered: bool,
@@ -228,11 +229,12 @@ impl ForcePressGestureRecognizer {
     }
 
     /// Handle pointer down event
-    fn handle_down(&self, data: &flui_types::events::PointerEventData) {
+    fn handle_down(&self, position: Offset, pressure: f32) {
         let mut state = self.gesture_state.lock();
 
-        // Check if device supports pressure
-        if data.pressure.is_none() {
+        // Check if device supports pressure (pressure > 0 indicates support)
+        // In ui-events, pressure of 0.0 typically means no pressure support
+        if pressure == 0.0 {
             // No pressure support - reject immediately
             state.phase = ForcePressPhase::Ended;
             drop(state);
@@ -241,9 +243,9 @@ impl ForcePressGestureRecognizer {
         }
 
         state.phase = ForcePressPhase::Possible;
-        state.current_position = data.position;
-        state.current_pressure = data.normalized_pressure();
-        state.max_pressure = data.pressure_max;
+        state.current_position = position;
+        state.current_pressure = pressure;
+        state.max_pressure = 1.0; // ui-events uses normalized pressure
         state.peak_triggered = false;
 
         // Check if already past start threshold
@@ -260,12 +262,12 @@ impl ForcePressGestureRecognizer {
     }
 
     /// Handle pointer move event (pressure may change)
-    fn handle_move(&self, data: &flui_types::events::PointerEventData) {
+    fn handle_move(&self, position: Offset, pressure: f32) {
         let mut state = self.gesture_state.lock();
 
         // Check slop - if moved too far, cancel
         if let Some(initial_pos) = self.state.initial_position() {
-            let delta = data.position - initial_pos;
+            let delta = position - initial_pos;
             if delta.distance() > constants::TAP_SLOP as f32 {
                 // Moved too far, end the gesture
                 if state.phase == ForcePressPhase::Started || state.phase == ForcePressPhase::Peaked
@@ -284,8 +286,8 @@ impl ForcePressGestureRecognizer {
             }
         }
 
-        state.current_position = data.position;
-        state.current_pressure = data.normalized_pressure();
+        state.current_position = position;
+        state.current_pressure = pressure;
 
         match state.phase {
             ForcePressPhase::Possible => {
@@ -349,9 +351,9 @@ impl ForcePressGestureRecognizer {
     }
 
     /// Handle pointer up event
-    fn handle_up(&self, data: &flui_types::events::PointerEventData) {
+    fn handle_up(&self, position: Offset) {
         let mut state = self.gesture_state.lock();
-        state.current_position = data.position;
+        state.current_position = position;
         state.current_pressure = 0.0;
 
         if state.phase == ForcePressPhase::Started || state.phase == ForcePressPhase::Peaked {
@@ -432,13 +434,19 @@ impl GestureRecognizer for ForcePressGestureRecognizer {
 
         match event {
             PointerEvent::Down(data) => {
-                self.handle_down(data);
+                let pos = data.state.position;
+                let position = Offset::new(pos.x as f32, pos.y as f32);
+                self.handle_down(position, data.state.pressure);
             }
             PointerEvent::Move(data) => {
-                self.handle_move(data);
+                let pos = data.current.position;
+                let position = Offset::new(pos.x as f32, pos.y as f32);
+                self.handle_move(position, data.current.pressure);
             }
             PointerEvent::Up(data) => {
-                self.handle_up(data);
+                let pos = data.state.position;
+                let position = Offset::new(pos.x as f32, pos.y as f32);
+                self.handle_up(position);
             }
             PointerEvent::Cancel(_) => {
                 self.handle_cancel();
@@ -502,8 +510,7 @@ impl std::fmt::Debug for ForcePressGestureRecognizer {
 mod tests {
     use super::*;
     use crate::arena::GestureArena;
-    use flui_types::events::PointerEventData;
-    use flui_types::gestures::PointerDeviceKind;
+    
 
     #[test]
     fn test_force_press_recognizer_creation() {
@@ -542,9 +549,8 @@ mod tests {
         // Start tracking
         recognizer.add_pointer(pointer, position);
 
-        // Send down event with pressure above threshold
-        let data = PointerEventData::new(position, PointerDeviceKind::Touch).with_pressure(0.5);
-        recognizer.handle_event(&PointerEvent::Down(data));
+        // Directly call handle_down with pressure above threshold
+        recognizer.handle_down(position, 0.5);
 
         assert!(*started.lock());
     }
@@ -565,9 +571,8 @@ mod tests {
         // Start tracking
         recognizer.add_pointer(pointer, position);
 
-        // Send down event without pressure (mouse)
-        let data = PointerEventData::new(position, PointerDeviceKind::Mouse);
-        recognizer.handle_event(&PointerEvent::Down(data));
+        // Directly call handle_down without pressure (mouse)
+        recognizer.handle_down(position, 0.0);
 
         // Should not start - no pressure support
         assert!(!*started.lock());
@@ -590,15 +595,13 @@ mod tests {
         recognizer.add_pointer(pointer, position);
 
         // Down with moderate pressure
-        let data = PointerEventData::new(position, PointerDeviceKind::Touch).with_pressure(0.5);
-        recognizer.handle_event(&PointerEvent::Down(data));
+        recognizer.handle_down(position, 0.5);
 
         // Peak not reached yet
         assert!(!*peaked.lock());
 
         // Move with high pressure
-        let data = PointerEventData::new(position, PointerDeviceKind::Touch).with_pressure(0.9);
-        recognizer.handle_event(&PointerEvent::Move(data));
+        recognizer.handle_move(position, 0.9);
 
         // Peak should be triggered
         assert!(*peaked.lock());
@@ -621,15 +624,11 @@ mod tests {
         recognizer.add_pointer(pointer, position);
 
         // Down with pressure above threshold
-        let data = PointerEventData::new(position, PointerDeviceKind::Touch).with_pressure(0.5);
-        recognizer.handle_event(&PointerEvent::Down(data));
+        recognizer.handle_down(position, 0.5);
 
         // Move with changing pressure
-        let data = PointerEventData::new(position, PointerDeviceKind::Touch).with_pressure(0.6);
-        recognizer.handle_event(&PointerEvent::Move(data));
-
-        let data = PointerEventData::new(position, PointerDeviceKind::Touch).with_pressure(0.7);
-        recognizer.handle_event(&PointerEvent::Move(data));
+        recognizer.handle_move(position, 0.6);
+        recognizer.handle_move(position, 0.7);
 
         assert_eq!(*update_count.lock(), 2);
     }
@@ -651,12 +650,10 @@ mod tests {
         recognizer.add_pointer(pointer, position);
 
         // Down with pressure
-        let data = PointerEventData::new(position, PointerDeviceKind::Touch).with_pressure(0.5);
-        recognizer.handle_event(&PointerEvent::Down(data));
+        recognizer.handle_down(position, 0.5);
 
         // Up
-        let data = PointerEventData::new(position, PointerDeviceKind::Touch);
-        recognizer.handle_event(&PointerEvent::Up(data));
+        recognizer.handle_up(position);
 
         assert!(*ended.lock());
     }

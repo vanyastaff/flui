@@ -11,8 +11,9 @@
 
 use super::recognizer::{constants, GestureRecognizer, GestureRecognizerState};
 use crate::arena::GestureArenaMember;
+use crate::events::{PointerEvent, PointerType};
 use crate::ids::PointerId;
-use flui_types::{events::PointerEvent, Offset};
+use flui_types::Offset;
 use parking_lot::Mutex;
 use std::sync::Arc;
 
@@ -27,7 +28,7 @@ pub struct TapDetails {
     /// Local position (relative to widget)
     pub local_position: Offset,
     /// Pointer device kind
-    pub kind: flui_types::events::PointerDeviceKind,
+    pub kind: PointerType,
 }
 
 /// Recognizes tap gestures
@@ -145,7 +146,7 @@ impl TapGestureRecognizer {
     }
 
     /// Handle tap down event
-    fn handle_tap_down(&self, position: Offset, kind: flui_types::events::PointerDeviceKind) {
+    fn handle_tap_down(&self, position: Offset, kind: PointerType) {
         *self.gesture_state.lock() = TapState::Down;
 
         // Call on_tap_down callback
@@ -160,7 +161,7 @@ impl TapGestureRecognizer {
     }
 
     /// Handle tap up event
-    fn handle_tap_up(&self, position: Offset, kind: flui_types::events::PointerDeviceKind) {
+    fn handle_tap_up(&self, position: Offset, kind: PointerType) {
         let current_state = *self.gesture_state.lock();
 
         if current_state == TapState::Down {
@@ -190,7 +191,7 @@ impl TapGestureRecognizer {
     }
 
     /// Handle tap cancel event
-    fn handle_tap_cancel(&self, position: Offset, kind: flui_types::events::PointerDeviceKind) {
+    fn handle_tap_cancel(&self, position: Offset, kind: PointerType) {
         let current_state = *self.gesture_state.lock();
 
         if current_state == TapState::Down {
@@ -212,7 +213,7 @@ impl TapGestureRecognizer {
     }
 
     /// Handle tap move event (pointer moved within slop tolerance)
-    fn handle_tap_move(&self, position: Offset, kind: flui_types::events::PointerDeviceKind) {
+    fn handle_tap_move(&self, position: Offset, kind: PointerType) {
         let current_state = *self.gesture_state.lock();
 
         if current_state == TapState::Down {
@@ -250,7 +251,7 @@ impl GestureRecognizer for TapGestureRecognizer {
         self.state.start_tracking(pointer, position, &recognizer);
 
         // Handle tap down
-        self.handle_tap_down(position, flui_types::events::PointerDeviceKind::Touch);
+        self.handle_tap_down(position, PointerType::Touch);
     }
 
     fn handle_event(&self, event: &PointerEvent) {
@@ -261,19 +262,27 @@ impl GestureRecognizer for TapGestureRecognizer {
 
         match event {
             PointerEvent::Move(data) => {
+                let pos = data.current.position;
+                let position = Offset::new(pos.x as f32, pos.y as f32);
+                let pointer_type = data.pointer.pointer_type;
                 // Check if moved too far (slop detection)
-                if self.check_slop(data.position) {
-                    self.handle_tap_cancel(data.position, data.device_kind);
+                if self.check_slop(position) {
+                    self.handle_tap_cancel(position, pointer_type);
                 } else {
                     // Still within slop - call tap move callback
-                    self.handle_tap_move(data.position, data.device_kind);
+                    self.handle_tap_move(position, pointer_type);
                 }
             }
             PointerEvent::Up(data) => {
-                self.handle_tap_up(data.position, data.device_kind);
+                let pos = data.state.position;
+                let position = Offset::new(pos.x as f32, pos.y as f32);
+                self.handle_tap_up(position, data.pointer.pointer_type);
             }
-            PointerEvent::Cancel(data) => {
-                self.handle_tap_cancel(data.position, data.device_kind);
+            PointerEvent::Cancel(info) => {
+                // Cancel doesn't have position, use initial position
+                if let Some(pos) = self.state.initial_position() {
+                    self.handle_tap_cancel(pos, info.pointer_type);
+                }
             }
             _ => {}
         }
@@ -303,7 +312,7 @@ impl GestureArenaMember for TapGestureRecognizer {
     fn reject_gesture(&self, _pointer: PointerId) {
         // We lost the arena - cancel the gesture
         if let Some(pos) = self.state.initial_position() {
-            self.handle_tap_cancel(pos, flui_types::events::PointerDeviceKind::Touch);
+            self.handle_tap_cancel(pos, PointerType::Touch);
         }
     }
 }
@@ -336,12 +345,7 @@ mod tests {
 
         // Simulate tap: down -> up
         recognizer.add_pointer(pointer, position);
-        recognizer.handle_event(&PointerEvent::Up(
-            flui_types::events::PointerEventData::new(
-                position,
-                flui_types::events::PointerDeviceKind::Touch,
-            ),
-        ));
+        recognizer.handle_event(&crate::events::make_up_event(position, PointerType::Touch));
 
         // Should have called callback
         assert!(*tapped.lock());
@@ -372,11 +376,9 @@ mod tests {
 
         // Move too far (beyond TAP_SLOP = 18px)
         let moved_pos = Offset::new(100.0, 130.0); // 30px away
-        recognizer.handle_event(&PointerEvent::Move(
-            flui_types::events::PointerEventData::new(
-                moved_pos,
-                flui_types::events::PointerDeviceKind::Touch,
-            ),
+        recognizer.handle_event(&crate::events::make_move_event(
+            moved_pos,
+            PointerType::Touch,
         ));
 
         // Should have cancelled
@@ -402,20 +404,13 @@ mod tests {
 
         // Move slightly (within TAP_SLOP = 18px)
         let moved_pos = Offset::new(105.0, 105.0); // ~7px away
-        recognizer.handle_event(&PointerEvent::Move(
-            flui_types::events::PointerEventData::new(
-                moved_pos,
-                flui_types::events::PointerDeviceKind::Touch,
-            ),
+        recognizer.handle_event(&crate::events::make_move_event(
+            moved_pos,
+            PointerType::Touch,
         ));
 
         // Tap up
-        recognizer.handle_event(&PointerEvent::Up(
-            flui_types::events::PointerEventData::new(
-                moved_pos,
-                flui_types::events::PointerDeviceKind::Touch,
-            ),
-        ));
+        recognizer.handle_event(&crate::events::make_up_event(moved_pos, PointerType::Touch));
 
         // Should have succeeded (within slop)
         assert!(*tapped.lock());

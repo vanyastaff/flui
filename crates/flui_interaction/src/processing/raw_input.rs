@@ -35,8 +35,8 @@
 //! handler.handle_event(&pointer_event);
 //! ```
 
+use crate::events::{PointerEvent, PointerType};
 use crate::ids::PointerId;
-use flui_types::events::{PointerDeviceKind, PointerEvent};
 use flui_types::geometry::Offset;
 use parking_lot::Mutex;
 use std::collections::HashMap;
@@ -62,7 +62,7 @@ pub enum RawPointerEvent {
         /// Position in logical pixels.
         position: Offset,
         /// Device type.
-        device_kind: PointerDeviceKind,
+        device_kind: PointerType,
         /// Event timestamp.
         timestamp: Instant,
     },
@@ -76,7 +76,7 @@ pub enum RawPointerEvent {
         /// Delta from previous position.
         delta: Offset,
         /// Device type.
-        device_kind: PointerDeviceKind,
+        device_kind: PointerType,
         /// Event timestamp.
         timestamp: Instant,
     },
@@ -90,7 +90,7 @@ pub enum RawPointerEvent {
         /// Delta from previous position.
         delta: Offset,
         /// Device type.
-        device_kind: PointerDeviceKind,
+        device_kind: PointerType,
         /// Event timestamp.
         timestamp: Instant,
     },
@@ -102,7 +102,7 @@ pub enum RawPointerEvent {
         /// Last known position.
         position: Offset,
         /// Device type.
-        device_kind: PointerDeviceKind,
+        device_kind: PointerType,
         /// Event timestamp.
         timestamp: Instant,
     },
@@ -116,7 +116,7 @@ pub enum RawPointerEvent {
         /// Delta from previous position.
         delta: Offset,
         /// Device type.
-        device_kind: PointerDeviceKind,
+        device_kind: PointerType,
         /// Event timestamp.
         timestamp: Instant,
     },
@@ -205,7 +205,7 @@ struct PointerTrackingState {
     is_down: bool,
     /// Device kind (stored for potential future use).
     #[allow(dead_code)]
-    device_kind: PointerDeviceKind,
+    device_kind: PointerType,
 }
 
 // ============================================================================
@@ -298,15 +298,42 @@ impl RawInputHandler {
         raw_event
     }
 
+    /// Extract pointer ID from event (use 0 for primary pointer)
+    fn get_pointer_id(event: &PointerEvent) -> PointerId {
+        let id = match event {
+            PointerEvent::Down(e) => e.pointer.pointer_id,
+            PointerEvent::Up(e) => e.pointer.pointer_id,
+            PointerEvent::Move(e) => e.pointer.pointer_id,
+            PointerEvent::Cancel(info) | PointerEvent::Enter(info) | PointerEvent::Leave(info) => {
+                info.pointer_id
+            }
+            PointerEvent::Scroll(e) => e.pointer.pointer_id,
+            PointerEvent::Gesture(e) => e.pointer.pointer_id,
+        };
+        // Use 0 for primary pointer, hash for others
+        let raw_id = match id {
+            Some(p) if p.is_primary_pointer() => 0,
+            Some(p) => {
+                use std::hash::{Hash, Hasher};
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                p.hash(&mut hasher);
+                (hasher.finish() & 0x7FFFFFFF) as i32
+            }
+            None => 0,
+        };
+        PointerId::new(raw_id)
+    }
+
     /// Convert a PointerEvent to RawPointerEvent.
     fn convert_event(&self, event: &PointerEvent) -> Option<RawPointerEvent> {
         let timestamp = Instant::now();
-        let pointer = PointerId::new(event.device());
+        let pointer = Self::get_pointer_id(event);
 
         match event {
             PointerEvent::Down(data) => {
-                let position = data.position;
-                let device_kind = data.device_kind;
+                let pos = data.state.position;
+                let position = Offset::new(pos.x as f32, pos.y as f32);
+                let device_kind = data.pointer.pointer_type;
 
                 // Start tracking
                 self.tracking.lock().insert(
@@ -327,8 +354,9 @@ impl RawInputHandler {
             }
 
             PointerEvent::Move(data) => {
-                let position = data.position;
-                let device_kind = data.device_kind;
+                let pos = data.current.position;
+                let position = Offset::new(pos.x as f32, pos.y as f32);
+                let device_kind = data.pointer.pointer_type;
 
                 let delta = {
                     let mut tracking = self.tracking.lock();
@@ -360,8 +388,9 @@ impl RawInputHandler {
             }
 
             PointerEvent::Up(data) => {
-                let position = data.position;
-                let device_kind = data.device_kind;
+                let pos = data.state.position;
+                let position = Offset::new(pos.x as f32, pos.y as f32);
+                let device_kind = data.pointer.pointer_type;
 
                 let delta = {
                     let mut tracking = self.tracking.lock();
@@ -381,9 +410,16 @@ impl RawInputHandler {
                 })
             }
 
-            PointerEvent::Cancel(data) => {
-                let position = data.position;
-                let device_kind = data.device_kind;
+            PointerEvent::Cancel(info) => {
+                let device_kind = info.pointer_type;
+
+                // Get last position from tracking, or use ZERO
+                let position = self
+                    .tracking
+                    .lock()
+                    .get(&pointer)
+                    .map(|s| s.last_position)
+                    .unwrap_or(Offset::ZERO);
 
                 // Stop tracking
                 self.tracking.lock().remove(&pointer);
@@ -396,46 +432,7 @@ impl RawInputHandler {
                 })
             }
 
-            PointerEvent::Hover(data) => {
-                let position = data.position;
-                let device_kind = data.device_kind;
-
-                let delta = {
-                    let mut tracking = self.tracking.lock();
-                    if let Some(state) = tracking.get_mut(&pointer) {
-                        let delta = position - state.last_position;
-                        state.last_position = position;
-                        delta
-                    } else {
-                        tracking.insert(
-                            pointer,
-                            PointerTrackingState {
-                                last_position: position,
-                                is_down: false,
-                                device_kind,
-                            },
-                        );
-                        Offset::ZERO
-                    }
-                };
-
-                Some(RawPointerEvent::Hover {
-                    pointer,
-                    position,
-                    delta,
-                    device_kind,
-                    timestamp,
-                })
-            }
-
-            // Events we don't convert to raw
-            PointerEvent::Enter(_)
-            | PointerEvent::Exit(_)
-            | PointerEvent::Scroll { .. }
-            | PointerEvent::Added { .. }
-            | PointerEvent::Removed { .. } => None,
-
-            // Handle any future variants (PointerEvent is non-exhaustive)
+            // Events we don't convert to raw (Enter, Leave, Scroll, Gesture)
             _ => None,
         }
     }
@@ -521,28 +518,7 @@ impl InputMode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_types::events::PointerEventData;
-
-    fn make_down_event(x: f32, y: f32) -> PointerEvent {
-        PointerEvent::Down(PointerEventData::new(
-            Offset::new(x, y),
-            PointerDeviceKind::Touch,
-        ))
-    }
-
-    fn make_move_event(x: f32, y: f32) -> PointerEvent {
-        PointerEvent::Move(PointerEventData::new(
-            Offset::new(x, y),
-            PointerDeviceKind::Touch,
-        ))
-    }
-
-    fn make_up_event(x: f32, y: f32) -> PointerEvent {
-        PointerEvent::Up(PointerEventData::new(
-            Offset::new(x, y),
-            PointerDeviceKind::Touch,
-        ))
-    }
+    use crate::events::{make_down_event, make_move_event, make_up_event};
 
     #[test]
     fn test_raw_handler_creation() {
@@ -555,7 +531,7 @@ mod tests {
     fn test_raw_handler_down_event() {
         let handler = RawInputHandler::new();
 
-        let event = make_down_event(100.0, 100.0);
+        let event = make_down_event(Offset::new(100.0, 100.0), PointerType::Touch);
         let raw = handler.handle_event(&event).unwrap();
 
         assert!(raw.is_down());
@@ -568,12 +544,12 @@ mod tests {
         let handler = RawInputHandler::new();
 
         // Down at (100, 100)
-        handler.handle_event(&make_down_event(100.0, 100.0));
+        let down = make_down_event(Offset::new(100.0, 100.0), PointerType::Touch);
+        handler.handle_event(&down);
 
         // Move to (120, 110) - delta should be (20, 10)
-        let raw = handler
-            .handle_event(&make_move_event(120.0, 110.0))
-            .unwrap();
+        let mv = make_move_event(Offset::new(120.0, 110.0), PointerType::Touch);
+        let raw = handler.handle_event(&mv).unwrap();
 
         assert!(raw.is_move());
         assert_eq!(raw.position(), Offset::new(120.0, 110.0));
@@ -584,10 +560,12 @@ mod tests {
     fn test_raw_handler_up_clears_tracking() {
         let handler = RawInputHandler::new();
 
-        handler.handle_event(&make_down_event(100.0, 100.0));
+        let down = make_down_event(Offset::new(100.0, 100.0), PointerType::Touch);
+        handler.handle_event(&down);
         assert_eq!(handler.active_pointer_count(), 1);
 
-        handler.handle_event(&make_up_event(100.0, 100.0));
+        let up = make_up_event(Offset::new(100.0, 100.0), PointerType::Touch);
+        handler.handle_event(&up);
         assert_eq!(handler.tracked_pointer_count(), 0);
     }
 
@@ -601,7 +579,8 @@ mod tests {
             *called_clone.lock() = true;
         });
 
-        handler.handle_event(&make_down_event(100.0, 100.0));
+        let down = make_down_event(Offset::new(100.0, 100.0), PointerType::Touch);
+        handler.handle_event(&down);
 
         assert!(*called.lock());
     }
@@ -611,7 +590,8 @@ mod tests {
         let handler = RawInputHandler::new();
         handler.set_enabled(false);
 
-        let result = handler.handle_event(&make_down_event(100.0, 100.0));
+        let down = make_down_event(Offset::new(100.0, 100.0), PointerType::Touch);
+        let result = handler.handle_event(&down);
 
         assert!(result.is_none());
         assert_eq!(handler.tracked_pointer_count(), 0);
@@ -633,17 +613,20 @@ mod tests {
     fn test_raw_event_helpers() {
         let handler = RawInputHandler::new();
 
-        let down = handler.handle_event(&make_down_event(50.0, 50.0)).unwrap();
-        assert!(down.is_down());
-        assert!(!down.is_move());
-        assert!(!down.is_up());
-        assert_eq!(down.delta(), Offset::ZERO); // Down has no delta
+        let down = make_down_event(Offset::new(50.0, 50.0), PointerType::Touch);
+        let raw_down = handler.handle_event(&down).unwrap();
+        assert!(raw_down.is_down());
+        assert!(!raw_down.is_move());
+        assert!(!raw_down.is_up());
+        assert_eq!(raw_down.delta(), Offset::ZERO); // Down has no delta
 
-        let mv = handler.handle_event(&make_move_event(60.0, 60.0)).unwrap();
-        assert!(mv.is_move());
+        let mv = make_move_event(Offset::new(60.0, 60.0), PointerType::Touch);
+        let raw_mv = handler.handle_event(&mv).unwrap();
+        assert!(raw_mv.is_move());
 
-        let up = handler.handle_event(&make_up_event(70.0, 70.0)).unwrap();
-        assert!(up.is_up());
+        let up = make_up_event(Offset::new(70.0, 70.0), PointerType::Touch);
+        let raw_up = handler.handle_event(&up).unwrap();
+        assert!(raw_up.is_up());
     }
 
     #[test]
@@ -652,7 +635,8 @@ mod tests {
 
         assert!(handler.pointer_position(PointerId::new(0)).is_none());
 
-        handler.handle_event(&make_down_event(100.0, 200.0));
+        let down = make_down_event(Offset::new(100.0, 200.0), PointerType::Touch);
+        handler.handle_event(&down);
 
         let pos = handler.pointer_position(PointerId::new(0)).unwrap();
         assert_eq!(pos, Offset::new(100.0, 200.0));
@@ -662,7 +646,8 @@ mod tests {
     fn test_reset() {
         let handler = RawInputHandler::new();
 
-        handler.handle_event(&make_down_event(100.0, 100.0));
+        let down = make_down_event(Offset::new(100.0, 100.0), PointerType::Touch);
+        handler.handle_event(&down);
         assert_eq!(handler.tracked_pointer_count(), 1);
 
         handler.reset();

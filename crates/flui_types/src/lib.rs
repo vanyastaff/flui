@@ -66,7 +66,6 @@
 
 #![warn(missing_docs)]
 pub mod animation;
-pub mod events;
 pub mod geometry;
 pub mod gestures;
 pub mod layout;
@@ -77,11 +76,10 @@ pub mod styling;
 pub mod typography;
 
 // Note: Semantics types are in flui-semantics crate
+// Note: Event types moved to flui_interaction (uses ui-events crate)
 
 // Re-exports for convenience - Most commonly used types
-pub use events::{Event, KeyEvent, PointerEvent, PointerEventData, Theme, WindowEvent};
 pub use geometry::{Matrix4, Offset, Point, RRect, Rect, Size};
-pub use gestures::PointerDeviceKind;
 pub use layout::{Alignment, Axis, EdgeInsets};
 pub use styling::{Color, Color32};
 
@@ -108,7 +106,4 @@ pub mod prelude {
     pub use crate::typography::{
         FontStyle, FontWeight, TextAlign, TextBaseline, TextDirection, TextStyle,
     };
-
-    // Events - Common
-    pub use crate::events::{KeyEvent, PointerEvent, WindowEvent};
 }

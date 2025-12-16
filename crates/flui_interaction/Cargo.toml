@@ -33,6 +33,7 @@ futures = { workspace = true }
 
 # Logging
 tracing = { workspace = true }
+dpi = "0.1.2"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }

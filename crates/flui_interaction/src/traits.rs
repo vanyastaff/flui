@@ -7,9 +7,9 @@
 //! - **Extension traits**: Add methods to foreign types
 //! - **Marker traits**: Compile-time constraints
 
+use crate::events::{PointerEvent, PointerEventExt as EventsPointerEventExt};
 use crate::ids::PointerId;
 use crate::routing::HitTestEntry;
-use flui_types::events::PointerEvent;
 use flui_types::geometry::Offset;
 
 // ============================================================================
@@ -78,13 +78,13 @@ pub trait GestureCallback: Send + Sync {
 pub type BoxedCallback<D> = Box<dyn Fn(D) + Send + Sync>;
 
 // ============================================================================
-// PointerEventExt extension trait
+// PointerEventExtTrait extension trait (additional methods)
 // ============================================================================
 
-/// Extension trait for `PointerEvent` with convenience methods.
+/// Extension trait for `PointerEvent` with convenience methods for gesture recognition.
 ///
 /// Adds commonly needed methods without modifying the original type.
-pub trait PointerEventExt {
+pub trait PointerEventExtTrait {
     /// Returns the position of this pointer event.
     fn position(&self) -> Offset;
 
@@ -107,14 +107,37 @@ pub trait PointerEventExt {
     fn ends_gesture(&self) -> bool;
 }
 
-impl PointerEventExt for PointerEvent {
+impl PointerEventExtTrait for PointerEvent {
     fn position(&self) -> Offset {
-        // Delegate to the inherent method
-        PointerEvent::position(self)
+        // Use the PointerEventExt trait from events module
+        EventsPointerEventExt::position(self)
     }
 
     fn pointer_id(&self) -> PointerId {
-        PointerId::new(self.device())
+        // Extract pointer ID from the event
+        let id = match self {
+            PointerEvent::Down(e) => e.pointer.pointer_id,
+            PointerEvent::Up(e) => e.pointer.pointer_id,
+            PointerEvent::Move(e) => e.pointer.pointer_id,
+            PointerEvent::Cancel(info) | PointerEvent::Enter(info) | PointerEvent::Leave(info) => {
+                info.pointer_id
+            }
+            PointerEvent::Scroll(e) => e.pointer.pointer_id,
+            PointerEvent::Gesture(e) => e.pointer.pointer_id,
+        };
+        // Use 0 for primary pointer, hash for others
+        let raw_id = match id {
+            Some(p) if p.is_primary_pointer() => 0,
+            Some(p) => {
+                // Use a simple hash based on memory representation
+                use std::hash::{Hash, Hasher};
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                p.hash(&mut hasher);
+                (hasher.finish() & 0x7FFFFFFF) as i32
+            }
+            None => 0,
+        };
+        PointerId::new(raw_id)
     }
 
     fn is_down(&self) -> bool {
@@ -126,7 +149,7 @@ impl PointerEventExt for PointerEvent {
     }
 
     fn is_move(&self) -> bool {
-        matches!(self, PointerEvent::Move(_) | PointerEvent::Hover(_))
+        matches!(self, PointerEvent::Move(_))
     }
 
     fn starts_gesture(&self) -> bool {
@@ -209,25 +232,24 @@ impl<T: HitTestTarget + ?Sized> HitTestTarget for Box<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_types::events::{PointerDeviceKind, PointerEventData};
+    use crate::events::{make_down_event, PointerType};
 
     #[test]
     fn test_pointer_event_ext() {
         let pos = Offset::new(100.0, 200.0);
-        let data = PointerEventData::new(pos, PointerDeviceKind::Mouse);
 
-        let down = PointerEvent::Down(data.clone());
+        let down = make_down_event(pos, PointerType::Mouse);
         assert!(down.is_down());
         assert!(!down.is_up());
         assert!(down.starts_gesture());
-        assert_eq!(down.position(), pos);
+        assert_eq!(PointerEventExtTrait::position(&down), pos);
 
-        let up = PointerEvent::Up(data.clone());
+        let up = crate::events::make_up_event(pos, PointerType::Mouse);
         assert!(up.is_up());
         assert!(!up.is_down());
         assert!(up.ends_gesture());
 
-        let mv = PointerEvent::Move(data);
+        let mv = crate::events::make_move_event(pos, PointerType::Mouse);
         assert!(mv.is_move());
         assert!(!mv.is_down());
         assert!(!mv.is_up());

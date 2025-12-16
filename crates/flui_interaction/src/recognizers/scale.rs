@@ -11,9 +11,10 @@
 
 use super::recognizer::{GestureRecognizer, GestureRecognizerState};
 use crate::arena::GestureArenaMember;
+use crate::events::PointerEvent;
 use crate::ids::PointerId;
 use crate::processing::VelocityTracker;
-use flui_types::{events::PointerEvent, Offset};
+use flui_types::Offset;
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -580,7 +581,9 @@ impl GestureRecognizer for ScaleGestureRecognizer {
                 // For now, assume it's the primary pointer
                 // In a real implementation, we'd track pointer IDs
                 if let Some(pointer) = self.state.primary_pointer() {
-                    self.handle_pointer_move(pointer, data.position);
+                    let pos = data.current.position;
+                    let position = Offset::new(pos.x as f32, pos.y as f32);
+                    self.handle_pointer_move(pointer, position);
                 }
             }
             PointerEvent::Up(_data) => {

@@ -5,8 +5,8 @@
 
 use super::focus::FocusManager;
 use super::hit_test::{HitTestResult, HitTestable};
+use crate::events::{Event, KeyEvent, PointerEvent, PointerEventExt, ScrollEventData};
 use crate::ids::PointerId;
-use flui_types::events::{Event, KeyEvent, PointerEvent, ScrollEventData};
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -33,12 +33,12 @@ use std::sync::Arc;
 /// ```
 pub struct EventRouter {
     /// Pointer state tracking (for drag gestures)
-    pointer_state: Arc<RwLock<HashMap<PointerId, PointerState>>>,
+    pointer_state: Arc<RwLock<HashMap<PointerId, PointerStateTracking>>>,
 }
 
 /// State for a single pointer (finger/mouse)
 #[derive(Debug, Clone)]
-struct PointerState {
+struct PointerStateTracking {
     /// Is pointer currently down?
     is_down: bool,
 
@@ -68,15 +68,11 @@ impl EventRouter {
             Event::Pointer(pointer_event) => {
                 self.route_pointer_event(root, pointer_event);
             }
-            Event::Key(key_event) => {
+            Event::Keyboard(key_event) | Event::Key(key_event) => {
                 self.route_key_event(root, key_event);
             }
             Event::Scroll(scroll_event_data) => {
                 self.route_scroll_event(root, scroll_event_data);
-            }
-            _ => {
-                // Other events not yet implemented
-                tracing::trace!("Unhandled event type: {:?}", event);
             }
         }
     }
@@ -84,7 +80,7 @@ impl EventRouter {
     /// Route pointer event via hit testing
     fn route_pointer_event(&mut self, root: &mut dyn HitTestable, event: &PointerEvent) {
         let position = event.position();
-        let pointer_id = PointerId::new(event.device());
+        let pointer_id = get_pointer_id(event);
 
         match event {
             PointerEvent::Down(_) => {
@@ -102,7 +98,7 @@ impl EventRouter {
                 // Store pointer state for drag tracking
                 self.pointer_state.write().insert(
                     pointer_id,
-                    PointerState {
+                    PointerStateTracking {
                         is_down: true,
                         last_position: position,
                         down_target: Some(result.clone()),
@@ -161,7 +157,7 @@ impl EventRouter {
             }
 
             _ => {
-                // Other pointer events (Enter, Exit, etc.)
+                // Other pointer events (Enter, Leave, Scroll, Gesture)
                 let mut result = HitTestResult::new();
                 root.hit_test(position, &mut result);
                 result.dispatch(event);
@@ -226,6 +222,32 @@ impl EventRouter {
     }
 }
 
+/// Helper to extract pointer ID from event
+fn get_pointer_id(event: &PointerEvent) -> PointerId {
+    let id = match event {
+        PointerEvent::Down(e) => e.pointer.pointer_id,
+        PointerEvent::Up(e) => e.pointer.pointer_id,
+        PointerEvent::Move(e) => e.pointer.pointer_id,
+        PointerEvent::Cancel(info) | PointerEvent::Enter(info) | PointerEvent::Leave(info) => {
+            info.pointer_id
+        }
+        PointerEvent::Scroll(e) => e.pointer.pointer_id,
+        PointerEvent::Gesture(e) => e.pointer.pointer_id,
+    };
+    // Use 0 for primary pointer, hash for others
+    let raw_id = match id {
+        Some(p) if p.is_primary_pointer() => 0,
+        Some(p) => {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            p.hash(&mut hasher);
+            (hasher.finish() & 0x7FFFFFFF) as i32
+        }
+        None => 0,
+    };
+    PointerId::new(raw_id)
+}
+
 impl Default for EventRouter {
     fn default() -> Self {
         Self::new()
@@ -236,6 +258,7 @@ impl Default for EventRouter {
 pub(crate) mod tests {
     use super::super::hit_test::HitTestEntry;
     use super::*;
+    use crate::events::{make_down_event, PointerType};
     use flui_foundation::RenderId;
     use flui_types::geometry::{Offset, Rect};
 
@@ -263,26 +286,22 @@ pub(crate) mod tests {
 
     #[test]
     fn test_pointer_down_up_tracking() {
+        use crate::events::make_up_event;
+
         let mut router = EventRouter::new();
         let mut layer = MockLayer {
             bounds: Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
         };
 
         // Down event
-        let down = PointerEvent::Down(flui_types::events::PointerEventData::new(
-            Offset::new(50.0, 50.0),
-            flui_types::events::PointerDeviceKind::Mouse,
-        ));
+        let down = make_down_event(Offset::new(50.0, 50.0), PointerType::Mouse);
         router.route_event(&mut layer, &Event::Pointer(down));
 
         // Should track pointer
         assert_eq!(router.pointer_state.read().len(), 1);
 
         // Up event
-        let up = PointerEvent::Up(flui_types::events::PointerEventData::new(
-            Offset::new(50.0, 50.0),
-            flui_types::events::PointerDeviceKind::Mouse,
-        ));
+        let up = make_up_event(Offset::new(50.0, 50.0), PointerType::Mouse);
         router.route_event(&mut layer, &Event::Pointer(up));
 
         // Should clear pointer
@@ -298,7 +317,7 @@ pub(crate) mod tests {
         // Add some state
         router.pointer_state.write().insert(
             PointerId::new(0),
-            PointerState {
+            PointerStateTracking {
                 is_down: true,
                 last_position: Offset::new(0.0, 0.0),
                 down_target: None,

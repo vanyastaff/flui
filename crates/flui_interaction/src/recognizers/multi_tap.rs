@@ -11,8 +11,9 @@
 
 use super::recognizer::{constants, GestureRecognizer, GestureRecognizerState};
 use crate::arena::GestureArenaMember;
+use crate::events::{PointerEvent, PointerType};
 use crate::ids::PointerId;
-use flui_types::{events::PointerEvent, Offset};
+use flui_types::Offset;
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -31,7 +32,7 @@ pub struct MultiTapDetails {
     /// Center point of all taps
     pub center: Offset,
     /// Pointer device kind
-    pub kind: flui_types::events::PointerDeviceKind,
+    pub kind: PointerType,
 }
 
 /// Recognizes multi-tap gestures (multiple simultaneous taps)
@@ -117,7 +118,7 @@ struct MultiTapState {
     /// Time when first pointer went down
     first_down_time: Option<Instant>,
     /// Device kind
-    device_kind: Option<flui_types::events::PointerDeviceKind>,
+    device_kind: Option<PointerType>,
 }
 
 impl Default for MultiTapState {
@@ -175,12 +176,7 @@ impl MultiTapGestureRecognizer {
     }
 
     /// Handle pointer down
-    fn handle_pointer_down(
-        &self,
-        pointer: PointerId,
-        position: Offset,
-        kind: flui_types::events::PointerDeviceKind,
-    ) {
+    fn handle_pointer_down(&self, pointer: PointerId, position: Offset, kind: PointerType) {
         let mut state = self.gesture_state.lock();
 
         match state.phase {
@@ -254,7 +250,7 @@ impl MultiTapGestureRecognizer {
     }
 
     /// Handle pointer up
-    fn handle_pointer_up(&self, pointer: PointerId, kind: flui_types::events::PointerDeviceKind) {
+    fn handle_pointer_up(&self, pointer: PointerId, kind: PointerType) {
         let mut state = self.gesture_state.lock();
 
         if let Some(info) = state.pointers.get_mut(&pointer) {
@@ -320,9 +316,7 @@ impl MultiTapGestureRecognizer {
             };
 
             let count = positions.len();
-            let kind = state
-                .device_kind
-                .unwrap_or(flui_types::events::PointerDeviceKind::Touch);
+            let kind = state.device_kind.unwrap_or(PointerType::Touch);
 
             drop(state);
 
@@ -390,11 +384,7 @@ impl GestureRecognizer for MultiTapGestureRecognizer {
             self.state.start_tracking(pointer, position, &recognizer);
         }
 
-        self.handle_pointer_down(
-            pointer,
-            position,
-            flui_types::events::PointerDeviceKind::Touch,
-        );
+        self.handle_pointer_down(pointer, position, PointerType::Touch);
     }
 
     fn handle_event(&self, event: &PointerEvent) {
@@ -403,12 +393,14 @@ impl GestureRecognizer for MultiTapGestureRecognizer {
                 // In a real implementation, we'd need to know which pointer this is
                 // For now, we'll track via primary pointer
                 if let Some(pointer) = self.state.primary_pointer() {
-                    self.handle_pointer_move(pointer, data.position);
+                    let pos = data.current.position;
+                    let position = Offset::new(pos.x as f32, pos.y as f32);
+                    self.handle_pointer_move(pointer, position);
                 }
             }
             PointerEvent::Up(data) => {
                 if let Some(pointer) = self.state.primary_pointer() {
-                    self.handle_pointer_up(pointer, data.device_kind);
+                    self.handle_pointer_up(pointer, data.pointer.pointer_type);
                 }
             }
             PointerEvent::Cancel(_) => {
@@ -493,8 +485,8 @@ mod tests {
         drop(state);
 
         // Release both pointers
-        recognizer.handle_pointer_up(pointer1, flui_types::events::PointerDeviceKind::Touch);
-        recognizer.handle_pointer_up(pointer2, flui_types::events::PointerDeviceKind::Touch);
+        recognizer.handle_pointer_up(pointer1, PointerType::Touch);
+        recognizer.handle_pointer_up(pointer2, PointerType::Touch);
 
         // Should have called callback
         assert!(*tapped.lock());
@@ -528,18 +520,9 @@ mod tests {
         drop(state);
 
         // Release all pointers
-        recognizer.handle_pointer_up(
-            PointerId::new(1),
-            flui_types::events::PointerDeviceKind::Touch,
-        );
-        recognizer.handle_pointer_up(
-            PointerId::new(2),
-            flui_types::events::PointerDeviceKind::Touch,
-        );
-        recognizer.handle_pointer_up(
-            PointerId::new(3),
-            flui_types::events::PointerDeviceKind::Touch,
-        );
+        recognizer.handle_pointer_up(PointerId::new(1), PointerType::Touch);
+        recognizer.handle_pointer_up(PointerId::new(2), PointerType::Touch);
+        recognizer.handle_pointer_up(PointerId::new(3), PointerType::Touch);
 
         // Should have called callback
         assert!(*tapped.lock());
@@ -562,14 +545,8 @@ mod tests {
         recognizer.add_pointer(PointerId::new(2), Offset::new(100.0, 0.0));
 
         // Release both
-        recognizer.handle_pointer_up(
-            PointerId::new(1),
-            flui_types::events::PointerDeviceKind::Touch,
-        );
-        recognizer.handle_pointer_up(
-            PointerId::new(2),
-            flui_types::events::PointerDeviceKind::Touch,
-        );
+        recognizer.handle_pointer_up(PointerId::new(1), PointerType::Touch);
+        recognizer.handle_pointer_up(PointerId::new(2), PointerType::Touch);
 
         // Center should be at (50, 0)
         let center = *center_pos.lock();

@@ -13,8 +13,9 @@
 
 use super::recognizer::{constants, GestureRecognizer, GestureRecognizerState};
 use crate::arena::GestureArenaMember;
+use crate::events::{PointerEvent, PointerType};
 use crate::ids::PointerId;
-use flui_types::{events::PointerEvent, Offset};
+use flui_types::Offset;
 use parking_lot::Mutex;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -39,7 +40,7 @@ pub struct LongPressDownDetails {
     /// Local position (relative to widget)
     pub local_position: Offset,
     /// Pointer device kind
-    pub kind: flui_types::events::PointerDeviceKind,
+    pub kind: PointerType,
 }
 
 /// Details about long press start
@@ -50,7 +51,7 @@ pub struct LongPressStartDetails {
     /// Local position (relative to widget)
     pub local_position: Offset,
     /// Pointer device kind
-    pub kind: flui_types::events::PointerDeviceKind,
+    pub kind: PointerType,
 }
 
 /// Details about long press event
@@ -61,7 +62,7 @@ pub struct LongPressDetails {
     /// Local position (relative to widget)
     pub local_position: Offset,
     /// Pointer device kind
-    pub kind: flui_types::events::PointerDeviceKind,
+    pub kind: PointerType,
 }
 
 /// Recognizes long press gestures
@@ -134,7 +135,7 @@ struct LongPressState {
     /// Current position
     current_position: Option<Offset>,
     /// Pointer device kind
-    device_kind: Option<flui_types::events::PointerDeviceKind>,
+    device_kind: Option<PointerType>,
 }
 
 impl Default for LongPressState {
@@ -233,7 +234,7 @@ impl LongPressGestureRecognizer {
     }
 
     /// Handle pointer down event
-    fn handle_down(&self, position: Offset, kind: flui_types::events::PointerDeviceKind) {
+    fn handle_down(&self, position: Offset, kind: PointerType) {
         let mut state = self.gesture_state.lock();
         state.phase = LongPressPhase::Possible;
         state.down_time = Some(Instant::now());
@@ -253,7 +254,7 @@ impl LongPressGestureRecognizer {
     }
 
     /// Handle pointer move event
-    fn handle_move(&self, position: Offset, kind: flui_types::events::PointerDeviceKind) {
+    fn handle_move(&self, position: Offset, kind: PointerType) {
         let mut state = self.gesture_state.lock();
 
         match state.phase {
@@ -313,7 +314,7 @@ impl LongPressGestureRecognizer {
     }
 
     /// Handle pointer up event
-    fn handle_up(&self, position: Offset, kind: flui_types::events::PointerDeviceKind) {
+    fn handle_up(&self, position: Offset, kind: PointerType) {
         let mut state = self.gesture_state.lock();
 
         match state.phase {
@@ -350,7 +351,7 @@ impl LongPressGestureRecognizer {
     }
 
     /// Handle cancel event
-    fn handle_cancel(&self, position: Offset, kind: flui_types::events::PointerDeviceKind) {
+    fn handle_cancel(&self, position: Offset, kind: PointerType) {
         let mut state = self.gesture_state.lock();
 
         if state.phase == LongPressPhase::Started || state.phase == LongPressPhase::Possible {
@@ -433,7 +434,7 @@ impl GestureRecognizer for LongPressGestureRecognizer {
         self.state.start_tracking(pointer, position, &recognizer);
 
         // Handle pointer down
-        self.handle_down(position, flui_types::events::PointerDeviceKind::Touch);
+        self.handle_down(position, PointerType::Touch);
     }
 
     fn handle_event(&self, event: &PointerEvent) {
@@ -444,13 +445,20 @@ impl GestureRecognizer for LongPressGestureRecognizer {
 
         match event {
             PointerEvent::Move(data) => {
-                self.handle_move(data.position, data.device_kind);
+                let pos = data.current.position;
+                let position = Offset::new(pos.x as f32, pos.y as f32);
+                self.handle_move(position, data.pointer.pointer_type);
             }
             PointerEvent::Up(data) => {
-                self.handle_up(data.position, data.device_kind);
+                let pos = data.state.position;
+                let position = Offset::new(pos.x as f32, pos.y as f32);
+                self.handle_up(position, data.pointer.pointer_type);
             }
-            PointerEvent::Cancel(data) => {
-                self.handle_cancel(data.position, data.device_kind);
+            PointerEvent::Cancel(info) => {
+                // Cancel doesn't have position, use last known position
+                if let Some(pos) = self.state.initial_position() {
+                    self.handle_cancel(pos, info.pointer_type);
+                }
             }
             _ => {}
         }
@@ -486,7 +494,7 @@ impl GestureArenaMember for LongPressGestureRecognizer {
                 .gesture_state
                 .lock()
                 .device_kind
-                .unwrap_or(flui_types::events::PointerDeviceKind::Touch);
+                .unwrap_or(PointerType::Touch);
             self.handle_cancel(pos, kind);
         }
     }
@@ -570,11 +578,9 @@ mod tests {
 
         // Move too far (beyond TAP_SLOP = 18px)
         let moved_pos = Offset::new(100.0, 130.0); // 30px away
-        recognizer.handle_event(&PointerEvent::Move(
-            flui_types::events::PointerEventData::new(
-                moved_pos,
-                flui_types::events::PointerDeviceKind::Touch,
-            ),
+        recognizer.handle_event(&crate::events::make_move_event(
+            moved_pos,
+            PointerType::Touch,
         ));
 
         // Should have cancelled
@@ -606,11 +612,9 @@ mod tests {
 
         // Move slightly (within slop)
         let moved_pos = Offset::new(105.0, 105.0);
-        recognizer.handle_event(&PointerEvent::Move(
-            flui_types::events::PointerEventData::new(
-                moved_pos,
-                flui_types::events::PointerDeviceKind::Touch,
-            ),
+        recognizer.handle_event(&crate::events::make_move_event(
+            moved_pos,
+            PointerType::Touch,
         ));
 
         // Should have called move callback

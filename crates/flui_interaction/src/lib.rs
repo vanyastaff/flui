@@ -46,7 +46,7 @@
 //!
 //! ```rust,ignore
 //! use flui_interaction::{EventRouter, HitTestable};
-//! use flui_types::events::{Event, PointerEvent};
+//! use crate::events::{Event, PointerEvent};
 //!
 //! let mut router = EventRouter::new();
 //!
@@ -214,8 +214,8 @@ pub use processing::{
 // ============================================================================
 
 pub use testing::{
-    GestureBuilder, GesturePlayer, GestureRecorder, GestureRecording, KeyEventBuilder,
-    ModifiersBuilder, RecordedEvent, RecordedEventType,
+    GestureBuilder, GesturePlayer, GestureRecorder, GestureRecording, ModifiersBuilder,
+    RecordedEvent, RecordedEventType,
 };
 
 // ============================================================================
@@ -231,7 +231,8 @@ pub use signal_resolver::{PointerSignalResolver, SignalPriority};
 // ============================================================================
 
 pub use traits::{
-    Disposable, DragAxis, GestureCallback, GestureRecognizerExt, HitTestTarget, PointerEventExt,
+    Disposable, DragAxis, GestureCallback, GestureRecognizerExt, HitTestTarget,
+    PointerEventExtTrait as PointerEventExt,
 };
 
 // ============================================================================
@@ -264,7 +265,8 @@ pub mod prelude {
 
     // Traits
     pub use crate::traits::{
-        Disposable, DragAxis, GestureCallback, GestureRecognizerExt, HitTestTarget, PointerEventExt,
+        Disposable, DragAxis, GestureCallback, GestureRecognizerExt, HitTestTarget,
+        PointerEventExtTrait as PointerEventExt,
     };
 
     // Extension traits for custom types

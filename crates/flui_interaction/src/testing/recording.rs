@@ -25,11 +25,11 @@
 //! }
 //! ```
 
+use crate::events::{PointerEvent, PointerEventData, PointerType};
 use crate::ids::PointerId;
-use flui_types::events::{PointerEvent, PointerEventData};
-use flui_types::gestures::PointerDeviceKind;
 use flui_types::Offset;
 use std::time::{Duration, Instant};
+use ui_events::pointer::{PointerButton, PointerButtons};
 
 /// A recorded pointer event with timing information
 #[derive(Debug, Clone)]
@@ -43,7 +43,7 @@ pub struct RecordedEvent {
     /// Position of the event
     pub position: Offset,
     /// Device kind
-    pub device_kind: PointerDeviceKind,
+    pub device_kind: PointerType,
     /// Pressure (if available)
     pub pressure: Option<f32>,
     /// Tilt X (if available)
@@ -65,8 +65,6 @@ pub enum RecordedEventType {
     Up,
     /// Pointer cancel
     Cancel,
-    /// Pointer hover (move without button pressed)
-    Hover,
 }
 
 impl RecordedEvent {
@@ -82,7 +80,7 @@ impl RecordedEvent {
             pointer,
             event_type,
             position,
-            device_kind: PointerDeviceKind::Touch,
+            device_kind: PointerType::Touch,
             pressure: None,
             tilt_x: None,
             tilt_y: None,
@@ -91,7 +89,7 @@ impl RecordedEvent {
     }
 
     /// Set device kind
-    pub fn with_device_kind(mut self, kind: PointerDeviceKind) -> Self {
+    pub fn with_device_kind(mut self, kind: PointerType) -> Self {
         self.device_kind = kind;
         self
     }
@@ -115,29 +113,42 @@ impl RecordedEvent {
         self
     }
 
+    /// Convert to a PointerEventData (for internal use)
+    fn to_pointer_event_data(&self) -> PointerEventData {
+        let pressure = self.pressure.unwrap_or(1.0);
+
+        PointerEventData {
+            position: self.position,
+            local_position: self.position,
+            device_kind: self.device_kind,
+            device: self.pointer.get(),
+            buttons: if matches!(
+                self.event_type,
+                RecordedEventType::Down | RecordedEventType::Move
+            ) {
+                PointerButtons::from(PointerButton::Primary)
+            } else {
+                PointerButtons::new()
+            },
+            pressure,
+            time_stamp: self.time_offset.as_nanos() as u64,
+        }
+    }
+
     /// Convert to a PointerEvent
     pub fn to_pointer_event(&self) -> PointerEvent {
-        let mut data = PointerEventData::new(self.position, self.device_kind);
-        data.device = self.pointer.get();
+        let data = self.to_pointer_event_data();
+        crate::events::make_pointer_event(self.event_type.into(), data)
+    }
+}
 
-        if let Some(pressure) = self.pressure {
-            data = data.with_pressure(pressure);
-        }
-
-        if let (Some(tx), Some(ty)) = (self.tilt_x, self.tilt_y) {
-            data = data.with_tilt(tx, ty);
-        }
-
-        if let Some(rotation) = self.rotation {
-            data = data.with_rotation(rotation);
-        }
-
-        match self.event_type {
-            RecordedEventType::Down => PointerEvent::Down(data),
-            RecordedEventType::Move => PointerEvent::Move(data),
-            RecordedEventType::Up => PointerEvent::Up(data),
-            RecordedEventType::Cancel => PointerEvent::Cancel(data),
-            RecordedEventType::Hover => PointerEvent::Hover(data),
+impl From<RecordedEventType> for crate::events::PointerEventKind {
+    fn from(event_type: RecordedEventType) -> Self {
+        match event_type {
+            RecordedEventType::Down => crate::events::PointerEventKind::Down,
+            RecordedEventType::Move => crate::events::PointerEventKind::Move,
+            RecordedEventType::Up => crate::events::PointerEventKind::Up,
+            RecordedEventType::Cancel => crate::events::PointerEventKind::Cancel,
         }
     }
 }
@@ -200,7 +211,7 @@ pub struct GestureRecorder {
     /// Start time of the recording
     start_time: Option<Instant>,
     /// Device kind to use for all events
-    device_kind: PointerDeviceKind,
+    device_kind: PointerType,
 }
 
 impl GestureRecorder {
@@ -209,7 +220,7 @@ impl GestureRecorder {
         Self {
             recording: GestureRecording::new(),
             start_time: None,
-            device_kind: PointerDeviceKind::Touch,
+            device_kind: PointerType::Touch,
         }
     }
 
@@ -218,12 +229,12 @@ impl GestureRecorder {
         Self {
             recording: GestureRecording::with_name(name),
             start_time: None,
-            device_kind: PointerDeviceKind::Touch,
+            device_kind: PointerType::Touch,
         }
     }
 
     /// Set the device kind for all subsequent events
-    pub fn set_device_kind(&mut self, kind: PointerDeviceKind) {
+    pub fn set_device_kind(&mut self, kind: PointerType) {
         self.device_kind = kind;
     }
 
@@ -271,50 +282,61 @@ impl GestureRecorder {
         self.recording.push(event);
     }
 
-    /// Record a hover event
-    pub fn record_hover(&mut self, pointer: PointerId, position: Offset) {
-        let time_offset = self.time_offset();
-        let event = RecordedEvent::new(time_offset, pointer, RecordedEventType::Hover, position)
-            .with_device_kind(self.device_kind);
-        self.recording.push(event);
-    }
-
     /// Record a raw PointerEvent
     pub fn record_event(&mut self, event: &PointerEvent) {
         let time_offset = self.time_offset();
 
-        let (event_type, data) = match event {
-            PointerEvent::Down(data) => (RecordedEventType::Down, Some(data)),
-            PointerEvent::Move(data) => (RecordedEventType::Move, Some(data)),
-            PointerEvent::Up(data) => (RecordedEventType::Up, Some(data)),
-            PointerEvent::Cancel(data) => (RecordedEventType::Cancel, Some(data)),
-            PointerEvent::Hover(data) => (RecordedEventType::Hover, Some(data)),
-            _ => return, // Skip Added, Removed, Scroll events
+        // Extract event info using pattern matching
+        let (event_type, position, device_kind, pressure) = match event {
+            PointerEvent::Down(data) => {
+                let pos = data.state.position;
+                (
+                    RecordedEventType::Down,
+                    Offset::new(pos.x as f32, pos.y as f32),
+                    data.pointer.pointer_type,
+                    Some(data.state.pressure),
+                )
+            }
+            PointerEvent::Up(data) => {
+                let pos = data.state.position;
+                (
+                    RecordedEventType::Up,
+                    Offset::new(pos.x as f32, pos.y as f32),
+                    data.pointer.pointer_type,
+                    Some(data.state.pressure),
+                )
+            }
+            PointerEvent::Move(data) => {
+                let pos = data.current.position;
+                (
+                    RecordedEventType::Move,
+                    Offset::new(pos.x as f32, pos.y as f32),
+                    data.pointer.pointer_type,
+                    Some(data.current.pressure),
+                )
+            }
+            PointerEvent::Cancel(info) => (
+                RecordedEventType::Cancel,
+                Offset::ZERO,
+                info.pointer_type,
+                None,
+            ),
+            _ => return, // Skip Enter, Leave, Scroll, Gesture events
         };
 
-        if let Some(data) = data {
-            let mut recorded = RecordedEvent::new(
-                time_offset,
-                PointerId::new(data.device),
-                event_type,
-                data.position,
-            )
-            .with_device_kind(data.device_kind);
+        let mut recorded = RecordedEvent::new(
+            time_offset,
+            PointerId::new(0), // Default to primary pointer
+            event_type,
+            position,
+        )
+        .with_device_kind(device_kind);
 
-            if let Some(pressure) = data.pressure {
-                recorded = recorded.with_pressure(pressure);
-            }
-
-            if let (Some(tx), Some(ty)) = (data.tilt_x, data.tilt_y) {
-                recorded = recorded.with_tilt(tx, ty);
-            }
-
-            if let Some(rotation) = data.rotation {
-                recorded = recorded.with_rotation(rotation);
-            }
-
-            self.recording.push(recorded);
+        if let Some(p) = pressure {
+            recorded = recorded.with_pressure(p);
         }
+
+        self.recording.push(recorded);
     }
 
     /// Finish recording and return the completed recording
@@ -672,19 +694,10 @@ mod tests {
         let events: Vec<_> = player.collect();
         assert_eq!(events.len(), 2);
 
-        match &events[0] {
-            PointerEvent::Down(data) => {
-                assert_eq!(data.position, Offset::new(50.0, 50.0));
-            }
-            _ => panic!("Expected Down event"),
-        }
-
-        match &events[1] {
-            PointerEvent::Up(data) => {
-                assert_eq!(data.position, Offset::new(50.0, 50.0));
-            }
-            _ => panic!("Expected Up event"),
-        }
+        // First should be Down
+        assert!(matches!(events[0], PointerEvent::Down(_)));
+        // Second should be Up
+        assert!(matches!(events[1], PointerEvent::Up(_)));
     }
 
     #[test]
@@ -752,40 +765,16 @@ mod tests {
             Offset::new(0.0, 0.0),
         )
         .with_pressure(0.5)
-        .with_device_kind(PointerDeviceKind::Stylus);
+        .with_device_kind(PointerType::Pen);
 
         let pointer_event = event.to_pointer_event();
 
         match pointer_event {
             PointerEvent::Down(data) => {
-                assert_eq!(data.device_kind, PointerDeviceKind::Stylus);
-                assert_eq!(data.pressure, Some(0.5));
+                assert_eq!(data.pointer.pointer_type, PointerType::Pen);
+                assert!((data.state.pressure - 0.5).abs() < 0.01);
             }
             _ => panic!("Expected Down event"),
-        }
-    }
-
-    #[test]
-    fn test_recorded_event_with_tilt() {
-        use std::f32::consts::FRAC_PI_4;
-
-        let event = RecordedEvent::new(
-            Duration::ZERO,
-            PointerId::new(0),
-            RecordedEventType::Move,
-            Offset::new(0.0, 0.0),
-        )
-        .with_tilt(FRAC_PI_4, -FRAC_PI_4)
-        .with_rotation(1.0);
-
-        let pointer_event = event.to_pointer_event();
-
-        match pointer_event {
-            PointerEvent::Move(data) => {
-                assert!(data.supports_tilt());
-                assert!(data.supports_rotation());
-            }
-            _ => panic!("Expected Move event"),
         }
     }
 

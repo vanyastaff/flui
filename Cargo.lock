@@ -398,6 +398,7 @@ dependencies = [
  "crossbeam",
  "cursor-icon",
  "dashmap",
+ "dpi",
  "flui-foundation",
  "flui_types",
  "futures",

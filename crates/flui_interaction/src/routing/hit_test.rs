@@ -15,11 +15,8 @@
 //! - HitTestResult: gestures/hit_test.dart
 //! - HitTestEntry: gestures/hit_test.dart
 
-use crate::events::CursorIcon;
-use flui_types::{
-    events::{PointerEvent, ScrollEventData},
-    geometry::{Matrix4, Offset},
-};
+use crate::events::{CursorIcon, PointerEvent, ScrollEventData};
+use flui_types::geometry::{Matrix4, Offset};
 use std::sync::Arc;
 
 pub use flui_foundation::RenderId;
@@ -343,7 +340,7 @@ impl HitTestResult {
                         continue;
                     }
                 } else {
-                    event.clone()
+                    *event
                 };
 
                 if handler(&local_event).should_stop() {
@@ -422,65 +419,52 @@ impl<T: crate::sealed::CustomHitTestable> HitTestable for T {
 // ============================================================================
 
 fn transform_pointer_event(event: &PointerEvent, transform: &Matrix4) -> PointerEvent {
-    use flui_types::events::PointerEventData;
+    use ui_events::pointer::{PointerButtonEvent, PointerScrollEvent, PointerUpdate};
 
-    let transform_offset = |offset: Offset| -> Offset {
-        let (x, y) = transform.transform_point(offset.dx, offset.dy);
-        Offset::new(x, y)
+    let transform_position = |pos: dpi::PhysicalPosition<f64>| -> dpi::PhysicalPosition<f64> {
+        let (x, y) = transform.transform_point(pos.x as f32, pos.y as f32);
+        dpi::PhysicalPosition::new(x as f64, y as f64)
     };
 
     match event {
-        PointerEvent::Down(data) => {
-            let mut new_data =
-                PointerEventData::new(transform_offset(data.position), data.device_kind);
-            new_data.device = data.device;
-            PointerEvent::Down(new_data)
+        PointerEvent::Down(e) => {
+            let mut new_state = e.state.clone();
+            new_state.position = transform_position(e.state.position);
+            PointerEvent::Down(PointerButtonEvent {
+                button: e.button,
+                pointer: e.pointer,
+                state: new_state,
+            })
         }
-        PointerEvent::Up(data) => {
-            let mut new_data =
-                PointerEventData::new(transform_offset(data.position), data.device_kind);
-            new_data.device = data.device;
-            PointerEvent::Up(new_data)
+        PointerEvent::Up(e) => {
+            let mut new_state = e.state.clone();
+            new_state.position = transform_position(e.state.position);
+            PointerEvent::Up(PointerButtonEvent {
+                button: e.button,
+                pointer: e.pointer,
+                state: new_state,
+            })
         }
-        PointerEvent::Move(data) => {
-            let mut new_data =
-                PointerEventData::new(transform_offset(data.position), data.device_kind);
-            new_data.device = data.device;
-            PointerEvent::Move(new_data)
+        PointerEvent::Move(e) => {
+            let mut new_current = e.current.clone();
+            new_current.position = transform_position(e.current.position);
+            PointerEvent::Move(PointerUpdate {
+                pointer: e.pointer,
+                current: new_current,
+                coalesced: e.coalesced.clone(),
+                predicted: e.predicted.clone(),
+            })
         }
-        PointerEvent::Hover(data) => {
-            let mut new_data =
-                PointerEventData::new(transform_offset(data.position), data.device_kind);
-            new_data.device = data.device;
-            PointerEvent::Hover(new_data)
+        PointerEvent::Scroll(e) => {
+            let mut new_state = e.state.clone();
+            new_state.position = transform_position(e.state.position);
+            PointerEvent::Scroll(PointerScrollEvent {
+                pointer: e.pointer,
+                state: new_state,
+                delta: e.delta,
+            })
         }
-        PointerEvent::Enter(data) => {
-            let mut new_data =
-                PointerEventData::new(transform_offset(data.position), data.device_kind);
-            new_data.device = data.device;
-            PointerEvent::Enter(new_data)
-        }
-        PointerEvent::Exit(data) => {
-            let mut new_data =
-                PointerEventData::new(transform_offset(data.position), data.device_kind);
-            new_data.device = data.device;
-            PointerEvent::Exit(new_data)
-        }
-        PointerEvent::Cancel(data) => {
-            let mut new_data =
-                PointerEventData::new(transform_offset(data.position), data.device_kind);
-            new_data.device = data.device;
-            PointerEvent::Cancel(new_data)
-        }
-        PointerEvent::Scroll {
-            device,
-            position,
-            scroll_delta,
-        } => PointerEvent::Scroll {
-            device: *device,
-            position: transform_offset(*position),
-            scroll_delta: *scroll_delta,
-        },
+        // Cancel, Enter, Leave don't have position - just clone
         other => other.clone(),
     }
 }
@@ -502,6 +486,7 @@ fn transform_scroll_event(event: &ScrollEventData, transform: &Matrix4) -> Scrol
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::events::PointerType;
 
     #[test]
     fn test_hit_test_result_new() {
@@ -564,10 +549,7 @@ mod tests {
 
         result.add(HitTestEntry::new(RenderId::new(1)).handler(handler));
 
-        let event = PointerEvent::Down(flui_types::events::PointerEventData::new(
-            Offset::new(50.0, 50.0),
-            flui_types::events::PointerDeviceKind::Mouse,
-        ));
+        let event = crate::events::make_down_event(Offset::new(50.0, 50.0), PointerType::Mouse);
         result.dispatch(&event);
 
         assert!(*called.lock().unwrap());
@@ -599,10 +581,7 @@ mod tests {
         result.add(HitTestEntry::new(RenderId::new(1)).handler(handler1));
         result.add(HitTestEntry::new(RenderId::new(2)).handler(handler2));
 
-        let event = PointerEvent::Down(flui_types::events::PointerEventData::new(
-            Offset::new(50.0, 50.0),
-            flui_types::events::PointerDeviceKind::Mouse,
-        ));
+        let event = crate::events::make_down_event(Offset::new(50.0, 50.0), PointerType::Mouse);
         result.dispatch(&event);
 
         assert!(*first_called.lock().unwrap());

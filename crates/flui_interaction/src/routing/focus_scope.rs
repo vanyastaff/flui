@@ -59,7 +59,7 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{Arc, Weak};
 
-use flui_types::events::KeyEvent;
+use crate::events::KeyEvent;
 use flui_types::geometry::{Offset, Rect};
 
 // Re-export FocusNodeId from ids module

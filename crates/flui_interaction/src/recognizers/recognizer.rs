@@ -4,7 +4,8 @@
 
 use crate::arena::{GestureArena, GestureArenaMember};
 use crate::ids::PointerId;
-use flui_types::{events::PointerEvent, Offset};
+use flui_types::Offset;
+use crate::events::PointerEvent;
 use parking_lot::Mutex;
 use std::sync::Arc;
 

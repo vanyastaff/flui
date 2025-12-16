@@ -33,7 +33,7 @@
 //! ```
 
 use crate::ids::FocusNodeId;
-use flui_types::events::KeyEvent;
+use crate::events::KeyEvent;
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -563,8 +563,8 @@ mod tests {
 
     #[test]
     fn test_dispatch_key_event_to_focused() {
+        use crate::events::keyboard::Code;
         use crate::testing::input::KeyEventBuilder;
-        use flui_types::events::PhysicalKey;
         use std::sync::atomic::{AtomicBool, Ordering};
 
         let manager = FocusManager::new();
@@ -585,7 +585,7 @@ mod tests {
         manager.request_focus(node);
 
         // Create a key event
-        let event = KeyEventBuilder::new(PhysicalKey::KeyA).build();
+        let event = KeyEventBuilder::new(Code::KeyA).build();
 
         // Dispatch - should be handled
         let result = manager.dispatch_key_event(&event);
@@ -595,8 +595,8 @@ mod tests {
 
     #[test]
     fn test_dispatch_key_event_no_focus() {
+        use crate::events::keyboard::Code;
         use crate::testing::input::KeyEventBuilder;
-        use flui_types::events::PhysicalKey;
         use std::sync::atomic::{AtomicBool, Ordering};
 
         let manager = FocusManager::new();
@@ -614,7 +614,7 @@ mod tests {
         );
 
         // Don't focus the node
-        let event = KeyEventBuilder::new(PhysicalKey::KeyA).build();
+        let event = KeyEventBuilder::new(Code::KeyA).build();
 
         // Dispatch - should NOT be handled (no focus)
         let result = manager.dispatch_key_event(&event);
@@ -624,8 +624,8 @@ mod tests {
 
     #[test]
     fn test_global_key_handler() {
+        use crate::events::keyboard::Code;
         use crate::testing::input::KeyEventBuilder;
-        use flui_types::events::PhysicalKey;
         use std::sync::atomic::{AtomicBool, Ordering};
 
         let manager = FocusManager::new();
@@ -638,7 +638,7 @@ mod tests {
             true
         }));
 
-        let event = KeyEventBuilder::new(PhysicalKey::Escape).build();
+        let event = KeyEventBuilder::new(Code::Escape).build();
 
         // Global handler should be called even without focus
         let result = manager.dispatch_key_event(&event);
@@ -648,8 +648,8 @@ mod tests {
 
     #[test]
     fn test_global_handler_priority() {
+        use crate::events::keyboard::Code;
         use crate::testing::input::KeyEventBuilder;
-        use flui_types::events::PhysicalKey;
         use std::sync::atomic::{AtomicBool, Ordering};
 
         let manager = FocusManager::new();
@@ -677,7 +677,7 @@ mod tests {
 
         manager.request_focus(node);
 
-        let event = KeyEventBuilder::new(PhysicalKey::Enter).build();
+        let event = KeyEventBuilder::new(Code::Enter).build();
         manager.dispatch_key_event(&event);
 
         // Global should be called first and handle
@@ -688,8 +688,8 @@ mod tests {
 
     #[test]
     fn test_global_handler_passthrough() {
+        use crate::events::keyboard::Code;
         use crate::testing::input::KeyEventBuilder;
-        use flui_types::events::PhysicalKey;
         use std::sync::atomic::{AtomicBool, Ordering};
 
         let manager = FocusManager::new();
@@ -717,7 +717,7 @@ mod tests {
 
         manager.request_focus(node);
 
-        let event = KeyEventBuilder::new(PhysicalKey::KeyX).build();
+        let event = KeyEventBuilder::new(Code::KeyX).build();
         manager.dispatch_key_event(&event);
 
         // Both should be called
@@ -727,8 +727,8 @@ mod tests {
 
     #[test]
     fn test_clear_global_key_handlers() {
+        use crate::events::keyboard::Code;
         use crate::testing::input::KeyEventBuilder;
-        use flui_types::events::PhysicalKey;
         use std::sync::atomic::{AtomicBool, Ordering};
 
         let manager = FocusManager::new();
@@ -743,7 +743,7 @@ mod tests {
 
         manager.clear_global_key_handlers();
 
-        let event = KeyEventBuilder::new(PhysicalKey::Tab).build();
+        let event = KeyEventBuilder::new(Code::Tab).build();
         manager.dispatch_key_event(&event);
 
         // Handler should not be called (was cleared)

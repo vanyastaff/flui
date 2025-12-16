@@ -41,7 +41,7 @@ use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use flui_types::events::PointerEvent;
+use crate::events::PointerEvent;
 
 use crate::ids::{HandlerId, PointerId};
 
@@ -298,11 +298,7 @@ mod tests {
             called_clone.store(true, Ordering::Relaxed);
         });
 
-        let event = PointerEvent::Scroll {
-            device: 0,
-            position: Offset::ZERO,
-            scroll_delta: Offset::new(0.0, 10.0),
-        };
+        let event = crate::events::make_scroll_event(Offset::ZERO, Offset::new(0.0, 10.0));
 
         resolver.resolve(PointerId::new(0), event);
 
@@ -326,11 +322,7 @@ mod tests {
             high_clone.store(true, Ordering::Relaxed);
         });
 
-        let event = PointerEvent::Scroll {
-            device: 0,
-            position: Offset::ZERO,
-            scroll_delta: Offset::new(0.0, 10.0),
-        };
+        let event = crate::events::make_scroll_event(Offset::ZERO, Offset::new(0.0, 10.0));
 
         resolver.resolve(PointerId::new(0), event);
 
@@ -355,11 +347,7 @@ mod tests {
             second_clone.fetch_add(1, Ordering::Relaxed);
         });
 
-        let event = PointerEvent::Scroll {
-            device: 0,
-            position: Offset::ZERO,
-            scroll_delta: Offset::new(0.0, 10.0),
-        };
+        let event = crate::events::make_scroll_event(Offset::ZERO, Offset::new(0.0, 10.0));
 
         resolver.resolve(PointerId::new(0), event);
 
@@ -405,11 +393,7 @@ mod tests {
             called_clone.store(true, Ordering::Relaxed);
         });
 
-        let event = PointerEvent::Scroll {
-            device: 0,
-            position: Offset::ZERO,
-            scroll_delta: Offset::new(0.0, 10.0),
-        };
+        let event = crate::events::make_scroll_event(Offset::ZERO, Offset::new(0.0, 10.0));
 
         let accepted = resolver.resolve_and_accept(PointerId::new(0), event);
 

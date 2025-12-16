@@ -12,8 +12,9 @@
 
 use super::recognizer::{constants, GestureRecognizer, GestureRecognizerState};
 use crate::arena::GestureArenaMember;
+use crate::events::{PointerEvent, PointerEventExt, PointerType};
 use crate::ids::PointerId;
-use flui_types::{events::PointerEvent, Offset};
+use flui_types::Offset;
 use parking_lot::Mutex;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -29,7 +30,7 @@ pub struct DoubleTapDetails {
     /// Local position (relative to widget)
     pub local_position: Offset,
     /// Pointer device kind
-    pub kind: flui_types::events::PointerDeviceKind,
+    pub kind: PointerType,
 }
 
 /// Recognizes double tap gestures
@@ -102,7 +103,7 @@ struct DoubleTapState {
     /// Current position (for slop detection)
     current_position: Option<Offset>,
     /// Device kind
-    device_kind: Option<flui_types::events::PointerDeviceKind>,
+    device_kind: Option<PointerType>,
 }
 
 impl Default for DoubleTapState {
@@ -148,7 +149,7 @@ impl DoubleTapGestureRecognizer {
     }
 
     /// Handle pointer down
-    fn handle_down(&self, position: Offset, kind: flui_types::events::PointerDeviceKind) {
+    fn handle_down(&self, position: Offset, kind: PointerType) {
         let mut state = self.gesture_state.lock();
 
         match state.phase {
@@ -196,7 +197,7 @@ impl DoubleTapGestureRecognizer {
     }
 
     /// Handle pointer move
-    fn handle_move(&self, position: Offset, kind: flui_types::events::PointerDeviceKind) {
+    fn handle_move(&self, position: Offset, kind: PointerType) {
         let mut state = self.gesture_state.lock();
 
         state.current_position = Some(position);
@@ -217,7 +218,7 @@ impl DoubleTapGestureRecognizer {
     }
 
     /// Handle pointer up
-    fn handle_up(&self, position: Offset, kind: flui_types::events::PointerDeviceKind) {
+    fn handle_up(&self, position: Offset, kind: PointerType) {
         let mut state = self.gesture_state.lock();
 
         match state.phase {
@@ -253,7 +254,7 @@ impl DoubleTapGestureRecognizer {
     }
 
     /// Handle cancel
-    fn handle_cancel(&self, position: Offset, kind: flui_types::events::PointerDeviceKind) {
+    fn handle_cancel(&self, position: Offset, kind: PointerType) {
         let mut state = self.gesture_state.lock();
 
         if state.phase != DoubleTapPhase::Ready && state.phase != DoubleTapPhase::Cancelled {
@@ -307,6 +308,22 @@ impl DoubleTapGestureRecognizer {
 
         false
     }
+
+    /// Extract position and pointer type from a PointerEvent
+    fn extract_event_data(event: &PointerEvent) -> (Offset, PointerType) {
+        let position = event.position();
+        let pointer_type = match event {
+            PointerEvent::Down(e) => e.pointer.pointer_type,
+            PointerEvent::Up(e) => e.pointer.pointer_type,
+            PointerEvent::Move(e) => e.pointer.pointer_type,
+            PointerEvent::Cancel(info) | PointerEvent::Enter(info) | PointerEvent::Leave(info) => {
+                info.pointer_type
+            }
+            PointerEvent::Scroll(e) => e.pointer.pointer_type,
+            PointerEvent::Gesture(e) => e.pointer.pointer_type,
+        };
+        (position, pointer_type)
+    }
 }
 
 impl GestureRecognizer for DoubleTapGestureRecognizer {
@@ -316,7 +333,7 @@ impl GestureRecognizer for DoubleTapGestureRecognizer {
         self.state.start_tracking(pointer, position, &recognizer);
 
         // Handle pointer down
-        self.handle_down(position, flui_types::events::PointerDeviceKind::Touch);
+        self.handle_down(position, PointerType::Touch);
     }
 
     fn handle_event(&self, event: &PointerEvent) {
@@ -325,15 +342,17 @@ impl GestureRecognizer for DoubleTapGestureRecognizer {
             return;
         }
 
+        let (position, pointer_type) = Self::extract_event_data(event);
+
         match event {
-            PointerEvent::Move(data) => {
-                self.handle_move(data.position, data.device_kind);
+            PointerEvent::Move(_) => {
+                self.handle_move(position, pointer_type);
             }
-            PointerEvent::Up(data) => {
-                self.handle_up(data.position, data.device_kind);
+            PointerEvent::Up(_) => {
+                self.handle_up(position, pointer_type);
             }
-            PointerEvent::Cancel(data) => {
-                self.handle_cancel(data.position, data.device_kind);
+            PointerEvent::Cancel(_) => {
+                self.handle_cancel(position, pointer_type);
             }
             _ => {}
         }
@@ -362,7 +381,7 @@ impl GestureArenaMember for DoubleTapGestureRecognizer {
                 .gesture_state
                 .lock()
                 .device_kind
-                .unwrap_or(flui_types::events::PointerDeviceKind::Touch);
+                .unwrap_or(PointerType::Touch);
             self.handle_cancel(pos, kind);
         }
     }
@@ -383,6 +402,7 @@ impl std::fmt::Debug for DoubleTapGestureRecognizer {
 mod tests {
     use super::*;
     use crate::arena::GestureArena;
+    use crate::events::make_up_event;
 
     #[test]
     fn test_double_tap_recognizer_creation() {
@@ -408,12 +428,8 @@ mod tests {
 
         // First tap
         recognizer.add_pointer(pointer, position);
-        recognizer.handle_event(&PointerEvent::Up(
-            flui_types::events::PointerEventData::new(
-                position,
-                flui_types::events::PointerDeviceKind::Touch,
-            ),
-        ));
+        let up_event = make_up_event(position, PointerType::Touch);
+        recognizer.handle_event(&up_event);
 
         // Should be waiting for second tap
         let state = recognizer.gesture_state.lock();
@@ -421,13 +437,9 @@ mod tests {
         drop(state);
 
         // Second tap (need to add pointer again for new sequence)
-        recognizer.handle_down(position, flui_types::events::PointerDeviceKind::Touch);
-        recognizer.handle_event(&PointerEvent::Up(
-            flui_types::events::PointerEventData::new(
-                position,
-                flui_types::events::PointerDeviceKind::Touch,
-            ),
-        ));
+        recognizer.handle_down(position, PointerType::Touch);
+        let up_event = make_up_event(position, PointerType::Touch);
+        recognizer.handle_event(&up_event);
 
         // Should have called callback
         assert!(*tapped.lock());
@@ -449,28 +461,20 @@ mod tests {
 
         // First tap
         recognizer.add_pointer(pointer, first_pos);
-        recognizer.handle_event(&PointerEvent::Up(
-            flui_types::events::PointerEventData::new(
-                first_pos,
-                flui_types::events::PointerDeviceKind::Touch,
-            ),
-        ));
+        let up_event = make_up_event(first_pos, PointerType::Touch);
+        recognizer.handle_event(&up_event);
 
         // Second tap too far away (> 100px)
         let second_pos = Offset::new(250.0, 100.0); // 150px away
-        recognizer.handle_down(second_pos, flui_types::events::PointerDeviceKind::Touch);
+        recognizer.handle_down(second_pos, PointerType::Touch);
 
         // Should have reset to first tap, not double tap
         let state = recognizer.gesture_state.lock();
         assert_eq!(state.phase, DoubleTapPhase::FirstDown);
         drop(state);
 
-        recognizer.handle_event(&PointerEvent::Up(
-            flui_types::events::PointerEventData::new(
-                second_pos,
-                flui_types::events::PointerDeviceKind::Touch,
-            ),
-        ));
+        let up_event = make_up_event(second_pos, PointerType::Touch);
+        recognizer.handle_event(&up_event);
 
         // Should NOT have called double tap callback
         assert!(!*tapped.lock());
@@ -486,12 +490,8 @@ mod tests {
 
         // First tap
         recognizer.add_pointer(pointer, position);
-        recognizer.handle_event(&PointerEvent::Up(
-            flui_types::events::PointerEventData::new(
-                position,
-                flui_types::events::PointerDeviceKind::Touch,
-            ),
-        ));
+        let up_event = make_up_event(position, PointerType::Touch);
+        recognizer.handle_event(&up_event);
 
         // Wait longer than timeout
         std::thread::sleep(Duration::from_millis(350));

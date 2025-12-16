@@ -31,4 +31,4 @@ pub use recording::{
 };
 
 // Re-export input builders
-pub use input::{KeyEventBuilder, ModifiersBuilder};
+pub use input::ModifiersBuilder;
