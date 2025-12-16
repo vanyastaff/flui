@@ -210,15 +210,19 @@ serde = [
 # Enable all stable features (temporarily disabled)
 # full = ["serde", "parallel", "devtools"]
 
-[profile.release]
-opt-level = 3
-lto = "thin"
-codegen-units = 1
-strip = "debuginfo"  # Strip debug symbols but keep android_main symbol
-panic = "abort"
+# ═══════════════════════════════════════════════════════════════════════════════
+# Build Profiles
+# ═══════════════════════════════════════════════════════════════════════════════
 
 [profile.dev]
-opt-level = 1
+opt-level = 1           # Some optimization for faster runtime
+incremental = true      # Faster rebuilds
 
 [profile.dev.package."*"]
-opt-level = 2
+opt-level = 2           # Optimize dependencies (they don't change often)
+
+[profile.release]
+opt-level = 3
+lto = "thin"            # Link-time optimization (good balance)
+codegen-units = 1       # Better optimization, slower compile
+strip = "symbols"       # Smaller binary
