@@ -9,8 +9,8 @@ use std::num::NonZeroU64;
 use flui_types::{Matrix4, Rect};
 
 use super::{
-    AttributedString, SemanticsAction, SemanticsConfiguration, SemanticsFlag, SemanticsSortKey,
-    SemanticsTag, TextDirection,
+    AttributedString, SemanticsAction, SemanticsConfiguration, SemanticsSortKey, SemanticsTag,
+    TextDirection,
 };
 
 // ============================================================================
@@ -424,11 +424,11 @@ impl SemanticsNode {
             id: self.id.to_index(),
             flags: self.config.flags().bits(),
             actions: self.config.actions_as_bits(),
-            label: self.config.label().map(|l| l.string.clone()),
-            value: self.config.value().map(|v| v.string.clone()),
-            increased_value: self.config.increased_value().map(|v| v.string.clone()),
-            decreased_value: self.config.decreased_value().map(|v| v.string.clone()),
-            hint: self.config.hint().map(|h| h.string.clone()),
+            label: self.config.label().map(|l| l.string.to_string()),
+            value: self.config.value().map(|v| v.string.to_string()),
+            increased_value: self.config.increased_value().map(|v| v.string.to_string()),
+            decreased_value: self.config.decreased_value().map(|v| v.string.to_string()),
+            hint: self.config.hint().map(|h| h.string.to_string()),
             tooltip: self.config.tooltip().map(|t| t.to_string()),
             text_direction: self.config.text_direction(),
             rect: self.rect,
@@ -508,6 +508,7 @@ pub struct SemanticsNodeData {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::semantics::SemanticsFlag;
 
     #[test]
     fn test_node_id() {

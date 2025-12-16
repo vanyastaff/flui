@@ -6,10 +6,10 @@
 use std::sync::Arc;
 
 use flui_foundation::SemanticsId;
-use flui_types::semantics::SemanticsData;
 
 use crate::node::SemanticsNode;
 use crate::tree::SemanticsTree;
+use crate::update::SemanticsNodeData;
 
 // ============================================================================
 // CALLBACK TYPE
@@ -32,7 +32,7 @@ pub struct SemanticsUpdate {
     pub id: SemanticsId,
 
     /// The semantics data for this node.
-    pub data: SemanticsData,
+    pub data: SemanticsNodeData,
 
     /// Parent node ID (None for root).
     pub parent: Option<SemanticsId>,
@@ -43,7 +43,7 @@ pub struct SemanticsUpdate {
 
 impl SemanticsUpdate {
     /// Creates a new semantics update.
-    pub fn new(id: SemanticsId, data: SemanticsData) -> Self {
+    pub fn new(id: SemanticsId, data: SemanticsNodeData) -> Self {
         Self {
             id,
             data,
@@ -319,7 +319,7 @@ impl SemanticsOwner {
         let node = self.tree.get(id)?;
 
         Some(
-            SemanticsUpdate::new(id, node.to_data())
+            SemanticsUpdate::new(id, node.to_node_data(id))
                 .with_parent(node.parent())
                 .with_children(node.children().to_vec()),
         )
@@ -357,7 +357,6 @@ impl Default for SemanticsOwner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_types::semantics::{SemanticsProperties, SemanticsRole};
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
@@ -395,8 +394,8 @@ mod tests {
     fn test_semantics_owner_insert_and_get() {
         let mut owner = SemanticsOwner::new_without_callback();
 
-        let node =
-            SemanticsNode::new().with_properties(SemanticsProperties::new().with_label("Test"));
+        let mut node = SemanticsNode::new();
+        node.config_mut().set_label("Test");
         let id = owner.insert(node);
 
         let retrieved = owner.get(id);
@@ -445,13 +444,14 @@ mod tests {
         let mut owner = SemanticsOwner::new(callback);
 
         // Insert some nodes (they start dirty)
-        let id1 = owner.insert(
-            SemanticsNode::new()
-                .with_properties(SemanticsProperties::new().with_role(SemanticsRole::Button)),
-        );
-        let id2 = owner.insert(
-            SemanticsNode::new().with_properties(SemanticsProperties::new().with_label("Child")),
-        );
+        let mut node1 = SemanticsNode::new();
+        node1.config_mut().set_button(true);
+        let id1 = owner.insert(node1);
+
+        let mut node2 = SemanticsNode::new();
+        node2.config_mut().set_label("Child");
+        let id2 = owner.insert(node2);
+
         owner.add_child(id1, id2);
         owner.set_root(Some(id1));
 
@@ -555,10 +555,10 @@ mod tests {
 
     #[test]
     fn test_semantics_update() {
-        let data = SemanticsData::new(
-            SemanticsProperties::new().with_label("Test"),
-            flui_types::geometry::Rect::ZERO,
-        );
+        let data = SemanticsNodeData {
+            label: Some("Test".into()),
+            ..Default::default()
+        };
 
         let update = SemanticsUpdate::new(SemanticsId::new(1), data)
             .with_parent(Some(SemanticsId::new(2)))

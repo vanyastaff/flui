@@ -30,4 +30,17 @@ parking_lot = "0.12"
 # Tracing for diagnostics
 tracing = "0.1"
 
+# Platform accessibility - integrates with OS accessibility APIs
+# (Windows UI Automation, macOS NSAccessibility, Linux AT-SPI)
+accesskit = "0.21"
+
+# Small-string optimization - O(1) clone for label/hint/value
+smol_str = "0.3"
+
+# Stack-allocated vectors for small collections (children, actions)
+smallvec = "1.15"
+
+# Fast hashing for SemanticsId HashMap keys
+rustc-hash = "2.1"
+
 [dev-dependencies]

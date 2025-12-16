@@ -28,30 +28,23 @@
 //! ## Key Types
 //!
 //! - [`SemanticsNode`] - Node with accessibility properties (label, role, actions)
-//! - [`SemanticsTree`] - Tree storage implementing `TreeRead`/`TreeNav`
+//! - [`SemanticsConfiguration`] - Builder for semantic properties
 //! - [`SemanticsOwner`] - Manages tree lifecycle and platform updates
+//! - [`SemanticsAction`] - Actions that assistive tech can perform
+//! - [`SemanticsEvent`] - Notifications to assistive technologies
 //!
-//! ## Tree Integration
+//! ## Optimizations
 //!
-//! SemanticsTree implements `TreeRead<SemanticsId>` and `TreeNav<SemanticsId>` from `flui-tree`,
-//! enabling generic tree algorithms and visitors.
-//!
-//! ```rust,ignore
-//! use flui_semantics::{SemanticsTree, SemanticsNode};
-//! use flui_foundation::SemanticsId;
-//! use flui_tree::{TreeRead, TreeNav};
-//!
-//! let mut tree = SemanticsTree::new();
-//! let id = tree.insert(SemanticsNode::new());
-//!
-//! // Use generic tree operations
-//! assert!(tree.contains(id));
-//! ```
+//! This crate uses several optimizations for performance:
+//! - [`SmolStr`](smol_str::SmolStr) for labels/hints (O(1) clone, inline storage)
+//! - [`SmallVec`](smallvec::SmallVec) for children/actions (stack allocation)
+//! - [`FxHashMap`](rustc_hash::FxHashMap) for fast lookups
 //!
 //! ## Flutter Compatibility
 //!
 //! This follows Flutter's semantics protocol closely:
 //! - `SemanticsNode` ≈ Flutter's `SemanticsNode`
+//! - `SemanticsConfiguration` ≈ Flutter's `SemanticsConfiguration`
 //! - `SemanticsOwner` ≈ Flutter's `SemanticsOwner`
 //! - `SemanticsAction` ≈ Flutter's `SemanticsAction`
 
@@ -72,28 +65,78 @@
 // MODULES
 // ============================================================================
 
+pub mod action;
+pub mod configuration;
+pub mod event;
+pub mod flags;
 pub mod node;
 pub mod owner;
+pub mod properties;
 pub mod tree;
+pub mod update;
 
 // ============================================================================
-// RE-EXPORTS - Core Types
+// RE-EXPORTS - Action Types
+// ============================================================================
+
+pub use action::{ActionArgs, SemanticsAction, SemanticsActionHandler};
+
+// ============================================================================
+// RE-EXPORTS - Configuration
+// ============================================================================
+
+pub use configuration::SemanticsConfiguration;
+
+// ============================================================================
+// RE-EXPORTS - Event Types
+// ============================================================================
+
+pub use event::{SemanticsEvent, SemanticsEventData, SemanticsEventType};
+
+// ============================================================================
+// RE-EXPORTS - Flag Types
+// ============================================================================
+
+pub use flags::{SemanticsFlag, SemanticsFlags};
+
+// ============================================================================
+// RE-EXPORTS - Node Types
 // ============================================================================
 
 pub use node::SemanticsNode;
+
+// ============================================================================
+// RE-EXPORTS - Owner Types
+// ============================================================================
+
 pub use owner::{SemanticsOwner, SemanticsUpdateCallback};
+
+// ============================================================================
+// RE-EXPORTS - Property Types
+// ============================================================================
+
+pub use properties::{
+    AttributedString, CustomSemanticsAction, SemanticsHintOverrides, SemanticsProperties,
+    SemanticsSortKey, SemanticsTag, StringAttribute, StringAttributeType, TextDirection,
+};
+
+// ============================================================================
+// RE-EXPORTS - Tree Types
+// ============================================================================
+
 pub use tree::SemanticsTree;
+
+// ============================================================================
+// RE-EXPORTS - Update Types
+// ============================================================================
+
+pub use update::{SemanticsNodeData, SemanticsUpdate, SemanticsUpdateBuilder};
 
 // ============================================================================
 // RE-EXPORTS - Foundation Types
 // ============================================================================
 
 pub use flui_foundation::SemanticsId;
-
-// Re-export semantics types from flui_types
-pub use flui_types::semantics::{
-    SemanticsAction, SemanticsData, SemanticsFlags, SemanticsProperties, SemanticsRole,
-};
 
 // ============================================================================
 // PRELUDE
@@ -105,13 +148,21 @@ pub use flui_types::semantics::{
 /// use flui_semantics::prelude::*;
 /// ```
 pub mod prelude {
+    // Core types
     pub use crate::{
-        SemanticsAction, SemanticsData, SemanticsId, SemanticsNode, SemanticsOwner,
-        SemanticsProperties, SemanticsRole, SemanticsTree,
+        ActionArgs, AttributedString, SemanticsAction, SemanticsActionHandler,
+        SemanticsConfiguration, SemanticsEvent, SemanticsEventType, SemanticsFlag, SemanticsFlags,
+        SemanticsId, SemanticsNode, SemanticsNodeData, SemanticsOwner, SemanticsProperties,
+        SemanticsTag, SemanticsTree, SemanticsUpdate, SemanticsUpdateBuilder, TextDirection,
     };
 
     // Re-export tree traits for convenience
     pub use flui_tree::{TreeNav, TreeRead};
+
+    // Re-export optimized types
+    pub use rustc_hash::{FxHashMap, FxHashSet};
+    pub use smallvec::SmallVec;
+    pub use smol_str::SmolStr;
 }
 
 // ============================================================================
@@ -145,5 +196,31 @@ mod tests {
         assert!(!tree.is_empty());
         assert_eq!(tree.len(), 1);
         assert!(tree.contains(id));
+    }
+
+    #[test]
+    fn test_configuration_basic() {
+        let mut config = SemanticsConfiguration::new();
+        config.set_label("Test Button");
+        config.set_button(true);
+
+        assert!(config.is_button());
+        assert_eq!(config.label().map(|l| l.as_str()), Some("Test Button"));
+    }
+
+    #[test]
+    fn test_action_bitmask() {
+        let tap = SemanticsAction::Tap;
+        let long_press = SemanticsAction::LongPress;
+
+        let combined = tap.value() | long_press.value();
+        assert_eq!(combined, 3);
+    }
+
+    #[test]
+    fn test_event_creation() {
+        let event = SemanticsEvent::announce("Item selected");
+        assert_eq!(event.event_type(), SemanticsEventType::Announce);
+        assert_eq!(event.get_string("message"), Some("Item selected"));
     }
 }

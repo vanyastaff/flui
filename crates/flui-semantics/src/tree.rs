@@ -37,18 +37,15 @@ use crate::node::SemanticsNode;
 /// # Example
 ///
 /// ```rust
-/// use flui_semantics::{SemanticsTree, SemanticsNode, SemanticsProperties, SemanticsRole};
+/// use flui_semantics::{SemanticsTree, SemanticsNode};
 /// use flui_tree::TreeRead;
 ///
 /// let mut tree = SemanticsTree::new();
 ///
 /// // Insert semantics node
-/// let node = SemanticsNode::new()
-///     .with_properties(
-///         SemanticsProperties::new()
-///             .with_role(SemanticsRole::Button)
-///             .with_label("Submit")
-///     );
+/// let mut node = SemanticsNode::new();
+/// node.config_mut().set_label("Submit");
+/// node.config_mut().set_button(true);
 /// let id = tree.insert(node);
 ///
 /// // Access node
@@ -379,7 +376,6 @@ impl TreeNav<SemanticsId> for SemanticsTree {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_types::semantics::SemanticsProperties;
 
     #[test]
     fn test_semantics_tree_new() {
@@ -410,8 +406,8 @@ mod tests {
     #[test]
     fn test_semantics_tree_get() {
         let mut tree = SemanticsTree::new();
-        let node =
-            SemanticsNode::new().with_properties(SemanticsProperties::new().with_label("Test"));
+        let mut node = SemanticsNode::new();
+        node.config_mut().set_label("Test");
         let id = tree.insert(node);
 
         let node = tree.get(id);
@@ -426,7 +422,7 @@ mod tests {
         let id = tree.insert(node);
 
         if let Some(node) = tree.get_mut(id) {
-            node.set_properties(SemanticsProperties::new().with_label("Modified"));
+            node.config_mut().set_label("Modified");
         }
 
         assert_eq!(tree.get(id).unwrap().label(), Some("Modified"));
