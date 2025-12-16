@@ -37,7 +37,7 @@ use flui_types::{
     geometry::{Matrix4, Offset, Point, RRect, Rect},
     painting::{Clip, ClipOp, Image, Path},
     styling::Color,
-    typography::TextStyle,
+    typography::{InlineSpan, TextStyle},
 };
 
 /// High-level drawing canvas with intuitive API
@@ -811,6 +811,26 @@ impl Canvas {
             offset,
             style: style.clone(),
             paint: paint.clone(),
+            transform: self.transform,
+        });
+    }
+
+    /// Draws rich text with inline spans
+    ///
+    /// This is used by [`TextPainter`] to render styled text with nested spans.
+    ///
+    /// # Arguments
+    ///
+    /// * `span` - The rich text span (may contain nested styles)
+    /// * `offset` - Position offset
+    /// * `text_scale_factor` - Scale factor for accessibility
+    ///
+    /// [`TextPainter`]: crate::TextPainter
+    pub fn draw_text_span(&mut self, span: &InlineSpan, offset: Offset, text_scale_factor: f64) {
+        self.display_list.push(DrawCommand::DrawTextSpan {
+            span: span.clone(),
+            offset,
+            text_scale_factor,
             transform: self.transform,
         });
     }

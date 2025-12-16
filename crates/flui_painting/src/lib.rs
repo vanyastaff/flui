@@ -164,6 +164,8 @@ pub mod canvas;
 pub mod clip_context;
 pub mod display_list;
 pub mod error;
+pub mod text_layout;
+pub mod text_painter;
 
 // ===== Facade Pattern: Public Re-exports =====
 //
@@ -179,6 +181,7 @@ pub use display_list::{
     HitRegionHandler,
 };
 pub use error::{PaintingError, Result};
+pub use text_painter::{TextBaseline, TextPainter, DEFAULT_FONT_SIZE};
 
 // Flutter compatibility: Picture is our DisplayList
 /// A Picture is an immutable recording of drawing commands.
@@ -257,6 +260,7 @@ pub mod prelude {
 
     pub use crate::canvas::Canvas;
     pub use crate::display_list::{DisplayList, DisplayListCore, DisplayListExt, DrawCommand};
+    pub use crate::text_painter::{TextBaseline, TextPainter};
     pub use crate::Picture; // Flutter compatibility
     pub use flui_types::painting::{
         BlendMode, Paint, PaintStyle, PointMode, Shader, StrokeCap, StrokeJoin,

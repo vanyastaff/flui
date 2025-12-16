@@ -17,11 +17,16 @@ flui_types = { path = "../flui_types" }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 serde = { workspace = true, optional = true }
+parking_lot = { workspace = true }
+
+# Text shaping and layout
+cosmic-text = { version = "0.12", optional = true }
 
 [dev-dependencies]
 
 [features]
-default = []
+default = ["text"]
+text = ["dep:cosmic-text"]
 serde = ["dep:serde", "flui_types/serde"]
 
 [lints]

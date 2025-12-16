@@ -6,11 +6,13 @@
 pub mod text_alignment;
 pub mod text_decoration;
 pub mod text_metrics;
+pub mod text_scaler;
 pub mod text_spans;
 pub mod text_style;
 
 pub use text_alignment::*;
 pub use text_decoration::*;
 pub use text_metrics::*;
+pub use text_scaler::*;
 pub use text_spans::*;
 pub use text_style::*;

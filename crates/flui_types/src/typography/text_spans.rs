@@ -50,6 +50,41 @@ impl InlineSpan {
     pub fn as_trait(&self) -> &(dyn InlineSpanTrait + Send + Sync) {
         &*self.inner
     }
+
+    /// Returns the style for this span, if any.
+    #[inline]
+    #[must_use]
+    pub fn style(&self) -> Option<&TextStyle> {
+        self.inner.style()
+    }
+
+    /// Returns the plain text content of this span.
+    #[inline]
+    #[must_use]
+    pub fn to_plain_text(&self) -> String {
+        self.inner.to_plain_text()
+    }
+
+    /// Returns true if this span contains semantic labels.
+    #[inline]
+    #[must_use]
+    pub fn has_semantics(&self) -> bool {
+        self.inner.has_semantics()
+    }
+}
+
+impl PartialEq for InlineSpan {
+    fn eq(&self, other: &Self) -> bool {
+        // Compare by pointer equality for Arc (identity comparison)
+        // For deep comparison, use to_plain_text() or compare serialized forms
+        Arc::ptr_eq(&self.inner, &other.inner)
+    }
+}
+
+impl From<TextSpan> for InlineSpan {
+    fn from(span: TextSpan) -> Self {
+        Self::new(span)
+    }
 }
 
 /// A span of text with a style.

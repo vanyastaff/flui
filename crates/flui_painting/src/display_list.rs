@@ -14,7 +14,7 @@ use flui_types::{
     geometry::{Matrix4, Offset, Point, RRect, Rect, Size},
     painting::{Image, Path},
     styling::Color,
-    typography::TextStyle,
+    typography::{InlineSpan, TextStyle},
 };
 use std::sync::Arc;
 use std::time::Duration;
@@ -1085,6 +1085,18 @@ pub enum DrawCommand {
         transform: Matrix4,
     },
 
+    /// Draw rich text with inline spans
+    DrawTextSpan {
+        /// Rich text span (with nested styles)
+        span: InlineSpan,
+        /// Position offset
+        offset: Offset,
+        /// Text scale factor for accessibility
+        text_scale_factor: f64,
+        /// Transform at recording time
+        transform: Matrix4,
+    },
+
     // === Image ===
     /// Draw an image
     DrawImage {
@@ -1507,6 +1519,17 @@ impl DrawCommand {
                 offset: *offset,
                 style: style.clone(),
                 paint: paint.clone().with_opacity(opacity),
+                transform: *transform,
+            },
+            DrawCommand::DrawTextSpan {
+                span,
+                offset,
+                text_scale_factor,
+                transform,
+            } => DrawCommand::DrawTextSpan {
+                span: span.clone(),
+                offset: *offset,
+                text_scale_factor: *text_scale_factor,
                 transform: *transform,
             },
             DrawCommand::DrawShadow {
@@ -1961,7 +1984,8 @@ impl DrawCommand {
             DrawCommand::ClipRect { .. }
             | DrawCommand::ClipRRect { .. }
             | DrawCommand::ClipPath { .. }
-            | DrawCommand::DrawText { .. } => None,
+            | DrawCommand::DrawText { .. }
+            | DrawCommand::DrawTextSpan { .. } => None,
 
             // Layer commands - SaveLayer bounds if specified, RestoreLayer has no bounds
             DrawCommand::SaveLayer {
@@ -2066,7 +2090,10 @@ impl DrawCommand {
     /// Returns `true` if this command draws text.
     #[inline]
     pub fn is_text(&self) -> bool {
-        matches!(self, DrawCommand::DrawText { .. })
+        matches!(
+            self,
+            DrawCommand::DrawText { .. } | DrawCommand::DrawTextSpan { .. }
+        )
     }
 
     // ===== Accessor Methods =====
@@ -2087,6 +2114,7 @@ impl DrawCommand {
             | DrawCommand::DrawOval { transform, .. }
             | DrawCommand::DrawPath { transform, .. }
             | DrawCommand::DrawText { transform, .. }
+            | DrawCommand::DrawTextSpan { transform, .. }
             | DrawCommand::DrawImage { transform, .. }
             | DrawCommand::DrawImageRepeat { transform, .. }
             | DrawCommand::DrawImageNineSlice { transform, .. }
@@ -2159,6 +2187,7 @@ impl DrawCommand {
             | DrawCommand::DrawOval { transform, .. }
             | DrawCommand::DrawPath { transform, .. }
             | DrawCommand::DrawText { transform, .. }
+            | DrawCommand::DrawTextSpan { transform, .. }
             | DrawCommand::DrawImage { transform, .. }
             | DrawCommand::DrawImageRepeat { transform, .. }
             | DrawCommand::DrawImageNineSlice { transform, .. }
