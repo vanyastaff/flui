@@ -41,6 +41,7 @@ pub use r#box::{
     RenderShiftedBox,
     SingleChildRenderBox,
     TextBaseline,
+    TextDirection,
 };
 
 // Re-export sliver traits

@@ -17,7 +17,7 @@
 //! # Example
 //!
 //! ```ignore
-//! use flui_rendering::objects::box::basic::RenderPadding;
+//! use flui_rendering::prelude::*;
 //! use flui_types::EdgeInsets;
 //!
 //! let padding = RenderPadding::new(EdgeInsets::all(16.0));
@@ -25,3 +25,13 @@
 
 pub mod r#box;
 pub mod sliver;
+
+// Re-export all box render objects for convenience
+pub use r#box::basic::*;
+pub use r#box::effects::*;
+pub use r#box::layout::*;
+pub use r#box::scroll::*;
+pub use r#box::text::*;
+
+// Re-export sliver render objects
+pub use sliver::*;

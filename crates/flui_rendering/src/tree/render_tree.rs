@@ -12,7 +12,7 @@ use parking_lot::RwLock;
 use slab::Slab;
 
 use crate::pipeline::PipelineOwner;
-use crate::traits::RenderBox;
+use crate::traits::RenderObject;
 
 // ============================================================================
 // RenderNode
@@ -26,7 +26,7 @@ use crate::traits::RenderBox;
 #[derive(Debug)]
 pub struct RenderNode {
     /// The render object (boxed for trait object storage).
-    render_object: Box<dyn RenderBox>,
+    render_object: Box<dyn RenderObject>,
 
     /// Parent node ID (None for root).
     parent: Option<RenderId>,
@@ -41,7 +41,7 @@ pub struct RenderNode {
 impl RenderNode {
     /// Creates a new render node.
     #[inline]
-    pub fn new(render_object: Box<dyn RenderBox>) -> Self {
+    pub fn new(render_object: Box<dyn RenderObject>) -> Self {
         Self {
             render_object,
             parent: None,
@@ -52,7 +52,7 @@ impl RenderNode {
 
     /// Creates a new render node with a parent.
     #[inline]
-    pub fn with_parent(render_object: Box<dyn RenderBox>, parent: RenderId, depth: u16) -> Self {
+    pub fn with_parent(render_object: Box<dyn RenderObject>, parent: RenderId, depth: u16) -> Self {
         Self {
             render_object,
             parent: Some(parent),
@@ -63,13 +63,13 @@ impl RenderNode {
 
     /// Returns a reference to the render object.
     #[inline]
-    pub fn render_object(&self) -> &dyn RenderBox {
+    pub fn render_object(&self) -> &dyn RenderObject {
         &*self.render_object
     }
 
     /// Returns a mutable reference to the render object.
     #[inline]
-    pub fn render_object_mut(&mut self) -> &mut dyn RenderBox {
+    pub fn render_object_mut(&mut self) -> &mut dyn RenderObject {
         &mut *self.render_object
     }
 
@@ -124,7 +124,7 @@ impl RenderNode {
 
     /// Consumes the node and returns the render object.
     #[inline]
-    pub fn into_render_object(self) -> Box<dyn RenderBox> {
+    pub fn into_render_object(self) -> Box<dyn RenderObject> {
         self.render_object
     }
 }
@@ -273,13 +273,13 @@ impl RenderTree {
 
     /// Returns a reference to the render object.
     #[inline]
-    pub fn render_object(&self, id: RenderId) -> Option<&dyn RenderBox> {
+    pub fn render_object(&self, id: RenderId) -> Option<&dyn RenderObject> {
         self.get(id).map(|node| node.render_object())
     }
 
     /// Returns a mutable reference to the render object.
     #[inline]
-    pub fn render_object_mut(&mut self, id: RenderId) -> Option<&mut dyn RenderBox> {
+    pub fn render_object_mut(&mut self, id: RenderId) -> Option<&mut dyn RenderObject> {
         self.get_mut(id).map(|node| node.render_object_mut())
     }
 
@@ -290,7 +290,7 @@ impl RenderTree {
     /// # Slab Offset Pattern
     ///
     /// Applies +1 offset: `nodes.insert()` returns 0 → `RenderId(1)`
-    pub fn insert(&mut self, render_object: Box<dyn RenderBox>) -> RenderId {
+    pub fn insert(&mut self, render_object: Box<dyn RenderObject>) -> RenderId {
         let node = RenderNode::new(render_object);
         let slab_index = self.nodes.insert(node);
         RenderId::new(slab_index + 1) // 0-based → 1-based
@@ -302,7 +302,7 @@ impl RenderTree {
     pub fn insert_child(
         &mut self,
         parent_id: RenderId,
-        render_object: Box<dyn RenderBox>,
+        render_object: Box<dyn RenderObject>,
     ) -> Option<RenderId> {
         // Get parent depth
         let parent_depth = self.get(parent_id)?.depth();
@@ -326,7 +326,7 @@ impl RenderTree {
     /// Returns the removed render object, or None if it didn't exist.
     ///
     /// **Note:** This does NOT remove children. Use `remove_recursive` for that.
-    pub fn remove(&mut self, id: RenderId) -> Option<Box<dyn RenderBox>> {
+    pub fn remove(&mut self, id: RenderId) -> Option<Box<dyn RenderObject>> {
         // Update root if removing root
         if self.root == Some(id) {
             self.root = None;
@@ -577,7 +577,7 @@ impl RenderTree {
 
 // Safety: RenderTree is Send + Sync because:
 // - Slab<RenderNode> is Send + Sync when RenderNode is
-// - RenderNode contains Box<dyn RenderBox> which is Send + Sync
+// - RenderNode contains Box<dyn RenderObject> which is Send + Sync
 // - Option<RenderId> and Option<Arc<RwLock<PipelineOwner>>> are Send + Sync
 unsafe impl Send for RenderTree {}
 unsafe impl Sync for RenderTree {}
@@ -706,7 +706,7 @@ mod tests {
     use crate::objects::r#box::basic::RenderPadding;
     use flui_types::EdgeInsets;
 
-    fn test_render_box() -> Box<dyn RenderBox> {
+    fn test_render_box() -> Box<dyn RenderObject> {
         Box::new(RenderPadding::new(EdgeInsets::all(10.0)))
     }
 

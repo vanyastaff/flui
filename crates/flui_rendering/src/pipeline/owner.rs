@@ -3,9 +3,10 @@
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
+use flui_foundation::RenderId;
 use parking_lot::RwLock;
 
-use crate::traits::RenderObject;
+use crate::tree::RenderTree;
 
 // ============================================================================
 // Pipeline ID Counter
@@ -72,8 +73,11 @@ pub struct PipelineOwner {
     /// Unique identifier for this pipeline owner.
     id: u64,
 
-    /// The root render object of this pipeline.
-    root_node: Option<Arc<RwLock<dyn RenderObject>>>,
+    /// The render tree storing all RenderObjects (Slab-based).
+    render_tree: RenderTree,
+
+    /// The root render object ID of this pipeline.
+    root_id: Option<RenderId>,
 
     /// Callback when visual update is needed.
     #[allow(clippy::type_complexity)]
@@ -119,7 +123,8 @@ impl std::fmt::Debug for PipelineOwner {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PipelineOwner")
             .field("id", &self.id)
-            .field("root_node", &self.root_node.is_some())
+            .field("root_id", &self.root_id)
+            .field("render_tree_len", &self.render_tree.len())
             .field("nodes_needing_layout", &self.nodes_needing_layout.len())
             .field("nodes_needing_paint", &self.nodes_needing_paint.len())
             .field("children", &self.children.len())
@@ -141,7 +146,8 @@ impl PipelineOwner {
     pub fn new() -> Self {
         Self {
             id: PIPELINE_ID_COUNTER.fetch_add(1, Ordering::Relaxed),
-            root_node: None,
+            render_tree: RenderTree::new(),
+            root_id: None,
             on_need_visual_update: None,
             on_semantics_owner_created: None,
             on_semantics_owner_disposed: None,
@@ -170,7 +176,8 @@ impl PipelineOwner {
     {
         Self {
             id: PIPELINE_ID_COUNTER.fetch_add(1, Ordering::Relaxed),
-            root_node: None,
+            render_tree: RenderTree::new(),
+            root_id: None,
             on_need_visual_update: on_need_visual_update.map(|f| Box::new(f) as _),
             on_semantics_owner_created: on_semantics_owner_created.map(|f| Box::new(f) as _),
             on_semantics_owner_disposed: on_semantics_owner_disposed.map(|f| Box::new(f) as _),
@@ -225,14 +232,113 @@ impl PipelineOwner {
         }
     }
 
-    /// Returns the root render object.
-    pub fn root_node(&self) -> Option<&Arc<RwLock<dyn RenderObject>>> {
-        self.root_node.as_ref()
+    /// Returns the root render object ID.
+    pub fn root_id(&self) -> Option<RenderId> {
+        self.root_id
     }
 
-    /// Sets the root render object.
-    pub fn set_root_node(&mut self, node: Option<Arc<RwLock<dyn RenderObject>>>) {
-        self.root_node = node;
+    /// Sets the root render object ID.
+    pub fn set_root_id(&mut self, id: Option<RenderId>) {
+        self.root_id = id;
+    }
+
+    /// Returns a reference to the render tree.
+    pub fn render_tree(&self) -> &RenderTree {
+        &self.render_tree
+    }
+
+    /// Returns a mutable reference to the render tree.
+    pub fn render_tree_mut(&mut self) -> &mut RenderTree {
+        &mut self.render_tree
+    }
+
+    // ========================================================================
+    // RenderObject Insertion (with dirty tracking)
+    // ========================================================================
+
+    /// Inserts a render object into the tree and marks it as needing layout.
+    ///
+    /// This method:
+    /// 1. Inserts the render object into the RenderTree
+    /// 2. Adds the node to the dirty layout list (since new nodes need layout)
+    /// 3. Adds the node to the dirty paint list (since new nodes need paint)
+    ///
+    /// Use this instead of `render_tree_mut().insert()` to ensure proper dirty tracking.
+    ///
+    /// # Returns
+    ///
+    /// The `RenderId` of the inserted node.
+    pub fn insert_render_object(
+        &mut self,
+        render_object: Box<dyn crate::traits::RenderObject>,
+    ) -> RenderId {
+        let id = self.render_tree.insert(render_object);
+        let depth = self.render_tree.depth(id).unwrap_or(0);
+
+        // New nodes need layout and paint
+        self.add_node_needing_layout(id.get(), depth);
+        self.add_node_needing_paint(id.get(), depth);
+
+        id
+    }
+
+    /// Inserts a render object as a child and marks it as needing layout.
+    ///
+    /// This method:
+    /// 1. Inserts the render object as a child in the RenderTree
+    /// 2. Adds the node to the dirty layout list
+    /// 3. Adds the node to the dirty paint list
+    /// 4. Marks the parent as needing layout (since child structure changed)
+    ///
+    /// Use this instead of `render_tree_mut().insert_child()` to ensure proper dirty tracking.
+    ///
+    /// # Arguments
+    ///
+    /// * `parent_id` - The parent node ID
+    /// * `render_object` - The render object to insert as child
+    ///
+    /// # Returns
+    ///
+    /// The `RenderId` of the inserted child, or `None` if parent doesn't exist.
+    pub fn insert_child_render_object(
+        &mut self,
+        parent_id: RenderId,
+        render_object: Box<dyn crate::traits::RenderObject>,
+    ) -> Option<RenderId> {
+        // Get parent depth before insertion
+        let parent_depth = self.render_tree.depth(parent_id)?;
+
+        // Insert child
+        let child_id = self.render_tree.insert_child(parent_id, render_object)?;
+        let child_depth = parent_depth + 1;
+
+        // Mark child as needing layout and paint
+        self.add_node_needing_layout(child_id.get(), child_depth);
+        self.add_node_needing_paint(child_id.get(), child_depth);
+
+        // Mark parent as needing layout (child structure changed)
+        self.add_node_needing_layout(parent_id.get(), parent_depth);
+
+        Some(child_id)
+    }
+
+    /// Sets the root render object and marks it as needing layout.
+    ///
+    /// This is a convenience method that:
+    /// 1. Inserts the render object
+    /// 2. Sets it as the root
+    /// 3. Ensures it's in the dirty lists
+    ///
+    /// # Returns
+    ///
+    /// The `RenderId` of the root node.
+    pub fn set_root_render_object(
+        &mut self,
+        render_object: Box<dyn crate::traits::RenderObject>,
+    ) -> RenderId {
+        let id = self.insert_render_object(render_object);
+        self.root_id = Some(id);
+        id
     }
 
     // ========================================================================
@@ -388,28 +494,61 @@ impl PipelineOwner {
     pub fn flush_layout(&mut self) {
         tracing::debug!("flush_layout: {} nodes", self.nodes_needing_layout.len());
 
-        self.debug_doing_layout = true;
+        // Process own dirty nodes if any
+        // Flutter pattern: while loop to handle nodes added during layout
+        while !self.nodes_needing_layout.is_empty() {
+            self.debug_doing_layout = true;
 
-        // Sort by depth (shallow first) - parents before children
-        // Flutter: dirtyNodes.sort((a, b) => a.depth - b.depth)
-        self.nodes_needing_layout
-            .sort_unstable_by_key(|node| node.depth);
+            // Take the dirty nodes and replace with empty vec
+            // This allows new nodes to be added during layout
+            let mut dirty_nodes = std::mem::take(&mut self.nodes_needing_layout);
 
-        // Process dirty nodes
-        // Each node should call _layoutWithoutResize() if still dirty
-        for node in &self.nodes_needing_layout {
-            tracing::trace!("layout node id={} depth={}", node.id, node.depth);
-            // TODO: Look up node by id and call layout_without_resize()
-            // if node._needs_layout && node.owner == self
+            // Sort by depth (shallow first) - parents before children
+            // Flutter: dirtyNodes.sort((a, b) => a.depth - b.depth)
+            dirty_nodes.sort_unstable_by_key(|node| node.depth);
+
+            // Process each dirty node
+            for dirty_node in dirty_nodes {
+                // Look up the node in the RenderTree by its ID
+                // The DirtyNode.id is the slab index (0-based), but RenderId is 1-based
+                let render_id = RenderId::new(dirty_node.id);
+
+                if let Some(render_node) = self.render_tree.get_mut(render_id) {
+                    let render_object = render_node.render_object_mut();
+
+                    // Only process if still needs layout and owned by this pipeline
+                    // Flutter: if (node._needsLayout && node.owner == this)
+                    if render_object.needs_layout() {
+                        tracing::trace!(
+                            "flush_layout: laying out node id={} depth={}",
+                            dirty_node.id,
+                            dirty_node.depth
+                        );
+
+                        // Special handling for RenderView (root)
+                        if let Some(render_view) = render_object
+                            .as_any_mut()
+                            .downcast_mut::<crate::view::RenderView>()
+                        {
+                            // Ensure initial frame is prepared (sets up root_transform)
+                            render_view.prepare_initial_frame_without_owner();
+                            render_view.perform_layout();
+                        } else {
+                            // For other nodes, call layout_without_resize
+                            render_object.layout_without_resize();
+                        }
+                    }
+                }
+            }
+
+            self.debug_doing_layout = false;
         }
-        self.nodes_needing_layout.clear();
 
-        // Flush children
+        // Always flush children, even if parent has no dirty nodes
+        // Flutter does this to ensure hierarchical pipeline owners work correctly
         for child in &self.children {
             child.write().flush_layout();
         }
-
-        self.debug_doing_layout = false;
     }
 
     // ========================================================================
@@ -468,35 +607,52 @@ impl PipelineOwner {
     pub fn flush_paint(&mut self) {
         tracing::debug!("flush_paint: {} nodes", self.nodes_needing_paint.len());
 
-        self.debug_doing_paint = true;
+        // Process own dirty nodes if any
+        if !self.nodes_needing_paint.is_empty() {
+            self.debug_doing_paint = true;
 
-        // Sort by depth (deep first) - children before parents
-        // Flutter: dirtyNodes.sort((a, b) => b.depth - a.depth)
-        self.nodes_needing_paint
-            .sort_unstable_by(|a, b| b.depth.cmp(&a.depth));
+            // Take dirty nodes and replace with empty vec
+            let mut dirty_nodes = std::mem::take(&mut self.nodes_needing_paint);
 
-        // Process dirty nodes
-        for node in &self.nodes_needing_paint {
-            tracing::trace!("paint node id={} depth={}", node.id, node.depth);
-            // TODO: Look up node by id and call:
-            // if (node._needs_paint || node._needs_composited_layer_update) && node.owner == self {
-            //     if node._layer.attached {
-            //         if node._needs_paint {
-            //             PaintingContext::repaint_composited_child(node);
-            //         } else {
-            //             PaintingContext::update_layer_properties(node);
-            //         }
-            //     }
-            // }
+            // Sort by depth (deep first) - children before parents
+            // Flutter: dirtyNodes.sort((a, b) => b.depth - a.depth)
+            dirty_nodes.sort_unstable_by(|a, b| b.depth.cmp(&a.depth));
+
+            // Process each dirty node
+            // Flutter iterates all dirty nodes and calls PaintingContext.repaintCompositedChild
+            for dirty_node in dirty_nodes {
+                let render_id = RenderId::new(dirty_node.id);
+
+                if let Some(render_node) = self.render_tree.get(render_id) {
+                    let render_object = render_node.render_object();
+
+                    // Only paint if still needs paint
+                    // Flutter: if ((node._needsPaint || node._needsCompositedLayerUpdate) && node.owner == this)
+                    if render_object.needs_paint() {
+                        tracing::trace!(
+                            "flush_paint: painting node id={} depth={}",
+                            dirty_node.id,
+                            dirty_node.depth
+                        );
+
+                        // TODO: Implement full paint with PaintingContext
+                        // Flutter: PaintingContext.repaintCompositedChild(node)
+                        // For now, just clear the needs_paint flag
+                        if let Some(render_node) = self.render_tree.get_mut(render_id) {
+                            render_node.render_object_mut().clear_needs_paint();
+                        }
+                    }
+                }
+            }
+
+            self.debug_doing_paint = false;
         }
-        self.nodes_needing_paint.clear();
 
-        // Flush children
+        // Always flush children, even if parent has no dirty nodes
+        // Flutter does this to ensure hierarchical pipeline owners work correctly
         for child in &self.children {
             child.write().flush_paint();
         }
-
-        self.debug_doing_paint = false;
     }
 
     // ========================================================================
@@ -659,7 +815,7 @@ mod tests {
     #[test]
     fn test_pipeline_owner_new() {
         let owner = PipelineOwner::new();
-        assert!(owner.root_node().is_none());
+        assert!(owner.root_id().is_none());
         assert!(owner.nodes_needing_layout().is_empty());
         assert!(owner.nodes_needing_paint().is_empty());
         assert!(!owner.debug_doing_layout());

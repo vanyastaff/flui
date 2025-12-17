@@ -145,15 +145,8 @@ pub struct RenderFlex {
     overflow: f32,
 }
 
-/// Text direction for horizontal layouts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum TextDirection {
-    /// Left to right.
-    #[default]
-    Ltr,
-    /// Right to left.
-    Rtl,
-}
+// Re-export TextDirection from traits (avoid duplication)
+pub use crate::traits::TextDirection;
 
 impl RenderFlex {
     /// Creates a new flex layout with the given direction.

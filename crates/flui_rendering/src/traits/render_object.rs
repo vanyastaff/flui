@@ -647,6 +647,38 @@ pub trait RenderObject: Debug + Send + Sync + 'static {
         let _ = parent_uses_size;
     }
 
+    /// Perform layout without receiving new constraints.
+    ///
+    /// This method is called by `PipelineOwner::flush_layout()` on dirty
+    /// relayout boundaries. It reuses the constraints from the previous layout.
+    ///
+    /// The method:
+    /// 1. Calls `perform_layout_impl()` to do actual layout
+    /// 2. Clears the `needs_layout` flag
+    /// 3. Marks the object as needing paint
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// This corresponds to Flutter's `RenderObject._layoutWithoutResize` method.
+    ///
+    /// # Default Implementation
+    ///
+    /// The default implementation clears the layout flag and marks for paint.
+    /// Subclasses (like `RenderBox`) should override this to call their
+    /// `perform_layout()` method.
+    fn layout_without_resize(&mut self) {
+        debug_assert!(
+            self.needs_layout(),
+            "layout_without_resize called on object that doesn't need layout"
+        );
+
+        // Clear the needs_layout flag
+        self.clear_needs_layout();
+
+        // Mark as needing paint (layout changed, so visual output may differ)
+        self.mark_needs_paint();
+    }
+
     /// Computes the size of this render object when `sized_by_parent` is true.
     ///
     /// This is called when `sized_by_parent` returns true, before layout.

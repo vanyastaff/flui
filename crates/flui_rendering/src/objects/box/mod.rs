@@ -13,6 +13,7 @@ pub mod basic;
 pub mod effects;
 pub mod layout;
 pub mod scroll;
+pub mod text;
 
 // TODO: Add remaining categories
 // pub mod animation;

@@ -161,6 +161,9 @@ pub mod prelude {
 
     // Re-export RenderId from flui_foundation
     pub use flui_foundation::RenderId;
+
+    // Re-export all concrete RenderObjects
+    pub use crate::objects::*;
 }
 
 // Re-export key types at crate root

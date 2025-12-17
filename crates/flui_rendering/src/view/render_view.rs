@@ -2,6 +2,9 @@
 
 use std::any::Any;
 use std::fmt::Debug;
+use std::sync::Arc;
+
+use parking_lot::RwLock;
 
 use flui_types::{Matrix4, Offset, Rect, Size};
 
@@ -39,8 +42,13 @@ pub struct RenderView {
     /// The view configuration.
     configuration: Option<ViewConfiguration>,
 
-    /// The child render box.
+    /// The child render box (owned version - legacy).
     child: Option<Box<dyn RenderBox>>,
+
+    /// The child render box (shared version - for Flutter-like element tree).
+    /// This is used when the child RenderObject is owned by an Element
+    /// but needs to be accessible from the render tree.
+    child_shared: Option<Arc<RwLock<dyn RenderBox>>>,
 
     /// The current size (in logical pixels).
     size: Size,
@@ -94,6 +102,7 @@ impl RenderView {
             base,
             configuration: None,
             child: None,
+            child_shared: None,
             size: Size::ZERO,
             root_transform: None,
             layer: None,
@@ -193,10 +202,31 @@ impl RenderView {
         self.child.as_mut().map(|c| c.as_mut())
     }
 
-    /// Sets the child render box.
+    /// Sets the child render box (owned version).
     pub fn set_child(&mut self, child: Option<Box<dyn RenderBox>>) {
         self.child = child;
+        self.child_shared = None; // Clear shared child when setting owned
         self.base.mark_needs_layout();
+    }
+
+    /// Sets the child render box (shared version).
+    ///
+    /// This is used when the child RenderObject is owned by an Element
+    /// but needs to be referenced from the render tree for layout/paint.
+    ///
+    /// # Flutter Equivalent
+    ///
+    /// In Flutter, RenderObjects are stored in Elements and referenced
+    /// in the parent's child field. This method enables the same pattern.
+    pub fn set_child_shared(&mut self, child: Option<Arc<RwLock<dyn RenderBox>>>) {
+        self.child_shared = child;
+        self.child = None; // Clear owned child when setting shared
+        self.base.mark_needs_layout();
+    }
+
+    /// Returns the shared child, if any.
+    pub fn child_shared(&self) -> Option<&Arc<RwLock<dyn RenderBox>>> {
+        self.child_shared.as_ref()
     }
 
     // ========================================================================
@@ -288,12 +318,23 @@ impl RenderView {
         self.base.mark_needs_paint();
     }
 
-    /// Internal method to prepare initial frame without requiring a PipelineOwner.
-    /// Used for testing.
-    #[cfg(test)]
-    fn prepare_initial_frame_internal(&mut self) {
+    /// Prepare the initial frame without requiring a PipelineOwner.
+    ///
+    /// This is useful when bootstrapping the render tree before
+    /// the PipelineOwner is fully attached.
+    pub fn prepare_initial_frame_without_owner(&mut self) {
+        if self.root_transform.is_some() {
+            // Already prepared
+            return;
+        }
         self.schedule_initial_layout_internal();
         self.schedule_initial_paint_internal();
+    }
+
+    /// Internal method for testing.
+    #[cfg(test)]
+    fn prepare_initial_frame_internal(&mut self) {
+        self.prepare_initial_frame_without_owner();
     }
 
     // ========================================================================
@@ -307,8 +348,17 @@ impl RenderView {
         let constraints = self.constraints();
         let sized_by_child = !constraints.is_tight();
 
-        if let Some(child) = &mut self.child {
-            let child_size = child.perform_layout(constraints);
+        // Try owned child first, then shared child
+        let child_size = if let Some(child) = &mut self.child {
+            Some(child.perform_layout(constraints))
+        } else if let Some(child_shared) = &self.child_shared {
+            let mut child = child_shared.write();
+            Some(child.perform_layout(constraints))
+        } else {
+            None
+        };
+
+        if let Some(child_size) = child_size {
             if sized_by_child {
                 self.size = child_size;
             } else {
@@ -342,10 +392,15 @@ impl RenderView {
     /// The `position` argument is in the coordinate system of the render view,
     /// which is in logical pixels.
     pub fn hit_test(&self, result: &mut HitTestResult, position: Offset) -> bool {
+        // Try owned child first, then shared child
         if let Some(child) = &self.child {
             let mut box_result = BoxHitTestResult::new();
             child.hit_test(&mut box_result, position);
             // Note: In a full implementation, we would merge box_result into result
+        } else if let Some(child_shared) = &self.child_shared {
+            let child = child_shared.read();
+            let mut box_result = BoxHitTestResult::new();
+            child.hit_test(&mut box_result, position);
         }
         result.add(HitTestEntry::new_render_view());
         true
@@ -356,7 +411,11 @@ impl RenderView {
     /// This is a convenience method that directly returns a BoxHitTestResult.
     pub fn hit_test_box(&self, position: Offset) -> BoxHitTestResult {
         let mut result = BoxHitTestResult::new();
+        // Try owned child first, then shared child
         if let Some(child) = &self.child {
+            child.hit_test(&mut result, position);
+        } else if let Some(child_shared) = &self.child_shared {
+            let child = child_shared.read();
             child.hit_test(&mut result, position);
         }
         result
@@ -368,8 +427,12 @@ impl RenderView {
 
     /// Paints this render view.
     pub fn paint(&self, context: &mut PaintingContext, offset: Offset) {
+        // Try owned child first, then shared child
         if let Some(child) = &self.child {
             context.paint_child(child.as_ref(), offset);
+        } else if let Some(child_shared) = &self.child_shared {
+            let child = child_shared.read();
+            context.paint_child(&*child, offset);
         }
     }
 
