@@ -10,16 +10,16 @@ FLUI Foundation provides fundamental building blocks used throughout the FLUI UI
 
 ## Features
 
-- **Tree IDs**: `ViewId`, `ElementId`, `RenderId`, `LayerId`, `SemanticsId` for the 5-tree architecture
-- **Keys**: `Key`, `ValueKey`, `ObjectKey`, `UniqueKey`, `GlobalKey` for widget identity
+- **Tree IDs**: Type-safe `Id<T>` with wgpu-style marker traits for all tree levels
+- **Keys**: `Key`, `ValueKey`, `UniqueKey` for widget identity (GlobalKey/ObjectKey in flui-view)
 - **Change Notification**: Observable patterns for reactive UI updates
 - **Observer Lists**: Efficient `ObserverList`, `SyncObserverList`, `HashedObserverList`
 - **Diagnostics**: Rich debugging and introspection utilities
 - **Error Handling**: Standardized `FoundationError` with context chaining
 - **Callbacks**: Type-safe callback aliases (`VoidCallback`, `ValueChanged`, etc.)
 - **Platform Detection**: `TargetPlatform` for cross-platform code
+- **WASM Support**: `WasmNotSendSync` trait for web compatibility
 - **Thread Safety**: All types designed for multi-threaded contexts
-- **Minimal Dependencies**: Only essential external crates
 
 ## Quick Start
 
@@ -36,9 +36,8 @@ Basic usage:
 use flui_foundation::{ElementId, Key, ChangeNotifier, Listenable};
 use std::sync::Arc;
 
-// Create unique identifiers
-let element_id = ElementId::new(1);
-let key = Key::new();
+// Create unique identifiers (1-based index)
+let element_id = ElementId::zip(0); // index 0 → ID with value 1
 
 // Observable values for reactive UI
 let notifier = ChangeNotifier::new();
@@ -52,30 +51,51 @@ notifier.notify_listeners();
 
 ## Core Types
 
-### Tree IDs (5-Tree Architecture)
+### Type-Safe ID System (wgpu-style)
+
+IDs use marker traits for type safety, similar to wgpu's resource ID system:
 
 ```rust
-use flui_foundation::{ViewId, ElementId, RenderId, LayerId, SemanticsId};
+use flui_foundation::{
+    Id, RawId, Marker, Identifier,
+    ViewId, ElementId, RenderId, LayerId, SemanticsId
+};
 
-// Each tree level has its own ID type
-let view_id = ViewId::new(1);
-let element_id = ElementId::new(1);
-let render_id = RenderId::new(1);
-let layer_id = LayerId::new(1);
-let semantics_id = SemanticsId::new(1);
+// Each tree level has its own ID type via marker traits
+let view_id = ViewId::zip(0);      // index 0 → ID 1
+let element_id = ElementId::zip(1); // index 1 → ID 2
+let render_id = RenderId::zip(2);   // index 2 → ID 3
 
-// IDs support arithmetic and comparison
-let next = element_id + 1;
-assert!(element_id < next);
+// Extract index from ID (for Slab access)
+let index = element_id.unzip(); // ID 2 → index 1
 
-// Niche optimization: Option<ElementId> is 8 bytes
-assert_eq!(std::mem::size_of::<Option<ElementId>>(), 8);
+// IDs use NonZeroUsize for niche optimization
+assert_eq!(std::mem::size_of::<Option<ElementId>>(), std::mem::size_of::<ElementId>());
+
+// Generic ID operations via Identifier trait
+fn process<I: Identifier>(id: I) {
+    let index = id.get();
+    println!("Processing index: {}", index);
+}
 ```
+
+#### Available ID Types
+
+| Category | Types |
+|----------|-------|
+| **Core Tree** | `ViewId`, `ElementId`, `RenderId`, `LayerId`, `SemanticsId` |
+| **Animation** | `AnimationId`, `FrameCallbackId` |
+| **Input** | `PointerId`, `GestureId`, `KeyId`, `MotionEventId` |
+| **Platform** | `PlatformViewId`, `TextureId`, `EmbedderId`, `DeviceId` |
+| **Focus/Groups** | `FocusId`, `GroupId`, `LocationId` |
+| **Navigation** | `RouteId`, `RestorationScopeId` |
+| **Observers** | `ListenerId`, `ObserverId` |
+| **Debug** | `DiagnosticsId`, `ProductId`, `VendorId` |
 
 ### Keys for Widget Identity
 
 ```rust
-use flui_foundation::{Key, ValueKey};
+use flui_foundation::{Key, ValueKey, UniqueKey};
 
 // Auto-generated unique keys
 let key1 = Key::new();
@@ -89,7 +109,14 @@ assert_eq!(header, header2);
 
 // Value keys for list items
 let item_key = ValueKey::new(42i64);
+
+// Unique keys (each instance is unique)
+let unique1 = UniqueKey::new();
+let unique2 = UniqueKey::new();
+assert_ne!(unique1, unique2);
 ```
+
+> **Note**: `GlobalKey` and `ObjectKey` are in `flui-view` (widgets layer), matching Flutter's architecture.
 
 ### Change Notification
 
@@ -133,53 +160,18 @@ let id = hashed.add("observer".to_string());
 hashed.remove(id);
 ```
 
-### Diagnostics
+### WASM Compatibility
 
 ```rust
-use flui_foundation::{DiagnosticsNode, DiagnosticsProperty, DiagnosticLevel};
+use flui_foundation::{WasmNotSendSync, WasmNotSend};
 
-// Build diagnostic tree
-let tree = DiagnosticsNode::new("MyWidget")
-    .property("width", 100)
-    .property("height", 50)
-    .child(
-        DiagnosticsNode::new("Child")
-            .property("text", "Hello")
-    );
+// WasmNotSendSync: Send + Sync on native, empty on WASM
+// This allows IDs and markers to work on both platforms
 
-println!("{}", tree);
-
-// Custom diagnosticable
-use flui_foundation::{Diagnosticable, DiagnosticsBuilder};
-
-#[derive(Debug)]
-struct MyWidget { width: f32 }
-
-impl Diagnosticable for MyWidget {
-    fn debug_fill_properties(&self, props: &mut Vec<DiagnosticsProperty>) {
-        props.push(DiagnosticsProperty::new("width", self.width));
-    }
+fn use_in_thread<T: WasmNotSendSync>(value: T) {
+    // Works on native (requires Send + Sync)
+    // Works on WASM (no thread requirements)
 }
-```
-
-### Error Handling
-
-```rust
-use flui_foundation::{FoundationError, Result, error::ErrorContext};
-
-fn example() -> Result<i32> {
-    // Create specific errors
-    Err(FoundationError::invalid_id(0, "ID cannot be zero"))
-}
-
-fn with_context() -> Result<i32> {
-    example().with_context("in with_context function")
-}
-
-// Check error properties
-let err = FoundationError::listener_error("add", "limit reached");
-assert!(err.is_recoverable());
-assert_eq!(err.category(), "listener");
 ```
 
 ### Platform Detection
@@ -198,32 +190,78 @@ if platform.is_desktop() {
 }
 ```
 
-## Feature Flags
+### Diagnostics
 
-- `serde`: Enables serialization support for foundation types
-- `full`: Enables all optional features
+```rust
+use flui_foundation::{DiagnosticsNode, DiagnosticsProperty, DiagnosticLevel};
 
-```toml
-[dependencies]
-flui-foundation = { version = "0.1", features = ["serde"] }
+// Build diagnostic tree
+let tree = DiagnosticsNode::new("MyWidget")
+    .property("width", 100)
+    .property("height", 50)
+    .child(
+        DiagnosticsNode::new("Child")
+            .property("text", "Hello")
+    );
+
+println!("{}", tree);
 ```
 
-## Examples
+### Error Handling
 
-Run the examples to see the types in action:
+```rust
+use flui_foundation::{FoundationError, Result};
 
-```bash
-# Basic ID usage
-cargo run -p flui-foundation --example basic_ids
+fn example() -> Result<i32> {
+    // Create specific errors
+    Err(FoundationError::invalid_id(0, "ID cannot be zero"))
+}
 
-# Change notification patterns
-cargo run -p flui-foundation --example change_notification
+// Check error properties
+let err = FoundationError::listener_error("add", "limit reached");
+assert!(err.is_recoverable());
+assert_eq!(err.category(), "listener");
+```
 
-# Diagnostics and debugging
-cargo run -p flui-foundation --example diagnostics
+## ID System Design
 
-# Observer pattern implementations
-cargo run -p flui-foundation --example observer_pattern
+The ID system follows wgpu's pattern for type-safe resource identification:
+
+```rust
+// RawId: The underlying NonZeroUsize value
+pub struct RawId(NonZeroUsize);
+
+// Marker trait: Discriminates ID types (zero-sized)
+pub trait Marker: 'static + WasmNotSendSync + Debug {}
+
+// Id<T>: Generic typed ID
+pub struct Id<T: Marker>(RawId, PhantomData<T>);
+
+// Type aliases for each tree level
+pub type ElementId = Id<markers::Element>;
+pub type RenderId = Id<markers::Render>;
+// ... etc
+
+// Identifier trait for generic operations
+pub trait Identifier {
+    fn get(self) -> Index;
+    fn zip(index: Index) -> Self;
+    fn try_zip(index: Index) -> Option<Self>;
+}
+```
+
+### Index Offset Convention
+
+**CRITICAL**: Slab uses 0-based indices, IDs use 1-based values (NonZeroUsize):
+
+```rust
+// Inserting into Slab:
+let slab_index = slab.insert(node);      // 0, 1, 2, ...
+let id = ElementId::zip(slab_index);      // 1, 2, 3, ... (index + 1)
+
+// Accessing from Slab:
+let index = element_id.unzip();           // ID → index (value - 1)
+let node = slab.get(index);
 ```
 
 ## Architecture
@@ -236,7 +274,7 @@ Foundation sits at the base of the FLUI architecture:
 ├─────────────────┤
 │  flui_widgets   │  ← Widget library  
 ├─────────────────┤
-│   flui_core     │  ← Core framework
+│   flui-view     │  ← View/Element trees (GlobalKey, ObjectKey here)
 ├─────────────────┤
 │ flui-foundation │  ← Foundation types (this crate)
 ├─────────────────┤
@@ -244,24 +282,36 @@ Foundation sits at the base of the FLUI architecture:
 └─────────────────┘
 ```
 
+See [ARCHITECTURE.md](./ARCHITECTURE.md) for complete Flutter foundation types reference.
+
 ## Performance
 
 Foundation types are optimized for common UI patterns:
 
-- **IDs**: Use `NonZeroUsize` for niche optimization (`Option<ElementId>` = 8 bytes)
+- **IDs**: `NonZeroUsize` for niche optimization (`Option<Id>` same size as `Id`)
 - **Keys**: Atomic counter for O(1) generation, FNV-1a hash for string keys
-- **Observer Lists**: O(1) add/remove with slot reuse, optional compaction
+- **Observer Lists**: O(1) add/remove with slot reuse
 - **Change Notifiers**: Efficient listener storage with `parking_lot` locks
 
 ## Thread Safety
 
 All foundation types are designed for multi-threaded use:
 
-- **IDs**: `Send + Sync` (Copy types)
+- **IDs**: `Send + Sync` (Copy types via `WasmNotSendSync`)
 - **Keys**: `Send + Sync` (Copy types with atomic generation)
 - **ChangeNotifier**: `Send + Sync` with `parking_lot::Mutex`
 - **SyncObserverList**: Thread-safe with `RwLock`
 - **HashedObserverList**: Lock-free with `DashMap`
+
+## Feature Flags
+
+- `serde`: Enables serialization support for foundation types
+- `full`: Enables all optional features
+
+```toml
+[dependencies]
+flui-foundation = { version = "0.1", features = ["serde"] }
+```
 
 ## Development
 
@@ -271,9 +321,6 @@ cargo test -p flui-foundation
 
 # Run tests with all features
 cargo test -p flui-foundation --all-features
-
-# Run clippy with pedantic lints
-cargo clippy -p flui-foundation -- -W clippy::pedantic
 
 # Check documentation
 cargo doc -p flui-foundation --open
@@ -292,7 +339,6 @@ at your option.
 
 - [`flui-types`](../flui_types): Basic geometry and mathematical types
 - [`flui-tree`](../flui-tree): Tree abstractions and visitor patterns
-- [`flui-view`](../flui-view): View traits and abstractions
-- [`flui-core`](../flui_core): Core FLUI framework
-- [`flui-widgets`](../flui_widgets): Widget library
-- [`flui-app`](../flui_app): Application framework
+- [`flui-view`](../flui-view): View/Element trees, GlobalKey, ObjectKey
+- [`flui_rendering`](../flui_rendering): Render tree and layout
+- [`flui_app`](../flui_app): Application framework
