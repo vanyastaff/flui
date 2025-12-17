@@ -27,10 +27,6 @@ impl View for HelloWorld {
     fn create_element(&self) -> Box<dyn ElementBase> {
         Box::new(StatelessElement::new(self))
     }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 fn main() {
