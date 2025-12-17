@@ -3,24 +3,23 @@
 //! `EmbedderCore` contains all the common logic shared across platforms.
 //! Platform-specific embedders compose this rather than duplicating code.
 
-use crate::{
-    bindings::{GestureBinding, SchedulerBinding},
-    core::{FrameCoordinator, PointerState, SceneCache},
-    traits::{DefaultLifecycle, PlatformLifecycle},
+use super::{EmbedderScheduler, FrameCoordinator, PointerState, SceneCache};
+use crate::app::AppLifecycle;
+use flui_engine::wgpu::SceneRenderer;
+use flui_interaction::{
+    binding::GestureBinding,
+    events::{
+        make_pointer_event, Event, PointerButton, PointerEventData, PointerEventKind, PointerType,
+    },
 };
-use flui_core::pipeline::PipelineOwner;
-use flui_engine::{CanvasLayer, Layer, Scene, SceneRenderer};
-use flui_types::{
-    constraints::BoxConstraints,
-    events::{PointerButton, PointerDeviceKind, PointerEventData},
-    Event, Offset, PointerEvent, Size,
-};
+use flui_layer::Scene;
+use flui_rendering::{constraints::BoxConstraints, pipeline::PipelineOwner};
+use flui_types::{Offset, Size};
 use parking_lot::RwLock;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
-use tracing::instrument;
 
 /// Shared embedder implementation
 ///
@@ -31,34 +30,18 @@ use tracing::instrument;
 ///
 /// ```text
 /// EmbedderCore (shared 90%+ logic)
-///   ├─ pipeline_owner: Arc<RwLock<PipelineOwner>> - Framework pipeline
+///   ├─ pipeline_owner: Arc<RwLock<PipelineOwner>> - Rendering pipeline
 ///   ├─ needs_redraw: Arc<AtomicBool> - On-demand rendering flag
 ///   ├─ scene_cache: SceneCache - Type-safe scene caching
 ///   ├─ pointer_state: PointerState - Pointer tracking/coalescing
 ///   ├─ frame_coordinator: FrameCoordinator - Frame rendering
-///   ├─ scheduler: SchedulerBinding - Frame scheduling
+///   ├─ scheduler: EmbedderScheduler - Frame scheduling
 ///   ├─ gesture: GestureBinding - Safe hit testing
-///   └─ lifecycle: DefaultLifecycle - Lifecycle tracking
+///   └─ lifecycle: AppLifecycle - Lifecycle tracking
 /// ```
-///
-/// # Usage
-///
-/// ```rust,ignore
-/// pub struct DesktopEmbedder {
-///     core: EmbedderCore,
-///     window: WinitWindow,
-///     renderer: GpuRenderer,
-/// }
-///
-/// impl DesktopEmbedder {
-///     pub fn render_frame(&mut self) {
-///         let scene = self.core.render_frame(&mut self.renderer);
-///         // Platform-specific post-processing
-///     }
-/// }
-/// ```
+#[derive(Debug)]
 pub struct EmbedderCore {
-    /// Core pipeline - single source of truth for element tree
+    /// Render pipeline owner
     pipeline_owner: Arc<RwLock<PipelineOwner>>,
 
     /// On-demand rendering flag
@@ -73,14 +56,14 @@ pub struct EmbedderCore {
     /// Frame coordinator (orchestrates rendering)
     frame_coordinator: FrameCoordinator,
 
-    /// Scheduler binding (frame scheduling)
-    scheduler: SchedulerBinding,
+    /// Embedder scheduler (frame scheduling)
+    scheduler: EmbedderScheduler,
 
     /// Gesture binding (safe hit testing)
     gesture: GestureBinding,
 
     /// Lifecycle tracking
-    lifecycle: DefaultLifecycle,
+    lifecycle: AppLifecycle,
 }
 
 impl EmbedderCore {
@@ -90,16 +73,14 @@ impl EmbedderCore {
     ///
     /// * `pipeline_owner` - Shared pipeline owner from AppBinding
     /// * `needs_redraw` - Shared redraw flag from AppBinding
-    /// * `scheduler` - Scheduler from AppBinding
-    /// * `event_router` - Event router from GestureBinding
+    /// * `scheduler` - Scheduler instance
     pub fn new(
         pipeline_owner: Arc<RwLock<PipelineOwner>>,
         needs_redraw: Arc<AtomicBool>,
         scheduler: Arc<flui_scheduler::Scheduler>,
-        event_router: Arc<RwLock<flui_interaction::EventRouter>>,
     ) -> Self {
-        let scheduler_binding = SchedulerBinding::new(scheduler);
-        let gesture_binding = GestureBinding::new(event_router);
+        let scheduler_binding = EmbedderScheduler::new(scheduler);
+        let gesture_binding = GestureBinding::new();
 
         // Wire up scheduler callbacks
         let pipeline_weak = Arc::downgrade(&pipeline_owner);
@@ -114,7 +95,7 @@ impl EmbedderCore {
             frame_coordinator: FrameCoordinator::new(),
             scheduler: scheduler_binding,
             gesture: gesture_binding,
-            lifecycle: DefaultLifecycle::new(),
+            lifecycle: AppLifecycle::default(),
         }
     }
 
@@ -152,10 +133,10 @@ impl EmbedderCore {
     pub fn handle_resize(&mut self, renderer: &mut SceneRenderer, width: u32, height: u32) {
         renderer.resize(width, height);
 
-        let mut pipeline = self.pipeline_owner.write();
-        if let Some(root_id) = pipeline.root_element_id() {
-            pipeline.request_layout(root_id);
-        }
+        // Request visual update which will trigger layout flush
+        let pipeline = self.pipeline_owner.read();
+        pipeline.request_visual_update();
+        drop(pipeline);
 
         self.request_redraw();
     }
@@ -163,7 +144,7 @@ impl EmbedderCore {
     /// Handle cursor/touch move
     ///
     /// Updates position and stores coalesced event for frame processing.
-    pub fn handle_pointer_move(&mut self, position: Offset, device: PointerDeviceKind) {
+    pub fn handle_pointer_move(&mut self, position: Offset, device: PointerType) {
         self.pointer_state.update_position(position, device);
 
         // Schedule high-priority input task
@@ -172,49 +153,56 @@ impl EmbedderCore {
 
     /// Handle pointer button (mouse click / touch)
     ///
-    /// Routes event through interaction system (SAFE - no unsafe code!)
+    /// Routes event through interaction system
     pub fn handle_pointer_button(
         &mut self,
         position: Offset,
-        device: PointerDeviceKind,
-        button: PointerButton,
+        device: PointerType,
+        _button: PointerButton,
         is_down: bool,
     ) {
-        let data = PointerEventData::new(position, device).with_button(button);
+        let data = PointerEventData::new(position, device);
 
-        let event = if is_down {
+        let kind = if is_down {
             self.pointer_state.set_down(true);
-            Event::Pointer(PointerEvent::Down(data))
+            PointerEventKind::Down
         } else {
             self.pointer_state.set_down(false);
-            Event::Pointer(PointerEvent::Up(data))
+            PointerEventKind::Up
         };
+
+        let pointer_event = make_pointer_event(kind, data);
+        let event = Event::Pointer(pointer_event);
 
         // Route through interaction system
         self.route_event(event);
     }
 
     /// Handle keyboard event
-    ///
-    /// Routes keyboard event through focus system and interaction system.
-    pub fn handle_key_event(&mut self, key_event: flui_types::events::KeyEvent) {
-        let event = Event::Key(key_event);
+    pub fn handle_key_event(&mut self, key_event: flui_interaction::events::KeyboardEvent) {
+        let event = Event::Keyboard(key_event);
         self.route_event(event);
     }
 
     /// Handle scroll event
-    ///
-    /// Routes scroll event through hit testing to find scroll targets.
-    pub fn handle_scroll_event(&mut self, scroll_event: flui_types::events::ScrollEventData) {
+    pub fn handle_scroll_event(&mut self, scroll_event: flui_interaction::events::ScrollEventData) {
         let event = Event::Scroll(scroll_event);
         self.route_event(event);
     }
 
     /// Route event through hit testing
     fn route_event(&mut self, event: Event) {
-        if let Some(scene) = self.scene_cache.get() {
-            self.gesture.route_event(&scene, event);
+        // For pointer events, use GestureBinding's hit test system
+        if let Event::Pointer(ref pointer_event) = event {
+            self.gesture
+                .handle_pointer_event(pointer_event, |_position| {
+                    // TODO: Implement proper hit testing through scene/render tree
+                    // For now return empty result
+                    flui_interaction::routing::HitTestResult::new()
+                });
         }
+        // Keyboard and scroll events don't go through gesture binding
+        // They are routed directly to focused elements (future implementation)
     }
 
     // ========================================================================
@@ -223,22 +211,25 @@ impl EmbedderCore {
 
     /// Handle focus change
     pub fn handle_focus_changed(&mut self, focused: bool) {
-        self.lifecycle.on_focus_changed(focused);
+        self.lifecycle = if focused {
+            AppLifecycle::Resumed
+        } else {
+            AppLifecycle::Inactive
+        };
     }
 
     /// Handle visibility change
     pub fn handle_visibility_changed(&mut self, visible: bool) {
-        self.lifecycle.on_visibility_changed(visible);
-    }
-
-    /// Check if rendering should occur
-    pub fn should_render(&self) -> bool {
-        self.lifecycle.state().should_render()
+        self.lifecycle = if visible {
+            AppLifecycle::Resumed
+        } else {
+            AppLifecycle::Paused
+        };
     }
 
     /// Get lifecycle state
-    pub fn lifecycle(&self) -> &DefaultLifecycle {
-        &self.lifecycle
+    pub fn lifecycle(&self) -> AppLifecycle {
+        self.lifecycle
     }
 
     // ========================================================================
@@ -258,35 +249,22 @@ impl EmbedderCore {
     pub fn draw_frame(&self, constraints: BoxConstraints) -> Scene {
         let mut pipeline = self.pipeline_owner.write();
 
-        // Execute pipeline: build → layout → paint
-        let canvas_opt = match pipeline.build_frame(constraints) {
-            Ok(canvas_opt) => canvas_opt,
-            Err(e) => {
-                tracing::error!(error = ?e, "Pipeline build_frame failed");
-                None
-            }
-        };
+        // Execute pipeline phases: layout → compositing bits → paint → semantics
+        pipeline.flush_all();
 
         // Extract size from constraints
         let size = constraints.constrain(Size::ZERO);
 
         // Create scene
-        let frame_number = self.frame_coordinator.frames_rendered() + 1;
-        match canvas_opt {
-            Some(canvas) => {
-                // Convert Canvas → CanvasLayer → Layer
-                let canvas_layer = CanvasLayer::from_canvas(canvas);
-                let layer = Layer::Canvas(canvas_layer);
-                Scene::from_layer(size, layer, frame_number)
-            }
-            None => Scene::empty(size),
-        }
+        // TODO: Get canvas from paint phase output when fully integrated
+        let _frame_number = self.frame_coordinator.frames_rendered() + 1;
+        Scene::empty(size.into())
     }
 
     /// Render a complete frame
     ///
     /// Orchestrates: begin_frame → process_events → draw → render → end_frame
-    #[instrument(level = "debug", skip_all)]
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn render_frame(&mut self, renderer: &mut SceneRenderer) -> Arc<Scene> {
         // 1. Begin frame (scheduler callbacks)
         self.scheduler.begin_frame();
@@ -331,23 +309,22 @@ impl EmbedderCore {
     }
 
     /// Get scheduler statistics
-    pub fn scheduler_stats(&self) -> crate::bindings::SchedulerStats {
+    pub fn scheduler_stats(&self) -> SchedulerStats {
         self.scheduler.stats()
     }
 }
+
+use super::SchedulerStats;
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    // Note: Full integration tests require mocking PipelineOwner and Scheduler
-    // These are basic unit tests for the core logic.
-
     #[test]
     fn test_pointer_state_integration() {
         let mut state = PointerState::new();
 
-        state.update_position(Offset::new(100.0, 200.0), PointerDeviceKind::Mouse);
+        state.update_position(Offset::new(100.0, 200.0), PointerType::Mouse);
         assert_eq!(state.last_position(), Offset::new(100.0, 200.0));
         assert!(state.has_pending_move());
     }

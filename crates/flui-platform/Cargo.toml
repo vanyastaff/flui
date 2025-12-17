@@ -2,22 +2,17 @@
 name = "flui-platform"
 version = "0.1.0"
 edition = "2021"
-description = "Cross-platform embedder abstraction for FLUI"
+description = "Platform abstraction traits for FLUI"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/user/flui"
-keywords = ["ui", "gui", "platform", "embedder"]
+keywords = ["ui", "gui", "platform", "abstraction"]
 categories = ["gui"]
 
 [dependencies]
-# Core FLUI crates
+# Core types
 flui_types = { path = "../flui_types" }
-flui-foundation = { path = "../flui-foundation" }
-flui_core = { path = "../flui_core" }
-flui-scheduler = { path = "../flui-scheduler" }
-flui_interaction = { path = "../flui_interaction" }
-flui_engine = { path = "../flui_engine" }
 
-# Windowing (desktop + mobile)
+# Windowing (for PlatformWindow trait)
 winit = { workspace = true }
 
 # Sync primitives
@@ -26,15 +21,7 @@ parking_lot = { workspace = true }
 # Logging
 tracing = { workspace = true }
 
-# Error handling
-thiserror = { workspace = true }
-
 [dev-dependencies]
-tokio = { workspace = true, features = ["rt", "macros"] }
 
 [features]
-default = ["desktop"]
-desktop = []
-android = []
-ios = []
-web = []
+default = []

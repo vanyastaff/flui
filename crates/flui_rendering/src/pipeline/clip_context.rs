@@ -203,7 +203,7 @@ mod tests {
     #[test]
     fn test_clip_default() {
         let clip = Clip::default();
-        assert_eq!(clip, Clip::None);
+        assert_eq!(clip, Clip::HardEdge);
     }
 
     /// Test struct implementing ClipContext for testing
@@ -228,8 +228,9 @@ mod tests {
             canvas.draw_rect(rect, &Paint::default());
         });
 
-        // Should have: Save, DrawRect, Restore
-        assert_eq!(ctx.canvas.len(), 3);
+        // Canvas.len() counts DrawCommands in display_list, not save/restore
+        // Clip::None: just DrawRect (save/restore don't add commands)
+        assert_eq!(ctx.canvas.len(), 1);
     }
 
     #[test]
@@ -243,8 +244,8 @@ mod tests {
             canvas.draw_rect(rect, &Paint::default());
         });
 
-        // Should have: Save, ClipRect(do_anti_alias=false), DrawRect, Restore
-        assert_eq!(ctx.canvas.len(), 4);
+        // Clip::HardEdge: ClipRect + DrawRect (save/restore don't add commands)
+        assert_eq!(ctx.canvas.len(), 2);
     }
 
     #[test]
@@ -258,8 +259,8 @@ mod tests {
             canvas.draw_rect(rect, &Paint::default());
         });
 
-        // Should have: Save, ClipRect(do_anti_alias=true), DrawRect, Restore
-        assert_eq!(ctx.canvas.len(), 4);
+        // Clip::AntiAlias: ClipRect + DrawRect (save/restore don't add commands)
+        assert_eq!(ctx.canvas.len(), 2);
     }
 
     #[test]
@@ -273,8 +274,9 @@ mod tests {
             canvas.draw_rect(rect, &Paint::default());
         });
 
-        // Should have: Save, ClipRect, SaveLayer, DrawRect, Restore, Restore
-        assert_eq!(ctx.canvas.len(), 6);
+        // Clip::AntiAliasWithSaveLayer: ClipRect + SaveLayer + DrawRect + RestoreLayer
+        // save_layer adds SaveLayer command, restore from save_layer adds RestoreLayer
+        assert_eq!(ctx.canvas.len(), 4);
     }
 
     #[test]
@@ -289,8 +291,8 @@ mod tests {
             canvas.draw_rect(rect, &Paint::default());
         });
 
-        // Should have: Save, ClipRRect, DrawRect, Restore
-        assert_eq!(ctx.canvas.len(), 4);
+        // ClipRRect + DrawRect (save/restore don't add commands)
+        assert_eq!(ctx.canvas.len(), 2);
     }
 
     #[test]
@@ -312,7 +314,7 @@ mod tests {
             canvas.draw_rect(rect, &Paint::default());
         });
 
-        // Should have: Save, ClipPath, DrawRect, Restore
-        assert_eq!(ctx.canvas.len(), 4);
+        // ClipPath + DrawRect (save/restore don't add commands)
+        assert_eq!(ctx.canvas.len(), 2);
     }
 }

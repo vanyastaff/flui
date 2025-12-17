@@ -33,10 +33,18 @@ flui-foundation = { path = "../flui-foundation" }
 flui_interaction = { path = "../flui_interaction" }
 flui-scheduler = { path = "../flui-scheduler" }
 flui_painting = { path = "../flui_painting" }
+flui-layer = { path = "../flui-layer" }
+flui_engine = { path = "../flui_engine" }
+flui_log = { path = "../flui_log" }
+
+# Windowing (desktop)
+winit = { workspace = true }
+ui-events-winit = { workspace = true }
 
 # Utilities
 tracing.workspace = true
-tracing-subscriber.workspace = true
 parking_lot.workspace = true
+thiserror.workspace = true
+dpi = "0.1.2"
 
 [dev-dependencies]

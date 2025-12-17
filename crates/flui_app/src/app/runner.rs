@@ -65,17 +65,15 @@ where
 
 /// Initialize logging based on environment.
 fn init_logging() {
-    use tracing_subscriber::{fmt, prelude::*, EnvFilter};
-
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-        EnvFilter::new("info,flui_app=debug,flui_view=debug,flui_rendering=debug")
+    // Use flui_log for cross-platform logging (desktop, Android, iOS, WASM)
+    let filter = std::env::var("RUST_LOG").unwrap_or_else(|_| {
+        "info,flui_app=debug,flui_view=debug,flui_rendering=debug,wgpu=warn".to_string()
     });
 
-    tracing_subscriber::registry()
-        .with(fmt::layer().with_target(true))
-        .with(filter)
-        .try_init()
-        .ok(); // Ignore if already initialized
+    flui_log::Logger::new()
+        .with_filter(&filter)
+        .with_level(flui_log::Level::DEBUG)
+        .init();
 }
 
 // ============================================================================

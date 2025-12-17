@@ -1,9 +1,9 @@
-//! Scheduler binding
+//! Embedder scheduler integration
 //!
-//! Connects the platform layer to flui-scheduler for frame lifecycle
-//! and task scheduling. Follows Flutter's SchedulerBinding pattern.
+//! Connects the embedder to flui-scheduler for frame lifecycle
+//! and task scheduling.
 
-use flui_core::pipeline::PipelineOwner;
+use flui_rendering::pipeline::PipelineOwner;
 use flui_scheduler::{Priority, Scheduler};
 use parking_lot::RwLock;
 use std::sync::{
@@ -24,40 +24,30 @@ pub struct SchedulerStats {
     pub current_frame: u64,
 }
 
-/// Binding between platform and scheduler
+/// Embedder scheduler integration
 ///
-/// Provides frame lifecycle and task scheduling integration:
+/// Connects the embedder to flui-scheduler for:
 /// - Frame lifecycle (begin_frame, end_frame)
 /// - Task scheduling with priorities
-/// - Pipeline rebuild coordination
+/// - Pipeline dirty-check coordination
 ///
-/// # Flutter Analogy
-///
-/// Similar to Flutter's `SchedulerBinding` which manages:
-/// - `scheduleFrameCallback` → `schedule_animation`
-/// - `addPostFrameCallback` → handled via `end_frame`
-/// - Frame timing and statistics
-///
-/// # Example
-///
-/// ```rust,ignore
-/// let binding = SchedulerBinding::new(scheduler);
-///
-/// // Wire up pipeline for automatic rebuilds
-/// binding.wire_up_pipeline(pipeline_weak, needs_redraw);
-///
-/// // In render loop
-/// binding.begin_frame();
-/// // ... render ...
-/// binding.end_frame();
-/// ```
-pub struct SchedulerBinding {
+/// This is embedder-specific glue code, not to be confused with
+/// `flui_scheduler::SchedulerBinding` trait.
+pub struct EmbedderScheduler {
     scheduler: Arc<Scheduler>,
     current_frame: u64,
 }
 
-impl SchedulerBinding {
-    /// Create a new scheduler binding
+impl std::fmt::Debug for EmbedderScheduler {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EmbedderScheduler")
+            .field("current_frame", &self.current_frame)
+            .finish_non_exhaustive()
+    }
+}
+
+impl EmbedderScheduler {
+    /// Create a new embedder scheduler
     pub fn new(scheduler: Arc<Scheduler>) -> Self {
         Self {
             scheduler,
@@ -67,33 +57,12 @@ impl SchedulerBinding {
 
     /// Wire up pipeline for automatic rebuilds
     ///
-    /// Adds a persistent frame callback that flushes the rebuild queue
+    /// Adds a persistent frame callback that flushes dirty nodes
     /// and sets the needs_redraw flag when changes occur.
     ///
     /// # Why Weak Reference?
     ///
     /// Uses `Weak<RwLock<PipelineOwner>>` to prevent circular reference memory leaks.
-    /// Without Weak, we'd have:
-    ///
-    /// ```text
-    /// EmbedderCore → Scheduler → Callback(Arc<PipelineOwner>) → PipelineOwner
-    ///        ↑                                                           │
-    ///        └───────────────────────────────────────────────────────────┘
-    ///                            (circular reference = memory leak)
-    /// ```
-    ///
-    /// With Weak, the cycle is broken:
-    ///
-    /// ```text
-    /// EmbedderCore → Scheduler → Callback(Weak<PipelineOwner>) ⇢ PipelineOwner
-    ///        ↑                                                           │
-    ///        └───────────────────────────────────────────────────────────┘
-    ///                            (weak link breaks cycle = no leak)
-    /// ```
-    ///
-    /// When `EmbedderCore` is dropped, `PipelineOwner` can be freed even though
-    /// the `Scheduler` still holds callbacks. The `upgrade()` returns `None` for
-    /// graceful cleanup.
     pub fn wire_up_pipeline(
         &self,
         pipeline_weak: Weak<RwLock<PipelineOwner>>,
@@ -102,8 +71,9 @@ impl SchedulerBinding {
         self.scheduler
             .add_persistent_frame_callback(Arc::new(move |_timing| {
                 if let Some(pipeline) = pipeline_weak.upgrade() {
-                    let mut owner = pipeline.write();
-                    if owner.flush_rebuild_queue() {
+                    let owner = pipeline.read();
+                    // Check if there are dirty nodes that need processing
+                    if owner.has_dirty_nodes() {
                         needs_redraw.store(true, Ordering::Relaxed);
                     }
                 }
@@ -179,7 +149,7 @@ impl SchedulerBinding {
         SchedulerStats {
             target_fps: self.scheduler.target_fps(),
             frame_budget_ms: 1000.0 / self.scheduler.target_fps() as f64,
-            is_over_budget: false, // Would need access to budget tracker
+            is_over_budget: false,
             current_frame: self.current_frame,
         }
     }
@@ -197,7 +167,7 @@ mod tests {
     #[test]
     fn test_scheduler_stats() {
         let scheduler = Arc::new(Scheduler::new());
-        let binding = SchedulerBinding::new(scheduler);
+        let binding = EmbedderScheduler::new(scheduler);
 
         let stats = binding.stats();
         // Allow 59 or 60 due to floating-point rounding in fps calculation

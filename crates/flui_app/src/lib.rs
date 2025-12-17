@@ -54,6 +54,7 @@
 // Modules
 pub mod app;
 pub mod debug;
+pub mod embedder;
 pub mod overlay;
 pub mod theme;
 
@@ -62,6 +63,9 @@ pub use app::{AppBinding, AppConfig, AppLifecycle};
 pub use debug::{DebugFlags, FrameStats, PerformanceOverlay};
 pub use overlay::{OverlayEntry, OverlayManager, OverlayPosition};
 pub use theme::{Color, ColorScheme, Theme, ThemeMode};
+
+// Embedder re-exports
+pub use embedder::{DesktopEmbedder, EmbedderCore, EmbedderError};
 
 // Convenience re-exports from flui-view
 pub use flui_view::{
@@ -74,6 +78,9 @@ pub use flui_rendering::pipeline::PipelineOwner as RenderPipelineOwner;
 
 // Convenience re-exports from flui_interaction
 pub use flui_interaction::GestureBinding;
+
+// Convenience re-exports from flui_log (cross-platform logging)
+pub use flui_log::{debug, error, info, trace, warn, Level, Logger};
 
 /// Run a FLUI application.
 ///

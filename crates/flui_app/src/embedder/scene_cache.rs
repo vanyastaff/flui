@@ -2,7 +2,7 @@
 //!
 //! Maintains the most recent scene for hit testing without unsafe code.
 
-use flui_engine::Scene;
+use flui_layer::Scene;
 use parking_lot::RwLock;
 use std::sync::Arc;
 
@@ -17,21 +17,7 @@ use std::sync::Arc;
 /// - Multiple readers can access the scene concurrently
 /// - Updates are atomic via write lock
 /// - Arc clone is cheap (ref count increment)
-///
-/// # Example
-///
-/// ```rust,ignore
-/// let cache = SceneCache::new();
-///
-/// // After rendering
-/// cache.update(Arc::new(scene));
-///
-/// // For hit testing
-/// if let Some(scene) = cache.get() {
-///     // perform hit testing on &Scene
-/// }
-/// ```
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct SceneCache {
     /// Most recent scene wrapped in Arc for zero-copy sharing
     current: Arc<RwLock<Option<Arc<Scene>>>>,

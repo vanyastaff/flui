@@ -31,7 +31,7 @@ members = [
 
     # === Application Layer ===
     "crates/flui_app",          # Application runner and bindings
-    # "crates/flui-platform",     # Cross-platform embedder abstraction
+    "crates/flui-platform",       # Platform abstraction traits
 
     # === Temporarily disabled ===
     # "crates/flui_assets",       # Asset management system
@@ -124,6 +124,7 @@ reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls"] }
 
 # UI EVENTS - Cross-platform input event abstraction (W3C compliant)
 ui-events = "0.2"
+ui-events-winit = "0.2"
 cursor-icon = "1.2"
 
 # UTILITIES - Used by multiple crates
