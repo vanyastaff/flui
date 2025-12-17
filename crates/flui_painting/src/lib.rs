@@ -160,6 +160,7 @@
 #![allow(clippy::match_same_arms)]
 
 // Core modules
+pub mod binding;
 pub mod canvas;
 pub mod clip_context;
 pub mod display_list;
@@ -172,6 +173,12 @@ pub mod text_painter;
 // Re-export all public types at the crate root for convenient access.
 // This allows changing internal module structure without breaking user code.
 // Users can write `use flui_painting::Canvas` instead of `use flui_painting::canvas::Canvas`.
+
+// Binding
+pub use binding::{
+    image_cache, CachedImage, DefaultShaderWarmUp, ImageCache, ImageHandle, PaintingBinding,
+    ShaderWarmUp, SystemFontsNotifier, WarmUpCanvas,
+};
 
 // Primary API types
 pub use canvas::Canvas;

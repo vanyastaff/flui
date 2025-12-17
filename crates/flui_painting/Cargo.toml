@@ -13,6 +13,7 @@ readme = "README.md"
 
 [dependencies]
 flui_types = { path = "../flui_types" }
+flui-foundation = { path = "../flui-foundation" }
 
 thiserror = { workspace = true }
 tracing = { workspace = true }
