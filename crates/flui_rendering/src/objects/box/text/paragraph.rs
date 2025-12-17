@@ -47,9 +47,11 @@
 //! paragraph.set_overflow(TextOverflow::Ellipsis);
 //! ```
 
-use std::any::Any;
 
+use flui_foundation::{Diagnosticable, DiagnosticsBuilder};
 use flui_painting::{measure_text, TextPainter};
+
+use crate::hit_testing::{HitTestEntry, HitTestTarget, PointerEvent};
 use flui_types::geometry::{Offset, Rect, Size};
 use flui_types::styling::Color;
 use flui_types::typography::{
@@ -60,9 +62,7 @@ use flui_types::typography::{
 use crate::constraints::BoxConstraints;
 use crate::lifecycle::BaseRenderObject;
 use crate::pipeline::{PaintingContext, PipelineOwner};
-use crate::traits::{
-    BoxHitTestResult, DiagnosticPropertiesBuilder, RenderBox, RenderObject, TextBaseline,
-};
+use crate::traits::{BoxHitTestResult, RenderBox, RenderObject, TextBaseline};
 
 /// The ellipsis character used for text overflow.
 const ELLIPSIS: &str = "\u{2026}";
@@ -579,23 +579,7 @@ impl RenderObject for RenderParagraph {
         // RenderParagraph is a leaf - no children
     }
 
-    fn debug_fill_properties(&self, properties: &mut DiagnosticPropertiesBuilder) {
-        properties.add_string("textAlign", format!("{:?}", self.text_align()));
-        properties.add_string("textDirection", format!("{:?}", self.text_direction()));
-        properties.add_string("softWrap", format!("{}", self.soft_wrap));
-        properties.add_string("overflow", format!("{:?}", self.overflow));
-        if let Some(max_lines) = self.max_lines() {
-            properties.add_string("maxLines", format!("{}", max_lines));
-        }
-    }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
-    }
 }
 
 // ============================================================================
@@ -813,5 +797,27 @@ mod tests {
     fn test_render_paragraph_boxed() {
         let paragraph: Box<dyn RenderBox> = Box::new(create_test_paragraph("Test"));
         assert_eq!(paragraph.size(), Size::ZERO);
+    }
+}
+
+// ============================================================================
+// Diagnosticable Implementation
+// ============================================================================
+
+impl Diagnosticable for RenderParagraph {
+    fn debug_fill_properties(&self, properties: &mut DiagnosticsBuilder) {
+        properties.add("textAlign", format!("{:?}", self.text_align()));
+        properties.add("textDirection", format!("{:?}", self.text_direction()));
+        properties.add("softWrap", self.soft_wrap);
+        properties.add("overflow", format!("{:?}", self.overflow));
+        if let Some(max_lines) = self.max_lines() {
+            properties.add("maxLines", max_lines);
+        }
+    }
+}
+
+impl HitTestTarget for RenderParagraph {
+    fn handle_event(&self, event: &PointerEvent, entry: &HitTestEntry) {
+        RenderObject::handle_event(self, event, entry);
     }
 }

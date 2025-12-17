@@ -17,9 +17,10 @@
 //! - `performLayout()` sets `child.parentData.offset = Offset(padding.left, padding.top)`
 //! - `paint()` and `hitTestChildren()` read offset from child.parentData
 
-use std::any::Any;
-
+use flui_foundation::{Diagnosticable, DiagnosticsBuilder};
 use flui_types::{EdgeInsets, Offset, Size};
+
+use crate::hit_testing::{HitTestEntry, HitTestTarget, PointerEvent};
 
 use crate::constraints::BoxConstraints;
 use crate::containers::BoxChild;
@@ -27,8 +28,8 @@ use crate::lifecycle::BaseRenderObject;
 use crate::parent_data::BoxParentData;
 use crate::pipeline::{PaintingContext, PipelineOwner};
 use crate::traits::{
-    set_child_offset, BoxHitTestResult, DiagnosticPropertiesBuilder, RenderBox, RenderObject,
-    RenderShiftedBox, SingleChildRenderBox, TextBaseline,
+    set_child_offset, BoxHitTestResult, RenderBox, RenderObject, RenderShiftedBox,
+    SingleChildRenderBox, TextBaseline,
 };
 
 /// A render object that insets its child by the given padding.
@@ -237,18 +238,6 @@ impl RenderObject for RenderPadding {
         if let Some(child) = self.child.get_mut() {
             visitor(child);
         }
-    }
-
-    fn debug_fill_properties(&self, properties: &mut DiagnosticPropertiesBuilder) {
-        properties.add_string("padding", format!("{:?}", self.padding));
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
     }
 }
 
@@ -522,5 +511,21 @@ mod tests {
         let padding: Box<dyn RenderBox> = Box::new(RenderPadding::new(EdgeInsets::all(10.0)));
         // Should work - can be stored as Box<dyn RenderBox>
         assert_eq!(padding.size(), Size::ZERO);
+    }
+}
+
+// ============================================================================
+// Diagnosticable Implementation
+// ============================================================================
+
+impl Diagnosticable for RenderPadding {
+    fn debug_fill_properties(&self, properties: &mut DiagnosticsBuilder) {
+        properties.add("padding", format!("{:?}", self.padding));
+    }
+}
+
+impl HitTestTarget for RenderPadding {
+    fn handle_event(&self, event: &PointerEvent, entry: &HitTestEntry) {
+        RenderObject::handle_event(self, event, entry);
     }
 }

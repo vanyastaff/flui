@@ -8,10 +8,12 @@
 //!
 //! This corresponds to Flutter's `RenderViewport` in `rendering/viewport.dart`.
 
-use std::any::Any;
 use std::sync::Arc;
 
+use flui_foundation::{Diagnosticable, DiagnosticsBuilder};
 use flui_types::prelude::AxisDirection;
+
+use crate::hit_testing::{HitTestEntry, HitTestTarget, PointerEvent};
 use flui_types::{Axis, Offset, Rect, Size};
 
 use crate::constraints::{BoxConstraints, GrowthDirection, SliverConstraints};
@@ -20,9 +22,7 @@ use crate::lifecycle::BaseRenderObject;
 
 use crate::pipeline::{PaintingContext, PipelineOwner};
 use crate::traits::sliver::SliverHitTestResult;
-use crate::traits::{
-    BoxHitTestResult, DiagnosticPropertiesBuilder, RenderBox, RenderObject, RenderSliver,
-};
+use crate::traits::{BoxHitTestResult, RenderBox, RenderObject, RenderSliver};
 use crate::view::{
     CacheExtentStyle, RenderAbstractViewport, RevealedOffset, ScrollDirection, ViewportOffset,
 };
@@ -456,24 +456,7 @@ impl RenderObject for RenderViewport {
         Rect::from_ltwh(0.0, 0.0, self.size.width, self.size.height)
     }
 
-    fn debug_fill_properties(&self, properties: &mut DiagnosticPropertiesBuilder) {
-        properties.add_string("axisDirection", format!("{:?}", self.axis_direction()));
-        properties.add_string(
-            "crossAxisDirection",
-            format!("{:?}", self.cross_axis_direction()),
-        );
-        properties.add_float("anchor", self.anchor() as f64);
-        properties.add_float("cacheExtent", self.cache_extent() as f64);
-        properties.add_int("childCount", self.child_count() as i64);
-    }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
-    }
 }
 
 // ============================================================================
@@ -745,5 +728,28 @@ mod tests {
         let bounds = viewport.paint_bounds();
         assert_eq!(bounds.width(), 400.0);
         assert_eq!(bounds.height(), 800.0);
+    }
+}
+
+// ============================================================================
+// Diagnosticable Implementation
+// ============================================================================
+
+impl Diagnosticable for RenderViewport {
+    fn debug_fill_properties(&self, properties: &mut DiagnosticsBuilder) {
+        properties.add("axisDirection", format!("{:?}", self.axis_direction()));
+        properties.add(
+            "crossAxisDirection",
+            format!("{:?}", self.cross_axis_direction()),
+        );
+        properties.add("anchor", self.anchor());
+        properties.add("cacheExtent", self.cache_extent());
+        properties.add("childCount", self.child_count());
+    }
+}
+
+impl HitTestTarget for RenderViewport {
+    fn handle_event(&self, event: &PointerEvent, entry: &HitTestEntry) {
+        RenderObject::handle_event(self, event, entry);
     }
 }

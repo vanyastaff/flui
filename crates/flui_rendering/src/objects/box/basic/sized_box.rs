@@ -4,18 +4,17 @@
 //! Unlike ConstrainedBox, it always uses tight constraints for the specified
 //! dimensions.
 
-use std::any::Any;
-
+use flui_foundation::{Diagnosticable, DiagnosticsBuilder};
 use flui_types::{Offset, Size};
+
+use crate::hit_testing::{HitTestEntry, HitTestTarget, PointerEvent};
 
 use crate::constraints::BoxConstraints;
 use crate::containers::BoxChild;
 use crate::lifecycle::BaseRenderObject;
 use crate::parent_data::BoxParentData;
 use crate::pipeline::{PaintingContext, PipelineOwner};
-use crate::traits::{
-    BoxHitTestResult, DiagnosticPropertiesBuilder, RenderBox, RenderObject, TextBaseline,
-};
+use crate::traits::{BoxHitTestResult, RenderBox, RenderObject, TextBaseline};
 
 /// A render object that forces a specific size.
 ///
@@ -323,19 +322,6 @@ impl RenderObject for RenderSizedBox {
             visitor(child);
         }
     }
-
-    fn debug_fill_properties(&self, properties: &mut DiagnosticPropertiesBuilder) {
-        properties.add_string("width", format!("{:?}", self.width));
-        properties.add_string("height", format!("{:?}", self.height));
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
-    }
 }
 
 // ============================================================================
@@ -481,5 +467,22 @@ mod tests {
 
         assert_eq!(size.width, 100.0);
         assert_eq!(size.height, 75.0);
+    }
+}
+
+// ============================================================================
+// Diagnosticable Implementation
+// ============================================================================
+
+impl Diagnosticable for RenderSizedBox {
+    fn debug_fill_properties(&self, properties: &mut DiagnosticsBuilder) {
+        properties.add("width", format!("{:?}", self.width));
+        properties.add("height", format!("{:?}", self.height));
+    }
+}
+
+impl HitTestTarget for RenderSizedBox {
+    fn handle_event(&self, event: &PointerEvent, entry: &HitTestEntry) {
+        RenderObject::handle_event(self, event, entry);
     }
 }

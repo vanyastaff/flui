@@ -1,6 +1,6 @@
 //! Base ParentData trait.
 
-use std::any::Any;
+use downcast_rs::{impl_downcast, DowncastSync};
 use std::fmt::Debug;
 
 // ============================================================================
@@ -24,7 +24,7 @@ use std::fmt::Debug;
 ///
 /// All parent data types must implement this trait. The trait provides:
 /// - `detach()` for cleanup when removed from tree
-/// - `as_any()` / `as_any_mut()` for downcasting to concrete types
+/// - Downcasting via `downcast_rs` (use `downcast_ref::<T>()`, `downcast_mut::<T>()`)
 ///
 /// # Example
 ///
@@ -36,37 +36,14 @@ use std::fmt::Debug;
 ///     custom_field: i32,
 /// }
 ///
-/// impl ParentData for MyParentData {
-///     fn as_any(&self) -> &dyn Any { self }
-///     fn as_any_mut(&mut self) -> &mut dyn Any { self }
-/// }
+/// impl ParentData for MyParentData {}
 /// ```
-pub trait ParentData: Any + Debug + Send + Sync + 'static {
+pub trait ParentData: Debug + DowncastSync {
     /// Called when the render object is removed from the tree.
     ///
     /// Subclasses should override this to clean up any resources.
     /// The default implementation does nothing.
     fn detach(&mut self) {}
-
-    /// Returns self as `Any` for downcasting.
-    fn as_any(&self) -> &dyn Any;
-
-    /// Returns self as mutable `Any` for downcasting.
-    fn as_any_mut(&mut self) -> &mut dyn Any;
 }
 
-/// Helper macro to implement ParentData trait for a type.
-#[macro_export]
-macro_rules! impl_parent_data {
-    ($ty:ty) => {
-        impl $crate::parent_data::ParentData for $ty {
-            fn as_any(&self) -> &dyn std::any::Any {
-                self
-            }
-
-            fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-                self
-            }
-        }
-    };
-}
+impl_downcast!(sync ParentData);

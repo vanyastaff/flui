@@ -4,18 +4,17 @@
 //! beyond those from its parent. Useful for enforcing minimum/maximum
 //! sizes on widgets.
 
-use std::any::Any;
-
+use flui_foundation::{Diagnosticable, DiagnosticsBuilder};
 use flui_types::{Offset, Size};
+
+use crate::hit_testing::{HitTestEntry, HitTestTarget, PointerEvent};
 
 use crate::constraints::BoxConstraints;
 use crate::containers::BoxChild;
 use crate::lifecycle::BaseRenderObject;
 use crate::parent_data::BoxParentData;
 use crate::pipeline::{PaintingContext, PipelineOwner};
-use crate::traits::{
-    BoxHitTestResult, DiagnosticPropertiesBuilder, RenderBox, RenderObject, TextBaseline,
-};
+use crate::traits::{BoxHitTestResult, RenderBox, RenderObject, TextBaseline};
 
 /// A render object that imposes additional constraints on its child.
 ///
@@ -268,20 +267,7 @@ impl RenderObject for RenderConstrainedBox {
         }
     }
 
-    fn debug_fill_properties(&self, properties: &mut DiagnosticPropertiesBuilder) {
-        properties.add_string(
-            "additionalConstraints",
-            format!("{:?}", self.additional_constraints),
-        );
-    }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
-    }
 }
 
 // ============================================================================
@@ -437,5 +423,24 @@ mod tests {
         let size = constrained.layout_with_child_size(parent, child_size);
 
         assert_eq!(size, Size::new(100.0, 80.0));
+    }
+}
+
+// ============================================================================
+// Diagnosticable Implementation
+// ============================================================================
+
+impl Diagnosticable for RenderConstrainedBox {
+    fn debug_fill_properties(&self, properties: &mut DiagnosticsBuilder) {
+        properties.add(
+            "additionalConstraints",
+            format!("{:?}", self.additional_constraints),
+        );
+    }
+}
+
+impl HitTestTarget for RenderConstrainedBox {
+    fn handle_event(&self, event: &PointerEvent, entry: &HitTestEntry) {
+        RenderObject::handle_event(self, event, entry);
     }
 }

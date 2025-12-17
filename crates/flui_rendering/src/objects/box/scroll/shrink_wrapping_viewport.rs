@@ -8,10 +8,12 @@
 //!
 //! This corresponds to Flutter's `RenderShrinkWrappingViewport` in `rendering/viewport.dart`.
 
-use std::any::Any;
 use std::sync::Arc;
 
+use flui_foundation::{Diagnosticable, DiagnosticsBuilder};
 use flui_types::prelude::AxisDirection;
+
+use crate::hit_testing::{HitTestEntry, HitTestTarget, PointerEvent};
 use flui_types::{Axis, Offset, Rect, Size};
 
 use crate::constraints::{BoxConstraints, GrowthDirection, SliverConstraints};
@@ -21,9 +23,7 @@ use crate::parent_data::SliverParentData;
 use crate::pipeline::{PaintingContext, PipelineOwner};
 use crate::protocol::SliverProtocol;
 use crate::traits::sliver::SliverHitTestResult;
-use crate::traits::{
-    BoxHitTestResult, DiagnosticPropertiesBuilder, RenderBox, RenderObject, RenderSliver,
-};
+use crate::traits::{BoxHitTestResult, RenderBox, RenderObject, RenderSliver};
 use crate::view::{
     CacheExtentStyle, RenderAbstractViewport, RevealedOffset, ScrollDirection, ViewportOffset,
 };
@@ -376,23 +376,7 @@ impl RenderObject for RenderShrinkWrappingViewport {
         Rect::from_ltwh(0.0, 0.0, self.size.width, self.size.height)
     }
 
-    fn debug_fill_properties(&self, properties: &mut DiagnosticPropertiesBuilder) {
-        properties.add_string("axisDirection", format!("{:?}", self.axis_direction));
-        properties.add_string(
-            "crossAxisDirection",
-            format!("{:?}", self.cross_axis_direction),
-        );
-        properties.add_float("cacheExtent", self.cache_extent as f64);
-        properties.add_int("childCount", self.child_count() as i64);
-    }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
-    }
 }
 
 // ============================================================================
@@ -644,5 +628,27 @@ mod tests {
         // Horizontal scrolling should have vertical cross axis
         let viewport = RenderShrinkWrappingViewport::new(AxisDirection::LeftToRight);
         assert_eq!(viewport.cross_axis_direction(), AxisDirection::TopToBottom);
+    }
+}
+
+// ============================================================================
+// Diagnosticable Implementation
+// ============================================================================
+
+impl Diagnosticable for RenderShrinkWrappingViewport {
+    fn debug_fill_properties(&self, properties: &mut DiagnosticsBuilder) {
+        properties.add("axisDirection", format!("{:?}", self.axis_direction));
+        properties.add(
+            "crossAxisDirection",
+            format!("{:?}", self.cross_axis_direction),
+        );
+        properties.add("cacheExtent", self.cache_extent);
+        properties.add("childCount", self.child_count());
+    }
+}
+
+impl HitTestTarget for RenderShrinkWrappingViewport {
+    fn handle_event(&self, event: &PointerEvent, entry: &HitTestEntry) {
+        RenderObject::handle_event(self, event, entry);
     }
 }

@@ -13,6 +13,8 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
+use flui_foundation::{Diagnosticable, DiagnosticsBuilder};
+use flui_rendering::hit_testing::{HitTestEntry, HitTestTarget, PointerEvent};
 use parking_lot::RwLock;
 
 use flui_rendering::constraints::BoxConstraints;
@@ -369,4 +371,21 @@ fn test_current_behavior_only_processes_root() {
     // TODO: Add assertions that verify ALL nodes had layout called,
     // not just the root. This requires implementing layout_without_resize()
     // and iterating through dirty nodes.
+}
+
+// ============================================================================
+// Diagnosticable Implementation
+// ============================================================================
+
+impl Diagnosticable for TestRenderBox {
+    fn debug_fill_properties(&self, properties: &mut DiagnosticsBuilder) {
+        properties.add("name", &self.name);
+        properties.add("size", format!("{:?}", self.size));
+    }
+}
+
+impl HitTestTarget for TestRenderBox {
+    fn handle_event(&self, event: &PointerEvent, entry: &HitTestEntry) {
+        RenderObject::handle_event(self, event, entry);
+    }
 }

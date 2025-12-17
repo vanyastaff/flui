@@ -145,12 +145,4 @@ impl ParentData for SliverPhysicalParentData {
     fn detach(&mut self) {
         self.paint_offset = Offset::ZERO;
     }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-        self
-    }
 }

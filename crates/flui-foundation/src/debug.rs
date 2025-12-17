@@ -687,12 +687,14 @@ pub trait Diagnosticable: fmt::Debug {
     fn to_diagnostics_node(&self) -> DiagnosticsNode {
         let type_name = std::any::type_name::<Self>();
         let mut node = DiagnosticsNode::new(type_name);
-        self.debug_fill_properties(node.properties_mut());
+        let mut builder = DiagnosticsBuilder::new();
+        self.debug_fill_properties(&mut builder);
+        *node.properties_mut() = builder.build();
         node
     }
 
     /// Collect diagnostic properties.
-    fn debug_fill_properties(&self, _properties: &mut Vec<DiagnosticsProperty>) {
+    fn debug_fill_properties(&self, _properties: &mut DiagnosticsBuilder) {
         // Override in implementations
     }
 }

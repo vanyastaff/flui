@@ -48,7 +48,7 @@ impl BoxParentData {
     }
 }
 
-crate::impl_parent_data!(BoxParentData);
+impl crate::ParentData for BoxParentData {}
 
 // ============================================================================
 // ContainerBoxParentData
@@ -93,7 +93,7 @@ impl From<BoxParentData> for ContainerBoxParentData {
     }
 }
 
-crate::impl_parent_data!(ContainerBoxParentData);
+impl crate::ParentData for ContainerBoxParentData {}
 
 // ============================================================================
 // FlexParentData
@@ -137,7 +137,7 @@ impl Default for FlexParentData {
     }
 }
 
-crate::impl_parent_data!(FlexParentData);
+impl crate::ParentData for FlexParentData {}
 
 /// How a flexible child is inscribed into available space.
 ///
@@ -209,7 +209,7 @@ impl StackParentData {
     }
 }
 
-crate::impl_parent_data!(StackParentData);
+impl crate::ParentData for StackParentData {}
 
 // ============================================================================
 // WrapParentData
@@ -232,7 +232,7 @@ impl WrapParentData {
     }
 }
 
-crate::impl_parent_data!(WrapParentData);
+impl crate::ParentData for WrapParentData {}
 
 // ============================================================================
 // ListWheelParentData
@@ -269,7 +269,7 @@ impl ListWheelParentData {
     }
 }
 
-crate::impl_parent_data!(ListWheelParentData);
+impl crate::ParentData for ListWheelParentData {}
 
 // ============================================================================
 // MultiChildLayoutParentData
@@ -315,7 +315,7 @@ impl MultiChildLayoutParentData {
     }
 }
 
-crate::impl_parent_data!(MultiChildLayoutParentData);
+impl crate::ParentData for MultiChildLayoutParentData {}
 
 // ============================================================================
 // FlowParentData
@@ -363,7 +363,7 @@ impl FlowParentData {
     }
 }
 
-crate::impl_parent_data!(FlowParentData);
+impl crate::ParentData for FlowParentData {}
 
 // ============================================================================
 // TextParentData
@@ -476,7 +476,7 @@ impl TextParentData {
     }
 }
 
-crate::impl_parent_data!(TextParentData);
+impl crate::ParentData for TextParentData {}
 
 // ============================================================================
 // TableCellParentData
@@ -560,7 +560,7 @@ impl TableCellParentData {
     }
 }
 
-crate::impl_parent_data!(TableCellParentData);
+impl crate::ParentData for TableCellParentData {}
 
 // ============================================================================
 // ListBodyParentData
@@ -589,7 +589,7 @@ impl ListBodyParentData {
     }
 }
 
-crate::impl_parent_data!(ListBodyParentData);
+impl crate::ParentData for ListBodyParentData {}
 
 #[cfg(test)]
 mod tests {

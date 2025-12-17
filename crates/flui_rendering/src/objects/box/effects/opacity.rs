@@ -20,9 +20,10 @@
 //! - Size equals child's size (pass-through)
 //! - Child painted at same offset (no offset in parentData)
 
-use std::any::Any;
-
+use flui_foundation::{Diagnosticable, DiagnosticsBuilder};
 use flui_types::{Offset, Size};
+
+use crate::hit_testing::{HitTestEntry, HitTestTarget, PointerEvent};
 
 use crate::constraints::BoxConstraints;
 use crate::containers::BoxChild;
@@ -30,8 +31,8 @@ use crate::lifecycle::BaseRenderObject;
 use crate::parent_data::ParentData;
 use crate::pipeline::{PaintingContext, PipelineOwner};
 use crate::traits::{
-    BoxHitTestEntry, BoxHitTestResult, DiagnosticPropertiesBuilder, HitTestBehavior, RenderBox,
-    RenderObject, RenderProxyBox, SingleChildRenderBox, TextBaseline,
+    BoxHitTestEntry, BoxHitTestResult, HitTestBehavior, RenderBox, RenderObject, RenderProxyBox,
+    SingleChildRenderBox, TextBaseline,
 };
 
 /// Simple parent data for proxy boxes.
@@ -41,15 +42,7 @@ use crate::traits::{
 #[derive(Debug, Default)]
 struct SimpleParentData;
 
-impl ParentData for SimpleParentData {
-    fn detach(&mut self) {}
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
-    }
-}
+impl ParentData for SimpleParentData {}
 
 /// A render object that applies opacity to its child.
 ///
@@ -247,21 +240,6 @@ impl RenderObject for RenderOpacity {
         if let Some(child) = self.child.get_mut() {
             visitor(child);
         }
-    }
-
-    fn debug_fill_properties(&self, properties: &mut DiagnosticPropertiesBuilder) {
-        properties.add_string("opacity", format!("{:.2}", self.opacity));
-        if self.always_include_semantics {
-            properties.add_string("alwaysIncludeSemantics", "true".to_string());
-        }
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
     }
 }
 
@@ -465,5 +443,24 @@ mod tests {
     fn test_default() {
         let opacity = RenderOpacity::default();
         assert!(opacity.is_opaque());
+    }
+}
+
+// ============================================================================
+// Diagnosticable Implementation
+// ============================================================================
+
+impl Diagnosticable for RenderOpacity {
+    fn debug_fill_properties(&self, properties: &mut DiagnosticsBuilder) {
+        properties.add("opacity", format!("{:.2}", self.opacity));
+        if self.always_include_semantics {
+            properties.add("alwaysIncludeSemantics", true);
+        }
+    }
+}
+
+impl HitTestTarget for RenderOpacity {
+    fn handle_event(&self, event: &PointerEvent, entry: &HitTestEntry) {
+        RenderObject::handle_event(self, event, entry);
     }
 }

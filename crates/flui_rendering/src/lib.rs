@@ -138,10 +138,10 @@ pub mod prelude {
         SemanticsOwner, SemanticsTreeUpdate,
     };
     pub use crate::traits::{
-        MultiChildRenderBox, RenderAligningShiftedBox, RenderBox, RenderObject, RenderObjectExt,
-        RenderProxyBox, RenderProxySliver, RenderShiftedBox, RenderSliver,
-        RenderSliverMultiBoxAdaptor, RenderSliverPersistentHeader, RenderSliverSingleBoxAdapter,
-        SingleChildRenderBox, TextBaseline,
+        MultiChildRenderBox, RenderAligningShiftedBox, RenderBox, RenderObject, RenderProxyBox,
+        RenderProxySliver, RenderShiftedBox, RenderSliver, RenderSliverMultiBoxAdaptor,
+        RenderSliverPersistentHeader, RenderSliverSingleBoxAdapter, SingleChildRenderBox,
+        TextBaseline,
     };
     pub use crate::view::{
         CacheExtentStyle, CompositeResult, FixedViewportOffset, RenderAbstractViewport, RenderView,

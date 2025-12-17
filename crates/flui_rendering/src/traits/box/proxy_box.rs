@@ -200,19 +200,7 @@ pub trait RenderProxyBox: SingleChildRenderBox {
 #[derive(Debug, Default)]
 pub struct SimpleParentData;
 
-impl ParentData for SimpleParentData {
-    fn detach(&mut self) {
-        // Nothing to detach
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-        self
-    }
-}
+impl ParentData for SimpleParentData {}
 
 /// How to behave during hit testing.
 ///

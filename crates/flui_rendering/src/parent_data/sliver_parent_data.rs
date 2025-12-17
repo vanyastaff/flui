@@ -48,7 +48,7 @@ impl SliverParentData {
     }
 }
 
-crate::impl_parent_data!(SliverParentData);
+impl crate::ParentData for SliverParentData {}
 
 // ============================================================================
 // SliverPhysicalParentData
@@ -96,7 +96,7 @@ impl SliverPhysicalParentData {
     }
 }
 
-crate::impl_parent_data!(SliverPhysicalParentData);
+impl crate::ParentData for SliverPhysicalParentData {}
 
 // ============================================================================
 // SliverMultiBoxAdaptorParentData
@@ -138,7 +138,7 @@ impl SliverMultiBoxAdaptorParentData {
     }
 }
 
-crate::impl_parent_data!(SliverMultiBoxAdaptorParentData);
+impl crate::ParentData for SliverMultiBoxAdaptorParentData {}
 
 // ============================================================================
 // SliverGridParentData
@@ -170,7 +170,7 @@ pub struct SliverGridParentData {
     pub cross_axis_offset: Option<f32>,
 }
 
-crate::impl_parent_data!(SliverGridParentData);
+impl crate::ParentData for SliverGridParentData {}
 
 #[cfg(test)]
 mod tests {

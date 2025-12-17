@@ -2,143 +2,15 @@
 //!
 //! RenderObject is the base class for all objects in the render tree.
 
-use std::any::Any;
-use std::fmt::Debug;
-
-use flui_foundation::SemanticsId;
+use downcast_rs::{impl_downcast, DowncastSync};
+use flui_foundation::{Diagnosticable, DiagnosticsNode, SemanticsId};
 
 use crate::constraints::Constraints;
-
+use crate::hit_testing::HitTestTarget;
 use crate::lifecycle::BaseRenderObject;
 use crate::parent_data::ParentData;
 use crate::pipeline::PipelineOwner;
 use crate::semantics::{SemanticsConfiguration, SemanticsEvent, SemanticsNode};
-
-// ============================================================================
-// Diagnostic Types
-// ============================================================================
-
-/// Builder for diagnostic properties.
-///
-/// Used by `debug_fill_properties` to collect diagnostic information.
-///
-/// # Flutter Equivalence
-///
-/// Corresponds to Flutter's `DiagnosticPropertiesBuilder`.
-#[derive(Debug, Default)]
-pub struct DiagnosticPropertiesBuilder {
-    properties: Vec<DiagnosticProperty>,
-}
-
-impl DiagnosticPropertiesBuilder {
-    /// Creates a new builder.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Adds a string property.
-    pub fn add_string(&mut self, name: &str, value: impl Into<String>) {
-        self.properties.push(DiagnosticProperty {
-            name: name.to_string(),
-            value: DiagnosticValue::String(value.into()),
-        });
-    }
-
-    /// Adds a boolean property.
-    pub fn add_bool(&mut self, name: &str, value: bool) {
-        self.properties.push(DiagnosticProperty {
-            name: name.to_string(),
-            value: DiagnosticValue::Bool(value),
-        });
-    }
-
-    /// Adds an integer property.
-    pub fn add_int(&mut self, name: &str, value: i64) {
-        self.properties.push(DiagnosticProperty {
-            name: name.to_string(),
-            value: DiagnosticValue::Int(value),
-        });
-    }
-
-    /// Adds a float property.
-    pub fn add_float(&mut self, name: &str, value: f64) {
-        self.properties.push(DiagnosticProperty {
-            name: name.to_string(),
-            value: DiagnosticValue::Float(value),
-        });
-    }
-
-    /// Adds a flag property (shown only if true).
-    pub fn add_flag(&mut self, name: &str, value: bool) {
-        if value {
-            self.properties.push(DiagnosticProperty {
-                name: name.to_string(),
-                value: DiagnosticValue::Flag(value),
-            });
-        }
-    }
-
-    /// Returns the collected properties.
-    pub fn properties(&self) -> &[DiagnosticProperty] {
-        &self.properties
-    }
-
-    /// Consumes the builder and returns the properties.
-    pub fn into_properties(self) -> Vec<DiagnosticProperty> {
-        self.properties
-    }
-}
-
-/// A single diagnostic property.
-#[derive(Debug, Clone)]
-pub struct DiagnosticProperty {
-    /// Property name.
-    pub name: String,
-    /// Property value.
-    pub value: DiagnosticValue,
-}
-
-/// Value of a diagnostic property.
-#[derive(Debug, Clone)]
-pub enum DiagnosticValue {
-    /// String value.
-    String(String),
-    /// Boolean value.
-    Bool(bool),
-    /// Integer value.
-    Int(i64),
-    /// Float value.
-    Float(f64),
-    /// Flag value (only shown if true).
-    Flag(bool),
-}
-
-impl std::fmt::Display for DiagnosticValue {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::String(s) => write!(f, "{}", s),
-            Self::Bool(b) => write!(f, "{}", b),
-            Self::Int(i) => write!(f, "{}", i),
-            Self::Float(fl) => write!(f, "{}", fl),
-            Self::Flag(b) => write!(f, "{}", b),
-        }
-    }
-}
-
-/// A node in the diagnostics tree.
-///
-/// # Flutter Equivalence
-///
-/// Corresponds to Flutter's `DiagnosticsNode`.
-#[derive(Debug, Clone)]
-pub struct DiagnosticsNode {
-    /// Node name.
-    pub name: String,
-    /// Node description.
-    pub description: String,
-    /// Child properties.
-    pub properties: Vec<DiagnosticProperty>,
-}
 
 // ============================================================================
 // RenderObject Trait
@@ -167,7 +39,7 @@ pub struct DiagnosticsNode {
 ///
 /// All render objects must be `Send + Sync` to support parallel layout
 /// and rendering operations.
-pub trait RenderObject: Debug + Send + Sync + 'static {
+pub trait RenderObject: Diagnosticable + HitTestTarget + DowncastSync {
     // ========================================================================
     // Base State Access
     // ========================================================================
@@ -376,22 +248,9 @@ pub trait RenderObject: Debug + Send + Sync + 'static {
     /// This returns true if `mark_needs_layout()` has been called since the
     /// last time the render object was laid out.
     ///
-    /// # Flutter Equivalence
-    ///
-    /// This corresponds to Flutter's `RenderObject.debugNeedsLayout` getter.
-    ///
     /// Default implementation delegates to `base().needs_layout()`.
     fn needs_layout(&self) -> bool {
         self.base().needs_layout()
-    }
-
-    /// Alias for `needs_layout()` to match Flutter's debug naming.
-    ///
-    /// # Flutter Equivalence
-    ///
-    /// This corresponds to Flutter's `RenderObject.debugNeedsLayout` getter.
-    fn debug_needs_layout(&self) -> bool {
-        self.needs_layout()
     }
 
     /// Returns whether this render object needs to be repainted.
@@ -399,22 +258,9 @@ pub trait RenderObject: Debug + Send + Sync + 'static {
     /// This returns true if `mark_needs_paint()` has been called since the
     /// last time the render object was painted.
     ///
-    /// # Flutter Equivalence
-    ///
-    /// This corresponds to Flutter's `RenderObject.debugNeedsPaint` getter.
-    ///
     /// Default implementation delegates to `base().needs_paint()`.
     fn needs_paint(&self) -> bool {
         self.base().needs_paint()
-    }
-
-    /// Alias for `needs_paint()` to match Flutter's debug naming.
-    ///
-    /// # Flutter Equivalence
-    ///
-    /// This corresponds to Flutter's `RenderObject.debugNeedsPaint` getter.
-    fn debug_needs_paint(&self) -> bool {
-        self.needs_paint()
     }
 
     /// Returns whether this render object needs compositing bits update.
@@ -1026,23 +872,8 @@ pub trait RenderObject: Debug + Send + Sync + 'static {
     ///
     /// Repaint boundaries typically have their own layer. This getter
     /// provides access to that layer ID for compositing operations.
-    ///
-    /// # Flutter Equivalence
-    ///
-    /// This corresponds to Flutter's `RenderObject.layer` getter.
     fn layer_id(&self) -> Option<flui_foundation::LayerId> {
         None
-    }
-
-    /// Returns the compositing layer ID for debug purposes.
-    ///
-    /// This is the same as `layer_id()` but available for debug assertions.
-    ///
-    /// # Flutter Equivalence
-    ///
-    /// This corresponds to Flutter's `RenderObject.debugLayer` getter.
-    fn debug_layer_id(&self) -> Option<flui_foundation::LayerId> {
-        self.layer_id()
     }
 
     /// Replaces the root layer for this render object.
@@ -1339,83 +1170,18 @@ pub trait RenderObject: Debug + Send + Sync + 'static {
     // Debug Information
     // ========================================================================
 
-    /// Returns a human-readable description of this render object.
-    ///
-    /// Used for debugging and diagnostics.
-    fn describe(&self) -> String {
-        format!("{:?}", self)
-    }
-
-    /// Returns detailed diagnostic information about this render object.
-    ///
-    /// Used for debugging and developer tools.
-    fn to_debug_string(&self) -> String {
-        self.describe()
-    }
-
-    /// Add additional properties to the given property builder.
-    ///
-    /// Override this method to add diagnostic information about this object.
-    /// This is called by the debug tools to gather diagnostic data.
-    ///
-    /// # Flutter Equivalence
-    ///
-    /// This corresponds to Flutter's `RenderObject.debugFillProperties` method.
-    fn debug_fill_properties(&self, properties: &mut DiagnosticPropertiesBuilder) {
-        // Default: add basic information
-        properties.add_string("description", self.describe());
-        properties.add_bool("needsLayout", self.needs_layout());
-        properties.add_bool("needsPaint", self.needs_paint());
-        properties.add_bool("needsCompositing", self.needs_compositing());
-    }
-
     /// Returns a list of diagnostics describing this node's children.
     ///
     /// Override this method to provide information about children for debug tools.
-    ///
-    /// # Flutter Equivalence
-    ///
-    /// This corresponds to Flutter's `RenderObject.debugDescribeChildren` method.
     fn debug_describe_children(&self) -> Vec<DiagnosticsNode> {
         let mut children = Vec::new();
         let mut index = 0;
         self.visit_children(&mut |child| {
-            children.push(DiagnosticsNode {
-                name: format!("child {}", index),
-                description: child.describe(),
-                properties: Vec::new(),
-            });
+            children.push(DiagnosticsNode::new(format!("child {}", index)));
             index += 1;
         });
         children
     }
-
-    // ========================================================================
-    // Type Inspection
-    // ========================================================================
-
-    /// Returns self as `Any` for downcasting.
-    fn as_any(&self) -> &dyn Any;
-
-    /// Returns self as mutable `Any` for downcasting.
-    fn as_any_mut(&mut self) -> &mut dyn Any;
 }
 
-// ============================================================================
-// Helper Extensions
-// ============================================================================
-
-/// Extension trait for downcasting render objects.
-pub trait RenderObjectExt: RenderObject {
-    /// Attempts to downcast to a concrete type.
-    fn downcast_ref<T: RenderObject>(&self) -> Option<&T> {
-        self.as_any().downcast_ref::<T>()
-    }
-
-    /// Attempts to downcast to a concrete type mutably.
-    fn downcast_mut<T: RenderObject>(&mut self) -> Option<&mut T> {
-        self.as_any_mut().downcast_mut::<T>()
-    }
-}
-
-impl<T: RenderObject + ?Sized> RenderObjectExt for T {}
+impl_downcast!(sync RenderObject);

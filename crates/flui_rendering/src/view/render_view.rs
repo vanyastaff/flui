@@ -1,10 +1,12 @@
 //! RenderView - the root of the render tree.
 
-use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 
+use flui_foundation::{Diagnosticable, DiagnosticsBuilder};
 use parking_lot::RwLock;
+
+use crate::hit_testing::{HitTestEntry, HitTestResult, HitTestTarget, PointerEvent};
 
 use flui_types::{Matrix4, Offset, Rect, Size};
 
@@ -12,7 +14,6 @@ use crate::constraints::{BoxConstraints, Constraints};
 use crate::lifecycle::BaseRenderObject;
 
 use super::ViewConfiguration;
-use crate::hit_testing::{HitTestEntry, HitTestResult};
 use crate::pipeline::{PaintingContext, PipelineOwner};
 use crate::traits::BoxHitTestResult;
 use crate::traits::{RenderBox, RenderObject};
@@ -613,13 +614,7 @@ impl RenderObject for RenderView {
         }
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
-    }
 
     fn mark_parent_needs_layout(&mut self) {
         // RenderView is the root, so no parent to mark
@@ -747,5 +742,24 @@ mod tests {
         // Should have DPR scaling applied (column-major: [0] = scale_x, [5] = scale_y)
         assert!((transform[0] - 2.0).abs() < 1e-6);
         assert!((transform[5] - 2.0).abs() < 1e-6);
+    }
+}
+
+// ============================================================================
+// Diagnosticable Implementation
+// ============================================================================
+
+impl Diagnosticable for RenderView {
+    fn debug_fill_properties(&self, properties: &mut DiagnosticsBuilder) {
+        properties.add("size", format!("{:?}", self.size));
+        if let Some(ref config) = self.configuration {
+            properties.add("devicePixelRatio", config.device_pixel_ratio());
+        }
+    }
+}
+
+impl HitTestTarget for RenderView {
+    fn handle_event(&self, event: &PointerEvent, entry: &HitTestEntry) {
+        RenderObject::handle_event(self, event, entry);
     }
 }

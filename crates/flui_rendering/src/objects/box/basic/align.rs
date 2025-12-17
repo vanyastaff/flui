@@ -22,9 +22,10 @@
 //! - Parent sets offset via `set_child_offset(child, offset)` during layout
 //! - `paint()` and `hitTestChildren()` read offset from child.parentData
 
-use std::any::Any;
-
+use flui_foundation::{Diagnosticable, DiagnosticsBuilder};
 use flui_types::{Alignment, Offset, Size};
+
+use crate::hit_testing::{HitTestEntry, HitTestTarget, PointerEvent};
 
 use crate::constraints::BoxConstraints;
 use crate::containers::BoxChild;
@@ -32,8 +33,8 @@ use crate::lifecycle::BaseRenderObject;
 use crate::parent_data::BoxParentData;
 use crate::pipeline::{PaintingContext, PipelineOwner};
 use crate::traits::{
-    set_child_offset, BoxHitTestResult, DiagnosticPropertiesBuilder, RenderAligningShiftedBox,
-    RenderBox, RenderObject, RenderShiftedBox, SingleChildRenderBox, TextBaseline,
+    set_child_offset, BoxHitTestResult, RenderAligningShiftedBox, RenderBox, RenderObject,
+    RenderShiftedBox, SingleChildRenderBox, TextBaseline,
 };
 // TextDirection is defined in aligning_shifted_box.rs
 pub use crate::traits::r#box::TextDirection;
@@ -227,24 +228,6 @@ impl RenderObject for RenderAlign {
         if let Some(child) = self.child.get_mut() {
             visitor(child);
         }
-    }
-
-    fn debug_fill_properties(&self, properties: &mut DiagnosticPropertiesBuilder) {
-        properties.add_string("alignment", format!("{:?}", self.alignment));
-        if let Some(wf) = self.width_factor {
-            properties.add_string("widthFactor", format!("{}", wf));
-        }
-        if let Some(hf) = self.height_factor {
-            properties.add_string("heightFactor", format!("{}", hf));
-        }
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
     }
 }
 
@@ -558,5 +541,27 @@ mod tests {
         let resolved = align.resolved_alignment();
         assert_eq!(resolved.x, -1.0); // Flipped to left
         assert_eq!(resolved.y, 0.0);
+    }
+}
+
+// ============================================================================
+// Diagnosticable Implementation
+// ============================================================================
+
+impl Diagnosticable for RenderAlign {
+    fn debug_fill_properties(&self, properties: &mut DiagnosticsBuilder) {
+        properties.add("alignment", format!("{:?}", self.alignment));
+        if let Some(wf) = self.width_factor {
+            properties.add("widthFactor", wf);
+        }
+        if let Some(hf) = self.height_factor {
+            properties.add("heightFactor", hf);
+        }
+    }
+}
+
+impl HitTestTarget for RenderAlign {
+    fn handle_event(&self, event: &PointerEvent, entry: &HitTestEntry) {
+        RenderObject::handle_event(self, event, entry);
     }
 }
