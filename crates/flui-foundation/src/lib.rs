@@ -8,7 +8,7 @@
 //!
 //! FLUI Foundation contains:
 //! - **Tree IDs**: `ViewId`, `ElementId`, `RenderId`, `LayerId`, `SemanticsId` for the 5-tree architecture
-//! - **Keys**: `Key`, `ValueKey`, `ObjectKey`, `UniqueKey`, `GlobalKey` for widget identity
+//! - **Keys**: `Key`, `ValueKey`, `UniqueKey` for widget identity (ObjectKey/GlobalKey in flui-view)
 //! - **Change Notification**: Observable patterns for reactive UI updates
 //! - **Callbacks**: `VoidCallback`, `ValueChanged`, and other callback type aliases
 //! - **Platform**: `TargetPlatform` for platform detection
@@ -138,6 +138,7 @@ pub mod id;
 pub mod key;
 pub mod observer;
 pub mod platform;
+pub mod wasm;
 
 // Reactive programming - change notification and observables
 pub mod notifier;
@@ -152,9 +153,50 @@ pub mod error;
 
 // Core types - IDs for all tree levels
 pub use id::{
-    ElementId, Identifier, LayerId, ListenerId, ObserverId, RenderId, SemanticsId, ViewId,
+    // Marker types module
+    markers,
+    // Animation/Scheduler IDs
+    AnimationId,
+    // Platform/System IDs
+    DeviceId,
+    // Debug/Inspector IDs
+    DiagnosticsId,
+    // Core tree IDs (5-tree architecture)
+    ElementId,
+    EmbedderId,
+    // Group/Region IDs
+    FocusId,
+    FrameCallbackId,
+    // Gesture IDs
+    GestureId,
+    GroupId,
+    // Generic ID system
+    Id,
+    Identifier,
+    Index,
+    // Keyboard IDs
+    KeyId,
+    LayerId,
+    // Listener/Observer IDs
+    ListenerId,
+    LocationId,
+    Marker,
+    MotionEventId,
+    ObserverId,
+    PlatformViewId,
+    PointerId,
+    ProductId,
+    RawId,
+    RenderId,
+    // Navigation/Restoration IDs
+    RestorationScopeId,
+    RouteId,
+    SemanticsId,
+    TextureId,
+    VendorId,
+    ViewId,
 };
-pub use key::{GlobalKey, Key, KeyRef, Keyed, ObjectKey, UniqueKey, ValueKey, ViewKey, WithKey};
+pub use key::{Key, KeyRef, Keyed, UniqueKey, ValueKey, ViewKey, WithKey};
 
 // Constants
 pub use consts::{
@@ -194,6 +236,9 @@ pub use debug::{
 // Error handling
 pub use error::{FoundationError, Result};
 
+// WASM compatibility
+pub use wasm::{WasmNotSend, WasmNotSendSync};
+
 // ============================================================================
 // PRELUDE
 // ============================================================================
@@ -222,12 +267,13 @@ pub mod prelude {
         // Assertions
         FluiError,
         // Keys
-        GlobalKey,
         HasInstance,
         // Observer lists
         HashedObserverList,
-        // Identifier trait
+        // Generic ID system
+        Id,
         Identifier,
+        Index,
         Key,
         KeyRef,
         Keyed,
@@ -236,7 +282,7 @@ pub mod prelude {
         ListenerCallback,
         ListenerId,
         MergedListenable,
-        ObjectKey,
+
         ObserverId,
         ObserverList,
         Predicate,

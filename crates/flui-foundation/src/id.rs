@@ -1,31 +1,24 @@
-//! Type-safe IDs for all tree levels
+//! Type-safe IDs for all tree levels using marker trait pattern.
 //!
-// Allow unsafe code in this module - it's required for NonZeroUsize::new_unchecked
-// which provides a const unsafe constructor for performance-critical ID creation.
-#![allow(unsafe_code)]
+//! This module provides a generic `Id<T>` type with marker traits for type-safe
+//! identification across different subsystems. Inspired by wgpu's ID system.
 //!
-//! Flui uses a 5-tree architecture similar to Flutter:
-//! - **View**: Immutable configuration (like Flutter's Widget)
-//! - **Element**: Mutable lifecycle management
-//! - **Render**: Layout and painting
-//! - **Layer**: Compositing and GPU optimization
-//! - **Semantics**: Accessibility information for assistive technologies
+//! # Architecture
 //!
-//! All IDs use `NonZeroUsize` for niche optimization:
-//! - `Option<Id>` is same size as `Id` (no extra byte needed)
-//! - Prevents 0 from being a valid ID (reserved for sentinel)
-//! - IDs are reused after removal (slab behavior)
+//! ```text
+//! RawId (NonZeroUsize) ─► Id<T: Marker> ─► ViewId, ElementId, etc.
+//! ```
 //!
 //! # Design Notes
 //!
-//! These IDs are indices into `Slab` collections. They remain valid until
-//! the corresponding item is removed, at which point the ID may be reused.
-//! Always verify an ID is still valid before dereferencing.
+//! - All IDs use `NonZeroUsize` for niche optimization (`Option<Id>` = `Id` size)
+//! - Marker traits provide type safety between different ID domains
+//! - IDs are indices into `Slab` collections (valid until item removed)
 //!
 //! # Examples
 //!
 //! ```rust
-//! use flui_foundation::{ViewId, ElementId, RenderId, LayerId, SemanticsId};
+//! use flui_foundation::{ViewId, ElementId, RenderId};
 //!
 //! // All IDs have same size as Option<Id> (niche optimization)
 //! assert_eq!(
@@ -41,48 +34,394 @@
 //! let maybe_id = ViewId::new_checked(0); // None
 //! let valid_id = ViewId::new_checked(1); // Some(ViewId(1))
 //! ```
+#![allow(unsafe_code)]
 
-use std::hash::Hash;
-use std::num::NonZeroUsize;
+use crate::WasmNotSendSync;
+use core::{
+    cmp::Ordering,
+    fmt::{self, Debug, Display},
+    hash::{Hash, Hasher},
+    marker::PhantomData,
+    num::NonZeroUsize,
+};
 
 // =========================================================================
-// TreeId Trait - Common interface for all tree node identifiers
+// Compile-time size assertions
 // =========================================================================
 
-/// Common trait for all tree node identifiers.
+const _: () = {
+    // RawId must be pointer-sized for efficient passing
+    assert!(size_of::<RawId>() == size_of::<usize>());
+};
+
+const _: () = {
+    // Option<RawId> must have same size (niche optimization)
+    assert!(size_of::<RawId>() == size_of::<Option<RawId>>());
+};
+
+// =========================================================================
+// Index type alias (for slab indices)
+// =========================================================================
+
+/// Index type for slab-based storage.
 ///
-/// This trait provides a unified interface for ID types used in tree structures,
-/// enabling generic tree algorithms to work with any ID type (`ViewId`, `ElementId`,
-/// `RenderId`, etc.).
+/// This is the raw index value before being wrapped in `RawId`.
+pub type Index = usize;
+
+// =========================================================================
+// RawId - The underlying representation
+// =========================================================================
+
+/// The raw underlying representation of an identifier.
 ///
-/// # Design
+/// Uses `NonZeroUsize` for niche optimization - `Option<RawId>` has the same
+/// size as `RawId` because the compiler uses 0 as the `None` representation.
+#[repr(transparent)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct RawId(NonZeroUsize);
+
+impl RawId {
+    /// Zip an index into a RawId.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `index` is 0 (reserved for sentinel/None).
+    #[inline]
+    #[track_caller]
+    pub fn zip(index: Index) -> Self {
+        Self(NonZeroUsize::new(index).expect("ID index must be non-zero"))
+    }
+
+    /// Unzip a RawId back to its index.
+    #[inline]
+    pub const fn unzip(self) -> Index {
+        self.0.get()
+    }
+
+    /// Creates a RawId without checking for zero.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that `index` is not 0.
+    #[inline]
+    pub const unsafe fn zip_unchecked(index: Index) -> Self {
+        // SAFETY: Caller guarantees index is non-zero
+        Self(NonZeroUsize::new_unchecked(index))
+    }
+
+    /// Creates a RawId, returning `None` if index is 0.
+    #[inline]
+    pub const fn try_zip(index: Index) -> Option<Self> {
+        match NonZeroUsize::new(index) {
+            Some(nz) => Some(Self(nz)),
+            None => None,
+        }
+    }
+}
+
+impl Debug for RawId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "RawId({})", self.unzip())
+    }
+}
+
+impl Display for RawId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.unzip())
+    }
+}
+
+impl From<NonZeroUsize> for RawId {
+    #[inline]
+    fn from(value: NonZeroUsize) -> Self {
+        Self(value)
+    }
+}
+
+impl From<RawId> for Index {
+    #[inline]
+    fn from(id: RawId) -> Self {
+        id.unzip()
+    }
+}
+
+// =========================================================================
+// Marker trait
+// =========================================================================
+
+/// Marker trait for ID type discrimination.
 ///
-/// Uses generic parameter pattern for trait bounds:
-/// - Clean trait bounds: `TreeRead<I>` where `I: Identifier`
-/// - Composable: `trait DirtyTracking<I>: TreeNav<I>`
-/// - Flexible: same tree can work with different ID types
+/// Each resource type defines its own marker, ensuring that IDs for different
+/// resources cannot be confused. The marker is a zero-sized type that exists
+/// only at compile time.
+///
+/// Uses `WasmNotSendSync` for WASM compatibility - on native requires `Send + Sync`,
+/// on WASM (single-threaded) has no thread-safety requirements.
+///
+/// # Example
+///
+/// ```rust
+/// use flui_foundation::Marker;
+///
+/// // Define a custom marker for a new resource type
+/// #[derive(Debug)]
+/// pub enum CustomMarker {}
+/// impl Marker for CustomMarker {}
+/// ```
+pub trait Marker: 'static + WasmNotSendSync + Debug {}
+
+// =========================================================================
+// Id<T> - The generic typed identifier
+// =========================================================================
+
+/// A type-safe identifier for a specific resource type.
+///
+/// `Id<T>` wraps a `RawId` with a marker type `T` that ensures IDs for different
+/// resource types cannot be mixed up at compile time.
+///
+/// # Type Safety
+///
+/// ```compile_fail
+/// use flui_foundation::{ViewId, ElementId};
+///
+/// let view_id = ViewId::new(1);
+/// let element_id: ElementId = view_id; // Compile error!
+/// ```
 ///
 /// # Examples
 ///
 /// ```rust
-/// use flui_foundation::{Identifier, ElementId, ViewId};
+/// use flui_foundation::{ViewId, ElementId};
 ///
-/// fn print_id<I: Identifier>(id: I) {
-///     println!("ID value: {}", id.get());
-/// }
+/// let view = ViewId::zip(1);
+/// let element = ElementId::zip(1);
 ///
-/// print_id(ElementId::new(1));
-/// print_id(ViewId::new(2));
+/// // Same underlying value, but different types
+/// assert_eq!(view.unzip(), element.unzip());
+/// // assert_eq!(view, element); // Would not compile!
 /// ```
+#[repr(transparent)]
+pub struct Id<T: Marker>(RawId, PhantomData<T>);
+
+impl<T: Marker> Id<T> {
+    /// Creates an ID from a raw ID.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure the raw ID is valid for this marker type.
+    #[inline]
+    pub const unsafe fn from_raw(raw: RawId) -> Self {
+        Self(raw, PhantomData)
+    }
+
+    /// Coerce the identifier into its raw underlying representation.
+    #[inline]
+    pub const fn into_raw(self) -> RawId {
+        self.0
+    }
+
+    /// Zip an index into an Id.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `index` is 0.
+    #[inline]
+    #[track_caller]
+    pub fn zip(index: Index) -> Self {
+        Self(RawId::zip(index), PhantomData)
+    }
+
+    /// Unzip an Id back to its index.
+    #[inline]
+    pub const fn unzip(self) -> Index {
+        self.0.unzip()
+    }
+
+    /// Creates an ID without checking for zero.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that `index` is not 0.
+    #[inline]
+    pub const unsafe fn zip_unchecked(index: Index) -> Self {
+        // SAFETY: Caller guarantees index is non-zero
+        Self(RawId::zip_unchecked(index), PhantomData)
+    }
+
+    /// Creates an ID, returning `None` if index is 0.
+    #[inline]
+    pub const fn try_zip(index: Index) -> Option<Self> {
+        match RawId::try_zip(index) {
+            Some(raw) => Some(Self(raw, PhantomData)),
+            None => None,
+        }
+    }
+
+    // =========================================================================
+    // Convenience aliases (for easier migration from old API)
+    // =========================================================================
+
+    /// Alias for `zip` - creates an ID from an index.
+    #[inline]
+    #[track_caller]
+    pub fn new(index: Index) -> Self {
+        Self::zip(index)
+    }
+
+    /// Alias for `unzip` - returns the index.
+    #[inline]
+    pub const fn get(self) -> Index {
+        self.unzip()
+    }
+
+    /// Alias for `try_zip` - creates an ID if index is non-zero.
+    #[inline]
+    pub const fn new_checked(index: Index) -> Option<Self> {
+        Self::try_zip(index)
+    }
+
+    /// Alias for `zip_unchecked`.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that `index` is not 0.
+    #[inline]
+    pub const unsafe fn new_unchecked(index: Index) -> Self {
+        // SAFETY: Caller guarantees index is non-zero
+        Self::zip_unchecked(index)
+    }
+}
+
+// Manual trait implementations to avoid requiring T: Trait bounds
+
+impl<T: Marker> Copy for Id<T> {}
+
+impl<T: Marker> Clone for Id<T> {
+    #[inline]
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T: Marker> Debug for Id<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let type_name = core::any::type_name::<T>();
+        let marker_name = type_name.rsplit("::").next().unwrap_or(type_name);
+        write!(f, "Id<{}>({})", marker_name, self.unzip())
+    }
+}
+
+impl<T: Marker> Display for Id<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let type_name = core::any::type_name::<T>();
+        let marker_name = type_name.rsplit("::").next().unwrap_or(type_name);
+        write!(f, "{}({})", marker_name, self.unzip())
+    }
+}
+
+impl<T: Marker> Hash for Id<T> {
+    #[inline]
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.0.hash(state);
+    }
+}
+
+impl<T: Marker> PartialEq for Id<T> {
+    #[inline]
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+
+impl<T: Marker> Eq for Id<T> {}
+
+impl<T: Marker> PartialOrd for Id<T> {
+    #[inline]
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<T: Marker> Ord for Id<T> {
+    #[inline]
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.0.cmp(&other.0)
+    }
+}
+
+// Conversions
+
+impl<T: Marker> From<NonZeroUsize> for Id<T> {
+    #[inline]
+    fn from(value: NonZeroUsize) -> Self {
+        Self(RawId::from(value), PhantomData)
+    }
+}
+
+impl<T: Marker> From<Id<T>> for Index {
+    #[inline]
+    fn from(id: Id<T>) -> Self {
+        id.unzip()
+    }
+}
+
+impl<T: Marker> From<Id<T>> for RawId {
+    #[inline]
+    fn from(id: Id<T>) -> Self {
+        id.0
+    }
+}
+
+// Arithmetic operations (for bitmap indexing in dirty tracking)
+
+impl<T: Marker> core::ops::Sub<Index> for Id<T> {
+    type Output = Index;
+
+    #[inline]
+    fn sub(self, rhs: Index) -> Index {
+        self.unzip() - rhs
+    }
+}
+
+impl<T: Marker> core::ops::Add<Index> for Id<T> {
+    type Output = Self;
+
+    #[inline]
+    fn add(self, rhs: Index) -> Self {
+        Self::zip(self.unzip() + rhs)
+    }
+}
+
+// Test-only: Allow creating from usize for convenience
+#[cfg(test)]
+impl<T: Marker> From<Index> for Id<T> {
+    fn from(index: Index) -> Self {
+        Self::zip(index)
+    }
+}
+
+// =========================================================================
+// Identifier trait alias (for backwards compatibility with flui-tree)
+// =========================================================================
+
+/// Trait alias for ID types usable in tree structures.
 ///
-/// # Generic Tree Functions
+/// This provides a convenient bound for generic tree algorithms that need
+/// to work with any ID type (`ViewId`, `ElementId`, `RenderId`, etc.).
+///
+/// All `Id<T: Marker>` types automatically implement this trait.
+///
+/// # Example
 ///
 /// ```rust
-/// use flui_foundation::Identifier;
+/// use flui_foundation::{Identifier, ElementId, ViewId};
 ///
-/// fn validate_ids<I: Identifier>(ids: &[I]) -> bool {
-///     ids.iter().all(|id| id.get() > 0)
+/// fn process_id<I: Identifier>(id: I) -> usize {
+///     id.into()
 /// }
+///
+/// assert_eq!(process_id(ElementId::zip(42)), 42);
+/// assert_eq!(process_id(ViewId::zip(99)), 99);
 /// ```
 pub trait Identifier:
     Copy
@@ -92,344 +431,276 @@ pub trait Identifier:
     + Ord
     + PartialOrd
     + Hash
-    + std::fmt::Debug
-    + std::fmt::Display
+    + Debug
+    + Display
+    + Into<Index>
     + Send
     + Sync
     + 'static
 {
-    /// Creates a new ID from a non-zero usize.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `value` is 0.
-    fn new(value: usize) -> Self;
+    /// Returns the underlying index value.
+    fn get(self) -> Index;
 
-    /// Creates a new ID from a usize, returning `None` if 0.
-    fn new_checked(value: usize) -> Option<Self>;
+    /// Creates an ID from an index, panics if zero.
+    fn zip(index: Index) -> Self;
 
-    /// Returns the inner usize value.
-    fn get(self) -> usize;
+    /// Creates an ID from an index, returns None if zero.
+    fn try_zip(index: Index) -> Option<Self>;
+}
 
-    /// Creates an ID without checking if the value is non-zero.
-    ///
-    /// # Safety
-    ///
-    /// The caller must ensure that `value` is not 0.
-    unsafe fn new_unchecked(value: usize) -> Self;
+// Blanket implementation for all Id<T> types
+impl<T: Marker> Identifier for Id<T> {
+    #[inline]
+    fn get(self) -> Index {
+        self.unzip()
+    }
+
+    #[inline]
+    fn zip(index: Index) -> Self {
+        Id::zip(index)
+    }
+
+    #[inline]
+    fn try_zip(index: Index) -> Option<Self> {
+        Id::try_zip(index)
+    }
 }
 
 // =========================================================================
-// Macro for defining ID types
+// Marker types and type aliases
 // =========================================================================
 
-macro_rules! define_id {
-    (
+/// Define marker types and ID type aliases.
+macro_rules! ids {
+    ($(
         $(#[$meta:meta])*
-        $vis:vis struct $name:ident;
-    ) => {
-        $(#[$meta])*
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-        #[repr(transparent)]
-        #[must_use = "IDs should be used for tree node identification"]
-        $vis struct $name(NonZeroUsize);
-
-        impl $name {
-            /// Create a new ID from a non-zero usize.
-            ///
-            /// # Panics
-            ///
-            /// Panics if `id` is 0. Zero is reserved for sentinel values
-            /// and cannot be used as a valid ID.
-            ///
-            /// If you need to handle 0, use [`new_checked()`](Self::new_checked) instead.
-            #[inline]
-            #[track_caller]
-            pub fn new(id: usize) -> Self {
-                Self(NonZeroUsize::new(id).unwrap_or_else(|| {
-                    panic!(
-                        "{}::new() called with 0, which is not a valid ID.\n\
-                        \n\
-                        {} uses NonZeroUsize internally, so 0 is reserved for sentinel values.\n\
-                        \n\
-                        To handle potentially-zero values, use {}::new_checked() instead:\n\
-                        ```\n\
-                        match {}::new_checked(id) {{\n\
-                            Some(id) => /* use id */,\n\
-                            None => /* handle zero case */,\n\
-                        }}\n\
-                        ```",
-                        stringify!($name),
-                        stringify!($name),
-                        stringify!($name),
-                        stringify!($name)
-                    )
-                }))
-            }
-
-            /// Create a new ID from a usize, returning None if 0.
-            #[inline]
-            pub const fn new_checked(id: usize) -> Option<Self> {
-                match NonZeroUsize::new(id) {
-                    Some(nz) => Some(Self(nz)),
-                    None => None,
-                }
-            }
-
-            /// Get the inner usize value.
-            #[inline]
-            pub const fn get(self) -> usize {
-                self.0.get()
-            }
-
-            /// Create an ID without checking if the value is non-zero.
-            ///
-            /// # Safety
-            ///
-            /// The caller must ensure that `id` is not 0.
-            #[inline]
-            pub const unsafe fn new_unchecked(id: usize) -> Self {
-                // SAFETY: Caller must ensure id is non-zero
-                unsafe { Self(NonZeroUsize::new_unchecked(id)) }
-            }
+        pub type $name:ident $marker:ident;
+    )*) => {
+        /// Marker types for each resource.
+        ///
+        /// These are zero-sized enum types that exist only at compile time
+        /// to provide type safety between different ID domains.
+        pub mod markers {
+            $(
+                #[doc = concat!("Marker type for [`", stringify!($name), "`](super::", stringify!($name), ").")]
+                #[derive(Debug)]
+                pub enum $marker {}
+                impl super::Marker for $marker {}
+            )*
         }
 
-        // Conversions
-        impl From<NonZeroUsize> for $name {
-            #[inline]
-            fn from(id: NonZeroUsize) -> Self {
-                Self(id)
-            }
-        }
-
-        impl From<$name> for usize {
-            #[inline]
-            fn from(id: $name) -> usize {
-                id.get()
-            }
-        }
-
-        // Display for debugging
-        impl std::fmt::Display for $name {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                write!(f, "{}({})", stringify!($name), self.get())
-            }
-        }
-
-        // Arithmetic operations (for bitmap indexing in dirty tracking)
-        impl std::ops::Sub<usize> for $name {
-            type Output = usize;
-
-            #[inline]
-            fn sub(self, rhs: usize) -> usize {
-                self.get() - rhs
-            }
-        }
-
-        impl std::ops::Add<usize> for $name {
-            type Output = $name;
-
-            #[inline]
-            fn add(self, rhs: usize) -> $name {
-                $name::new(self.get() + rhs)
-            }
-        }
-
-        // Serde support (feature gated)
-        #[cfg(feature = "serde")]
-        impl serde::Serialize for $name {
-            fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-            where
-                S: serde::Serializer,
-            {
-                serializer.serialize_u64(self.get() as u64)
-            }
-        }
-
-        #[cfg(feature = "serde")]
-        impl<'de> serde::Deserialize<'de> for $name {
-            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-            where
-                D: serde::Deserializer<'de>,
-            {
-                let id = u64::deserialize(deserializer)?;
-                if id == 0 {
-                    return Err(serde::de::Error::custom(concat!(
-                        stringify!($name),
-                        " cannot be zero (uses NonZeroUsize internally)"
-                    )));
-                }
-
-                // Convert to usize (may truncate on 32-bit systems)
-                #[allow(clippy::cast_possible_truncation)]
-                let id_usize = id as usize;
-                if id_usize == 0 {
-                    return Err(serde::de::Error::custom(concat!(
-                        stringify!($name),
-                        " overflowed when converting from u64 to usize"
-                    )));
-                }
-
-                Ok(Self::new(id_usize))
-            }
-        }
-
-        // Test-only: Allow creating from usize for convenience
-        #[cfg(test)]
-        impl From<usize> for $name {
-            fn from(id: usize) -> Self {
-                Self::new(id)
-            }
-        }
-
-        // Identifier implementation for generic tree algorithms
-        impl Identifier for $name {
-            #[inline]
-            fn new(value: usize) -> Self {
-                Self::new(value)
-            }
-
-            #[inline]
-            fn new_checked(value: usize) -> Option<Self> {
-                Self::new_checked(value)
-            }
-
-            #[inline]
-            fn get(self) -> usize {
-                self.get()
-            }
-
-            #[inline]
-            unsafe fn new_unchecked(value: usize) -> Self {
-                // SAFETY: Caller ensures value is non-zero
-                unsafe { Self::new_unchecked(value) }
-            }
-        }
-    };
+        $(
+            $(#[$meta])*
+            pub type $name = Id<markers::$marker>;
+        )*
+    }
 }
 
-// =========================================================================
-// ID Type Definitions
-// =========================================================================
+ids! {
+    // =====================================================================
+    // Core Tree IDs (5-tree architecture)
+    // =====================================================================
 
-define_id! {
-    /// View ID - stable index into the View tree
+    /// View ID - index into the View tree.
     ///
     /// Views are immutable configuration objects (like Flutter's Widgets).
     /// They describe what the UI should look like but don't contain mutable state.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use flui_foundation::ViewId;
-    ///
-    /// let id = ViewId::new(1);
-    /// assert_eq!(id.get(), 1);
-    /// ```
-    pub struct ViewId;
-}
+    pub type ViewId View;
 
-define_id! {
-    /// Element ID - stable index into the Element tree
+    /// Element ID - index into the Element tree.
     ///
     /// Elements are the mutable counterparts to Views. They manage lifecycle,
-    /// hold state between rebuilds, and coordinate updates between Views and `RenderObjects`.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use flui_foundation::ElementId;
-    ///
-    /// let id = ElementId::new(1);
-    /// assert_eq!(id.get(), 1);
-    /// ```
-    pub struct ElementId;
-}
+    /// hold state between rebuilds, and coordinate updates.
+    pub type ElementId Element;
 
-define_id! {
-    /// Render ID - stable index into the `RenderObject` tree
+    /// Render ID - index into the RenderObject tree.
     ///
-    /// `RenderObjects` handle layout and painting. They form a separate tree
+    /// RenderObjects handle layout and painting. They form a separate tree
     /// optimized for performance-critical operations.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use flui_foundation::RenderId;
-    ///
-    /// let id = RenderId::new(1);
-    /// assert_eq!(id.get(), 1);
-    /// ```
-    pub struct RenderId;
-}
+    pub type RenderId Render;
 
-define_id! {
-    /// Layer ID - stable index into the Layer tree
+    /// Layer ID - index into the Layer tree.
     ///
-    /// Layers handle compositing and GPU optimization. They're created at
-    /// repaint boundaries and cached for efficient rendering.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use flui_foundation::LayerId;
-    ///
-    /// let id = LayerId::new(1);
-    /// assert_eq!(id.get(), 1);
-    /// ```
-    pub struct LayerId;
-}
+    /// Layers handle compositing and GPU optimization. Created at repaint
+    /// boundaries and cached for efficient rendering.
+    pub type LayerId Layer;
 
-define_id! {
-    /// Semantics ID - stable index into the Semantics tree
+    /// Semantics ID - index into the Semantics tree.
     ///
-    /// `SemanticsNodes` provide accessibility information for screen readers
-    /// and other assistive technologies. The semantics tree is built in
-    /// parallel with the layer tree during the paint phase.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use flui_foundation::SemanticsId;
-    ///
-    /// let id = SemanticsId::new(1);
-    /// assert_eq!(id.get(), 1);
-    /// ```
-    pub struct SemanticsId;
-}
+    /// SemanticsNodes provide accessibility information for screen readers
+    /// and other assistive technologies.
+    pub type SemanticsId Semantics;
 
-define_id! {
-    /// Listener ID - unique identifier for registered listeners
+    // =====================================================================
+    // Listener/Observer IDs
+    // =====================================================================
+
+    /// Listener ID - identifier for registered listeners.
     ///
     /// Used by `ChangeNotifier` and `Listenable` to track registered callbacks.
-    /// Each listener gets a unique ID that can be used to remove it later.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use flui_foundation::ListenerId;
-    ///
-    /// let id = ListenerId::new(1);
-    /// assert_eq!(id.get(), 1);
-    /// ```
-    pub struct ListenerId;
-}
+    pub type ListenerId Listener;
 
-define_id! {
-    /// Observer ID - unique identifier for registered observers
+    /// Observer ID - identifier for registered observers.
     ///
     /// Used by `ObserverList` to track registered observers.
-    /// Similar to `ListenerId` but for the observer pattern.
+    pub type ObserverId Observer;
+
+    // =====================================================================
+    // Platform/System IDs (from Flutter)
+    // =====================================================================
+
+    /// Texture ID - GPU texture identifier.
     ///
-    /// # Examples
+    /// References a texture registered with the engine for external content
+    /// like video frames or platform views.
+    pub type TextureId Texture;
+
+    /// Platform View ID - native view identifier.
     ///
-    /// ```rust
-    /// use flui_foundation::ObserverId;
+    /// References a native platform view embedded in the Flutter view hierarchy.
+    pub type PlatformViewId PlatformView;
+
+    /// Device ID - input device identifier.
     ///
-    /// let id = ObserverId::new(1);
-    /// assert_eq!(id.get(), 1);
-    /// ```
-    pub struct ObserverId;
+    /// Identifies different input devices (keyboards, mice, touch screens).
+    pub type DeviceId Device;
+
+    /// Pointer ID - pointer/touch identifier.
+    ///
+    /// Tracks individual touch points or pointer devices in multi-touch scenarios.
+    pub type PointerId Pointer;
+
+    /// Embedder ID - embedder identifier.
+    ///
+    /// Identifies the embedder that generated an event (for multi-view scenarios).
+    pub type EmbedderId Embedder;
+
+    // =====================================================================
+    // Keyboard IDs
+    // =====================================================================
+
+    /// Key ID - logical keyboard key identifier.
+    ///
+    /// Represents a logical key independent of physical keyboard layout.
+    pub type KeyId Key;
+
+    /// Vendor ID - hardware vendor identifier.
+    ///
+    /// Identifies the manufacturer of an input device.
+    pub type VendorId Vendor;
+
+    /// Product ID - hardware product identifier.
+    ///
+    /// Identifies a specific product model from a vendor.
+    pub type ProductId Product;
+
+    // =====================================================================
+    // Navigation/Restoration IDs
+    // =====================================================================
+
+    /// Restoration Scope ID - state restoration scope identifier.
+    ///
+    /// Used for state restoration to track restoration scopes across app restarts.
+    pub type RestorationScopeId RestorationScope;
+
+    /// Route ID - navigation route identifier.
+    ///
+    /// Identifies a route in the navigation stack.
+    pub type RouteId Route;
+
+    // =====================================================================
+    // Animation/Scheduler IDs
+    // =====================================================================
+
+    /// Animation ID - animation frame callback identifier.
+    ///
+    /// Returned when scheduling frame callbacks, used to cancel them.
+    pub type AnimationId Animation;
+
+    /// Frame Callback ID - scheduler frame callback identifier.
+    ///
+    /// Identifies scheduled frame callbacks in the scheduler binding.
+    pub type FrameCallbackId FrameCallback;
+
+    // =====================================================================
+    // Gesture IDs
+    // =====================================================================
+
+    /// Motion Event ID - Android motion event identifier.
+    ///
+    /// Identifies motion events on Android platform for gesture handling.
+    pub type MotionEventId MotionEvent;
+
+    /// Gesture ID - gesture recognizer identifier.
+    ///
+    /// Identifies active gesture recognizers during gesture disambiguation.
+    pub type GestureId Gesture;
+
+    // =====================================================================
+    // Group/Region IDs
+    // =====================================================================
+
+    /// Group ID - tap region group identifier.
+    ///
+    /// Groups tap regions together for coordinated tap handling.
+    pub type GroupId Group;
+
+    /// Focus ID - focus node identifier.
+    ///
+    /// Identifies nodes in the focus tree for keyboard focus management.
+    pub type FocusId Focus;
+
+    // =====================================================================
+    // Debug/Inspector IDs
+    // =====================================================================
+
+    /// Diagnostics ID - widget inspector diagnostics identifier.
+    ///
+    /// Used by the widget inspector for object identification and tracking.
+    pub type DiagnosticsId Diagnostics;
+
+    /// Location ID - source location identifier.
+    ///
+    /// Identifies source code locations for debugging and error reporting.
+    pub type LocationId Location;
+}
+
+// =========================================================================
+// Serde support
+// =========================================================================
+
+#[cfg(feature = "serde")]
+mod serde_impl {
+    use super::*;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    impl Serialize for RawId {
+        fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+            self.unzip().serialize(serializer)
+        }
+    }
+
+    impl<'de> Deserialize<'de> for RawId {
+        fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+            let index = Index::deserialize(deserializer)?;
+            RawId::try_zip(index)
+                .ok_or_else(|| serde::de::Error::custom("ID index must be non-zero"))
+        }
+    }
+
+    impl<T: Marker> Serialize for Id<T> {
+        fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+            self.0.serialize(serializer)
+        }
+    }
+
+    impl<'de, T: Marker> Deserialize<'de> for Id<T> {
+        fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+            let raw = RawId::deserialize(deserializer)?;
+            // SAFETY: We just validated the RawId is non-zero
+            Ok(unsafe { Self::from_raw(raw) })
+        }
+    }
 }
 
 // =========================================================================
@@ -440,165 +711,152 @@ define_id! {
 mod tests {
     use super::*;
 
-    macro_rules! test_id_type {
-        ($mod_name:ident, $name:ident) => {
-            mod $mod_name {
-                use super::*;
-
-                #[test]
-                fn test_new() {
-                    let id = $name::new(42);
-                    assert_eq!(id.get(), 42);
-                }
-
-                #[test]
-                #[should_panic]
-                fn test_new_zero_panics() {
-                    let _ = $name::new(0);
-                }
-
-                #[test]
-                fn test_new_checked() {
-                    assert_eq!($name::new_checked(0), None);
-                    assert_eq!($name::new_checked(1).map(|id| id.get()), Some(1));
-                    assert_eq!($name::new_checked(42).map(|id| id.get()), Some(42));
-                }
-
-                #[test]
-                fn test_new_unchecked() {
-                    let id = unsafe { $name::new_unchecked(1) };
-                    assert_eq!(id.get(), 1);
-                }
-
-                #[test]
-                fn test_niche_optimization() {
-                    // Option<Id> should be same size as Id (niche optimization)
-                    assert_eq!(
-                        std::mem::size_of::<$name>(),
-                        std::mem::size_of::<Option<$name>>()
-                    );
-                }
-
-                #[test]
-                fn test_from_non_zero() {
-                    let nz = NonZeroUsize::new(42).unwrap();
-                    let id = $name::from(nz);
-                    assert_eq!(id.get(), 42);
-                }
-
-                #[test]
-                fn test_into_usize() {
-                    let id = $name::new(42);
-                    let value: usize = id.into();
-                    assert_eq!(value, 42);
-                }
-
-                #[test]
-                fn test_display() {
-                    let id = $name::new(42);
-                    assert_eq!(format!("{}", id), concat!(stringify!($name), "(42)"));
-                }
-
-                #[test]
-                fn test_arithmetic() {
-                    let id = $name::new(10);
-                    assert_eq!(id - 5, 5);
-                    assert_eq!((id + 5).get(), 15);
-                }
-
-                #[test]
-                fn test_equality() {
-                    let id1 = $name::new(42);
-                    let id2 = $name::new(42);
-                    let id3 = $name::new(43);
-
-                    assert_eq!(id1, id2);
-                    assert_ne!(id1, id3);
-                }
-
-                #[test]
-                fn test_ordering() {
-                    let id1 = $name::new(1);
-                    let id2 = $name::new(2);
-                    let id3 = $name::new(3);
-
-                    assert!(id1 < id2);
-                    assert!(id2 < id3);
-                    assert!(id1 < id3);
-                }
-
-                #[test]
-                fn test_from_usize_in_tests() {
-                    let id: $name = 42.into();
-                    assert_eq!(id.get(), 42);
-                }
-
-                #[cfg(feature = "serde")]
-                #[test]
-                fn test_serde_roundtrip() {
-                    let id = $name::new(42);
-                    let json = serde_json::to_string(&id).unwrap();
-                    assert_eq!(json, "42");
-
-                    let deserialized: $name = serde_json::from_str(&json).unwrap();
-                    assert_eq!(deserialized.get(), 42);
-                }
-
-                #[cfg(feature = "serde")]
-                #[test]
-                fn test_serde_zero_rejection() {
-                    let json = "0";
-                    let result: Result<$name, _> = serde_json::from_str(json);
-                    assert!(result.is_err());
-                }
-            }
-        };
-    }
-
-    // Run all tests for each ID type
-    test_id_type!(view_id, ViewId);
-    test_id_type!(element_id, ElementId);
-    test_id_type!(render_id, RenderId);
-    test_id_type!(layer_id, LayerId);
-    test_id_type!(semantics_id, SemanticsId);
-
     #[test]
-    fn test_all_ids_have_same_size() {
-        assert_eq!(
-            std::mem::size_of::<ViewId>(),
-            std::mem::size_of::<ElementId>()
-        );
-        assert_eq!(
-            std::mem::size_of::<ElementId>(),
-            std::mem::size_of::<RenderId>()
-        );
-        assert_eq!(
-            std::mem::size_of::<RenderId>(),
-            std::mem::size_of::<LayerId>()
-        );
-        assert_eq!(
-            std::mem::size_of::<LayerId>(),
-            std::mem::size_of::<SemanticsId>()
-        );
+    fn test_raw_id_basics() {
+        let id = RawId::zip(42);
+        assert_eq!(id.unzip(), 42);
     }
 
     #[test]
-    fn test_ids_are_distinct_types() {
-        let view = ViewId::new(1);
-        let element = ElementId::new(1);
-        let render = RenderId::new(1);
-        let layer = LayerId::new(1);
-        let semantics = SemanticsId::new(1);
+    #[should_panic(expected = "non-zero")]
+    fn test_raw_id_zero_panics() {
+        let _ = RawId::zip(0);
+    }
 
-        // These should not compile if uncommented:
-        // let _: ViewId = element;
-        // let _: ElementId = render;
-        // let _: RenderId = layer;
-        // let _: LayerId = semantics;
+    #[test]
+    fn test_raw_id_try_zip() {
+        assert!(RawId::try_zip(0).is_none());
+        assert_eq!(RawId::try_zip(42).map(|id| id.unzip()), Some(42));
+    }
 
-        assert_eq!(view.get(), element.get());
-        assert_eq!(element.get(), render.get());
-        assert_eq!(render.get(), layer.get());
-        assert_eq!(layer.get(), semantics.get());
+    #[test]
+    fn test_id_basics() {
+        let id = ViewId::zip(42);
+        assert_eq!(id.unzip(), 42);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_id_zero_panics() {
+        let _ = ElementId::zip(0);
+    }
+
+    #[test]
+    fn test_id_try_zip() {
+        assert!(RenderId::try_zip(0).is_none());
+        assert_eq!(LayerId::try_zip(42).map(|id| id.unzip()), Some(42));
+    }
+
+    #[test]
+    fn test_niche_optimization() {
+        // Option<Id> should be same size as Id
+        assert_eq!(size_of::<ViewId>(), size_of::<Option<ViewId>>());
+        assert_eq!(size_of::<ElementId>(), size_of::<Option<ElementId>>());
+        assert_eq!(size_of::<RawId>(), size_of::<Option<RawId>>());
+    }
+
+    #[test]
+    fn test_all_ids_same_size() {
+        let size = size_of::<ViewId>();
+        assert_eq!(size_of::<ElementId>(), size);
+        assert_eq!(size_of::<RenderId>(), size);
+        assert_eq!(size_of::<LayerId>(), size);
+        assert_eq!(size_of::<SemanticsId>(), size);
+        assert_eq!(size_of::<TextureId>(), size);
+        assert_eq!(size_of::<PlatformViewId>(), size);
+    }
+
+    #[test]
+    fn test_type_safety() {
+        let view = ViewId::zip(1);
+        let element = ElementId::zip(1);
+
+        // Same underlying value
+        assert_eq!(view.unzip(), element.unzip());
+
+        // But different types (this would not compile):
+        // assert_eq!(view, element);
+    }
+
+    #[test]
+    fn test_debug_format() {
+        let id = ViewId::zip(42);
+        let debug = format!("{:?}", id);
+        assert!(debug.contains("View"));
+        assert!(debug.contains("42"));
+    }
+
+    #[test]
+    fn test_display_format() {
+        let id = ElementId::zip(42);
+        let display = format!("{}", id);
+        assert!(display.contains("Element"));
+        assert!(display.contains("42"));
+    }
+
+    #[test]
+    fn test_arithmetic() {
+        let id = ViewId::zip(10);
+        assert_eq!(id - 5, 5);
+        assert_eq!((id + 5).unzip(), 15);
+    }
+
+    #[test]
+    fn test_ordering() {
+        let id1 = RenderId::zip(1);
+        let id2 = RenderId::zip(2);
+        let id3 = RenderId::zip(3);
+
+        assert!(id1 < id2);
+        assert!(id2 < id3);
+        assert!(id1 < id3);
+    }
+
+    #[test]
+    fn test_hash() {
+        use std::collections::HashSet;
+
+        let mut set = HashSet::new();
+        set.insert(ViewId::zip(1));
+        set.insert(ViewId::zip(2));
+        set.insert(ViewId::zip(1)); // Duplicate
+
+        assert_eq!(set.len(), 2);
+    }
+
+    #[test]
+    fn test_raw_conversion() {
+        let id = ViewId::zip(42);
+        let raw = id.into_raw();
+        assert_eq!(raw.unzip(), 42);
+
+        let recovered = unsafe { ViewId::from_raw(raw) };
+        assert_eq!(recovered, id);
+    }
+
+    #[test]
+    fn test_convenience_aliases() {
+        // new/get are aliases for zip/unzip
+        let id = ViewId::new(42);
+        assert_eq!(id.get(), 42);
+        assert_eq!(id.get(), id.unzip());
+
+        // new_checked is alias for try_zip
+        assert!(ViewId::new_checked(0).is_none());
+        assert_eq!(ViewId::new_checked(42).map(|id| id.get()), Some(42));
+    }
+
+    #[test]
+    fn test_new_id_types() {
+        // Test some of the new Flutter-inspired ID types
+        let texture = TextureId::zip(1);
+        let platform_view = PlatformViewId::zip(2);
+        let device = DeviceId::zip(3);
+        let pointer = PointerId::zip(4);
+
+        assert_eq!(texture.unzip(), 1);
+        assert_eq!(platform_view.unzip(), 2);
+        assert_eq!(device.unzip(), 3);
+        assert_eq!(pointer.unzip(), 4);
     }
 }

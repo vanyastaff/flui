@@ -1,7 +1,6 @@
 //! View keys for element identity and reconciliation
 //!
 // Allow unsafe code in this module - it's required for NonZeroU64::new_unchecked
-// and unsafe Send/Sync implementations for ObjectKey.
 #![allow(unsafe_code)]
 //!
 //! This module provides key types for view identity tracking:
@@ -17,9 +16,10 @@
 //!
 //! - [`ViewKey`] - Trait for all reconciliation keys
 //! - [`ValueKey<T>`] - Key by value (string, number, struct)
-//! - [`ObjectKey`] - Key by object identity (pointer equality)
 //! - [`UniqueKey`] - Guaranteed unique, never matches another
-//! - [`GlobalKey<T>`] - Access element from anywhere in tree
+//!
+//! Note: `ObjectKey` and `GlobalKey<T>` are in `flui-view` (widgets layer),
+//! matching Flutter's architecture where they live in `widgets/framework.dart`.
 //!
 //! # When to Use Which
 //!
@@ -27,9 +27,7 @@
 //! |----------|----------|
 //! | `Key` | Simple ID, compile-time constants, database IDs |
 //! | `ValueKey<T>` | Match by value (list items with unique field) |
-//! | `ObjectKey` | Match by object instance |
 //! | `UniqueKey` | Force new element on every rebuild |
-//! | `GlobalKey<T>` | Access widget state from outside tree |
 //!
 //! # Examples
 //!
@@ -51,12 +49,8 @@
 use std::any::{Any, TypeId};
 use std::fmt;
 use std::hash::{Hash, Hasher};
-use std::marker::PhantomData;
 use std::num::NonZeroU64;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
-
-use crate::ElementId;
 
 /// View key with niche optimization
 ///
@@ -437,91 +431,6 @@ impl<T: Clone + Hash + Eq + Send + Sync + fmt::Debug + 'static> ViewKey for Valu
 }
 
 // ============================================================================
-// OBJECT KEY
-// ============================================================================
-
-/// A key based on object identity (pointer equality).
-///
-/// Two `ObjectKey` are equal only if they point to the same object.
-/// Useful when you want to key by a specific instance.
-///
-/// # Example
-///
-/// ```rust
-/// use flui_foundation::{ObjectKey, ViewKey};
-/// use std::sync::Arc;
-///
-/// let obj1 = Arc::new(42);
-/// let obj2 = Arc::new(42); // Same value, different object
-///
-/// let key1 = ObjectKey::new(Arc::clone(&obj1));
-/// let key2 = ObjectKey::new(Arc::clone(&obj1)); // Same object
-/// let key3 = ObjectKey::new(obj2); // Different object
-///
-/// assert!(key1.key_eq(&key2));  // Same object
-/// assert!(!key1.key_eq(&key3)); // Different objects
-/// ```
-#[derive(Clone)]
-pub struct ObjectKey {
-    ptr: *const (),
-    _holder: Arc<dyn Any + Send + Sync>,
-}
-
-// SAFETY: ObjectKey is Send + Sync because:
-// 1. The raw pointer `ptr` is never dereferenced - it's only used for identity comparison
-//    via `std::ptr::eq()` which compares addresses, not values
-// 2. The `_holder` field is `Arc<dyn Any + Send + Sync>` which keeps the object alive
-//    and is itself Send + Sync
-// 3. The pointer value is derived from Arc::as_ptr() and remains valid as long as
-//    the Arc exists, which is guaranteed by the struct's lifetime
-unsafe impl Send for ObjectKey {}
-unsafe impl Sync for ObjectKey {}
-
-impl ObjectKey {
-    /// Create a new object key from an Arc.
-    pub fn new<T: Send + Sync + 'static>(object: Arc<T>) -> Self {
-        let ptr = Arc::as_ptr(&object).cast::<()>();
-        Self {
-            ptr,
-            _holder: object,
-        }
-    }
-}
-
-impl fmt::Debug for ObjectKey {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ObjectKey")
-            .field("ptr", &self.ptr)
-            .finish_non_exhaustive()
-    }
-}
-
-impl ViewKey for ObjectKey {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn key_eq(&self, other: &dyn ViewKey) -> bool {
-        other
-            .as_any()
-            .downcast_ref::<Self>()
-            .is_some_and(|other| std::ptr::eq(self.ptr, other.ptr))
-    }
-
-    fn key_hash(&self) -> u64 {
-        self.ptr as u64
-    }
-
-    fn clone_key(&self) -> Box<dyn ViewKey> {
-        Box::new(self.clone())
-    }
-
-    fn debug_fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "ObjectKey({:p})", self.ptr)
-    }
-}
-
-// ============================================================================
 // UNIQUE KEY
 // ============================================================================
 
@@ -595,144 +504,6 @@ impl ViewKey for UniqueKey {
 
     fn debug_fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "UniqueKey({})", self.id)
-    }
-}
-
-// ============================================================================
-// GLOBAL KEY
-// ============================================================================
-
-/// A key that provides access to the element from anywhere.
-///
-/// Unlike regular keys which only affect reconciliation, `GlobalKey`
-/// also allows you to access the element's state from outside the tree.
-///
-/// # Use Cases
-///
-/// - Access state of a widget from a parent or sibling
-/// - Trigger methods on a widget programmatically
-/// - Get the render object for measurements/positioning
-///
-/// # Example
-///
-/// ```rust,ignore
-/// use flui_foundation::GlobalKey;
-///
-/// // Create a global key
-/// let form_key = GlobalKey::<FormState>::new();
-///
-/// // Use in widget tree
-/// Form::new().with_view_key(form_key.clone())
-///
-/// // Access from anywhere
-/// if let Some(state) = form_key.current_state() {
-///     state.validate();
-/// }
-/// ```
-///
-/// # Performance Note
-///
-/// Global keys have overhead compared to local keys because they
-/// maintain a registry. Use sparingly.
-#[derive(Clone)]
-pub struct GlobalKey<T: 'static> {
-    id: u64,
-    _marker: PhantomData<fn() -> T>,
-}
-
-impl<T: 'static> GlobalKey<T> {
-    /// Create a new global key.
-    pub fn new() -> Self {
-        static COUNTER: AtomicU64 = AtomicU64::new(1);
-        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
-        Self {
-            id,
-            _marker: PhantomData,
-        }
-    }
-
-    /// Get the unique ID of this key.
-    #[must_use]
-    pub const fn id(&self) -> u64 {
-        self.id
-    }
-
-    /// Get the current element ID associated with this key.
-    ///
-    /// Returns `None` if the element is not currently mounted.
-    #[must_use]
-    pub const fn current_element(&self) -> Option<ElementId> {
-        // TODO: Implement via GlobalKeyRegistry
-        None
-    }
-
-    /// Get the current state associated with this key.
-    ///
-    /// Only works for `StatefulView` widgets.
-    #[must_use]
-    pub const fn current_state(&self) -> Option<Arc<T>>
-    where
-        T: Send + Sync,
-    {
-        // TODO: Implement via GlobalKeyRegistry
-        None
-    }
-}
-
-impl<T: 'static> Default for GlobalKey<T> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl<T: 'static> fmt::Debug for GlobalKey<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("GlobalKey")
-            .field("id", &self.id)
-            .field("type", &std::any::type_name::<T>())
-            .finish()
-    }
-}
-
-impl<T: 'static> PartialEq for GlobalKey<T> {
-    fn eq(&self, other: &Self) -> bool {
-        self.id == other.id
-    }
-}
-
-impl<T: 'static> Eq for GlobalKey<T> {}
-
-impl<T: 'static> Hash for GlobalKey<T> {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.id.hash(state);
-    }
-}
-
-impl<T: 'static> ViewKey for GlobalKey<T> {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn key_eq(&self, other: &dyn ViewKey) -> bool {
-        other
-            .as_any()
-            .downcast_ref::<Self>()
-            .is_some_and(|other| self.id == other.id)
-    }
-
-    fn key_hash(&self) -> u64 {
-        self.id
-    }
-
-    fn clone_key(&self) -> Box<dyn ViewKey> {
-        Box::new(Self {
-            id: self.id,
-            _marker: PhantomData,
-        })
-    }
-
-    fn debug_fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "GlobalKey<{}>({})", std::any::type_name::<T>(), self.id)
     }
 }
 
