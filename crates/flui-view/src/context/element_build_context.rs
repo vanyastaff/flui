@@ -127,6 +127,28 @@ impl ElementBuildContext {
     pub fn build_owner(&self) -> &Arc<RwLock<BuildOwner>> {
         &self.owner
     }
+
+    /// Create a minimal context for use when full tree/owner aren't available.
+    ///
+    /// This is useful for StatelessElement::perform_build where we just need
+    /// a context to pass to view.build() but don't have full tree infrastructure.
+    pub fn new_minimal(depth: usize) -> Self {
+        // Create dummy tree and owner for minimal context
+        let tree = Arc::new(RwLock::new(ElementTree::new()));
+        let owner = Arc::new(RwLock::new(BuildOwner::new()));
+        // ElementId::new(1) is safe - 1 is non-zero
+        let element_id = ElementId::new(1);
+
+        Self {
+            element_id,
+            depth,
+            mounted: true,
+            tree,
+            owner,
+            #[cfg(debug_assertions)]
+            is_building: true,
+        }
+    }
 }
 
 impl BuildContext for ElementBuildContext {

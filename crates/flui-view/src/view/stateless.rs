@@ -4,10 +4,13 @@
 //! as a function of their configuration (fields) and inherited data.
 
 use super::view::{ElementBase, View};
-use crate::context::BuildContext;
+use crate::context::{BuildContext, ElementBuildContext};
 use crate::element::Lifecycle;
-use flui_foundation::ElementId;
-use std::any::TypeId;
+use flui_foundation::{ElementId, RenderId};
+use flui_rendering::pipeline::PipelineOwner;
+use parking_lot::RwLock;
+use std::any::{Any, TypeId};
+use std::sync::Arc;
 
 /// A View that has no mutable state.
 ///
@@ -94,6 +97,10 @@ pub struct StatelessElement<V: StatelessView> {
     child: Option<Box<dyn ElementBase>>,
     /// Whether we need to rebuild.
     dirty: bool,
+    /// PipelineOwner for render tree access (propagated to children).
+    pipeline_owner: Option<Arc<RwLock<PipelineOwner>>>,
+    /// Parent's RenderId for tree structure (propagated to children).
+    parent_render_id: Option<RenderId>,
 }
 
 impl<V: StatelessView> StatelessElement<V> {
@@ -105,6 +112,8 @@ impl<V: StatelessView> StatelessElement<V> {
             depth: 0,
             child: None,
             dirty: true,
+            pipeline_owner: None,
+            parent_render_id: None,
         }
     }
 }
@@ -145,8 +154,44 @@ impl<V: StatelessView> ElementBase for StatelessElement<V> {
             return;
         }
 
-        // TODO: Create proper BuildContext from element
-        // For now, we'll defer the actual build to when we have BuildOwner
+        // Create BuildContext for the build call
+        let ctx = ElementBuildContext::new_minimal(self.depth);
+
+        // Call view.build() to get the child View
+        let child_view = self.view.build(&ctx);
+
+        if self.child.is_none() {
+            // First build - create child element
+            let mut child_element = child_view.create_element();
+
+            // Propagate PipelineOwner and parent_render_id to child
+            if let Some(ref pipeline_owner) = self.pipeline_owner {
+                let owner_any: Arc<dyn Any + Send + Sync> =
+                    Arc::clone(pipeline_owner) as Arc<dyn Any + Send + Sync>;
+                child_element.set_pipeline_owner_any(owner_any);
+                child_element.set_parent_render_id(self.parent_render_id);
+
+                tracing::debug!(
+                    "StatelessElement::perform_build propagated PipelineOwner and parent_id={:?} to child",
+                    self.parent_render_id
+                );
+            }
+
+            // Mount child
+            child_element.mount(None, self.depth + 1);
+
+            // Build child's children
+            child_element.perform_build();
+
+            self.child = Some(child_element);
+        } else {
+            // Rebuild - update existing child
+            if let Some(ref mut child) = self.child {
+                child.update(child_view.as_ref());
+                child.perform_build();
+            }
+        }
+
         self.dirty = false;
     }
 
@@ -185,6 +230,24 @@ impl<V: StatelessView> ElementBase for StatelessElement<V> {
 
     fn depth(&self) -> usize {
         self.depth
+    }
+
+    fn set_pipeline_owner_any(&mut self, owner: Arc<dyn Any + Send + Sync>) {
+        // Downcast from Arc<dyn Any> to Arc<RwLock<PipelineOwner>>
+        if let Ok(pipeline_owner) = owner.downcast::<RwLock<PipelineOwner>>() {
+            self.pipeline_owner = Some(pipeline_owner);
+            tracing::debug!("StatelessElement::set_pipeline_owner_any received PipelineOwner");
+        } else {
+            tracing::warn!("StatelessElement::set_pipeline_owner_any received wrong type");
+        }
+    }
+
+    fn set_parent_render_id(&mut self, parent_id: Option<RenderId>) {
+        self.parent_render_id = parent_id;
+        tracing::debug!(
+            "StatelessElement::set_parent_render_id parent_id={:?}",
+            parent_id
+        );
     }
 }
 
