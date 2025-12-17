@@ -1,12 +1,15 @@
 //! Counter Demo - FLUI application with GPU-accelerated window
 //!
-//! Demonstrates rendering using Canvas -> CanvasLayer -> SceneRenderer pipeline.
+//! Demonstrates rendering using LayerTree with PerformanceOverlay.
 
 use flui_app::AppConfig;
 use flui_engine::wgpu::SceneRenderer;
-use flui_layer::{CanvasLayer, Layer};
+use flui_layer::{
+    CanvasLayer, Layer, LayerTree, OffsetLayer, PerformanceOverlayLayer, PerformanceOverlayOption,
+    PerformanceStats, Scene,
+};
 use flui_painting::{Canvas, Paint};
-use flui_types::geometry::{Offset, Rect};
+use flui_types::geometry::{Offset, Rect, Size};
 use flui_types::styling::Color;
 use flui_types::typography::TextStyle;
 use std::sync::Arc;
@@ -18,48 +21,46 @@ use winit::{
     window::{Window, WindowId},
 };
 
-/// Create a canvas with drawing commands for a frame
-fn create_frame_canvas(frame_count: u64, width: u32, height: u32) -> Canvas {
+/// Create the main content canvas (Hello World)
+fn create_content_canvas(frame_count: u64, width: u32, height: u32) -> Canvas {
     let mut canvas = Canvas::new();
 
-    // Animated background color
-    let t = (frame_count as f32 * 0.01).sin() * 0.5 + 0.5;
-    let bg_color = Color::rgba(
-        (30.0 + t * 20.0) as u8,
-        (40.0 + t * 30.0) as u8,
-        (60.0 + t * 40.0) as u8,
-        255,
-    );
-
-    // Draw background
+    // Dark background
+    let bg_color = Color::rgba(30, 30, 40, 255);
     let viewport = Rect::from_xywh(0.0, 0.0, width as f32, height as f32);
     canvas.draw_rect(viewport, &Paint::fill(bg_color));
 
-    // Draw animated centered rectangle
-    let rect_size = 200.0;
-    let x = (width as f32 - rect_size) / 2.0;
-    let y = (height as f32 - rect_size) / 2.0;
-    let rect = Rect::from_xywh(x, y, rect_size, rect_size);
-
-    // Animate color using hue
+    // Draw "Hello World" centered with animated color
     let hue = (frame_count % 360) as f32;
     let r = ((hue * 0.017).sin() * 127.0 + 128.0) as u8;
     let g = (((hue + 120.0) * 0.017).sin() * 127.0 + 128.0) as u8;
     let b = (((hue + 240.0) * 0.017).sin() * 127.0 + 128.0) as u8;
-    let box_color = Color::rgba(r, g, b, 255);
+    let text_color = Color::rgba(r, g, b, 255);
 
-    canvas.draw_rect(rect, &Paint::fill(box_color));
+    // Large "Hello World" text
+    let hello_style = TextStyle::new().with_font_size(72.0).with_color(text_color);
 
-    // Draw frame counter text
-    let text = format!("Frame: {}", frame_count);
-    let text_style = TextStyle::new()
-        .with_font_size(24.0)
-        .with_color(Color::WHITE);
+    // Center the text (approximate)
+    let text_x = (width as f32 - 400.0) / 2.0;
+    let text_y = height as f32 / 2.0;
+
     canvas.draw_text(
-        &text,
-        Offset::new(20.0, 30.0),
-        &text_style,
-        &Paint::fill(Color::WHITE),
+        "Hello World!",
+        Offset::new(text_x, text_y),
+        &hello_style,
+        &Paint::fill(text_color),
+    );
+
+    // Subtitle
+    let subtitle_style = TextStyle::new()
+        .with_font_size(24.0)
+        .with_color(Color::rgba(150, 150, 160, 255));
+
+    canvas.draw_text(
+        "FLUI Framework - GPU Accelerated",
+        Offset::new(text_x - 20.0, text_y + 60.0),
+        &subtitle_style,
+        &Paint::fill(Color::rgba(150, 150, 160, 255)),
     );
 
     canvas
@@ -70,6 +71,8 @@ struct App {
     renderer: Option<SceneRenderer>,
     config: AppConfig,
     frame_count: u64,
+    /// Performance statistics tracker
+    perf_stats: PerformanceStats,
 }
 
 impl App {
@@ -79,6 +82,7 @@ impl App {
             renderer: None,
             config,
             frame_count: 0,
+            perf_stats: PerformanceStats::default(),
         }
     }
 }
@@ -130,24 +134,60 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::RedrawRequested => {
+                // Record frame timing
+                self.perf_stats.record_frame();
                 self.frame_count += 1;
 
-                // Get size from window first
+                // Get size from window
                 let size = self.window.as_ref().map(|w| w.inner_size());
 
                 if let (Some(renderer), Some(size)) = (&mut self.renderer, size) {
-                    // Create canvas with drawing commands
-                    let canvas = create_frame_canvas(self.frame_count, size.width, size.height);
+                    // Build LayerTree with proper hierarchy:
+                    // root (OffsetLayer)
+                    //   └── content (CanvasLayer)
+                    //   └── overlay (PerformanceOverlayLayer)
+                    let mut tree = LayerTree::new();
 
-                    // Wrap in CanvasLayer and Layer
-                    let canvas_layer = CanvasLayer::from_canvas(canvas);
-                    let layer = Layer::Canvas(canvas_layer);
+                    // Root container layer
+                    let root_layer = Layer::Offset(OffsetLayer::zero());
+                    let root_id = tree.insert(root_layer);
+                    tree.set_root(Some(root_id));
 
-                    // Render
-                    match renderer.render(&layer) {
+                    // Content layer (child of root)
+                    let content_canvas =
+                        create_content_canvas(self.frame_count, size.width, size.height);
+                    let content_layer = Layer::Canvas(CanvasLayer::from_canvas(content_canvas));
+                    let content_id = tree.insert(content_layer);
+                    tree.add_child(root_id, content_id);
+
+                    // Performance overlay layer (child of root, renders on top)
+                    let overlay_rect = Rect::from_xywh(8.0, 8.0, 110.0, 40.0);
+                    let mut overlay = PerformanceOverlayLayer::new(
+                        overlay_rect,
+                        PerformanceOverlayOption::DISPLAY_RASTER_STATISTICS
+                            | PerformanceOverlayOption::DISPLAY_ENGINE_STATISTICS,
+                    );
+                    overlay.update_stats(&self.perf_stats);
+                    let overlay_layer = Layer::PerformanceOverlay(overlay);
+                    let overlay_id = tree.insert(overlay_layer);
+                    tree.add_child(root_id, overlay_id);
+
+                    // Create scene and render
+                    let scene = Scene::new(
+                        Size::new(size.width as f32, size.height as f32),
+                        tree,
+                        Some(root_id),
+                        self.frame_count,
+                    );
+
+                    match renderer.render_scene(&scene) {
                         Ok(()) => {
                             if self.frame_count % 60 == 0 {
-                                tracing::debug!("Frame {} rendered", self.frame_count);
+                                tracing::debug!(
+                                    "Frame {} rendered ({:.1} FPS)",
+                                    self.frame_count,
+                                    self.perf_stats.fps()
+                                );
                             }
                         }
                         Err(e) => {
@@ -184,7 +224,7 @@ fn main() {
         )
         .init();
 
-    tracing::info!("Starting Counter Demo with GPU rendering");
+    tracing::info!("Starting Counter Demo with GPU rendering and Performance Overlay");
 
     // Create app configuration
     let config = AppConfig::new()

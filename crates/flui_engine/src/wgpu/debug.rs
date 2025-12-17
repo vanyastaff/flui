@@ -407,4 +407,21 @@ impl CommandRenderer for DebugBackend {
     fn pop_image_filter(&mut self) {
         self.log_command("pop_image_filter", "");
     }
+
+    fn add_performance_overlay(
+        &mut self,
+        options_mask: u32,
+        bounds: Rect,
+        fps: f32,
+        frame_time_ms: f32,
+        total_frames: u64,
+    ) {
+        self.log_command(
+            "add_performance_overlay",
+            &format!(
+                "options_mask={}, bounds={:?}, fps={:.1}, frame_time={:.2}ms, total_frames={}",
+                options_mask, bounds, fps, frame_time_ms, total_frames
+            ),
+        );
+    }
 }

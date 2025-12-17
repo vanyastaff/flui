@@ -107,7 +107,9 @@ pub use image_filter::ImageFilterLayer;
 pub use leader::{LayerLink, LeaderLayer};
 pub use offset::OffsetLayer;
 pub use opacity::OpacityLayer;
-pub use performance_overlay::{PerformanceOverlayLayer, PerformanceOverlayOption};
+pub use performance_overlay::{
+    PerformanceOverlayLayer, PerformanceOverlayOption, PerformanceStats,
+};
 pub use picture::PictureLayer;
 pub use platform_view::{PlatformViewHitTestBehavior, PlatformViewId, PlatformViewLayer};
 pub use shader_mask::ShaderMaskLayer;

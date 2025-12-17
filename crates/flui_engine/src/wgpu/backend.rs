@@ -502,4 +502,78 @@ impl CommandRenderer for Backend {
     fn pop_image_filter(&mut self) {
         self.painter.restore();
     }
+
+    fn add_performance_overlay(
+        &mut self,
+        options_mask: u32,
+        bounds: Rect,
+        fps: f32,
+        frame_time_ms: f32,
+        total_frames: u64,
+    ) {
+        use flui_layer::PerformanceOverlayOption;
+
+        let _options = PerformanceOverlayOption::from_mask(options_mask);
+
+        // Semi-transparent dark background (MangoHud style)
+        let bg_color = Color::rgba(10, 10, 15, 200);
+        let bg_paint = Paint::fill(bg_color);
+        let bg_rrect =
+            RRect::from_rect_and_radius(bounds, flui_types::geometry::Radius::circular(4.0));
+        self.painter.rrect(bg_rrect, &bg_paint);
+
+        let x = bounds.left() + 8.0;
+        let x_val = bounds.left() + 50.0;
+        let mut y = bounds.top() + 14.0;
+
+        // GPU label (cyan) + FPS value
+        let cyan = Color::rgba(0, 200, 200, 255);
+        self.painter
+            .text("GPU", Point::new(x, y), 11.0, &Paint::fill(cyan));
+
+        // FPS with color coding
+        let fps_color = if fps >= 55.0 {
+            Color::rgba(170, 255, 170, 255) // Light green
+        } else if fps >= 30.0 {
+            Color::rgba(255, 255, 130, 255) // Light yellow
+        } else {
+            Color::rgba(255, 130, 130, 255) // Light red
+        };
+        self.painter.text(
+            &format!("{:.0}", fps),
+            Point::new(x_val, y),
+            11.0,
+            &Paint::fill(fps_color),
+        );
+
+        // FPS unit (dimmer)
+        let gray = Color::rgba(130, 130, 130, 255);
+        let fps_w = if fps >= 100.0 {
+            24.0
+        } else if fps >= 10.0 {
+            16.0
+        } else {
+            8.0
+        };
+        self.painter
+            .text("FPS", Point::new(x_val + fps_w, y), 8.0, &Paint::fill(gray));
+        y += 14.0;
+
+        // Frametime label (purple) + value
+        let purple = Color::rgba(200, 100, 255, 255);
+        self.painter
+            .text("Frame", Point::new(x, y), 10.0, &Paint::fill(purple));
+
+        let white = Color::rgba(220, 220, 220, 255);
+        self.painter.text(
+            &format!("{:.1}", frame_time_ms),
+            Point::new(x_val, y),
+            10.0,
+            &Paint::fill(white),
+        );
+        self.painter
+            .text("ms", Point::new(x_val + 22.0, y), 8.0, &Paint::fill(gray));
+
+        let _ = total_frames;
+    }
 }

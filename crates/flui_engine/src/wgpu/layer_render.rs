@@ -8,7 +8,8 @@ use super::commands::CommandRenderer;
 use flui_layer::{
     BackdropFilterLayer, CanvasLayer, ClipPathLayer, ClipRRectLayer, ClipRectLayer,
     ColorFilterLayer, FollowerLayer, ImageFilterLayer, Layer, LeaderLayer, OffsetLayer,
-    OpacityLayer, PictureLayer, PlatformViewLayer, ShaderMaskLayer, TextureLayer, TransformLayer,
+    OpacityLayer, PerformanceOverlayLayer, PictureLayer, PlatformViewLayer, ShaderMaskLayer,
+    TextureLayer, TransformLayer,
 };
 use flui_painting::DisplayListCore;
 
@@ -76,9 +77,7 @@ impl<R: CommandRenderer + ?Sized> LayerRender<R> for Layer {
             }
 
             // Debug/Performance layers
-            Layer::PerformanceOverlay(_) => {
-                // TODO: Render performance overlay (FPS counter, frame times, etc.)
-            }
+            Layer::PerformanceOverlay(layer) => layer.render(renderer),
         }
     }
 }
@@ -267,5 +266,21 @@ impl<R: CommandRenderer + ?Sized> LayerRender<R> for LeaderLayer {
 impl<R: CommandRenderer + ?Sized> LayerRender<R> for FollowerLayer {
     fn render(&self, _renderer: &mut R) {
         // Transform is calculated by the compositor
+    }
+}
+
+// ============================================================================
+// PERFORMANCE OVERLAY LAYER
+// ============================================================================
+
+impl<R: CommandRenderer + ?Sized> LayerRender<R> for PerformanceOverlayLayer {
+    fn render(&self, renderer: &mut R) {
+        renderer.add_performance_overlay(
+            self.options_mask(),
+            self.bounds(),
+            self.fps(),
+            self.frame_time_ms(),
+            self.total_frames(),
+        );
     }
 }

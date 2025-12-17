@@ -132,6 +132,7 @@ pub use layer::{
     // Performance overlay
     PerformanceOverlayLayer,
     PerformanceOverlayOption,
+    PerformanceStats,
     PictureLayer,
     // Platform layers
     PlatformViewHitTestBehavior,
@@ -203,8 +204,8 @@ pub use flui_foundation::LayerId;
 pub mod prelude {
     // Leaf layers
     pub use crate::{
-        CanvasLayer, PerformanceOverlayLayer, PerformanceOverlayOption, PlatformViewLayer,
-        TextureLayer,
+        CanvasLayer, PerformanceOverlayLayer, PerformanceOverlayOption, PerformanceStats,
+        PlatformViewLayer, TextureLayer,
     };
 
     // Clip layers

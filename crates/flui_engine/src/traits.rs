@@ -296,6 +296,29 @@ pub trait CommandRenderer {
 
     /// Pop the most recent image filter from the effect stack
     fn pop_image_filter(&mut self);
+
+    // ===== Performance Overlay =====
+
+    /// Add a performance overlay to the scene
+    ///
+    /// This is the equivalent of Flutter's `SceneBuilder.addPerformanceOverlay()`.
+    /// Renders FPS counter and frame timing statistics at the specified location.
+    ///
+    /// # Arguments
+    ///
+    /// * `options_mask` - Bitmask of `PerformanceOverlayOption` flags
+    /// * `bounds` - Rectangle where the overlay should be displayed
+    /// * `fps` - Current frames per second
+    /// * `frame_time_ms` - Average frame time in milliseconds
+    /// * `total_frames` - Total frames rendered
+    fn add_performance_overlay(
+        &mut self,
+        options_mask: u32,
+        bounds: Rect,
+        fps: f32,
+        frame_time_ms: f32,
+        total_frames: u64,
+    );
 }
 
 // ============================================================================

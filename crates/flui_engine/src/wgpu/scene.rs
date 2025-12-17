@@ -514,8 +514,8 @@ impl SceneRenderer {
 
             // Debug/Performance layers
             Layer::PerformanceOverlay(_) => {
-                // Performance overlay is rendered by the debug system
-                // TODO: Implement performance overlay rendering
+                // PerformanceOverlayLayer is rendered via LayerRender trait
+                // in render_layer_tree's recursive traversal
                 Ok(())
             }
         }

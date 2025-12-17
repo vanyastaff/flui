@@ -4,6 +4,125 @@
 //! performance metrics like frame timings, raster cache, and memory usage.
 
 use flui_types::geometry::Rect;
+use std::collections::VecDeque;
+use std::time::{Duration, Instant};
+
+/// Performance statistics for frame timing
+///
+/// Tracks frame times for calculating FPS and frame time statistics.
+/// Uses a ring buffer to store recent frame times.
+#[derive(Debug, Clone)]
+pub struct PerformanceStats {
+    /// Recent frame durations (ring buffer)
+    frame_times: VecDeque<Duration>,
+    /// Maximum number of frames to track
+    max_samples: usize,
+    /// Last frame timestamp
+    last_frame: Option<Instant>,
+    /// Total frames rendered
+    total_frames: u64,
+}
+
+impl Default for PerformanceStats {
+    fn default() -> Self {
+        Self::new(120) // 2 seconds at 60fps
+    }
+}
+
+impl PerformanceStats {
+    /// Create new performance stats with specified sample count
+    pub fn new(max_samples: usize) -> Self {
+        Self {
+            frame_times: VecDeque::with_capacity(max_samples),
+            max_samples,
+            last_frame: None,
+            total_frames: 0,
+        }
+    }
+
+    /// Record a new frame
+    pub fn record_frame(&mut self) {
+        let now = Instant::now();
+
+        if let Some(last) = self.last_frame {
+            let duration = now.duration_since(last);
+
+            if self.frame_times.len() >= self.max_samples {
+                self.frame_times.pop_front();
+            }
+            self.frame_times.push_back(duration);
+        }
+
+        self.last_frame = Some(now);
+        self.total_frames += 1;
+    }
+
+    /// Get current FPS (frames per second)
+    pub fn fps(&self) -> f32 {
+        if self.frame_times.is_empty() {
+            return 0.0;
+        }
+
+        let total: Duration = self.frame_times.iter().sum();
+        let avg_frame_time = total.as_secs_f32() / self.frame_times.len() as f32;
+
+        if avg_frame_time > 0.0 {
+            1.0 / avg_frame_time
+        } else {
+            0.0
+        }
+    }
+
+    /// Get average frame time in milliseconds
+    pub fn avg_frame_time_ms(&self) -> f32 {
+        if self.frame_times.is_empty() {
+            return 0.0;
+        }
+
+        let total: Duration = self.frame_times.iter().sum();
+        total.as_secs_f32() * 1000.0 / self.frame_times.len() as f32
+    }
+
+    /// Get minimum frame time in milliseconds
+    pub fn min_frame_time_ms(&self) -> f32 {
+        self.frame_times
+            .iter()
+            .min()
+            .map(|d| d.as_secs_f32() * 1000.0)
+            .unwrap_or(0.0)
+    }
+
+    /// Get maximum frame time in milliseconds
+    pub fn max_frame_time_ms(&self) -> f32 {
+        self.frame_times
+            .iter()
+            .max()
+            .map(|d| d.as_secs_f32() * 1000.0)
+            .unwrap_or(0.0)
+    }
+
+    /// Get total frames rendered
+    pub fn total_frames(&self) -> u64 {
+        self.total_frames
+    }
+
+    /// Get frame times for histogram visualization
+    pub fn frame_times_ms(&self) -> impl Iterator<Item = f32> + '_ {
+        self.frame_times.iter().map(|d| d.as_secs_f32() * 1000.0)
+    }
+
+    /// Get number of recorded samples
+    pub fn sample_count(&self) -> usize {
+        self.frame_times.len()
+    }
+
+    /// Reset all statistics
+    pub fn reset(&mut self) {
+        self.frame_times.clear();
+        self.last_frame = None;
+        self.total_frames = 0;
+    }
+}
 
 /// Options for what to display in the performance overlay.
 ///
@@ -141,6 +260,15 @@ pub struct PerformanceOverlayLayer {
 
     /// Whether this layer needs to be re-added to scene.
     needs_add_to_scene: bool,
+
+    /// Cached FPS value for rendering
+    cached_fps: f32,
+
+    /// Cached average frame time in ms
+    cached_frame_time_ms: f32,
+
+    /// Cached total frame count
+    cached_total_frames: u64,
 }
 
 impl PerformanceOverlayLayer {
@@ -157,7 +285,36 @@ impl PerformanceOverlayLayer {
             overlay_rect,
             options,
             needs_add_to_scene: true,
+            cached_fps: 0.0,
+            cached_frame_time_ms: 0.0,
+            cached_total_frames: 0,
         }
+    }
+
+    /// Update the overlay with current performance statistics
+    pub fn update_stats(&mut self, stats: &PerformanceStats) {
+        self.cached_fps = stats.fps();
+        self.cached_frame_time_ms = stats.avg_frame_time_ms();
+        self.cached_total_frames = stats.total_frames();
+        self.needs_add_to_scene = true;
+    }
+
+    /// Get cached FPS value
+    #[inline]
+    pub fn fps(&self) -> f32 {
+        self.cached_fps
+    }
+
+    /// Get cached frame time in milliseconds
+    #[inline]
+    pub fn frame_time_ms(&self) -> f32 {
+        self.cached_frame_time_ms
+    }
+
+    /// Get cached total frame count
+    #[inline]
+    pub fn total_frames(&self) -> u64 {
+        self.cached_total_frames
     }
 
     /// Creates a performance overlay showing all raster statistics.
@@ -253,7 +410,14 @@ impl PerformanceOverlayLayer {
 
 impl Default for PerformanceOverlayLayer {
     fn default() -> Self {
-        Self::new(Rect::ZERO, PerformanceOverlayOption::empty())
+        Self {
+            overlay_rect: Rect::ZERO,
+            options: PerformanceOverlayOption::empty(),
+            needs_add_to_scene: true,
+            cached_fps: 0.0,
+            cached_frame_time_ms: 0.0,
+            cached_total_frames: 0,
+        }
     }
 }
 
