@@ -481,10 +481,13 @@ impl FrameDuration {
         self.utilization(elapsed) >= 0.8
     }
 
-    /// Check if frame is janky (>150% budget used)
+    /// Check if elapsed time indicates a janky frame.
+    ///
+    /// A frame is considered janky if it exceeds the target frame duration.
+    /// For 60 FPS, any frame taking longer than ~16.67ms is janky.
     #[inline]
     pub fn is_janky(self, elapsed: Milliseconds) -> bool {
-        elapsed.value() > self.target_ms.value() * 1.5
+        elapsed.value() > self.target_ms.value()
     }
 }
 

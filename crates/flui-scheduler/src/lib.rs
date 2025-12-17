@@ -156,6 +156,7 @@
 #![warn(clippy::all)]
 
 // Core modules
+pub mod binding;
 pub mod budget;
 pub mod frame;
 pub mod scheduler;
@@ -170,6 +171,11 @@ pub mod traits;
 pub mod typestate;
 
 // Re-exports - Core types
+pub use binding::{
+    default_scheduling_strategy, set_time_dilation, time_dilation, FrameCallbackId,
+    PerformanceMode, PerformanceModeRequestHandle, SchedulerBinding, SchedulerServiceExtensions,
+    SchedulingStrategy, TaskCallback, TimingsCallback,
+};
 pub use budget::{
     AllPhaseStats, BudgetPolicy, FrameBudget, FrameBudgetBuilder, PhaseStats, SharedBudget,
 };
@@ -179,13 +185,15 @@ pub use frame::{
     TransientFrameCallback,
 };
 pub use scheduler::{
-    CallbackId, FrameCompletionFuture, FrameSkipPolicy, Scheduler, SchedulerBinding,
-    SchedulerBuilder,
+    CallbackId, FrameCompletionFuture, FrameSkipPolicy, Scheduler, SchedulerBuilder,
 };
+
+// Re-export from flui-foundation for binding pattern
+pub use flui_foundation::{BindingBase, HasInstance};
 pub use task::{Priority, PriorityCount, Task, TaskId, TaskQueue, TypedTask};
 pub use ticker::{
-    ScheduledTicker, ScheduledTickerCallback, Ticker, TickerCallback, TickerGroup, TickerId,
-    TickerProvider, TickerState,
+    ScheduledTicker, ScheduledTickerCallback, Ticker, TickerCallback, TickerCanceled, TickerFuture,
+    TickerFutureOrCancel, TickerGroup, TickerId, TickerProvider, TickerState,
 };
 pub use vsync::{VsyncCallback, VsyncDrivenScheduler, VsyncMode, VsyncScheduler, VsyncStats};
 

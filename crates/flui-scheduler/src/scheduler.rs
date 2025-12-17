@@ -62,10 +62,13 @@ use crate::task::{Priority, TaskQueue};
 use crate::ticker::TickerProvider;
 use crate::traits::PriorityLevel;
 use crate::vsync::VsyncScheduler;
+use dashmap::DashMap;
+use flui_foundation::{impl_binding_singleton, BindingBase};
 use parking_lot::Mutex;
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::task::{Context, Poll, Waker};
 use web_time::Instant;
@@ -211,6 +214,33 @@ pub enum FrameSkipPolicy {
 }
 
 impl FrameSkipPolicy {
+    /// Try to convert from u8 representation
+    ///
+    /// Returns `None` if the value is not a valid discriminant.
+    #[inline]
+    pub const fn try_from_u8(value: u8) -> Option<Self> {
+        match value {
+            0 => Some(Self::Never),
+            1 => Some(Self::CatchUp),
+            2 => Some(Self::SkipToLatest),
+            3 => Some(Self::LimitedSkip),
+            _ => None,
+        }
+    }
+
+    /// Convert from u8 representation (for atomic storage)
+    ///
+    /// # Panics
+    /// Panics if the value is not a valid FrameSkipPolicy discriminant.
+    /// For fallible conversion, use [`try_from_u8`](Self::try_from_u8).
+    #[inline]
+    pub const fn from_u8(value: u8) -> Self {
+        match Self::try_from_u8(value) {
+            Some(v) => v,
+            None => panic!("Invalid FrameSkipPolicy value"),
+        }
+    }
+
     /// Calculate how many frames to skip given elapsed time since last frame
     ///
     /// # Arguments
@@ -294,7 +324,8 @@ impl FrameSkipPolicy {
 #[derive(Clone)]
 pub struct Scheduler {
     /// Current scheduler phase (Flutter-like state machine)
-    scheduler_phase: Arc<Mutex<SchedulerPhase>>,
+    /// Optimized: AtomicU8 for lock-free phase transitions
+    scheduler_phase: Arc<AtomicU8>,
 
     /// Current frame timing
     current_frame: Arc<Mutex<Option<FrameTiming>>>,
@@ -309,7 +340,8 @@ pub struct Scheduler {
     transient_callbacks: Arc<Mutex<Vec<CancellableTransientCallback>>>,
 
     /// Cancelled callback IDs (checked before execution)
-    cancelled_callbacks: Arc<Mutex<HashMap<CallbackId, ()>>>,
+    /// Optimized: DashMap for lock-free concurrent access
+    cancelled_callbacks: Arc<DashMap<CallbackId, ()>>,
 
     /// Callback ID generator
     callback_id_gen: Arc<IdGenerator<CallbackIdMarker>>,
@@ -334,10 +366,12 @@ pub struct Scheduler {
     budget: Arc<Mutex<FrameBudget>>,
 
     /// Whether a frame is currently scheduled
-    frame_scheduled: Arc<Mutex<bool>>,
+    /// Optimized: AtomicBool for lock-free access
+    frame_scheduled: Arc<AtomicBool>,
 
     /// Frame counter
-    frame_count: Arc<Mutex<u64>>,
+    /// Optimized: AtomicU64 for lock-free increment
+    frame_count: Arc<AtomicU64>,
 
     /// VSync scheduler (optional integration)
     vsync: Arc<Mutex<Option<VsyncScheduler>>>,
@@ -346,10 +380,12 @@ pub struct Scheduler {
     janky_frames: Arc<Mutex<Vec<FrameId>>>,
 
     /// Whether warm-up frame was executed
-    warm_up_done: Arc<Mutex<bool>>,
+    /// Optimized: AtomicBool for lock-free access
+    warm_up_done: Arc<AtomicBool>,
 
     /// Frame skip policy for catching up
-    frame_skip_policy: Arc<Mutex<FrameSkipPolicy>>,
+    /// Optimized: AtomicU8 for lock-free access
+    frame_skip_policy: Arc<AtomicU8>,
 
     /// Maximum frames to skip (for LimitedSkip policy)
     max_frame_skip: Arc<Mutex<u32>>,
@@ -358,16 +394,22 @@ pub struct Scheduler {
     last_frame_end: Arc<Mutex<Option<Instant>>>,
 
     /// Skipped frame counter
-    skipped_frames: Arc<Mutex<u64>>,
+    /// Optimized: AtomicU64 for lock-free increment
+    skipped_frames: Arc<AtomicU64>,
 
     /// Current application lifecycle state
-    lifecycle_state: Arc<Mutex<AppLifecycleState>>,
+    /// Optimized: AtomicU8 for lock-free access
+    lifecycle_state: Arc<AtomicU8>,
 
     /// Lifecycle state change listeners
     lifecycle_listeners: Arc<Mutex<Vec<LifecycleListener>>>,
 
     /// Pending frame completion futures waiting to be notified
     frame_completion_waiters: Arc<Mutex<Vec<FrameCompletionNotifier>>>,
+
+    /// Binding state for SchedulerBinding trait implementation
+    /// Stored per-instance for proper test isolation
+    pub(crate) binding_state: Arc<Mutex<crate::binding::SchedulerBindingState>>,
 }
 
 impl Scheduler {
@@ -385,12 +427,12 @@ impl Scheduler {
     pub fn with_frame_duration(frame_duration: FrameDuration) -> Self {
         let target_fps = frame_duration.fps() as u32;
         Self {
-            scheduler_phase: Arc::new(Mutex::new(SchedulerPhase::Idle)),
+            scheduler_phase: Arc::new(AtomicU8::new(SchedulerPhase::Idle as u8)),
             current_frame: Arc::new(Mutex::new(None)),
             current_vsync_time: Arc::new(Mutex::new(None)),
             task_queue: TaskQueue::new(),
             transient_callbacks: Arc::new(Mutex::new(Vec::new())),
-            cancelled_callbacks: Arc::new(Mutex::new(HashMap::new())),
+            cancelled_callbacks: Arc::new(DashMap::new()),
             callback_id_gen: Arc::new(IdGenerator::new()),
             frame_callbacks: Arc::new(Mutex::new(Vec::new())),
             persistent_callbacks: Arc::new(Mutex::new(Vec::new())),
@@ -398,18 +440,19 @@ impl Scheduler {
             microtasks: Arc::new(Mutex::new(VecDeque::new())),
             frame_duration: Arc::new(Mutex::new(frame_duration)),
             budget: Arc::new(Mutex::new(FrameBudget::new(target_fps))),
-            frame_scheduled: Arc::new(Mutex::new(false)),
-            frame_count: Arc::new(Mutex::new(0)),
+            frame_scheduled: Arc::new(AtomicBool::new(false)),
+            frame_count: Arc::new(AtomicU64::new(0)),
             vsync: Arc::new(Mutex::new(None)),
             janky_frames: Arc::new(Mutex::new(Vec::new())),
-            warm_up_done: Arc::new(Mutex::new(false)),
-            frame_skip_policy: Arc::new(Mutex::new(FrameSkipPolicy::default())),
+            warm_up_done: Arc::new(AtomicBool::new(false)),
+            frame_skip_policy: Arc::new(AtomicU8::new(FrameSkipPolicy::default() as u8)),
             max_frame_skip: Arc::new(Mutex::new(3)), // Default max 3 frame skips
             last_frame_end: Arc::new(Mutex::new(None)),
-            skipped_frames: Arc::new(Mutex::new(0)),
-            lifecycle_state: Arc::new(Mutex::new(AppLifecycleState::Resumed)),
+            skipped_frames: Arc::new(AtomicU64::new(0)),
+            lifecycle_state: Arc::new(AtomicU8::new(AppLifecycleState::Resumed as u8)),
             lifecycle_listeners: Arc::new(Mutex::new(Vec::new())),
             frame_completion_waiters: Arc::new(Mutex::new(Vec::new())),
+            binding_state: Arc::new(Mutex::new(crate::binding::SchedulerBindingState::new())),
         }
     }
 
@@ -419,19 +462,20 @@ impl Scheduler {
 
     /// Get current scheduler phase
     pub fn phase(&self) -> SchedulerPhase {
-        *self.scheduler_phase.lock()
+        SchedulerPhase::from_u8(self.scheduler_phase.load(Ordering::Acquire))
     }
 
     /// Set scheduler phase with validation
     fn set_scheduler_phase(&self, new_phase: SchedulerPhase) {
-        let current = *self.scheduler_phase.lock();
+        let current = SchedulerPhase::from_u8(self.scheduler_phase.load(Ordering::Acquire));
         debug_assert!(
             current.can_transition_to(new_phase),
             "Invalid phase transition: {:?} -> {:?}",
             current,
             new_phase
         );
-        *self.scheduler_phase.lock() = new_phase;
+        self.scheduler_phase
+            .store(new_phase as u8, Ordering::Release);
     }
 
     /// Check if currently in a frame
@@ -459,8 +503,8 @@ impl Scheduler {
 
         let frame_id = timing.id;
         *self.current_frame.lock() = Some(timing);
-        *self.frame_scheduled.lock() = false;
-        *self.frame_count.lock() += 1;
+        self.frame_scheduled.store(false, Ordering::Release);
+        self.frame_count.fetch_add(1, Ordering::Relaxed);
 
         // Phase 1: TransientCallbacks (animation tickers)
         self.set_scheduler_phase(SchedulerPhase::TransientCallbacks);
@@ -471,19 +515,16 @@ impl Scheduler {
             std::mem::take(&mut *cbs)
         };
 
-        // Get cancelled callbacks set
-        let cancelled = self.cancelled_callbacks.lock().clone();
-
         for cancellable in transient {
-            // Skip if cancelled
-            if cancelled.contains_key(&cancellable.id) {
+            // Skip if cancelled (DashMap provides lock-free contains_key)
+            if self.cancelled_callbacks.contains_key(&cancellable.id) {
                 continue;
             }
             (cancellable.callback)(vsync_time);
         }
 
         // Clear processed cancellations
-        self.cancelled_callbacks.lock().clear();
+        self.cancelled_callbacks.clear();
 
         // Execute legacy frame callbacks
         let callbacks = {
@@ -525,10 +566,9 @@ impl Scheduler {
                 .collect::<Vec<_>>()
         };
 
-        let cancelled = self.cancelled_callbacks.lock().clone();
-
         for (id, callback) in persistent_callbacks.iter() {
-            if cancelled.contains_key(id) {
+            // DashMap provides lock-free contains_key
+            if self.cancelled_callbacks.contains_key(id) {
                 continue;
             }
             if let Some(timing) = self.current_frame.lock().as_ref() {
@@ -559,17 +599,16 @@ impl Scheduler {
                 std::mem::take(&mut *cbs)
             };
 
-            let cancelled = self.cancelled_callbacks.lock().clone();
-
             for cancellable in callbacks {
-                if cancelled.contains_key(&cancellable.id) {
+                // DashMap provides lock-free contains_key
+                if self.cancelled_callbacks.contains_key(&cancellable.id) {
                     continue;
                 }
                 (cancellable.callback)(&timing);
             }
 
             // Clear processed cancellations
-            self.cancelled_callbacks.lock().clear();
+            self.cancelled_callbacks.clear();
 
             // Notify frame completion futures
             self.notify_frame_completion(&timing);
@@ -602,13 +641,13 @@ impl Scheduler {
     /// - Reducing first-frame jank
     /// - Forcing immediate layout updates
     pub fn schedule_warm_up_frame(&self) {
-        if *self.warm_up_done.lock() {
+        if self.warm_up_done.load(Ordering::Acquire) {
             return;
         }
 
         // Execute frame immediately without vsync
         self.execute_frame();
-        *self.warm_up_done.lock() = true;
+        self.warm_up_done.store(true, Ordering::Release);
     }
 
     // =========================================================================
@@ -626,7 +665,7 @@ impl Scheduler {
         self.transient_callbacks
             .lock()
             .push(CancellableTransientCallback { id, callback });
-        *self.frame_scheduled.lock() = true;
+        self.frame_scheduled.store(true, Ordering::Release);
         id
     }
 
@@ -657,19 +696,19 @@ impl Scheduler {
         }
 
         // If not found, mark as cancelled (in case it's about to be executed)
-        self.cancelled_callbacks.lock().insert(id, ());
+        self.cancelled_callbacks.insert(id, ());
         false
     }
 
     /// Schedule a legacy frame callback
     pub fn schedule_frame(&self, callback: FrameCallback) {
         self.frame_callbacks.lock().push(callback);
-        *self.frame_scheduled.lock() = true;
+        self.frame_scheduled.store(true, Ordering::Release);
     }
 
     /// Request a frame (without callback)
     pub fn request_frame(&self) {
-        *self.frame_scheduled.lock() = true;
+        self.frame_scheduled.store(true, Ordering::Release);
     }
 
     /// Add a persistent frame callback
@@ -721,7 +760,7 @@ impl Scheduler {
             return true;
         }
 
-        self.cancelled_callbacks.lock().insert(id, ());
+        self.cancelled_callbacks.insert(id, ());
         false
     }
 
@@ -819,7 +858,15 @@ impl Scheduler {
 
     /// Check if a frame is scheduled
     pub fn is_frame_scheduled(&self) -> bool {
-        *self.frame_scheduled.lock()
+        self.frame_scheduled.load(Ordering::Acquire)
+    }
+
+    /// Get the number of pending transient callbacks
+    ///
+    /// This is useful for debugging and testing to verify that
+    /// all transient callbacks have been processed.
+    pub fn transient_callback_count(&self) -> usize {
+        self.transient_callbacks.lock().len()
     }
 
     /// Get current frame timing (if a frame is active)
@@ -846,7 +893,8 @@ impl Scheduler {
             // Skip to post-frame if needed
             if self.phase() != SchedulerPhase::PostFrameCallbacks {
                 // Force transition (skip validation for legacy API)
-                *self.scheduler_phase.lock() = SchedulerPhase::PostFrameCallbacks;
+                self.scheduler_phase
+                    .store(SchedulerPhase::PostFrameCallbacks as u8, Ordering::Release);
             }
 
             let timing = self.current_frame.lock().take();
@@ -858,22 +906,22 @@ impl Scheduler {
                     std::mem::take(&mut *cbs)
                 };
 
-                let cancelled = self.cancelled_callbacks.lock().clone();
-
                 for cancellable in callbacks {
-                    if cancelled.contains_key(&cancellable.id) {
+                    // DashMap provides lock-free contains_key
+                    if self.cancelled_callbacks.contains_key(&cancellable.id) {
                         continue;
                     }
                     (cancellable.callback)(&timing);
                 }
 
-                self.cancelled_callbacks.lock().clear();
+                self.cancelled_callbacks.clear();
 
                 // Notify frame completion futures
                 self.notify_frame_completion(&timing);
             }
 
-            *self.scheduler_phase.lock() = SchedulerPhase::Idle;
+            self.scheduler_phase
+                .store(SchedulerPhase::Idle as u8, Ordering::Release);
         }
     }
 
@@ -921,7 +969,7 @@ impl Scheduler {
 
     /// Get total frame count
     pub fn frame_count(&self) -> u64 {
-        *self.frame_count.lock()
+        self.frame_count.load(Ordering::Relaxed)
     }
 
     /// Get average FPS from budget statistics
@@ -960,12 +1008,13 @@ impl Scheduler {
 
     /// Set frame skip policy
     pub fn set_frame_skip_policy(&self, policy: FrameSkipPolicy) {
-        *self.frame_skip_policy.lock() = policy;
+        self.frame_skip_policy
+            .store(policy as u8, Ordering::Release);
     }
 
     /// Get current frame skip policy
     pub fn frame_skip_policy(&self) -> FrameSkipPolicy {
-        *self.frame_skip_policy.lock()
+        FrameSkipPolicy::from_u8(self.frame_skip_policy.load(Ordering::Acquire))
     }
 
     /// Set maximum frames to skip (for LimitedSkip policy)
@@ -980,7 +1029,7 @@ impl Scheduler {
 
     /// Get count of skipped frames
     pub fn skipped_frame_count(&self) -> u64 {
-        *self.skipped_frames.lock()
+        self.skipped_frames.load(Ordering::Relaxed)
     }
 
     /// Calculate frames to skip based on current policy
@@ -995,7 +1044,7 @@ impl Scheduler {
 
         let elapsed_ms = last.elapsed().as_secs_f64() * 1000.0;
         let frame_budget_ms = self.frame_duration.lock().as_ms().value();
-        let policy = *self.frame_skip_policy.lock();
+        let policy = FrameSkipPolicy::from_u8(self.frame_skip_policy.load(Ordering::Acquire));
         let max_skip = *self.max_frame_skip.lock();
 
         policy.frames_to_skip(elapsed_ms, frame_budget_ms, max_skip)
@@ -1009,7 +1058,8 @@ impl Scheduler {
         let skip_count = self.should_skip_frames();
 
         if skip_count > 0 {
-            *self.skipped_frames.lock() += skip_count as u64;
+            self.skipped_frames
+                .fetch_add(skip_count as u64, Ordering::Relaxed);
             true
         } else {
             false
@@ -1018,7 +1068,7 @@ impl Scheduler {
 
     /// Clear skip statistics
     pub fn clear_skip_stats(&self) {
-        *self.skipped_frames.lock() = 0;
+        self.skipped_frames.store(0, Ordering::Relaxed);
     }
 
     /// Get skip rate as percentage
@@ -1039,7 +1089,7 @@ impl Scheduler {
     ///
     /// Returns the current state of the application as seen by the platform.
     pub fn lifecycle_state(&self) -> AppLifecycleState {
-        *self.lifecycle_state.lock()
+        AppLifecycleState::from_u8(self.lifecycle_state.load(Ordering::Acquire))
     }
 
     /// Handle a lifecycle state change from the platform
@@ -1066,12 +1116,10 @@ impl Scheduler {
     /// }
     /// ```
     pub fn handle_app_lifecycle_state_change(&self, new_state: AppLifecycleState) {
-        let old_state = {
-            let mut state = self.lifecycle_state.lock();
-            let old = *state;
-            *state = new_state;
-            old
-        };
+        // Atomically swap state and get old value
+        let old_state = AppLifecycleState::from_u8(
+            self.lifecycle_state.swap(new_state as u8, Ordering::AcqRel),
+        );
 
         // Only notify if state actually changed
         if old_state != new_state {
@@ -1203,37 +1251,25 @@ impl Default for Scheduler {
     }
 }
 
-/// Binding trait for scheduler access
-///
-/// This allows different parts of the framework to access the scheduler
-/// without tight coupling.
-pub trait SchedulerBinding: Send + Sync {
-    /// Get reference to the scheduler
-    fn scheduler(&self) -> &Scheduler;
-
-    /// Schedule a frame
-    fn schedule_frame(&self) {
-        self.scheduler().request_frame();
-    }
-
-    /// Add a task
-    fn add_task(&self, priority: Priority, callback: impl FnOnce() + Send + 'static) {
-        self.scheduler().add_task(priority, callback);
-    }
-
-    /// Add a typed task
-    fn add_task_typed<P: PriorityLevel>(&self, callback: impl FnOnce() + Send + 'static) {
-        self.scheduler().add_task_typed::<P>(callback);
+// Implement BindingBase trait for singleton pattern
+impl BindingBase for Scheduler {
+    fn init_instances(&mut self) {
+        tracing::debug!("Scheduler initialized");
     }
 }
 
+// Implement singleton pattern via macro
+impl_binding_singleton!(Scheduler);
+
 impl TickerProvider for Scheduler {
     fn schedule_tick(&self, callback: Box<dyn FnOnce(f64) + Send>) {
-        // Schedule as transient callback - ticker gets vsync timestamp
-        self.schedule_frame_callback(Box::new(move |vsync_time| {
-            // Convert to seconds elapsed (from epoch, consistent across tickers)
-            let elapsed = vsync_time.elapsed().as_secs_f64();
-            callback(elapsed);
+        // Schedule as transient callback for next frame
+        self.schedule_frame_callback(Box::new(move |_vsync_time| {
+            // Pass 0.0 as elapsed time since the callback was just scheduled.
+            // Individual Tickers (like ScheduledTicker) track their own start times
+            // and compute elapsed time internally. This matches Flutter's behavior
+            // where TickerProvider just schedules the tick, not computes elapsed.
+            callback(0.0);
         }));
     }
 }

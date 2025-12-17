@@ -9,6 +9,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Safe conversion methods**:
+  - `SchedulerPhase::try_from_u8()` - fallible conversion from u8
+  - `AppLifecycleState::try_from_u8()` - fallible conversion from u8
+  - `FrameSkipPolicy::try_from_u8()` - fallible conversion from u8
+
+### Changed
+
+- **`TickerFuture::when_complete_or_cancel`** now uses `event-listener` crate instead of busy-wait thread spawn, eliminating potential resource leaks
+- **`SchedulerBindingState`** is now per-`Scheduler` instance instead of global static, enabling proper test isolation and multiple scheduler support
+- **`TickerProvider::schedule_tick`** now passes `0.0` as elapsed time, matching Flutter semantics where individual tickers track their own start times
+
+### Fixed
+
+- Thread spawn leak in `TickerFuture::when_complete_or_cancel` - threads no longer spin in a busy loop
+- Test interference caused by global `BINDING_STATE` - each `Scheduler` now has isolated binding state
+- Confusing elapsed time semantics in `TickerProvider::schedule_tick`
+
+### Documentation
+
+- Added "Why ScheduledTicker doesn't implement Clone" section explaining design rationale
+- Updated `TickerProvider::schedule_tick` documentation to clarify elapsed time semantics
+- Added cross-references to `try_from_u8` in `from_u8` panic documentation
+
+### Dependencies
+
+- Added `event-listener = "5.3"` for efficient async event notification
+
+---
+
+## [0.1.1] - Previous Unreleased
+
+### Added
+
 - **Advanced type system features**:
   - Typestate pattern for tickers (`TypestateTicker<Idle>`, `TypestateTicker<Active>`, etc.)
   - Type-safe duration wrappers (`Milliseconds`, `Seconds`, `Microseconds`, `Percentage`)

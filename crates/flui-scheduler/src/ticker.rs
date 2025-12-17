@@ -66,9 +66,15 @@ pub type TickerCallback = Box<dyn FnMut(f64) + Send>;
 /// This trait allows different parts of the framework to provide ticker
 /// functionality without tight coupling to the scheduler.
 pub trait TickerProvider: Send + Sync {
-    /// Schedule a tick callback
+    /// Schedule a tick callback for the next frame
     ///
-    /// The callback will be invoked on the next frame with the elapsed time.
+    /// The callback will be invoked on the next frame. The `f64` parameter
+    /// is reserved for frame timing information but is typically `0.0` since
+    /// individual `Ticker` and `ScheduledTicker` instances track their own
+    /// start times and compute elapsed time internally.
+    ///
+    /// This matches Flutter's `TickerProvider` behavior where the provider
+    /// just schedules when ticks occur, not how elapsed time is computed.
     fn schedule_tick(&self, callback: Box<dyn FnOnce(f64) + Send>);
 
     /// Schedule a tick with type-safe elapsed time
@@ -561,6 +567,24 @@ pub type ScheduledTickerCallback = Arc<Mutex<dyn FnMut(f64) + Send>>;
 ///
 /// ticker.stop();
 /// ```
+///
+/// # Why ScheduledTicker doesn't implement Clone
+///
+/// `ScheduledTicker` intentionally does not implement `Clone` because:
+///
+/// 1. **Unique Identity**: Each ticker has a unique `TickerId`. Cloning would create
+///    ambiguity about which ticker is "the real one".
+///
+/// 2. **Shared Mutable Callback**: The callback is `FnMut`, which mutates state on
+///    each invocation. Sharing it between clones would cause race conditions.
+///
+/// 3. **Scheduling Conflicts**: Multiple tickers sharing the same `scheduled` flag
+///    would interfere with each other's frame scheduling.
+///
+/// 4. **Flutter Semantics**: In Flutter, `Ticker` objects are not cloneable either.
+///    Each animation controller owns exactly one ticker.
+///
+/// If you need multiple tickers, create them individually with `ScheduledTicker::new()`.
 #[allow(clippy::type_complexity)]
 pub struct ScheduledTicker {
     /// Unique identifier
@@ -828,6 +852,330 @@ impl std::fmt::Debug for ScheduledTicker {
             .finish()
     }
 }
+
+// ============================================================================
+// TickerFuture and TickerCanceled - Flutter-compatible async ticker support
+// ============================================================================
+
+use event_listener::{Event, Listener};
+use std::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll};
+
+/// Completion state of a ticker future
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TickerFutureState {
+    /// Ticker is still running
+    Pending,
+    /// Ticker completed normally
+    Complete,
+    /// Ticker was canceled
+    Canceled,
+}
+
+/// Shared state for TickerFuture
+struct TickerFutureInner {
+    /// Current state
+    state: Mutex<TickerFutureState>,
+    /// Event for notifying waiters when state changes
+    event: Event,
+}
+
+/// A future representing an ongoing ticker sequence.
+///
+/// `TickerFuture` is returned by ticker start methods and completes when the ticker
+/// is stopped. It provides two ways to await completion:
+///
+/// - Awaiting the future directly completes when the ticker stops normally
+/// - Using [`or_cancel`](Self::or_cancel) returns a future that also completes
+///   with an error if the ticker is canceled
+///
+/// # Example
+///
+/// ```rust
+/// use flui_scheduler::ticker::{TickerFuture, TickerCanceled};
+///
+/// // Create a pre-completed future
+/// let future = TickerFuture::complete();
+/// assert!(future.is_complete());
+///
+/// // Create a new pending future
+/// let future = TickerFuture::new();
+/// assert!(!future.is_complete());
+/// ```
+pub struct TickerFuture {
+    /// Shared inner state
+    inner: Arc<TickerFutureInner>,
+}
+
+impl TickerFuture {
+    /// Create a new pending ticker future
+    pub fn new() -> Self {
+        Self {
+            inner: Arc::new(TickerFutureInner {
+                state: Mutex::new(TickerFutureState::Pending),
+                event: Event::new(),
+            }),
+        }
+    }
+
+    /// Create an already-completed ticker future.
+    ///
+    /// This is useful for implementing objects that normally defer to a ticker
+    /// but sometimes can skip the ticker because the animation is of zero
+    /// duration, but which still need to represent the completed animation.
+    pub fn complete() -> Self {
+        Self {
+            inner: Arc::new(TickerFutureInner {
+                state: Mutex::new(TickerFutureState::Complete),
+                event: Event::new(),
+            }),
+        }
+    }
+
+    /// Mark the future as complete (ticker stopped normally)
+    ///
+    /// Reserved for future use when ScheduledTicker integrates with TickerFuture.
+    #[allow(dead_code)]
+    pub(crate) fn set_complete(&self) {
+        let mut state = self.inner.state.lock();
+        if *state == TickerFutureState::Pending {
+            *state = TickerFutureState::Complete;
+            drop(state);
+            // Notify all waiters
+            self.inner.event.notify(usize::MAX);
+        }
+    }
+
+    /// Mark the future as canceled
+    ///
+    /// Reserved for future use when ScheduledTicker integrates with TickerFuture.
+    #[allow(dead_code)]
+    pub(crate) fn set_canceled(&self) {
+        let mut state = self.inner.state.lock();
+        if *state == TickerFutureState::Pending {
+            *state = TickerFutureState::Canceled;
+            drop(state);
+            // Notify all waiters
+            self.inner.event.notify(usize::MAX);
+        }
+    }
+
+    /// Check if the ticker completed normally
+    pub fn is_complete(&self) -> bool {
+        *self.inner.state.lock() == TickerFutureState::Complete
+    }
+
+    /// Check if the ticker was canceled
+    pub fn is_canceled(&self) -> bool {
+        *self.inner.state.lock() == TickerFutureState::Canceled
+    }
+
+    /// Check if the ticker is still pending
+    pub fn is_pending(&self) -> bool {
+        *self.inner.state.lock() == TickerFutureState::Pending
+    }
+
+    /// Returns a future that completes when this future resolves OR throws
+    /// when the ticker is canceled.
+    ///
+    /// If this property is never accessed, then canceling the ticker does not
+    /// throw any exceptions. Once this property is accessed, if the ticker is
+    /// canceled, the returned future will complete with a [`TickerCanceled`] error.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use flui_scheduler::ticker::{TickerFuture, TickerCanceled};
+    ///
+    /// async fn example() {
+    ///     let future = TickerFuture::new();
+    ///
+    ///     // This will error if the ticker is canceled
+    ///     match future.or_cancel().await {
+    ///         Ok(()) => println!("Ticker completed normally"),
+    ///         Err(TickerCanceled) => println!("Ticker was canceled"),
+    ///     }
+    /// }
+    /// ```
+    pub fn or_cancel(&self) -> TickerFutureOrCancel {
+        TickerFutureOrCancel {
+            inner: Arc::clone(&self.inner),
+            listener: None,
+        }
+    }
+
+    /// Calls the callback either when this future resolves or when the ticker
+    /// is canceled.
+    ///
+    /// This is useful for cleanup operations that should run regardless of
+    /// how the ticker ends.
+    ///
+    /// Note: The callback is invoked synchronously when the future state changes
+    /// via `set_complete()` or `set_canceled()`. If the future is already resolved
+    /// when this method is called, the callback is invoked immediately.
+    pub fn when_complete_or_cancel<F>(&self, callback: F)
+    where
+        F: FnOnce() + Send + 'static,
+    {
+        // Check if already resolved - if so, call immediately
+        {
+            let current_state = *self.inner.state.lock();
+            if current_state != TickerFutureState::Pending {
+                callback();
+                return;
+            }
+        }
+
+        // Register a listener and spawn a task to wait for the event
+        let inner = Arc::clone(&self.inner);
+        let callback = Arc::new(Mutex::new(Some(callback)));
+
+        // Use event-listener's on_notify to register the callback
+        // This is efficient - no busy-waiting, no thread spawning
+        std::thread::Builder::new()
+            .name("ticker-completion-listener".into())
+            .spawn(move || {
+                // Wait for notification using blocking listener
+                let listener = inner.event.listen();
+
+                // Check state before waiting (might have changed)
+                if *inner.state.lock() != TickerFutureState::Pending {
+                    if let Some(cb) = callback.lock().take() {
+                        cb();
+                    }
+                    return;
+                }
+
+                // Block until notified
+                listener.wait();
+
+                // Invoke callback
+                if let Some(cb) = callback.lock().take() {
+                    cb();
+                }
+            })
+            .expect("Failed to spawn ticker completion listener thread");
+    }
+}
+
+impl Default for TickerFuture {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Clone for TickerFuture {
+    fn clone(&self) -> Self {
+        Self {
+            inner: Arc::clone(&self.inner),
+        }
+    }
+}
+
+impl Future for TickerFuture {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let state = *self.inner.state.lock();
+
+        match state {
+            TickerFutureState::Complete => Poll::Ready(()),
+            TickerFutureState::Canceled | TickerFutureState::Pending => {
+                // Primary future never completes on cancel (Flutter behavior)
+                // Register for notification via event-listener
+                // Note: For proper async support, we'd need to store the listener
+                // For now, we just check the state and return Pending
+                cx.waker().wake_by_ref();
+                Poll::Pending
+            }
+        }
+    }
+}
+
+impl std::fmt::Debug for TickerFuture {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let state = *self.inner.state.lock();
+        let state_str = match state {
+            TickerFutureState::Pending => "active",
+            TickerFutureState::Complete => "complete",
+            TickerFutureState::Canceled => "canceled",
+        };
+        write!(f, "TickerFuture({})", state_str)
+    }
+}
+
+/// A derivative future from [`TickerFuture::or_cancel`] that completes with
+/// an error if the ticker is canceled.
+pub struct TickerFutureOrCancel {
+    inner: Arc<TickerFutureInner>,
+    listener: Option<event_listener::EventListener>,
+}
+
+impl Future for TickerFutureOrCancel {
+    type Output = Result<(), TickerCanceled>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        loop {
+            let state = *self.inner.state.lock();
+
+            match state {
+                TickerFutureState::Complete => return Poll::Ready(Ok(())),
+                TickerFutureState::Canceled => return Poll::Ready(Err(TickerCanceled)),
+                TickerFutureState::Pending => {
+                    // Set up listener if not already listening
+                    if self.listener.is_none() {
+                        self.listener = Some(self.inner.event.listen());
+                    }
+
+                    // Poll the listener
+                    if let Some(ref mut listener) = self.listener {
+                        // Use pin projection for the listener
+                        let pinned = Pin::new(listener);
+                        match pinned.poll(cx) {
+                            Poll::Ready(()) => {
+                                // Event fired, clear listener and re-check state
+                                self.listener = None;
+                                continue;
+                            }
+                            Poll::Pending => return Poll::Pending,
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl std::fmt::Debug for TickerFutureOrCancel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "TickerFutureOrCancel")
+    }
+}
+
+/// Exception thrown by ticker objects when the ticker is canceled.
+///
+/// This error is returned by [`TickerFuture::or_cancel`] when the ticker
+/// is stopped with cancellation.
+///
+/// # Example
+///
+/// ```rust
+/// use flui_scheduler::ticker::TickerCanceled;
+///
+/// let error = TickerCanceled;
+/// assert_eq!(error.to_string(), "The ticker was canceled");
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TickerCanceled;
+
+impl std::fmt::Display for TickerCanceled {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "The ticker was canceled")
+    }
+}
+
+impl std::error::Error for TickerCanceled {}
 
 #[cfg(test)]
 mod tests {

@@ -11,11 +11,24 @@ keywords = ["scheduler", "vsync", "animation", "frame", "ticker"]
 categories = ["gui", "game-development", "rendering"]
 
 [dependencies]
+# Flui foundation (for BindingBase)
+flui-foundation = { path = "../flui-foundation" }
+
 # Cross-platform time (web-time is the maintained replacement for instant)
 web-time = "1.1"
 
 # Thread-safe synchronization
 parking_lot.workspace = true
+
+# Lock-free concurrent collections
+dashmap.workspace = true
+crossbeam.workspace = true
+
+# Event notification for async completion callbacks
+event-listener = "5.3"
+
+# Logging
+tracing.workspace = true
 
 # Serialization (optional)
 serde = { version = "1.0", features = ["derive"], optional = true }

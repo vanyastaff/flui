@@ -476,9 +476,12 @@ impl FrameBudget {
         variance.sqrt()
     }
 
-    /// Get jank count (frames that exceeded budget by >50%)
+    /// Get jank count (frames that exceeded the target frame duration)
+    ///
+    /// A frame is considered "janky" if it took longer than the target
+    /// frame duration (e.g., >16.67ms for 60 FPS).
     pub fn jank_count(&self) -> usize {
-        let threshold = self.frame_duration.as_ms().value() * 1.5;
+        let threshold = self.frame_duration.as_ms().value();
         self.frame_times
             .iter()
             .filter(|t| t.value() > threshold)

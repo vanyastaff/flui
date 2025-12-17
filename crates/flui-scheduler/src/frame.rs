@@ -72,6 +72,34 @@ pub enum SchedulerPhase {
 }
 
 impl SchedulerPhase {
+    /// Try to convert from u8 representation
+    ///
+    /// Returns `None` if the value is not a valid discriminant.
+    #[inline]
+    pub const fn try_from_u8(value: u8) -> Option<Self> {
+        match value {
+            0 => Some(Self::Idle),
+            1 => Some(Self::TransientCallbacks),
+            2 => Some(Self::MidFrameMicrotasks),
+            3 => Some(Self::PersistentCallbacks),
+            4 => Some(Self::PostFrameCallbacks),
+            _ => None,
+        }
+    }
+
+    /// Convert from u8 representation (for atomic storage)
+    ///
+    /// # Panics
+    /// Panics if the value is not a valid SchedulerPhase discriminant.
+    /// For fallible conversion, use [`try_from_u8`](Self::try_from_u8).
+    #[inline]
+    pub const fn from_u8(value: u8) -> Self {
+        match Self::try_from_u8(value) {
+            Some(v) => v,
+            None => panic!("Invalid SchedulerPhase value"),
+        }
+    }
+
     /// All phases in execution order
     pub const ALL: [SchedulerPhase; 5] = [
         SchedulerPhase::Idle,
@@ -231,6 +259,34 @@ pub enum AppLifecycleState {
 }
 
 impl AppLifecycleState {
+    /// Try to convert from u8 representation
+    ///
+    /// Returns `None` if the value is not a valid discriminant.
+    #[inline]
+    pub const fn try_from_u8(value: u8) -> Option<Self> {
+        match value {
+            0 => Some(Self::Resumed),
+            1 => Some(Self::Inactive),
+            2 => Some(Self::Hidden),
+            3 => Some(Self::Paused),
+            4 => Some(Self::Detached),
+            _ => None,
+        }
+    }
+
+    /// Convert from u8 representation (for atomic storage)
+    ///
+    /// # Panics
+    /// Panics if the value is not a valid AppLifecycleState discriminant.
+    /// For fallible conversion, use [`try_from_u8`](Self::try_from_u8).
+    #[inline]
+    pub const fn from_u8(value: u8) -> Self {
+        match Self::try_from_u8(value) {
+            Some(v) => v,
+            None => panic!("Invalid AppLifecycleState value"),
+        }
+    }
+
     /// All states in typical lifecycle order
     pub const ALL: [AppLifecycleState; 5] = [
         AppLifecycleState::Detached,
