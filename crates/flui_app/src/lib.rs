@@ -50,8 +50,8 @@ pub use debug::DebugFlags;
 
 // Bindings re-exports
 pub use bindings::{
-    GestureBinding, PipelineOwner, RenderingFlutterBinding, Scheduler, SemanticsBinding,
-    WidgetsBinding,
+    GestureBinding, PaintingBinding, PipelineOwner, RenderingFlutterBinding, Scheduler,
+    SemanticsBinding, WidgetsBinding,
 };
 
 // Convenience re-exports from flui-view

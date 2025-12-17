@@ -35,6 +35,7 @@ mod renderer_binding;
 
 // Re-export bindings from their respective crates
 pub use flui_interaction::binding::GestureBinding;
+pub use flui_painting::PaintingBinding;
 pub use flui_rendering::pipeline::PipelineOwner;
 pub use flui_scheduler::Scheduler;
 pub use flui_semantics::SemanticsBinding;

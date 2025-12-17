@@ -38,6 +38,7 @@ use parking_lot::RwLock;
 
 use flui_foundation::{impl_binding_singleton, BindingBase, HasInstance};
 use flui_interaction::binding::GestureBinding;
+use flui_painting::PaintingBinding;
 use flui_rendering::binding::{HitTestable, PipelineManifold, RendererBinding};
 use flui_rendering::hit_testing::HitTestResult;
 use flui_rendering::input::MouseTracker;
@@ -260,6 +261,25 @@ impl RenderingFlutterBinding {
     pub fn semantics() -> &'static SemanticsBinding {
         SemanticsBinding::instance()
     }
+
+    /// Get the PaintingBinding singleton.
+    ///
+    /// Equivalent to Flutter's `PaintingBinding.instance`.
+    pub fn painting() -> &'static PaintingBinding {
+        PaintingBinding::instance()
+    }
+
+    // ========================================================================
+    // Memory Management
+    // ========================================================================
+
+    /// Handles memory pressure by clearing caches.
+    ///
+    /// Delegates to PaintingBinding to clear the image cache.
+    pub fn handle_memory_pressure(&self) {
+        Self::painting().handle_memory_pressure();
+        tracing::info!("RenderingFlutterBinding: handled memory pressure");
+    }
 }
 
 // ============================================================================
@@ -279,6 +299,10 @@ impl BindingBase for RenderingFlutterBinding {
         // Initialize semantics binding
         let _ = SemanticsBinding::instance();
         tracing::debug!("SemanticsBinding initialized via RenderingFlutterBinding");
+
+        // Initialize painting binding (image cache, shader warm-up)
+        let _ = PaintingBinding::instance();
+        tracing::debug!("PaintingBinding initialized via RenderingFlutterBinding");
 
         tracing::info!("RenderingFlutterBinding initialized");
     }
