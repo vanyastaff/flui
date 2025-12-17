@@ -40,7 +40,24 @@ pub type ListenerCallback = Arc<dyn Fn() + Send + Sync>;
 ///
 /// Similar to Flutter's `Listenable`.
 /// Uses interior mutability for thread-safe listener management.
-pub trait Listenable {
+///
+/// There are two variants of this interface:
+///
+/// - [`ValueListenable`]: A `Listenable` that also exposes a current value.
+/// - [`ChangeNotifier`]: A concrete implementation that can be used directly.
+///
+/// # Example
+///
+/// ```rust
+/// use flui_foundation::notifier::{Listenable, ChangeNotifier};
+/// use std::sync::Arc;
+///
+/// let notifier = ChangeNotifier::new();
+/// let id = notifier.add_listener(Arc::new(|| println!("Changed!")));
+/// notifier.notify_listeners();
+/// notifier.remove_listener(id);
+/// ```
+pub trait Listenable: Send + Sync {
     /// Register a listener callback.
     fn add_listener(&self, listener: ListenerCallback) -> ListenerId;
 
@@ -49,6 +66,34 @@ pub trait Listenable {
 
     /// Remove all listeners.
     fn remove_all_listeners(&self);
+}
+
+/// An interface for subclasses of [`Listenable`] that expose a value.
+///
+/// Similar to Flutter's `ValueListenable<T>`.
+///
+/// This trait is implemented by [`ValueNotifier<T>`] and can be used
+/// to accept any listenable that provides a current value.
+///
+/// # Example
+///
+/// ```rust
+/// use flui_foundation::notifier::{ValueListenable, ValueNotifier, Listenable};
+/// use std::sync::Arc;
+///
+/// fn print_on_change<T: std::fmt::Debug + Clone + Send + Sync>(listenable: &impl ValueListenable<T>) {
+///     println!("Current value: {:?}", listenable.value());
+/// }
+///
+/// let notifier = ValueNotifier::new(42);
+/// print_on_change(&notifier);
+/// ```
+pub trait ValueListenable<T>: Listenable {
+    /// The current value of the object.
+    ///
+    /// When the value changes, the callbacks registered with
+    /// [`Listenable::add_listener`] will be invoked.
+    fn value(&self) -> &T;
 }
 
 /// A class that can be extended or mixed in that provides a change notification API.
@@ -311,7 +356,7 @@ impl<T: Clone> AsRef<T> for ValueNotifier<T> {
     }
 }
 
-impl<T: Clone> Listenable for ValueNotifier<T> {
+impl<T: Clone + Send + Sync> Listenable for ValueNotifier<T> {
     fn add_listener(&self, listener: ListenerCallback) -> ListenerId {
         self.notifier.add_listener(listener)
     }
@@ -322,6 +367,12 @@ impl<T: Clone> Listenable for ValueNotifier<T> {
 
     fn remove_all_listeners(&self) {
         self.notifier.remove_all_listeners();
+    }
+}
+
+impl<T: Clone + Send + Sync> ValueListenable<T> for ValueNotifier<T> {
+    fn value(&self) -> &T {
+        &self.value
     }
 }
 

@@ -187,7 +187,9 @@ pub use platform::TargetPlatform;
 pub use observer::{HashedObserverList, ObserverList, SyncObserverList};
 
 // Change notification (Listenable pattern)
-pub use notifier::{ChangeNotifier, Listenable, ListenerCallback, MergedListenable, ValueNotifier};
+pub use notifier::{
+    ChangeNotifier, Listenable, ListenerCallback, MergedListenable, ValueListenable, ValueNotifier,
+};
 
 // Diagnostics
 pub use debug::{
@@ -239,6 +241,7 @@ pub mod prelude {
         Listenable,
         ListenerCallback,
         ListenerId,
+        MergedListenable,
         ObjectKey,
         ObserverId,
         ObserverList,
@@ -254,6 +257,7 @@ pub mod prelude {
         ValueChanged,
         ValueGetter,
         ValueKey,
+        ValueListenable,
         ValueNotifier,
         ValueSetter,
         ValueTransformer,
