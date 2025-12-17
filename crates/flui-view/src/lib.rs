@@ -146,9 +146,12 @@ pub use flui_foundation::{ElementId, RenderId};
 
 // Binding
 pub use binding::{
-    create_shared_binding, AppLifecycleState, SharedWidgetsBinding, WidgetsBinding,
-    WidgetsBindingObserver,
+    AppExitResponse, AppLifecycleState, PredictiveBackEvent, RouteInformation, ViewFocusDirection,
+    ViewFocusEvent, ViewFocusState, WidgetsBinding, WidgetsBindingObserver,
 };
+
+// Logging re-exports from flui_log
+pub use flui_log::{debug, error, info, trace, warn, Level, Logger};
 
 // ============================================================================
 // Prelude
@@ -160,8 +163,12 @@ pub use binding::{
 /// use flui_view::prelude::*;
 /// ```
 pub mod prelude {
-    pub use crate::binding::{AppLifecycleState, WidgetsBinding, WidgetsBindingObserver};
+    pub use crate::binding::{
+        AppExitResponse, AppLifecycleState, PredictiveBackEvent, RouteInformation,
+        ViewFocusDirection, ViewFocusEvent, ViewFocusState, WidgetsBinding, WidgetsBindingObserver,
+    };
     pub use crate::child::{Child, Children};
+    // Logging
     pub use crate::context::{BuildContext, BuildContextExt};
     pub use crate::element::{
         ElementSlot, IndexedSlot, IndexedSlotBuilder, LayoutChangedNotification, Lifecycle,
@@ -175,4 +182,5 @@ pub mod prelude {
         StatefulView, StatelessView, View, ViewExt, ViewState,
     };
     pub use flui_foundation::{ElementId, RenderId};
+    pub use flui_log::{debug, error, info, trace, warn};
 }

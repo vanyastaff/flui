@@ -5,9 +5,12 @@
 
 use crate::app::AppBinding;
 use flui_engine::wgpu::SceneRenderer;
+use flui_foundation::HasInstance;
 use flui_interaction::events::{PointerEvent, ScrollEventData};
+use flui_scheduler::Scheduler;
 use flui_types::Offset;
 use std::sync::Arc;
+use std::time::Instant;
 
 use ui_events_winit::{WindowEventReducer, WindowEventTranslation};
 use winit::{event::WindowEvent, event_loop::ActiveEventLoop, window::Window};
@@ -184,7 +187,19 @@ impl DesktopEmbedder {
     /// Render a frame
     ///
     /// Delegates to AppBinding for all framework logic, only handles GPU rendering.
+    /// Also invokes scheduler callbacks for animations.
     pub fn render_frame(&mut self) {
+        // 1. Handle scheduler frame callbacks (animations, etc.)
+        let scheduler = Scheduler::instance();
+        let frame_id = scheduler.handle_begin_frame(Instant::now());
+        tracing::trace!(
+            "render_frame: handle_begin_frame completed, frame_id={:?}",
+            frame_id
+        );
+        scheduler.handle_draw_frame();
+        tracing::trace!("render_frame: handle_draw_frame completed");
+
+        // 2. Render the frame via AppBinding
         let binding = AppBinding::instance();
         let _scene = binding.render_frame(&mut self.renderer);
     }

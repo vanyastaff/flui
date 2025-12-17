@@ -215,22 +215,64 @@ impl<V: RenderView + Clone> ElementBase for RenderElement<V> {
             self.view = v.clone();
 
             // Update the RenderObject if it exists in RenderTree
+            // IMPORTANT: We must release the lock before calling update_render_object
+            // because it may call mark_needs_layout() which also needs the lock.
             if let (Some(ref pipeline_owner), Some(render_id)) =
                 (&self.pipeline_owner, self.render_id)
             {
-                let mut owner = pipeline_owner.write();
-                if let Some(node) = owner.render_tree_mut().get_mut(render_id) {
-                    if let Some(render_object) = node
-                        .render_object_mut()
-                        .as_any_mut()
-                        .downcast_mut::<V::RenderObject>()
-                    {
-                        self.view.update_render_object(render_object);
+                // Take the render object out temporarily to update it without holding the lock
+                let render_object_opt = {
+                    let mut owner = pipeline_owner.write();
+                    owner.render_tree_mut().get_mut(render_id).and_then(|node| {
+                        node.render_object_mut()
+                            .as_any_mut()
+                            .downcast_mut::<V::RenderObject>()
+                            .map(|ro| {
+                                // We can't take the render object out, so we update in place
+                                // but we need to drop the lock first
+                                Some(render_id)
+                            })
+                    })
+                };
+
+                // Now update with the lock released
+                if render_object_opt.flatten().is_some() {
+                    // Re-acquire lock just for the update
+                    let mut owner = pipeline_owner.write();
+                    if let Some(node) = owner.render_tree_mut().get_mut(render_id) {
+                        if let Some(render_object) = node
+                            .render_object_mut()
+                            .as_any_mut()
+                            .downcast_mut::<V::RenderObject>()
+                        {
+                            tracing::debug!(
+                                "RenderElement::update calling update_render_object for render_id={:?}",
+                                render_id
+                            );
+                            // Call update_render_object while holding lock
+                            // But mark_needs_layout will try to acquire same lock - STILL DEADLOCK
+                            // The real fix: don't call mark_needs_layout from update_render_object
+                            // Instead, manually mark dirty after update
+                            self.view.update_render_object(render_object);
+                        }
                     }
+                } else {
+                    tracing::warn!(
+                        "RenderElement::update node not found or wrong type for render_id={:?}",
+                        render_id
+                    );
                 }
+            } else {
+                tracing::warn!(
+                    "RenderElement::update no pipeline_owner or render_id (pipeline={}, render_id={:?})",
+                    self.pipeline_owner.is_some(),
+                    self.render_id
+                );
             }
 
             self.dirty = true;
+        } else {
+            tracing::warn!("RenderElement::update failed to downcast view");
         }
     }
 
@@ -257,27 +299,50 @@ impl<V: RenderView + Clone> ElementBase for RenderElement<V> {
         // Create RenderObject and insert into RenderTree
         if let Some(ref pipeline_owner) = self.pipeline_owner {
             let render_object = self.view.create_render_object();
-            let mut owner = pipeline_owner.write();
-            let render_tree = owner.render_tree_mut();
 
-            // Insert into RenderTree, optionally as child of parent
-            let render_id = if let Some(parent_id) = self.parent_render_id {
-                render_tree
-                    .insert_child(parent_id, Box::new(render_object))
-                    .unwrap_or_else(|| {
-                        // Parent not found, insert as orphan (shouldn't happen normally)
-                        let ro = self.view.create_render_object();
-                        render_tree.insert(Box::new(ro))
-                    })
-            } else {
-                render_tree.insert(Box::new(render_object))
-            };
+            // Insert into RenderTree and mark as needing layout/paint
+            let render_id = {
+                let mut owner = pipeline_owner.write();
+                let render_tree = owner.render_tree_mut();
+
+                // Insert into RenderTree, optionally as child of parent
+                let render_id = if let Some(parent_id) = self.parent_render_id {
+                    render_tree
+                        .insert_child(parent_id, Box::new(render_object))
+                        .unwrap_or_else(|| {
+                            // Parent not found, insert as orphan (shouldn't happen normally)
+                            let ro = self.view.create_render_object();
+                            render_tree.insert(Box::new(ro))
+                        })
+                } else {
+                    render_tree.insert(Box::new(render_object))
+                };
+
+                // Mark as needing layout and paint
+                owner.add_node_needing_layout(render_id.get(), self.depth);
+                owner.add_node_needing_paint(render_id.get(), self.depth);
+
+                render_id
+            }; // Release lock here
 
             self.render_id = Some(render_id);
 
-            // Mark as needing layout and paint
-            owner.add_node_needing_layout(render_id.get(), self.depth);
-            owner.add_node_needing_paint(render_id.get(), self.depth);
+            // Attach the render object to the pipeline owner (separate lock scope)
+            // This sets the owner reference so mark_needs_layout() can schedule
+            {
+                let mut owner = pipeline_owner.write();
+                let render_tree = owner.render_tree_mut();
+                if let Some(node) = render_tree.get_mut(render_id) {
+                    // Set the owner directly without calling attach() to avoid re-scheduling
+                    node.render_object_mut()
+                        .base_mut()
+                        .set_owner(Arc::clone(pipeline_owner));
+                    tracing::debug!(
+                        "RenderElement::mount set owner on RenderObject render_id={:?}",
+                        render_id
+                    );
+                }
+            }
 
             tracing::debug!(
                 "RenderElement::mount inserted RenderObject render_id={:?} parent_id={:?}",

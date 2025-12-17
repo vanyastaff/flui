@@ -328,6 +328,20 @@ impl<V: View + Clone + Send + Sync + 'static> ElementBase for RootRenderElement<
         // In a full implementation, we'd have the child's ElementId
         let _ = visitor;
     }
+
+    fn set_pipeline_owner_any(&mut self, owner: Arc<dyn Any + Send + Sync>) {
+        // Downcast from Arc<dyn Any> to Arc<RwLock<PipelineOwner>>
+        if let Ok(pipeline_owner) = owner.downcast::<RwLock<PipelineOwner>>() {
+            self.pipeline_owner = Some(pipeline_owner);
+            tracing::debug!("RootRenderElement::set_pipeline_owner_any received PipelineOwner");
+        } else {
+            tracing::warn!("RootRenderElement::set_pipeline_owner_any received wrong type");
+        }
+    }
+
+    fn set_parent_render_id(&mut self, _parent_id: Option<RenderId>) {
+        // Root element has no parent render object
+    }
 }
 
 // ============================================================================

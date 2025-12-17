@@ -26,9 +26,10 @@
 //!   └── pointer_state: PointerState    (event coalescing)
 //! ```
 
-use crate::bindings::{Binding, RendererBinding, RendererBindingBehavior};
+use crate::bindings::RenderingFlutterBinding;
 use crate::embedder::{FrameCoordinator, PointerState};
 use flui_engine::wgpu::SceneRenderer;
+use flui_foundation::HasInstance;
 use flui_interaction::binding::GestureBinding;
 use flui_interaction::events::{
     make_pointer_event, Event, PointerButton, PointerEventData, PointerEventKind, PointerType,
@@ -37,8 +38,8 @@ use flui_layer::Scene;
 use flui_rendering::constraints::BoxConstraints;
 use flui_scheduler::Scheduler;
 use flui_types::{Offset, Size};
-use flui_view::{View, WidgetsBinding};
-use parking_lot::RwLock;
+use flui_view::{ElementBase, View, WidgetsBinding};
+use parking_lot::{Mutex, RwLock};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 
@@ -65,16 +66,13 @@ use std::sync::{Arc, OnceLock};
 /// ```
 pub struct AppBinding {
     /// Renderer binding (render tree, layout/paint phases)
-    renderer: RwLock<RendererBinding>,
+    renderer: RwLock<RenderingFlutterBinding>,
 
     /// Widgets binding (element tree, build phase)
     widgets: RwLock<WidgetsBinding>,
 
     /// Gesture binding (input handling, hit testing)
     gestures: GestureBinding,
-
-    /// Frame scheduler
-    scheduler: Arc<Scheduler>,
 
     /// Frame coordinator (tracks frame statistics)
     frame_coordinator: RwLock<FrameCoordinator>,
@@ -92,21 +90,25 @@ pub struct AppBinding {
     /// This is the same PipelineOwner as in RendererBinding, but wrapped
     /// for sharing with elements that need `Arc<RwLock<PipelineOwner>>`.
     shared_pipeline_owner: Arc<RwLock<flui_rendering::pipeline::PipelineOwner>>,
+
+    /// Root element stored for rebuild support.
+    /// This is set by `set_root_element()` and rebuilt by `rebuild_root()`.
+    root_element: Mutex<Option<Box<dyn ElementBase>>>,
 }
 
 impl AppBinding {
     /// Create a new AppBinding.
     fn new() -> Self {
-        let scheduler = Arc::new(Scheduler::new());
+        // Ensure the global Scheduler singleton is initialized
+        let _ = Scheduler::instance();
 
         // Create shared pipeline owner first (elements need Arc access)
         let shared_pipeline_owner =
             Arc::new(RwLock::new(flui_rendering::pipeline::PipelineOwner::new()));
 
         // Create and initialize RendererBinding
-        let mut renderer = RendererBinding::new();
-        renderer.init_instances();
-        renderer.init_service_extensions();
+        let renderer = RenderingFlutterBinding::new();
+        // RenderingFlutterBinding::new() already calls init_instances()
 
         // Create WidgetsBinding
         let mut widgets = WidgetsBinding::new();
@@ -122,12 +124,12 @@ impl AppBinding {
             renderer: RwLock::new(renderer),
             widgets: RwLock::new(widgets),
             gestures: GestureBinding::new(),
-            scheduler,
             frame_coordinator: RwLock::new(FrameCoordinator::new()),
             pointer_state: RwLock::new(PointerState::new()),
             needs_redraw: AtomicBool::new(false),
             initialized: AtomicBool::new(false),
             shared_pipeline_owner,
+            root_element: Mutex::new(None),
         }
     }
 
@@ -152,20 +154,21 @@ impl AppBinding {
     // ========================================================================
 
     /// Get read access to RendererBinding.
-    pub fn renderer(&self) -> parking_lot::RwLockReadGuard<'_, RendererBinding> {
+    pub fn renderer(&self) -> parking_lot::RwLockReadGuard<'_, RenderingFlutterBinding> {
         self.renderer.read()
     }
 
     /// Get write access to RendererBinding.
-    pub fn renderer_mut(&self) -> parking_lot::RwLockWriteGuard<'_, RendererBinding> {
+    pub fn renderer_mut(&self) -> parking_lot::RwLockWriteGuard<'_, RenderingFlutterBinding> {
         self.renderer.write()
     }
 
     /// Get the cached scene for hit testing.
     ///
     /// Returns the most recent scene if available.
+    /// TODO: Implement scene caching in RenderingFlutterBinding
     pub fn cached_scene(&self) -> Option<Arc<Scene>> {
-        self.renderer.read().cached_scene()
+        None // Scene caching not yet implemented in RenderingFlutterBinding
     }
 
     // ========================================================================
@@ -198,6 +201,46 @@ impl AppBinding {
     }
 
     // ========================================================================
+    // Root Element Management
+    // ========================================================================
+
+    /// Store a root element for rebuild support.
+    ///
+    /// This should be called by the app runner after creating the root element.
+    /// The stored element will be rebuilt when `rebuild_root()` is called.
+    pub fn set_root_element(&self, element: Box<dyn ElementBase>) {
+        let mut root = self.root_element.lock();
+        *root = Some(element);
+        tracing::debug!("Root element stored in AppBinding");
+    }
+
+    /// Take the root element out of storage.
+    ///
+    /// Returns the stored root element, leaving None in its place.
+    pub fn take_root_element(&self) -> Option<Box<dyn ElementBase>> {
+        self.root_element.lock().take()
+    }
+
+    /// Rebuild the stored root element.
+    ///
+    /// This triggers `perform_build()` on the root element which will
+    /// recursively rebuild the entire widget tree.
+    pub fn rebuild_root(&self) {
+        tracing::trace!("rebuild_root: acquiring lock");
+        let mut root = self.root_element.lock();
+        tracing::trace!("rebuild_root: lock acquired");
+        if let Some(ref mut element) = *root {
+            element.mark_needs_build();
+            tracing::trace!("rebuild_root: calling perform_build");
+            element.perform_build();
+            tracing::debug!("Root element rebuilt");
+        } else {
+            tracing::warn!("rebuild_root called but no root element stored");
+        }
+        tracing::trace!("rebuild_root: complete");
+    }
+
+    // ========================================================================
     // Render Pipeline Access (for elements)
     // ========================================================================
 
@@ -212,15 +255,15 @@ impl AppBinding {
     /// Get read access to RenderPipelineOwner.
     pub fn render_pipeline(
         &self,
-    ) -> impl std::ops::Deref<Target = flui_rendering::pipeline::PipelineOwner> + '_ {
-        parking_lot::RwLockReadGuard::map(self.renderer.read(), |r| r.root_pipeline_owner())
+    ) -> parking_lot::RwLockReadGuard<'_, flui_rendering::pipeline::PipelineOwner> {
+        self.shared_pipeline_owner.read()
     }
 
     /// Get write access to RenderPipelineOwner.
     pub fn render_pipeline_mut(
         &self,
-    ) -> impl std::ops::DerefMut<Target = flui_rendering::pipeline::PipelineOwner> + '_ {
-        parking_lot::RwLockWriteGuard::map(self.renderer.write(), |r| r.root_pipeline_owner_mut())
+    ) -> parking_lot::RwLockWriteGuard<'_, flui_rendering::pipeline::PipelineOwner> {
+        self.shared_pipeline_owner.write()
     }
 
     // ========================================================================
@@ -236,9 +279,9 @@ impl AppBinding {
     // Scheduler Access
     // ========================================================================
 
-    /// Get the scheduler.
-    pub fn scheduler(&self) -> &Arc<Scheduler> {
-        &self.scheduler
+    /// Get the scheduler singleton.
+    pub fn scheduler(&self) -> &'static Scheduler {
+        Scheduler::instance()
     }
 
     // ========================================================================
@@ -293,12 +336,13 @@ impl AppBinding {
 
         let mut pipeline = self.shared_pipeline_owner.write();
         if let Some(layer_tree) = pipeline.take_layer_tree() {
-            let renderer = self.renderer.read();
-            let scene = renderer.create_scene(layer_tree, size, frame_number);
-            Some(scene)
+            // Create scene from layer tree
+            let root = layer_tree.root();
+            let scene = Scene::new(size, layer_tree, root, frame_number);
+            Some(Arc::new(scene))
         } else {
-            // No new layer tree - return cached scene
-            self.renderer.read().cached_scene()
+            // No new layer tree
+            None
         }
     }
 

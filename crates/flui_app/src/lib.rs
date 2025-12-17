@@ -38,9 +38,15 @@
 pub mod app;
 pub mod bindings;
 pub mod debug;
+pub mod embedder;
+pub mod overlay;
+pub mod theme;
 
 // Primary exports - Flutter naming
-pub use app::{AppConfig, AppLifecycle, RootRenderElement, RootRenderView, WidgetsFlutterBinding};
+pub use app::{
+    run_app, run_app_with_config, AppConfig, AppLifecycle, RootRenderElement, RootRenderView,
+    WidgetsFlutterBinding,
+};
 
 // Legacy alias
 pub use app::AppBinding;
@@ -62,3 +68,31 @@ pub use flui_view::{
 
 // Convenience re-exports from flui_log
 pub use flui_log::{debug, error, info, trace, warn, Level, Logger};
+
+// ============================================================================
+// PRELUDE
+// ============================================================================
+
+/// Prelude module with commonly used types.
+///
+/// # Usage
+///
+/// ```rust,ignore
+/// use flui_app::prelude::*;
+/// ```
+pub mod prelude {
+    // Application types
+    pub use crate::{run_app, run_app_with_config, AppConfig, AppLifecycle, WidgetsFlutterBinding};
+
+    // Bindings
+    pub use crate::{
+        GestureBinding, PaintingBinding, PipelineOwner, RenderingFlutterBinding, Scheduler,
+        SemanticsBinding, WidgetsBinding,
+    };
+
+    // Debug
+    pub use crate::DebugFlags;
+
+    // Logging
+    pub use flui_log::{debug, error, info, trace, warn};
+}

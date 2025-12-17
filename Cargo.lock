@@ -894,6 +894,17 @@ checksum = "8bf7cc16383c4b8d58b9905a8509f02926ce3058053c056376248d958c9df1e8"
 name = "flui"
 version = "0.1.0"
 dependencies = [
+ "flui-foundation",
+ "flui-layer",
+ "flui-reactivity",
+ "flui-scheduler",
+ "flui-semantics",
+ "flui-tree",
+ "flui-view",
+ "flui_animation",
+ "flui_app",
+ "flui_interaction",
+ "flui_painting",
  "flui_rendering",
  "flui_types",
  "tracing",
@@ -1008,6 +1019,7 @@ dependencies = [
  "flui-foundation",
  "flui-tree",
  "flui_interaction",
+ "flui_log",
  "flui_rendering",
  "flui_types",
  "parking_lot",
@@ -1038,6 +1050,7 @@ dependencies = [
  "flui-foundation",
  "flui-layer",
  "flui-scheduler",
+ "flui-semantics",
  "flui-view",
  "flui_engine",
  "flui_interaction",
@@ -1130,6 +1143,7 @@ name = "flui_painting"
 version = "0.1.0"
 dependencies = [
  "cosmic-text 0.12.1",
+ "flui-foundation",
  "flui_types",
  "parking_lot",
  "serde",

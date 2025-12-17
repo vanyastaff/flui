@@ -49,6 +49,7 @@ impl PartialOrd for DirtyElement {
 /// - Process rebuilds in correct order
 /// - Manage GlobalKey registry
 /// - Track InheritedElement locations for O(1) lookup
+/// - Track inactive elements for finalization
 pub struct BuildOwner {
     /// Elements that need rebuild, sorted by depth.
     dirty_elements: BinaryHeap<Reverse<DirtyElement>>,
@@ -63,6 +64,10 @@ pub struct BuildOwner {
     /// Used for O(1) InheritedView lookup.
     inherited_elements: HashMap<TypeId, ElementId>,
 
+    /// Elements that have been deactivated and are pending unmount.
+    /// These are unmounted in `finalize_tree()`.
+    inactive_elements: Vec<InactiveElement>,
+
     /// Whether we're currently in a build phase.
     #[cfg(debug_assertions)]
     building: bool,
@@ -70,6 +75,17 @@ pub struct BuildOwner {
     /// Build scope nesting depth.
     #[cfg(debug_assertions)]
     scope_depth: usize,
+
+    /// Callback to be called when a build is scheduled.
+    #[allow(clippy::type_complexity)]
+    on_build_scheduled: Option<Box<dyn Fn() + Send + Sync>>,
+}
+
+/// An element that has been deactivated and is pending unmount.
+#[derive(Debug, Clone, Copy)]
+struct InactiveElement {
+    id: ElementId,
+    depth: usize,
 }
 
 impl Default for BuildOwner {
@@ -86,11 +102,24 @@ impl BuildOwner {
             dirty_set: std::collections::HashSet::new(),
             global_keys: HashMap::new(),
             inherited_elements: HashMap::new(),
+            inactive_elements: Vec::new(),
             #[cfg(debug_assertions)]
             building: false,
             #[cfg(debug_assertions)]
             scope_depth: 0,
+            on_build_scheduled: None,
         }
+    }
+
+    /// Set the callback for when a build is scheduled.
+    ///
+    /// This is called by `schedule_build_for` to notify the binding
+    /// that a visual update is needed.
+    pub fn set_on_build_scheduled<F>(&mut self, callback: F)
+    where
+        F: Fn() + Send + Sync + 'static,
+    {
+        self.on_build_scheduled = Some(Box::new(callback));
     }
 
     /// Schedule an element for rebuild.
@@ -101,6 +130,11 @@ impl BuildOwner {
         if self.dirty_set.insert(id) {
             self.dirty_elements
                 .push(Reverse(DirtyElement { id, depth }));
+
+            // Notify that a build was scheduled
+            if let Some(ref callback) = self.on_build_scheduled {
+                callback();
+            }
         }
     }
 
@@ -148,6 +182,92 @@ impl BuildOwner {
         {
             self.building = false;
             self.scope_depth -= 1;
+        }
+    }
+
+    // ========================================================================
+    // Inactive Elements (for finalization)
+    // ========================================================================
+
+    /// Add an element to the inactive list.
+    ///
+    /// Called when an element is deactivated (e.g., its parent rebuilds without it).
+    /// The element will be unmounted in `finalize_tree()`.
+    pub fn add_to_inactive(&mut self, id: ElementId, depth: usize) {
+        self.inactive_elements.push(InactiveElement { id, depth });
+    }
+
+    /// Remove an element from the inactive list.
+    ///
+    /// Called when an element is reactivated (e.g., moved via GlobalKey).
+    pub fn remove_from_inactive(&mut self, id: ElementId) {
+        self.inactive_elements.retain(|e| e.id != id);
+    }
+
+    /// Check if there are inactive elements pending unmount.
+    pub fn has_inactive_elements(&self) -> bool {
+        !self.inactive_elements.is_empty()
+    }
+
+    /// Complete the element build pass by unmounting inactive elements.
+    ///
+    /// This is called by `WidgetsBinding.draw_frame()` after `build_scope()`
+    /// and `super.draw_frame()` (layout/paint).
+    ///
+    /// Elements are unmounted in reverse depth order (deepest first) to ensure
+    /// children are unmounted before parents.
+    pub fn finalize_tree(&mut self, tree: &mut ElementTree) {
+        if self.inactive_elements.is_empty() {
+            return;
+        }
+
+        tracing::debug!(
+            count = self.inactive_elements.len(),
+            "Finalizing tree - unmounting inactive elements"
+        );
+
+        // Sort by depth (deepest first for unmounting)
+        self.inactive_elements.sort_by(|a, b| b.depth.cmp(&a.depth));
+
+        // Take ownership of inactive elements to avoid borrow conflicts
+        let inactive_elements: Vec<_> = self.inactive_elements.drain(..).collect();
+
+        // Collect all elements to unmount (including children)
+        let mut elements_to_unmount = Vec::new();
+        for inactive in &inactive_elements {
+            Self::collect_elements_to_unmount(tree, inactive.id, &mut elements_to_unmount);
+        }
+
+        // Unmount all elements (deepest first - already sorted by collect order)
+        for id in elements_to_unmount.iter().rev() {
+            if let Some(node) = tree.get_mut(*id) {
+                node.element_mut().unmount();
+            }
+        }
+
+        // Remove all elements from tree
+        for id in elements_to_unmount {
+            tree.remove(id);
+        }
+
+        tracing::debug!("Finalize tree complete");
+    }
+
+    /// Recursively collect all element IDs to unmount (breadth-first).
+    fn collect_elements_to_unmount(tree: &ElementTree, id: ElementId, result: &mut Vec<ElementId>) {
+        // Add this element
+        result.push(id);
+
+        // Collect children
+        if let Some(node) = tree.get(id) {
+            let mut children = Vec::new();
+            node.element().visit_children(&mut |child_id| {
+                children.push(child_id);
+            });
+
+            for child_id in children {
+                Self::collect_elements_to_unmount(tree, child_id, result);
+            }
         }
     }
 
@@ -244,23 +364,74 @@ impl Drop for BuildScopeGuard<'_> {
 mod tests {
     use super::*;
     use crate::tree::ElementTree;
-    use crate::BuildContext;
-    use crate::{StatelessElement, StatelessView, View};
+    use crate::{Lifecycle, View};
 
-    #[derive(Clone)]
-    struct TestView;
+    /// A leaf element that doesn't create children (prevents infinite recursion)
+    struct LeafElement {
+        depth: usize,
+        lifecycle: Lifecycle,
+    }
 
-    impl StatelessView for TestView {
-        fn build(&self, _ctx: &dyn BuildContext) -> Box<dyn View> {
-            Box::new(TestView)
+    impl LeafElement {
+        fn new() -> Self {
+            Self {
+                depth: 0,
+                lifecycle: Lifecycle::Initial,
+            }
         }
     }
 
-    impl View for TestView {
-        fn create_element(&self) -> Box<dyn crate::ElementBase> {
-            Box::new(StatelessElement::new(self))
+    impl crate::ElementBase for LeafElement {
+        fn view_type_id(&self) -> TypeId {
+            TypeId::of::<TestView>()
         }
 
+        fn depth(&self) -> usize {
+            self.depth
+        }
+
+        fn lifecycle(&self) -> Lifecycle {
+            self.lifecycle
+        }
+
+        fn mount(&mut self, _parent: Option<ElementId>, slot: usize) {
+            self.depth = slot;
+            self.lifecycle = Lifecycle::Active;
+        }
+
+        fn unmount(&mut self) {
+            self.lifecycle = Lifecycle::Defunct;
+        }
+
+        fn activate(&mut self) {
+            self.lifecycle = Lifecycle::Active;
+        }
+
+        fn deactivate(&mut self) {
+            self.lifecycle = Lifecycle::Inactive;
+        }
+
+        fn update(&mut self, _new_view: &dyn View) {}
+
+        fn mark_needs_build(&mut self) {}
+
+        fn perform_build(&mut self) {
+            // Leaf - no children to build
+        }
+
+        fn visit_children(&self, _visitor: &mut dyn FnMut(ElementId)) {
+            // No children
+        }
+    }
+
+    /// A leaf view that creates a LeafElement (no children)
+    #[derive(Clone)]
+    struct TestView;
+
+    impl View for TestView {
+        fn create_element(&self) -> Box<dyn crate::ElementBase> {
+            Box::new(LeafElement::new())
+        }
     }
 
     #[test]

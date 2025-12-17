@@ -32,14 +32,17 @@
 //! ```
 
 mod renderer_binding;
+mod traits;
 
 // Re-export bindings from their respective crates
 pub use flui_interaction::binding::GestureBinding;
 pub use flui_painting::PaintingBinding;
+pub use flui_rendering::binding::RendererBinding;
 pub use flui_rendering::pipeline::PipelineOwner;
 pub use flui_scheduler::Scheduler;
 pub use flui_semantics::SemanticsBinding;
 pub use flui_view::WidgetsBinding;
 
-// Re-export local bindings
+// Re-export local bindings and traits
 pub use renderer_binding::RenderingFlutterBinding;
+pub use traits::{Binding, RendererBindingBehavior};

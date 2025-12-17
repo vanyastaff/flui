@@ -129,3 +129,35 @@ pub use traits::{AsyncHook, DependencyId, Hook, ReactiveHook};
 // Re-export foundation types that hooks may need
 // TODO: Uncomment when flui_foundation is available
 // pub use flui_foundation::ElementId;
+
+// ============================================================================
+// PRELUDE
+// ============================================================================
+
+/// Commonly used types and traits for reactive programming.
+///
+/// ```rust,ignore
+/// use flui_reactivity::prelude::*;
+/// ```
+pub mod prelude {
+    // Signals
+    pub use crate::{Owner, Signal, SignalId};
+
+    // Computed
+    pub use crate::{Computed, ComputedId};
+
+    // Hooks
+    pub use crate::{use_callback, use_effect, use_memo, use_reducer, use_ref, Callback, Ref};
+
+    // Context API
+    pub use crate::{provide_context, use_context, ContextProvider};
+
+    // Batching
+    pub use crate::{batch, BatchGuard};
+
+    // Hook infrastructure
+    pub use crate::{DependencyId, HookContext, HookId};
+
+    // Error types
+    pub use crate::{HookError, ReactivityError};
+}

@@ -221,9 +221,16 @@ impl RenderParagraph {
         let needs_update = self.text_painter.text().map(|t| t != &text).unwrap_or(true);
 
         if needs_update {
+            let has_owner = self.base.owner().is_some();
+            tracing::debug!(
+                "RenderParagraph::set_text updating text (needs_update=true, has_owner={})",
+                has_owner
+            );
             self.text_painter.set_text(Some(text));
             self._overflow_shader = None;
             self.mark_needs_layout();
+        } else {
+            tracing::trace!("RenderParagraph::set_text text unchanged");
         }
     }
 

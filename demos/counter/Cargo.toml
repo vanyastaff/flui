@@ -16,6 +16,12 @@ flui_types = { path = "../../crates/flui_types" }
 # Engine for GPU rendering (dx12 on Windows)
 flui_engine = { path = "../../crates/flui_engine", default-features = false, features = ["wgpu-backend", "dx12"] }
 
+# Windowing
+winit = "0.30"
+
+# Async runtime for wgpu
+pollster = "0.4"
+
 # Logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

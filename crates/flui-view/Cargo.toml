@@ -15,6 +15,7 @@ flui-tree = { path = "../flui-tree" }
 flui_types = { path = "../flui_types" }
 flui_rendering = { path = "../flui_rendering" }
 flui_interaction = { path = "../flui_interaction" }
+flui_log = { path = "../flui_log" }
 
 # Core dependencies
 bitflags.workspace = true

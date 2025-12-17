@@ -86,7 +86,6 @@ where
     V: View + StatelessView + Clone + Send + Sync + 'static,
 {
     use crate::embedder::DesktopEmbedder;
-    use flui_view::ElementBase;
     use winit::{
         application::ApplicationHandler,
         event::WindowEvent,
@@ -103,8 +102,6 @@ where
         /// The user's root widget
         root_widget: V,
         embedder: Option<DesktopEmbedder>,
-        /// The root element (RootRenderElement wrapping user's widget)
-        root_element: Option<Box<dyn ElementBase>>,
     }
 
     impl<V: View + Clone + Send + Sync + 'static> DesktopApp<V> {
@@ -113,7 +110,6 @@ where
                 config,
                 root_widget,
                 embedder: None,
-                root_element: None,
             }
         }
 
@@ -156,8 +152,9 @@ where
                 }
             }
 
-            self.root_element = Some(root_element);
-            tracing::info!("Root element mounted successfully");
+            // Store root element in AppBinding for rebuild support
+            binding.set_root_element(root_element);
+            tracing::info!("Root element mounted and stored in AppBinding");
         }
     }
 

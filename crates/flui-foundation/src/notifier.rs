@@ -1,10 +1,14 @@
-//! Listenable, change notification, and event bubbling types.
+//! Listenable and change notification types.
 //!
-//! This module provides:
-//! - **Listenable**: Observer pattern for change notification (like Flutter's `ChangeNotifier`)
-//! - **Notification**: Event bubbling up the view tree (like DOM event bubbling)
+//! This module provides the observer pattern for reactive UI updates,
+//! similar to Flutter's `ChangeNotifier` system in foundation.
 //!
-//! # Change Notification
+//! - **Listenable**: Base trait for objects that notify listeners
+//! - **ChangeNotifier**: Manages a list of listeners and notifies them
+//! - **ValueNotifier**: A ChangeNotifier that holds a single value
+//! - **MergedListenable**: Combines multiple listenables
+//!
+//! # Example
 //!
 //! ```rust
 //! use flui_foundation::notifier::{ChangeNotifier, Listenable};
@@ -15,29 +19,19 @@
 //! notifier.notify_listeners();
 //! ```
 //!
-//! # Event Bubbling
+//! # Note
 //!
-//! ```rust
-//! use flui_foundation::notifier::{Notification, DynNotification};
-//! use flui_foundation::ElementId;
-//!
-//! #[derive(Debug, Clone)]
-//! struct ButtonClicked { button_id: String }
-//! impl Notification for ButtonClicked {}
-//!
-//! let notification = ButtonClicked { button_id: "ok".into() };
-//! let dyn_notif: &dyn DynNotification = &notification;
-//! ```
+//! For event bubbling notifications (like `ScrollNotification`), see `flui-view`
+//! which provides the `Notification` trait that integrates with `BuildContext`.
 
 use parking_lot::Mutex;
-use std::any::Any;
 use std::collections::HashMap;
 use std::fmt;
 use std::ops::Deref;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use crate::id::{ElementId, ListenerId};
+use crate::id::ListenerId;
 
 /// A listener callback function.
 pub type ListenerCallback = Arc<dyn Fn() + Send + Sync>;
@@ -422,67 +416,6 @@ impl Listenable for MergedListenable {
     }
 }
 
-// ============================================================================
-// EVENT BUBBLING (Notification)
-// ============================================================================
-
-/// Base trait for notifications that bubble up the widget tree.
-///
-/// Notifications are events that propagate from child to parent through the element tree.
-/// Any widget can dispatch a notification, and ancestor widgets can listen for it.
-///
-/// # Thread Safety
-///
-/// All notifications must be `Send + Sync` to work in FLUI's multi-threaded environment.
-///
-/// # Example
-///
-/// ```rust
-/// use flui_foundation::notifier::Notification;
-/// use flui_foundation::ElementId;
-///
-/// #[derive(Debug, Clone)]
-/// struct MyNotification { data: String }
-///
-/// impl Notification for MyNotification {
-///     fn visit_ancestor(&self, element_id: ElementId) -> bool {
-///         false // continue bubbling
-///     }
-/// }
-/// ```
-pub trait Notification: Any + Send + Sync + fmt::Debug {
-    /// Called when visiting an ancestor element during bubbling.
-    ///
-    /// # Returns
-    ///
-    /// - `true`: Stop notification from bubbling further
-    /// - `false`: Allow notification to continue bubbling (default)
-    fn visit_ancestor(&self, _element_id: ElementId) -> bool {
-        false
-    }
-}
-
-/// Object-safe notification trait for type erasure.
-///
-/// Automatically implemented for all `Notification` types.
-pub trait DynNotification: Send + Sync + fmt::Debug {
-    /// Called when visiting an ancestor element during bubbling.
-    fn visit_ancestor(&self, element_id: ElementId) -> bool;
-
-    /// Get notification as Any for downcasting.
-    fn as_any(&self) -> &dyn Any;
-}
-
-impl<T: Notification> DynNotification for T {
-    fn visit_ancestor(&self, element_id: ElementId) -> bool {
-        Notification::visit_ancestor(self, element_id)
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -758,64 +691,5 @@ mod tests {
 
         let deserialized: ListenerId = serde_json::from_str(&json).unwrap();
         assert_eq!(id, deserialized);
-    }
-
-    // ========================================================================
-    // Notification tests
-    // ========================================================================
-
-    #[derive(Debug, Clone)]
-    struct TestNotification {
-        value: i32,
-    }
-
-    impl Notification for TestNotification {}
-
-    #[derive(Debug, Clone)]
-    struct CustomBubblingNotification {
-        stop_at: ElementId,
-    }
-
-    impl Notification for CustomBubblingNotification {
-        fn visit_ancestor(&self, element_id: ElementId) -> bool {
-            element_id == self.stop_at
-        }
-    }
-
-    #[test]
-    fn test_notification_trait() {
-        let notification = TestNotification { value: 42 };
-        let element_id = ElementId::new(1);
-        assert!(!Notification::visit_ancestor(&notification, element_id));
-    }
-
-    #[test]
-    fn test_custom_bubbling_logic() {
-        let stop_at = ElementId::new(10);
-        let other_element = ElementId::new(5);
-
-        let notification = CustomBubblingNotification { stop_at };
-
-        assert!(Notification::visit_ancestor(&notification, stop_at));
-        assert!(!Notification::visit_ancestor(&notification, other_element));
-    }
-
-    #[test]
-    fn test_dyn_notification_downcast() {
-        let notification = TestNotification { value: 42 };
-        let dyn_notification: &dyn DynNotification = &notification;
-
-        let downcasted = dyn_notification.as_any().downcast_ref::<TestNotification>();
-        assert!(downcasted.is_some());
-        assert_eq!(downcasted.unwrap().value, 42);
-    }
-
-    #[test]
-    fn test_notification_send_sync() {
-        fn assert_send<T: Send>() {}
-        fn assert_sync<T: Sync>() {}
-
-        assert_send::<TestNotification>();
-        assert_sync::<TestNotification>();
     }
 }

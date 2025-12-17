@@ -327,6 +327,10 @@ git commit -m "feat: Add new widget
 
 Types: `feat`, `fix`, `refactor`, `test`, `docs`, `chore`
 
+### CRITICAL Git Rules
+
+**NEVER do `git checkout`, `git reset`, `git stash`, or any destructive git operations without explicit user permission.** Always ask first. Lost uncommitted work is unrecoverable.
+
 ## Troubleshooting
 
 ```bash

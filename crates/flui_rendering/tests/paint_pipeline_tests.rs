@@ -245,7 +245,7 @@ fn test_padding_paint() {
     // Paint
     let bounds = Rect::from_ltwh(0.0, 0.0, 200.0, 200.0);
     let mut context = PaintingContext::from_bounds(bounds);
-    padding.paint(&mut context, Offset::ZERO);
+    RenderBox::paint(&padding, &mut context, Offset::ZERO);
 
     // Padding paints its child at an offset
     // The actual child painting behavior depends on paint_child implementation

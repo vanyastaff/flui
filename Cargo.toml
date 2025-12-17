@@ -167,16 +167,36 @@ description = "Flutter-inspired declarative UI framework with wgpu rendering"
 keywords = ["gui", "ui", "wgpu", "flutter", "reactive"]
 
 [dependencies]
-# Temporarily disabled - only core dependencies for flui_rendering development
+# === Foundation Layer ===
 flui_types = { path = "crates/flui_types" }
+flui-foundation = { path = "crates/flui-foundation" }
+flui-tree = { path = "crates/flui-tree" }
+
+# === Core Layer ===
+flui-layer = { path = "crates/flui-layer" }
+flui-semantics = { path = "crates/flui-semantics" }
+flui_interaction = { path = "crates/flui_interaction" }
+flui_painting = { path = "crates/flui_painting" }
+
+# === Rendering Layer ===
 flui_rendering = { path = "crates/flui_rendering" }
-# flui_core = { path = "crates/flui_core" }
-# flui_painting = { path = "crates/flui_painting" }
-# flui_engine = { path = "crates/flui_engine" }
-# flui_animation = { path = "crates/flui_animation" }
-# flui_interaction = { path = "crates/flui_interaction" }
-# flui_app = { path = "crates/flui_app" }
+# flui_engine = { path = "crates/flui_engine" }  # GPU backend - enable when needed
+
+# === View Layer ===
+flui-view = { path = "crates/flui-view" }
+
+# === Reactive Layer ===
+flui-scheduler = { path = "crates/flui-scheduler" }
+flui_animation = { path = "crates/flui_animation" }
+flui-reactivity = { path = "crates/flui-reactivity" }
+
+# === Application Layer ===
+flui_app = { path = "crates/flui_app" }
+
+# === Widgets (when stable) ===
 # flui_widgets = { path = "crates/flui_widgets" }
+
+# === Logging ===
 tracing.workspace = true
 tracing-subscriber.workspace = true
 tracing-forest.workspace = true

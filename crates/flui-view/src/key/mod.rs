@@ -1,10 +1,9 @@
 //! Key system for element identity and reparenting.
 //!
-//! This module provides:
-//! - [`GlobalKey`] - Global keys for cross-tree element lookup
-//! - [`ValueKey`] - Value-based keys for list reconciliation
-//! - [`ObjectKey`] - Identity-based unique keys
+//! Re-exports key types from `flui-foundation` which is the source of truth.
 
-mod global_key;
+// Re-export from flui-foundation (source of truth)
+pub use flui_foundation::{GlobalKey, Key, KeyRef, ObjectKey, UniqueKey, ValueKey, ViewKey};
 
-pub use global_key::{GlobalKey, GlobalKeyId, ObjectKey, ValueKey};
+/// Unique identifier for a GlobalKey (re-exported for backwards compatibility).
+pub type GlobalKeyId = u64;

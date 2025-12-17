@@ -151,8 +151,15 @@ impl<V: StatelessView> ElementBase for StatelessElement<V> {
 
     fn perform_build(&mut self) {
         if !self.dirty || !self.lifecycle.can_build() {
+            tracing::trace!(
+                "StatelessElement::perform_build skipped (dirty={}, can_build={})",
+                self.dirty,
+                self.lifecycle.can_build()
+            );
             return;
         }
+
+        tracing::debug!("StatelessElement::perform_build starting rebuild");
 
         // Create BuildContext for the build call
         let ctx = ElementBuildContext::new_minimal(self.depth);
@@ -186,6 +193,7 @@ impl<V: StatelessView> ElementBase for StatelessElement<V> {
             self.child = Some(child_element);
         } else {
             // Rebuild - update existing child
+            tracing::debug!("StatelessElement::perform_build updating existing child");
             if let Some(ref mut child) = self.child {
                 child.update(child_view.as_ref());
                 child.perform_build();

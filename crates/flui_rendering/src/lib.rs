@@ -116,11 +116,12 @@ pub mod prelude {
         SliverGridDelegateWithFixedCrossAxisCount, SliverGridDelegateWithMaxCrossAxisExtent,
         SliverGridLayout,
     };
+    // Hit testing - only protocol-specific types (base types come from flui_interaction)
     pub use crate::hit_testing::{
-        BoxHitTestEntry, BoxHitTestResult, HitTestBehavior, HitTestEntry, HitTestResult,
-        HitTestTarget, MatrixTransformPart, PointerEvent, PointerEventKind, SliverHitTestEntry,
-        SliverHitTestResult,
+        BoxHitTestEntry, BoxHitTestResult, MatrixTransformPart, PointerEventKind,
+        SliverHitTestEntry, SliverHitTestResult,
     };
+    // Re-export base hit testing types from flui_interaction (source of truth)
     pub use crate::input::{
         CursorIcon, MouseCursorSession, MouseTracker, MouseTrackerAnnotation, MouseTrackerHitTest,
         PointerEnterEvent, PointerExitEvent, PointerHoverEvent,
@@ -148,6 +149,7 @@ pub mod prelude {
         ViewConfiguration, ViewportOffset,
     };
     pub use flui_foundation::SemanticsId;
+    pub use flui_interaction::{HitTestBehavior, HitTestEntry, HitTestResult, HitTestTarget};
 
     // Constraints from this crate
     pub use crate::constraints::{BoxConstraints, Constraints, SliverConstraints, SliverGeometry};

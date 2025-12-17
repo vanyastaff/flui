@@ -186,11 +186,8 @@ pub use platform::TargetPlatform;
 // Observer lists
 pub use observer::{HashedObserverList, ObserverList, SyncObserverList};
 
-// Change notification and event bubbling
-pub use notifier::{
-    ChangeNotifier, DynNotification, Listenable, ListenerCallback, MergedListenable, Notification,
-    ValueNotifier,
-};
+// Change notification (Listenable pattern)
+pub use notifier::{ChangeNotifier, Listenable, ListenerCallback, MergedListenable, ValueNotifier};
 
 // Diagnostics
 pub use debug::{
@@ -222,8 +219,6 @@ pub mod prelude {
         // Diagnostics
         DiagnosticLevel,
         Diagnosticable,
-        // Notification system
-        DynNotification,
         // IDs
         ElementId,
         // Callbacks
@@ -244,7 +239,6 @@ pub mod prelude {
         Listenable,
         ListenerCallback,
         ListenerId,
-        Notification,
         ObjectKey,
         ObserverId,
         ObserverList,

@@ -1,7 +1,26 @@
-//! Gesture Binding - Central coordinator for pointer event handling
+//! Gesture Binding - Singleton coordinator for pointer event handling
 //!
 //! GestureBinding is the main entry point for handling pointer events in the
-//! gesture system. It coordinates hit testing, event routing, and arena management.
+//! gesture system. It coordinates hit testing, event routing, arena management,
+//! and pointer move event coalescing.
+//!
+//! # Flutter Equivalence
+//!
+//! This corresponds to Flutter's `GestureBinding` mixin:
+//!
+//! ```dart
+//! mixin GestureBinding on BindingBase implements HitTestable, HitTestDispatcher, HitTestTarget {
+//!   @override
+//!   void initInstances() {
+//!     super.initInstances();
+//!     _instance = this;
+//!     // ...
+//!   }
+//!
+//!   static GestureBinding get instance => BindingBase.checkInstance(_instance);
+//!   static GestureBinding? _instance;
+//! }
+//! ```
 //!
 //! # Architecture
 //!
@@ -10,9 +29,12 @@
 //!         │
 //!         ▼
 //! ┌─────────────────────┐
-//! │   GestureBinding    │
+//! │   GestureBinding    │ (singleton)
 //! │  ┌───────────────┐  │
 //! │  │ Hit Test Cache│  │  (DashMap<PointerId, HitTestResult>)
+//! │  └───────────────┘  │
+//! │  ┌───────────────┐  │
+//! │  │ Pending Moves │  │  (DashMap<PointerId, PointerEvent> - coalescing)
 //! │  └───────────────┘  │
 //! │  ┌───────────────┐  │
 //! │  │ PointerRouter │  │  (routes events to handlers)
@@ -21,7 +43,7 @@
 //! │  │ GestureArena  │  │  (conflict resolution)
 //! │  └───────────────┘  │
 //! │  ┌───────────────┐  │
-//! │  │ GestureSettings│  │  (device-specific config)
+//! │  │ GestureSettings│ │  (device-specific config)
 //! │  └───────────────┘  │
 //! └─────────────────────┘
 //!         │
@@ -32,20 +54,21 @@
 //! # Lifecycle
 //!
 //! 1. **Pointer Down**: Hit test → cache result → dispatch → close arena
-//! 2. **Pointer Move**: Use cached hit test → dispatch
+//! 2. **Pointer Move**: Use cached hit test → dispatch (coalesced)
 //! 3. **Pointer Up/Cancel**: Use cached hit test → dispatch → sweep arena → clear cache
 //!
 //! # Example
 //!
 //! ```rust,ignore
-//! use flui_interaction::binding::GestureBinding;
+//! use flui_interaction::GestureBinding;
 //! use flui_interaction::events::PointerEvent;
 //!
-//! let binding = GestureBinding::new();
+//! // Get the singleton instance
+//! let binding = GestureBinding::instance();
 //!
 //! // Handle platform events
-//! fn handle_event(binding: &GestureBinding, event: &PointerEvent) {
-//!     binding.handle_pointer_event(event, |hit_test_position| {
+//! fn handle_event(event: &PointerEvent) {
+//!     GestureBinding::instance().handle_pointer_event(event, |hit_test_position| {
 //!         // Perform hit testing on your render tree
 //!         my_render_tree.hit_test(hit_test_position)
 //!     });
@@ -57,37 +80,69 @@ use crate::ids::PointerId;
 use crate::routing::{HitTestResult, PointerRouter};
 use crate::settings::GestureSettings;
 use dashmap::DashMap;
+use flui_foundation::{impl_binding_singleton, BindingBase};
 use flui_types::geometry::Offset;
-use std::sync::Arc;
 use ui_events::pointer::{PointerEvent, PointerType};
 
-/// Central coordinator for gesture event handling.
+/// Central coordinator for gesture event handling (singleton).
 ///
 /// GestureBinding manages the complete lifecycle of pointer events:
 /// - Performs hit testing on pointer down
 /// - Caches hit test results for subsequent events
+/// - Coalesces high-frequency pointer move events (100+ events/sec → 1 per frame)
 /// - Routes events through the PointerRouter
 /// - Manages arena lifecycle (close on down, sweep on up)
+///
+/// # Singleton Pattern
+///
+/// Access via `GestureBinding::instance()`:
+///
+/// ```rust,ignore
+/// let binding = GestureBinding::instance();
+/// binding.handle_pointer_event(&event, hit_test_fn);
+/// ```
+///
+/// # Event Coalescing
+///
+/// Desktop platforms can generate 100+ mouse move events per second.
+/// GestureBinding coalesces these by storing only the latest move event
+/// per pointer. Call `flush_pending_moves()` once per frame to process
+/// the coalesced events.
 ///
 /// # Thread Safety
 ///
 /// GestureBinding is fully thread-safe and can be shared across threads.
 /// All internal state is protected by appropriate synchronization primitives.
-#[derive(Clone)]
 pub struct GestureBinding {
     /// Cached hit test results per pointer.
     /// Avoids redundant hit testing for move/up events.
-    hit_tests: Arc<DashMap<PointerId, HitTestResult>>,
+    hit_tests: DashMap<PointerId, HitTestResult>,
+
+    /// Pending move events for coalescing.
+    /// Only the latest move per pointer is kept.
+    pending_moves: DashMap<PointerId, PointerEvent>,
 
     /// Routes pointer events to registered handlers.
-    pointer_router: Arc<PointerRouter>,
+    pointer_router: PointerRouter,
 
     /// Resolves conflicts between competing gesture recognizers.
-    arena: Arc<GestureArena>,
+    arena: GestureArena,
 
     /// Default gesture settings (can be overridden per device).
     default_settings: GestureSettings,
 }
+
+// Implement BindingBase trait
+impl BindingBase for GestureBinding {
+    fn init_instances(&mut self) {
+        // GestureBinding initialization is done in new()
+        // This is called automatically by the singleton macro
+        tracing::debug!("GestureBinding initialized");
+    }
+}
+
+// Implement singleton pattern via macro
+impl_binding_singleton!(GestureBinding);
 
 impl Default for GestureBinding {
     fn default() -> Self {
@@ -97,37 +152,31 @@ impl Default for GestureBinding {
 
 impl GestureBinding {
     /// Create a new GestureBinding with default settings.
+    ///
+    /// Note: Prefer using `GestureBinding::instance()` for singleton access.
     pub fn new() -> Self {
-        Self {
-            hit_tests: Arc::new(DashMap::new()),
-            pointer_router: Arc::new(PointerRouter::new()),
-            arena: Arc::new(GestureArena::new()),
+        let mut binding = Self {
+            hit_tests: DashMap::new(),
+            pending_moves: DashMap::new(),
+            pointer_router: PointerRouter::new(),
+            arena: GestureArena::new(),
             default_settings: GestureSettings::default(),
-        }
+        };
+        binding.init_instances();
+        binding
     }
 
     /// Create with specific settings.
     pub fn with_settings(settings: GestureSettings) -> Self {
-        Self {
-            hit_tests: Arc::new(DashMap::new()),
-            pointer_router: Arc::new(PointerRouter::new()),
-            arena: Arc::new(GestureArena::new()),
+        let mut binding = Self {
+            hit_tests: DashMap::new(),
+            pending_moves: DashMap::new(),
+            pointer_router: PointerRouter::new(),
+            arena: GestureArena::new(),
             default_settings: settings,
-        }
-    }
-
-    /// Create with custom components.
-    pub fn with_components(
-        pointer_router: Arc<PointerRouter>,
-        arena: Arc<GestureArena>,
-        settings: GestureSettings,
-    ) -> Self {
-        Self {
-            hit_tests: Arc::new(DashMap::new()),
-            pointer_router,
-            arena,
-            default_settings: settings,
-        }
+        };
+        binding.init_instances();
+        binding
     }
 
     // ========================================================================
@@ -142,11 +191,6 @@ impl GestureBinding {
     /// Get the gesture arena.
     pub fn arena(&self) -> &GestureArena {
         &self.arena
-    }
-
-    /// Get a clone of the arena Arc.
-    pub fn arena_arc(&self) -> Arc<GestureArena> {
-        self.arena.clone()
     }
 
     /// Get the default gesture settings.
@@ -177,7 +221,7 @@ impl GestureBinding {
     /// # Example
     ///
     /// ```rust,ignore
-    /// binding.handle_pointer_event(&event, |position| {
+    /// GestureBinding::instance().handle_pointer_event(&event, |position| {
     ///     render_tree.hit_test(position)
     /// });
     /// ```
@@ -203,21 +247,11 @@ impl GestureBinding {
                 self.arena.close(pointer_id);
             }
 
-            PointerEvent::Move(e) => {
+            PointerEvent::Move(_) => {
                 let pointer_id = self.extract_pointer_id(event);
 
-                // Use cached hit test result
-                if let Some(result) = self.hit_tests.get(&pointer_id) {
-                    self.dispatch_event(event, &result);
-                } else {
-                    // No cached result - this shouldn't happen normally
-                    // but we can handle it by doing a new hit test
-                    let position =
-                        Offset::new(e.current.position.x as f32, e.current.position.y as f32);
-                    let result = hit_test_fn(position);
-                    self.hit_tests.insert(pointer_id, result.clone());
-                    self.dispatch_event(event, &result);
-                }
+                // Coalesce move events - store only the latest, process on flush
+                self.pending_moves.insert(pointer_id, event.clone());
             }
 
             PointerEvent::Up(_) | PointerEvent::Cancel(_) => {
@@ -290,6 +324,59 @@ impl GestureBinding {
                 self.dispatch_event(event, result);
             }
         }
+    }
+
+    // ========================================================================
+    // Event Coalescing
+    // ========================================================================
+
+    /// Flush pending coalesced move events.
+    ///
+    /// Call this once per frame to process all coalesced pointer move events.
+    /// Returns the number of events processed.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // In your frame loop:
+    /// fn on_frame(&mut self) {
+    ///     // Process coalesced move events
+    ///     GestureBinding::instance().flush_pending_moves();
+    ///
+    ///     // Then do layout, paint, etc.
+    /// }
+    /// ```
+    pub fn flush_pending_moves(&self) -> usize {
+        let mut count = 0;
+
+        // Take all pending moves
+        let pending: Vec<_> = self
+            .pending_moves
+            .iter()
+            .map(|entry| (*entry.key(), entry.value().clone()))
+            .collect();
+
+        self.pending_moves.clear();
+
+        for (pointer_id, event) in pending {
+            // Use cached hit test result
+            if let Some(result) = self.hit_tests.get(&pointer_id) {
+                self.dispatch_event(&event, &result);
+                count += 1;
+            }
+        }
+
+        count
+    }
+
+    /// Check if there are pending move events to process.
+    pub fn has_pending_moves(&self) -> bool {
+        !self.pending_moves.is_empty()
+    }
+
+    /// Get the number of pending move events.
+    pub fn pending_move_count(&self) -> usize {
+        self.pending_moves.len()
     }
 
     // ========================================================================
@@ -401,6 +488,7 @@ impl std::fmt::Debug for GestureBinding {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("GestureBinding")
             .field("active_pointers", &self.hit_tests.len())
+            .field("pending_moves", &self.pending_moves.len())
             .field("arena_count", &self.arena.len())
             .finish()
     }
@@ -409,6 +497,25 @@ impl std::fmt::Debug for GestureBinding {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_foundation::HasInstance;
+
+    #[test]
+    fn test_binding_singleton() {
+        let binding1 = GestureBinding::instance();
+        let binding2 = GestureBinding::instance();
+
+        // Should be the same instance
+        assert!(std::ptr::eq(binding1, binding2));
+    }
+
+    #[test]
+    fn test_binding_is_initialized() {
+        // Ensure instance exists
+        let _ = GestureBinding::instance();
+
+        // Should be initialized
+        assert!(GestureBinding::is_initialized());
+    }
 
     #[test]
     fn test_binding_creation() {
@@ -460,19 +567,6 @@ mod tests {
 
         binding.clear_all_hit_tests();
         assert_eq!(binding.active_pointer_count(), 0);
-    }
-
-    #[test]
-    fn test_arena_access() {
-        let binding = GestureBinding::new();
-        let pointer = PointerId::new(1);
-
-        // Arena should be accessible
-        assert!(!binding.arena().contains(pointer));
-
-        // Should be able to get Arc clone
-        let arena = binding.arena_arc();
-        assert!(Arc::ptr_eq(&arena, &binding.arena));
     }
 
     #[test]

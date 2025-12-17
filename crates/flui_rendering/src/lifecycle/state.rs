@@ -183,6 +183,17 @@ impl RenderObjectState {
         self.owner.as_ref()
     }
 
+    /// Sets the pipeline owner directly without scheduling.
+    ///
+    /// Use this when the render object has already been scheduled
+    /// for layout/paint and you just need to set the owner reference.
+    /// This avoids re-scheduling which could cause deadlocks when
+    /// called from within a lock.
+    #[inline]
+    pub fn set_owner(&mut self, owner: Arc<RwLock<PipelineOwner>>) {
+        self.owner = Some(owner);
+    }
+
     /// Returns whether this object is attached to a pipeline owner.
     ///
     /// # Flutter Equivalence

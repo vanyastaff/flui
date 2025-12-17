@@ -143,6 +143,15 @@ impl BaseRenderObject {
         self.state.owner()
     }
 
+    /// Sets the pipeline owner directly without scheduling.
+    ///
+    /// Use this when the render object has already been scheduled
+    /// for layout/paint and you just need to set the owner reference.
+    #[inline]
+    pub fn set_owner(&mut self, owner: Arc<RwLock<PipelineOwner>>) {
+        self.state.set_owner(owner);
+    }
+
     /// Returns whether this object is attached to a pipeline owner.
     #[inline]
     pub fn is_attached(&self) -> bool {

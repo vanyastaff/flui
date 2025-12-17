@@ -5,7 +5,10 @@
 
 use crate::view::{ElementBase, View};
 use flui_foundation::ElementId;
+use flui_rendering::pipeline::PipelineOwner;
+use parking_lot::RwLock;
 use slab::Slab;
+use std::sync::Arc;
 
 /// A node in the Element tree.
 ///
@@ -136,15 +139,55 @@ impl ElementTree {
     /// Mount a View as the root of the tree.
     ///
     /// Returns the ElementId of the root element.
+    ///
+    /// Note: This method does NOT pass PipelineOwner to the element.
+    /// For RenderObjectElements that need PipelineOwner, use
+    /// `mount_root_with_pipeline_owner` instead.
     pub fn mount_root(&mut self, view: &dyn View) -> ElementId {
-        let element = view.create_element();
+        self.mount_root_with_pipeline_owner(view, None)
+    }
+
+    /// Mount a View as the root of the tree with PipelineOwner.
+    ///
+    /// This method passes the PipelineOwner to the root element before mounting,
+    /// which is necessary for RenderObjectElements to create their RenderObjects.
+    ///
+    /// # Flutter Equivalent
+    ///
+    /// In Flutter, this corresponds to `RootWidget.attach(buildOwner, rootElement)`
+    /// combined with `_RawViewElement.mount()` which sets up the PipelineOwner.
+    ///
+    /// # Arguments
+    ///
+    /// * `view` - The root View to mount
+    /// * `pipeline_owner` - Optional PipelineOwner for render tree management
+    ///
+    /// Returns the ElementId of the root element.
+    pub fn mount_root_with_pipeline_owner(
+        &mut self,
+        view: &dyn View,
+        pipeline_owner: Option<Arc<RwLock<PipelineOwner>>>,
+    ) -> ElementId {
+        let mut element = view.create_element();
+
+        // Pass PipelineOwner to element BEFORE mounting
+        // This is critical for RenderObjectElements to create their RenderObjects
+        if let Some(ref owner) = pipeline_owner {
+            let owner_any: Arc<dyn std::any::Any + Send + Sync> =
+                Arc::clone(owner) as Arc<dyn std::any::Any + Send + Sync>;
+            element.set_pipeline_owner_any(owner_any);
+            tracing::debug!(
+                "ElementTree::mount_root_with_pipeline_owner: passed PipelineOwner to root element"
+            );
+        }
+
         let node = ElementNode::new(element, None, 0);
 
         // Slab is 0-indexed, ElementId is 1-indexed
         let slab_index = self.nodes.insert(node);
         let id = ElementId::new(slab_index + 1);
 
-        // Mount the element
+        // Mount the element (now it has PipelineOwner set)
         self.nodes[slab_index].element.mount(None, 0);
 
         self.root = Some(id);
@@ -289,7 +332,6 @@ mod tests {
         fn create_element(&self) -> Box<dyn crate::ElementBase> {
             Box::new(StatelessElement::new(self))
         }
-
     }
 
     #[test]
