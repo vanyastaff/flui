@@ -135,6 +135,7 @@
 
 // Core modules - fundamental types with minimal dependencies
 pub mod assert;
+pub mod binding;
 pub mod callbacks;
 pub mod consts;
 pub mod id;
@@ -166,6 +167,9 @@ pub use consts::{
     approx_equal, approx_equal_f32, is_near_zero, is_near_zero_f32, DEBUG_MODE, EPSILON,
     EPSILON_F32, IS_DESKTOP, IS_MOBILE, IS_WEB, RELEASE_MODE,
 };
+
+// Binding infrastructure
+pub use binding::{check_instance, BindingBase, HasInstance};
 
 // Assertions and error handling
 pub use assert::FluiError;
@@ -211,6 +215,8 @@ pub use error::{FoundationError, Result};
 /// ```
 pub mod prelude {
     pub use crate::{
+        // Binding infrastructure
+        BindingBase,
         // Change notification
         ChangeNotifier,
         // Diagnostics
@@ -226,6 +232,7 @@ pub mod prelude {
         FluiError,
         // Keys
         GlobalKey,
+        HasInstance,
         // Observer lists
         HashedObserverList,
         // Identifier trait
