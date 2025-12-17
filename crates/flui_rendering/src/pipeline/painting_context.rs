@@ -244,10 +244,9 @@ impl PaintingContext {
     pub fn paint_child(&mut self, child: &dyn RenderBox, offset: Offset) {
         // In full implementation, check if child is a repaint boundary
         // and create a new layer if needed
-        let _ = (child, offset);
 
-        // For now, just paint directly
-        // child.paint(self, offset);
+        // Paint the child using RenderBox::paint (specialized paint implementation)
+        RenderBox::paint(child, self, offset);
     }
 
     /// Paints a child sliver render object.

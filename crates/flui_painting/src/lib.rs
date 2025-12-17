@@ -181,6 +181,7 @@ pub use display_list::{
     HitRegionHandler,
 };
 pub use error::{PaintingError, Result};
+pub use text_layout::measure_text;
 pub use text_painter::{TextBaseline, TextPainter, DEFAULT_FONT_SIZE};
 
 // Flutter compatibility: Picture is our DisplayList

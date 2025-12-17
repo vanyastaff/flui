@@ -494,7 +494,7 @@ impl RenderBox for RenderShrinkWrappingViewport {
                 // Only paint if visible
                 let geometry = child.geometry();
                 if geometry.visible {
-                    child.paint(context, child_offset);
+                    RenderSliver::paint(child, context, child_offset);
                 }
             }
         });

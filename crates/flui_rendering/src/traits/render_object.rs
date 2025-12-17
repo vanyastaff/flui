@@ -7,6 +7,8 @@ use std::fmt::Debug;
 
 use flui_foundation::SemanticsId;
 
+use crate::constraints::Constraints;
+
 use crate::lifecycle::BaseRenderObject;
 use crate::parent_data::ParentData;
 use crate::pipeline::PipelineOwner;
@@ -615,36 +617,64 @@ pub trait RenderObject: Debug + Send + Sync + 'static {
 
     /// Compute the layout for this render object.
     ///
-    /// This method is the main entry point for layout. It calls `perform_resize`
-    /// if `sized_by_parent` is true, then calls the subclass-specific layout method.
+    /// This method is the main entry point for layout, called by the parent
+    /// render object during its `performLayout`. It:
     ///
-    /// The `parent_uses_size` parameter indicates whether the parent render object
-    /// will use this object's size in its own layout. If false, this render object
-    /// can be a relayout boundary.
+    /// 1. Caches the constraints for later use by `layout_without_resize()`
+    /// 2. Determines if this is a relayout boundary
+    /// 3. Early-returns if constraints haven't changed and layout isn't needed
+    /// 4. Calls `perform_resize()` if `sized_by_parent` is true
+    /// 5. Calls `perform_layout()` to do actual layout work
+    /// 6. Clears the `needs_layout` flag
+    /// 7. Marks as needing paint
     ///
-    /// **Note:** This is a base implementation. `RenderBox` and `RenderSliver`
-    /// have their own `perform_layout` methods that take constraints as parameters.
-    /// The actual layout orchestration is handled by the `PipelineOwner`.
+    /// # Arguments
+    ///
+    /// * `constraints` - The constraints from the parent
+    /// * `parent_uses_size` - Whether the parent uses this object's size.
+    ///   If false, this object becomes a relayout boundary.
     ///
     /// # Flutter Equivalence
     ///
     /// This corresponds to Flutter's `RenderObject.layout` method.
-    fn layout(&mut self, parent_uses_size: bool) {
-        // In Flutter, this method receives constraints and orchestrates layout.
-        // In our Rust implementation, the constraints are passed to perform_layout
-        // in RenderBox/RenderSliver directly. This method handles the common logic.
+    fn layout(&mut self, constraints: crate::constraints::BoxConstraints, parent_uses_size: bool) {
+        // Determine if this is a relayout boundary
+        // Flutter: _isRelayoutBoundary = !parentUsesSize || sizedByParent || constraints.isTight || parent == null
+        let is_relayout_boundary = !parent_uses_size
+            || self.sized_by_parent()
+            || constraints.is_tight()
+            || self.parent().is_none();
+
+        self.base_mut()
+            .state_mut()
+            .set_relayout_boundary(is_relayout_boundary);
+
+        // Check if we can skip layout (constraints unchanged and layout not needed)
+        // Flutter: if (!_needsLayout && constraints == _constraints) return;
+        if !self.needs_layout() {
+            if let Some(cached) = self.base().cached_constraints() {
+                if cached == constraints {
+                    return;
+                }
+            }
+        }
+
+        // Cache the constraints
+        self.base_mut().set_cached_constraints(constraints);
 
         // If sized_by_parent, call perform_resize first
         if self.sized_by_parent() {
             self.perform_resize();
         }
 
+        // Call perform_layout (uses cached constraints via self.constraints())
+        self.perform_layout_impl();
+
         // Clear the needs_layout flag
         self.clear_needs_layout();
 
-        // Mark as relayout boundary if parent doesn't use our size
-        // (This would typically be stored in a field, but we keep it simple here)
-        let _ = parent_uses_size;
+        // Mark as needing paint (layout changed, so visual output may differ)
+        self.mark_needs_paint();
     }
 
     /// Perform layout without receiving new constraints.
@@ -653,7 +683,7 @@ pub trait RenderObject: Debug + Send + Sync + 'static {
     /// relayout boundaries. It reuses the constraints from the previous layout.
     ///
     /// The method:
-    /// 1. Calls `perform_layout_impl()` to do actual layout
+    /// 1. Calls `perform_layout_impl()` using cached constraints
     /// 2. Clears the `needs_layout` flag
     /// 3. Marks the object as needing paint
     ///
@@ -661,22 +691,45 @@ pub trait RenderObject: Debug + Send + Sync + 'static {
     ///
     /// This corresponds to Flutter's `RenderObject._layoutWithoutResize` method.
     ///
-    /// # Default Implementation
+    /// # Panics
     ///
-    /// The default implementation clears the layout flag and marks for paint.
-    /// Subclasses (like `RenderBox`) should override this to call their
-    /// `perform_layout()` method.
+    /// Panics if:
+    /// - The object doesn't need layout
+    /// - No constraints have been cached (layout() was never called)
     fn layout_without_resize(&mut self) {
         debug_assert!(
             self.needs_layout(),
             "layout_without_resize called on object that doesn't need layout"
         );
+        debug_assert!(
+            self.base().cached_constraints().is_some(),
+            "layout_without_resize called before layout() - no cached constraints"
+        );
+
+        // Call perform_layout (uses cached constraints via self.constraints())
+        self.perform_layout_impl();
 
         // Clear the needs_layout flag
         self.clear_needs_layout();
 
         // Mark as needing paint (layout changed, so visual output may differ)
         self.mark_needs_paint();
+    }
+
+    /// Internal method that performs the actual layout work.
+    ///
+    /// This is called by both `layout()` and `layout_without_resize()`.
+    /// Subclasses should override this to implement their layout logic,
+    /// accessing constraints via `self.constraints()`.
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// This corresponds to Flutter's `RenderObject.performLayout` method.
+    /// In Flutter, `performLayout()` takes no arguments and accesses
+    /// constraints via `this.constraints`.
+    fn perform_layout_impl(&mut self) {
+        // Default implementation does nothing
+        // RenderBox implementations should override this
     }
 
     /// Computes the size of this render object when `sized_by_parent` is true.
@@ -1147,6 +1200,44 @@ pub trait RenderObject: Debug + Send + Sync + 'static {
     ///
     /// This corresponds to Flutter's `RenderObject.paintBounds` getter.
     fn paint_bounds(&self) -> flui_types::Rect;
+
+    /// Paint this render object into the given context at the given offset.
+    ///
+    /// This is called by the rendering pipeline during the paint phase.
+    /// Subclasses should override this to paint themselves and their children.
+    ///
+    /// The `offset` is the position where this render object should paint,
+    /// relative to the origin of the `context`.
+    ///
+    /// # Arguments
+    ///
+    /// * `context` - The painting context to paint into
+    /// * `offset` - The offset at which to paint
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// This corresponds to Flutter's `RenderObject.paint` method.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// fn paint(&self, context: &mut PaintingContext, offset: Offset) {
+    ///     // Paint background
+    ///     context.canvas().draw_rect(
+    ///         Rect::from_size(self.size()).translate(offset),
+    ///         &Paint::fill(Color::RED),
+    ///     );
+    ///
+    ///     // Paint children
+    ///     for child in self.children() {
+    ///         context.paint_child(child, offset + child.offset());
+    ///     }
+    /// }
+    /// ```
+    fn paint(&self, context: &mut crate::pipeline::PaintingContext, offset: flui_types::Offset) {
+        // Default implementation does nothing
+        let _ = (context, offset);
+    }
 
     /// Applies the transform that would be applied when painting to the
     /// given matrix.

@@ -84,6 +84,7 @@ pub fn dispatch_command<R: CommandRenderer + ?Sized>(command: &DrawCommand, rend
         DrawCommand::DrawText {
             text,
             offset,
+            size: _,
             style,
             paint,
             transform,

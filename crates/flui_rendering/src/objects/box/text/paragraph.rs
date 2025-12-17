@@ -19,14 +19,14 @@
 //! # Architecture
 //!
 //! `RenderParagraph` is a leaf render object (no children in the render tree sense,
-//! though it can have inline widget children via `WidgetSpan`). It delegates text
-//! measurement and painting to `TextPainter` from `flui_painting`.
+//! though it can have inline widget children via `WidgetSpan`). It uses `TextPainter`
+//! for painting and direct `measure_text` calls for layout measurement.
 //!
 //! # Layout Protocol
 //!
 //! 1. Layout inline children (WidgetSpans) to get placeholder dimensions
-//! 2. Set placeholder dimensions on TextPainter
-//! 3. Layout text with constraints
+//! 2. Measure text directly using `measure_text`
+//! 3. Constrain size to box constraints
 //! 4. Position inline children based on placeholder boxes
 //! 5. Determine overflow handling (clip, ellipsis, fade)
 //!
@@ -49,7 +49,7 @@
 
 use std::any::Any;
 
-use flui_painting::TextPainter;
+use flui_painting::{measure_text, TextPainter};
 use flui_types::geometry::{Offset, Rect, Size};
 use flui_types::styling::Color;
 use flui_types::typography::{
@@ -386,6 +386,52 @@ impl RenderParagraph {
         }
     }
 
+    /// Measures text directly using cosmic-text, bypassing TextPainter delegation.
+    ///
+    /// Returns the computed size of the text.
+    fn measure_text_size(&self, max_width: f32) -> Size {
+        let Some(text) = self.text() else {
+            return Size::ZERO;
+        };
+
+        // Get font size from style or use default
+        let font_size = text
+            .style()
+            .and_then(|s| s.font_size.map(|f| f as f32))
+            .unwrap_or(14.0);
+
+        let scaled_font_size = font_size * self.text_scale_factor();
+        let plain_text = text.to_plain_text();
+
+        // Use max_width constraint if finite
+        let max_width_opt = if max_width.is_finite() {
+            Some(max_width)
+        } else {
+            None
+        };
+
+        // Direct measurement using cosmic-text
+        let result = measure_text(
+            &plain_text,
+            text.style(),
+            scaled_font_size,
+            max_width_opt,
+            None,
+        );
+
+        tracing::debug!(
+            text = %plain_text,
+            font_size = scaled_font_size,
+            max_width = ?max_width_opt,
+            result_width = result.width,
+            result_height = result.height,
+            line_count = result.line_count,
+            "RenderParagraph::measure_text_size"
+        );
+
+        Size::new(result.width, result.height)
+    }
+
     /// Lays out text with the given constraints.
     fn layout_text_with_constraints(&mut self, constraints: &BoxConstraints) {
         let adjusted_max_width = self.adjust_max_width(constraints.max_width);
@@ -502,6 +548,22 @@ impl RenderObject for RenderParagraph {
         Rect::from_ltwh(0.0, 0.0, self.size.width, self.size.height)
     }
 
+    fn paint(&self, context: &mut PaintingContext, offset: Offset) {
+        // Delegate to RenderBox::paint implementation
+        RenderBox::paint(self, context, offset);
+    }
+
+    fn perform_layout_impl(&mut self) {
+        // Get cached constraints from base().cached_constraints()
+        let constraints = self
+            .base()
+            .cached_constraints()
+            .expect("perform_layout_impl called without cached constraints");
+
+        // Delegate to RenderBox::perform_layout
+        RenderBox::perform_layout(self, constraints);
+    }
+
     fn visit_children(&self, _visitor: &mut dyn FnMut(&dyn RenderObject)) {
         // RenderParagraph is a leaf - no children
     }
@@ -535,42 +597,33 @@ impl RenderObject for RenderParagraph {
 
 impl RenderBox for RenderParagraph {
     fn perform_layout(&mut self, constraints: BoxConstraints) -> Size {
-        // Layout text with constraints
-        self.layout_text_with_constraints(&constraints);
+        let adjusted_max_width = self.adjust_max_width(constraints.max_width);
 
-        // Get text size from painter
-        let text_size = self.text_painter.size();
+        // Measure text directly using cosmic-text (not through TextPainter)
+        let text_size = self.measure_text_size(adjusted_max_width);
+
+        // Also layout TextPainter for painting (it needs layout() called before paint())
+        self.text_painter
+            .layout(constraints.min_width, adjusted_max_width);
 
         // Constrain to box constraints
         let size = constraints.constrain(text_size);
         self.size = size;
 
+        tracing::debug!(
+            text_size = ?text_size,
+            constrained_size = ?size,
+            constraints = ?constraints,
+            "RenderParagraph::perform_layout"
+        );
+
         // Determine if we need clipping
-        let did_overflow_height =
-            size.height < text_size.height || self.text_painter.did_exceed_max_lines();
+        let did_overflow_height = size.height < text_size.height;
         let did_overflow_width = size.width < text_size.width;
         let has_visual_overflow = did_overflow_width || did_overflow_height;
 
-        if has_visual_overflow {
-            match self.overflow {
-                TextOverflow::Visible => {
-                    self.needs_clipping = false;
-                    self._overflow_shader = None;
-                }
-                TextOverflow::Clip | TextOverflow::Ellipsis => {
-                    self.needs_clipping = true;
-                    self._overflow_shader = None;
-                }
-                TextOverflow::Fade => {
-                    self.needs_clipping = true;
-                    // TODO: Implement fade shader
-                    self._overflow_shader = None;
-                }
-            }
-        } else {
-            self.needs_clipping = false;
-            self._overflow_shader = None;
-        }
+        self.needs_clipping = has_visual_overflow && self.overflow != TextOverflow::Visible;
+        self._overflow_shader = None; // Fade shader not implemented yet
 
         self._last_constraints = Some(constraints);
         size
@@ -585,32 +638,36 @@ impl RenderBox for RenderParagraph {
     }
 
     fn paint(&self, context: &mut PaintingContext, offset: Offset) {
-        // Re-layout if needed (text alignment might have changed)
-        // Note: In a full implementation, we'd check if layout is still valid
+        let Some(text) = self.text() else {
+            return;
+        };
 
         if self.needs_clipping {
             let bounds = Rect::from_ltwh(offset.dx, offset.dy, self.size.width, self.size.height);
-
-            if self._overflow_shader.is_some() {
-                // TODO: Save layer for shader blending
-                context.canvas().save();
-            } else {
-                context.canvas().save();
-            }
-
+            context.canvas().save();
             context.canvas().clip_rect(bounds);
         }
 
-        // Paint the text
-        self.text_painter.paint(context.canvas(), offset);
+        // Paint text directly using canvas.draw_text()
+        let plain_text = text.to_plain_text();
+        let style = text.style().cloned().unwrap_or_default();
 
-        // TODO: Paint inline children (WidgetSpans)
-        // self.paint_inline_children(context, offset);
+        // Get color from style or use black
+        let color = style.color.unwrap_or(flui_types::styling::Color::BLACK);
+        let paint = flui_types::painting::Paint::fill(color);
+
+        context
+            .canvas()
+            .draw_text(&plain_text, offset, self.size, &style, &paint);
+
+        tracing::debug!(
+            text = %plain_text,
+            offset = ?offset,
+            size = ?self.size,
+            "RenderParagraph::paint"
+        );
 
         if self.needs_clipping {
-            if self._overflow_shader.is_some() {
-                // TODO: Apply overflow shader
-            }
             context.canvas().restore();
         }
     }
@@ -626,22 +683,13 @@ impl RenderBox for RenderParagraph {
     }
 
     fn compute_min_intrinsic_width(&self, _height: f32) -> f32 {
-        // TODO: Properly compute min intrinsic width using a separate TextPainter
-        // For now, return 0 (text can be wrapped to any width)
+        // Text can be wrapped to any width
         0.0
     }
 
     fn compute_max_intrinsic_width(&self, _height: f32) -> f32 {
-        // TODO: Use a separate intrinsics TextPainter like Flutter does
-        // For now, estimate based on text length
-        if let Some(text) = self.text() {
-            let plain_text = text.to_plain_text();
-            let font_size = text.style().and_then(|s| s.font_size).unwrap_or(14.0) as f32;
-            let char_width = font_size * 0.6 * self.text_scale_factor();
-            plain_text.len() as f32 * char_width
-        } else {
-            0.0
-        }
+        // Measure text without width constraint to get natural width
+        self.measure_text_size(f32::INFINITY).width
     }
 
     fn compute_min_intrinsic_height(&self, width: f32) -> f32 {
@@ -649,33 +697,8 @@ impl RenderBox for RenderParagraph {
     }
 
     fn compute_max_intrinsic_height(&self, width: f32) -> f32 {
-        // Estimate height based on text wrapping
-        if let Some(text) = self.text() {
-            let plain_text = text.to_plain_text();
-            let font_size = text.style().and_then(|s| s.font_size).unwrap_or(14.0) as f32;
-            let scaled_font_size = font_size * self.text_scale_factor();
-            let char_width = scaled_font_size * 0.6;
-            let line_height = scaled_font_size * 1.2;
-
-            let adjusted_width = self.adjust_max_width(width);
-            if adjusted_width.is_finite() && char_width > 0.0 {
-                let chars_per_line = (adjusted_width / char_width).max(1.0);
-                let num_lines = (plain_text.len() as f32 / chars_per_line).ceil().max(1.0);
-
-                // Apply max_lines constraint
-                let actual_lines = if let Some(max) = self.max_lines() {
-                    num_lines.min(max as f32)
-                } else {
-                    num_lines
-                };
-
-                actual_lines * line_height
-            } else {
-                line_height // Single line for infinite width
-            }
-        } else {
-            0.0
-        }
+        let adjusted_width = self.adjust_max_width(width);
+        self.measure_text_size(adjusted_width).height
     }
 
     fn compute_distance_to_actual_baseline(&self, baseline: TextBaseline) -> Option<f32> {

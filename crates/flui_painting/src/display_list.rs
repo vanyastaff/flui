@@ -1077,6 +1077,8 @@ pub enum DrawCommand {
         text: String,
         /// Position offset
         offset: Offset,
+        /// Pre-computed size of the text (for bounds calculation)
+        size: Size,
         /// Text style (font, size, etc.)
         style: TextStyle,
         /// Paint style (color, etc.)
@@ -1511,12 +1513,14 @@ impl DrawCommand {
             DrawCommand::DrawText {
                 text,
                 offset,
+                size,
                 style,
                 paint,
                 transform,
             } => DrawCommand::DrawText {
                 text: text.clone(),
                 offset: *offset,
+                size: *size,
                 style: style.clone(),
                 paint: paint.clone().with_opacity(opacity),
                 transform: *transform,
@@ -1983,9 +1987,17 @@ impl DrawCommand {
             // Clipping and text don't contribute to bounds directly
             DrawCommand::ClipRect { .. }
             | DrawCommand::ClipRRect { .. }
-            | DrawCommand::ClipPath { .. }
-            | DrawCommand::DrawText { .. }
-            | DrawCommand::DrawTextSpan { .. } => None,
+            | DrawCommand::ClipPath { .. } => None,
+            DrawCommand::DrawText {
+                offset,
+                size,
+                transform,
+                ..
+            } => {
+                let local_bounds = Rect::from_xywh(offset.dx, offset.dy, size.width, size.height);
+                Some(transform.transform_rect(&local_bounds))
+            }
+            DrawCommand::DrawTextSpan { .. } => None, // TextSpan doesn't have pre-computed size
 
             // Layer commands - SaveLayer bounds if specified, RestoreLayer has no bounds
             DrawCommand::SaveLayer {

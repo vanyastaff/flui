@@ -589,7 +589,7 @@ impl RenderBox for RenderViewport {
             // Only paint if child has visible geometry
             let geometry = child.geometry();
             if geometry.visible {
-                child.paint(context, child_offset);
+                RenderSliver::paint(child, context, child_offset);
             }
         });
     }

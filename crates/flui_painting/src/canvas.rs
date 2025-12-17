@@ -34,7 +34,7 @@ use crate::display_list::{
     BlendMode, DisplayList, DisplayListCore, DrawCommand, ImageFilter, Paint,
 };
 use flui_types::{
-    geometry::{Matrix4, Offset, Point, RRect, Rect},
+    geometry::{Matrix4, Offset, Point, RRect, Rect, Size},
     painting::{Clip, ClipOp, Image, Path},
     styling::Color,
     typography::{InlineSpan, TextStyle},
@@ -803,12 +803,21 @@ impl Canvas {
     ///
     /// * `text` - Text content to draw
     /// * `offset` - Position offset
+    /// * `size` - Pre-computed size of the text (for bounds calculation)
     /// * `style` - Text style (font, size, etc.)
     /// * `paint` - Paint style (color)
-    pub fn draw_text(&mut self, text: &str, offset: Offset, style: &TextStyle, paint: &Paint) {
+    pub fn draw_text(
+        &mut self,
+        text: &str,
+        offset: Offset,
+        size: Size,
+        style: &TextStyle,
+        paint: &Paint,
+    ) {
         self.display_list.push(DrawCommand::DrawText {
             text: text.to_string(),
             offset,
+            size,
             style: style.clone(),
             paint: paint.clone(),
             transform: self.transform,
@@ -2867,10 +2876,11 @@ impl Canvas {
         &mut self,
         text: &str,
         offset: Offset,
+        size: Size,
         style: &TextStyle,
         paint: &Paint,
     ) -> &mut Self {
-        self.draw_text(text, offset, style, paint);
+        self.draw_text(text, offset, size, style, paint);
         self
     }
 

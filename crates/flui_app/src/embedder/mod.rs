@@ -6,13 +6,18 @@
 //! # Architecture
 //!
 //! ```text
+//! AppBinding (central coordinator - all framework logic)
+//!   ├── WidgetsBinding (build phase)
+//!   ├── RenderPipelineOwner (layout/paint)
+//!   ├── GestureBinding (hit testing)
+//!   ├── SceneCache (hit testing cache)
+//!   └── FrameCoordinator (frame stats)
+//!
 //! embedder/
-//!   ├── core.rs           - EmbedderCore (shared 90% logic)
 //!   ├── desktop.rs        - DesktopEmbedder (Windows/macOS/Linux)
 //!   ├── frame_coordinator.rs - Frame rendering coordination
 //!   ├── pointer_state.rs  - Pointer tracking and coalescing
-//!   ├── scene_cache.rs    - Scene caching for hit testing
-//!   └── scheduler_binding.rs - Frame scheduling integration
+//!   └── scene_cache.rs    - Scene caching for hit testing
 //! ```
 //!
 //! # Platform Support
@@ -22,16 +27,12 @@
 //! - **iOS**: (future) UIKit integration
 //! - **Web**: (future) wasm-bindgen integration
 
-mod core;
 mod desktop;
-mod embedder_scheduler;
 mod frame_coordinator;
 mod pointer_state;
 mod scene_cache;
 
-pub use core::EmbedderCore;
 pub use desktop::{DesktopEmbedder, EmbedderError};
-pub use embedder_scheduler::{EmbedderScheduler, SchedulerStats};
 pub use frame_coordinator::{FrameCoordinator, FrameResult};
 pub use pointer_state::PointerState;
 pub use scene_cache::SceneCache;

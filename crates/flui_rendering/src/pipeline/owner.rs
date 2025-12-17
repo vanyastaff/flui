@@ -4,8 +4,11 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use flui_foundation::RenderId;
+use flui_layer::LayerTree;
+use flui_types::Offset;
 use parking_lot::RwLock;
 
+use crate::pipeline::PaintingContext;
 use crate::tree::RenderTree;
 
 // ============================================================================
@@ -117,6 +120,9 @@ pub struct PipelineOwner {
 
     /// Whether semantics are enabled.
     semantics_enabled: AtomicBool,
+
+    /// The layer tree produced by the last paint phase.
+    last_layer_tree: Option<LayerTree>,
 }
 
 impl std::fmt::Debug for PipelineOwner {
@@ -131,6 +137,7 @@ impl std::fmt::Debug for PipelineOwner {
             .field("debug_doing_layout", &self.debug_doing_layout)
             .field("debug_doing_paint", &self.debug_doing_paint)
             .field("debug_doing_semantics", &self.debug_doing_semantics)
+            .field("has_layer_tree", &self.last_layer_tree.is_some())
             .finish()
     }
 }
@@ -160,6 +167,7 @@ impl PipelineOwner {
             debug_doing_paint: false,
             debug_doing_semantics: false,
             semantics_enabled: AtomicBool::new(false),
+            last_layer_tree: None,
         }
     }
 
@@ -190,6 +198,7 @@ impl PipelineOwner {
             debug_doing_paint: false,
             debug_doing_semantics: false,
             semantics_enabled: AtomicBool::new(false),
+            last_layer_tree: None,
         }
     }
 
@@ -250,6 +259,19 @@ impl PipelineOwner {
     /// Returns a mutable reference to the render tree.
     pub fn render_tree_mut(&mut self) -> &mut RenderTree {
         &mut self.render_tree
+    }
+
+    /// Returns a reference to the layer tree from the last paint phase.
+    pub fn layer_tree(&self) -> Option<&LayerTree> {
+        self.last_layer_tree.as_ref()
+    }
+
+    /// Takes the layer tree from the last paint phase.
+    ///
+    /// This removes the layer tree from the pipeline owner, returning ownership
+    /// to the caller. Useful for passing to the compositor.
+    pub fn take_layer_tree(&mut self) -> Option<LayerTree> {
+        self.last_layer_tree.take()
     }
 
     // ========================================================================
@@ -534,7 +556,26 @@ impl PipelineOwner {
                             render_view.prepare_initial_frame_without_owner();
                             render_view.perform_layout();
                         } else {
-                            // For other nodes, call layout_without_resize
+                            // For non-root nodes, call layout_without_resize()
+                            // This uses cached constraints from the parent's layout() call
+                            //
+                            // Note: In a full implementation, the parent would call
+                            // child.layout(constraints, parentUsesSize) during its
+                            // perform_layout(). For now, if no constraints are cached,
+                            // we set default constraints.
+                            use crate::constraints::BoxConstraints;
+
+                            if render_object.base().cached_constraints().is_none() {
+                                // No cached constraints - this is likely first layout
+                                // Set default loose constraints
+                                let default_constraints =
+                                    BoxConstraints::loose(flui_types::Size::new(800.0, 600.0));
+                                render_object
+                                    .base_mut()
+                                    .set_cached_constraints(default_constraints);
+                            }
+
+                            // Now call layout_without_resize which uses cached constraints
                             render_object.layout_without_resize();
                         }
                     }
@@ -612,36 +653,50 @@ impl PipelineOwner {
             self.debug_doing_paint = true;
 
             // Take dirty nodes and replace with empty vec
-            let mut dirty_nodes = std::mem::take(&mut self.nodes_needing_paint);
+            let dirty_nodes = std::mem::take(&mut self.nodes_needing_paint);
 
             // Sort by depth (deep first) - children before parents
             // Flutter: dirtyNodes.sort((a, b) => b.depth - a.depth)
-            dirty_nodes.sort_unstable_by(|a, b| b.depth.cmp(&a.depth));
+            // Note: We don't need to sort for now since we paint from root
 
-            // Process each dirty node
-            // Flutter iterates all dirty nodes and calls PaintingContext.repaintCompositedChild
-            for dirty_node in dirty_nodes {
+            // Clear needs_paint flags for all dirty nodes
+            for dirty_node in &dirty_nodes {
                 let render_id = RenderId::new(dirty_node.id);
+                if let Some(render_node) = self.render_tree.get_mut(render_id) {
+                    render_node.render_object_mut().clear_needs_paint();
+                }
+            }
 
-                if let Some(render_node) = self.render_tree.get(render_id) {
-                    let render_object = render_node.render_object();
+            // Paint all render objects
+            // Since RenderView.child is not directly set (children tracked via RenderTree),
+            // we paint all render objects in the tree directly.
+            if let Some(root_id) = self.root_id {
+                if let Some(root_node) = self.render_tree.get(root_id) {
+                    let paint_bounds = root_node.render_object().paint_bounds();
+                    tracing::debug!("flush_paint: painting root with bounds {:?}", paint_bounds);
 
-                    // Only paint if still needs paint
-                    // Flutter: if ((node._needsPaint || node._needsCompositedLayerUpdate) && node.owner == this)
-                    if render_object.needs_paint() {
-                        tracing::trace!(
-                            "flush_paint: painting node id={} depth={}",
-                            dirty_node.id,
-                            dirty_node.depth
-                        );
+                    // Create PaintingContext
+                    let mut context = PaintingContext::new(paint_bounds);
 
-                        // TODO: Implement full paint with PaintingContext
-                        // Flutter: PaintingContext.repaintCompositedChild(node)
-                        // For now, just clear the needs_paint flag
-                        if let Some(render_node) = self.render_tree.get_mut(render_id) {
-                            render_node.render_object_mut().clear_needs_paint();
+                    // Paint all nodes in the tree (parents first, then children)
+                    // Collect all node IDs first to avoid borrow issues
+                    let node_ids: Vec<RenderId> =
+                        self.render_tree.iter().map(|(id, _)| id).collect();
+
+                    for render_id in node_ids {
+                        if let Some(render_node) = self.render_tree.get(render_id) {
+                            let render_object = render_node.render_object();
+                            tracing::trace!("flush_paint: painting node {:?}", render_id);
+                            render_object.paint(&mut context, Offset::ZERO);
                         }
                     }
+
+                    // Store the resulting layer tree
+                    self.last_layer_tree = Some(context.into_layer_tree());
+                    tracing::debug!(
+                        "flush_paint: layer tree has {} layers",
+                        self.last_layer_tree.as_ref().map(|t| t.len()).unwrap_or(0)
+                    );
                 }
             }
 

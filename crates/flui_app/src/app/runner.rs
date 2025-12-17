@@ -33,10 +33,6 @@ where
         "Starting FLUI application"
     );
 
-    // Get binding and attach root widget
-    let binding = AppBinding::instance();
-    binding.attach_root_widget(&root);
-
     // Run platform-specific event loop
     #[cfg(all(
         not(target_os = "android"),
@@ -90,11 +86,7 @@ where
     V: View + StatelessView + Clone + Send + Sync + 'static,
 {
     use crate::embedder::DesktopEmbedder;
-    use flui_rendering::pipeline::PipelineOwner;
-    use flui_scheduler::Scheduler;
     use flui_view::ElementBase;
-    use parking_lot::RwLock;
-    use std::sync::{atomic::AtomicBool, Arc};
     use winit::{
         application::ApplicationHandler,
         event::WindowEvent,
@@ -111,29 +103,16 @@ where
         /// The user's root widget
         root_widget: V,
         embedder: Option<DesktopEmbedder>,
-        /// Pipeline owner shared with DesktopEmbedder (used for GPU rendering callbacks)
-        embedder_pipeline_owner: Arc<RwLock<PipelineOwner>>,
-        needs_redraw: Arc<AtomicBool>,
-        scheduler: Arc<Scheduler>,
         /// The root element (RootRenderElement wrapping user's widget)
         root_element: Option<Box<dyn ElementBase>>,
     }
 
     impl<V: View + Clone + Send + Sync + 'static> DesktopApp<V> {
         fn new(root_widget: V, config: AppConfig) -> Self {
-            // Note: We'll use AppBinding's PipelineOwner for the actual rendering pipeline
-            // This embedder_pipeline_owner is just for DesktopEmbedder construction
-            let embedder_pipeline_owner = Arc::new(RwLock::new(PipelineOwner::new()));
-            let needs_redraw = Arc::new(AtomicBool::new(true));
-            let scheduler = Arc::new(Scheduler::new());
-
             Self {
                 config,
                 root_widget,
                 embedder: None,
-                embedder_pipeline_owner,
-                needs_redraw,
-                scheduler,
                 root_element: None,
             }
         }
@@ -190,22 +169,14 @@ where
 
             tracing::info!("Creating window and GPU renderer");
 
-            // Create embedder with window
-            let embedder = pollster::block_on(async {
-                DesktopEmbedder::new(
-                    Arc::clone(&self.embedder_pipeline_owner),
-                    Arc::clone(&self.needs_redraw),
-                    Arc::clone(&self.scheduler),
-                    event_loop,
-                )
-                .await
-            });
+            // Create embedder with window (no longer needs pipeline_owner - uses AppBinding)
+            let embedder = pollster::block_on(async { DesktopEmbedder::new(event_loop).await });
 
             match embedder {
                 Ok(emb) => {
                     // Get window size for RootRenderView
-                    let size = emb.window().inner_size();
-                    let (width, height) = (size.width as f32, size.height as f32);
+                    let (width, height) = emb.size();
+                    let (width, height) = (width as f32, height as f32);
 
                     // Mount the root element with RootRenderView wrapper
                     self.mount_root(width, height);
@@ -241,11 +212,7 @@ where
 
             // Handle redraw
             if matches!(event, WindowEvent::RedrawRequested) {
-                // Draw frame using AppBinding's draw_frame
-                let binding = AppBinding::instance();
-                binding.draw_frame();
-
-                // Render to GPU
+                // Render frame (AppBinding handles all framework logic)
                 embedder.render_frame();
 
                 // Request next frame
@@ -321,10 +288,6 @@ mod tests {
     impl View for TestView {
         fn create_element(&self) -> Box<dyn flui_view::ElementBase> {
             Box::new(flui_view::StatelessElement::new(self))
-        }
-
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
         }
     }
 

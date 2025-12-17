@@ -3,36 +3,40 @@
 //! Platform embedder for desktop environments using winit + wgpu.
 //! Uses `ui-events-winit` for W3C-compliant event translation.
 
-use super::EmbedderCore;
+use crate::app::AppBinding;
 use flui_engine::wgpu::SceneRenderer;
 use flui_interaction::events::{PointerEvent, ScrollEventData};
-use flui_rendering::pipeline::PipelineOwner;
 use flui_types::Offset;
-use parking_lot::RwLock;
-use std::sync::{atomic::AtomicBool, Arc};
+use std::sync::Arc;
 
 use ui_events_winit::{WindowEventReducer, WindowEventTranslation};
 use winit::{event::WindowEvent, event_loop::ActiveEventLoop, window::Window};
 
 /// Desktop embedder for Windows, macOS, Linux
 ///
-/// Thin wrapper around `EmbedderCore` with desktop-specific event handling.
-/// Uses `ui-events-winit::WindowEventReducer` for W3C-compliant event translation.
+/// Thin wrapper that connects platform (winit/wgpu) to AppBinding.
+/// All framework logic is in AppBinding, this only handles:
+/// - Window management
+/// - GPU rendering
+/// - Event translation (winit → ui-events → AppBinding)
 ///
 /// # Architecture
 ///
 /// ```text
-/// DesktopEmbedder (thin wrapper)
-///   ├─ core: EmbedderCore (90% of logic)
+/// DesktopEmbedder (thin platform wrapper)
 ///   ├─ window: Arc<Window> (winit window)
 ///   ├─ renderer: SceneRenderer (GPU rendering)
 ///   └─ event_reducer: WindowEventReducer (winit → ui-events)
+///
+/// AppBinding (all framework logic)
+///   ├─ WidgetsBinding (build phase)
+///   ├─ RenderPipelineOwner (layout/paint)
+///   ├─ GestureBinding (hit testing)
+///   ├─ SceneCache (hit testing cache)
+///   └─ FrameCoordinator (frame stats)
 /// ```
 #[allow(missing_debug_implementations)]
 pub struct DesktopEmbedder {
-    /// Shared embedder core (90% of logic)
-    core: EmbedderCore,
-
     /// Platform window
     window: Arc<Window>,
 
@@ -48,16 +52,8 @@ impl DesktopEmbedder {
     ///
     /// # Arguments
     ///
-    /// * `pipeline_owner` - Shared pipeline from AppBinding
-    /// * `needs_redraw` - Shared redraw flag from AppBinding
-    /// * `scheduler` - Scheduler instance
     /// * `event_loop` - Active event loop for window creation
-    pub async fn new(
-        pipeline_owner: Arc<RwLock<PipelineOwner>>,
-        needs_redraw: Arc<AtomicBool>,
-        scheduler: Arc<flui_scheduler::Scheduler>,
-        event_loop: &ActiveEventLoop,
-    ) -> Result<Self, EmbedderError> {
+    pub async fn new(event_loop: &ActiveEventLoop) -> Result<Self, EmbedderError> {
         let _init_span = tracing::info_span!("init_embedder").entered();
 
         // 1. Create window using ActiveEventLoop (winit 0.30+ API)
@@ -86,11 +82,7 @@ impl DesktopEmbedder {
 
         tracing::info!(width = size.width, height = size.height, "Window created");
 
-        // 3. Create embedder core (shared logic)
-        let core = EmbedderCore::new(pipeline_owner, needs_redraw, scheduler);
-
         Ok(Self {
-            core,
             window,
             renderer,
             event_reducer: WindowEventReducer::default(),
@@ -101,32 +93,23 @@ impl DesktopEmbedder {
     ///
     /// Uses `ui-events-winit::WindowEventReducer` for W3C-compliant event translation.
     pub fn handle_window_event(&mut self, event: WindowEvent, elwt: &ActiveEventLoop) {
-        // 1. Update lifecycle state
-        match &event {
-            WindowEvent::Focused(focused) => {
-                self.core.handle_focus_changed(*focused);
-            }
-            WindowEvent::Occluded(occluded) => {
-                self.core.handle_visibility_changed(!occluded);
-            }
-            _ => {}
-        }
+        let binding = AppBinding::instance();
 
-        // 2. Handle events that don't go through the reducer
+        // 1. Handle events that don't go through the reducer
         match &event {
             WindowEvent::CloseRequested => {
                 elwt.exit();
                 return;
             }
             WindowEvent::Resized(size) => {
-                self.core
-                    .handle_resize(&mut self.renderer, size.width, size.height);
+                self.renderer.resize(size.width, size.height);
+                binding.request_redraw();
                 return;
             }
             _ => {}
         }
 
-        // 3. Use WindowEventReducer for pointer/keyboard event translation
+        // 2. Use WindowEventReducer for pointer/keyboard event translation
         let scale_factor = self.window.scale_factor();
         if let Some(translation) = self.event_reducer.reduce(scale_factor, &event) {
             match translation {
@@ -134,7 +117,7 @@ impl DesktopEmbedder {
                     self.handle_pointer_event(pointer_event);
                 }
                 WindowEventTranslation::Keyboard(keyboard_event) => {
-                    self.core.handle_key_event(keyboard_event);
+                    binding.handle_key_event(keyboard_event);
                 }
             }
         }
@@ -145,6 +128,8 @@ impl DesktopEmbedder {
         use flui_interaction::events::PointerEventData;
         use flui_interaction::events::ScrollDelta;
 
+        let binding = AppBinding::instance();
+
         // Extract position from the pointer event
         if let Some(data) = PointerEventData::from_pointer_event(&event) {
             let position = data.position;
@@ -153,7 +138,7 @@ impl DesktopEmbedder {
             // Determine event type and route appropriately
             match &event {
                 PointerEvent::Down(_) => {
-                    self.core.handle_pointer_button(
+                    binding.handle_pointer_button(
                         position,
                         device,
                         flui_interaction::events::PointerButton::Primary,
@@ -161,7 +146,7 @@ impl DesktopEmbedder {
                     );
                 }
                 PointerEvent::Up(_) => {
-                    self.core.handle_pointer_button(
+                    binding.handle_pointer_button(
                         position,
                         device,
                         flui_interaction::events::PointerButton::Primary,
@@ -169,7 +154,7 @@ impl DesktopEmbedder {
                     );
                 }
                 PointerEvent::Move(_) => {
-                    self.core.handle_pointer_move(position, device);
+                    binding.handle_pointer_move(position, device);
                 }
                 PointerEvent::Scroll(scroll) => {
                     // Convert ScrollDelta enum to Offset
@@ -184,7 +169,7 @@ impl DesktopEmbedder {
                         delta,
                         modifiers: scroll.state.modifiers,
                     };
-                    self.core.handle_scroll_event(scroll_event);
+                    binding.handle_scroll_event(scroll_event);
                 }
                 // Gesture events (pinch, rotate) - pass through for future handling
                 PointerEvent::Gesture(_) => {
@@ -197,19 +182,27 @@ impl DesktopEmbedder {
     }
 
     /// Render a frame
+    ///
+    /// Delegates to AppBinding for all framework logic, only handles GPU rendering.
     pub fn render_frame(&mut self) {
-        let _scene = self.core.render_frame(&mut self.renderer);
-        self.core.mark_rendered();
+        let binding = AppBinding::instance();
+        let _scene = binding.render_frame(&mut self.renderer);
     }
 
     /// Check if redraw is needed
     pub fn needs_redraw(&self) -> bool {
-        self.core.needs_redraw()
+        AppBinding::instance().needs_redraw()
     }
 
     /// Get the underlying winit window
     pub fn window(&self) -> &Arc<Window> {
         &self.window
+    }
+
+    /// Get window size
+    pub fn size(&self) -> (u32, u32) {
+        let size = self.window.inner_size();
+        (size.width, size.height)
     }
 
     /// Request a redraw

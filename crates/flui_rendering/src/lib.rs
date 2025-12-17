@@ -80,7 +80,7 @@ pub mod layer {
 
 /// Prelude module for convenient imports.
 pub mod prelude {
-    pub use crate::binding::{HitTestDispatcher, PipelineManifold, RendererBinding};
+    pub use crate::binding::{HitTestDispatcher, PipelineManifold};
     pub use crate::containers::{
         // Box protocol
         BoxChild,

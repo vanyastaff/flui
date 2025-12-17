@@ -8,6 +8,7 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 
 use super::RenderObjectState;
+use crate::constraints::BoxConstraints;
 use crate::parent_data::ParentData;
 use crate::pipeline::PipelineOwner;
 
@@ -63,6 +64,16 @@ pub struct BaseRenderObject {
 
     /// Debug information about who created this object.
     debug_creator: Option<String>,
+
+    /// Cached constraints from the most recent layout() call.
+    ///
+    /// # Flutter Equivalence
+    /// `Constraints? _constraints` in Flutter's `RenderObject`.
+    ///
+    /// These constraints are set during `layout()` and used by
+    /// `layout_without_resize()` to re-layout without receiving
+    /// new constraints from the parent.
+    cached_constraints: Option<BoxConstraints>,
 }
 
 impl Default for BaseRenderObject {
@@ -79,6 +90,7 @@ impl BaseRenderObject {
             state: RenderObjectState::new(),
             parent_data: None,
             debug_creator: None,
+            cached_constraints: None,
         }
     }
 
@@ -89,6 +101,7 @@ impl BaseRenderObject {
             state: RenderObjectState::with_node_id(node_id),
             parent_data: None,
             debug_creator: None,
+            cached_constraints: None,
         }
     }
 
@@ -306,6 +319,41 @@ impl BaseRenderObject {
     #[inline]
     pub fn set_debug_creator(&mut self, creator: Option<String>) {
         self.debug_creator = creator;
+    }
+
+    // ========================================================================
+    // Cached Constraints
+    // ========================================================================
+
+    /// Returns the cached constraints from the last layout() call.
+    ///
+    /// Returns `None` if layout has never been called.
+    ///
+    /// # Flutter Equivalence
+    /// `Constraints? get constraints => _constraints;`
+    #[inline]
+    pub fn cached_constraints(&self) -> Option<BoxConstraints> {
+        self.cached_constraints
+    }
+
+    /// Sets the cached constraints.
+    ///
+    /// This is called by `layout()` to store the constraints before
+    /// calling `perform_layout()`.
+    ///
+    /// # Flutter Equivalence
+    /// `_constraints = constraints;` in `layout()`
+    #[inline]
+    pub fn set_cached_constraints(&mut self, constraints: BoxConstraints) {
+        self.cached_constraints = Some(constraints);
+    }
+
+    /// Clears the cached constraints.
+    ///
+    /// Called when the render object is detached or disposed.
+    #[inline]
+    pub fn clear_cached_constraints(&mut self) {
+        self.cached_constraints = None;
     }
 }
 

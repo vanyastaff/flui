@@ -656,6 +656,11 @@ impl RenderObject for RenderView {
     fn paint_bounds(&self) -> Rect {
         Rect::new(0.0, 0.0, self.size.width, self.size.height)
     }
+
+    fn paint(&self, context: &mut PaintingContext, offset: Offset) {
+        // Delegate to RenderView's paint implementation
+        RenderView::paint(self, context, offset);
+    }
 }
 
 // ============================================================================

@@ -53,6 +53,7 @@
 
 // Modules
 pub mod app;
+pub mod bindings;
 pub mod debug;
 pub mod embedder;
 pub mod overlay;
@@ -60,12 +61,16 @@ pub mod theme;
 
 // Re-exports
 pub use app::{AppBinding, AppConfig, AppLifecycle, RootRenderElement, RootRenderView};
+pub use bindings::{
+    Binding, GestureBindingBehavior, RenderView, RendererBinding, RendererBindingBehavior,
+    SchedulerBindingBehavior, WidgetsBindingBehavior,
+};
 pub use debug::{DebugFlags, FrameStats, PerformanceOverlay};
 pub use overlay::{OverlayEntry, OverlayManager, OverlayPosition};
 pub use theme::{Color, ColorScheme, Theme, ThemeMode};
 
 // Embedder re-exports
-pub use embedder::{DesktopEmbedder, EmbedderCore, EmbedderError};
+pub use embedder::{DesktopEmbedder, EmbedderError};
 
 // Convenience re-exports from flui-view
 pub use flui_view::{

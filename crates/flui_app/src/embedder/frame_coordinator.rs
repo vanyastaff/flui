@@ -64,14 +64,16 @@ impl FrameCoordinator {
     /// Render a scene to the GPU
     ///
     /// Handles surface errors gracefully and tracks statistics.
+    /// Uses `render_scene` to traverse the full layer tree.
     #[tracing::instrument(level = "trace", skip_all, fields(frame = scene.frame_number()))]
     pub fn render_scene(&mut self, renderer: &mut SceneRenderer, scene: &Scene) -> FrameResult {
-        let Some(layer) = scene.root_layer() else {
+        if !scene.has_content() {
             tracing::trace!("Empty scene, skipping render");
             return FrameResult::Empty;
-        };
+        }
 
-        match renderer.render(layer) {
+        // Use render_scene to traverse the full layer tree (not just root layer)
+        match renderer.render_scene(scene) {
             Ok(()) => {
                 self.frames_rendered += 1;
                 tracing::trace!(
