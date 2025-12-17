@@ -10,16 +10,11 @@ rust-version = "1.91"
 [dependencies]
 # Core FLUI crates (active in workspace)
 flui_app = { path = "../../crates/flui_app" }
+flui_widgets = { path = "../../crates/flui_widgets" }
 flui_types = { path = "../../crates/flui_types" }
-flui_painting = { path = "../../crates/flui_painting" }
-flui-layer = { path = "../../crates/flui-layer" }
 
 # Engine for GPU rendering (dx12 on Windows)
 flui_engine = { path = "../../crates/flui_engine", default-features = false, features = ["wgpu-backend", "dx12"] }
-
-# Window management
-winit = "0.30"
-pollster = "0.4"
 
 # Logging
 tracing = "0.1"

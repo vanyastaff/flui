@@ -36,7 +36,7 @@ members = [
     # === Temporarily disabled ===
     # "crates/flui_assets",       # Asset management system
     # "crates/flui-objects",      # Concrete RenderObject implementations
-    # "crates/flui_widgets",      # Widget library
+    "crates/flui_widgets",      # Widget library
     # "crates/flui_devtools",     # Developer tools
     # "crates/flui_cli",          # CLI tool for project management
     # "crates/flui_build",        # Build system library for cross-platform builds

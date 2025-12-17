@@ -1,408 +1,342 @@
-//! Text widget - displays styled text
+//! Text widget - displays styled text.
 //!
-//! The Text widget displays a string with a single style. It's one of the most
-//! fundamental widgets in any UI framework.
+//! A widget that displays a string of text with a single style.
+//! Similar to Flutter's Text widget.
 //!
 //! # Usage Patterns
 //!
-//! ## 1. Simple Constructor
+//! ## 1. Simple Text
 //! ```rust,ignore
 //! Text::new("Hello, World!")
 //! ```
 //!
-//! ## 2. Convenience Methods
+//! ## 2. Styled Text
 //! ```rust,ignore
-//! // Sized text
-//! Text::sized("Hello", 24.0)
-//!
-//! // Colored text
-//! Text::colored("Error!", Color::RED)
-//!
-//! // Typography presets
-//! Text::headline("Main Title")      // 32px bold
-//! Text::title("Section Title")      // 24px
-//! Text::body("Regular text")        // 16px
-//! Text::caption("Small text")       // 12px
-//! ```
-//!
-//! ## 3. Builder Pattern
-//! ```rust,ignore
-//! Text::builder()
-//!     .data("Styled text")
-//!     .size(20.0)
+//! Text::new("Hello")
+//!     .style(TextStyle::default().with_font_size(24.0))
 //!     .color(Color::BLUE)
-//!     .text_align(TextAlign::Center)
-//!     .build()
 //! ```
 //!
-//! ## 4. Macro
+//! ## 3. Multi-line Text
 //! ```rust,ignore
-//! text!("Hello")
-//! text!(data: "Hello", size: 24.0, color: Color::RED)
+//! Text::new("Long text that wraps...")
+//!     .max_lines(3)
+//!     .overflow(TextOverflow::Ellipsis)
 //! ```
+//!
+//! # Flutter Equivalence
+//!
+//! This corresponds to Flutter's `Text` widget which builds a `RichText`.
 
-use bon::Builder;
-use flui_objects::{ParagraphData, RenderParagraph};
-use flui_rendering::{BoxProtocol, Leaf};
-use flui_types::{
-    typography::{TextAlign, TextDirection, TextOverflow},
-    Color,
+use flui_rendering::prelude::*;
+use flui_types::styling::Color;
+use flui_types::typography::{
+    InlineSpan, StrutStyle, TextAlign, TextDirection, TextHeightBehavior, TextOverflow, TextSpan,
+    TextStyle, TextWidthBasis,
 };
-use flui_view::{
-    wrappers::RenderViewWrapper, IntoView, IntoViewConfig, RenderView, UpdateResult, ViewConfig,
-    ViewObject,
-};
+use flui_view::{impl_render_view, RenderView};
 
-/// A widget that displays a string of text with a single style.
+/// A widget that displays a string of text with styling.
 ///
-/// The Text widget displays a string with a uniform style. For text with
-/// multiple styles, use RichText instead.
+/// The text to display is described using a tree of [TextSpan] objects,
+/// each of which has its own associated style.
 ///
-/// # Example
+/// ## Layout Behavior
+///
+/// - Text wraps at word boundaries by default (soft_wrap = true)
+/// - Text is clipped or truncated based on overflow setting
+/// - Text alignment can be configured
+///
+/// ## Flutter Equivalence
+///
+/// This corresponds to Flutter's `Text` widget.
+///
+/// ## Examples
 ///
 /// ```rust,ignore
+/// // Simple text
 /// Text::new("Hello, World!")
+///
+/// // Styled text
+/// Text::new("Hello")
+///     .font_size(24.0)
+///     .color(Color::BLUE)
+///     .text_align(TextAlign::Center)
+///
+/// // Multi-line with overflow
+/// Text::new("This is a very long text that should wrap to multiple lines...")
+///     .max_lines(2)
+///     .overflow(TextOverflow::Ellipsis)
 /// ```
-///
-/// # Implementation
-///
-/// Text is a LeafRenderObjectWidget that creates a RenderParagraph object for
-/// rendering. The actual text rendering is delegated to flui_rendering's RenderParagraph.
-#[derive(Debug, Clone, Builder)]
-#[builder(on(String, into), finish_fn(name = build_internal, vis = ""))]
+#[derive(Debug)]
 pub struct Text {
-    /// The text to display
-    #[builder(default)]
-    pub data: String,
+    /// The text to display (as InlineSpan for rich text support).
+    text: InlineSpan,
 
-    /// Text size in logical pixels
-    #[builder(default = 14.0)]
-    pub size: f32,
+    /// The style to apply to the text.
+    style: Option<TextStyle>,
 
-    /// Text color
-    #[builder(default = Color::BLACK)]
-    pub color: Color,
+    /// How the text should be aligned horizontally.
+    text_align: TextAlign,
 
-    /// Text alignment
-    #[builder(default = TextAlign::Left)]
-    pub text_align: TextAlign,
+    /// The directionality of the text.
+    text_direction: TextDirection,
 
-    /// Text direction
-    #[builder(default = TextDirection::Ltr)]
-    pub text_direction: TextDirection,
+    /// Whether the text should break at soft line breaks.
+    soft_wrap: bool,
 
-    /// Maximum number of lines
-    pub max_lines: Option<usize>,
+    /// How visual overflow should be handled.
+    overflow: TextOverflow,
 
-    /// Text overflow behavior
-    #[builder(default = TextOverflow::Clip)]
-    pub overflow: TextOverflow,
+    /// The text scale factor for accessibility.
+    text_scale_factor: f32,
 
-    /// Whether to wrap text at word boundaries
-    #[builder(default = true)]
-    pub soft_wrap: bool,
+    /// Maximum number of lines before truncation.
+    max_lines: Option<u32>,
 
-    /// Optional key for widget identification
-    pub key: Option<String>,
+    /// Strut style for consistent line heights.
+    strut_style: Option<StrutStyle>,
+
+    /// How to measure text width.
+    text_width_basis: TextWidthBasis,
+
+    /// Text height behavior.
+    text_height_behavior: Option<TextHeightBehavior>,
+
+    /// Selection color (for selectable text).
+    selection_color: Option<Color>,
+}
+
+impl Clone for Text {
+    fn clone(&self) -> Self {
+        Self {
+            text: self.text.clone(),
+            style: self.style.clone(),
+            text_align: self.text_align,
+            text_direction: self.text_direction,
+            soft_wrap: self.soft_wrap,
+            overflow: self.overflow,
+            text_scale_factor: self.text_scale_factor,
+            max_lines: self.max_lines,
+            strut_style: self.strut_style.clone(),
+            text_width_basis: self.text_width_basis,
+            text_height_behavior: self.text_height_behavior.clone(),
+            selection_color: self.selection_color,
+        }
+    }
 }
 
 impl Text {
-    /// Create a new Text widget with the given string.
-    ///
-    /// Uses default styling: 14px black text, left-aligned.
+    /// Creates a new Text widget with the given string.
     ///
     /// # Example
     ///
     /// ```rust,ignore
-    /// let text = Text::new("Hello, World!");
+    /// Text::new("Hello, World!")
     /// ```
-    pub fn new(data: impl Into<String>) -> Self {
+    pub fn new(text: impl Into<String>) -> Self {
+        let text_string = text.into();
         Self {
-            data: data.into(),
-            size: 14.0,
-            color: Color::BLACK,
-            text_align: TextAlign::Left,
+            text: InlineSpan::from(TextSpan::new(text_string)),
+            style: None,
+            text_align: TextAlign::Start,
             text_direction: TextDirection::Ltr,
-            max_lines: None,
-            overflow: TextOverflow::Clip,
             soft_wrap: true,
-            key: None,
+            overflow: TextOverflow::Clip,
+            text_scale_factor: 1.0,
+            max_lines: None,
+            strut_style: None,
+            text_width_basis: TextWidthBasis::Parent,
+            text_height_behavior: None,
+            selection_color: None,
         }
     }
 
-    /// Create a text widget with a specific size.
+    /// Creates a new Text widget with a rich text span.
+    ///
+    /// Use this for complex text with multiple styles.
     ///
     /// # Example
     ///
     /// ```rust,ignore
-    /// let text = Text::sized("Hello", 24.0);
+    /// let span = TextSpan::new("Hello ")
+    ///     .add_child(TextSpan::new("World").with_style(bold_style));
+    /// Text::rich(span)
     /// ```
-    pub fn sized(data: impl Into<String>, size: f32) -> Self {
+    pub fn rich(text_span: impl Into<InlineSpan>) -> Self {
         Self {
-            data: data.into(),
-            size,
-            color: Color::BLACK,
-            text_align: TextAlign::Left,
+            text: text_span.into(),
+            style: None,
+            text_align: TextAlign::Start,
             text_direction: TextDirection::Ltr,
-            max_lines: None,
-            overflow: TextOverflow::Clip,
             soft_wrap: true,
-            key: None,
+            overflow: TextOverflow::Clip,
+            text_scale_factor: 1.0,
+            max_lines: None,
+            strut_style: None,
+            text_width_basis: TextWidthBasis::Parent,
+            text_height_behavior: None,
+            selection_color: None,
         }
     }
 
-    /// Create a colored text widget.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// let text = Text::colored("Error!", Color::RED);
-    /// ```
-    pub fn colored(data: impl Into<String>, color: Color) -> Self {
-        Self {
-            data: data.into(),
-            size: 14.0,
-            color,
-            text_align: TextAlign::Left,
-            text_direction: TextDirection::Ltr,
-            max_lines: None,
-            overflow: TextOverflow::Clip,
-            soft_wrap: true,
-            key: None,
-        }
+    // ========================================================================
+    // Builder Methods
+    // ========================================================================
+
+    /// Sets the text style.
+    pub fn style(mut self, style: TextStyle) -> Self {
+        self.style = Some(style);
+        self
     }
 
-    /// Create headline text (large, prominent) - 32px.
+    /// Sets the text color.
     ///
-    /// Perfect for page titles and main headings.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// let title = Text::headline("Welcome to FLUI");
-    /// ```
-    pub fn headline(data: impl Into<String>) -> Self {
-        Self::sized(data, 32.0)
+    /// Shorthand for `style(TextStyle::default().with_color(color))`.
+    pub fn color(mut self, color: Color) -> Self {
+        let style = self.style.take().unwrap_or_default();
+        self.style = Some(style.with_color(color));
+        self
     }
 
-    /// Create title text (section heading) - 24px.
+    /// Sets the font size.
     ///
-    /// Perfect for section titles and subheadings.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// let section = Text::title("Getting Started");
-    /// ```
-    pub fn title(data: impl Into<String>) -> Self {
-        Self::sized(data, 24.0)
+    /// Shorthand for `style(TextStyle::default().with_font_size(size))`.
+    pub fn font_size(mut self, size: f64) -> Self {
+        let style = self.style.take().unwrap_or_default();
+        self.style = Some(style.with_font_size(size));
+        self
     }
 
-    /// Create body text (normal reading) - 16px.
-    ///
-    /// Perfect for paragraphs and regular content.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// let content = Text::body("This is some regular text content.");
-    /// ```
-    pub fn body(data: impl Into<String>) -> Self {
-        Self::sized(data, 16.0)
+    /// Sets the text alignment.
+    pub fn text_align(mut self, align: TextAlign) -> Self {
+        self.text_align = align;
+        self
     }
 
-    /// Create caption text (small, secondary) - 12px.
-    ///
-    /// Perfect for labels, captions, and metadata.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// let label = Text::caption("Last updated: 2024");
-    /// ```
-    pub fn caption(data: impl Into<String>) -> Self {
-        Self::sized(data, 12.0)
+    /// Sets the text direction.
+    pub fn text_direction(mut self, direction: TextDirection) -> Self {
+        self.text_direction = direction;
+        self
     }
 
-    /// Create text with custom size and color.
-    ///
-    /// Convenience method combining both common customizations.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// let styled = Text::styled("Warning", 18.0, Color::ORANGE);
-    /// ```
-    pub fn styled(data: impl Into<String>, size: f32, color: Color) -> Self {
-        Self {
-            data: data.into(),
-            size,
-            color,
-            text_align: TextAlign::Left,
-            text_direction: TextDirection::Ltr,
-            max_lines: None,
-            overflow: TextOverflow::Clip,
-            soft_wrap: true,
-            key: None,
-        }
+    /// Sets whether text should wrap at soft line breaks.
+    pub fn soft_wrap(mut self, wrap: bool) -> Self {
+        self.soft_wrap = wrap;
+        self
     }
 
-    /// Create centered text.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// let centered = Text::centered("Middle");
-    /// ```
-    pub fn centered(data: impl Into<String>) -> Self {
-        Self {
-            data: data.into(),
-            size: 14.0,
-            color: Color::BLACK,
-            text_align: TextAlign::Center,
-            text_direction: TextDirection::Ltr,
-            max_lines: None,
-            overflow: TextOverflow::Clip,
-            soft_wrap: true,
-            key: None,
-        }
+    /// Sets the overflow behavior.
+    pub fn overflow(mut self, overflow: TextOverflow) -> Self {
+        self.overflow = overflow;
+        self
     }
 
-    /// Create right-aligned text.
+    /// Sets the text scale factor.
+    pub fn text_scale_factor(mut self, factor: f32) -> Self {
+        self.text_scale_factor = factor;
+        self
+    }
+
+    /// Sets the maximum number of lines.
+    pub fn max_lines(mut self, max: u32) -> Self {
+        self.max_lines = Some(max);
+        self
+    }
+
+    /// Sets the strut style.
+    pub fn strut_style(mut self, strut: StrutStyle) -> Self {
+        self.strut_style = Some(strut);
+        self
+    }
+
+    /// Sets the text width basis.
+    pub fn text_width_basis(mut self, basis: TextWidthBasis) -> Self {
+        self.text_width_basis = basis;
+        self
+    }
+
+    /// Sets the text height behavior.
+    pub fn text_height_behavior(mut self, behavior: TextHeightBehavior) -> Self {
+        self.text_height_behavior = Some(behavior);
+        self
+    }
+
+    /// Sets the selection color.
+    pub fn selection_color(mut self, color: Color) -> Self {
+        self.selection_color = Some(color);
+        self
+    }
+
+    // ========================================================================
+    // Getters
+    // ========================================================================
+
+    /// Returns the text span.
+    pub fn text(&self) -> &InlineSpan {
+        &self.text
+    }
+
+    /// Returns the effective inline span with merged style.
     ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// let right = Text::right_aligned("End");
-    /// ```
-    pub fn right_aligned(data: impl Into<String>) -> Self {
-        Self {
-            data: data.into(),
-            size: 14.0,
-            color: Color::BLACK,
-            text_align: TextAlign::Right,
-            text_direction: TextDirection::Ltr,
-            max_lines: None,
-            overflow: TextOverflow::Clip,
-            soft_wrap: true,
-            key: None,
+    /// If a style was set on the Text widget, it creates a new TextSpan
+    /// with the merged style applied.
+    fn effective_text(&self) -> InlineSpan {
+        if let Some(ref widget_style) = self.style {
+            // Create a new TextSpan with merged style
+            let plain_text = self.text.to_plain_text();
+            let base_style = self.text.style().cloned().unwrap_or_default();
+            let merged_style = base_style.merge(widget_style);
+
+            InlineSpan::from(TextSpan::new(plain_text).with_style(merged_style))
+        } else {
+            self.text.clone()
         }
     }
 }
 
-// bon Builder Extensions
-use text_builder::State;
+// Implement View trait via macro (creates create_element and as_any)
+impl_render_view!(Text);
 
-impl<S: State> TextBuilder<S> {
-    /// Builds the Text widget.
-    pub fn build(self) -> Text {
-        self.build_internal()
-    }
-}
-
-impl RenderView<BoxProtocol, Leaf> for Text {
+impl RenderView for Text {
     type RenderObject = RenderParagraph;
 
-    fn create(&self) -> RenderParagraph {
-        let mut data = ParagraphData::new(&self.data)
-            .with_font_size(self.size)
-            .with_color(self.color)
-            .with_align(self.text_align);
-
-        if let Some(max) = self.max_lines {
-            data = data.with_max_lines(max);
-        }
-
-        data = data.with_overflow(self.overflow);
-
-        RenderParagraph::new(data)
+    fn create_render_object(&self) -> Self::RenderObject {
+        RenderParagraph::with_config(
+            self.effective_text(),
+            self.text_align,
+            self.text_direction,
+            self.soft_wrap,
+            self.overflow,
+            self.text_scale_factor,
+            self.max_lines,
+            self.strut_style.clone(),
+            self.text_width_basis,
+            self.text_height_behavior.clone(),
+            self.selection_color,
+        )
     }
 
-    fn update(&self, render: &mut RenderParagraph) -> UpdateResult {
-        let mut result = UpdateResult::Unchanged;
+    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+        // Update text
+        render_object.set_text(self.effective_text());
 
-        // Text/size changes require re-layout
-        if render.text() != self.data {
-            render.set_text(&self.data);
-            result = UpdateResult::NeedsLayout;
-        }
-
-        if render.font_size() != self.size {
-            render.set_font_size(self.size);
-            result = UpdateResult::NeedsLayout;
-        }
-
-        // Color/alignment changes only need repaint
-        if render.color() != self.color {
-            render.set_color(self.color);
-            if result == UpdateResult::Unchanged {
-                result = UpdateResult::NeedsPaint;
-            }
-        }
-
-        if render.text_align() != self.text_align {
-            render.set_text_align(self.text_align);
-            if result == UpdateResult::Unchanged {
-                result = UpdateResult::NeedsPaint;
-            }
-        }
-
-        result
+        // Update properties
+        render_object.set_text_align(self.text_align);
+        render_object.set_text_direction(self.text_direction);
+        render_object.set_soft_wrap(self.soft_wrap);
+        render_object.set_overflow(self.overflow);
+        render_object.set_text_scale_factor(self.text_scale_factor);
+        render_object.set_max_lines(self.max_lines);
+        render_object.set_strut_style(self.strut_style.clone());
+        render_object.set_text_width_basis(self.text_width_basis);
+        render_object.set_text_height_behavior(self.text_height_behavior.clone());
+        render_object.set_selection_color(self.selection_color);
     }
-}
 
-/// IntoView implementation for Text.
-///
-/// Enables Text to be used directly in widget trees without `.leaf()`:
-/// ```ignore
-/// Padding::all(32.0).child(Text::headline("Hello"))
-/// ```
-impl IntoView for Text {
-    fn into_view(self) -> Box<dyn ViewObject> {
-        Box::new(RenderViewWrapper::new(self))
+    fn has_children(&self) -> bool {
+        false // Text is a leaf widget
     }
-}
-
-/// IntoViewConfig implementation for Text.
-///
-/// Enables Text to be used with the Child API:
-/// ```ignore
-/// Padding::all(32.0).child(Text::headline("Hello"))
-/// ```
-impl IntoViewConfig for Text {
-    fn into_view_config(self) -> ViewConfig {
-        ViewConfig::new_with_factory(self, |v: &Text| Box::new(RenderViewWrapper::new(v.clone())))
-    }
-}
-
-/// Declarative macro for creating Text widgets
-///
-/// # Example
-///
-/// ```rust,ignore
-/// text! {
-///     data: "Hello, World!",
-///     size: 24.0,
-///     color: Color::rgb(255, 0, 0),
-/// }
-/// ```
-#[macro_export]
-macro_rules! text {
-    // Simple text: text!("Hello")
-    ($data:expr) => {
-        $crate::Text::new($data)
-    };
-
-    // With fields: text! { data: "Hello", size: 24.0 }
-    {
-        $( $field:ident : $value:expr ),* $(,)?
-    } => {
-        $crate::Text::builder()
-            $(
-                .$field($value)
-            )*
-            .build()
-    };
 }
 
 #[cfg(test)]
@@ -411,101 +345,67 @@ mod tests {
 
     #[test]
     fn test_text_new() {
-        let text = Text::new("Hello, World!");
-        assert_eq!(text.data, "Hello, World!");
-        assert_eq!(text.size, 14.0);
-        assert_eq!(text.color, Color::rgb(0, 0, 0));
+        let text = Text::new("Hello");
+        assert_eq!(text.text().to_plain_text(), "Hello");
     }
 
     #[test]
-    fn test_text_sized() {
-        let text = Text::sized("Hello", 24.0);
-        assert_eq!(text.data, "Hello");
-        assert_eq!(text.size, 24.0);
+    fn test_text_color() {
+        let text = Text::new("Hello").color(Color::RED);
+        assert!(text.style.is_some());
+        assert_eq!(text.style.as_ref().unwrap().color, Some(Color::RED));
     }
 
     #[test]
-    fn test_text_colored() {
-        let color = Color::rgb(255, 0, 0);
-        let text = Text::colored("Error!", color);
-        assert_eq!(text.data, "Error!");
-        assert_eq!(text.color, color);
+    fn test_text_font_size() {
+        let text = Text::new("Hello").font_size(24.0);
+        assert!(text.style.is_some());
+        assert_eq!(text.style.as_ref().unwrap().font_size, Some(24.0));
     }
 
     #[test]
-    fn test_text_headline() {
-        let text = Text::headline("Main Title");
-        assert_eq!(text.data, "Main Title");
-        assert_eq!(text.size, 32.0);
-    }
-
-    #[test]
-    fn test_text_title() {
-        let text = Text::title("Section");
-        assert_eq!(text.data, "Section");
-        assert_eq!(text.size, 24.0);
-    }
-
-    #[test]
-    fn test_text_body() {
-        let text = Text::body("Content");
-        assert_eq!(text.data, "Content");
-        assert_eq!(text.size, 16.0);
-    }
-
-    #[test]
-    fn test_text_caption() {
-        let text = Text::caption("Small");
-        assert_eq!(text.data, "Small");
-        assert_eq!(text.size, 12.0);
-    }
-
-    #[test]
-    fn test_text_styled() {
-        let color = Color::rgb(255, 128, 0);
-        let text = Text::styled("Warning", 18.0, color);
-        assert_eq!(text.data, "Warning");
-        assert_eq!(text.size, 18.0);
-        assert_eq!(text.color, color);
-    }
-
-    #[test]
-    fn test_text_centered() {
-        let text = Text::centered("Middle");
-        assert_eq!(text.data, "Middle");
+    fn test_text_text_align() {
+        let text = Text::new("Hello").text_align(TextAlign::Center);
         assert_eq!(text.text_align, TextAlign::Center);
     }
 
     #[test]
-    fn test_text_right_aligned() {
-        let text = Text::right_aligned("End");
-        assert_eq!(text.data, "End");
-        assert_eq!(text.text_align, TextAlign::Right);
+    fn test_text_overflow() {
+        let text = Text::new("Hello").overflow(TextOverflow::Ellipsis);
+        assert_eq!(text.overflow, TextOverflow::Ellipsis);
     }
 
     #[test]
-    fn test_text_builder() {
-        let text = Text::builder()
-            .data("Test")
-            .size(20.0)
-            .color(Color::rgb(100, 100, 100))
-            .build();
-
-        assert_eq!(text.data, "Test");
-        assert_eq!(text.size, 20.0);
-        assert_eq!(text.color, Color::rgb(100, 100, 100));
+    fn test_text_max_lines() {
+        let text = Text::new("Hello").max_lines(3);
+        assert_eq!(text.max_lines, Some(3));
     }
 
     #[test]
-    fn test_text_macro_simple() {
-        let text = Text::new("Hello");
-        assert_eq!(text.data, "Hello");
+    fn test_text_soft_wrap() {
+        let text = Text::new("Hello").soft_wrap(false);
+        assert!(!text.soft_wrap);
     }
 
     #[test]
-    fn test_text_macro_with_fields() {
-        let text = Text::builder().data("Test").size(20.0).build();
-        assert_eq!(text.data, "Test");
-        assert_eq!(text.size, 20.0);
+    fn test_render_view_create() {
+        let text = Text::new("Hello, World!");
+        let render = text.create_render_object();
+        assert!(render.text().is_some());
+    }
+
+    #[test]
+    fn test_text_chained_builders() {
+        let text = Text::new("Hello")
+            .color(Color::BLUE)
+            .font_size(16.0)
+            .text_align(TextAlign::Center)
+            .max_lines(2)
+            .overflow(TextOverflow::Ellipsis);
+
+        assert!(text.style.is_some());
+        assert_eq!(text.text_align, TextAlign::Center);
+        assert_eq!(text.max_lines, Some(2));
+        assert_eq!(text.overflow, TextOverflow::Ellipsis);
     }
 }

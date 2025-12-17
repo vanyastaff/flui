@@ -59,7 +59,7 @@ pub mod overlay;
 pub mod theme;
 
 // Re-exports
-pub use app::{AppBinding, AppConfig, AppLifecycle};
+pub use app::{AppBinding, AppConfig, AppLifecycle, RootRenderElement, RootRenderView};
 pub use debug::{DebugFlags, FrameStats, PerformanceOverlay};
 pub use overlay::{OverlayEntry, OverlayManager, OverlayPosition};
 pub use theme::{Color, ColorScheme, Theme, ThemeMode};
@@ -69,8 +69,8 @@ pub use embedder::{DesktopEmbedder, EmbedderCore, EmbedderError};
 
 // Convenience re-exports from flui-view
 pub use flui_view::{
-    BuildContext, BuildContextExt, BuildOwner, ElementTree, StatefulView, StatelessView, View,
-    WidgetsBinding,
+    BuildContext, BuildContextExt, BuildOwner, ElementBase, ElementTree, StatefulView,
+    StatelessElement, StatelessView, View, WidgetsBinding,
 };
 
 // Convenience re-exports from flui_rendering

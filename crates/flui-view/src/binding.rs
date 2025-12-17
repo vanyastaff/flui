@@ -370,9 +370,6 @@ mod tests {
             Box::new(crate::StatelessElement::new(self))
         }
 
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
     }
 
     #[test]

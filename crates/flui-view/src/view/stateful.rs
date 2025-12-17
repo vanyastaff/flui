@@ -154,10 +154,6 @@ macro_rules! impl_stateful_view {
             fn create_element(&self) -> Box<dyn $crate::ElementBase> {
                 Box::new($crate::StatefulElement::new(self))
             }
-
-            fn as_any(&self) -> &dyn std::any::Any {
-                self
-            }
         }
     };
 }
@@ -354,10 +350,6 @@ mod tests {
     impl View for TestCounter {
         fn create_element(&self) -> Box<dyn ElementBase> {
             Box::new(StatefulElement::new(self))
-        }
-
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
         }
     }
 

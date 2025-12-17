@@ -47,7 +47,8 @@ pub struct AppBinding {
     widgets: RwLock<WidgetsBinding>,
 
     /// Render pipeline owner (layout/paint phases)
-    render_pipeline: RwLock<RenderPipelineOwner>,
+    /// Wrapped in Arc for sharing with RootRenderElement
+    render_pipeline: Arc<RwLock<RenderPipelineOwner>>,
 
     /// Gesture binding (input handling)
     gestures: GestureBinding,
@@ -78,7 +79,7 @@ impl AppBinding {
 
         Self {
             widgets: RwLock::new(widgets),
-            render_pipeline: RwLock::new(RenderPipelineOwner::new()),
+            render_pipeline: Arc::new(RwLock::new(RenderPipelineOwner::new())),
             gestures: GestureBinding::new(),
             scheduler,
             needs_redraw: AtomicBool::new(false),
@@ -134,6 +135,13 @@ impl AppBinding {
     // ========================================================================
     // Render Layer
     // ========================================================================
+
+    /// Get the Arc to RenderPipelineOwner for sharing with elements.
+    ///
+    /// This is used by RootRenderElement to insert RenderObjects into the tree.
+    pub fn render_pipeline_arc(&self) -> Arc<RwLock<RenderPipelineOwner>> {
+        Arc::clone(&self.render_pipeline)
+    }
 
     /// Get read access to RenderPipelineOwner.
     pub fn render_pipeline(&self) -> parking_lot::RwLockReadGuard<'_, RenderPipelineOwner> {

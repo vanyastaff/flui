@@ -11,15 +11,14 @@ keywords = ["ui", "gui", "widgets", "flutter"]
 categories = ["gui"]
 
 [dependencies]
-flui_core = { path = "../flui_core" }
 flui_rendering = { path = "../flui_rendering" }
-# flui-objects = { path = "../flui-objects" }  # temporarily disabled
 flui_painting = { path = "../flui_painting" }
 flui_types = { path = "../flui_types" }
 flui_interaction = { path = "../flui_interaction" }
 flui_animation = { path = "../flui_animation" }
 flui-view = { path = "../flui-view" }
 flui-foundation = { path = "../flui-foundation" }
+flui-pipeline = { path = "../flui-pipeline" }
 bon = { workspace = true }
 parking_lot = { workspace = true }
 thiserror = { workspace = true }
@@ -30,8 +29,7 @@ default = []
 
 # === Serialization ===
 # Serde support for widget state serialization
-serde = ["flui_core/serde", "flui_types/serde", "flui_rendering/serde"]
+serde = ["flui_types/serde", "flui_rendering/serde"]
 
 [dev-dependencies]
-flui_core = { path = "../flui_core", features = ["testing"] }
 flui-scheduler = { path = "../flui-scheduler" }

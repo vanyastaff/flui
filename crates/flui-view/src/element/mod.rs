@@ -9,6 +9,7 @@
 
 mod lifecycle;
 mod notification;
+mod render_object_element;
 mod root;
 mod slot;
 
@@ -19,7 +20,6 @@ pub use notification::{
     NotificationCallback, NotificationHandler, NotificationNode, ScrollNotification,
     SizeChangedNotification,
 };
+pub use render_object_element::{RenderObjectElement, RenderSlot, RenderTreeRootElement};
 pub use root::{RootElement, RootElementImpl};
 pub use slot::{ElementSlot, IndexedSlot, IndexedSlotBuilder};
-
-// Element trait and implementations will be added in later phases

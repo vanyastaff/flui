@@ -100,11 +100,12 @@ pub mod view;
 
 // View traits
 pub use view::{
-    clear_error_view_builder, set_error_view_builder, BoxedView, ElementBase, ErrorElement,
-    ErrorView, ErrorViewBuilder, FlutterError, InheritedElement, InheritedView, IntoView,
-    ParentData, ParentDataElement, ParentDataView, ProxyElement, ProxyView, RenderElement,
-    RenderView, StatefulElement, StatefulView, StatelessElement, StatelessView, View, ViewExt,
-    ViewKey, ViewState,
+    clear_error_view_builder, set_error_view_builder, BoxedElement, BoxedView, ElementBase,
+    ElementExt, ErrorElement, ErrorView, ErrorViewBuilder, FlutterError, InheritedElement,
+    InheritedView, IntoElement, IntoView, ParentData, ParentDataElement, ParentDataView,
+    ProxyElement, ProxyView, RenderElement, RenderView, RootRenderElement, RootRenderView,
+    StatefulElement, StatefulView, StatelessElement, StatelessView, View, ViewExt, ViewKey,
+    ViewState,
 };
 
 // Keys
@@ -127,11 +128,14 @@ pub use element::{
 // Root element
 pub use element::{RootElement, RootElementImpl};
 
+// RenderObjectElement traits
+pub use element::{RenderObjectElement, RenderSlot, RenderTreeRootElement};
+
 // Slot types for multi-child elements
 pub use element::{ElementSlot, IndexedSlot, IndexedSlotBuilder};
 
 // Context
-pub use context::{BuildContext, BuildContextExt};
+pub use context::{BuildContext, BuildContextExt, ElementBuildContext, ElementBuildContextBuilder};
 
 // Tree management
 pub use owner::BuildOwner;

@@ -9,6 +9,9 @@
 
 use std::any::TypeId;
 
+use downcast_rs::{impl_downcast, Downcast};
+use dyn_clone::{clone_trait_object, DynClone};
+
 /// Base trait for all Views.
 ///
 /// A View is an immutable configuration for a piece of UI. Views are created
@@ -42,7 +45,7 @@ use std::any::TypeId;
 /// This trait corresponds to Flutter's `Widget` abstract class:
 /// - `create_element()` → `Widget.createElement()`
 /// - `can_update()` → `Widget.canUpdate()` static method
-pub trait View: Send + Sync + 'static {
+pub trait View: Downcast + DynClone + Send + Sync + 'static {
     /// Create a new Element for this View.
     ///
     /// Called once when this View first appears in the tree.
@@ -52,11 +55,6 @@ pub trait View: Send + Sync + 'static {
     ///
     /// A boxed Element that will manage this View's lifecycle.
     fn create_element(&self) -> Box<dyn ElementBase>;
-
-    /// Get this View as an Any reference for downcasting.
-    ///
-    /// This enables safe runtime downcasting of trait objects.
-    fn as_any(&self) -> &dyn std::any::Any;
 
     /// Get the type ID of this View for runtime type checking.
     ///
@@ -94,6 +92,9 @@ pub trait View: Send + Sync + 'static {
     }
 }
 
+impl_downcast!(View);
+clone_trait_object!(View);
+
 /// Trait for View keys used in reconciliation.
 ///
 /// Keys help the framework match old and new Views during reconciliation.
@@ -122,7 +123,7 @@ pub trait ViewKey: Send + Sync + std::fmt::Debug {
 /// - `rebuild()` / `performRebuild()` - rebuild children
 /// - `activate()` / `deactivate()` - temporary removal
 /// - `didChangeDependencies()` - inherited widget changed
-pub trait ElementBase: Send + Sync + 'static {
+pub trait ElementBase: Downcast + Send + Sync + 'static {
     // ========================================================================
     // Identity
     // ========================================================================
@@ -271,7 +272,99 @@ pub trait ElementBase: Send + Sync + 'static {
             self.depth()
         )
     }
+
+    // ========================================================================
+    // RenderObject Access
+    // ========================================================================
+
+    /// Get the RenderObject managed by this Element, if any.
+    ///
+    /// Only RenderObjectElement implementations return Some.
+    /// ComponentElements (Stateless, Stateful) return None.
+    ///
+    /// This is used by parent RenderObjectElements to attach child
+    /// RenderObjects to the render tree.
+    fn render_object_any(&self) -> Option<&dyn std::any::Any> {
+        None
+    }
+
+    /// Get the RenderObject managed by this Element mutably, if any.
+    fn render_object_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
+        None
+    }
+
+    /// Get the first child element, if any.
+    ///
+    /// Used for traversing the element tree to find descendant RenderObjects.
+    fn child_element(&self) -> Option<&dyn ElementBase> {
+        None
+    }
+
+    /// Get the first child element mutably, if any.
+    fn child_element_mut(&mut self) -> Option<&mut dyn ElementBase> {
+        None
+    }
+
+    /// Called by parent to attach this element's RenderObject to the render tree.
+    ///
+    /// For RenderObjectElements, this returns the RenderObject that should be
+    /// inserted into the parent's render object.
+    ///
+    /// For ComponentElements (Stateless, Stateful), this delegates to the child.
+    ///
+    /// # Flutter Equivalent
+    ///
+    /// This corresponds to the pattern where `attachRenderObject` calls
+    /// `ancestorRenderObjectElement.insertRenderObjectChild(renderObject, slot)`.
+    fn attach_to_render_tree(&mut self) -> Option<&mut dyn std::any::Any> {
+        // Default: no RenderObject to attach
+        // ComponentElements override to delegate to child
+        // RenderElements override to return their RenderObject
+        None
+    }
+
+    /// Get the RenderObject as a shared Arc for render tree attachment.
+    ///
+    /// This enables the Flutter-like pattern where RenderObjects are owned
+    /// by Elements but referenced by parent RenderObjects in the render tree.
+    ///
+    /// # Returns
+    ///
+    /// An Arc containing the RenderObject, or None if this element doesn't
+    /// have a RenderObject or doesn't support shared ownership.
+    fn render_object_shared(
+        &self,
+    ) -> Option<std::sync::Arc<parking_lot::RwLock<dyn std::any::Any + Send + Sync>>> {
+        None
+    }
+
+    // ========================================================================
+    // Pipeline Owner Propagation (for RenderTree integration)
+    // ========================================================================
+
+    /// Set the PipelineOwner for this element.
+    ///
+    /// Called by parent elements to propagate the PipelineOwner down the tree.
+    /// RenderObjectElements use this to insert their RenderObjects into the RenderTree.
+    ///
+    /// Default implementation does nothing - only RenderObjectElements need this.
+    ///
+    /// # Arguments
+    /// * `owner` - Arc<dyn Any> that should be downcast to the concrete PipelineOwner type
+    fn set_pipeline_owner_any(&mut self, _owner: std::sync::Arc<dyn std::any::Any + Send + Sync>) {
+        // Default: no-op
+    }
+
+    /// Set the parent's RenderId for tree structure.
+    ///
+    /// Called by parent elements to establish parent-child relationships in RenderTree.
+    /// Child RenderObjects will be attached as children of this RenderId.
+    fn set_parent_render_id(&mut self, _parent_id: Option<flui_foundation::RenderId>) {
+        // Default: no-op
+    }
 }
+
+impl_downcast!(ElementBase);
 
 #[cfg(test)]
 mod tests {

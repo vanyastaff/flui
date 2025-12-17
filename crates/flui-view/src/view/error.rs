@@ -176,9 +176,6 @@ impl View for ErrorView {
         Box::new(ErrorElement::new(self))
     }
 
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 // ============================================================================
@@ -274,6 +271,8 @@ impl ElementBase for ErrorElement {
     fn visit_children(&self, _visitor: &mut dyn FnMut(ElementId)) {
         // No children
     }
+
+
 }
 
 #[cfg(test)]

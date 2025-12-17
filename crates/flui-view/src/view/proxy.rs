@@ -60,9 +60,6 @@ macro_rules! impl_proxy_view {
                 Box::new($crate::ProxyElement::new(self))
             }
 
-            fn as_any(&self) -> &dyn std::any::Any {
-                self
-            }
         }
     };
 }
@@ -194,6 +191,8 @@ impl<V: ProxyView + Clone> ElementBase for ProxyElement<V> {
     fn depth(&self) -> usize {
         self.depth
     }
+
+
 }
 
 #[cfg(test)]
@@ -209,9 +208,6 @@ mod tests {
             Box::new(DummyChildElement)
         }
 
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
     }
 
     struct DummyChildElement;
@@ -254,9 +250,6 @@ mod tests {
             Box::new(ProxyElement::new(self))
         }
 
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
     }
 
     #[test]

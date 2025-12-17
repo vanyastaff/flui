@@ -108,9 +108,6 @@ macro_rules! impl_inherited_view {
                 Box::new($crate::InheritedElement::new(self))
             }
 
-            fn as_any(&self) -> &dyn std::any::Any {
-                self
-            }
         }
     };
 }
@@ -277,6 +274,8 @@ impl<V: InheritedView + Clone> ElementBase for InheritedElement<V> {
     fn depth(&self) -> usize {
         self.depth
     }
+
+
 }
 
 #[cfg(test)]
@@ -297,9 +296,6 @@ mod tests {
             Box::new(DummyElement)
         }
 
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
     }
 
     struct DummyElement;
@@ -352,9 +348,6 @@ mod tests {
             Box::new(InheritedElement::new(self))
         }
 
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
     }
 
     #[test]

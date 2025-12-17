@@ -21,6 +21,7 @@ mod into_view;
 mod parent_data;
 mod proxy;
 mod render;
+mod root;
 mod stateful;
 mod stateless;
 mod view;
@@ -30,10 +31,11 @@ pub use error::{
     FlutterError,
 };
 pub use inherited::{InheritedElement, InheritedView};
-pub use into_view::{BoxedView, IntoView, ViewExt};
+pub use into_view::{BoxedElement, BoxedView, ElementExt, IntoElement, IntoView, ViewExt};
 pub use parent_data::{ParentData, ParentDataElement, ParentDataView};
 pub use proxy::{ProxyElement, ProxyView};
 pub use render::{RenderElement, RenderView};
+pub use root::{RootRenderElement, RootRenderView};
 pub use stateful::{StatefulElement, StatefulView, ViewState};
 pub use stateless::{StatelessElement, StatelessView};
 pub use view::{ElementBase, View, ViewKey};

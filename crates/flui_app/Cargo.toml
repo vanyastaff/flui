@@ -46,5 +46,6 @@ tracing.workspace = true
 parking_lot.workspace = true
 thiserror.workspace = true
 dpi = "0.1.2"
+pollster = "0.4"
 
 [dev-dependencies]

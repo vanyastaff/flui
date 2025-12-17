@@ -261,9 +261,6 @@ mod tests {
             Box::new(StatelessElement::new(self))
         }
 
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
     }
 
     #[test]

@@ -13,3 +13,6 @@ pub mod runner;
 pub use binding::AppBinding;
 pub use config::AppConfig;
 pub use lifecycle::AppLifecycle;
+
+// Re-export RootRenderView and RootRenderElement from flui-view
+pub use flui_view::{RootRenderElement, RootRenderView};

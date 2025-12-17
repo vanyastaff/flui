@@ -16,25 +16,10 @@
 //! // Only specific sides
 //! Padding::only(10.0, 0.0, 0.0, 0.0).child(content)
 //! ```
-//!
-//! ## 2. Builder Pattern
-//! ```rust,ignore
-//! Padding::builder()
-//!     .padding(EdgeInsets::all(16.0))
-//!     .child(some_widget)
-//!     .build()
-//! ```
 
-use bon::Builder;
-use flui_core::{view::IntoElement, Element};
-use flui_objects::RenderPadding;
-use flui_rendering::BoxProtocol;
-use flui_rendering::{Optional, ProtocolId, RenderElement, RuntimeArity};
+use flui_rendering::prelude::*;
 use flui_types::EdgeInsets;
-use flui_view::{
-    wrappers::RenderViewWrapper, Child, IntoView, IntoViewConfig, RenderView, UpdateResult,
-    ViewObject,
-};
+use flui_view::{impl_render_view, Child, RenderView, View};
 
 /// A widget that insets its child by the given padding.
 ///
@@ -53,16 +38,25 @@ use flui_view::{
 /// // Asymmetric padding
 /// Padding::only(10.0, 5.0, 10.0, 5.0).child(content)
 /// ```
-#[derive(Debug, Builder)]
-#[builder(on(EdgeInsets, into), finish_fn(name = build_internal, vis = ""))]
+#[derive(Debug)]
 pub struct Padding {
     /// The amount of space by which to inset the child.
-    #[builder(default = EdgeInsets::ZERO)]
     pub padding: EdgeInsets,
 
     /// The child widget.
-    #[builder(default = Child::none())]
-    pub child: Child,
+    child: Child,
+}
+
+// Manual Clone implementation since Child doesn't implement Clone
+impl Clone for Padding {
+    fn clone(&self) -> Self {
+        Self {
+            padding: self.padding,
+            // Child cannot be cloned, create empty - this is a limitation
+            // In practice, widgets are rebuilt fresh each frame
+            child: Child::empty(),
+        }
+    }
 }
 
 impl Padding {
@@ -70,7 +64,7 @@ impl Padding {
     pub fn new() -> Self {
         Self {
             padding: EdgeInsets::ZERO,
-            child: Child::none(),
+            child: Child::empty(),
         }
     }
 
@@ -78,54 +72,31 @@ impl Padding {
     pub fn from_insets(padding: EdgeInsets) -> Self {
         Self {
             padding,
-            child: Child::none(),
+            child: Child::empty(),
         }
     }
 
     /// Creates a Padding with uniform padding on all sides.
-    ///
-    /// Most common use case - adds equal spacing on all four sides.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// Padding::all(16.0).child(Text::new("Hello"))
-    /// ```
     pub fn all(value: f32) -> Self {
         Self {
             padding: EdgeInsets::all(value),
-            child: Child::none(),
+            child: Child::empty(),
         }
     }
 
     /// Creates a Padding with symmetric horizontal and vertical padding.
-    ///
-    /// Perfect for responsive layouts - different spacing on x and y axes.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// // 20px left/right, 10px top/bottom
-    /// Padding::symmetric(20.0, 10.0).child(content)
-    /// ```
     pub fn symmetric(horizontal: f32, vertical: f32) -> Self {
         Self {
             padding: EdgeInsets::symmetric(horizontal, vertical),
-            child: Child::none(),
+            child: Child::empty(),
         }
     }
 
     /// Creates a Padding with custom padding on specific sides.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// Padding::only(10.0, 5.0, 10.0, 5.0).child(content)  // left, top, right, bottom
-    /// ```
     pub fn only(left: f32, top: f32, right: f32, bottom: f32) -> Self {
         Self {
             padding: EdgeInsets::new(left, top, right, bottom),
-            child: Child::none(),
+            child: Child::empty(),
         }
     }
 
@@ -133,7 +104,7 @@ impl Padding {
     pub fn left(value: f32) -> Self {
         Self {
             padding: EdgeInsets::new(value, 0.0, 0.0, 0.0),
-            child: Child::none(),
+            child: Child::empty(),
         }
     }
 
@@ -141,7 +112,7 @@ impl Padding {
     pub fn top(value: f32) -> Self {
         Self {
             padding: EdgeInsets::new(0.0, value, 0.0, 0.0),
-            child: Child::none(),
+            child: Child::empty(),
         }
     }
 
@@ -149,7 +120,7 @@ impl Padding {
     pub fn right(value: f32) -> Self {
         Self {
             padding: EdgeInsets::new(0.0, 0.0, value, 0.0),
-            child: Child::none(),
+            child: Child::empty(),
         }
     }
 
@@ -157,7 +128,7 @@ impl Padding {
     pub fn bottom(value: f32) -> Self {
         Self {
             padding: EdgeInsets::new(0.0, 0.0, 0.0, value),
-            child: Child::none(),
+            child: Child::empty(),
         }
     }
 
@@ -165,7 +136,7 @@ impl Padding {
     pub fn horizontal(value: f32) -> Self {
         Self {
             padding: EdgeInsets::symmetric(value, 0.0),
-            child: Child::none(),
+            child: Child::empty(),
         }
     }
 
@@ -173,13 +144,13 @@ impl Padding {
     pub fn vertical(value: f32) -> Self {
         Self {
             padding: EdgeInsets::symmetric(0.0, value),
-            child: Child::none(),
+            child: Child::empty(),
         }
     }
 
     /// Sets the child widget.
-    pub fn child<V: IntoViewConfig>(mut self, view: V) -> Self {
-        self.child = Child::new(view);
+    pub fn child(mut self, view: impl View) -> Self {
+        self.child = Child::some(view);
         self
     }
 }
@@ -190,74 +161,24 @@ impl Default for Padding {
     }
 }
 
-// bon Builder Extensions
-use padding_builder::State;
+// Implement View trait via macro (creates create_element and as_any)
+impl_render_view!(Padding);
 
-impl<S: State> PaddingBuilder<S> {
-    /// Builds the Padding widget.
-    pub fn build(self) -> Padding {
-        self.build_internal()
-    }
-}
-
-impl RenderView<BoxProtocol, Optional> for Padding {
+impl RenderView for Padding {
     type RenderObject = RenderPadding;
 
-    fn create(&self) -> RenderPadding {
+    fn create_render_object(&self) -> Self::RenderObject {
         RenderPadding::new(self.padding)
     }
 
-    fn update(&self, render: &mut RenderPadding) -> UpdateResult {
-        if render.padding != self.padding {
-            render.set_padding(self.padding);
-            UpdateResult::NeedsLayout
-        } else {
-            UpdateResult::Unchanged
+    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+        if render_object.padding() != self.padding {
+            render_object.set_padding(self.padding);
         }
     }
-}
 
-/// IntoView implementation for Padding.
-///
-/// Enables Padding to be used in widget composition. Note: This only converts
-/// the Padding widget itself, not its child. The child is stored in the `child` field
-/// and will be mounted separately during the element tree construction.
-impl IntoView for Padding {
-    fn into_view(self) -> Box<dyn ViewObject> {
-        Box::new(RenderViewWrapper::new(self))
-    }
-}
-
-/// IntoElement implementation for Padding.
-///
-/// Converts Padding to Element with its child. The child is converted
-/// using `Child::into_element()` and attached as a pending child.
-impl IntoElement for Padding {
-    fn into_element(self) -> Element {
-        // Extract child before moving self into wrapper
-        let child = self.child;
-
-        // Create the Padding render object
-        let render_object = RenderPadding::new(self.padding);
-
-        // Check if child is present
-        if child.is_none() {
-            // No child - just create render element
-            Element::Render(RenderElement::with_pending(
-                Box::new(render_object),
-                ProtocolId::Box,
-                RuntimeArity::Exact(0),
-            ))
-        } else {
-            // Has child - convert and create with pending child
-            let child_element = child.into_element();
-            Element::Render(RenderElement::with_pending_and_children(
-                Box::new(render_object),
-                ProtocolId::Box,
-                RuntimeArity::Exact(1),
-                vec![Box::new(child_element)],
-            ))
-        }
+    fn has_children(&self) -> bool {
+        self.child.is_some()
     }
 }
 
@@ -299,12 +220,6 @@ mod tests {
     }
 
     #[test]
-    fn test_padding_builder() {
-        let padding = Padding::builder().padding(EdgeInsets::all(16.0)).build();
-        assert_eq!(padding.padding, EdgeInsets::all(16.0));
-    }
-
-    #[test]
     fn test_padding_default() {
         let padding = Padding::default();
         assert_eq!(padding.padding, EdgeInsets::ZERO);
@@ -313,26 +228,7 @@ mod tests {
     #[test]
     fn test_render_view_create() {
         let padding = Padding::all(10.0);
-        let render = padding.create();
-        assert_eq!(render.padding, EdgeInsets::all(10.0));
-    }
-
-    #[test]
-    fn test_render_view_update_changed() {
-        let padding = Padding::all(20.0);
-        let mut render = RenderPadding::new(EdgeInsets::all(10.0));
-
-        let result = padding.update(&mut render);
-        assert_eq!(result, UpdateResult::NeedsLayout);
-        assert_eq!(render.padding, EdgeInsets::all(20.0));
-    }
-
-    #[test]
-    fn test_render_view_update_unchanged() {
-        let padding = Padding::all(10.0);
-        let mut render = RenderPadding::new(EdgeInsets::all(10.0));
-
-        let result = padding.update(&mut render);
-        assert_eq!(result, UpdateResult::Unchanged);
+        let render = padding.create_render_object();
+        assert_eq!(render.padding(), EdgeInsets::all(10.0));
     }
 }

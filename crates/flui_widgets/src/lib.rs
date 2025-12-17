@@ -67,7 +67,8 @@ pub mod basic;
 // pub mod visual_effects;
 
 // Re-export commonly used widgets for convenient access
-pub use basic::{Padding, Text};
+pub use basic::Padding;
+pub use basic::Text;
 // pub use layout::{Column, Row};
 
 // Temporarily disabled exports until widgets are fixed
@@ -98,13 +99,8 @@ pub use basic::{Padding, Text};
 /// use flui_widgets::prelude::*;
 /// ```
 pub mod prelude {
-    // Temporarily disabled - only Text widget is enabled for counter demo
-    // // Re-export essential widgets for Container and Flex layout
-    // pub use crate::basic::{
-    //     Align, AspectRatio, Builder, Button, Card, Center, ColoredBox, ConstrainedBox, Container,
-    //     CustomPaint, DecoratedBox, Divider, Empty, FittedBox, LayoutBuilder, LimitedBox, Padding,
-    //     SafeArea, SizedBox, Text, VerticalDivider,
-    // };
+    // Re-export enabled widgets
+    pub use crate::basic::Padding;
     pub use crate::basic::Text;
 
     // pub use crate::gestures::GestureDetector;
@@ -118,10 +114,10 @@ pub mod prelude {
 
     // Re-export core types
     // pub use flui_core::BuildContext;  // Not needed for IntoElement pattern
+    pub use flui_rendering::prelude::BoxConstraints;
     pub use flui_types::layout::{
         CrossAxisAlignment, FlexFit, MainAxisAlignment, MainAxisSize, StackFit,
     };
     pub use flui_types::styling::{BorderRadius, BoxDecoration, Radius};
-    pub use flui_types::BoxConstraints;
     pub use flui_types::{Alignment, Color, EdgeInsets, Matrix4, Offset, Size};
 }
