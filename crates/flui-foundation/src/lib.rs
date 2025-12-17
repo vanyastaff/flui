@@ -63,7 +63,7 @@
 //! ### Element Identification
 //!
 //! ```rust
-//! use flui_foundation::{ElementId, Key, Slot};
+//! use flui_foundation::{ElementId, Key};
 //!
 //! // Unique element identifier with O(1) operations
 //! let element_id = ElementId::new(42);
@@ -73,10 +73,6 @@
 //! let key1 = Key::new();
 //! let key2 = Key::from_str("header");
 //! assert_ne!(key1, key2);
-//!
-//! // Child slot positioning
-//! let slot = Slot::new(0);
-//! assert_eq!(slot.index(), 0);
 //! ```
 //!
 //! ### Change Notification
@@ -142,7 +138,6 @@ pub mod id;
 pub mod key;
 pub mod observer;
 pub mod platform;
-pub mod slot;
 
 // Reactive programming - change notification and observables
 pub mod notifier;
@@ -160,7 +155,6 @@ pub use id::{
     ElementId, Identifier, LayerId, ListenerId, ObserverId, RenderId, SemanticsId, ViewId,
 };
 pub use key::{GlobalKey, Key, KeyRef, Keyed, ObjectKey, UniqueKey, ValueKey, ViewKey, WithKey};
-pub use slot::Slot;
 
 // Constants
 pub use consts::{
@@ -248,8 +242,6 @@ pub mod prelude {
         Predicate,
         RenderId,
         SemanticsId,
-        // Slot
-        Slot,
         SyncObserverList,
         // Platform
         TargetPlatform,
@@ -291,8 +283,6 @@ mod tests {
         assert_eq!(element_id.get(), 1);
 
         let _key = Key::new();
-        let slot = Slot::new(0);
-        assert_eq!(slot.index(), 0);
 
         let notifier = ChangeNotifier::new();
         let _listener = notifier.add_listener(std::sync::Arc::new(|| {}));

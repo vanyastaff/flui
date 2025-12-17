@@ -7,7 +7,7 @@ use flui_foundation::{
     error::ErrorContext, ChangeNotifier, DiagnosticLevel, Diagnosticable, DiagnosticsBuilder,
     DiagnosticsNode, DiagnosticsProperty, ElementId, FoundationError, HashedObserverList, Key,
     LayerId, Listenable, ListenerId, MergedListenable, ObserverId, ObserverList, RenderId, Result,
-    SemanticsId, Slot, SyncObserverList, TargetPlatform, ValueNotifier, ViewId,
+    SemanticsId, SyncObserverList, TargetPlatform, ValueNotifier, ViewId,
 };
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -112,52 +112,6 @@ fn test_key_uniqueness() {
     assert_ne!(key1, key2);
     assert_ne!(key2, key3);
     assert_ne!(key1, key3);
-}
-
-// ============================================================================
-// Slot System Integration Tests
-// ============================================================================
-
-/// Test slot-based child positioning
-#[test]
-fn test_slot_based_child_positioning() {
-    // Simulate a parent with multiple children
-    let children: Vec<(&str, Slot)> = vec![
-        ("child_0", Slot::new(0)),
-        ("child_1", Slot::with_previous_sibling(1, Some(0))),
-        ("child_2", Slot::with_previous_sibling(2, Some(1))),
-    ];
-
-    // Verify ordering
-    for (i, (_, slot)) in children.iter().enumerate() {
-        assert_eq!(slot.index(), i);
-    }
-
-    // Verify sibling tracking
-    assert!(children[0].1.is_first());
-    assert_eq!(children[1].1.previous_sibling(), Some(0));
-    assert_eq!(children[2].1.previous_sibling(), Some(1));
-}
-
-/// Test slot arithmetic for reordering
-#[test]
-fn test_slot_reordering() {
-    let mut slots: Vec<Slot> = (0..5).map(Slot::new).collect();
-
-    // Simulate moving item from position 3 to position 1
-    let moved_slot = slots.remove(3);
-    slots.insert(1, moved_slot.without_tracking());
-
-    // Renumber slots after reordering
-    let renumbered: Vec<Slot> = slots
-        .iter()
-        .enumerate()
-        .map(|(i, _)| Slot::new(i))
-        .collect();
-
-    for (i, slot) in renumbered.iter().enumerate() {
-        assert_eq!(slot.index(), i);
-    }
 }
 
 // ============================================================================
@@ -558,21 +512,18 @@ fn test_widget_state_management() {
     assert_eq!(widget.id.get(), 1);
 }
 
-/// Test tree structure with IDs and slots
+/// Test tree structure with IDs
 #[test]
 fn test_tree_structure() {
     struct TreeNode {
         id: ElementId,
-        #[allow(dead_code)]
-        slot: Slot,
         children: Vec<TreeNode>,
     }
 
     impl TreeNode {
-        fn new(id: usize, slot: Slot) -> Self {
+        fn new(id: usize) -> Self {
             Self {
                 id: ElementId::new(id),
-                slot,
                 children: Vec::new(),
             }
         }
@@ -591,13 +542,13 @@ fn test_tree_structure() {
     }
 
     // Build tree
-    let mut root = TreeNode::new(1, Slot::new(0));
+    let mut root = TreeNode::new(1);
 
-    let mut child1 = TreeNode::new(2, Slot::new(0));
-    child1.add_child(TreeNode::new(4, Slot::new(0)));
-    child1.add_child(TreeNode::new(5, Slot::with_previous_sibling(1, Some(4))));
+    let mut child1 = TreeNode::new(2);
+    child1.add_child(TreeNode::new(4));
+    child1.add_child(TreeNode::new(5));
 
-    let child2 = TreeNode::new(3, Slot::with_previous_sibling(1, Some(2)));
+    let child2 = TreeNode::new(3);
 
     root.add_child(child1);
     root.add_child(child2);

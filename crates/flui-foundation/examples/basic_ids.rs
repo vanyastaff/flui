@@ -3,7 +3,7 @@
 //! This example demonstrates how to use the various ID types in FLUI Foundation
 //! for identifying elements in the UI tree.
 
-use flui_foundation::{ElementId, Key, LayerId, RenderId, SemanticsId, Slot, ViewId};
+use flui_foundation::{ElementId, Key, LayerId, RenderId, SemanticsId, ViewId};
 use std::collections::HashMap;
 
 fn main() {
@@ -84,33 +84,6 @@ fn main() {
     println!("   key4 (str):  {key4}");
     println!("   key1 == key2: {}", key1 == key2);
     println!("   key3 == key4: {}", key3 == key4); // true - same string
-    println!();
-
-    // -------------------------------------------------------------------------
-    // Slots - Child positioning
-    // -------------------------------------------------------------------------
-    println!("5. Slots for Child Positioning");
-    println!("   -----------------------------");
-
-    let slot0 = Slot::new(0);
-    let slot1 = Slot::with_previous_sibling(1, Some(elem1.get()));
-    let slot2 = Slot::with_previous_sibling(2, Some(elem2.get()));
-
-    println!("   slot0: {} (is_first: {})", slot0, slot0.is_first());
-    println!(
-        "   slot1: {} (prev_sibling: {:?})",
-        slot1,
-        slot1.previous_sibling()
-    );
-    println!(
-        "   slot2: {} (prev_sibling: {:?})",
-        slot2,
-        slot2.previous_sibling()
-    );
-
-    // Slot arithmetic
-    let next_slot = slot0.next();
-    println!("   slot0.next() = {next_slot}");
     println!();
 
     println!("=== Example Complete ===");

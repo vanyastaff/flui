@@ -91,24 +91,6 @@ assert_eq!(header, header2);
 let item_key = ValueKey::new(42i64);
 ```
 
-### Slots for Child Positioning
-
-```rust
-use flui_foundation::Slot;
-
-// Basic slot
-let slot = Slot::new(0);
-assert!(slot.is_first());
-
-// Slot with sibling tracking (for efficient insertion)
-let slot = Slot::with_previous_sibling(2, Some(1));
-assert_eq!(slot.previous_sibling(), Some(1));
-
-// Slot arithmetic
-let next = slot.next();
-let prev = slot.prev();
-```
-
 ### Change Notification
 
 ```rust

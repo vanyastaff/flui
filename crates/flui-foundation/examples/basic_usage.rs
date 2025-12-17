@@ -1,7 +1,7 @@
 //! Basic usage example for FLUI Foundation
 //!
 //! This example demonstrates the core functionality of FLUI Foundation types:
-//! - Element identification (ElementId, Key, Slot)
+//! - Element identification (ElementId, Key)
 //! - Change notification (ChangeNotifier, ValueNotifier)
 //! - Atomic flags for state management
 //! - Diagnostics for debugging
@@ -36,13 +36,6 @@ fn main() {
     println!("  Key 1: {}", key1);
     println!("  Key 2: {}", key2);
     println!("  Keys are unique: {}", key1 != key2);
-
-    // Slot - for positioning elements
-    let slot = Slot::new(0); // First position
-    let next_slot = slot.next();
-
-    println!("  Slot: {}", slot);
-    println!("  Next slot: {}", next_slot);
     println!();
 
     // ========================================================================
