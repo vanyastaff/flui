@@ -18,8 +18,7 @@ FLUI has been restructured into focused, composable crates:
 
 - **flui-foundation** - Core types and change notification
 - **flui-tree** - Tree abstractions and visitor patterns
-- **flui-view** - View traits and abstractions
-- **flui-pipeline** - Abstract pipeline traits and coordination
+- **flui-view** - View traits, elements, and BuildContext
 - **flui-reactivity** - Signals, hooks, and reactive state management
 - **flui-scheduler** - Frame scheduling and task prioritization
 
@@ -50,24 +49,6 @@ impl View for Counter {
         ]
     }
 }
-```
-
-### Abstract Pipeline System
-```rust
-use flui_pipeline::{BuildPhase, LayoutPhase, PaintPhase, PipelineCoordinator};
-
-// Implement your own pipeline phases
-struct MyBuildPhase;
-impl BuildPhase for MyBuildPhase {
-    type Tree = MyTree;
-    
-    fn schedule(&mut self, element_id: ElementId) {
-        // Custom rebuild scheduling
-    }
-}
-
-// Or use the built-in concrete implementations
-use flui_core::pipeline::{BuildPipeline, LayoutPipeline, PaintPipeline};
 ```
 
 ## 🎯 Key Features
@@ -127,8 +108,7 @@ flui/
 │   ├── flui-tree/              # Tree abstractions and visitor patterns
 │   
 │   # Framework Layer  
-│   ├── flui-view/              # View traits and abstractions
-│   ├── flui-pipeline/          # Abstract pipeline traits
+│   ├── flui-view/              # View traits, elements, and BuildContext
 │   ├── flui-reactivity/        # Signals, hooks, reactive state
 │   ├── flui-scheduler/         # Frame scheduling and task prioritization
 │   ├── flui_core/              # Core framework implementation
@@ -297,8 +277,7 @@ cargo fmt --all
 
 ### Framework Layer
 
-- **[flui-view](crates/flui-view/README.md)** - View traits and abstractions
-- **[flui-pipeline](crates/flui-pipeline/README.md)** - Abstract pipeline system
+- **[flui-view](crates/flui-view/README.md)** - View traits, elements, and BuildContext
 - **[flui-reactivity](crates/flui-reactivity/README.md)** - Reactive state management
 - **[flui_core](crates/flui_core/README.md)** - Core framework implementation
 
@@ -319,9 +298,6 @@ cargo fmt --all
 ```toml
 # Reactive system with hooks
 flui-reactivity = { version = "0.1", features = ["hooks", "async"] }
-
-# Parallel processing
-flui-pipeline = { version = "0.1", features = ["parallel"] }
 
 # Asset management
 flui_assets = { version = "0.1", features = ["images", "network", "hot-reload"] }
@@ -358,30 +334,9 @@ Each crate has a specific responsibility:
 
 - **Foundation**: Minimal dependencies, core abstractions
 - **Tree**: Visitor patterns, tree traversal algorithms  
-- **View**: View traits, element creation
-- **Pipeline**: Abstract phase traits, coordination
+- **View**: View traits, elements, and BuildContext
 - **Reactivity**: Signals, hooks, state management
 - **Core**: Concrete implementations of abstractions
-
-### Abstract Traits
-
-```rust
-use flui_pipeline::{BuildPhase, LayoutPhase, PaintPhase};
-
-// Implement custom pipeline phases
-struct CustomBuildPhase;
-impl BuildPhase for CustomBuildPhase {
-    type Tree = MyElementTree;
-    
-    fn schedule(&mut self, element_id: ElementId) {
-        // Custom scheduling logic
-    }
-    
-    fn rebuild_dirty(&mut self, tree: &mut Self::Tree) -> ChangeFlags {
-        // Custom rebuild logic
-    }
-}
-```
 
 ### Thread-Safe Reactivity
 
@@ -411,8 +366,7 @@ batch(|| {
 ### New Crates
 - ✨ **flui-foundation** - Core types and diagnostics
 - ✨ **flui-tree** - Tree abstractions and visitors
-- ✨ **flui-view** - View traits and element creation
-- ✨ **flui-pipeline** - Abstract pipeline coordination
+- ✨ **flui-view** - View traits, elements, and BuildContext
 - ✨ **flui-reactivity** - Comprehensive reactive system
 - ✨ **flui-scheduler** - Frame scheduling and prioritization
 

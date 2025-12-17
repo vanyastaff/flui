@@ -918,21 +918,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "flui-pipeline"
-version = "0.1.0"
-dependencies = [
- "flui-foundation",
- "flui-tree",
- "parking_lot",
- "rayon",
- "serde",
- "static_assertions",
- "thiserror 2.0.17",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "flui-platform"
 version = "0.1.0"
 dependencies = [
@@ -1180,7 +1165,6 @@ version = "0.1.0"
 dependencies = [
  "bon",
  "flui-foundation",
- "flui-pipeline",
  "flui-scheduler",
  "flui-view",
  "flui_animation",

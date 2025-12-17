@@ -18,7 +18,6 @@ flui_interaction = { path = "../flui_interaction" }
 flui_animation = { path = "../flui_animation" }
 flui-view = { path = "../flui-view" }
 flui-foundation = { path = "../flui-foundation" }
-flui-pipeline = { path = "../flui-pipeline" }
 bon = { workspace = true }
 parking_lot = { workspace = true }
 thiserror = { workspace = true }

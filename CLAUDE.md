@@ -50,7 +50,7 @@ View Tree (immutable) → Element Tree (mutable) → Render Tree (layout/paint)
 
 **Modular Design:** 20+ specialized crates organized in layers:
 - **Foundation:** `flui_types`, `flui-foundation`, `flui-tree`
-- **Framework:** `flui-view`, `flui-pipeline`, `flui-reactivity`, `flui-scheduler`, `flui_core`
+- **Framework:** `flui-view`, `flui-reactivity`, `flui-scheduler`, `flui_core`
 - **Rendering:** `flui_painting`, `flui_engine`, `flui_rendering`
 - **Widget:** `flui_widgets`, `flui_animation`, `flui_interaction`
 - **Application:** `flui_app`, `flui_assets`
@@ -160,10 +160,9 @@ pub struct RenderFlex {
 
 Three phases: **Build** → **Layout** → **Paint**
 
-Coordinated by abstract traits from `flui-pipeline`:
-- `BuildPhase` - Widget rebuilds
-- `LayoutPhase` - Size computation
-- `PaintPhase` - Layer generation
+- `BuildPhase` - Widget rebuilds via `BuildOwner`
+- `LayoutPhase` - Size computation via `RenderTree`
+- `PaintPhase` - Layer generation via `PaintContext`
 
 ## Logging and Debugging
 

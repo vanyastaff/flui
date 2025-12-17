@@ -23,11 +23,9 @@ members = [
     "crates/flui_animation",    # Animation system
 
     # === Core Layer ===
-    "crates/flui-pipeline",     # Pipeline phases traits (build/layout/paint)
     "crates/flui-reactivity",   # Reactive state management with hooks and signals
     "crates/flui_engine",       # Rendering engine
     "crates/flui_log",          # Cross-platform logging
-    # "crates/flui_core",         # ARCHIVED - replaced by flui-view BuildOwner + flui_rendering RenderPipelineOwner
 
     # === Application Layer ===
     "crates/flui_app",          # Application runner and bindings
@@ -40,11 +38,6 @@ members = [
     # "crates/flui_devtools",     # Developer tools
     # "crates/flui_cli",          # CLI tool for project management
     # "crates/flui_build",        # Build system library for cross-platform builds
-
-    # === Archived ===
-    # "crates/_archived_flui-element",  # replaced by flui-view
-    # "crates/_archived_flui_core",     # replaced by flui-view BuildOwner + flui_rendering RenderPipelineOwner
-    # "crates/_archived_flui_app",      # replaced by direct use of WidgetsBinding + PipelineOwner
 ]
 
 [workspace.package]
