@@ -1,0 +1,100 @@
+[package]
+name = "flui_app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Application framework for Flui - Flutter-inspired UI"
+
+[lib]
+crate-type = ["rlib", "staticlib", "cdylib"]
+
+[features]
+default = ["desktop"]
+
+# === Platform Features ===
+# Desktop platforms (Windows, Linux, macOS)
+desktop = []
+
+# Mobile platforms
+mobile = []
+android = ["mobile"]
+ios = ["mobile"]
+
+# Web platform
+web = []
+
+# === Optional Components ===
+# Widget library (basic widgets like Text, Button, etc.)
+widgets = ["dep:flui_widgets"]
+
+# Image loading support
+# images = ["flui_engine/images"]  # Temporarily disabled
+
+# === Logging Features ===
+# Pretty hierarchical logging for desktop development
+pretty-logs = ["flui_log/pretty"]
+
+# === DevTools Features ===
+# Developer tools integration
+# devtools = ["flui_engine/devtools"]  # Temporarily disabled
+
+[dependencies]
+# Flui crates - New architecture (flui-view + flui_rendering)
+flui-view = { path = "../flui-view" }
+flui_rendering = { path = "../flui_rendering" }
+flui_types = { path = "../flui_types" }
+flui-foundation = { path = "../flui-foundation" }
+flui_widgets = { path = "../flui_widgets", optional = true }
+flui_interaction = { path = "../flui_interaction" }
+flui-scheduler = { path = "../flui-scheduler" }
+flui-platform = { path = "../flui-platform" }
+flui_log = { path = "../flui_log" }
+flui_painting = { path = "../flui_painting" }
+
+# Rendering engine - temporarily disabled due to Rust 1.92 ICE
+# flui_engine = { path = "../flui_engine" }
+
+# GPU rendering (for Surface creation)
+wgpu = { workspace = true }
+
+# Window management
+winit.workspace = true
+
+# Utilities
+tracing.workspace = true
+parking_lot.workspace = true
+pollster = "0.3"
+
+# Android dependencies
+[target.'cfg(target_os = "android")'.dependencies]
+ndk = "0.9"
+ndk-context = "0.1"
+ndk-glue = "0.7"
+
+jni = "0.21"
+
+android-activity = { version = "0.6", features = ["native-activity"] }
+flui_widgets = { path = "../flui_widgets" }
+
+# iOS dependencies
+[target.'cfg(target_os = "ios")'.dependencies]
+objc = "0.2"
+
+# WebAssembly support
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+wasm-logger = "0.2"
+web-sys = { version = "0.3", features = [
+    "Document",
+    "Window",
+    "Element",
+    "HtmlCanvasElement",
+] }
+console_error_panic_hook = "0.1"
+
+[dev-dependencies]
+flui_widgets = { path = "../flui_widgets" }

@@ -178,6 +178,24 @@ impl CommandRenderer for Backend {
         });
     }
 
+    fn render_text_span(
+        &mut self,
+        _span: &flui_types::typography::InlineSpan,
+        offset: Offset,
+        _text_scale_factor: f64,
+        transform: &Matrix4,
+    ) {
+        // TODO: Implement rich text span rendering
+        // For now, just log that we received a text span
+        self.with_transform(transform, |_painter| {
+            tracing::debug!(
+                offset_x = offset.dx,
+                offset_y = offset.dy,
+                "render_text_span: rich text span rendering not yet implemented"
+            );
+        });
+    }
+
     fn render_image(
         &mut self,
         image: &Image,

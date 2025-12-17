@@ -41,38 +41,73 @@ pub use flui_types::{Offset, Size};
 // =============================================================================
 
 pub use flui_foundation::{ElementId, Key, Slot};
-pub use flui_view::ViewMode;
 
 // =============================================================================
-// Re-exports from flui-element crate
+// Re-exports from flui-view crate (Flutter-like View/Element system)
 // =============================================================================
 
-pub use flui_element::{Element, ElementLifecycle, ElementTree};
+// Core View traits
+pub use flui_view::{
+    BoxedView, InheritedView, IntoView, ParentDataView, ProxyView, RenderView, StatefulView,
+    StatelessView, View, ViewExt, ViewState,
+};
 
-/// Element module for backward compatibility with widgets.
-///
-/// Re-exports core element types from `flui-element` crate.
-pub mod element {
-    pub use flui_element::{Element, ElementLifecycle, ElementTree};
-    pub use flui_foundation::ElementId;
+// Element types
+pub use flui_view::{
+    ElementBase, InheritedElement, Lifecycle, ParentDataElement, ProxyElement, RenderElement,
+    StatefulElement, StatelessElement,
+};
+
+// BuildContext
+pub use flui_view::{BuildContext, BuildContextExt};
+
+// BuildOwner
+pub use flui_view::BuildOwner;
+
+// Tree types
+pub use flui_view::{reconcile_children, ElementNode, ElementTree};
+
+// Key types
+pub use flui_view::{GlobalKey, GlobalKeyId, ObjectKey, ValueKey, ViewKey};
+
+// Child helpers
+pub use flui_view::{Child, Children};
+
+// Notification system
+pub use flui_view::{
+    BoxedNotification, DragEndNotification, DragStartNotification, FocusNotification,
+    KeepAliveNotification, LayoutChangedNotification, NotifiableElement, Notification,
+    NotificationCallback, NotificationHandler, NotificationNode, ScrollNotification,
+    SizeChangedNotification,
+};
+
+// Root element
+pub use flui_view::{RootElement, RootElementImpl};
+
+// Slot types
+pub use flui_view::{ElementSlot, IndexedSlot, IndexedSlotBuilder};
+
+/// View module for convenient imports.
+pub mod view {
+    pub use flui_view::{
+        BoxedView, Child, Children, InheritedView, IntoView, ParentDataView, ProxyView, RenderView,
+        StatefulView, StatelessView, View, ViewExt, ViewKey, ViewState,
+    };
 }
 
-// =============================================================================
-// Re-exports from flui-view crate
-// =============================================================================
-
-pub use flui_element::IntoElement;
-pub use flui_view::{BuildContext, ViewObject};
-
-/// View traits module for backward compatibility with widgets.
-///
-/// Re-exports view traits and types from `flui-view` crate.
-pub mod view {
-    pub use flui_element::IntoElement;
+/// Element module for convenient imports.
+pub mod element {
+    pub use flui_foundation::ElementId;
     pub use flui_view::{
-        children, AnimatedView, BuildContext, Child, Children, Listenable, ProviderView, ProxyView,
-        StatefulView, StatelessView, ViewMode, ViewState,
+        ElementBase, ElementNode, ElementSlot, ElementTree, IndexedSlot, IndexedSlotBuilder,
+        InheritedElement, Lifecycle, ParentDataElement, ProxyElement, RenderElement,
+        StatefulElement, StatelessElement,
     };
+}
+
+/// Context module for convenient imports.
+pub mod context {
+    pub use flui_view::{BuildContext, BuildContextExt, BuildOwner};
 }
 
 // =============================================================================
@@ -80,8 +115,8 @@ pub mod view {
 // =============================================================================
 
 pub use flui_rendering::{Arity, RenderBox, RuntimeArity};
-// Re-export RenderView trait and UpdateResult from flui-view
-pub use flui_view::{RenderView, UpdateResult};
+// Re-export UpdateResult from flui-view
+pub use flui_view::view::UpdateResult;
 
 /// Render module for backward compatibility with widgets.
 ///
@@ -128,12 +163,6 @@ pub const VERSION_MINOR: &str = env!("CARGO_PKG_VERSION_MINOR");
 /// FLUI patch version
 pub const VERSION_PATCH: &str = env!("CARGO_PKG_VERSION_PATCH");
 
-// NOTE: Cannot implement IntoElement → IntoView bridge due to orphan rule
-// (cannot impl foreign trait for type parameter without local type).
-//
-// Instead, all widgets should implement IntoElement directly (like Text does).
-// Composite widgets can call .into_element() on child widgets.
-
 // =============================================================================
 // Tests
 // =============================================================================
@@ -155,6 +184,5 @@ mod tests {
         // Test that key types are available
         let _key: Option<Key> = None;
         let _id: Option<ElementId> = None;
-        let _mode = ViewMode::Stateless;
     }
 }

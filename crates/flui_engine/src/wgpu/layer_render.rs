@@ -49,6 +49,7 @@ impl<R: CommandRenderer + ?Sized> LayerRender<R> for Layer {
             Layer::ClipRect(layer) => layer.render(renderer),
             Layer::ClipRRect(layer) => layer.render(renderer),
             Layer::ClipPath(layer) => layer.render(renderer),
+            Layer::ClipSuperellipse(layer) => layer.render(renderer),
 
             // Transform layers
             Layer::Offset(layer) => layer.render(renderer),
@@ -72,6 +73,11 @@ impl<R: CommandRenderer + ?Sized> LayerRender<R> for Layer {
             // Annotation layers (metadata only, no visual rendering)
             Layer::AnnotatedRegion(_) => {
                 // AnnotatedRegion is metadata-only, no visual rendering needed
+            }
+
+            // Debug/Performance layers
+            Layer::PerformanceOverlay(_) => {
+                // TODO: Render performance overlay (FPS counter, frame times, etc.)
             }
         }
     }
@@ -124,6 +130,27 @@ impl<R: CommandRenderer + ?Sized> LayerRender<R> for ClipPathLayer {
         }
         let path = self.clip_path();
         renderer.push_clip_path(path, self.clip_behavior());
+    }
+}
+
+impl<R: CommandRenderer + ?Sized> LayerRender<R> for flui_layer::ClipSuperellipseLayer {
+    fn render(&self, renderer: &mut R) {
+        if !self.clips() {
+            return;
+        }
+        // Superellipse clipping - fallback to RRect approximation
+        // TODO: Implement native superellipse clipping with proper squircle curve
+        let superellipse = self.clip_superellipse();
+        let rect = superellipse.outer_rect();
+        // Use the corner radii from superellipse to create an approximate RRect
+        let rrect = flui_types::geometry::RRect::from_rect_and_corners(
+            rect,
+            superellipse.tl_radius(),
+            superellipse.tr_radius(),
+            superellipse.br_radius(),
+            superellipse.bl_radius(),
+        );
+        renderer.push_clip_rrect(&rrect, self.clip_behavior());
     }
 }
 

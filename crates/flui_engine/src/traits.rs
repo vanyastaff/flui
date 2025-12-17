@@ -104,6 +104,15 @@ pub trait CommandRenderer {
         transform: &Matrix4,
     );
 
+    /// Render rich text span
+    fn render_text_span(
+        &mut self,
+        span: &flui_types::typography::InlineSpan,
+        offset: Offset,
+        text_scale_factor: f64,
+        transform: &Matrix4,
+    );
+
     // ===== Images =====
 
     /// Render an image to destination rectangle

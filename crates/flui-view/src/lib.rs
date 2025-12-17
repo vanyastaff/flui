@@ -85,6 +85,7 @@
 // Modules
 // ============================================================================
 
+pub mod binding;
 pub mod child;
 pub mod context;
 pub mod element;
@@ -139,6 +140,12 @@ pub use tree::{reconcile_children, ElementNode, ElementTree};
 // Re-export from flui-foundation
 pub use flui_foundation::{ElementId, RenderId};
 
+// Binding
+pub use binding::{
+    create_shared_binding, AppLifecycleState, SharedWidgetsBinding, WidgetsBinding,
+    WidgetsBindingObserver,
+};
+
 // ============================================================================
 // Prelude
 // ============================================================================
@@ -149,6 +156,7 @@ pub use flui_foundation::{ElementId, RenderId};
 /// use flui_view::prelude::*;
 /// ```
 pub mod prelude {
+    pub use crate::binding::{AppLifecycleState, WidgetsBinding, WidgetsBindingObserver};
     pub use crate::child::{Child, Children};
     pub use crate::context::{BuildContext, BuildContextExt};
     pub use crate::element::{

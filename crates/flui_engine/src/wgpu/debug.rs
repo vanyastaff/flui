@@ -124,6 +124,19 @@ impl CommandRenderer for DebugBackend {
         );
     }
 
+    fn render_text_span(
+        &mut self,
+        _span: &flui_types::typography::InlineSpan,
+        offset: Offset,
+        text_scale_factor: f64,
+        _transform: &Matrix4,
+    ) {
+        self.log_command(
+            "render_text_span",
+            &format!("offset={:?}, scale={}", offset, text_scale_factor),
+        );
+    }
+
     fn render_image(
         &mut self,
         _image: &Image,

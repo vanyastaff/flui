@@ -463,7 +463,10 @@ impl SceneRenderer {
             Layer::Picture(picture_layer) => self.render_picture_layer(picture_layer),
 
             // Clip layers - these modify the clip stack for children
-            Layer::ClipRect(_) | Layer::ClipRRect(_) | Layer::ClipPath(_) => {
+            Layer::ClipRect(_)
+            | Layer::ClipRRect(_)
+            | Layer::ClipPath(_)
+            | Layer::ClipSuperellipse(_) => {
                 // Clip layers don't render content themselves,
                 // they modify state for child rendering via LayerRender trait
                 Ok(())
@@ -506,6 +509,13 @@ impl SceneRenderer {
             // Annotation layers
             Layer::AnnotatedRegion(_) => {
                 // Annotation layers are metadata-only, no visual rendering
+                Ok(())
+            }
+
+            // Debug/Performance layers
+            Layer::PerformanceOverlay(_) => {
+                // Performance overlay is rendered by the debug system
+                // TODO: Implement performance overlay rendering
                 Ok(())
             }
         }
@@ -1057,7 +1067,10 @@ impl SceneRenderer {
     ///
     /// Returns `RenderError` if surface acquisition or rendering fails.
     #[tracing::instrument(level = "trace", skip_all, err)]
-    fn render_picture_layer(&mut self, layer: &flui_layer::PictureLayer) -> Result<(), RenderError> {
+    fn render_picture_layer(
+        &mut self,
+        layer: &flui_layer::PictureLayer,
+    ) -> Result<(), RenderError> {
         // Get current frame (swapchain acquire)
         let frame = {
             let _span = tracing::trace_span!("acquire_frame").entered();

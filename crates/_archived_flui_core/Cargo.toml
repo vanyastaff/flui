@@ -13,12 +13,12 @@ flui-foundation = { path = "../flui-foundation" }
 flui-pipeline = { path = "../flui-pipeline" }
 flui-tree = { path = "../flui-tree" }
 flui-view = { path = "../flui-view" }
-flui-element = { path = "../flui-element" }
+# flui-element = { path = "../flui-element" }  # ARCHIVED - replaced by flui-view
 flui_types = { path = "../flui_types" }
 flui_painting = { path = "../flui_painting" }
 flui_rendering = { path = "../flui_rendering" }
 # flui-objects = { path = "../flui-objects" }  # For RenderParagraph paint (temporarily disabled)
-flui_engine = { path = "../flui_engine" }  # For LayerTree
+# flui_engine = { path = "../flui_engine" }  # For LayerTree - temporarily disabled due to Rust 1.92 ICE in moxcms
 flui_interaction = { path = "../flui_interaction" }
 flui-scheduler = { path = "../flui-scheduler" }
 flui-reactivity = { path = "../flui-reactivity" }
