@@ -34,6 +34,7 @@ flui_interaction = { path = "../flui_interaction" }
 flui-scheduler = { path = "../flui-scheduler" }
 flui_painting = { path = "../flui_painting" }
 flui-layer = { path = "../flui-layer" }
+flui-semantics = { path = "../flui-semantics" }
 flui_engine = { path = "../flui_engine" }
 flui_log = { path = "../flui_log" }
 

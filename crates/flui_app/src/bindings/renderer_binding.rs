@@ -1,345 +1,411 @@
-//! RendererBinding - manages the render tree and pipeline.
+//! RenderingFlutterBinding - Concrete implementation of RendererBinding.
 //!
-//! This is the Rust equivalent of Flutter's `RendererBinding` mixin.
-//! It owns the `PipelineOwner` and manages the rendering phases.
+//! This is the glue between the render trees and the FLUI engine.
+//! It manages multiple independent render trees, each rooted in a RenderView.
 //!
 //! # Flutter Equivalence
 //!
-//! This corresponds to Flutter's `RendererBinding` mixin in `rendering/binding.dart`.
+//! Corresponds to Flutter's `RenderingFlutterBinding` class from
+//! `rendering/binding.dart`:
 //!
-//! # Responsibilities
+//! ```dart
+//! class RenderingFlutterBinding extends BindingBase
+//!     with GestureBinding, SchedulerBinding, ServicesBinding,
+//!          SemanticsBinding, PaintingBinding, RendererBinding { }
+//! ```
 //!
-//! - Owns the root `PipelineOwner`
-//! - Manages collection of `RenderView`s
-//! - Executes rendering phases: layout → compositing bits → paint → semantics
-//! - Creates `Scene` from `LayerTree`
+//! # Architecture
+//!
+//! ```text
+//! RenderingFlutterBinding
+//!   ├── root_pipeline_owner   - Root of PipelineOwner tree
+//!   ├── render_views          - Map<ViewId, RenderView>
+//!   ├── mouse_tracker         - Hover event management
+//!   └── semantics integration - Via SemanticsBinding
+//! ```
+//!
+//! # Usage
+//!
+//! For most applications, use `WidgetsFlutterBinding` instead, which
+//! includes this binding plus widgets support. Use `RenderingFlutterBinding`
+//! directly only when working with the rendering layer without widgets.
 
-use super::traits::{Binding, RendererBindingBehavior};
-use crate::embedder::{FrameCoordinator, SceneCache};
-use flui_layer::Scene;
-use flui_rendering::pipeline::PipelineOwner;
-use flui_types::Size;
-use parking_lot::RwLock;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 
-/// A render view managed by the RendererBinding.
+use parking_lot::RwLock;
+
+use flui_foundation::{impl_binding_singleton, BindingBase, HasInstance};
+use flui_interaction::binding::GestureBinding;
+use flui_rendering::binding::{HitTestable, PipelineManifold, RendererBinding};
+use flui_rendering::hit_testing::HitTestResult;
+use flui_rendering::input::MouseTracker;
+use flui_rendering::pipeline::PipelineOwner;
+use flui_rendering::view::{RenderView, ViewConfiguration};
+use flui_scheduler::Scheduler;
+use flui_semantics::{Assertiveness, SemanticsAction, SemanticsBinding};
+use flui_types::Offset;
+
+// ============================================================================
+// RenderingFlutterBinding
+// ============================================================================
+
+/// Concrete binding for applications using the Rendering framework directly.
 ///
-/// This corresponds to Flutter's `RenderView` class.
-/// Each render view represents a separate render tree rooted at a RenderBox.
-#[derive(Debug)]
-pub struct RenderView {
-    /// Unique identifier for this view.
-    pub id: u64,
+/// This is the glue that binds the framework to the FLUI engine.
+/// For widget-based applications, use `WidgetsFlutterBinding` instead.
+///
+/// # Responsibilities
+///
+/// - Managing the root [`PipelineOwner`] tree
+/// - Managing [`RenderView`]s (add/remove)
+/// - Creating [`ViewConfiguration`]s for views
+/// - Coordinating frame production
+/// - Managing [`MouseTracker`] for hover events
+/// - Integrating with [`SemanticsBinding`] for accessibility
+///
+/// # Thread Safety
+///
+/// This binding is thread-safe and can be accessed from multiple threads.
+/// Internal state is protected by `RwLock`s.
+pub struct RenderingFlutterBinding {
+    /// Root of the PipelineOwner tree.
+    root_pipeline_owner: RwLock<PipelineOwner>,
 
-    /// Size of this view.
-    pub size: Size,
+    /// Render views managed by this binding (viewId → RenderView).
+    render_views: RwLock<HashMap<u64, Arc<RwLock<RenderView>>>>,
 
-    /// Whether this view is attached to the binding.
-    pub attached: bool,
+    /// Mouse tracker for hover notification.
+    mouse_tracker: RwLock<MouseTracker>,
+
+    /// Whether semantics are enabled.
+    semantics_enabled: AtomicBool,
+
+    /// Listeners for semantics enabled changes.
+    semantics_listeners: RwLock<Vec<Arc<dyn Fn(bool) + Send + Sync>>>,
+
+    /// Counter for deferred first frame.
+    first_frame_deferred_count: AtomicU32,
+
+    /// Whether the first frame has been sent.
+    first_frame_sent: AtomicBool,
 }
 
-impl RenderView {
-    /// Creates a new render view with the given ID and size.
-    pub fn new(id: u64, size: Size) -> Self {
-        Self {
-            id,
-            size,
-            attached: false,
-        }
-    }
-}
-
-/// RendererBinding - manages the render tree and pipeline.
-///
-/// This binding owns the `PipelineOwner` and coordinates the rendering phases.
-/// It implements both [`Binding`] and [`RendererBindingBehavior`] traits.
-///
-/// # Frame Production
-///
-/// Call [`draw_frame`](Self::draw_frame) each frame to execute:
-/// 1. Layout phase - compute sizes and positions
-/// 2. Compositing bits phase - determine layer requirements
-/// 3. Paint phase - generate display lists
-/// 4. Semantics phase - build accessibility tree
-///
-/// # Example
-///
-/// ```rust,ignore
-/// let mut renderer = RendererBinding::new();
-/// renderer.init_instances();
-///
-/// // Each frame:
-/// renderer.draw_frame();
-/// if let Some(layer_tree) = renderer.take_layer_tree() {
-///     let scene = renderer.create_scene(layer_tree, size, frame_number);
-///     // Send scene to GPU
-/// }
-/// ```
-pub struct RendererBinding {
-    /// Root pipeline owner - manages the render tree
-    root_pipeline_owner: PipelineOwner,
-
-    /// Render views managed by this binding (view_id → RenderView)
-    render_views: HashMap<u64, RenderView>,
-
-    /// Scene cache for hit testing
-    scene_cache: SceneCache,
-
-    /// Frame coordinator (tracks frame statistics)
-    frame_coordinator: RwLock<FrameCoordinator>,
-
-    /// Whether the binding has been initialized
-    initialized: bool,
-
-    /// Whether the first frame has been sent
-    first_frame_sent: bool,
-
-    /// Count of deferred first frame requests
-    first_frame_deferred_count: u32,
-}
-
-impl std::fmt::Debug for RendererBinding {
+impl std::fmt::Debug for RenderingFlutterBinding {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RendererBinding")
-            .field("initialized", &self.initialized)
-            .field("first_frame_sent", &self.first_frame_sent)
-            .field("render_views_count", &self.render_views.len())
-            .field("has_scene", &self.scene_cache.has_scene())
+        f.debug_struct("RenderingFlutterBinding")
+            .field("render_views_count", &self.render_views.read().len())
+            .field(
+                "semantics_enabled",
+                &self.semantics_enabled.load(Ordering::Relaxed),
+            )
+            .field(
+                "first_frame_sent",
+                &self.first_frame_sent.load(Ordering::Relaxed),
+            )
             .finish()
     }
 }
 
-impl Default for RendererBinding {
+// Safety: All fields are thread-safe
+unsafe impl Send for RenderingFlutterBinding {}
+unsafe impl Sync for RenderingFlutterBinding {}
+
+impl Default for RenderingFlutterBinding {
     fn default() -> Self {
         Self::new()
     }
 }
 
-// ============================================================================
-// Binding trait implementation
-// ============================================================================
+impl RenderingFlutterBinding {
+    /// Creates a new rendering binding.
+    pub fn new() -> Self {
+        // Create a dummy hit test callback for now
+        // In practice, this gets replaced when the binding is fully initialized
+        let hit_test_callback: flui_rendering::input::MouseTrackerHitTest =
+            Arc::new(|_position, _view_id| HitTestResult::new());
 
-impl Binding for RendererBinding {
-    fn init_instances(&mut self) {
-        tracing::debug!("RendererBinding::init_instances");
-        self.initialized = true;
-
-        // In Flutter, this also attaches the pipeline owner to a manifold
-        // that provides request_visual_update() and semantics_enabled()
+        let mut binding = Self {
+            root_pipeline_owner: RwLock::new(PipelineOwner::new()),
+            render_views: RwLock::new(HashMap::new()),
+            mouse_tracker: RwLock::new(MouseTracker::new(hit_test_callback)),
+            semantics_enabled: AtomicBool::new(false),
+            semantics_listeners: RwLock::new(Vec::new()),
+            first_frame_deferred_count: AtomicU32::new(0),
+            first_frame_sent: AtomicBool::new(false),
+        };
+        binding.init_instances();
+        binding
     }
 
-    fn init_service_extensions(&mut self) {
-        // Debug service extensions for rendering
-        // - debugDumpRenderTree
-        // - debugDumpLayerTree
-        // - debugPaint, debugRepaintRainbow, etc.
-        tracing::debug!("RendererBinding::init_service_extensions");
+    /// Returns an instance of the binding that implements [`RendererBinding`].
+    ///
+    /// If no binding has yet been initialized, creates and initializes one.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use flui_app::RenderingFlutterBinding;
+    ///
+    /// let binding = RenderingFlutterBinding::ensure_initialized();
+    /// ```
+    pub fn ensure_initialized() -> &'static Self {
+        Self::instance()
     }
 
-    fn is_initialized(&self) -> bool {
-        self.initialized
+    // ========================================================================
+    // First Frame Deferral
+    // ========================================================================
+
+    /// Tell the framework to not send the first frames to the engine until
+    /// there is a corresponding call to [`allow_first_frame`](Self::allow_first_frame).
+    ///
+    /// Call this to perform asynchronous initialization work before the first
+    /// frame is rendered (which takes down the splash screen). The framework
+    /// will still do all the work to produce frames, but those frames are never
+    /// sent to the engine and will not appear on screen.
+    ///
+    /// Calling this has no effect after the first frame has been sent.
+    pub fn defer_first_frame(&self) {
+        self.first_frame_deferred_count
+            .fetch_add(1, Ordering::Relaxed);
     }
 
-    fn perform_reassemble(&mut self) {
-        // Force repaint of all render views
-        for view in self.render_views.values_mut() {
-            view.attached = false;
+    /// Called after [`defer_first_frame`](Self::defer_first_frame) to tell
+    /// the framework that it is ok to send the first frame to the engine now.
+    ///
+    /// For best performance, this method should only be called while the
+    /// scheduler phase is idle.
+    ///
+    /// This method may only be called once for each corresponding call
+    /// to [`defer_first_frame`](Self::defer_first_frame).
+    pub fn allow_first_frame(&self) {
+        let prev = self
+            .first_frame_deferred_count
+            .fetch_sub(1, Ordering::Relaxed);
+        assert!(
+            prev > 0,
+            "allow_first_frame called without matching defer_first_frame"
+        );
+
+        // Schedule a warm up frame even if count is not zero yet
+        if !self.first_frame_sent.load(Ordering::Relaxed) {
+            Scheduler::instance().schedule_frame(Box::new(|_timing| {
+                // Warm-up frame callback
+            }));
         }
-        tracing::debug!("RendererBinding::perform_reassemble - marked views for repaint");
+    }
+
+    /// Call this to pretend that no frames have been sent to the engine yet.
+    ///
+    /// This is useful for tests that want to call [`defer_first_frame`] and
+    /// [`allow_first_frame`] since those methods only have an effect if no
+    /// frames have been sent to the engine yet.
+    pub fn reset_first_frame_sent(&self) {
+        self.first_frame_sent.store(false, Ordering::Relaxed);
+    }
+
+    // ========================================================================
+    // Semantics Integration
+    // ========================================================================
+
+    /// Sets whether semantics are enabled.
+    ///
+    /// When enabled, the framework will maintain the semantics tree.
+    pub fn set_semantics_enabled(&self, enabled: bool) {
+        let was_enabled = self.semantics_enabled.swap(enabled, Ordering::Relaxed);
+        if was_enabled != enabled {
+            // Notify listeners
+            let listeners = self.semantics_listeners.read();
+            for listener in listeners.iter() {
+                listener(enabled);
+            }
+
+            // Update SemanticsBinding if available
+            if SemanticsBinding::is_initialized() {
+                SemanticsBinding::instance().set_platform_semantics_enabled(enabled);
+            }
+        }
+    }
+
+    /// Announces a message via accessibility services.
+    pub fn announce(&self, message: &str, assertiveness: Assertiveness) {
+        if SemanticsBinding::is_initialized() {
+            SemanticsBinding::instance().announce(message, assertiveness);
+        }
+    }
+
+    // ========================================================================
+    // Binding Accessors
+    // ========================================================================
+
+    /// Get the GestureBinding singleton.
+    ///
+    /// Equivalent to Flutter's `GestureBinding.instance`.
+    pub fn gestures() -> &'static GestureBinding {
+        GestureBinding::instance()
+    }
+
+    /// Get the Scheduler singleton.
+    ///
+    /// Equivalent to Flutter's `SchedulerBinding.instance`.
+    pub fn scheduler() -> &'static Scheduler {
+        Scheduler::instance()
+    }
+
+    /// Get the SemanticsBinding singleton.
+    ///
+    /// Equivalent to Flutter's `SemanticsBinding.instance`.
+    pub fn semantics() -> &'static SemanticsBinding {
+        SemanticsBinding::instance()
     }
 }
 
 // ============================================================================
-// RendererBindingBehavior trait implementation
+// BindingBase Implementation
 // ============================================================================
 
-impl RendererBindingBehavior for RendererBinding {
-    type PipelineOwner = PipelineOwner;
-    type RenderView = RenderView;
+impl BindingBase for RenderingFlutterBinding {
+    fn init_instances(&mut self) {
+        // Initialize GestureBinding first (provides hit testing)
+        let _ = GestureBinding::instance();
+        tracing::debug!("GestureBinding initialized via RenderingFlutterBinding");
 
-    fn root_pipeline_owner(&self) -> &Self::PipelineOwner {
+        // Initialize scheduler
+        let _ = Scheduler::instance();
+        tracing::debug!("Scheduler initialized via RenderingFlutterBinding");
+
+        // Initialize semantics binding
+        let _ = SemanticsBinding::instance();
+        tracing::debug!("SemanticsBinding initialized via RenderingFlutterBinding");
+
+        tracing::info!("RenderingFlutterBinding initialized");
+    }
+}
+
+// Singleton pattern
+impl_binding_singleton!(RenderingFlutterBinding);
+
+// ============================================================================
+// PipelineManifold Implementation
+// ============================================================================
+
+impl PipelineManifold for RenderingFlutterBinding {
+    fn request_visual_update(&self) {
+        Scheduler::instance().schedule_frame(Box::new(|_timing| {
+            // Visual update frame callback
+        }));
+    }
+
+    fn semantics_enabled(&self) -> bool {
+        self.semantics_enabled.load(Ordering::Relaxed)
+    }
+
+    fn add_semantics_enabled_listener(&self, listener: Arc<dyn Fn(bool) + Send + Sync>) {
+        self.semantics_listeners.write().push(listener);
+    }
+
+    fn remove_semantics_enabled_listener(&self, listener: &Arc<dyn Fn(bool) + Send + Sync>) {
+        let mut listeners = self.semantics_listeners.write();
+        listeners.retain(|l| !Arc::ptr_eq(l, listener));
+    }
+}
+
+// ============================================================================
+// HitTestable Implementation
+// ============================================================================
+
+impl HitTestable for RenderingFlutterBinding {
+    fn hit_test_in_view(&self, result: &mut HitTestResult, position: Offset, view_id: u64) {
+        let views = self.render_views.read();
+        if let Some(view) = views.get(&view_id) {
+            let view_guard = view.read();
+            view_guard.hit_test(result, position);
+        }
+    }
+}
+
+// ============================================================================
+// RendererBinding Implementation
+// ============================================================================
+
+impl RendererBinding for RenderingFlutterBinding {
+    fn root_pipeline_owner(&self) -> &RwLock<PipelineOwner> {
         &self.root_pipeline_owner
     }
 
-    fn root_pipeline_owner_mut(&mut self) -> &mut Self::PipelineOwner {
-        &mut self.root_pipeline_owner
+    fn render_views(&self) -> &RwLock<HashMap<u64, Arc<RwLock<RenderView>>>> {
+        &self.render_views
     }
 
-    fn render_views(&self) -> impl Iterator<Item = &Self::RenderView> {
-        self.render_views.values()
+    fn mouse_tracker(&self) -> &RwLock<MouseTracker> {
+        &self.mouse_tracker
     }
 
-    fn add_render_view(&mut self, view: Self::RenderView) {
-        let view_id = view.id;
-        tracing::debug!("RendererBinding::add_render_view id={}", view_id);
-        self.render_views.insert(view_id, view);
+    fn send_frames_to_engine(&self) -> bool {
+        self.first_frame_sent.load(Ordering::Relaxed)
+            || self.first_frame_deferred_count.load(Ordering::Relaxed) == 0
     }
 
-    fn remove_render_view(&mut self, view_id: u64) {
-        tracing::debug!("RendererBinding::remove_render_view id={}", view_id);
-        self.render_views.remove(&view_id);
+    fn create_view_configuration_for(&self, render_view: &RenderView) -> ViewConfiguration {
+        if render_view.has_configuration() {
+            render_view.configuration().clone()
+        } else {
+            // Default configuration for testing
+            ViewConfiguration::default()
+        }
     }
 
-    fn draw_frame(&mut self) {
-        // Phase 1: Layout
-        self.root_pipeline_owner.flush_layout();
+    fn draw_frame(&self) {
+        // Call default implementation
+        let root_owner = self.root_pipeline_owner();
 
-        // Phase 2: Compositing bits
-        self.root_pipeline_owner.flush_compositing_bits();
+        // Phase 3: Layout
+        root_owner.write().flush_layout();
 
-        // Phase 3: Paint
-        self.root_pipeline_owner.flush_paint();
+        // Phase 4: Compositing bits
+        root_owner.write().flush_compositing_bits();
 
-        // Phase 4: Composite and send to GPU (for each render view)
+        // Phase 5: Paint
+        root_owner.write().flush_paint();
+
+        // Phase 6 & 7: Composite and Semantics (only if sending frames)
         if self.send_frames_to_engine() {
-            // In Flutter: for each renderView, call renderView.compositeFrame()
-            // This creates Scene from LayerTree and sends to engine
-            self.first_frame_sent = true;
-        }
+            // Composite each render view
+            for (_, view) in self.render_views.read().iter() {
+                let view_guard = view.read();
+                let _result = view_guard.composite_frame();
+                // In a real implementation, send to GPU here
+            }
 
-        // Phase 5: Semantics
-        self.root_pipeline_owner.flush_semantics();
-    }
+            // Phase 7: Semantics
+            root_owner.write().flush_semantics();
 
-    fn handle_metrics_changed(&mut self) {
-        tracing::debug!("RendererBinding::handle_metrics_changed");
-        // Update configurations for all render views
-        // In Flutter: view.configuration = createViewConfigurationFor(view)
-    }
-}
-
-// ============================================================================
-// RendererBinding specific methods
-// ============================================================================
-
-impl RendererBinding {
-    /// Creates a new renderer binding.
-    pub fn new() -> Self {
-        Self {
-            root_pipeline_owner: PipelineOwner::new(),
-            render_views: HashMap::new(),
-            scene_cache: SceneCache::new(),
-            frame_coordinator: RwLock::new(FrameCoordinator::new()),
-            initialized: false,
-            first_frame_sent: false,
-            first_frame_deferred_count: 0,
+            // Mark first frame sent
+            self.first_frame_sent.store(true, Ordering::Relaxed);
         }
     }
 
-    // ========================================================================
-    // First Frame Management (Flutter pattern)
-    // ========================================================================
-
-    /// Whether frames should be sent to the engine.
-    ///
-    /// Returns `true` if either:
-    /// - The first frame has already been sent
-    /// - There are no deferred first frame requests
-    pub fn send_frames_to_engine(&self) -> bool {
-        self.first_frame_sent || self.first_frame_deferred_count == 0
-    }
-
-    /// Defer sending the first frame.
-    ///
-    /// Call this to perform asynchronous initialization before the first
-    /// frame is rendered. The framework will still do all work to produce
-    /// frames, but they won't be sent to the engine.
-    pub fn defer_first_frame(&mut self) {
-        self.first_frame_deferred_count += 1;
-    }
-
-    /// Allow sending the first frame after deferral.
-    pub fn allow_first_frame(&mut self) {
-        if self.first_frame_deferred_count > 0 {
-            self.first_frame_deferred_count -= 1;
-        }
-    }
-
-    /// Reset first frame state (for testing).
-    pub fn reset_first_frame_sent(&mut self) {
-        self.first_frame_sent = false;
-    }
-
-    // ========================================================================
-    // Scene Cache
-    // ========================================================================
-
-    /// Returns the scene cache for hit testing.
-    pub fn scene_cache(&self) -> &SceneCache {
-        &self.scene_cache
-    }
-
-    /// Returns the cached scene if available.
-    pub fn cached_scene(&self) -> Option<Arc<Scene>> {
-        self.scene_cache.get()
-    }
-
-    // ========================================================================
-    // Frame Coordinator
-    // ========================================================================
-
-    /// Returns the number of frames rendered.
-    pub fn frames_rendered(&self) -> u64 {
-        self.frame_coordinator.read().frames_rendered()
-    }
-
-    /// Returns a reference to the frame coordinator.
-    pub fn frame_coordinator(&self) -> &RwLock<FrameCoordinator> {
-        &self.frame_coordinator
-    }
-
-    // ========================================================================
-    // Layer Tree and Scene Creation
-    // ========================================================================
-
-    /// Takes the layer tree from the last paint phase.
-    ///
-    /// Call this after `draw_frame()` to get the LayerTree for scene creation.
-    pub fn take_layer_tree(&mut self) -> Option<flui_layer::LayerTree> {
-        self.root_pipeline_owner.take_layer_tree()
-    }
-
-    /// Creates a Scene from a LayerTree.
-    ///
-    /// # Arguments
-    ///
-    /// * `layer_tree` - The layer tree from paint phase
-    /// * `size` - The size of the scene
-    /// * `frame_number` - The frame number for debugging
-    pub fn create_scene(
+    fn perform_semantics_action(
         &self,
-        layer_tree: flui_layer::LayerTree,
-        size: Size,
-        frame_number: u64,
-    ) -> Arc<Scene> {
-        let root = layer_tree.root();
-        tracing::debug!(
-            "create_scene: {} layers, root={:?}, frame={}",
-            layer_tree.len(),
-            root,
-            frame_number
-        );
-        let scene = Arc::new(Scene::new(size, layer_tree, root, frame_number));
-
-        // Cache for hit testing
-        self.scene_cache.update(Arc::clone(&scene));
-
-        scene
-    }
-
-    // ========================================================================
-    // Dirty State Queries
-    // ========================================================================
-
-    /// Returns whether there are dirty nodes needing processing.
-    pub fn has_dirty_nodes(&self) -> bool {
-        self.root_pipeline_owner.has_dirty_nodes()
-    }
-
-    /// Returns the count of dirty nodes.
-    pub fn dirty_node_count(&self) -> usize {
-        self.root_pipeline_owner.dirty_node_count()
+        view_id: u64,
+        node_id: i32,
+        action: SemanticsAction,
+        args: Option<flui_semantics::ActionArgs>,
+    ) {
+        // Look up the render view and delegate to its semantics owner
+        let views = self.render_views.read();
+        if let Some(_view) = views.get(&view_id) {
+            // TODO: Get semantics owner from pipeline owner and perform action
+            tracing::debug!(
+                "perform_semantics_action: view={}, node={}, action={:?}, args={:?}",
+                view_id,
+                node_id,
+                action,
+                args
+            );
+        }
     }
 }
 
@@ -352,54 +418,95 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_renderer_binding_new() {
-        let binding = RendererBinding::new();
-        assert!(!binding.initialized);
-        assert!(!binding.first_frame_sent);
-        assert!(binding.send_frames_to_engine());
+    fn test_singleton() {
+        let binding1 = RenderingFlutterBinding::instance();
+        let binding2 = RenderingFlutterBinding::instance();
+        assert!(std::ptr::eq(binding1, binding2));
     }
 
     #[test]
-    fn test_init_instances() {
-        let mut binding = RendererBinding::new();
-        assert!(!binding.is_initialized());
-
-        binding.init_instances();
-        assert!(binding.is_initialized());
+    fn test_ensure_initialized() {
+        let binding = RenderingFlutterBinding::ensure_initialized();
+        assert!(RenderingFlutterBinding::is_initialized());
+        assert!(std::ptr::eq(binding, RenderingFlutterBinding::instance()));
     }
 
     #[test]
-    fn test_defer_first_frame() {
-        let mut binding = RendererBinding::new();
+    fn test_semantics_enabled() {
+        let binding = RenderingFlutterBinding::instance();
 
+        // Initially disabled
+        assert!(!binding.semantics_enabled());
+
+        // Enable
+        binding.set_semantics_enabled(true);
+        assert!(binding.semantics_enabled());
+
+        // Disable
+        binding.set_semantics_enabled(false);
+        assert!(!binding.semantics_enabled());
+    }
+
+    #[test]
+    fn test_send_frames_to_engine() {
+        let binding = RenderingFlutterBinding::instance();
+        binding.reset_first_frame_sent();
+
+        // Initially should send (no deferrals)
         assert!(binding.send_frames_to_engine());
 
+        // Defer first frame
         binding.defer_first_frame();
         assert!(!binding.send_frames_to_engine());
 
+        // Allow first frame
         binding.allow_first_frame();
         assert!(binding.send_frames_to_engine());
     }
 
     #[test]
-    fn test_add_remove_render_view() {
-        let mut binding = RendererBinding::new();
+    fn test_render_view_management() {
+        let binding = RenderingFlutterBinding::instance();
 
-        let view = RenderView::new(1, Size::new(800.0, 600.0));
-        binding.add_render_view(view);
+        // Add a render view
+        let view = Arc::new(RwLock::new(RenderView::new()));
+        binding.add_render_view(1, view.clone());
 
-        assert_eq!(binding.render_views().count(), 1);
+        assert!(binding.get_render_view(1).is_some());
+        assert!(binding.get_render_view(2).is_none());
 
-        binding.remove_render_view(1);
-        assert_eq!(binding.render_views().count(), 0);
+        // Remove
+        let removed = binding.remove_render_view(1);
+        assert!(removed.is_some());
+        assert!(binding.get_render_view(1).is_none());
     }
 
     #[test]
-    fn test_draw_frame_no_dirty_nodes() {
-        let mut binding = RendererBinding::new();
-        binding.init_instances();
+    fn test_semantics_listener() {
+        use std::sync::atomic::AtomicUsize;
 
-        // No dirty nodes - should complete without panic
-        binding.draw_frame();
+        let binding = RenderingFlutterBinding::instance();
+        let call_count = Arc::new(AtomicUsize::new(0));
+        let call_count_clone = call_count.clone();
+
+        let listener: Arc<dyn Fn(bool) + Send + Sync> = Arc::new(move |_enabled| {
+            call_count_clone.fetch_add(1, Ordering::Relaxed);
+        });
+
+        binding.add_semantics_enabled_listener(listener.clone());
+
+        // Toggle semantics
+        binding.set_semantics_enabled(true);
+        assert_eq!(call_count.load(Ordering::Relaxed), 1);
+
+        binding.set_semantics_enabled(false);
+        assert_eq!(call_count.load(Ordering::Relaxed), 2);
+
+        // Remove listener
+        binding.remove_semantics_enabled_listener(&listener);
+
+        binding.set_semantics_enabled(true);
+        // Should not increment (listener removed)
+        assert_eq!(call_count.load(Ordering::Relaxed), 2);
     }
 }

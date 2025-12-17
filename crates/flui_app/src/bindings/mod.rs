@@ -1,60 +1,44 @@
-//! Application bindings - Flutter-like binding architecture.
+//! Application bindings - re-exports from specialized crates.
 //!
-//! This module provides the binding system that connects all parts of FLUI:
+//! FLUI uses composition instead of Flutter's mixin pattern.
+//! Each binding is a separate crate with focused responsibility:
 //!
-//! - [`Binding`] - Base trait for all bindings
-//! - [`RendererBindingBehavior`] - Trait for renderer bindings
-//! - [`RendererBinding`] - Manages render tree and pipeline (layout/paint)
-//! - [`WidgetsBinding`] - Manages element tree and build phase (from flui-view)
-//! - [`GestureBinding`] - Manages hit testing and gestures (from flui-interaction)
+//! - [`WidgetsBinding`] - Element tree and build phase (from flui-view)
+//! - [`GestureBinding`] - Hit testing and gestures (from flui-interaction)
+//! - [`PipelineOwner`] - Render tree and layout/paint (from flui_rendering)
+//! - [`Scheduler`] - Frame scheduling (from flui-scheduler)
+//! - [`SemanticsBinding`] - Accessibility (from flui-semantics)
+//! - [`RenderingFlutterBinding`] - Rendering integration (local)
 //!
 //! # Flutter Equivalence
 //!
-//! This corresponds to Flutter's binding system:
-//! - `flutter/lib/src/foundation/binding.dart` → Binding trait (BindingBase)
-//! - `flutter/lib/src/rendering/binding.dart` → RendererBinding
-//! - `flutter/lib/src/widgets/binding.dart` → WidgetsBinding
-//! - `flutter/lib/src/gestures/binding.dart` → GestureBinding
-//! - `flutter/lib/src/scheduler/binding.dart` → SchedulerBindingBehavior
+//! Flutter's mixin-based binding system:
+//! ```dart
+//! class WidgetsFlutterBinding extends BindingBase
+//!     with GestureBinding, SchedulerBinding, ServicesBinding,
+//!          SemanticsBinding, PaintingBinding, RendererBinding,
+//!          WidgetsBinding { }
+//! ```
 //!
-//! # Architecture
-//!
-//! ```text
-//! Binding (base trait - like BindingBase)
-//!   ├── init_instances()
-//!   ├── init_service_extensions()
-//!   └── is_initialized()
-//!
-//! RendererBindingBehavior : Binding
-//!   ├── root_pipeline_owner()
-//!   ├── render_views()
-//!   ├── add_render_view() / remove_render_view()
-//!   └── draw_frame()
-//!
-//! WidgetsBindingBehavior : RendererBindingBehavior
-//!   ├── build_owner()
-//!   ├── attach_root_widget()
-//!   └── build_scope()
-//!
-//! AppBinding (singleton, combines all bindings)
-//!   ├── renderer: RendererBinding
-//!   ├── widgets: WidgetsBinding (from flui-view)
-//!   ├── gestures: GestureBinding (from flui-interaction)
-//!   └── scheduler: Scheduler
+//! FLUI equivalent using composition:
+//! ```rust,ignore
+//! pub struct WidgetsFlutterBinding {
+//!     widgets: WidgetsBinding,
+//!     gestures: GestureBinding,
+//!     pipeline_owner: PipelineOwner,
+//!     scheduler: Scheduler,
+//!     renderer: RenderingFlutterBinding,
+//! }
 //! ```
 
 mod renderer_binding;
-mod traits;
 
-// Export traits
-pub use traits::{
-    Binding, GestureBindingBehavior, RendererBindingBehavior, SchedulerBindingBehavior,
-    WidgetsBindingBehavior,
-};
-
-// Export concrete implementations
-pub use renderer_binding::{RenderView, RendererBinding};
-
-// Re-export from other crates
+// Re-export bindings from their respective crates
 pub use flui_interaction::binding::GestureBinding;
+pub use flui_rendering::pipeline::PipelineOwner;
+pub use flui_scheduler::Scheduler;
+pub use flui_semantics::SemanticsBinding;
 pub use flui_view::WidgetsBinding;
+
+// Re-export local bindings
+pub use renderer_binding::RenderingFlutterBinding;
