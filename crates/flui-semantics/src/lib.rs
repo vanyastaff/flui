@@ -66,12 +66,14 @@
 // ============================================================================
 
 pub mod action;
+pub mod binding;
 pub mod configuration;
 pub mod event;
 pub mod flags;
 pub mod node;
 pub mod owner;
 pub mod properties;
+pub mod role;
 pub mod tree;
 pub mod update;
 
@@ -80,6 +82,15 @@ pub mod update;
 // ============================================================================
 
 pub use action::{ActionArgs, SemanticsAction, SemanticsActionHandler};
+
+// ============================================================================
+// RE-EXPORTS - Binding Types
+// ============================================================================
+
+pub use binding::{
+    AccessibilityFeatures, SemanticsActionEvent, SemanticsBinding, SemanticsHandle,
+    SemanticsService,
+};
 
 // ============================================================================
 // RE-EXPORTS - Configuration
@@ -121,6 +132,14 @@ pub use properties::{
 };
 
 // ============================================================================
+// RE-EXPORTS - Role Types
+// ============================================================================
+
+pub use role::{
+    AccessibilityFocusBlockType, Assertiveness, DebugSemanticsDumpOrder, SemanticsRole,
+};
+
+// ============================================================================
 // RE-EXPORTS - Tree Types
 // ============================================================================
 
@@ -150,10 +169,12 @@ pub use flui_foundation::SemanticsId;
 pub mod prelude {
     // Core types
     pub use crate::{
-        ActionArgs, AttributedString, SemanticsAction, SemanticsActionHandler,
-        SemanticsConfiguration, SemanticsEvent, SemanticsEventType, SemanticsFlag, SemanticsFlags,
-        SemanticsId, SemanticsNode, SemanticsNodeData, SemanticsNodeUpdate, SemanticsOwner,
-        SemanticsProperties, SemanticsTag, SemanticsTree, SemanticsTreeUpdate,
+        AccessibilityFeatures, AccessibilityFocusBlockType, ActionArgs, Assertiveness,
+        AttributedString, DebugSemanticsDumpOrder, SemanticsAction, SemanticsActionEvent,
+        SemanticsActionHandler, SemanticsBinding, SemanticsConfiguration, SemanticsEvent,
+        SemanticsEventType, SemanticsFlag, SemanticsFlags, SemanticsHandle, SemanticsId,
+        SemanticsNode, SemanticsNodeData, SemanticsNodeUpdate, SemanticsOwner, SemanticsProperties,
+        SemanticsRole, SemanticsService, SemanticsTag, SemanticsTree, SemanticsTreeUpdate,
         SemanticsTreeUpdateBuilder, TextDirection,
     };
 

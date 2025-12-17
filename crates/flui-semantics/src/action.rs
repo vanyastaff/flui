@@ -90,6 +90,15 @@ pub enum SemanticsAction {
 
     /// Unfocus action.
     Unfocus = 1 << 23,
+
+    /// Expand action (for expandable elements).
+    Expand = 1 << 24,
+
+    /// Collapse action (for expandable elements).
+    Collapse = 1 << 25,
+
+    /// Scroll to a specific offset.
+    ScrollToOffset = 1 << 26,
 }
 
 impl SemanticsAction {
@@ -126,6 +135,9 @@ impl SemanticsAction {
             Self::SetText => "setText",
             Self::Focus => "focus",
             Self::Unfocus => "unfocus",
+            Self::Expand => "expand",
+            Self::Collapse => "collapse",
+            Self::ScrollToOffset => "scrollToOffset",
         }
     }
 
@@ -156,7 +168,52 @@ impl SemanticsAction {
             Self::SetText,
             Self::Focus,
             Self::Unfocus,
+            Self::Expand,
+            Self::Collapse,
+            Self::ScrollToOffset,
         ]
+    }
+
+    /// Returns whether this action is a scroll action.
+    pub fn is_scroll_action(self) -> bool {
+        matches!(
+            self,
+            Self::ScrollLeft
+                | Self::ScrollRight
+                | Self::ScrollUp
+                | Self::ScrollDown
+                | Self::ScrollToOffset
+        )
+    }
+
+    /// Returns whether this action is a cursor movement action.
+    pub fn is_cursor_action(self) -> bool {
+        matches!(
+            self,
+            Self::MoveCursorForwardByCharacter
+                | Self::MoveCursorBackwardByCharacter
+                | Self::MoveCursorForwardByWord
+                | Self::MoveCursorBackwardByWord
+        )
+    }
+
+    /// Returns whether this action is a text editing action.
+    pub fn is_text_action(self) -> bool {
+        matches!(
+            self,
+            Self::SetSelection | Self::SetText | Self::Copy | Self::Cut | Self::Paste
+        )
+    }
+
+    /// Returns whether this action is a focus-related action.
+    pub fn is_focus_action(self) -> bool {
+        matches!(
+            self,
+            Self::Focus
+                | Self::Unfocus
+                | Self::DidGainAccessibilityFocus
+                | Self::DidLoseAccessibilityFocus
+        )
     }
 }
 
@@ -198,6 +255,14 @@ pub enum ActionArgs {
     MoveCursor {
         /// Whether to extend selection.
         extend_selection: bool,
+    },
+
+    /// Scroll to offset arguments.
+    ScrollToOffset {
+        /// Target X offset.
+        x: f64,
+        /// Target Y offset.
+        y: f64,
     },
 }
 
