@@ -1,64 +1,226 @@
-//! Scroll metrics types.
+//! Scroll metrics for tracking scroll state and position.
 //!
-//! This module provides types that describe the scroll position and extents
-//! of scrollable areas.
+//! Provides types for representing scroll position, bounds, and progress tracking
+//! in scrollable viewports.
 
 use flui_types::layout::Axis;
+use std::fmt;
+use std::hash::{Hash, Hasher};
 
-/// Scroll metrics with a fixed item extent.
+/// Common scroll metrics interface.
 ///
-/// # Flutter Equivalence
-///
-/// Corresponds to Flutter's `FixedExtentMetrics`. Describes the scroll position
-/// in a scrollable area where all items have the same extent.
-///
-/// # Examples
-///
-/// ```
-/// use flui_rendering::constraints::FixedExtentMetrics;
-/// use flui_types::layout::Axis;
-///
-/// let metrics = FixedExtentMetrics::new(
-///     0.0,        // min_scroll_extent
-///     1000.0,     // max_scroll_extent
-///     100.0,      // pixels (current scroll offset)
-///     800.0,      // viewport_dimension
-///     Axis::Vertical,
-///     50.0,       // item_extent
-/// );
-///
-/// assert_eq!(metrics.item_index(), 2);
-/// assert_eq!(metrics.item_extent, 50.0);
-/// ```
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct FixedExtentMetrics {
-    /// The minimum in-range value for `pixels`.
+/// Provides shared functionality for tracking scroll position, bounds,
+/// and progress in scrollable content.
+pub trait ScrollMetrics {
+    /// Minimum scroll extent (usually 0.0).
+    fn min_scroll_extent(&self) -> f32;
+
+    /// Maximum scroll extent (content size - viewport size).
+    fn max_scroll_extent(&self) -> f32;
+
+    /// Current scroll offset in pixels.
+    fn pixels(&self) -> f32;
+
+    /// Size of the viewport in the scroll axis.
+    fn viewport_dimension(&self) -> f32;
+
+    /// Scroll axis direction.
+    fn axis(&self) -> Axis;
+
+    // Derived queries with default implementations
+
+    /// Returns whether scroll is at minimum extent.
+    #[inline]
+    fn at_start(&self) -> bool {
+        self.pixels() <= self.min_scroll_extent()
+    }
+
+    /// Returns whether scroll is at maximum extent.
+    #[inline]
+    fn at_end(&self) -> bool {
+        self.pixels() >= self.max_scroll_extent()
+    }
+
+    /// Returns whether scroll is within bounds.
+    #[inline]
+    fn in_bounds(&self) -> bool {
+        self.pixels() >= self.min_scroll_extent() && self.pixels() <= self.max_scroll_extent()
+    }
+
+    /// Returns whether scroll is out of bounds.
+    #[inline]
+    fn out_of_bounds(&self) -> bool {
+        !self.in_bounds()
+    }
+
+    /// Returns the out-of-bounds distance (0.0 if in bounds).
+    #[inline]
+    fn out_of_bounds_distance(&self) -> f32 {
+        if self.pixels() < self.min_scroll_extent() {
+            self.min_scroll_extent() - self.pixels()
+        } else if self.pixels() > self.max_scroll_extent() {
+            self.pixels() - self.max_scroll_extent()
+        } else {
+            0.0
+        }
+    }
+
+    /// Returns scroll progress as a fraction (0.0 to 1.0).
     ///
-    /// The actual `pixels` value might be outside this range if the scroll
-    /// position is out of bounds.
+    /// Returns 0.0 if there's no scrollable range.
+    #[inline]
+    fn scroll_progress(&self) -> f32 {
+        let range = self.max_scroll_extent() - self.min_scroll_extent();
+        if range > 0.0 {
+            ((self.pixels() - self.min_scroll_extent()) / range).clamp(0.0, 1.0)
+        } else {
+            0.0
+        }
+    }
+
+    /// Returns the total scrollable extent.
+    #[inline]
+    fn scroll_extent(&self) -> f32 {
+        self.max_scroll_extent() - self.min_scroll_extent()
+    }
+
+    /// Returns the amount of content before the viewport.
+    #[inline]
+    fn before_viewport(&self) -> f32 {
+        (self.pixels() - self.min_scroll_extent()).max(0.0)
+    }
+
+    /// Returns the amount of content after the viewport.
+    #[inline]
+    fn after_viewport(&self) -> f32 {
+        (self.max_scroll_extent() - self.pixels() - self.viewport_dimension()).max(0.0)
+    }
+}
+
+// ============================================================================
+// FIXED SCROLL METRICS
+// ============================================================================
+
+/// Basic scroll metrics with fixed boundaries.
+///
+/// Tracks scroll position within defined min/max bounds without
+/// any assumptions about content structure.
+#[derive(Clone, Copy, PartialEq)]
+pub struct FixedScrollMetrics {
     pub min_scroll_extent: f32,
-
-    /// The maximum in-range value for `pixels`.
-    ///
-    /// The actual `pixels` value might be outside this range if the scroll
-    /// position is out of bounds.
     pub max_scroll_extent: f32,
-
-    /// The current scroll offset.
-    ///
-    /// This is the distance from the start of the scrollable area to the
-    /// leading edge of the viewport.
     pub pixels: f32,
-
-    /// The extent of the viewport along the scroll axis.
     pub viewport_dimension: f32,
-
-    /// The axis along which the viewport scrolls.
     pub axis: Axis,
+}
 
-    /// The fixed extent of each item.
-    ///
-    /// All items in the scrollable area have this extent along the main axis.
+impl FixedScrollMetrics {
+    /// Creates new fixed scroll metrics.
+    #[inline]
+    #[must_use]
+    pub const fn new(
+        min_scroll_extent: f32,
+        max_scroll_extent: f32,
+        pixels: f32,
+        viewport_dimension: f32,
+        axis: Axis,
+    ) -> Self {
+        Self {
+            min_scroll_extent,
+            max_scroll_extent,
+            pixels,
+            viewport_dimension,
+            axis,
+        }
+    }
+
+    /// Updates scroll position.
+    #[inline]
+    #[must_use]
+    pub const fn with_pixels(mut self, pixels: f32) -> Self {
+        self.pixels = pixels;
+        self
+    }
+
+    /// Updates viewport dimension.
+    #[inline]
+    #[must_use]
+    pub const fn with_viewport_dimension(mut self, dimension: f32) -> Self {
+        self.viewport_dimension = dimension;
+        self
+    }
+}
+
+impl ScrollMetrics for FixedScrollMetrics {
+    #[inline]
+    fn min_scroll_extent(&self) -> f32 {
+        self.min_scroll_extent
+    }
+
+    #[inline]
+    fn max_scroll_extent(&self) -> f32 {
+        self.max_scroll_extent
+    }
+
+    #[inline]
+    fn pixels(&self) -> f32 {
+        self.pixels
+    }
+
+    #[inline]
+    fn viewport_dimension(&self) -> f32 {
+        self.viewport_dimension
+    }
+
+    #[inline]
+    fn axis(&self) -> Axis {
+        self.axis
+    }
+}
+
+impl Hash for FixedScrollMetrics {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.min_scroll_extent.to_bits().hash(state);
+        self.max_scroll_extent.to_bits().hash(state);
+        self.pixels.to_bits().hash(state);
+        self.viewport_dimension.to_bits().hash(state);
+        self.axis.hash(state);
+    }
+}
+
+impl Eq for FixedScrollMetrics {}
+
+impl fmt::Debug for FixedScrollMetrics {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FixedScrollMetrics")
+            .field("pixels", &self.pixels)
+            .field(
+                "range",
+                &format!("{}..{}", self.min_scroll_extent, self.max_scroll_extent),
+            )
+            .field(
+                "progress",
+                &format!("{:.1}%", self.scroll_progress() * 100.0),
+            )
+            .finish()
+    }
+}
+
+// ============================================================================
+// FIXED EXTENT METRICS
+// ============================================================================
+
+/// Scroll metrics with uniform item sizing.
+///
+/// Extends basic scroll tracking with item-based calculations,
+/// assuming all items have the same extent.
+#[derive(Clone, Copy, PartialEq)]
+pub struct FixedExtentMetrics {
+    pub min_scroll_extent: f32,
+    pub max_scroll_extent: f32,
+    pub pixels: f32,
+    pub viewport_dimension: f32,
+    pub axis: Axis,
     pub item_extent: f32,
 }
 
@@ -66,7 +228,7 @@ impl FixedExtentMetrics {
     /// Creates new fixed extent metrics.
     #[inline]
     #[must_use]
-    pub fn new(
+    pub const fn new(
         min_scroll_extent: f32,
         max_scroll_extent: f32,
         pixels: f32,
@@ -84,9 +246,27 @@ impl FixedExtentMetrics {
         }
     }
 
-    /// Returns the current item index based on the scroll position.
+    /// Updates scroll position.
+    #[inline]
+    #[must_use]
+    pub const fn with_pixels(mut self, pixels: f32) -> Self {
+        self.pixels = pixels;
+        self
+    }
+
+    /// Updates viewport dimension.
+    #[inline]
+    #[must_use]
+    pub const fn with_viewport_dimension(mut self, dimension: f32) -> Self {
+        self.viewport_dimension = dimension;
+        self
+    }
+
+    // Item-specific calculations
+
+    /// Returns the current item index based on scroll position.
     ///
-    /// This is calculated as `floor(pixels / item_extent)`.
+    /// Calculates which item is at the leading edge of the viewport.
     #[inline]
     #[must_use]
     pub fn item_index(&self) -> usize {
@@ -97,34 +277,23 @@ impl FixedExtentMetrics {
         }
     }
 
-    /// Returns the fractional part of the current scroll position.
+    /// Returns the fractional offset within the current item.
     ///
-    /// This is the offset within the current item, in the range [0.0, 1.0).
+    /// Value is in [0.0, item_extent).
     #[inline]
     #[must_use]
-    pub fn item_offset_fraction(&self) -> f32 {
+    pub fn item_offset(&self) -> f32 {
         if self.item_extent > 0.0 {
-            (self.pixels % self.item_extent) / self.item_extent
+            self.pixels % self.item_extent
         } else {
             0.0
         }
     }
 
-    /// Returns how many items are fully or partially visible in the viewport.
+    /// Returns the total number of items in the scroll extent.
     #[inline]
     #[must_use]
-    pub fn visible_item_count(&self) -> usize {
-        if self.item_extent > 0.0 {
-            (self.viewport_dimension / self.item_extent).ceil() as usize + 1
-        } else {
-            0
-        }
-    }
-
-    /// Returns the total number of items that can be scrolled through.
-    #[inline]
-    #[must_use]
-    pub fn total_item_count(&self) -> usize {
+    pub fn total_items(&self) -> usize {
         if self.item_extent > 0.0 {
             ((self.max_scroll_extent - self.min_scroll_extent) / self.item_extent).ceil() as usize
         } else {
@@ -132,476 +301,137 @@ impl FixedExtentMetrics {
         }
     }
 
-    /// Returns whether the scroll position is at the start.
+    /// Returns the number of items visible in the viewport.
+    ///
+    /// May include partially visible items.
     #[inline]
     #[must_use]
-    pub fn at_edge_start(&self) -> bool {
-        self.pixels <= self.min_scroll_extent
-    }
-
-    /// Returns whether the scroll position is at the end.
-    #[inline]
-    #[must_use]
-    pub fn at_edge_end(&self) -> bool {
-        self.pixels >= self.max_scroll_extent
-    }
-
-    /// Returns whether the scroll position is out of bounds.
-    #[inline]
-    #[must_use]
-    pub fn out_of_range(&self) -> bool {
-        self.pixels < self.min_scroll_extent || self.pixels > self.max_scroll_extent
-    }
-
-    /// Returns the amount of overscroll at the start.
-    #[inline]
-    #[must_use]
-    pub fn overscroll_start(&self) -> f32 {
-        if self.pixels < self.min_scroll_extent {
-            self.min_scroll_extent - self.pixels
-        } else {
-            0.0
-        }
-    }
-
-    /// Returns the amount of overscroll at the end.
-    #[inline]
-    #[must_use]
-    pub fn overscroll_end(&self) -> f32 {
-        if self.pixels > self.max_scroll_extent {
-            self.pixels - self.max_scroll_extent
-        } else {
-            0.0
-        }
-    }
-
-    /// Returns the total scrollable extent.
-    #[inline]
-    #[must_use]
-    pub fn extent(&self) -> f32 {
-        self.max_scroll_extent - self.min_scroll_extent
-    }
-
-    /// Returns the pixel offset of a specific item.
-    #[inline]
-    #[must_use]
-    pub fn item_offset(&self, index: usize) -> f32 {
-        self.min_scroll_extent + (index as f32 * self.item_extent)
-    }
-
-    /// Returns the range of visible item indices (start, end).
-    #[inline]
-    #[must_use]
-    pub fn visible_item_range(&self) -> (usize, usize) {
-        let start = self.item_index();
-        let end = start + self.visible_item_count();
-        (start, end.min(self.total_item_count()))
-    }
-
-    /// Clamp a scroll position to valid bounds.
-    #[inline]
-    #[must_use]
-    pub fn clamp_pixels(&self, pixels: f32) -> f32 {
-        pixels.clamp(self.min_scroll_extent, self.max_scroll_extent)
-    }
-
-    /// Snap to the nearest item boundary.
-    #[inline]
-    #[must_use]
-    pub fn snap_to_item(&self) -> f32 {
+    pub fn visible_items(&self) -> usize {
         if self.item_extent > 0.0 {
-            (self.pixels / self.item_extent).round() * self.item_extent
-        } else {
-            self.pixels
-        }
-    }
-
-    /// Returns whether this metrics represents infinite scrolling (no bounds).
-    #[inline]
-    #[must_use]
-    pub fn is_infinite(&self) -> bool {
-        self.max_scroll_extent.is_infinite()
-    }
-}
-
-/// Fixed scroll metrics.
-///
-/// # Flutter Equivalence
-///
-/// Corresponds to Flutter's `FixedScrollMetrics`. Describes the scroll position
-/// in a scrollable area with fixed boundaries.
-///
-/// # Examples
-///
-/// ```
-/// use flui_rendering::constraints::FixedScrollMetrics;
-/// use flui_types::layout::Axis;
-///
-/// let metrics = FixedScrollMetrics::new(
-///     0.0,        // min_scroll_extent
-///     1000.0,     // max_scroll_extent
-///     100.0,      // pixels (current scroll offset)
-///     800.0,      // viewport_dimension
-///     Axis::Vertical,
-/// );
-///
-/// assert_eq!(metrics.pixels, 100.0);
-/// assert!(!metrics.at_edge_start());
-/// ```
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct FixedScrollMetrics {
-    /// The minimum in-range value for `pixels`.
-    pub min_scroll_extent: f32,
-
-    /// The maximum in-range value for `pixels`.
-    pub max_scroll_extent: f32,
-
-    /// The current scroll offset in pixels.
-    pub pixels: f32,
-
-    /// The extent of the viewport along the scroll axis.
-    pub viewport_dimension: f32,
-
-    /// The axis along which the viewport scrolls.
-    pub axis: Axis,
-}
-
-impl FixedScrollMetrics {
-    /// Creates new fixed scroll metrics.
-    #[inline]
-    #[must_use]
-    pub fn new(
-        min_scroll_extent: f32,
-        max_scroll_extent: f32,
-        pixels: f32,
-        viewport_dimension: f32,
-        axis: Axis,
-    ) -> Self {
-        Self {
-            min_scroll_extent,
-            max_scroll_extent,
-            pixels,
-            viewport_dimension,
-            axis,
-        }
-    }
-
-    /// Returns the total scrollable extent.
-    #[inline]
-    #[must_use]
-    pub fn extent(&self) -> f32 {
-        self.max_scroll_extent - self.min_scroll_extent
-    }
-
-    /// Returns whether the scroll position is at the start.
-    #[inline]
-    #[must_use]
-    pub fn at_edge_start(&self) -> bool {
-        self.pixels <= self.min_scroll_extent
-    }
-
-    /// Returns whether the scroll position is at the end.
-    #[inline]
-    #[must_use]
-    pub fn at_edge_end(&self) -> bool {
-        self.pixels >= self.max_scroll_extent
-    }
-
-    /// Returns whether the scroll position is out of bounds.
-    #[inline]
-    #[must_use]
-    pub fn out_of_range(&self) -> bool {
-        self.pixels < self.min_scroll_extent || self.pixels > self.max_scroll_extent
-    }
-
-    /// Returns the amount of overscroll at the start.
-    #[inline]
-    #[must_use]
-    pub fn overscroll_start(&self) -> f32 {
-        if self.pixels < self.min_scroll_extent {
-            self.min_scroll_extent - self.pixels
-        } else {
-            0.0
-        }
-    }
-
-    /// Returns the amount of overscroll at the end.
-    #[inline]
-    #[must_use]
-    pub fn overscroll_end(&self) -> f32 {
-        if self.pixels > self.max_scroll_extent {
-            self.pixels - self.max_scroll_extent
-        } else {
-            0.0
-        }
-    }
-
-    /// Returns the fraction of the scrollable extent that is currently scrolled.
-    ///
-    /// Returns a value between 0.0 (at start) and 1.0 (at end).
-    /// Returns 0.0 if the extent is zero.
-    #[inline]
-    #[must_use]
-    pub fn scroll_fraction(&self) -> f32 {
-        let extent = self.extent();
-        if extent > 0.0 {
-            ((self.pixels - self.min_scroll_extent) / extent).clamp(0.0, 1.0)
-        } else {
-            0.0
-        }
-    }
-
-    /// Returns the number of viewport-sized pages in the scrollable area.
-    #[inline]
-    #[must_use]
-    pub fn page_count(&self) -> f32 {
-        if self.viewport_dimension > 0.0 {
-            self.extent() / self.viewport_dimension
-        } else {
-            0.0
-        }
-    }
-
-    /// Returns the current page index (0-based).
-    ///
-    /// This is calculated based on the viewport dimension.
-    #[inline]
-    #[must_use]
-    pub fn current_page(&self) -> usize {
-        if self.viewport_dimension > 0.0 {
-            ((self.pixels - self.min_scroll_extent) / self.viewport_dimension)
-                .floor()
-                .max(0.0) as usize
+            (self.viewport_dimension / self.item_extent).ceil() as usize
         } else {
             0
         }
     }
+}
 
-    /// Returns the amount of content visible beyond the trailing edge.
+impl ScrollMetrics for FixedExtentMetrics {
     #[inline]
-    #[must_use]
-    pub fn trailing_content(&self) -> f32 {
-        (self.max_scroll_extent - self.pixels).max(0.0)
+    fn min_scroll_extent(&self) -> f32 {
+        self.min_scroll_extent
     }
 
-    /// Returns the amount of content before the leading edge.
     #[inline]
-    #[must_use]
-    pub fn leading_content(&self) -> f32 {
-        (self.pixels - self.min_scroll_extent).max(0.0)
+    fn max_scroll_extent(&self) -> f32 {
+        self.max_scroll_extent
     }
 
-    /// Clamp a scroll position to valid bounds.
     #[inline]
-    #[must_use]
-    pub fn clamp_pixels(&self, pixels: f32) -> f32 {
-        pixels.clamp(self.min_scroll_extent, self.max_scroll_extent)
+    fn pixels(&self) -> f32 {
+        self.pixels
     }
 
-    /// Returns whether this metrics represents infinite scrolling (no bounds).
     #[inline]
-    #[must_use]
-    pub fn is_infinite(&self) -> bool {
-        self.max_scroll_extent.is_infinite()
+    fn viewport_dimension(&self) -> f32 {
+        self.viewport_dimension
     }
 
-    /// Returns whether the scroll is within valid bounds.
     #[inline]
-    #[must_use]
-    pub fn is_in_range(&self) -> bool {
-        !self.out_of_range()
-    }
-
-    /// Scroll to a specific fraction (0.0 = start, 1.0 = end).
-    #[inline]
-    #[must_use]
-    pub fn pixels_from_fraction(&self, fraction: f32) -> f32 {
-        self.min_scroll_extent + (self.extent() * fraction.clamp(0.0, 1.0))
-    }
-
-    /// Scroll to a specific page index.
-    #[inline]
-    #[must_use]
-    pub fn pixels_from_page(&self, page: usize) -> f32 {
-        self.min_scroll_extent + (page as f32 * self.viewport_dimension)
-    }
-
-    /// Returns the total amount of overscroll (start + end).
-    #[inline]
-    #[must_use]
-    pub fn total_overscroll(&self) -> f32 {
-        self.overscroll_start() + self.overscroll_end()
-    }
-
-    /// Returns whether the viewport can scroll (content exceeds viewport).
-    #[inline]
-    #[must_use]
-    pub fn can_scroll(&self) -> bool {
-        self.extent() > self.viewport_dimension
-    }
-
-    /// Copy metrics with new pixel offset.
-    #[inline]
-    #[must_use]
-    pub fn with_pixels(&self, pixels: f32) -> Self {
-        Self { pixels, ..*self }
+    fn axis(&self) -> Axis {
+        self.axis
     }
 }
+
+impl Hash for FixedExtentMetrics {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.min_scroll_extent.to_bits().hash(state);
+        self.max_scroll_extent.to_bits().hash(state);
+        self.pixels.to_bits().hash(state);
+        self.viewport_dimension.to_bits().hash(state);
+        self.axis.hash(state);
+        self.item_extent.to_bits().hash(state);
+    }
+}
+
+impl Eq for FixedExtentMetrics {}
+
+impl fmt::Debug for FixedExtentMetrics {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FixedExtentMetrics")
+            .field("pixels", &self.pixels)
+            .field("item", &format!("#{}", self.item_index()))
+            .field(
+                "progress",
+                &format!("{:.1}%", self.scroll_progress() * 100.0),
+            )
+            .finish()
+    }
+}
+
+// ============================================================================
+// TESTS
+// ============================================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
 
     #[test]
-    fn test_fixed_extent_metrics_new() {
-        let metrics = FixedExtentMetrics::new(0.0, 1000.0, 100.0, 800.0, Axis::Vertical, 50.0);
+    fn test_scroll_metrics_trait() {
+        let metrics = FixedScrollMetrics::new(0.0, 1000.0, 500.0, 800.0, Axis::Vertical);
 
-        assert_eq!(metrics.min_scroll_extent, 0.0);
-        assert_eq!(metrics.max_scroll_extent, 1000.0);
-        assert_eq!(metrics.pixels, 100.0);
-        assert_eq!(metrics.viewport_dimension, 800.0);
-        assert_eq!(metrics.axis, Axis::Vertical);
-        assert_eq!(metrics.item_extent, 50.0);
+        assert_eq!(metrics.scroll_progress(), 0.5);
+        assert!(!metrics.at_start());
+        assert!(!metrics.at_end());
+        assert!(metrics.in_bounds());
+        assert_eq!(metrics.scroll_extent(), 1000.0);
     }
 
     #[test]
-    fn test_fixed_extent_metrics_item_index() {
-        let metrics = FixedExtentMetrics::new(0.0, 1000.0, 100.0, 800.0, Axis::Vertical, 50.0);
+    fn test_bounds_checking() {
+        let metrics = FixedScrollMetrics::new(0.0, 1000.0, -50.0, 800.0, Axis::Vertical);
+
+        assert!(metrics.out_of_bounds());
+        assert_eq!(metrics.out_of_bounds_distance(), 50.0);
+
+        let in_bounds = metrics.with_pixels(500.0);
+        assert!(in_bounds.in_bounds());
+        assert_eq!(in_bounds.out_of_bounds_distance(), 0.0);
+    }
+
+    #[test]
+    fn test_fixed_extent_items() {
+        let metrics = FixedExtentMetrics::new(0.0, 1000.0, 125.0, 800.0, Axis::Vertical, 50.0);
+
         assert_eq!(metrics.item_index(), 2);
-
-        let metrics2 = FixedExtentMetrics::new(0.0, 1000.0, 125.0, 800.0, Axis::Vertical, 50.0);
-        assert_eq!(metrics2.item_index(), 2);
-
-        let metrics3 = FixedExtentMetrics::new(0.0, 1000.0, 150.0, 800.0, Axis::Vertical, 50.0);
-        assert_eq!(metrics3.item_index(), 3);
+        assert_eq!(metrics.item_offset(), 25.0);
+        assert_eq!(metrics.total_items(), 20);
+        assert_eq!(metrics.visible_items(), 16);
     }
 
     #[test]
-    fn test_fixed_extent_metrics_visible_count() {
-        let metrics = FixedExtentMetrics::new(0.0, 1000.0, 0.0, 800.0, Axis::Vertical, 50.0);
-        assert_eq!(metrics.visible_item_count(), 17); // ceil(800/50) + 1
+    fn test_hash_equality() {
+        let m1 = FixedScrollMetrics::new(0.0, 1000.0, 100.0, 800.0, Axis::Vertical);
+        let m2 = FixedScrollMetrics::new(0.0, 1000.0, 100.0, 800.0, Axis::Vertical);
+        let m3 = FixedScrollMetrics::new(0.0, 1000.0, 200.0, 800.0, Axis::Vertical);
+
+        assert_eq!(m1, m2);
+        assert_ne!(m1, m3);
+
+        let mut set = HashSet::new();
+        set.insert(m1);
+        assert!(set.contains(&m2));
+        assert!(!set.contains(&m3));
     }
 
     #[test]
-    fn test_fixed_extent_metrics_total_count() {
-        let metrics = FixedExtentMetrics::new(0.0, 1000.0, 0.0, 800.0, Axis::Vertical, 50.0);
-        assert_eq!(metrics.total_item_count(), 20); // ceil(1000/50)
-    }
+    fn test_builder_pattern() {
+        let metrics = FixedScrollMetrics::new(0.0, 1000.0, 0.0, 800.0, Axis::Vertical)
+            .with_pixels(500.0)
+            .with_viewport_dimension(600.0);
 
-    #[test]
-    fn test_fixed_extent_metrics_edges() {
-        let at_start = FixedExtentMetrics::new(0.0, 1000.0, 0.0, 800.0, Axis::Vertical, 50.0);
-        assert!(at_start.at_edge_start());
-        assert!(!at_start.at_edge_end());
-
-        let at_end = FixedExtentMetrics::new(0.0, 1000.0, 1000.0, 800.0, Axis::Vertical, 50.0);
-        assert!(!at_end.at_edge_start());
-        assert!(at_end.at_edge_end());
-
-        let in_middle = FixedExtentMetrics::new(0.0, 1000.0, 500.0, 800.0, Axis::Vertical, 50.0);
-        assert!(!in_middle.at_edge_start());
-        assert!(!in_middle.at_edge_end());
-    }
-
-    #[test]
-    fn test_fixed_extent_metrics_overscroll() {
-        let overscroll_start =
-            FixedExtentMetrics::new(0.0, 1000.0, -50.0, 800.0, Axis::Vertical, 50.0);
-        assert_eq!(overscroll_start.overscroll_start(), 50.0);
-        assert_eq!(overscroll_start.overscroll_end(), 0.0);
-        assert!(overscroll_start.out_of_range());
-
-        let overscroll_end =
-            FixedExtentMetrics::new(0.0, 1000.0, 1050.0, 800.0, Axis::Vertical, 50.0);
-        assert_eq!(overscroll_end.overscroll_start(), 0.0);
-        assert_eq!(overscroll_end.overscroll_end(), 50.0);
-        assert!(overscroll_end.out_of_range());
-
-        let in_range = FixedExtentMetrics::new(0.0, 1000.0, 500.0, 800.0, Axis::Vertical, 50.0);
-        assert_eq!(in_range.overscroll_start(), 0.0);
-        assert_eq!(in_range.overscroll_end(), 0.0);
-        assert!(!in_range.out_of_range());
-    }
-
-    #[test]
-    fn test_fixed_scroll_metrics_new() {
-        let metrics = FixedScrollMetrics::new(0.0, 1000.0, 100.0, 800.0, Axis::Vertical);
-
-        assert_eq!(metrics.min_scroll_extent, 0.0);
-        assert_eq!(metrics.max_scroll_extent, 1000.0);
-        assert_eq!(metrics.pixels, 100.0);
-        assert_eq!(metrics.viewport_dimension, 800.0);
-        assert_eq!(metrics.axis, Axis::Vertical);
-    }
-
-    #[test]
-    fn test_fixed_scroll_metrics_extent() {
-        let metrics = FixedScrollMetrics::new(0.0, 1000.0, 100.0, 800.0, Axis::Vertical);
-        assert_eq!(metrics.extent(), 1000.0);
-
-        let metrics2 = FixedScrollMetrics::new(100.0, 900.0, 200.0, 800.0, Axis::Vertical);
-        assert_eq!(metrics2.extent(), 800.0);
-    }
-
-    #[test]
-    fn test_fixed_scroll_metrics_edges() {
-        let at_start = FixedScrollMetrics::new(0.0, 1000.0, 0.0, 800.0, Axis::Vertical);
-        assert!(at_start.at_edge_start());
-        assert!(!at_start.at_edge_end());
-
-        let at_end = FixedScrollMetrics::new(0.0, 1000.0, 1000.0, 800.0, Axis::Vertical);
-        assert!(!at_end.at_edge_start());
-        assert!(at_end.at_edge_end());
-    }
-
-    #[test]
-    fn test_fixed_scroll_metrics_scroll_fraction() {
-        let at_start = FixedScrollMetrics::new(0.0, 1000.0, 0.0, 800.0, Axis::Vertical);
-        assert_eq!(at_start.scroll_fraction(), 0.0);
-
-        let at_middle = FixedScrollMetrics::new(0.0, 1000.0, 500.0, 800.0, Axis::Vertical);
-        assert_eq!(at_middle.scroll_fraction(), 0.5);
-
-        let at_end = FixedScrollMetrics::new(0.0, 1000.0, 1000.0, 800.0, Axis::Vertical);
-        assert_eq!(at_end.scroll_fraction(), 1.0);
-    }
-
-    #[test]
-    fn test_fixed_scroll_metrics_page_count() {
-        let metrics = FixedScrollMetrics::new(0.0, 1600.0, 0.0, 800.0, Axis::Vertical);
-        assert_eq!(metrics.page_count(), 2.0);
-
-        let metrics2 = FixedScrollMetrics::new(0.0, 1000.0, 0.0, 400.0, Axis::Vertical);
-        assert_eq!(metrics2.page_count(), 2.5);
-    }
-
-    #[test]
-    fn test_fixed_scroll_metrics_current_page() {
-        let page0 = FixedScrollMetrics::new(0.0, 1600.0, 0.0, 800.0, Axis::Vertical);
-        assert_eq!(page0.current_page(), 0);
-
-        let page1 = FixedScrollMetrics::new(0.0, 1600.0, 800.0, 800.0, Axis::Vertical);
-        assert_eq!(page1.current_page(), 1);
-
-        let page1_partial = FixedScrollMetrics::new(0.0, 1600.0, 850.0, 800.0, Axis::Vertical);
-        assert_eq!(page1_partial.current_page(), 1);
-    }
-
-    #[test]
-    fn test_fixed_scroll_metrics_overscroll() {
-        let overscroll_start = FixedScrollMetrics::new(0.0, 1000.0, -50.0, 800.0, Axis::Vertical);
-        assert_eq!(overscroll_start.overscroll_start(), 50.0);
-        assert_eq!(overscroll_start.overscroll_end(), 0.0);
-
-        let overscroll_end = FixedScrollMetrics::new(0.0, 1000.0, 1050.0, 800.0, Axis::Vertical);
-        assert_eq!(overscroll_end.overscroll_start(), 0.0);
-        assert_eq!(overscroll_end.overscroll_end(), 50.0);
-    }
-
-    #[test]
-    fn test_fixed_scroll_metrics_content() {
-        let metrics = FixedScrollMetrics::new(0.0, 1000.0, 200.0, 800.0, Axis::Vertical);
-        assert_eq!(metrics.leading_content(), 200.0);
-        assert_eq!(metrics.trailing_content(), 800.0);
+        assert_eq!(metrics.pixels, 500.0);
+        assert_eq!(metrics.viewport_dimension, 600.0);
     }
 }

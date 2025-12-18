@@ -1,30 +1,80 @@
-//! Layout constraints for the rendering layer.
+//! Layout constraints system for FLUI rendering pipeline.
 //!
-//! This module provides constraint types used in the rendering pipeline.
-//! Constraints flow down from parent to child during layout, describing
-//! the space available for the child.
+//! This module provides constraint types that follow Flutter's proven constraint model
+//! while leveraging Rust's type system and performance characteristics.
 //!
-//! # Constraint Types
+//! # Core Concepts
 //!
-//! - [`BoxConstraints`]: 2D rectangular constraints (min/max width/height)
-//! - [`SliverConstraints`]: Scrollable viewport constraints
-//! - [`SliverGeometry`]: Layout output for slivers
+//! ## Constraint Types
 //!
-//! # Direction Types
+//! - [`BoxConstraints`] - Rectangular constraints for box-based layout (min/max width/height)
+//! - [`SliverConstraints`] - Viewport-aware constraints for scrollable content
+//! - [`SliverGeometry`] - Layout results describing space occupied by slivers
 //!
-//! - [`GrowthDirection`]: Direction in which content grows in scrollable areas
+//! ## Direction Types
 //!
-//! # Scroll Metrics
+//! - [`GrowthDirection`] - Content growth direction in scrollable areas
 //!
-//! - [`FixedScrollMetrics`]: Scroll metrics with fixed boundaries
-//! - [`FixedExtentMetrics`]: Scroll metrics with fixed item extent
+//! ## Scroll State
+//!
+//! - [`FixedScrollMetrics`] - Scroll position and bounds tracking
+//! - [`FixedExtentMetrics`] - Scroll metrics with uniform item sizing
+//!
+//! # Performance Features
+//!
+//! All constraint types are optimized for performance-critical layout operations:
+//!
+//! - **Hash + Eq** - Enable efficient constraint-based caching
+//! - **Normalization** - Consistent floating-point comparison for cache keys
+//! - **Copy semantics** - Zero-cost constraint passing
+//! - **Const constructors** - Compile-time initialization where possible
+//!
+//! ## Layout Caching
+//!
+//! Constraints can be used as cache keys to avoid redundant layout calculations:
+//!
+//! ```ignore
+//! use std::collections::HashMap;
+//! use flui_rendering::constraints::BoxConstraints;
+//!
+//! let mut cache = HashMap::new();
+//!
+//! // Normalize constraints for stable cache keys
+//! let key = constraints.normalize();
+//! cache.insert(key, computed_size);
+//! ```
+//!
+//! ## Batch Operations
+//!
+//! BoxConstraints supports SIMD-accelerated batch operations when the `simd` feature is enabled:
+//!
+//! ```ignore
+//! #[cfg(feature = "simd")]
+//! {
+//!     let sizes = vec![/* many sizes */];
+//!     let constrained = constraints.batch_constrain(&sizes);
+//! }
+//! ```
+//!
+//! # Builder Pattern
+//!
+//! All constraint types provide fluent builder APIs:
+//!
+//! ```ignore
+//! let constraints = BoxConstraints::UNCONSTRAINED
+//!     .with_min_width(10.0)
+//!     .with_max_width(100.0)
+//!     .with_tight_height(50.0);
+//! ```
 //!
 //! # Flutter Equivalence
 //!
-//! - `BoxConstraints` → Flutter's `BoxConstraints`
-//! - `SliverConstraints` → Flutter's `SliverConstraints`
-//! - `SliverGeometry` → Flutter's `SliverGeometry`
-//! - `GrowthDirection` → Flutter's `GrowthDirection`
+//! Types map directly to Flutter's constraint system:
+//!
+//! - `BoxConstraints` ↔ Flutter `BoxConstraints`
+//! - `SliverConstraints` ↔ Flutter `SliverConstraints`
+//! - `SliverGeometry` ↔ Flutter `SliverGeometry`
+//! - `GrowthDirection` ↔ Flutter `GrowthDirection`
 
 mod box_constraints;
 mod direction;
@@ -34,85 +84,35 @@ mod sliver_geometry;
 
 pub use box_constraints::BoxConstraints;
 pub use direction::GrowthDirection;
-pub use scroll_metrics::{FixedExtentMetrics, FixedScrollMetrics};
+pub use scroll_metrics::{FixedExtentMetrics, FixedScrollMetrics, ScrollMetrics};
 pub use sliver_constraints::SliverConstraints;
 pub use sliver_geometry::SliverGeometry;
 
 use std::fmt;
 
-/// Abstract constraints trait following Flutter's protocol.
+/// Abstract constraint trait following Flutter's protocol.
 ///
-/// This trait defines the contract for all constraint types in FLUI,
-/// matching Flutter's abstract `Constraints` class.
-///
-/// # Flutter Equivalence
-///
-/// ```dart
-/// abstract class Constraints {
-///   const Constraints();
-///   bool get isTight;
-///   bool get isNormalized;
-///   bool debugAssertIsValid({bool isAppliedConstraint = false});
-/// }
-/// ```
-///
-/// # Required Properties
-///
-/// ## `is_tight()`
-/// Returns whether exactly one size satisfies these constraints.
-/// For box constraints, this means `min == max` for both dimensions.
-///
-/// ## `is_normalized()`
-/// Returns whether constraints are in canonical form:
-/// - All min values are non-negative
-/// - All min values <= max values
-/// - No NaN or invalid values
+/// Defines the contract for all constraint types in FLUI, matching Flutter's
+/// abstract `Constraints` class.
 pub trait Constraints: Clone + PartialEq + fmt::Debug + Send + Sync + 'static {
-    /// Whether exactly one size satisfies these constraints.
+    /// Returns whether exactly one size satisfies these constraints.
     ///
-    /// For `BoxConstraints`, returns true if:
-    /// - `min_width == max_width` AND
-    /// - `min_height == max_height`
-    ///
-    /// For `SliverConstraints`, always returns false (slivers don't have tight constraints).
-    ///
-    /// # Flutter Equivalence
-    ///
-    /// ```dart
-    /// bool get isTight;
-    /// ```
+    /// Tight constraints force a specific size and leave no flexibility
+    /// for the child to choose its own dimensions.
     fn is_tight(&self) -> bool;
 
-    /// Whether constraints are in canonical form.
+    /// Returns whether constraints are in canonical/valid form.
     ///
-    /// Returns true if:
-    /// - All values are non-negative (>= 0.0)
-    /// - All min values <= max values
-    /// - No NaN values
-    ///
-    /// # Flutter Equivalence
-    ///
-    /// ```dart
-    /// bool get isNormalized;
-    /// ```
+    /// Normalized constraints have non-negative values and proper ordering
+    /// (min <= max). Invalid constraints violate layout invariants.
     fn is_normalized(&self) -> bool;
 
-    /// Validates constraints (debug mode only).
+    /// Validates constraint invariants in debug builds.
     ///
     /// # Parameters
     ///
-    /// - `is_applied_constraint`: Whether these constraints are about to be
-    ///   applied during a layout call. If true, performs additional validation
-    ///   (e.g., ensuring max values are finite).
-    ///
-    /// # Flutter Equivalence
-    ///
-    /// ```dart
-    /// bool debugAssertIsValid({
-    ///   bool isAppliedConstraint = false,
-    ///   InformationCollector? informationCollector,
-    /// });
-    /// ```
+    /// - `is_applied_constraint`: Whether these constraints are being passed
+    ///   to a child during layout (enables stricter validation)
     #[cfg(debug_assertions)]
     fn debug_assert_is_valid(&self, is_applied_constraint: bool) -> bool {
         debug_assert!(
@@ -122,17 +122,33 @@ pub trait Constraints: Clone + PartialEq + fmt::Debug + Send + Sync + 'static {
         );
 
         if is_applied_constraint {
-            // Additional validation for constraints being applied
-            // Override in implementation if needed
+            // Additional validation for applied constraints
         }
 
         true
     }
 
-    /// Validates constraints (no-op in release mode).
+    /// No-op in release builds for zero overhead.
     #[cfg(not(debug_assertions))]
     #[inline]
     fn debug_assert_is_valid(&self, _is_applied_constraint: bool) -> bool {
         true
     }
+}
+
+/// Convenience prelude for common imports.
+///
+/// # Example
+///
+/// ```ignore
+/// use flui_rendering::constraints::prelude::*;
+///
+/// let constraints = BoxConstraints::tight(Size::new(100.0, 100.0));
+/// let normalized = constraints.normalize();
+/// ```
+pub mod prelude {
+    pub use super::{
+        BoxConstraints, Constraints, FixedExtentMetrics, FixedScrollMetrics, GrowthDirection,
+        ScrollMetrics, SliverConstraints, SliverGeometry,
+    };
 }
