@@ -1,620 +1,238 @@
-//! Box parent data types.
+//! BoxParentData - Cartesian positioning metadata for box layout children.
 
 use flui_types::Offset;
+use std::hash::{Hash, Hasher};
+
+use super::base::ParentData;
 
 // ============================================================================
-// BoxParentData
+// BOX PARENT DATA
 // ============================================================================
 
-/// Parent data for children of box render objects.
+/// Parent data for box protocol children storing 2D offset.
 ///
-/// Stores the offset at which to paint the child in the parent's
-/// coordinate system.
+/// Used by parent render objects to position children in Cartesian space.
+/// The offset is relative to the parent's top-left corner.
 ///
-/// # Flutter Equivalence
-///
-/// ```dart
-/// class BoxParentData extends ParentData {
-///   Offset offset = Offset.zero;
-/// }
-/// ```
-///
-/// # Example
+/// # Usage
 ///
 /// ```ignore
 /// use flui_rendering::parent_data::BoxParentData;
 /// use flui_types::Offset;
 ///
-/// let mut data = BoxParentData::default();
-/// data.offset = Offset::new(10.0, 20.0);
+/// // Create with builder
+/// let data = BoxParentData::new(Offset::new(10.0, 20.0));
+///
+/// // Or use default (zero offset)
+/// let data = BoxParentData::default();
+///
+/// // Builder pattern
+/// let data = BoxParentData::zero()
+///     .with_offset(Offset::new(10.0, 20.0));
 /// ```
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct BoxParentData {
-    /// The offset at which to paint the child in the parent's coordinate system.
+    /// Offset of child relative to parent's top-left corner.
     pub offset: Offset,
 }
 
 impl BoxParentData {
-    /// Creates new BoxParentData with the given offset.
+    /// Create parent data with specific offset.
     #[inline]
-    pub fn new(offset: Offset) -> Self {
+    pub const fn new(offset: Offset) -> Self {
         Self { offset }
     }
 
-    /// Creates BoxParentData with zero offset.
+    /// Create parent data with zero offset (at parent's origin).
     #[inline]
-    pub fn zero() -> Self {
-        Self::default()
-    }
-}
-
-impl crate::ParentData for BoxParentData {}
-
-// ============================================================================
-// ContainerBoxParentData
-// ============================================================================
-
-/// Parent data for children in a container with multiple box children.
-///
-/// Extends [`BoxParentData`] with sibling pointers for efficient
-/// iteration through children.
-///
-/// # Flutter Equivalence
-///
-/// ```dart
-/// abstract class ContainerBoxParentData<ChildType extends RenderObject>
-///     extends BoxParentData with ContainerParentDataMixin<ChildType> {}
-/// ```
-///
-/// # Note
-///
-/// In Rust we don't use sibling pointers. Instead, children are stored
-/// in a Vec or similar collection in the parent. This type exists for
-/// API compatibility and to store additional metadata.
-#[derive(Debug, Clone, Default)]
-pub struct ContainerBoxParentData {
-    /// The offset at which to paint the child.
-    pub offset: Offset,
-}
-
-impl ContainerBoxParentData {
-    /// Creates new ContainerBoxParentData with the given offset.
-    #[inline]
-    pub fn new(offset: Offset) -> Self {
-        Self { offset }
-    }
-}
-
-impl From<BoxParentData> for ContainerBoxParentData {
-    fn from(data: BoxParentData) -> Self {
+    pub const fn zero() -> Self {
         Self {
-            offset: data.offset,
+            offset: Offset::ZERO,
         }
     }
+
+    /// Builder: set offset (consumes self).
+    #[inline]
+    pub const fn with_offset(mut self, offset: Offset) -> Self {
+        self.offset = offset;
+        self
+    }
+
+    /// Check if offset is at origin.
+    #[inline]
+    pub fn is_zero(&self) -> bool {
+        self.offset == Offset::ZERO
+    }
+
+    /// Set offset to zero (mutating).
+    #[inline]
+    pub fn reset(&mut self) {
+        self.offset = Offset::ZERO;
+    }
 }
 
-impl crate::ParentData for ContainerBoxParentData {}
-
 // ============================================================================
-// FlexParentData
+// TRAIT IMPLEMENTATIONS
 // ============================================================================
 
-/// Parent data for children of flex (Row/Column) render objects.
-///
-/// Extends [`ContainerBoxParentData`] with flex factor and fit mode.
-///
-/// # Flutter Equivalence
-///
-/// ```dart
-/// class FlexParentData extends ContainerBoxParentData<RenderBox> {
-///   int? flex;
-///   FlexFit fit = FlexFit.tight;
-/// }
-/// ```
-#[derive(Debug, Clone)]
-pub struct FlexParentData {
-    /// The offset at which to paint the child.
-    pub offset: Offset,
-
-    /// The flex factor for this child.
-    ///
-    /// If None, the child is inflexible and determines its own size.
-    /// If Some, the child's size along the main axis is determined by
-    /// dividing free space according to flex factors.
-    pub flex: Option<u32>,
-
-    /// How the child should be inscribed into the space allocated by flex.
-    pub fit: FlexFit,
-}
-
-impl Default for FlexParentData {
+impl Default for BoxParentData {
     fn default() -> Self {
-        Self {
-            offset: Offset::ZERO,
-            flex: None,
-            fit: FlexFit::Tight,
-        }
+        Self::zero()
     }
 }
 
-impl crate::ParentData for FlexParentData {}
+impl ParentData for BoxParentData {}
 
-/// How a flexible child is inscribed into available space.
-///
-/// # Flutter Equivalence
-///
-/// ```dart
-/// enum FlexFit { tight, loose }
-/// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum FlexFit {
-    /// The child is forced to fill available space.
-    #[default]
-    Tight,
+// Hash implementation for caching layout results
+impl Hash for BoxParentData {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        // Hash offset components as bits to avoid float precision issues
+        self.offset.x.to_bits().hash(state);
+        self.offset.y.to_bits().hash(state);
+    }
+}
 
-    /// The child can be at most as large as available space.
-    Loose,
+impl Eq for BoxParentData {}
+
+// ============================================================================
+// CONVERSIONS
+// ============================================================================
+
+impl From<Offset> for BoxParentData {
+    fn from(offset: Offset) -> Self {
+        Self::new(offset)
+    }
+}
+
+impl From<(f32, f32)> for BoxParentData {
+    fn from((x, y): (f32, f32)) -> Self {
+        Self::new(Offset::new(x, y))
+    }
 }
 
 // ============================================================================
-// StackParentData
+// TESTS
 // ============================================================================
-
-/// Parent data for children of stack render objects.
-///
-/// Extends [`ContainerBoxParentData`] with positioning information.
-///
-/// # Flutter Equivalence
-///
-/// ```dart
-/// class StackParentData extends ContainerBoxParentData<RenderBox> {
-///   double? top, right, bottom, left, width, height;
-///   bool get isPositioned => ...;
-/// }
-/// ```
-#[derive(Debug, Clone, Default)]
-pub struct StackParentData {
-    /// The offset at which to paint the child.
-    pub offset: Offset,
-
-    /// Distance from the top edge.
-    pub top: Option<f32>,
-
-    /// Distance from the right edge.
-    pub right: Option<f32>,
-
-    /// Distance from the bottom edge.
-    pub bottom: Option<f32>,
-
-    /// Distance from the left edge.
-    pub left: Option<f32>,
-
-    /// Fixed width for the child.
-    pub width: Option<f32>,
-
-    /// Fixed height for the child.
-    pub height: Option<f32>,
-}
-
-impl StackParentData {
-    /// Returns whether this child is positioned (has any position constraints).
-    #[inline]
-    pub fn is_positioned(&self) -> bool {
-        self.top.is_some()
-            || self.right.is_some()
-            || self.bottom.is_some()
-            || self.left.is_some()
-            || self.width.is_some()
-            || self.height.is_some()
-    }
-}
-
-impl crate::ParentData for StackParentData {}
-
-// ============================================================================
-// WrapParentData
-// ============================================================================
-
-/// Parent data for children of wrap render objects.
-///
-/// Extends [`ContainerBoxParentData`] with wrap-specific metadata.
-#[derive(Debug, Clone, Default)]
-pub struct WrapParentData {
-    /// The offset at which to paint the child.
-    pub offset: Offset,
-}
-
-impl WrapParentData {
-    /// Creates new WrapParentData with the given offset.
-    #[inline]
-    pub fn new(offset: Offset) -> Self {
-        Self { offset }
-    }
-}
-
-impl crate::ParentData for WrapParentData {}
-
-// ============================================================================
-// ListWheelParentData
-// ============================================================================
-
-/// Parent data for children of list wheel render objects.
-///
-/// Extends [`ContainerBoxParentData`] with an index for wheel positioning.
-///
-/// # Flutter Equivalence
-///
-/// ```dart
-/// class ListWheelParentData extends ContainerBoxParentData<RenderBox> {
-///   int? index;
-/// }
-/// ```
-#[derive(Debug, Clone, Default)]
-pub struct ListWheelParentData {
-    /// The offset at which to paint the child.
-    pub offset: Offset,
-
-    /// The index of this child in the wheel.
-    pub index: Option<usize>,
-}
-
-impl ListWheelParentData {
-    /// Creates new ListWheelParentData with the given index.
-    #[inline]
-    pub fn new(index: usize) -> Self {
-        Self {
-            offset: Offset::ZERO,
-            index: Some(index),
-        }
-    }
-}
-
-impl crate::ParentData for ListWheelParentData {}
-
-// ============================================================================
-// MultiChildLayoutParentData
-// ============================================================================
-
-/// Parent data for children of custom multi-child layout render objects.
-///
-/// Extends [`ContainerBoxParentData`] with an identifier for custom positioning.
-///
-/// # Flutter Equivalence
-///
-/// ```dart
-/// class MultiChildLayoutParentData extends ContainerBoxParentData<RenderBox> {
-///   Object? id;
-/// }
-/// ```
-#[derive(Debug, Clone, Default)]
-pub struct MultiChildLayoutParentData {
-    /// The offset at which to paint the child.
-    pub offset: Offset,
-
-    /// The identifier for this child in the custom layout.
-    ///
-    /// This is used by [`MultiChildLayoutDelegate`] to identify which child
-    /// is being laid out or positioned.
-    pub id: Option<String>,
-}
-
-impl MultiChildLayoutParentData {
-    /// Creates new MultiChildLayoutParentData with the given id.
-    #[inline]
-    pub fn new(id: impl Into<String>) -> Self {
-        Self {
-            offset: Offset::ZERO,
-            id: Some(id.into()),
-        }
-    }
-
-    /// Creates new MultiChildLayoutParentData without an id.
-    #[inline]
-    pub fn without_id() -> Self {
-        Self::default()
-    }
-}
-
-impl crate::ParentData for MultiChildLayoutParentData {}
-
-// ============================================================================
-// FlowParentData
-// ============================================================================
-
-/// Parent data for children of flow render objects.
-///
-/// Extends [`ContainerBoxParentData`] with a transform for flow positioning.
-///
-/// # Flutter Equivalence
-///
-/// ```dart
-/// class FlowParentData extends ContainerBoxParentData<RenderBox> {
-///   Matrix4? _transform;
-/// }
-/// ```
-#[derive(Debug, Clone, Default)]
-pub struct FlowParentData {
-    /// The offset at which to paint the child (used for hit testing).
-    pub offset: Offset,
-
-    /// The transform applied to this child during painting.
-    ///
-    /// This is set by the `FlowDelegate` during `paintChildren`.
-    pub transform: Option<[f32; 16]>,
-}
-
-impl FlowParentData {
-    /// Creates new FlowParentData.
-    #[inline]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Sets the transform matrix.
-    #[inline]
-    pub fn set_transform(&mut self, transform: [f32; 16]) {
-        self.transform = Some(transform);
-    }
-
-    /// Clears the transform matrix.
-    #[inline]
-    pub fn clear_transform(&mut self) {
-        self.transform = None;
-    }
-}
-
-impl crate::ParentData for FlowParentData {}
-
-// ============================================================================
-// TextParentData
-// ============================================================================
-
-/// Parent data for inline children within text render objects.
-///
-/// Used by `RenderParagraph` and `RenderEditable` for inline widgets.
-///
-/// # Flutter Equivalence
-///
-/// ```dart
-/// class TextParentData extends ParentData with ContainerParentDataMixin<RenderBox> {
-///   TextRange? span;
-/// }
-/// ```
-#[derive(Debug, Clone, Default)]
-pub struct TextParentData {
-    /// The offset at which to paint the child.
-    pub offset: Offset,
-
-    /// The text range that this inline widget replaces.
-    ///
-    /// If `None`, the widget is not associated with any text range.
-    pub span: Option<TextRange>,
-
-    /// The scale factor applied to this inline widget.
-    ///
-    /// This is used to scale inline widgets based on the text scale factor.
-    pub scale: f32,
-}
-
-/// A range of text indices.
-///
-/// Represents a contiguous range of characters in a text string.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct TextRange {
-    /// The index of the first character in the range.
-    pub start: usize,
-    /// The index of the character just after the last character in the range.
-    pub end: usize,
-}
-
-impl TextRange {
-    /// Creates a new text range.
-    #[inline]
-    pub fn new(start: usize, end: usize) -> Self {
-        Self { start, end }
-    }
-
-    /// Creates an empty text range at the given position.
-    #[inline]
-    pub fn collapsed(position: usize) -> Self {
-        Self {
-            start: position,
-            end: position,
-        }
-    }
-
-    /// Returns whether this range is empty.
-    #[inline]
-    pub fn is_empty(&self) -> bool {
-        self.start == self.end
-    }
-
-    /// Returns whether this range is collapsed (empty).
-    #[inline]
-    pub fn is_collapsed(&self) -> bool {
-        self.is_empty()
-    }
-
-    /// Returns the length of this range.
-    #[inline]
-    pub fn len(&self) -> usize {
-        self.end.saturating_sub(self.start)
-    }
-
-    /// Returns whether this range is valid (start <= end).
-    #[inline]
-    pub fn is_valid(&self) -> bool {
-        self.start <= self.end
-    }
-
-    /// Returns whether the given index is within this range.
-    #[inline]
-    pub fn contains(&self, index: usize) -> bool {
-        index >= self.start && index < self.end
-    }
-}
-
-impl TextParentData {
-    /// Creates new TextParentData with the given span.
-    #[inline]
-    pub fn new(span: TextRange) -> Self {
-        Self {
-            offset: Offset::ZERO,
-            span: Some(span),
-            scale: 1.0,
-        }
-    }
-
-    /// Creates new TextParentData without a span.
-    #[inline]
-    pub fn without_span() -> Self {
-        Self {
-            offset: Offset::ZERO,
-            span: None,
-            scale: 1.0,
-        }
-    }
-}
-
-impl crate::ParentData for TextParentData {}
-
-// ============================================================================
-// TableCellParentData
-// ============================================================================
-
-/// Parent data for children of table render objects.
-///
-/// Stores the cell position and vertical alignment.
-///
-/// # Flutter Equivalence
-///
-/// ```dart
-/// class TableCellParentData extends BoxParentData {
-///   int? x;
-///   int? y;
-///   TableCellVerticalAlignment? verticalAlignment;
-/// }
-/// ```
-#[derive(Debug, Clone, Default)]
-pub struct TableCellParentData {
-    /// The offset at which to paint the child.
-    pub offset: Offset,
-
-    /// The column index of this cell.
-    pub x: Option<usize>,
-
-    /// The row index of this cell.
-    pub y: Option<usize>,
-
-    /// The vertical alignment for this cell.
-    ///
-    /// If `None`, uses the table's default alignment.
-    pub vertical_alignment: Option<TableCellVerticalAlignment>,
-}
-
-/// Vertical alignment for a cell in a table.
-///
-/// # Flutter Equivalence
-///
-/// ```dart
-/// enum TableCellVerticalAlignment {
-///   top, middle, bottom, baseline, fill,
-///   intrinsicHeight,
-/// }
-/// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum TableCellVerticalAlignment {
-    /// Cells with this alignment are placed with their top at the top of the row.
-    #[default]
-    Top,
-
-    /// Cells with this alignment are vertically centered in the row.
-    Middle,
-
-    /// Cells with this alignment are placed with their bottom at the bottom of the row.
-    Bottom,
-
-    /// Cells with this alignment are aligned to the baseline of the row.
-    ///
-    /// The baseline of the row is the baseline of the cell with the largest
-    /// distance between its top and its baseline.
-    Baseline,
-
-    /// Cells with this alignment are forced to have the height of the row.
-    Fill,
-
-    /// Cells with this alignment are sized intrinsically.
-    IntrinsicHeight,
-}
-
-impl TableCellParentData {
-    /// Creates new TableCellParentData with the given position.
-    #[inline]
-    pub fn new(x: usize, y: usize) -> Self {
-        Self {
-            offset: Offset::ZERO,
-            x: Some(x),
-            y: Some(y),
-            vertical_alignment: None,
-        }
-    }
-}
-
-impl crate::ParentData for TableCellParentData {}
-
-// ============================================================================
-// ListBodyParentData
-// ============================================================================
-
-/// Parent data for children of list body render objects.
-///
-/// This is a simple container parent data without additional fields.
-///
-/// # Flutter Equivalence
-///
-/// ```dart
-/// class ListBodyParentData extends ContainerBoxParentData<RenderBox> {}
-/// ```
-#[derive(Debug, Clone, Default)]
-pub struct ListBodyParentData {
-    /// The offset at which to paint the child.
-    pub offset: Offset,
-}
-
-impl ListBodyParentData {
-    /// Creates new ListBodyParentData with the given offset.
-    #[inline]
-    pub fn new(offset: Offset) -> Self {
-        Self { offset }
-    }
-}
-
-impl crate::ParentData for ListBodyParentData {}
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_box_parent_data_default() {
+    fn test_new() {
+        let offset = Offset::new(10.0, 20.0);
+        let data = BoxParentData::new(offset);
+
+        assert_eq!(data.offset, offset);
+    }
+
+    #[test]
+    fn test_zero() {
+        let data = BoxParentData::zero();
+
+        assert_eq!(data.offset, Offset::ZERO);
+        assert!(data.is_zero());
+    }
+
+    #[test]
+    fn test_default() {
         let data = BoxParentData::default();
+
         assert_eq!(data.offset, Offset::ZERO);
+        assert!(data.is_zero());
     }
 
     #[test]
-    fn test_flex_parent_data_default() {
-        let data = FlexParentData::default();
-        assert_eq!(data.offset, Offset::ZERO);
-        assert_eq!(data.flex, None);
-        assert_eq!(data.fit, FlexFit::Tight);
+    fn test_builder() {
+        let data = BoxParentData::zero().with_offset(Offset::new(5.0, 10.0));
+
+        assert_eq!(data.offset.x, 5.0);
+        assert_eq!(data.offset.y, 10.0);
+        assert!(!data.is_zero());
     }
 
     #[test]
-    fn test_stack_parent_data_is_positioned() {
-        let mut data = StackParentData::default();
-        assert!(!data.is_positioned());
+    fn test_reset() {
+        let mut data = BoxParentData::new(Offset::new(10.0, 20.0));
+        assert!(!data.is_zero());
 
-        data.top = Some(10.0);
-        assert!(data.is_positioned());
+        data.reset();
+        assert!(data.is_zero());
+    }
+
+    #[test]
+    fn test_hash() {
+        use std::collections::hash_map::DefaultHasher;
+
+        let data1 = BoxParentData::new(Offset::new(10.0, 20.0));
+        let data2 = BoxParentData::new(Offset::new(10.0, 20.0));
+        let data3 = BoxParentData::new(Offset::new(10.0, 20.1));
+
+        let mut hasher1 = DefaultHasher::new();
+        data1.hash(&mut hasher1);
+        let hash1 = hasher1.finish();
+
+        let mut hasher2 = DefaultHasher::new();
+        data2.hash(&mut hasher2);
+        let hash2 = hasher2.finish();
+
+        let mut hasher3 = DefaultHasher::new();
+        data3.hash(&mut hasher3);
+        let hash3 = hasher3.finish();
+
+        assert_eq!(hash1, hash2); // Same values = same hash
+        assert_ne!(hash1, hash3); // Different values = different hash
+    }
+
+    #[test]
+    fn test_eq() {
+        let data1 = BoxParentData::new(Offset::new(10.0, 20.0));
+        let data2 = BoxParentData::new(Offset::new(10.0, 20.0));
+        let data3 = BoxParentData::new(Offset::new(10.0, 20.1));
+
+        assert_eq!(data1, data2);
+        assert_ne!(data1, data3);
+    }
+
+    #[test]
+    fn test_clone() {
+        let data1 = BoxParentData::new(Offset::new(10.0, 20.0));
+        let data2 = data1.clone();
+
+        assert_eq!(data1, data2);
+    }
+
+    #[test]
+    fn test_from_offset() {
+        let offset = Offset::new(15.0, 25.0);
+        let data: BoxParentData = offset.into();
+
+        assert_eq!(data.offset, offset);
+    }
+
+    #[test]
+    fn test_from_tuple() {
+        let data: BoxParentData = (15.0, 25.0).into();
+
+        assert_eq!(data.offset.x, 15.0);
+        assert_eq!(data.offset.y, 25.0);
+    }
+
+    #[test]
+    fn test_parent_data_trait() {
+        let mut data = BoxParentData::new(Offset::new(10.0, 20.0));
+
+        // ParentData::detach should not panic
+        data.detach();
+    }
+
+    #[test]
+    fn test_downcast() {
+        let data = BoxParentData::new(Offset::new(10.0, 20.0));
+        let trait_obj: &dyn ParentData = &data;
+
+        let downcasted = trait_obj.downcast_ref::<BoxParentData>();
+        assert!(downcasted.is_some());
+        assert_eq!(downcasted.unwrap().offset.x, 10.0);
     }
 }
