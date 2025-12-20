@@ -58,12 +58,9 @@
 
 pub mod binding;
 pub mod constraints;
-pub mod containers;
 pub mod delegates;
 pub mod hit_testing;
 pub mod input;
-pub mod lifecycle;
-pub mod objects;
 pub mod parent_data;
 pub mod pipeline;
 pub mod protocol;
@@ -84,30 +81,6 @@ pub mod prelude {
         debug_dump_layer_tree, debug_dump_pipeline_owner_tree, debug_dump_render_tree,
         debug_dump_semantics_tree, HitTestDispatcher, HitTestable, PipelineManifold,
         RendererBinding,
-    };
-    pub use crate::containers::{
-        // Box protocol
-        BoxChild,
-        BoxChildList,
-        BoxChildRequired,
-        BoxChildren,
-        // Primary types
-        Child,
-        ChildEntry,
-        ChildList,
-        // Layout aliases
-        FlexChildren,
-        // Traits
-        HasOffset,
-        MultiChildContainer,
-        MultiChildContainerWithData,
-        SingleChildContainer,
-        // Sliver protocol
-        SliverChild,
-        SliverChildRequired,
-        SliverChildren,
-        StackChildren,
-        WrapChildren,
     };
     pub use crate::delegates::{
         AspectRatioDelegate, CenterLayoutDelegate, CustomClipper, CustomPainter, FlowDelegate,
@@ -137,12 +110,7 @@ pub mod prelude {
         SemanticsAction, SemanticsConfiguration, SemanticsNode, SemanticsNodeUpdate,
         SemanticsOwner, SemanticsTreeUpdate,
     };
-    pub use crate::traits::{
-        MultiChildRenderBox, RenderAligningShiftedBox, RenderBox, RenderObject, RenderProxyBox,
-        RenderProxySliver, RenderShiftedBox, RenderSliver, RenderSliverMultiBoxAdaptor,
-        RenderSliverPersistentHeader, RenderSliverSingleBoxAdapter, SingleChildRenderBox,
-        TextBaseline,
-    };
+    pub use crate::traits::RenderObject;
     pub use crate::view::{
         CacheExtentStyle, CompositeResult, FixedViewportOffset, RenderAbstractViewport, RenderView,
         RevealedOffset, ScrollDirection, ScrollableViewportOffset, SliverPaintOrder,
@@ -154,11 +122,6 @@ pub mod prelude {
     // Constraints from this crate
     pub use crate::constraints::{BoxConstraints, Constraints, SliverConstraints, SliverGeometry};
 
-    // Lifecycle types
-    pub use crate::lifecycle::{
-        BaseRenderObject, DirtyFlags, RelayoutBoundary, RenderObjectFlags, RenderObjectState,
-    };
-
     // Tree types
     pub use crate::tree::{RenderNode, RenderTree};
 
@@ -167,13 +130,10 @@ pub mod prelude {
 
     // Re-export RenderId from flui_foundation
     pub use flui_foundation::RenderId;
-
-    // Re-export all concrete RenderObjects
-    pub use crate::objects::*;
 }
 
 // Re-export key types at crate root
 pub use parent_data::ParentData;
 pub use pipeline::{PaintingContext, PipelineOwner};
 pub use protocol::{BoxProtocol, Protocol, SliverProtocol};
-pub use traits::{RenderBox, RenderObject, RenderSliver};
+pub use traits::RenderObject;

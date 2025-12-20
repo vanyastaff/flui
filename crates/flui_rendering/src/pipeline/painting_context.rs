@@ -31,7 +31,7 @@ use flui_painting::DisplayListCore;
 use flui_types::painting::{effects::ColorMatrix, Clip, Path};
 use flui_types::{Matrix4, Offset, RRect, Rect};
 
-use crate::traits::{RenderBox, RenderSliver};
+use crate::traits::RenderObject;
 
 // ============================================================================
 // PaintingContext
@@ -237,27 +237,16 @@ impl PaintingContext {
     // Child Painting
     // ========================================================================
 
-    /// Paints a child box render object.
+    /// Paints a child render object.
     ///
     /// This handles layer management - if the child is a repaint boundary,
     /// it will be painted into its own layer.
-    pub fn paint_child(&mut self, child: &dyn RenderBox, offset: Offset) {
+    pub fn paint_child(&mut self, child: &dyn RenderObject, offset: Offset) {
         // In full implementation, check if child is a repaint boundary
         // and create a new layer if needed
 
-        // Paint the child using RenderBox::paint (specialized paint implementation)
-        RenderBox::paint(child, self, offset);
-    }
-
-    /// Paints a child sliver render object.
-    ///
-    /// Similar to `paint_child` but for sliver protocol.
-    pub fn paint_sliver_child(&mut self, child: &dyn RenderSliver, offset: Offset) {
-        // In full implementation, check if child is a repaint boundary
-        let _ = (child, offset);
-
-        // For now, just paint directly
-        // child.paint(self, offset);
+        // Paint the child using RenderObject::paint
+        child.paint(self, offset);
     }
 
     /// Paints a child into a new layer with the given offset.
