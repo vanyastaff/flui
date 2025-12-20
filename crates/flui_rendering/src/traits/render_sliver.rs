@@ -1,6 +1,9 @@
 //! RenderSliver trait for scrollable content layout.
 
-use flui_types::{AxisDirection, Offset, Size, SliverConstraints, SliverGeometry};
+use flui_types::prelude::AxisDirection;
+use flui_types::{Offset, Size};
+
+use crate::constraints::{SliverConstraints, SliverGeometry};
 
 use super::RenderObject;
 use crate::pipeline::PaintingContext;
