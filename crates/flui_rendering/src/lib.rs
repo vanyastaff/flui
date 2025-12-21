@@ -57,11 +57,13 @@
 #![allow(clippy::large_enum_variant)]
 
 pub mod binding;
+pub mod child_handle;
 pub mod constraints;
 pub mod delegates;
 pub mod hit_testing;
 pub mod input;
 pub mod parent_data;
+pub mod phase;
 pub mod pipeline;
 pub mod protocol;
 /// Re-export semantics from flui-semantics crate.
@@ -77,6 +79,14 @@ pub mod layer {
 
 /// Prelude module for convenient imports.
 pub mod prelude {
+    // Phase system
+    pub use crate::phase::{HitTestPhase, LayoutPhase, PaintPhase, Phase};
+
+    // Child handles with phase safety
+    pub use crate::child_handle::{
+        ChildHandle, HitTestChildHandle, LayoutChildHandle, PaintChildHandle,
+    };
+
     pub use crate::binding::{
         debug_dump_layer_tree, debug_dump_pipeline_owner_tree, debug_dump_render_tree,
         debug_dump_semantics_tree, HitTestDispatcher, HitTestable, PipelineManifold,
