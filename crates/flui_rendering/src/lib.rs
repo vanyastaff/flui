@@ -56,8 +56,10 @@
 #![allow(clippy::type_complexity)]
 #![allow(clippy::large_enum_variant)]
 
+pub mod arity;
 pub mod binding;
 pub mod child_handle;
+pub mod children_access;
 pub mod constraints;
 pub mod delegates;
 pub mod hit_testing;
@@ -79,6 +81,9 @@ pub mod layer {
 
 /// Prelude module for convenient imports.
 pub mod prelude {
+    // Arity system
+    pub use crate::arity::{Arity, Leaf, Optional, Single, Variable};
+
     // Phase system
     pub use crate::phase::{HitTestPhase, LayoutPhase, PaintPhase, Phase};
 
@@ -86,6 +91,9 @@ pub mod prelude {
     pub use crate::child_handle::{
         ChildHandle, HitTestChildHandle, LayoutChildHandle, PaintChildHandle,
     };
+
+    // Children access
+    pub use crate::children_access::{ChildState, ChildrenAccess};
 
     pub use crate::binding::{
         debug_dump_layer_tree, debug_dump_pipeline_owner_tree, debug_dump_render_tree,
