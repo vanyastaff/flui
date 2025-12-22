@@ -19,16 +19,15 @@
 //!   SliverLayout SliverHitTest    (shared)
 //! ```
 //!
-//! # Capabilities
+//! # Module Structure
 //!
-//! Each capability groups related types:
-//! - **LayoutCapability**: Constraints, Geometry, LayoutContext
-//! - **HitTestCapability**: Position, Result, Entry, HitTestContext
-//! - **PaintCapability**: Painter, Layering, Effects, Caching, PaintContext
+//! - `protocol`: Core Protocol trait
+//! - `capabilities`: LayoutCapability, HitTestCapability, PaintCapability
+//! - `box_protocol`: BoxProtocol with BoxLayout, BoxHitTest
+//! - `sliver_protocol`: SliverProtocol with SliverLayout, SliverHitTest
+//! - `paint`: StandardPaint (shared by all protocols)
 //!
 //! # Examples
-//!
-//! ## Using Protocol Types
 //!
 //! ```ignore
 //! use flui_rendering::protocol::{BoxProtocol, Protocol, ProtocolConstraints};
@@ -37,62 +36,87 @@
 //!     // Generic over any protocol
 //! }
 //! ```
-//!
-//! ## Implementing a RenderObject
-//!
-//! ```ignore
-//! use flui_rendering::protocol::{BoxProtocol, ProtocolRenderObject};
-//! use flui_rendering::arity::Single;
-//!
-//! struct MyRenderBox { /* ... */ }
-//!
-//! impl ProtocolRenderObject<BoxProtocol, Single> for MyRenderBox {
-//!     fn perform_layout(&mut self, ctx: &mut ProtocolLayoutCtx<'_, BoxProtocol, Single, BoxParentData>) {
-//!         // Layout implementation
-//!     }
-//!     // ... other methods
-//! }
-//! ```
 
 // ============================================================================
 // MODULE DECLARATIONS
 // ============================================================================
 
-mod base;
-pub mod capabilities;
+mod box_protocol;
+mod capabilities;
+mod protocol;
+mod sliver_protocol;
 
 // ============================================================================
-// CORE EXPORTS
+// PROTOCOL TRAIT EXPORTS
 // ============================================================================
 
-// Protocol trait and implementations
-pub use base::{
-    BaselineProtocol, BidirectionalProtocol, BoxProtocol, IntrinsicProtocol, Protocol,
-    ProtocolCompatible, ProtocolRenderObject, SliverProtocol,
+pub use protocol::{
+    // Marker traits
+    BaselineProtocol,
+    BidirectionalProtocol,
+    IntrinsicProtocol,
+    // Protocol trait
+    Protocol,
+    ProtocolCompatible,
+    ProtocolRenderObject,
 };
 
-// Type aliases for convenience
-pub use base::{
-    ProtocolConstraints, ProtocolGeometry, ProtocolHitResult, ProtocolHitTestCtx,
-    ProtocolLayoutCtx, ProtocolPaintCtx, ProtocolPosition,
-};
+// ============================================================================
+// CAPABILITY EXPORTS
+// ============================================================================
 
-// Capability traits
 pub use capabilities::{
-    HitTestCapability, HitTestContextApi, LayoutCapability, LayoutContextApi, PaintCapability,
+    // Capability traits
+    HitTestCapability,
+    HitTestContextApi,
+    LayoutCapability,
+    LayoutContextApi,
+    PaintCapability,
     PaintContextApi,
+    // Type aliases
+    ProtocolConstraints,
+    ProtocolGeometry,
+    ProtocolHitResult,
+    ProtocolHitTestCtx,
+    ProtocolLayoutCtx,
+    ProtocolPaintCtx,
+    ProtocolPosition,
 };
 
-// Concrete capabilities
-pub use capabilities::{
-    BoxHitTest, BoxHitTestCtx, BoxHitTestEntry, BoxHitTestResult, BoxLayout, BoxLayoutCtx,
-    DynCaching, DynEffects, DynLayering, DynPainter, SliverHitTest, SliverHitTestCtx,
-    SliverHitTestEntry, SliverHitTestResult, SliverLayout, SliverLayoutCtx, StandardPaint,
-    StandardPaintCtx,
+// ============================================================================
+// BOX PROTOCOL EXPORTS
+// ============================================================================
+
+pub use box_protocol::{
+    // Hit test
+    BoxHitTest,
+    BoxHitTestCtx,
+    BoxHitTestEntry,
+    BoxHitTestResult,
+    // Layout
+    BoxLayout,
+    BoxLayoutCtx,
+    // Protocol
+    BoxProtocol,
 };
 
-// Hit test position types
-pub use capabilities::MainAxisPosition;
+// ============================================================================
+// SLIVER PROTOCOL EXPORTS
+// ============================================================================
+
+pub use sliver_protocol::{
+    // Hit test
+    MainAxisPosition,
+    SliverHitTest,
+    SliverHitTestCtx,
+    SliverHitTestEntry,
+    SliverHitTestResult,
+    // Layout
+    SliverLayout,
+    SliverLayoutCtx,
+    // Protocol
+    SliverProtocol,
+};
 
 // ============================================================================
 // PRELUDE MODULE
@@ -105,13 +129,13 @@ pub use capabilities::MainAxisPosition;
 /// ```
 pub mod prelude {
     pub use super::{
-        // Protocol trait and marker traits
+        // Marker traits
         BaselineProtocol,
         BidirectionalProtocol,
         // Concrete capabilities
         BoxHitTest,
         BoxLayout,
-        // Concrete protocols
+        // Protocols
         BoxProtocol,
         // Capability traits
         HitTestCapability,
@@ -121,6 +145,7 @@ pub mod prelude {
         LayoutContextApi,
         PaintCapability,
         PaintContextApi,
+        // Protocol trait
         Protocol,
         ProtocolCompatible,
         // Type aliases
@@ -135,7 +160,6 @@ pub mod prelude {
         SliverHitTest,
         SliverLayout,
         SliverProtocol,
-        StandardPaint,
     };
 }
 
@@ -153,8 +177,6 @@ where
 }
 
 /// Assert protocol compatibility at compile time.
-///
-/// Fails to compile if protocols aren't compatible.
 pub fn assert_compatible<From, To>()
 where
     From: Protocol + ProtocolCompatible<To>,

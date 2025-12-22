@@ -46,8 +46,8 @@ use flui_types::painting::{Paint, Path};
 
 use crate::arity::Arity;
 use crate::parent_data::ParentData;
-use crate::protocol::capabilities::{PaintCapability, PaintContextApi};
 use crate::protocol::Protocol;
+use crate::protocol::{PaintCapability, PaintContextApi};
 
 // ============================================================================
 // PAINT CONTEXT

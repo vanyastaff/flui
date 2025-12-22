@@ -29,6 +29,7 @@ ambassador = { workspace = true }  # Trait delegation via procedural macros
 
 [dev-dependencies]
 criterion.workspace = true
+mockall = "0.13"
 
 [features]
 default = []

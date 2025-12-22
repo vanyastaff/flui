@@ -157,7 +157,7 @@ pub use pipeline::{PaintingContext, PipelineOwner};
 pub use traits::RenderObject;
 
 // Protocol system
-pub use context::PaintContext;
+pub use context::{HitTestContext, LayoutContext, PaintContext};
 pub use protocol::{
     // Marker traits
     BaselineProtocol,
