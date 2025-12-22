@@ -1,38 +1,39 @@
 //! Child handle for type-safe parent-child interactions.
 //!
 //! This module provides [`ChildHandle`], a typed view into a child render object
-//! that enforces phase-based API restrictions at compile time.
+//! that provides safe access to child operations.
 //!
-//! # Phase-Based API Safety
+//! # Context-Based API Safety
 //!
-//! The handle is parameterized by both ParentData type (`P`) and phase (`Ph`).
-//! Different phases expose different APIs to prevent misuse:
+//! The handle is parameterized by ParentData type (`P`). Phase-specific restrictions
+//! are enforced by the context type that provides access to child handles
+//! (e.g., `BoxLayoutContext`, `BoxPaintContext`):
 //!
-//! - **Layout Phase**: Can layout children, set offsets, modify ParentData
-//! - **Paint Phase**: Can only paint children (read-only access)
-//! - **Hit Test Phase**: Can only hit test children (read-only access)
+//! - **Layout Context**: Can layout children, set offsets, modify ParentData
+//! - **Paint Context**: Can only paint children (read-only access)
+//! - **Hit Test Context**: Can only hit test children (read-only access)
 //!
 //! # Example
 //!
 //! ```ignore
-//! // During layout phase - full access
+//! // During layout context - full access
 //! fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<Variable, FlexParentData>) -> Size {
-//!     for mut child in ctx.iter_children_mut() {
-//!         // child: ChildHandle<FlexParentData, LayoutPhase>
+//!     ctx.children.for_each(|mut child| {
+//!         // child: ChildHandle<FlexParentData>
 //!         let size = child.layout(constraints);  // ✅ OK
 //!         child.set_offset(offset);              // ✅ OK
 //!         child.parent_data_mut().flex = 2.0;    // ✅ OK
-//!     }
+//!     });
 //! }
 //!
-//! // During paint phase - read-only
+//! // During paint context - read-only
 //! fn paint(&self, ctx: &mut BoxPaintContext<Variable, FlexParentData>) {
-//!     for child in ctx.iter_children() {
-//!         // child: ChildHandle<FlexParentData, PaintPhase>
+//!     ctx.children.for_each(|child| {
+//!         // child: ChildHandle<FlexParentData>
 //!         child.paint(&mut ctx.canvas());        // ✅ OK
-//!         // child.layout(constraints);          // ❌ Compile error!
-//!         // child.set_offset(offset);           // ❌ Compile error!
-//!     }
+//!         // child.layout(constraints);          // ❌ Not available in paint context!
+//!         // child.set_offset(offset);           // ❌ Not available in paint context!
+//!     });
 //! }
 //! ```
 

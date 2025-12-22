@@ -317,18 +317,17 @@ pub trait RendererBinding: PipelineManifold + HitTestable {
         view_id: u64,
         node_id: i32,
         action: flui_semantics::SemanticsAction,
-        args: Option<flui_semantics::ActionArgs>,
+        _args: Option<flui_semantics::ActionArgs>,
     ) {
         // Look up the render view and delegate to its semantics owner
         if let Some(view) = self.get_render_view(view_id) {
             let _view_guard = view.read();
-            // TODO: Get semantics owner from pipeline owner and perform action
-            // view_guard.owner().semantics_owner().perform_action(node_id, action, args);
-            tracing::debug!(
-                "perform_semantics_action: view={}, node={}, action={:?}",
-                view_id,
+            unimplemented!(
+                "Semantics actions not yet implemented - requires SemanticsOwner integration. \
+                 Attempted action: {:?} on node {} in view {}",
+                action,
                 node_id,
-                action
+                view_id
             );
         }
     }
@@ -386,7 +385,7 @@ pub fn debug_dump_layer_tree<B: RendererBinding + ?Sized>(binding: &B) -> String
 /// * `child_order` - The order to dump children
 pub fn debug_dump_semantics_tree<B: RendererBinding + ?Sized>(
     binding: &B,
-    child_order: flui_semantics::DebugSemanticsDumpOrder,
+    _child_order: flui_semantics::DebugSemanticsDumpOrder,
 ) -> String {
     let views = binding.render_views().read();
     if views.is_empty() {

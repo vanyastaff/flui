@@ -618,8 +618,12 @@ impl PipelineOwner {
         // Process dirty nodes
         for node in &self.nodes_needing_compositing_bits_update {
             tracing::trace!("compositing bits node id={} depth={}", node.id, node.depth);
-            // TODO: Look up node by id and call _update_compositing_bits()
-            // if node._needs_compositing_bits_update && node.owner == self
+            unimplemented!(
+                "Compositing bits update not yet implemented - requires render object lookup by ID. \
+                 Node id={}, depth={}",
+                node.id,
+                node.depth
+            );
         }
         self.nodes_needing_compositing_bits_update.clear();
 
@@ -741,47 +745,13 @@ impl PipelineOwner {
 
         self.nodes_needing_semantics.clear();
 
-        // Sort by depth (shallow first) - top-down order
-        // Flutter: .sort((a, b) => a.depth - b.depth)
-        let mut sorted_nodes = nodes_to_process;
-        sorted_nodes.sort_unstable_by_key(|node| node.depth);
-
-        // Process dirty nodes in three passes (matching Flutter):
-        // 1. updateChildren - update semantic children relationships
-        // 2. ensureGeometry - calculate semantic geometry
-        // 3. ensureSemanticsNode - create/update semantics nodes (reversed order)
-        for node in &sorted_nodes {
-            tracing::trace!(
-                "semantics updateChildren id={} depth={}",
-                node.id,
-                node.depth
+        // Semantics system is not yet implemented
+        if !nodes_to_process.is_empty() {
+            unimplemented!(
+                "Semantics system not yet implemented - requires full semantics integration. \
+                 {} nodes need semantics updates",
+                nodes_to_process.len()
             );
-            // TODO: node._semantics.updateChildren()
-        }
-
-        for node in &sorted_nodes {
-            tracing::trace!(
-                "semantics ensureGeometry id={} depth={}",
-                node.id,
-                node.depth
-            );
-            // TODO: node._semantics.ensureGeometry()
-        }
-
-        for node in sorted_nodes.iter().rev() {
-            tracing::trace!(
-                "semantics ensureSemanticsNode id={} depth={}",
-                node.id,
-                node.depth
-            );
-            // TODO: node._semantics.ensureSemanticsNode()
-        }
-
-        // TODO: _semantics_owner.send_semantics_update()
-
-        // Flush children
-        for child in &self.children {
-            child.write().flush_semantics();
         }
 
         self.debug_doing_semantics = false;

@@ -5,7 +5,7 @@
 
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::objects::r#box::basic::{RenderPadding, RenderSizedBox};
-use flui_rendering::pipeline::{Paint, PaintingContext};
+use flui_rendering::pipeline::{Paint, CanvasContext};
 use flui_rendering::traits::{RenderBox, RenderObject};
 use flui_types::geometry::Radius;
 use flui_types::{EdgeInsets, Offset, Point, Rect, Size};
@@ -30,7 +30,7 @@ fn layout_render_box(render_box: &mut dyn RenderBox, max_size: Size) -> Size {
 #[test]
 fn test_painting_context_creation() {
     let bounds = Rect::from_ltwh(0.0, 0.0, 100.0, 100.0);
-    let context = PaintingContext::from_bounds(bounds);
+    let context = CanvasContext::from_bounds(bounds);
 
     assert_eq!(context.estimated_bounds(), bounds);
 }
@@ -38,7 +38,7 @@ fn test_painting_context_creation() {
 #[test]
 fn test_canvas_creation() {
     let bounds = Rect::from_ltwh(0.0, 0.0, 100.0, 100.0);
-    let mut context = PaintingContext::from_bounds(bounds);
+    let mut context = CanvasContext::from_bounds(bounds);
 
     // Get canvas and verify it exists
     let canvas = context.canvas();
@@ -48,7 +48,7 @@ fn test_canvas_creation() {
 #[test]
 fn test_canvas_draw_rect() {
     let bounds = Rect::from_ltwh(0.0, 0.0, 200.0, 200.0);
-    let mut context = PaintingContext::from_bounds(bounds);
+    let mut context = CanvasContext::from_bounds(bounds);
 
     let rect = Rect::from_ltwh(10.0, 10.0, 50.0, 50.0);
     let paint = Paint::default();
@@ -61,7 +61,7 @@ fn test_canvas_draw_rect() {
 #[test]
 fn test_canvas_draw_circle() {
     let bounds = Rect::from_ltwh(0.0, 0.0, 200.0, 200.0);
-    let mut context = PaintingContext::from_bounds(bounds);
+    let mut context = CanvasContext::from_bounds(bounds);
 
     let center = Point::new(100.0, 100.0);
     let radius = 50.0;
@@ -74,7 +74,7 @@ fn test_canvas_draw_circle() {
 #[test]
 fn test_canvas_draw_line() {
     let bounds = Rect::from_ltwh(0.0, 0.0, 200.0, 200.0);
-    let mut context = PaintingContext::from_bounds(bounds);
+    let mut context = CanvasContext::from_bounds(bounds);
 
     let p1 = Point::new(0.0, 0.0);
     let p2 = Point::new(100.0, 100.0);
@@ -91,7 +91,7 @@ fn test_canvas_draw_line() {
 #[test]
 fn test_canvas_save_restore() {
     let bounds = Rect::from_ltwh(0.0, 0.0, 200.0, 200.0);
-    let mut context = PaintingContext::from_bounds(bounds);
+    let mut context = CanvasContext::from_bounds(bounds);
 
     context.canvas().save();
     context.canvas().translate(10.0, 10.0);
@@ -106,7 +106,7 @@ fn test_canvas_save_restore() {
 #[test]
 fn test_canvas_translate() {
     let bounds = Rect::from_ltwh(0.0, 0.0, 200.0, 200.0);
-    let mut context = PaintingContext::from_bounds(bounds);
+    let mut context = CanvasContext::from_bounds(bounds);
 
     context.canvas().translate(50.0, 25.0);
 
@@ -117,7 +117,7 @@ fn test_canvas_translate() {
 #[test]
 fn test_canvas_scale() {
     let bounds = Rect::from_ltwh(0.0, 0.0, 200.0, 200.0);
-    let mut context = PaintingContext::from_bounds(bounds);
+    let mut context = CanvasContext::from_bounds(bounds);
 
     // Use scaled() which takes a single uniform scale factor
     context.canvas().scaled(2.0);
@@ -129,7 +129,7 @@ fn test_canvas_scale() {
 #[test]
 fn test_canvas_rotate() {
     let bounds = Rect::from_ltwh(0.0, 0.0, 200.0, 200.0);
-    let mut context = PaintingContext::from_bounds(bounds);
+    let mut context = CanvasContext::from_bounds(bounds);
 
     context.canvas().rotate(std::f32::consts::PI / 4.0);
 
@@ -144,7 +144,7 @@ fn test_canvas_rotate() {
 #[test]
 fn test_canvas_clip_rect() {
     let bounds = Rect::from_ltwh(0.0, 0.0, 200.0, 200.0);
-    let mut context = PaintingContext::from_bounds(bounds);
+    let mut context = CanvasContext::from_bounds(bounds);
 
     let clip_rect = Rect::from_ltwh(10.0, 10.0, 100.0, 100.0);
     context.canvas().clip_rect(clip_rect);
@@ -155,7 +155,7 @@ fn test_canvas_clip_rect() {
 #[test]
 fn test_canvas_clip_rrect() {
     let bounds = Rect::from_ltwh(0.0, 0.0, 200.0, 200.0);
-    let mut context = PaintingContext::from_bounds(bounds);
+    let mut context = CanvasContext::from_bounds(bounds);
 
     let clip_rrect = flui_types::RRect::from_rect_and_radius(
         Rect::from_ltwh(10.0, 10.0, 100.0, 100.0),
@@ -173,7 +173,7 @@ fn test_canvas_clip_rrect() {
 #[test]
 fn test_multiple_draw_commands() {
     let bounds = Rect::from_ltwh(0.0, 0.0, 200.0, 200.0);
-    let mut context = PaintingContext::from_bounds(bounds);
+    let mut context = CanvasContext::from_bounds(bounds);
     let paint = Paint::default();
 
     // Draw multiple shapes
@@ -193,7 +193,7 @@ fn test_multiple_draw_commands() {
 #[test]
 fn test_complex_paint_sequence() {
     let bounds = Rect::from_ltwh(0.0, 0.0, 200.0, 200.0);
-    let mut context = PaintingContext::from_bounds(bounds);
+    let mut context = CanvasContext::from_bounds(bounds);
     let paint = Paint::default();
 
     // Complex sequence: save, clip, draw, restore
@@ -225,7 +225,7 @@ fn test_sized_box_paint() {
 
     // Paint
     let bounds = Rect::from_ltwh(0.0, 0.0, 200.0, 200.0);
-    let mut context = PaintingContext::from_bounds(bounds);
+    let mut context = CanvasContext::from_bounds(bounds);
     sized_box.paint(&mut context, Offset::ZERO);
 
     // SizedBox itself doesn't draw anything, just paints children
@@ -244,7 +244,7 @@ fn test_padding_paint() {
 
     // Paint
     let bounds = Rect::from_ltwh(0.0, 0.0, 200.0, 200.0);
-    let mut context = PaintingContext::from_bounds(bounds);
+    let mut context = CanvasContext::from_bounds(bounds);
     RenderBox::paint(&padding, &mut context, Offset::ZERO);
 
     // Padding paints its child at an offset
@@ -260,7 +260,7 @@ fn test_paint_at_offset() {
 
     // Paint at an offset
     let bounds = Rect::from_ltwh(0.0, 0.0, 200.0, 200.0);
-    let mut context = PaintingContext::from_bounds(bounds);
+    let mut context = CanvasContext::from_bounds(bounds);
     let offset = Offset::new(25.0, 25.0);
     sized_box.paint(&mut context, offset);
 
@@ -274,7 +274,7 @@ fn test_paint_at_offset() {
 #[test]
 fn test_stop_recording_creates_picture() {
     let bounds = Rect::from_ltwh(0.0, 0.0, 200.0, 200.0);
-    let mut context = PaintingContext::from_bounds(bounds);
+    let mut context = CanvasContext::from_bounds(bounds);
     let paint = Paint::default();
 
     // Draw something to start recording
@@ -295,7 +295,7 @@ fn test_repaint_composited_child() {
     let bounds = Rect::from_ltwh(0.0, 0.0, 100.0, 100.0);
 
     // Use the static method to repaint
-    let _layer = PaintingContext::repaint_composited_child(bounds, |context, offset| {
+    let _layer = CanvasContext::repaint_composited_child(bounds, |context, offset| {
         let paint = Paint::default();
         context.canvas().translate(offset.dx, offset.dy);
         context
@@ -338,7 +338,7 @@ fn test_paint_bounds_after_layout() {
 #[test]
 fn test_empty_canvas() {
     let bounds = Rect::from_ltwh(0.0, 0.0, 100.0, 100.0);
-    let mut context = PaintingContext::from_bounds(bounds);
+    let mut context = CanvasContext::from_bounds(bounds);
 
     let canvas = context.canvas();
     assert!(canvas.is_empty());
@@ -348,7 +348,7 @@ fn test_empty_canvas() {
 #[test]
 fn test_zero_size_bounds() {
     let bounds = Rect::ZERO;
-    let mut context = PaintingContext::from_bounds(bounds);
+    let mut context = CanvasContext::from_bounds(bounds);
 
     // Should still be able to draw
     let paint = Paint::default();
@@ -362,7 +362,7 @@ fn test_zero_size_bounds() {
 #[test]
 fn test_nested_save_restore() {
     let bounds = Rect::from_ltwh(0.0, 0.0, 200.0, 200.0);
-    let mut context = PaintingContext::from_bounds(bounds);
+    let mut context = CanvasContext::from_bounds(bounds);
 
     context.canvas().save();
     context.canvas().translate(10.0, 10.0);

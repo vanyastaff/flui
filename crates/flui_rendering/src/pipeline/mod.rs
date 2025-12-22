@@ -16,10 +16,6 @@ pub use owner::{DirtyNode, PipelineOwner};
 // Re-export contexts from context module (canonical location)
 pub use crate::context::{Canvas, CanvasContext, ClipContext, Paint, PaintStyle, Picture};
 
-/// Deprecated: Use `CanvasContext` instead.
-#[deprecated(since = "0.1.0", note = "Use `CanvasContext` instead")]
-pub type PaintingContext = CanvasContext;
-
 // Re-export additional types from flui_types::painting for convenience
 pub use flui_types::painting::{BlendMode, ClipOp, FilterQuality, ImageFilter, PointMode, Shader};
 

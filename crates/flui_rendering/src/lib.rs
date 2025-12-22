@@ -62,7 +62,6 @@ pub mod delegates;
 pub mod hit_testing;
 pub mod input;
 pub mod parent_data;
-pub mod phase;
 pub mod pipeline;
 pub mod protocol;
 /// Re-export semantics from flui-semantics crate.
@@ -80,9 +79,6 @@ pub mod layer {
 pub mod prelude {
     // Arity system
     pub use crate::arity::{Arity, Leaf, Optional, Single, Variable};
-
-    // Phase system (kept for backwards compatibility, may be removed in future)
-    pub use crate::phase::{HitTestPhase, LayoutPhase, PaintPhase, Phase};
 
     // Child handles
     pub use crate::child_handle::ChildHandle;

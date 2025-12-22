@@ -171,7 +171,7 @@ impl RenderBox for TestRenderBox {
         true
     }
 
-    fn paint(&self, _context: &mut flui_rendering::pipeline::PaintingContext, _offset: Offset) {
+    fn paint(&self, _context: &mut flui_rendering::pipeline::CanvasContext, _offset: Offset) {
         // No-op for test
     }
 }

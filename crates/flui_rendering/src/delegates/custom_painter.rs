@@ -13,18 +13,21 @@ use flui_painting::Canvas;
 
 /// Builder for semantics information.
 ///
-/// This is a placeholder type that will be expanded when semantics
-/// support is fully implemented.
+/// **INCOMPLETE**: This is a placeholder type. Semantics support is not yet implemented.
+/// Using this builder will panic until the semantics system is complete.
 #[derive(Debug, Clone)]
 pub struct SemanticsBuilder {
-    // TODO: Implement semantics builder fields
     _private: (),
 }
 
 impl SemanticsBuilder {
     /// Creates a new empty semantics builder.
+    ///
+    /// # Panics
+    ///
+    /// This method will panic until semantics support is implemented.
     pub fn new() -> Self {
-        Self { _private: () }
+        unimplemented!("SemanticsBuilder not yet implemented - semantics support incomplete");
     }
 }
 
