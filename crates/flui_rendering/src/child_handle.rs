@@ -36,16 +36,14 @@
 //! }
 //! ```
 
-use std::marker::PhantomData;
-
 use flui_foundation::RenderId;
 use flui_types::{Offset, Rect, Size};
 
 use crate::constraints::BoxConstraints;
+use crate::context::CanvasContext;
+use crate::hit_testing::{BoxHitTestEntry, BoxHitTestResult};
 use crate::parent_data::ParentData;
-use crate::phase::{HitTestPhase, LayoutPhase, PaintPhase, Phase};
-use crate::pipeline::PaintingContext;
-use crate::traits::{BoxHitTestEntry, BoxHitTestResult, TextBaseline};
+use crate::traits::TextBaseline;
 
 // ============================================================================
 // ChildHandle
@@ -55,22 +53,23 @@ use crate::traits::{BoxHitTestEntry, BoxHitTestResult, TextBaseline};
 ///
 /// The handle is parameterized by:
 /// - `P`: The ParentData type (e.g., `FlexParentData`, `StackParentData`)
-/// - `Ph`: The current phase (e.g., `LayoutPhase`, `PaintPhase`)
 ///
-/// Different phases expose different APIs:
+/// This handle provides full access to child operations. Phase-specific
+/// restrictions are now enforced by the context type that provides access
+/// to children (e.g., `BoxLayoutContext`, `BoxPaintContext`).
 ///
-/// | Operation           | Layout | Paint | HitTest |
-/// |---------------------|--------|-------|---------|
-/// | `layout()`          | ✅     | ❌    | ❌      |
-/// | `set_offset()`      | ✅     | ❌    | ❌      |
-/// | `parent_data_mut()` | ✅     | ❌    | ❌      |
-/// | `dry_layout()`      | ✅     | ❌    | ❌      |
-/// | `paint()`           | ❌     | ✅    | ❌      |
-/// | `hit_test()`        | ❌     | ❌    | ✅      |
-/// | `size()`            | ✅     | ✅    | ✅      |
-/// | `offset()`          | ✅     | ✅    | ✅      |
-/// | `parent_data()`     | ✅     | ✅    | ✅      |
-pub struct ChildHandle<'a, P: ParentData + Default, Ph: Phase = LayoutPhase> {
+/// # Available Operations
+///
+/// - `layout()`: Layout the child with constraints
+/// - `set_offset()`: Set the child's position
+/// - `parent_data_mut()`: Modify parent data
+/// - `dry_layout()`: Compute size without side effects
+/// - `paint()`: Paint the child
+/// - `hit_test()`: Perform hit testing
+/// - `size()`: Get cached size
+/// - `offset()`: Get position offset
+/// - `parent_data()`: Read parent data
+pub struct ChildHandle<'a, P: ParentData + Default> {
     /// ID of the child render node.
     child_id: RenderId,
 
@@ -82,29 +81,13 @@ pub struct ChildHandle<'a, P: ParentData + Default, Ph: Phase = LayoutPhase> {
 
     /// Parent data stored on this child.
     parent_data: &'a mut P,
-
-    /// Phantom for phase type.
-    _phase: PhantomData<Ph>,
 }
 
 // ============================================================================
-// Type Aliases for Convenience
+// Common Methods
 // ============================================================================
 
-/// Child handle for layout phase (can layout, set offset, modify parent data).
-pub type LayoutChildHandle<'a, P> = ChildHandle<'a, P, LayoutPhase>;
-
-/// Child handle for paint phase (can only paint, read-only access).
-pub type PaintChildHandle<'a, P> = ChildHandle<'a, P, PaintPhase>;
-
-/// Child handle for hit test phase (can only hit test, read-only access).
-pub type HitTestChildHandle<'a, P> = ChildHandle<'a, P, HitTestPhase>;
-
-// ============================================================================
-// Common Methods (All Phases)
-// ============================================================================
-
-impl<'a, P: ParentData + Default, Ph: Phase> ChildHandle<'a, P, Ph> {
+impl<'a, P: ParentData + Default> ChildHandle<'a, P> {
     /// Creates a new child handle.
     #[inline]
     pub fn new(child_id: RenderId, size: Size, offset: Offset, parent_data: &'a mut P) -> Self {
@@ -113,7 +96,6 @@ impl<'a, P: ParentData + Default, Ph: Phase> ChildHandle<'a, P, Ph> {
             size,
             offset,
             parent_data,
-            _phase: PhantomData,
         }
     }
 
@@ -161,13 +143,11 @@ impl<'a, P: ParentData + Default, Ph: Phase> ChildHandle<'a, P, Ph> {
             && local.dx < self.size.width
             && local.dy < self.size.height
     }
-}
 
-// ============================================================================
-// Layout Phase Methods
-// ============================================================================
+    // ========================================================================
+    // Layout Operations
+    // ========================================================================
 
-impl<'a, P: ParentData + Default> ChildHandle<'a, P, LayoutPhase> {
     /// Sets the offset of this child.
     ///
     /// This positions the child relative to the parent's origin.
@@ -183,8 +163,6 @@ impl<'a, P: ParentData + Default> ChildHandle<'a, P, LayoutPhase> {
     }
 
     /// Returns a mutable reference to the typed parent data.
-    ///
-    /// Only available during layout phase.
     ///
     /// # Example
     ///
@@ -273,13 +251,11 @@ impl<'a, P: ParentData + Default> ChildHandle<'a, P, LayoutPhase> {
         // TODO: Delegate to render object
         None
     }
-}
 
-// ============================================================================
-// Paint Phase Methods
-// ============================================================================
+    // ========================================================================
+    // Paint Operations
+    // ========================================================================
 
-impl<'a, P: ParentData + Default> ChildHandle<'a, P, PaintPhase> {
     /// Paints this child at its stored offset.
     ///
     /// # Example
@@ -292,7 +268,7 @@ impl<'a, P: ParentData + Default> ChildHandle<'a, P, PaintPhase> {
     /// }
     /// ```
     #[inline]
-    pub fn paint(&self, _context: &mut PaintingContext) {
+    pub fn paint(&self, _context: &mut CanvasContext) {
         // TODO: Actually paint via render object
         // context.paint_child(self.child_id, self.offset);
     }
@@ -308,17 +284,15 @@ impl<'a, P: ParentData + Default> ChildHandle<'a, P, PaintPhase> {
     /// child.paint_at(ctx.canvas(), animated_offset);
     /// ```
     #[inline]
-    pub fn paint_at(&self, _context: &mut PaintingContext, _offset: Offset) {
+    pub fn paint_at(&self, _context: &mut CanvasContext, _offset: Offset) {
         // TODO: Actually paint at offset
         // context.paint_child(self.child_id, offset);
     }
-}
 
-// ============================================================================
-// Hit Test Phase Methods
-// ============================================================================
+    // ========================================================================
+    // Hit Test Operations
+    // ========================================================================
 
-impl<'a, P: ParentData + Default> ChildHandle<'a, P, HitTestPhase> {
     /// Hit tests this child at the given position.
     ///
     /// The position is in the parent's coordinate system.
@@ -385,38 +359,6 @@ impl<'a, P: ParentData + Default> ChildHandle<'a, P, HitTestPhase> {
 }
 
 // ============================================================================
-// Phase Transition (Internal)
-// ============================================================================
-
-impl<'a, P: ParentData + Default> ChildHandle<'a, P, LayoutPhase> {
-    /// Converts this handle to paint phase (internal use).
-    ///
-    /// After layout is complete, handles can be converted for painting.
-    #[inline]
-    pub(crate) fn into_paint_phase(self) -> ChildHandle<'a, P, PaintPhase> {
-        ChildHandle {
-            child_id: self.child_id,
-            size: self.size,
-            offset: self.offset,
-            parent_data: self.parent_data,
-            _phase: PhantomData,
-        }
-    }
-
-    /// Converts this handle to hit test phase (internal use).
-    #[inline]
-    pub(crate) fn into_hit_test_phase(self) -> ChildHandle<'a, P, HitTestPhase> {
-        ChildHandle {
-            child_id: self.child_id,
-            size: self.size,
-            offset: self.offset,
-            parent_data: self.parent_data,
-            _phase: PhantomData,
-        }
-    }
-}
-
-// ============================================================================
 // Tests
 // ============================================================================
 
@@ -428,7 +370,7 @@ mod tests {
     #[test]
     fn test_child_handle_creation() {
         let mut parent_data = BoxParentData::default();
-        let handle: ChildHandle<BoxParentData, LayoutPhase> = ChildHandle::new(
+        let handle: ChildHandle<BoxParentData> = ChildHandle::new(
             RenderId::new(1),
             Size::new(100.0, 50.0),
             Offset::new(10.0, 20.0),
@@ -441,9 +383,9 @@ mod tests {
     }
 
     #[test]
-    fn test_layout_phase_set_offset() {
+    fn test_set_offset() {
         let mut parent_data = BoxParentData::default();
-        let mut handle: LayoutChildHandle<BoxParentData> = ChildHandle::new(
+        let mut handle: ChildHandle<BoxParentData> = ChildHandle::new(
             RenderId::new(1),
             Size::new(100.0, 50.0),
             Offset::ZERO,
@@ -457,7 +399,7 @@ mod tests {
     #[test]
     fn test_contains_point() {
         let mut parent_data = BoxParentData::default();
-        let handle: ChildHandle<BoxParentData, LayoutPhase> = ChildHandle::new(
+        let handle: ChildHandle<BoxParentData> = ChildHandle::new(
             RenderId::new(1),
             Size::new(100.0, 50.0),
             Offset::new(10.0, 20.0),
@@ -477,7 +419,7 @@ mod tests {
     #[test]
     fn test_paint_bounds() {
         let mut parent_data = BoxParentData::default();
-        let handle: ChildHandle<BoxParentData, LayoutPhase> = ChildHandle::new(
+        let handle: ChildHandle<BoxParentData> = ChildHandle::new(
             RenderId::new(1),
             Size::new(100.0, 50.0),
             Offset::new(10.0, 20.0),
@@ -489,54 +431,5 @@ mod tests {
         assert_eq!(bounds.top(), 20.0);
         assert_eq!(bounds.width(), 100.0);
         assert_eq!(bounds.height(), 50.0);
-    }
-
-    #[test]
-    fn test_phase_transition() {
-        let mut parent_data = BoxParentData::default();
-        let layout_handle: LayoutChildHandle<BoxParentData> = ChildHandle::new(
-            RenderId::new(1),
-            Size::new(100.0, 50.0),
-            Offset::new(10.0, 20.0),
-            &mut parent_data,
-        );
-
-        // Convert to paint phase
-        let paint_handle = layout_handle.into_paint_phase();
-        assert_eq!(paint_handle.size(), Size::new(100.0, 50.0));
-        assert_eq!(paint_handle.offset(), Offset::new(10.0, 20.0));
-    }
-
-    #[test]
-    fn test_type_aliases() {
-        fn assert_layout_handle<P: ParentData + Default>(_: LayoutChildHandle<P>) {}
-        fn assert_paint_handle<P: ParentData + Default>(_: PaintChildHandle<P>) {}
-        fn assert_hit_test_handle<P: ParentData + Default>(_: HitTestChildHandle<P>) {}
-
-        let mut pd = BoxParentData::default();
-
-        let lh: LayoutChildHandle<BoxParentData> =
-            ChildHandle::new(RenderId::new(1), Size::ZERO, Offset::ZERO, &mut pd);
-        assert_layout_handle(lh);
-
-        let mut pd2 = BoxParentData::default();
-        let ph: PaintChildHandle<BoxParentData> = ChildHandle {
-            child_id: RenderId::new(1),
-            size: Size::ZERO,
-            offset: Offset::ZERO,
-            parent_data: &mut pd2,
-            _phase: PhantomData,
-        };
-        assert_paint_handle(ph);
-
-        let mut pd3 = BoxParentData::default();
-        let hh: HitTestChildHandle<BoxParentData> = ChildHandle {
-            child_id: RenderId::new(1),
-            size: Size::ZERO,
-            offset: Offset::ZERO,
-            parent_data: &mut pd3,
-            _phase: PhantomData,
-        };
-        assert_hit_test_handle(hh);
     }
 }

@@ -13,7 +13,8 @@ use crate::parent_data::ParentData;
 use crate::traits::RenderObject;
 
 use super::ViewConfiguration;
-use crate::pipeline::{PaintingContext, PipelineOwner};
+use crate::context::CanvasContext;
+use crate::pipeline::PipelineOwner;
 use flui_layer::TransformLayer;
 
 /// The root of the render tree.
@@ -313,7 +314,7 @@ impl RenderView {
     // ========================================================================
 
     /// Paints this render view.
-    pub fn paint_view(&self, _context: &mut PaintingContext, _offset: Offset) {
+    pub fn paint_view(&self, _context: &mut CanvasContext, _offset: Offset) {
         // No children to paint currently
     }
 
@@ -572,7 +573,7 @@ impl RenderObject for RenderView {
         Rect::new(0.0, 0.0, self.size.width, self.size.height)
     }
 
-    fn paint(&self, context: &mut PaintingContext, offset: Offset) {
+    fn paint(&self, context: &mut CanvasContext, offset: Offset) {
         self.paint_view(context, offset);
     }
 }

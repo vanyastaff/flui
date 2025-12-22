@@ -9,7 +9,7 @@ use flui_types::{RRect, Rect};
 use flui_painting::Canvas;
 use flui_types::painting::{Clip, ClipOp, Paint};
 
-/// Clip utilities used by [`PaintingContext`](super::PaintingContext).
+/// Clip utilities used by [`CanvasContext`](super::CanvasContext).
 ///
 /// This trait provides convenience methods for clipping and painting in one operation.
 /// After painting, the canvas is restored to its pre-clip state.

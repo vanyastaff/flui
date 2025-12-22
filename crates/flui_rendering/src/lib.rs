@@ -39,7 +39,7 @@
 //!         self.size
 //!     }
 //!
-//!     fn paint(&self, context: &mut PaintingContext, offset: Offset) {
+//!     fn paint(&self, context: &mut CanvasContext, offset: Offset) {
 //!         // Paint implementation
 //!     }
 //! }
@@ -47,14 +47,10 @@
 
 #![warn(missing_docs)]
 #![warn(clippy::all)]
-// Active development - many incomplete features
-#![allow(dead_code)]
-#![allow(unused_variables)]
-#![allow(unused_mut)]
-#![allow(unused_assignments)]
-#![allow(clippy::too_many_arguments)]
+// Rendering crate uses complex generic types for type-safe protocols
 #![allow(clippy::type_complexity)]
-#![allow(clippy::large_enum_variant)]
+// Some render objects have many configuration parameters
+#![allow(clippy::too_many_arguments)]
 
 pub mod arity;
 pub mod binding;
@@ -85,16 +81,20 @@ pub mod prelude {
     // Arity system
     pub use crate::arity::{Arity, Leaf, Optional, Single, Variable};
 
-    // Phase system
+    // Phase system (kept for backwards compatibility, may be removed in future)
     pub use crate::phase::{HitTestPhase, LayoutPhase, PaintPhase, Phase};
 
-    // Child handles with phase safety
-    pub use crate::child_handle::{
-        ChildHandle, HitTestChildHandle, LayoutChildHandle, PaintChildHandle,
-    };
+    // Child handles
+    pub use crate::child_handle::ChildHandle;
 
     // Children access
     pub use crate::children_access::{ChildState, ChildrenAccess};
+
+    // Context types for RenderBox and RenderSliver
+    pub use crate::context::{
+        BoxHitTestContext, BoxLayoutContext, BoxPaintContext, PaintContext, SliverHitTestContext,
+        SliverLayoutContext, SliverPaintContext,
+    };
 
     pub use crate::binding::{
         debug_dump_layer_tree, debug_dump_pipeline_owner_tree, debug_dump_render_tree,
@@ -123,7 +123,7 @@ pub mod prelude {
         SliverGridParentData, SliverMultiBoxAdaptorParentData, SliverParentData,
         SliverPhysicalParentData, StackParentData,
     };
-    pub use crate::pipeline::{Canvas, Paint, PaintStyle, PaintingContext, PipelineOwner};
+    pub use crate::pipeline::{Canvas, CanvasContext, Paint, PaintStyle, PipelineOwner};
     pub use crate::protocol::{BoxProtocol, Protocol, SliverProtocol};
     pub use crate::semantics::{
         SemanticsAction, SemanticsConfiguration, SemanticsNode, SemanticsNodeUpdate,
@@ -153,11 +153,14 @@ pub mod prelude {
 
 // Re-export key types at crate root
 pub use parent_data::ParentData;
-pub use pipeline::{PaintingContext, PipelineOwner};
+pub use pipeline::{CanvasContext, PipelineOwner};
 pub use traits::RenderObject;
 
-// Protocol system
-pub use context::{HitTestContext, LayoutContext};
+// Context system
+pub use context::{
+    BoxHitTestContext, BoxLayoutContext, BoxPaintContext, HitTestContext, LayoutContext,
+    PaintContext, SliverHitTestContext, SliverLayoutContext, SliverPaintContext,
+};
 pub use protocol::{
     // Marker traits
     BaselineProtocol,

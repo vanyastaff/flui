@@ -8,7 +8,12 @@
 //! - [`LayoutContext`]: Rich layout API with constraint helpers and child operations
 //! - [`HitTestContext`]: Rich hit testing API with position helpers and child testing
 //!
-//! Paint is not protocol-specific - all render objects use `flui_painting::Canvas` directly.
+//! For painting, use [`CanvasContext`] for low-level canvas operations.
+//!
+//! # Type Aliases for RenderBox
+//!
+//! - [`BoxLayoutContext`]: Layout context for box protocol
+//! - [`BoxHitTestContext`]: Hit test context for box protocol
 //!
 //! # Architecture
 //!
@@ -21,28 +26,87 @@
 //! # Example
 //!
 //! ```ignore
-//! use flui_rendering::context::{LayoutContext, HitTestContext};
+//! use flui_rendering::context::{BoxLayoutContext, BoxHitTestContext};
+//! use flui_rendering::context::CanvasContext;
 //!
-//! // Layout with rich API
-//! fn perform_layout(ctx: &mut LayoutContext<BoxProtocol, Single, BoxParentData>) {
-//!     let child_size = ctx.layout_single_child_loose();
-//!     ctx.position_single_child_at_origin();
-//!     ctx.complete_with_size(ctx.constrain(child_size));
-//! }
+//! impl RenderBox for MyWidget {
+//!     type Arity = Single;
+//!     type ParentData = BoxParentData;
 //!
-//! // Hit test with rich API
-//! fn hit_test(ctx: &mut HitTestContext<BoxProtocol, Single, BoxParentData>) -> bool {
-//!     if !ctx.is_within_size(self.width, self.height) {
-//!         return false;
+//!     fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<Single, BoxParentData>) {
+//!         let child_size = ctx.layout_single_child_loose();
+//!         ctx.position_single_child_at_origin();
+//!         ctx.complete_with_size(ctx.constrain(child_size));
 //!     }
-//!     ctx.add_self(self.id);
-//!     true
+//!
+//!     fn paint(&self, context: &mut CanvasContext, offset: Offset,
+//!              children: &ChildrenAccess<Single, BoxParentData, PaintPhase>) {
+//!         // Paint using CanvasContext
+//!         context.canvas().draw_rect(...);
+//!     }
+//!
+//!     fn hit_test(&self, ctx: &mut BoxHitTestContext<Single, BoxParentData>) -> bool {
+//!         if !ctx.is_within_size(self.size.width, self.size.height) {
+//!             return false;
+//!         }
+//!         ctx.add_self(self.id);
+//!         true
+//!     }
 //! }
 //! ```
 
+mod canvas;
+mod clip;
 mod hit_test;
 mod layout;
 mod paint;
 
+pub use canvas::{Canvas, CanvasContext, Paint, PaintStyle, Picture};
+pub use clip::ClipContext;
 pub use hit_test::HitTestContext;
 pub use layout::LayoutContext;
+pub use paint::PaintContext;
+
+// ============================================================================
+// Protocol Type Aliases
+// ============================================================================
+
+use crate::protocol::{BoxProtocol, SliverProtocol};
+
+// ────────────────────────────────────────────────────────────────────────────
+// Box Protocol
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Layout context for RenderBox.
+///
+/// This is the context type passed to `RenderBox::perform_layout()`.
+pub type BoxLayoutContext<'ctx, A, PD> = LayoutContext<'ctx, BoxProtocol, A, PD>;
+
+/// Hit test context for RenderBox.
+///
+/// This is the context type passed to `RenderBox::hit_test()`.
+pub type BoxHitTestContext<'ctx, A, PD> = HitTestContext<'ctx, BoxProtocol, A, PD>;
+
+/// Paint context for RenderBox.
+///
+/// This is the context type passed to `RenderBox::paint()`.
+pub type BoxPaintContext<'ctx, A, PD> = PaintContext<'ctx, BoxProtocol, A, PD>;
+
+// ────────────────────────────────────────────────────────────────────────────
+// Sliver Protocol
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Layout context for RenderSliver.
+///
+/// This is the context type passed to `RenderSliver::perform_layout()`.
+pub type SliverLayoutContext<'ctx, A, PD> = LayoutContext<'ctx, SliverProtocol, A, PD>;
+
+/// Hit test context for RenderSliver.
+///
+/// This is the context type passed to `RenderSliver::hit_test()`.
+pub type SliverHitTestContext<'ctx, A, PD> = HitTestContext<'ctx, SliverProtocol, A, PD>;
+
+/// Paint context for RenderSliver.
+///
+/// This is the context type passed to `RenderSliver::paint()`.
+pub type SliverPaintContext<'ctx, A, PD> = PaintContext<'ctx, SliverProtocol, A, PD>;

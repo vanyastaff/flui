@@ -282,7 +282,7 @@ pub trait RenderObject: Diagnosticable + HitTestTarget + DowncastSync {
     fn paint_bounds(&self) -> flui_types::Rect;
 
     /// Paints this render object.
-    fn paint(&self, context: &mut crate::pipeline::PaintingContext, offset: flui_types::Offset) {
+    fn paint(&self, context: &mut crate::context::CanvasContext, offset: flui_types::Offset) {
         let _ = (context, offset);
     }
 

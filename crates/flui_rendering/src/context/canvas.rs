@@ -1,26 +1,25 @@
-//! PaintingContext for recording paint commands.
+//! CanvasContext for recording paint commands into a layer tree.
 //!
-//! This module provides the `PaintingContext` type which manages the painting
-//! of render objects into a layer tree. It uses `flui-layer`'s `LayerTree` and
-//! `SceneBuilder` for constructing the compositor layer hierarchy.
+//! This module provides the [`CanvasContext`] type which manages low-level
+//! painting operations - canvas recording and layer tree construction.
 //!
 //! # Architecture
 //!
 //! ```text
-//! RenderObject.paint()
+//! PaintContext (high-level: offset + children)
 //!     │
 //!     ▼
-//! PaintingContext
+//! CanvasContext (low-level: canvas + layers)
 //!     │
-//!     │ Uses Canvas for drawing, SceneBuilder for layers
+//!     │ Uses Canvas for drawing, manages layer tree
 //!     ▼
 //! LayerTree + Picture layers
 //! ```
 //!
 //! # Flutter Equivalence
 //!
-//! This corresponds to Flutter's `PaintingContext` class in
-//! `rendering/object.dart`.
+//! This corresponds to the internal parts of Flutter's `PaintingContext` class
+//! in `rendering/object.dart` - specifically canvas and layer management.
 
 use flui_foundation::LayerId;
 use flui_layer::{
@@ -34,34 +33,37 @@ use flui_types::{Matrix4, Offset, RRect, Rect};
 use crate::traits::RenderObject;
 
 // ============================================================================
-// PaintingContext
+// CanvasContext
 // ============================================================================
 
-/// A context for painting render objects.
+/// Low-level context for canvas recording and layer tree management.
 ///
-/// Provides a canvas for recording paint commands and methods for
-/// painting child render objects with proper layer management.
+/// `CanvasContext` handles the mechanics of painting - recording draw commands
+/// to a canvas, managing layer push/pop operations, and building the layer tree.
+///
+/// For high-level painting with offset and children access, use [`PaintContext`]
+/// which wraps this type.
 ///
 /// # Flutter Equivalence
 ///
-/// This corresponds to Flutter's `PaintingContext` class in
-/// `rendering/object.dart`.
+/// This corresponds to the internal implementation of Flutter's `PaintingContext`
+/// class - specifically the canvas and layer management parts.
 ///
 /// # Usage
 ///
 /// ```ignore
-/// fn paint(&self, context: &mut PaintingContext, offset: Offset) {
-///     // Paint background
-///     context.canvas().draw_rect(Rect::from_size(self.size()), paint);
+/// // Usually accessed through PaintContext:
+/// fn paint(&self, ctx: &mut BoxPaintContext<'_, Single, BoxParentData>) {
+///     ctx.canvas().draw_rect(Rect::from_size(self.size()), paint);
+/// }
 ///
-///     // Paint child
-///     if let Some(child) = self.child() {
-///         context.paint_child(child, offset + child_offset);
-///     }
+/// // Or directly for low-level operations:
+/// fn paint_directly(canvas_ctx: &mut CanvasContext, offset: Offset) {
+///     canvas_ctx.canvas().draw_rect(...);
 /// }
 /// ```
 #[derive(Debug)]
-pub struct PaintingContext {
+pub struct CanvasContext {
     /// The layer tree being built.
     layer_tree: LayerTree,
 
@@ -84,7 +86,7 @@ pub struct PaintingContext {
     layer_stack: Vec<LayerId>,
 }
 
-impl PaintingContext {
+impl CanvasContext {
     /// Creates a new painting context with the given bounds.
     pub fn new(estimated_bounds: Rect) -> Self {
         let mut layer_tree = LayerTree::new();
@@ -162,12 +164,12 @@ impl PaintingContext {
     /// The [`LayerTree`] containing the painted content.
     pub fn repaint_composited_child<F>(paint_bounds: Rect, painter: F) -> LayerTree
     where
-        F: FnOnce(&mut PaintingContext, Offset),
+        F: FnOnce(&mut CanvasContext, Offset),
     {
         tracing::debug!("repaint_composited_child bounds={:?}", paint_bounds);
 
         // Create painting context
-        let mut context = PaintingContext::new(paint_bounds);
+        let mut context = CanvasContext::new(paint_bounds);
 
         // Paint the child
         painter(&mut context, Offset::ZERO);
@@ -252,7 +254,7 @@ impl PaintingContext {
     /// Paints a child into a new layer with the given offset.
     pub fn paint_child_with_offset<F>(&mut self, offset: Offset, painter: F)
     where
-        F: FnOnce(&mut PaintingContext),
+        F: FnOnce(&mut CanvasContext),
     {
         self.stop_recording_if_needed();
 
@@ -290,7 +292,7 @@ impl PaintingContext {
     /// All painting within the callback will be rendered with the given opacity.
     pub fn push_opacity<F>(&mut self, offset: Offset, alpha: u8, painter: F)
     where
-        F: FnOnce(&mut PaintingContext),
+        F: FnOnce(&mut CanvasContext),
     {
         self.stop_recording_if_needed();
 
@@ -328,7 +330,7 @@ impl PaintingContext {
         clip_rect: Rect,
         painter: F,
     ) where
-        F: FnOnce(&mut PaintingContext),
+        F: FnOnce(&mut CanvasContext),
     {
         if needs_compositing {
             self.stop_recording_if_needed();
@@ -373,7 +375,7 @@ impl PaintingContext {
         clip_rrect: RRect,
         painter: F,
     ) where
-        F: FnOnce(&mut PaintingContext),
+        F: FnOnce(&mut CanvasContext),
     {
         if needs_compositing {
             self.stop_recording_if_needed();
@@ -417,7 +419,7 @@ impl PaintingContext {
         clip_path: Path,
         painter: F,
     ) where
-        F: FnOnce(&mut PaintingContext),
+        F: FnOnce(&mut CanvasContext),
     {
         if needs_compositing {
             self.stop_recording_if_needed();
@@ -465,7 +467,7 @@ impl PaintingContext {
         _old_layer: Option<LayerId>,
     ) -> Option<LayerId>
     where
-        F: FnOnce(&mut PaintingContext),
+        F: FnOnce(&mut CanvasContext),
     {
         if needs_compositing {
             self.stop_recording_if_needed();
@@ -525,7 +527,7 @@ impl PaintingContext {
         _old_layer: Option<LayerId>,
     ) -> LayerId
     where
-        F: FnOnce(&mut PaintingContext),
+        F: FnOnce(&mut CanvasContext),
     {
         self.stop_recording_if_needed();
 
@@ -568,7 +570,7 @@ impl PaintingContext {
         _offset: Offset,
         _child_paint_bounds: Option<Rect>,
     ) where
-        F: FnOnce(&mut PaintingContext, Offset),
+        F: FnOnce(&mut CanvasContext, Offset),
     {
         self.stop_recording_if_needed();
 
@@ -635,8 +637,8 @@ impl PaintingContext {
     /// # Flutter Equivalence
     ///
     /// This corresponds to Flutter's `createChildContext` method.
-    pub fn create_child_context(bounds: Rect) -> PaintingContext {
-        PaintingContext::new(bounds)
+    pub fn create_child_context(bounds: Rect) -> CanvasContext {
+        CanvasContext::new(bounds)
     }
 
     // ========================================================================
@@ -669,10 +671,10 @@ impl PaintingContext {
 }
 
 // ============================================================================
-// ClipContext Implementation for PaintingContext
+// ClipContext Implementation for CanvasContext
 // ============================================================================
 
-impl super::ClipContext for PaintingContext {
+impl super::ClipContext for CanvasContext {
     fn canvas(&mut self) -> &mut Canvas {
         self.canvas()
     }
@@ -701,7 +703,7 @@ mod tests {
     #[test]
     fn test_painting_context_new() {
         let bounds = Rect::from_ltrb(0.0, 0.0, 100.0, 100.0);
-        let context = PaintingContext::new(bounds);
+        let context = CanvasContext::new(bounds);
 
         assert_eq!(context.estimated_bounds(), bounds);
         assert!(context.root_layer().is_some());
@@ -710,7 +712,7 @@ mod tests {
     #[test]
     fn test_painting_context_canvas() {
         let bounds = Rect::from_ltrb(0.0, 0.0, 100.0, 100.0);
-        let mut context = PaintingContext::new(bounds);
+        let mut context = CanvasContext::new(bounds);
 
         // Should be able to get canvas
         let _canvas = context.canvas();
@@ -720,7 +722,7 @@ mod tests {
     #[test]
     fn test_painting_context_stop_recording() {
         let bounds = Rect::from_ltrb(0.0, 0.0, 100.0, 100.0);
-        let mut context = PaintingContext::new(bounds);
+        let mut context = CanvasContext::new(bounds);
 
         // Draw something
         context.canvas().draw_rect(bounds, &Paint::fill(Color::RED));
@@ -737,7 +739,7 @@ mod tests {
     #[test]
     fn test_painting_context_push_opacity() {
         let bounds = Rect::from_ltrb(0.0, 0.0, 100.0, 100.0);
-        let mut context = PaintingContext::new(bounds);
+        let mut context = CanvasContext::new(bounds);
 
         context.push_opacity(Offset::ZERO, 128, |ctx| {
             ctx.canvas().draw_rect(bounds, &Paint::fill(Color::BLUE));
@@ -751,7 +753,7 @@ mod tests {
     #[test]
     fn test_painting_context_push_clip_rect() {
         let bounds = Rect::from_ltrb(0.0, 0.0, 100.0, 100.0);
-        let mut context = PaintingContext::new(bounds);
+        let mut context = CanvasContext::new(bounds);
 
         context.push_clip_rect(true, Offset::ZERO, bounds, |ctx| {
             ctx.canvas().draw_rect(bounds, &Paint::fill(Color::GREEN));

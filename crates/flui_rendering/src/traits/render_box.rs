@@ -1,34 +1,13 @@
 //! RenderBox trait for 2D box layout with Arity-based child management.
 
-use flui_types::{Offset, Point, Rect, Size};
+use flui_types::{Point, Rect, Size};
 
 use super::RenderObject;
 use crate::arity::Arity;
-use crate::children_access::ChildrenAccess;
 use crate::constraints::BoxConstraints;
+use crate::context::{BoxHitTestContext, BoxLayoutContext, BoxPaintContext};
+use crate::hit_testing::HitTestBehavior;
 use crate::parent_data::ParentData;
-use crate::phase::{HitTestPhase, LayoutPhase, PaintPhase};
-use crate::pipeline::PaintingContext;
-
-// ============================================================================
-// Hit Test Behavior
-// ============================================================================
-
-/// How a render object behaves during hit testing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum HitTestBehavior {
-    /// Targets that defer to their children receive events within their bounds
-    /// only if one of their children is hit by the hit test.
-    #[default]
-    DeferToChild,
-
-    /// Opaque targets can be hit even if their children have not been hit.
-    Opaque,
-
-    /// Translucent targets both receive events within their bounds and permit
-    /// targets visually behind them to also receive events.
-    Translucent,
-}
 
 // ============================================================================
 // RenderBox Trait with Arity and ParentData
@@ -100,13 +79,21 @@ pub trait RenderBox: RenderObject {
 
     /// Computes the layout of this render object.
     ///
-    /// The context provides type-safe access to children with the correct
-    /// ParentData type based on this render object's associated type.
-    fn perform_layout(
-        &mut self,
-        constraints: BoxConstraints,
-        children: &mut ChildrenAccess<'_, Self::Arity, Self::ParentData, LayoutPhase>,
-    ) -> Size;
+    /// The context provides:
+    /// - Constraints from parent via `ctx.constraints()`
+    /// - Type-safe child access via `ctx.layout_child()`, `ctx.position_child()`
+    /// - Completion via `ctx.complete_with_size()`
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<Single, BoxParentData>) {
+    ///     let child_size = ctx.layout_single_child_loose();
+    ///     ctx.position_single_child_at_origin();
+    ///     ctx.complete_with_size(ctx.constrain(child_size));
+    /// }
+    /// ```
+    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Self::Arity, Self::ParentData>);
 
     /// Returns the current size of this render object.
     fn size(&self) -> Size;
@@ -124,12 +111,27 @@ pub trait RenderBox: RenderObject {
     // ========================================================================
 
     /// Paints this render object.
-    fn paint(
-        &self,
-        context: &mut PaintingContext,
-        offset: Offset,
-        children: &ChildrenAccess<'_, Self::Arity, Self::ParentData, PaintPhase>,
-    );
+    ///
+    /// The context provides:
+    /// - Canvas access via `ctx.canvas()`
+    /// - Current offset via `ctx.offset()`
+    /// - Children access via `ctx.children_mut()`
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// fn paint(&self, ctx: &mut BoxPaintContext<'_, Single, BoxParentData>) {
+    ///     // Draw background
+    ///     let rect = Rect::from_size(self.size).translate(ctx.offset());
+    ///     ctx.canvas().draw_rect(rect, &Paint::fill(Color::WHITE));
+    ///
+    ///     // Paint children
+    ///     ctx.children_mut().for_each(|child| {
+    ///         child.paint(ctx.canvas_context_mut());
+    ///     });
+    /// }
+    /// ```
+    fn paint(&mut self, ctx: &mut BoxPaintContext<'_, Self::Arity, Self::ParentData>);
 
     // ========================================================================
     // Hit Testing
@@ -141,12 +143,29 @@ pub trait RenderBox: RenderObject {
     }
 
     /// Hit tests this render object.
-    fn hit_test(
-        &self,
-        result: &mut BoxHitTestResult,
-        position: Offset,
-        children: &ChildrenAccess<'_, Self::Arity, Self::ParentData, HitTestPhase>,
-    ) -> bool;
+    ///
+    /// The context provides:
+    /// - Position via `ctx.position()` or `ctx.x()`, `ctx.y()`
+    /// - Bounds checking via `ctx.is_within_size(w, h)`
+    /// - Child testing via `ctx.hit_test_child_at_offset()`
+    /// - Result management via `ctx.add_self(id)`
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// fn hit_test(&self, ctx: &mut BoxHitTestContext<Single, BoxParentData>) -> bool {
+    ///     if !ctx.is_within_size(self.size.width, self.size.height) {
+    ///         return false;
+    ///     }
+    ///     // Test children first
+    ///     if ctx.hit_test_child_at_offset(0, child_offset) {
+    ///         return true;
+    ///     }
+    ///     ctx.add_self(self.id);
+    ///     true
+    /// }
+    /// ```
+    fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Self::Arity, Self::ParentData>) -> bool;
 
     // ========================================================================
     // Parent Data
@@ -272,74 +291,6 @@ pub trait RenderBox: RenderObject {
     }
 }
 
-// ============================================================================
-// Supporting Types
-// ============================================================================
-
-/// Result of a box hit test.
-#[derive(Debug, Default)]
-pub struct BoxHitTestResult {
-    entries: Vec<BoxHitTestEntry>,
-}
-
-impl BoxHitTestResult {
-    /// Creates a new empty hit test result.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Adds an entry to the result.
-    pub fn add(&mut self, entry: BoxHitTestEntry) {
-        self.entries.push(entry);
-    }
-
-    /// Returns the entries in this result.
-    pub fn entries(&self) -> &[BoxHitTestEntry] {
-        &self.entries
-    }
-
-    /// Returns whether this result has any entries.
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
-
-    /// Clears all entries.
-    pub fn clear(&mut self) {
-        self.entries.clear();
-    }
-
-    /// Transforms the position by subtracting the paint offset.
-    pub fn add_with_paint_offset<F>(
-        &mut self,
-        offset: Option<Offset>,
-        position: Offset,
-        hit_test: F,
-    ) -> bool
-    where
-        F: FnOnce(&mut BoxHitTestResult, Offset) -> bool,
-    {
-        let transformed = match offset {
-            Some(off) => Offset::new(position.dx - off.dx, position.dy - off.dy),
-            None => position,
-        };
-        hit_test(self, transformed)
-    }
-}
-
-/// An entry in a box hit test result.
-#[derive(Debug)]
-pub struct BoxHitTestEntry {
-    /// The local position of the hit.
-    pub local_position: Offset,
-}
-
-impl BoxHitTestEntry {
-    /// Creates a new hit test entry.
-    pub fn new(local_position: Offset) -> Self {
-        Self { local_position }
-    }
-}
-
 /// Text baseline types for baseline alignment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TextBaseline {
@@ -359,36 +310,10 @@ mod tests {
 
     #[test]
     fn test_hit_test_behavior_default() {
+        // HitTestBehavior is now imported from flui_interaction via hit_testing
         let behavior = HitTestBehavior::default();
         assert_eq!(behavior, HitTestBehavior::DeferToChild);
     }
 
-    #[test]
-    fn test_box_hit_test_result() {
-        let mut result = BoxHitTestResult::new();
-        assert!(result.is_empty());
-
-        result.add(BoxHitTestEntry::new(Offset::new(10.0, 20.0)));
-        assert!(!result.is_empty());
-        assert_eq!(result.entries().len(), 1);
-
-        result.clear();
-        assert!(result.is_empty());
-    }
-
-    #[test]
-    fn test_box_hit_test_result_with_offset() {
-        let mut result = BoxHitTestResult::new();
-        let position = Offset::new(100.0, 100.0);
-        let paint_offset = Some(Offset::new(10.0, 20.0));
-
-        let hit = result.add_with_paint_offset(paint_offset, position, |_result, transformed| {
-            // Verify the position was transformed correctly
-            assert_eq!(transformed.dx, 90.0);
-            assert_eq!(transformed.dy, 80.0);
-            true
-        });
-
-        assert!(hit);
-    }
+    // BoxHitTestResult and BoxHitTestEntry tests are now in hit_testing/result.rs
 }

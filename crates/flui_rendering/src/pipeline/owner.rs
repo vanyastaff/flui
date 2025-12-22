@@ -8,7 +8,7 @@ use flui_layer::LayerTree;
 use flui_types::Offset;
 use parking_lot::RwLock;
 
-use crate::pipeline::PaintingContext;
+use crate::context::CanvasContext;
 use crate::tree::RenderTree;
 
 // ============================================================================
@@ -673,8 +673,8 @@ impl PipelineOwner {
                     let paint_bounds = root_node.render_object().paint_bounds();
                     tracing::debug!("flush_paint: painting root with bounds {:?}", paint_bounds);
 
-                    // Create PaintingContext
-                    let mut context = PaintingContext::new(paint_bounds);
+                    // Create CanvasContext
+                    let mut context = CanvasContext::new(paint_bounds);
 
                     // Paint all nodes in the tree (parents first, then children)
                     // Collect all node IDs first to avoid borrow issues

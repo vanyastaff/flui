@@ -190,40 +190,6 @@ mod private {
 }
 
 // ============================================================================
-// Phase Conversion Utilities
-// ============================================================================
-
-/// Converts a layout handle to a paint handle.
-///
-/// This is used internally when transitioning from layout to paint phase.
-/// The conversion is safe because:
-/// - Layout has already completed
-/// - Paint only needs read access to state set during layout
-///
-/// # Safety
-///
-/// This function is safe because it only changes the phase marker (zero-sized type).
-/// The underlying data and lifetime remain the same.
-#[inline]
-pub(crate) fn to_paint_phase<T>(handle: T) -> T {
-    // This is a no-op at runtime since phases are zero-sized
-    handle
-}
-
-/// Converts a layout handle to a hit test handle.
-///
-/// This is used internally when transitioning from layout to hit testing phase.
-///
-/// # Safety
-///
-/// This function is safe because it only changes the phase marker (zero-sized type).
-#[inline]
-pub(crate) fn to_hit_test_phase<T>(handle: T) -> T {
-    // This is a no-op at runtime since phases are zero-sized
-    handle
-}
-
-// ============================================================================
 // Tests
 // ============================================================================
 

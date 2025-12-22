@@ -35,7 +35,6 @@ use flui_types::{Offset, Size};
 use crate::arity::{Arity, Leaf, Optional, Single, Variable};
 use crate::child_handle::ChildHandle;
 use crate::parent_data::ParentData;
-use crate::phase::{LayoutPhase, Phase};
 
 // ============================================================================
 // ChildState - Per-child state storage
@@ -86,28 +85,29 @@ impl<P: ParentData + Default> ChildState<P> {
 /// `ChildrenAccess` is parameterized by:
 /// - `A`: Arity (Leaf, Optional, Single, Variable)
 /// - `P`: ParentData type
-/// - `Ph`: Phase type (LayoutPhase, PaintPhase, HitTestPhase)
 ///
 /// Different methods are available depending on the Arity type.
+/// Phase-specific behavior is now determined by the context type that
+/// contains this `ChildrenAccess` (e.g., `BoxLayoutContext`, `BoxPaintContext`).
 ///
 /// # Design
 ///
 /// This type stores child states and creates `ChildHandle` instances on-demand
 /// via closure-based iteration. This avoids borrow checker issues that would
 /// occur if we tried to return iterators of handles.
-pub struct ChildrenAccess<'a, A: Arity, P: ParentData + Default, Ph: Phase = LayoutPhase> {
+pub struct ChildrenAccess<'a, A: Arity, P: ParentData + Default> {
     /// Child states (owned, mutable).
     children: &'a mut [ChildState<P>],
 
-    /// Phantom data for type parameters.
-    _phantom: PhantomData<(A, Ph)>,
+    /// Phantom data for arity type parameter.
+    _phantom: PhantomData<A>,
 }
 
 // ============================================================================
 // Common Methods (Available for All Arities)
 // ============================================================================
 
-impl<'a, A: Arity, P: ParentData + Default, Ph: Phase> ChildrenAccess<'a, A, P, Ph> {
+impl<'a, A: Arity, P: ParentData + Default> ChildrenAccess<'a, A, P> {
     /// Creates a new children accessor.
     #[inline]
     pub fn new(children: &'a mut [ChildState<P>]) -> Self {
@@ -134,7 +134,7 @@ impl<'a, A: Arity, P: ParentData + Default, Ph: Phase> ChildrenAccess<'a, A, P, 
 // Leaf Arity (No children - no additional methods)
 // ============================================================================
 
-impl<'a, P: ParentData + Default, Ph: Phase> ChildrenAccess<'a, Leaf, P, Ph> {
+impl<'a, P: ParentData + Default> ChildrenAccess<'a, Leaf, P> {
     // Intentionally empty - Leaf has no children to access
 }
 
@@ -142,7 +142,7 @@ impl<'a, P: ParentData + Default, Ph: Phase> ChildrenAccess<'a, Leaf, P, Ph> {
 // Optional Arity (0 or 1 child)
 // ============================================================================
 
-impl<'a, P: ParentData + Default, Ph: Phase> ChildrenAccess<'a, Optional, P, Ph> {
+impl<'a, P: ParentData + Default> ChildrenAccess<'a, Optional, P> {
     /// Returns a handle to the optional child, if present.
     ///
     /// # Example
@@ -153,7 +153,7 @@ impl<'a, P: ParentData + Default, Ph: Phase> ChildrenAccess<'a, Optional, P, Ph>
     ///     child.set_offset(offset);
     /// }
     /// ```
-    pub fn get(&mut self) -> Option<ChildHandle<'_, P, Ph>> {
+    pub fn get(&mut self) -> Option<ChildHandle<'_, P>> {
         self.children.first_mut().map(|state| {
             ChildHandle::new(state.id, state.size, state.offset, &mut state.parent_data)
         })
@@ -183,7 +183,7 @@ impl<'a, P: ParentData + Default, Ph: Phase> ChildrenAccess<'a, Optional, P, Ph>
     /// ```
     pub fn if_some<F, R>(&mut self, f: F) -> Option<R>
     where
-        F: FnOnce(ChildHandle<'_, P, Ph>) -> R,
+        F: FnOnce(ChildHandle<'_, P>) -> R,
     {
         self.get().map(f)
     }
@@ -193,7 +193,7 @@ impl<'a, P: ParentData + Default, Ph: Phase> ChildrenAccess<'a, Optional, P, Ph>
 // Single Arity (Exactly 1 child)
 // ============================================================================
 
-impl<'a, P: ParentData + Default, Ph: Phase> ChildrenAccess<'a, Single, P, Ph> {
+impl<'a, P: ParentData + Default> ChildrenAccess<'a, Single, P> {
     /// Returns a handle to the single child.
     ///
     /// This method always succeeds because Single arity guarantees exactly 1 child.
@@ -209,7 +209,7 @@ impl<'a, P: ParentData + Default, Ph: Phase> ChildrenAccess<'a, Single, P, Ph> {
     /// let size = child.layout(constraints);
     /// child.set_offset(Offset::new(padding.left, padding.top));
     /// ```
-    pub fn get(&mut self) -> ChildHandle<'_, P, Ph> {
+    pub fn get(&mut self) -> ChildHandle<'_, P> {
         let state = &mut self.children[0];
         ChildHandle::new(state.id, state.size, state.offset, &mut state.parent_data)
     }
@@ -219,7 +219,7 @@ impl<'a, P: ParentData + Default, Ph: Phase> ChildrenAccess<'a, Single, P, Ph> {
 // Variable Arity (0+ children)
 // ============================================================================
 
-impl<'a, P: ParentData + Default, Ph: Phase> ChildrenAccess<'a, Variable, P, Ph> {
+impl<'a, P: ParentData + Default> ChildrenAccess<'a, Variable, P> {
     /// Returns a handle to the child at the given index.
     ///
     /// # Example
@@ -229,7 +229,7 @@ impl<'a, P: ParentData + Default, Ph: Phase> ChildrenAccess<'a, Variable, P, Ph>
     ///     first.layout(special_constraints);
     /// }
     /// ```
-    pub fn get(&mut self, index: usize) -> Option<ChildHandle<'_, P, Ph>> {
+    pub fn get(&mut self, index: usize) -> Option<ChildHandle<'_, P>> {
         self.children.get_mut(index).map(|state| {
             ChildHandle::new(state.id, state.size, state.offset, &mut state.parent_data)
         })
@@ -251,7 +251,7 @@ impl<'a, P: ParentData + Default, Ph: Phase> ChildrenAccess<'a, Variable, P, Ph>
     /// ```
     pub fn for_each<F>(&mut self, mut f: F)
     where
-        F: FnMut(ChildHandle<'_, P, Ph>),
+        F: FnMut(ChildHandle<'_, P>),
     {
         for state in self.children.iter_mut() {
             let handle =
@@ -272,7 +272,7 @@ impl<'a, P: ParentData + Default, Ph: Phase> ChildrenAccess<'a, Variable, P, Ph>
     /// ```
     pub fn for_each_indexed<F>(&mut self, mut f: F)
     where
-        F: FnMut(usize, ChildHandle<'_, P, Ph>),
+        F: FnMut(usize, ChildHandle<'_, P>),
     {
         for (index, state) in self.children.iter_mut().enumerate() {
             let handle =
@@ -292,7 +292,7 @@ impl<'a, P: ParentData + Default, Ph: Phase> ChildrenAccess<'a, Variable, P, Ph>
     /// ```
     pub fn map<T, F>(&mut self, mut f: F) -> Vec<T>
     where
-        F: FnMut(ChildHandle<'_, P, Ph>) -> T,
+        F: FnMut(ChildHandle<'_, P>) -> T,
     {
         let mut results = Vec::with_capacity(self.children.len());
         for state in self.children.iter_mut() {
@@ -314,7 +314,7 @@ impl<'a, P: ParentData + Default, Ph: Phase> ChildrenAccess<'a, Variable, P, Ph>
     /// ```
     pub fn fold<T, F>(&mut self, init: T, mut f: F) -> T
     where
-        F: FnMut(T, ChildHandle<'_, P, Ph>) -> T,
+        F: FnMut(T, ChildHandle<'_, P>) -> T,
     {
         let mut acc = init;
         for state in self.children.iter_mut() {
@@ -336,7 +336,7 @@ impl<'a, P: ParentData + Default, Ph: Phase> ChildrenAccess<'a, Variable, P, Ph>
     /// ```
     pub fn any<F>(&mut self, mut predicate: F) -> bool
     where
-        F: FnMut(ChildHandle<'_, P, Ph>) -> bool,
+        F: FnMut(ChildHandle<'_, P>) -> bool,
     {
         for state in self.children.iter_mut() {
             let handle =
@@ -359,7 +359,7 @@ impl<'a, P: ParentData + Default, Ph: Phase> ChildrenAccess<'a, Variable, P, Ph>
     /// ```
     pub fn all<F>(&mut self, mut predicate: F) -> bool
     where
-        F: FnMut(ChildHandle<'_, P, Ph>) -> bool,
+        F: FnMut(ChildHandle<'_, P>) -> bool,
     {
         for state in self.children.iter_mut() {
             let handle =
@@ -380,7 +380,7 @@ impl<'a, P: ParentData + Default, Ph: Phase> ChildrenAccess<'a, Variable, P, Ph>
     /// ```
     pub fn count<F>(&mut self, mut predicate: F) -> usize
     where
-        F: FnMut(ChildHandle<'_, P, Ph>) -> bool,
+        F: FnMut(ChildHandle<'_, P>) -> bool,
     {
         let mut count = 0;
         for state in self.children.iter_mut() {
@@ -403,7 +403,7 @@ impl<'a, P: ParentData + Default, Ph: Phase> ChildrenAccess<'a, Variable, P, Ph>
     pub fn sum<T, F>(&mut self, mut f: F) -> T
     where
         T: std::iter::Sum + Default,
-        F: FnMut(ChildHandle<'_, P, Ph>) -> T,
+        F: FnMut(ChildHandle<'_, P>) -> T,
     {
         self.map(|child| f(child)).into_iter().sum()
     }
@@ -413,14 +413,11 @@ impl<'a, P: ParentData + Default, Ph: Phase> ChildrenAccess<'a, Variable, P, Ph>
 // Debug
 // ============================================================================
 
-impl<A: Arity, P: ParentData + Default, Ph: Phase> std::fmt::Debug
-    for ChildrenAccess<'_, A, P, Ph>
-{
+impl<A: Arity, P: ParentData + Default> std::fmt::Debug for ChildrenAccess<'_, A, P> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ChildrenAccess")
             .field("arity", &std::any::type_name::<A>())
             .field("parent_data", &std::any::type_name::<P>())
-            .field("phase", &std::any::type_name::<Ph>())
             .field("child_count", &self.children.len())
             .finish()
     }
@@ -438,7 +435,7 @@ mod tests {
     #[test]
     fn test_children_access_empty() {
         let mut children: Vec<ChildState<BoxParentData>> = vec![];
-        let access: ChildrenAccess<'_, Variable, BoxParentData, LayoutPhase> =
+        let access: ChildrenAccess<'_, Variable, BoxParentData> =
             ChildrenAccess::new(&mut children);
 
         assert!(access.is_empty());
@@ -448,7 +445,7 @@ mod tests {
     #[test]
     fn test_optional_none() {
         let mut children: Vec<ChildState<BoxParentData>> = vec![];
-        let mut access: ChildrenAccess<'_, Optional, BoxParentData, LayoutPhase> =
+        let mut access: ChildrenAccess<'_, Optional, BoxParentData> =
             ChildrenAccess::new(&mut children);
 
         assert!(access.is_none());
@@ -458,7 +455,7 @@ mod tests {
     #[test]
     fn test_optional_some() {
         let mut children = vec![ChildState::new(RenderId::new(1))];
-        let mut access: ChildrenAccess<'_, Optional, BoxParentData, LayoutPhase> =
+        let mut access: ChildrenAccess<'_, Optional, BoxParentData> =
             ChildrenAccess::new(&mut children);
 
         assert!(access.is_some());
@@ -469,7 +466,7 @@ mod tests {
     #[test]
     fn test_single_get() {
         let mut children = vec![ChildState::new(RenderId::new(1))];
-        let mut access: ChildrenAccess<'_, Single, BoxParentData, LayoutPhase> =
+        let mut access: ChildrenAccess<'_, Single, BoxParentData> =
             ChildrenAccess::new(&mut children);
 
         let child = access.get();
@@ -483,7 +480,7 @@ mod tests {
             ChildState::new(RenderId::new(2)),
             ChildState::new(RenderId::new(3)),
         ];
-        let mut access: ChildrenAccess<'_, Variable, BoxParentData, LayoutPhase> =
+        let mut access: ChildrenAccess<'_, Variable, BoxParentData> =
             ChildrenAccess::new(&mut children);
 
         let mut count = 0;
@@ -501,7 +498,7 @@ mod tests {
             ChildState::new(RenderId::new(2)),
             ChildState::new(RenderId::new(3)),
         ];
-        let mut access: ChildrenAccess<'_, Variable, BoxParentData, LayoutPhase> =
+        let mut access: ChildrenAccess<'_, Variable, BoxParentData> =
             ChildrenAccess::new(&mut children);
 
         let ids: Vec<usize> = access.map(|child| child.id().get());
@@ -515,7 +512,7 @@ mod tests {
             ChildState::new(RenderId::new(2)),
             ChildState::new(RenderId::new(3)),
         ];
-        let mut access: ChildrenAccess<'_, Variable, BoxParentData, LayoutPhase> =
+        let mut access: ChildrenAccess<'_, Variable, BoxParentData> =
             ChildrenAccess::new(&mut children);
 
         let sum: usize = access.fold(0, |acc, child| acc + child.id().get());

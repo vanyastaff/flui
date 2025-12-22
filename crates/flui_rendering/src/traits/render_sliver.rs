@@ -1,12 +1,13 @@
 //! RenderSliver trait for scrollable content layout.
 
 use flui_types::prelude::AxisDirection;
-use flui_types::{Offset, Size};
-
-use crate::constraints::{SliverConstraints, SliverGeometry};
+use flui_types::Size;
 
 use super::RenderObject;
-use crate::pipeline::PaintingContext;
+use crate::arity::Arity;
+use crate::constraints::{SliverConstraints, SliverGeometry};
+use crate::context::{SliverHitTestContext, SliverLayoutContext, SliverPaintContext};
+use crate::parent_data::ParentData;
 
 // ============================================================================
 // RenderSliver Trait
@@ -26,9 +27,9 @@ use crate::pipeline::PaintingContext;
 ///
 /// # Layout Protocol
 ///
-/// 1. Parent (viewport) calls `perform_layout()` with constraints
+/// 1. Parent (viewport) calls `perform_layout()` with context
 /// 2. Sliver determines visible portion based on scroll offset
-/// 3. Sliver returns geometry describing how much space it consumes
+/// 3. Sliver completes layout via `ctx.complete(geometry)`
 /// 4. Viewport composes geometries to build scrollable view
 ///
 /// # Key Concepts
@@ -37,24 +38,39 @@ use crate::pipeline::PaintingContext;
 /// - **Paint Extent**: How much the sliver paints in the viewport
 /// - **Layout Extent**: How much the sliver consumes in the viewport
 /// - **Cache Extent**: Extra area to keep rendered for smooth scrolling
+///
+/// # Example
+///
+/// ```ignore
+/// impl RenderSliver for MySliverList {
+///     type Arity = Variable;
+///     type ParentData = SliverMultiBoxAdaptorParentData;
+///
+///     fn perform_layout(&mut self, ctx: &mut SliverLayoutContext<Variable, Self::ParentData>) {
+///         let scroll_offset = ctx.constraints().scroll_offset;
+///         // ... compute visible items ...
+///         ctx.complete(SliverGeometry { ... });
+///     }
+/// }
+/// ```
 pub trait RenderSliver: RenderObject {
+    /// The arity of this render sliver (Leaf, Optional, Variable, etc.)
+    type Arity: Arity;
+
+    /// The parent data type for children of this render sliver.
+    type ParentData: ParentData + Default;
+
     // ========================================================================
     // Layout
     // ========================================================================
 
     /// Computes the layout of this sliver.
     ///
-    /// Called by the parent viewport with constraints that specify
-    /// scroll position and viewport dimensions.
-    ///
-    /// # Arguments
-    ///
-    /// * `constraints` - The sliver constraints from the viewport
-    ///
-    /// # Returns
-    ///
-    /// The computed geometry describing this sliver's space usage
-    fn perform_layout(&mut self, constraints: SliverConstraints) -> SliverGeometry;
+    /// The context provides:
+    /// - Constraints via `ctx.constraints()`
+    /// - Child layout via `ctx.layout_child()`
+    /// - Completion via `ctx.complete(geometry)`
+    fn perform_layout(&mut self, ctx: &mut SliverLayoutContext<'_, Self::Arity, Self::ParentData>);
 
     /// Returns the current geometry of this sliver.
     ///
@@ -236,11 +252,11 @@ pub trait RenderSliver: RenderObject {
     ///
     /// Called after layout. Should only paint the visible portion.
     ///
-    /// # Arguments
-    ///
-    /// * `context` - The painting context with canvas access
-    /// * `offset` - The offset from the origin to paint at
-    fn paint(&self, context: &mut PaintingContext, offset: Offset);
+    /// The context provides:
+    /// - Canvas access via `ctx.canvas()`
+    /// - Current offset via `ctx.offset()`
+    /// - Children access via `ctx.children_mut()`
+    fn paint(&mut self, ctx: &mut SliverPaintContext<'_, Self::Arity, Self::ParentData>);
 
     // ========================================================================
     // Hit Testing
@@ -248,97 +264,15 @@ pub trait RenderSliver: RenderObject {
 
     /// Hit tests this sliver.
     ///
-    /// Positions are in the sliver's coordinate system:
-    /// - Main axis position: along scroll direction
-    /// - Cross axis position: perpendicular to scroll direction
-    ///
-    /// # Arguments
-    ///
-    /// * `result` - The hit test result to add entries to
-    /// * `main_axis_position` - Position along main (scroll) axis
-    /// * `cross_axis_position` - Position along cross axis
-    fn hit_test(
-        &self,
-        result: &mut SliverHitTestResult,
-        main_axis_position: f32,
-        cross_axis_position: f32,
-    ) -> bool {
-        let geometry = self.geometry();
-        let constraints = self.constraints();
-
-        if main_axis_position >= 0.0
-            && main_axis_position < geometry.hit_test_extent
-            && cross_axis_position >= 0.0
-            && cross_axis_position < constraints.cross_axis_extent
-        {
-            self.hit_test_children(result, main_axis_position, cross_axis_position)
-                || self.hit_test_self(main_axis_position, cross_axis_position)
-        } else {
-            false
-        }
-    }
+    /// The context provides:
+    /// - Position via `ctx.main_axis()`, `ctx.cross_axis()`
+    /// - Child testing via `ctx.hit_test_child()`
+    /// - Result management via `ctx.add_self(id)`
+    fn hit_test(&self, ctx: &mut SliverHitTestContext<'_, Self::Arity, Self::ParentData>) -> bool;
 
     /// Hit tests just this sliver (not children).
     fn hit_test_self(&self, _main: f32, _cross: f32) -> bool {
         false
-    }
-
-    /// Hit tests children of this sliver.
-    fn hit_test_children(
-        &self,
-        _result: &mut SliverHitTestResult,
-        _main: f32,
-        _cross: f32,
-    ) -> bool {
-        false
-    }
-}
-
-// ============================================================================
-// Supporting Types
-// ============================================================================
-
-/// Result of a sliver hit test.
-#[derive(Debug, Default)]
-pub struct SliverHitTestResult {
-    /// The list of hit test entries.
-    entries: Vec<SliverHitTestEntry>,
-}
-
-impl SliverHitTestResult {
-    /// Creates a new empty hit test result.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Adds an entry to the result.
-    pub fn add(&mut self, entry: SliverHitTestEntry) {
-        self.entries.push(entry);
-    }
-
-    /// Returns the entries in this result.
-    pub fn entries(&self) -> &[SliverHitTestEntry] {
-        &self.entries
-    }
-}
-
-/// An entry in a sliver hit test result.
-#[derive(Debug)]
-pub struct SliverHitTestEntry {
-    /// Position along main axis.
-    pub main_axis_position: f32,
-
-    /// Position along cross axis.
-    pub cross_axis_position: f32,
-}
-
-impl SliverHitTestEntry {
-    /// Creates a new hit test entry.
-    pub fn new(main_axis_position: f32, cross_axis_position: f32) -> Self {
-        Self {
-            main_axis_position,
-            cross_axis_position,
-        }
     }
 }
 
@@ -347,13 +281,15 @@ impl SliverHitTestEntry {
 // ============================================================================
 
 /// Trait for slivers with a single sliver child.
-pub trait RenderProxySliver: RenderSliver {
+///
+/// Generic over the child type `C` which must implement `RenderSliver`.
+pub trait RenderProxySliver<C: RenderSliver>: RenderSliver {
     /// Returns the child sliver, if any.
-    fn child(&self) -> Option<&dyn RenderSliver>;
+    fn child(&self) -> Option<&C>;
 
     /// Returns the child sliver mutably, if any.
-    fn child_mut(&mut self) -> Option<&mut dyn RenderSliver>;
+    fn child_mut(&mut self) -> Option<&mut C>;
 
     /// Sets the child sliver.
-    fn set_child(&mut self, child: Option<Box<dyn RenderSliver>>);
+    fn set_child(&mut self, child: Option<C>);
 }
