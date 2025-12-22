@@ -19,13 +19,30 @@ use crate::parent_data::ParentData;
 /// Capability trait for layout operations.
 ///
 /// Groups all types related to layout: constraints from parent,
-/// geometry output, and the layout context GAT.
+/// geometry output, cache key, and the layout context GAT.
+///
+/// # Cache Key Design
+///
+/// Constraints contain floats which don't implement `Hash + Eq` reliably.
+/// Instead of forcing awkward float hashing, we separate concerns:
+/// - `Constraints`: semantic layout input (no Hash/Eq required)
+/// - `CacheKey`: hashable fingerprint for caching (derived from constraints)
+///
+/// This allows proper caching while keeping constraints ergonomic.
 pub trait LayoutCapability: Send + Sync + 'static {
-    /// Layout constraints from parent (must be hashable for caching).
-    type Constraints: Clone + Debug + Send + Sync + Hash + Eq + 'static;
+    /// Layout constraints from parent.
+    ///
+    /// No `Hash + Eq` required - use `CacheKey` for caching.
+    type Constraints: Clone + Debug + Send + Sync + 'static;
 
     /// Layout geometry output (returned to parent after layout).
     type Geometry: Clone + Debug + Default + Send + Sync + 'static;
+
+    /// Hashable cache key derived from constraints.
+    ///
+    /// Used for layout caching. Implementations should handle float
+    /// comparison carefully (e.g., using integer bits).
+    type CacheKey: Clone + Debug + Hash + Eq + Send + Sync + 'static;
 
     /// Layout context with Generic Associated Type.
     type Context<'ctx, A: Arity, P: ParentData>: LayoutContextApi<'ctx, Self, A, P>
@@ -42,7 +59,12 @@ pub trait LayoutCapability: Send + Sync + 'static {
         true
     }
 
-    /// Normalizes constraints for consistent cache keys.
+    /// Derives a cache key from constraints.
+    ///
+    /// Returns `None` if constraints are not cacheable (e.g., contain NaN).
+    fn cache_key(constraints: &Self::Constraints) -> Option<Self::CacheKey>;
+
+    /// Normalizes constraints for layout (e.g., clamping negative values).
     fn normalize_constraints(constraints: Self::Constraints) -> Self::Constraints {
         constraints
     }

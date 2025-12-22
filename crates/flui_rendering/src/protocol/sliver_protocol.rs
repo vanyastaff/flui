@@ -69,9 +69,62 @@ impl ProtocolCompatible<SliverProtocol> for BoxProtocol {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SliverLayout;
 
+/// Cache key for SliverConstraints.
+///
+/// Uses integer representation of floats (bits) for reliable hashing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SliverConstraintsCacheKey {
+    axis_direction: u8,
+    growth_direction: u8,
+    cross_axis_extent_bits: u32,
+    viewport_main_axis_extent_bits: u32,
+    scroll_offset_bits: u32,
+    remaining_paint_extent_bits: u32,
+    overlap_bits: u32,
+    remaining_cache_extent_bits: u32,
+    cache_origin_bits: u32,
+    preceding_scroll_extent_bits: u32,
+}
+
+impl SliverConstraintsCacheKey {
+    /// Creates a cache key from constraints.
+    ///
+    /// Returns `None` if any float value is NaN.
+    pub fn from_constraints(c: &SliverConstraints) -> Option<Self> {
+        // NaN check helper
+        let is_nan = |v: f32| v != v;
+
+        if is_nan(c.cross_axis_extent)
+            || is_nan(c.viewport_main_axis_extent)
+            || is_nan(c.scroll_offset)
+            || is_nan(c.remaining_paint_extent)
+            || is_nan(c.overlap)
+            || is_nan(c.remaining_cache_extent)
+            || is_nan(c.cache_origin)
+            || is_nan(c.preceding_scroll_extent)
+        {
+            return None;
+        }
+
+        Some(Self {
+            axis_direction: c.axis_direction as u8,
+            growth_direction: c.growth_direction as u8,
+            cross_axis_extent_bits: c.cross_axis_extent.to_bits(),
+            viewport_main_axis_extent_bits: c.viewport_main_axis_extent.to_bits(),
+            scroll_offset_bits: c.scroll_offset.to_bits(),
+            remaining_paint_extent_bits: c.remaining_paint_extent.to_bits(),
+            overlap_bits: c.overlap.to_bits(),
+            remaining_cache_extent_bits: c.remaining_cache_extent.to_bits(),
+            cache_origin_bits: c.cache_origin.to_bits(),
+            preceding_scroll_extent_bits: c.preceding_scroll_extent.to_bits(),
+        })
+    }
+}
+
 impl LayoutCapability for SliverLayout {
     type Constraints = SliverConstraints;
     type Geometry = SliverGeometry;
+    type CacheKey = SliverConstraintsCacheKey;
     type Context<'ctx, A: Arity, P: ParentData>
         = SliverLayoutCtx<'ctx, A, P>
     where
@@ -83,6 +136,10 @@ impl LayoutCapability for SliverLayout {
 
     fn validate_constraints(constraints: &Self::Constraints) -> bool {
         constraints.is_normalized()
+    }
+
+    fn cache_key(constraints: &Self::Constraints) -> Option<Self::CacheKey> {
+        SliverConstraintsCacheKey::from_constraints(constraints)
     }
 
     fn normalize_constraints(constraints: Self::Constraints) -> Self::Constraints {

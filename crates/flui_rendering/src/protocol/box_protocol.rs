@@ -58,9 +58,45 @@ impl ProtocolCompatible<BoxProtocol> for BoxProtocol {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct BoxLayout;
 
+/// Cache key for BoxConstraints.
+///
+/// Uses integer representation of floats (bits) for reliable hashing.
+/// This handles -0.0/+0.0 and provides exact equality.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct BoxConstraintsCacheKey {
+    min_width_bits: u32,
+    max_width_bits: u32,
+    min_height_bits: u32,
+    max_height_bits: u32,
+}
+
+impl BoxConstraintsCacheKey {
+    /// Creates a cache key from constraints.
+    ///
+    /// Returns `None` if any value is NaN.
+    pub fn from_constraints(c: &BoxConstraints) -> Option<Self> {
+        // NaN check - NaN != NaN
+        if c.min_width != c.min_width
+            || c.max_width != c.max_width
+            || c.min_height != c.min_height
+            || c.max_height != c.max_height
+        {
+            return None;
+        }
+
+        Some(Self {
+            min_width_bits: c.min_width.to_bits(),
+            max_width_bits: c.max_width.to_bits(),
+            min_height_bits: c.min_height.to_bits(),
+            max_height_bits: c.max_height.to_bits(),
+        })
+    }
+}
+
 impl LayoutCapability for BoxLayout {
     type Constraints = BoxConstraints;
     type Geometry = Size;
+    type CacheKey = BoxConstraintsCacheKey;
     type Context<'ctx, A: Arity, P: ParentData>
         = BoxLayoutCtx<'ctx, A, P>
     where
@@ -72,6 +108,10 @@ impl LayoutCapability for BoxLayout {
 
     fn validate_constraints(constraints: &Self::Constraints) -> bool {
         constraints.is_normalized()
+    }
+
+    fn cache_key(constraints: &Self::Constraints) -> Option<Self::CacheKey> {
+        BoxConstraintsCacheKey::from_constraints(constraints)
     }
 
     fn normalize_constraints(constraints: Self::Constraints) -> Self::Constraints {
@@ -341,5 +381,62 @@ mod tests {
 
         ctx.complete_layout(Size::new(100.0, 100.0));
         assert!(ctx.is_complete());
+    }
+
+    #[test]
+    fn test_box_constraints_cache_key_equality() {
+        let c1 = BoxConstraints::tight(Size::new(100.0, 100.0));
+        let c2 = BoxConstraints::tight(Size::new(100.0, 100.0));
+        let c3 = BoxConstraints::tight(Size::new(200.0, 100.0));
+
+        let key1 = BoxConstraintsCacheKey::from_constraints(&c1).unwrap();
+        let key2 = BoxConstraintsCacheKey::from_constraints(&c2).unwrap();
+        let key3 = BoxConstraintsCacheKey::from_constraints(&c3).unwrap();
+
+        assert_eq!(key1, key2);
+        assert_ne!(key1, key3);
+    }
+
+    #[test]
+    fn test_box_constraints_cache_key_nan() {
+        let c = BoxConstraints::new(f32::NAN, 100.0, 0.0, 100.0);
+        assert!(BoxConstraintsCacheKey::from_constraints(&c).is_none());
+    }
+
+    #[test]
+    fn test_box_constraints_cache_key_negative_zero() {
+        // -0.0 and +0.0 should produce different cache keys (bit-exact)
+        let c1 = BoxConstraints::new(0.0, 100.0, 0.0, 100.0);
+        let c2 = BoxConstraints::new(-0.0, 100.0, 0.0, 100.0);
+
+        let key1 = BoxConstraintsCacheKey::from_constraints(&c1).unwrap();
+        let key2 = BoxConstraintsCacheKey::from_constraints(&c2).unwrap();
+
+        // They have different bits, so different keys
+        assert_ne!(key1, key2);
+    }
+
+    #[test]
+    fn test_box_constraints_cache_key_hash() {
+        use std::collections::HashSet;
+
+        let c1 = BoxConstraints::tight(Size::new(100.0, 100.0));
+        let c2 = BoxConstraints::tight(Size::new(100.0, 100.0));
+        let c3 = BoxConstraints::tight(Size::new(200.0, 100.0));
+
+        let key1 = BoxConstraintsCacheKey::from_constraints(&c1).unwrap();
+        let key2 = BoxConstraintsCacheKey::from_constraints(&c2).unwrap();
+        let key3 = BoxConstraintsCacheKey::from_constraints(&c3).unwrap();
+
+        let mut set = HashSet::new();
+        set.insert(key1);
+
+        // key2 is equal to key1, so set size should stay 1
+        set.insert(key2);
+        assert_eq!(set.len(), 1);
+
+        // key3 is different, so set size should become 2
+        set.insert(key3);
+        assert_eq!(set.len(), 2);
     }
 }

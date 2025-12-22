@@ -84,6 +84,8 @@ pub use capabilities::{
 // ============================================================================
 
 pub use box_protocol::{
+    // Cache key
+    BoxConstraintsCacheKey,
     // Hit test
     BoxHitTest,
     BoxHitTestCtx,
@@ -103,6 +105,8 @@ pub use box_protocol::{
 pub use sliver_protocol::{
     // Hit test
     MainAxisPosition,
+    // Cache key
+    SliverConstraintsCacheKey,
     SliverHitTest,
     SliverHitTestCtx,
     SliverHitTestEntry,
