@@ -18,6 +18,7 @@ workspace = true
 [dependencies]
 bitflags = { workspace = true }
 dashmap = { workspace = true }
+flui_types = { path = "../flui_types" }
 parking_lot = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }

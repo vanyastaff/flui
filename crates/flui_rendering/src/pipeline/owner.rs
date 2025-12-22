@@ -565,14 +565,12 @@ impl PipelineOwner {
                             // we set default constraints.
                             use crate::constraints::BoxConstraints;
 
-                            if render_object.base().cached_constraints().is_none() {
+                            if render_object.cached_constraints().is_none() {
                                 // No cached constraints - this is likely first layout
                                 // Set default loose constraints
                                 let default_constraints =
                                     BoxConstraints::loose(flui_types::Size::new(800.0, 600.0));
-                                render_object
-                                    .base_mut()
-                                    .set_cached_constraints(default_constraints);
+                                render_object.set_cached_constraints(default_constraints);
                             }
 
                             // Now call layout_without_resize which uses cached constraints

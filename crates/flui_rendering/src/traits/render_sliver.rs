@@ -201,8 +201,10 @@ pub trait RenderSliver: RenderObject {
         let cross_axis_extent = constraints.cross_axis_extent;
 
         match constraints.axis_direction {
-            AxisDirection::Up | AxisDirection::Down => Size::new(cross_axis_extent, paint_extent),
-            AxisDirection::Left | AxisDirection::Right => {
+            AxisDirection::TopToBottom | AxisDirection::BottomToTop => {
+                Size::new(cross_axis_extent, paint_extent)
+            }
+            AxisDirection::LeftToRight | AxisDirection::RightToLeft => {
                 Size::new(paint_extent, cross_axis_extent)
             }
         }
@@ -265,7 +267,7 @@ pub trait RenderSliver: RenderObject {
         let constraints = self.constraints();
 
         if main_axis_position >= 0.0
-            && main_axis_position < geometry.hit_test_extent()
+            && main_axis_position < geometry.hit_test_extent
             && cross_axis_position >= 0.0
             && cross_axis_position < constraints.cross_axis_extent
         {
@@ -354,38 +356,4 @@ pub trait RenderProxySliver: RenderSliver {
 
     /// Sets the child sliver.
     fn set_child(&mut self, child: Option<Box<dyn RenderSliver>>);
-}
-
-// ============================================================================
-// Box Adapter
-// ============================================================================
-
-/// Trait for slivers that contain a single box child.
-///
-/// Used to embed box widgets inside scrollable content.
-pub trait RenderSliverSingleBoxAdapter: RenderSliver {
-    /// Returns the box child, if any.
-    fn child(&self) -> Option<&dyn super::RenderBox>;
-
-    /// Returns the box child mutably, if any.
-    fn child_mut(&mut self) -> Option<&mut dyn super::RenderBox>;
-
-    /// Sets the box child.
-    fn set_child(&mut self, child: Option<Box<dyn super::RenderBox>>);
-}
-
-// ============================================================================
-// Multi Box Adapter
-// ============================================================================
-
-/// Trait for slivers with multiple box children (lists, grids).
-pub trait RenderSliverMultiBoxAdaptor: RenderSliver {
-    /// Returns an iterator over box children.
-    fn children(&self) -> Box<dyn Iterator<Item = &dyn super::RenderBox> + '_>;
-
-    /// Returns a mutable iterator over box children.
-    fn children_mut(&mut self) -> Box<dyn Iterator<Item = &mut dyn super::RenderBox> + '_>;
-
-    /// Returns the number of children.
-    fn child_count(&self) -> usize;
 }

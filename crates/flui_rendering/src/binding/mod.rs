@@ -278,8 +278,8 @@ pub trait RendererBinding: PipelineManifold + HitTestable {
 
         for (_, view) in self.render_views().read().iter() {
             let mut view_guard = view.write();
-            let has_child = view_guard.child().is_some();
-            force_frame = force_frame || has_child;
+            // If view has configuration, it needs a frame update
+            force_frame = force_frame || view_guard.has_configuration();
 
             let new_config = self.create_view_configuration_for(&view_guard);
             view_guard.set_configuration(new_config);

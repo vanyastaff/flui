@@ -14,7 +14,7 @@ use parking_lot::RwLock;
 /// # Flutter Equivalence
 ///
 /// Corresponds to Flutter's `ScrollDirection` enum.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
 pub enum ScrollDirection {
     /// No scrolling is underway.
     #[default]

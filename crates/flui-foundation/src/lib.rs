@@ -137,6 +137,7 @@ pub mod consts;
 pub mod id;
 pub mod key;
 pub mod observer;
+pub mod painting;
 pub mod platform;
 pub mod wasm;
 
@@ -239,6 +240,12 @@ pub use error::{FoundationError, Result};
 // WASM compatibility
 pub use wasm::{WasmNotSend, WasmNotSendSync};
 
+// Painting traits
+pub use painting::{
+    BlendMode, CacheHint, Caching, ClipBehavior, Effects, Layering, PaintColorFilter, PaintImage,
+    PaintParagraph, PaintShader, Painter,
+};
+
 // ============================================================================
 // PRELUDE
 // ============================================================================
@@ -255,11 +262,17 @@ pub mod prelude {
     pub use crate::{
         // Binding infrastructure
         BindingBase,
+        // Painting traits
+        BlendMode,
+        CacheHint,
+        Caching,
         // Change notification
         ChangeNotifier,
+        ClipBehavior,
         // Diagnostics
         DiagnosticLevel,
         Diagnosticable,
+        Effects,
         // IDs
         ElementId,
         // Callbacks
@@ -278,6 +291,7 @@ pub mod prelude {
         KeyRef,
         Keyed,
         LayerId,
+        Layering,
         Listenable,
         ListenerCallback,
         ListenerId,
@@ -285,6 +299,7 @@ pub mod prelude {
 
         ObserverId,
         ObserverList,
+        Painter,
         Predicate,
         RenderId,
         SemanticsId,

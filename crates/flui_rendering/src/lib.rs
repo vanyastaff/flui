@@ -61,6 +61,7 @@ pub mod binding;
 pub mod child_handle;
 pub mod children_access;
 pub mod constraints;
+pub mod context;
 pub mod delegates;
 pub mod hit_testing;
 pub mod input;
@@ -153,5 +154,40 @@ pub mod prelude {
 // Re-export key types at crate root
 pub use parent_data::ParentData;
 pub use pipeline::{PaintingContext, PipelineOwner};
-pub use protocol::{BoxProtocol, Protocol, SliverProtocol};
 pub use traits::RenderObject;
+
+// Protocol system
+pub use context::PaintContext;
+pub use protocol::{
+    // Marker traits
+    BaselineProtocol,
+    BidirectionalProtocol,
+    // Concrete capabilities
+    BoxHitTest,
+    BoxLayout,
+    // Core protocol trait and implementations
+    BoxProtocol,
+    // Capability traits
+    HitTestCapability,
+    HitTestContextApi,
+    IntrinsicProtocol,
+    LayoutCapability,
+    LayoutContextApi,
+    PaintCapability,
+    PaintContextApi,
+    Protocol,
+    ProtocolCompatible,
+    // Type aliases
+    ProtocolConstraints,
+    ProtocolGeometry,
+    ProtocolHitResult,
+    ProtocolHitTestCtx,
+    ProtocolLayoutCtx,
+    ProtocolPaintCtx,
+    ProtocolPosition,
+    ProtocolRenderObject,
+    SliverHitTest,
+    SliverLayout,
+    SliverProtocol,
+    StandardPaint,
+};

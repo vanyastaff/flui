@@ -448,7 +448,7 @@ impl RenderTree {
         let mut nodes: Vec<(RenderId, usize)> = self
             .nodes
             .iter()
-            .filter(|(_, node)| node.render_object().base().needs_layout())
+            .filter(|(_, node)| node.render_object().needs_layout())
             .map(|(idx, node)| (RenderId::new(idx + 1), node.depth()))
             .collect();
 
@@ -466,7 +466,7 @@ impl RenderTree {
         let mut nodes: Vec<(RenderId, usize)> = self
             .nodes
             .iter()
-            .filter(|(_, node)| node.render_object().base().needs_paint())
+            .filter(|(_, node)| node.render_object().needs_paint())
             .map(|(idx, node)| (RenderId::new(idx + 1), node.depth()))
             .collect();
 

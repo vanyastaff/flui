@@ -354,7 +354,7 @@ impl Constraints for SliverConstraints {
 impl Default for SliverConstraints {
     fn default() -> Self {
         Self {
-            axis_direction: AxisDirection::Down,
+            axis_direction: AxisDirection::TopToBottom,
             growth_direction: GrowthDirection::Forward,
             user_scroll_direction: ScrollDirection::Idle,
             scroll_offset: 0.0,
@@ -362,7 +362,7 @@ impl Default for SliverConstraints {
             overlap: 0.0,
             remaining_paint_extent: 0.0,
             cross_axis_extent: 0.0,
-            cross_axis_direction: AxisDirection::Right,
+            cross_axis_direction: AxisDirection::LeftToRight,
             viewport_main_axis_extent: 0.0,
             remaining_cache_extent: 0.0,
             cache_origin: 0.0,

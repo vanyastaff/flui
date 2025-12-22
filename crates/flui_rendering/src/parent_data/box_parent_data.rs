@@ -87,8 +87,8 @@ impl ParentData for BoxParentData {}
 impl Hash for BoxParentData {
     fn hash<H: Hasher>(&self, state: &mut H) {
         // Hash offset components as bits to avoid float precision issues
-        self.offset.x.to_bits().hash(state);
-        self.offset.y.to_bits().hash(state);
+        self.offset.dx.to_bits().hash(state);
+        self.offset.dy.to_bits().hash(state);
     }
 }
 
