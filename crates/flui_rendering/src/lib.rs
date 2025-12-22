@@ -157,7 +157,7 @@ pub use pipeline::{PaintingContext, PipelineOwner};
 pub use traits::RenderObject;
 
 // Protocol system
-pub use context::{HitTestContext, LayoutContext, PaintContext};
+pub use context::{HitTestContext, LayoutContext};
 pub use protocol::{
     // Marker traits
     BaselineProtocol,
@@ -173,8 +173,6 @@ pub use protocol::{
     IntrinsicProtocol,
     LayoutCapability,
     LayoutContextApi,
-    PaintCapability,
-    PaintContextApi,
     Protocol,
     ProtocolCompatible,
     // Type aliases
@@ -183,11 +181,9 @@ pub use protocol::{
     ProtocolHitResult,
     ProtocolHitTestCtx,
     ProtocolLayoutCtx,
-    ProtocolPaintCtx,
     ProtocolPosition,
     ProtocolRenderObject,
     SliverHitTest,
     SliverLayout,
     SliverProtocol,
-    StandardPaint,
 };

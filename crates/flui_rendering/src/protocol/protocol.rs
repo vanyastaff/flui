@@ -2,15 +2,15 @@
 //!
 //! This module defines the main [`Protocol`] trait that composes capabilities.
 //! The protocol is the top-level abstraction that defines how a render object
-//! performs layout, hit testing, and painting.
+//! performs layout and hit testing.
 
 use std::fmt::Debug;
 
 use crate::parent_data::ParentData;
 
 use super::capabilities::{
-    HitTestCapability, LayoutCapability, PaintCapability, ProtocolConstraints, ProtocolGeometry,
-    ProtocolHitTestCtx, ProtocolLayoutCtx, ProtocolPaintCtx,
+    HitTestCapability, LayoutCapability, ProtocolConstraints, ProtocolGeometry, ProtocolHitTestCtx,
+    ProtocolLayoutCtx,
 };
 use crate::arity::Arity;
 
@@ -30,17 +30,18 @@ pub(crate) mod sealed {
 
 /// Protocol trait that composes capabilities.
 ///
-/// This trait composes three capability traits, each grouping related types:
+/// This trait composes two capability traits, each grouping related types:
 ///
 /// - **Layout**: Constraints, Geometry, LayoutContext
 /// - **HitTest**: Position, Result, Entry, HitTestContext
-/// - **Paint**: Painter, Layering, Effects, Caching, PaintContext
+///
+/// Paint is not part of the protocol - all render objects use the same
+/// Canvas API for painting regardless of their protocol.
 ///
 /// # Type Parameters
 ///
 /// Each capability is a separate associated type, allowing different protocols
-/// to share components. For example, BoxProtocol and SliverProtocol both use
-/// StandardPaint for painting.
+/// to have different layout and hit test behaviors.
 ///
 /// # Example
 ///
@@ -50,7 +51,6 @@ pub(crate) mod sealed {
 /// impl Protocol for BoxProtocol {
 ///     type Layout = BoxLayout;
 ///     type HitTest = BoxHitTest;
-///     type Paint = StandardPaint;
 ///     type DefaultParentData = BoxParentData;
 ///
 ///     fn name() -> &'static str { "Box" }
@@ -62,9 +62,6 @@ pub trait Protocol: Send + Sync + Debug + Clone + Copy + sealed::Sealed + 'stati
 
     /// Hit test capability defining position, result, and hit test context.
     type HitTest: HitTestCapability;
-
-    /// Paint capability composing Painter, Layering, Effects, and Caching.
-    type Paint: PaintCapability;
 
     /// Default parent data for child render objects.
     type DefaultParentData: ParentData + Default;
@@ -141,9 +138,6 @@ pub trait ProtocolRenderObject<
 {
     /// Perform layout with the given context.
     fn perform_layout(&mut self, ctx: &mut ProtocolLayoutCtx<'_, P, A, PD>);
-
-    /// Paint this render object.
-    fn paint(&self, ctx: &mut ProtocolPaintCtx<'_, P, A, PD>);
 
     /// Hit test at the given position.
     fn hit_test(&self, ctx: &mut ProtocolHitTestCtx<'_, P, A, PD>) -> bool;

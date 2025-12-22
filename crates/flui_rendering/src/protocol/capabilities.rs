@@ -3,12 +3,10 @@
 //! This module defines the capability traits that protocols compose:
 //! - [`LayoutCapability`]: Layout input/output types
 //! - [`HitTestCapability`]: Hit test input/output types
-//! - [`PaintCapability`]: Paint component types
 
 use std::fmt::Debug;
 use std::hash::Hash;
 
-use flui_foundation::painting::{Caching, Effects, Layering, Painter};
 use flui_types::geometry::Offset;
 
 use crate::arity::Arity;
@@ -141,62 +139,6 @@ pub trait HitTestContextApi<'ctx, H: HitTestCapability + ?Sized, A: Arity, P: Pa
 }
 
 // ============================================================================
-// PAINT CAPABILITY
-// ============================================================================
-
-/// Capability trait for paint operations.
-///
-/// Unlike Layout and HitTest which are protocol-specific, Paint is shared
-/// across all protocols (Box and Sliver use the same painting system).
-///
-/// The capability composes 4 orthogonal concerns:
-/// - **Painter**: What to draw (shapes, images, text)
-/// - **Layering**: How layers are composed
-/// - **Effects**: Visual effects applied
-/// - **Caching**: Optimization strategies
-pub trait PaintCapability: Send + Sync + 'static {
-    /// The canvas/painter implementation for drawing primitives.
-    type Painter: Painter;
-
-    /// The layer composition strategy.
-    type Layering: Layering;
-
-    /// Visual effects implementation.
-    type Effects: Effects;
-
-    /// Caching strategy for paint optimization.
-    type Caching: Caching;
-
-    /// The paint context type, parameterized by lifetime, arity and parent data.
-    type Context<'ctx, A: Arity, P: ParentData>: PaintContextApi<'ctx, Self, A, P>
-    where
-        Self: 'ctx;
-}
-
-/// API that paint contexts must provide.
-pub trait PaintContextApi<'ctx, P: PaintCapability + ?Sized, A: Arity, PD: ParentData>:
-    Send + Sync
-{
-    /// Get access to the underlying painter for direct drawing.
-    fn painter(&mut self) -> &mut P::Painter;
-
-    /// Get access to layering operations.
-    fn layering(&mut self) -> &mut P::Layering;
-
-    /// Get access to effects operations.
-    fn effects(&mut self) -> &mut P::Effects;
-
-    /// Get access to caching information.
-    fn caching(&self) -> &P::Caching;
-
-    /// Check if this render object is a repaint boundary.
-    fn is_repaint_boundary(&self) -> bool;
-
-    /// Get the current paint offset (accumulated from parent transforms).
-    fn offset(&self) -> Offset;
-}
-
-// ============================================================================
 // TYPE ALIASES (for Protocol usage)
 // ============================================================================
 
@@ -221,7 +163,3 @@ pub type ProtocolLayoutCtx<'ctx, P, A, PD> =
 /// Hit test context type for a protocol.
 pub type ProtocolHitTestCtx<'ctx, P, A, PD> =
     <<P as Protocol>::HitTest as HitTestCapability>::Context<'ctx, A, PD>;
-
-/// Paint context type for a protocol.
-pub type ProtocolPaintCtx<'ctx, P, A, PD> =
-    <<P as Protocol>::Paint as PaintCapability>::Context<'ctx, A, PD>;

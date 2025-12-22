@@ -1,4 +1,4 @@
-//! Rich context implementations for layout, hit testing, and painting.
+//! Rich context implementations for layout and hit testing.
 //!
 //! This module provides high-level context types that wrap the capability traits
 //! and provide ergonomic APIs for common operations.
@@ -7,20 +7,21 @@
 //!
 //! - [`LayoutContext`]: Rich layout API with constraint helpers and child operations
 //! - [`HitTestContext`]: Rich hit testing API with position helpers and child testing
-//! - [`PaintContext`]: Rich painting API with scoped operations and chaining
+//!
+//! Paint is not protocol-specific - all render objects use `flui_painting::Canvas` directly.
 //!
 //! # Architecture
 //!
 //! Contexts wrap the underlying capability implementations and provide:
-//! - **Scoped operations**: `with_save()`, `with_translate()`, `with_opacity()`
+//! - **Scoped operations**: `with_save()`, `with_translate()`
 //! - **Chaining API**: Fluent builder pattern for sequential operations
-//! - **Conditional operations**: `when()`, `when_else()`, `draw_if()`
-//! - **Child helpers**: `paint_child()`, `layout_child()`, `hit_test_child()`
+//! - **Conditional operations**: `when()`, `when_else()`
+//! - **Child helpers**: `layout_child()`, `hit_test_child()`
 //!
 //! # Example
 //!
 //! ```ignore
-//! use flui_rendering::context::{LayoutContext, HitTestContext, PaintContext};
+//! use flui_rendering::context::{LayoutContext, HitTestContext};
 //!
 //! // Layout with rich API
 //! fn perform_layout(ctx: &mut LayoutContext<BoxProtocol, Single, BoxParentData>) {
@@ -37,13 +38,6 @@
 //!     ctx.add_self(self.id);
 //!     true
 //! }
-//!
-//! // Paint with rich API
-//! fn paint(ctx: &mut PaintContext<BoxProtocol, Single, BoxParentData>) {
-//!     ctx.with_translate(10.0, 10.0, |ctx| {
-//!         ctx.draw_rect(bounds, &paint);
-//!     });
-//! }
 //! ```
 
 mod hit_test;
@@ -52,4 +46,3 @@ mod paint;
 
 pub use hit_test::HitTestContext;
 pub use layout::LayoutContext;
-pub use paint::PaintContext;

@@ -32,7 +32,6 @@ impl sealed::Sealed for BoxProtocol {}
 impl Protocol for BoxProtocol {
     type Layout = BoxLayout;
     type HitTest = BoxHitTest;
-    // TODO: type Paint = ...;
     type DefaultParentData = BoxParentData;
 
     fn name() -> &'static str {

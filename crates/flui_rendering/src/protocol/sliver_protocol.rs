@@ -32,7 +32,6 @@ impl sealed::Sealed for SliverProtocol {}
 impl Protocol for SliverProtocol {
     type Layout = SliverLayout;
     type HitTest = SliverHitTest;
-    // TODO: type Paint = ...;
     type DefaultParentData = SliverParentData;
 
     fn name() -> &'static str {

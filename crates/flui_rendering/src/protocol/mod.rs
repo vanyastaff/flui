@@ -1,7 +1,7 @@
 //! Protocol System - Type-safe render object protocols with composition.
 //!
 //! This module provides the protocol system based on capability composition:
-//! - Protocol trait composes Layout, HitTest, and Paint capabilities
+//! - Protocol trait composes Layout and HitTest capabilities
 //! - BoxProtocol for 2D cartesian layout (most widgets)
 //! - SliverProtocol for scrollable content layout
 //!
@@ -10,22 +10,21 @@
 //! ```text
 //!              Protocol Trait (Composition)
 //!                     │
-//!        ┌────────────┼────────────┐
-//!        ▼            ▼            ▼
-//!   LayoutCap    HitTestCap    PaintCap
-//!        │            │            │
-//!        ▼            ▼            ▼
-//!   BoxLayout    BoxHitTest   StandardPaint
-//!   SliverLayout SliverHitTest    (shared)
+//!        ┌────────────┴────────────┐
+//!        ▼                         ▼
+//!   LayoutCap                 HitTestCap
+//!        │                         │
+//!        ▼                         ▼
+//!   BoxLayout                 BoxHitTest
+//!   SliverLayout              SliverHitTest
 //! ```
 //!
 //! # Module Structure
 //!
 //! - `protocol`: Core Protocol trait
-//! - `capabilities`: LayoutCapability, HitTestCapability, PaintCapability
+//! - `capabilities`: LayoutCapability, HitTestCapability
 //! - `box_protocol`: BoxProtocol with BoxLayout, BoxHitTest
 //! - `sliver_protocol`: SliverProtocol with SliverLayout, SliverHitTest
-//! - `paint`: StandardPaint (shared by all protocols)
 //!
 //! # Examples
 //!
@@ -71,15 +70,12 @@ pub use capabilities::{
     HitTestContextApi,
     LayoutCapability,
     LayoutContextApi,
-    PaintCapability,
-    PaintContextApi,
     // Type aliases
     ProtocolConstraints,
     ProtocolGeometry,
     ProtocolHitResult,
     ProtocolHitTestCtx,
     ProtocolLayoutCtx,
-    ProtocolPaintCtx,
     ProtocolPosition,
 };
 
@@ -143,8 +139,6 @@ pub mod prelude {
         IntrinsicProtocol,
         LayoutCapability,
         LayoutContextApi,
-        PaintCapability,
-        PaintContextApi,
         // Protocol trait
         Protocol,
         ProtocolCompatible,
@@ -154,7 +148,6 @@ pub mod prelude {
         ProtocolHitResult,
         ProtocolHitTestCtx,
         ProtocolLayoutCtx,
-        ProtocolPaintCtx,
         ProtocolPosition,
         ProtocolRenderObject,
         SliverHitTest,
