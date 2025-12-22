@@ -282,6 +282,75 @@ impl Tessellator {
         self.tessellate_fill(&path, paint)
     }
 
+    /// Tessellate an arc (pie slice or arc stroke)
+    ///
+    /// # Arguments
+    /// * `rect` - Bounding rectangle of the ellipse
+    /// * `start_angle` - Start angle in radians
+    /// * `sweep_angle` - Sweep angle in radians
+    /// * `use_center` - If true, draws a pie slice (connected to center)
+    /// * `paint` - Paint style (fill or stroke)
+    ///
+    /// # Returns
+    /// Tuple of (vertices, indices) ready for GPU upload
+    pub fn tessellate_arc(
+        &mut self,
+        rect: Rect,
+        start_angle: f32,
+        sweep_angle: f32,
+        use_center: bool,
+        paint: &Paint,
+    ) -> Result<(Vec<Vertex>, Vec<u32>)> {
+        let mut path_builder = Path::builder();
+
+        let center = rect.center();
+        let radii = lyon::geom::vector(rect.width() / 2.0, rect.height() / 2.0);
+
+        // Calculate number of segments based on sweep angle for smooth curves
+        let num_segments =
+            ((sweep_angle.abs() / (std::f32::consts::PI / 12.0)).ceil() as i32).max(8);
+        let angle_step = sweep_angle / num_segments as f32;
+
+        // Start point on the arc
+        let start_x = center.x + radii.x * start_angle.cos();
+        let start_y = center.y + radii.y * start_angle.sin();
+
+        if use_center {
+            // Pie slice: start from center
+            path_builder.begin(lyon::geom::point(center.x, center.y));
+            path_builder.line_to(lyon::geom::point(start_x, start_y));
+        } else {
+            // Arc only: start from arc edge
+            path_builder.begin(lyon::geom::point(start_x, start_y));
+        }
+
+        // Draw arc segments
+        for i in 1..=num_segments {
+            let angle = start_angle + angle_step * i as f32;
+            let x = center.x + radii.x * angle.cos();
+            let y = center.y + radii.y * angle.sin();
+            path_builder.line_to(lyon::geom::point(x, y));
+        }
+
+        if use_center {
+            // Pie slice: close back to center
+            path_builder.line_to(lyon::geom::point(center.x, center.y));
+            path_builder.close();
+        } else {
+            // Arc only: don't close
+            path_builder.end(false);
+        }
+
+        let path = path_builder.build();
+
+        // Use fill or stroke based on paint style
+        if paint.style == flui_painting::PaintStyle::Fill {
+            self.tessellate_fill(&path, paint)
+        } else {
+            self.tessellate_stroke(&path, paint)
+        }
+    }
+
     /// Tessellate a double rounded rectangle (ring/border with inner cutout)
     ///
     /// Creates a path with two contours: outer (positive winding) and inner (negative winding).
@@ -562,24 +631,36 @@ impl IntoLyonPath for flui_types::painting::path::Path {
 
         let mut builder = Path::builder();
         let mut current_pos: Option<Point> = None;
+        let mut has_begun = false;
 
         for command in self.commands() {
             match command {
                 PathCommand::MoveTo(point) => {
                     // End previous subpath if exists
-                    if current_pos.is_some() {
+                    if has_begun {
                         builder.end(false);
                     }
                     builder.begin(lyon::geom::point(point.x, point.y));
                     current_pos = Some(*point);
+                    has_begun = true;
                 }
 
                 PathCommand::LineTo(point) => {
-                    builder.line_to(lyon::geom::point(point.x, point.y));
+                    // Auto-begin if no move_to was called
+                    if !has_begun {
+                        builder.begin(lyon::geom::point(point.x, point.y));
+                        has_begun = true;
+                    } else {
+                        builder.line_to(lyon::geom::point(point.x, point.y));
+                    }
                     current_pos = Some(*point);
                 }
 
                 PathCommand::QuadraticTo(control, end) => {
+                    if !has_begun {
+                        builder.begin(lyon::geom::point(control.x, control.y));
+                        has_begun = true;
+                    }
                     builder.quadratic_bezier_to(
                         lyon::geom::point(control.x, control.y),
                         lyon::geom::point(end.x, end.y),
@@ -588,6 +669,10 @@ impl IntoLyonPath for flui_types::painting::path::Path {
                 }
 
                 PathCommand::CubicTo(control1, control2, end) => {
+                    if !has_begun {
+                        builder.begin(lyon::geom::point(control1.x, control1.y));
+                        has_begun = true;
+                    }
                     builder.cubic_bezier_to(
                         lyon::geom::point(control1.x, control1.y),
                         lyon::geom::point(control2.x, control2.y),
@@ -597,12 +682,16 @@ impl IntoLyonPath for flui_types::painting::path::Path {
                 }
 
                 PathCommand::Close => {
-                    builder.close();
+                    if has_begun {
+                        builder.close();
+                        has_begun = false;
+                        current_pos = None;
+                    }
                 }
 
                 PathCommand::AddRect(rect) => {
                     // Start new subpath for rectangle
-                    if current_pos.is_some() {
+                    if has_begun {
                         builder.end(false);
                     }
                     builder.begin(lyon::geom::point(rect.left(), rect.top()));
@@ -611,11 +700,12 @@ impl IntoLyonPath for flui_types::painting::path::Path {
                     builder.line_to(lyon::geom::point(rect.left(), rect.bottom()));
                     builder.close();
                     current_pos = None;
+                    has_begun = false;
                 }
 
                 PathCommand::AddCircle(center, radius) => {
                     // Start new subpath for circle
-                    if current_pos.is_some() {
+                    if has_begun {
                         builder.end(false);
                     }
                     builder.add_circle(
@@ -624,11 +714,12 @@ impl IntoLyonPath for flui_types::painting::path::Path {
                         lyon::path::Winding::Positive,
                     );
                     current_pos = None;
+                    has_begun = false;
                 }
 
                 PathCommand::AddOval(rect) => {
                     // Start new subpath for oval/ellipse
-                    if current_pos.is_some() {
+                    if has_begun {
                         builder.end(false);
                     }
                     let center = rect.center();
@@ -640,11 +731,12 @@ impl IntoLyonPath for flui_types::painting::path::Path {
                         lyon::path::Winding::Positive,
                     );
                     current_pos = None;
+                    has_begun = false;
                 }
 
                 PathCommand::AddArc(rect, start_angle, sweep_angle) => {
                     // Start new subpath for arc
-                    if current_pos.is_some() {
+                    if has_begun {
                         builder.end(false);
                     }
                     let center = rect.center();
@@ -660,6 +752,7 @@ impl IntoLyonPath for flui_types::painting::path::Path {
                     let start_y = center.y + radii.y * start_angle.sin();
 
                     builder.begin(lyon::geom::point(start_x, start_y));
+                    has_begun = true;
 
                     for i in 1..=num_segments {
                         let angle = start_angle + angle_step * i as f32;
@@ -677,7 +770,7 @@ impl IntoLyonPath for flui_types::painting::path::Path {
         }
 
         // End the final subpath if not closed
-        if current_pos.is_some() {
+        if has_begun {
             builder.end(false);
         }
 

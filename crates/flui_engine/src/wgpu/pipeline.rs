@@ -123,6 +123,9 @@ pub struct PipelineCache {
 
     /// Surface format
     format: wgpu::TextureFormat,
+
+    /// Viewport bind group layout (for coordinate transformation)
+    viewport_bind_group_layout: wgpu::BindGroupLayout,
 }
 
 impl PipelineCache {
@@ -132,7 +135,13 @@ impl PipelineCache {
     /// * `device` - wgpu device
     /// * `shader_source` - WGSL shader source code
     /// * `format` - Surface texture format
-    pub fn new(device: &wgpu::Device, shader_source: &str, format: wgpu::TextureFormat) -> Self {
+    /// * `viewport_bind_group_layout` - Bind group layout for viewport uniform
+    pub fn new(
+        device: &wgpu::Device,
+        shader_source: &str,
+        format: wgpu::TextureFormat,
+        viewport_bind_group_layout: wgpu::BindGroupLayout,
+    ) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Shape Shader"),
             source: wgpu::ShaderSource::Wgsl(shader_source.into()),
@@ -142,6 +151,7 @@ impl PipelineCache {
             cache: HashMap::new(),
             shader,
             format,
+            viewport_bind_group_layout,
         }
     }
 
@@ -165,10 +175,10 @@ impl PipelineCache {
         #[cfg(debug_assertions)]
         tracing::trace!("PipelineCache::create_pipeline: key={:?}", key);
 
-        // Create layout
+        // Create layout with viewport bind group
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Shape Pipeline Layout"),
-            bind_group_layouts: &[],
+            bind_group_layouts: &[&self.viewport_bind_group_layout],
             push_constant_ranges: &[],
         });
 
@@ -230,6 +240,15 @@ impl PipelineCache {
     /// Clear the cache (useful for resource cleanup)
     pub fn clear(&mut self) {
         self.cache.clear();
+    }
+
+    /// Get a reference to the viewport bind group layout
+    ///
+    /// This is needed to create bind groups that are compatible with pipelines
+    /// created by this cache. In wgpu, bind groups must be created with the
+    /// exact same layout object that the pipeline expects.
+    pub fn viewport_bind_group_layout(&self) -> &wgpu::BindGroupLayout {
+        &self.viewport_bind_group_layout
     }
 }
 

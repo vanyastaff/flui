@@ -71,7 +71,7 @@ pub struct WgpuPainter {
     /// Viewport uniform buffer (for instanced shader)
     viewport_buffer: wgpu::Buffer,
 
-    /// Viewport bind group
+    /// Viewport bind group (for instanced pipelines)
     viewport_bind_group: wgpu::BindGroup,
 
     /// Shared unit quad vertex buffer (reused for all instances)
@@ -196,10 +196,7 @@ impl WgpuPainter {
         let device = Arc::new(device);
         let queue = Arc::new(queue);
 
-        // Create pipeline cache with shader
-        let pipeline_cache = PipelineCache::new(&device, super::shaders::SHAPE, surface_format);
-
-        // ===== Instanced Rendering Setup =====
+        // ===== Viewport Setup (shared by all pipelines) =====
 
         // Create viewport uniform buffer
         let viewport_data = [size.0 as f32, size.1 as f32, 0.0, 0.0]; // [width, height, padding, padding]
@@ -209,7 +206,7 @@ impl WgpuPainter {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
-        // Create bind group layout for viewport
+        // Create bind group layout for viewport (will be owned by PipelineCache)
         let viewport_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("Viewport Bind Group Layout"),
@@ -225,15 +222,26 @@ impl WgpuPainter {
                 }],
             });
 
-        // Create viewport bind group
+        // Create pipeline cache FIRST - it will own the layout
+        let pipeline_cache = PipelineCache::new(
+            &device,
+            super::shaders::SHAPE,
+            surface_format,
+            viewport_bind_group_layout,
+        );
+
+        // Now create bind group using layout FROM pipeline_cache
+        // This ensures the bind group uses the EXACT SAME layout object as shape pipeline
         let viewport_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Viewport Bind Group"),
-            layout: &viewport_bind_group_layout,
+            layout: pipeline_cache.viewport_bind_group_layout(),
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
                 resource: viewport_buffer.as_entire_binding(),
             }],
         });
+
+        // ===== Instanced Rendering Setup =====
 
         // Create instanced rectangle shader
         let instanced_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -245,7 +253,7 @@ impl WgpuPainter {
         let instanced_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Instanced Rect Pipeline Layout"),
-                bind_group_layouts: &[&viewport_bind_group_layout],
+                bind_group_layouts: &[pipeline_cache.viewport_bind_group_layout()],
                 push_constant_ranges: &[],
             });
 
@@ -501,7 +509,10 @@ impl WgpuPainter {
         let texture_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Instanced Texture Pipeline Layout"),
-                bind_group_layouts: &[&viewport_bind_group_layout, &texture_bind_group_layout],
+                bind_group_layouts: &[
+                    pipeline_cache.viewport_bind_group_layout(),
+                    &texture_bind_group_layout,
+                ],
                 push_constant_ranges: &[],
             });
 
@@ -581,7 +592,7 @@ impl WgpuPainter {
         let linear_gradient_pipeline = super::effects_pipeline::create_linear_gradient_pipeline(
             &device,
             surface_format,
-            &viewport_bind_group_layout,
+            pipeline_cache.viewport_bind_group_layout(),
             &gradient_bind_group_layout,
         );
 
@@ -592,7 +603,7 @@ impl WgpuPainter {
         let radial_gradient_pipeline = super::effects_pipeline::create_radial_gradient_pipeline(
             &device,
             surface_format,
-            &viewport_bind_group_layout,
+            pipeline_cache.viewport_bind_group_layout(),
             &gradient_bind_group_layout,
         );
 
@@ -603,7 +614,7 @@ impl WgpuPainter {
         let shadow_pipeline = super::effects_pipeline::create_shadow_pipeline(
             &device,
             surface_format,
-            &viewport_bind_group_layout,
+            pipeline_cache.viewport_bind_group_layout(),
         );
 
         // Create shadow batch
@@ -695,7 +706,14 @@ impl WgpuPainter {
             "Drawing commands"
         );
 
-        // ===== Render Shapes =====
+        // ===== Render All Instanced Primitives FIRST =====
+        // (Background rects, circles, etc. render first, then tessellated shapes on top)
+        self.flush_all_instanced_batches(encoder, view);
+
+        // ===== Render Gradients (Linear + Radial) =====
+        self.flush_gradient_batches(encoder, view);
+
+        // ===== Render Tessellated Shapes LAST (on top of instanced) =====
         if !self.vertices.is_empty() {
             // Upload vertices to GPU
             let vertex_buffer = self
@@ -742,6 +760,7 @@ impl WgpuPainter {
             });
 
             render_pass.set_pipeline(pipeline);
+            render_pass.set_bind_group(0, &self.viewport_bind_group, &[]); // Use same bind group as instanced (they share layout now)
             render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
             render_pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint32);
 
@@ -752,14 +771,6 @@ impl WgpuPainter {
 
             render_pass.draw_indexed(0..self.indices.len() as u32, 0, 0..1);
         }
-
-        // ===== Render All Instanced Primitives (Multi-Draw Optimization) =====
-        // Combined instance buffer upload: 1 upload instead of 3!
-        // This is 2-3x faster than individual flush calls.
-        self.flush_all_instanced_batches(encoder, view);
-
-        // ===== Render Gradients (Linear + Radial) =====
-        self.flush_gradient_batches(encoder, view);
 
         // ===== Render Text =====
         self.text_renderer
@@ -1343,8 +1354,22 @@ impl Painter for WgpuPainter {
                 );
                 let _ = self.arc_batch.add(instance);
             } else {
-                #[cfg(debug_assertions)]
-                tracing::warn!("WgpuPainter::draw_arc: stroked arcs not fully implemented yet");
+                // Use tessellation for stroked arcs
+                match self.tessellator.tessellate_arc(
+                    rect,
+                    start_angle,
+                    sweep_angle,
+                    use_center,
+                    paint,
+                ) {
+                    Ok((vertices, indices)) => {
+                        self.add_tessellated(vertices, indices);
+                    }
+                    Err(e) => {
+                        #[cfg(debug_assertions)]
+                        tracing::error!("Failed to tessellate stroked arc: {}", e);
+                    }
+                }
             }
         }
     }
@@ -1455,13 +1480,6 @@ impl Painter for WgpuPainter {
     }
 
     fn draw_path(&mut self, path: &flui_types::painting::path::Path, paint: &Paint) {
-        #[cfg(debug_assertions)]
-        tracing::trace!(
-            "WgpuPainter::draw_path: commands={}, paint={:?}",
-            path.commands().len(),
-            paint
-        );
-
         // Tessellate the path
         // Paint already contains stroke information
         let result = if paint.style == PaintStyle::Fill {
@@ -1475,8 +1493,7 @@ impl Painter for WgpuPainter {
                 self.add_tessellated(vertices, indices);
             }
             Err(e) => {
-                #[cfg(debug_assertions)]
-                tracing::error!("Failed to tessellate path: {}", e);
+                tracing::warn!("Failed to tessellate path: {}", e);
             }
         }
     }
