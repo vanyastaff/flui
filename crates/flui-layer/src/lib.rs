@@ -94,7 +94,6 @@
 
 mod compositor;
 mod handle;
-mod layering_impl; // Layering trait implementation for SceneBuilder
 mod link_registry;
 mod scene;
 

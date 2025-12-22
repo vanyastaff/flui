@@ -165,7 +165,7 @@ pub mod canvas;
 pub mod clip_context;
 pub mod display_list;
 pub mod error;
-mod painter_impl; // Painter trait implementation for Canvas
+
 pub mod text_layout;
 pub mod text_painter;
 
