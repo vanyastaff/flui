@@ -2,22 +2,23 @@
 name = "counter"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.91"
+rust-version = "1.85"
 
 # This is a standalone demo project, not part of the main workspace
 [workspace]
 
 [dependencies]
-# Core FLUI crates (active in workspace)
-flui_app = { path = "../../crates/flui_app" }
-flui_widgets = { path = "../../crates/flui_widgets" }
+# Core FLUI crates for Canvas API demo
 flui_types = { path = "../../crates/flui_types" }
-
-# Engine for GPU rendering (dx12 on Windows)
+flui_painting = { path = "../../crates/flui_painting" }
+flui-layer = { path = "../../crates/flui-layer" }
 flui_engine = { path = "../../crates/flui_engine", default-features = false, features = ["wgpu-backend", "dx12"] }
 
 # Windowing
 winit = "0.30"
+
+# GPU
+wgpu = "25"
 
 # Async runtime for wgpu
 pollster = "0.4"

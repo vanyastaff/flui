@@ -54,10 +54,7 @@ use crate::traits::RenderObject;
 /// }
 /// ```
 ///
-/// # Note
-///
-/// `RenderSliver` extends `Renderable` with `Protocol = SliverProtocol`, so any type
-/// implementing `RenderSliver` can be used with `Wrapper<T>` directly.
+/// Use `SliverWrapper<T>` to bridge to `RenderObject` for storage in `RenderTree`.
 pub trait RenderSliver: Send + Sync + std::fmt::Debug + 'static {
     /// The arity of this render sliver (Leaf, Optional, Variable, etc.)
     type Arity: Arity;

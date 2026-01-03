@@ -62,17 +62,10 @@ use crate::parent_data::ParentData;
 /// Trait for render objects that use 2D cartesian coordinates.
 ///
 /// Users implement this trait for their custom render objects.
-/// The `Wrapper<T: Renderable>` type provides the `RenderObject` implementation
-/// for storage in `RenderTree`.
+/// Use `BoxWrapper<T>` to bridge to `RenderObject` for storage in `RenderTree`.
 ///
-/// # Note
+/// # Features
 ///
-/// `RenderBox` extends `Renderable` with `Protocol = BoxProtocol`, so any type
-/// implementing `RenderBox` can be used with `Wrapper<T>` directly.
-///
-/// # Box-Specific Features
-///
-/// In addition to the base `Renderable` methods, `RenderBox` provides:
 /// - Intrinsic dimension queries (min/max width/height)
 /// - Baseline support for text alignment
 /// - Dry layout (compute size without actual layout)
