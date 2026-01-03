@@ -66,6 +66,7 @@ pub mod pipeline;
 pub mod protocol;
 /// Re-export semantics from flui-semantics crate.
 pub use flui_semantics as semantics;
+pub mod objects;
 pub mod traits;
 pub mod tree;
 pub mod view;

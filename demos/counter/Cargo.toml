@@ -13,6 +13,7 @@ flui_types = { path = "../../crates/flui_types" }
 flui_painting = { path = "../../crates/flui_painting" }
 flui-layer = { path = "../../crates/flui-layer" }
 flui_engine = { path = "../../crates/flui_engine", default-features = false, features = ["wgpu-backend", "dx12"] }
+flui_rendering = { path = "../../crates/flui_rendering" }
 
 # Windowing
 winit = "0.30"
