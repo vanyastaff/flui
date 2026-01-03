@@ -474,6 +474,6 @@ mod tests {
     #[test]
     fn test_sliver_physical_parent_data() {
         let data = SliverPhysicalParentData::new(Offset::new(10.0, 20.0));
-        assert_eq!(data.paint_offset.x, 10.0);
+        assert_eq!(data.paint_offset.dx, 10.0);
     }
 }

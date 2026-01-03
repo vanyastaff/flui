@@ -127,11 +127,9 @@ impl<'a, P: ParentData + Default> ChildHandle<'a, P> {
     /// Returns the paint bounds of this child.
     #[inline]
     pub fn paint_bounds(&self) -> Rect {
-        Rect::new(
-            self.offset.dx,
-            self.offset.dy,
-            self.size.width,
-            self.size.height,
+        Rect::from_origin_size(
+            flui_types::Point::new(self.offset.dx, self.offset.dy),
+            self.size,
         )
     }
 

@@ -1,13 +1,13 @@
 //! RenderSliver trait for scrollable content layout.
 
 use flui_types::prelude::AxisDirection;
-use flui_types::Size;
+use flui_types::{Rect, Size};
 
-use super::RenderObject;
 use crate::arity::Arity;
 use crate::constraints::{SliverConstraints, SliverGeometry};
 use crate::context::{SliverHitTestContext, SliverLayoutContext, SliverPaintContext};
 use crate::parent_data::ParentData;
+use crate::traits::RenderObject;
 
 // ============================================================================
 // RenderSliver Trait
@@ -53,7 +53,12 @@ use crate::parent_data::ParentData;
 ///     }
 /// }
 /// ```
-pub trait RenderSliver: RenderObject {
+///
+/// # Note
+///
+/// `RenderSliver` extends `Renderable` with `Protocol = SliverProtocol`, so any type
+/// implementing `RenderSliver` can be used with `Wrapper<T>` directly.
+pub trait RenderSliver: Send + Sync + std::fmt::Debug + 'static {
     /// The arity of this render sliver (Leaf, Optional, Variable, etc.)
     type Arity: Arity;
 
@@ -273,6 +278,26 @@ pub trait RenderSliver: RenderObject {
     /// Hit tests just this sliver (not children).
     fn hit_test_self(&self, _main: f32, _cross: f32) -> bool {
         false
+    }
+
+    // ========================================================================
+    // Paint Bounds
+    // ========================================================================
+
+    /// Returns the paint bounds of this render sliver.
+    fn sliver_paint_bounds(&self) -> Rect {
+        let geometry = self.geometry();
+        let size = self.get_absolute_size(geometry.paint_extent);
+        Rect::new(0.0, 0.0, size.width, size.height)
+    }
+
+    // ========================================================================
+    // Parent Data
+    // ========================================================================
+
+    /// Creates default parent data for a child.
+    fn create_default_parent_data() -> Self::ParentData {
+        Self::ParentData::default()
     }
 }
 

@@ -146,8 +146,8 @@ mod tests {
     fn test_builder() {
         let data = BoxParentData::zero().with_offset(Offset::new(5.0, 10.0));
 
-        assert_eq!(data.offset.x, 5.0);
-        assert_eq!(data.offset.y, 10.0);
+        assert_eq!(data.offset.dx, 5.0);
+        assert_eq!(data.offset.dy, 10.0);
         assert!(!data.is_zero());
     }
 
@@ -214,8 +214,8 @@ mod tests {
     fn test_from_tuple() {
         let data: BoxParentData = (15.0, 25.0).into();
 
-        assert_eq!(data.offset.x, 15.0);
-        assert_eq!(data.offset.y, 25.0);
+        assert_eq!(data.offset.dx, 15.0);
+        assert_eq!(data.offset.dy, 25.0);
     }
 
     #[test]
@@ -233,6 +233,6 @@ mod tests {
 
         let downcasted = trait_obj.downcast_ref::<BoxParentData>();
         assert!(downcasted.is_some());
-        assert_eq!(downcasted.unwrap().offset.x, 10.0);
+        assert_eq!(downcasted.unwrap().offset.dx, 10.0);
     }
 }

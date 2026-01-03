@@ -399,7 +399,6 @@ impl<'ctx, A: Arity, P: ParentData> HitTestContextApi<'ctx, SliverHitTest, A, P>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::arity::Leaf;
 
     #[test]
     fn test_sliver_protocol_name() {
@@ -431,8 +430,10 @@ mod tests {
 
     #[test]
     fn test_protocol_compatibility() {
-        assert!(SliverProtocol::is_compatible::<SliverProtocol>());
-        assert!(SliverProtocol::is_compatible::<BoxProtocol>());
-        assert!(BoxProtocol::is_compatible::<SliverProtocol>());
+        use crate::protocol::protocol::ProtocolCompatible;
+
+        assert!(<SliverProtocol as ProtocolCompatible<SliverProtocol>>::is_compatible());
+        assert!(<SliverProtocol as ProtocolCompatible<BoxProtocol>>::is_compatible());
+        assert!(<BoxProtocol as ProtocolCompatible<SliverProtocol>>::is_compatible());
     }
 }

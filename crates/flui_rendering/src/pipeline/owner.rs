@@ -616,14 +616,16 @@ impl PipelineOwner {
             .sort_unstable_by_key(|node| node.depth);
 
         // Process dirty nodes
+        // TODO: Implement actual compositing bits update - requires render object lookup by ID
         for node in &self.nodes_needing_compositing_bits_update {
-            tracing::trace!("compositing bits node id={} depth={}", node.id, node.depth);
-            unimplemented!(
-                "Compositing bits update not yet implemented - requires render object lookup by ID. \
-                 Node id={}, depth={}",
+            tracing::trace!(
+                "compositing bits update (stub): node id={} depth={}",
                 node.id,
                 node.depth
             );
+            // Future implementation should:
+            // 1. Look up the render object by ID in the render tree
+            // 2. Call render_object.update_compositing_bits()
         }
         self.nodes_needing_compositing_bits_update.clear();
 

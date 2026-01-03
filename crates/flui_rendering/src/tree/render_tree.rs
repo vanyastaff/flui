@@ -703,11 +703,189 @@ impl TreeNav<RenderId> for RenderTree {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::objects::r#box::basic::RenderPadding;
-    use flui_types::EdgeInsets;
+    use crate::constraints::BoxConstraints;
+    use crate::hit_testing::{HitTestEntry, HitTestTarget, PointerEvent};
+    use crate::parent_data::ParentData;
+    use crate::pipeline::CanvasContext;
+    use flui_foundation::{Diagnosticable, DiagnosticsBuilder};
+    use flui_types::{Offset, Rect, Size};
+
+    /// Minimal mock RenderObject for testing RenderTree structure.
+    #[derive(Debug)]
+    struct MockRenderObject {
+        depth: usize,
+        needs_layout: bool,
+        needs_paint: bool,
+        needs_compositing_bits_update: bool,
+        is_repaint_boundary: bool,
+        was_repaint_boundary: bool,
+        needs_compositing: bool,
+        cached_constraints: Option<BoxConstraints>,
+        size: Size,
+    }
+
+    impl Default for MockRenderObject {
+        fn default() -> Self {
+            Self {
+                depth: 0,
+                needs_layout: true,
+                needs_paint: true,
+                needs_compositing_bits_update: false,
+                is_repaint_boundary: false,
+                was_repaint_boundary: false,
+                needs_compositing: false,
+                cached_constraints: None,
+                size: Size::new(100.0, 100.0),
+            }
+        }
+    }
+
+    impl Diagnosticable for MockRenderObject {
+        fn debug_fill_properties(&self, builder: &mut DiagnosticsBuilder) {
+            builder.add("size", format!("{:?}", self.size));
+        }
+    }
+
+    impl HitTestTarget for MockRenderObject {
+        fn handle_event(&self, _event: &PointerEvent, _entry: &HitTestEntry) {}
+    }
+
+    impl RenderObject for MockRenderObject {
+        fn depth(&self) -> usize {
+            self.depth
+        }
+
+        fn set_depth(&mut self, depth: usize) {
+            self.depth = depth;
+        }
+
+        fn owner(&self) -> Option<&crate::pipeline::PipelineOwner> {
+            None
+        }
+
+        fn set_parent(&mut self, _parent: Option<*const dyn RenderObject>) {}
+
+        fn attach(&mut self, _owner: &crate::pipeline::PipelineOwner) {}
+
+        fn detach(&mut self) {}
+
+        fn adopt_child(&mut self, _child: &mut dyn RenderObject) {}
+
+        fn drop_child(&mut self, _child: &mut dyn RenderObject) {}
+
+        fn redepth_child(&mut self, _child: &mut dyn RenderObject) {}
+
+        fn needs_layout(&self) -> bool {
+            self.needs_layout
+        }
+
+        fn needs_paint(&self) -> bool {
+            self.needs_paint
+        }
+
+        fn needs_compositing_bits_update(&self) -> bool {
+            self.needs_compositing_bits_update
+        }
+
+        fn is_relayout_boundary(&self) -> bool {
+            false
+        }
+
+        fn mark_needs_layout(&mut self) {
+            self.needs_layout = true;
+        }
+
+        fn mark_needs_paint(&mut self) {
+            self.needs_paint = true;
+        }
+
+        fn mark_needs_compositing_bits_update(&mut self) {
+            self.needs_compositing_bits_update = true;
+        }
+
+        fn mark_needs_semantics_update(&mut self) {}
+
+        fn clear_needs_layout(&mut self) {
+            self.needs_layout = false;
+        }
+
+        fn clear_needs_paint(&mut self) {
+            self.needs_paint = false;
+        }
+
+        fn clear_needs_compositing_bits_update(&mut self) {
+            self.needs_compositing_bits_update = false;
+        }
+
+        fn layout(&mut self, _constraints: BoxConstraints, _parent_uses_size: bool) {
+            self.needs_layout = false;
+        }
+
+        fn layout_without_resize(&mut self) {
+            self.needs_layout = false;
+        }
+
+        fn cached_constraints(&self) -> Option<BoxConstraints> {
+            self.cached_constraints
+        }
+
+        fn set_cached_constraints(&mut self, constraints: BoxConstraints) {
+            self.cached_constraints = Some(constraints);
+        }
+
+        fn mark_parent_needs_layout(&mut self) {}
+
+        fn schedule_initial_layout(&mut self) {
+            self.needs_layout = true;
+        }
+
+        fn schedule_initial_paint(&mut self) {
+            self.needs_paint = true;
+        }
+
+        fn is_repaint_boundary(&self) -> bool {
+            self.is_repaint_boundary
+        }
+
+        fn was_repaint_boundary(&self) -> bool {
+            self.was_repaint_boundary
+        }
+
+        fn set_was_repaint_boundary(&mut self, value: bool) {
+            self.was_repaint_boundary = value;
+        }
+
+        fn needs_compositing(&self) -> bool {
+            self.needs_compositing
+        }
+
+        fn set_needs_compositing(&mut self, value: bool) {
+            self.needs_compositing = value;
+        }
+
+        fn parent_data(&self) -> Option<&dyn ParentData> {
+            None
+        }
+
+        fn parent_data_mut(&mut self) -> Option<&mut dyn ParentData> {
+            None
+        }
+
+        fn set_parent_data(&mut self, _data: Box<dyn ParentData>) {}
+
+        fn visit_children(&self, _visitor: &mut dyn FnMut(&dyn RenderObject)) {}
+
+        fn visit_children_mut(&mut self, _visitor: &mut dyn FnMut(&mut dyn RenderObject)) {}
+
+        fn paint_bounds(&self) -> Rect {
+            Rect::from_origin_size(flui_types::Point::ZERO, self.size)
+        }
+
+        fn paint(&self, _context: &mut CanvasContext, _offset: Offset) {}
+    }
 
     fn test_render_box() -> Box<dyn RenderObject> {
-        Box::new(RenderPadding::new(EdgeInsets::all(10.0)))
+        Box::new(MockRenderObject::default())
     }
 
     #[test]

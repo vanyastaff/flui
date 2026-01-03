@@ -2,7 +2,6 @@
 
 use flui_types::{Point, Rect, Size};
 
-use super::RenderObject;
 use crate::arity::Arity;
 use crate::constraints::BoxConstraints;
 use crate::context::{BoxHitTestContext, BoxLayoutContext, BoxPaintContext};
@@ -60,7 +59,25 @@ use crate::parent_data::ParentData;
 ///     ...
 /// }
 /// ```
-pub trait RenderBox: RenderObject {
+/// Trait for render objects that use 2D cartesian coordinates.
+///
+/// Users implement this trait for their custom render objects.
+/// The `Wrapper<T: Renderable>` type provides the `RenderObject` implementation
+/// for storage in `RenderTree`.
+///
+/// # Note
+///
+/// `RenderBox` extends `Renderable` with `Protocol = BoxProtocol`, so any type
+/// implementing `RenderBox` can be used with `Wrapper<T>` directly.
+///
+/// # Box-Specific Features
+///
+/// In addition to the base `Renderable` methods, `RenderBox` provides:
+/// - Intrinsic dimension queries (min/max width/height)
+/// - Baseline support for text alignment
+/// - Dry layout (compute size without actual layout)
+/// - Coordinate conversion (local ↔ global)
+pub trait RenderBox: Send + Sync + std::fmt::Debug + 'static {
     /// The arity of this render box (Leaf, Optional, Variable, etc.)
     type Arity: Arity;
 
@@ -183,12 +200,12 @@ pub trait RenderBox: RenderObject {
     // ========================================================================
 
     /// Converts a point from global coordinates to local coordinates.
-    fn global_to_local(&self, point: Point, _ancestor: Option<&dyn RenderObject>) -> Point {
+    fn global_to_local(&self, point: Point) -> Point {
         point
     }
 
     /// Converts a point from local coordinates to global coordinates.
-    fn local_to_global(&self, point: Point, _ancestor: Option<&dyn RenderObject>) -> Point {
+    fn local_to_global(&self, point: Point) -> Point {
         point
     }
 

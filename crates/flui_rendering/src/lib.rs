@@ -69,6 +69,7 @@ pub use flui_semantics as semantics;
 pub mod traits;
 pub mod tree;
 pub mod view;
+pub mod wrapper;
 
 /// Re-export layer types from flui-layer crate for convenience.
 pub mod layer {
@@ -125,7 +126,7 @@ pub mod prelude {
         SemanticsAction, SemanticsConfiguration, SemanticsNode, SemanticsNodeUpdate,
         SemanticsOwner, SemanticsTreeUpdate,
     };
-    pub use crate::traits::RenderObject;
+    pub use crate::traits::{RenderBox, RenderObject, TextBaseline};
     pub use crate::view::{
         CacheExtentStyle, CompositeResult, FixedViewportOffset, RenderAbstractViewport, RenderView,
         RevealedOffset, ScrollDirection, ScrollableViewportOffset, SliverPaintOrder,
@@ -139,6 +140,9 @@ pub mod prelude {
 
     // Tree types
     pub use crate::tree::{RenderNode, RenderTree};
+
+    // Wrapper types for RenderBox -> RenderObject bridging
+    pub use crate::wrapper::BoxWrapper;
 
     // Re-export commonly used types from flui_types
     pub use flui_types::{Offset, Point, RRect, Rect, Size};
