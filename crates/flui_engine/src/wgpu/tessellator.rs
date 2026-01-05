@@ -109,8 +109,8 @@ impl Tessellator {
             .map_err(|e| TessellationError::FillFailed(e.to_string()))?;
 
         Ok((
-            self.geometry.vertices.clone(),
-            self.geometry.indices.clone(),
+            std::mem::take(&mut self.geometry.vertices),
+            std::mem::take(&mut self.geometry.indices),
         ))
     }
 
@@ -158,8 +158,8 @@ impl Tessellator {
             .map_err(|e| TessellationError::StrokeFailed(e.to_string()))?;
 
         Ok((
-            self.geometry.vertices.clone(),
-            self.geometry.indices.clone(),
+            std::mem::take(&mut self.geometry.vertices),
+            std::mem::take(&mut self.geometry.indices),
         ))
     }
 
