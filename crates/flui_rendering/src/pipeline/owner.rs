@@ -598,13 +598,25 @@ impl PipelineOwner {
     ///
     /// This is phase 2 of the rendering pipeline. During this phase:
     /// - Each object determines if it needs a compositing layer
-    /// - This information is used during paint
+    /// - The `needs_compositing` flag is updated based on:
+    ///   - Whether any child needs compositing
+    ///   - Whether this object is a repaint boundary
+    ///   - Whether this object always needs compositing
     ///
-    /// Nodes are sorted by depth (shallow first). This matches Flutter's
+    /// Nodes are sorted by depth (shallow first) to ensure parents are
+    /// processed after their children have been updated. This matches Flutter's
     /// `flushCompositingBits` behavior.
     ///
     /// After processing own nodes, recursively flushes child pipeline owners.
     pub fn flush_compositing_bits(&mut self) {
+        if self.nodes_needing_compositing_bits_update.is_empty() {
+            // Still need to flush children even if we have no dirty nodes
+            for child in &self.children {
+                child.write().flush_compositing_bits();
+            }
+            return;
+        }
+
         tracing::debug!(
             "flush_compositing_bits: {} nodes",
             self.nodes_needing_compositing_bits_update.len()
@@ -615,19 +627,39 @@ impl PipelineOwner {
         self.nodes_needing_compositing_bits_update
             .sort_unstable_by_key(|node| node.depth);
 
-        // Process dirty nodes
-        for node in &self.nodes_needing_compositing_bits_update {
-            tracing::trace!("compositing bits node id={} depth={}", node.id, node.depth);
-            unimplemented!(
-                "Compositing bits update not yet implemented - requires render object lookup by ID. \
-                 Node id={}, depth={}",
-                node.id,
-                node.depth
-            );
-        }
-        self.nodes_needing_compositing_bits_update.clear();
+        // Take ownership of dirty nodes list
+        let dirty_nodes = std::mem::take(&mut self.nodes_needing_compositing_bits_update);
 
-        // Flush children
+        // Process dirty nodes - update compositing bits for each
+        for dirty_node in &dirty_nodes {
+            let render_id = RenderId::new(dirty_node.id);
+
+            if let Some(render_node) = self.render_tree.get_mut(render_id) {
+                let render_object = render_node.render_object_mut();
+
+                // Skip if already processed (could happen with hierarchical updates)
+                if !render_object.needs_compositing_bits_update() {
+                    continue;
+                }
+
+                tracing::trace!(
+                    "updating compositing bits for node id={} depth={}",
+                    dirty_node.id,
+                    dirty_node.depth
+                );
+
+                // Call the render object's update method
+                // This will recursively update children and set needs_compositing
+                render_object.update_compositing_bits();
+            } else {
+                tracing::warn!(
+                    "flush_compositing_bits: node {} not found in render tree",
+                    dirty_node.id
+                );
+            }
+        }
+
+        // Flush child pipeline owners
         for child in &self.children {
             child.write().flush_compositing_bits();
         }
@@ -729,6 +761,16 @@ impl PipelineOwner {
     /// After processing own nodes, recursively flushes child pipeline owners.
     pub fn flush_semantics(&mut self) {
         if !self.semantics_enabled() {
+            // Clear any pending semantics nodes since semantics is disabled
+            self.nodes_needing_semantics.clear();
+            return;
+        }
+
+        if self.nodes_needing_semantics.is_empty() {
+            // Still need to flush children
+            for child in &self.children {
+                child.write().flush_semantics();
+            }
             return;
         }
 
@@ -739,22 +781,65 @@ impl PipelineOwner {
 
         self.debug_doing_semantics = true;
 
+        // Sort by depth (shallow first) - parents before children
+        // The geometries of children depend on ancestors' transforms and clips
+        self.nodes_needing_semantics
+            .sort_unstable_by_key(|node| node.depth);
+
+        // Take ownership of dirty nodes
+        let dirty_nodes = std::mem::take(&mut self.nodes_needing_semantics);
+
         // Filter out nodes that still need layout (they're not ready for semantics)
         // Flutter: .where((object) => !object._needsLayout && object.owner == this)
-        let nodes_to_process: Vec<DirtyNode> = self.nodes_needing_semantics.to_vec();
+        for dirty_node in &dirty_nodes {
+            let render_id = RenderId::new(dirty_node.id);
 
-        self.nodes_needing_semantics.clear();
+            if let Some(render_node) = self.render_tree.get_mut(render_id) {
+                let render_object = render_node.render_object_mut();
 
-        // Semantics system is not yet implemented
-        if !nodes_to_process.is_empty() {
-            unimplemented!(
-                "Semantics system not yet implemented - requires full semantics integration. \
-                 {} nodes need semantics updates",
-                nodes_to_process.len()
-            );
+                // Skip nodes that still need layout
+                if render_object.needs_layout() {
+                    tracing::trace!(
+                        "skipping semantics update for node {} (needs layout)",
+                        dirty_node.id
+                    );
+                    continue;
+                }
+
+                // Skip if semantics update already cleared
+                if !render_object.needs_semantics_update() {
+                    continue;
+                }
+
+                tracing::trace!(
+                    "updating semantics for node id={} depth={}",
+                    dirty_node.id,
+                    dirty_node.depth
+                );
+
+                // Mark semantics as updated
+                // Note: Full semantics tree update requires SemanticsOwner integration
+                // For now, just clear the flag to prevent infinite loops
+                render_object.clear_needs_semantics_update();
+
+                // TODO: When semantics is fully integrated:
+                // - Build SemanticsConfiguration from render object
+                // - Update SemanticsNode in SemanticsOwner
+                // - Propagate to accessibility framework
+            } else {
+                tracing::warn!(
+                    "flush_semantics: node {} not found in render tree",
+                    dirty_node.id
+                );
+            }
         }
 
         self.debug_doing_semantics = false;
+
+        // Flush child pipeline owners
+        for child in &self.children {
+            child.write().flush_semantics();
+        }
     }
 
     /// Flushes all pipeline phases in the correct order.

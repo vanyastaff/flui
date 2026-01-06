@@ -103,6 +103,9 @@ pub trait RenderObject: Diagnosticable + HitTestTarget + DowncastSync {
     /// Returns whether this render object is a relayout boundary.
     fn is_relayout_boundary(&self) -> bool;
 
+    /// Returns whether this render object needs semantics update.
+    fn needs_semantics_update(&self) -> bool;
+
     // ========================================================================
     // Dirty Marking
     // ========================================================================
@@ -127,6 +130,9 @@ pub trait RenderObject: Diagnosticable + HitTestTarget + DowncastSync {
 
     /// Clears the needs_compositing_bits_update flag.
     fn clear_needs_compositing_bits_update(&mut self);
+
+    /// Clears the needs_semantics_update flag.
+    fn clear_needs_semantics_update(&mut self);
 
     // ========================================================================
     // Layout

@@ -127,11 +127,12 @@ impl<'a, P: ParentData + Default> ChildHandle<'a, P> {
     /// Returns the paint bounds of this child.
     #[inline]
     pub fn paint_bounds(&self) -> Rect {
+        // Rect::new expects corner coordinates: (left, top, right, bottom)
         Rect::new(
             self.offset.dx,
             self.offset.dy,
-            self.size.width,
-            self.size.height,
+            self.offset.dx + self.size.width,
+            self.offset.dy + self.size.height,
         )
     }
 

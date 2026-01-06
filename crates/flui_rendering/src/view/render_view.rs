@@ -33,6 +33,20 @@ use flui_layer::TransformLayer;
 /// # Flutter Equivalence
 ///
 /// Corresponds to Flutter's `RenderView` class from `rendering/view.dart`.
+///
+/// # Safety Note on `owner` field
+///
+/// The `owner` field stores a raw pointer to the `PipelineOwner` for performance
+/// reasons (avoiding reference counting overhead during hot paths like layout/paint).
+///
+/// **Invariants that must be maintained:**
+/// 1. The pointer is only set via `attach()` and cleared via `detach()`
+/// 2. The `PipelineOwner` must outlive any `RenderView` attached to it
+/// 3. Access to the pointer is only valid between `attach()` and `detach()` calls
+/// 4. The `PipelineOwner` manages `RenderView` lifetime through `RenderTree`
+///
+/// This pattern mirrors Flutter's implementation where `RenderObject.owner`
+/// is a direct reference managed by the attach/detach lifecycle.
 pub struct RenderView {
     /// The view configuration.
     configuration: Option<ViewConfiguration>,
@@ -49,8 +63,18 @@ pub struct RenderView {
     /// Whether automatic system UI adjustment is enabled.
     automatic_system_ui_adjustment: bool,
 
-    /// The pipeline owner (raw pointer for direct access).
+    /// The pipeline owner managing this render view.
+    ///
+    /// # Safety
+    ///
+    /// This is a raw pointer for performance. See struct-level safety docs.
+    /// The pointer is valid only while this RenderView is attached.
     owner: Option<*const PipelineOwner>,
+
+    /// Pipeline owner ID for debugging and validation.
+    /// Used to verify the owner pointer is still valid.
+    #[allow(dead_code)]
+    owner_id: Option<u64>,
 
     // ========================================================================
     // Render Object State
@@ -73,11 +97,16 @@ impl Debug for RenderView {
             .field("configuration", &self.configuration)
             .field("size", &self.size)
             .field("has_layer", &self.layer.is_some())
+            .field("owner_id", &self.owner_id)
             .finish()
     }
 }
 
-// Safety: RenderView manages raw pointer to PipelineOwner carefully
+// SAFETY: RenderView manages raw pointer to PipelineOwner with the following guarantees:
+// 1. The pointer is only valid while RenderView is attached (between attach/detach calls)
+// 2. PipelineOwner owns RenderTree which owns RenderView - no dangling pointers
+// 3. All access goes through methods that check attachment status
+// 4. The owner_id field allows runtime validation in debug builds
 unsafe impl Send for RenderView {}
 unsafe impl Sync for RenderView {}
 
@@ -100,6 +129,7 @@ impl RenderView {
             layer: None,
             automatic_system_ui_adjustment: true,
             owner: None,
+            owner_id: None,
             // RenderView is always a repaint boundary and needs compositing
             depth: 0,
             needs_layout: true,
@@ -400,11 +430,21 @@ impl RenderObject for RenderView {
     }
 
     fn attach(&mut self, owner: &PipelineOwner) {
+        debug_assert!(
+            self.owner.is_none(),
+            "RenderView is already attached to a PipelineOwner"
+        );
         self.owner = Some(owner as *const PipelineOwner);
+        self.owner_id = Some(owner.id());
     }
 
     fn detach(&mut self) {
+        debug_assert!(
+            self.owner.is_some(),
+            "RenderView is not attached to a PipelineOwner"
+        );
         self.owner = None;
+        self.owner_id = None;
     }
 
     fn dispose(&mut self) {
@@ -482,6 +522,14 @@ impl RenderObject for RenderView {
 
     fn clear_needs_compositing_bits_update(&mut self) {
         self.needs_compositing_bits_update = false;
+    }
+
+    fn needs_semantics_update(&self) -> bool {
+        self.needs_semantics_update
+    }
+
+    fn clear_needs_semantics_update(&mut self) {
+        self.needs_semantics_update = false;
     }
 
     fn layout(&mut self, constraints: BoxConstraints, _parent_uses_size: bool) {

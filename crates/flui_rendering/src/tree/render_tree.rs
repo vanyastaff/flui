@@ -703,11 +703,10 @@ impl TreeNav<RenderId> for RenderTree {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::objects::r#box::basic::RenderPadding;
-    use flui_types::EdgeInsets;
+    use crate::view::RenderView;
 
     fn test_render_box() -> Box<dyn RenderObject> {
-        Box::new(RenderPadding::new(EdgeInsets::all(10.0)))
+        Box::new(RenderView::new())
     }
 
     #[test]
