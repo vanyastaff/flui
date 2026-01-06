@@ -131,7 +131,7 @@ use flui_types::Offset;
 use once_cell::sync::OnceCell;
 
 use super::flags::{AtomicRenderFlags, RenderFlags};
-use crate::constraints::SliverGeometry;
+use crate::constraints::{Constraints, SliverGeometry};
 use crate::protocol::{
     BoxProtocol, Protocol, ProtocolConstraints, ProtocolGeometry, SliverProtocol,
 };
@@ -1369,15 +1369,13 @@ impl RenderState<SliverProtocol> {
     /// Returns layout extent, or 0.0 if geometry is not set.
     #[inline]
     pub fn layout_extent(&self) -> f32 {
-        self.geometry().and_then(|g| g.layout_extent).unwrap_or(0.0)
+        self.geometry().map(|g| g.layout_extent).unwrap_or(0.0)
     }
 
     /// Returns max paint extent, or 0.0 if geometry is not set.
     #[inline]
     pub fn max_paint_extent(&self) -> f32 {
-        self.geometry()
-            .and_then(|g| g.max_paint_extent)
-            .unwrap_or(0.0)
+        self.geometry().map(|g| g.max_paint_extent).unwrap_or(0.0)
     }
 
     /// Sets sliver geometry (convenience wrapper for `set_geometry()`).

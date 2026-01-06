@@ -339,11 +339,11 @@ impl PipelineOwner {
         let child_depth = parent_depth + 1;
 
         // Mark child as needing layout and paint
-        self.add_node_needing_layout(child_id.get(), child_depth);
-        self.add_node_needing_paint(child_id.get(), child_depth);
+        self.add_node_needing_layout(child_id.get(), child_depth as usize);
+        self.add_node_needing_paint(child_id.get(), child_depth as usize);
 
         // Mark parent as needing layout (child structure changed)
-        self.add_node_needing_layout(parent_id.get(), parent_depth);
+        self.add_node_needing_layout(parent_id.get(), parent_depth as usize);
 
         Some(child_id)
     }

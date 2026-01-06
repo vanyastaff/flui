@@ -98,12 +98,12 @@ impl RenderBox for RenderSizedBox {
         ctx.complete_with_size(self.size);
     }
 
-    fn size(&self) -> Size {
-        self.size
+    fn size(&self) -> &Size {
+        &self.size
     }
 
-    fn set_size(&mut self, size: Size) {
-        self.size = size;
+    fn size_mut(&mut self) -> &mut Size {
+        &mut self.size
     }
 
     fn paint(&mut self, _ctx: &mut BoxPaintContext<'_, Leaf, BoxParentData>) {

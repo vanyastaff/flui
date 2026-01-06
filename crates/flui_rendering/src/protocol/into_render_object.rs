@@ -125,9 +125,8 @@ where
     T: RenderBox + Send + Sync + 'static,
 {
     fn into_render_entry(self) -> RenderEntry<BoxProtocol> {
-        // Convert to RenderObject<P> adapter
-        let adapter = BoxProtocolAdapter::new(self);
-        RenderEntry::new(Box::new(adapter))
+        // No adapter needed - blanket impl makes T: RenderObject<BoxProtocol>
+        RenderEntry::new(Box::new(self))
     }
 
     fn into_render_node(self) -> RenderNode {
@@ -144,9 +143,8 @@ where
     T: RenderSliver + Send + Sync + 'static,
 {
     fn into_render_entry(self) -> RenderEntry<SliverProtocol> {
-        // Convert to RenderObject<P> adapter
-        let adapter = SliverProtocolAdapter::new(self);
-        RenderEntry::new(Box::new(adapter))
+        // No adapter needed - blanket impl makes T: RenderObject<SliverProtocol>
+        RenderEntry::new(Box::new(self))
     }
 
     fn into_render_node(self) -> RenderNode {
@@ -155,154 +153,14 @@ where
 }
 
 // ============================================================================
-// Protocol Adapters
+// Note: BoxProtocolAdapter and SliverProtocolAdapter removed
 // ============================================================================
-
-use crate::protocol::RenderObject;
-use std::fmt;
-
-/// Adapter that converts RenderBox into RenderObject<BoxProtocol>.
-///
-/// This adapter bridges the gap between the typed RenderBox API with Arity/ParentData
-/// and the protocol-specific RenderObject<P> trait needed for storage.
-pub struct BoxProtocolAdapter<T: RenderBox> {
-    inner: T,
-    /// Cached geometry from last layout
-    geometry: flui_types::Size,
-}
-
-impl<T: RenderBox> BoxProtocolAdapter<T> {
-    pub fn new(inner: T) -> Self {
-        Self {
-            inner,
-            geometry: flui_types::Size::ZERO,
-        }
-    }
-}
-
-impl<T: RenderBox> fmt::Debug for BoxProtocolAdapter<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("BoxProtocolAdapter")
-            .field("inner", &self.inner)
-            .field("geometry", &self.geometry)
-            .finish()
-    }
-}
-
-impl<T: RenderBox> flui_foundation::Diagnosticable for BoxProtocolAdapter<T> {
-    fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        builder.add("geometry", format!("{:?}", self.geometry));
-        builder.add("inner_type", std::any::type_name::<T>());
-    }
-}
-
-impl<T: RenderBox> RenderObject<BoxProtocol> for BoxProtocolAdapter<T> {
-    fn perform_layout_raw(
-        &mut self,
-        constraints: crate::protocol::ProtocolConstraints<BoxProtocol>,
-    ) -> crate::protocol::ProtocolGeometry<BoxProtocol> {
-        // TODO: Create proper BoxLayoutContext and call inner.perform_layout()
-        // For now, return current size
-        let size = self.inner.size();
-        self.inner.set_size(size);
-        size
-    }
-
-    fn paint(&self, _context: &mut crate::pipeline::CanvasContext, _offset: flui_types::Offset) {
-        // TODO: Create proper BoxPaintContext and call inner.paint()
-    }
-
-    fn hit_test_raw(
-        &self,
-        _result: &mut crate::protocol::ProtocolHitResult<BoxProtocol>,
-        _position: crate::protocol::ProtocolPosition<BoxProtocol>,
-    ) -> bool {
-        // TODO: Create proper BoxHitTestContext and call inner.hit_test()
-        false
-    }
-
-    fn geometry(&self) -> &crate::protocol::ProtocolGeometry<BoxProtocol> {
-        &self.geometry
-    }
-
-    fn set_geometry(&mut self, geometry: crate::protocol::ProtocolGeometry<BoxProtocol>) {
-        self.geometry = geometry;
-        self.inner.set_size(geometry);
-    }
-
-    fn paint_bounds(&self) -> flui_types::Rect {
-        self.inner.box_paint_bounds()
-    }
-}
-
-/// Adapter that converts RenderSliver into RenderObject<SliverProtocol>.
-pub struct SliverProtocolAdapter<T: RenderSliver> {
-    inner: T,
-    /// Cached geometry from last layout
-    geometry: crate::constraints::SliverGeometry,
-}
-
-impl<T: RenderSliver> SliverProtocolAdapter<T> {
-    pub fn new(inner: T) -> Self {
-        Self {
-            inner,
-            geometry: crate::constraints::SliverGeometry::default(),
-        }
-    }
-}
-
-impl<T: RenderSliver> fmt::Debug for SliverProtocolAdapter<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("SliverProtocolAdapter")
-            .field("inner", &self.inner)
-            .field("geometry", &self.geometry)
-            .finish()
-    }
-}
-
-impl<T: RenderSliver> flui_foundation::Diagnosticable for SliverProtocolAdapter<T> {
-    fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        builder.add("geometry", format!("{:?}", self.geometry));
-        builder.add("inner_type", std::any::type_name::<T>());
-    }
-}
-
-impl<T: RenderSliver> RenderObject<SliverProtocol> for SliverProtocolAdapter<T> {
-    fn perform_layout_raw(
-        &mut self,
-        _constraints: crate::protocol::ProtocolConstraints<SliverProtocol>,
-    ) -> crate::protocol::ProtocolGeometry<SliverProtocol> {
-        // TODO: Create proper SliverLayoutContext and call inner.perform_layout()
-        // For now, return default geometry
-        crate::constraints::SliverGeometry::default()
-    }
-
-    fn paint(&self, _context: &mut crate::pipeline::CanvasContext, _offset: flui_types::Offset) {
-        // TODO: Create proper SliverPaintContext and call inner.paint()
-    }
-
-    fn hit_test_raw(
-        &self,
-        _result: &mut crate::protocol::ProtocolHitResult<SliverProtocol>,
-        _position: crate::protocol::ProtocolPosition<SliverProtocol>,
-    ) -> bool {
-        // TODO: Create proper SliverHitTestContext and call inner.hit_test()
-        false
-    }
-
-    fn geometry(&self) -> &crate::protocol::ProtocolGeometry<SliverProtocol> {
-        &self.geometry
-    }
-
-    fn set_geometry(&mut self, geometry: crate::protocol::ProtocolGeometry<SliverProtocol>) {
-        self.geometry = geometry;
-    }
-
-    fn paint_bounds(&self) -> flui_types::Rect {
-        // TODO: Implement sliver paint bounds
-        flui_types::Rect::ZERO
-    }
-}
+//
+// Adapters are no longer needed because:
+// 1. Blanket impl in render_box.rs automatically implements RenderObject<BoxProtocol> for all RenderBox types
+// 2. Blanket impl in render_sliver.rs automatically implements RenderObject<SliverProtocol> for all RenderSliver types
+// 3. This eliminates an unnecessary layer of indirection
+// 4. Simpler API: Box::new(render_box) instead of Box::new(adapter)
 
 #[cfg(test)]
 mod tests {

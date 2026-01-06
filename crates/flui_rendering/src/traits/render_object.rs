@@ -209,6 +209,37 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + DowncastSync + Send + Sync
     ///
     /// Default: Does nothing (storage layer handles dirty marking)
     fn reassemble(&mut self) {}
+
+    // ========================================================================
+    // Children Access (для pipeline/owner.rs)
+    // ========================================================================
+
+    /// Returns the number of children for painting.
+    ///
+    /// Note: This is separate from tree children. Render objects may have
+    /// different numbers of logical vs tree children (e.g., MultiChildRenderObjectWidget).
+    ///
+    /// Default: 0 (leaf nodes)
+    fn child_count(&self) -> usize {
+        0
+    }
+
+    /// Returns the paint offset for the child at the given index.
+    ///
+    /// Called during painting to position children. The offset is relative
+    /// to this node's origin and is typically set during layout via position_child().
+    ///
+    /// Default: Offset::ZERO
+    fn child_offset(&self, _index: usize) -> Offset {
+        Offset::ZERO
+    }
+
+    /// Sets whether this was a repaint boundary in the last paint.
+    ///
+    /// Used by the framework to track boundary status for optimization.
+    ///
+    /// Default: Does nothing
+    fn set_was_repaint_boundary(&mut self, _value: bool) {}
 }
 
 impl_downcast!(sync RenderObject<P> where P: Protocol);

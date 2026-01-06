@@ -284,7 +284,7 @@ pub trait RenderSliver: RenderObject<SliverProtocol> {
 
     /// Returns the paint bounds of this render sliver.
     fn sliver_paint_bounds(&self) -> Rect {
-        let geometry = self.geometry();
+        let geometry = RenderSliver::geometry(self);
         let size = self.get_absolute_size(geometry.paint_extent);
         Rect::new(0.0, 0.0, size.width, size.height)
     }

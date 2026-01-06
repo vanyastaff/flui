@@ -271,23 +271,10 @@ impl RenderNode {
         }
     }
 
-    /// Marks as needing layout.
-    #[inline]
-    pub fn mark_needs_layout(&self) {
-        match self {
-            Self::Box(entry) => entry.mark_needs_layout(),
-            Self::Sliver(entry) => entry.mark_needs_layout(),
-        }
-    }
-
-    /// Marks as needing paint.
-    #[inline]
-    pub fn mark_needs_paint(&self) {
-        match self {
-            Self::Box(entry) => entry.mark_needs_paint(),
-            Self::Sliver(entry) => entry.mark_needs_paint(),
-        }
-    }
+    // NOTE: mark_needs_layout() and mark_needs_paint() removed from RenderNode
+    // These methods require element_id and tree access for dirty propagation.
+    // They should be called through RenderTree or PipelineOwner instead.
+    // See similar note in entry.rs for details.
 
     /// Returns true if this is a repaint boundary.
     pub fn is_repaint_boundary(&self) -> bool {

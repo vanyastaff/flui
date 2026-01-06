@@ -107,11 +107,16 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
     /// ```
     fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Self::Arity, Self::ParentData>);
 
-    /// Returns the current size of this render object.
-    fn size(&self) -> Size;
+    /// Returns a reference to the current size of this render object.
+    ///
+    /// This method must return a reference to allow `RenderObject<BoxProtocol>`
+    /// blanket implementation to work correctly.
+    fn size(&self) -> &Size;
 
-    /// Sets the size of this render object.
-    fn set_size(&mut self, size: Size);
+    /// Returns a mutable reference to the size of this render object.
+    ///
+    /// This allows direct mutation of the size field without set_size().
+    fn size_mut(&mut self) -> &mut Size;
 
     /// Returns whether this render object has undergone layout and has a size.
     fn has_size(&self) -> bool {
@@ -366,15 +371,21 @@ where
 {
     fn perform_layout_raw(
         &mut self,
-        constraints: crate::protocol::ProtocolConstraints<BoxProtocol>,
+        _constraints: crate::protocol::ProtocolConstraints<BoxProtocol>,
     ) -> crate::protocol::ProtocolGeometry<BoxProtocol> {
-        // TODO: Create proper BoxLayoutContext and call self.perform_layout()
-        // For now, just return current size
-        self.size()
+        // NOTE: This method should not be called directly!
+        // Layout must go through PipelineOwner which creates proper context with children access.
+        // This blanket impl exists only to make RenderBox compatible with RenderObject<BoxProtocol>
+        // for storage in Box<dyn RenderObject<BoxProtocol>>.
+        //
+        // For now, just return current size without performing layout.
+        // Real layout happens in PipelineOwner::layout_node_with_children()
+        *self.size()
     }
 
-    fn paint(&self, _context: &mut crate::pipeline::CanvasContext, _offset: Offset) {
-        // TODO: Create BoxPaintContext and call self.paint()
+    fn paint(&self, context: &mut crate::pipeline::CanvasContext, offset: Offset) {
+        // Paint can work without children context
+        self.paint_with_canvas(context, offset);
     }
 
     fn hit_test_raw(
@@ -382,18 +393,19 @@ where
         _result: &mut crate::protocol::ProtocolHitResult<BoxProtocol>,
         _position: crate::protocol::ProtocolPosition<BoxProtocol>,
     ) -> bool {
-        // TODO: Create BoxHitTestContext and call self.hit_test()
+        // NOTE: Similar to perform_layout_raw, this should go through proper pipeline
+        // For now, return false (no hit)
         false
     }
 
     fn geometry(&self) -> &crate::protocol::ProtocolGeometry<BoxProtocol> {
-        // We can't return a reference to size() since it returns by value
-        // This needs to be stored in the adapter or state
-        unimplemented!("geometry() needs to be stored in RenderState")
+        // Now that size() returns &Size, this works!
+        self.size()
     }
 
     fn set_geometry(&mut self, geometry: crate::protocol::ProtocolGeometry<BoxProtocol>) {
-        self.set_size(geometry);
+        // Use size_mut() to directly set the size
+        *self.size_mut() = geometry;
     }
 
     fn paint_bounds(&self) -> Rect {

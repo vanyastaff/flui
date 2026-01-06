@@ -68,11 +68,11 @@ impl RenderBox for RenderColoredBox {
         ctx.complete_with_size(constrained);
     }
 
-    fn size(&self) -> Size {
-        self.size
+    fn size(&self) -> &Size {
+        &self.size
     }
-    fn set_size(&mut self, size: Size) {
-        self.size = size;
+    fn size_mut(&mut self) -> &mut Size {
+        &mut self.size
     }
 
     fn paint(&mut self, _ctx: &mut BoxPaintContext<'_, Leaf, BoxParentData>) {

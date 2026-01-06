@@ -173,17 +173,9 @@ impl<P: Protocol> RenderEntry<P> {
         self.state.needs_paint()
     }
 
-    /// Marks as needing layout.
-    #[inline]
-    pub fn mark_needs_layout(&self) {
-        self.state.mark_needs_layout();
-    }
-
-    /// Marks as needing paint.
-    #[inline]
-    pub fn mark_needs_paint(&self) {
-        self.state.mark_needs_paint();
-    }
+    // NOTE: mark_needs_layout() and mark_needs_paint() removed from RenderEntry
+    // These methods require element_id and tree access for dirty propagation.
+    // They should be called through RenderTree or PipelineOwner instead.
 }
 
 // ============================================================================

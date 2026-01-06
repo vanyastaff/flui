@@ -144,7 +144,7 @@ pub mod prelude {
     pub use crate::storage::{RenderNode, RenderTree};
 
     // Protocol adapters for RenderBox -> RenderObject<BoxProtocol> bridging
-    pub use crate::protocol::{BoxProtocolAdapter, IntoRenderObject, SliverProtocolAdapter};
+    pub use crate::protocol::IntoRenderObject;
 
     // Re-export commonly used types from flui_types
     pub use flui_types::{Offset, Point, RRect, Rect, Size};

@@ -71,7 +71,7 @@ pub use crate::traits::RenderObject;
 // INTO RENDER OBJECT EXPORTS
 // ============================================================================
 
-pub use into_render_object::{BoxProtocolAdapter, IntoRenderObject, SliverProtocolAdapter};
+pub use into_render_object::IntoRenderObject;
 
 // ============================================================================
 // CAPABILITY EXPORTS
