@@ -62,6 +62,15 @@ impl RenderCenter {
     }
 }
 
+impl flui_foundation::Diagnosticable for RenderCenter {
+    fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
+        builder.add("size", format!("{:?}", self.size));
+        builder.add("width_factor", format!("{:?}", self.width_factor));
+        builder.add("height_factor", format!("{:?}", self.height_factor));
+        builder.add("has_child", self.has_child);
+    }
+}
+
 impl RenderBox for RenderCenter {
     type Arity = Single;
     type ParentData = BoxParentData;
@@ -69,11 +78,19 @@ impl RenderBox for RenderCenter {
     fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) {
         let constraints = ctx.constraints().clone();
 
+        tracing::debug!(
+            "RenderCenter::perform_layout: constraints={:?}, child_count={}",
+            constraints,
+            ctx.child_count()
+        );
+
         if ctx.child_count() > 0 {
             self.has_child = true;
 
             // Give child loose constraints
             let child_size = ctx.layout_single_child_loose();
+
+            tracing::debug!("RenderCenter: child_size={:?}", child_size);
 
             // Calculate our size
             let width = if let Some(factor) = self.width_factor {
@@ -95,11 +112,20 @@ impl RenderBox for RenderCenter {
                 (self.size.width - child_size.width) / 2.0,
                 (self.size.height - child_size.height) / 2.0,
             );
+
+            tracing::debug!(
+                "RenderCenter: my_size={:?}, child_offset=({}, {})",
+                self.size,
+                self.child_offset.dx,
+                self.child_offset.dy
+            );
+
             ctx.position_child(0, self.child_offset);
         } else {
             self.has_child = false;
             // No child - expand to fill
             self.size = constraints.biggest();
+            tracing::debug!("RenderCenter: no child, size={:?}", self.size);
         }
 
         ctx.complete_with_size(self.size);

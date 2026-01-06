@@ -143,8 +143,8 @@ fn test_colored_box_layout() {
     assert_eq!(pipeline.render_tree().len(), 1);
 
     // Set constraints on the root
-    if let Some(node) = pipeline.render_tree_mut().get_mut(root_id) {
-        let render_object = node.render_object_mut();
+    if let Some(node) = pipeline.render_tree().get(root_id) {
+        let mut render_object = node.render_object_mut();
         render_object.set_cached_constraints(BoxConstraints::tight(Size::new(200.0, 100.0)));
     }
 
@@ -265,4 +265,111 @@ fn test_layout_context_helpers() {
 
     // Size should be the preferred size (within loose constraints)
     assert_eq!(wrapper.inner().actual_size, Size::new(50.0, 50.0));
+}
+
+#[test]
+fn test_paint_offset_propagation() {
+    use flui_rendering::objects::RenderCenter;
+    use flui_rendering::objects::RenderColoredBox;
+    use flui_types::Offset;
+
+    let mut pipeline = PipelineOwner::new();
+
+    // Create Center widget with a ColoredBox child
+    // The Center should position the child at the center offset
+    let center = RenderCenter::new();
+    let center_wrapper = BoxWrapper::new(center);
+    let root_id = pipeline.set_root_render_object(Box::new(center_wrapper));
+
+    // Add colored box child (50x50)
+    let colored_box = RenderColoredBox::red(50.0, 50.0);
+    let child_wrapper = BoxWrapper::new(colored_box);
+    let child_id = pipeline.insert_child_render_object(root_id, Box::new(child_wrapper));
+    assert!(child_id.is_some());
+    let child_id = child_id.unwrap();
+
+    // Set constraints on the root (200x200)
+    if let Some(node) = pipeline.render_tree().get(root_id) {
+        let mut render_object = node.render_object_mut();
+        render_object.set_cached_constraints(BoxConstraints::tight(Size::new(200.0, 200.0)));
+    }
+
+    // Flush layout
+    pipeline.flush_layout();
+
+    // Verify layout was performed
+    assert!(!pipeline
+        .render_tree()
+        .get(root_id)
+        .unwrap()
+        .render_object()
+        .needs_layout());
+    assert!(!pipeline
+        .render_tree()
+        .get(child_id)
+        .unwrap()
+        .render_object()
+        .needs_layout());
+
+    // Check that Center positioned the child correctly
+    // Center should put 50x50 child in center of 200x200 = offset (75, 75)
+    if let Some(node) = pipeline.render_tree().get(root_id) {
+        let render_object = node.render_object();
+        let child_offset = render_object.child_offset(0);
+        // With 200x200 parent and 50x50 child, center offset should be (75, 75)
+        assert_eq!(child_offset.dx, 75.0);
+        assert_eq!(child_offset.dy, 75.0);
+    }
+
+    // Now flush paint and verify layer tree is created
+    pipeline.flush_paint();
+
+    let layer_tree = pipeline.layer_tree();
+    assert!(layer_tree.is_some());
+    let layer_tree = layer_tree.unwrap();
+
+    // Layer tree should have at least root offset layer + picture layer
+    assert!(layer_tree.len() >= 1);
+}
+
+#[test]
+fn test_repaint_boundary_creates_offset_layer() {
+    use flui_rendering::objects::RenderColoredBox;
+    use flui_rendering::wrapper::BoxWrapper;
+
+    let mut pipeline = PipelineOwner::new();
+
+    // Create a root colored box
+    let root_box = RenderColoredBox::blue(200.0, 200.0);
+    let root_wrapper = BoxWrapper::new(root_box);
+    let root_id = pipeline.set_root_render_object(Box::new(root_wrapper));
+
+    // Create a child with repaint boundary
+    let child_box = RenderColoredBox::red(50.0, 50.0);
+    let child_wrapper = BoxWrapper::with_repaint_boundary(child_box);
+    let child_id = pipeline.insert_child_render_object(root_id, Box::new(child_wrapper));
+    assert!(child_id.is_some());
+
+    // Set constraints on root
+    if let Some(node) = pipeline.render_tree().get(root_id) {
+        let mut render_object = node.render_object_mut();
+        render_object.set_cached_constraints(BoxConstraints::tight(Size::new(200.0, 200.0)));
+    }
+
+    // Flush layout and paint
+    pipeline.flush_layout();
+    pipeline.flush_paint();
+
+    // Verify layer tree was created
+    let layer_tree = pipeline.layer_tree();
+    assert!(layer_tree.is_some());
+
+    // The repaint boundary child should have created its own OffsetLayer
+    // Layer tree should have: root offset + picture + child offset layer + child picture
+    let layer_tree = layer_tree.unwrap();
+    assert!(
+        layer_tree.len() >= 2,
+        "Expected at least 2 layers, got {}",
+        layer_tree.len()
+    );
 }

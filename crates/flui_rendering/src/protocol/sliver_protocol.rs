@@ -125,7 +125,7 @@ impl LayoutCapability for SliverLayout {
     type Constraints = SliverConstraints;
     type Geometry = SliverGeometry;
     type CacheKey = SliverConstraintsCacheKey;
-    type Context<'ctx, A: Arity, P: ParentData>
+    type Context<'ctx, A: Arity, P: ParentData + Default>
         = SliverLayoutCtx<'ctx, A, P>
     where
         Self: 'ctx;

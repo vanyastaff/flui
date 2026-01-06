@@ -1,24 +1,28 @@
-//! Animation widgets - explicit and implicit animations
+//! Animation widgets - explicit and implicit animations.
 //!
 //! This module provides animation widgets that integrate with `flui_animation`.
 //!
-//! ## Explicit Animations (User-controlled)
+//! ## Explicit Animations (Transition widgets)
 //!
-//! These widgets require the user to provide and manage an `AnimationController`:
+//! These widgets require the user to provide and manage an `AnimationController`.
+//! The widget rebuilds when the animation value changes:
 //!
-//! - [`FadeTransition`] - Animates opacity based on controller
-//! - [`SlideTransition`] - Animates position based on controller
+//! - [`FadeTransition`] - Animates opacity
+//! - [`SlideTransition`] - Animates position (fractional offset)
+//! - [`ScaleTransition`] - Animates scale
+//! - [`RotationTransition`] - Animates rotation
 //!
-//! ## Implicit Animations (Auto-animated)
+//! ## Implicit Animations (coming soon)
 //!
 //! These widgets automatically animate when their properties change:
 //!
-//! - [`AnimatedOpacity`] - Automatically animates opacity changes
+//! - `AnimatedOpacity` - Auto-animates opacity changes
+//! - `AnimatedContainer` - Auto-animates size/color/padding changes
 //!
 //! ## Example (Explicit Animation)
 //!
 //! ```rust,ignore
-//! use flui_animation::AnimationController;
+//! use flui_animation::{AnimationController, Animation};
 //! use flui_widgets::animation::FadeTransition;
 //! use std::time::Duration;
 //!
@@ -28,27 +32,16 @@
 //! );
 //! controller.forward();
 //!
-//! FadeTransition::new(controller, child)
-//! ```
-//!
-//! ## Example (Implicit Animation)
-//!
-//! ```rust,ignore
-//! use flui_widgets::animation::AnimatedOpacity;
-//! use std::time::Duration;
-//!
-//! // Just change opacity - animation happens automatically!
-//! AnimatedOpacity::builder()
-//!     .opacity(0.5)
-//!     .duration(Duration::from_millis(300))
+//! FadeTransition::new(controller.clone())
 //!     .child(my_widget)
-//!     .build()
 //! ```
 
 mod fade_transition;
-// mod slide_transition;
-// mod animated_opacity;
+mod rotation_transition;
+mod scale_transition;
+mod slide_transition;
 
 pub use fade_transition::FadeTransition;
-// pub use slide_transition::SlideTransition;
-// pub use animated_opacity::AnimatedOpacity;
+pub use rotation_transition::RotationTransition;
+pub use scale_transition::ScaleTransition;
+pub use slide_transition::SlideTransition;

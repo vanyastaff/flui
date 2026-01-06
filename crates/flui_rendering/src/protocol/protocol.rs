@@ -133,7 +133,7 @@ pub trait ProtocolCompatible<Other: Protocol>: Protocol {
 pub trait ProtocolRenderObject<
     P: Protocol,
     A: Arity,
-    PD: ParentData = <P as Protocol>::DefaultParentData,
+    PD: ParentData + Default = <P as Protocol>::DefaultParentData,
 >: Send + Sync
 {
     /// Perform layout with the given context.

@@ -7,6 +7,7 @@ use crate::arity::Arity;
 use crate::constraints::{SliverConstraints, SliverGeometry};
 use crate::context::{SliverHitTestContext, SliverLayoutContext, SliverPaintContext};
 use crate::parent_data::ParentData;
+use crate::protocol::SliverProtocol;
 use crate::traits::RenderObject;
 
 // ============================================================================
@@ -55,7 +56,7 @@ use crate::traits::RenderObject;
 /// ```
 ///
 /// Use `SliverWrapper<T>` to bridge to `RenderObject` for storage in `RenderTree`.
-pub trait RenderSliver: Send + Sync + std::fmt::Debug + 'static {
+pub trait RenderSliver: RenderObject<SliverProtocol> {
     /// The arity of this render sliver (Leaf, Optional, Variable, etc.)
     type Arity: Arity;
 
@@ -162,7 +163,7 @@ pub trait RenderSliver: Send + Sync + std::fmt::Debug + 'static {
     /// # Flutter Equivalence
     ///
     /// Corresponds to `RenderSliver.childMainAxisPosition` in Flutter.
-    fn child_main_axis_position(&self, child: &dyn RenderObject) -> f32 {
+    fn child_main_axis_position(&self, child: &dyn RenderObject<SliverProtocol>) -> f32 {
         let _ = child;
         0.0
     }
@@ -176,7 +177,7 @@ pub trait RenderSliver: Send + Sync + std::fmt::Debug + 'static {
     /// # Flutter Equivalence
     ///
     /// Corresponds to `RenderSliver.childCrossAxisPosition` in Flutter.
-    fn child_cross_axis_position(&self, child: &dyn RenderObject) -> f32 {
+    fn child_cross_axis_position(&self, child: &dyn RenderObject<SliverProtocol>) -> f32 {
         let _ = child;
         0.0
     }
@@ -193,7 +194,7 @@ pub trait RenderSliver: Send + Sync + std::fmt::Debug + 'static {
     /// # Flutter Equivalence
     ///
     /// Corresponds to `RenderSliver.childScrollOffset` in Flutter.
-    fn child_scroll_offset(&self, child: &dyn RenderObject) -> Option<f32> {
+    fn child_scroll_offset(&self, child: &dyn RenderObject<SliverProtocol>) -> Option<f32> {
         let _ = child;
         None
     }

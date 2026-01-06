@@ -28,11 +28,15 @@
 mod center;
 mod colored_box;
 mod flex;
+mod opacity;
 mod padding;
 mod sized_box;
+mod transform;
 
 pub use center::RenderCenter;
 pub use colored_box::RenderColoredBox;
 pub use flex::{CrossAxisAlignment, FlexDirection, MainAxisAlignment, RenderFlex};
-pub use padding::{EdgeInsets, RenderPadding};
+pub use opacity::RenderOpacity;
+pub use padding::RenderPadding;
 pub use sized_box::RenderSizedBox;
+pub use transform::RenderTransform;

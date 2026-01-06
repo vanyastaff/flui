@@ -157,3 +157,6 @@ criterion/
 *.profdata
 perf.data
 flamegraph.svg
+
+# Auto Claude data directory
+.auto-claude/

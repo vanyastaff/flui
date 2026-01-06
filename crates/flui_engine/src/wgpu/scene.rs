@@ -553,7 +553,6 @@ impl SceneRenderer {
     #[tracing::instrument(level = "trace", skip_all, err)]
     pub fn render_scene(&mut self, scene: &Scene) -> Result<(), RenderError> {
         if !scene.has_content() {
-            tracing::trace!("Scene is empty, skipping render");
             return Ok(());
         }
 
@@ -644,10 +643,7 @@ impl SceneRenderer {
         let mut renderer_wrapper = Backend::new(painter);
 
         // Render layer tree depth-first
-        {
-            let _span = tracing::trace_span!("traverse_layers").entered();
-            Self::render_layer_recursive(tree, root_id, &mut renderer_wrapper);
-        }
+        Self::render_layer_recursive(tree, root_id, &mut renderer_wrapper);
 
         // Extract painter and render to GPU
         let mut painter = renderer_wrapper.into_painter();
@@ -688,8 +684,8 @@ impl SceneRenderer {
             Self::render_layer_recursive(tree, child_id, renderer);
         }
 
-        // TODO: Pop state for layers that pushed state (clips, transforms, effects)
-        // This requires tracking what was pushed in render() and popping after children
+        // Clean up state pushed by this layer
+        node.layer().cleanup(renderer);
     }
 
     /// Render a ShaderMaskLayer (offscreen rendering + shader mask + composite)

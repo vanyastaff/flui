@@ -74,6 +74,16 @@ pub trait RenderView: Send + Sync + 'static + Sized {
     fn has_children(&self) -> bool {
         false
     }
+
+    /// Visit child views for mounting.
+    ///
+    /// Override for single/multi child variants to provide access to children.
+    /// The visitor is called once for each child View.
+    ///
+    /// Default implementation does nothing (leaf widgets have no children).
+    fn visit_child_views(&self, _visitor: &mut dyn FnMut(&dyn View)) {
+        // Default: no children
+    }
 }
 
 /// Implement View for a RenderView type.
@@ -239,6 +249,7 @@ impl<V: RenderView + Clone> ElementBase for RenderElement<V> {
                 if render_object_opt.flatten().is_some() {
                     // Re-acquire lock just for the update
                     let mut owner = pipeline_owner.write();
+                    let tree_depth = owner.render_tree().depth(render_id).unwrap_or(0);
                     if let Some(node) = owner.render_tree_mut().get_mut(render_id) {
                         if let Some(render_object) = node
                             .render_object_mut()
@@ -256,6 +267,8 @@ impl<V: RenderView + Clone> ElementBase for RenderElement<V> {
                             self.view.update_render_object(render_object);
                         }
                     }
+                    // Mark as needing paint after update - this ensures the changes are rendered
+                    owner.add_node_needing_paint(render_id.get(), tree_depth);
                 } else {
                     tracing::warn!(
                         "RenderElement::update node not found or wrong type for render_id={:?}",
@@ -282,15 +295,109 @@ impl<V: RenderView + Clone> ElementBase for RenderElement<V> {
 
     fn perform_build(&mut self) {
         if !self.dirty || !self.lifecycle.can_build() {
+            tracing::trace!(
+                "RenderElement::perform_build SKIPPED dirty={} can_build={} render_id={:?}",
+                self.dirty,
+                self.lifecycle.can_build(),
+                self.render_id
+            );
             return;
         }
 
-        // RenderElements typically don't rebuild in the same way as
-        // ComponentElements. Their "build" is creating/updating the RenderObject.
+        let has_children = self.view.has_children();
+        let children_empty = self.children.is_empty();
+        tracing::info!(
+            "RenderElement::perform_build START render_id={:?} has_children={} children_empty={}",
+            self.render_id,
+            has_children,
+            children_empty
+        );
+
+        // Mount child views if this is a single/multi child RenderView
+        if has_children && children_empty {
+            // First build - create child elements
+            // We need to collect elements first because we can't borrow self mutably
+            // while iterating over self.view
+            let mut new_children: Vec<Box<dyn ElementBase>> = Vec::new();
+
+            self.view.visit_child_views(&mut |child_view| {
+                tracing::info!(
+                    "RenderElement::perform_build visiting child view type={:?}",
+                    std::any::type_name_of_val(child_view)
+                );
+                let child_element = child_view.create_element();
+                new_children.push(child_element);
+            });
+
+            tracing::info!(
+                "RenderElement::perform_build collected {} child elements",
+                new_children.len()
+            );
+
+            // Now mount each child with proper context
+            let mut slot_index = 0usize;
+            for mut child_element in new_children {
+                // Propagate PipelineOwner and parent_render_id to child
+                if let Some(ref owner) = self.pipeline_owner {
+                    let owner_any: Arc<dyn Any + Send + Sync> =
+                        Arc::clone(owner) as Arc<dyn Any + Send + Sync>;
+                    child_element.set_pipeline_owner_any(owner_any);
+                    child_element.set_parent_render_id(self.render_id);
+
+                    tracing::debug!(
+                        "RenderElement::perform_build propagated PipelineOwner and parent_id={:?} to child",
+                        self.render_id
+                    );
+                }
+
+                // Mount child
+                child_element.mount(None, self.depth + 1);
+
+                // Build child's children recursively
+                child_element.perform_build();
+
+                self.children.push(child_element);
+                slot_index += 1;
+            }
+
+            tracing::debug!(
+                "RenderElement::perform_build mounted {} children for render_id={:?}",
+                self.children.len(),
+                self.render_id
+            );
+        } else if !self.children.is_empty() {
+            // Rebuild existing children - need to update them with new child views
+            // Collect new child views first
+            let mut new_child_views: Vec<Box<dyn View>> = Vec::new();
+            self.view.visit_child_views(&mut |child_view| {
+                // Clone the view by creating a boxed version using dyn_clone
+                new_child_views.push(dyn_clone::clone_box(child_view));
+            });
+
+            // Update each existing child with its corresponding new view
+            for (i, child) in self.children.iter_mut().enumerate() {
+                if let Some(new_view) = new_child_views.get(i) {
+                    tracing::debug!(
+                        "RenderElement::perform_build updating child[{}] with new view",
+                        i
+                    );
+                    child.update(new_view.as_ref());
+                }
+                child.perform_build();
+            }
+        }
+
         self.dirty = false;
     }
 
     fn mount(&mut self, _parent: Option<ElementId>, slot: usize) {
+        tracing::info!(
+            "RenderElement::mount START slot={} has_pipeline_owner={} parent_render_id={:?}",
+            slot,
+            self.pipeline_owner.is_some(),
+            self.parent_render_id
+        );
+
         self.lifecycle = Lifecycle::Active;
 
         // Store slot
@@ -298,6 +405,7 @@ impl<V: RenderView + Clone> ElementBase for RenderElement<V> {
 
         // Create RenderObject and insert into RenderTree
         if let Some(ref pipeline_owner) = self.pipeline_owner {
+            tracing::info!("RenderElement::mount creating RenderObject");
             let render_object = self.view.create_render_object();
 
             // Insert into RenderTree and mark as needing layout/paint
@@ -318,31 +426,25 @@ impl<V: RenderView + Clone> ElementBase for RenderElement<V> {
                     render_tree.insert(Box::new(render_object))
                 };
 
-                // Mark as needing layout and paint
-                owner.add_node_needing_layout(render_id.get(), self.depth);
-                owner.add_node_needing_paint(render_id.get(), self.depth);
+                // Get the actual depth from the RenderTree (set correctly by insert_child)
+                let tree_depth = render_tree.depth(render_id).unwrap_or(0);
+                self.depth = tree_depth;
+
+                // Mark as needing layout and paint with the correct tree depth
+                owner.add_node_needing_layout(render_id.get(), tree_depth);
+                owner.add_node_needing_paint(render_id.get(), tree_depth);
 
                 render_id
             }; // Release lock here
 
             self.render_id = Some(render_id);
 
-            // Attach the render object to the pipeline owner (separate lock scope)
-            // This sets the owner reference so mark_needs_layout() can schedule
-            {
-                let mut owner = pipeline_owner.write();
-                let render_tree = owner.render_tree_mut();
-                if let Some(node) = render_tree.get_mut(render_id) {
-                    // Set the owner directly without calling attach() to avoid re-scheduling
-                    node.render_object_mut()
-                        .base_mut()
-                        .set_owner(Arc::clone(pipeline_owner));
-                    tracing::debug!(
-                        "RenderElement::mount set owner on RenderObject render_id={:?}",
-                        render_id
-                    );
-                }
-            }
+            // Note: Owner is now managed through PipelineOwner, not stored in RenderObject.
+            // The render object is already associated with the pipeline through RenderTree.
+            tracing::debug!(
+                "RenderElement::mount - RenderObject created with render_id={:?}",
+                render_id
+            );
 
             tracing::debug!(
                 "RenderElement::mount inserted RenderObject render_id={:?} parent_id={:?}",
@@ -504,9 +606,15 @@ impl<V: RenderView + Clone> RenderObjectElement for RenderElement<V> {
                     child_node.set_parent(Some(parent_id));
                 }
 
-                // Add child to parent's children list
+                // Add child to parent's children list in RenderNode
                 if let Some(parent_node) = render_tree.get_mut(parent_id) {
                     parent_node.add_child(*child_render_id);
+
+                    // Also notify the render object itself so it can track children
+                    // for layout (BoxWrapper needs this for position_child to work)
+                    parent_node
+                        .render_object_mut()
+                        .add_child_render_id(*child_render_id);
                 }
             }
         }

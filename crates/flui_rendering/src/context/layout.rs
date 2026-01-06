@@ -47,12 +47,12 @@ use crate::protocol::{BoxLayout, LayoutCapability, LayoutContextApi, Protocol};
 /// - Constraint manipulation helpers
 /// - Child layout and positioning utilities
 /// - Debugging aids
-pub struct LayoutContext<'ctx, P: Protocol, A: Arity, PD: ParentData> {
+pub struct LayoutContext<'ctx, P: Protocol, A: Arity, PD: ParentData + Default> {
     /// The underlying layout context from the capability
     inner: <P::Layout as LayoutCapability>::Context<'ctx, A, PD>,
 }
 
-impl<'ctx, P: Protocol, A: Arity, PD: ParentData> LayoutContext<'ctx, P, A, PD>
+impl<'ctx, P: Protocol, A: Arity, PD: ParentData + Default> LayoutContext<'ctx, P, A, PD>
 where
     <P::Layout as LayoutCapability>::Context<'ctx, A, PD>: LayoutContextApi<'ctx, P::Layout, A, PD>,
 {
@@ -190,7 +190,7 @@ where
 
 use crate::protocol::BoxProtocol;
 
-impl<'ctx, A: Arity, PD: ParentData> LayoutContext<'ctx, BoxProtocol, A, PD>
+impl<'ctx, A: Arity, PD: ParentData + Default> LayoutContext<'ctx, BoxProtocol, A, PD>
 where
     <BoxLayout as LayoutCapability>::Context<'ctx, A, PD>: LayoutContextApi<'ctx, BoxLayout, A, PD>,
 {

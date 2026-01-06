@@ -637,6 +637,7 @@ impl ScheduledTicker {
     where
         F: FnMut(f64) + Send + 'static,
     {
+        eprintln!("[DEBUG] ScheduledTicker::start called");
         *self.state.lock() = TickerState::Active;
         *self.start_time.lock() = Some(Instant::now());
         *self.callback.lock() = Some(Arc::new(Mutex::new(callback)));
@@ -644,6 +645,7 @@ impl ScheduledTicker {
 
         // Schedule for next frame
         self.schedule_next_frame();
+        eprintln!("[DEBUG] ScheduledTicker::start completed, scheduled next frame");
     }
 
     /// Start with a type-safe callback
@@ -750,11 +752,15 @@ impl ScheduledTicker {
         // Register transient callback - fires during TransientCallbacks phase
         self.scheduler
             .schedule_frame_callback(Box::new(move |_vsync_time| {
+                eprintln!("[DEBUG] ScheduledTicker transient callback fired");
                 // Clear scheduled flag
                 *scheduled.lock() = false;
 
                 // Check if still active
-                if *state.lock() != TickerState::Active {
+                let current_state = *state.lock();
+                eprintln!("[DEBUG] ScheduledTicker: state = {:?}", current_state);
+                if current_state != TickerState::Active {
+                    eprintln!("[DEBUG] ScheduledTicker: not active, returning early");
                     return;
                 }
 
@@ -762,16 +768,27 @@ impl ScheduledTicker {
                 let elapsed = if let Some(start) = *start_time.lock() {
                     start.elapsed().as_secs_f64()
                 } else {
+                    eprintln!("[DEBUG] ScheduledTicker: no start_time, returning early");
                     return;
                 };
 
                 // Invoke callback
                 if let Some(cb) = callback.lock().as_ref() {
+                    eprintln!(
+                        "[DEBUG] ScheduledTicker callback: invoking user callback, elapsed={:.3}s",
+                        elapsed
+                    );
                     cb.lock()(elapsed);
                 }
 
                 // Schedule next frame if still active
-                if *state.lock() == TickerState::Active {
+                let current_state = *state.lock();
+                eprintln!(
+                    "[DEBUG] ScheduledTicker callback: state after callback = {:?}",
+                    current_state
+                );
+                if current_state == TickerState::Active {
+                    eprintln!("[DEBUG] ScheduledTicker callback: scheduling next frame");
                     *scheduled.lock() = true;
 
                     // Clone for next callback

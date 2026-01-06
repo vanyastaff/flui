@@ -45,7 +45,7 @@ pub trait LayoutCapability: Send + Sync + 'static {
     type CacheKey: Clone + Debug + Hash + Eq + Send + Sync + 'static;
 
     /// Layout context with Generic Associated Type.
-    type Context<'ctx, A: Arity, P: ParentData>: LayoutContextApi<'ctx, Self, A, P>
+    type Context<'ctx, A: Arity, P: ParentData + Default>: LayoutContextApi<'ctx, Self, A, P>
     where
         Self: 'ctx;
 
@@ -179,6 +179,7 @@ pub type ProtocolPosition<P> = <<P as Protocol>::HitTest as HitTestCapability>::
 pub type ProtocolHitResult<P> = <<P as Protocol>::HitTest as HitTestCapability>::Result;
 
 /// Layout context type for a protocol.
+/// Note: PD requires Default bound since LayoutCapability::Context requires it.
 pub type ProtocolLayoutCtx<'ctx, P, A, PD> =
     <<P as Protocol>::Layout as LayoutCapability>::Context<'ctx, A, PD>;
 

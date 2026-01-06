@@ -1,12 +1,14 @@
 //! RenderBox trait for 2D box layout with Arity-based child management.
 
-use flui_types::{Point, Rect, Size};
+use flui_types::{Offset, Point, Rect, Size};
 
 use crate::arity::Arity;
 use crate::constraints::BoxConstraints;
 use crate::context::{BoxHitTestContext, BoxLayoutContext, BoxPaintContext};
 use crate::hit_testing::HitTestBehavior;
 use crate::parent_data::ParentData;
+use crate::protocol::BoxProtocol;
+use crate::traits::RenderObject;
 
 // ============================================================================
 // RenderBox Trait with Arity and ParentData
@@ -70,7 +72,7 @@ use crate::parent_data::ParentData;
 /// - Baseline support for text alignment
 /// - Dry layout (compute size without actual layout)
 /// - Coordinate conversion (local ↔ global)
-pub trait RenderBox: Send + Sync + std::fmt::Debug + 'static {
+pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable {
     /// The arity of this render box (Leaf, Optional, Variable, etc.)
     type Arity: Arity;
 
@@ -299,6 +301,44 @@ pub trait RenderBox: Send + Sync + std::fmt::Debug + 'static {
         let size = self.size();
         Rect::new(0.0, 0.0, size.width, size.height)
     }
+
+    // ========================================================================
+    // Direct Canvas Painting
+    // ========================================================================
+
+    /// Paints directly using a CanvasContext.
+    ///
+    /// This is a simpler painting method that bypasses BoxPaintContext.
+    /// Override this for leaf widgets that need to draw directly.
+    ///
+    /// Default implementation does nothing.
+    fn paint_with_canvas(&self, _context: &mut crate::context::CanvasContext, _offset: Offset) {
+        // Default: no-op
+    }
+
+    // ========================================================================
+    // Effect Layers
+    // ========================================================================
+
+    /// Returns the alpha value for this render object's children.
+    ///
+    /// If this returns Some(alpha), paint_node_recursive will wrap children
+    /// in an OpacityLayer with the given alpha (0-255).
+    ///
+    /// Override this in RenderOpacity to provide the current alpha value.
+    fn paint_alpha(&self) -> Option<u8> {
+        None
+    }
+
+    /// Returns the transform matrix for this render object's children.
+    ///
+    /// If this returns Some(matrix), paint_node_recursive will wrap children
+    /// in a TransformLayer with the given matrix.
+    ///
+    /// Override this in RenderTransform to provide the current transform.
+    fn paint_transform(&self) -> Option<flui_types::Matrix4> {
+        None
+    }
 }
 
 /// Text baseline types for baseline alignment.
@@ -308,6 +348,57 @@ pub enum TextBaseline {
     Alphabetic,
     /// The ideographic baseline.
     Ideographic,
+}
+
+// ============================================================================
+// Blanket Implementation of RenderObject<BoxProtocol> for RenderBox
+// ============================================================================
+
+/// Automatic implementation of RenderObject<BoxProtocol> for all RenderBox types.
+///
+/// This bridges the gap between the typed RenderBox API (with Arity/ParentData)
+/// and the protocol-specific RenderObject<P> trait needed for storage.
+///
+/// Note: This requires T to also implement Diagnosticable since RenderObject<P> requires it.
+impl<T> RenderObject<BoxProtocol> for T
+where
+    T: RenderBox + flui_foundation::Diagnosticable,
+{
+    fn perform_layout_raw(
+        &mut self,
+        constraints: crate::protocol::ProtocolConstraints<BoxProtocol>,
+    ) -> crate::protocol::ProtocolGeometry<BoxProtocol> {
+        // TODO: Create proper BoxLayoutContext and call self.perform_layout()
+        // For now, just return current size
+        self.size()
+    }
+
+    fn paint(&self, _context: &mut crate::pipeline::CanvasContext, _offset: Offset) {
+        // TODO: Create BoxPaintContext and call self.paint()
+    }
+
+    fn hit_test_raw(
+        &self,
+        _result: &mut crate::protocol::ProtocolHitResult<BoxProtocol>,
+        _position: crate::protocol::ProtocolPosition<BoxProtocol>,
+    ) -> bool {
+        // TODO: Create BoxHitTestContext and call self.hit_test()
+        false
+    }
+
+    fn geometry(&self) -> &crate::protocol::ProtocolGeometry<BoxProtocol> {
+        // We can't return a reference to size() since it returns by value
+        // This needs to be stored in the adapter or state
+        unimplemented!("geometry() needs to be stored in RenderState")
+    }
+
+    fn set_geometry(&mut self, geometry: crate::protocol::ProtocolGeometry<BoxProtocol>) {
+        self.set_size(geometry);
+    }
+
+    fn paint_bounds(&self) -> Rect {
+        self.box_paint_bounds()
+    }
 }
 
 // ============================================================================

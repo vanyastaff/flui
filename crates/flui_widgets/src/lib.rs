@@ -11,86 +11,63 @@
 //! Widget (immutable) → Element (mutable) → RenderObject (layout & paint)
 //! ```
 //!
-//! # Widget Categories
+//! # Available Widgets
 //!
 //! ## Basic Widgets (`basic` module)
-//! - **Container**: Combines sizing, padding, decoration, and constraints
-//! - **SizedBox**: A box with fixed dimensions
 //! - **Padding**: Insets its child by padding
 //! - **Center**: Centers its child
-//! - **Align**: Aligns its child with flexible positioning
+//! - **SizedBox**: A box with fixed dimensions
+//! - **ColoredBox**: Paints a colored rectangle
 //!
 //! ## Layout Widgets (`layout` module)
 //! - **Row**: Horizontal flex layout
 //! - **Column**: Vertical flex layout
-//! - **Stack**: Positioned layout with z-ordering
-//! - **IndexedStack**: Shows only one child at a time
-//!
-//! ## Visual Effects (`visual_effects` module)
-//! - **Opacity**: Controls child opacity
-//! - **Transform**: Applies matrix transformations
-//! - **ClipRRect**: Clips child with rounded rectangle
-//! - **DecoratedBox**: Paints decoration before or after child
-//!
-//! ## Interaction Widgets (`interaction` module)
-//! - **IgnorePointer**: Makes widget transparent to pointer events
-//! - **AbsorbPointer**: Blocks pointer events from passing through
-//!
-//! ## Future Categories
-//! - **Scrolling:** ListView, GridView, ScrollView
+//! - **Flex**: Base flex layout widget
 //!
 //! # Examples
 //!
 //! ```rust,ignore
 //! use flui_widgets::prelude::*;
 //!
-//! // Create a centered container with padding
-//! Container::builder()
-//!     .width(200.0)
-//!     .height(100.0)
-//!     .padding(EdgeInsets::all(16.0))
-//!     .color(Color::rgb(0, 0, 255))
-//!     .build()
+//! // Create a centered colored box
+//! Center::new().child(
+//!     ColoredBox::red(100.0, 50.0)
+//! )
+//!
+//! // Create a row of boxes
+//! Row::new()
+//!     .spacing(8.0)
+//!     .children([
+//!         ColoredBox::red(50.0, 50.0),
+//!         ColoredBox::green(50.0, 50.0),
+//!         ColoredBox::blue(50.0, 50.0),
+//!     ])
 //! ```
 
 #![warn(missing_docs)]
 
-// Temporarily disable modules with compilation errors for counter demo
-// pub mod animation;
+// Active modules (using new RenderBox architecture)
+pub mod animation;
 pub mod basic;
+pub mod layout;
+
+// Re-export commonly used widgets
+pub use animation::{FadeTransition, RotationTransition, ScaleTransition, SlideTransition};
+pub use basic::{Center, ColoredBox, Padding, SizedBox};
+pub use layout::{Column, CrossAxisAlignment, Flex, MainAxisAlignment, Row};
+
+// ============================================================================
+// DISABLED: Modules below use old flui_core/flui_objects architecture
+// They will be migrated when their RenderObjects are implemented
+// ============================================================================
+
+// pub mod animation;
 // pub mod error;
 // pub mod gestures;
 // pub mod interaction;
-// pub mod layout;
 // pub mod scrolling;
 // pub mod style;
 // pub mod visual_effects;
-
-// Re-export commonly used widgets for convenient access
-pub use basic::Padding;
-pub use basic::Text;
-// pub use layout::{Column, Row};
-
-// Temporarily disabled exports until widgets are fixed
-// pub use basic::{
-//     Align, AspectRatio, Builder, Button, Card, Center, ColoredBox, ConstrainedBox, Container,
-//     CustomPaint, DecoratedBox, Divider, Empty, FittedBox, LayoutBuilder, LimitedBox, Padding,
-//     SafeArea, SizedBox, VerticalDivider,
-// };
-// pub use gestures::GestureDetector;
-// pub use interaction::{AbsorbPointer, IgnorePointer, MouseRegion};
-// pub use layout::{
-//     Baseline, Expanded, Flex, Flexible, FractionallySizedBox, IndexedStack,
-//     IntrinsicHeight, IntrinsicWidth, ListBody, OverflowBox, Positioned, PositionedDirectional,
-//     RotatedBox, Scaffold, ScrollController, SingleChildScrollView, SizedOverflowBox, Spacer,
-//     Stack, Wrap,
-// };
-
-// Re-export commonly used types
-// pub use flui_objects::DecorationPosition;
-// pub use flui_types::layout::{FlexFit, StackFit};
-// pub use flui_types::styling::{BorderRadius, BoxDecoration, Radius};
-// pub use flui_types::{Alignment, BoxConstraints, Color, EdgeInsets, Matrix4, Offset, Size};
 
 /// Prelude module for convenient imports
 ///
@@ -99,25 +76,16 @@ pub use basic::Text;
 /// use flui_widgets::prelude::*;
 /// ```
 pub mod prelude {
-    // Re-export enabled widgets
-    pub use crate::basic::Padding;
-    pub use crate::basic::Text;
+    // Re-export animation widgets
+    pub use crate::animation::{
+        FadeTransition, RotationTransition, ScaleTransition, SlideTransition,
+    };
 
-    // pub use crate::gestures::GestureDetector;
-    // pub use crate::interaction::{AbsorbPointer, IgnorePointer, MouseRegion};
-    // pub use crate::layout::{
-    //     Baseline, Column, Expanded, Flex, Flexible, FractionallySizedBox, IndexedStack,
-    //     IntrinsicHeight, IntrinsicWidth, ListBody, OverflowBox, Positioned, PositionedDirectional,
-    //     RotatedBox, Row, Scaffold, ScrollController, SingleChildScrollView, SizedOverflowBox,
-    //     Spacer, Stack, Wrap,
-    // };
+    // Re-export all active widgets
+    pub use crate::basic::{Center, ColoredBox, Padding, SizedBox};
+    pub use crate::layout::{Column, CrossAxisAlignment, Flex, MainAxisAlignment, Row};
 
     // Re-export core types
-    // pub use flui_core::BuildContext;  // Not needed for IntoElement pattern
     pub use flui_rendering::prelude::BoxConstraints;
-    pub use flui_types::layout::{
-        CrossAxisAlignment, FlexFit, MainAxisAlignment, MainAxisSize, StackFit,
-    };
-    pub use flui_types::styling::{BorderRadius, BoxDecoration, Radius};
-    pub use flui_types::{Alignment, Color, EdgeInsets, Matrix4, Offset, Size};
+    pub use flui_types::{EdgeInsets, Offset, Size};
 }

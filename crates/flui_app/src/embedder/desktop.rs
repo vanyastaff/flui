@@ -189,15 +189,23 @@ impl DesktopEmbedder {
     /// Delegates to AppBinding for all framework logic, only handles GPU rendering.
     /// Also invokes scheduler callbacks for animations.
     pub fn render_frame(&mut self) {
+        let now = Instant::now();
+
         // 1. Handle scheduler frame callbacks (animations, etc.)
         let scheduler = Scheduler::instance();
-        let frame_id = scheduler.handle_begin_frame(Instant::now());
+        let frame_id = scheduler.handle_begin_frame(now);
         tracing::trace!(
             "render_frame: handle_begin_frame completed, frame_id={:?}",
             frame_id
         );
         scheduler.handle_draw_frame();
         tracing::trace!("render_frame: handle_draw_frame completed");
+
+        // 2. Also tick the Arc scheduler singleton (used by AnimationController)
+        let arc_scheduler = Scheduler::arc_instance();
+        let arc_frame_id = arc_scheduler.handle_begin_frame(now);
+        tracing::trace!("render_frame: arc_scheduler frame_id={:?}", arc_frame_id);
+        arc_scheduler.handle_draw_frame();
 
         // 2. Render the frame via AppBinding
         let binding = AppBinding::instance();
@@ -206,7 +214,13 @@ impl DesktopEmbedder {
 
     /// Check if redraw is needed
     pub fn needs_redraw(&self) -> bool {
-        AppBinding::instance().needs_redraw()
+        // Check if framework needs redraw
+        if AppBinding::instance().needs_redraw() {
+            return true;
+        }
+        // Check if animation scheduler has pending callbacks
+        let arc_scheduler = Scheduler::arc_instance();
+        arc_scheduler.is_frame_scheduled()
     }
 
     /// Get the underlying winit window

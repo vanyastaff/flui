@@ -42,6 +42,23 @@ impl Backend {
         self.painter
     }
 
+    /// Returns the current save stack depth.
+    ///
+    /// This is useful for tracking how many `save()` calls have been made
+    /// by layer rendering so that the corresponding number of `restore()` calls
+    /// can be issued after rendering children.
+    pub fn save_count(&self) -> usize {
+        self.painter.save_count()
+    }
+
+    /// Restores the most recently saved canvas state.
+    ///
+    /// This pops the transform and clip state from the save stack.
+    /// Used to restore state after rendering layer children.
+    pub fn restore(&mut self) {
+        self.painter.restore();
+    }
+
     fn with_transform<F>(&mut self, transform: &Matrix4, draw_fn: F)
     where
         F: FnOnce(&mut WgpuPainter),

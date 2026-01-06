@@ -168,6 +168,14 @@ pub struct WgpuPainter {
 
     /// Current active scissor rect (None = no clipping)
     current_scissor: Option<(u32, u32, u32, u32)>,
+
+    // ===== Opacity/Layer Stack =====
+    /// Stack of opacity values for save_layer/restore_layer
+    /// Each element is the accumulated alpha (0.0-1.0)
+    opacity_stack: Vec<f32>,
+
+    /// Current accumulated opacity (1.0 = fully opaque)
+    current_opacity: f32,
 }
 
 impl WgpuPainter {
@@ -674,6 +682,8 @@ impl WgpuPainter {
             current_transform,
             scissor_stack: Vec::new(),
             current_scissor: None,
+            opacity_stack: Vec::new(),
+            current_opacity: 1.0,
         }
     }
 
@@ -799,6 +809,14 @@ impl WgpuPainter {
             0,
             bytemuck::cast_slice(&viewport_data),
         );
+    }
+
+    /// Returns the current save stack depth.
+    ///
+    /// This is useful for tracking how many `save()` calls have been made
+    /// so that the corresponding number of `restore()` calls can be issued.
+    pub fn save_count(&self) -> usize {
+        self.transform_stack.len()
     }
 
     // ===== External Texture Registry Access =====
@@ -1239,8 +1257,22 @@ impl Painter for WgpuPainter {
         tracing::trace!("WgpuPainter::rect: rect={:?}, paint={:?}", rect, paint);
 
         if paint.style == PaintStyle::Fill {
+            // Apply current transform to rect bounds
+            let top_left = self.apply_transform(Point::new(rect.left(), rect.top()));
+            let bottom_right = self.apply_transform(Point::new(rect.right(), rect.bottom()));
+            let transformed_rect =
+                Rect::from_ltrb(top_left.x, top_left.y, bottom_right.x, bottom_right.y);
+
+            // Apply current opacity to color
+            let color = if self.current_opacity < 1.0 {
+                let alpha = (paint.color.a as f32 * self.current_opacity) as u8;
+                flui_types::Color::rgba(paint.color.r, paint.color.g, paint.color.b, alpha)
+            } else {
+                paint.color
+            };
+
             // Use GPU instancing for filled rects (100x faster!)
-            let instance = super::instancing::RectInstance::rect(rect, paint.color);
+            let instance = super::instancing::RectInstance::rect(transformed_rect, color);
             let _ = self.rect_batch.add(instance);
             // Note: Auto-flush happens in render() - no need to flush here
         } else {
@@ -1254,10 +1286,25 @@ impl Painter for WgpuPainter {
 
     fn rrect(&mut self, rrect: RRect, paint: &Paint) {
         if paint.style == PaintStyle::Fill {
+            // Apply current transform to rect bounds
+            let top_left = self.apply_transform(Point::new(rrect.rect.left(), rrect.rect.top()));
+            let bottom_right =
+                self.apply_transform(Point::new(rrect.rect.right(), rrect.rect.bottom()));
+            let transformed_rect =
+                Rect::from_ltrb(top_left.x, top_left.y, bottom_right.x, bottom_right.y);
+
+            // Apply current opacity to color
+            let color = if self.current_opacity < 1.0 {
+                let alpha = (paint.color.a as f32 * self.current_opacity) as u8;
+                flui_types::Color::rgba(paint.color.r, paint.color.g, paint.color.b, alpha)
+            } else {
+                paint.color
+            };
+
             // Use GPU instancing for filled rounded rects (100x faster!)
             let instance = super::instancing::RectInstance::rounded_rect_corners(
-                rrect.rect,
-                paint.color,
+                transformed_rect,
+                color,
                 rrect.top_left.x.max(rrect.top_left.y),
                 rrect.top_right.x.max(rrect.top_right.y),
                 rrect.bottom_right.x.max(rrect.bottom_right.y),
@@ -1282,8 +1329,20 @@ impl Painter for WgpuPainter {
         );
 
         if paint.style == PaintStyle::Fill {
+            // Apply current transform to center point
+            let transformed_center = self.apply_transform(center);
+
+            // Apply current opacity to color
+            let color = if self.current_opacity < 1.0 {
+                let alpha = (paint.color.a as f32 * self.current_opacity) as u8;
+                flui_types::Color::rgba(paint.color.r, paint.color.g, paint.color.b, alpha)
+            } else {
+                paint.color
+            };
+
             // Use GPU instancing for filled circles (100x faster!)
-            let instance = super::instancing::CircleInstance::new(center, radius, paint.color);
+            let instance =
+                super::instancing::CircleInstance::new(transformed_center, radius, color);
             let _ = self.circle_batch.add(instance);
             // Note: Auto-flush happens in render() - no need to flush here
         } else {
@@ -2005,6 +2064,39 @@ impl Painter for WgpuPainter {
 
     fn viewport_bounds(&self) -> Rect {
         Rect::from_ltrb(0.0, 0.0, self.size.0 as f32, self.size.1 as f32)
+    }
+
+    // ===== Layer Operations (Opacity) =====
+
+    fn save_layer(&mut self, _bounds: Option<Rect>, paint: &Paint) {
+        // Push current opacity onto stack
+        self.opacity_stack.push(self.current_opacity);
+
+        // Apply the paint's alpha to current opacity
+        let paint_alpha = paint.color.a as f32 / 255.0;
+        self.current_opacity *= paint_alpha;
+
+        #[cfg(debug_assertions)]
+        tracing::trace!(
+            "WgpuPainter::save_layer: paint_alpha={}, current_opacity={}",
+            paint_alpha,
+            self.current_opacity
+        );
+    }
+
+    fn restore_layer(&mut self) {
+        if let Some(prev_opacity) = self.opacity_stack.pop() {
+            self.current_opacity = prev_opacity;
+
+            #[cfg(debug_assertions)]
+            tracing::trace!(
+                "WgpuPainter::restore_layer: restored opacity={}",
+                self.current_opacity
+            );
+        } else {
+            #[cfg(debug_assertions)]
+            tracing::warn!("WgpuPainter::restore_layer: stack underflow");
+        }
     }
 }
 

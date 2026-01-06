@@ -236,8 +236,8 @@ impl<V: View + Clone + Send + Sync + 'static> ElementBase for RootRenderElement<
                 (&self.pipeline_owner, self.render_id)
             {
                 let mut owner = pipeline_owner.write();
-                if let Some(node) = owner.render_tree_mut().get_mut(render_id) {
-                    let render_object = node.render_object_mut();
+                if let Some(node) = owner.render_tree().get(render_id) {
+                    let mut render_object = node.render_object_mut();
                     if let Some(render_view) = render_object
                         .as_any_mut()
                         .downcast_mut::<RenderViewObject>()
@@ -303,6 +303,11 @@ impl<V: View + Clone + Send + Sync + 'static> ElementBase for RootRenderElement<
                     // Add child to parent's children list
                     if let Some(parent_node) = render_tree.get_mut(parent_id) {
                         parent_node.add_child(child_render_id);
+
+                        // Also notify the render object itself so it can track children
+                        parent_node
+                            .render_object_mut()
+                            .add_child_render_id(child_render_id);
                     }
 
                     tracing::debug!(
@@ -392,6 +397,11 @@ impl<V: View + Clone + Send + Sync + 'static> RenderObjectElement for RootRender
                 // Add child to parent's children list
                 if let Some(parent_node) = render_tree.get_mut(parent_id) {
                     parent_node.add_child(*child_render_id);
+
+                    // Also notify the render object itself so it can track children
+                    parent_node
+                        .render_object_mut()
+                        .add_child_render_id(*child_render_id);
                 }
             }
         }

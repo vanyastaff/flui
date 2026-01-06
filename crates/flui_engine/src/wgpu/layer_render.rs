@@ -37,6 +37,12 @@ use flui_painting::DisplayListCore;
 pub trait LayerRender<R: CommandRenderer + ?Sized> {
     /// Render this layer using the provided command renderer.
     fn render(&self, renderer: &mut R);
+
+    /// Clean up any state pushed by render().
+    ///
+    /// This is called after all children have been rendered to restore
+    /// the renderer state (transforms, clips, effects).
+    fn cleanup(&self, renderer: &mut R);
 }
 
 impl<R: CommandRenderer + ?Sized> LayerRender<R> for Layer {
@@ -80,6 +86,45 @@ impl<R: CommandRenderer + ?Sized> LayerRender<R> for Layer {
             Layer::PerformanceOverlay(layer) => layer.render(renderer),
         }
     }
+
+    fn cleanup(&self, renderer: &mut R) {
+        match self {
+            // Leaf layers - no cleanup needed
+            Layer::Canvas(layer) => layer.cleanup(renderer),
+            Layer::Picture(layer) => layer.cleanup(renderer),
+
+            // Clip layers
+            Layer::ClipRect(layer) => layer.cleanup(renderer),
+            Layer::ClipRRect(layer) => layer.cleanup(renderer),
+            Layer::ClipPath(layer) => layer.cleanup(renderer),
+            Layer::ClipSuperellipse(layer) => layer.cleanup(renderer),
+
+            // Transform layers
+            Layer::Offset(layer) => layer.cleanup(renderer),
+            Layer::Transform(layer) => layer.cleanup(renderer),
+
+            // Effect layers
+            Layer::Opacity(layer) => layer.cleanup(renderer),
+            Layer::ColorFilter(layer) => layer.cleanup(renderer),
+            Layer::ImageFilter(layer) => layer.cleanup(renderer),
+            Layer::ShaderMask(layer) => layer.cleanup(renderer),
+            Layer::BackdropFilter(layer) => layer.cleanup(renderer),
+
+            // Leaf layers (external content)
+            Layer::Texture(layer) => layer.cleanup(renderer),
+            Layer::PlatformView(layer) => layer.cleanup(renderer),
+
+            // Linking layers
+            Layer::Leader(layer) => layer.cleanup(renderer),
+            Layer::Follower(layer) => layer.cleanup(renderer),
+
+            // Annotation layers (metadata only, no cleanup needed)
+            Layer::AnnotatedRegion(_) => {}
+
+            // Debug/Performance layers
+            Layer::PerformanceOverlay(layer) => layer.cleanup(renderer),
+        }
+    }
 }
 
 // ============================================================================
@@ -90,11 +135,19 @@ impl<R: CommandRenderer + ?Sized> LayerRender<R> for CanvasLayer {
     fn render(&self, renderer: &mut R) {
         dispatch_commands(self.display_list().commands(), renderer);
     }
+
+    fn cleanup(&self, _renderer: &mut R) {
+        // Leaf layer - no state to clean up
+    }
 }
 
 impl<R: CommandRenderer + ?Sized> LayerRender<R> for PictureLayer {
     fn render(&self, renderer: &mut R) {
         dispatch_commands(self.picture().commands(), renderer);
+    }
+
+    fn cleanup(&self, _renderer: &mut R) {
+        // Leaf layer - no state to clean up
     }
 }
 
@@ -110,6 +163,12 @@ impl<R: CommandRenderer + ?Sized> LayerRender<R> for ClipRectLayer {
         let rect = self.clip_rect();
         renderer.push_clip_rect(&rect, self.clip_behavior());
     }
+
+    fn cleanup(&self, renderer: &mut R) {
+        if self.clips() {
+            renderer.pop_clip();
+        }
+    }
 }
 
 impl<R: CommandRenderer + ?Sized> LayerRender<R> for ClipRRectLayer {
@@ -120,6 +179,12 @@ impl<R: CommandRenderer + ?Sized> LayerRender<R> for ClipRRectLayer {
         let rrect = self.clip_rrect();
         renderer.push_clip_rrect(rrect, self.clip_behavior());
     }
+
+    fn cleanup(&self, renderer: &mut R) {
+        if self.clips() {
+            renderer.pop_clip();
+        }
+    }
 }
 
 impl<R: CommandRenderer + ?Sized> LayerRender<R> for ClipPathLayer {
@@ -129,6 +194,12 @@ impl<R: CommandRenderer + ?Sized> LayerRender<R> for ClipPathLayer {
         }
         let path = self.clip_path();
         renderer.push_clip_path(path, self.clip_behavior());
+    }
+
+    fn cleanup(&self, renderer: &mut R) {
+        if self.clips() {
+            renderer.pop_clip();
+        }
     }
 }
 
@@ -151,6 +222,12 @@ impl<R: CommandRenderer + ?Sized> LayerRender<R> for flui_layer::ClipSuperellips
         );
         renderer.push_clip_rrect(&rrect, self.clip_behavior());
     }
+
+    fn cleanup(&self, renderer: &mut R) {
+        if self.clips() {
+            renderer.pop_clip();
+        }
+    }
 }
 
 // ============================================================================
@@ -164,6 +241,12 @@ impl<R: CommandRenderer + ?Sized> LayerRender<R> for OffsetLayer {
         }
         renderer.push_offset(self.offset());
     }
+
+    fn cleanup(&self, renderer: &mut R) {
+        if !self.is_zero() {
+            renderer.pop_transform();
+        }
+    }
 }
 
 impl<R: CommandRenderer + ?Sized> LayerRender<R> for TransformLayer {
@@ -172,6 +255,12 @@ impl<R: CommandRenderer + ?Sized> LayerRender<R> for TransformLayer {
             return;
         }
         renderer.push_transform(self.transform());
+    }
+
+    fn cleanup(&self, renderer: &mut R) {
+        if !self.is_identity() {
+            renderer.pop_transform();
+        }
     }
 }
 
@@ -192,6 +281,17 @@ impl<R: CommandRenderer + ?Sized> LayerRender<R> for OpacityLayer {
         }
         renderer.push_opacity(self.alpha());
     }
+
+    fn cleanup(&self, renderer: &mut R) {
+        if self.is_invisible() || self.is_opaque() {
+            return;
+        }
+        // Pop in reverse order: first opacity, then offset
+        renderer.pop_opacity();
+        if self.has_offset() {
+            renderer.pop_transform();
+        }
+    }
 }
 
 impl<R: CommandRenderer + ?Sized> LayerRender<R> for ColorFilterLayer {
@@ -200,6 +300,12 @@ impl<R: CommandRenderer + ?Sized> LayerRender<R> for ColorFilterLayer {
             return;
         }
         renderer.push_color_filter(self.color_filter());
+    }
+
+    fn cleanup(&self, renderer: &mut R) {
+        if !self.is_identity() {
+            renderer.pop_color_filter();
+        }
     }
 }
 
@@ -210,17 +316,33 @@ impl<R: CommandRenderer + ?Sized> LayerRender<R> for ImageFilterLayer {
         }
         renderer.push_image_filter(self.filter());
     }
+
+    fn cleanup(&self, renderer: &mut R) {
+        // Pop in reverse order: first filter, then offset
+        renderer.pop_image_filter();
+        if self.has_offset() {
+            renderer.pop_transform();
+        }
+    }
 }
 
 impl<R: CommandRenderer + ?Sized> LayerRender<R> for ShaderMaskLayer {
     fn render(&self, _renderer: &mut R) {
         // TODO: Implement shader mask GPU rendering
     }
+
+    fn cleanup(&self, _renderer: &mut R) {
+        // TODO: Implement shader mask cleanup
+    }
 }
 
 impl<R: CommandRenderer + ?Sized> LayerRender<R> for BackdropFilterLayer {
     fn render(&self, _renderer: &mut R) {
         // TODO: Implement backdrop filter GPU rendering
+    }
+
+    fn cleanup(&self, _renderer: &mut R) {
+        // TODO: Implement backdrop filter cleanup
     }
 }
 
@@ -242,11 +364,19 @@ impl<R: CommandRenderer + ?Sized> LayerRender<R> for TextureLayer {
             &flui_types::geometry::Matrix4::IDENTITY,
         );
     }
+
+    fn cleanup(&self, _renderer: &mut R) {
+        // Leaf layer - no state to clean up
+    }
 }
 
 impl<R: CommandRenderer + ?Sized> LayerRender<R> for PlatformViewLayer {
     fn render(&self, _renderer: &mut R) {
         // Platform views are composited by the platform embedder
+    }
+
+    fn cleanup(&self, _renderer: &mut R) {
+        // Leaf layer - no state to clean up
     }
 }
 
@@ -261,11 +391,22 @@ impl<R: CommandRenderer + ?Sized> LayerRender<R> for LeaderLayer {
             renderer.push_offset(offset);
         }
     }
+
+    fn cleanup(&self, renderer: &mut R) {
+        let offset = self.get_offset();
+        if offset.dx != 0.0 || offset.dy != 0.0 {
+            renderer.pop_transform();
+        }
+    }
 }
 
 impl<R: CommandRenderer + ?Sized> LayerRender<R> for FollowerLayer {
     fn render(&self, _renderer: &mut R) {
         // Transform is calculated by the compositor
+    }
+
+    fn cleanup(&self, _renderer: &mut R) {
+        // No state to clean up
     }
 }
 
@@ -282,5 +423,9 @@ impl<R: CommandRenderer + ?Sized> LayerRender<R> for PerformanceOverlayLayer {
             self.frame_time_ms(),
             self.total_frames(),
         );
+    }
+
+    fn cleanup(&self, _renderer: &mut R) {
+        // Leaf layer - no state to clean up
     }
 }

@@ -75,6 +75,7 @@ impl RenderSizedBox {
     }
 }
 
+impl flui_foundation::Diagnosticable for RenderSizedBox {}
 impl RenderBox for RenderSizedBox {
     type Arity = Leaf;
     type ParentData = BoxParentData;

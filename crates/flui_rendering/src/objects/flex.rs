@@ -186,6 +186,7 @@ impl RenderFlex {
     }
 }
 
+impl flui_foundation::Diagnosticable for RenderFlex {}
 impl RenderBox for RenderFlex {
     type Arity = Variable;
     type ParentData = BoxParentData;

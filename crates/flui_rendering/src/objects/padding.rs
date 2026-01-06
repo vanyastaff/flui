@@ -1,72 +1,12 @@
 //! RenderPadding - adds padding around a single child.
 
-use flui_types::{Offset, Point, Rect, Size};
+use flui_types::{EdgeInsets, Offset, Point, Rect, Size};
 
 use crate::arity::Single;
 use crate::constraints::BoxConstraints;
 use crate::context::{BoxHitTestContext, BoxLayoutContext, BoxPaintContext};
 use crate::parent_data::BoxParentData;
 use crate::traits::RenderBox;
-
-/// Edge insets for padding.
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
-pub struct EdgeInsets {
-    /// Left padding.
-    pub left: f32,
-    /// Top padding.
-    pub top: f32,
-    /// Right padding.
-    pub right: f32,
-    /// Bottom padding.
-    pub bottom: f32,
-}
-
-impl EdgeInsets {
-    /// Creates edge insets with all sides equal.
-    pub const fn all(value: f32) -> Self {
-        Self {
-            left: value,
-            top: value,
-            right: value,
-            bottom: value,
-        }
-    }
-
-    /// Creates edge insets with symmetric horizontal and vertical values.
-    pub const fn symmetric(horizontal: f32, vertical: f32) -> Self {
-        Self {
-            left: horizontal,
-            top: vertical,
-            right: horizontal,
-            bottom: vertical,
-        }
-    }
-
-    /// Creates edge insets with only specific sides.
-    pub const fn only(left: f32, top: f32, right: f32, bottom: f32) -> Self {
-        Self {
-            left,
-            top,
-            right,
-            bottom,
-        }
-    }
-
-    /// Returns the total horizontal padding.
-    pub fn horizontal(&self) -> f32 {
-        self.left + self.right
-    }
-
-    /// Returns the total vertical padding.
-    pub fn vertical(&self) -> f32 {
-        self.top + self.bottom
-    }
-
-    /// Returns the top-left offset.
-    pub fn top_left(&self) -> Offset {
-        Offset::new(self.left, self.top)
-    }
-}
 
 /// A render object that adds padding around its child.
 ///
@@ -122,8 +62,8 @@ impl RenderPadding {
 
     /// Deflates constraints by padding amount.
     fn deflate_constraints(&self, constraints: &BoxConstraints) -> BoxConstraints {
-        let horizontal = self.padding.horizontal();
-        let vertical = self.padding.vertical();
+        let horizontal = self.padding.horizontal_total();
+        let vertical = self.padding.vertical_total();
 
         BoxConstraints::new(
             (constraints.min_width - horizontal).max(0.0),
@@ -134,6 +74,7 @@ impl RenderPadding {
     }
 }
 
+impl flui_foundation::Diagnosticable for RenderPadding {}
 impl RenderBox for RenderPadding {
     type Arity = Single;
     type ParentData = BoxParentData;
@@ -154,13 +95,16 @@ impl RenderBox for RenderPadding {
 
             // Our size is child size + padding
             self.size = Size::new(
-                child_size.width + self.padding.horizontal(),
-                child_size.height + self.padding.vertical(),
+                child_size.width + self.padding.horizontal_total(),
+                child_size.height + self.padding.vertical_total(),
             );
         } else {
             self.has_child = false;
             // No child - just the padding itself
-            self.size = Size::new(self.padding.horizontal(), self.padding.vertical());
+            self.size = Size::new(
+                self.padding.horizontal_total(),
+                self.padding.vertical_total(),
+            );
         }
 
         // Constrain to parent's constraints
@@ -208,8 +152,8 @@ mod tests {
     #[test]
     fn test_edge_insets() {
         let insets = EdgeInsets::all(10.0);
-        assert_eq!(insets.horizontal(), 20.0);
-        assert_eq!(insets.vertical(), 20.0);
+        assert_eq!(insets.horizontal_total(), 20.0);
+        assert_eq!(insets.vertical_total(), 20.0);
         assert_eq!(insets.top_left(), Offset::new(10.0, 10.0));
     }
 
