@@ -2,7 +2,7 @@
 
 use std::fmt::Debug;
 
-use flui_foundation::{Diagnosticable, DiagnosticsBuilder, LayerId};
+use flui_foundation::{Diagnosticable, DiagnosticsBuilder, LayerId, RenderId};
 
 use crate::hit_testing::{HitTestEntry, HitTestResult, HitTestTarget, PointerEvent};
 
@@ -409,9 +409,7 @@ impl RenderView {
 // ============================================================================
 
 impl RenderObject for RenderView {
-    fn parent(&self) -> Option<&dyn RenderObject> {
-        None
-    }
+    // parent_id() uses default implementation returning None (RenderView is always root)
 
     fn depth(&self) -> usize {
         self.depth
@@ -425,8 +423,8 @@ impl RenderObject for RenderView {
         self.owner.map(|p| unsafe { &*p })
     }
 
-    fn set_parent(&mut self, _parent: Option<*const dyn RenderObject>) {
-        // RenderView is always the root
+    fn set_parent(&mut self, _parent: Option<RenderId>) {
+        // RenderView is always the root, so parent is always None
     }
 
     fn attach(&mut self, owner: &PipelineOwner) {
@@ -456,7 +454,8 @@ impl RenderObject for RenderView {
         self.needs_layout = true;
         self.needs_compositing_bits_update = true;
         self.needs_semantics_update = true;
-        child.set_parent(Some(self as *const dyn RenderObject));
+        // Note: Parent ID is managed by RenderTree, not set here
+        // The tree structure is maintained externally via RenderNode
         if let Some(owner) = self.owner() {
             child.attach(owner);
         }
@@ -464,7 +463,7 @@ impl RenderObject for RenderView {
     }
 
     fn drop_child(&mut self, child: &mut dyn RenderObject) {
-        child.set_parent(None);
+        // Note: Parent ID is managed by RenderTree, not cleared here
         if self.attached() {
             child.detach();
         }
@@ -555,7 +554,7 @@ impl RenderObject for RenderView {
 
     fn schedule_initial_layout(&mut self) {
         assert!(self.attached());
-        assert!(self.parent().is_none());
+        assert!(self.parent_id().is_none());
         self.needs_layout = true;
     }
 
@@ -683,7 +682,7 @@ mod tests {
     #[test]
     fn test_render_view_parent_is_none() {
         let view = RenderView::new();
-        assert!(view.parent().is_none());
+        assert!(view.parent_id().is_none());
     }
 
     #[test]

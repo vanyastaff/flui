@@ -13,6 +13,15 @@
 //! - **Paint Context**: Can only paint children (read-only access)
 //! - **Hit Test Context**: Can only hit test children (read-only access)
 //!
+//! # Implementation Status
+//!
+//! The handle stores cached values (size, offset, parent_data) and the child's
+//! `RenderId`. Methods that require actual render object delegation (layout,
+//! paint, intrinsic size queries) currently return cached/default values.
+//!
+//! Full implementation requires the context to provide access to the `RenderTree`
+//! so the handle can look up and delegate to the actual render object.
+//!
 //! # Example
 //!
 //! ```ignore

@@ -19,7 +19,7 @@
 //! - **Semantics**: Providing accessibility information
 
 use downcast_rs::{impl_downcast, DowncastSync};
-use flui_foundation::{Diagnosticable, LayerId, SemanticsId};
+use flui_foundation::{Diagnosticable, LayerId, RenderId, SemanticsId};
 
 use crate::constraints::BoxConstraints;
 use crate::hit_testing::HitTestTarget;
@@ -36,8 +36,11 @@ pub trait RenderObject: Diagnosticable + HitTestTarget + DowncastSync {
     // Tree Structure
     // ========================================================================
 
-    /// Returns the parent render object, if any.
-    fn parent(&self) -> Option<&dyn RenderObject> {
+    /// Returns the parent render object ID, if any.
+    ///
+    /// This returns the ID of the parent in the render tree. To access the
+    /// actual parent render object, use `RenderTree::get(parent_id)`.
+    fn parent_id(&self) -> Option<RenderId> {
         None
     }
 
@@ -50,8 +53,15 @@ pub trait RenderObject: Diagnosticable + HitTestTarget + DowncastSync {
     /// Returns the pipeline owner that manages this render object.
     fn owner(&self) -> Option<&PipelineOwner>;
 
-    /// Sets the parent reference for this render object.
-    fn set_parent(&mut self, parent: Option<*const dyn RenderObject>);
+    /// Sets the parent ID for this render object.
+    ///
+    /// This is called by the tree when parent-child relationships change.
+    /// The actual parent-child relationship is managed by `RenderTree`.
+    ///
+    /// # Arguments
+    ///
+    /// * `parent` - The RenderId of the parent, or None if this is the root
+    fn set_parent(&mut self, parent: Option<RenderId>);
 
     // ========================================================================
     // Lifecycle

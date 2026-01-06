@@ -514,6 +514,20 @@ impl PipelineOwner {
     ///
     /// After processing own nodes, recursively flushes child pipeline owners.
     pub fn flush_layout(&mut self) {
+        // Validate pipeline state - no re-entrancy or invalid phase combinations
+        debug_assert!(
+            !self.debug_doing_layout,
+            "flush_layout called recursively - layout is already in progress"
+        );
+        debug_assert!(
+            !self.debug_doing_paint,
+            "flush_layout called during paint phase - invalid pipeline order"
+        );
+        debug_assert!(
+            !self.debug_doing_semantics,
+            "flush_layout called during semantics phase - invalid pipeline order"
+        );
+
         tracing::debug!("flush_layout: {} nodes", self.nodes_needing_layout.len());
 
         // Process own dirty nodes if any
@@ -609,6 +623,16 @@ impl PipelineOwner {
     ///
     /// After processing own nodes, recursively flushes child pipeline owners.
     pub fn flush_compositing_bits(&mut self) {
+        // Validate pipeline state
+        debug_assert!(
+            !self.debug_doing_layout,
+            "flush_compositing_bits called during layout phase - flush layout first"
+        );
+        debug_assert!(
+            !self.debug_doing_paint,
+            "flush_compositing_bits called during paint phase - invalid pipeline order"
+        );
+
         if self.nodes_needing_compositing_bits_update.is_empty() {
             // Still need to flush children even if we have no dirty nodes
             for child in &self.children {
@@ -680,6 +704,20 @@ impl PipelineOwner {
     ///
     /// After processing own nodes, recursively flushes child pipeline owners.
     pub fn flush_paint(&mut self) {
+        // Validate pipeline state
+        debug_assert!(
+            !self.debug_doing_layout,
+            "flush_paint called during layout phase - flush layout first"
+        );
+        debug_assert!(
+            !self.debug_doing_paint,
+            "flush_paint called recursively - paint is already in progress"
+        );
+        debug_assert!(
+            !self.debug_doing_semantics,
+            "flush_paint called during semantics phase - invalid pipeline order"
+        );
+
         tracing::debug!("flush_paint: {} nodes", self.nodes_needing_paint.len());
 
         // Process own dirty nodes if any
@@ -760,6 +798,20 @@ impl PipelineOwner {
     ///
     /// After processing own nodes, recursively flushes child pipeline owners.
     pub fn flush_semantics(&mut self) {
+        // Validate pipeline state
+        debug_assert!(
+            !self.debug_doing_layout,
+            "flush_semantics called during layout phase - flush layout first"
+        );
+        debug_assert!(
+            !self.debug_doing_paint,
+            "flush_semantics called during paint phase - flush paint first"
+        );
+        debug_assert!(
+            !self.debug_doing_semantics,
+            "flush_semantics called recursively - semantics update is already in progress"
+        );
+
         if !self.semantics_enabled() {
             // Clear any pending semantics nodes since semantics is disabled
             self.nodes_needing_semantics.clear();
