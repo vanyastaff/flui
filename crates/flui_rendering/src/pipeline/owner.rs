@@ -633,38 +633,6 @@ impl PipelineOwner {
             self.sync_child_size_to_parent(*child_id);
         }
 
-        // STEP 4: Now layout the parent - it can use cached child sizes
-        // TODO: Refactor to use new RenderObject<P> API
-        // The new API doesn't have layout_without_resize() or cached_constraints()
-        /*
-        if let Some(render_node) = self.render_tree.get(render_id) {
-            let mut render_object = render_node.box_render_object_mut();
-
-            // Special handling for RenderView (root)
-            if let Some(render_view) = render_object
-                .as_any_mut()
-                .downcast_mut::<crate::view::RenderView>()
-            {
-                // Ensure initial frame is prepared (sets up root_transform)
-                render_view.prepare_initial_frame_without_owner();
-                render_view.perform_layout();
-            } else {
-                // For non-root nodes, ensure constraints are set
-                use crate::constraints::BoxConstraints;
-
-                if render_object.cached_constraints().is_none() {
-                    // No cached constraints - this is likely first layout
-                    // Set default loose constraints
-                    let default_constraints =
-                        BoxConstraints::loose(flui_types::Size::new(800.0, 600.0));
-                    render_object.set_cached_constraints(default_constraints);
-                }
-
-                // Perform layout - layout_child() now returns cached child sizes
-                render_object.layout_without_resize();
-            }
-        }
-        */
     }
 
     /// Propagates constraints from parent to child.
@@ -674,35 +642,6 @@ impl PipelineOwner {
     /// within the parent's bounds. This matches Flutter's typical behavior where
     /// parents like Center/Align give children loose constraints.
     fn propagate_constraints_to_child(&self, _parent_id: RenderId, _child_id: RenderId) {
-        // TODO: Refactor to use new RenderObject<P> API
-        // The new API doesn't have cached_constraints() - need to rethink constraint propagation
-        /*
-        use crate::constraints::BoxConstraints;
-
-        // Get parent's constraints
-        let parent_constraints = {
-            if let Some(parent_node) = self.render_tree.get(parent_id) {
-                parent_node.box_render_object().cached_constraints()
-            } else {
-                None
-            }
-        };
-
-        // Set loose constraints on child (allows child to be any size up to parent's max)
-        if let Some(constraints) = parent_constraints {
-            if let Some(child_node) = self.render_tree.get(child_id) {
-                let mut child_ro = child_node.box_render_object_mut();
-                if child_ro.cached_constraints().is_none() {
-                    // Use loose constraints: min=0, max=parent's max
-                    let loose = BoxConstraints::loose(flui_types::Size::new(
-                        constraints.max_width,
-                        constraints.max_height,
-                    ));
-                    child_ro.set_cached_constraints(loose);
-                }
-            }
-        }
-        */
     }
 
     /// Syncs a child's size to its parent's ChildState.
@@ -711,29 +650,6 @@ impl PipelineOwner {
     /// ChildState with the child's resulting size. This allows the parent's
     /// `layout_child()` to return the correct size.
     fn sync_child_size_to_parent(&mut self, _child_id: RenderId) {
-        // TODO: Refactor to use new RenderObject<P> API
-        // The new API doesn't have update_child_size() - need to rethink child size tracking
-        /*
-        // Get the child's size and parent ID
-        let (child_size, parent_id) = {
-            if let Some(child_node) = self.render_tree.get(child_id) {
-                let size = child_node.size().unwrap_or_default();
-                let parent = child_node.parent();
-                (size, parent)
-            } else {
-                return;
-            }
-        };
-
-        // Update the parent's ChildState for this child
-        if let Some(parent_id) = parent_id {
-            if let Some(parent_node) = self.render_tree.get(parent_id) {
-                let mut parent_ro = parent_node.box_render_object_mut();
-                // Find the child index and update the size in ChildState
-                parent_ro.update_child_size(child_id, child_size);
-            }
-        }
-        */
     }
 
     // ========================================================================

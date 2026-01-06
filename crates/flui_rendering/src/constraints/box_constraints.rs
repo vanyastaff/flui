@@ -617,7 +617,10 @@ impl BoxConstraints {
 // ============================================================================
 // SIMD BATCH OPERATIONS
 // ============================================================================
+// SIMD implementation removed - feature does not exist in Cargo.toml
+// If SIMD support is needed in the future, add "simd" feature and uncomment below
 
+/*
 #[cfg(feature = "simd")]
 impl BoxConstraints {
     /// Constrains multiple sizes at once using SIMD.
@@ -719,6 +722,7 @@ impl BoxConstraints {
         result
     }
 }
+*/
 
 // ============================================================================
 // NORMALIZATION HELPERS

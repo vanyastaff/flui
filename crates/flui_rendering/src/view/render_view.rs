@@ -2,7 +2,7 @@
 
 use std::fmt::Debug;
 
-use flui_foundation::{Diagnosticable, DiagnosticsBuilder, LayerId};
+use flui_foundation::{Diagnosticable, DiagnosticsBuilder};
 
 use crate::hit_testing::{HitTestEntry, HitTestResult, HitTestTarget, PointerEvent};
 
@@ -54,15 +54,25 @@ pub struct RenderView {
     // ========================================================================
     // Render Object State
     // ========================================================================
+    #[allow(dead_code)] // Placeholder for full RenderView implementation
     depth: usize,
+    #[allow(dead_code)]
     needs_layout: bool,
+    #[allow(dead_code)]
     needs_paint: bool,
+    #[allow(dead_code)]
     needs_compositing_bits_update: bool,
+    #[allow(dead_code)]
     needs_semantics_update: bool,
+    #[allow(dead_code)]
     is_repaint_boundary: bool,
+    #[allow(dead_code)]
     was_repaint_boundary: bool,
+    #[allow(dead_code)]
     needs_compositing: bool,
+    #[allow(dead_code)]
     cached_constraints: Option<BoxConstraints>,
+    #[allow(dead_code)]
     parent_data: Option<Box<dyn ParentData>>,
 }
 
