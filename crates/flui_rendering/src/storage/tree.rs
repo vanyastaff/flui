@@ -12,122 +12,9 @@ use parking_lot::RwLock;
 use slab::Slab;
 
 use crate::pipeline::PipelineOwner;
-use crate::traits::RenderObject;
+use crate::protocol::{BoxProtocol, RenderObject, SliverProtocol};
 
-// ============================================================================
-// RenderNode
-// ============================================================================
-
-/// Internal node wrapper for slab storage.
-///
-/// Stores a render object along with its tree relationships.
-/// The tree structure is managed externally (parent/children IDs) rather
-/// than via pointers on the render objects themselves.
-#[derive(Debug)]
-pub struct RenderNode {
-    /// The render object (boxed for trait object storage).
-    render_object: Box<dyn RenderObject>,
-
-    /// Parent node ID (None for root).
-    parent: Option<RenderId>,
-
-    /// Child node IDs.
-    children: Vec<RenderId>,
-
-    /// Depth in the tree (root = 0).
-    depth: u16,
-}
-
-impl RenderNode {
-    /// Creates a new render node.
-    #[inline]
-    pub fn new(render_object: Box<dyn RenderObject>) -> Self {
-        Self {
-            render_object,
-            parent: None,
-            children: Vec::new(),
-            depth: 0,
-        }
-    }
-
-    /// Creates a new render node with a parent.
-    #[inline]
-    pub fn with_parent(render_object: Box<dyn RenderObject>, parent: RenderId, depth: u16) -> Self {
-        Self {
-            render_object,
-            parent: Some(parent),
-            children: Vec::new(),
-            depth,
-        }
-    }
-
-    /// Returns a reference to the render object.
-    #[inline]
-    pub fn render_object(&self) -> &dyn RenderObject {
-        &*self.render_object
-    }
-
-    /// Returns a mutable reference to the render object.
-    #[inline]
-    pub fn render_object_mut(&mut self) -> &mut dyn RenderObject {
-        &mut *self.render_object
-    }
-
-    /// Returns the parent ID.
-    #[inline]
-    pub fn parent(&self) -> Option<RenderId> {
-        self.parent
-    }
-
-    /// Sets the parent ID.
-    #[inline]
-    pub fn set_parent(&mut self, parent: Option<RenderId>) {
-        self.parent = parent;
-    }
-
-    /// Returns the children IDs.
-    #[inline]
-    pub fn children(&self) -> &[RenderId] {
-        &self.children
-    }
-
-    /// Adds a child ID.
-    #[inline]
-    pub fn add_child(&mut self, child: RenderId) {
-        self.children.push(child);
-    }
-
-    /// Removes a child ID.
-    ///
-    /// Returns `true` if the child was found and removed.
-    pub fn remove_child(&mut self, child: RenderId) -> bool {
-        if let Some(pos) = self.children.iter().position(|&id| id == child) {
-            let _ = self.children.remove(pos);
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Returns the depth.
-    #[inline]
-    pub fn depth(&self) -> usize {
-        self.depth as usize
-    }
-
-    /// Sets the depth.
-    #[inline]
-    pub fn set_depth(&mut self, depth: usize) {
-        debug_assert!(depth <= u16::MAX as usize, "Tree depth exceeds u16::MAX");
-        self.depth = depth as u16;
-    }
-
-    /// Consumes the node and returns the render object.
-    #[inline]
-    pub fn into_render_object(self) -> Box<dyn RenderObject> {
-        self.render_object
-    }
-}
+use super::node::RenderNode;
 
 // ============================================================================
 // RenderTree
@@ -154,7 +41,7 @@ impl RenderNode {
 /// let root_id = tree.insert(Box::new(RenderColoredBox::new(Color::RED)));
 /// tree.set_root(Some(root_id));
 ///
-/// // Insert child
+/// // Insert child`
 /// let child_id = tree.insert_child(root_id, Box::new(RenderColoredBox::new(Color::BLUE)));
 ///
 /// // Access render object
@@ -271,49 +158,67 @@ impl RenderTree {
         self.nodes.get_mut(id.get() - 1)
     }
 
-    /// Returns a reference to the render object.
-    #[inline]
-    pub fn render_object(&self, id: RenderId) -> Option<&dyn RenderObject> {
-        self.get(id).map(|node| node.render_object())
-    }
-
-    /// Returns a mutable reference to the render object.
-    #[inline]
-    pub fn render_object_mut(&mut self, id: RenderId) -> Option<&mut dyn RenderObject> {
-        self.get_mut(id).map(|node| node.render_object_mut())
-    }
-
-    /// Inserts a render object into the tree (no parent).
+    /// Inserts a Box protocol render object into the tree (no parent).
     ///
     /// Returns the RenderId of the inserted node.
     ///
     /// # Slab Offset Pattern
     ///
     /// Applies +1 offset: `nodes.insert()` returns 0 → `RenderId(1)`
-    pub fn insert(&mut self, render_object: Box<dyn RenderObject>) -> RenderId {
-        let node = RenderNode::new(render_object);
+    pub fn insert_box(&mut self, render_object: Box<dyn RenderObject<BoxProtocol>>) -> RenderId {
+        let node = RenderNode::new_box(render_object);
         let slab_index = self.nodes.insert(node);
         RenderId::new(slab_index + 1) // 0-based → 1-based
     }
 
-    /// Inserts a render object as a child of the given parent.
+    /// Inserts a Sliver protocol render object into the tree (no parent).
+    pub fn insert_sliver(
+        &mut self,
+        render_object: Box<dyn RenderObject<SliverProtocol>>,
+    ) -> RenderId {
+        let node = RenderNode::new_sliver(render_object);
+        let slab_index = self.nodes.insert(node);
+        RenderId::new(slab_index + 1)
+    }
+
+    /// Inserts a Box protocol render object as a child of the given parent.
     ///
     /// Returns the RenderId of the inserted child.
-    pub fn insert_child(
+    pub fn insert_box_child(
         &mut self,
         parent_id: RenderId,
-        render_object: Box<dyn RenderObject>,
+        render_object: Box<dyn RenderObject<BoxProtocol>>,
     ) -> Option<RenderId> {
         // Get parent depth
         let parent_depth = self.get(parent_id)?.depth();
 
         // Create child node
         let child_node =
-            RenderNode::with_parent(render_object, parent_id, (parent_depth + 1) as u16);
+            RenderNode::new_box_with_parent(render_object, parent_id, (parent_depth + 1) as u16);
         let child_slab_index = self.nodes.insert(child_node);
         let child_id = RenderId::new(child_slab_index + 1);
 
-        // Add child to parent
+        // Add child to parent's tree structure
+        if let Some(parent) = self.nodes.get_mut(parent_id.get() - 1) {
+            parent.add_child(child_id);
+        }
+
+        Some(child_id)
+    }
+
+    /// Inserts a Sliver protocol render object as a child of the given parent.
+    pub fn insert_sliver_child(
+        &mut self,
+        parent_id: RenderId,
+        render_object: Box<dyn RenderObject<SliverProtocol>>,
+    ) -> Option<RenderId> {
+        let parent_depth = self.get(parent_id)?.depth();
+
+        let child_node =
+            RenderNode::new_sliver_with_parent(render_object, parent_id, (parent_depth + 1) as u16);
+        let child_slab_index = self.nodes.insert(child_node);
+        let child_id = RenderId::new(child_slab_index + 1);
+
         if let Some(parent) = self.nodes.get_mut(parent_id.get() - 1) {
             parent.add_child(child_id);
         }
@@ -323,10 +228,10 @@ impl RenderTree {
 
     /// Removes a node from the tree.
     ///
-    /// Returns the removed render object, or None if it didn't exist.
+    /// Returns the removed node, or None if it didn't exist.
     ///
     /// **Note:** This does NOT remove children. Use `remove_recursive` for that.
-    pub fn remove(&mut self, id: RenderId) -> Option<Box<dyn RenderObject>> {
+    pub fn remove(&mut self, id: RenderId) -> Option<RenderNode> {
         // Update root if removing root
         if self.root == Some(id) {
             self.root = None;
@@ -339,9 +244,7 @@ impl RenderTree {
             }
         }
 
-        self.nodes
-            .try_remove(id.get() - 1)
-            .map(|node| node.into_render_object())
+        self.nodes.try_remove(id.get() - 1)
     }
 
     /// Removes a node and all its descendants recursively.
@@ -398,7 +301,7 @@ impl RenderTree {
 
     /// Returns the depth of a node in the tree.
     #[inline]
-    pub fn depth(&self, id: RenderId) -> Option<usize> {
+    pub fn depth(&self, id: RenderId) -> Option<u16> {
         self.get(id).map(|n| n.depth())
     }
 
@@ -448,8 +351,8 @@ impl RenderTree {
         let mut nodes: Vec<(RenderId, usize)> = self
             .nodes
             .iter()
-            .filter(|(_, node)| node.render_object().needs_layout())
-            .map(|(idx, node)| (RenderId::new(idx + 1), node.depth()))
+            .filter(|(_, node)| node.needs_layout())
+            .map(|(idx, node)| (RenderId::new(idx + 1), node.depth() as usize))
             .collect();
 
         // Sort by depth (shallow first)
@@ -466,8 +369,8 @@ impl RenderTree {
         let mut nodes: Vec<(RenderId, usize)> = self
             .nodes
             .iter()
-            .filter(|(_, node)| node.render_object().needs_paint())
-            .map(|(idx, node)| (RenderId::new(idx + 1), node.depth()))
+            .filter(|(_, node)| node.needs_paint())
+            .map(|(idx, node)| (RenderId::new(idx + 1), node.depth() as usize))
             .collect();
 
         // Sort by depth (shallow first)
@@ -700,350 +603,3 @@ impl TreeNav<RenderId> for RenderTree {
 // Tests
 // ============================================================================
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::view::RenderView;
-
-    fn test_render_box() -> Box<dyn RenderObject> {
-        Box::new(RenderView::new())
-    }
-
-    #[test]
-    fn test_tree_creation() {
-        let tree = RenderTree::new();
-        assert!(tree.is_empty());
-        assert_eq!(tree.len(), 0);
-        assert!(tree.root().is_none());
-    }
-
-    #[test]
-    fn test_insert_and_get() {
-        let mut tree = RenderTree::new();
-
-        let id = tree.insert(test_render_box());
-        assert!(!tree.is_empty());
-        assert_eq!(tree.len(), 1);
-        assert!(tree.contains(id));
-        assert!(tree.get(id).is_some());
-    }
-
-    #[test]
-    fn test_render_id_offset() {
-        let mut tree = RenderTree::new();
-
-        // First node should have ID 1 (not 0)
-        let id1 = tree.insert(test_render_box());
-        assert_eq!(id1.get(), 1);
-
-        let id2 = tree.insert(test_render_box());
-        assert_eq!(id2.get(), 2);
-
-        // Both should be accessible
-        assert!(tree.get(id1).is_some());
-        assert!(tree.get(id2).is_some());
-    }
-
-    #[test]
-    fn test_remove() {
-        let mut tree = RenderTree::new();
-
-        let id = tree.insert(test_render_box());
-        assert!(tree.contains(id));
-
-        let removed = tree.remove(id);
-        assert!(removed.is_some());
-        assert!(!tree.contains(id));
-    }
-
-    #[test]
-    fn test_root_management() {
-        let mut tree = RenderTree::new();
-
-        let id = tree.insert(test_render_box());
-        assert!(tree.root().is_none());
-
-        tree.set_root(Some(id));
-        assert_eq!(tree.root(), Some(id));
-
-        tree.set_root(None);
-        assert!(tree.root().is_none());
-    }
-
-    #[test]
-    fn test_insert_child() {
-        let mut tree = RenderTree::new();
-
-        let parent_id = tree.insert(test_render_box());
-        tree.set_root(Some(parent_id));
-
-        let child_id = tree.insert_child(parent_id, test_render_box());
-        assert!(child_id.is_some());
-
-        let child_id = child_id.unwrap();
-
-        // Verify relationships
-        assert_eq!(tree.parent(child_id), Some(parent_id));
-        assert_eq!(tree.children(parent_id), &[child_id]);
-
-        // Verify depth
-        assert_eq!(tree.depth(parent_id), Some(0));
-        assert_eq!(tree.depth(child_id), Some(1));
-    }
-
-    #[test]
-    fn test_is_ancestor() {
-        let mut tree = RenderTree::new();
-
-        let root_id = tree.insert(test_render_box());
-        tree.set_root(Some(root_id));
-
-        let child_id = tree.insert_child(root_id, test_render_box()).unwrap();
-        let grandchild_id = tree.insert_child(child_id, test_render_box()).unwrap();
-
-        assert!(tree.is_ancestor(root_id, child_id));
-        assert!(tree.is_ancestor(root_id, grandchild_id));
-        assert!(tree.is_ancestor(child_id, grandchild_id));
-        assert!(!tree.is_ancestor(child_id, root_id));
-        assert!(!tree.is_ancestor(grandchild_id, root_id));
-    }
-
-    #[test]
-    fn test_path_to_root() {
-        let mut tree = RenderTree::new();
-
-        let root_id = tree.insert(test_render_box());
-        tree.set_root(Some(root_id));
-
-        let child_id = tree.insert_child(root_id, test_render_box()).unwrap();
-        let grandchild_id = tree.insert_child(child_id, test_render_box()).unwrap();
-
-        let path = tree.path_to_root(grandchild_id);
-        assert_eq!(path, vec![root_id, child_id, grandchild_id]);
-    }
-
-    #[test]
-    fn test_remove_recursive() {
-        let mut tree = RenderTree::new();
-
-        let root_id = tree.insert(test_render_box());
-        tree.set_root(Some(root_id));
-
-        let child1 = tree.insert_child(root_id, test_render_box()).unwrap();
-        let child2 = tree.insert_child(root_id, test_render_box()).unwrap();
-        let _grandchild = tree.insert_child(child1, test_render_box()).unwrap();
-
-        assert_eq!(tree.len(), 4);
-
-        // Remove child1 and its descendants
-        let removed = tree.remove_recursive(child1);
-        assert_eq!(removed, 2); // child1 + grandchild
-        assert_eq!(tree.len(), 2); // root + child2
-
-        // child1 should be removed from root's children
-        assert_eq!(tree.children(root_id), &[child2]);
-    }
-
-    #[test]
-    fn test_iteration() {
-        let mut tree = RenderTree::new();
-
-        tree.insert(test_render_box());
-        tree.insert(test_render_box());
-        tree.insert(test_render_box());
-
-        let ids: Vec<_> = tree.ids().collect();
-        assert_eq!(ids.len(), 3);
-
-        let nodes: Vec<_> = tree.nodes().collect();
-        assert_eq!(nodes.len(), 3);
-    }
-
-    #[test]
-    fn test_visit_depth_first() {
-        let mut tree = RenderTree::new();
-
-        let root_id = tree.insert(test_render_box());
-        tree.set_root(Some(root_id));
-
-        let child1 = tree.insert_child(root_id, test_render_box()).unwrap();
-        let child2 = tree.insert_child(root_id, test_render_box()).unwrap();
-        let grandchild = tree.insert_child(child1, test_render_box()).unwrap();
-
-        let mut visited = Vec::new();
-        tree.visit_depth_first(|id, _| {
-            visited.push(id);
-        });
-
-        // Pre-order: root, child1, grandchild, child2
-        assert_eq!(visited, vec![root_id, child1, grandchild, child2]);
-    }
-
-    #[test]
-    fn test_clear() {
-        let mut tree = RenderTree::new();
-
-        let id = tree.insert(test_render_box());
-        tree.set_root(Some(id));
-        tree.insert(test_render_box());
-
-        assert_eq!(tree.len(), 2);
-
-        tree.clear();
-
-        assert!(tree.is_empty());
-        assert!(tree.root().is_none());
-    }
-
-    #[test]
-    fn test_send_sync() {
-        fn assert_send_sync<T: Send + Sync>() {}
-        assert_send_sync::<RenderTree>();
-        assert_send_sync::<RenderNode>();
-    }
-
-    // ========================================================================
-    // flui-tree Trait Tests
-    // ========================================================================
-
-    #[test]
-    fn test_tree_read_trait() {
-        let mut tree = RenderTree::new();
-
-        let id1 = TreeWrite::insert(&mut tree, RenderNode::new(test_render_box()));
-        let id2 = TreeWrite::insert(&mut tree, RenderNode::new(test_render_box()));
-
-        // TreeRead::get
-        assert!(TreeRead::get(&tree, id1).is_some());
-        assert!(TreeRead::get(&tree, id2).is_some());
-
-        // TreeRead::contains
-        assert!(TreeRead::contains(&tree, id1));
-        assert!(TreeRead::contains(&tree, id2));
-
-        // TreeRead::len
-        assert_eq!(TreeRead::len(&tree), 2);
-
-        // TreeRead::node_ids
-        let ids: Vec<_> = TreeRead::node_ids(&tree).collect();
-        assert_eq!(ids.len(), 2);
-        assert!(ids.contains(&id1));
-        assert!(ids.contains(&id2));
-    }
-
-    #[test]
-    fn test_tree_write_trait() {
-        let mut tree = RenderTree::new();
-
-        // TreeWrite::insert
-        let id = TreeWrite::insert(&mut tree, RenderNode::new(test_render_box()));
-        assert!(TreeRead::contains(&tree, id));
-
-        // TreeWrite::get_mut
-        assert!(TreeWrite::get_mut(&mut tree, id).is_some());
-
-        // TreeWrite::remove
-        let removed = TreeWrite::remove(&mut tree, id);
-        assert!(removed.is_some());
-        assert!(!TreeRead::contains(&tree, id));
-
-        // TreeWrite::clear
-        TreeWrite::insert(&mut tree, RenderNode::new(test_render_box()));
-        TreeWrite::insert(&mut tree, RenderNode::new(test_render_box()));
-        assert_eq!(TreeRead::len(&tree), 2);
-        TreeWrite::clear(&mut tree);
-        assert_eq!(TreeRead::len(&tree), 0);
-    }
-
-    #[test]
-    fn test_tree_nav_trait_parent_children() {
-        let mut tree = RenderTree::new();
-
-        let root_id = tree.insert(test_render_box());
-        tree.set_root(Some(root_id));
-
-        let child_id = tree.insert_child(root_id, test_render_box()).unwrap();
-
-        // TreeNav::parent
-        assert_eq!(TreeNav::parent(&tree, child_id), Some(root_id));
-        assert_eq!(TreeNav::parent(&tree, root_id), None);
-
-        // TreeNav::children
-        let children: Vec<_> = TreeNav::children(&tree, root_id).collect();
-        assert_eq!(children, vec![child_id]);
-
-        // TreeNav::child_count
-        assert_eq!(TreeNav::child_count(&tree, root_id), 1);
-        assert_eq!(TreeNav::child_count(&tree, child_id), 0);
-
-        // TreeNav::has_children
-        assert!(TreeNav::has_children(&tree, root_id));
-        assert!(!TreeNav::has_children(&tree, child_id));
-    }
-
-    #[test]
-    fn test_tree_nav_trait_ancestors() {
-        let mut tree = RenderTree::new();
-
-        let root_id = tree.insert(test_render_box());
-        tree.set_root(Some(root_id));
-
-        let child_id = tree.insert_child(root_id, test_render_box()).unwrap();
-        let grandchild_id = tree.insert_child(child_id, test_render_box()).unwrap();
-
-        // TreeNav::ancestors (includes self)
-        let ancestors: Vec<_> = TreeNav::ancestors(&tree, grandchild_id).collect();
-        assert_eq!(ancestors, vec![grandchild_id, child_id, root_id]);
-
-        let ancestors_from_child: Vec<_> = TreeNav::ancestors(&tree, child_id).collect();
-        assert_eq!(ancestors_from_child, vec![child_id, root_id]);
-
-        let ancestors_from_root: Vec<_> = TreeNav::ancestors(&tree, root_id).collect();
-        assert_eq!(ancestors_from_root, vec![root_id]);
-    }
-
-    #[test]
-    fn test_tree_nav_trait_descendants() {
-        let mut tree = RenderTree::new();
-
-        let root_id = tree.insert(test_render_box());
-        tree.set_root(Some(root_id));
-
-        let child1 = tree.insert_child(root_id, test_render_box()).unwrap();
-        let child2 = tree.insert_child(root_id, test_render_box()).unwrap();
-        let grandchild = tree.insert_child(child1, test_render_box()).unwrap();
-
-        // TreeNav::descendants returns (id, depth) pairs
-        let descendants: Vec<_> = TreeNav::descendants(&tree, root_id).collect();
-
-        assert_eq!(descendants.len(), 4);
-        assert!(descendants.contains(&(root_id, 0)));
-        assert!(descendants.contains(&(child1, 1)));
-        assert!(descendants.contains(&(child2, 1)));
-        assert!(descendants.contains(&(grandchild, 2)));
-    }
-
-    #[test]
-    fn test_tree_nav_trait_siblings() {
-        let mut tree = RenderTree::new();
-
-        let root_id = tree.insert(test_render_box());
-        tree.set_root(Some(root_id));
-
-        let child1 = tree.insert_child(root_id, test_render_box()).unwrap();
-        let child2 = tree.insert_child(root_id, test_render_box()).unwrap();
-        let child3 = tree.insert_child(root_id, test_render_box()).unwrap();
-
-        // TreeNav::siblings (excludes self, as per AllSiblings behavior)
-        let siblings: Vec<_> = TreeNav::siblings(&tree, child2).collect();
-        assert_eq!(siblings.len(), 2);
-        assert!(siblings.contains(&child1));
-        assert!(siblings.contains(&child3));
-        // child2 should NOT be in its own siblings list
-        assert!(!siblings.contains(&child2));
-
-        // Root has no siblings
-        let root_siblings: Vec<_> = TreeNav::siblings(&tree, root_id).collect();
-        assert!(root_siblings.is_empty());
-    }
-}

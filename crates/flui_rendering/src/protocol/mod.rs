@@ -42,6 +42,7 @@
 
 mod box_protocol;
 mod capabilities;
+mod into_render_object;
 mod protocol;
 mod sliver_protocol;
 
@@ -59,6 +60,18 @@ pub use protocol::{
     ProtocolCompatible,
     ProtocolRenderObject,
 };
+
+// ============================================================================
+// RENDER OBJECT TRAIT EXPORTS (re-exported from traits module)
+// ============================================================================
+
+pub use crate::traits::RenderObject;
+
+// ============================================================================
+// INTO RENDER OBJECT EXPORTS
+// ============================================================================
+
+pub use into_render_object::IntoRenderObject;
 
 // ============================================================================
 // CAPABILITY EXPORTS

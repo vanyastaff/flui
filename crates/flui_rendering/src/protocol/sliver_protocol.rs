@@ -125,7 +125,7 @@ impl LayoutCapability for SliverLayout {
     type Constraints = SliverConstraints;
     type Geometry = SliverGeometry;
     type CacheKey = SliverConstraintsCacheKey;
-    type Context<'ctx, A: Arity, P: ParentData>
+    type Context<'ctx, A: Arity, P: ParentData + Default>
         = SliverLayoutCtx<'ctx, A, P>
     where
         Self: 'ctx;
@@ -430,6 +430,8 @@ mod tests {
 
     #[test]
     fn test_protocol_compatibility() {
+        use crate::protocol::protocol::ProtocolCompatible;
+
         // Test self-compatibility
         assert!(<SliverProtocol as ProtocolCompatible<SliverProtocol>>::is_compatible());
         assert!(<BoxProtocol as ProtocolCompatible<BoxProtocol>>::is_compatible());

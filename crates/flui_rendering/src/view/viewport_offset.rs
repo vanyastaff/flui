@@ -156,6 +156,7 @@ impl FixedViewportOffset {
         Self::new(0.0)
     }
 
+    #[allow(dead_code)] // Reserved for future ViewportOffset listener API
     fn notify_listeners(&self) {
         let listeners = self.listeners.read();
         for listener in listeners.iter() {

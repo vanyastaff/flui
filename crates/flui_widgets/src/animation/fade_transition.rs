@@ -1,131 +1,124 @@
-//! FadeTransition - animates opacity using AnimationController
+//! FadeTransition widget - animates opacity using an Animation<f32>.
 //!
-//! An explicit animation widget that fades its child in or out.
+//! This is an explicit animation widget that requires an AnimationController.
 
-use flui_animation::{Animation, AnimationController};
-use flui_core::BuildContext;
-use flui_view::traits::AnimatedView;
-use flui_view::IntoView;
-use flui_objects::RenderOpacity;
+use flui_animation::Animation;
+use flui_rendering::objects::RenderOpacity;
+use flui_rendering::wrapper::BoxWrapper;
+use flui_view::{Child, RenderView, View};
 use std::sync::Arc;
 
-/// A widget that animates the opacity of its child using an AnimationController.
+/// A widget that animates the opacity of its child.
 ///
-/// FadeTransition uses an explicit `AnimationController` to animate opacity
-/// from 0.0 (fully transparent) to 1.0 (fully opaque).
+/// The opacity is driven by an `Animation<f32>` (typically from `AnimationController`).
+/// Values are clamped to 0.0-1.0 range.
 ///
-/// # Explicit Animation
-///
-/// Unlike `AnimatedOpacity` which animates automatically, `FadeTransition`
-/// requires you to provide and control an `AnimationController`. This gives
-/// you fine-grained control over the animation lifecycle.
-///
-/// # Performance
-///
-/// FadeTransition is optimized for animations:
-/// - Only triggers repaint (not relayout) when opacity changes
-/// - Uses `UpdateResult::NeedsPaint` for minimal overhead
-/// - Reuses the same RenderObject across frames
-///
-/// # Example
+/// ## Example
 ///
 /// ```rust,ignore
 /// use flui_animation::AnimationController;
 /// use flui_widgets::animation::FadeTransition;
-/// use flui_widgets::Text;
 /// use std::time::Duration;
 ///
-/// // Create controller
-/// let controller = AnimationController::new(
-///     Duration::from_millis(500),
-///     scheduler
-/// );
-///
-/// // Start fade-in
+/// let controller = AnimationController::new(Duration::from_millis(300), scheduler);
 /// controller.forward();
 ///
-/// // Create fade transition
-/// FadeTransition::new(
-///     controller.clone(),
-///     Text::new("Hello, World!")
-/// )
+/// FadeTransition::new(controller.clone())
+///     .child(my_content)
 /// ```
 ///
-/// # Advanced Usage
+/// ## Comparison with AnimatedOpacity
 ///
-/// ```rust,ignore
-/// // Fade in and out repeatedly
-/// controller.repeat(true);
-///
-/// // Custom curves
-/// let curved = controller.curved(Curves::EaseInOut);
-/// FadeTransition::new(curved, child)
-///
-/// // Reverse animation
-/// controller.reverse();
-/// ```
-#[derive(Clone)]
-pub struct FadeTransition<C> {
-    /// Animation controller that drives opacity (0.0 = transparent, 1.0 = opaque)
-    pub opacity: Arc<AnimationController>,
-
-    /// The child widget to fade
-    pub child: C,
+/// - `FadeTransition`: You control the animation with an `AnimationController`
+/// - `AnimatedOpacity`: Animation happens automatically when opacity changes
+pub struct FadeTransition<A: Animation<f32>> {
+    /// The animation that drives the opacity.
+    animation: Arc<A>,
+    /// The child widget.
+    child: Child,
 }
 
-impl<C> FadeTransition<C> {
-    /// Create a new FadeTransition with an animation controller and child.
-    ///
-    /// # Arguments
-    ///
-    /// * `opacity` - AnimationController that drives the opacity (0.0 to 1.0)
-    /// * `child` - Widget to animate
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// let controller = AnimationController::new(Duration::from_millis(300), scheduler);
-    /// controller.forward();
-    ///
-    /// FadeTransition::new(controller, Text::new("Fading in..."))
-    /// ```
-    pub fn new(opacity: Arc<AnimationController>, child: C) -> Self {
-        Self { opacity, child }
-    }
-}
-
-impl<C> std::fmt::Debug for FadeTransition<C> {
+impl<A: Animation<f32>> std::fmt::Debug for FadeTransition<A> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("FadeTransition")
-            .field("opacity_value", &self.opacity.as_ref().value())
-            .field("opacity_status", &self.opacity.as_ref().status())
-            .field("child", &"<child>")
+            .field("opacity", &self.animation.value())
             .finish()
     }
 }
 
-impl<C: IntoView + Clone + Sync> AnimatedView<AnimationController> for FadeTransition<C> {
-    fn build(&mut self, _ctx: &dyn BuildContext) -> impl IntoView {
-        // TODO: Need to create an Opacity widget wrapper that properly implements IntoView
-        // For now, just return the child (opacity effect won't work until Opacity widget is fixed)
-        // Once Opacity is fixed, use: Opacity::new(self.opacity.as_ref().value(), self.child.clone())
-        self.child.clone()
+impl<A: Animation<f32> + Clone> Clone for FadeTransition<A> {
+    fn clone(&self) -> Self {
+        Self {
+            animation: Arc::clone(&self.animation),
+            child: self.child.clone(),
+        }
+    }
+}
+
+impl<A: Animation<f32>> FadeTransition<A> {
+    /// Creates a new FadeTransition with the given animation.
+    ///
+    /// The animation value (0.0-1.0) controls the opacity:
+    /// - 0.0 = fully transparent
+    /// - 1.0 = fully opaque
+    pub fn new(animation: A) -> Self {
+        Self {
+            animation: Arc::new(animation),
+            child: Child::empty(),
+        }
     }
 
-    fn listenable(&self) -> &AnimationController {
-        self.opacity.as_ref()
+    /// Creates a FadeTransition from an Arc'd animation.
+    ///
+    /// Use this when you need to share the animation with other widgets.
+    pub fn from_arc(animation: Arc<A>) -> Self {
+        Self {
+            animation,
+            child: Child::empty(),
+        }
     }
 
-    fn on_animation_tick(&mut self, _ctx: &dyn BuildContext) {
-        // Called before each build during animation
-        // Can be used for custom logic or debugging
-        #[cfg(debug_assertions)]
-        {
-            tracing::trace!(
-                opacity = self.opacity.as_ref().value(),
-                status = ?self.opacity.as_ref().status(),
-                "FadeTransition animation tick"
-            );
+    /// Sets the child widget.
+    pub fn child(mut self, view: impl View) -> Self {
+        self.child = Child::some(view);
+        self
+    }
+
+    /// Returns the current opacity value.
+    pub fn opacity(&self) -> f32 {
+        self.animation.value().clamp(0.0, 1.0)
+    }
+}
+
+// Implement View trait manually (macro doesn't support generics)
+impl<A: Animation<f32> + Clone + Send + Sync + 'static> View for FadeTransition<A> {
+    fn create_element(&self) -> Box<dyn flui_view::ElementBase> {
+        Box::new(flui_view::RenderElement::new(self))
+    }
+}
+
+impl<A: Animation<f32> + Clone + Send + Sync + 'static> RenderView for FadeTransition<A> {
+    type RenderObject = BoxWrapper<RenderOpacity>;
+
+    fn create_render_object(&self) -> Self::RenderObject {
+        let render = RenderOpacity::new(self.opacity());
+        BoxWrapper::new(render)
+    }
+
+    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+        let current_opacity = self.opacity();
+        if (render_object.inner().opacity() - current_opacity).abs() > f32::EPSILON {
+            render_object.inner_mut().set_opacity(current_opacity);
+        }
+    }
+
+    fn has_children(&self) -> bool {
+        self.child.is_some()
+    }
+
+    fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn View)) {
+        if let Some(child_view) = self.child.as_ref() {
+            visitor(child_view);
         }
     }
 }
@@ -133,67 +126,45 @@ impl<C: IntoView + Clone + Sync> AnimatedView<AnimationController> for FadeTrans
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_animation::AnimationController;
     use flui_scheduler::Scheduler;
+    use std::sync::Arc;
     use std::time::Duration;
 
     #[test]
-    fn test_fade_transition_creation() {
-        use crate::basic::Text;
-
+    fn test_fade_transition_new() {
         let scheduler = Arc::new(Scheduler::new());
         let controller = AnimationController::new(Duration::from_millis(300), scheduler);
 
-        let fade = FadeTransition::new(
-            controller.clone(),
-            Text::new("Test")
-        );
+        let fade = FadeTransition::new(controller.clone());
+        assert!((fade.opacity() - 0.0).abs() < f32::EPSILON);
 
-        // Initial value should be at lower bound (0.0)
-        assert_eq!(fade.opacity.as_ref().value(), 0.0);
-    }
-
-    #[test]
-    fn test_fade_transition_animation_values() {
-        use crate::basic::Text;
-
-        let scheduler = Arc::new(Scheduler::new());
-        let controller = AnimationController::new(Duration::from_millis(300), scheduler);
-
-        let fade = FadeTransition::new(
-            controller.clone(),
-            Text::new("Test")
-        );
-
-        // Manually set values to test
-        controller.set_value(0.0);
-        assert_eq!(fade.opacity.as_ref().value(), 0.0);
-
-        controller.set_value(0.5);
-        assert_eq!(fade.opacity.as_ref().value(), 0.5);
-
-        controller.set_value(1.0);
-        assert_eq!(fade.opacity.as_ref().value(), 1.0);
-
-        // Cleanup
         controller.dispose();
     }
 
     #[test]
-    fn test_fade_transition_debug() {
-        use crate::basic::Text;
-
+    fn test_fade_transition_opacity() {
         let scheduler = Arc::new(Scheduler::new());
         let controller = AnimationController::new(Duration::from_millis(300), scheduler);
-        controller.set_value(0.75);
+        controller.set_value(0.5);
 
-        let fade = FadeTransition::new(
-            controller.clone(),
-            Text::new("Test")
-        );
+        let fade = FadeTransition::new(controller.clone());
+        assert!((fade.opacity() - 0.5).abs() < f32::EPSILON);
 
-        let debug_str = format!("{:?}", fade);
-        assert!(debug_str.contains("FadeTransition"));
-        assert!(debug_str.contains("0.75"));
+        controller.dispose();
+    }
+
+    #[test]
+    fn test_fade_transition_clamp() {
+        let scheduler = Arc::new(Scheduler::new());
+        let controller =
+            AnimationController::with_bounds(Duration::from_millis(300), scheduler, -1.0, 2.0)
+                .unwrap();
+        controller.set_value(1.5);
+
+        let fade = FadeTransition::new(controller.clone());
+        // Should clamp to 1.0
+        assert!((fade.opacity() - 1.0).abs() < f32::EPSILON);
 
         controller.dispose();
     }

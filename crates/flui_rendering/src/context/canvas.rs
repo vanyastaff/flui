@@ -28,6 +28,8 @@ use flui_layer::{
 };
 use flui_painting::DisplayListCore;
 use flui_types::painting::{effects::ColorMatrix, Clip, Path};
+
+use crate::protocol::BoxProtocol;
 use flui_types::{Matrix4, Offset, RRect, Rect};
 
 use crate::traits::RenderObject;
@@ -243,7 +245,7 @@ impl CanvasContext {
     ///
     /// This handles layer management - if the child is a repaint boundary,
     /// it will be painted into its own layer.
-    pub fn paint_child(&mut self, child: &dyn RenderObject, offset: Offset) {
+    pub fn paint_child(&mut self, child: &dyn RenderObject<BoxProtocol>, offset: Offset) {
         // In full implementation, check if child is a repaint boundary
         // and create a new layer if needed
 

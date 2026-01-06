@@ -515,6 +515,13 @@ impl Scheduler {
             std::mem::take(&mut *cbs)
         };
 
+        if !transient.is_empty() {
+            eprintln!(
+                "[DEBUG] handle_begin_frame: executing {} transient callbacks",
+                transient.len()
+            );
+        }
+
         for cancellable in transient {
             // Skip if cancelled (DashMap provides lock-free contains_key)
             if self.cancelled_callbacks.contains_key(&cancellable.id) {
@@ -666,6 +673,7 @@ impl Scheduler {
             .lock()
             .push(CancellableTransientCallback { id, callback });
         self.frame_scheduled.store(true, Ordering::Release);
+        tracing::debug!("schedule_frame_callback: registered callback id={:?}", id);
         id
     }
 
@@ -1260,6 +1268,25 @@ impl BindingBase for Scheduler {
 
 // Implement singleton pattern via macro
 impl_binding_singleton!(Scheduler);
+
+// Arc-compatible singleton for AnimationController compatibility
+static ARC_INSTANCE: std::sync::OnceLock<Arc<Scheduler>> = std::sync::OnceLock::new();
+
+impl Scheduler {
+    /// Get Arc-wrapped singleton instance.
+    ///
+    /// This is needed for APIs that require `Arc<Scheduler>` (e.g., AnimationController).
+    /// The Arc wraps a new Scheduler instance that is separate from the static singleton,
+    /// but both will be ticked by the same event loop since they share the same thread.
+    ///
+    /// **Important:** The caller must ensure this scheduler is ticked by calling
+    /// `handle_begin_frame()` and `handle_draw_frame()` in the event loop.
+    pub fn arc_instance() -> Arc<Scheduler> {
+        ARC_INSTANCE
+            .get_or_init(|| Arc::new(Scheduler::new()))
+            .clone()
+    }
+}
 
 impl TickerProvider for Scheduler {
     fn schedule_tick(&self, callback: Box<dyn FnOnce(f64) + Send>) {

@@ -1,8 +1,7 @@
-//! Core rendering abstraction for the FLUI framework.
+//! RenderObject<P> trait - Protocol-aware base trait for render objects.
 //!
-//! This module defines [`RenderObject`], the fundamental building block of FLUI's
-//! render tree. Every visual element in a FLUI application is backed by a render
-//! object that knows how to lay out and paint itself.
+//! This module defines the core `RenderObject<P>` trait that all concrete
+//! render objects implement through their protocol-specific traits (RenderBox, RenderSliver).
 //!
 //! # Architecture
 //!
@@ -12,403 +11,235 @@
 //! View Tree (immutable) → Element Tree (mutable) → Render Tree (layout/paint)
 //! ```
 //!
-//! The render tree is responsible for:
-//! - **Layout**: Computing sizes and positions of UI elements
-//! - **Painting**: Drawing UI elements to the screen
-//! - **Hit Testing**: Determining which elements are under a pointer
-//! - **Semantics**: Providing accessibility information
+//! The render tree is built from protocol-aware render objects that use the
+//! `RenderObject<P>` trait, where `P` is either `BoxProtocol` or `SliverProtocol`.
+//!
+//! # Protocol System
+//!
+//! Instead of implementing `RenderObject<P>` directly, users implement:
+//! - `RenderBox` for 2D box layout (most widgets)
+//! - `RenderSliver` for scrollable content (lists, grids)
+//!
+//! These traits provide better APIs with typed contexts, Arity support, and
+//! ParentData handling. Protocol adapters automatically bridge to the storage layer.
+//!
+//! # Storage Integration
+//!
+//! Render objects are wrapped in `RenderEntry<P>` which adds:
+//! - Tree structure via `NodeLinks` (parent, children, depth)
+//! - Dirty state via `RenderState<P>` (needs_layout, needs_paint, etc)
+//! - Thread-safe access via `RwLock`
 
 use downcast_rs::{impl_downcast, DowncastSync};
-use flui_foundation::{Diagnosticable, LayerId, RenderId, SemanticsId};
+use flui_foundation::Diagnosticable;
+use flui_types::{Offset, Rect};
 
-use crate::constraints::BoxConstraints;
-use crate::hit_testing::HitTestTarget;
-use crate::parent_data::ParentData;
-use crate::pipeline::PipelineOwner;
-use crate::semantics::{SemanticsConfiguration, SemanticsEvent, SemanticsNode};
+use crate::protocol::{
+    Protocol, ProtocolConstraints, ProtocolGeometry, ProtocolHitResult, ProtocolPosition,
+};
+use crate::semantics::SemanticsConfiguration;
 
-/// The base trait for all render objects in the render tree.
+/// Base trait for all render objects in the render tree.
 ///
-/// This is a minimal trait definition. The architecture is being reorganized
-/// and methods will be added as needed.
-pub trait RenderObject: Diagnosticable + HitTestTarget + DowncastSync {
+/// This trait defines the minimal interface required by the storage layer
+/// to execute layout, painting, and hit testing. Users don't implement this
+/// trait directly - instead, they implement protocol-specific traits like
+/// `RenderBox` or `RenderSliver` which provide better APIs with typed
+/// contexts and Arity/ParentData support.
+///
+/// # Type Parameters
+///
+/// - `P`: The layout protocol (BoxProtocol or SliverProtocol)
+///
+/// # Storage Integration
+///
+/// Render objects are wrapped in `RenderEntry<P>` which adds:
+/// - Tree structure via `NodeLinks` (parent, children, depth)
+/// - Dirty state via `RenderState<P>` (needs_layout, needs_paint, etc)
+/// - Thread-safe access via `RwLock`
+///
+/// The storage layer calls these trait methods to drive the rendering pipeline.
+pub trait RenderObject<P: Protocol>: Diagnosticable + DowncastSync + Send + Sync + 'static {
     // ========================================================================
-    // Tree Structure
+    // Core Operations
     // ========================================================================
 
-    /// Returns the parent render object ID, if any.
+    /// Performs layout with raw protocol constraints.
     ///
-    /// This returns the ID of the parent in the render tree. To access the
-    /// actual parent render object, use `RenderTree::get(parent_id)`.
-    fn parent_id(&self) -> Option<RenderId> {
-        None
+    /// Called by `RenderEntry::layout()`. Returns the computed geometry.
+    ///
+    /// **Users don't implement this directly.** Protocol traits like `RenderBox`
+    /// provide blanket implementations that create typed contexts and call
+    /// the typed `perform_layout()` method.
+    fn perform_layout_raw(&mut self, constraints: ProtocolConstraints<P>) -> ProtocolGeometry<P>;
+
+    /// Paints this render object.
+    ///
+    /// Called by the painting pipeline after layout. The offset is this node's
+    /// position relative to the parent's origin.
+    ///
+    /// Protocol traits may provide typed paint methods with better APIs.
+    fn paint(&self, context: &mut crate::pipeline::CanvasContext, offset: Offset);
+
+    /// Hit tests this render object with raw protocol types.
+    ///
+    /// Called by the hit testing pipeline. Returns true if the position hits
+    /// this render object or any of its children.
+    ///
+    /// **Users don't implement this directly.** Protocol traits provide
+    /// blanket implementations that create typed contexts.
+    fn hit_test_raw(
+        &self,
+        result: &mut ProtocolHitResult<P>,
+        position: ProtocolPosition<P>,
+    ) -> bool;
+
+    // ========================================================================
+    // Optimization Boundaries
+    // ========================================================================
+
+    /// Returns whether this is a repaint boundary.
+    ///
+    /// Repaint boundaries create compositing layers for caching painted content.
+    /// Use for widgets that change frequently (animations) or have expensive
+    /// paint operations.
+    ///
+    /// Default: `false` (no caching)
+    fn is_repaint_boundary(&self) -> bool {
+        false
     }
 
-    /// Returns the depth of this node in the render tree.
-    fn depth(&self) -> usize;
-
-    /// Sets the depth of this node in the render tree.
-    fn set_depth(&mut self, depth: usize);
-
-    /// Returns the pipeline owner that manages this render object.
-    fn owner(&self) -> Option<&PipelineOwner>;
-
-    /// Sets the parent ID for this render object.
+    /// Returns whether this is a relayout boundary.
     ///
-    /// This is called by the tree when parent-child relationships change.
-    /// The actual parent-child relationship is managed by `RenderTree`.
+    /// Relayout boundaries prevent layout changes from propagating upward.
+    /// Use for widgets with fixed sizes or `sized_by_parent = true`.
     ///
-    /// # Arguments
-    ///
-    /// * `parent` - The RenderId of the parent, or None if this is the root
-    fn set_parent(&mut self, parent: Option<RenderId>);
-
-    // ========================================================================
-    // Lifecycle
-    // ========================================================================
-
-    /// Attaches this render object to a pipeline owner.
-    fn attach(&mut self, owner: &PipelineOwner);
-
-    /// Detaches this render object from its pipeline owner.
-    fn detach(&mut self);
-
-    /// Releases any resources held by this render object.
-    fn dispose(&mut self) {}
-
-    /// Returns whether this render object is attached to a pipeline owner.
-    fn attached(&self) -> bool {
-        self.owner().is_some()
+    /// Default: `false` (layout can propagate)
+    fn is_relayout_boundary(&self) -> bool {
+        false
     }
 
-    // ========================================================================
-    // Child Management
-    // ========================================================================
-
-    /// Marks a render object as a child of this object.
-    fn adopt_child(&mut self, child: &mut dyn RenderObject);
-
-    /// Removes a render object from this object's children.
-    fn drop_child(&mut self, child: &mut dyn RenderObject);
-
-    /// Adjusts a child's depth to be greater than this node's depth.
-    fn redepth_child(&mut self, child: &mut dyn RenderObject);
-
-    /// Adjusts the depth of this node's children.
-    fn redepth_children(&mut self) {}
-
-    // ========================================================================
-    // Dirty State Queries
-    // ========================================================================
-
-    /// Returns whether this render object needs layout.
-    fn needs_layout(&self) -> bool;
-
-    /// Returns whether this render object needs paint.
-    fn needs_paint(&self) -> bool;
-
-    /// Returns whether this render object needs compositing bits update.
-    fn needs_compositing_bits_update(&self) -> bool;
-
-    /// Returns whether this render object is a relayout boundary.
-    fn is_relayout_boundary(&self) -> bool;
-
-    /// Returns whether this render object needs semantics update.
-    fn needs_semantics_update(&self) -> bool;
-
-    // ========================================================================
-    // Dirty Marking
-    // ========================================================================
-
-    /// Marks this render object as needing layout.
-    fn mark_needs_layout(&mut self);
-
-    /// Marks this render object as needing paint.
-    fn mark_needs_paint(&mut self);
-
-    /// Marks this render object as needing compositing bits update.
-    fn mark_needs_compositing_bits_update(&mut self);
-
-    /// Marks this render object as needing semantics update.
-    fn mark_needs_semantics_update(&mut self);
-
-    /// Clears the needs_layout flag.
-    fn clear_needs_layout(&mut self);
-
-    /// Clears the needs_paint flag.
-    fn clear_needs_paint(&mut self);
-
-    /// Clears the needs_compositing_bits_update flag.
-    fn clear_needs_compositing_bits_update(&mut self);
-
-    /// Clears the needs_semantics_update flag.
-    fn clear_needs_semantics_update(&mut self);
-
-    // ========================================================================
-    // Layout
-    // ========================================================================
-
-    /// Computes the layout for this render object.
-    fn layout(&mut self, constraints: BoxConstraints, parent_uses_size: bool);
-
-    /// Performs layout without receiving new constraints.
-    fn layout_without_resize(&mut self);
-
-    /// Performs the actual layout computation.
-    fn perform_layout_impl(&mut self) {}
-
-    /// Computes the size when sized_by_parent is true.
-    fn perform_resize(&mut self) {}
-
-    /// Returns cached constraints.
-    fn cached_constraints(&self) -> Option<BoxConstraints>;
-
-    /// Sets cached constraints.
-    fn set_cached_constraints(&mut self, constraints: BoxConstraints);
-
-    // ========================================================================
-    // Layout Dirty Propagation
-    // ========================================================================
-
-    /// Marks the parent as needing layout.
-    fn mark_parent_needs_layout(&mut self);
-
-    /// Marks this object dirty and notifies the parent about sized_by_parent changes.
-    fn mark_needs_layout_for_sized_by_parent_change(&mut self) {
-        self.mark_needs_layout();
-        self.mark_parent_needs_layout();
-    }
-
-    /// Schedules the initial layout for the render tree.
-    fn schedule_initial_layout(&mut self);
-
-    /// Schedules the initial paint for the render tree.
-    fn schedule_initial_paint(&mut self);
-
-    // ========================================================================
-    // Layout Configuration
-    // ========================================================================
-
-    /// Returns whether this object's size depends only on constraints.
+    /// Returns whether size depends only on constraints (not on children).
+    ///
+    /// When true, `perform_resize()` is called instead of `perform_layout()`
+    /// when only constraints change, improving performance.
+    ///
+    /// Default: `false` (size depends on children)
     fn sized_by_parent(&self) -> bool {
         false
     }
 
-    /// Returns whether this render object is a repaint boundary.
-    fn is_repaint_boundary(&self) -> bool;
-
-    /// Returns whether this object was a repaint boundary during the last paint.
-    fn was_repaint_boundary(&self) -> bool;
-
-    /// Sets whether this object was a repaint boundary.
-    fn set_was_repaint_boundary(&mut self, value: bool);
-
-    /// Returns whether this object always needs compositing.
+    /// Returns whether this widget always needs compositing.
+    ///
+    /// Use for widgets that apply effects requiring their own layer
+    /// (like clip or backdrop filters).
+    ///
+    /// Default: `false`
     fn always_needs_compositing(&self) -> bool {
         false
     }
 
     // ========================================================================
-    // Compositing
+    // Geometry Access
     // ========================================================================
 
-    /// Returns whether this render object needs compositing.
-    fn needs_compositing(&self) -> bool;
+    /// Returns the current geometry after layout.
+    ///
+    /// For Box protocol: `Size`
+    /// For Sliver protocol: `SliverGeometry`
+    fn geometry(&self) -> &ProtocolGeometry<P>;
 
-    /// Sets whether this render object needs compositing.
-    fn set_needs_compositing(&mut self, value: bool);
+    /// Sets the geometry (called by storage layer after layout).
+    fn set_geometry(&mut self, geometry: ProtocolGeometry<P>);
 
-    /// Updates the compositing bits for this render object and its descendants.
-    fn update_compositing_bits(&mut self) {
-        if !self.needs_compositing_bits_update() {
-            return;
-        }
+    // ========================================================================
+    // Effect Layers
+    // ========================================================================
 
-        let mut child_needs_compositing = false;
-        self.visit_children_mut(&mut |child| {
-            child.update_compositing_bits();
-            if child.needs_compositing() {
-                child_needs_compositing = true;
-            }
-        });
-
-        let needs_compositing = child_needs_compositing
-            || self.is_repaint_boundary()
-            || self.always_needs_compositing();
-        self.set_needs_compositing(needs_compositing);
-        self.clear_needs_compositing_bits_update();
-
-        if self.needs_compositing() != child_needs_compositing {
-            self.mark_needs_paint();
-        }
-    }
-
-    /// Marks this object as needing a composited layer update.
-    fn mark_needs_composited_layer_update(&mut self) {
-        self.mark_needs_paint();
-    }
-
-    /// Returns whether this render object has a compositing layer.
-    fn has_layer(&self) -> bool {
-        false
-    }
-
-    /// Returns the layer ID for this render object, if any.
-    fn layer_id(&self) -> Option<LayerId> {
+    /// Returns the alpha value to apply to children.
+    ///
+    /// If Some(alpha), the painting pipeline wraps children in an OpacityLayer.
+    /// Used by `RenderOpacity` to implement opacity animations.
+    ///
+    /// Default: `None` (no opacity effect)
+    fn paint_alpha(&self) -> Option<u8> {
         None
     }
 
-    /// Replaces the root layer for this render object.
-    fn replace_root_layer(&mut self) {}
-
-    /// Updates the composited layer for this render object.
-    fn update_composited_layer(&mut self) {}
-
-    // ========================================================================
-    // Parent Data
-    // ========================================================================
-
-    /// Sets up parent data for a child.
-    fn setup_parent_data(&self, _child: &mut dyn RenderObject) {}
-
-    /// Returns this object's parent data, if any.
-    fn parent_data(&self) -> Option<&dyn ParentData>;
-
-    /// Returns mutable access to this object's parent data.
-    fn parent_data_mut(&mut self) -> Option<&mut dyn ParentData>;
-
-    /// Sets this object's parent data.
-    fn set_parent_data(&mut self, data: Box<dyn ParentData>);
-
-    // ========================================================================
-    // Children
-    // ========================================================================
-
-    /// Visits each child render object.
-    fn visit_children(&self, visitor: &mut dyn FnMut(&dyn RenderObject));
-
-    /// Visits each child render object with mutable access.
-    fn visit_children_mut(&mut self, visitor: &mut dyn FnMut(&mut dyn RenderObject));
-
-    // ========================================================================
-    // Painting
-    // ========================================================================
-
-    /// Returns the bounds within which this object will paint.
-    fn paint_bounds(&self) -> flui_types::Rect;
-
-    /// Paints this render object.
-    fn paint(&self, context: &mut crate::context::CanvasContext, offset: flui_types::Offset) {
-        let _ = (context, offset);
-    }
-
-    /// Applies the paint transform for a child.
-    fn apply_paint_transform(&self, child: &dyn RenderObject, transform: &mut [f32; 16]) {
-        let _ = (child, transform);
-    }
-
-    /// Returns the approximate clip rectangle for a child.
-    fn describe_approximate_paint_clip(
-        &self,
-        _child: &dyn RenderObject,
-    ) -> Option<flui_types::Rect> {
+    /// Returns the transform matrix to apply to children.
+    ///
+    /// If Some(matrix), the painting pipeline wraps children in a TransformLayer.
+    /// Used by `RenderTransform` to implement transform animations.
+    ///
+    /// Default: `None` (no transform effect)
+    fn paint_transform(&self) -> Option<flui_types::Matrix4> {
         None
     }
 
-    /// Returns the semantics clip for a child.
-    fn describe_semantics_clip(&self, _child: &dyn RenderObject) -> Option<flui_types::Rect> {
-        None
-    }
-
-    /// Returns the semantic bounds of this render object.
-    fn semantic_bounds(&self) -> flui_types::Rect {
-        self.paint_bounds()
-    }
-
-    /// Returns whether a child would be painted.
-    fn paints_child(&self, _child: &dyn RenderObject) -> bool {
-        true
-    }
-
-    /// Computes the transform from this object to a target ancestor.
-    fn get_transform_to(&self, _target: Option<&dyn RenderObject>) -> [f32; 16] {
-        [
-            1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
-        ]
-    }
-
     // ========================================================================
-    // Hit Testing & Events
+    // Paint Bounds
     // ========================================================================
 
-    /// Handles a pointer event delivered to this render object.
-    fn handle_event(
-        &self,
-        _event: &crate::hit_testing::PointerEvent,
-        _entry: &crate::hit_testing::HitTestEntry,
-    ) {
-    }
-
-    /// Attempts to make this render object visible.
-    fn show_on_screen(&self) {}
+    /// Returns the bounds within which this object paints.
+    ///
+    /// Used for clipping and culling. Should include all pixels this
+    /// render object might paint, including effects like shadows.
+    fn paint_bounds(&self) -> Rect;
 
     // ========================================================================
-    // Semantics
+    // Semantics (Accessibility)
     // ========================================================================
 
-    /// Schedules the initial semantics update for this render tree.
-    fn schedule_initial_semantics(&mut self) {
-        self.mark_needs_semantics_update();
-    }
-
-    /// Describes the semantic configuration for this render object.
+    /// Describes semantic properties for accessibility.
+    ///
+    /// Called when building the semantics tree. Override to provide
+    /// labels, actions, or other semantic information.
+    ///
+    /// Default: No semantic properties
     fn describe_semantics_configuration(&self, _config: &mut SemanticsConfiguration) {}
 
-    /// Visits children for semantics tree building.
-    fn visit_children_for_semantics(&self, visitor: &mut dyn FnMut(&dyn RenderObject)) {
-        self.visit_children(visitor);
+    // ========================================================================
+    // Hot Reload
+    // ========================================================================
+
+    /// Marks this render object for reprocessing after hot reload.
+    ///
+    /// Called by the framework after code changes. The storage layer
+    /// will mark this node dirty and reprocess it.
+    ///
+    /// Default: Does nothing (storage layer handles dirty marking)
+    fn reassemble(&mut self) {}
+
+    // ========================================================================
+    // Children Access (для pipeline/owner.rs)
+    // ========================================================================
+
+    /// Returns the number of children for painting.
+    ///
+    /// Note: This is separate from tree children. Render objects may have
+    /// different numbers of logical vs tree children (e.g., MultiChildRenderObjectWidget).
+    ///
+    /// Default: 0 (leaf nodes)
+    fn child_count(&self) -> usize {
+        0
     }
 
-    /// Clears any cached semantics information.
-    fn clear_semantics(&mut self) {}
-
-    /// Sends a semantics event from this render object.
-    fn send_semantics_event(&self, _event: SemanticsEvent) {}
-
-    /// Assembles the semantics node for this render object.
-    fn assemble_semantics_node(
-        &self,
-        node: &mut SemanticsNode,
-        config: &SemanticsConfiguration,
-        children: Vec<SemanticsId>,
-    ) {
-        node.set_config(config.clone());
-        for child_id in children {
-            node.add_child(child_id);
-        }
+    /// Returns the paint offset for the child at the given index.
+    ///
+    /// Called during painting to position children. The offset is relative
+    /// to this node's origin and is typically set during layout via position_child().
+    ///
+    /// Default: Offset::ZERO
+    fn child_offset(&self, _index: usize) -> Offset {
+        Offset::ZERO
     }
 
-    // ========================================================================
-    // Hot Reload Support
-    // ========================================================================
-
-    /// Forces the entire subtree to be marked dirty.
-    fn reassemble(&mut self) {
-        self.mark_needs_layout();
-        self.mark_needs_compositing_bits_update();
-        self.mark_needs_paint();
-        self.mark_needs_semantics_update();
-        self.visit_children_mut(&mut |child| {
-            child.reassemble();
-        });
-    }
-
-    // ========================================================================
-    // Layout Callbacks
-    // ========================================================================
-
-    /// Allows mutations to descendants during layout.
-    fn invoke_layout_callback(&mut self, _callback: Box<dyn FnOnce() + Send>) {}
+    /// Sets whether this was a repaint boundary in the last paint.
+    ///
+    /// Used by the framework to track boundary status for optimization.
+    ///
+    /// Default: Does nothing
+    fn set_was_repaint_boundary(&mut self, _value: bool) {}
 }
 
-impl_downcast!(sync RenderObject);
+impl_downcast!(sync RenderObject<P> where P: Protocol);

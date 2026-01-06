@@ -107,10 +107,15 @@ pub trait ScrollMetrics {
 /// any assumptions about content structure.
 #[derive(Clone, Copy, PartialEq)]
 pub struct FixedScrollMetrics {
+    /// Minimum scroll offset (typically 0.0 or negative for overscroll).
     pub min_scroll_extent: f32,
+    /// Maximum scroll offset (content size minus viewport size).
     pub max_scroll_extent: f32,
+    /// Current scroll position in logical pixels.
     pub pixels: f32,
+    /// Size of the viewport along the scroll axis.
     pub viewport_dimension: f32,
+    /// The axis along which scrolling occurs.
     pub axis: Axis,
 }
 
@@ -216,11 +221,17 @@ impl fmt::Debug for FixedScrollMetrics {
 /// assuming all items have the same extent.
 #[derive(Clone, Copy, PartialEq)]
 pub struct FixedExtentMetrics {
+    /// Minimum scroll offset (typically 0.0 or negative for overscroll).
     pub min_scroll_extent: f32,
+    /// Maximum scroll offset (content size minus viewport size).
     pub max_scroll_extent: f32,
+    /// Current scroll position in logical pixels.
     pub pixels: f32,
+    /// Size of the viewport along the scroll axis.
     pub viewport_dimension: f32,
+    /// The axis along which scrolling occurs.
     pub axis: Axis,
+    /// Size of each item along the scroll axis (all items have same size).
     pub item_extent: f32,
 }
 

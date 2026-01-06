@@ -42,6 +42,23 @@ impl Backend {
         self.painter
     }
 
+    /// Returns the current save stack depth.
+    ///
+    /// This is useful for tracking how many `save()` calls have been made
+    /// by layer rendering so that the corresponding number of `restore()` calls
+    /// can be issued after rendering children.
+    pub fn save_count(&self) -> usize {
+        self.painter.save_count()
+    }
+
+    /// Restores the most recently saved canvas state.
+    ///
+    /// This pops the transform and clip state from the save stack.
+    /// Used to restore state after rendering layer children.
+    pub fn restore(&mut self) {
+        self.painter.restore();
+    }
+
     fn with_transform<F>(&mut self, transform: &Matrix4, draw_fn: F)
     where
         F: FnOnce(&mut WgpuPainter),
@@ -312,11 +329,107 @@ impl CommandRenderer for Backend {
     }
 
     fn render_gradient(&mut self, rect: Rect, shader: &flui_painting::Shader, transform: &Matrix4) {
-        // Sample gradient center for fallback solid color until GPU gradient shader is implemented
-        let color = <WgpuPainter as Painter>::sample_gradient_center(shader, rect);
-        let paint = Paint::fill(color);
+        use super::effects::GradientStop;
+
         self.with_transform(transform, |painter| {
-            painter.rect(rect, &paint);
+            match shader {
+                flui_painting::Shader::LinearGradient {
+                    from,
+                    to,
+                    colors,
+                    stops,
+                    ..
+                } => {
+                    if colors.is_empty() {
+                        return;
+                    }
+
+                    // Convert colors and stops to GradientStop array
+                    let gradient_stops: Vec<GradientStop> = if let Some(stop_positions) = stops {
+                        colors
+                            .iter()
+                            .zip(stop_positions.iter())
+                            .map(|(color, pos)| GradientStop::new(*color, *pos))
+                            .collect()
+                    } else {
+                        // Default evenly spaced stops
+                        let count = colors.len();
+                        colors
+                            .iter()
+                            .enumerate()
+                            .map(|(i, color)| {
+                                let pos = if count > 1 {
+                                    i as f32 / (count - 1) as f32
+                                } else {
+                                    0.0
+                                };
+                                GradientStop::new(*color, pos)
+                            })
+                            .collect()
+                    };
+
+                    painter.gradient_rect(
+                        rect,
+                        glam::Vec2::new(from.dx, from.dy),
+                        glam::Vec2::new(to.dx, to.dy),
+                        &gradient_stops,
+                        0.0, // No corner radius for rect
+                    );
+                }
+                flui_painting::Shader::RadialGradient {
+                    center,
+                    radius,
+                    colors,
+                    stops,
+                    ..
+                } => {
+                    if colors.is_empty() {
+                        return;
+                    }
+
+                    // Convert colors and stops to GradientStop array
+                    let gradient_stops: Vec<GradientStop> = if let Some(stop_positions) = stops {
+                        colors
+                            .iter()
+                            .zip(stop_positions.iter())
+                            .map(|(color, pos)| GradientStop::new(*color, *pos))
+                            .collect()
+                    } else {
+                        // Default evenly spaced stops
+                        let count = colors.len();
+                        colors
+                            .iter()
+                            .enumerate()
+                            .map(|(i, color)| {
+                                let pos = if count > 1 {
+                                    i as f32 / (count - 1) as f32
+                                } else {
+                                    0.0
+                                };
+                                GradientStop::new(*color, pos)
+                            })
+                            .collect()
+                    };
+
+                    painter.radial_gradient_rect(
+                        rect,
+                        glam::Vec2::new(center.dx, center.dy),
+                        *radius,
+                        &gradient_stops,
+                        0.0, // No corner radius for rect
+                    );
+                }
+                flui_painting::Shader::SweepGradient { colors, .. } => {
+                    // Fallback to center color for sweep gradients (not yet implemented)
+                    if let Some(color) = colors.first() {
+                        let paint = Paint::fill(*color);
+                        painter.rect(rect, &paint);
+                    }
+                }
+                _ => {
+                    // Unknown shader type - fallback to transparent
+                }
+            }
         });
     }
 
@@ -326,11 +439,112 @@ impl CommandRenderer for Backend {
         shader: &flui_painting::Shader,
         transform: &Matrix4,
     ) {
-        // Sample gradient center for fallback solid color until GPU gradient shader is implemented
-        let color = <WgpuPainter as Painter>::sample_gradient_center(shader, rrect.rect);
-        let paint = Paint::fill(color);
+        use super::effects::GradientStop;
+
         self.with_transform(transform, |painter| {
-            painter.rrect(rrect, &paint);
+            // Get average corner radius
+            let corner_radius =
+                (rrect.top_left.x + rrect.top_right.x + rrect.bottom_left.x + rrect.bottom_right.x)
+                    / 4.0;
+
+            match shader {
+                flui_painting::Shader::LinearGradient {
+                    from,
+                    to,
+                    colors,
+                    stops,
+                    ..
+                } => {
+                    if colors.is_empty() {
+                        return;
+                    }
+
+                    // Convert colors and stops to GradientStop array
+                    let gradient_stops: Vec<GradientStop> = if let Some(stop_positions) = stops {
+                        colors
+                            .iter()
+                            .zip(stop_positions.iter())
+                            .map(|(color, pos)| GradientStop::new(*color, *pos))
+                            .collect()
+                    } else {
+                        // Default evenly spaced stops
+                        let count = colors.len();
+                        colors
+                            .iter()
+                            .enumerate()
+                            .map(|(i, color)| {
+                                let pos = if count > 1 {
+                                    i as f32 / (count - 1) as f32
+                                } else {
+                                    0.0
+                                };
+                                GradientStop::new(*color, pos)
+                            })
+                            .collect()
+                    };
+
+                    painter.gradient_rect(
+                        rrect.rect,
+                        glam::Vec2::new(from.dx, from.dy),
+                        glam::Vec2::new(to.dx, to.dy),
+                        &gradient_stops,
+                        corner_radius,
+                    );
+                }
+                flui_painting::Shader::RadialGradient {
+                    center,
+                    radius,
+                    colors,
+                    stops,
+                    ..
+                } => {
+                    if colors.is_empty() {
+                        return;
+                    }
+
+                    // Convert colors and stops to GradientStop array
+                    let gradient_stops: Vec<GradientStop> = if let Some(stop_positions) = stops {
+                        colors
+                            .iter()
+                            .zip(stop_positions.iter())
+                            .map(|(color, pos)| GradientStop::new(*color, *pos))
+                            .collect()
+                    } else {
+                        // Default evenly spaced stops
+                        let count = colors.len();
+                        colors
+                            .iter()
+                            .enumerate()
+                            .map(|(i, color)| {
+                                let pos = if count > 1 {
+                                    i as f32 / (count - 1) as f32
+                                } else {
+                                    0.0
+                                };
+                                GradientStop::new(*color, pos)
+                            })
+                            .collect()
+                    };
+
+                    painter.radial_gradient_rect(
+                        rrect.rect,
+                        glam::Vec2::new(center.dx, center.dy),
+                        *radius,
+                        &gradient_stops,
+                        corner_radius,
+                    );
+                }
+                flui_painting::Shader::SweepGradient { colors, .. } => {
+                    // Fallback to center color for sweep gradients (not yet implemented)
+                    if let Some(color) = colors.first() {
+                        let paint = Paint::fill(*color);
+                        painter.rrect(rrect, &paint);
+                    }
+                }
+                _ => {
+                    // Unknown shader type - fallback to transparent
+                }
+            }
         });
     }
 

@@ -1,13 +1,14 @@
 //! RenderSliver trait for scrollable content layout.
 
 use flui_types::prelude::AxisDirection;
-use flui_types::Size;
+use flui_types::{Rect, Size};
 
-use super::RenderObject;
 use crate::arity::Arity;
 use crate::constraints::{SliverConstraints, SliverGeometry};
 use crate::context::{SliverHitTestContext, SliverLayoutContext, SliverPaintContext};
 use crate::parent_data::ParentData;
+use crate::protocol::SliverProtocol;
+use crate::traits::RenderObject;
 
 // ============================================================================
 // RenderSliver Trait
@@ -53,7 +54,9 @@ use crate::parent_data::ParentData;
 ///     }
 /// }
 /// ```
-pub trait RenderSliver: RenderObject {
+///
+/// Use `SliverWrapper<T>` to bridge to `RenderObject` for storage in `RenderTree`.
+pub trait RenderSliver: RenderObject<SliverProtocol> {
     /// The arity of this render sliver (Leaf, Optional, Variable, etc.)
     type Arity: Arity;
 
@@ -160,7 +163,7 @@ pub trait RenderSliver: RenderObject {
     /// # Flutter Equivalence
     ///
     /// Corresponds to `RenderSliver.childMainAxisPosition` in Flutter.
-    fn child_main_axis_position(&self, child: &dyn RenderObject) -> f32 {
+    fn child_main_axis_position(&self, child: &dyn RenderObject<SliverProtocol>) -> f32 {
         let _ = child;
         0.0
     }
@@ -174,7 +177,7 @@ pub trait RenderSliver: RenderObject {
     /// # Flutter Equivalence
     ///
     /// Corresponds to `RenderSliver.childCrossAxisPosition` in Flutter.
-    fn child_cross_axis_position(&self, child: &dyn RenderObject) -> f32 {
+    fn child_cross_axis_position(&self, child: &dyn RenderObject<SliverProtocol>) -> f32 {
         let _ = child;
         0.0
     }
@@ -191,7 +194,7 @@ pub trait RenderSliver: RenderObject {
     /// # Flutter Equivalence
     ///
     /// Corresponds to `RenderSliver.childScrollOffset` in Flutter.
-    fn child_scroll_offset(&self, child: &dyn RenderObject) -> Option<f32> {
+    fn child_scroll_offset(&self, child: &dyn RenderObject<SliverProtocol>) -> Option<f32> {
         let _ = child;
         None
     }
@@ -273,6 +276,26 @@ pub trait RenderSliver: RenderObject {
     /// Hit tests just this sliver (not children).
     fn hit_test_self(&self, _main: f32, _cross: f32) -> bool {
         false
+    }
+
+    // ========================================================================
+    // Paint Bounds
+    // ========================================================================
+
+    /// Returns the paint bounds of this render sliver.
+    fn sliver_paint_bounds(&self) -> Rect {
+        let geometry = RenderSliver::geometry(self);
+        let size = self.get_absolute_size(geometry.paint_extent);
+        Rect::new(0.0, 0.0, size.width, size.height)
+    }
+
+    // ========================================================================
+    // Parent Data
+    // ========================================================================
+
+    /// Creates default parent data for a child.
+    fn create_default_parent_data() -> Self::ParentData {
+        Self::ParentData::default()
     }
 }
 

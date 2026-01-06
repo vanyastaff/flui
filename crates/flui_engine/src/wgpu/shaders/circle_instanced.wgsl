@@ -5,9 +5,9 @@
 //
 // Performance: 100 circles = 1 draw call (vs 100 without instancing)
 
-// Vertex input (shared unit quad: [-1,-1] to [1,1])
+// Vertex input (shared unit quad: [0,0] to [1,1])
 struct VertexInput {
-    @location(0) position: vec2<f32>,  // Quad corner [-1 to 1]
+    @location(0) position: vec2<f32>,  // Quad corner [0 to 1]
 }
 
 // Instance input (per-circle data)
@@ -44,14 +44,17 @@ fn vs_main(
     let center = instance.center_radius.xy;
     let radius = instance.center_radius.z;
 
-    // Transform unit quad [-1,1] to circle bounding box
+    // Convert unit quad [0,1] to [-1,1] range for local position
+    let normalized_pos = vertex.position * 2.0 - 1.0;
+
+    // Transform to circle bounding box in world space
     // Apply instance transform for ellipses (scale_x, scale_y)
-    let local_pos = vertex.position * vec2<f32>(
+    let scaled_pos = normalized_pos * vec2<f32>(
         radius * instance.transform.x,
         radius * instance.transform.y
     );
 
-    let world_pos = center + local_pos + instance.transform.zw; // Add translation
+    let world_pos = center + scaled_pos + instance.transform.zw; // Add translation
 
     // Convert to clip space [-1, 1]
     let clip_x = (world_pos.x / viewport.size.x) * 2.0 - 1.0;
@@ -59,7 +62,7 @@ fn vs_main(
 
     out.position = vec4<f32>(clip_x, clip_y, 0.0, 1.0);
     out.color = instance.color;
-    out.local_pos = vertex.position; // [-1 to 1] range
+    out.local_pos = normalized_pos; // [-1 to 1] range for fragment shader
     out.radius = radius;
 
     return out;

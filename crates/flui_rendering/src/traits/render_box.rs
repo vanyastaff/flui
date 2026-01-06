@@ -1,13 +1,14 @@
 //! RenderBox trait for 2D box layout with Arity-based child management.
 
-use flui_types::{Point, Rect, Size};
+use flui_types::{Offset, Point, Rect, Size};
 
-use super::RenderObject;
 use crate::arity::Arity;
 use crate::constraints::BoxConstraints;
 use crate::context::{BoxHitTestContext, BoxLayoutContext, BoxPaintContext};
 use crate::hit_testing::HitTestBehavior;
 use crate::parent_data::ParentData;
+use crate::protocol::BoxProtocol;
+use crate::traits::RenderObject;
 
 // ============================================================================
 // RenderBox Trait with Arity and ParentData
@@ -60,7 +61,18 @@ use crate::parent_data::ParentData;
 ///     ...
 /// }
 /// ```
-pub trait RenderBox: RenderObject {
+/// Trait for render objects that use 2D cartesian coordinates.
+///
+/// Users implement this trait for their custom render objects.
+/// Use `BoxWrapper<T>` to bridge to `RenderObject` for storage in `RenderTree`.
+///
+/// # Features
+///
+/// - Intrinsic dimension queries (min/max width/height)
+/// - Baseline support for text alignment
+/// - Dry layout (compute size without actual layout)
+/// - Coordinate conversion (local ↔ global)
+pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable {
     /// The arity of this render box (Leaf, Optional, Variable, etc.)
     type Arity: Arity;
 
@@ -95,11 +107,16 @@ pub trait RenderBox: RenderObject {
     /// ```
     fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Self::Arity, Self::ParentData>);
 
-    /// Returns the current size of this render object.
-    fn size(&self) -> Size;
+    /// Returns a reference to the current size of this render object.
+    ///
+    /// This method must return a reference to allow `RenderObject<BoxProtocol>`
+    /// blanket implementation to work correctly.
+    fn size(&self) -> &Size;
 
-    /// Sets the size of this render object.
-    fn set_size(&mut self, size: Size);
+    /// Returns a mutable reference to the size of this render object.
+    ///
+    /// This allows direct mutation of the size field without set_size().
+    fn size_mut(&mut self) -> &mut Size;
 
     /// Returns whether this render object has undergone layout and has a size.
     fn has_size(&self) -> bool {
@@ -183,12 +200,12 @@ pub trait RenderBox: RenderObject {
     // ========================================================================
 
     /// Converts a point from global coordinates to local coordinates.
-    fn global_to_local(&self, point: Point, _ancestor: Option<&dyn RenderObject>) -> Point {
+    fn global_to_local(&self, point: Point) -> Point {
         point
     }
 
     /// Converts a point from local coordinates to global coordinates.
-    fn local_to_global(&self, point: Point, _ancestor: Option<&dyn RenderObject>) -> Point {
+    fn local_to_global(&self, point: Point) -> Point {
         point
     }
 
@@ -289,6 +306,44 @@ pub trait RenderBox: RenderObject {
         let size = self.size();
         Rect::new(0.0, 0.0, size.width, size.height)
     }
+
+    // ========================================================================
+    // Direct Canvas Painting
+    // ========================================================================
+
+    /// Paints directly using a CanvasContext.
+    ///
+    /// This is a simpler painting method that bypasses BoxPaintContext.
+    /// Override this for leaf widgets that need to draw directly.
+    ///
+    /// Default implementation does nothing.
+    fn paint_with_canvas(&self, _context: &mut crate::context::CanvasContext, _offset: Offset) {
+        // Default: no-op
+    }
+
+    // ========================================================================
+    // Effect Layers
+    // ========================================================================
+
+    /// Returns the alpha value for this render object's children.
+    ///
+    /// If this returns Some(alpha), paint_node_recursive will wrap children
+    /// in an OpacityLayer with the given alpha (0-255).
+    ///
+    /// Override this in RenderOpacity to provide the current alpha value.
+    fn paint_alpha(&self) -> Option<u8> {
+        None
+    }
+
+    /// Returns the transform matrix for this render object's children.
+    ///
+    /// If this returns Some(matrix), paint_node_recursive will wrap children
+    /// in a TransformLayer with the given matrix.
+    ///
+    /// Override this in RenderTransform to provide the current transform.
+    fn paint_transform(&self) -> Option<flui_types::Matrix4> {
+        None
+    }
 }
 
 /// Text baseline types for baseline alignment.
@@ -298,6 +353,64 @@ pub enum TextBaseline {
     Alphabetic,
     /// The ideographic baseline.
     Ideographic,
+}
+
+// ============================================================================
+// Blanket Implementation of RenderObject<BoxProtocol> for RenderBox
+// ============================================================================
+
+/// Automatic implementation of RenderObject<BoxProtocol> for all RenderBox types.
+///
+/// This bridges the gap between the typed RenderBox API (with Arity/ParentData)
+/// and the protocol-specific RenderObject<P> trait needed for storage.
+///
+/// Note: This requires T to also implement Diagnosticable since RenderObject<P> requires it.
+impl<T> RenderObject<BoxProtocol> for T
+where
+    T: RenderBox + flui_foundation::Diagnosticable,
+{
+    fn perform_layout_raw(
+        &mut self,
+        _constraints: crate::protocol::ProtocolConstraints<BoxProtocol>,
+    ) -> crate::protocol::ProtocolGeometry<BoxProtocol> {
+        // NOTE: This method should not be called directly!
+        // Layout must go through PipelineOwner which creates proper context with children access.
+        // This blanket impl exists only to make RenderBox compatible with RenderObject<BoxProtocol>
+        // for storage in Box<dyn RenderObject<BoxProtocol>>.
+        //
+        // For now, just return current size without performing layout.
+        // Real layout happens in PipelineOwner::layout_node_with_children()
+        *self.size()
+    }
+
+    fn paint(&self, context: &mut crate::pipeline::CanvasContext, offset: Offset) {
+        // Paint can work without children context
+        self.paint_with_canvas(context, offset);
+    }
+
+    fn hit_test_raw(
+        &self,
+        _result: &mut crate::protocol::ProtocolHitResult<BoxProtocol>,
+        _position: crate::protocol::ProtocolPosition<BoxProtocol>,
+    ) -> bool {
+        // NOTE: Similar to perform_layout_raw, this should go through proper pipeline
+        // For now, return false (no hit)
+        false
+    }
+
+    fn geometry(&self) -> &crate::protocol::ProtocolGeometry<BoxProtocol> {
+        // Now that size() returns &Size, this works!
+        self.size()
+    }
+
+    fn set_geometry(&mut self, geometry: crate::protocol::ProtocolGeometry<BoxProtocol>) {
+        // Use size_mut() to directly set the size
+        *self.size_mut() = geometry;
+    }
+
+    fn paint_bounds(&self) -> Rect {
+        self.box_paint_bounds()
+    }
 }
 
 // ============================================================================

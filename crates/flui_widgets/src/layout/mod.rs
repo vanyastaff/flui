@@ -3,52 +3,37 @@
 //! This module contains widgets for laying out multiple children:
 //! - Row: Horizontal flex layout
 //! - Column: Vertical flex layout
-//! - Stack: Layered positioning (future)
-//! - Wrap: Flowing layout (future)
+//! - Flex: Base flex layout widget
 
-pub mod baseline;
-pub mod column;
-pub mod expanded;
+// Active widgets (using new RenderBox architecture)
 pub mod flex;
-pub mod flexible;
-pub mod fractionally_sized_box;
-pub mod indexed_stack;
-pub mod intrinsic_height;
-pub mod intrinsic_width;
-pub mod list_body;
-pub mod overflow_box;
-pub mod positioned;
-pub mod positioned_directional;
-pub mod rotated_box;
-pub mod row;
-pub mod scaffold;
-pub mod scroll_controller;
-pub mod single_child_scroll_view;
-pub mod sized_overflow_box;
-pub mod spacer;
-pub mod stack;
-pub mod wrap;
 
 // Re-exports
-pub use baseline::Baseline;
-pub use column::Column;
-pub use expanded::Expanded;
-pub use flex::Flex;
-pub use flexible::Flexible;
-pub use fractionally_sized_box::FractionallySizedBox;
-pub use indexed_stack::IndexedStack;
-pub use intrinsic_height::IntrinsicHeight;
-pub use intrinsic_width::IntrinsicWidth;
-pub use list_body::ListBody;
-pub use overflow_box::OverflowBox;
-pub use positioned::Positioned;
-pub use positioned_directional::PositionedDirectional;
-pub use rotated_box::RotatedBox;
-pub use row::Row;
-pub use scaffold::Scaffold;
-pub use scroll_controller::ScrollController;
-pub use single_child_scroll_view::SingleChildScrollView;
-pub use sized_overflow_box::SizedOverflowBox;
-pub use spacer::Spacer;
-pub use stack::Stack;
-pub use wrap::Wrap;
+pub use flex::{Column, CrossAxisAlignment, Flex, MainAxisAlignment, Row};
+
+// ============================================================================
+// DISABLED: Widgets below use old flui_core/flui_objects architecture
+// They will be migrated when their RenderObjects are implemented
+// ============================================================================
+
+// pub mod baseline;
+// pub mod column;  // Replaced by flex::Column
+// pub mod expanded;
+// pub mod flexible;
+// pub mod fractionally_sized_box;
+// pub mod indexed_stack;
+// pub mod intrinsic_height;
+// pub mod intrinsic_width;
+// pub mod list_body;
+// pub mod overflow_box;
+// pub mod positioned;
+// pub mod positioned_directional;
+// pub mod rotated_box;
+// pub mod row;  // Replaced by flex::Row
+// pub mod scaffold;
+// pub mod scroll_controller;
+// pub mod single_child_scroll_view;
+// pub mod sized_overflow_box;
+// pub mod spacer;
+// pub mod stack;
+// pub mod wrap;

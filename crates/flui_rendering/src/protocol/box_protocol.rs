@@ -97,7 +97,7 @@ impl LayoutCapability for BoxLayout {
     type Constraints = BoxConstraints;
     type Geometry = Size;
     type CacheKey = BoxConstraintsCacheKey;
-    type Context<'ctx, A: Arity, P: ParentData>
+    type Context<'ctx, A: Arity, P: ParentData + Default>
         = BoxLayoutCtx<'ctx, A, P>
     where
         Self: 'ctx;
@@ -120,18 +120,75 @@ impl LayoutCapability for BoxLayout {
 }
 
 /// Box layout context implementation.
-pub struct BoxLayoutCtx<'ctx, A: Arity, P: ParentData> {
+///
+/// This context provides access to constraints and children during layout.
+
+/// Callback type for synchronous child layout.
+///
+/// Called when parent's `layout_child()` is invoked. The callback receives
+/// the child's `RenderId` and constraints, performs layout on the child via
+/// the RenderTree, and returns the child's size.
+pub type LayoutChildCallback<'a> =
+    &'a (dyn Fn(flui_foundation::RenderId, BoxConstraints) -> Size + Send + Sync);
+
+/// The children reference allows `position_child` to store offsets that
+/// will be used during painting.
+pub struct BoxLayoutCtx<'ctx, A: Arity, P: ParentData + Default> {
     constraints: BoxConstraints,
     geometry: Option<Size>,
-    _phantom: std::marker::PhantomData<(&'ctx (), A, P)>,
+    /// Reference to children states for position_child to update offsets.
+    children: Option<&'ctx mut Vec<crate::children_access::ChildState<P>>>,
+    /// Child render IDs for tree lookup during layout_child.
+    child_ids: Option<&'ctx [flui_foundation::RenderId]>,
+    /// Callback to perform synchronous child layout through RenderTree.
+    layout_child_callback: Option<LayoutChildCallback<'ctx>>,
+    _phantom: std::marker::PhantomData<A>,
 }
 
-impl<'ctx, A: Arity, P: ParentData> BoxLayoutCtx<'ctx, A, P> {
-    /// Creates a new box layout context with given constraints.
+impl<'ctx, A: Arity, P: ParentData + Default> BoxLayoutCtx<'ctx, A, P> {
+    /// Creates a new box layout context with given constraints (no children access).
     pub fn new(constraints: BoxConstraints) -> Self {
         Self {
             constraints,
             geometry: None,
+            children: None,
+            child_ids: None,
+            layout_child_callback: None,
+            _phantom: std::marker::PhantomData,
+        }
+    }
+
+    /// Creates a new box layout context with children access.
+    pub fn with_children(
+        constraints: BoxConstraints,
+        children: &'ctx mut Vec<crate::children_access::ChildState<P>>,
+    ) -> Self {
+        Self {
+            constraints,
+            geometry: None,
+            children: Some(children),
+            child_ids: None,
+            layout_child_callback: None,
+            _phantom: std::marker::PhantomData,
+        }
+    }
+
+    /// Creates a new box layout context with full access for synchronous child layout.
+    ///
+    /// This constructor enables proper Flutter-style layout where parent's
+    /// `layout_child()` triggers synchronous child layout through the RenderTree.
+    pub fn with_layout_callback(
+        constraints: BoxConstraints,
+        children: &'ctx mut Vec<crate::children_access::ChildState<P>>,
+        child_ids: &'ctx [flui_foundation::RenderId],
+        layout_child_callback: LayoutChildCallback<'ctx>,
+    ) -> Self {
+        Self {
+            constraints,
+            geometry: None,
+            children: Some(children),
+            child_ids: Some(child_ids),
+            layout_child_callback: Some(layout_child_callback),
             _phantom: std::marker::PhantomData,
         }
     }
@@ -142,7 +199,7 @@ impl<'ctx, A: Arity, P: ParentData> BoxLayoutCtx<'ctx, A, P> {
     }
 }
 
-impl<'ctx, A: Arity, P: ParentData> LayoutContextApi<'ctx, BoxLayout, A, P>
+impl<'ctx, A: Arity, P: ParentData + Default> LayoutContextApi<'ctx, BoxLayout, A, P>
     for BoxLayoutCtx<'ctx, A, P>
 {
     fn constraints(&self) -> &BoxConstraints {
@@ -158,27 +215,66 @@ impl<'ctx, A: Arity, P: ParentData> LayoutContextApi<'ctx, BoxLayout, A, P>
     }
 
     fn child_count(&self) -> usize {
-        0 // Override in actual implementation with children
+        self.children.as_ref().map(|c| c.len()).unwrap_or(0)
     }
 
-    fn layout_child(&mut self, _index: usize, _constraints: BoxConstraints) -> Size {
-        Size::ZERO // Override in actual implementation
+    fn layout_child(&mut self, index: usize, constraints: BoxConstraints) -> Size {
+        // Try to use the layout callback for synchronous child layout
+        if let (Some(child_ids), Some(callback)) =
+            (self.child_ids, self.layout_child_callback.as_ref())
+        {
+            if let Some(&child_id) = child_ids.get(index) {
+                // Perform synchronous layout through RenderTree
+                let size = callback(child_id, constraints);
+
+                // Update cached size in children state
+                if let Some(children) = &mut self.children {
+                    if let Some(child) = children.get_mut(index) {
+                        child.size = size;
+                    }
+                }
+
+                return size;
+            }
+        }
+
+        // Fallback: return cached size if available
+        if let Some(children) = &self.children {
+            if let Some(child) = children.get(index) {
+                return child.size;
+            }
+        }
+        Size::ZERO
     }
 
-    fn position_child(&mut self, _index: usize, _offset: Offset) {
-        // Override in actual implementation
+    fn position_child(&mut self, index: usize, offset: Offset) {
+        // Store the offset in the child's state
+        if let Some(children) = &mut self.children {
+            if let Some(child) = children.get_mut(index) {
+                child.offset = offset;
+            }
+        }
     }
 
-    fn child_geometry(&self, _index: usize) -> Option<&Size> {
-        None // Override in actual implementation
+    fn child_geometry(&self, index: usize) -> Option<&Size> {
+        self.children
+            .as_ref()
+            .and_then(|c| c.get(index))
+            .map(|child| &child.size)
     }
 
-    fn child_parent_data(&self, _index: usize) -> Option<&P> {
-        None // Override in actual implementation
+    fn child_parent_data(&self, index: usize) -> Option<&P> {
+        self.children
+            .as_ref()
+            .and_then(|c| c.get(index))
+            .map(|child| &child.parent_data)
     }
 
-    fn child_parent_data_mut(&mut self, _index: usize) -> Option<&mut P> {
-        None // Override in actual implementation
+    fn child_parent_data_mut(&mut self, index: usize) -> Option<&mut P> {
+        self.children
+            .as_mut()
+            .and_then(|c| c.get_mut(index))
+            .map(|child| &mut child.parent_data)
     }
 }
 

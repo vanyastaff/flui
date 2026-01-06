@@ -67,9 +67,12 @@ pub mod pipeline;
 pub mod protocol;
 /// Re-export semantics from flui-semantics crate.
 pub use flui_semantics as semantics;
+pub mod objects;
+pub mod storage;
 pub mod traits;
-pub mod tree;
 pub mod view;
+// Wrapper module removed - use IntoRenderObject and protocol adapters instead
+// pub mod wrapper;
 
 /// Re-export layer types from flui-layer crate for convenience.
 pub mod layer {
@@ -126,7 +129,7 @@ pub mod prelude {
         SemanticsAction, SemanticsConfiguration, SemanticsNode, SemanticsNodeUpdate,
         SemanticsOwner, SemanticsTreeUpdate,
     };
-    pub use crate::traits::RenderObject;
+    pub use crate::traits::{RenderBox, RenderObject, TextBaseline};
 
     // Error types
     pub use crate::error::{RenderError, RenderResult};
@@ -143,7 +146,10 @@ pub mod prelude {
     pub use crate::constraints::{BoxConstraints, Constraints, SliverConstraints, SliverGeometry};
 
     // Tree types
-    pub use crate::tree::{RenderNode, RenderTree};
+    pub use crate::storage::{RenderNode, RenderTree};
+
+    // Protocol adapters for RenderBox -> RenderObject<BoxProtocol> bridging
+    pub use crate::protocol::IntoRenderObject;
 
     // Re-export commonly used types from flui_types
     pub use flui_types::{Offset, Point, RRect, Rect, Size};

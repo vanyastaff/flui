@@ -118,6 +118,14 @@ impl Children {
     }
 }
 
+impl Clone for Children {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+        }
+    }
+}
+
 impl std::fmt::Debug for Children {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Children")
@@ -158,7 +166,6 @@ mod tests {
         fn create_element(&self) -> Box<dyn ElementBase> {
             Box::new(StatelessElement::new(self))
         }
-
     }
 
     #[test]

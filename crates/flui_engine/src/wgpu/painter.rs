@@ -71,7 +71,7 @@ pub struct WgpuPainter {
     /// Viewport uniform buffer (for instanced shader)
     viewport_buffer: wgpu::Buffer,
 
-    /// Viewport bind group
+    /// Viewport bind group (for instanced pipelines)
     viewport_bind_group: wgpu::BindGroup,
 
     /// Shared unit quad vertex buffer (reused for all instances)
@@ -168,6 +168,14 @@ pub struct WgpuPainter {
 
     /// Current active scissor rect (None = no clipping)
     current_scissor: Option<(u32, u32, u32, u32)>,
+
+    // ===== Opacity/Layer Stack =====
+    /// Stack of opacity values for save_layer/restore_layer
+    /// Each element is the accumulated alpha (0.0-1.0)
+    opacity_stack: Vec<f32>,
+
+    /// Current accumulated opacity (1.0 = fully opaque)
+    current_opacity: f32,
 }
 
 impl WgpuPainter {
@@ -196,10 +204,7 @@ impl WgpuPainter {
         let device = Arc::new(device);
         let queue = Arc::new(queue);
 
-        // Create pipeline cache with shader
-        let pipeline_cache = PipelineCache::new(&device, super::shaders::SHAPE, surface_format);
-
-        // ===== Instanced Rendering Setup =====
+        // ===== Viewport Setup (shared by all pipelines) =====
 
         // Create viewport uniform buffer
         let viewport_data = [size.0 as f32, size.1 as f32, 0.0, 0.0]; // [width, height, padding, padding]
@@ -209,7 +214,7 @@ impl WgpuPainter {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
-        // Create bind group layout for viewport
+        // Create bind group layout for viewport (will be owned by PipelineCache)
         let viewport_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("Viewport Bind Group Layout"),
@@ -225,15 +230,26 @@ impl WgpuPainter {
                 }],
             });
 
-        // Create viewport bind group
+        // Create pipeline cache FIRST - it will own the layout
+        let pipeline_cache = PipelineCache::new(
+            &device,
+            super::shaders::SHAPE,
+            surface_format,
+            viewport_bind_group_layout,
+        );
+
+        // Now create bind group using layout FROM pipeline_cache
+        // This ensures the bind group uses the EXACT SAME layout object as shape pipeline
         let viewport_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Viewport Bind Group"),
-            layout: &viewport_bind_group_layout,
+            layout: pipeline_cache.viewport_bind_group_layout(),
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
                 resource: viewport_buffer.as_entire_binding(),
             }],
         });
+
+        // ===== Instanced Rendering Setup =====
 
         // Create instanced rectangle shader
         let instanced_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -245,7 +261,7 @@ impl WgpuPainter {
         let instanced_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Instanced Rect Pipeline Layout"),
-                bind_group_layouts: &[&viewport_bind_group_layout],
+                bind_group_layouts: &[pipeline_cache.viewport_bind_group_layout()],
                 push_constant_ranges: &[],
             });
 
@@ -501,7 +517,10 @@ impl WgpuPainter {
         let texture_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Instanced Texture Pipeline Layout"),
-                bind_group_layouts: &[&viewport_bind_group_layout, &texture_bind_group_layout],
+                bind_group_layouts: &[
+                    pipeline_cache.viewport_bind_group_layout(),
+                    &texture_bind_group_layout,
+                ],
                 push_constant_ranges: &[],
             });
 
@@ -581,7 +600,7 @@ impl WgpuPainter {
         let linear_gradient_pipeline = super::effects_pipeline::create_linear_gradient_pipeline(
             &device,
             surface_format,
-            &viewport_bind_group_layout,
+            pipeline_cache.viewport_bind_group_layout(),
             &gradient_bind_group_layout,
         );
 
@@ -592,7 +611,7 @@ impl WgpuPainter {
         let radial_gradient_pipeline = super::effects_pipeline::create_radial_gradient_pipeline(
             &device,
             surface_format,
-            &viewport_bind_group_layout,
+            pipeline_cache.viewport_bind_group_layout(),
             &gradient_bind_group_layout,
         );
 
@@ -603,7 +622,7 @@ impl WgpuPainter {
         let shadow_pipeline = super::effects_pipeline::create_shadow_pipeline(
             &device,
             surface_format,
-            &viewport_bind_group_layout,
+            pipeline_cache.viewport_bind_group_layout(),
         );
 
         // Create shadow batch
@@ -663,6 +682,8 @@ impl WgpuPainter {
             current_transform,
             scissor_stack: Vec::new(),
             current_scissor: None,
+            opacity_stack: Vec::new(),
+            current_opacity: 1.0,
         }
     }
 
@@ -695,7 +716,14 @@ impl WgpuPainter {
             "Drawing commands"
         );
 
-        // ===== Render Shapes =====
+        // ===== Render All Instanced Primitives FIRST =====
+        // (Background rects, circles, etc. render first, then tessellated shapes on top)
+        self.flush_all_instanced_batches(encoder, view);
+
+        // ===== Render Gradients (Linear + Radial) =====
+        self.flush_gradient_batches(encoder, view);
+
+        // ===== Render Tessellated Shapes LAST (on top of instanced) =====
         if !self.vertices.is_empty() {
             // Upload vertices to GPU
             let vertex_buffer = self
@@ -742,6 +770,7 @@ impl WgpuPainter {
             });
 
             render_pass.set_pipeline(pipeline);
+            render_pass.set_bind_group(0, &self.viewport_bind_group, &[]); // Use same bind group as instanced (they share layout now)
             render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
             render_pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint32);
 
@@ -752,14 +781,6 @@ impl WgpuPainter {
 
             render_pass.draw_indexed(0..self.indices.len() as u32, 0, 0..1);
         }
-
-        // ===== Render All Instanced Primitives (Multi-Draw Optimization) =====
-        // Combined instance buffer upload: 1 upload instead of 3!
-        // This is 2-3x faster than individual flush calls.
-        self.flush_all_instanced_batches(encoder, view);
-
-        // ===== Render Gradients (Linear + Radial) =====
-        self.flush_gradient_batches(encoder, view);
 
         // ===== Render Text =====
         self.text_renderer
@@ -788,6 +809,14 @@ impl WgpuPainter {
             0,
             bytemuck::cast_slice(&viewport_data),
         );
+    }
+
+    /// Returns the current save stack depth.
+    ///
+    /// This is useful for tracking how many `save()` calls have been made
+    /// so that the corresponding number of `restore()` calls can be issued.
+    pub fn save_count(&self) -> usize {
+        self.transform_stack.len()
     }
 
     // ===== External Texture Registry Access =====
@@ -1228,8 +1257,22 @@ impl Painter for WgpuPainter {
         tracing::trace!("WgpuPainter::rect: rect={:?}, paint={:?}", rect, paint);
 
         if paint.style == PaintStyle::Fill {
+            // Apply current transform to rect bounds
+            let top_left = self.apply_transform(Point::new(rect.left(), rect.top()));
+            let bottom_right = self.apply_transform(Point::new(rect.right(), rect.bottom()));
+            let transformed_rect =
+                Rect::from_ltrb(top_left.x, top_left.y, bottom_right.x, bottom_right.y);
+
+            // Apply current opacity to color
+            let color = if self.current_opacity < 1.0 {
+                let alpha = (paint.color.a as f32 * self.current_opacity) as u8;
+                flui_types::Color::rgba(paint.color.r, paint.color.g, paint.color.b, alpha)
+            } else {
+                paint.color
+            };
+
             // Use GPU instancing for filled rects (100x faster!)
-            let instance = super::instancing::RectInstance::rect(rect, paint.color);
+            let instance = super::instancing::RectInstance::rect(transformed_rect, color);
             let _ = self.rect_batch.add(instance);
             // Note: Auto-flush happens in render() - no need to flush here
         } else {
@@ -1243,10 +1286,25 @@ impl Painter for WgpuPainter {
 
     fn rrect(&mut self, rrect: RRect, paint: &Paint) {
         if paint.style == PaintStyle::Fill {
+            // Apply current transform to rect bounds
+            let top_left = self.apply_transform(Point::new(rrect.rect.left(), rrect.rect.top()));
+            let bottom_right =
+                self.apply_transform(Point::new(rrect.rect.right(), rrect.rect.bottom()));
+            let transformed_rect =
+                Rect::from_ltrb(top_left.x, top_left.y, bottom_right.x, bottom_right.y);
+
+            // Apply current opacity to color
+            let color = if self.current_opacity < 1.0 {
+                let alpha = (paint.color.a as f32 * self.current_opacity) as u8;
+                flui_types::Color::rgba(paint.color.r, paint.color.g, paint.color.b, alpha)
+            } else {
+                paint.color
+            };
+
             // Use GPU instancing for filled rounded rects (100x faster!)
             let instance = super::instancing::RectInstance::rounded_rect_corners(
-                rrect.rect,
-                paint.color,
+                transformed_rect,
+                color,
                 rrect.top_left.x.max(rrect.top_left.y),
                 rrect.top_right.x.max(rrect.top_right.y),
                 rrect.bottom_right.x.max(rrect.bottom_right.y),
@@ -1271,8 +1329,20 @@ impl Painter for WgpuPainter {
         );
 
         if paint.style == PaintStyle::Fill {
+            // Apply current transform to center point
+            let transformed_center = self.apply_transform(center);
+
+            // Apply current opacity to color
+            let color = if self.current_opacity < 1.0 {
+                let alpha = (paint.color.a as f32 * self.current_opacity) as u8;
+                flui_types::Color::rgba(paint.color.r, paint.color.g, paint.color.b, alpha)
+            } else {
+                paint.color
+            };
+
             // Use GPU instancing for filled circles (100x faster!)
-            let instance = super::instancing::CircleInstance::new(center, radius, paint.color);
+            let instance =
+                super::instancing::CircleInstance::new(transformed_center, radius, color);
             let _ = self.circle_batch.add(instance);
             // Note: Auto-flush happens in render() - no need to flush here
         } else {
@@ -1343,8 +1413,22 @@ impl Painter for WgpuPainter {
                 );
                 let _ = self.arc_batch.add(instance);
             } else {
-                #[cfg(debug_assertions)]
-                tracing::warn!("WgpuPainter::draw_arc: stroked arcs not fully implemented yet");
+                // Use tessellation for stroked arcs
+                match self.tessellator.tessellate_arc(
+                    rect,
+                    start_angle,
+                    sweep_angle,
+                    use_center,
+                    paint,
+                ) {
+                    Ok((vertices, indices)) => {
+                        self.add_tessellated(vertices, indices);
+                    }
+                    Err(e) => {
+                        #[cfg(debug_assertions)]
+                        tracing::error!("Failed to tessellate stroked arc: {}", e);
+                    }
+                }
             }
         }
     }
@@ -1455,13 +1539,6 @@ impl Painter for WgpuPainter {
     }
 
     fn draw_path(&mut self, path: &flui_types::painting::path::Path, paint: &Paint) {
-        #[cfg(debug_assertions)]
-        tracing::trace!(
-            "WgpuPainter::draw_path: commands={}, paint={:?}",
-            path.commands().len(),
-            paint
-        );
-
         // Tessellate the path
         // Paint already contains stroke information
         let result = if paint.style == PaintStyle::Fill {
@@ -1475,8 +1552,7 @@ impl Painter for WgpuPainter {
                 self.add_tessellated(vertices, indices);
             }
             Err(e) => {
-                #[cfg(debug_assertions)]
-                tracing::error!("Failed to tessellate path: {}", e);
+                tracing::warn!("Failed to tessellate path: {}", e);
             }
         }
     }
@@ -1988,6 +2064,39 @@ impl Painter for WgpuPainter {
 
     fn viewport_bounds(&self) -> Rect {
         Rect::from_ltrb(0.0, 0.0, self.size.0 as f32, self.size.1 as f32)
+    }
+
+    // ===== Layer Operations (Opacity) =====
+
+    fn save_layer(&mut self, _bounds: Option<Rect>, paint: &Paint) {
+        // Push current opacity onto stack
+        self.opacity_stack.push(self.current_opacity);
+
+        // Apply the paint's alpha to current opacity
+        let paint_alpha = paint.color.a as f32 / 255.0;
+        self.current_opacity *= paint_alpha;
+
+        #[cfg(debug_assertions)]
+        tracing::trace!(
+            "WgpuPainter::save_layer: paint_alpha={}, current_opacity={}",
+            paint_alpha,
+            self.current_opacity
+        );
+    }
+
+    fn restore_layer(&mut self) {
+        if let Some(prev_opacity) = self.opacity_stack.pop() {
+            self.current_opacity = prev_opacity;
+
+            #[cfg(debug_assertions)]
+            tracing::trace!(
+                "WgpuPainter::restore_layer: restored opacity={}",
+                self.current_opacity
+            );
+        } else {
+            #[cfg(debug_assertions)]
+            tracing::warn!("WgpuPainter::restore_layer: stack underflow");
+        }
     }
 }
 

@@ -7,6 +7,7 @@
 //!
 //! This corresponds to parts of Flutter's `rendering/viewport.dart`.
 
+use crate::protocol::BoxProtocol;
 use crate::traits::RenderObject;
 use flui_types::{Axis, Rect};
 
@@ -111,7 +112,7 @@ impl RevealedOffset {
 /// without having specific knowledge of all the various types of viewports.
 ///
 /// [`ViewportOffset`]: super::ViewportOffset
-pub trait RenderAbstractViewport: RenderObject {
+pub trait RenderAbstractViewport: RenderObject<BoxProtocol> {
     /// Returns the offset that would be needed to reveal the target render object.
     ///
     /// # Arguments
@@ -126,7 +127,7 @@ pub trait RenderAbstractViewport: RenderObject {
     /// * `axis` - Optional axis for 2D viewports. Ignored by 1D viewports.
     fn get_offset_to_reveal(
         &self,
-        target: &dyn RenderObject,
+        target: &dyn RenderObject<BoxProtocol>,
         alignment: f32,
         rect: Option<Rect>,
         axis: Option<Axis>,

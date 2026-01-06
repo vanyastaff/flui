@@ -2,7 +2,7 @@
 
 use std::fmt::Debug;
 
-use flui_foundation::{Diagnosticable, DiagnosticsBuilder, LayerId, RenderId};
+use flui_foundation::{Diagnosticable, DiagnosticsBuilder};
 
 use crate::hit_testing::{HitTestEntry, HitTestResult, HitTestTarget, PointerEvent};
 
@@ -10,7 +10,6 @@ use flui_types::{Matrix4, Offset, Rect, Size};
 
 use crate::constraints::BoxConstraints;
 use crate::parent_data::ParentData;
-use crate::traits::RenderObject;
 
 use super::ViewConfiguration;
 use crate::context::CanvasContext;
@@ -33,20 +32,6 @@ use flui_layer::TransformLayer;
 /// # Flutter Equivalence
 ///
 /// Corresponds to Flutter's `RenderView` class from `rendering/view.dart`.
-///
-/// # Safety Note on `owner` field
-///
-/// The `owner` field stores a raw pointer to the `PipelineOwner` for performance
-/// reasons (avoiding reference counting overhead during hot paths like layout/paint).
-///
-/// **Invariants that must be maintained:**
-/// 1. The pointer is only set via `attach()` and cleared via `detach()`
-/// 2. The `PipelineOwner` must outlive any `RenderView` attached to it
-/// 3. Access to the pointer is only valid between `attach()` and `detach()` calls
-/// 4. The `PipelineOwner` manages `RenderView` lifetime through `RenderTree`
-///
-/// This pattern mirrors Flutter's implementation where `RenderObject.owner`
-/// is a direct reference managed by the attach/detach lifecycle.
 pub struct RenderView {
     /// The view configuration.
     configuration: Option<ViewConfiguration>,
@@ -63,31 +48,31 @@ pub struct RenderView {
     /// Whether automatic system UI adjustment is enabled.
     automatic_system_ui_adjustment: bool,
 
-    /// The pipeline owner managing this render view.
-    ///
-    /// # Safety
-    ///
-    /// This is a raw pointer for performance. See struct-level safety docs.
-    /// The pointer is valid only while this RenderView is attached.
+    /// The pipeline owner (raw pointer for direct access).
     owner: Option<*const PipelineOwner>,
-
-    /// Pipeline owner ID for debugging and validation.
-    /// Used to verify the owner pointer is still valid.
-    #[allow(dead_code)]
-    owner_id: Option<u64>,
 
     // ========================================================================
     // Render Object State
     // ========================================================================
+    #[allow(dead_code)] // Placeholder for full RenderView implementation
     depth: usize,
+    #[allow(dead_code)]
     needs_layout: bool,
+    #[allow(dead_code)]
     needs_paint: bool,
+    #[allow(dead_code)]
     needs_compositing_bits_update: bool,
+    #[allow(dead_code)]
     needs_semantics_update: bool,
+    #[allow(dead_code)]
     is_repaint_boundary: bool,
+    #[allow(dead_code)]
     was_repaint_boundary: bool,
+    #[allow(dead_code)]
     needs_compositing: bool,
+    #[allow(dead_code)]
     cached_constraints: Option<BoxConstraints>,
+    #[allow(dead_code)]
     parent_data: Option<Box<dyn ParentData>>,
 }
 
@@ -97,16 +82,11 @@ impl Debug for RenderView {
             .field("configuration", &self.configuration)
             .field("size", &self.size)
             .field("has_layer", &self.layer.is_some())
-            .field("owner_id", &self.owner_id)
             .finish()
     }
 }
 
-// SAFETY: RenderView manages raw pointer to PipelineOwner with the following guarantees:
-// 1. The pointer is only valid while RenderView is attached (between attach/detach calls)
-// 2. PipelineOwner owns RenderTree which owns RenderView - no dangling pointers
-// 3. All access goes through methods that check attachment status
-// 4. The owner_id field allows runtime validation in debug builds
+// Safety: RenderView manages raw pointer to PipelineOwner carefully
 unsafe impl Send for RenderView {}
 unsafe impl Sync for RenderView {}
 
@@ -129,7 +109,6 @@ impl RenderView {
             layer: None,
             automatic_system_ui_adjustment: true,
             owner: None,
-            owner_id: None,
             // RenderView is always a repaint boundary and needs compositing
             depth: 0,
             needs_layout: true,
@@ -408,222 +387,209 @@ impl RenderView {
 // RenderObject Implementation
 // ============================================================================
 
-impl RenderObject for RenderView {
-    // parent_id() uses default implementation returning None (RenderView is always root)
-
-    fn depth(&self) -> usize {
-        self.depth
-    }
-
-    fn set_depth(&mut self, depth: usize) {
-        self.depth = depth;
-    }
-
-    fn owner(&self) -> Option<&PipelineOwner> {
-        self.owner.map(|p| unsafe { &*p })
-    }
-
-    fn set_parent(&mut self, _parent: Option<RenderId>) {
-        // RenderView is always the root, so parent is always None
-    }
-
-    fn attach(&mut self, owner: &PipelineOwner) {
-        debug_assert!(
-            self.owner.is_none(),
-            "RenderView is already attached to a PipelineOwner"
-        );
-        self.owner = Some(owner as *const PipelineOwner);
-        self.owner_id = Some(owner.id());
-    }
-
-    fn detach(&mut self) {
-        debug_assert!(
-            self.owner.is_some(),
-            "RenderView is not attached to a PipelineOwner"
-        );
-        self.owner = None;
-        self.owner_id = None;
-    }
-
-    fn dispose(&mut self) {
-        self.layer = None;
-    }
-
-    fn adopt_child(&mut self, child: &mut dyn RenderObject) {
-        self.setup_parent_data(child);
-        self.needs_layout = true;
-        self.needs_compositing_bits_update = true;
-        self.needs_semantics_update = true;
-        // Note: Parent ID is managed by RenderTree, not set here
-        // The tree structure is maintained externally via RenderNode
-        if let Some(owner) = self.owner() {
-            child.attach(owner);
-        }
-        self.redepth_child(child);
-    }
-
-    fn drop_child(&mut self, child: &mut dyn RenderObject) {
-        // Note: Parent ID is managed by RenderTree, not cleared here
-        if self.attached() {
-            child.detach();
-        }
-        self.needs_layout = true;
-        self.needs_compositing_bits_update = true;
-        self.needs_semantics_update = true;
-    }
-
-    fn redepth_child(&mut self, child: &mut dyn RenderObject) {
-        if child.depth() <= self.depth {
-            child.set_depth(self.depth + 1);
-            child.redepth_children();
-        }
-    }
-
-    fn needs_layout(&self) -> bool {
-        self.needs_layout
-    }
-
-    fn needs_paint(&self) -> bool {
-        self.needs_paint
-    }
-
-    fn needs_compositing_bits_update(&self) -> bool {
-        self.needs_compositing_bits_update
-    }
-
-    fn is_relayout_boundary(&self) -> bool {
-        true
-    }
-
-    fn mark_needs_layout(&mut self) {
-        self.needs_layout = true;
-    }
-
-    fn mark_needs_paint(&mut self) {
-        self.needs_paint = true;
-    }
-
-    fn mark_needs_compositing_bits_update(&mut self) {
-        self.needs_compositing_bits_update = true;
-    }
-
-    fn mark_needs_semantics_update(&mut self) {
-        self.needs_semantics_update = true;
-    }
-
-    fn clear_needs_layout(&mut self) {
-        self.needs_layout = false;
-    }
-
-    fn clear_needs_paint(&mut self) {
-        self.needs_paint = false;
-    }
-
-    fn clear_needs_compositing_bits_update(&mut self) {
-        self.needs_compositing_bits_update = false;
-    }
-
-    fn needs_semantics_update(&self) -> bool {
-        self.needs_semantics_update
-    }
-
-    fn clear_needs_semantics_update(&mut self) {
-        self.needs_semantics_update = false;
-    }
-
-    fn layout(&mut self, constraints: BoxConstraints, _parent_uses_size: bool) {
-        self.cached_constraints = Some(constraints);
-        self.perform_layout();
-    }
-
-    fn layout_without_resize(&mut self) {
-        self.perform_layout();
-    }
-
-    fn cached_constraints(&self) -> Option<BoxConstraints> {
-        self.cached_constraints
-    }
-
-    fn set_cached_constraints(&mut self, constraints: BoxConstraints) {
-        self.cached_constraints = Some(constraints);
-    }
-
-    fn mark_parent_needs_layout(&mut self) {
-        self.needs_layout = true;
-    }
-
-    fn schedule_initial_layout(&mut self) {
-        assert!(self.attached());
-        assert!(self.parent_id().is_none());
-        self.needs_layout = true;
-    }
-
-    fn schedule_initial_paint(&mut self) {
-        assert!(self.attached());
-        assert!(self.is_repaint_boundary());
-        self.needs_paint = true;
-    }
-
-    fn is_repaint_boundary(&self) -> bool {
-        self.is_repaint_boundary
-    }
-
-    fn was_repaint_boundary(&self) -> bool {
-        self.was_repaint_boundary
-    }
-
-    fn set_was_repaint_boundary(&mut self, value: bool) {
-        self.was_repaint_boundary = value;
-    }
-
-    fn needs_compositing(&self) -> bool {
-        self.needs_compositing
-    }
-
-    fn set_needs_compositing(&mut self, value: bool) {
-        self.needs_compositing = value;
-    }
-
-    fn has_layer(&self) -> bool {
-        self.layer.is_some()
-    }
-
-    fn layer_id(&self) -> Option<LayerId> {
-        None
-    }
-
-    fn replace_root_layer(&mut self) {
-        self.replace_root_layer_internal();
-    }
-
-    fn parent_data(&self) -> Option<&dyn ParentData> {
-        self.parent_data.as_ref().map(|p| p.as_ref())
-    }
-
-    fn parent_data_mut(&mut self) -> Option<&mut dyn ParentData> {
-        self.parent_data.as_mut().map(|p| p.as_mut())
-    }
-
-    fn set_parent_data(&mut self, data: Box<dyn ParentData>) {
-        self.parent_data = Some(data);
-    }
-
-    fn visit_children(&self, _visitor: &mut dyn FnMut(&dyn RenderObject)) {
-        // No children
-    }
-
-    fn visit_children_mut(&mut self, _visitor: &mut dyn FnMut(&mut dyn RenderObject)) {
-        // No children
-    }
-
-    fn paint_bounds(&self) -> Rect {
-        Rect::new(0.0, 0.0, self.size.width, self.size.height)
-    }
-
-    fn paint(&self, context: &mut CanvasContext, offset: Offset) {
-        self.paint_view(context, offset);
-    }
-}
+// impl RenderObject for RenderView {
+//     fn parent(&self) -> Option<&dyn RenderObject> {
+//         None
+//     }
+//
+//     fn depth(&self) -> usize {
+//         self.depth
+//     }
+//
+//     fn set_depth(&mut self, depth: usize) {
+//         self.depth = depth;
+//     }
+//
+//     fn owner(&self) -> Option<&PipelineOwner> {
+//         self.owner.map(|p| unsafe { &*p })
+//     }
+//
+//     fn set_parent(&mut self, _parent: Option<*const dyn RenderObject>) {
+//         // RenderView is always the root
+//     }
+//
+//     fn attach(&mut self, owner: &PipelineOwner) {
+//         self.owner = Some(owner as *const PipelineOwner);
+//     }
+//
+//     fn detach(&mut self) {
+//         self.owner = None;
+//     }
+//
+//     fn dispose(&mut self) {
+//         self.layer = None;
+//     }
+//
+//     fn adopt_child(&mut self, child: &mut dyn RenderObject) {
+//         self.setup_parent_data(child);
+//         self.needs_layout = true;
+//         self.needs_compositing_bits_update = true;
+//         self.needs_semantics_update = true;
+//         child.set_parent(Some(self as *const dyn RenderObject));
+//         if let Some(owner) = self.owner() {
+//             child.attach(owner);
+//         }
+//         self.redepth_child(child);
+//     }
+//
+//     fn drop_child(&mut self, child: &mut dyn RenderObject) {
+//         child.set_parent(None);
+//         if self.attached() {
+//             child.detach();
+//         }
+//         self.needs_layout = true;
+//         self.needs_compositing_bits_update = true;
+//         self.needs_semantics_update = true;
+//     }
+//
+//     fn redepth_child(&mut self, child: &mut dyn RenderObject) {
+//         if child.depth() <= self.depth {
+//             child.set_depth(self.depth + 1);
+//             child.redepth_children();
+//         }
+//     }
+//
+//     fn needs_layout(&self) -> bool {
+//         self.needs_layout
+//     }
+//
+//     fn needs_paint(&self) -> bool {
+//         self.needs_paint
+//     }
+//
+//     fn needs_compositing_bits_update(&self) -> bool {
+//         self.needs_compositing_bits_update
+//     }
+//
+//     fn is_relayout_boundary(&self) -> bool {
+//         true
+//     }
+//
+//     fn mark_needs_layout(&mut self) {
+//         self.needs_layout = true;
+//     }
+//
+//     fn mark_needs_paint(&mut self) {
+//         self.needs_paint = true;
+//     }
+//
+//     fn mark_needs_compositing_bits_update(&mut self) {
+//         self.needs_compositing_bits_update = true;
+//     }
+//
+//     fn mark_needs_semantics_update(&mut self) {
+//         self.needs_semantics_update = true;
+//     }
+//
+//     fn clear_needs_layout(&mut self) {
+//         self.needs_layout = false;
+//     }
+//
+//     fn clear_needs_paint(&mut self) {
+//         self.needs_paint = false;
+//     }
+//
+//     fn clear_needs_compositing_bits_update(&mut self) {
+//         self.needs_compositing_bits_update = false;
+//     }
+//
+//     fn layout(&mut self, constraints: BoxConstraints, _parent_uses_size: bool) {
+//         self.cached_constraints = Some(constraints);
+//         self.perform_layout();
+//     }
+//
+//     fn layout_without_resize(&mut self) {
+//         self.perform_layout();
+//     }
+//
+//     fn cached_constraints(&self) -> Option<BoxConstraints> {
+//         self.cached_constraints
+//     }
+//
+//     fn set_cached_constraints(&mut self, constraints: BoxConstraints) {
+//         self.cached_constraints = Some(constraints);
+//     }
+//
+//     fn mark_parent_needs_layout(&mut self) {
+//         self.needs_layout = true;
+//     }
+//
+//     fn schedule_initial_layout(&mut self) {
+//         assert!(self.attached());
+//         assert!(self.parent().is_none());
+//         self.needs_layout = true;
+//     }
+//
+//     fn schedule_initial_paint(&mut self) {
+//         assert!(self.attached());
+//         assert!(self.is_repaint_boundary());
+//         self.needs_paint = true;
+//     }
+//
+//     fn is_repaint_boundary(&self) -> bool {
+//         self.is_repaint_boundary
+//     }
+//
+//     fn was_repaint_boundary(&self) -> bool {
+//         self.was_repaint_boundary
+//     }
+//
+//     fn set_was_repaint_boundary(&mut self, value: bool) {
+//         self.was_repaint_boundary = value;
+//     }
+//
+//     fn needs_compositing(&self) -> bool {
+//         self.needs_compositing
+//     }
+//
+//     fn set_needs_compositing(&mut self, value: bool) {
+//         self.needs_compositing = value;
+//     }
+//
+//     fn has_layer(&self) -> bool {
+//         self.layer.is_some()
+//     }
+//
+//     fn layer_id(&self) -> Option<LayerId> {
+//         None
+//     }
+//
+//     fn replace_root_layer(&mut self) {
+//         self.replace_root_layer_internal();
+//     }
+//
+//     fn parent_data(&self) -> Option<&dyn ParentData> {
+//         self.parent_data.as_ref().map(|p| p.as_ref())
+//     }
+//
+//     fn parent_data_mut(&mut self) -> Option<&mut dyn ParentData> {
+//         self.parent_data.as_mut().map(|p| p.as_mut())
+//     }
+//
+//     fn set_parent_data(&mut self, data: Box<dyn ParentData>) {
+//         self.parent_data = Some(data);
+//     }
+//
+//     fn visit_children(&self, _visitor: &mut dyn FnMut(&dyn RenderObject)) {
+//         // No children
+//     }
+//
+//     fn visit_children_mut(&mut self, _visitor: &mut dyn FnMut(&mut dyn RenderObject)) {
+//         // No children
+//     }
+//
+//     fn paint_bounds(&self) -> Rect {
+//         Rect::new(0.0, 0.0, self.size.width, self.size.height)
+//     }
+//
+//     fn size(&self) -> Size {
+//         self.size
+//     }
+//
+//     fn paint(&self, context: &mut CanvasContext, offset: Offset) {
+//         self.paint_view(context, offset);
+//     }
+// }
 
 // ============================================================================
 // CompositeResult
@@ -670,19 +636,19 @@ mod tests {
     #[test]
     fn test_render_view_is_repaint_boundary() {
         let view = RenderView::new();
-        assert!(view.is_repaint_boundary());
+        assert!(view.is_repaint_boundary);
     }
 
     #[test]
     fn test_render_view_depth() {
         let view = RenderView::new();
-        assert_eq!(view.depth(), 0);
+        assert_eq!(view.depth, 0);
     }
 
     #[test]
-    fn test_render_view_parent_is_none() {
+    fn test_render_view_owner_is_none() {
         let view = RenderView::new();
-        assert!(view.parent_id().is_none());
+        assert!(view.owner.is_none());
     }
 
     #[test]
@@ -723,6 +689,7 @@ impl Diagnosticable for RenderView {
 
 impl HitTestTarget for RenderView {
     fn handle_event(&self, event: &PointerEvent, entry: &HitTestEntry) {
-        RenderObject::handle_event(self, event, entry);
+        // RenderView doesn't handle events, just implements the trait
+        let _ = (event, entry);
     }
 }

@@ -212,8 +212,11 @@ where
                 // Render frame (AppBinding handles all framework logic)
                 embedder.render_frame();
 
-                // Request next frame
-                embedder.request_redraw();
+                // On-demand rendering: only request next frame if there's pending work
+                // (animations, state changes, etc.)
+                if embedder.needs_redraw() {
+                    embedder.request_redraw();
+                }
                 return;
             }
 
@@ -231,8 +234,13 @@ where
     }
 
     // Create and run event loop
+    // Use Wait for on-demand rendering (Flutter-style) instead of Poll (game-style)
+    // Frames are only rendered when:
+    // - Widget state changes (mark_needs_build/paint/layout)
+    // - Animations are running (scheduler frame callbacks)
+    // - Window resize/expose events
     let event_loop = EventLoop::new().expect("Failed to create event loop");
-    event_loop.set_control_flow(ControlFlow::Poll);
+    event_loop.set_control_flow(ControlFlow::Wait);
 
     let mut app = DesktopApp::new(root, config);
     event_loop.run_app(&mut app).expect("Event loop failed");

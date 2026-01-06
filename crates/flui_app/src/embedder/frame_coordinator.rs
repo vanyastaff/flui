@@ -67,11 +67,16 @@ impl FrameCoordinator {
     /// Uses `render_scene` to traverse the full layer tree.
     #[tracing::instrument(level = "trace", skip_all, fields(frame = scene.frame_number()))]
     pub fn render_scene(&mut self, renderer: &mut SceneRenderer, scene: &Scene) -> FrameResult {
+        tracing::debug!(
+            "FrameCoordinator::render_scene called, has_content={}",
+            scene.has_content()
+        );
         if !scene.has_content() {
-            tracing::trace!("Empty scene, skipping render");
+            tracing::debug!("Empty scene, skipping render");
             return FrameResult::Empty;
         }
 
+        tracing::debug!("FrameCoordinator: calling renderer.render_scene");
         // Use render_scene to traverse the full layer tree (not just root layer)
         match renderer.render_scene(scene) {
             Ok(()) => {

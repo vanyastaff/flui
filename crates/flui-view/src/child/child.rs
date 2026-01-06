@@ -29,7 +29,7 @@ use crate::view::{BoxedView, View};
 ///     }
 /// }
 /// ```
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct Child {
     inner: Option<BoxedView>,
 }
@@ -123,7 +123,6 @@ mod tests {
         fn create_element(&self) -> Box<dyn ElementBase> {
             Box::new(StatelessElement::new(self))
         }
-
     }
 
     #[test]

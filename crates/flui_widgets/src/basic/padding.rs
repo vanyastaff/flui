@@ -17,7 +17,8 @@
 //! Padding::only(10.0, 0.0, 0.0, 0.0).child(content)
 //! ```
 
-use flui_rendering::prelude::*;
+use flui_rendering::objects::RenderPadding;
+use flui_rendering::wrapper::BoxWrapper;
 use flui_types::EdgeInsets;
 use flui_view::{impl_render_view, Child, RenderView, View};
 
@@ -47,14 +48,11 @@ pub struct Padding {
     child: Child,
 }
 
-// Manual Clone implementation since Child doesn't implement Clone
 impl Clone for Padding {
     fn clone(&self) -> Self {
         Self {
             padding: self.padding,
-            // Child cannot be cloned, create empty - this is a limitation
-            // In practice, widgets are rebuilt fresh each frame
-            child: Child::empty(),
+            child: self.child.clone(),
         }
     }
 }
@@ -165,20 +163,26 @@ impl Default for Padding {
 impl_render_view!(Padding);
 
 impl RenderView for Padding {
-    type RenderObject = RenderPadding;
+    type RenderObject = BoxWrapper<RenderPadding>;
 
     fn create_render_object(&self) -> Self::RenderObject {
-        RenderPadding::new(self.padding)
+        BoxWrapper::new(RenderPadding::new(self.padding))
     }
 
     fn update_render_object(&self, render_object: &mut Self::RenderObject) {
-        if render_object.padding() != self.padding {
-            render_object.set_padding(self.padding);
+        if render_object.inner().padding() != self.padding {
+            render_object.inner_mut().set_padding(self.padding);
         }
     }
 
     fn has_children(&self) -> bool {
         self.child.is_some()
+    }
+
+    fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn View)) {
+        if let Some(child_view) = self.child.as_ref() {
+            visitor(child_view);
+        }
     }
 }
 
@@ -229,6 +233,7 @@ mod tests {
     fn test_render_view_create() {
         let padding = Padding::all(10.0);
         let render = padding.create_render_object();
-        assert_eq!(render.padding(), EdgeInsets::all(10.0));
+        // Access inner RenderPadding through BoxWrapper
+        assert_eq!(render.inner().padding(), EdgeInsets::all(10.0));
     }
 }

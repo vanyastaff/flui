@@ -1,36 +1,36 @@
 //! Basic single-child layout widgets.
 //!
 //! This module contains fundamental widgets for basic layout operations:
-//! - Text: Displays styled text
-//! - Container: Combines padding, decoration, and sizing
 //! - Padding: Adds padding around a child
 //! - Center: Centers its child
-//! - And many more...
+//! - SizedBox: Forces specific size constraints
+//! - ColoredBox: Paints a colored rectangle
 
-// Temporarily disabled widgets for counter demo - only Text is enabled
-// pub mod align;
-// pub mod app_bar;
-// pub mod aspect_ratio;
-// pub mod builder;
-// pub mod button;
-// pub mod card;
-// pub mod center;
-// pub mod colored_box;
-// pub mod constrained_box;
-// pub mod container;
-// pub mod custom_paint;
-// pub mod decorated_box;
-// pub mod divider;
-// pub mod empty;
-// pub mod fitted_box;
-// pub mod layout_builder;
-// pub mod limited_box;
+// Active widgets (using new RenderBox architecture)
+pub mod center;
+pub mod colored_box;
 pub mod padding;
-// pub mod safe_area;
-// pub mod sized_box;
-pub mod text;
-// pub mod vertical_divider;
+pub mod sized_box;
 
 // Re-exports
+pub use center::Center;
+pub use colored_box::ColoredBox;
 pub use padding::Padding;
-pub use text::Text;
+pub use sized_box::SizedBox;
+
+// ============================================================================
+// DISABLED: Widgets below use old flui_core/flui_objects architecture
+// They will be migrated when their RenderObjects are implemented
+// ============================================================================
+
+// pub mod text;  // Needs RenderParagraph
+// pub mod container;
+// pub mod align;
+// pub mod aspect_ratio;
+// pub mod baseline;
+// pub mod constrained_box;
+// pub mod fitted_box;
+// pub mod limited_box;
+// pub mod offstage;
+// pub mod opacity;
+// pub mod transform;
