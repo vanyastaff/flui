@@ -290,12 +290,15 @@ impl PipelineOwner {
     /// # Returns
     ///
     /// The `RenderId` of the inserted node.
-    pub fn insert_render_object(
-        &mut self,
-        render_object: Box<dyn crate::traits::RenderObject<crate::protocol::BoxProtocol>>,
-    ) -> RenderId {
+    pub fn insert<P>(&mut self, render_object: Box<dyn crate::traits::RenderObject<P>>) -> RenderId
+    where
+        P: crate::protocol::Protocol,
+        crate::storage::RenderNode: From<Box<dyn crate::traits::RenderObject<P>>>,
+    {
         use flui_tree::traits::TreeWrite;
-        let node = crate::storage::RenderNode::new_box(render_object);
+
+        // Convert to RenderNode using From impl (zero-cost, compile-time dispatch)
+        let node: crate::storage::RenderNode = render_object.into();
         let id = self.render_tree.insert(node);
         let depth = self.render_tree.depth(id).unwrap_or(0) as usize;
 
@@ -362,7 +365,7 @@ impl PipelineOwner {
         &mut self,
         render_object: Box<dyn crate::traits::RenderObject<crate::protocol::BoxProtocol>>,
     ) -> RenderId {
-        let id = self.insert_render_object(render_object);
+        let id = self.insert(render_object);
         self.root_id = Some(id);
         id
     }
@@ -632,7 +635,6 @@ impl PipelineOwner {
             // STEP 3: Sync child size to parent's ChildState BEFORE parent layout
             self.sync_child_size_to_parent(*child_id);
         }
-
     }
 
     /// Propagates constraints from parent to child.
@@ -641,16 +643,14 @@ impl PipelineOwner {
     /// We pass loose constraints (same max, zero min) so children can size themselves
     /// within the parent's bounds. This matches Flutter's typical behavior where
     /// parents like Center/Align give children loose constraints.
-    fn propagate_constraints_to_child(&self, _parent_id: RenderId, _child_id: RenderId) {
-    }
+    fn propagate_constraints_to_child(&self, _parent_id: RenderId, _child_id: RenderId) {}
 
     /// Syncs a child's size to its parent's ChildState.
     ///
     /// After a child is laid out, this method updates the parent's internal
     /// ChildState with the child's resulting size. This allows the parent's
     /// `layout_child()` to return the correct size.
-    fn sync_child_size_to_parent(&mut self, _child_id: RenderId) {
-    }
+    fn sync_child_size_to_parent(&mut self, _child_id: RenderId) {}
 
     // ========================================================================
     // Compositing Bits Phase

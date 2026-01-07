@@ -80,6 +80,22 @@ impl RenderNode {
 }
 
 // ============================================================================
+// FROM CONVERSIONS (Idiomatic Rust pattern)
+// ============================================================================
+
+impl From<Box<dyn RenderObject<BoxProtocol>>> for RenderNode {
+    fn from(render_object: Box<dyn RenderObject<BoxProtocol>>) -> Self {
+        Self::new_box(render_object)
+    }
+}
+
+impl From<Box<dyn RenderObject<SliverProtocol>>> for RenderNode {
+    fn from(render_object: Box<dyn RenderObject<SliverProtocol>>) -> Self {
+        Self::new_sliver(render_object)
+    }
+}
+
+// ============================================================================
 // PROTOCOL CHECK
 // ============================================================================
 

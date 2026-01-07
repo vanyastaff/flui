@@ -42,21 +42,25 @@ use std::sync::Arc;
 /// }
 ///
 /// impl RenderView for ColoredBox {
+///     type Protocol = flui_rendering::protocol::BoxProtocol;
 ///     type RenderObject = RenderDecoratedBox;
 ///
-///     fn create_render_object(&self, ctx: &dyn BuildContext) -> Self::RenderObject {
+///     fn create_render_object(&self) -> Self::RenderObject {
 ///         RenderDecoratedBox::new(self.color)
 ///     }
 ///
-///     fn update_render_object(&self, ctx: &dyn BuildContext, render: &mut Self::RenderObject) {
+///     fn update_render_object(&self, render: &mut Self::RenderObject) {
 ///         render.set_color(self.color);
 ///     }
 /// }
 /// ```
 pub trait RenderView: Send + Sync + 'static + Sized {
+    /// The layout protocol this View uses (BoxProtocol or SliverProtocol).
+    type Protocol: flui_rendering::protocol::Protocol;
+
     /// The RenderObject type this View creates.
-    /// Must implement RenderObject trait for RenderTree storage.
-    type RenderObject: RenderObject + Send + Sync + 'static;
+    /// Must implement RenderObject<Self::Protocol> for RenderTree storage.
+    type RenderObject: flui_rendering::traits::RenderObject<Self::Protocol> + Send + Sync + 'static;
 
     /// Create a new RenderObject.
     ///
@@ -210,7 +214,11 @@ impl<V: RenderView + Clone> std::fmt::Debug for RenderElement<V> {
     }
 }
 
-impl<V: RenderView + Clone> ElementBase for RenderElement<V> {
+impl<V: RenderView + Clone> ElementBase for RenderElement<V>
+where
+    flui_rendering::storage::RenderNode:
+        From<Box<dyn flui_rendering::traits::RenderObject<V::Protocol>>>,
+{
     fn view_type_id(&self) -> TypeId {
         TypeId::of::<V>()
     }
@@ -408,31 +416,30 @@ impl<V: RenderView + Clone> ElementBase for RenderElement<V> {
             tracing::info!("RenderElement::mount creating RenderObject");
             let render_object = self.view.create_render_object();
 
-            // Insert into RenderTree and mark as needing layout/paint
+            // Insert into RenderTree using generic insert() method
             let render_id = {
                 let mut owner = pipeline_owner.write();
-                let render_tree = owner.render_tree_mut();
 
-                // Insert into RenderTree, optionally as child of parent
-                let render_id = if let Some(parent_id) = self.parent_render_id {
-                    render_tree
-                        .insert_child(parent_id, Box::new(render_object))
-                        .unwrap_or_else(|| {
-                            // Parent not found, insert as orphan (shouldn't happen normally)
-                            let ro = self.view.create_render_object();
-                            render_tree.insert(Box::new(ro))
-                        })
-                } else {
-                    render_tree.insert(Box::new(render_object))
-                };
+                // Generic insert with explicit type annotation for Protocol
+                let boxed: Box<dyn flui_rendering::traits::RenderObject<V::Protocol>> =
+                    Box::new(render_object);
+                let render_id = owner.insert(boxed);
 
-                // Get the actual depth from the RenderTree (set correctly by insert_child)
-                let tree_depth = render_tree.depth(render_id).unwrap_or(0);
+                // Handle parent relationship if needed
+                if let Some(parent_id) = self.parent_render_id {
+                    // Set parent in tree structure
+                    let render_tree = owner.render_tree_mut();
+                    if let Some(node) = render_tree.get_mut(render_id) {
+                        node.set_parent(Some(parent_id));
+                    }
+                    if let Some(parent_node) = render_tree.get_mut(parent_id) {
+                        parent_node.add_child(render_id);
+                    }
+                }
+
+                // Get the actual depth from the RenderTree
+                let tree_depth = owner.render_tree().depth(render_id).unwrap_or(0);
                 self.depth = tree_depth;
-
-                // Mark as needing layout and paint with the correct tree depth
-                owner.add_node_needing_layout(render_id.get(), tree_depth);
-                owner.add_node_needing_paint(render_id.get(), tree_depth);
 
                 render_id
             }; // Release lock here
@@ -683,6 +690,7 @@ mod tests {
     }
 
     impl RenderView for SizedBoxView {
+        type Protocol = flui_rendering::protocol::BoxProtocol;
         type RenderObject = RenderSizedBox;
 
         fn create_render_object(&self) -> Self::RenderObject {
