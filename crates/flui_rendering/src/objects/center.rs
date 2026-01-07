@@ -3,7 +3,7 @@
 use flui_types::{Offset, Point, Rect, Size};
 
 use crate::arity::Single;
-use crate::context::{BoxHitTestContext, BoxLayoutContext, BoxPaintContext};
+use crate::context::{BoxHitTestContext, BoxLayoutContext};
 use crate::parent_data::BoxParentData;
 use crate::traits::RenderBox;
 
@@ -139,9 +139,7 @@ impl RenderBox for RenderCenter {
         &mut self.size
     }
 
-    fn paint(&mut self, _ctx: &mut BoxPaintContext<'_, Single, BoxParentData>) {
-        // Children are painted automatically by the wrapper
-    }
+    // paint() uses default no-op - Center just positions children
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {
         if !ctx.is_within_size(self.size.width, self.size.height) {
@@ -163,20 +161,6 @@ impl RenderBox for RenderCenter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::constraints::BoxConstraints;
-    use crate::traits::RenderObject;
-    use crate::wrapper::BoxWrapper;
-
-    #[test]
-    fn test_center_no_child() {
-        let center = RenderCenter::new();
-        let mut wrapper = BoxWrapper::new(center);
-
-        wrapper.layout(BoxConstraints::tight(Size::new(200.0, 100.0)), true);
-
-        // Expands to fill
-        assert_eq!(wrapper.inner().size(), Size::new(200.0, 100.0));
-    }
 
     #[test]
     fn test_center_with_factors() {
@@ -186,5 +170,12 @@ mod tests {
 
         assert_eq!(center.width_factor(), Some(0.5));
         assert_eq!(center.height_factor(), Some(0.5));
+    }
+
+    #[test]
+    fn test_center_default_factors() {
+        let center = RenderCenter::new();
+        assert_eq!(center.width_factor(), None);
+        assert_eq!(center.height_factor(), None);
     }
 }

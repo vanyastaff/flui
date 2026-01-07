@@ -59,6 +59,7 @@ pub mod children_access;
 pub mod constraints;
 pub mod context;
 pub mod delegates;
+pub mod error;
 pub mod hit_testing;
 pub mod input;
 pub mod parent_data;
@@ -129,6 +130,10 @@ pub mod prelude {
         SemanticsOwner, SemanticsTreeUpdate,
     };
     pub use crate::traits::{RenderBox, RenderObject, TextBaseline};
+
+    // Error types
+    pub use crate::error::{RenderError, RenderResult};
+
     pub use crate::view::{
         CacheExtentStyle, CompositeResult, FixedViewportOffset, RenderAbstractViewport, RenderView,
         RevealedOffset, ScrollDirection, ScrollableViewportOffset, SliverPaintOrder,
@@ -154,6 +159,7 @@ pub mod prelude {
 }
 
 // Re-export key types at crate root
+pub use error::{RenderError, RenderResult};
 pub use parent_data::ParentData;
 pub use pipeline::{CanvasContext, PipelineOwner};
 pub use traits::RenderObject;

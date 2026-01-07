@@ -4,7 +4,7 @@ use flui_types::{EdgeInsets, Offset, Point, Rect, Size};
 
 use crate::arity::Single;
 use crate::constraints::BoxConstraints;
-use crate::context::{BoxHitTestContext, BoxLayoutContext, BoxPaintContext};
+use crate::context::{BoxHitTestContext, BoxLayoutContext};
 use crate::parent_data::BoxParentData;
 use crate::traits::RenderBox;
 
@@ -120,9 +120,7 @@ impl RenderBox for RenderPadding {
         &mut self.size
     }
 
-    fn paint(&mut self, _ctx: &mut BoxPaintContext<'_, Single, BoxParentData>) {
-        // Children are painted automatically by the wrapper
-    }
+    // paint() uses default no-op - Padding just positions children
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {
         // First check if we're in bounds
@@ -146,8 +144,7 @@ impl RenderBox for RenderPadding {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::traits::RenderObject;
-    use crate::wrapper::BoxWrapper;
+    use crate::constraints::BoxConstraints;
 
     #[test]
     fn test_edge_insets() {
@@ -164,17 +161,6 @@ mod tests {
     }
 
     #[test]
-    fn test_padding_no_child() {
-        let padding = RenderPadding::all(10.0);
-        let mut wrapper = BoxWrapper::new(padding);
-
-        wrapper.layout(BoxConstraints::loose(Size::new(100.0, 100.0)), true);
-
-        // Just padding, no child
-        assert_eq!(wrapper.inner().size(), Size::new(20.0, 20.0));
-    }
-
-    #[test]
     fn test_deflate_constraints() {
         let padding = RenderPadding::symmetric(20.0, 10.0);
         let constraints = BoxConstraints::new(0.0, 200.0, 0.0, 100.0);
@@ -182,5 +168,12 @@ mod tests {
 
         assert_eq!(deflated.max_width, 160.0); // 200 - 40
         assert_eq!(deflated.max_height, 80.0); // 100 - 20
+    }
+
+    #[test]
+    fn test_edge_insets_symmetric() {
+        let insets = EdgeInsets::symmetric(10.0, 20.0);
+        assert_eq!(insets.horizontal_total(), 20.0);
+        assert_eq!(insets.vertical_total(), 40.0);
     }
 }

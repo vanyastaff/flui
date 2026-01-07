@@ -5,7 +5,9 @@ use flui_types::{Rect, Size};
 
 use crate::arity::Arity;
 use crate::constraints::{SliverConstraints, SliverGeometry};
-use crate::context::{SliverHitTestContext, SliverLayoutContext, SliverPaintContext};
+use flui_types::Offset;
+
+use crate::context::{CanvasContext, SliverHitTestContext, SliverLayoutContext, SliverPaintContext};
 use crate::parent_data::ParentData;
 use crate::protocol::SliverProtocol;
 use crate::traits::RenderObject;
@@ -55,8 +57,8 @@ use crate::traits::RenderObject;
 /// }
 /// ```
 ///
-/// Use `SliverWrapper<T>` to bridge to `RenderObject` for storage in `RenderTree`.
-pub trait RenderSliver: RenderObject<SliverProtocol> {
+/// Implementations are automatically bridged to `RenderObject<SliverProtocol>` via blanket impl.
+pub trait RenderSliver: flui_foundation::Diagnosticable + Send + Sync + 'static {
     /// The arity of this render sliver (Leaf, Optional, Variable, etc.)
     type Arity: Arity;
 
@@ -248,18 +250,35 @@ pub trait RenderSliver: RenderObject<SliverProtocol> {
     }
 
     // ========================================================================
-    // Paint
+    // Painting
     // ========================================================================
 
-    /// Paints this sliver.
-    ///
-    /// Called after layout. Should only paint the visible portion.
+    /// Paints this sliver and its children.
     ///
     /// The context provides:
-    /// - Canvas access via `ctx.canvas()`
     /// - Current offset via `ctx.offset()`
-    /// - Children access via `ctx.children_mut()`
-    fn paint(&mut self, ctx: &mut SliverPaintContext<'_, Self::Arity, Self::ParentData>);
+    /// - Canvas for drawing via `ctx.canvas()`
+    /// - Child painting via `ctx.paint_child()` (arity-specific)
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// fn paint(&self, ctx: &mut SliverPaintContext<'_, Variable, SliverParentData>) {
+    ///     // Draw visible portion
+    ///     let rect = self.visible_rect().translate(ctx.offset());
+    ///     ctx.canvas().draw_rect(rect, &paint);
+    ///
+    ///     // Paint visible children
+    ///     for i in self.first_visible..=self.last_visible {
+    ///         ctx.paint_child(i);
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// Default implementation paints children only.
+    fn paint(&self, _ctx: &mut SliverPaintContext<'_, Self::Arity, Self::ParentData>) {
+        // Default: no-op - pipeline handles child painting if not overridden
+    }
 
     // ========================================================================
     // Hit Testing
@@ -296,6 +315,62 @@ pub trait RenderSliver: RenderObject<SliverProtocol> {
     /// Creates default parent data for a child.
     fn create_default_parent_data() -> Self::ParentData {
         Self::ParentData::default()
+    }
+}
+
+// ============================================================================
+// Blanket Implementation of RenderObject<SliverProtocol> for RenderSliver
+// ============================================================================
+
+/// Automatic implementation of RenderObject<SliverProtocol> for all RenderSliver types.
+///
+/// This blanket impl bridges the typed RenderSliver API (with Arity/ParentData)
+/// and the protocol-specific RenderObject<P> trait needed for storage.
+///
+/// # Architecture Note
+///
+/// The `perform_layout_raw` and `hit_test_raw` methods are **protocol bridges only**.
+/// See the RenderBox blanket impl documentation for detailed explanation.
+impl<T> RenderObject<SliverProtocol> for T
+where
+    T: RenderSliver + flui_foundation::Diagnosticable,
+{
+    fn perform_layout_raw(
+        &mut self,
+        _constraints: crate::protocol::ProtocolConstraints<SliverProtocol>,
+    ) -> crate::protocol::ProtocolGeometry<SliverProtocol> {
+        // Protocol bridge only - returns current geometry.
+        // Real layout flows through RenderSliver::perform_layout() with SliverLayoutContext.
+        *self.geometry()
+    }
+
+    fn paint(&self, _context: &mut CanvasContext, _offset: Offset) {
+        // Protocol bridge only - no-op.
+        // Real painting flows through RenderSliver::paint() with SliverPaintContext,
+        // which provides children access and paint_child() callbacks.
+        // The pipeline creates the proper context and calls RenderSliver::paint() directly.
+    }
+
+    fn hit_test_raw(
+        &self,
+        _result: &mut crate::protocol::ProtocolHitResult<SliverProtocol>,
+        _position: crate::protocol::ProtocolPosition<SliverProtocol>,
+    ) -> bool {
+        // Protocol bridge only - returns false.
+        // Real hit testing flows through RenderSliver::hit_test() with SliverHitTestContext.
+        false
+    }
+
+    fn geometry(&self) -> &crate::protocol::ProtocolGeometry<SliverProtocol> {
+        RenderSliver::geometry(self)
+    }
+
+    fn set_geometry(&mut self, geometry: crate::protocol::ProtocolGeometry<SliverProtocol>) {
+        self.set_geometry(geometry);
+    }
+
+    fn paint_bounds(&self) -> Rect {
+        self.sliver_paint_bounds()
     }
 }
 

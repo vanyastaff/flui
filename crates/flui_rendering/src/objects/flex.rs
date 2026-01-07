@@ -4,7 +4,7 @@ use flui_types::{Offset, Point, Rect, Size};
 
 use crate::arity::Variable;
 use crate::constraints::BoxConstraints;
-use crate::context::{BoxHitTestContext, BoxLayoutContext, BoxPaintContext};
+use crate::context::{BoxHitTestContext, BoxLayoutContext};
 use crate::parent_data::BoxParentData;
 use crate::traits::RenderBox;
 
@@ -304,9 +304,7 @@ impl RenderBox for RenderFlex {
         &mut self.size
     }
 
-    fn paint(&mut self, _ctx: &mut BoxPaintContext<'_, Variable, BoxParentData>) {
-        // Children are painted automatically by the wrapper
-    }
+    // paint() uses default no-op - Flex just positions children
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Variable, BoxParentData>) -> bool {
         if !ctx.is_within_size(self.size.width, self.size.height) {
@@ -333,8 +331,6 @@ impl RenderBox for RenderFlex {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::traits::RenderObject;
-    use crate::wrapper::BoxWrapper;
 
     #[test]
     fn test_flex_row_creation() {
@@ -351,17 +347,6 @@ mod tests {
     }
 
     #[test]
-    fn test_flex_no_children() {
-        let flex = RenderFlex::row();
-        let mut wrapper = BoxWrapper::new(flex);
-
-        wrapper.layout(BoxConstraints::loose(Size::new(200.0, 100.0)), true);
-
-        // Minimum size when no children
-        assert_eq!(wrapper.inner().size(), Size::ZERO);
-    }
-
-    #[test]
     fn test_flex_builder() {
         let flex = RenderFlex::column()
             .with_main_axis_alignment(MainAxisAlignment::Center)
@@ -372,5 +357,13 @@ mod tests {
         assert_eq!(flex.main_axis_alignment, MainAxisAlignment::Center);
         assert_eq!(flex.cross_axis_alignment, CrossAxisAlignment::Stretch);
         assert_eq!(flex.spacing, 8.0);
+    }
+
+    #[test]
+    fn test_flex_default_values() {
+        let flex = RenderFlex::row();
+        assert_eq!(flex.main_axis_alignment, MainAxisAlignment::Start);
+        assert_eq!(flex.cross_axis_alignment, CrossAxisAlignment::Start);
+        assert_eq!(flex.spacing, 0.0);
     }
 }

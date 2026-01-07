@@ -636,19 +636,19 @@ mod tests {
     #[test]
     fn test_render_view_is_repaint_boundary() {
         let view = RenderView::new();
-        assert!(view.is_repaint_boundary());
+        assert!(view.is_repaint_boundary);
     }
 
     #[test]
     fn test_render_view_depth() {
         let view = RenderView::new();
-        assert_eq!(view.depth(), 0);
+        assert_eq!(view.depth, 0);
     }
 
     #[test]
-    fn test_render_view_parent_is_none() {
+    fn test_render_view_owner_is_none() {
         let view = RenderView::new();
-        assert!(view.parent().is_none());
+        assert!(view.owner.is_none());
     }
 
     #[test]

@@ -358,6 +358,71 @@ impl RenderNode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::objects::RenderColoredBox;
+    use flui_types::Size;
 
-    // TODO: Add tests once we have concrete render objects
+    #[test]
+    fn test_render_node_box_creation() {
+        let colored_box = RenderColoredBox::red(100.0, 50.0);
+        let node = RenderNode::new_box(Box::new(colored_box));
+
+        assert!(node.is_box());
+        assert!(!node.is_sliver());
+        assert_eq!(node.protocol_name(), "Box");
+    }
+
+    #[test]
+    fn test_render_node_links() {
+        let colored_box = RenderColoredBox::blue(200.0, 100.0);
+        let node = RenderNode::new_box(Box::new(colored_box));
+
+        // New nodes have no parent
+        assert!(node.parent().is_none());
+        assert!(node.children().is_empty());
+        assert_eq!(node.depth(), 0);
+    }
+
+    #[test]
+    fn test_render_node_with_parent() {
+        let colored_box = RenderColoredBox::green(50.0, 50.0);
+        let parent_id = RenderId::new(1);
+        let node = RenderNode::new_box_with_parent(Box::new(colored_box), parent_id, 1);
+
+        assert_eq!(node.parent(), Some(parent_id));
+        assert_eq!(node.depth(), 1);
+    }
+
+    #[test]
+    fn test_render_node_as_box() {
+        let colored_box = RenderColoredBox::red(100.0, 100.0);
+        let node = RenderNode::new_box(Box::new(colored_box));
+
+        assert!(node.as_box().is_some());
+        assert!(node.as_sliver().is_none());
+    }
+
+    #[test]
+    fn test_render_node_state_access() {
+        let colored_box = RenderColoredBox::new([1.0, 0.0, 0.0, 1.0], Size::new(100.0, 50.0));
+        let node = RenderNode::new_box(Box::new(colored_box));
+
+        // Check state access through the node
+        if let Some(entry) = node.as_box() {
+            // Entry should have default state (None before layout)
+            assert!(entry.state().geometry().is_none());
+        }
+    }
+
+    #[test]
+    fn test_render_node_needs_layout() {
+        let colored_box = RenderColoredBox::red(100.0, 50.0);
+        let node = RenderNode::new_box(Box::new(colored_box));
+
+        // New nodes need layout by default
+        assert!(node.needs_layout());
+
+        // Clear the flag
+        node.clear_needs_layout();
+        assert!(!node.needs_layout());
+    }
 }
