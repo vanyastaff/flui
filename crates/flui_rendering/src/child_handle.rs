@@ -1,84 +1,81 @@
-//! Child handle for type-safe parent-child interactions.
+//! Child handle for type-safe parent-child state access.
 //!
-//! This module provides [`ChildHandle`], a typed view into a child render object
-//! that provides safe access to child operations.
+//! This module provides [`ChildHandle`], a typed view into a child's state
+//! (size, offset, parent data) for use during layout and painting operations.
 //!
-//! # Context-Based API Safety
+//! # Context-Based API
 //!
-//! The handle is parameterized by ParentData type (`P`). Phase-specific restrictions
-//! are enforced by the context type that provides access to child handles
-//! (e.g., `BoxLayoutContext`, `BoxPaintContext`):
+//! Child handles provide read/write access to child state. For actual operations
+//! (layout, paint, hit test), use the Context API methods:
 //!
-//! - **Layout Context**: Can layout children, set offsets, modify ParentData
-//! - **Paint Context**: Can only paint children (read-only access)
-//! - **Hit Test Context**: Can only hit test children (read-only access)
-//!
-//! # Implementation Status
-//!
-//! The handle stores cached values (size, offset, parent_data) and the child's
-//! `RenderId`. Methods that require actual render object delegation (layout,
-//! paint, intrinsic size queries) currently return cached/default values.
-//!
-//! Full implementation requires the context to provide access to the `RenderTree`
-//! so the handle can look up and delegate to the actual render object.
+//! - **Layout**: `ctx.layout_child(index, constraints)` via `LayoutContext`
+//! - **Paint**: `ctx.paint_child(index)` via `PaintContext`
+//! - **Hit Test**: `ctx.hit_test_child(index)` via `HitTestContext`
 //!
 //! # Example
 //!
 //! ```ignore
-//! // During layout context - full access
-//! fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<Variable, FlexParentData>) -> Size {
-//!     ctx.children.for_each(|mut child| {
-//!         // child: ChildHandle<FlexParentData>
-//!         let size = child.layout(constraints);  // ✅ OK
-//!         child.set_offset(offset);              // ✅ OK
-//!         child.parent_data_mut().flex = 2.0;    // ✅ OK
-//!     });
+//! // During layout - use Context for layout, Handle for positioning
+//! fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<Variable, FlexParentData>) {
+//!     for i in 0..ctx.child_count() {
+//!         // Layout through context
+//!         let size = ctx.layout_child(i, constraints);
+//!
+//!         // Position through context
+//!         ctx.position_child(i, Offset::new(0.0, y_offset));
+//!         y_offset += size.height;
+//!     }
 //! }
 //!
-//! // During paint context - read-only
-//! fn paint(&self, ctx: &mut BoxPaintContext<Variable, FlexParentData>) {
-//!     ctx.children.for_each(|child| {
-//!         // child: ChildHandle<FlexParentData>
-//!         child.paint(&mut ctx.canvas());        // ✅ OK
-//!         // child.layout(constraints);          // ❌ Not available in paint context!
-//!         // child.set_offset(offset);           // ❌ Not available in paint context!
+//! // Alternative: using ChildrenAccess for typed parent data
+//! fn perform_layout(&mut self, children: &mut ChildrenAccess<Variable, FlexParentData>) {
+//!     children.for_each(|mut child| {
+//!         // Read/modify parent data
+//!         child.parent_data_mut().flex = 2.0;
+//!
+//!         // Read cached values
+//!         let current_offset = child.offset();
+//!         child.set_offset(new_offset);
 //!     });
 //! }
 //! ```
 
 use flui_foundation::RenderId;
-use flui_types::{Offset, Rect, Size};
+use flui_types::{Offset, Point, Rect, Size};
 
-use crate::constraints::BoxConstraints;
-use crate::context::CanvasContext;
-use crate::hit_testing::{BoxHitTestEntry, BoxHitTestResult};
 use crate::parent_data::ParentData;
-use crate::traits::TextBaseline;
 
 // ============================================================================
 // ChildHandle
 // ============================================================================
 
-/// Type-safe handle to a child render object.
+/// Type-safe handle to a child's state (size, offset, parent data).
 ///
-/// The handle is parameterized by:
+/// `ChildHandle` provides access to a child's cached state. For operations
+/// that require the render tree (layout, paint, hit test), use the
+/// corresponding Context API instead.
+///
+/// # Type Parameters
+///
 /// - `P`: The ParentData type (e.g., `FlexParentData`, `StackParentData`)
-///
-/// This handle provides full access to child operations. Phase-specific
-/// restrictions are now enforced by the context type that provides access
-/// to children (e.g., `BoxLayoutContext`, `BoxPaintContext`).
 ///
 /// # Available Operations
 ///
-/// - `layout()`: Layout the child with constraints
-/// - `set_offset()`: Set the child's position
-/// - `parent_data_mut()`: Modify parent data
-/// - `dry_layout()`: Compute size without side effects
-/// - `paint()`: Paint the child
-/// - `hit_test()`: Perform hit testing
-/// - `size()`: Get cached size
-/// - `offset()`: Get position offset
-/// - `parent_data()`: Read parent data
+/// | Operation | Method |
+/// |-----------|--------|
+/// | Read ID | `id()` |
+/// | Read size | `size()` |
+/// | Read/set offset | `offset()`, `set_offset()` |
+/// | Read/modify parent data | `parent_data()`, `parent_data_mut()` |
+/// | Bounds checking | `contains_point()`, `paint_bounds()` |
+///
+/// # Note on Layout/Paint/HitTest
+///
+/// This handle does NOT provide layout/paint/hit_test operations.
+/// Use the Context API for those:
+/// - `LayoutContext::layout_child(index, constraints)`
+/// - `PaintContext::paint_child(index)`
+/// - `HitTestContext::hit_test_child(index)`
 pub struct ChildHandle<'a, P: ParentData + Default> {
     /// ID of the child render node.
     child_id: RenderId,
@@ -94,7 +91,7 @@ pub struct ChildHandle<'a, P: ParentData + Default> {
 }
 
 // ============================================================================
-// Common Methods
+// Core Methods
 // ============================================================================
 
 impl<'a, P: ParentData + Default> ChildHandle<'a, P> {
@@ -109,6 +106,10 @@ impl<'a, P: ParentData + Default> ChildHandle<'a, P> {
         }
     }
 
+    // ========================================================================
+    // Read Accessors
+    // ========================================================================
+
     /// Returns the child's render ID.
     #[inline]
     pub fn id(&self) -> RenderId {
@@ -121,7 +122,7 @@ impl<'a, P: ParentData + Default> ChildHandle<'a, P> {
         self.size
     }
 
-    /// Returns the offset of this child.
+    /// Returns the offset of this child from parent's origin.
     #[inline]
     pub fn offset(&self) -> Offset {
         self.offset
@@ -133,27 +134,8 @@ impl<'a, P: ParentData + Default> ChildHandle<'a, P> {
         self.parent_data
     }
 
-    /// Returns the paint bounds of this child.
-    #[inline]
-    pub fn paint_bounds(&self) -> Rect {
-        Rect::from_origin_size(
-            flui_types::Point::new(self.offset.dx, self.offset.dy),
-            self.size,
-        )
-    }
-
-    /// Checks if a point is within this child's bounds.
-    #[inline]
-    pub fn contains_point(&self, point: Offset) -> bool {
-        let local = Offset::new(point.dx - self.offset.dx, point.dy - self.offset.dy);
-        local.dx >= 0.0
-            && local.dy >= 0.0
-            && local.dx < self.size.width
-            && local.dy < self.size.height
-    }
-
     // ========================================================================
-    // Layout Operations
+    // Write Accessors
     // ========================================================================
 
     /// Sets the offset of this child.
@@ -188,181 +170,36 @@ impl<'a, P: ParentData + Default> ChildHandle<'a, P> {
         self.parent_data
     }
 
-    /// Layouts this child with the given constraints.
-    ///
-    /// Returns the resulting size. The size is also cached in this handle.
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// let size = child.layout(BoxConstraints::tight(Size::new(100.0, 50.0)));
-    /// child.set_offset(Offset::new(0.0, current_y));
-    /// current_y += size.height;
-    /// ```
-    #[inline]
-    pub fn layout(&mut self, _constraints: BoxConstraints) -> Size {
-        // TODO: Actually perform layout via RenderTree
-        // For now, return cached size
-        self.size
-    }
-
-    /// Performs dry layout (compute size without side effects).
-    ///
-    /// Returns the size this child would have with the given constraints,
-    /// without actually performing layout.
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// let hypothetical_size = child.dry_layout(constraints);
-    /// if hypothetical_size.width > available_width {
-    ///     // Use different constraints
-    /// }
-    /// ```
-    #[inline]
-    pub fn dry_layout(&self, _constraints: BoxConstraints) -> Size {
-        // TODO: Actually perform dry layout
-        self.size
-    }
-
-    /// Returns the minimum intrinsic width for a given height.
-    #[inline]
-    pub fn get_min_intrinsic_width(&self, _height: f32) -> f32 {
-        // TODO: Delegate to render object
-        0.0
-    }
-
-    /// Returns the maximum intrinsic width for a given height.
-    #[inline]
-    pub fn get_max_intrinsic_width(&self, _height: f32) -> f32 {
-        // TODO: Delegate to render object
-        0.0
-    }
-
-    /// Returns the minimum intrinsic height for a given width.
-    #[inline]
-    pub fn get_min_intrinsic_height(&self, _width: f32) -> f32 {
-        // TODO: Delegate to render object
-        0.0
-    }
-
-    /// Returns the maximum intrinsic height for a given width.
-    #[inline]
-    pub fn get_max_intrinsic_height(&self, _width: f32) -> f32 {
-        // TODO: Delegate to render object
-        0.0
-    }
-
-    /// Returns the distance from the top of the box to its baseline.
-    #[inline]
-    pub fn get_distance_to_baseline(&self, _baseline: TextBaseline) -> Option<f32> {
-        // TODO: Delegate to render object
-        None
-    }
-
     // ========================================================================
-    // Paint Operations
+    // Geometry Helpers
     // ========================================================================
 
-    /// Paints this child at its stored offset.
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// fn paint(&self, ctx: &mut BoxPaintContext<Variable, FlexParentData>) {
-    ///     for child in ctx.iter_children() {
-    ///         child.paint(ctx.canvas());  // Paints at child.offset()
-    ///     }
-    /// }
-    /// ```
+    /// Returns the paint bounds of this child.
     #[inline]
-    pub fn paint(&self, _context: &mut CanvasContext) {
-        // TODO: Actually paint via render object
-        // context.paint_child(self.child_id, self.offset);
+    pub fn paint_bounds(&self) -> Rect {
+        Rect::from_origin_size(Point::new(self.offset.dx, self.offset.dy), self.size)
     }
 
-    /// Paints this child at a custom offset (overriding stored offset).
-    ///
-    /// Useful for scrolling or animated positions.
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// let animated_offset = lerp(start_offset, end_offset, t);
-    /// child.paint_at(ctx.canvas(), animated_offset);
-    /// ```
+    /// Checks if a point (in parent coordinates) is within this child's bounds.
     #[inline]
-    pub fn paint_at(&self, _context: &mut CanvasContext, _offset: Offset) {
-        // TODO: Actually paint at offset
-        // context.paint_child(self.child_id, offset);
+    pub fn contains_point(&self, point: Offset) -> bool {
+        let local = Offset::new(point.dx - self.offset.dx, point.dy - self.offset.dy);
+        local.dx >= 0.0
+            && local.dy >= 0.0
+            && local.dx < self.size.width
+            && local.dy < self.size.height
     }
 
-    // ========================================================================
-    // Hit Test Operations
-    // ========================================================================
-
-    /// Hit tests this child at the given position.
-    ///
-    /// The position is in the parent's coordinate system.
-    /// Returns true if the child (or any of its descendants) was hit.
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// fn hit_test(&self, ctx: &mut BoxHitTestContext<Variable, FlexParentData>, position: Offset) -> bool {
-    ///     // Test children in reverse order (front to back)
-    ///     for child in ctx.iter_children().rev() {
-    ///         if child.hit_test(ctx.result_mut(), position) {
-    ///             return true;
-    ///         }
-    ///     }
-    ///     false
-    /// }
-    /// ```
+    /// Transforms a point from parent coordinates to local child coordinates.
     #[inline]
-    pub fn hit_test(&self, result: &mut BoxHitTestResult, position: Offset) -> bool {
-        // Transform position to local coordinates
-        let local_position =
-            Offset::new(position.dx - self.offset.dx, position.dy - self.offset.dy);
-
-        // Check if within bounds
-        if local_position.dx < 0.0
-            || local_position.dy < 0.0
-            || local_position.dx >= self.size.width
-            || local_position.dy >= self.size.height
-        {
-            return false;
-        }
-
-        // TODO: Delegate to render object for actual hit testing
-        result.add(BoxHitTestEntry::new(local_position));
-        true
+    pub fn global_to_local(&self, point: Offset) -> Offset {
+        Offset::new(point.dx - self.offset.dx, point.dy - self.offset.dy)
     }
 
-    /// Hit tests this child with a custom offset (overriding stored offset).
-    ///
-    /// Useful for scrolling views where visual offset differs from logical offset.
+    /// Transforms a point from local child coordinates to parent coordinates.
     #[inline]
-    pub fn hit_test_at(
-        &self,
-        result: &mut BoxHitTestResult,
-        position: Offset,
-        paint_offset: Offset,
-    ) -> bool {
-        let local_position =
-            Offset::new(position.dx - paint_offset.dx, position.dy - paint_offset.dy);
-
-        if local_position.dx < 0.0
-            || local_position.dy < 0.0
-            || local_position.dx >= self.size.width
-            || local_position.dy >= self.size.height
-        {
-            return false;
-        }
-
-        // TODO: Delegate to render object
-        result.add(BoxHitTestEntry::new(local_position));
-        true
+    pub fn local_to_global(&self, point: Offset) -> Offset {
+        Offset::new(point.dx + self.offset.dx, point.dy + self.offset.dy)
     }
 }
 
@@ -439,5 +276,24 @@ mod tests {
         assert_eq!(bounds.top(), 20.0);
         assert_eq!(bounds.width(), 100.0);
         assert_eq!(bounds.height(), 50.0);
+    }
+
+    #[test]
+    fn test_coordinate_transforms() {
+        let mut parent_data = BoxParentData::default();
+        let handle: ChildHandle<BoxParentData> = ChildHandle::new(
+            RenderId::new(1),
+            Size::new(100.0, 50.0),
+            Offset::new(10.0, 20.0),
+            &mut parent_data,
+        );
+
+        // Global to local
+        let local = handle.global_to_local(Offset::new(50.0, 40.0));
+        assert_eq!(local, Offset::new(40.0, 20.0));
+
+        // Local to global
+        let global = handle.local_to_global(Offset::new(40.0, 20.0));
+        assert_eq!(global, Offset::new(50.0, 40.0));
     }
 }
