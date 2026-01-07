@@ -402,7 +402,11 @@ pub fn debug_dump_semantics_tree<B: RendererBinding + ?Sized>(
     views
         .iter()
         .map(|(id, _view)| {
-            // TODO: Get semantics tree from view's pipeline owner
+            // Note: Semantics tree integration is not yet implemented.
+            // This would require:
+            // 1. View to expose its PipelineOwner
+            // 2. PipelineOwner to build and expose SemanticsTree
+            // 3. SemanticsTree to implement Debug or custom formatting
             let mut message = format!("=== SemanticsTree {} ===\nSemantics not generated.", id);
             if !printed_explanation {
                 printed_explanation = true;
