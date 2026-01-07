@@ -4,7 +4,7 @@ use flui_types::{EdgeInsets, Offset, Point, Rect, Size};
 
 use crate::arity::Single;
 use crate::constraints::BoxConstraints;
-use crate::context::{BoxHitTestContext, BoxLayoutContext, BoxPaintContext};
+use crate::context::{BoxHitTestContext, BoxLayoutContext};
 use crate::parent_data::BoxParentData;
 use crate::traits::RenderBox;
 
@@ -120,9 +120,7 @@ impl RenderBox for RenderPadding {
         &mut self.size
     }
 
-    fn paint(&mut self, _ctx: &mut BoxPaintContext<'_, Single, BoxParentData>) {
-        // Children are painted automatically by the wrapper
-    }
+    // paint() uses default no-op - Padding just positions children
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {
         // First check if we're in bounds

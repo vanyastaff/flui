@@ -4,7 +4,7 @@ use flui_painting::Paint;
 use flui_types::{Color, Offset, Point, Rect, Size};
 
 use crate::arity::Leaf;
-use crate::context::{BoxHitTestContext, BoxLayoutContext, BoxPaintContext, CanvasContext};
+use crate::context::{BoxHitTestContext, BoxLayoutContext, CanvasContext};
 use crate::parent_data::BoxParentData;
 use crate::traits::RenderBox;
 
@@ -75,14 +75,10 @@ impl RenderBox for RenderColoredBox {
         &mut self.size
     }
 
-    fn paint(&mut self, _ctx: &mut BoxPaintContext<'_, Leaf, BoxParentData>) {
-        // Painting is done via paint_with_canvas
-    }
-
-    fn paint_with_canvas(&self, context: &mut CanvasContext, offset: Offset) {
+    fn paint(&self, context: &mut CanvasContext, offset: Offset) {
         let rect = Rect::from_origin_size(Point::new(offset.dx, offset.dy), self.size);
         tracing::debug!(
-            "RenderColoredBox::paint_with_canvas: offset=({}, {}), size={:?}, rect={:?}",
+            "RenderColoredBox::paint: offset=({}, {}), size={:?}, rect={:?}",
             offset.dx,
             offset.dy,
             self.size,

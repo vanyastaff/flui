@@ -4,7 +4,7 @@ use flui_types::{Offset, Point, Rect, Size};
 
 use crate::arity::Variable;
 use crate::constraints::BoxConstraints;
-use crate::context::{BoxHitTestContext, BoxLayoutContext, BoxPaintContext};
+use crate::context::{BoxHitTestContext, BoxLayoutContext};
 use crate::parent_data::BoxParentData;
 use crate::traits::RenderBox;
 
@@ -304,9 +304,7 @@ impl RenderBox for RenderFlex {
         &mut self.size
     }
 
-    fn paint(&mut self, _ctx: &mut BoxPaintContext<'_, Variable, BoxParentData>) {
-        // Children are painted automatically by the wrapper
-    }
+    // paint() uses default no-op - Flex just positions children
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Variable, BoxParentData>) -> bool {
         if !ctx.is_within_size(self.size.width, self.size.height) {

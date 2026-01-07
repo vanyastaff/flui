@@ -3,7 +3,7 @@
 use flui_types::{Point, Rect, Size};
 
 use crate::arity::Leaf;
-use crate::context::{BoxHitTestContext, BoxLayoutContext, BoxPaintContext};
+use crate::context::{BoxHitTestContext, BoxLayoutContext};
 use crate::parent_data::BoxParentData;
 use crate::traits::RenderBox;
 
@@ -106,9 +106,7 @@ impl RenderBox for RenderSizedBox {
         &mut self.size
     }
 
-    fn paint(&mut self, _ctx: &mut BoxPaintContext<'_, Leaf, BoxParentData>) {
-        // SizedBox is invisible - it only affects layout
-    }
+    // paint() uses default no-op - SizedBox only affects layout
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Leaf, BoxParentData>) -> bool {
         ctx.is_within_size(self.size.width, self.size.height)
