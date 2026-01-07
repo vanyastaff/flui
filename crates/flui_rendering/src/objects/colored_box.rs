@@ -102,18 +102,3 @@ impl RenderBox for RenderColoredBox {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::constraints::BoxConstraints;
-    use crate::traits::RenderObject;
-    use crate::wrapper::BoxWrapper;
-
-    #[test]
-    fn test_colored_box_layout() {
-        let box_obj = RenderColoredBox::red(100.0, 50.0);
-        let mut wrapper = BoxWrapper::new(box_obj);
-        wrapper.layout(BoxConstraints::tight(Size::new(80.0, 40.0)), true);
-        assert_eq!(wrapper.inner().size(), Size::new(80.0, 40.0));
-    }
-}

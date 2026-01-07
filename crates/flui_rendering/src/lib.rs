@@ -70,8 +70,6 @@ pub mod objects;
 pub mod storage;
 pub mod traits;
 pub mod view;
-// Wrapper module removed - use IntoRenderObject and protocol adapters instead
-// pub mod wrapper;
 
 /// Re-export layer types from flui-layer crate for convenience.
 pub mod layer {

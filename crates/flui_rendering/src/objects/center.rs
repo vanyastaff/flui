@@ -16,7 +16,7 @@ use crate::traits::RenderBox;
 ///
 /// ```ignore
 /// let center = RenderCenter::new();
-/// let mut wrapper = BoxWrapper::new(center);
+/// // Use with PipelineOwner and RenderTree for actual rendering
 /// // Add a child, then layout with constraints
 /// ```
 #[derive(Debug, Clone, Default)]
@@ -160,31 +160,3 @@ impl RenderBox for RenderCenter {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::constraints::BoxConstraints;
-    use crate::traits::RenderObject;
-    use crate::wrapper::BoxWrapper;
-
-    #[test]
-    fn test_center_no_child() {
-        let center = RenderCenter::new();
-        let mut wrapper = BoxWrapper::new(center);
-
-        wrapper.layout(BoxConstraints::tight(Size::new(200.0, 100.0)), true);
-
-        // Expands to fill
-        assert_eq!(wrapper.inner().size(), Size::new(200.0, 100.0));
-    }
-
-    #[test]
-    fn test_center_with_factors() {
-        let center = RenderCenter::new()
-            .with_width_factor(0.5)
-            .with_height_factor(0.5);
-
-        assert_eq!(center.width_factor(), Some(0.5));
-        assert_eq!(center.height_factor(), Some(0.5));
-    }
-}

@@ -9,7 +9,8 @@
 //! ## Single Child Objects
 //! - [`RenderPadding`] - Adds padding around child
 //! - [`RenderCenter`] - Centers child within available space
-//! - [`RenderAlign`] - Aligns child with configurable alignment
+//! - [`RenderOpacity`] - Applies transparency to child
+//! - [`RenderTransform`] - Applies transformation matrix to child
 //!
 //! ## Multi-Child Objects
 //! - [`RenderFlex`] - Lays out children in a row or column
@@ -17,12 +18,13 @@
 //! # Example
 //!
 //! ```ignore
-//! use flui_rendering::objects::{RenderColoredBox, RenderPadding};
-//! use flui_rendering::wrapper::BoxWrapper;
+//! use flui_rendering::objects::RenderColoredBox;
+//! use flui_rendering::traits::RenderBox;
+//! use flui_types::{Color, Size};
 //!
-//! // Create a colored box
-//! let box_obj = RenderColoredBox::new(Color::RED, Size::new(100.0, 50.0));
-//! let wrapper = BoxWrapper::new(box_obj);
+//! // Create a colored box render object
+//! let colored_box = RenderColoredBox::new(Color::RED);
+//! // Use with PipelineOwner for actual rendering
 //! ```
 
 mod center;

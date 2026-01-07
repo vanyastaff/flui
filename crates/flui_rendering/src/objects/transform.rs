@@ -307,29 +307,29 @@ mod tests {
     #[test]
     fn test_transform_scale() {
         let transform = RenderTransform::scale(2.0, 3.0);
-        let expected = Matrix4::scale(2.0, 3.0, 1.0);
+        let expected = Matrix4::scaling(2.0, 3.0, 1.0);
         assert_eq!(transform.transform(), &expected);
     }
 
     #[test]
     fn test_transform_uniform_scale() {
         let transform = RenderTransform::uniform_scale(0.5);
-        let expected = Matrix4::scale(0.5, 0.5, 1.0);
+        let expected = Matrix4::scaling(0.5, 0.5, 1.0);
         assert_eq!(transform.transform(), &expected);
     }
 
     #[test]
     fn test_transform_rotation() {
         let transform = RenderTransform::rotation(PI / 2.0);
-        // Should be 90 degree rotation
-        assert!((transform.transform().m11 - 0.0).abs() < 1e-6);
+        // Should be 90 degree rotation - check matrix element
+        assert!((transform.transform().m[5] - 0.0).abs() < 1e-6);
     }
 
     #[test]
     fn test_transform_rotation_degrees() {
         let transform = RenderTransform::rotation_degrees(90.0);
         // Should be same as PI/2 radians
-        assert!((transform.transform().m11 - 0.0).abs() < 1e-6);
+        assert!((transform.transform().m[5] - 0.0).abs() < 1e-6);
     }
 
     #[test]

@@ -23,7 +23,7 @@ use crate::traits::RenderBox;
 ///
 /// ```ignore
 /// let opacity = RenderOpacity::new(0.5); // 50% transparent
-/// let mut wrapper = BoxWrapper::new(opacity);
+/// // Use with PipelineOwner and RenderTree for actual rendering
 /// // Add a child, then layout with constraints
 /// ```
 #[derive(Debug, Clone)]

@@ -298,23 +298,13 @@ fn test_paint_offset_propagation() {
     pipeline.flush_layout();
 
     // Verify layout was performed
-    assert!(!pipeline
-        .render_tree()
-        .get(root_id)
-        .unwrap()
-        .render_object()
-        .needs_layout());
-    assert!(!pipeline
-        .render_tree()
-        .get(child_id)
-        .unwrap()
-        .render_object()
-        .needs_layout());
+    assert!(!pipeline.render_tree().get(root_id).unwrap().needs_layout());
+    assert!(!pipeline.render_tree().get(child_id).unwrap().needs_layout());
 
     // Check that Center positioned the child correctly
     // Center should put 50x50 child in center of 200x200 = offset (75, 75)
     if let Some(node) = pipeline.render_tree().get(root_id) {
-        let render_object = node.render_object();
+        let render_object = node.box_render_object();
         let child_offset = render_object.child_offset(0);
         // With 200x200 parent and 50x50 child, center offset should be (75, 75)
         assert_eq!(child_offset.dx, 75.0);

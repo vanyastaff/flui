@@ -166,6 +166,7 @@ where
 mod tests {
     use super::*;
     use crate::arity::Leaf;
+    use crate::context::{BoxHitTestContext, BoxLayoutContext, BoxPaintContext};
     use crate::parent_data::BoxParentData;
     use flui_types::Size;
 
@@ -173,6 +174,8 @@ mod tests {
     struct TestBox {
         size: Size,
     }
+
+    impl flui_foundation::Diagnosticable for TestBox {}
 
     impl RenderBox for TestBox {
         type Arity = Leaf;
@@ -188,12 +191,12 @@ mod tests {
             false
         }
 
-        fn size(&self) -> Size {
-            self.size
+        fn size(&self) -> &Size {
+            &self.size
         }
 
-        fn set_size(&mut self, size: Size) {
-            self.size = size;
+        fn size_mut(&mut self) -> &mut Size {
+            &mut self.size
         }
     }
 
