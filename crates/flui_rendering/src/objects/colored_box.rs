@@ -1,10 +1,10 @@
 //! RenderColoredBox - a simple colored rectangle.
 
 use flui_painting::Paint;
-use flui_types::{Color, Offset, Point, Rect, Size};
+use flui_types::{Color, Point, Rect, Size};
 
 use crate::arity::Leaf;
-use crate::context::{BoxHitTestContext, BoxLayoutContext, CanvasContext};
+use crate::context::{BoxHitTestContext, BoxLayoutContext, BoxPaintContext};
 use crate::parent_data::BoxParentData;
 use crate::traits::RenderBox;
 
@@ -75,7 +75,8 @@ impl RenderBox for RenderColoredBox {
         &mut self.size
     }
 
-    fn paint(&self, context: &mut CanvasContext, offset: Offset) {
+    fn paint(&self, ctx: &mut BoxPaintContext<'_, Leaf, BoxParentData>) {
+        let offset = ctx.offset();
         let rect = Rect::from_origin_size(Point::new(offset.dx, offset.dy), self.size);
         tracing::debug!(
             "RenderColoredBox::paint: offset=({}, {}), size={:?}, rect={:?}",
@@ -86,7 +87,7 @@ impl RenderBox for RenderColoredBox {
         );
         let color = Color::from_rgba_f32_array(self.color);
         let paint = Paint::fill(color);
-        context.canvas().draw_rect(rect, &paint);
+        ctx.canvas().draw_rect(rect, &paint);
     }
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Leaf, BoxParentData>) -> bool {

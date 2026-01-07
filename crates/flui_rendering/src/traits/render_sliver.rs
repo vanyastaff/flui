@@ -7,7 +7,7 @@ use crate::arity::Arity;
 use crate::constraints::{SliverConstraints, SliverGeometry};
 use flui_types::Offset;
 
-use crate::context::{SliverHitTestContext, SliverLayoutContext};
+use crate::context::{CanvasContext, SliverHitTestContext, SliverLayoutContext, SliverPaintContext};
 use crate::parent_data::ParentData;
 use crate::protocol::SliverProtocol;
 use crate::traits::RenderObject;
@@ -253,19 +253,31 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + Send + Sync + 'static 
     // Painting
     // ========================================================================
 
-    /// Paints this sliver at the given offset.
+    /// Paints this sliver and its children.
     ///
-    /// This method is called by the pipeline during the paint phase.
-    /// Should only paint the visible portion of the sliver.
+    /// The context provides:
+    /// - Current offset via `ctx.offset()`
+    /// - Canvas for drawing via `ctx.canvas()`
+    /// - Child painting via `ctx.paint_child()` (arity-specific)
     ///
-    /// # Important
+    /// # Example
     ///
-    /// Only paint THIS sliver, not its children. The pipeline handles
-    /// child painting automatically via recursive traversal.
+    /// ```ignore
+    /// fn paint(&self, ctx: &mut SliverPaintContext<'_, Variable, SliverParentData>) {
+    ///     // Draw visible portion
+    ///     let rect = self.visible_rect().translate(ctx.offset());
+    ///     ctx.canvas().draw_rect(rect, &paint);
     ///
-    /// Default implementation does nothing.
-    fn paint(&self, _context: &mut crate::context::CanvasContext, _offset: Offset) {
-        // Default: no-op
+    ///     // Paint visible children
+    ///     for i in self.first_visible..=self.last_visible {
+    ///         ctx.paint_child(i);
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// Default implementation paints children only.
+    fn paint(&self, _ctx: &mut SliverPaintContext<'_, Self::Arity, Self::ParentData>) {
+        // Default: no-op - pipeline handles child painting if not overridden
     }
 
     // ========================================================================
@@ -332,9 +344,11 @@ where
         *self.geometry()
     }
 
-    fn paint(&self, context: &mut crate::pipeline::CanvasContext, offset: Offset) {
-        // Delegate to the RenderSliver::paint method
-        RenderSliver::paint(self, context, offset);
+    fn paint(&self, _context: &mut CanvasContext, _offset: Offset) {
+        // Protocol bridge only - no-op.
+        // Real painting flows through RenderSliver::paint() with SliverPaintContext,
+        // which provides children access and paint_child() callbacks.
+        // The pipeline creates the proper context and calls RenderSliver::paint() directly.
     }
 
     fn hit_test_raw(

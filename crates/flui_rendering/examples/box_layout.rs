@@ -75,7 +75,7 @@ impl RenderBox for ColoredBox {
         &mut self.size
     }
 
-    fn paint(&mut self, _ctx: &mut BoxPaintContext<'_, Leaf, BoxParentData>) {
+    fn paint(&self, _ctx: &mut BoxPaintContext<'_, Leaf, BoxParentData>) {
         // In real implementation, would draw a colored rectangle
         println!(
             "  Paint ColoredBox: size={:?}, color={:?}",

@@ -4,7 +4,7 @@ use flui_types::{Offset, Point, Rect, Size};
 
 use crate::arity::Arity;
 use crate::constraints::BoxConstraints;
-use crate::context::{BoxHitTestContext, BoxLayoutContext};
+use crate::context::{BoxHitTestContext, BoxLayoutContext, BoxPaintContext, CanvasContext};
 use crate::hit_testing::HitTestBehavior;
 use crate::parent_data::ParentData;
 use crate::protocol::BoxProtocol;
@@ -284,33 +284,30 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
     // Painting
     // ========================================================================
 
-    /// Paints this render object at the given offset.
+    /// Paints this render object and its children.
     ///
-    /// This method is called by the pipeline during the paint phase to render
-    /// this object. The offset is the accumulated position from the root.
-    ///
-    /// # Important
-    ///
-    /// Only paint THIS render object, not its children. The pipeline handles
-    /// child painting automatically via recursive traversal, applying parent
-    /// offsets and effect layers (opacity, transforms) as needed.
+    /// The context provides:
+    /// - Current offset via `ctx.offset()`
+    /// - Canvas for drawing via `ctx.canvas()`
+    /// - Child painting via `ctx.paint_child()` (arity-specific)
     ///
     /// # Example
     ///
     /// ```ignore
-    /// fn paint(&self, context: &mut CanvasContext, offset: Offset) {
-    ///     let rect = Rect::from_origin_size(
-    ///         Point::new(offset.dx, offset.dy),
-    ///         *self.size()
-    ///     );
-    ///     context.canvas().draw_rect(rect, &Paint::fill(self.color));
+    /// fn paint(&self, ctx: &mut BoxPaintContext<'_, Single, BoxParentData>) {
+    ///     // Draw background
+    ///     let rect = Rect::from_size(self.size).translate(ctx.offset());
+    ///     ctx.canvas().draw_rect(rect, &Paint::fill(self.color));
+    ///
+    ///     // Paint child
+    ///     ctx.paint_child();
     /// }
     /// ```
     ///
-    /// Default implementation does nothing (for container widgets that
-    /// only position children without drawing themselves).
-    fn paint(&self, _context: &mut crate::context::CanvasContext, _offset: Offset) {
-        // Default: no-op (containers don't draw themselves)
+    /// Default implementation paints children only (for containers that
+    /// don't draw themselves).
+    fn paint(&self, _ctx: &mut BoxPaintContext<'_, Self::Arity, Self::ParentData>) {
+        // Default: no-op - pipeline handles child painting if not overridden
     }
 
     // ========================================================================
@@ -384,9 +381,11 @@ where
         *self.size()
     }
 
-    fn paint(&self, context: &mut crate::pipeline::CanvasContext, offset: Offset) {
-        // Delegate to the RenderBox::paint method
-        RenderBox::paint(self, context, offset);
+    fn paint(&self, _context: &mut CanvasContext, _offset: Offset) {
+        // Protocol bridge only - no-op.
+        // Real painting flows through RenderBox::paint() with BoxPaintContext,
+        // which provides children access and paint_child() callbacks.
+        // The pipeline creates the proper context and calls RenderBox::paint() directly.
     }
 
     fn hit_test_raw(
