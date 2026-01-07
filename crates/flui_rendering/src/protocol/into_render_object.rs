@@ -1,8 +1,8 @@
 //! IntoRenderObject trait for converting RenderBox/RenderSliver into storage-ready nodes.
 //!
-//! This module provides the `IntoRenderObject` trait that replaces the old wrapper approach.
-//! Instead of wrapping concrete types in BoxWrapper/SliverWrapper, we directly convert them
-//! into RenderEntry<Protocol> for storage in RenderTree.
+//! This module provides the `IntoRenderObject` trait for protocol-aware conversions.
+//! Concrete render objects are directly converted into RenderEntry<Protocol> for storage
+//! in RenderTree, without intermediate wrapper types.
 //!
 //! # Architecture
 //!
@@ -35,12 +35,12 @@
 //! └──────────────────────────────────────────────────────────────┘
 //! ```
 //!
-//! # Benefits over Wrapper Approach
+//! # Benefits of Direct Protocol Conversion
 //!
-//! 1. **No Wrapper Boilerplate**: Direct conversion to RenderEntry
+//! 1. **No Boilerplate**: Direct conversion to RenderEntry
 //! 2. **Better Type Safety**: Protocol system enforced at creation time
-//! 3. **Cleaner API**: `my_box.into_render_object()` vs `BoxWrapper::new(my_box)`
-//! 4. **Storage Efficiency**: One less layer of indirection
+//! 3. **Cleaner API**: `my_box.into_render_object()` for protocol-aware conversion
+//! 4. **Storage Efficiency**: Direct storage without intermediate types
 //! 5. **Protocol Flexibility**: Easy to add new protocols
 //!
 //! # Example

@@ -17,7 +17,7 @@
 //! ```
 
 use flui_rendering::objects::RenderSizedBox;
-use flui_rendering::wrapper::BoxWrapper;
+use flui_rendering::protocol::BoxProtocol;
 use flui_view::{impl_render_view, Child, RenderView, View};
 
 /// A widget that forces a specific size.
@@ -123,16 +123,16 @@ impl Default for SizedBox {
 impl_render_view!(SizedBox);
 
 impl RenderView for SizedBox {
-    type RenderObject = BoxWrapper<RenderSizedBox>;
+    type Protocol = BoxProtocol;
+    type RenderObject = RenderSizedBox;
 
     fn create_render_object(&self) -> Self::RenderObject {
-        BoxWrapper::new(RenderSizedBox::new(self.width, self.height))
+        RenderSizedBox::new(self.width, self.height)
     }
 
     fn update_render_object(&self, render_object: &mut Self::RenderObject) {
-        let inner = render_object.inner();
-        if inner.width() != self.width || inner.height() != self.height {
-            *render_object = BoxWrapper::new(RenderSizedBox::new(self.width, self.height));
+        if render_object.width() != self.width || render_object.height() != self.height {
+            *render_object = RenderSizedBox::new(self.width, self.height);
         }
     }
 

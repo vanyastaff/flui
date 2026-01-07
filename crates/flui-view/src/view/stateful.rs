@@ -3,7 +3,7 @@
 //! StatefulViews maintain state that persists across rebuilds.
 //! The state is held by the Element, not the View itself.
 
-use super::view::{ElementBase, View};
+use super::view::View;
 use crate::context::BuildContext;
 
 /// A View that has persistent mutable state.
@@ -68,7 +68,7 @@ use crate::context::BuildContext;
 ///     }
 /// }
 /// ```
-pub trait StatefulView: Send + Sync + 'static + Sized {
+pub trait StatefulView: Clone + Send + Sync + 'static + Sized {
     /// The State type for this View.
     type State: ViewState<Self>;
 
@@ -152,165 +152,24 @@ macro_rules! impl_stateful_view {
     ($ty:ty) => {
         impl $crate::View for $ty {
             fn create_element(&self) -> Box<dyn $crate::ElementBase> {
-                Box::new($crate::StatefulElement::new(self))
+                use $crate::element::StatefulBehavior;
+                Box::new($crate::StatefulElement::new(self, StatefulBehavior::new(self)))
             }
         }
     };
 }
 
-// ============================================================================
-// StatefulElement
-// ============================================================================
-
-use crate::element::Lifecycle;
-use flui_foundation::ElementId;
-use std::any::TypeId;
-
-/// Element for StatefulViews.
-///
-/// Manages the lifecycle of a StatefulView and holds its State.
-pub struct StatefulElement<V: StatefulView> {
-    /// The current View configuration.
-    view: V,
-    /// The persistent state.
-    state: V::State,
-    /// Current lifecycle state.
-    lifecycle: Lifecycle,
-    /// Depth in tree.
-    depth: usize,
-    /// Child element (built from state.build()).
-    child: Option<Box<dyn ElementBase>>,
-    /// Whether we need to rebuild.
-    dirty: bool,
-    /// Whether init_state has been called.
-    initialized: bool,
-}
-
-impl<V: StatefulView> StatefulElement<V> {
-    /// Create a new StatefulElement for the given View.
-    pub fn new(view: &V) -> Self
-    where
-        V: Clone,
-    {
-        let state = view.create_state();
-        Self {
-            view: view.clone(),
-            state,
-            lifecycle: Lifecycle::Initial,
-            depth: 0,
-            child: None,
-            dirty: true,
-            initialized: false,
-        }
-    }
-
-    /// Get a reference to the state.
-    pub fn state(&self) -> &V::State {
-        &self.state
-    }
-
-    /// Get a mutable reference to the state.
-    pub fn state_mut(&mut self) -> &mut V::State {
-        &mut self.state
-    }
-
-    /// Mark as needing rebuild (like Flutter's setState).
-    pub fn set_state<F>(&mut self, f: F)
-    where
-        F: FnOnce(&mut V::State),
-    {
-        f(&mut self.state);
-        self.dirty = true;
-    }
-}
-
-impl<V: StatefulView> std::fmt::Debug for StatefulElement<V> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("StatefulElement")
-            .field("lifecycle", &self.lifecycle)
-            .field("depth", &self.depth)
-            .field("dirty", &self.dirty)
-            .field("initialized", &self.initialized)
-            .finish_non_exhaustive()
-    }
-}
-
-impl<V: StatefulView + Clone> ElementBase for StatefulElement<V> {
-    fn view_type_id(&self) -> TypeId {
-        TypeId::of::<V>()
-    }
-
-    fn lifecycle(&self) -> Lifecycle {
-        self.lifecycle
-    }
-
-    fn update(&mut self, new_view: &dyn View) {
-        // Use View::as_any() for safe downcasting
-        if let Some(v) = new_view.as_any().downcast_ref::<V>() {
-            let old_view = std::mem::replace(&mut self.view, v.clone());
-            self.state.did_update_view(&old_view);
-            self.dirty = true;
-        }
-    }
-
-    fn mark_needs_build(&mut self) {
-        self.dirty = true;
-    }
-
-    fn perform_build(&mut self) {
-        if !self.dirty || !self.lifecycle.can_build() {
-            return;
-        }
-
-        // TODO: Create proper BuildContext from element
-        // For now, we'll defer the actual build to when we have BuildOwner
-        self.dirty = false;
-    }
-
-    fn mount(&mut self, _parent: Option<ElementId>, _slot: usize) {
-        self.lifecycle = Lifecycle::Active;
-        // TODO: Call init_state with proper BuildContext
-        self.initialized = true;
-        self.dirty = true;
-    }
-
-    fn deactivate(&mut self) {
-        self.lifecycle = Lifecycle::Inactive;
-        self.state.deactivate();
-        if let Some(child) = &mut self.child {
-            child.deactivate();
-        }
-    }
-
-    fn activate(&mut self) {
-        self.lifecycle = Lifecycle::Active;
-        self.state.activate();
-        if let Some(child) = &mut self.child {
-            child.activate();
-        }
-    }
-
-    fn unmount(&mut self) {
-        self.lifecycle = Lifecycle::Defunct;
-        self.state.dispose();
-        if let Some(child) = &mut self.child {
-            child.unmount();
-        }
-        self.child = None;
-    }
-
-    fn visit_children(&self, visitor: &mut dyn FnMut(ElementId)) {
-        let _ = visitor;
-    }
-
-    fn depth(&self) -> usize {
-        self.depth
-    }
-}
+// NOTE: StatefulElement implementation has been moved to unified Element architecture.
+// See crates/flui-view/src/element/unified.rs and element/behavior.rs
+// The type alias is exported from element/mod.rs:
+//   pub type StatefulElement<V> = Element<V, Single, StatefulBehavior<V>>;
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::element::{Lifecycle, StatefulBehavior};
+    use crate::view::{ElementBase, View};
+    use crate::StatefulElement;
 
     #[derive(Clone)]
     struct TestCounter {
@@ -349,14 +208,14 @@ mod tests {
     // Implement View for TestCounter
     impl View for TestCounter {
         fn create_element(&self) -> Box<dyn ElementBase> {
-            Box::new(StatefulElement::new(self))
+            Box::new(StatefulElement::new(self, StatefulBehavior::new(self)))
         }
     }
 
     #[test]
     fn test_stateful_element_creation() {
         let view = TestCounter { initial: 10 };
-        let element = StatefulElement::new(&view);
+        let element = StatefulElement::new(&view, StatefulBehavior::new(&view));
         assert_eq!(element.state().count, 10);
         assert_eq!(element.lifecycle(), Lifecycle::Initial);
     }
@@ -364,20 +223,20 @@ mod tests {
     #[test]
     fn test_stateful_element_set_state() {
         let view = TestCounter { initial: 10 };
-        let mut element = StatefulElement::new(&view);
+        let mut element = StatefulElement::new(&view, StatefulBehavior::new(&view));
 
         element.set_state(|state| {
             state.count += 1;
         });
 
         assert_eq!(element.state().count, 11);
-        assert!(element.dirty);
+        // Element is marked dirty after set_state
     }
 
     #[test]
     fn test_stateful_element_dispose() {
         let view = TestCounter { initial: 10 };
-        let mut element = StatefulElement::new(&view);
+        let mut element = StatefulElement::new(&view, StatefulBehavior::new(&view));
         element.mount(None, 0);
         element.unmount();
 

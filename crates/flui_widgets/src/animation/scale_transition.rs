@@ -4,9 +4,10 @@
 
 use flui_animation::Animation;
 use flui_rendering::objects::RenderTransform;
-use flui_rendering::wrapper::BoxWrapper;
+use flui_rendering::protocol::BoxProtocol;
 use flui_types::{Alignment, Matrix4};
 use flui_view::{Child, RenderView, View};
+use flui_view::element::RenderBehavior;
 use std::sync::Arc;
 
 /// A widget that animates the scale of its child.
@@ -107,24 +108,24 @@ impl<A: Animation<f32>> ScaleTransition<A> {
 // Implement View trait manually (macro doesn't support generics)
 impl<A: Animation<f32> + Clone + Send + Sync + 'static> View for ScaleTransition<A> {
     fn create_element(&self) -> Box<dyn flui_view::ElementBase> {
-        Box::new(flui_view::RenderElement::new(self))
+        Box::new(flui_view::RenderElement::new(self, RenderBehavior::new()))
     }
 }
 
 impl<A: Animation<f32> + Clone + Send + Sync + 'static> RenderView for ScaleTransition<A> {
-    type RenderObject = BoxWrapper<RenderTransform>;
+    type Protocol = BoxProtocol;
+    type RenderObject = RenderTransform;
 
     fn create_render_object(&self) -> Self::RenderObject {
         let scale = self.animation.value();
         let transform = Matrix4::scaling(scale, scale, 1.0);
-        let render = RenderTransform::new(transform).with_alignment(self.alignment);
-        BoxWrapper::new(render)
+        RenderTransform::new(transform).with_alignment(self.alignment)
     }
 
     fn update_render_object(&self, render_object: &mut Self::RenderObject) {
         let scale = self.animation.value();
         let transform = Matrix4::scaling(scale, scale, 1.0);
-        render_object.inner_mut().set_transform(transform);
+        render_object.set_transform(transform);
     }
 
     fn has_children(&self) -> bool {

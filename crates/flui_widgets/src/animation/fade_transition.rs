@@ -4,8 +4,9 @@
 
 use flui_animation::Animation;
 use flui_rendering::objects::RenderOpacity;
-use flui_rendering::wrapper::BoxWrapper;
+use flui_rendering::protocol::BoxProtocol;
 use flui_view::{Child, RenderView, View};
+use flui_view::element::RenderBehavior;
 use std::sync::Arc;
 
 /// A widget that animates the opacity of its child.
@@ -93,22 +94,22 @@ impl<A: Animation<f32>> FadeTransition<A> {
 // Implement View trait manually (macro doesn't support generics)
 impl<A: Animation<f32> + Clone + Send + Sync + 'static> View for FadeTransition<A> {
     fn create_element(&self) -> Box<dyn flui_view::ElementBase> {
-        Box::new(flui_view::RenderElement::new(self))
+        Box::new(flui_view::RenderElement::new(self, RenderBehavior::new()))
     }
 }
 
 impl<A: Animation<f32> + Clone + Send + Sync + 'static> RenderView for FadeTransition<A> {
-    type RenderObject = BoxWrapper<RenderOpacity>;
+    type Protocol = BoxProtocol;
+    type RenderObject = RenderOpacity;
 
     fn create_render_object(&self) -> Self::RenderObject {
-        let render = RenderOpacity::new(self.opacity());
-        BoxWrapper::new(render)
+        RenderOpacity::new(self.opacity())
     }
 
     fn update_render_object(&self, render_object: &mut Self::RenderObject) {
         let current_opacity = self.opacity();
-        if (render_object.inner().opacity() - current_opacity).abs() > f32::EPSILON {
-            render_object.inner_mut().set_opacity(current_opacity);
+        if (render_object.opacity() - current_opacity).abs() > f32::EPSILON {
+            render_object.set_opacity(current_opacity);
         }
     }
 

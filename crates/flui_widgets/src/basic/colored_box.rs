@@ -16,7 +16,7 @@
 //! ```
 
 use flui_rendering::objects::RenderColoredBox;
-use flui_rendering::wrapper::BoxWrapper;
+use flui_rendering::protocol::BoxProtocol;
 use flui_types::Size;
 use flui_view::{impl_render_view, RenderView};
 
@@ -107,17 +107,17 @@ impl ColoredBox {
 impl_render_view!(ColoredBox);
 
 impl RenderView for ColoredBox {
-    type RenderObject = BoxWrapper<RenderColoredBox>;
+    type Protocol = BoxProtocol;
+    type RenderObject = RenderColoredBox;
 
     fn create_render_object(&self) -> Self::RenderObject {
-        BoxWrapper::new(RenderColoredBox::new(self.color, self.size))
+        RenderColoredBox::new(self.color, self.size)
     }
 
     fn update_render_object(&self, render_object: &mut Self::RenderObject) {
-        let inner = render_object.inner();
-        if inner.color() != self.color || inner.preferred_size() != self.size {
+        if render_object.color() != self.color || render_object.preferred_size() != self.size {
             // RenderColoredBox is immutable after creation, recreate
-            *render_object = BoxWrapper::new(RenderColoredBox::new(self.color, self.size));
+            *render_object = RenderColoredBox::new(self.color, self.size);
         }
     }
 

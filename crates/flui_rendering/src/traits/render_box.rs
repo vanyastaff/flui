@@ -64,7 +64,8 @@ use crate::traits::RenderObject;
 /// Trait for render objects that use 2D cartesian coordinates.
 ///
 /// Users implement this trait for their custom render objects.
-/// Use `BoxWrapper<T>` to bridge to `RenderObject` for storage in `RenderTree`.
+/// Render objects are automatically converted to `RenderObject<BoxProtocol>`
+/// for storage in `RenderTree` via the From trait.
 ///
 /// # Features
 ///

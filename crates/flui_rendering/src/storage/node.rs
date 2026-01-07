@@ -5,7 +5,7 @@
 
 use flui_foundation::RenderId;
 
-use crate::protocol::{BoxProtocol, RenderObject, SliverProtocol};
+use crate::protocol::{BoxProtocol, Protocol, RenderObject, SliverProtocol};
 
 use super::entry::RenderEntry;
 use super::links::NodeLinks;
@@ -352,6 +352,94 @@ impl RenderNode {
         self.as_box_unchecked().render_object_mut()
     }
 
+    /// Returns a read lock on the Sliver render object.
+    ///
+    /// Panics if this is not a Sliver node.
+    pub fn sliver_render_object(
+        &self,
+    ) -> parking_lot::RwLockReadGuard<'_, Box<dyn RenderObject<SliverProtocol>>> {
+        self.as_sliver()
+            .expect("Expected Sliver protocol node")
+            .render_object()
+    }
+
+    /// Returns a write lock on the Sliver render object.
+    ///
+    /// Panics if this is not a Sliver node.
+    pub fn sliver_render_object_mut(
+        &self,
+    ) -> parking_lot::RwLockWriteGuard<'_, Box<dyn RenderObject<SliverProtocol>>> {
+        self.as_sliver()
+            .expect("Expected Sliver protocol node")
+            .render_object_mut()
+    }
+
+    /// Generic method to get render object for a specific protocol.
+    ///
+    /// Returns Some if the node matches the protocol, None otherwise.
+    /// This is the idiomatic generic way to access render objects.
+    pub fn render_object_for_protocol<P: Protocol>(
+        &self,
+    ) -> Option<parking_lot::RwLockReadGuard<'_, Box<dyn RenderObject<P>>>> {
+        use std::any::TypeId;
+
+        // Use TypeId to dispatch at runtime to the correct protocol
+        if TypeId::of::<P>() == TypeId::of::<BoxProtocol>() {
+            if self.is_box() {
+                // SAFETY: We've verified P is BoxProtocol
+                let guard = self.as_box_unchecked().render_object();
+                // This transmute is safe because we know P == BoxProtocol
+                Some(unsafe { std::mem::transmute(guard) })
+            } else {
+                None
+            }
+        } else if TypeId::of::<P>() == TypeId::of::<SliverProtocol>() {
+            if self.is_sliver() {
+                // SAFETY: We've verified P is SliverProtocol
+                let guard = self.as_sliver().unwrap().render_object();
+                // This transmute is safe because we know P == SliverProtocol
+                Some(unsafe { std::mem::transmute(guard) })
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
+
+    /// Generic method to get mutable render object for a specific protocol.
+    ///
+    /// Returns Some if the node matches the protocol, None otherwise.
+    /// This is the idiomatic generic way to access render objects mutably.
+    pub fn render_object_mut_for_protocol<P: Protocol>(
+        &self,
+    ) -> Option<parking_lot::RwLockWriteGuard<'_, Box<dyn RenderObject<P>>>> {
+        use std::any::TypeId;
+
+        // Use TypeId to dispatch at runtime to the correct protocol
+        if TypeId::of::<P>() == TypeId::of::<BoxProtocol>() {
+            if self.is_box() {
+                // SAFETY: We've verified P is BoxProtocol
+                let guard = self.as_box_unchecked().render_object_mut();
+                // This transmute is safe because we know P == BoxProtocol
+                Some(unsafe { std::mem::transmute(guard) })
+            } else {
+                None
+            }
+        } else if TypeId::of::<P>() == TypeId::of::<SliverProtocol>() {
+            if self.is_sliver() {
+                // SAFETY: We've verified P is SliverProtocol
+                let guard = self.as_sliver().unwrap().render_object_mut();
+                // This transmute is safe because we know P == SliverProtocol
+                Some(unsafe { std::mem::transmute(guard) })
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
+
     /// Clears the needs_paint flag.
     #[inline]
     pub fn clear_needs_paint(&self) {
@@ -373,7 +461,5 @@ impl RenderNode {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     // TODO: Add tests once we have concrete render objects
 }

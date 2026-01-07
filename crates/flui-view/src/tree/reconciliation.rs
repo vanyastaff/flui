@@ -224,7 +224,8 @@ mod tests {
 
     impl View for TestView {
         fn create_element(&self) -> Box<dyn crate::ElementBase> {
-            Box::new(StatelessElement::new(self))
+            use crate::element::StatelessBehavior;
+            Box::new(StatelessElement::new(self, StatelessBehavior))
         }
 
     }

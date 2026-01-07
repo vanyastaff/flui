@@ -345,7 +345,7 @@ impl HitTestable for RenderingFlutterBinding {
         let views = self.render_views.read();
         if let Some(view) = views.get(&view_id) {
             let view_guard = view.read();
-            view_guard.hit_test(result, position);
+            view_guard.hit_test_view(result, position);
         }
     }
 }

@@ -18,7 +18,7 @@
 //! ```
 
 use flui_rendering::objects::{FlexDirection, RenderFlex};
-use flui_rendering::wrapper::BoxWrapper;
+use flui_rendering::protocol::BoxProtocol;
 use flui_view::{impl_render_view, Children, RenderView, View};
 
 // Re-export alignment types for convenience
@@ -129,23 +129,21 @@ impl Default for Flex {
 impl_render_view!(Flex);
 
 impl RenderView for Flex {
-    type RenderObject = BoxWrapper<RenderFlex>;
+    type Protocol = BoxProtocol;
+    type RenderObject = RenderFlex;
 
     fn create_render_object(&self) -> Self::RenderObject {
-        let render = match self.direction {
+        match self.direction {
             FlexDirection::Horizontal => RenderFlex::row(),
             FlexDirection::Vertical => RenderFlex::column(),
         }
         .with_main_axis_alignment(self.main_axis_alignment)
         .with_cross_axis_alignment(self.cross_axis_alignment)
-        .with_spacing(self.spacing);
-
-        BoxWrapper::new(render)
+        .with_spacing(self.spacing)
     }
 
     fn update_render_object(&self, render_object: &mut Self::RenderObject) {
-        let inner = render_object.inner();
-        if inner.direction() != self.direction {
+        if render_object.direction() != self.direction {
             // Direction changed - need to recreate
             *render_object = self.create_render_object();
         }
@@ -235,7 +233,8 @@ impl Default for Row {
 impl_render_view!(Row);
 
 impl RenderView for Row {
-    type RenderObject = BoxWrapper<RenderFlex>;
+    type Protocol = BoxProtocol;
+    type RenderObject = RenderFlex;
 
     fn create_render_object(&self) -> Self::RenderObject {
         self.inner.create_render_object()
@@ -328,7 +327,8 @@ impl Default for Column {
 impl_render_view!(Column);
 
 impl RenderView for Column {
-    type RenderObject = BoxWrapper<RenderFlex>;
+    type Protocol = BoxProtocol;
+    type RenderObject = RenderFlex;
 
     fn create_render_object(&self) -> Self::RenderObject {
         self.inner.create_render_object()

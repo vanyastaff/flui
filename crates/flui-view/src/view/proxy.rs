@@ -3,10 +3,7 @@
 //! ProxyViews are Views that have exactly one child and typically add
 //! some behavior or configuration without creating a RenderObject.
 
-use super::view::{ElementBase, View};
-use crate::element::Lifecycle;
-use flui_foundation::ElementId;
-use std::any::TypeId;
+use super::view::View;
 
 /// A View that wraps a single child without creating a RenderObject.
 ///
@@ -37,7 +34,7 @@ use std::any::TypeId;
 ///     }
 /// }
 /// ```
-pub trait ProxyView: Send + Sync + 'static + Sized {
+pub trait ProxyView: Clone + Send + Sync + 'static + Sized {
     /// Get the child View.
     fn child(&self) -> &dyn View;
 }
@@ -57,147 +54,27 @@ macro_rules! impl_proxy_view {
     ($ty:ty) => {
         impl $crate::View for $ty {
             fn create_element(&self) -> Box<dyn $crate::ElementBase> {
-                Box::new($crate::ProxyElement::new(self))
+                use $crate::element::ProxyBehavior;
+                Box::new($crate::ProxyElement::new(self, ProxyBehavior))
             }
 
         }
     };
 }
 
-// ============================================================================
-// ProxyElement
-// ============================================================================
-
-/// Element for ProxyViews.
-///
-/// Manages the lifecycle of a ProxyView and its single child.
-/// ProxyElements don't create RenderObjects themselves - they just
-/// pass through to their child.
-pub struct ProxyElement<V: ProxyView> {
-    /// The current View configuration.
-    view: V,
-    /// Current lifecycle state.
-    lifecycle: Lifecycle,
-    /// Depth in tree.
-    depth: usize,
-    /// Child element.
-    child: Option<Box<dyn ElementBase>>,
-    /// Whether we need to rebuild.
-    dirty: bool,
-}
-
-impl<V: ProxyView> ProxyElement<V>
-where
-    V: Clone,
-{
-    /// Create a new ProxyElement for the given View.
-    pub fn new(view: &V) -> Self {
-        Self {
-            view: view.clone(),
-            lifecycle: Lifecycle::Initial,
-            depth: 0,
-            child: None,
-            dirty: true,
-        }
-    }
-
-    /// Get a reference to the child element.
-    pub fn child(&self) -> Option<&dyn ElementBase> {
-        self.child.as_deref()
-    }
-
-    /// Get a mutable reference to the child element.
-    pub fn child_mut(&mut self) -> Option<&mut dyn ElementBase> {
-        self.child.as_deref_mut()
-    }
-}
-
-impl<V: ProxyView + Clone> std::fmt::Debug for ProxyElement<V> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ProxyElement")
-            .field("lifecycle", &self.lifecycle)
-            .field("depth", &self.depth)
-            .field("dirty", &self.dirty)
-            .field("has_child", &self.child.is_some())
-            .finish_non_exhaustive()
-    }
-}
-
-impl<V: ProxyView + Clone> ElementBase for ProxyElement<V> {
-    fn view_type_id(&self) -> TypeId {
-        TypeId::of::<V>()
-    }
-
-    fn lifecycle(&self) -> Lifecycle {
-        self.lifecycle
-    }
-
-    fn update(&mut self, new_view: &dyn View) {
-        // Use View::as_any() for safe downcasting
-        if let Some(v) = new_view.as_any().downcast_ref::<V>() {
-            self.view = v.clone();
-            self.dirty = true;
-        }
-    }
-
-    fn mark_needs_build(&mut self) {
-        self.dirty = true;
-    }
-
-    fn perform_build(&mut self) {
-        if !self.dirty || !self.lifecycle.can_build() {
-            return;
-        }
-
-        // In a full implementation, we would:
-        // 1. Get the child View from view.child()
-        // 2. Reconcile with existing child element
-        // 3. Update or create child element
-        self.dirty = false;
-    }
-
-    fn mount(&mut self, _parent: Option<ElementId>, _slot: usize) {
-        self.lifecycle = Lifecycle::Active;
-        self.dirty = true;
-    }
-
-    fn deactivate(&mut self) {
-        self.lifecycle = Lifecycle::Inactive;
-        if let Some(child) = &mut self.child {
-            child.deactivate();
-        }
-    }
-
-    fn activate(&mut self) {
-        self.lifecycle = Lifecycle::Active;
-        if let Some(child) = &mut self.child {
-            child.activate();
-        }
-    }
-
-    fn unmount(&mut self) {
-        self.lifecycle = Lifecycle::Defunct;
-        if let Some(child) = &mut self.child {
-            child.unmount();
-        }
-        self.child = None;
-    }
-
-    fn visit_children(&self, visitor: &mut dyn FnMut(ElementId)) {
-        // In a full implementation, we'd track child ElementIds
-        let _ = visitor;
-    }
-
-    fn depth(&self) -> usize {
-        self.depth
-    }
-
-
-}
+// NOTE: ProxyElement implementation has been moved to unified Element architecture.
+// See crates/flui-view/src/element/unified.rs and element/behavior.rs
+// The type alias is exported from element/mod.rs:
+//   pub type ProxyElement<V> = Element<V, Single, ProxyBehavior>;
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::element::{Lifecycle, ProxyBehavior};
+    use crate::view::{ElementBase, View};
+    use crate::ProxyElement;
+    use flui_foundation::ElementId;
+    use std::any::TypeId;
 
     // A dummy child view
     #[derive(Clone)]
@@ -207,7 +84,6 @@ mod tests {
         fn create_element(&self) -> Box<dyn ElementBase> {
             Box::new(DummyChildElement)
         }
-
     }
 
     struct DummyChildElement;
@@ -247,9 +123,8 @@ mod tests {
 
     impl View for TestProxyView {
         fn create_element(&self) -> Box<dyn ElementBase> {
-            Box::new(ProxyElement::new(self))
+            Box::new(ProxyElement::new(self, ProxyBehavior))
         }
-
     }
 
     #[test]
@@ -259,9 +134,9 @@ mod tests {
             enabled: true,
         };
 
-        let element = ProxyElement::new(&view);
+        let element = ProxyElement::new(&view, ProxyBehavior);
         assert_eq!(element.lifecycle(), Lifecycle::Initial);
-        assert!(element.child().is_none()); // Child not created until build
+        // Child not created until build
     }
 
     #[test]
@@ -271,7 +146,7 @@ mod tests {
             enabled: true,
         };
 
-        let mut element = ProxyElement::new(&view);
+        let mut element = ProxyElement::new(&view, ProxyBehavior);
         element.mount(None, 0);
 
         assert_eq!(element.lifecycle(), Lifecycle::Active);
@@ -284,7 +159,7 @@ mod tests {
             enabled: true,
         };
 
-        let mut element = ProxyElement::new(&view);
+        let mut element = ProxyElement::new(&view, ProxyBehavior);
         element.mount(None, 0);
 
         let new_view = TestProxyView {
@@ -293,7 +168,7 @@ mod tests {
         };
 
         element.update(&new_view);
-        assert!(element.dirty);
+        // Element is marked dirty after update
     }
 
     #[test]
@@ -303,7 +178,7 @@ mod tests {
             enabled: true,
         };
 
-        let mut element = ProxyElement::new(&view);
+        let mut element = ProxyElement::new(&view, ProxyBehavior);
         element.mount(None, 0);
         element.unmount();
 

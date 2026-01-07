@@ -18,7 +18,7 @@
 //! ```
 
 use flui_rendering::objects::RenderPadding;
-use flui_rendering::wrapper::BoxWrapper;
+use flui_rendering::protocol::BoxProtocol;
 use flui_types::EdgeInsets;
 use flui_view::{impl_render_view, Child, RenderView, View};
 
@@ -163,15 +163,16 @@ impl Default for Padding {
 impl_render_view!(Padding);
 
 impl RenderView for Padding {
-    type RenderObject = BoxWrapper<RenderPadding>;
+    type Protocol = BoxProtocol;
+    type RenderObject = RenderPadding;
 
     fn create_render_object(&self) -> Self::RenderObject {
-        BoxWrapper::new(RenderPadding::new(self.padding))
+        RenderPadding::new(self.padding)
     }
 
     fn update_render_object(&self, render_object: &mut Self::RenderObject) {
-        if render_object.inner().padding() != self.padding {
-            render_object.inner_mut().set_padding(self.padding);
+        if render_object.padding() != self.padding {
+            render_object.set_padding(self.padding);
         }
     }
 
@@ -233,7 +234,7 @@ mod tests {
     fn test_render_view_create() {
         let padding = Padding::all(10.0);
         let render = padding.create_render_object();
-        // Access inner RenderPadding through BoxWrapper
-        assert_eq!(render.inner().padding(), EdgeInsets::all(10.0));
+        // Direct access to RenderPadding
+        assert_eq!(render.padding(), EdgeInsets::all(10.0));
     }
 }

@@ -17,7 +17,7 @@
 //! ```
 
 use flui_rendering::objects::RenderCenter;
-use flui_rendering::wrapper::BoxWrapper;
+use flui_rendering::protocol::BoxProtocol;
 use flui_view::{impl_render_view, Child, RenderView, View};
 
 /// A widget that centers its child within the available space.
@@ -104,7 +104,8 @@ impl Default for Center {
 impl_render_view!(Center);
 
 impl RenderView for Center {
-    type RenderObject = BoxWrapper<RenderCenter>;
+    type Protocol = BoxProtocol;
+    type RenderObject = RenderCenter;
 
     fn create_render_object(&self) -> Self::RenderObject {
         let mut render = RenderCenter::new();
@@ -114,12 +115,12 @@ impl RenderView for Center {
         if let Some(hf) = self.height_factor {
             render = render.with_height_factor(hf);
         }
-        BoxWrapper::new(render)
+        render
     }
 
     fn update_render_object(&self, render_object: &mut Self::RenderObject) {
-        let inner = render_object.inner();
-        if inner.width_factor() != self.width_factor || inner.height_factor() != self.height_factor
+        if render_object.width_factor() != self.width_factor
+            || render_object.height_factor() != self.height_factor
         {
             let mut render = RenderCenter::new();
             if let Some(wf) = self.width_factor {
@@ -128,7 +129,7 @@ impl RenderView for Center {
             if let Some(hf) = self.height_factor {
                 render = render.with_height_factor(hf);
             }
-            *render_object = BoxWrapper::new(render);
+            *render_object = render;
         }
     }
 

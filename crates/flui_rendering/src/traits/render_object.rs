@@ -240,6 +240,33 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + DowncastSync + Send + Sync
     ///
     /// Default: Does nothing
     fn set_was_repaint_boundary(&mut self, _value: bool) {}
+
+    // ========================================================================
+    // Pipeline Integration
+    // ========================================================================
+
+    /// Inserts this render object into the pipeline owner and returns its ID.
+    ///
+    /// This is the idiomatic way to insert render objects into the render tree.
+    /// The method uses the `From` trait to convert the boxed render object
+    /// into a `RenderNode`, ensuring compile-time protocol dispatch.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let render_object = RenderPadding::new(padding);
+    /// let render_id = Box::new(render_object).insert_into_pipeline(&mut owner);
+    /// ```
+    fn insert_into_pipeline(
+        self: Box<Self>,
+        owner: &mut crate::pipeline::PipelineOwner,
+    ) -> flui_foundation::RenderId
+    where
+        Self: Sized,
+        crate::storage::RenderNode: From<Box<dyn RenderObject<P>>>,
+    {
+        owner.insert(self)
+    }
 }
 
 impl_downcast!(sync RenderObject<P> where P: Protocol);

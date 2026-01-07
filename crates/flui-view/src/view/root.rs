@@ -173,8 +173,8 @@ impl<V: View + Clone + Send + Sync + 'static> ElementBase for RootRenderElement<
         // Insert into PipelineOwner's RenderTree and get RenderId
         if let Some(ref pipeline_owner) = self.pipeline_owner {
             let mut owner = pipeline_owner.write();
-            let render_tree = owner.render_tree_mut();
-            let render_id = render_tree.insert(Box::new(render_view));
+            // Use PipelineOwner::insert which handles conversion to RenderNode
+            let render_id = owner.insert(Box::new(render_view));
             owner.set_root_id(Some(render_id));
             self.render_id = Some(render_id);
 
@@ -235,9 +235,10 @@ impl<V: View + Clone + Send + Sync + 'static> ElementBase for RootRenderElement<
             if let (Some(ref pipeline_owner), Some(render_id)) =
                 (&self.pipeline_owner, self.render_id)
             {
-                let mut owner = pipeline_owner.write();
+                let owner = pipeline_owner.write();
                 if let Some(node) = owner.render_tree().get(render_id) {
-                    let mut render_object = node.render_object_mut();
+                    // RenderView uses BoxProtocol
+                    let mut render_object = node.box_render_object_mut();
                     if let Some(render_view) = render_object
                         .as_any_mut()
                         .downcast_mut::<RenderViewObject>()
@@ -303,11 +304,8 @@ impl<V: View + Clone + Send + Sync + 'static> ElementBase for RootRenderElement<
                     // Add child to parent's children list
                     if let Some(parent_node) = render_tree.get_mut(parent_id) {
                         parent_node.add_child(child_render_id);
-
-                        // Also notify the render object itself so it can track children
-                        parent_node
-                            .render_object_mut()
-                            .add_child_render_id(child_render_id);
+                        // Parent-child relationships are fully managed by NodeLinks
+                        // No need to notify render objects directly
                     }
 
                     tracing::debug!(
@@ -397,11 +395,8 @@ impl<V: View + Clone + Send + Sync + 'static> RenderObjectElement for RootRender
                 // Add child to parent's children list
                 if let Some(parent_node) = render_tree.get_mut(parent_id) {
                     parent_node.add_child(*child_render_id);
-
-                    // Also notify the render object itself so it can track children
-                    parent_node
-                        .render_object_mut()
-                        .add_child_render_id(*child_render_id);
+                    // Parent-child relationships are fully managed by NodeLinks
+                    // No need to notify render objects directly
                 }
             }
         }
@@ -495,6 +490,7 @@ impl<V: View + Clone + Send + Sync + 'static> RenderTreeRootElement for RootRend
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_rendering::pipeline::PipelineOwner;
 
     #[derive(Clone)]
     struct TestView;

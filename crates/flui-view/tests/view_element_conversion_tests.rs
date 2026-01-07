@@ -4,6 +4,7 @@
 //! and downcast-rs / dyn-clone integration.
 
 use flui_view::{
+    element::{StatefulBehavior, StatelessBehavior},
     BoxedElement, BoxedView, BuildContext, ElementBase, IntoElement, IntoView, Lifecycle,
     StatefulElement, StatefulView, StatelessElement, StatelessView, View, ViewExt, ViewState,
 };
@@ -26,7 +27,7 @@ impl StatelessView for SimpleView {
 
 impl View for SimpleView {
     fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(StatelessElement::new(self))
+        Box::new(StatelessElement::new(self, StatelessBehavior::new()))
     }
 }
 
@@ -59,7 +60,7 @@ impl ViewState<CounterView> for CounterState {
 
 impl View for CounterView {
     fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(StatefulElement::new(self))
+        Box::new(StatefulElement::new(self, StatefulBehavior::new(self)))
     }
 }
 
@@ -282,9 +283,12 @@ fn test_view_downcast_mut() {
 
 #[test]
 fn test_element_downcast_ref() {
-    let element: Box<dyn ElementBase> = Box::new(StatelessElement::new(&SimpleView {
-        text: "Element".to_string(),
-    }));
+    let element: Box<dyn ElementBase> = Box::new(StatelessElement::new(
+        &SimpleView {
+            text: "Element".to_string(),
+        },
+        StatelessBehavior::new(),
+    ));
 
     // Downcast to concrete element type
     let concrete = element
@@ -295,9 +299,12 @@ fn test_element_downcast_ref() {
 
 #[test]
 fn test_element_downcast_wrong_type() {
-    let element: Box<dyn ElementBase> = Box::new(StatelessElement::new(&SimpleView {
-        text: "Wrong".to_string(),
-    }));
+    let element: Box<dyn ElementBase> = Box::new(StatelessElement::new(
+        &SimpleView {
+            text: "Wrong".to_string(),
+        },
+        StatelessBehavior::new(),
+    ));
 
     // Downcast to wrong element type should fail
     let wrong = element
