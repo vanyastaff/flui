@@ -39,10 +39,11 @@
 //!         ctx.complete_with_size(ctx.constrain(child_size));
 //!     }
 //!
-//!     fn paint(&self, context: &mut CanvasContext, offset: Offset,
-//!              children: &ChildrenAccess<Single, BoxParentData, PaintPhase>) {
-//!         // Paint using CanvasContext
-//!         context.canvas().draw_rect(...);
+//!     fn paint(&self, ctx: &mut BoxPaintContext<'_, Single, BoxParentData>) {
+//!         // Draw self
+//!         ctx.canvas().draw_rect(...);
+//!         // Paint child
+//!         ctx.paint_child();
 //!     }
 //!
 //!     fn hit_test(&self, ctx: &mut BoxHitTestContext<Single, BoxParentData>) -> bool {
@@ -65,7 +66,7 @@ pub use canvas::{Canvas, CanvasContext, Paint, PaintStyle, Picture};
 pub use clip::ClipContext;
 pub use hit_test::HitTestContext;
 pub use layout::LayoutContext;
-pub use paint::PaintContext;
+pub use paint::{ChildPaintInfo, PaintChildCallback, PaintContext};
 
 // ============================================================================
 // Protocol Type Aliases

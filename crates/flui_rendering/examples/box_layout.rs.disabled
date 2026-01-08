@@ -1,18 +1,20 @@
-//! Example demonstrating BoxWrapper usage with RenderBox.
+//! Example demonstrating RenderBox and IntoRenderObject usage.
 //!
 //! This example shows how to:
 //! 1. Implement RenderBox for a custom render object
-//! 2. Wrap it with BoxWrapper for RenderTree storage
-//! 3. Perform layout with constraints
+//! 2. Convert it to RenderNode via IntoRenderObject for RenderTree storage
+//! 3. Build a tree structure with parent-child relationships
 
 use flui_rendering::{
     arity::Leaf,
-    constraints::BoxConstraints,
+    constraints::{BoxConstraints, Constraints},
     context::{BoxHitTestContext, BoxLayoutContext, BoxPaintContext},
     parent_data::BoxParentData,
-    traits::{RenderBox, RenderObject},
-    wrapper::BoxWrapper,
+    protocol::IntoRenderObject,
+    storage::RenderTree,
+    traits::RenderBox,
 };
+use flui_tree::TreeWrite;
 use flui_types::Size;
 
 // ============================================================================
@@ -52,6 +54,8 @@ impl ColoredBox {
     }
 }
 
+impl flui_foundation::Diagnosticable for ColoredBox {}
+
 impl RenderBox for ColoredBox {
     type Arity = Leaf;
     type ParentData = BoxParentData;
@@ -63,15 +67,15 @@ impl RenderBox for ColoredBox {
         ctx.complete_with_size(constrained);
     }
 
-    fn size(&self) -> Size {
-        self.size
+    fn size(&self) -> &Size {
+        &self.size
     }
 
-    fn set_size(&mut self, size: Size) {
-        self.size = size;
+    fn size_mut(&mut self) -> &mut Size {
+        &mut self.size
     }
 
-    fn paint(&mut self, _ctx: &mut BoxPaintContext<'_, Leaf, BoxParentData>) {
+    fn paint(&self, _ctx: &mut BoxPaintContext<'_, Leaf, BoxParentData>) {
         // In real implementation, would draw a colored rectangle
         println!(
             "  Paint ColoredBox: size={:?}, color={:?}",
@@ -90,71 +94,70 @@ impl RenderBox for ColoredBox {
 // ============================================================================
 
 fn main() {
-    println!("=== BoxWrapper Example ===\n");
+    println!("=== RenderBox with IntoRenderObject Example ===\n");
+
+    // Create a RenderTree to store our render objects
+    let mut tree = RenderTree::new();
 
     // Create colored boxes
     let red_box = ColoredBox::red(100.0, 50.0);
     let green_box = ColoredBox::green(200.0, 100.0);
     let blue_box = ColoredBox::blue(150.0, 75.0);
 
-    // Wrap them for RenderTree storage
-    let mut red_wrapper = BoxWrapper::new(red_box);
-    let mut green_wrapper = BoxWrapper::new(green_box);
-    let mut blue_wrapper = BoxWrapper::new(blue_box);
+    println!("Created boxes:");
+    println!("  Red:   preferred={:?}", red_box.preferred_size);
+    println!("  Green: preferred={:?}", green_box.preferred_size);
+    println!("  Blue:  preferred={:?}", blue_box.preferred_size);
 
-    println!("Before layout:");
-    println!("  Red:   needs_layout={}", red_wrapper.needs_layout());
-    println!("  Green: needs_layout={}", green_wrapper.needs_layout());
-    println!("  Blue:  needs_layout={}", blue_wrapper.needs_layout());
+    // Convert to RenderNodes via IntoRenderObject and insert into tree
+    let red_node = red_box.into_render_node();
+    let green_node = green_box.into_render_node();
+    let blue_node = blue_box.into_render_node();
 
-    // Layout with tight constraints (exact size)
-    println!("\n--- Layout with tight constraints (80x40) ---");
+    println!("\nNode types:");
+    println!("  Red is_box:   {}", red_node.is_box());
+    println!("  Green is_box: {}", green_node.is_box());
+    println!("  Blue is_box:  {}", blue_node.is_box());
+
+    // Insert all nodes into tree as independent nodes
+    // (Full parent-child setup requires PipelineOwner integration)
+    let red_id = tree.insert(red_node);
+    let green_id = tree.insert(green_node);
+    let blue_id = tree.insert(blue_node);
+
+    println!("\nTree structure:");
+    println!("  Tree length: {}", tree.len());
+    println!("  Red id: {:?}", red_id);
+    println!("  Green id: {:?}", green_id);
+    println!("  Blue id: {:?}", blue_id);
+
+    // Demonstrate BoxConstraints
+    println!("\n--- BoxConstraints examples ---");
+
     let tight = BoxConstraints::tight(Size::new(80.0, 40.0));
-    red_wrapper.layout(tight, true);
-    println!(
-        "  Red after layout: size={:?}, needs_layout={}",
-        red_wrapper.inner().size(),
-        red_wrapper.needs_layout()
-    );
+    println!("  Tight(80x40): is_tight={}", tight.is_tight());
 
-    // Layout with loose constraints (max size)
-    println!("\n--- Layout with loose constraints (max 300x200) ---");
     let loose = BoxConstraints::loose(Size::new(300.0, 200.0));
-    green_wrapper.layout(loose, true);
     println!(
-        "  Green after layout: size={:?}",
-        green_wrapper.inner().size()
+        "  Loose(max 300x200): min=({},{}), max=({},{})",
+        loose.min_width, loose.min_height, loose.max_width, loose.max_height
     );
 
-    // Layout with bounded constraints
-    println!("\n--- Layout with bounded constraints (50-100 x 25-50) ---");
     let bounded = BoxConstraints::new(50.0, 100.0, 25.0, 50.0);
-    blue_wrapper.layout(bounded, true);
     println!(
-        "  Blue after layout: size={:?}",
-        blue_wrapper.inner().size()
+        "  Bounded(50-100 x 25-50): min=({},{}), max=({},{})",
+        bounded.min_width, bounded.min_height, bounded.max_width, bounded.max_height
     );
 
-    // Check paint bounds
-    println!("\n--- Paint bounds ---");
-    println!("  Red paint_bounds:   {:?}", red_wrapper.paint_bounds());
-    println!("  Green paint_bounds: {:?}", green_wrapper.paint_bounds());
-    println!("  Blue paint_bounds:  {:?}", blue_wrapper.paint_bounds());
-
-    // Demonstrate RenderObject trait
-    println!("\n--- RenderObject trait ---");
-    println!("  Red depth:   {}", red_wrapper.depth());
+    // Test constraint operations
+    println!("\n--- Constraint operations ---");
+    let test_size = Size::new(200.0, 200.0);
+    println!("  Size to constrain: {:?}", test_size);
+    println!("  Tight constrains to: {:?}", tight.constrain(test_size));
+    println!("  Loose constrains to: {:?}", loose.constrain(test_size));
     println!(
-        "  Red is_repaint_boundary: {}",
-        red_wrapper.is_repaint_boundary()
-    );
-
-    // Create with repaint boundary
-    let boundary_box = ColoredBox::new(50.0, 50.0, [1.0, 1.0, 0.0, 1.0]);
-    let boundary_wrapper = BoxWrapper::with_repaint_boundary(boundary_box);
-    println!(
-        "  Boundary is_repaint_boundary: {}",
-        boundary_wrapper.is_repaint_boundary()
+        "  Bounded constrains to: {:?}",
+        bounded.constrain(test_size)
     );
 
     println!("\n=== Example Complete ===");

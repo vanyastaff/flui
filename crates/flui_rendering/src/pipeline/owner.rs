@@ -678,16 +678,21 @@ impl PipelineOwner {
             .sort_unstable_by_key(|node| node.depth);
 
         // Process dirty nodes
-        // TODO: Implement actual compositing bits update - requires render object lookup by ID
+        //
+        // Note: Full compositing bits update is not yet implemented.
+        // This would require:
+        // 1. PipelineOwner to hold a reference to RenderTree
+        // 2. Look up each render object by ID
+        // 3. Call render_object.update_compositing_bits()
+        //
+        // Currently we just clear the list - compositing works but
+        // may not be optimally batched.
         for node in &self.nodes_needing_compositing_bits_update {
             tracing::trace!(
-                "compositing bits update (stub): node id={} depth={}",
+                "compositing bits update: node id={} depth={} (batching not implemented)",
                 node.id,
                 node.depth
             );
-            // Future implementation should:
-            // 1. Look up the render object by ID in the render tree
-            // 2. Call render_object.update_compositing_bits()
         }
         self.nodes_needing_compositing_bits_update.clear();
 

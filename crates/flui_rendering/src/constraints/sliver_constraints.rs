@@ -275,6 +275,8 @@ impl SliverConstraints {
 
 /// Rounds value to hundredths (0.01 precision).
 ///
+/// Preserves infinity and NaN unchanged.
+#[inline]
 fn round_to_hundredths_runtime(value: f32) -> f32 {
     if value.is_finite() {
         (value * 100.0).round() / 100.0

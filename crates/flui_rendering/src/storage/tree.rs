@@ -99,9 +99,18 @@ impl RenderTree {
     /// Sets the pipeline owner.
     ///
     /// This will attach all existing nodes to the new owner.
+    ///
+    /// # Note
+    ///
+    /// Currently this only stores the owner reference. Full attach/detach
+    /// lifecycle would require:
+    /// 1. Iterating all nodes and calling their attach/detach methods
+    /// 2. Adding `attached` state tracking to RenderEntry
+    /// 3. Notifying the owner about all existing dirty nodes
     pub fn set_owner(&mut self, owner: Option<Arc<RwLock<PipelineOwner>>>) {
+        // Note: Full attach/detach lifecycle for existing nodes is not yet implemented.
+        // This would require iterating all nodes and calling render_object.attach(owner).
         self.owner = owner;
-        // TODO: Attach/detach existing nodes when owner changes
     }
 
     // ========================================================================

@@ -4,7 +4,7 @@ use flui_types::{EdgeInsets, Offset, Point, Rect, Size};
 
 use crate::arity::Single;
 use crate::constraints::BoxConstraints;
-use crate::context::{BoxHitTestContext, BoxLayoutContext, BoxPaintContext};
+use crate::context::{BoxHitTestContext, BoxLayoutContext};
 use crate::parent_data::BoxParentData;
 use crate::traits::RenderBox;
 
@@ -14,7 +14,7 @@ use crate::traits::RenderBox;
 ///
 /// ```ignore
 /// let padding = RenderPadding::new(EdgeInsets::all(16.0));
-/// // Use with PipelineOwner and RenderTree for actual rendering
+/// let mut wrapper = BoxWrapper::new(padding);
 /// // Add child, then layout...
 /// ```
 #[derive(Debug, Clone)]
@@ -120,9 +120,7 @@ impl RenderBox for RenderPadding {
         &mut self.size
     }
 
-    fn paint(&mut self, _ctx: &mut BoxPaintContext<'_, Single, BoxParentData>) {
-        // Children are painted automatically by the wrapper
-    }
+    // paint() uses default no-op - Padding just positions children
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {
         // First check if we're in bounds
@@ -143,3 +141,39 @@ impl RenderBox for RenderPadding {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::constraints::BoxConstraints;
+
+    #[test]
+    fn test_edge_insets() {
+        let insets = EdgeInsets::all(10.0);
+        assert_eq!(insets.horizontal_total(), 20.0);
+        assert_eq!(insets.vertical_total(), 20.0);
+        assert_eq!(insets.top_left(), Offset::new(10.0, 10.0));
+    }
+
+    #[test]
+    fn test_padding_creation() {
+        let padding = RenderPadding::all(16.0);
+        assert_eq!(padding.padding(), EdgeInsets::all(16.0));
+    }
+
+    #[test]
+    fn test_deflate_constraints() {
+        let padding = RenderPadding::symmetric(20.0, 10.0);
+        let constraints = BoxConstraints::new(0.0, 200.0, 0.0, 100.0);
+        let deflated = padding.deflate_constraints(&constraints);
+
+        assert_eq!(deflated.max_width, 160.0); // 200 - 40
+        assert_eq!(deflated.max_height, 80.0); // 100 - 20
+    }
+
+    #[test]
+    fn test_edge_insets_symmetric() {
+        let insets = EdgeInsets::symmetric(10.0, 20.0);
+        assert_eq!(insets.horizontal_total(), 20.0);
+        assert_eq!(insets.vertical_total(), 40.0);
+    }
+}

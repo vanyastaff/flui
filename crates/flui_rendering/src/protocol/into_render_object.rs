@@ -1,8 +1,8 @@
 //! IntoRenderObject trait for converting RenderBox/RenderSliver into storage-ready nodes.
 //!
-//! This module provides the `IntoRenderObject` trait for protocol-aware conversions.
-//! Concrete render objects are directly converted into RenderEntry<Protocol> for storage
-//! in RenderTree, without intermediate wrapper types.
+//! This module provides the `IntoRenderObject` trait that replaces the old wrapper approach.
+//! Instead of wrapping concrete types in BoxWrapper/SliverWrapper, we directly convert them
+//! into RenderEntry<Protocol> for storage in RenderTree.
 //!
 //! # Architecture
 //!
@@ -35,12 +35,12 @@
 //! └──────────────────────────────────────────────────────────────┘
 //! ```
 //!
-//! # Benefits of Direct Protocol Conversion
+//! # Benefits over Wrapper Approach
 //!
-//! 1. **No Boilerplate**: Direct conversion to RenderEntry
+//! 1. **No Wrapper Boilerplate**: Direct conversion to RenderEntry
 //! 2. **Better Type Safety**: Protocol system enforced at creation time
-//! 3. **Cleaner API**: `my_box.into_render_object()` for protocol-aware conversion
-//! 4. **Storage Efficiency**: Direct storage without intermediate types
+//! 3. **Cleaner API**: `my_box.into_render_object()` vs `BoxWrapper::new(my_box)`
+//! 4. **Storage Efficiency**: One less layer of indirection
 //! 5. **Protocol Flexibility**: Easy to add new protocols
 //!
 //! # Example
@@ -62,8 +62,8 @@
 //!         ctx.complete_with_size(size);
 //!     }
 //!
-//!     fn paint(&mut self, ctx: &mut BoxPaintContext<Leaf, BoxParentData>) {
-//!         let rect = Rect::from_size(self.size).translate(ctx.offset());
+//!     fn paint(&self, ctx: &mut CanvasContext, offset: Offset) {
+//!         let rect = Rect::from_size(self.size).translate(offset);
 //!         ctx.canvas().draw_rect(rect, self.color);
 //!     }
 //!
@@ -71,8 +71,8 @@
 //!         ctx.is_within_size(self.size.width, self.size.height)
 //!     }
 //!
-//!     fn size(&self) -> Size { self.size }
-//!     fn set_size(&mut self, size: Size) { self.size = size; }
+//!     fn size(&self) -> &Size { &self.size }
+//!     fn size_mut(&mut self) -> &mut Size { &mut self.size }
 //! }
 //!
 //! // Create and insert into tree
@@ -166,7 +166,7 @@ where
 mod tests {
     use super::*;
     use crate::arity::Leaf;
-    use crate::context::{BoxHitTestContext, BoxLayoutContext, BoxPaintContext};
+    use crate::context::{BoxHitTestContext, BoxLayoutContext};
     use crate::parent_data::BoxParentData;
     use flui_types::Size;
 
@@ -185,7 +185,7 @@ mod tests {
             // Test implementation
         }
 
-        fn paint(&mut self, _ctx: &mut BoxPaintContext<'_, Leaf, BoxParentData>) {}
+        // paint() uses default no-op
 
         fn hit_test(&self, _ctx: &mut BoxHitTestContext<'_, Leaf, BoxParentData>) -> bool {
             false

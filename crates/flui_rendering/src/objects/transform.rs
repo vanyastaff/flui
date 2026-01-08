@@ -3,7 +3,7 @@
 use flui_types::{Alignment, Matrix4, Offset, Point, Rect, Size};
 
 use crate::arity::Single;
-use crate::context::{BoxHitTestContext, BoxLayoutContext, BoxPaintContext};
+use crate::context::{BoxHitTestContext, BoxLayoutContext};
 use crate::parent_data::BoxParentData;
 use crate::traits::RenderBox;
 
@@ -195,26 +195,7 @@ impl RenderBox for RenderTransform {
         &mut self.size
     }
 
-    fn paint(&mut self, ctx: &mut BoxPaintContext<'_, Single, BoxParentData>) {
-        if !self.has_child {
-            return;
-        }
-
-        let offset = ctx.offset();
-        let effective = self.effective_transform();
-
-        // Use transform layer for compositing
-        // Children will be painted into this layer by the wrapper
-        ctx.canvas_context_mut().push_transform(
-            self.needs_compositing,
-            offset,
-            &effective,
-            |_canvas_ctx| {
-                // Children painting handled by wrapper
-            },
-            None,
-        );
-    }
+    // paint() uses default no-op - transform is applied via paint_transform()
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {
         // Transform hit test position by inverse matrix
@@ -321,15 +302,15 @@ mod tests {
     #[test]
     fn test_transform_rotation() {
         let transform = RenderTransform::rotation(PI / 2.0);
-        // Should be 90 degree rotation - check matrix element
-        assert!((transform.transform().m[5] - 0.0).abs() < 1e-6);
+        // Should be 90 degree rotation - m[0] is m11 in column-major order
+        assert!((transform.transform().m[0] - 0.0).abs() < 1e-6);
     }
 
     #[test]
     fn test_transform_rotation_degrees() {
         let transform = RenderTransform::rotation_degrees(90.0);
-        // Should be same as PI/2 radians
-        assert!((transform.transform().m[5] - 0.0).abs() < 1e-6);
+        // Should be same as PI/2 radians - m[0] is m11 in column-major order
+        assert!((transform.transform().m[0] - 0.0).abs() < 1e-6);
     }
 
     #[test]

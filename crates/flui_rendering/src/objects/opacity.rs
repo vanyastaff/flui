@@ -3,7 +3,7 @@
 use flui_types::{Offset, Point, Rect, Size};
 
 use crate::arity::Single;
-use crate::context::{BoxHitTestContext, BoxLayoutContext, BoxPaintContext};
+use crate::context::{BoxHitTestContext, BoxLayoutContext};
 use crate::parent_data::BoxParentData;
 use crate::traits::RenderBox;
 
@@ -153,12 +153,7 @@ impl RenderBox for RenderOpacity {
         &mut self.size
     }
 
-    fn paint(&mut self, ctx: &mut BoxPaintContext<'_, Single, BoxParentData>) {
-        // RenderOpacity doesn't paint anything itself.
-        // The opacity is applied by paint_node_recursive which checks paint_alpha().
-        // Children are painted automatically by the wrapper after this method.
-        let _ = ctx;
-    }
+    // paint() uses default no-op - opacity is applied via paint_alpha()
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {
         // Invisible elements can still receive hit tests

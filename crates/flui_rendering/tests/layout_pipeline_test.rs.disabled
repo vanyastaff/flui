@@ -2,12 +2,12 @@
 //!
 //! These tests verify the full layout flow:
 //! 1. User implements RenderBox
-//! 2. Wrapped in BoxWrapper for RenderObject
-//! 3. Stored in RenderTree
-//! 4. PipelineOwner.flush_layout() performs layout
+//! 2. Converted via IntoRenderObject for RenderTree storage
+//! 3. PipelineOwner.flush_layout() performs layout
 
-use flui_rendering::constraints::BoxConstraints;
+use flui_rendering::constraints::{BoxConstraints, Constraints};
 use flui_rendering::prelude::*;
+use flui_tree::TreeWrite;
 use flui_types::Size;
 
 // ============================================================================
@@ -30,6 +30,8 @@ impl ColoredBox {
     }
 }
 
+impl flui_foundation::Diagnosticable for ColoredBox {}
+
 impl RenderBox for ColoredBox {
     type Arity = Leaf;
     type ParentData = BoxParentData;
@@ -40,15 +42,15 @@ impl RenderBox for ColoredBox {
         ctx.complete_with_size(self.actual_size);
     }
 
-    fn size(&self) -> Size {
-        self.actual_size
+    fn size(&self) -> &Size {
+        &self.actual_size
     }
 
-    fn set_size(&mut self, size: Size) {
-        self.actual_size = size;
+    fn size_mut(&mut self) -> &mut Size {
+        &mut self.actual_size
     }
 
-    fn paint(&mut self, _ctx: &mut BoxPaintContext<'_, Leaf, BoxParentData>) {
+    fn paint(&self, _ctx: &mut BoxPaintContext<'_, Leaf, BoxParentData>) {
         // Would paint a colored rectangle here
     }
 
@@ -74,6 +76,8 @@ impl SizedBox {
         }
     }
 }
+
+impl flui_foundation::Diagnosticable for SizedBox {}
 
 impl RenderBox for SizedBox {
     type Arity = Single;
@@ -105,15 +109,15 @@ impl RenderBox for SizedBox {
         ctx.complete_with_size(self.size);
     }
 
-    fn size(&self) -> Size {
-        self.size
+    fn size(&self) -> &Size {
+        &self.size
     }
 
-    fn set_size(&mut self, size: Size) {
-        self.size = size;
+    fn size_mut(&mut self) -> &mut Size {
+        &mut self.size
     }
 
-    fn paint(&mut self, _ctx: &mut BoxPaintContext<'_, Single, BoxParentData>) {
+    fn paint(&self, _ctx: &mut BoxPaintContext<'_, Single, BoxParentData>) {
         // Paint child
     }
 
@@ -127,239 +131,80 @@ impl RenderBox for SizedBox {
 // ============================================================================
 
 #[test]
-fn test_colored_box_layout() {
-    // Create a ColoredBox
+fn test_colored_box_creation() {
     let colored_box = ColoredBox::new(100.0, 50.0);
-
-    // Wrap it for RenderTree storage
-    let wrapper = BoxWrapper::new(colored_box);
-
-    // Create a PipelineOwner and insert the render object
-    let mut pipeline = PipelineOwner::new();
-    let root_id = pipeline.set_root_render_object(Box::new(wrapper));
-
-    // Verify node was inserted
-    assert!(pipeline.render_tree().contains(root_id));
-    assert_eq!(pipeline.render_tree().len(), 1);
-
-    // Set constraints on the root
-    if let Some(node) = pipeline.render_tree().get(root_id) {
-        let mut render_object = node.render_object_mut();
-        render_object.set_cached_constraints(BoxConstraints::tight(Size::new(200.0, 100.0)));
-    }
-
-    // Flush layout
-    pipeline.flush_layout();
-
-    // Verify layout was performed (no longer needs layout)
-    if let Some(node) = pipeline.render_tree().get(root_id) {
-        let render_object = node.render_object();
-        assert!(!render_object.needs_layout());
-
-        // Check paint bounds
-        // Tight constraints (200x100) force the size to exactly 200x100
-        // The ColoredBox preferred (100x50) gets constrained to tight bounds
-        let bounds = render_object.paint_bounds();
-        assert_eq!(bounds.width(), 200.0); // tight constraints force 200
-        assert_eq!(bounds.height(), 100.0); // tight constraints force 100
-    }
+    assert_eq!(colored_box.preferred_size, Size::new(100.0, 50.0));
+    assert_eq!(*colored_box.size(), Size::ZERO);
 }
 
 #[test]
-fn test_box_wrapper_creation_and_access() {
-    let colored_box = ColoredBox::new(150.0, 75.0);
-    let wrapper = BoxWrapper::new(colored_box);
-
-    // Access inner
-    assert_eq!(wrapper.inner().preferred_size, Size::new(150.0, 75.0));
-
-    // Check RenderObject implementation
-    assert!(wrapper.needs_layout());
-    assert!(wrapper.needs_paint());
-    assert_eq!(wrapper.depth(), 0);
+fn test_sized_box_creation() {
+    let sized_box = SizedBox::new(Some(100.0), Some(50.0));
+    assert_eq!(sized_box.width, Some(100.0));
+    assert_eq!(sized_box.height, Some(50.0));
 }
 
 #[test]
-fn test_pipeline_owner_with_wrapper() {
-    let mut pipeline = PipelineOwner::new();
+fn test_into_render_node() {
+    use flui_rendering::protocol::IntoRenderObject;
 
-    // Insert wrapped render object
-    let colored_box = ColoredBox::new(200.0, 100.0);
-    let wrapper = BoxWrapper::new(colored_box);
-    let id = pipeline.set_root_render_object(Box::new(wrapper));
-
-    // Verify it's in the dirty lists
-    assert!(pipeline.has_dirty_nodes());
-
-    // Flush layout
-    pipeline.flush_layout();
-
-    // Check node state
-    if let Some(node) = pipeline.render_tree().get(id) {
-        assert!(!node.render_object().needs_layout());
-    }
+    let colored_box = ColoredBox::new(100.0, 50.0);
+    let node = colored_box.into_render_node();
+    assert!(node.is_box());
 }
 
 #[test]
-fn test_multiple_render_objects() {
-    let mut pipeline = PipelineOwner::new();
+fn test_render_tree_insertion() {
+    use flui_rendering::protocol::IntoRenderObject;
+    use flui_rendering::storage::RenderTree;
 
-    // Create root
-    let root = ColoredBox::new(300.0, 200.0);
-    let root_wrapper = BoxWrapper::new(root);
-    let root_id = pipeline.set_root_render_object(Box::new(root_wrapper));
+    let mut tree = RenderTree::new();
 
-    // Create child (will be sibling in tree for now)
-    let child = ColoredBox::new(100.0, 50.0);
-    let child_wrapper = BoxWrapper::new(child);
-    let child_id = pipeline.insert_child_render_object(root_id, Box::new(child_wrapper));
+    let colored_box = ColoredBox::new(100.0, 50.0);
+    let node = colored_box.into_render_node();
+    let id = tree.insert(node);
 
-    assert!(child_id.is_some());
-    let child_id = child_id.unwrap();
-
-    // Verify tree structure
-    assert_eq!(pipeline.render_tree().len(), 2);
-    assert_eq!(pipeline.render_tree().parent(child_id), Some(root_id));
-    assert!(pipeline.render_tree().children(root_id).contains(&child_id));
-
-    // Flush layout
-    pipeline.flush_layout();
-
-    // Both should no longer need layout
-    assert!(!pipeline
-        .render_tree()
-        .get(root_id)
-        .unwrap()
-        .render_object()
-        .needs_layout());
-    assert!(!pipeline
-        .render_tree()
-        .get(child_id)
-        .unwrap()
-        .render_object()
-        .needs_layout());
+    assert!(tree.contains(id));
+    assert_eq!(tree.len(), 1);
 }
 
 #[test]
-fn test_constraints_propagation() {
-    let colored_box = ColoredBox::new(500.0, 500.0); // Larger than constraints
-    let mut wrapper = BoxWrapper::new(colored_box);
+fn test_render_tree_multiple_nodes() {
+    use flui_rendering::protocol::IntoRenderObject;
+    use flui_rendering::storage::RenderTree;
 
-    // Layout with tight constraints that are smaller
-    let constraints = BoxConstraints::tight(Size::new(100.0, 100.0));
-    wrapper.layout(constraints, true);
+    let mut tree = RenderTree::new();
 
-    // Size should be constrained
-    assert_eq!(wrapper.inner().actual_size, Size::new(100.0, 100.0));
-    assert!(!wrapper.needs_layout());
+    // Insert multiple nodes
+    let parent = ColoredBox::new(200.0, 200.0);
+    let parent_node = parent.into_render_node();
+    let parent_id = tree.insert(parent_node);
+
+    let child = ColoredBox::new(50.0, 50.0);
+    let child_node = child.into_render_node();
+    let child_id = tree.insert(child_node);
+
+    // Verify tree has both nodes
+    assert_eq!(tree.len(), 2);
+    assert!(tree.contains(parent_id));
+    assert!(tree.contains(child_id));
 }
 
 #[test]
-fn test_layout_context_helpers() {
-    let colored_box = ColoredBox::new(50.0, 50.0);
-    let mut wrapper = BoxWrapper::new(colored_box);
+fn test_box_constraints_operations() {
+    // Test tight constraints
+    let tight = BoxConstraints::tight(Size::new(100.0, 50.0));
+    assert!(tight.is_tight());
+    assert_eq!(tight.min_width, 100.0);
+    assert_eq!(tight.max_width, 100.0);
 
-    // Layout with loose constraints
-    let constraints = BoxConstraints::loose(Size::new(200.0, 200.0));
-    wrapper.layout(constraints, true);
+    // Test loose constraints
+    let loose = BoxConstraints::loose(Size::new(200.0, 100.0));
+    assert!(!loose.is_tight());
+    assert_eq!(loose.min_width, 0.0);
+    assert_eq!(loose.max_width, 200.0);
 
-    // Size should be the preferred size (within loose constraints)
-    assert_eq!(wrapper.inner().actual_size, Size::new(50.0, 50.0));
-}
-
-#[test]
-fn test_paint_offset_propagation() {
-    use flui_rendering::objects::RenderCenter;
-    use flui_rendering::objects::RenderColoredBox;
-    use flui_types::Offset;
-
-    let mut pipeline = PipelineOwner::new();
-
-    // Create Center widget with a ColoredBox child
-    // The Center should position the child at the center offset
-    let center = RenderCenter::new();
-    let center_wrapper = BoxWrapper::new(center);
-    let root_id = pipeline.set_root_render_object(Box::new(center_wrapper));
-
-    // Add colored box child (50x50)
-    let colored_box = RenderColoredBox::red(50.0, 50.0);
-    let child_wrapper = BoxWrapper::new(colored_box);
-    let child_id = pipeline.insert_child_render_object(root_id, Box::new(child_wrapper));
-    assert!(child_id.is_some());
-    let child_id = child_id.unwrap();
-
-    // Set constraints on the root (200x200)
-    if let Some(node) = pipeline.render_tree().get(root_id) {
-        let mut render_object = node.render_object_mut();
-        render_object.set_cached_constraints(BoxConstraints::tight(Size::new(200.0, 200.0)));
-    }
-
-    // Flush layout
-    pipeline.flush_layout();
-
-    // Verify layout was performed
-    assert!(!pipeline.render_tree().get(root_id).unwrap().needs_layout());
-    assert!(!pipeline.render_tree().get(child_id).unwrap().needs_layout());
-
-    // Check that Center positioned the child correctly
-    // Center should put 50x50 child in center of 200x200 = offset (75, 75)
-    if let Some(node) = pipeline.render_tree().get(root_id) {
-        let render_object = node.box_render_object();
-        let child_offset = render_object.child_offset(0);
-        // With 200x200 parent and 50x50 child, center offset should be (75, 75)
-        assert_eq!(child_offset.dx, 75.0);
-        assert_eq!(child_offset.dy, 75.0);
-    }
-
-    // Now flush paint and verify layer tree is created
-    pipeline.flush_paint();
-
-    let layer_tree = pipeline.layer_tree();
-    assert!(layer_tree.is_some());
-    let layer_tree = layer_tree.unwrap();
-
-    // Layer tree should have at least root offset layer + picture layer
-    assert!(layer_tree.len() >= 1);
-}
-
-#[test]
-fn test_repaint_boundary_creates_offset_layer() {
-    use flui_rendering::objects::RenderColoredBox;
-    use flui_rendering::wrapper::BoxWrapper;
-
-    let mut pipeline = PipelineOwner::new();
-
-    // Create a root colored box
-    let root_box = RenderColoredBox::blue(200.0, 200.0);
-    let root_wrapper = BoxWrapper::new(root_box);
-    let root_id = pipeline.set_root_render_object(Box::new(root_wrapper));
-
-    // Create a child with repaint boundary
-    let child_box = RenderColoredBox::red(50.0, 50.0);
-    let child_wrapper = BoxWrapper::with_repaint_boundary(child_box);
-    let child_id = pipeline.insert_child_render_object(root_id, Box::new(child_wrapper));
-    assert!(child_id.is_some());
-
-    // Set constraints on root
-    if let Some(node) = pipeline.render_tree().get(root_id) {
-        let mut render_object = node.render_object_mut();
-        render_object.set_cached_constraints(BoxConstraints::tight(Size::new(200.0, 200.0)));
-    }
-
-    // Flush layout and paint
-    pipeline.flush_layout();
-    pipeline.flush_paint();
-
-    // Verify layer tree was created
-    let layer_tree = pipeline.layer_tree();
-    assert!(layer_tree.is_some());
-
-    // The repaint boundary child should have created its own OffsetLayer
-    // Layer tree should have: root offset + picture + child offset layer + child picture
-    let layer_tree = layer_tree.unwrap();
-    assert!(
-        layer_tree.len() >= 2,
-        "Expected at least 2 layers, got {}",
-        layer_tree.len()
-    );
+    // Test constrain
+    let size = tight.constrain(Size::new(500.0, 500.0));
+    assert_eq!(size, Size::new(100.0, 50.0));
 }

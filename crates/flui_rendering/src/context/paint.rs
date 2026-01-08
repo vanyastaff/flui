@@ -11,6 +11,8 @@
 //!     ▼
 //! PaintContext (high-level: offset + children)
 //!     │
+//!     ├── paint_child(index) → recursively paints child
+//!     │
 //!     ▼
 //! CanvasContext (low-level: canvas + layers)
 //!     │
@@ -22,26 +24,47 @@
 //!
 //! ```ignore
 //! fn paint(&self, ctx: &mut BoxPaintContext<'_, Single, BoxParentData>) {
-//!     // Access offset
-//!     let offset = ctx.offset();
+//!     // Draw background
+//!     let rect = Rect::from_size(self.size).translate(ctx.offset());
+//!     ctx.canvas().draw_rect(rect, &paint);
 //!
-//!     // Draw using canvas
-//!     ctx.canvas().draw_rect(rect.translate(offset), &paint);
+//!     // Paint child (pipeline handles the recursion)
+//!     ctx.paint_child();
 //!
-//!     // Paint children
-//!     ctx.paint_children();
+//!     // Draw foreground overlay
+//!     ctx.canvas().draw_rect(overlay_rect, &overlay_paint);
 //! }
 //! ```
 
 use flui_types::Offset;
 
-use crate::arity::Arity;
-use crate::children_access::ChildrenAccess;
+use crate::arity::{Arity, Leaf, Optional, Single, Variable};
 use crate::parent_data::ParentData;
 use crate::protocol::Protocol;
 
 use super::canvas::CanvasContext;
 use super::Canvas;
+
+// ============================================================================
+// PaintChildCallback - Function type for painting children
+// ============================================================================
+
+/// Callback type for painting a child at a given index with offset.
+///
+/// The pipeline provides this callback which has access to the render tree
+/// and can recursively paint child render objects.
+pub type PaintChildCallback<'a> = &'a mut dyn FnMut(usize, Offset);
+
+// ============================================================================
+// ChildPaintInfo - Information about a child for painting
+// ============================================================================
+
+/// Information about a child needed for painting.
+#[derive(Debug, Clone, Copy)]
+pub struct ChildPaintInfo {
+    /// The offset of this child from parent's origin.
+    pub offset: Offset,
+}
 
 // ============================================================================
 // PaintContext
@@ -51,7 +74,7 @@ use super::Canvas;
 ///
 /// `PaintContext` wraps a [`CanvasContext`] and provides:
 /// - Current paint offset
-/// - Type-safe access to children for painting
+/// - Methods to paint children at their positions
 /// - Convenience methods for common paint operations
 ///
 /// # Type Parameters
@@ -68,17 +91,12 @@ use super::Canvas;
 ///     type ParentData = BoxParentData;
 ///
 ///     fn paint(&self, ctx: &mut BoxPaintContext<'_, Single, BoxParentData>) {
-///         // Get offset
-///         let offset = ctx.offset();
+///         // Draw background at current offset
+///         let rect = Rect::from_size(self.size).translate(ctx.offset());
+///         ctx.canvas().draw_rect(rect, &Paint::fill(Color::WHITE));
 ///
-///         // Draw background
-///         ctx.canvas().draw_rect(
-///             Rect::from_size(self.size).translate(offset),
-///             &Paint::fill(Color::WHITE)
-///         );
-///
-///         // Paint child at its position
-///         ctx.paint_child(0, child_offset);
+///         // Paint the single child
+///         ctx.paint_child();
 ///     }
 /// }
 /// ```
@@ -89,11 +107,14 @@ pub struct PaintContext<'ctx, P: Protocol, A: Arity, PD: ParentData + Default> {
     /// Current paint offset from parent.
     offset: Offset,
 
-    /// Access to children for painting.
-    children: &'ctx mut ChildrenAccess<'ctx, A, PD>,
+    /// Information about children (offsets, etc.)
+    children_info: &'ctx [ChildPaintInfo],
 
-    /// Phantom for protocol type.
-    _protocol: std::marker::PhantomData<P>,
+    /// Callback to paint a child (provided by pipeline).
+    paint_child_callback: PaintChildCallback<'ctx>,
+
+    /// Phantom for protocol and parent data types.
+    _phantom: std::marker::PhantomData<(P, A, PD)>,
 }
 
 impl<'ctx, P: Protocol, A: Arity, PD: ParentData + Default> PaintContext<'ctx, P, A, PD> {
@@ -101,13 +122,15 @@ impl<'ctx, P: Protocol, A: Arity, PD: ParentData + Default> PaintContext<'ctx, P
     pub fn new(
         inner: &'ctx mut CanvasContext,
         offset: Offset,
-        children: &'ctx mut ChildrenAccess<'ctx, A, PD>,
+        children_info: &'ctx [ChildPaintInfo],
+        paint_child_callback: PaintChildCallback<'ctx>,
     ) -> Self {
         Self {
             inner,
             offset,
-            children,
-            _protocol: std::marker::PhantomData,
+            children_info,
+            paint_child_callback,
+            _phantom: std::marker::PhantomData,
         }
     }
 
@@ -117,7 +140,7 @@ impl<'ctx, P: Protocol, A: Arity, PD: ParentData + Default> PaintContext<'ctx, P
 
     /// Returns the current paint offset.
     ///
-    /// This is the offset from the parent's origin to this object's origin.
+    /// This is the offset from the root to this object's origin.
     #[inline]
     pub fn offset(&self) -> Offset {
         self.offset
@@ -169,25 +192,25 @@ impl<'ctx, P: Protocol, A: Arity, PD: ParentData + Default> PaintContext<'ctx, P
     }
 
     // ========================================================================
-    // Children Access
+    // Children Info
     // ========================================================================
-
-    /// Returns mutable access to children.
-    #[inline]
-    pub fn children_mut(&mut self) -> &mut ChildrenAccess<'ctx, A, PD> {
-        self.children
-    }
 
     /// Returns the number of children.
     #[inline]
     pub fn child_count(&self) -> usize {
-        self.children.len()
+        self.children_info.len()
     }
 
     /// Returns whether there are any children.
     #[inline]
     pub fn has_children(&self) -> bool {
-        !self.children.is_empty()
+        !self.children_info.is_empty()
+    }
+
+    /// Returns the offset of a child.
+    #[inline]
+    pub fn child_offset(&self, index: usize) -> Option<Offset> {
+        self.children_info.get(index).map(|info| info.offset)
     }
 
     // ========================================================================
@@ -226,6 +249,135 @@ impl<'ctx, P: Protocol, A: Arity, PD: ParentData + Default> PaintContext<'ctx, P
 }
 
 // ============================================================================
+// Leaf Arity - No paint_child methods
+// ============================================================================
+
+impl<'ctx, P: Protocol, PD: ParentData + Default> PaintContext<'ctx, P, Leaf, PD> {
+    // Leaf has no children, so no paint_child methods
+}
+
+// ============================================================================
+// Optional Arity - paint_child for 0 or 1 child
+// ============================================================================
+
+impl<'ctx, P: Protocol, PD: ParentData + Default> PaintContext<'ctx, P, Optional, PD> {
+    /// Paints the optional child if present.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// fn paint(&self, ctx: &mut BoxPaintContext<'_, Optional, BoxParentData>) {
+    ///     // Draw background
+    ///     ctx.canvas().draw_rect(...);
+    ///     // Paint child if exists
+    ///     ctx.paint_child_if_present();
+    /// }
+    /// ```
+    pub fn paint_child_if_present(&mut self) {
+        if !self.children_info.is_empty() {
+            let offset = self.offset + self.children_info[0].offset;
+            (self.paint_child_callback)(0, offset);
+        }
+    }
+
+    /// Returns whether a child is present.
+    #[inline]
+    pub fn has_child(&self) -> bool {
+        !self.children_info.is_empty()
+    }
+}
+
+// ============================================================================
+// Single Arity - paint_child for exactly 1 child
+// ============================================================================
+
+impl<'ctx, P: Protocol, PD: ParentData + Default> PaintContext<'ctx, P, Single, PD> {
+    /// Paints the single child.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// fn paint(&self, ctx: &mut BoxPaintContext<'_, Single, BoxParentData>) {
+    ///     ctx.canvas().draw_rect(...);  // Background
+    ///     ctx.paint_child();             // Child
+    ///     ctx.canvas().draw_rect(...);  // Foreground
+    /// }
+    /// ```
+    pub fn paint_child(&mut self) {
+        if !self.children_info.is_empty() {
+            let offset = self.offset + self.children_info[0].offset;
+            (self.paint_child_callback)(0, offset);
+        }
+    }
+
+    /// Paints the single child with a custom offset.
+    ///
+    /// This ignores the child's stored offset and uses the provided one instead.
+    pub fn paint_child_at(&mut self, offset: Offset) {
+        let absolute_offset = self.offset + offset;
+        (self.paint_child_callback)(0, absolute_offset);
+    }
+}
+
+// ============================================================================
+// Variable Arity - paint_child for N children
+// ============================================================================
+
+impl<'ctx, P: Protocol, PD: ParentData + Default> PaintContext<'ctx, P, Variable, PD> {
+    /// Paints a specific child by index.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// fn paint(&self, ctx: &mut BoxPaintContext<'_, Variable, BoxParentData>) {
+    ///     // Paint children in reverse order (back to front)
+    ///     for i in (0..ctx.child_count()).rev() {
+    ///         ctx.paint_child(i);
+    ///     }
+    /// }
+    /// ```
+    pub fn paint_child(&mut self, index: usize) {
+        if let Some(info) = self.children_info.get(index) {
+            let offset = self.offset + info.offset;
+            (self.paint_child_callback)(index, offset);
+        }
+    }
+
+    /// Paints a specific child at a custom offset.
+    pub fn paint_child_at(&mut self, index: usize, offset: Offset) {
+        if index < self.children_info.len() {
+            let absolute_offset = self.offset + offset;
+            (self.paint_child_callback)(index, absolute_offset);
+        }
+    }
+
+    /// Paints all children in order (first to last).
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// fn paint(&self, ctx: &mut BoxPaintContext<'_, Variable, BoxParentData>) {
+    ///     ctx.canvas().draw_rect(...);  // Background
+    ///     ctx.paint_children();          // All children
+    /// }
+    /// ```
+    pub fn paint_children(&mut self) {
+        for i in 0..self.children_info.len() {
+            self.paint_child(i);
+        }
+    }
+
+    /// Paints all children in reverse order (last to first).
+    ///
+    /// Useful when children are stacked and you want back-to-front painting.
+    pub fn paint_children_reverse(&mut self) {
+        for i in (0..self.children_info.len()).rev() {
+            self.paint_child(i);
+        }
+    }
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 
@@ -239,5 +391,14 @@ mod tests {
         let bounds = Rect::from_ltrb(0.0, 0.0, 100.0, 100.0);
         let ctx = CanvasContext::new(bounds);
         assert_eq!(ctx.estimated_bounds(), bounds);
+    }
+
+    #[test]
+    fn test_child_paint_info() {
+        let info = ChildPaintInfo {
+            offset: Offset::new(10.0, 20.0),
+        };
+        assert_eq!(info.offset.dx, 10.0);
+        assert_eq!(info.offset.dy, 20.0);
     }
 }

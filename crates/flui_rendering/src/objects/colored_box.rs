@@ -1,10 +1,10 @@
 //! RenderColoredBox - a simple colored rectangle.
 
 use flui_painting::Paint;
-use flui_types::{Color, Offset, Point, Rect, Size};
+use flui_types::{Color, Point, Rect, Size};
 
 use crate::arity::Leaf;
-use crate::context::{BoxHitTestContext, BoxLayoutContext, BoxPaintContext, CanvasContext};
+use crate::context::{BoxHitTestContext, BoxLayoutContext, BoxPaintContext};
 use crate::parent_data::BoxParentData;
 use crate::traits::RenderBox;
 
@@ -75,14 +75,11 @@ impl RenderBox for RenderColoredBox {
         &mut self.size
     }
 
-    fn paint(&mut self, _ctx: &mut BoxPaintContext<'_, Leaf, BoxParentData>) {
-        // Painting is done via paint_with_canvas
-    }
-
-    fn paint_with_canvas(&self, context: &mut CanvasContext, offset: Offset) {
+    fn paint(&self, ctx: &mut BoxPaintContext<'_, Leaf, BoxParentData>) {
+        let offset = ctx.offset();
         let rect = Rect::from_origin_size(Point::new(offset.dx, offset.dy), self.size);
         tracing::debug!(
-            "RenderColoredBox::paint_with_canvas: offset=({}, {}), size={:?}, rect={:?}",
+            "RenderColoredBox::paint: offset=({}, {}), size={:?}, rect={:?}",
             offset.dx,
             offset.dy,
             self.size,
@@ -90,7 +87,7 @@ impl RenderBox for RenderColoredBox {
         );
         let color = Color::from_rgba_f32_array(self.color);
         let paint = Paint::fill(color);
-        context.canvas().draw_rect(rect, &paint);
+        ctx.canvas().draw_rect(rect, &paint);
     }
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Leaf, BoxParentData>) -> bool {
@@ -102,3 +99,27 @@ impl RenderBox for RenderColoredBox {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_colored_box_creation() {
+        let box_obj = RenderColoredBox::red(100.0, 50.0);
+        // Size starts at ZERO before layout, preferred_size is set
+        assert_eq!(box_obj.preferred_size(), Size::new(100.0, 50.0));
+        assert_eq!(*box_obj.size(), Size::ZERO);
+    }
+
+    #[test]
+    fn test_colored_box_factory_methods() {
+        let red = RenderColoredBox::red(10.0, 20.0);
+        let green = RenderColoredBox::green(30.0, 40.0);
+        let blue = RenderColoredBox::blue(50.0, 60.0);
+
+        // Check preferred sizes (size is ZERO before layout)
+        assert_eq!(red.preferred_size(), Size::new(10.0, 20.0));
+        assert_eq!(green.preferred_size(), Size::new(30.0, 40.0));
+        assert_eq!(blue.preferred_size(), Size::new(50.0, 60.0));
+    }
+}
