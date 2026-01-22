@@ -3,45 +3,97 @@
 //! API design inspired by Flutter and kurbo.
 
 use super::{Offset, Point, Rect, Size, Vec2};
+use super::traits::{NumericUnit, Unit};
 
 /// Corner radius for rounded rectangles.
 ///
 /// Supports both circular (same x and y) and elliptical radii.
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+///
+/// Generic over unit type `T`. Common usage:
+/// - `Radius<Pixels>` - UI corner radius
+/// - `Radius<f32>` - Normalized/dimensionless radius
+#[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(C)]
-pub struct Radius {
+pub struct Radius<T: Unit = f32> {
     /// Horizontal radius.
-    pub x: f32,
+    pub x: T,
     /// Vertical radius.
-    pub y: f32,
+    pub y: T,
 }
 
-impl Radius {
+// ============================================================================
+// Constants (f32 only for backwards compatibility)
+// ============================================================================
+
+impl Radius<f32> {
     /// Zero radius (no rounding).
     pub const ZERO: Self = Self::new(0.0, 0.0);
+}
 
+// ============================================================================
+// Basic Constructors (generic over Unit)
+// ============================================================================
+
+impl<T: Unit> Radius<T> {
     /// Creates a new radius.
     #[inline]
     #[must_use]
-    pub const fn new(x: f32, y: f32) -> Self {
+    pub const fn new(x: T, y: T) -> Self {
         Self { x, y }
     }
 
     /// Creates a circular radius (x == y).
     #[inline]
     #[must_use]
-    pub const fn circular(r: f32) -> Self {
+    pub const fn circular(r: T) -> Self {
         Self::new(r, r)
     }
 
     /// Creates an elliptical radius.
     #[inline]
     #[must_use]
-    pub const fn elliptical(x: f32, y: f32) -> Self {
+    pub const fn elliptical(x: T, y: T) -> Self {
         Self::new(x, y)
     }
 
+}
+
+// ============================================================================
+// Numeric Unit Operations
+// ============================================================================
+
+impl<T: NumericUnit> Radius<T>
+where
+    T: std::ops::Mul<f32, Output = T>,
+{
+    /// Scales the radius by a factor.
+    #[inline]
+    #[must_use]
+    pub fn scale(&self, factor: f32) -> Self {
+        Self::new(self.x * factor, self.y * factor)
+    }
+}
+
+impl<T: NumericUnit + PartialOrd> Radius<T> {
+    /// Clamps the radius to maximum values.
+    #[inline]
+    #[must_use]
+    pub fn clamp(&self, max_x: T, max_y: T) -> Self {
+        Self::new(
+            if self.x > max_x { max_x } else { self.x },
+            if self.y > max_y { max_y } else { self.y },
+        )
+    }
+}
+
+
+
+// ============================================================================
+// f32 Float Operations
+// ============================================================================
+
+impl Radius<f32> {
     /// Returns `true` if this is a circular radius.
     #[inline]
     #[must_use]
@@ -56,25 +108,21 @@ impl Radius {
         self.x.abs() < f32::EPSILON && self.y.abs() < f32::EPSILON
     }
 
-    /// Scales the radius by a factor.
-    #[inline]
-    #[must_use]
-    pub fn scale(&self, factor: f32) -> Self {
-        Self::new(self.x * factor, self.y * factor)
-    }
-
     /// Linear interpolation between two radii.
     #[inline]
     #[must_use]
     pub fn lerp(a: Self, b: Self, t: f32) -> Self {
         Self::new(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t)
     }
+}
 
-    /// Clamps the radius to maximum values.
-    #[inline]
-    #[must_use]
-    pub fn clamp(&self, max_x: f32, max_y: f32) -> Self {
-        Self::new(self.x.min(max_x), self.y.min(max_y))
+// ============================================================================
+// Default Implementation
+// ============================================================================
+
+impl<T: Unit> Default for Radius<T> {
+    fn default() -> Self {
+        Self::new(T::zero(), T::zero())
     }
 }
 

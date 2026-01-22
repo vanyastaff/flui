@@ -11,6 +11,7 @@
 
 use std::fmt;
 
+use super::traits::{NumericUnit, Unit};
 use super::{Line, Point, Rect, Vec2};
 
 // ============================================================================
@@ -34,78 +35,153 @@ use super::{Line, Point, Rect, Vec2};
 ///
 /// let midpoint = curve.eval(0.5);
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(C)]
-pub struct QuadBez {
+pub struct QuadBez<T: Unit = f32> {
     /// Start point.
-    pub p0: Point<f32>,
+    pub p0: Point<T>,
     /// Control point.
-    pub p1: Point<f32>,
+    pub p1: Point<T>,
     /// End point.
-    pub p2: Point<f32>,
+    pub p2: Point<T>,
 }
 
-impl QuadBez {
+impl<T: Unit> Default for QuadBez<T> {
+    fn default() -> Self {
+        Self {
+            p0: Point::default(),
+            p1: Point::default(),
+            p2: Point::default(),
+        }
+    }
+}
+
+// ============================================================================
+// Basic Constructors (generic over Unit)
+// ============================================================================
+
+impl<T: Unit> QuadBez<T> {
     /// Creates a new quadratic Bézier curve.
     #[inline]
     #[must_use]
-    pub const fn new(p0: Point<f32>, p1: Point<f32>, p2: Point<f32>) -> Self {
+    pub const fn new(p0: Point<T>, p1: Point<T>, p2: Point<T>) -> Self {
         Self { p0, p1, p2 }
-    }
-
-    /// Returns the point at parameter t (0.0 to 1.0).
-    #[inline]
-    #[must_use]
-    pub fn eval(&self, t: f32) -> Point<f32> {
-        let mt = 1.0 - t;
-        let mt2 = mt * mt;
-        let t2 = t * t;
-
-        Point::new(
-            mt2 * self.p0.x + 2.0 * mt * t * self.p1.x + t2 * self.p2.x,
-            mt2 * self.p0.y + 2.0 * mt * t * self.p1.y + t2 * self.p2.y,
-        )
-    }
-
-    /// Returns the tangent vector at parameter t.
-    #[inline]
-    #[must_use]
-    pub fn tangent(&self, t: f32) -> Vec2<f32> {
-        let mt = 1.0 - t;
-
-        Vec2::new(
-            2.0 * mt * (self.p1.x - self.p0.x) + 2.0 * t * (self.p2.x - self.p1.x),
-            2.0 * mt * (self.p1.y - self.p0.y) + 2.0 * t * (self.p2.y - self.p1.y),
-        )
-    }
-
-    /// Returns the normalized tangent (direction) at parameter t.
-    #[inline]
-    #[must_use]
-    pub fn direction(&self, t: f32) -> Vec2<f32> {
-        self.tangent(t).normalize_or(Vec2::X)
     }
 
     /// Returns the start point.
     #[inline]
     #[must_use]
-    pub const fn start(&self) -> Point<f32> {
+    pub const fn start(&self) -> Point<T> {
         self.p0
     }
 
     /// Returns the end point.
     #[inline]
     #[must_use]
-    pub const fn end(&self) -> Point<f32> {
+    pub const fn end(&self) -> Point<T> {
         self.p2
     }
 
     /// Returns the control point.
     #[inline]
     #[must_use]
-    pub const fn control(&self) -> Point<f32> {
+    pub const fn control(&self) -> Point<T> {
         self.p1
+    }
+}
+
+// ============================================================================
+// Numeric Operations (NumericUnit with Into<f32> + From<f32>)
+// ============================================================================
+
+impl<T: NumericUnit> QuadBez<T>
+where
+    T: Into<f32> + From<f32>,
+{
+    /// Returns the point at parameter t (0.0 to 1.0).
+    #[inline]
+    #[must_use]
+    pub fn eval(&self, t: f32) -> Point<T> {
+        let mt = 1.0 - t;
+        let mt2 = mt * mt;
+        let t2 = t * t;
+
+        let p0x: f32 = self.p0.x.into();
+        let p0y: f32 = self.p0.y.into();
+        let p1x: f32 = self.p1.x.into();
+        let p1y: f32 = self.p1.y.into();
+        let p2x: f32 = self.p2.x.into();
+        let p2y: f32 = self.p2.y.into();
+
+        Point::new(
+            T::from(mt2 * p0x + 2.0 * mt * t * p1x + t2 * p2x),
+            T::from(mt2 * p0y + 2.0 * mt * t * p1y + t2 * p2y),
+        )
+    }
+
+    /// Returns the tangent vector at parameter t.
+    #[inline]
+    #[must_use]
+    pub fn tangent(&self, t: f32) -> Vec2<T> {
+        let mt = 1.0 - t;
+
+        let p0x: f32 = self.p0.x.into();
+        let p0y: f32 = self.p0.y.into();
+        let p1x: f32 = self.p1.x.into();
+        let p1y: f32 = self.p1.y.into();
+        let p2x: f32 = self.p2.x.into();
+        let p2y: f32 = self.p2.y.into();
+
+        Vec2::new(
+            T::from(2.0 * mt * (p1x - p0x) + 2.0 * t * (p2x - p1x)),
+            T::from(2.0 * mt * (p1y - p0y) + 2.0 * t * (p2y - p1y)),
+        )
+    }
+
+    /// Splits the curve at parameter t into two curves.
+    #[must_use]
+    pub fn split(&self, t: f32) -> (Self, Self) {
+        let p01 = self.p0.lerp(self.p1, t);
+        let p12 = self.p1.lerp(self.p2, t);
+        let p012 = p01.lerp(p12, t);
+
+        (Self::new(self.p0, p01, p012), Self::new(p012, p12, self.p2))
+    }
+
+    /// Returns a new curve translated by the given vector.
+    #[inline]
+    #[must_use]
+    pub fn translate(&self, offset: Vec2<T>) -> Self {
+        Self {
+            p0: self.p0 + offset,
+            p1: self.p1 + offset,
+            p2: self.p2 + offset,
+        }
+    }
+
+    /// Linear interpolation between two curves.
+    #[inline]
+    #[must_use]
+    pub fn lerp(self, other: Self, t: f32) -> Self {
+        Self {
+            p0: self.p0.lerp(other.p0, t),
+            p1: self.p1.lerp(other.p1, t),
+            p2: self.p2.lerp(other.p2, t),
+        }
+    }
+}
+
+// ============================================================================
+// f32-specific operations
+// ============================================================================
+
+impl QuadBez<f32> {
+    /// Returns the normalized tangent (direction) at parameter t.
+    #[inline]
+    #[must_use]
+    pub fn direction(&self, t: f32) -> Vec2<f32> {
+        self.tangent(t).normalize_or(Vec2::X)
     }
 
     /// Returns the bounding box (conservative estimate using control points).
@@ -142,16 +218,6 @@ impl QuadBez {
             self.arc_length_recursive(t0, mid, tolerance)
                 + self.arc_length_recursive(mid, t1, tolerance)
         }
-    }
-
-    /// Splits the curve at parameter t into two curves.
-    #[must_use]
-    pub fn split(&self, t: f32) -> (Self, Self) {
-        let p01 = self.p0.lerp(self.p1, t);
-        let p12 = self.p1.lerp(self.p2, t);
-        let p012 = p01.lerp(p12, t);
-
-        (Self::new(self.p0, p01, p012), Self::new(p012, p12, self.p2))
     }
 
     /// Returns the nearest point on the curve to the given point.
@@ -201,7 +267,7 @@ impl QuadBez {
     /// Converts to a cubic Bézier curve.
     #[inline]
     #[must_use]
-    pub fn to_cubic(&self) -> CubicBez {
+    pub fn to_cubic(&self) -> CubicBez<f32> {
         // Q(t) = C(t) when:
         // C.p1 = Q.p0 + 2/3 * (Q.p1 - Q.p0)
         // C.p2 = Q.p2 + 2/3 * (Q.p1 - Q.p2)
@@ -216,31 +282,12 @@ impl QuadBez {
 
         CubicBez::new(self.p0, c1, c2, self.p2)
     }
-
-    /// Returns a new curve translated by the given vector.
-    #[inline]
-    #[must_use]
-    pub fn translate(&self, offset: Vec2<f32>) -> Self {
-        Self {
-            p0: self.p0 + offset,
-            p1: self.p1 + offset,
-            p2: self.p2 + offset,
-        }
-    }
-
-    /// Linear interpolation between two curves.
-    #[inline]
-    #[must_use]
-    pub fn lerp(self, other: Self, t: f32) -> Self {
-        Self {
-            p0: self.p0.lerp(other.p0, t),
-            p1: self.p1.lerp(other.p1, t),
-            p2: self.p2.lerp(other.p2, t),
-        }
-    }
 }
 
-impl fmt::Display for QuadBez {
+impl<T: Unit> fmt::Display for QuadBez<T>
+where
+    T: fmt::Display,
+{
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "QuadBez({} -> {} -> {})", self.p0, self.p1, self.p2)
     }
@@ -268,28 +315,206 @@ impl fmt::Display for QuadBez {
 ///
 /// let midpoint = curve.eval(0.5);
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(C)]
-pub struct CubicBez {
+pub struct CubicBez<T: Unit = f32> {
     /// Start point.
-    pub p0: Point<f32>,
+    pub p0: Point<T>,
     /// First control point.
-    pub p1: Point<f32>,
+    pub p1: Point<T>,
     /// Second control point.
-    pub p2: Point<f32>,
+    pub p2: Point<T>,
     /// End point.
-    pub p3: Point<f32>,
+    pub p3: Point<T>,
 }
 
-impl CubicBez {
+impl<T: Unit> Default for CubicBez<T> {
+    fn default() -> Self {
+        Self {
+            p0: Point::default(),
+            p1: Point::default(),
+            p2: Point::default(),
+            p3: Point::default(),
+        }
+    }
+}
+
+// ============================================================================
+// Basic Constructors (generic over Unit)
+// ============================================================================
+
+impl<T: Unit> CubicBez<T> {
     /// Creates a new cubic Bézier curve.
     #[inline]
     #[must_use]
-    pub const fn new(p0: Point<f32>, p1: Point<f32>, p2: Point<f32>, p3: Point<f32>) -> Self {
+    pub const fn new(p0: Point<T>, p1: Point<T>, p2: Point<T>, p3: Point<T>) -> Self {
         Self { p0, p1, p2, p3 }
     }
 
+    /// Returns the start point.
+    #[inline]
+    #[must_use]
+    pub const fn start(&self) -> Point<T> {
+        self.p0
+    }
+
+    /// Returns the end point.
+    #[inline]
+    #[must_use]
+    pub const fn end(&self) -> Point<T> {
+        self.p3
+    }
+
+    /// Returns the first control point.
+    #[inline]
+    #[must_use]
+    pub const fn control1(&self) -> Point<T> {
+        self.p1
+    }
+
+    /// Returns the second control point.
+    #[inline]
+    #[must_use]
+    pub const fn control2(&self) -> Point<T> {
+        self.p2
+    }
+}
+
+// ============================================================================
+// Numeric Operations (NumericUnit with Into<f32> + From<f32>)
+// ============================================================================
+
+impl<T: NumericUnit> CubicBez<T>
+where
+    T: Into<f32> + From<f32>,
+{
+    /// Returns the point at parameter t (0.0 to 1.0).
+    #[inline]
+    #[must_use]
+    pub fn eval(&self, t: f32) -> Point<T> {
+        let mt = 1.0 - t;
+        let mt2 = mt * mt;
+        let mt3 = mt2 * mt;
+        let t2 = t * t;
+        let t3 = t2 * t;
+
+        let p0x: f32 = self.p0.x.into();
+        let p0y: f32 = self.p0.y.into();
+        let p1x: f32 = self.p1.x.into();
+        let p1y: f32 = self.p1.y.into();
+        let p2x: f32 = self.p2.x.into();
+        let p2y: f32 = self.p2.y.into();
+        let p3x: f32 = self.p3.x.into();
+        let p3y: f32 = self.p3.y.into();
+
+        Point::new(
+            T::from(
+                mt3 * p0x
+                    + 3.0 * mt2 * t * p1x
+                    + 3.0 * mt * t2 * p2x
+                    + t3 * p3x,
+            ),
+            T::from(
+                mt3 * p0y
+                    + 3.0 * mt2 * t * p1y
+                    + 3.0 * mt * t2 * p2y
+                    + t3 * p3y,
+            ),
+        )
+    }
+
+    /// Returns the tangent vector at parameter t.
+    #[inline]
+    #[must_use]
+    pub fn tangent(&self, t: f32) -> Vec2<T> {
+        let mt = 1.0 - t;
+        let mt2 = mt * mt;
+        let t2 = t * t;
+
+        let p0x: f32 = self.p0.x.into();
+        let p0y: f32 = self.p0.y.into();
+        let p1x: f32 = self.p1.x.into();
+        let p1y: f32 = self.p1.y.into();
+        let p2x: f32 = self.p2.x.into();
+        let p2y: f32 = self.p2.y.into();
+        let p3x: f32 = self.p3.x.into();
+        let p3y: f32 = self.p3.y.into();
+
+        Vec2::new(
+            T::from(
+                3.0 * mt2 * (p1x - p0x)
+                    + 6.0 * mt * t * (p2x - p1x)
+                    + 3.0 * t2 * (p3x - p2x),
+            ),
+            T::from(
+                3.0 * mt2 * (p1y - p0y)
+                    + 6.0 * mt * t * (p2y - p1y)
+                    + 3.0 * t2 * (p3y - p2y),
+            ),
+        )
+    }
+
+    /// Splits the curve at parameter t into two curves (de Casteljau).
+    #[must_use]
+    pub fn split(&self, t: f32) -> (Self, Self) {
+        let p01 = self.p0.lerp(self.p1, t);
+        let p12 = self.p1.lerp(self.p2, t);
+        let p23 = self.p2.lerp(self.p3, t);
+
+        let p012 = p01.lerp(p12, t);
+        let p123 = p12.lerp(p23, t);
+
+        let p0123 = p012.lerp(p123, t);
+
+        (
+            Self::new(self.p0, p01, p012, p0123),
+            Self::new(p0123, p123, p23, self.p3),
+        )
+    }
+
+    /// Returns a new curve translated by the given vector.
+    #[inline]
+    #[must_use]
+    pub fn translate(&self, offset: Vec2<T>) -> Self {
+        Self {
+            p0: self.p0 + offset,
+            p1: self.p1 + offset,
+            p2: self.p2 + offset,
+            p3: self.p3 + offset,
+        }
+    }
+
+    /// Returns a new curve with start and end points swapped.
+    #[inline]
+    #[must_use]
+    pub const fn reverse(&self) -> Self {
+        Self {
+            p0: self.p3,
+            p1: self.p2,
+            p2: self.p1,
+            p3: self.p0,
+        }
+    }
+
+    /// Linear interpolation between two curves.
+    #[inline]
+    #[must_use]
+    pub fn lerp(self, other: Self, t: f32) -> Self {
+        Self {
+            p0: self.p0.lerp(other.p0, t),
+            p1: self.p1.lerp(other.p1, t),
+            p2: self.p2.lerp(other.p2, t),
+            p3: self.p3.lerp(other.p3, t),
+        }
+    }
+}
+
+// ============================================================================
+// f32-specific operations
+// ============================================================================
+
+impl CubicBez<f32> {
     /// Creates a horizontal S-curve between two points.
     ///
     /// Control points are placed horizontally for smooth left-to-right connections.
@@ -346,79 +571,11 @@ impl CubicBez {
         Self::new(start, p1, p2, end)
     }
 
-    /// Returns the point at parameter t (0.0 to 1.0).
-    #[inline]
-    #[must_use]
-    pub fn eval(&self, t: f32) -> Point<f32> {
-        let mt = 1.0 - t;
-        let mt2 = mt * mt;
-        let mt3 = mt2 * mt;
-        let t2 = t * t;
-        let t3 = t2 * t;
-
-        Point::new(
-            mt3 * self.p0.x
-                + 3.0 * mt2 * t * self.p1.x
-                + 3.0 * mt * t2 * self.p2.x
-                + t3 * self.p3.x,
-            mt3 * self.p0.y
-                + 3.0 * mt2 * t * self.p1.y
-                + 3.0 * mt * t2 * self.p2.y
-                + t3 * self.p3.y,
-        )
-    }
-
-    /// Returns the tangent vector at parameter t.
-    #[inline]
-    #[must_use]
-    pub fn tangent(&self, t: f32) -> Vec2<f32> {
-        let mt = 1.0 - t;
-        let mt2 = mt * mt;
-        let t2 = t * t;
-
-        Vec2::new(
-            3.0 * mt2 * (self.p1.x - self.p0.x)
-                + 6.0 * mt * t * (self.p2.x - self.p1.x)
-                + 3.0 * t2 * (self.p3.x - self.p2.x),
-            3.0 * mt2 * (self.p1.y - self.p0.y)
-                + 6.0 * mt * t * (self.p2.y - self.p1.y)
-                + 3.0 * t2 * (self.p3.y - self.p2.y),
-        )
-    }
-
     /// Returns the normalized tangent (direction) at parameter t.
     #[inline]
     #[must_use]
     pub fn direction(&self, t: f32) -> Vec2<f32> {
         self.tangent(t).normalize_or(Vec2::X)
-    }
-
-    /// Returns the start point.
-    #[inline]
-    #[must_use]
-    pub const fn start(&self) -> Point<f32> {
-        self.p0
-    }
-
-    /// Returns the end point.
-    #[inline]
-    #[must_use]
-    pub const fn end(&self) -> Point<f32> {
-        self.p3
-    }
-
-    /// Returns the first control point.
-    #[inline]
-    #[must_use]
-    pub const fn control1(&self) -> Point<f32> {
-        self.p1
-    }
-
-    /// Returns the second control point.
-    #[inline]
-    #[must_use]
-    pub const fn control2(&self) -> Point<f32> {
-        self.p2
     }
 
     /// Returns the bounding box (conservative estimate using control points).
@@ -453,24 +610,6 @@ impl CubicBez {
             self.arc_length_recursive(t0, mid, tolerance)
                 + self.arc_length_recursive(mid, t1, tolerance)
         }
-    }
-
-    /// Splits the curve at parameter t into two curves (de Casteljau).
-    #[must_use]
-    pub fn split(&self, t: f32) -> (Self, Self) {
-        let p01 = self.p0.lerp(self.p1, t);
-        let p12 = self.p1.lerp(self.p2, t);
-        let p23 = self.p2.lerp(self.p3, t);
-
-        let p012 = p01.lerp(p12, t);
-        let p123 = p12.lerp(p23, t);
-
-        let p0123 = p012.lerp(p123, t);
-
-        (
-            Self::new(self.p0, p01, p012, p0123),
-            Self::new(p0123, p123, p23, self.p3),
-        )
     }
 
     /// Returns the nearest point on the curve to the given point.
@@ -531,42 +670,6 @@ impl CubicBez {
         self.distance_to_point(point) <= tolerance
     }
 
-    /// Returns a new curve translated by the given vector.
-    #[inline]
-    #[must_use]
-    pub fn translate(&self, offset: Vec2<f32>) -> Self {
-        Self {
-            p0: self.p0 + offset,
-            p1: self.p1 + offset,
-            p2: self.p2 + offset,
-            p3: self.p3 + offset,
-        }
-    }
-
-    /// Returns a new curve with start and end points swapped.
-    #[inline]
-    #[must_use]
-    pub const fn reverse(&self) -> Self {
-        Self {
-            p0: self.p3,
-            p1: self.p2,
-            p2: self.p1,
-            p3: self.p0,
-        }
-    }
-
-    /// Linear interpolation between two curves.
-    #[inline]
-    #[must_use]
-    pub fn lerp(self, other: Self, t: f32) -> Self {
-        Self {
-            p0: self.p0.lerp(other.p0, t),
-            p1: self.p1.lerp(other.p1, t),
-            p2: self.p2.lerp(other.p2, t),
-            p3: self.p3.lerp(other.p3, t),
-        }
-    }
-
     /// Flattens the curve into line segments.
     ///
     /// Returns points along the curve with the given tolerance.
@@ -613,7 +716,10 @@ impl CubicBez {
     }
 }
 
-impl fmt::Display for CubicBez {
+impl<T: Unit> fmt::Display for CubicBez<T>
+where
+    T: fmt::Display,
+{
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
@@ -630,14 +736,14 @@ impl fmt::Display for CubicBez {
 /// Shorthand for `QuadBez::new(p0, p1, p2)`.
 #[inline]
 #[must_use]
-pub fn quad_bez(p0: Point<f32>, p1: Point<f32>, p2: Point<f32>) -> QuadBez {
+pub fn quad_bez(p0: Point<f32>, p1: Point<f32>, p2: Point<f32>) -> QuadBez<f32> {
     QuadBez::new(p0, p1, p2)
 }
 
 /// Shorthand for `CubicBez::new(p0, p1, p2, p3)`.
 #[inline]
 #[must_use]
-pub fn cubic_bez(p0: Point<f32>, p1: Point<f32>, p2: Point<f32>, p3: Point<f32>) -> CubicBez {
+pub fn cubic_bez(p0: Point<f32>, p1: Point<f32>, p2: Point<f32>, p3: Point<f32>) -> CubicBez<f32> {
     CubicBez::new(p0, p1, p2, p3)
 }
 
