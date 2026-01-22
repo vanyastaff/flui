@@ -242,6 +242,12 @@ impl Matrix4 {
         )
     }
 
+    /// Creates a rotation matrix around the Z axis (type-safe version).
+    #[inline]
+    pub fn rotation_z_radians(angle: crate::geometry::Radians) -> Self {
+        Self::rotation_z(angle.0)
+    }
+
     /// Creates a rotation matrix around the X axis.
     ///
     /// # Arguments
@@ -254,6 +260,12 @@ impl Matrix4 {
         )
     }
 
+    /// Creates a rotation matrix around the X axis (type-safe version).
+    #[inline]
+    pub fn rotation_x_radians(angle: crate::geometry::Radians) -> Self {
+        Self::rotation_x(angle.0)
+    }
+
     /// Creates a rotation matrix around the Y axis.
     ///
     /// # Arguments
@@ -264,6 +276,12 @@ impl Matrix4 {
         Self::new(
             cos, 0.0, -sin, 0.0, 0.0, 1.0, 0.0, 0.0, sin, 0.0, cos, 0.0, 0.0, 0.0, 0.0, 1.0,
         )
+    }
+
+    /// Creates a rotation matrix around the Y axis (type-safe version).
+    #[inline]
+    pub fn rotation_y_radians(angle: crate::geometry::Radians) -> Self {
+        Self::rotation_y(angle.0)
     }
 
     /// Creates a 2D skew (shear) transformation matrix.
@@ -431,6 +449,12 @@ impl Matrix4 {
         *self = Matrix4::rotation_z(angle) * *self;
     }
 
+    /// Applies a Z-axis rotation to this matrix (type-safe version).
+    #[inline]
+    pub fn rotate_z_radians(&mut self, angle: crate::geometry::Radians) {
+        self.rotate_z(angle.0);
+    }
+
     /// Transforms a 2D point (x, y) by this matrix.
     ///
     /// Uses homogeneous coordinates: (x, y, 0, 1) → (x', y', z', w')
@@ -464,7 +488,7 @@ impl Matrix4 {
     /// assert_eq!(transformed[1], Point::new(15.0, 25.0));
     /// ```
     #[must_use]
-    pub fn transform_points(&self, points: &[Point]) -> Vec<Point> {
+    pub fn transform_points(&self, points: &[Point<f32>]) -> Vec<Point<f32>> {
         if points.is_empty() {
             return Vec::new();
         }
@@ -483,7 +507,7 @@ impl Matrix4 {
     }
 
     #[inline]
-    fn transform_points_scalar(&self, points: &[Point]) -> Vec<Point> {
+    fn transform_points_scalar(&self, points: &[Point<f32>]) -> Vec<Point<f32>> {
         points
             .iter()
             .map(|p| {
@@ -495,7 +519,7 @@ impl Matrix4 {
 
     #[cfg(all(feature = "simd", target_arch = "x86_64"))]
     #[inline]
-    fn transform_points_simd_sse(&self, points: &[Point]) -> Vec<Point> {
+    fn transform_points_simd_sse(&self, points: &[Point<f32>]) -> Vec<Point<f32>> {
         #[cfg(target_feature = "sse")]
         unsafe {
             use std::arch::x86_64::*;
@@ -559,7 +583,7 @@ impl Matrix4 {
 
     #[cfg(all(feature = "simd", target_arch = "aarch64"))]
     #[inline]
-    fn transform_points_simd_neon(&self, points: &[Point]) -> Vec<Point> {
+    fn transform_points_simd_neon(&self, points: &[Point<f32>]) -> Vec<Point<f32>> {
         #[cfg(target_feature = "neon")]
         unsafe {
             use std::arch::aarch64::*;

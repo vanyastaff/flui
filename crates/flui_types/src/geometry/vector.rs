@@ -20,7 +20,7 @@
 use std::fmt::{self, Debug, Display};
 use std::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use super::traits::{Along, Axis, Negate, NumericUnit, Unit};
+use super::traits::{Along, Axis, NumericUnit, Unit};
 use super::Point;
 
 /// A 2D vector representing direction and magnitude.
@@ -79,6 +79,35 @@ impl Vec2<f32> {
 
     /// Vector with NaN components.
     pub const NAN: Self = Self::new(f32::NAN, f32::NAN);
+
+    /// Checks if this vector is approximately equal to another.
+    #[inline]
+    #[must_use]
+    pub fn approx_eq(self, other: Self) -> bool {
+        (self.x - other.x).abs() < f32::EPSILON
+            && (self.y - other.y).abs() < f32::EPSILON
+    }
+
+    /// Checks if this vector is valid (finite).
+    #[inline]
+    #[must_use]
+    pub fn is_valid(self) -> bool {
+        self.is_finite()
+    }
+
+    /// Returns the Manhattan distance (|x| + |y|).
+    #[inline]
+    #[must_use]
+    pub fn manhattan_length(self) -> f32 {
+        self.x.abs() + self.y.abs()
+    }
+
+    /// Returns the Chebyshev distance (max(|x|, |y|)).
+    #[inline]
+    #[must_use]
+    pub fn chebyshev_length(self) -> f32 {
+        self.x.abs().max(self.y.abs())
+    }
 }
 
 // ============================================================================
@@ -174,6 +203,23 @@ impl<T: Unit> Vec2<T> {
     #[must_use]
     pub const fn with_y(self, y: T) -> Self {
         Self::new(self.x, y)
+    }
+
+    /// Returns a vector with x and y swapped.
+    #[inline]
+    #[must_use]
+    pub fn swap(self) -> Self {
+        Self::new(self.y, self.x)
+    }
+
+    /// Maps the vector components through a function.
+    #[inline]
+    #[must_use]
+    pub fn map<U: Unit>(self, f: impl Fn(T) -> U) -> Vec2<U> {
+        Vec2 {
+            x: f(self.x),
+            y: f(self.y),
+        }
     }
 }
 
@@ -836,12 +882,12 @@ impl<T: NumericUnit> DivAssign<f32> for Vec2<T> {
     }
 }
 
-impl<T: NumericUnit + Negate> Neg for Vec2<T> {
+impl<T: NumericUnit + Neg<Output = T>> Neg for Vec2<T> {
     type Output = Self;
 
     #[inline]
     fn neg(self) -> Self {
-        Self::new(self.x.negate(), self.y.negate())
+        Self::new(-self.x, -self.y)
     }
 }
 
@@ -979,19 +1025,7 @@ where
     }
 }
 
-// ============================================================================
-// Negate trait - Semantic negation
-// ============================================================================
-
-impl<T: Unit> super::traits::Negate for Vec2<T>
-where
-    T: super::traits::Negate
-{
-    #[inline]
-    fn negate(self) -> Self {
-        Self { x: self.x.negate(), y: self.y.negate() }
-    }
-}
+// Negate is now replaced by std::ops::Neg (see Neg impl above)
 
 // ============================================================================
 // IsZero trait - Zero check
@@ -1004,6 +1038,93 @@ where
     #[inline]
     fn is_zero(&self) -> bool {
         self.x.is_zero() && self.y.is_zero()
+    }
+}
+
+// ============================================================================
+// Double trait - Double the value
+// ============================================================================
+
+impl<T: Unit> super::traits::Double for Vec2<T>
+where
+    T: super::traits::Double
+{
+    #[inline]
+    fn double(&self) -> Self {
+        Self {
+            x: self.x.double(),
+            y: self.y.double(),
+        }
+    }
+}
+
+// ============================================================================
+// ApproxEq trait - Approximate equality
+// ============================================================================
+
+impl<T: Unit> super::traits::ApproxEq for Vec2<T>
+where
+    T: super::traits::ApproxEq
+{
+    #[inline]
+    fn approx_eq_eps(&self, other: &Self, epsilon: f32) -> bool {
+        self.x.approx_eq_eps(&other.x, epsilon)
+            && self.y.approx_eq_eps(&other.y, epsilon)
+    }
+}
+
+// ============================================================================
+// Sign trait - Signum operations
+// ============================================================================
+
+impl<T: NumericUnit> super::traits::Sign for Vec2<T>
+where
+    T: super::traits::Sign
+{
+    #[inline]
+    fn signum(self) -> Self {
+        Self {
+            x: self.x.signum(),
+            y: self.y.signum(),
+        }
+    }
+
+    #[inline]
+    fn is_positive(&self) -> bool {
+        self.x.is_positive() && self.y.is_positive()
+    }
+
+    #[inline]
+    fn is_negative(&self) -> bool {
+        self.x.is_negative() || self.y.is_negative()
+    }
+}
+
+// ============================================================================
+// Sum trait - Iterator summing
+// ============================================================================
+
+impl<T> std::iter::Sum for Vec2<T>
+where
+    T: NumericUnit,
+{
+    fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
+        iter.fold(Vec2::new(T::zero(), T::zero()), |acc, v| Vec2::new(
+            T::add(acc.x, v.x),
+            T::add(acc.y, v.y),
+        ))
+    }
+}
+
+impl<'a, T> std::iter::Sum<&'a Vec2<T>> for Vec2<T>
+where
+    T: NumericUnit,
+{
+    fn sum<I: Iterator<Item = &'a Self>>(iter: I) -> Self {
+        iter.fold(Vec2::new(T::zero(), T::zero()), |acc, v| Vec2::new(
+            T::add(acc.x, v.x),
+            T::add(acc.y, v.y),
+        ))
     }
 }
 
@@ -1300,7 +1421,7 @@ mod typed_tests {
 
     #[test]
     fn test_vec2_utility_traits() {
-        use crate::geometry::{Axis, Along, Half, Negate, IsZero};
+        use crate::geometry::{Axis, Along, Half, IsZero, Double, ApproxEq, Sign};
 
         // Test Along trait
         let v = Vec2::<Pixels>::new(px(10.0), px(20.0));
@@ -1316,8 +1437,8 @@ mod typed_tests {
         assert_eq!(half_v.x.0, 5.0);
         assert_eq!(half_v.y.0, 10.0);
 
-        // Test Negate trait
-        let neg_v = v.negate();
+        // Test negation (using std::ops::Neg)
+        let neg_v = -v;
         assert_eq!(neg_v.x.0, -10.0);
         assert_eq!(neg_v.y.0, -20.0);
 
@@ -1325,5 +1446,67 @@ mod typed_tests {
         let zero = Vec2::<Pixels>::new(px(0.0), px(0.0));
         assert!(zero.is_zero());
         assert!(!v.is_zero());
+
+        // Test Double trait
+        let doubled = v.double();
+        assert_eq!(doubled.x.0, 20.0);
+        assert_eq!(doubled.y.0, 40.0);
+
+        // Test ApproxEq trait
+        let v2 = Vec2::<Pixels>::new(px(10.0 + 1e-8), px(20.0 - 1e-8));
+        assert!(v.approx_eq_eps(&v2, 1e-6));
+
+        // Test Sign trait
+        let v_f32 = Vec2::<f32>::new(-10.0, 20.0);
+        let signum_v: Vec2<f32> = Sign::signum(v_f32);
+        assert_eq!(signum_v.x, -1.0);
+        assert_eq!(signum_v.y, 1.0);
+    }
+
+    #[test]
+    fn test_vec2_swap() {
+        let v = Vec2::<f32>::new(10.0, 20.0);
+        let swapped = v.swap();
+        assert_eq!(swapped.x, 20.0);
+        assert_eq!(swapped.y, 10.0);
+    }
+
+    #[test]
+    fn test_vec2_map() {
+        let v = Vec2::<f32>::new(2.0, 3.0);
+        let mapped = v.map(|c| c * 2.0);
+        assert_eq!(mapped.x, 4.0);
+        assert_eq!(mapped.y, 6.0);
+    }
+
+    #[test]
+    fn test_vec2_distance_metrics() {
+        let v = Vec2::<f32>::new(3.0, 4.0);
+        assert_eq!(v.manhattan_length(), 7.0);  // |3| + |4|
+        assert_eq!(v.chebyshev_length(), 4.0);  // max(|3|, |4|)
+        assert_eq!(v.length(), 5.0);            // sqrt(3^2 + 4^2)
+    }
+
+    #[test]
+    fn test_vec2_sum_iterator() {
+        let vectors = vec![
+            Vec2::<f32>::new(1.0, 2.0),
+            Vec2::<f32>::new(3.0, 4.0),
+            Vec2::<f32>::new(5.0, 6.0),
+        ];
+        let total: Vec2<f32> = vectors.iter().sum();
+        assert_eq!(total.x, 9.0);
+        assert_eq!(total.y, 12.0);
+
+        let total_owned: Vec2<f32> = vectors.into_iter().sum();
+        assert_eq!(total_owned.x, 9.0);
+        assert_eq!(total_owned.y, 12.0);
+    }
+
+    #[test]
+    fn test_vec2_is_valid() {
+        assert!(Vec2::<f32>::new(1.0, 2.0).is_valid());
+        assert!(!Vec2::<f32>::INFINITY.is_valid());
+        assert!(!Vec2::<f32>::NAN.is_valid());
     }
 }

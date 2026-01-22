@@ -16,6 +16,7 @@
 //! ```
 
 use std::fmt;
+use std::iter::Sum;
 use std::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use super::traits::{NumericUnit, Unit};
@@ -39,8 +40,19 @@ use super::Vec2;
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Point<T: Unit> {
+    /// The x coordinate (horizontal position).
     pub x: T,
+    /// The y coordinate (vertical position).
     pub y: T,
+}
+
+impl<T: Unit> Default for Point<T> {
+    fn default() -> Self {
+        Self {
+            x: T::zero(),
+            y: T::zero(),
+        }
+    }
 }
 
 // ============================================================================
@@ -79,6 +91,22 @@ impl<T: Unit> Point<T> {
     #[inline]
     pub fn splat(value: T) -> Self {
         Self { x: value, y: value }
+    }
+
+    /// Swaps x and y coordinates.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::geometry::Point;
+    ///
+    /// let p = Point::new(10.0, 20.0);
+    /// assert_eq!(p.swap(), Point::new(20.0, 10.0));
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn swap(self) -> Self {
+        Self { x: self.y, y: self.x }
     }
 }
 
@@ -166,19 +194,19 @@ where
     /// ```
     /// use flui_types::geometry::Point;
     ///
-    /// let p: Point<i32> = Point::new(3, 4);
-    /// let p_float = p.map(|coord| coord as f32);
-    /// assert_eq!(p_float, Point::new(3.0, 4.0));
+    /// let p: Point<f32> = Point::new(3.0, 4.0);
+    /// let p_doubled: Point<f32> = p.map(|coord| coord * 2.0);
+    /// assert_eq!(p_doubled, Point::new(6.0, 8.0));
     /// ```
     #[inline]
     #[must_use]
     pub fn map<U>(&self, f: impl Fn(T) -> U) -> Point<U>
     where
-        U: Clone + fmt::Debug + Default + PartialEq,
+        U: Unit,
     {
         Point {
-            x: f(self.x.clone()),
-            y: f(self.y.clone()),
+            x: f(self.x),
+            y: f(self.y),
         }
     }
 
@@ -221,7 +249,7 @@ impl Point<f32> {
     /// This interprets the point coordinates as a displacement from origin.
     #[inline]
     #[must_use]
-    pub const fn to_vec2(self) -> Vec2 {
+    pub const fn to_vec2(self) -> Vec2<f32> {
         Vec2::new(self.x, self.y)
     }
 }
@@ -230,7 +258,10 @@ impl Point<f32> {
 // Geometric Operations (f32 only)
 // ============================================================================
 
-impl Point<f32> {
+impl<T> Point<T>
+where
+    T: NumericUnit + Into<f32> + From<f32>,
+{
     /// Euclidean distance to another point.
     ///
     /// # Examples
@@ -255,9 +286,11 @@ impl Point<f32> {
     #[inline]
     #[must_use]
     pub fn distance_squared(self, other: Self) -> f32 {
-        let dx = other.x - self.x;
-        let dy = other.y - self.y;
-        dx * dx + dy * dy
+        let dx = T::sub(other.x, self.x);
+        let dy = T::sub(other.y, self.y);
+        let dx_f32: f32 = dx.into();
+        let dy_f32: f32 = dy.into();
+        dx_f32 * dx_f32 + dy_f32 * dy_f32
     }
 
     /// Midpoint between this point and another.
@@ -274,9 +307,26 @@ impl Point<f32> {
     #[inline]
     #[must_use]
     pub fn midpoint(self, other: Self) -> Self {
-        Self::new((self.x + other.x) * 0.5, (self.y + other.y) * 0.5)
+        let sum_x = T::add(self.x, other.x);
+        let sum_y = T::add(self.y, other.y);
+        Self::new(
+            T::div(sum_x, 2.0),
+            T::div(sum_y, 2.0),
+        )
     }
+}
 
+impl Point<f32> {
+}
+
+// ============================================================================
+// Interpolation (generic with NumericUnit)
+// ============================================================================
+
+impl<T> Point<T>
+where
+    T: NumericUnit + Into<f32> + From<f32>,
+{
     /// Linear interpolation between two points.
     ///
     /// - `t = 0.0` returns `self`
@@ -287,9 +337,14 @@ impl Point<f32> {
     #[inline]
     #[must_use]
     pub fn lerp(self, other: Self, t: f32) -> Self {
+        let x0: f32 = self.x.into();
+        let y0: f32 = self.y.into();
+        let x1: f32 = other.x.into();
+        let y1: f32 = other.y.into();
+
         Self::new(
-            self.x + (other.x - self.x) * t,
-            self.y + (other.y - self.y) * t,
+            T::from(x0 + (x1 - x0) * t),
+            T::from(y0 + (y1 - y0) * t),
         )
     }
 }
@@ -421,63 +476,98 @@ impl Point<f32> {
 // ============================================================================
 
 impl Point<f32> {
-    /// Returns `true` if either coordinate is NaN.
-    #[inline]
-    #[must_use]
-    pub fn is_nan(self) -> bool {
-        self.x.is_nan() || self.y.is_nan()
-    }
 }
 
 // ============================================================================
-// Operators: Point - Point = Vec2 (f32 only)
+// Operators: Point - Point = Vec2 (generic)
 // ============================================================================
 
-impl Sub for Point<f32> {
-    type Output = Vec2;
+impl<T> Sub for Point<T>
+where
+    T: NumericUnit,
+{
+    type Output = Vec2<T>;
 
     /// Returns the displacement vector from `rhs` to `self`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::geometry::{Point, Vec2, px, Pixels};
+    ///
+    /// let p1 = Point::<f32>::new(10.0, 20.0);
+    /// let p2 = Point::<f32>::new(3.0, 5.0);
+    /// let v: Vec2<f32> = p1 - p2;
+    /// assert_eq!(v, Vec2::new(7.0, 15.0));
+    ///
+    /// // Works with Pixels too
+    /// let p1 = Point::new(px(100.0), px(200.0));
+    /// let p2 = Point::new(px(30.0), px(50.0));
+    /// let v: Vec2<Pixels> = p1 - p2;
+    /// assert_eq!(v.x.get(), 70.0);
+    /// ```
     #[inline]
-    fn sub(self, rhs: Self) -> Vec2 {
-        Vec2::new(self.x - rhs.x, self.y - rhs.y)
+    fn sub(self, rhs: Self) -> Vec2<T> {
+        Vec2::new(
+            T::sub(self.x, rhs.x),
+            T::sub(self.y, rhs.y),
+        )
     }
 }
 
 // ============================================================================
-// Operators: Point ± Vec2 = Point (f32 only, Vec2 is f32-based)
+// Operators: Point ± Vec2 = Point (generic)
 // ============================================================================
 
-impl Add<Vec2<f32>> for Point<f32> {
+impl<T> Add<Vec2<T>> for Point<T>
+where
+    T: NumericUnit,
+{
     type Output = Self;
 
     #[inline]
-    fn add(self, rhs: Vec2) -> Self {
-        Self::new(self.x + rhs.x, self.y + rhs.y)
+    fn add(self, rhs: Vec2<T>) -> Self {
+        Self::new(
+            T::add(self.x, rhs.x),
+            T::add(self.y, rhs.y),
+        )
     }
 }
 
-impl AddAssign<Vec2<f32>> for Point<f32> {
+impl<T> AddAssign<Vec2<T>> for Point<T>
+where
+    T: NumericUnit,
+{
     #[inline]
-    fn add_assign(&mut self, rhs: Vec2) {
-        self.x += rhs.x;
-        self.y += rhs.y;
+    fn add_assign(&mut self, rhs: Vec2<T>) {
+        self.x = T::add(self.x, rhs.x);
+        self.y = T::add(self.y, rhs.y);
     }
 }
 
-impl Sub<Vec2<f32>> for Point<f32> {
+impl<T> Sub<Vec2<T>> for Point<T>
+where
+    T: NumericUnit,
+{
     type Output = Self;
 
     #[inline]
-    fn sub(self, rhs: Vec2) -> Self {
-        Self::new(self.x - rhs.x, self.y - rhs.y)
+    fn sub(self, rhs: Vec2<T>) -> Self {
+        Self::new(
+            T::sub(self.x, rhs.x),
+            T::sub(self.y, rhs.y),
+        )
     }
 }
 
-impl SubAssign<Vec2<f32>> for Point<f32> {
+impl<T> SubAssign<Vec2<T>> for Point<T>
+where
+    T: NumericUnit,
+{
     #[inline]
-    fn sub_assign(&mut self, rhs: Vec2) {
-        self.x -= rhs.x;
-        self.y -= rhs.y;
+    fn sub_assign(&mut self, rhs: Vec2<T>) {
+        self.x = T::sub(self.x, rhs.x);
+        self.y = T::sub(self.y, rhs.y);
     }
 }
 
@@ -710,7 +800,7 @@ impl<T: NumericUnit> Point<T>
 where
     T: Into<f32>
 {
-    /// Converts to Point<f32> (shorthand for GPU usage).
+    /// Converts to `Point<f32>` (shorthand for GPU usage).
     ///
     /// # Examples
     ///
@@ -773,7 +863,7 @@ where
 // because it conflicts with the reflexive impl From<T> for T when T=f32.
 // Instead, users should use .cast(), .to_f32(), or .into() on specific types.
 
-/// Converts from Point<T> to (f32, f32) for any T that converts to f32.
+/// Converts from `Point<T>` to `(f32, f32)` for any T that converts to f32.
 impl<T: Unit> From<Point<T>> for (f32, f32)
 where
     T: Into<f32>
@@ -784,7 +874,7 @@ where
     }
 }
 
-/// Converts from Point<T> to [f32; 2] for any T that converts to f32.
+/// Converts from `Point<T>` to `[f32; 2]` for any T that converts to f32.
 impl<T: Unit> From<Point<T>> for [f32; 2]
 where
     T: Into<f32>
@@ -815,7 +905,7 @@ impl From<[f32; 2]> for Point<f32> {
 
 impl From<Vec2<f32>> for Point<f32> {
     #[inline]
-    fn from(v: Vec2) -> Self {
+    fn from(v: Vec2<f32>) -> Self {
         Self::new(v.x, v.y)
     }
 }
@@ -865,8 +955,8 @@ where
     #[inline]
     fn along(&self, axis: super::traits::Axis) -> Self::Unit {
         match axis {
-            super::traits::Axis::Horizontal => self.x.clone(),
-            super::traits::Axis::Vertical => self.y.clone(),
+            super::traits::Axis::Horizontal => self.x,
+            super::traits::Axis::Vertical => self.y,
         }
     }
 
@@ -877,8 +967,8 @@ where
         f: impl FnOnce(Self::Unit) -> Self::Unit,
     ) -> Self {
         match axis {
-            super::traits::Axis::Horizontal => Self::new(f(self.x.clone()), self.y.clone()),
-            super::traits::Axis::Vertical => Self::new(self.x.clone(), f(self.y.clone())),
+            super::traits::Axis::Horizontal => Self::new(f(self.x), self.y),
+            super::traits::Axis::Vertical => Self::new(self.x, f(self.y)),
         }
     }
 }
@@ -897,19 +987,7 @@ where
     }
 }
 
-// ============================================================================
-// Negate trait - Semantic negation (generic)
-// ============================================================================
-
-impl<T: Unit> super::traits::Negate for Point<T>
-where
-    T: super::traits::Negate
-{
-    #[inline]
-    fn negate(self) -> Self {
-        Self { x: self.x.negate(), y: self.y.negate() }
-    }
-}
+// Negate is now replaced by std::ops::Neg (see Neg impl above)
 
 // ============================================================================
 // IsZero trait - Zero check (generic)
@@ -926,11 +1004,94 @@ where
 }
 
 // ============================================================================
+// Double trait - Compute double value (generic)
+// ============================================================================
+
+impl<T: Unit> super::traits::Double for Point<T>
+where
+    T: super::traits::Double
+{
+    #[inline]
+    fn double(&self) -> Self {
+        Self { x: self.x.double(), y: self.y.double() }
+    }
+}
+
+// ============================================================================
+// Sum trait - Iterator support (generic)
+// ============================================================================
+
+impl<T> Sum for Point<T>
+where
+    T: NumericUnit,
+{
+    fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
+        iter.fold(Point::default(), |acc, p| Point::new(
+            T::add(acc.x, p.x),
+            T::add(acc.y, p.y),
+        ))
+    }
+}
+
+impl<'a, T> Sum<&'a Point<T>> for Point<T>
+where
+    T: NumericUnit,
+{
+    fn sum<I: Iterator<Item = &'a Self>>(iter: I) -> Self {
+        iter.fold(Point::default(), |acc, p| Point::new(
+            T::add(acc.x, p.x),
+            T::add(acc.y, p.y),
+        ))
+    }
+}
+
+// ============================================================================
+// ApproxEq trait - Approximate equality (generic)
+// ============================================================================
+
+impl<T: Unit> super::traits::ApproxEq for Point<T>
+where
+    T: super::traits::ApproxEq
+{
+    #[inline]
+    fn approx_eq_eps(&self, other: &Self, epsilon: f32) -> bool {
+        self.x.approx_eq_eps(&other.x, epsilon) && self.y.approx_eq_eps(&other.y, epsilon)
+    }
+}
+
+// ============================================================================
+// Sign trait - Sign operations (generic)
+// ============================================================================
+
+impl<T: Unit> super::traits::Sign for Point<T>
+where
+    T: super::traits::Sign + Clone + std::fmt::Debug + Default + PartialEq
+{
+    #[inline]
+    fn is_positive(&self) -> bool {
+        self.x.is_positive() && self.y.is_positive()
+    }
+
+    #[inline]
+    fn is_negative(&self) -> bool {
+        self.x.is_negative() && self.y.is_negative()
+    }
+
+    #[inline]
+    fn signum(self) -> Self {
+        Self {
+            x: super::traits::Sign::signum(self.x),
+            y: super::traits::Sign::signum(self.y),
+        }
+    }
+}
+
+// ============================================================================
 // Specialized implementations for Pixels
 // ============================================================================
 
 impl Point<super::units::Pixels> {
-    /// Scales the point by a given factor, producing a Point<ScaledPixels>.
+    /// Scales the point by a given factor, producing a `Point<ScaledPixels>`.
     ///
     /// This is typically used to convert logical pixel coordinates to scaled
     /// pixels for high-DPI displays.
@@ -1018,8 +1179,8 @@ where
     #[must_use]
     pub fn relative_to(&self, origin: &Point<T>) -> Point<T> {
         Point {
-            x: self.x.clone() - origin.x.clone(),
-            y: self.y.clone() - origin.y.clone(),
+            x: self.x - origin.x,
+            y: self.y - origin.y,
         }
     }
 }
@@ -1122,7 +1283,7 @@ mod tests {
     fn test_point_minus_point() {
         let p1 = Point::new(10.0, 20.0);
         let p2 = Point::new(3.0, 5.0);
-        let v: Vec2 = p1 - p2;
+        let v: Vec2<f32> = p1 - p2;
         assert_eq!(v, Vec2::new(7.0, 15.0));
     }
 
@@ -1157,8 +1318,8 @@ mod tests {
     fn test_conversions() {
         let p = Point::new(10.0, 20.0);
 
-        let from_tuple: Point = (10.0, 20.0).into();
-        let from_array: Point = [10.0, 20.0].into();
+        let from_tuple: Point<f32> = (10.0, 20.0).into();
+        let from_array: Point<f32> = [10.0, 20.0].into();
         assert_eq!(from_tuple, p);
         assert_eq!(from_array, p);
 
@@ -1168,7 +1329,7 @@ mod tests {
         assert_eq!(to_array, [10.0, 20.0]);
 
         let v = Vec2::new(5.0, 10.0);
-        let p_from_v: Point = v.into();
+        let p_from_v: Point<f32> = v.into();
         assert_eq!(p_from_v, Point::new(5.0, 10.0));
     }
 
@@ -1455,7 +1616,7 @@ mod arithmetic_tests {
 
     #[test]
     fn test_point_utility_traits() {
-        use crate::geometry::{Axis, Along, Half, Negate, IsZero};
+        use crate::geometry::{Axis, Along, Half, IsZero};
 
         // Test Along trait
         let p = Point::<Pixels>::new(px(10.0), px(20.0));
@@ -1471,8 +1632,8 @@ mod arithmetic_tests {
         assert_eq!(half_p.x.0, 5.0);
         assert_eq!(half_p.y.0, 10.0);
 
-        // Test Negate trait
-        let neg_p = p.negate();
+        // Test negation (using std::ops::Neg)
+        let neg_p = -p;
         assert_eq!(neg_p.x.0, -10.0);
         assert_eq!(neg_p.y.0, -20.0);
 

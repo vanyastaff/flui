@@ -80,6 +80,45 @@ impl<T: Unit> Offset<T> {
     pub const fn new(dx: T, dy: T) -> Self {
         Self { dx, dy }
     }
+
+    /// Returns a new offset with dx and dy swapped.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::geometry::{Offset, px};
+    ///
+    /// let offset = Offset::new(px(10.0), px(20.0));
+    /// let swapped = offset.swap();
+    /// assert_eq!(swapped.dx.get(), 20.0);
+    /// assert_eq!(swapped.dy.get(), 10.0);
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn swap(self) -> Self {
+        Self { dx: self.dy, dy: self.dx }
+    }
+
+    /// Applies a transformation function to both components.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::geometry::Offset;
+    ///
+    /// let offset: Offset<f32> = Offset::new(10.0, 20.0);
+    /// let doubled: Offset<f32> = offset.map(|v| v * 2.0);
+    /// assert_eq!(doubled.dx, 20.0);
+    /// assert_eq!(doubled.dy, 40.0);
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn map<U: Unit>(&self, f: impl Fn(T) -> U) -> Offset<U> {
+        Offset {
+            dx: f(self.dx),
+            dy: f(self.dy),
+        }
+    }
 }
 
 // ============================================================================
@@ -732,19 +771,7 @@ where
     }
 }
 
-// ============================================================================
-// Negate trait - Semantic negation
-// ============================================================================
-
-impl<T: Unit> super::traits::Negate for Offset<T>
-where
-    T: super::traits::Negate
-{
-    #[inline]
-    fn negate(self) -> Self {
-        Self { dx: self.dx.negate(), dy: self.dy.negate() }
-    }
-}
+// Negate is now replaced by std::ops::Neg (see Neg impl above)
 
 // ============================================================================
 // IsZero trait - Zero check
@@ -757,6 +784,82 @@ where
     #[inline]
     fn is_zero(&self) -> bool {
         self.dx.is_zero() && self.dy.is_zero()
+    }
+}
+
+// ============================================================================
+// Double trait - Compute double value
+// ============================================================================
+
+impl<T: Unit> super::traits::Double for Offset<T>
+where
+    T: super::traits::Double
+{
+    #[inline]
+    fn double(&self) -> Self {
+        Self { dx: self.dx.double(), dy: self.dy.double() }
+    }
+}
+
+// ============================================================================
+// ApproxEq trait - Approximate equality for floating-point
+// ============================================================================
+
+impl<T: Unit> super::traits::ApproxEq for Offset<T>
+where
+    T: super::traits::ApproxEq
+{
+    #[inline]
+    fn approx_eq_eps(&self, other: &Self, epsilon: f32) -> bool {
+        self.dx.approx_eq_eps(&other.dx, epsilon) && self.dy.approx_eq_eps(&other.dy, epsilon)
+    }
+}
+
+// ============================================================================
+// Sign trait - Sign operations
+// ============================================================================
+
+impl<T: NumericUnit> super::traits::Sign for Offset<T>
+where
+    T: super::traits::Sign
+{
+    #[inline]
+    fn is_positive(&self) -> bool {
+        self.dx.is_positive() && self.dy.is_positive()
+    }
+
+    #[inline]
+    fn is_negative(&self) -> bool {
+        self.dx.is_negative() && self.dy.is_negative()
+    }
+
+    #[inline]
+    fn signum(self) -> Self {
+        Self { dx: self.dx.signum(), dy: self.dy.signum() }
+    }
+
+    #[inline]
+    fn abs_sign(&self) -> i32 {
+        // Return sign of both components (0 if mixed)
+        let dx_sign = self.dx.abs_sign();
+        let dy_sign = self.dy.abs_sign();
+        if dx_sign == dy_sign { dx_sign } else { 0 }
+    }
+}
+
+// ============================================================================
+// Sum trait - Iterator support
+// ============================================================================
+
+impl<T> std::iter::Sum for Offset<T>
+where
+    T: NumericUnit,
+{
+    fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
+        iter.fold(Offset::new(T::zero(), T::zero()), |acc, o| Offset::new(
+            T::add(acc.dx, o.dx),
+            T::add(acc.dy, o.dy),
+        ))
     }
 }
 
@@ -989,7 +1092,7 @@ mod typed_tests {
 
         o -= Offset::<Pixels>::new(px(5.0), px(10.0));
         assert_eq!(o.dx.get(), 10.0);
-        assert_eq!(o.dy.get(), 10.0);
+        assert_eq!(o.dy.get(), 20.0); // 30.0 - 10.0 = 20.0
     }
 
     #[test]
@@ -1003,7 +1106,7 @@ mod typed_tests {
 
     #[test]
     fn test_offset_utility_traits() {
-        use crate::geometry::{Axis, Along, Half, Negate, IsZero};
+        use crate::geometry::{Axis, Along, Half, IsZero};
 
         // Test Along trait
         let o = Offset::<Pixels>::new(px(10.0), px(20.0));
@@ -1019,8 +1122,8 @@ mod typed_tests {
         assert_eq!(half_o.dx.0, 5.0);
         assert_eq!(half_o.dy.0, 10.0);
 
-        // Test Negate trait
-        let neg_o = o.negate();
+        // Test negation (using std::ops::Neg)
+        let neg_o = -o;
         assert_eq!(neg_o.dx.0, -10.0);
         assert_eq!(neg_o.dy.0, -20.0);
 

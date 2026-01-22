@@ -118,6 +118,38 @@ impl QuarterTurns {
     pub fn radians(self) -> f32 {
         self.degrees().to_radians()
     }
+
+    /// Get the angle as Radians (type-safe version).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::geometry::{QuarterTurns, Radians};
+    /// use std::f32::consts::FRAC_PI_2;
+    ///
+    /// let angle = QuarterTurns::One.to_radians();
+    /// assert!((angle.0 - FRAC_PI_2).abs() < 0.0001);
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn to_radians(self) -> crate::geometry::Radians {
+        crate::geometry::radians(self.radians())
+    }
+}
+
+// Conversions
+impl From<QuarterTurns> for f32 {
+    #[inline]
+    fn from(turns: QuarterTurns) -> Self {
+        turns.radians()
+    }
+}
+
+impl From<QuarterTurns> for crate::geometry::Radians {
+    #[inline]
+    fn from(turns: QuarterTurns) -> Self {
+        turns.to_radians()
+    }
 }
 
 #[cfg(test)]
@@ -162,5 +194,42 @@ mod tests {
     #[test]
     fn test_quarter_turns_default() {
         assert_eq!(QuarterTurns::default(), QuarterTurns::Zero);
+    }
+
+    #[test]
+    fn test_quarter_turns_to_radians() {
+        use std::f32::consts::{FRAC_PI_2, PI};
+
+        let zero = QuarterTurns::Zero.to_radians();
+        assert!((zero.0 - 0.0).abs() < 0.0001);
+
+        let one = QuarterTurns::One.to_radians();
+        assert!((one.0 - FRAC_PI_2).abs() < 0.0001);
+
+        let two = QuarterTurns::Two.to_radians();
+        assert!((two.0 - PI).abs() < 0.0001);
+
+        let three = QuarterTurns::Three.to_radians();
+        assert!((three.0 - (3.0 * FRAC_PI_2)).abs() < 0.0001);
+    }
+
+    #[test]
+    fn test_quarter_turns_from_to_radians() {
+        use crate::geometry::Radians;
+
+        let angle: Radians = QuarterTurns::One.into();
+        assert!((angle.0 - std::f32::consts::FRAC_PI_2).abs() < 0.0001);
+
+        let angle: Radians = QuarterTurns::Two.into();
+        assert!((angle.0 - std::f32::consts::PI).abs() < 0.0001);
+    }
+
+    #[test]
+    fn test_quarter_turns_from_to_f32() {
+        let angle: f32 = QuarterTurns::One.into();
+        assert!((angle - std::f32::consts::FRAC_PI_2).abs() < 0.0001);
+
+        let angle: f32 = QuarterTurns::Two.into();
+        assert!((angle - std::f32::consts::PI).abs() < 0.0001);
     }
 }

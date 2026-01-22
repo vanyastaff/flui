@@ -94,7 +94,7 @@ impl RelativeRect {
     /// ```
     #[inline]
     #[must_use]
-    pub fn from_rect(rect: Rect, parent: Size) -> Self {
+    pub fn from_rect(rect: Rect, parent: Size<f32>) -> Self {
         Self {
             left: rect.left(),
             top: rect.top(),
@@ -122,7 +122,7 @@ impl RelativeRect {
     /// ```
     #[inline]
     #[must_use]
-    pub fn from_size(offset: Offset, size: Size, parent: Size) -> Self {
+    pub fn from_size(offset: Offset<f32>, size: Size<f32>, parent: Size<f32>) -> Self {
         Self {
             left: offset.dx,
             top: offset.dy,
@@ -141,7 +141,7 @@ impl RelativeRect {
         top: f32,
         width: f32,
         height: f32,
-        parent: Size,
+        parent: Size<f32>,
     ) -> Self {
         Self {
             left,
@@ -170,7 +170,7 @@ impl RelativeRect {
     /// ```
     #[inline]
     #[must_use]
-    pub fn to_rect(&self, parent: Size) -> Rect {
+    pub fn to_rect(&self, parent: Size<f32>) -> Rect {
         Rect::from_ltrb(
             self.left,
             self.top,
@@ -196,7 +196,7 @@ impl RelativeRect {
     /// ```
     #[inline]
     #[must_use]
-    pub fn to_size(&self, parent: Size) -> Size {
+    pub fn to_size(&self, parent: Size<f32>) -> Size<f32> {
         Size::new(
             parent.width - self.left - self.right,
             parent.height - self.top - self.bottom,
@@ -256,7 +256,7 @@ impl RelativeRect {
     /// Returns a new RelativeRect shifted by the given offset.
     #[inline]
     #[must_use]
-    pub fn shift(&self, offset: Offset) -> Self {
+    pub fn shift(&self, offset: Offset<f32>) -> Self {
         Self {
             left: self.left + offset.dx,
             top: self.top + offset.dy,

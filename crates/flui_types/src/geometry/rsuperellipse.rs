@@ -92,6 +92,7 @@ impl RSuperellipse {
     /// Creates a superellipse from left, top, right, bottom and individual corner radii.
     #[inline]
     #[must_use]
+    #[allow(clippy::too_many_arguments)]
     pub fn from_ltrb_and_corners(
         left: f32,
         top: f32,
@@ -328,7 +329,7 @@ impl RSuperellipse {
     /// Shifts the superellipse by the given offset.
     #[inline]
     #[must_use]
-    pub fn shift(&self, offset: Offset) -> Self {
+    pub fn shift(&self, offset: Offset<f32>) -> Self {
         Self {
             rect: self.rect.translate(Vec2::new(offset.dx, offset.dy)),
             ..*self
@@ -382,7 +383,7 @@ impl RSuperellipse {
     /// This uses an approximation based on the corner radii and superellipse
     /// formula for accurate hit testing.
     #[must_use]
-    pub fn contains(&self, point: Point) -> bool {
+    pub fn contains(&self, point: Point<f32>) -> bool {
         // Quick bounding box check
         if !self.rect.contains(point) {
             return false;

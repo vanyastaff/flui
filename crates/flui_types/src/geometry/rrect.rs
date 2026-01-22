@@ -205,28 +205,28 @@ impl RRect {
     /// Left edge.
     #[inline]
     #[must_use]
-    pub const fn left(&self) -> f32 {
+    pub fn left(&self) -> f32 {
         self.rect.left()
     }
 
     /// Top edge.
     #[inline]
     #[must_use]
-    pub const fn top(&self) -> f32 {
+    pub fn top(&self) -> f32 {
         self.rect.top()
     }
 
     /// Right edge.
     #[inline]
     #[must_use]
-    pub const fn right(&self) -> f32 {
+    pub fn right(&self) -> f32 {
         self.rect.right()
     }
 
     /// Bottom edge.
     #[inline]
     #[must_use]
-    pub const fn bottom(&self) -> f32 {
+    pub fn bottom(&self) -> f32 {
         self.rect.bottom()
     }
 
@@ -247,14 +247,14 @@ impl RRect {
     /// Size.
     #[inline]
     #[must_use]
-    pub fn size(&self) -> Size {
+    pub fn size(&self) -> Size<f32> {
         self.rect.size()
     }
 
     /// Center point.
     #[inline]
     #[must_use]
-    pub fn center(&self) -> Point {
+    pub fn center(&self) -> Point<f32> {
         self.rect.center()
     }
 
@@ -359,7 +359,7 @@ impl RRect {
 impl RRect {
     /// Returns `true` if the point is inside the rounded rectangle.
     #[must_use]
-    pub fn contains(&self, point: Point) -> bool {
+    pub fn contains(&self, point: Point<f32>) -> bool {
         if !self.rect.contains(point) {
             return false;
         }
@@ -473,7 +473,7 @@ impl RRect {
     /// Translates the rounded rectangle.
     #[inline]
     #[must_use]
-    pub fn translate(&self, offset: Vec2) -> Self {
+    pub fn translate(&self, offset: Vec2<f32>) -> Self {
         Self::new(
             self.rect.translate(offset),
             self.top_left,
@@ -486,7 +486,7 @@ impl RRect {
     /// Translates using an Offset.
     #[inline]
     #[must_use]
-    pub fn translate_offset(&self, offset: Offset) -> Self {
+    pub fn translate_offset(&self, offset: Offset<f32>) -> Self {
         self.translate(Vec2::new(offset.dx, offset.dy))
     }
 
@@ -508,7 +508,7 @@ impl RRect {
     /// Corner centers for rendering elliptical arcs.
     #[inline]
     #[must_use]
-    pub fn corner_centers(&self) -> [Point; 4] {
+    pub fn corner_centers(&self) -> [Point<f32>; 4] {
         [
             Point::new(self.left() + self.top_left.x, self.top() + self.top_left.y),
             Point::new(

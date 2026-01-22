@@ -422,6 +422,13 @@ impl<T: Unit> Size<T> {
     pub fn transpose(self) -> Self {
         Self::new(self.height, self.width)
     }
+
+    /// Alias for `transpose()` - returns size with width and height swapped.
+    #[inline]
+    #[must_use]
+    pub fn swap(self) -> Self {
+        self.transpose()
+    }
 }
 
 // ============================================================================
@@ -578,10 +585,75 @@ impl Size<f32> {
         }
     }
 
+    /// Returns the perimeter (2 × width + 2 × height).
+    #[inline]
+    #[must_use]
+    pub fn perimeter(self) -> f32 {
+        2.0 * (self.width + self.height)
+    }
+
+    /// Returns the diagonal length (√(width² + height²)).
+    #[inline]
+    #[must_use]
+    pub fn diagonal(self) -> f32 {
+        (self.width * self.width + self.height * self.height).sqrt()
+    }
+
+    /// Returns a size scaled uniformly to the given maximum dimension.
+    ///
+    /// Maintains aspect ratio while ensuring neither dimension exceeds `max`.
+    #[inline]
+    #[must_use]
+    pub fn scale_to_max(self, max: f32) -> Self {
+        if self.width <= 0.0 || self.height <= 0.0 || max <= 0.0 {
+            return Self::ZERO;
+        }
+        let scale = (max / self.width).min(max / self.height);
+        Self::new(self.width * scale, self.height * scale)
+    }
+
+    /// Checks if this size is approximately equal to another.
+    #[inline]
+    #[must_use]
+    pub fn approx_eq(self, other: Self) -> bool {
+        (self.width - other.width).abs() < f32::EPSILON
+            && (self.height - other.height).abs() < f32::EPSILON
+    }
+
+    /// Checks if this size is valid (finite and non-negative).
+    #[inline]
+    #[must_use]
+    pub fn is_valid(self) -> bool {
+        self.is_finite() && self.width >= 0.0 && self.height >= 0.0
+    }
+
+    /// Returns the absolute size (makes both dimensions positive).
+    #[inline]
+    #[must_use]
+    pub fn abs(self) -> Self {
+        Self::new(self.width.abs(), self.height.abs())
+    }
+
+    /// Returns the signum of each dimension.
+    #[inline]
+    #[must_use]
+    pub fn signum(self) -> Self {
+        Self::new(self.width.signum(), self.height.signum())
+    }
+}
+
+// ============================================================================
+// Generic map function
+// ============================================================================
+
+impl<T: Unit> Size<T> {
     /// Maps the size components through a function.
     #[inline]
     #[must_use]
-    pub fn map(&self, f: impl Fn(f32) -> f32) -> Size<f32> {
+    pub fn map<U>(&self, f: impl Fn(T) -> U) -> Size<U>
+    where
+        U: Unit,
+    {
         Size {
             width: f(self.width),
             height: f(self.height),
@@ -633,52 +705,73 @@ impl<T: NumericUnit> SubAssign for Size<T> {
     }
 }
 
-impl<T: NumericUnit> Mul<f32> for Size<T> {
+// Generic Mul/Div for any Rhs that T supports
+impl<T, Rhs> Mul<Rhs> for Size<T>
+where
+    T: Unit + Mul<Rhs, Output = T>,
+    Rhs: Copy,
+{
     type Output = Self;
 
     #[inline]
-    fn mul(self, rhs: f32) -> Self::Output {
+    fn mul(self, rhs: Rhs) -> Self::Output {
         Self {
-            width: self.width.mul(rhs),
-            height: self.height.mul(rhs),
+            width: self.width * rhs,
+            height: self.height * rhs,
         }
     }
 }
 
-impl<T: NumericUnit> Mul<Size<T>> for f32 {
+impl<T, Rhs> Div<Rhs> for Size<T>
+where
+    T: Unit + Div<Rhs, Output = T>,
+    Rhs: Copy,
+{
+    type Output = Self;
+
+    #[inline]
+    fn div(self, rhs: Rhs) -> Self::Output {
+        Self {
+            width: self.width / rhs,
+            height: self.height / rhs,
+        }
+    }
+}
+
+impl<T, Rhs> MulAssign<Rhs> for Size<T>
+where
+    T: Unit + MulAssign<Rhs>,
+    Rhs: Copy,
+{
+    #[inline]
+    fn mul_assign(&mut self, rhs: Rhs) {
+        self.width *= rhs;
+        self.height *= rhs;
+    }
+}
+
+impl<T, Rhs> DivAssign<Rhs> for Size<T>
+where
+    T: Unit + DivAssign<Rhs>,
+    Rhs: Copy,
+{
+    #[inline]
+    fn div_assign(&mut self, rhs: Rhs) {
+        self.width /= rhs;
+        self.height /= rhs;
+    }
+}
+
+// Reverse multiplication for f32 * Size
+impl<T: NumericUnit> Mul<Size<T>> for f32
+where
+    T: Mul<f32, Output = T>,
+{
     type Output = Size<T>;
 
     #[inline]
     fn mul(self, rhs: Size<T>) -> Self::Output {
         rhs * self
-    }
-}
-
-impl<T: NumericUnit> MulAssign<f32> for Size<T> {
-    #[inline]
-    fn mul_assign(&mut self, rhs: f32) {
-        self.width = self.width.mul(rhs);
-        self.height = self.height.mul(rhs);
-    }
-}
-
-impl<T: NumericUnit> Div<f32> for Size<T> {
-    type Output = Self;
-
-    #[inline]
-    fn div(self, rhs: f32) -> Self::Output {
-        Self {
-            width: self.width.div(rhs),
-            height: self.height.div(rhs),
-        }
-    }
-}
-
-impl<T: NumericUnit> DivAssign<f32> for Size<T> {
-    #[inline]
-    fn div_assign(&mut self, rhs: f32) {
-        self.width = self.width.div(rhs);
-        self.height = self.height.div(rhs);
     }
 }
 
@@ -801,11 +894,71 @@ where
 }
 
 // ============================================================================
+// Double trait - Double the value
+// ============================================================================
+
+impl<T: Unit> super::traits::Double for Size<T>
+where
+    T: super::traits::Double
+{
+    #[inline]
+    fn double(&self) -> Self {
+        Self {
+            width: self.width.double(),
+            height: self.height.double(),
+        }
+    }
+}
+
+// ============================================================================
+// ApproxEq trait - Approximate equality
+// ============================================================================
+
+impl<T: Unit> super::traits::ApproxEq for Size<T>
+where
+    T: super::traits::ApproxEq
+{
+    #[inline]
+    fn approx_eq_eps(&self, other: &Self, epsilon: f32) -> bool {
+        self.width.approx_eq_eps(&other.width, epsilon)
+            && self.height.approx_eq_eps(&other.height, epsilon)
+    }
+}
+
+// ============================================================================
+// Sum trait - Iterator summing
+// ============================================================================
+
+impl<T> std::iter::Sum for Size<T>
+where
+    T: NumericUnit,
+{
+    fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
+        iter.fold(Size::new(T::zero(), T::zero()), |acc, s| Size::new(
+            T::add(acc.width, s.width),
+            T::add(acc.height, s.height),
+        ))
+    }
+}
+
+impl<'a, T> std::iter::Sum<&'a Size<T>> for Size<T>
+where
+    T: NumericUnit,
+{
+    fn sum<I: Iterator<Item = &'a Self>>(iter: I) -> Self {
+        iter.fold(Size::new(T::zero(), T::zero()), |acc, s| Size::new(
+            T::add(acc.width, s.width),
+            T::add(acc.height, s.height),
+        ))
+    }
+}
+
+// ============================================================================
 // Specialized implementations for Pixels
 // ============================================================================
 
 impl Size<super::units::Pixels> {
-    /// Scales the size by a given factor, producing a Size<ScaledPixels>.
+    /// Scales the size by a given factor, producing a `Size<ScaledPixels>`.
     ///
     /// This is typically used to convert logical pixel sizes to scaled
     /// pixels for high-DPI displays.
@@ -996,8 +1149,8 @@ mod tests {
     fn test_conversions() {
         let s = Size::new(100.0, 50.0);
 
-        let from_tuple: Size = (100.0, 50.0).into();
-        let from_array: Size = [100.0, 50.0].into();
+        let from_tuple: Size<f32> = (100.0, 50.0).into();
+        let from_array: Size<f32> = [100.0, 50.0].into();
         assert_eq!(from_tuple, s);
         assert_eq!(from_array, s);
 
@@ -1127,7 +1280,7 @@ mod typed_tests {
 
     #[test]
     fn test_size_utility_traits() {
-        use crate::geometry::{Axis, Along, Half, IsZero};
+        use crate::geometry::{Axis, Along, Half, IsZero, Double, ApproxEq};
 
         // Test Along trait
         let s = Size::<Pixels>::new(px(100.0), px(200.0));
@@ -1147,5 +1300,74 @@ mod typed_tests {
         let zero = Size::<Pixels>::new(px(0.0), px(0.0));
         assert!(zero.is_zero());
         assert!(!s.is_zero());
+
+        // Test Double trait
+        let doubled = s.double();
+        assert_eq!(doubled.width.0, 200.0);
+        assert_eq!(doubled.height.0, 400.0);
+
+        // Test ApproxEq trait
+        let s2 = Size::<Pixels>::new(px(100.0 + 1e-8), px(200.0 - 1e-8));
+        assert!(s.approx_eq_eps(&s2, 1e-6));
+    }
+
+    #[test]
+    fn test_size_abs_signum() {
+        // Test f32-specific abs and signum methods
+        let s_f32 = Size::<f32>::new(-10.0, 20.0);
+        let abs_s = s_f32.abs();
+        assert_eq!(abs_s.width, 10.0);
+        assert_eq!(abs_s.height, 20.0);
+
+        let signum_s = s_f32.signum();
+        assert_eq!(signum_s.width, -1.0);
+        assert_eq!(signum_s.height, 1.0);
+    }
+
+    #[test]
+    fn test_size_swap() {
+        let s = Size::<f32>::new(100.0, 50.0);
+        let swapped = s.swap();
+        assert_eq!(swapped.width, 50.0);
+        assert_eq!(swapped.height, 100.0);
+    }
+
+    #[test]
+    fn test_size_perimeter_diagonal() {
+        let s = Size::<f32>::new(3.0, 4.0);
+        assert_eq!(s.perimeter(), 14.0);
+        assert_eq!(s.diagonal(), 5.0); // 3-4-5 triangle
+    }
+
+    #[test]
+    fn test_size_scale_to_max() {
+        let s = Size::<f32>::new(200.0, 100.0);
+        let scaled = s.scale_to_max(50.0);
+        assert_eq!(scaled.width, 50.0);
+        assert_eq!(scaled.height, 25.0);
+    }
+
+    #[test]
+    fn test_size_is_valid() {
+        assert!(Size::<f32>::new(10.0, 20.0).is_valid());
+        assert!(!Size::<f32>::new(-10.0, 20.0).is_valid());
+        assert!(!Size::<f32>::INFINITY.is_valid());
+        assert!(!Size::<f32>::NAN.is_valid());
+    }
+
+    #[test]
+    fn test_size_sum_iterator() {
+        let sizes = vec![
+            Size::<f32>::new(10.0, 20.0),
+            Size::<f32>::new(30.0, 40.0),
+            Size::<f32>::new(50.0, 60.0),
+        ];
+        let total: Size<f32> = sizes.iter().sum();
+        assert_eq!(total.width, 90.0);
+        assert_eq!(total.height, 120.0);
+
+        let total_owned: Size<f32> = sizes.into_iter().sum();
+        assert_eq!(total_owned.width, 90.0);
+        assert_eq!(total_owned.height, 120.0);
     }
 }

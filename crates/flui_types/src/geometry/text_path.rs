@@ -37,13 +37,14 @@
 
 use std::f64::consts::{PI, TAU};
 
+use crate::geometry::traits::{NumericUnit, Unit};
 use crate::Point;
 
 /// Result of character position calculation along a path
 #[derive(Debug, Clone, Copy)]
-pub struct CharTransform {
+pub struct CharTransform<T: Unit = f32> {
     /// Position of the character (center point or baseline)
-    pub position: Point,
+    pub position: Point<T>,
     /// Rotation angle in radians (0 = horizontal)
     pub rotation: f64,
 }
@@ -201,25 +202,28 @@ pub fn vertical_scale(normalized_y: f64, top_scale: f64, bottom_scale: f64) -> f
 ///
 /// # Example
 /// ```
-/// use flui_types::geometry::text_path::grid_position;
+/// use flui_types::geometry::{text_path::grid_position, Point};
 ///
 /// // 10 characters per row, 30px wide, 40px tall
-/// let pos = grid_position(15, 10, 30.0, 40.0);
+/// let pos: Point<f32> = grid_position(15, 10, 30.0, 40.0);
 /// // Returns position for character at column 5, row 1
 /// ```
 #[inline]
-pub fn grid_position(
+pub fn grid_position<T>(
     char_index: usize,
     chars_per_row: usize,
     char_width: f64,
     char_height: f64,
-) -> Point {
+) -> Point<T>
+where
+    T: NumericUnit + From<f32>,
+{
     let row = char_index / chars_per_row.max(1);
     let col = char_index % chars_per_row.max(1);
 
     Point::new(
-        (col as f64 * char_width) as f32,
-        (row as f64 * char_height) as f32,
+        T::from((col as f64 * char_width) as f32),
+        T::from((row as f64 * char_height) as f32),
     )
 }
 
@@ -245,16 +249,20 @@ pub fn grid_position(
 /// let mid_point = bezier_point(0.5, start, control, end);
 /// ```
 #[inline]
-pub fn bezier_point(t: f64, p0: Point, p1: Point, p2: Point) -> Point {
-    let t = t.clamp(0.0, 1.0) as f32;
+pub fn bezier_point<T>(t: f64, p0: Point<T>, p1: Point<T>, p2: Point<T>) -> Point<T>
+where
+    T: NumericUnit + Into<f32> + From<f32>,
+{
+    let t = t.clamp(0.0, 1.0);
     let mt = 1.0 - t;
     let mt2 = mt * mt;
     let t2 = t * t;
 
-    Point::new(
-        mt2 * p0.x + 2.0 * mt * t * p1.x + t2 * p2.x,
-        mt2 * p0.y + 2.0 * mt * t * p1.y + t2 * p2.y,
-    )
+    // Convert to f32 for calculation, then back to T
+    let x = mt2 as f32 * p0.x.into() + 2.0 * (mt * t) as f32 * p1.x.into() + t2 as f32 * p2.x.into();
+    let y = mt2 as f32 * p0.y.into() + 2.0 * (mt * t) as f32 * p1.y.into() + t2 as f32 * p2.y.into();
+
+    Point::new(T::from(x), T::from(y))
 }
 
 /// Calculates tangent rotation for a point on a Bezier curve
@@ -268,15 +276,26 @@ pub fn bezier_point(t: f64, p0: Point, p1: Point, p2: Point) -> Point {
 /// # Returns
 /// Rotation angle in radians tangent to the curve at t
 #[inline]
-pub fn bezier_tangent_rotation(t: f64, p0: Point, p1: Point, p2: Point) -> f64 {
-    let t = t.clamp(0.0, 1.0) as f32;
+pub fn bezier_tangent_rotation<T>(t: f64, p0: Point<T>, p1: Point<T>, p2: Point<T>) -> f64
+where
+    T: NumericUnit + Into<f32>,
+{
+    let t = t.clamp(0.0, 1.0);
     let mt = 1.0 - t;
 
-    // Derivative of quadratic Bezier
-    let dx = 2.0 * mt * (p1.x - p0.x) + 2.0 * t * (p2.x - p1.x);
-    let dy = 2.0 * mt * (p1.y - p0.y) + 2.0 * t * (p2.y - p1.y);
+    // Convert to f64 for calculation
+    let p0x = Into::<f32>::into(p0.x) as f64;
+    let p0y = Into::<f32>::into(p0.y) as f64;
+    let p1x = Into::<f32>::into(p1.x) as f64;
+    let p1y = Into::<f32>::into(p1.y) as f64;
+    let p2x = Into::<f32>::into(p2.x) as f64;
+    let p2y = Into::<f32>::into(p2.y) as f64;
 
-    (dy as f64).atan2(dx as f64)
+    // Derivative of quadratic Bezier
+    let dx = 2.0 * mt * (p1x - p0x) + 2.0 * t * (p2x - p1x);
+    let dy = 2.0 * mt * (p1y - p0y) + 2.0 * t * (p2y - p1y);
+
+    dy.atan2(dx)
 }
 
 /// Calculates character position along a custom parametric path
@@ -348,7 +367,7 @@ mod tests {
 
     #[test]
     fn test_grid_position() {
-        let pos = grid_position(15, 10, 30.0, 40.0);
+        let pos: Point<f32> = grid_position(15, 10, 30.0, 40.0);
         assert_eq!(pos.x, 5.0 * 30.0);
         assert_eq!(pos.y, 1.0 * 40.0);
     }

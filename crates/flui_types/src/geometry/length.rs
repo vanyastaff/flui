@@ -74,7 +74,7 @@ use std::str::FromStr;
 /// - Desktop: 16px
 /// - Mobile: 14-16px
 /// - Accessibility (large text): 18-20px
-#[derive(Clone, Copy, Default, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Default, PartialEq)]
 #[repr(transparent)]
 pub struct Rems(pub f32);
 
@@ -131,10 +131,111 @@ impl Rems {
         px(self.0 * rem_size.get())
     }
 
-    /// Checks if the value is zero.
+    /// Checks if the value is zero (within epsilon tolerance).
     #[inline]
     pub fn is_zero(self) -> bool {
-        self.0 == 0.0
+        self.0.abs() < f32::EPSILON
+    }
+
+    /// Returns the absolute value.
+    #[inline]
+    #[must_use]
+    pub fn abs(self) -> Self {
+        Self(self.0.abs())
+    }
+
+    /// Returns the minimum of two values.
+    #[inline]
+    #[must_use]
+    pub fn min(self, other: Self) -> Self {
+        Self(self.0.min(other.0))
+    }
+
+    /// Returns the maximum of two values.
+    #[inline]
+    #[must_use]
+    pub fn max(self, other: Self) -> Self {
+        Self(self.0.max(other.0))
+    }
+
+    /// Clamps the value between min and max.
+    #[inline]
+    #[must_use]
+    pub fn clamp(self, min: Self, max: Self) -> Self {
+        Self(self.0.clamp(min.0, max.0))
+    }
+
+    /// Returns the sign of the value (-1.0, 0.0, or 1.0).
+    #[inline]
+    pub fn signum(self) -> f32 {
+        self.0.signum()
+    }
+
+    /// Checks if the value is finite (not infinite or NaN).
+    #[inline]
+    pub fn is_finite(self) -> bool {
+        self.0.is_finite()
+    }
+
+    /// Returns the floor of the value.
+    #[inline]
+    #[must_use]
+    pub fn floor(self) -> Self {
+        Self(self.0.floor())
+    }
+
+    /// Returns the ceiling of the value.
+    #[inline]
+    #[must_use]
+    pub fn ceil(self) -> Self {
+        Self(self.0.ceil())
+    }
+
+    /// Returns the nearest integer value.
+    #[inline]
+    #[must_use]
+    pub fn round(self) -> Self {
+        Self(self.0.round())
+    }
+
+    /// Returns the integer part (truncates towards zero).
+    #[inline]
+    #[must_use]
+    pub fn trunc(self) -> Self {
+        Self(self.0.trunc())
+    }
+
+    /// Scales the value by a factor.
+    #[inline]
+    #[must_use]
+    pub fn scale(self, factor: f32) -> Self {
+        Self(self.0 * factor)
+    }
+
+    /// Applies a function to the inner value.
+    #[inline]
+    #[must_use]
+    pub fn map(self, f: impl FnOnce(f32) -> f32) -> Self {
+        Self(f(self.0))
+    }
+
+    /// Checks if the value is NaN.
+    #[inline]
+    pub fn is_nan(self) -> bool {
+        self.0.is_nan()
+    }
+
+    /// Checks if the value is infinite.
+    #[inline]
+    pub fn is_infinite(self) -> bool {
+        self.0.is_infinite()
+    }
+
+    /// Linear interpolation between self and other.
+    #[inline]
+    #[must_use]
+    pub fn lerp(self, other: Self, t: f32) -> Self {
+        Self(self.0 + (other.0 - self.0) * t)
     }
 }
 
@@ -164,6 +265,62 @@ impl From<Rems> for f32 {
     }
 }
 
+// Ordering (using total_cmp for proper NaN handling)
+impl Eq for Rems {}
+
+impl PartialOrd for Rems {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Rems {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.0.total_cmp(&other.0)
+    }
+}
+
+// Hashing (using to_bits for proper NaN handling)
+impl std::hash::Hash for Rems {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.0.to_bits().hash(state);
+    }
+}
+
+impl std::str::FromStr for Rems {
+    type Err = ParseLengthError;
+
+    /// Parses a `Rems` value from a string.
+    ///
+    /// Supported formats:
+    /// - `"1.5"` - bare number
+    /// - `"1.5rem"` - with "rem" suffix
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::geometry::Rems;
+    ///
+    /// let r: Rems = "1.5".parse().unwrap();
+    /// assert_eq!(r.get(), 1.5);
+    ///
+    /// let r: Rems = "2rem".parse().unwrap();
+    /// assert_eq!(r.get(), 2.0);
+    /// ```
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let s = s.trim();
+        let num_str = s.strip_suffix("rem").unwrap_or(s).trim();
+
+        num_str
+            .parse::<f32>()
+            .map(Rems)
+            .map_err(|_| ParseLengthError {
+                input: s.to_string(),
+                expected: "a number like '1.5' or '1.5rem'",
+            })
+    }
+}
+
 // ============================================================================
 // REMS - TRAIT IMPLEMENTATIONS
 // ============================================================================
@@ -172,30 +329,136 @@ impl super::traits::Unit for Rems {
     type Scalar = f32;
 
     #[inline]
-    fn zero() -> Self {
-        Self::ZERO
+    fn one() -> Self {
+        Rems(1.0)
     }
+
+    const MIN: Self = Rems(f32::MIN);
+    const MAX: Self = Rems(f32::MAX);
 }
 
 impl super::traits::NumericUnit for Rems {
     #[inline]
-    fn add(self, other: Self) -> Self {
-        Rems(self.0 + other.0)
+    fn abs(self) -> Self {
+        Rems(self.0.abs())
     }
 
     #[inline]
-    fn sub(self, other: Self) -> Self {
-        Rems(self.0 - other.0)
+    fn min(self, other: Self) -> Self {
+        Rems(self.0.min(other.0))
     }
 
     #[inline]
-    fn mul(self, scalar: f32) -> Self {
-        Rems(self.0 * scalar)
+    fn max(self, other: Self) -> Self {
+        Rems(self.0.max(other.0))
     }
+}
 
+// ============================================================================
+// REMS - ARITHMETIC OPERATORS
+// ============================================================================
+
+use std::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
+
+impl Add for Rems {
+    type Output = Self;
     #[inline]
-    fn div(self, scalar: f32) -> Self {
-        Rems(self.0 / scalar)
+    fn add(self, rhs: Self) -> Self::Output {
+        Rems(self.0 + rhs.0)
+    }
+}
+
+impl AddAssign for Rems {
+    #[inline]
+    fn add_assign(&mut self, rhs: Self) {
+        self.0 += rhs.0;
+    }
+}
+
+impl Sub for Rems {
+    type Output = Self;
+    #[inline]
+    fn sub(self, rhs: Self) -> Self::Output {
+        Rems(self.0 - rhs.0)
+    }
+}
+
+impl SubAssign for Rems {
+    #[inline]
+    fn sub_assign(&mut self, rhs: Self) {
+        self.0 -= rhs.0;
+    }
+}
+
+impl Mul<f32> for Rems {
+    type Output = Self;
+    #[inline]
+    fn mul(self, rhs: f32) -> Self::Output {
+        Rems(self.0 * rhs)
+    }
+}
+
+impl Mul<Rems> for f32 {
+    type Output = Rems;
+    #[inline]
+    fn mul(self, rhs: Rems) -> Self::Output {
+        Rems(self * rhs.0)
+    }
+}
+
+impl MulAssign<f32> for Rems {
+    #[inline]
+    fn mul_assign(&mut self, rhs: f32) {
+        self.0 *= rhs;
+    }
+}
+
+impl Div<f32> for Rems {
+    type Output = Self;
+    #[inline]
+    fn div(self, rhs: f32) -> Self::Output {
+        Rems(self.0 / rhs)
+    }
+}
+
+impl Div for Rems {
+    type Output = f32;
+    #[inline]
+    fn div(self, rhs: Self) -> Self::Output {
+        self.0 / rhs.0
+    }
+}
+
+impl DivAssign<f32> for Rems {
+    #[inline]
+    fn div_assign(&mut self, rhs: f32) {
+        self.0 /= rhs;
+    }
+}
+
+impl Neg for Rems {
+    type Output = Self;
+    #[inline]
+    fn neg(self) -> Self::Output {
+        Rems(-self.0)
+    }
+}
+
+// ============================================================================
+// REMS - ADDITIONAL TRAIT IMPLEMENTATIONS
+// ============================================================================
+
+// Note: Half, Double, IsZero, Sign, ApproxEq, GeometryOps are implemented in traits.rs
+
+impl std::iter::Sum for Rems {
+    fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
+        iter.fold(Rems::ZERO, |acc, x| acc + x)
+    }
+}
+
+impl<'a> std::iter::Sum<&'a Rems> for Rems {
+    fn sum<I: Iterator<Item = &'a Self>>(iter: I) -> Self {
+        iter.fold(Rems::ZERO, |acc, x| acc + *x)
     }
 }
 

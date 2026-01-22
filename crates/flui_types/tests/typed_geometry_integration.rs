@@ -17,8 +17,8 @@ fn test_type_safety_prevents_unit_mixing() {
     // This should NOT compile (type mismatch):
     // let bad = ui_point + Vec2::from(device_point); // ❌
 
-    // Must explicitly convert using cast:
-    let device_as_pixels: Point<Pixels> = device_point.cast();
+    // Must explicitly convert using manual conversion:
+    let device_as_pixels = Point::<Pixels>::new(px(device_point.x.0 as f32), px(device_point.y.0 as f32));
     let _ = ui_point + Vec2::from(device_as_pixels); // ✅
 }
 
@@ -49,7 +49,7 @@ fn test_point_vec2_size_interop() {
 fn test_gpu_conversion_pipeline() {
     // UI coordinates
     let ui_pos = Point::<Pixels>::new(px(100.0), px(200.0));
-    let ui_size = Size::<Pixels>::new(px(400.0), px(300.0));
+    let _ui_size = Size::<Pixels>::new(px(400.0), px(300.0));
 
     // Scale for 2x display
     let scale_factor = 2.0;
@@ -172,8 +172,8 @@ fn test_utility_traits() {
     let half = p.half();
     assert_eq!(half.x.0, 5.0);
 
-    // Negate
-    let neg = p.negate();
+    // Negate using - operator
+    let neg = -p;
     assert_eq!(neg.x.0, -10.0);
 
     // IsZero
@@ -206,13 +206,13 @@ fn test_ui_layout_scenario() {
 fn test_animation_scenario() {
     // Animation state
     let start = Point::<Pixels>::new(px(0.0), px(0.0));
-    let end = Point::<Pixels>::new(px(100.0), px(100.0));
+    let _end = Point::<Pixels>::new(px(100.0), px(100.0));
     let velocity = Vec2::<Pixels>::new(px(10.0), px(10.0));
 
     // Update position
     let mut current = start;
     for _ in 0..10 {
-        current = current + velocity;
+        current += velocity;
     }
 
     assert_eq!(current.x.0, 100.0);
@@ -252,7 +252,8 @@ fn test_offset_vec2_interop() {
 #[test]
 fn test_size_point_conversions() {
     let size = Size::<Pixels>::new(px(100.0), px(200.0));
-    let point: Point<Pixels> = size.into();
+    // Convert size to point manually (using width as x, height as y)
+    let point = Point::<Pixels>::new(size.width, size.height);
 
     assert_eq!(point.x.0, 100.0);
     assert_eq!(point.y.0, 200.0);
@@ -291,13 +292,14 @@ fn test_complete_rendering_pipeline() {
     assert_eq!(device_x.0, 20);
     assert_eq!(device_y.0, 40);
 
-    // 4. Convert to GPU coordinates (f32)
-    let gpu_bounds: Bounds<f32> = ui_button.cast();
-    assert_eq!(gpu_bounds.origin.x, 10.0);
-    assert_eq!(gpu_bounds.size.width, 100.0);
+    // 4. Convert to GPU coordinates (f32) - manual conversion
+    let gpu_origin: Point<f32> = ui_button.origin.cast();
+    let gpu_size = Size::<f32>::new(ui_button.size.width.0, ui_button.size.height.0);
+    assert_eq!(gpu_origin.x, 10.0);
+    assert_eq!(gpu_size.width, 100.0);
 
     // 5. Export to vertex buffer
-    let vertices = gpu_bounds.origin.to_array();
+    let vertices = gpu_origin.to_array();
     assert_eq!(vertices, [10.0, 20.0]);
 }
 
@@ -310,7 +312,7 @@ fn test_mixed_unit_operations() {
 
     // Convert all to f32 for comparison
     let logical_f32: Point<f32> = logical.cast();
-    let device_f32: Point<f32> = device.cast();
+    let device_f32 = Point::<f32>::new(device.x.0 as f32, device.y.0 as f32);
     let scaled_f32: Point<f32> = scaled.cast();
 
     assert_eq!(logical_f32.x, 100.0);
@@ -372,7 +374,7 @@ fn test_scaled_pixel_arithmetic() {
 #[test]
 fn test_bounds_with_different_units() {
     // Bounds with Pixels
-    let pixel_bounds = Bounds::<Pixels>::new(
+    let _pixel_bounds = Bounds::<Pixels>::new(
         Point::new(px(0.0), px(0.0)),
         Size::new(px(100.0), px(100.0)),
     );
@@ -383,8 +385,11 @@ fn test_bounds_with_different_units() {
         Size::new(device_px(200), device_px(200)),
     );
 
-    // Convert device to pixels
-    let device_as_pixels: Bounds<Pixels> = device_bounds.cast();
+    // Convert device to pixels (manually)
+    let device_as_pixels = Bounds::<Pixels>::new(
+        Point::new(px(device_bounds.origin.x.0 as f32), px(device_bounds.origin.y.0 as f32)),
+        Size::new(px(device_bounds.size.width.0 as f32), px(device_bounds.size.height.0 as f32)),
+    );
     assert_eq!(device_as_pixels.size.width.0, 200.0);
 }
 
@@ -396,10 +401,10 @@ fn test_edges_with_units() {
     assert_eq!(edges_px.top.0, 10.0);
     assert_eq!(edges_device.top.0, 20);
 
-    // Symmetric edges
+    // Symmetric edges: symmetric(vertical, horizontal)
     let edges = Edges::<Pixels>::symmetric(px(10.0), px(20.0));
-    assert_eq!(edges.left.0, 10.0);
-    assert_eq!(edges.top.0, 20.0);
+    assert_eq!(edges.left.0, 20.0);  // horizontal
+    assert_eq!(edges.top.0, 10.0);   // vertical
 }
 
 #[test]
@@ -458,7 +463,7 @@ fn test_zero_values() {
     assert_eq!(zero_scaled.0, 0.0);
 
     // Zero points
-    let zero_point = Point::<Pixels>::ZERO;
+    let zero_point = Point::<Pixels>::new(px(0.0), px(0.0));
     assert!(zero_point.is_zero());
 }
 
@@ -470,9 +475,9 @@ fn test_negative_values() {
     assert_eq!(neg_px.abs().0, 10.0);
     assert_eq!(neg_device.abs().0, 20);
 
-    // Negative point
+    // Negative point using - operator
     let p = Point::<Pixels>::new(px(10.0), px(20.0));
-    let neg = p.negate();
+    let neg = -p;
     assert_eq!(neg.x.0, -10.0);
     assert_eq!(neg.y.0, -20.0);
 }

@@ -278,7 +278,7 @@ impl Transform {
 
     /// Create a translation transform from an Offset
     #[inline]
-    pub fn translate_offset(offset: Offset) -> Self {
+    pub fn translate_offset(offset: Offset<f32>) -> Self {
         Self::Translate {
             x: offset.dx,
             y: offset.dy,
@@ -289,6 +289,20 @@ impl Transform {
     #[inline]
     pub fn rotate(angle: f32) -> Self {
         Self::Rotate { angle }
+    }
+
+    /// Create a rotation transform (type-safe version).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use flui_types::geometry::{Transform, Radians};
+    ///
+    /// let t = Transform::rotate_radians(Radians::from_degrees(45.0));
+    /// ```
+    #[inline]
+    pub fn rotate_radians(angle: crate::geometry::Radians) -> Self {
+        Self::Rotate { angle: angle.0 }
     }
 
     /// Create a rotation transform (angle in degrees, counter-clockwise)
@@ -324,6 +338,32 @@ impl Transform {
     pub fn rotate_around(angle: f32, pivot_x: f32, pivot_y: f32) -> Self {
         Self::RotateAround {
             angle,
+            pivot_x,
+            pivot_y,
+        }
+    }
+
+    /// Create a rotation around a pivot point (type-safe version).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use flui_types::geometry::{Transform, Radians};
+    ///
+    /// let t = Transform::rotate_around_radians(
+    ///     Radians::from_degrees(45.0),
+    ///     100.0,
+    ///     100.0
+    /// );
+    /// ```
+    #[inline]
+    pub fn rotate_around_radians(
+        angle: crate::geometry::Radians,
+        pivot_x: f32,
+        pivot_y: f32,
+    ) -> Self {
+        Self::RotateAround {
+            angle: angle.0,
             pivot_x,
             pivot_y,
         }
@@ -635,8 +675,8 @@ impl From<Matrix4> for Transform {
 }
 
 /// Convert Offset to Transform (creates Translation)
-impl From<Offset> for Transform {
-    fn from(offset: Offset) -> Self {
+impl From<Offset<f32>> for Transform {
+    fn from(offset: Offset<f32>) -> Self {
         Transform::translate(offset.dx, offset.dy)
     }
 }
