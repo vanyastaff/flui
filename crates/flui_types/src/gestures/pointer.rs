@@ -28,10 +28,10 @@ use std::time::Duration;
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct OffsetPair {
     /// The local offset (relative to the target widget)
-    pub local: Offset,
+    pub local: Offset<f32>,
 
     /// The global offset (relative to the screen/window)
-    pub global: Offset,
+    pub global: Offset<f32>,
 }
 
 impl OffsetPair {
@@ -56,7 +56,7 @@ impl OffsetPair {
     /// ```
     #[inline]
     #[must_use]
-    pub const fn new(local: Offset, global: Offset) -> Self {
+    pub const fn new(local: Offset<f32>, global: Offset<f32>) -> Self {
         Self { local, global }
     }
 
@@ -73,7 +73,7 @@ impl OffsetPair {
     /// ```
     #[inline]
     #[must_use]
-    pub const fn from_offset(offset: Offset) -> Self {
+    pub const fn from_offset(offset: Offset<f32>) -> Self {
         Self {
             local: offset,
             global: offset,
@@ -99,7 +99,7 @@ impl OffsetPair {
     /// ```
     #[inline]
     #[must_use]
-    pub fn delta(&self) -> Offset {
+    pub fn delta(&self) -> Offset<f32> {
         self.global - self.local
     }
 
@@ -189,10 +189,10 @@ pub struct PointerData {
     pub time_stamp: Duration,
 
     /// The position of the pointer in global coordinates
-    pub position: Offset,
+    pub position: Offset<f32>,
 
     /// The delta since the last update
-    pub delta: Offset,
+    pub delta: Offset<f32>,
 
     /// Unique identifier for the pointer
     pub pointer: i32,
@@ -276,7 +276,7 @@ impl PointerData {
     #[must_use]
     pub fn new(
         time_stamp: Duration,
-        position: Offset,
+        position: Offset<f32>,
         pointer: i32,
         device_kind: PointerDeviceKind,
     ) -> Self {
@@ -353,7 +353,7 @@ impl PointerData {
     /// Builder method to set delta
     #[inline]
     #[must_use]
-    pub fn with_delta(mut self, delta: Offset) -> Self {
+    pub fn with_delta(mut self, delta: Offset<f32>) -> Self {
         self.delta = delta;
         self
     }

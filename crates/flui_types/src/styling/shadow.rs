@@ -23,7 +23,7 @@ pub struct Shadow {
     pub color: Color,
 
     /// The displacement of the shadow from the casting element.
-    pub offset: Offset,
+    pub offset: Offset<f32>,
 
     /// The standard deviation of the Gaussian to convolve with the shadow's shape.
     ///
@@ -39,7 +39,7 @@ impl Shadow {
     /// * `color` - The color of the shadow
     /// * `offset` - The offset of the shadow from the element
     /// * `blur_radius` - The blur radius of the shadow (0.0 for sharp edges)
-    pub const fn new(color: Color, offset: Offset, blur_radius: f32) -> Self {
+    pub const fn new(color: Color, offset: Offset<f32>, blur_radius: f32) -> Self {
         Self {
             color,
             offset,
@@ -65,7 +65,7 @@ impl Shadow {
     }
 
     /// Creates a copy of this shadow with the given offset.
-    pub const fn with_offset(self, offset: Offset) -> Self {
+    pub const fn with_offset(self, offset: Offset<f32>) -> Self {
         Self { offset, ..self }
     }
 
@@ -169,7 +169,7 @@ pub struct BoxShadow {
     pub color: Color,
 
     /// The displacement of the shadow from the casting element.
-    pub offset: Offset,
+    pub offset: Offset<f32>,
 
     /// The standard deviation of the Gaussian to convolve with the shadow's shape.
     pub blur_radius: f32,
@@ -194,7 +194,7 @@ impl BoxShadow {
     /// * `offset` - The offset of the shadow from the element
     /// * `blur_radius` - The blur radius of the shadow
     /// * `spread_radius` - The spread radius of the shadow
-    pub const fn new(color: Color, offset: Offset, blur_radius: f32, spread_radius: f32) -> Self {
+    pub const fn new(color: Color, offset: Offset<f32>, blur_radius: f32, spread_radius: f32) -> Self {
         Self {
             color,
             offset,
@@ -212,7 +212,7 @@ impl BoxShadow {
     /// * `offset` - The offset of the shadow from the element
     /// * `blur_radius` - The blur radius of the shadow
     /// * `spread_radius` - The spread radius of the shadow
-    pub const fn inner(color: Color, offset: Offset, blur_radius: f32, spread_radius: f32) -> Self {
+    pub const fn inner(color: Color, offset: Offset<f32>, blur_radius: f32, spread_radius: f32) -> Self {
         Self {
             color,
             offset,
@@ -238,7 +238,7 @@ impl BoxShadow {
     }
 
     /// Creates a copy of this box shadow with the given offset.
-    pub const fn with_offset(self, offset: Offset) -> Self {
+    pub const fn with_offset(self, offset: Offset<f32>) -> Self {
         Self { offset, ..self }
     }
 

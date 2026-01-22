@@ -103,7 +103,7 @@ impl Image {
     /// Returns the size of the image.
     #[inline]
     #[must_use]
-    pub fn size(&self) -> Size {
+    pub fn size(&self) -> Size<f32> {
         Size::new(self.width as f32, self.height as f32)
     }
 
@@ -265,7 +265,7 @@ pub enum ImageRepeat {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ImageConfiguration {
     /// The size at which the image will be rendered.
-    pub size: Option<Size>,
+    pub size: Option<Size<f32>>,
 
     /// The device pixel ratio where the image will be shown.
     pub device_pixel_ratio: Option<f32>,
@@ -289,7 +289,7 @@ impl ImageConfiguration {
     /// Creates a configuration with the given size.
     #[inline]
     #[must_use]
-    pub const fn with_size(mut self, size: Size) -> Self {
+    pub const fn with_size(mut self, size: Size<f32>) -> Self {
         self.size = Some(size);
         self
     }
@@ -323,7 +323,7 @@ impl ImageConfiguration {
     /// Returns the logical size in physical pixels.
     #[inline]
     #[must_use]
-    pub fn physical_size(&self) -> Option<Size> {
+    pub fn physical_size(&self) -> Option<Size<f32>> {
         self.size.map(|s| {
             let ratio = self.effective_device_pixel_ratio();
             Size::new(s.width * ratio, s.height * ratio)

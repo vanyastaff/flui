@@ -140,7 +140,7 @@ impl BoxFit {
     /// - `fitted_size` is the size the image should be rendered at
     /// - `source_size` is the portion of the source image to use
     #[must_use]
-    pub fn apply(self, input_size: Size, output_size: Size) -> FittedSizes {
+    pub fn apply(self, input_size: Size<f32>, output_size: Size<f32>) -> FittedSizes {
         let input_aspect_ratio = if input_size.height.abs() > EPSILON {
             input_size.width / input_size.height
         } else {
@@ -317,17 +317,17 @@ impl BoxShape {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct FittedSizes {
     /// The size of the part of the input to show on the output.
-    pub source: Size,
+    pub source: Size<f32>,
 
     /// The size of the part of the output on which to show the input.
-    pub destination: Size,
+    pub destination: Size<f32>,
 }
 
 impl FittedSizes {
     /// Creates a new fitted sizes struct.
     #[inline]
     #[must_use]
-    pub const fn new(source: Size, destination: Size) -> Self {
+    pub const fn new(source: Size<f32>, destination: Size<f32>) -> Self {
         Self {
             source,
             destination,

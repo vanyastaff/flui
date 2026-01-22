@@ -23,21 +23,21 @@ use std::time::Duration;
 /// use flui_types::Offset;
 ///
 /// let details = TapDownDetails::new(
-///     Offset::new(100.0, 200.0),
-///     Offset::new(10.0, 20.0),
+///     Offset::<f32>::new(100.0, 200.0),
+///     Offset::<f32>::new(10.0, 20.0),
 /// );
 ///
-/// assert_eq!(details.global_position, Offset::new(100.0, 200.0));
-/// assert_eq!(details.local_position, Offset::new(10.0, 20.0));
+/// assert_eq!(details.global_position, Offset::<f32>::new(100.0, 200.0));
+/// assert_eq!(details.local_position, Offset::<f32>::new(10.0, 20.0));
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TapDownDetails {
     /// The global position where the tap occurred
-    pub global_position: Offset,
+    pub global_position: Offset<f32>,
 
     /// The local position where the tap occurred
-    pub local_position: Offset,
+    pub local_position: Offset<f32>,
 
     /// The kind of device that triggered the tap
     pub kind: PointerDeviceKind,
@@ -45,7 +45,7 @@ pub struct TapDownDetails {
 
 impl TapDownDetails {
     /// Creates new tap down details
-    pub const fn new(global_position: Offset, local_position: Offset) -> Self {
+    pub const fn new(global_position: Offset<f32>, local_position: Offset<f32>) -> Self {
         Self {
             global_position,
             local_position,
@@ -67,10 +67,10 @@ impl TapDownDetails {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TapUpDetails {
     /// The global position where the tap ended
-    pub global_position: Offset,
+    pub global_position: Offset<f32>,
 
     /// The local position where the tap ended
-    pub local_position: Offset,
+    pub local_position: Offset<f32>,
 
     /// The kind of device that triggered the tap
     pub kind: PointerDeviceKind,
@@ -78,7 +78,7 @@ pub struct TapUpDetails {
 
 impl TapUpDetails {
     /// Creates new tap up details
-    pub const fn new(global_position: Offset, local_position: Offset) -> Self {
+    pub const fn new(global_position: Offset<f32>, local_position: Offset<f32>) -> Self {
         Self {
             global_position,
             local_position,
@@ -107,10 +107,10 @@ pub struct DragStartDetails {
     pub source_time_stamp: Duration,
 
     /// The global position where the drag started
-    pub global_position: Offset,
+    pub global_position: Offset<f32>,
 
     /// The local position where the drag started
-    pub local_position: Offset,
+    pub local_position: Offset<f32>,
 
     /// The kind of device performing the drag
     pub kind: PointerDeviceKind,
@@ -120,8 +120,8 @@ impl DragStartDetails {
     /// Creates new drag start details
     pub const fn new(
         source_time_stamp: Duration,
-        global_position: Offset,
-        local_position: Offset,
+        global_position: Offset<f32>,
+        local_position: Offset<f32>,
     ) -> Self {
         Self {
             source_time_stamp,
@@ -145,15 +145,15 @@ impl DragStartDetails {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DragDownDetails {
     /// The global position where the pointer contacted
-    pub global_position: Offset,
+    pub global_position: Offset<f32>,
 
     /// The local position where the pointer contacted
-    pub local_position: Offset,
+    pub local_position: Offset<f32>,
 }
 
 impl DragDownDetails {
     /// Creates new drag down details
-    pub const fn new(global_position: Offset, local_position: Offset) -> Self {
+    pub const fn new(global_position: Offset<f32>, local_position: Offset<f32>) -> Self {
         Self {
             global_position,
             local_position,
@@ -171,7 +171,7 @@ pub struct DragUpdateDetails {
     pub source_time_stamp: Duration,
 
     /// The amount the pointer has moved since the last update
-    pub delta: Offset,
+    pub delta: Offset<f32>,
 
     /// The primary delta along the main axis
     ///
@@ -180,19 +180,19 @@ pub struct DragUpdateDetails {
     pub primary_delta: Option<f32>,
 
     /// The global position of the pointer
-    pub global_position: Offset,
+    pub global_position: Offset<f32>,
 
     /// The local position of the pointer
-    pub local_position: Offset,
+    pub local_position: Offset<f32>,
 }
 
 impl DragUpdateDetails {
     /// Creates new drag update details
     pub const fn new(
         source_time_stamp: Duration,
-        delta: Offset,
-        global_position: Offset,
-        local_position: Offset,
+        delta: Offset<f32>,
+        global_position: Offset<f32>,
+        local_position: Offset<f32>,
     ) -> Self {
         Self {
             source_time_stamp,
@@ -276,7 +276,7 @@ pub struct ScaleUpdateDetails {
     pub focal_point: OffsetPair,
 
     /// The focal point delta since the last update
-    pub focal_point_delta: Offset,
+    pub focal_point_delta: Offset<f32>,
 
     /// The scale factor
     ///
@@ -306,7 +306,7 @@ impl ScaleUpdateDetails {
     ) -> Self {
         Self {
             focal_point,
-            focal_point_delta: Offset::ZERO,
+            focal_point_delta: Offset::<f32>::ZERO,
             scale,
             horizontal_scale: scale,
             vertical_scale: scale,
@@ -316,7 +316,7 @@ impl ScaleUpdateDetails {
     }
 
     /// Builder method to set the focal point delta
-    pub fn with_focal_point_delta(mut self, delta: Offset) -> Self {
+    pub fn with_focal_point_delta(mut self, delta: Offset<f32>) -> Self {
         self.focal_point_delta = delta;
         self
     }
@@ -363,10 +363,10 @@ impl ScaleEndDetails {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct LongPressDownDetails {
     /// The global position where the pointer contacted
-    pub global_position: Offset,
+    pub global_position: Offset<f32>,
 
     /// The local position where the pointer contacted
-    pub local_position: Offset,
+    pub local_position: Offset<f32>,
 
     /// The kind of device
     pub kind: PointerDeviceKind,
@@ -374,7 +374,7 @@ pub struct LongPressDownDetails {
 
 impl LongPressDownDetails {
     /// Creates new long press down details
-    pub const fn new(global_position: Offset, local_position: Offset) -> Self {
+    pub const fn new(global_position: Offset<f32>, local_position: Offset<f32>) -> Self {
         Self {
             global_position,
             local_position,
@@ -396,15 +396,15 @@ impl LongPressDownDetails {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct LongPressStartDetails {
     /// The global position where the long press started
-    pub global_position: Offset,
+    pub global_position: Offset<f32>,
 
     /// The local position where the long press started
-    pub local_position: Offset,
+    pub local_position: Offset<f32>,
 }
 
 impl LongPressStartDetails {
     /// Creates new long press start details
-    pub const fn new(global_position: Offset, local_position: Offset) -> Self {
+    pub const fn new(global_position: Offset<f32>, local_position: Offset<f32>) -> Self {
         Self {
             global_position,
             local_position,
@@ -419,25 +419,25 @@ impl LongPressStartDetails {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct LongPressMoveUpdateDetails {
     /// The global position of the pointer
-    pub global_position: Offset,
+    pub global_position: Offset<f32>,
 
     /// The local position of the pointer
-    pub local_position: Offset,
+    pub local_position: Offset<f32>,
 
     /// The distance moved since the last update
-    pub offset_from_origin: Offset,
+    pub offset_from_origin: Offset<f32>,
 
     /// The total distance moved since the long press started
-    pub local_offset_from_origin: Offset,
+    pub local_offset_from_origin: Offset<f32>,
 }
 
 impl LongPressMoveUpdateDetails {
     /// Creates new long press move update details
     pub const fn new(
-        global_position: Offset,
-        local_position: Offset,
-        offset_from_origin: Offset,
-        local_offset_from_origin: Offset,
+        global_position: Offset<f32>,
+        local_position: Offset<f32>,
+        offset_from_origin: Offset<f32>,
+        local_offset_from_origin: Offset<f32>,
     ) -> Self {
         Self {
             global_position,
@@ -455,10 +455,10 @@ impl LongPressMoveUpdateDetails {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct LongPressEndDetails {
     /// The global position where the long press ended
-    pub global_position: Offset,
+    pub global_position: Offset<f32>,
 
     /// The local position where the long press ended
-    pub local_position: Offset,
+    pub local_position: Offset<f32>,
 
     /// The velocity when the long press ended
     pub velocity: Velocity,
@@ -466,7 +466,7 @@ pub struct LongPressEndDetails {
 
 impl LongPressEndDetails {
     /// Creates new long press end details
-    pub const fn new(global_position: Offset, local_position: Offset, velocity: Velocity) -> Self {
+    pub const fn new(global_position: Offset<f32>, local_position: Offset<f32>, velocity: Velocity) -> Self {
         Self {
             global_position,
             local_position,
@@ -486,10 +486,10 @@ impl LongPressEndDetails {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ForcePressDetails {
     /// The global position of the pointer
-    pub global_position: Offset,
+    pub global_position: Offset<f32>,
 
     /// The local position of the pointer
-    pub local_position: Offset,
+    pub local_position: Offset<f32>,
 
     /// The pressure of the touch (0.0 to 1.0)
     pub pressure: f32,
@@ -501,8 +501,8 @@ pub struct ForcePressDetails {
 impl ForcePressDetails {
     /// Creates new force press details
     pub const fn new(
-        global_position: Offset,
-        local_position: Offset,
+        global_position: Offset<f32>,
+        local_position: Offset<f32>,
         pressure: f32,
         max_pressure: f32,
     ) -> Self {
@@ -530,11 +530,11 @@ mod tests {
 
     #[test]
     fn test_tap_down_details() {
-        let details = TapDownDetails::new(Offset::new(100.0, 200.0), Offset::new(10.0, 20.0))
+        let details = TapDownDetails::new(Offset::<f32>::new(100.0, 200.0), Offset::<f32>::new(10.0, 20.0))
             .with_kind(PointerDeviceKind::Mouse);
 
-        assert_eq!(details.global_position, Offset::new(100.0, 200.0));
-        assert_eq!(details.local_position, Offset::new(10.0, 20.0));
+        assert_eq!(details.global_position, Offset::<f32>::new(100.0, 200.0));
+        assert_eq!(details.local_position, Offset::<f32>::new(10.0, 20.0));
         assert_eq!(details.kind, PointerDeviceKind::Mouse);
     }
 
@@ -542,39 +542,39 @@ mod tests {
     fn test_drag_start_details() {
         let details = DragStartDetails::new(
             Duration::from_millis(100),
-            Offset::new(100.0, 200.0),
-            Offset::new(10.0, 20.0),
+            Offset::<f32>::new(100.0, 200.0),
+            Offset::<f32>::new(10.0, 20.0),
         );
 
         assert_eq!(details.source_time_stamp, Duration::from_millis(100));
-        assert_eq!(details.global_position, Offset::new(100.0, 200.0));
+        assert_eq!(details.global_position, Offset::<f32>::new(100.0, 200.0));
     }
 
     #[test]
     fn test_drag_update_details() {
         let details = DragUpdateDetails::new(
             Duration::from_millis(100),
-            Offset::new(5.0, 10.0),
-            Offset::new(100.0, 200.0),
-            Offset::new(10.0, 20.0),
+            Offset::<f32>::new(5.0, 10.0),
+            Offset::<f32>::new(100.0, 200.0),
+            Offset::<f32>::new(10.0, 20.0),
         )
         .with_primary_delta(10.0);
 
-        assert_eq!(details.delta, Offset::new(5.0, 10.0));
+        assert_eq!(details.delta, Offset::<f32>::new(5.0, 10.0));
         assert_eq!(details.primary_delta, Some(10.0));
     }
 
     #[test]
     fn test_scale_update_details() {
-        let focal_point = OffsetPair::new(Offset::new(10.0, 20.0), Offset::new(100.0, 200.0));
+        let focal_point = OffsetPair::new(Offset::<f32>::new(10.0, 20.0), Offset::<f32>::new(100.0, 200.0));
         let details = ScaleUpdateDetails::new(focal_point, 1.5, 0.5, 2)
-            .with_focal_point_delta(Offset::new(2.0, 3.0))
+            .with_focal_point_delta(Offset::<f32>::new(2.0, 3.0))
             .with_scale_factors(1.6, 1.4);
 
         assert_eq!(details.scale, 1.5);
         assert_eq!(details.rotation, 0.5);
         assert_eq!(details.pointer_count, 2);
-        assert_eq!(details.focal_point_delta, Offset::new(2.0, 3.0));
+        assert_eq!(details.focal_point_delta, Offset::<f32>::new(2.0, 3.0));
         assert_eq!(details.horizontal_scale, 1.6);
         assert_eq!(details.vertical_scale, 1.4);
     }
@@ -582,7 +582,7 @@ mod tests {
     #[test]
     fn test_force_press_details() {
         let details =
-            ForcePressDetails::new(Offset::new(100.0, 200.0), Offset::new(10.0, 20.0), 0.8, 1.0);
+            ForcePressDetails::new(Offset::<f32>::new(100.0, 200.0), Offset::<f32>::new(10.0, 20.0), 0.8, 1.0);
 
         assert_eq!(details.pressure, 0.8);
         assert_eq!(details.max_pressure, 1.0);
@@ -591,10 +591,10 @@ mod tests {
 
     #[test]
     fn test_force_press_normalized_pressure() {
-        let details = ForcePressDetails::new(Offset::ZERO, Offset::ZERO, 50.0, 100.0);
+        let details = ForcePressDetails::new(Offset::<f32>::ZERO, Offset::<f32>::ZERO, 50.0, 100.0);
         assert_eq!(details.normalized_pressure(), 0.5);
 
-        let no_max = ForcePressDetails::new(Offset::ZERO, Offset::ZERO, 50.0, 0.0);
+        let no_max = ForcePressDetails::new(Offset::<f32>::ZERO, Offset::<f32>::ZERO, 50.0, 0.0);
         assert_eq!(no_max.normalized_pressure(), 0.0);
     }
 }

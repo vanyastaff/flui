@@ -78,7 +78,7 @@ impl Axis {
     /// ```
     #[inline]
     #[must_use]
-    pub const fn select_size(self, size: Size) -> f32 {
+    pub const fn select_size(self, size: Size<f32>) -> f32 {
         match self {
             Axis::Horizontal => size.width,
             Axis::Vertical => size.height,
@@ -97,7 +97,7 @@ impl Axis {
     /// ```
     #[inline]
     #[must_use]
-    pub const fn make_size(self, value: f32) -> Size {
+    pub const fn make_size(self, value: f32) -> Size<f32> {
         match self {
             Axis::Horizontal => Size::new(value, 0.0),
             Axis::Vertical => Size::new(0.0, value),
@@ -118,7 +118,7 @@ impl Axis {
     /// ```
     #[inline]
     #[must_use]
-    pub const fn make_size_with_cross(self, main: f32, cross: f32) -> Size {
+    pub const fn make_size_with_cross(self, main: f32, cross: f32) -> Size<f32> {
         match self {
             Axis::Horizontal => Size::new(main, cross),
             Axis::Vertical => Size::new(cross, main),
@@ -140,7 +140,7 @@ impl Axis {
     /// ```
     #[inline]
     #[must_use]
-    pub const fn flip_size(self, size: Size) -> Size {
+    pub const fn flip_size(self, size: Size<f32>) -> Size<f32> {
         match self {
             Axis::Horizontal => size,
             Axis::Vertical => Size::new(size.height, size.width),
@@ -160,7 +160,7 @@ impl Axis {
     /// ```
     #[inline]
     #[must_use]
-    pub const fn main_size(self, size: Size) -> f32 {
+    pub const fn main_size(self, size: Size<f32>) -> f32 {
         self.select_size(size)
     }
 
@@ -177,7 +177,7 @@ impl Axis {
     /// ```
     #[inline]
     #[must_use]
-    pub const fn cross_size(self, size: Size) -> f32 {
+    pub const fn cross_size(self, size: Size<f32>) -> f32 {
         self.opposite().select_size(size)
     }
 }
@@ -376,7 +376,7 @@ impl Orientation {
     /// ```
     #[inline]
     #[must_use]
-    pub const fn from_size(size: Size) -> Self {
+    pub const fn from_size(size: Size<f32>) -> Self {
         if size.height > size.width {
             Orientation::Portrait
         } else {

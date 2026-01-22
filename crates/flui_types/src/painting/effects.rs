@@ -535,7 +535,7 @@ pub enum ImageFilter {
         /// Vertical overflow in pixels
         overflow_v: f32,
         /// Container size
-        container_size: crate::Size,
+        container_size: crate::Size<f32>,
     },
 }
 
@@ -598,7 +598,7 @@ impl ImageFilter {
     pub fn overflow_indicator(
         overflow_h: f32,
         overflow_v: f32,
-        container_size: crate::Size,
+        container_size: crate::Size<f32>,
     ) -> Self {
         Self::OverflowIndicator {
             overflow_h,

@@ -87,7 +87,7 @@ impl Elevation {
     /// Simulates a light source positioned above and slightly offset.
     /// Higher elevations cast shadows further from the element.
     #[inline]
-    pub fn shadow_offset(elevation: f32) -> Offset {
+    pub fn shadow_offset(elevation: f32) -> Offset<f32> {
         // Material Design assumes light from top-left at ~45 degrees
         // Vertical offset increases more than horizontal
         Offset::new(

@@ -43,7 +43,7 @@ use std::time::Duration;
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Velocity {
     /// The number of pixels per second of velocity in the x and y directions
-    pub pixels_per_second: Offset,
+    pub pixels_per_second: Offset<f32>,
 }
 
 impl Velocity {
@@ -66,7 +66,7 @@ impl Velocity {
     /// ```
     #[inline]
     #[must_use]
-    pub const fn new(pixels_per_second: Offset) -> Self {
+    pub const fn new(pixels_per_second: Offset<f32>) -> Self {
         Self { pixels_per_second }
     }
 
@@ -133,7 +133,7 @@ impl Velocity {
     /// ```
     #[inline]
     #[must_use]
-    pub fn from_offset_over_duration(offset: Offset, duration: Duration) -> Self {
+    pub fn from_offset_over_duration(offset: Offset<f32>, duration: Duration) -> Self {
         let seconds = duration.as_secs_f32();
         if seconds == 0.0 {
             return Self::ZERO;
@@ -302,7 +302,7 @@ impl Velocity {
     /// assert_eq!(distance, Offset::new(100.0, 0.0));
     /// ```
     #[must_use]
-    pub fn distance_over_duration(&self, duration: Duration) -> Offset {
+    pub fn distance_over_duration(&self, duration: Duration) -> Offset<f32> {
         let seconds = duration.as_secs_f32();
         self.pixels_per_second * seconds
     }
@@ -377,10 +377,10 @@ pub struct VelocityEstimate {
     pub duration: Duration,
 
     /// The offset at which the velocity was estimated
-    pub offset: Offset,
+    pub offset: Offset<f32>,
 
     /// The velocity in pixels per second
-    pub pixels_per_second: Offset,
+    pub pixels_per_second: Offset<f32>,
 
     /// A value between 0.0 and 1.0 indicating confidence in the estimate
     ///
@@ -408,8 +408,8 @@ impl VelocityEstimate {
     #[inline]
     #[must_use]
     pub const fn new(
-        offset: Offset,
-        pixels_per_second: Offset,
+        offset: Offset<f32>,
+        pixels_per_second: Offset<f32>,
         duration: Duration,
         confidence: f32,
     ) -> Self {

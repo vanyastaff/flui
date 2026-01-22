@@ -2,7 +2,7 @@
 //!
 //! Provides Path structure for creating complex shapes with lines, curves, and arcs.
 
-use crate::geometry::{Offset, Point, Rect, Vec2};
+use crate::geometry::{Offset, Point, Rect, Vec2, NumericUnit};
 use crate::painting::PathFillType;
 use smallvec::SmallVec;
 
@@ -13,20 +13,20 @@ use smallvec::SmallVec;
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum PathCommand {
     /// Move to a point without drawing.
-    MoveTo(Point),
+    MoveTo(Point<f32>),
 
     /// Draw a line to a point.
-    LineTo(Point),
+    LineTo(Point<f32>),
 
     /// Draw a quadratic Bézier curve.
     ///
     /// Arguments: control point, end point
-    QuadraticTo(Point, Point),
+    QuadraticTo(Point<f32>, Point<f32>),
 
     /// Draw a cubic Bézier curve.
     ///
     /// Arguments: control point 1, control point 2, end point
-    CubicTo(Point, Point, Point),
+    CubicTo(Point<f32>, Point<f32>, Point<f32>),
 
     /// Close the current subpath by drawing a line to the starting point.
     Close,
@@ -37,7 +37,7 @@ pub enum PathCommand {
     /// Add a circle.
     ///
     /// Arguments: center, radius
-    AddCircle(Point, f32),
+    AddCircle(Point<f32>, f32),
 
     /// Add an oval (ellipse).
     ///
@@ -142,7 +142,7 @@ impl Path {
     /// ```
     #[inline]
     #[must_use]
-    pub fn circle(center: Point, radius: f32) -> Self {
+    pub fn circle(center: Point<f32>, radius: f32) -> Self {
         let mut path = Self::new();
         path.add_circle(center, radius);
         path
@@ -162,7 +162,7 @@ impl Path {
     /// ```
     #[inline]
     #[must_use]
-    pub fn line(from: Point, to: Point) -> Self {
+    pub fn line(from: Point<f32>, to: Point<f32>) -> Self {
         let mut path = Self::new();
         path.move_to(from);
         path.line_to(to);
@@ -239,7 +239,7 @@ impl Path {
     /// ]);
     /// ```
     #[must_use]
-    pub fn polygon(points: &[Point]) -> Self {
+    pub fn polygon(points: &[Point<f32>]) -> Self {
         let mut path = Self::new();
 
         if points.is_empty() {
@@ -378,14 +378,14 @@ impl Path {
 
     /// Starts a new subpath at the given point.
     #[inline]
-    pub fn move_to(&mut self, point: Point) {
+    pub fn move_to(&mut self, point: Point<f32>) {
         self.commands.push(PathCommand::MoveTo(point));
         self.bounds = None;
     }
 
     /// Adds a line from the current point to the given point.
     #[inline]
-    pub fn line_to(&mut self, point: Point) {
+    pub fn line_to(&mut self, point: Point<f32>) {
         self.commands.push(PathCommand::LineTo(point));
         self.bounds = None;
     }
@@ -397,7 +397,7 @@ impl Path {
     /// * `control` - The control point
     /// * `end` - The end point
     #[inline]
-    pub fn quadratic_to(&mut self, control: Point, end: Point) {
+    pub fn quadratic_to(&mut self, control: Point<f32>, end: Point<f32>) {
         self.commands.push(PathCommand::QuadraticTo(control, end));
         self.bounds = None;
     }
@@ -410,7 +410,7 @@ impl Path {
     /// * `control2` - The second control point
     /// * `end` - The end point
     #[inline]
-    pub fn cubic_to(&mut self, control1: Point, control2: Point, end: Point) {
+    pub fn cubic_to(&mut self, control1: Point<f32>, control2: Point<f32>, end: Point<f32>) {
         self.commands
             .push(PathCommand::CubicTo(control1, control2, end));
         self.bounds = None;
@@ -436,7 +436,7 @@ impl Path {
     /// * `center` - The center of the circle
     /// * `radius` - The radius of the circle
     #[inline]
-    pub fn add_circle(&mut self, center: Point, radius: f32) {
+    pub fn add_circle(&mut self, center: Point<f32>, radius: f32) {
         self.commands.push(PathCommand::AddCircle(center, radius));
         self.bounds = None;
     }
@@ -598,7 +598,7 @@ impl Path {
 
     /// Transforms the path by translating it.
     #[must_use]
-    pub fn translate(&self, offset: Offset) -> Self {
+    pub fn translate(&self, offset: Offset<f32>) -> Self {
         let delta = Vec2::new(offset.dx, offset.dy);
         let commands = self
             .commands
@@ -657,7 +657,7 @@ impl Path {
     /// assert!(!path.contains(Point::new(150.0, 50.0)));
     /// ```
     #[must_use]
-    pub fn contains(&self, point: Point) -> bool {
+    pub fn contains(&self, point: Point<f32>) -> bool {
         // Quick bounds check using compute_bounds() (no mutation needed)
         let bounds = self.compute_bounds();
         if !bounds.contains(point) {
@@ -671,7 +671,7 @@ impl Path {
     }
 
     /// Ray casting algorithm for even-odd fill rule.
-    fn contains_even_odd(&self, point: Point) -> bool {
+    fn contains_even_odd(&self, point: Point<f32>) -> bool {
         let mut crossings = 0;
         let mut current_pos = Point::new(0.0, 0.0);
         let mut subpath_start = Point::new(0.0, 0.0);
@@ -741,7 +741,7 @@ impl Path {
     }
 
     /// Winding number algorithm for non-zero fill rule.
-    fn contains_non_zero(&self, point: Point) -> bool {
+    fn contains_non_zero(&self, point: Point<f32>) -> bool {
         let mut winding = 0;
         let mut current_pos = Point::new(0.0, 0.0);
         let mut subpath_start = Point::new(0.0, 0.0);
@@ -801,7 +801,7 @@ impl Path {
     }
 
     /// Tests if a horizontal ray from point intersects a line segment.
-    fn ray_intersects_segment(&self, point: Point, p1: Point, p2: Point) -> bool {
+    fn ray_intersects_segment(&self, point: Point<f32>, p1: Point<f32>, p2: Point<f32>) -> bool {
         // Ray extends to the right from point
         if (p1.y > point.y) == (p2.y > point.y) {
             return false; // Both endpoints on same side of ray
@@ -813,7 +813,7 @@ impl Path {
     }
 
     /// Compute winding contribution of a line segment.
-    fn segment_winding(&self, point: Point, p1: Point, p2: Point) -> i32 {
+    fn segment_winding(&self, point: Point<f32>, p1: Point<f32>, p2: Point<f32>) -> i32 {
         if p1.y <= point.y {
             if p2.y > point.y {
                 // Upward crossing
@@ -832,12 +832,12 @@ impl Path {
 
     /// Test if point is left of line segment (p1 -> p2).
     /// Returns > 0 for left, < 0 for right, 0 for on line.
-    fn is_left(&self, p1: Point, p2: Point, point: Point) -> f32 {
+    fn is_left(&self, p1: Point<f32>, p2: Point<f32>, point: Point<f32>) -> f32 {
         (p2.x - p1.x) * (point.y - p1.y) - (point.x - p1.x) * (p2.y - p1.y)
     }
 
     /// Count crossings for quadratic bezier curve (approximated).
-    fn count_curve_crossings_quad(&self, point: Point, p0: Point, p1: Point, p2: Point) -> usize {
+    fn count_curve_crossings_quad(&self, point: Point<f32>, p0: Point<f32>, p1: Point<f32>, p2: Point<f32>) -> usize {
         // Simple approximation: subdivide into 4 line segments
         let t_values: [f32; 5] = [0.0, 0.25, 0.5, 0.75, 1.0];
         let mut crossings = 0;
@@ -860,11 +860,11 @@ impl Path {
     /// Count crossings for cubic bezier curve (approximated).
     fn count_curve_crossings_cubic(
         &self,
-        point: Point,
-        p0: Point,
-        p1: Point,
-        p2: Point,
-        p3: Point,
+        point: Point<f32>,
+        p0: Point<f32>,
+        p1: Point<f32>,
+        p2: Point<f32>,
+        p3: Point<f32>,
     ) -> usize {
         // Simple approximation: subdivide into 8 line segments
         let t_values: [f32; 9] = [0.0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1.0];
@@ -886,7 +886,7 @@ impl Path {
     }
 
     /// Winding number for quadratic curve.
-    fn curve_winding_quad(&self, point: Point, p0: Point, p1: Point, p2: Point) -> i32 {
+    fn curve_winding_quad(&self, point: Point<f32>, p0: Point<f32>, p1: Point<f32>, p2: Point<f32>) -> i32 {
         let t_values: [f32; 5] = [0.0, 0.25, 0.5, 0.75, 1.0];
         let mut winding = 0;
 
@@ -904,7 +904,7 @@ impl Path {
     }
 
     /// Winding number for cubic curve.
-    fn curve_winding_cubic(&self, point: Point, p0: Point, p1: Point, p2: Point, p3: Point) -> i32 {
+    fn curve_winding_cubic(&self, point: Point<f32>, p0: Point<f32>, p1: Point<f32>, p2: Point<f32>, p3: Point<f32>) -> i32 {
         let t_values: [f32; 9] = [0.0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1.0];
         let mut winding = 0;
 
@@ -922,19 +922,25 @@ impl Path {
     }
 
     /// Evaluate quadratic bezier at parameter t.
-    fn eval_quadratic(&self, p0: Point, p1: Point, p2: Point, t: f32) -> Point {
+    fn eval_quadratic<T>(&self, p0: Point<T>, p1: Point<T>, p2: Point<T>, t: f32) -> Point<T>
+    where
+        T: NumericUnit + Into<f32> + From<f32>,
+    {
         let t2 = t * t;
         let mt = 1.0 - t;
         let mt2 = mt * mt;
 
         Point::new(
-            mt2 * p0.x + 2.0 * mt * t * p1.x + t2 * p2.x,
-            mt2 * p0.y + 2.0 * mt * t * p1.y + t2 * p2.y,
+            T::from(mt2 * p0.x.into() + 2.0 * mt * t * p1.x.into() + t2 * p2.x.into()),
+            T::from(mt2 * p0.y.into() + 2.0 * mt * t * p1.y.into() + t2 * p2.y.into()),
         )
     }
 
     /// Evaluate cubic bezier at parameter t.
-    fn eval_cubic(&self, p0: Point, p1: Point, p2: Point, p3: Point, t: f32) -> Point {
+    fn eval_cubic<T>(&self, p0: Point<T>, p1: Point<T>, p2: Point<T>, p3: Point<T>, t: f32) -> Point<T>
+    where
+        T: NumericUnit + Into<f32> + From<f32>,
+    {
         let t2 = t * t;
         let t3 = t2 * t;
         let mt = 1.0 - t;
@@ -942,8 +948,8 @@ impl Path {
         let mt3 = mt2 * mt;
 
         Point::new(
-            mt3 * p0.x + 3.0 * mt2 * t * p1.x + 3.0 * mt * t2 * p2.x + t3 * p3.x,
-            mt3 * p0.y + 3.0 * mt2 * t * p1.y + 3.0 * mt * t2 * p2.y + t3 * p3.y,
+            T::from(mt3 * p0.x.into() + 3.0 * mt2 * t * p1.x.into() + 3.0 * mt * t2 * p2.x.into() + t3 * p3.x.into()),
+            T::from(mt3 * p0.y.into() + 3.0 * mt2 * t * p1.y.into() + 3.0 * mt * t2 * p2.y.into() + t3 * p3.y.into()),
         )
     }
 }

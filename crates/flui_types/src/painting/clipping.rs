@@ -176,7 +176,7 @@ pub trait NotchedShape: std::fmt::Debug {
     /// The `guest` is the bounding rectangle of the notch.
     ///
     /// Returns a path that describes the outer edge of the shape with the notch.
-    fn get_outer_path(&self, host: Rect, guest: Option<Rect>) -> Vec<Offset>;
+    fn get_outer_path(&self, host: Rect, guest: Option<Rect>) -> Vec<Offset<f32>>;
 }
 
 /// A rectangle with smooth circular notches.
@@ -226,7 +226,7 @@ impl Default for CircularNotchedRectangle {
 }
 
 impl NotchedShape for CircularNotchedRectangle {
-    fn get_outer_path(&self, host: Rect, guest: Option<Rect>) -> Vec<Offset> {
+    fn get_outer_path(&self, host: Rect, guest: Option<Rect>) -> Vec<Offset<f32>> {
         let Some(guest) = guest else {
             // No notch, just return the rectangle corners
             return vec![
@@ -318,7 +318,7 @@ impl<T: NotchedShape> AutomaticNotchedShape<T> {
 }
 
 impl<T: NotchedShape> NotchedShape for AutomaticNotchedShape<T> {
-    fn get_outer_path(&self, host: Rect, guest: Option<Rect>) -> Vec<Offset> {
+    fn get_outer_path(&self, host: Rect, guest: Option<Rect>) -> Vec<Offset<f32>> {
         let scaled_guest = guest.map(|g| {
             let center = g.center();
             let scaled_size = Size::new(g.width() * self.scale, g.height() * self.scale);

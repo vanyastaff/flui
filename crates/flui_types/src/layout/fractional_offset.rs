@@ -157,7 +157,7 @@ impl FractionalOffset {
     /// ```
     #[inline]
     #[must_use]
-    pub fn along_size(&self, size: Size) -> Offset {
+    pub fn along_size(&self, size: Size<f32>) -> Offset<f32> {
         Offset::new(self.dx * size.width, self.dy * size.height)
     }
 
@@ -185,7 +185,7 @@ impl FractionalOffset {
     /// ```
     #[inline]
     #[must_use]
-    pub fn along_offset(&self, parent_size: Size, child_size: Size) -> Offset {
+    pub fn along_offset(&self, parent_size: Size<f32>, child_size: Size<f32>) -> Offset<f32> {
         let parent_offset = self.along_size(parent_size);
         let child_offset = self.along_size(child_size);
         Offset::new(

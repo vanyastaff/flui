@@ -319,7 +319,7 @@ impl Alignment {
     /// ```
     #[inline]
     #[must_use]
-    pub fn calculate_offset(self, child_size: Size, parent_size: Size) -> Offset {
+    pub fn calculate_offset(self, child_size: Size<f32>, parent_size: Size<f32>) -> Offset<f32> {
         let available_space = Size::new(
             parent_size.width - child_size.width,
             parent_size.height - child_size.height,
@@ -355,7 +355,7 @@ impl Alignment {
     /// ```
     #[inline]
     #[must_use]
-    pub fn along_offset(self, other: Offset) -> Offset {
+    pub fn along_offset(self, other: Offset<f32>) -> Offset<f32> {
         let center_x = other.dx / 2.0;
         let center_y = other.dy / 2.0;
         Offset::new(center_x + self.x * center_x, center_y + self.y * center_y)
@@ -378,7 +378,7 @@ impl Alignment {
     /// ```
     #[inline]
     #[must_use]
-    pub fn along_size(self, other: Size) -> Offset {
+    pub fn along_size(self, other: Size<f32>) -> Offset<f32> {
         let center_x = other.width / 2.0;
         let center_y = other.height / 2.0;
         Offset::new(center_x + self.x * center_x, center_y + self.y * center_y)
@@ -690,7 +690,7 @@ impl AlignmentGeometry {
     }
 
     /// Calculate offset for a child within a parent, respecting text direction.
-    pub fn calculate_offset(&self, child_size: Size, parent_size: Size, is_ltr: bool) -> Offset {
+    pub fn calculate_offset(&self, child_size: Size<f32>, parent_size: Size<f32>, is_ltr: bool) -> Offset<f32> {
         self.resolve(is_ltr)
             .calculate_offset(child_size, parent_size)
     }

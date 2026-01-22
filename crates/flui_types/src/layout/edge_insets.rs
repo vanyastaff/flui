@@ -216,7 +216,7 @@ impl EdgeInsets {
     /// let insets = EdgeInsets::new(1.0, 2.0, 3.0, 4.0);
     /// assert_eq!(insets.total_size(), Size::new(4.0, 6.0));
     /// ```
-    pub fn total_size(&self) -> Size {
+    pub fn total_size(&self) -> Size<f32> {
         Size::new(self.horizontal_total(), self.vertical_total())
     }
 
@@ -230,7 +230,7 @@ impl EdgeInsets {
     /// let insets = EdgeInsets::new(1.0, 2.0, 3.0, 4.0);
     /// assert_eq!(insets.top_left(), Offset::new(1.0, 2.0));
     /// ```
-    pub fn top_left(&self) -> Offset {
+    pub fn top_left(&self) -> Offset<f32> {
         Offset::new(self.left, self.top)
     }
 
@@ -244,7 +244,7 @@ impl EdgeInsets {
     /// let insets = EdgeInsets::new(1.0, 2.0, 3.0, 4.0);
     /// assert_eq!(insets.bottom_right(), Offset::new(3.0, 4.0));
     /// ```
-    pub fn bottom_right(&self) -> Offset {
+    pub fn bottom_right(&self) -> Offset<f32> {
         Offset::new(self.right, self.bottom)
     }
 
@@ -360,7 +360,7 @@ impl EdgeInsets {
     /// let shrunk = insets.shrink_size(size);
     /// assert_eq!(shrunk, Size::new(90.0, 80.0));
     /// ```
-    pub fn shrink_size(&self, size: impl Into<Size>) -> Size {
+    pub fn shrink_size(&self, size: impl Into<Size<f32>>) -> Size<f32> {
         let size = size.into();
         Size::new(
             (size.width - self.horizontal_total()).max(0.0),
@@ -380,7 +380,7 @@ impl EdgeInsets {
     /// let expanded = insets.expand_size(size);
     /// assert_eq!(expanded, Size::new(110.0, 120.0));
     /// ```
-    pub fn expand_size(&self, size: impl Into<Size>) -> Size {
+    pub fn expand_size(&self, size: impl Into<Size<f32>>) -> Size<f32> {
         let size = size.into();
         Size::new(
             size.width + self.horizontal_total(),
