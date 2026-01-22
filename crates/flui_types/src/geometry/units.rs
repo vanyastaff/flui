@@ -701,6 +701,41 @@ impl Debug for DevicePixels {
 }
 
 // ============================================================================
+// DEVICE PIXELS - TRAIT IMPLEMENTATIONS
+// ============================================================================
+
+impl Unit for DevicePixels {
+    type Scalar = i32;
+
+    #[inline]
+    fn zero() -> Self {
+        Self::ZERO
+    }
+}
+
+impl NumericUnit for DevicePixels {
+    #[inline]
+    fn add(self, other: Self) -> Self {
+        DevicePixels(self.0.saturating_add(other.0))
+    }
+
+    #[inline]
+    fn sub(self, other: Self) -> Self {
+        DevicePixels(self.0.saturating_sub(other.0))
+    }
+
+    #[inline]
+    fn mul(self, scalar: f32) -> Self {
+        DevicePixels((self.0 as f32 * scalar).round() as i32)
+    }
+
+    #[inline]
+    fn div(self, scalar: f32) -> Self {
+        DevicePixels((self.0 as f32 / scalar).round() as i32)
+    }
+}
+
+// ============================================================================
 // SCALED PIXELS - Display-scaled pixels
 // ============================================================================
 
@@ -904,6 +939,41 @@ impl Neg for ScaledPixels {
     #[inline]
     fn neg(self) -> Self::Output {
         Self(-self.0)
+    }
+}
+
+// ============================================================================
+// SCALED PIXELS - TRAIT IMPLEMENTATIONS
+// ============================================================================
+
+impl Unit for ScaledPixels {
+    type Scalar = f32;
+
+    #[inline]
+    fn zero() -> Self {
+        Self::ZERO
+    }
+}
+
+impl NumericUnit for ScaledPixels {
+    #[inline]
+    fn add(self, other: Self) -> Self {
+        ScaledPixels(self.0 + other.0)
+    }
+
+    #[inline]
+    fn sub(self, other: Self) -> Self {
+        ScaledPixels(self.0 - other.0)
+    }
+
+    #[inline]
+    fn mul(self, scalar: f32) -> Self {
+        ScaledPixels(self.0 * scalar)
+    }
+
+    #[inline]
+    fn div(self, scalar: f32) -> Self {
+        ScaledPixels(self.0 / scalar)
     }
 }
 
@@ -1510,5 +1580,120 @@ mod tests {
         let scaled = logical.scale(2.0);
         let device = scaled.to_device_pixels();
         assert_eq!(device, device_px(200));
+    }
+
+    #[test]
+    fn test_device_pixels_unit() {
+        use super::super::traits::{NumericUnit, Unit};
+
+        // Test Unit trait
+        let zero = DevicePixels::zero();
+        assert_eq!(zero.0, 0);
+        assert_eq!(zero, DevicePixels::ZERO);
+
+        // Test NumericUnit trait methods with saturating arithmetic
+        let a = device_px(10);
+        let b = device_px(20);
+
+        assert_eq!(NumericUnit::add(a, b).0, 30);
+        assert_eq!(NumericUnit::sub(a, b).0, -10);
+        assert_eq!(NumericUnit::mul(a, 2.0).0, 20);
+        assert_eq!(NumericUnit::div(a, 2.0).0, 5);
+
+        // Test saturating behavior
+        let max_val = device_px(i32::MAX);
+        let one = device_px(1);
+        assert_eq!(NumericUnit::add(max_val, one).0, i32::MAX); // Saturates at MAX
+
+        let min_val = device_px(i32::MIN);
+        assert_eq!(NumericUnit::sub(min_val, one).0, i32::MIN); // Saturates at MIN
+
+        // Test rounding in multiplication/division
+        let val = device_px(10);
+        assert_eq!(NumericUnit::mul(val, 1.4).0, 14); // 14.0 rounds to 14
+        assert_eq!(NumericUnit::mul(val, 1.6).0, 16); // 16.0 rounds to 16
+        assert_eq!(NumericUnit::div(val, 3.0).0, 3); // 3.333... rounds to 3
+    }
+
+    #[test]
+    fn test_scaled_pixels_unit() {
+        use super::super::traits::{NumericUnit, Unit};
+
+        // Test Unit trait
+        let zero = ScaledPixels::zero();
+        assert_eq!(zero.0, 0.0);
+        assert_eq!(zero, ScaledPixels::ZERO);
+
+        // Test NumericUnit trait methods
+        let a = scaled_px(10.0);
+        let b = scaled_px(20.0);
+
+        assert_eq!(NumericUnit::add(a, b).0, 30.0);
+        assert_eq!(NumericUnit::sub(a, b).0, -10.0);
+        assert_eq!(NumericUnit::mul(a, 2.0).0, 20.0);
+        assert_eq!(NumericUnit::div(a, 2.0).0, 5.0);
+
+        // Test to_device_pixels conversion
+        let sp = scaled_px(200.0);
+        let dp = sp.to_device_pixels();
+        assert_eq!(dp.0, 200);
+
+        // Test rounding behavior in to_device_pixels
+        assert_eq!(scaled_px(199.4).to_device_pixels().0, 199);
+        assert_eq!(scaled_px(199.5).to_device_pixels().0, 200);
+        assert_eq!(scaled_px(199.7).to_device_pixels().0, 200);
+    }
+
+    #[test]
+    fn test_rems_unit() {
+        use super::super::traits::{NumericUnit, Unit};
+        use crate::geometry::rems;
+
+        // Test Unit trait
+        let zero = <crate::geometry::Rems as Unit>::zero();
+        assert_eq!(zero.0, 0.0);
+
+        // Test NumericUnit trait methods
+        let a = rems(1.0);
+        let b = rems(0.5);
+
+        assert_eq!(NumericUnit::add(a, b).0, 1.5);
+        assert_eq!(NumericUnit::sub(a, b).0, 0.5);
+        assert_eq!(NumericUnit::mul(a, 2.0).0, 2.0);
+        assert_eq!(NumericUnit::div(a, 2.0).0, 0.5);
+
+        // Test conversions
+        let r = rems(1.5);
+        let f: f32 = r.into();
+        assert_eq!(f, 1.5);
+
+        let r2: crate::geometry::Rems = 2.0.into();
+        assert_eq!(r2.0, 2.0);
+    }
+
+    #[test]
+    fn test_unit_conversions() {
+        // Test ScaledPixels from/to f32
+        let sp = scaled_px(100.0);
+        let f: f32 = sp.into();
+        assert_eq!(f, 100.0);
+
+        let sp2: ScaledPixels = 200.0.into();
+        assert_eq!(sp2.0, 200.0);
+
+        // Test Rems from/to f32
+        use crate::geometry::rems;
+        let r = rems(1.5);
+        let f: f32 = r.into();
+        assert_eq!(f, 1.5);
+
+        let r2: crate::geometry::Rems = 2.5.into();
+        assert_eq!(r2.0, 2.5);
+
+        // Test bidirectional conversion for ScaledPixels
+        let original = scaled_px(123.456);
+        let as_f32: f32 = original.into();
+        let back: ScaledPixels = as_f32.into();
+        assert_eq!(original, back);
     }
 }
