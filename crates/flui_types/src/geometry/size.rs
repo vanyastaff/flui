@@ -2,37 +2,43 @@
 //!
 //! API design inspired by kurbo, glam, and Flutter.
 
-use std::fmt;
+use std::fmt::{self, Debug, Display};
 use std::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Sub, SubAssign};
 
-use super::Vec2;
+use super::traits::{Along, Axis, Half, IsZero, NumericUnit, Unit};
+use super::{Point, Vec2};
 
 /// A 2D size with width and height.
+///
+/// Generic over unit type `T`. Common usage:
+/// - `Size<Pixels>` - UI dimensions
+/// - `Size<DevicePixels>` - Screen dimensions
+/// - `Size<f32>` - Normalized/dimensionless size
 ///
 /// # Examples
 ///
 /// ```
-/// use flui_types::geometry::Size;
+/// use flui_types::geometry::{Size, px, Pixels};
 ///
-/// let size = Size::new(800.0, 600.0);
-/// assert_eq!(size.area(), 480000.0);
-/// assert_eq!(size.aspect_ratio(), 800.0 / 600.0);
+/// let ui_size = Size::<Pixels>::new(px(800.0), px(600.0));
+/// let normalized = Size::<f32>::new(1.0, 1.0);
+/// assert_eq!(normalized.area(), 1.0);
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(C)]
-pub struct Size {
+pub struct Size<T: Unit> {
     /// Width dimension.
-    pub width: f32,
+    pub width: T,
     /// Height dimension.
-    pub height: f32,
+    pub height: T,
 }
 
 // ============================================================================
-// Constants
+// Constants (f32 only for backwards compatibility)
 // ============================================================================
 
-impl Size {
+impl Size<f32> {
     /// Zero size (0, 0).
     pub const ZERO: Self = Self::new(0.0, 0.0);
 
@@ -44,92 +50,385 @@ impl Size {
 }
 
 // ============================================================================
-// Constructors
+// Debug implementation
 // ============================================================================
 
-impl Size {
+impl<T: Unit + Debug> Debug for Size<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Size")
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .finish()
+    }
+}
+
+// ============================================================================
+// Basic Constructors (generic)
+// ============================================================================
+
+impl<T: Unit> Size<T> {
     /// Creates a new size.
     #[inline]
     #[must_use]
-    pub const fn new(width: f32, height: f32) -> Self {
+    pub const fn new(width: T, height: T) -> Self {
         Self { width, height }
     }
 
     /// Creates a square size (width == height).
     #[inline]
     #[must_use]
-    pub const fn splat(v: f32) -> Self {
-        Self::new(v, v)
-    }
-
-    /// Creates a size from an array.
-    #[inline]
-    #[must_use]
-    pub const fn from_array(a: [f32; 2]) -> Self {
-        Self::new(a[0], a[1])
-    }
-
-    /// Creates a size from a tuple.
-    #[inline]
-    #[must_use]
-    pub const fn from_tuple(t: (f32, f32)) -> Self {
-        Self::new(t.0, t.1)
+    pub fn splat(value: T) -> Self {
+        Self {
+            width: value,
+            height: value,
+        }
     }
 }
 
 // ============================================================================
-// Accessors & Conversion
+// Size-specific operations (generic with NumericUnit)
 // ============================================================================
 
-impl Size {
-    /// Returns the size as an array `[width, height]`.
+impl<T: NumericUnit> Size<T>
+where
+    T: Into<f32> + From<f32>,
+{
+    /// Creates a square size with the given side length.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::geometry::Size;
+    ///
+    /// let s = Size::<f32>::square(10.0);
+    /// assert_eq!(s.width, 10.0);
+    /// assert_eq!(s.height, 10.0);
+    /// ```
     #[inline]
     #[must_use]
-    pub const fn to_array(self) -> [f32; 2] {
-        [self.width, self.height]
+    pub fn square(side: T) -> Self {
+        Self {
+            width: side,
+            height: side,
+        }
     }
 
-    /// Returns the size as a tuple `(width, height)`.
+    /// Returns true if width or height is zero.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::geometry::Size;
+    ///
+    /// let s1 = Size::<f32>::new(0.0, 10.0);
+    /// assert!(s1.is_empty());
+    ///
+    /// let s2 = Size::<f32>::new(10.0, 10.0);
+    /// assert!(!s2.is_empty());
+    /// ```
     #[inline]
     #[must_use]
-    pub const fn to_tuple(self) -> (f32, f32) {
-        (self.width, self.height)
+    pub fn is_empty(&self) -> bool
+    where
+        T: IsZero,
+    {
+        self.width.is_zero() || self.height.is_zero()
     }
 
-    /// Converts to a vector.
+    /// Returns the area (width × height).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::geometry::Size;
+    ///
+    /// let s = Size::<f32>::new(10.0, 20.0);
+    /// assert_eq!(s.area(), 200.0);
+    /// ```
     #[inline]
     #[must_use]
-    pub const fn to_vec2(self) -> Vec2 {
-        Vec2::new(self.width, self.height)
+    pub fn area(&self) -> f32 {
+        let w: f32 = self.width.into();
+        let h: f32 = self.height.into();
+        w * h
     }
 
+    /// Returns the aspect ratio (width / height).
+    ///
+    /// Returns 0.0 if height is zero.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::geometry::Size;
+    ///
+    /// let s = Size::<f32>::new(16.0, 9.0);
+    /// assert!((s.aspect_ratio() - 1.777).abs() < 0.01);
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn aspect_ratio(&self) -> f32 {
+        let w: f32 = self.width.into();
+        let h: f32 = self.height.into();
+        if h != 0.0 {
+            w / h
+        } else {
+            0.0
+        }
+    }
+
+    /// Returns the center point (half width, half height).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::geometry::{Size, Point};
+    ///
+    /// let s = Size::<f32>::new(100.0, 200.0);
+    /// let c = s.center();
+    /// assert_eq!(c, Point::<f32>::new(50.0, 100.0));
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn center(&self) -> Point<T>
+    where
+        T: Half,
+    {
+        Point {
+            x: self.width.half(),
+            y: self.height.half(),
+        }
+    }
+
+    /// Checks if this size contains a point.
+    ///
+    /// The point is considered inside if:
+    /// - 0 <= x <= width
+    /// - 0 <= y <= height
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::geometry::{Size, Point};
+    ///
+    /// let s = Size::<f32>::new(10.0, 20.0);
+    /// assert!(s.contains(Point::<f32>::new(5.0, 10.0)));
+    /// assert!(!s.contains(Point::<f32>::new(15.0, 10.0)));
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn contains(&self, point: Point<T>) -> bool {
+        let w: f32 = self.width.into();
+        let h: f32 = self.height.into();
+        let x: f32 = point.x.into();
+        let y: f32 = point.y.into();
+
+        x >= 0.0 && x <= w && y >= 0.0 && y <= h
+    }
+
+    /// Component-wise minimum.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::geometry::Size;
+    ///
+    /// let s1 = Size::<f32>::new(100.0, 50.0);
+    /// let s2 = Size::<f32>::new(80.0, 60.0);
+    /// let result = s1.min(s2);
+    /// assert_eq!(result, Size::<f32>::new(80.0, 50.0));
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn min(self, other: Self) -> Self {
+        let w1: f32 = self.width.into();
+        let h1: f32 = self.height.into();
+        let w2: f32 = other.width.into();
+        let h2: f32 = other.height.into();
+
+        Self {
+            width: T::from(w1.min(w2)),
+            height: T::from(h1.min(h2)),
+        }
+    }
+
+    /// Component-wise maximum.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::geometry::Size;
+    ///
+    /// let s1 = Size::<f32>::new(100.0, 50.0);
+    /// let s2 = Size::<f32>::new(80.0, 60.0);
+    /// let result = s1.max(s2);
+    /// assert_eq!(result, Size::<f32>::new(100.0, 60.0));
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn max(self, other: Self) -> Self {
+        let w1: f32 = self.width.into();
+        let h1: f32 = self.height.into();
+        let w2: f32 = other.width.into();
+        let h2: f32 = other.height.into();
+
+        Self {
+            width: T::from(w1.max(w2)),
+            height: T::from(h1.max(h2)),
+        }
+    }
+}
+
+// ============================================================================
+// Conversions (generic)
+// ============================================================================
+
+impl<T: Unit> Size<T> {
+    /// Casts this size to a different unit type.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::geometry::{Size, px};
+    ///
+    /// let size_px = Size::new(px(100.0), px(200.0));
+    /// let size_f32: Size<f32> = size_px.cast();
+    /// assert_eq!(size_f32.width, 100.0);
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn cast<U: Unit>(self) -> Size<U>
+    where
+        T: Into<U>,
+    {
+        Size {
+            width: self.width.into(),
+            height: self.height.into(),
+        }
+    }
+}
+
+impl<T: NumericUnit> Size<T>
+where
+    T: Into<f32>,
+{
+    /// Converts to a size with f32 components.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::geometry::{Size, px};
+    ///
+    /// let size = Size::new(px(100.0), px(200.0));
+    /// let f32_size = size.to_f32();
+    /// assert_eq!(f32_size.width, 100.0);
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn to_f32(self) -> Size<f32> {
+        Size {
+            width: self.width.into(),
+            height: self.height.into(),
+        }
+    }
+
+    /// Converts to an array [width, height].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::geometry::Size;
+    ///
+    /// let s = Size::<f32>::new(100.0, 200.0);
+    /// assert_eq!(s.to_array(), [100.0, 200.0]);
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn to_array(self) -> [f32; 2] {
+        [self.width.into(), self.height.into()]
+    }
+
+    /// Converts to a Vec2 with the same components.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::geometry::{Size, Vec2};
+    ///
+    /// let s = Size::<f32>::new(100.0, 200.0);
+    /// let v = s.to_vec2();
+    /// assert_eq!(v, Vec2::<f32>::new(100.0, 200.0));
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn to_vec2(self) -> Vec2<T> {
+        Vec2 {
+            x: self.width,
+            y: self.height,
+        }
+    }
+}
+
+// From Point<T> for Size<T>
+impl<T: Unit> From<Point<T>> for Size<T> {
+    #[inline]
+    fn from(p: Point<T>) -> Self {
+        Size {
+            width: p.x,
+            height: p.y,
+        }
+    }
+}
+
+// From Vec2<T> for Size<T>
+impl<T: Unit> From<Vec2<T>> for Size<T> {
+    #[inline]
+    fn from(v: Vec2<T>) -> Self {
+        Size {
+            width: v.x,
+            height: v.y,
+        }
+    }
+}
+
+// ============================================================================
+// Additional accessors (generic)
+// ============================================================================
+
+impl<T: Unit> Size<T> {
     /// Returns a new size with the width replaced.
     #[inline]
     #[must_use]
-    pub const fn with_width(self, width: f32) -> Self {
-        Self::new(width, self.height)
+    pub fn with_width(self, width: T) -> Self {
+        Self {
+            width,
+            height: self.height,
+        }
     }
 
     /// Returns a new size with the height replaced.
     #[inline]
     #[must_use]
-    pub const fn with_height(self, height: f32) -> Self {
-        Self::new(self.width, height)
+    pub fn with_height(self, height: T) -> Self {
+        Self {
+            width: self.width,
+            height,
+        }
+    }
+
+    /// Returns size with width and height swapped.
+    #[inline]
+    #[must_use]
+    pub fn transpose(self) -> Self {
+        Self::new(self.height, self.width)
     }
 }
 
 // ============================================================================
-// Dimensions
+// f32-specific operations
 // ============================================================================
 
-impl Size {
-    /// Returns the area (width × height).
-    #[inline]
-    #[must_use]
-    pub fn area(self) -> f32 {
-        self.width * self.height
-    }
-
+impl Size<f32> {
     /// Returns `true` if the area is zero or negative.
     #[inline]
     #[must_use]
@@ -142,15 +441,6 @@ impl Size {
     #[must_use]
     pub fn is_zero(self) -> bool {
         self.width.abs() < f32::EPSILON && self.height.abs() < f32::EPSILON
-    }
-
-    /// Returns `true` if either dimension is zero or negative.
-    ///
-    /// This is equivalent to `is_zero_area` and matches Flutter's `Size.isEmpty`.
-    #[inline]
-    #[must_use]
-    pub fn is_empty(self) -> bool {
-        self.width <= 0.0 || self.height <= 0.0
     }
 
     /// Returns the smaller dimension.
@@ -167,62 +457,13 @@ impl Size {
         self.width.max(self.height)
     }
 
-    /// Returns the aspect ratio (width / height).
-    ///
-    /// Returns 0.0 if height is zero.
-    #[inline]
-    #[must_use]
-    pub fn aspect_ratio(self) -> f32 {
-        if self.height.abs() < f32::EPSILON {
-            0.0
-        } else {
-            self.width / self.height
-        }
-    }
-}
-
-// ============================================================================
-// Component-wise Operations
-// ============================================================================
-
-impl Size {
-    /// Component-wise minimum.
-    #[inline]
-    #[must_use]
-    pub fn min(self, other: Self) -> Self {
-        Self::new(self.width.min(other.width), self.height.min(other.height))
-    }
-
-    /// Component-wise maximum.
-    #[inline]
-    #[must_use]
-    pub fn max(self, other: Self) -> Self {
-        Self::new(self.width.max(other.width), self.height.max(other.height))
-    }
-
     /// Clamp size between min and max.
     #[inline]
     #[must_use]
     pub fn clamp(self, min: Self, max: Self) -> Self {
-        Self::new(
-            self.width.clamp(min.width, max.width),
-            self.height.clamp(min.height, max.height),
-        )
+        self.max(min).min(max)
     }
 
-    /// Returns size with width and height swapped.
-    #[inline]
-    #[must_use]
-    pub const fn transpose(self) -> Self {
-        Self::new(self.height, self.width)
-    }
-}
-
-// ============================================================================
-// Rounding Operations
-// ============================================================================
-
-impl Size {
     /// Rounds dimensions to the nearest integer.
     #[inline]
     #[must_use]
@@ -268,13 +509,7 @@ impl Size {
             },
         )
     }
-}
 
-// ============================================================================
-// Validation
-// ============================================================================
-
-impl Size {
     /// Returns `true` if both dimensions are finite.
     #[inline]
     #[must_use]
@@ -295,13 +530,7 @@ impl Size {
     pub fn is_positive(self) -> bool {
         self.width > 0.0 && self.height > 0.0
     }
-}
 
-// ============================================================================
-// Interpolation & Fitting
-// ============================================================================
-
-impl Size {
     /// Linear interpolation between two sizes.
     #[inline]
     #[must_use]
@@ -348,147 +577,252 @@ impl Size {
             Self::new(self.width, self.width / ratio)
         }
     }
-}
 
-// ============================================================================
-// Operators
-// ============================================================================
-
-impl Add for Size {
-    type Output = Self;
-
+    /// Maps the size components through a function.
     #[inline]
-    fn add(self, rhs: Self) -> Self {
-        Self::new(self.width + rhs.width, self.height + rhs.height)
+    #[must_use]
+    pub fn map(&self, f: impl Fn(f32) -> f32) -> Size<f32> {
+        Size {
+            width: f(self.width),
+            height: f(self.height),
+        }
     }
 }
 
-impl AddAssign for Size {
+// ============================================================================
+// Arithmetic operators (generic with NumericUnit)
+// ============================================================================
+
+impl<T: NumericUnit> Add for Size<T> {
+    type Output = Self;
+
+    #[inline]
+    fn add(self, rhs: Self) -> Self::Output {
+        Self {
+            width: self.width.add(rhs.width),
+            height: self.height.add(rhs.height),
+        }
+    }
+}
+
+impl<T: NumericUnit> AddAssign for Size<T> {
     #[inline]
     fn add_assign(&mut self, rhs: Self) {
-        self.width += rhs.width;
-        self.height += rhs.height;
+        self.width = self.width.add(rhs.width);
+        self.height = self.height.add(rhs.height);
     }
 }
 
-impl Sub for Size {
+impl<T: NumericUnit> Sub for Size<T> {
     type Output = Self;
 
     #[inline]
-    fn sub(self, rhs: Self) -> Self {
-        Self::new(self.width - rhs.width, self.height - rhs.height)
+    fn sub(self, rhs: Self) -> Self::Output {
+        Self {
+            width: self.width.sub(rhs.width),
+            height: self.height.sub(rhs.height),
+        }
     }
 }
 
-impl SubAssign for Size {
+impl<T: NumericUnit> SubAssign for Size<T> {
     #[inline]
     fn sub_assign(&mut self, rhs: Self) {
-        self.width -= rhs.width;
-        self.height -= rhs.height;
+        self.width = self.width.sub(rhs.width);
+        self.height = self.height.sub(rhs.height);
     }
 }
 
-impl Mul<f32> for Size {
+impl<T: NumericUnit> Mul<f32> for Size<T> {
     type Output = Self;
 
     #[inline]
-    fn mul(self, rhs: f32) -> Self {
-        Self::new(self.width * rhs, self.height * rhs)
+    fn mul(self, rhs: f32) -> Self::Output {
+        Self {
+            width: self.width.mul(rhs),
+            height: self.height.mul(rhs),
+        }
     }
 }
 
-impl Mul<Size> for f32 {
-    type Output = Size;
+impl<T: NumericUnit> Mul<Size<T>> for f32 {
+    type Output = Size<T>;
 
     #[inline]
-    fn mul(self, rhs: Size) -> Size {
-        Size::new(self * rhs.width, self * rhs.height)
+    fn mul(self, rhs: Size<T>) -> Self::Output {
+        rhs * self
     }
 }
 
-impl MulAssign<f32> for Size {
+impl<T: NumericUnit> MulAssign<f32> for Size<T> {
     #[inline]
     fn mul_assign(&mut self, rhs: f32) {
-        self.width *= rhs;
-        self.height *= rhs;
+        self.width = self.width.mul(rhs);
+        self.height = self.height.mul(rhs);
     }
 }
 
-impl Div<f32> for Size {
+impl<T: NumericUnit> Div<f32> for Size<T> {
     type Output = Self;
 
     #[inline]
-    fn div(self, rhs: f32) -> Self {
-        Self::new(self.width / rhs, self.height / rhs)
+    fn div(self, rhs: f32) -> Self::Output {
+        Self {
+            width: self.width.div(rhs),
+            height: self.height.div(rhs),
+        }
     }
 }
 
-impl DivAssign<f32> for Size {
+impl<T: NumericUnit> DivAssign<f32> for Size<T> {
     #[inline]
     fn div_assign(&mut self, rhs: f32) {
-        self.width /= rhs;
-        self.height /= rhs;
+        self.width = self.width.div(rhs);
+        self.height = self.height.div(rhs);
     }
 }
 
 // ============================================================================
-// Conversions
+// Conversions for f32 (backwards compatibility)
 // ============================================================================
 
-impl From<(f32, f32)> for Size {
+impl From<(f32, f32)> for Size<f32> {
     #[inline]
     fn from((width, height): (f32, f32)) -> Self {
         Self::new(width, height)
     }
 }
 
-impl From<[f32; 2]> for Size {
+impl From<[f32; 2]> for Size<f32> {
     #[inline]
     fn from([width, height]: [f32; 2]) -> Self {
         Self::new(width, height)
     }
 }
 
-impl From<Size> for (f32, f32) {
+impl From<Size<f32>> for (f32, f32) {
     #[inline]
-    fn from(s: Size) -> Self {
+    fn from(s: Size<f32>) -> Self {
         (s.width, s.height)
     }
 }
 
-impl From<Size> for [f32; 2] {
+impl From<Size<f32>> for [f32; 2] {
     #[inline]
-    fn from(s: Size) -> Self {
+    fn from(s: Size<f32>) -> Self {
         [s.width, s.height]
     }
 }
 
-impl From<Vec2> for Size {
-    #[inline]
-    fn from(v: Vec2) -> Self {
-        Self::new(v.x, v.y)
-    }
-}
-
 // ============================================================================
-// Display
+// Display (generic)
 // ============================================================================
 
-impl fmt::Display for Size {
+impl<T: Unit + Display> Display for Size<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}×{}", self.width, self.height)
     }
 }
 
 // ============================================================================
-// Convenience function
+// Default (generic)
+// ============================================================================
+
+impl<T: Unit> Default for Size<T> {
+    fn default() -> Self {
+        Self {
+            width: T::zero(),
+            height: T::zero(),
+        }
+    }
+}
+
+// ============================================================================
+// Convenience function (f32 only)
 // ============================================================================
 
 /// Shorthand for `Size::new(width, height)`.
 #[inline]
 #[must_use]
-pub const fn size(width: f32, height: f32) -> Size {
+pub const fn size(width: f32, height: f32) -> Size<f32> {
     Size::new(width, height)
+}
+
+// ============================================================================
+// Along trait - Axis-based access (generic)
+// ============================================================================
+
+impl<T: Unit> Along for Size<T> {
+    type Unit = T;
+
+    #[inline]
+    fn along(&self, axis: Axis) -> Self::Unit {
+        match axis {
+            Axis::Horizontal => self.width,
+            Axis::Vertical => self.height,
+        }
+    }
+
+    #[inline]
+    fn apply_along(&self, axis: Axis, f: impl FnOnce(Self::Unit) -> Self::Unit) -> Self {
+        match axis {
+            Axis::Horizontal => Self::new(f(self.width), self.height),
+            Axis::Vertical => Self::new(self.width, f(self.height)),
+        }
+    }
+}
+
+// ============================================================================
+// Specialized implementations for Pixels
+// ============================================================================
+
+impl Size<super::units::Pixels> {
+    /// Scales the size by a given factor, producing a Size<ScaledPixels>.
+    ///
+    /// This is typically used to convert logical pixel sizes to scaled
+    /// pixels for high-DPI displays.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::geometry::{Size, px};
+    ///
+    /// let size = Size::new(px(100.0), px(200.0));
+    /// let scaled = size.scale(2.0);  // 2x Retina display
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn scale(&self, factor: f32) -> Size<super::units::ScaledPixels> {
+        Size {
+            width: self.width.scale(factor),
+            height: self.height.scale(factor),
+        }
+    }
+}
+
+// ============================================================================
+// Specialized implementations for ScaledPixels
+// ============================================================================
+
+impl Size<super::units::ScaledPixels> {
+    /// Converts to device pixels by rounding both dimensions.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::geometry::{Size, scaled_px};
+    ///
+    /// let size = Size::new(scaled_px(199.7), scaled_px(299.3));
+    /// let device = size.to_device_pixels();
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn to_device_pixels(&self) -> Size<super::units::DevicePixels> {
+        Size {
+            width: self.width.to_device_pixels(),
+            height: self.height.to_device_pixels(),
+        }
+    }
 }
 
 // ============================================================================
@@ -506,8 +840,6 @@ mod tests {
         assert_eq!(s.height, 600.0);
 
         assert_eq!(Size::splat(10.0), Size::new(10.0, 10.0));
-        assert_eq!(Size::from_array([1.0, 2.0]), Size::new(1.0, 2.0));
-        assert_eq!(Size::from_tuple((3.0, 4.0)), Size::new(3.0, 4.0));
     }
 
     #[test]
@@ -645,10 +977,6 @@ mod tests {
         let to_array: [f32; 2] = s.into();
         assert_eq!(to_tuple, (100.0, 50.0));
         assert_eq!(to_array, [100.0, 50.0]);
-
-        let v = Vec2::new(10.0, 20.0);
-        let s_from_v: Size = v.into();
-        assert_eq!(s_from_v, Size::new(10.0, 20.0));
     }
 
     #[test]
@@ -659,5 +987,113 @@ mod tests {
     #[test]
     fn test_convenience_fn() {
         assert_eq!(size(100.0, 50.0), Size::new(100.0, 50.0));
+    }
+}
+
+// ============================================================================
+// Typed tests (generic with unit types)
+// ============================================================================
+
+#[cfg(test)]
+mod typed_tests {
+    use super::*;
+    use crate::geometry::{px, Pixels};
+
+    #[test]
+    fn test_size_new() {
+        let s = Size::<Pixels>::new(px(100.0), px(200.0));
+        assert_eq!(s.width.get(), 100.0);
+        assert_eq!(s.height.get(), 200.0);
+    }
+
+    #[test]
+    fn test_size_square() {
+        let s = Size::<f32>::square(10.0);
+        assert_eq!(s.width, 10.0);
+        assert_eq!(s.height, 10.0);
+    }
+
+    #[test]
+    fn test_size_area_aspect() {
+        let s = Size::<f32>::new(10.0, 20.0);
+        assert_eq!(s.area(), 200.0);
+        assert_eq!(s.aspect_ratio(), 0.5);
+    }
+
+    #[test]
+    fn test_size_is_empty() {
+        let s1 = Size::<f32>::new(0.0, 10.0);
+        assert!(s1.is_empty());
+
+        let s2 = Size::<f32>::new(10.0, 10.0);
+        assert!(!s2.is_empty());
+    }
+
+    #[test]
+    fn test_size_contains() {
+        let s = Size::<f32>::new(10.0, 20.0);
+        let p1 = Point::<f32>::new(5.0, 10.0);
+        assert!(s.contains(p1));
+
+        let p2 = Point::<f32>::new(15.0, 10.0);
+        assert!(!s.contains(p2));
+    }
+
+    #[test]
+    fn test_size_arithmetic() {
+        let s1 = Size::<Pixels>::new(px(10.0), px(20.0));
+        let s2 = Size::<Pixels>::new(px(5.0), px(10.0));
+
+        let s3 = s1 + s2;
+        assert_eq!(s3.width.get(), 15.0);
+
+        let s4 = s1 * 2.0;
+        assert_eq!(s4.width.get(), 20.0);
+    }
+
+    #[test]
+    fn test_size_center() {
+        let s = Size::<f32>::new(100.0, 200.0);
+        let c = s.center();
+        assert_eq!(c.x, 50.0);
+        assert_eq!(c.y, 100.0);
+    }
+
+    #[test]
+    fn test_size_conversions() {
+        let s = Size::<Pixels>::new(px(100.0), px(200.0));
+        let arr = s.to_array();
+        assert_eq!(arr, [100.0, 200.0]);
+
+        let v = s.to_vec2();
+        assert_eq!(v.x.get(), 100.0);
+        assert_eq!(v.y.get(), 200.0);
+    }
+
+    #[test]
+    fn test_from_point_vec2() {
+        let p = Point::<f32>::new(10.0, 20.0);
+        let s: Size<f32> = p.into();
+        assert_eq!(s.width, 10.0);
+        assert_eq!(s.height, 20.0);
+
+        let v = Vec2::<f32>::new(30.0, 40.0);
+        let s2: Size<f32> = v.into();
+        assert_eq!(s2.width, 30.0);
+        assert_eq!(s2.height, 40.0);
+    }
+
+    #[test]
+    fn test_size_min_max_generic() {
+        let s1 = Size::<Pixels>::new(px(100.0), px(50.0));
+        let s2 = Size::<Pixels>::new(px(80.0), px(60.0));
+
+        let min = s1.min(s2);
+        assert_eq!(min.width.get(), 80.0);
+        assert_eq!(min.height.get(), 50.0);
+
+        let max = s1.max(s2);
+        assert_eq!(max.width.get(), 100.0);
+        assert_eq!(max.height.get(), 60.0);
     }
 }
