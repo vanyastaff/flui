@@ -155,7 +155,7 @@ where
 
 impl<T> Point<T>
 where
-    T: Clone + fmt::Debug + Default + PartialEq,
+    T: Unit + Clone + fmt::Debug + Default + PartialEq,
 {
     /// Applies a transformation function to both coordinates.
     ///
@@ -214,20 +214,6 @@ impl Point<f32> {
     #[must_use]
     pub const fn from_tuple(t: (f32, f32)) -> Self {
         Self::new(t.0, t.1)
-    }
-
-    /// Returns the point as an array `[x, y]`.
-    #[inline]
-    #[must_use]
-    pub const fn to_array(self) -> [f32; 2] {
-        [self.x, self.y]
-    }
-
-    /// Returns the point as a tuple `(x, y)`.
-    #[inline]
-    #[must_use]
-    pub const fn to_tuple(self) -> (f32, f32) {
-        (self.x, self.y)
     }
 
     /// Converts to a vector with same coordinates.
@@ -314,7 +300,7 @@ impl Point<f32> {
 
 impl<T> Point<T>
 where
-    T: PartialOrd + Clone + fmt::Debug + Default + PartialEq,
+    T: Unit + PartialOrd + Clone + fmt::Debug + Default + PartialEq,
 {
     /// Component-wise minimum.
     #[inline]
@@ -508,7 +494,7 @@ impl SubAssign<Vec2> for Point<f32> {
 
 impl<T, Rhs> Mul<Rhs> for Point<T>
 where
-    T: Mul<Rhs, Output = T> + Clone + fmt::Debug + Default + PartialEq,
+    T: Unit + Mul<Rhs, Output = T> + Clone + fmt::Debug + Default + PartialEq,
     Rhs: Clone,
 {
     type Output = Point<T>;
@@ -537,7 +523,7 @@ impl Mul<Point<f32>> for f32 {
 
 impl<T, Rhs> Div<Rhs> for Point<T>
 where
-    T: Div<Rhs, Output = T> + Clone + fmt::Debug + Default + PartialEq,
+    T: Unit + Div<Rhs, Output = T> + Clone + fmt::Debug + Default + PartialEq,
     Rhs: Clone,
 {
     type Output = Point<T>;
@@ -553,7 +539,7 @@ where
 
 impl<T, Rhs> MulAssign<Rhs> for Point<T>
 where
-    T: MulAssign<Rhs> + Clone + fmt::Debug + Default + PartialEq,
+    T: Unit + MulAssign<Rhs> + Clone + fmt::Debug + Default + PartialEq,
     Rhs: Clone,
 {
     #[inline]
@@ -565,7 +551,7 @@ where
 
 impl<T, Rhs> DivAssign<Rhs> for Point<T>
 where
-    T: DivAssign<Rhs> + Clone + fmt::Debug + Default + PartialEq,
+    T: Unit + DivAssign<Rhs> + Clone + fmt::Debug + Default + PartialEq,
     Rhs: Clone,
 {
     #[inline]
@@ -577,7 +563,7 @@ where
 
 impl<T> Neg for Point<T>
 where
-    T: Neg<Output = T> + Clone + fmt::Debug + Default + PartialEq,
+    T: Unit + Neg<Output = T> + Clone + fmt::Debug + Default + PartialEq,
 {
     type Output = Self;
 
@@ -591,7 +577,130 @@ where
 }
 
 // ============================================================================
-// Conversions (f32 only)
+// Type Conversion Methods (generic)
+// ============================================================================
+
+impl<T: Unit> Point<T> {
+    /// Converts point to different unit type.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::geometry::{Point, Pixels, px};
+    ///
+    /// let p = Point::<Pixels>::new(px(100.0), px(200.0));
+    /// let p_f32: Point<f32> = p.cast();
+    /// assert_eq!(p_f32.x, 100.0);
+    /// assert_eq!(p_f32.y, 200.0);
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn cast<U: Unit>(self) -> Point<U>
+    where
+        T: Into<U>
+    {
+        Point {
+            x: self.x.into(),
+            y: self.y.into(),
+        }
+    }
+}
+
+// ============================================================================
+// GPU Conversion Methods (NumericUnit → f32)
+// ============================================================================
+
+impl<T: NumericUnit> Point<T>
+where
+    T: Into<f32>
+{
+    /// Converts to Point<f32> (shorthand for GPU usage).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::geometry::{Point, Pixels, px};
+    ///
+    /// let p = Point::<Pixels>::new(px(100.0), px(200.0));
+    /// let p_f32 = p.to_f32();
+    /// assert_eq!(p_f32, Point::new(100.0, 200.0));
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn to_f32(self) -> Point<f32> {
+        Point {
+            x: self.x.into(),
+            y: self.y.into(),
+        }
+    }
+
+    /// Converts to raw array [x, y] for GPU buffers.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::geometry::{Point, Pixels, px};
+    ///
+    /// let p = Point::<Pixels>::new(px(100.0), px(200.0));
+    /// let arr = p.to_array();
+    /// assert_eq!(arr, [100.0, 200.0]);
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn to_array(self) -> [f32; 2] {
+        [self.x.into(), self.y.into()]
+    }
+
+    /// Converts to tuple (x, y).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::geometry::{Point, Pixels, px};
+    ///
+    /// let p = Point::<Pixels>::new(px(100.0), px(200.0));
+    /// let tuple = p.to_tuple();
+    /// assert_eq!(tuple, (100.0, 200.0));
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn to_tuple(self) -> (f32, f32) {
+        (self.x.into(), self.y.into())
+    }
+}
+
+// ============================================================================
+// From Trait Implementations
+// ============================================================================
+
+// Note: We cannot implement From<Point<T>> for Point<f32> generically
+// because it conflicts with the reflexive impl From<T> for T when T=f32.
+// Instead, users should use .cast(), .to_f32(), or .into() on specific types.
+
+/// Converts from Point<T> to (f32, f32) for any T that converts to f32.
+impl<T: Unit> From<Point<T>> for (f32, f32)
+where
+    T: Into<f32>
+{
+    #[inline]
+    fn from(p: Point<T>) -> (f32, f32) {
+        (p.x.into(), p.y.into())
+    }
+}
+
+/// Converts from Point<T> to [f32; 2] for any T that converts to f32.
+impl<T: Unit> From<Point<T>> for [f32; 2]
+where
+    T: Into<f32>
+{
+    #[inline]
+    fn from(p: Point<T>) -> [f32; 2] {
+        [p.x.into(), p.y.into()]
+    }
+}
+
+// ============================================================================
+// Conversions (f32 only - specialized)
 // ============================================================================
 
 impl From<(f32, f32)> for Point<f32> {
@@ -608,20 +717,6 @@ impl From<[f32; 2]> for Point<f32> {
     }
 }
 
-impl From<Point<f32>> for (f32, f32) {
-    #[inline]
-    fn from(p: Point<f32>) -> Self {
-        (p.x, p.y)
-    }
-}
-
-impl From<Point<f32>> for [f32; 2] {
-    #[inline]
-    fn from(p: Point<f32>) -> Self {
-        [p.x, p.y]
-    }
-}
-
 impl From<Vec2> for Point<f32> {
     #[inline]
     fn from(v: Vec2) -> Self {
@@ -635,7 +730,7 @@ impl From<Vec2> for Point<f32> {
 
 impl<T> fmt::Display for Point<T>
 where
-    T: fmt::Display + Clone + fmt::Debug + Default + PartialEq,
+    T: Unit + fmt::Display + Clone + fmt::Debug + Default + PartialEq,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "({}, {})", self.x, self.y)
@@ -667,7 +762,7 @@ pub const fn point(x: f32, y: f32) -> Point<f32> {
 
 impl<T> super::traits::Along for Point<T>
 where
-    T: Clone + fmt::Debug + Default + PartialEq,
+    T: Unit + Clone + fmt::Debug + Default + PartialEq,
 {
     type Unit = T;
 
@@ -767,7 +862,7 @@ impl Point<super::units::ScaledPixels> {
 
 impl<T> Point<T>
 where
-    T: Sub<T, Output = T> + Clone + fmt::Debug + Default + PartialEq,
+    T: Unit + Sub<T, Output = T> + Clone + fmt::Debug + Default + PartialEq,
 {
     /// Returns the position of this point relative to the given origin.
     ///
@@ -998,5 +1093,40 @@ mod typed_tests {
         let p = Point::<f32>::new_clamped(f32::INFINITY, -f32::INFINITY);
         assert_eq!(p.x, f32::MAX);
         assert_eq!(p.y, f32::MIN);
+    }
+
+    #[test]
+    fn test_point_cast() {
+        let p = Point::<Pixels>::new(px(100.0), px(200.0));
+        let p_f32: Point<f32> = p.cast();
+        assert_eq!(p_f32.x, 100.0);
+        assert_eq!(p_f32.y, 200.0);
+    }
+
+    #[test]
+    fn test_point_to_f32() {
+        let p = Point::<Pixels>::new(px(100.0), px(200.0));
+        let p_f32 = p.to_f32();
+        assert_eq!(p_f32.x, 100.0);
+    }
+
+    #[test]
+    fn test_point_to_array() {
+        let p = Point::<Pixels>::new(px(100.0), px(200.0));
+        let arr = p.to_array();
+        assert_eq!(arr, [100.0, 200.0]);
+    }
+
+    #[test]
+    fn test_point_from_into() {
+        let p = Point::<Pixels>::new(px(100.0), px(200.0));
+
+        // Test tuple conversion
+        let tuple: (f32, f32) = p.into();
+        assert_eq!(tuple, (100.0, 200.0));
+
+        // Test array conversion
+        let arr: [f32; 2] = p.into();
+        assert_eq!(arr, [100.0, 200.0]);
     }
 }
