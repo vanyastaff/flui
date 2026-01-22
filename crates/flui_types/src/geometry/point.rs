@@ -18,43 +18,36 @@
 use std::fmt;
 use std::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
+use super::traits::{NumericUnit, Unit};
+use super::error::GeometryError;
 use super::Vec2;
 
-/// A point in 2D space.
+/// Absolute position in 2D space.
 ///
-/// This represents an absolute position, not a direction or displacement.
-/// For vectors (direction + magnitude), use [`Vec2`].
+/// Generic over unit type `T`. Common usage:
+/// - `Point<Pixels>` - UI coordinates
+/// - `Point<DevicePixels>` - Screen pixels
+/// - `Point<f32>` - Normalized/dimensionless coordinates
 ///
 /// # Examples
 ///
 /// ```
-/// use flui_types::geometry::{Point, Vec2};
+/// use flui_types::geometry::{Point, px, Pixels};
 ///
-/// let origin = Point::ORIGIN;
-/// let target = Point::new(10.0, 20.0);
-///
-/// // Displacement between points
-/// let displacement: Vec2 = target - origin;
-///
-/// // Move point by vector
-/// let moved = origin + displacement;
-/// assert_eq!(moved, target);
+/// let ui_pos = Point::<Pixels>::new(px(100.0), px(200.0));
+/// let normalized = Point::<f32>::new(0.5, 0.75);
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[repr(C)]
-pub struct Point {
-    /// X coordinate.
-    pub x: f32,
-    /// Y coordinate.
-    pub y: f32,
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Point<T: Unit> {
+    pub x: T,
+    pub y: T,
 }
 
 // ============================================================================
-// Constants
+// Constants (f32 only for backwards compatibility)
 // ============================================================================
 
-impl Point {
+impl Point<f32> {
     /// The origin point (0, 0).
     pub const ORIGIN: Self = Self::new(0.0, 0.0);
 
@@ -72,33 +65,143 @@ impl Point {
 }
 
 // ============================================================================
-// Constructors
+// Basic Constructors (generic over Unit)
 // ============================================================================
 
-impl Point {
-    /// Creates a new point.
+impl<T: Unit> Point<T> {
+    /// Creates a new point (fast, no validation).
     #[inline]
-    #[must_use]
-    pub const fn new(x: f32, y: f32) -> Self {
+    pub const fn new(x: T, y: T) -> Self {
         Self { x, y }
     }
 
     /// Creates a point with both coordinates set to the same value.
+    #[inline]
+    pub fn splat(value: T) -> Self {
+        Self { x: value, y: value }
+    }
+}
+
+// ============================================================================
+// Safe Constructors (NumericUnit with Into<f32> + From<f32>)
+// ============================================================================
+
+impl<T: NumericUnit> Point<T>
+where
+    T: Into<f32> + From<f32>
+{
+    /// Creates a point with validation (returns Result).
+    pub fn try_new(x: T, y: T) -> Result<Self, GeometryError> {
+        let point = Self { x, y };
+        if !point.is_valid() {
+            return Err(GeometryError::InvalidCoordinates {
+                x: x.into(),
+                y: y.into(),
+            });
+        }
+        Ok(point)
+    }
+
+    /// Creates a point, clamping invalid values to valid range.
+    pub fn new_clamped(x: T, y: T) -> Self {
+        let clamp_f32 = |v: f32| {
+            if v.is_nan() {
+                0.0
+            } else if v.is_infinite() {
+                if v > 0.0 { f32::MAX } else { f32::MIN }
+            } else {
+                v
+            }
+        };
+
+        Self {
+            x: T::from(clamp_f32(x.into())),
+            y: T::from(clamp_f32(y.into())),
+        }
+    }
+}
+
+// ============================================================================
+// Validation Methods (NumericUnit with Into<f32>)
+// ============================================================================
+
+impl<T: NumericUnit> Point<T>
+where
+    T: Into<f32>
+{
+    /// Checks if coordinates are valid (finite, not NaN).
+    pub fn is_valid(&self) -> bool {
+        let x_f32: f32 = self.x.into();
+        let y_f32: f32 = self.y.into();
+        x_f32.is_finite() && y_f32.is_finite()
+    }
+
+    /// Returns true if both coordinates are finite.
+    pub fn is_finite(&self) -> bool {
+        self.is_valid()
+    }
+
+    /// Returns true if any coordinate is NaN.
+    pub fn is_nan(&self) -> bool {
+        let x_f32: f32 = self.x.into();
+        let y_f32: f32 = self.y.into();
+        x_f32.is_nan() || y_f32.is_nan()
+    }
+}
+
+// ============================================================================
+// Legacy Generic Methods (T: Clone + Debug + Default + PartialEq)
+// ============================================================================
+
+impl<T> Point<T>
+where
+    T: Clone + fmt::Debug + Default + PartialEq,
+{
+    /// Applies a transformation function to both coordinates.
+    ///
+    /// This enables converting between different unit types.
     ///
     /// # Examples
     ///
     /// ```
     /// use flui_types::geometry::Point;
     ///
-    /// let p = Point::splat(5.0);
-    /// assert_eq!(p, Point::new(5.0, 5.0));
+    /// let p: Point<i32> = Point::new(3, 4);
+    /// let p_float = p.map(|coord| coord as f32);
+    /// assert_eq!(p_float, Point::new(3.0, 4.0));
     /// ```
     #[inline]
     #[must_use]
-    pub const fn splat(v: f32) -> Self {
-        Self::new(v, v)
+    pub fn map<U>(&self, f: impl Fn(T) -> U) -> Point<U>
+    where
+        U: Clone + fmt::Debug + Default + PartialEq,
+    {
+        Point {
+            x: f(self.x.clone()),
+            y: f(self.y.clone()),
+        }
     }
 
+    /// Returns a new point with the x coordinate replaced.
+    #[inline]
+    #[must_use]
+    pub fn with_x(self, x: T) -> Self {
+        Self::new(x, self.y)
+    }
+
+    /// Returns a new point with the y coordinate replaced.
+    #[inline]
+    #[must_use]
+    pub fn with_y(self, y: T) -> Self {
+        Self::new(self.x, y)
+    }
+}
+
+// ============================================================================
+// Accessors & Conversion (f32 specialization)
+// ============================================================================
+
+impl Point<f32> {
     /// Creates a point from an array.
     #[inline]
     #[must_use]
@@ -112,13 +215,7 @@ impl Point {
     pub const fn from_tuple(t: (f32, f32)) -> Self {
         Self::new(t.0, t.1)
     }
-}
 
-// ============================================================================
-// Accessors & Conversion
-// ============================================================================
-
-impl Point {
     /// Returns the point as an array `[x, y]`.
     #[inline]
     #[must_use]
@@ -141,27 +238,13 @@ impl Point {
     pub const fn to_vec2(self) -> Vec2 {
         Vec2::new(self.x, self.y)
     }
-
-    /// Returns a new point with the x coordinate replaced.
-    #[inline]
-    #[must_use]
-    pub const fn with_x(self, x: f32) -> Self {
-        Self::new(x, self.y)
-    }
-
-    /// Returns a new point with the y coordinate replaced.
-    #[inline]
-    #[must_use]
-    pub const fn with_y(self, y: f32) -> Self {
-        Self::new(self.x, y)
-    }
 }
 
 // ============================================================================
-// Geometric Operations
+// Geometric Operations (f32 only)
 // ============================================================================
 
-impl Point {
+impl Point<f32> {
     /// Euclidean distance to another point.
     ///
     /// # Examples
@@ -226,31 +309,46 @@ impl Point {
 }
 
 // ============================================================================
-// Component-wise Operations
+// Component-wise Operations (generic with PartialOrd)
 // ============================================================================
 
-impl Point {
+impl<T> Point<T>
+where
+    T: PartialOrd + Clone + fmt::Debug + Default + PartialEq,
+{
     /// Component-wise minimum.
     #[inline]
     #[must_use]
     pub fn min(self, other: Self) -> Self {
-        Self::new(self.x.min(other.x), self.y.min(other.y))
+        Self {
+            x: if self.x <= other.x { self.x } else { other.x },
+            y: if self.y <= other.y { self.y } else { other.y },
+        }
     }
 
     /// Component-wise maximum.
     #[inline]
     #[must_use]
     pub fn max(self, other: Self) -> Self {
-        Self::new(self.x.max(other.x), self.y.max(other.y))
+        Self {
+            x: if self.x >= other.x { self.x } else { other.x },
+            y: if self.y >= other.y { self.y } else { other.y },
+        }
     }
 
     /// Clamp point coordinates between min and max.
     #[inline]
     #[must_use]
     pub fn clamp(self, min: Self, max: Self) -> Self {
-        Self::new(self.x.clamp(min.x, max.x), self.y.clamp(min.y, max.y))
+        self.max(min).min(max)
     }
+}
 
+// ============================================================================
+// f32-specific operations
+// ============================================================================
+
+impl Point<f32> {
     /// Component-wise absolute value.
     #[inline]
     #[must_use]
@@ -274,10 +372,10 @@ impl Point {
 }
 
 // ============================================================================
-// Rounding Operations (kurbo-style)
+// Rounding Operations (f32 only)
 // ============================================================================
 
-impl Point {
+impl Point<f32> {
     /// Rounds coordinates to the nearest integer.
     #[inline]
     #[must_use]
@@ -333,10 +431,10 @@ impl Point {
 }
 
 // ============================================================================
-// Validation
+// Validation (f32 only)
 // ============================================================================
 
-impl Point {
+impl Point<f32> {
     /// Returns `true` if both coordinates are finite.
     #[inline]
     #[must_use]
@@ -353,10 +451,10 @@ impl Point {
 }
 
 // ============================================================================
-// Operators: Point - Point = Vec2
+// Operators: Point - Point = Vec2 (f32 only)
 // ============================================================================
 
-impl Sub for Point {
+impl Sub for Point<f32> {
     type Output = Vec2;
 
     /// Returns the displacement vector from `rhs` to `self`.
@@ -367,10 +465,10 @@ impl Sub for Point {
 }
 
 // ============================================================================
-// Operators: Point ± Vec2 = Point
+// Operators: Point ± Vec2 = Point (f32 only, Vec2 is f32-based)
 // ============================================================================
 
-impl Add<Vec2> for Point {
+impl Add<Vec2> for Point<f32> {
     type Output = Self;
 
     #[inline]
@@ -379,7 +477,7 @@ impl Add<Vec2> for Point {
     }
 }
 
-impl AddAssign<Vec2> for Point {
+impl AddAssign<Vec2> for Point<f32> {
     #[inline]
     fn add_assign(&mut self, rhs: Vec2) {
         self.x += rhs.x;
@@ -387,7 +485,7 @@ impl AddAssign<Vec2> for Point {
     }
 }
 
-impl Sub<Vec2> for Point {
+impl Sub<Vec2> for Point<f32> {
     type Output = Self;
 
     #[inline]
@@ -396,7 +494,7 @@ impl Sub<Vec2> for Point {
     }
 }
 
-impl SubAssign<Vec2> for Point {
+impl SubAssign<Vec2> for Point<f32> {
     #[inline]
     fn sub_assign(&mut self, rhs: Vec2) {
         self.x -= rhs.x;
@@ -405,94 +503,126 @@ impl SubAssign<Vec2> for Point {
 }
 
 // ============================================================================
-// Operators: Scalar multiplication/division
+// Operators: Scalar multiplication/division (generic)
 // ============================================================================
 
-impl Mul<f32> for Point {
-    type Output = Self;
+impl<T, Rhs> Mul<Rhs> for Point<T>
+where
+    T: Mul<Rhs, Output = T> + Clone + fmt::Debug + Default + PartialEq,
+    Rhs: Clone,
+{
+    type Output = Point<T>;
 
     #[inline]
-    fn mul(self, rhs: f32) -> Self {
-        Self::new(self.x * rhs, self.y * rhs)
+    fn mul(self, rhs: Rhs) -> Point<T> {
+        Point {
+            x: self.x * rhs.clone(),
+            y: self.y * rhs,
+        }
     }
 }
 
-impl Mul<Point> for f32 {
-    type Output = Point;
+// Reverse multiplication: f32 * Point<f32>
+impl Mul<Point<f32>> for f32 {
+    type Output = Point<f32>;
 
     #[inline]
-    fn mul(self, rhs: Point) -> Point {
-        Point::new(self * rhs.x, self * rhs.y)
+    fn mul(self, rhs: Point<f32>) -> Point<f32> {
+        Point {
+            x: self * rhs.x,
+            y: self * rhs.y,
+        }
     }
 }
 
-impl MulAssign<f32> for Point {
+impl<T, Rhs> Div<Rhs> for Point<T>
+where
+    T: Div<Rhs, Output = T> + Clone + fmt::Debug + Default + PartialEq,
+    Rhs: Clone,
+{
+    type Output = Point<T>;
+
     #[inline]
-    fn mul_assign(&mut self, rhs: f32) {
-        self.x *= rhs;
+    fn div(self, rhs: Rhs) -> Point<T> {
+        Point {
+            x: self.x / rhs.clone(),
+            y: self.y / rhs,
+        }
+    }
+}
+
+impl<T, Rhs> MulAssign<Rhs> for Point<T>
+where
+    T: MulAssign<Rhs> + Clone + fmt::Debug + Default + PartialEq,
+    Rhs: Clone,
+{
+    #[inline]
+    fn mul_assign(&mut self, rhs: Rhs) {
+        self.x *= rhs.clone();
         self.y *= rhs;
     }
 }
 
-impl Div<f32> for Point {
-    type Output = Self;
-
+impl<T, Rhs> DivAssign<Rhs> for Point<T>
+where
+    T: DivAssign<Rhs> + Clone + fmt::Debug + Default + PartialEq,
+    Rhs: Clone,
+{
     #[inline]
-    fn div(self, rhs: f32) -> Self {
-        Self::new(self.x / rhs, self.y / rhs)
-    }
-}
-
-impl DivAssign<f32> for Point {
-    #[inline]
-    fn div_assign(&mut self, rhs: f32) {
-        self.x /= rhs;
+    fn div_assign(&mut self, rhs: Rhs) {
+        self.x /= rhs.clone();
         self.y /= rhs;
     }
 }
 
-impl Neg for Point {
+impl<T> Neg for Point<T>
+where
+    T: Neg<Output = T> + Clone + fmt::Debug + Default + PartialEq,
+{
     type Output = Self;
 
     #[inline]
     fn neg(self) -> Self {
-        Self::new(-self.x, -self.y)
+        Self {
+            x: -self.x,
+            y: -self.y,
+        }
     }
 }
 
 // ============================================================================
-// Conversions
+// Conversions (f32 only)
 // ============================================================================
 
-impl From<(f32, f32)> for Point {
+impl From<(f32, f32)> for Point<f32> {
     #[inline]
     fn from((x, y): (f32, f32)) -> Self {
         Self::new(x, y)
     }
 }
 
-impl From<[f32; 2]> for Point {
+impl From<[f32; 2]> for Point<f32> {
     #[inline]
     fn from([x, y]: [f32; 2]) -> Self {
         Self::new(x, y)
     }
 }
 
-impl From<Point> for (f32, f32) {
+impl From<Point<f32>> for (f32, f32) {
     #[inline]
-    fn from(p: Point) -> Self {
+    fn from(p: Point<f32>) -> Self {
         (p.x, p.y)
     }
 }
 
-impl From<Point> for [f32; 2] {
+impl From<Point<f32>> for [f32; 2] {
     #[inline]
-    fn from(p: Point) -> Self {
+    fn from(p: Point<f32>) -> Self {
         [p.x, p.y]
     }
 }
 
-impl From<Vec2> for Point {
+impl From<Vec2> for Point<f32> {
     #[inline]
     fn from(v: Vec2) -> Self {
         Self::new(v.x, v.y)
@@ -500,17 +630,20 @@ impl From<Vec2> for Point {
 }
 
 // ============================================================================
-// Display
+// Display (generic)
 // ============================================================================
 
-impl fmt::Display for Point {
+impl<T> fmt::Display for Point<T>
+where
+    T: fmt::Display + Clone + fmt::Debug + Default + PartialEq,
+{
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "({}, {})", self.x, self.y)
     }
 }
 
 // ============================================================================
-// Convenience function
+// Convenience function (f32 only)
 // ============================================================================
 
 /// Shorthand for `Point::new(x, y)`.
@@ -524,8 +657,138 @@ impl fmt::Display for Point {
 /// ```
 #[inline]
 #[must_use]
-pub const fn point(x: f32, y: f32) -> Point {
+pub const fn point(x: f32, y: f32) -> Point<f32> {
     Point::new(x, y)
+}
+
+// ============================================================================
+// Along trait - Axis-based access (generic)
+// ============================================================================
+
+impl<T> super::traits::Along for Point<T>
+where
+    T: Clone + fmt::Debug + Default + PartialEq,
+{
+    type Unit = T;
+
+    #[inline]
+    fn along(&self, axis: super::traits::Axis) -> Self::Unit {
+        match axis {
+            super::traits::Axis::Horizontal => self.x.clone(),
+            super::traits::Axis::Vertical => self.y.clone(),
+        }
+    }
+
+    #[inline]
+    fn apply_along(
+        &self,
+        axis: super::traits::Axis,
+        f: impl FnOnce(Self::Unit) -> Self::Unit,
+    ) -> Self {
+        match axis {
+            super::traits::Axis::Horizontal => Self::new(f(self.x.clone()), self.y.clone()),
+            super::traits::Axis::Vertical => Self::new(self.x.clone(), f(self.y.clone())),
+        }
+    }
+}
+
+// ============================================================================
+// Specialized implementations for Pixels
+// ============================================================================
+
+impl Point<super::units::Pixels> {
+    /// Scales the point by a given factor, producing a Point<ScaledPixels>.
+    ///
+    /// This is typically used to convert logical pixel coordinates to scaled
+    /// pixels for high-DPI displays.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::geometry::{Point, px};
+    ///
+    /// let p = Point::new(px(100.0), px(200.0));
+    /// let scaled = p.scale(2.0);  // 2x Retina display
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn scale(&self, factor: f32) -> Point<super::units::ScaledPixels> {
+        Point {
+            x: self.x.scale(factor),
+            y: self.y.scale(factor),
+        }
+    }
+
+    /// Calculates the Euclidean distance from the origin (0, 0) to this point.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::geometry::{Point, px};
+    ///
+    /// let p = Point::new(px(3.0), px(4.0));
+    /// assert_eq!(p.magnitude(), 5.0);
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn magnitude(&self) -> f32 {
+        (self.x.get().powi(2) + self.y.get().powi(2)).sqrt()
+    }
+}
+
+// ============================================================================
+// Specialized implementations for ScaledPixels
+// ============================================================================
+
+impl Point<super::units::ScaledPixels> {
+    /// Converts to device pixels by rounding both coordinates.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::geometry::{Point, scaled_px};
+    ///
+    /// let p = Point::new(scaled_px(199.7), scaled_px(299.3));
+    /// let device = p.to_device_pixels();
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn to_device_pixels(&self) -> Point<super::units::DevicePixels> {
+        Point {
+            x: self.x.to_device_pixels(),
+            y: self.y.to_device_pixels(),
+        }
+    }
+}
+
+// ============================================================================
+// Generic relative positioning (requires Sub)
+// ============================================================================
+
+impl<T> Point<T>
+where
+    T: Sub<T, Output = T> + Clone + fmt::Debug + Default + PartialEq,
+{
+    /// Returns the position of this point relative to the given origin.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::geometry::Point;
+    ///
+    /// let p = Point::new(100.0, 150.0);
+    /// let origin = Point::new(20.0, 30.0);
+    /// let relative = p.relative_to(&origin);
+    /// assert_eq!(relative, Point::new(80.0, 120.0));
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn relative_to(&self, origin: &Point<T>) -> Point<T> {
+        Point {
+            x: self.x.clone() - origin.x.clone(),
+            y: self.y.clone() - origin.y.clone(),
+        }
+    }
 }
 
 // ============================================================================
@@ -684,5 +947,56 @@ mod tests {
     #[test]
     fn test_convenience_fn() {
         assert_eq!(point(1.0, 2.0), Point::new(1.0, 2.0));
+    }
+}
+
+#[cfg(test)]
+mod typed_tests {
+    use super::*;
+    use crate::geometry::{Pixels, px};
+
+    #[test]
+    fn test_point_new() {
+        let p = Point::<Pixels>::new(px(10.0), px(20.0));
+        assert_eq!(p.x.0, 10.0);
+        assert_eq!(p.y.0, 20.0);
+    }
+
+    #[test]
+    fn test_point_f32() {
+        let p = Point::<f32>::new(0.5, 0.75);
+        assert_eq!(p.x, 0.5);
+        assert_eq!(p.y, 0.75);
+    }
+
+    #[test]
+    fn test_point_validation() {
+        let valid = Point::<f32>::new(1.0, 2.0);
+        assert!(valid.is_valid());
+        assert!(!valid.is_nan());
+
+        let invalid = Point::<f32>::new(f32::NAN, 2.0);
+        assert!(!invalid.is_valid());
+        assert!(invalid.is_nan());
+    }
+
+    #[test]
+    fn test_point_try_new() {
+        let result = Point::<f32>::try_new(1.0, 2.0);
+        assert!(result.is_ok());
+
+        let result = Point::<f32>::try_new(f32::NAN, 2.0);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_point_clamped() {
+        let p = Point::<f32>::new_clamped(f32::NAN, 2.0);
+        assert_eq!(p.x, 0.0);
+        assert_eq!(p.y, 2.0);
+
+        let p = Point::<f32>::new_clamped(f32::INFINITY, -f32::INFINITY);
+        assert_eq!(p.x, f32::MAX);
+        assert_eq!(p.y, f32::MIN);
     }
 }
