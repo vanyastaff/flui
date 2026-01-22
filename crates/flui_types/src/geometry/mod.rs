@@ -27,7 +27,13 @@
 //! - Validation: `is_finite()`, `is_nan()`
 
 pub mod bezier;
+pub mod bounds;
 pub mod circle;
+pub mod corner;
+pub mod corners;
+pub mod edges;
+pub mod error;
+pub mod length;
 pub mod line;
 pub mod matrix4;
 pub mod offset;
@@ -39,12 +45,20 @@ pub mod rrect;
 pub mod rsuperellipse;
 pub mod size;
 pub mod text_path;
+pub mod traits;
 pub mod transform;
+pub mod units;
 pub mod vector;
 
 // Core types
 pub use bezier::{cubic_bez, quad_bez, CubicBez, QuadBez};
+pub use bounds::{bounds, Bounds};
 pub use circle::{circle, Circle};
+pub use corner::Corner;
+pub use corners::{corners, Corners};
+pub use edges::{edges, Edges};
+pub use error::GeometryError;
+pub use length::{auto, relative, rems, AbsoluteLength, DefiniteLength, Length, Percentage, Rems};
 pub use line::{line, Line};
 pub use matrix4::Matrix4;
 pub use offset::Offset;
@@ -55,7 +69,12 @@ pub use rotation::QuarterTurns;
 pub use rrect::{RRect, Radius};
 pub use rsuperellipse::RSuperellipse;
 pub use size::{size, Size};
+pub use traits::{Along, Axis, Half, IsZero, Negate};
 pub use transform::Transform;
+pub use units::{
+    device_px, px, radians, scaled_px, DevicePixels, ParseLengthError, Pixels, Radians,
+    ScaledPixels,
+};
 pub use vector::{vec2, Vec2};
 
 // Re-export text path helpers

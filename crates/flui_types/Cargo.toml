@@ -13,6 +13,9 @@ tracing = { workspace = true }
 # Numeric traits for generic math (Float, Num, etc.)
 num-traits = "0.2"
 
+# Error handling
+thiserror = "2.0"
+
 # Serialization support (optional)
 serde = { workspace = true, optional = true }
 
