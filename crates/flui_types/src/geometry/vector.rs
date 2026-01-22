@@ -966,6 +966,48 @@ impl<T: NumericUnit> Along for Vec2<T> {
 }
 
 // ============================================================================
+// Half trait - Compute half value
+// ============================================================================
+
+impl<T: Unit> super::traits::Half for Vec2<T>
+where
+    T: super::traits::Half
+{
+    #[inline]
+    fn half(&self) -> Self {
+        Self { x: self.x.half(), y: self.y.half() }
+    }
+}
+
+// ============================================================================
+// Negate trait - Semantic negation
+// ============================================================================
+
+impl<T: Unit> super::traits::Negate for Vec2<T>
+where
+    T: super::traits::Negate
+{
+    #[inline]
+    fn negate(self) -> Self {
+        Self { x: self.x.negate(), y: self.y.negate() }
+    }
+}
+
+// ============================================================================
+// IsZero trait - Zero check
+// ============================================================================
+
+impl<T: Unit> super::traits::IsZero for Vec2<T>
+where
+    T: super::traits::IsZero
+{
+    #[inline]
+    fn is_zero(&self) -> bool {
+        self.x.is_zero() && self.y.is_zero()
+    }
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 
@@ -1254,5 +1296,34 @@ mod typed_tests {
         let rotated = v.rotate(std::f32::consts::PI / 2.0);
         assert!((rotated.x.get()).abs() < 0.001);
         assert!((rotated.y.get() - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_vec2_utility_traits() {
+        use crate::geometry::{Axis, Along, Half, Negate, IsZero};
+
+        // Test Along trait
+        let v = Vec2::<Pixels>::new(px(10.0), px(20.0));
+        assert_eq!(v.along(Axis::Horizontal).0, 10.0);
+        assert_eq!(v.along(Axis::Vertical).0, 20.0);
+
+        let modified = v.apply_along(Axis::Horizontal, |x| px(x.0 * 2.0));
+        assert_eq!(modified.x.0, 20.0);
+        assert_eq!(modified.y.0, 20.0);
+
+        // Test Half trait
+        let half_v = v.half();
+        assert_eq!(half_v.x.0, 5.0);
+        assert_eq!(half_v.y.0, 10.0);
+
+        // Test Negate trait
+        let neg_v = v.negate();
+        assert_eq!(neg_v.x.0, -10.0);
+        assert_eq!(neg_v.y.0, -20.0);
+
+        // Test IsZero trait
+        let zero = Vec2::<Pixels>::new(px(0.0), px(0.0));
+        assert!(zero.is_zero());
+        assert!(!v.is_zero());
     }
 }

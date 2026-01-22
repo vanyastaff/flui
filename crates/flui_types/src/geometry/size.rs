@@ -773,6 +773,34 @@ impl<T: Unit> Along for Size<T> {
 }
 
 // ============================================================================
+// Half trait - Compute half value
+// ============================================================================
+
+impl<T: Unit> super::traits::Half for Size<T>
+where
+    T: super::traits::Half
+{
+    #[inline]
+    fn half(&self) -> Self {
+        Self { width: self.width.half(), height: self.height.half() }
+    }
+}
+
+// ============================================================================
+// IsZero trait - Zero check
+// ============================================================================
+
+impl<T: Unit> super::traits::IsZero for Size<T>
+where
+    T: super::traits::IsZero
+{
+    #[inline]
+    fn is_zero(&self) -> bool {
+        self.width.is_zero() && self.height.is_zero()
+    }
+}
+
+// ============================================================================
 // Specialized implementations for Pixels
 // ============================================================================
 
@@ -1095,5 +1123,29 @@ mod typed_tests {
         let max = s1.max(s2);
         assert_eq!(max.width.get(), 100.0);
         assert_eq!(max.height.get(), 60.0);
+    }
+
+    #[test]
+    fn test_size_utility_traits() {
+        use crate::geometry::{Axis, Along, Half, IsZero};
+
+        // Test Along trait
+        let s = Size::<Pixels>::new(px(100.0), px(200.0));
+        assert_eq!(s.along(Axis::Horizontal).0, 100.0);
+        assert_eq!(s.along(Axis::Vertical).0, 200.0);
+
+        let modified = s.apply_along(Axis::Horizontal, |w| px(w.0 * 2.0));
+        assert_eq!(modified.width.0, 200.0);
+        assert_eq!(modified.height.0, 200.0);
+
+        // Test Half trait
+        let half_s = s.half();
+        assert_eq!(half_s.width.0, 50.0);
+        assert_eq!(half_s.height.0, 100.0);
+
+        // Test IsZero trait
+        let zero = Size::<Pixels>::new(px(0.0), px(0.0));
+        assert!(zero.is_zero());
+        assert!(!s.is_zero());
     }
 }

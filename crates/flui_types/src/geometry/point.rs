@@ -421,13 +421,6 @@ impl Point<f32> {
 // ============================================================================
 
 impl Point<f32> {
-    /// Returns `true` if both coordinates are finite.
-    #[inline]
-    #[must_use]
-    pub fn is_finite(self) -> bool {
-        self.x.is_finite() && self.y.is_finite()
-    }
-
     /// Returns `true` if either coordinate is NaN.
     #[inline]
     #[must_use]
@@ -454,7 +447,7 @@ impl Sub for Point<f32> {
 // Operators: Point ± Vec2 = Point (f32 only, Vec2 is f32-based)
 // ============================================================================
 
-impl Add<Vec2> for Point<f32> {
+impl Add<Vec2<f32>> for Point<f32> {
     type Output = Self;
 
     #[inline]
@@ -463,7 +456,7 @@ impl Add<Vec2> for Point<f32> {
     }
 }
 
-impl AddAssign<Vec2> for Point<f32> {
+impl AddAssign<Vec2<f32>> for Point<f32> {
     #[inline]
     fn add_assign(&mut self, rhs: Vec2) {
         self.x += rhs.x;
@@ -471,7 +464,7 @@ impl AddAssign<Vec2> for Point<f32> {
     }
 }
 
-impl Sub<Vec2> for Point<f32> {
+impl Sub<Vec2<f32>> for Point<f32> {
     type Output = Self;
 
     #[inline]
@@ -480,7 +473,7 @@ impl Sub<Vec2> for Point<f32> {
     }
 }
 
-impl SubAssign<Vec2> for Point<f32> {
+impl SubAssign<Vec2<f32>> for Point<f32> {
     #[inline]
     fn sub_assign(&mut self, rhs: Vec2) {
         self.x -= rhs.x;
@@ -577,6 +570,108 @@ where
 }
 
 // ============================================================================
+// Checked Arithmetic (NumericUnit with validation)
+// ============================================================================
+
+impl<T: NumericUnit> Point<T>
+where
+    T: Into<f32> + From<f32>
+{
+    /// Checked addition with a vector (returns None on invalid result).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::geometry::{Point, point};
+    ///
+    /// let p = Point::<f32>::new(1.0, 2.0);
+    /// // Note: This would need Vec2<f32> to work fully generically
+    /// let result = p.checked_add_vec(3.0, 4.0);
+    /// assert!(result.is_some());
+    /// assert_eq!(result.unwrap(), Point::new(4.0, 6.0));
+    /// ```
+    pub fn checked_add_vec(self, dx: T, dy: T) -> Option<Self> {
+        let result = Self {
+            x: self.x.add(dx),
+            y: self.y.add(dy),
+        };
+
+        if result.is_valid() {
+            Some(result)
+        } else {
+            None
+        }
+    }
+
+    /// Saturating addition with a vector (clamps to valid range).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::geometry::{Point, point};
+    ///
+    /// let p = Point::<f32>::new(1.0, 2.0);
+    /// let result = p.saturating_add_vec(f32::NAN, 4.0);
+    /// // NaN gets clamped to 0
+    /// assert_eq!(result.x, 0.0);
+    /// assert_eq!(result.y, 6.0);
+    /// ```
+    pub fn saturating_add_vec(self, dx: T, dy: T) -> Self {
+        Self::new_clamped(
+            self.x.add(dx),
+            self.y.add(dy),
+        )
+    }
+
+    /// Checked scalar multiplication (returns None on invalid result).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::geometry::{Point, point};
+    ///
+    /// let p = Point::<f32>::new(1.0, 2.0);
+    /// let result = p.checked_mul(2.0);
+    /// assert!(result.is_some());
+    /// assert_eq!(result.unwrap(), Point::new(2.0, 4.0));
+    ///
+    /// let infinity = p.checked_mul(f32::INFINITY);
+    /// assert!(infinity.is_none());
+    /// ```
+    pub fn checked_mul(self, scalar: f32) -> Option<Self> {
+        let result = Self {
+            x: self.x.mul(scalar),
+            y: self.y.mul(scalar),
+        };
+
+        if result.is_valid() {
+            Some(result)
+        } else {
+            None
+        }
+    }
+
+    /// Saturating scalar multiplication (clamps to valid range).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::geometry::{Point, point};
+    ///
+    /// let p = Point::<f32>::new(1.0, 2.0);
+    /// let result = p.saturating_mul(f32::INFINITY);
+    /// assert_eq!(result.x, f32::MAX);
+    /// assert_eq!(result.y, f32::MAX);
+    /// ```
+    pub fn saturating_mul(self, scalar: f32) -> Self {
+        Self::new_clamped(
+            self.x.mul(scalar),
+            self.y.mul(scalar),
+        )
+    }
+}
+
+// ============================================================================
 // Type Conversion Methods (generic)
 // ============================================================================
 
@@ -595,8 +690,9 @@ impl<T: Unit> Point<T> {
     /// ```
     #[inline]
     #[must_use]
-    pub fn cast<U: Unit>(self) -> Point<U>
+    pub fn cast<U>(self) -> Point<U>
     where
+        U: Unit,
         T: Into<U>
     {
         Point {
@@ -717,7 +813,7 @@ impl From<[f32; 2]> for Point<f32> {
     }
 }
 
-impl From<Vec2> for Point<f32> {
+impl From<Vec2<f32>> for Point<f32> {
     #[inline]
     fn from(v: Vec2) -> Self {
         Self::new(v.x, v.y)
@@ -784,6 +880,48 @@ where
             super::traits::Axis::Horizontal => Self::new(f(self.x.clone()), self.y.clone()),
             super::traits::Axis::Vertical => Self::new(self.x.clone(), f(self.y.clone())),
         }
+    }
+}
+
+// ============================================================================
+// Half trait - Compute half value (generic)
+// ============================================================================
+
+impl<T: Unit> super::traits::Half for Point<T>
+where
+    T: super::traits::Half
+{
+    #[inline]
+    fn half(&self) -> Self {
+        Self { x: self.x.half(), y: self.y.half() }
+    }
+}
+
+// ============================================================================
+// Negate trait - Semantic negation (generic)
+// ============================================================================
+
+impl<T: Unit> super::traits::Negate for Point<T>
+where
+    T: super::traits::Negate
+{
+    #[inline]
+    fn negate(self) -> Self {
+        Self { x: self.x.negate(), y: self.y.negate() }
+    }
+}
+
+// ============================================================================
+// IsZero trait - Zero check (generic)
+// ============================================================================
+
+impl<T: Unit> super::traits::IsZero for Point<T>
+where
+    T: super::traits::IsZero
+{
+    #[inline]
+    fn is_zero(&self) -> bool {
+        self.x.is_zero() && self.y.is_zero()
     }
 }
 
@@ -1128,5 +1266,219 @@ mod typed_tests {
         // Test array conversion
         let arr: [f32; 2] = p.into();
         assert_eq!(arr, [100.0, 200.0]);
+    }
+}
+
+#[cfg(test)]
+mod arithmetic_tests {
+    use super::*;
+    use crate::geometry::{Pixels, px, vec2};
+
+    #[test]
+    fn test_point_add_vec2() {
+        let p = Point::<f32>::new(10.0, 20.0);
+        let v = vec2(5.0, 10.0);
+
+        let result = p + v;
+        assert_eq!(result.x, 15.0);
+        assert_eq!(result.y, 30.0);
+    }
+
+    #[test]
+    fn test_point_add_assign_vec2() {
+        let mut p = Point::<f32>::new(10.0, 20.0);
+        let v = vec2(5.0, 10.0);
+
+        p += v;
+        assert_eq!(p.x, 15.0);
+        assert_eq!(p.y, 30.0);
+    }
+
+    #[test]
+    fn test_point_sub_point() {
+        let p1 = Point::<f32>::new(20.0, 30.0);
+        let p2 = Point::<f32>::new(10.0, 15.0);
+
+        let v = p1 - p2;
+        assert_eq!(v.x, 10.0);
+        assert_eq!(v.y, 15.0);
+    }
+
+    #[test]
+    fn test_point_sub_vec2() {
+        let p = Point::<f32>::new(10.0, 20.0);
+        let v = vec2(5.0, 10.0);
+
+        let result = p - v;
+        assert_eq!(result.x, 5.0);
+        assert_eq!(result.y, 10.0);
+    }
+
+    #[test]
+    fn test_point_sub_assign_vec2() {
+        let mut p = Point::<f32>::new(10.0, 20.0);
+        let v = vec2(5.0, 10.0);
+
+        p -= v;
+        assert_eq!(p.x, 5.0);
+        assert_eq!(p.y, 10.0);
+    }
+
+    #[test]
+    fn test_point_scalar_mul() {
+        let p = Point::<f32>::new(10.0, 20.0);
+
+        let p2 = p * 2.0;
+        assert_eq!(p2.x, 20.0);
+        assert_eq!(p2.y, 40.0);
+    }
+
+    #[test]
+    fn test_point_scalar_mul_reverse() {
+        let p = Point::<f32>::new(10.0, 20.0);
+
+        let p2 = 2.0 * p;
+        assert_eq!(p2.x, 20.0);
+        assert_eq!(p2.y, 40.0);
+    }
+
+    #[test]
+    fn test_point_scalar_div() {
+        let p = Point::<f32>::new(10.0, 20.0);
+
+        let p2 = p / 2.0;
+        assert_eq!(p2.x, 5.0);
+        assert_eq!(p2.y, 10.0);
+    }
+
+    #[test]
+    fn test_point_negation() {
+        let p = Point::<f32>::new(10.0, -20.0);
+
+        let neg_p = -p;
+        assert_eq!(neg_p.x, -10.0);
+        assert_eq!(neg_p.y, 20.0);
+    }
+
+    #[test]
+    fn test_point_checked_add_vec() {
+        let p = Point::<f32>::new(1.0, 2.0);
+
+        let result = p.checked_add_vec(3.0, 4.0);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().x, 4.0);
+        assert_eq!(result.unwrap().y, 6.0);
+
+        // Test with invalid values
+        let invalid = p.checked_add_vec(f32::NAN, 4.0);
+        assert!(invalid.is_none());
+    }
+
+    #[test]
+    fn test_point_saturating_add_vec() {
+        let p = Point::<f32>::new(1.0, 2.0);
+
+        let result = p.saturating_add_vec(3.0, 4.0);
+        assert_eq!(result.x, 4.0);
+        assert_eq!(result.y, 6.0);
+
+        // Test with NaN - should clamp to 0
+        let saturated = p.saturating_add_vec(f32::NAN, 4.0);
+        assert_eq!(saturated.x, 0.0);
+        assert_eq!(saturated.y, 6.0);
+
+        // Test with infinity - should clamp to MAX
+        let inf_result = p.saturating_add_vec(f32::INFINITY, 4.0);
+        assert_eq!(inf_result.x, f32::MAX);
+        assert_eq!(inf_result.y, 6.0);
+    }
+
+    #[test]
+    fn test_point_checked_mul() {
+        let p = Point::<f32>::new(1.0, 2.0);
+
+        let result = p.checked_mul(2.0);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().x, 2.0);
+        assert_eq!(result.unwrap().y, 4.0);
+
+        // Test with infinity - should return None
+        let infinity = p.checked_mul(f32::INFINITY);
+        assert!(infinity.is_none());
+    }
+
+    #[test]
+    fn test_point_saturating_mul() {
+        let p = Point::<f32>::new(1.0, 2.0);
+
+        let result = p.saturating_mul(2.0);
+        assert_eq!(result.x, 2.0);
+        assert_eq!(result.y, 4.0);
+
+        // Test with infinity - should clamp to MAX
+        let saturated = p.saturating_mul(f32::INFINITY);
+        assert_eq!(saturated.x, f32::MAX);
+        assert_eq!(saturated.y, f32::MAX);
+    }
+
+    #[test]
+    fn test_typed_point_scalar_ops() {
+        let p = Point::<Pixels>::new(px(10.0), px(20.0));
+
+        // Scalar multiplication
+        let p2 = p * 2.0;
+        assert_eq!(p2.x.0, 20.0);
+        assert_eq!(p2.y.0, 40.0);
+
+        // Scalar division
+        let p3 = p / 2.0;
+        assert_eq!(p3.x.0, 5.0);
+        assert_eq!(p3.y.0, 10.0);
+    }
+
+    #[test]
+    fn test_typed_point_checked_operations() {
+        let p = Point::<Pixels>::new(px(10.0), px(20.0));
+
+        // Checked addition
+        let result = p.checked_add_vec(px(5.0), px(10.0));
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().x.0, 15.0);
+        assert_eq!(result.unwrap().y.0, 30.0);
+
+        // Checked multiplication
+        let result = p.checked_mul(2.0);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().x.0, 20.0);
+        assert_eq!(result.unwrap().y.0, 40.0);
+    }
+
+    #[test]
+    fn test_point_utility_traits() {
+        use crate::geometry::{Axis, Along, Half, Negate, IsZero};
+
+        // Test Along trait
+        let p = Point::<Pixels>::new(px(10.0), px(20.0));
+        assert_eq!(p.along(Axis::Horizontal).0, 10.0);
+        assert_eq!(p.along(Axis::Vertical).0, 20.0);
+
+        let modified = p.apply_along(Axis::Horizontal, |x| px(x.0 * 2.0));
+        assert_eq!(modified.x.0, 20.0);
+        assert_eq!(modified.y.0, 20.0);
+
+        // Test Half trait
+        let half_p = p.half();
+        assert_eq!(half_p.x.0, 5.0);
+        assert_eq!(half_p.y.0, 10.0);
+
+        // Test Negate trait
+        let neg_p = p.negate();
+        assert_eq!(neg_p.x.0, -10.0);
+        assert_eq!(neg_p.y.0, -20.0);
+
+        // Test IsZero trait
+        let zero = Point::<Pixels>::new(px(0.0), px(0.0));
+        assert!(zero.is_zero());
+        assert!(!p.is_zero());
     }
 }
