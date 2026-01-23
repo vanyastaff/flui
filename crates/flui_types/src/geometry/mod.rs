@@ -131,6 +131,7 @@ pub mod size;
 pub mod text_path;
 pub mod traits;
 pub mod transform;
+pub mod transform2d;
 pub mod units;
 pub mod vector;
 
