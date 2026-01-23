@@ -4,6 +4,7 @@ pub mod alignment;
 pub mod axis;
 pub mod baseline;
 pub mod r#box;
+pub mod constraints;
 pub mod edge_insets;
 pub mod flex;
 pub mod fractional_offset;
@@ -18,6 +19,7 @@ pub use alignment::{
 };
 pub use axis::{Axis, AxisDirection, Orientation, VerticalDirection};
 pub use baseline::TextBaseline;
+pub use constraints::BoxConstraints;
 pub use edge_insets::{EdgeInsets, EdgeInsetsDirectional, EdgeInsetsGeometry};
 pub use flex::FlexFit;
 pub use fractional_offset::FractionalOffset;
