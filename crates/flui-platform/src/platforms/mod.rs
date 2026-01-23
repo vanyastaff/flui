@@ -4,9 +4,9 @@
 
 pub mod headless;
 
-// Windows native platform - DISABLED (needs Arc instead of Rc)
-// #[cfg(windows)]
-// pub mod windows;
+// Windows native platform
+#[cfg(windows)]
+pub mod windows;
 
 // Legacy winit backend (deprecated, optional)
 #[cfg(feature = "winit-backend")]
@@ -14,8 +14,8 @@ pub mod winit;
 
 pub use headless::HeadlessPlatform;
 
-// #[cfg(windows)]
-// pub use windows::WindowsPlatform;
+#[cfg(windows)]
+pub use windows::WindowsPlatform;
 
 #[cfg(feature = "winit-backend")]
 pub use winit::WinitPlatform;

@@ -1,8 +1,6 @@
 //! Windows platform implementation
 
-use std::cell::RefCell;
 use std::collections::HashMap;
-use std::rc::Rc;
 use std::sync::Arc;
 use parking_lot::Mutex;
 
@@ -30,7 +28,7 @@ pub struct WindowsPlatform {
     message_window: HWND,
 
     /// All created windows (keyed by HWND)
-    windows: Rc<RefCell<HashMap<isize, Rc<WindowsWindow>>>>,
+    windows: Arc<Mutex<HashMap<isize, Arc<WindowsWindow>>>>,
 
     /// Platform handlers (callbacks from platform to framework)
     handlers: Arc<Mutex<PlatformHandlers>>,
@@ -39,20 +37,27 @@ pub struct WindowsPlatform {
     dpi_awareness: DPI_AWARENESS_CONTEXT,
 }
 
+// SAFETY: HWND and DPI_AWARENESS_CONTEXT are just integer handles and are safe to send/share between threads.
+// Windows API handles are thread-safe by design.
+unsafe impl Send for WindowsPlatform {}
+unsafe impl Sync for WindowsPlatform {}
+
 impl WindowsPlatform {
     /// Create a new Windows platform instance
     pub fn new() -> Result<Self> {
         // Initialize COM for drag-and-drop, clipboard, etc.
         unsafe {
             use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
-            CoInitializeEx(None, COINIT_APARTMENTTHREADED)
-                .context("Failed to initialize COM")?;
+            let hr = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+            if hr.is_err() {
+                return Err(anyhow::anyhow!("Failed to initialize COM: {:?}", hr));
+            }
         }
 
         // Set DPI awareness to per-monitor v2 (best quality)
         let dpi_awareness = unsafe {
-            SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)
-                .context("Failed to set DPI awareness")?;
+            let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+            // Ignore errors - this can fail if already set or on older Windows
             GetThreadDpiAwarenessContext()
         };
 
@@ -63,6 +68,9 @@ impl WindowsPlatform {
 
         // Create message-only window for platform messages
         let message_window = unsafe {
+            let hinstance = GetModuleHandleW(None)
+                .map_err(|e| anyhow::anyhow!("Failed to get module handle: {:?}", e))?;
+
             CreateWindowExW(
                 WINDOW_EX_STYLE(0),
                 WINDOW_CLASS_NAME,
@@ -71,14 +79,14 @@ impl WindowsPlatform {
                 0, 0, 0, 0,
                 HWND_MESSAGE, // Message-only window
                 None,
-                GetModuleHandleW(None).ok(),
+                hinstance,
                 None,
-            ).context("Failed to create message window")?
+            ).map_err(|e| anyhow::anyhow!("Failed to create message window: {:?}", e))?
         };
 
         Ok(Self {
             message_window,
-            windows: Rc::new(RefCell::new(HashMap::new())),
+            windows: Arc::new(Mutex::new(HashMap::new())),
             handlers: Arc::new(Mutex::new(PlatformHandlers::default())),
             dpi_awareness,
         })
@@ -225,8 +233,8 @@ impl WindowsPlatform {
         }
     }
 
-    /// Run the Windows message loop
-    pub fn run(&self) -> Result<()> {
+    /// Run the Windows message loop (internal implementation)
+    fn run_message_loop(&self) -> Result<()> {
         tracing::info!("Starting Windows message loop");
 
         unsafe {
@@ -245,6 +253,64 @@ impl WindowsPlatform {
 }
 
 impl Platform for WindowsPlatform {
+    // ==================== Core System ====================
+
+    fn background_executor(&self) -> Arc<dyn PlatformExecutor> {
+        // TODO: Implement proper executor
+        Arc::new(DummyExecutor)
+    }
+
+    fn foreground_executor(&self) -> Arc<dyn PlatformExecutor> {
+        // TODO: Implement proper executor
+        Arc::new(DummyExecutor)
+    }
+
+    fn text_system(&self) -> Arc<dyn PlatformTextSystem> {
+        // TODO: Implement DirectWrite text system
+        Arc::new(DummyTextSystem)
+    }
+
+    // ==================== Lifecycle ====================
+
+    fn run(&self, on_ready: Box<dyn FnOnce()>) {
+        tracing::info!("Running Windows platform");
+
+        // Call ready callback
+        on_ready();
+
+        // Run message loop
+        if let Err(e) = self.run_message_loop() {
+            tracing::error!("Message loop error: {:?}", e);
+        }
+    }
+
+    fn quit(&self) {
+        tracing::info!("Quitting Windows platform");
+        unsafe {
+            PostQuitMessage(0);
+        }
+    }
+
+    fn request_frame(&self) {
+        // TODO: Implement frame requests
+        tracing::trace!("Frame requested");
+    }
+
+    // ==================== Window Management ====================
+
+    fn active_window(&self) -> Option<WindowId> {
+        unsafe {
+            let hwnd = GetForegroundWindow();
+            if hwnd.is_invalid() {
+                None
+            } else {
+                Some(WindowId(hwnd.0 as u64))
+            }
+        }
+    }
+
+    // ==================== Display Management ====================
+
     fn displays(&self) -> Vec<Arc<dyn PlatformDisplay>> {
         // TODO: Enumerate monitors
         vec![]
@@ -259,25 +325,54 @@ impl Platform for WindowsPlatform {
         tracing::info!("Opening window: {:?}", options.title);
 
         let window = WindowsWindow::new(options, self.windows.clone())?;
-        let hwnd_value = window.hwnd().0;
+        let hwnd_value = window.hwnd().0 as isize;
 
         // Store window
-        self.windows.borrow_mut().insert(hwnd_value, window.clone());
+        self.windows.lock().insert(hwnd_value, window.clone());
 
         Ok(Box::new(window))
     }
 
-    fn clipboard(&self) -> &dyn crate::Clipboard {
-        // TODO: Implement clipboard
-        todo!("Windows clipboard not yet implemented")
+    // ==================== Input & Clipboard ====================
+
+    fn clipboard(&self) -> Arc<dyn Clipboard> {
+        // TODO: Implement Windows clipboard
+        Arc::new(DummyClipboard)
     }
 
-    fn on_window_event(&self, callback: Box<dyn FnMut(WindowEvent)>) {
+    // ==================== Platform Capabilities ====================
+
+    fn capabilities(&self) -> &dyn PlatformCapabilities {
+        // TODO: Return actual capabilities
+        &WINDOWS_CAPABILITIES
+    }
+
+    fn name(&self) -> &'static str {
+        "Windows"
+    }
+
+    // ==================== Callbacks ====================
+
+    fn on_quit(&self, callback: Box<dyn FnMut() + Send>) {
+        self.handlers.lock().quit = Some(callback);
+    }
+
+    fn on_window_event(&self, callback: Box<dyn FnMut(WindowEvent) + Send>) {
         self.handlers.lock().window_event = Some(callback);
     }
 
-    // Note: on_lifecycle_event removed from Platform trait
-    // TODO: Add back if needed
+    // ==================== File System Integration ====================
+
+    fn app_path(&self) -> Result<std::path::PathBuf> {
+        unsafe {
+            let mut buffer = vec![0u16; 512];
+            let len = GetModuleFileNameW(None, &mut buffer);
+            if len == 0 {
+                return Err(windows::core::Error::from_win32().into());
+            }
+            Ok(std::path::PathBuf::from(String::from_utf16_lossy(&buffer[..len as usize])))
+        }
+    }
 }
 
 impl Drop for WindowsPlatform {
@@ -302,9 +397,39 @@ impl Drop for WindowsPlatform {
 /// Platform-specific handlers
 #[derive(Default)]
 struct PlatformHandlers {
-    window_event: Option<Box<dyn FnMut(WindowEvent)>>,
-    lifecycle_event: Option<Box<dyn FnMut(LifecycleEvent)>>,
+    window_event: Option<Box<dyn FnMut(WindowEvent) + Send>>,
+    quit: Option<Box<dyn FnMut() + Send>>,
 }
+
+// ==================== Dummy Implementations ====================
+
+struct DummyExecutor;
+
+impl PlatformExecutor for DummyExecutor {
+    fn spawn(&self, task: Box<dyn FnOnce() + Send>) {
+        // TODO: Use proper thread pool
+        std::thread::spawn(task);
+    }
+}
+
+struct DummyTextSystem;
+
+impl PlatformTextSystem for DummyTextSystem {}
+
+struct DummyClipboard;
+
+impl Clipboard for DummyClipboard {
+    fn read_text(&self) -> Option<String> {
+        None
+    }
+
+    fn write_text(&self, _text: String) {
+        // No-op
+    }
+}
+
+// Windows platform capabilities
+static WINDOWS_CAPABILITIES: DesktopCapabilities = DesktopCapabilities;
 
 #[cfg(test)]
 mod tests {

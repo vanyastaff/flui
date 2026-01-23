@@ -173,7 +173,7 @@ pub fn mouse_button_event(
             px(device_to_logical(x, scale_factor)),
             px(device_to_logical(y, scale_factor)),
         ),
-        delta: Point::zero(), // TODO: Calculate from previous position
+        delta: Point::new(px(0.0), px(0.0)), // TODO: Calculate from previous position
         modifiers,
         phase,
         timestamp: Instant::now(),
@@ -210,7 +210,7 @@ pub fn mouse_move_event(
             px(device_to_logical(x, scale_factor)),
             px(device_to_logical(y, scale_factor)),
         ),
-        delta: Point::zero(), // TODO: Calculate from previous position
+        delta: Point::new(px(0.0), px(0.0)), // TODO: Calculate from previous position
         modifiers,
         phase: PointerPhase::Move,
         timestamp: Instant::now(),

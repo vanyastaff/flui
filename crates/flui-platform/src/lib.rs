@@ -102,9 +102,8 @@ pub use traits::{
 // Re-export platform implementations
 pub use platforms::HeadlessPlatform;
 
-// Windows disabled (needs refactoring to Arc)
-// #[cfg(windows)]
-// pub use platforms::WindowsPlatform;
+#[cfg(windows)]
+pub use platforms::WindowsPlatform;
 
 #[cfg(feature = "winit-backend")]
 pub use platforms::WinitPlatform;
@@ -144,22 +143,22 @@ pub fn current_platform() -> Arc<dyn Platform> {
         return Arc::new(HeadlessPlatform::new());
     }
 
+    // Windows: Native Win32 platform
+    #[cfg(windows)]
+    {
+        tracing::info!("Using Windows native platform (Win32 API)");
+        return Arc::new(WindowsPlatform::new().expect("Failed to create Windows platform"));
+    }
+
     // Winit backend (cross-platform)
-    #[cfg(feature = "winit-backend")]
+    #[cfg(all(feature = "winit-backend", not(windows)))]
     {
         tracing::info!("Using winit platform (cross-platform)");
         return Arc::new(WinitPlatform::new());
     }
 
-    // Windows: Native Win32 platform (DISABLED - needs refactoring)
-    // #[cfg(windows)]
-    // {
-    //     tracing::info!("Using Windows native platform (Win32 API)");
-    //     return Arc::new(WindowsPlatform::new().expect("Failed to create Windows platform"));
-    // }
-
     // Fallback to headless
-    #[cfg(not(feature = "winit-backend"))]
+    #[cfg(all(not(windows), not(feature = "winit-backend")))]
     {
         tracing::warn!("No platform backend enabled, falling back to headless");
         Arc::new(HeadlessPlatform::new())

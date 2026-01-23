@@ -69,7 +69,7 @@ pub unsafe fn load_cursor_style(style: PCWSTR) -> Result<HCURSOR> {
 /// Check if a key is pressed
 #[inline]
 pub unsafe fn is_key_pressed(vkey: i32) -> bool {
-    (GetAsyncKeyState(vkey) & 0x8000u16 as i32) != 0
+    (GetAsyncKeyState(vkey) as i32 & 0x8000) != 0
 }
 
 /// DPI constants

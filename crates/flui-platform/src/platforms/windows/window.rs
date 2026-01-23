@@ -1,9 +1,9 @@
 //! Windows window implementation
 
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ptr::NonNull;
-use std::rc::Rc;
+use std::sync::Arc;
+use parking_lot::Mutex;
 
 use anyhow::{Context, Result};
 use raw_window_handle::{HasWindowHandle, HasDisplayHandle, RawWindowHandle, RawDisplayHandle};
@@ -15,7 +15,7 @@ use windows::Win32::UI::HiDpi::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::{HSTRING, PCWSTR};
 
-use flui_types::geometry::{Bounds, DevicePixels, Pixels, Size, device_px};
+use flui_types::geometry::{Bounds, DevicePixels, Pixels, Point, Size, device_px, px};
 use crate::traits::*;
 use super::util::{logical_to_device, USER_DEFAULT_SCREEN_DPI};
 
@@ -27,11 +27,16 @@ pub struct WindowsWindow {
     hwnd: HWND,
 
     /// Window state
-    state: Rc<RefCell<WindowState>>,
+    state: Arc<Mutex<WindowState>>,
 
     /// Reference to platform's window map (for cleanup)
-    windows_map: Rc<RefCell<HashMap<isize, Rc<WindowsWindow>>>>,
+    windows_map: Arc<Mutex<HashMap<isize, Arc<WindowsWindow>>>>,
 }
+
+// SAFETY: HWND is just an integer handle and is safe to send/share between threads.
+// Windows API handles are thread-safe by design.
+unsafe impl Send for WindowsWindow {}
+unsafe impl Sync for WindowsWindow {}
 
 /// Mutable window state
 struct WindowState {
@@ -55,8 +60,8 @@ impl WindowsWindow {
     /// Create a new Windows window
     pub fn new(
         options: WindowOptions,
-        windows_map: Rc<RefCell<HashMap<isize, Rc<WindowsWindow>>>>,
-    ) -> Result<Rc<Self>> {
+        windows_map: Arc<Mutex<HashMap<isize, Arc<WindowsWindow>>>>,
+    ) -> Result<Arc<Self>> {
         unsafe {
             let hinstance = GetModuleHandleW(None).context("Failed to get module handle")?;
 
@@ -65,13 +70,15 @@ impl WindowsWindow {
             let scale_factor = dpi as f32 / USER_DEFAULT_SCREEN_DPI as f32;
 
             // Convert logical size to device pixels
-            let width = logical_to_device(options.bounds.size.width.0, scale_factor);
-            let height = logical_to_device(options.bounds.size.height.0, scale_factor);
-            let x = logical_to_device(options.bounds.origin.x.0, scale_factor);
-            let y = logical_to_device(options.bounds.origin.y.0, scale_factor);
+            let width = logical_to_device(options.size.width.0, scale_factor);
+            let height = logical_to_device(options.size.height.0, scale_factor);
+
+            // Default position (center on screen)
+            let x = CW_USEDEFAULT;
+            let y = CW_USEDEFAULT;
 
             // Determine window style
-            let style = if options.decorations == Decorations::Client {
+            let style = if options.decorated {
                 WS_OVERLAPPEDWINDOW
             } else {
                 WS_POPUP | WS_VISIBLE
@@ -105,16 +112,19 @@ impl WindowsWindow {
                 hwnd, width, height, x, y, scale_factor
             );
 
-            // Create window state
-            let state = Rc::new(RefCell::new(WindowState {
-                bounds: options.bounds,
+            // Create window state with default bounds (actual bounds will be set after creation)
+            let state = Arc::new(Mutex::new(WindowState {
+                bounds: Bounds {
+                    origin: Point::new(px(0.0), px(0.0)),
+                    size: options.size,
+                },
                 scale_factor,
                 visible: false,
                 focused: false,
                 title: options.title.clone(),
             }));
 
-            let window = Rc::new(Self {
+            let window = Arc::new(Self {
                 hwnd,
                 state,
                 windows_map,
@@ -124,7 +134,7 @@ impl WindowsWindow {
             if options.visible {
                 ShowWindow(hwnd, SW_SHOW);
                 UpdateWindow(hwnd).ok();
-                window.state.borrow_mut().visible = true;
+                window.state.lock().visible = true;
             }
 
             Ok(window)
@@ -138,19 +148,54 @@ impl WindowsWindow {
 
     /// Get current window bounds
     pub fn bounds(&self) -> Bounds<Pixels> {
-        self.state.borrow().bounds
+        let state = self.state.lock();
+        Bounds {
+            origin: state.bounds.origin,
+            size: state.bounds.size,
+        }
     }
 
     /// Get current scale factor
     pub fn scale_factor(&self) -> f32 {
-        self.state.borrow().scale_factor
+        self.state.lock().scale_factor
+    }
+}
+
+impl PlatformWindow for Arc<WindowsWindow> {
+    fn physical_size(&self) -> Size<DevicePixels> {
+        self.as_ref().physical_size()
+    }
+
+    fn logical_size(&self) -> Size<Pixels> {
+        self.as_ref().logical_size()
+    }
+
+    fn scale_factor(&self) -> f64 {
+        self.as_ref().scale_factor() as f64
+    }
+
+    fn request_redraw(&self) {
+        self.as_ref().request_redraw()
+    }
+
+    fn is_focused(&self) -> bool {
+        self.as_ref().is_focused()
+    }
+
+    fn is_visible(&self) -> bool {
+        self.as_ref().is_visible()
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self.as_ref()
     }
 }
 
 impl PlatformWindow for WindowsWindow {
     fn physical_size(&self) -> Size<DevicePixels> {
-        let logical = self.state.borrow().bounds.size;
-        let scale = self.state.borrow().scale_factor;
+        let state = self.state.lock();
+        let logical = state.bounds.size;
+        let scale = state.scale_factor;
         Size::new(
             device_px(logical_to_device(logical.width.0, scale)),
             device_px(logical_to_device(logical.height.0, scale)),
@@ -158,11 +203,11 @@ impl PlatformWindow for WindowsWindow {
     }
 
     fn logical_size(&self) -> Size<Pixels> {
-        self.state.borrow().bounds.size
+        self.state.lock().bounds.size
     }
 
     fn scale_factor(&self) -> f64 {
-        self.state.borrow().scale_factor as f64
+        self.state.lock().scale_factor as f64
     }
 
     fn request_redraw(&self) {
@@ -172,11 +217,11 @@ impl PlatformWindow for WindowsWindow {
     }
 
     fn is_focused(&self) -> bool {
-        self.state.borrow().focused
+        self.state.lock().focused
     }
 
     fn is_visible(&self) -> bool {
-        self.state.borrow().visible
+        self.state.lock().visible
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
@@ -187,15 +232,19 @@ impl PlatformWindow for WindowsWindow {
 // Implement raw-window-handle for wgpu integration
 impl HasWindowHandle for WindowsWindow {
     fn window_handle(&self) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
+        use std::num::NonZeroIsize;
+
+        let hwnd_value = self.hwnd.0 as isize;
         let mut handle = Win32WindowHandle::new(
-            NonNull::new(self.hwnd.0 as *mut std::ffi::c_void)
+            NonZeroIsize::new(hwnd_value)
                 .ok_or(raw_window_handle::HandleError::Unavailable)?
         );
 
         unsafe {
             let hinstance = GetModuleHandleW(None)
                 .map_err(|_| raw_window_handle::HandleError::Unavailable)?;
-            handle.hinstance = NonNull::new(hinstance.0 as *mut std::ffi::c_void);
+            let hinstance_value = hinstance.0 as isize;
+            handle.hinstance = NonZeroIsize::new(hinstance_value);
         }
 
         Ok(unsafe { raw_window_handle::WindowHandle::borrow_raw(RawWindowHandle::Win32(handle)) })
@@ -213,8 +262,8 @@ impl Clone for WindowsWindow {
     fn clone(&self) -> Self {
         Self {
             hwnd: self.hwnd,
-            state: self.state.clone(),
-            windows_map: self.windows_map.clone(),
+            state: Arc::clone(&self.state),
+            windows_map: Arc::clone(&self.windows_map),
         }
     }
 }
@@ -222,7 +271,7 @@ impl Clone for WindowsWindow {
 impl Drop for WindowsWindow {
     fn drop(&mut self) {
         // Only destroy if this is the last reference
-        if Rc::strong_count(&self.state) == 1 {
+        if Arc::strong_count(&self.state) == 1 {
             tracing::debug!("Destroying window HWND {:?}", self.hwnd);
 
             unsafe {
@@ -232,7 +281,8 @@ impl Drop for WindowsWindow {
             }
 
             // Remove from windows map
-            self.windows_map.borrow_mut().remove(&self.hwnd.0);
+            let hwnd_key = self.hwnd.0 as isize;
+            self.windows_map.lock().remove(&hwnd_key);
         }
     }
 }
@@ -244,17 +294,16 @@ mod tests {
     #[test]
     fn test_window_creation() {
         let options = WindowOptions {
-            bounds: Bounds {
-                origin: Point::new(px(100.0), px(100.0)),
-                size: Size::new(px(800.0), px(600.0)),
-            },
             title: "Test Window".to_string(),
+            size: Size::new(px(800.0), px(600.0)),
+            resizable: true,
             visible: false,
-            decorations: Decorations::Client,
-            ..Default::default()
+            decorated: true,
+            min_size: None,
+            max_size: None,
         };
 
-        let windows_map = Rc::new(RefCell::new(HashMap::new()));
+        let windows_map = Arc::new(Mutex::new(HashMap::new()));
         let result = WindowsWindow::new(options, windows_map);
 
         assert!(result.is_ok(), "Failed to create window: {:?}", result.err());
