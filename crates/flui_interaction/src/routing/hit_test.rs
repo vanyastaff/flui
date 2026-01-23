@@ -16,6 +16,8 @@
 //! - HitTestEntry: gestures/hit_test.dart
 
 use crate::events::{CursorIcon, PointerEvent, ScrollEventData};
+use flui_types::geometry::Pixels;
+
 use flui_types::geometry::{Matrix4, Offset};
 use std::sync::Arc;
 
@@ -184,7 +186,7 @@ pub struct HitTestResult {
 #[derive(Debug, Clone)]
 enum TransformPart {
     Matrix(Matrix4),
-    Offset(Offset),
+    Offset(Offset<Pixels>),
 }
 
 impl TransformPart {
@@ -265,7 +267,7 @@ impl HitTestResult {
     /// Pushes an offset translation onto the stack.
     ///
     /// Flutter equivalent: `@protected void pushOffset(Offset offset)`
-    pub fn push_offset(&mut self, offset: Offset) {
+    pub fn push_offset(&mut self, offset: Offset<Pixels>) {
         self.local_transforms.push(TransformPart::Offset(offset));
     }
 
@@ -396,7 +398,7 @@ impl Drop for TransformGuard<'_> {
 /// Trait for objects that can be hit-tested.
 pub trait HitTestable: crate::sealed::hit_testable::Sealed {
     /// Performs hit testing at the given position.
-    fn hit_test(&self, position: Offset, result: &mut HitTestResult) -> bool;
+    fn hit_test(&self, position: Offset<Pixels>, result: &mut HitTestResult) -> bool;
 
     /// Returns the hit test behavior.
     fn hit_test_behavior(&self) -> HitTestBehavior {
@@ -405,7 +407,7 @@ pub trait HitTestable: crate::sealed::hit_testable::Sealed {
 }
 
 impl<T: crate::sealed::CustomHitTestable> HitTestable for T {
-    fn hit_test(&self, position: Offset, result: &mut HitTestResult) -> bool {
+    fn hit_test(&self, position: Offset<Pixels>, result: &mut HitTestResult) -> bool {
         self.perform_hit_test(position, result)
     }
 

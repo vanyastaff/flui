@@ -43,11 +43,12 @@
 //! ```
 
 use parking_lot::Mutex;
+
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::events::{CursorIcon, InputEvent, PointerEvent, PointerEventExt};
-use flui_types::geometry::Offset;
+use flui_types::geometry::{Offset, Pixels};
 
 use crate::ids::RegionId;
 
@@ -56,13 +57,13 @@ pub use crate::events::DeviceId;
 use crate::routing::HitTestResult;
 
 /// Callback for mouse enter events
-pub type MouseEnterCallback = Arc<dyn Fn(DeviceId, Offset) + Send + Sync>;
+pub type MouseEnterCallback = Arc<dyn Fn(DeviceId, Offset<Pixels>) + Send + Sync>;
 
 /// Callback for mouse exit events
-pub type MouseExitCallback = Arc<dyn Fn(DeviceId, Offset) + Send + Sync>;
+pub type MouseExitCallback = Arc<dyn Fn(DeviceId, Offset<Pixels>) + Send + Sync>;
 
 /// Callback for mouse hover events
-pub type MouseHoverCallback = Arc<dyn Fn(DeviceId, Offset) + Send + Sync>;
+pub type MouseHoverCallback = Arc<dyn Fn(DeviceId, Offset<Pixels>) + Send + Sync>;
 
 /// Annotation for a mouse-sensitive region
 ///
@@ -94,7 +95,7 @@ impl MouseTrackerAnnotation {
     /// Sets the enter callback
     pub fn with_enter<F>(mut self, callback: F) -> Self
     where
-        F: Fn(DeviceId, Offset) + Send + Sync + 'static,
+        F: Fn(DeviceId, Offset<Pixels>) + Send + Sync + 'static,
     {
         self.on_enter = Some(Arc::new(callback));
         self
@@ -103,7 +104,7 @@ impl MouseTrackerAnnotation {
     /// Sets the exit callback
     pub fn with_exit<F>(mut self, callback: F) -> Self
     where
-        F: Fn(DeviceId, Offset) + Send + Sync + 'static,
+        F: Fn(DeviceId, Offset<Pixels>) + Send + Sync + 'static,
     {
         self.on_exit = Some(Arc::new(callback));
         self
@@ -112,7 +113,7 @@ impl MouseTrackerAnnotation {
     /// Sets the hover callback
     pub fn with_hover<F>(mut self, callback: F) -> Self
     where
-        F: Fn(DeviceId, Offset) + Send + Sync + 'static,
+        F: Fn(DeviceId, Offset<Pixels>) + Send + Sync + 'static,
     {
         self.on_hover = Some(Arc::new(callback));
         self
@@ -123,7 +124,7 @@ impl MouseTrackerAnnotation {
 #[derive(Debug, Clone)]
 struct DeviceState {
     /// Last known position
-    last_position: Offset,
+    last_position: Offset<Pixels>,
     /// Set of regions currently under this device
     active_regions: HashSet<RegionId>,
     /// Current mouse cursor for this device
@@ -231,7 +232,7 @@ impl MouseTracker {
                 inner.devices.insert(
                     *device_id,
                     DeviceState {
-                        last_position: Offset::ZERO,
+                        last_position: Offset::new(Pixels::ZERO, Pixels::ZERO),
                         active_regions: HashSet::new(),
                         current_cursor: CursorIcon::Default,
                     },
@@ -363,7 +364,7 @@ impl MouseTracker {
     }
 
     /// Gets the last known position for a device
-    pub fn device_position(&self, device_id: DeviceId) -> Option<Offset> {
+    pub fn device_position(&self, device_id: DeviceId) -> Option<Offset<Pixels>> {
         self.inner
             .lock()
             .devices

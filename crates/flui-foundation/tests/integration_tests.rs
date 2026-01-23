@@ -346,16 +346,13 @@ fn test_custom_diagnosticable() {
     }
 
     impl Diagnosticable for CustomWidget {
-        fn debug_fill_properties(&self, properties: &mut Vec<DiagnosticsProperty>) {
-            properties.push(DiagnosticsProperty::new("width", self.width));
-            properties.push(DiagnosticsProperty::new("height", self.height));
+        fn debug_fill_properties(&self, properties: &mut DiagnosticsBuilder) {
+            properties.add("width", self.width);
+            properties.add("height", self.height);
             if !self.visible {
-                properties.push(
-                    DiagnosticsProperty::new("visible", self.visible)
-                        .with_level(DiagnosticLevel::Warning),
-                );
+                properties.add_with_level("visible", self.visible, DiagnosticLevel::Warning);
             }
-            properties.push(DiagnosticsProperty::new("childCount", self.child_count));
+            properties.add("childCount", self.child_count);
         }
     }
 

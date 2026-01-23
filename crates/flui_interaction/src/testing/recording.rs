@@ -26,6 +26,8 @@
 //! ```
 
 use crate::events::{PointerEvent, PointerEventData, PointerType};
+use flui_types::geometry::Pixels;
+
 use crate::ids::PointerId;
 use flui_types::Offset;
 use std::time::{Duration, Instant};
@@ -41,7 +43,7 @@ pub struct RecordedEvent {
     /// The event type
     pub event_type: RecordedEventType,
     /// Position of the event
-    pub position: Offset,
+    pub position: Offset<Pixels>,
     /// Device kind
     pub device_kind: PointerType,
     /// Pressure (if available)
@@ -73,7 +75,7 @@ impl RecordedEvent {
         time_offset: Duration,
         pointer: PointerId,
         event_type: RecordedEventType,
-        position: Offset,
+        position: Offset<Pixels>,
     ) -> Self {
         Self {
             time_offset,
@@ -251,7 +253,7 @@ impl GestureRecorder {
     }
 
     /// Record a pointer down event
-    pub fn record_down(&mut self, pointer: PointerId, position: Offset) {
+    pub fn record_down(&mut self, pointer: PointerId, position: Offset<Pixels>) {
         let time_offset = self.time_offset();
         let event = RecordedEvent::new(time_offset, pointer, RecordedEventType::Down, position)
             .with_device_kind(self.device_kind);
@@ -259,7 +261,7 @@ impl GestureRecorder {
     }
 
     /// Record a pointer move event
-    pub fn record_move(&mut self, pointer: PointerId, position: Offset) {
+    pub fn record_move(&mut self, pointer: PointerId, position: Offset<Pixels>) {
         let time_offset = self.time_offset();
         let event = RecordedEvent::new(time_offset, pointer, RecordedEventType::Move, position)
             .with_device_kind(self.device_kind);
@@ -267,7 +269,7 @@ impl GestureRecorder {
     }
 
     /// Record a pointer up event
-    pub fn record_up(&mut self, pointer: PointerId, position: Offset) {
+    pub fn record_up(&mut self, pointer: PointerId, position: Offset<Pixels>) {
         let time_offset = self.time_offset();
         let event = RecordedEvent::new(time_offset, pointer, RecordedEventType::Up, position)
             .with_device_kind(self.device_kind);
@@ -275,7 +277,7 @@ impl GestureRecorder {
     }
 
     /// Record a pointer cancel event
-    pub fn record_cancel(&mut self, pointer: PointerId, position: Offset) {
+    pub fn record_cancel(&mut self, pointer: PointerId, position: Offset<Pixels>) {
         let time_offset = self.time_offset();
         let event = RecordedEvent::new(time_offset, pointer, RecordedEventType::Cancel, position)
             .with_device_kind(self.device_kind);
@@ -453,7 +455,7 @@ pub struct GestureBuilder;
 
 impl GestureBuilder {
     /// Create a simple tap gesture
-    pub fn tap(position: Offset) -> GestureRecording {
+    pub fn tap(position: Offset<Pixels>) -> GestureRecording {
         let mut recording = GestureRecording::with_name("tap");
         let pointer = PointerId::new(0);
 
@@ -474,7 +476,7 @@ impl GestureBuilder {
     }
 
     /// Create a double tap gesture
-    pub fn double_tap(position: Offset) -> GestureRecording {
+    pub fn double_tap(position: Offset<Pixels>) -> GestureRecording {
         let mut recording = GestureRecording::with_name("double_tap");
         let pointer = PointerId::new(0);
 
@@ -510,7 +512,7 @@ impl GestureBuilder {
     }
 
     /// Create a long press gesture
-    pub fn long_press(position: Offset, duration_ms: u64) -> GestureRecording {
+    pub fn long_press(position: Offset<Pixels>, duration_ms: u64) -> GestureRecording {
         let mut recording = GestureRecording::with_name("long_press");
         let pointer = PointerId::new(0);
 
@@ -531,17 +533,17 @@ impl GestureBuilder {
     }
 
     /// Create a horizontal drag gesture
-    pub fn horizontal_drag(start: Offset, end: Offset, steps: usize) -> GestureRecording {
+    pub fn horizontal_drag(start: Offset<Pixels>, end: Offset<Pixels>, steps: usize) -> GestureRecording {
         Self::drag(start, end, steps, "horizontal_drag")
     }
 
     /// Create a vertical drag gesture
-    pub fn vertical_drag(start: Offset, end: Offset, steps: usize) -> GestureRecording {
+    pub fn vertical_drag(start: Offset<Pixels>, end: Offset<Pixels>, steps: usize) -> GestureRecording {
         Self::drag(start, end, steps, "vertical_drag")
     }
 
     /// Create a drag gesture with intermediate steps
-    pub fn drag(start: Offset, end: Offset, steps: usize, name: &str) -> GestureRecording {
+    pub fn drag(start: Offset<Pixels>, end: Offset<Pixels>, steps: usize, name: &str) -> GestureRecording {
         let mut recording = GestureRecording::with_name(name);
         let pointer = PointerId::new(0);
 
@@ -582,7 +584,7 @@ impl GestureBuilder {
 
     /// Create a pinch/scale gesture with two fingers
     pub fn pinch(
-        center: Offset,
+        center: Offset<Pixels>,
         start_distance: f32,
         end_distance: f32,
         steps: usize,
@@ -659,7 +661,7 @@ impl GestureBuilder {
     }
 
     /// Create a swipe gesture (fast drag)
-    pub fn swipe(start: Offset, end: Offset) -> GestureRecording {
+    pub fn swipe(start: Offset<Pixels>, end: Offset<Pixels>) -> GestureRecording {
         Self::drag(start, end, 5, "swipe")
     }
 }

@@ -17,6 +17,8 @@ use crate::events::{
     make_cancel_event, make_down_event, make_move_event, make_up_event, Code, Key, KeyState,
     KeyboardEvent, Modifiers, NamedKey, PointerEvent, PointerType,
 };
+use flui_types::geometry::Pixels;
+
 use flui_types::geometry::Offset;
 use ui_events::keyboard::Location;
 
@@ -46,19 +48,19 @@ pub fn device_kind_from_button(button: u32) -> PointerType {
 
 /// Create a PointerEvent::Down
 #[inline]
-pub fn pointer_down(position: Offset, device_kind: PointerType) -> PointerEvent {
+pub fn pointer_down(position: Offset<Pixels>, device_kind: PointerType) -> PointerEvent {
     make_down_event(position, device_kind)
 }
 
 /// Create a PointerEvent::Up
 #[inline]
-pub fn pointer_up(position: Offset, device_kind: PointerType) -> PointerEvent {
+pub fn pointer_up(position: Offset<Pixels>, device_kind: PointerType) -> PointerEvent {
     make_up_event(position, device_kind)
 }
 
 /// Create a PointerEvent::Move
 #[inline]
-pub fn pointer_move(position: Offset, device_kind: PointerType) -> PointerEvent {
+pub fn pointer_move(position: Offset<Pixels>, device_kind: PointerType) -> PointerEvent {
     make_move_event(position, device_kind)
 }
 

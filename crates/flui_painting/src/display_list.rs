@@ -11,7 +11,7 @@
 //! ```
 
 use flui_types::{
-    geometry::{Matrix4, Offset, Point, RRect, Rect, Size},
+    geometry::{Matrix4, Offset, Pixels, Point, RRect, Rect, Size},
     painting::{Image, Path},
     styling::Color,
     typography::{InlineSpan, TextStyle},
@@ -28,7 +28,7 @@ pub struct PointerEvent {
     /// The type of pointer event.
     pub kind: PointerEventKind,
     /// The position of the event in local coordinates.
-    pub position: Offset,
+    pub position: Offset<Pixels>,
     /// The pointer ID.
     pub pointer: i32,
     /// The button state (for mouse events).
@@ -56,7 +56,7 @@ pub enum PointerEventKind {
 
 impl PointerEvent {
     /// Create a new pointer event.
-    pub fn new(kind: PointerEventKind, position: Offset, pointer: i32) -> Self {
+    pub fn new(kind: PointerEventKind, position: Offset<Pixels>, pointer: i32) -> Self {
         Self {
             kind,
             position,
@@ -99,7 +99,7 @@ impl HitRegion {
     }
 
     /// Check if a point is inside this region
-    pub fn contains(&self, point: Point) -> bool {
+    pub fn contains(&self, point: Point<Pixels>) -> bool {
         self.bounds.contains(point)
     }
 }
@@ -575,7 +575,7 @@ impl DisplayList {
             if self.commands.is_empty() {
                 self.bounds = cmd_bounds;
             } else {
-                self.bounds = self.bounds.union(cmd_bounds);
+                self.bounds = self.bounds.union(&cmd_bounds);
             }
         }
         self.commands.push(command);
@@ -628,7 +628,7 @@ impl DisplayList {
                 if self.bounds == Rect::ZERO {
                     self.bounds = cmd_bounds;
                 } else {
-                    self.bounds = self.bounds.union(cmd_bounds);
+                    self.bounds = self.bounds.union(&cmd_bounds);
                 }
             }
         }
@@ -732,7 +732,7 @@ impl DisplayList {
 
             // Update bounds
             if !other.bounds.is_empty() {
-                self.bounds = self.bounds.union(other.bounds);
+                self.bounds = self.bounds.union(&other.bounds);
             }
         }
 
@@ -1009,9 +1009,9 @@ pub enum DrawCommand {
     /// Draw a line
     DrawLine {
         /// Start point
-        p1: Point,
+        p1: Point<Pixels>,
         /// End point
-        p2: Point,
+        p2: Point<Pixels>,
         /// Paint style (color, stroke width, etc.)
         paint: Paint,
         /// Transform at recording time
@@ -1041,7 +1041,7 @@ pub enum DrawCommand {
     /// Draw a circle
     DrawCircle {
         /// Center point
-        center: Point,
+        center: Point<Pixels>,
         /// Radius
         radius: f32,
         /// Paint style
@@ -1076,9 +1076,9 @@ pub enum DrawCommand {
         /// Text content
         text: String,
         /// Position offset
-        offset: Offset,
+        offset: Offset<Pixels>,
         /// Pre-computed size of the text (for bounds calculation)
-        size: Size,
+        size: Size<Pixels>,
         /// Text style (font, size, etc.)
         style: TextStyle,
         /// Paint style (color, etc.)
@@ -1092,7 +1092,7 @@ pub enum DrawCommand {
         /// Rich text span (with nested styles)
         span: InlineSpan,
         /// Position offset
-        offset: Offset,
+        offset: Offset<Pixels>,
         /// Text scale factor for accessibility
         text_scale_factor: f64,
         /// Transform at recording time
@@ -1334,7 +1334,7 @@ pub enum DrawCommand {
         /// Point drawing mode
         mode: PointMode,
         /// Points to draw
-        points: Vec<Point>,
+        points: Vec<Point<Pixels>>,
         /// Paint style
         paint: Paint,
         /// Transform at recording time
@@ -1344,11 +1344,11 @@ pub enum DrawCommand {
     /// Draw custom vertices with optional colors and texture coordinates
     DrawVertices {
         /// Vertex positions
-        vertices: Vec<Point>,
+        vertices: Vec<Point<Pixels>>,
         /// Optional vertex colors (must match vertices length)
         colors: Option<Vec<Color>>,
         /// Optional texture coordinates (must match vertices length)
-        tex_coords: Option<Vec<Point>>,
+        tex_coords: Option<Vec<Point<Pixels>>>,
         /// Triangle indices (groups of 3)
         indices: Vec<u16>,
         /// Paint style
@@ -1672,7 +1672,8 @@ impl DrawCommand {
                 let stroke_outset = paint.effective_stroke_width() * 0.5;
                 let effective_radius = radius + stroke_outset;
                 let size = Size::new(effective_radius * 2.0, effective_radius * 2.0);
-                let local_bounds = Rect::from_center_size(*center, size);
+                let center_f32 = center.map(|p| p.0);
+                let local_bounds = Rect::from_center_size(center_f32, size);
                 Some(transform.transform_rect(&local_bounds))
             }
             DrawCommand::DrawOval {
@@ -1703,10 +1704,10 @@ impl DrawCommand {
             } => {
                 // Account for stroke width
                 let stroke_half = paint.effective_stroke_width() * 0.5;
-                let min_x = p1.x.min(p2.x) - stroke_half;
-                let min_y = p1.y.min(p2.y) - stroke_half;
-                let max_x = p1.x.max(p2.x) + stroke_half;
-                let max_y = p1.y.max(p2.y) + stroke_half;
+                let min_x = p1.x.0.min(p2.x.0) - stroke_half;
+                let min_y = p1.y.0.min(p2.y.0) - stroke_half;
+                let max_x = p1.x.0.max(p2.x.0) + stroke_half;
+                let max_y = p1.y.0.max(p2.y.0) + stroke_half;
                 let local_bounds = Rect::from_ltrb(min_x, min_y, max_x, max_y);
                 Some(transform.transform_rect(&local_bounds))
             }
@@ -1831,7 +1832,7 @@ impl DrawCommand {
 
                     // Union with existing bounds
                     combined_bounds = match combined_bounds {
-                        Some(existing) => Some(existing.union(screen_bounds)),
+                        Some(existing) => Some(existing.union(&screen_bounds)),
                         None => Some(screen_bounds),
                     };
                 }

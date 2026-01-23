@@ -223,21 +223,23 @@ mod tests {
         }
     }
 
+    impl From<TestId> for usize {
+        fn from(id: TestId) -> usize {
+            id.0.get()
+        }
+    }
+
     impl Identifier for TestId {
-        fn new(value: usize) -> Self {
-            Self(std::num::NonZeroUsize::new(value).expect("ID cannot be 0"))
-        }
-
-        fn new_checked(value: usize) -> Option<Self> {
-            std::num::NonZeroUsize::new(value).map(Self)
-        }
-
         fn get(self) -> usize {
             self.0.get()
         }
 
-        unsafe fn new_unchecked(value: usize) -> Self {
-            Self(std::num::NonZeroUsize::new_unchecked(value))
+        fn zip(index: usize) -> Self {
+            Self(std::num::NonZeroUsize::new(index).expect("TestId cannot be 0"))
+        }
+
+        fn try_zip(index: usize) -> Option<Self> {
+            std::num::NonZeroUsize::new(index).map(Self)
         }
     }
 
@@ -254,7 +256,7 @@ mod tests {
     #[test]
     fn test_node_trait() {
         let _node = TestNode { value: 42 };
-        let id = TestId::new(1);
+        let id = TestId::zip(1);
         assert_eq!(id.get(), 1);
     }
 
@@ -283,13 +285,13 @@ mod tests {
 
     #[test]
     fn test_identifier_checked() {
-        assert!(TestId::new_checked(0).is_none());
-        assert!(TestId::new_checked(1).is_some());
+        assert!(TestId::try_zip(0).is_none());
+        assert!(TestId::try_zip(1).is_some());
     }
 
     #[test]
-    #[should_panic(expected = "ID cannot be 0")]
+    #[should_panic(expected = "TestId cannot be 0")]
     fn test_identifier_zero_panics() {
-        let _ = TestId::new(0);
+        let _ = TestId::zip(0);
     }
 }

@@ -5,7 +5,8 @@
 
 use flui_view::{
     BuildContext, BuildContextExt, BuildOwner, ElementBase, ElementBuildContext,
-    ElementBuildContextBuilder, ElementTree, Lifecycle, StatelessElement, StatelessView, View,
+    ElementBuildContextBuilder, ElementTree, Lifecycle, StatelessBehavior, StatelessElement,
+    StatelessView, View,
 };
 use parking_lot::RwLock;
 use std::any::TypeId;
@@ -29,7 +30,7 @@ impl StatelessView for SimpleView {
 
 impl View for SimpleView {
     fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(StatelessElement::new(self))
+        Box::new(StatelessElement::new(self, StatelessBehavior))
     }
 }
 
@@ -47,7 +48,7 @@ impl StatelessView for ChildView {
 
 impl View for ChildView {
     fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(StatelessElement::new(self))
+        Box::new(StatelessElement::new(self, StatelessBehavior))
     }
 }
 

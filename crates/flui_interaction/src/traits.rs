@@ -8,6 +8,9 @@
 //! - **Marker traits**: Compile-time constraints
 
 use crate::events::{PointerEvent, PointerEventExt as EventsPointerEventExt};
+use flui_types::geometry::Pixels;
+use flui_types::geometry::PixelDelta;
+
 use crate::ids::PointerId;
 use crate::routing::HitTestEntry;
 use flui_types::geometry::Offset;
@@ -86,7 +89,7 @@ pub type BoxedCallback<D> = Box<dyn Fn(D) + Send + Sync>;
 /// Adds commonly needed methods without modifying the original type.
 pub trait PointerEventExtTrait {
     /// Returns the position of this pointer event.
-    fn position(&self) -> Offset;
+    fn position(&self) -> Offset<Pixels>;
 
     /// Returns the pointer/device ID.
     fn pointer_id(&self) -> PointerId;
@@ -108,7 +111,7 @@ pub trait PointerEventExtTrait {
 }
 
 impl PointerEventExtTrait for PointerEvent {
-    fn position(&self) -> Offset {
+    fn position(&self) -> Offset<Pixels> {
         // Use the PointerEventExt trait from events module
         EventsPointerEventExt::position(self)
     }
@@ -174,16 +177,16 @@ pub trait GestureRecognizerExt {
     /// * `initial` - Initial pointer position
     /// * `current` - Current pointer position
     /// * `slop` - Maximum allowed movement (typically 18px)
-    fn exceeds_slop(initial: Offset, current: Offset, slop: f32) -> bool {
+    fn exceeds_slop(initial: Offset<Pixels>, current: Offset<Pixels>, slop: f32) -> bool {
         let delta = current - initial;
         delta.distance() > slop
     }
 
     /// Calculates the primary delta for a given drag axis.
-    fn primary_delta(delta: Offset, axis: DragAxis) -> f32 {
+    fn primary_delta(delta: Offset<PixelDelta>, axis: DragAxis) -> f32 {
         match axis {
-            DragAxis::Vertical => delta.dy,
-            DragAxis::Horizontal => delta.dx,
+            DragAxis::Vertical => delta.dy.get(),
+            DragAxis::Horizontal => delta.dx.get(),
             DragAxis::Free => delta.distance(),
         }
     }

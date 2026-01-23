@@ -4,7 +4,8 @@
 
 use flui_foundation::ElementId;
 use flui_view::{
-    BuildContext, ElementBase, ElementTree, Lifecycle, StatelessElement, StatelessView, View,
+    BuildContext, ElementBase, ElementTree, Lifecycle, StatelessBehavior, StatelessElement,
+    StatelessView, View,
 };
 
 // ============================================================================
@@ -24,7 +25,7 @@ impl StatelessView for TestView {
 
 impl View for TestView {
     fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(StatelessElement::new(self))
+        Box::new(StatelessElement::new(self, StatelessBehavior))
     }
 }
 

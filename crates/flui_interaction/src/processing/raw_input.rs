@@ -36,6 +36,9 @@
 //! ```
 
 use crate::events::{PointerEvent, PointerType};
+use flui_types::geometry::{Pixels, px};
+use flui_types::geometry::PixelDelta;
+
 use crate::ids::PointerId;
 use flui_types::geometry::Offset;
 use parking_lot::Mutex;
@@ -60,7 +63,7 @@ pub enum RawPointerEvent {
         /// Pointer identifier.
         pointer: PointerId,
         /// Position in logical pixels.
-        position: Offset,
+        position: Offset<Pixels>,
         /// Device type.
         device_kind: PointerType,
         /// Event timestamp.
@@ -72,9 +75,9 @@ pub enum RawPointerEvent {
         /// Pointer identifier.
         pointer: PointerId,
         /// Current position.
-        position: Offset,
+        position: Offset<Pixels>,
         /// Delta from previous position.
-        delta: Offset,
+        delta: Offset<PixelDelta>,
         /// Device type.
         device_kind: PointerType,
         /// Event timestamp.
@@ -86,9 +89,9 @@ pub enum RawPointerEvent {
         /// Pointer identifier.
         pointer: PointerId,
         /// Final position.
-        position: Offset,
+        position: Offset<Pixels>,
         /// Delta from previous position.
-        delta: Offset,
+        delta: Offset<PixelDelta>,
         /// Device type.
         device_kind: PointerType,
         /// Event timestamp.
@@ -100,7 +103,7 @@ pub enum RawPointerEvent {
         /// Pointer identifier.
         pointer: PointerId,
         /// Last known position.
-        position: Offset,
+        position: Offset<Pixels>,
         /// Device type.
         device_kind: PointerType,
         /// Event timestamp.
@@ -112,9 +115,9 @@ pub enum RawPointerEvent {
         /// Pointer identifier.
         pointer: PointerId,
         /// Current position.
-        position: Offset,
+        position: Offset<Pixels>,
         /// Delta from previous position.
-        delta: Offset,
+        delta: Offset<PixelDelta>,
         /// Device type.
         device_kind: PointerType,
         /// Event timestamp.
@@ -135,7 +138,7 @@ impl RawPointerEvent {
     }
 
     /// Get the position.
-    pub fn position(&self) -> Offset {
+    pub fn position(&self) -> Offset<Pixels> {
         match self {
             Self::Down { position, .. }
             | Self::Move { position, .. }
@@ -146,7 +149,7 @@ impl RawPointerEvent {
     }
 
     /// Get the delta (zero for Down events).
-    pub fn delta(&self) -> Offset {
+    pub fn delta(&self) -> Offset<PixelDelta> {
         match self {
             Self::Down { .. } | Self::Cancel { .. } => Offset::ZERO,
             Self::Move { delta, .. } | Self::Up { delta, .. } | Self::Hover { delta, .. } => *delta,
@@ -200,7 +203,7 @@ pub type RawInputCallback = Arc<dyn Fn(RawPointerEvent) + Send + Sync>;
 #[derive(Debug, Clone)]
 struct PointerTrackingState {
     /// Last known position.
-    last_position: Offset,
+    last_position: Offset<Pixels>,
     /// Is pointer currently down?
     is_down: bool,
     /// Device kind (stored for potential future use).
@@ -332,7 +335,7 @@ impl RawInputHandler {
         match event {
             PointerEvent::Down(data) => {
                 let pos = data.state.position;
-                let position = Offset::new(pos.x as f32, pos.y as f32);
+                let position = Offset::new(px(pos.x as f32), px(pos.y as f32));
                 let device_kind = data.pointer.pointer_type;
 
                 // Start tracking
@@ -355,7 +358,7 @@ impl RawInputHandler {
 
             PointerEvent::Move(data) => {
                 let pos = data.current.position;
-                let position = Offset::new(pos.x as f32, pos.y as f32);
+                let position = Offset::new(px(pos.x as f32), px(pos.y as f32));
                 let device_kind = data.pointer.pointer_type;
 
                 let delta = {
@@ -389,7 +392,7 @@ impl RawInputHandler {
 
             PointerEvent::Up(data) => {
                 let pos = data.state.position;
-                let position = Offset::new(pos.x as f32, pos.y as f32);
+                let position = Offset::new(px(pos.x as f32), px(pos.y as f32));
                 let device_kind = data.pointer.pointer_type;
 
                 let delta = {
@@ -456,7 +459,7 @@ impl RawInputHandler {
     }
 
     /// Get the last known position of a pointer.
-    pub fn pointer_position(&self, pointer: PointerId) -> Option<Offset> {
+    pub fn pointer_position(&self, pointer: PointerId) -> Option<Offset<Pixels>> {
         self.tracking.lock().get(&pointer).map(|s| s.last_position)
     }
 

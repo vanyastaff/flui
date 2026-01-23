@@ -115,27 +115,18 @@ fn main() {
     }
 
     impl Diagnosticable for CustomButton {
-        fn debug_fill_properties(&self, properties: &mut Vec<DiagnosticsProperty>) {
-            properties.push(DiagnosticsProperty::new("label", &self.label));
-            properties.push(DiagnosticsProperty::new(
-                "size",
-                format!("{}x{}", self.width, self.height),
-            ));
+        fn debug_fill_properties(&self, properties: &mut DiagnosticsBuilder) {
+            properties.add("label", &self.label);
+            properties.add("size", format!("{}x{}", self.width, self.height));
 
             if !self.enabled {
-                properties.push(
-                    DiagnosticsProperty::new("enabled", self.enabled)
-                        .with_level(DiagnosticLevel::Warning),
-                );
+                properties.add_with_level("enabled", self.enabled, DiagnosticLevel::Warning);
             }
 
             if let Some(handler) = &self.on_press {
-                properties.push(DiagnosticsProperty::new("onPress", handler));
+                properties.add("onPress", handler);
             } else {
-                properties.push(
-                    DiagnosticsProperty::new("onPress", "null")
-                        .with_level(DiagnosticLevel::Warning),
-                );
+                properties.add_with_level("onPress", "null", DiagnosticLevel::Warning);
             }
         }
     }

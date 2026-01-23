@@ -10,6 +10,8 @@
 //! Flutter reference: https://api.flutter.dev/flutter/gestures/MultiTapGestureRecognizer-class.html
 
 use super::recognizer::{GestureRecognizer, GestureRecognizerState};
+use flui_types::geometry::Pixels;
+
 use crate::arena::GestureArenaMember;
 use crate::events::{PointerEvent, PointerType};
 use crate::ids::PointerId;
@@ -29,9 +31,9 @@ pub struct MultiTapDetails {
     /// Number of pointers/fingers involved
     pub pointer_count: usize,
     /// Positions of all pointers when tap completed
-    pub positions: Vec<Offset>,
+    pub positions: Vec<Offset<Pixels>>,
     /// Center point of all taps
-    pub center: Offset,
+    pub center: Offset<Pixels>,
     /// Pointer device kind
     pub kind: PointerType,
 }
@@ -103,9 +105,9 @@ enum MultiTapPhase {
 #[derive(Debug, Clone)]
 struct PointerInfo {
     /// Initial position
-    initial_position: Offset,
+    initial_position: Offset<Pixels>,
     /// Current position
-    current_position: Offset,
+    current_position: Offset<Pixels>,
     /// Time when pointer went down
     #[allow(dead_code)]
     down_time: Instant,
@@ -212,7 +214,7 @@ impl MultiTapGestureRecognizer {
     }
 
     /// Handle pointer down
-    fn handle_pointer_down(&self, pointer: PointerId, position: Offset, kind: PointerType) {
+    fn handle_pointer_down(&self, pointer: PointerId, position: Offset<Pixels>, kind: PointerType) {
         let mut state = self.gesture_state.lock();
 
         match state.phase {
@@ -266,7 +268,7 @@ impl MultiTapGestureRecognizer {
     }
 
     /// Handle pointer move
-    fn handle_pointer_move(&self, pointer: PointerId, position: Offset) {
+    fn handle_pointer_move(&self, pointer: PointerId, position: Offset<Pixels>) {
         // Cache settings to avoid nested locks
         let settings = self.settings.lock().clone();
         let mut state = self.gesture_state.lock();
@@ -303,7 +305,7 @@ impl MultiTapGestureRecognizer {
                 // Multi-tap completed!
                 state.phase = MultiTapPhase::Completed;
 
-                let positions: Vec<Offset> = state
+                let positions: Vec<Offset<Pixels>> = state
                     .pointers
                     .values()
                     .map(|info| info.initial_position)
@@ -341,7 +343,7 @@ impl MultiTapGestureRecognizer {
         if state.phase != MultiTapPhase::Ready && state.phase != MultiTapPhase::Cancelled {
             state.phase = MultiTapPhase::Cancelled;
 
-            let positions: Vec<Offset> = state
+            let positions: Vec<Offset<Pixels>> = state
                 .pointers
                 .values()
                 .map(|info| info.initial_position)
@@ -350,7 +352,7 @@ impl MultiTapGestureRecognizer {
             let center = if !positions.is_empty() {
                 self.calculate_center(&positions)
             } else {
-                Offset::ZERO
+                Offset::new(Pixels::ZERO, Pixels::ZERO)
             };
 
             let count = positions.len();
@@ -376,9 +378,9 @@ impl MultiTapGestureRecognizer {
     }
 
     /// Calculate center point of all positions
-    fn calculate_center(&self, positions: &[Offset]) -> Offset {
+    fn calculate_center(&self, positions: &[Offset<Pixels>]) -> Offset<Pixels> {
         if positions.is_empty() {
-            return Offset::ZERO;
+            return Offset::new(Pixels::ZERO, Pixels::ZERO);
         }
 
         let mut sum_x = 0.0;
@@ -415,7 +417,7 @@ impl MultiTapGestureRecognizer {
 }
 
 impl GestureRecognizer for MultiTapGestureRecognizer {
-    fn add_pointer(&self, pointer: PointerId, position: Offset) {
+    fn add_pointer(&self, pointer: PointerId, position: Offset<Pixels>) {
         // For the first pointer, track with arena
         if self.gesture_state.lock().pointers.is_empty() {
             let recognizer = Arc::new(self.clone());

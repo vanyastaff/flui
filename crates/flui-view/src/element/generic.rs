@@ -282,7 +282,8 @@ where
 
             // Propagate owner if we have one
             if let Some(ref owner) = self.pipeline_owner {
-                self.children.propagate_owner(Arc::clone(owner), self.parent_render_id);
+                self.children
+                    .propagate_owner(Arc::clone(owner), self.parent_render_id);
             }
 
             // Mount child
@@ -294,7 +295,20 @@ where
             tracing::debug!("ElementCore::update_or_create_child created new child");
         } else {
             // Update existing child
+            let had_child = !self.children.is_empty();
             self.children.update_with_view(child_view.as_ref());
+
+            // If a new child was created (previously was empty), mount it
+            if !had_child && !self.children.is_empty() {
+                self.children.mount_children(None, self.depth + 1);
+
+                // Propagate owner if we have one
+                if let Some(ref owner) = self.pipeline_owner {
+                    self.children
+                        .propagate_owner(Arc::clone(owner), self.parent_render_id);
+                }
+            }
+
             self.children.perform_build_children();
 
             tracing::debug!("ElementCore::update_or_create_child updated existing child");
@@ -315,7 +329,8 @@ where
 
             // Propagate owner if we have one
             if let Some(ref owner) = self.pipeline_owner {
-                self.children.propagate_owner(Arc::clone(owner), self.parent_render_id);
+                self.children
+                    .propagate_owner(Arc::clone(owner), self.parent_render_id);
             }
 
             // Mount children
@@ -324,13 +339,33 @@ where
             // Build children's children
             self.children.perform_build_children();
 
-            tracing::debug!("ElementCore::update_or_create_children created {} children", child_views.len());
+            tracing::debug!(
+                "ElementCore::update_or_create_children created {} children",
+                child_views.len()
+            );
         } else {
             // Update existing children
+            let old_count = self.children.len();
             self.children.update_with_views(&child_views);
+
+            // If new children were added, mount them
+            if child_views.len() > old_count {
+                // Mount only the newly added children
+                self.children.mount_children(None, self.depth + 1);
+
+                // Propagate owner to new children if we have one
+                if let Some(ref owner) = self.pipeline_owner {
+                    self.children
+                        .propagate_owner(Arc::clone(owner), self.parent_render_id);
+                }
+            }
+
             self.children.perform_build_children();
 
-            tracing::debug!("ElementCore::update_or_create_children updated to {} children", child_views.len());
+            tracing::debug!(
+                "ElementCore::update_or_create_children updated to {} children",
+                child_views.len()
+            );
         }
     }
 
@@ -387,7 +422,8 @@ where
     /// Should be called after children are created.
     pub fn propagate_owner_to_children(&mut self) {
         if let Some(ref owner) = self.pipeline_owner {
-            self.children.propagate_owner(Arc::clone(owner), self.parent_render_id);
+            self.children
+                .propagate_owner(Arc::clone(owner), self.parent_render_id);
         }
     }
 

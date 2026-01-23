@@ -6,7 +6,7 @@
 #[cfg(feature = "text")]
 mod inner {
     use cosmic_text::{Attrs, Buffer, Cursor, Family, FontSystem, Metrics, Shaping, Style, Weight};
-    use flui_types::geometry::{Offset, Rect, Size};
+    use flui_types::geometry::{px, Offset, Pixels, Rect, Size};
     use flui_types::typography::{
         FontStyle, FontWeight, LineMetrics, TextAffinity, TextBox, TextDirection, TextPosition,
         TextRange, TextStyle,
@@ -118,8 +118,8 @@ mod inner {
         /// Returns the size as a Size struct.
         #[inline]
         #[must_use]
-        pub fn size(&self) -> Size {
-            Size::new(self.width, self.height)
+        pub fn size(&self) -> Size<Pixels> {
+            Size::new(px(self.width), px(self.height))
         }
     }
 
@@ -259,7 +259,7 @@ mod inner {
         /// Returns the screen offset for a caret at the given text position.
         ///
         /// This is used for drawing the text cursor.
-        pub fn get_offset_for_caret(&mut self, position: TextPosition) -> Offset {
+        pub fn get_offset_for_caret(&mut self, position: TextPosition) -> Offset<Pixels> {
             let mut font_system = font_system().lock();
 
             // Create cursor at position
@@ -304,7 +304,7 @@ mod inner {
         /// Returns the text position for a screen offset.
         ///
         /// This is used for hit testing (e.g., mouse clicks).
-        pub fn get_position_for_offset(&self, offset: Offset) -> TextPosition {
+        pub fn get_position_for_offset(&self, offset: Offset<Pixels>) -> TextPosition {
             let x = offset.dx;
             let y = offset.dy;
 
@@ -955,7 +955,7 @@ pub use inner::*;
 /// Fallback implementation when text feature is disabled.
 #[cfg(not(feature = "text"))]
 mod fallback {
-    use flui_types::geometry::Size;
+    use flui_types::geometry::{px, Pixels, Size};
     use flui_types::typography::TextDirection;
 
     /// Text layout result (stub).
@@ -971,8 +971,8 @@ mod fallback {
     impl TextLayoutResult {
         #[inline]
         #[must_use]
-        pub fn size(&self) -> Size {
-            Size::new(self.width, self.height)
+        pub fn size(&self) -> Size<Pixels> {
+            Size::new(px(self.width), px(self.height))
         }
     }
 

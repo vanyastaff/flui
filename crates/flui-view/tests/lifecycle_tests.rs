@@ -3,8 +3,8 @@
 //! Tests the lifecycle states and transitions: Initial → Active ⇄ Inactive → Defunct
 
 use flui_view::{
-    BuildContext, ElementBase, ElementTree, Lifecycle, StatefulElement, StatefulView,
-    StatelessElement, StatelessView, View, ViewState,
+    BuildContext, ElementBase, ElementTree, Lifecycle, StatefulBehavior, StatefulElement,
+    StatefulView, StatelessBehavior, StatelessElement, StatelessView, View, ViewState,
 };
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -26,7 +26,7 @@ impl StatelessView for TrackingView {
 
 impl View for TrackingView {
     fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(StatelessElement::new(self))
+        Box::new(StatelessElement::new(self, StatelessBehavior))
     }
 }
 
@@ -75,7 +75,7 @@ impl ViewState<LifecycleTrackingView> for LifecycleTrackingState {
 
 impl View for LifecycleTrackingView {
     fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(StatefulElement::new(self))
+        Box::new(StatefulElement::new(self, StatefulBehavior::new(self)))
     }
 }
 
@@ -127,7 +127,7 @@ fn test_lifecycle_state_checks() {
 #[test]
 fn test_element_initial_lifecycle() {
     let view = TrackingView { id: 1 };
-    let element = StatelessElement::new(&view);
+    let element = StatelessElement::new(&view, StatelessBehavior);
 
     assert_eq!(element.lifecycle(), Lifecycle::Initial);
 }
@@ -135,7 +135,7 @@ fn test_element_initial_lifecycle() {
 #[test]
 fn test_element_mount_transitions_to_active() {
     let view = TrackingView { id: 1 };
-    let mut element = StatelessElement::new(&view);
+    let mut element = StatelessElement::new(&view, StatelessBehavior);
 
     assert_eq!(element.lifecycle(), Lifecycle::Initial);
 
@@ -147,7 +147,7 @@ fn test_element_mount_transitions_to_active() {
 #[test]
 fn test_element_deactivate_transitions_to_inactive() {
     let view = TrackingView { id: 1 };
-    let mut element = StatelessElement::new(&view);
+    let mut element = StatelessElement::new(&view, StatelessBehavior);
 
     element.mount(None, 0);
     assert_eq!(element.lifecycle(), Lifecycle::Active);
@@ -159,7 +159,7 @@ fn test_element_deactivate_transitions_to_inactive() {
 #[test]
 fn test_element_activate_transitions_to_active() {
     let view = TrackingView { id: 1 };
-    let mut element = StatelessElement::new(&view);
+    let mut element = StatelessElement::new(&view, StatelessBehavior);
 
     element.mount(None, 0);
     element.deactivate();
@@ -172,7 +172,7 @@ fn test_element_activate_transitions_to_active() {
 #[test]
 fn test_element_unmount_transitions_to_defunct() {
     let view = TrackingView { id: 1 };
-    let mut element = StatelessElement::new(&view);
+    let mut element = StatelessElement::new(&view, StatelessBehavior);
 
     element.mount(None, 0);
     element.unmount();

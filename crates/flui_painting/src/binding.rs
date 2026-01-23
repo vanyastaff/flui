@@ -20,7 +20,7 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 
 use flui_foundation::{impl_binding_singleton, BindingBase, HasInstance};
-use flui_types::geometry::Radius;
+use flui_types::geometry::{px, Pixels, Radius};
 use flui_types::Size;
 
 // ============================================================================
@@ -64,7 +64,7 @@ pub struct CachedImage {
     pub size_bytes: usize,
 
     /// Original size of the image.
-    pub dimensions: Size,
+    pub dimensions: Size<Pixels>,
 }
 
 /// Opaque handle to an image.
@@ -246,8 +246,8 @@ pub trait ShaderWarmUp: Send + Sync {
     /// The size of the canvas to use for warm-up.
     ///
     /// Defaults to 100x100 logical pixels.
-    fn size(&self) -> Size {
-        Size::new(100.0, 100.0)
+    fn size(&self) -> Size<Pixels> {
+        Size::new(px(100.0), px(100.0))
     }
 
     /// Paints the warm-up scene onto the canvas.
@@ -277,10 +277,10 @@ pub trait WarmUpCanvas {
     fn draw_rrect(&mut self, rrect: flui_types::RRect);
 
     /// Draws a circle.
-    fn draw_circle(&mut self, center: flui_types::Offset, radius: f32);
+    fn draw_circle(&mut self, center: flui_types::Offset<Pixels>, radius: f32);
 
     /// Draws a path.
-    fn draw_path(&mut self, path: &[flui_types::Offset]);
+    fn draw_path(&mut self, path: &[flui_types::Offset<Pixels>]);
 }
 
 /// Default shader warm-up that draws common shapes.
@@ -303,7 +303,7 @@ impl ShaderWarmUp for DefaultShaderWarmUp {
             Radius::circular(10.0),
         ));
         canvas.draw_circle(
-            flui_types::Offset::new(size.width / 2.0, size.height / 2.0),
+            flui_types::Offset::new(size.width / px(2.0), size.height / px(2.0)),
             30.0,
         );
     }
@@ -514,7 +514,7 @@ mod tests {
         let image = CachedImage {
             handle: ImageHandle { id: 1 },
             size_bytes: 1024,
-            dimensions: Size::new(100.0, 100.0),
+            dimensions: Size::new(px(100.0), px(100.0)),
         };
 
         cache.put("test".to_string(), image.clone());
@@ -532,7 +532,7 @@ mod tests {
         let image = CachedImage {
             handle: ImageHandle { id: 1 },
             size_bytes: 1024,
-            dimensions: Size::new(100.0, 100.0),
+            dimensions: Size::new(px(100.0), px(100.0)),
         };
 
         cache.put("test".to_string(), image);
@@ -551,7 +551,7 @@ mod tests {
             let image = CachedImage {
                 handle: ImageHandle { id: i },
                 size_bytes: 1024,
-                dimensions: Size::new(100.0, 100.0),
+                dimensions: Size::new(px(100.0), px(100.0)),
             };
             cache.put(format!("test_{}", i), image);
         }
@@ -569,7 +569,7 @@ mod tests {
             let image = CachedImage {
                 handle: ImageHandle { id: i },
                 size_bytes: 1024,
-                dimensions: Size::new(100.0, 100.0),
+                dimensions: Size::new(px(100.0), px(100.0)),
             };
             cache.put(format!("test_{}", i), image);
         }

@@ -295,18 +295,23 @@ mod tests {
         }
     }
 
+    impl From<TestId> for usize {
+        fn from(id: TestId) -> usize {
+            id.0.get()
+        }
+    }
+
     impl Identifier for TestId {
-        fn new(value: usize) -> Self {
-            Self(std::num::NonZeroUsize::new(value).unwrap())
-        }
-        fn new_checked(value: usize) -> Option<Self> {
-            std::num::NonZeroUsize::new(value).map(Self)
-        }
         fn get(self) -> usize {
             self.0.get()
         }
-        unsafe fn new_unchecked(value: usize) -> Self {
-            Self(std::num::NonZeroUsize::new_unchecked(value))
+
+        fn zip(index: usize) -> Self {
+            Self(std::num::NonZeroUsize::new(index).expect("TestId cannot be 0"))
+        }
+
+        fn try_zip(index: usize) -> Option<Self> {
+            std::num::NonZeroUsize::new(index).map(Self)
         }
     }
 
@@ -416,7 +421,7 @@ mod tests {
     #[test]
     fn test_mount_as_child() {
         let node = TestNode::new(42);
-        let parent_id = TestId::new(10);
+        let parent_id = TestId::zip(10);
         let mounted = node.mount(Some(parent_id), Depth::new(2));
 
         assert!(!mounted.is_root());
@@ -436,7 +441,7 @@ mod tests {
     #[test]
     fn test_mount_child_ext() {
         let node = TestNode::new(42);
-        let parent_id = TestId::new(5);
+        let parent_id = TestId::zip(5);
         let mounted = node.mount_child(parent_id, Depth::root());
 
         assert!(!mounted.is_root());
@@ -459,7 +464,7 @@ mod tests {
     #[test]
     fn test_is_root() {
         let root = TestNode::new(1).mount_root();
-        let child = TestNode::new(2).mount_child(TestId::new(1), Depth::root());
+        let child = TestNode::new(2).mount_child(TestId::zip(1), Depth::root());
 
         assert!(root.is_root());
         assert!(!child.is_root());
@@ -468,7 +473,7 @@ mod tests {
     #[test]
     fn test_roundtrip() {
         let original = TestNode::new(99);
-        let mounted = original.mount_child(TestId::new(5), Depth::new(2));
+        let mounted = original.mount_child(TestId::zip(5), Depth::new(2));
 
         assert_eq!(mounted.depth(), Depth::new(3));
 

@@ -3,6 +3,8 @@
 //! Defines the core `GestureRecognizer` trait and common types used by all recognizers.
 
 use crate::arena::{GestureArena, GestureArenaMember};
+use flui_types::geometry::Pixels;
+
 use crate::ids::PointerId;
 use flui_types::Offset;
 use crate::events::PointerEvent;
@@ -26,7 +28,7 @@ pub trait GestureRecognizer: GestureArenaMember + Send + Sync {
     ///
     /// Called when a pointer goes down. The recognizer should add itself to the
     /// gesture arena if it wants to compete for this pointer.
-    fn add_pointer(&self, pointer: PointerId, position: Offset);
+    fn add_pointer(&self, pointer: PointerId, position: Offset<Pixels>);
 
     /// Handle a pointer event
     ///
@@ -59,7 +61,7 @@ pub struct GestureRecognizerState {
     primary_pointer: Arc<Mutex<Option<PointerId>>>,
 
     /// Initial position of primary pointer
-    initial_position: Arc<Mutex<Option<Offset>>>,
+    initial_position: Arc<Mutex<Option<Offset<Pixels>>>>,
 
     /// Whether recognizer has been disposed
     disposed: Arc<Mutex<bool>>,
@@ -92,12 +94,12 @@ impl GestureRecognizerState {
     }
 
     /// Get the initial position of the primary pointer
-    pub fn initial_position(&self) -> Option<Offset> {
+    pub fn initial_position(&self) -> Option<Offset<Pixels>> {
         *self.initial_position.lock()
     }
 
     /// Set the initial position
-    pub fn set_initial_position(&self, position: Option<Offset>) {
+    pub fn set_initial_position(&self, position: Option<Offset<Pixels>>) {
         *self.initial_position.lock() = position;
     }
 
@@ -118,7 +120,7 @@ impl GestureRecognizerState {
     pub fn start_tracking<T: GestureArenaMember + Clone + 'static>(
         &self,
         pointer: PointerId,
-        position: Offset,
+        position: Offset<Pixels>,
         recognizer: &Arc<T>,
     ) {
         if self.is_disposed() {

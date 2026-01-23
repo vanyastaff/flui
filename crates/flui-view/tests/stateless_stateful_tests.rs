@@ -3,8 +3,8 @@
 //! Tests view creation, element management, state handling, and update cycles.
 
 use flui_view::{
-    BuildContext, ElementBase, Lifecycle, StatefulElement, StatefulView, StatelessElement,
-    StatelessView, View, ViewState,
+    BuildContext, ElementBase, Lifecycle, StatefulBehavior, StatefulElement, StatefulView,
+    StatelessBehavior, StatelessElement, StatelessView, View, ViewState,
 };
 use std::any::TypeId;
 use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
@@ -27,7 +27,7 @@ impl StatelessView for SimpleStatelessView {
 
 impl View for SimpleStatelessView {
     fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(StatelessElement::new(self))
+        Box::new(StatelessElement::new(self, StatelessBehavior))
     }
 }
 
@@ -52,7 +52,7 @@ impl StatelessView for NestedView {
 
 impl View for NestedView {
     fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(StatelessElement::new(self))
+        Box::new(StatelessElement::new(self, StatelessBehavior))
     }
 }
 
@@ -72,7 +72,7 @@ fn test_stateless_element_mount() {
     let view = SimpleStatelessView {
         label: "Mount".to_string(),
     };
-    let mut element = StatelessElement::new(&view);
+    let mut element = StatelessElement::new(&view, StatelessBehavior);
 
     element.mount(None, 0);
 
@@ -88,7 +88,7 @@ fn test_stateless_element_update() {
         label: "Second".to_string(),
     };
 
-    let mut element = StatelessElement::new(&view1);
+    let mut element = StatelessElement::new(&view1, StatelessBehavior);
     element.mount(None, 0);
 
     // Update with new view of same type
@@ -103,7 +103,7 @@ fn test_stateless_element_mark_needs_build() {
     let view = SimpleStatelessView {
         label: "Dirty".to_string(),
     };
-    let mut element = StatelessElement::new(&view);
+    let mut element = StatelessElement::new(&view, StatelessBehavior);
     element.mount(None, 0);
 
     // perform_build clears dirty flag
@@ -163,14 +163,14 @@ impl ViewState<CounterView> for CounterState {
 
 impl View for CounterView {
     fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(StatefulElement::new(self))
+        Box::new(StatefulElement::new(self, StatefulBehavior::new(self)))
     }
 }
 
 #[test]
 fn test_stateful_view_create_state() {
     let view = CounterView { initial_count: 10 };
-    let element = StatefulElement::new(&view);
+    let element = StatefulElement::new(&view, StatefulBehavior::new(&view));
 
     assert_eq!(element.state().count.load(Ordering::SeqCst), 10);
 }
@@ -178,7 +178,7 @@ fn test_stateful_view_create_state() {
 #[test]
 fn test_stateful_element_state_persistence() {
     let view = CounterView { initial_count: 0 };
-    let mut element = StatefulElement::new(&view);
+    let mut element = StatefulElement::new(&view, StatefulBehavior::new(&view));
     element.mount(None, 0);
 
     // Modify state
@@ -191,7 +191,7 @@ fn test_stateful_element_state_persistence() {
 #[test]
 fn test_stateful_element_set_state() {
     let view = CounterView { initial_count: 0 };
-    let mut element = StatefulElement::new(&view);
+    let mut element = StatefulElement::new(&view, StatefulBehavior::new(&view));
     element.mount(None, 0);
 
     // Use set_state helper
@@ -207,7 +207,7 @@ fn test_stateful_element_update_calls_did_update_view() {
     let view1 = CounterView { initial_count: 0 };
     let view2 = CounterView { initial_count: 10 };
 
-    let mut element = StatefulElement::new(&view1);
+    let mut element = StatefulElement::new(&view1, StatefulBehavior::new(&view1));
     element.mount(None, 0);
 
     let update_count = element.state().update_count.clone();
@@ -222,7 +222,7 @@ fn test_stateful_element_update_calls_did_update_view() {
 #[test]
 fn test_stateful_element_multiple_updates() {
     let view = CounterView { initial_count: 0 };
-    let mut element = StatefulElement::new(&view);
+    let mut element = StatefulElement::new(&view, StatefulBehavior::new(&view));
     element.mount(None, 0);
 
     let update_count = element.state().update_count.clone();
@@ -289,14 +289,14 @@ impl ViewState<LifecycleCallbackView> for LifecycleCallbackState {
 
 impl View for LifecycleCallbackView {
     fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(StatefulElement::new(self))
+        Box::new(StatefulElement::new(self, StatefulBehavior::new(self)))
     }
 }
 
 #[test]
 fn test_stateful_deactivate_callback_called() {
     let view = LifecycleCallbackView;
-    let mut element = StatefulElement::new(&view);
+    let mut element = StatefulElement::new(&view, StatefulBehavior::new(&view));
     element.mount(None, 0);
 
     let deactivate_count = element.state().deactivate_called.clone();
@@ -310,7 +310,7 @@ fn test_stateful_deactivate_callback_called() {
 #[test]
 fn test_stateful_activate_callback_called() {
     let view = LifecycleCallbackView;
-    let mut element = StatefulElement::new(&view);
+    let mut element = StatefulElement::new(&view, StatefulBehavior::new(&view));
     element.mount(None, 0);
     element.deactivate();
 
@@ -325,7 +325,7 @@ fn test_stateful_activate_callback_called() {
 #[test]
 fn test_stateful_dispose_callback_called_on_unmount() {
     let view = LifecycleCallbackView;
-    let mut element = StatefulElement::new(&view);
+    let mut element = StatefulElement::new(&view, StatefulBehavior::new(&view));
     element.mount(None, 0);
 
     let dispose_count = element.state().dispose_called.clone();
@@ -344,8 +344,8 @@ fn test_stateful_dispose_callback_called_on_unmount() {
 fn test_separate_elements_have_separate_state() {
     let view = CounterView { initial_count: 0 };
 
-    let mut element1 = StatefulElement::new(&view);
-    let mut element2 = StatefulElement::new(&view);
+    let mut element1 = StatefulElement::new(&view, StatefulBehavior::new(&view));
+    let mut element2 = StatefulElement::new(&view, StatefulBehavior::new(&view));
 
     element1.mount(None, 0);
     element2.mount(None, 1);
@@ -440,7 +440,7 @@ fn test_stateless_element_debug() {
     let view = SimpleStatelessView {
         label: "Debug".to_string(),
     };
-    let element = StatelessElement::new(&view);
+    let element = StatelessElement::new(&view, StatelessBehavior);
 
     let debug_str = format!("{:?}", element);
     assert!(debug_str.contains("StatelessElement"));
@@ -450,7 +450,7 @@ fn test_stateless_element_debug() {
 #[test]
 fn test_stateful_element_debug() {
     let view = CounterView { initial_count: 42 };
-    let element = StatefulElement::new(&view);
+    let element = StatefulElement::new(&view, StatefulBehavior::new(&view));
 
     let debug_str = format!("{:?}", element);
     assert!(debug_str.contains("StatefulElement"));

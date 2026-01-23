@@ -295,7 +295,7 @@ impl SemanticsNode {
         if self.rect == Rect::ZERO {
             self.rect = other.rect;
         } else if other.rect != Rect::ZERO {
-            self.rect = self.rect.union(other.rect);
+            self.rect = self.rect.union(&other.rect);
         }
 
         self.dirty = true;

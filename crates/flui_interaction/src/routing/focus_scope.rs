@@ -54,6 +54,7 @@
 //! - [Understanding Flutter's keyboard focus system](https://docs.flutter.dev/ui/interactivity/focus)
 
 use parking_lot::{Mutex, RwLock};
+use flui_types::geometry::Pixels;
 use std::cmp::Ordering;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering};
@@ -955,9 +956,9 @@ impl FocusTraversalPolicy for DirectionalFocusPolicy {
 }
 
 #[inline]
-fn distance_squared(a: Offset, b: Offset) -> f32 {
-    let dx = b.dx - a.dx;
-    let dy = b.dy - a.dy;
+fn distance_squared(a: Offset<Pixels>, b: Offset<Pixels>) -> f32 {
+    let dx = (b.dx - a.dx).get();
+    let dy = (b.dy - a.dy).get();
     dx * dx + dy * dy
 }
 

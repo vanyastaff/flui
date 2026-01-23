@@ -31,6 +31,8 @@
 //! - Low accuracy: 32-50ms (use with caution)
 
 use super::velocity::{Velocity, VelocityEstimationStrategy, VelocityTracker};
+use flui_types::geometry::Pixels;
+
 use flui_types::geometry::Offset;
 use std::time::{Duration, Instant};
 
@@ -115,7 +117,7 @@ impl PredictionConfig {
 #[derive(Debug, Clone, Copy)]
 pub struct PredictedPosition {
     /// The predicted position.
-    pub position: Offset,
+    pub position: Offset<Pixels>,
     /// Confidence in prediction (0.0 - 1.0).
     pub confidence: f32,
     /// How far into the future this prediction is.
@@ -131,7 +133,7 @@ impl PredictedPosition {
     }
 
     /// Returns the position if confident, otherwise returns fallback.
-    pub fn position_or(&self, fallback: Offset) -> Offset {
+    pub fn position_or(&self, fallback: Offset<Pixels>) -> Offset<Pixels> {
         if self.is_confident() {
             self.position
         } else {
@@ -171,7 +173,7 @@ pub struct InputPredictor {
     /// Configuration.
     config: PredictionConfig,
     /// Last known position.
-    last_position: Option<Offset>,
+    last_position: Option<Offset<Pixels>>,
     /// Last sample time.
     last_time: Option<Instant>,
     /// Previous velocity (for acceleration calculation).
@@ -179,7 +181,7 @@ pub struct InputPredictor {
     /// Previous velocity time.
     prev_velocity_time: Option<Instant>,
     /// Smoothed prediction (for reducing jitter).
-    smoothed_prediction: Option<Offset>,
+    smoothed_prediction: Option<Offset<Pixels>>,
 }
 
 impl Default for InputPredictor {
@@ -218,7 +220,7 @@ impl InputPredictor {
     }
 
     /// Add a position sample.
-    pub fn add_sample(&mut self, time: Instant, position: Offset) {
+    pub fn add_sample(&mut self, time: Instant, position: Offset<Pixels>) {
         // Store previous velocity for acceleration
         if self.velocity_tracker.has_sufficient_data() {
             self.prev_velocity = Some(self.velocity_tracker.velocity());
@@ -340,7 +342,7 @@ impl InputPredictor {
     }
 
     /// Get the last known position.
-    pub fn last_position(&self) -> Option<Offset> {
+    pub fn last_position(&self) -> Option<Offset<Pixels>> {
         self.last_position
     }
 

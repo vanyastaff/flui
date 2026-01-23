@@ -45,6 +45,8 @@
 //! ```
 
 use parking_lot::Mutex;
+use flui_types::geometry::Pixels;
+
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -96,7 +98,7 @@ struct ResamplerInner {
     /// Whether the pointer is being tracked
     is_tracked: bool,
     /// Last sampled position (for interpolation)
-    last_position: Option<Offset>,
+    last_position: Option<Offset<Pixels>>,
     /// Last sample time
     last_sample_time: Option<Instant>,
 }

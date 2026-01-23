@@ -11,6 +11,8 @@
 //! Flutter reference: https://api.flutter.dev/flutter/gestures/DoubleTapGestureRecognizer-class.html
 
 use super::recognizer::{GestureRecognizer, GestureRecognizerState};
+use flui_types::geometry::{Pixels, px};
+
 use crate::arena::GestureArenaMember;
 use crate::events::{PointerEvent, PointerEventExt, PointerType};
 use crate::ids::PointerId;
@@ -27,9 +29,9 @@ pub type DoubleTapCallback = Arc<dyn Fn(DoubleTapDetails) + Send + Sync>;
 #[derive(Debug, Clone, PartialEq)]
 pub struct DoubleTapDetails {
     /// Global position where double tap occurred
-    pub global_position: Offset,
+    pub global_position: Offset<Pixels>,
     /// Local position (relative to widget)
-    pub local_position: Offset,
+    pub local_position: Offset<Pixels>,
     /// Pointer device kind
     pub kind: PointerType,
 }
@@ -95,11 +97,11 @@ struct DoubleTapState {
     /// Current phase
     phase: DoubleTapPhase,
     /// Position of first tap down
-    first_tap_position: Option<Offset>,
+    first_tap_position: Option<Offset<Pixels>>,
     /// Time of first tap completion
     first_tap_time: Option<Instant>,
     /// Current position (for slop detection)
-    current_position: Option<Offset>,
+    current_position: Option<Offset<Pixels>>,
     /// Device kind
     device_kind: Option<PointerType>,
 }
@@ -174,7 +176,7 @@ impl DoubleTapGestureRecognizer {
     }
 
     /// Handle pointer down
-    fn handle_down(&self, position: Offset, kind: PointerType) {
+    fn handle_down(&self, position: Offset<Pixels>, kind: PointerType) {
         let mut state = self.gesture_state.lock();
 
         match state.phase {
@@ -205,7 +207,7 @@ impl DoubleTapGestureRecognizer {
                     // Check distance from first tap
                     if let Some(first_pos) = state.first_tap_position {
                         let distance = (position - first_pos).distance();
-                        if distance > settings.double_tap_slop() {
+                        if distance.get() > settings.double_tap_slop() {
                             // Too far - start over as first tap
                             state.phase = DoubleTapPhase::FirstDown;
                             state.first_tap_position = Some(position);
@@ -225,7 +227,7 @@ impl DoubleTapGestureRecognizer {
     }
 
     /// Handle pointer move
-    fn handle_move(&self, position: Offset, kind: PointerType) {
+    fn handle_move(&self, position: Offset<Pixels>, kind: PointerType) {
         let mut state = self.gesture_state.lock();
 
         state.current_position = Some(position);
@@ -246,7 +248,7 @@ impl DoubleTapGestureRecognizer {
     }
 
     /// Handle pointer up
-    fn handle_up(&self, position: Offset, kind: PointerType) {
+    fn handle_up(&self, position: Offset<Pixels>, kind: PointerType) {
         let mut state = self.gesture_state.lock();
 
         match state.phase {
@@ -282,7 +284,7 @@ impl DoubleTapGestureRecognizer {
     }
 
     /// Handle cancel
-    fn handle_cancel(&self, position: Offset, kind: PointerType) {
+    fn handle_cancel(&self, position: Offset<Pixels>, kind: PointerType) {
         let mut state = self.gesture_state.lock();
 
         if state.phase != DoubleTapPhase::Ready && state.phase != DoubleTapPhase::Cancelled {
@@ -304,12 +306,12 @@ impl DoubleTapGestureRecognizer {
     }
 
     /// Check if pointer moved too far (beyond slop tolerance)
-    fn check_slop(&self, current_position: Offset) -> bool {
+    fn check_slop(&self, current_position: Offset<Pixels>) -> bool {
         if let Some(initial_pos) = self.state.initial_position() {
             let delta = current_position - initial_pos;
             let distance = delta.distance();
 
-            if self.settings.lock().exceeds_touch_slop(distance) {
+            if self.settings.lock().exceeds_touch_slop(distance.get()) {
                 return true; // Moved too far
             }
         }
@@ -338,7 +340,7 @@ impl DoubleTapGestureRecognizer {
     }
 
     /// Extract position and pointer type from a PointerEvent
-    fn extract_event_data(event: &PointerEvent) -> (Offset, PointerType) {
+    fn extract_event_data(event: &PointerEvent) -> (Offset<Pixels>, PointerType) {
         let position = event.position();
         let pointer_type = match event {
             PointerEvent::Down(e) => e.pointer.pointer_type,
@@ -355,7 +357,7 @@ impl DoubleTapGestureRecognizer {
 }
 
 impl GestureRecognizer for DoubleTapGestureRecognizer {
-    fn add_pointer(&self, pointer: PointerId, position: Offset) {
+    fn add_pointer(&self, pointer: PointerId, position: Offset<Pixels>) {
         // Start tracking this pointer
         let recognizer = Arc::new(self.clone());
         self.state.start_tracking(pointer, position, &recognizer);
@@ -451,7 +453,7 @@ mod tests {
             });
 
         let pointer = PointerId::new(1);
-        let position = Offset::new(100.0, 100.0);
+        let position = Offset::new(px(100.0), px(100.0));
 
         // First tap
         recognizer.add_pointer(pointer, position);
@@ -484,7 +486,7 @@ mod tests {
             });
 
         let pointer = PointerId::new(1);
-        let first_pos = Offset::new(100.0, 100.0);
+        let first_pos = Offset::new(px(100.0), px(100.0));
 
         // First tap
         recognizer.add_pointer(pointer, first_pos);
@@ -492,7 +494,7 @@ mod tests {
         recognizer.handle_event(&up_event);
 
         // Second tap too far away (> 100px)
-        let second_pos = Offset::new(250.0, 100.0); // 150px away
+        let second_pos = Offset::new(px(250.0), px(100.0)); // 150px away
         recognizer.handle_down(second_pos, PointerType::Touch);
 
         // Should have reset to first tap, not double tap
@@ -513,7 +515,7 @@ mod tests {
         let recognizer = DoubleTapGestureRecognizer::new(arena);
 
         let pointer = PointerId::new(1);
-        let position = Offset::new(100.0, 100.0);
+        let position = Offset::new(px(100.0), px(100.0));
 
         // First tap
         recognizer.add_pointer(pointer, position);

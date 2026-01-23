@@ -48,6 +48,9 @@
 //! ```
 
 use flui_types::geometry::Offset;
+use flui_types::geometry::Pixels;
+use flui_types::geometry::PixelDelta;
+
 
 // ============================================================================
 // Re-exports from ui-events (W3C UI Events specification)
@@ -137,9 +140,9 @@ pub enum Event {
 #[derive(Debug, Clone)]
 pub struct PointerEventData {
     /// Position in global coordinates
-    pub position: Offset,
+    pub position: Offset<Pixels>,
     /// Position in local widget coordinates (set during hit testing)
-    pub local_position: Offset,
+    pub local_position: Offset<Pixels>,
     /// Device that generated the event
     pub device_kind: PointerType,
     /// Pointer device ID
@@ -154,7 +157,7 @@ pub struct PointerEventData {
 
 impl PointerEventData {
     /// Create new pointer event data
-    pub fn new(position: Offset, device_kind: PointerType) -> Self {
+    pub fn new(position: Offset<Pixels>, device_kind: PointerType) -> Self {
         Self {
             position,
             local_position: position,
@@ -429,14 +432,14 @@ fn get_pointer_state(event: &PointerEvent) -> Option<&PointerState> {
 /// Extension trait for extracting position from pointer events.
 pub trait PointerEventExt {
     /// Returns the position of the pointer event.
-    fn position(&self) -> Offset;
+    fn position(&self) -> Offset<Pixels>;
 
     /// Returns the pointer type if available.
     fn pointer_type(&self) -> Option<PointerType>;
 }
 
 impl PointerEventExt for PointerEvent {
-    fn position(&self) -> Offset {
+    fn position(&self) -> Offset<Pixels> {
         if let Some(state) = get_pointer_state(self) {
             let pos = state.position;
             Offset::new(pos.x as f32, pos.y as f32)
@@ -461,16 +464,16 @@ impl PointerEventExt for PointerEvent {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ScrollEventData {
     /// Position where the scroll occurred.
-    pub position: Offset,
+    pub position: Offset<Pixels>,
     /// Scroll delta in pixels (converted from any scroll unit).
-    pub delta: Offset,
+    pub delta: Offset<PixelDelta>,
     /// Keyboard modifiers active during scroll.
     pub modifiers: Modifiers,
 }
 
 impl ScrollEventData {
     /// Creates new scroll event data.
-    pub fn new(position: Offset, delta: Offset, modifiers: Modifiers) -> Self {
+    pub fn new(position: Offset<Pixels>, delta: Offset<PixelDelta>, modifiers: Modifiers) -> Self {
         Self {
             position,
             delta,
@@ -479,7 +482,7 @@ impl ScrollEventData {
     }
 
     /// Converts a ScrollDelta to pixel offset.
-    pub fn delta_to_offset(delta: &ScrollDelta) -> Offset {
+    pub fn delta_to_offset(delta: &ScrollDelta) -> Offset<PixelDelta> {
         match delta {
             ScrollDelta::PixelDelta(pos) => Offset::new(pos.x as f32, pos.y as f32),
             ScrollDelta::LineDelta(x, y) => {
@@ -510,7 +513,7 @@ impl From<&PointerScrollEvent> for ScrollEventData {
 // ============================================================================
 
 /// Create a PointerEvent::Down for testing
-pub fn make_down_event(position: Offset, pointer_type: PointerType) -> PointerEvent {
+pub fn make_down_event(position: Offset<Pixels>, pointer_type: PointerType) -> PointerEvent {
     use ui_events::pointer::{
         ContactGeometry, PointerButtonEvent, PointerOrientation, PointerState,
     };
@@ -524,7 +527,7 @@ pub fn make_down_event(position: Offset, pointer_type: PointerType) -> PointerEv
         },
         state: PointerState {
             time: 0,
-            position: dpi::PhysicalPosition::new(position.dx as f64, position.dy as f64),
+            position: dpi::PhysicalPosition::new(position.dx.get() as f64, position.dy.get() as f64),
             buttons: PointerButtons::from(PointerButton::Primary),
             modifiers: Modifiers::empty(),
             count: 1,
@@ -541,7 +544,7 @@ pub fn make_down_event(position: Offset, pointer_type: PointerType) -> PointerEv
 }
 
 /// Create a PointerEvent::Up for testing
-pub fn make_up_event(position: Offset, pointer_type: PointerType) -> PointerEvent {
+pub fn make_up_event(position: Offset<Pixels>, pointer_type: PointerType) -> PointerEvent {
     use ui_events::pointer::{
         ContactGeometry, PointerButtonEvent, PointerOrientation, PointerState,
     };
@@ -555,7 +558,7 @@ pub fn make_up_event(position: Offset, pointer_type: PointerType) -> PointerEven
         },
         state: PointerState {
             time: 0,
-            position: dpi::PhysicalPosition::new(position.dx as f64, position.dy as f64),
+            position: dpi::PhysicalPosition::new(position.dx.get() as f64, position.dy.get() as f64),
             buttons: PointerButtons::new(),
             modifiers: Modifiers::empty(),
             count: 1,
@@ -572,7 +575,7 @@ pub fn make_up_event(position: Offset, pointer_type: PointerType) -> PointerEven
 }
 
 /// Create a PointerEvent::Move for testing
-pub fn make_move_event(position: Offset, pointer_type: PointerType) -> PointerEvent {
+pub fn make_move_event(position: Offset<Pixels>, pointer_type: PointerType) -> PointerEvent {
     use ui_events::pointer::{ContactGeometry, PointerOrientation, PointerState, PointerUpdate};
 
     PointerEvent::Move(PointerUpdate {
@@ -583,7 +586,7 @@ pub fn make_move_event(position: Offset, pointer_type: PointerType) -> PointerEv
         },
         current: PointerState {
             time: 0,
-            position: dpi::PhysicalPosition::new(position.dx as f64, position.dy as f64),
+            position: dpi::PhysicalPosition::new(position.dx.get() as f64, position.dy.get() as f64),
             buttons: PointerButtons::from(PointerButton::Primary),
             modifiers: Modifiers::empty(),
             count: 0,
@@ -611,7 +614,7 @@ pub fn make_cancel_event(pointer_type: PointerType) -> PointerEvent {
 }
 
 /// Create a PointerEvent::Scroll for testing
-pub fn make_scroll_event(position: Offset, delta: Offset) -> PointerEvent {
+pub fn make_scroll_event(position: Offset<Pixels>, delta: Offset<Pixels>) -> PointerEvent {
     use ui_events::pointer::{
         ContactGeometry, PointerOrientation, PointerScrollEvent, PointerState,
     };
@@ -623,12 +626,12 @@ pub fn make_scroll_event(position: Offset, delta: Offset) -> PointerEvent {
             persistent_device_id: None,
         },
         delta: ScrollDelta::PixelDelta(dpi::PhysicalPosition::new(
-            delta.dx as f64,
-            delta.dy as f64,
+            delta.dx.get() as f64,
+            delta.dy.get() as f64,
         )),
         state: PointerState {
             time: 0,
-            position: dpi::PhysicalPosition::new(position.dx as f64, position.dy as f64),
+            position: dpi::PhysicalPosition::new(position.dx.get() as f64, position.dy.get() as f64),
             buttons: PointerButtons::new(),
             modifiers: Modifiers::empty(),
             count: 0,
@@ -671,7 +674,7 @@ pub fn make_pointer_event(kind: PointerEventKind, data: PointerEventData) -> Poi
 
     let state = PointerState {
         time: data.time_stamp,
-        position: dpi::PhysicalPosition::new(data.position.dx as f64, data.position.dy as f64),
+        position: dpi::PhysicalPosition::new(data.position.dx.get() as f64, data.position.dy.get() as f64),
         buttons: data.buttons,
         modifiers: Modifiers::empty(),
         count: 1,

@@ -138,7 +138,11 @@ impl ElementChildStorage for NoChildStorage {
         // No children to mount
     }
 
-    fn propagate_owner(&mut self, _owner: Arc<RwLock<PipelineOwner>>, _parent_id: Option<RenderId>) {
+    fn propagate_owner(
+        &mut self,
+        _owner: Arc<RwLock<PipelineOwner>>,
+        _parent_id: Option<RenderId>,
+    ) {
         // No children to propagate to
     }
 
@@ -197,7 +201,11 @@ impl ElementChildStorage for SingleChildStorage {
     }
 
     fn len(&self) -> usize {
-        if self.child.is_some() { 1 } else { 0 }
+        if self.child.is_some() {
+            1
+        } else {
+            0
+        }
     }
 
     fn create_from_view(&mut self, view: &dyn View) {
@@ -241,7 +249,10 @@ impl ElementChildStorage for SingleChildStorage {
             let owner_any: Arc<dyn Any + Send + Sync> = owner as Arc<dyn Any + Send + Sync>;
             child.set_pipeline_owner_any(owner_any);
             child.set_parent_render_id(parent_id);
-            tracing::debug!("SingleChildStorage: propagated owner and parent_id={:?}", parent_id);
+            tracing::debug!(
+                "SingleChildStorage: propagated owner and parent_id={:?}",
+                parent_id
+            );
         }
     }
 
@@ -311,7 +322,11 @@ impl ElementChildStorage for OptionalChildStorage {
     }
 
     fn len(&self) -> usize {
-        if self.child.is_some() { 1 } else { 0 }
+        if self.child.is_some() {
+            1
+        } else {
+            0
+        }
     }
 
     fn create_from_view(&mut self, view: &dyn View) {
@@ -352,7 +367,10 @@ impl ElementChildStorage for OptionalChildStorage {
             let owner_any: Arc<dyn Any + Send + Sync> = owner as Arc<dyn Any + Send + Sync>;
             child.set_pipeline_owner_any(owner_any);
             child.set_parent_render_id(parent_id);
-            tracing::debug!("OptionalChildStorage: propagated owner and parent_id={:?}", parent_id);
+            tracing::debug!(
+                "OptionalChildStorage: propagated owner and parent_id={:?}",
+                parent_id
+            );
         }
     }
 
@@ -437,7 +455,9 @@ impl ElementChildStorage for VariableChildStorage {
 
     fn update_with_view(&mut self, _view: &dyn View) {
         // For Variable arity, use update_with_views instead
-        tracing::warn!("VariableChildStorage::update_with_view called - use update_with_views instead");
+        tracing::warn!(
+            "VariableChildStorage::update_with_view called - use update_with_views instead"
+        );
     }
 
     fn update_with_views(&mut self, views: &[Box<dyn View>]) {
@@ -455,8 +475,9 @@ impl ElementChildStorage for VariableChildStorage {
 
         // Remove extra children
         if views.len() < self.children.len() {
-            for child in self.children.drain(views.len()..) {
-                // Unmount removed children
+            for mut child in self.children.drain(views.len()..) {
+                // Unmount removed children before dropping
+                child.unmount();
                 drop(child);
             }
         }
@@ -470,11 +491,16 @@ impl ElementChildStorage for VariableChildStorage {
 
     fn propagate_owner(&mut self, owner: Arc<RwLock<PipelineOwner>>, parent_id: Option<RenderId>) {
         for child in &mut self.children {
-            let owner_any: Arc<dyn Any + Send + Sync> = Arc::clone(&owner) as Arc<dyn Any + Send + Sync>;
+            let owner_any: Arc<dyn Any + Send + Sync> =
+                Arc::clone(&owner) as Arc<dyn Any + Send + Sync>;
             child.set_pipeline_owner_any(owner_any);
             child.set_parent_render_id(parent_id);
         }
-        tracing::debug!("VariableChildStorage: propagated owner and parent_id={:?} to {} children", parent_id, self.children.len());
+        tracing::debug!(
+            "VariableChildStorage: propagated owner and parent_id={:?} to {} children",
+            parent_id,
+            self.children.len()
+        );
     }
 
     fn deactivate_children(&mut self) {

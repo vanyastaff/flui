@@ -10,6 +10,8 @@
 //! Flutter reference: https://api.flutter.dev/flutter/gestures/TapGestureRecognizer-class.html
 
 use super::recognizer::{GestureRecognizer, GestureRecognizerState};
+use flui_types::geometry::Pixels;
+
 use crate::arena::GestureArenaMember;
 use crate::events::{PointerEvent, PointerType};
 use crate::ids::PointerId;
@@ -25,9 +27,9 @@ pub type TapCallback = Arc<dyn Fn(TapDetails) + Send + Sync>;
 #[derive(Debug, Clone, PartialEq)]
 pub struct TapDetails {
     /// Global position where tap occurred
-    pub global_position: Offset,
+    pub global_position: Offset<Pixels>,
     /// Local position (relative to widget)
-    pub local_position: Offset,
+    pub local_position: Offset<Pixels>,
     /// Pointer device kind
     pub kind: PointerType,
 }
@@ -179,7 +181,7 @@ impl TapGestureRecognizer {
     }
 
     /// Handle tap down event
-    fn handle_tap_down(&self, position: Offset, kind: PointerType) {
+    fn handle_tap_down(&self, position: Offset<Pixels>, kind: PointerType) {
         *self.gesture_state.lock() = TapState::Down;
 
         // Call on_tap_down callback
@@ -194,7 +196,7 @@ impl TapGestureRecognizer {
     }
 
     /// Handle tap up event
-    fn handle_tap_up(&self, position: Offset, kind: PointerType) {
+    fn handle_tap_up(&self, position: Offset<Pixels>, kind: PointerType) {
         let current_state = *self.gesture_state.lock();
 
         if current_state == TapState::Down {
@@ -224,7 +226,7 @@ impl TapGestureRecognizer {
     }
 
     /// Handle tap cancel event
-    fn handle_tap_cancel(&self, position: Offset, kind: PointerType) {
+    fn handle_tap_cancel(&self, position: Offset<Pixels>, kind: PointerType) {
         let current_state = *self.gesture_state.lock();
 
         if current_state == TapState::Down {
@@ -246,7 +248,7 @@ impl TapGestureRecognizer {
     }
 
     /// Handle tap move event (pointer moved within slop tolerance)
-    fn handle_tap_move(&self, position: Offset, kind: PointerType) {
+    fn handle_tap_move(&self, position: Offset<Pixels>, kind: PointerType) {
         let current_state = *self.gesture_state.lock();
 
         if current_state == TapState::Down {
@@ -263,7 +265,7 @@ impl TapGestureRecognizer {
     }
 
     /// Check if pointer moved too far (beyond slop tolerance)
-    fn check_slop(&self, current_position: Offset) -> bool {
+    fn check_slop(&self, current_position: Offset<Pixels>) -> bool {
         if let Some(initial_pos) = self.state.initial_position() {
             let delta = current_position - initial_pos;
             let distance = delta.distance();
@@ -277,7 +279,7 @@ impl TapGestureRecognizer {
 }
 
 impl GestureRecognizer for TapGestureRecognizer {
-    fn add_pointer(&self, pointer: PointerId, position: Offset) {
+    fn add_pointer(&self, pointer: PointerId, position: Offset<Pixels>) {
         // Start tracking this pointer
         // Create Arc from self for arena tracking
         let recognizer = Arc::new(self.clone());

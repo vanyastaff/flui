@@ -33,6 +33,7 @@
 //! ```
 
 use crate::events::PointerEvent;
+use flui_types::geometry::Pixels;
 use crate::ids::PointerId;
 use parking_lot::RwLock;
 use std::collections::HashMap;
@@ -324,7 +325,7 @@ mod tests {
     use flui_types::geometry::Offset;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    fn make_event(device: i32, position: Offset) -> PointerEvent {
+    fn make_event(device: i32, position: Offset<Pixels>) -> PointerEvent {
         // For testing, use make_move_event with the position
         // The device ID will be PRIMARY (0) by default
         let _ = device; // device ID is not directly settable in ui-events

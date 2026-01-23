@@ -23,7 +23,7 @@
 //! use flui_painting::ClipContext;
 //! use flui_rendering::PaintingContext;
 //!
-//! fn paint(&self, ctx: &mut PaintingContext, offset: Offset) {
+//! fn paint(&self, ctx: &mut PaintingContext, offset: Offset<Pixels>) {
 //!     // ClipContext methods available directly:
 //!     ctx.clip_rect_and_paint(rect, Clip::AntiAlias, bounds, |ctx| {
 //!         ctx.paint_child(child_id, offset);

@@ -34,7 +34,7 @@ use crate::display_list::{
     BlendMode, DisplayList, DisplayListCore, DrawCommand, ImageFilter, Paint,
 };
 use flui_types::{
-    geometry::{Matrix4, Offset, Point, RRect, Rect, Size},
+    geometry::{Matrix4, Offset, Pixels, Point, RRect, Rect, Size},
     painting::{Clip, ClipOp, Image, Path},
     styling::Color,
     typography::{InlineSpan, TextStyle},
@@ -446,7 +446,7 @@ impl Canvas {
         // Record the SaveLayer command
         self.display_list.push(DrawCommand::SaveLayer {
             bounds,
-            paint: paint.clone(),
+            paint: (*paint).clone(),
             transform: self.transform,
         });
 
@@ -557,9 +557,9 @@ impl Canvas {
     /// Uses default clip behavior (intersect, anti-aliased).
     pub fn clip_path(&mut self, path: &Path) {
         self.clip_stack
-            .push(ClipShape::Path(Box::new(path.clone())));
+            .push(ClipShape::Path(Box::new((*path).clone())));
         self.display_list.push(DrawCommand::ClipPath {
-            path: path.clone(),
+            path: (*path).clone(),
             transform: self.transform,
         });
     }
@@ -683,7 +683,7 @@ impl Canvas {
     #[must_use]
     pub fn would_be_clipped(&self, rect: &Rect) -> Option<bool> {
         self.local_clip_bounds()
-            .map(|clip_bounds| !clip_bounds.intersects(*rect))
+            .map(|clip_bounds| !clip_bounds.intersects(rect))
     }
 
     // ===== Drawing Primitives =====
@@ -695,7 +695,7 @@ impl Canvas {
     /// * `p1` - Start point
     /// * `p2` - End point
     /// * `paint` - Paint style (color, stroke width, etc.)
-    pub fn draw_line(&mut self, p1: Point, p2: Point, paint: &Paint) {
+    pub fn draw_line(&mut self, p1: Point<Pixels>, p2: Point<Pixels>, paint: &Paint) {
         self.display_list.push(DrawCommand::DrawLine {
             p1,
             p2,
@@ -745,7 +745,7 @@ impl Canvas {
     /// # Panics
     ///
     /// In debug builds, panics if `radius` is negative or NaN.
-    pub fn draw_circle(&mut self, center: Point, radius: f32, paint: &Paint) {
+    pub fn draw_circle(&mut self, center: Point<Pixels>, radius: f32, paint: &Paint) {
         debug_assert!(
             radius >= 0.0 && !radius.is_nan(),
             "Circle radius must be non-negative and not NaN, got: {}",
@@ -777,7 +777,7 @@ impl Canvas {
     ///
     /// ```rust,ignore
     /// use flui_painting::{Canvas, Paint};
-    /// use flui_types::{Path, Point, Color};
+    /// use flui_types::{Path, Point<Pixels>, Color};
     ///
     /// let mut canvas = Canvas::new();
     /// let mut path = Path::new();
@@ -809,8 +809,8 @@ impl Canvas {
     pub fn draw_text(
         &mut self,
         text: &str,
-        offset: Offset,
-        size: Size,
+        offset: Offset<Pixels>,
+        size: Size<Pixels>,
         style: &TextStyle,
         paint: &Paint,
     ) {
@@ -835,7 +835,7 @@ impl Canvas {
     /// * `text_scale_factor` - Scale factor for accessibility
     ///
     /// [`TextPainter`]: crate::TextPainter
-    pub fn draw_text_span(&mut self, span: &InlineSpan, offset: Offset, text_scale_factor: f64) {
+    pub fn draw_text_span(&mut self, span: &InlineSpan, offset: Offset<Pixels>, text_scale_factor: f64) {
         self.display_list.push(DrawCommand::DrawTextSpan {
             span: span.clone(),
             offset,
@@ -1220,7 +1220,7 @@ impl Canvas {
     pub fn draw_points_with_mode(
         &mut self,
         mode: crate::display_list::PointMode,
-        points: Vec<Point>,
+        points: Vec<Point<Pixels>>,
         paint: &Paint,
     ) {
         self.display_list.push(DrawCommand::DrawPoints {
@@ -1242,9 +1242,9 @@ impl Canvas {
     /// * `paint` - Paint style
     pub fn draw_vertices(
         &mut self,
-        vertices: Vec<Point>,
+        vertices: Vec<Point<Pixels>>,
         colors: Option<Vec<Color>>,
-        tex_coords: Option<Vec<Point>>,
+        tex_coords: Option<Vec<Point<Pixels>>>,
         indices: Vec<u16>,
         paint: &Paint,
     ) {
@@ -1519,19 +1519,19 @@ impl Canvas {
     ///
     /// In debug builds, panics if `radius` is negative or NaN.
     #[inline]
-    pub fn draw_point(&mut self, point: Point, radius: f32, paint: &Paint) {
+    pub fn draw_point(&mut self, point: Point<Pixels>, radius: f32, paint: &Paint) {
         self.draw_circle(point, radius, paint);
     }
 
     /// Draws multiple points
-    pub fn draw_points(&mut self, points: &[Point], radius: f32, paint: &Paint) {
+    pub fn draw_points(&mut self, points: &[Point<Pixels>], radius: f32, paint: &Paint) {
         for &point in points {
             self.draw_circle(point, radius, paint);
         }
     }
 
     /// Draws a polyline (connected line segments)
-    pub fn draw_polyline(&mut self, points: &[Point], paint: &Paint) {
+    pub fn draw_polyline(&mut self, points: &[Point<Pixels>], paint: &Paint) {
         if points.len() < 2 {
             return;
         }
@@ -1669,7 +1669,7 @@ impl Canvas {
     ///
     /// canvas.append_display_list_at_offset(&cached_display_list, offset);
     /// ```
-    pub fn append_display_list_at_offset(&mut self, display_list: &DisplayList, offset: Offset) {
+    pub fn append_display_list_at_offset(&mut self, display_list: &DisplayList, offset: Offset<Pixels>) {
         // If offset is zero, we can potentially optimize
         if offset.dx == 0.0 && offset.dy == 0.0 {
             // Clone and append directly
@@ -2323,7 +2323,7 @@ impl Canvas {
     /// canvas.draw_circles(&circles, &paint);
     /// ```
     #[inline]
-    pub fn draw_circles(&mut self, circles: &[(Point, f32)], paint: &Paint) {
+    pub fn draw_circles(&mut self, circles: &[(Point<Pixels>, f32)], paint: &Paint) {
         for (center, radius) in circles {
             self.draw_circle(*center, *radius, paint);
         }
@@ -2341,7 +2341,7 @@ impl Canvas {
     /// canvas.draw_lines(&lines, &paint);
     /// ```
     #[inline]
-    pub fn draw_lines(&mut self, lines: &[(Point, Point)], paint: &Paint) {
+    pub fn draw_lines(&mut self, lines: &[(Point<Pixels>, Point<Pixels>)], paint: &Paint) {
         for (p1, p2) in lines {
             self.draw_line(*p1, *p2, paint);
         }
@@ -2383,9 +2383,9 @@ impl Canvas {
 
     /// Draws a circle only if the condition is true.
     #[inline]
-    pub fn draw_circle_if(&mut self, condition: bool, center: Point, radius: f32, paint: &Paint) {
+    pub fn draw_circle_if(&mut self, condition: bool, center: Point<Pixels>, radius: f32, paint: &Paint) {
         if condition {
-            self.draw_circle(center, radius, paint);
+            self.draw_circle(center.map(Pixels), radius, paint);
         }
     }
 
@@ -2563,17 +2563,17 @@ impl Canvas {
     ///
     /// Useful for marking anchor points, centers, etc.
     #[inline]
-    pub fn debug_point(&mut self, point: Point, size: f32, color: Color) {
+    pub fn debug_point(&mut self, point: Point<Pixels>, size: f32, color: Color) {
         let half = size / 2.0;
         let paint = Paint::stroke(color, 1.0);
         self.draw_line(
-            Point::new(point.x - half, point.y),
-            Point::new(point.x + half, point.y),
+            Point::new(Pixels(point.x - half), Pixels(point.y)),
+            Point::new(Pixels(point.x + half), Pixels(point.y)),
             &paint,
         );
         self.draw_line(
-            Point::new(point.x, point.y - half),
-            Point::new(point.x, point.y + half),
+            Point::new(Pixels(point.x), Pixels(point.y - half)),
+            Point::new(Pixels(point.x), Pixels(point.y + half)),
             &paint,
         );
     }
@@ -2583,19 +2583,19 @@ impl Canvas {
     /// Shows X axis (red), Y axis (green), and origin point.
     #[inline]
     pub fn debug_axes(&mut self, length: f32) {
-        let origin = Point::new(0.0, 0.0);
+        let origin = Point::new(Pixels(0.0), Pixels(0.0));
 
         // X axis (red)
         self.draw_line(
             origin,
-            Point::new(length, 0.0),
+            Point::new(Pixels(length), Pixels(0.0)),
             &Paint::stroke(Color::RED, 2.0),
         );
 
         // Y axis (green)
         self.draw_line(
             origin,
-            Point::new(0.0, length),
+            Point::new(Pixels(0.0), Pixels(length)),
             &Paint::stroke(Color::GREEN, 2.0),
         );
 
@@ -2617,8 +2617,8 @@ impl Canvas {
         let mut x = bounds.left();
         while x <= bounds.right() {
             self.draw_line(
-                Point::new(x, bounds.top()),
-                Point::new(x, bounds.bottom()),
+                Point::new(Pixels(x), Pixels(bounds.top())),
+                Point::new(Pixels(x), Pixels(bounds.bottom())),
                 &paint,
             );
             x += spacing;
@@ -2628,8 +2628,8 @@ impl Canvas {
         let mut y = bounds.top();
         while y <= bounds.bottom() {
             self.draw_line(
-                Point::new(bounds.left(), y),
-                Point::new(bounds.right(), y),
+                Point::new(Pixels(bounds.left()), Pixels(y)),
+                Point::new(Pixels(bounds.right()), Pixels(y)),
                 &paint,
             );
             y += spacing;
@@ -2713,7 +2713,7 @@ impl Canvas {
     #[inline]
     pub fn draw_ring(
         &mut self,
-        center: Point,
+        center: Point<Pixels>,
         outer_radius: f32,
         inner_radius: f32,
         paint: &Paint,
@@ -2851,15 +2851,15 @@ impl Canvas {
 
     /// Draws a circle and returns self for chaining.
     #[inline]
-    pub fn circle(&mut self, center: Point, radius: f32, paint: &Paint) -> &mut Self {
-        self.draw_circle(center, radius, paint);
+    pub fn circle(&mut self, center: Point<Pixels>, radius: f32, paint: &Paint) -> &mut Self {
+        self.draw_circle(center.map(Pixels), radius, paint);
         self
     }
 
     /// Draws a line and returns self for chaining.
     #[inline]
-    pub fn line(&mut self, p1: Point, p2: Point, paint: &Paint) -> &mut Self {
-        self.draw_line(p1, p2, paint);
+    pub fn line(&mut self, p1: Point<Pixels>, p2: Point<Pixels>, paint: &Paint) -> &mut Self {
+        self.draw_line(p1.map(Pixels), p2.map(Pixels), paint);
         self
     }
 
@@ -2875,8 +2875,8 @@ impl Canvas {
     pub fn text(
         &mut self,
         text: &str,
-        offset: Offset,
-        size: Size,
+        offset: Offset<Pixels>,
+        size: Size<Pixels>,
         style: &TextStyle,
         paint: &Paint,
     ) -> &mut Self {
@@ -3010,7 +3010,7 @@ impl Canvas {
     pub fn points(
         &mut self,
         mode: crate::display_list::PointMode,
-        points: Vec<Point>,
+        points: Vec<Point<Pixels>>,
         paint: &Paint,
     ) -> &mut Self {
         self.draw_points_with_mode(mode, points, paint);
@@ -3021,9 +3021,9 @@ impl Canvas {
     #[inline]
     pub fn vertices(
         &mut self,
-        vertices: Vec<Point>,
+        vertices: Vec<Point<Pixels>>,
         colors: Option<Vec<Color>>,
-        tex_coords: Option<Vec<Point>>,
+        tex_coords: Option<Vec<Point<Pixels>>>,
         indices: Vec<u16>,
         paint: &Paint,
     ) -> &mut Self {

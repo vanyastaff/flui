@@ -34,7 +34,7 @@
 //! painter.paint(&mut canvas, Offset::ZERO);
 //! ```
 
-use flui_types::geometry::{Offset, Size};
+use flui_types::geometry::{Offset, Pixels, Size};
 use flui_types::typography::{
     InlineSpan, LineMetrics, PlaceholderDimensions, StrutStyle, TextAlign, TextBox, TextDirection,
     TextHeightBehavior, TextPosition, TextRange, TextWidthBasis,
@@ -106,7 +106,7 @@ struct TextLayoutCache {
     /// The max width constraint used for layout.
     max_width: f32,
     /// Computed size after layout.
-    size: Size,
+    size: Size<Pixels>,
     /// Distance to alphabetic baseline.
     alphabetic_baseline: f32,
     /// Distance to ideographic baseline.
@@ -114,7 +114,7 @@ struct TextLayoutCache {
     /// Whether layout did overflow.
     did_exceed_max_lines: bool,
     /// Computed paint offset based on alignment.
-    paint_offset: Offset,
+    paint_offset: Offset<Pixels>,
     /// The underlying text layout for cursor/hit testing.
     layout: TextLayout,
 }
@@ -478,7 +478,7 @@ impl TextPainter {
     }
 
     /// Computes the paint offset based on text alignment.
-    fn compute_paint_offset(&self, content_width: f32, max_width: f32) -> Offset {
+    fn compute_paint_offset(&self, content_width: f32, max_width: f32) -> Offset<Pixels> {
         if !max_width.is_finite() {
             return Offset::ZERO;
         }
@@ -512,7 +512,7 @@ impl TextPainter {
     ///
     /// Panics if [`layout`](Self::layout) has not been called.
     #[must_use]
-    pub fn size(&self) -> Size {
+    pub fn size(&self) -> Size<Pixels> {
         self.layout_cache
             .as_ref()
             .expect("layout() must be called before accessing size")
@@ -592,14 +592,15 @@ impl TextPainter {
     /// // Draw cursor at caret_offset
     /// ```
     #[must_use]
-    pub fn get_offset_for_caret(&mut self, position: TextPosition) -> Offset {
+    pub fn get_offset_for_caret(&mut self, position: TextPosition) -> Offset<Pixels> {
         let cache = self
             .layout_cache
             .as_mut()
             .expect("layout() must be called before get_offset_for_caret()");
 
         let offset = cache.layout.get_offset_for_caret(position);
-        offset + cache.paint_offset
+        let combined = offset + cache.paint_offset;
+        combined.map(Pixels)
     }
 
     /// Returns the text position for a screen offset.
@@ -622,14 +623,15 @@ impl TextPainter {
     /// // position.offset is the character index
     /// ```
     #[must_use]
-    pub fn get_position_for_offset(&self, offset: Offset) -> TextPosition {
+    pub fn get_position_for_offset(&self, offset: Offset<Pixels>) -> TextPosition {
         let cache = self
             .layout_cache
             .as_ref()
             .expect("layout() must be called before get_position_for_offset()");
 
-        // Adjust for paint offset
-        let adjusted = offset - cache.paint_offset;
+        // Convert to f32 and adjust for paint offset
+        let offset_f32 = offset.map(|p| p.0);
+        let adjusted = offset_f32 - cache.paint_offset;
         cache.layout.get_position_for_offset(adjusted)
     }
 
@@ -744,7 +746,7 @@ impl TextPainter {
     /// painter.layout(0.0, 200.0);
     /// painter.paint(&mut canvas, Offset::new(10.0, 10.0));
     /// ```
-    pub fn paint(&self, canvas: &mut Canvas, offset: Offset) {
+    pub fn paint(&self, canvas: &mut Canvas, offset: Offset<Pixels>) {
         let cache = self
             .layout_cache
             .as_ref()
@@ -764,11 +766,11 @@ impl TextPainter {
 
 /// Intermediate layout metrics.
 struct LayoutMetrics {
-    size: Size,
+    size: Size<Pixels>,
     alphabetic_baseline: f32,
     ideographic_baseline: f32,
     did_exceed_max_lines: bool,
-    paint_offset: Offset,
+    paint_offset: Offset<Pixels>,
 }
 
 /// The baseline to use for aligning text.

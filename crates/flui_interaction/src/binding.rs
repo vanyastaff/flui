@@ -76,6 +76,7 @@
 //! ```
 
 use crate::arena::GestureArena;
+use flui_types::geometry::Pixels;
 use crate::ids::PointerId;
 use crate::routing::{HitTestResult, PointerRouter};
 use crate::settings::GestureSettings;
@@ -227,7 +228,7 @@ impl GestureBinding {
     /// ```
     pub fn handle_pointer_event<F>(&self, event: &PointerEvent, hit_test_fn: F)
     where
-        F: FnOnce(Offset) -> HitTestResult,
+        F: FnOnce(Offset<Pixels>) -> HitTestResult,
     {
         match event {
             PointerEvent::Down(e) => {

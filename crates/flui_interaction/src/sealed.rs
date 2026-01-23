@@ -37,6 +37,8 @@
 //! ```
 
 use crate::ids::PointerId;
+use flui_types::geometry::Pixels;
+
 use flui_types::geometry::Offset;
 
 // ============================================================================
@@ -108,7 +110,7 @@ pub trait CustomGestureRecognizer: Send + Sync {
 /// }
 ///
 /// impl CustomHitTestable for CustomLayer {
-///     fn perform_hit_test(&self, position: Offset, result: &mut HitTestResult) -> bool {
+///     fn perform_hit_test(&self, position: Offset<Pixels>, result: &mut HitTestResult) -> bool {
 ///         if !self.bounds.contains(position) {
 ///             return false;
 ///         }
@@ -141,7 +143,7 @@ pub trait CustomHitTestable: Send + Sync {
     /// * `result` - Accumulator for hit test results
     fn perform_hit_test(
         &self,
-        position: Offset,
+        position: Offset<Pixels>,
         result: &mut crate::routing::HitTestResult,
     ) -> bool;
 

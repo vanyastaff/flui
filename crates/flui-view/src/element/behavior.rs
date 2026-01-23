@@ -7,7 +7,9 @@
 use super::arity::ElementArity;
 use super::generic::ElementCore;
 use crate::context::ElementBuildContext;
-use crate::view::{AnimatedView, InheritedView, ProxyView, StatefulView, StatelessView, View, ViewState};
+use crate::view::{
+    AnimatedView, InheritedView, ProxyView, StatefulView, StatelessView, View, ViewState,
+};
 use flui_foundation::{ListenerId, RenderId};
 use flui_rendering::pipeline::PipelineOwner;
 use flui_rendering::protocol::Protocol;
@@ -281,11 +283,17 @@ where
 {
     fn perform_build(&mut self, core: &mut ElementCore<V, A>) {
         if !core.should_build() {
-            tracing::trace!("RenderBehavior::perform_build skipped render_id={:?}", self.render_id);
+            tracing::trace!(
+                "RenderBehavior::perform_build skipped render_id={:?}",
+                self.render_id
+            );
             return;
         }
 
-        tracing::info!("RenderBehavior::perform_build START render_id={:?}", self.render_id);
+        tracing::info!(
+            "RenderBehavior::perform_build START render_id={:?}",
+            self.render_id
+        );
 
         let has_children = core.view().has_children();
 
@@ -300,7 +308,10 @@ where
 
         core.clear_dirty();
 
-        tracing::debug!("RenderBehavior::perform_build completed render_id={:?}", self.render_id);
+        tracing::debug!(
+            "RenderBehavior::perform_build completed render_id={:?}",
+            self.render_id
+        );
     }
 
     fn on_mount(&mut self, core: &mut ElementCore<V, A>) {
@@ -344,7 +355,10 @@ where
             if let Some(ref pipeline_owner) = core.pipeline_owner() {
                 let mut owner = pipeline_owner.write();
                 owner.render_tree_mut().remove(render_id);
-                tracing::debug!("RenderBehavior::on_unmount removed render_id={:?}", render_id);
+                tracing::debug!(
+                    "RenderBehavior::on_unmount removed render_id={:?}",
+                    render_id
+                );
             }
         }
 
@@ -361,7 +375,10 @@ where
                 owner.add_node_needing_layout(render_id.get(), tree_depth as usize);
                 owner.add_node_needing_paint(render_id.get(), tree_depth as usize);
 
-                tracing::debug!("RenderBehavior::on_update marked render_id={:?} dirty", render_id);
+                tracing::debug!(
+                    "RenderBehavior::on_update marked render_id={:?} dirty",
+                    render_id
+                );
             }
         }
     }
@@ -463,8 +480,9 @@ where
 
     fn on_unmount(&mut self, _core: &mut ElementCore<V, A>) {
         // Clear dependents on unmount
+        let count = self.dependents.len();
         self.dependents.clear();
-        tracing::debug!("InheritedBehavior::on_unmount cleared {} dependents", self.dependents.len());
+        tracing::debug!("InheritedBehavior::on_unmount cleared {} dependents", count);
     }
 }
 

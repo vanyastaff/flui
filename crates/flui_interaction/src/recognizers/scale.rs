@@ -10,6 +10,8 @@
 //! Flutter reference: https://api.flutter.dev/flutter/gestures/ScaleGestureRecognizer-class.html
 
 use super::recognizer::{GestureRecognizer, GestureRecognizerState};
+use flui_types::geometry::Pixels;
+
 use crate::arena::GestureArenaMember;
 use crate::events::PointerEvent;
 use crate::ids::PointerId;
@@ -36,9 +38,9 @@ pub type ScaleCancelCallback = Arc<dyn Fn() + Send + Sync>;
 #[derive(Debug, Clone, PartialEq)]
 pub struct ScaleStartDetails {
     /// Focal point (center between pointers) in global coordinates
-    pub focal_point: Offset,
+    pub focal_point: Offset<Pixels>,
     /// Focal point in local coordinates
-    pub local_focal_point: Offset,
+    pub local_focal_point: Offset<Pixels>,
     /// Number of pointers involved
     pub pointer_count: usize,
 }
@@ -47,9 +49,9 @@ pub struct ScaleStartDetails {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ScaleUpdateDetails {
     /// Focal point (center between pointers) in global coordinates
-    pub focal_point: Offset,
+    pub focal_point: Offset<Pixels>,
     /// Focal point in local coordinates
-    pub local_focal_point: Offset,
+    pub local_focal_point: Offset<Pixels>,
     /// Scale factor (1.0 = no change, >1.0 = zoom in, <1.0 = zoom out)
     pub scale: f32,
     /// Horizontal scale factor
@@ -66,7 +68,7 @@ pub struct ScaleUpdateDetails {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ScaleEndDetails {
     /// Final focal point
-    pub focal_point: Offset,
+    pub focal_point: Offset<Pixels>,
     /// Final scale factor
     pub scale: f32,
     /// Final rotation angle in radians
@@ -150,7 +152,7 @@ struct ScaleState {
     /// Current phase
     phase: ScalePhase,
     /// Active pointers and their positions
-    pointers: HashMap<PointerId, Offset>,
+    pointers: HashMap<PointerId, Offset<Pixels>>,
     /// Initial span (distance between first two pointers)
     initial_span: Option<f32>,
     /// Initial horizontal span
@@ -234,7 +236,7 @@ impl ScaleGestureRecognizer {
     }
 
     /// Handle pointer down - add to tracking
-    fn handle_pointer_down(&self, pointer: PointerId, position: Offset) {
+    fn handle_pointer_down(&self, pointer: PointerId, position: Offset<Pixels>) {
         let mut state = self.gesture_state.lock();
 
         // Add pointer to tracking
@@ -267,7 +269,7 @@ impl ScaleGestureRecognizer {
     }
 
     /// Handle pointer move - update scale
-    fn handle_pointer_move(&self, pointer: PointerId, position: Offset) {
+    fn handle_pointer_move(&self, pointer: PointerId, position: Offset<Pixels>) {
         let mut state = self.gesture_state.lock();
 
         // Update pointer position
@@ -472,7 +474,7 @@ impl ScaleGestureRecognizer {
 
     /// Calculate span (distance) between pointers
     /// Returns (total_span, horizontal_span, vertical_span)
-    fn calculate_spans(&self, pointers: &HashMap<PointerId, Offset>) -> (f32, f32, f32) {
+    fn calculate_spans(&self, pointers: &HashMap<PointerId, Offset<Pixels>>) -> (f32, f32, f32) {
         if pointers.len() < 2 {
             return (0.0, 0.0, 0.0);
         }
@@ -507,7 +509,7 @@ impl ScaleGestureRecognizer {
     }
 
     /// Calculate focal point (center of all pointers)
-    fn calculate_focal_point(&self, pointers: &HashMap<PointerId, Offset>) -> Offset {
+    fn calculate_focal_point(&self, pointers: &HashMap<PointerId, Offset<Pixels>>) -> Offset<Pixels> {
         if pointers.is_empty() {
             return Offset::ZERO;
         }
@@ -528,7 +530,7 @@ impl ScaleGestureRecognizer {
     ///
     /// For 2 pointers, returns the angle of the line between them.
     /// For more pointers, returns the average angle from the focal point to each pointer.
-    fn calculate_rotation(&self, pointers: &HashMap<PointerId, Offset>) -> f32 {
+    fn calculate_rotation(&self, pointers: &HashMap<PointerId, Offset<Pixels>>) -> f32 {
         if pointers.len() < 2 {
             return 0.0;
         }
@@ -564,7 +566,7 @@ impl ScaleGestureRecognizer {
 }
 
 impl GestureRecognizer for ScaleGestureRecognizer {
-    fn add_pointer(&self, pointer: PointerId, position: Offset) {
+    fn add_pointer(&self, pointer: PointerId, position: Offset<Pixels>) {
         // For the first pointer, track with arena
         if self.gesture_state.lock().pointers.is_empty() {
             let recognizer = Arc::new(self.clone());

@@ -7,7 +7,10 @@
 ///
 /// Describes the features and limitations of each platform.
 /// Used by the framework to adapt behavior.
-pub trait PlatformCapabilities: Send + Sync + Clone + Copy {
+///
+/// NOTE: This trait is not `Clone` or `Copy` to remain dyn-safe.
+/// Implementations should be cheap to construct.
+pub trait PlatformCapabilities: Send + Sync {
     /// Platform name for logging/debugging
     fn platform_name(&self) -> &'static str;
 

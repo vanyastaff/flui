@@ -4,6 +4,8 @@
 //! It uses hit testing for pointer events and focus management for keyboard events.
 
 use super::focus::FocusManager;
+use flui_types::geometry::Pixels;
+
 use super::hit_test::{HitTestResult, HitTestable};
 use crate::events::{Event, KeyEvent, PointerEvent, PointerEventExt, ScrollEventData};
 use crate::ids::PointerId;
@@ -43,7 +45,7 @@ struct PointerStateTracking {
     is_down: bool,
 
     /// Last known position
-    last_position: flui_types::geometry::Offset,
+    last_position: flui_types::geometry:: Offset<Pixels>,
 
     /// Target that received the down event (for drag tracking)
     down_target: Option<HitTestResult>,
@@ -268,7 +270,7 @@ pub(crate) mod tests {
     }
 
     impl HitTestable for MockLayer {
-        fn hit_test(&self, position: Offset, result: &mut HitTestResult) -> bool {
+        fn hit_test(&self, position: Offset<Pixels>, result: &mut HitTestResult) -> bool {
             if self.bounds.contains(position.into()) {
                 result.add(HitTestEntry::new(RenderId::new(1)));
                 true

@@ -4,8 +4,8 @@
 //! efficiently using keys and position matching.
 
 use flui_view::{
-    reconcile_children, BuildContext, ElementBase, ElementTree, Lifecycle, StatelessElement,
-    StatelessView, View,
+    reconcile_children, BuildContext, ElementBase, ElementTree, Lifecycle, StatelessBehavior,
+    StatelessElement, StatelessView, View,
 };
 
 // ============================================================================
@@ -26,7 +26,7 @@ impl StatelessView for SimpleView {
 
 impl View for SimpleView {
     fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(StatelessElement::new(self))
+        Box::new(StatelessElement::new(self, StatelessBehavior))
     }
 }
 
@@ -44,7 +44,7 @@ impl StatelessView for DifferentView {
 
 impl View for DifferentView {
     fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(StatelessElement::new(self))
+        Box::new(StatelessElement::new(self, StatelessBehavior))
     }
 }
 

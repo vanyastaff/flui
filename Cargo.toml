@@ -1,43 +1,29 @@
 [workspace]
 resolver = "2"
 members = [
-    # === Foundation Layer (required for flui_rendering) ===
-    "crates/flui_types",        # Base types - no dependencies
-    "crates/flui-foundation",   # Foundation types and utilities
-    "crates/flui-tree",         # Tree abstractions with arity system
+    # === Phase 1: Foundation Layer ===
+    "crates/flui_types",          # Base types with Unit system (ACTIVE)
+    "crates/flui-foundation",     # Foundation types and utilities (ACTIVE)
+    "crates/flui-tree",           # Tree abstractions (ACTIVE)
+    "crates/flui-platform",       # Platform abstraction traits (ACTIVE - Phase 1)
 
-    # === Core Dependencies ===
-    "crates/flui-layer",        # Layer tree for compositor
-    "crates/flui-semantics",    # Semantics tree for accessibility
-    "crates/flui_interaction",  # Event routing and hit testing
-    "crates/flui_painting",     # Painting primitives
-
-    # === Target Crate ===
-    "crates/flui_rendering",    # Render tree implementation (ACTIVE DEVELOPMENT)
-
-    # === View Layer ===
-    "crates/flui-view",         # View and Element system (ACTIVE DEVELOPMENT)
-
-    # === Animation (for testing) ===
-    "crates/flui-scheduler",    # Frame scheduling
-    "crates/flui_animation",    # Animation system
-
-    # === Core Layer ===
-    "crates/flui-reactivity",   # Reactive state management with hooks and signals
-    "crates/flui_engine",       # Rendering engine
-    "crates/flui_log",          # Cross-platform logging
-
-    # === Application Layer ===
-    "crates/flui_app",          # Application runner and bindings
-    "crates/flui-platform",       # Platform abstraction traits
-
-    # === Temporarily disabled ===
-    # "crates/flui_assets",       # Asset management system
-    # "crates/flui-objects",      # Concrete RenderObject implementations
-    "crates/flui_widgets",      # Widget library
-    # "crates/flui_devtools",     # Developer tools
-    # "crates/flui_cli",          # CLI tool for project management
-    # "crates/flui_build",        # Build system library for cross-platform builds
+    # === Temporarily disabled until Phase 1 complete ===
+    # "crates/flui-layer",
+    # "crates/flui-semantics",
+    # "crates/flui_interaction",
+    # "crates/flui_painting",
+    # "crates/flui_rendering",
+    # "crates/flui-view",
+    # "crates/flui-scheduler",
+    # "crates/flui_animation",
+    # "crates/flui-reactivity",
+    # "crates/flui_engine",
+    # "crates/flui_log",
+    # "crates/flui_app",
+    # "crates/flui_widgets",
+    # "crates/flui_devtools",
+    # "crates/flui_cli",
+    # "crates/flui_build",
 ]
 
 [workspace.package]
@@ -92,6 +78,9 @@ tracing-forest = { version = "0.3", features = ["smallvec"] }
 wgpu = { version = "25.0", default-features = false, features = ["wgsl"] }
 winit = "0.30.12"
 pollster = "0.4"
+
+# CLIPBOARD - Cross-platform clipboard access
+arboard = "3.4"
 
 # IMAGE PROCESSING - Used by flui_assets and flui_engine
 # TODO: Re-enable "webp" feature when image-webp is fixed for Rust 1.91+

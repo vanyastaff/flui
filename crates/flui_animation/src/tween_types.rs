@@ -26,7 +26,7 @@
 //! ```
 
 use crate::curve::Curve;
-use flui_types::geometry::{Offset, Rect, Size};
+use flui_types::geometry::{Offset, Pixels, Rect, Size};
 use flui_types::layout::{Alignment, EdgeInsets};
 use flui_types::styling::{BorderRadius, Color};
 
@@ -306,39 +306,39 @@ impl Tween<Color> for ColorTween {
 /// A tween that linearly interpolates between two sizes.
 ///
 /// Similar to Flutter's `SizeTween`.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SizeTween {
     /// The beginning size.
-    pub begin: Size,
+    pub begin: Size<Pixels>,
     /// The ending size.
-    pub end: Size,
+    pub end: Size<Pixels>,
 }
 
 impl SizeTween {
     /// Creates a new size tween.
     #[must_use]
-    pub const fn new(begin: Size, end: Size) -> Self {
+    pub const fn new(begin: Size<Pixels>, end: Size<Pixels>) -> Self {
         Self { begin, end }
     }
 }
 
-impl Animatable<Size> for SizeTween {
-    fn transform(&self, t: f32) -> Size {
+impl Animatable<Size<Pixels>> for SizeTween {
+    fn transform(&self, t: f32) -> Size<Pixels> {
         self.lerp(t)
     }
 }
 
-impl Tween<Size> for SizeTween {
-    fn begin(&self) -> &Size {
+impl Tween<Size<Pixels>> for SizeTween {
+    fn begin(&self) -> &Size<Pixels> {
         &self.begin
     }
 
-    fn end(&self) -> &Size {
+    fn end(&self) -> &Size<Pixels> {
         &self.end
     }
 
-    fn lerp(&self, t: f32) -> Size {
+    fn lerp(&self, t: f32) -> Size<Pixels> {
         let t = t.clamp(0.0, 1.0);
         Size::new(
             self.begin.width + (self.end.width - self.begin.width) * t,
@@ -395,39 +395,39 @@ impl Tween<Rect> for RectTween {
 /// A tween that linearly interpolates between two offsets.
 ///
 /// Similar to Flutter's `OffsetTween` (but `Offset::lerp` is used directly in Flutter).
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct OffsetTween {
     /// The beginning offset.
-    pub begin: Offset,
+    pub begin: Offset<Pixels>,
     /// The ending offset.
-    pub end: Offset,
+    pub end: Offset<Pixels>,
 }
 
 impl OffsetTween {
     /// Creates a new offset tween.
     #[must_use]
-    pub const fn new(begin: Offset, end: Offset) -> Self {
+    pub const fn new(begin: Offset<Pixels>, end: Offset<Pixels>) -> Self {
         Self { begin, end }
     }
 }
 
-impl Animatable<Offset> for OffsetTween {
-    fn transform(&self, t: f32) -> Offset {
+impl Animatable<Offset<Pixels>> for OffsetTween {
+    fn transform(&self, t: f32) -> Offset<Pixels> {
         self.lerp(t)
     }
 }
 
-impl Tween<Offset> for OffsetTween {
-    fn begin(&self) -> &Offset {
+impl Tween<Offset<Pixels>> for OffsetTween {
+    fn begin(&self) -> &Offset<Pixels> {
         &self.begin
     }
 
-    fn end(&self) -> &Offset {
+    fn end(&self) -> &Offset<Pixels> {
         &self.end
     }
 
-    fn lerp(&self, t: f32) -> Offset {
+    fn lerp(&self, t: f32) -> Offset<Pixels> {
         Offset::lerp(self.begin, self.end, t.clamp(0.0, 1.0))
     }
 }

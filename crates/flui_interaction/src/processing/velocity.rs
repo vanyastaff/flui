@@ -30,6 +30,9 @@
 //! ```
 
 use flui_types::geometry::Offset;
+use flui_types::geometry::Pixels;
+use flui_types::geometry::PixelDelta;
+
 use std::time::{Duration, Instant};
 
 // ============================================================================
@@ -59,18 +62,18 @@ const MIN_DURATION: Duration = Duration::from_micros(1000);
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Velocity {
     /// Velocity vector in pixels per second.
-    pub pixels_per_second: Offset,
+    pub pixels_per_second: Offset<PixelDelta>,
 }
 
 impl Velocity {
     /// Zero velocity.
     pub const ZERO: Self = Self {
-        pixels_per_second: Offset::ZERO,
+        pixels_per_second: Offset::new(PixelDelta::ZERO, PixelDelta::ZERO),
     };
 
     /// Create a new velocity from pixels per second.
     #[inline]
-    pub const fn new(pixels_per_second: Offset) -> Self {
+    pub const fn new(pixels_per_second: Offset<Pixels>) -> Self {
         Self { pixels_per_second }
     }
 
@@ -87,7 +90,7 @@ impl Velocity {
     }
 
     /// Get the direction as a unit vector, or None if velocity is zero.
-    pub fn direction(&self) -> Option<Offset> {
+    pub fn direction(&self) -> Option<Offset<Pixels>> {
         let mag = self.magnitude();
         if mag < f32::EPSILON {
             None
@@ -116,14 +119,14 @@ impl Velocity {
     }
 }
 
-impl From<Offset> for Velocity {
+impl From<Offset<Pixels>> for Velocity {
     #[inline]
-    fn from(pixels_per_second: Offset) -> Self {
+    fn from(pixels_per_second: Offset<Pixels>) -> Self {
         Self { pixels_per_second }
     }
 }
 
-impl From<Velocity> for Offset {
+impl From<Velocity> for Offset<Pixels> {
     #[inline]
     fn from(velocity: Velocity) -> Self {
         velocity.pixels_per_second
@@ -140,7 +143,7 @@ struct PositionSample {
     /// When this sample was recorded.
     time: Instant,
     /// Position at this time.
-    position: Offset,
+    position: Offset<Pixels>,
 }
 
 // ============================================================================
@@ -219,7 +222,7 @@ impl VelocityTracker {
     }
 
     /// Add a position sample.
-    pub fn add_position(&mut self, time: Instant, position: Offset) {
+    pub fn add_position(&mut self, time: Instant, position: Offset<Pixels>) {
         // Remove samples older than HORIZON
         let cutoff = time.checked_sub(HORIZON).unwrap_or(time);
         self.samples.retain(|s| s.time >= cutoff);
@@ -295,8 +298,8 @@ impl VelocityTracker {
             let weight = (-dt / 0.05).exp();
 
             times.push(t);
-            x_positions.push(sample.position.dx as f64);
-            y_positions.push(sample.position.dy as f64);
+            x_positions.push(sample.position.dx.get() as f64);
+            y_positions.push(sample.position.dy.get() as f64);
             weights.push(weight);
         }
 
@@ -324,8 +327,8 @@ impl VelocityTracker {
         for sample in &self.samples {
             let dt = ref_time.duration_since(sample.time).as_secs_f64();
             sum_t += -dt;
-            sum_x += sample.position.dx as f64;
-            sum_y += sample.position.dy as f64;
+            sum_x += sample.position.dx.get() as f64;
+            sum_y += sample.position.dy.get() as f64;
         }
 
         let mean_t = sum_t / n as f64;
@@ -340,8 +343,8 @@ impl VelocityTracker {
         for sample in &self.samples {
             let dt = ref_time.duration_since(sample.time).as_secs_f64();
             let t = -dt - mean_t;
-            let x = sample.position.dx as f64 - mean_x;
-            let y = sample.position.dy as f64 - mean_y;
+            let x = sample.position.dx.get() as f64 - mean_x;
+            let y = sample.position.dy.get() as f64 - mean_y;
 
             num_x += t * x;
             num_y += t * y;

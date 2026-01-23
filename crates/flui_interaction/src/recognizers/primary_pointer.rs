@@ -30,12 +30,12 @@
 //! }
 //!
 //! impl TapRecognizer {
-//!     fn handle_pointer_down(&mut self, position: Offset) {
+//!     fn handle_pointer_down(&mut self, position: Offset<Pixels>) {
 //!         self.state.set_state(GestureRecognizerState::Possible);
 //!         self.state.set_initial_position(position);
 //!     }
 //!
-//!     fn handle_pointer_move(&mut self, position: Offset) {
+//!     fn handle_pointer_move(&mut self, position: Offset<Pixels>) {
 //!         if self.state.exceeds_slop(position) {
 //!             self.state.set_state(GestureRecognizerState::Defunct);
 //!         }
@@ -44,6 +44,8 @@
 //! ```
 
 use crate::ids::PointerId;
+use flui_types::geometry::Pixels;
+
 use crate::recognizers::one_sequence::{OneSequenceGestureRecognizer, OneSequenceState};
 use crate::settings::GestureSettings;
 use flui_types::geometry::Offset;
@@ -140,10 +142,10 @@ pub trait PrimaryPointerGestureRecognizer: OneSequenceGestureRecognizer {
     fn set_state(&mut self, state: GestureRecognizerState);
 
     /// Get the initial position when tracking started.
-    fn initial_position(&self) -> Option<Offset>;
+    fn initial_position(&self) -> Option<Offset<Pixels>>;
 
     /// Set the initial position.
-    fn set_initial_position(&mut self, position: Offset);
+    fn set_initial_position(&mut self, position: Offset<Pixels>);
 
     /// Get the deadline (if set).
     fn deadline(&self) -> Option<Instant>;
@@ -173,10 +175,10 @@ pub trait PrimaryPointerGestureRecognizer: OneSequenceGestureRecognizer {
     ///
     /// Pre-acceptance slop is the maximum movement allowed while
     /// still in the Possible state.
-    fn exceeds_pre_acceptance_slop(&self, position: Offset) -> bool {
+    fn exceeds_pre_acceptance_slop(&self, position: Offset<Pixels>) -> bool {
         if let Some(initial) = self.initial_position() {
             let delta = position - initial;
-            let distance = (delta.dx * delta.dx + delta.dy * delta.dy).sqrt();
+            let distance = delta.distance();
             self.settings().exceeds_touch_slop(distance)
         } else {
             false
@@ -187,7 +189,7 @@ pub trait PrimaryPointerGestureRecognizer: OneSequenceGestureRecognizer {
     ///
     /// Post-acceptance slop is typically larger or infinite, allowing
     /// more movement after the gesture is accepted.
-    fn exceeds_post_acceptance_slop(&self, _position: Offset) -> bool {
+    fn exceeds_post_acceptance_slop(&self, _position: Offset<Pixels>) -> bool {
         // By default, no post-acceptance slop limit
         false
     }
@@ -213,7 +215,7 @@ pub trait PrimaryPointerGestureRecognizer: OneSequenceGestureRecognizer {
     /// Reset to ready state.
     fn reset(&mut self) {
         self.set_state(GestureRecognizerState::Ready);
-        self.set_initial_position(Offset::ZERO);
+        self.set_initial_position(Offset::new(Pixels::ZERO, Pixels::ZERO));
         self.clear_deadline();
         self.stop_tracking_all();
     }
@@ -229,7 +231,7 @@ pub struct PrimaryPointerState {
     /// Current state machine state.
     state: GestureRecognizerState,
     /// Initial position when tracking started.
-    initial_position: Option<Offset>,
+    initial_position: Option<Offset<Pixels>>,
     /// Deadline for gesture resolution.
     deadline: Option<Instant>,
 }
@@ -272,12 +274,12 @@ impl PrimaryPointerState {
     }
 
     /// Get initial position.
-    pub fn initial_position(&self) -> Option<Offset> {
+    pub fn initial_position(&self) -> Option<Offset<Pixels>> {
         self.initial_position
     }
 
     /// Set initial position.
-    pub fn set_initial_position(&mut self, position: Offset) {
+    pub fn set_initial_position(&mut self, position: Offset<Pixels>) {
         self.initial_position = Some(position);
     }
 
@@ -302,10 +304,10 @@ impl PrimaryPointerState {
     }
 
     /// Check if exceeds slop.
-    pub fn exceeds_slop(&self, position: Offset) -> bool {
+    pub fn exceeds_slop(&self, position: Offset<Pixels>) -> bool {
         if let Some(initial) = self.initial_position {
             let delta = position - initial;
-            let distance = (delta.dx * delta.dx + delta.dy * delta.dy).sqrt();
+            let distance = delta.distance();
             self.base.settings().exceeds_touch_slop(distance)
         } else {
             false
@@ -313,17 +315,17 @@ impl PrimaryPointerState {
     }
 
     /// Get distance from initial position.
-    pub fn distance_from_initial(&self, position: Offset) -> f32 {
+    pub fn distance_from_initial(&self, position: Offset<Pixels>) -> f32 {
         if let Some(initial) = self.initial_position {
             let delta = position - initial;
-            (delta.dx * delta.dx + delta.dy * delta.dy).sqrt()
+            delta.distance()
         } else {
             0.0
         }
     }
 
     /// Start tracking with initial position.
-    pub fn start_tracking_at(&mut self, pointer: PointerId, position: Offset) {
+    pub fn start_tracking_at(&mut self, pointer: PointerId, position: Offset<Pixels>) {
         self.base.start_tracking(pointer);
         self.initial_position = Some(position);
         self.state = GestureRecognizerState::Possible;

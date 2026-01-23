@@ -11,6 +11,8 @@
 //! Flutter reference: https://api.flutter.dev/flutter/gestures/ForcePressGestureRecognizer-class.html
 
 use super::recognizer::{GestureRecognizer, GestureRecognizerState};
+use flui_types::geometry::Pixels;
+
 use crate::arena::GestureArenaMember;
 use crate::events::PointerEvent;
 use crate::ids::PointerId;
@@ -118,7 +120,7 @@ struct ForcePressState {
     /// Current phase
     phase: ForcePressPhase,
     /// Current position
-    current_position: Offset,
+    current_position: Offset<Pixels>,
     /// Current pressure (0.0 to 1.0)
     current_pressure: f32,
     /// Maximum pressure for the device (always 1.0 for ui-events)
@@ -131,7 +133,7 @@ impl Default for ForcePressState {
     fn default() -> Self {
         Self {
             phase: ForcePressPhase::Ready,
-            current_position: Offset::ZERO,
+            current_position: Offset::new(Pixels::ZERO, Pixels::ZERO),
             current_pressure: 0.0,
             max_pressure: 1.0,
             peak_triggered: false,
@@ -259,7 +261,7 @@ impl ForcePressGestureRecognizer {
     }
 
     /// Handle pointer down event
-    fn handle_down(&self, position: Offset, pressure: f32) {
+    fn handle_down(&self, position: Offset<Pixels>, pressure: f32) {
         let mut state = self.gesture_state.lock();
 
         // Check if device supports pressure (pressure > 0 indicates support)
@@ -292,7 +294,7 @@ impl ForcePressGestureRecognizer {
     }
 
     /// Handle pointer move event (pressure may change)
-    fn handle_move(&self, position: Offset, pressure: f32) {
+    fn handle_move(&self, position: Offset<Pixels>, pressure: f32) {
         // Cache settings to avoid nested locks
         let settings = self.settings.lock().clone();
         let mut state = self.gesture_state.lock();
@@ -383,7 +385,7 @@ impl ForcePressGestureRecognizer {
     }
 
     /// Handle pointer up event
-    fn handle_up(&self, position: Offset) {
+    fn handle_up(&self, position: Offset<Pixels>) {
         let mut state = self.gesture_state.lock();
         state.current_position = position;
         state.current_pressure = 0.0;
@@ -442,7 +444,7 @@ impl ForcePressGestureRecognizer {
     fn reset(&self) {
         let mut state = self.gesture_state.lock();
         state.phase = ForcePressPhase::Ready;
-        state.current_position = Offset::ZERO;
+        state.current_position = Offset::new(Pixels::ZERO, Pixels::ZERO);
         state.current_pressure = 0.0;
         state.peak_triggered = false;
         drop(state);
@@ -452,7 +454,7 @@ impl ForcePressGestureRecognizer {
 }
 
 impl GestureRecognizer for ForcePressGestureRecognizer {
-    fn add_pointer(&self, pointer: PointerId, position: Offset) {
+    fn add_pointer(&self, pointer: PointerId, position: Offset<Pixels>) {
         // Start tracking this pointer
         let recognizer = Arc::new(self.clone());
         self.state.start_tracking(pointer, position, &recognizer);

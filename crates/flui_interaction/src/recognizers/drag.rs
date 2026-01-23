@@ -10,6 +10,9 @@
 //! Flutter reference: https://api.flutter.dev/flutter/gestures/DragGestureRecognizer-class.html
 
 use super::recognizer::{GestureRecognizer, GestureRecognizerState};
+use flui_types::geometry::Pixels;
+use flui_types::geometry::PixelDelta;
+
 use crate::arena::GestureArenaMember;
 use crate::events::{PointerEvent, PointerEventExt, PointerType};
 use crate::ids::PointerId;
@@ -35,9 +38,9 @@ pub enum DragAxis {
 #[derive(Debug, Clone, PartialEq)]
 pub struct DragDownDetails {
     /// Global position where pointer contacted the screen
-    pub global_position: Offset,
+    pub global_position: Offset<Pixels>,
     /// Local position (relative to widget)
-    pub local_position: Offset,
+    pub local_position: Offset<Pixels>,
     /// Pointer device kind
     pub kind: PointerType,
 }
@@ -46,9 +49,9 @@ pub struct DragDownDetails {
 #[derive(Debug, Clone)]
 pub struct DragStartDetails {
     /// Global position where drag started
-    pub global_position: Offset,
+    pub global_position: Offset<Pixels>,
     /// Local position (relative to widget)
-    pub local_position: Offset,
+    pub local_position: Offset<Pixels>,
     /// Pointer device kind
     pub kind: PointerType,
     /// When the drag started
@@ -59,11 +62,11 @@ pub struct DragStartDetails {
 #[derive(Debug, Clone, PartialEq)]
 pub struct DragUpdateDetails {
     /// Current global position
-    pub global_position: Offset,
+    pub global_position: Offset<Pixels>,
     /// Current local position
-    pub local_position: Offset,
+    pub local_position: Offset<Pixels>,
     /// Delta since last update
-    pub delta: Offset,
+    pub delta: Offset<PixelDelta>,
     /// Total delta since drag started
     pub primary_delta: f32,
     /// Pointer device kind
@@ -76,9 +79,9 @@ pub struct DragEndDetails {
     /// Velocity at end of drag (pixels per second)
     pub velocity: Velocity,
     /// Final global position
-    pub global_position: Offset,
+    pub global_position: Offset<Pixels>,
     /// Final local position
-    pub local_position: Offset,
+    pub local_position: Offset<Pixels>,
     /// Primary velocity (axis-aligned)
     pub primary_velocity: f32,
 }
@@ -162,11 +165,11 @@ struct DragState {
     /// When drag started
     start_time: Option<Instant>,
     /// Last update position
-    last_position: Option<Offset>,
+    last_position: Option<Offset<Pixels>>,
     /// Last update time (for velocity calculation)
     last_time: Option<Instant>,
     /// Total delta since start
-    total_delta: Offset,
+    total_delta: Offset<PixelDelta>,
     /// Velocity tracker
     velocity_tracker: VelocityTracker,
 }
@@ -186,7 +189,7 @@ impl Default for DragState {
             start_time: None,
             last_position: None,
             last_time: None,
-            total_delta: Offset::ZERO,
+            total_delta: Offset::new(PixelDelta::ZERO, PixelDelta::ZERO),
             velocity_tracker: VelocityTracker::new(),
         }
     }
@@ -289,13 +292,13 @@ impl DragGestureRecognizer {
     }
 
     /// Handle pointer down - start tracking
-    fn handle_down(&self, position: Offset, kind: PointerType) {
+    fn handle_down(&self, position: Offset<Pixels>, kind: PointerType) {
         let mut state = self.drag_state.lock();
         state.state = DragPhase::Possible;
         state.start_time = Some(Instant::now());
         state.last_position = Some(position);
         state.last_time = Some(Instant::now());
-        state.total_delta = Offset::ZERO;
+        state.total_delta = Offset::new(PixelDelta::ZERO, PixelDelta::ZERO);
         state.velocity_tracker.reset();
         state
             .velocity_tracker
@@ -314,7 +317,7 @@ impl DragGestureRecognizer {
     }
 
     /// Handle pointer move - check slop and start/update drag
-    fn handle_move(&self, position: Offset, kind: PointerType) {
+    fn handle_move(&self, position: Offset<Pixels>, kind: PointerType) {
         let mut state = self.drag_state.lock();
 
         match state.state {
@@ -344,7 +347,7 @@ impl DragGestureRecognizer {
             DragPhase::Started => {
                 // Update drag
                 if let Some(last_pos) = state.last_position {
-                    let delta = position - last_pos;
+                    let delta = (position - last_pos).to_delta();
                     state.total_delta = state.total_delta + delta;
                     state.last_position = Some(position);
                     state.last_time = Some(Instant::now());
@@ -352,7 +355,7 @@ impl DragGestureRecognizer {
                         .velocity_tracker
                         .add_position(Instant::now(), position);
 
-                    let primary_delta = self.calculate_primary_delta(state.total_delta);
+                    let primary_delta = self.calculate_primary_delta(state.total_delta.to_pixels());
 
                     drop(state); // Release lock before calling callback
 
@@ -373,13 +376,13 @@ impl DragGestureRecognizer {
     }
 
     /// Handle pointer up - end drag
-    fn handle_up(&self, position: Offset, _kind: PointerType) {
+    fn handle_up(&self, position: Offset<Pixels>, _kind: PointerType) {
         let mut state = self.drag_state.lock();
 
         if state.state == DragPhase::Started {
             // Calculate final velocity
             let velocity = state.velocity_tracker.velocity();
-            let primary_velocity = self.calculate_primary_velocity(velocity.pixels_per_second);
+            let primary_velocity = self.calculate_primary_velocity(velocity.pixels_per_second.to_pixels());
 
             state.state = DragPhase::Ready;
             drop(state); // Release lock before calling callback
@@ -418,19 +421,19 @@ impl DragGestureRecognizer {
     }
 
     /// Calculate primary delta based on axis
-    fn calculate_primary_delta(&self, delta: Offset) -> f32 {
+    fn calculate_primary_delta(&self, delta: Offset<Pixels>) -> f32 {
         match self.axis {
-            DragAxis::Vertical => delta.dy,
-            DragAxis::Horizontal => delta.dx,
+            DragAxis::Vertical => delta.dy.get(),
+            DragAxis::Horizontal => delta.dx.get(),
             DragAxis::Free => delta.distance(),
         }
     }
 
     /// Calculate primary velocity based on axis
-    fn calculate_primary_velocity(&self, velocity: Offset) -> f32 {
+    fn calculate_primary_velocity(&self, velocity: Offset<Pixels>) -> f32 {
         match self.axis {
-            DragAxis::Vertical => velocity.dy,
-            DragAxis::Horizontal => velocity.dx,
+            DragAxis::Vertical => velocity.dy.get(),
+            DragAxis::Horizontal => velocity.dx.get(),
             DragAxis::Free => velocity.distance(),
         }
     }
@@ -442,7 +445,7 @@ impl DragGestureRecognizer {
     }
 
     /// Extract position and pointer type from a PointerEvent
-    fn extract_event_data(event: &PointerEvent) -> (Offset, PointerType) {
+    fn extract_event_data(event: &PointerEvent) -> (Offset<Pixels>, PointerType) {
         let position = event.position();
         let pointer_type = match event {
             PointerEvent::Down(e) => e.pointer.pointer_type,
@@ -459,7 +462,7 @@ impl DragGestureRecognizer {
 }
 
 impl GestureRecognizer for DragGestureRecognizer {
-    fn add_pointer(&self, pointer: PointerId, position: Offset) {
+    fn add_pointer(&self, pointer: PointerId, position: Offset<Pixels>) {
         // Start tracking this pointer
         let recognizer = Arc::new(self.clone());
         self.state.start_tracking(pointer, position, &recognizer);

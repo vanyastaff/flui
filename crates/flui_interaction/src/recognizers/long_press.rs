@@ -12,6 +12,8 @@
 //! Flutter reference: https://api.flutter.dev/flutter/gestures/LongPressGestureRecognizer-class.html
 
 use super::recognizer::{GestureRecognizer, GestureRecognizerState};
+use flui_types::geometry::Pixels;
+
 use crate::arena::GestureArenaMember;
 use crate::events::{PointerEvent, PointerType};
 use crate::ids::PointerId;
@@ -37,9 +39,9 @@ pub type LongPressCallback = Arc<dyn Fn(LongPressDetails) + Send + Sync>;
 #[derive(Debug, Clone, PartialEq)]
 pub struct LongPressDownDetails {
     /// Global position where pointer contacted screen
-    pub global_position: Offset,
+    pub global_position: Offset<Pixels>,
     /// Local position (relative to widget)
-    pub local_position: Offset,
+    pub local_position: Offset<Pixels>,
     /// Pointer device kind
     pub kind: PointerType,
 }
@@ -48,9 +50,9 @@ pub struct LongPressDownDetails {
 #[derive(Debug, Clone, PartialEq)]
 pub struct LongPressStartDetails {
     /// Global position where long press started
-    pub global_position: Offset,
+    pub global_position: Offset<Pixels>,
     /// Local position (relative to widget)
-    pub local_position: Offset,
+    pub local_position: Offset<Pixels>,
     /// Pointer device kind
     pub kind: PointerType,
 }
@@ -59,9 +61,9 @@ pub struct LongPressStartDetails {
 #[derive(Debug, Clone, PartialEq)]
 pub struct LongPressDetails {
     /// Global position
-    pub global_position: Offset,
+    pub global_position: Offset<Pixels>,
     /// Local position (relative to widget)
-    pub local_position: Offset,
+    pub local_position: Offset<Pixels>,
     /// Pointer device kind
     pub kind: PointerType,
 }
@@ -134,7 +136,7 @@ struct LongPressState {
     /// Time when pointer went down
     down_time: Option<Instant>,
     /// Current position
-    current_position: Option<Offset>,
+    current_position: Option<Offset<Pixels>>,
     /// Pointer device kind
     device_kind: Option<PointerType>,
 }
@@ -263,7 +265,7 @@ impl LongPressGestureRecognizer {
     }
 
     /// Handle pointer down event
-    fn handle_down(&self, position: Offset, kind: PointerType) {
+    fn handle_down(&self, position: Offset<Pixels>, kind: PointerType) {
         let mut state = self.gesture_state.lock();
         state.phase = LongPressPhase::Possible;
         state.down_time = Some(Instant::now());
@@ -283,7 +285,7 @@ impl LongPressGestureRecognizer {
     }
 
     /// Handle pointer move event
-    fn handle_move(&self, position: Offset, kind: PointerType) {
+    fn handle_move(&self, position: Offset<Pixels>, kind: PointerType) {
         // Cache settings to avoid multiple locks
         let settings = self.settings.lock().clone();
         let mut state = self.gesture_state.lock();
@@ -347,7 +349,7 @@ impl LongPressGestureRecognizer {
     }
 
     /// Handle pointer up event
-    fn handle_up(&self, position: Offset, kind: PointerType) {
+    fn handle_up(&self, position: Offset<Pixels>, kind: PointerType) {
         let mut state = self.gesture_state.lock();
 
         match state.phase {
@@ -384,7 +386,7 @@ impl LongPressGestureRecognizer {
     }
 
     /// Handle cancel event
-    fn handle_cancel(&self, position: Offset, kind: PointerType) {
+    fn handle_cancel(&self, position: Offset<Pixels>, kind: PointerType) {
         let mut state = self.gesture_state.lock();
 
         if state.phase == LongPressPhase::Started || state.phase == LongPressPhase::Possible {
@@ -448,7 +450,7 @@ impl LongPressGestureRecognizer {
 }
 
 impl GestureRecognizer for LongPressGestureRecognizer {
-    fn add_pointer(&self, pointer: PointerId, position: Offset) {
+    fn add_pointer(&self, pointer: PointerId, position: Offset<Pixels>) {
         // Start tracking this pointer
         let recognizer = Arc::new(self.clone());
         self.state.start_tracking(pointer, position, &recognizer);
