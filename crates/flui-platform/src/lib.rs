@@ -102,15 +102,12 @@ pub use traits::{
 // Re-export platform implementations
 pub use platforms::HeadlessPlatform;
 
-// TEMPORARILY DISABLED for Phase 1
+// Windows disabled (needs refactoring to Arc)
 // #[cfg(windows)]
 // pub use platforms::WindowsPlatform;
 
-// #[cfg(feature = "winit-backend")]
-// pub use platforms::WinitPlatform;
-
-// #[cfg(feature = "winit-backend")]
-// pub use traits::WinitWindow;
+#[cfg(feature = "winit-backend")]
+pub use platforms::WinitPlatform;
 
 // Re-export shared infrastructure
 pub use shared::PlatformHandlers;
@@ -141,37 +138,32 @@ use std::sync::Arc;
 ///
 /// - `FLUI_HEADLESS`: Set to `1` to force headless mode (useful for CI)
 pub fn current_platform() -> Arc<dyn Platform> {
-    // PHASE 1: Only headless platform supported
-    tracing::info!("Using headless platform (Phase 1 - foundation layer only)");
-    Arc::new(HeadlessPlatform::new())
+    // Check for headless mode
+    if std::env::var("FLUI_HEADLESS").unwrap_or_default() == "1" {
+        tracing::info!("Using headless platform (FLUI_HEADLESS=1)");
+        return Arc::new(HeadlessPlatform::new());
+    }
 
-    // TEMPORARILY DISABLED for Phase 1
-    // // Check for headless mode
-    // if std::env::var("FLUI_HEADLESS").unwrap_or_default() == "1" {
-    //     tracing::info!("Using headless platform (FLUI_HEADLESS=1)");
-    //     return Arc::new(HeadlessPlatform::new());
-    // }
+    // Winit backend (cross-platform)
+    #[cfg(feature = "winit-backend")]
+    {
+        tracing::info!("Using winit platform (cross-platform)");
+        return Arc::new(WinitPlatform::new());
+    }
 
-    // // Windows: Native Win32 platform
+    // Windows: Native Win32 platform (DISABLED - needs refactoring)
     // #[cfg(windows)]
     // {
     //     tracing::info!("Using Windows native platform (Win32 API)");
     //     return Arc::new(WindowsPlatform::new().expect("Failed to create Windows platform"));
     // }
 
-    // // Legacy winit backend (if enabled)
-    // #[cfg(all(feature = "winit-backend", not(windows)))]
-    // {
-    //     tracing::info!("Using legacy winit platform");
-    //     return Arc::new(WinitPlatform::new());
-    // }
-
-    // // Fallback to headless
-    // #[cfg(not(any(windows, feature = "winit-backend")))]
-    // {
-    //     tracing::warn!("No native platform available, falling back to headless");
-    //     Arc::new(HeadlessPlatform::new())
-    // }
+    // Fallback to headless
+    #[cfg(not(feature = "winit-backend"))]
+    {
+        tracing::warn!("No platform backend enabled, falling back to headless");
+        Arc::new(HeadlessPlatform::new())
+    }
 }
 
 /// Create a headless platform for testing
