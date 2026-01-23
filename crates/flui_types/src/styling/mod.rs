@@ -20,7 +20,7 @@ pub mod shape_border;
 pub use border::{BorderPosition, BorderSide, BorderStyle};
 pub use border_radius::{BorderRadius, BorderRadiusDirectional};
 pub use box_border::{Border, BorderDirectional, BoxBorder};
-pub use color::{Color, ParseColorError};
+pub use color::{Color, Colorf32, ParseColorError};
 pub use color32::Color32;
 pub use decoration::{
     BlendMode, BoxDecoration, BoxFit, ColorFilter, Decoration, DecorationImage, ImageRepeat,
