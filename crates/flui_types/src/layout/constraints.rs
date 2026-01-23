@@ -247,9 +247,10 @@ impl BoxConstraints {
 
     /// Deflates constraints by EdgeInsets (shrinks available space)
     #[inline]
+    #[allow(deprecated)]
     pub fn deflate(&self, insets: crate::layout::EdgeInsets) -> Self {
-        let horizontal = Pixels(insets.left + insets.right);
-        let vertical = Pixels(insets.top + insets.bottom);
+        let horizontal = insets.horizontal_total();
+        let vertical = insets.vertical_total();
 
         Self::new(
             Pixels((self.min_width.0 - horizontal.0).max(0.0)),
