@@ -1098,6 +1098,58 @@ impl Point<super::units::ScaledPixels> {
 }
 
 // ============================================================================
+// Type-safe scale conversions with ScaleFactor
+// ============================================================================
+
+impl Point<Pixels> {
+    /// Type-safe scale conversion to DevicePixels.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::geometry::{Point, ScaleFactor, Pixels, DevicePixels, px, device_px};
+    ///
+    /// let logical = Point::new(px(100.0), px(200.0));
+    /// let scale = ScaleFactor::<Pixels, DevicePixels>::new(2.0);
+    /// let device = logical.scale_with(scale);
+    /// assert_eq!(device.x.get(), 200);
+    /// assert_eq!(device.y.get(), 400);
+    /// ```
+    #[must_use]
+    pub fn scale_with(self, scale: super::units::ScaleFactor<Pixels, super::units::DevicePixels>) -> Point<super::units::DevicePixels> {
+        use super::units::device_px;
+        Point {
+            x: device_px((self.x.get() * scale.get()).round() as i32),
+            y: device_px((self.y.get() * scale.get()).round() as i32),
+        }
+    }
+}
+
+impl Point<super::units::DevicePixels> {
+    /// Converts to logical pixels using a type-safe scale factor.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::geometry::{Point, ScaleFactor, Pixels, DevicePixels, device_px, px};
+    ///
+    /// let device = Point::new(device_px(200.0), device_px(400.0));
+    /// let scale = ScaleFactor::<Pixels, DevicePixels>::new(2.0);
+    /// let logical = device.unscale(scale);
+    /// assert_eq!(logical.x, px(100.0));
+    /// assert_eq!(logical.y, px(200.0));
+    /// ```
+    #[must_use]
+    pub fn unscale(self, scale: super::units::ScaleFactor<Pixels, super::units::DevicePixels>) -> Point<Pixels> {
+        let inverse = scale.inverse();
+        Point {
+            x: px(self.x.get() as f32 * inverse.get()),
+            y: px(self.y.get() as f32 * inverse.get()),
+        }
+    }
+}
+
+// ============================================================================
 // Generic relative positioning (requires Sub)
 // ============================================================================
 

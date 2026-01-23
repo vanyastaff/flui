@@ -1,7 +1,7 @@
 //! 2D offset (position/translation) type
 //!
 //! This module provides an immutable 2D offset type, similar to Flutter's Offset.
-use super::Pixels;
+use super::{px, Pixels};
 
 use std::fmt::{self, Debug, Display};
 use std::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
@@ -818,6 +818,58 @@ where
         let dx_sign = self.dx.abs_sign();
         let dy_sign = self.dy.abs_sign();
         if dx_sign == dy_sign { dx_sign } else { 0 }
+    }
+}
+
+// ============================================================================
+// Type-safe scale conversions with ScaleFactor
+// ============================================================================
+
+impl Offset<Pixels> {
+    /// Type-safe scale conversion to DevicePixels.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::geometry::{Offset, ScaleFactor, Pixels, DevicePixels, px, device_px};
+    ///
+    /// let logical = Offset::new(px(10.0), px(20.0));
+    /// let scale = ScaleFactor::<Pixels, DevicePixels>::new(2.0);
+    /// let device = logical.scale_with(scale);
+    /// assert_eq!(device.dx.get(), 20);
+    /// assert_eq!(device.dy.get(), 40);
+    /// ```
+    #[must_use]
+    pub fn scale_with(self, scale: super::units::ScaleFactor<Pixels, super::units::DevicePixels>) -> Offset<super::units::DevicePixels> {
+        use super::units::device_px;
+        Offset {
+            dx: device_px((self.dx.get() * scale.get()).round() as i32),
+            dy: device_px((self.dy.get() * scale.get()).round() as i32),
+        }
+    }
+}
+
+impl Offset<super::units::DevicePixels> {
+    /// Unscales this offset to logical pixels using a type-safe scale factor.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::geometry::{Offset, ScaleFactor, Pixels, DevicePixels, device_px, px};
+    ///
+    /// let device = Offset::new(device_px(20.0), device_px(40.0));
+    /// let scale = ScaleFactor::<Pixels, DevicePixels>::new(2.0);
+    /// let logical = device.unscale(scale);
+    /// assert_eq!(logical.dx, px(10.0));
+    /// assert_eq!(logical.dy, px(20.0));
+    /// ```
+    #[must_use]
+    pub fn unscale(self, scale: super::units::ScaleFactor<Pixels, super::units::DevicePixels>) -> Offset<Pixels> {
+        let inverse = scale.inverse();
+        Offset {
+            dx: px(self.dx.get() as f32 * inverse.get()),
+            dy: px(self.dy.get() as f32 * inverse.get()),
+        }
     }
 }
 

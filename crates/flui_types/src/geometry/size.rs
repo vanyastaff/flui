@@ -560,6 +560,58 @@ impl Size<Pixels> {
 }
 
 // ============================================================================
+// Type-safe scale conversions with ScaleFactor
+// ============================================================================
+
+impl Size<Pixels> {
+    /// Type-safe scale conversion to DevicePixels.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::geometry::{Size, ScaleFactor, Pixels, DevicePixels, px, device_px};
+    ///
+    /// let logical = Size::new(px(100.0), px(200.0));
+    /// let scale = ScaleFactor::<Pixels, DevicePixels>::new(2.0);
+    /// let device = logical.scale_with(scale);
+    /// assert_eq!(device.width.get(), 200);
+    /// assert_eq!(device.height.get(), 400);
+    /// ```
+    #[must_use]
+    pub fn scale_with(self, scale: super::units::ScaleFactor<Pixels, super::units::DevicePixels>) -> Size<super::units::DevicePixels> {
+        use super::units::device_px;
+        Size {
+            width: device_px((self.width.get() * scale.get()).round() as i32),
+            height: device_px((self.height.get() * scale.get()).round() as i32),
+        }
+    }
+}
+
+impl Size<super::units::DevicePixels> {
+    /// Converts to logical pixels using a type-safe scale factor.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::geometry::{Size, ScaleFactor, Pixels, DevicePixels, device_px, px};
+    ///
+    /// let device = Size::new(device_px(200.0), device_px(400.0));
+    /// let scale = ScaleFactor::<Pixels, DevicePixels>::new(2.0);
+    /// let logical = device.unscale(scale);
+    /// assert_eq!(logical.width, px(100.0));
+    /// assert_eq!(logical.height, px(200.0));
+    /// ```
+    #[must_use]
+    pub fn unscale(self, scale: super::units::ScaleFactor<Pixels, super::units::DevicePixels>) -> Size<Pixels> {
+        let inverse = scale.inverse();
+        Size {
+            width: px(self.width.get() as f32 * inverse.get()),
+            height: px(self.height.get() as f32 * inverse.get()),
+        }
+    }
+}
+
+// ============================================================================
 // Generic map function
 // ============================================================================
 

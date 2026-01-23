@@ -780,6 +780,56 @@ where
 }
 
 // ============================================================================
+// Type-safe scale conversions with ScaleFactor
+// ============================================================================
+
+impl Rect<Pixels> {
+    /// Type-safe scale conversion to DevicePixels.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::geometry::{Rect, Point, Size, ScaleFactor, Pixels, DevicePixels, px};
+    ///
+    /// let logical = Rect::new(Point::new(px(10.0), px(20.0)), Size::new(px(100.0), px(200.0)));
+    /// let scale = ScaleFactor::<Pixels, DevicePixels>::new(2.0);
+    /// let device = logical.scale_with(scale);
+    /// assert_eq!(device.origin().x.get(), 20);
+    /// assert_eq!(device.size().width.get(), 200);
+    /// ```
+    #[must_use]
+    pub fn scale_with(self, scale: super::units::ScaleFactor<Pixels, super::units::DevicePixels>) -> Rect<super::units::DevicePixels> {
+        Rect {
+            min: self.min.scale_with(scale),
+            max: self.max.scale_with(scale),
+        }
+    }
+}
+
+impl Rect<super::units::DevicePixels> {
+    /// Converts to logical pixels using a type-safe scale factor.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::geometry::{Rect, Point, Size, ScaleFactor, Pixels, DevicePixels, device_px, px};
+    ///
+    /// let device = Rect::new(Point::new(device_px(20.0), device_px(40.0)), Size::new(device_px(200.0), device_px(400.0)));
+    /// let scale = ScaleFactor::<Pixels, DevicePixels>::new(2.0);
+    /// let logical = device.unscale(scale);
+    /// assert_eq!(logical.origin().x, px(10.0));
+    /// assert_eq!(logical.size().width, px(100.0));
+    /// ```
+    #[must_use]
+    pub fn unscale(self, scale: super::units::ScaleFactor<Pixels, super::units::DevicePixels>) -> Rect<Pixels> {
+        Rect {
+            min: self.min.unscale(scale),
+            max: self.max.unscale(scale),
+        }
+    }
+}
+
+// ============================================================================
 // Conversions
 // ============================================================================
 
