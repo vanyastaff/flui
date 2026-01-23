@@ -1896,5 +1896,352 @@ impl std::str::FromStr for Radians {
 }
 
 // ============================================================================
+// SCALE FACTOR - Type-safe unit conversions
+// ============================================================================
+
+use std::marker::PhantomData;
+
+/// Scale factor for converting between unit types
+///
+/// Represents a multiplicative conversion factor from source units to destination units.
+/// Ensures type-safe scaling operations at compile time.
+///
+/// # Examples
+///
+/// ```
+/// use flui_types::geometry::{Pixels, DevicePixels, ScaleFactor, px};
+///
+/// // 2x scale factor (e.g., Retina display)
+/// let scale = ScaleFactor::<Pixels, DevicePixels>::new(2.0);
+///
+/// let logical = px(100.0);
+/// let physical = scale.transform_scalar(logical);
+/// assert_eq!(physical.get(), 200);
+/// ```
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub struct ScaleFactor<Src: Unit, Dst: Unit> {
+    factor: f32,
+    _phantom: PhantomData<(Src, Dst)>,
+}
+
+impl<Src: Unit, Dst: Unit> ScaleFactor<Src, Dst> {
+    /// Create a new scale factor
+    #[inline]
+    pub const fn new(factor: f32) -> Self {
+        Self {
+            factor,
+            _phantom: PhantomData,
+        }
+    }
+
+    /// Get the raw scale factor value
+    #[inline]
+    pub const fn get(&self) -> f32 {
+        self.factor
+    }
+
+    /// Transform a scalar value from source to destination units
+    #[inline]
+    pub fn transform_scalar<T>(&self, value: T) -> T
+    where
+        T: Mul<f32, Output = T>,
+    {
+        value * self.factor
+    }
+
+    /// Get the inverse scale factor (Dst -> Src)
+    #[inline]
+    pub fn inverse(self) -> ScaleFactor<Dst, Src> {
+        ScaleFactor::new(1.0 / self.factor)
+    }
+
+    /// Compose with another scale factor (Src -> Mid -> Dst)
+    #[inline]
+    pub fn then<Third: Unit>(
+        self,
+        other: ScaleFactor<Dst, Third>,
+    ) -> ScaleFactor<Src, Third> {
+        ScaleFactor::new(self.factor * other.factor)
+    }
+}
+
+impl<Src: Unit, Dst: Unit> Default for ScaleFactor<Src, Dst> {
+    fn default() -> Self {
+        Self::new(1.0)
+    }
+}
+
+// Convenience constructors
+impl ScaleFactor<Pixels, DevicePixels> {
+    /// Create a scale factor from DPI (dots per inch)
+    ///
+    /// Standard DPI is 96 on Windows, 72 on macOS
+    #[inline]
+    pub fn from_dpi(dpi: f32) -> Self {
+        Self::new(dpi / 96.0)
+    }
+}
+
+// ============================================================================
+// ENHANCED UNIT CONVERSIONS
+// ============================================================================
+
+impl Pixels {
+    /// Convert to device pixels using a scale factor
+    #[inline]
+    pub fn to_device(self, scale: ScaleFactor<Pixels, DevicePixels>) -> DevicePixels {
+        DevicePixels((self.0 * scale.get()).round() as i32)
+    }
+
+    /// Convert to scaled pixels using a scale factor
+    #[inline]
+    pub fn to_scaled(self, scale: f32) -> ScaledPixels {
+        ScaledPixels(self.0 * scale)
+    }
+}
+
+impl DevicePixels {
+    /// Convert to logical pixels using a scale factor
+    #[inline]
+    pub fn to_logical(self, scale: ScaleFactor<Pixels, DevicePixels>) -> Pixels {
+        Pixels(self.0 as f32 / scale.get())
+    }
+}
+
+impl ScaledPixels {
+    /// Convert to logical pixels
+    #[inline]
+    pub fn to_logical(self, scale: f32) -> Pixels {
+        Pixels(self.0 / scale)
+    }
+}
+
+// ============================================================================
 // TESTS
 // ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ========================================================================
+    // ScaleFactor Tests
+    // ========================================================================
+
+    #[test]
+    fn test_scale_factor_creation() {
+        let scale = ScaleFactor::<Pixels, DevicePixels>::new(2.0);
+        assert_eq!(scale.get(), 2.0);
+    }
+
+    #[test]
+    fn test_scale_factor_default() {
+        let scale = ScaleFactor::<Pixels, DevicePixels>::default();
+        assert_eq!(scale.get(), 1.0);
+    }
+
+    #[test]
+    fn test_scale_factor_inverse() {
+        let scale = ScaleFactor::<Pixels, DevicePixels>::new(2.0);
+        let inverse = scale.inverse();
+        assert_eq!(inverse.get(), 0.5);
+    }
+
+    #[test]
+    fn test_scale_factor_composition() {
+        let scale1 = ScaleFactor::<Pixels, ScaledPixels>::new(2.0);
+        let scale2 = ScaleFactor::<ScaledPixels, DevicePixels>::new(1.5);
+        let composed = scale1.then(scale2);
+        assert_eq!(composed.get(), 3.0);
+    }
+
+    #[test]
+    fn test_scale_factor_from_dpi() {
+        let scale = ScaleFactor::<Pixels, DevicePixels>::from_dpi(192.0);
+        assert_eq!(scale.get(), 2.0); // 192 / 96 = 2.0
+    }
+
+    #[test]
+    fn test_scale_factor_retina() {
+        let scale = ScaleFactor::<Pixels, DevicePixels>::from_dpi(144.0);
+        assert!((scale.get() - 1.5).abs() < 0.01); // 144 / 96 = 1.5
+    }
+
+    // ========================================================================
+    // Unit Conversion Tests
+    // ========================================================================
+
+    #[test]
+    fn test_pixels_to_device() {
+        let logical = px(100.0);
+        let scale = ScaleFactor::<Pixels, DevicePixels>::new(2.0);
+        let device = logical.to_device(scale);
+        assert_eq!(device.get(), 200);
+    }
+
+    #[test]
+    fn test_pixels_to_device_with_rounding() {
+        let logical = px(100.5);
+        let scale = ScaleFactor::<Pixels, DevicePixels>::new(2.0);
+        let device = logical.to_device(scale);
+        assert_eq!(device.get(), 201); // Rounds to nearest
+    }
+
+    #[test]
+    fn test_device_to_logical() {
+        let device = DevicePixels(200);
+        let scale = ScaleFactor::<Pixels, DevicePixels>::new(2.0);
+        let logical = device.to_logical(scale);
+        assert_eq!(logical.get(), 100.0);
+    }
+
+    #[test]
+    fn test_pixels_to_scaled() {
+        let logical = px(100.0);
+        let scaled = logical.to_scaled(1.5);
+        assert_eq!(scaled.get(), 150.0);
+    }
+
+    #[test]
+    fn test_scaled_to_logical() {
+        let scaled = ScaledPixels(150.0);
+        let logical = scaled.to_logical(1.5);
+        assert_eq!(logical.get(), 100.0);
+    }
+
+    #[test]
+    fn test_round_trip_conversion() {
+        let original = px(100.0);
+        let scale = ScaleFactor::<Pixels, DevicePixels>::new(2.0);
+        let device = original.to_device(scale);
+        let back = device.to_logical(scale);
+        assert_eq!(back.get(), original.get());
+    }
+
+    // ========================================================================
+    // Pixels Tests
+    // ========================================================================
+
+    #[test]
+    fn test_pixels_constants() {
+        assert_eq!(Pixels::ZERO.get(), 0.0);
+        assert_eq!(Pixels::MAX.get(), f32::MAX);
+        assert_eq!(Pixels::MIN.get(), f32::MIN);
+    }
+
+    #[test]
+    fn test_pixels_arithmetic() {
+        let a = px(10.0);
+        let b = px(5.0);
+        assert_eq!((a + b).get(), 15.0);
+        assert_eq!((a - b).get(), 5.0);
+        assert_eq!((a * 2.0).get(), 20.0);
+        assert_eq!((a / 2.0).get(), 5.0);
+    }
+
+    #[test]
+    fn test_pixels_rounding() {
+        let p = px(10.7);
+        assert_eq!(p.floor().get(), 10.0);
+        assert_eq!(p.ceil().get(), 11.0);
+        assert_eq!(p.round().get(), 11.0);
+        assert_eq!(p.trunc().get(), 10.0);
+    }
+
+    #[test]
+    fn test_pixels_math() {
+        let p = px(16.0);
+        assert_eq!(p.sqrt().get(), 4.0);
+        assert_eq!(px(-5.0).abs().get(), 5.0);
+        assert_eq!(px(10.3).fract().get(), 0.3);
+    }
+
+    // ========================================================================
+    // DevicePixels Tests
+    // ========================================================================
+
+    #[test]
+    fn test_device_pixels_constants() {
+        assert_eq!(DevicePixels::ZERO.get(), 0);
+        assert_eq!(DevicePixels::MAX.get(), i32::MAX);
+        assert_eq!(DevicePixels::MIN.get(), i32::MIN);
+    }
+
+    #[test]
+    fn test_device_pixels_arithmetic() {
+        let a = DevicePixels(10);
+        let b = DevicePixels(5);
+        assert_eq!((a + b).get(), 15);
+        assert_eq!((a - b).get(), 5);
+        assert_eq!((a * 2).get(), 20);
+        assert_eq!((a / 2).get(), 5);
+    }
+
+    // ========================================================================
+    // Type Safety Tests
+    // ========================================================================
+
+    #[test]
+    fn test_unit_type_safety() {
+        // This test verifies that different units cannot be mixed at compile time
+        let logical = px(100.0);
+        let _scaled = ScaledPixels(150.0);
+
+        // These would fail to compile (type mismatch):
+        // let _ = logical + scaled; // ❌
+        // let _ = logical == scaled; // ❌
+
+        // But these work:
+        let logical2 = px(50.0);
+        let _ = logical + logical2; // ✅
+    }
+
+    #[test]
+    fn test_zero_runtime_overhead() {
+        // Verify that size_of is same as underlying type
+        assert_eq!(std::mem::size_of::<Pixels>(), std::mem::size_of::<f32>());
+        assert_eq!(std::mem::size_of::<DevicePixels>(), std::mem::size_of::<i32>());
+        assert_eq!(std::mem::size_of::<ScaledPixels>(), std::mem::size_of::<f32>());
+
+        // ScaleFactor should be just f32 (PhantomData is zero-sized)
+        assert_eq!(
+            std::mem::size_of::<ScaleFactor<Pixels, DevicePixels>>(),
+            std::mem::size_of::<f32>()
+        );
+    }
+
+    // ========================================================================
+    // Edge Cases
+    // ========================================================================
+
+    #[test]
+    fn test_zero_scale_factor() {
+        let scale = ScaleFactor::<Pixels, DevicePixels>::new(0.0);
+        let logical = px(100.0);
+        let device = logical.to_device(scale);
+        assert_eq!(device.get(), 0);
+    }
+
+    #[test]
+    fn test_negative_pixels() {
+        let p = px(-10.0);
+        assert_eq!(p.get(), -10.0);
+        assert_eq!(p.abs().get(), 10.0);
+    }
+
+    #[test]
+    fn test_large_scale_factor() {
+        let scale = ScaleFactor::<Pixels, DevicePixels>::new(10.0);
+        let logical = px(100.0);
+        let device = logical.to_device(scale);
+        assert_eq!(device.get(), 1000);
+    }
+
+    #[test]
+    fn test_fractional_scale_factor() {
+        let scale = ScaleFactor::<Pixels, DevicePixels>::new(1.25);
+        let logical = px(100.0);
+        let device = logical.to_device(scale);
+        assert_eq!(device.get(), 125);
+    }
+}

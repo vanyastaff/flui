@@ -241,7 +241,7 @@ pub use transform::Transform;
 
 pub use units::{
     delta_px, device_px, px, radians, scaled_px,
-    DevicePixels, ParseLengthError, PixelDelta, Pixels, Radians, ScaledPixels,
+    DevicePixels, ParseLengthError, PixelDelta, Pixels, Radians, ScaleFactor, ScaledPixels,
 };
 
 // =============================================================================
