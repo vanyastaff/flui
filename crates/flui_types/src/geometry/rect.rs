@@ -10,6 +10,7 @@
 use std::fmt;
 
 use super::traits::{NumericUnit, Unit};
+use super::units::Pixels;
 use super::{Offset, Point, Size, Vec2};
 
 /// An axis-aligned rectangle.
@@ -37,10 +38,10 @@ use super::{Offset, Point, Size, Vec2};
 /// // Hit testing
 /// assert!(rect.contains(point(50.0, 25.0)));
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(C)]
-pub struct Rect<T: Unit = f32> {
+pub struct Rect<T: Unit = Pixels> {
     /// Minimum corner (top-left in screen coordinates).
     pub min: Point<T>,
     /// Maximum corner (bottom-right in screen coordinates).
@@ -57,14 +58,26 @@ impl<T: Unit> Default for Rect<T> {
 }
 
 // ============================================================================
-// Constants (f32 only)
+// Constants
 // ============================================================================
 
-impl Rect<f32> {
+impl<T: NumericUnit> Rect<T> {
+    /// Empty rectangle at origin.
+    /// Note: This only works for types with a const ZERO. For generic T, use Rect::default()
+    #[inline]
+    pub fn zero() -> Self {
+        Self {
+            min: Point::new(T::zero(), T::zero()),
+            max: Point::new(T::zero(), T::zero()),
+        }
+    }
+}
+
+impl Rect<Pixels> {
     /// Empty rectangle at origin.
     pub const ZERO: Self = Self {
-        min: Point::ORIGIN,
-        max: Point::ORIGIN,
+        min: Point::ZERO,
+        max: Point::ZERO,
     };
 
     /// Infinite rectangle containing everything.
@@ -153,16 +166,16 @@ where
 }
 
 // ============================================================================
-// f32-specific Constructors
+// Pixels-specific Constructors
 // ============================================================================
 
-impl Rect<f32> {
+impl Rect<Pixels> {
     /// Creates a rectangle from raw coordinates.
     ///
     /// Note: Does not normalize — if `x0 > x1` or `y0 > y1`, the rect is inverted.
     #[inline]
     #[must_use]
-    pub const fn new(x0: f32, y0: f32, x1: f32, y1: f32) -> Self {
+    pub const fn new(x0: Pixels, y0: Pixels, x1: Pixels, y1: Pixels) -> Self {
         Self {
             min: Point::new(x0, y0),
             max: Point::new(x1, y1),
@@ -172,28 +185,28 @@ impl Rect<f32> {
     /// Creates a rectangle from x, y, width, height.
     #[inline]
     #[must_use]
-    pub fn from_xywh(x: f32, y: f32, width: f32, height: f32) -> Self {
+    pub fn from_xywh(x: Pixels, y: Pixels, width: Pixels, height: Pixels) -> Self {
         Self::new(x, y, x + width, y + height)
     }
 
     /// Creates a rectangle from left, top, right, bottom (Flutter-style).
     #[inline]
     #[must_use]
-    pub const fn from_ltrb(left: f32, top: f32, right: f32, bottom: f32) -> Self {
+    pub const fn from_ltrb(left: Pixels, top: Pixels, right: Pixels, bottom: Pixels) -> Self {
         Self::new(left, top, right, bottom)
     }
 
     /// Creates a rectangle from left, top, width, height (Flutter-style).
     #[inline]
     #[must_use]
-    pub fn from_ltwh(left: f32, top: f32, width: f32, height: f32) -> Self {
+    pub fn from_ltwh(left: Pixels, top: Pixels, width: Pixels, height: Pixels) -> Self {
         Self::new(left, top, left + width, top + height)
     }
 
     /// Creates a rectangle from center point with width and height.
     #[inline]
     #[must_use]
-    pub fn from_center(center: Offset<f32>, width: f32, height: f32) -> Self {
+    pub fn from_center(center: Offset<Pixels>, width: Pixels, height: Pixels) -> Self {
         let half_width = width / 2.0;
         let half_height = height / 2.0;
         Self::new(
@@ -468,14 +481,14 @@ where
 }
 
 // ============================================================================
-// f32-specific Containment (Offset)
+// Pixels-specific Containment (Offset)
 // ============================================================================
 
-impl Rect<f32> {
+impl Rect<Pixels> {
     /// Returns `true` if the offset is inside the rectangle.
     #[inline]
     #[must_use]
-    pub fn contains_offset(&self, offset: Offset<f32>) -> bool {
+    pub fn contains_offset(&self, offset: Offset<Pixels>) -> bool {
         offset.dx >= self.min.x
             && offset.dx <= self.max.x
             && offset.dy >= self.min.y
@@ -675,23 +688,23 @@ where
 }
 
 // ============================================================================
-// f32-specific Transformations (Offset)
+// Pixels-specific Transformations (Offset)
 // ============================================================================
 
-impl Rect<f32> {
+impl Rect<Pixels> {
     /// Translates the rectangle by an offset.
     #[inline]
     #[must_use]
-    pub fn translate_offset(&self, offset: Offset<f32>) -> Self {
+    pub fn translate_offset(&self, offset: Offset<Pixels>) -> Self {
         self.translate(Vec2::new(offset.dx, offset.dy))
     }
 }
 
 // ============================================================================
-// Rounding Operations (f32 only)
+// Rounding Operations (Pixels only)
 // ============================================================================
 
-impl Rect<f32> {
+impl Rect<Pixels> {
     /// Rounds all coordinates to the nearest integer.
     #[inline]
     #[must_use]
@@ -774,10 +787,10 @@ impl<T: NumericUnit> Rect<T>
 where
     T: Into<f32>,
 {
-    /// Converts to `Rect<f32>`.
+    /// Converts to `Rect<Pixels>` with f32 values.
     #[inline]
     #[must_use]
-    pub fn to_f32(&self) -> Rect<f32> {
+    pub fn to_f32(&self) -> Rect<Pixels> {
         Rect {
             min: self.min.to_f32(),
             max: self.max.to_f32(),
@@ -823,7 +836,7 @@ where
     }
 }
 
-impl fmt::Display for Rect<f32> {
+impl fmt::Display for Rect<Pixels> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.format_display(f)
     }
@@ -836,8 +849,9 @@ impl fmt::Display for Rect<f32> {
 /// Shorthand for `Rect::from_xywh(x, y, w, h)`.
 #[inline]
 #[must_use]
-pub fn rect(x: f32, y: f32, w: f32, h: f32) -> Rect<f32> {
-    Rect::from_xywh(x, y, w, h)
+pub fn rect(x: f32, y: f32, w: f32, h: f32) -> Rect<Pixels> {
+    use super::units::px;
+    Rect::from_xywh(px(x), px(y), px(w), px(h))
 }
 
 // ============================================================================

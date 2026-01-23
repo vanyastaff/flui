@@ -4,6 +4,7 @@
 //! are positioned at different heights with corresponding shadow effects.
 
 use crate::Offset;
+use crate::geometry::{px, Pixels};
 
 /// Shape type for physical model layers.
 ///
@@ -87,12 +88,12 @@ impl Elevation {
     /// Simulates a light source positioned above and slightly offset.
     /// Higher elevations cast shadows further from the element.
     #[inline]
-    pub fn shadow_offset(elevation: f32) -> Offset<f32> {
+    pub fn shadow_offset(elevation: f32) -> Offset<Pixels> {
         // Material Design assumes light from top-left at ~45 degrees
         // Vertical offset increases more than horizontal
         Offset::new(
-            elevation * 0.2, // Slight horizontal offset
-            elevation * 0.4, // More pronounced vertical offset
+            px(elevation * 0.2), // Slight horizontal offset
+            px(elevation * 0.4), // More pronounced vertical offset
         )
     }
 

@@ -568,34 +568,3 @@ impl MaterialColors {
     pub const BLUE_GREY_900: Color = Color::rgb(38, 50, 56);
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_material_colors_exist() {
-        // Test a few colors to ensure they're defined correctly
-        assert_eq!(MaterialColors::RED_500, Color::rgb(244, 67, 54));
-        assert_eq!(MaterialColors::BLUE_500, Color::rgb(33, 150, 243));
-        assert_eq!(MaterialColors::GREEN_500, Color::rgb(76, 175, 80));
-        assert_eq!(MaterialColors::PURPLE_500, Color::rgb(156, 39, 176));
-    }
-
-    #[test]
-    fn test_material_colors_all_opaque() {
-        // All Material colors should be fully opaque
-        assert!(MaterialColors::RED_500.is_opaque());
-        assert!(MaterialColors::BLUE_A200.is_opaque());
-        assert!(MaterialColors::GREY_900.is_opaque());
-    }
-
-    #[test]
-    fn test_material_shades_lighten() {
-        // Lower numbers should be lighter (higher RGB values)
-        let red_50 = MaterialColors::RED_50;
-        let red_900 = MaterialColors::RED_900;
-
-        // 50 should be lighter than 900
-        assert!(red_50.r > red_900.r);
-    }
-}

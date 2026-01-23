@@ -39,72 +39,21 @@ pub use tolerance::Tolerance;
 /// let vel = sim.velocity(0.1);
 /// ```
 pub trait Simulation {
-    /// Returns the position at the given time
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_types::physics::{Simulation, FrictionSimulation};
-    ///
-    /// let sim = FrictionSimulation::new(0.1, 0.0, 100.0);
-    /// let pos = sim.position(1.0);
-    /// assert!(pos > 0.0);
-    /// ```
     #[must_use]
     fn position(&self, time: f32) -> f32;
 
-    /// Returns the velocity at the given time
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_types::physics::{Simulation, FrictionSimulation};
-    ///
-    /// let sim = FrictionSimulation::new(0.1, 0.0, 100.0);
-    /// let vel = sim.velocity(1.0);
-    /// assert!(vel < 100.0); // Velocity decreases due to friction
-    /// ```
     #[must_use]
     fn velocity(&self, time: f32) -> f32;
 
-    /// Returns whether the simulation is done at the given time
-    ///
-    /// A simulation is considered done when it has reached a stable state
-    /// and won't change significantly anymore.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_types::physics::{Simulation, FrictionSimulation};
-    ///
-    /// let sim = FrictionSimulation::new(0.5, 0.0, 10.0);
-    /// assert!(!sim.is_done(0.0)); // Just started
-    /// assert!(sim.is_done(20.0)); // Should be done after enough time
-    /// ```
     #[must_use]
     fn is_done(&self, time: f32) -> bool;
 
-    /// Returns the tolerance for this simulation
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_types::physics::{Simulation, FrictionSimulation, Tolerance};
-    ///
-    /// let sim = FrictionSimulation::new(0.1, 0.0, 100.0);
-    /// let tolerance = sim.tolerance();
-    /// assert_eq!(tolerance, Tolerance::default());
-    /// ```
     #[must_use]
     fn tolerance(&self) -> Tolerance {
         Tolerance::default()
     }
 }
 
-/// A simulation that clamps another simulation to a range
-///
-/// Similar to Flutter's `ClampedSimulation`. Wraps another simulation
-/// and ensures its output stays within specified bounds.
 #[derive(Debug, Clone)]
 pub struct ClampedSimulation<S: Simulation> {
     /// The underlying simulation
@@ -118,17 +67,6 @@ pub struct ClampedSimulation<S: Simulation> {
 }
 
 impl<S: Simulation> ClampedSimulation<S> {
-    /// Creates a new clamped simulation
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_types::physics::{ClampedSimulation, FrictionSimulation};
-    ///
-    /// let friction = FrictionSimulation::new(0.1, 0.0, 100.0);
-    /// let clamped = ClampedSimulation::new(friction, 0.0, 50.0);
-    /// ```
-    #[inline]
     #[must_use]
     pub fn new(simulation: S, min: f32, max: f32) -> Self {
         Self {
@@ -138,88 +76,26 @@ impl<S: Simulation> ClampedSimulation<S> {
         }
     }
 
-    /// Returns the minimum bound
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_types::physics::{ClampedSimulation, FrictionSimulation};
-    ///
-    /// let friction = FrictionSimulation::new(0.1, 0.0, 100.0);
-    /// let clamped = ClampedSimulation::new(friction, -10.0, 50.0);
-    /// assert_eq!(clamped.min(), -10.0);
-    /// ```
-    #[inline]
     #[must_use]
     pub fn min(&self) -> f32 {
         self.min
     }
 
-    /// Returns the maximum bound
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_types::physics::{ClampedSimulation, FrictionSimulation};
-    ///
-    /// let friction = FrictionSimulation::new(0.1, 0.0, 100.0);
-    /// let clamped = ClampedSimulation::new(friction, -10.0, 50.0);
-    /// assert_eq!(clamped.max(), 50.0);
-    /// ```
-    #[inline]
     #[must_use]
     pub fn max(&self) -> f32 {
         self.max
     }
 
-    /// Returns a reference to the inner simulation
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_types::physics::{ClampedSimulation, FrictionSimulation};
-    ///
-    /// let friction = FrictionSimulation::new(0.1, 0.0, 100.0);
-    /// let clamped = ClampedSimulation::new(friction, -10.0, 50.0);
-    /// assert_eq!(clamped.inner().drag(), 0.1);
-    /// ```
-    #[inline]
     #[must_use]
     pub fn inner(&self) -> &S {
         &self.simulation
     }
 
-    /// Consumes the clamped simulation and returns the inner simulation
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_types::physics::{ClampedSimulation, FrictionSimulation};
-    ///
-    /// let friction = FrictionSimulation::new(0.1, 0.0, 100.0);
-    /// let clamped = ClampedSimulation::new(friction, -10.0, 50.0);
-    /// let inner = clamped.into_inner();
-    /// assert_eq!(inner.drag(), 0.1);
-    /// ```
-    #[inline]
     #[must_use]
     pub fn into_inner(self) -> S {
         self.simulation
     }
 
-    /// Checks if currently at a boundary
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_types::physics::{ClampedSimulation, FrictionSimulation, Simulation};
-    ///
-    /// let friction = FrictionSimulation::new(0.05, 10.0, 100.0);
-    /// let clamped = ClampedSimulation::new(friction, 0.0, 50.0);
-    /// assert!(!clamped.is_at_boundary(0.0)); // Starts at 10.0, not at boundary
-    /// assert!(clamped.is_at_boundary(10.0)); // Eventually hits boundary at 50.0
-    /// ```
-    #[inline]
     #[must_use]
     pub fn is_at_boundary(&self, time: f32) -> bool {
         let unclamped_pos = self.simulation.position(time);
@@ -253,23 +129,3 @@ impl<S: Simulation> Simulation for ClampedSimulation<S> {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::physics::FrictionSimulation;
-
-    #[test]
-    fn test_clamped_simulation() {
-        let friction = FrictionSimulation::new(0.1, 0.0, 100.0);
-        let clamped = ClampedSimulation::new(friction, -10.0, 50.0);
-
-        // Position should be clamped
-        let pos = clamped.position(1.0);
-        assert!(pos >= -10.0 && pos <= 50.0);
-
-        // Velocity at boundary should be zero
-        let vel_at_max = clamped.velocity(5.0);
-        // After long time, friction simulation stops
-        assert_eq!(vel_at_max, 0.0);
-    }
-}

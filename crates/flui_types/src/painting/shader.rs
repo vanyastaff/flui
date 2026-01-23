@@ -1,6 +1,6 @@
 //! Shader types for painting.
 
-use crate::geometry::{Offset, Size, NumericUnit};
+use crate::geometry::{Offset, Size, NumericUnit, Pixels, px};
 use crate::painting::{BlurStyle, TileMode};
 use crate::styling::{Color, Color32};
 
@@ -30,9 +30,9 @@ pub enum Shader {
     /// A linear gradient shader.
     LinearGradient {
         /// The starting point of the gradient.
-        from: Offset<f32>,
+        from: Offset<Pixels>,
         /// The ending point of the gradient.
-        to: Offset<f32>,
+        to: Offset<Pixels>,
         /// The colors in the gradient.
         colors: Vec<Color>,
         /// Optional color stops (0.0 to 1.0).
@@ -44,7 +44,7 @@ pub enum Shader {
     /// A radial gradient shader.
     RadialGradient {
         /// The center of the gradient.
-        center: Offset<f32>,
+        center: Offset<Pixels>,
         /// The radius of the gradient.
         radius: f32,
         /// The colors in the gradient.
@@ -54,7 +54,7 @@ pub enum Shader {
         /// How to tile the gradient.
         tile_mode: TileMode,
         /// Optional focal point.
-        focal: Option<Offset<f32>>,
+        focal: Option<Offset<Pixels>>,
         /// Optional focal radius.
         focal_radius: Option<f32>,
     },
@@ -62,7 +62,7 @@ pub enum Shader {
     /// A sweep (angular/conic) gradient shader.
     SweepGradient {
         /// The center of the gradient.
-        center: Offset<f32>,
+        center: Offset<Pixels>,
         /// The colors in the gradient.
         colors: Vec<Color>,
         /// Optional color stops (0.0 to 1.0).
@@ -84,8 +84,8 @@ impl Shader {
     #[inline]
     #[must_use]
     pub fn linear_gradient(
-        from: Offset<f32>,
-        to: Offset<f32>,
+        from: Offset<Pixels>,
+        to: Offset<Pixels>,
         colors: Vec<Color>,
         stops: Option<Vec<f32>>,
         tile_mode: TileMode,
@@ -104,12 +104,12 @@ impl Shader {
     #[must_use]
     #[allow(clippy::too_many_arguments)]
     pub fn radial_gradient(
-        center: Offset<f32>,
+        center: Offset<Pixels>,
         radius: f32,
         colors: Vec<Color>,
         stops: Option<Vec<f32>>,
         tile_mode: TileMode,
-        focal: Option<Offset<f32>>,
+        focal: Option<Offset<Pixels>>,
         focal_radius: Option<f32>,
     ) -> Self {
         Shader::RadialGradient {
@@ -127,7 +127,7 @@ impl Shader {
     #[inline]
     #[must_use]
     pub fn sweep_gradient(
-        center: Offset<f32>,
+        center: Offset<Pixels>,
         colors: Vec<Color>,
         stops: Option<Vec<f32>>,
         tile_mode: TileMode,
@@ -172,7 +172,7 @@ impl Shader {
     /// ```
     #[inline]
     #[must_use]
-    pub fn simple_linear(from: Offset<f32>, to: Offset<f32>, colors: Vec<Color>) -> Self {
+    pub fn simple_linear(from: Offset<Pixels>, to: Offset<Pixels>, colors: Vec<Color>) -> Self {
         Self::linear_gradient(from, to, colors, None, TileMode::Clamp)
     }
 
@@ -198,7 +198,7 @@ impl Shader {
     /// ```
     #[inline]
     #[must_use]
-    pub fn simple_radial(center: Offset<f32>, radius: f32, colors: Vec<Color>) -> Self {
+    pub fn simple_radial(center: Offset<Pixels>, radius: f32, colors: Vec<Color>) -> Self {
         Self::radial_gradient(center, radius, colors, None, TileMode::Clamp, None, None)
     }
 
@@ -223,7 +223,7 @@ impl Shader {
     /// ```
     #[inline]
     #[must_use]
-    pub fn simple_sweep(center: Offset<f32>, colors: Vec<Color>) -> Self {
+    pub fn simple_sweep(center: Offset<Pixels>, colors: Vec<Color>) -> Self {
         Self::sweep_gradient(
             center,
             colors,
@@ -505,8 +505,8 @@ impl ShaderSpec {
         match self {
             ShaderSpec::LinearGradient { start, end, colors } => {
                 // Convert relative positions to absolute offsets
-                let from = Offset::new(start.0 * size.width.into(), start.1 * size.height.into());
-                let to = Offset::new(end.0 * size.width.into(), end.1 * size.height.into());
+                let from = Offset::new(Pixels(start.0 * size.width.into()), Pixels(start.1 * size.height.into()));
+                let to = Offset::new(Pixels(end.0 * size.width.into()), Pixels(end.1 * size.height.into()));
 
                 // Convert Color32 to Color
                 let converted_colors: Vec<Color> = colors
@@ -522,7 +522,7 @@ impl ShaderSpec {
                 colors,
             } => {
                 // Convert relative position to absolute offset
-                let center_offset = Offset::new(center.0 * size.width.into(), center.1 * size.height.into());
+                let center_offset = Offset::new(Pixels(center.0 * size.width.into()), Pixels(center.1 * size.height.into()));
 
                 // Convert relative radius to absolute (use average of width/height for circular radius)
                 let absolute_radius = *radius * (size.width.into() + size.height.into()) / 2.0;
@@ -538,7 +538,7 @@ impl ShaderSpec {
             ShaderSpec::Solid(color) => {
                 // For solid color, create a simple linear gradient with same color
                 let c = Color::rgba(color.r(), color.g(), color.b(), color.a());
-                Shader::simple_linear(Offset::ZERO, Offset::new(size.width.into(), 0.0), vec![c, c])
+                Shader::simple_linear(Offset::ZERO, Offset::new(px(size.width.into()), px(0.0)), vec![c, c])
             }
         }
     }

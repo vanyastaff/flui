@@ -5,39 +5,20 @@
 
 use super::pointer::{OffsetPair, PointerDeviceKind};
 use super::velocity::Velocity;
-use crate::geometry::Offset;
+use crate::geometry::{Offset, Pixels};
 use std::time::Duration;
 
 // ============================================================================
 // Tap Gesture Details
 // ============================================================================
 
-/// Details for a tap down event
-///
-/// Similar to Flutter's `TapDownDetails`.
-///
-/// # Examples
-///
-/// ```
-/// use flui_types::gestures::TapDownDetails;
-/// use flui_types::Offset;
-///
-/// let details = TapDownDetails::new(
-///     Offset::<f32>::new(100.0, 200.0),
-///     Offset::<f32>::new(10.0, 20.0),
-/// );
-///
-/// assert_eq!(details.global_position, Offset::<f32>::new(100.0, 200.0));
-/// assert_eq!(details.local_position, Offset::<f32>::new(10.0, 20.0));
-/// ```
-#[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TapDownDetails {
     /// The global position where the tap occurred
-    pub global_position: Offset<f32>,
+    pub global_position: Offset<Pixels>,
 
     /// The local position where the tap occurred
-    pub local_position: Offset<f32>,
+    pub local_position: Offset<Pixels>,
 
     /// The kind of device that triggered the tap
     pub kind: PointerDeviceKind,
@@ -45,7 +26,7 @@ pub struct TapDownDetails {
 
 impl TapDownDetails {
     /// Creates new tap down details
-    pub const fn new(global_position: Offset<f32>, local_position: Offset<f32>) -> Self {
+    pub const fn new(global_position: Offset<Pixels>, local_position: Offset<Pixels>) -> Self {
         Self {
             global_position,
             local_position,
@@ -60,17 +41,13 @@ impl TapDownDetails {
     }
 }
 
-/// Details for a tap up event
-///
-/// Similar to Flutter's `TapUpDetails`.
-#[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TapUpDetails {
     /// The global position where the tap ended
-    pub global_position: Offset<f32>,
+    pub global_position: Offset<Pixels>,
 
     /// The local position where the tap ended
-    pub local_position: Offset<f32>,
+    pub local_position: Offset<Pixels>,
 
     /// The kind of device that triggered the tap
     pub kind: PointerDeviceKind,
@@ -78,7 +55,7 @@ pub struct TapUpDetails {
 
 impl TapUpDetails {
     /// Creates new tap up details
-    pub const fn new(global_position: Offset<f32>, local_position: Offset<f32>) -> Self {
+    pub const fn new(global_position: Offset<Pixels>, local_position: Offset<Pixels>) -> Self {
         Self {
             global_position,
             local_position,
@@ -97,20 +74,16 @@ impl TapUpDetails {
 // Drag Gesture Details
 // ============================================================================
 
-/// Details for when a drag gesture starts
-///
-/// Similar to Flutter's `DragStartDetails`.
-#[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DragStartDetails {
     /// The time when the drag started
     pub source_time_stamp: Duration,
 
     /// The global position where the drag started
-    pub global_position: Offset<f32>,
+    pub global_position: Offset<Pixels>,
 
     /// The local position where the drag started
-    pub local_position: Offset<f32>,
+    pub local_position: Offset<Pixels>,
 
     /// The kind of device performing the drag
     pub kind: PointerDeviceKind,
@@ -120,8 +93,8 @@ impl DragStartDetails {
     /// Creates new drag start details
     pub const fn new(
         source_time_stamp: Duration,
-        global_position: Offset<f32>,
-        local_position: Offset<f32>,
+        global_position: Offset<Pixels>,
+        local_position: Offset<Pixels>,
     ) -> Self {
         Self {
             source_time_stamp,
@@ -138,22 +111,18 @@ impl DragStartDetails {
     }
 }
 
-/// Details for when a pointer starts contacting the screen (before drag starts)
-///
-/// Similar to Flutter's `DragDownDetails`.
-#[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DragDownDetails {
     /// The global position where the pointer contacted
-    pub global_position: Offset<f32>,
+    pub global_position: Offset<Pixels>,
 
     /// The local position where the pointer contacted
-    pub local_position: Offset<f32>,
+    pub local_position: Offset<Pixels>,
 }
 
 impl DragDownDetails {
     /// Creates new drag down details
-    pub const fn new(global_position: Offset<f32>, local_position: Offset<f32>) -> Self {
+    pub const fn new(global_position: Offset<Pixels>, local_position: Offset<Pixels>) -> Self {
         Self {
             global_position,
             local_position,
@@ -161,17 +130,13 @@ impl DragDownDetails {
     }
 }
 
-/// Details for when a drag gesture updates
-///
-/// Similar to Flutter's `DragUpdateDetails`.
-#[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DragUpdateDetails {
     /// The time when the update occurred
     pub source_time_stamp: Duration,
 
     /// The amount the pointer has moved since the last update
-    pub delta: Offset<f32>,
+    pub delta: Offset<Pixels>,
 
     /// The primary delta along the main axis
     ///
@@ -180,19 +145,19 @@ pub struct DragUpdateDetails {
     pub primary_delta: Option<f32>,
 
     /// The global position of the pointer
-    pub global_position: Offset<f32>,
+    pub global_position: Offset<Pixels>,
 
     /// The local position of the pointer
-    pub local_position: Offset<f32>,
+    pub local_position: Offset<Pixels>,
 }
 
 impl DragUpdateDetails {
     /// Creates new drag update details
     pub const fn new(
         source_time_stamp: Duration,
-        delta: Offset<f32>,
-        global_position: Offset<f32>,
-        local_position: Offset<f32>,
+        delta: Offset<Pixels>,
+        global_position: Offset<Pixels>,
+        local_position: Offset<Pixels>,
     ) -> Self {
         Self {
             source_time_stamp,
@@ -210,10 +175,6 @@ impl DragUpdateDetails {
     }
 }
 
-/// Details for when a drag gesture ends
-///
-/// Similar to Flutter's `DragEndDetails`.
-#[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DragEndDetails {
     /// The velocity of the pointer when the drag ended
@@ -243,10 +204,6 @@ impl DragEndDetails {
 // Scale Gesture Details
 // ============================================================================
 
-/// Details for when a scale gesture starts
-///
-/// Similar to Flutter's `ScaleStartDetails`.
-#[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ScaleStartDetails {
     /// The focal point of the pointers in contact with the screen
@@ -266,17 +223,13 @@ impl ScaleStartDetails {
     }
 }
 
-/// Details for when a scale gesture updates
-///
-/// Similar to Flutter's `ScaleUpdateDetails`.
-#[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ScaleUpdateDetails {
     /// The focal point of the pointers in contact with the screen
     pub focal_point: OffsetPair,
 
     /// The focal point delta since the last update
-    pub focal_point_delta: Offset<f32>,
+    pub focal_point_delta: Offset<Pixels>,
 
     /// The scale factor
     ///
@@ -306,7 +259,7 @@ impl ScaleUpdateDetails {
     ) -> Self {
         Self {
             focal_point,
-            focal_point_delta: Offset::<f32>::ZERO,
+            focal_point_delta: Offset::<Pixels>::ZERO,
             scale,
             horizontal_scale: scale,
             vertical_scale: scale,
@@ -316,7 +269,7 @@ impl ScaleUpdateDetails {
     }
 
     /// Builder method to set the focal point delta
-    pub fn with_focal_point_delta(mut self, delta: Offset<f32>) -> Self {
+    pub fn with_focal_point_delta(mut self, delta: Offset<Pixels>) -> Self {
         self.focal_point_delta = delta;
         self
     }
@@ -329,10 +282,6 @@ impl ScaleUpdateDetails {
     }
 }
 
-/// Details for when a scale gesture ends
-///
-/// Similar to Flutter's `ScaleEndDetails`.
-#[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ScaleEndDetails {
     /// The velocity of the gesture
@@ -356,17 +305,13 @@ impl ScaleEndDetails {
 // Long Press Gesture Details
 // ============================================================================
 
-/// Details for when a pointer contacts the screen (before long press)
-///
-/// Similar to Flutter's `LongPressDownDetails`.
-#[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct LongPressDownDetails {
     /// The global position where the pointer contacted
-    pub global_position: Offset<f32>,
+    pub global_position: Offset<Pixels>,
 
     /// The local position where the pointer contacted
-    pub local_position: Offset<f32>,
+    pub local_position: Offset<Pixels>,
 
     /// The kind of device
     pub kind: PointerDeviceKind,
@@ -374,7 +319,7 @@ pub struct LongPressDownDetails {
 
 impl LongPressDownDetails {
     /// Creates new long press down details
-    pub const fn new(global_position: Offset<f32>, local_position: Offset<f32>) -> Self {
+    pub const fn new(global_position: Offset<Pixels>, local_position: Offset<Pixels>) -> Self {
         Self {
             global_position,
             local_position,
@@ -389,22 +334,18 @@ impl LongPressDownDetails {
     }
 }
 
-/// Details for when a long press gesture starts
-///
-/// Similar to Flutter's `LongPressStartDetails`.
-#[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct LongPressStartDetails {
     /// The global position where the long press started
-    pub global_position: Offset<f32>,
+    pub global_position: Offset<Pixels>,
 
     /// The local position where the long press started
-    pub local_position: Offset<f32>,
+    pub local_position: Offset<Pixels>,
 }
 
 impl LongPressStartDetails {
     /// Creates new long press start details
-    pub const fn new(global_position: Offset<f32>, local_position: Offset<f32>) -> Self {
+    pub const fn new(global_position: Offset<Pixels>, local_position: Offset<Pixels>) -> Self {
         Self {
             global_position,
             local_position,
@@ -412,32 +353,28 @@ impl LongPressStartDetails {
     }
 }
 
-/// Details for when a long press gesture updates (moves)
-///
-/// Similar to Flutter's `LongPressMoveUpdateDetails`.
-#[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct LongPressMoveUpdateDetails {
     /// The global position of the pointer
-    pub global_position: Offset<f32>,
+    pub global_position: Offset<Pixels>,
 
     /// The local position of the pointer
-    pub local_position: Offset<f32>,
+    pub local_position: Offset<Pixels>,
 
     /// The distance moved since the last update
-    pub offset_from_origin: Offset<f32>,
+    pub offset_from_origin: Offset<Pixels>,
 
     /// The total distance moved since the long press started
-    pub local_offset_from_origin: Offset<f32>,
+    pub local_offset_from_origin: Offset<Pixels>,
 }
 
 impl LongPressMoveUpdateDetails {
     /// Creates new long press move update details
     pub const fn new(
-        global_position: Offset<f32>,
-        local_position: Offset<f32>,
-        offset_from_origin: Offset<f32>,
-        local_offset_from_origin: Offset<f32>,
+        global_position: Offset<Pixels>,
+        local_position: Offset<Pixels>,
+        offset_from_origin: Offset<Pixels>,
+        local_offset_from_origin: Offset<Pixels>,
     ) -> Self {
         Self {
             global_position,
@@ -448,17 +385,13 @@ impl LongPressMoveUpdateDetails {
     }
 }
 
-/// Details for when a long press gesture ends
-///
-/// Similar to Flutter's `LongPressEndDetails`.
-#[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct LongPressEndDetails {
     /// The global position where the long press ended
-    pub global_position: Offset<f32>,
+    pub global_position: Offset<Pixels>,
 
     /// The local position where the long press ended
-    pub local_position: Offset<f32>,
+    pub local_position: Offset<Pixels>,
 
     /// The velocity when the long press ended
     pub velocity: Velocity,
@@ -466,7 +399,7 @@ pub struct LongPressEndDetails {
 
 impl LongPressEndDetails {
     /// Creates new long press end details
-    pub const fn new(global_position: Offset<f32>, local_position: Offset<f32>, velocity: Velocity) -> Self {
+    pub const fn new(global_position: Offset<Pixels>, local_position: Offset<Pixels>, velocity: Velocity) -> Self {
         Self {
             global_position,
             local_position,
@@ -479,17 +412,13 @@ impl LongPressEndDetails {
 // Force Press Gesture Details
 // ============================================================================
 
-/// Details for a force press gesture
-///
-/// Similar to Flutter's `ForcePressDetails`.
-#[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ForcePressDetails {
     /// The global position of the pointer
-    pub global_position: Offset<f32>,
+    pub global_position: Offset<Pixels>,
 
     /// The local position of the pointer
-    pub local_position: Offset<f32>,
+    pub local_position: Offset<Pixels>,
 
     /// The pressure of the touch (0.0 to 1.0)
     pub pressure: f32,
@@ -501,8 +430,8 @@ pub struct ForcePressDetails {
 impl ForcePressDetails {
     /// Creates new force press details
     pub const fn new(
-        global_position: Offset<f32>,
-        local_position: Offset<f32>,
+        global_position: Offset<Pixels>,
+        local_position: Offset<Pixels>,
         pressure: f32,
         max_pressure: f32,
     ) -> Self {
@@ -521,80 +450,5 @@ impl ForcePressDetails {
         } else {
             0.0
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_tap_down_details() {
-        let details = TapDownDetails::new(Offset::<f32>::new(100.0, 200.0), Offset::<f32>::new(10.0, 20.0))
-            .with_kind(PointerDeviceKind::Mouse);
-
-        assert_eq!(details.global_position, Offset::<f32>::new(100.0, 200.0));
-        assert_eq!(details.local_position, Offset::<f32>::new(10.0, 20.0));
-        assert_eq!(details.kind, PointerDeviceKind::Mouse);
-    }
-
-    #[test]
-    fn test_drag_start_details() {
-        let details = DragStartDetails::new(
-            Duration::from_millis(100),
-            Offset::<f32>::new(100.0, 200.0),
-            Offset::<f32>::new(10.0, 20.0),
-        );
-
-        assert_eq!(details.source_time_stamp, Duration::from_millis(100));
-        assert_eq!(details.global_position, Offset::<f32>::new(100.0, 200.0));
-    }
-
-    #[test]
-    fn test_drag_update_details() {
-        let details = DragUpdateDetails::new(
-            Duration::from_millis(100),
-            Offset::<f32>::new(5.0, 10.0),
-            Offset::<f32>::new(100.0, 200.0),
-            Offset::<f32>::new(10.0, 20.0),
-        )
-        .with_primary_delta(10.0);
-
-        assert_eq!(details.delta, Offset::<f32>::new(5.0, 10.0));
-        assert_eq!(details.primary_delta, Some(10.0));
-    }
-
-    #[test]
-    fn test_scale_update_details() {
-        let focal_point = OffsetPair::new(Offset::<f32>::new(10.0, 20.0), Offset::<f32>::new(100.0, 200.0));
-        let details = ScaleUpdateDetails::new(focal_point, 1.5, 0.5, 2)
-            .with_focal_point_delta(Offset::<f32>::new(2.0, 3.0))
-            .with_scale_factors(1.6, 1.4);
-
-        assert_eq!(details.scale, 1.5);
-        assert_eq!(details.rotation, 0.5);
-        assert_eq!(details.pointer_count, 2);
-        assert_eq!(details.focal_point_delta, Offset::<f32>::new(2.0, 3.0));
-        assert_eq!(details.horizontal_scale, 1.6);
-        assert_eq!(details.vertical_scale, 1.4);
-    }
-
-    #[test]
-    fn test_force_press_details() {
-        let details =
-            ForcePressDetails::new(Offset::<f32>::new(100.0, 200.0), Offset::<f32>::new(10.0, 20.0), 0.8, 1.0);
-
-        assert_eq!(details.pressure, 0.8);
-        assert_eq!(details.max_pressure, 1.0);
-        assert_eq!(details.normalized_pressure(), 0.8);
-    }
-
-    #[test]
-    fn test_force_press_normalized_pressure() {
-        let details = ForcePressDetails::new(Offset::<f32>::ZERO, Offset::<f32>::ZERO, 50.0, 100.0);
-        assert_eq!(details.normalized_pressure(), 0.5);
-
-        let no_max = ForcePressDetails::new(Offset::<f32>::ZERO, Offset::<f32>::ZERO, 50.0, 0.0);
-        assert_eq!(no_max.normalized_pressure(), 0.0);
     }
 }

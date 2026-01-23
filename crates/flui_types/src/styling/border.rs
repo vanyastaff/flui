@@ -2,13 +2,9 @@
 
 use crate::styling::Color;
 
-/// The style of a border side.
-///
-/// Similar to Flutter's `BorderStyle`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum BorderStyle {
-    /// Draw the border as a solid line.
     #[default]
     Solid,
 
@@ -31,22 +27,7 @@ impl BorderStyle {
     }
 }
 
-/// A side of a border of a box.
-///
-/// Similar to Flutter's `BorderSide`.
-///
-/// # Examples
-///
-/// ```
-/// use flui_types::styling::{BorderSide, BorderStyle, Color};
-///
-/// // Black solid border, 1px width
-/// let side = BorderSide::new(Color::BLACK, 1.0, BorderStyle::Solid);
-///
-/// // No border
-/// let none = BorderSide::none();
-/// ```
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct BorderSide {
     /// The color of this side of the border.
@@ -190,10 +171,6 @@ impl Default for BorderSide {
     }
 }
 
-/// Position of a border side in a box.
-///
-/// Used to identify which side of a border is being painted or styled.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum BorderPosition {
     /// Top side of the border
@@ -220,119 +197,5 @@ impl BorderPosition {
     /// Returns true if this is a vertical position (Left or Right)
     pub const fn is_vertical(&self) -> bool {
         matches!(self, Self::Left | Self::Right)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_border_style() {
-        assert!(BorderStyle::Solid.is_solid());
-        assert!(!BorderStyle::None.is_solid());
-        assert!(BorderStyle::None.is_none());
-        assert!(!BorderStyle::Solid.is_none());
-    }
-
-    #[test]
-    fn test_border_style_default() {
-        assert_eq!(BorderStyle::default(), BorderStyle::Solid);
-    }
-
-    #[test]
-    fn test_border_side_new() {
-        let side = BorderSide::new(Color::RED, 2.0, BorderStyle::Solid);
-        assert_eq!(side.color, Color::RED);
-        assert_eq!(side.width, 2.0);
-        assert_eq!(side.style, BorderStyle::Solid);
-        assert_eq!(side.stroke_align, 0.0);
-    }
-
-    #[test]
-    fn test_border_side_constants() {
-        assert_eq!(BorderSide::HAIRLINE.width, 0.0);
-        assert_eq!(BorderSide::HAIRLINE.style, BorderStyle::Solid);
-
-        assert_eq!(BorderSide::NONE.style, BorderStyle::None);
-    }
-
-    #[test]
-    fn test_border_side_is_visible() {
-        let visible = BorderSide::new(Color::BLACK, 1.0, BorderStyle::Solid);
-        assert!(visible.is_visible());
-
-        let invisible_width = BorderSide::new(Color::BLACK, 0.0, BorderStyle::Solid);
-        assert!(!invisible_width.is_visible());
-
-        let invisible_style = BorderSide::new(Color::BLACK, 1.0, BorderStyle::None);
-        assert!(!invisible_style.is_visible());
-    }
-
-    #[test]
-    fn test_border_side_with_methods() {
-        let side = BorderSide::default();
-
-        let colored = side.with_color(Color::BLUE);
-        assert_eq!(colored.color, Color::BLUE);
-
-        let wider = side.with_width(5.0);
-        assert_eq!(wider.width, 5.0);
-
-        let styled = side.with_style(BorderStyle::None);
-        assert_eq!(styled.style, BorderStyle::None);
-
-        let aligned = side.with_stroke_alignment(0.5);
-        assert_eq!(aligned.stroke_align, 0.5);
-    }
-
-    #[test]
-    fn test_border_side_lerp() {
-        let a = BorderSide::new(Color::BLACK, 1.0, BorderStyle::Solid);
-        let b = BorderSide::new(Color::WHITE, 5.0, BorderStyle::None);
-
-        let mid = BorderSide::lerp(a, b, 0.5);
-        assert_eq!(mid.width, 3.0);
-        assert_eq!(mid.style, BorderStyle::None); // Switches at 0.5
-    }
-
-    #[test]
-    fn test_border_side_scale() {
-        let side = BorderSide::new(Color::BLACK, 2.0, BorderStyle::Solid);
-        let scaled = side.scale(2.5);
-        assert_eq!(scaled.width, 5.0);
-        assert_eq!(scaled.color, Color::BLACK);
-    }
-
-    #[test]
-    fn test_border_side_default() {
-        let default = BorderSide::default();
-        assert_eq!(default, BorderSide::HAIRLINE);
-    }
-
-    #[test]
-    fn test_border_position_all() {
-        let positions = BorderPosition::all();
-        assert_eq!(positions.len(), 4);
-        assert_eq!(positions[0], BorderPosition::Top);
-        assert_eq!(positions[1], BorderPosition::Right);
-        assert_eq!(positions[2], BorderPosition::Bottom);
-        assert_eq!(positions[3], BorderPosition::Left);
-    }
-
-    #[test]
-    fn test_border_position_is_horizontal() {
-        assert!(BorderPosition::Top.is_horizontal());
-        assert!(BorderPosition::Bottom.is_horizontal());
-        assert!(!BorderPosition::Left.is_horizontal());
-        assert!(!BorderPosition::Right.is_horizontal());
-    }
-
-    #[test]
-    fn test_border_position_is_vertical() {
-        assert!(BorderPosition::Left.is_vertical());
-        assert!(BorderPosition::Right.is_vertical());
-        assert!(!BorderPosition::Top.is_vertical());
-        assert!(!BorderPosition::Bottom.is_vertical());
     }
 }

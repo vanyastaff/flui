@@ -9,7 +9,9 @@
 //! - Vector graphics
 //! - UI transitions
 
+use super::{px, Pixels};
 use std::fmt;
+use std::ops::{Add, Mul, Sub};
 
 use super::traits::{NumericUnit, Unit};
 use super::{Line, Point, Rect, Vec2};
@@ -18,27 +20,8 @@ use super::{Line, Point, Rect, Vec2};
 // Quadratic Bézier
 // ============================================================================
 
-/// A quadratic Bézier curve segment.
-///
-/// Defined by start point, control point, and end point.
-///
-/// # Examples
-///
-/// ```
-/// use flui_types::geometry::{QuadBez, Point};
-///
-/// let curve = QuadBez::new(
-///     Point::new(0.0, 0.0),
-///     Point::new(50.0, 100.0),
-///     Point::new(100.0, 0.0),
-/// );
-///
-/// let midpoint = curve.eval(0.5);
-/// ```
-#[derive(Debug, Clone, Copy, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(C)]
-pub struct QuadBez<T: Unit = f32> {
+pub struct QuadBez<T: Unit> {
     /// Start point.
     pub p0: Point<T>,
     /// Control point.
@@ -62,29 +45,21 @@ impl<T: Unit> Default for QuadBez<T> {
 // ============================================================================
 
 impl<T: Unit> QuadBez<T> {
-    /// Creates a new quadratic Bézier curve.
-    #[inline]
     #[must_use]
     pub const fn new(p0: Point<T>, p1: Point<T>, p2: Point<T>) -> Self {
         Self { p0, p1, p2 }
     }
 
-    /// Returns the start point.
-    #[inline]
     #[must_use]
     pub const fn start(&self) -> Point<T> {
         self.p0
     }
 
-    /// Returns the end point.
-    #[inline]
     #[must_use]
     pub const fn end(&self) -> Point<T> {
         self.p2
     }
 
-    /// Returns the control point.
-    #[inline]
     #[must_use]
     pub const fn control(&self) -> Point<T> {
         self.p1
@@ -99,8 +74,6 @@ impl<T: NumericUnit> QuadBez<T>
 where
     T: Into<f32> + From<f32>,
 {
-    /// Returns the point at parameter t (0.0 to 1.0).
-    #[inline]
     #[must_use]
     pub fn eval(&self, t: f32) -> Point<T> {
         let mt = 1.0 - t;
@@ -120,8 +93,6 @@ where
         )
     }
 
-    /// Returns the tangent vector at parameter t.
-    #[inline]
     #[must_use]
     pub fn tangent(&self, t: f32) -> Vec2<T> {
         let mt = 1.0 - t;
@@ -139,7 +110,6 @@ where
         )
     }
 
-    /// Splits the curve at parameter t into two curves.
     #[must_use]
     pub fn split(&self, t: f32) -> (Self, Self) {
         let p01 = self.p0.lerp(self.p1, t);
@@ -149,8 +119,6 @@ where
         (Self::new(self.p0, p01, p012), Self::new(p012, p12, self.p2))
     }
 
-    /// Returns a new curve translated by the given vector.
-    #[inline]
     #[must_use]
     pub fn translate(&self, offset: Vec2<T>) -> Self {
         Self {
@@ -160,8 +128,6 @@ where
         }
     }
 
-    /// Linear interpolation between two curves.
-    #[inline]
     #[must_use]
     pub fn lerp(self, other: Self, t: f32) -> Self {
         Self {
@@ -176,28 +142,22 @@ where
 // f32-specific operations
 // ============================================================================
 
-impl QuadBez<f32> {
-    /// Returns the normalized tangent (direction) at parameter t.
-    #[inline]
+impl QuadBez<Pixels> {
     #[must_use]
-    pub fn direction(&self, t: f32) -> Vec2<f32> {
+    pub fn direction(&self, t: f32) -> Vec2<Pixels> {
         self.tangent(t).normalize_or(Vec2::X)
     }
 
-    /// Returns the bounding box (conservative estimate using control points).
     #[must_use]
-    pub fn bounding_box(&self) -> Rect {
+    pub fn bounding_box(&self) -> Rect<Pixels> {
         let min_x = self.p0.x.min(self.p1.x).min(self.p2.x);
         let min_y = self.p0.y.min(self.p1.y).min(self.p2.y);
         let max_x = self.p0.x.max(self.p1.x).max(self.p2.x);
         let max_y = self.p0.y.max(self.p1.y).max(self.p2.y);
 
-        Rect::new(min_x, min_y, max_x, max_y)
+        Rect::from_ltrb(min_x, min_y, max_x, max_y)
     }
 
-    /// Returns the approximate length of the curve.
-    ///
-    /// Uses subdivision for estimation.
     #[must_use]
     pub fn arc_length(&self, tolerance: f32) -> f32 {
         self.arc_length_recursive(0.0, 1.0, tolerance)
@@ -220,15 +180,9 @@ impl QuadBez<f32> {
         }
     }
 
-    /// Returns the nearest point on the curve to the given point.
-    ///
-    /// Uses iterative refinement.
     #[must_use]
-    pub fn nearest_point(&self, point: Point<f32>) -> Point<f32> {
-        self.nearest_t(point, 0.0, 1.0, 10)
-    }
 
-    fn nearest_t(&self, point: Point<f32>, t0: f32, t1: f32, iterations: u32) -> Point<f32> {
+    fn nearest_t(&self, point: Point<Pixels>, t0: f32, t1: f32, iterations: u32) -> Point<Pixels> {
         if iterations == 0 {
             let p0 = self.eval(t0);
             let p1 = self.eval(t1);
@@ -250,24 +204,10 @@ impl QuadBez<f32> {
         }
     }
 
-    /// Returns the distance from the point to the curve.
-    #[inline]
-    #[must_use]
-    pub fn distance_to_point(&self, point: Point<f32>) -> f32 {
-        point.distance(self.nearest_point(point))
-    }
 
-    /// Checks if a point is within the given distance of the curve.
-    #[inline]
-    #[must_use]
-    pub fn is_point_near(&self, point: Point<f32>, tolerance: f32) -> bool {
-        self.distance_to_point(point) <= tolerance
-    }
 
-    /// Converts to a cubic Bézier curve.
-    #[inline]
     #[must_use]
-    pub fn to_cubic(&self) -> CubicBez<f32> {
+    pub fn to_cubic(&self) -> CubicBez<Pixels> {
         // Q(t) = C(t) when:
         // C.p1 = Q.p0 + 2/3 * (Q.p1 - Q.p0)
         // C.p2 = Q.p2 + 2/3 * (Q.p1 - Q.p2)
@@ -297,28 +237,8 @@ where
 // Cubic Bézier
 // ============================================================================
 
-/// A cubic Bézier curve segment.
-///
-/// Defined by start point, two control points, and end point.
-/// Most commonly used for smooth connections in node editors.
-///
-/// # Examples
-///
-/// ```
-/// use flui_types::geometry::{CubicBez, Point};
-///
-/// // Horizontal S-curve (common for node connections)
-/// let curve = CubicBez::horizontal_s(
-///     Point::new(0.0, 0.0),
-///     Point::new(100.0, 50.0),
-/// );
-///
-/// let midpoint = curve.eval(0.5);
-/// ```
-#[derive(Debug, Clone, Copy, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(C)]
-pub struct CubicBez<T: Unit = f32> {
+pub struct CubicBez<T: Unit> {
     /// Start point.
     pub p0: Point<T>,
     /// First control point.
@@ -345,36 +265,26 @@ impl<T: Unit> Default for CubicBez<T> {
 // ============================================================================
 
 impl<T: Unit> CubicBez<T> {
-    /// Creates a new cubic Bézier curve.
-    #[inline]
     #[must_use]
     pub const fn new(p0: Point<T>, p1: Point<T>, p2: Point<T>, p3: Point<T>) -> Self {
         Self { p0, p1, p2, p3 }
     }
 
-    /// Returns the start point.
-    #[inline]
     #[must_use]
     pub const fn start(&self) -> Point<T> {
         self.p0
     }
 
-    /// Returns the end point.
-    #[inline]
     #[must_use]
     pub const fn end(&self) -> Point<T> {
         self.p3
     }
 
-    /// Returns the first control point.
-    #[inline]
     #[must_use]
     pub const fn control1(&self) -> Point<T> {
         self.p1
     }
 
-    /// Returns the second control point.
-    #[inline]
     #[must_use]
     pub const fn control2(&self) -> Point<T> {
         self.p2
@@ -389,8 +299,6 @@ impl<T: NumericUnit> CubicBez<T>
 where
     T: Into<f32> + From<f32>,
 {
-    /// Returns the point at parameter t (0.0 to 1.0).
-    #[inline]
     #[must_use]
     pub fn eval(&self, t: f32) -> Point<T> {
         let mt = 1.0 - t;
@@ -424,8 +332,6 @@ where
         )
     }
 
-    /// Returns the tangent vector at parameter t.
-    #[inline]
     #[must_use]
     pub fn tangent(&self, t: f32) -> Vec2<T> {
         let mt = 1.0 - t;
@@ -455,7 +361,6 @@ where
         )
     }
 
-    /// Splits the curve at parameter t into two curves (de Casteljau).
     #[must_use]
     pub fn split(&self, t: f32) -> (Self, Self) {
         let p01 = self.p0.lerp(self.p1, t);
@@ -473,8 +378,6 @@ where
         )
     }
 
-    /// Returns a new curve translated by the given vector.
-    #[inline]
     #[must_use]
     pub fn translate(&self, offset: Vec2<T>) -> Self {
         Self {
@@ -485,8 +388,6 @@ where
         }
     }
 
-    /// Returns a new curve with start and end points swapped.
-    #[inline]
     #[must_use]
     pub const fn reverse(&self) -> Self {
         Self {
@@ -497,8 +398,6 @@ where
         }
     }
 
-    /// Linear interpolation between two curves.
-    #[inline]
     #[must_use]
     pub fn lerp(self, other: Self, t: f32) -> Self {
         Self {
@@ -514,82 +413,26 @@ where
 // f32-specific operations
 // ============================================================================
 
-impl CubicBez<f32> {
-    /// Creates a horizontal S-curve between two points.
-    ///
-    /// Control points are placed horizontally for smooth left-to-right connections.
-    /// Ideal for node editor connections.
-    #[inline]
-    #[must_use]
-    pub fn horizontal_s(start: Point<f32>, end: Point<f32>) -> Self {
-        let dx = (end.x - start.x).abs() * 0.5;
-        Self {
-            p0: start,
-            p1: Point::new(start.x + dx, start.y),
-            p2: Point::new(end.x - dx, end.y),
-            p3: end,
-        }
-    }
+impl CubicBez<Pixels> {
 
-    /// Creates a vertical S-curve between two points.
-    ///
-    /// Control points are placed vertically for smooth top-to-bottom connections.
-    #[inline]
-    #[must_use]
-    pub fn vertical_s(start: Point<f32>, end: Point<f32>) -> Self {
-        let dy = (end.y - start.y).abs() * 0.5;
-        Self {
-            p0: start,
-            p1: Point::new(start.x, start.y + dy),
-            p2: Point::new(end.x, end.y - dy),
-            p3: end,
-        }
-    }
 
-    /// Creates a curve with custom control point offset.
-    ///
-    /// `factor` controls how far control points extend (0.0 to 1.0).
-    /// Higher values create more pronounced curves.
-    #[inline]
-    #[must_use]
-    pub fn horizontal_s_with_factor(start: Point<f32>, end: Point<f32>, factor: f32) -> Self {
-        let dx = (end.x - start.x).abs() * factor;
-        Self {
-            p0: start,
-            p1: Point::new(start.x + dx, start.y),
-            p2: Point::new(end.x - dx, end.y),
-            p3: end,
-        }
-    }
 
-    /// Creates a straight line as a degenerate cubic Bézier.
-    #[inline]
-    #[must_use]
-    pub fn line(start: Point<f32>, end: Point<f32>) -> Self {
-        let p1 = start.lerp(end, 1.0 / 3.0);
-        let p2 = start.lerp(end, 2.0 / 3.0);
-        Self::new(start, p1, p2, end)
-    }
 
-    /// Returns the normalized tangent (direction) at parameter t.
-    #[inline]
     #[must_use]
-    pub fn direction(&self, t: f32) -> Vec2<f32> {
+    pub fn direction(&self, t: f32) -> Vec2<Pixels> {
         self.tangent(t).normalize_or(Vec2::X)
     }
 
-    /// Returns the bounding box (conservative estimate using control points).
     #[must_use]
-    pub fn bounding_box(&self) -> Rect {
+    pub fn bounding_box(&self) -> Rect<Pixels> {
         let min_x = self.p0.x.min(self.p1.x).min(self.p2.x).min(self.p3.x);
         let min_y = self.p0.y.min(self.p1.y).min(self.p2.y).min(self.p3.y);
         let max_x = self.p0.x.max(self.p1.x).max(self.p2.x).max(self.p3.x);
         let max_y = self.p0.y.max(self.p1.y).max(self.p2.y).max(self.p3.y);
 
-        Rect::new(min_x, min_y, max_x, max_y)
+        Rect::from_ltrb(min_x, min_y, max_x, max_y)
     }
 
-    /// Returns the approximate length of the curve.
     #[must_use]
     pub fn arc_length(&self, tolerance: f32) -> f32 {
         self.arc_length_recursive(0.0, 1.0, tolerance)
@@ -612,20 +455,15 @@ impl CubicBez<f32> {
         }
     }
 
-    /// Returns the nearest point on the curve to the given point.
     #[must_use]
-    pub fn nearest_point(&self, point: Point<f32>) -> Point<f32> {
-        // Newton-Raphson with fallback to subdivision
-        self.nearest_point_subdivision(point, 0.0, 1.0, 16)
-    }
 
     fn nearest_point_subdivision(
         &self,
-        point: Point<f32>,
+        point: Point<Pixels>,
         t0: f32,
         t1: f32,
         subdivisions: u32,
-    ) -> Point<f32> {
+    ) -> Point<Pixels> {
         if subdivisions == 0 {
             let p0 = self.eval(t0);
             let p1 = self.eval(t1);
@@ -656,31 +494,16 @@ impl CubicBez<f32> {
         self.nearest_point_subdivision(point, new_t0, new_t1, subdivisions - 1)
     }
 
-    /// Returns the distance from the point to the curve.
-    #[inline]
-    #[must_use]
-    pub fn distance_to_point(&self, point: Point<f32>) -> f32 {
-        point.distance(self.nearest_point(point))
-    }
 
-    /// Checks if a point is within the given distance of the curve.
-    #[inline]
-    #[must_use]
-    pub fn is_point_near(&self, point: Point<f32>, tolerance: f32) -> bool {
-        self.distance_to_point(point) <= tolerance
-    }
 
-    /// Flattens the curve into line segments.
-    ///
-    /// Returns points along the curve with the given tolerance.
     #[must_use]
-    pub fn flatten(&self, tolerance: f32) -> Vec<Point<f32>> {
+    pub fn flatten(&self, tolerance: f32) -> Vec<Point<Pixels>> {
         let mut points = vec![self.p0];
         self.flatten_recursive(0.0, 1.0, tolerance, &mut points);
         points
     }
 
-    fn flatten_recursive(&self, t0: f32, t1: f32, tolerance: f32, points: &mut Vec<Point<f32>>) {
+    fn flatten_recursive(&self, t0: f32, t1: f32, tolerance: f32, points: &mut Vec<Point<Pixels>>) {
         let p0 = self.eval(t0);
         let p1 = self.eval(t1);
         let pm = self.eval((t0 + t1) / 2.0);
@@ -698,9 +521,8 @@ impl CubicBez<f32> {
         }
     }
 
-    /// Returns intersection points with a line.
     #[must_use]
-    pub fn intersect_line(&self, line: &Line) -> Vec<Point<f32>> {
+    pub fn intersect_line(&self, line: &Line<Pixels>) -> Vec<Point<Pixels>> {
         // Simplified: flatten and check segments
         let points = self.flatten(1.0);
         let mut intersections = Vec::new();
@@ -733,272 +555,7 @@ where
 // Convenience functions
 // ============================================================================
 
-/// Shorthand for `QuadBez::new(p0, p1, p2)`.
-#[inline]
-#[must_use]
-pub fn quad_bez(p0: Point<f32>, p1: Point<f32>, p2: Point<f32>) -> QuadBez<f32> {
-    QuadBez::new(p0, p1, p2)
-}
-
-/// Shorthand for `CubicBez::new(p0, p1, p2, p3)`.
-#[inline]
-#[must_use]
-pub fn cubic_bez(p0: Point<f32>, p1: Point<f32>, p2: Point<f32>, p3: Point<f32>) -> CubicBez<f32> {
-    CubicBez::new(p0, p1, p2, p3)
-}
 
 // ============================================================================
 // Tests
 // ============================================================================
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // QuadBez tests
-
-    #[test]
-    fn test_quad_construction() {
-        let q = QuadBez::new(
-            Point::new(0.0, 0.0),
-            Point::new(50.0, 100.0),
-            Point::new(100.0, 0.0),
-        );
-        assert_eq!(q.start(), Point::new(0.0, 0.0));
-        assert_eq!(q.end(), Point::new(100.0, 0.0));
-        assert_eq!(q.control(), Point::new(50.0, 100.0));
-    }
-
-    #[test]
-    fn test_quad_eval() {
-        let q = QuadBez::new(
-            Point::new(0.0, 0.0),
-            Point::new(50.0, 100.0),
-            Point::new(100.0, 0.0),
-        );
-
-        assert_eq!(q.eval(0.0), Point::new(0.0, 0.0));
-        assert_eq!(q.eval(1.0), Point::new(100.0, 0.0));
-
-        let mid = q.eval(0.5);
-        assert!((mid.x - 50.0).abs() < 0.001);
-        assert!((mid.y - 50.0).abs() < 0.001);
-    }
-
-    #[test]
-    fn test_quad_split() {
-        let q = QuadBez::new(
-            Point::new(0.0, 0.0),
-            Point::new(50.0, 100.0),
-            Point::new(100.0, 0.0),
-        );
-
-        let (left, right) = q.split(0.5);
-        assert_eq!(left.start(), q.start());
-        assert_eq!(right.end(), q.end());
-
-        // Both should evaluate to same point at split
-        let p1 = left.eval(1.0);
-        let p2 = right.eval(0.0);
-        assert!((p1.x - p2.x).abs() < 0.001);
-        assert!((p1.y - p2.y).abs() < 0.001);
-    }
-
-    #[test]
-    fn test_quad_bounding_box() {
-        let q = QuadBez::new(
-            Point::new(0.0, 0.0),
-            Point::new(50.0, 100.0),
-            Point::new(100.0, 0.0),
-        );
-
-        let bbox = q.bounding_box();
-        assert_eq!(bbox.min.x, 0.0);
-        assert_eq!(bbox.min.y, 0.0);
-        assert_eq!(bbox.max.x, 100.0);
-        assert_eq!(bbox.max.y, 100.0);
-    }
-
-    #[test]
-    fn test_quad_to_cubic() {
-        let q = QuadBez::new(
-            Point::new(0.0, 0.0),
-            Point::new(50.0, 100.0),
-            Point::new(100.0, 0.0),
-        );
-
-        let c = q.to_cubic();
-
-        // Should evaluate to same points
-        for t in [0.0, 0.25, 0.5, 0.75, 1.0] {
-            let pq = q.eval(t);
-            let pc = c.eval(t);
-            assert!((pq.x - pc.x).abs() < 0.01);
-            assert!((pq.y - pc.y).abs() < 0.01);
-        }
-    }
-
-    // CubicBez tests
-
-    #[test]
-    fn test_cubic_construction() {
-        let c = CubicBez::new(
-            Point::new(0.0, 0.0),
-            Point::new(33.0, 100.0),
-            Point::new(66.0, 100.0),
-            Point::new(100.0, 0.0),
-        );
-
-        assert_eq!(c.start(), Point::new(0.0, 0.0));
-        assert_eq!(c.end(), Point::new(100.0, 0.0));
-        assert_eq!(c.control1(), Point::new(33.0, 100.0));
-        assert_eq!(c.control2(), Point::new(66.0, 100.0));
-    }
-
-    #[test]
-    fn test_cubic_eval() {
-        let c = CubicBez::new(
-            Point::new(0.0, 0.0),
-            Point::new(0.0, 100.0),
-            Point::new(100.0, 100.0),
-            Point::new(100.0, 0.0),
-        );
-
-        assert_eq!(c.eval(0.0), Point::new(0.0, 0.0));
-        assert_eq!(c.eval(1.0), Point::new(100.0, 0.0));
-
-        let mid = c.eval(0.5);
-        assert!((mid.x - 50.0).abs() < 0.001);
-    }
-
-    #[test]
-    fn test_cubic_horizontal_s() {
-        let c = CubicBez::horizontal_s(Point::new(0.0, 0.0), Point::new(100.0, 50.0));
-
-        assert_eq!(c.start(), Point::new(0.0, 0.0));
-        assert_eq!(c.end(), Point::new(100.0, 50.0));
-
-        // Control points should be horizontal from endpoints
-        assert_eq!(c.control1().y, 0.0);
-        assert_eq!(c.control2().y, 50.0);
-    }
-
-    #[test]
-    fn test_cubic_vertical_s() {
-        let c = CubicBez::vertical_s(Point::new(0.0, 0.0), Point::new(50.0, 100.0));
-
-        assert_eq!(c.start(), Point::new(0.0, 0.0));
-        assert_eq!(c.end(), Point::new(50.0, 100.0));
-
-        // Control points should be vertical from endpoints
-        assert_eq!(c.control1().x, 0.0);
-        assert_eq!(c.control2().x, 50.0);
-    }
-
-    #[test]
-    fn test_cubic_split() {
-        let c = CubicBez::horizontal_s(Point::new(0.0, 0.0), Point::new(100.0, 0.0));
-
-        let (left, right) = c.split(0.5);
-        assert_eq!(left.start(), c.start());
-        assert_eq!(right.end(), c.end());
-
-        // Both should meet at split point
-        let p1 = left.eval(1.0);
-        let p2 = right.eval(0.0);
-        assert!((p1.x - p2.x).abs() < 0.001);
-        assert!((p1.y - p2.y).abs() < 0.001);
-    }
-
-    #[test]
-    fn test_cubic_reverse() {
-        let c = CubicBez::new(
-            Point::new(0.0, 0.0),
-            Point::new(33.0, 100.0),
-            Point::new(66.0, 100.0),
-            Point::new(100.0, 0.0),
-        );
-
-        let r = c.reverse();
-        assert_eq!(r.start(), c.end());
-        assert_eq!(r.end(), c.start());
-    }
-
-    #[test]
-    fn test_cubic_flatten() {
-        let c = CubicBez::horizontal_s(Point::new(0.0, 0.0), Point::new(100.0, 50.0));
-
-        let points = c.flatten(1.0);
-        assert!(points.len() >= 2);
-        assert_eq!(points[0], c.start());
-        assert_eq!(*points.last().unwrap(), c.end());
-    }
-
-    #[test]
-    fn test_cubic_nearest_point() {
-        let c = CubicBez::horizontal_s(Point::new(0.0, 0.0), Point::new(100.0, 0.0));
-
-        // Point on curve
-        let near = c.nearest_point(Point::new(50.0, 0.0));
-        assert!(near.distance(Point::new(50.0, 0.0)) < 1.0);
-
-        // Point above curve
-        let near = c.nearest_point(Point::new(50.0, 50.0));
-        assert!(near.y < 50.0);
-    }
-
-    #[test]
-    fn test_cubic_is_point_near() {
-        let c = CubicBez::horizontal_s(Point::new(0.0, 0.0), Point::new(100.0, 0.0));
-
-        assert!(c.is_point_near(Point::new(50.0, 5.0), 10.0));
-        assert!(!c.is_point_near(Point::new(50.0, 50.0), 10.0));
-    }
-
-    #[test]
-    fn test_cubic_translate() {
-        let c = CubicBez::horizontal_s(Point::new(0.0, 0.0), Point::new(100.0, 0.0));
-        let translated = c.translate(Vec2::new(10.0, 20.0));
-
-        assert_eq!(translated.start(), Point::new(10.0, 20.0));
-        assert_eq!(translated.end(), Point::new(110.0, 20.0));
-    }
-
-    #[test]
-    fn test_cubic_lerp() {
-        let c1 = CubicBez::horizontal_s(Point::new(0.0, 0.0), Point::new(100.0, 0.0));
-        let c2 = CubicBez::horizontal_s(Point::new(0.0, 100.0), Point::new(100.0, 100.0));
-
-        let mid = c1.lerp(c2, 0.5);
-        assert_eq!(mid.start(), Point::new(0.0, 50.0));
-        assert_eq!(mid.end(), Point::new(100.0, 50.0));
-    }
-
-    #[test]
-    fn test_cubic_line() {
-        let c = CubicBez::line(Point::new(0.0, 0.0), Point::new(100.0, 100.0));
-
-        // Should be a straight line
-        let mid = c.eval(0.5);
-        assert!((mid.x - 50.0).abs() < 0.001);
-        assert!((mid.y - 50.0).abs() < 0.001);
-    }
-
-    #[test]
-    fn test_convenience_functions() {
-        let q = quad_bez(
-            Point::ORIGIN,
-            Point::new(50.0, 100.0),
-            Point::new(100.0, 0.0),
-        );
-        assert_eq!(q.start(), Point::ORIGIN);
-
-        let c = cubic_bez(
-            Point::ORIGIN,
-            Point::new(33.0, 100.0),
-            Point::new(66.0, 100.0),
-            Point::new(100.0, 0.0),
-        );
-        assert_eq!(c.start(), Point::ORIGIN);
-    }
-}

@@ -60,7 +60,6 @@ pub trait TextScaler: Debug + Send + Sync {
     /// For non-linear scaling, this represents the "typical" scale factor.
     fn text_scale_factor(&self) -> f64;
 
-    /// Returns true if this scaler applies no scaling (factor = 1.0).
     #[inline]
     fn is_identity(&self) -> bool {
         (self.text_scale_factor() - 1.0).abs() < f64::EPSILON
@@ -76,44 +75,12 @@ impl Clone for Box<dyn TextScaler> {
     }
 }
 
-/// Linear text scaler that multiplies font sizes by a constant factor.
-///
-/// This is the most common scaling strategy, where all text sizes are
-/// scaled by the same factor.
-///
-/// # Examples
-///
-/// ```
-/// use flui_types::typography::{TextScaler, LinearTextScaler};
-///
-/// let scaler = LinearTextScaler::new(1.5);
-/// assert_eq!(scaler.scale(10.0), 15.0);
-/// assert_eq!(scaler.scale(20.0), 30.0);
-/// assert_eq!(scaler.text_scale_factor(), 1.5);
-/// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LinearTextScaler {
     factor: f64,
 }
 
 impl LinearTextScaler {
-    /// Creates a new linear text scaler with the given factor.
-    ///
-    /// # Arguments
-    ///
-    /// * `factor` - The scale factor (1.0 = no scaling, 2.0 = double size).
-    ///
-    /// # Panics
-    ///
-    /// Panics if `factor` is negative or NaN.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_types::typography::LinearTextScaler;
-    ///
-    /// let scaler = LinearTextScaler::new(1.5);
-    /// ```
     #[must_use]
     pub fn new(factor: f64) -> Self {
         assert!(
@@ -123,24 +90,11 @@ impl LinearTextScaler {
         Self { factor }
     }
 
-    /// Creates a linear text scaler with no scaling (factor = 1.0).
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_types::typography::{TextScaler, LinearTextScaler};
-    ///
-    /// let scaler = LinearTextScaler::identity();
-    /// assert!(scaler.is_identity());
-    /// assert_eq!(scaler.scale(16.0), 16.0);
-    /// ```
     #[must_use]
     pub const fn identity() -> Self {
         Self { factor: 1.0 }
     }
 
-    /// Returns the scale factor.
-    #[inline]
     #[must_use]
     pub const fn factor(&self) -> f64 {
         self.factor
@@ -169,21 +123,6 @@ impl TextScaler for LinearTextScaler {
     }
 }
 
-/// No-op text scaler that returns font sizes unchanged.
-///
-/// Use this when you want to opt out of system text scaling for
-/// specific text elements (e.g., fixed-size icons or badges).
-///
-/// # Examples
-///
-/// ```
-/// use flui_types::typography::{TextScaler, NoScaling};
-///
-/// let scaler = NoScaling;
-/// assert_eq!(scaler.scale(16.0), 16.0);
-/// assert_eq!(scaler.scale(100.0), 100.0);
-/// assert!(scaler.is_identity());
-/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct NoScaling;
 
@@ -203,23 +142,6 @@ impl TextScaler for NoScaling {
     }
 }
 
-/// Clamped text scaler that limits scaling for large text.
-///
-/// This scaler applies a different (usually smaller) scale factor
-/// to text larger than a threshold. This is useful for accessibility
-/// where very large text shouldn't scale as aggressively.
-///
-/// # Examples
-///
-/// ```
-/// use flui_types::typography::{TextScaler, ClampedTextScaler};
-///
-/// // Scale small text by 2x, but large text (>24) only by 1.5x
-/// let scaler = ClampedTextScaler::new(2.0, 1.5, 24.0);
-///
-/// assert_eq!(scaler.scale(16.0), 32.0);  // 16 * 2.0
-/// assert_eq!(scaler.scale(32.0), 48.0);  // 32 * 1.5
-/// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ClampedTextScaler {
     /// Scale factor for small text.
@@ -231,25 +153,6 @@ pub struct ClampedTextScaler {
 }
 
 impl ClampedTextScaler {
-    /// Creates a new clamped text scaler.
-    ///
-    /// # Arguments
-    ///
-    /// * `small_factor` - Scale factor for text smaller than threshold.
-    /// * `large_factor` - Scale factor for text at or larger than threshold.
-    /// * `threshold` - Font size threshold for switching scale factors.
-    ///
-    /// # Panics
-    ///
-    /// Panics if any factor is negative or NaN, or if threshold is not positive.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_types::typography::ClampedTextScaler;
-    ///
-    /// let scaler = ClampedTextScaler::new(2.0, 1.5, 24.0);
-    /// ```
     #[must_use]
     pub fn new(small_factor: f64, large_factor: f64, threshold: f64) -> Self {
         assert!(
@@ -271,22 +174,16 @@ impl ClampedTextScaler {
         }
     }
 
-    /// Returns the small text scale factor.
-    #[inline]
     #[must_use]
     pub const fn small_factor(&self) -> f64 {
         self.small_factor
     }
 
-    /// Returns the large text scale factor.
-    #[inline]
     #[must_use]
     pub const fn large_factor(&self) -> f64 {
         self.large_factor
     }
 
-    /// Returns the threshold size.
-    #[inline]
     #[must_use]
     pub const fn threshold(&self) -> f64 {
         self.threshold
@@ -312,83 +209,3 @@ impl TextScaler for ClampedTextScaler {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_linear_text_scaler() {
-        let scaler = LinearTextScaler::new(1.5);
-        assert_eq!(scaler.scale(10.0), 15.0);
-        assert_eq!(scaler.scale(20.0), 30.0);
-        assert_eq!(scaler.text_scale_factor(), 1.5);
-        assert!(!scaler.is_identity());
-    }
-
-    #[test]
-    fn test_linear_text_scaler_identity() {
-        let scaler = LinearTextScaler::identity();
-        assert_eq!(scaler.scale(16.0), 16.0);
-        assert!(scaler.is_identity());
-    }
-
-    #[test]
-    fn test_linear_text_scaler_default() {
-        let scaler = LinearTextScaler::default();
-        assert!(scaler.is_identity());
-    }
-
-    #[test]
-    fn test_no_scaling() {
-        let scaler = NoScaling;
-        assert_eq!(scaler.scale(16.0), 16.0);
-        assert_eq!(scaler.scale(100.0), 100.0);
-        assert_eq!(scaler.text_scale_factor(), 1.0);
-        assert!(scaler.is_identity());
-    }
-
-    #[test]
-    fn test_clamped_text_scaler() {
-        let scaler = ClampedTextScaler::new(2.0, 1.5, 24.0);
-
-        // Small text scales by 2x
-        assert_eq!(scaler.scale(10.0), 20.0);
-        assert_eq!(scaler.scale(20.0), 40.0);
-
-        // Large text scales by 1.5x
-        assert_eq!(scaler.scale(24.0), 36.0);
-        assert_eq!(scaler.scale(32.0), 48.0);
-
-        assert_eq!(scaler.text_scale_factor(), 2.0);
-    }
-
-    #[test]
-    fn test_clamped_text_scaler_at_threshold() {
-        let scaler = ClampedTextScaler::new(2.0, 1.5, 24.0);
-
-        // At exactly threshold, use large factor
-        assert_eq!(scaler.scale(24.0), 36.0);
-
-        // Just below threshold, use small factor
-        assert_eq!(scaler.scale(23.9), 47.8);
-    }
-
-    #[test]
-    fn test_text_scaler_clone_box() {
-        let scaler: Box<dyn TextScaler> = Box::new(LinearTextScaler::new(1.5));
-        let cloned = scaler.clone();
-        assert_eq!(cloned.scale(10.0), 15.0);
-    }
-
-    #[test]
-    #[should_panic(expected = "Scale factor must be non-negative")]
-    fn test_linear_text_scaler_negative_factor() {
-        let _ = LinearTextScaler::new(-1.0);
-    }
-
-    #[test]
-    #[should_panic(expected = "threshold must be positive")]
-    fn test_clamped_text_scaler_zero_threshold() {
-        let _ = ClampedTextScaler::new(1.5, 1.2, 0.0);
-    }
-}

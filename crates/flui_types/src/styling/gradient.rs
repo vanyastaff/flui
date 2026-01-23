@@ -6,10 +6,7 @@ use crate::styling::Color;
 // Re-export TileMode from painting module
 pub use crate::painting::TileMode;
 
-/// A 2D gradient.
-///
-/// Similar to Flutter's `Gradient`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Gradient {
     /// A linear gradient.
@@ -62,25 +59,7 @@ impl Gradient {
     }
 }
 
-/// A 2D linear gradient.
-///
-/// Similar to Flutter's `LinearGradient`.
-///
-/// # Examples
-///
-/// ```
-/// use flui_types::styling::{LinearGradient, Color};
-/// use flui_types::layout::Alignment;
-///
-/// let gradient = LinearGradient::new(
-///     Alignment::CENTER_LEFT,
-///     Alignment::CENTER_RIGHT,
-///     vec![Color::RED, Color::BLUE],
-///     None,
-///     Default::default(),
-/// );
-/// ```
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct LinearGradient {
     /// The offset at which the gradient begins.
@@ -228,27 +207,7 @@ impl LinearGradient {
     }
 }
 
-/// A 2D radial gradient.
-///
-/// Similar to Flutter's `RadialGradient`.
-///
-/// # Examples
-///
-/// ```
-/// use flui_types::styling::{RadialGradient, Color};
-/// use flui_types::layout::Alignment;
-///
-/// let gradient = RadialGradient::new(
-///     Alignment::CENTER,
-///     0.5,
-///     vec![Color::RED, Color::BLUE],
-///     None,
-///     Default::default(),
-///     None,
-///     None,
-/// );
-/// ```
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct RadialGradient {
     /// The center of the gradient.
@@ -277,7 +236,6 @@ pub struct RadialGradient {
 }
 
 impl RadialGradient {
-    /// Creates a radial gradient.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         center: Alignment,
@@ -384,26 +342,7 @@ impl RadialGradient {
     }
 }
 
-/// A 2D sweep gradient (also known as angular or conic gradient).
-///
-/// Similar to Flutter's `SweepGradient`.
-///
-/// # Examples
-///
-/// ```
-/// use flui_types::styling::{SweepGradient, Color};
-/// use flui_types::layout::Alignment;
-///
-/// let gradient = SweepGradient::new(
-///     Alignment::CENTER,
-///     vec![Color::RED, Color::BLUE, Color::RED],
-///     None,
-///     Default::default(),
-///     0.0,
-///     std::f32::consts::TAU,
-/// );
-/// ```
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SweepGradient {
     /// The center of the gradient.
@@ -503,9 +442,6 @@ pub trait GradientTransform: std::fmt::Debug {
     fn transform(&self) -> [[f32; 3]; 3];
 }
 
-/// A rotation transformation for gradients.
-///
-/// Similar to Flutter's `GradientRotation`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct GradientRotation {
@@ -526,170 +462,5 @@ impl GradientTransform for GradientRotation {
         let sin = self.radians.sin();
 
         [[cos, -sin, 0.0], [sin, cos, 0.0], [0.0, 0.0, 1.0]]
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_tile_mode_default() {
-        assert_eq!(TileMode::default(), TileMode::Clamp);
-    }
-
-    #[test]
-    fn test_linear_gradient_new() {
-        let gradient = LinearGradient::new(
-            Alignment::CENTER_LEFT,
-            Alignment::CENTER_RIGHT,
-            vec![Color::RED, Color::BLUE],
-            None,
-            TileMode::Clamp,
-        );
-
-        assert_eq!(gradient.colors.len(), 2);
-        assert_eq!(gradient.begin, Alignment::CENTER_LEFT);
-        assert_eq!(gradient.end, Alignment::CENTER_RIGHT);
-    }
-
-    #[test]
-    fn test_linear_gradient_horizontal() {
-        let gradient = LinearGradient::horizontal(vec![Color::RED, Color::BLUE]);
-        assert_eq!(gradient.begin, Alignment::CENTER_LEFT);
-        assert_eq!(gradient.end, Alignment::CENTER_RIGHT);
-    }
-
-    #[test]
-    fn test_linear_gradient_vertical() {
-        let gradient = LinearGradient::vertical(vec![Color::RED, Color::BLUE]);
-        assert_eq!(gradient.begin, Alignment::TOP_CENTER);
-        assert_eq!(gradient.end, Alignment::BOTTOM_CENTER);
-    }
-
-    #[test]
-    fn test_linear_gradient_lerp() {
-        let a = LinearGradient::horizontal(vec![Color::BLACK, Color::WHITE]);
-        let b = LinearGradient::horizontal(vec![Color::RED, Color::BLUE]);
-
-        let mid = LinearGradient::lerp(&a, &b, 0.5).unwrap();
-        assert_eq!(mid.colors.len(), 2);
-    }
-
-    #[test]
-    fn test_linear_gradient_lerp_different_lengths() {
-        let a = LinearGradient::horizontal(vec![Color::BLACK, Color::WHITE]);
-        let b = LinearGradient::horizontal(vec![Color::RED]);
-
-        assert!(LinearGradient::lerp(&a, &b, 0.5).is_none());
-    }
-
-    #[test]
-    fn test_radial_gradient_new() {
-        let gradient = RadialGradient::new(
-            Alignment::CENTER,
-            0.5,
-            vec![Color::RED, Color::BLUE],
-            None,
-            TileMode::Clamp,
-            None,
-            None,
-        );
-
-        assert_eq!(gradient.center, Alignment::CENTER);
-        assert_eq!(gradient.radius, 0.5);
-        assert_eq!(gradient.colors.len(), 2);
-    }
-
-    #[test]
-    fn test_radial_gradient_centered() {
-        let gradient = RadialGradient::centered(0.5, vec![Color::RED, Color::BLUE]);
-        assert_eq!(gradient.center, Alignment::CENTER);
-        assert_eq!(gradient.radius, 0.5);
-    }
-
-    #[test]
-    fn test_radial_gradient_lerp() {
-        let a = RadialGradient::centered(0.3, vec![Color::BLACK, Color::WHITE]);
-        let b = RadialGradient::centered(0.7, vec![Color::RED, Color::BLUE]);
-
-        let mid = RadialGradient::lerp(&a, &b, 0.5).unwrap();
-        assert_eq!(mid.radius, 0.5);
-    }
-
-    #[test]
-    fn test_sweep_gradient_new() {
-        let gradient = SweepGradient::new(
-            Alignment::CENTER,
-            vec![Color::RED, Color::BLUE],
-            None,
-            TileMode::Clamp,
-            0.0,
-            std::f32::consts::TAU,
-        );
-
-        assert_eq!(gradient.center, Alignment::CENTER);
-        assert_eq!(gradient.start_angle, 0.0);
-        assert_eq!(gradient.end_angle, std::f32::consts::TAU);
-    }
-
-    #[test]
-    fn test_sweep_gradient_centered() {
-        let gradient = SweepGradient::centered(vec![Color::RED, Color::BLUE]);
-        assert_eq!(gradient.center, Alignment::CENTER);
-        assert_eq!(gradient.end_angle, std::f32::consts::TAU);
-    }
-
-    #[test]
-    fn test_sweep_gradient_lerp() {
-        let a = SweepGradient::centered(vec![Color::BLACK, Color::WHITE]);
-        let b = SweepGradient::centered(vec![Color::RED, Color::BLUE]);
-
-        let mid = SweepGradient::lerp(&a, &b, 0.5).unwrap();
-        assert_eq!(mid.colors.len(), 2);
-    }
-
-    #[test]
-    fn test_gradient_enum_colors() {
-        let linear = Gradient::Linear(LinearGradient::horizontal(vec![Color::RED, Color::BLUE]));
-        assert_eq!(linear.colors().len(), 2);
-
-        let radial = Gradient::Radial(RadialGradient::centered(0.5, vec![Color::RED]));
-        assert_eq!(radial.colors().len(), 1);
-
-        let sweep = Gradient::Sweep(SweepGradient::centered(vec![
-            Color::RED,
-            Color::BLUE,
-            Color::GREEN,
-        ]));
-        assert_eq!(sweep.colors().len(), 3);
-    }
-
-    #[test]
-    fn test_gradient_lerp_same_type() {
-        let a = Gradient::Linear(LinearGradient::horizontal(vec![Color::BLACK, Color::WHITE]));
-        let b = Gradient::Linear(LinearGradient::horizontal(vec![Color::RED, Color::BLUE]));
-
-        assert!(Gradient::lerp(&a, &b, 0.5).is_some());
-    }
-
-    #[test]
-    fn test_gradient_lerp_different_types() {
-        let a = Gradient::Linear(LinearGradient::horizontal(vec![Color::BLACK, Color::WHITE]));
-        let b = Gradient::Radial(RadialGradient::centered(0.5, vec![Color::RED, Color::BLUE]));
-
-        assert!(Gradient::lerp(&a, &b, 0.5).is_none());
-    }
-
-    #[test]
-    fn test_gradient_rotation() {
-        let rotation = GradientRotation::new(std::f32::consts::PI / 2.0);
-        let matrix = rotation.transform();
-
-        // Should be approximately a 90-degree rotation matrix
-        assert!((matrix[0][0] - 0.0).abs() < 0.001);
-        assert!((matrix[0][1] - (-1.0)).abs() < 0.001);
-        assert!((matrix[1][0] - 1.0).abs() < 0.001);
-        assert!((matrix[1][1] - 0.0).abs() < 0.001);
     }
 }

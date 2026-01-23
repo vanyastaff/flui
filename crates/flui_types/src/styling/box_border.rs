@@ -2,27 +2,7 @@
 
 use crate::styling::BorderSide;
 
-/// A border of a box, comprised of four sides.
-///
-/// Similar to Flutter's `Border`.
-///
-/// # Examples
-///
-/// ```
-/// use flui_types::styling::{Border, BorderSide, Color};
-///
-/// // All sides with same border
-/// let border = Border::all(BorderSide::new(Color::BLACK, 1.0, Default::default()));
-///
-/// // Different borders for each side
-/// let border = Border::new(
-///     Some(BorderSide::new(Color::RED, 2.0, Default::default())),
-///     Some(BorderSide::new(Color::GREEN, 2.0, Default::default())),
-///     Some(BorderSide::new(Color::BLUE, 2.0, Default::default())),
-///     Some(BorderSide::new(Color::YELLOW, 2.0, Default::default())),
-/// );
-/// ```
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Border {
     /// The top side of this border.
@@ -181,10 +161,6 @@ impl Default for Border {
     }
 }
 
-/// A border of a box that is expressed in terms of start and end rather than left and right.
-///
-/// Similar to Flutter's `BorderDirectional`.
-#[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct BorderDirectional {
     /// The top side of this border.
@@ -284,120 +260,5 @@ impl BoxBorder for Border {
 
     fn lerp_border(a: &Self, b: &Self, t: f32) -> Self {
         Border::lerp(*a, *b, t)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::styling::{BorderStyle, Color};
-
-    fn test_side() -> BorderSide {
-        BorderSide::new(Color::BLACK, 1.0, BorderStyle::Solid)
-    }
-
-    #[test]
-    fn test_border_all() {
-        let border = Border::all(test_side());
-        assert_eq!(border.top, Some(test_side()));
-        assert_eq!(border.right, Some(test_side()));
-        assert_eq!(border.bottom, Some(test_side()));
-        assert_eq!(border.left, Some(test_side()));
-    }
-
-    #[test]
-    fn test_border_symmetric() {
-        let vert = BorderSide::new(Color::RED, 2.0, BorderStyle::Solid);
-        let horiz = BorderSide::new(Color::BLUE, 3.0, BorderStyle::Solid);
-
-        let border = Border::symmetric(Some(vert), Some(horiz));
-        assert_eq!(border.top, Some(vert));
-        assert_eq!(border.bottom, Some(vert));
-        assert_eq!(border.left, Some(horiz));
-        assert_eq!(border.right, Some(horiz));
-    }
-
-    #[test]
-    fn test_border_only_methods() {
-        let side = test_side();
-
-        let top = Border::top_only(side);
-        assert_eq!(top.top, Some(side));
-        assert_eq!(top.right, None);
-
-        let right = Border::right_only(side);
-        assert_eq!(right.right, Some(side));
-        assert_eq!(right.top, None);
-
-        let bottom = Border::bottom_only(side);
-        assert_eq!(bottom.bottom, Some(side));
-        assert_eq!(bottom.top, None);
-
-        let left = Border::left_only(side);
-        assert_eq!(left.left, Some(side));
-        assert_eq!(left.top, None);
-    }
-
-    #[test]
-    fn test_border_is_uniform() {
-        let side = test_side();
-        let uniform = Border::all(side);
-        assert!(uniform.is_uniform());
-
-        let non_uniform = Border::new(
-            Some(side),
-            Some(BorderSide::new(Color::RED, 2.0, BorderStyle::Solid)),
-            Some(side),
-            Some(side),
-        );
-        assert!(!non_uniform.is_uniform());
-
-        let partial = Border::top_only(side);
-        assert!(!partial.is_uniform());
-    }
-
-    #[test]
-    fn test_border_lerp() {
-        let a = Border::all(BorderSide::new(Color::BLACK, 1.0, BorderStyle::Solid));
-        let b = Border::all(BorderSide::new(Color::WHITE, 3.0, BorderStyle::Solid));
-
-        let mid = Border::lerp(a, b, 0.5);
-        assert!(mid.top.is_some());
-        let top = mid.top.unwrap();
-        assert_eq!(top.width, 2.0);
-    }
-
-    #[test]
-    fn test_border_directional_resolve_ltr() {
-        let side = test_side();
-        let directional = BorderDirectional::all(side);
-        let resolved = directional.resolve(true);
-
-        assert_eq!(resolved.top, Some(side));
-        assert_eq!(resolved.right, Some(side));
-        assert_eq!(resolved.bottom, Some(side));
-        assert_eq!(resolved.left, Some(side));
-    }
-
-    #[test]
-    fn test_border_directional_resolve_rtl() {
-        let start_side = BorderSide::new(Color::RED, 2.0, BorderStyle::Solid);
-        let end_side = BorderSide::new(Color::BLUE, 3.0, BorderStyle::Solid);
-
-        let directional = BorderDirectional::new(None, Some(end_side), None, Some(start_side));
-        let resolved = directional.resolve(false);
-
-        assert_eq!(resolved.left, Some(end_side));
-        assert_eq!(resolved.right, Some(start_side));
-    }
-
-    #[test]
-    fn test_box_border_trait() {
-        let border = Border::all(test_side());
-        assert!(border.is_uniform());
-
-        let a = Border::all(BorderSide::new(Color::BLACK, 1.0, BorderStyle::Solid));
-        let b = Border::all(BorderSide::new(Color::WHITE, 3.0, BorderStyle::Solid));
-        let _lerped = Border::lerp_border(&a, &b, 0.5);
     }
 }

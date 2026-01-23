@@ -1,6 +1,6 @@
 //! Box layout types - fit and shape
 
-use crate::geometry::Size;
+use crate::geometry::{px, Size, Pixels};
 
 /// Epsilon for safe float comparisons (Rust 1.91.0 strict arithmetic)
 const EPSILON: f32 = 1e-6;
@@ -140,14 +140,14 @@ impl BoxFit {
     /// - `fitted_size` is the size the image should be rendered at
     /// - `source_size` is the portion of the source image to use
     #[must_use]
-    pub fn apply(self, input_size: Size<f32>, output_size: Size<f32>) -> FittedSizes {
-        let input_aspect_ratio = if input_size.height.abs() > EPSILON {
+    pub fn apply(self, input_size: Size<Pixels>, output_size: Size<Pixels>) -> FittedSizes {
+        let input_aspect_ratio = if input_size.height.abs() > px(EPSILON) {
             input_size.width / input_size.height
         } else {
             0.0
         };
 
-        let output_aspect_ratio = if output_size.height.abs() > EPSILON {
+        let output_aspect_ratio = if output_size.height.abs() > px(EPSILON) {
             output_size.width / output_size.height
         } else {
             0.0
@@ -317,17 +317,17 @@ impl BoxShape {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct FittedSizes {
     /// The size of the part of the input to show on the output.
-    pub source: Size<f32>,
+    pub source: Size<Pixels>,
 
     /// The size of the part of the output on which to show the input.
-    pub destination: Size<f32>,
+    pub destination: Size<Pixels>,
 }
 
 impl FittedSizes {
     /// Creates a new fitted sizes struct.
     #[inline]
     #[must_use]
-    pub const fn new(source: Size<f32>, destination: Size<f32>) -> Self {
+    pub const fn new(source: Size<Pixels>, destination: Size<Pixels>) -> Self {
         Self {
             source,
             destination,
@@ -338,7 +338,7 @@ impl FittedSizes {
     #[inline]
     #[must_use]
     pub fn scale_factor(&self) -> f32 {
-        if self.source.width.abs() > EPSILON {
+        if self.source.width.abs() > px(EPSILON) {
             self.destination.width / self.source.width
         } else {
             1.0

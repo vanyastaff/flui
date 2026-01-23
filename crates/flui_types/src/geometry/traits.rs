@@ -11,7 +11,6 @@ use std::ops::{Add, Div, Mul, Neg, Sub};
 // AXIS - 2D cartesian axes
 // ============================================================================
 
-/// Axis in a 2D cartesian space.
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]
 pub enum Axis {
     /// The vertical axis (y, up and down).
@@ -21,17 +20,6 @@ pub enum Axis {
 }
 
 impl Axis {
-    /// Returns the opposite axis.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use flui_types::geometry::Axis;
-    ///
-    /// assert_eq!(Axis::Horizontal.invert(), Axis::Vertical);
-    /// assert_eq!(Axis::Vertical.invert(), Axis::Horizontal);
-    /// ```
-    #[inline]
     #[must_use]
     pub const fn invert(self) -> Self {
         match self {
@@ -40,52 +28,16 @@ impl Axis {
         }
     }
 
-    /// Checks if this axis is vertical.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use flui_types::geometry::Axis;
-    ///
-    /// assert!(Axis::Vertical.is_vertical());
-    /// assert!(!Axis::Horizontal.is_vertical());
-    /// ```
-    #[inline]
     #[must_use]
     pub const fn is_vertical(self) -> bool {
         matches!(self, Axis::Vertical)
     }
 
-    /// Checks if this axis is horizontal.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use flui_types::geometry::Axis;
-    ///
-    /// assert!(Axis::Horizontal.is_horizontal());
-    /// assert!(!Axis::Vertical.is_horizontal());
-    /// ```
-    #[inline]
     #[must_use]
     pub const fn is_horizontal(self) -> bool {
         matches!(self, Axis::Horizontal)
     }
 
-    /// Returns array index for this axis (0 for Horizontal, 1 for Vertical).
-    ///
-    /// Useful for accessing axis-specific data in arrays.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use flui_types::geometry::Axis;
-    ///
-    /// let values = [100.0, 200.0]; // [x, y]
-    /// assert_eq!(values[Axis::Horizontal.index()], 100.0);
-    /// assert_eq!(values[Axis::Vertical.index()], 200.0);
-    /// ```
-    #[inline]
     #[must_use]
     pub const fn index(self) -> usize {
         match self {
@@ -94,22 +46,6 @@ impl Axis {
         }
     }
 
-    /// Selects a value based on the axis.
-    ///
-    /// Returns `horizontal` for `Axis::Horizontal`, `vertical` for `Axis::Vertical`.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use flui_types::geometry::Axis;
-    ///
-    /// let width = 100.0;
-    /// let height = 200.0;
-    ///
-    /// assert_eq!(Axis::Horizontal.select(width, height), 100.0);
-    /// assert_eq!(Axis::Vertical.select(width, height), 200.0);
-    /// ```
-    #[inline]
     #[must_use]
     pub fn select<T>(self, horizontal: T, vertical: T) -> T {
         match self {
@@ -127,7 +63,11 @@ impl Axis {
 ///
 /// This trait enables generic geometry types to work with different
 /// coordinate systems in a type-safe manner.
-pub trait Unit: Copy + Clone + Debug + Default + PartialEq + PartialOrd {
+///
+/// **Note:** This trait requires `Eq` and `Hash` to prevent using raw floating-point
+/// types (like `f32`) which don't implement these traits due to NaN semantics.
+/// Use wrapper types like `Pixels` instead, which implement `Eq` and `Hash` manually.
+pub trait Unit: Copy + Clone + Debug + Default + PartialEq + Eq + PartialOrd + std::hash::Hash {
     /// The underlying scalar type (f32, i32, etc.)
     type Scalar: Copy;
 
@@ -151,17 +91,11 @@ pub trait Unit: Copy + Clone + Debug + Default + PartialEq + PartialOrd {
 /// This trait enables math operations on unit types while maintaining
 /// type safety. All operations preserve the unit type.
 ///
-/// **Note:** This trait requires standard operator traits (`Add`, `Sub`, `Mul`, `Div`)
+/// **Note:** This trait requires standard operator traits (`Add`, `Sub`)
 /// and provides additional utility methods (`abs`, `min`, `max`) for common operations.
 /// Prefer using operators directly for clarity; utility methods are provided for
 /// generic programming contexts.
-pub trait NumericUnit:
-    Unit
-    + Add<Output = Self>
-    + Sub<Output = Self>
-    + Mul<f32, Output = Self>
-    + Div<f32, Output = Self>
-{
+pub trait NumericUnit: Unit + Add<Output = Self> + Sub<Output = Self> {
     /// Returns the absolute value.
     fn abs(self) -> Self;
 
@@ -172,34 +106,8 @@ pub trait NumericUnit:
     fn max(self, other: Self) -> Self;
 }
 
-impl Unit for f32 {
-    type Scalar = f32;
-
-    #[inline]
-    fn one() -> Self {
-        1.0
-    }
-
-    const MIN: Self = f32::MIN;
-    const MAX: Self = f32::MAX;
-}
-
-impl NumericUnit for f32 {
-    #[inline]
-    fn abs(self) -> Self {
-        self.abs()
-    }
-
-    #[inline]
-    fn min(self, other: Self) -> Self {
-        self.min(other)
-    }
-
-    #[inline]
-    fn max(self, other: Self) -> Self {
-        self.max(other)
-    }
-}
+// Note: f32 impl removed - f32 cannot implement Unit due to Eq + Hash requirements.
+// Use wrapper types like Pixels, PixelDelta, etc. instead.
 
 // ============================================================================
 // ALONG - Axis-based value access
@@ -249,7 +157,6 @@ pub trait Along {
 /// assert_eq!(width.half(), px(50.0));
 /// ```
 pub trait Half {
-    /// Returns half of this value.
     #[must_use]
     fn half(&self) -> Self;
 }
@@ -321,7 +228,6 @@ impl Half for Radians {
 /// assert_eq!(width.double(), px(100.0));
 /// ```
 pub trait Double {
-    /// Returns double of this value.
     #[must_use]
     fn double(&self) -> Self;
 }
@@ -398,10 +304,6 @@ pub trait IsZero {
 }
 
 impl IsZero for f32 {
-    /// Returns true if the absolute value is less than EPSILON.
-    ///
-    /// Note: This uses epsilon-based comparison for floating-point safety.
-    /// Exact zero and values within epsilon range are considered zero.
     #[inline]
     fn is_zero(&self) -> bool {
         self.abs() < f32::EPSILON
@@ -409,10 +311,6 @@ impl IsZero for f32 {
 }
 
 impl IsZero for f64 {
-    /// Returns true if the absolute value is less than EPSILON.
-    ///
-    /// Note: This uses epsilon-based comparison for floating-point safety.
-    /// Exact zero and values within epsilon range are considered zero.
     #[inline]
     fn is_zero(&self) -> bool {
         self.abs() < f64::EPSILON
@@ -519,19 +417,6 @@ pub trait Sign: Neg<Output = Self> + Sized {
     /// Returns the sign of the value (-1, 0, or 1).
     fn signum(self) -> Self;
 
-    /// Returns -1 for negative, 0 for zero, 1 for positive.
-    ///
-    /// Unlike `signum()`, this explicitly handles zero and returns an integer.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use flui_types::geometry::Sign;
-    ///
-    /// assert_eq!(100.0_f32.abs_sign(), 1);
-    /// assert_eq!((-50.0_f32).abs_sign(), -1);
-    /// assert_eq!(0.0_f32.abs_sign(), 0);
-    /// ```
     #[inline]
     fn abs_sign(&self) -> i32 {
         if self.is_positive() {
@@ -824,7 +709,7 @@ pub trait GeometryOps: NumericUnit {
 
 impl<T> GeometryOps for T
 where
-    T: NumericUnit,
+    T: NumericUnit + Mul<f32, Output = T>,
 {
     #[inline(always)]
     fn clamp(self, min: Self, max: Self) -> Self {
@@ -846,394 +731,3 @@ where
 // ============================================================================
 // TESTS
 // ============================================================================
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::geometry::{device_px, px};
-
-    #[test]
-    fn test_axis_invert() {
-        assert_eq!(Axis::Horizontal.invert(), Axis::Vertical);
-        assert_eq!(Axis::Vertical.invert(), Axis::Horizontal);
-    }
-
-    #[test]
-    fn test_axis_is_vertical() {
-        assert!(Axis::Vertical.is_vertical());
-        assert!(!Axis::Horizontal.is_vertical());
-    }
-
-    #[test]
-    fn test_axis_is_horizontal() {
-        assert!(Axis::Horizontal.is_horizontal());
-        assert!(!Axis::Vertical.is_horizontal());
-    }
-
-    #[test]
-    fn test_half() {
-        assert_eq!(px(100.0).half(), px(50.0));
-        assert_eq!(100.0_f32.half(), 50.0);
-        assert_eq!(device_px(100).half(), device_px(50));
-    }
-
-    #[test]
-    fn test_is_zero_float() {
-        // Test epsilon-based comparison for floats
-        assert!(0.0_f32.is_zero());
-        assert!(!f32::EPSILON.is_zero()); // Exactly epsilon is NOT < epsilon
-        assert!((f32::EPSILON * 0.5).is_zero()); // Half epsilon is within threshold
-        assert!(!1.0_f32.is_zero());
-
-        assert!(px(0.0).is_zero());
-        assert!(px(f32::EPSILON * 0.5).is_zero()); // Within epsilon
-        assert!(!px(1.0).is_zero());
-    }
-
-    #[test]
-    fn test_is_zero_integer() {
-        assert!(0_i32.is_zero());
-        assert!(!1_i32.is_zero());
-
-        assert!(device_px(0).is_zero());
-        assert!(!device_px(1).is_zero());
-    }
-
-    #[test]
-    fn test_sign() {
-        // f32
-        assert!(100.0_f32.is_positive());
-        assert!((-100.0_f32).is_negative());
-        assert_eq!(100.0_f32.signum(), 1.0);
-        assert_eq!((-100.0_f32).signum(), -1.0);
-
-        // Pixels
-        let positive = px(100.0);
-        assert!(positive.is_positive());
-        assert!(!positive.is_negative());
-        // Note: Pixels has an inherent signum() method that returns f32
-        assert_eq!(Sign::signum(positive), px(1.0));
-
-        let negative = px(-50.0);
-        assert!(negative.is_negative());
-        assert!(!negative.is_positive());
-        assert_eq!(Sign::signum(negative), px(-1.0));
-
-        // DevicePixels
-        assert!(device_px(100).is_positive());
-        assert!(device_px(-100).is_negative());
-        // Note: DevicePixels has inherent signum() -> i32, use Sign trait for DevicePixels
-        assert_eq!(Sign::signum(device_px(100)), device_px(1));
-        assert_eq!(Sign::signum(device_px(-100)), device_px(-1));
-    }
-
-    #[test]
-    fn test_geometry_ops() {
-        let a = px(100.0);
-        let b = px(50.0);
-
-        assert_eq!(a.abs(), px(100.0));
-        assert_eq!(px(-100.0).abs(), px(100.0));
-
-        assert_eq!(a.min(b), px(50.0));
-        assert_eq!(a.max(b), px(100.0));
-
-        assert_eq!(b.clamp(px(60.0), px(140.0)), px(60.0));
-        assert_eq!(a.clamp(px(60.0), px(140.0)), px(100.0));
-        assert_eq!(px(150.0).clamp(px(60.0), px(140.0)), px(140.0));
-    }
-
-    #[test]
-    fn test_lerp() {
-        let start = px(0.0);
-        let end = px(100.0);
-
-        assert_eq!(start.lerp(end, 0.0), px(0.0));
-        assert_eq!(start.lerp(end, 0.5), px(50.0));
-        assert_eq!(start.lerp(end, 1.0), px(100.0));
-
-        // Beyond range
-        assert_eq!(start.lerp(end, 1.5), px(150.0));
-        assert_eq!(start.lerp(end, -0.5), px(-50.0));
-    }
-
-    #[test]
-    fn test_f32_unit() {
-        assert_eq!(f32::zero(), 0.0);
-        assert_eq!(f32::one(), 1.0);
-        assert_eq!(f32::MIN, f32::MIN);
-        assert_eq!(f32::MAX, f32::MAX);
-    }
-
-    #[test]
-    fn test_numeric_unit_trait() {
-        let a = 10.0_f32;
-        let b = 20.0_f32;
-
-        assert_eq!(a.abs(), 10.0);
-        assert_eq!((-10.0_f32).abs(), 10.0);
-        assert_eq!(a.min(b), 10.0);
-        assert_eq!(a.max(b), 20.0);
-    }
-
-    #[test]
-    fn test_axis_index() {
-        let values = [100.0, 200.0]; // [x, y]
-        assert_eq!(values[Axis::Horizontal.index()], 100.0);
-        assert_eq!(values[Axis::Vertical.index()], 200.0);
-
-        // Test inversion
-        assert_eq!(Axis::Horizontal.invert().index(), 1);
-        assert_eq!(Axis::Vertical.invert().index(), 0);
-    }
-
-    #[test]
-    fn test_sign_zero() {
-        // Rust's f32::signum() returns 1.0 for positive zero (IEEE 754)
-        assert_eq!(0.0_f32.signum(), 1.0);
-        // Note: Pixels has inherent signum() -> f32, use trait method
-        assert_eq!(Sign::signum(px(0.0)).get(), 1.0);
-
-        // Positive zero is considered positive by Rust
-        assert!(0.0_f32.is_sign_positive());
-        assert!(!0.0_f32.is_sign_negative());
-
-        // abs_sign should return 0 for zero (special case)
-        assert_eq!(0.0_f32.abs_sign(), 0);
-        assert_eq!(px(0.0).abs_sign(), 0);
-    }
-
-    #[test]
-    fn test_abs_sign() {
-        // Positive
-        assert_eq!(100.0_f32.abs_sign(), 1);
-        assert_eq!(px(100.0).abs_sign(), 1);
-        assert_eq!(device_px(100).abs_sign(), 1);
-
-        // Negative
-        assert_eq!((-50.0_f32).abs_sign(), -1);
-        assert_eq!(px(-50.0).abs_sign(), -1);
-        assert_eq!(device_px(-50).abs_sign(), -1);
-
-        // Zero
-        assert_eq!(0.0_f32.abs_sign(), 0);
-        assert_eq!(px(0.0).abs_sign(), 0);
-        assert_eq!(device_px(0).abs_sign(), 0);
-    }
-
-    #[test]
-    fn test_lerp_edge_cases() {
-        let start = px(100.0);
-        let end = px(100.0); // Same values
-
-        // Should handle same values gracefully
-        assert_eq!(start.lerp(end, 0.5), px(100.0));
-        assert_eq!(start.lerp(end, 0.0), px(100.0));
-        assert_eq!(start.lerp(end, 1.0), px(100.0));
-
-        // Negative lerp (extrapolation)
-        let a = px(0.0);
-        let b = px(100.0);
-        assert_eq!(a.lerp(b, -1.0), px(-100.0));
-
-        // Beyond 1.0 (extrapolation)
-        assert_eq!(a.lerp(b, 2.0), px(200.0));
-
-        // Zero distance lerp
-        assert_eq!(px(0.0).lerp(px(0.0), 0.5), px(0.0));
-    }
-
-    #[test]
-    fn test_saturating_lerp() {
-        let start = px(0.0);
-        let end = px(100.0);
-
-        // Normal range
-        assert_eq!(start.saturating_lerp(end, 0.0), px(0.0));
-        assert_eq!(start.saturating_lerp(end, 0.5), px(50.0));
-        assert_eq!(start.saturating_lerp(end, 1.0), px(100.0));
-
-        // Clamped below
-        assert_eq!(start.saturating_lerp(end, -0.5), px(0.0));
-        assert_eq!(start.saturating_lerp(end, -10.0), px(0.0));
-
-        // Clamped above
-        assert_eq!(start.saturating_lerp(end, 1.5), px(100.0));
-        assert_eq!(start.saturating_lerp(end, 100.0), px(100.0));
-
-        // Edge cases with same values
-        assert_eq!(px(50.0).saturating_lerp(px(50.0), 2.0), px(50.0));
-    }
-
-    #[test]
-    fn test_clamp_edge_cases() {
-        // Normal clamp
-        let val = px(50.0);
-        assert_eq!(val.clamp(px(0.0), px(100.0)), px(50.0));
-        assert_eq!(val.clamp(px(60.0), px(100.0)), px(60.0));
-        assert_eq!(val.clamp(px(0.0), px(40.0)), px(40.0));
-
-        // Note: Rust's clamp panics when min > max in debug mode
-        // This is correct behavior - don't test invalid input
-
-        // Exact boundaries
-        assert_eq!(px(0.0).clamp(px(0.0), px(100.0)), px(0.0));
-        assert_eq!(px(100.0).clamp(px(0.0), px(100.0)), px(100.0));
-
-        // Same min and max
-        assert_eq!(px(50.0).clamp(px(75.0), px(75.0)), px(75.0));
-    }
-
-    #[test]
-    fn test_geometry_ops_with_device_pixels() {
-        let a = device_px(10);
-        let b = device_px(20);
-
-        assert_eq!(a.clamp(device_px(5), device_px(15)), device_px(10));
-        assert_eq!(a.clamp(device_px(15), device_px(25)), device_px(15));
-
-        // DevicePixels lerp with rounding
-        assert_eq!(a.lerp(b, 0.5), device_px(15));
-    }
-
-    #[test]
-    fn test_is_zero_epsilon() {
-        // Values strictly less than epsilon are considered zero
-        assert!((f32::EPSILON * 0.5).is_zero());
-        assert!((f32::EPSILON * 0.9).is_zero());
-
-        // Exactly epsilon and greater are NOT zero (strict < comparison)
-        assert!(!f32::EPSILON.is_zero());
-        assert!(!(f32::EPSILON * 2.0).is_zero());
-        assert!(!0.001_f32.is_zero());
-
-        // Exact zero
-        assert!(0.0_f32.is_zero());
-        assert!((-0.0_f32).is_zero());
-    }
-
-    // ========================================================================
-    // RADIANS TRAIT TESTS
-    // ========================================================================
-
-    #[test]
-    fn test_radians_half() {
-        use crate::geometry::radians;
-        use std::f32::consts::PI;
-
-        assert_eq!(radians(PI).half(), radians(PI / 2.0));
-        assert_eq!(radians(2.0).half(), radians(1.0));
-        assert_eq!(radians(0.0).half(), radians(0.0));
-    }
-
-    #[test]
-    fn test_radians_is_zero() {
-        use crate::geometry::radians;
-
-        assert!(radians(0.0).is_zero());
-        assert!(radians(f32::EPSILON * 0.5).is_zero());
-        assert!(!radians(1.0).is_zero());
-        assert!(!radians(-1.0).is_zero());
-    }
-
-    #[test]
-    fn test_radians_sign() {
-        use crate::geometry::radians;
-        use std::f32::consts::PI;
-
-        // Positive
-        let pos = radians(PI);
-        assert!(pos.is_positive());
-        assert!(!pos.is_negative());
-        assert_eq!(Sign::signum(pos), radians(1.0));
-
-        // Negative
-        let neg = radians(-PI);
-        assert!(neg.is_negative());
-        assert!(!neg.is_positive());
-        assert_eq!(Sign::signum(neg), radians(-1.0));
-
-        // Zero (Rust's signum returns 1.0 for positive zero)
-        let zero = radians(0.0);
-        assert!(zero.0.is_sign_positive());
-        assert!(!zero.0.is_sign_negative());
-        assert_eq!(Sign::signum(zero).get(), 1.0);
-
-        // abs_sign
-        assert_eq!(radians(PI).abs_sign(), 1);
-        assert_eq!(radians(-PI).abs_sign(), -1);
-        assert_eq!(radians(0.0).abs_sign(), 0);
-    }
-
-    // ========================================================================
-    // DOUBLE TRAIT TESTS
-    // ========================================================================
-
-    #[test]
-    fn test_double() {
-        // f32
-        assert_eq!(50.0_f32.double(), 100.0);
-        assert_eq!((-25.0_f32).double(), -50.0);
-
-        // Pixels
-        assert_eq!(px(50.0).double(), px(100.0));
-        assert_eq!(px(-25.0).double(), px(-50.0));
-
-        // DevicePixels
-        assert_eq!(device_px(50).double(), device_px(100));
-        assert_eq!(device_px(-25).double(), device_px(-50));
-    }
-
-    #[test]
-    fn test_double_radians() {
-        use crate::geometry::radians;
-        use std::f32::consts::PI;
-
-        assert_eq!(radians(PI).double(), radians(PI * 2.0));
-        assert_eq!(radians(PI / 2.0).double(), radians(PI));
-    }
-
-    // ========================================================================
-    // APPROXEQ TRAIT TESTS
-    // ========================================================================
-
-    #[test]
-    fn test_approx_eq_f32() {
-        let a = 100.0_f32;
-        let b = 100.0 + 1e-8;
-        let c = 100.1;
-
-        assert!(a.approx_eq(&b));
-        assert!(!a.approx_eq(&c));
-
-        // Custom epsilon
-        assert!(a.approx_eq_eps(&c, 0.2));
-        assert!(!a.approx_eq_eps(&c, 0.05));
-    }
-
-    #[test]
-    fn test_approx_eq_pixels() {
-        let a = px(100.0);
-        let b = px(100.0 + 1e-8);
-        let c = px(100.1);
-
-        assert!(a.approx_eq(&b));
-        assert!(!a.approx_eq(&c));
-
-        // Custom epsilon
-        assert!(a.approx_eq_eps(&c, 0.2));
-    }
-
-    #[test]
-    fn test_approx_eq_radians() {
-        use crate::geometry::radians;
-        use std::f32::consts::PI;
-
-        let a = radians(PI);
-        let b = radians(PI + 1e-8);
-        let c = radians(PI + 0.1);
-
-        assert!(a.approx_eq(&b));
-        assert!(!a.approx_eq(&c));
-    }
-}

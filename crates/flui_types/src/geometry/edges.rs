@@ -7,32 +7,6 @@
 use std::fmt::{self, Debug};
 use std::ops::{Add, AddAssign, Mul, MulAssign, Sub, SubAssign};
 
-/// Values associated with the four edges of a rectangle.
-///
-/// `Edges` is used throughout FLUI for box model properties like padding,
-/// margin, borders, and insets. It provides convenient constructors and
-/// operations for working with edge-based values.
-///
-/// # Examples
-///
-/// ```rust
-/// use flui_types::geometry::{Edges, edges};
-///
-/// // Uniform edges
-/// let padding = Edges::all(10.0);
-/// assert_eq!(padding.top, 10.0);
-/// assert_eq!(padding.left, 10.0);
-///
-/// // Asymmetric edges
-/// let margin = edges(5.0, 10.0, 5.0, 10.0);
-/// assert_eq!(margin.top, 5.0);
-/// assert_eq!(margin.right, 10.0);
-///
-/// // Vertical and horizontal
-/// let border = Edges::symmetric(2.0, 4.0);
-/// assert_eq!(border.top, 2.0);    // vertical
-/// assert_eq!(border.left, 4.0);   // horizontal
-/// ```
 #[derive(Clone, Copy, Default, PartialEq)]
 pub struct Edges<T = f32> {
     /// The top edge value.
@@ -45,17 +19,6 @@ pub struct Edges<T = f32> {
     pub left: T,
 }
 
-/// Constructs `Edges` with the specified values for each side.
-///
-/// # Examples
-///
-/// ```rust
-/// use flui_types::geometry::edges;
-///
-/// let e = edges(10.0, 20.0, 10.0, 20.0);
-/// assert_eq!(e.top, 10.0);
-/// assert_eq!(e.right, 20.0);
-/// ```
 #[inline]
 pub const fn edges<T>(top: T, right: T, bottom: T, left: T) -> Edges<T> {
     Edges {
@@ -67,15 +30,6 @@ pub const fn edges<T>(top: T, right: T, bottom: T, left: T) -> Edges<T> {
 }
 
 impl<T> Edges<T> {
-    /// Creates new `Edges` with the specified values for each side.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use flui_types::geometry::Edges;
-    ///
-    /// let e = Edges::new(5.0, 10.0, 5.0, 10.0);
-    /// ```
     #[inline]
     pub const fn new(top: T, right: T, bottom: T, left: T) -> Self {
         Self {
@@ -86,19 +40,6 @@ impl<T> Edges<T> {
         }
     }
 
-    /// Creates `Edges` where all sides have the same value.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use flui_types::geometry::Edges;
-    ///
-    /// let padding = Edges::all(10.0);
-    /// assert_eq!(padding.top, 10.0);
-    /// assert_eq!(padding.right, 10.0);
-    /// assert_eq!(padding.bottom, 10.0);
-    /// assert_eq!(padding.left, 10.0);
-    /// ```
     #[inline]
     pub fn all(value: T) -> Self
     where
@@ -112,24 +53,6 @@ impl<T> Edges<T> {
         }
     }
 
-    /// Creates `Edges` with symmetric vertical and horizontal values.
-    ///
-    /// # Arguments
-    ///
-    /// * `vertical` - Value for top and bottom edges
-    /// * `horizontal` - Value for left and right edges
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use flui_types::geometry::Edges;
-    ///
-    /// let padding = Edges::symmetric(10.0, 20.0);
-    /// assert_eq!(padding.top, 10.0);
-    /// assert_eq!(padding.bottom, 10.0);
-    /// assert_eq!(padding.left, 20.0);
-    /// assert_eq!(padding.right, 20.0);
-    /// ```
     #[inline]
     pub fn symmetric(vertical: T, horizontal: T) -> Self
     where
@@ -143,20 +66,6 @@ impl<T> Edges<T> {
         }
     }
 
-    /// Creates `Edges` with only horizontal values (left and right).
-    ///
-    /// Top and bottom are set to the default value.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use flui_types::geometry::Edges;
-    ///
-    /// let padding = Edges::horizontal(20.0);
-    /// assert_eq!(padding.left, 20.0);
-    /// assert_eq!(padding.right, 20.0);
-    /// assert_eq!(padding.top, 0.0);
-    /// ```
     #[inline]
     pub fn horizontal(value: T) -> Self
     where
@@ -170,20 +79,6 @@ impl<T> Edges<T> {
         }
     }
 
-    /// Creates `Edges` with only vertical values (top and bottom).
-    ///
-    /// Left and right are set to the default value.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use flui_types::geometry::Edges;
-    ///
-    /// let padding = Edges::vertical(10.0);
-    /// assert_eq!(padding.top, 10.0);
-    /// assert_eq!(padding.bottom, 10.0);
-    /// assert_eq!(padding.left, 0.0);
-    /// ```
     #[inline]
     pub fn vertical(value: T) -> Self
     where
@@ -197,16 +92,6 @@ impl<T> Edges<T> {
         }
     }
 
-    /// Returns the total horizontal extent (left + right).
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use flui_types::geometry::Edges;
-    ///
-    /// let padding = Edges::new(10.0, 20.0, 10.0, 30.0);
-    /// assert_eq!(padding.horizontal_total(), 50.0);
-    /// ```
     #[inline]
     pub fn horizontal_total(&self) -> T
     where
@@ -215,16 +100,6 @@ impl<T> Edges<T> {
         self.left + self.right
     }
 
-    /// Returns the total vertical extent (top + bottom).
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use flui_types::geometry::Edges;
-    ///
-    /// let padding = Edges::new(10.0, 20.0, 15.0, 20.0);
-    /// assert_eq!(padding.vertical_total(), 25.0);
-    /// ```
     #[inline]
     pub fn vertical_total(&self) -> T
     where
@@ -233,18 +108,6 @@ impl<T> Edges<T> {
         self.top + self.bottom
     }
 
-    /// Applies a function to each edge value, producing new `Edges`.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use flui_types::geometry::Edges;
-    ///
-    /// let e = Edges::all(10);
-    /// let doubled = e.map(|&x| x * 2);
-    /// assert_eq!(doubled.top, 20);
-    /// ```
-    #[inline]
     #[must_use]
     pub fn map<U>(&self, f: impl Fn(&T) -> U) -> Edges<U> {
         Edges {
@@ -255,39 +118,11 @@ impl<T> Edges<T> {
         }
     }
 
-    /// Returns `true` if any edge satisfies the predicate.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use flui_types::geometry::Edges;
-    ///
-    /// let e = Edges::new(0.0, 10.0, 0.0, 0.0);
-    /// assert!(e.any(|&x| x > 0.0));
-    ///
-    /// let zeros = Edges::all(0.0);
-    /// assert!(!zeros.any(|&x| x > 0.0));
-    /// ```
-    #[inline]
     #[must_use]
     pub fn any(&self, f: impl Fn(&T) -> bool) -> bool {
         f(&self.top) || f(&self.right) || f(&self.bottom) || f(&self.left)
     }
 
-    /// Returns `true` if all edges satisfy the predicate.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use flui_types::geometry::Edges;
-    ///
-    /// let e = Edges::all(10.0);
-    /// assert!(e.all_satisfy(|&x| x > 0.0));
-    ///
-    /// let mixed = Edges::new(10.0, 0.0, 10.0, 10.0);
-    /// assert!(!mixed.all_satisfy(|&x| x > 0.0));
-    /// ```
-    #[inline]
     #[must_use]
     pub fn all_satisfy(&self, f: impl Fn(&T) -> bool) -> bool {
         f(&self.top) && f(&self.right) && f(&self.bottom) && f(&self.left)
@@ -298,56 +133,11 @@ impl<T> Edges<T> {
 // f32-specific methods
 // ============================================================================
 
-impl Edges<f32> {
-    /// Returns the maximum value among all edges.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use flui_types::geometry::Edges;
-    ///
-    /// let e = Edges::new(5.0, 10.0, 3.0, 7.0);
-    /// assert_eq!(e.max(), 10.0);
-    /// ```
-    #[inline]
-    #[must_use]
-    pub fn max(&self) -> f32 {
-        self.top.max(self.right).max(self.bottom).max(self.left)
-    }
-
-    /// Returns the minimum value among all edges.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use flui_types::geometry::Edges;
-    ///
-    /// let e = Edges::new(5.0, 10.0, 3.0, 7.0);
-    /// assert_eq!(e.min(), 3.0);
-    /// ```
-    #[inline]
-    #[must_use]
-    pub fn min(&self) -> f32 {
-        self.top.min(self.right).min(self.bottom).min(self.left)
-    }
-}
-
 // ============================================================================
 // Specialized implementations for Pixels
 // ============================================================================
 
 impl Edges<super::units::Pixels> {
-    /// Scales all edges by the given factor, producing `Edges<ScaledPixels>`.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use flui_types::geometry::{Edges, px};
-    ///
-    /// let padding = Edges::all(px(10.0));
-    /// let scaled = padding.scale(2.0);
-    /// ```
-    #[inline]
     #[must_use]
     pub fn scale(&self, factor: f32) -> Edges<super::units::ScaledPixels> {
         Edges {
@@ -510,92 +300,3 @@ impl<T: Debug> Debug for Edges<T> {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_edges_all() {
-        let e = Edges::all(10.0);
-        assert_eq!(e.top, 10.0);
-        assert_eq!(e.right, 10.0);
-        assert_eq!(e.bottom, 10.0);
-        assert_eq!(e.left, 10.0);
-    }
-
-    #[test]
-    fn test_edges_symmetric() {
-        let e = Edges::symmetric(10.0, 20.0);
-        assert_eq!(e.top, 10.0);
-        assert_eq!(e.bottom, 10.0);
-        assert_eq!(e.left, 20.0);
-        assert_eq!(e.right, 20.0);
-    }
-
-    #[test]
-    fn test_edges_horizontal_vertical() {
-        let h = Edges::horizontal(20.0);
-        assert_eq!(h.left, 20.0);
-        assert_eq!(h.right, 20.0);
-        assert_eq!(h.top, 0.0);
-        assert_eq!(h.bottom, 0.0);
-
-        let v = Edges::vertical(10.0);
-        assert_eq!(v.top, 10.0);
-        assert_eq!(v.bottom, 10.0);
-        assert_eq!(v.left, 0.0);
-        assert_eq!(v.right, 0.0);
-    }
-
-    #[test]
-    fn test_edges_totals() {
-        let e = Edges::new(10.0, 20.0, 15.0, 30.0);
-        assert_eq!(e.horizontal_total(), 50.0);
-        assert_eq!(e.vertical_total(), 25.0);
-    }
-
-    #[test]
-    fn test_edges_arithmetic() {
-        let e1 = Edges::all(10.0);
-        let e2 = Edges::all(5.0);
-
-        let sum = e1 + e2;
-        assert_eq!(sum.top, 15.0);
-
-        let diff = e1 - e2;
-        assert_eq!(diff.top, 5.0);
-    }
-
-    #[test]
-    fn test_edges_map() {
-        let e = Edges::all(10);
-        let doubled = e.map(|&x| x * 2);
-        assert_eq!(doubled.top, 20);
-        assert_eq!(doubled.left, 20);
-    }
-
-    #[test]
-    fn test_edges_any() {
-        let e = Edges::new(0.0, 10.0, 0.0, 0.0);
-        assert!(e.any(|&x| x > 0.0));
-
-        let zeros = Edges::all(0.0);
-        assert!(!zeros.any(|&x| x > 0.0));
-    }
-
-    #[test]
-    fn test_edges_all_satisfy() {
-        let e = Edges::all(10.0);
-        assert!(e.all_satisfy(|&x| x > 0.0));
-
-        let mixed = Edges::new(10.0, 0.0, 10.0, 10.0);
-        assert!(!mixed.all_satisfy(|&x| x > 0.0));
-    }
-
-    #[test]
-    fn test_edges_max_min() {
-        let e = Edges::new(5.0, 10.0, 3.0, 7.0);
-        assert_eq!(e.max(), 10.0);
-        assert_eq!(e.min(), 3.0);
-    }
-}

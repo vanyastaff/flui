@@ -4,6 +4,7 @@
 //! similar to CSS filter and backdrop-filter properties.
 
 use super::canvas::{StrokeCap, StrokeJoin};
+use crate::geometry::Pixels;
 use std::sync::Arc;
 
 /// Blur quality/algorithm level.
@@ -535,7 +536,7 @@ pub enum ImageFilter {
         /// Vertical overflow in pixels
         overflow_v: f32,
         /// Container size
-        container_size: crate::Size<f32>,
+        container_size: crate::Size<Pixels>,
     },
 }
 
@@ -598,7 +599,7 @@ impl ImageFilter {
     pub fn overflow_indicator(
         overflow_h: f32,
         overflow_v: f32,
-        container_size: crate::Size<f32>,
+        container_size: crate::Size<Pixels>,
     ) -> Self {
         Self::OverflowIndicator {
             overflow_h,

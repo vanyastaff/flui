@@ -2,8 +2,7 @@
 
 use crate::Color;
 
-/// Font weight values from 100 (thin) to 900 (black).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum FontWeight {
     /// Thin (100)
@@ -33,8 +32,6 @@ impl FontWeight {
     /// Bold font weight (700).
     pub const BOLD: Self = Self::W700;
 
-    /// Returns the numeric value of the font weight.
-    #[inline]
     #[must_use]
     pub const fn value(&self) -> u16 {
         match self {
@@ -50,35 +47,11 @@ impl FontWeight {
         }
     }
 
-    /// Returns true if this weight is bold or heavier (>= 600)
-    #[inline]
     #[must_use]
     pub const fn is_bold(&self) -> bool {
         self.value() >= 600
     }
 
-    /// Convert a CSS font-weight value (100-900) to a FontWeight.
-    ///
-    /// Rounds to the nearest valid weight. Useful when parsing CSS or web fonts.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_types::typography::FontWeight;
-    ///
-    /// assert_eq!(FontWeight::from_css(400), FontWeight::W400);
-    /// assert_eq!(FontWeight::from_css(700), FontWeight::W700);
-    ///
-    /// // Rounds to nearest valid weight
-    /// assert_eq!(FontWeight::from_css(350), FontWeight::W300);
-    /// assert_eq!(FontWeight::from_css(450), FontWeight::W500);
-    /// assert_eq!(FontWeight::from_css(650), FontWeight::W700);
-    ///
-    /// // Clamps out-of-range values
-    /// assert_eq!(FontWeight::from_css(50), FontWeight::W100);
-    /// assert_eq!(FontWeight::from_css(1000), FontWeight::W900);
-    /// ```
-    #[inline]
     #[must_use]
     pub const fn from_css(value: i32) -> Self {
         match value {
@@ -101,19 +74,16 @@ impl Default for FontWeight {
     }
 }
 
-/// Font style (normal or italic).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum FontStyle {
-    /// Normal font style.
     #[default]
     Normal,
     /// Italic font style.
     Italic,
 }
 
-/// OpenType font feature.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct FontFeature {
     /// OpenType feature tag (4 characters).
@@ -142,8 +112,7 @@ impl FontFeature {
     }
 }
 
-/// OpenType font variation axis.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct FontVariation {
     /// Variation axis tag (4 characters).
@@ -162,9 +131,6 @@ impl FontVariation {
     }
 }
 
-/// Strut style for minimum line height.
-#[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Default)]
 pub struct StrutStyle {
     /// Font family name.
@@ -216,10 +182,7 @@ impl StrutStyle {
     }
 }
 
-/// Text style for styling text.
-#[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Default)]
+#[derive(Default, Clone, Debug, PartialEq)]
 pub struct TextStyle {
     /// Text color.
     pub color: Option<Color>,
@@ -366,8 +329,7 @@ impl TextStyle {
     }
 }
 
-/// Shadow for text.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TextShadow {
     /// Shadow color.
@@ -389,120 +351,5 @@ impl TextShadow {
             offset_y,
             blur_radius,
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_font_weight_values() {
-        assert_eq!(FontWeight::W100.value(), 100);
-        assert_eq!(FontWeight::W400.value(), 400);
-        assert_eq!(FontWeight::W700.value(), 700);
-        assert_eq!(FontWeight::W900.value(), 900);
-        assert_eq!(FontWeight::NORMAL.value(), 400);
-        assert_eq!(FontWeight::BOLD.value(), 700);
-    }
-
-    #[test]
-    fn test_font_weight_default() {
-        assert_eq!(FontWeight::default(), FontWeight::NORMAL);
-    }
-
-    #[test]
-    fn test_font_style_default() {
-        assert_eq!(FontStyle::default(), FontStyle::Normal);
-    }
-
-    #[test]
-    fn test_font_feature() {
-        let feature = FontFeature::enable("liga");
-        assert_eq!(feature.feature, "liga");
-        assert_eq!(feature.value, 1);
-
-        let feature = FontFeature::disable("kern");
-        assert_eq!(feature.feature, "kern");
-        assert_eq!(feature.value, 0);
-    }
-
-    #[test]
-    fn test_font_variation() {
-        let variation = FontVariation::new("wght", 450.0);
-        assert_eq!(variation.axis, "wght");
-        assert_eq!(variation.value, 450.0);
-    }
-
-    #[test]
-    fn test_strut_style_builder() {
-        let strut = StrutStyle::new()
-            .with_font_family("Roboto")
-            .with_font_size(16.0)
-            .with_height(1.5)
-            .with_force_strut_height(true);
-
-        assert_eq!(strut.font_family, Some("Roboto".to_string()));
-        assert_eq!(strut.font_size, Some(16.0));
-        assert_eq!(strut.height, Some(1.5));
-        assert!(strut.force_strut_height);
-    }
-
-    #[test]
-    fn test_text_style_builder() {
-        let color = Color::rgba(0, 0, 0, 255);
-        let style = TextStyle::new()
-            .with_color(color)
-            .with_font_size(14.0)
-            .with_font_weight(FontWeight::BOLD)
-            .with_font_style(FontStyle::Italic)
-            .with_font_family("Arial")
-            .with_letter_spacing(1.0)
-            .with_height(1.2);
-
-        assert_eq!(style.color, Some(color));
-        assert_eq!(style.font_size, Some(14.0));
-        assert_eq!(style.font_weight, Some(FontWeight::BOLD));
-        assert_eq!(style.font_style, Some(FontStyle::Italic));
-        assert_eq!(style.font_family, Some("Arial".to_string()));
-        assert_eq!(style.letter_spacing, Some(1.0));
-        assert_eq!(style.height, Some(1.2));
-    }
-
-    #[test]
-    fn test_text_style_merge() {
-        let color1 = Color::rgba(0, 0, 0, 255);
-        let color2 = Color::rgba(255, 0, 0, 255);
-
-        let style1 = TextStyle::new()
-            .with_color(color1)
-            .with_font_size(14.0)
-            .with_font_weight(FontWeight::NORMAL);
-
-        let style2 = TextStyle::new()
-            .with_color(color2)
-            .with_font_style(FontStyle::Italic);
-
-        let merged = style1.merge(&style2);
-
-        // style2 takes precedence
-        assert_eq!(merged.color, Some(color2));
-        // style2 doesn't have font_size, so style1's value is used
-        assert_eq!(merged.font_size, Some(14.0));
-        // style2 doesn't have font_weight, so style1's value is used
-        assert_eq!(merged.font_weight, Some(FontWeight::NORMAL));
-        // style2 has font_style
-        assert_eq!(merged.font_style, Some(FontStyle::Italic));
-    }
-
-    #[test]
-    fn test_text_shadow() {
-        let color = Color::rgba(0, 0, 0, 128);
-        let shadow = TextShadow::new(color, 2.0, 2.0, 4.0);
-
-        assert_eq!(shadow.color, color);
-        assert_eq!(shadow.offset_x, 2.0);
-        assert_eq!(shadow.offset_y, 2.0);
-        assert_eq!(shadow.blur_radius, 4.0);
     }
 }

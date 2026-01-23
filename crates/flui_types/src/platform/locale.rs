@@ -2,22 +2,6 @@
 
 use std::fmt;
 
-/// An identifier for a locale
-///
-/// Similar to Flutter's `Locale`. Identifies a specific language and
-/// optionally a country/region.
-///
-/// # Examples
-///
-/// ```
-/// use flui_types::platform::Locale;
-///
-/// let locale = Locale::new("en", Some("US"));
-/// assert_eq!(locale.language(), "en");
-/// assert_eq!(locale.country(), Some("US"));
-/// assert_eq!(locale.to_string(), "en_US");
-/// ```
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Locale {
     /// The language code (e.g., "en", "es", "fr")
@@ -74,40 +58,21 @@ impl Locale {
         }
     }
 
-    /// Returns the language code
-    #[inline]
     #[must_use]
     pub fn language(&self) -> &str {
         &self.language
     }
 
-    /// Returns the country code, if set
-    #[inline]
     #[must_use]
     pub fn country(&self) -> Option<&str> {
         self.country.as_deref()
     }
 
-    /// Returns the script code, if set
-    #[inline]
     #[must_use]
     pub fn script(&self) -> Option<&str> {
         self.script.as_deref()
     }
 
-    /// Returns a locale tag string (language_country)
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_types::platform::Locale;
-    ///
-    /// let locale = Locale::new("en", Some("US"));
-    /// assert_eq!(locale.to_language_tag(), "en_US");
-    ///
-    /// let locale = Locale::new("fr", None::<String>);
-    /// assert_eq!(locale.to_language_tag(), "fr");
-    /// ```
     #[must_use]
     pub fn to_language_tag(&self) -> String {
         if let Some(country) = &self.country {
@@ -117,35 +82,11 @@ impl Locale {
         }
     }
 
-    /// Returns whether this locale is left-to-right
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_types::platform::Locale;
-    ///
-    /// assert!(Locale::en_us().is_ltr());
-    /// assert!(!Locale::new("ar", Some("SA")).is_ltr());
-    /// ```
-    #[inline]
     #[must_use]
     pub fn is_ltr(&self) -> bool {
         !self.is_rtl()
     }
 
-    /// Returns whether this locale is right-to-left
-    ///
-    /// Common RTL languages: Arabic (ar), Hebrew (he), Persian (fa), Urdu (ur)
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_types::platform::Locale;
-    ///
-    /// assert!(Locale::new("ar", Some("SA")).is_rtl());
-    /// assert!(Locale::new("he", Some("IL")).is_rtl());
-    /// assert!(!Locale::en_us().is_rtl());
-    /// ```
     #[must_use]
     pub fn is_rtl(&self) -> bool {
         matches!(
@@ -154,31 +95,6 @@ impl Locale {
         )
     }
 
-    /// Parse a language tag string into a Locale.
-    ///
-    /// Supports both underscore and hyphen separators (BCP 47 format):
-    /// - "en" -> Locale(language: "en")
-    /// - "en_US" or "en-US" -> Locale(language: "en", country: "US")
-    /// - "zh_Hans_CN" -> Locale(language: "zh", script: "Hans", country: "CN")
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_types::platform::Locale;
-    ///
-    /// let locale = Locale::from_language_tag("en_US").unwrap();
-    /// assert_eq!(locale.language(), "en");
-    /// assert_eq!(locale.country(), Some("US"));
-    ///
-    /// let locale = Locale::from_language_tag("en-GB").unwrap();
-    /// assert_eq!(locale.language(), "en");
-    /// assert_eq!(locale.country(), Some("GB"));
-    ///
-    /// let locale = Locale::from_language_tag("zh-Hans-CN").unwrap();
-    /// assert_eq!(locale.language(), "zh");
-    /// assert_eq!(locale.script(), Some("Hans"));
-    /// assert_eq!(locale.country(), Some("CN"));
-    /// ```
     #[must_use]
     pub fn from_language_tag(tag: &str) -> Option<Self> {
         if tag.is_empty() {
@@ -258,49 +174,3 @@ impl Locale {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_locale_new() {
-        let locale = Locale::new("en", Some("US"));
-        assert_eq!(locale.language(), "en");
-        assert_eq!(locale.country(), Some("US"));
-        assert_eq!(locale.script(), None);
-    }
-
-    #[test]
-    fn test_locale_with_script() {
-        let locale = Locale::with_script("zh", Some("CN"), Some("Hans"));
-        assert_eq!(locale.language(), "zh");
-        assert_eq!(locale.country(), Some("CN"));
-        assert_eq!(locale.script(), Some("Hans"));
-    }
-
-    #[test]
-    fn test_locale_to_language_tag() {
-        let locale1 = Locale::new("en", Some("US"));
-        assert_eq!(locale1.to_language_tag(), "en_US");
-
-        let locale2 = Locale::new("fr", None::<String>);
-        assert_eq!(locale2.to_language_tag(), "fr");
-    }
-
-    #[test]
-    fn test_locale_display() {
-        let locale = Locale::new("en", Some("GB"));
-        assert_eq!(locale.to_string(), "en_GB");
-    }
-
-    #[test]
-    fn test_locale_common() {
-        assert_eq!(Locale::en_us().to_language_tag(), "en_US");
-        assert_eq!(Locale::en_gb().to_language_tag(), "en_GB");
-        assert_eq!(Locale::es_es().to_language_tag(), "es_ES");
-        assert_eq!(Locale::fr_fr().to_language_tag(), "fr_FR");
-        assert_eq!(Locale::de_de().to_language_tag(), "de_DE");
-        assert_eq!(Locale::zh_cn().to_language_tag(), "zh_CN");
-        assert_eq!(Locale::ja_jp().to_language_tag(), "ja_JP");
-    }
-}

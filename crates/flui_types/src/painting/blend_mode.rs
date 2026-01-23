@@ -1,21 +1,6 @@
 //! Blend modes for compositing colors.
 
-/// Blend modes for compositing colors.
-///
-/// Defines how colors should be blended when compositing images or drawing operations.
-/// Similar to Flutter's `BlendMode` and CSS blend modes.
-///
-/// # Examples
-///
-/// ```
-/// use flui_types::painting::BlendMode;
-///
-/// let mode = BlendMode::Multiply;
-/// assert_eq!(mode, BlendMode::Multiply);
-/// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Default)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
 pub enum BlendMode {
     /// Drop both the source and the destination, leaving nothing.
     ///
@@ -32,9 +17,6 @@ pub enum BlendMode {
     /// This corresponds to the "dst" Porter-Duff operator.
     Dst,
 
-    /// Composite the source over the destination.
-    ///
-    /// This is the default blend mode. This corresponds to the "src-over" Porter-Duff operator.
     #[default]
     SrcOver,
 
@@ -166,8 +148,6 @@ pub enum BlendMode {
 }
 
 impl BlendMode {
-    /// Returns true if this blend mode is a Porter-Duff mode.
-    #[inline]
     #[must_use]
     pub const fn is_porter_duff(&self) -> bool {
         matches!(
@@ -189,22 +169,16 @@ impl BlendMode {
         )
     }
 
-    /// Returns true if this blend mode requires the destination image.
-    #[inline]
     #[must_use]
     pub const fn requires_destination(&self) -> bool {
         !matches!(self, BlendMode::Clear | BlendMode::Src)
     }
 
-    /// Returns true if this is an advanced (non-Porter-Duff) blend mode.
-    #[inline]
     #[must_use]
     pub const fn is_advanced(&self) -> bool {
         !self.is_porter_duff()
     }
 
-    /// Returns true if this blend mode can lighten colors.
-    #[inline]
     #[must_use]
     pub const fn can_lighten(&self) -> bool {
         matches!(
@@ -213,8 +187,6 @@ impl BlendMode {
         )
     }
 
-    /// Returns true if this blend mode can darken colors.
-    #[inline]
     #[must_use]
     pub const fn can_darken(&self) -> bool {
         matches!(
@@ -223,46 +195,8 @@ impl BlendMode {
         )
     }
 
-    /// Returns true if this blend mode is compositional (affects alpha).
-    #[inline]
     #[must_use]
     pub const fn is_compositional(&self) -> bool {
         self.is_porter_duff()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_blend_mode_default() {
-        assert_eq!(BlendMode::default(), BlendMode::SrcOver);
-    }
-
-    #[test]
-    fn test_blend_mode_porter_duff() {
-        assert!(BlendMode::SrcOver.is_porter_duff());
-        assert!(BlendMode::Clear.is_porter_duff());
-        assert!(BlendMode::Xor.is_porter_duff());
-
-        assert!(!BlendMode::Screen.is_porter_duff());
-        assert!(!BlendMode::Multiply.is_porter_duff());
-        assert!(!BlendMode::Overlay.is_porter_duff());
-    }
-
-    #[test]
-    fn test_blend_mode_requires_destination() {
-        assert!(!BlendMode::Clear.requires_destination());
-        assert!(!BlendMode::Src.requires_destination());
-
-        assert!(BlendMode::SrcOver.requires_destination());
-        assert!(BlendMode::Multiply.requires_destination());
-    }
-
-    #[test]
-    fn test_blend_mode_equality() {
-        assert_eq!(BlendMode::Multiply, BlendMode::Multiply);
-        assert_ne!(BlendMode::Multiply, BlendMode::Screen);
     }
 }

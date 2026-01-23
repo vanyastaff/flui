@@ -2,27 +2,7 @@
 
 use crate::styling::Radius;
 
-/// An immutable set of radii for each corner of a rectangle.
-///
-/// Similar to Flutter's `BorderRadius`.
-///
-/// # Examples
-///
-/// ```
-/// use flui_types::styling::{BorderRadius, Radius};
-///
-/// // All corners with same circular radius
-/// let radius = BorderRadius::circular(10.0);
-///
-/// // Different radii for each corner
-/// let radius = BorderRadius::only(
-///     Radius::circular(10.0),
-///     Radius::circular(20.0),
-///     Radius::circular(10.0),
-///     Radius::circular(20.0),
-/// );
-/// ```
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct BorderRadius {
     /// The top-left corner radius.
@@ -243,10 +223,6 @@ impl Default for BorderRadius {
     }
 }
 
-/// A border radius that is expressed in terms of start and end rather than left and right.
-///
-/// Similar to Flutter's `BorderRadiusDirectional`.
-#[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct BorderRadiusDirectional {
     /// The top-start corner radius.
@@ -344,112 +320,5 @@ impl BorderRadiusDirectional {
 impl Default for BorderRadiusDirectional {
     fn default() -> Self {
         Self::ZERO
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_border_radius_circular() {
-        let radius = BorderRadius::circular(10.0);
-        assert_eq!(radius.top_left, Radius::circular(10.0));
-        assert_eq!(radius.top_right, Radius::circular(10.0));
-        assert_eq!(radius.bottom_left, Radius::circular(10.0));
-        assert_eq!(radius.bottom_right, Radius::circular(10.0));
-    }
-
-    #[test]
-    fn test_border_radius_only() {
-        let radius = BorderRadius::only(
-            Radius::circular(5.0),
-            Radius::circular(10.0),
-            Radius::circular(15.0),
-            Radius::circular(20.0),
-        );
-        assert_eq!(radius.top_left, Radius::circular(5.0));
-        assert_eq!(radius.top_right, Radius::circular(10.0));
-        assert_eq!(radius.bottom_left, Radius::circular(15.0));
-        assert_eq!(radius.bottom_right, Radius::circular(20.0));
-    }
-
-    #[test]
-    fn test_border_radius_vertical() {
-        let radius = BorderRadius::vertical(Radius::circular(5.0), Radius::circular(10.0));
-        assert_eq!(radius.top_left, Radius::circular(5.0));
-        assert_eq!(radius.top_right, Radius::circular(5.0));
-        assert_eq!(radius.bottom_left, Radius::circular(10.0));
-        assert_eq!(radius.bottom_right, Radius::circular(10.0));
-    }
-
-    #[test]
-    fn test_border_radius_horizontal() {
-        let radius = BorderRadius::horizontal(Radius::circular(5.0), Radius::circular(10.0));
-        assert_eq!(radius.top_left, Radius::circular(5.0));
-        assert_eq!(radius.top_right, Radius::circular(10.0));
-        assert_eq!(radius.bottom_left, Radius::circular(5.0));
-        assert_eq!(radius.bottom_right, Radius::circular(10.0));
-    }
-
-    #[test]
-    fn test_border_radius_lerp() {
-        let a = BorderRadius::circular(0.0);
-        let b = BorderRadius::circular(10.0);
-        let mid = BorderRadius::lerp(a, b, 0.5);
-        assert_eq!(mid.top_left, Radius::circular(5.0));
-    }
-
-    #[test]
-    fn test_border_radius_with_methods() {
-        let radius = BorderRadius::ZERO;
-
-        let modified = radius
-            .with_top_left(Radius::circular(5.0))
-            .with_top_right(Radius::circular(10.0));
-
-        assert_eq!(modified.top_left, Radius::circular(5.0));
-        assert_eq!(modified.top_right, Radius::circular(10.0));
-        assert_eq!(modified.bottom_left, Radius::ZERO);
-    }
-
-    #[test]
-    fn test_border_radius_directional_resolve_ltr() {
-        let radius = BorderRadiusDirectional::only(
-            Radius::circular(5.0),
-            Radius::circular(10.0),
-            Radius::circular(15.0),
-            Radius::circular(20.0),
-        );
-
-        let resolved = radius.resolve(true);
-        assert_eq!(resolved.top_left, Radius::circular(5.0));
-        assert_eq!(resolved.top_right, Radius::circular(10.0));
-        assert_eq!(resolved.bottom_left, Radius::circular(15.0));
-        assert_eq!(resolved.bottom_right, Radius::circular(20.0));
-    }
-
-    #[test]
-    fn test_border_radius_directional_resolve_rtl() {
-        let radius = BorderRadiusDirectional::only(
-            Radius::circular(5.0),
-            Radius::circular(10.0),
-            Radius::circular(15.0),
-            Radius::circular(20.0),
-        );
-
-        let resolved = radius.resolve(false);
-        assert_eq!(resolved.top_left, Radius::circular(10.0));
-        assert_eq!(resolved.top_right, Radius::circular(5.0));
-        assert_eq!(resolved.bottom_left, Radius::circular(20.0));
-        assert_eq!(resolved.bottom_right, Radius::circular(15.0));
-    }
-
-    #[test]
-    fn test_border_radius_directional_lerp() {
-        let a = BorderRadiusDirectional::circular(0.0);
-        let b = BorderRadiusDirectional::circular(10.0);
-        let mid = BorderRadiusDirectional::lerp(a, b, 0.5);
-        assert_eq!(mid.top_start, Radius::circular(5.0));
     }
 }

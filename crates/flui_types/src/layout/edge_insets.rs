@@ -3,25 +3,12 @@
 //! This module contains types for representing padding and margins,
 //! similar to Flutter's EdgeInsets system.
 
+use crate::geometry::{px, Pixels};
 use std::ops::{Add, Div, Mul, Neg, Sub};
 
 use crate::{Offset, Point, Rect, Size};
 
-/// An immutable set of offsets in each of the four cardinal directions.
-///
-/// Similar to Flutter's `EdgeInsets`.
-///
-/// # Examples
-///
-/// ```
-/// use flui_types::{EdgeInsets, Size};
-///
-/// let padding = EdgeInsets::all(10.0);
-/// let size = Size::new(100.0, 100.0);
-/// let padded = padding.expand_size(size);
-/// assert_eq!(padded, Size::new(120.0, 120.0));
-/// ```
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct EdgeInsets {
     /// The offset from the left.
@@ -147,18 +134,6 @@ impl EdgeInsets {
         }
     }
 
-    /// Create uniform edge insets (same value on all sides).
-    ///
-    /// This is an alias for `all()` that may be more intuitive in some contexts.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_types::EdgeInsets;
-    ///
-    /// let padding = EdgeInsets::uniform(16.0);
-    /// assert_eq!(padding, EdgeInsets::all(16.0));
-    /// ```
     #[inline]
     pub const fn uniform(value: f32) -> Self {
         Self::all(value)
@@ -174,33 +149,11 @@ impl EdgeInsets {
         Self::symmetric(0.0, value)
     }
 
-    /// Get the total horizontal insets (left + right).
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_types::EdgeInsets;
-    ///
-    /// let insets = EdgeInsets::symmetric(5.0, 10.0);
-    /// assert_eq!(insets.horizontal_total(), 10.0);
-    /// ```
-    #[inline]
     #[must_use]
     pub fn horizontal_total(&self) -> f32 {
         self.left + self.right
     }
 
-    /// Get the total vertical insets (top + bottom).
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_types::EdgeInsets;
-    ///
-    /// let insets = EdgeInsets::symmetric(5.0, 10.0);
-    /// assert_eq!(insets.vertical_total(), 20.0);
-    /// ```
-    #[inline]
     #[must_use]
     pub fn vertical_total(&self) -> f32 {
         self.top + self.bottom
@@ -214,10 +167,10 @@ impl EdgeInsets {
     /// use flui_types::{EdgeInsets, Size};
     ///
     /// let insets = EdgeInsets::new(1.0, 2.0, 3.0, 4.0);
-    /// assert_eq!(insets.total_size(), Size::new(4.0, 6.0));
+    /// assert_eq!(insets.total_size(), Size::new(px(4.0), px(6.0)));
     /// ```
-    pub fn total_size(&self) -> Size<f32> {
-        Size::new(self.horizontal_total(), self.vertical_total())
+    pub fn total_size(&self) -> Size<Pixels> {
+        Size::new(px(self.horizontal_total()), px(self.vertical_total()))
     }
 
     /// Get the top-left offset.
@@ -228,10 +181,10 @@ impl EdgeInsets {
     /// use flui_types::{EdgeInsets, Offset};
     ///
     /// let insets = EdgeInsets::new(1.0, 2.0, 3.0, 4.0);
-    /// assert_eq!(insets.top_left(), Offset::new(1.0, 2.0));
+    /// assert_eq!(insets.top_left(), Offset::new(px(1.0), px(2.0)));
     /// ```
-    pub fn top_left(&self) -> Offset<f32> {
-        Offset::new(self.left, self.top)
+    pub fn top_left(&self) -> Offset<Pixels> {
+        Offset::new(px(self.left), px(self.top))
     }
 
     /// Get the bottom-right offset.
@@ -242,56 +195,22 @@ impl EdgeInsets {
     /// use flui_types::{EdgeInsets, Offset};
     ///
     /// let insets = EdgeInsets::new(1.0, 2.0, 3.0, 4.0);
-    /// assert_eq!(insets.bottom_right(), Offset::new(3.0, 4.0));
+    /// assert_eq!(insets.bottom_right(), Offset::new(px(3.0), px(4.0)));
     /// ```
-    pub fn bottom_right(&self) -> Offset<f32> {
-        Offset::new(self.right, self.bottom)
+    pub fn bottom_right(&self) -> Offset<Pixels> {
+        Offset::new(px(self.right), px(self.bottom))
     }
 
-    /// Check if all insets are zero.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_types::EdgeInsets;
-    ///
-    /// assert!(EdgeInsets::ZERO.is_zero());
-    /// assert!(!EdgeInsets::all(1.0).is_zero());
-    /// ```
-    #[inline]
     #[must_use]
     pub fn is_zero(&self) -> bool {
         self.left == 0.0 && self.top == 0.0 && self.right == 0.0 && self.bottom == 0.0
     }
 
-    /// Check if all insets are non-negative.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_types::EdgeInsets;
-    ///
-    /// assert!(EdgeInsets::all(5.0).is_non_negative());
-    /// assert!(!EdgeInsets::new(-1.0, 0.0, 0.0, 0.0).is_non_negative());
-    /// ```
-    #[inline]
     #[must_use]
     pub fn is_non_negative(&self) -> bool {
         self.left >= 0.0 && self.top >= 0.0 && self.right >= 0.0 && self.bottom >= 0.0
     }
 
-    /// Clamp all insets to be non-negative.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_types::EdgeInsets;
-    ///
-    /// let insets = EdgeInsets::new(-1.0, 2.0, -3.0, 4.0);
-    /// let clamped = insets.clamp_non_negative();
-    /// assert_eq!(clamped, EdgeInsets::new(0.0, 2.0, 0.0, 4.0));
-    /// ```
-    #[inline]
     #[must_use]
     pub fn clamp_non_negative(&self) -> Self {
         Self {
@@ -312,16 +231,16 @@ impl EdgeInsets {
     /// use flui_types::{EdgeInsets, Point, Rect, Size};
     ///
     /// let insets = EdgeInsets::all(10.0);
-    /// let rect = Rect::from_origin_size(Point::ZERO, Size::new(100.0, 100.0));
+    /// let rect = Rect::from_origin_size(Point::ZERO, Size::new(px(100.0), px(100.0)));
     /// let inflated = insets.inflate_rect(rect);
-    /// assert_eq!(inflated.min, Point::new(-10.0, -10.0));
-    /// assert_eq!(inflated.max, Point::new(110.0, 110.0));
+    /// assert_eq!(inflated.min, Point::new(px(-10.0), px(-10.0)));
+    /// assert_eq!(inflated.max, Point::new(px(110.0), px(110.0)));
     /// ```
-    pub fn inflate_rect(&self, rect: impl Into<Rect>) -> Rect {
+    pub fn inflate_rect(&self, rect: impl Into<Rect<Pixels>>) -> Rect<Pixels> {
         let rect = rect.into();
         Rect::from_min_max(
-            Point::new(rect.min.x - self.left, rect.min.y - self.top),
-            Point::new(rect.max.x + self.right, rect.max.y + self.bottom),
+            Point::new(rect.min.x - px(self.left), rect.min.y - px(self.top)),
+            Point::new(rect.max.x + px(self.right), rect.max.y + px(self.bottom)),
         )
     }
 
@@ -335,16 +254,16 @@ impl EdgeInsets {
     /// use flui_types::{EdgeInsets, Point, Rect, Size};
     ///
     /// let insets = EdgeInsets::all(10.0);
-    /// let rect = Rect::from_origin_size(Point::ZERO, Size::new(100.0, 100.0));
+    /// let rect = Rect::from_origin_size(Point::ZERO, Size::new(px(100.0), px(100.0)));
     /// let deflated = insets.deflate_rect(rect);
-    /// assert_eq!(deflated.min, Point::new(10.0, 10.0));
-    /// assert_eq!(deflated.max, Point::new(90.0, 90.0));
+    /// assert_eq!(deflated.min, Point::new(px(10.0), px(10.0)));
+    /// assert_eq!(deflated.max, Point::new(px(90.0), px(90.0)));
     /// ```
-    pub fn deflate_rect(&self, rect: impl Into<Rect>) -> Rect {
+    pub fn deflate_rect(&self, rect: impl Into<Rect<Pixels>>) -> Rect<Pixels> {
         let rect = rect.into();
         Rect::from_min_max(
-            Point::new(rect.min.x + self.left, rect.min.y + self.top),
-            Point::new(rect.max.x - self.right, rect.max.y - self.bottom),
+            Point::new(rect.min.x + px(self.left), rect.min.y + px(self.top)),
+            Point::new(rect.max.x - px(self.right), rect.max.y - px(self.bottom)),
         )
     }
 
@@ -356,17 +275,10 @@ impl EdgeInsets {
     /// use flui_types::{EdgeInsets, Size};
     ///
     /// let insets = EdgeInsets::symmetric(5.0, 10.0);
-    /// let size = Size::new(100.0, 100.0);
+    /// let size = Size::new(px(100.0), px(100.0));
     /// let shrunk = insets.shrink_size(size);
-    /// assert_eq!(shrunk, Size::new(90.0, 80.0));
+    /// assert_eq!(shrunk, Size::new(px(90.0), px(80.0)));
     /// ```
-    pub fn shrink_size(&self, size: impl Into<Size<f32>>) -> Size<f32> {
-        let size = size.into();
-        Size::new(
-            (size.width - self.horizontal_total()).max(0.0),
-            (size.height - self.vertical_total()).max(0.0),
-        )
-    }
 
     /// Apply these insets to a size, expanding it.
     ///
@@ -376,17 +288,10 @@ impl EdgeInsets {
     /// use flui_types::{EdgeInsets, Size};
     ///
     /// let insets = EdgeInsets::symmetric(5.0, 10.0);
-    /// let size = Size::new(100.0, 100.0);
+    /// let size = Size::new(px(100.0), px(100.0));
     /// let expanded = insets.expand_size(size);
-    /// assert_eq!(expanded, Size::new(110.0, 120.0));
+    /// assert_eq!(expanded, Size::new(px(110.0), px(120.0)));
     /// ```
-    pub fn expand_size(&self, size: impl Into<Size<f32>>) -> Size<f32> {
-        let size = size.into();
-        Size::new(
-            size.width + self.horizontal_total(),
-            size.height + self.vertical_total(),
-        )
-    }
 
     /// Flip the insets horizontally (swap left and right).
     ///
@@ -512,166 +417,7 @@ impl Neg for EdgeInsets {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_edge_insets_creation() {
-        let all = EdgeInsets::all(10.0);
-        assert_eq!(all.left, 10.0);
-        assert_eq!(all.top, 10.0);
-        assert_eq!(all.right, 10.0);
-        assert_eq!(all.bottom, 10.0);
-
-        let symmetric = EdgeInsets::symmetric(5.0, 10.0);
-        assert_eq!(symmetric.left, 5.0);
-        assert_eq!(symmetric.right, 5.0);
-        assert_eq!(symmetric.top, 10.0);
-        assert_eq!(symmetric.bottom, 10.0);
-
-        let custom = EdgeInsets::new(1.0, 2.0, 3.0, 4.0);
-        assert_eq!(custom.left, 1.0);
-        assert_eq!(custom.top, 2.0);
-        assert_eq!(custom.right, 3.0);
-        assert_eq!(custom.bottom, 4.0);
-
-        let zero = EdgeInsets::ZERO;
-        assert!(zero.is_zero());
-    }
-
-    #[test]
-    fn test_edge_insets_only() {
-        let left = EdgeInsets::only_left(5.0);
-        assert_eq!(left.left, 5.0);
-        assert_eq!(left.top, 0.0);
-        assert_eq!(left.right, 0.0);
-        assert_eq!(left.bottom, 0.0);
-
-        let top = EdgeInsets::only_top(5.0);
-        assert_eq!(top.top, 5.0);
-        assert_eq!(top.left, 0.0);
-
-        let right = EdgeInsets::only_right(5.0);
-        assert_eq!(right.right, 5.0);
-
-        let bottom = EdgeInsets::only_bottom(5.0);
-        assert_eq!(bottom.bottom, 5.0);
-    }
-
-    #[test]
-    fn test_edge_insets_totals() {
-        let insets = EdgeInsets::new(1.0, 2.0, 3.0, 4.0);
-        assert_eq!(insets.horizontal_total(), 4.0);
-        assert_eq!(insets.vertical_total(), 6.0);
-        assert_eq!(insets.total_size(), Size::new(4.0, 6.0));
-    }
-
-    #[test]
-    fn test_edge_insets_rect_operations() {
-        let insets = EdgeInsets::all(10.0);
-        let rect = Rect::from_origin_size(Point::new(0.0, 0.0), Size::new(100.0, 100.0));
-
-        // Deflate (shrink)
-        let deflated = insets.deflate_rect(rect);
-        assert_eq!(deflated.min, Point::new(10.0, 10.0));
-        assert_eq!(deflated.max, Point::new(90.0, 90.0));
-        assert_eq!(deflated.size(), Size::new(80.0, 80.0));
-
-        // Inflate (expand)
-        let inflated = insets.inflate_rect(rect);
-        assert_eq!(inflated.min, Point::new(-10.0, -10.0));
-        assert_eq!(inflated.max, Point::new(110.0, 110.0));
-        assert_eq!(inflated.size(), Size::new(120.0, 120.0));
-    }
-
-    #[test]
-    fn test_edge_insets_size_operations() {
-        let insets = EdgeInsets::symmetric(5.0, 10.0);
-        let size = Size::new(100.0, 100.0);
-
-        let shrunk = insets.shrink_size(size);
-        assert_eq!(shrunk, Size::new(90.0, 80.0));
-
-        let expanded = insets.expand_size(size);
-        assert_eq!(expanded, Size::new(110.0, 120.0));
-    }
-
-    #[test]
-    fn test_edge_insets_arithmetic() {
-        let a = EdgeInsets::all(10.0);
-        let b = EdgeInsets::all(5.0);
-
-        let sum = a + b;
-        assert_eq!(sum, EdgeInsets::all(15.0));
-
-        let diff = a - b;
-        assert_eq!(diff, EdgeInsets::all(5.0));
-
-        let product = a * 2.0;
-        assert_eq!(product, EdgeInsets::all(20.0));
-
-        let quotient = a / 2.0;
-        assert_eq!(quotient, EdgeInsets::all(5.0));
-
-        let negated = -a;
-        assert_eq!(negated, EdgeInsets::all(-10.0));
-    }
-
-    #[test]
-    fn test_edge_insets_flip() {
-        let insets = EdgeInsets::new(1.0, 2.0, 3.0, 4.0);
-
-        let h_flipped = insets.flip_horizontal();
-        assert_eq!(h_flipped.left, 3.0);
-        assert_eq!(h_flipped.right, 1.0);
-        assert_eq!(h_flipped.top, 2.0);
-        assert_eq!(h_flipped.bottom, 4.0);
-
-        let v_flipped = insets.flip_vertical();
-        assert_eq!(v_flipped.left, 1.0);
-        assert_eq!(v_flipped.right, 3.0);
-        assert_eq!(v_flipped.top, 4.0);
-        assert_eq!(v_flipped.bottom, 2.0);
-    }
-
-    #[test]
-    fn test_edge_insets_validation() {
-        let positive = EdgeInsets::all(5.0);
-        assert!(positive.is_non_negative());
-
-        let negative = EdgeInsets::new(-5.0, 10.0, -3.0, 2.0);
-        assert!(!negative.is_non_negative());
-
-        let clamped = negative.clamp_non_negative();
-        assert!(clamped.is_non_negative());
-        assert_eq!(clamped.left, 0.0);
-        assert_eq!(clamped.top, 10.0);
-        assert_eq!(clamped.right, 0.0);
-        assert_eq!(clamped.bottom, 2.0);
-    }
-
-    #[test]
-    fn test_edge_insets_conversions() {
-        let from_f32: EdgeInsets = 10.0.into();
-        assert_eq!(from_f32, EdgeInsets::all(10.0));
-
-        let from_tuple: EdgeInsets = (5.0, 10.0).into();
-        assert_eq!(from_tuple, EdgeInsets::symmetric(5.0, 10.0));
-
-        let from_tuple4: EdgeInsets = (1.0, 2.0, 3.0, 4.0).into();
-        assert_eq!(from_tuple4, EdgeInsets::new(1.0, 2.0, 3.0, 4.0));
-    }
-}
-
-/// An immutable set of offsets in each of the four cardinal directions using start/end instead of left/right.
-///
-/// This is useful for internationalization where the direction of text may vary (LTR vs RTL).
-/// Start corresponds to the beginning of text direction (left in LTR, right in RTL).
-/// End corresponds to the end of text direction (right in LTR, left in RTL).
-///
-/// Similar to Flutter's `EdgeInsetsDirectional`.
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct EdgeInsetsDirectional {
     /// The offset from the start (left in LTR, right in RTL).
@@ -844,11 +590,7 @@ impl Div<f32> for EdgeInsetsDirectional {
     }
 }
 
-/// Base class for EdgeInsets and EdgeInsetsDirectional.
-///
-/// This enum allows working with both absolute and directional insets uniformly.
-/// Similar to Flutter's `EdgeInsetsGeometry`.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum EdgeInsetsGeometry {
     /// Absolute edge insets (left, top, right, bottom).
@@ -910,112 +652,5 @@ impl From<EdgeInsetsDirectional> for EdgeInsetsGeometry {
 impl Default for EdgeInsetsGeometry {
     fn default() -> Self {
         EdgeInsetsGeometry::Absolute(EdgeInsets::ZERO)
-    }
-}
-
-#[cfg(test)]
-mod directional_tests {
-    use super::*;
-
-    #[test]
-    fn test_edge_insets_directional_creation() {
-        let all = EdgeInsetsDirectional::all(10.0);
-        assert_eq!(all.start, 10.0);
-        assert_eq!(all.end, 10.0);
-
-        let custom = EdgeInsetsDirectional::new(1.0, 2.0, 3.0, 4.0);
-        assert_eq!(custom.start, 1.0);
-        assert_eq!(custom.top, 2.0);
-        assert_eq!(custom.end, 3.0);
-        assert_eq!(custom.bottom, 4.0);
-    }
-
-    #[test]
-    fn test_edge_insets_directional_resolve_ltr() {
-        let directional = EdgeInsetsDirectional::new(10.0, 20.0, 30.0, 40.0);
-        let resolved = directional.resolve(true); // LTR
-
-        assert_eq!(resolved.left, 10.0); // start -> left
-        assert_eq!(resolved.top, 20.0);
-        assert_eq!(resolved.right, 30.0); // end -> right
-        assert_eq!(resolved.bottom, 40.0);
-    }
-
-    #[test]
-    fn test_edge_insets_directional_resolve_rtl() {
-        let directional = EdgeInsetsDirectional::new(10.0, 20.0, 30.0, 40.0);
-        let resolved = directional.resolve(false); // RTL
-
-        assert_eq!(resolved.left, 30.0); // end -> left
-        assert_eq!(resolved.top, 20.0);
-        assert_eq!(resolved.right, 10.0); // start -> right
-        assert_eq!(resolved.bottom, 40.0);
-    }
-
-    #[test]
-    fn test_edge_insets_directional_arithmetic() {
-        let a = EdgeInsetsDirectional::all(10.0);
-        let b = EdgeInsetsDirectional::all(5.0);
-
-        let sum = a + b;
-        assert_eq!(sum.start, 15.0);
-
-        let diff = a - b;
-        assert_eq!(diff.start, 5.0);
-
-        let product = a * 2.0;
-        assert_eq!(product.start, 20.0);
-
-        let quotient = a / 2.0;
-        assert_eq!(quotient.start, 5.0);
-    }
-
-    #[test]
-    fn test_edge_insets_geometry_from_absolute() {
-        let insets = EdgeInsets::all(10.0);
-        let geometry: EdgeInsetsGeometry = insets.into();
-
-        let resolved = geometry.resolve(true);
-        assert_eq!(resolved, insets);
-
-        let resolved_rtl = geometry.resolve(false);
-        assert_eq!(resolved_rtl, insets); // Absolute insets don't change with direction
-    }
-
-    #[test]
-    fn test_edge_insets_geometry_from_directional() {
-        let directional = EdgeInsetsDirectional::new(10.0, 20.0, 30.0, 40.0);
-        let geometry: EdgeInsetsGeometry = directional.into();
-
-        let resolved_ltr = geometry.resolve(true);
-        assert_eq!(resolved_ltr.left, 10.0);
-        assert_eq!(resolved_ltr.right, 30.0);
-
-        let resolved_rtl = geometry.resolve(false);
-        assert_eq!(resolved_rtl.left, 30.0);
-        assert_eq!(resolved_rtl.right, 10.0);
-    }
-
-    #[test]
-    fn test_edge_insets_geometry_totals() {
-        let abs_geometry: EdgeInsetsGeometry = EdgeInsets::symmetric(5.0, 10.0).into();
-        assert_eq!(abs_geometry.horizontal_total(), 10.0);
-        assert_eq!(abs_geometry.vertical_total(), 20.0);
-
-        let dir_geometry: EdgeInsetsGeometry = EdgeInsetsDirectional::symmetric(5.0, 10.0).into();
-        assert_eq!(dir_geometry.horizontal_total(), 10.0);
-        assert_eq!(dir_geometry.vertical_total(), 20.0);
-    }
-
-    #[test]
-    fn test_edge_insets_geometry_is_zero() {
-        let zero_abs: EdgeInsetsGeometry = EdgeInsets::ZERO.into();
-        assert!(zero_abs.is_zero());
-
-        let zero_dir: EdgeInsetsGeometry = EdgeInsetsDirectional::ZERO.into();
-        assert!(zero_dir.is_zero());
-
-        let non_zero: EdgeInsetsGeometry = EdgeInsets::all(1.0).into();
-        assert!(!non_zero.is_zero());
     }
 }

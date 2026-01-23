@@ -2,7 +2,7 @@
 //!
 //! This module provides types for tracking pointer/touch device information.
 
-use crate::geometry::Offset;
+use crate::geometry::{Offset, Pixels};
 use std::time::Duration;
 
 /// A pair of local and global offsets
@@ -28,10 +28,10 @@ use std::time::Duration;
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct OffsetPair {
     /// The local offset (relative to the target widget)
-    pub local: Offset<f32>,
+    pub local: Offset<Pixels>,
 
     /// The global offset (relative to the screen/window)
-    pub global: Offset<f32>,
+    pub global: Offset<Pixels>,
 }
 
 impl OffsetPair {
@@ -56,7 +56,7 @@ impl OffsetPair {
     /// ```
     #[inline]
     #[must_use]
-    pub const fn new(local: Offset<f32>, global: Offset<f32>) -> Self {
+    pub const fn new(local: Offset<Pixels>, global: Offset<Pixels>) -> Self {
         Self { local, global }
     }
 
@@ -73,7 +73,7 @@ impl OffsetPair {
     /// ```
     #[inline]
     #[must_use]
-    pub const fn from_offset(offset: Offset<f32>) -> Self {
+    pub const fn from_offset(offset: Offset<Pixels>) -> Self {
         Self {
             local: offset,
             global: offset,
@@ -99,7 +99,7 @@ impl OffsetPair {
     /// ```
     #[inline]
     #[must_use]
-    pub fn delta(&self) -> Offset<f32> {
+    pub fn delta(&self) -> Offset<Pixels> {
         self.global - self.local
     }
 
@@ -189,10 +189,10 @@ pub struct PointerData {
     pub time_stamp: Duration,
 
     /// The position of the pointer in global coordinates
-    pub position: Offset<f32>,
+    pub position: Offset<Pixels>,
 
     /// The delta since the last update
-    pub delta: Offset<f32>,
+    pub delta: Offset<Pixels>,
 
     /// Unique identifier for the pointer
     pub pointer: i32,
@@ -276,7 +276,7 @@ impl PointerData {
     #[must_use]
     pub fn new(
         time_stamp: Duration,
-        position: Offset<f32>,
+        position: Offset<Pixels>,
         pointer: i32,
         device_kind: PointerDeviceKind,
     ) -> Self {
@@ -353,7 +353,7 @@ impl PointerData {
     /// Builder method to set delta
     #[inline]
     #[must_use]
-    pub fn with_delta(mut self, delta: Offset<f32>) -> Self {
+    pub fn with_delta(mut self, delta: Offset<Pixels>) -> Self {
         self.delta = delta;
         self
     }
@@ -551,7 +551,7 @@ impl PointerData {
     #[inline]
     #[must_use]
     pub fn speed(&self) -> f32 {
-        self.delta.distance()
+        self.delta.distance().0
     }
 }
 

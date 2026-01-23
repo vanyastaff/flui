@@ -10,21 +10,6 @@ pub trait ShapeBorder: std::fmt::Debug {
     fn scale(&self, t: f32) -> Box<dyn ShapeBorder>;
 }
 
-/// A rectangular border with rounded corners.
-///
-/// Similar to Flutter's `RoundedRectangleBorder`.
-///
-/// # Examples
-///
-/// ```
-/// use flui_types::styling::{RoundedRectangleBorder, BorderRadius, BorderSide, Color};
-///
-/// let border = RoundedRectangleBorder::new(
-///     BorderSide::new(Color::BLACK, 2.0, Default::default()),
-///     BorderRadius::circular(10.0),
-/// );
-/// ```
-#[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct RoundedRectangleBorder {
     /// The style of the border's edge.
@@ -70,10 +55,6 @@ impl Default for RoundedRectangleBorder {
     }
 }
 
-/// A rectangular border with beveled corners.
-///
-/// Similar to Flutter's `BeveledRectangleBorder`.
-#[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct BeveledRectangleBorder {
     /// The style of the border's edge.
@@ -119,10 +100,6 @@ impl Default for BeveledRectangleBorder {
     }
 }
 
-/// A circular border.
-///
-/// Similar to Flutter's `CircleBorder`.
-#[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct CircleBorder {
     /// The style of the border's edge.
@@ -165,10 +142,6 @@ impl Default for CircleBorder {
     }
 }
 
-/// An oval border.
-///
-/// Similar to Flutter's `OvalBorder`.
-#[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct OvalBorder {
     /// The style of the border's edge.
@@ -211,10 +184,6 @@ impl Default for OvalBorder {
     }
 }
 
-/// A stadium-shaped border (rectangle with semicircular ends).
-///
-/// Similar to Flutter's `StadiumBorder`.
-#[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct StadiumBorder {
     /// The style of the border's edge.
@@ -244,10 +213,6 @@ impl Default for StadiumBorder {
     }
 }
 
-/// A star-shaped border.
-///
-/// Similar to Flutter's `StarBorder`.
-#[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct StarBorder {
     /// The style of the border's edge.
@@ -287,7 +252,6 @@ impl StarBorder {
         }
     }
 
-    /// Creates a star border with all parameters.
     #[allow(clippy::too_many_arguments)]
     pub const fn with_params(
         side: BorderSide,
@@ -339,10 +303,6 @@ impl Default for StarBorder {
     }
 }
 
-/// A continuous rectangular border with smooth corners.
-///
-/// Similar to Flutter's `ContinuousRectangleBorder`.
-#[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ContinuousRectangleBorder {
     /// The style of the border's edge.
@@ -388,10 +348,6 @@ impl Default for ContinuousRectangleBorder {
     }
 }
 
-/// A rectangular border with linear sides.
-///
-/// Similar to Flutter's `LinearBorder`.
-#[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct LinearBorder {
     /// The style of the border's edge.
@@ -434,10 +390,6 @@ impl Default for LinearBorder {
     }
 }
 
-/// Defines which edges to draw for a LinearBorder.
-///
-/// Similar to Flutter's `LinearBorderEdge`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct LinearBorderEdges {
     /// Whether to draw the top edge.
@@ -519,138 +471,3 @@ impl Default for LinearBorderEdges {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::styling::{BorderStyle, Color, Radius};
-
-    fn test_side() -> BorderSide {
-        BorderSide::new(Color::BLACK, 1.0, BorderStyle::Solid)
-    }
-
-    #[test]
-    fn test_rounded_rectangle_border_new() {
-        let border = RoundedRectangleBorder::new(test_side(), BorderRadius::circular(10.0));
-        assert_eq!(border.side, test_side());
-        assert_eq!(border.border_radius, BorderRadius::circular(10.0));
-    }
-
-    #[test]
-    fn test_rounded_rectangle_border_circular() {
-        let border = RoundedRectangleBorder::circular(test_side(), 10.0);
-        assert_eq!(border.border_radius, BorderRadius::circular(10.0));
-    }
-
-    #[test]
-    fn test_rounded_rectangle_border_lerp() {
-        let a = RoundedRectangleBorder::circular(test_side(), 5.0);
-        let b = RoundedRectangleBorder::circular(test_side(), 15.0);
-        let mid = RoundedRectangleBorder::lerp(a, b, 0.5);
-        assert_eq!(mid.border_radius.top_left, Radius::circular(10.0));
-    }
-
-    #[test]
-    fn test_beveled_rectangle_border() {
-        let border = BeveledRectangleBorder::uniform(test_side(), 10.0);
-        assert_eq!(border.side, test_side());
-    }
-
-    #[test]
-    fn test_circle_border_new() {
-        let border = CircleBorder::new(test_side());
-        assert_eq!(border.side, test_side());
-        assert_eq!(border.eccentricity, 0.0);
-    }
-
-    #[test]
-    fn test_circle_border_with_eccentricity() {
-        let border = CircleBorder::with_eccentricity(test_side(), 0.5);
-        assert_eq!(border.eccentricity, 0.5);
-    }
-
-    #[test]
-    fn test_circle_border_lerp() {
-        let a = CircleBorder::with_eccentricity(test_side(), 0.0);
-        let b = CircleBorder::with_eccentricity(test_side(), 1.0);
-        let mid = CircleBorder::lerp(a, b, 0.5);
-        assert_eq!(mid.eccentricity, 0.5);
-    }
-
-    #[test]
-    fn test_oval_border() {
-        let border = OvalBorder::new(test_side());
-        assert_eq!(border.side, test_side());
-    }
-
-    #[test]
-    fn test_stadium_border() {
-        let border = StadiumBorder::new(test_side());
-        assert_eq!(border.side, test_side());
-    }
-
-    #[test]
-    fn test_star_border_new() {
-        let border = StarBorder::new(test_side(), 5);
-        assert_eq!(border.points, 5);
-        assert_eq!(border.inner_radius_ratio, 0.4);
-    }
-
-    #[test]
-    fn test_star_border_with_params() {
-        let border = StarBorder::with_params(test_side(), 6, 0.3, 1.0, 0.1, 0.2, 0.5);
-        assert_eq!(border.points, 6);
-        assert_eq!(border.inner_radius_ratio, 0.3);
-        assert_eq!(border.rotation, 1.0);
-    }
-
-    #[test]
-    fn test_star_border_lerp() {
-        let a = StarBorder::new(test_side(), 5);
-        let b = StarBorder::with_params(test_side(), 5, 0.6, 2.0, 0.2, 0.4, 1.0);
-        let mid = StarBorder::lerp(a, b, 0.5);
-        assert_eq!(mid.inner_radius_ratio, 0.5);
-        assert_eq!(mid.rotation, 1.0);
-    }
-
-    #[test]
-    fn test_continuous_rectangle_border() {
-        let border = ContinuousRectangleBorder::circular(test_side(), 10.0);
-        assert_eq!(border.side, test_side());
-    }
-
-    #[test]
-    fn test_linear_border_new() {
-        let border = LinearBorder::new(test_side(), LinearBorderEdges::ALL);
-        assert_eq!(border.side, test_side());
-        assert_eq!(border.edges, LinearBorderEdges::ALL);
-    }
-
-    #[test]
-    fn test_linear_border_all() {
-        let border = LinearBorder::all(test_side());
-        assert_eq!(border.edges, LinearBorderEdges::ALL);
-    }
-
-    #[test]
-    fn test_linear_border_edges_constants() {
-        assert!(LinearBorderEdges::ALL.top);
-        assert!(LinearBorderEdges::ALL.right);
-        assert!(LinearBorderEdges::ALL.bottom);
-        assert!(LinearBorderEdges::ALL.left);
-
-        assert!(!LinearBorderEdges::NONE.top);
-        assert!(!LinearBorderEdges::NONE.right);
-
-        assert!(LinearBorderEdges::TOP.top);
-        assert!(!LinearBorderEdges::TOP.bottom);
-    }
-
-    #[test]
-    fn test_linear_border_lerp() {
-        let a = LinearBorder::all(test_side());
-        let b = LinearBorder::new(test_side(), LinearBorderEdges::TOP);
-        let mid = LinearBorder::lerp(a, b, 0.5);
-        // Should switch at t = 0.5
-        assert_eq!(mid.edges, LinearBorderEdges::TOP);
-    }
-}

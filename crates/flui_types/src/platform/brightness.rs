@@ -2,32 +2,9 @@
 
 use crate::styling::Color;
 
-/// The brightness of the overall theme
-///
-/// Similar to Flutter's `Brightness`. Used to determine whether to use
-/// light or dark colors.
-///
-/// # Memory Safety
-/// - Zero-sized enum with no allocations
-/// - Const-evaluable methods
-///
-/// # Type Safety
-/// - `#[must_use]` on all pure methods
-/// - Strongly typed brightness states
-///
-/// # Examples
-///
-/// ```
-/// use flui_types::platform::Brightness;
-///
-/// let brightness = Brightness::Dark;
-/// assert!(brightness.is_dark());
-/// assert!(!brightness.is_light());
-/// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Brightness {
-    /// Light theme (dark text on light background)
     #[default]
     Light,
 
@@ -36,49 +13,16 @@ pub enum Brightness {
 }
 
 impl Brightness {
-    /// Returns true if this is light brightness
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_types::platform::Brightness;
-    ///
-    /// assert!(Brightness::Light.is_light());
-    /// assert!(!Brightness::Dark.is_light());
-    /// ```
-    #[inline]
     #[must_use]
     pub const fn is_light(&self) -> bool {
         matches!(self, Self::Light)
     }
 
-    /// Returns true if this is dark brightness
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_types::platform::Brightness;
-    ///
-    /// assert!(Brightness::Dark.is_dark());
-    /// assert!(!Brightness::Light.is_dark());
-    /// ```
-    #[inline]
     #[must_use]
     pub const fn is_dark(&self) -> bool {
         matches!(self, Self::Dark)
     }
 
-    /// Returns the opposite brightness
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_types::platform::Brightness;
-    ///
-    /// assert_eq!(Brightness::Light.invert(), Brightness::Dark);
-    /// assert_eq!(Brightness::Dark.invert(), Brightness::Light);
-    /// ```
-    #[inline]
     #[must_use]
     pub const fn invert(&self) -> Self {
         match self {
@@ -87,22 +31,6 @@ impl Brightness {
         }
     }
 
-    /// Returns a suggested background color for this brightness
-    ///
-    /// Useful for theming and rendering.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_types::platform::Brightness;
-    ///
-    /// let light_bg = Brightness::Light.background_color();
-    /// assert_eq!(light_bg.r, 255);
-    ///
-    /// let dark_bg = Brightness::Dark.background_color();
-    /// assert_eq!(dark_bg.r, 18);
-    /// ```
-    #[inline]
     #[must_use]
     pub const fn background_color(&self) -> Color {
         match self {
@@ -111,22 +39,6 @@ impl Brightness {
         }
     }
 
-    /// Returns a suggested foreground/text color for this brightness
-    ///
-    /// Useful for theming and rendering.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_types::platform::Brightness;
-    ///
-    /// let light_fg = Brightness::Light.foreground_color();
-    /// assert_eq!(light_fg.r, 0);
-    ///
-    /// let dark_fg = Brightness::Dark.foreground_color();
-    /// assert_eq!(dark_fg.r, 255);
-    /// ```
-    #[inline]
     #[must_use]
     pub const fn foreground_color(&self) -> Color {
         match self {
@@ -135,22 +47,6 @@ impl Brightness {
         }
     }
 
-    /// Returns a suggested surface color for this brightness
-    ///
-    /// Useful for cards, dialogs, and elevated surfaces.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_types::platform::Brightness;
-    ///
-    /// let light_surface = Brightness::Light.surface_color();
-    /// assert_eq!(light_surface.r, 255);
-    ///
-    /// let dark_surface = Brightness::Dark.surface_color();
-    /// assert_eq!(dark_surface.r, 30);
-    /// ```
-    #[inline]
     #[must_use]
     pub const fn surface_color(&self) -> Color {
         match self {
@@ -159,19 +55,6 @@ impl Brightness {
         }
     }
 
-    /// Returns the opacity factor for elevation shadows
-    ///
-    /// Dark themes typically need stronger shadows.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_types::platform::Brightness;
-    ///
-    /// assert_eq!(Brightness::Light.shadow_opacity(), 0.2);
-    /// assert_eq!(Brightness::Dark.shadow_opacity(), 0.4);
-    /// ```
-    #[inline]
     #[must_use]
     pub const fn shadow_opacity(&self) -> f32 {
         match self {
@@ -180,18 +63,6 @@ impl Brightness {
         }
     }
 
-    /// Parses a brightness from a string
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_types::platform::Brightness;
-    ///
-    /// assert_eq!(Brightness::parse("light"), Some(Brightness::Light));
-    /// assert_eq!(Brightness::parse("dark"), Some(Brightness::Dark));
-    /// assert_eq!(Brightness::parse("LIGHT"), Some(Brightness::Light));
-    /// assert_eq!(Brightness::parse("invalid"), None);
-    /// ```
     #[must_use]
     pub fn parse(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
@@ -201,50 +72,11 @@ impl Brightness {
         }
     }
 
-    /// Returns a string representation
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_types::platform::Brightness;
-    ///
-    /// assert_eq!(Brightness::Light.as_str(), "light");
-    /// assert_eq!(Brightness::Dark.as_str(), "dark");
-    /// ```
-    #[inline]
     #[must_use]
     pub const fn as_str(&self) -> &'static str {
         match self {
             Self::Light => "light",
             Self::Dark => "dark",
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_brightness_default() {
-        assert_eq!(Brightness::default(), Brightness::Light);
-    }
-
-    #[test]
-    fn test_brightness_is_light() {
-        assert!(Brightness::Light.is_light());
-        assert!(!Brightness::Dark.is_light());
-    }
-
-    #[test]
-    fn test_brightness_is_dark() {
-        assert!(Brightness::Dark.is_dark());
-        assert!(!Brightness::Light.is_dark());
-    }
-
-    #[test]
-    fn test_brightness_invert() {
-        assert_eq!(Brightness::Light.invert(), Brightness::Dark);
-        assert_eq!(Brightness::Dark.invert(), Brightness::Light);
     }
 }

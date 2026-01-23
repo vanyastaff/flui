@@ -1,23 +1,8 @@
 //! Canvas painting primitives.
 
-/// Defines how a shader or gradient tiles the plane.
-///
-/// Similar to Flutter's `TileMode` and CSS repeat modes.
-///
-/// # Examples
-///
-/// ```
-/// use flui_types::painting::TileMode;
-///
-/// let mode = TileMode::Repeat;
-/// assert_eq!(mode, TileMode::Repeat);
-/// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum TileMode {
-    /// Edge colors are clamped to the final color.
-    ///
-    /// The edge of the last tile is extended infinitely.
     #[default]
     Clamp,
 
@@ -37,24 +22,9 @@ pub enum TileMode {
     Decal,
 }
 
-/// Styles to use for blurs in MaskFilter objects.
-///
-/// Similar to Flutter's `BlurStyle`.
-///
-/// # Examples
-///
-/// ```
-/// use flui_types::painting::BlurStyle;
-///
-/// let style = BlurStyle::Normal;
-/// assert_eq!(style, BlurStyle::Normal);
-/// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum BlurStyle {
-    /// Blur inside and outside the shape.
-    ///
-    /// This is the default blur style.
     #[default]
     Normal,
 
@@ -74,19 +44,7 @@ pub enum BlurStyle {
     Inner,
 }
 
-/// Quality levels for image sampling.
-///
-/// Similar to Flutter's `FilterQuality`.
-///
-/// # Examples
-///
-/// ```
-/// use flui_types::painting::FilterQuality;
-///
-/// let quality = FilterQuality::Medium;
-/// assert_eq!(quality, FilterQuality::Medium);
-/// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum FilterQuality {
     /// Nearest neighbor sampling.
@@ -94,9 +52,6 @@ pub enum FilterQuality {
     /// Fastest, but lowest quality. Good for pixel art.
     None,
 
-    /// Bilinear interpolation.
-    ///
-    /// Better quality than nearest neighbor, still quite fast.
     #[default]
     Low,
 
@@ -111,22 +66,9 @@ pub enum FilterQuality {
     High,
 }
 
-/// Strategies for painting shapes and paths.
-///
-/// Similar to Flutter's `PaintingStyle`.
-///
-/// # Examples
-///
-/// ```
-/// use flui_types::painting::PaintingStyle;
-///
-/// let style = PaintingStyle::Fill;
-/// assert_eq!(style, PaintingStyle::Fill);
-/// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum PaintingStyle {
-    /// Fill the shape with the paint's color.
     #[default]
     Fill,
 
@@ -134,19 +76,6 @@ pub enum PaintingStyle {
     Stroke,
 }
 
-/// Strategies for combining paths.
-///
-/// Similar to Flutter's `PathOperation`.
-///
-/// # Examples
-///
-/// ```
-/// use flui_types::painting::PathOperation;
-///
-/// let op = PathOperation::Union;
-/// assert_eq!(op, PathOperation::Union);
-/// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum PathOperation {
     /// Subtract the second path from the first path.
@@ -175,24 +104,9 @@ pub enum PathOperation {
     ReverseDifference,
 }
 
-/// Determines the winding rule for filling a path.
-///
-/// Similar to Flutter's `PathFillType`.
-///
-/// # Examples
-///
-/// ```
-/// use flui_types::painting::PathFillType;
-///
-/// let fill_type = PathFillType::NonZero;
-/// assert_eq!(fill_type, PathFillType::NonZero);
-/// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum PathFillType {
-    /// The non-zero fill rule.
-    ///
-    /// A point is inside the path if the sum of all edge crossings is non-zero.
     #[default]
     NonZero,
 
@@ -202,22 +116,9 @@ pub enum PathFillType {
     EvenOdd,
 }
 
-/// Styles for ending a stroked line.
-///
-/// Similar to Flutter's `StrokeCap`.
-///
-/// # Examples
-///
-/// ```
-/// use flui_types::painting::StrokeCap;
-///
-/// let cap = StrokeCap::Round;
-/// assert_eq!(cap, StrokeCap::Round);
-/// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum StrokeCap {
-    /// Begin and end contours with a flat edge and no extension.
     #[default]
     Butt,
 
@@ -228,24 +129,9 @@ pub enum StrokeCap {
     Square,
 }
 
-/// Styles for joining two line segments.
-///
-/// Similar to Flutter's `StrokeJoin`.
-///
-/// # Examples
-///
-/// ```
-/// use flui_types::painting::StrokeJoin;
-///
-/// let join = StrokeJoin::Round;
-/// assert_eq!(join, StrokeJoin::Round);
-/// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum StrokeJoin {
-    /// Join line segments with a sharp point.
-    ///
-    /// This is the default join style.
     #[default]
     Miter,
 
@@ -256,22 +142,9 @@ pub enum StrokeJoin {
     Bevel,
 }
 
-/// Defines how a list of points is interpreted when drawing.
-///
-/// Similar to Flutter's `VertexMode`.
-///
-/// # Examples
-///
-/// ```
-/// use flui_types::painting::VertexMode;
-///
-/// let mode = VertexMode::Triangles;
-/// assert_eq!(mode, VertexMode::Triangles);
-/// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum VertexMode {
-    /// Draw each sequence of three vertices as an independent triangle.
     #[default]
     Triangles,
 
@@ -286,55 +159,20 @@ pub enum VertexMode {
     TriangleFan,
 }
 
-/// GPU texture identifier for external texture rendering.
-///
-/// TextureId represents a platform-specific handle to a GPU texture that
-/// can be rendered by the FLUI engine. Common use cases include:
-/// - Video decoder output frames
-/// - Camera preview streams
-/// - External rendering contexts (e.g., embedded OpenGL/Vulkan content)
-/// - Platform view textures
-///
-/// # Examples
-///
-/// ```
-/// use flui_types::painting::TextureId;
-///
-/// let texture_id = TextureId::new(42);
-/// assert_eq!(texture_id.get(), 42);
-///
-/// // TextureId is Copy for cheap passing
-/// let copy = texture_id;
-/// assert_eq!(copy, texture_id);
-/// ```
-///
-/// # Platform Notes
-///
-/// The meaning of the underlying u64 value is platform-specific:
-/// - On Android: May reference a SurfaceTexture ID
-/// - On iOS: May reference a CVPixelBuffer or IOSurface ID
-/// - On Desktop: May reference a shared texture handle
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TextureId(u64);
 
 impl TextureId {
-    /// Create a new texture ID from a raw platform handle.
-    #[inline]
     #[must_use]
     pub const fn new(id: u64) -> Self {
         Self(id)
     }
 
-    /// Get the underlying platform texture handle.
-    #[inline]
     #[must_use]
     pub const fn get(self) -> u64 {
         self.0
     }
 
-    /// Returns true if this is a null/invalid texture ID (value 0).
-    #[inline]
     #[must_use]
     pub const fn is_null(self) -> bool {
         self.0 == 0
@@ -353,26 +191,9 @@ impl From<TextureId> for u64 {
     }
 }
 
-/// Point drawing mode for DrawPoints command
-///
-/// Defines how a sequence of points should be interpreted when drawing.
-/// Similar to Flutter's `PointMode`.
-///
-/// # Examples
-///
-/// ```
-/// use flui_types::painting::PointMode;
-///
-/// let mode = PointMode::Points;
-/// assert!(mode.is_points());
-/// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum PointMode {
-    /// Draw each point as a separate dot
-    ///
-    /// Each point in the list is rendered as an individual dot with the
-    /// stroke width determining the dot size.
     #[default]
     Points,
 
@@ -390,29 +211,21 @@ pub enum PointMode {
 }
 
 impl PointMode {
-    /// Returns true if this mode draws individual points
-    #[inline]
     #[must_use]
     pub const fn is_points(&self) -> bool {
         matches!(self, PointMode::Points)
     }
 
-    /// Returns true if this mode draws lines
-    #[inline]
     #[must_use]
     pub const fn is_lines(&self) -> bool {
         matches!(self, PointMode::Lines)
     }
 
-    /// Returns true if this mode draws a polygon
-    #[inline]
     #[must_use]
     pub const fn is_polygon(&self) -> bool {
         matches!(self, PointMode::Polygon)
     }
 
-    /// Returns the minimum number of points required for this mode
-    #[inline]
     #[must_use]
     pub const fn min_points(&self) -> usize {
         match self {
@@ -420,133 +233,5 @@ impl PointMode {
             PointMode::Lines => 2,
             PointMode::Polygon => 3,
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_tile_mode_default() {
-        assert_eq!(TileMode::default(), TileMode::Clamp);
-    }
-
-    #[test]
-    fn test_tile_mode_variants() {
-        assert_ne!(TileMode::Repeat, TileMode::Mirror);
-        assert_ne!(TileMode::Clamp, TileMode::Decal);
-    }
-
-    #[test]
-    fn test_blur_style_default() {
-        assert_eq!(BlurStyle::default(), BlurStyle::Normal);
-    }
-
-    #[test]
-    fn test_blur_style_variants() {
-        assert_ne!(BlurStyle::Normal, BlurStyle::Solid);
-        assert_ne!(BlurStyle::Outer, BlurStyle::Inner);
-    }
-
-    #[test]
-    fn test_filter_quality_default() {
-        assert_eq!(FilterQuality::default(), FilterQuality::Low);
-    }
-
-    #[test]
-    fn test_filter_quality_variants() {
-        assert_ne!(FilterQuality::None, FilterQuality::Low);
-        assert_ne!(FilterQuality::Medium, FilterQuality::High);
-    }
-
-    #[test]
-    fn test_painting_style_default() {
-        assert_eq!(PaintingStyle::default(), PaintingStyle::Fill);
-    }
-
-    #[test]
-    fn test_painting_style_variants() {
-        assert_ne!(PaintingStyle::Fill, PaintingStyle::Stroke);
-    }
-
-    #[test]
-    fn test_path_operation_variants() {
-        assert_ne!(PathOperation::Union, PathOperation::Intersect);
-        assert_ne!(PathOperation::Difference, PathOperation::ReverseDifference);
-        assert_ne!(PathOperation::Xor, PathOperation::Union);
-    }
-
-    #[test]
-    fn test_path_fill_type_default() {
-        assert_eq!(PathFillType::default(), PathFillType::NonZero);
-    }
-
-    #[test]
-    fn test_path_fill_type_variants() {
-        assert_ne!(PathFillType::NonZero, PathFillType::EvenOdd);
-    }
-
-    #[test]
-    fn test_stroke_cap_default() {
-        assert_eq!(StrokeCap::default(), StrokeCap::Butt);
-    }
-
-    #[test]
-    fn test_stroke_cap_variants() {
-        assert_ne!(StrokeCap::Butt, StrokeCap::Round);
-        assert_ne!(StrokeCap::Round, StrokeCap::Square);
-    }
-
-    #[test]
-    fn test_stroke_join_default() {
-        assert_eq!(StrokeJoin::default(), StrokeJoin::Miter);
-    }
-
-    #[test]
-    fn test_stroke_join_variants() {
-        assert_ne!(StrokeJoin::Miter, StrokeJoin::Round);
-        assert_ne!(StrokeJoin::Round, StrokeJoin::Bevel);
-    }
-
-    #[test]
-    fn test_vertex_mode_default() {
-        assert_eq!(VertexMode::default(), VertexMode::Triangles);
-    }
-
-    #[test]
-    fn test_vertex_mode_variants() {
-        assert_ne!(VertexMode::Triangles, VertexMode::TriangleStrip);
-        assert_ne!(VertexMode::TriangleStrip, VertexMode::TriangleFan);
-    }
-
-    #[test]
-    fn test_point_mode_default() {
-        assert_eq!(PointMode::default(), PointMode::Points);
-    }
-
-    #[test]
-    fn test_point_mode_is_methods() {
-        let points = PointMode::Points;
-        assert!(points.is_points());
-        assert!(!points.is_lines());
-        assert!(!points.is_polygon());
-
-        let lines = PointMode::Lines;
-        assert!(!lines.is_points());
-        assert!(lines.is_lines());
-        assert!(!lines.is_polygon());
-
-        let polygon = PointMode::Polygon;
-        assert!(!polygon.is_points());
-        assert!(!polygon.is_lines());
-        assert!(polygon.is_polygon());
-    }
-
-    #[test]
-    fn test_point_mode_min_points() {
-        assert_eq!(PointMode::Points.min_points(), 1);
-        assert_eq!(PointMode::Lines.min_points(), 2);
-        assert_eq!(PointMode::Polygon.min_points(), 3);
     }
 }

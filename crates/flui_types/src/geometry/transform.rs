@@ -161,7 +161,7 @@
 //! }
 //! ```
 
-use super::{Matrix4, Offset};
+use super::{Matrix4, Offset, Pixels};
 use std::f32::consts::PI;
 
 /// High-level 2D transformation API
@@ -278,10 +278,10 @@ impl Transform {
 
     /// Create a translation transform from an Offset
     #[inline]
-    pub fn translate_offset(offset: Offset<f32>) -> Self {
+    pub fn translate_offset(offset: Offset<Pixels>) -> Self {
         Self::Translate {
-            x: offset.dx,
-            y: offset.dy,
+            x: offset.dx.0,
+            y: offset.dy.0,
         }
     }
 
@@ -675,9 +675,9 @@ impl From<Matrix4> for Transform {
 }
 
 /// Convert Offset to Transform (creates Translation)
-impl From<Offset<f32>> for Transform {
-    fn from(offset: Offset<f32>) -> Self {
-        Transform::translate(offset.dx, offset.dy)
+impl From<Offset<Pixels>> for Transform {
+    fn from(offset: Offset<Pixels>) -> Self {
+        Transform::translate(offset.dx.0, offset.dy.0)
     }
 }
 

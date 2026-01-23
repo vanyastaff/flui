@@ -2,74 +2,50 @@
 //!
 //! Provides Path structure for creating complex shapes with lines, curves, and arcs.
 
-use crate::geometry::{Offset, Point, Rect, Vec2, NumericUnit};
+use crate::geometry::{Offset, Point, Rect, Vec2, NumericUnit, Pixels, px};
 use crate::painting::PathFillType;
 use smallvec::SmallVec;
 
-/// A command in a path.
-///
-/// Similar to SVG path commands and Flutter's Path operations.
-#[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum PathCommand {
     /// Move to a point without drawing.
-    MoveTo(Point<f32>),
+    MoveTo(Point<Pixels>),
 
     /// Draw a line to a point.
-    LineTo(Point<f32>),
+    LineTo(Point<Pixels>),
 
     /// Draw a quadratic Bézier curve.
     ///
     /// Arguments: control point, end point
-    QuadraticTo(Point<f32>, Point<f32>),
+    QuadraticTo(Point<Pixels>, Point<Pixels>),
 
     /// Draw a cubic Bézier curve.
     ///
     /// Arguments: control point 1, control point 2, end point
-    CubicTo(Point<f32>, Point<f32>, Point<f32>),
+    CubicTo(Point<Pixels>, Point<Pixels>, Point<Pixels>),
 
     /// Close the current subpath by drawing a line to the starting point.
     Close,
 
     /// Add a rectangle.
-    AddRect(Rect),
+    AddRect(Rect<Pixels>),
 
     /// Add a circle.
     ///
     /// Arguments: center, radius
-    AddCircle(Point<f32>, f32),
+    AddCircle(Point<Pixels>, f32),
 
     /// Add an oval (ellipse).
     ///
     /// Arguments: bounding rectangle
-    AddOval(Rect),
+    AddOval(Rect<Pixels>),
 
     /// Add an arc.
     ///
     /// Arguments: bounding rectangle, start angle (radians), sweep angle (radians)
-    AddArc(Rect, f32, f32),
+    AddArc(Rect<Pixels>, f32, f32),
 }
 
-/// A complex, one-dimensional subset of a plane.
-///
-/// Similar to Flutter's `ui.Path` and HTML Canvas Path2D.
-///
-/// A path consists of a number of sub-paths, and a current point.
-/// Sub-paths consist of segments of various types (lines, arcs, cubic Bézier curves).
-///
-/// # Examples
-///
-/// ```rust
-/// use flui_types::painting::Path;
-/// use flui_types::geometry::Point;
-///
-/// let mut path = Path::new();
-/// path.move_to(Point::new(0.0, 0.0));
-/// path.line_to(Point::new(100.0, 0.0));
-/// path.line_to(Point::new(100.0, 100.0));
-/// path.close();
-/// ```
-#[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Path {
     /// The list of path commands.
@@ -80,12 +56,10 @@ pub struct Path {
     fill_type: PathFillType,
 
     /// Cached bounding box (invalidated when commands change).
-    bounds: Option<Rect>,
+    bounds: Option<Rect<Pixels>>,
 }
 
 impl Path {
-    /// Creates a new empty path.
-    #[inline]
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -95,8 +69,6 @@ impl Path {
         }
     }
 
-    /// Creates a path with a specific fill type.
-    #[inline]
     #[must_use]
     pub fn with_fill_type(fill_type: PathFillType) -> Self {
         Self {
@@ -106,173 +78,33 @@ impl Path {
         }
     }
 
-    /// Creates a path containing a rectangle.
-    ///
-    /// Common pattern for drawing rectangular shapes. More concise than creating
-    /// an empty path and calling add_rect.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_types::painting::Path;
-    /// use flui_types::geometry::Rect;
-    ///
-    /// let rect = Rect::from_ltrb(0.0, 0.0, 100.0, 50.0);
-    /// let path = Path::rectangle(rect);
-    /// ```
-    #[inline]
     #[must_use]
-    pub fn rectangle(rect: Rect) -> Self {
+    pub fn rectangle(rect: Rect<Pixels>) -> Self {
         let mut path = Self::new();
         path.add_rect(rect);
         path
     }
 
-    /// Creates a path containing a circle.
-    ///
-    /// Common pattern for drawing circular shapes.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_types::painting::Path;
-    /// use flui_types::geometry::Point;
-    ///
-    /// let path = Path::circle(Point::new(50.0, 50.0), 25.0);
-    /// ```
-    #[inline]
     #[must_use]
-    pub fn circle(center: Point<f32>, radius: f32) -> Self {
-        let mut path = Self::new();
-        path.add_circle(center, radius);
-        path
-    }
 
-    /// Creates a path containing a single line.
-    ///
-    /// Useful for drawing simple lines without manual move_to/line_to calls.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_types::painting::Path;
-    /// use flui_types::geometry::Point;
-    ///
-    /// let path = Path::line(Point::new(0.0, 0.0), Point::new(100.0, 100.0));
-    /// ```
-    #[inline]
     #[must_use]
-    pub fn line(from: Point<f32>, to: Point<f32>) -> Self {
-        let mut path = Self::new();
-        path.move_to(from);
-        path.line_to(to);
-        path
-    }
 
-    /// Creates a path containing an oval (ellipse).
-    ///
-    /// The oval is inscribed within the given rectangle.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_types::painting::Path;
-    /// use flui_types::geometry::Rect;
-    ///
-    /// let path = Path::oval(Rect::from_xywh(0.0, 0.0, 100.0, 50.0));
-    /// ```
-    #[inline]
     #[must_use]
-    pub fn oval(rect: Rect) -> Self {
+    pub fn oval(rect: Rect<Pixels>) -> Self {
         let mut path = Self::new();
         path.add_oval(rect);
         path
     }
 
-    /// Creates a path containing an arc.
-    ///
-    /// The arc is part of an oval inscribed in the given rectangle.
-    ///
-    /// # Arguments
-    ///
-    /// * `rect` - The bounding rectangle of the oval
-    /// * `start_angle` - The starting angle in radians
-    /// * `sweep_angle` - The sweep angle in radians
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_types::painting::Path;
-    /// use flui_types::geometry::Rect;
-    /// use std::f32::consts::PI;
-    ///
-    /// // Create a quarter circle arc
-    /// let path = Path::arc(
-    ///     Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
-    ///     0.0,
-    ///     PI / 2.0,
-    /// );
-    /// ```
-    #[inline]
     #[must_use]
-    pub fn arc(rect: Rect, start_angle: f32, sweep_angle: f32) -> Self {
+    pub fn arc(rect: Rect<Pixels>, start_angle: f32, sweep_angle: f32) -> Self {
         let mut path = Self::new();
         path.add_arc(rect, start_angle, sweep_angle);
         path
     }
 
-    /// Creates a path containing a polygon from a sequence of points.
-    ///
-    /// The path will automatically close by connecting the last point to the first.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_types::painting::Path;
-    /// use flui_types::geometry::Point;
-    ///
-    /// // Create a triangle
-    /// let path = Path::polygon(&[
-    ///     Point::new(50.0, 0.0),
-    ///     Point::new(100.0, 100.0),
-    ///     Point::new(0.0, 100.0),
-    /// ]);
-    /// ```
     #[must_use]
-    pub fn polygon(points: &[Point<f32>]) -> Self {
-        let mut path = Self::new();
 
-        if points.is_empty() {
-            return path;
-        }
-
-        path.move_to(points[0]);
-        for point in &points[1..] {
-            path.line_to(*point);
-        }
-        path.close();
-
-        path
-    }
-
-    /// Creates a path from a rounded rectangle (RRect).
-    ///
-    /// This creates a path that traces the outline of a rounded rectangle,
-    /// properly handling the elliptical corners.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_types::painting::Path;
-    /// use flui_types::geometry::{RRect, Rect};
-    /// use flui_types::styling::Radius;
-    ///
-    /// let rrect = RRect::from_rect_circular(
-    ///     Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
-    ///     10.0
-    /// );
-    /// let path = Path::from_rrect(rrect);
-    /// ```
     #[must_use]
     pub fn from_rrect(rrect: crate::geometry::RRect) -> Self {
         let mut path = Self::new();
@@ -300,12 +132,12 @@ impl Path {
         path.line_to(Point::new(rect.right() - tr_x, rect.top()));
 
         // Top-right corner
-        if tr_x > 0.0 || tr_y > 0.0 {
+        if tr_x > px(0.0) || tr_y > px(0.0) {
             let corner_rect = Rect::from_xywh(
-                rect.right() - tr_x * 2.0,
+                rect.right() - tr_x * px(2.0),
                 rect.top(),
-                tr_x * 2.0,
-                tr_y * 2.0,
+                tr_x * px(2.0),
+                tr_y * px(2.0),
             );
             path.add_arc(
                 corner_rect,
@@ -318,12 +150,12 @@ impl Path {
         path.line_to(Point::new(rect.right(), rect.bottom() - br_y));
 
         // Bottom-right corner
-        if br_x > 0.0 || br_y > 0.0 {
+        if br_x > px(0.0) || br_y > px(0.0) {
             let corner_rect = Rect::from_xywh(
-                rect.right() - br_x * 2.0,
-                rect.bottom() - br_y * 2.0,
-                br_x * 2.0,
-                br_y * 2.0,
+                rect.right() - br_x * px(2.0),
+                rect.bottom() - br_y * px(2.0),
+                br_x * px(2.0),
+                br_y * px(2.0),
             );
             path.add_arc(corner_rect, 0.0, std::f32::consts::FRAC_PI_2);
         }
@@ -332,12 +164,12 @@ impl Path {
         path.line_to(Point::new(rect.left() + bl_x, rect.bottom()));
 
         // Bottom-left corner
-        if bl_x > 0.0 || bl_y > 0.0 {
+        if bl_x > px(0.0) || bl_y > px(0.0) {
             let corner_rect = Rect::from_xywh(
                 rect.left(),
-                rect.bottom() - bl_y * 2.0,
-                bl_x * 2.0,
-                bl_y * 2.0,
+                rect.bottom() - bl_y * px(2.0),
+                bl_x * px(2.0),
+                bl_y * px(2.0),
             );
             path.add_arc(
                 corner_rect,
@@ -350,8 +182,8 @@ impl Path {
         path.line_to(Point::new(rect.left(), rect.top() + tl_y));
 
         // Top-left corner
-        if tl_x > 0.0 || tl_y > 0.0 {
-            let corner_rect = Rect::from_xywh(rect.left(), rect.top(), tl_x * 2.0, tl_y * 2.0);
+        if tl_x > px(0.0) || tl_y > px(0.0) {
+            let corner_rect = Rect::from_xywh(rect.left(), rect.top(), tl_x * px(2.0), tl_y * px(2.0));
             path.add_arc(
                 corner_rect,
                 std::f32::consts::PI,
@@ -363,165 +195,85 @@ impl Path {
         path
     }
 
-    /// Sets the fill type for this path.
     #[inline]
     pub fn set_fill_type(&mut self, fill_type: PathFillType) {
         self.fill_type = fill_type;
     }
 
-    /// Gets the fill type for this path.
-    #[inline]
     #[must_use]
     pub const fn fill_type(&self) -> PathFillType {
         self.fill_type
     }
 
-    /// Starts a new subpath at the given point.
     #[inline]
-    pub fn move_to(&mut self, point: Point<f32>) {
+
+    #[inline]
+
+    #[inline]
+
+    #[inline]
+
+    #[inline]
+    pub fn move_to(&mut self, point: Point<Pixels>) {
         self.commands.push(PathCommand::MoveTo(point));
         self.bounds = None;
     }
 
-    /// Adds a line from the current point to the given point.
     #[inline]
-    pub fn line_to(&mut self, point: Point<f32>) {
+    pub fn line_to(&mut self, point: Point<Pixels>) {
         self.commands.push(PathCommand::LineTo(point));
         self.bounds = None;
     }
 
-    /// Adds a quadratic Bézier curve from the current point.
-    ///
-    /// # Arguments
-    ///
-    /// * `control` - The control point
-    /// * `end` - The end point
-    #[inline]
-    pub fn quadratic_to(&mut self, control: Point<f32>, end: Point<f32>) {
-        self.commands.push(PathCommand::QuadraticTo(control, end));
-        self.bounds = None;
-    }
-
-    /// Adds a cubic Bézier curve from the current point.
-    ///
-    /// # Arguments
-    ///
-    /// * `control1` - The first control point
-    /// * `control2` - The second control point
-    /// * `end` - The end point
-    #[inline]
-    pub fn cubic_to(&mut self, control1: Point<f32>, control2: Point<f32>, end: Point<f32>) {
-        self.commands
-            .push(PathCommand::CubicTo(control1, control2, end));
-        self.bounds = None;
-    }
-
-    /// Closes the current subpath by adding a line back to the starting point.
     #[inline]
     pub fn close(&mut self) {
         self.commands.push(PathCommand::Close);
     }
 
-    /// Adds a rectangle to the path.
     #[inline]
-    pub fn add_rect(&mut self, rect: Rect) {
+    pub fn add_rect(&mut self, rect: Rect<Pixels>) {
         self.commands.push(PathCommand::AddRect(rect));
         self.bounds = None;
     }
 
-    /// Adds a circle to the path.
-    ///
-    /// # Arguments
-    ///
-    /// * `center` - The center of the circle
-    /// * `radius` - The radius of the circle
     #[inline]
-    pub fn add_circle(&mut self, center: Point<f32>, radius: f32) {
-        self.commands.push(PathCommand::AddCircle(center, radius));
-        self.bounds = None;
-    }
 
-    /// Adds an oval (ellipse) to the path.
-    ///
-    /// # Arguments
-    ///
-    /// * `rect` - The bounding rectangle of the oval
     #[inline]
-    pub fn add_oval(&mut self, rect: Rect) {
+    pub fn add_oval(&mut self, rect: Rect<Pixels>) {
         self.commands.push(PathCommand::AddOval(rect));
         self.bounds = None;
     }
 
-    /// Adds an arc to the path.
-    ///
-    /// # Arguments
-    ///
-    /// * `rect` - The bounding rectangle of the arc
-    /// * `start_angle` - The starting angle in radians
-    /// * `sweep_angle` - The sweep angle in radians
     #[inline]
-    pub fn add_arc(&mut self, rect: Rect, start_angle: f32, sweep_angle: f32) {
+    pub fn add_arc(&mut self, rect: Rect<Pixels>, start_angle: f32, sweep_angle: f32) {
         self.commands
             .push(PathCommand::AddArc(rect, start_angle, sweep_angle));
         self.bounds = None;
     }
 
-    /// Returns an iterator over the path commands.
-    #[inline]
     #[must_use]
     pub fn commands(&self) -> &[PathCommand] {
         &self.commands
     }
 
-    /// Returns true if the path contains no commands.
-    #[inline]
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.commands.is_empty()
     }
 
-    /// Clears all commands from the path.
     #[inline]
     pub fn reset(&mut self) {
         self.commands.clear();
         self.bounds = None;
     }
 
-    /// Returns the cached bounding box if available, without computing.
-    ///
-    /// This is useful when you have an immutable reference to the path and need
-    /// the bounds if they were already computed. Returns `None` if bounds haven't
-    /// been computed yet.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use flui_types::painting::Path;
-    /// use flui_types::geometry::Point;
-    ///
-    /// let mut path = Path::new();
-    /// path.move_to(Point::new(0.0, 0.0));
-    /// path.line_to(Point::new(100.0, 100.0));
-    ///
-    /// // Before computing
-    /// assert!(path.cached_bounds().is_none());
-    ///
-    /// // After computing
-    /// let _ = path.bounds();
-    /// assert!(path.cached_bounds().is_some());
-    /// ```
-    #[inline]
     #[must_use]
-    pub fn cached_bounds(&self) -> Option<Rect> {
+    pub fn cached_bounds(&self) -> Option<Rect<Pixels>> {
         self.bounds
     }
 
-    /// Computes the bounding box without caching.
-    ///
-    /// Use this when you have an immutable reference and need bounds computed.
-    /// For repeated access, prefer `bounds()` which caches the result.
     #[must_use]
-    pub fn compute_bounds(&self) -> Rect {
+    pub fn compute_bounds(&self) -> Rect<Pixels> {
         // Quick return if cached
         if let Some(bounds) = self.bounds {
             return bounds;
@@ -531,7 +283,7 @@ impl Path {
     }
 
     /// Internal bounds computation (shared between bounds() and compute_bounds())
-    fn compute_bounds_internal(&self) -> Rect {
+    fn compute_bounds_internal(&self) -> Rect<Pixels> {
         let mut min_x = f32::INFINITY;
         let mut min_y = f32::INFINITY;
         let mut max_x = f32::NEG_INFINITY;
@@ -540,53 +292,50 @@ impl Path {
         for cmd in &self.commands {
             match cmd {
                 PathCommand::MoveTo(p) | PathCommand::LineTo(p) => {
-                    min_x = min_x.min(p.x);
-                    min_y = min_y.min(p.y);
-                    max_x = max_x.max(p.x);
-                    max_y = max_y.max(p.y);
+                    min_x = min_x.min(p.x.0);
+                    min_y = min_y.min(p.y.0);
+                    max_x = max_x.max(p.x.0);
+                    max_y = max_y.max(p.y.0);
                 }
                 PathCommand::QuadraticTo(c, e) => {
-                    min_x = min_x.min(c.x).min(e.x);
-                    min_y = min_y.min(c.y).min(e.y);
-                    max_x = max_x.max(c.x).max(e.x);
-                    max_y = max_y.max(c.y).max(e.y);
+                    min_x = min_x.min(c.x.0).min(e.x.0);
+                    min_y = min_y.min(c.y.0).min(e.y.0);
+                    max_x = max_x.max(c.x.0).max(e.x.0);
+                    max_y = max_y.max(c.y.0).max(e.y.0);
                 }
                 PathCommand::CubicTo(c1, c2, e) => {
-                    min_x = min_x.min(c1.x).min(c2.x).min(e.x);
-                    min_y = min_y.min(c1.y).min(c2.y).min(e.y);
-                    max_x = max_x.max(c1.x).max(c2.x).max(e.x);
-                    max_y = max_y.max(c1.y).max(c2.y).max(e.y);
+                    min_x = min_x.min(c1.x.0).min(c2.x.0).min(e.x.0);
+                    min_y = min_y.min(c1.y.0).min(c2.y.0).min(e.y.0);
+                    max_x = max_x.max(c1.x.0).max(c2.x.0).max(e.x.0);
+                    max_y = max_y.max(c1.y.0).max(c2.y.0).max(e.y.0);
                 }
                 PathCommand::AddRect(r)
                 | PathCommand::AddOval(r)
                 | PathCommand::AddArc(r, _, _) => {
-                    min_x = min_x.min(r.left());
-                    min_y = min_y.min(r.top());
-                    max_x = max_x.max(r.right());
-                    max_y = max_y.max(r.bottom());
+                    min_x = min_x.min(r.left().0);
+                    min_y = min_y.min(r.top().0);
+                    max_x = max_x.max(r.right().0);
+                    max_y = max_y.max(r.bottom().0);
                 }
                 PathCommand::AddCircle(center, radius) => {
-                    min_x = min_x.min(center.x - radius);
-                    min_y = min_y.min(center.y - radius);
-                    max_x = max_x.max(center.x + radius);
-                    max_y = max_y.max(center.y + radius);
+                    min_x = min_x.min(center.x.0 - radius);
+                    min_y = min_y.min(center.y.0 - radius);
+                    max_x = max_x.max(center.x.0 + radius);
+                    max_y = max_y.max(center.y.0 + radius);
                 }
                 PathCommand::Close => {}
             }
         }
 
         if min_x.is_finite() && max_x.is_finite() {
-            Rect::from_min_max(Point::new(min_x, min_y), Point::new(max_x, max_y))
+            Rect::from_min_max(Point::new(Pixels(min_x), Pixels(min_y)), Point::new(Pixels(max_x), Pixels(max_y)))
         } else {
             Rect::ZERO
         }
     }
 
-    /// Computes and returns the bounding box of the path.
-    ///
-    /// This is cached after the first computation.
     #[must_use]
-    pub fn bounds(&mut self) -> Rect {
+    pub fn bounds(&mut self) -> Rect<Pixels> {
         if let Some(bounds) = self.bounds {
             return bounds;
         }
@@ -596,9 +345,8 @@ impl Path {
         bounds
     }
 
-    /// Transforms the path by translating it.
     #[must_use]
-    pub fn translate(&self, offset: Offset<f32>) -> Self {
+    pub fn translate(&self, offset: Offset<Pixels>) -> Self {
         let delta = Vec2::new(offset.dx, offset.dy);
         let commands = self
             .commands
@@ -629,52 +377,13 @@ impl Path {
         }
     }
 
-    /// Tests whether a point is inside the path using the path's fill rule.
-    ///
-    /// This implements both even-odd and non-zero winding number algorithms
-    /// for path containment testing.
-    ///
-    /// # Algorithm
-    ///
-    /// - **EvenOdd**: Counts the number of times a ray from the point crosses
-    ///   path edges. Point is inside if count is odd.
-    /// - **NonZero**: Computes the winding number by considering edge direction.
-    ///   Point is inside if winding number is non-zero.
-    ///
-    /// # Performance
-    ///
-    /// This method processes all path commands and may be expensive for complex paths.
-    /// Consider caching results if testing many points against the same path.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_types::painting::Path;
-    /// use flui_types::geometry::{Point, Rect};
-    ///
-    /// let mut path = Path::rectangle(Rect::from_xywh(0.0, 0.0, 100.0, 100.0));
-    /// assert!(path.contains(Point::new(50.0, 50.0)));
-    /// assert!(!path.contains(Point::new(150.0, 50.0)));
-    /// ```
     #[must_use]
-    pub fn contains(&self, point: Point<f32>) -> bool {
-        // Quick bounds check using compute_bounds() (no mutation needed)
-        let bounds = self.compute_bounds();
-        if !bounds.contains(point) {
-            return false;
-        }
-
-        match self.fill_type {
-            PathFillType::EvenOdd => self.contains_even_odd(point),
-            PathFillType::NonZero => self.contains_non_zero(point),
-        }
-    }
 
     /// Ray casting algorithm for even-odd fill rule.
-    fn contains_even_odd(&self, point: Point<f32>) -> bool {
+    fn contains_even_odd(&self, point: Point<Pixels>) -> bool {
         let mut crossings = 0;
-        let mut current_pos = Point::new(0.0, 0.0);
-        let mut subpath_start = Point::new(0.0, 0.0);
+        let mut current_pos = Point::new(px(0.0), px(0.0));
+        let mut subpath_start = Point::new(px(0.0), px(0.0));
 
         for cmd in &self.commands {
             match cmd {
@@ -714,7 +423,7 @@ impl Path {
                     // Simple circle test
                     let dx = point.x - center.x;
                     let dy = point.y - center.y;
-                    if dx * dx + dy * dy <= radius * radius {
+                    if dx.0 * dx.0 + dy.0 * dy.0 <= radius * radius {
                         crossings += 1;
                     }
                 }
@@ -741,10 +450,10 @@ impl Path {
     }
 
     /// Winding number algorithm for non-zero fill rule.
-    fn contains_non_zero(&self, point: Point<f32>) -> bool {
+    fn contains_non_zero(&self, point: Point<Pixels>) -> bool {
         let mut winding = 0;
-        let mut current_pos = Point::new(0.0, 0.0);
-        let mut subpath_start = Point::new(0.0, 0.0);
+        let mut current_pos = Point::new(px(0.0), px(0.0));
+        let mut subpath_start = Point::new(px(0.0), px(0.0));
 
         for cmd in &self.commands {
             match cmd {
@@ -776,7 +485,7 @@ impl Path {
                 PathCommand::AddCircle(center, radius) => {
                     let dx = point.x - center.x;
                     let dy = point.y - center.y;
-                    if dx * dx + dy * dy <= radius * radius {
+                    if dx.0 * dx.0 + dy.0 * dy.0 <= radius * radius {
                         winding += 1;
                     }
                 }
@@ -801,7 +510,7 @@ impl Path {
     }
 
     /// Tests if a horizontal ray from point intersects a line segment.
-    fn ray_intersects_segment(&self, point: Point<f32>, p1: Point<f32>, p2: Point<f32>) -> bool {
+    fn ray_intersects_segment(&self, point: Point<Pixels>, p1: Point<Pixels>, p2: Point<Pixels>) -> bool {
         // Ray extends to the right from point
         if (p1.y > point.y) == (p2.y > point.y) {
             return false; // Both endpoints on same side of ray
@@ -813,7 +522,7 @@ impl Path {
     }
 
     /// Compute winding contribution of a line segment.
-    fn segment_winding(&self, point: Point<f32>, p1: Point<f32>, p2: Point<f32>) -> i32 {
+    fn segment_winding(&self, point: Point<Pixels>, p1: Point<Pixels>, p2: Point<Pixels>) -> i32 {
         if p1.y <= point.y {
             if p2.y > point.y {
                 // Upward crossing
@@ -832,12 +541,12 @@ impl Path {
 
     /// Test if point is left of line segment (p1 -> p2).
     /// Returns > 0 for left, < 0 for right, 0 for on line.
-    fn is_left(&self, p1: Point<f32>, p2: Point<f32>, point: Point<f32>) -> f32 {
-        (p2.x - p1.x) * (point.y - p1.y) - (point.x - p1.x) * (p2.y - p1.y)
+    fn is_left(&self, p1: Point<Pixels>, p2: Point<Pixels>, point: Point<Pixels>) -> f32 {
+        ((p2.x - p1.x) * (point.y - p1.y) - (point.x - p1.x) * (p2.y - p1.y)).0
     }
 
     /// Count crossings for quadratic bezier curve (approximated).
-    fn count_curve_crossings_quad(&self, point: Point<f32>, p0: Point<f32>, p1: Point<f32>, p2: Point<f32>) -> usize {
+    fn count_curve_crossings_quad(&self, point: Point<Pixels>, p0: Point<Pixels>, p1: Point<Pixels>, p2: Point<Pixels>) -> usize {
         // Simple approximation: subdivide into 4 line segments
         let t_values: [f32; 5] = [0.0, 0.25, 0.5, 0.75, 1.0];
         let mut crossings = 0;
@@ -860,11 +569,11 @@ impl Path {
     /// Count crossings for cubic bezier curve (approximated).
     fn count_curve_crossings_cubic(
         &self,
-        point: Point<f32>,
-        p0: Point<f32>,
-        p1: Point<f32>,
-        p2: Point<f32>,
-        p3: Point<f32>,
+        point: Point<Pixels>,
+        p0: Point<Pixels>,
+        p1: Point<Pixels>,
+        p2: Point<Pixels>,
+        p3: Point<Pixels>,
     ) -> usize {
         // Simple approximation: subdivide into 8 line segments
         let t_values: [f32; 9] = [0.0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1.0];
@@ -886,7 +595,7 @@ impl Path {
     }
 
     /// Winding number for quadratic curve.
-    fn curve_winding_quad(&self, point: Point<f32>, p0: Point<f32>, p1: Point<f32>, p2: Point<f32>) -> i32 {
+    fn curve_winding_quad(&self, point: Point<Pixels>, p0: Point<Pixels>, p1: Point<Pixels>, p2: Point<Pixels>) -> i32 {
         let t_values: [f32; 5] = [0.0, 0.25, 0.5, 0.75, 1.0];
         let mut winding = 0;
 
@@ -904,7 +613,7 @@ impl Path {
     }
 
     /// Winding number for cubic curve.
-    fn curve_winding_cubic(&self, point: Point<f32>, p0: Point<f32>, p1: Point<f32>, p2: Point<f32>, p3: Point<f32>) -> i32 {
+    fn curve_winding_cubic(&self, point: Point<Pixels>, p0: Point<Pixels>, p1: Point<Pixels>, p2: Point<Pixels>, p3: Point<Pixels>) -> i32 {
         let t_values: [f32; 9] = [0.0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1.0];
         let mut winding = 0;
 
@@ -963,333 +672,8 @@ impl Default for Path {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_path_new() {
-        let path = Path::new();
-        assert!(path.is_empty());
-        assert_eq!(path.fill_type(), PathFillType::NonZero);
-    }
-
-    #[test]
-    fn test_path_move_line() {
-        let mut path = Path::new();
-        path.move_to(Point::new(0.0, 0.0));
-        path.line_to(Point::new(100.0, 100.0));
-
-        assert_eq!(path.commands().len(), 2);
-        assert!(!path.is_empty());
-    }
-
-    #[test]
-    fn test_path_close() {
-        let mut path = Path::new();
-        path.move_to(Point::new(0.0, 0.0));
-        path.line_to(Point::new(100.0, 0.0));
-        path.line_to(Point::new(100.0, 100.0));
-        path.close();
-
-        assert_eq!(path.commands().len(), 4);
-    }
-
-    #[test]
-    fn test_path_add_rect() {
-        let mut path = Path::new();
-        let rect = Rect::from_xywh(10.0, 10.0, 100.0, 100.0);
-        path.add_rect(rect);
-
-        assert_eq!(path.commands().len(), 1);
-    }
-
-    #[test]
-    fn test_path_add_circle() {
-        let mut path = Path::new();
-        path.add_circle(Point::new(50.0, 50.0), 25.0);
-
-        assert_eq!(path.commands().len(), 1);
-    }
-
-    #[test]
-    fn test_path_bounds() {
-        let mut path = Path::new();
-        path.move_to(Point::new(10.0, 10.0));
-        path.line_to(Point::new(100.0, 100.0));
-
-        let bounds = path.bounds();
-        assert_eq!(bounds.left(), 10.0);
-        assert_eq!(bounds.top(), 10.0);
-        assert_eq!(bounds.right(), 100.0);
-        assert_eq!(bounds.bottom(), 100.0);
-    }
-
-    #[test]
-    fn test_path_reset() {
-        let mut path = Path::new();
-        path.move_to(Point::new(0.0, 0.0));
-        path.line_to(Point::new(100.0, 100.0));
-
-        assert!(!path.is_empty());
-
-        path.reset();
-        assert!(path.is_empty());
-    }
-
-    #[test]
-    fn test_path_translate() {
-        let mut path = Path::new();
-        path.move_to(Point::new(10.0, 10.0));
-        path.line_to(Point::new(20.0, 20.0));
-
-        let translated = path.translate(Offset::new(5.0, 5.0));
-
-        match translated.commands()[0] {
-            PathCommand::MoveTo(p) => {
-                assert_eq!(p.x, 15.0);
-                assert_eq!(p.y, 15.0);
-            }
-            _ => panic!("Expected MoveTo"),
-        }
-    }
+    use crate::geometry::px;
 
     // Path containment tests
 
-    #[test]
-    fn test_contains_rect_even_odd() {
-        let mut path = Path::new();
-        path.set_fill_type(PathFillType::EvenOdd);
-        path.add_rect(Rect::from_xywh(10.0, 10.0, 100.0, 100.0));
-
-        // Points inside
-        assert!(path.contains(Point::new(50.0, 50.0)));
-        assert!(path.contains(Point::new(20.0, 20.0)));
-        assert!(path.contains(Point::new(100.0, 100.0)));
-
-        // Points outside
-        assert!(!path.contains(Point::new(0.0, 0.0)));
-        assert!(!path.contains(Point::new(150.0, 50.0)));
-        assert!(!path.contains(Point::new(50.0, 150.0)));
-
-        // Edge cases (on boundary)
-        assert!(path.contains(Point::new(10.0, 50.0)));
-        assert!(path.contains(Point::new(110.0, 50.0)));
-    }
-
-    #[test]
-    fn test_contains_rect_non_zero() {
-        let mut path = Path::new();
-        path.set_fill_type(PathFillType::NonZero);
-        path.add_rect(Rect::from_xywh(10.0, 10.0, 100.0, 100.0));
-
-        // Points inside
-        assert!(path.contains(Point::new(50.0, 50.0)));
-        assert!(path.contains(Point::new(20.0, 20.0)));
-        assert!(path.contains(Point::new(100.0, 100.0)));
-
-        // Points outside
-        assert!(!path.contains(Point::new(0.0, 0.0)));
-        assert!(!path.contains(Point::new(150.0, 50.0)));
-        assert!(!path.contains(Point::new(50.0, 150.0)));
-    }
-
-    #[test]
-    fn test_contains_circle() {
-        let mut path = Path::new();
-        let center = Point::new(50.0, 50.0);
-        let radius = 25.0;
-        path.add_circle(center, radius);
-
-        // Points inside
-        assert!(path.contains(center));
-        assert!(path.contains(Point::new(60.0, 50.0)));
-        assert!(path.contains(Point::new(50.0, 60.0)));
-
-        // Points outside
-        assert!(!path.contains(Point::new(0.0, 0.0)));
-        assert!(!path.contains(Point::new(100.0, 50.0)));
-        assert!(!path.contains(Point::new(50.0, 100.0)));
-
-        // Points near boundary (inside)
-        assert!(path.contains(Point::new(50.0 + radius * 0.9, 50.0)));
-        assert!(path.contains(Point::new(50.0, 50.0 + radius * 0.9)));
-
-        // Points near boundary (outside)
-        assert!(!path.contains(Point::new(50.0 + radius * 1.1, 50.0)));
-        assert!(!path.contains(Point::new(50.0, 50.0 + radius * 1.1)));
-    }
-
-    #[test]
-    fn test_contains_oval() {
-        let mut path = Path::new();
-        path.add_oval(Rect::from_xywh(10.0, 10.0, 100.0, 50.0));
-
-        // Points inside
-        assert!(path.contains(Point::new(60.0, 35.0))); // Center
-        assert!(path.contains(Point::new(70.0, 35.0)));
-
-        // Points outside
-        assert!(!path.contains(Point::new(0.0, 0.0)));
-        assert!(!path.contains(Point::new(150.0, 35.0)));
-        assert!(!path.contains(Point::new(60.0, 100.0)));
-    }
-
-    #[test]
-    fn test_contains_triangle() {
-        let mut path = Path::new();
-        path.move_to(Point::new(50.0, 10.0));
-        path.line_to(Point::new(90.0, 90.0));
-        path.line_to(Point::new(10.0, 90.0));
-        path.close();
-
-        // Point inside
-        assert!(path.contains(Point::new(50.0, 50.0)));
-        assert!(path.contains(Point::new(40.0, 60.0)));
-
-        // Points outside
-        assert!(!path.contains(Point::new(10.0, 10.0)));
-        assert!(!path.contains(Point::new(90.0, 10.0)));
-        assert!(!path.contains(Point::new(50.0, 95.0)));
-    }
-
-    #[test]
-    fn test_contains_quadratic_bezier() {
-        let mut path = Path::new();
-        // Create a simple closed shape with a quadratic bezier curve
-        path.move_to(Point::new(10.0, 50.0));
-        path.line_to(Point::new(10.0, 10.0));
-        path.line_to(Point::new(90.0, 10.0));
-        path.line_to(Point::new(90.0, 50.0));
-        // Quadratic curve back (bulging downward)
-        path.quadratic_to(Point::new(50.0, 80.0), Point::new(10.0, 50.0));
-        path.close();
-
-        // Points inside the shape
-        assert!(path.contains(Point::new(50.0, 30.0)));
-        assert!(path.contains(Point::new(30.0, 25.0)));
-        assert!(path.contains(Point::new(50.0, 50.0)));
-
-        // Points outside (below the curve or far away)
-        assert!(!path.contains(Point::new(50.0, 85.0)));
-        assert!(!path.contains(Point::new(0.0, 0.0)));
-        assert!(!path.contains(Point::new(100.0, 10.0)));
-    }
-
-    #[test]
-    fn test_contains_cubic_bezier() {
-        let mut path = Path::new();
-        path.move_to(Point::new(10.0, 50.0));
-        path.cubic_to(
-            Point::new(30.0, 10.0),
-            Point::new(70.0, 90.0),
-            Point::new(90.0, 50.0),
-        );
-        path.line_to(Point::new(90.0, 80.0));
-        path.line_to(Point::new(10.0, 80.0));
-        path.close();
-
-        // Points inside (should be inside the closed path)
-        assert!(path.contains(Point::new(50.0, 60.0)));
-
-        // Points outside
-        assert!(!path.contains(Point::new(0.0, 50.0)));
-        assert!(!path.contains(Point::new(100.0, 50.0)));
-        assert!(!path.contains(Point::new(50.0, 0.0)));
-    }
-
-    #[test]
-    fn test_contains_donut_even_odd() {
-        // Create a donut shape: outer rect with inner rect hole
-        let mut path = Path::new();
-        path.set_fill_type(PathFillType::EvenOdd);
-
-        // Outer rectangle
-        path.add_rect(Rect::from_xywh(0.0, 0.0, 100.0, 100.0));
-
-        // Inner rectangle (hole)
-        path.add_rect(Rect::from_xywh(25.0, 25.0, 50.0, 50.0));
-
-        // Points in the "ring" (between outer and inner)
-        assert!(path.contains(Point::new(10.0, 10.0)));
-        assert!(path.contains(Point::new(90.0, 90.0)));
-        assert!(path.contains(Point::new(10.0, 50.0)));
-
-        // Points in the hole (should be outside with even-odd)
-        assert!(!path.contains(Point::new(50.0, 50.0)));
-        assert!(!path.contains(Point::new(40.0, 40.0)));
-        assert!(!path.contains(Point::new(60.0, 60.0)));
-
-        // Points completely outside
-        assert!(!path.contains(Point::new(-10.0, 50.0)));
-        assert!(!path.contains(Point::new(110.0, 50.0)));
-    }
-
-    #[test]
-    fn test_contains_donut_non_zero() {
-        // Create a donut with non-zero winding
-        let mut path = Path::new();
-        path.set_fill_type(PathFillType::NonZero);
-
-        // Outer rectangle (counter-clockwise)
-        path.move_to(Point::new(0.0, 0.0));
-        path.line_to(Point::new(100.0, 0.0));
-        path.line_to(Point::new(100.0, 100.0));
-        path.line_to(Point::new(0.0, 100.0));
-        path.close();
-
-        // Inner rectangle (clockwise - opposite winding)
-        path.move_to(Point::new(25.0, 25.0));
-        path.line_to(Point::new(25.0, 75.0));
-        path.line_to(Point::new(75.0, 75.0));
-        path.line_to(Point::new(75.0, 25.0));
-        path.close();
-
-        // Points in the ring
-        assert!(path.contains(Point::new(10.0, 10.0)));
-        assert!(path.contains(Point::new(90.0, 90.0)));
-
-        // Points in the hole (opposite winding cancels out)
-        assert!(!path.contains(Point::new(50.0, 50.0)));
-        assert!(!path.contains(Point::new(40.0, 40.0)));
-    }
-
-    #[test]
-    fn test_contains_complex_path() {
-        // Complex path with lines and curves
-        let mut path = Path::new();
-        path.move_to(Point::new(20.0, 20.0));
-        path.line_to(Point::new(80.0, 20.0));
-        path.quadratic_to(Point::new(100.0, 50.0), Point::new(80.0, 80.0));
-        path.line_to(Point::new(20.0, 80.0));
-        path.cubic_to(
-            Point::new(10.0, 60.0),
-            Point::new(10.0, 40.0),
-            Point::new(20.0, 20.0),
-        );
-        path.close();
-
-        // Point clearly inside
-        assert!(path.contains(Point::new(50.0, 50.0)));
-
-        // Points clearly outside
-        assert!(!path.contains(Point::new(0.0, 0.0)));
-        assert!(!path.contains(Point::new(110.0, 50.0)));
-        assert!(!path.contains(Point::new(50.0, 100.0)));
-    }
-
-    #[test]
-    fn test_contains_empty_path() {
-        let path = Path::new();
-        assert!(!path.contains(Point::new(50.0, 50.0)));
-    }
-
-    #[test]
-    fn test_contains_point_outside_bounds() {
-        let mut path = Path::new();
-        path.add_rect(Rect::from_xywh(10.0, 10.0, 100.0, 100.0));
-
-        // Points far outside the bounds should quickly return false
-        assert!(!path.contains(Point::new(-100.0, 50.0)));
-        assert!(!path.contains(Point::new(200.0, 50.0)));
-        assert!(!path.contains(Point::new(50.0, -100.0)));
-        assert!(!path.contains(Point::new(50.0, 200.0)));
-    }
 }

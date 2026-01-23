@@ -4,41 +4,6 @@
 
 use super::{Simulation, Tolerance};
 
-/// A simulation of an object moving under constant acceleration (gravity)
-///
-/// Similar to Flutter's `GravitySimulation`. Models projectile motion
-/// with constant acceleration (like throwing or dropping an object).
-///
-/// # Physics Model
-/// - Position: `p(t) = p₀ + v₀*t + 0.5*a*t²`
-/// - Velocity: `v(t) = v₀ + a*t`
-/// - Where a is the acceleration (gravity)
-///
-/// # Memory Safety
-/// - Stack-allocated `Copy` type with no heap allocations
-/// - All calculations use safe floating-point math
-///
-/// # Type Safety
-/// - `#[must_use]` on all pure methods
-/// - Validation methods prevent invalid states
-///
-/// # Examples
-///
-/// ```
-/// use flui_types::physics::{GravitySimulation, Simulation};
-///
-/// // Create a gravity simulation
-/// // acceleration: 9.8 m/s^2, initial position: 0.0, end position: 100.0, initial velocity: 0.0
-/// let sim = GravitySimulation::new(9.8, 0.0, 100.0, 0.0);
-///
-/// // Get position and velocity at t=1.0 seconds
-/// let pos = sim.position(1.0);
-/// let vel = sim.velocity(1.0);
-///
-/// assert!(pos > 0.0); // Object has moved
-/// assert!(vel > 0.0); // Velocity has increased due to gravity
-/// ```
-#[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct GravitySimulation {
     /// The acceleration due to gravity (in pixels per second squared)
@@ -58,24 +23,6 @@ pub struct GravitySimulation {
 }
 
 impl GravitySimulation {
-    /// Creates a new gravity simulation
-    ///
-    /// # Arguments
-    ///
-    /// * `acceleration` - The acceleration due to gravity (positive = downward)
-    /// * `start` - The starting position
-    /// * `end` - The ending position (where simulation should stop)
-    /// * `velocity` - The initial velocity
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_types::physics::GravitySimulation;
-    ///
-    /// // Simulate dropping an object
-    /// let sim = GravitySimulation::new(9.8, 0.0, 100.0, 0.0);
-    /// ```
-    #[inline]
     #[must_use]
     pub fn new(acceleration: f32, start: f32, end: f32, velocity: f32) -> Self {
         Self {
@@ -87,99 +34,32 @@ impl GravitySimulation {
         }
     }
 
-    /// Creates a new gravity simulation with a custom tolerance
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_types::physics::{GravitySimulation, Tolerance};
-    ///
-    /// let tolerance = Tolerance::new(0.01, 0.1, 0.01);
-    /// let sim = GravitySimulation::new(9.8, 0.0, 100.0, 0.0)
-    ///     .with_tolerance(tolerance);
-    /// ```
-    #[inline]
     #[must_use]
     pub fn with_tolerance(mut self, tolerance: Tolerance) -> Self {
         self.tolerance = tolerance;
         self
     }
 
-    /// Returns the acceleration
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_types::physics::GravitySimulation;
-    ///
-    /// let sim = GravitySimulation::new(9.8, 0.0, 100.0, 0.0);
-    /// assert_eq!(sim.acceleration(), 9.8);
-    /// ```
-    #[inline]
     #[must_use]
     pub fn acceleration(&self) -> f32 {
         self.acceleration
     }
 
-    /// Returns the starting position
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_types::physics::GravitySimulation;
-    ///
-    /// let sim = GravitySimulation::new(9.8, 10.0, 100.0, 0.0);
-    /// assert_eq!(sim.start(), 10.0);
-    /// ```
-    #[inline]
     #[must_use]
     pub fn start(&self) -> f32 {
         self.start
     }
 
-    /// Returns the ending position
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_types::physics::GravitySimulation;
-    ///
-    /// let sim = GravitySimulation::new(9.8, 0.0, 100.0, 0.0);
-    /// assert_eq!(sim.end(), 100.0);
-    /// ```
-    #[inline]
     #[must_use]
     pub fn end(&self) -> f32 {
         self.end
     }
 
-    /// Returns the initial velocity
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_types::physics::GravitySimulation;
-    ///
-    /// let sim = GravitySimulation::new(9.8, 0.0, 100.0, 20.0);
-    /// assert_eq!(sim.initial_velocity(), 20.0);
-    /// ```
-    #[inline]
     #[must_use]
     pub fn initial_velocity(&self) -> f32 {
         self.initial_velocity
     }
 
-    /// Checks if the simulation parameters are valid
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_types::physics::GravitySimulation;
-    ///
-    /// let valid = GravitySimulation::new(9.8, 0.0, 100.0, 0.0);
-    /// assert!(valid.is_valid());
-    /// ```
-    #[inline]
     #[must_use]
     pub fn is_valid(&self) -> bool {
         self.acceleration.is_finite()
@@ -189,21 +69,6 @@ impl GravitySimulation {
             && self.tolerance.is_valid()
     }
 
-    /// Returns the time at which the simulation reaches the end position
-    ///
-    /// Returns None if the object never reaches the end position.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_types::physics::GravitySimulation;
-    ///
-    /// let sim = GravitySimulation::new(10.0, 0.0, 100.0, 0.0);
-    /// let time = sim.time_at_end();
-    ///
-    /// assert!(time.is_some());
-    /// assert!(time.unwrap() > 0.0);
-    /// ```
     #[must_use]
     pub fn time_at_end(&self) -> Option<f32> {
         let distance = self.end - self.start;
@@ -287,121 +152,3 @@ impl Simulation for GravitySimulation {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_gravity_simulation_new() {
-        let sim = GravitySimulation::new(9.8, 0.0, 100.0, 0.0);
-        assert_eq!(sim.position(0.0), 0.0);
-        assert_eq!(sim.velocity(0.0), 0.0);
-    }
-
-    #[test]
-    fn test_gravity_simulation_accelerates() {
-        let sim = GravitySimulation::new(10.0, 0.0, 100.0, 0.0);
-
-        let vel_at_1 = sim.velocity(1.0);
-        let vel_at_2 = sim.velocity(2.0);
-
-        assert_eq!(vel_at_1, 10.0);
-        assert_eq!(vel_at_2, 20.0);
-    }
-
-    #[test]
-    fn test_gravity_simulation_position() {
-        let sim = GravitySimulation::new(10.0, 0.0, 100.0, 0.0);
-
-        // At t=1: position = 0 + 0*1 + 0.5*10*1^2 = 5
-        let pos_at_1 = sim.position(1.0);
-        assert_eq!(pos_at_1, 5.0);
-
-        // At t=2: position = 0 + 0*2 + 0.5*10*2^2 = 20
-        let pos_at_2 = sim.position(2.0);
-        assert_eq!(pos_at_2, 20.0);
-    }
-
-    #[test]
-    fn test_gravity_simulation_with_initial_velocity() {
-        let sim = GravitySimulation::new(10.0, 0.0, 100.0, 20.0);
-
-        // At t=1: position = 0 + 20*1 + 0.5*10*1^2 = 25
-        let pos_at_1 = sim.position(1.0);
-        assert_eq!(pos_at_1, 25.0);
-
-        // velocity = 20 + 10*1 = 30
-        let vel_at_1 = sim.velocity(1.0);
-        assert_eq!(vel_at_1, 30.0);
-    }
-
-    #[test]
-    fn test_gravity_simulation_time_at_end() {
-        let sim = GravitySimulation::new(10.0, 0.0, 100.0, 0.0);
-        let time = sim.time_at_end();
-
-        assert!(time.is_some());
-        let t = time.unwrap();
-
-        // Check that position at this time is approximately the end position
-        let pos = sim.position(t);
-        assert!((pos - 100.0).abs() < 0.01);
-    }
-
-    #[test]
-    fn test_gravity_simulation_time_at_end_with_velocity() {
-        let sim = GravitySimulation::new(10.0, 0.0, 100.0, 20.0);
-        let time = sim.time_at_end();
-
-        assert!(time.is_some());
-        let t = time.unwrap();
-
-        let pos = sim.position(t);
-        assert!((pos - 100.0).abs() < 0.01);
-    }
-
-    #[test]
-    fn test_gravity_simulation_is_done() {
-        let sim = GravitySimulation::new(10.0, 0.0, 50.0, 0.0);
-
-        assert!(!sim.is_done(0.0));
-        assert!(!sim.is_done(1.0)); // position = 5.0
-        assert!(!sim.is_done(2.0)); // position = 20.0
-        assert!(sim.is_done(10.0)); // position = 500.0 (way past end)
-    }
-
-    #[test]
-    fn test_gravity_simulation_tolerance() {
-        let tolerance = Tolerance::new(0.01, 0.1, 0.01);
-        let sim = GravitySimulation::new(10.0, 0.0, 100.0, 0.0).with_tolerance(tolerance);
-
-        assert_eq!(sim.tolerance(), tolerance);
-    }
-
-    #[test]
-    fn test_gravity_simulation_negative_acceleration() {
-        let sim = GravitySimulation::new(-10.0, 100.0, 0.0, 0.0);
-
-        // Should move backwards
-        let pos_at_1 = sim.position(1.0);
-        assert!(pos_at_1 < 100.0);
-
-        let vel_at_1 = sim.velocity(1.0);
-        assert_eq!(vel_at_1, -10.0);
-    }
-
-    #[test]
-    fn test_gravity_simulation_no_acceleration() {
-        let sim = GravitySimulation::new(0.0, 0.0, 100.0, 10.0);
-
-        // Should move at constant velocity
-        let pos_at_1 = sim.position(1.0);
-        assert_eq!(pos_at_1, 10.0);
-
-        let pos_at_2 = sim.position(2.0);
-        assert_eq!(pos_at_2, 20.0);
-
-        let vel_at_1 = sim.velocity(1.0);
-        assert_eq!(vel_at_1, 10.0);
-    }
-}

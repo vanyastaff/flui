@@ -4,6 +4,7 @@
 //! similar to Flutter's axis system.
 
 use crate::Size;
+use crate::geometry::{px, Pixels};
 
 /// The two cardinal directions in two dimensions.
 ///
@@ -78,10 +79,10 @@ impl Axis {
     /// ```
     #[inline]
     #[must_use]
-    pub const fn select_size(self, size: Size<f32>) -> f32 {
+    pub const fn select_size(self, size: Size<Pixels>) -> f32 {
         match self {
-            Axis::Horizontal => size.width,
-            Axis::Vertical => size.height,
+            Axis::Horizontal => size.width.0,
+            Axis::Vertical => size.height.0,
         }
     }
 
@@ -97,10 +98,10 @@ impl Axis {
     /// ```
     #[inline]
     #[must_use]
-    pub const fn make_size(self, value: f32) -> Size<f32> {
+    pub const fn make_size(self, value: f32) -> Size<Pixels> {
         match self {
-            Axis::Horizontal => Size::new(value, 0.0),
-            Axis::Vertical => Size::new(0.0, value),
+            Axis::Horizontal => Size::new(px(value), px(0.0)),
+            Axis::Vertical => Size::new(px(0.0), px(value)),
         }
     }
 
@@ -118,10 +119,10 @@ impl Axis {
     /// ```
     #[inline]
     #[must_use]
-    pub const fn make_size_with_cross(self, main: f32, cross: f32) -> Size<f32> {
+    pub const fn make_size_with_cross(self, main: f32, cross: f32) -> Size<Pixels> {
         match self {
-            Axis::Horizontal => Size::new(main, cross),
-            Axis::Vertical => Size::new(cross, main),
+            Axis::Horizontal => Size::new(px(main), px(cross)),
+            Axis::Vertical => Size::new(px(cross), px(main)),
         }
     }
 
@@ -140,7 +141,7 @@ impl Axis {
     /// ```
     #[inline]
     #[must_use]
-    pub const fn flip_size(self, size: Size<f32>) -> Size<f32> {
+    pub const fn flip_size(self, size: Size<Pixels>) -> Size<Pixels> {
         match self {
             Axis::Horizontal => size,
             Axis::Vertical => Size::new(size.height, size.width),
@@ -160,7 +161,7 @@ impl Axis {
     /// ```
     #[inline]
     #[must_use]
-    pub const fn main_size(self, size: Size<f32>) -> f32 {
+    pub const fn main_size(self, size: Size<Pixels>) -> f32 {
         self.select_size(size)
     }
 
@@ -177,7 +178,7 @@ impl Axis {
     /// ```
     #[inline]
     #[must_use]
-    pub const fn cross_size(self, size: Size<f32>) -> f32 {
+    pub const fn cross_size(self, size: Size<Pixels>) -> f32 {
         self.opposite().select_size(size)
     }
 }
@@ -376,7 +377,7 @@ impl Orientation {
     /// ```
     #[inline]
     #[must_use]
-    pub const fn from_size(size: Size<f32>) -> Self {
+    pub fn from_size(size: Size<Pixels>) -> Self {
         if size.height > size.width {
             Orientation::Portrait
         } else {

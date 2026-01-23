@@ -1,6 +1,6 @@
 //! Image handling types for painting.
 
-use crate::geometry::Size;
+use crate::geometry::{Size, Pixels, px};
 use crate::painting::BlendMode;
 use crate::styling::Color;
 use std::sync::Arc;
@@ -103,8 +103,8 @@ impl Image {
     /// Returns the size of the image.
     #[inline]
     #[must_use]
-    pub fn size(&self) -> Size<f32> {
-        Size::new(self.width as f32, self.height as f32)
+    pub fn size(&self) -> Size<Pixels> {
+        Size::new(px(self.width as f32), px(self.height as f32))
     }
 
     /// Returns a reference to the pixel data.
@@ -265,7 +265,7 @@ pub enum ImageRepeat {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ImageConfiguration {
     /// The size at which the image will be rendered.
-    pub size: Option<Size<f32>>,
+    pub size: Option<Size<Pixels>>,
 
     /// The device pixel ratio where the image will be shown.
     pub device_pixel_ratio: Option<f32>,
@@ -289,7 +289,7 @@ impl ImageConfiguration {
     /// Creates a configuration with the given size.
     #[inline]
     #[must_use]
-    pub const fn with_size(mut self, size: Size<f32>) -> Self {
+    pub const fn with_size(mut self, size: Size<Pixels>) -> Self {
         self.size = Some(size);
         self
     }
@@ -323,10 +323,10 @@ impl ImageConfiguration {
     /// Returns the logical size in physical pixels.
     #[inline]
     #[must_use]
-    pub fn physical_size(&self) -> Option<Size<f32>> {
+    pub fn physical_size(&self) -> Option<Size<Pixels>> {
         self.size.map(|s| {
             let ratio = self.effective_device_pixel_ratio();
-            Size::new(s.width * ratio, s.height * ratio)
+            Size::new(px(s.width.get() * ratio), px(s.height.get() * ratio))
         })
     }
 }

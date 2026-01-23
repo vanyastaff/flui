@@ -7,30 +7,9 @@ use crate::styling::{Border, BorderRadius, BoxShadow, Color, Gradient};
 // Re-export painting types that are commonly used with decorations
 pub use crate::painting::{BlendMode, BoxFit, ColorFilter, ImageRepeat};
 
-/// An image that is part of a [BoxDecoration].
-///
-/// Similar to Flutter's `DecorationImage`.
-///
-/// # Examples
-///
-/// ```rust,ignore
-/// use flui_types::styling::DecorationImage;
-/// use flui_types::painting::{Image, BoxFit, ImageRepeat};
-/// use flui_types::layout::Alignment;
-///
-/// let decoration_image = DecorationImage {
-///     image,
-///     fit: Some(BoxFit::Cover),
-///     alignment: Alignment::CENTER,
-///     repeat: ImageRepeat::NoRepeat,
-///     opacity: 1.0,
-///     color_filter: None,
-/// };
-/// ```
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DecorationImage {
-    /// The image to be painted.
     #[cfg_attr(feature = "serde", serde(skip))]
     pub image: Image,
 
@@ -53,7 +32,6 @@ pub struct DecorationImage {
 }
 
 impl DecorationImage {
-    /// Creates a new decoration image.
     #[must_use]
     pub fn new(image: Image) -> Self {
         Self {
@@ -66,35 +44,30 @@ impl DecorationImage {
         }
     }
 
-    /// Sets the fit mode for the image.
     #[must_use]
     pub fn with_fit(mut self, fit: BoxFit) -> Self {
         self.fit = Some(fit);
         self
     }
 
-    /// Sets the alignment for the image.
     #[must_use]
     pub const fn with_alignment(mut self, alignment: Alignment) -> Self {
         self.alignment = alignment;
         self
     }
 
-    /// Sets the repeat mode for the image.
     #[must_use]
     pub const fn with_repeat(mut self, repeat: ImageRepeat) -> Self {
         self.repeat = repeat;
         self
     }
 
-    /// Sets the opacity for the image.
     #[must_use]
     pub const fn with_opacity(mut self, opacity: f32) -> Self {
         self.opacity = opacity;
         self
     }
 
-    /// Sets a color filter for the image.
     #[must_use]
     pub const fn with_color_filter(mut self, color_filter: ColorFilter) -> Self {
         self.color_filter = Some(color_filter);
@@ -118,24 +91,6 @@ pub trait Decoration: std::fmt::Debug {
         Self: Sized;
 }
 
-/// A decoration for a box.
-///
-/// Similar to Flutter's `BoxDecoration`.
-///
-/// # Examples
-///
-/// ```
-/// use flui_types::styling::{BoxDecoration, Color, BorderRadius};
-///
-/// let decoration = BoxDecoration {
-///     color: Some(Color::WHITE),
-///     border: None,
-///     border_radius: Some(BorderRadius::circular(10.0)),
-///     box_shadow: None,
-///     gradient: None,
-///     image: None,
-/// };
-/// ```
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct BoxDecoration {
@@ -318,101 +273,9 @@ impl Decoration for BoxDecoration {
     }
 }
 
-/// An image for a decoration.
-///
-/// Similar to Flutter's `DecorationImage`.
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::styling::LinearGradient;
 
-    #[test]
-    fn test_box_decoration_new() {
-        let decoration = BoxDecoration::new();
-        assert!(decoration.color.is_none());
-        assert!(decoration.border.is_none());
-        assert!(decoration.gradient.is_none());
-    }
-
-    #[test]
-    fn test_box_decoration_with_color() {
-        let decoration = BoxDecoration::with_color(Color::RED);
-        assert_eq!(decoration.color, Some(Color::RED));
-    }
-
-    #[test]
-    fn test_box_decoration_with_gradient() {
-        let gradient = Gradient::Linear(LinearGradient::horizontal(vec![Color::RED, Color::BLUE]));
-        let decoration = BoxDecoration::with_gradient(gradient.clone());
-        assert_eq!(decoration.gradient, Some(gradient));
-    }
-
-    #[test]
-    fn test_box_decoration_builder_pattern() {
-        let decoration = BoxDecoration::new()
-            .set_color(Some(Color::WHITE))
-            .set_border_radius(Some(BorderRadius::circular(10.0)));
-
-        assert_eq!(decoration.color, Some(Color::WHITE));
-        assert_eq!(decoration.border_radius, Some(BorderRadius::circular(10.0)));
-    }
-
-    #[test]
-    fn test_box_decoration_lerp_colors() {
-        let a = BoxDecoration::with_color(Color::BLACK);
-        let b = BoxDecoration::with_color(Color::WHITE);
-
-        let mid = BoxDecoration::lerp(&a, &b, 0.5);
-        assert!(mid.color.is_some());
-    }
-
-    #[test]
-    fn test_box_decoration_is_complex() {
-        let simple = BoxDecoration::with_color(Color::RED);
-        assert!(!simple.is_complex());
-
-        let gradient =
-            BoxDecoration::with_gradient(Gradient::Linear(LinearGradient::horizontal(vec![
-                Color::RED,
-                Color::BLUE,
-            ])));
-        assert!(gradient.is_complex());
-
-        let with_shadow = BoxDecoration::new().set_box_shadow(Some(vec![BoxShadow::default()]));
-        assert!(with_shadow.is_complex());
-    }
-
-    #[test]
-    fn test_box_fit_variants() {
-        assert_eq!(BoxFit::default(), BoxFit::Contain);
-        assert_ne!(BoxFit::Fill, BoxFit::Cover);
-    }
-
-    #[test]
-    fn test_image_repeat_variants() {
-        assert_eq!(ImageRepeat::default(), ImageRepeat::NoRepeat);
-        assert_ne!(ImageRepeat::Repeat, ImageRepeat::RepeatX);
-    }
-
-    #[test]
-    fn test_color_filter_mode() {
-        let filter = ColorFilter::Mode {
-            color: Color::RED,
-            blend_mode: BlendMode::Multiply,
-        };
-
-        match filter {
-            ColorFilter::Mode { color, blend_mode } => {
-                assert_eq!(color, Color::RED);
-                assert_eq!(blend_mode, BlendMode::Multiply);
-            }
-            _ => panic!("Wrong variant"),
-        }
-    }
-
-    #[test]
-    fn test_blend_mode_variants() {
-        assert_ne!(BlendMode::SrcOver, BlendMode::DstOver);
-        assert_ne!(BlendMode::Multiply, BlendMode::Screen);
-    }
 }

@@ -3,7 +3,7 @@
 //! This module provides types for tracking and estimating velocity
 //! of pointer movements.
 
-use crate::geometry::Offset;
+use crate::geometry::{px, Offset, Pixels};
 use std::time::Duration;
 
 /// A velocity in two dimensions
@@ -43,7 +43,7 @@ use std::time::Duration;
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Velocity {
     /// The number of pixels per second of velocity in the x and y directions
-    pub pixels_per_second: Offset<f32>,
+    pub pixels_per_second: Offset<Pixels>,
 }
 
 impl Velocity {
@@ -66,7 +66,7 @@ impl Velocity {
     /// ```
     #[inline]
     #[must_use]
-    pub const fn new(pixels_per_second: Offset<f32>) -> Self {
+    pub const fn new(pixels_per_second: Offset<Pixels>) -> Self {
         Self { pixels_per_second }
     }
 
@@ -84,7 +84,7 @@ impl Velocity {
     #[inline]
     #[must_use]
     pub fn from_components(dx: f32, dy: f32) -> Self {
-        Self::new(Offset::new(dx, dy))
+        Self::new(Offset::new(px(dx), px(dy)))
     }
 
     /// Creates a velocity from magnitude and direction
@@ -133,7 +133,7 @@ impl Velocity {
     /// ```
     #[inline]
     #[must_use]
-    pub fn from_offset_over_duration(offset: Offset<f32>, duration: Duration) -> Self {
+    pub fn from_offset_over_duration(offset: Offset<Pixels>, duration: Duration) -> Self {
         let seconds = duration.as_secs_f32();
         if seconds == 0.0 {
             return Self::ZERO;
@@ -157,7 +157,7 @@ impl Velocity {
     #[inline]
     #[must_use]
     pub fn magnitude(&self) -> f32 {
-        self.pixels_per_second.distance()
+        self.pixels_per_second.distance().0
     }
 
     /// Returns the direction of the velocity in radians
@@ -302,7 +302,7 @@ impl Velocity {
     /// assert_eq!(distance, Offset::new(100.0, 0.0));
     /// ```
     #[must_use]
-    pub fn distance_over_duration(&self, duration: Duration) -> Offset<f32> {
+    pub fn distance_over_duration(&self, duration: Duration) -> Offset<Pixels> {
         let seconds = duration.as_secs_f32();
         self.pixels_per_second * seconds
     }
@@ -321,7 +321,7 @@ impl Velocity {
     #[inline]
     #[must_use]
     pub fn dx(&self) -> f32 {
-        self.pixels_per_second.dx
+        self.pixels_per_second.dx.0
     }
 
     /// Returns the vertical (y) component of velocity
@@ -338,7 +338,7 @@ impl Velocity {
     #[inline]
     #[must_use]
     pub fn dy(&self) -> f32 {
-        self.pixels_per_second.dy
+        self.pixels_per_second.dy.0
     }
 }
 
@@ -377,10 +377,10 @@ pub struct VelocityEstimate {
     pub duration: Duration,
 
     /// The offset at which the velocity was estimated
-    pub offset: Offset<f32>,
+    pub offset: Offset<Pixels>,
 
     /// The velocity in pixels per second
-    pub pixels_per_second: Offset<f32>,
+    pub pixels_per_second: Offset<Pixels>,
 
     /// A value between 0.0 and 1.0 indicating confidence in the estimate
     ///
@@ -408,8 +408,8 @@ impl VelocityEstimate {
     #[inline]
     #[must_use]
     pub const fn new(
-        offset: Offset<f32>,
-        pixels_per_second: Offset<f32>,
+        offset: Offset<Pixels>,
+        pixels_per_second: Offset<Pixels>,
         duration: Duration,
         confidence: f32,
     ) -> Self {

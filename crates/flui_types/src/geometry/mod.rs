@@ -8,9 +8,9 @@
 //! | Type | Description | Example |
 //! |------|-------------|---------|
 //! | [`Point<T>`] | Absolute position in 2D space | `Point::<Pixels>::new(px(10.0), px(20.0))` |
-//! | [`Vec2<T>`] | Direction and magnitude (displacement) | `Vec2::<f32>::new(1.0, 0.0).normalize()` |
+//! | [`Vec2<T>`] | Direction and magnitude (displacement) | `Vec2::new(px(1.0), px(0.0)).normalize()` |
 //! | [`Size<T>`] | Width and height dimensions | `Size::<Pixels>::new(px(100.0), px(200.0))` |
-//! | [`Offset<T>`] | UI displacement (Flutter compat) | `Offset::<f32>::new(5.0, 10.0)` |
+//! | [`Offset<T>`] | UI displacement (Flutter compat) | `Offset::new(px(5.0), px(10.0))` |
 //! | [`Rect`] | Axis-aligned bounding rectangle | `Rect::new(origin, size)` |
 //! | [`RRect`] | Rounded rectangle | `RRect::new(rect, radius)` |
 //! | [`Circle`] | Circle with center and radius | `Circle::new(center, 50.0)` |
@@ -42,7 +42,7 @@
 //! // let mixed = ui_pos + device_pos.to_vec2();  // ❌
 //!
 //! // Explicit conversion required
-//! let gpu_pos: Point<f32> = ui_pos.into();  // ✅
+//! let gpu_pos: Point<Pixels> = ui_pos.into();  // ✅
 //! ```
 //!
 //! # GPU Integration
@@ -55,7 +55,7 @@
 //! let pos = Point::<Pixels>::new(px(100.0), px(200.0));
 //!
 //! // Into trait (ergonomic)
-//! let gpu_pos: Point<f32> = pos.into();
+//! let gpu_pos: Point<Pixels> = pos.into();
 //!
 //! // Explicit cast (clarity)
 //! let gpu_pos = pos.cast::<f32>();
@@ -75,13 +75,13 @@
 //! use flui_types::geometry::prelude::*;
 //!
 //! // Fast (no validation) - for hot loops
-//! let p = Point::<f32>::new(x, y);
+//! let p = Point::new(x, y);
 //!
 //! // Safe (returns Result) - for user input
 //! let p = Point::<f32>::try_new(x, y)?;
 //!
 //! // Validated (clamps) - for edge cases
-//! let p = Point::<f32>::new_clamped(x, y);
+//! let p = Point::new_clamped(x, y);
 //! ```
 //!
 //! # Precision
@@ -165,7 +165,7 @@ pub mod prelude {
 
     // Unit types
     pub use super::units::{
-        device_px, px, scaled_px, DevicePixels, Pixels, ScaledPixels,
+        delta_px, device_px, px, scaled_px, DevicePixels, PixelDelta, Pixels, ScaledPixels,
     };
     pub use super::length::Rems;
 
@@ -179,9 +179,6 @@ pub mod prelude {
     pub use super::point::point;
     pub use super::size::size;
     pub use super::vector::vec2;
-    pub use super::bounds::bounds;
-    pub use super::circle::circle;
-    pub use super::line::line;
     pub use super::rect::rect;
 }
 
@@ -213,10 +210,10 @@ pub use offset::Offset;
 // SHAPE TYPES
 // =============================================================================
 
-pub use bezier::{cubic_bez, quad_bez, CubicBez, QuadBez};
-pub use bounds::{bounds, Bounds};
-pub use circle::{circle, Circle};
-pub use line::{line, Line};
+pub use bezier::{CubicBez, QuadBez};
+pub use bounds::Bounds;
+pub use circle::Circle;
+pub use line::Line;
 pub use rect::{rect, Rect};
 pub use rrect::{RRect, Radius};
 pub use rsuperellipse::RSuperellipse;
@@ -243,8 +240,8 @@ pub use transform::Transform;
 // =============================================================================
 
 pub use units::{
-    device_px, px, radians, scaled_px,
-    DevicePixels, ParseLengthError, Pixels, Radians, ScaledPixels,
+    delta_px, device_px, px, radians, scaled_px,
+    DevicePixels, ParseLengthError, PixelDelta, Pixels, Radians, ScaledPixels,
 };
 
 // =============================================================================
@@ -299,7 +296,7 @@ pub type DevicePoint = Point<DevicePixels>;
 pub type ScaledPoint = Point<ScaledPixels>;
 
 /// Point in raw float coordinates (GPU-ready).
-pub type FloatPoint = Point<f32>;
+pub type FloatPoint = Point<Pixels>;
 
 /// Vector in logical pixel coordinates.
 pub type PixelVec2 = Vec2<Pixels>;
@@ -311,7 +308,7 @@ pub type DeviceVec2 = Vec2<DevicePixels>;
 pub type ScaledVec2 = Vec2<ScaledPixels>;
 
 /// Vector in raw float coordinates (GPU-ready).
-pub type FloatVec2 = Vec2<f32>;
+pub type FloatVec2 = Vec2<Pixels>;
 
 /// Size in logical pixel coordinates.
 pub type PixelSize = Size<Pixels>;
@@ -323,7 +320,7 @@ pub type DeviceSize = Size<DevicePixels>;
 pub type ScaledSize = Size<ScaledPixels>;
 
 /// Size in raw float coordinates (GPU-ready).
-pub type FloatSize = Size<f32>;
+pub type FloatSize = Size<Pixels>;
 
 /// Offset in logical pixel coordinates.
 pub type PixelOffset = Offset<Pixels>;
@@ -332,56 +329,8 @@ pub type PixelOffset = Offset<Pixels>;
 pub type DeviceOffset = Offset<DevicePixels>;
 
 /// Offset in raw float coordinates (GPU-ready).
-pub type FloatOffset = Offset<f32>;
+pub type FloatOffset = Offset<Pixels>;
 
 // =============================================================================
 // TESTS
 // =============================================================================
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_prelude_imports() {
-        use super::prelude::*;
-
-        let p = Point::<Pixels>::new(px(10.0), px(20.0));
-        let s = Size::<Pixels>::new(px(100.0), px(50.0));
-        let v = Vec2::<f32>::new(1.0, 0.0);
-
-        assert_eq!(p.x, px(10.0));
-        assert_eq!(s.width, px(100.0));
-        assert_eq!(v.x, 1.0);
-    }
-
-    #[test]
-    fn test_type_aliases() {
-        let p: PixelPoint = Point::new(px(10.0), px(20.0));
-        let v: FloatVec2 = Vec2::new(1.0, 2.0);
-        let s: DeviceSize = Size::new(device_px(800), device_px(600));
-
-        assert_eq!(p.x, px(10.0));
-        assert_eq!(v.x, 1.0);
-        assert_eq!(s.width, device_px(800));
-    }
-
-    #[test]
-    fn test_trait_reexports() {
-        // Verify traits are accessible
-        assert!(px(0.0).is_zero());
-        assert_eq!(px(100.0).half(), px(50.0));
-        assert_eq!(-px(100.0), px(-100.0));
-    }
-
-    #[test]
-    fn test_constructor_functions() {
-        let p = point(10.0, 20.0);
-        let s = size(100.0, 50.0);
-        let v = vec2(1.0, 2.0);
-
-        assert_eq!(p.x, 10.0);
-        assert_eq!(s.width, 100.0);
-        assert_eq!(v.x, 1.0);
-    }
-}

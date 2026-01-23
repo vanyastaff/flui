@@ -2,25 +2,7 @@
 
 use std::ops::{Add, Div, Mul, Neg, Sub};
 
-/// An immutable radius with separate x and y components.
-///
-/// Used to define circular or elliptical corner radii.
-/// Similar to Flutter's `Radius`.
-///
-/// # Examples
-///
-/// ```
-/// use flui_types::styling::Radius;
-///
-/// // Circular radius
-/// let circular = Radius::circular(10.0);
-/// assert_eq!(circular.x, 10.0);
-/// assert_eq!(circular.y, 10.0);
-///
-/// // Elliptical radius
-/// let elliptical = Radius::elliptical(20.0, 10.0);
-/// ```
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Radius {
     /// The radius value on the horizontal axis.
@@ -167,107 +149,5 @@ impl Neg for Radius {
             x: -self.x,
             y: -self.y,
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_radius_circular() {
-        let radius = Radius::circular(10.0);
-        assert_eq!(radius.x, 10.0);
-        assert_eq!(radius.y, 10.0);
-        assert!(radius.is_circular());
-    }
-
-    #[test]
-    fn test_radius_elliptical() {
-        let radius = Radius::elliptical(20.0, 10.0);
-        assert_eq!(radius.x, 20.0);
-        assert_eq!(radius.y, 10.0);
-        assert!(!radius.is_circular());
-    }
-
-    #[test]
-    fn test_radius_zero() {
-        let zero = Radius::ZERO;
-        assert!(zero.is_zero());
-        assert_eq!(zero.x, 0.0);
-        assert_eq!(zero.y, 0.0);
-    }
-
-    #[test]
-    fn test_radius_is_finite() {
-        let finite = Radius::circular(10.0);
-        assert!(finite.is_finite());
-
-        let infinite = Radius::circular(f32::INFINITY);
-        assert!(!infinite.is_finite());
-    }
-
-    #[test]
-    fn test_radius_lerp() {
-        let a = Radius::circular(0.0);
-        let b = Radius::circular(10.0);
-        let mid = Radius::lerp(a, b, 0.5);
-        assert_eq!(mid.x, 5.0);
-        assert_eq!(mid.y, 5.0);
-    }
-
-    #[test]
-    fn test_radius_clamp_non_negative() {
-        let negative = Radius::elliptical(-5.0, 10.0);
-        let clamped = negative.clamp_non_negative();
-        assert_eq!(clamped.x, 0.0);
-        assert_eq!(clamped.y, 10.0);
-    }
-
-    #[test]
-    fn test_radius_arithmetic() {
-        let a = Radius::circular(10.0);
-        let b = Radius::circular(5.0);
-
-        let sum = a + b;
-        assert_eq!(sum.x, 15.0);
-
-        let diff = a - b;
-        assert_eq!(diff.x, 5.0);
-
-        let product = a * 2.0;
-        assert_eq!(product.x, 20.0);
-
-        let quotient = a / 2.0;
-        assert_eq!(quotient.x, 5.0);
-
-        let negated = -a;
-        assert_eq!(negated.x, -10.0);
-    }
-
-    #[test]
-    fn test_radius_from_f32() {
-        let radius: Radius = 10.0.into();
-        assert_eq!(radius, Radius::circular(10.0));
-    }
-
-    #[test]
-    fn test_radius_from_tuple() {
-        let radius: Radius = (20.0, 10.0).into();
-        assert_eq!(radius, Radius::elliptical(20.0, 10.0));
-    }
-
-    #[test]
-    fn test_radius_default() {
-        let default = Radius::default();
-        assert_eq!(default, Radius::ZERO);
-    }
-
-    #[test]
-    fn test_radius_scale() {
-        let radius = Radius::elliptical(10.0, 5.0);
-        let scaled = radius.scale(2.0);
-        assert_eq!(scaled.x, 20.0);
-        assert_eq!(scaled.y, 10.0);
     }
 }

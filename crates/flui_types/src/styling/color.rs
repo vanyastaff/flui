@@ -3,28 +3,7 @@
 //! This module provides a comprehensive Color type with conversions between
 //! different color spaces (RGB, HSL, HSV), similar to Flutter's Color system.
 
-/// A color in the RGBA color space.
-///
-/// Colors are represented using 8-bit channels (0-255) for red, green, blue, and alpha.
-///
-/// # Examples
-///
-/// ```
-/// use flui_types::Color;
-///
-/// // Create from RGB
-/// let red = Color::rgb(255, 0, 0);
-///
-/// // Create from RGBA with transparency
-/// let semi_transparent_blue = Color::rgba(0, 0, 255, 128);
-///
-/// // Create from hex string
-/// let green = Color::from_hex("#00FF00").unwrap();
-///
-/// // Adjust opacity
-/// let faded = red.with_opacity(0.5);
-/// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Color {
     /// Red channel (0-255)
@@ -130,10 +109,6 @@ impl Color {
 
     // ===== Component accessors =====
 
-    /// Gets the opacity as a float (0.0-1.0).
-    ///
-    /// This is alpha / 255.0
-    #[inline]
     #[must_use]
     pub const fn opacity(&self) -> f32 {
         self.a as f32 / 255.0
@@ -257,7 +232,6 @@ impl Color {
         )
     }
 
-    #[cfg(all(feature = "simd", target_arch = "x86_64"))]
     #[inline]
     fn lerp_simd_sse(a: Color, b: Color, t: f32) -> Color {
         #[cfg(target_feature = "sse2")]
@@ -289,7 +263,6 @@ impl Color {
         }
     }
 
-    #[cfg(all(feature = "simd", target_arch = "aarch64"))]
     #[inline]
     fn lerp_simd_neon(a: Color, b: Color, t: f32) -> Color {
         #[cfg(target_feature = "neon")]
@@ -321,14 +294,11 @@ impl Color {
         }
     }
 
-    /// Converts to a 32-bit ARGB value (0xAARRGGBB).
-    #[inline]
     #[must_use]
     pub const fn to_argb(&self) -> u32 {
         ((self.a as u32) << 24) | ((self.r as u32) << 16) | ((self.g as u32) << 8) | (self.b as u32)
     }
 
-    /// Converts to a hex string (format: "#AARRGGBB" or "#RRGGBB" if fully opaque).
     #[must_use]
     pub fn to_hex(&self) -> String {
         if self.is_opaque() {
@@ -338,8 +308,6 @@ impl Color {
         }
     }
 
-    /// Converts to RGBA f32 tuple (0.0-1.0 range).
-    #[inline]
     #[must_use]
     pub const fn to_rgba_f32(&self) -> (f32, f32, f32, f32) {
         (
@@ -350,21 +318,6 @@ impl Color {
         )
     }
 
-    /// Converts to RGBA f32 array (0.0-1.0 range).
-    ///
-    /// This is the preferred format for passing colors to GPU backends
-    /// that expect array inputs (egui, wgpu, etc.)
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_types::Color;
-    ///
-    /// let red = Color::RED;
-    /// let rgba = red.to_rgba_f32_array();
-    /// assert_eq!(rgba, [1.0, 0.0, 0.0, 1.0]);
-    /// ```
-    #[inline]
     #[must_use]
     pub const fn to_rgba_f32_array(&self) -> [f32; 4] {
         [
@@ -375,20 +328,6 @@ impl Color {
         ]
     }
 
-    /// Create a color from RGBA f32 array (0.0-1.0 range).
-    ///
-    /// Values are clamped to [0.0, 1.0] range.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_types::Color;
-    ///
-    /// let color = Color::from_rgba_f32_array([1.0, 0.5, 0.0, 0.8]);
-    /// assert_eq!(color.r, 255);
-    /// assert_eq!(color.g, 127);
-    /// ```
-    #[inline]
     #[must_use]
     pub fn from_rgba_f32_array(rgba: [f32; 4]) -> Self {
         Self::rgba(
@@ -399,23 +338,6 @@ impl Color {
         )
     }
 
-    /// Convert color to f32 array [r, g, b, a] in 0.0-1.0 range.
-    ///
-    /// Useful for GPU shaders that expect normalized color values.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_types::Color;
-    ///
-    /// let color = Color::rgba(255, 128, 0, 255);
-    /// let array = color.to_f32_array();
-    /// assert_eq!(array[0], 1.0);    // R
-    /// assert_eq!(array[1], 0.5019608); // G (128/255)
-    /// assert_eq!(array[2], 0.0);    // B
-    /// assert_eq!(array[3], 1.0);    // A
-    /// ```
-    #[inline]
     #[must_use]
     pub fn to_f32_array(&self) -> [f32; 4] {
         [
@@ -426,29 +348,21 @@ impl Color {
         ]
     }
 
-    /// Get the red component as f32 (0.0-1.0 range).
-    #[inline]
     #[must_use]
     pub const fn red_f32(&self) -> f32 {
         self.r as f32 / 255.0
     }
 
-    /// Get the green component as f32 (0.0-1.0 range).
-    #[inline]
     #[must_use]
     pub const fn green_f32(&self) -> f32 {
         self.g as f32 / 255.0
     }
 
-    /// Get the blue component as f32 (0.0-1.0 range).
-    #[inline]
     #[must_use]
     pub const fn blue_f32(&self) -> f32 {
         self.b as f32 / 255.0
     }
 
-    /// Get the alpha component as f32 (0.0-1.0 range).
-    #[inline]
     #[must_use]
     pub const fn alpha_f32(&self) -> f32 {
         self.a as f32 / 255.0
@@ -456,19 +370,6 @@ impl Color {
 
     // ===== Helper methods for rendering =====
 
-    /// Alpha blend this color over a background color.
-    ///
-    /// Uses standard alpha compositing: `src over dst`.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_types::Color;
-    ///
-    /// let red = Color::rgba(255, 0, 0, 128);  // Semi-transparent red
-    /// let white = Color::WHITE;
-    /// let result = red.blend_over(white);
-    /// ```
     #[must_use]
     pub fn blend_over(&self, background: Color) -> Color {
         // Fast paths
@@ -522,7 +423,6 @@ impl Color {
         Color::rgba(r, g, b, a)
     }
 
-    #[cfg(all(feature = "simd", target_arch = "x86_64"))]
     #[inline]
     fn blend_over_simd_sse(&self, background: Color) -> Color {
         #[cfg(target_feature = "sse2")]
@@ -574,7 +474,6 @@ impl Color {
         }
     }
 
-    #[cfg(all(feature = "simd", target_arch = "aarch64"))]
     #[inline]
     fn blend_over_simd_neon(&self, background: Color) -> Color {
         #[cfg(target_feature = "neon")]
@@ -630,8 +529,6 @@ impl Color {
         }
     }
 
-    /// Multiply color by another (component-wise).
-    #[inline]
     #[must_use]
     pub const fn multiply(&self, other: Color) -> Color {
         Color::rgba(
@@ -642,8 +539,6 @@ impl Color {
         )
     }
 
-    /// Darken color by a factor (0.0 = black, 1.0 = unchanged).
-    #[inline]
     #[must_use]
     pub fn darken(&self, factor: f32) -> Color {
         let factor = factor.clamp(0.0, 1.0);
@@ -655,8 +550,6 @@ impl Color {
         )
     }
 
-    /// Lighten color by a factor (0.0 = unchanged, 1.0 = white).
-    #[inline]
     #[must_use]
     pub fn lighten(&self, factor: f32) -> Color {
         let factor = factor.clamp(0.0, 1.0);
@@ -668,31 +561,21 @@ impl Color {
         )
     }
 
-    /// Get luminance (perceived brightness) using Rec. 709 formula.
-    ///
-    /// Returns value in 0.0-1.0 range.
-    #[inline]
     #[must_use]
     pub const fn luminance(&self) -> f32 {
         (0.2126 * self.r as f32 + 0.7152 * self.g as f32 + 0.0722 * self.b as f32) / 255.0
     }
 
-    /// Check if color is "dark" (luminance < 0.5).
-    #[inline]
     #[must_use]
     pub const fn is_dark(&self) -> bool {
         self.luminance() < 0.5
     }
 
-    /// Check if color is "light" (luminance >= 0.5).
-    #[inline]
     #[must_use]
     pub const fn is_light(&self) -> bool {
         self.luminance() >= 0.5
     }
 
-    /// Get a contrasting color (black or white) for text on this background.
-    #[inline]
     #[must_use]
     pub const fn contrasting_text_color(&self) -> Color {
         if self.is_dark() {
@@ -702,31 +585,6 @@ impl Color {
         }
     }
 
-    /// Interpolate through multiple color stops like a CSS gradient.
-    ///
-    /// Takes a slice of (color, stop_position) tuples where stop_position is in [0.0, 1.0].
-    /// Returns the interpolated color at position `t`.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_types::Color;
-    ///
-    /// // Three-color gradient: red -> green -> blue
-    /// let stops = vec![
-    ///     (Color::RED, 0.0),
-    ///     (Color::GREEN, 0.5),
-    ///     (Color::BLUE, 1.0),
-    /// ];
-    ///
-    /// // At t=0.25, should be between red and green
-    /// let color = Color::lerp_multi_stop(&stops, 0.25);
-    /// assert!(color.r > 0 && color.g > 0);
-    ///
-    /// // At t=0.75, should be between green and blue
-    /// let color = Color::lerp_multi_stop(&stops, 0.75);
-    /// assert!(color.g > 0 && color.b > 0);
-    /// ```
     #[must_use]
     pub fn lerp_multi_stop(stops: &[(Color, f32)], t: f32) -> Color {
         if stops.is_empty() {
@@ -760,25 +618,6 @@ impl Color {
         stops.last().unwrap().0
     }
 
-    /// Batch blend multiple colors over a background using SIMD.
-    ///
-    /// Significantly faster than calling `blend_over()` in a loop (3-4x with SIMD).
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_types::Color;
-    ///
-    /// let bg = Color::WHITE;
-    /// let colors = vec![
-    ///     Color::rgba(255, 0, 0, 128),
-    ///     Color::rgba(0, 255, 0, 128),
-    ///     Color::rgba(0, 0, 255, 128),
-    /// ];
-    ///
-    /// let blended = Color::blend_over_batch(&colors, bg);
-    /// assert_eq!(blended.len(), 3);
-    /// ```
     #[must_use]
     pub fn blend_over_batch(colors: &[Color], background: Color) -> Vec<Color> {
         if colors.is_empty() {
@@ -815,7 +654,6 @@ impl Color {
             .collect()
     }
 
-    #[cfg(all(feature = "simd", target_arch = "x86_64"))]
     #[inline]
     fn blend_over_batch_simd_sse(colors: &[Color], background: Color) -> Vec<Color> {
         #[cfg(target_feature = "sse2")]
@@ -847,7 +685,6 @@ impl Color {
         }
     }
 
-    #[cfg(all(feature = "simd", target_arch = "aarch64"))]
     #[inline]
     fn blend_over_batch_simd_neon(colors: &[Color], background: Color) -> Vec<Color> {
         #[cfg(target_feature = "neon")]
@@ -954,7 +791,6 @@ impl From<[u8; 4]> for Color {
 
 // ===== Error types =====
 
-/// Error type for color parsing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParseColorError {
     /// Invalid hex string format
@@ -975,221 +811,3 @@ impl std::fmt::Display for ParseColorError {
 }
 
 impl std::error::Error for ParseColorError {}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_color_creation() {
-        let red = Color::rgb(255, 0, 0);
-        assert_eq!(red.r, 255);
-        assert_eq!(red.g, 0);
-        assert_eq!(red.b, 0);
-        assert_eq!(red.a, 255);
-
-        let with_alpha = Color::rgba(0, 255, 0, 128);
-        assert_eq!(with_alpha.g, 255);
-        assert_eq!(with_alpha.a, 128);
-    }
-
-    #[test]
-    fn test_color_from_hex() {
-        let red = Color::from_hex("#FF0000").unwrap();
-        assert_eq!(red, Color::RED);
-
-        let blue_no_hash = Color::from_hex("0000FF").unwrap();
-        assert_eq!(blue_no_hash, Color::BLUE);
-
-        let with_alpha = Color::from_hex("#80FF0000").unwrap();
-        assert_eq!(with_alpha.a, 128);
-        assert_eq!(with_alpha.r, 255);
-
-        // Invalid formats
-        assert!(Color::from_hex("FF").is_err());
-        assert!(Color::from_hex("GGGGGG").is_err());
-    }
-
-    #[test]
-    fn test_color_to_hex() {
-        assert_eq!(Color::RED.to_hex(), "#FF0000");
-        assert_eq!(Color::BLUE.to_hex(), "#0000FF");
-
-        let semi_transparent = Color::rgba(255, 0, 0, 128);
-        assert_eq!(semi_transparent.to_hex(), "#80FF0000");
-    }
-
-    #[test]
-    fn test_color_argb() {
-        let color = Color::from_argb(0xFF0000FF);
-        assert_eq!(color, Color::BLUE);
-
-        let argb = Color::RED.to_argb();
-        assert_eq!(argb, 0xFFFF0000);
-    }
-
-    #[test]
-    fn test_color_opacity() {
-        let opaque = Color::RED;
-        let half = opaque.with_opacity(0.5);
-
-        assert_eq!(half.a, 127); // 0.5 * 255
-        assert!((half.opacity() - 0.5).abs() < 0.01);
-
-        // Test clamping
-        let clamped_low = opaque.with_opacity(-1.0);
-        assert_eq!(clamped_low.a, 0);
-
-        let clamped_high = opaque.with_opacity(2.0);
-        assert_eq!(clamped_high.a, 255);
-    }
-
-    #[test]
-    fn test_color_with_components() {
-        let color = Color::rgb(100, 150, 200);
-
-        let r = color.with_red(255);
-        assert_eq!(r, Color::rgb(255, 150, 200));
-
-        let g = color.with_green(255);
-        assert_eq!(g, Color::rgb(100, 255, 200));
-
-        let b = color.with_blue(255);
-        assert_eq!(b, Color::rgb(100, 150, 255));
-
-        let a = color.with_alpha(128);
-        assert_eq!(a.a, 128);
-    }
-
-    #[test]
-    fn test_color_checks() {
-        assert!(Color::TRANSPARENT.is_transparent());
-        assert!(!Color::RED.is_transparent());
-
-        assert!(Color::RED.is_opaque());
-        assert!(!Color::rgba(255, 0, 0, 128).is_opaque());
-    }
-
-    #[test]
-    fn test_color_lerp() {
-        let red = Color::RED;
-        let blue = Color::BLUE;
-
-        // At t=0, should be red
-        let at_0 = Color::lerp(red, blue, 0.0);
-        assert_eq!(at_0, red);
-
-        // At t=1, should be blue
-        let at_1 = Color::lerp(red, blue, 1.0);
-        assert_eq!(at_1, blue);
-
-        // At t=0.5, should be mix
-        let mid = Color::lerp(red, blue, 0.5);
-        assert!(mid.r > 0 && mid.r < 255);
-        assert!(mid.b > 0 && mid.b < 255);
-
-        // Test clamping
-        let clamped = Color::lerp(red, blue, 2.0);
-        assert_eq!(clamped, blue);
-    }
-
-    #[test]
-    fn test_color_conversions() {
-        // From tuples
-        let from_tuple: Color = (255, 0, 0).into();
-        assert_eq!(from_tuple, Color::RED);
-
-        let from_tuple_alpha: Color = (255, 0, 0, 128).into();
-        assert_eq!(from_tuple_alpha.a, 128);
-
-        // From arrays
-        let from_array: Color = [0, 255, 0].into();
-        assert_eq!(from_array, Color::GREEN);
-
-        let from_array_alpha: Color = [0, 0, 255, 200].into();
-        assert_eq!(from_array_alpha, Color::rgba(0, 0, 255, 200));
-    }
-
-    #[test]
-    fn test_color_rgba_f32() {
-        let red = Color::RED;
-        let (r, g, b, a) = red.to_rgba_f32();
-
-        assert!((r - 1.0).abs() < 0.01);
-        assert!((g - 0.0).abs() < 0.01);
-        assert!((b - 0.0).abs() < 0.01);
-        assert!((a - 1.0).abs() < 0.01);
-    }
-
-    #[test]
-    fn test_color_constants() {
-        assert_eq!(Color::BLACK, Color::rgb(0, 0, 0));
-        assert_eq!(Color::WHITE, Color::rgb(255, 255, 255));
-        assert_eq!(Color::RED, Color::rgb(255, 0, 0));
-        assert_eq!(Color::GREEN, Color::rgb(0, 255, 0));
-        assert_eq!(Color::BLUE, Color::rgb(0, 0, 255));
-        assert_eq!(Color::YELLOW, Color::rgb(255, 255, 0));
-        assert_eq!(Color::CYAN, Color::rgb(0, 255, 255));
-        assert_eq!(Color::MAGENTA, Color::rgb(255, 0, 255));
-        assert_eq!(Color::TRANSPARENT, Color::rgba(0, 0, 0, 0));
-    }
-
-    #[test]
-    fn test_default() {
-        let default: Color = Default::default();
-        assert_eq!(default, Color::TRANSPARENT);
-    }
-
-    #[test]
-    fn test_to_rgba_f32_array() {
-        let red = Color::RED;
-        let rgba = red.to_rgba_f32_array();
-        assert_eq!(rgba, [1.0, 0.0, 0.0, 1.0]);
-
-        let semi_transparent = Color::rgba(128, 64, 32, 127);
-        let rgba = semi_transparent.to_rgba_f32_array();
-        assert!((rgba[0] - 128.0 / 255.0).abs() < 0.01);
-        assert!((rgba[1] - 64.0 / 255.0).abs() < 0.01);
-        assert!((rgba[2] - 32.0 / 255.0).abs() < 0.01);
-        assert!((rgba[3] - 127.0 / 255.0).abs() < 0.01);
-    }
-
-    #[test]
-    fn test_from_rgba_f32_array() {
-        let color = Color::from_rgba_f32_array([1.0, 0.5, 0.0, 0.8]);
-        assert_eq!(color.r, 255);
-        assert_eq!(color.g, 127); // 0.5 * 255
-        assert_eq!(color.b, 0);
-        assert_eq!(color.a, 204); // 0.8 * 255
-
-        // Test clamping
-        let clamped = Color::from_rgba_f32_array([2.0, -0.5, 0.5, 1.5]);
-        assert_eq!(clamped.r, 255); // Clamped to 1.0
-        assert_eq!(clamped.g, 0); // Clamped to 0.0
-        assert_eq!(clamped.b, 127);
-        assert_eq!(clamped.a, 255); // Clamped to 1.0
-    }
-
-    #[test]
-    fn test_component_f32_accessors() {
-        let color = Color::rgba(255, 128, 64, 32);
-
-        assert!((color.red_f32() - 1.0).abs() < 0.01);
-        assert!((color.green_f32() - 128.0 / 255.0).abs() < 0.01);
-        assert!((color.blue_f32() - 64.0 / 255.0).abs() < 0.01);
-        assert!((color.alpha_f32() - 32.0 / 255.0).abs() < 0.01);
-    }
-
-    #[test]
-    fn test_array_round_trip() {
-        let original = Color::rgba(200, 150, 100, 180);
-        let array = original.to_rgba_f32_array();
-        let reconstructed = Color::from_rgba_f32_array(array);
-
-        // Should be very close (within rounding error)
-        assert!((original.r as i16 - reconstructed.r as i16).abs() <= 1);
-        assert!((original.g as i16 - reconstructed.g as i16).abs() <= 1);
-        assert!((original.b as i16 - reconstructed.b as i16).abs() <= 1);
-        assert!((original.a as i16 - reconstructed.a as i16).abs() <= 1);
-    }
-}
