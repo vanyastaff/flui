@@ -1132,7 +1132,7 @@ mod typed_tests {
 
     #[test]
     fn test_offset_utility_traits() {
-        use crate::geometry::{Axis, Along, Half, IsZero};
+        use crate::geometry::{Axis, Along, Half};
 
         // Test Along trait
         let o = Offset::<Pixels>::new(px(10.0), px(20.0));

@@ -1311,7 +1311,7 @@ mod typed_tests {
 
     #[test]
     fn test_vec2_utility_traits() {
-        use crate::geometry::{Axis, Along, Half, IsZero, Double, ApproxEq, Sign};
+        use crate::geometry::{Axis, Along, Half, Double, ApproxEq, Sign};
 
         // Test Along trait
         let v = Vec2::<Pixels>::new(px(10.0), px(20.0));

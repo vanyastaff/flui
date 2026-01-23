@@ -1241,7 +1241,7 @@ mod typed_tests {
 
     #[test]
     fn test_size_utility_traits() {
-        use crate::geometry::{Axis, Along, Half, IsZero, Double, ApproxEq};
+        use crate::geometry::{Axis, Along, Half, Double, ApproxEq};
 
         // Test Along trait
         let s = Size::<Pixels>::new(px(100.0), px(200.0));
