@@ -44,11 +44,13 @@
 // CORE MODULES
 // ============================================================================
 
+mod atlas;
 mod backend;
 #[allow(dead_code)]
 mod buffer_pool;
 mod buffers;
 mod commands;
+mod compositor;
 #[cfg(debug_assertions)]
 mod debug;
 #[allow(dead_code)]
@@ -69,6 +71,7 @@ mod scene;
 mod shader_compiler;
 mod tessellator;
 mod text;
+mod text_renderer;
 pub mod texture_cache;
 mod texture_pool;
 mod vertex;
@@ -124,3 +127,13 @@ pub use buffers::{BufferManager, DynamicBuffer};
 
 // Pipeline management
 pub use pipelines::{PipelineBuilder, PipelineCache};
+
+// Texture atlas
+pub use atlas::{AtlasEntry, AtlasRect, TextureAtlas};
+
+// Compositor
+pub use compositor::{Compositor, RenderContext, TransformStack};
+
+// Text rendering (feature-gated)
+#[cfg(feature = "wgpu-backend")]
+pub use text_renderer::{TextRenderingSystem, TextRun};
