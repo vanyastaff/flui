@@ -467,7 +467,7 @@ impl TextPainter {
         let paint_offset = self.compute_paint_offset(width, max_width);
 
         let metrics = LayoutMetrics {
-            size: Size::new(width, layout_result.height),
+            size: Size::new(Pixels(width), Pixels(layout_result.height)),
             alphabetic_baseline: layout_result.alphabetic_baseline,
             ideographic_baseline,
             did_exceed_max_lines,
@@ -501,7 +501,7 @@ impl TextPainter {
             },
         };
 
-        Offset::new(dx, 0.0)
+        Offset::new(Pixels(dx), Pixels(0.0))
     }
 
     // ===== Metrics =====
@@ -526,7 +526,7 @@ impl TextPainter {
     /// Panics if [`layout`](Self::layout) has not been called.
     #[must_use]
     pub fn width(&self) -> f32 {
-        self.size().width
+        self.size().width.0
     }
 
     /// Returns the computed height after layout.
@@ -536,7 +536,7 @@ impl TextPainter {
     /// Panics if [`layout`](Self::layout) has not been called.
     #[must_use]
     pub fn height(&self) -> f32 {
-        self.size().height
+        self.size().height.0
     }
 
     /// Returns the distance from the top to the alphabetic baseline.
@@ -600,7 +600,7 @@ impl TextPainter {
 
         let offset = cache.layout.get_offset_for_caret(position);
         let combined = offset + cache.paint_offset;
-        combined.map(Pixels)
+        combined
     }
 
     /// Returns the text position for a screen offset.
@@ -629,9 +629,8 @@ impl TextPainter {
             .as_ref()
             .expect("layout() must be called before get_position_for_offset()");
 
-        // Convert to f32 and adjust for paint offset
-        let offset_f32 = offset.map(|p| p.0);
-        let adjusted = offset_f32 - cache.paint_offset;
+        // Adjust for paint offset
+        let adjusted = offset - cache.paint_offset;
         cache.layout.get_position_for_offset(adjusted)
     }
 

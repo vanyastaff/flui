@@ -304,7 +304,7 @@ impl ShaderWarmUp for DefaultShaderWarmUp {
         ));
         canvas.draw_circle(
             flui_types::Offset::new(size.width.half(), size.height.half()),
-            px(30.0),
+            30.0,
         );
     }
 }

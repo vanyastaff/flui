@@ -1650,7 +1650,7 @@ impl DrawCommand {
             } => {
                 // Account for stroke width if stroking
                 let outset = paint.effective_stroke_width() * 0.5;
-                let local_bounds = rect.expand(outset);
+                let local_bounds = rect.expand(Pixels(outset));
                 Some(transform.transform_rect(&local_bounds))
             }
             DrawCommand::DrawRRect {
@@ -1659,7 +1659,7 @@ impl DrawCommand {
                 transform,
             } => {
                 let outset = paint.effective_stroke_width() * 0.5;
-                let local_bounds = rrect.bounding_rect().expand(outset);
+                let local_bounds = rrect.bounding_rect().expand(Pixels(outset));
                 Some(transform.transform_rect(&local_bounds))
             }
             DrawCommand::DrawCircle {
@@ -1681,7 +1681,7 @@ impl DrawCommand {
                 transform,
             } => {
                 let outset = paint.effective_stroke_width() * 0.5;
-                let local_bounds = rect.expand(outset);
+                let local_bounds = rect.expand(Pixels(outset));
                 Some(transform.transform_rect(&local_bounds))
             }
             DrawCommand::DrawImage { dst, transform, .. } => Some(transform.transform_rect(dst)),
@@ -1707,7 +1707,7 @@ impl DrawCommand {
                 let min_y = p1.y.0.min(p2.y.0) - stroke_half;
                 let max_x = p1.x.0.max(p2.x.0) + stroke_half;
                 let max_y = p1.y.0.max(p2.y.0) + stroke_half;
-                let local_bounds = Rect::from_ltrb(min_x, min_y, max_x, max_y);
+                let local_bounds = Rect::from_ltrb(Pixels(min_x), Pixels(min_y), Pixels(max_x), Pixels(max_y));
                 Some(transform.transform_rect(&local_bounds))
             }
             DrawCommand::DrawPath {
@@ -1717,7 +1717,7 @@ impl DrawCommand {
             } => {
                 // Use compute_bounds() which works with &self
                 let outset = paint.effective_stroke_width() * 0.5;
-                let local_bounds = path.compute_bounds().expand(outset);
+                let local_bounds = path.compute_bounds().expand(Pixels(outset));
                 Some(transform.transform_rect(&local_bounds))
             }
             DrawCommand::DrawShadow {
@@ -1727,7 +1727,7 @@ impl DrawCommand {
                 ..
             } => {
                 // Shadow extends beyond path by elevation amount
-                let local_bounds = path.compute_bounds().expand(*elevation);
+                let local_bounds = path.compute_bounds().expand(Pixels(*elevation));
                 Some(transform.transform_rect(&local_bounds))
             }
             DrawCommand::DrawArc {
@@ -1737,7 +1737,7 @@ impl DrawCommand {
                 ..
             } => {
                 let outset = paint.effective_stroke_width() * 0.5;
-                let local_bounds = rect.expand(outset);
+                let local_bounds = rect.expand(Pixels(outset));
                 Some(transform.transform_rect(&local_bounds))
             }
             DrawCommand::DrawDRRect {
@@ -1747,7 +1747,7 @@ impl DrawCommand {
                 ..
             } => {
                 let outset = paint.effective_stroke_width() * 0.5;
-                let local_bounds = outer.bounding_rect().expand(outset);
+                let local_bounds = outer.bounding_rect().expand(Pixels(outset));
                 Some(transform.transform_rect(&local_bounds))
             }
             DrawCommand::DrawPoints {
@@ -1773,10 +1773,10 @@ impl DrawCommand {
                 }
 
                 let local_bounds = Rect::from_ltrb(
-                    min_x - stroke_half,
-                    min_y - stroke_half,
-                    max_x + stroke_half,
-                    max_y + stroke_half,
+                    min_x - Pixels(stroke_half),
+                    min_y - Pixels(stroke_half),
+                    max_x + Pixels(stroke_half),
+                    max_y + Pixels(stroke_half),
                 );
                 Some(transform.transform_rect(&local_bounds))
             }

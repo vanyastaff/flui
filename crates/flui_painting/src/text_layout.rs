@@ -294,7 +294,7 @@ mod inner {
                     }
                 }
 
-                Offset::new(x, y)
+                Offset::new(Pixels(x), Pixels(y))
             } else {
                 // Fallback for empty buffer or invalid position
                 Offset::ZERO
@@ -305,8 +305,8 @@ mod inner {
         ///
         /// This is used for hit testing (e.g., mouse clicks).
         pub fn get_position_for_offset(&self, offset: Offset<Pixels>) -> TextPosition {
-            let x = offset.dx;
-            let y = offset.dy;
+            let x = offset.dx.0;
+            let y = offset.dy.0;
 
             // Find the line at y
             let mut target_line: Option<usize> = None;
@@ -519,10 +519,10 @@ mod inner {
 
                 if let Some(start_x) = line_start_x {
                     let rect = Rect::from_ltrb(
-                        start_x,
-                        run.line_top,
-                        line_end_x,
-                        run.line_top + run.line_height,
+                        Pixels(start_x),
+                        Pixels(run.line_top),
+                        Pixels(line_end_x),
+                        Pixels(run.line_top + run.line_height),
                     );
                     boxes.push(TextBox::new(rect, self.direction));
                 }

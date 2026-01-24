@@ -2385,7 +2385,7 @@ impl Canvas {
     #[inline]
     pub fn draw_circle_if(&mut self, condition: bool, center: Point<Pixels>, radius: f32, paint: &Paint) {
         if condition {
-            self.draw_circle(center.map(Pixels), radius, paint);
+            self.draw_circle(center, radius, paint);
         }
     }
 
@@ -2610,29 +2610,29 @@ impl Canvas {
     /// ```rust,ignore
     /// canvas.debug_grid(bounds, 50.0, Color::from_rgba(128, 128, 128, 64));
     /// ```
-    pub fn debug_grid(&mut self, bounds: Rect, spacing: f32, color: Color) {
+    pub fn debug_grid(&mut self, bounds: Rect<Pixels>, spacing: f32, color: Color) {
         let paint = Paint::stroke(color, 0.5);
 
         // Vertical lines
         let mut x = bounds.left();
         while x <= bounds.right() {
             self.draw_line(
-                Point::new(Pixels(x), Pixels(bounds.top())),
-                Point::new(Pixels(x), Pixels(bounds.bottom())),
+                Point::new(x, bounds.top()),
+                Point::new(x, bounds.bottom()),
                 &paint,
             );
-            x += spacing;
+            x += Pixels(spacing);
         }
 
         // Horizontal lines
         let mut y = bounds.top();
         while y <= bounds.bottom() {
             self.draw_line(
-                Point::new(Pixels(bounds.left()), Pixels(y)),
-                Point::new(Pixels(bounds.right()), Pixels(y)),
+                Point::new(bounds.left(), y),
+                Point::new(bounds.right(), y),
                 &paint,
             );
-            y += spacing;
+            y += Pixels(spacing);
         }
     }
 
@@ -2648,8 +2648,8 @@ impl Canvas {
     /// canvas.draw_rounded_rect(rect, 10.0, &paint);
     /// ```
     #[inline]
-    pub fn draw_rounded_rect(&mut self, rect: Rect, radius: f32, paint: &Paint) {
-        let rrect = RRect::from_rect_circular(rect, radius);
+    pub fn draw_rounded_rect(&mut self, rect: Rect<Pixels>, radius: f32, paint: &Paint) {
+        let rrect = RRect::from_rect_circular(rect, px(radius));
         self.draw_rrect(rrect, paint);
     }
 
@@ -2673,10 +2673,10 @@ impl Canvas {
         use flui_types::geometry::Radius;
         let rrect = RRect::from_rect_and_corners(
             rect,
-            Radius::circular(top_left),
-            Radius::circular(top_right),
-            Radius::circular(bottom_right),
-            Radius::circular(bottom_left),
+            Radius::circular(px(top_left)),
+            Radius::circular(px(top_right)),
+            Radius::circular(px(bottom_right)),
+            Radius::circular(px(bottom_left)),
         );
         self.draw_rrect(rrect, paint);
     }
@@ -2691,8 +2691,8 @@ impl Canvas {
     /// canvas.draw_pill(Rect::from_xywh(0.0, 0.0, 100.0, 40.0), &paint);
     /// ```
     #[inline]
-    pub fn draw_pill(&mut self, rect: Rect, paint: &Paint) {
-        let radius = rect.width().min(rect.height()) / 2.0;
+    pub fn draw_pill(&mut self, rect: Rect<Pixels>, paint: &Paint) {
+        let radius = rect.width().min(rect.height()).0 / 2.0;
         self.draw_rounded_rect(rect, radius, paint);
     }
 
@@ -2721,16 +2721,16 @@ impl Canvas {
         let outer = RRect::from_rect_circular(
             Rect::from_center_size(
                 center,
-                flui_types::geometry::Size::new(outer_radius * 2.0, outer_radius * 2.0),
+                flui_types::geometry::Size::new(px(outer_radius * 2.0), px(outer_radius * 2.0)),
             ),
-            outer_radius,
+            px(outer_radius),
         );
         let inner = RRect::from_rect_circular(
             Rect::from_center_size(
                 center,
-                flui_types::geometry::Size::new(inner_radius * 2.0, inner_radius * 2.0),
+                flui_types::geometry::Size::new(px(inner_radius * 2.0), px(inner_radius * 2.0)),
             ),
-            inner_radius,
+            px(inner_radius),
         );
         self.draw_drrect(outer, inner, paint);
     }
@@ -2852,14 +2852,14 @@ impl Canvas {
     /// Draws a circle and returns self for chaining.
     #[inline]
     pub fn circle(&mut self, center: Point<Pixels>, radius: f32, paint: &Paint) -> &mut Self {
-        self.draw_circle(center.map(Pixels), radius, paint);
+        self.draw_circle(center, radius, paint);
         self
     }
 
     /// Draws a line and returns self for chaining.
     #[inline]
     pub fn line(&mut self, p1: Point<Pixels>, p2: Point<Pixels>, paint: &Paint) -> &mut Self {
-        self.draw_line(p1.map(Pixels), p2.map(Pixels), paint);
+        self.draw_line(p1, p2, paint);
         self
     }
 
