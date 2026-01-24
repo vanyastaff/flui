@@ -129,6 +129,35 @@ impl Scene {
         batches
     }
 
+    /// Group primitives with layer context (transform, opacity, blend mode)
+    ///
+    /// This advanced batching method preserves layer context for GPU rendering.
+    /// Each batch includes the layer's transform matrix and blend state.
+    ///
+    /// # Returns
+    ///
+    /// Vector of batches with layer context included.
+    #[must_use]
+    pub fn batch_with_context(&self) -> Vec<LayerBatch> {
+        let mut batches = Vec::new();
+
+        for layer in &self.layers {
+            let primitive_batches = Self::batch_layer_primitives(&layer.primitives);
+
+            for prim_batch in primitive_batches {
+                batches.push(LayerBatch {
+                    primitives: prim_batch,
+                    transform: layer.transform,
+                    opacity: layer.opacity,
+                    blend_mode: layer.blend_mode,
+                    clip: layer.clip,
+                });
+            }
+        }
+
+        batches
+    }
+
     /// Batch primitives within a single layer
     fn batch_layer_primitives(primitives: &[Primitive]) -> Vec<PrimitiveBatch> {
         let mut batches: Vec<PrimitiveBatch> = Vec::new();
@@ -767,6 +796,48 @@ pub enum LineJoin {
     Bevel,
 }
 
+/// Batch with layer context (transform, opacity, blend mode)
+///
+/// This batch type includes layer-level rendering context, allowing
+/// the GPU to apply transforms and effects to the entire batch.
+#[derive(Clone, Debug)]
+pub struct LayerBatch {
+    /// Primitive batch
+    pub primitives: PrimitiveBatch,
+
+    /// Layer transform matrix
+    pub transform: glam::Mat4,
+
+    /// Layer opacity (0.0 - 1.0)
+    pub opacity: f32,
+
+    /// Layer blend mode
+    pub blend_mode: BlendMode,
+
+    /// Layer clipping region
+    pub clip: Option<Rect<DevicePixels>>,
+}
+
+impl LayerBatch {
+    /// Check if this batch has identity transform
+    #[must_use]
+    pub fn has_identity_transform(&self) -> bool {
+        self.transform == glam::Mat4::IDENTITY
+    }
+
+    /// Check if this batch is fully opaque
+    #[must_use]
+    pub fn is_opaque(&self) -> bool {
+        self.opacity >= 1.0
+    }
+
+    /// Check if this batch has clipping
+    #[must_use]
+    pub fn has_clip(&self) -> bool {
+        self.clip.is_some()
+    }
+}
+
 /// Batch of similar primitives for efficient rendering
 ///
 /// Batches group primitives that can be rendered with a single draw call.
@@ -842,6 +913,86 @@ pub enum BlendMode {
     Difference,
     /// Exclusion
     Exclusion,
+}
+
+impl BlendMode {
+    /// Convert to wgpu blend state
+    ///
+    /// Maps FLUI blend modes to wgpu's BlendState configuration.
+    /// Note: Some advanced blend modes require custom shaders.
+    #[must_use]
+    #[cfg(feature = "wgpu-backend")]
+    pub fn to_wgpu_blend(&self) -> wgpu::BlendState {
+        use wgpu::{BlendComponent, BlendFactor, BlendOperation, BlendState};
+
+        match self {
+            BlendMode::Normal => BlendState::ALPHA_BLENDING,
+
+            BlendMode::Multiply => BlendState {
+                color: BlendComponent {
+                    src_factor: BlendFactor::Dst,
+                    dst_factor: BlendFactor::Zero,
+                    operation: BlendOperation::Add,
+                },
+                alpha: BlendComponent::OVER,
+            },
+
+            BlendMode::Screen => BlendState {
+                color: BlendComponent {
+                    src_factor: BlendFactor::One,
+                    dst_factor: BlendFactor::OneMinusSrc,
+                    operation: BlendOperation::Add,
+                },
+                alpha: BlendComponent::OVER,
+            },
+
+            // Advanced blend modes require shader-based implementation
+            BlendMode::Overlay
+            | BlendMode::ColorDodge
+            | BlendMode::ColorBurn
+            | BlendMode::HardLight
+            | BlendMode::SoftLight
+            | BlendMode::Difference
+            | BlendMode::Exclusion => {
+                // Fall back to normal blending
+                // TODO: Implement via custom fragment shader
+                BlendState::ALPHA_BLENDING
+            }
+
+            BlendMode::Darken => BlendState {
+                color: BlendComponent {
+                    src_factor: BlendFactor::One,
+                    dst_factor: BlendFactor::One,
+                    operation: BlendOperation::Min,
+                },
+                alpha: BlendComponent::OVER,
+            },
+
+            BlendMode::Lighten => BlendState {
+                color: BlendComponent {
+                    src_factor: BlendFactor::One,
+                    dst_factor: BlendFactor::One,
+                    operation: BlendOperation::Max,
+                },
+                alpha: BlendComponent::OVER,
+            },
+        }
+    }
+
+    /// Check if this blend mode requires custom shader implementation
+    #[must_use]
+    pub fn requires_shader(&self) -> bool {
+        matches!(
+            self,
+            BlendMode::Overlay
+                | BlendMode::ColorDodge
+                | BlendMode::ColorBurn
+                | BlendMode::HardLight
+                | BlendMode::SoftLight
+                | BlendMode::Difference
+                | BlendMode::Exclusion
+        )
+    }
 }
 
 #[cfg(test)]
@@ -1417,5 +1568,136 @@ mod tests {
 
         let cmd2 = PathCommand::LineTo(Point::new(px(30.0), px(40.0)));
         assert_eq!(cmd2.point().x, px(30.0));
+    }
+
+    // ========== Advanced Batching Tests ==========
+
+    #[test]
+    fn test_batch_with_context() {
+        let viewport = Size::new(px(800.0), px(600.0));
+        let scene = Scene::builder(viewport)
+            .push_layer()
+            .add_rect(Rect::new(px(0.0), px(0.0), px(100.0), px(100.0)), Color::RED)
+            .opacity(0.5)
+            .blend_mode(BlendMode::Multiply)
+            .finish()
+            .build();
+
+        let batches = scene.batch_with_context();
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].opacity, 0.5);
+        assert_eq!(batches[0].blend_mode, BlendMode::Multiply);
+    }
+
+    #[test]
+    fn test_layer_batch_identity_transform() {
+        let viewport = Size::new(px(800.0), px(600.0));
+        let scene = Scene::builder(viewport)
+            .push_layer()
+            .add_rect(Rect::new(px(0.0), px(0.0), px(100.0), px(100.0)), Color::RED)
+            .finish()
+            .build();
+
+        let batches = scene.batch_with_context();
+        assert!(batches[0].has_identity_transform());
+    }
+
+    #[test]
+    fn test_layer_batch_with_transform() {
+        let viewport = Size::new(px(800.0), px(600.0));
+        let transform = glam::Mat4::from_translation(glam::Vec3::new(50.0, 50.0, 0.0));
+
+        let scene = Scene::builder(viewport)
+            .push_layer()
+            .add_rect(Rect::new(px(0.0), px(0.0), px(100.0), px(100.0)), Color::RED)
+            .transform(transform)
+            .finish()
+            .build();
+
+        let batches = scene.batch_with_context();
+        assert!(!batches[0].has_identity_transform());
+        assert_eq!(batches[0].transform, transform);
+    }
+
+    #[test]
+    fn test_layer_batch_opacity_check() {
+        let viewport = Size::new(px(800.0), px(600.0));
+
+        let scene1 = Scene::builder(viewport)
+            .push_layer()
+            .add_rect(Rect::new(px(0.0), px(0.0), px(100.0), px(100.0)), Color::RED)
+            .opacity(1.0)
+            .finish()
+            .build();
+
+        let batches1 = scene1.batch_with_context();
+        assert!(batches1[0].is_opaque());
+
+        let scene2 = Scene::builder(viewport)
+            .push_layer()
+            .add_rect(Rect::new(px(0.0), px(0.0), px(100.0), px(100.0)), Color::RED)
+            .opacity(0.5)
+            .finish()
+            .build();
+
+        let batches2 = scene2.batch_with_context();
+        assert!(!batches2[0].is_opaque());
+    }
+
+    #[test]
+    fn test_layer_batch_clipping() {
+        let viewport = Size::new(px(800.0), px(600.0));
+        let clip = Rect::new(px(0.0), px(0.0), px(200.0), px(200.0));
+
+        let scene = Scene::builder(viewport)
+            .push_layer()
+            .add_rect(Rect::new(px(0.0), px(0.0), px(100.0), px(100.0)), Color::RED)
+            .clip(clip)
+            .finish()
+            .build();
+
+        let batches = scene.batch_with_context();
+        assert!(batches[0].has_clip());
+        assert_eq!(batches[0].clip, Some(clip));
+    }
+
+    // ========== BlendMode Tests ==========
+
+    #[test]
+    #[cfg(feature = "wgpu-backend")]
+    fn test_blend_mode_to_wgpu_normal() {
+        let blend = BlendMode::Normal.to_wgpu_blend();
+        assert_eq!(blend, wgpu::BlendState::ALPHA_BLENDING);
+    }
+
+    #[test]
+    #[cfg(feature = "wgpu-backend")]
+    fn test_blend_mode_to_wgpu_multiply() {
+        let blend = BlendMode::Multiply.to_wgpu_blend();
+        assert_eq!(blend.color.src_factor, wgpu::BlendFactor::Dst);
+    }
+
+    #[test]
+    #[cfg(feature = "wgpu-backend")]
+    fn test_blend_mode_to_wgpu_screen() {
+        let blend = BlendMode::Screen.to_wgpu_blend();
+        assert_eq!(blend.color.src_factor, wgpu::BlendFactor::One);
+        assert_eq!(blend.color.dst_factor, wgpu::BlendFactor::OneMinusSrc);
+    }
+
+    #[test]
+    fn test_blend_mode_requires_shader() {
+        assert!(!BlendMode::Normal.requires_shader());
+        assert!(!BlendMode::Multiply.requires_shader());
+        assert!(!BlendMode::Screen.requires_shader());
+        assert!(BlendMode::Overlay.requires_shader());
+        assert!(BlendMode::ColorDodge.requires_shader());
+        assert!(BlendMode::HardLight.requires_shader());
+    }
+
+    #[test]
+    fn test_blend_mode_default() {
+        let mode: BlendMode = Default::default();
+        assert_eq!(mode, BlendMode::Normal);
     }
 }
