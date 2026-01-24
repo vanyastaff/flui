@@ -53,6 +53,8 @@ mod commands;
 mod compositor;
 #[cfg(debug_assertions)]
 mod debug;
+#[cfg(test)]
+mod integration_tests;
 #[allow(dead_code)]
 mod effects;
 mod effects_pipeline;
