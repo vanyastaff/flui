@@ -41,12 +41,6 @@
 //! ```
 
 // ============================================================================
-// SHADERS
-// ============================================================================
-
-pub mod shaders;
-
-// ============================================================================
 // CORE MODULES
 // ============================================================================
 
@@ -106,7 +100,7 @@ pub use crate::traits::Painter;
 pub use painter::WgpuPainter;
 
 // Vertex types
-pub use vertex::Vertex;
+pub use vertex::{ImageInstance, PathVertex, RectInstance, RectVertex};
 
 // Tessellator
 pub use tessellator::Tessellator;
