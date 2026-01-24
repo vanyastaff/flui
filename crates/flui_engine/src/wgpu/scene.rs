@@ -1,1186 +1,1421 @@
-//! Scene Renderer - High-level GPU rendering for Scene objects
+//! Scene Graph - Immutable rendering primitives
 //!
-//! Manages all wgpu resources and provides a clean interface for rendering
-//! Scene objects from flui-layer.
+//! This module provides an immutable scene graph architecture inspired by GPUI.
+//! Scenes are built once via `SceneBuilder` and can be cached, diffed, and replayed.
 //!
 //! # Architecture
 //!
 //! ```text
-//! Scene (flui-layer)
-//!     │
-//!     ▼
-//! SceneRenderer
-//!     ├─ wgpu::Surface
-//!     ├─ wgpu::Device
-//!     ├─ wgpu::Queue
-//!     └─ Painter (WgpuPainter)
+//! Scene (immutable)
+//!   ├─ layers: Vec<Layer>
+//!   ├─ viewport: Size<DevicePixels>
+//!   └─ clear_color: Color
+//!
+//! Layer (immutable)
+//!   ├─ primitives: Vec<Primitive>
+//!   ├─ transform: Matrix4
+//!   ├─ opacity: f32
+//!   ├─ blend_mode: BlendMode
+//!   └─ clip: Option<Rect>
+//!
+//! Primitive (enum)
+//!   ├─ Rect { rect, color, border_radius }
+//!   ├─ Text { text, position, style, color }
+//!   ├─ Path { path, fill, stroke }
+//!   ├─ Image { image, rect, source_rect }
+//!   ├─ Underline { start, end, thickness, color }
+//!   └─ Shadow { primitive, offset, blur, color }
+//! ```
+//!
+//! # Example
+//!
+//! ```rust,ignore
+//! use flui_engine::wgpu::scene::{Scene, SceneBuilder};
+//! use flui_types::{Size, Point, Color};
+//!
+//! let viewport = Size::new(800.0, 600.0);
+//! let scene = Scene::builder(viewport)
+//!     .clear_color(Color::WHITE)
+//!     .push_layer()
+//!         .add_rect(Rect::new(10.0, 10.0, 100.0, 100.0), Color::RED)
+//!         .add_text("Hello".to_string(), Point::new(20.0, 20.0), TextStyle::default())
+//!         .opacity(0.8)
+//!     .finish_layer()
+//!     .build();
 //! ```
 
-use super::backend::Backend;
-use super::layer_render::LayerRender;
-use super::offscreen::OffscreenRenderer;
-use super::painter::WgpuPainter;
-use crate::error::RenderError;
-use flui_layer::{LayerId, LayerTree, Scene};
+use flui_types::{
+    geometry::{Point, Rect, Size},
+    styling::Color,
+    typography::TextStyle,
+    units::DevicePixels,
+};
 
-/// High-level GPU rendering abstraction
+/// Immutable scene graph
 ///
-/// Manages all wgpu resources (device, queue, surface, painter) and provides
-/// a clean interface for rendering without exposing low-level GPU details.
+/// A Scene represents a complete frame ready for rendering. It contains:
+/// - Layers (primitives grouped with transform/opacity/blend)
+/// - Viewport size (render target dimensions)
+/// - Clear color (background)
+///
+/// Scenes are built via `SceneBuilder` and are immutable after construction.
+/// This enables caching, diffing, and replay optimizations.
+#[derive(Clone, Debug)]
+pub struct Scene {
+    /// All layers in the scene (ordered front-to-back)
+    layers: Vec<Layer>,
+
+    /// Viewport size (in DevicePixels)
+    viewport: Size<DevicePixels>,
+
+    /// Global clear color
+    clear_color: Color,
+}
+
+impl Scene {
+    /// Create a new SceneBuilder
+    pub fn builder(viewport: Size<DevicePixels>) -> SceneBuilder {
+        SceneBuilder::new(viewport)
+    }
+
+    /// Get all layers in the scene
+    #[must_use]
+    pub fn layers(&self) -> &[Layer] {
+        &self.layers
+    }
+
+    /// Get viewport size
+    #[must_use]
+    pub fn viewport(&self) -> Size<DevicePixels> {
+        self.viewport
+    }
+
+    /// Get clear color
+    #[must_use]
+    pub fn clear_color(&self) -> Color {
+        self.clear_color
+    }
+
+    /// Check if scene is empty (no layers)
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.layers.is_empty()
+    }
+
+    /// Get total number of primitives across all layers
+    #[must_use]
+    pub fn primitive_count(&self) -> usize {
+        self.layers.iter().map(|layer| layer.primitives.len()).sum()
+    }
+
+    /// Group primitives into batches for efficient rendering
+    ///
+    /// Batching reduces draw calls by grouping similar primitives together.
+    /// Primitives are batched by type and texture (for images).
+    ///
+    /// # Returns
+    ///
+    /// Vector of batches, each containing primitives that can be rendered
+    /// with a single draw call.
+    #[must_use]
+    pub fn batch_primitives(&self) -> Vec<PrimitiveBatch> {
+        let mut batches = Vec::new();
+
+        for layer in &self.layers {
+            let layer_batches = Self::batch_layer_primitives(&layer.primitives);
+            batches.extend(layer_batches);
+        }
+
+        batches
+    }
+
+    /// Batch primitives within a single layer
+    fn batch_layer_primitives(primitives: &[Primitive]) -> Vec<PrimitiveBatch> {
+        let mut batches: Vec<PrimitiveBatch> = Vec::new();
+
+        for primitive in primitives {
+            let prim_type = primitive.primitive_type();
+
+            // Special handling for Image primitives (batch by texture)
+            if let Primitive::Image { image_id, .. } = primitive {
+                if let Some(batch) = batches.iter_mut().find(|b| {
+                    b.primitive_type == PrimitiveType::Image && b.texture_id == Some(*image_id)
+                }) {
+                    batch.primitives.push(primitive.clone());
+                    continue;
+                }
+
+                // Create new image batch
+                batches.push(PrimitiveBatch {
+                    primitive_type: PrimitiveType::Image,
+                    primitives: vec![primitive.clone()],
+                    texture_id: Some(*image_id),
+                });
+                continue;
+            }
+
+            // Try to batch with previous batch of same type
+            if let Some(last_batch) = batches.last_mut() {
+                if last_batch.primitive_type == prim_type && last_batch.texture_id.is_none() {
+                    last_batch.primitives.push(primitive.clone());
+                    continue;
+                }
+            }
+
+            // Create new batch
+            batches.push(PrimitiveBatch {
+                primitive_type: prim_type,
+                primitives: vec![primitive.clone()],
+                texture_id: None,
+            });
+        }
+
+        batches
+    }
+}
+
+/// Builder for constructing immutable Scenes
+///
+/// Provides a fluent API for building scenes layer-by-layer.
 ///
 /// # Example
 ///
 /// ```rust,ignore
-/// use flui_engine::SceneRenderer;
-/// use std::sync::Arc;
-///
-/// // Create surface in app layer (flui_app)
-/// let instance = wgpu::Instance::default();
-/// let surface = instance.create_surface(window)?;
-/// let size = window.inner_size();
-///
-/// // Pass surface to engine (NO window reference!)
-/// let mut renderer = SceneRenderer::new(surface, size.width, size.height);
-///
-/// // Resize on window resize
-/// renderer.resize(1920, 1080);
-///
-/// // Render a layer
-/// let layer = /* your CanvasLayer */;
-/// renderer.render(&layer)?;
+/// let scene = SceneBuilder::new(viewport)
+///     .clear_color(Color::BLACK)
+///     .push_layer()
+///         .add_rect(rect1, Color::RED)
+///         .add_rect(rect2, Color::BLUE)
+///     .finish()
+///     .push_layer()
+///         .add_text(text, pos, style)
+///         .opacity(0.5)
+///     .finish()
+///     .build();
 /// ```
-#[allow(missing_debug_implementations)]
-pub struct SceneRenderer {
-    /// wgpu surface (render target)
-    surface: wgpu::Surface<'static>,
+pub struct SceneBuilder {
+    /// Completed layers
+    layers: Vec<Layer>,
 
-    /// wgpu device (GPU handle)
-    device: wgpu::Device,
+    /// Viewport size
+    viewport: Size<DevicePixels>,
 
-    /// wgpu queue (command submission)
-    queue: wgpu::Queue,
-
-    /// Surface configuration
-    config: wgpu::SurfaceConfiguration,
-
-    /// GPU painter (persistent, reused every frame)
-    /// Wrapped in Option to allow temporary ownership transfer without allocation
-    painter: Option<WgpuPainter>,
-
-    /// Offscreen renderer for shader masks
-    offscreen_renderer: Option<OffscreenRenderer>,
+    /// Clear color
+    clear_color: Color,
 }
 
-impl SceneRenderer {
-    /// Create a new GPU renderer with a window (async version, PREFERRED)
-    ///
-    /// This method creates the surface internally from the window, ensuring that
-    /// the surface is created from the same wgpu::Instance that SceneRenderer uses.
-    /// This avoids lifetime and instance mismatch issues.
-    ///
-    /// # Arguments
-    ///
-    /// * `window` - Window handle (`Arc<Window>` from winit)
-    /// * `width` - Initial surface width in pixels
-    /// * `height` - Initial surface height in pixels
-    ///
-    /// # Errors
-    ///
-    /// Returns `RenderError` if GPU initialization fails.
-    pub async fn with_window<W>(window: W, width: u32, height: u32) -> Result<Self, RenderError>
-    where
-        W: Into<wgpu::SurfaceTarget<'static>>,
-    {
-        let instance = Self::create_instance();
-
-        let surface = instance
-            .create_surface(window)
-            .map_err(RenderError::surface_creation)?;
-
-        Self::try_new_async_impl(instance, surface, width, height).await
-    }
-
-    /// Create wgpu instance with configured backends
-    ///
-    /// Backend selection is determined by cargo features:
-    /// - `vulkan` - Vulkan backend (Linux, Windows, Android)
-    /// - `metal` - Metal backend (macOS, iOS)
-    /// - `dx12` - DirectX 12 backend (Windows)
-    /// - `webgpu` - WebGPU backend (Web browsers)
-    /// - `gles` - OpenGL ES backend (fallback)
-    ///
-    /// If no specific backend feature is enabled, all available backends are used.
-    fn create_instance() -> wgpu::Instance {
-        let backends = Self::select_backends();
-        wgpu::Instance::new(&wgpu::InstanceDescriptor {
-            backends,
-            ..Default::default()
-        })
-    }
-
-    /// Select GPU backends based on enabled features
-    fn select_backends() -> wgpu::Backends {
-        #[allow(unused_mut)]
-        let mut backends = wgpu::Backends::empty();
-
-        #[cfg(feature = "vulkan")]
-        {
-            backends |= wgpu::Backends::VULKAN;
-        }
-
-        #[cfg(feature = "metal")]
-        {
-            backends |= wgpu::Backends::METAL;
-        }
-
-        #[cfg(feature = "dx12")]
-        {
-            backends |= wgpu::Backends::DX12;
-        }
-
-        #[cfg(feature = "webgpu")]
-        {
-            backends |= wgpu::Backends::BROWSER_WEBGPU;
-        }
-
-        #[cfg(feature = "gles")]
-        {
-            backends |= wgpu::Backends::GL;
-        }
-
-        // If no specific backend selected, use all available
-        if backends.is_empty() {
-            wgpu::Backends::all()
-        } else {
-            backends
-        }
-    }
-
-    /// Select GPU limits based on target platform
-    ///
-    /// - WebAssembly: WebGL2 compatible limits (most restrictive)
-    /// - Mobile (Android/iOS): Conservative mobile limits
-    /// - Desktop: Default limits (most permissive)
-    fn select_limits() -> wgpu::Limits {
-        #[cfg(target_arch = "wasm32")]
-        {
-            wgpu::Limits::downlevel_webgl2_defaults()
-        }
-
-        #[cfg(all(
-            any(target_os = "android", target_os = "ios"),
-            not(target_arch = "wasm32")
-        ))]
-        {
-            wgpu::Limits {
-                // Modern mobile GPUs (Adreno 6xx+, Mali G7x+, Apple A12+) support 8192x8192+
-                max_texture_dimension_2d: 8192,
-                max_texture_dimension_3d: 2048,
-                // Conservative buffer limits for broad compatibility
-                max_storage_buffers_per_shader_stage: 4,
-                max_uniform_buffer_binding_size: 16 << 10, // 16KB
-                max_storage_buffer_binding_size: 128 << 20, // 128MB
-                ..wgpu::Limits::default()
-            }
-        }
-
-        #[cfg(all(
-            not(target_arch = "wasm32"),
-            not(target_os = "android"),
-            not(target_os = "ios")
-        ))]
-        {
-            wgpu::Limits::default()
-        }
-    }
-
-    /// Create a new GPU renderer with an existing surface (async version for WASM)
-    ///
-    /// In WebAssembly, we can't use pollster::block_on because the browser's
-    /// event loop doesn't support blocking. Use this method instead.
-    ///
-    /// # Arguments
-    ///
-    /// * `surface` - Pre-created wgpu surface (created by app layer from window)
-    /// * `width` - Initial surface width in pixels
-    /// * `height` - Initial surface height in pixels
-    ///
-    /// # Panics
-    ///
-    /// Panics if GPU initialization fails (no adapter, device creation fails, etc.)
-    ///
-    /// # Note
-    ///
-    /// DEPRECATED for desktop/mobile - use `new_async_with_window` instead to avoid
-    /// instance mismatch issues. Only use this for WASM where surface lifetime is managed externally.
-    pub async fn new_async(surface: wgpu::Surface<'static>, width: u32, height: u32) -> Self {
-        let instance = Self::create_instance();
-        Self::new_async_impl(instance, surface, width, height).await
-    }
-
-    /// Internal implementation - creates renderer from instance and surface (fallible)
-    async fn try_new_async_impl(
-        instance: wgpu::Instance,
-        surface: wgpu::Surface<'static>,
-        width: u32,
-        height: u32,
-    ) -> Result<Self, RenderError> {
-        // Request adapter (async)
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::default(),
-                compatible_surface: Some(&surface),
-                force_fallback_adapter: false,
-            })
-            .await
-            .map_err(|_| RenderError::NoAdapter)?;
-
-        tracing::trace!(adapter_info = ?adapter.get_info(), "GPU Adapter initialized");
-        tracing::trace!(backend = ?adapter.get_info().backend, "GPU Backend");
-
-        // Request device and queue (async)
-        let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor {
-                required_features: wgpu::Features::empty(),
-                required_limits: Self::select_limits(),
-                label: Some("FLUI GPU Device"),
-                memory_hints: wgpu::MemoryHints::default(),
-                trace: Default::default(),
-            })
-            .await
-            .map_err(RenderError::device_creation)?;
-
-        // Configure surface
-        let config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format: surface.get_capabilities(&adapter).formats[0],
-            width,
-            height,
-            present_mode: wgpu::PresentMode::Fifo,
-            alpha_mode: wgpu::CompositeAlphaMode::Auto,
-            view_formats: vec![],
-            desired_maximum_frame_latency: 2,
-        };
-        surface.configure(&device, &config);
-
-        // Create GPU painter (persistent, created once)
-        let painter = WgpuPainter::new(
-            device.clone(),
-            queue.clone(),
-            config.format,
-            (config.width, config.height),
-        );
-
-        // Create offscreen renderer for shader masks
-        let mut offscreen_renderer = OffscreenRenderer::new(
-            std::sync::Arc::new(device.clone()),
-            std::sync::Arc::new(queue.clone()),
-            config.format,
-        );
-
-        // Pre-warm shader pipelines for better first-frame performance
-        offscreen_renderer.warmup();
-
-        tracing::trace!(
-            width = config.width,
-            height = config.height,
-            format = ?config.format,
-            "GPU renderer created with shader mask support"
-        );
-
-        Ok(Self {
-            surface,
-            device,
-            queue,
-            config,
-            painter: Some(painter),
-            offscreen_renderer: Some(offscreen_renderer),
-        })
-    }
-
-    /// Internal implementation - creates renderer from instance and surface (panicking)
-    async fn new_async_impl(
-        instance: wgpu::Instance,
-        surface: wgpu::Surface<'static>,
-        width: u32,
-        height: u32,
-    ) -> Self {
-        Self::try_new_async_impl(instance, surface, width, height)
-            .await
-            .expect("Failed to create GPU renderer")
-    }
-
-    /// Create a new GPU renderer with an existing surface
-    ///
-    /// Initializes all wgpu resources: instance, adapter, device, queue, and painter.
-    ///
-    /// # Arguments
-    ///
-    /// * `surface` - Pre-created wgpu surface (created by app layer from window)
-    /// * `width` - Initial surface width in pixels
-    /// * `height` - Initial surface height in pixels
-    ///
-    /// # Panics
-    ///
-    /// Panics if GPU initialization fails (no adapter, device creation fails, etc.)
-    ///
-    /// # Note
-    ///
-    /// On WebAssembly, use `new_async()` instead as this method uses `pollster::block_on`
-    /// which doesn't work in browser environments.
-    pub fn new(surface: wgpu::Surface<'static>, width: u32, height: u32) -> Self {
-        // Create wgpu instance
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-            #[cfg(target_os = "android")]
-            backends: wgpu::Backends::GL, // Use OpenGL ES on Android (Vulkan crashes on x86_64 emulator)
-            #[cfg(not(target_os = "android"))]
-            backends: wgpu::Backends::all(),
-            ..Default::default()
-        });
-
-        // Request adapter
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::default(),
-            compatible_surface: Some(&surface),
-            force_fallback_adapter: false,
-        }))
-        .expect("Failed to find suitable GPU adapter");
-
-        // Request device and queue
-        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            required_features: wgpu::Features::empty(),
-            required_limits: wgpu::Limits::default(),
-            label: Some("FLUI GPU Device"),
-            memory_hints: wgpu::MemoryHints::default(),
-            trace: Default::default(),
-        }))
-        .expect("Failed to create GPU device");
-
-        // Configure surface
-        let config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format: surface.get_capabilities(&adapter).formats[0],
-            width,
-            height,
-            present_mode: wgpu::PresentMode::Fifo,
-            alpha_mode: wgpu::CompositeAlphaMode::Auto,
-            view_formats: vec![],
-            desired_maximum_frame_latency: 2,
-        };
-        surface.configure(&device, &config);
-
-        // Create GPU painter (persistent, created once)
-        let painter = WgpuPainter::new(
-            device.clone(),
-            queue.clone(),
-            config.format,
-            (config.width, config.height),
-        );
-
-        // Create offscreen renderer for shader masks
-        let mut offscreen_renderer = OffscreenRenderer::new(
-            std::sync::Arc::new(device.clone()),
-            std::sync::Arc::new(queue.clone()),
-            config.format,
-        );
-
-        // Pre-warm shader pipelines for better first-frame performance
-        offscreen_renderer.warmup();
-
-        tracing::trace!(
-            width = config.width,
-            height = config.height,
-            format = ?config.format,
-            "GPU renderer created with shader mask support"
-        );
-
+impl SceneBuilder {
+    /// Create a new SceneBuilder with viewport size
+    #[must_use]
+    pub fn new(viewport: Size<DevicePixels>) -> Self {
         Self {
-            surface,
-            device,
-            queue,
-            config,
-            painter: Some(painter),
-            offscreen_renderer: Some(offscreen_renderer),
+            layers: Vec::new(),
+            viewport,
+            clear_color: Color::WHITE,
         }
     }
 
-    /// Resize the rendering surface
-    ///
-    /// Updates surface configuration and painter viewport.
-    /// Call this when the window is resized.
-    ///
-    /// # Arguments
-    ///
-    /// * `width` - New width in pixels
-    /// * `height` - New height in pixels
-    pub fn resize(&mut self, width: u32, height: u32) {
-        if width > 0 && height > 0 {
-            self.config.width = width;
-            self.config.height = height;
-            self.surface.configure(&self.device, &self.config);
+    /// Set clear color (background)
+    #[must_use]
+    pub fn clear_color(mut self, color: Color) -> Self {
+        self.clear_color = color;
+        self
+    }
 
-            if let Some(painter) = &mut self.painter {
-                painter.resize(width, height);
-            }
+    /// Start building a new layer
+    ///
+    /// Returns a LayerBuilder that must call `.finish()` to return to SceneBuilder.
+    #[must_use]
+    pub fn push_layer(self) -> LayerBuilder {
+        LayerBuilder::new(self)
+    }
 
-            tracing::trace!(width = width, height = height, "GPU renderer resized");
+    /// Add a pre-built layer directly
+    #[must_use]
+    pub fn add_layer(mut self, layer: Layer) -> Self {
+        self.layers.push(layer);
+        self
+    }
+
+    /// Build the final Scene
+    ///
+    /// Creates an immutable Scene from all added layers.
+    #[must_use]
+    pub fn build(self) -> Scene {
+        Scene {
+            layers: self.layers,
+            viewport: self.viewport,
+            clear_color: self.clear_color,
+        }
+    }
+}
+
+/// Immutable layer containing rendering primitives
+///
+/// A Layer groups primitives with shared properties:
+/// - Transform (translation, rotation, scale)
+/// - Opacity (alpha blending)
+/// - Blend mode (how layer composites with background)
+/// - Clipping region (optional)
+#[derive(Clone, Debug)]
+pub struct Layer {
+    /// Rendering primitives in this layer
+    primitives: Vec<Primitive>,
+
+    /// Transform matrix (applied to all primitives)
+    transform: glam::Mat4,
+
+    /// Layer opacity (0.0 = transparent, 1.0 = opaque)
+    opacity: f32,
+
+    /// Blend mode for compositing
+    blend_mode: BlendMode,
+
+    /// Optional clipping region
+    clip: Option<Rect<DevicePixels>>,
+}
+
+impl Layer {
+    /// Create a new LayerBuilder
+    #[must_use]
+    pub fn builder() -> LayerBuilderStandalone {
+        LayerBuilderStandalone::default()
+    }
+
+    /// Get primitives in this layer
+    #[must_use]
+    pub fn primitives(&self) -> &[Primitive] {
+        &self.primitives
+    }
+
+    /// Get transform matrix
+    #[must_use]
+    pub fn transform(&self) -> glam::Mat4 {
+        self.transform
+    }
+
+    /// Get opacity
+    #[must_use]
+    pub fn opacity(&self) -> f32 {
+        self.opacity
+    }
+
+    /// Get blend mode
+    #[must_use]
+    pub fn blend_mode(&self) -> BlendMode {
+        self.blend_mode
+    }
+
+    /// Get clipping region
+    #[must_use]
+    pub fn clip(&self) -> Option<Rect<DevicePixels>> {
+        self.clip
+    }
+
+    /// Check if layer is empty (no primitives)
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.primitives.is_empty()
+    }
+}
+
+/// Builder for constructing Layers (attached to SceneBuilder)
+pub struct LayerBuilder {
+    /// Parent scene builder (moved in, returned on finish)
+    scene_builder: Option<SceneBuilder>,
+
+    /// Primitives being added
+    primitives: Vec<Primitive>,
+
+    /// Transform matrix
+    transform: glam::Mat4,
+
+    /// Opacity
+    opacity: f32,
+
+    /// Blend mode
+    blend_mode: BlendMode,
+
+    /// Clipping region
+    clip: Option<Rect<DevicePixels>>,
+}
+
+impl LayerBuilder {
+    fn new(scene_builder: SceneBuilder) -> Self {
+        Self {
+            scene_builder: Some(scene_builder),
+            primitives: Vec::new(),
+            transform: glam::Mat4::IDENTITY,
+            opacity: 1.0,
+            blend_mode: BlendMode::Normal,
+            clip: None,
         }
     }
 
-    /// Render a layer to the surface
-    ///
-    /// Acquires the current frame, renders the layer using the painter,
-    /// and presents the result.
-    ///
-    /// # Arguments
-    ///
-    /// * `layer` - The layer to render
-    ///
-    /// # Returns
-    ///
-    /// `Ok(())` on success, or `RenderError` if rendering fails
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// match renderer.render(&layer) {
-    ///     Ok(()) => {},
-    ///     Err(RenderError::SurfaceLost) => {
-    ///         // Surface was lost, will recover next frame
-    ///     }
-    ///     Err(e) => {
-    ///         eprintln!("Render error: {:?}", e);
-    ///     }
-    /// }
-    /// ```
-    pub fn render(&mut self, layer: &flui_layer::Layer) -> Result<(), RenderError> {
-        use flui_layer::Layer;
-
-        // Dispatch to appropriate rendering method based on layer type
-        match layer {
-            // Leaf layers
-            Layer::Canvas(canvas_layer) => self.render_canvas_layer(canvas_layer),
-            Layer::Picture(picture_layer) => self.render_picture_layer(picture_layer),
-
-            // Clip layers - these modify the clip stack for children
-            Layer::ClipRect(_)
-            | Layer::ClipRRect(_)
-            | Layer::ClipPath(_)
-            | Layer::ClipSuperellipse(_) => {
-                // Clip layers don't render content themselves,
-                // they modify state for child rendering via LayerRender trait
-                Ok(())
-            }
-
-            // Transform layers - these modify the transform stack for children
-            Layer::Offset(_) | Layer::Transform(_) => {
-                // Transform layers don't render content themselves,
-                // they modify state for child rendering via LayerRender trait
-                Ok(())
-            }
-
-            // Effect layers
-            Layer::Opacity(_) | Layer::ColorFilter(_) | Layer::ImageFilter(_) => {
-                // Effect layers apply visual effects to children
-                // Currently handled via LayerRender trait during tree traversal
-                Ok(())
-            }
-            Layer::ShaderMask(shader_mask_layer) => {
-                self.render_shader_mask_layer(shader_mask_layer)
-            }
-            Layer::BackdropFilter(backdrop_filter_layer) => {
-                self.render_backdrop_filter_layer(backdrop_filter_layer)
-            }
-
-            // External content layers
-            Layer::Texture(_) | Layer::PlatformView(_) => {
-                // Texture and PlatformView layers are composited externally
-                // by the platform embedder, not by the GPU renderer directly
-                Ok(())
-            }
-
-            // Linking layers
-            Layer::Leader(_) | Layer::Follower(_) => {
-                // Linking layers handle coordinate transformations
-                // Actual transforms are calculated by the compositor
-                Ok(())
-            }
-
-            // Annotation layers
-            Layer::AnnotatedRegion(_) => {
-                // Annotation layers are metadata-only, no visual rendering
-                Ok(())
-            }
-
-            // Debug/Performance layers
-            Layer::PerformanceOverlay(_) => {
-                // PerformanceOverlayLayer is rendered via LayerRender trait
-                // in render_layer_tree's recursive traversal
-                Ok(())
-            }
-        }
+    /// Add a rectangle primitive
+    pub fn add_rect(mut self, rect: Rect<DevicePixels>, color: Color) -> Self {
+        self.primitives.push(Primitive::Rect {
+            rect,
+            color,
+            border_radius: 0.0,
+        });
+        self
     }
 
-    /// Render a Scene to the surface
-    ///
-    /// Traverses the layer tree depth-first and renders all layers.
-    ///
-    /// # Arguments
-    ///
-    /// * `scene` - The Scene containing LayerTree and root LayerId
-    ///
-    /// # Returns
-    ///
-    /// `Ok(())` on success, or `RenderError` if rendering fails
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// use flui_engine::{SceneRenderer, Scene};
-    /// use flui_layer::{LayerTree, SceneBuilder, CanvasLayer};
-    /// use flui_types::Size;
-    ///
-    /// // Build scene
-    /// let mut tree = LayerTree::new();
-    /// let mut builder = SceneBuilder::new(&mut tree);
-    /// builder.add_canvas(CanvasLayer::new());
-    /// let root = builder.finish();
-    /// let scene = Scene::new(Size::new(800.0, 600.0), tree, root, 0);
-    ///
-    /// // Render
-    /// renderer.render_scene(&scene)?;
-    /// ```
-    #[tracing::instrument(level = "trace", skip_all, err)]
-    pub fn render_scene(&mut self, scene: &Scene) -> Result<(), RenderError> {
-        if !scene.has_content() {
-            return Ok(());
-        }
-
-        let root_id = scene.root().expect("Scene has content but no root");
-        self.render_layer_tree(scene.layer_tree(), root_id)
+    /// Add a rounded rectangle primitive
+    pub fn add_rounded_rect(
+        mut self,
+        rect: Rect<DevicePixels>,
+        color: Color,
+        border_radius: f32,
+    ) -> Self {
+        self.primitives.push(Primitive::Rect {
+            rect,
+            color,
+            border_radius,
+        });
+        self
     }
 
-    /// Render a LayerTree starting from a root LayerId
-    ///
-    /// Traverses the tree depth-first, applying transforms and effects
-    /// from parent layers before rendering children.
-    #[tracing::instrument(level = "trace", skip_all, err)]
-    pub fn render_layer_tree(
-        &mut self,
-        tree: &LayerTree,
-        root_id: LayerId,
-    ) -> Result<(), RenderError> {
-        // Get current frame
-        let frame = {
-            let _span = tracing::trace_span!("acquire_frame").entered();
-            self.surface.get_current_texture().map_err(|e| match e {
-                wgpu::SurfaceError::Lost => {
-                    tracing::warn!("Surface lost, reconfiguring...");
-                    self.surface.configure(&self.device, &self.config);
-                    RenderError::SurfaceLost
-                }
-                wgpu::SurfaceError::Outdated => {
-                    tracing::warn!("Surface outdated, reconfiguring...");
-                    self.surface.configure(&self.device, &self.config);
-                    RenderError::SurfaceOutdated
-                }
-                wgpu::SurfaceError::OutOfMemory => {
-                    tracing::error!("Out of GPU memory!");
-                    RenderError::OutOfMemory
-                }
-                wgpu::SurfaceError::Timeout => {
-                    tracing::warn!("Surface timeout");
-                    RenderError::Timeout
-                }
-                wgpu::SurfaceError::Other => {
-                    tracing::error!("Unknown surface error occurred");
-                    RenderError::PainterError("Unknown surface error".to_string())
-                }
-            })?
+    /// Add a text primitive
+    pub fn add_text(
+        mut self,
+        text: String,
+        position: Point<DevicePixels>,
+        style: TextStyle,
+        color: Color,
+    ) -> Self {
+        self.primitives.push(Primitive::Text {
+            text,
+            position,
+            style,
+            color,
+        });
+        self
+    }
+
+    /// Add an underline primitive
+    pub fn add_underline(
+        mut self,
+        start: Point<DevicePixels>,
+        end: Point<DevicePixels>,
+        thickness: f32,
+        color: Color,
+    ) -> Self {
+        self.primitives.push(Primitive::Underline {
+            start,
+            end,
+            thickness,
+            color,
+        });
+        self
+    }
+
+    /// Set transform matrix
+    #[must_use]
+    pub fn transform(mut self, transform: glam::Mat4) -> Self {
+        self.transform = transform;
+        self
+    }
+
+    /// Set opacity (0.0 - 1.0)
+    #[must_use]
+    pub fn opacity(mut self, opacity: f32) -> Self {
+        self.opacity = opacity.clamp(0.0, 1.0);
+        self
+    }
+
+    /// Set blend mode
+    #[must_use]
+    pub fn blend_mode(mut self, blend_mode: BlendMode) -> Self {
+        self.blend_mode = blend_mode;
+        self
+    }
+
+    /// Set clipping region
+    #[must_use]
+    pub fn clip(mut self, clip: Rect<DevicePixels>) -> Self {
+        self.clip = Some(clip);
+        self
+    }
+
+    /// Finish building this layer and return to SceneBuilder
+    #[must_use]
+    pub fn finish(mut self) -> SceneBuilder {
+        let layer = Layer {
+            primitives: self.primitives,
+            transform: self.transform,
+            opacity: self.opacity,
+            blend_mode: self.blend_mode,
+            clip: self.clip,
         };
 
-        let view = frame
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
-
-        // Create command encoder
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("FLUI Render Encoder"),
-            });
-
-        // Clear screen
-        {
-            let _span = tracing::trace_span!("clear_screen").entered();
-            let _render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Clear Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.1,
-                            g: 0.1,
-                            b: 0.1,
-                            a: 1.0,
-                        }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
-        }
-
-        // Take painter for rendering
-        let painter = self
-            .painter
-            .take()
-            .expect("Painter should always exist during render");
-
-        let mut renderer_wrapper = Backend::new(painter);
-
-        // Render layer tree depth-first
-        Self::render_layer_recursive(tree, root_id, &mut renderer_wrapper);
-
-        // Extract painter and render to GPU
-        let mut painter = renderer_wrapper.into_painter();
-
-        {
-            let _span = tracing::trace_span!("gpu_render").entered();
-            painter
-                .render(&view, &mut encoder)
-                .map_err(|e| RenderError::PainterError(e.to_string()))?;
-        }
-
-        // Put painter back
-        self.painter = Some(painter);
-
-        // Submit and present
-        {
-            let _span = tracing::trace_span!("submit_present").entered();
-            self.queue.submit(std::iter::once(encoder.finish()));
-            frame.present();
-        }
-
-        Ok(())
+        let mut scene_builder = self.scene_builder.take().expect("SceneBuilder should exist");
+        scene_builder.layers.push(layer);
+        scene_builder
     }
+}
 
-    /// Recursively render a layer and its children
-    fn render_layer_recursive(tree: &LayerTree, layer_id: LayerId, renderer: &mut Backend) {
-        // Get layer
-        let Some(node) = tree.get(layer_id) else {
-            tracing::warn!("Layer {:?} not found in tree", layer_id);
-            return;
-        };
+/// Standalone LayerBuilder (not attached to SceneBuilder)
+///
+/// Use this when building layers independently of a scene.
+#[derive(Default)]
+pub struct LayerBuilderStandalone {
+    primitives: Vec<Primitive>,
+    transform: glam::Mat4,
+    opacity: f32,
+    blend_mode: BlendMode,
+    clip: Option<Rect<DevicePixels>>,
+}
 
-        // Render this layer (applies transforms, clips, effects)
-        node.layer().render(renderer);
-
-        // Render children
-        for &child_id in node.children() {
-            Self::render_layer_recursive(tree, child_id, renderer);
-        }
-
-        // Clean up state pushed by this layer
-        node.layer().cleanup(renderer);
+impl Default for glam::Mat4 {
+    fn default() -> Self {
+        Self::IDENTITY
     }
+}
 
-    /// Render a ShaderMaskLayer (offscreen rendering + shader mask + composite)
-    ///
-    /// # Architecture
-    ///
-    /// ```text
-    /// 1. Create offscreen texture (from TexturePool)
-    /// 2. Render child content to offscreen texture
-    /// 3. Apply shader mask (WGSL shader)
-    /// 4. Composite masked result to framebuffer
-    /// 5. Return texture to pool
-    /// ```
-    ///
-    /// # TODO: GPU Implementation
-    ///
-    /// This is a placeholder showing the architecture. Full implementation requires:
-    ///
-    /// 1. **Offscreen Texture Creation**:
-    ///    ```rust,ignore
-    ///    let texture = device.create_texture(&wgpu::TextureDescriptor {
-    ///        size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
-    ///        format: wgpu::TextureFormat::Rgba8UnormSrgb,
-    ///        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-    ///        ..Default::default()
-    ///    });
-    ///    ```
-    ///
-    /// 2. **Shader Pipeline Creation** (use ShaderCache):
-    ///    ```rust,ignore
-    ///    let shader_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-    ///        label: Some("Shader Mask Shader"),
-    ///        source: wgpu::ShaderSource::Wgsl(shader_cache.get_source(shader_type).into()),
-    ///    });
-    ///
-    ///    let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-    ///        vertex: wgpu::VertexState {
-    ///            module: &shader_module,
-    ///            entry_point: "vs_main",
-    ///            buffers: &[fullscreen_quad_layout],
-    ///        },
-    ///        fragment: Some(wgpu::FragmentState {
-    ///            module: &shader_module,
-    ///            entry_point: "fs_main",
-    ///            targets: &[wgpu::ColorTargetState {
-    ///                format: surface_format,
-    ///                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-    ///                write_mask: wgpu::ColorWrites::ALL,
-    ///            }],
-    ///        }),
-    ///        ..Default::default()
-    ///    });
-    ///    ```
-    ///
-    /// 3. **Bind Group for Texture + Uniforms**:
-    ///    ```rust,ignore
-    ///    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-    ///        layout: &bind_group_layout,
-    ///        entries: &[
-    ///            wgpu::BindGroupEntry {
-    ///                binding: 0,
-    ///                resource: wgpu::BindingResource::TextureView(&texture_view),
-    ///            },
-    ///            wgpu::BindGroupEntry {
-    ///                binding: 1,
-    ///                resource: wgpu::BindingResource::Sampler(&sampler),
-    ///            },
-    ///            wgpu::BindGroupEntry {
-    ///                binding: 2,
-    ///                resource: uniform_buffer.as_entire_binding(),
-    ///            },
-    ///        ],
-    ///    });
-    ///    ```
-    ///
-    /// 4. **Render Pass Execution**:
-    ///    ```rust,ignore
-    ///    let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-    ///        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-    ///            view: &view,
-    ///            ops: wgpu::Operations {
-    ///                load: wgpu::LoadOp::Load,
-    ///                store: wgpu::StoreOp::Store,
-    ///            },
-    ///            ..Default::default()
-    ///        })],
-    ///        ..Default::default()
-    ///    });
-    ///
-    ///    render_pass.set_pipeline(&pipeline);
-    ///    render_pass.set_bind_group(0, &bind_group, &[]);
-    ///    render_pass.set_vertex_buffer(0, fullscreen_quad_buffer.slice(..));
-    ///    render_pass.draw(0..6, 0..1); // 6 vertices for fullscreen quad
-    ///    ```
-    fn render_shader_mask_layer(
-        &mut self,
-        shader_mask_layer: &flui_layer::ShaderMaskLayer,
-    ) -> Result<(), RenderError> {
-        tracing::trace!(
-            bounds = ?shader_mask_layer.bounds(),
-            shader = ?shader_mask_layer.shader(),
-            "Rendering shader mask layer"
-        );
-
-        // TODO: Full implementation requires child layer reference
-        // Current ShaderMaskLayer doesn't store child layer - this is architectural limitation
-        // For now, we can only validate the integration with a placeholder child texture
-        //
-        // To complete implementation, ShaderMaskLayer needs to be refactored to:
-        // 1. Store child layer reference: `child: Arc<Layer>`
-        // 2. Render child to offscreen texture first
-        // 3. Pass child texture to offscreen_renderer.render_masked()
-        //
-        // Architecture note: This would align with Flutter's ShaderMask widget which
-        // wraps a child widget and applies shader as mask.
-
-        let offscreen_renderer = self
-            .offscreen_renderer
-            .as_mut()
-            .ok_or_else(|| RenderError::PainterError("OffscreenRenderer not initialized".into()))?;
-
-        // For demonstration: create a dummy child texture
-        // In real implementation, this would be the pre-rendered child content
-        let dummy_child_texture = self.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Dummy Child Texture"),
-            size: wgpu::Extent3d {
-                width: shader_mask_layer.bounds().width() as u32,
-                height: shader_mask_layer.bounds().height() as u32,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: self.config.format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
+impl LayerBuilderStandalone {
+    /// Add a rectangle primitive
+    pub fn add_rect(&mut self, rect: Rect<DevicePixels>, color: Color) -> &mut Self {
+        self.primitives.push(Primitive::Rect {
+            rect,
+            color,
+            border_radius: 0.0,
         });
-
-        // Call offscreen renderer with shader mask parameters
-        let _masked_result = offscreen_renderer.render_masked(
-            shader_mask_layer.bounds(),
-            shader_mask_layer.shader(),
-            shader_mask_layer.blend_mode(),
-            &dummy_child_texture,
-        );
-
-        tracing::trace!("Shader mask rendering complete (with dummy child texture)");
-
-        // TODO: Composite masked_result to framebuffer
-        // This requires access to current frame's texture view
-        // For now, the integration is demonstrated but not fully functional
-
-        Ok(())
+        self
     }
 
-    /// Render a BackdropFilterLayer (framebuffer capture + filter + composite)
-    ///
-    /// # Architecture
-    ///
-    /// ```text
-    /// 1. Capture current framebuffer in bounds
-    /// 2. Apply image filter (blur, color adjustments)
-    /// 3. Render filtered backdrop to framebuffer
-    /// 4. Composite with blend mode
-    /// ```
-    ///
-    /// # Implementation
-    ///
-    /// For blur filters, uses two-pass separable Gaussian blur:
-    /// - Horizontal pass: blur in X direction
-    /// - Vertical pass: blur in Y direction (on horizontally-blurred result)
-    ///
-    /// This is more efficient than 2D blur (O(n) vs O(n²) per pixel).
-    fn render_backdrop_filter_layer(
+    /// Add a rounded rectangle primitive
+    pub fn add_rounded_rect(
         &mut self,
-        backdrop_filter_layer: &flui_layer::BackdropFilterLayer,
-    ) -> Result<(), RenderError> {
-        use flui_types::painting::ImageFilter;
-
-        tracing::trace!(
-            bounds = ?backdrop_filter_layer.bounds(),
-            filter = ?backdrop_filter_layer.filter(),
-            "Rendering backdrop filter layer"
-        );
-
-        // Phase 2.2: Framebuffer capture
-        // For now, we create a placeholder backdrop texture
-        // In full implementation, this would capture the actual framebuffer content
-        let bounds = backdrop_filter_layer.bounds();
-        let _backdrop_texture = self.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Backdrop Capture Texture"),
-            size: wgpu::Extent3d {
-                width: bounds.width().max(1.0) as u32,
-                height: bounds.height().max(1.0) as u32,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: self.config.format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                | wgpu::TextureUsages::TEXTURE_BINDING
-                | wgpu::TextureUsages::COPY_DST
-                | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
+        rect: Rect<DevicePixels>,
+        color: Color,
+        border_radius: f32,
+    ) -> &mut Self {
+        self.primitives.push(Primitive::Rect {
+            rect,
+            color,
+            border_radius,
         });
+        self
+    }
 
-        // Phase 2.3: Apply image filter
-        match backdrop_filter_layer.filter() {
-            ImageFilter::Blur { sigma_x, sigma_y } => {
-                tracing::trace!(sigma_x, sigma_y, "Applying Gaussian blur filter");
+    /// Add a text primitive
+    pub fn add_text(
+        &mut self,
+        text: String,
+        position: Point<DevicePixels>,
+        style: TextStyle,
+        color: Color,
+    ) -> &mut Self {
+        self.primitives.push(Primitive::Text {
+            text,
+            position,
+            style,
+            color,
+        });
+        self
+    }
 
-                // Two-pass separable Gaussian blur
-                // Pass 1: Horizontal blur
-                // Pass 2: Vertical blur on horizontally-blurred result
+    /// Add an underline primitive
+    pub fn add_underline(
+        &mut self,
+        start: Point<DevicePixels>,
+        end: Point<DevicePixels>,
+        thickness: f32,
+        color: Color,
+    ) -> &mut Self {
+        self.primitives.push(Primitive::Underline {
+            start,
+            end,
+            thickness,
+            color,
+        });
+        self
+    }
 
-                // For now, we log the blur parameters
-                // Full GPU compute shader implementation will be added in next iteration
-                tracing::info!(
-                    "Blur filter configured: sigma_x={}, sigma_y={}",
-                    sigma_x,
-                    sigma_y
+    /// Set transform matrix
+    pub fn transform(&mut self, transform: glam::Mat4) -> &mut Self {
+        self.transform = transform;
+        self
+    }
+
+    /// Set opacity (0.0 - 1.0)
+    pub fn opacity(&mut self, opacity: f32) -> &mut Self {
+        self.opacity = opacity.clamp(0.0, 1.0);
+        self
+    }
+
+    /// Set blend mode
+    pub fn blend_mode(&mut self, blend_mode: BlendMode) -> &mut Self {
+        self.blend_mode = blend_mode;
+        self
+    }
+
+    /// Set clipping region
+    pub fn clip(&mut self, clip: Rect<DevicePixels>) -> &mut Self {
+        self.clip = Some(clip);
+        self
+    }
+
+    /// Build the final Layer
+    #[must_use]
+    pub fn build(self) -> Layer {
+        Layer {
+            primitives: self.primitives,
+            transform: self.transform,
+            opacity: self.opacity,
+            blend_mode: self.blend_mode,
+            clip: self.clip,
+        }
+    }
+}
+
+/// Rendering primitive (leaf node in scene graph)
+///
+/// Primitives are the atomic rendering operations. Each primitive type
+/// maps to a specific GPU rendering path:
+/// - Rect → instanced quad rendering
+/// - Text → glyph atlas + instanced quads
+/// - Path → lyon tessellation + triangle buffers
+/// - Image → textured quad
+/// - Underline → thin rectangle
+/// - Shadow → blur shader + primitive rendering
+#[derive(Clone, Debug)]
+pub enum Primitive {
+    /// Solid or rounded rectangle
+    Rect {
+        rect: Rect<DevicePixels>,
+        color: Color,
+        border_radius: f32,
+    },
+
+    /// Text with style and color
+    Text {
+        text: String,
+        position: Point<DevicePixels>,
+        style: TextStyle,
+        color: Color,
+    },
+
+    /// Vector path (filled or stroked)
+    Path {
+        path: Vec<PathCommand>,
+        fill: Option<Color>,
+        stroke: Option<StrokeStyle>,
+    },
+
+    /// Image/texture rectangle
+    Image {
+        /// Destination rectangle (where to draw)
+        rect: Rect<DevicePixels>,
+        /// Source rectangle (which part of image to draw)
+        source_rect: Option<Rect<DevicePixels>>,
+        /// Image handle (references texture atlas or uploaded texture)
+        image_id: u32,
+    },
+
+    /// Text underline
+    Underline {
+        start: Point<DevicePixels>,
+        end: Point<DevicePixels>,
+        thickness: f32,
+        color: Color,
+    },
+
+    /// Drop shadow (primitive + blur)
+    Shadow {
+        /// Boxed primitive to cast shadow from
+        primitive: Box<Primitive>,
+        /// Shadow offset
+        offset: Point<DevicePixels>,
+        /// Blur radius
+        blur_radius: f32,
+        /// Shadow color
+        color: Color,
+    },
+}
+
+impl Primitive {
+    /// Get the type of this primitive for batching
+    #[must_use]
+    pub fn primitive_type(&self) -> PrimitiveType {
+        match self {
+            Primitive::Rect { .. } => PrimitiveType::Rect,
+            Primitive::Text { .. } => PrimitiveType::Text,
+            Primitive::Path { .. } => PrimitiveType::Path,
+            Primitive::Image { .. } => PrimitiveType::Image,
+            Primitive::Underline { .. } => PrimitiveType::Underline,
+            Primitive::Shadow { .. } => PrimitiveType::Shadow,
+        }
+    }
+
+    /// Get bounding box of this primitive
+    #[must_use]
+    pub fn bounds(&self) -> Rect<DevicePixels> {
+        match self {
+            Primitive::Rect { rect, .. } => *rect,
+            Primitive::Text { position, style, .. } => {
+                // Approximate bounds (will be refined with actual text layout)
+                let font_size = style.font_size.unwrap_or(14.0);
+                Rect::new(
+                    position.x,
+                    position.y,
+                    DevicePixels(100), // Placeholder width
+                    DevicePixels(font_size as i32),
+                )
+            }
+            Primitive::Path { path, .. } => {
+                if path.is_empty() {
+                    return Rect::new(
+                        DevicePixels(0),
+                        DevicePixels(0),
+                        DevicePixels(0),
+                        DevicePixels(0),
+                    );
+                }
+
+                let mut min_x = path[0].point().x;
+                let mut max_x = min_x;
+                let mut min_y = path[0].point().y;
+                let mut max_y = min_y;
+
+                for cmd in &path[1..] {
+                    let pt = cmd.point();
+                    min_x = DevicePixels(min_x.0.min(pt.x.0));
+                    max_x = DevicePixels(max_x.0.max(pt.x.0));
+                    min_y = DevicePixels(min_y.0.min(pt.y.0));
+                    max_y = DevicePixels(max_y.0.max(pt.y.0));
+                }
+
+                Rect::new(min_x, min_y, max_x, max_y)
+            }
+            Primitive::Image { rect, .. } => *rect,
+            Primitive::Underline { start, end, thickness, .. } => {
+                let min_x = DevicePixels(start.x.0.min(end.x.0));
+                let max_x = DevicePixels(start.x.0.max(end.x.0));
+                let min_y = DevicePixels((start.y.0 as f32 - thickness / 2.0) as i32);
+                let max_y = DevicePixels((end.y.0 as f32 + thickness / 2.0) as i32);
+                Rect::new(min_x, min_y, max_x, max_y)
+            }
+            Primitive::Shadow { primitive, offset, blur_radius, .. } => {
+                let base_bounds = primitive.bounds();
+                let offset_bounds = Rect::new(
+                    DevicePixels(base_bounds.min_x().0 + offset.x.0),
+                    DevicePixels(base_bounds.min_y().0 + offset.y.0),
+                    DevicePixels(base_bounds.max_x().0 + offset.x.0),
+                    DevicePixels(base_bounds.max_y().0 + offset.y.0),
                 );
-            }
-            ImageFilter::Dilate { radius } => {
-                tracing::trace!(radius, "Dilate filter requested (not yet implemented)");
-            }
-            ImageFilter::Erode { radius } => {
-                tracing::trace!(radius, "Erode filter requested (not yet implemented)");
-            }
-            ImageFilter::Matrix(_) => {
-                tracing::trace!("Matrix filter requested (not yet implemented)");
-            }
-            ImageFilter::ColorAdjust(_) => {
-                tracing::trace!("ColorAdjust filter requested (not yet implemented)");
-            }
-            ImageFilter::Compose(_) => {
-                tracing::trace!("Compose filter requested (not yet implemented)");
-            }
-            #[cfg(debug_assertions)]
-            ImageFilter::OverflowIndicator { .. } => {
-                tracing::trace!("OverflowIndicator filter requested (not yet implemented)");
+                let blur = *blur_radius as i32;
+                Rect::new(
+                    DevicePixels(offset_bounds.min_x().0 - blur),
+                    DevicePixels(offset_bounds.min_y().0 - blur),
+                    DevicePixels(offset_bounds.max_x().0 + blur),
+                    DevicePixels(offset_bounds.max_y().0 + blur),
+                )
             }
         }
+    }
+}
 
-        // Phase 2.4: Composite filtered backdrop
-        // The filtered backdrop would be rendered to the framebuffer here
-        // With blend mode applied
+/// Path drawing command
+#[derive(Clone, Debug)]
+pub enum PathCommand {
+    MoveTo(Point<DevicePixels>),
+    LineTo(Point<DevicePixels>),
+    QuadraticTo(Point<DevicePixels>, Point<DevicePixels>),
+    CubicTo(Point<DevicePixels>, Point<DevicePixels>, Point<DevicePixels>),
+    Close,
+}
 
-        tracing::trace!(
-            blend_mode = ?backdrop_filter_layer.blend_mode(),
-            "Backdrop filter rendering complete (infrastructure ready, GPU compute pending)"
+impl PathCommand {
+    /// Get the primary point from this command (for bounds calculation)
+    #[must_use]
+    pub fn point(&self) -> Point<DevicePixels> {
+        match self {
+            PathCommand::MoveTo(p) => *p,
+            PathCommand::LineTo(p) => *p,
+            PathCommand::QuadraticTo(_, p) => *p,
+            PathCommand::CubicTo(_, _, p) => *p,
+            PathCommand::Close => Point::new(DevicePixels(0), DevicePixels(0)),
+        }
+    }
+}
+
+/// Stroke style for path rendering
+#[derive(Clone, Debug)]
+pub struct StrokeStyle {
+    pub color: Color,
+    pub width: f32,
+    pub line_cap: LineCap,
+    pub line_join: LineJoin,
+}
+
+/// Line cap style
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LineCap {
+    Butt,
+    Round,
+    Square,
+}
+
+/// Line join style
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LineJoin {
+    Miter,
+    Round,
+    Bevel,
+}
+
+/// Batch of similar primitives for efficient rendering
+///
+/// Batches group primitives that can be rendered with a single draw call.
+/// This reduces GPU overhead by minimizing pipeline state changes.
+#[derive(Clone, Debug)]
+pub struct PrimitiveBatch {
+    /// Type of primitives in this batch
+    pub primitive_type: PrimitiveType,
+
+    /// Primitives in this batch
+    pub primitives: Vec<Primitive>,
+
+    /// Texture ID (for image batches only)
+    pub texture_id: Option<u32>,
+}
+
+impl PrimitiveBatch {
+    /// Get the number of primitives in this batch
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.primitives.len()
+    }
+
+    /// Check if batch is empty
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.primitives.is_empty()
+    }
+}
+
+/// Type of rendering primitive
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum PrimitiveType {
+    /// Rectangle (solid or rounded)
+    Rect,
+    /// Text glyph run
+    Text,
+    /// Vector path
+    Path,
+    /// Textured image
+    Image,
+    /// Text underline
+    Underline,
+    /// Drop shadow
+    Shadow,
+}
+
+/// Blend mode for layer compositing
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum BlendMode {
+    /// Normal alpha blending (default)
+    #[default]
+    Normal,
+    /// Multiply (darkens)
+    Multiply,
+    /// Screen (lightens)
+    Screen,
+    /// Overlay (contrast)
+    Overlay,
+    /// Darken (min)
+    Darken,
+    /// Lighten (max)
+    Lighten,
+    /// Color dodge
+    ColorDodge,
+    /// Color burn
+    ColorBurn,
+    /// Hard light
+    HardLight,
+    /// Soft light
+    SoftLight,
+    /// Difference
+    Difference,
+    /// Exclusion
+    Exclusion,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn px(value: f32) -> DevicePixels {
+        DevicePixels(value as i32)
+    }
+
+    #[test]
+    fn test_empty_scene() {
+        let viewport = Size::new(px(800.0), px(600.0));
+        let scene = Scene::builder(viewport).build();
+
+        assert!(scene.is_empty());
+        assert_eq!(scene.primitive_count(), 0);
+        assert_eq!(scene.viewport(), viewport);
+    }
+
+    #[test]
+    fn test_scene_with_clear_color() {
+        let viewport = Size::new(px(800.0), px(600.0));
+        let scene = Scene::builder(viewport)
+            .clear_color(Color::BLACK)
+            .build();
+
+        assert_eq!(scene.clear_color(), Color::BLACK);
+    }
+
+    #[test]
+    fn test_single_layer() {
+        let viewport = Size::new(px(800.0), px(600.0));
+        let rect = Rect::new(px(10.0), px(10.0), px(100.0), px(100.0));
+
+        let scene = Scene::builder(viewport)
+            .push_layer()
+            .add_rect(rect, Color::RED)
+            .finish()
+            .build();
+
+        assert_eq!(scene.layers().len(), 1);
+        assert_eq!(scene.primitive_count(), 1);
+    }
+
+    #[test]
+    fn test_multiple_layers() {
+        let viewport = Size::new(px(800.0), px(600.0));
+
+        let scene = Scene::builder(viewport)
+            .push_layer()
+            .add_rect(Rect::new(px(0.0), px(0.0), px(100.0), px(100.0)), Color::RED)
+            .finish()
+            .push_layer()
+            .add_rect(
+                Rect::new(px(50.0), px(50.0), px(100.0), px(100.0)),
+                Color::BLUE,
+            )
+            .finish()
+            .build();
+
+        assert_eq!(scene.layers().len(), 2);
+        assert_eq!(scene.primitive_count(), 2);
+    }
+
+    #[test]
+    fn test_layer_opacity() {
+        let viewport = Size::new(px(800.0), px(600.0));
+
+        let scene = Scene::builder(viewport)
+            .push_layer()
+            .add_rect(Rect::new(px(0.0), px(0.0), px(100.0), px(100.0)), Color::RED)
+            .opacity(0.5)
+            .finish()
+            .build();
+
+        assert_eq!(scene.layers()[0].opacity(), 0.5);
+    }
+
+    #[test]
+    fn test_layer_blend_mode() {
+        let viewport = Size::new(px(800.0), px(600.0));
+
+        let scene = Scene::builder(viewport)
+            .push_layer()
+            .add_rect(Rect::new(px(0.0), px(0.0), px(100.0), px(100.0)), Color::RED)
+            .blend_mode(BlendMode::Multiply)
+            .finish()
+            .build();
+
+        assert_eq!(scene.layers()[0].blend_mode(), BlendMode::Multiply);
+    }
+
+    #[test]
+    fn test_layer_clipping() {
+        let viewport = Size::new(px(800.0), px(600.0));
+        let clip_rect = Rect::new(px(0.0), px(0.0), px(200.0), px(200.0));
+
+        let scene = Scene::builder(viewport)
+            .push_layer()
+            .add_rect(Rect::new(px(10.0), px(10.0), px(100.0), px(100.0)), Color::RED)
+            .clip(clip_rect)
+            .finish()
+            .build();
+
+        assert_eq!(scene.layers()[0].clip(), Some(clip_rect));
+    }
+
+    #[test]
+    fn test_rounded_rect() {
+        let viewport = Size::new(px(800.0), px(600.0));
+
+        let scene = Scene::builder(viewport)
+            .push_layer()
+            .add_rounded_rect(
+                Rect::new(px(10.0), px(10.0), px(100.0), px(100.0)),
+                Color::RED,
+                10.0,
+            )
+            .finish()
+            .build();
+
+        match &scene.layers()[0].primitives()[0] {
+            Primitive::Rect { border_radius, .. } => {
+                assert_eq!(*border_radius, 10.0);
+            }
+            _ => panic!("Expected Rect primitive"),
+        }
+    }
+
+    #[test]
+    fn test_text_primitive() {
+        let viewport = Size::new(px(800.0), px(600.0));
+
+        let scene = Scene::builder(viewport)
+            .push_layer()
+            .add_text(
+                "Hello".to_string(),
+                Point::new(px(20.0), px(20.0)),
+                TextStyle::default(),
+                Color::BLACK,
+            )
+            .finish()
+            .build();
+
+        match &scene.layers()[0].primitives()[0] {
+            Primitive::Text { text, .. } => {
+                assert_eq!(text, "Hello");
+            }
+            _ => panic!("Expected Text primitive"),
+        }
+    }
+
+    #[test]
+    fn test_underline_primitive() {
+        let viewport = Size::new(px(800.0), px(600.0));
+
+        let scene = Scene::builder(viewport)
+            .push_layer()
+            .add_underline(
+                Point::new(px(10.0), px(30.0)),
+                Point::new(px(50.0), px(30.0)),
+                1.0,
+                Color::BLACK,
+            )
+            .finish()
+            .build();
+
+        match &scene.layers()[0].primitives()[0] {
+            Primitive::Underline { thickness, .. } => {
+                assert_eq!(*thickness, 1.0);
+            }
+            _ => panic!("Expected Underline primitive"),
+        }
+    }
+
+    #[test]
+    fn test_multiple_primitives_single_layer() {
+        let viewport = Size::new(px(800.0), px(600.0));
+
+        let scene = Scene::builder(viewport)
+            .push_layer()
+            .add_rect(Rect::new(px(0.0), px(0.0), px(100.0), px(100.0)), Color::RED)
+            .add_rect(Rect::new(px(110.0), px(0.0), px(100.0), px(100.0)), Color::BLUE)
+            .add_text(
+                "Test".to_string(),
+                Point::new(px(20.0), px(20.0)),
+                TextStyle::default(),
+                Color::BLACK,
+            )
+            .finish()
+            .build();
+
+        assert_eq!(scene.layers()[0].primitives().len(), 3);
+    }
+
+    #[test]
+    fn test_layer_transform() {
+        let viewport = Size::new(px(800.0), px(600.0));
+        let transform = glam::Mat4::from_translation(glam::Vec3::new(10.0, 20.0, 0.0));
+
+        let scene = Scene::builder(viewport)
+            .push_layer()
+            .add_rect(Rect::new(px(0.0), px(0.0), px(100.0), px(100.0)), Color::RED)
+            .transform(transform)
+            .finish()
+            .build();
+
+        assert_eq!(scene.layers()[0].transform(), transform);
+    }
+
+    #[test]
+    fn test_opacity_clamping() {
+        let viewport = Size::new(px(800.0), px(600.0));
+
+        let scene1 = Scene::builder(viewport)
+            .push_layer()
+            .add_rect(Rect::new(px(0.0), px(0.0), px(100.0), px(100.0)), Color::RED)
+            .opacity(1.5) // Should clamp to 1.0
+            .finish()
+            .build();
+
+        assert_eq!(scene1.layers()[0].opacity(), 1.0);
+
+        let scene2 = Scene::builder(viewport)
+            .push_layer()
+            .add_rect(Rect::new(px(0.0), px(0.0), px(100.0), px(100.0)), Color::RED)
+            .opacity(-0.5) // Should clamp to 0.0
+            .finish()
+            .build();
+
+        assert_eq!(scene2.layers()[0].opacity(), 0.0);
+    }
+
+    #[test]
+    fn test_standalone_layer_builder() {
+        let mut builder = Layer::builder();
+        builder
+            .add_rect(Rect::new(px(0.0), px(0.0), px(100.0), px(100.0)), Color::RED)
+            .opacity(0.8);
+
+        let layer = builder.build();
+
+        assert_eq!(layer.primitives().len(), 1);
+        assert_eq!(layer.opacity(), 0.8);
+    }
+
+    #[test]
+    fn test_add_layer_directly() {
+        let viewport = Size::new(px(800.0), px(600.0));
+
+        let mut layer_builder = Layer::builder();
+        layer_builder.add_rect(
+            Rect::new(px(0.0), px(0.0), px(100.0), px(100.0)),
+            Color::RED,
         );
+        let layer = layer_builder.build();
 
-        Ok(())
+        let scene = Scene::builder(viewport).add_layer(layer).build();
+
+        assert_eq!(scene.layers().len(), 1);
+        assert_eq!(scene.primitive_count(), 1);
     }
 
-    /// Internal method to render a CanvasLayer
-    #[tracing::instrument(level = "trace", skip_all, err)]
-    fn render_canvas_layer(&mut self, layer: &flui_layer::CanvasLayer) -> Result<(), RenderError> {
-        // Get current frame (swapchain acquire)
-        let frame = {
-            let _span = tracing::trace_span!("acquire_frame").entered();
-            self.surface.get_current_texture().map_err(|e| match e {
-                wgpu::SurfaceError::Lost => {
-                    tracing::warn!("Surface lost, reconfiguring...");
-                    self.surface.configure(&self.device, &self.config);
-                    RenderError::SurfaceLost
-                }
-                wgpu::SurfaceError::Outdated => {
-                    tracing::warn!("Surface outdated, reconfiguring...");
-                    self.surface.configure(&self.device, &self.config);
-                    RenderError::SurfaceOutdated
-                }
-                wgpu::SurfaceError::OutOfMemory => {
-                    tracing::error!("Out of GPU memory!");
-                    RenderError::OutOfMemory
-                }
-                wgpu::SurfaceError::Timeout => {
-                    tracing::warn!("Surface timeout");
-                    RenderError::Timeout
-                }
-                wgpu::SurfaceError::Other => {
-                    tracing::error!("Unknown surface error occurred");
-                    RenderError::PainterError("Unknown surface error".to_string())
-                }
-            })?
+    #[test]
+    fn test_shadow_primitive() {
+        let shadow_prim = Primitive::Shadow {
+            primitive: Box::new(Primitive::Rect {
+                rect: Rect::new(px(10.0), px(10.0), px(100.0), px(100.0)),
+                color: Color::RED,
+                border_radius: 0.0,
+            }),
+            offset: Point::new(px(2.0), px(2.0)),
+            blur_radius: 4.0,
+            color: Color::BLACK,
         };
 
-        let view = frame
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
-
-        // Create command encoder
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("FLUI Render Encoder"),
-            });
-
-        // Clear screen
-        {
-            let _span = tracing::trace_span!("clear_pass").entered();
-            let _render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Clear Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.1,
-                            g: 0.1,
-                            b: 0.1,
-                            a: 1.0,
-                        }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
+        match shadow_prim {
+            Primitive::Shadow { blur_radius, .. } => {
+                assert_eq!(blur_radius, 4.0);
+            }
+            _ => panic!("Expected Shadow primitive"),
         }
-
-        // CRITICAL: Zero-allocation rendering via painter reuse!
-        // Take ownership temporarily (field becomes None, zero allocation)
-        let painter = self
-            .painter
-            .take()
-            .expect("Painter should always exist during render");
-
-        // Create renderer wrapper (stack allocation, just one pointer field)
-        let mut renderer_wrapper = Backend::new(painter);
-
-        // Record draw commands from canvas layer
-        {
-            let _span = tracing::trace_span!("record_commands").entered();
-            layer.render(&mut renderer_wrapper);
-        }
-
-        // Extract painter and render accumulated commands to GPU
-        let mut painter = renderer_wrapper.into_painter();
-
-        {
-            let _span = tracing::trace_span!("gpu_render").entered();
-            painter
-                .render(&view, &mut encoder)
-                .map_err(|e| RenderError::PainterError(e.to_string()))?;
-        }
-
-        // Put painter back (zero allocation, just moves Option)
-        self.painter = Some(painter);
-
-        // Submit commands and present
-        {
-            let _span = tracing::trace_span!("submit_present").entered();
-            self.queue.submit(std::iter::once(encoder.finish()));
-            frame.present();
-        }
-
-        Ok(())
     }
 
-    /// Render a picture layer to the screen.
-    ///
-    /// PictureLayer contains an immutable recorded Picture (DisplayList) that was
-    /// previously recorded, typically at a repaint boundary. This method is nearly
-    /// identical to render_canvas_layer but works with immutable Pictures.
-    ///
-    /// # Arguments
-    ///
-    /// * `layer` - The picture layer to render
-    ///
-    /// # Errors
-    ///
-    /// Returns `RenderError` if surface acquisition or rendering fails.
-    #[tracing::instrument(level = "trace", skip_all, err)]
-    fn render_picture_layer(
-        &mut self,
-        layer: &flui_layer::PictureLayer,
-    ) -> Result<(), RenderError> {
-        // Get current frame (swapchain acquire)
-        let frame = {
-            let _span = tracing::trace_span!("acquire_frame").entered();
-            self.surface.get_current_texture().map_err(|e| match e {
-                wgpu::SurfaceError::Lost => {
-                    tracing::warn!("Surface lost, reconfiguring...");
-                    self.surface.configure(&self.device, &self.config);
-                    RenderError::SurfaceLost
-                }
-                wgpu::SurfaceError::Outdated => {
-                    tracing::warn!("Surface outdated, reconfiguring...");
-                    self.surface.configure(&self.device, &self.config);
-                    RenderError::SurfaceOutdated
-                }
-                wgpu::SurfaceError::OutOfMemory => {
-                    tracing::error!("Out of GPU memory!");
-                    RenderError::OutOfMemory
-                }
-                wgpu::SurfaceError::Timeout => {
-                    tracing::warn!("Surface timeout");
-                    RenderError::Timeout
-                }
-                wgpu::SurfaceError::Other => {
-                    tracing::error!("Unknown surface error occurred");
-                    RenderError::PainterError("Unknown surface error".to_string())
-                }
-            })?
+    #[test]
+    fn test_path_primitive() {
+        let viewport = Size::new(px(800.0), px(600.0));
+
+        let path_commands = vec![
+            PathCommand::MoveTo(Point::new(px(0.0), px(0.0))),
+            PathCommand::LineTo(Point::new(px(100.0), px(0.0))),
+            PathCommand::LineTo(Point::new(px(100.0), px(100.0))),
+            PathCommand::Close,
+        ];
+
+        let mut builder = Layer::builder();
+        builder.primitives.push(Primitive::Path {
+            path: path_commands.clone(),
+            fill: Some(Color::RED),
+            stroke: None,
+        });
+
+        let layer = builder.build();
+        match &layer.primitives()[0] {
+            Primitive::Path { path, .. } => {
+                assert_eq!(path.len(), 4);
+            }
+            _ => panic!("Expected Path primitive"),
+        }
+    }
+
+    #[test]
+    fn test_image_primitive() {
+        let viewport = Size::new(px(800.0), px(600.0));
+
+        let mut builder = Layer::builder();
+        builder.primitives.push(Primitive::Image {
+            rect: Rect::new(px(0.0), px(0.0), px(200.0), px(200.0)),
+            source_rect: Some(Rect::new(px(0.0), px(0.0), px(100.0), px(100.0))),
+            image_id: 42,
+        });
+
+        let layer = builder.build();
+        match &layer.primitives()[0] {
+            Primitive::Image { image_id, .. } => {
+                assert_eq!(*image_id, 42);
+            }
+            _ => panic!("Expected Image primitive"),
+        }
+    }
+
+    #[test]
+    fn test_blend_modes() {
+        assert_eq!(BlendMode::default(), BlendMode::Normal);
+
+        let modes = [
+            BlendMode::Normal,
+            BlendMode::Multiply,
+            BlendMode::Screen,
+            BlendMode::Overlay,
+            BlendMode::Darken,
+            BlendMode::Lighten,
+        ];
+
+        for mode in modes {
+            let viewport = Size::new(px(800.0), px(600.0));
+            let scene = Scene::builder(viewport)
+                .push_layer()
+                .add_rect(Rect::new(px(0.0), px(0.0), px(100.0), px(100.0)), Color::RED)
+                .blend_mode(mode)
+                .finish_layer()
+                .build();
+
+            assert_eq!(scene.layers()[0].blend_mode(), mode);
+        }
+    }
+
+    #[test]
+    fn test_empty_layer() {
+        let mut builder = Layer::builder();
+        let layer = builder.build();
+
+        assert!(layer.is_empty());
+        assert_eq!(layer.primitives().len(), 0);
+    }
+
+    // ========== Batching Tests ==========
+
+    #[test]
+    fn test_empty_scene_batching() {
+        let viewport = Size::new(px(800.0), px(600.0));
+        let scene = Scene::builder(viewport).build();
+
+        let batches = scene.batch_primitives();
+        assert_eq!(batches.len(), 0);
+    }
+
+    #[test]
+    fn test_single_rect_batch() {
+        let viewport = Size::new(px(800.0), px(600.0));
+        let scene = Scene::builder(viewport)
+            .push_layer()
+            .add_rect(Rect::new(px(0.0), px(0.0), px(100.0), px(100.0)), Color::RED)
+            .finish()
+            .build();
+
+        let batches = scene.batch_primitives();
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].primitive_type, PrimitiveType::Rect);
+        assert_eq!(batches[0].primitives.len(), 1);
+    }
+
+    #[test]
+    fn test_multiple_rects_batched_together() {
+        let viewport = Size::new(px(800.0), px(600.0));
+        let scene = Scene::builder(viewport)
+            .push_layer()
+            .add_rect(Rect::new(px(0.0), px(0.0), px(100.0), px(100.0)), Color::RED)
+            .add_rect(Rect::new(px(110.0), px(0.0), px(100.0), px(100.0)), Color::BLUE)
+            .add_rect(Rect::new(px(220.0), px(0.0), px(100.0), px(100.0)), Color::GREEN)
+            .finish()
+            .build();
+
+        let batches = scene.batch_primitives();
+        assert_eq!(batches.len(), 1, "All rects should batch together");
+        assert_eq!(batches[0].primitive_type, PrimitiveType::Rect);
+        assert_eq!(batches[0].primitives.len(), 3);
+    }
+
+    #[test]
+    fn test_mixed_primitive_types_create_multiple_batches() {
+        let viewport = Size::new(px(800.0), px(600.0));
+        let scene = Scene::builder(viewport)
+            .push_layer()
+            .add_rect(Rect::new(px(0.0), px(0.0), px(100.0), px(100.0)), Color::RED)
+            .add_text(
+                "Hello".to_string(),
+                Point::new(px(10.0), px(10.0)),
+                TextStyle::default(),
+                Color::BLACK,
+            )
+            .add_rect(Rect::new(px(110.0), px(0.0), px(100.0), px(100.0)), Color::BLUE)
+            .finish()
+            .build();
+
+        let batches = scene.batch_primitives();
+        assert_eq!(batches.len(), 3, "Should have 3 batches: Rect, Text, Rect");
+        assert_eq!(batches[0].primitive_type, PrimitiveType::Rect);
+        assert_eq!(batches[0].primitives.len(), 1);
+        assert_eq!(batches[1].primitive_type, PrimitiveType::Text);
+        assert_eq!(batches[1].primitives.len(), 1);
+        assert_eq!(batches[2].primitive_type, PrimitiveType::Rect);
+        assert_eq!(batches[2].primitives.len(), 1);
+    }
+
+    #[test]
+    fn test_image_batching_by_texture() {
+        let viewport = Size::new(px(800.0), px(600.0));
+
+        let mut builder = Layer::builder();
+        builder.primitives.push(Primitive::Image {
+            rect: Rect::new(px(0.0), px(0.0), px(100.0), px(100.0)),
+            source_rect: None,
+            image_id: 1,
+        });
+        builder.primitives.push(Primitive::Image {
+            rect: Rect::new(px(110.0), px(0.0), px(100.0), px(100.0)),
+            source_rect: None,
+            image_id: 1, // Same texture
+        });
+        builder.primitives.push(Primitive::Image {
+            rect: Rect::new(px(220.0), px(0.0), px(100.0), px(100.0)),
+            source_rect: None,
+            image_id: 2, // Different texture
+        });
+        let layer = builder.build();
+
+        let scene = Scene::builder(viewport).add_layer(layer).build();
+        let batches = scene.batch_primitives();
+
+        assert_eq!(batches.len(), 2, "Should have 2 batches by texture ID");
+        assert_eq!(batches[0].texture_id, Some(1));
+        assert_eq!(batches[0].primitives.len(), 2);
+        assert_eq!(batches[1].texture_id, Some(2));
+        assert_eq!(batches[1].primitives.len(), 1);
+    }
+
+    #[test]
+    fn test_underline_batching() {
+        let viewport = Size::new(px(800.0), px(600.0));
+        let scene = Scene::builder(viewport)
+            .push_layer()
+            .add_underline(
+                Point::new(px(0.0), px(20.0)),
+                Point::new(px(100.0), px(20.0)),
+                1.0,
+                Color::BLACK,
+            )
+            .add_underline(
+                Point::new(px(0.0), px(40.0)),
+                Point::new(px(100.0), px(40.0)),
+                1.0,
+                Color::BLACK,
+            )
+            .finish()
+            .build();
+
+        let batches = scene.batch_primitives();
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].primitive_type, PrimitiveType::Underline);
+        assert_eq!(batches[0].primitives.len(), 2);
+    }
+
+    #[test]
+    fn test_batch_across_multiple_layers() {
+        let viewport = Size::new(px(800.0), px(600.0));
+        let scene = Scene::builder(viewport)
+            .push_layer()
+            .add_rect(Rect::new(px(0.0), px(0.0), px(100.0), px(100.0)), Color::RED)
+            .finish()
+            .push_layer()
+            .add_rect(Rect::new(px(110.0), px(0.0), px(100.0), px(100.0)), Color::BLUE)
+            .finish()
+            .build();
+
+        let batches = scene.batch_primitives();
+        // Each layer creates separate batches (layers might have different transforms/opacity)
+        assert_eq!(batches.len(), 2);
+        assert_eq!(batches[0].primitives.len(), 1);
+        assert_eq!(batches[1].primitives.len(), 1);
+    }
+
+    #[test]
+    fn test_primitive_type_method() {
+        let rect_prim = Primitive::Rect {
+            rect: Rect::new(px(0.0), px(0.0), px(100.0), px(100.0)),
+            color: Color::RED,
+            border_radius: 0.0,
         };
+        assert_eq!(rect_prim.primitive_type(), PrimitiveType::Rect);
 
-        let view = frame
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
-
-        // Create command encoder
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("FLUI Render Encoder"),
-            });
-
-        // Clear screen
-        {
-            let _span = tracing::trace_span!("clear_pass").entered();
-            let _render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Clear Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.1,
-                            g: 0.1,
-                            b: 0.1,
-                            a: 1.0,
-                        }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
-        }
-
-        // CRITICAL: Zero-allocation rendering via painter reuse!
-        // Take ownership temporarily (field becomes None, zero allocation)
-        let painter = self
-            .painter
-            .take()
-            .expect("Painter should always exist during render");
-
-        // Create renderer wrapper (stack allocation, just one pointer field)
-        let mut renderer_wrapper = Backend::new(painter);
-
-        // Record draw commands from picture layer
-        {
-            let _span = tracing::trace_span!("record_commands").entered();
-            layer.render(&mut renderer_wrapper);
-        }
-
-        // Extract painter and render accumulated commands to GPU
-        let mut painter = renderer_wrapper.into_painter();
-
-        {
-            let _span = tracing::trace_span!("gpu_render").entered();
-            painter
-                .render(&view, &mut encoder)
-                .map_err(|e| RenderError::PainterError(e.to_string()))?;
-        }
-
-        // Put painter back (zero allocation, just moves Option)
-        self.painter = Some(painter);
-
-        // Submit commands and present
-        {
-            let _span = tracing::trace_span!("submit_present").entered();
-            self.queue.submit(std::iter::once(encoder.finish()));
-            frame.present();
-        }
-
-        Ok(())
+        let text_prim = Primitive::Text {
+            text: "Test".to_string(),
+            position: Point::new(px(10.0), px(10.0)),
+            style: TextStyle::default(),
+            color: Color::BLACK,
+        };
+        assert_eq!(text_prim.primitive_type(), PrimitiveType::Text);
     }
 
-    /// Get current viewport size
-    ///
-    /// Returns (width, height) in pixels
-    #[must_use]
-    pub fn size(&self) -> (u32, u32) {
-        (self.config.width, self.config.height)
+    #[test]
+    fn test_primitive_bounds_rect() {
+        let prim = Primitive::Rect {
+            rect: Rect::new(px(10.0), px(20.0), px(110.0), px(120.0)),
+            color: Color::RED,
+            border_radius: 0.0,
+        };
+        let bounds = prim.bounds();
+        assert_eq!(bounds.min_x(), px(10.0));
+        assert_eq!(bounds.min_y(), px(20.0));
     }
 
-    /// Get the surface texture format
-    #[must_use]
-    pub fn format(&self) -> wgpu::TextureFormat {
-        self.config.format
+    #[test]
+    fn test_primitive_bounds_underline() {
+        let prim = Primitive::Underline {
+            start: Point::new(px(10.0), px(20.0)),
+            end: Point::new(px(100.0), px(20.0)),
+            thickness: 2.0,
+            color: Color::BLACK,
+        };
+        let bounds = prim.bounds();
+        assert_eq!(bounds.min_x(), px(10.0));
+        assert_eq!(bounds.max_x(), px(100.0));
+    }
+
+    #[test]
+    fn test_batch_is_empty() {
+        let batch = PrimitiveBatch {
+            primitive_type: PrimitiveType::Rect,
+            primitives: vec![],
+            texture_id: None,
+        };
+        assert!(batch.is_empty());
+        assert_eq!(batch.len(), 0);
+    }
+
+    #[test]
+    fn test_path_command_point() {
+        let cmd = PathCommand::MoveTo(Point::new(px(10.0), px(20.0)));
+        assert_eq!(cmd.point().x, px(10.0));
+        assert_eq!(cmd.point().y, px(20.0));
+
+        let cmd2 = PathCommand::LineTo(Point::new(px(30.0), px(40.0)));
+        assert_eq!(cmd2.point().x, px(30.0));
     }
 }
