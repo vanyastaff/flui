@@ -20,7 +20,7 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 
 use flui_foundation::{impl_binding_singleton, BindingBase, HasInstance};
-use flui_types::geometry::{px, Pixels, Radius};
+use flui_types::geometry::{px, Pixels, Radius, Half};
 use flui_types::Size;
 
 // ============================================================================
@@ -293,18 +293,18 @@ impl ShaderWarmUp for DefaultShaderWarmUp {
 
         // Draw various shapes to trigger shader compilation
         canvas.draw_rect(flui_types::Rect::from_ltwh(
-            0.0,
-            0.0,
+            px(0.0),
+            px(0.0),
             size.width,
             size.height,
         ));
         canvas.draw_rrect(flui_types::RRect::from_rect_and_radius(
-            flui_types::Rect::from_ltwh(10.0, 10.0, 80.0, 80.0),
-            Radius::circular(10.0),
+            flui_types::Rect::from_ltwh(px(10.0), px(10.0), px(80.0), px(80.0)),
+            Radius::circular(px(10.0)),
         ));
         canvas.draw_circle(
-            flui_types::Offset::new(size.width / px(2.0), size.height / px(2.0)),
-            30.0,
+            flui_types::Offset::new(size.width.half(), size.height.half()),
+            px(30.0),
         );
     }
 }

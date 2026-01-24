@@ -131,7 +131,7 @@ impl FontVariation {
     }
 }
 
-#[derive(Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct StrutStyle {
     /// Font family name.
     pub font_family: Option<String>,

@@ -6,6 +6,7 @@
 use crate::painting::{BlendMode, Shader, StrokeCap, StrokeJoin};
 use crate::styling::Color;
 
+#[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Paint {
     /// Paint style (fill or stroke)
@@ -182,7 +183,7 @@ impl Default for Paint {
     }
 }
 
-#[derive(Default)]
+#[derive(Clone, Debug, Default, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum PaintStyle {
     #[default]

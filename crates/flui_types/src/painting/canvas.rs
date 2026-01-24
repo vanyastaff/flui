@@ -159,6 +159,7 @@ pub enum VertexMode {
     TriangleFan,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TextureId(u64);
 
@@ -191,7 +192,7 @@ impl From<TextureId> for u64 {
     }
 }
 
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum PointMode {
     #[default]

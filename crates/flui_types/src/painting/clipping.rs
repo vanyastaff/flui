@@ -12,7 +12,7 @@ pub enum ClipOp {
     Difference,
 }
 
-#[derive(Default)]
+#[derive(Default, Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Clip {
     /// No clipping whatsoever.

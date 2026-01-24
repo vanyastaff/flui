@@ -367,6 +367,7 @@ impl InlineSpanTrait for PlaceholderSpan {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct PlaceholderDimensions {
     /// Width of the placeholder.

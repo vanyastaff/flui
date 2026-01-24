@@ -34,7 +34,7 @@ use crate::display_list::{
     BlendMode, DisplayList, DisplayListCore, DrawCommand, ImageFilter, Paint,
 };
 use flui_types::{
-    geometry::{Matrix4, Offset, Pixels, Point, RRect, Rect, Size},
+    geometry::{px, Matrix4, Offset, Pixels, Point, RRect, Rect, Size},
     painting::{Clip, ClipOp, Image, Path},
     styling::Color,
     typography::{InlineSpan, TextStyle},
@@ -1671,7 +1671,7 @@ impl Canvas {
     /// ```
     pub fn append_display_list_at_offset(&mut self, display_list: &DisplayList, offset: Offset<Pixels>) {
         // If offset is zero, we can potentially optimize
-        if offset.dx == 0.0 && offset.dy == 0.0 {
+        if offset.dx == px(0.0) && offset.dy == px(0.0) {
             // Clone and append directly
             self.display_list.append(display_list.clone());
             return;
@@ -1679,7 +1679,7 @@ impl Canvas {
 
         // Apply offset by wrapping in save/translate/restore
         self.save();
-        self.translate(offset.dx, offset.dy);
+        self.translate(offset.dx.0, offset.dy.0);
 
         // Append cloned commands - they will inherit our current transform
         // Note: We need to re-record commands with the new transform
@@ -2567,13 +2567,13 @@ impl Canvas {
         let half = size / 2.0;
         let paint = Paint::stroke(color, 1.0);
         self.draw_line(
-            Point::new(Pixels(point.x - half), Pixels(point.y)),
-            Point::new(Pixels(point.x + half), Pixels(point.y)),
+            Point::new(Pixels(point.x.0 - half), point.y),
+            Point::new(Pixels(point.x.0 + half), point.y),
             &paint,
         );
         self.draw_line(
-            Point::new(Pixels(point.x), Pixels(point.y - half)),
-            Point::new(Pixels(point.x), Pixels(point.y + half)),
+            Point::new(point.x, Pixels(point.y.0 - half)),
+            Point::new(point.x, Pixels(point.y.0 + half)),
             &paint,
         );
     }

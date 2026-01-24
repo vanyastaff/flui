@@ -1671,9 +1671,8 @@ impl DrawCommand {
                 // Circle radius + stroke outset
                 let stroke_outset = paint.effective_stroke_width() * 0.5;
                 let effective_radius = radius + stroke_outset;
-                let size = Size::new(effective_radius * 2.0, effective_radius * 2.0);
-                let center_f32 = center.map(|p| p.0);
-                let local_bounds = Rect::from_center_size(center_f32, size);
+                let size = Size::new(Pixels(effective_radius * 2.0), Pixels(effective_radius * 2.0));
+                let local_bounds = Rect::from_center_size(*center, size);
                 Some(transform.transform_rect(&local_bounds))
             }
             DrawCommand::DrawOval {

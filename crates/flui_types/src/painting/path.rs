@@ -6,6 +6,7 @@ use crate::geometry::{Offset, Point, Rect, Vec2, NumericUnit, Pixels, px};
 use crate::painting::PathFillType;
 use smallvec::SmallVec;
 
+#[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum PathCommand {
     /// Move to a point without drawing.
@@ -46,6 +47,7 @@ pub enum PathCommand {
     AddArc(Rect<Pixels>, f32, f32),
 }
 
+#[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Path {
     /// The list of path commands.

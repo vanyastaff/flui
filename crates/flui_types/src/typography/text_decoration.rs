@@ -89,7 +89,7 @@ pub enum TextOverflow {
     Visible,
 }
 
-#[derive(Default)]
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum TextWidthBasis {
     #[default]
@@ -98,6 +98,7 @@ pub enum TextWidthBasis {
     LongestLine,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TextHeightBehavior {
     /// Whether to apply height to the first line ascent.
