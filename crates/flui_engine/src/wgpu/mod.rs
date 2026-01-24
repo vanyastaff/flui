@@ -47,6 +47,7 @@
 mod backend;
 #[allow(dead_code)]
 mod buffer_pool;
+mod buffers;
 mod commands;
 #[cfg(debug_assertions)]
 mod debug;
@@ -62,6 +63,7 @@ mod offscreen;
 mod painter;
 #[allow(dead_code)]
 mod pipeline;
+mod pipelines;
 mod scene;
 #[allow(dead_code)]
 mod shader_compiler;
@@ -116,3 +118,9 @@ pub use shader_compiler::{ShaderCache, ShaderType};
 
 // Texture pool
 pub use texture_pool::{PooledTexture, TextureDesc, TexturePool};
+
+// Buffer management
+pub use buffers::{BufferManager, DynamicBuffer};
+
+// Pipeline management
+pub use pipelines::{PipelineBuilder, PipelineCache};
