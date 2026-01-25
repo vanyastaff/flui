@@ -53,6 +53,8 @@ mod commands;
 mod compositor;
 #[cfg(debug_assertions)]
 mod debug;
+#[cfg(target_os = "windows")]
+pub mod dx12;
 #[allow(dead_code)]
 mod effects;
 mod effects_pipeline;
@@ -61,6 +63,8 @@ mod external_texture_registry;
 mod instancing;
 #[cfg(test)]
 mod integration_tests;
+#[cfg(target_os = "macos")]
+pub mod metal;
 #[allow(dead_code)]
 mod multi_draw;
 mod offscreen;
@@ -68,6 +72,7 @@ mod painter;
 #[allow(dead_code)]
 mod pipeline;
 mod pipelines;
+mod renderer;
 mod scene;
 #[allow(dead_code)]
 mod shader_compiler;
@@ -77,6 +82,8 @@ mod text_renderer;
 pub mod texture_cache;
 mod texture_pool;
 mod vertex;
+#[cfg(any(target_os = "linux", target_os = "android"))]
+pub mod vulkan;
 
 // ============================================================================
 // LAYER RENDERING
@@ -135,6 +142,9 @@ pub use atlas::{AtlasEntry, AtlasRect, TextureAtlas};
 
 // Compositor
 pub use compositor::{Compositor, RenderContext, TransformStack};
+
+// Renderer (cross-platform GPU renderer)
+pub use renderer::{GpuCapabilities, Renderer};
 
 // Text rendering (feature-gated)
 #[cfg(feature = "wgpu-backend")]

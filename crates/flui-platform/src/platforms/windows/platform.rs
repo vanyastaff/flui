@@ -15,13 +15,54 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 use super::display::enumerate_displays;
 use super::util::*;
 use super::window::WindowsWindow;
+use crate::config::WindowConfiguration;
+use crate::executor::{BackgroundExecutor, ForegroundExecutor};
+use crate::shared::PlatformHandlers;
 use crate::traits::*;
+use flui_types::geometry::{Bounds, DevicePixels, Point, Pixels, Size};
 
 /// Windows platform window class name
 const WINDOW_CLASS_NAME: PCWSTR = w!("FluiWindowClass");
 
 /// Static flag to ensure window class is registered only once
 static mut WINDOW_CLASS_REGISTERED: bool = false;
+
+/// Context data stored per window for event dispatch
+pub(super) struct WindowContext {
+    /// Window ID for event dispatch
+    pub window_id: WindowId,
+    /// Reference to platform handlers
+    pub handlers: Arc<Mutex<PlatformHandlers>>,
+    /// Scale factor for coordinate conversion
+    pub scale_factor: f32,
+    /// Current window mode (replaces display_state + saved bounds)
+    pub mode: std::cell::Cell<WindowMode>,
+    /// Last known size (before minimization) for restore detection
+    pub last_size: std::cell::Cell<Size<DevicePixels>>,
+    /// Window configuration (hotkeys, debouncing, etc.)
+    pub config: WindowConfiguration,
+}
+
+impl WindowContext {
+    /// Dispatch a window event safely without holding locks
+    ///
+    /// This method extracts the handler, releases the lock, calls the handler,
+    /// then re-acquires the lock to restore it. This prevents deadlocks when
+    /// the handler tries to acquire the same lock.
+    #[inline]
+    pub(super) fn dispatch_event(&self, event: WindowEvent) {
+        // Take the handler out of the lock
+        let handler = self.handlers.lock().window_event.take();
+
+        // Release the lock before calling the handler
+        if let Some(mut handler) = handler {
+            handler(event);
+
+            // Restore the handler after the call
+            self.handlers.lock().window_event = Some(handler);
+        }
+    }
+}
 
 /// Windows platform state
 pub struct WindowsPlatform {
@@ -36,6 +77,15 @@ pub struct WindowsPlatform {
 
     /// Current DPI awareness
     dpi_awareness: DPI_AWARENESS_CONTEXT,
+
+    /// Background executor for async tasks
+    background_executor: Arc<BackgroundExecutor>,
+
+    /// Foreground executor for UI thread tasks
+    foreground_executor: Arc<ForegroundExecutor>,
+
+    /// Window configuration (shared across all windows)
+    config: WindowConfiguration,
 }
 
 // SAFETY: HWND and DPI_AWARENESS_CONTEXT are just integer handles and are safe to send/share between threads.
@@ -44,8 +94,34 @@ unsafe impl Send for WindowsPlatform {}
 unsafe impl Sync for WindowsPlatform {}
 
 impl WindowsPlatform {
-    /// Create a new Windows platform instance
+    /// Create a new Windows platform instance with default configuration
     pub fn new() -> Result<Self> {
+        Self::with_config(WindowConfiguration::default())
+    }
+
+    /// Create a new Windows platform instance with custom configuration
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - Window configuration (hotkeys, debouncing, fullscreen behavior)
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use flui_platform::{WindowsPlatform, WindowConfiguration, FullscreenMonitor};
+    ///
+    /// // Disable F11 hotkey
+    /// let config = WindowConfiguration::no_hotkey();
+    /// let platform = WindowsPlatform::with_config(config)?;
+    ///
+    /// // Use primary monitor for fullscreen
+    /// let config = WindowConfiguration {
+    ///     fullscreen_monitor: FullscreenMonitor::Primary,
+    ///     ..Default::default()
+    /// };
+    /// let platform = WindowsPlatform::with_config(config)?;
+    /// ```
+    pub fn with_config(config: WindowConfiguration) -> Result<Self> {
         // Initialize COM for drag-and-drop, clipboard, etc.
         unsafe {
             use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
@@ -89,11 +165,20 @@ impl WindowsPlatform {
             .map_err(|e| anyhow::anyhow!("Failed to create message window: {:?}", e))?
         };
 
+        // Create executors
+        let background_executor = Arc::new(BackgroundExecutor::new());
+        let foreground_executor = Arc::new(ForegroundExecutor::new());
+
+        tracing::info!("Windows platform initialized with Tokio executors");
+
         Ok(Self {
             message_window,
             windows: Arc::new(Mutex::new(HashMap::new())),
             handlers: Arc::new(Mutex::new(PlatformHandlers::default())),
             dpi_awareness,
+            background_executor,
+            foreground_executor,
+            config,
         })
     }
 
@@ -136,6 +221,14 @@ impl WindowsPlatform {
         wparam: WPARAM,
         lparam: LPARAM,
     ) -> LRESULT {
+        // Get window context from GWLP_USERDATA
+        let ctx_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut WindowContext;
+        let ctx = if !ctx_ptr.is_null() {
+            Some(&*ctx_ptr)
+        } else {
+            None
+        };
+
         match msg {
             WM_CREATE => {
                 tracing::debug!("WM_CREATE for HWND {:?}", hwnd);
@@ -144,6 +237,12 @@ impl WindowsPlatform {
 
             WM_CLOSE => {
                 tracing::debug!("WM_CLOSE for HWND {:?}", hwnd);
+
+                // Dispatch CloseRequested event
+                if let Some(ctx) = ctx {
+                    ctx.dispatch_event(WindowEvent::CloseRequested { window_id: ctx.window_id });
+                }
+
                 // Let the window handle it
                 DestroyWindow(hwnd).ok();
                 LRESULT(0)
@@ -151,7 +250,16 @@ impl WindowsPlatform {
 
             WM_DESTROY => {
                 tracing::debug!("WM_DESTROY for HWND {:?}", hwnd);
-                // TODO: Remove window from windows map
+
+                // Dispatch Closed event
+                if let Some(ctx) = ctx {
+                    ctx.dispatch_event(WindowEvent::Closed(ctx.window_id));
+
+                    // Clean up context - IMPORTANT: Clear pointer BEFORE dropping to avoid dangling pointer
+                    SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+                    drop(Box::from_raw(ctx_ptr));
+                }
+
                 LRESULT(0)
             }
 
@@ -159,78 +267,282 @@ impl WindowsPlatform {
                 let mut ps = PAINTSTRUCT::default();
                 let hdc = BeginPaint(hwnd, &mut ps);
                 if !hdc.is_invalid() {
-                    // TODO: Trigger paint callback
+                    // Skip rendering for minimized windows to save CPU/GPU resources
+                    let should_skip = WindowsWindow::should_skip_render(hwnd);
+                    if !should_skip {
+                        // Dispatch RedrawRequested event
+                        if let Some(ctx) = ctx {
+                            ctx.dispatch_event(WindowEvent::RedrawRequested { window_id: ctx.window_id });
+                        }
+                    } else {
+                        tracing::trace!("⏭️  Skipping render for minimized window");
+                    }
                     EndPaint(hwnd, &ps);
                 }
                 LRESULT(0)
             }
 
             WM_SIZE => {
-                let width = get_x_lparam(lparam);
-                let height = get_y_lparam(lparam);
-                tracing::trace!("WM_SIZE: {}x{}", width, height);
-                // TODO: Handle resize
+                use super::util::{SIZE_MINIMIZED, SIZE_MAXIMIZED, SIZE_RESTORED};
+
+                let width = get_x_lparam(lparam).max(1);
+                let height = get_y_lparam(lparam).max(1);
+                let size_type = wparam.0 as u32;
+
+                if let Some(ctx) = ctx {
+                    use flui_types::geometry::DevicePixels;
+                    let size = Size::new(DevicePixels(width), DevicePixels(height));
+                    let prev_mode = ctx.mode.get();
+
+                    // Handle state transition and dispatch appropriate event
+                    let (new_mode, event) = match size_type {
+                        SIZE_MINIMIZED => {
+                            tracing::info!("📦 Window Minimized");
+                            // Validate transition
+                            let candidate = WindowMode::Minimized {
+                                previous: Bounds {
+                                    origin: Point::new(DevicePixels(0), DevicePixels(0)),
+                                    size: ctx.last_size.get(),
+                                },
+                            };
+                            if !prev_mode.can_transition_to(&candidate) {
+                                tracing::warn!("⚠️  Invalid state transition: {:?} -> Minimized (transition ignored)", prev_mode);
+                                (prev_mode, None)
+                            } else {
+                                // Save current size before minimizing
+                                if !prev_mode.is_minimized() {
+                                    ctx.last_size.set(size);
+                                }
+                                (candidate, Some(WindowEvent::Minimized { window_id: ctx.window_id }))
+                            }
+                        }
+                        SIZE_MAXIMIZED => {
+                            tracing::info!("📏 Window Maximized: {}x{}", width, height);
+                            // Validate transition
+                            let candidate = WindowMode::Maximized {
+                                previous: Bounds {
+                                    origin: Point::new(DevicePixels(0), DevicePixels(0)),
+                                    size: ctx.last_size.get(),
+                                },
+                            };
+                            if !prev_mode.can_transition_to(&candidate) {
+                                tracing::warn!("⚠️  Invalid state transition: {:?} -> Maximized (transition ignored)", prev_mode);
+                                (prev_mode, None)
+                            } else {
+                                ctx.last_size.set(size);
+                                (candidate, Some(WindowEvent::Maximized { window_id: ctx.window_id, size }))
+                            }
+                        }
+                        SIZE_RESTORED => {
+                            tracing::info!("📐 Window Restored: {}x{}", width, height);
+                            // Validate transition
+                            let candidate = WindowMode::Normal;
+                            if !prev_mode.can_transition_to(&candidate) {
+                                tracing::warn!("⚠️  Invalid state transition: {:?} -> Normal (transition ignored)", prev_mode);
+                                (prev_mode, None)
+                            } else {
+                                ctx.last_size.set(size);
+
+                                // Dispatch Restored event only when transitioning FROM minimized or maximized
+                                let event = if prev_mode.is_minimized() || prev_mode.is_maximized() {
+                                    Some(WindowEvent::Restored { window_id: ctx.window_id, size })
+                                } else {
+                                    // Normal resize within normal state
+                                    Some(WindowEvent::Resized { window_id: ctx.window_id, size })
+                                };
+                                (candidate, event)
+                            }
+                        }
+                        _ => {
+                            // Regular resize while in current state
+                            tracing::info!("📐 Window Resized: {}x{}", width, height);
+                            if prev_mode.is_normal() {
+                                ctx.last_size.set(size);
+                            }
+                            (prev_mode, Some(WindowEvent::Resized { window_id: ctx.window_id, size }))
+                        }
+                    };
+
+                    // Update state
+                    ctx.mode.set(new_mode);
+
+                    // Dispatch event if any
+                    if let Some(event) = event {
+                        ctx.dispatch_event(event);
+                    }
+                }
+
                 LRESULT(0)
             }
 
             WM_MOVE => {
                 let x = get_x_lparam(lparam);
                 let y = get_y_lparam(lparam);
-                tracing::trace!("WM_MOVE: ({}, {})", x, y);
-                // TODO: Handle move
+                tracing::info!("📍 Window Moved: ({}, {})", x, y);
+
+                // Dispatch Moved event
+                if let Some(ctx) = ctx {
+                    use flui_types::geometry::{Point, Pixels, px};
+                    let position = Point::new(px(x as f32 / ctx.scale_factor), px(y as f32 / ctx.scale_factor));
+                    ctx.dispatch_event(WindowEvent::Moved {
+                        id: ctx.window_id,
+                        position
+                    });
+                }
+
                 LRESULT(0)
             }
 
             WM_DPICHANGED => {
-                tracing::debug!("WM_DPICHANGED");
-                // TODO: Handle DPI change
+                // Extract new DPI from wparam
+                let new_dpi = hiword(wparam.0 as u32) as f32;
+                let new_scale = new_dpi / 96.0; // 96 DPI = 1.0 scale
+                tracing::info!("🔍 DPI Changed: {} (scale: {:.2}x)", new_dpi, new_scale);
+
+                // Dispatch ScaleFactorChanged event
+                if let Some(ctx) = ctx {
+                    ctx.dispatch_event(WindowEvent::ScaleFactorChanged {
+                        window_id: ctx.window_id,
+                        scale_factor: new_scale as f64
+                    });
+
+                    // Update context scale factor
+                    let ctx_mut = &mut *(ctx_ptr);
+                    ctx_mut.scale_factor = new_scale;
+
+                    // Suggested rect for new DPI
+                    let suggested_rect = lparam.0 as *const RECT;
+                    if !suggested_rect.is_null() {
+                        let rect = *suggested_rect;
+                        SetWindowPos(
+                            hwnd,
+                            None,
+                            rect.left,
+                            rect.top,
+                            rect.right - rect.left,
+                            rect.bottom - rect.top,
+                            SWP_NOZORDER | SWP_NOACTIVATE,
+                        ).ok();
+                    }
+                }
+
                 LRESULT(0)
             }
 
             WM_MOUSEMOVE => {
-                // TODO: Handle mouse move
+                let x = get_x_lparam(lparam);
+                let y = get_y_lparam(lparam);
+                tracing::debug!("🖱️  Mouse Move: ({}, {})", x, y);
                 LRESULT(0)
             }
 
-            WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN => {
-                // TODO: Handle mouse button down
+            WM_LBUTTONDOWN => {
+                let x = get_x_lparam(lparam);
+                let y = get_y_lparam(lparam);
+                tracing::info!("🖱️  Left Mouse Button Down at ({}, {})", x, y);
                 LRESULT(0)
             }
 
-            WM_LBUTTONUP | WM_RBUTTONUP | WM_MBUTTONUP => {
-                // TODO: Handle mouse button up
+            WM_RBUTTONDOWN => {
+                let x = get_x_lparam(lparam);
+                let y = get_y_lparam(lparam);
+                tracing::info!("🖱️  Right Mouse Button Down at ({}, {})", x, y);
+                LRESULT(0)
+            }
+
+            WM_MBUTTONDOWN => {
+                let x = get_x_lparam(lparam);
+                let y = get_y_lparam(lparam);
+                tracing::info!("🖱️  Middle Mouse Button Down at ({}, {})", x, y);
+                LRESULT(0)
+            }
+
+            WM_LBUTTONUP => {
+                let x = get_x_lparam(lparam);
+                let y = get_y_lparam(lparam);
+                tracing::info!("🖱️  Left Mouse Button Up at ({}, {})", x, y);
+                LRESULT(0)
+            }
+
+            WM_RBUTTONUP => {
+                let x = get_x_lparam(lparam);
+                let y = get_y_lparam(lparam);
+                tracing::info!("🖱️  Right Mouse Button Up at ({}, {})", x, y);
+                LRESULT(0)
+            }
+
+            WM_MBUTTONUP => {
+                let x = get_x_lparam(lparam);
+                let y = get_y_lparam(lparam);
+                tracing::info!("🖱️  Middle Mouse Button Up at ({}, {})", x, y);
                 LRESULT(0)
             }
 
             WM_MOUSEWHEEL => {
-                // TODO: Handle mouse wheel
+                let delta = ((wparam.0 as i32) >> 16) as i16;
+                let x = get_x_lparam(lparam);
+                let y = get_y_lparam(lparam);
+                tracing::info!("🖱️  Mouse Wheel: delta={} at ({}, {})", delta, x, y);
                 LRESULT(0)
             }
 
             WM_KEYDOWN | WM_SYSKEYDOWN => {
-                // TODO: Handle key down
+                let vk = wparam.0 as u16;
+                let is_repeat = (lparam.0 & (1 << 30)) != 0;
+                tracing::info!("⌨️  Key Down: VK={:#04x} (repeat={})", vk, is_repeat);
+
+                // Check if fullscreen hotkey is pressed (configurable, default F11)
+                if let Some(ctx) = ctx {
+                    if let Some(hotkey) = ctx.config.fullscreen_hotkey {
+                        if vk == hotkey && !is_repeat {
+                            tracing::info!("🔄 Fullscreen hotkey (VK={:#04x}) pressed - toggling fullscreen", hotkey);
+                            WindowsWindow::toggle_fullscreen_for_hwnd(hwnd);
+                        }
+                    }
+                }
+
                 LRESULT(0)
             }
 
             WM_KEYUP | WM_SYSKEYUP => {
-                // TODO: Handle key up
+                let vk = wparam.0 as u16;
+                tracing::info!("⌨️  Key Up: VK={:#04x}", vk);
                 LRESULT(0)
             }
 
             WM_CHAR => {
-                // TODO: Handle character input
+                let ch = wparam.0 as u32;
+                if let Some(c) = char::from_u32(ch) {
+                    tracing::info!("⌨️  Char: '{}'", c);
+                }
                 LRESULT(0)
             }
 
             WM_SETFOCUS => {
-                tracing::debug!("WM_SETFOCUS");
-                // TODO: Handle focus gained
+                tracing::info!("🎯 Window Focused");
+
+                // Dispatch FocusChanged event
+                if let Some(ctx) = ctx {
+                    ctx.dispatch_event(WindowEvent::FocusChanged {
+                        window_id: ctx.window_id,
+                        focused: true
+                    });
+                }
+
                 LRESULT(0)
             }
 
             WM_KILLFOCUS => {
-                tracing::debug!("WM_KILLFOCUS");
-                // TODO: Handle focus lost
+                tracing::info!("💤 Window Unfocused");
+
+                // Dispatch FocusChanged event
+                if let Some(ctx) = ctx {
+                    ctx.dispatch_event(WindowEvent::FocusChanged {
+                        window_id: ctx.window_id,
+                        focused: false
+                    });
+                }
+
                 LRESULT(0)
             }
 
@@ -246,6 +558,9 @@ impl WindowsPlatform {
             let mut msg = MSG::default();
 
             while GetMessageW(&mut msg, None, 0, 0).as_bool() {
+                // Drain foreground executor tasks before processing Windows messages
+                self.foreground_executor.drain_tasks();
+
                 TranslateMessage(&msg);
                 DispatchMessageW(&msg);
             }
@@ -261,13 +576,11 @@ impl Platform for WindowsPlatform {
     // ==================== Core System ====================
 
     fn background_executor(&self) -> Arc<dyn PlatformExecutor> {
-        // TODO: Implement proper executor
-        Arc::new(DummyExecutor)
+        Arc::clone(&self.background_executor) as Arc<dyn PlatformExecutor>
     }
 
     fn foreground_executor(&self) -> Arc<dyn PlatformExecutor> {
-        // TODO: Implement proper executor
-        Arc::new(DummyExecutor)
+        Arc::clone(&self.foreground_executor) as Arc<dyn PlatformExecutor>
     }
 
     fn text_system(&self) -> Arc<dyn PlatformTextSystem> {
@@ -329,7 +642,12 @@ impl Platform for WindowsPlatform {
     fn open_window(&self, options: WindowOptions) -> Result<Box<dyn PlatformWindow>> {
         tracing::info!("Opening window: {:?}", options.title);
 
-        let window = WindowsWindow::new(options, self.windows.clone())?;
+        let window = WindowsWindow::new(
+            options,
+            self.windows.clone(),
+            self.handlers.clone(),
+            self.config.clone(),
+        )?;
         let hwnd_value = window.hwnd().0 as isize;
 
         // Store window
@@ -401,23 +719,9 @@ impl Drop for WindowsPlatform {
     }
 }
 
-/// Platform-specific handlers
-#[derive(Default)]
-struct PlatformHandlers {
-    window_event: Option<Box<dyn FnMut(WindowEvent) + Send>>,
-    quit: Option<Box<dyn FnMut() + Send>>,
-}
+// PlatformHandlers is imported from crate::shared
 
 // ==================== Dummy Implementations ====================
-
-struct DummyExecutor;
-
-impl PlatformExecutor for DummyExecutor {
-    fn spawn(&self, task: Box<dyn FnOnce() + Send>) {
-        // TODO: Use proper thread pool
-        std::thread::spawn(task);
-    }
-}
 
 struct DummyTextSystem;
 

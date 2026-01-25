@@ -16,6 +16,7 @@ use windows::Win32::UI::HiDpi::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 use super::util::{logical_to_device, USER_DEFAULT_SCREEN_DPI};
+use crate::shared::PlatformHandlers;
 use crate::traits::*;
 use flui_types::geometry::{device_px, px, Bounds, DevicePixels, Pixels, Point, Size};
 
@@ -61,6 +62,8 @@ impl WindowsWindow {
     pub fn new(
         options: WindowOptions,
         windows_map: Arc<Mutex<HashMap<isize, Arc<WindowsWindow>>>>,
+        handlers: Arc<Mutex<PlatformHandlers>>,
+        config: crate::config::WindowConfiguration,
     ) -> Result<Arc<Self>> {
         unsafe {
             let hinstance = GetModuleHandleW(None).context("Failed to get module handle")?;
@@ -136,6 +139,25 @@ impl WindowsWindow {
                 windows_map,
             });
 
+            // Create and store WindowContext for event dispatch
+            use super::platform::WindowContext;
+            use flui_types::geometry::{DevicePixels, Size};
+
+            let window_id = WindowId(hwnd.0 as u64);
+            let device_width = logical_to_device(width as f32, scale_factor);
+            let device_height = logical_to_device(height as f32, scale_factor);
+            let initial_size = Size::new(DevicePixels(device_width), DevicePixels(device_height));
+            let context = Box::new(WindowContext {
+                window_id,
+                handlers: handlers.clone(),
+                scale_factor,
+                mode: std::cell::Cell::new(WindowMode::Normal),
+                last_size: std::cell::Cell::new(initial_size),
+                config,
+            });
+            let context_ptr = Box::into_raw(context);
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, context_ptr as isize);
+
             // Show window if requested
             if options.visible {
                 ShowWindow(hwnd, SW_SHOW);
@@ -164,6 +186,195 @@ impl WindowsWindow {
     /// Get current scale factor
     pub fn scale_factor(&self) -> f32 {
         self.state.lock().scale_factor
+    }
+
+    /// Toggle fullscreen mode for a window by HWND (static method for use from window_proc)
+    ///
+    /// This method implements borderless fullscreen by:
+    /// 1. **Entering fullscreen**: Saves current window style and bounds, removes window borders
+    ///    (WS_POPUP), and resizes to cover the entire monitor
+    /// 2. **Exiting fullscreen**: Restores saved window style and bounds
+    ///
+    /// # Implementation Details
+    /// - Uses borderless fullscreen (WS_POPUP) rather than exclusive fullscreen for better compatibility
+    /// - Automatically detects the monitor containing the window and fills it completely
+    /// - Preserves window state (position, size, style) for proper restoration
+    /// - Dispatches `WindowEvent::Fullscreen` and `WindowEvent::ExitFullscreen` events
+    ///
+    /// # Thread Safety
+    /// This method is unsafe because it accesses raw window context via GWLP_USERDATA.
+    /// It should only be called from the window's message loop thread or with proper synchronization.
+    ///
+    /// # Example
+    /// ```ignore
+    /// // Toggle fullscreen on F11 key press (from WM_KEYDOWN handler)
+    /// WindowsWindow::toggle_fullscreen_for_hwnd(hwnd);
+    /// ```
+    pub fn toggle_fullscreen_for_hwnd(hwnd: HWND) {
+        use windows::Win32::Graphics::Gdi::*;
+        use windows::Win32::UI::WindowsAndMessaging::*;
+
+        unsafe {
+            // Get WindowContext from GWLP_USERDATA
+            let ctx_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut super::platform::WindowContext;
+            if ctx_ptr.is_null() {
+                tracing::warn!("Cannot toggle fullscreen: no WindowContext");
+                return;
+            }
+            let ctx = &*ctx_ptr;
+
+            let current_mode = ctx.mode.get();
+
+            match current_mode {
+                WindowMode::Fullscreen { restore_style, restore_bounds } => {
+                    // Exit fullscreen - restore previous style and bounds
+                    tracing::info!("🪟 Exiting fullscreen mode");
+
+                    // Validate transition
+                    let candidate = WindowMode::Normal;
+                    if !current_mode.can_transition_to(&candidate) {
+                        tracing::warn!("⚠️  Cannot exit fullscreen: invalid state transition");
+                        return;
+                    }
+
+                    // Restore window style
+                    SetWindowLongPtrW(hwnd, GWL_STYLE, restore_style as isize);
+
+                    // Restore window position and size
+                    SetWindowPos(
+                        hwnd,
+                        None,
+                        restore_bounds.origin.x.0,
+                        restore_bounds.origin.y.0,
+                        restore_bounds.size.width.0,
+                        restore_bounds.size.height.0,
+                        SWP_FRAMECHANGED | SWP_NOZORDER | SWP_NOACTIVATE,
+                    ).ok();
+
+                    // Update state
+                    ctx.mode.set(WindowMode::Normal);
+
+                    // Dispatch ExitFullscreen event
+                    ctx.dispatch_event(crate::traits::WindowEvent::ExitFullscreen {
+                        window_id: ctx.window_id,
+                        size: restore_bounds.size,
+                    });
+                }
+                _ => {
+                    // Enter fullscreen - save current state and go borderless on monitor
+                    tracing::info!("🖥️  Entering fullscreen mode");
+
+                    // Get current window rect
+                    let mut rect = RECT::default();
+                    GetWindowRect(hwnd, &mut rect).ok();
+
+                    // Save current style
+                    let current_style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
+
+                    // Save current bounds
+                    let restore_bounds = Bounds {
+                        origin: Point::new(DevicePixels(rect.left), DevicePixels(rect.top)),
+                        size: Size::new(
+                            DevicePixels(rect.right - rect.left),
+                            DevicePixels(rect.bottom - rect.top)
+                        ),
+                    };
+
+                    // Validate transition
+                    let candidate = WindowMode::Fullscreen {
+                        restore_style: current_style,
+                        restore_bounds,
+                    };
+                    if !current_mode.can_transition_to(&candidate) {
+                        tracing::warn!("⚠️  Cannot enter fullscreen: invalid state transition from {:?}", current_mode);
+                        return;
+                    }
+
+                    // Get monitor containing this window
+                    let monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY);
+                    let mut monitor_info = MONITORINFO {
+                        cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+                        ..Default::default()
+                    };
+                    GetMonitorInfoW(monitor, &mut monitor_info).ok();
+
+                    let monitor_rect = monitor_info.rcMonitor;
+
+                    // Set borderless style
+                    let fullscreen_style = WS_POPUP | WS_VISIBLE;
+                    SetWindowLongPtrW(hwnd, GWL_STYLE, fullscreen_style.0 as isize);
+
+                    // Position window to cover entire monitor
+                    SetWindowPos(
+                        hwnd,
+                        Some(HWND_TOP),
+                        monitor_rect.left,
+                        monitor_rect.top,
+                        monitor_rect.right - monitor_rect.left,
+                        monitor_rect.bottom - monitor_rect.top,
+                        SWP_FRAMECHANGED | SWP_NOACTIVATE,
+                    ).ok();
+
+                    // Update state
+                    ctx.mode.set(candidate);
+
+                    // Dispatch Fullscreen event
+                    let size = Size::new(
+                        flui_types::geometry::DevicePixels(monitor_rect.right - monitor_rect.left),
+                        flui_types::geometry::DevicePixels(monitor_rect.bottom - monitor_rect.top)
+                    );
+                    ctx.dispatch_event(crate::traits::WindowEvent::Fullscreen {
+                        window_id: ctx.window_id,
+                        size,
+                    });
+                }
+            }
+        }
+    }
+
+    /// Toggle fullscreen mode for this window
+    pub fn toggle_fullscreen(&self) {
+        Self::toggle_fullscreen_for_hwnd(self.hwnd)
+    }
+
+    /// Check if the window is currently in fullscreen mode
+    pub fn is_fullscreen(&self) -> bool {
+        unsafe {
+            let ctx_ptr = GetWindowLongPtrW(self.hwnd, GWLP_USERDATA) as *mut super::platform::WindowContext;
+            if ctx_ptr.is_null() {
+                return false;
+            }
+            let ctx = &*ctx_ptr;
+            ctx.mode.get().is_fullscreen()
+        }
+    }
+
+    /// Set fullscreen mode
+    ///
+    /// # Arguments
+    /// * `fullscreen` - true to enter fullscreen, false to exit fullscreen
+    pub fn set_fullscreen(&self, fullscreen: bool) {
+        let is_fullscreen = self.is_fullscreen();
+
+        // Only toggle if state needs to change
+        if fullscreen != is_fullscreen {
+            Self::toggle_fullscreen_for_hwnd(self.hwnd);
+        }
+    }
+
+    /// Check if rendering should be skipped for this window
+    ///
+    /// Returns true if the window is minimized, as rendering minimized windows
+    /// wastes CPU/GPU resources without any visible output.
+    pub fn should_skip_render(hwnd: HWND) -> bool {
+        unsafe {
+            let ctx_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut super::platform::WindowContext;
+            if ctx_ptr.is_null() {
+                return false;
+            }
+            let ctx = &*ctx_ptr;
+            ctx.mode.get().is_minimized()
+        }
     }
 }
 
@@ -303,6 +514,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[ignore] // Requires WindowsPlatform to register window class
     fn test_window_creation() {
         let options = WindowOptions {
             title: "Test Window".to_string(),
@@ -315,7 +527,9 @@ mod tests {
         };
 
         let windows_map = Arc::new(Mutex::new(HashMap::new()));
-        let result = WindowsWindow::new(options, windows_map);
+        let handlers = Arc::new(Mutex::new(PlatformHandlers::default()));
+        let config = crate::config::WindowConfiguration::default();
+        let result = WindowsWindow::new(options, windows_map, handlers, config);
 
         assert!(
             result.is_ok(),

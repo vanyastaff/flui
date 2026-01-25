@@ -19,6 +19,18 @@ pub fn get_y_lparam(lparam: LPARAM) -> i32 {
     ((lparam.0 >> 16) & 0xFFFF) as i16 as i32
 }
 
+/// Get high word from u32
+#[inline]
+pub fn hiword(value: u32) -> u16 {
+    ((value >> 16) & 0xFFFF) as u16
+}
+
+/// Get low word from u32
+#[inline]
+pub fn loword(value: u32) -> u16 {
+    (value & 0xFFFF) as u16
+}
+
 /// Convert logical pixels to device pixels
 #[inline]
 pub fn logical_to_device(logical: f32, scale_factor: f32) -> i32 {
@@ -74,6 +86,13 @@ pub unsafe fn is_key_pressed(vkey: i32) -> bool {
 
 /// DPI constants
 pub const USER_DEFAULT_SCREEN_DPI: u32 = 96;
+
+/// WM_SIZE wParam values
+pub const SIZE_RESTORED: u32 = 0;
+pub const SIZE_MINIMIZED: u32 = 1;
+pub const SIZE_MAXIMIZED: u32 = 2;
+pub const SIZE_MAXSHOW: u32 = 3;
+pub const SIZE_MAXHIDE: u32 = 4;
 
 #[cfg(test)]
 mod tests {

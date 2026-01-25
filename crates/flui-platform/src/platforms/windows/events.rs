@@ -314,6 +314,7 @@ pub fn char_to_text(wparam: WPARAM) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::traits::NamedKey;
 
     #[test]
     fn test_vk_to_key() {
