@@ -160,7 +160,7 @@ pub struct FocusNode {
     on_key_event: RwLock<Option<KeyEventHandler>>,
 
     /// Bounding rectangle (for spatial navigation).
-    rect: RwLock<Rect>,
+    rect: RwLock<Rect<Pixels>>,
 
     /// Whether this node is attached to the focus tree.
     attached: AtomicBool,
@@ -267,12 +267,12 @@ impl FocusNode {
     }
 
     /// Returns the bounding rectangle.
-    pub fn rect(&self) -> Rect {
+    pub fn rect(&self) -> Rect<Pixels> {
         *self.rect.read()
     }
 
     /// Sets the bounding rectangle.
-    pub fn set_rect(&self, rect: Rect) {
+    pub fn set_rect(&self, rect: Rect<Pixels>) {
         *self.rect.write() = rect;
     }
 

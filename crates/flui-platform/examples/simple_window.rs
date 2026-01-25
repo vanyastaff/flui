@@ -18,7 +18,7 @@ fn main() {
     println!("Starting FLUI simple window example...");
 
     // Get the platform
-    let platform = current_platform();
+    let platform = current_platform().expect("Failed to create platform");
     println!("Platform: {}", platform.name());
 
     // Configure window

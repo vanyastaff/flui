@@ -287,7 +287,8 @@ mod tests {
 
         if let Some(vel) = tracker.velocity() {
             // Should be ~500 pixels/sec (50px in 0.1s)
-            assert!(vel.dx > 400.0 && vel.dx < 600.0);
+            use flui_types::geometry::px;
+            assert!(vel.dx > px(400.0) && vel.dx < px(600.0));
         }
     }
 }

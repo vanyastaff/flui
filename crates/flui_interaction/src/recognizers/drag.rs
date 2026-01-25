@@ -383,7 +383,7 @@ impl DragGestureRecognizer {
             // Calculate final velocity
             let velocity = state.velocity_tracker.velocity();
             let primary_velocity =
-                self.calculate_primary_velocity(velocity.pixels_per_second.to_pixels());
+                self.calculate_primary_velocity(velocity.pixels_per_second);
 
             state.state = DragPhase::Ready;
             drop(state); // Release lock before calling callback
@@ -441,8 +441,9 @@ impl DragGestureRecognizer {
 
     /// Check if velocity is sufficient for a fling gesture
     pub fn is_fling(&self, velocity: &Velocity) -> bool {
+        use flui_types::geometry::px;
         let speed = velocity.pixels_per_second.distance();
-        speed >= PixelDelta(self.min_fling_velocity())
+        speed >= px(self.min_fling_velocity())
     }
 
     /// Extract position and pointer type from a PointerEvent

@@ -354,35 +354,35 @@ impl Tween<Size<Pixels>> for SizeTween {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct RectTween {
     /// The beginning rectangle.
-    pub begin: Rect,
+    pub begin: Rect<Pixels>,
     /// The ending rectangle.
-    pub end: Rect,
+    pub end: Rect<Pixels>,
 }
 
 impl RectTween {
     /// Creates a new rectangle tween.
     #[must_use]
-    pub const fn new(begin: Rect, end: Rect) -> Self {
+    pub const fn new(begin: Rect<Pixels>, end: Rect<Pixels>) -> Self {
         Self { begin, end }
     }
 }
 
-impl Animatable<Rect> for RectTween {
-    fn transform(&self, t: f32) -> Rect {
+impl Animatable<Rect<Pixels>> for RectTween {
+    fn transform(&self, t: f32) -> Rect<Pixels> {
         self.lerp(t)
     }
 }
 
-impl Tween<Rect> for RectTween {
-    fn begin(&self) -> &Rect {
+impl Tween<Rect<Pixels>> for RectTween {
+    fn begin(&self) -> &Rect<Pixels> {
         &self.begin
     }
 
-    fn end(&self) -> &Rect {
+    fn end(&self) -> &Rect<Pixels> {
         &self.end
     }
 
-    fn lerp(&self, t: f32) -> Rect {
+    fn lerp(&self, t: f32) -> Rect<Pixels> {
         let t = t.clamp(0.0, 1.0);
         let min_x = self.begin.left() + (self.end.left() - self.begin.left()) * t;
         let min_y = self.begin.top() + (self.end.top() - self.begin.top()) * t;

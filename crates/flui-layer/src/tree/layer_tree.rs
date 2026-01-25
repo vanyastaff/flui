@@ -561,7 +561,7 @@ impl LayerTree {
     ///
     /// ```rust,ignore
     /// impl PaintingContext {
-    ///     pub fn push_clip_rect<F>(&mut self, clip_rect: Rect, clip_behavior: Clip, painter: F)
+    ///     pub fn push_clip_rect<F>(&mut self, clip_rect: Rect<Pixels>, clip_behavior: Clip, painter: F)
     ///     where
     ///         F: FnOnce(&mut PaintingContext, Offset),
     ///     {
@@ -589,7 +589,7 @@ impl LayerTree {
     pub fn push_clip_rect(
         &mut self,
         container_id: LayerId,
-        clip_rect: Rect,
+        clip_rect: Rect<Pixels>,
         clip_behavior: Clip,
     ) -> LayerId {
         use crate::layer::ClipRectLayer;
@@ -1283,7 +1283,7 @@ mod tests {
     #[test]
     fn test_push_clip_rrect() {
         use crate::layer::OffsetLayer;
-        use flui_types::geometry::{RRect, Rect};
+        use flui_types::geometry::{Pixels, RRect, Rect};
         use flui_types::painting::Clip;
 
         let mut tree = LayerTree::new();
@@ -1396,7 +1396,7 @@ mod tests {
     fn test_nested_clip_layers() {
         // Test Flutter's pattern of nested clip layers
         use crate::layer::OffsetLayer;
-        use flui_types::geometry::{RRect, Rect};
+        use flui_types::geometry::{Pixels, RRect, Rect};
         use flui_types::painting::Clip;
 
         let mut tree = LayerTree::new();

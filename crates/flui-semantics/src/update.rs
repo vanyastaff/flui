@@ -2,6 +2,7 @@
 //!
 //! This module provides types for batched semantics updates to the platform.
 
+use flui_types::geometry::Pixels;
 use flui_types::{Matrix4, Rect};
 use smallvec::SmallVec;
 use smol_str::SmolStr;
@@ -39,7 +40,7 @@ pub struct SemanticsNodeData {
     /// Text direction.
     pub text_direction: Option<TextDirection>,
     /// Bounding rectangle.
-    pub rect: Rect,
+    pub rect: Rect<Pixels>,
     /// Transform matrix.
     pub transform: Matrix4,
     /// Child node IDs.

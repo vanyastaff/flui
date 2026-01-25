@@ -9,7 +9,6 @@ repository.workspace = true
 description = "Platform abstraction layer for FLUI - cross-platform window and input handling"
 
 [dependencies]
-# FLUI foundation
 flui_types = { path = "../flui_types" }
 
 # UI Events - W3C compliant event types
@@ -25,8 +24,12 @@ anyhow = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
-# Synchronization
+# Synchronization & Async
 parking_lot = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time"] }
+num_cpus = "1.16"
+flume = "0.11"              # Better MPSC channels for UI thread communication
+waker-fn = "1.2"            # Simplified async waker creation
 
 # Window handle abstraction
 raw-window-handle = "0.6"
@@ -42,6 +45,16 @@ windows = { version = "0.59", features = [
     "Win32_UI_HiDpi",
     "Win32_System_Com",
 ] }
+
+# macOS platform
+[target.'cfg(target_os = "macos")'.dependencies]
+cocoa = "0.26.0"
+cocoa-foundation = "0.2.0"
+core-foundation = "0.10.0"
+core-graphics = "0.24"
+objc = "0.2"
+foreign-types = "0.5"
+block = "0.1"
 
 [features]
 default = ["desktop"]

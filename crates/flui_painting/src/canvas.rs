@@ -435,7 +435,7 @@ impl Canvas {
         blend_mode = ?paint.blend_mode,
         layer_depth = self.save_stack.len(),
     ))]
-    pub fn save_layer(&mut self, bounds: Option<Rect>, paint: &Paint) {
+    pub fn save_layer(&mut self, bounds: Option<Rect<Pixels>>, paint: &Paint) {
         // Save state for restore (marked as layer)
         self.save_stack.push(CanvasState {
             transform: self.transform,
@@ -473,7 +473,7 @@ impl Canvas {
     /// canvas.draw_rect(rect, &paint);
     /// canvas.restore();
     /// ```
-    pub fn save_layer_alpha(&mut self, bounds: Option<Rect>, alpha: u8) {
+    pub fn save_layer_alpha(&mut self, bounds: Option<Rect<Pixels>>, alpha: u8) {
         let opacity = alpha as f32 / 255.0;
         self.save_layer(
             bounds,
@@ -498,7 +498,7 @@ impl Canvas {
     /// canvas.draw_rect(rect, &paint);
     /// canvas.restore();
     /// ```
-    pub fn save_layer_opacity(&mut self, bounds: Option<Rect>, opacity: f32) {
+    pub fn save_layer_opacity(&mut self, bounds: Option<Rect<Pixels>>, opacity: f32) {
         self.save_layer(
             bounds,
             &Paint::fill(Color::TRANSPARENT).with_opacity(opacity.clamp(0.0, 1.0)),
@@ -520,7 +520,7 @@ impl Canvas {
     /// canvas.draw_rect(rect, &paint);
     /// canvas.restore();
     /// ```
-    pub fn save_layer_blend(&mut self, bounds: Option<Rect>, blend_mode: BlendMode) {
+    pub fn save_layer_blend(&mut self, bounds: Option<Rect<Pixels>>, blend_mode: BlendMode) {
         self.save_layer(
             bounds,
             &Paint::fill(Color::TRANSPARENT).with_blend_mode(blend_mode),
@@ -533,7 +533,7 @@ impl Canvas {
     ///
     /// All subsequent drawing will be clipped to this rectangle.
     /// Uses default clip behavior (intersect, anti-aliased).
-    pub fn clip_rect(&mut self, rect: Rect) {
+    pub fn clip_rect(&mut self, rect: Rect<Pixels>) {
         self.clip_stack.push(ClipShape::Rect(rect));
         self.display_list.push(DrawCommand::ClipRect {
             rect,
@@ -588,7 +588,7 @@ impl Canvas {
     /// // Fast clip without anti-aliasing
     /// canvas.clip_rect_ext(rect, ClipOp::Intersect, Clip::HardEdge);
     /// ```
-    pub fn clip_rect_ext(&mut self, rect: Rect, _clip_op: ClipOp, _clip_behavior: Clip) {
+    pub fn clip_rect_ext(&mut self, rect: Rect<Pixels>, _clip_op: ClipOp, _clip_behavior: Clip) {
         // TODO: Store clip_op and clip_behavior in DrawCommand when engine supports it
         self.clip_rect(rect);
     }
@@ -623,7 +623,7 @@ impl Canvas {
     /// ```
     #[inline]
     #[must_use]
-    pub fn local_clip_bounds(&self) -> Option<Rect> {
+    pub fn local_clip_bounds(&self) -> Option<Rect<Pixels>> {
         self.clip_stack.last().and_then(|clip| match clip {
             ClipShape::Rect(rect) => Some(*rect),
             ClipShape::RRect(rrect) => Some(rrect.bounding_rect()),
@@ -649,7 +649,7 @@ impl Canvas {
     /// ```
     #[inline]
     #[must_use]
-    pub fn device_clip_bounds(&self) -> Option<Rect> {
+    pub fn device_clip_bounds(&self) -> Option<Rect<Pixels>> {
         self.local_clip_bounds()
             .map(|local_bounds| self.transform.transform_rect(&local_bounds))
     }
@@ -681,7 +681,7 @@ impl Canvas {
     /// ```
     #[inline]
     #[must_use]
-    pub fn would_be_clipped(&self, rect: &Rect) -> Option<bool> {
+    pub fn would_be_clipped(&self, rect: &Rect<Pixels>) -> Option<bool> {
         self.local_clip_bounds()
             .map(|clip_bounds| !clip_bounds.intersects(rect))
     }
@@ -717,7 +717,7 @@ impl Canvas {
     /// let paint = Paint::fill(Color::BLUE);
     /// canvas.draw_rect(rect, &paint);
     /// ```
-    pub fn draw_rect(&mut self, rect: Rect, paint: &Paint) {
+    pub fn draw_rect(&mut self, rect: Rect<Pixels>, paint: &Paint) {
         self.display_list.push(DrawCommand::DrawRect {
             rect,
             paint: paint.clone(),
@@ -763,7 +763,7 @@ impl Canvas {
     /// Draws an oval (ellipse)
     ///
     /// The oval is inscribed in the given rectangle.
-    pub fn draw_oval(&mut self, rect: Rect, paint: &Paint) {
+    pub fn draw_oval(&mut self, rect: Rect<Pixels>, paint: &Paint) {
         self.display_list.push(DrawCommand::DrawOval {
             rect,
             paint: paint.clone(),
@@ -856,7 +856,7 @@ impl Canvas {
     /// * `image` - Image
     /// * `dst` - Destination rectangle
     /// * `paint` - Optional paint (for tinting, opacity, etc.)
-    pub fn draw_image(&mut self, image: Image, dst: Rect, paint: Option<&Paint>) {
+    pub fn draw_image(&mut self, image: Image, dst: Rect<Pixels>, paint: Option<&Paint>) {
         self.display_list.push(DrawCommand::DrawImage {
             image,
             dst,
@@ -892,7 +892,7 @@ impl Canvas {
     pub fn draw_image_repeat(
         &mut self,
         image: Image,
-        dst: Rect,
+        dst: Rect<Pixels>,
         repeat: crate::display_list::ImageRepeat,
         paint: Option<&Paint>,
     ) {
@@ -938,8 +938,8 @@ impl Canvas {
     pub fn draw_image_nine_slice(
         &mut self,
         image: Image,
-        center_slice: Rect,
-        dst: Rect,
+        center_slice: Rect<Pixels>,
+        dst: Rect<Pixels>,
         paint: Option<&Paint>,
     ) {
         self.display_list.push(DrawCommand::DrawImageNineSlice {
@@ -990,7 +990,7 @@ impl Canvas {
     pub fn draw_image_filtered(
         &mut self,
         image: Image,
-        dst: Rect,
+        dst: Rect<Pixels>,
         filter: crate::display_list::ColorFilter,
         paint: Option<&Paint>,
     ) {
@@ -1037,8 +1037,8 @@ impl Canvas {
     pub fn draw_texture(
         &mut self,
         texture_id: crate::display_list::TextureId,
-        dst: Rect,
-        src: Option<Rect>,
+        dst: Rect<Pixels>,
+        src: Option<Rect<Pixels>>,
         filter_quality: crate::display_list::FilterQuality,
         opacity: f32,
     ) {
@@ -1107,7 +1107,7 @@ impl Canvas {
     /// );
     /// canvas.draw_gradient(rect, gradient);
     /// ```
-    pub fn draw_gradient(&mut self, rect: Rect, shader: crate::display_list::Shader) {
+    pub fn draw_gradient(&mut self, rect: Rect<Pixels>, shader: crate::display_list::Shader) {
         self.display_list.push(DrawCommand::DrawGradient {
             rect,
             shader,
@@ -1163,7 +1163,7 @@ impl Canvas {
     /// * `paint` - Paint style
     pub fn draw_arc(
         &mut self,
-        rect: Rect,
+        rect: Rect<Pixels>,
         start_angle: f32,
         sweep_angle: f32,
         use_center: bool,
@@ -1338,7 +1338,7 @@ impl Canvas {
     pub fn draw_atlas(
         &mut self,
         image: Image,
-        sprites: Vec<Rect>,
+        sprites: Vec<Rect<Pixels>>,
         transforms: Vec<Matrix4>,
         colors: Option<Vec<Color>>,
         blend_mode: crate::display_list::BlendMode,
@@ -1413,7 +1413,7 @@ impl Canvas {
     /// ```
     pub fn draw_shader_mask<F>(
         &mut self,
-        bounds: Rect,
+        bounds: Rect<Pixels>,
         shader: crate::display_list::Shader,
         blend_mode: crate::display_list::BlendMode,
         draw_child: F,
@@ -1486,7 +1486,7 @@ impl Canvas {
     /// ```
     pub fn draw_backdrop_filter<F>(
         &mut self,
-        bounds: Rect,
+        bounds: Rect<Pixels>,
         filter: ImageFilter,
         blend_mode: BlendMode,
         draw_child: Option<F>,
@@ -1854,7 +1854,7 @@ impl Canvas {
     /// ```
     #[inline]
     #[must_use]
-    pub fn bounds(&self) -> Rect {
+    pub fn bounds(&self) -> Rect<Pixels> {
         self.display_list.bounds()
     }
 
@@ -2126,7 +2126,7 @@ impl Canvas {
     /// });
     /// ```
     #[inline]
-    pub fn with_clip_rect<F, R>(&mut self, rect: Rect, f: F) -> R
+    pub fn with_clip_rect<F, R>(&mut self, rect: Rect<Pixels>, f: F) -> R
     where
         F: FnOnce(&mut Self) -> R,
     {
@@ -2208,7 +2208,7 @@ impl Canvas {
     /// });
     /// ```
     #[inline]
-    pub fn with_opacity<F, R>(&mut self, opacity: f32, bounds: Option<Rect>, f: F) -> R
+    pub fn with_opacity<F, R>(&mut self, opacity: f32, bounds: Option<Rect<Pixels>>, f: F) -> R
     where
         F: FnOnce(&mut Self) -> R,
     {
@@ -2231,7 +2231,7 @@ impl Canvas {
     /// });
     /// ```
     #[inline]
-    pub fn with_blend_mode<F, R>(&mut self, blend_mode: BlendMode, bounds: Option<Rect>, f: F) -> R
+    pub fn with_blend_mode<F, R>(&mut self, blend_mode: BlendMode, bounds: Option<Rect<Pixels>>, f: F) -> R
     where
         F: FnOnce(&mut Self) -> R,
     {
@@ -2313,7 +2313,7 @@ impl Canvas {
     /// canvas.draw_rects(&rects, &paint);
     /// ```
     #[inline]
-    pub fn draw_rects(&mut self, rects: &[Rect], paint: &Paint) {
+    pub fn draw_rects(&mut self, rects: &[Rect<Pixels>], paint: &Paint) {
         for rect in rects {
             self.draw_rect(*rect, paint);
         }
@@ -2384,7 +2384,7 @@ impl Canvas {
     /// canvas.draw_rect_if(is_selected, selection_rect, &highlight_paint);
     /// ```
     #[inline]
-    pub fn draw_rect_if(&mut self, condition: bool, rect: Rect, paint: &Paint) {
+    pub fn draw_rect_if(&mut self, condition: bool, rect: Rect<Pixels>, paint: &Paint) {
         if condition {
             self.draw_rect(rect, paint);
         }
@@ -2440,7 +2440,7 @@ impl Canvas {
     /// # Examples
     ///
     /// ```rust,ignore
-    /// let maybe_rect: Option<Rect> = get_selection();
+    /// let maybe_rect: Option<Rect<Pixels>> = get_selection();
     /// canvas.draw_if_some(maybe_rect, |c, rect| {
     ///     c.draw_rect(rect, &selection_paint);
     /// });
@@ -2569,7 +2569,7 @@ impl Canvas {
     /// canvas.debug_rect(widget_bounds, Color::RED);
     /// ```
     #[inline]
-    pub fn debug_rect(&mut self, rect: Rect, color: Color) {
+    pub fn debug_rect(&mut self, rect: Rect<Pixels>, color: Color) {
         let paint = Paint::stroke(color, 1.0);
         self.draw_rect(rect, &paint);
     }
@@ -2678,7 +2678,7 @@ impl Canvas {
     #[inline]
     pub fn draw_rounded_rect_corners(
         &mut self,
-        rect: Rect,
+        rect: Rect<Pixels>,
         top_left: f32,
         top_right: f32,
         bottom_right: f32,
@@ -2810,7 +2810,7 @@ impl Canvas {
 
     /// Clips to a rectangle and returns self for chaining.
     #[inline]
-    pub fn clipped_rect(&mut self, rect: Rect) -> &mut Self {
+    pub fn clipped_rect(&mut self, rect: Rect<Pixels>) -> &mut Self {
         self.clip_rect(rect);
         self
     }
@@ -2845,7 +2845,7 @@ impl Canvas {
 
     /// Draws a rect and returns self for chaining.
     #[inline]
-    pub fn rect(&mut self, rect: Rect, paint: &Paint) -> &mut Self {
+    pub fn rect(&mut self, rect: Rect<Pixels>, paint: &Paint) -> &mut Self {
         self.draw_rect(rect, paint);
         self
     }
@@ -2859,7 +2859,7 @@ impl Canvas {
 
     /// Draws a rectangle with uniform corner radius and returns self for chaining.
     #[inline]
-    pub fn rounded_rect(&mut self, rect: Rect, radius: f32, paint: &Paint) -> &mut Self {
+    pub fn rounded_rect(&mut self, rect: Rect<Pixels>, radius: f32, paint: &Paint) -> &mut Self {
         self.draw_rounded_rect(rect, Pixels(radius), paint);
         self
     }
@@ -2901,7 +2901,7 @@ impl Canvas {
 
     /// Draws an oval and returns self for chaining.
     #[inline]
-    pub fn oval(&mut self, rect: Rect, paint: &Paint) -> &mut Self {
+    pub fn oval(&mut self, rect: Rect<Pixels>, paint: &Paint) -> &mut Self {
         self.draw_oval(rect, paint);
         self
     }
@@ -2919,8 +2919,8 @@ impl Canvas {
     pub fn texture(
         &mut self,
         texture_id: crate::display_list::TextureId,
-        dst: Rect,
-        src: Option<Rect>,
+        dst: Rect<Pixels>,
+        src: Option<Rect<Pixels>>,
         filter_quality: crate::display_list::FilterQuality,
         opacity: f32,
     ) -> &mut Self {
@@ -2930,7 +2930,7 @@ impl Canvas {
 
     /// Draws an image and returns self for chaining.
     #[inline]
-    pub fn image(&mut self, image: Image, dst: Rect, paint: Option<&Paint>) -> &mut Self {
+    pub fn image(&mut self, image: Image, dst: Rect<Pixels>, paint: Option<&Paint>) -> &mut Self {
         self.draw_image(image, dst, paint);
         self
     }
@@ -2940,7 +2940,7 @@ impl Canvas {
     pub fn image_repeat(
         &mut self,
         image: Image,
-        dst: Rect,
+        dst: Rect<Pixels>,
         repeat: crate::display_list::ImageRepeat,
         paint: Option<&Paint>,
     ) -> &mut Self {
@@ -2953,8 +2953,8 @@ impl Canvas {
     pub fn image_nine_slice(
         &mut self,
         image: Image,
-        center_slice: Rect,
-        dst: Rect,
+        center_slice: Rect<Pixels>,
+        dst: Rect<Pixels>,
         paint: Option<&Paint>,
     ) -> &mut Self {
         self.draw_image_nine_slice(image, center_slice, dst, paint);
@@ -2966,7 +2966,7 @@ impl Canvas {
     pub fn image_filtered(
         &mut self,
         image: Image,
-        dst: Rect,
+        dst: Rect<Pixels>,
         filter: crate::display_list::ColorFilter,
         paint: Option<&Paint>,
     ) -> &mut Self {
@@ -2983,7 +2983,7 @@ impl Canvas {
 
     /// Draws a gradient-filled rectangle and returns self for chaining.
     #[inline]
-    pub fn gradient(&mut self, rect: Rect, shader: crate::display_list::Shader) -> &mut Self {
+    pub fn gradient(&mut self, rect: Rect<Pixels>, shader: crate::display_list::Shader) -> &mut Self {
         self.draw_gradient(rect, shader);
         self
     }
@@ -3003,7 +3003,7 @@ impl Canvas {
     #[inline]
     pub fn arc(
         &mut self,
-        rect: Rect,
+        rect: Rect<Pixels>,
         start_angle: f32,
         sweep_angle: f32,
         use_center: bool,
@@ -3132,7 +3132,7 @@ struct CanvasState {
 #[derive(Debug, Clone)]
 #[allow(dead_code)] // Fields stored for future optimization features
 enum ClipShape {
-    Rect(Rect),
+    Rect(Rect<Pixels>),
     RRect(RRect),
     Path(Box<Path>),
 }

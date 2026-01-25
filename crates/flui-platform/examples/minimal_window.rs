@@ -15,7 +15,7 @@ fn main() {
     println!("===========================================\n");
 
     // Try to get platform
-    let platform = flui_platform::current_platform();
+    let platform = flui_platform::current_platform().expect("Failed to create platform");
 
     println!("Platform initialized: {}", platform.name());
     println!("Platform capabilities available: {:?}\n",

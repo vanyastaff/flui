@@ -5,7 +5,7 @@
 
 use super::{PlatformCapabilities, PlatformDisplay, PlatformWindow};
 use anyhow::Result;
-use flui_types::geometry::{DevicePixels, Pixels, Point, Size};
+use flui_types::geometry::{Bounds, DevicePixels, Pixels, Point, Size};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -41,6 +41,101 @@ impl Default for WindowOptions {
             min_size: None,
             max_size: None,
         }
+    }
+}
+
+/// Window display mode with restoration data
+///
+/// Combines window state (normal/minimized/maximized/fullscreen) with the data
+/// needed to restore from each state. This design ensures type-safety: restoration
+/// data is only available when in the corresponding state.
+///
+/// # Platform-specific notes
+///
+/// - **Windows**: `restore_style` stores WS_* window style bits
+/// - **macOS**: Would store NSWindow style mask
+/// - **Linux**: Would store window manager hints
+///
+/// # Example
+///
+/// ```rust,ignore
+/// match window_mode {
+///     WindowMode::Normal => println!("Window is in normal state"),
+///     WindowMode::Fullscreen { restore_style, restore_bounds } => {
+///         println!("Window is fullscreen, can restore to {:?}", restore_bounds);
+///     }
+///     _ => {}
+/// }
+/// ```
+#[derive(Debug, Clone, Copy)]
+pub enum WindowMode {
+    /// Normal windowed state
+    Normal,
+
+    /// Window is minimized (iconified)
+    Minimized {
+        /// Bounds before minimization for restoration
+        previous: Bounds<DevicePixels>,
+    },
+
+    /// Window is maximized
+    Maximized {
+        /// Bounds before maximization for restoration
+        previous: Bounds<DevicePixels>,
+    },
+
+    /// Window is in fullscreen mode
+    Fullscreen {
+        /// Window style bits before fullscreen (platform-specific)
+        ///
+        /// - Windows: WS_OVERLAPPEDWINDOW, WS_POPUP, etc.
+        /// - macOS: NSWindowStyleMask bits
+        /// - Linux: X11/Wayland window type atoms
+        restore_style: u32,
+
+        /// Bounds before fullscreen for restoration
+        restore_bounds: Bounds<DevicePixels>,
+    },
+}
+
+impl WindowMode {
+    /// Check if window is in fullscreen mode
+    #[inline]
+    pub fn is_fullscreen(&self) -> bool {
+        matches!(self, WindowMode::Fullscreen { .. })
+    }
+
+    /// Check if window is minimized
+    #[inline]
+    pub fn is_minimized(&self) -> bool {
+        matches!(self, WindowMode::Minimized { .. })
+    }
+
+    /// Check if window is maximized
+    #[inline]
+    pub fn is_maximized(&self) -> bool {
+        matches!(self, WindowMode::Maximized { .. })
+    }
+
+    /// Check if window is in normal windowed mode
+    #[inline]
+    pub fn is_normal(&self) -> bool {
+        matches!(self, WindowMode::Normal)
+    }
+
+    /// Validate if transition to new mode is allowed
+    ///
+    /// All transitions are currently allowed except transitioning to the same state.
+    /// This method exists as a hook for adding transition restrictions in the future.
+    pub fn can_transition_to(&self, new_mode: &WindowMode) -> bool {
+        // All transitions allowed except same state
+        !std::mem::discriminant(self).eq(&std::mem::discriminant(new_mode))
+    }
+}
+
+impl Default for WindowMode {
+    fn default() -> Self {
+        WindowMode::Normal
     }
 }
 
@@ -221,6 +316,35 @@ pub enum WindowEvent {
     Moved {
         id: WindowId,
         position: Point<Pixels>,
+    },
+
+    /// Window was minimized (iconified)
+    Minimized { window_id: WindowId },
+
+    /// Window was maximized
+    Maximized {
+        window_id: WindowId,
+        size: Size<DevicePixels>,
+    },
+
+    /// Window was restored from minimized or maximized state
+    Restored {
+        window_id: WindowId,
+        size: Size<DevicePixels>,
+    },
+
+    /// Window entered fullscreen mode
+    Fullscreen {
+        window_id: WindowId,
+        /// Size of the fullscreen window (monitor size)
+        size: Size<DevicePixels>,
+    },
+
+    /// Window exited fullscreen mode
+    ExitFullscreen {
+        window_id: WindowId,
+        /// Restored window size
+        size: Size<DevicePixels>,
     },
 }
 

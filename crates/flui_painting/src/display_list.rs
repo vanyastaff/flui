@@ -87,14 +87,14 @@ pub type HitRegionHandler = Arc<dyn Fn(&PointerEvent) + Send + Sync>;
 #[derive(Clone)]
 pub struct HitRegion {
     /// Bounds of the hit-testable area
-    pub bounds: Rect,
+    pub bounds: Rect<Pixels>,
     /// Handler to call when pointer events occur in this region
     pub handler: HitRegionHandler,
 }
 
 impl HitRegion {
     /// Create a new hit region
-    pub fn new(bounds: Rect, handler: HitRegionHandler) -> Self {
+    pub fn new(bounds: Rect<Pixels>, handler: HitRegionHandler) -> Self {
         Self { bounds, handler }
     }
 
@@ -171,7 +171,7 @@ pub struct DisplayList {
     commands: Vec<DrawCommand>,
 
     /// Cached bounds of all drawing
-    bounds: Rect,
+    bounds: Rect<Pixels>,
 
     /// Hit-testable regions with event handlers
     #[cfg_attr(feature = "serde", serde(skip))]
@@ -236,7 +236,7 @@ pub trait DisplayListCore: private::Sealed {
     ///
     /// The bounds are calculated incrementally as commands are added and represent
     /// the union of all command bounds.
-    fn bounds(&self) -> Rect;
+    fn bounds(&self) -> Rect<Pixels>;
 
     /// Returns the total number of commands in this display list.
     fn len(&self) -> usize;
@@ -445,7 +445,7 @@ impl DisplayListCore for DisplayList {
         self.commands.iter()
     }
 
-    fn bounds(&self) -> Rect {
+    fn bounds(&self) -> Rect<Pixels> {
         self.bounds
     }
 
@@ -465,7 +465,7 @@ impl DisplayListCore for Arc<DisplayList> {
         (**self).commands()
     }
 
-    fn bounds(&self) -> Rect {
+    fn bounds(&self) -> Rect<Pixels> {
         (**self).bounds()
     }
 
@@ -483,7 +483,7 @@ impl DisplayListCore for Box<DisplayList> {
         (**self).commands()
     }
 
-    fn bounds(&self) -> Rect {
+    fn bounds(&self) -> Rect<Pixels> {
         (**self).bounds()
     }
 
@@ -501,7 +501,7 @@ impl DisplayListCore for &DisplayList {
         (*self).commands()
     }
 
-    fn bounds(&self) -> Rect {
+    fn bounds(&self) -> Rect<Pixels> {
         (*self).bounds()
     }
 
@@ -984,7 +984,7 @@ pub enum DrawCommand {
     /// Clip to a rectangle
     ClipRect {
         /// Rectangle to clip to
-        rect: Rect,
+        rect: Rect<Pixels>,
         /// Transform at recording time
         transform: Matrix4,
     },
@@ -1021,7 +1021,7 @@ pub enum DrawCommand {
     /// Draw a rectangle
     DrawRect {
         /// Rectangle to draw
-        rect: Rect,
+        rect: Rect<Pixels>,
         /// Paint style
         paint: Paint,
         /// Transform at recording time
@@ -1053,7 +1053,7 @@ pub enum DrawCommand {
     /// Draw an oval (ellipse)
     DrawOval {
         /// Bounding rectangle
-        rect: Rect,
+        rect: Rect<Pixels>,
         /// Paint style
         paint: Paint,
         /// Transform at recording time
@@ -1105,7 +1105,7 @@ pub enum DrawCommand {
         /// Image
         image: Image,
         /// Destination rectangle
-        dst: Rect,
+        dst: Rect<Pixels>,
         /// Optional paint (for tinting, etc.)
         paint: Option<Paint>,
         /// Transform at recording time
@@ -1119,7 +1119,7 @@ pub enum DrawCommand {
         /// Image to tile
         image: Image,
         /// Destination rectangle to fill
-        dst: Rect,
+        dst: Rect<Pixels>,
         /// How to repeat the image
         repeat: ImageRepeat,
         /// Optional paint (for tinting, opacity, etc.)
@@ -1138,9 +1138,9 @@ pub enum DrawCommand {
         image: Image,
         /// Center slice rectangle within the image (in image coordinates)
         /// This area will be scaled; areas outside will maintain their size
-        center_slice: Rect,
+        center_slice: Rect<Pixels>,
         /// Destination rectangle
-        dst: Rect,
+        dst: Rect<Pixels>,
         /// Optional paint (for tinting, opacity, etc.)
         paint: Option<Paint>,
         /// Transform at recording time
@@ -1154,7 +1154,7 @@ pub enum DrawCommand {
         /// Image to draw
         image: Image,
         /// Destination rectangle
-        dst: Rect,
+        dst: Rect<Pixels>,
         /// Color filter to apply
         filter: ColorFilter,
         /// Optional paint (for additional effects)
@@ -1180,9 +1180,9 @@ pub enum DrawCommand {
         /// GPU texture identifier
         texture_id: TextureId,
         /// Destination rectangle
-        dst: Rect,
+        dst: Rect<Pixels>,
         /// Source rectangle within the texture (None = entire texture)
-        src: Option<Rect>,
+        src: Option<Rect<Pixels>>,
         /// Filter quality for texture sampling
         filter_quality: FilterQuality,
         /// Opacity (0.0 = transparent, 1.0 = opaque)
@@ -1211,7 +1211,7 @@ pub enum DrawCommand {
     /// Supports linear, radial, and sweep gradients.
     DrawGradient {
         /// Rectangle to fill
-        rect: Rect,
+        rect: Rect<Pixels>,
         /// Gradient shader
         shader: Shader,
         /// Transform at recording time
@@ -1263,7 +1263,7 @@ pub enum DrawCommand {
         /// Shader specification (gradient type, colors, etc.)
         shader: Shader,
         /// Bounds of the masked region
-        bounds: Rect,
+        bounds: Rect<Pixels>,
         /// Blend mode for final compositing
         blend_mode: BlendMode,
         /// Transform at recording time
@@ -1293,7 +1293,7 @@ pub enum DrawCommand {
         /// Image filter to apply (blur, color adjustments, etc.)
         filter: ImageFilter,
         /// Bounds for backdrop capture
-        bounds: Rect,
+        bounds: Rect<Pixels>,
         /// Blend mode for final compositing
         blend_mode: BlendMode,
         /// Transform at recording time
@@ -1304,7 +1304,7 @@ pub enum DrawCommand {
     /// Draw an arc segment
     DrawArc {
         /// Bounding rectangle for the ellipse
-        rect: Rect,
+        rect: Rect<Pixels>,
         /// Start angle in radians
         start_angle: f32,
         /// Sweep angle in radians
@@ -1372,7 +1372,7 @@ pub enum DrawCommand {
         /// Source image (atlas texture)
         image: Image,
         /// Source rectangles in atlas (sprite locations)
-        sprites: Vec<Rect>,
+        sprites: Vec<Rect<Pixels>>,
         /// Destination transforms for each sprite
         transforms: Vec<Matrix4>,
         /// Optional colors to blend with each sprite
@@ -1418,7 +1418,7 @@ pub enum DrawCommand {
     /// ```
     SaveLayer {
         /// Bounds of the layer (None = unbounded, clips to current clip)
-        bounds: Option<Rect>,
+        bounds: Option<Rect<Pixels>>,
         /// Paint to apply when compositing the layer (opacity, blend mode, etc.)
         paint: Paint,
         /// Transform at recording time
@@ -1761,7 +1761,7 @@ impl DrawCommand {
     ///
     /// Used to calculate the DisplayList's overall bounds.
     /// This returns transformed screen-space bounds (local bounds transformed by the command's matrix).
-    fn bounds(&self) -> Option<Rect> {
+    fn bounds(&self) -> Option<Rect<Pixels>> {
         match self {
             DrawCommand::DrawRect {
                 rect,
@@ -1940,7 +1940,7 @@ impl DrawCommand {
                 // 2. Destination transform (sprite_transforms[i])
                 // 3. Overall command transform (transform)
 
-                let mut combined_bounds: Option<Rect> = None;
+                let mut combined_bounds: Option<Rect<Pixels>> = None;
 
                 for (sprite_rect, sprite_transform) in sprites.iter().zip(sprite_transforms.iter())
                 {

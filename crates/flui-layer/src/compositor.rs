@@ -37,7 +37,7 @@
 //! ```
 
 use flui_foundation::LayerId;
-use flui_types::geometry::{RRect, Rect};
+use flui_types::geometry::{Pixels, RRect, Rect};
 use flui_types::painting::{
     effects::ColorMatrix, BlendMode, Clip, FilterQuality, ImageFilter, Path, ShaderSpec, TextureId,
 };
@@ -247,17 +247,17 @@ impl<'a> SceneBuilder<'a> {
     ///
     /// * `rect` - The clipping rectangle
     /// * `clip` - Clip behavior (HardEdge, AntiAlias, AntiAliasWithSaveLayer)
-    pub fn push_clip_rect(&mut self, rect: Rect, clip: Clip) -> LayerId {
+    pub fn push_clip_rect(&mut self, rect: Rect<Pixels>, clip: Clip) -> LayerId {
         self.push_layer(Layer::ClipRect(ClipRectLayer::new(rect, clip)))
     }
 
     /// Pushes a clip rect layer with hard edge clipping.
-    pub fn push_clip_rect_hard(&mut self, rect: Rect) -> LayerId {
+    pub fn push_clip_rect_hard(&mut self, rect: Rect<Pixels>) -> LayerId {
         self.push_layer(Layer::ClipRect(ClipRectLayer::hard_edge(rect)))
     }
 
     /// Pushes a clip rect layer with anti-aliased clipping.
-    pub fn push_clip_rect_aa(&mut self, rect: Rect) -> LayerId {
+    pub fn push_clip_rect_aa(&mut self, rect: Rect<Pixels>) -> LayerId {
         self.push_layer(Layer::ClipRect(ClipRectLayer::anti_alias(rect)))
     }
 
@@ -319,7 +319,7 @@ impl<'a> SceneBuilder<'a> {
         &mut self,
         shader: ShaderSpec,
         blend_mode: BlendMode,
-        bounds: Rect,
+        bounds: Rect<Pixels>,
     ) -> LayerId {
         self.push_layer(Layer::ShaderMask(ShaderMaskLayer::new(
             shader, blend_mode, bounds,
@@ -337,7 +337,7 @@ impl<'a> SceneBuilder<'a> {
         &mut self,
         filter: ImageFilter,
         blend_mode: BlendMode,
-        bounds: Rect,
+        bounds: Rect<Pixels>,
     ) -> LayerId {
         self.push_layer(Layer::BackdropFilter(BackdropFilterLayer::new(
             filter, blend_mode, bounds,
@@ -350,7 +350,7 @@ impl<'a> SceneBuilder<'a> {
     ///
     /// * `sigma` - Blur radius
     /// * `bounds` - The bounds of the effect
-    pub fn push_backdrop_blur(&mut self, sigma: f32, bounds: Rect) -> LayerId {
+    pub fn push_backdrop_blur(&mut self, sigma: f32, bounds: Rect<Pixels>) -> LayerId {
         self.push_layer(Layer::BackdropFilter(BackdropFilterLayer::new(
             ImageFilter::blur(sigma),
             BlendMode::SrcOver,
@@ -389,7 +389,7 @@ impl<'a> SceneBuilder<'a> {
     ///
     /// * `texture_id` - The GPU texture identifier
     /// * `rect` - The destination rectangle
-    pub fn add_texture(&mut self, texture_id: TextureId, rect: Rect) -> LayerId {
+    pub fn add_texture(&mut self, texture_id: TextureId, rect: Rect<Pixels>) -> LayerId {
         self.add_leaf(Layer::Texture(TextureLayer::new(texture_id, rect)))
     }
 
@@ -404,7 +404,7 @@ impl<'a> SceneBuilder<'a> {
     pub fn add_texture_with_options(
         &mut self,
         texture_id: TextureId,
-        rect: Rect,
+        rect: Rect<Pixels>,
         filter_quality: FilterQuality,
         opacity: f32,
     ) -> LayerId {

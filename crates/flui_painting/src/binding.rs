@@ -271,7 +271,7 @@ pub trait ShaderWarmUp: Send + Sync {
 /// A minimal canvas interface used during warm-up.
 pub trait WarmUpCanvas {
     /// Draws a rectangle.
-    fn draw_rect(&mut self, rect: flui_types::Rect);
+    fn draw_rect(&mut self, rect: flui_types::Rect<flui_types::geometry::Pixels>);
 
     /// Draws a rounded rectangle.
     fn draw_rrect(&mut self, rrect: flui_types::RRect);

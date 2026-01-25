@@ -30,8 +30,10 @@
 //! ```
 
 use flui_types::geometry::Offset;
-use flui_types::geometry::PixelDelta;
 use flui_types::geometry::Pixels;
+
+// Re-export Velocity and VelocityEstimate from flui_types
+pub use flui_types::gestures::{Velocity, VelocityEstimate};
 
 use std::time::{Duration, Instant};
 
@@ -53,85 +55,6 @@ const POLYNOMIAL_DEGREE: usize = 2;
 
 /// Minimum duration to compute velocity (1ms)
 const MIN_DURATION: Duration = Duration::from_micros(1000);
-
-// ============================================================================
-// Velocity struct
-// ============================================================================
-
-/// Velocity in 2D space, measured in pixels per second.
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
-pub struct Velocity {
-    /// Velocity vector in pixels per second.
-    pub pixels_per_second: Offset<PixelDelta>,
-}
-
-impl Velocity {
-    /// Zero velocity.
-    pub const ZERO: Self = Self {
-        pixels_per_second: Offset::new(PixelDelta::ZERO, PixelDelta::ZERO),
-    };
-
-    /// Create a new velocity from pixels per second.
-    #[inline]
-    pub const fn new(pixels_per_second: Offset<PixelDelta>) -> Self {
-        Self { pixels_per_second }
-    }
-
-    /// Create zero velocity.
-    #[inline]
-    pub const fn zero() -> Self {
-        Self::ZERO
-    }
-
-    /// Get the magnitude (speed) in pixels per second.
-    #[inline]
-    pub fn magnitude(&self) -> f32 {
-        self.pixels_per_second.distance().0
-    }
-
-    /// Get the direction as a unit vector, or None if velocity is zero.
-    pub fn direction(&self) -> Option<Offset<PixelDelta>> {
-        let mag = self.magnitude();
-        if mag < f32::EPSILON {
-            None
-        } else {
-            Some(Offset::new(
-                self.pixels_per_second.dx / mag,
-                self.pixels_per_second.dy / mag,
-            ))
-        }
-    }
-
-    /// Clamp velocity magnitude to a maximum value.
-    pub fn clamp_magnitude(self, max: f32) -> Self {
-        let mag = self.magnitude();
-        if mag <= max {
-            self
-        } else {
-            let scale = max / mag;
-            Self {
-                pixels_per_second: Offset::new(
-                    self.pixels_per_second.dx * scale,
-                    self.pixels_per_second.dy * scale,
-                ),
-            }
-        }
-    }
-}
-
-impl From<Offset<PixelDelta>> for Velocity {
-    #[inline]
-    fn from(pixels_per_second: Offset<PixelDelta>) -> Self {
-        Self { pixels_per_second }
-    }
-}
-
-impl From<Velocity> for Offset<PixelDelta> {
-    #[inline]
-    fn from(velocity: Velocity) -> Self {
-        velocity.pixels_per_second
-    }
-}
 
 // ============================================================================
 // PositionSample
@@ -307,7 +230,7 @@ impl VelocityTracker {
         let vx = polynomial_fit_velocity(&times, &x_positions, &weights);
         let vy = polynomial_fit_velocity(&times, &y_positions, &weights);
 
-        Velocity::new(Offset::new(PixelDelta(vx as f32), PixelDelta(vy as f32)))
+        Velocity::new(Offset::new(Pixels(vx as f32), Pixels(vy as f32)))
     }
 
     /// Simple linear regression.
@@ -358,7 +281,7 @@ impl VelocityTracker {
         let vx = num_x / denom;
         let vy = num_y / denom;
 
-        Velocity::new(Offset::new(PixelDelta(vx as f32), PixelDelta(vy as f32)))
+        Velocity::new(Offset::new(Pixels(vx as f32), Pixels(vy as f32)))
     }
 
     /// Simple two-sample velocity (fastest).
@@ -379,10 +302,7 @@ impl VelocityTracker {
         let dt_secs = dt.as_secs_f32();
         let delta = newest.position - oldest.position;
 
-        Velocity::new(Offset::new(
-            PixelDelta((delta.dx / dt_secs).0),
-            PixelDelta((delta.dy / dt_secs).0),
-        ))
+        Velocity::new(Offset::new(delta.dx / dt_secs, delta.dy / dt_secs))
     }
 }
 
@@ -529,56 +449,40 @@ fn solve_3x3(a: &[[f64; 3]; 3], b: &[f64; 3]) -> Option<[f64; 3]> {
 }
 
 // ============================================================================
-// VelocityEstimate (for prediction)
+// VelocityEstimate extensions (using type from flui_types)
 // ============================================================================
-
-/// Velocity estimate with confidence information.
-#[derive(Debug, Clone, Copy)]
-pub struct VelocityEstimate {
-    /// Estimated velocity.
-    pub velocity: Velocity,
-    /// Confidence in the estimate (0.0 - 1.0).
-    pub confidence: f32,
-    /// Duration of data used for estimation.
-    pub duration: Duration,
-    /// Number of samples used.
-    pub sample_count: usize,
-}
-
-impl VelocityEstimate {
-    /// Check if this estimate is reliable enough for fling detection.
-    pub fn is_reliable(&self) -> bool {
-        self.confidence > 0.5 && self.sample_count >= 3
-    }
-}
 
 impl VelocityTracker {
     /// Get a velocity estimate with confidence information.
+    ///
+    /// Uses the `VelocityEstimate` type from `flui_types::gestures`.
     pub fn estimate(&self) -> VelocityEstimate {
-        let velocity = self.velocity();
         let n = self.samples.len();
 
-        let (duration, confidence) = if n < 2 {
-            (Duration::ZERO, 0.0)
-        } else {
-            let first = self.samples[0].time;
-            let last = self.samples[n - 1].time;
-            let dur = last.duration_since(first);
-
-            // Confidence based on sample count and duration
-            let count_factor = (n as f32 / 5.0).min(1.0);
-            let duration_factor = (dur.as_secs_f32() / 0.05).min(1.0);
-            let conf = count_factor * duration_factor;
-
-            (dur, conf)
-        };
-
-        VelocityEstimate {
-            velocity,
-            confidence,
-            duration,
-            sample_count: n,
+        if n < 2 {
+            // No data - return zero velocity with no confidence
+            return VelocityEstimate::new(Offset::ZERO, Offset::ZERO, Duration::ZERO, 0.0);
         }
+
+        let first = self.samples[0];
+        let last = self.samples[n - 1];
+        let dur = last.time.duration_since(first.time);
+
+        // Calculate velocity
+        let velocity = self.velocity();
+
+        // Confidence based on sample count and duration
+        let count_factor = (n as f32 / 5.0).min(1.0);
+        let duration_factor = (dur.as_secs_f32() / 0.05).min(1.0);
+        let confidence = count_factor * duration_factor;
+
+        VelocityEstimate::new(last.position, velocity.pixels_per_second, dur, confidence)
+    }
+
+    /// Check if the current velocity estimate is reliable enough for fling detection.
+    pub fn is_reliable(&self) -> bool {
+        let estimate = self.estimate();
+        estimate.confidence > 0.5 && self.samples.len() >= 3
     }
 }
 

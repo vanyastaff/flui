@@ -4,6 +4,7 @@
 //! one or more render objects. Non-boundary render objects merge their
 //! semantics into the nearest boundary ancestor.
 
+use flui_types::geometry::Pixels;
 use flui_foundation::{ElementId, SemanticsId};
 use flui_types::geometry::Rect;
 use flui_types::Matrix4;
@@ -63,7 +64,7 @@ pub struct SemanticsNode {
 
     // ========== Geometry ==========
     /// Bounding rectangle in global coordinates.
-    rect: Rect,
+    rect: Rect<Pixels>,
 
     /// Transform matrix (stored as 4x4 column-major).
     transform: Option<[f32; 16]>,
@@ -191,12 +192,12 @@ impl SemanticsNode {
 
     /// Returns the bounding rectangle.
     #[inline]
-    pub fn rect(&self) -> Rect {
+    pub fn rect(&self) -> Rect<Pixels> {
         self.rect
     }
 
     /// Sets the bounding rectangle.
-    pub fn set_rect(&mut self, rect: Rect) {
+    pub fn set_rect(&mut self, rect: Rect<Pixels>) {
         self.rect = rect;
         self.dirty = true;
     }
