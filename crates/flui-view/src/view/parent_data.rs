@@ -130,7 +130,6 @@ macro_rules! impl_parent_data_view {
             fn create_element(&self) -> Box<dyn $crate::ElementBase> {
                 Box::new($crate::ParentDataElement::new(self))
             }
-
         }
     };
 }
@@ -287,8 +286,6 @@ impl<V: ParentDataView + Clone> ElementBase for ParentDataElement<V> {
     fn depth(&self) -> usize {
         self.depth
     }
-
-
 }
 
 #[cfg(test)]
@@ -312,7 +309,6 @@ mod tests {
         fn create_element(&self) -> Box<dyn ElementBase> {
             Box::new(DummyChildElement)
         }
-
     }
 
     struct DummyChildElement;
@@ -364,7 +360,6 @@ mod tests {
         fn create_element(&self) -> Box<dyn ElementBase> {
             Box::new(ParentDataElement::new(self))
         }
-
     }
 
     #[test]

@@ -128,4 +128,3 @@ impl<S: Simulation> Simulation for ClampedSimulation<S> {
         self.simulation.tolerance()
     }
 }
-

@@ -3,7 +3,7 @@
 //! This module provides types for tracking and estimating velocity
 //! of pointer movements.
 
-use crate::geometry::{px, Offset, Pixels};
+use crate::geometry::{Offset, Pixels};
 use std::time::Duration;
 
 /// A velocity in two dimensions
@@ -84,7 +84,7 @@ impl Velocity {
     #[inline]
     #[must_use]
     pub fn from_components(dx: f32, dy: f32) -> Self {
-        Self::new(Offset::new(px(dx), px(dy)))
+        Self::new(Offset::new(Pixels(dx), Pixels(dy)))
     }
 
     /// Creates a velocity from magnitude and direction

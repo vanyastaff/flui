@@ -36,7 +36,12 @@ impl DynamicBuffer {
     /// * `label` - Debug label
     /// * `initial_capacity` - Initial capacity in bytes
     /// * `usage` - Buffer usage flags
-    pub fn new(device: Arc<Device>, label: &str, initial_capacity: u64, usage: BufferUsages) -> Self {
+    pub fn new(
+        device: Arc<Device>,
+        label: &str,
+        initial_capacity: u64,
+        usage: BufferUsages,
+    ) -> Self {
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some(label),
             size: initial_capacity,

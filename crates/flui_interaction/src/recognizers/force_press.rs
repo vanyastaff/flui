@@ -346,7 +346,7 @@ impl ForcePressGestureRecognizer {
                     drop(state);
 
                     if let Some(callback) = self.callbacks.lock().on_peak.clone() {
-                        callback(details);
+                        callback(details.clone());
                     }
                 } else {
                     drop(state);
@@ -469,17 +469,17 @@ impl GestureRecognizer for ForcePressGestureRecognizer {
         match event {
             PointerEvent::Down(data) => {
                 let pos = data.state.position;
-                let position = Offset::new(pos.x as f32, pos.y as f32);
+                let position = Offset::new(Pixels(pos.x as f32), Pixels(pos.y as f32));
                 self.handle_down(position, data.state.pressure);
             }
             PointerEvent::Move(data) => {
                 let pos = data.current.position;
-                let position = Offset::new(pos.x as f32, pos.y as f32);
+                let position = Offset::new(Pixels(pos.x as f32), Pixels(pos.y as f32));
                 self.handle_move(position, data.current.pressure);
             }
             PointerEvent::Up(data) => {
                 let pos = data.state.position;
-                let position = Offset::new(pos.x as f32, pos.y as f32);
+                let position = Offset::new(Pixels(pos.x as f32), Pixels(pos.y as f32));
                 self.handle_up(position);
             }
             PointerEvent::Cancel(_) => {
@@ -578,7 +578,7 @@ mod tests {
         });
 
         let pointer = PointerId::new(1);
-        let position = Offset::new(100.0, 100.0);
+        let position = Offset::new(Pixels(100.0), Pixels(100.0));
 
         // Start tracking
         recognizer.add_pointer(pointer, position);
@@ -600,7 +600,7 @@ mod tests {
         });
 
         let pointer = PointerId::new(1);
-        let position = Offset::new(100.0, 100.0);
+        let position = Offset::new(Pixels(100.0), Pixels(100.0));
 
         // Start tracking
         recognizer.add_pointer(pointer, position);
@@ -623,7 +623,7 @@ mod tests {
         });
 
         let pointer = PointerId::new(1);
-        let position = Offset::new(100.0, 100.0);
+        let position = Offset::new(Pixels(100.0), Pixels(100.0));
 
         // Start tracking
         recognizer.add_pointer(pointer, position);
@@ -652,7 +652,7 @@ mod tests {
         });
 
         let pointer = PointerId::new(1);
-        let position = Offset::new(100.0, 100.0);
+        let position = Offset::new(Pixels(100.0), Pixels(100.0));
 
         // Start tracking
         recognizer.add_pointer(pointer, position);
@@ -678,7 +678,7 @@ mod tests {
         });
 
         let pointer = PointerId::new(1);
-        let position = Offset::new(100.0, 100.0);
+        let position = Offset::new(Pixels(100.0), Pixels(100.0));
 
         // Start tracking
         recognizer.add_pointer(pointer, position);

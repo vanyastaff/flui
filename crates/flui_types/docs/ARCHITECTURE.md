@@ -32,7 +32,7 @@ flui_types/
 │   ├── rect.rs        # Rect
 │   ├── offset.rs      # Offset
 │   ├── radius.rs      # Radius, BorderRadius
-│   ├── insets.rs      # EdgeInsets
+│   ├── edges.rs       # Edges (generic edge insets)
 │   └── relative_rect.rs # RelativeRect
 │
 ├── layout/            # Layout types
@@ -184,7 +184,7 @@ Offset ─────► Displacement (vector)
                            │ constrain()
                            ▼
 ┌────────┐   offset   ┌────────┐   inflate   ┌────────┐
-│ Point  │ ─────────► │  Rect  │ ◄────────── │EdgeInsets│
+│ Point  │ ─────────► │  Rect  │ ◄────────── │ Edges  │
 └────────┘            └────────┘             └────────┘
      │                     │
      │ + Size              │ .size
@@ -221,7 +221,7 @@ flui_types = { version = "0.1", features = ["serde"] }
 
 | Module | Types |
 |--------|-------|
-| geometry | Point, Size, Rect, Offset, Radius, EdgeInsets |
+| geometry | Point, Size, Rect, Offset, Radius, Edges |
 | layout | Axis, Alignment, BoxConstraints |
 | painting | Color, Gradient, BoxShadow |
 | animation | Curve (built-in) |

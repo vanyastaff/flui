@@ -227,7 +227,6 @@ mod tests {
             use crate::element::StatelessBehavior;
             Box::new(StatelessElement::new(self, StatelessBehavior))
         }
-
     }
 
     #[test]

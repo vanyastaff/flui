@@ -11,9 +11,11 @@ use super::{px, Pixels};
 use std::fmt;
 
 use super::traits::{NumericUnit, Unit};
-use super::{Point, Rect, Vec2};
+use super::{Point, Vec2};
 
+/// A line segment defined by two endpoints with generic unit type.
 #[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Line<T: Unit> {
     /// Start point.
     pub p0: Point<T>,
@@ -35,21 +37,25 @@ impl<T: Unit> Default for Line<T> {
 // ============================================================================
 
 impl<T: Unit> Line<T> {
+    /// Creates a new line segment from two points.
     #[must_use]
     pub const fn new(p0: Point<T>, p1: Point<T>) -> Self {
         Self { p0, p1 }
     }
 
+    /// Returns the start point of the line segment.
     #[must_use]
     pub const fn start(&self) -> Point<T> {
         self.p0
     }
 
+    /// Returns the end point of the line segment.
     #[must_use]
     pub const fn end(&self) -> Point<T> {
         self.p1
     }
 
+    /// Returns a line with reversed direction (swaps start and end points).
     #[must_use]
     pub const fn reverse(&self) -> Self {
         Self {
@@ -58,6 +64,7 @@ impl<T: Unit> Line<T> {
         }
     }
 
+    /// Maps this line to a different unit type using the provided function.
     #[must_use]
     pub fn map<U: Unit>(&self, f: impl Fn(T) -> U + Copy) -> Line<U>
     where
@@ -71,10 +78,6 @@ impl<T: Unit> Line<T> {
 }
 
 // ============================================================================
-// f32-specific Constructors
-// ============================================================================
-
-// ============================================================================
 // Accessors (NumericUnit)
 // ============================================================================
 
@@ -82,16 +85,19 @@ impl<T: NumericUnit> Line<T>
 where
     T: Into<f32> + From<f32> + std::ops::Sub<Output = T>,
 {
+    /// Returns the length of the line segment.
     #[must_use]
     pub fn length(&self) -> f32 {
         self.p0.distance(self.p1)
     }
 
+    /// Returns the squared length of the line segment (faster than length).
     #[must_use]
     pub fn length_squared(&self) -> f32 {
         self.p0.distance_squared(self.p1)
     }
 
+    /// Converts the line segment to a direction vector.
     #[must_use]
     pub fn to_vec(&self) -> Vec2<T>
     where
@@ -100,16 +106,19 @@ where
         Vec2::new(self.p1.x - self.p0.x, self.p1.y - self.p0.y)
     }
 
+    /// Returns the normalized direction vector of the line segment.
     #[must_use]
     pub fn direction(&self) -> Vec2<Pixels> {
         self.to_vec().normalize_or(Vec2::ZERO)
     }
 
+    /// Returns the midpoint of the line segment.
     #[must_use]
     pub fn midpoint(&self) -> Point<T> {
         self.p0.midpoint(self.p1)
     }
 
+    /// Evaluates a point along the line segment at parameter t ∈ [0, 1].
     #[must_use]
     pub fn eval(&self, t: f32) -> Point<T> {
         self.p0.lerp(self.p1, t)
@@ -124,11 +133,13 @@ impl<T: NumericUnit> Line<T>
 where
     T: Into<f32> + From<f32> + PartialEq + std::ops::Sub<Output = T> + Clone + fmt::Debug + Default,
 {
+    /// Returns true if the line segment has zero length (both points are equal).
     #[must_use]
     pub fn is_zero_length(&self) -> bool {
         self.p0 == self.p1
     }
 
+    /// Returns true if the line segment is horizontal (y-coordinates are equal within epsilon).
     #[must_use]
     pub fn is_horizontal(&self) -> bool {
         let y0: f32 = self.p0.y.into();
@@ -136,6 +147,7 @@ where
         (y0 - y1).abs() < f32::EPSILON
     }
 
+    /// Returns true if the line segment is vertical (x-coordinates are equal within epsilon).
     #[must_use]
     pub fn is_vertical(&self) -> bool {
         let x0: f32 = self.p0.x.into();
@@ -143,6 +155,9 @@ where
         (x0 - x1).abs() < f32::EPSILON
     }
 
+    /// Returns the nearest point on the line segment to the given point.
+    ///
+    /// If the nearest point falls outside the segment, returns the closest endpoint.
     #[must_use]
     pub fn nearest_point(&self, point: Point<T>) -> Point<T>
     where
@@ -171,25 +186,24 @@ where
         self.eval(t)
     }
 
+    /// Returns the shortest distance from a point to the line segment.
     #[must_use]
     pub fn distance_to_point(&self, point: Point<T>) -> f32 {
         point.distance(self.nearest_point(point))
     }
 
+    /// Returns the squared distance from a point to the line segment (faster than distance_to_point).
     #[must_use]
     pub fn distance_squared_to_point(&self, point: Point<T>) -> f32 {
         point.distance_squared(self.nearest_point(point))
     }
 
+    /// Returns true if a point is within the specified tolerance distance of the line segment.
     #[must_use]
     pub fn is_point_near(&self, point: Point<T>, tolerance: f32) -> bool {
         self.distance_squared_to_point(point) <= tolerance * tolerance
     }
 }
-
-// ============================================================================
-// f32-specific Queries (Rect operations)
-// ============================================================================
 
 // ============================================================================
 // Transformations (NumericUnit)
@@ -199,6 +213,7 @@ impl<T: NumericUnit> Line<T>
 where
     T: Into<f32> + From<f32>,
 {
+    /// Translates the line segment by the given offset vector.
     #[must_use]
     pub fn translate(&self, offset: Vec2<T>) -> Self {
         Self {
@@ -207,6 +222,10 @@ where
         }
     }
 
+    /// Linearly interpolates between two line segments.
+    ///
+    /// - `t = 0.0` returns `self`
+    /// - `t = 1.0` returns `other`
     #[must_use]
     pub fn lerp(self, other: Self, t: f32) -> Self {
         Self {
@@ -224,6 +243,7 @@ impl<T: NumericUnit> Line<T>
 where
     T: Into<f32>,
 {
+    /// Converts the line segment to use `Pixels` units.
     #[must_use]
     pub fn to_f32(&self) -> Line<Pixels> {
         Line {
@@ -237,6 +257,7 @@ impl<T: Unit> Line<T>
 where
     T: Into<f32>,
 {
+    /// Converts the line segment to an array `[x0, y0, x1, y1]` for GPU buffers.
     #[must_use]
     pub fn to_array(&self) -> [f32; 4] {
         [
@@ -297,7 +318,7 @@ impl Line<Pixels> {
 
 impl<T: Unit> super::traits::IsZero for Line<T>
 where
-    T: super::traits::IsZero
+    T: super::traits::IsZero,
 {
     #[inline]
     fn is_zero(&self) -> bool {
@@ -307,12 +328,11 @@ where
 
 impl<T: Unit> super::traits::ApproxEq for Line<T>
 where
-    T: super::traits::ApproxEq
+    T: super::traits::ApproxEq,
 {
     #[inline]
     fn approx_eq_eps(&self, other: &Self, epsilon: f32) -> bool {
-        self.p0.approx_eq_eps(&other.p0, epsilon)
-            && self.p1.approx_eq_eps(&other.p1, epsilon)
+        self.p0.approx_eq_eps(&other.p0, epsilon) && self.p1.approx_eq_eps(&other.p1, epsilon)
     }
 }
 
@@ -321,6 +341,7 @@ where
 // ============================================================================
 
 impl<T: Unit> Line<T> {
+    /// Converts the line segment to a different unit type.
     #[must_use]
     pub fn cast<U: Unit>(self) -> Line<U>
     where
@@ -332,6 +353,7 @@ impl<T: Unit> Line<T> {
         }
     }
 
+    /// Alias for `reverse()` - swaps the start and end points.
     #[must_use]
     pub fn swap(self) -> Self {
         self.reverse()
@@ -345,11 +367,13 @@ impl Line<Pixels> {
         p1: Point::ORIGIN,
     };
 
+    /// Returns true if both endpoints have valid (finite) coordinates.
     #[must_use]
     pub fn is_valid(&self) -> bool {
         self.p0.is_valid() && self.p1.is_valid()
     }
 
+    /// Linearly interpolates between two line segments (alias for `lerp`).
     #[must_use]
     pub fn lerp_line(&self, other: &Self, t: f32) -> Self {
         Self {
@@ -358,6 +382,7 @@ impl Line<Pixels> {
         }
     }
 
+    /// Returns a perpendicular line segment of the same length, centered at the midpoint.
     #[must_use]
     pub fn perpendicular(&self) -> Self {
         let mid = self.midpoint();
@@ -375,6 +400,7 @@ impl Line<Pixels> {
         }
     }
 
+    /// Extends the line segment in both directions by the specified amount.
     #[must_use]
     pub fn extend(&self, amount: f32) -> Self {
         let dir = self.direction();
@@ -384,6 +410,7 @@ impl Line<Pixels> {
         }
     }
 
+    /// Shrinks the line segment from both ends by the specified amount.
     #[must_use]
     pub fn shrink(&self, amount: f32) -> Self {
         self.extend(-amount)
@@ -402,11 +429,3 @@ where
         write!(f, "Line({} -> {})", self.p0, self.p1)
     }
 }
-
-// ============================================================================
-// Convenience function
-// ============================================================================
-
-// ============================================================================
-// Tests
-// ============================================================================

@@ -186,18 +186,13 @@ pub enum WindowEvent {
     Created(WindowId),
 
     /// Window close was requested (user clicked X button)
-    CloseRequested {
-        window_id: WindowId,
-    },
+    CloseRequested { window_id: WindowId },
 
     /// Window was closed
     Closed(WindowId),
 
     /// Window focus changed
-    FocusChanged {
-        window_id: WindowId,
-        focused: bool,
-    },
+    FocusChanged { window_id: WindowId, focused: bool },
 
     /// Window gained focus (deprecated, use FocusChanged)
     #[deprecated(note = "Use FocusChanged instead")]
@@ -220,9 +215,7 @@ pub enum WindowEvent {
     },
 
     /// Window needs to be redrawn
-    RedrawRequested {
-        window_id: WindowId,
-    },
+    RedrawRequested { window_id: WindowId },
 
     /// Window was moved (position in logical pixels)
     Moved {

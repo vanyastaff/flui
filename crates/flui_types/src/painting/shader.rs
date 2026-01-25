@@ -1,6 +1,6 @@
 //! Shader types for painting.
 
-use crate::geometry::{Offset, Size, NumericUnit, Pixels, px};
+use crate::geometry::{px, NumericUnit, Offset, Pixels, Size};
 use crate::painting::{BlurStyle, TileMode};
 use crate::styling::{Color, Color32};
 
@@ -505,8 +505,14 @@ impl ShaderSpec {
         match self {
             ShaderSpec::LinearGradient { start, end, colors } => {
                 // Convert relative positions to absolute offsets
-                let from = Offset::new(Pixels(start.0 * size.width.into()), Pixels(start.1 * size.height.into()));
-                let to = Offset::new(Pixels(end.0 * size.width.into()), Pixels(end.1 * size.height.into()));
+                let from = Offset::new(
+                    Pixels(start.0 * size.width.into()),
+                    Pixels(start.1 * size.height.into()),
+                );
+                let to = Offset::new(
+                    Pixels(end.0 * size.width.into()),
+                    Pixels(end.1 * size.height.into()),
+                );
 
                 // Convert Color32 to Color
                 let converted_colors: Vec<Color> = colors
@@ -522,7 +528,10 @@ impl ShaderSpec {
                 colors,
             } => {
                 // Convert relative position to absolute offset
-                let center_offset = Offset::new(Pixels(center.0 * size.width.into()), Pixels(center.1 * size.height.into()));
+                let center_offset = Offset::new(
+                    Pixels(center.0 * size.width.into()),
+                    Pixels(center.1 * size.height.into()),
+                );
 
                 // Convert relative radius to absolute (use average of width/height for circular radius)
                 let absolute_radius = *radius * (size.width.into() + size.height.into()) / 2.0;
@@ -538,7 +547,11 @@ impl ShaderSpec {
             ShaderSpec::Solid(color) => {
                 // For solid color, create a simple linear gradient with same color
                 let c = Color::rgba(color.r(), color.g(), color.b(), color.a());
-                Shader::simple_linear(Offset::ZERO, Offset::new(px(size.width.into()), px(0.0)), vec![c, c])
+                Shader::simple_linear(
+                    Offset::ZERO,
+                    Offset::new(px(size.width.into()), px(0.0)),
+                    vec![c, c],
+                )
             }
         }
     }

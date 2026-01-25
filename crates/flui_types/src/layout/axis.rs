@@ -3,8 +3,8 @@
 //! This module contains types for representing axes, directions, and orientation,
 //! similar to Flutter's axis system.
 
+use crate::geometry::Pixels;
 use crate::Size;
-use crate::geometry::{px, Pixels};
 
 /// The two cardinal directions in two dimensions.
 ///
@@ -100,8 +100,8 @@ impl Axis {
     #[must_use]
     pub const fn make_size(self, value: f32) -> Size<Pixels> {
         match self {
-            Axis::Horizontal => Size::new(px(value), px(0.0)),
-            Axis::Vertical => Size::new(px(0.0), px(value)),
+            Axis::Horizontal => Size::new(Pixels(value), Pixels(0.0)),
+            Axis::Vertical => Size::new(Pixels(0.0), Pixels(value)),
         }
     }
 
@@ -121,8 +121,8 @@ impl Axis {
     #[must_use]
     pub const fn make_size_with_cross(self, main: f32, cross: f32) -> Size<Pixels> {
         match self {
-            Axis::Horizontal => Size::new(px(main), px(cross)),
-            Axis::Vertical => Size::new(px(cross), px(main)),
+            Axis::Horizontal => Size::new(Pixels(main), Pixels(cross)),
+            Axis::Vertical => Size::new(Pixels(cross), Pixels(main)),
         }
     }
 

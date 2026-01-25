@@ -1,8 +1,13 @@
 //! Text metrics types.
 
 use super::TextAffinity;
-use crate::geometry::{Rect, Pixels};
+use crate::geometry::{Pixels, Rect};
 
+/// Position within text with directional affinity.
+///
+/// Represents a cursor position in text with information about which direction
+/// the position "leans" toward (upstream/downstream). This is important for
+/// handling positions at line breaks and bidirectional text.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TextPosition {
@@ -13,26 +18,31 @@ pub struct TextPosition {
 }
 
 impl TextPosition {
+    /// Creates a new text position.
     #[must_use]
     pub const fn new(offset: usize, affinity: TextAffinity) -> Self {
         Self { offset, affinity }
     }
 
+    /// Creates a position with upstream affinity.
     #[must_use]
     pub const fn upstream(offset: usize) -> Self {
         Self::new(offset, TextAffinity::Upstream)
     }
 
+    /// Creates a position with downstream affinity.
     #[must_use]
     pub const fn downstream(offset: usize) -> Self {
         Self::new(offset, TextAffinity::Downstream)
     }
 
+    /// Returns the character offset.
     #[must_use]
     pub const fn offset(&self) -> usize {
         self.offset
     }
 
+    /// Returns the text affinity.
     #[must_use]
     pub const fn affinity(&self) -> TextAffinity {
         self.affinity
@@ -45,6 +55,9 @@ impl Default for TextPosition {
     }
 }
 
+/// Range of text specified by start and end offsets.
+///
+/// Represents a contiguous span of text characters. Start is inclusive, end is exclusive.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TextRange {
     /// Start offset (inclusive).
@@ -54,36 +67,43 @@ pub struct TextRange {
 }
 
 impl TextRange {
+    /// Creates a new text range.
     #[must_use]
     pub const fn new(start: usize, end: usize) -> Self {
         Self { start, end }
     }
 
+    /// Creates a collapsed (zero-length) range at the given offset.
     #[must_use]
     pub const fn collapsed(offset: usize) -> Self {
         Self::new(offset, offset)
     }
 
+    /// Returns the length of the range.
     #[must_use]
     pub const fn len(&self) -> usize {
         self.end.saturating_sub(self.start)
     }
 
+    /// Returns true if the range is empty (start >= end).
     #[must_use]
     pub const fn is_empty(&self) -> bool {
         self.start >= self.end
     }
 
+    /// Returns true if the range is collapsed (start == end).
     #[must_use]
     pub const fn is_collapsed(&self) -> bool {
         self.start == self.end
     }
 
+    /// Returns true if the range contains the given offset.
     #[must_use]
     pub const fn contains(&self, offset: usize) -> bool {
         offset >= self.start && offset < self.end
     }
 
+    /// Returns the intersection of two ranges, or None if they don't overlap.
     #[must_use]
     pub const fn intersect(&self, other: &TextRange) -> Option<TextRange> {
         let start = if self.start > other.start {
@@ -104,6 +124,7 @@ impl TextRange {
         }
     }
 
+    /// Returns the union of two ranges (smallest range containing both).
     #[must_use]
     pub const fn union(&self, other: &TextRange) -> TextRange {
         let start = if self.start < other.start {
@@ -119,16 +140,19 @@ impl TextRange {
         TextRange::new(start, end)
     }
 
+    /// Returns true if this range overlaps with another.
     #[must_use]
     pub const fn overlaps(&self, other: &TextRange) -> bool {
         self.start < other.end && other.start < self.end
     }
 
+    /// Returns the start offset.
     #[must_use]
     pub const fn start(&self) -> usize {
         self.start
     }
 
+    /// Returns the end offset.
     #[must_use]
     pub const fn end(&self) -> usize {
         self.end
@@ -141,6 +165,10 @@ impl Default for TextRange {
     }
 }
 
+/// Text selection with base and extent positions.
+///
+/// Represents a text selection with separate tracking of where it started (base)
+/// and where it currently ends (extent). This allows for directional selections.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TextSelection {
     /// Base position (where selection started).
@@ -150,27 +178,32 @@ pub struct TextSelection {
 }
 
 impl TextSelection {
+    /// Creates a new text selection.
     #[must_use]
     pub const fn new(base: TextPosition, extent: TextPosition) -> Self {
         Self { base, extent }
     }
 
+    /// Creates a collapsed selection at the given position.
     #[must_use]
     pub const fn collapsed(position: TextPosition) -> Self {
         Self::new(position, position)
     }
 
+    /// Creates a collapsed selection at the given offset and affinity.
     #[must_use]
     pub const fn collapsed_at(offset: usize, affinity: TextAffinity) -> Self {
         let position = TextPosition::new(offset, affinity);
         Self::collapsed(position)
     }
 
+    /// Returns true if the selection is collapsed (no range selected).
     #[must_use]
     pub const fn is_collapsed(&self) -> bool {
         self.base.offset == self.extent.offset
     }
 
+    /// Returns the start offset of the selection (minimum of base and extent).
     #[must_use]
     pub const fn start(&self) -> usize {
         if self.base.offset < self.extent.offset {
@@ -180,6 +213,7 @@ impl TextSelection {
         }
     }
 
+    /// Returns the end offset of the selection (maximum of base and extent).
     #[must_use]
     pub const fn end(&self) -> usize {
         if self.base.offset > self.extent.offset {
@@ -189,26 +223,31 @@ impl TextSelection {
         }
     }
 
+    /// Returns the selection as a text range.
     #[must_use]
     pub const fn range(&self) -> TextRange {
         TextRange::new(self.start(), self.end())
     }
 
+    /// Returns true if the selection is reversed (base > extent).
     #[must_use]
     pub const fn is_reversed(&self) -> bool {
         self.base.offset > self.extent.offset
     }
 
+    /// Returns the length of the selection.
     #[must_use]
     pub const fn len(&self) -> usize {
         self.range().len()
     }
 
+    /// Returns true if the selection is empty.
     #[must_use]
     pub const fn is_empty(&self) -> bool {
         self.is_collapsed()
     }
 
+    /// Expands the selection to include the given range.
     #[must_use]
     pub const fn expand_to_range(&self, range: &TextRange) -> Self {
         let new_start = if self.start() < range.start {
@@ -227,11 +266,13 @@ impl TextSelection {
         )
     }
 
+    /// Returns the base position.
     #[must_use]
     pub const fn base(&self) -> TextPosition {
         self.base
     }
 
+    /// Returns the extent position.
     #[must_use]
     pub const fn extent(&self) -> TextPosition {
         self.extent
@@ -244,6 +285,10 @@ impl Default for TextSelection {
     }
 }
 
+/// Bounding box for a portion of text.
+///
+/// Represents the rectangular bounds of text with directional information
+/// for handling bidirectional text layout.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TextBox {
     /// Bounding rectangle.
@@ -253,11 +298,13 @@ pub struct TextBox {
 }
 
 impl TextBox {
+    /// Creates a new text box.
     #[must_use]
     pub const fn new(rect: Rect<Pixels>, direction: super::TextDirection) -> Self {
         Self { rect, direction }
     }
 
+    /// Returns the start edge (left for LTR, right for RTL).
     #[must_use]
     pub fn start(&self) -> f64 {
         if self.direction.is_ltr() {
@@ -267,6 +314,7 @@ impl TextBox {
         }
     }
 
+    /// Returns the end edge (right for LTR, left for RTL).
     #[must_use]
     pub fn end(&self) -> f64 {
         if self.direction.is_ltr() {
@@ -276,27 +324,35 @@ impl TextBox {
         }
     }
 
+    /// Returns the bounding rectangle.
     #[must_use]
     pub const fn rect(&self) -> &Rect<Pixels> {
         &self.rect
     }
 
+    /// Returns the text direction.
     #[must_use]
     pub const fn direction(&self) -> super::TextDirection {
         self.direction
     }
 
+    /// Returns the width of the text box.
     #[must_use]
     pub fn width(&self) -> f64 {
         self.rect.width().0 as f64
     }
 
+    /// Returns the height of the text box.
     #[must_use]
     pub fn height(&self) -> f64 {
         self.rect.height().0 as f64
     }
 }
 
+/// Information about a single glyph.
+///
+/// Contains rendering information for a single glyph including its ID,
+/// Unicode code point, bounding box, and advance width.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct GlyphInfo {
     /// Glyph ID in the font.
@@ -310,6 +366,7 @@ pub struct GlyphInfo {
 }
 
 impl GlyphInfo {
+    /// Creates new glyph info.
     #[must_use]
     pub fn new(glyph_id: u32, code_point: char, bounds: Rect<Pixels>, advance: f64) -> Self {
         Self {
@@ -320,37 +377,47 @@ impl GlyphInfo {
         }
     }
 
+    /// Returns the glyph ID.
     #[must_use]
     pub const fn glyph_id(&self) -> u32 {
         self.glyph_id
     }
 
+    /// Returns the Unicode code point.
     #[must_use]
     pub const fn code_point(&self) -> char {
         self.code_point
     }
 
+    /// Returns the glyph bounds.
     #[must_use]
     pub const fn bounds(&self) -> &Rect<Pixels> {
         &self.bounds
     }
 
+    /// Returns the advance width.
     #[must_use]
     pub const fn advance(&self) -> f64 {
         self.advance
     }
 
+    /// Returns the glyph width.
     #[must_use]
     pub fn width(&self) -> f64 {
         self.bounds.width().0 as f64
     }
 
+    /// Returns the glyph height.
     #[must_use]
     pub fn height(&self) -> f64 {
         self.bounds.height().0 as f64
     }
 }
 
+/// Metrics for a single line of text.
+///
+/// Contains comprehensive layout information for a text line including
+/// dimensions, baseline, and text range information.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct LineMetrics {
     /// Whether this line ends with a hard break.
@@ -382,6 +449,7 @@ pub struct LineMetrics {
 }
 
 impl LineMetrics {
+    /// Creates new line metrics.
     #[must_use]
     pub fn new(
         hard_break: bool,
@@ -415,51 +483,61 @@ impl LineMetrics {
         }
     }
 
+    /// Returns the number of characters in the line.
     #[must_use]
     pub fn len(&self) -> usize {
         self.end_index.saturating_sub(self.start_index)
     }
 
+    /// Returns true if the line is empty.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
+    /// Returns the text range for this line.
     #[must_use]
     pub fn range(&self) -> TextRange {
         TextRange::new(self.start_index, self.end_index)
     }
 
+    /// Returns the top coordinate of the line.
     #[must_use]
     pub fn top(&self) -> f64 {
         self.baseline - self.ascent
     }
 
+    /// Returns the bottom coordinate of the line.
     #[must_use]
     pub fn bottom(&self) -> f64 {
         self.baseline + self.descent
     }
 
+    /// Returns the right edge of the line.
     #[must_use]
     pub fn right(&self) -> f64 {
         self.left + self.width
     }
 
+    /// Returns true if the line ends with a hard break.
     #[must_use]
     pub const fn has_hard_break(&self) -> bool {
         self.hard_break
     }
 
+    /// Returns the ascent value.
     #[must_use]
     pub const fn ascent(&self) -> f64 {
         self.ascent
     }
 
+    /// Returns the descent value.
     #[must_use]
     pub const fn descent(&self) -> f64 {
         self.descent
     }
 
+    /// Returns the total height (ascent + descent).
     #[must_use]
     pub fn total_height(&self) -> f64 {
         self.ascent + self.descent

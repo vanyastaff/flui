@@ -41,15 +41,15 @@ use flui_types::prelude::*;
 fn main() {
     let point = Point::new(10.0, 20.0);
     let color = Color::RED;
-    let padding = EdgeInsets::all(16.0);
+    let padding = Edges::all(px(16.0));
 }
 ```
 
 Or import specific modules:
 
 ```rust
-use flui_types::geometry::{Point, Rect, Size};
-use flui_types::layout::{Alignment, EdgeInsets};
+use flui_types::geometry::{Point, Rect, Size, Edges, px};
+use flui_types::layout::Alignment;
 use flui_types::styling::Color;
 ```
 
@@ -233,33 +233,33 @@ let back = fractional.to_alignment();
 
 ### Edge Insets (Padding & Margins)
 
-`EdgeInsets` represents spacing on all four sides:
+`Edges<Pixels>` represents spacing on all four sides:
 
 ```rust
 // Uniform on all sides
-let padding = EdgeInsets::all(16.0);
+let padding = Edges::all(px(16.0));
 
-// Symmetric (horizontal, vertical)
-let card_padding = EdgeInsets::symmetric(24.0, 16.0);
+// Symmetric (vertical, horizontal)
+let card_padding = Edges::symmetric(px(24.0), px(16.0));
 
-// Individual sides
-let asymmetric = EdgeInsets::only(
-    10.0,   // left
-    20.0,   // top
-    10.0,   // right
-    30.0,   // bottom
+// Individual sides (top, right, bottom, left)
+let asymmetric = Edges::new(
+    px(20.0),   // top
+    px(10.0),   // right
+    px(30.0),   // bottom
+    px(10.0),   // left
 );
 
 // Common patterns
-let horizontal_only = EdgeInsets::symmetric(16.0, 0.0);
-let vertical_only = EdgeInsets::symmetric(0.0, 16.0);
+let horizontal_only = Edges::horizontal(px(16.0));
+let vertical_only = Edges::vertical(px(16.0));
 ```
 
 Apply to rectangles:
 
 ```rust
 let outer = Rect::from_xywh(0.0, 0.0, 200.0, 100.0);
-let padding = EdgeInsets::all(16.0);
+let padding = Edges::all(px(16.0));
 
 let inner = padding.deflate_rect(outer);
 // inner = Rect(16, 16, 168, 68) - smaller by padding
@@ -613,11 +613,11 @@ fn center_rect(child: Size, parent: Size) -> Rect {
 ### Padding a Rectangle
 
 ```rust
-fn with_padding(rect: Rect, padding: EdgeInsets) -> Rect {
+fn with_padding(rect: Rect, padding: Edges<Pixels>) -> Rect {
     padding.deflate_rect(rect)
 }
 
-fn add_margin(rect: Rect, margin: EdgeInsets) -> Rect {
+fn add_margin(rect: Rect, margin: Edges<Pixels>) -> Rect {
     margin.inflate_rect(rect)
 }
 ```

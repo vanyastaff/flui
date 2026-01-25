@@ -245,10 +245,9 @@ impl BoxConstraints {
         )
     }
 
-    /// Deflates constraints by EdgeInsets (shrinks available space)
+    /// Deflates constraints by Edges (shrinks available space)
     #[inline]
-    #[allow(deprecated)]
-    pub fn deflate(&self, insets: crate::layout::EdgeInsets) -> Self {
+    pub fn deflate(&self, insets: crate::geometry::Edges<Pixels>) -> Self {
         let horizontal = insets.horizontal_total();
         let vertical = insets.vertical_total();
 
@@ -329,10 +328,7 @@ mod tests {
 
     #[test]
     fn test_constrain() {
-        let constraints = BoxConstraints::new(
-            px(50.0), px(150.0),
-            px(100.0), px(300.0)
-        );
+        let constraints = BoxConstraints::new(px(50.0), px(150.0), px(100.0), px(300.0));
 
         // Within bounds
         let size1 = Size::new(px(100.0), px(200.0));
@@ -344,7 +340,10 @@ mod tests {
 
         // Too large
         let size3 = Size::new(px(200.0), px(400.0));
-        assert_eq!(constraints.constrain(size3), Size::new(px(150.0), px(300.0)));
+        assert_eq!(
+            constraints.constrain(size3),
+            Size::new(px(150.0), px(300.0))
+        );
     }
 
     #[test]
@@ -371,8 +370,10 @@ mod tests {
     fn test_normalize() {
         // Invalid constraints (min > max)
         let invalid = BoxConstraints::new(
-            px(100.0), px(50.0),  // min > max
-            px(200.0), px(100.0)  // min > max
+            px(100.0),
+            px(50.0), // min > max
+            px(200.0),
+            px(100.0), // min > max
         );
 
         let normalized = invalid.normalize();

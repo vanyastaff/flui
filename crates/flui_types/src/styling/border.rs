@@ -1,7 +1,10 @@
 //! Border types for styling
 
+use crate::geometry::traits::{NumericUnit, Unit};
+use crate::geometry::Pixels;
 use crate::styling::Color;
 
+/// Style of a border.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum BorderStyle {
@@ -27,35 +30,51 @@ impl BorderStyle {
     }
 }
 
+/// A single side of a border.
+///
+/// Generic over unit type `T` for full type safety. Use `BorderSide<Pixels>` for UI borders.
+///
+/// # Examples
+///
+/// ```
+/// use flui_types::styling::{BorderSide, BorderStyle, Color};
+/// use flui_types::geometry::px;
+///
+/// // Simple solid border
+/// let side = BorderSide::new(Color::BLACK, px(2.0), BorderStyle::Solid);
+///
+/// // With custom stroke alignment (centered on border)
+/// let side = BorderSide::with_stroke_align(Color::RED, px(1.0), BorderStyle::Solid, 0.5);
+/// ```
 #[derive(Copy, Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct BorderSide {
+pub struct BorderSide<T: Unit> {
     /// The color of this side of the border.
     pub color: Color,
 
-    /// The width of this side of the border, in logical pixels.
-    pub width: f32,
+    /// The width of this side of the border.
+    pub width: T,
 
     /// The style of this side of the border.
     pub style: BorderStyle,
 
-    /// The relative position of the stroke on a `BorderSide` in an
-    /// `OutlinedBorder` or `Border`.
+    /// The relative position of the stroke on a border side.
     ///
     /// Values typically range from 0.0 (inside) to 1.0 (outside).
     /// 0.5 represents the stroke centered on the border.
     pub stroke_align: f32,
 }
 
-impl BorderSide {
+impl<T: Unit> BorderSide<T> {
     /// Creates a border side.
     ///
     /// # Arguments
     ///
     /// * `color` - The color of the border
-    /// * `width` - The width of the border in logical pixels
+    /// * `width` - The width of the border
     /// * `style` - The style of the border
-    pub const fn new(color: Color, width: f32, style: BorderStyle) -> Self {
+    #[inline]
+    pub const fn new(color: Color, width: T, style: BorderStyle) -> Self {
         Self {
             color,
             width,
@@ -65,9 +84,10 @@ impl BorderSide {
     }
 
     /// Creates a border side with custom stroke alignment.
+    #[inline]
     pub const fn with_stroke_align(
         color: Color,
-        width: f32,
+        width: T,
         style: BorderStyle,
         stroke_align: f32,
     ) -> Self {
@@ -79,12 +99,52 @@ impl BorderSide {
         }
     }
 
+    /// Creates a border side with no border.
+    #[inline]
+    pub fn none() -> Self {
+        Self {
+            color: Color::BLACK,
+            width: T::zero(),
+            style: BorderStyle::None,
+            stroke_align: 0.0,
+        }
+    }
+
+    /// Creates a copy of this border side with the given color.
+    #[inline]
+    pub const fn with_color(self, color: Color) -> Self {
+        Self { color, ..self }
+    }
+
+    /// Creates a copy of this border side with the given width.
+    #[inline]
+    pub const fn with_width(self, width: T) -> Self {
+        Self { width, ..self }
+    }
+
+    /// Creates a copy of this border side with the given style.
+    #[inline]
+    pub const fn with_style(self, style: BorderStyle) -> Self {
+        Self { style, ..self }
+    }
+
+    /// Creates a copy of this border side with the given stroke alignment.
+    #[inline]
+    pub const fn with_stroke_alignment(self, stroke_align: f32) -> Self {
+        Self {
+            stroke_align,
+            ..self
+        }
+    }
+}
+
+impl BorderSide<Pixels> {
     /// A hairline border side (width = 0.0).
     ///
     /// This is the default border side, with black color.
     pub const HAIRLINE: Self = Self {
         color: Color::BLACK,
-        width: 0.0,
+        width: Pixels::ZERO,
         style: BorderStyle::Solid,
         stroke_align: 0.0,
     };
@@ -92,46 +152,24 @@ impl BorderSide {
     /// A border side with no border.
     pub const NONE: Self = Self {
         color: Color::BLACK,
-        width: 0.0,
+        width: Pixels::ZERO,
         style: BorderStyle::None,
         stroke_align: 0.0,
     };
 
-    /// Creates a border side with no border.
-    pub const fn none() -> Self {
-        Self::NONE
-    }
-
-    /// Returns true if this border side is effectively invisible.
+    /// Returns true if this border side is effectively visible.
     ///
-    /// A border is invisible if its style is None or its width is 0.0.
+    /// A border is visible if its style is solid and its width is greater than 0.
     pub fn is_visible(&self) -> bool {
-        self.style.is_solid() && self.width > 0.0
+        use crate::geometry::px;
+        self.style.is_solid() && self.width > px(0.0)
     }
+}
 
-    /// Creates a copy of this border side with the given color.
-    pub const fn with_color(self, color: Color) -> Self {
-        Self { color, ..self }
-    }
-
-    /// Creates a copy of this border side with the given width.
-    pub const fn with_width(self, width: f32) -> Self {
-        Self { width, ..self }
-    }
-
-    /// Creates a copy of this border side with the given style.
-    pub const fn with_style(self, style: BorderStyle) -> Self {
-        Self { style, ..self }
-    }
-
-    /// Creates a copy of this border side with the given stroke alignment.
-    pub const fn with_stroke_alignment(self, stroke_align: f32) -> Self {
-        Self {
-            stroke_align,
-            ..self
-        }
-    }
-
+impl<T: NumericUnit> BorderSide<T>
+where
+    T: std::ops::Mul<f32, Output = T>,
+{
     /// Linearly interpolate between two border sides.
     ///
     /// If the two sides have different styles, the interpolation switches
@@ -142,14 +180,14 @@ impl BorderSide {
         if t < 0.5 {
             Self {
                 color: Color::lerp(a.color, b.color, t),
-                width: a.width + (b.width - a.width) * t,
+                width: a.width * (1.0 - t) + b.width * t,
                 style: a.style,
                 stroke_align: a.stroke_align + (b.stroke_align - a.stroke_align) * t,
             }
         } else {
             Self {
                 color: Color::lerp(a.color, b.color, t),
-                width: a.width + (b.width - a.width) * t,
+                width: a.width * (1.0 - t) + b.width * t,
                 style: b.style,
                 stroke_align: a.stroke_align + (b.stroke_align - a.stroke_align) * t,
             }
@@ -165,12 +203,19 @@ impl BorderSide {
     }
 }
 
-impl Default for BorderSide {
+impl<T: Unit> Default for BorderSide<T> {
     fn default() -> Self {
-        Self::HAIRLINE
+        Self {
+            color: Color::BLACK,
+            width: T::zero(),
+            style: BorderStyle::Solid,
+            stroke_align: 0.0,
+        }
     }
 }
 
+/// Physical position of a border side on a box.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum BorderPosition {
     /// Top side of the border

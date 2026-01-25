@@ -9,12 +9,7 @@ use wgpu::{Device, MultisampleState, Queue, TextureFormat};
 #[cfg(feature = "wgpu-backend")]
 use glyphon::{FontSystem, SwashCache, TextAtlas, TextRenderer as GlyphonRenderer};
 
-use flui_types::{
-    geometry::Point,
-    styling::Color,
-    typography::TextStyle,
-    units::DevicePixels,
-};
+use flui_types::{geometry::Point, styling::Color, typography::TextStyle, units::DevicePixels};
 
 /// Text rendering system
 ///
@@ -51,12 +46,8 @@ impl TextRenderingSystem {
         let swash_cache = SwashCache::new();
         let mut text_atlas = TextAtlas::new(device, queue, surface_format);
 
-        let text_renderer = GlyphonRenderer::new(
-            device,
-            queue,
-            MultisampleState::default(),
-            surface_format,
-        );
+        let text_renderer =
+            GlyphonRenderer::new(device, queue, MultisampleState::default(), surface_format);
 
         Self {
             font_system,
@@ -96,12 +87,7 @@ impl TextRenderingSystem {
     /// * `device` - GPU device
     /// * `queue` - GPU queue
     /// * `runs` - Text runs to render
-    pub fn render_text_runs(
-        &mut self,
-        device: &Device,
-        queue: &Queue,
-        runs: &[TextRun],
-    ) {
+    pub fn render_text_runs(&mut self, device: &Device, queue: &Queue, runs: &[TextRun]) {
         // TODO: Implement actual glyphon rendering
         // This requires:
         // 1. Convert TextRun to glyphon::TextArea
@@ -144,12 +130,7 @@ impl TextRenderingSystem {
     }
 
     /// Render text runs (no-op without wgpu backend)
-    pub fn render_text_runs(
-        &mut self,
-        _device: &Device,
-        _queue: &Queue,
-        _runs: &[TextRun],
-    ) {
+    pub fn render_text_runs(&mut self, _device: &Device, _queue: &Queue, _runs: &[TextRun]) {
         // No-op
     }
 

@@ -5,7 +5,7 @@
 
 use super::{DevicePixels, Pixels, Radians, Rems, ScaledPixels};
 use std::fmt::Debug;
-use std::ops::{Add, Div, Mul, Neg, Sub};
+use std::ops::{Add, Mul, Neg, Sub};
 
 // ============================================================================
 // AXIS - 2D cartesian axes
@@ -67,7 +67,9 @@ impl Axis {
 /// **Note:** This trait requires `Eq` and `Hash` to prevent using raw floating-point
 /// types (like `f32`) which don't implement these traits due to NaN semantics.
 /// Use wrapper types like `Pixels` instead, which implement `Eq` and `Hash` manually.
-pub trait Unit: Copy + Clone + Debug + Default + PartialEq + Eq + PartialOrd + std::hash::Hash {
+pub trait Unit:
+    Copy + Clone + Debug + Default + PartialEq + Eq + PartialOrd + std::hash::Hash
+{
     /// The underlying scalar type (f32, i32, etc.)
     type Scalar: Copy;
 

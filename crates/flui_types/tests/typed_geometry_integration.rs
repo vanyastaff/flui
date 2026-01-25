@@ -18,7 +18,8 @@ fn test_type_safety_prevents_unit_mixing() {
     // let bad = ui_point + Vec2::from(device_point); // ❌
 
     // Must explicitly convert using manual conversion:
-    let device_as_pixels = Point::<Pixels>::new(px(device_point.x.0 as f32), px(device_point.y.0 as f32));
+    let device_as_pixels =
+        Point::<Pixels>::new(px(device_point.x.0 as f32), px(device_point.y.0 as f32));
     let _ = ui_point + Vec2::from(device_as_pixels); // ✅
 }
 
@@ -382,8 +383,14 @@ fn test_bounds_with_different_units() {
 
     // Convert device to pixels (manually)
     let device_as_pixels = Bounds::<Pixels>::new(
-        Point::new(px(device_bounds.origin.x.0 as f32), px(device_bounds.origin.y.0 as f32)),
-        Size::new(px(device_bounds.size.width.0 as f32), px(device_bounds.size.height.0 as f32)),
+        Point::new(
+            px(device_bounds.origin.x.0 as f32),
+            px(device_bounds.origin.y.0 as f32),
+        ),
+        Size::new(
+            px(device_bounds.size.width.0 as f32),
+            px(device_bounds.size.height.0 as f32),
+        ),
     );
     assert_eq!(device_as_pixels.size.width.0, 200.0);
 }
@@ -398,8 +405,8 @@ fn test_edges_with_units() {
 
     // Symmetric edges: symmetric(vertical, horizontal)
     let edges = Edges::<Pixels>::symmetric(px(10.0), px(20.0));
-    assert_eq!(edges.left.0, 20.0);  // horizontal
-    assert_eq!(edges.top.0, 10.0);   // vertical
+    assert_eq!(edges.left.0, 20.0); // horizontal
+    assert_eq!(edges.top.0, 10.0); // vertical
 }
 
 #[test]

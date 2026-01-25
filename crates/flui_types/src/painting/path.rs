@@ -2,7 +2,7 @@
 //!
 //! Provides Path structure for creating complex shapes with lines, curves, and arcs.
 
-use crate::geometry::{Offset, Point, Rect, Vec2, NumericUnit, Pixels, px};
+use crate::geometry::{px, NumericUnit, Offset, Pixels, Point, Rect, Vec2};
 use crate::painting::PathFillType;
 use smallvec::SmallVec;
 
@@ -88,10 +88,6 @@ impl Path {
     }
 
     #[must_use]
-
-    #[must_use]
-
-    #[must_use]
     pub fn oval(rect: Rect<Pixels>) -> Self {
         let mut path = Self::new();
         path.add_oval(rect);
@@ -104,8 +100,6 @@ impl Path {
         path.add_arc(rect, start_angle, sweep_angle);
         path
     }
-
-    #[must_use]
 
     #[must_use]
     pub fn from_rrect(rrect: crate::geometry::RRect) -> Self {
@@ -185,7 +179,8 @@ impl Path {
 
         // Top-left corner
         if tl_x > px(0.0) || tl_y > px(0.0) {
-            let corner_rect = Rect::from_xywh(rect.left(), rect.top(), tl_x * px(2.0), tl_y * px(2.0));
+            let corner_rect =
+                Rect::from_xywh(rect.left(), rect.top(), tl_x * px(2.0), tl_y * px(2.0));
             path.add_arc(
                 corner_rect,
                 std::f32::consts::PI,
@@ -206,14 +201,6 @@ impl Path {
     pub const fn fill_type(&self) -> PathFillType {
         self.fill_type
     }
-
-    #[inline]
-
-    #[inline]
-
-    #[inline]
-
-    #[inline]
 
     #[inline]
     pub fn move_to(&mut self, point: Point<Pixels>) {
@@ -237,8 +224,6 @@ impl Path {
         self.commands.push(PathCommand::AddRect(rect));
         self.bounds = None;
     }
-
-    #[inline]
 
     #[inline]
     pub fn add_oval(&mut self, rect: Rect<Pixels>) {
@@ -330,7 +315,10 @@ impl Path {
         }
 
         if min_x.is_finite() && max_x.is_finite() {
-            Rect::from_min_max(Point::new(Pixels(min_x), Pixels(min_y)), Point::new(Pixels(max_x), Pixels(max_y)))
+            Rect::from_min_max(
+                Point::new(Pixels(min_x), Pixels(min_y)),
+                Point::new(Pixels(max_x), Pixels(max_y)),
+            )
         } else {
             Rect::ZERO
         }
@@ -379,9 +367,8 @@ impl Path {
         }
     }
 
-    #[must_use]
-
     /// Ray casting algorithm for even-odd fill rule.
+    #[must_use]
     fn contains_even_odd(&self, point: Point<Pixels>) -> bool {
         let mut crossings = 0;
         let mut current_pos = Point::new(px(0.0), px(0.0));
@@ -512,7 +499,12 @@ impl Path {
     }
 
     /// Tests if a horizontal ray from point intersects a line segment.
-    fn ray_intersects_segment(&self, point: Point<Pixels>, p1: Point<Pixels>, p2: Point<Pixels>) -> bool {
+    fn ray_intersects_segment(
+        &self,
+        point: Point<Pixels>,
+        p1: Point<Pixels>,
+        p2: Point<Pixels>,
+    ) -> bool {
         // Ray extends to the right from point
         if (p1.y > point.y) == (p2.y > point.y) {
             return false; // Both endpoints on same side of ray
@@ -548,7 +540,13 @@ impl Path {
     }
 
     /// Count crossings for quadratic bezier curve (approximated).
-    fn count_curve_crossings_quad(&self, point: Point<Pixels>, p0: Point<Pixels>, p1: Point<Pixels>, p2: Point<Pixels>) -> usize {
+    fn count_curve_crossings_quad(
+        &self,
+        point: Point<Pixels>,
+        p0: Point<Pixels>,
+        p1: Point<Pixels>,
+        p2: Point<Pixels>,
+    ) -> usize {
         // Simple approximation: subdivide into 4 line segments
         let t_values: [f32; 5] = [0.0, 0.25, 0.5, 0.75, 1.0];
         let mut crossings = 0;
@@ -597,7 +595,13 @@ impl Path {
     }
 
     /// Winding number for quadratic curve.
-    fn curve_winding_quad(&self, point: Point<Pixels>, p0: Point<Pixels>, p1: Point<Pixels>, p2: Point<Pixels>) -> i32 {
+    fn curve_winding_quad(
+        &self,
+        point: Point<Pixels>,
+        p0: Point<Pixels>,
+        p1: Point<Pixels>,
+        p2: Point<Pixels>,
+    ) -> i32 {
         let t_values: [f32; 5] = [0.0, 0.25, 0.5, 0.75, 1.0];
         let mut winding = 0;
 
@@ -615,7 +619,14 @@ impl Path {
     }
 
     /// Winding number for cubic curve.
-    fn curve_winding_cubic(&self, point: Point<Pixels>, p0: Point<Pixels>, p1: Point<Pixels>, p2: Point<Pixels>, p3: Point<Pixels>) -> i32 {
+    fn curve_winding_cubic(
+        &self,
+        point: Point<Pixels>,
+        p0: Point<Pixels>,
+        p1: Point<Pixels>,
+        p2: Point<Pixels>,
+        p3: Point<Pixels>,
+    ) -> i32 {
         let t_values: [f32; 9] = [0.0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1.0];
         let mut winding = 0;
 
@@ -648,7 +659,14 @@ impl Path {
     }
 
     /// Evaluate cubic bezier at parameter t.
-    fn eval_cubic<T>(&self, p0: Point<T>, p1: Point<T>, p2: Point<T>, p3: Point<T>, t: f32) -> Point<T>
+    fn eval_cubic<T>(
+        &self,
+        p0: Point<T>,
+        p1: Point<T>,
+        p2: Point<T>,
+        p3: Point<T>,
+        t: f32,
+    ) -> Point<T>
     where
         T: NumericUnit + Into<f32> + From<f32>,
     {
@@ -659,8 +677,18 @@ impl Path {
         let mt3 = mt2 * mt;
 
         Point::new(
-            T::from(mt3 * p0.x.into() + 3.0 * mt2 * t * p1.x.into() + 3.0 * mt * t2 * p2.x.into() + t3 * p3.x.into()),
-            T::from(mt3 * p0.y.into() + 3.0 * mt2 * t * p1.y.into() + 3.0 * mt * t2 * p2.y.into() + t3 * p3.y.into()),
+            T::from(
+                mt3 * p0.x.into()
+                    + 3.0 * mt2 * t * p1.x.into()
+                    + 3.0 * mt * t2 * p2.x.into()
+                    + t3 * p3.x.into(),
+            ),
+            T::from(
+                mt3 * p0.y.into()
+                    + 3.0 * mt2 * t * p1.y.into()
+                    + 3.0 * mt * t2 * p2.y.into()
+                    + t3 * p3.y.into(),
+            ),
         )
     }
 }
@@ -677,5 +705,4 @@ mod tests {
     use crate::geometry::px;
 
     // Path containment tests
-
 }

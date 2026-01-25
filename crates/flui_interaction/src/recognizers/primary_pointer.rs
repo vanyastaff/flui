@@ -318,7 +318,7 @@ impl PrimaryPointerState {
     pub fn distance_from_initial(&self, position: Offset<Pixels>) -> f32 {
         if let Some(initial) = self.initial_position {
             let delta = position - initial;
-            delta.distance()
+            delta.distance().0
         } else {
             0.0
         }
@@ -400,7 +400,7 @@ mod tests {
     fn test_primary_pointer_state_transitions() {
         let mut state = PrimaryPointerState::new();
         let pointer = PointerId::new(1);
-        let position = Offset::new(100.0, 100.0);
+        let position = Offset::new(Pixels(100.0), Pixels(100.0));
 
         // Start tracking
         state.start_tracking_at(pointer, position);
@@ -431,15 +431,15 @@ mod tests {
     fn test_exceeds_slop() {
         let mut state = PrimaryPointerState::new();
         let pointer = PointerId::new(1);
-        let initial = Offset::new(100.0, 100.0);
+        let initial = Offset::new(Pixels(100.0), Pixels(100.0));
 
         state.start_tracking_at(pointer, initial);
 
         // Within slop (default 18.0)
-        assert!(!state.exceeds_slop(Offset::new(110.0, 100.0)));
+        assert!(!state.exceeds_slop(Offset::new(Pixels(110.0), Pixels(100.0))));
 
         // Beyond slop
-        assert!(state.exceeds_slop(Offset::new(130.0, 100.0)));
+        assert!(state.exceeds_slop(Offset::new(Pixels(130.0), Pixels(100.0))));
     }
 
     #[test]
@@ -447,9 +447,9 @@ mod tests {
         let mut state = PrimaryPointerState::new();
         let pointer = PointerId::new(1);
 
-        state.start_tracking_at(pointer, Offset::new(0.0, 0.0));
+        state.start_tracking_at(pointer, Offset::new(Pixels(0.0), Pixels(0.0)));
 
-        let distance = state.distance_from_initial(Offset::new(3.0, 4.0));
+        let distance = state.distance_from_initial(Offset::new(Pixels(3.0), Pixels(4.0)));
         assert!((distance - 5.0).abs() < 0.001); // 3-4-5 triangle
     }
 

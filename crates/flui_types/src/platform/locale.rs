@@ -173,4 +173,3 @@ impl Locale {
         Self::new("ja", Some("JP"))
     }
 }
-

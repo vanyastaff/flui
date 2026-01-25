@@ -6,7 +6,7 @@
 use slab::Slab;
 
 use flui_foundation::{ElementId, LayerId};
-use flui_types::geometry::{RRect, Rect};
+use flui_types::geometry::{Pixels, RRect, Rect};
 use flui_types::painting::{Clip, Path};
 use flui_types::{Matrix4, Offset};
 
@@ -39,7 +39,7 @@ pub struct LayerNode {
     needs_compositing: bool,
 
     /// Offset from parent (parent data)
-    offset: Option<Offset>,
+    offset: Option<Offset<Pixels>>,
 
     /// Associated ElementId (for cross-tree references)
     element_id: Option<ElementId>,
@@ -65,7 +65,7 @@ impl LayerNode {
     }
 
     /// Creates a LayerNode with an offset.
-    pub fn with_offset(mut self, offset: Offset) -> Self {
+    pub fn with_offset(mut self, offset: Offset<Pixels>) -> Self {
         self.offset = Some(offset);
         self
     }
@@ -150,13 +150,13 @@ impl LayerNode {
 
     /// Gets the offset from parent (parent data).
     #[inline]
-    pub fn offset(&self) -> Option<Offset> {
+    pub fn offset(&self) -> Option<Offset<Pixels>> {
         self.offset
     }
 
     /// Sets the offset from parent.
     #[inline]
-    pub fn set_offset(&mut self, offset: Option<Offset>) {
+    pub fn set_offset(&mut self, offset: Option<Offset<Pixels>>) {
         self.offset = offset;
     }
 
@@ -860,7 +860,12 @@ impl LayerTree {
     ///
     /// The LayerId of the newly created opacity layer, which can be used as a container
     /// for painting content with transparency.
-    pub fn push_opacity(&mut self, container_id: LayerId, alpha: f32, offset: Offset) -> LayerId {
+    pub fn push_opacity(
+        &mut self,
+        container_id: LayerId,
+        alpha: f32,
+        offset: Offset<Pixels>,
+    ) -> LayerId {
         use crate::layer::OpacityLayer;
 
         let layer = Layer::Opacity(OpacityLayer::with_offset(alpha, offset));

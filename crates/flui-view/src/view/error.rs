@@ -175,7 +175,6 @@ impl View for ErrorView {
     fn create_element(&self) -> Box<dyn ElementBase> {
         Box::new(ErrorElement::new(self))
     }
-
 }
 
 // ============================================================================
@@ -271,8 +270,6 @@ impl ElementBase for ErrorElement {
     fn visit_children(&self, _visitor: &mut dyn FnMut(ElementId)) {
         // No children
     }
-
-
 }
 
 #[cfg(test)]

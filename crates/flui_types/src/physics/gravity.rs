@@ -151,4 +151,3 @@ impl Simulation for GravitySimulation {
         self.tolerance
     }
 }
-

@@ -4,10 +4,12 @@
 //! the four edges of a rectangle (top, right, bottom, left). Common uses
 //! include padding, margin, borders, and insets.
 
-use std::fmt::{self, Debug};
 use std::ops::{Add, AddAssign, Mul, MulAssign, Sub, SubAssign};
 
-#[derive(Clone, Copy, Default, PartialEq)]
+/// Edge-specific values for rectangles (e.g., padding, margin, borders).
+///
+/// Generic over type `T` to support various value types.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct Edges<T = f32> {
     /// The top edge value.
     pub top: T,
@@ -19,6 +21,7 @@ pub struct Edges<T = f32> {
     pub left: T,
 }
 
+/// Convenience function to create [`Edges`] with explicit values.
 #[inline]
 pub const fn edges<T>(top: T, right: T, bottom: T, left: T) -> Edges<T> {
     Edges {
@@ -30,6 +33,7 @@ pub const fn edges<T>(top: T, right: T, bottom: T, left: T) -> Edges<T> {
 }
 
 impl<T> Edges<T> {
+    /// Creates new edge values with explicit values for each edge.
     #[inline]
     pub const fn new(top: T, right: T, bottom: T, left: T) -> Self {
         Self {
@@ -40,6 +44,7 @@ impl<T> Edges<T> {
         }
     }
 
+    /// Creates edge values with the same value for all edges.
     #[inline]
     pub fn all(value: T) -> Self
     where
@@ -53,6 +58,7 @@ impl<T> Edges<T> {
         }
     }
 
+    /// Creates symmetric edge values (vertical for top/bottom, horizontal for left/right).
     #[inline]
     pub fn symmetric(vertical: T, horizontal: T) -> Self
     where
@@ -66,6 +72,7 @@ impl<T> Edges<T> {
         }
     }
 
+    /// Creates edge values with the given value for horizontal edges only.
     #[inline]
     pub fn horizontal(value: T) -> Self
     where
@@ -79,6 +86,7 @@ impl<T> Edges<T> {
         }
     }
 
+    /// Creates edge values with the given value for vertical edges only.
     #[inline]
     pub fn vertical(value: T) -> Self
     where
@@ -92,6 +100,7 @@ impl<T> Edges<T> {
         }
     }
 
+    /// Returns the sum of left and right edge values.
     #[inline]
     pub fn horizontal_total(&self) -> T
     where
@@ -100,6 +109,7 @@ impl<T> Edges<T> {
         self.left + self.right
     }
 
+    /// Returns the sum of top and bottom edge values.
     #[inline]
     pub fn vertical_total(&self) -> T
     where
@@ -108,6 +118,7 @@ impl<T> Edges<T> {
         self.top + self.bottom
     }
 
+    /// Maps each edge value using the provided function.
     #[must_use]
     pub fn map<U>(&self, f: impl Fn(&T) -> U) -> Edges<U> {
         Edges {
@@ -118,20 +129,18 @@ impl<T> Edges<T> {
         }
     }
 
+    /// Returns `true` if any edge satisfies the predicate.
     #[must_use]
     pub fn any(&self, f: impl Fn(&T) -> bool) -> bool {
         f(&self.top) || f(&self.right) || f(&self.bottom) || f(&self.left)
     }
 
+    /// Returns `true` if all edges satisfy the predicate.
     #[must_use]
     pub fn all_satisfy(&self, f: impl Fn(&T) -> bool) -> bool {
         f(&self.top) && f(&self.right) && f(&self.bottom) && f(&self.left)
     }
 }
-
-// ============================================================================
-// f32-specific methods
-// ============================================================================
 
 // ============================================================================
 // Specialized implementations for Pixels
@@ -271,7 +280,10 @@ impl Edges<super::units::Pixels> {
     #[must_use]
     pub fn is_zero(&self) -> bool {
         use super::units::px;
-        self.left == px(0.0) && self.top == px(0.0) && self.right == px(0.0) && self.bottom == px(0.0)
+        self.left == px(0.0)
+            && self.top == px(0.0)
+            && self.right == px(0.0)
+            && self.bottom == px(0.0)
     }
 
     /// Check if all edge values are non-negative.
@@ -290,7 +302,10 @@ impl Edges<super::units::Pixels> {
     #[must_use]
     pub fn is_non_negative(&self) -> bool {
         use super::units::px;
-        self.left >= px(0.0) && self.top >= px(0.0) && self.right >= px(0.0) && self.bottom >= px(0.0)
+        self.left >= px(0.0)
+            && self.top >= px(0.0)
+            && self.right >= px(0.0)
+            && self.bottom >= px(0.0)
     }
 
     /// Clamp all edge values to be non-negative.
@@ -311,13 +326,30 @@ impl Edges<super::units::Pixels> {
     pub fn clamp_non_negative(&self) -> Self {
         use super::units::px;
         Self {
-            top: if self.top.get() < 0.0 { px(0.0) } else { self.top },
-            right: if self.right.get() < 0.0 { px(0.0) } else { self.right },
-            bottom: if self.bottom.get() < 0.0 { px(0.0) } else { self.bottom },
-            left: if self.left.get() < 0.0 { px(0.0) } else { self.left },
+            top: if self.top.get() < 0.0 {
+                px(0.0)
+            } else {
+                self.top
+            },
+            right: if self.right.get() < 0.0 {
+                px(0.0)
+            } else {
+                self.right
+            },
+            bottom: if self.bottom.get() < 0.0 {
+                px(0.0)
+            } else {
+                self.bottom
+            },
+            left: if self.left.get() < 0.0 {
+                px(0.0)
+            } else {
+                self.left
+            },
         }
     }
 
+    /// Scales all edges by the given factor, converting to scaled pixels.
     #[must_use]
     pub fn scale(&self, factor: f32) -> Edges<super::units::ScaledPixels> {
         Edges {
@@ -346,7 +378,10 @@ impl Edges<super::units::Pixels> {
     /// assert_eq!(inflated.bottom(), px(110.0));
     /// ```
     #[must_use]
-    pub fn inflate_rect(&self, rect: super::Rect<super::units::Pixels>) -> super::Rect<super::units::Pixels> {
+    pub fn inflate_rect(
+        &self,
+        rect: super::Rect<super::units::Pixels>,
+    ) -> super::Rect<super::units::Pixels> {
         super::Rect::from_min_max(
             super::Point::new(rect.min.x - self.left, rect.min.y - self.top),
             super::Point::new(rect.max.x + self.right, rect.max.y + self.bottom),
@@ -371,7 +406,10 @@ impl Edges<super::units::Pixels> {
     /// assert_eq!(deflated.bottom(), px(90.0));
     /// ```
     #[must_use]
-    pub fn deflate_rect(&self, rect: super::Rect<super::units::Pixels>) -> super::Rect<super::units::Pixels> {
+    pub fn deflate_rect(
+        &self,
+        rect: super::Rect<super::units::Pixels>,
+    ) -> super::Rect<super::units::Pixels> {
         super::Rect::from_min_max(
             super::Point::new(rect.min.x + self.left, rect.min.y + self.top),
             super::Point::new(rect.max.x - self.right, rect.max.y - self.bottom),
@@ -394,7 +432,10 @@ impl Edges<super::units::Pixels> {
     /// assert_eq!(inflated.height, px(120.0)); // 100 + 10 + 10
     /// ```
     #[must_use]
-    pub fn inflate_size(&self, size: super::Size<super::units::Pixels>) -> super::Size<super::units::Pixels> {
+    pub fn inflate_size(
+        &self,
+        size: super::Size<super::units::Pixels>,
+    ) -> super::Size<super::units::Pixels> {
         super::Size::new(
             size.width + self.left + self.right,
             size.height + self.top + self.bottom,
@@ -417,7 +458,10 @@ impl Edges<super::units::Pixels> {
     /// assert_eq!(deflated.height, px(80.0)); // 100 - 10 - 10
     /// ```
     #[must_use]
-    pub fn deflate_size(&self, size: super::Size<super::units::Pixels>) -> super::Size<super::units::Pixels> {
+    pub fn deflate_size(
+        &self,
+        size: super::Size<super::units::Pixels>,
+    ) -> super::Size<super::units::Pixels> {
         super::Size::new(
             size.width - self.left - self.right,
             size.height - self.top - self.bottom,
@@ -467,7 +511,6 @@ impl Edges<super::units::Pixels> {
             left: self.left,
         }
     }
-
 }
 
 // Arithmetic operators
@@ -578,8 +621,22 @@ impl From<(super::units::Pixels, super::units::Pixels)> for Edges<super::units::
     }
 }
 
-impl From<(super::units::Pixels, super::units::Pixels, super::units::Pixels, super::units::Pixels)> for Edges<super::units::Pixels> {
-    fn from((top, right, bottom, left): (super::units::Pixels, super::units::Pixels, super::units::Pixels, super::units::Pixels)) -> Self {
+impl
+    From<(
+        super::units::Pixels,
+        super::units::Pixels,
+        super::units::Pixels,
+        super::units::Pixels,
+    )> for Edges<super::units::Pixels>
+{
+    fn from(
+        (top, right, bottom, left): (
+            super::units::Pixels,
+            super::units::Pixels,
+            super::units::Pixels,
+            super::units::Pixels,
+        ),
+    ) -> Self {
         Self::new(top, right, bottom, left)
     }
 }
@@ -625,20 +682,5 @@ impl<T: Clone> super::traits::Along for Edges<T> {
                 }
             }
         }
-    }
-}
-
-// ============================================================================
-// Debug formatting
-// ============================================================================
-
-impl<T: Debug> Debug for Edges<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Edges")
-            .field("top", &self.top)
-            .field("right", &self.right)
-            .field("bottom", &self.bottom)
-            .field("left", &self.left)
-            .finish()
     }
 }

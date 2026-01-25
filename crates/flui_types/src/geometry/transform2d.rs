@@ -43,7 +43,7 @@
 //! - `shx`, `shy`: Shear factors
 //! - `tx`, `ty`: Translation offsets
 
-use super::{Point, Offset, Rect, Pixels, traits::Unit};
+use super::{traits::Unit, Offset, Pixels, Point, Rect};
 use std::marker::PhantomData;
 
 /// A 2D affine transformation matrix, generic over Unit type.
@@ -351,7 +351,7 @@ impl<T: Unit> Default for Transform2D<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geometry::{Pixels, px};
+    use crate::geometry::{px, Pixels};
 
     #[test]
     fn test_identity() {

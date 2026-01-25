@@ -57,7 +57,6 @@ macro_rules! impl_proxy_view {
                 use $crate::element::ProxyBehavior;
                 Box::new($crate::ProxyElement::new(self, ProxyBehavior))
             }
-
         }
     };
 }

@@ -50,10 +50,14 @@ use std::str::FromStr;
 // REMS - Root em units for scalable typography
 // ============================================================================
 
+/// Root em units for font-relative sizing.
+///
+/// One rem equals the root font size. Commonly used for scalable typography.
 #[derive(Copy, Clone, Default, PartialEq)]
 #[repr(transparent)]
 pub struct Rems(pub f32);
 
+/// Creates a new Rems value.
 #[inline]
 pub const fn rems(value: f32) -> Rems {
     Rems(value)
@@ -63,96 +67,115 @@ impl Rems {
     /// Zero rems.
     pub const ZERO: Rems = Rems(0.0);
 
+    /// Creates a new Rems value.
     #[inline]
     pub const fn new(value: f32) -> Self {
         Self(value)
     }
 
+    /// Returns the raw f32 value.
     #[inline]
     pub const fn get(self) -> f32 {
         self.0
     }
 
+    /// Converts to pixels using the given rem size.
     #[must_use]
     pub fn to_pixels(self, rem_size: Pixels) -> Pixels {
         px(self.0 * rem_size.get())
     }
 
+    /// Returns `true` if the value is zero.
     #[inline]
     pub fn is_zero(self) -> bool {
         self.0.abs() < f32::EPSILON
     }
 
+    /// Returns the absolute value.
     #[must_use]
     pub fn abs(self) -> Self {
         Self(self.0.abs())
     }
 
+    /// Returns the minimum of two values.
     #[must_use]
     pub fn min(self, other: Self) -> Self {
         Self(self.0.min(other.0))
     }
 
+    /// Returns the maximum of two values.
     #[must_use]
     pub fn max(self, other: Self) -> Self {
         Self(self.0.max(other.0))
     }
 
+    /// Clamps the value to the given range.
     #[must_use]
     pub fn clamp(self, min: Self, max: Self) -> Self {
         Self(self.0.clamp(min.0, max.0))
     }
 
+    /// Returns the sign of the value (-1, 0, or 1).
     #[inline]
     pub fn signum(self) -> f32 {
         self.0.signum()
     }
 
+    /// Returns `true` if the value is finite (not NaN or infinite).
     #[inline]
     pub fn is_finite(self) -> bool {
         self.0.is_finite()
     }
 
+    /// Returns the largest integer less than or equal to the value.
     #[must_use]
     pub fn floor(self) -> Self {
         Self(self.0.floor())
     }
 
+    /// Returns the smallest integer greater than or equal to the value.
     #[must_use]
     pub fn ceil(self) -> Self {
         Self(self.0.ceil())
     }
 
+    /// Returns the nearest integer to the value.
     #[must_use]
     pub fn round(self) -> Self {
         Self(self.0.round())
     }
 
+    /// Returns the integer part of the value.
     #[must_use]
     pub fn trunc(self) -> Self {
         Self(self.0.trunc())
     }
 
+    /// Scales the value by the given factor.
     #[must_use]
     pub fn scale(self, factor: f32) -> Self {
         Self(self.0 * factor)
     }
 
+    /// Applies a function to the underlying value.
     #[must_use]
     pub fn map(self, f: impl FnOnce(f32) -> f32) -> Self {
         Self(f(self.0))
     }
 
+    /// Returns `true` if the value is NaN.
     #[inline]
     pub fn is_nan(self) -> bool {
         self.0.is_nan()
     }
 
+    /// Returns `true` if the value is infinite.
     #[inline]
     pub fn is_infinite(self) -> bool {
         self.0.is_infinite()
     }
 
+    /// Linearly interpolates between this value and another.
     #[must_use]
     pub fn lerp(self, other: Self, t: f32) -> Self {
         Self(self.0 + (other.0 - self.0) * t)
@@ -386,6 +409,7 @@ impl<'a> std::iter::Sum<&'a Rems> for Rems {
 // PERCENTAGE - Relative percentage values
 // ============================================================================
 
+/// Percentage value (0.0 = 0%, 1.0 = 100%).
 #[repr(transparent)]
 pub struct Percentage(pub f32);
 
@@ -396,16 +420,19 @@ impl Percentage {
     /// One hundred percent.
     pub const FULL: Percentage = Percentage(1.0);
 
+    /// Creates a new percentage value.
     #[inline]
     pub const fn new(value: f32) -> Self {
         Self(value)
     }
 
+    /// Returns the raw value (0.0 to 1.0).
     #[inline]
     pub const fn get(self) -> f32 {
         self.0
     }
 
+    /// Applies this percentage to a base value.
     #[must_use]
     pub fn of(self, base: Pixels) -> Pixels {
         px(self.0 * base.get())
@@ -428,6 +455,7 @@ impl Debug for Percentage {
 // ABSOLUTE LENGTH - Pixels or Rems
 // ============================================================================
 
+/// An absolute length that can be either pixels or rems.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum AbsoluteLength {
     /// Length in pixels.
@@ -459,6 +487,7 @@ impl AbsoluteLength {
         }
     }
 
+    /// Converts to pixels using the given rem size.
     #[must_use]
     pub fn to_pixels(self, rem_size: Pixels) -> Pixels {
         match self {
@@ -467,6 +496,7 @@ impl AbsoluteLength {
         }
     }
 
+    /// Converts to rems using the given rem size.
     #[must_use]
     pub fn to_rems(self, rem_size: Pixels) -> Rems {
         match self {
@@ -549,6 +579,7 @@ impl FromStr for AbsoluteLength {
 // DEFINITE LENGTH - Absolute or Fractional
 // ============================================================================
 
+/// A definite length that can be either absolute or a fraction of parent size.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum DefiniteLength {
     /// Absolute length (pixels or rems).
@@ -557,12 +588,14 @@ pub enum DefiniteLength {
     Fraction(f32),
 }
 
+/// Creates a fractional length relative to parent size.
 #[inline]
 pub const fn relative(fraction: f32) -> DefiniteLength {
     DefiniteLength::Fraction(fraction)
 }
 
 impl DefiniteLength {
+    /// Converts to pixels using the given parent size and rem size.
     #[must_use]
     pub fn to_pixels(self, parent_size: Pixels, rem_size: Pixels) -> Pixels {
         match self {
@@ -647,30 +680,36 @@ impl FromStr for DefiniteLength {
 // LENGTH - Definite or Auto
 // ============================================================================
 
+/// A length that can be either definite or automatically determined.
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub enum Length {
     /// Definite length with concrete value.
     Definite(DefiniteLength),
+    /// Automatically determined by layout.
     #[default]
     Auto,
 }
 
+/// Creates an automatic length.
 #[inline]
 pub const fn auto() -> Length {
     Length::Auto
 }
 
 impl Length {
+    /// Returns `true` if the length is automatic.
     #[inline]
     pub fn is_auto(&self) -> bool {
         matches!(self, Length::Auto)
     }
 
+    /// Returns `true` if the length is definite.
     #[inline]
     pub fn is_definite(&self) -> bool {
         matches!(self, Length::Definite(_))
     }
 
+    /// Converts to pixels if definite, or returns `None` if automatic.
     #[must_use]
     pub fn to_pixels(self, parent_size: Pixels, rem_size: Pixels) -> Option<Pixels> {
         match self {

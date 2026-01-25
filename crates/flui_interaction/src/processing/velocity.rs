@@ -20,9 +20,9 @@
 //! let mut tracker = VelocityTracker::new();
 //!
 //! // Add samples as pointer moves
-//! tracker.add_position(Instant::now(), Offset::new(0.0, 0.0));
+//! tracker.add_position(Instant::now(), Offset::new(Pixels(0.0), Pixels(0.0)));
 //! // ... more samples ...
-//! tracker.add_position(Instant::now(), Offset::new(100.0, 50.0));
+//! tracker.add_position(Instant::now(), Offset::new(Pixels(100.0), Pixels(50.0)));
 //!
 //! // Get estimated velocity
 //! let velocity = tracker.velocity();
@@ -30,8 +30,8 @@
 //! ```
 
 use flui_types::geometry::Offset;
-use flui_types::geometry::Pixels;
 use flui_types::geometry::PixelDelta;
+use flui_types::geometry::Pixels;
 
 use std::time::{Duration, Instant};
 
@@ -73,7 +73,7 @@ impl Velocity {
 
     /// Create a new velocity from pixels per second.
     #[inline]
-    pub const fn new(pixels_per_second: Offset<Pixels>) -> Self {
+    pub const fn new(pixels_per_second: Offset<PixelDelta>) -> Self {
         Self { pixels_per_second }
     }
 
@@ -86,11 +86,11 @@ impl Velocity {
     /// Get the magnitude (speed) in pixels per second.
     #[inline]
     pub fn magnitude(&self) -> f32 {
-        self.pixels_per_second.distance()
+        self.pixels_per_second.distance().0
     }
 
     /// Get the direction as a unit vector, or None if velocity is zero.
-    pub fn direction(&self) -> Option<Offset<Pixels>> {
+    pub fn direction(&self) -> Option<Offset<PixelDelta>> {
         let mag = self.magnitude();
         if mag < f32::EPSILON {
             None
@@ -119,14 +119,14 @@ impl Velocity {
     }
 }
 
-impl From<Offset<Pixels>> for Velocity {
+impl From<Offset<PixelDelta>> for Velocity {
     #[inline]
-    fn from(pixels_per_second: Offset<Pixels>) -> Self {
+    fn from(pixels_per_second: Offset<PixelDelta>) -> Self {
         Self { pixels_per_second }
     }
 }
 
-impl From<Velocity> for Offset<Pixels> {
+impl From<Velocity> for Offset<PixelDelta> {
     #[inline]
     fn from(velocity: Velocity) -> Self {
         velocity.pixels_per_second
@@ -172,7 +172,7 @@ struct PositionSample {
 /// let start = Instant::now();
 /// for i in 0..10 {
 ///     let t = start + Duration::from_millis(i * 10);
-///     tracker.add_position(t, Offset::new(i as f32 * 10.0, 0.0));
+///     tracker.add_position(t, Offset::new(Pixels(i as f32 * 10.0), Pixels(0.0)));
 /// }
 ///
 /// let velocity = tracker.velocity();
@@ -307,7 +307,7 @@ impl VelocityTracker {
         let vx = polynomial_fit_velocity(&times, &x_positions, &weights);
         let vy = polynomial_fit_velocity(&times, &y_positions, &weights);
 
-        Velocity::new(Offset::new(vx as f32, vy as f32))
+        Velocity::new(Offset::new(PixelDelta(vx as f32), PixelDelta(vy as f32)))
     }
 
     /// Simple linear regression.
@@ -358,7 +358,7 @@ impl VelocityTracker {
         let vx = num_x / denom;
         let vy = num_y / denom;
 
-        Velocity::new(Offset::new(vx as f32, vy as f32))
+        Velocity::new(Offset::new(PixelDelta(vx as f32), PixelDelta(vy as f32)))
     }
 
     /// Simple two-sample velocity (fastest).
@@ -379,7 +379,10 @@ impl VelocityTracker {
         let dt_secs = dt.as_secs_f32();
         let delta = newest.position - oldest.position;
 
-        Velocity::new(Offset::new(delta.dx / dt_secs, delta.dy / dt_secs))
+        Velocity::new(Offset::new(
+            PixelDelta((delta.dx / dt_secs).0),
+            PixelDelta((delta.dy / dt_secs).0),
+        ))
     }
 }
 
@@ -591,23 +594,23 @@ mod tests {
 
     #[test]
     fn test_velocity_magnitude() {
-        let v = Velocity::new(Offset::new(3.0, 4.0));
+        let v = Velocity::new(Offset::new(PixelDelta(3.0), PixelDelta(4.0)));
         assert!((v.magnitude() - 5.0).abs() < 0.001);
     }
 
     #[test]
     fn test_velocity_direction() {
-        let v = Velocity::new(Offset::new(10.0, 0.0));
+        let v = Velocity::new(Offset::new(PixelDelta(10.0), PixelDelta(0.0)));
         let dir = v.direction().unwrap();
-        assert!((dir.dx - 1.0).abs() < 0.001);
-        assert!(dir.dy.abs() < 0.001);
+        assert!((dir.dx - PixelDelta(1.0)).abs() < PixelDelta(0.001));
+        assert!(dir.dy.abs() < PixelDelta(0.001));
 
         assert!(Velocity::ZERO.direction().is_none());
     }
 
     #[test]
     fn test_velocity_clamp() {
-        let v = Velocity::new(Offset::new(1000.0, 0.0));
+        let v = Velocity::new(Offset::new(PixelDelta(1000.0), PixelDelta(0.0)));
         let clamped = v.clamp_magnitude(500.0);
         assert!((clamped.magnitude() - 500.0).abs() < 0.001);
     }
@@ -622,7 +625,7 @@ mod tests {
     #[test]
     fn test_tracker_single_sample() {
         let mut tracker = VelocityTracker::new();
-        tracker.add_position(Instant::now(), Offset::new(0.0, 0.0));
+        tracker.add_position(Instant::now(), Offset::new(Pixels(0.0), Pixels(0.0)));
         assert_eq!(tracker.velocity(), Velocity::ZERO);
         assert!(!tracker.has_sufficient_data());
     }
@@ -635,14 +638,14 @@ mod tests {
         // 100 pixels in 100ms = 1000 px/s
         for i in 0..10 {
             let t = start + Duration::from_millis(i * 10);
-            tracker.add_position(t, Offset::new(i as f32 * 10.0, 0.0));
+            tracker.add_position(t, Offset::new(Pixels(i as f32 * 10.0), Pixels(0.0)));
         }
 
         let velocity = tracker.velocity();
         // Should be approximately 1000 px/s horizontal
-        assert!(velocity.pixels_per_second.dx > 800.0);
-        assert!(velocity.pixels_per_second.dx < 1200.0);
-        assert!(velocity.pixels_per_second.dy.abs() < 100.0);
+        assert!(velocity.pixels_per_second.dx > PixelDelta(800.0));
+        assert!(velocity.pixels_per_second.dx < PixelDelta(1200.0));
+        assert!(velocity.pixels_per_second.dy.abs() < PixelDelta(100.0));
     }
 
     #[test]
@@ -652,12 +655,12 @@ mod tests {
 
         for i in 0..10 {
             let t = start + Duration::from_millis(i * 10);
-            tracker.add_position(t, Offset::new(0.0, i as f32 * 10.0));
+            tracker.add_position(t, Offset::new(Pixels(0.0), Pixels(i as f32 * 10.0)));
         }
 
         let velocity = tracker.velocity();
-        assert!(velocity.pixels_per_second.dx.abs() < 100.0);
-        assert!(velocity.pixels_per_second.dy > 800.0);
+        assert!(velocity.pixels_per_second.dx.abs() < PixelDelta(100.0));
+        assert!(velocity.pixels_per_second.dy > PixelDelta(800.0));
     }
 
     #[test]
@@ -667,20 +670,23 @@ mod tests {
 
         for i in 0..10 {
             let t = start + Duration::from_millis(i * 10);
-            tracker.add_position(t, Offset::new(i as f32 * 10.0, i as f32 * 10.0));
+            tracker.add_position(
+                t,
+                Offset::new(Pixels(i as f32 * 10.0), Pixels(i as f32 * 10.0)),
+            );
         }
 
         let velocity = tracker.velocity();
         // Both components should be around 1000 px/s
-        assert!(velocity.pixels_per_second.dx > 800.0);
-        assert!(velocity.pixels_per_second.dy > 800.0);
+        assert!(velocity.pixels_per_second.dx > PixelDelta(800.0));
+        assert!(velocity.pixels_per_second.dy > PixelDelta(800.0));
     }
 
     #[test]
     fn test_tracker_reset() {
         let mut tracker = VelocityTracker::new();
-        tracker.add_position(Instant::now(), Offset::new(0.0, 0.0));
-        tracker.add_position(Instant::now(), Offset::new(10.0, 0.0));
+        tracker.add_position(Instant::now(), Offset::new(Pixels(0.0), Pixels(0.0)));
+        tracker.add_position(Instant::now(), Offset::new(Pixels(10.0), Pixels(0.0)));
 
         assert!(tracker.has_sufficient_data());
         tracker.reset();
@@ -694,7 +700,7 @@ mod tests {
             .map(|i| {
                 (
                     start + Duration::from_millis(i * 10),
-                    Offset::new(i as f32 * 10.0, 0.0),
+                    Offset::new(Pixels(i as f32 * 10.0), Pixels(0.0)),
                 )
             })
             .collect();
@@ -712,7 +718,7 @@ mod tests {
             let velocity = tracker.velocity();
             // All strategies should give roughly 1000 px/s
             assert!(
-                velocity.pixels_per_second.dx > 500.0,
+                velocity.pixels_per_second.dx > PixelDelta(500.0),
                 "{:?} gave {}",
                 strategy,
                 velocity.pixels_per_second.dx
@@ -727,7 +733,7 @@ mod tests {
 
         for i in 0..10 {
             let t = start + Duration::from_millis(i * 10);
-            tracker.add_position(t, Offset::new(i as f32 * 10.0, 0.0));
+            tracker.add_position(t, Offset::new(Pixels(i as f32 * 10.0), Pixels(0.0)));
         }
 
         let estimate = tracker.estimate();
@@ -748,7 +754,7 @@ mod tests {
         let recent = start + Duration::from_millis(200);
         for i in 0..5 {
             let t = recent + Duration::from_millis(i * 10);
-            tracker.add_position(t, Offset::new(i as f32 * 10.0, 0.0));
+            tracker.add_position(t, Offset::new(Pixels(i as f32 * 10.0), Pixels(0.0)));
         }
 
         // Old sample should be removed, only 5 recent samples remain

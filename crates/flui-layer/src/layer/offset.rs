@@ -4,7 +4,7 @@
 //! Corresponds to Flutter's `OffsetLayer`, which is the base class
 //! for repaint boundary layers.
 
-use flui_types::geometry::{Rect, Vec2};
+use flui_types::geometry::{Pixels, Rect, Vec2};
 use flui_types::Offset;
 
 /// Layer that applies a simple offset to its children.
@@ -44,13 +44,13 @@ use flui_types::Offset;
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct OffsetLayer {
     /// The offset to apply to children
-    offset: Offset,
+    offset: Offset<Pixels>,
 }
 
 impl OffsetLayer {
     /// Creates a new offset layer with the given offset.
     #[inline]
-    pub const fn new(offset: Offset) -> Self {
+    pub const fn new(offset: Offset<Pixels>) -> Self {
         Self { offset }
     }
 
@@ -68,13 +68,13 @@ impl OffsetLayer {
 
     /// Returns the offset.
     #[inline]
-    pub const fn offset(&self) -> Offset {
+    pub const fn offset(&self) -> Offset<Pixels> {
         self.offset
     }
 
     /// Sets the offset.
     #[inline]
-    pub fn set_offset(&mut self, offset: Offset) {
+    pub fn set_offset(&mut self, offset: Offset<Pixels>) {
         self.offset = offset;
     }
 
@@ -120,7 +120,7 @@ impl OffsetLayer {
 
     /// Adds another offset to this layer.
     #[inline]
-    pub fn add_offset(&mut self, offset: Offset) {
+    pub fn add_offset(&mut self, offset: Offset<Pixels>) {
         self.offset = Offset::new(self.offset.dx + offset.dx, self.offset.dy + offset.dy);
     }
 }

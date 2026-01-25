@@ -54,8 +54,8 @@ let expanded = rect.inflate(5.0, 5.0);
 // Shrink (padding inward)
 let shrunk = rect.deflate(5.0, 5.0);
 
-// With EdgeInsets
-let padded = rect.inflate_by(EdgeInsets::all(10.0));
+// With Edges
+let padded = Edges::all(px(10.0)).inflate_rect(rect);
 
 // Scale from center
 let scaled = Rect::from_center(rect.center(), rect.size * 1.5);
@@ -369,14 +369,14 @@ if let Some(velocity) = tracker.get_velocity() {
 ### Creation in Hot Paths
 
 ```rust
-// ❌ Bad: creating EdgeInsets every frame
-fn layout(&self) -> EdgeInsets {
-    EdgeInsets::symmetric(16.0, 8.0)  // Allocation every call
+// ❌ Bad: creating Edges every frame
+fn layout(&self) -> Edges<Pixels> {
+    Edges::symmetric(px(16.0), px(8.0))  // Creation every call
 }
 
 // ✅ Good: constant
-const PADDING: EdgeInsets = EdgeInsets::symmetric_const(16.0, 8.0);
-fn layout(&self) -> EdgeInsets {
+const PADDING: Edges<Pixels> = Edges::symmetric(px(16.0), px(8.0));
+fn layout(&self) -> Edges<Pixels> {
     PADDING
 }
 ```

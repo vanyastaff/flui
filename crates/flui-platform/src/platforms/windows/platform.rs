@@ -1,20 +1,20 @@
 //! Windows platform implementation
 
+use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::sync::Arc;
-use parking_lot::Mutex;
 
 use anyhow::{Context, Result};
+use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::System::LibraryLoader::*;
 use windows::Win32::UI::HiDpi::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
-use windows::core::{PCWSTR, w};
 
-use crate::traits::*;
-use super::window::WindowsWindow;
 use super::util::*;
+use super::window::WindowsWindow;
+use crate::traits::*;
 
 /// Windows platform window class name
 const WINDOW_CLASS_NAME: PCWSTR = w!("FluiWindowClass");
@@ -76,12 +76,16 @@ impl WindowsPlatform {
                 WINDOW_CLASS_NAME,
                 w!("Flui Platform Message Window"),
                 WINDOW_STYLE(0),
-                0, 0, 0, 0,
+                0,
+                0,
+                0,
+                0,
                 HWND_MESSAGE, // Message-only window
                 None,
                 hinstance,
                 None,
-            ).map_err(|e| anyhow::anyhow!("Failed to create message window: {:?}", e))?
+            )
+            .map_err(|e| anyhow::anyhow!("Failed to create message window: {:?}", e))?
         };
 
         Ok(Self {
@@ -370,7 +374,9 @@ impl Platform for WindowsPlatform {
             if len == 0 {
                 return Err(windows::core::Error::from_win32().into());
             }
-            Ok(std::path::PathBuf::from(String::from_utf16_lossy(&buffer[..len as usize])))
+            Ok(std::path::PathBuf::from(String::from_utf16_lossy(
+                &buffer[..len as usize],
+            )))
         }
     }
 }
@@ -438,6 +444,10 @@ mod tests {
     #[test]
     fn test_platform_creation() {
         let result = WindowsPlatform::new();
-        assert!(result.is_ok(), "Failed to create Windows platform: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Failed to create Windows platform: {:?}",
+            result.err()
+        );
     }
 }

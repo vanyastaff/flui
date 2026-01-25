@@ -4,7 +4,10 @@
 //! into a single GPU texture, reducing draw calls and improving performance.
 
 use std::collections::HashMap;
-use wgpu::{Device, Extent3d, Queue, Texture, TextureDescriptor, TextureDimension, TextureFormat, TextureUsages};
+use wgpu::{
+    Device, Extent3d, Queue, Texture, TextureDescriptor, TextureDimension, TextureFormat,
+    TextureUsages,
+};
 
 /// Rectangle in atlas space
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -23,7 +26,12 @@ impl AtlasRect {
     /// Create a new atlas rectangle
     #[must_use]
     pub const fn new(x: u32, y: u32, width: u32, height: u32) -> Self {
-        Self { x, y, width, height }
+        Self {
+            x,
+            y,
+            width,
+            height,
+        }
     }
 
     /// Get UV coordinates (0.0 - 1.0) for this rect in the atlas
@@ -152,13 +160,7 @@ impl TextureAtlas {
             let image_id = self.next_image_id;
             self.next_image_id += 1;
 
-            self.entries.insert(
-                image_id,
-                AtlasEntry {
-                    rect,
-                    image_id,
-                },
-            );
+            self.entries.insert(image_id, AtlasEntry { rect, image_id });
 
             Some((image_id, rect))
         } else {
@@ -174,13 +176,7 @@ impl TextureAtlas {
                 let image_id = self.next_image_id;
                 self.next_image_id += 1;
 
-                self.entries.insert(
-                    image_id,
-                    AtlasEntry {
-                        rect,
-                        image_id,
-                    },
-                );
+                self.entries.insert(image_id, AtlasEntry { rect, image_id });
 
                 Some((image_id, rect))
             } else {

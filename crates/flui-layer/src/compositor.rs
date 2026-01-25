@@ -186,7 +186,7 @@ impl<'a> SceneBuilder<'a> {
     /// // ... add children ...
     /// builder.pop();
     /// ```
-    pub fn push_offset(&mut self, offset: flui_types::Offset) -> LayerId {
+    pub fn push_offset(&mut self, offset: flui_types::Offset<flui_types::Pixels>) -> LayerId {
         self.push_layer(Layer::Offset(OffsetLayer::new(offset)))
     }
 
@@ -233,7 +233,11 @@ impl<'a> SceneBuilder<'a> {
     }
 
     /// Pushes an opacity layer with offset.
-    pub fn push_opacity_with_offset(&mut self, alpha: f32, offset: flui_types::Offset) -> LayerId {
+    pub fn push_opacity_with_offset(
+        &mut self,
+        alpha: f32,
+        offset: flui_types::Offset<flui_types::Pixels>,
+    ) -> LayerId {
         self.push_layer(Layer::Opacity(OpacityLayer::with_offset(alpha, offset)))
     }
 

@@ -5,9 +5,9 @@
 use crate::arena::{GestureArena, GestureArenaMember};
 use flui_types::geometry::Pixels;
 
+use crate::events::PointerEvent;
 use crate::ids::PointerId;
 use flui_types::Offset;
-use crate::events::PointerEvent;
 use parking_lot::Mutex;
 use std::sync::Arc;
 
@@ -241,7 +241,7 @@ mod tests {
         let state = GestureRecognizerState::new(arena);
 
         let pointer = PointerId::new(1);
-        let position = Offset::new(100.0, 200.0);
+        let position = Offset::new(Pixels(100.0), Pixels(200.0));
 
         state.set_primary_pointer(Some(pointer));
         state.set_initial_position(Some(position));

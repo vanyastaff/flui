@@ -46,10 +46,14 @@ use super::traits::{NumericUnit, Unit};
 // PIXELS - Logical pixels (layout and measurement)
 // ============================================================================
 
+/// Logical pixels used for layout and UI measurements.
+///
+/// This is the primary unit for UI layout calculations, independent of device pixel density.
 #[derive(Copy, Clone, Default, PartialEq)]
 #[repr(transparent)]
 pub struct Pixels(pub f32);
 
+/// Shorthand constructor for `Pixels`.
 #[inline]
 pub const fn px(value: f32) -> Pixels {
     Pixels(value)
@@ -65,101 +69,121 @@ impl Pixels {
     /// Minimum representable pixels value.
     pub const MIN: Pixels = Pixels(f32::MIN);
 
+    /// Creates a new `Pixels` value.
     #[inline]
     pub const fn new(value: f32) -> Self {
         Self(value)
     }
 
+    /// Gets the raw f32 value.
     #[inline]
     pub const fn get(self) -> f32 {
         self.0
     }
 
+    /// Rounds down to the nearest integer.
     #[must_use]
     pub fn floor(self) -> Self {
         Self(self.0.floor())
     }
 
+    /// Rounds to the nearest integer.
     #[must_use]
     pub fn round(self) -> Self {
         Self(self.0.round())
     }
 
+    /// Rounds up to the nearest integer.
     #[must_use]
     pub fn ceil(self) -> Self {
         Self(self.0.ceil())
     }
 
+    /// Truncates the fractional part.
     #[must_use]
     pub fn trunc(self) -> Self {
         Self(self.0.trunc())
     }
 
+    /// Returns the absolute value.
     #[must_use]
     pub fn abs(self) -> Self {
         Self(self.0.abs())
     }
 
+    /// Returns the square root.
     #[must_use]
     pub fn sqrt(self) -> Self {
         Self(self.0.sqrt())
     }
 
+    /// Returns the sign as -1.0, 0.0, or 1.0.
     #[must_use]
     pub fn signum(self) -> Self {
         Self(self.0.signum())
     }
 
+    /// Returns the sign as a raw f32.
     #[inline]
     pub fn signum_raw(self) -> f32 {
         self.0.signum()
     }
 
+    /// Returns the fractional part.
     #[must_use]
     pub fn fract(self) -> Self {
         Self(self.0.fract())
     }
 
+    /// Computes the four-quadrant arctangent of `self` and `other`.
     #[must_use]
     pub fn atan2(self, other: Self) -> f32 {
         self.0.atan2(other.0)
     }
 
+    /// Raises to the given power.
     #[must_use]
     pub fn pow(self, exponent: f32) -> Self {
         Self(self.0.powf(exponent))
     }
 
+    /// Scales logical pixels by a factor, producing scaled pixels.
     #[must_use]
     pub fn scale(self, factor: f32) -> ScaledPixels {
         ScaledPixels(self.0 * factor)
     }
 
+    /// Returns true if the value is finite (not NaN or infinite).
     #[inline]
     pub fn is_finite(self) -> bool {
         self.0.is_finite()
     }
 
+    /// Returns true if the value is NaN.
     #[inline]
     pub fn is_nan(self) -> bool {
         self.0.is_nan()
     }
 
+    /// Returns true if the value is infinite.
     #[inline]
     pub fn is_infinite(self) -> bool {
         self.0.is_infinite()
     }
 
+    /// Returns the minimum of two values.
     #[must_use]
     pub fn min(self, other: Self) -> Self {
         Self(self.0.min(other.0))
     }
 
+    /// Returns the maximum of two values.
     #[must_use]
     pub fn max(self, other: Self) -> Self {
         Self(self.0.max(other.0))
     }
 
+    /// Returns the maximum of two values (const version).
     #[must_use]
     pub const fn max_const(self, other: Self) -> Self {
         if self.0 > other.0 {
@@ -169,6 +193,7 @@ impl Pixels {
         }
     }
 
+    /// Returns the minimum of two values (const version).
     #[must_use]
     pub const fn min_const(self, other: Self) -> Self {
         if self.0 < other.0 {
@@ -178,11 +203,13 @@ impl Pixels {
         }
     }
 
+    /// Clamps the value between min and max.
     #[must_use]
     pub fn clamp(self, min: Self, max: Self) -> Self {
         Self(self.0.clamp(min.0, max.0))
     }
 
+    /// Creates a new value, clamping to zero if invalid.
     #[inline]
     pub fn new_clamped(value: f32) -> Self {
         if value.is_finite() {
@@ -192,6 +219,7 @@ impl Pixels {
         }
     }
 
+    /// Attempts to create a new value, returning None if invalid.
     #[inline]
     pub fn try_new(value: f32) -> Option<Self> {
         if value.is_finite() && value >= 0.0 {
@@ -201,16 +229,19 @@ impl Pixels {
         }
     }
 
+    /// Converts an i32 to Pixels.
     #[inline]
     pub const fn from_i32(value: i32) -> Self {
         Self(value as f32)
     }
 
+    /// Converts logical pixels to device pixels using a scale factor.
     #[must_use]
     pub fn to_device_pixels(self, scale_factor: f32) -> DevicePixels {
         DevicePixels((self.0 * scale_factor).round() as i32)
     }
 
+    /// Converts device pixels to logical pixels using a scale factor.
     #[must_use]
     pub fn from_device_pixels(device: DevicePixels, scale_factor: f32) -> Self {
         Pixels(device.0 as f32 / scale_factor)
@@ -869,10 +900,14 @@ impl<'a> Sum<&'a PixelDelta> for PixelDelta {
 // DEVICE PIXELS - Physical display pixels
 // ============================================================================
 
+/// Physical pixels on the display device.
+///
+/// Uses i32 for precise integer pixel addressing on hardware.
 #[derive(Copy, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
 pub struct DevicePixels(pub i32);
 
+/// Shorthand constructor for `DevicePixels`.
 #[inline]
 pub const fn device_px(value: i32) -> DevicePixels {
     DevicePixels(value)
@@ -882,46 +917,55 @@ impl DevicePixels {
     /// Zero device pixels.
     pub const ZERO: DevicePixels = DevicePixels(0);
 
+    /// Creates a new `DevicePixels` value.
     #[inline]
     pub const fn new(value: i32) -> Self {
         Self(value)
     }
 
+    /// Gets the raw i32 value.
     #[inline]
     pub const fn get(self) -> i32 {
         self.0
     }
 
+    /// Converts to bytes (for buffer size calculations).
     #[inline]
     pub fn to_bytes(self, bytes_per_pixel: u8) -> u32 {
         (self.0 as u32) * (bytes_per_pixel as u32)
     }
 
+    /// Returns the absolute value.
     #[must_use]
     pub fn abs(self) -> Self {
         Self(self.0.abs())
     }
 
+    /// Returns the minimum of two values.
     #[must_use]
     pub fn min(self, other: Self) -> Self {
         Self(self.0.min(other.0))
     }
 
+    /// Returns the maximum of two values.
     #[must_use]
     pub fn max(self, other: Self) -> Self {
         Self(self.0.max(other.0))
     }
 
+    /// Clamps the value between min and max.
     #[must_use]
     pub fn clamp(self, min: Self, max: Self) -> Self {
         Self(self.0.clamp(min.0, max.0))
     }
 
+    /// Returns the sign as -1, 0, or 1.
     #[inline]
     pub fn signum(self) -> i32 {
         self.0.signum()
     }
 
+    /// Returns the maximum of two values (const version).
     #[must_use]
     pub const fn max_const(self, other: Self) -> Self {
         if self.0 > other.0 {
@@ -931,6 +975,7 @@ impl DevicePixels {
         }
     }
 
+    /// Returns the minimum of two values (const version).
     #[must_use]
     pub const fn min_const(self, other: Self) -> Self {
         if self.0 < other.0 {
@@ -940,16 +985,19 @@ impl DevicePixels {
         }
     }
 
+    /// Converts device pixels to logical pixels using a scale factor.
     #[must_use]
     pub fn to_pixels(self, scale_factor: f32) -> Pixels {
         Pixels(self.0 as f32 / scale_factor)
     }
 
+    /// Converts to scaled pixels.
     #[must_use]
     pub fn to_scaled_pixels(self) -> ScaledPixels {
         ScaledPixels(self.0 as f32)
     }
 
+    /// Applies a function to the underlying value.
     #[must_use]
     pub fn map(self, f: impl FnOnce(i32) -> i32) -> Self {
         DevicePixels(f(self.0))
@@ -1160,10 +1208,14 @@ impl<'a> Sum<&'a DevicePixels> for DevicePixels {
 // SCALED PIXELS - Display-scaled pixels
 // ============================================================================
 
+/// Pixels scaled by the display scale factor.
+///
+/// Intermediate representation between logical and device pixels.
 #[derive(Copy, Clone, Default, PartialEq)]
 #[repr(transparent)]
 pub struct ScaledPixels(pub f32);
 
+/// Shorthand constructor for `ScaledPixels`.
 #[inline]
 pub const fn scaled_px(value: f32) -> ScaledPixels {
     ScaledPixels(value)
@@ -1173,66 +1225,79 @@ impl ScaledPixels {
     /// Zero scaled pixels.
     pub const ZERO: ScaledPixels = ScaledPixels(0.0);
 
+    /// Creates a new `ScaledPixels` value.
     #[inline]
     pub const fn new(value: f32) -> Self {
         Self(value)
     }
 
+    /// Gets the raw f32 value.
     #[inline]
     pub const fn get(self) -> f32 {
         self.0
     }
 
+    /// Rounds down to the nearest integer.
     #[must_use]
     pub fn floor(self) -> Self {
         Self(self.0.floor())
     }
 
+    /// Rounds to the nearest integer.
     #[must_use]
     pub fn round(self) -> Self {
         Self(self.0.round())
     }
 
+    /// Rounds up to the nearest integer.
     #[must_use]
     pub fn ceil(self) -> Self {
         Self(self.0.ceil())
     }
 
+    /// Truncates the fractional part.
     #[must_use]
     pub fn trunc(self) -> Self {
         Self(self.0.trunc())
     }
 
+    /// Returns the absolute value.
     #[must_use]
     pub fn abs(self) -> Self {
         Self(self.0.abs())
     }
 
+    /// Converts to device pixels by rounding.
     #[must_use]
     pub fn to_device_pixels(self) -> DevicePixels {
         DevicePixels(self.0.round() as i32)
     }
 
+    /// Returns true if the value is finite.
     #[inline]
     pub fn is_finite(self) -> bool {
         self.0.is_finite()
     }
 
+    /// Returns the minimum of two values.
     #[must_use]
     pub fn min(self, other: Self) -> Self {
         Self(self.0.min(other.0))
     }
 
+    /// Returns the maximum of two values.
     #[must_use]
     pub fn max(self, other: Self) -> Self {
         Self(self.0.max(other.0))
     }
 
+    /// Clamps the value between min and max.
     #[must_use]
     pub fn clamp(self, min: Self, max: Self) -> Self {
         Self(self.0.clamp(min.0, max.0))
     }
 
+    /// Returns the sign of the value.
     #[inline]
     pub fn signum(self) -> f32 {
         self.0.signum()
@@ -1957,10 +2022,7 @@ impl<Src: Unit, Dst: Unit> ScaleFactor<Src, Dst> {
 
     /// Compose with another scale factor (Src -> Mid -> Dst)
     #[inline]
-    pub fn then<Third: Unit>(
-        self,
-        other: ScaleFactor<Dst, Third>,
-    ) -> ScaleFactor<Src, Third> {
+    pub fn then<Third: Unit>(self, other: ScaleFactor<Dst, Third>) -> ScaleFactor<Src, Third> {
         ScaleFactor::new(self.factor * other.factor)
     }
 }
@@ -2200,8 +2262,14 @@ mod tests {
     fn test_zero_runtime_overhead() {
         // Verify that size_of is same as underlying type
         assert_eq!(std::mem::size_of::<Pixels>(), std::mem::size_of::<f32>());
-        assert_eq!(std::mem::size_of::<DevicePixels>(), std::mem::size_of::<i32>());
-        assert_eq!(std::mem::size_of::<ScaledPixels>(), std::mem::size_of::<f32>());
+        assert_eq!(
+            std::mem::size_of::<DevicePixels>(),
+            std::mem::size_of::<i32>()
+        );
+        assert_eq!(
+            std::mem::size_of::<ScaledPixels>(),
+            std::mem::size_of::<f32>()
+        );
 
         // ScaleFactor should be just f32 (PhantomData is zero-sized)
         assert_eq!(

@@ -51,10 +51,10 @@
 //! let mut router = EventRouter::new();
 //!
 //! // Register a layer with hit testing
-//! let layer = MyLayer { bounds: Rect::from_xywh(0.0, 0.0, 100.0, 100.0) };
+//! let layer = MyLayer { bounds: Rect::from_xywh(Pixels(0.0), Pixels(0.0), Pixels(100.0), Pixels(100.0)) };
 //!
 //! // Route pointer event
-//! let event = PointerEvent::Down { position: Offset::new(50.0, 50.0), ... };
+//! let event = PointerEvent::Down { position: Offset::new(Pixels(50.0), Pixels(50.0)), ... };
 //! router.route_event(&mut layer, &Event::Pointer(event));
 //! ```
 //!

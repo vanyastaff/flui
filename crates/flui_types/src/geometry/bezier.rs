@@ -9,9 +9,8 @@
 //! - Vector graphics
 //! - UI transitions
 
-use super::{px, Pixels};
+use super::Pixels;
 use std::fmt;
-use std::ops::{Add, Mul, Sub};
 
 use super::traits::{NumericUnit, Unit};
 use super::{Line, Point, Rect, Vec2};
@@ -20,7 +19,11 @@ use super::{Line, Point, Rect, Vec2};
 // Quadratic Bézier
 // ============================================================================
 
+/// Quadratic Bézier curve with generic unit type.
+///
+/// A quadratic Bézier curve is defined by three points: start (p0), control (p1), and end (p2).
 #[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct QuadBez<T: Unit> {
     /// Start point.
     pub p0: Point<T>,
@@ -45,21 +48,25 @@ impl<T: Unit> Default for QuadBez<T> {
 // ============================================================================
 
 impl<T: Unit> QuadBez<T> {
+    /// Creates a new quadratic Bézier curve from three points.
     #[must_use]
     pub const fn new(p0: Point<T>, p1: Point<T>, p2: Point<T>) -> Self {
         Self { p0, p1, p2 }
     }
 
+    /// Returns the start point of the curve.
     #[must_use]
     pub const fn start(&self) -> Point<T> {
         self.p0
     }
 
+    /// Returns the end point of the curve.
     #[must_use]
     pub const fn end(&self) -> Point<T> {
         self.p2
     }
 
+    /// Returns the control point of the curve.
     #[must_use]
     pub const fn control(&self) -> Point<T> {
         self.p1
@@ -74,6 +81,7 @@ impl<T: NumericUnit> QuadBez<T>
 where
     T: Into<f32> + From<f32>,
 {
+    /// Evaluates the curve at parameter t ∈ [0, 1].
     #[must_use]
     pub fn eval(&self, t: f32) -> Point<T> {
         let mt = 1.0 - t;
@@ -93,6 +101,7 @@ where
         )
     }
 
+    /// Returns the tangent vector at parameter t.
     #[must_use]
     pub fn tangent(&self, t: f32) -> Vec2<T> {
         let mt = 1.0 - t;
@@ -110,6 +119,8 @@ where
         )
     }
 
+    /// Splits the curve at parameter t into two curves.
+    /// Splits the curve at parameter t into two curves.
     #[must_use]
     pub fn split(&self, t: f32) -> (Self, Self) {
         let p01 = self.p0.lerp(self.p1, t);
@@ -119,6 +130,7 @@ where
         (Self::new(self.p0, p01, p012), Self::new(p012, p12, self.p2))
     }
 
+    /// Translates the curve by the given offset.
     #[must_use]
     pub fn translate(&self, offset: Vec2<T>) -> Self {
         Self {
@@ -128,6 +140,7 @@ where
         }
     }
 
+    /// Linearly interpolates between this curve and another at parameter t.
     #[must_use]
     pub fn lerp(self, other: Self, t: f32) -> Self {
         Self {
@@ -139,15 +152,18 @@ where
 }
 
 // ============================================================================
-// f32-specific operations
+// Pixels-specific operations
 // ============================================================================
 
 impl QuadBez<Pixels> {
+    /// Returns the normalized direction vector at parameter t.
     #[must_use]
     pub fn direction(&self, t: f32) -> Vec2<Pixels> {
         self.tangent(t).normalize_or(Vec2::X)
     }
 
+    /// Computes an approximate bounding box for the curve.
+    /// Computes an approximate bounding box for the curve.
     #[must_use]
     pub fn bounding_box(&self) -> Rect<Pixels> {
         let min_x = self.p0.x.min(self.p1.x).min(self.p2.x);
@@ -158,6 +174,7 @@ impl QuadBez<Pixels> {
         Rect::from_ltrb(min_x, min_y, max_x, max_y)
     }
 
+    /// Computes the arc length of the curve using recursive subdivision.
     #[must_use]
     pub fn arc_length(&self, tolerance: f32) -> f32 {
         self.arc_length_recursive(0.0, 1.0, tolerance)
@@ -180,8 +197,10 @@ impl QuadBez<Pixels> {
         }
     }
 
+    /// Finds the nearest point on the curve to the given point using binary search.
+    /// Reserved for future curve operations API.
+    #[allow(dead_code)]
     #[must_use]
-
     fn nearest_t(&self, point: Point<Pixels>, t0: f32, t1: f32, iterations: u32) -> Point<Pixels> {
         if iterations == 0 {
             let p0 = self.eval(t0);
@@ -204,8 +223,7 @@ impl QuadBez<Pixels> {
         }
     }
 
-
-
+    /// Converts this quadratic Bézier to a cubic Bézier curve.
     #[must_use]
     pub fn to_cubic(&self) -> CubicBez<Pixels> {
         // Q(t) = C(t) when:
@@ -237,7 +255,11 @@ where
 // Cubic Bézier
 // ============================================================================
 
+/// Cubic Bézier curve with generic unit type.
+///
+/// A cubic Bézier curve is defined by four points: start (p0), control points (p1, p2), and end (p3).
 #[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CubicBez<T: Unit> {
     /// Start point.
     pub p0: Point<T>,
@@ -265,26 +287,31 @@ impl<T: Unit> Default for CubicBez<T> {
 // ============================================================================
 
 impl<T: Unit> CubicBez<T> {
+    /// Creates a new cubic Bézier curve from four points.
     #[must_use]
     pub const fn new(p0: Point<T>, p1: Point<T>, p2: Point<T>, p3: Point<T>) -> Self {
         Self { p0, p1, p2, p3 }
     }
 
+    /// Returns the start point of the curve.
     #[must_use]
     pub const fn start(&self) -> Point<T> {
         self.p0
     }
 
+    /// Returns the end point of the curve.
     #[must_use]
     pub const fn end(&self) -> Point<T> {
         self.p3
     }
 
+    /// Returns the first control point.
     #[must_use]
     pub const fn control1(&self) -> Point<T> {
         self.p1
     }
 
+    /// Returns the second control point.
     #[must_use]
     pub const fn control2(&self) -> Point<T> {
         self.p2
@@ -299,6 +326,7 @@ impl<T: NumericUnit> CubicBez<T>
 where
     T: Into<f32> + From<f32>,
 {
+    /// Evaluates the curve at parameter t ∈ [0, 1].
     #[must_use]
     pub fn eval(&self, t: f32) -> Point<T> {
         let mt = 1.0 - t;
@@ -317,21 +345,12 @@ where
         let p3y: f32 = self.p3.y.into();
 
         Point::new(
-            T::from(
-                mt3 * p0x
-                    + 3.0 * mt2 * t * p1x
-                    + 3.0 * mt * t2 * p2x
-                    + t3 * p3x,
-            ),
-            T::from(
-                mt3 * p0y
-                    + 3.0 * mt2 * t * p1y
-                    + 3.0 * mt * t2 * p2y
-                    + t3 * p3y,
-            ),
+            T::from(mt3 * p0x + 3.0 * mt2 * t * p1x + 3.0 * mt * t2 * p2x + t3 * p3x),
+            T::from(mt3 * p0y + 3.0 * mt2 * t * p1y + 3.0 * mt * t2 * p2y + t3 * p3y),
         )
     }
 
+    /// Returns the tangent vector at parameter t.
     #[must_use]
     pub fn tangent(&self, t: f32) -> Vec2<T> {
         let mt = 1.0 - t;
@@ -348,19 +367,12 @@ where
         let p3y: f32 = self.p3.y.into();
 
         Vec2::new(
-            T::from(
-                3.0 * mt2 * (p1x - p0x)
-                    + 6.0 * mt * t * (p2x - p1x)
-                    + 3.0 * t2 * (p3x - p2x),
-            ),
-            T::from(
-                3.0 * mt2 * (p1y - p0y)
-                    + 6.0 * mt * t * (p2y - p1y)
-                    + 3.0 * t2 * (p3y - p2y),
-            ),
+            T::from(3.0 * mt2 * (p1x - p0x) + 6.0 * mt * t * (p2x - p1x) + 3.0 * t2 * (p3x - p2x)),
+            T::from(3.0 * mt2 * (p1y - p0y) + 6.0 * mt * t * (p2y - p1y) + 3.0 * t2 * (p3y - p2y)),
         )
     }
 
+    /// Splits the curve at parameter t into two curves.
     #[must_use]
     pub fn split(&self, t: f32) -> (Self, Self) {
         let p01 = self.p0.lerp(self.p1, t);
@@ -378,6 +390,7 @@ where
         )
     }
 
+    /// Translates the curve by the given offset.
     #[must_use]
     pub fn translate(&self, offset: Vec2<T>) -> Self {
         Self {
@@ -388,6 +401,7 @@ where
         }
     }
 
+    /// Reverses the direction of the curve.
     #[must_use]
     pub const fn reverse(&self) -> Self {
         Self {
@@ -398,6 +412,7 @@ where
         }
     }
 
+    /// Linearly interpolates between this curve and another at parameter t.
     #[must_use]
     pub fn lerp(self, other: Self, t: f32) -> Self {
         Self {
@@ -410,19 +425,17 @@ where
 }
 
 // ============================================================================
-// f32-specific operations
+// Pixels-specific operations
 // ============================================================================
 
 impl CubicBez<Pixels> {
-
-
-
-
+    /// Returns the normalized direction vector at parameter t.
     #[must_use]
     pub fn direction(&self, t: f32) -> Vec2<Pixels> {
         self.tangent(t).normalize_or(Vec2::X)
     }
 
+    /// Computes an approximate bounding box for the curve.
     #[must_use]
     pub fn bounding_box(&self) -> Rect<Pixels> {
         let min_x = self.p0.x.min(self.p1.x).min(self.p2.x).min(self.p3.x);
@@ -433,6 +446,7 @@ impl CubicBez<Pixels> {
         Rect::from_ltrb(min_x, min_y, max_x, max_y)
     }
 
+    /// Computes the arc length of the curve using recursive subdivision.
     #[must_use]
     pub fn arc_length(&self, tolerance: f32) -> f32 {
         self.arc_length_recursive(0.0, 1.0, tolerance)
@@ -455,8 +469,10 @@ impl CubicBez<Pixels> {
         }
     }
 
+    /// Finds the nearest point on the curve using subdivision.
+    /// Reserved for future curve operations API.
+    #[allow(dead_code)]
     #[must_use]
-
     fn nearest_point_subdivision(
         &self,
         point: Point<Pixels>,
@@ -494,8 +510,7 @@ impl CubicBez<Pixels> {
         self.nearest_point_subdivision(point, new_t0, new_t1, subdivisions - 1)
     }
 
-
-
+    /// Flattens the curve into a series of line segments within the given tolerance.
     #[must_use]
     pub fn flatten(&self, tolerance: f32) -> Vec<Point<Pixels>> {
         let mut points = vec![self.p0];
@@ -521,6 +536,7 @@ impl CubicBez<Pixels> {
         }
     }
 
+    /// Finds approximate intersection points with a line segment.
     #[must_use]
     pub fn intersect_line(&self, line: &Line<Pixels>) -> Vec<Point<Pixels>> {
         // Simplified: flatten and check segments
@@ -550,11 +566,6 @@ where
         )
     }
 }
-
-// ============================================================================
-// Convenience functions
-// ============================================================================
-
 
 // ============================================================================
 // Tests

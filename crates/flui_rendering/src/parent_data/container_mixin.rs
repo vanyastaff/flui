@@ -33,7 +33,7 @@ use std::fmt::Debug;
 pub struct ContainerParentDataMixin<ChildId> {
     /// Previous sibling in parent's child list.
     pub previous_sibling: Option<ChildId>,
-    
+
     /// Next sibling in parent's child list.
     pub next_sibling: Option<ChildId>,
 }
@@ -46,31 +46,31 @@ impl<ChildId> ContainerParentDataMixin<ChildId> {
             next_sibling: None,
         }
     }
-    
+
     /// Check if this child has a previous sibling.
     #[inline]
     pub const fn has_previous_sibling(&self) -> bool {
         self.previous_sibling.is_some()
     }
-    
+
     /// Check if this child has a next sibling.
     #[inline]
     pub const fn has_next_sibling(&self) -> bool {
         self.next_sibling.is_some()
     }
-    
+
     /// Check if this is the first child (no previous sibling).
     #[inline]
     pub const fn is_first_child(&self) -> bool {
         self.previous_sibling.is_none()
     }
-    
+
     /// Check if this is the last child (no next sibling).
     #[inline]
     pub const fn is_last_child(&self) -> bool {
         self.next_sibling.is_none()
     }
-    
+
     /// Reset sibling pointers (detach from list).
     pub fn detach(&mut self) {
         self.previous_sibling = None;
@@ -97,7 +97,7 @@ mod tests {
     #[test]
     fn test_new() {
         let mixin = ContainerParentDataMixin::<TestId>::new();
-        
+
         assert!(mixin.previous_sibling.is_none());
         assert!(mixin.next_sibling.is_none());
         assert!(mixin.is_first_child());
@@ -110,7 +110,7 @@ mod tests {
             previous_sibling: Some(1),
             next_sibling: Some(2),
         };
-        
+
         assert!(mixin.has_previous_sibling());
         assert!(mixin.has_next_sibling());
         assert!(!mixin.is_first_child());
@@ -123,9 +123,9 @@ mod tests {
             previous_sibling: Some(1),
             next_sibling: Some(2),
         };
-        
+
         mixin.detach();
-        
+
         assert!(mixin.previous_sibling.is_none());
         assert!(mixin.next_sibling.is_none());
     }
@@ -136,7 +136,7 @@ mod tests {
             previous_sibling: None,
             next_sibling: Some(2),
         };
-        
+
         assert!(mixin.is_first_child());
         assert!(!mixin.is_last_child());
     }
@@ -147,7 +147,7 @@ mod tests {
             previous_sibling: Some(1),
             next_sibling: None,
         };
-        
+
         assert!(!mixin.is_first_child());
         assert!(mixin.is_last_child());
     }

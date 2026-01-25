@@ -3,7 +3,7 @@
 //! This layer applies a full 4x4 transformation matrix to its children.
 //! Corresponds to Flutter's `TransformLayer`.
 
-use flui_types::geometry::{Point, Rect};
+use flui_types::geometry::{Pixels, Point, Rect};
 use flui_types::Matrix4;
 
 /// Layer that applies a full matrix transformation to its children.
@@ -86,7 +86,7 @@ impl TransformLayer {
     ///
     /// * `angle` - Rotation angle in radians
     /// * `anchor` - The point to rotate around
-    pub fn rotation_around(angle: f32, anchor: Point) -> Self {
+    pub fn rotation_around(angle: f32, anchor: Point<Pixels>) -> Self {
         // Translate to origin, rotate, translate back
         let translate_to_origin = Matrix4::translation(-anchor.x, -anchor.y, 0.0);
         let rotate = Matrix4::rotation_z(angle);
@@ -108,7 +108,7 @@ impl TransformLayer {
     }
 
     /// Creates a scale transform layer around an anchor point.
-    pub fn scale_around(sx: f32, sy: f32, anchor: Point) -> Self {
+    pub fn scale_around(sx: f32, sy: f32, anchor: Point<Pixels>) -> Self {
         let translate_to_origin = Matrix4::translation(-anchor.x, -anchor.y, 0.0);
         let scale = Matrix4::scaling(sx, sy, 1.0);
         let translate_back = Matrix4::translation(anchor.x, anchor.y, 0.0);
@@ -156,7 +156,7 @@ impl TransformLayer {
 
     /// Transforms a point by the matrix.
     #[inline]
-    pub fn transform_point(&self, point: Point) -> Point {
+    pub fn transform_point(&self, point: Point<Pixels>) -> Point<Pixels> {
         let (x, y) = self.transform.transform_point(point.x, point.y);
         Point::new(x, y)
     }

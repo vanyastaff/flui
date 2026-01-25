@@ -567,4 +567,3 @@ impl MaterialColors {
     /// Blue Grey 900
     pub const BLUE_GREY_900: Color = Color::rgb(38, 50, 56);
 }
-

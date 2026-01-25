@@ -1,11 +1,11 @@
 //! Windows utility functions and helpers
 
-use anyhow::{Result, anyhow};
-use windows::Win32::Foundation::*;
-use windows::Win32::UI::WindowsAndMessaging::*;
-use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
+use anyhow::{anyhow, Result};
+use flui_types::geometry::{device_px, px, DevicePixels, Pixels, Point, Size};
 use windows::core::PCWSTR;
-use flui_types::geometry::{DevicePixels, Pixels, Point, Size, px, device_px};
+use windows::Win32::Foundation::*;
+use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
+use windows::Win32::UI::WindowsAndMessaging::*;
 
 /// Convert LPARAM to X coordinate
 #[inline]

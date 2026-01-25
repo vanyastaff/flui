@@ -26,7 +26,7 @@ All geometry types are optimized for minimal memory footprint:
 | `Offset` | 8 | 2 × f32 |
 | `Rect` | 16 | 4 × f32 |
 | `Color` | 4 | RGBA packed u8 |
-| `EdgeInsets` | 16 | 4 × f32 |
+| `Edges<Pixels>` | 16 | 4 × f32 |
 | `BoxConstraints` | 16 | 4 × f32 |
 | `Alignment` | 8 | 2 × f32 |
 
@@ -120,12 +120,12 @@ Many types support `const` construction:
 
 ```rust
 // Computed at compile time
-const PADDING: EdgeInsets = EdgeInsets::symmetric_const(16.0, 8.0);
+const PADDING: Edges<Pixels> = Edges::symmetric(px(16.0), px(8.0));
 const CENTER: Alignment = Alignment::CENTER;
 const WHITE: Color = Colors::WHITE;
 
 // Zero runtime cost
-fn get_padding() -> EdgeInsets {
+fn get_padding() -> Edges<Pixels> {
     PADDING
 }
 ```

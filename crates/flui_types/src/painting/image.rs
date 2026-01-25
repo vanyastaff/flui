@@ -1,6 +1,6 @@
 //! Image handling types for painting.
 
-use crate::geometry::{Size, Pixels, px};
+use crate::geometry::{px, Pixels, Size};
 use crate::painting::BlendMode;
 use crate::styling::Color;
 use std::sync::Arc;

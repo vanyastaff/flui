@@ -11,7 +11,7 @@
 //! Flutter reference: https://api.flutter.dev/flutter/gestures/DoubleTapGestureRecognizer-class.html
 
 use super::recognizer::{GestureRecognizer, GestureRecognizerState};
-use flui_types::geometry::{Pixels, px};
+use flui_types::geometry::{px, Pixels};
 
 use crate::arena::GestureArenaMember;
 use crate::events::{PointerEvent, PointerEventExt, PointerType};
@@ -311,7 +311,7 @@ impl DoubleTapGestureRecognizer {
             let delta = current_position - initial_pos;
             let distance = delta.distance();
 
-            if self.settings.lock().exceeds_touch_slop(distance.get()) {
+            if self.settings.lock().exceeds_touch_slop(distance) {
                 return true; // Moved too far
             }
         }

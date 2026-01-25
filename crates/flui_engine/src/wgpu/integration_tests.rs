@@ -430,10 +430,7 @@ mod tests {
 
             // Verify state is tracked correctly
             assert!(context.compositor.current_opacity() <= 1.0);
-            assert_ne!(
-                context.compositor.current_blend_mode(),
-                BlendMode::Normal
-            ); // Second layer uses Alpha
+            assert_ne!(context.compositor.current_blend_mode(), BlendMode::Normal); // Second layer uses Alpha
 
             context.compositor.end_layer();
         }

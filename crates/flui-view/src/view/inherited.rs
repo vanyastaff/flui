@@ -103,7 +103,10 @@ macro_rules! impl_inherited_view {
         impl $crate::View for $ty {
             fn create_element(&self) -> Box<dyn $crate::ElementBase> {
                 use $crate::element::InheritedBehavior;
-                Box::new($crate::InheritedElement::new(self, InheritedBehavior::new(self)))
+                Box::new($crate::InheritedElement::new(
+                    self,
+                    InheritedBehavior::new(self),
+                ))
             }
         }
     };

@@ -17,7 +17,7 @@
 //! let mut predictor = InputPredictor::new();
 //!
 //! // Add samples as pointer moves
-//! predictor.add_sample(Instant::now(), Offset::new(100.0, 100.0));
+//! predictor.add_sample(Instant::now(), Offset::new(Pixels(100.0), Pixels(100.0)));
 //!
 //! // Get predicted position 16ms into the future (one frame at 60fps)
 //! let predicted = predictor.predict(Duration::from_millis(16));
@@ -278,8 +278,8 @@ impl InputPredictor {
 
         // Basic linear prediction: pos + velocity * time
         let mut predicted = Offset::new(
-            last_pos.dx + velocity.pixels_per_second.dx * dt,
-            last_pos.dy + velocity.pixels_per_second.dy * dt,
+            last_pos.dx + Pixels((velocity.pixels_per_second.dx * dt).0),
+            last_pos.dy + Pixels((velocity.pixels_per_second.dy * dt).0),
         );
 
         // Add acceleration term if enabled
@@ -296,8 +296,8 @@ impl InputPredictor {
                         (velocity.pixels_per_second.dy - prev_vel.pixels_per_second.dy) / vel_dt;
 
                     // Add 0.5 * a * t^2 term
-                    predicted.dx += 0.5 * accel_x * dt * dt;
-                    predicted.dy += 0.5 * accel_y * dt * dt;
+                    predicted.dx += Pixels((0.5 * accel_x * dt * dt).0);
+                    predicted.dy += Pixels((0.5 * accel_y * dt * dt).0);
                 }
             }
         }
@@ -383,13 +383,13 @@ mod tests {
     #[test]
     fn test_predictor_single_sample() {
         let mut predictor = InputPredictor::new();
-        predictor.add_sample(Instant::now(), Offset::new(100.0, 100.0));
+        predictor.add_sample(Instant::now(), Offset::new(Pixels(100.0), Pixels(100.0)));
 
         let predicted = predictor.predict(Duration::from_millis(16));
 
         // Should return last position with low confidence
-        assert_eq!(predicted.position.dx, 100.0);
-        assert_eq!(predicted.position.dy, 100.0);
+        assert_eq!(predicted.position.dx, Pixels(100.0));
+        assert_eq!(predicted.position.dy, Pixels(100.0));
     }
 
     #[test]
@@ -400,7 +400,7 @@ mod tests {
         // Simulate horizontal motion: 100 pixels in 100ms = 1000 px/s
         for i in 0..10 {
             let t = start + Duration::from_millis(i * 10);
-            predictor.add_sample(t, Offset::new(i as f32 * 10.0, 0.0));
+            predictor.add_sample(t, Offset::new(Pixels(i as f32 * 10.0), Pixels(0.0)));
         }
 
         // Predict 16ms into future
@@ -408,8 +408,8 @@ mod tests {
 
         // At 1000 px/s, after 16ms we should move ~16 pixels
         // Last position was 90px, predicted should be around 106px
-        assert!(predicted.position.dx > 100.0);
-        assert!(predicted.position.dx < 120.0);
+        assert!(predicted.position.dx > Pixels(100.0));
+        assert!(predicted.position.dx < Pixels(120.0));
         assert!(predicted.confidence > 0.3);
     }
 
@@ -427,7 +427,7 @@ mod tests {
     #[test]
     fn test_predictor_reset() {
         let mut predictor = InputPredictor::new();
-        predictor.add_sample(Instant::now(), Offset::new(100.0, 100.0));
+        predictor.add_sample(Instant::now(), Offset::new(Pixels(100.0), Pixels(100.0)));
 
         assert!(predictor.last_position().is_some());
 
@@ -440,7 +440,7 @@ mod tests {
     #[test]
     fn test_predicted_position_helpers() {
         let confident = PredictedPosition {
-            position: Offset::new(100.0, 100.0),
+            position: Offset::new(Pixels(100.0), Pixels(100.0)),
             confidence: 0.8,
             prediction_time: Duration::from_millis(16),
             velocity: Velocity::ZERO,
@@ -449,11 +449,11 @@ mod tests {
         assert!(confident.is_confident());
         assert_eq!(
             confident.position_or(Offset::ZERO),
-            Offset::new(100.0, 100.0)
+            Offset::new(Pixels(100.0), Pixels(100.0))
         );
 
         let not_confident = PredictedPosition {
-            position: Offset::new(100.0, 100.0),
+            position: Offset::new(Pixels(100.0), Pixels(100.0)),
             confidence: 0.2,
             prediction_time: Duration::from_millis(16),
             velocity: Velocity::ZERO,
@@ -461,8 +461,8 @@ mod tests {
 
         assert!(!not_confident.is_confident());
         assert_eq!(
-            not_confident.position_or(Offset::new(50.0, 50.0)),
-            Offset::new(50.0, 50.0)
+            not_confident.position_or(Offset::new(Pixels(50.0), Pixels(50.0))),
+            Offset::new(Pixels(50.0), Pixels(50.0))
         );
     }
 
@@ -473,7 +473,7 @@ mod tests {
 
         for i in 0..10 {
             let t = start + Duration::from_millis(i * 10);
-            predictor.add_sample(t, Offset::new(i as f32 * 10.0, 0.0));
+            predictor.add_sample(t, Offset::new(Pixels(i as f32 * 10.0), Pixels(0.0)));
         }
 
         // Request very long prediction - should be clamped
@@ -490,7 +490,7 @@ mod tests {
 
         for i in 0..10 {
             let t = start + Duration::from_millis(i * 10);
-            predictor.add_sample(t, Offset::new(i as f32 * 10.0, 0.0));
+            predictor.add_sample(t, Offset::new(Pixels(i as f32 * 10.0), Pixels(0.0)));
         }
 
         let at_60fps = predictor.predict_next_frame(60);

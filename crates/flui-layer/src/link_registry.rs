@@ -47,7 +47,7 @@
 use std::collections::HashMap;
 
 use flui_foundation::LayerId;
-use flui_types::geometry::{Offset, Size};
+use flui_types::geometry::{Offset, Pixels, Size};
 
 use crate::layer::LayerLink;
 
@@ -62,10 +62,10 @@ pub struct LeaderInfo {
     pub layer_id: LayerId,
 
     /// Global offset (computed during traversal)
-    pub offset: Offset,
+    pub offset: Offset<Pixels>,
 
     /// Size of the leader area
-    pub size: Size,
+    pub size: Size<Pixels>,
 
     /// List of follower LayerIds linked to this leader
     pub followers: Vec<LayerId>,
@@ -73,7 +73,7 @@ pub struct LeaderInfo {
 
 impl LeaderInfo {
     /// Creates new leader info.
-    pub fn new(layer_id: LayerId, offset: Offset, size: Size) -> Self {
+    pub fn new(layer_id: LayerId, offset: Offset<Pixels>, size: Size<Pixels>) -> Self {
         Self {
             layer_id,
             offset,
@@ -146,8 +146,8 @@ impl LinkRegistry {
         &mut self,
         link: LayerLink,
         layer_id: LayerId,
-        offset: Offset,
-        size: Size,
+        offset: Offset<Pixels>,
+        size: Size<Pixels>,
     ) {
         let info = self
             .leaders
@@ -159,7 +159,7 @@ impl LinkRegistry {
     }
 
     /// Updates the offset and size for an existing leader.
-    pub fn update_leader(&mut self, link: LayerLink, offset: Offset, size: Size) {
+    pub fn update_leader(&mut self, link: LayerLink, offset: Offset<Pixels>, size: Size<Pixels>) {
         if let Some(info) = self.leaders.get_mut(&link) {
             info.offset = offset;
             info.size = size;

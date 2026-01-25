@@ -3,8 +3,8 @@
 //! These types support Material Design's concept of elevation, where UI elements
 //! are positioned at different heights with corresponding shadow effects.
 
-use crate::Offset;
 use crate::geometry::{px, Pixels};
+use crate::Offset;
 
 /// Shape type for physical model layers.
 ///
@@ -148,11 +148,12 @@ mod tests {
 
     #[test]
     fn test_elevation_shadow_offset() {
+        use crate::geometry::px;
         let offset_0 = Elevation::shadow_offset(0.0);
         assert_eq!(offset_0, Offset::ZERO);
 
         let offset_8 = Elevation::shadow_offset(8.0);
-        assert!(offset_8.dx > 0.0 && offset_8.dy > 0.0);
+        assert!(offset_8.dx > px(0.0) && offset_8.dy > px(0.0));
 
         // Vertical offset should be larger than horizontal
         assert!(offset_8.dy > offset_8.dx);

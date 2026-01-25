@@ -3,6 +3,7 @@
 //! Types for configuring table column widths and cell alignment.
 //! Based on Flutter's Table widget API.
 
+#[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum TableColumnWidth {
     /// Fixed width in logical pixels.
@@ -35,7 +36,7 @@ impl Default for TableColumnWidth {
     }
 }
 
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum TableCellVerticalAlignment {
     #[default]

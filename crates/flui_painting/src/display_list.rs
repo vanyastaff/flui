@@ -1043,7 +1043,7 @@ pub enum DrawCommand {
         /// Center point
         center: Point<Pixels>,
         /// Radius
-        radius: f32,
+        radius: Pixels,
         /// Paint style
         paint: Paint,
         /// Transform at recording time
@@ -1476,39 +1476,72 @@ impl DrawCommand {
             // ─────────────────────────────────────────────────────────────────
             // Paint commands: Apply opacity to paint field
             // ─────────────────────────────────────────────────────────────────
-            Self::DrawRect { rect, paint, transform } => Self::DrawRect {
+            Self::DrawRect {
+                rect,
+                paint,
+                transform,
+            } => Self::DrawRect {
                 rect: *rect,
                 paint: paint.clone().with_opacity(opacity),
                 transform: *transform,
             },
-            Self::DrawRRect { rrect, paint, transform } => Self::DrawRRect {
+            Self::DrawRRect {
+                rrect,
+                paint,
+                transform,
+            } => Self::DrawRRect {
                 rrect: *rrect,
                 paint: paint.clone().with_opacity(opacity),
                 transform: *transform,
             },
-            Self::DrawCircle { center, radius, paint, transform } => Self::DrawCircle {
+            Self::DrawCircle {
+                center,
+                radius,
+                paint,
+                transform,
+            } => Self::DrawCircle {
                 center: *center,
                 radius: *radius,
                 paint: paint.clone().with_opacity(opacity),
                 transform: *transform,
             },
-            Self::DrawOval { rect, paint, transform } => Self::DrawOval {
+            Self::DrawOval {
+                rect,
+                paint,
+                transform,
+            } => Self::DrawOval {
                 rect: *rect,
                 paint: paint.clone().with_opacity(opacity),
                 transform: *transform,
             },
-            Self::DrawLine { p1, p2, paint, transform } => Self::DrawLine {
+            Self::DrawLine {
+                p1,
+                p2,
+                paint,
+                transform,
+            } => Self::DrawLine {
                 p1: *p1,
                 p2: *p2,
                 paint: paint.clone().with_opacity(opacity),
                 transform: *transform,
             },
-            Self::DrawPath { path, paint, transform } => Self::DrawPath {
+            Self::DrawPath {
+                path,
+                paint,
+                transform,
+            } => Self::DrawPath {
                 path: path.clone(),
                 paint: paint.clone().with_opacity(opacity),
                 transform: *transform,
             },
-            Self::DrawArc { rect, start_angle, sweep_angle, use_center, paint, transform } => Self::DrawArc {
+            Self::DrawArc {
+                rect,
+                start_angle,
+                sweep_angle,
+                use_center,
+                paint,
+                transform,
+            } => Self::DrawArc {
                 rect: *rect,
                 start_angle: *start_angle,
                 sweep_angle: *sweep_angle,
@@ -1516,19 +1549,36 @@ impl DrawCommand {
                 paint: paint.clone().with_opacity(opacity),
                 transform: *transform,
             },
-            Self::DrawDRRect { outer, inner, paint, transform } => Self::DrawDRRect {
+            Self::DrawDRRect {
+                outer,
+                inner,
+                paint,
+                transform,
+            } => Self::DrawDRRect {
                 outer: *outer,
                 inner: *inner,
                 paint: paint.clone().with_opacity(opacity),
                 transform: *transform,
             },
-            Self::DrawPoints { mode, points, paint, transform } => Self::DrawPoints {
+            Self::DrawPoints {
+                mode,
+                points,
+                paint,
+                transform,
+            } => Self::DrawPoints {
                 mode: *mode,
                 points: points.clone(),
                 paint: paint.clone().with_opacity(opacity),
                 transform: *transform,
             },
-            Self::DrawVertices { vertices, colors, tex_coords, indices, paint, transform } => Self::DrawVertices {
+            Self::DrawVertices {
+                vertices,
+                colors,
+                tex_coords,
+                indices,
+                paint,
+                transform,
+            } => Self::DrawVertices {
                 vertices: vertices.clone(),
                 colors: colors.clone(),
                 tex_coords: tex_coords.clone(),
@@ -1536,7 +1586,14 @@ impl DrawCommand {
                 paint: paint.clone().with_opacity(opacity),
                 transform: *transform,
             },
-            Self::DrawText { text, offset, size, style, paint, transform } => Self::DrawText {
+            Self::DrawText {
+                text,
+                offset,
+                size,
+                style,
+                paint,
+                transform,
+            } => Self::DrawText {
                 text: text.clone(),
                 offset: *offset,
                 size: *size,
@@ -1544,7 +1601,11 @@ impl DrawCommand {
                 paint: paint.clone().with_opacity(opacity),
                 transform: *transform,
             },
-            Self::SaveLayer { bounds, paint, transform } => Self::SaveLayer {
+            Self::SaveLayer {
+                bounds,
+                paint,
+                transform,
+            } => Self::SaveLayer {
                 bounds: *bounds,
                 paint: paint.clone().with_opacity(opacity),
                 transform: *transform,
@@ -1553,34 +1614,65 @@ impl DrawCommand {
             // ─────────────────────────────────────────────────────────────────
             // Optional paint commands: Map over Option<Paint>
             // ─────────────────────────────────────────────────────────────────
-            Self::DrawImage { image, dst, paint, transform } => Self::DrawImage {
+            Self::DrawImage {
+                image,
+                dst,
+                paint,
+                transform,
+            } => Self::DrawImage {
                 image: image.clone(),
                 dst: *dst,
                 paint: paint.as_ref().map(|p| p.clone().with_opacity(opacity)),
                 transform: *transform,
             },
-            Self::DrawImageRepeat { image, dst, repeat, paint, transform } => Self::DrawImageRepeat {
+            Self::DrawImageRepeat {
+                image,
+                dst,
+                repeat,
+                paint,
+                transform,
+            } => Self::DrawImageRepeat {
                 image: image.clone(),
                 dst: *dst,
                 repeat: *repeat,
                 paint: paint.as_ref().map(|p| p.clone().with_opacity(opacity)),
                 transform: *transform,
             },
-            Self::DrawImageNineSlice { image, center_slice, dst, paint, transform } => Self::DrawImageNineSlice {
+            Self::DrawImageNineSlice {
+                image,
+                center_slice,
+                dst,
+                paint,
+                transform,
+            } => Self::DrawImageNineSlice {
                 image: image.clone(),
                 center_slice: *center_slice,
                 dst: *dst,
                 paint: paint.as_ref().map(|p| p.clone().with_opacity(opacity)),
                 transform: *transform,
             },
-            Self::DrawImageFiltered { image, dst, filter, paint, transform } => Self::DrawImageFiltered {
+            Self::DrawImageFiltered {
+                image,
+                dst,
+                filter,
+                paint,
+                transform,
+            } => Self::DrawImageFiltered {
                 image: image.clone(),
                 dst: *dst,
                 filter: *filter,
                 paint: paint.as_ref().map(|p| p.clone().with_opacity(opacity)),
                 transform: *transform,
             },
-            Self::DrawAtlas { image, sprites, transforms, colors, blend_mode, paint, transform } => Self::DrawAtlas {
+            Self::DrawAtlas {
+                image,
+                sprites,
+                transforms,
+                colors,
+                blend_mode,
+                paint,
+                transform,
+            } => Self::DrawAtlas {
                 image: image.clone(),
                 sprites: sprites.clone(),
                 transforms: transforms.clone(),
@@ -1593,13 +1685,22 @@ impl DrawCommand {
             // ─────────────────────────────────────────────────────────────────
             // Color commands: Apply opacity to color field
             // ─────────────────────────────────────────────────────────────────
-            Self::DrawShadow { path, color, elevation, transform } => Self::DrawShadow {
+            Self::DrawShadow {
+                path,
+                color,
+                elevation,
+                transform,
+            } => Self::DrawShadow {
                 path: path.clone(),
                 color: color.with_opacity(opacity),
                 elevation: *elevation,
                 transform: *transform,
             },
-            Self::DrawColor { color, blend_mode, transform } => Self::DrawColor {
+            Self::DrawColor {
+                color,
+                blend_mode,
+                transform,
+            } => Self::DrawColor {
                 color: color.with_opacity(opacity),
                 blend_mode: *blend_mode,
                 transform: *transform,
@@ -1608,14 +1709,26 @@ impl DrawCommand {
             // ─────────────────────────────────────────────────────────────────
             // Child commands: Recursively apply opacity to DisplayList
             // ─────────────────────────────────────────────────────────────────
-            Self::ShaderMask { child, shader, bounds, blend_mode, transform } => Self::ShaderMask {
+            Self::ShaderMask {
+                child,
+                shader,
+                bounds,
+                blend_mode,
+                transform,
+            } => Self::ShaderMask {
                 child: Box::new(child.to_opacity(opacity)),
                 shader: shader.clone(),
                 bounds: *bounds,
                 blend_mode: *blend_mode,
                 transform: *transform,
             },
-            Self::BackdropFilter { child, filter, bounds, blend_mode, transform } => Self::BackdropFilter {
+            Self::BackdropFilter {
+                child,
+                filter,
+                bounds,
+                blend_mode,
+                transform,
+            } => Self::BackdropFilter {
                 child: child.as_ref().map(|c| Box::new(c.to_opacity(opacity))),
                 filter: filter.clone(),
                 bounds: *bounds,
@@ -1626,7 +1739,14 @@ impl DrawCommand {
             // ─────────────────────────────────────────────────────────────────
             // Texture command: Multiply opacity field
             // ─────────────────────────────────────────────────────────────────
-            Self::DrawTexture { texture_id, dst, src, filter_quality, opacity: tex_opacity, transform } => Self::DrawTexture {
+            Self::DrawTexture {
+                texture_id,
+                dst,
+                src,
+                filter_quality,
+                opacity: tex_opacity,
+                transform,
+            } => Self::DrawTexture {
                 texture_id: *texture_id,
                 dst: *dst,
                 src: *src,
@@ -1670,8 +1790,8 @@ impl DrawCommand {
             } => {
                 // Circle radius + stroke outset
                 let stroke_outset = paint.effective_stroke_width() * 0.5;
-                let effective_radius = radius + stroke_outset;
-                let size = Size::new(Pixels(effective_radius * 2.0), Pixels(effective_radius * 2.0));
+                let effective_radius = *radius + Pixels(stroke_outset);
+                let size = Size::new(effective_radius * 2.0, effective_radius * 2.0);
                 let local_bounds = Rect::from_center_size(*center, size);
                 Some(transform.transform_rect(&local_bounds))
             }
@@ -1707,7 +1827,8 @@ impl DrawCommand {
                 let min_y = p1.y.0.min(p2.y.0) - stroke_half;
                 let max_x = p1.x.0.max(p2.x.0) + stroke_half;
                 let max_y = p1.y.0.max(p2.y.0) + stroke_half;
-                let local_bounds = Rect::from_ltrb(Pixels(min_x), Pixels(min_y), Pixels(max_x), Pixels(max_y));
+                let local_bounds =
+                    Rect::from_ltrb(Pixels(min_x), Pixels(min_y), Pixels(max_x), Pixels(max_y));
                 Some(transform.transform_rect(&local_bounds))
             }
             DrawCommand::DrawPath {

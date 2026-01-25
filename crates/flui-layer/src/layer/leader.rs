@@ -3,7 +3,7 @@
 //! This layer establishes a coordinate space that FollowerLayer instances
 //! can link to. Used for tooltips, dropdowns, and connected overlays.
 
-use flui_types::geometry::{Offset, Rect, Size};
+use flui_types::geometry::{Offset, Pixels, Rect, Size};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Unique identifier for leader-follower linkage.
@@ -82,16 +82,16 @@ pub struct LeaderLayer {
     link: LayerLink,
 
     /// Size of the leader area
-    size: Size,
+    size: Size<Pixels>,
 
     /// Offset from parent
-    offset: Offset,
+    offset: Offset<Pixels>,
 }
 
 impl LeaderLayer {
     /// Creates a new leader layer with the given link and size.
     #[inline]
-    pub fn new(link: LayerLink, size: Size) -> Self {
+    pub fn new(link: LayerLink, size: Size<Pixels>) -> Self {
         Self {
             link,
             size,
@@ -101,13 +101,13 @@ impl LeaderLayer {
 
     /// Creates a leader layer with an offset.
     #[inline]
-    pub fn with_offset(link: LayerLink, size: Size, offset: Offset) -> Self {
+    pub fn with_offset(link: LayerLink, size: Size<Pixels>, offset: Offset<Pixels>) -> Self {
         Self { link, size, offset }
     }
 
     /// Sets the offset.
     #[inline]
-    pub fn offset(mut self, offset: Offset) -> Self {
+    pub fn offset(mut self, offset: Offset<Pixels>) -> Self {
         self.offset = offset;
         self
     }
@@ -120,13 +120,13 @@ impl LeaderLayer {
 
     /// Returns the size.
     #[inline]
-    pub fn size(&self) -> Size {
+    pub fn size(&self) -> Size<Pixels> {
         self.size
     }
 
     /// Returns the offset.
     #[inline]
-    pub fn get_offset(&self) -> Offset {
+    pub fn get_offset(&self) -> Offset<Pixels> {
         self.offset
     }
 
@@ -143,13 +143,13 @@ impl LeaderLayer {
 
     /// Sets the size.
     #[inline]
-    pub fn set_size(&mut self, size: Size) {
+    pub fn set_size(&mut self, size: Size<Pixels>) {
         self.size = size;
     }
 
     /// Sets the offset.
     #[inline]
-    pub fn set_offset(&mut self, offset: Offset) {
+    pub fn set_offset(&mut self, offset: Offset<Pixels>) {
         self.offset = offset;
     }
 }

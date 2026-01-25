@@ -11,4 +11,3 @@ pub use brightness::Brightness;
 pub use locale::Locale;
 pub use orientation::DeviceOrientation;
 pub use target_platform::TargetPlatform;
-

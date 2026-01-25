@@ -2,11 +2,11 @@
 //!
 //! This test suite validates the layout primitives including:
 //! - BoxConstraints (tight, loose, tightFor, enforce)
-//! - Edges/EdgeInsets (inflate, deflate, validation)
+//! - Edges (inflate, deflate, validation)
 //! - Alignment (constants, lerp, arithmetic)
 //! - Axis utilities (perpendicular, direction)
 
-use flui_types::geometry::{Edges, Offset, Point, Rect, Size, px};
+use flui_types::geometry::{px, Edges, Offset, Point, Rect, Size};
 use flui_types::layout::{
     Alignment, Axis, AxisDirection, BoxConstraints, CrossAxisAlignment, MainAxisAlignment,
     MainAxisSize, Orientation,
@@ -108,12 +108,9 @@ fn test_box_constraints_enforce() {
 }
 
 #[test]
-#[allow(deprecated)]
 fn test_box_constraints_deflate() {
-    use flui_types::layout::EdgeInsets;
-
     let constraints = BoxConstraints::new(px(100.0), px(200.0), px(100.0), px(200.0));
-    let insets = EdgeInsets::all(px(10.0));
+    let insets = Edges::all(px(10.0));
 
     let deflated = constraints.deflate(insets);
 
@@ -365,10 +362,22 @@ fn test_axis_direction_axis() {
 
 #[test]
 fn test_axis_direction_opposite() {
-    assert_eq!(AxisDirection::LeftToRight.opposite(), AxisDirection::RightToLeft);
-    assert_eq!(AxisDirection::RightToLeft.opposite(), AxisDirection::LeftToRight);
-    assert_eq!(AxisDirection::TopToBottom.opposite(), AxisDirection::BottomToTop);
-    assert_eq!(AxisDirection::BottomToTop.opposite(), AxisDirection::TopToBottom);
+    assert_eq!(
+        AxisDirection::LeftToRight.opposite(),
+        AxisDirection::RightToLeft
+    );
+    assert_eq!(
+        AxisDirection::RightToLeft.opposite(),
+        AxisDirection::LeftToRight
+    );
+    assert_eq!(
+        AxisDirection::TopToBottom.opposite(),
+        AxisDirection::BottomToTop
+    );
+    assert_eq!(
+        AxisDirection::BottomToTop.opposite(),
+        AxisDirection::TopToBottom
+    );
 }
 
 #[test]

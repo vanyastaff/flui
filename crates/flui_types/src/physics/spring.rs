@@ -325,4 +325,3 @@ impl Simulation for SpringSimulation {
         self.tolerance
     }
 }
-

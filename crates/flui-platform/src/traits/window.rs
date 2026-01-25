@@ -100,7 +100,10 @@ impl PlatformWindow for WinitWindow {
 
         let size = self.window.inner_size();
         let scale = self.window.scale_factor() as f32;
-        Size::new(px(size.width as f32 / scale), px(size.height as f32 / scale))
+        Size::new(
+            px(size.width as f32 / scale),
+            px(size.height as f32 / scale),
+        )
     }
 
     fn scale_factor(&self) -> f64 {

@@ -100,4 +100,3 @@ impl Default for TargetPlatform {
         return Self::Linux; // fallback
     }
 }
-

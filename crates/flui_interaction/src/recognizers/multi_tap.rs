@@ -387,12 +387,12 @@ impl MultiTapGestureRecognizer {
         let mut sum_y = 0.0;
 
         for pos in positions {
-            sum_x += pos.dx;
-            sum_y += pos.dy;
+            sum_x += pos.dx.0;
+            sum_y += pos.dy.0;
         }
 
         let count = positions.len() as f32;
-        Offset::new(sum_x / count, sum_y / count)
+        Offset::new(Pixels(sum_x / count), Pixels(sum_y / count))
     }
 
     /// Check if time window has expired
@@ -434,7 +434,7 @@ impl GestureRecognizer for MultiTapGestureRecognizer {
                 // For now, we'll track via primary pointer
                 if let Some(pointer) = self.state.primary_pointer() {
                     let pos = data.current.position;
-                    let position = Offset::new(pos.x as f32, pos.y as f32);
+                    let position = Offset::new(Pixels(pos.x as f32), Pixels(pos.y as f32));
                     self.handle_pointer_move(pointer, position);
                 }
             }
@@ -516,8 +516,8 @@ mod tests {
         let pointer2 = PointerId::new(2);
 
         // Add two pointers
-        recognizer.add_pointer(pointer1, Offset::new(100.0, 100.0));
-        recognizer.add_pointer(pointer2, Offset::new(200.0, 100.0));
+        recognizer.add_pointer(pointer1, Offset::new(Pixels(100.0), Pixels(100.0)));
+        recognizer.add_pointer(pointer2, Offset::new(Pixels(200.0), Pixels(100.0)));
 
         // Verify collecting phase
         let state = recognizer.gesture_state.lock();
@@ -550,9 +550,9 @@ mod tests {
             });
 
         // Add three pointers
-        recognizer.add_pointer(PointerId::new(1), Offset::new(100.0, 100.0));
-        recognizer.add_pointer(PointerId::new(2), Offset::new(200.0, 100.0));
-        recognizer.add_pointer(PointerId::new(3), Offset::new(150.0, 200.0));
+        recognizer.add_pointer(PointerId::new(1), Offset::new(Pixels(100.0), Pixels(100.0)));
+        recognizer.add_pointer(PointerId::new(2), Offset::new(Pixels(200.0), Pixels(100.0)));
+        recognizer.add_pointer(PointerId::new(3), Offset::new(Pixels(150.0), Pixels(200.0)));
 
         // Verify waiting for up phase
         let state = recognizer.gesture_state.lock();
@@ -582,8 +582,8 @@ mod tests {
             });
 
         // Add two pointers at (0, 0) and (100, 0)
-        recognizer.add_pointer(PointerId::new(1), Offset::new(0.0, 0.0));
-        recognizer.add_pointer(PointerId::new(2), Offset::new(100.0, 0.0));
+        recognizer.add_pointer(PointerId::new(1), Offset::new(Pixels(0.0), Pixels(0.0)));
+        recognizer.add_pointer(PointerId::new(2), Offset::new(Pixels(100.0), Pixels(0.0)));
 
         // Release both
         recognizer.handle_pointer_up(PointerId::new(1), PointerType::Touch);
@@ -591,8 +591,8 @@ mod tests {
 
         // Center should be at (50, 0)
         let center = *center_pos.lock();
-        assert!((center.dx - 50.0).abs() < 0.01);
-        assert!(center.dy.abs() < 0.01);
+        assert!((center.dx - Pixels(50.0)).abs() < Pixels(0.01));
+        assert!(center.dy.abs() < Pixels(0.01));
     }
 
     #[test]
@@ -607,9 +607,9 @@ mod tests {
             });
 
         // Add three pointers (one too many)
-        recognizer.add_pointer(PointerId::new(1), Offset::new(100.0, 100.0));
-        recognizer.add_pointer(PointerId::new(2), Offset::new(200.0, 100.0));
-        recognizer.add_pointer(PointerId::new(3), Offset::new(150.0, 200.0));
+        recognizer.add_pointer(PointerId::new(1), Offset::new(Pixels(100.0), Pixels(100.0)));
+        recognizer.add_pointer(PointerId::new(2), Offset::new(Pixels(200.0), Pixels(100.0)));
+        recognizer.add_pointer(PointerId::new(3), Offset::new(Pixels(150.0), Pixels(200.0)));
 
         // Should have cancelled
         assert!(*cancelled.lock());

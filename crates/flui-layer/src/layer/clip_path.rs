@@ -88,7 +88,11 @@ impl ClipPathLayer {
     /// * `radius` - Radius of the circle
     /// * `clip_behavior` - How to apply the clip
     #[inline]
-    pub fn circle(center: flui_types::geometry::Point, radius: f32, clip_behavior: Clip) -> Self {
+    pub fn circle(
+        center: flui_types::geometry::Point<flui_types::Pixels>,
+        radius: f32,
+        clip_behavior: Clip,
+    ) -> Self {
         Self::new(Path::circle(center, radius), clip_behavior)
     }
 

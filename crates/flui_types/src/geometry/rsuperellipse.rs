@@ -12,7 +12,7 @@
 //! creating softer transitions that match Apple's design language.
 
 use super::{px, Pixels};
-use super::{Offset, Point, Radius, Rect, Vec2};
+use super::{Radius, Rect};
 
 #[repr(C)]
 pub struct RSuperellipse {
@@ -43,7 +43,13 @@ impl RSuperellipse {
     // ========================================================================
 
     #[must_use]
-    pub fn from_ltrb_r(left: Pixels, top: Pixels, right: Pixels, bottom: Pixels, radius: Radius<Pixels>) -> Self {
+    pub fn from_ltrb_r(
+        left: Pixels,
+        top: Pixels,
+        right: Pixels,
+        bottom: Pixels,
+        radius: Radius<Pixels>,
+    ) -> Self {
         Self {
             rect: Rect::from_ltrb(left, top, right, bottom),
             tl_radius: radius,
@@ -54,7 +60,14 @@ impl RSuperellipse {
     }
 
     #[must_use]
-    pub fn from_ltrb_xy(left: Pixels, top: Pixels, right: Pixels, bottom: Pixels, rx: Pixels, ry: Pixels) -> Self {
+    pub fn from_ltrb_xy(
+        left: Pixels,
+        top: Pixels,
+        right: Pixels,
+        bottom: Pixels,
+        rx: Pixels,
+        ry: Pixels,
+    ) -> Self {
         let radius = Radius::new(rx, ry);
         Self::from_ltrb_r(left, top, right, bottom, radius)
     }
@@ -249,7 +262,6 @@ impl RSuperellipse {
     // Transformations
     // ========================================================================
 
-
     #[must_use]
     pub fn inflate(&self, delta: Pixels) -> Self {
         Self {
@@ -285,7 +297,6 @@ impl RSuperellipse {
     // ========================================================================
     // Hit testing
     // ========================================================================
-
 
     #[inline]
     fn point_in_corner(&self, dx: f32, dy: f32, radius: Radius<Pixels>) -> bool {

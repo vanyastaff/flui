@@ -20,13 +20,12 @@ pub use embedder::PlatformEmbedder;
 pub use input::{
     FileDropEvent, FileDropPhase, InputEvent, KeyCode, KeyDownEvent, KeyUpEvent, LogicalKey,
     Modifiers, ModifiersChangedEvent, MouseButton, NamedKey, PlatformInput, PointerEvent,
-    PointerKind, PointerPhase, PointerTilt, ScrollDelta, ScrollPhase, ScrollWheelEvent,
-    Velocity, VelocityTracker,
+    PointerKind, PointerPhase, PointerTilt, ScrollDelta, ScrollPhase, ScrollWheelEvent, Velocity,
+    VelocityTracker,
 };
 pub use lifecycle::{DefaultLifecycle, LifecycleEvent, LifecycleState, PlatformLifecycle};
 pub use platform::{
-    Clipboard, Platform, PlatformExecutor, PlatformTextSystem, WindowEvent, WindowId,
-    WindowOptions,
+    Clipboard, Platform, PlatformExecutor, PlatformTextSystem, WindowEvent, WindowId, WindowOptions,
 };
 pub use window::PlatformWindow;
 

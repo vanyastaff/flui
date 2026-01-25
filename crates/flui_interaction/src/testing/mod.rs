@@ -13,7 +13,7 @@
 //! use flui_interaction::testing::{GestureBuilder, GesturePlayer};
 //!
 //! // Create a tap gesture
-//! let recording = GestureBuilder::tap(Offset::new(100.0, 100.0));
+//! let recording = GestureBuilder::tap(Offset::new(Pixels(100.0), Pixels(100.0)));
 //!
 //! // Replay it
 //! let player = GesturePlayer::new(recording);

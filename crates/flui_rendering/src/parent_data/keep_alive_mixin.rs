@@ -31,7 +31,7 @@ pub struct KeepAliveParentDataMixin {
     ///
     /// Set by the child widget (usually via AutomaticKeepAlive).
     pub keep_alive: bool,
-    
+
     /// Whether this child is currently being kept alive.
     ///
     /// Managed by the parent sliver. May differ from `keep_alive`
@@ -47,7 +47,7 @@ impl KeepAliveParentDataMixin {
             kept_alive: false,
         }
     }
-    
+
     /// Create keep-alive mixin with specified state.
     pub const fn with_state(keep_alive: bool, kept_alive: bool) -> Self {
         Self {
@@ -55,39 +55,39 @@ impl KeepAliveParentDataMixin {
             kept_alive,
         }
     }
-    
+
     /// Check if child wants to be kept alive.
     #[inline]
     pub const fn wants_keep_alive(&self) -> bool {
         self.keep_alive
     }
-    
+
     /// Check if child is currently kept alive.
     #[inline]
     pub const fn is_kept_alive(&self) -> bool {
         self.kept_alive
     }
-    
+
     /// Request to keep child alive (called by child).
     pub fn request_keep_alive(&mut self) {
         self.keep_alive = true;
     }
-    
+
     /// Cancel keep-alive request (called by child).
     pub fn cancel_keep_alive(&mut self) {
         self.keep_alive = false;
     }
-    
+
     /// Mark child as kept alive (called by parent).
     pub fn mark_kept_alive(&mut self) {
         self.kept_alive = true;
     }
-    
+
     /// Mark child as no longer kept alive (called by parent).
     pub fn mark_not_kept_alive(&mut self) {
         self.kept_alive = false;
     }
-    
+
     /// Reset to default state (not kept alive).
     pub fn reset(&mut self) {
         self.keep_alive = false;
@@ -112,7 +112,7 @@ mod tests {
     #[test]
     fn test_new() {
         let mixin = KeepAliveParentDataMixin::new();
-        
+
         assert!(!mixin.keep_alive);
         assert!(!mixin.kept_alive);
         assert!(!mixin.wants_keep_alive());
@@ -122,7 +122,7 @@ mod tests {
     #[test]
     fn test_with_state() {
         let mixin = KeepAliveParentDataMixin::with_state(true, true);
-        
+
         assert!(mixin.keep_alive);
         assert!(mixin.kept_alive);
     }
@@ -130,9 +130,9 @@ mod tests {
     #[test]
     fn test_request_keep_alive() {
         let mut mixin = KeepAliveParentDataMixin::new();
-        
+
         mixin.request_keep_alive();
-        
+
         assert!(mixin.wants_keep_alive());
         assert!(!mixin.is_kept_alive()); // Parent hasn't marked yet
     }
@@ -140,9 +140,9 @@ mod tests {
     #[test]
     fn test_cancel_keep_alive() {
         let mut mixin = KeepAliveParentDataMixin::with_state(true, true);
-        
+
         mixin.cancel_keep_alive();
-        
+
         assert!(!mixin.wants_keep_alive());
         assert!(mixin.is_kept_alive()); // Parent still keeping alive
     }
@@ -150,10 +150,10 @@ mod tests {
     #[test]
     fn test_mark_kept_alive() {
         let mut mixin = KeepAliveParentDataMixin::new();
-        
+
         mixin.request_keep_alive();
         mixin.mark_kept_alive();
-        
+
         assert!(mixin.wants_keep_alive());
         assert!(mixin.is_kept_alive());
     }
@@ -161,9 +161,9 @@ mod tests {
     #[test]
     fn test_reset() {
         let mut mixin = KeepAliveParentDataMixin::with_state(true, true);
-        
+
         mixin.reset();
-        
+
         assert!(!mixin.keep_alive);
         assert!(!mixin.kept_alive);
     }

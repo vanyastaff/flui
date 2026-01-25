@@ -76,13 +76,13 @@
 //! ```
 
 use crate::arena::GestureArena;
-use flui_types::geometry::Pixels;
 use crate::ids::PointerId;
 use crate::routing::{HitTestResult, PointerRouter};
 use crate::settings::GestureSettings;
 use dashmap::DashMap;
 use flui_foundation::{impl_binding_singleton, BindingBase};
 use flui_types::geometry::Offset;
+use flui_types::geometry::Pixels;
 use ui_events::pointer::{PointerEvent, PointerType};
 
 /// Central coordinator for gesture event handling (singleton).
@@ -233,7 +233,10 @@ impl GestureBinding {
         match event {
             PointerEvent::Down(e) => {
                 let pointer_id = self.extract_pointer_id(event);
-                let position = Offset::new(e.state.position.x as f32, e.state.position.y as f32);
+                let position = Offset::new(
+                    Pixels(e.state.position.x as f32),
+                    Pixels(e.state.position.y as f32),
+                );
 
                 // Perform hit test
                 let result = hit_test_fn(position);
@@ -284,8 +287,10 @@ impl GestureBinding {
                 if let Some(result) = self.hit_tests.get(&pointer_id) {
                     self.dispatch_event(event, &result);
                 } else {
-                    let position =
-                        Offset::new(e.state.position.x as f32, e.state.position.y as f32);
+                    let position = Offset::new(
+                        Pixels(e.state.position.x as f32),
+                        Pixels(e.state.position.y as f32),
+                    );
                     let result = hit_test_fn(position);
                     self.dispatch_event(event, &result);
                 }

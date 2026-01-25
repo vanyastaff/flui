@@ -101,10 +101,7 @@ fn test_font_style_default() {
 #[test]
 fn test_font_style_all_variants() {
     // Verify both variants are constructible
-    let styles = [
-        FontStyle::Normal,
-        FontStyle::Italic,
-    ];
+    let styles = [FontStyle::Normal, FontStyle::Italic];
 
     assert_eq!(styles.len(), 2);
 }
@@ -273,10 +270,8 @@ fn test_text_decoration_single() {
 
 #[test]
 fn test_text_decoration_combined() {
-    let combined = TextDecoration::combine(&[
-        TextDecoration::UNDERLINE,
-        TextDecoration::LINE_THROUGH,
-    ]);
+    let combined =
+        TextDecoration::combine(&[TextDecoration::UNDERLINE, TextDecoration::LINE_THROUGH]);
 
     assert!(combined.has_underline());
     assert!(combined.has_line_through());
@@ -285,10 +280,7 @@ fn test_text_decoration_combined() {
 
 #[test]
 fn test_text_decoration_combine_method() {
-    let decorations = [
-        TextDecoration::UNDERLINE,
-        TextDecoration::OVERLINE,
-    ];
+    let decorations = [TextDecoration::UNDERLINE, TextDecoration::OVERLINE];
 
     let combined = TextDecoration::combine(&decorations);
     assert!(combined.has_underline());

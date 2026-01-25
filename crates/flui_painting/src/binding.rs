@@ -20,7 +20,7 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 
 use flui_foundation::{impl_binding_singleton, BindingBase, HasInstance};
-use flui_types::geometry::{px, Pixels, Radius, Half};
+use flui_types::geometry::{px, Half, Pixels, Radius};
 use flui_types::Size;
 
 // ============================================================================

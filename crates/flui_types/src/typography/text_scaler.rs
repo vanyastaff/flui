@@ -208,4 +208,3 @@ impl TextScaler for ClampedTextScaler {
         Box::new(*self)
     }
 }
-

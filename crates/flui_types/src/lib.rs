@@ -1,9 +1,9 @@
 //! Core types for Flui framework
 //!
 //! This crate provides fundamental types used throughout Flui:
-//! - **Geometry**: Point, Rect, Size, Offset, RRect, Matrix4
-//! - **Layout**: Axis, EdgeInsets, Alignment, MainAxisAlignment, CrossAxisAlignment, MainAxisSize
-//! - **Styling**: Color, HSLColor, HSVColor, Border, Shadow, Gradient, Decoration
+//! - **Geometry**: Point, Rect, Size, Offset, RRect, Matrix4, Edges (with typed units)
+//! - **Layout**: Axis, Alignment, MainAxisAlignment, CrossAxisAlignment, MainAxisSize
+//! - **Styling**: Color, HSLColor, HSVColor, Border, Shadow, Gradient, Decoration (all generic over Unit type)
 //! - **Typography**: TextStyle, TextAlign, TextDecoration, TextSpan, and more
 //! - **Painting**: BlendMode, BoxFit, ImageRepeat, Clip, TileMode, Shader, and more
 //! - **Gestures**: TapDetails, DragDetails, ScaleDetails, Velocity, PointerData
@@ -79,8 +79,8 @@ pub mod typography;
 // Note: Event types moved to flui_interaction (uses ui-events crate)
 
 // Re-exports for convenience - Most commonly used types
-pub use geometry::{Matrix4, Offset, Point, RRect, Rect, Size};
-pub use layout::{Alignment, Axis, EdgeInsets};
+pub use geometry::{Edges, Matrix4, Offset, Pixels, Point, RRect, Rect, Size};
+pub use layout::{Alignment, Axis};
 pub use styling::{Color, Color32};
 
 /// Prelude module for convenient glob imports
@@ -92,9 +92,12 @@ pub mod prelude {
 
     // Layout - Common types
     pub use crate::layout::{
-        Alignment, Axis, AxisDirection, CrossAxisAlignment, EdgeInsets, MainAxisAlignment,
-        MainAxisSize, Orientation, VerticalDirection,
+        Alignment, Axis, AxisDirection, CrossAxisAlignment, MainAxisAlignment, MainAxisSize,
+        Orientation, VerticalDirection,
     };
+
+    // Geometry - Edges and Pixels for layout
+    pub use crate::geometry::{px, Edges, Pixels};
 
     // Styling - Essential
     pub use crate::styling::{Color, Color32, HSLColor, HSVColor};

@@ -7,7 +7,9 @@ use crate::arity::Arity;
 use crate::constraints::{SliverConstraints, SliverGeometry};
 use flui_types::Offset;
 
-use crate::context::{CanvasContext, SliverHitTestContext, SliverLayoutContext, SliverPaintContext};
+use crate::context::{
+    CanvasContext, SliverHitTestContext, SliverLayoutContext, SliverPaintContext,
+};
 use crate::parent_data::ParentData;
 use crate::protocol::SliverProtocol;
 use crate::traits::RenderObject;

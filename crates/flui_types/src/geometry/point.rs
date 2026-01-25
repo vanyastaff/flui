@@ -20,8 +20,8 @@ use std::fmt;
 use std::iter::Sum;
 use std::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use super::traits::{NumericUnit, Unit};
 use super::error::GeometryError;
+use super::traits::{NumericUnit, Unit};
 use super::Vec2;
 
 /// Absolute position in 2D space.
@@ -81,11 +81,13 @@ impl Point<Pixels> {
 // ============================================================================
 
 impl<T: Unit> Point<T> {
+    /// Creates a point from x and y coordinates.
     #[inline]
     pub const fn new(x: T, y: T) -> Self {
         Self { x, y }
     }
 
+    /// Creates a point with both coordinates set to the same value.
     #[inline]
     pub fn splat(value: T) -> Self {
         Self { x: value, y: value }
@@ -102,7 +104,10 @@ impl<T: Unit> Point<T> {
     /// assert_eq!(p.swap(), Point::new(20.0, 10.0));
     #[must_use]
     pub fn swap(self) -> Self {
-        Self { x: self.y, y: self.x }
+        Self {
+            x: self.y,
+            y: self.x,
+        }
     }
 }
 
@@ -112,9 +117,9 @@ impl<T: Unit> Point<T> {
 
 impl<T: NumericUnit> Point<T>
 where
-    T: Into<f32> + From<f32>
+    T: Into<f32> + From<f32>,
 {
-    /// Creates a point with validation (returns Result).
+    /// Creates a point with validation, returning an error for invalid coordinates.
     pub fn try_new(x: T, y: T) -> Result<Self, GeometryError> {
         let point = Self { x, y };
         if !point.is_valid() {
@@ -132,7 +137,11 @@ where
             if v.is_nan() {
                 0.0
             } else if v.is_infinite() {
-                if v > 0.0 { f32::MAX } else { f32::MIN }
+                if v > 0.0 {
+                    f32::MAX
+                } else {
+                    f32::MIN
+                }
             } else {
                 v
             }
@@ -151,21 +160,24 @@ where
 
 impl<T: NumericUnit> Point<T>
 where
-    T: Into<f32>
+    T: Into<f32>,
 {
     /// Checks if coordinates are valid (finite, not NaN).
+    #[must_use]
     pub fn is_valid(&self) -> bool {
         let x_f32: f32 = self.x.into();
         let y_f32: f32 = self.y.into();
         x_f32.is_finite() && y_f32.is_finite()
     }
 
-    /// Returns true if both coordinates are finite.
+    /// Checks if both coordinates are finite.
+    #[must_use]
     pub fn is_finite(&self) -> bool {
         self.is_valid()
     }
 
-    /// Returns true if any coordinate is NaN.
+    /// Checks if any coordinate is NaN.
+    #[must_use]
     pub fn is_nan(&self) -> bool {
         let x_f32: f32 = self.x.into();
         let y_f32: f32 = self.y.into();
@@ -204,11 +216,13 @@ where
         }
     }
 
+    /// Returns a point with a new x coordinate.
     #[must_use]
     pub fn with_x(self, x: T) -> Self {
         Self::new(x, self.y)
     }
 
+    /// Returns a point with a new y coordinate.
     #[must_use]
     pub fn with_y(self, y: T) -> Self {
         Self::new(self.x, y)
@@ -220,11 +234,13 @@ where
 // ============================================================================
 
 impl Point<Pixels> {
+    /// Creates a point from a two-element array.
     #[must_use]
     pub const fn from_array(a: [f32; 2]) -> Self {
         Self::new(px(a[0]), px(a[1]))
     }
 
+    /// Creates a point from a tuple.
     #[must_use]
     pub const fn from_tuple(t: (f32, f32)) -> Self {
         Self::new(px(t.0), px(t.1))
@@ -289,15 +305,11 @@ where
         let sum_y = self.y + other.y;
         let sum_x_f32: f32 = sum_x.into();
         let sum_y_f32: f32 = sum_y.into();
-        Self::new(
-            T::from(sum_x_f32 / 2.0),
-            T::from(sum_y_f32 / 2.0),
-        )
+        Self::new(T::from(sum_x_f32 / 2.0), T::from(sum_y_f32 / 2.0))
     }
 }
 
-impl Point<Pixels> {
-}
+impl Point<Pixels> {}
 
 // ============================================================================
 // Interpolation (generic with NumericUnit)
@@ -320,10 +332,7 @@ where
         let x1: f32 = other.x.into();
         let y1: f32 = other.y.into();
 
-        Self::new(
-            T::from(x0 + (x1 - x0) * t),
-            T::from(y0 + (y1 - y0) * t),
-        )
+        Self::new(T::from(x0 + (x1 - x0) * t), T::from(y0 + (y1 - y0) * t))
     }
 }
 
@@ -335,6 +344,7 @@ impl<T> Point<T>
 where
     T: Unit + PartialOrd + Clone + fmt::Debug + Default + PartialEq,
 {
+    /// Returns a point with the minimum of each coordinate.
     #[must_use]
     pub fn min(self, other: Self) -> Self {
         Self {
@@ -343,6 +353,7 @@ where
         }
     }
 
+    /// Returns a point with the maximum of each coordinate.
     #[must_use]
     pub fn max(self, other: Self) -> Self {
         Self {
@@ -351,6 +362,7 @@ where
         }
     }
 
+    /// Clamps each coordinate between min and max values.
     #[must_use]
     pub fn clamp(self, min: Self, max: Self) -> Self {
         self.max(min).min(max)
@@ -362,16 +374,19 @@ where
 // ============================================================================
 
 impl Point<Pixels> {
+    /// Returns a point with absolute values of both coordinates.
     #[must_use]
     pub fn abs(self) -> Self {
         Self::new(self.x.abs(), self.y.abs())
     }
 
+    /// Returns the minimum coordinate value.
     #[must_use]
     pub fn min_element(self) -> Pixels {
         self.x.min(self.y)
     }
 
+    /// Returns the maximum coordinate value.
     #[must_use]
     pub fn max_element(self) -> Pixels {
         self.x.max(self.y)
@@ -383,26 +398,31 @@ impl Point<Pixels> {
 // ============================================================================
 
 impl Point<Pixels> {
+    /// Rounds both coordinates to the nearest integer.
     #[must_use]
     pub fn round(self) -> Self {
         Self::new(self.x.round(), self.y.round())
     }
 
+    /// Rounds both coordinates up.
     #[must_use]
     pub fn ceil(self) -> Self {
         Self::new(self.x.ceil(), self.y.ceil())
     }
 
+    /// Rounds both coordinates down.
     #[must_use]
     pub fn floor(self) -> Self {
         Self::new(self.x.floor(), self.y.floor())
     }
 
+    /// Truncates both coordinates toward zero.
     #[must_use]
     pub fn trunc(self) -> Self {
         Self::new(self.x.trunc(), self.y.trunc())
     }
 
+    /// Expands both coordinates away from zero.
     #[must_use]
     pub fn expand(self) -> Self {
         Self::new(
@@ -419,6 +439,7 @@ impl Point<Pixels> {
         )
     }
 
+    /// Returns the fractional part of each coordinate.
     #[must_use]
     pub fn fract(self) -> Self {
         Self::new(self.x.fract(), self.y.fract())
@@ -429,8 +450,7 @@ impl Point<Pixels> {
 // Validation (f32 only)
 // ============================================================================
 
-impl Point<Pixels> {
-}
+impl Point<Pixels> {}
 
 // ============================================================================
 // Operators: Point - Point = Vec2 (generic)
@@ -461,10 +481,7 @@ where
     /// assert_eq!(v.x.get(), 70.0);
     #[inline]
     fn sub(self, rhs: Self) -> Vec2<T> {
-        Vec2::new(
-            T::sub(self.x, rhs.x),
-            T::sub(self.y, rhs.y),
-        )
+        Vec2::new(T::sub(self.x, rhs.x), T::sub(self.y, rhs.y))
     }
 }
 
@@ -480,10 +497,7 @@ where
 
     #[inline]
     fn add(self, rhs: Vec2<T>) -> Self {
-        Self::new(
-            T::add(self.x, rhs.x),
-            T::add(self.y, rhs.y),
-        )
+        Self::new(T::add(self.x, rhs.x), T::add(self.y, rhs.y))
     }
 }
 
@@ -506,10 +520,7 @@ where
 
     #[inline]
     fn sub(self, rhs: Vec2<T>) -> Self {
-        Self::new(
-            T::sub(self.x, rhs.x),
-            T::sub(self.y, rhs.y),
-        )
+        Self::new(T::sub(self.x, rhs.x), T::sub(self.y, rhs.y))
     }
 }
 
@@ -618,9 +629,9 @@ where
 
 impl<T: NumericUnit> Point<T>
 where
-    T: Into<f32> + From<f32>
+    T: Into<f32> + From<f32>,
 {
-    /// Checked addition with a vector (returns None on invalid result).
+    /// Checked addition with a vector, returns None if result is invalid.
     ///
     /// # Examples
     ///
@@ -633,6 +644,7 @@ where
     /// assert!(result.is_some());
     /// assert_eq!(result.unwrap(), Point::new(4.0, 6.0));
     /// ```
+    #[must_use]
     pub fn checked_add_vec(self, dx: T, dy: T) -> Option<Self> {
         let result = Self {
             x: self.x.add(dx),
@@ -646,7 +658,7 @@ where
         }
     }
 
-    /// Saturating addition with a vector (clamps to valid range).
+    /// Saturating addition with a vector, clamps invalid values to valid range.
     ///
     /// # Examples
     ///
@@ -659,14 +671,12 @@ where
     /// assert_eq!(result.x, 0.0);
     /// assert_eq!(result.y, 6.0);
     /// ```
+    #[must_use]
     pub fn saturating_add_vec(self, dx: T, dy: T) -> Self {
-        Self::new_clamped(
-            self.x.add(dx),
-            self.y.add(dy),
-        )
+        Self::new_clamped(self.x.add(dx), self.y.add(dy))
     }
 
-    /// Checked scalar multiplication (returns None on invalid result).
+    /// Checked scalar multiplication, returns None if result is invalid.
     ///
     /// # Examples
     ///
@@ -681,6 +691,7 @@ where
     /// let infinity = p.checked_mul(f32::INFINITY);
     /// assert!(infinity.is_none());
     /// ```
+    #[must_use]
     pub fn checked_mul(self, scalar: f32) -> Option<Self> {
         let x_f32: f32 = self.x.into();
         let y_f32: f32 = self.y.into();
@@ -696,7 +707,7 @@ where
         }
     }
 
-    /// Saturating scalar multiplication (clamps to valid range).
+    /// Saturating scalar multiplication, clamps invalid values to valid range.
     ///
     /// # Examples
     ///
@@ -708,13 +719,11 @@ where
     /// assert_eq!(result.x, f32::MAX);
     /// assert_eq!(result.y, f32::MAX);
     /// ```
+    #[must_use]
     pub fn saturating_mul(self, scalar: f32) -> Self {
         let x_f32: f32 = self.x.into();
         let y_f32: f32 = self.y.into();
-        Self::new_clamped(
-            T::from(x_f32 * scalar),
-            T::from(y_f32 * scalar),
-        )
+        Self::new_clamped(T::from(x_f32 * scalar), T::from(y_f32 * scalar))
     }
 }
 
@@ -738,7 +747,7 @@ impl<T: Unit> Point<T> {
     pub fn cast<U>(self) -> Point<U>
     where
         U: Unit,
-        T: Into<U>
+        T: Into<U>,
     {
         Point {
             x: self.x.into(),
@@ -753,7 +762,7 @@ impl<T: Unit> Point<T> {
 
 impl<T: NumericUnit> Point<T>
 where
-    T: Into<f32>
+    T: Into<f32>,
 {
     /// Converts to `Point<Pixels>` (shorthand for GPU usage).
     ///
@@ -816,7 +825,7 @@ where
 /// Converts from `Point<T>` to `(f32, f32)` for any T that converts to f32.
 impl<T: Unit> From<Point<T>> for (f32, f32)
 where
-    T: Into<f32>
+    T: Into<f32>,
 {
     #[inline]
     fn from(p: Point<T>) -> (f32, f32) {
@@ -827,7 +836,7 @@ where
 /// Converts from `Point<T>` to `[f32; 2]` for any T that converts to f32.
 impl<T: Unit> From<Point<T>> for [f32; 2]
 where
-    T: Into<f32>
+    T: Into<f32>,
 {
     #[inline]
     fn from(p: Point<T>) -> [f32; 2] {
@@ -927,11 +936,14 @@ where
 
 impl<T: Unit> super::traits::Half for Point<T>
 where
-    T: super::traits::Half
+    T: super::traits::Half,
 {
     #[inline]
     fn half(&self) -> Self {
-        Self { x: self.x.half(), y: self.y.half() }
+        Self {
+            x: self.x.half(),
+            y: self.y.half(),
+        }
     }
 }
 
@@ -943,7 +955,7 @@ where
 
 impl<T: Unit> super::traits::IsZero for Point<T>
 where
-    T: super::traits::IsZero
+    T: super::traits::IsZero,
 {
     #[inline]
     fn is_zero(&self) -> bool {
@@ -957,11 +969,14 @@ where
 
 impl<T: Unit> super::traits::Double for Point<T>
 where
-    T: super::traits::Double
+    T: super::traits::Double,
 {
     #[inline]
     fn double(&self) -> Self {
-        Self { x: self.x.double(), y: self.y.double() }
+        Self {
+            x: self.x.double(),
+            y: self.y.double(),
+        }
     }
 }
 
@@ -974,10 +989,9 @@ where
     T: NumericUnit,
 {
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.fold(Point::default(), |acc, p| Point::new(
-            T::add(acc.x, p.x),
-            T::add(acc.y, p.y),
-        ))
+        iter.fold(Point::default(), |acc, p| {
+            Point::new(T::add(acc.x, p.x), T::add(acc.y, p.y))
+        })
     }
 }
 
@@ -986,10 +1000,9 @@ where
     T: NumericUnit,
 {
     fn sum<I: Iterator<Item = &'a Self>>(iter: I) -> Self {
-        iter.fold(Point::default(), |acc, p| Point::new(
-            T::add(acc.x, p.x),
-            T::add(acc.y, p.y),
-        ))
+        iter.fold(Point::default(), |acc, p| {
+            Point::new(T::add(acc.x, p.x), T::add(acc.y, p.y))
+        })
     }
 }
 
@@ -999,7 +1012,7 @@ where
 
 impl<T: Unit> super::traits::ApproxEq for Point<T>
 where
-    T: super::traits::ApproxEq
+    T: super::traits::ApproxEq,
 {
     #[inline]
     fn approx_eq_eps(&self, other: &Self, epsilon: f32) -> bool {
@@ -1013,7 +1026,7 @@ where
 
 impl<T: Unit> super::traits::Sign for Point<T>
 where
-    T: super::traits::Sign + Clone + std::fmt::Debug + Default + PartialEq
+    T: super::traits::Sign + Clone + std::fmt::Debug + Default + PartialEq,
 {
     #[inline]
     fn is_positive(&self) -> bool {
@@ -1116,7 +1129,10 @@ impl Point<Pixels> {
     /// assert_eq!(device.y.get(), 400);
     /// ```
     #[must_use]
-    pub fn scale_with(self, scale: super::units::ScaleFactor<Pixels, super::units::DevicePixels>) -> Point<super::units::DevicePixels> {
+    pub fn scale_with(
+        self,
+        scale: super::units::ScaleFactor<Pixels, super::units::DevicePixels>,
+    ) -> Point<super::units::DevicePixels> {
         use super::units::device_px;
         Point {
             x: device_px((self.x.get() * scale.get()).round() as i32),
@@ -1140,7 +1156,10 @@ impl Point<super::units::DevicePixels> {
     /// assert_eq!(logical.y, px(200.0));
     /// ```
     #[must_use]
-    pub fn unscale(self, scale: super::units::ScaleFactor<Pixels, super::units::DevicePixels>) -> Point<Pixels> {
+    pub fn unscale(
+        self,
+        scale: super::units::ScaleFactor<Pixels, super::units::DevicePixels>,
+    ) -> Point<Pixels> {
         let inverse = scale.inverse();
         Point {
             x: px(self.x.get() as f32 * inverse.get()),
@@ -1184,21 +1203,22 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::geometry::px;
 
     #[test]
     fn test_construction() {
-        let p = Point::new(10.0, 20.0);
-        assert_eq!(p.x, 10.0);
-        assert_eq!(p.y, 20.0);
+        let p = Point::new(px(10.0), px(20.0));
+        assert_eq!(p.x, px(10.0));
+        assert_eq!(p.y, px(20.0));
 
-        assert_eq!(Point::splat(5.0), Point::new(5.0, 5.0));
-        assert_eq!(Point::from_array([1.0, 2.0]), Point::new(1.0, 2.0));
-        assert_eq!(Point::from_tuple((3.0, 4.0)), Point::new(3.0, 4.0));
+        assert_eq!(Point::splat(px(5.0)), Point::new(px(5.0), px(5.0)));
+        assert_eq!(Point::from_array([1.0, 2.0]), Point::new(px(1.0), px(2.0)));
+        assert_eq!(Point::from_tuple((3.0, 4.0)), Point::new(px(3.0), px(4.0)));
     }
 
     #[test]
     fn test_constants() {
-        assert_eq!(Point::ORIGIN, Point::new(0.0, 0.0));
+        assert_eq!(Point::ORIGIN, Point::new(px(0.0), px(0.0)));
         assert_eq!(Point::ZERO, Point::ORIGIN);
         assert!(Point::INFINITY.x.is_infinite());
         assert!(Point::NAN.is_nan());
@@ -1206,65 +1226,65 @@ mod tests {
 
     #[test]
     fn test_accessors() {
-        let p = Point::new(10.0, 20.0);
+        let p = Point::new(px(10.0), px(20.0));
         assert_eq!(p.to_array(), [10.0, 20.0]);
         assert_eq!(p.to_tuple(), (10.0, 20.0));
-        assert_eq!(p.with_x(5.0), Point::new(5.0, 20.0));
-        assert_eq!(p.with_y(5.0), Point::new(10.0, 5.0));
+        assert_eq!(p.with_x(px(5.0)), Point::new(px(5.0), px(20.0)));
+        assert_eq!(p.with_y(px(5.0)), Point::new(px(10.0), px(5.0)));
     }
 
     #[test]
     fn test_distance() {
-        let p1 = Point::new(0.0, 0.0);
-        let p2 = Point::new(3.0, 4.0);
+        let p1 = Point::new(px(0.0), px(0.0));
+        let p2 = Point::new(px(3.0), px(4.0));
         assert_eq!(p1.distance(p2), 5.0);
         assert_eq!(p1.distance_squared(p2), 25.0);
     }
 
     #[test]
     fn test_midpoint() {
-        let p1 = Point::new(0.0, 0.0);
-        let p2 = Point::new(10.0, 20.0);
-        assert_eq!(p1.midpoint(p2), Point::new(5.0, 10.0));
+        let p1 = Point::new(px(0.0), px(0.0));
+        let p2 = Point::new(px(10.0), px(20.0));
+        assert_eq!(p1.midpoint(p2), Point::new(px(5.0), px(10.0)));
     }
 
     #[test]
     fn test_lerp() {
-        let p1 = Point::new(0.0, 0.0);
-        let p2 = Point::new(10.0, 20.0);
+        let p1 = Point::new(px(0.0), px(0.0));
+        let p2 = Point::new(px(10.0), px(20.0));
 
         assert_eq!(p1.lerp(p2, 0.0), p1);
-        assert_eq!(p1.lerp(p2, 0.5), Point::new(5.0, 10.0));
+        assert_eq!(p1.lerp(p2, 0.5), Point::new(px(5.0), px(10.0)));
         assert_eq!(p1.lerp(p2, 1.0), p2);
     }
 
     #[test]
     fn test_min_max_clamp() {
-        let p1 = Point::new(5.0, 15.0);
-        let p2 = Point::new(10.0, 8.0);
+        let p1 = Point::new(px(5.0), px(15.0));
+        let p2 = Point::new(px(10.0), px(8.0));
 
-        assert_eq!(p1.min(p2), Point::new(5.0, 8.0));
-        assert_eq!(p1.max(p2), Point::new(10.0, 15.0));
+        assert_eq!(p1.min(p2), Point::new(px(5.0), px(8.0)));
+        assert_eq!(p1.max(p2), Point::new(px(10.0), px(15.0)));
 
-        let p = Point::new(15.0, -5.0);
+        let p = Point::new(px(15.0), px(-5.0));
         let min = Point::ZERO;
-        let max = Point::splat(10.0);
-        assert_eq!(p.clamp(min, max), Point::new(10.0, 0.0));
+        let max = Point::splat(px(10.0));
+        assert_eq!(p.clamp(min, max), Point::new(px(10.0), px(0.0)));
     }
 
     #[test]
     fn test_rounding() {
-        let p = Point::new(10.6, -3.3);
-        assert_eq!(p.round(), Point::new(11.0, -3.0));
-        assert_eq!(p.ceil(), Point::new(11.0, -3.0));
-        assert_eq!(p.floor(), Point::new(10.0, -4.0));
-        assert_eq!(p.trunc(), Point::new(10.0, -3.0));
-        assert_eq!(p.expand(), Point::new(11.0, -4.0));
+        let p = Point::new(px(10.6), px(-3.3));
+        assert_eq!(p.round(), Point::new(px(11.0), px(-3.0)));
+        assert_eq!(p.ceil(), Point::new(px(11.0), px(-3.0)));
+        assert_eq!(p.floor(), Point::new(px(10.0), px(-4.0)));
+        assert_eq!(p.trunc(), Point::new(px(10.0), px(-3.0)));
+        assert_eq!(p.expand(), Point::new(px(11.0), px(-4.0)));
     }
 
     #[test]
     fn test_validation() {
-        assert!(Point::new(1.0, 2.0).is_finite());
+        assert!(Point::new(px(1.0), px(2.0)).is_finite());
         assert!(!Point::INFINITY.is_finite());
         assert!(!Point::NAN.is_finite());
         assert!(Point::NAN.is_nan());
@@ -1273,45 +1293,45 @@ mod tests {
 
     #[test]
     fn test_point_minus_point() {
-        let p1 = Point::new(10.0, 20.0);
-        let p2 = Point::new(3.0, 5.0);
+        let p1 = Point::new(px(10.0), px(20.0));
+        let p2 = Point::new(px(3.0), px(5.0));
         let v: Vec2<Pixels> = p1 - p2;
-        assert_eq!(v, Vec2::new(7.0, 15.0));
+        assert_eq!(v, Vec2::new(px(7.0), px(15.0)));
     }
 
     #[test]
     fn test_point_vec_ops() {
-        let p = Point::new(10.0, 20.0);
-        let v = Vec2::new(5.0, 10.0);
+        let p = Point::new(px(10.0), px(20.0));
+        let v = Vec2::new(px(5.0), px(10.0));
 
-        assert_eq!(p + v, Point::new(15.0, 30.0));
-        assert_eq!(p - v, Point::new(5.0, 10.0));
+        assert_eq!(p + v, Point::new(px(15.0), px(30.0)));
+        assert_eq!(p - v, Point::new(px(5.0), px(10.0)));
 
         let mut p2 = p;
         p2 += v;
-        assert_eq!(p2, Point::new(15.0, 30.0));
+        assert_eq!(p2, Point::new(px(15.0), px(30.0)));
 
         let mut p3 = p;
         p3 -= v;
-        assert_eq!(p3, Point::new(5.0, 10.0));
+        assert_eq!(p3, Point::new(px(5.0), px(10.0)));
     }
 
     #[test]
     fn test_scalar_ops() {
-        let p = Point::new(10.0, 20.0);
+        let p = Point::new(px(10.0), px(20.0));
 
-        assert_eq!(p * 2.0, Point::new(20.0, 40.0));
-        assert_eq!(2.0 * p, Point::new(20.0, 40.0));
-        assert_eq!(p / 2.0, Point::new(5.0, 10.0));
-        assert_eq!(-p, Point::new(-10.0, -20.0));
+        assert_eq!(p * 2.0, Point::new(px(20.0), px(40.0)));
+        assert_eq!(2.0 * p, Point::new(px(20.0), px(40.0)));
+        assert_eq!(p / 2.0, Point::new(px(5.0), px(10.0)));
+        assert_eq!(-p, Point::new(px(-10.0), px(-20.0)));
     }
 
     #[test]
     fn test_conversions() {
-        let p = Point::new(10.0, 20.0);
+        let p = Point::new(px(10.0), px(20.0));
 
-        let from_tuple: Point<Pixels> = (10.0, 20.0).into();
-        let from_array: Point<Pixels> = [10.0, 20.0].into();
+        let from_tuple: Point<Pixels> = (10.0_f32, 20.0_f32).into();
+        let from_array: Point<Pixels> = [10.0_f32, 20.0_f32].into();
         assert_eq!(from_tuple, p);
         assert_eq!(from_array, p);
 
@@ -1320,26 +1340,29 @@ mod tests {
         assert_eq!(to_tuple, (10.0, 20.0));
         assert_eq!(to_array, [10.0, 20.0]);
 
-        let v = Vec2::new(5.0, 10.0);
+        let v = Vec2::new(px(5.0), px(10.0));
         let p_from_v: Point<Pixels> = v.into();
-        assert_eq!(p_from_v, Point::new(5.0, 10.0));
+        assert_eq!(p_from_v, Point::new(px(5.0), px(10.0)));
     }
 
     #[test]
     fn test_display() {
-        assert_eq!(format!("{}", Point::new(10.5, 20.5)), "(10.5, 20.5)");
+        assert_eq!(
+            format!("{}", Point::new(px(10.5), px(20.5))),
+            "(10.5, 20.5)"
+        );
     }
 
     #[test]
     fn test_convenience_fn() {
-        assert_eq!(point(1.0, 2.0), Point::new(1.0, 2.0));
+        assert_eq!(point(1.0, 2.0), Point::new(px(1.0), px(2.0)));
     }
 }
 
 #[cfg(test)]
 mod typed_tests {
     use super::*;
-    use crate::geometry::{Pixels, px};
+    use crate::geometry::{px, Pixels};
 
     #[test]
     fn test_point_new() {
@@ -1349,56 +1372,56 @@ mod typed_tests {
     }
 
     #[test]
-    fn test_point_f32() {
-        let p = Point::<f32>::new(0.5, 0.75);
-        assert_eq!(p.x, 0.5);
-        assert_eq!(p.y, 0.75);
+    fn test_point_pixels() {
+        let p = Point::<Pixels>::new(px(0.5), px(0.75));
+        assert_eq!(p.x.get(), 0.5);
+        assert_eq!(p.y.get(), 0.75);
     }
 
     #[test]
     fn test_point_validation() {
-        let valid = Point::<f32>::new(1.0, 2.0);
+        let valid = Point::<Pixels>::new(px(1.0), px(2.0));
         assert!(valid.is_valid());
         assert!(!valid.is_nan());
 
-        let invalid = Point::<f32>::new(f32::NAN, 2.0);
+        let invalid = Point::<Pixels>::new(px(f32::NAN), px(2.0));
         assert!(!invalid.is_valid());
         assert!(invalid.is_nan());
     }
 
     #[test]
     fn test_point_try_new() {
-        let result = Point::<f32>::try_new(1.0, 2.0);
+        let result = Point::<Pixels>::try_new(px(1.0), px(2.0));
         assert!(result.is_ok());
 
-        let result = Point::<f32>::try_new(f32::NAN, 2.0);
+        let result = Point::<Pixels>::try_new(px(f32::NAN), px(2.0));
         assert!(result.is_err());
     }
 
     #[test]
     fn test_point_clamped() {
-        let p = Point::<f32>::new_clamped(f32::NAN, 2.0);
-        assert_eq!(p.x, 0.0);
-        assert_eq!(p.y, 2.0);
+        let p = Point::<Pixels>::new_clamped(px(f32::NAN), px(2.0));
+        assert_eq!(p.x.get(), 0.0);
+        assert_eq!(p.y.get(), 2.0);
 
-        let p = Point::<f32>::new_clamped(f32::INFINITY, -f32::INFINITY);
-        assert_eq!(p.x, f32::MAX);
-        assert_eq!(p.y, f32::MIN);
+        let p = Point::<Pixels>::new_clamped(px(f32::INFINITY), px(-f32::INFINITY));
+        assert_eq!(p.x.get(), f32::MAX);
+        assert_eq!(p.y.get(), f32::MIN);
     }
 
     #[test]
     fn test_point_cast() {
         let p = Point::<Pixels>::new(px(100.0), px(200.0));
         let p_f32: Point<Pixels> = p.cast();
-        assert_eq!(p_f32.x, 100.0);
-        assert_eq!(p_f32.y, 200.0);
+        assert_eq!(p_f32.x.get(), 100.0);
+        assert_eq!(p_f32.y.get(), 200.0);
     }
 
     #[test]
     fn test_point_to_f32() {
         let p = Point::<Pixels>::new(px(100.0), px(200.0));
         let p_f32 = p.to_f32();
-        assert_eq!(p_f32.x, 100.0);
+        assert_eq!(p_f32.x.get(), 100.0);
     }
 
     #[test]
@@ -1425,7 +1448,7 @@ mod typed_tests {
 #[cfg(test)]
 mod arithmetic_tests {
     use super::*;
-    use crate::geometry::{Pixels, px, vec2};
+    use crate::geometry::{px, vec2, Pixels};
 
     #[test]
     fn test_point_add_vec2() {
@@ -1608,7 +1631,7 @@ mod arithmetic_tests {
 
     #[test]
     fn test_point_utility_traits() {
-        use crate::geometry::{Axis, Along, Half, IsZero};
+        use crate::geometry::{Along, Axis, Half, IsZero};
 
         // Test Along trait
         let p = Point::<Pixels>::new(px(10.0), px(20.0));

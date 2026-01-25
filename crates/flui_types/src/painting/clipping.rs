@@ -1,6 +1,6 @@
 //! Clipping types for painting.
 
-use crate::geometry::{Offset, Rect, Size, Pixels, px};
+use crate::geometry::{px, Offset, Pixels, Rect, Size};
 
 #[derive(Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -124,7 +124,11 @@ pub trait NotchedShape: std::fmt::Debug {
     /// The `guest` is the bounding rectangle of the notch.
     ///
     /// Returns a path that describes the outer edge of the shape with the notch.
-    fn get_outer_path(&self, host: Rect<Pixels>, guest: Option<Rect<Pixels>>) -> Vec<Offset<Pixels>>;
+    fn get_outer_path(
+        &self,
+        host: Rect<Pixels>,
+        guest: Option<Rect<Pixels>>,
+    ) -> Vec<Offset<Pixels>>;
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -153,7 +157,11 @@ impl Default for CircularNotchedRectangle {
 }
 
 impl NotchedShape for CircularNotchedRectangle {
-    fn get_outer_path(&self, host: Rect<Pixels>, guest: Option<Rect<Pixels>>) -> Vec<Offset<Pixels>> {
+    fn get_outer_path(
+        &self,
+        host: Rect<Pixels>,
+        guest: Option<Rect<Pixels>>,
+    ) -> Vec<Offset<Pixels>> {
         let Some(guest) = guest else {
             // No notch, just return the rectangle corners
             return vec![
@@ -229,7 +237,11 @@ impl<T: NotchedShape> AutomaticNotchedShape<T> {
 }
 
 impl<T: NotchedShape> NotchedShape for AutomaticNotchedShape<T> {
-    fn get_outer_path(&self, host: Rect<Pixels>, guest: Option<Rect<Pixels>>) -> Vec<Offset<Pixels>> {
+    fn get_outer_path(
+        &self,
+        host: Rect<Pixels>,
+        guest: Option<Rect<Pixels>>,
+    ) -> Vec<Offset<Pixels>> {
         let scaled_guest = guest.map(|g| {
             let center = g.center();
             let scaled_size = Size::new(g.width() * self.scale, g.height() * self.scale);

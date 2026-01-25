@@ -10,8 +10,8 @@
 //! Flutter reference: https://api.flutter.dev/flutter/gestures/DragGestureRecognizer-class.html
 
 use super::recognizer::{GestureRecognizer, GestureRecognizerState};
-use flui_types::geometry::Pixels;
 use flui_types::geometry::PixelDelta;
+use flui_types::geometry::Pixels;
 
 use crate::arena::GestureArenaMember;
 use crate::events::{PointerEvent, PointerEventExt, PointerType};
@@ -382,7 +382,8 @@ impl DragGestureRecognizer {
         if state.state == DragPhase::Started {
             // Calculate final velocity
             let velocity = state.velocity_tracker.velocity();
-            let primary_velocity = self.calculate_primary_velocity(velocity.pixels_per_second.to_pixels());
+            let primary_velocity =
+                self.calculate_primary_velocity(velocity.pixels_per_second.to_pixels());
 
             state.state = DragPhase::Ready;
             drop(state); // Release lock before calling callback
@@ -423,25 +424,25 @@ impl DragGestureRecognizer {
     /// Calculate primary delta based on axis
     fn calculate_primary_delta(&self, delta: Offset<Pixels>) -> f32 {
         match self.axis {
-            DragAxis::Vertical => delta.dy.get(),
-            DragAxis::Horizontal => delta.dx.get(),
-            DragAxis::Free => delta.distance(),
+            DragAxis::Vertical => delta.dy.0,
+            DragAxis::Horizontal => delta.dx.0,
+            DragAxis::Free => delta.distance().0,
         }
     }
 
     /// Calculate primary velocity based on axis
     fn calculate_primary_velocity(&self, velocity: Offset<Pixels>) -> f32 {
         match self.axis {
-            DragAxis::Vertical => velocity.dy.get(),
-            DragAxis::Horizontal => velocity.dx.get(),
-            DragAxis::Free => velocity.distance(),
+            DragAxis::Vertical => velocity.dy.0,
+            DragAxis::Horizontal => velocity.dx.0,
+            DragAxis::Free => velocity.distance().0,
         }
     }
 
     /// Check if velocity is sufficient for a fling gesture
     pub fn is_fling(&self, velocity: &Velocity) -> bool {
         let speed = velocity.pixels_per_second.distance();
-        speed >= self.min_fling_velocity()
+        speed >= PixelDelta(self.min_fling_velocity())
     }
 
     /// Extract position and pointer type from a PointerEvent
@@ -552,13 +553,13 @@ mod tests {
             });
 
         let pointer = PointerId::new(1);
-        let start_pos = Offset::new(100.0, 100.0);
+        let start_pos = Offset::new(Pixels(100.0), Pixels(100.0));
 
         // Start tracking
         recognizer.add_pointer(pointer, start_pos);
 
         // Move vertically beyond slop
-        let moved_pos = Offset::new(100.0, 130.0); // 30px down
+        let moved_pos = Offset::new(Pixels(100.0), Pixels(130.0)); // 30px down
         let move_event = make_move_event(moved_pos, PointerType::Touch);
         recognizer.handle_event(&move_event);
 
@@ -566,7 +567,7 @@ mod tests {
         assert!(*started.lock());
 
         // Move more
-        let moved_pos2 = Offset::new(100.0, 150.0);
+        let moved_pos2 = Offset::new(Pixels(100.0), Pixels(150.0));
         let move_event2 = make_move_event(moved_pos2, PointerType::Touch);
         recognizer.handle_event(&move_event2);
 
@@ -579,20 +580,20 @@ mod tests {
         let mut tracker = VelocityTracker::new();
 
         let start_time = Instant::now();
-        let start_pos = Offset::new(0.0, 0.0);
+        let start_pos = Offset::new(Pixels(0.0), Pixels(0.0));
 
         tracker.add_position(start_time, start_pos);
 
         // Simulate movement over 100ms
         let dt = std::time::Duration::from_millis(100);
-        let end_pos = Offset::new(100.0, 0.0); // Moved 100px in 100ms = 1000 px/s
+        let end_pos = Offset::new(Pixels(100.0), Pixels(0.0)); // Moved 100px in 100ms = 1000 px/s
 
         tracker.add_position(start_time + dt, end_pos);
 
         let velocity = tracker.velocity();
 
         // Should be approximately 1000 px/s horizontally
-        assert!(velocity.pixels_per_second.dx > 900.0);
-        assert!(velocity.pixels_per_second.dx < 1100.0);
+        assert!(velocity.pixels_per_second.dx > PixelDelta(900.0));
+        assert!(velocity.pixels_per_second.dx < PixelDelta(1100.0));
     }
 }

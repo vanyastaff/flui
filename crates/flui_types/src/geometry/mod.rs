@@ -116,6 +116,7 @@ pub mod circle;
 pub mod corner;
 pub mod corners;
 pub mod edges;
+/// Error types for geometry operations.
 pub mod error;
 pub mod length;
 pub mod line;
@@ -124,6 +125,7 @@ pub mod offset;
 pub mod point;
 pub mod rect;
 pub mod relative_rect;
+/// 2D rotation type.
 pub mod rotation;
 pub mod rrect;
 pub mod rsuperellipse;
@@ -152,10 +154,10 @@ pub mod vector;
 /// ```
 pub mod prelude {
     // Core generic types
+    pub use super::offset::Offset;
     pub use super::point::Point;
     pub use super::size::Size;
     pub use super::vector::Vec2;
-    pub use super::offset::Offset;
 
     // Shape types
     pub use super::bounds::Bounds;
@@ -165,10 +167,10 @@ pub mod prelude {
     pub use super::rrect::{RRect, Radius};
 
     // Unit types
+    pub use super::length::Rems;
     pub use super::units::{
         delta_px, device_px, px, scaled_px, DevicePixels, PixelDelta, Pixels, ScaledPixels,
     };
-    pub use super::length::Rems;
 
     // Traits
     pub use super::traits::{Along, Axis, GeometryOps, Half, IsZero, NumericUnit, Sign, Unit};
@@ -178,9 +180,9 @@ pub mod prelude {
 
     // Constructor functions
     pub use super::point::point;
+    pub use super::rect::rect;
     pub use super::size::size;
     pub use super::vector::vec2;
-    pub use super::rect::rect;
 }
 
 // =============================================================================
@@ -241,24 +243,23 @@ pub use transform::Transform;
 // =============================================================================
 
 pub use units::{
-    delta_px, device_px, px, radians, scaled_px,
-    DevicePixels, ParseLengthError, PixelDelta, Pixels, Radians, ScaleFactor, ScaledPixels,
+    delta_px, device_px, px, radians, scaled_px, DevicePixels, ParseLengthError, PixelDelta,
+    Pixels, Radians, ScaleFactor, ScaledPixels,
 };
 
 // =============================================================================
 // LENGTH TYPES
 // =============================================================================
 
-pub use length::{
-    auto, relative, rems,
-    AbsoluteLength, DefiniteLength, Length, Percentage, Rems,
-};
+pub use length::{auto, relative, rems, AbsoluteLength, DefiniteLength, Length, Percentage, Rems};
 
 // =============================================================================
 // TRAITS
 // =============================================================================
 
-pub use traits::{Along, ApproxEq, Axis, Double, GeometryOps, Half, IsZero, NumericUnit, Sign, Unit};
+pub use traits::{
+    Along, ApproxEq, Axis, Double, GeometryOps, Half, IsZero, NumericUnit, Sign, Unit,
+};
 
 // =============================================================================
 // ERROR TYPES

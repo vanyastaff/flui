@@ -957,12 +957,12 @@ mod tests {
         let c1 = Color::rgb(100, 100, 100);
 
         // Test at exactly 1/255 difference
-        let c2 = Color::from_rgba_f32(
+        let c2 = Color::from_rgba_f32_array([
             100.0 / 255.0 + 1.0 / 255.0,
             100.0 / 255.0,
             100.0 / 255.0,
             1.0,
-        );
+        ]);
 
         // Should be within epsilon
         assert!(c1.approx_eq(&c2));

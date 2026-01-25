@@ -8,8 +8,8 @@
 //! - **Marker traits**: Compile-time constraints
 
 use crate::events::{PointerEvent, PointerEventExt as EventsPointerEventExt};
-use flui_types::geometry::Pixels;
 use flui_types::geometry::PixelDelta;
+use flui_types::geometry::Pixels;
 
 use crate::ids::PointerId;
 use crate::routing::HitTestEntry;
@@ -177,7 +177,7 @@ pub trait GestureRecognizerExt {
     /// * `initial` - Initial pointer position
     /// * `current` - Current pointer position
     /// * `slop` - Maximum allowed movement (typically 18px)
-    fn exceeds_slop(initial: Offset<Pixels>, current: Offset<Pixels>, slop: f32) -> bool {
+    fn exceeds_slop(initial: Offset<Pixels>, current: Offset<Pixels>, slop: Pixels) -> bool {
         let delta = current - initial;
         delta.distance() > slop
     }
@@ -187,7 +187,7 @@ pub trait GestureRecognizerExt {
         match axis {
             DragAxis::Vertical => delta.dy.get(),
             DragAxis::Horizontal => delta.dx.get(),
-            DragAxis::Free => delta.distance(),
+            DragAxis::Free => delta.distance().get(),
         }
     }
 }
@@ -239,7 +239,7 @@ mod tests {
 
     #[test]
     fn test_pointer_event_ext() {
-        let pos = Offset::new(100.0, 200.0);
+        let pos = Offset::new(Pixels(100.0), Pixels(200.0));
 
         let down = make_down_event(pos, PointerType::Mouse);
         assert!(down.is_down());
@@ -263,15 +263,15 @@ mod tests {
         struct Helper;
         impl GestureRecognizerExt for Helper {}
 
-        let initial = Offset::new(100.0, 100.0);
+        let initial = Offset::new(Pixels(100.0), Pixels(100.0));
 
         // Within slop (18px)
-        let within = Offset::new(110.0, 105.0); // ~11px
-        assert!(!Helper::exceeds_slop(initial, within, 18.0));
+        let within = Offset::new(Pixels(110.0), Pixels(105.0)); // ~11px
+        assert!(!Helper::exceeds_slop(initial, within, Pixels(18.0)));
 
         // Beyond slop
-        let beyond = Offset::new(100.0, 125.0); // 25px
-        assert!(Helper::exceeds_slop(initial, beyond, 18.0));
+        let beyond = Offset::new(Pixels(100.0), Pixels(125.0)); // 25px
+        assert!(Helper::exceeds_slop(initial, beyond, Pixels(18.0)));
     }
 
     #[test]
@@ -279,14 +279,14 @@ mod tests {
         struct Helper;
         impl GestureRecognizerExt for Helper {}
 
-        let delta = Offset::new(10.0, 20.0);
+        let delta = Offset::new(PixelDelta(10.0), PixelDelta(20.0));
 
         assert_eq!(Helper::primary_delta(delta, DragAxis::Horizontal), 10.0);
         assert_eq!(Helper::primary_delta(delta, DragAxis::Vertical), 20.0);
 
         // Free axis returns distance
         let dist = Helper::primary_delta(delta, DragAxis::Free);
-        assert!((dist - delta.distance()).abs() < 0.001);
+        assert!((dist - delta.distance().get()).abs() < 0.001);
     }
 
     #[test]

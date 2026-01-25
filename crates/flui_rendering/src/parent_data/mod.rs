@@ -103,14 +103,12 @@ pub use box_variants::{
 // Sliver variants
 pub use sliver_variants::{
     SliverGridParentData, SliverLogicalContainerParentData, SliverLogicalParentData,
-    SliverMultiBoxAdaptorParentData, SliverPhysicalContainerParentData,
-    SliverPhysicalParentData, TreeSliverNodeParentData,
+    SliverMultiBoxAdaptorParentData, SliverPhysicalContainerParentData, SliverPhysicalParentData,
+    TreeSliverNodeParentData,
 };
 
 // Table and text
-pub use table_text::{
-    TableCellParentData, TableCellVerticalAlignment, TextParentData, TextRange,
-};
+pub use table_text::{TableCellParentData, TableCellVerticalAlignment, TextParentData, TextRange};
 
 // ============================================================================
 // TYPE COUNTS
@@ -287,7 +285,7 @@ mod tests {
     #[test]
     fn test_prelude() {
         use prelude::*;
-        
+
         // Should be able to use all types from prelude
         let _ = BoxParentData::default();
         let _ = FlexParentData::default();

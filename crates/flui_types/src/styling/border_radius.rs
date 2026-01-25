@@ -1,118 +1,104 @@
 //! Border radius types for styling
+//!
+//! This module provides [`BorderRadius`] as a type alias to [`Corners<Radius<Pixels>>`](crate::geometry::Corners),
+//! offering ergonomic constructors and methods for defining corner radii in UI elements.
 
-use crate::styling::Radius;
+use crate::geometry::{Corners, Pixels, Radius};
 
-#[derive(Copy, Clone, Debug, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct BorderRadius {
-    /// The top-left corner radius.
-    pub top_left: Radius,
+/// Border radius for all four corners of a rectangle.
+///
+/// This is a type alias to [`Corners<Radius<Pixels>>`](Corners), providing convenient
+/// constructors for common border radius patterns.
+///
+/// # Examples
+///
+/// ```
+/// use flui_types::styling::BorderRadius;
+/// use flui_types::geometry::{Radius, px};
+///
+/// // All corners with the same circular radius
+/// let radius = BorderRadius::circular(px(16.0));
+///
+/// // Top corners only (for cards, modals)
+/// let radius = BorderRadius::top(Radius::circular(px(16.0)));
+///
+/// // Custom per-corner
+/// let radius = BorderRadius::only(
+///     Radius::circular(px(8.0)),   // top-left
+///     Radius::circular(px(16.0)),  // top-right
+///     Radius::circular(px(8.0)),   // bottom-right
+///     Radius::circular(px(16.0)),  // bottom-left
+/// );
+/// ```
+pub type BorderRadius = Corners<Radius<Pixels>>;
 
-    /// The top-right corner radius.
-    pub top_right: Radius,
-
-    /// The bottom-left corner radius.
-    pub bottom_left: Radius,
-
-    /// The bottom-right corner radius.
-    pub bottom_right: Radius,
-}
-
-impl BorderRadius {
+/// Extension trait providing BorderRadius-specific constructors and methods.
+///
+/// This trait is automatically implemented for [`BorderRadius`] (which is [`Corners<Radius<Pixels>>`](Corners))
+/// to provide ergonomic APIs that match Flutter's BorderRadius.
+pub trait BorderRadiusExt {
     /// Creates a border radius with all corners having the same circular radius.
-    pub const fn circular(radius: f32) -> Self {
-        Self::all(Radius::circular(radius))
-    }
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::styling::BorderRadius;
+    /// use flui_types::geometry::px;
+    ///
+    /// let radius = BorderRadius::circular(px(16.0));
+    /// ```
+    fn circular(radius: Pixels) -> Self;
 
     /// Creates a border radius with all corners having the same elliptical radius.
-    pub const fn elliptical(x: f32, y: f32) -> Self {
-        Self::all(Radius::elliptical(x, y))
-    }
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::styling::BorderRadius;
+    /// use flui_types::geometry::px;
+    ///
+    /// let radius = BorderRadius::elliptical(px(20.0), px(10.0));
+    /// ```
+    fn elliptical(x: Pixels, y: Pixels) -> Self;
 
     /// Creates a border radius with all corners having the same radius.
-    pub const fn all(radius: Radius) -> Self {
-        Self {
-            top_left: radius,
-            top_right: radius,
-            bottom_left: radius,
-            bottom_right: radius,
-        }
-    }
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::styling::BorderRadius;
+    /// use flui_types::geometry::{Radius, px};
+    ///
+    /// let r = Radius::elliptical(px(20.0), px(10.0));
+    /// let radius = BorderRadius::all(r);
+    /// ```
+    fn all(radius: Radius<Pixels>) -> Self;
 
     /// Creates a border radius with only the specified corners having radii.
-    pub const fn only(
-        top_left: Radius,
-        top_right: Radius,
-        bottom_left: Radius,
-        bottom_right: Radius,
-    ) -> Self {
-        Self {
-            top_left,
-            top_right,
-            bottom_left,
-            bottom_right,
-        }
-    }
+    fn only(
+        top_left: Radius<Pixels>,
+        top_right: Radius<Pixels>,
+        bottom_right: Radius<Pixels>,
+        bottom_left: Radius<Pixels>,
+    ) -> Self;
 
     /// Creates a border radius with only the top-left corner having a radius.
-    pub const fn top_left_only(radius: Radius) -> Self {
-        Self {
-            top_left: radius,
-            top_right: Radius::ZERO,
-            bottom_left: Radius::ZERO,
-            bottom_right: Radius::ZERO,
-        }
-    }
+    fn top_left_only(radius: Radius<Pixels>) -> Self;
 
     /// Creates a border radius with only the top-right corner having a radius.
-    pub const fn top_right_only(radius: Radius) -> Self {
-        Self {
-            top_left: Radius::ZERO,
-            top_right: radius,
-            bottom_left: Radius::ZERO,
-            bottom_right: Radius::ZERO,
-        }
-    }
+    fn top_right_only(radius: Radius<Pixels>) -> Self;
 
     /// Creates a border radius with only the bottom-left corner having a radius.
-    pub const fn bottom_left_only(radius: Radius) -> Self {
-        Self {
-            top_left: Radius::ZERO,
-            top_right: Radius::ZERO,
-            bottom_left: radius,
-            bottom_right: Radius::ZERO,
-        }
-    }
+    fn bottom_left_only(radius: Radius<Pixels>) -> Self;
 
     /// Creates a border radius with only the bottom-right corner having a radius.
-    pub const fn bottom_right_only(radius: Radius) -> Self {
-        Self {
-            top_left: Radius::ZERO,
-            top_right: Radius::ZERO,
-            bottom_left: Radius::ZERO,
-            bottom_right: radius,
-        }
-    }
+    fn bottom_right_only(radius: Radius<Pixels>) -> Self;
 
     /// Creates a border radius with vertical (top and bottom) corners having the same radius.
-    pub const fn vertical(top: Radius, bottom: Radius) -> Self {
-        Self {
-            top_left: top,
-            top_right: top,
-            bottom_left: bottom,
-            bottom_right: bottom,
-        }
-    }
+    fn vertical(top: Radius<Pixels>, bottom: Radius<Pixels>) -> Self;
 
     /// Creates a border radius with horizontal (left and right) corners having the same radius.
-    pub const fn horizontal(left: Radius, right: Radius) -> Self {
-        Self {
-            top_left: left,
-            top_right: right,
-            bottom_left: left,
-            bottom_right: right,
-        }
-    }
+    fn horizontal(left: Radius<Pixels>, right: Radius<Pixels>) -> Self;
 
     /// Creates a border radius for the top corners only.
     ///
@@ -121,18 +107,12 @@ impl BorderRadius {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::styling::{BorderRadius, Radius};
+    /// use flui_types::styling::BorderRadius;
+    /// use flui_types::geometry::{Radius, px};
     ///
-    /// let radius = BorderRadius::top(Radius::circular(16.0));
+    /// let radius = BorderRadius::top(Radius::circular(px(16.0)));
     /// ```
-    pub const fn top(radius: Radius) -> Self {
-        Self {
-            top_left: radius,
-            top_right: radius,
-            bottom_left: Radius::ZERO,
-            bottom_right: Radius::ZERO,
-        }
-    }
+    fn top(radius: Radius<Pixels>) -> Self;
 
     /// Creates a border radius for the bottom corners only.
     ///
@@ -141,18 +121,12 @@ impl BorderRadius {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::styling::{BorderRadius, Radius};
+    /// use flui_types::styling::BorderRadius;
+    /// use flui_types::geometry::{Radius, px};
     ///
-    /// let radius = BorderRadius::bottom(Radius::circular(16.0));
+    /// let radius = BorderRadius::bottom(Radius::circular(px(16.0)));
     /// ```
-    pub const fn bottom(radius: Radius) -> Self {
-        Self {
-            top_left: Radius::ZERO,
-            top_right: Radius::ZERO,
-            bottom_left: radius,
-            bottom_right: radius,
-        }
-    }
+    fn bottom(radius: Radius<Pixels>) -> Self;
 
     /// Creates a "pill" border radius (fully rounded sides).
     ///
@@ -167,90 +141,194 @@ impl BorderRadius {
     /// // Perfect for buttons, tags, and badges
     /// let radius = BorderRadius::pill();
     /// ```
-    pub const fn pill() -> Self {
-        Self::circular(9999.0)
-    }
+    fn pill() -> Self;
 
     /// A border radius with zero radius on all corners.
-    pub const ZERO: Self = Self {
-        top_left: Radius::ZERO,
-        top_right: Radius::ZERO,
-        bottom_left: Radius::ZERO,
-        bottom_right: Radius::ZERO,
-    };
+    const ZERO: Self;
 
     /// Linearly interpolate between two border radii.
-    pub fn lerp(a: Self, b: Self, t: f32) -> Self {
-        let t = t.clamp(0.0, 1.0);
-        Self {
-            top_left: Radius::lerp(a.top_left, b.top_left, t),
-            top_right: Radius::lerp(a.top_right, b.top_right, t),
-            bottom_left: Radius::lerp(a.bottom_left, b.bottom_left, t),
-            bottom_right: Radius::lerp(a.bottom_right, b.bottom_right, t),
-        }
-    }
+    fn lerp(a: Self, b: Self, t: f32) -> Self;
 
     /// Returns a copy of this border radius with the top-left corner replaced.
-    pub const fn with_top_left(self, top_left: Radius) -> Self {
-        Self { top_left, ..self }
-    }
+    fn with_top_left(self, top_left: Radius<Pixels>) -> Self;
 
     /// Returns a copy of this border radius with the top-right corner replaced.
-    pub const fn with_top_right(self, top_right: Radius) -> Self {
-        Self { top_right, ..self }
-    }
+    fn with_top_right(self, top_right: Radius<Pixels>) -> Self;
 
     /// Returns a copy of this border radius with the bottom-left corner replaced.
-    pub const fn with_bottom_left(self, bottom_left: Radius) -> Self {
-        Self {
+    fn with_bottom_left(self, bottom_left: Radius<Pixels>) -> Self;
+
+    /// Returns a copy of this border radius with the bottom-right corner replaced.
+    fn with_bottom_right(self, bottom_right: Radius<Pixels>) -> Self;
+}
+
+impl BorderRadiusExt for BorderRadius {
+    #[inline]
+    fn circular(radius: Pixels) -> Self {
+        Self::all(Radius::circular(radius))
+    }
+
+    #[inline]
+    fn elliptical(x: Pixels, y: Pixels) -> Self {
+        Self::all(Radius::elliptical(x, y))
+    }
+
+    #[inline]
+    fn all(radius: Radius<Pixels>) -> Self {
+        Corners::all(radius)
+    }
+
+    #[inline]
+    fn only(
+        top_left: Radius<Pixels>,
+        top_right: Radius<Pixels>,
+        bottom_right: Radius<Pixels>,
+        bottom_left: Radius<Pixels>,
+    ) -> Self {
+        Corners::new(top_left, top_right, bottom_right, bottom_left)
+    }
+
+    #[inline]
+    fn top_left_only(radius: Radius<Pixels>) -> Self {
+        Corners::new(radius, Radius::ZERO, Radius::ZERO, Radius::ZERO)
+    }
+
+    #[inline]
+    fn top_right_only(radius: Radius<Pixels>) -> Self {
+        Corners::new(Radius::ZERO, radius, Radius::ZERO, Radius::ZERO)
+    }
+
+    #[inline]
+    fn bottom_left_only(radius: Radius<Pixels>) -> Self {
+        Corners::new(Radius::ZERO, Radius::ZERO, Radius::ZERO, radius)
+    }
+
+    #[inline]
+    fn bottom_right_only(radius: Radius<Pixels>) -> Self {
+        Corners::new(Radius::ZERO, Radius::ZERO, radius, Radius::ZERO)
+    }
+
+    #[inline]
+    fn vertical(top: Radius<Pixels>, bottom: Radius<Pixels>) -> Self {
+        Corners::new(top, top, bottom, bottom)
+    }
+
+    #[inline]
+    fn horizontal(left: Radius<Pixels>, right: Radius<Pixels>) -> Self {
+        Corners::new(left, right, left, right)
+    }
+
+    #[inline]
+    fn top(radius: Radius<Pixels>) -> Self {
+        Corners::new(radius, radius, Radius::ZERO, Radius::ZERO)
+    }
+
+    #[inline]
+    fn bottom(radius: Radius<Pixels>) -> Self {
+        Corners::new(Radius::ZERO, Radius::ZERO, radius, radius)
+    }
+
+    #[inline]
+    fn pill() -> Self {
+        use crate::geometry::px;
+        Self::circular(px(9999.0))
+    }
+
+    const ZERO: Self = Corners {
+        top_left: Radius::ZERO,
+        top_right: Radius::ZERO,
+        bottom_right: Radius::ZERO,
+        bottom_left: Radius::ZERO,
+    };
+
+    #[inline]
+    fn lerp(a: Self, b: Self, t: f32) -> Self {
+        let t = t.clamp(0.0, 1.0);
+        Corners::new(
+            Radius::lerp(a.top_left, b.top_left, t),
+            Radius::lerp(a.top_right, b.top_right, t),
+            Radius::lerp(a.bottom_right, b.bottom_right, t),
+            Radius::lerp(a.bottom_left, b.bottom_left, t),
+        )
+    }
+
+    #[inline]
+    fn with_top_left(self, top_left: Radius<Pixels>) -> Self {
+        Corners { top_left, ..self }
+    }
+
+    #[inline]
+    fn with_top_right(self, top_right: Radius<Pixels>) -> Self {
+        Corners { top_right, ..self }
+    }
+
+    #[inline]
+    fn with_bottom_left(self, bottom_left: Radius<Pixels>) -> Self {
+        Corners {
             bottom_left,
             ..self
         }
     }
 
-    /// Returns a copy of this border radius with the bottom-right corner replaced.
-    pub const fn with_bottom_right(self, bottom_right: Radius) -> Self {
-        Self {
+    #[inline]
+    fn with_bottom_right(self, bottom_right: Radius<Pixels>) -> Self {
+        Corners {
             bottom_right,
             ..self
         }
     }
 }
 
-impl Default for BorderRadius {
-    fn default() -> Self {
-        Self::ZERO
-    }
-}
-
+/// Directional border radius that supports both LTR and RTL text directions.
+///
+/// Unlike [`BorderRadius`] which uses physical corners (top-left, top-right, etc.),
+/// `BorderRadiusDirectional` uses logical corners (top-start, top-end) that adapt
+/// to text direction.
+///
+/// # Examples
+///
+/// ```
+/// use flui_types::styling::BorderRadiusDirectional;
+/// use flui_types::geometry::{Radius, px};
+///
+/// let directional = BorderRadiusDirectional::circular(px(16.0));
+///
+/// // Resolve to physical corners based on text direction
+/// let ltr_radius = directional.resolve(true);   // LTR
+/// let rtl_radius = directional.resolve(false);  // RTL
+/// ```
+#[derive(Copy, Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct BorderRadiusDirectional {
     /// The top-start corner radius.
-    pub top_start: Radius,
+    pub top_start: Radius<Pixels>,
 
     /// The top-end corner radius.
-    pub top_end: Radius,
+    pub top_end: Radius<Pixels>,
 
     /// The bottom-start corner radius.
-    pub bottom_start: Radius,
+    pub bottom_start: Radius<Pixels>,
 
     /// The bottom-end corner radius.
-    pub bottom_end: Radius,
+    pub bottom_end: Radius<Pixels>,
 }
 
 impl BorderRadiusDirectional {
     /// Creates a directional border radius with all corners having the same circular radius.
-    pub const fn circular(radius: f32) -> Self {
+    #[inline]
+    pub fn circular(radius: Pixels) -> Self {
         Self::all(Radius::circular(radius))
     }
 
     /// Creates a directional border radius with all corners having the same elliptical radius.
-    pub const fn elliptical(x: f32, y: f32) -> Self {
+    #[inline]
+    pub fn elliptical(x: Pixels, y: Pixels) -> Self {
         Self::all(Radius::elliptical(x, y))
     }
 
     /// Creates a directional border radius with all corners having the same radius.
-    pub const fn all(radius: Radius) -> Self {
+    #[inline]
+    pub const fn all(radius: Radius<Pixels>) -> Self {
         Self {
             top_start: radius,
             top_end: radius,
@@ -260,11 +338,12 @@ impl BorderRadiusDirectional {
     }
 
     /// Creates a directional border radius with only the specified corners having radii.
+    #[inline]
     pub const fn only(
-        top_start: Radius,
-        top_end: Radius,
-        bottom_start: Radius,
-        bottom_end: Radius,
+        top_start: Radius<Pixels>,
+        top_end: Radius<Pixels>,
+        bottom_start: Radius<Pixels>,
+        bottom_end: Radius<Pixels>,
     ) -> Self {
         Self {
             top_start,
@@ -287,16 +366,17 @@ impl BorderRadiusDirectional {
     /// # Arguments
     ///
     /// * `ltr` - If true, uses left-to-right layout. If false, uses right-to-left.
+    #[inline]
     pub const fn resolve(self, ltr: bool) -> BorderRadius {
         if ltr {
-            BorderRadius {
+            Corners {
                 top_left: self.top_start,
                 top_right: self.top_end,
                 bottom_left: self.bottom_start,
                 bottom_right: self.bottom_end,
             }
         } else {
-            BorderRadius {
+            Corners {
                 top_left: self.top_end,
                 top_right: self.top_start,
                 bottom_left: self.bottom_end,
@@ -306,6 +386,7 @@ impl BorderRadiusDirectional {
     }
 
     /// Linearly interpolate between two directional border radii.
+    #[inline]
     pub fn lerp(a: Self, b: Self, t: f32) -> Self {
         let t = t.clamp(0.0, 1.0);
         Self {

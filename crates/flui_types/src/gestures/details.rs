@@ -12,6 +12,7 @@ use std::time::Duration;
 // Tap Gesture Details
 // ============================================================================
 
+#[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TapDownDetails {
     /// The global position where the tap occurred
@@ -41,6 +42,7 @@ impl TapDownDetails {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TapUpDetails {
     /// The global position where the tap ended
@@ -74,6 +76,7 @@ impl TapUpDetails {
 // Drag Gesture Details
 // ============================================================================
 
+#[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DragStartDetails {
     /// The time when the drag started
@@ -111,6 +114,7 @@ impl DragStartDetails {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DragDownDetails {
     /// The global position where the pointer contacted
@@ -130,6 +134,7 @@ impl DragDownDetails {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DragUpdateDetails {
     /// The time when the update occurred
@@ -175,6 +180,7 @@ impl DragUpdateDetails {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DragEndDetails {
     /// The velocity of the pointer when the drag ended
@@ -204,6 +210,7 @@ impl DragEndDetails {
 // Scale Gesture Details
 // ============================================================================
 
+#[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ScaleStartDetails {
     /// The focal point of the pointers in contact with the screen
@@ -223,6 +230,7 @@ impl ScaleStartDetails {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ScaleUpdateDetails {
     /// The focal point of the pointers in contact with the screen
@@ -282,6 +290,7 @@ impl ScaleUpdateDetails {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ScaleEndDetails {
     /// The velocity of the gesture
@@ -305,6 +314,7 @@ impl ScaleEndDetails {
 // Long Press Gesture Details
 // ============================================================================
 
+#[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct LongPressDownDetails {
     /// The global position where the pointer contacted
@@ -334,6 +344,7 @@ impl LongPressDownDetails {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct LongPressStartDetails {
     /// The global position where the long press started
@@ -353,6 +364,7 @@ impl LongPressStartDetails {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct LongPressMoveUpdateDetails {
     /// The global position of the pointer
@@ -385,6 +397,7 @@ impl LongPressMoveUpdateDetails {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct LongPressEndDetails {
     /// The global position where the long press ended
@@ -399,7 +412,11 @@ pub struct LongPressEndDetails {
 
 impl LongPressEndDetails {
     /// Creates new long press end details
-    pub const fn new(global_position: Offset<Pixels>, local_position: Offset<Pixels>, velocity: Velocity) -> Self {
+    pub const fn new(
+        global_position: Offset<Pixels>,
+        local_position: Offset<Pixels>,
+        velocity: Velocity,
+    ) -> Self {
         Self {
             global_position,
             local_position,
@@ -412,6 +429,7 @@ impl LongPressEndDetails {
 // Force Press Gesture Details
 // ============================================================================
 
+#[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ForcePressDetails {
     /// The global position of the pointer

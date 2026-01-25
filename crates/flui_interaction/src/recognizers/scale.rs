@@ -341,7 +341,7 @@ impl ScaleGestureRecognizer {
                     let now = Instant::now();
                     state
                         .scale_velocity_tracker
-                        .add_position(now, Offset::new(scale, 0.0));
+                        .add_position(now, Offset::new(Pixels(scale), Pixels(0.0)));
                     state.last_update_time = Some(now);
 
                     state.previous_span = Some(current_span);
@@ -398,7 +398,12 @@ impl ScaleGestureRecognizer {
 
                 // Calculate scale velocity from tracker
                 // The velocity is in scale units per second (e.g., 0.5 means scaling at 50% per second)
-                let velocity = state.scale_velocity_tracker.velocity().pixels_per_second.dx;
+                let velocity = state
+                    .scale_velocity_tracker
+                    .velocity()
+                    .pixels_per_second
+                    .dx
+                    .0;
 
                 state.phase = ScalePhase::Ready;
                 state.initial_span = None;
@@ -479,7 +484,7 @@ impl ScaleGestureRecognizer {
             return (0.0, 0.0, 0.0);
         }
 
-        let positions: Vec<&Offset> = pointers.values().collect();
+        let positions: Vec<&Offset<Pixels>> = pointers.values().collect();
 
         // Calculate average span between all pairs
         let mut total_distance = 0.0;
@@ -490,9 +495,9 @@ impl ScaleGestureRecognizer {
         for i in 0..positions.len() {
             for j in (i + 1)..positions.len() {
                 let delta = *positions[j] - *positions[i];
-                total_distance += delta.distance();
-                total_h_distance += delta.dx.abs();
-                total_v_distance += delta.dy.abs();
+                total_distance += delta.distance().0;
+                total_h_distance += delta.dx.abs().0;
+                total_v_distance += delta.dy.abs().0;
                 count += 1;
             }
         }
@@ -509,7 +514,10 @@ impl ScaleGestureRecognizer {
     }
 
     /// Calculate focal point (center of all pointers)
-    fn calculate_focal_point(&self, pointers: &HashMap<PointerId, Offset<Pixels>>) -> Offset<Pixels> {
+    fn calculate_focal_point(
+        &self,
+        pointers: &HashMap<PointerId, Offset<Pixels>>,
+    ) -> Offset<Pixels> {
         if pointers.is_empty() {
             return Offset::ZERO;
         }
@@ -518,12 +526,12 @@ impl ScaleGestureRecognizer {
         let mut sum_y = 0.0;
 
         for pos in pointers.values() {
-            sum_x += pos.dx;
-            sum_y += pos.dy;
+            sum_x += pos.dx.0;
+            sum_y += pos.dy.0;
         }
 
         let count = pointers.len() as f32;
-        Offset::new(sum_x / count, sum_y / count)
+        Offset::new(Pixels(sum_x / count), Pixels(sum_y / count))
     }
 
     /// Calculate rotation angle between pointers (in radians)
@@ -535,7 +543,7 @@ impl ScaleGestureRecognizer {
             return 0.0;
         }
 
-        let positions: Vec<&Offset> = pointers.values().collect();
+        let positions: Vec<&Offset<Pixels>> = pointers.values().collect();
 
         if positions.len() == 2 {
             // For exactly 2 pointers, calculate angle of line between them
@@ -549,9 +557,9 @@ impl ScaleGestureRecognizer {
 
             for pos in positions {
                 let delta = *pos - focal;
-                if delta.distance() > 0.001 {
+                if delta.distance() > Pixels(0.001) {
                     // Avoid division by zero
-                    total_angle += delta.dy.atan2(delta.dx);
+                    total_angle += delta.dy.0.atan2(delta.dx.0);
                     count += 1;
                 }
             }
@@ -584,7 +592,7 @@ impl GestureRecognizer for ScaleGestureRecognizer {
                 // In a real implementation, we'd track pointer IDs
                 if let Some(pointer) = self.state.primary_pointer() {
                     let pos = data.current.position;
-                    let position = Offset::new(pos.x as f32, pos.y as f32);
+                    let position = Offset::new(Pixels(pos.x as f32), Pixels(pos.y as f32));
                     self.handle_pointer_move(pointer, position);
                 }
             }
@@ -643,14 +651,14 @@ mod tests {
         let recognizer = ScaleGestureRecognizer::new(arena);
 
         let mut pointers = HashMap::new();
-        pointers.insert(PointerId::new(1), Offset::new(0.0, 0.0));
-        pointers.insert(PointerId::new(2), Offset::new(100.0, 100.0));
+        pointers.insert(PointerId::new(1), Offset::new(Pixels(0.0), Pixels(0.0)));
+        pointers.insert(PointerId::new(2), Offset::new(Pixels(100.0), Pixels(100.0)));
 
         let focal_point = recognizer.calculate_focal_point(&pointers);
 
         // Center should be at (50, 50)
-        assert!((focal_point.dx - 50.0).abs() < 0.01);
-        assert!((focal_point.dy - 50.0).abs() < 0.01);
+        assert!((focal_point.dx - Pixels(50.0)).abs() < Pixels(0.01));
+        assert!((focal_point.dy - Pixels(50.0)).abs() < Pixels(0.01));
     }
 
     #[test]
@@ -659,8 +667,8 @@ mod tests {
         let recognizer = ScaleGestureRecognizer::new(arena);
 
         let mut pointers = HashMap::new();
-        pointers.insert(PointerId::new(1), Offset::new(0.0, 0.0));
-        pointers.insert(PointerId::new(2), Offset::new(100.0, 0.0));
+        pointers.insert(PointerId::new(1), Offset::new(Pixels(0.0), Pixels(0.0)));
+        pointers.insert(PointerId::new(2), Offset::new(Pixels(100.0), Pixels(0.0)));
 
         let (span, h_span, v_span) = recognizer.calculate_spans(&pointers);
 
@@ -680,8 +688,8 @@ mod tests {
         let pointer2 = PointerId::new(2);
 
         // Add two pointers 100px apart
-        recognizer.add_pointer(pointer1, Offset::new(0.0, 0.0));
-        recognizer.add_pointer(pointer2, Offset::new(100.0, 0.0));
+        recognizer.add_pointer(pointer1, Offset::new(Pixels(0.0), Pixels(0.0)));
+        recognizer.add_pointer(pointer2, Offset::new(Pixels(100.0), Pixels(0.0)));
 
         // Verify we have 2 pointers and initial span is set
         let state = recognizer.gesture_state.lock();
@@ -691,7 +699,7 @@ mod tests {
 
         // Manually test scale calculation by updating pointer and checking span
         drop(state);
-        recognizer.handle_pointer_move(pointer2, Offset::new(200.0, 0.0));
+        recognizer.handle_pointer_move(pointer2, Offset::new(Pixels(200.0), Pixels(0.0)));
 
         let state = recognizer.gesture_state.lock();
         let current_span = recognizer.calculate_spans(&state.pointers).0;

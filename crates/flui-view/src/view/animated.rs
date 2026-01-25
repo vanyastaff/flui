@@ -116,7 +116,10 @@ macro_rules! impl_animated_view {
         impl $crate::View for $ty {
             fn create_element(&self) -> Box<dyn $crate::ElementBase> {
                 use $crate::element::AnimationBehavior;
-                Box::new($crate::AnimatedElement::new(self, AnimationBehavior::new(self)))
+                Box::new($crate::AnimatedElement::new(
+                    self,
+                    AnimationBehavior::new(self),
+                ))
             }
         }
     };
@@ -163,7 +166,10 @@ mod tests {
                 }
             }
 
-            Box::new(StatelessElement::new(&MinimalView, StatelessBehavior::new()))
+            Box::new(StatelessElement::new(
+                &MinimalView,
+                StatelessBehavior::new(),
+            ))
         }
     }
 

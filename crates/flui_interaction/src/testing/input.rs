@@ -9,8 +9,8 @@
 //! use flui_types::Offset;
 //! use ui_events::pointer::PointerType;
 //!
-//! let down = pointer_down(Offset::new(100.0, 100.0), PointerType::Mouse);
-//! let up = pointer_up(Offset::new(100.0, 100.0), PointerType::Mouse);
+//! let down = pointer_down(Offset::new(Pixels(100.0), Pixels(100.0)), PointerType::Mouse);
+//! let up = pointer_up(Offset::new(Pixels(100.0), Pixels(100.0)), PointerType::Mouse);
 //! ```
 
 use crate::events::{
@@ -240,7 +240,7 @@ mod tests {
 
     #[test]
     fn test_pointer_event_creation() {
-        let pos = Offset::new(100.0, 200.0);
+        let pos = Offset::new(Pixels(100.0), Pixels(200.0));
         let event = pointer_down(pos, PointerType::Mouse);
 
         assert_eq!(event.position(), pos);

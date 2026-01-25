@@ -121,8 +121,8 @@ impl RectInstance {
                 },
                 // Color
                 wgpu::VertexAttribute {
-                    offset: (std::mem::size_of::<[f32; 2]>() * 2
-                        + std::mem::size_of::<f32>()) as wgpu::BufferAddress,
+                    offset: (std::mem::size_of::<[f32; 2]>() * 2 + std::mem::size_of::<f32>())
+                        as wgpu::BufferAddress,
                     shader_location: 5,
                     format: wgpu::VertexFormat::Float32x4,
                 },
@@ -266,8 +266,13 @@ mod tests {
 
     #[test]
     fn test_rect_instance_creation() {
-        let instance =
-            RectInstance::new(Point::new(px(0.0), px(0.0)), px(100.0), px(50.0), 5.0, Color::BLUE);
+        let instance = RectInstance::new(
+            Point::new(px(0.0), px(0.0)),
+            px(100.0),
+            px(50.0),
+            5.0,
+            Color::BLUE,
+        );
         assert_eq!(instance.position, [0.0, 0.0]);
         assert_eq!(instance.size, [100.0, 50.0]);
         assert_eq!(instance.border_radius, 5.0);

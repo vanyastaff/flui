@@ -196,7 +196,7 @@ impl TransformPart {
             TransformPart::Matrix(m) => *m * rhs,
             TransformPart::Offset(o) => {
                 // Left multiply: Translation * rhs
-                Matrix4::translation(o.dx, o.dy, 0.0) * rhs
+                Matrix4::translation(o.dx.0, o.dy.0, 0.0) * rhs
             }
         }
     }
@@ -424,8 +424,8 @@ fn transform_pointer_event(event: &PointerEvent, transform: &Matrix4) -> Pointer
     use ui_events::pointer::{PointerButtonEvent, PointerScrollEvent, PointerUpdate};
 
     let transform_position = |pos: dpi::PhysicalPosition<f64>| -> dpi::PhysicalPosition<f64> {
-        let (x, y) = transform.transform_point(pos.x as f32, pos.y as f32);
-        dpi::PhysicalPosition::new(x as f64, y as f64)
+        let (x, y) = transform.transform_point(Pixels(pos.x as f32), Pixels(pos.y as f32));
+        dpi::PhysicalPosition::new(x.0 as f64, y.0 as f64)
     };
 
     match event {
@@ -508,7 +508,7 @@ mod tests {
     fn test_hit_test_result_transform_stack() {
         let mut result = HitTestResult::new();
 
-        result.push_offset(Offset::new(10.0, 20.0));
+        result.push_offset(Offset::new(Pixels(10.0), Pixels(20.0)));
         result.add(HitTestEntry::new(RenderId::new(1)));
 
         // Entry should have captured the transform
@@ -551,7 +551,10 @@ mod tests {
 
         result.add(HitTestEntry::new(RenderId::new(1)).handler(handler));
 
-        let event = crate::events::make_down_event(Offset::new(50.0, 50.0), PointerType::Mouse);
+        let event = crate::events::make_down_event(
+            Offset::new(Pixels(50.0), Pixels(50.0)),
+            PointerType::Mouse,
+        );
         result.dispatch(&event);
 
         assert!(*called.lock().unwrap());
@@ -583,7 +586,10 @@ mod tests {
         result.add(HitTestEntry::new(RenderId::new(1)).handler(handler1));
         result.add(HitTestEntry::new(RenderId::new(2)).handler(handler2));
 
-        let event = crate::events::make_down_event(Offset::new(50.0, 50.0), PointerType::Mouse);
+        let event = crate::events::make_down_event(
+            Offset::new(Pixels(50.0), Pixels(50.0)),
+            PointerType::Mouse,
+        );
         result.dispatch(&event);
 
         assert!(*first_called.lock().unwrap());

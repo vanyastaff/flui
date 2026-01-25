@@ -3,11 +3,10 @@
 //! Similar to Flutter's `RelativeRect`. Used for `Positioned` widget
 //! and animations like `RelativeRectTween`.
 
-use super::Pixels;
-use crate::{Offset, Rect, Size};
+use crate::{Offset, Size};
 
 use super::traits::{NumericUnit, Unit};
-use std::ops::{Add, Sub, Mul, Neg};
+use std::ops::{Add, Mul, Neg, Sub};
 
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct RelativeRect<T: Unit> {
@@ -20,10 +19,6 @@ pub struct RelativeRect<T: Unit> {
     /// Offset from the bottom edge of the parent (parent.height - child.bottom).
     pub bottom: T,
 }
-
-// ============================================================================
-// Constants (f32 only for backwards compatibility)
-// ============================================================================
 
 // ============================================================================
 // Basic Constructors (generic over Unit)
@@ -49,7 +44,6 @@ impl<T: NumericUnit> RelativeRect<T>
 where
     T: Add<Output = T> + Sub<Output = T> + Mul<f32, Output = T>,
 {
-
     #[must_use]
     pub fn from_size(offset: Offset<T>, size: Size<T>, parent: Size<T>) -> Self {
         Self {
@@ -114,14 +108,6 @@ where
 }
 
 // ============================================================================
-// f32 Float Operations
-// ============================================================================
-
-// ============================================================================
-// Lerp Support (f32 only)
-// ============================================================================
-
-// ============================================================================
 // Default Implementation
 // ============================================================================
 
@@ -135,4 +121,3 @@ impl<T: Unit> Default for RelativeRect<T> {
         }
     }
 }
-

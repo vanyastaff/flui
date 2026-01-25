@@ -200,28 +200,27 @@ f.along_offset(parent, child)  // Position child
 f.lerp(other, t)          // Interpolate
 ```
 
-### EdgeInsets
+### Edges<Pixels>
 
 ```rust
 // Create
-let e = EdgeInsets::all(16.0);
-let e = EdgeInsets::symmetric(horizontal, vertical);
-let e = EdgeInsets::only(left, top, right, bottom);
-let e = EdgeInsets::ZERO;
+let e = Edges::all(px(16.0));
+let e = Edges::symmetric(px(horizontal), px(vertical));
+let e = Edges::new(px(top), px(right), px(bottom), px(left));
+let e = Edges::<Pixels>::ZERO;
 
 // Access
 e.left, e.top, e.right, e.bottom
 
 // Operations
-e.horizontal()            // left + right
-e.vertical()              // top + bottom
+e.horizontal_total()      // left + right
+e.vertical_total()        // top + bottom
 e.total_size()            // Size(horizontal, vertical)
 e.deflate_rect(rect)      // Shrink rect
 e.inflate_rect(rect)      // Expand rect
 e.deflate_size(size)      // Shrink size
-e.lerp(other, t)          // Interpolate
 e + other, e - other      // Add/subtract
-e * 2.0, e / 2.0          // Scale
+e * other                 // Multiply
 ```
 
 ### BoxConstraints

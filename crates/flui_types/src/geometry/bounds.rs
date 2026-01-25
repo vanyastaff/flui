@@ -46,13 +46,17 @@
 //! assert_eq!(intersection.size.width, 5.0);
 //! ```
 
-use super::Pixels;
 use super::traits::{NumericUnit, Unit};
+use super::Pixels;
 use super::{Corner, Edges, Point, Rect, Size};
 use std::fmt::{self, Display};
 use std::ops::{Add, Div, Mul, Sub};
 
+/// Axis-aligned bounding rectangle defined by origin and size.
+///
+/// Generic over unit type `T` for type-safe coordinate system handling.
 #[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Bounds<T: Unit> {
     /// The origin point (top-left corner).
     pub origin: Point<T>,
@@ -74,11 +78,13 @@ impl<T: Unit> Default for Bounds<T> {
 // ============================================================================
 
 impl<T: Unit> Bounds<T> {
+    /// Creates new bounds from an origin point and size.
     #[must_use]
     pub const fn new(origin: Point<T>, size: Size<T>) -> Self {
         Self { origin, size }
     }
 
+    /// Maps the bounds to a different unit type by applying a function to each component.
     #[must_use]
     pub fn map<U: Unit>(&self, f: impl Fn(T) -> U + Copy) -> Bounds<U>
     where
@@ -90,6 +96,7 @@ impl<T: Unit> Bounds<T> {
         }
     }
 
+    /// Transforms the origin by applying a function while keeping the size unchanged.
     #[must_use]
     pub fn map_origin(self, f: impl Fn(T) -> T) -> Self
     where
@@ -101,6 +108,7 @@ impl<T: Unit> Bounds<T> {
         }
     }
 
+    /// Transforms the size by applying a function while keeping the origin unchanged.
     #[must_use]
     pub fn map_size(self, f: impl Fn(T) -> T) -> Self
     where
@@ -121,6 +129,9 @@ impl<T: Unit> Bounds<T>
 where
     T: Sub<Output = T>,
 {
+    /// Creates bounds from two corner points.
+    ///
+    /// Computes the size from the difference between bottom-right and top-left corners.
     #[must_use]
     pub fn from_corners(top_left: Point<T>, bottom_right: Point<T>) -> Self {
         Self {
@@ -129,6 +140,9 @@ where
         }
     }
 
+    /// Creates bounds from a specific corner point and size.
+    ///
+    /// The corner parameter determines which corner the origin point represents.
     #[must_use]
     pub fn from_corner_and_size(corner: Corner, origin: Point<T>, size: Size<T>) -> Self {
         let origin = match corner {
@@ -145,6 +159,7 @@ impl<T: Unit> Bounds<T>
 where
     T: Add<T, Output = T> + Sub<T, Output = T> + Div<f32, Output = T>,
 {
+    /// Creates bounds centered at the given point with the specified size.
     #[must_use]
     pub fn centered_at(center: Point<T>, size: Size<T>) -> Self {
         Self {
@@ -162,46 +177,58 @@ impl<T: Unit> Bounds<T>
 where
     T: Add<T, Output = T>,
 {
+    /// Returns the Y coordinate of the top edge.
     #[must_use]
     pub fn top(&self) -> T {
         self.origin.y
     }
 
+    /// Returns the Y coordinate of the bottom edge.
     #[must_use]
     pub fn bottom(&self) -> T {
         self.origin.y + self.size.height
     }
 
+    /// Returns the X coordinate of the left edge.
     #[must_use]
     pub fn left(&self) -> T {
         self.origin.x
     }
 
+    /// Returns the X coordinate of the right edge.
     #[must_use]
     pub fn right(&self) -> T {
         self.origin.x + self.size.width
     }
 
+    /// Returns the top-left corner point.
     #[must_use]
     pub fn top_left(&self) -> Point<T> {
         self.origin
     }
 
+    /// Returns the top-right corner point.
     #[must_use]
     pub fn top_right(&self) -> Point<T> {
         Point::new(self.origin.x + self.size.width, self.origin.y)
     }
 
+    /// Returns the bottom-left corner point.
     #[must_use]
     pub fn bottom_left(&self) -> Point<T> {
         Point::new(self.origin.x, self.origin.y + self.size.height)
     }
 
+    /// Returns the bottom-right corner point.
     #[must_use]
     pub fn bottom_right(&self) -> Point<T> {
-        Point::new(self.origin.x + self.size.width, self.origin.y + self.size.height)
+        Point::new(
+            self.origin.x + self.size.width,
+            self.origin.y + self.size.height,
+        )
     }
 
+    /// Returns the point at the specified corner.
     #[must_use]
     pub fn corner(&self, corner: Corner) -> Point<T> {
         match corner {
@@ -212,6 +239,7 @@ where
         }
     }
 
+    /// Returns the center point of the bounds.
     #[must_use]
     pub fn center(&self) -> Point<T>
     where
@@ -232,6 +260,9 @@ impl<T: Unit> Bounds<T>
 where
     T: PartialOrd + Add<T, Output = T>,
 {
+    /// Checks if these bounds overlap with another bounds.
+    ///
+    /// Returns `true` if the two bounds share any area.
     #[must_use]
     pub fn intersects(&self, other: &Self) -> bool {
         let my_br = self.bottom_right();
@@ -243,6 +274,9 @@ where
             && my_br.y > other.origin.y
     }
 
+    /// Checks if the given point is inside these bounds.
+    ///
+    /// Returns `true` if the point is within or on the edges of the bounds.
     #[must_use]
     pub fn contains(&self, point: &Point<T>) -> bool {
         point.x >= self.origin.x
@@ -251,6 +285,7 @@ where
             && point.y <= self.origin.y + self.size.height
     }
 
+    /// Checks if these bounds are completely contained within another bounds.
     #[must_use]
     pub fn is_contained_within(&self, other: &Self) -> bool {
         other.contains(&self.origin) && other.contains(&self.bottom_right())
@@ -261,6 +296,10 @@ impl<T: Unit> Bounds<T>
 where
     T: PartialOrd + Add<T, Output = T> + Sub<Output = T>,
 {
+    /// Computes the intersection of these bounds with another bounds.
+    ///
+    /// Returns a bounds representing the overlapping area. If there is no overlap,
+    /// the returned bounds may have negative or zero size.
     #[must_use]
     pub fn intersect(&self, other: &Self) -> Self {
         let top_left = Point::new(
@@ -295,6 +334,9 @@ where
         Self::from_corners(top_left, bottom_right)
     }
 
+    /// Computes the union of these bounds with another bounds.
+    ///
+    /// Returns the smallest bounds that completely contains both input bounds.
     #[must_use]
     pub fn union(&self, other: &Self) -> Self {
         let top_left = Point::new(
@@ -329,6 +371,10 @@ where
         Self::from_corners(top_left, bottom_right)
     }
 
+    /// Converts a global point to local coordinates relative to these bounds.
+    ///
+    /// Returns `Some(point)` with coordinates relative to the origin if the point is within
+    /// the bounds, or `None` if the point is outside.
     #[must_use]
     pub fn localize(&self, point: &Point<T>) -> Option<Point<T>> {
         if self.contains(point) {
@@ -347,6 +393,9 @@ impl<T: Unit> Bounds<T>
 where
     T: Add<T, Output = T> + Sub<T, Output = T>,
 {
+    /// Expands the bounds uniformly in all directions by the specified amount.
+    ///
+    /// The origin moves outward by `amount`, and the size increases by `2 * amount`.
     #[must_use]
     pub fn dilate(&self, amount: T) -> Self {
         let double_amount = amount + amount;
@@ -359,6 +408,9 @@ where
         }
     }
 
+    /// Extends the bounds by different amounts on each edge.
+    ///
+    /// The edges parameter specifies how much to expand each side.
     #[must_use]
     pub fn extend(&self, amount: Edges<T>) -> Self {
         Self {
@@ -370,6 +422,9 @@ where
         }
     }
 
+    /// Shrinks the bounds uniformly in all directions by the specified amount.
+    ///
+    /// This is the opposite of `dilate` - equivalent to `dilate(-amount)`.
     #[must_use]
     pub fn inset(&self, amount: T) -> Self
     where
@@ -378,6 +433,10 @@ where
         self.dilate(-amount)
     }
 
+    /// Computes the spacing between these bounds and an outer bounds.
+    ///
+    /// Returns edges representing the distance from each side of these bounds
+    /// to the corresponding side of the outer bounds.
     #[must_use]
     pub fn space_within(&self, outer: &Self) -> Edges<T> {
         Edges {
@@ -500,6 +559,7 @@ impl<T: Unit + NumericUnit> From<Bounds<T>> for Rect<T> {
 // ============================================================================
 
 impl Bounds<super::units::Pixels> {
+    /// Scales the bounds by a factor, converting to scaled pixels.
     #[must_use]
     pub fn scale(&self, factor: f32) -> Bounds<super::units::ScaledPixels> {
         Bounds {
@@ -514,6 +574,7 @@ impl Bounds<super::units::Pixels> {
 // ============================================================================
 
 impl Bounds<super::units::ScaledPixels> {
+    /// Converts scaled pixel bounds to device pixels by rounding.
     #[must_use]
     pub fn to_device_pixels(&self) -> Bounds<super::units::DevicePixels> {
         Bounds {
@@ -529,7 +590,7 @@ impl Bounds<super::units::ScaledPixels> {
 
 impl<T: Unit> super::traits::IsZero for Bounds<T>
 where
-    T: super::traits::IsZero
+    T: super::traits::IsZero,
 {
     #[inline]
     fn is_zero(&self) -> bool {
@@ -539,7 +600,7 @@ where
 
 impl<T: Unit> super::traits::ApproxEq for Bounds<T>
 where
-    T: super::traits::ApproxEq
+    T: super::traits::ApproxEq,
 {
     #[inline]
     fn approx_eq_eps(&self, other: &Self, epsilon: f32) -> bool {
@@ -554,15 +615,19 @@ where
 // ============================================================================
 
 impl<T: Unit> Bounds<T> {
+    /// Returns `true` if the bounds have zero or negative area.
     #[must_use]
     pub fn is_empty(&self) -> bool
     where
         T: super::traits::IsZero + PartialOrd,
     {
-        self.size.width.is_zero() || self.size.height.is_zero()
-            || self.size.width < T::zero() || self.size.height < T::zero()
+        self.size.width.is_zero()
+            || self.size.height.is_zero()
+            || self.size.width < T::zero()
+            || self.size.height < T::zero()
     }
 
+    /// Casts the bounds to a different unit type.
     #[must_use]
     pub fn cast<U: Unit>(self) -> Bounds<U>
     where
@@ -574,6 +639,7 @@ impl<T: Unit> Bounds<T> {
         }
     }
 
+    /// Converts the bounds to f32-based Pixels.
     #[must_use]
     pub fn to_f32(self) -> Bounds<Pixels>
     where
@@ -581,11 +647,10 @@ impl<T: Unit> Bounds<T> {
     {
         Bounds {
             origin: Point::new(Pixels(self.origin.x.into()), Pixels(self.origin.y.into())),
-            size: Size::new(Pixels(self.size.width.into()), Pixels(self.size.height.into())),
+            size: Size::new(
+                Pixels(self.size.width.into()),
+                Pixels(self.size.height.into()),
+            ),
         }
     }
 }
-
-// ============================================================================
-// Tests
-// ============================================================================

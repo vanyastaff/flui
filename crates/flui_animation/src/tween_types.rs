@@ -26,9 +26,9 @@
 //! ```
 
 use crate::curve::Curve;
-use flui_types::geometry::{Offset, Pixels, Rect, Size};
-use flui_types::layout::{Alignment, EdgeInsets};
-use flui_types::styling::{BorderRadius, Color};
+use flui_types::geometry::{Edges, Offset, Pixels, Rect, Size};
+use flui_types::layout::Alignment;
+use flui_types::styling::{BorderRadius, BorderRadiusExt, Color};
 
 /// A value that can be animated.
 ///
@@ -479,37 +479,37 @@ impl Tween<Alignment> for AlignmentTween {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct EdgeInsetsTween {
     /// The beginning edge insets.
-    pub begin: EdgeInsets,
+    pub begin: Edges<Pixels>,
     /// The ending edge insets.
-    pub end: EdgeInsets,
+    pub end: Edges<Pixels>,
 }
 
 impl EdgeInsetsTween {
     /// Creates a new edge insets tween.
     #[must_use]
-    pub const fn new(begin: EdgeInsets, end: EdgeInsets) -> Self {
+    pub const fn new(begin: Edges<Pixels>, end: Edges<Pixels>) -> Self {
         Self { begin, end }
     }
 }
 
-impl Animatable<EdgeInsets> for EdgeInsetsTween {
-    fn transform(&self, t: f32) -> EdgeInsets {
+impl Animatable<Edges<Pixels>> for EdgeInsetsTween {
+    fn transform(&self, t: f32) -> Edges<Pixels> {
         self.lerp(t)
     }
 }
 
-impl Tween<EdgeInsets> for EdgeInsetsTween {
-    fn begin(&self) -> &EdgeInsets {
+impl Tween<Edges<Pixels>> for EdgeInsetsTween {
+    fn begin(&self) -> &Edges<Pixels> {
         &self.begin
     }
 
-    fn end(&self) -> &EdgeInsets {
+    fn end(&self) -> &Edges<Pixels> {
         &self.end
     }
 
-    fn lerp(&self, t: f32) -> EdgeInsets {
+    fn lerp(&self, t: f32) -> Edges<Pixels> {
         let t = t.clamp(0.0, 1.0);
-        EdgeInsets::new(
+        Edges::new(
             self.begin.left + (self.end.left - self.begin.left) * t,
             self.begin.top + (self.end.top - self.begin.top) * t,
             self.begin.right + (self.end.right - self.begin.right) * t,
@@ -1016,13 +1016,14 @@ mod tests {
 
     #[test]
     fn test_edge_insets_tween() {
-        let begin = EdgeInsets::all(0.0);
-        let end = EdgeInsets::all(20.0);
+        use flui_types::geometry::px;
+        let begin = Edges::all(px(0.0));
+        let end = Edges::all(px(20.0));
         let tween = EdgeInsetsTween::new(begin, end);
 
         let mid = tween.transform(0.5);
-        assert_eq!(mid.left, 10.0);
-        assert_eq!(mid.top, 10.0);
+        assert_eq!(mid.left, px(10.0));
+        assert_eq!(mid.top, px(10.0));
     }
 
     #[test]

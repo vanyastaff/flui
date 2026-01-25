@@ -468,12 +468,12 @@ impl GestureRecognizer for LongPressGestureRecognizer {
         match event {
             PointerEvent::Move(data) => {
                 let pos = data.current.position;
-                let position = Offset::new(pos.x as f32, pos.y as f32);
+                let position = Offset::new(Pixels(pos.x as f32), Pixels(pos.y as f32));
                 self.handle_move(position, data.pointer.pointer_type);
             }
             PointerEvent::Up(data) => {
                 let pos = data.state.position;
-                let position = Offset::new(pos.x as f32, pos.y as f32);
+                let position = Offset::new(Pixels(pos.x as f32), Pixels(pos.y as f32));
                 self.handle_up(position, data.pointer.pointer_type);
             }
             PointerEvent::Cancel(info) => {
@@ -557,7 +557,7 @@ mod tests {
             });
 
         let pointer = PointerId::new(1);
-        let position = Offset::new(100.0, 100.0);
+        let position = Offset::new(Pixels(100.0), Pixels(100.0));
 
         // Start long press
         recognizer.add_pointer(pointer, position);
@@ -593,13 +593,13 @@ mod tests {
             });
 
         let pointer = PointerId::new(1);
-        let start_pos = Offset::new(100.0, 100.0);
+        let start_pos = Offset::new(Pixels(100.0), Pixels(100.0));
 
         // Start long press
         recognizer.add_pointer(pointer, start_pos);
 
         // Move too far (beyond TAP_SLOP = 18px)
-        let moved_pos = Offset::new(100.0, 130.0); // 30px away
+        let moved_pos = Offset::new(Pixels(100.0), Pixels(130.0)); // 30px away
         recognizer.handle_event(&crate::events::make_move_event(
             moved_pos,
             PointerType::Touch,
@@ -623,7 +623,7 @@ mod tests {
             });
 
         let pointer = PointerId::new(1);
-        let position = Offset::new(100.0, 100.0);
+        let position = Offset::new(Pixels(100.0), Pixels(100.0));
 
         // Start long press
         recognizer.add_pointer(pointer, position);
@@ -633,7 +633,7 @@ mod tests {
         recognizer.check_timer();
 
         // Move slightly (within slop)
-        let moved_pos = Offset::new(105.0, 105.0);
+        let moved_pos = Offset::new(Pixels(105.0), Pixels(105.0));
         recognizer.handle_event(&crate::events::make_move_event(
             moved_pos,
             PointerType::Touch,

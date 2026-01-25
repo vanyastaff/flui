@@ -153,7 +153,10 @@ macro_rules! impl_stateful_view {
         impl $crate::View for $ty {
             fn create_element(&self) -> Box<dyn $crate::ElementBase> {
                 use $crate::element::StatefulBehavior;
-                Box::new($crate::StatefulElement::new(self, StatefulBehavior::new(self)))
+                Box::new($crate::StatefulElement::new(
+                    self,
+                    StatefulBehavior::new(self),
+                ))
             }
         }
     };

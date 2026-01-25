@@ -4,13 +4,12 @@ use std::time::Instant;
 use windows::Win32::Foundation::*;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 
-use flui_types::geometry::{Point, px};
-use crate::traits::{
-    KeyCode, KeyDownEvent, KeyUpEvent, LogicalKey, Modifiers,
-    MouseButton, NamedKey, PlatformInput, PointerEvent, PointerKind, PointerPhase,
-    ScrollDelta, ScrollPhase, ScrollWheelEvent,
-};
 use super::util::*;
+use crate::traits::{
+    KeyCode, KeyDownEvent, KeyUpEvent, LogicalKey, Modifiers, MouseButton, NamedKey, PlatformInput,
+    PointerEvent, PointerKind, PointerPhase, ScrollDelta, ScrollPhase, ScrollWheelEvent,
+};
+use flui_types::geometry::{px, Point};
 
 /// Convert VK_* to KeyCode
 pub fn vk_to_keycode(vk: VIRTUAL_KEY) -> KeyCode {
@@ -223,11 +222,7 @@ pub fn mouse_move_event(
 }
 
 /// Convert WM_MOUSEWHEEL to ScrollWheelEvent
-pub fn mouse_wheel_event(
-    wparam: WPARAM,
-    lparam: LPARAM,
-    scale_factor: f32,
-) -> PlatformInput {
+pub fn mouse_wheel_event(wparam: WPARAM, lparam: LPARAM, scale_factor: f32) -> PlatformInput {
     // Get wheel delta (HIWORD of wparam)
     let delta = ((wparam.0 as i32) >> 16) as i16 as f32;
     let lines = delta / 120.0; // WHEEL_DELTA = 120
@@ -242,10 +237,7 @@ pub fn mouse_wheel_event(
             px(device_to_logical(x, scale_factor)),
             px(device_to_logical(y, scale_factor)),
         ),
-        delta: ScrollDelta::Lines {
-            x: 0.0,
-            y: lines,
-        },
+        delta: ScrollDelta::Lines { x: 0.0, y: lines },
         modifiers,
         phase: ScrollPhase::Changed,
     };
@@ -254,10 +246,7 @@ pub fn mouse_wheel_event(
 }
 
 /// Convert WM_KEYDOWN to KeyDownEvent
-pub fn key_down_event(
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> PlatformInput {
+pub fn key_down_event(wparam: WPARAM, lparam: LPARAM) -> PlatformInput {
     let vk = VIRTUAL_KEY(wparam.0 as u16);
     let scan_code = ((lparam.0 >> 16) & 0xFF) as u16;
     let is_repeat = (lparam.0 & (1 << 30)) != 0;
@@ -276,10 +265,7 @@ pub fn key_down_event(
 }
 
 /// Convert WM_KEYUP to KeyUpEvent
-pub fn key_up_event(
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> PlatformInput {
+pub fn key_up_event(wparam: WPARAM, lparam: LPARAM) -> PlatformInput {
     let vk = VIRTUAL_KEY(wparam.0 as u16);
     let scan_code = ((lparam.0 >> 16) & 0xFF) as u16;
 
@@ -319,12 +305,7 @@ mod tests {
     #[test]
     fn test_mouse_button_event() {
         let lparam = LPARAM(((200 << 16) | 100) as isize);
-        let event = mouse_button_event(
-            MouseButton::Left,
-            PointerPhase::Down,
-            lparam,
-            1.0,
-        );
+        let event = mouse_button_event(MouseButton::Left, PointerPhase::Down, lparam, 1.0);
 
         if let PlatformInput::Pointer(ptr) = event {
             assert_eq!(ptr.position.x.0, 100.0);

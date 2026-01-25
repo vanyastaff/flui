@@ -53,8 +53,8 @@
 //! - [Flutter FocusScopeNode](https://api.flutter.dev/flutter/widgets/FocusScopeNode-class.html)
 //! - [Understanding Flutter's keyboard focus system](https://docs.flutter.dev/ui/interactivity/focus)
 
-use parking_lot::{Mutex, RwLock};
 use flui_types::geometry::Pixels;
+use parking_lot::{Mutex, RwLock};
 use std::cmp::Ordering;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering};
@@ -1108,17 +1108,32 @@ mod tests {
         let nodes = vec![
             {
                 let n = FocusNode::new();
-                n.set_rect(Rect::from_xywh(100.0, 0.0, 50.0, 30.0)); // right
+                n.set_rect(Rect::from_xywh(
+                    Pixels(100.0),
+                    Pixels(0.0),
+                    Pixels(50.0),
+                    Pixels(30.0),
+                )); // right
                 n
             },
             {
                 let n = FocusNode::new();
-                n.set_rect(Rect::from_xywh(0.0, 0.0, 50.0, 30.0)); // left
+                n.set_rect(Rect::from_xywh(
+                    Pixels(0.0),
+                    Pixels(0.0),
+                    Pixels(50.0),
+                    Pixels(30.0),
+                )); // left
                 n
             },
             {
                 let n = FocusNode::new();
-                n.set_rect(Rect::from_xywh(0.0, 50.0, 50.0, 30.0)); // bottom
+                n.set_rect(Rect::from_xywh(
+                    Pixels(0.0),
+                    Pixels(50.0),
+                    Pixels(50.0),
+                    Pixels(30.0),
+                )); // bottom
                 n
             },
         ];

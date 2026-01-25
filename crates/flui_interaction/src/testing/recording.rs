@@ -11,9 +11,9 @@
 //!
 //! // Record a gesture
 //! let mut recorder = GestureRecorder::new();
-//! recorder.record_down(PointerId::new(0), Offset::new(100.0, 100.0));
-//! recorder.record_move(PointerId::new(0), Offset::new(150.0, 100.0));
-//! recorder.record_up(PointerId::new(0), Offset::new(200.0, 100.0));
+//! recorder.record_down(PointerId::new(0), Offset::new(Pixels(100.0), Pixels(100.0)));
+//! recorder.record_move(PointerId::new(0), Offset::new(Pixels(150.0), Pixels(100.0)));
+//! recorder.record_up(PointerId::new(0), Offset::new(Pixels(200.0), Pixels(100.0)));
 //!
 //! // Save/export the recording
 //! let recording = recorder.finish();
@@ -294,7 +294,7 @@ impl GestureRecorder {
                 let pos = data.state.position;
                 (
                     RecordedEventType::Down,
-                    Offset::new(pos.x as f32, pos.y as f32),
+                    Offset::new(Pixels(pos.x as f32), Pixels(pos.y as f32)),
                     data.pointer.pointer_type,
                     Some(data.state.pressure),
                 )
@@ -303,7 +303,7 @@ impl GestureRecorder {
                 let pos = data.state.position;
                 (
                     RecordedEventType::Up,
-                    Offset::new(pos.x as f32, pos.y as f32),
+                    Offset::new(Pixels(pos.x as f32), Pixels(pos.y as f32)),
                     data.pointer.pointer_type,
                     Some(data.state.pressure),
                 )
@@ -312,7 +312,7 @@ impl GestureRecorder {
                 let pos = data.current.position;
                 (
                     RecordedEventType::Move,
-                    Offset::new(pos.x as f32, pos.y as f32),
+                    Offset::new(Pixels(pos.x as f32), Pixels(pos.y as f32)),
                     data.pointer.pointer_type,
                     Some(data.current.pressure),
                 )
@@ -533,17 +533,30 @@ impl GestureBuilder {
     }
 
     /// Create a horizontal drag gesture
-    pub fn horizontal_drag(start: Offset<Pixels>, end: Offset<Pixels>, steps: usize) -> GestureRecording {
+    pub fn horizontal_drag(
+        start: Offset<Pixels>,
+        end: Offset<Pixels>,
+        steps: usize,
+    ) -> GestureRecording {
         Self::drag(start, end, steps, "horizontal_drag")
     }
 
     /// Create a vertical drag gesture
-    pub fn vertical_drag(start: Offset<Pixels>, end: Offset<Pixels>, steps: usize) -> GestureRecording {
+    pub fn vertical_drag(
+        start: Offset<Pixels>,
+        end: Offset<Pixels>,
+        steps: usize,
+    ) -> GestureRecording {
         Self::drag(start, end, steps, "vertical_drag")
     }
 
     /// Create a drag gesture with intermediate steps
-    pub fn drag(start: Offset<Pixels>, end: Offset<Pixels>, steps: usize, name: &str) -> GestureRecording {
+    pub fn drag(
+        start: Offset<Pixels>,
+        end: Offset<Pixels>,
+        steps: usize,
+        name: &str,
+    ) -> GestureRecording {
         let mut recording = GestureRecording::with_name(name);
         let pointer = PointerId::new(0);
 
@@ -597,8 +610,8 @@ impl GestureBuilder {
 
         // Calculate start positions
         let start_offset = start_distance / 2.0;
-        let start1 = Offset::new(center.dx - start_offset, center.dy);
-        let start2 = Offset::new(center.dx + start_offset, center.dy);
+        let start1 = Offset::new(center.dx - Pixels(start_offset), center.dy);
+        let start2 = Offset::new(center.dx + Pixels(start_offset), center.dy);
 
         // Down for both fingers
         recording.push(RecordedEvent::new(
@@ -620,8 +633,8 @@ impl GestureBuilder {
             let current_distance = start_distance + (end_distance - start_distance) * t;
             let offset = current_distance / 2.0;
 
-            let pos1 = Offset::new(center.dx - offset, center.dy);
-            let pos2 = Offset::new(center.dx + offset, center.dy);
+            let pos1 = Offset::new(center.dx - Pixels(offset), center.dy);
+            let pos2 = Offset::new(center.dx + Pixels(offset), center.dy);
 
             let time = Duration::from_millis(20 + 16 * i as u64);
             recording.push(RecordedEvent::new(
@@ -640,8 +653,8 @@ impl GestureBuilder {
 
         // Up for both fingers
         let end_offset = end_distance / 2.0;
-        let end1 = Offset::new(center.dx - end_offset, center.dy);
-        let end2 = Offset::new(center.dx + end_offset, center.dy);
+        let end1 = Offset::new(center.dx - Pixels(end_offset), center.dy);
+        let end2 = Offset::new(center.dx + Pixels(end_offset), center.dy);
 
         let final_time = Duration::from_millis(20 + 16 * (steps + 1) as u64);
         recording.push(RecordedEvent::new(
@@ -674,11 +687,11 @@ mod tests {
     fn test_recorder_basic() {
         let mut recorder = GestureRecorder::new();
         let pointer = PointerId::new(0);
-        let pos = Offset::new(100.0, 100.0);
+        let pos = Offset::new(Pixels(100.0), Pixels(100.0));
 
         recorder.record_down(pointer, pos);
-        recorder.record_move(pointer, Offset::new(110.0, 100.0));
-        recorder.record_up(pointer, Offset::new(120.0, 100.0));
+        recorder.record_move(pointer, Offset::new(Pixels(110.0), Pixels(100.0)));
+        recorder.record_up(pointer, Offset::new(Pixels(120.0), Pixels(100.0)));
 
         let recording = recorder.finish();
 
@@ -690,7 +703,7 @@ mod tests {
 
     #[test]
     fn test_player_iteration() {
-        let recording = GestureBuilder::tap(Offset::new(50.0, 50.0));
+        let recording = GestureBuilder::tap(Offset::new(Pixels(50.0), Pixels(50.0)));
         let player = GesturePlayer::new(recording);
 
         let events: Vec<_> = player.collect();
@@ -704,7 +717,7 @@ mod tests {
 
     #[test]
     fn test_player_reset() {
-        let recording = GestureBuilder::tap(Offset::new(0.0, 0.0));
+        let recording = GestureBuilder::tap(Offset::new(Pixels(0.0), Pixels(0.0)));
         let mut player = GesturePlayer::new(recording);
 
         // Consume all events
@@ -719,7 +732,7 @@ mod tests {
 
     #[test]
     fn test_double_tap_builder() {
-        let recording = GestureBuilder::double_tap(Offset::new(100.0, 100.0));
+        let recording = GestureBuilder::double_tap(Offset::new(Pixels(100.0), Pixels(100.0)));
 
         assert_eq!(recording.len(), 4);
         assert_eq!(recording.events[0].event_type, RecordedEventType::Down);
@@ -730,8 +743,11 @@ mod tests {
 
     #[test]
     fn test_drag_builder() {
-        let recording =
-            GestureBuilder::horizontal_drag(Offset::new(0.0, 0.0), Offset::new(100.0, 0.0), 5);
+        let recording = GestureBuilder::horizontal_drag(
+            Offset::new(Pixels(0.0), Pixels(0.0)),
+            Offset::new(Pixels(100.0), Pixels(0.0)),
+            5,
+        );
 
         // 1 down + 5 moves + 1 up = 7 events
         assert_eq!(recording.len(), 7);
@@ -742,12 +758,12 @@ mod tests {
         let mid_event = &recording.events[3];
         assert_eq!(mid_event.event_type, RecordedEventType::Move);
         // Position should be around 60% of the way (event 3 of 5 moves)
-        assert!(mid_event.position.dx > 50.0 && mid_event.position.dx < 70.0);
+        assert!(mid_event.position.dx > Pixels(50.0) && mid_event.position.dx < Pixels(70.0));
     }
 
     #[test]
     fn test_pinch_builder() {
-        let center = Offset::new(200.0, 200.0);
+        let center = Offset::new(Pixels(200.0), Pixels(200.0));
         let recording = GestureBuilder::pinch(center, 100.0, 200.0, 5);
 
         // 2 downs + 5*2 moves + 2 ups = 14 events
@@ -764,7 +780,7 @@ mod tests {
             Duration::ZERO,
             PointerId::new(0),
             RecordedEventType::Down,
-            Offset::new(0.0, 0.0),
+            Offset::new(Pixels(0.0), Pixels(0.0)),
         )
         .with_pressure(0.5)
         .with_device_kind(PointerType::Pen);
@@ -788,7 +804,7 @@ mod tests {
 
     #[test]
     fn test_player_all_events() {
-        let recording = GestureBuilder::tap(Offset::new(0.0, 0.0));
+        let recording = GestureBuilder::tap(Offset::new(Pixels(0.0), Pixels(0.0)));
         let player = GesturePlayer::new(recording);
 
         let events = player.all_events();
@@ -797,7 +813,7 @@ mod tests {
 
     #[test]
     fn test_long_press_builder() {
-        let recording = GestureBuilder::long_press(Offset::new(50.0, 50.0), 600);
+        let recording = GestureBuilder::long_press(Offset::new(Pixels(50.0), Pixels(50.0)), 600);
 
         assert_eq!(recording.len(), 2);
         assert!(recording.duration >= Duration::from_millis(600));
@@ -805,7 +821,10 @@ mod tests {
 
     #[test]
     fn test_swipe_builder() {
-        let recording = GestureBuilder::swipe(Offset::new(0.0, 0.0), Offset::new(300.0, 0.0));
+        let recording = GestureBuilder::swipe(
+            Offset::new(Pixels(0.0), Pixels(0.0)),
+            Offset::new(Pixels(300.0), Pixels(0.0)),
+        );
 
         // Swipe is a fast drag with 5 steps
         assert_eq!(recording.len(), 7); // 1 down + 5 moves + 1 up

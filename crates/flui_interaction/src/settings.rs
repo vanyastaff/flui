@@ -19,6 +19,7 @@
 //! assert_eq!(mouse_settings.touch_slop(), 1.0);
 //! ```
 
+use flui_types::geometry::Pixels;
 use std::time::Duration;
 use ui_events::pointer::PointerType;
 
@@ -326,14 +327,14 @@ impl GestureSettings {
 
     /// Check if a distance exceeds the touch slop.
     #[inline]
-    pub fn exceeds_touch_slop(&self, distance: f32) -> bool {
-        distance > self.touch_slop
+    pub fn exceeds_touch_slop(&self, distance: Pixels) -> bool {
+        distance.0 > self.touch_slop
     }
 
     /// Check if a distance exceeds the pan slop.
     #[inline]
-    pub fn exceeds_pan_slop(&self, distance: f32) -> bool {
-        distance > self.pan_slop
+    pub fn exceeds_pan_slop(&self, distance: Pixels) -> bool {
+        distance.0 > self.pan_slop
     }
 
     /// Check if a scale factor exceeds the scale slop.
@@ -417,9 +418,9 @@ mod tests {
     fn test_exceeds_touch_slop() {
         let settings = GestureSettings::default();
 
-        assert!(!settings.exceeds_touch_slop(10.0));
-        assert!(!settings.exceeds_touch_slop(18.0)); // Equal is not exceeded
-        assert!(settings.exceeds_touch_slop(19.0));
+        assert!(!settings.exceeds_touch_slop(Pixels(10.0)));
+        assert!(!settings.exceeds_touch_slop(Pixels(18.0))); // Equal is not exceeded
+        assert!(settings.exceeds_touch_slop(Pixels(19.0)));
     }
 
     #[test]

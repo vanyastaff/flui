@@ -5,9 +5,9 @@
 
 use std::sync::Arc;
 use wgpu::{
-    BlendState, ColorTargetState, ColorWrites, Device, FragmentState, FrontFace,
-    MultisampleState, PipelineLayoutDescriptor, PolygonMode, PrimitiveState, PrimitiveTopology,
-    RenderPipeline, RenderPipelineDescriptor, ShaderModule, TextureFormat, VertexState,
+    BlendState, ColorTargetState, ColorWrites, Device, FragmentState, FrontFace, MultisampleState,
+    PipelineLayoutDescriptor, PolygonMode, PrimitiveState, PrimitiveTopology, RenderPipeline,
+    RenderPipelineDescriptor, ShaderModule, TextureFormat, VertexState,
 };
 
 use super::vertex::{ImageInstance, PathVertex, RectInstance, RectVertex};
@@ -247,7 +247,11 @@ pub struct PipelineBuilder<'a> {
 
 impl<'a> PipelineBuilder<'a> {
     /// Create a new pipeline builder
-    pub fn new(device: &'a Device, shader: &'a ShaderModule, surface_format: TextureFormat) -> Self {
+    pub fn new(
+        device: &'a Device,
+        shader: &'a ShaderModule,
+        surface_format: TextureFormat,
+    ) -> Self {
         Self {
             device,
             label: None,
@@ -301,49 +305,52 @@ impl<'a> PipelineBuilder<'a> {
     /// Full implementation requires vertex buffer descriptors.
     #[must_use]
     pub fn build(self) -> RenderPipeline {
-        let pipeline_layout = self.device.create_pipeline_layout(&PipelineLayoutDescriptor {
-            label: self.label,
-            bind_group_layouts: &[],
-            push_constant_ranges: &[],
-        });
+        let pipeline_layout = self
+            .device
+            .create_pipeline_layout(&PipelineLayoutDescriptor {
+                label: self.label,
+                bind_group_layouts: &[],
+                push_constant_ranges: &[],
+            });
 
-        self.device.create_render_pipeline(&RenderPipelineDescriptor {
-            label: self.label,
-            layout: Some(&pipeline_layout),
-            vertex: VertexState {
-                module: self.shader,
-                entry_point: self.vertex_entry,
-                buffers: &[], // Caller should set vertex buffers separately
-                compilation_options: Default::default(),
-            },
-            fragment: Some(FragmentState {
-                module: self.shader,
-                entry_point: self.fragment_entry,
-                targets: &[Some(ColorTargetState {
-                    format: self.surface_format,
-                    blend: Some(self.blend_state),
-                    write_mask: ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: PrimitiveState {
-                topology: self.topology,
-                strip_index_format: None,
-                front_face: FrontFace::Ccw,
-                cull_mode: None,
-                polygon_mode: PolygonMode::Fill,
-                unclipped_depth: false,
-                conservative: false,
-            },
-            depth_stencil: None,
-            multisample: MultisampleState {
-                count: 1,
-                mask: !0,
-                alpha_to_coverage_enabled: false,
-            },
-            multiview: None,
-            cache: None,
-        })
+        self.device
+            .create_render_pipeline(&RenderPipelineDescriptor {
+                label: self.label,
+                layout: Some(&pipeline_layout),
+                vertex: VertexState {
+                    module: self.shader,
+                    entry_point: self.vertex_entry,
+                    buffers: &[], // Caller should set vertex buffers separately
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(FragmentState {
+                    module: self.shader,
+                    entry_point: self.fragment_entry,
+                    targets: &[Some(ColorTargetState {
+                        format: self.surface_format,
+                        blend: Some(self.blend_state),
+                        write_mask: ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                primitive: PrimitiveState {
+                    topology: self.topology,
+                    strip_index_format: None,
+                    front_face: FrontFace::Ccw,
+                    cull_mode: None,
+                    polygon_mode: PolygonMode::Fill,
+                    unclipped_depth: false,
+                    conservative: false,
+                },
+                depth_stencil: None,
+                multisample: MultisampleState {
+                    count: 1,
+                    mask: !0,
+                    alpha_to_coverage_enabled: false,
+                },
+                multiview: None,
+                cache: None,
+            })
     }
 }
 

@@ -1,6 +1,8 @@
 //! Integration tests for type-safe scale conversions in geometry types
 
-use flui_types::geometry::{Point, Size, Rect, Offset, ScaleFactor, Pixels, DevicePixels, px, device_px};
+use flui_types::geometry::{
+    device_px, px, DevicePixels, Offset, Pixels, Point, Rect, ScaleFactor, Size,
+};
 
 #[test]
 fn test_point_scale_with() {
@@ -46,7 +48,7 @@ fn test_size_unscale() {
 fn test_rect_scale_with() {
     let logical = Rect::from_points(
         Point::new(px(10.0), px(20.0)),
-        Point::new(px(110.0), px(220.0))
+        Point::new(px(110.0), px(220.0)),
     );
     let scale = ScaleFactor::<Pixels, DevicePixels>::new(2.0);
     let device = logical.scale_with(scale);
@@ -61,7 +63,7 @@ fn test_rect_scale_with() {
 fn test_rect_unscale() {
     let device = Rect::from_points(
         Point::new(device_px(20), device_px(40)),
-        Point::new(device_px(220), device_px(440))
+        Point::new(device_px(220), device_px(440)),
     );
     let scale = ScaleFactor::<Pixels, DevicePixels>::new(2.0);
     let logical = device.unscale(scale);

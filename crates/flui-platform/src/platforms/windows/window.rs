@@ -1,23 +1,23 @@
 //! Windows window implementation
 
+use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::ptr::NonNull;
 use std::sync::Arc;
-use parking_lot::Mutex;
 
 use anyhow::{Context, Result};
-use raw_window_handle::{HasWindowHandle, HasDisplayHandle, RawWindowHandle, RawDisplayHandle};
+use raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle};
 use raw_window_handle::{Win32WindowHandle, WindowsDisplayHandle};
+use windows::core::{HSTRING, PCWSTR};
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::System::LibraryLoader::*;
 use windows::Win32::UI::HiDpi::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
-use windows::core::{HSTRING, PCWSTR};
 
-use flui_types::geometry::{Bounds, DevicePixels, Pixels, Point, Size, device_px, px};
-use crate::traits::*;
 use super::util::{logical_to_device, USER_DEFAULT_SCREEN_DPI};
+use crate::traits::*;
+use flui_types::geometry::{device_px, px, Bounds, DevicePixels, Pixels, Point, Size};
 
 const WINDOW_CLASS_NAME: PCWSTR = windows::core::w!("FluiWindowClass");
 
@@ -101,7 +101,8 @@ impl WindowsWindow {
                 None, // menu
                 hinstance,
                 None, // lpParam
-            ).context("Failed to create window")?;
+            )
+            .context("Failed to create window")?;
 
             if hwnd.is_invalid() {
                 return Err(windows::core::Error::from_win32().into());
@@ -109,7 +110,12 @@ impl WindowsWindow {
 
             tracing::info!(
                 "Created window HWND {:?} - {}x{} at ({}, {}) - scale: {}",
-                hwnd, width, height, x, y, scale_factor
+                hwnd,
+                width,
+                height,
+                x,
+                y,
+                scale_factor
             );
 
             // Create window state with default bounds (actual bounds will be set after creation)
@@ -231,18 +237,19 @@ impl PlatformWindow for WindowsWindow {
 
 // Implement raw-window-handle for wgpu integration
 impl HasWindowHandle for WindowsWindow {
-    fn window_handle(&self) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
+    fn window_handle(
+        &self,
+    ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
         use std::num::NonZeroIsize;
 
         let hwnd_value = self.hwnd.0 as isize;
         let mut handle = Win32WindowHandle::new(
-            NonZeroIsize::new(hwnd_value)
-                .ok_or(raw_window_handle::HandleError::Unavailable)?
+            NonZeroIsize::new(hwnd_value).ok_or(raw_window_handle::HandleError::Unavailable)?,
         );
 
         unsafe {
-            let hinstance = GetModuleHandleW(None)
-                .map_err(|_| raw_window_handle::HandleError::Unavailable)?;
+            let hinstance =
+                GetModuleHandleW(None).map_err(|_| raw_window_handle::HandleError::Unavailable)?;
             let hinstance_value = hinstance.0 as isize;
             handle.hinstance = NonZeroIsize::new(hinstance_value);
         }
@@ -252,9 +259,13 @@ impl HasWindowHandle for WindowsWindow {
 }
 
 impl HasDisplayHandle for WindowsWindow {
-    fn display_handle(&self) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
+    fn display_handle(
+        &self,
+    ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
         let handle = WindowsDisplayHandle::new();
-        Ok(unsafe { raw_window_handle::DisplayHandle::borrow_raw(RawDisplayHandle::Windows(handle)) })
+        Ok(unsafe {
+            raw_window_handle::DisplayHandle::borrow_raw(RawDisplayHandle::Windows(handle))
+        })
     }
 }
 
@@ -306,7 +317,11 @@ mod tests {
         let windows_map = Arc::new(Mutex::new(HashMap::new()));
         let result = WindowsWindow::new(options, windows_map);
 
-        assert!(result.is_ok(), "Failed to create window: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Failed to create window: {:?}",
+            result.err()
+        );
 
         let window = result.unwrap();
         assert!(!window.hwnd().is_invalid());

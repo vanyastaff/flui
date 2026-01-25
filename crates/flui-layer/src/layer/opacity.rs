@@ -3,6 +3,7 @@
 //! This layer applies an opacity (alpha) value to its children.
 //! Corresponds to Flutter's `OpacityLayer`.
 
+use flui_types::geometry::Pixels;
 use flui_types::Offset;
 
 /// Layer that applies opacity (alpha blending) to its children.
@@ -50,7 +51,7 @@ pub struct OpacityLayer {
     alpha: f32,
 
     /// Optional offset (for optimization, avoids extra OffsetLayer)
-    offset: Offset,
+    offset: Offset<Pixels>,
 }
 
 impl OpacityLayer {
@@ -71,7 +72,7 @@ impl OpacityLayer {
     ///
     /// Combining offset with opacity avoids needing a separate OffsetLayer.
     #[inline]
-    pub fn with_offset(alpha: f32, offset: Offset) -> Self {
+    pub fn with_offset(alpha: f32, offset: Offset<Pixels>) -> Self {
         Self {
             alpha: alpha.clamp(0.0, 1.0),
             offset,
@@ -112,13 +113,13 @@ impl OpacityLayer {
 
     /// Returns the offset.
     #[inline]
-    pub const fn offset(&self) -> Offset {
+    pub const fn offset(&self) -> Offset<Pixels> {
         self.offset
     }
 
     /// Sets the offset.
     #[inline]
-    pub fn set_offset(&mut self, offset: Offset) {
+    pub fn set_offset(&mut self, offset: Offset<Pixels>) {
         self.offset = offset;
     }
 

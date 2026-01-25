@@ -745,11 +745,11 @@ impl Canvas {
     /// # Panics
     ///
     /// In debug builds, panics if `radius` is negative or NaN.
-    pub fn draw_circle(&mut self, center: Point<Pixels>, radius: f32, paint: &Paint) {
+    pub fn draw_circle(&mut self, center: Point<Pixels>, radius: Pixels, paint: &Paint) {
         debug_assert!(
-            radius >= 0.0 && !radius.is_nan(),
+            radius.0 >= 0.0 && !radius.0.is_nan(),
             "Circle radius must be non-negative and not NaN, got: {}",
-            radius
+            radius.0
         );
 
         self.display_list.push(DrawCommand::DrawCircle {
@@ -835,7 +835,12 @@ impl Canvas {
     /// * `text_scale_factor` - Scale factor for accessibility
     ///
     /// [`TextPainter`]: crate::TextPainter
-    pub fn draw_text_span(&mut self, span: &InlineSpan, offset: Offset<Pixels>, text_scale_factor: f64) {
+    pub fn draw_text_span(
+        &mut self,
+        span: &InlineSpan,
+        offset: Offset<Pixels>,
+        text_scale_factor: f64,
+    ) {
         self.display_list.push(DrawCommand::DrawTextSpan {
             span: span.clone(),
             offset,
@@ -1520,13 +1525,13 @@ impl Canvas {
     /// In debug builds, panics if `radius` is negative or NaN.
     #[inline]
     pub fn draw_point(&mut self, point: Point<Pixels>, radius: f32, paint: &Paint) {
-        self.draw_circle(point, radius, paint);
+        self.draw_circle(point, Pixels(radius), paint);
     }
 
     /// Draws multiple points
     pub fn draw_points(&mut self, points: &[Point<Pixels>], radius: f32, paint: &Paint) {
         for &point in points {
-            self.draw_circle(point, radius, paint);
+            self.draw_circle(point, Pixels(radius), paint);
         }
     }
 
@@ -1669,7 +1674,11 @@ impl Canvas {
     ///
     /// canvas.append_display_list_at_offset(&cached_display_list, offset);
     /// ```
-    pub fn append_display_list_at_offset(&mut self, display_list: &DisplayList, offset: Offset<Pixels>) {
+    pub fn append_display_list_at_offset(
+        &mut self,
+        display_list: &DisplayList,
+        offset: Offset<Pixels>,
+    ) {
         // If offset is zero, we can potentially optimize
         if offset.dx == px(0.0) && offset.dy == px(0.0) {
             // Clone and append directly
@@ -2325,7 +2334,7 @@ impl Canvas {
     #[inline]
     pub fn draw_circles(&mut self, circles: &[(Point<Pixels>, f32)], paint: &Paint) {
         for (center, radius) in circles {
-            self.draw_circle(*center, *radius, paint);
+            self.draw_circle(*center, Pixels(*radius), paint);
         }
     }
 
@@ -2383,7 +2392,13 @@ impl Canvas {
 
     /// Draws a circle only if the condition is true.
     #[inline]
-    pub fn draw_circle_if(&mut self, condition: bool, center: Point<Pixels>, radius: f32, paint: &Paint) {
+    pub fn draw_circle_if(
+        &mut self,
+        condition: bool,
+        center: Point<Pixels>,
+        radius: Pixels,
+        paint: &Paint,
+    ) {
         if condition {
             self.draw_circle(center, radius, paint);
         }
@@ -2600,7 +2615,7 @@ impl Canvas {
         );
 
         // Origin point (blue)
-        self.draw_circle(origin, 3.0, &Paint::fill(Color::BLUE));
+        self.draw_circle(origin, px(3.0), &Paint::fill(Color::BLUE));
     }
 
     /// Draws a debug grid overlay.
@@ -2648,8 +2663,8 @@ impl Canvas {
     /// canvas.draw_rounded_rect(rect, 10.0, &paint);
     /// ```
     #[inline]
-    pub fn draw_rounded_rect(&mut self, rect: Rect<Pixels>, radius: f32, paint: &Paint) {
-        let rrect = RRect::from_rect_circular(rect, px(radius));
+    pub fn draw_rounded_rect(&mut self, rect: Rect<Pixels>, radius: Pixels, paint: &Paint) {
+        let rrect = RRect::from_rect_circular(rect, radius);
         self.draw_rrect(rrect, paint);
     }
 
@@ -2693,7 +2708,7 @@ impl Canvas {
     #[inline]
     pub fn draw_pill(&mut self, rect: Rect<Pixels>, paint: &Paint) {
         let radius = rect.width().min(rect.height()).0 / 2.0;
-        self.draw_rounded_rect(rect, radius, paint);
+        self.draw_rounded_rect(rect, Pixels(radius), paint);
     }
 
     /// Draws a ring (donut shape).
@@ -2845,14 +2860,14 @@ impl Canvas {
     /// Draws a rectangle with uniform corner radius and returns self for chaining.
     #[inline]
     pub fn rounded_rect(&mut self, rect: Rect, radius: f32, paint: &Paint) -> &mut Self {
-        self.draw_rounded_rect(rect, radius, paint);
+        self.draw_rounded_rect(rect, Pixels(radius), paint);
         self
     }
 
     /// Draws a circle and returns self for chaining.
     #[inline]
     pub fn circle(&mut self, center: Point<Pixels>, radius: f32, paint: &Paint) -> &mut Self {
-        self.draw_circle(center, radius, paint);
+        self.draw_circle(center, Pixels(radius), paint);
         self
     }
 

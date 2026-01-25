@@ -61,7 +61,10 @@ pub fn arc_position(
     let angle = start_angle + arc_length * t;
 
     CharTransform {
-        position: Point::new(px((radius * angle.cos()) as f32), px((radius * angle.sin()) as f32)),
+        position: Point::new(
+            px((radius * angle.cos()) as f32),
+            px((radius * angle.sin()) as f32),
+        ),
         rotation: angle + PI / 2.0, // Rotate 90° to face outward
     }
 }
@@ -84,7 +87,10 @@ pub fn spiral_position(
     let radius = start_radius + (radius_per_revolution * revolutions * t);
 
     CharTransform {
-        position: Point::new(px((radius * angle.cos()) as f32), px((radius * angle.sin()) as f32)),
+        position: Point::new(
+            px((radius * angle.cos()) as f32),
+            px((radius * angle.sin()) as f32),
+        ),
         rotation: angle + PI / 2.0,
     }
 }
@@ -129,8 +135,10 @@ where
     let t2 = t * t;
 
     // Convert to f32 for calculation, then back to T
-    let x = mt2 as f32 * p0.x.into() + 2.0 * (mt * t) as f32 * p1.x.into() + t2 as f32 * p2.x.into();
-    let y = mt2 as f32 * p0.y.into() + 2.0 * (mt * t) as f32 * p1.y.into() + t2 as f32 * p2.y.into();
+    let x =
+        mt2 as f32 * p0.x.into() + 2.0 * (mt * t) as f32 * p1.x.into() + t2 as f32 * p2.x.into();
+    let y =
+        mt2 as f32 * p0.y.into() + 2.0 * (mt * t) as f32 * p1.y.into() + t2 as f32 * p2.y.into();
 
     Point::new(T::from(x), T::from(y))
 }
@@ -159,7 +167,11 @@ where
 }
 
 #[inline]
-pub fn parametric_position<F>(char_index: usize, total_chars: usize, path_fn: F) -> CharTransform<Pixels>
+pub fn parametric_position<F>(
+    char_index: usize,
+    total_chars: usize,
+    path_fn: F,
+) -> CharTransform<Pixels>
 where
     F: Fn(f64) -> (f64, f64, f64),
 {

@@ -479,7 +479,10 @@ impl LayerBuilder {
             clip: self.clip,
         };
 
-        let mut scene_builder = self.scene_builder.take().expect("SceneBuilder should exist");
+        let mut scene_builder = self
+            .scene_builder
+            .take()
+            .expect("SceneBuilder should exist");
         scene_builder.layers.push(layer);
         scene_builder
     }
@@ -684,7 +687,9 @@ impl Primitive {
     pub fn bounds(&self) -> Rect<DevicePixels> {
         match self {
             Primitive::Rect { rect, .. } => *rect,
-            Primitive::Text { position, style, .. } => {
+            Primitive::Text {
+                position, style, ..
+            } => {
                 // Approximate bounds (will be refined with actual text layout)
                 let font_size = style.font_size.unwrap_or(14.0);
                 Rect::new(
@@ -720,14 +725,24 @@ impl Primitive {
                 Rect::new(min_x, min_y, max_x, max_y)
             }
             Primitive::Image { rect, .. } => *rect,
-            Primitive::Underline { start, end, thickness, .. } => {
+            Primitive::Underline {
+                start,
+                end,
+                thickness,
+                ..
+            } => {
                 let min_x = DevicePixels(start.x.0.min(end.x.0));
                 let max_x = DevicePixels(start.x.0.max(end.x.0));
                 let min_y = DevicePixels((start.y.0 as f32 - thickness / 2.0) as i32);
                 let max_y = DevicePixels((end.y.0 as f32 + thickness / 2.0) as i32);
                 Rect::new(min_x, min_y, max_x, max_y)
             }
-            Primitive::Shadow { primitive, offset, blur_radius, .. } => {
+            Primitive::Shadow {
+                primitive,
+                offset,
+                blur_radius,
+                ..
+            } => {
                 let base_bounds = primitive.bounds();
                 let offset_bounds = Rect::new(
                     DevicePixels(base_bounds.min_x().0 + offset.x.0),
@@ -753,7 +768,11 @@ pub enum PathCommand {
     MoveTo(Point<DevicePixels>),
     LineTo(Point<DevicePixels>),
     QuadraticTo(Point<DevicePixels>, Point<DevicePixels>),
-    CubicTo(Point<DevicePixels>, Point<DevicePixels>, Point<DevicePixels>),
+    CubicTo(
+        Point<DevicePixels>,
+        Point<DevicePixels>,
+        Point<DevicePixels>,
+    ),
     Close,
 }
 
@@ -1016,9 +1035,7 @@ mod tests {
     #[test]
     fn test_scene_with_clear_color() {
         let viewport = Size::new(px(800.0), px(600.0));
-        let scene = Scene::builder(viewport)
-            .clear_color(Color::BLACK)
-            .build();
+        let scene = Scene::builder(viewport).clear_color(Color::BLACK).build();
 
         assert_eq!(scene.clear_color(), Color::BLACK);
     }
@@ -1044,7 +1061,10 @@ mod tests {
 
         let scene = Scene::builder(viewport)
             .push_layer()
-            .add_rect(Rect::new(px(0.0), px(0.0), px(100.0), px(100.0)), Color::RED)
+            .add_rect(
+                Rect::new(px(0.0), px(0.0), px(100.0), px(100.0)),
+                Color::RED,
+            )
             .finish()
             .push_layer()
             .add_rect(
@@ -1064,7 +1084,10 @@ mod tests {
 
         let scene = Scene::builder(viewport)
             .push_layer()
-            .add_rect(Rect::new(px(0.0), px(0.0), px(100.0), px(100.0)), Color::RED)
+            .add_rect(
+                Rect::new(px(0.0), px(0.0), px(100.0), px(100.0)),
+                Color::RED,
+            )
             .opacity(0.5)
             .finish()
             .build();
@@ -1078,7 +1101,10 @@ mod tests {
 
         let scene = Scene::builder(viewport)
             .push_layer()
-            .add_rect(Rect::new(px(0.0), px(0.0), px(100.0), px(100.0)), Color::RED)
+            .add_rect(
+                Rect::new(px(0.0), px(0.0), px(100.0), px(100.0)),
+                Color::RED,
+            )
             .blend_mode(BlendMode::Multiply)
             .finish()
             .build();
@@ -1093,7 +1119,10 @@ mod tests {
 
         let scene = Scene::builder(viewport)
             .push_layer()
-            .add_rect(Rect::new(px(10.0), px(10.0), px(100.0), px(100.0)), Color::RED)
+            .add_rect(
+                Rect::new(px(10.0), px(10.0), px(100.0), px(100.0)),
+                Color::RED,
+            )
             .clip(clip_rect)
             .finish()
             .build();
@@ -1175,8 +1204,14 @@ mod tests {
 
         let scene = Scene::builder(viewport)
             .push_layer()
-            .add_rect(Rect::new(px(0.0), px(0.0), px(100.0), px(100.0)), Color::RED)
-            .add_rect(Rect::new(px(110.0), px(0.0), px(100.0), px(100.0)), Color::BLUE)
+            .add_rect(
+                Rect::new(px(0.0), px(0.0), px(100.0), px(100.0)),
+                Color::RED,
+            )
+            .add_rect(
+                Rect::new(px(110.0), px(0.0), px(100.0), px(100.0)),
+                Color::BLUE,
+            )
             .add_text(
                 "Test".to_string(),
                 Point::new(px(20.0), px(20.0)),
@@ -1196,7 +1231,10 @@ mod tests {
 
         let scene = Scene::builder(viewport)
             .push_layer()
-            .add_rect(Rect::new(px(0.0), px(0.0), px(100.0), px(100.0)), Color::RED)
+            .add_rect(
+                Rect::new(px(0.0), px(0.0), px(100.0), px(100.0)),
+                Color::RED,
+            )
             .transform(transform)
             .finish()
             .build();
@@ -1210,7 +1248,10 @@ mod tests {
 
         let scene1 = Scene::builder(viewport)
             .push_layer()
-            .add_rect(Rect::new(px(0.0), px(0.0), px(100.0), px(100.0)), Color::RED)
+            .add_rect(
+                Rect::new(px(0.0), px(0.0), px(100.0), px(100.0)),
+                Color::RED,
+            )
             .opacity(1.5) // Should clamp to 1.0
             .finish()
             .build();
@@ -1219,7 +1260,10 @@ mod tests {
 
         let scene2 = Scene::builder(viewport)
             .push_layer()
-            .add_rect(Rect::new(px(0.0), px(0.0), px(100.0), px(100.0)), Color::RED)
+            .add_rect(
+                Rect::new(px(0.0), px(0.0), px(100.0), px(100.0)),
+                Color::RED,
+            )
             .opacity(-0.5) // Should clamp to 0.0
             .finish()
             .build();
@@ -1231,7 +1275,10 @@ mod tests {
     fn test_standalone_layer_builder() {
         let mut builder = Layer::builder();
         builder
-            .add_rect(Rect::new(px(0.0), px(0.0), px(100.0), px(100.0)), Color::RED)
+            .add_rect(
+                Rect::new(px(0.0), px(0.0), px(100.0), px(100.0)),
+                Color::RED,
+            )
             .opacity(0.8);
 
         let layer = builder.build();
@@ -1342,7 +1389,10 @@ mod tests {
             let viewport = Size::new(px(800.0), px(600.0));
             let scene = Scene::builder(viewport)
                 .push_layer()
-                .add_rect(Rect::new(px(0.0), px(0.0), px(100.0), px(100.0)), Color::RED)
+                .add_rect(
+                    Rect::new(px(0.0), px(0.0), px(100.0), px(100.0)),
+                    Color::RED,
+                )
                 .blend_mode(mode)
                 .finish_layer()
                 .build();
@@ -1376,7 +1426,10 @@ mod tests {
         let viewport = Size::new(px(800.0), px(600.0));
         let scene = Scene::builder(viewport)
             .push_layer()
-            .add_rect(Rect::new(px(0.0), px(0.0), px(100.0), px(100.0)), Color::RED)
+            .add_rect(
+                Rect::new(px(0.0), px(0.0), px(100.0), px(100.0)),
+                Color::RED,
+            )
             .finish()
             .build();
 
@@ -1391,9 +1444,18 @@ mod tests {
         let viewport = Size::new(px(800.0), px(600.0));
         let scene = Scene::builder(viewport)
             .push_layer()
-            .add_rect(Rect::new(px(0.0), px(0.0), px(100.0), px(100.0)), Color::RED)
-            .add_rect(Rect::new(px(110.0), px(0.0), px(100.0), px(100.0)), Color::BLUE)
-            .add_rect(Rect::new(px(220.0), px(0.0), px(100.0), px(100.0)), Color::GREEN)
+            .add_rect(
+                Rect::new(px(0.0), px(0.0), px(100.0), px(100.0)),
+                Color::RED,
+            )
+            .add_rect(
+                Rect::new(px(110.0), px(0.0), px(100.0), px(100.0)),
+                Color::BLUE,
+            )
+            .add_rect(
+                Rect::new(px(220.0), px(0.0), px(100.0), px(100.0)),
+                Color::GREEN,
+            )
             .finish()
             .build();
 
@@ -1408,14 +1470,20 @@ mod tests {
         let viewport = Size::new(px(800.0), px(600.0));
         let scene = Scene::builder(viewport)
             .push_layer()
-            .add_rect(Rect::new(px(0.0), px(0.0), px(100.0), px(100.0)), Color::RED)
+            .add_rect(
+                Rect::new(px(0.0), px(0.0), px(100.0), px(100.0)),
+                Color::RED,
+            )
             .add_text(
                 "Hello".to_string(),
                 Point::new(px(10.0), px(10.0)),
                 TextStyle::default(),
                 Color::BLACK,
             )
-            .add_rect(Rect::new(px(110.0), px(0.0), px(100.0), px(100.0)), Color::BLUE)
+            .add_rect(
+                Rect::new(px(110.0), px(0.0), px(100.0), px(100.0)),
+                Color::BLUE,
+            )
             .finish()
             .build();
 
@@ -1492,10 +1560,16 @@ mod tests {
         let viewport = Size::new(px(800.0), px(600.0));
         let scene = Scene::builder(viewport)
             .push_layer()
-            .add_rect(Rect::new(px(0.0), px(0.0), px(100.0), px(100.0)), Color::RED)
+            .add_rect(
+                Rect::new(px(0.0), px(0.0), px(100.0), px(100.0)),
+                Color::RED,
+            )
             .finish()
             .push_layer()
-            .add_rect(Rect::new(px(110.0), px(0.0), px(100.0), px(100.0)), Color::BLUE)
+            .add_rect(
+                Rect::new(px(110.0), px(0.0), px(100.0), px(100.0)),
+                Color::BLUE,
+            )
             .finish()
             .build();
 
@@ -1577,7 +1651,10 @@ mod tests {
         let viewport = Size::new(px(800.0), px(600.0));
         let scene = Scene::builder(viewport)
             .push_layer()
-            .add_rect(Rect::new(px(0.0), px(0.0), px(100.0), px(100.0)), Color::RED)
+            .add_rect(
+                Rect::new(px(0.0), px(0.0), px(100.0), px(100.0)),
+                Color::RED,
+            )
             .opacity(0.5)
             .blend_mode(BlendMode::Multiply)
             .finish()
@@ -1594,7 +1671,10 @@ mod tests {
         let viewport = Size::new(px(800.0), px(600.0));
         let scene = Scene::builder(viewport)
             .push_layer()
-            .add_rect(Rect::new(px(0.0), px(0.0), px(100.0), px(100.0)), Color::RED)
+            .add_rect(
+                Rect::new(px(0.0), px(0.0), px(100.0), px(100.0)),
+                Color::RED,
+            )
             .finish()
             .build();
 
@@ -1609,7 +1689,10 @@ mod tests {
 
         let scene = Scene::builder(viewport)
             .push_layer()
-            .add_rect(Rect::new(px(0.0), px(0.0), px(100.0), px(100.0)), Color::RED)
+            .add_rect(
+                Rect::new(px(0.0), px(0.0), px(100.0), px(100.0)),
+                Color::RED,
+            )
             .transform(transform)
             .finish()
             .build();
@@ -1625,7 +1708,10 @@ mod tests {
 
         let scene1 = Scene::builder(viewport)
             .push_layer()
-            .add_rect(Rect::new(px(0.0), px(0.0), px(100.0), px(100.0)), Color::RED)
+            .add_rect(
+                Rect::new(px(0.0), px(0.0), px(100.0), px(100.0)),
+                Color::RED,
+            )
             .opacity(1.0)
             .finish()
             .build();
@@ -1635,7 +1721,10 @@ mod tests {
 
         let scene2 = Scene::builder(viewport)
             .push_layer()
-            .add_rect(Rect::new(px(0.0), px(0.0), px(100.0), px(100.0)), Color::RED)
+            .add_rect(
+                Rect::new(px(0.0), px(0.0), px(100.0), px(100.0)),
+                Color::RED,
+            )
             .opacity(0.5)
             .finish()
             .build();
@@ -1651,7 +1740,10 @@ mod tests {
 
         let scene = Scene::builder(viewport)
             .push_layer()
-            .add_rect(Rect::new(px(0.0), px(0.0), px(100.0), px(100.0)), Color::RED)
+            .add_rect(
+                Rect::new(px(0.0), px(0.0), px(100.0), px(100.0)),
+                Color::RED,
+            )
             .clip(clip)
             .finish()
             .build();

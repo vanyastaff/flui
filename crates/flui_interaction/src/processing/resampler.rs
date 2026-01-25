@@ -44,8 +44,8 @@
 //! });
 //! ```
 
-use parking_lot::Mutex;
 use flui_types::geometry::Pixels;
+use parking_lot::Mutex;
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -308,7 +308,7 @@ mod tests {
     fn test_add_event() {
         let resampler = PointerEventResampler::new(PointerId::new(0));
 
-        let event = make_down_event(Offset::new(10.0, 20.0), PointerType::Mouse);
+        let event = make_down_event(Offset::new(Pixels(10.0), Pixels(20.0)), PointerType::Mouse);
         resampler.add_event(event);
 
         assert!(resampler.is_tracked());
@@ -321,7 +321,7 @@ mod tests {
         let resampler = PointerEventResampler::new(PointerId::new(0));
 
         // Add down event
-        let event = make_down_event(Offset::new(10.0, 20.0), PointerType::Mouse);
+        let event = make_down_event(Offset::new(Pixels(10.0), Pixels(20.0)), PointerType::Mouse);
         resampler.add_event(event);
 
         // Sample events
@@ -339,10 +339,10 @@ mod tests {
     fn test_stop_flushes_events() {
         let resampler = PointerEventResampler::new(PointerId::new(0));
 
-        let down = make_down_event(Offset::new(10.0, 20.0), PointerType::Mouse);
+        let down = make_down_event(Offset::new(Pixels(10.0), Pixels(20.0)), PointerType::Mouse);
         resampler.add_event(down);
 
-        let mv = make_move_event(Offset::new(20.0, 30.0), PointerType::Mouse);
+        let mv = make_move_event(Offset::new(Pixels(20.0), Pixels(30.0)), PointerType::Mouse);
         resampler.add_event(mv);
 
         let mut flushed_events = Vec::new();
@@ -359,7 +359,7 @@ mod tests {
     fn test_clear() {
         let resampler = PointerEventResampler::new(PointerId::new(0));
 
-        let event = make_down_event(Offset::new(10.0, 20.0), PointerType::Mouse);
+        let event = make_down_event(Offset::new(Pixels(10.0), Pixels(20.0)), PointerType::Mouse);
         resampler.add_event(event);
 
         assert!(resampler.has_pending_events());

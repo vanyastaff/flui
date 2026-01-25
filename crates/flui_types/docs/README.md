@@ -75,7 +75,7 @@ fn main() {
     let center = rect.center();
     
     // Layout
-    let padding = EdgeInsets::all(16.0);
+    let padding = Edges::all(px(16.0));
     let alignment = Alignment::CENTER;
     
     // Styling
@@ -129,7 +129,7 @@ let align = Alignment::TOP_LEFT; // (-1, -1)
 let frac = FractionalOffset::CENTER; // (0.5, 0.5)
 
 // Padding/margins
-let insets = EdgeInsets::symmetric(16.0, 8.0);
+let insets = Edges::symmetric(px(16.0), px(8.0));
 
 // Box constraints
 let constraints = BoxConstraints::tight(Size::new(100.0, 50.0));
@@ -172,7 +172,7 @@ let friction = FrictionSimulation::new(0.135, 0.0, 1000.0);
 | Category | Types | Purpose |
 |----------|-------|---------|
 | **Geometry** | `Point`, `Offset`, `Size`, `Rect`, `RRect`, `Matrix4` | Spatial primitives |
-| **Layout** | `Alignment`, `EdgeInsets`, `BoxConstraints`, `Axis` | Widget layout |
+| **Layout** | `Alignment`, `Edges`, `BoxConstraints`, `Axis` | Widget layout |
 | **Styling** | `Color`, `Paint`, `Gradient`, `BoxDecoration` | Visual appearance |
 | **Typography** | `TextStyle`, `FontWeight`, `TextAlign` | Text rendering |
 | **Animation** | `Curve`, `Tween`, `AnimationStatus` | Motion |
@@ -202,7 +202,7 @@ Compact, cache-friendly types:
 | `Rect` | 16 bytes | 4 × f32 |
 | `Color` | 4 bytes | u32 (packed RGBA) |
 | `Matrix4` | 64 bytes | 16 × f32 |
-| `EdgeInsets` | 16 bytes | 4 × f32 |
+| `Edges<Pixels>` | 16 bytes | 4 × f32 |
 
 ## Best Practices
 

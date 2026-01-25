@@ -41,7 +41,7 @@ use flui_foundation::LayerId;
 use crate::layer::Layer;
 use crate::link_registry::LinkRegistry;
 use crate::tree::LayerTree;
-use flui_types::Size;
+use flui_types::{Pixels, Size};
 
 // ============================================================================
 // SCENE
@@ -65,7 +65,7 @@ use flui_types::Size;
 #[derive(Debug)]
 pub struct Scene {
     /// Viewport size
-    size: Size,
+    size: Size<Pixels>,
 
     /// Layer tree containing all layers
     layer_tree: LayerTree,
@@ -82,7 +82,7 @@ pub struct Scene {
 
 impl Scene {
     /// Creates a new empty Scene.
-    pub fn empty(size: Size) -> Self {
+    pub fn empty(size: Size<Pixels>) -> Self {
         Self {
             size,
             layer_tree: LayerTree::new(),
@@ -94,7 +94,7 @@ impl Scene {
 
     /// Creates a new Scene with LayerTree and root.
     pub fn new(
-        size: Size,
+        size: Size<Pixels>,
         layer_tree: LayerTree,
         root: Option<LayerId>,
         frame_number: u64,
@@ -110,7 +110,7 @@ impl Scene {
 
     /// Creates a Scene with full metadata.
     pub fn with_links(
-        size: Size,
+        size: Size<Pixels>,
         layer_tree: LayerTree,
         root: Option<LayerId>,
         link_registry: LinkRegistry,
@@ -128,7 +128,7 @@ impl Scene {
     /// Creates a Scene from a single layer (convenience method).
     ///
     /// Creates a LayerTree with a single layer as root.
-    pub fn from_layer(size: Size, layer: Layer, frame_number: u64) -> Self {
+    pub fn from_layer(size: Size<Pixels>, layer: Layer, frame_number: u64) -> Self {
         let mut tree = LayerTree::new();
         let root_id = tree.insert(layer);
         Self {
@@ -142,7 +142,7 @@ impl Scene {
 
     /// Returns the viewport size.
     #[inline]
-    pub fn size(&self) -> Size {
+    pub fn size(&self) -> Size<Pixels> {
         self.size
     }
 

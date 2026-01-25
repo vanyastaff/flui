@@ -1,12 +1,17 @@
 //! Decoration types for styling
 
+use crate::geometry::traits::{NumericUnit, Unit};
 use crate::layout::Alignment;
 use crate::painting::Image;
-use crate::styling::{Border, BorderRadius, BoxShadow, Color, Gradient};
+use crate::styling::{Border, BorderRadius, BorderRadiusExt, BoxShadow, Color, Gradient};
 
 // Re-export painting types that are commonly used with decorations
 pub use crate::painting::{BlendMode, BoxFit, ColorFilter, ImageRepeat};
 
+/// An image to paint as part of a decoration.
+///
+/// Used within `BoxDecoration` to display images with specific fit, alignment,
+/// repeat, and opacity settings.
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DecorationImage {
@@ -91,9 +96,29 @@ pub trait Decoration: std::fmt::Debug {
         Self: Sized;
 }
 
+/// Box decoration with borders, shadows, and gradients.
+///
+/// Generic over unit type `T` for full type safety.
+///
+/// # Examples
+///
+/// ```
+/// use flui_types::styling::{BoxDecoration, Color, Border, BorderSide, BorderStyle};
+/// use flui_types::geometry::{Pixels, px};
+///
+/// // Simple colored box
+/// let decoration = BoxDecoration::<Pixels>::with_color(Color::RED);
+///
+/// // Box with border and shadow
+/// let decoration = BoxDecoration::<Pixels>::new()
+///     .set_color(Some(Color::WHITE))
+///     .set_border(Some(Border::all(
+///         BorderSide::new(Color::BLACK, px(2.0), BorderStyle::Solid)
+///     )));
+/// ```
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct BoxDecoration {
+pub struct BoxDecoration<T: Unit> {
     /// The color to fill the box with.
     pub color: Option<Color>,
 
@@ -101,13 +126,13 @@ pub struct BoxDecoration {
     pub image: Option<DecorationImage>,
 
     /// A border to draw above the background.
-    pub border: Option<Border>,
+    pub border: Option<Border<T>>,
 
     /// The border radius of the box.
     pub border_radius: Option<BorderRadius>,
 
     /// A list of shadows cast by the box.
-    pub box_shadow: Option<Vec<BoxShadow>>,
+    pub box_shadow: Option<Vec<BoxShadow<T>>>,
 
     /// A gradient to use when filling the box.
     ///
@@ -115,8 +140,9 @@ pub struct BoxDecoration {
     pub gradient: Option<Gradient>,
 }
 
-impl BoxDecoration {
+impl<T: Unit> BoxDecoration<T> {
     /// Creates a new box decoration.
+    #[inline]
     pub const fn new() -> Self {
         Self {
             color: None,
@@ -129,6 +155,7 @@ impl BoxDecoration {
     }
 
     /// Creates a box decoration with a color.
+    #[inline]
     pub const fn with_color(color: Color) -> Self {
         Self {
             color: Some(color),
@@ -141,6 +168,7 @@ impl BoxDecoration {
     }
 
     /// Creates a box decoration with a gradient.
+    #[inline]
     pub fn with_gradient(gradient: Gradient) -> Self {
         Self {
             color: None,
@@ -171,7 +199,7 @@ impl BoxDecoration {
     }
 
     /// Creates a copy of this decoration with the given border.
-    pub const fn set_border(mut self, border: Option<Border>) -> Self {
+    pub const fn set_border(mut self, border: Option<Border<T>>) -> Self {
         self.border = border;
         self
     }
@@ -183,7 +211,7 @@ impl BoxDecoration {
     }
 
     /// Creates a copy of this decoration with the given box shadow.
-    pub fn set_box_shadow(mut self, box_shadow: Option<Vec<BoxShadow>>) -> Self {
+    pub fn set_box_shadow(mut self, box_shadow: Option<Vec<BoxShadow<T>>>) -> Self {
         self.box_shadow = box_shadow;
         self
     }
@@ -193,7 +221,12 @@ impl BoxDecoration {
         self.gradient = gradient;
         self
     }
+}
 
+impl<T: NumericUnit> BoxDecoration<T>
+where
+    T: std::ops::Mul<f32, Output = T>,
+{
     /// Linearly interpolate between two box decorations.
     pub fn lerp(a: &Self, b: &Self, t: f32) -> Self {
         let t = t.clamp(0.0, 1.0);
@@ -238,8 +271,7 @@ impl BoxDecoration {
             _ => None,
         };
 
-        // Image interpolation: crossfade between images
-        // At t=0, use image a; at t=1, use image b; in between, prefer closer image
+        // Image interpolation: crossfade between images (at t=0.5, switch)
         let image = if t < 0.5 {
             a.image.clone()
         } else {
@@ -257,13 +289,16 @@ impl BoxDecoration {
     }
 }
 
-impl Default for BoxDecoration {
+impl<T: Unit> Default for BoxDecoration<T> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl Decoration for BoxDecoration {
+impl<T: NumericUnit> Decoration for BoxDecoration<T>
+where
+    T: std::ops::Mul<f32, Output = T>,
+{
     fn is_complex(&self) -> bool {
         self.gradient.is_some() || self.box_shadow.is_some()
     }
@@ -271,11 +306,4 @@ impl Decoration for BoxDecoration {
     fn lerp_decoration(a: &Self, b: &Self, t: f32) -> Option<Self> {
         Some(BoxDecoration::lerp(a, b, t))
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::styling::LinearGradient;
-
 }

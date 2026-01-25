@@ -4,7 +4,7 @@
 //! Used for tooltips, dropdowns, and connected overlays.
 
 use super::leader::LayerLink;
-use flui_types::geometry::{Offset, Size};
+use flui_types::geometry::{Offset, Pixels, Size};
 
 /// Layer that positions content relative to a LeaderLayer.
 ///
@@ -43,16 +43,16 @@ pub struct FollowerLayer {
     link: LayerLink,
 
     /// Offset from the leader's anchor point
-    target_offset: Offset,
+    target_offset: Offset<Pixels>,
 
     /// Whether to show when the leader is not in the tree
     show_when_unlinked: bool,
 
     /// Alignment on the leader (0,0 = top-left, 1,1 = bottom-right)
-    leader_anchor: Offset,
+    leader_anchor: Offset<Pixels>,
 
     /// Alignment on the follower (0,0 = top-left, 1,1 = bottom-right)
-    follower_anchor: Offset,
+    follower_anchor: Offset<Pixels>,
 }
 
 impl FollowerLayer {
@@ -70,7 +70,7 @@ impl FollowerLayer {
 
     /// Sets the offset from the leader's anchor point.
     #[inline]
-    pub fn with_target_offset(mut self, offset: Offset) -> Self {
+    pub fn with_target_offset(mut self, offset: Offset<Pixels>) -> Self {
         self.target_offset = offset;
         self
     }
@@ -86,7 +86,7 @@ impl FollowerLayer {
     ///
     /// Values are normalized: (0,0) = top-left, (1,1) = bottom-right.
     #[inline]
-    pub fn with_leader_anchor(mut self, anchor: Offset) -> Self {
+    pub fn with_leader_anchor(mut self, anchor: Offset<Pixels>) -> Self {
         self.leader_anchor = anchor;
         self
     }
@@ -95,7 +95,7 @@ impl FollowerLayer {
     ///
     /// Values are normalized: (0,0) = top-left, (1,1) = bottom-right.
     #[inline]
-    pub fn with_follower_anchor(mut self, anchor: Offset) -> Self {
+    pub fn with_follower_anchor(mut self, anchor: Offset<Pixels>) -> Self {
         self.follower_anchor = anchor;
         self
     }
@@ -108,7 +108,7 @@ impl FollowerLayer {
 
     /// Returns the target offset.
     #[inline]
-    pub fn target_offset(&self) -> Offset {
+    pub fn target_offset(&self) -> Offset<Pixels> {
         self.target_offset
     }
 
@@ -120,19 +120,19 @@ impl FollowerLayer {
 
     /// Returns the leader anchor.
     #[inline]
-    pub fn leader_anchor(&self) -> Offset {
+    pub fn leader_anchor(&self) -> Offset<Pixels> {
         self.leader_anchor
     }
 
     /// Returns the follower anchor.
     #[inline]
-    pub fn follower_anchor(&self) -> Offset {
+    pub fn follower_anchor(&self) -> Offset<Pixels> {
         self.follower_anchor
     }
 
     /// Sets the target offset.
     #[inline]
-    pub fn set_target_offset(&mut self, offset: Offset) {
+    pub fn set_target_offset(&mut self, offset: Offset<Pixels>) {
         self.target_offset = offset;
     }
 
@@ -144,13 +144,13 @@ impl FollowerLayer {
 
     /// Sets the leader anchor.
     #[inline]
-    pub fn set_leader_anchor(&mut self, anchor: Offset) {
+    pub fn set_leader_anchor(&mut self, anchor: Offset<Pixels>) {
         self.leader_anchor = anchor;
     }
 
     /// Sets the follower anchor.
     #[inline]
-    pub fn set_follower_anchor(&mut self, anchor: Offset) {
+    pub fn set_follower_anchor(&mut self, anchor: Offset<Pixels>) {
         self.follower_anchor = anchor;
     }
 
@@ -167,10 +167,10 @@ impl FollowerLayer {
     /// The global offset where the follower should be positioned.
     pub fn calculate_offset(
         &self,
-        leader_offset: Offset,
-        leader_size: Size,
-        follower_size: Size,
-    ) -> Offset {
+        leader_offset: Offset<Pixels>,
+        leader_size: Size<Pixels>,
+        follower_size: Size<Pixels>,
+    ) -> Offset<Pixels> {
         // Calculate the anchor point on the leader
         let leader_anchor_point = Offset::new(
             leader_offset.dx + leader_size.width * self.leader_anchor.dx,

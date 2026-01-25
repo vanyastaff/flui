@@ -4,9 +4,10 @@
 //! the four corners of a rectangle. Common uses include border radius,
 //! corner rounding, and corner-specific styling.
 
-use std::fmt::{self, Debug};
-
-#[derive(Clone, Copy, Default, PartialEq)]
+/// Corner-specific values for rectangles (e.g., border radii).
+///
+/// Generic over type `T` to support various value types.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct Corners<T = f32> {
     /// The top-left corner value.
     pub top_left: T,
@@ -18,6 +19,7 @@ pub struct Corners<T = f32> {
     pub bottom_left: T,
 }
 
+/// Convenience function to create [`Corners`] with explicit values.
 #[inline]
 pub const fn corners<T>(top_left: T, top_right: T, bottom_right: T, bottom_left: T) -> Corners<T> {
     Corners {
@@ -29,6 +31,7 @@ pub const fn corners<T>(top_left: T, top_right: T, bottom_right: T, bottom_left:
 }
 
 impl<T> Corners<T> {
+    /// Creates new corner values with explicit values for each corner.
     #[inline]
     pub const fn new(top_left: T, top_right: T, bottom_right: T, bottom_left: T) -> Self {
         Self {
@@ -39,6 +42,7 @@ impl<T> Corners<T> {
         }
     }
 
+    /// Creates corner values with the same value for all corners.
     #[inline]
     pub fn all(value: T) -> Self
     where
@@ -52,6 +56,7 @@ impl<T> Corners<T> {
         }
     }
 
+    /// Creates corner values with the given value for top corners only.
     #[inline]
     pub fn top(value: T) -> Self
     where
@@ -65,6 +70,7 @@ impl<T> Corners<T> {
         }
     }
 
+    /// Creates corner values with the given value for bottom corners only.
     #[inline]
     pub fn bottom(value: T) -> Self
     where
@@ -78,6 +84,7 @@ impl<T> Corners<T> {
         }
     }
 
+    /// Creates corner values with the given value for left corners only.
     #[inline]
     pub fn left(value: T) -> Self
     where
@@ -91,6 +98,7 @@ impl<T> Corners<T> {
         }
     }
 
+    /// Creates corner values with the given value for right corners only.
     #[inline]
     pub fn right(value: T) -> Self
     where
@@ -104,6 +112,7 @@ impl<T> Corners<T> {
         }
     }
 
+    /// Maps each corner value using the provided function.
     #[must_use]
     pub fn map<U>(&self, f: impl Fn(&T) -> U) -> Corners<U> {
         Corners {
@@ -114,6 +123,7 @@ impl<T> Corners<T> {
         }
     }
 
+    /// Returns the value for the specified corner.
     #[must_use]
     pub fn corner(&self, corner: super::Corner) -> T
     where
@@ -127,6 +137,7 @@ impl<T> Corners<T> {
         }
     }
 
+    /// Returns the maximum value among all corners.
     #[must_use]
     pub fn max(&self) -> T
     where
@@ -149,6 +160,7 @@ impl<T> Corners<T> {
         }
     }
 
+    /// Returns the minimum value among all corners.
     #[inline]
     pub fn min(&self) -> T
     where
@@ -173,14 +185,11 @@ impl<T> Corners<T> {
 }
 
 // ============================================================================
-// f32-specific methods
-// ============================================================================
-
-// ============================================================================
 // Specialized implementations for Pixels
 // ============================================================================
 
 impl Corners<super::units::Pixels> {
+    /// Scales these corner values to scaled pixels.
     #[must_use]
     pub fn scale(&self, factor: f32) -> Corners<super::units::ScaledPixels> {
         Corners {
@@ -243,19 +252,3 @@ impl<T: Clone> super::traits::Along for Corners<T> {
         }
     }
 }
-
-// ============================================================================
-// Debug formatting
-// ============================================================================
-
-impl<T: Debug> Debug for Corners<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Corners")
-            .field("top_left", &self.top_left)
-            .field("top_right", &self.top_right)
-            .field("bottom_right", &self.bottom_right)
-            .field("bottom_left", &self.bottom_left)
-            .finish()
-    }
-}
-

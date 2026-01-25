@@ -192,7 +192,10 @@ where
         From<Box<dyn flui_rendering::traits::RenderObject<V::Protocol>>>,
 {
     fn render_object_any(&self) -> Option<&dyn Any> {
-        self.behavior.render_id_ref().as_ref().map(|r| r as &dyn Any)
+        self.behavior
+            .render_id_ref()
+            .as_ref()
+            .map(|r| r as &dyn Any)
     }
 
     fn render_object_any_mut(&mut self) -> Option<&mut dyn Any> {
@@ -371,4 +374,3 @@ where
         self.core.set_pipeline_owner_any(owner_any);
     }
 }
-

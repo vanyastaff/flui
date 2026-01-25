@@ -42,7 +42,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::events::PointerEvent;
-use flui_types::geometry::{Offset, px};
+use flui_types::geometry::{px, Offset};
 
 use crate::ids::{HandlerId, PointerId};
 

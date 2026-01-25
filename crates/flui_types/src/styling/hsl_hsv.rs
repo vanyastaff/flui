@@ -223,4 +223,3 @@ impl From<HSVColor> for Color {
         )
     }
 }
-

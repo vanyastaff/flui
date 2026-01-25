@@ -100,6 +100,20 @@ use std::ops::{Index, IndexMut, Mul, MulAssign};
 
 use crate::geometry::{Point, Rect};
 
+/// A 4x4 transformation matrix stored in column-major order.
+///
+/// Used for affine transformations including translation, rotation, scaling, and skewing.
+/// The matrix is stored in column-major order to match OpenGL and egui conventions.
+///
+/// # Memory Layout
+///
+/// The 16 floats are stored as: `[m0, m1, m2, m3, m4, ..., m15]` representing:
+/// ```text
+/// | m0  m4  m8  m12 |
+/// | m1  m5  m9  m13 |
+/// | m2  m6  m10 m14 |
+/// | m3  m7  m11 m15 |
+/// ```
 #[derive(Debug, Clone, Copy)]
 pub struct Matrix4 {
     /// Matrix elements in column-major order (16 floats)
@@ -139,6 +153,9 @@ impl Matrix4 {
 }
 
 impl Matrix4 {
+    /// Creates a new matrix from 16 elements in column-major order.
+    ///
+    /// Parameters are named as `mRC` where R is row and C is column (0-indexed).
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         m00: f32,
@@ -165,6 +182,7 @@ impl Matrix4 {
         }
     }
 
+    /// Creates an identity matrix (no transformation).
     #[must_use]
     pub const fn identity() -> Self {
         Self {
@@ -174,6 +192,9 @@ impl Matrix4 {
         }
     }
 
+    /// Creates a translation matrix.
+    ///
+    /// For 2D transformations, use `z = 0.0`.
     #[inline]
     pub fn translation(x: f32, y: f32, z: f32) -> Self {
         Self::new(
@@ -181,6 +202,9 @@ impl Matrix4 {
         )
     }
 
+    /// Creates a uniform or non-uniform scaling matrix.
+    ///
+    /// For 2D transformations, use `z = 1.0`.
     #[inline]
     pub fn scaling(x: f32, y: f32, z: f32) -> Self {
         Self::new(
@@ -188,6 +212,9 @@ impl Matrix4 {
         )
     }
 
+    /// Creates a rotation matrix around the Z axis (for 2D rotations).
+    ///
+    /// Angle is in radians. Positive values rotate counter-clockwise.
     #[inline]
     pub fn rotation_z(angle: f32) -> Self {
         let (sin, cos) = angle.sin_cos();
@@ -196,11 +223,15 @@ impl Matrix4 {
         )
     }
 
+    /// Creates a rotation matrix around the Z axis (type-safe version).
     #[inline]
     pub fn rotation_z_radians(angle: crate::geometry::Radians) -> Self {
         Self::rotation_z(angle.0)
     }
 
+    /// Creates a rotation matrix around the X axis.
+    ///
+    /// Angle is in radians. Positive values rotate counter-clockwise when looking down the axis.
     #[inline]
     pub fn rotation_x(angle: f32) -> Self {
         let (sin, cos) = angle.sin_cos();
@@ -209,11 +240,15 @@ impl Matrix4 {
         )
     }
 
+    /// Creates a rotation matrix around the X axis (type-safe version).
     #[inline]
     pub fn rotation_x_radians(angle: crate::geometry::Radians) -> Self {
         Self::rotation_x(angle.0)
     }
 
+    /// Creates a rotation matrix around the Y axis.
+    ///
+    /// Angle is in radians. Positive values rotate counter-clockwise when looking down the axis.
     #[inline]
     pub fn rotation_y(angle: f32) -> Self {
         let (sin, cos) = angle.sin_cos();
@@ -222,11 +257,16 @@ impl Matrix4 {
         )
     }
 
+    /// Creates a rotation matrix around the Y axis (type-safe version).
     #[inline]
     pub fn rotation_y_radians(angle: crate::geometry::Radians) -> Self {
         Self::rotation_y(angle.0)
     }
 
+    /// Creates a 2D skew (shear) matrix.
+    ///
+    /// - `skew_x`: Skew angle along the X axis (in radians)
+    /// - `skew_y`: Skew angle along the Y axis (in radians)
     #[inline]
     pub fn skew_2d(skew_x: f32, skew_y: f32) -> Self {
         let tan_x = skew_x.tan();
@@ -237,6 +277,7 @@ impl Matrix4 {
         )
     }
 
+    /// Alias for `skew_2d`.
     #[inline]
     pub fn skew(skew_x: f32, skew_y: f32) -> Self {
         Self::skew_2d(skew_x, skew_y)
@@ -292,11 +333,13 @@ impl Matrix4 {
             && self.m[11].abs() < epsilon
     }
 
+    /// Extracts the translation component (x, y, z) from the matrix.
     #[inline]
     pub fn translation_component(&self) -> (f32, f32, f32) {
         (self.m[12], self.m[13], self.m[14])
     }
 
+    /// Sets the translation component without affecting other transformations.
     #[inline]
     pub fn set_translation(&mut self, x: f32, y: f32, z: f32) {
         self.m[12] = x;
@@ -304,21 +347,25 @@ impl Matrix4 {
         self.m[14] = z;
     }
 
+    /// Applies a translation to this matrix (modifies in place).
     #[inline]
     pub fn translate(&mut self, x: f32, y: f32, z: f32) {
         *self = Matrix4::translation(x, y, z) * *self;
     }
 
+    /// Applies a scaling to this matrix (modifies in place).
     #[inline]
     pub fn scale(&mut self, x: f32, y: f32, z: f32) {
         *self = Matrix4::scaling(x, y, z) * *self;
     }
 
+    /// Applies a Z-axis rotation to this matrix (modifies in place).
     #[inline]
     pub fn rotate_z(&mut self, angle: f32) {
         *self = Matrix4::rotation_z(angle) * *self;
     }
 
+    /// Applies a Z-axis rotation to this matrix (type-safe version, modifies in place).
     #[inline]
     pub fn rotate_z_radians(&mut self, angle: crate::geometry::Radians) {
         self.rotate_z(angle.0);
@@ -340,6 +387,9 @@ impl Matrix4 {
         }
     }
 
+    /// Transforms multiple points using scalar operations.
+    /// Reserved for future batch transformation API.
+    #[allow(dead_code)]
     #[inline]
     fn transform_points_scalar(&self, points: &[Point<Pixels>]) -> Vec<Point<Pixels>> {
         points
@@ -351,6 +401,9 @@ impl Matrix4 {
             .collect()
     }
 
+    /// Transforms multiple points using SSE SIMD operations.
+    /// Reserved for future batch transformation API.
+    #[allow(dead_code)]
     #[inline]
     fn transform_points_simd_sse(&self, points: &[Point<Pixels>]) -> Vec<Point<Pixels>> {
         #[cfg(target_feature = "sse")]
@@ -414,6 +467,9 @@ impl Matrix4 {
         }
     }
 
+    /// Transforms multiple points using NEON SIMD operations.
+    /// Reserved for future batch transformation API.
+    #[allow(dead_code)]
     #[inline]
     fn transform_points_simd_neon(&self, points: &[Point<Pixels>]) -> Vec<Point<Pixels>> {
         #[cfg(target_feature = "neon")]
@@ -471,6 +527,9 @@ impl Matrix4 {
         }
     }
 
+    /// Transforms a rectangle by this matrix, returning the bounding box of the result.
+    ///
+    /// Transforms all four corners and computes the axis-aligned bounding box.
     #[must_use]
     pub fn transform_rect(&self, rect: &Rect<Pixels>) -> Rect<Pixels> {
         // Transform all four corners
@@ -488,11 +547,15 @@ impl Matrix4 {
         Rect::from_ltrb(min_x, min_y, max_x, max_y)
     }
 
+    /// Returns the matrix as a column-major array (zero-copy).
     #[must_use]
     pub const fn to_col_major_array(&self) -> [f32; 16] {
         self.m
     }
 
+    /// Returns the transpose of this matrix.
+    ///
+    /// For rotation matrices, the transpose is equal to the inverse.
     #[must_use]
     pub fn transpose(&self) -> Self {
         let m = &self.m;
@@ -516,6 +579,7 @@ impl Matrix4 {
         }
     }
 
+    /// Converts the matrix to a 2D array in row-major order.
     #[must_use]
     pub fn to_row_major_2d(&self) -> [[f32; 4]; 4] {
         [
@@ -526,6 +590,7 @@ impl Matrix4 {
         ]
     }
 
+    /// Converts the matrix to a 2D array in column-major order.
     #[must_use]
     pub fn to_col_major_2d(&self) -> [[f32; 4]; 4] {
         [
@@ -536,12 +601,20 @@ impl Matrix4 {
         ]
     }
 
+    /// Gets the matrix element at the specified row and column.
+    ///
+    /// # Panics
+    /// Panics if row or column is >= 4.
     #[must_use]
     pub fn get(&self, row: usize, col: usize) -> f32 {
         assert!(row < 4 && col < 4, "Matrix index out of bounds");
         self.m[col * 4 + row]
     }
 
+    /// Gets a mutable reference to the matrix element at the specified row and column.
+    ///
+    /// # Panics
+    /// Panics if row or column is >= 4.
     #[inline]
     pub fn get_mut(&mut self, row: usize, col: usize) -> &mut f32 {
         assert!(row < 4 && col < 4, "Matrix index out of bounds");
@@ -663,6 +736,9 @@ impl PartialEq for Matrix4 {
 impl Eq for Matrix4 {}
 
 impl Matrix4 {
+    /// Checks approximate equality with a custom epsilon.
+    ///
+    /// Returns true if all elements differ by at most `epsilon`.
     #[must_use]
     pub fn approx_eq_eps(&self, other: &Self, epsilon: f32) -> bool {
         for i in 0..16 {
@@ -673,6 +749,7 @@ impl Matrix4 {
         true
     }
 
+    /// Checks approximate equality with default epsilon (1e-5).
     #[must_use]
     pub fn approx_eq(&self, other: &Self) -> bool {
         self.approx_eq_eps(other, 1e-5)
@@ -712,7 +789,7 @@ impl Matrix4 {
             // result[col][row] = sum of self.m[k * 4 + row] * rhs.m[col * 4 + k]
             for col in 0..4 {
                 // Load column 'col' from rhs (4 elements): rhs.m[col*4 + 0..3]
-                let rhs_col = _mm_loadu_ps(&rhs.m[col * 4]);
+                let _rhs_col = _mm_loadu_ps(&rhs.m[col * 4]);
 
                 // For each row, calculate the dot product
                 // We need: self[0][row] * rhs[col][0] + self[1][row] * rhs[col][1] + ...

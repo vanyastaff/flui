@@ -33,8 +33,8 @@
 //! ```
 
 use crate::events::PointerEvent;
-use flui_types::geometry::Pixels;
 use crate::ids::PointerId;
+use flui_types::geometry::Pixels;
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -395,7 +395,7 @@ mod tests {
 
         router.add_route(pointer, handler);
 
-        let event = make_event(0, Offset::new(50.0, 50.0));
+        let event = make_event(0, Offset::new(Pixels(50.0), Pixels(50.0)));
         router.route(&event);
 
         assert_eq!(call_count.load(Ordering::Relaxed), 1);
@@ -421,7 +421,7 @@ mod tests {
         router.add_route(pointer, handler1);
         router.add_route(pointer, handler2);
 
-        let event = make_event(0, Offset::new(50.0, 50.0));
+        let event = make_event(0, Offset::new(Pixels(50.0), Pixels(50.0)));
         router.route(&event);
 
         // Both handlers should be called
@@ -442,7 +442,7 @@ mod tests {
         router.add_global_handler(handler);
 
         // Route event for any pointer
-        let event = make_event(42, Offset::new(50.0, 50.0));
+        let event = make_event(42, Offset::new(Pixels(50.0), Pixels(50.0)));
         router.route(&event);
 
         assert_eq!(call_count.load(Ordering::Relaxed), 1);
@@ -468,7 +468,7 @@ mod tests {
         router.add_global_handler(global_handler);
         router.add_route(pointer, pointer_handler);
 
-        let event = make_event(0, Offset::new(50.0, 50.0));
+        let event = make_event(0, Offset::new(Pixels(50.0), Pixels(50.0)));
         router.route(&event);
 
         let calls = order.lock().unwrap();
@@ -523,7 +523,7 @@ mod tests {
         router.add_route(pointer1, handler);
 
         // Route event for pointer 0 (PRIMARY - default from make_event)
-        let event = make_event(2, Offset::new(50.0, 50.0));
+        let event = make_event(2, Offset::new(Pixels(50.0), Pixels(50.0)));
         router.route(&event);
 
         // Handler should NOT be called (registered for pointer1, event is for pointer0)
@@ -559,7 +559,7 @@ mod tests {
 
         router.add_route(pointer, handler);
 
-        let event = make_event(0, Offset::new(50.0, 50.0));
+        let event = make_event(0, Offset::new(Pixels(50.0), Pixels(50.0)));
         router.route(&event); // Should not deadlock
 
         assert_eq!(call_count.load(Ordering::Relaxed), 1);
@@ -587,7 +587,7 @@ mod tests {
 
         router.add_route(pointer, handler1);
 
-        let event = make_event(0, Offset::new(50.0, 50.0));
+        let event = make_event(0, Offset::new(Pixels(50.0), Pixels(50.0)));
         router.route(&event); // Should not deadlock
 
         // The new handler should NOT be called during this dispatch
@@ -623,7 +623,7 @@ mod tests {
         router.add_route(pointer, handler1);
         router.add_route(pointer, handler2);
 
-        let event = make_event(0, Offset::new(50.0, 50.0));
+        let event = make_event(0, Offset::new(Pixels(50.0), Pixels(50.0)));
         router.route(&event); // Should not deadlock
 
         // handler2 should NOT be called because handler1 removed it

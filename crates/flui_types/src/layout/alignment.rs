@@ -5,8 +5,6 @@
 
 use std::ops::{Add, Neg};
 
-use crate::{Offset, Size};
-
 #[derive(Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum MainAxisSize {
@@ -233,12 +231,6 @@ impl Alignment {
     pub const BOTTOM_RIGHT: Self = Self::new(1.0, 1.0);
 
     #[must_use]
-
-    #[must_use]
-
-    #[must_use]
-
-    #[must_use]
     pub fn lerp(a: Self, b: Self, t: f32) -> Self {
         let t = t.clamp(0.0, 1.0);
         Self::new(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t)
@@ -376,8 +368,6 @@ impl AlignmentGeometry {
             AlignmentGeometry::Directional(alignment) => alignment.resolve(is_ltr),
         }
     }
-
-
 }
 
 impl From<Alignment> for AlignmentGeometry {

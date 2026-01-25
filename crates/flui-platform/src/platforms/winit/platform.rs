@@ -14,15 +14,15 @@
 //! The architecture uses winit 0.30's `ApplicationHandler` trait to manage
 //! the event loop without consuming ownership.
 
+use super::clipboard::ArboardClipboard;
+use super::display::WinitDisplay;
+use super::window_requests::{WindowRequest, WindowRequestQueue};
 use crate::shared::PlatformHandlers;
 use crate::traits::{
     Clipboard, DesktopCapabilities, Platform, PlatformCapabilities, PlatformDisplay,
     PlatformExecutor, PlatformTextSystem, PlatformWindow, WindowEvent, WindowId, WindowOptions,
     WinitWindow,
 };
-use super::clipboard::ArboardClipboard;
-use super::display::WinitDisplay;
-use super::window_requests::{WindowRequest, WindowRequestQueue};
 
 use anyhow::Result;
 use parking_lot::Mutex;
@@ -100,12 +100,10 @@ struct WinitPlatformState {
 impl WinitPlatformState {
     fn new() -> Self {
         // Initialize clipboard (may fail in headless environments)
-        let clipboard = ArboardClipboard::new()
-            .map(Arc::new)
-            .unwrap_or_else(|err| {
-                tracing::warn!(?err, "Failed to initialize clipboard, using fallback");
-                Arc::new(ArboardClipboard::default())
-            });
+        let clipboard = ArboardClipboard::new().map(Arc::new).unwrap_or_else(|err| {
+            tracing::warn!(?err, "Failed to initialize clipboard, using fallback");
+            Arc::new(ArboardClipboard::default())
+        });
 
         Self {
             capabilities: DesktopCapabilities,
@@ -131,7 +129,12 @@ impl WinitPlatformState {
         id
     }
 
-    fn register_window(&mut self, winit_id: WinitWindowId, platform_id: WindowId, window: Arc<winit::window::Window>) {
+    fn register_window(
+        &mut self,
+        winit_id: WinitWindowId,
+        platform_id: WindowId,
+        window: Arc<winit::window::Window>,
+    ) {
         self.window_id_map.insert(winit_id, platform_id);
         self.windows.insert(platform_id, window);
 
@@ -244,9 +247,9 @@ impl ApplicationHandler for WinitApp {
         window_id: WinitWindowId,
         event: WinitWindowEvent,
     ) {
-        let platform_id = self.platform.with_state(|state| {
-            state.get_platform_window_id(window_id)
-        });
+        let platform_id = self
+            .platform
+            .with_state(|state| state.get_platform_window_id(window_id));
 
         let Some(platform_id) = platform_id else {
             tracing::warn!("Received event for unknown window");
@@ -259,9 +262,11 @@ impl ApplicationHandler for WinitApp {
 
                 // Notify handler
                 self.platform.with_state(|state| {
-                    state.handlers.invoke_window_event(WindowEvent::CloseRequested {
-                        window_id: platform_id
-                    });
+                    state
+                        .handlers
+                        .invoke_window_event(WindowEvent::CloseRequested {
+                            window_id: platform_id,
+                        });
                     state.should_quit = true;
                 });
 
@@ -290,9 +295,11 @@ impl ApplicationHandler for WinitApp {
 
                 // Notify handler
                 self.platform.with_state(|state| {
-                    state.handlers.invoke_window_event(WindowEvent::RedrawRequested {
-                        window_id: platform_id,
-                    });
+                    state
+                        .handlers
+                        .invoke_window_event(WindowEvent::RedrawRequested {
+                            window_id: platform_id,
+                        });
                 });
             }
             WinitWindowEvent::Focused(focused) => {
@@ -306,20 +313,24 @@ impl ApplicationHandler for WinitApp {
                         state.active_window = None;
                     }
 
-                    state.handlers.invoke_window_event(WindowEvent::FocusChanged {
-                        window_id: platform_id,
-                        focused,
-                    });
+                    state
+                        .handlers
+                        .invoke_window_event(WindowEvent::FocusChanged {
+                            window_id: platform_id,
+                            focused,
+                        });
                 });
             }
             WinitWindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 tracing::debug!(?platform_id, ?scale_factor, "Scale factor changed");
 
                 self.platform.with_state(|state| {
-                    state.handlers.invoke_window_event(WindowEvent::ScaleFactorChanged {
-                        window_id: platform_id,
-                        scale_factor,
-                    });
+                    state
+                        .handlers
+                        .invoke_window_event(WindowEvent::ScaleFactorChanged {
+                            window_id: platform_id,
+                            scale_factor,
+                        });
                 });
             }
             _ => {}
@@ -343,9 +354,9 @@ impl ApplicationHandler for WinitApp {
 impl WinitApp {
     /// Process pending window creation requests
     fn process_window_requests(&mut self, event_loop: &ActiveEventLoop) {
-        let requests = self.platform.with_state(|state| {
-            state.window_requests.drain_pending()
-        });
+        let requests = self
+            .platform
+            .with_state(|state| state.window_requests.drain_pending());
 
         for request in requests {
             tracing::debug!("Processing window creation request");

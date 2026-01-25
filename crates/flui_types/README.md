@@ -34,7 +34,7 @@ let rect = Rect::from_xywh(10.0, 20.0, size.width, size.height);
 let center = rect.center();
 
 // Layout
-let padding = EdgeInsets::all(16.0);
+let padding = Edges::all(px(16.0));
 let alignment = Alignment::CENTER;
 
 // Colors
@@ -80,8 +80,8 @@ let align = Alignment::TOP_LEFT;
 let fractional = FractionalOffset::new(0.25, 0.75);
 
 // Spacing
-let padding = EdgeInsets::symmetric(16.0, 8.0);
-let margin = EdgeInsets::only(left: 10.0, top: 20.0, right: 10.0, bottom: 20.0);
+let padding = Edges::symmetric(px(16.0), px(8.0));
+let margin = Edges::new(px(20.0), px(10.0), px(20.0), px(10.0));
 
 // Flex layout
 let direction = Axis::Horizontal;
@@ -238,7 +238,7 @@ All types are designed for high performance:
 
 ```rust
 // Compile-time constants
-const PADDING: EdgeInsets = EdgeInsets::all(16.0);
+const PADDING: Edges<Pixels> = Edges::all(px(16.0));
 const PRIMARY: Color = Color::rgb(66, 133, 244);
 const ORIGIN: Point = Point::ZERO;
 ```

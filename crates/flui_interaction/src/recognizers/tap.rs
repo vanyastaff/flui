@@ -128,7 +128,7 @@ impl TapGestureRecognizer {
     }
 
     /// Check if distance exceeds touch slop from settings
-    fn exceeds_touch_slop(&self, distance: f32) -> bool {
+    fn exceeds_touch_slop(&self, distance: Pixels) -> bool {
         self.settings.lock().exceeds_touch_slop(distance)
     }
 
@@ -298,7 +298,7 @@ impl GestureRecognizer for TapGestureRecognizer {
         match event {
             PointerEvent::Move(data) => {
                 let pos = data.current.position;
-                let position = Offset::new(pos.x as f32, pos.y as f32);
+                let position = Offset::new(Pixels(pos.x as f32), Pixels(pos.y as f32));
                 let pointer_type = data.pointer.pointer_type;
                 // Check if moved too far (slop detection)
                 if self.check_slop(position) {
@@ -310,7 +310,7 @@ impl GestureRecognizer for TapGestureRecognizer {
             }
             PointerEvent::Up(data) => {
                 let pos = data.state.position;
-                let position = Offset::new(pos.x as f32, pos.y as f32);
+                let position = Offset::new(Pixels(pos.x as f32), Pixels(pos.y as f32));
                 self.handle_tap_up(position, data.pointer.pointer_type);
             }
             PointerEvent::Cancel(info) => {
@@ -376,7 +376,7 @@ mod tests {
         });
 
         let pointer = PointerId::new(1);
-        let position = Offset::new(100.0, 100.0);
+        let position = Offset::new(Pixels(100.0), Pixels(100.0));
 
         // Simulate tap: down -> up
         recognizer.add_pointer(pointer, position);
@@ -404,13 +404,13 @@ mod tests {
             });
 
         let pointer = PointerId::new(1);
-        let start_pos = Offset::new(100.0, 100.0);
+        let start_pos = Offset::new(Pixels(100.0), Pixels(100.0));
 
         // Start tap
         recognizer.add_pointer(pointer, start_pos);
 
         // Move too far (beyond TAP_SLOP = 18px)
-        let moved_pos = Offset::new(100.0, 130.0); // 30px away
+        let moved_pos = Offset::new(Pixels(100.0), Pixels(130.0)); // 30px away
         recognizer.handle_event(&crate::events::make_move_event(
             moved_pos,
             PointerType::Touch,
@@ -432,13 +432,13 @@ mod tests {
         });
 
         let pointer = PointerId::new(1);
-        let start_pos = Offset::new(100.0, 100.0);
+        let start_pos = Offset::new(Pixels(100.0), Pixels(100.0));
 
         // Start tap
         recognizer.add_pointer(pointer, start_pos);
 
         // Move slightly (within TAP_SLOP = 18px)
-        let moved_pos = Offset::new(105.0, 105.0); // ~7px away
+        let moved_pos = Offset::new(Pixels(105.0), Pixels(105.0)); // ~7px away
         recognizer.handle_event(&crate::events::make_move_event(
             moved_pos,
             PointerType::Touch,

@@ -4,8 +4,6 @@
 //! -1.0 to 1.0 coordinates, `FractionalOffset` uses 0.0 to 1.0 where
 //! (0.0, 0.0) is the top-left corner.
 
-use crate::{Offset, Size};
-
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct FractionalOffset {
     /// The distance fraction in the horizontal direction.
@@ -64,10 +62,6 @@ impl FractionalOffset {
     pub fn to_alignment(&self) -> crate::layout::Alignment {
         crate::layout::Alignment::new(self.dx * 2.0 - 1.0, self.dy * 2.0 - 1.0)
     }
-
-    #[must_use]
-
-    #[must_use]
 
     #[must_use]
     pub fn lerp(a: Self, b: Self, t: f32) -> Self {
@@ -142,4 +136,3 @@ impl std::ops::Neg for FractionalOffset {
         self.negate()
     }
 }
-

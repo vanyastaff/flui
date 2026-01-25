@@ -45,7 +45,7 @@ struct PointerStateTracking {
     is_down: bool,
 
     /// Last known position
-    last_position: flui_types::geometry:: Offset<Pixels>,
+    last_position: flui_types::geometry::Offset<Pixels>,
 
     /// Target that received the down event (for drag tracking)
     down_target: Option<HitTestResult>,
@@ -292,18 +292,18 @@ pub(crate) mod tests {
 
         let mut router = EventRouter::new();
         let mut layer = MockLayer {
-            bounds: Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
+            bounds: Rect::from_xywh(Pixels(0.0), Pixels(0.0), Pixels(100.0), Pixels(100.0)),
         };
 
         // Down event
-        let down = make_down_event(Offset::new(50.0, 50.0), PointerType::Mouse);
+        let down = make_down_event(Offset::new(Pixels(50.0), Pixels(50.0)), PointerType::Mouse);
         router.route_event(&mut layer, &Event::Pointer(down));
 
         // Should track pointer
         assert_eq!(router.pointer_state.read().len(), 1);
 
         // Up event
-        let up = make_up_event(Offset::new(50.0, 50.0), PointerType::Mouse);
+        let up = make_up_event(Offset::new(Pixels(50.0), Pixels(50.0)), PointerType::Mouse);
         router.route_event(&mut layer, &Event::Pointer(up));
 
         // Should clear pointer
@@ -321,7 +321,7 @@ pub(crate) mod tests {
             PointerId::new(0),
             PointerStateTracking {
                 is_down: true,
-                last_position: Offset::new(0.0, 0.0),
+                last_position: Offset::new(Pixels(0.0), Pixels(0.0)),
                 down_target: None,
             },
         );

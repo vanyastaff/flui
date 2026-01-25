@@ -32,8 +32,8 @@
 //! FocusManager::global().unfocus();
 //! ```
 
-use crate::ids::FocusNodeId;
 use crate::events::KeyEvent;
+use crate::ids::FocusNodeId;
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;

@@ -30,7 +30,7 @@
 //! assert_eq!(result.entries()[0].annotation(), &"button".to_string());
 //! ```
 
-use flui_types::geometry::Offset;
+use flui_types::geometry::{Offset, Pixels};
 use std::fmt;
 
 /// Information about a single annotation found in the layer tree.
@@ -43,13 +43,13 @@ pub struct AnnotationEntry<T> {
     annotation: T,
 
     /// The position in the annotation's local coordinate space.
-    local_position: Offset,
+    local_position: Offset<Pixels>,
 }
 
 impl<T> AnnotationEntry<T> {
     /// Creates a new annotation entry.
     #[inline]
-    pub fn new(annotation: T, local_position: Offset) -> Self {
+    pub fn new(annotation: T, local_position: Offset<Pixels>) -> Self {
         Self {
             annotation,
             local_position,
@@ -70,7 +70,7 @@ impl<T> AnnotationEntry<T> {
 
     /// Returns the local position where the annotation was found.
     #[inline]
-    pub fn local_position(&self) -> Offset {
+    pub fn local_position(&self) -> Offset<Pixels> {
         self.local_position
     }
 

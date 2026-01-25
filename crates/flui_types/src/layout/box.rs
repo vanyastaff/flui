@@ -1,6 +1,6 @@
 //! Box layout types - fit and shape
 
-use crate::geometry::{px, Size, Pixels};
+use crate::geometry::{Pixels, Size};
 
 /// Epsilon for safe float comparisons (Rust 1.91.0 strict arithmetic)
 const EPSILON: f32 = 1e-6;
@@ -141,13 +141,13 @@ impl BoxFit {
     /// - `source_size` is the portion of the source image to use
     #[must_use]
     pub fn apply(self, input_size: Size<Pixels>, output_size: Size<Pixels>) -> FittedSizes {
-        let input_aspect_ratio = if input_size.height.abs() > px(EPSILON) {
+        let input_aspect_ratio = if input_size.height.abs() > Pixels(EPSILON) {
             input_size.width / input_size.height
         } else {
             0.0
         };
 
-        let output_aspect_ratio = if output_size.height.abs() > px(EPSILON) {
+        let output_aspect_ratio = if output_size.height.abs() > Pixels(EPSILON) {
             output_size.width / output_size.height
         } else {
             0.0
@@ -338,7 +338,7 @@ impl FittedSizes {
     #[inline]
     #[must_use]
     pub fn scale_factor(&self) -> f32 {
-        if self.source.width.abs() > px(EPSILON) {
+        if self.source.width.abs() > Pixels(EPSILON) {
             self.destination.width / self.source.width
         } else {
             1.0

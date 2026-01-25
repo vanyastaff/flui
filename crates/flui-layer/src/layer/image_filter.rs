@@ -3,6 +3,7 @@
 //! This layer applies image filters (blur, dilate, erode, etc.) to its children.
 //! Corresponds to Flutter's `ImageFilterLayer`.
 
+use flui_types::geometry::Pixels;
 use flui_types::painting::effects::ImageFilter;
 use flui_types::Offset;
 
@@ -53,7 +54,7 @@ pub struct ImageFilterLayer {
     filter: ImageFilter,
 
     /// Optional offset (for optimization)
-    offset: Offset,
+    offset: Offset<Pixels>,
 }
 
 impl ImageFilterLayer {
@@ -70,7 +71,7 @@ impl ImageFilterLayer {
     ///
     /// Combining offset with the filter avoids needing a separate OffsetLayer.
     #[inline]
-    pub fn with_offset(filter: ImageFilter, offset: Offset) -> Self {
+    pub fn with_offset(filter: ImageFilter, offset: Offset<Pixels>) -> Self {
         Self { filter, offset }
     }
 
@@ -141,13 +142,13 @@ impl ImageFilterLayer {
 
     /// Returns the offset.
     #[inline]
-    pub fn offset(&self) -> Offset {
+    pub fn offset(&self) -> Offset<Pixels> {
         self.offset
     }
 
     /// Sets the offset.
     #[inline]
-    pub fn set_offset(&mut self, offset: Offset) {
+    pub fn set_offset(&mut self, offset: Offset<Pixels>) {
         self.offset = offset;
     }
 

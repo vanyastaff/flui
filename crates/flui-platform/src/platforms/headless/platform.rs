@@ -135,9 +135,7 @@ impl Platform for HeadlessPlatform {
     }
 
     fn window_stack(&self) -> Option<Vec<WindowId>> {
-        Some(
-            self.with_state(|state| state.windows.iter().map(|w| w.id).collect()),
-        )
+        Some(self.with_state(|state| state.windows.iter().map(|w| w.id).collect()))
     }
 
     fn displays(&self) -> Vec<Arc<dyn PlatformDisplay>> {

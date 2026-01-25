@@ -196,8 +196,6 @@ impl crate::view::ElementBase for RootElementImpl {
             visitor(child);
         }
     }
-
-
 }
 
 #[cfg(test)]
