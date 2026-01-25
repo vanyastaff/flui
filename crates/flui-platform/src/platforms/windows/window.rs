@@ -769,6 +769,272 @@ impl WindowsWindow {
             placement
         }
     }
+
+    /// Set DWM window attribute
+    unsafe fn set_dwm_attribute<T>(&self, attribute: u32, value: &T) -> windows::core::Result<()> {
+        use windows::Win32::Graphics::Dwm::DwmSetWindowAttribute;
+
+        DwmSetWindowAttribute(
+            self.hwnd,
+            attribute,
+            value as *const T as *const std::ffi::c_void,
+            std::mem::size_of::<T>() as u32,
+        )
+    }
+
+    /// Get DWM window attribute
+    unsafe fn get_dwm_attribute<T: Default>(&self, attribute: u32) -> windows::core::Result<T> {
+        use windows::Win32::Graphics::Dwm::DwmGetWindowAttribute;
+
+        let mut value = T::default();
+        DwmGetWindowAttribute(
+            self.hwnd,
+            attribute,
+            &mut value as *mut T as *mut std::ffi::c_void,
+            std::mem::size_of::<T>() as u32,
+        )?;
+        Ok(value)
+    }
+}
+
+// ============================================================================
+// Windows Window Extension Trait Implementation
+// ============================================================================
+
+use super::window_ext::{
+    WindowsBackdrop, WindowsWindowExt as WindowsWindowExtTrait, WindowCornerPreference,
+    TaskbarProgressState, WindowsTheme, dwm_attributes,
+};
+
+impl WindowsWindowExtTrait for WindowsWindow {
+    fn set_backdrop(&mut self, backdrop: WindowsBackdrop) {
+        unsafe {
+            let backdrop_value = backdrop.to_dwm_value();
+            if let Err(e) = self.set_dwm_attribute(dwm_attributes::DWMWA_SYSTEMBACKDROP_TYPE, &backdrop_value) {
+                tracing::warn!("Failed to set backdrop material: {:?}", e);
+            } else {
+                tracing::debug!("Set window backdrop to {:?}", backdrop);
+            }
+        }
+    }
+
+    fn clear_backdrop(&mut self) {
+        self.set_backdrop(WindowsBackdrop::None);
+    }
+
+    fn backdrop(&self) -> WindowsBackdrop {
+        unsafe {
+            match self.get_dwm_attribute::<i32>(dwm_attributes::DWMWA_SYSTEMBACKDROP_TYPE) {
+                Ok(1) => WindowsBackdrop::None,
+                Ok(2) => WindowsBackdrop::Mica,
+                Ok(3) => WindowsBackdrop::Acrylic,
+                Ok(4) => WindowsBackdrop::MicaAlt,
+                _ => WindowsBackdrop::None,
+            }
+        }
+    }
+
+    fn enable_snap_layouts(&mut self) {
+        // Snap Layouts are automatically enabled on Windows 11 if the window has
+        // a standard maximize button. No explicit API call needed.
+        // We just need to ensure WS_MAXIMIZEBOX is set
+        unsafe {
+            let mut style = GetWindowLongPtrW(self.hwnd, GWL_STYLE) as u32;
+            style |= WS_MAXIMIZEBOX.0;
+            SetWindowLongPtrW(self.hwnd, GWL_STYLE, style as isize);
+            SetWindowPos(
+                self.hwnd,
+                None,
+                0, 0, 0, 0,
+                SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+            ).ok();
+
+            tracing::debug!("Snap Layouts enabled (via WS_MAXIMIZEBOX)");
+        }
+    }
+
+    fn disable_snap_layouts(&mut self) {
+        // Disable by removing WS_MAXIMIZEBOX
+        unsafe {
+            let mut style = GetWindowLongPtrW(self.hwnd, GWL_STYLE) as u32;
+            style &= !WS_MAXIMIZEBOX.0;
+            SetWindowLongPtrW(self.hwnd, GWL_STYLE, style as isize);
+            SetWindowPos(
+                self.hwnd,
+                None,
+                0, 0, 0, 0,
+                SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+            ).ok();
+
+            tracing::debug!("Snap Layouts disabled");
+        }
+    }
+
+    fn is_snap_layouts_enabled(&self) -> bool {
+        unsafe {
+            let style = GetWindowLongPtrW(self.hwnd, GWL_STYLE) as u32;
+            (style & WS_MAXIMIZEBOX.0) != 0
+        }
+    }
+
+    fn set_corner_preference(&mut self, preference: WindowCornerPreference) {
+        unsafe {
+            let corner_value = preference.to_dwm_value();
+            if let Err(e) = self.set_dwm_attribute(dwm_attributes::DWMWA_WINDOW_CORNER_PREFERENCE, &corner_value) {
+                tracing::warn!("Failed to set corner preference: {:?}", e);
+            } else {
+                tracing::debug!("Set corner preference to {:?}", preference);
+            }
+        }
+    }
+
+    fn corner_preference(&self) -> WindowCornerPreference {
+        unsafe {
+            match self.get_dwm_attribute::<i32>(dwm_attributes::DWMWA_WINDOW_CORNER_PREFERENCE) {
+                Ok(0) => WindowCornerPreference::Default,
+                Ok(1) => WindowCornerPreference::DoNotRound,
+                Ok(2) => WindowCornerPreference::Round,
+                Ok(3) => WindowCornerPreference::RoundSmall,
+                _ => WindowCornerPreference::Default,
+            }
+        }
+    }
+
+    fn enable_blur_behind(&mut self, enable: bool) {
+        use windows::Win32::Graphics::Dwm::{DwmEnableBlurBehindWindow, DWM_BLURBEHIND, DWM_BB_ENABLE};
+
+        unsafe {
+            let bb = DWM_BLURBEHIND {
+                dwFlags: DWM_BB_ENABLE,
+                fEnable: if enable { TRUE } else { FALSE },
+                hRgnBlur: HRGN::default(),
+                fTransitionOnMaximized: FALSE,
+            };
+
+            if let Err(e) = DwmEnableBlurBehindWindow(self.hwnd, &bb) {
+                tracing::warn!("Failed to enable blur behind: {:?}", e);
+            } else {
+                tracing::debug!("Blur behind: {}", enable);
+            }
+        }
+    }
+
+    fn set_taskbar_progress(&mut self, state: TaskbarProgressState, progress: u32) {
+        // This requires ITaskbarList3 COM interface
+        // For now, just log - full implementation would need COM integration
+        tracing::debug!("Set taskbar progress: {:?} {}%", state, progress);
+
+        // TODO: Implement ITaskbarList3::SetProgressState and SetProgressValue
+        // This requires:
+        // 1. CoCreateInstance for ITaskbarList3
+        // 2. Call SetProgressState(hwnd, state)
+        // 3. Call SetProgressValue(hwnd, progress, 100)
+    }
+
+    fn clear_taskbar_progress(&mut self) {
+        self.set_taskbar_progress(TaskbarProgressState::NoProgress, 0);
+    }
+
+    fn set_dark_mode(&mut self, dark_mode: bool) {
+        unsafe {
+            let dark_mode_value: i32 = if dark_mode { 1 } else { 0 };
+            if let Err(e) = self.set_dwm_attribute(dwm_attributes::DWMWA_USE_IMMERSIVE_DARK_MODE, &dark_mode_value) {
+                tracing::warn!("Failed to set dark mode: {:?}", e);
+            } else {
+                tracing::debug!("Set dark mode: {}", dark_mode);
+            }
+        }
+    }
+
+    fn is_dark_mode(&self) -> bool {
+        unsafe {
+            self.get_dwm_attribute::<i32>(dwm_attributes::DWMWA_USE_IMMERSIVE_DARK_MODE)
+                .unwrap_or(0) != 0
+        }
+    }
+
+    fn set_theme(&mut self, theme: WindowsTheme) {
+        if let Some(dark_mode) = theme.to_dark_mode_value() {
+            self.set_dark_mode(dark_mode);
+        } else {
+            // System theme - try to detect system preference
+            // For now, just log
+            tracing::debug!("Using system theme");
+        }
+    }
+
+    fn theme(&self) -> WindowsTheme {
+        if self.is_dark_mode() {
+            WindowsTheme::Dark
+        } else {
+            WindowsTheme::Light
+        }
+    }
+
+    fn set_has_shadow(&mut self, has_shadow: bool) {
+        // Windows doesn't have a direct API to disable shadows
+        // Shadows are controlled by DWM composition
+        // We can try extended window styles, but this is limited
+        tracing::debug!("set_has_shadow: {} (limited support)", has_shadow);
+    }
+
+    fn set_title_bar_color(&mut self, color: Option<(u8, u8, u8)>) {
+        unsafe {
+            if let Some((r, g, b)) = color {
+                // Windows expects COLORREF format: 0x00BBGGRR
+                let colorref: u32 = ((b as u32) << 16) | ((g as u32) << 8) | (r as u32);
+
+                if let Err(e) = self.set_dwm_attribute(dwm_attributes::DWMWA_CAPTION_COLOR, &colorref) {
+                    tracing::warn!("Failed to set title bar color: {:?}", e);
+                } else {
+                    tracing::debug!("Set title bar color: RGB({}, {}, {})", r, g, b);
+                }
+            } else {
+                // Reset to default (0xFFFFFFFF means use default)
+                let default_color: u32 = 0xFFFFFFFF;
+                self.set_dwm_attribute(dwm_attributes::DWMWA_CAPTION_COLOR, &default_color).ok();
+            }
+        }
+    }
+
+    fn set_caption_color(&mut self, color: Option<(u8, u8, u8)>) {
+        // Caption color is the same as title bar color in Windows 11
+        self.set_title_bar_color(color);
+    }
+
+    fn set_animations_enabled(&mut self, enabled: bool) {
+        // Windows animations are typically controlled system-wide
+        // Per-window animation control is limited
+        tracing::debug!("set_animations_enabled: {} (system-wide setting)", enabled);
+    }
+
+    fn dpi(&self) -> u32 {
+        unsafe {
+            GetDpiForWindow(self.hwnd)
+        }
+    }
+
+    fn convert_point_from_device(
+        &self,
+        point: flui_types::geometry::Point<flui_types::DevicePixels>,
+    ) -> flui_types::geometry::Point<flui_types::Pixels> {
+        let scale = self.scale_factor();
+        Point::new(
+            px(point.x.0 as f32 / scale),
+            px(point.y.0 as f32 / scale),
+        )
+    }
+
+    fn convert_point_to_device(
+        &self,
+        point: flui_types::geometry::Point<flui_types::Pixels>,
+    ) -> flui_types::geometry::Point<flui_types::DevicePixels> {
+        let scale = self.scale_factor();
+        flui_types::geometry::Point::new(
+            device_px((point.x.0 * scale).round()),
+            device_px((point.y.0 * scale).round()),
+        )
+    }
 }
 
 impl Drop for WindowsWindow {
