@@ -1,598 +1,167 @@
 //! Input event types for cross-platform support
 //!
-//! This module provides a unified input event system that works across
-//! all platforms: Desktop (Windows/macOS/Linux), Mobile (iOS/Android),
-//! and Web.
+//! This module re-exports W3C-compliant event types from `ui-events` crate
+//! and provides platform-specific utilities for event conversion.
 //!
-//! # Design Philosophy
+//! # Design Philosophy (Option A: W3C Events)
 //!
-//! 1. **Pointer Events** - Unified API for mouse, touch, and pen
-//! 2. **Platform Agnostic** - Same types work on desktop and mobile
-//! 3. **Type Safe** - Rust enums prevent invalid states
-//! 4. **GPUI-inspired** - Proven patterns from production UI framework
+//! 1. **W3C Compliant** - Use standard `ui-events` types everywhere
+//! 2. **Platform Agnostic** - Same types work on desktop, mobile, and web
+//! 3. **No Duplication** - Platform converts native events → ui-events
+//! 4. **Type Safe** - Concrete types (no generics in public API)
 //!
-//! # Input Sources
+//! # Architecture
 //!
-//! - **Mouse**: Desktop pointer device (buttons, wheel, movement)
-//! - **Touch**: Mobile/tablet touchscreen (multi-touch support)
-//! - **Pen/Stylus**: Precision input with pressure and tilt
-//! - **Keyboard**: Text input and shortcuts
-//! - **Gamepad**: Game controllers (future)
+//! ```text
+//! OS Events (Win32, Wayland, Cocoa)
+//!     ↓
+//! Platform Layer (converts to logical pixels)
+//!     ↓
+//! ui-events types (W3C PointerEvent, KeyboardEvent)
+//!     ↓
+//! flui_interaction (gesture recognition)
+//! ```
+//!
+//! # Migration from GPUI-style events
+//!
+//! This file previously contained custom `PointerEvent`, `Velocity`, etc.
+//! Those have been removed to avoid duplication with `ui-events` crate.
+//!
+//! **Before (custom types):**
+//! ```rust,ignore
+//! pub struct PointerEvent {
+//!     pub position: Point<Pixels>,
+//!     pub delta: Point<Pixels>,  // ❌ Wrong! Should be PixelDelta
+//!     // ...
+//! }
+//! ```
+//!
+//! **After (W3C types):**
+//! ```rust,ignore
+//! use ui_events::pointer::PointerEvent;  // ✅ Standard W3C type
+//! ```
 
-use flui_types::geometry::{Pixels, Point};
-use std::path::PathBuf;
+// ============================================================================
+// Re-exports from ui-events (W3C compliant)
+// ============================================================================
+
+/// Re-export W3C pointer events
+pub use ui_events::pointer::{
+    PointerButton, PointerButtons, PointerEvent, PointerId, PointerType, PointerUpdate,
+};
+
+/// Re-export keyboard types from keyboard-types crate
+pub use keyboard_types::{Key, Modifiers};
+
+/// Re-export scroll events
+pub use ui_events::ScrollDelta;
+
+// ============================================================================
+// Platform-specific utilities
+// ============================================================================
+
+use flui_types::geometry::{Offset, PixelDelta, Pixels};
 use std::time::Instant;
 
+/// Simple keyboard event (wrapper since ui-events 0.3 doesn't have KeyboardEvent)
+#[derive(Debug, Clone)]
+pub struct KeyboardEvent {
+    pub key: Key,
+    pub modifiers: Modifiers,
+    pub is_down: bool,
+    pub is_repeat: bool,
+}
+
+/// Platform input event wrapper
+///
+/// This enum wraps ui-events types for platform-specific dispatching.
+/// Platform implementations convert native events to these types.
+#[derive(Debug, Clone)]
+pub enum PlatformInput {
+    /// Pointer event (mouse, touch, pen) - W3C compliant
+    Pointer(PointerEvent),
+
+    /// Keyboard event
+    Keyboard(KeyboardEvent),
+}
+
+impl PlatformInput {
+    /// Extract pointer event if this is a pointer input
+    pub fn as_pointer(&self) -> Option<&PointerEvent> {
+        match self {
+            PlatformInput::Pointer(event) => Some(event),
+            _ => None,
+        }
+    }
+
+    /// Extract keyboard event if this is a keyboard input
+    pub fn as_keyboard(&self) -> Option<&KeyboardEvent> {
+        match self {
+            PlatformInput::Keyboard(event) => Some(event),
+            _ => None,
+        }
+    }
+}
+
 // ============================================================================
-// Pointer Events (Mouse, Touch, Pen)
+// Platform conversion utilities
 // ============================================================================
 
-/// Unified pointer event for mouse, touch, and pen input
+/// Convert device (physical) pixels to logical pixels
 ///
-/// This abstraction allows the same event handling code to work across
-/// desktop (mouse), mobile (touch), and tablet (pen) platforms.
-///
-/// # Gesture Recognition
-///
-/// This event contains all data needed for gesture recognizers:
-/// - `timestamp`: For velocity calculation and timeout detection
-/// - `pointer_id`: Unique ID to track pointer across phases
-/// - `delta`: Movement since last event (for drag gestures)
-/// - `position`: Current position (for hit testing)
-/// - `pressure`/`tilt`: For advanced pen gestures
+/// Platform implementations should use this to convert native coordinates
+/// to framework coordinates (logical pixels).
 ///
 /// # Example
 ///
 /// ```rust,ignore
-/// match pointer_event.kind {
-///     PointerKind::Mouse(MouseButton::Left) => { /* handle click */ }
-///     PointerKind::Touch { id: 0 } => { /* handle primary touch */ }
-///     PointerKind::Pen => { /* handle stylus */ }
-/// }
-/// ```
-#[derive(Debug, Clone, PartialEq)]
-pub struct PointerEvent {
-    /// Unique pointer ID (stable across down/move/up phases)
-    ///
-    /// For multi-touch, each finger gets a unique ID.
-    /// For mouse, this is typically 0.
-    pub pointer_id: u64,
-
-    /// Device ID (to distinguish multiple mice/touchscreens)
-    pub device_id: u32,
-
-    /// The kind of pointer that generated this event
-    pub kind: PointerKind,
-
-    /// Position in logical pixels
-    pub position: Point<Pixels>,
-
-    /// Movement delta since last event (logical pixels)
-    ///
-    /// This is crucial for drag gesture recognition.
-    pub delta: Point<Pixels>,
-
-    /// Modifiers held during event
-    pub modifiers: Modifiers,
-
-    /// Pointer phase (down, move, up, cancel)
-    pub phase: PointerPhase,
-
-    /// Timestamp when event occurred
-    ///
-    /// Used for velocity calculation and timeout detection in gestures.
-    pub timestamp: Instant,
-
-    /// Click count (for double-click/tap detection)
-    pub click_count: usize,
-
-    /// Pressure (0.0 - 1.0), relevant for pen/touch
-    ///
-    /// `None` if device doesn't support pressure.
-    /// For touch: typically 1.0 or actual finger pressure.
-    /// For pen: varies based on stylus pressure.
-    pub pressure: Option<f32>,
-
-    /// Tilt angles in degrees (relevant for pen)
-    ///
-    /// `None` if device doesn't support tilt.
-    pub tilt: Option<PointerTilt>,
-}
-
-/// The kind of pointer device
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum PointerKind {
-    /// Mouse pointer
-    Mouse(MouseButton),
-
-    /// Touch pointer (finger)
-    Touch {
-        /// Touch ID for multi-touch tracking
-        id: u64,
-    },
-
-    /// Pen/stylus pointer
-    Pen,
-}
-
-/// Mouse button
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub enum MouseButton {
-    /// Left mouse button (primary)
-    #[default]
-    Left,
-
-    /// Right mouse button (secondary/context menu)
-    Right,
-
-    /// Middle mouse button (wheel click)
-    Middle,
-
-    /// Back navigation button
-    Back,
-
-    /// Forward navigation button
-    Forward,
-
-    /// Other/unknown button
-    Other(u16),
-}
-
-/// Pointer event phase
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum PointerPhase {
-    /// Pointer was pressed down
-    Down,
-
-    /// Pointer moved while pressed
-    Move,
-
-    /// Pointer was released
-    Up,
-
-    /// Pointer event was cancelled (system interruption)
-    Cancel,
-}
-
-/// Pen tilt information
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct PointerTilt {
-    /// Tilt along X axis in degrees (-90 to +90)
-    pub x: f32,
-
-    /// Tilt along Y axis in degrees (-90 to +90)
-    pub y: f32,
-}
-
-/// Mouse wheel/scroll event
-#[derive(Debug, Clone, PartialEq)]
-pub struct ScrollWheelEvent {
-    /// Position where scroll occurred
-    pub position: Point<Pixels>,
-
-    /// Scroll delta (logical pixels)
-    pub delta: ScrollDelta,
-
-    /// Modifiers held during scroll
-    pub modifiers: Modifiers,
-
-    /// Touch phase (for trackpad momentum scrolling)
-    pub phase: ScrollPhase,
-}
-
-/// Scroll delta type
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum ScrollDelta {
-    /// Pixel-based scrolling (touchpad, smooth wheel)
-    Pixels { x: f32, y: f32 },
-
-    /// Line-based scrolling (old-style mouse wheels)
-    Lines { x: f32, y: f32 },
-}
-
-/// Scroll phase (for momentum scrolling)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ScrollPhase {
-    /// Scroll started
-    Started,
-
-    /// Scrolling continues
-    Changed,
-
-    /// Scroll ended
-    Ended,
-}
-
-// ============================================================================
-// Keyboard Events
-// ============================================================================
-
-/// Key press event
-#[derive(Debug, Clone, PartialEq)]
-pub struct KeyDownEvent {
-    /// The physical key code
-    pub key_code: KeyCode,
-
-    /// The logical key (after keyboard layout)
-    pub logical_key: LogicalKey,
-
-    /// Text produced by this key (if any)
-    pub text: Option<String>,
-
-    /// Modifiers held during key press
-    pub modifiers: Modifiers,
-
-    /// Is this a key repeat event?
-    pub is_repeat: bool,
-}
-
-/// Key release event
-#[derive(Debug, Clone, PartialEq)]
-pub struct KeyUpEvent {
-    /// The physical key code
-    pub key_code: KeyCode,
-
-    /// The logical key (after keyboard layout)
-    pub logical_key: LogicalKey,
-
-    /// Modifiers held during key release
-    pub modifiers: Modifiers,
-}
-
-/// Physical key code (position on keyboard)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub enum KeyCode {
-    // Letters
-    KeyA,
-    KeyB,
-    KeyC,
-    KeyD,
-    KeyE,
-    KeyF,
-    KeyG,
-    KeyH,
-    KeyI,
-    KeyJ,
-    KeyK,
-    KeyL,
-    KeyM,
-    KeyN,
-    KeyO,
-    KeyP,
-    KeyQ,
-    KeyR,
-    KeyS,
-    KeyT,
-    KeyU,
-    KeyV,
-    KeyW,
-    KeyX,
-    KeyY,
-    KeyZ,
-
-    // Numbers
-    Digit0,
-    Digit1,
-    Digit2,
-    Digit3,
-    Digit4,
-    Digit5,
-    Digit6,
-    Digit7,
-    Digit8,
-    Digit9,
-
-    // Function keys
-    F1,
-    F2,
-    F3,
-    F4,
-    F5,
-    F6,
-    F7,
-    F8,
-    F9,
-    F10,
-    F11,
-    F12,
-
-    // Navigation
-    ArrowLeft,
-    ArrowRight,
-    ArrowUp,
-    ArrowDown,
-    Home,
-    End,
-    PageUp,
-    PageDown,
-
-    // Editing
-    Backspace,
-    Delete,
-    Enter,
-    Tab,
-    Space,
-    Escape,
-
-    // Modifiers
-    ShiftLeft,
-    ShiftRight,
-    ControlLeft,
-    ControlRight,
-    AltLeft,
-    AltRight,
-    MetaLeft,
-    MetaRight, // Command on Mac, Windows key on Windows
-
-    // Other
-    CapsLock,
-    NumLock,
-    ScrollLock,
-    PrintScreen,
-    Pause,
-    Insert,
-
-    /// Unknown/unmapped key
-    Unknown,
-}
-
-/// Logical key (after keyboard layout applied)
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum LogicalKey {
-    /// A character key
-    Character(String),
-
-    /// A named key
-    Named(NamedKey),
-}
-
-/// Named logical keys
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub enum NamedKey {
-    Enter,
-    Tab,
-    Space,
-    Backspace,
-    Delete,
-    Escape,
-    ArrowLeft,
-    ArrowRight,
-    ArrowUp,
-    ArrowDown,
-    Home,
-    End,
-    PageUp,
-    PageDown,
-    Insert,
-    F1,
-    F2,
-    F3,
-    F4,
-    F5,
-    F6,
-    F7,
-    F8,
-    F9,
-    F10,
-    F11,
-    F12,
-}
-
-/// Modifier keys state
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub struct Modifiers {
-    /// Shift key
-    pub shift: bool,
-
-    /// Control key (Ctrl on Windows/Linux, Command on macOS)
-    pub control: bool,
-
-    /// Alt key (Option on macOS)
-    pub alt: bool,
-
-    /// Meta/Super key (Command on macOS, Windows key on Windows)
-    pub meta: bool,
-}
-
-/// Modifiers changed event
-#[derive(Debug, Clone, PartialEq)]
-pub struct ModifiersChangedEvent {
-    /// New modifiers state
-    pub modifiers: Modifiers,
-}
-
-// ============================================================================
-// File Drop Events
-// ============================================================================
-
-/// File drag-and-drop event
-#[derive(Debug, Clone, PartialEq)]
-pub struct FileDropEvent {
-    /// Position where files were dropped
-    pub position: Point<Pixels>,
-
-    /// Files that were dropped
-    pub paths: Vec<PathBuf>,
-
-    /// Drop phase
-    pub phase: FileDropPhase,
-}
-
-/// File drop phase
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum FileDropPhase {
-    /// Files are being dragged over the window
-    Hover,
-
-    /// Files were dropped
-    Dropped,
-
-    /// Drag operation was cancelled
-    Cancelled,
-}
-
-// ============================================================================
-// Platform Input Enum (GPUI-style)
-// ============================================================================
-
-/// Unified platform input event
+/// // Windows: WM_MOUSEMOVE gives physical pixels
+/// let physical_x = 1920; // On 2x DPI display
+/// let physical_y = 1080;
+/// let scale_factor = 2.0;
 ///
-/// This enum wraps all input event types and is used for event dispatch.
-#[derive(Debug, Clone, PartialEq)]
-pub enum PlatformInput {
-    /// Pointer event (mouse, touch, pen)
-    Pointer(PointerEvent),
+/// let logical_pos = Offset::new(
+///     Pixels(device_to_logical(physical_x as f32, scale_factor)),
+///     Pixels(device_to_logical(physical_y as f32, scale_factor))
+/// );
+/// // Result: (960, 540) logical pixels
+/// ```
+#[inline]
+pub fn device_to_logical(device_pixels: f32, scale_factor: f32) -> f32 {
+    device_pixels / scale_factor
+}
 
-    /// Mouse wheel/scroll event
-    ScrollWheel(ScrollWheelEvent),
+/// Convert logical pixels to device (physical) pixels
+#[inline]
+pub fn logical_to_device(logical_pixels: f32, scale_factor: f32) -> f32 {
+    logical_pixels * scale_factor
+}
 
-    /// Key press event
-    KeyDown(KeyDownEvent),
+/// Helper to create an Offset from raw coordinates
+#[inline]
+pub fn offset_from_coords(x: f32, y: f32) -> Offset<Pixels> {
+    Offset::new(Pixels(x), Pixels(y))
+}
 
-    /// Key release event
-    KeyUp(KeyUpEvent),
-
-    /// Modifiers changed
-    ModifiersChanged(ModifiersChangedEvent),
-
-    /// File drop event
-    FileDrop(FileDropEvent),
+/// Helper to create a delta Offset from raw coordinates
+#[inline]
+pub fn delta_offset_from_coords(dx: f32, dy: f32) -> Offset<PixelDelta> {
+    Offset::new(PixelDelta(dx), PixelDelta(dy))
 }
 
 // ============================================================================
-// Traits
+// Velocity tracking (moved from custom implementation)
 // ============================================================================
-
-/// Trait for input events
-pub trait InputEvent: Send + Sync + 'static {
-    /// Convert to platform input enum
-    fn to_platform_input(self) -> PlatformInput;
-}
-
-impl InputEvent for PointerEvent {
-    fn to_platform_input(self) -> PlatformInput {
-        PlatformInput::Pointer(self)
-    }
-}
-
-impl InputEvent for ScrollWheelEvent {
-    fn to_platform_input(self) -> PlatformInput {
-        PlatformInput::ScrollWheel(self)
-    }
-}
-
-impl InputEvent for KeyDownEvent {
-    fn to_platform_input(self) -> PlatformInput {
-        PlatformInput::KeyDown(self)
-    }
-}
-
-impl InputEvent for KeyUpEvent {
-    fn to_platform_input(self) -> PlatformInput {
-        PlatformInput::KeyUp(self)
-    }
-}
-
-impl InputEvent for ModifiersChangedEvent {
-    fn to_platform_input(self) -> PlatformInput {
-        PlatformInput::ModifiersChanged(self)
-    }
-}
-
-impl InputEvent for FileDropEvent {
-    fn to_platform_input(self) -> PlatformInput {
-        PlatformInput::FileDrop(self)
-    }
-}
-
-// ============================================================================
-// Helper implementations
-// ============================================================================
-
-impl Modifiers {
-    /// Check if any modifier is pressed
-    pub fn any(&self) -> bool {
-        self.shift || self.control || self.alt || self.meta
-    }
-
-    /// Check if only Shift is pressed
-    pub fn only_shift(&self) -> bool {
-        self.shift && !self.control && !self.alt && !self.meta
-    }
-
-    /// Check if only Control is pressed
-    pub fn only_control(&self) -> bool {
-        !self.shift && self.control && !self.alt && !self.meta
-    }
-
-    /// Check if only Alt is pressed
-    pub fn only_alt(&self) -> bool {
-        !self.shift && !self.control && self.alt && !self.meta
-    }
-
-    /// Check if only Meta is pressed
-    pub fn only_meta(&self) -> bool {
-        !self.shift && !self.control && !self.alt && self.meta
-    }
-}
-
-impl PointerEvent {
-    /// Check if this is a primary pointer event (left mouse button or first touch)
-    pub fn is_primary(&self) -> bool {
-        matches!(
-            self.kind,
-            PointerKind::Mouse(MouseButton::Left) | PointerKind::Touch { id: 0 }
-        )
-    }
-
-    /// Check if this event should trigger focus
-    pub fn is_focusing(&self) -> bool {
-        self.is_primary() && self.phase == PointerPhase::Down
-    }
-
-    /// Get distance from another pointer position (for gesture recognition)
-    pub fn distance_to(&self, other: Point<Pixels>) -> f32 {
-        let dx = self.position.x.0 - other.x.0;
-        let dy = self.position.y.0 - other.y.0;
-        (dx * dx + dy * dy).sqrt()
-    }
-
-    /// Check if pointer moved significantly (for drag gesture detection)
-    ///
-    /// Uses platform-specific thresholds (typically 8-10 pixels)
-    pub fn moved_significantly(&self, threshold: f32) -> bool {
-        self.delta.x.0.abs() > threshold || self.delta.y.0.abs() > threshold
-    }
-
-    /// Check if this is a down event
-    pub fn is_down(&self) -> bool {
-        self.phase == PointerPhase::Down
-    }
-
-    /// Check if this is a move event
-    pub fn is_move(&self) -> bool {
-        self.phase == PointerPhase::Move
-    }
-
-    /// Check if this is an up event
-    pub fn is_up(&self) -> bool {
-        self.phase == PointerPhase::Up
-    }
-
-    /// Check if this is a cancel event
-    pub fn is_cancel(&self) -> bool {
-        self.phase == PointerPhase::Cancel
-    }
-}
 
 /// Velocity tracker for gesture recognition
 ///
-/// Tracks pointer velocity to detect fling/swipe gestures.
-/// Based on Flutter's VelocityTracker.
+/// **Note:** This used to be a custom implementation. Now it should use
+/// types from `flui_types::gestures::Velocity`. We keep this minimal
+/// version for platform layer only.
+///
+/// For full velocity tracking, use `flui_interaction::processing::VelocityTracker`.
 #[derive(Debug, Clone)]
-pub struct VelocityTracker {
+pub struct BasicVelocityTracker {
     samples: Vec<VelocitySample>,
     max_samples: usize,
 }
@@ -600,10 +169,10 @@ pub struct VelocityTracker {
 #[derive(Debug, Clone, Copy)]
 struct VelocitySample {
     timestamp: Instant,
-    position: Point<Pixels>,
+    position: Offset<Pixels>,
 }
 
-impl VelocityTracker {
+impl BasicVelocityTracker {
     /// Create a new velocity tracker
     pub fn new() -> Self {
         Self {
@@ -612,23 +181,22 @@ impl VelocityTracker {
         }
     }
 
-    /// Add a pointer event sample
-    pub fn add_sample(&mut self, event: &PointerEvent) {
+    /// Add a sample
+    pub fn add_sample(&mut self, timestamp: Instant, position: Offset<Pixels>) {
         self.samples.push(VelocitySample {
-            timestamp: event.timestamp,
-            position: event.position,
+            timestamp,
+            position,
         });
 
-        // Keep only recent samples
         if self.samples.len() > self.max_samples {
             self.samples.remove(0);
         }
     }
 
-    /// Calculate current velocity in pixels per second
-    ///
-    /// Returns None if insufficient data for calculation.
-    pub fn velocity(&self) -> Option<Velocity> {
+    /// Calculate velocity (pixels per second)
+    pub fn velocity(&self) -> Option<Offset<Pixels>> {
+        use flui_types::geometry::px;
+
         if self.samples.len() < 2 {
             return None;
         }
@@ -638,55 +206,88 @@ impl VelocityTracker {
 
         let dt = last.timestamp.duration_since(first.timestamp);
         if dt.as_secs_f32() < 0.001 {
-            return None; // Too short time span
+            return None;
         }
 
-        let dx = last.position.x.0 - first.position.x.0;
-        let dy = last.position.y.0 - first.position.y.0;
-
+        let dx = last.position.dx.0 - first.position.dx.0;
+        let dy = last.position.dy.0 - first.position.dy.0;
         let dt_secs = dt.as_secs_f32();
 
-        Some(Velocity {
-            x: dx / dt_secs,
-            y: dy / dt_secs,
-        })
+        Some(Offset::new(px(dx / dt_secs), px(dy / dt_secs)))
     }
 
-    /// Clear all samples
+    /// Clear samples
     pub fn clear(&mut self) {
         self.samples.clear();
     }
 }
 
-impl Default for VelocityTracker {
+impl Default for BasicVelocityTracker {
     fn default() -> Self {
         Self::new()
     }
 }
 
-/// Velocity in pixels per second
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Velocity {
-    /// Horizontal velocity (pixels/second)
-    pub x: f32,
+// ============================================================================
+// Platform helpers
+// ============================================================================
 
-    /// Vertical velocity (pixels/second)
-    pub y: f32,
+/// Timestamp provider for platform events
+pub trait TimestampProvider {
+    fn now() -> Instant {
+        Instant::now()
+    }
 }
 
-impl Velocity {
-    /// Get velocity magnitude (speed)
-    pub fn magnitude(&self) -> f32 {
-        (self.x * self.x + self.y * self.y).sqrt()
+/// Default timestamp provider using std::time::Instant
+pub struct SystemTimestamp;
+
+impl TimestampProvider for SystemTimestamp {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_device_to_logical_conversion() {
+        assert_eq!(device_to_logical(100.0, 1.0), 100.0);
+        assert_eq!(device_to_logical(200.0, 2.0), 100.0);
+        assert_eq!(device_to_logical(150.0, 1.5), 100.0);
     }
 
-    /// Check if velocity exceeds threshold (for fling detection)
-    pub fn is_fling(&self, threshold: f32) -> bool {
-        self.magnitude() > threshold
+    #[test]
+    fn test_logical_to_device_conversion() {
+        assert_eq!(logical_to_device(100.0, 1.0), 100.0);
+        assert_eq!(logical_to_device(100.0, 2.0), 200.0);
+        assert_eq!(logical_to_device(100.0, 1.5), 150.0);
     }
 
-    /// Get velocity direction in radians
-    pub fn direction(&self) -> f32 {
-        self.y.atan2(self.x)
+    #[test]
+    fn test_offset_helpers() {
+        let offset = offset_from_coords(10.0, 20.0);
+        assert_eq!(offset.dx.0, 10.0);
+        assert_eq!(offset.dy.0, 20.0);
+
+        let delta = delta_offset_from_coords(5.0, -3.0);
+        assert_eq!(delta.dx.0, 5.0);
+        assert_eq!(delta.dy.0, -3.0);
+    }
+
+    #[test]
+    fn test_velocity_tracker() {
+        let mut tracker = BasicVelocityTracker::new();
+        let t0 = Instant::now();
+
+        tracker.add_sample(t0, offset_from_coords(0.0, 0.0));
+
+        // Simulate 100ms later, moved 50 pixels
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        let t1 = Instant::now();
+        tracker.add_sample(t1, offset_from_coords(50.0, 0.0));
+
+        if let Some(vel) = tracker.velocity() {
+            // Should be ~500 pixels/sec (50px in 0.1s)
+            assert!(vel.dx > 400.0 && vel.dx < 600.0);
+        }
     }
 }

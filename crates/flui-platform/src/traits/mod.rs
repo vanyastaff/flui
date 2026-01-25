@@ -18,11 +18,31 @@ pub use capabilities::{
 pub use display::{DisplayId, PlatformDisplay};
 pub use embedder::PlatformEmbedder;
 pub use input::{
-    FileDropEvent, FileDropPhase, InputEvent, KeyCode, KeyDownEvent, KeyUpEvent, LogicalKey,
-    Modifiers, ModifiersChangedEvent, MouseButton, NamedKey, PlatformInput, PointerEvent,
-    PointerKind, PointerPhase, PointerTilt, ScrollDelta, ScrollPhase, ScrollWheelEvent, Velocity,
-    VelocityTracker,
+    // Conversion helpers
+    delta_offset_from_coords,
+    device_to_logical,
+    logical_to_device,
+    offset_from_coords,
+    // Platform utilities
+    BasicVelocityTracker,
+    // W3C event types (re-exported from ui-events)
+    Key,
+    KeyboardEvent,
+    Modifiers,
+    PlatformInput,
+    PointerButton,
+    PointerButtons,
+    PointerEvent,
+    PointerId,
+    PointerType,
+    PointerUpdate,
+    ScrollDelta,
+    SystemTimestamp,
+    TimestampProvider,
 };
+
+// Re-export keyboard-types for convenience
+pub use keyboard_types::NamedKey;
 pub use lifecycle::{DefaultLifecycle, LifecycleEvent, LifecycleState, PlatformLifecycle};
 pub use platform::{
     Clipboard, Platform, PlatformExecutor, PlatformTextSystem, WindowEvent, WindowId, WindowOptions,

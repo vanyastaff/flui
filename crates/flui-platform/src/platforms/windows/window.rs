@@ -99,7 +99,7 @@ impl WindowsWindow {
                 height,
                 None, // parent
                 None, // menu
-                hinstance,
+                Some(hinstance.into()),
                 None, // lpParam
             )
             .context("Failed to create window")?;
@@ -218,7 +218,7 @@ impl PlatformWindow for WindowsWindow {
 
     fn request_redraw(&self) {
         unsafe {
-            InvalidateRect(self.hwnd, None, false).ok();
+            InvalidateRect(Some(self.hwnd), None, false).ok();
         }
     }
 

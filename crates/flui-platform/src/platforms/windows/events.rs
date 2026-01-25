@@ -1,4 +1,6 @@
-//! Windows event conversion to PlatformInput
+//! Windows event conversion to W3C ui-events (0.3 API)
+//!
+//! Converts Win32 messages to W3C-compliant PointerEvent using ui-events 0.3.
 
 use std::time::Instant;
 use windows::Win32::Foundation::*;
@@ -6,156 +8,134 @@ use windows::Win32::UI::Input::KeyboardAndMouse::*;
 
 use super::util::*;
 use crate::traits::{
-    KeyCode, KeyDownEvent, KeyUpEvent, LogicalKey, Modifiers, MouseButton, NamedKey, PlatformInput,
-    PointerEvent, PointerKind, PointerPhase, ScrollDelta, ScrollPhase, ScrollWheelEvent,
+    device_to_logical, offset_from_coords, Key, KeyboardEvent, Modifiers, PlatformInput, ScrollDelta,
 };
-use flui_types::geometry::{px, Point};
+use dpi::{PhysicalPosition, PhysicalSize};
+use keyboard_types::Modifiers as KeyboardModifiers;
+use ui_events::pointer::{
+    PointerButton, PointerButtonEvent, PointerEvent, PointerId, PointerInfo, PointerState,
+    PointerType, PointerUpdate,
+};
 
-/// Convert VK_* to KeyCode
-pub fn vk_to_keycode(vk: VIRTUAL_KEY) -> KeyCode {
+// ============================================================================
+// Keyboard Event Conversion
+// ============================================================================
+
+/// Convert VK_* to keyboard-types Key
+fn vk_to_key(vk: VIRTUAL_KEY, _scan_code: u16) -> Key {
+    use keyboard_types::{Key as K, NamedKey};
+
     match vk {
-        VK_A => KeyCode::KeyA,
-        VK_B => KeyCode::KeyB,
-        VK_C => KeyCode::KeyC,
-        VK_D => KeyCode::KeyD,
-        VK_E => KeyCode::KeyE,
-        VK_F => KeyCode::KeyF,
-        VK_G => KeyCode::KeyG,
-        VK_H => KeyCode::KeyH,
-        VK_I => KeyCode::KeyI,
-        VK_J => KeyCode::KeyJ,
-        VK_K => KeyCode::KeyK,
-        VK_L => KeyCode::KeyL,
-        VK_M => KeyCode::KeyM,
-        VK_N => KeyCode::KeyN,
-        VK_O => KeyCode::KeyO,
-        VK_P => KeyCode::KeyP,
-        VK_Q => KeyCode::KeyQ,
-        VK_R => KeyCode::KeyR,
-        VK_S => KeyCode::KeyS,
-        VK_T => KeyCode::KeyT,
-        VK_U => KeyCode::KeyU,
-        VK_V => KeyCode::KeyV,
-        VK_W => KeyCode::KeyW,
-        VK_X => KeyCode::KeyX,
-        VK_Y => KeyCode::KeyY,
-        VK_Z => KeyCode::KeyZ,
+        // Named keys
+        VK_RETURN => K::Named(NamedKey::Enter),
+        VK_TAB => K::Named(NamedKey::Tab),
+        VK_SPACE => K::Character(" ".into()),
+        VK_BACK => K::Named(NamedKey::Backspace),
+        VK_DELETE => K::Named(NamedKey::Delete),
+        VK_ESCAPE => K::Named(NamedKey::Escape),
 
-        VK_0 => KeyCode::Digit0,
-        VK_1 => KeyCode::Digit1,
-        VK_2 => KeyCode::Digit2,
-        VK_3 => KeyCode::Digit3,
-        VK_4 => KeyCode::Digit4,
-        VK_5 => KeyCode::Digit5,
-        VK_6 => KeyCode::Digit6,
-        VK_7 => KeyCode::Digit7,
-        VK_8 => KeyCode::Digit8,
-        VK_9 => KeyCode::Digit9,
+        VK_LEFT => K::Named(NamedKey::ArrowLeft),
+        VK_RIGHT => K::Named(NamedKey::ArrowRight),
+        VK_UP => K::Named(NamedKey::ArrowUp),
+        VK_DOWN => K::Named(NamedKey::ArrowDown),
 
-        VK_F1 => KeyCode::F1,
-        VK_F2 => KeyCode::F2,
-        VK_F3 => KeyCode::F3,
-        VK_F4 => KeyCode::F4,
-        VK_F5 => KeyCode::F5,
-        VK_F6 => KeyCode::F6,
-        VK_F7 => KeyCode::F7,
-        VK_F8 => KeyCode::F8,
-        VK_F9 => KeyCode::F9,
-        VK_F10 => KeyCode::F10,
-        VK_F11 => KeyCode::F11,
-        VK_F12 => KeyCode::F12,
+        VK_HOME => K::Named(NamedKey::Home),
+        VK_END => K::Named(NamedKey::End),
+        VK_PRIOR => K::Named(NamedKey::PageUp),
+        VK_NEXT => K::Named(NamedKey::PageDown),
+        VK_INSERT => K::Named(NamedKey::Insert),
 
-        VK_LEFT => KeyCode::ArrowLeft,
-        VK_RIGHT => KeyCode::ArrowRight,
-        VK_UP => KeyCode::ArrowUp,
-        VK_DOWN => KeyCode::ArrowDown,
+        VK_F1 => K::Named(NamedKey::F1),
+        VK_F2 => K::Named(NamedKey::F2),
+        VK_F3 => K::Named(NamedKey::F3),
+        VK_F4 => K::Named(NamedKey::F4),
+        VK_F5 => K::Named(NamedKey::F5),
+        VK_F6 => K::Named(NamedKey::F6),
+        VK_F7 => K::Named(NamedKey::F7),
+        VK_F8 => K::Named(NamedKey::F8),
+        VK_F9 => K::Named(NamedKey::F9),
+        VK_F10 => K::Named(NamedKey::F10),
+        VK_F11 => K::Named(NamedKey::F11),
+        VK_F12 => K::Named(NamedKey::F12),
 
-        VK_HOME => KeyCode::Home,
-        VK_END => KeyCode::End,
-        VK_PRIOR => KeyCode::PageUp,
-        VK_NEXT => KeyCode::PageDown,
+        // Modifiers
+        VK_LSHIFT | VK_RSHIFT => K::Named(NamedKey::Shift),
+        VK_LCONTROL | VK_RCONTROL => K::Named(NamedKey::Control),
+        VK_LMENU | VK_RMENU => K::Named(NamedKey::Alt),
+        VK_LWIN | VK_RWIN => K::Named(NamedKey::Meta),
 
-        VK_BACK => KeyCode::Backspace,
-        VK_DELETE => KeyCode::Delete,
-        VK_RETURN => KeyCode::Enter,
-        VK_TAB => KeyCode::Tab,
-        VK_SPACE => KeyCode::Space,
-        VK_ESCAPE => KeyCode::Escape,
+        // Letters
+        VK_A => K::Character("a".into()),
+        VK_B => K::Character("b".into()),
+        VK_C => K::Character("c".into()),
+        VK_D => K::Character("d".into()),
+        VK_E => K::Character("e".into()),
+        VK_F => K::Character("f".into()),
+        VK_G => K::Character("g".into()),
+        VK_H => K::Character("h".into()),
+        VK_I => K::Character("i".into()),
+        VK_J => K::Character("j".into()),
+        VK_K => K::Character("k".into()),
+        VK_L => K::Character("l".into()),
+        VK_M => K::Character("m".into()),
+        VK_N => K::Character("n".into()),
+        VK_O => K::Character("o".into()),
+        VK_P => K::Character("p".into()),
+        VK_Q => K::Character("q".into()),
+        VK_R => K::Character("r".into()),
+        VK_S => K::Character("s".into()),
+        VK_T => K::Character("t".into()),
+        VK_U => K::Character("u".into()),
+        VK_V => K::Character("v".into()),
+        VK_W => K::Character("w".into()),
+        VK_X => K::Character("x".into()),
+        VK_Y => K::Character("y".into()),
+        VK_Z => K::Character("z".into()),
 
-        VK_LSHIFT => KeyCode::ShiftLeft,
-        VK_RSHIFT => KeyCode::ShiftRight,
-        VK_LCONTROL => KeyCode::ControlLeft,
-        VK_RCONTROL => KeyCode::ControlRight,
-        VK_LMENU => KeyCode::AltLeft,
-        VK_RMENU => KeyCode::AltRight,
-        VK_LWIN => KeyCode::MetaLeft,
-        VK_RWIN => KeyCode::MetaRight,
+        // Numbers
+        VK_0 => K::Character("0".into()),
+        VK_1 => K::Character("1".into()),
+        VK_2 => K::Character("2".into()),
+        VK_3 => K::Character("3".into()),
+        VK_4 => K::Character("4".into()),
+        VK_5 => K::Character("5".into()),
+        VK_6 => K::Character("6".into()),
+        VK_7 => K::Character("7".into()),
+        VK_8 => K::Character("8".into()),
+        VK_9 => K::Character("9".into()),
 
-        VK_CAPITAL => KeyCode::CapsLock,
-        VK_NUMLOCK => KeyCode::NumLock,
-        VK_SCROLL => KeyCode::ScrollLock,
-        VK_SNAPSHOT => KeyCode::PrintScreen,
-        VK_PAUSE => KeyCode::Pause,
-        VK_INSERT => KeyCode::Insert,
-
-        _ => KeyCode::Unknown,
-    }
-}
-
-/// Convert VK_* to LogicalKey
-pub fn vk_to_logical_key(vk: VIRTUAL_KEY, _scan_code: u16) -> LogicalKey {
-    // TODO: Use keyboard layout to get character
-    match vk {
-        VK_RETURN => LogicalKey::Named(NamedKey::Enter),
-        VK_TAB => LogicalKey::Named(NamedKey::Tab),
-        VK_SPACE => LogicalKey::Named(NamedKey::Space),
-        VK_BACK => LogicalKey::Named(NamedKey::Backspace),
-        VK_DELETE => LogicalKey::Named(NamedKey::Delete),
-        VK_ESCAPE => LogicalKey::Named(NamedKey::Escape),
-
-        VK_LEFT => LogicalKey::Named(NamedKey::ArrowLeft),
-        VK_RIGHT => LogicalKey::Named(NamedKey::ArrowRight),
-        VK_UP => LogicalKey::Named(NamedKey::ArrowUp),
-        VK_DOWN => LogicalKey::Named(NamedKey::ArrowDown),
-
-        VK_HOME => LogicalKey::Named(NamedKey::Home),
-        VK_END => LogicalKey::Named(NamedKey::End),
-        VK_PRIOR => LogicalKey::Named(NamedKey::PageUp),
-        VK_NEXT => LogicalKey::Named(NamedKey::PageDown),
-        VK_INSERT => LogicalKey::Named(NamedKey::Insert),
-
-        VK_F1 => LogicalKey::Named(NamedKey::F1),
-        VK_F2 => LogicalKey::Named(NamedKey::F2),
-        VK_F3 => LogicalKey::Named(NamedKey::F3),
-        VK_F4 => LogicalKey::Named(NamedKey::F4),
-        VK_F5 => LogicalKey::Named(NamedKey::F5),
-        VK_F6 => LogicalKey::Named(NamedKey::F6),
-        VK_F7 => LogicalKey::Named(NamedKey::F7),
-        VK_F8 => LogicalKey::Named(NamedKey::F8),
-        VK_F9 => LogicalKey::Named(NamedKey::F9),
-        VK_F10 => LogicalKey::Named(NamedKey::F10),
-        VK_F11 => LogicalKey::Named(NamedKey::F11),
-        VK_F12 => LogicalKey::Named(NamedKey::F12),
-
-        // TODO: Get character from keyboard layout
-        _ => LogicalKey::Character("".to_string()),
+        _ => K::Named(NamedKey::Unidentified),
     }
 }
 
 /// Get current modifiers state
-pub unsafe fn get_modifiers() -> Modifiers {
-    Modifiers {
-        shift: is_key_pressed(VK_SHIFT.0 as i32),
-        control: is_key_pressed(VK_CONTROL.0 as i32),
-        alt: is_key_pressed(VK_MENU.0 as i32),
-        meta: is_key_pressed(VK_LWIN.0 as i32) || is_key_pressed(VK_RWIN.0 as i32),
+unsafe fn get_modifiers() -> KeyboardModifiers {
+    let mut mods = KeyboardModifiers::empty();
+
+    if is_key_pressed(VK_SHIFT.0 as i32) {
+        mods |= KeyboardModifiers::SHIFT;
     }
+    if is_key_pressed(VK_CONTROL.0 as i32) {
+        mods |= KeyboardModifiers::CONTROL;
+    }
+    if is_key_pressed(VK_MENU.0 as i32) {
+        mods |= KeyboardModifiers::ALT;
+    }
+    if is_key_pressed(VK_LWIN.0 as i32) || is_key_pressed(VK_RWIN.0 as i32) {
+        mods |= KeyboardModifiers::META;
+    }
+
+    mods
 }
 
-/// Convert WM_LBUTTONDOWN/UP to PointerEvent
+// ============================================================================
+// Pointer Event Conversion (W3C ui-events 0.3 API)
+// ============================================================================
+
+/// Convert WM_LBUTTONDOWN/UP to W3C PointerEvent
 pub fn mouse_button_event(
-    button: MouseButton,
-    phase: PointerPhase,
+    button: PointerButton,
+    is_down: bool,
     lparam: LPARAM,
     scale_factor: f32,
 ) -> PlatformInput {
@@ -164,66 +144,87 @@ pub fn mouse_button_event(
 
     let modifiers = unsafe { get_modifiers() };
 
-    let event = PointerEvent {
-        pointer_id: 0, // Mouse is always ID 0
-        device_id: 0,
-        kind: PointerKind::Mouse(button),
-        position: Point::new(
-            px(device_to_logical(x, scale_factor)),
-            px(device_to_logical(y, scale_factor)),
-        ),
-        delta: Point::new(px(0.0), px(0.0)), // TODO: Calculate from previous position
-        modifiers,
-        phase,
-        timestamp: Instant::now(),
-        click_count: 1, // TODO: Detect double-click
-        pressure: None,
-        tilt: None,
+    // Convert to logical pixels then to physical for ui-events
+    let logical_x = device_to_logical(x as f32, scale_factor);
+    let logical_y = device_to_logical(y as f32, scale_factor);
+
+    let pointer_info = PointerInfo {
+        pointer_id: Some(PointerId::PRIMARY),
+        pointer_type: PointerType::Mouse,
+        persistent_device_id: None,
     };
 
-    PlatformInput::Pointer(event)
-}
+    let state = PointerState {
+        time: Instant::now().elapsed().as_millis() as u64,
+        position: PhysicalPosition::new(logical_x as f64, logical_y as f64),
+        buttons: Default::default(),
+        modifiers,
+        count: 1,
+        contact_geometry: PhysicalSize::new(1.0, 1.0),
+        orientation: Default::default(),
+        pressure: if is_down { 0.5 } else { 0.0 },
+        tangential_pressure: 0.0,
+        scale_factor: scale_factor as f64,
+    };
 
-/// Convert WM_MOUSEMOVE to PointerEvent
-pub fn mouse_move_event(
-    lparam: LPARAM,
-    scale_factor: f32,
-    current_button: Option<MouseButton>,
-) -> PlatformInput {
-    let x = get_x_lparam(lparam);
-    let y = get_y_lparam(lparam);
-
-    let modifiers = unsafe { get_modifiers() };
-
-    let kind = if let Some(button) = current_button {
-        PointerKind::Mouse(button)
+    let event = if is_down {
+        PointerEvent::Down(PointerButtonEvent {
+            pointer: pointer_info,
+            state,
+            button: Some(button),
+        })
     } else {
-        PointerKind::Mouse(MouseButton::Left) // Default when hovering
-    };
-
-    let event = PointerEvent {
-        pointer_id: 0,
-        device_id: 0,
-        kind,
-        position: Point::new(
-            px(device_to_logical(x, scale_factor)),
-            px(device_to_logical(y, scale_factor)),
-        ),
-        delta: Point::new(px(0.0), px(0.0)), // TODO: Calculate from previous position
-        modifiers,
-        phase: PointerPhase::Move,
-        timestamp: Instant::now(),
-        click_count: 0,
-        pressure: None,
-        tilt: None,
+        PointerEvent::Up(PointerButtonEvent {
+            pointer: pointer_info,
+            state,
+            button: Some(button),
+        })
     };
 
     PlatformInput::Pointer(event)
 }
 
-/// Convert WM_MOUSEWHEEL to ScrollWheelEvent
+/// Convert WM_MOUSEMOVE to W3C PointerEvent
+pub fn mouse_move_event(lparam: LPARAM, scale_factor: f32) -> PlatformInput {
+    let x = get_x_lparam(lparam);
+    let y = get_y_lparam(lparam);
+
+    let modifiers = unsafe { get_modifiers() };
+
+    let logical_x = device_to_logical(x as f32, scale_factor);
+    let logical_y = device_to_logical(y as f32, scale_factor);
+
+    let pointer_info = PointerInfo {
+        pointer_id: Some(PointerId::PRIMARY),
+        pointer_type: PointerType::Mouse,
+        persistent_device_id: None,
+    };
+
+    let state = PointerState {
+        time: Instant::now().elapsed().as_millis() as u64,
+        position: PhysicalPosition::new(logical_x as f64, logical_y as f64),
+        buttons: Default::default(),
+        modifiers,
+        count: 1,
+        contact_geometry: PhysicalSize::new(1.0, 1.0),
+        orientation: Default::default(),
+        pressure: 0.0,
+        tangential_pressure: 0.0,
+        scale_factor: scale_factor as f64,
+    };
+
+    let event = PointerEvent::Move(PointerUpdate {
+        pointer: pointer_info,
+        current: state,
+        coalesced: Vec::new(),
+        predicted: Vec::new(),
+    });
+
+    PlatformInput::Pointer(event)
+}
+
+/// Convert WM_MOUSEWHEEL to W3C PointerEvent with Scroll
 pub fn mouse_wheel_event(wparam: WPARAM, lparam: LPARAM, scale_factor: f32) -> PlatformInput {
-    // Get wheel delta (HIWORD of wparam)
     let delta = ((wparam.0 as i32) >> 16) as i16 as f32;
     let lines = delta / 120.0; // WHEEL_DELTA = 120
 
@@ -232,55 +233,75 @@ pub fn mouse_wheel_event(wparam: WPARAM, lparam: LPARAM, scale_factor: f32) -> P
 
     let modifiers = unsafe { get_modifiers() };
 
-    let event = ScrollWheelEvent {
-        position: Point::new(
-            px(device_to_logical(x, scale_factor)),
-            px(device_to_logical(y, scale_factor)),
-        ),
-        delta: ScrollDelta::Lines { x: 0.0, y: lines },
-        modifiers,
-        phase: ScrollPhase::Changed,
+    let logical_x = device_to_logical(x as f32, scale_factor);
+    let logical_y = device_to_logical(y as f32, scale_factor);
+
+    let pointer_info = PointerInfo {
+        pointer_id: Some(PointerId::PRIMARY),
+        pointer_type: PointerType::Mouse,
+        persistent_device_id: None,
     };
 
-    PlatformInput::ScrollWheel(event)
+    let state = PointerState {
+        time: Instant::now().elapsed().as_millis() as u64,
+        position: PhysicalPosition::new(logical_x as f64, logical_y as f64),
+        buttons: Default::default(),
+        modifiers,
+        count: 1,
+        contact_geometry: PhysicalSize::new(1.0, 1.0),
+        orientation: Default::default(),
+        pressure: 0.0,
+        tangential_pressure: 0.0,
+        scale_factor: scale_factor as f64,
+    };
+
+    let event = PointerEvent::Scroll(ui_events::pointer::PointerScrollEvent {
+        pointer: pointer_info,
+        state,
+        delta: ScrollDelta::LineDelta(0.0, lines),
+    });
+
+    PlatformInput::Pointer(event)
 }
 
-/// Convert WM_KEYDOWN to KeyDownEvent
+// ============================================================================
+// Keyboard events (simple wrappers)
+// ============================================================================
+
+/// Convert WM_KEYDOWN to KeyboardEvent
 pub fn key_down_event(wparam: WPARAM, lparam: LPARAM) -> PlatformInput {
     let vk = VIRTUAL_KEY(wparam.0 as u16);
     let scan_code = ((lparam.0 >> 16) & 0xFF) as u16;
     let is_repeat = (lparam.0 & (1 << 30)) != 0;
 
     let modifiers = unsafe { get_modifiers() };
+    let key = vk_to_key(vk, scan_code);
 
-    let event = KeyDownEvent {
-        key_code: vk_to_keycode(vk),
-        logical_key: vk_to_logical_key(vk, scan_code),
-        text: None, // WM_CHAR provides text
-        modifiers,
+    PlatformInput::Keyboard(KeyboardEvent {
+        key,
+        modifiers: modifiers.into(),
+        is_down: true,
         is_repeat,
-    };
-
-    PlatformInput::KeyDown(event)
+    })
 }
 
-/// Convert WM_KEYUP to KeyUpEvent
+/// Convert WM_KEYUP to KeyboardEvent
 pub fn key_up_event(wparam: WPARAM, lparam: LPARAM) -> PlatformInput {
     let vk = VIRTUAL_KEY(wparam.0 as u16);
     let scan_code = ((lparam.0 >> 16) & 0xFF) as u16;
 
     let modifiers = unsafe { get_modifiers() };
+    let key = vk_to_key(vk, scan_code);
 
-    let event = KeyUpEvent {
-        key_code: vk_to_keycode(vk),
-        logical_key: vk_to_logical_key(vk, scan_code),
-        modifiers,
-    };
-
-    PlatformInput::KeyUp(event)
+    PlatformInput::Keyboard(KeyboardEvent {
+        key,
+        modifiers: modifiers.into(),
+        is_down: false,
+        is_repeat: false,
+    })
 }
 
-/// Convert WM_CHAR to text for KeyDownEvent
+/// Convert WM_CHAR to text
 pub fn char_to_text(wparam: WPARAM) -> String {
     let code_point = wparam.0 as u32;
     if let Some(c) = char::from_u32(code_point) {
@@ -295,25 +316,37 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_vk_to_keycode() {
-        assert_eq!(vk_to_keycode(VK_A), KeyCode::KeyA);
-        assert_eq!(vk_to_keycode(VK_RETURN), KeyCode::Enter);
-        assert_eq!(vk_to_keycode(VK_LEFT), KeyCode::ArrowLeft);
-        assert_eq!(vk_to_keycode(VK_F1), KeyCode::F1);
+    fn test_vk_to_key() {
+        assert!(matches!(vk_to_key(VK_A, 0), Key::Character(_)));
+        assert_eq!(vk_to_key(VK_RETURN, 0), Key::Named(NamedKey::Enter));
+        assert_eq!(vk_to_key(VK_LEFT, 0), Key::Named(NamedKey::ArrowLeft));
+        assert_eq!(vk_to_key(VK_F1, 0), Key::Named(NamedKey::F1));
     }
 
     #[test]
-    fn test_mouse_button_event() {
+    fn test_mouse_button_down() {
         let lparam = LPARAM(((200 << 16) | 100) as isize);
-        let event = mouse_button_event(MouseButton::Left, PointerPhase::Down, lparam, 1.0);
+        let event = mouse_button_event(PointerButton::Primary, true, lparam, 1.0);
 
-        if let PlatformInput::Pointer(ptr) = event {
-            assert_eq!(ptr.position.x.0, 100.0);
-            assert_eq!(ptr.position.y.0, 200.0);
-            assert_eq!(ptr.phase, PointerPhase::Down);
-            assert!(matches!(ptr.kind, PointerKind::Mouse(MouseButton::Left)));
+        if let PlatformInput::Pointer(PointerEvent::Down(down_event)) = event {
+            assert_eq!(down_event.state.position.x, 100.0);
+            assert_eq!(down_event.state.position.y, 200.0);
+            assert_eq!(down_event.button, Some(PointerButton::Primary));
         } else {
-            panic!("Expected PointerEvent");
+            panic!("Expected Pointer Down event");
+        }
+    }
+
+    #[test]
+    fn test_mouse_move() {
+        let lparam = LPARAM(((200 << 16) | 100) as isize);
+        let event = mouse_move_event(lparam, 1.0);
+
+        if let PlatformInput::Pointer(PointerEvent::Move(move_event)) = event {
+            assert_eq!(move_event.current.position.x, 100.0);
+            assert_eq!(move_event.current.position.y, 200.0);
+        } else {
+            panic!("Expected Pointer Move event");
         }
     }
 }

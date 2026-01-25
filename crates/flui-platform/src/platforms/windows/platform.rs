@@ -12,6 +12,7 @@ use windows::Win32::System::LibraryLoader::*;
 use windows::Win32::UI::HiDpi::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
+use super::display::enumerate_displays;
 use super::util::*;
 use super::window::WindowsWindow;
 use crate::traits::*;
@@ -80,9 +81,9 @@ impl WindowsPlatform {
                 0,
                 0,
                 0,
-                HWND_MESSAGE, // Message-only window
+                Some(HWND_MESSAGE), // Message-only window
                 None,
-                hinstance,
+                Some(hinstance.into()),
                 None,
             )
             .map_err(|e| anyhow::anyhow!("Failed to create message window: {:?}", e))?
@@ -316,13 +317,13 @@ impl Platform for WindowsPlatform {
     // ==================== Display Management ====================
 
     fn displays(&self) -> Vec<Arc<dyn PlatformDisplay>> {
-        // TODO: Enumerate monitors
-        vec![]
+        enumerate_displays()
     }
 
     fn primary_display(&self) -> Option<Arc<dyn PlatformDisplay>> {
-        // TODO: Get primary monitor
-        None
+        enumerate_displays()
+            .into_iter()
+            .find(|d| d.is_primary())
     }
 
     fn open_window(&self, options: WindowOptions) -> Result<Box<dyn PlatformWindow>> {

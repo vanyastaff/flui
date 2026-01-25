@@ -1,82 +1,54 @@
 [package]
 name = "flui-platform"
-version = "0.1.0"
-edition = "2021"
-description = "Platform abstraction traits for FLUI"
-license = "MIT OR Apache-2.0"
-repository = "https://github.com/user/flui"
-keywords = ["ui", "gui", "platform", "abstraction"]
-categories = ["gui"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Platform abstraction layer for FLUI - cross-platform window and input handling"
 
 [dependencies]
-# Core types
+# FLUI foundation
 flui_types = { path = "../flui_types" }
 
-# Windowing (DEPRECATED - will be removed)
+# UI Events - W3C compliant event types
+ui-events = { workspace = true }
+keyboard-types = "0.8"
+dpi = "0.1"
+
+# Windowing (for platform implementations)
 winit = { workspace = true, optional = true }
 
-# Clipboard
-arboard = { workspace = true }
-
-# Sync primitives
-parking_lot = { workspace = true }
-
-# Error handling
+# Error handling & logging
 anyhow = { workspace = true }
-
-# Logging
+thiserror = { workspace = true }
 tracing = { workspace = true }
 
-# Raw window handle for wgpu integration
+# Synchronization
+parking_lot = { workspace = true }
+
+# Window handle abstraction
 raw-window-handle = "0.6"
 
 # Windows platform
-[target.'cfg(windows)'.dependencies]
-windows = { version = "0.58", features = [
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.59", features = [
     "Win32_Foundation",
-    "Win32_Graphics_Gdi",
-    "Win32_Graphics_Dwm",
-    "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Input_KeyboardAndMouse",
-    "Win32_UI_Shell",
-    "Win32_UI_HiDpi",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Graphics_Gdi",
     "Win32_System_LibraryLoader",
-    "Win32_System_Threading",
+    "Win32_UI_HiDpi",
     "Win32_System_Com",
 ] }
 
-# macOS platform
-[target.'cfg(target_os = "macos")'.dependencies]
-objc2 = "0.5"
-objc2-foundation = { version = "0.2", features = ["NSString", "NSArray"] }
-objc2-app-kit = { version = "0.2", features = [
-    "NSApplication",
-    "NSWindow",
-    "NSView",
-    "NSEvent",
-    "NSScreen",
-] }
-cocoa = "0.26"
-core-foundation = "0.10"
-
-# Linux platform
-[target.'cfg(target_os = "linux")'.dependencies]
-# Wayland
-wayland-client = { version = "0.31", optional = true }
-wayland-protocols = { version = "0.32", features = ["client"], optional = true }
-smithay-client-toolkit = { version = "0.19", optional = true }
-# X11
-x11rb = { version = "0.13", features = ["all-extensions"], optional = true }
-# Common
-calloop = "0.14"
-xkbcommon = "0.8"
-
-[dev-dependencies]
-
 [features]
-default = []
-# Legacy winit support (deprecated)
-winit-backend = ["dep:winit"]
-# Linux backends
-wayland = ["dep:wayland-client", "dep:wayland-protocols", "dep:smithay-client-toolkit"]
-x11 = ["dep:x11rb"]
+default = ["desktop"]
+
+# Platform features
+desktop = ["winit"]
+
+# Re-export dependencies that might be needed by consumers
+[package.metadata.docs.rs]
+all-features = true
