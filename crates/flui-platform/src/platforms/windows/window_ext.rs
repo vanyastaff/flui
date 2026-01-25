@@ -168,14 +168,14 @@ pub trait WindowsWindowExt {
     /// Convert point from device (pixel) coordinates to logical coordinates.
     fn convert_point_from_device(
         &self,
-        point: flui_types::geometry::Point<flui_types::DevicePixels>,
-    ) -> flui_types::geometry::Point<flui_types::Pixels>;
+        point: flui_types::geometry::Point<flui_types::geometry::DevicePixels>,
+    ) -> flui_types::geometry::Point<flui_types::geometry::Pixels>;
 
     /// Convert point from logical coordinates to device (pixel) coordinates.
     fn convert_point_to_device(
         &self,
-        point: flui_types::geometry::Point<flui_types::Pixels>,
-    ) -> flui_types::geometry::Point<flui_types::DevicePixels>;
+        point: flui_types::geometry::Point<flui_types::geometry::Pixels>,
+    ) -> flui_types::geometry::Point<flui_types::geometry::DevicePixels>;
 }
 
 // ============================================================================
@@ -343,22 +343,22 @@ impl WindowsTheme {
 #[allow(dead_code)]
 pub(crate) mod dwm_attributes {
     /// Use immersive dark mode.
-    pub const DWMWA_USE_IMMERSIVE_DARK_MODE: u32 = 20;
+    pub const DWMWA_USE_IMMERSIVE_DARK_MODE: i32 = 20;
 
     /// Window corner preference.
-    pub const DWMWA_WINDOW_CORNER_PREFERENCE: u32 = 33;
+    pub const DWMWA_WINDOW_CORNER_PREFERENCE: i32 = 33;
 
     /// System backdrop type.
-    pub const DWMWA_SYSTEMBACKDROP_TYPE: u32 = 38;
+    pub const DWMWA_SYSTEMBACKDROP_TYPE: i32 = 38;
 
     /// Caption color.
-    pub const DWMWA_CAPTION_COLOR: u32 = 35;
+    pub const DWMWA_CAPTION_COLOR: i32 = 35;
 
     /// Border color.
-    pub const DWMWA_BORDER_COLOR: u32 = 34;
+    pub const DWMWA_BORDER_COLOR: i32 = 34;
 
     /// Enable blur behind window.
-    pub const DWMWA_ENABLE_BLUR_BEHIND: u32 = 10;
+    pub const DWMWA_ENABLE_BLUR_BEHIND: i32 = 10;
 }
 
 // ============================================================================

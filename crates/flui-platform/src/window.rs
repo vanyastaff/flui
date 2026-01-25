@@ -70,13 +70,13 @@ pub trait Window {
 
     /// Get the window's bounds (position + size).
     fn bounds(&self) -> Rect<Pixels> {
-        Rect::from_origin_and_size(self.position(), self.size())
+        Rect::from_origin_size(self.position(), self.size())
     }
 
     /// Set the window's bounds (position + size).
     fn set_bounds(&mut self, bounds: Rect<Pixels>) {
-        self.set_position(bounds.origin);
-        self.set_size(bounds.size);
+        self.set_position(bounds.origin());
+        self.set_size(bounds.size());
     }
 
     /// Get the window's current state (normal, minimized, maximized, fullscreen).
@@ -465,7 +465,7 @@ pub trait WindowManager {
     /// Calculate a cascade position for a new window.
     ///
     /// This provides the standard "staircase" positioning for new windows.
-    fn calculate_cascade_position(&self, window_size: Size<Pixels>) -> Point<Pixels> {
+    fn calculate_cascade_position(&self, _window_size: Size<Pixels>) -> Point<Pixels> {
         let count = self.window_count();
         let cascade_offset = 28.0; // Standard cascade offset
 

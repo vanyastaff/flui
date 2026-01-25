@@ -392,15 +392,15 @@ impl PlatformWindow for Arc<WindowsWindow> {
     }
 
     fn request_redraw(&self) {
-        self.as_ref().request_redraw()
+        PlatformWindow::request_redraw(self.as_ref())
     }
 
     fn is_focused(&self) -> bool {
-        self.as_ref().is_focused()
+        PlatformWindow::is_focused(self.as_ref())
     }
 
     fn is_visible(&self) -> bool {
-        self.as_ref().is_visible()
+        PlatformWindow::is_visible(self.as_ref())
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
@@ -570,16 +570,14 @@ impl WindowTrait for WindowsWindow {
         unsafe {
             let placement = self.get_window_placement();
 
-            match placement.showCmd {
-                SW_MINIMIZE => CrossWindowState::Minimized,
-                SW_MAXIMIZE => CrossWindowState::Maximized,
-                _ => {
-                    if self.is_fullscreen() {
-                        CrossWindowState::Fullscreen
-                    } else {
-                        CrossWindowState::Normal
-                    }
-                }
+            if placement.showCmd == SW_MINIMIZE.0 as u32 {
+                CrossWindowState::Minimized
+            } else if placement.showCmd == SW_MAXIMIZE.0 as u32 {
+                CrossWindowState::Maximized
+            } else if self.is_fullscreen() {
+                CrossWindowState::Fullscreen
+            } else {
+                CrossWindowState::Normal
             }
         }
     }
@@ -771,25 +769,25 @@ impl WindowsWindow {
     }
 
     /// Set DWM window attribute
-    unsafe fn set_dwm_attribute<T>(&self, attribute: u32, value: &T) -> windows::core::Result<()> {
-        use windows::Win32::Graphics::Dwm::DwmSetWindowAttribute;
+    unsafe fn set_dwm_attribute<T>(&self, attribute: i32, value: &T) -> windows::core::Result<()> {
+        use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWINDOWATTRIBUTE};
 
         DwmSetWindowAttribute(
             self.hwnd,
-            attribute,
+            DWMWINDOWATTRIBUTE(attribute),
             value as *const T as *const std::ffi::c_void,
             std::mem::size_of::<T>() as u32,
         )
     }
 
     /// Get DWM window attribute
-    unsafe fn get_dwm_attribute<T: Default>(&self, attribute: u32) -> windows::core::Result<T> {
-        use windows::Win32::Graphics::Dwm::DwmGetWindowAttribute;
+    unsafe fn get_dwm_attribute<T: Default>(&self, attribute: i32) -> windows::core::Result<T> {
+        use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWINDOWATTRIBUTE};
 
         let mut value = T::default();
         DwmGetWindowAttribute(
             self.hwnd,
-            attribute,
+            DWMWINDOWATTRIBUTE(attribute),
             &mut value as *mut T as *mut std::ffi::c_void,
             std::mem::size_of::<T>() as u32,
         )?;
@@ -1016,8 +1014,8 @@ impl WindowsWindowExtTrait for WindowsWindow {
 
     fn convert_point_from_device(
         &self,
-        point: flui_types::geometry::Point<flui_types::DevicePixels>,
-    ) -> flui_types::geometry::Point<flui_types::Pixels> {
+        point: Point<DevicePixels>,
+    ) -> Point<Pixels> {
         let scale = self.scale_factor();
         Point::new(
             px(point.x.0 as f32 / scale),
@@ -1027,12 +1025,12 @@ impl WindowsWindowExtTrait for WindowsWindow {
 
     fn convert_point_to_device(
         &self,
-        point: flui_types::geometry::Point<flui_types::Pixels>,
-    ) -> flui_types::geometry::Point<flui_types::DevicePixels> {
+        point: Point<Pixels>,
+    ) -> Point<DevicePixels> {
         let scale = self.scale_factor();
-        flui_types::geometry::Point::new(
-            device_px((point.x.0 * scale).round()),
-            device_px((point.y.0 * scale).round()),
+        Point::new(
+            device_px((point.x.0 * scale).round() as i32),
+            device_px((point.y.0 * scale).round() as i32),
         )
     }
 }
