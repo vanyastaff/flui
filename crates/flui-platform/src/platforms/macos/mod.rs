@@ -40,9 +40,15 @@ mod liquid_glass;
 mod platform;
 mod view;
 mod window;
+mod window_ext;
+mod window_manager;
+mod window_tiling;
 
 pub use display::MacOSDisplay;
 pub use events::convert_ns_event;
 pub use liquid_glass::{LiquidGlassMaterial, LiquidGlassConfig, BlendingMode};
 pub use platform::MacOSPlatform;
 pub use window::MacOSWindow;
+pub use window_ext::{MacOSWindowExt, MacOSWindowLevel, MacOSCollectionBehavior};
+pub use window_manager::{GroupId, SharedWindowManager, WindowId, WindowInfo, WindowLevel, WindowManager, WindowOptions};
+pub use window_tiling::{TilePosition, TilingConfiguration, TilingLayout, TilingState};

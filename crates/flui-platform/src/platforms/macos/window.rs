@@ -298,6 +298,515 @@ impl Drop for MacOSWindow {
 }
 
 // ============================================================================
+// Cross-Platform Window Trait Implementation
+// ============================================================================
+
+use crate::window::{Window as WindowTrait, WindowId as CrossWindowId, WindowState, RawWindowHandle as CrossRawWindowHandle};
+
+impl WindowTrait for MacOSWindow {
+    fn id(&self) -> CrossWindowId {
+        CrossWindowId::new(self.ns_window as u64)
+    }
+
+    fn title(&self) -> String {
+        unsafe {
+            let ns_title: id = msg_send![self.ns_window, title];
+            let c_str: *const i8 = msg_send![ns_title, UTF8String];
+            if c_str.is_null() {
+                String::new()
+            } else {
+                std::ffi::CStr::from_ptr(c_str)
+                    .to_string_lossy()
+                    .into_owned()
+            }
+        }
+    }
+
+    fn set_title(&mut self, title: &str) {
+        unsafe {
+            let ns_title = cocoa::foundation::NSString::alloc(nil);
+            let ns_title = cocoa::foundation::NSString::init_str(ns_title, title);
+            let _: () = msg_send![self.ns_window, setTitle: ns_title];
+        }
+    }
+
+    fn position(&self) -> Point<Pixels> {
+        let state = self.state.lock();
+        state.bounds.origin
+    }
+
+    fn set_position(&mut self, position: Point<Pixels>) {
+        unsafe {
+            let frame: NSRect = msg_send![self.ns_window, frame];
+            let new_frame = NSRect::new(
+                cocoa::foundation::NSPoint::new(position.x.0 as f64, position.y.0 as f64),
+                frame.size,
+            );
+            let _: () = msg_send![self.ns_window, setFrame: new_frame display: true];
+
+            // Update state
+            let mut state = self.state.lock();
+            state.bounds.origin = position;
+        }
+    }
+
+    fn size(&self) -> Size<Pixels> {
+        let state = self.state.lock();
+        state.bounds.size
+    }
+
+    fn set_size(&mut self, size: Size<Pixels>) {
+        unsafe {
+            let frame: NSRect = msg_send![self.ns_window, frame];
+            let new_frame = NSRect::new(
+                frame.origin,
+                cocoa::foundation::NSSize::new(size.width.0 as f64, size.height.0 as f64),
+            );
+            let _: () = msg_send![self.ns_window, setFrame: new_frame display: true];
+
+            // Update state
+            let mut state = self.state.lock();
+            state.bounds.size = size;
+        }
+    }
+
+    fn state(&self) -> WindowState {
+        unsafe {
+            let is_minimized: bool = msg_send![self.ns_window, isMiniaturized];
+            let is_zoomed: bool = msg_send![self.ns_window, isZoomed];
+            let style_mask: cocoa::appkit::NSWindowStyleMask = msg_send![self.ns_window, styleMask];
+
+            if is_minimized {
+                WindowState::Minimized
+            } else if style_mask.contains(NSWindowStyleMask::NSFullScreenWindowMask) {
+                WindowState::Fullscreen
+            } else if is_zoomed {
+                WindowState::Maximized
+            } else {
+                WindowState::Normal
+            }
+        }
+    }
+
+    fn set_state(&mut self, state: WindowState) {
+        unsafe {
+            match state {
+                WindowState::Normal => {
+                    // Restore from minimized
+                    let is_minimized: bool = msg_send![self.ns_window, isMiniaturized];
+                    if is_minimized {
+                        let _: () = msg_send![self.ns_window, deminiaturize: nil];
+                    }
+
+                    // Restore from maximized
+                    let is_zoomed: bool = msg_send![self.ns_window, isZoomed];
+                    if is_zoomed {
+                        let _: () = msg_send![self.ns_window, zoom: nil];
+                    }
+
+                    // Exit fullscreen
+                    let style_mask: cocoa::appkit::NSWindowStyleMask = msg_send![self.ns_window, styleMask];
+                    if style_mask.contains(NSWindowStyleMask::NSFullScreenWindowMask) {
+                        let _: () = msg_send![self.ns_window, toggleFullScreen: nil];
+                    }
+                }
+                WindowState::Minimized => {
+                    let _: () = msg_send![self.ns_window, miniaturize: nil];
+                }
+                WindowState::Maximized => {
+                    // First restore from minimized if needed
+                    let is_minimized: bool = msg_send![self.ns_window, isMiniaturized];
+                    if is_minimized {
+                        let _: () = msg_send![self.ns_window, deminiaturize: nil];
+                    }
+
+                    // Then zoom (maximize)
+                    let is_zoomed: bool = msg_send![self.ns_window, isZoomed];
+                    if !is_zoomed {
+                        let _: () = msg_send![self.ns_window, zoom: nil];
+                    }
+                }
+                WindowState::Fullscreen => {
+                    let style_mask: cocoa::appkit::NSWindowStyleMask = msg_send![self.ns_window, styleMask];
+                    if !style_mask.contains(NSWindowStyleMask::NSFullScreenWindowMask) {
+                        let _: () = msg_send![self.ns_window, toggleFullScreen: nil];
+                    }
+                }
+            }
+        }
+    }
+
+    fn is_visible(&self) -> bool {
+        unsafe {
+            let is_visible: bool = msg_send![self.ns_window, isVisible];
+            is_visible
+        }
+    }
+
+    fn set_visible(&mut self, visible: bool) {
+        unsafe {
+            if visible {
+                let _: () = msg_send![self.ns_window, makeKeyAndOrderFront: nil];
+            } else {
+                let _: () = msg_send![self.ns_window, orderOut: nil];
+            }
+        }
+    }
+
+    fn is_resizable(&self) -> bool {
+        unsafe {
+            let style_mask: cocoa::appkit::NSWindowStyleMask = msg_send![self.ns_window, styleMask];
+            style_mask.contains(NSWindowStyleMask::NSResizableWindowMask)
+        }
+    }
+
+    fn set_resizable(&mut self, resizable: bool) {
+        unsafe {
+            let mut style_mask: cocoa::appkit::NSWindowStyleMask = msg_send![self.ns_window, styleMask];
+            if resizable {
+                style_mask |= NSWindowStyleMask::NSResizableWindowMask;
+            } else {
+                style_mask &= !NSWindowStyleMask::NSResizableWindowMask;
+            }
+            let _: () = msg_send![self.ns_window, setStyleMask: style_mask];
+        }
+    }
+
+    fn is_minimizable(&self) -> bool {
+        unsafe {
+            let style_mask: cocoa::appkit::NSWindowStyleMask = msg_send![self.ns_window, styleMask];
+            style_mask.contains(NSWindowStyleMask::NSMiniaturizableWindowMask)
+        }
+    }
+
+    fn set_minimizable(&mut self, minimizable: bool) {
+        unsafe {
+            let mut style_mask: cocoa::appkit::NSWindowStyleMask = msg_send![self.ns_window, styleMask];
+            if minimizable {
+                style_mask |= NSWindowStyleMask::NSMiniaturizableWindowMask;
+            } else {
+                style_mask &= !NSWindowStyleMask::NSMiniaturizableWindowMask;
+            }
+            let _: () = msg_send![self.ns_window, setStyleMask: style_mask];
+        }
+    }
+
+    fn is_closable(&self) -> bool {
+        unsafe {
+            let style_mask: cocoa::appkit::NSWindowStyleMask = msg_send![self.ns_window, styleMask];
+            style_mask.contains(NSWindowStyleMask::NSClosableWindowMask)
+        }
+    }
+
+    fn set_closable(&mut self, closable: bool) {
+        unsafe {
+            let mut style_mask: cocoa::appkit::NSWindowStyleMask = msg_send![self.ns_window, styleMask];
+            if closable {
+                style_mask |= NSWindowStyleMask::NSClosableWindowMask;
+            } else {
+                style_mask &= !NSWindowStyleMask::NSClosableWindowMask;
+            }
+            let _: () = msg_send![self.ns_window, setStyleMask: style_mask];
+        }
+    }
+
+    fn focus(&mut self) {
+        unsafe {
+            let _: () = msg_send![self.ns_window, makeKeyAndOrderFront: nil];
+        }
+    }
+
+    fn is_focused(&self) -> bool {
+        unsafe {
+            let is_key: bool = msg_send![self.ns_window, isKeyWindow];
+            is_key
+        }
+    }
+
+    fn close(&mut self) {
+        unsafe {
+            let _: () = msg_send![self.ns_window, close];
+        }
+    }
+
+    fn request_redraw(&mut self) {
+        unsafe {
+            let content_view: id = msg_send![self.ns_window, contentView];
+            if content_view != nil {
+                let _: () = msg_send![content_view, setNeedsDisplay: true];
+            }
+        }
+    }
+
+    fn set_min_size(&mut self, size: Option<Size<Pixels>>) {
+        unsafe {
+            if let Some(size) = size {
+                let ns_size = cocoa::foundation::NSSize::new(
+                    size.width.0 as f64,
+                    size.height.0 as f64,
+                );
+                let _: () = msg_send![self.ns_window, setMinSize: ns_size];
+            } else {
+                // Set to zero to remove constraint
+                let ns_size = cocoa::foundation::NSSize::new(0.0, 0.0);
+                let _: () = msg_send![self.ns_window, setMinSize: ns_size];
+            }
+        }
+    }
+
+    fn set_max_size(&mut self, size: Option<Size<Pixels>>) {
+        unsafe {
+            if let Some(size) = size {
+                let ns_size = cocoa::foundation::NSSize::new(
+                    size.width.0 as f64,
+                    size.height.0 as f64,
+                );
+                let _: () = msg_send![self.ns_window, setMaxSize: ns_size];
+            } else {
+                // Set to max to remove constraint
+                let ns_size = cocoa::foundation::NSSize::new(f64::MAX, f64::MAX);
+                let _: () = msg_send![self.ns_window, setMaxSize: ns_size];
+            }
+        }
+    }
+
+    fn scale_factor(&self) -> f32 {
+        let state = self.state.lock();
+        state.scale_factor as f32
+    }
+
+    fn raw_window_handle(&self) -> CrossRawWindowHandle {
+        unsafe {
+            let content_view: id = msg_send![self.ns_window, contentView];
+            CrossRawWindowHandle::MacOS {
+                ns_view: content_view as *mut std::ffi::c_void,
+                ns_window: self.ns_window as *mut std::ffi::c_void,
+            }
+        }
+    }
+}
+
+// ============================================================================
+// macOS Window Extension Trait Implementation
+// ============================================================================
+
+use super::window_ext::{MacOSWindowExt as MacOSWindowExtTrait, MacOSWindowLevel, MacOSCollectionBehavior};
+use super::liquid_glass::{LiquidGlassConfig, LiquidGlassMaterial};
+use super::window_tiling::TilingConfiguration;
+
+impl MacOSWindowExtTrait for MacOSWindow {
+    fn set_liquid_glass(&mut self, material: LiquidGlassMaterial) {
+        // Create default config from material
+        let config = LiquidGlassConfig::from_material(material);
+        self.set_liquid_glass_config(config);
+    }
+
+    fn set_liquid_glass_config(&mut self, config: LiquidGlassConfig) {
+        unsafe {
+            // Apply vibrancy effect to window content view
+            let content_view: id = msg_send![self.ns_window, contentView];
+            if content_view == nil {
+                tracing::warn!("Cannot apply Liquid Glass: content view is nil");
+                return;
+            }
+
+            // Create NSVisualEffectView
+            let effect_view_class = class!(NSVisualEffectView);
+            let effect_view: id = msg_send![effect_view_class, alloc];
+            let effect_view: id = msg_send![effect_view, init];
+
+            // Set frame to match content view
+            let frame: NSRect = msg_send![content_view, frame];
+            let _: () = msg_send![effect_view, setFrame: frame];
+
+            // Set material (NSVisualEffectMaterial)
+            let material_value: usize = config.material.to_ns_visual_effect_material();
+            let _: () = msg_send![effect_view, setMaterial: material_value];
+
+            // Set blending mode (NSVisualEffectBlendingMode)
+            let blending_mode: usize = 0; // NSVisualEffectBlendingModeBehindWindow
+            let _: () = msg_send![effect_view, setBlendingMode: blending_mode];
+
+            // Set state (NSVisualEffectState)
+            let state: usize = 1; // NSVisualEffectStateActive
+            let _: () = msg_send![effect_view, setState: state];
+
+            // Enable autoresizing
+            let autoresizing_mask: usize = (1 << 1) | (1 << 4); // NSViewWidthSizable | NSViewHeightSizable
+            let _: () = msg_send![effect_view, setAutoresizingMask: autoresizing_mask];
+
+            // Set as window content view
+            let _: () = msg_send![self.ns_window, setContentView: effect_view];
+
+            // Make window titlebar transparent if requested
+            if config.transparent_titlebar {
+                let style_mask: cocoa::appkit::NSWindowStyleMask = msg_send![self.ns_window, styleMask];
+                let new_style_mask = style_mask | NSWindowStyleMask::NSFullSizeContentViewWindowMask;
+                let _: () = msg_send![self.ns_window, setStyleMask: new_style_mask];
+                let _: () = msg_send![self.ns_window, setTitlebarAppearsTransparent: YES];
+            }
+
+            tracing::debug!("Applied Liquid Glass material: {:?}", config.material);
+        }
+    }
+
+    fn clear_liquid_glass(&mut self) {
+        unsafe {
+            // Remove visual effect view and restore normal content view
+            let content_view = view::create_content_view(
+                NSRect::new(
+                    cocoa::foundation::NSPoint::new(0.0, 0.0),
+                    cocoa::foundation::NSSize::new(800.0, 600.0),
+                ),
+                self.scale_factor() as f64,
+                Arc::downgrade(&self.handlers),
+            );
+
+            let _: () = msg_send![self.ns_window, setContentView: content_view];
+
+            // Restore titlebar appearance
+            let _: () = msg_send![self.ns_window, setTitlebarAppearsTransparent: NO];
+
+            tracing::debug!("Cleared Liquid Glass effect");
+        }
+    }
+
+    fn enable_tiling(&mut self, config: TilingConfiguration) {
+        // Store tiling config for later use
+        // Note: Actual tiling API is only available in macOS 15+
+        // For now, we just log the configuration
+        tracing::info!(
+            "Window tiling enabled: position={:?}, ratio={}, layout={:?}",
+            config.primary_position,
+            config.split_ratio,
+            config.layout
+        );
+
+        // TODO: When macOS 15 APIs are available, implement actual tiling
+        // This would use NSWindow's tiling-related properties
+    }
+
+    fn disable_tiling(&mut self) {
+        tracing::info!("Window tiling disabled");
+        // TODO: Implement when macOS 15 APIs are available
+    }
+
+    fn is_tiling_enabled(&self) -> bool {
+        // TODO: Implement when macOS 15 APIs are available
+        false
+    }
+
+    fn enable_tabbing(&mut self) {
+        unsafe {
+            // Enable automatic tabbing (macOS 10.12+)
+            let tabbing_mode: isize = 1; // NSWindowTabbingModeAutomatic
+            let _: () = msg_send![self.ns_window, setTabbingMode: tabbing_mode];
+
+            tracing::debug!("Window tabbing enabled");
+        }
+    }
+
+    fn disable_tabbing(&mut self) {
+        unsafe {
+            let tabbing_mode: isize = 2; // NSWindowTabbingModeDisallowed
+            let _: () = msg_send![self.ns_window, setTabbingMode: tabbing_mode];
+
+            tracing::debug!("Window tabbing disabled");
+        }
+    }
+
+    fn add_tab_to_window(&mut self, other_window_id: u64) {
+        unsafe {
+            // Get the other window from the windows map
+            let other_window_ptr = other_window_id as *mut std::ffi::c_void;
+            let other_ns_window = other_window_ptr as id;
+
+            if other_ns_window != nil {
+                let _: () = msg_send![self.ns_window, addTabbedWindow:other_ns_window ordered:0]; // NSWindowAbove
+                tracing::debug!("Added tab to window {:p}", other_ns_window);
+            } else {
+                tracing::warn!("Cannot add tab: window {:?} not found", other_window_id);
+            }
+        }
+    }
+
+    fn toggle_native_fullscreen(&mut self) {
+        unsafe {
+            let _: () = msg_send![self.ns_window, toggleFullScreen: nil];
+            tracing::debug!("Toggled native fullscreen");
+        }
+    }
+
+    fn set_window_level(&mut self, level: MacOSWindowLevel) {
+        unsafe {
+            let level_value = level.to_ns_value();
+            let _: () = msg_send![self.ns_window, setLevel: level_value];
+            tracing::debug!("Set window level to {:?} ({})", level, level_value);
+        }
+    }
+
+    fn window_level(&self) -> MacOSWindowLevel {
+        unsafe {
+            let level_value: isize = msg_send![self.ns_window, level];
+            match level_value {
+                0 => MacOSWindowLevel::Normal,
+                3 => MacOSWindowLevel::Floating,
+                8 => MacOSWindowLevel::ModalPanel,
+                24 => MacOSWindowLevel::MainMenu,
+                25 => MacOSWindowLevel::Status,
+                101 => MacOSWindowLevel::PopUpMenu,
+                1000 => MacOSWindowLevel::ScreenSaver,
+                _ if level_value == isize::MAX - 1 => MacOSWindowLevel::FloatingPanel,
+                _ => MacOSWindowLevel::Normal, // Default to normal for unknown values
+            }
+        }
+    }
+
+    fn set_collection_behavior(&mut self, behavior: MacOSCollectionBehavior) {
+        unsafe {
+            let _: () = msg_send![self.ns_window, setCollectionBehavior: behavior.bits() as usize];
+            tracing::debug!("Set collection behavior: {:?}", behavior);
+        }
+    }
+
+    fn set_has_shadow(&mut self, has_shadow: bool) {
+        unsafe {
+            let _: () = msg_send![self.ns_window, setHasShadow: has_shadow as i8];
+            tracing::debug!("Set window shadow: {}", has_shadow);
+        }
+    }
+
+    fn set_alpha(&mut self, alpha: f32) {
+        unsafe {
+            let clamped_alpha = alpha.clamp(0.0, 1.0);
+            let _: () = msg_send![self.ns_window, setAlphaValue: clamped_alpha as f64];
+            tracing::debug!("Set window alpha: {}", clamped_alpha);
+        }
+    }
+
+    fn backing_scale_factor(&self) -> f32 {
+        let state = self.state.lock();
+        state.scale_factor as f32
+    }
+
+    fn convert_point_from_backing(&self, point: Point<Pixels>) -> Point<Pixels> {
+        let scale = self.backing_scale_factor();
+        Point::new(
+            Pixels(point.x.0 / scale),
+            Pixels(point.y.0 / scale),
+        )
+    }
+
+    fn convert_point_to_backing(&self, point: Point<Pixels>) -> Point<Pixels> {
+        let scale = self.backing_scale_factor();
+        Point::new(
+            Pixels(point.x.0 * scale),
+            Pixels(point.y.0 * scale),
+        )
+    }
+}
+
+// ============================================================================
 // NSWindowDelegate Implementation
 // ============================================================================
 

@@ -62,7 +62,7 @@ flui-platform/
 **Tasks:**
 - [x] NSWindow creation (DONE - Phase 8)
 - [x] NSView integration (DONE - Phase 8.6)
-- [ ] **Liquid Glass Material** (NEW - macOS Tahoe 26)
+- [x] **Liquid Glass Material** (DONE - 2026-01-25 Session)
   ```rust
   // src/platforms/macos/liquid_glass.rs
   pub enum LiquidGlassMaterial {
@@ -72,17 +72,27 @@ flui-platform/
       fn set_liquid_glass(&self, material: LiquidGlassMaterial);
   }
   ```
-- [ ] Window Tiling API (macOS Sequoia 15+)
+- [x] Window Tiling API (macOS Sequoia 15+) (DONE - 2026-01-25)
   ```rust
   // src/platforms/macos/window_tiling.rs
   pub struct TilingConfiguration {
-      pub primary_rect: Rect, pub secondary_rect: Rect,
+      pub primary_position: TilePosition,
+      pub split_ratio: f32,
+      pub layout: TilingLayout,
   }
-  impl WindowExt for NSWindow {
-      fn enable_tiling(&self, config: TilingConfiguration);
-  }
+  // Supports SideBySide, TopBottom, Quarters layouts
+  // 11 unit tests, comprehensive API
   ```
-- [ ] Multi-window support
+- [x] Multi-window support (DONE - 2026-01-25)
+  ```rust
+  // src/platforms/macos/window_manager.rs
+  pub struct WindowManager {
+      // Centralized window tracking and management
+      // Window groups for tabbed windows
+      // Cascade positioning, focus management
+  }
+  // 12 unit tests, thread-safe SharedWindowManager
+  ```
 - [ ] Window state management (minimize, maximize, fullscreen)
 
 #### 1.2 Input Handling ⭐⭐⭐⭐⭐

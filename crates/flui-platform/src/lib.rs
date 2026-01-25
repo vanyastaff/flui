@@ -92,6 +92,7 @@ pub mod executor;
 pub mod platforms;
 pub mod shared;
 pub mod traits;
+pub mod window;
 
 // Re-export configuration types
 pub use config::{FullscreenMonitor, WindowConfiguration};
