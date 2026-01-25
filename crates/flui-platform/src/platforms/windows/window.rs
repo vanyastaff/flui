@@ -490,6 +490,287 @@ impl Clone for WindowsWindow {
     }
 }
 
+// ============================================================================
+// Cross-Platform Window Trait Implementation
+// ============================================================================
+
+use crate::window::{
+    RawWindowHandle as CrossRawWindowHandle, Window as WindowTrait, WindowId as CrossWindowId,
+    WindowState as CrossWindowState,
+};
+
+impl WindowTrait for WindowsWindow {
+    fn id(&self) -> CrossWindowId {
+        CrossWindowId::new(self.hwnd.0 as u64)
+    }
+
+    fn title(&self) -> String {
+        self.state.lock().title.clone()
+    }
+
+    fn set_title(&mut self, title: &str) {
+        unsafe {
+            let title_str = HSTRING::from(title);
+            SetWindowTextW(self.hwnd, &title_str).ok();
+            self.state.lock().title = title.to_string();
+        }
+    }
+
+    fn position(&self) -> Point<Pixels> {
+        self.state.lock().bounds.origin
+    }
+
+    fn set_position(&mut self, position: Point<Pixels>) {
+        unsafe {
+            let scale = self.state.lock().scale_factor;
+            let x = logical_to_device(position.x.0, scale) as i32;
+            let y = logical_to_device(position.y.0, scale) as i32;
+
+            SetWindowPos(
+                self.hwnd,
+                None,
+                x,
+                y,
+                0,
+                0,
+                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+            )
+            .ok();
+
+            self.state.lock().bounds.origin = position;
+        }
+    }
+
+    fn size(&self) -> Size<Pixels> {
+        self.state.lock().bounds.size
+    }
+
+    fn set_size(&mut self, size: Size<Pixels>) {
+        unsafe {
+            let scale = self.state.lock().scale_factor;
+            let width = logical_to_device(size.width.0, scale) as i32;
+            let height = logical_to_device(size.height.0, scale) as i32;
+
+            SetWindowPos(
+                self.hwnd,
+                None,
+                0,
+                0,
+                width,
+                height,
+                SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
+            )
+            .ok();
+
+            self.state.lock().bounds.size = size;
+        }
+    }
+
+    fn state(&self) -> CrossWindowState {
+        unsafe {
+            let placement = self.get_window_placement();
+
+            match placement.showCmd {
+                SW_MINIMIZE => CrossWindowState::Minimized,
+                SW_MAXIMIZE => CrossWindowState::Maximized,
+                _ => {
+                    if self.is_fullscreen() {
+                        CrossWindowState::Fullscreen
+                    } else {
+                        CrossWindowState::Normal
+                    }
+                }
+            }
+        }
+    }
+
+    fn set_state(&mut self, state: CrossWindowState) {
+        unsafe {
+            match state {
+                CrossWindowState::Normal => {
+                    if self.is_fullscreen() {
+                        self.set_fullscreen(false);
+                    }
+                    ShowWindow(self.hwnd, SW_RESTORE);
+                }
+                CrossWindowState::Minimized => {
+                    ShowWindow(self.hwnd, SW_MINIMIZE);
+                }
+                CrossWindowState::Maximized => {
+                    if self.is_fullscreen() {
+                        self.set_fullscreen(false);
+                    }
+                    ShowWindow(self.hwnd, SW_MAXIMIZE);
+                }
+                CrossWindowState::Fullscreen => {
+                    self.set_fullscreen(true);
+                }
+            }
+        }
+    }
+
+    fn is_visible(&self) -> bool {
+        self.state.lock().visible
+    }
+
+    fn set_visible(&mut self, visible: bool) {
+        unsafe {
+            let cmd = if visible { SW_SHOW } else { SW_HIDE };
+            ShowWindow(self.hwnd, cmd);
+            self.state.lock().visible = visible;
+        }
+    }
+
+    fn is_resizable(&self) -> bool {
+        unsafe {
+            let style = GetWindowLongPtrW(self.hwnd, GWL_STYLE) as u32;
+            (style & WS_THICKFRAME.0) != 0
+        }
+    }
+
+    fn set_resizable(&mut self, resizable: bool) {
+        unsafe {
+            let mut style = GetWindowLongPtrW(self.hwnd, GWL_STYLE) as u32;
+            if resizable {
+                style |= WS_THICKFRAME.0;
+            } else {
+                style &= !WS_THICKFRAME.0;
+            }
+            SetWindowLongPtrW(self.hwnd, GWL_STYLE, style as isize);
+            SetWindowPos(
+                self.hwnd,
+                None,
+                0,
+                0,
+                0,
+                0,
+                SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+            )
+            .ok();
+        }
+    }
+
+    fn is_minimizable(&self) -> bool {
+        unsafe {
+            let style = GetWindowLongPtrW(self.hwnd, GWL_STYLE) as u32;
+            (style & WS_MINIMIZEBOX.0) != 0
+        }
+    }
+
+    fn set_minimizable(&mut self, minimizable: bool) {
+        unsafe {
+            let mut style = GetWindowLongPtrW(self.hwnd, GWL_STYLE) as u32;
+            if minimizable {
+                style |= WS_MINIMIZEBOX.0;
+            } else {
+                style &= !WS_MINIMIZEBOX.0;
+            }
+            SetWindowLongPtrW(self.hwnd, GWL_STYLE, style as isize);
+            SetWindowPos(
+                self.hwnd,
+                None,
+                0,
+                0,
+                0,
+                0,
+                SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+            )
+            .ok();
+        }
+    }
+
+    fn is_closable(&self) -> bool {
+        unsafe {
+            let style = GetWindowLongPtrW(self.hwnd, GWL_STYLE) as u32;
+            (style & WS_SYSMENU.0) != 0
+        }
+    }
+
+    fn set_closable(&mut self, closable: bool) {
+        unsafe {
+            let mut style = GetWindowLongPtrW(self.hwnd, GWL_STYLE) as u32;
+            if closable {
+                style |= WS_SYSMENU.0;
+            } else {
+                style &= !WS_SYSMENU.0;
+            }
+            SetWindowLongPtrW(self.hwnd, GWL_STYLE, style as isize);
+            SetWindowPos(
+                self.hwnd,
+                None,
+                0,
+                0,
+                0,
+                0,
+                SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+            )
+            .ok();
+        }
+    }
+
+    fn focus(&mut self) {
+        unsafe {
+            SetForegroundWindow(self.hwnd).ok();
+        }
+    }
+
+    fn is_focused(&self) -> bool {
+        self.state.lock().focused
+    }
+
+    fn close(&mut self) {
+        unsafe {
+            DestroyWindow(self.hwnd).ok();
+        }
+    }
+
+    fn request_redraw(&mut self) {
+        PlatformWindow::request_redraw(self);
+    }
+
+    fn set_min_size(&mut self, size: Option<Size<Pixels>>) {
+        // Windows doesn't have a direct API for min/max size
+        // This would need to be handled in WM_GETMINMAXINFO message
+        // For now, store in WindowState for future use
+        tracing::debug!("set_min_size: {:?} (not yet implemented)", size);
+    }
+
+    fn set_max_size(&mut self, size: Option<Size<Pixels>>) {
+        // Windows doesn't have a direct API for min/max size
+        // This would need to be handled in WM_GETMINMAXINFO message
+        // For now, store in WindowState for future use
+        tracing::debug!("set_max_size: {:?} (not yet implemented)", size);
+    }
+
+    fn scale_factor(&self) -> f32 {
+        self.state.lock().scale_factor
+    }
+
+    fn raw_window_handle(&self) -> CrossRawWindowHandle {
+        unsafe {
+            let hinstance = GetModuleHandleW(None).unwrap();
+            CrossRawWindowHandle::Windows {
+                hwnd: self.hwnd.0 as *mut std::ffi::c_void,
+                hinstance: hinstance.0 as *mut std::ffi::c_void,
+            }
+        }
+    }
+}
+
+impl WindowsWindow {
+    /// Helper to get window placement
+    fn get_window_placement(&self) -> WINDOWPLACEMENT {
+        unsafe {
+            let mut placement = WINDOWPLACEMENT {
+                length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
+                ..Default::default()
+            };
+            GetWindowPlacement(self.hwnd, &mut placement).ok();
+            placement
+        }
+    }
+}
+
 impl Drop for WindowsWindow {
     fn drop(&mut self) {
         // Only destroy if this is the last reference
