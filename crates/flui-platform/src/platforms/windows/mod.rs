@@ -8,7 +8,11 @@ mod events;
 mod platform;
 mod util;
 mod window;
+mod window_ext;
 
 pub use display::{enumerate_displays, WindowsDisplay};
 pub use platform::WindowsPlatform;
 pub use window::WindowsWindow;
+pub use window_ext::{
+    TaskbarProgressState, WindowCornerPreference, WindowsBackdrop, WindowsTheme, WindowsWindowExt,
+};

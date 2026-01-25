@@ -1,3 +1,7 @@
+mod window_ext;
+
+pub use window_ext::*;
+
 //! Linux platform implementation (stub)
 //!
 //! This module provides a stub implementation of the Platform trait for Linux.

@@ -34,6 +34,9 @@ waker-fn = "1.2"            # Simplified async waker creation
 # Window handle abstraction
 raw-window-handle = "0.6"
 
+# Bitflags for platform-specific flags
+bitflags = "2.6"
+
 # Windows platform
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.59", features = [
@@ -61,6 +64,10 @@ default = ["desktop"]
 
 # Platform features
 desktop = ["winit"]
+
+# Linux display server protocols
+wayland = []
+x11 = []
 
 # Re-export dependencies that might be needed by consumers
 [package.metadata.docs.rs]
