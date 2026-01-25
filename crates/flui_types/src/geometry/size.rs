@@ -1023,7 +1023,7 @@ mod tests {
     #[test]
     fn test_dimensions() {
         let s = Size::new(px(100.0), px(50.0));
-        assert_eq!(s.area(), px(5000.0));
+        assert_eq!(s.area(), 5000.0);
         assert_eq!(s.min_side(), px(50.0));
         assert_eq!(s.max_side(), px(100.0));
         assert_eq!(s.aspect_ratio(), 2.0);
@@ -1152,12 +1152,12 @@ mod tests {
 
     #[test]
     fn test_display() {
-        assert_eq!(format!("{}", Size::new(px(800.0), px(600.0))), "800×600");
+        assert_eq!(format!("{}", Size::new(px(800.0), px(600.0))), "800px×600px");
     }
 
     #[test]
     fn test_convenience_fn() {
-        assert_eq!(size(px(100.0), px(50.0)), Size::new(px(100.0), px(50.0)));
+        assert_eq!(size(100.0, 50.0), Size::new(px(100.0), px(50.0)));
     }
 }
 
@@ -1179,34 +1179,34 @@ mod typed_tests {
 
     #[test]
     fn test_size_square() {
-        let s = Size::<f32>::square(10.0);
+        let s = Size::square(px(10.0));
         assert_eq!(s.width, px(10.0));
         assert_eq!(s.height, px(10.0));
     }
 
     #[test]
     fn test_size_area_aspect() {
-        let s = Size::<f32>::new(10.0, 20.0);
+        let s = Size::new(px(10.0), px(20.0));
         assert_eq!(s.area(), 200.0);
         assert_eq!(s.aspect_ratio(), 0.5);
     }
 
     #[test]
     fn test_size_is_empty() {
-        let s1 = Size::<f32>::new(0.0, 10.0);
+        let s1 = Size::new(px(0.0), px(10.0));
         assert!(s1.is_empty());
 
-        let s2 = Size::<f32>::new(10.0, 10.0);
+        let s2 = Size::new(px(10.0), px(10.0));
         assert!(!s2.is_empty());
     }
 
     #[test]
     fn test_size_contains() {
-        let s = Size::<f32>::new(10.0, 20.0);
-        let p1 = Point::<f32>::new(5.0, 10.0);
+        let s = Size::new(px(10.0), px(20.0));
+        let p1 = Point::new(px(5.0), px(10.0));
         assert!(s.contains(p1));
 
-        let p2 = Point::<f32>::new(15.0, 10.0);
+        let p2 = Point::new(px(15.0), px(10.0));
         assert!(!s.contains(p2));
     }
 
@@ -1224,10 +1224,10 @@ mod typed_tests {
 
     #[test]
     fn test_size_center() {
-        let s = Size::<f32>::new(100.0, 200.0);
+        let s = Size::new(px(100.0), px(200.0));
         let c = s.center();
-        assert_eq!(c.x, 50.0);
-        assert_eq!(c.y, 100.0);
+        assert_eq!(c.x, px(50.0));
+        assert_eq!(c.y, px(100.0));
     }
 
     #[test]
@@ -1243,12 +1243,12 @@ mod typed_tests {
 
     #[test]
     fn test_from_point_vec2() {
-        let p = Point::<f32>::new(10.0, 20.0);
+        let p = Point::new(px(10.0), px(20.0));
         let s: Size<Pixels> = p.into();
         assert_eq!(s.width, px(10.0));
         assert_eq!(s.height, px(20.0));
 
-        let v = Vec2::<f32>::new(30.0, 40.0);
+        let v = Vec2::new(px(30.0), px(40.0));
         let s2: Size<Pixels> = v.into();
         assert_eq!(s2.width, px(30.0));
         assert_eq!(s2.height, px(40.0));
@@ -1303,20 +1303,20 @@ mod typed_tests {
 
     #[test]
     fn test_size_abs_signum() {
-        // Test f32-specific abs and signum methods
-        let s_f32 = Size::<f32>::new(-10.0, 20.0);
-        let abs_s = s_f32.abs();
+        // Test abs and signum methods with Pixels
+        let s_px = Size::new(px(-10.0), px(20.0));
+        let abs_s = s_px.abs();
         assert_eq!(abs_s.width, px(10.0));
         assert_eq!(abs_s.height, px(20.0));
 
-        let signum_s = s_f32.signum();
-        assert_eq!(signum_s.width, -1.0);
+        let signum_s = s_px.signum();
+        assert_eq!(signum_s.width, px(-1.0));
         assert_eq!(signum_s.height, px(1.0));
     }
 
     #[test]
     fn test_size_swap() {
-        let s = Size::<f32>::new(100.0, 50.0);
+        let s = Size::new(px(100.0), px(50.0));
         let swapped = s.swap();
         assert_eq!(swapped.width, px(50.0));
         assert_eq!(swapped.height, px(100.0));
@@ -1324,14 +1324,14 @@ mod typed_tests {
 
     #[test]
     fn test_size_perimeter_diagonal() {
-        let s = Size::<f32>::new(3.0, 4.0);
-        assert_eq!(s.perimeter(), 14.0);
-        assert_eq!(s.diagonal(), 5.0); // 3-4-5 triangle
+        let s = Size::new(px(3.0), px(4.0));
+        assert_eq!(s.perimeter(), px(14.0));
+        assert_eq!(s.diagonal(), px(5.0)); // 3-4-5 triangle
     }
 
     #[test]
     fn test_size_scale_to_max() {
-        let s = Size::<f32>::new(200.0, 100.0);
+        let s = Size::new(px(200.0), px(100.0));
         let scaled = s.scale_to_max(50.0);
         assert_eq!(scaled.width, px(50.0));
         assert_eq!(scaled.height, px(25.0));
@@ -1339,18 +1339,18 @@ mod typed_tests {
 
     #[test]
     fn test_size_is_valid() {
-        assert!(Size::<f32>::new(10.0, 20.0).is_valid());
-        assert!(!Size::<f32>::new(-10.0, 20.0).is_valid());
-        assert!(!Size::<f32>::INFINITY.is_valid());
-        assert!(!Size::<f32>::NAN.is_valid());
+        assert!(Size::new(px(10.0), px(20.0)).is_valid());
+        assert!(!Size::new(px(-10.0), px(20.0)).is_valid());
+        assert!(!Size::<Pixels>::INFINITY.is_valid());
+        assert!(!Size::<Pixels>::NAN.is_valid());
     }
 
     #[test]
     fn test_size_sum_iterator() {
         let sizes = vec![
-            Size::<f32>::new(10.0, 20.0),
-            Size::<f32>::new(30.0, 40.0),
-            Size::<f32>::new(50.0, 60.0),
+            Size::new(px(10.0), px(20.0)),
+            Size::new(px(30.0), px(40.0)),
+            Size::new(px(50.0), px(60.0)),
         ];
         let total: Size<Pixels> = sizes.iter().sum();
         assert_eq!(total.width, px(90.0));

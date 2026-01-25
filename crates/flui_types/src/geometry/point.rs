@@ -1330,8 +1330,8 @@ mod tests {
     fn test_conversions() {
         let p = Point::new(px(10.0), px(20.0));
 
-        let from_tuple: Point<Pixels> = (10.0_f32, 20.0_f32).into();
-        let from_array: Point<Pixels> = [10.0_f32, 20.0_f32].into();
+        let from_tuple: Point<Pixels> = (px(10.0), px(20.0)).into();
+        let from_array: Point<Pixels> = [px(10.0), px(20.0)].into();
         assert_eq!(from_tuple, p);
         assert_eq!(from_array, p);
 
@@ -1349,7 +1349,7 @@ mod tests {
     fn test_display() {
         assert_eq!(
             format!("{}", Point::new(px(10.5), px(20.5))),
-            "(10.5, 20.5)"
+            "(10.5px, 20.5px)"
         );
     }
 
@@ -1452,131 +1452,131 @@ mod arithmetic_tests {
 
     #[test]
     fn test_point_add_vec2() {
-        let p = Point::<f32>::new(10.0, 20.0);
+        let p = Point::new(px(10.0), px(20.0));
         let v = vec2(5.0, 10.0);
 
         let result = p + v;
-        assert_eq!(result.x, 15.0);
-        assert_eq!(result.y, 30.0);
+        assert_eq!(result.x, px(15.0));
+        assert_eq!(result.y, px(30.0));
     }
 
     #[test]
     fn test_point_add_assign_vec2() {
-        let mut p = Point::<f32>::new(10.0, 20.0);
+        let mut p = Point::new(px(10.0), px(20.0));
         let v = vec2(5.0, 10.0);
 
         p += v;
-        assert_eq!(p.x, 15.0);
-        assert_eq!(p.y, 30.0);
+        assert_eq!(p.x, px(15.0));
+        assert_eq!(p.y, px(30.0));
     }
 
     #[test]
     fn test_point_sub_point() {
-        let p1 = Point::<f32>::new(20.0, 30.0);
-        let p2 = Point::<f32>::new(10.0, 15.0);
+        let p1 = Point::new(px(20.0), px(30.0));
+        let p2 = Point::new(px(10.0), px(15.0));
 
         let v = p1 - p2;
-        assert_eq!(v.x, 10.0);
-        assert_eq!(v.y, 15.0);
+        assert_eq!(v.x, px(10.0));
+        assert_eq!(v.y, px(15.0));
     }
 
     #[test]
     fn test_point_sub_vec2() {
-        let p = Point::<f32>::new(10.0, 20.0);
+        let p = Point::new(px(10.0), px(20.0));
         let v = vec2(5.0, 10.0);
 
         let result = p - v;
-        assert_eq!(result.x, 5.0);
-        assert_eq!(result.y, 10.0);
+        assert_eq!(result.x, px(5.0));
+        assert_eq!(result.y, px(10.0));
     }
 
     #[test]
     fn test_point_sub_assign_vec2() {
-        let mut p = Point::<f32>::new(10.0, 20.0);
+        let mut p = Point::new(px(10.0), px(20.0));
         let v = vec2(5.0, 10.0);
 
         p -= v;
-        assert_eq!(p.x, 5.0);
-        assert_eq!(p.y, 10.0);
+        assert_eq!(p.x, px(5.0));
+        assert_eq!(p.y, px(10.0));
     }
 
     #[test]
     fn test_point_scalar_mul() {
-        let p = Point::<f32>::new(10.0, 20.0);
+        let p = Point::new(px(10.0), px(20.0));
 
         let p2 = p * 2.0;
-        assert_eq!(p2.x, 20.0);
-        assert_eq!(p2.y, 40.0);
+        assert_eq!(p2.x, px(20.0));
+        assert_eq!(p2.y, px(40.0));
     }
 
     #[test]
     fn test_point_scalar_mul_reverse() {
-        let p = Point::<f32>::new(10.0, 20.0);
+        let p = Point::new(px(10.0), px(20.0));
 
         let p2 = 2.0 * p;
-        assert_eq!(p2.x, 20.0);
-        assert_eq!(p2.y, 40.0);
+        assert_eq!(p2.x, px(20.0));
+        assert_eq!(p2.y, px(40.0));
     }
 
     #[test]
     fn test_point_scalar_div() {
-        let p = Point::<f32>::new(10.0, 20.0);
+        let p = Point::new(px(10.0), px(20.0));
 
         let p2 = p / 2.0;
-        assert_eq!(p2.x, 5.0);
-        assert_eq!(p2.y, 10.0);
+        assert_eq!(p2.x, px(5.0));
+        assert_eq!(p2.y, px(10.0));
     }
 
     #[test]
     fn test_point_negation() {
-        let p = Point::<f32>::new(10.0, -20.0);
+        let p = Point::new(px(10.0), px(-20.0));
 
         let neg_p = -p;
-        assert_eq!(neg_p.x, -10.0);
-        assert_eq!(neg_p.y, 20.0);
+        assert_eq!(neg_p.x, px(-10.0));
+        assert_eq!(neg_p.y, px(20.0));
     }
 
     #[test]
     fn test_point_checked_add_vec() {
-        let p = Point::<f32>::new(1.0, 2.0);
+        let p = Point::new(px(1.0), px(2.0));
 
-        let result = p.checked_add_vec(3.0, 4.0);
+        let result = p.checked_add_vec(px(3.0), px(4.0));
         assert!(result.is_some());
-        assert_eq!(result.unwrap().x, 4.0);
-        assert_eq!(result.unwrap().y, 6.0);
+        assert_eq!(result.unwrap().x, px(4.0));
+        assert_eq!(result.unwrap().y, px(6.0));
 
         // Test with invalid values
-        let invalid = p.checked_add_vec(f32::NAN, 4.0);
+        let invalid = p.checked_add_vec(px(f32::NAN), px(4.0));
         assert!(invalid.is_none());
     }
 
     #[test]
     fn test_point_saturating_add_vec() {
-        let p = Point::<f32>::new(1.0, 2.0);
+        let p = Point::new(px(1.0), px(2.0));
 
-        let result = p.saturating_add_vec(3.0, 4.0);
-        assert_eq!(result.x, 4.0);
-        assert_eq!(result.y, 6.0);
+        let result = p.saturating_add_vec(px(3.0), px(4.0));
+        assert_eq!(result.x, px(4.0));
+        assert_eq!(result.y, px(6.0));
 
         // Test with NaN - should clamp to 0
-        let saturated = p.saturating_add_vec(f32::NAN, 4.0);
-        assert_eq!(saturated.x, 0.0);
-        assert_eq!(saturated.y, 6.0);
+        let saturated = p.saturating_add_vec(px(f32::NAN), px(4.0));
+        assert_eq!(saturated.x, px(0.0));
+        assert_eq!(saturated.y, px(6.0));
 
         // Test with infinity - should clamp to MAX
-        let inf_result = p.saturating_add_vec(f32::INFINITY, 4.0);
-        assert_eq!(inf_result.x, f32::MAX);
-        assert_eq!(inf_result.y, 6.0);
+        let inf_result = p.saturating_add_vec(px(f32::INFINITY), px(4.0));
+        assert_eq!(inf_result.x, px(f32::MAX));
+        assert_eq!(inf_result.y, px(6.0));
     }
 
     #[test]
     fn test_point_checked_mul() {
-        let p = Point::<f32>::new(1.0, 2.0);
+        let p = Point::new(px(1.0), px(2.0));
 
         let result = p.checked_mul(2.0);
         assert!(result.is_some());
-        assert_eq!(result.unwrap().x, 2.0);
-        assert_eq!(result.unwrap().y, 4.0);
+        assert_eq!(result.unwrap().x, px(2.0));
+        assert_eq!(result.unwrap().y, px(4.0));
 
         // Test with infinity - should return None
         let infinity = p.checked_mul(f32::INFINITY);
@@ -1585,16 +1585,16 @@ mod arithmetic_tests {
 
     #[test]
     fn test_point_saturating_mul() {
-        let p = Point::<f32>::new(1.0, 2.0);
+        let p = Point::new(px(1.0), px(2.0));
 
         let result = p.saturating_mul(2.0);
-        assert_eq!(result.x, 2.0);
-        assert_eq!(result.y, 4.0);
+        assert_eq!(result.x, px(2.0));
+        assert_eq!(result.y, px(4.0));
 
         // Test with infinity - should clamp to MAX
         let saturated = p.saturating_mul(f32::INFINITY);
-        assert_eq!(saturated.x, f32::MAX);
-        assert_eq!(saturated.y, f32::MAX);
+        assert_eq!(saturated.x, px(f32::MAX));
+        assert_eq!(saturated.y, px(f32::MAX));
     }
 
     #[test]

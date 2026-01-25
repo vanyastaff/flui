@@ -557,6 +557,7 @@ impl VelocityEstimate {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::geometry::units::px;
 
     #[test]
     fn test_velocity_zero() {
@@ -567,17 +568,17 @@ mod tests {
 
     #[test]
     fn test_velocity_new() {
-        let velocity = Velocity::new(Offset::new(100.0, -50.0));
-        assert_eq!(velocity.pixels_per_second.dx, 100.0);
-        assert_eq!(velocity.pixels_per_second.dy, -50.0);
+        let velocity = Velocity::new(Offset::new(px(100.0), px(-50.0)));
+        assert_eq!(velocity.pixels_per_second.dx, px(100.0));
+        assert_eq!(velocity.pixels_per_second.dy, px(-50.0));
     }
 
     #[test]
     fn test_velocity_magnitude() {
-        let velocity = Velocity::new(Offset::new(3.0, 4.0));
+        let velocity = Velocity::new(Offset::new(px(3.0), px(4.0)));
         assert_eq!(velocity.magnitude(), 5.0);
 
-        let velocity2 = Velocity::new(Offset::new(100.0, 0.0));
+        let velocity2 = Velocity::new(Offset::new(px(100.0), px(0.0)));
         assert_eq!(velocity2.magnitude(), 100.0);
     }
 
@@ -585,32 +586,32 @@ mod tests {
     fn test_velocity_direction() {
         use std::f32::consts::PI;
 
-        let velocity_right = Velocity::new(Offset::new(1.0, 0.0));
+        let velocity_right = Velocity::new(Offset::new(px(1.0), px(0.0)));
         assert!((velocity_right.direction() - 0.0).abs() < 0.01);
 
-        let velocity_up = Velocity::new(Offset::new(0.0, 1.0));
+        let velocity_up = Velocity::new(Offset::new(px(0.0), px(1.0)));
         assert!((velocity_up.direction() - PI / 2.0).abs() < 0.01);
 
-        let velocity_left = Velocity::new(Offset::new(-1.0, 0.0));
+        let velocity_left = Velocity::new(Offset::new(px(-1.0), px(0.0)));
         assert!((velocity_left.direction() - PI).abs() < 0.01);
     }
 
     #[test]
     fn test_velocity_clamp_magnitude() {
-        let velocity = Velocity::new(Offset::new(100.0, 0.0));
+        let velocity = Velocity::new(Offset::new(px(100.0), px(0.0)));
 
         // Clamp to smaller magnitude
         let clamped = velocity.clamp_magnitude(0.0, 50.0);
         assert_eq!(clamped.magnitude(), 50.0);
-        assert_eq!(clamped.pixels_per_second.dx, 50.0);
-        assert_eq!(clamped.pixels_per_second.dy, 0.0);
+        assert_eq!(clamped.pixels_per_second.dx, px(50.0));
+        assert_eq!(clamped.pixels_per_second.dy, px(0.0));
 
         // Already within range
         let unclamped = velocity.clamp_magnitude(0.0, 200.0);
         assert_eq!(unclamped.magnitude(), 100.0);
 
         // Clamp to minimum
-        let clamped_min = Velocity::new(Offset::new(10.0, 0.0)).clamp_magnitude(50.0, 100.0);
+        let clamped_min = Velocity::new(Offset::new(px(10.0), px(0.0))).clamp_magnitude(50.0, 100.0);
         assert_eq!(clamped_min.magnitude(), 50.0);
     }
 
@@ -630,14 +631,14 @@ mod tests {
     #[test]
     fn test_velocity_estimate_new() {
         let estimate = VelocityEstimate::new(
-            Offset::new(100.0, 50.0),
-            Offset::new(200.0, -100.0),
+            Offset::new(px(100.0), px(50.0)),
+            Offset::new(px(200.0), px(-100.0)),
             Duration::from_millis(16),
             0.95,
         );
 
-        assert_eq!(estimate.offset, Offset::new(100.0, 50.0));
-        assert_eq!(estimate.pixels_per_second, Offset::new(200.0, -100.0));
+        assert_eq!(estimate.offset, Offset::new(px(100.0), px(50.0)));
+        assert_eq!(estimate.pixels_per_second, Offset::new(px(200.0), px(-100.0)));
         assert_eq!(estimate.duration, Duration::from_millis(16));
         assert_eq!(estimate.confidence, 0.95);
     }
@@ -645,14 +646,14 @@ mod tests {
     #[test]
     fn test_velocity_estimate_velocity() {
         let estimate = VelocityEstimate::new(
-            Offset::new(100.0, 50.0),
-            Offset::new(200.0, -100.0),
+            Offset::new(px(100.0), px(50.0)),
+            Offset::new(px(200.0), px(-100.0)),
             Duration::from_millis(16),
             0.95,
         );
 
         let velocity = estimate.velocity();
-        assert_eq!(velocity.pixels_per_second, Offset::new(200.0, -100.0));
+        assert_eq!(velocity.pixels_per_second, Offset::new(px(200.0), px(-100.0)));
     }
 
     #[test]

@@ -1044,196 +1044,196 @@ mod tests {
 
     #[test]
     fn test_construction() {
-        let v = Vec2::new(3.0, 4.0);
-        assert_eq!(v.x, 3.0);
-        assert_eq!(v.y, 4.0);
+        let v = Vec2::new(px(3.0), px(4.0));
+        assert_eq!(v.x, px(3.0));
+        assert_eq!(v.y, px(4.0));
 
-        assert_eq!(Vec2::splat(5.0), Vec2::new(5.0, 5.0));
-        assert_eq!(Vec2::from_array([1.0, 2.0]), Vec2::new(1.0, 2.0));
-        assert_eq!(Vec2::from_tuple((3.0, 4.0)), Vec2::new(3.0, 4.0));
+        assert_eq!(Vec2::splat(px(5.0)), Vec2::new(px(5.0), px(5.0)));
+        assert_eq!(Vec2::<Pixels>::from([1.0, 2.0]), Vec2::new(px(1.0), px(2.0)));
+        assert_eq!(Vec2::<Pixels>::from((3.0, 4.0)), Vec2::new(px(3.0), px(4.0)));
     }
 
     #[test]
     fn test_constants() {
-        assert_eq!(Vec2::ZERO, Vec2::new(0.0, 0.0));
-        assert_eq!(Vec2::ONE, Vec2::new(1.0, 1.0));
-        assert_eq!(Vec2::X, Vec2::new(1.0, 0.0));
-        assert_eq!(Vec2::Y, Vec2::new(0.0, 1.0));
+        assert_eq!(Vec2::<Pixels>::ZERO, Vec2::new(px(0.0), px(0.0)));
+        assert_eq!(Vec2::<Pixels>::ONE, Vec2::new(px(1.0), px(1.0)));
+        assert_eq!(Vec2::<Pixels>::X, Vec2::new(px(1.0), px(0.0)));
+        assert_eq!(Vec2::<Pixels>::Y, Vec2::new(px(0.0), px(1.0)));
     }
 
     #[test]
     fn test_length() {
-        let v = Vec2::new(3.0, 4.0);
+        let v = Vec2::new(px(3.0), px(4.0));
         assert_eq!(v.length(), 5.0);
         assert_eq!(v.length_squared(), 25.0);
     }
 
     #[test]
     fn test_normalize() {
-        let v = Vec2::new(3.0, 4.0);
+        let v = Vec2::new(px(3.0), px(4.0));
         let n = v.normalize();
         assert!((n.length() - 1.0).abs() < 1e-6);
-        assert!((n.x - 0.6).abs() < 1e-6);
-        assert!((n.y - 0.8).abs() < 1e-6);
+        assert!((n.x.0 - 0.6).abs() < 1e-6);
+        assert!((n.y.0 - 0.8).abs() < 1e-6);
 
-        assert_eq!(Vec2::ZERO.normalize(), Vec2::ZERO);
-        assert!(Vec2::X.is_normalized());
+        assert_eq!(Vec2::<Pixels>::ZERO.normalize(), Vec2::<Pixels>::ZERO);
+        assert!(Vec2::<Pixels>::X.is_normalized());
     }
 
     #[test]
     fn test_dot_cross() {
-        let v1 = Vec2::new(2.0, 3.0);
-        let v2 = Vec2::new(4.0, 5.0);
+        let v1 = Vec2::new(px(2.0), px(3.0));
+        let v2 = Vec2::new(px(4.0), px(5.0));
 
         assert_eq!(v1.dot(&v2), 23.0); // 2*4 + 3*5
         assert_eq!(v1.cross(&v2), -2.0); // 2*5 - 3*4
 
         // Perpendicular vectors
-        assert_eq!(Vec2::X.dot(&Vec2::Y), 0.0);
-        assert_eq!(Vec2::X.cross(&Vec2::Y), 1.0);
+        assert_eq!(Vec2::<Pixels>::X.dot(&Vec2::<Pixels>::Y), 0.0);
+        assert_eq!(Vec2::<Pixels>::X.cross(&Vec2::<Pixels>::Y), 1.0);
     }
 
     #[test]
     fn test_perp() {
-        let v = Vec2::new(1.0, 0.0);
-        assert_eq!(v.perp(), Vec2::new(0.0, 1.0));
+        let v = Vec2::new(px(1.0), px(0.0));
+        assert_eq!(v.perp(), Vec2::new(px(0.0), px(1.0)));
         assert_eq!(v.dot(&v.perp()), 0.0);
     }
 
     #[test]
     fn test_lerp() {
-        let v1 = Vec2::ZERO;
-        let v2 = Vec2::new(10.0, 20.0);
+        let v1 = Vec2::<Pixels>::ZERO;
+        let v2 = Vec2::new(px(10.0), px(20.0));
 
         assert_eq!(v1.lerp(&v2, 0.0), v1);
-        assert_eq!(v1.lerp(&v2, 0.5), Vec2::new(5.0, 10.0));
+        assert_eq!(v1.lerp(&v2, 0.5), Vec2::new(px(5.0), px(10.0)));
         assert_eq!(v1.lerp(&v2, 1.0), v2);
     }
 
     #[test]
     fn test_angle() {
-        assert_eq!(Vec2::X.angle(), 0.0);
-        assert!((Vec2::Y.angle() - PI / 2.0).abs() < 1e-6);
-        assert!((Vec2::NEG_X.angle() - PI).abs() < 1e-6);
+        assert_eq!(Vec2::<Pixels>::X.angle(), 0.0);
+        assert!((Vec2::<Pixels>::Y.angle() - PI / 2.0).abs() < 1e-6);
+        assert!((Vec2::<Pixels>::NEG_X.angle() - PI).abs() < 1e-6);
     }
 
     #[test]
     fn test_from_angle() {
-        let v = Vec2::from_angle(PI / 4.0);
+        let v = Vec2::<Pixels>::from_angle(PI / 4.0);
         let sqrt2_2 = std::f32::consts::FRAC_1_SQRT_2;
-        assert!((v.x - sqrt2_2).abs() < 1e-6);
-        assert!((v.y - sqrt2_2).abs() < 1e-6);
+        assert!((v.x.0 - sqrt2_2).abs() < 1e-6);
+        assert!((v.y.0 - sqrt2_2).abs() < 1e-6);
     }
 
     #[test]
     fn test_rotate() {
-        let v = Vec2::X;
+        let v = Vec2::<Pixels>::X;
         let rotated = v.rotate(PI / 2.0);
-        assert!((rotated.x).abs() < 1e-6);
-        assert!((rotated.y - 1.0).abs() < 1e-6);
+        assert!((rotated.x.0).abs() < 1e-6);
+        assert!((rotated.y.0 - 1.0).abs() < 1e-6);
     }
 
     #[test]
     fn test_project_reflect() {
-        let v = Vec2::new(3.0, 4.0);
-        let onto = Vec2::X;
-        assert_eq!(v.project(&onto), Vec2::new(3.0, 0.0));
+        let v = Vec2::new(px(3.0), px(4.0));
+        let onto = Vec2::<Pixels>::X;
+        assert_eq!(v.project(&onto), Vec2::new(px(3.0), px(0.0)));
 
-        let incoming = Vec2::new(1.0, -1.0);
-        let normal = Vec2::Y;
+        let incoming = Vec2::new(px(1.0), px(-1.0));
+        let normal = Vec2::<Pixels>::Y;
         let reflected = incoming.reflect(&normal);
-        assert!((reflected.x - 1.0).abs() < 1e-6);
-        assert!((reflected.y - 1.0).abs() < 1e-6);
+        assert!((reflected.x.0 - 1.0).abs() < 1e-6);
+        assert!((reflected.y.0 - 1.0).abs() < 1e-6);
     }
 
     #[test]
     fn test_min_max_clamp() {
-        let v1 = Vec2::new(5.0, 15.0);
-        let v2 = Vec2::new(10.0, 8.0);
+        let v1 = Vec2::new(px(5.0), px(15.0));
+        let v2 = Vec2::new(px(10.0), px(8.0));
 
-        assert_eq!(v1.min(&v2), Vec2::new(5.0, 8.0));
-        assert_eq!(v1.max(&v2), Vec2::new(10.0, 15.0));
+        assert_eq!(v1.min(&v2), Vec2::new(px(5.0), px(8.0)));
+        assert_eq!(v1.max(&v2), Vec2::new(px(10.0), px(15.0)));
 
-        let v = Vec2::new(15.0, -5.0);
-        let clamped = v.clamp(&Vec2::ZERO, &Vec2::splat(10.0));
-        assert_eq!(clamped, Vec2::new(10.0, 0.0));
+        let v = Vec2::new(px(15.0), px(-5.0));
+        let clamped = v.clamp(&Vec2::<Pixels>::ZERO, &Vec2::splat(px(10.0)));
+        assert_eq!(clamped, Vec2::new(px(10.0), px(0.0)));
     }
 
     #[test]
     fn test_clamp_length() {
-        let v = Vec2::new(3.0, 4.0); // length = 5
+        let v = Vec2::new(px(3.0), px(4.0)); // length = 5
 
         let clamped_max = v.clamp_length(0.0, 2.0);
         assert!((clamped_max.length() - 2.0).abs() < 1e-6);
 
-        let clamped_min = Vec2::new(0.3, 0.4).clamp_length(5.0, 10.0);
+        let clamped_min = Vec2::new(px(0.3), px(0.4)).clamp_length(5.0, 10.0);
         assert!((clamped_min.length() - 5.0).abs() < 1e-6);
     }
 
     #[test]
     fn test_component_ops() {
-        let v = Vec2::new(-3.0, 4.0);
-        assert_eq!(v.abs(), Vec2::new(3.0, 4.0));
-        assert_eq!(v.signum(), Vec2::new(-1.0, 1.0));
+        let v = Vec2::new(px(-3.0), px(4.0));
+        assert_eq!(v.abs(), Vec2::new(px(3.0), px(4.0)));
+        assert_eq!(v.signum(), Vec2::new(px(-1.0), px(1.0)));
         assert_eq!(v.min_element(), -3.0);
         assert_eq!(v.max_element(), 4.0);
     }
 
     #[test]
     fn test_rounding() {
-        let v = Vec2::new(10.6, -3.3);
-        assert_eq!(v.round(), Vec2::new(11.0, -3.0));
-        assert_eq!(v.ceil(), Vec2::new(11.0, -3.0));
-        assert_eq!(v.floor(), Vec2::new(10.0, -4.0));
-        assert_eq!(v.trunc(), Vec2::new(10.0, -3.0));
-        assert_eq!(v.expand(), Vec2::new(11.0, -4.0));
+        let v = Vec2::new(px(10.6), px(-3.3));
+        assert_eq!(v.round(), Vec2::new(px(11.0), px(-3.0)));
+        assert_eq!(v.ceil(), Vec2::new(px(11.0), px(-3.0)));
+        assert_eq!(v.floor(), Vec2::new(px(10.0), px(-4.0)));
+        assert_eq!(v.trunc(), Vec2::new(px(10.0), px(-3.0)));
+        assert_eq!(v.expand(), Vec2::new(px(11.0), px(-4.0)));
     }
 
     #[test]
     fn test_validation() {
-        assert!(Vec2::new(1.0, 2.0).is_finite());
-        assert!(!Vec2::INFINITY.is_finite());
-        assert!(Vec2::NAN.is_nan());
-        assert!(Vec2::ZERO.is_zero());
-        assert!(!Vec2::ONE.is_zero());
+        assert!(Vec2::new(px(1.0), px(2.0)).is_finite());
+        assert!(!Vec2::<Pixels>::INFINITY.is_finite());
+        assert!(Vec2::<Pixels>::NAN.is_nan());
+        assert!(Vec2::<Pixels>::ZERO.is_zero());
+        assert!(!Vec2::<Pixels>::ONE.is_zero());
     }
 
     #[test]
     fn test_operators() {
-        let v1 = Vec2::new(10.0, 20.0);
-        let v2 = Vec2::new(5.0, 8.0);
+        let v1 = Vec2::new(px(10.0), px(20.0));
+        let v2 = Vec2::new(px(5.0), px(8.0));
 
-        assert_eq!(v1 + v2, Vec2::new(15.0, 28.0));
-        assert_eq!(v1 - v2, Vec2::new(5.0, 12.0));
-        assert_eq!(v1 * 2.0, Vec2::new(20.0, 40.0));
-        assert_eq!(2.0 * v1, Vec2::new(20.0, 40.0));
-        assert_eq!(v1 / 2.0, Vec2::new(5.0, 10.0));
-        assert_eq!(-v1, Vec2::new(-10.0, -20.0));
+        assert_eq!(v1 + v2, Vec2::new(px(15.0), px(28.0)));
+        assert_eq!(v1 - v2, Vec2::new(px(5.0), px(12.0)));
+        assert_eq!(v1 * 2.0, Vec2::new(px(20.0), px(40.0)));
+        assert_eq!(2.0 * v1, Vec2::new(px(20.0), px(40.0)));
+        assert_eq!(v1 / 2.0, Vec2::new(px(5.0), px(10.0)));
+        assert_eq!(-v1, Vec2::new(px(-10.0), px(-20.0)));
     }
 
     #[test]
     fn test_assign_operators() {
-        let mut v = Vec2::new(10.0, 20.0);
+        let mut v = Vec2::new(px(10.0), px(20.0));
 
-        v += Vec2::new(5.0, 5.0);
-        assert_eq!(v, Vec2::new(15.0, 25.0));
+        v += Vec2::new(px(5.0), px(5.0));
+        assert_eq!(v, Vec2::new(px(15.0), px(25.0)));
 
-        v -= Vec2::new(5.0, 5.0);
-        assert_eq!(v, Vec2::new(10.0, 20.0));
+        v -= Vec2::new(px(5.0), px(5.0));
+        assert_eq!(v, Vec2::new(px(10.0), px(20.0)));
 
         v *= 2.0;
-        assert_eq!(v, Vec2::new(20.0, 40.0));
+        assert_eq!(v, Vec2::new(px(20.0), px(40.0)));
 
         v /= 2.0;
-        assert_eq!(v, Vec2::new(10.0, 20.0));
+        assert_eq!(v, Vec2::new(px(10.0), px(20.0)));
     }
 
     #[test]
     fn test_conversions() {
-        let v = Vec2::new(10.0, 20.0);
+        let v = Vec2::new(px(10.0), px(20.0));
 
-        let from_tuple: Vec2<Pixels> = (10.0, 20.0).into();
-        let from_array: Vec2<Pixels> = [10.0, 20.0].into();
+        let from_tuple = Vec2::<Pixels>::from((10.0, 20.0));
+        let from_array = Vec2::<Pixels>::from([10.0, 20.0]);
         assert_eq!(from_tuple, v);
         assert_eq!(from_array, v);
 
@@ -1242,19 +1242,19 @@ mod tests {
         assert_eq!(to_tuple, (10.0, 20.0));
         assert_eq!(to_array, [10.0, 20.0]);
 
-        let p = Point::new(5.0, 10.0);
+        let p = Point::new(px(5.0), px(10.0));
         let v_from_p: Vec2<Pixels> = p.into();
-        assert_eq!(v_from_p, Vec2::new(5.0, 10.0));
+        assert_eq!(v_from_p, Vec2::new(px(5.0), px(10.0)));
     }
 
     #[test]
     fn test_display() {
-        assert_eq!(format!("{}", Vec2::new(10.5, 20.5)), "(10.5, 20.5)");
+        assert_eq!(format!("{}", Vec2::new(px(10.5), px(20.5))), "(10.5, 20.5)");
     }
 
     #[test]
     fn test_convenience_fn() {
-        assert_eq!(vec2(1.0, 2.0), Vec2::new(1.0, 2.0));
+        assert_eq!(vec2(1.0, 2.0), Vec2::new(px(1.0), px(2.0)));
     }
 }
 
@@ -1276,22 +1276,22 @@ mod typed_tests {
 
     #[test]
     fn test_vec2_length() {
-        let v = Vec2::<Pixels>::new(3.0, 4.0);
+        let v = Vec2::<Pixels>::new(px(3.0), px(4.0));
         assert_eq!(v.length(), 5.0);
         assert_eq!(v.length_squared(), 25.0);
     }
 
     #[test]
     fn test_vec2_normalize() {
-        let v = Vec2::<Pixels>::new(3.0, 4.0);
+        let v = Vec2::<Pixels>::new(px(3.0), px(4.0));
         let n = v.normalize();
         assert!((n.length() - 1.0).abs() < 0.001);
     }
 
     #[test]
     fn test_vec2_dot_cross() {
-        let v1 = Vec2::<Pixels>::new(1.0, 0.0);
-        let v2 = Vec2::<Pixels>::new(0.0, 1.0);
+        let v1 = Vec2::<Pixels>::new(px(1.0), px(0.0));
+        let v2 = Vec2::<Pixels>::new(px(0.0), px(1.0));
         assert_eq!(v1.dot(&v2), 0.0);
         assert_eq!(v1.cross(&v2), 1.0);
     }
@@ -1320,8 +1320,8 @@ mod typed_tests {
     fn test_vec2_rotate() {
         let v = Vec2::<Pixels>::new(px(1.0), px(0.0));
         let rotated = v.rotate(std::f32::consts::PI / 2.0);
-        assert!((rotated.x.get()).abs() < 0.001);
-        assert!((rotated.y.get() - 1.0).abs() < 0.001);
+        assert!((rotated.x.0).abs() < 0.001);
+        assert!((rotated.y.0 - 1.0).abs() < 0.001);
     }
 
     #[test]
@@ -1362,7 +1362,7 @@ mod typed_tests {
         assert!(v.approx_eq_eps(&v2, 1e-6));
 
         // Test Sign trait
-        let v_f32 = Vec2::<Pixels>::new(-10.0, 20.0);
+        let v_f32 = Vec2::<Pixels>::new(px(-10.0), px(20.0));
         let signum_v: Vec2<Pixels> = Sign::signum(v_f32);
         assert_eq!(signum_v.x.get(), -1.0);
         assert_eq!(signum_v.y.get(), 1.0);
@@ -1370,7 +1370,7 @@ mod typed_tests {
 
     #[test]
     fn test_vec2_swap() {
-        let v = Vec2::<Pixels>::new(10.0, 20.0);
+        let v = Vec2::<Pixels>::new(px(10.0), px(20.0));
         let swapped = v.swap();
         assert_eq!(swapped.x.get(), 20.0);
         assert_eq!(swapped.y.get(), 10.0);
@@ -1378,7 +1378,7 @@ mod typed_tests {
 
     #[test]
     fn test_vec2_map() {
-        let v = Vec2::<Pixels>::new(2.0, 3.0);
+        let v = Vec2::<Pixels>::new(px(2.0), px(3.0));
         let mapped = v.map(|c| c * 2.0);
         assert_eq!(mapped.x.get(), 4.0);
         assert_eq!(mapped.y.get(), 6.0);
@@ -1386,18 +1386,18 @@ mod typed_tests {
 
     #[test]
     fn test_vec2_distance_metrics() {
-        let v = Vec2::<Pixels>::new(3.0, 4.0);
-        assert_eq!(v.manhattan_length(), 7.0); // |3| + |4|
-        assert_eq!(v.chebyshev_length(), 4.0); // max(|3|, |4|)
+        let v = Vec2::<Pixels>::new(px(3.0), px(4.0));
+        assert_eq!(v.manhattan_length(), px(7.0)); // |3| + |4|
+        assert_eq!(v.chebyshev_length(), px(4.0)); // max(|3|, |4|)
         assert_eq!(v.length(), 5.0); // sqrt(3^2 + 4^2)
     }
 
     #[test]
     fn test_vec2_sum_iterator() {
         let vectors = vec![
-            Vec2::<Pixels>::new(1.0, 2.0),
-            Vec2::<Pixels>::new(3.0, 4.0),
-            Vec2::<Pixels>::new(5.0, 6.0),
+            Vec2::<Pixels>::new(px(1.0), px(2.0)),
+            Vec2::<Pixels>::new(px(3.0), px(4.0)),
+            Vec2::<Pixels>::new(px(5.0), px(6.0)),
         ];
         let total: Vec2<Pixels> = vectors.iter().sum();
         assert_eq!(total.x.get(), 9.0);
@@ -1410,7 +1410,7 @@ mod typed_tests {
 
     #[test]
     fn test_vec2_is_valid() {
-        assert!(Vec2::<Pixels>::new(1.0, 2.0).is_valid());
+        assert!(Vec2::<Pixels>::new(px(1.0), px(2.0)).is_valid());
         assert!(!Vec2::<Pixels>::INFINITY.is_valid());
         assert!(!Vec2::<Pixels>::NAN.is_valid());
     }

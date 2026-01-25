@@ -713,6 +713,7 @@ impl From<&Transform> for Matrix4 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::geometry::units::px;
 
     #[test]
     fn test_identity() {
@@ -854,7 +855,7 @@ mod tests {
 
     #[test]
     fn test_from_offset() {
-        let offset = Offset::new(10.0, 20.0);
+        let offset = Offset::new(px(10.0), px(20.0));
         let transform = Transform::from(offset);
 
         if let Transform::Translate { x, y } = transform {

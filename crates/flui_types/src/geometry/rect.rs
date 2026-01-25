@@ -947,15 +947,15 @@ mod tests {
     #[test]
     fn test_from_points() {
         // Normalized automatically
-        let r = Rect::from_points(point(px(100.0), px(100.0)), point(px(0.0), px(0.0)));
-        assert_eq!(r.min, point(px(0.0), px(0.0)));
-        assert_eq!(r.max, point(px(100.0), px(100.0)));
+        let r = Rect::from_points(point(100.0, 100.0), point(0.0, 0.0));
+        assert_eq!(r.min, point(0.0, 0.0));
+        assert_eq!(r.max, point(100.0, 100.0));
     }
 
     #[test]
     fn test_from_center_size() {
-        let r = Rect::from_center_size(point(px(50.0), px(50.0)), size(px(20.0), px(10.0)));
-        assert_eq!(r.center(), point(px(50.0), px(50.0)));
+        let r = Rect::from_center_size(point(50.0, 50.0), size(20.0, 10.0));
+        assert_eq!(r.center(), point(50.0, 50.0));
         assert_eq!(r.width(), px(20.0));
         assert_eq!(r.height(), px(10.0));
     }
@@ -966,15 +966,15 @@ mod tests {
 
         assert_eq!(r.width(), px(100.0));
         assert_eq!(r.height(), px(50.0));
-        assert_eq!(r.size(), size(px(100.0), px(50.0)));
-        assert_eq!(r.area(), px(5000.0));
-        assert_eq!(r.origin(), point(px(10.0), px(20.0)));
-        assert_eq!(r.center(), point(px(60.0), px(45.0)));
+        assert_eq!(r.size(), size(100.0, 50.0));
+        assert_eq!(r.area(), 5000.0);
+        assert_eq!(r.origin(), point(10.0, 20.0));
+        assert_eq!(r.center(), point(60.0, 45.0));
 
-        assert_eq!(r.top_left(), point(px(10.0), px(20.0)));
-        assert_eq!(r.top_right(), point(px(110.0), px(20.0)));
-        assert_eq!(r.bottom_left(), point(px(10.0), px(70.0)));
-        assert_eq!(r.bottom_right(), point(px(110.0), px(70.0)));
+        assert_eq!(r.top_left(), point(10.0, 20.0));
+        assert_eq!(r.top_right(), point(110.0, 20.0));
+        assert_eq!(r.bottom_left(), point(10.0, 70.0));
+        assert_eq!(r.bottom_right(), point(110.0, 70.0));
     }
 
     #[test]
@@ -982,7 +982,7 @@ mod tests {
         assert!(!Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(50.0)).is_empty());
         assert!(Rect::ZERO.is_empty());
         assert!(Rect::from_xywh(px(0.0), px(0.0), px(0.0), px(50.0)).is_empty());
-        assert!(Rect::from_xywh(0.0, 0.0, -10.0, 50.0).is_empty());
+        assert!(Rect::from_xywh(px(0.0), px(0.0), px(-10.0), px(50.0)).is_empty());
 
         assert!(Rect::ZERO.is_finite());
         assert!(!Rect::EVERYTHING.is_finite());
@@ -992,11 +992,11 @@ mod tests {
     fn test_contains() {
         let r = Rect::from_xywh(px(10.0), px(10.0), px(100.0), px(100.0));
 
-        assert!(r.contains(point(px(50.0), px(50.0))));
-        assert!(r.contains(point(px(10.0), px(10.0)))); // on edge
-        assert!(r.contains(point(px(110.0), px(110.0)))); // on edge
-        assert!(!r.contains(point(px(5.0), px(50.0))));
-        assert!(!r.contains(point(px(115.0), px(50.0))));
+        assert!(r.contains(point(50.0, 50.0)));
+        assert!(r.contains(point(10.0, 10.0))); // on edge
+        assert!(r.contains(point(110.0, 110.0))); // on edge
+        assert!(!r.contains(point(5.0, 50.0)));
+        assert!(!r.contains(point(115.0, 50.0)));
     }
 
     #[test]
@@ -1048,27 +1048,27 @@ mod tests {
     #[test]
     fn test_union_pt() {
         let r = Rect::from_xywh(px(10.0), px(10.0), px(50.0), px(50.0));
-        let expanded = r.union_pt(point(px(100.0), px(100.0)));
-        assert_eq!(expanded.max, point(px(100.0), px(100.0)));
+        let expanded = r.union_pt(point(100.0, 100.0));
+        assert_eq!(expanded.max, point(100.0, 100.0));
     }
 
     #[test]
     fn test_transformations() {
         let r = Rect::from_xywh(px(10.0), px(10.0), px(100.0), px(50.0));
 
-        let inflated = r.inflate(5.0, 5.0);
+        let inflated = r.inflate(px(5.0), px(5.0));
         assert_eq!(
             inflated,
             Rect::from_xywh(px(5.0), px(5.0), px(110.0), px(60.0))
         );
 
-        let inset = r.inset(5.0);
+        let inset = r.inset(px(5.0));
         assert_eq!(
             inset,
             Rect::from_xywh(px(15.0), px(15.0), px(90.0), px(40.0))
         );
 
-        let translated = r.translate(Vec2::new(10.0, 20.0));
+        let translated = r.translate(Vec2::new(px(10.0), px(20.0)));
         assert_eq!(
             translated,
             Rect::from_xywh(px(20.0), px(30.0), px(100.0), px(50.0))
@@ -1085,13 +1085,13 @@ mod tests {
     fn test_with_origin_size() {
         let r = Rect::from_xywh(px(10.0), px(10.0), px(100.0), px(50.0));
 
-        let moved = r.with_origin(point(px(20.0), px(20.0)));
-        assert_eq!(moved.origin(), point(px(20.0), px(20.0)));
+        let moved = r.with_origin(point(20.0, 20.0));
+        assert_eq!(moved.origin(), point(20.0, 20.0));
         assert_eq!(moved.size(), r.size());
 
-        let resized = r.with_size(size(px(200.0), px(100.0)));
+        let resized = r.with_size(size(200.0, 100.0));
         assert_eq!(resized.origin(), r.origin());
-        assert_eq!(resized.size(), size(px(200.0), px(100.0)));
+        assert_eq!(resized.size(), size(200.0, 100.0));
     }
 
     #[test]
@@ -1099,16 +1099,16 @@ mod tests {
         let r = Rect::new(px(10.3), px(20.7), px(110.5), px(71.3));
 
         let rounded = r.round();
-        assert_eq!(rounded.min, point(px(10.0), px(21.0)));
-        assert_eq!(rounded.max, point(px(111.0), px(71.0)));
+        assert_eq!(rounded.min, point(10.0, 21.0));
+        assert_eq!(rounded.max, point(111.0, 71.0));
 
         let expanded = r.expand_to_int();
-        assert_eq!(expanded.min, point(px(10.0), px(20.0)));
-        assert_eq!(expanded.max, point(px(111.0), px(72.0)));
+        assert_eq!(expanded.min, point(10.0, 20.0));
+        assert_eq!(expanded.max, point(111.0, 72.0));
 
         let contracted = r.contract_to_int();
-        assert_eq!(contracted.min, point(px(11.0), px(21.0)));
-        assert_eq!(contracted.max, point(px(110.0), px(71.0)));
+        assert_eq!(contracted.min, point(11.0, 21.0));
+        assert_eq!(contracted.max, point(110.0, 71.0));
     }
 
     #[test]
@@ -1154,8 +1154,8 @@ mod tests {
             Size::new(px(100.0), px(50.0)),
         );
         let f = r.to_f32();
-        assert_eq!(f.min, point(px(10.0), px(20.0)));
-        assert_eq!(f.max, point(px(110.0), px(70.0)));
+        assert_eq!(f.min, point(10.0, 20.0));
+        assert_eq!(f.max, point(110.0, 70.0));
     }
 
     #[test]
@@ -1170,13 +1170,13 @@ mod tests {
         // rect(x=10, y=20, w=100, h=50) creates min=(10,20), max=(110,70)
         let r = rect(10.0, 20.0, 100.0, 50.0);
         let doubled = r.map(|x| x * 2.0);
-        assert_eq!(doubled.min, point(px(20.0), px(40.0))); // (10*2, 20*2)
-        assert_eq!(doubled.max, point(px(220.0), px(140.0))); // (110*2, 70*2)
+        assert_eq!(doubled.min, point(20.0, 40.0)); // (10*2, 20*2)
+        assert_eq!(doubled.max, point(220.0, 140.0)); // (110*2, 70*2)
     }
 
     #[test]
     fn test_default() {
-        let r: Rect<f32> = Rect::default();
+        let r: Rect<Pixels> = Rect::default();
         assert_eq!(r.min, Point::ORIGIN);
         assert_eq!(r.max, Point::ORIGIN);
     }

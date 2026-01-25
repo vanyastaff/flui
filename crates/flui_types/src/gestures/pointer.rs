@@ -558,12 +558,13 @@ impl PointerData {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::geometry::units::px;
 
     #[test]
     fn test_offset_pair_new() {
-        let pair = OffsetPair::new(Offset::new(10.0, 20.0), Offset::new(100.0, 200.0));
-        assert_eq!(pair.local, Offset::new(10.0, 20.0));
-        assert_eq!(pair.global, Offset::new(100.0, 200.0));
+        let pair = OffsetPair::new(Offset::new(px(10.0), px(20.0)), Offset::new(px(100.0), px(200.0)));
+        assert_eq!(pair.local, Offset::new(px(10.0), px(20.0)));
+        assert_eq!(pair.global, Offset::new(px(100.0), px(200.0)));
     }
 
     #[test]
@@ -575,7 +576,7 @@ mod tests {
 
     #[test]
     fn test_offset_pair_from_offset() {
-        let offset = Offset::new(50.0, 75.0);
+        let offset = Offset::new(px(50.0), px(75.0));
         let pair = OffsetPair::from_offset(offset);
         assert_eq!(pair.local, offset);
         assert_eq!(pair.global, offset);
@@ -590,13 +591,13 @@ mod tests {
     fn test_pointer_data_new() {
         let data = PointerData::new(
             Duration::from_millis(100),
-            Offset::new(100.0, 200.0),
+            Offset::new(px(100.0), px(200.0)),
             0,
             PointerDeviceKind::Touch,
         );
 
         assert_eq!(data.time_stamp, Duration::from_millis(100));
-        assert_eq!(data.position, Offset::new(100.0, 200.0));
+        assert_eq!(data.position, Offset::new(px(100.0), px(200.0)));
         assert_eq!(data.pointer, 0);
         assert_eq!(data.device_kind, PointerDeviceKind::Touch);
         assert_eq!(data.delta, Offset::ZERO);
@@ -606,7 +607,7 @@ mod tests {
     fn test_pointer_data_builder() {
         let data = PointerData::new(
             Duration::from_millis(100),
-            Offset::new(100.0, 200.0),
+            Offset::new(px(100.0), px(200.0)),
             0,
             PointerDeviceKind::Stylus,
         )
@@ -615,7 +616,7 @@ mod tests {
         .with_radius(10.0, 5.0, 0.0, 20.0)
         .with_orientation(0.5)
         .with_tilt(0.3)
-        .with_delta(Offset::new(2.0, 3.0))
+        .with_delta(Offset::new(px(2.0), px(3.0)))
         .with_buttons(1);
 
         assert_eq!(data.pressure, 0.8);
@@ -623,7 +624,7 @@ mod tests {
         assert_eq!(data.radius_major, 10.0);
         assert_eq!(data.orientation, 0.5);
         assert_eq!(data.tilt, 0.3);
-        assert_eq!(data.delta, Offset::new(2.0, 3.0));
+        assert_eq!(data.delta, Offset::new(px(2.0), px(3.0)));
         assert_eq!(data.buttons, 1);
     }
 

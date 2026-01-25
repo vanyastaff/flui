@@ -445,6 +445,7 @@ impl ColorFilter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::geometry::units::px;
 
     #[test]
     fn test_box_fit_default() {
@@ -453,8 +454,8 @@ mod tests {
 
     #[test]
     fn test_box_fit_fill() {
-        let input = Size::new(200.0, 100.0);
-        let output = Size::new(100.0, 200.0);
+        let input = Size::new(px(200.0), px(100.0));
+        let output = Size::new(px(100.0), px(200.0));
         let fitted = BoxFit::Fill.apply(input, output);
 
         assert_eq!(fitted.source, input);
@@ -463,52 +464,52 @@ mod tests {
 
     #[test]
     fn test_box_fit_contain() {
-        let input = Size::new(200.0, 100.0);
-        let output = Size::new(100.0, 100.0);
+        let input = Size::new(px(200.0), px(100.0));
+        let output = Size::new(px(100.0), px(100.0));
         let fitted = BoxFit::Contain.apply(input, output);
 
         assert_eq!(fitted.source, input);
-        assert_eq!(fitted.destination.width, 100.0);
-        assert_eq!(fitted.destination.height, 50.0);
+        assert_eq!(fitted.destination.width, px(100.0));
+        assert_eq!(fitted.destination.height, px(50.0));
     }
 
     #[test]
     fn test_box_fit_cover() {
-        let input = Size::new(100.0, 200.0);
-        let output = Size::new(100.0, 100.0);
+        let input = Size::new(px(100.0), px(200.0));
+        let output = Size::new(px(100.0), px(100.0));
         let fitted = BoxFit::Cover.apply(input, output);
 
         assert_eq!(fitted.source, input);
         // Cover должен покрывать весь output, поэтому масштабируем по width
         // height = 100 / 0.5 = 200 (изображение будет обрезано по высоте)
-        assert_eq!(fitted.destination.width, 100.0);
-        assert_eq!(fitted.destination.height, 200.0);
+        assert_eq!(fitted.destination.width, px(100.0));
+        assert_eq!(fitted.destination.height, px(200.0));
     }
 
     #[test]
     fn test_box_fit_fit_width() {
-        let input = Size::new(200.0, 100.0);
-        let output = Size::new(100.0, 100.0);
+        let input = Size::new(px(200.0), px(100.0));
+        let output = Size::new(px(100.0), px(100.0));
         let fitted = BoxFit::FitWidth.apply(input, output);
 
-        assert_eq!(fitted.destination.width, 100.0);
-        assert_eq!(fitted.destination.height, 50.0);
+        assert_eq!(fitted.destination.width, px(100.0));
+        assert_eq!(fitted.destination.height, px(50.0));
     }
 
     #[test]
     fn test_box_fit_fit_height() {
-        let input = Size::new(100.0, 200.0);
-        let output = Size::new(100.0, 100.0);
+        let input = Size::new(px(100.0), px(200.0));
+        let output = Size::new(px(100.0), px(100.0));
         let fitted = BoxFit::FitHeight.apply(input, output);
 
-        assert_eq!(fitted.destination.width, 50.0);
-        assert_eq!(fitted.destination.height, 100.0);
+        assert_eq!(fitted.destination.width, px(50.0));
+        assert_eq!(fitted.destination.height, px(100.0));
     }
 
     #[test]
     fn test_box_fit_none() {
-        let input = Size::new(200.0, 100.0);
-        let output = Size::new(100.0, 100.0);
+        let input = Size::new(px(200.0), px(100.0));
+        let output = Size::new(px(100.0), px(100.0));
         let fitted = BoxFit::None.apply(input, output);
 
         assert_eq!(fitted.source, input);
@@ -517,18 +518,18 @@ mod tests {
 
     #[test]
     fn test_box_fit_scale_down_shrinks() {
-        let input = Size::new(200.0, 200.0);
-        let output = Size::new(100.0, 100.0);
+        let input = Size::new(px(200.0), px(200.0));
+        let output = Size::new(px(100.0), px(100.0));
         let fitted = BoxFit::ScaleDown.apply(input, output);
 
-        assert_eq!(fitted.destination.width, 100.0);
-        assert_eq!(fitted.destination.height, 100.0);
+        assert_eq!(fitted.destination.width, px(100.0));
+        assert_eq!(fitted.destination.height, px(100.0));
     }
 
     #[test]
     fn test_box_fit_scale_down_no_shrink() {
-        let input = Size::new(50.0, 50.0);
-        let output = Size::new(100.0, 100.0);
+        let input = Size::new(px(50.0), px(50.0));
+        let output = Size::new(px(100.0), px(100.0));
         let fitted = BoxFit::ScaleDown.apply(input, output);
 
         assert_eq!(fitted.destination, input);
@@ -556,17 +557,17 @@ mod tests {
     #[test]
     fn test_image_configuration_builder() {
         let config = ImageConfiguration::new()
-            .with_size(Size::new(100.0, 100.0))
+            .with_size(Size::new(px(100.0), px(100.0)))
             .with_device_pixel_ratio(2.0);
 
-        assert_eq!(config.size, Some(Size::new(100.0, 100.0)));
+        assert_eq!(config.size, Some(Size::new(px(100.0), px(100.0))));
         assert_eq!(config.device_pixel_ratio, Some(2.0));
     }
 
     #[test]
     fn test_fitted_sizes_new() {
-        let source = Size::new(100.0, 100.0);
-        let destination = Size::new(50.0, 50.0);
+        let source = Size::new(px(100.0), px(100.0));
+        let destination = Size::new(px(50.0), px(50.0));
         let fitted = FittedSizes::new(source, destination);
 
         assert_eq!(fitted.source, source);

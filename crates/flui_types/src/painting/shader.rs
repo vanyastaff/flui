@@ -664,7 +664,7 @@ mod tests {
     fn test_shader_linear_gradient() {
         let shader = Shader::linear_gradient(
             Offset::ZERO,
-            Offset::new(100.0, 100.0),
+            Offset::new(px(100.0), px(100.0)),
             vec![Color::RED, Color::BLUE],
             None,
             TileMode::Clamp,
@@ -675,7 +675,7 @@ mod tests {
                 from, to, colors, ..
             } => {
                 assert_eq!(from, Offset::ZERO);
-                assert_eq!(to, Offset::new(100.0, 100.0));
+                assert_eq!(to, Offset::new(px(100.0), px(100.0)));
                 assert_eq!(colors.len(), 2);
             }
             _ => panic!("Wrong shader type"),
@@ -685,7 +685,7 @@ mod tests {
     #[test]
     fn test_shader_radial_gradient() {
         let shader = Shader::radial_gradient(
-            Offset::new(50.0, 50.0),
+            Offset::new(px(50.0), px(50.0)),
             25.0,
             vec![Color::RED, Color::BLUE],
             None,
@@ -701,7 +701,7 @@ mod tests {
                 colors,
                 ..
             } => {
-                assert_eq!(center, Offset::new(50.0, 50.0));
+                assert_eq!(center, Offset::new(px(50.0), px(50.0)));
                 assert_eq!(radius, 25.0);
                 assert_eq!(colors.len(), 2);
             }
@@ -712,7 +712,7 @@ mod tests {
     #[test]
     fn test_shader_sweep_gradient() {
         let shader = Shader::sweep_gradient(
-            Offset::new(50.0, 50.0),
+            Offset::new(px(50.0), px(50.0)),
             vec![Color::RED, Color::BLUE],
             None,
             TileMode::Clamp,
@@ -728,7 +728,7 @@ mod tests {
                 end_angle,
                 ..
             } => {
-                assert_eq!(center, Offset::new(50.0, 50.0));
+                assert_eq!(center, Offset::new(px(50.0), px(50.0)));
                 assert_eq!(colors.len(), 2);
                 assert_eq!(start_angle, 0.0);
                 assert_eq!(end_angle, std::f32::consts::TAU);
