@@ -16,3 +16,10 @@ pub use window::WindowsWindow;
 pub use window_ext::{
     TaskbarProgressState, WindowCornerPreference, WindowsBackdrop, WindowsTheme, WindowsWindowExt,
 };
+
+// Re-export Windows types for examples
+#[cfg(target_os = "windows")]
+pub mod win32 {
+    pub use windows::Win32::Foundation::HWND;
+    pub use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWINDOWATTRIBUTE};
+}
