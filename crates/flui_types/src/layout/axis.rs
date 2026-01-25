@@ -522,8 +522,14 @@ mod tests {
 
     #[test]
     fn test_axis_make_size() {
-        assert_eq!(Axis::Horizontal.make_size(100.0), Size::new(px(100.0), px(0.0)));
-        assert_eq!(Axis::Vertical.make_size(100.0), Size::new(px(0.0), px(100.0)));
+        assert_eq!(
+            Axis::Horizontal.make_size(100.0),
+            Size::new(px(100.0), px(0.0))
+        );
+        assert_eq!(
+            Axis::Vertical.make_size(100.0),
+            Size::new(px(0.0), px(100.0))
+        );
 
         assert_eq!(
             Axis::Horizontal.make_size_with_cross(100.0, 50.0),
@@ -538,8 +544,14 @@ mod tests {
     #[test]
     fn test_axis_flip_size() {
         let size = Size::new(px(100.0), px(50.0));
-        assert_eq!(Axis::Horizontal.flip_size(size), Size::new(px(100.0), px(50.0)));
-        assert_eq!(Axis::Vertical.flip_size(size), Size::new(px(50.0), px(100.0)));
+        assert_eq!(
+            Axis::Horizontal.flip_size(size),
+            Size::new(px(100.0), px(50.0))
+        );
+        assert_eq!(
+            Axis::Vertical.flip_size(size),
+            Size::new(px(50.0), px(100.0))
+        );
     }
 
     #[test]

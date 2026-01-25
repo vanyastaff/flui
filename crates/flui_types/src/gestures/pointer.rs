@@ -562,7 +562,10 @@ mod tests {
 
     #[test]
     fn test_offset_pair_new() {
-        let pair = OffsetPair::new(Offset::new(px(10.0), px(20.0)), Offset::new(px(100.0), px(200.0)));
+        let pair = OffsetPair::new(
+            Offset::new(px(10.0), px(20.0)),
+            Offset::new(px(100.0), px(200.0)),
+        );
         assert_eq!(pair.local, Offset::new(px(10.0), px(20.0)));
         assert_eq!(pair.global, Offset::new(px(100.0), px(200.0)));
     }

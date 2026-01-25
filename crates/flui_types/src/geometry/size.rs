@@ -1152,7 +1152,10 @@ mod tests {
 
     #[test]
     fn test_display() {
-        assert_eq!(format!("{}", Size::new(px(800.0), px(600.0))), "800px×600px");
+        assert_eq!(
+            format!("{}", Size::new(px(800.0), px(600.0))),
+            "800px×600px"
+        );
     }
 
     #[test]

@@ -611,7 +611,8 @@ mod tests {
         assert_eq!(unclamped.magnitude(), 100.0);
 
         // Clamp to minimum
-        let clamped_min = Velocity::new(Offset::new(px(10.0), px(0.0))).clamp_magnitude(50.0, 100.0);
+        let clamped_min =
+            Velocity::new(Offset::new(px(10.0), px(0.0))).clamp_magnitude(50.0, 100.0);
         assert_eq!(clamped_min.magnitude(), 50.0);
     }
 
@@ -638,7 +639,10 @@ mod tests {
         );
 
         assert_eq!(estimate.offset, Offset::new(px(100.0), px(50.0)));
-        assert_eq!(estimate.pixels_per_second, Offset::new(px(200.0), px(-100.0)));
+        assert_eq!(
+            estimate.pixels_per_second,
+            Offset::new(px(200.0), px(-100.0))
+        );
         assert_eq!(estimate.duration, Duration::from_millis(16));
         assert_eq!(estimate.confidence, 0.95);
     }
@@ -653,7 +657,10 @@ mod tests {
         );
 
         let velocity = estimate.velocity();
-        assert_eq!(velocity.pixels_per_second, Offset::new(px(200.0), px(-100.0)));
+        assert_eq!(
+            velocity.pixels_per_second,
+            Offset::new(px(200.0), px(-100.0))
+        );
     }
 
     #[test]

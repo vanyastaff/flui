@@ -1049,8 +1049,14 @@ mod tests {
         assert_eq!(v.y, px(4.0));
 
         assert_eq!(Vec2::splat(px(5.0)), Vec2::new(px(5.0), px(5.0)));
-        assert_eq!(Vec2::<Pixels>::from([1.0, 2.0]), Vec2::new(px(1.0), px(2.0)));
-        assert_eq!(Vec2::<Pixels>::from((3.0, 4.0)), Vec2::new(px(3.0), px(4.0)));
+        assert_eq!(
+            Vec2::<Pixels>::from([1.0, 2.0]),
+            Vec2::new(px(1.0), px(2.0))
+        );
+        assert_eq!(
+            Vec2::<Pixels>::from((3.0, 4.0)),
+            Vec2::new(px(3.0), px(4.0))
+        );
     }
 
     #[test]
