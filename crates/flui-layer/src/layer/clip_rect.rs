@@ -124,10 +124,11 @@ unsafe impl Sync for ClipRectLayer {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_types::geometry::px;
 
     #[test]
     fn test_clip_rect_layer_new() {
-        let rect = Rect::from_xywh(10.0, 20.0, 100.0, 50.0);
+        let rect = Rect::from_xywh(px(10.0), px(20.0), px(100.0), px(50.0));
         let layer = ClipRectLayer::new(rect, Clip::HardEdge);
 
         assert_eq!(layer.clip_rect(), rect);
@@ -137,7 +138,7 @@ mod tests {
 
     #[test]
     fn test_clip_rect_layer_hard_edge() {
-        let rect = Rect::from_xywh(0.0, 0.0, 50.0, 50.0);
+        let rect = Rect::from_xywh(px(0.0), px(0.0), px(50.0), px(50.0));
         let layer = ClipRectLayer::hard_edge(rect);
 
         assert_eq!(layer.clip_behavior(), Clip::HardEdge);
@@ -147,7 +148,7 @@ mod tests {
 
     #[test]
     fn test_clip_rect_layer_anti_alias() {
-        let rect = Rect::from_xywh(0.0, 0.0, 50.0, 50.0);
+        let rect = Rect::from_xywh(px(0.0), px(0.0), px(50.0), px(50.0));
         let layer = ClipRectLayer::anti_alias(rect);
 
         assert_eq!(layer.clip_behavior(), Clip::AntiAlias);
@@ -157,7 +158,7 @@ mod tests {
 
     #[test]
     fn test_clip_rect_layer_no_clip() {
-        let rect = Rect::from_xywh(0.0, 0.0, 50.0, 50.0);
+        let rect = Rect::from_xywh(px(0.0), px(0.0), px(50.0), px(50.0));
         let layer = ClipRectLayer::new(rect, Clip::None);
 
         assert!(!layer.clips());
@@ -165,8 +166,8 @@ mod tests {
 
     #[test]
     fn test_clip_rect_layer_setters() {
-        let rect1 = Rect::from_xywh(0.0, 0.0, 50.0, 50.0);
-        let rect2 = Rect::from_xywh(10.0, 10.0, 100.0, 100.0);
+        let rect1 = Rect::from_xywh(px(0.0), px(0.0), px(50.0), px(50.0));
+        let rect2 = Rect::from_xywh(px(10.0), px(10.0), px(100.0), px(100.0));
         let mut layer = ClipRectLayer::new(rect1, Clip::HardEdge);
 
         layer.set_clip_rect(rect2);
@@ -178,7 +179,7 @@ mod tests {
 
     #[test]
     fn test_clip_rect_layer_clone() {
-        let rect = Rect::from_xywh(10.0, 20.0, 100.0, 50.0);
+        let rect = Rect::from_xywh(px(10.0), px(20.0), px(100.0), px(50.0));
         let layer = ClipRectLayer::new(rect, Clip::AntiAlias);
         let cloned = layer.clone();
 

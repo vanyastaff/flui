@@ -969,6 +969,7 @@ impl LayerBounds for AnnotatedRegionLayer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_types::geometry::px;
     use flui_types::painting::Clip;
 
     #[test]
@@ -980,7 +981,7 @@ mod tests {
 
     #[test]
     fn test_layer_from_clip_rect() {
-        let clip = ClipRectLayer::new(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), Clip::HardEdge);
+        let clip = ClipRectLayer::new(Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0)), Clip::HardEdge);
         let layer = Layer::from(clip);
         assert!(layer.is_clip_rect());
         assert!(layer.is_clip());
@@ -1001,13 +1002,13 @@ mod tests {
 
         // Hard edge clip doesn't need compositing
         let clip = Layer::ClipRect(ClipRectLayer::hard_edge(Rect::from_xywh(
-            0.0, 0.0, 100.0, 100.0,
+            px(0.0), px(0.0), px(100.0), px(100.0),
         )));
         assert!(!clip.needs_compositing());
 
         // Anti-aliased clip needs compositing
         let aa_clip = Layer::ClipRect(ClipRectLayer::anti_alias(Rect::from_xywh(
-            0.0, 0.0, 100.0, 100.0,
+            px(0.0), px(0.0), px(100.0), px(100.0),
         )));
         assert!(aa_clip.needs_compositing());
 
@@ -1022,14 +1023,14 @@ mod tests {
     #[test]
     fn test_layer_bounds() {
         let clip = Layer::ClipRect(ClipRectLayer::new(
-            Rect::from_xywh(10.0, 20.0, 100.0, 50.0),
+            Rect::from_xywh(px(10.0), px(20.0), px(100.0), px(50.0)),
             Clip::HardEdge,
         ));
         let bounds = clip.bounds().unwrap();
-        assert_eq!(bounds.left(), 10.0);
-        assert_eq!(bounds.top(), 20.0);
-        assert_eq!(bounds.width(), 100.0);
-        assert_eq!(bounds.height(), 50.0);
+        assert_eq!(bounds.left(), px(10.0));
+        assert_eq!(bounds.top(), px(20.0));
+        assert_eq!(bounds.width(), px(100.0));
+        assert_eq!(bounds.height(), px(50.0));
     }
 
     #[test]

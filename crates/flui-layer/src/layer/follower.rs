@@ -34,7 +34,7 @@ use flui_types::geometry::{Offset, Pixels, Size};
 ///
 /// // Create follower that appears below the leader
 /// let tooltip = FollowerLayer::new(link)
-///     .with_target_offset(Offset::new(0.0, 5.0))
+///     .with_target_offset(Offset::new(px(0.0), px(5.0)))
 ///     .with_show_when_unlinked(false);
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -237,6 +237,7 @@ unsafe impl Sync for FollowerLayer {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_types::geometry::px;
 
     #[test]
     fn test_follower_layer_new() {
@@ -252,51 +253,51 @@ mod tests {
     fn test_follower_layer_builder() {
         let link = LayerLink::new();
         let layer = FollowerLayer::new(link)
-            .with_target_offset(Offset::new(10.0, 20.0))
+            .with_target_offset(Offset::new(px(10.0), px(20.0)))
             .with_show_when_unlinked(false)
-            .with_leader_anchor(Offset::new(0.5, 1.0))
-            .with_follower_anchor(Offset::new(0.5, 0.0));
+            .with_leader_anchor(Offset::new(px(0.5), px(1.0)))
+            .with_follower_anchor(Offset::new(px(0.5), px(0.0)));
 
-        assert_eq!(layer.target_offset(), Offset::new(10.0, 20.0));
+        assert_eq!(layer.target_offset(), Offset::new(px(10.0), px(20.0)));
         assert!(!layer.show_when_unlinked());
-        assert_eq!(layer.leader_anchor(), Offset::new(0.5, 1.0));
-        assert_eq!(layer.follower_anchor(), Offset::new(0.5, 0.0));
+        assert_eq!(layer.leader_anchor(), Offset::new(px(0.5), px(1.0)));
+        assert_eq!(layer.follower_anchor(), Offset::new(px(0.5), px(0.0)));
     }
 
     #[test]
     fn test_follower_calculate_offset_simple() {
         let link = LayerLink::new();
-        let follower = FollowerLayer::new(link).with_target_offset(Offset::new(0.0, 10.0));
+        let follower = FollowerLayer::new(link).with_target_offset(Offset::new(px(0.0), px(10.0)));
 
         let offset = follower.calculate_offset(
-            Offset::new(100.0, 100.0), // Leader at (100, 100)
-            Size::new(50.0, 30.0),     // Leader size
-            Size::new(80.0, 40.0),     // Follower size
+            Offset::new(px(100.0), px(100.0)), // Leader at (100, 100)
+            Size::new(px(50.0), px(30.0)),     // Leader size
+            Size::new(px(80.0), px(40.0)),     // Follower size
         );
 
         // Default anchors are (0,0), so follower goes to leader's top-left + target offset
-        assert_eq!(offset, Offset::new(100.0, 110.0));
+        assert_eq!(offset, Offset::new(px(100.0), px(110.0)));
     }
 
     #[test]
     fn test_follower_calculate_offset_centered() {
         let link = LayerLink::new();
         let follower = FollowerLayer::new(link)
-            .with_leader_anchor(Offset::new(0.5, 1.0)) // Bottom-center of leader
-            .with_follower_anchor(Offset::new(0.5, 0.0)) // Top-center of follower
-            .with_target_offset(Offset::new(0.0, 5.0)); // 5px gap
+            .with_leader_anchor(Offset::new(px(0.5), px(1.0))) // Bottom-center of leader
+            .with_follower_anchor(Offset::new(px(0.5), px(0.0))) // Top-center of follower
+            .with_target_offset(Offset::new(px(0.0), px(5.0))); // 5px gap
 
         let offset = follower.calculate_offset(
-            Offset::new(100.0, 100.0), // Leader at (100, 100)
-            Size::new(50.0, 30.0),     // Leader 50x30
-            Size::new(80.0, 40.0),     // Follower 80x40
+            Offset::new(px(100.0), px(100.0)), // Leader at (100, 100)
+            Size::new(px(50.0), px(30.0)),     // Leader 50x30
+            Size::new(px(80.0), px(40.0)),     // Follower 80x40
         );
 
         // Leader bottom-center: (100 + 25, 100 + 30) = (125, 130)
         // Add target offset: (125, 135)
         // Subtract follower anchor offset: (125 - 40, 135 - 0) = (85, 135)
-        assert_eq!(offset.dx, 85.0);
-        assert_eq!(offset.dy, 135.0);
+        assert_eq!(offset.dx, px(85.0));
+        assert_eq!(offset.dy, px(135.0));
     }
 
     #[test]
@@ -304,9 +305,9 @@ mod tests {
         let link = LayerLink::new();
         let follower = FollowerLayer::below(link, 5.0);
 
-        assert_eq!(follower.leader_anchor(), Offset::new(0.5, 1.0));
-        assert_eq!(follower.follower_anchor(), Offset::new(0.5, 0.0));
-        assert_eq!(follower.target_offset(), Offset::new(0.0, 5.0));
+        assert_eq!(follower.leader_anchor(), Offset::new(px(0.5), px(1.0)));
+        assert_eq!(follower.follower_anchor(), Offset::new(px(0.5), px(0.0)));
+        assert_eq!(follower.target_offset(), Offset::new(px(0.0), px(5.0)));
     }
 
     #[test]
@@ -314,9 +315,9 @@ mod tests {
         let link = LayerLink::new();
         let follower = FollowerLayer::above(link, 5.0);
 
-        assert_eq!(follower.leader_anchor(), Offset::new(0.5, 0.0));
-        assert_eq!(follower.follower_anchor(), Offset::new(0.5, 1.0));
-        assert_eq!(follower.target_offset(), Offset::new(0.0, -5.0));
+        assert_eq!(follower.leader_anchor(), Offset::new(px(0.5), px(0.0)));
+        assert_eq!(follower.follower_anchor(), Offset::new(px(0.5), px(1.0)));
+        assert_eq!(follower.target_offset(), Offset::new(px(0.0), px(-5.0)));
     }
 
     #[test]
@@ -324,9 +325,9 @@ mod tests {
         let link = LayerLink::new();
         let follower = FollowerLayer::right_of(link, 10.0);
 
-        assert_eq!(follower.leader_anchor(), Offset::new(1.0, 0.5));
-        assert_eq!(follower.follower_anchor(), Offset::new(0.0, 0.5));
-        assert_eq!(follower.target_offset(), Offset::new(10.0, 0.0));
+        assert_eq!(follower.leader_anchor(), Offset::new(px(1.0), px(0.5)));
+        assert_eq!(follower.follower_anchor(), Offset::new(px(0.0), px(0.5)));
+        assert_eq!(follower.target_offset(), Offset::new(px(10.0), px(0.0)));
     }
 
     #[test]
@@ -334,9 +335,9 @@ mod tests {
         let link = LayerLink::new();
         let follower = FollowerLayer::left_of(link, 10.0);
 
-        assert_eq!(follower.leader_anchor(), Offset::new(0.0, 0.5));
-        assert_eq!(follower.follower_anchor(), Offset::new(1.0, 0.5));
-        assert_eq!(follower.target_offset(), Offset::new(-10.0, 0.0));
+        assert_eq!(follower.leader_anchor(), Offset::new(px(0.0), px(0.5)));
+        assert_eq!(follower.follower_anchor(), Offset::new(px(1.0), px(0.5)));
+        assert_eq!(follower.target_offset(), Offset::new(px(-10.0), px(0.0)));
     }
 
     #[test]
@@ -344,14 +345,14 @@ mod tests {
         let link = LayerLink::new();
         let mut layer = FollowerLayer::new(link);
 
-        layer.set_target_offset(Offset::new(5.0, 10.0));
+        layer.set_target_offset(Offset::new(px(5.0), px(10.0)));
         layer.set_show_when_unlinked(false);
-        layer.set_leader_anchor(Offset::new(1.0, 1.0));
-        layer.set_follower_anchor(Offset::new(0.0, 0.0));
+        layer.set_leader_anchor(Offset::new(px(1.0), px(1.0)));
+        layer.set_follower_anchor(Offset::new(px(0.0), px(0.0)));
 
-        assert_eq!(layer.target_offset(), Offset::new(5.0, 10.0));
+        assert_eq!(layer.target_offset(), Offset::new(px(5.0), px(10.0)));
         assert!(!layer.show_when_unlinked());
-        assert_eq!(layer.leader_anchor(), Offset::new(1.0, 1.0));
+        assert_eq!(layer.leader_anchor(), Offset::new(px(1.0), px(1.0)));
         assert_eq!(layer.follower_anchor(), Offset::ZERO);
     }
 

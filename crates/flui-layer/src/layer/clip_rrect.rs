@@ -155,10 +155,11 @@ unsafe impl Sync for ClipRRectLayer {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_types::geometry::px;
 
     #[test]
     fn test_clip_rrect_layer_new() {
-        let rrect = RRect::from_rect_circular(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), 10.0);
+        let rrect = RRect::from_rect_circular(Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0)), px(10.0));
         let layer = ClipRRectLayer::new(rrect, Clip::AntiAlias);
 
         assert_eq!(layer.clip_rrect(), &rrect);
@@ -167,7 +168,7 @@ mod tests {
 
     #[test]
     fn test_clip_rrect_layer_circular() {
-        let rect = Rect::from_xywh(10.0, 20.0, 100.0, 50.0);
+        let rect = Rect::from_xywh(px(10.0), px(20.0), px(100.0), px(50.0));
         let layer = ClipRRectLayer::circular(rect, 8.0, Clip::AntiAlias);
 
         assert_eq!(layer.bounds(), rect);
@@ -177,7 +178,7 @@ mod tests {
 
     #[test]
     fn test_clip_rrect_layer_anti_alias() {
-        let rrect = RRect::from_rect_circular(Rect::from_xywh(0.0, 0.0, 50.0, 50.0), 5.0);
+        let rrect = RRect::from_rect_circular(Rect::from_xywh(px(0.0), px(0.0), px(50.0), px(50.0)), px(5.0));
         let layer = ClipRRectLayer::anti_alias(rrect);
 
         assert!(layer.is_anti_aliased());
@@ -186,7 +187,7 @@ mod tests {
 
     #[test]
     fn test_clip_rrect_layer_hard_edge() {
-        let rrect = RRect::from_rect_circular(Rect::from_xywh(0.0, 0.0, 50.0, 50.0), 5.0);
+        let rrect = RRect::from_rect_circular(Rect::from_xywh(px(0.0), px(0.0), px(50.0), px(50.0)), px(5.0));
         let layer = ClipRRectLayer::hard_edge(rrect);
 
         assert!(!layer.is_anti_aliased());
@@ -195,7 +196,7 @@ mod tests {
 
     #[test]
     fn test_clip_rrect_layer_no_rounding() {
-        let rrect = RRect::from_rect(Rect::from_xywh(0.0, 0.0, 50.0, 50.0));
+        let rrect = RRect::from_rect(Rect::from_xywh(px(0.0), px(0.0), px(50.0), px(50.0)));
         let layer = ClipRRectLayer::new(rrect, Clip::HardEdge);
 
         assert!(!layer.has_rounding());
@@ -203,19 +204,19 @@ mod tests {
 
     #[test]
     fn test_clip_rrect_layer_bounds() {
-        let rect = Rect::from_xywh(10.0, 20.0, 100.0, 50.0);
-        let rrect = RRect::from_rect_circular(rect, 10.0);
+        let rect = Rect::from_xywh(px(10.0), px(20.0), px(100.0), px(50.0));
+        let rrect = RRect::from_rect_circular(rect, px(10.0));
         let layer = ClipRRectLayer::new(rrect, Clip::AntiAlias);
 
         assert_eq!(layer.bounds(), rect);
-        assert_eq!(layer.bounds().width(), 100.0);
-        assert_eq!(layer.bounds().height(), 50.0);
+        assert_eq!(layer.bounds().width(), px(100.0));
+        assert_eq!(layer.bounds().height(), px(50.0));
     }
 
     #[test]
     fn test_clip_rrect_layer_setters() {
-        let rrect1 = RRect::from_rect_circular(Rect::from_xywh(0.0, 0.0, 50.0, 50.0), 5.0);
-        let rrect2 = RRect::from_rect_circular(Rect::from_xywh(10.0, 10.0, 100.0, 100.0), 15.0);
+        let rrect1 = RRect::from_rect_circular(Rect::from_xywh(px(0.0), px(0.0), px(50.0), px(50.0)), px(5.0));
+        let rrect2 = RRect::from_rect_circular(Rect::from_xywh(px(10.0), px(10.0), px(100.0), px(100.0)), px(15.0));
         let mut layer = ClipRRectLayer::new(rrect1, Clip::HardEdge);
 
         layer.set_clip_rrect(rrect2);
@@ -227,7 +228,7 @@ mod tests {
 
     #[test]
     fn test_clip_rrect_layer_clone() {
-        let rrect = RRect::from_rect_circular(Rect::from_xywh(0.0, 0.0, 50.0, 50.0), 5.0);
+        let rrect = RRect::from_rect_circular(Rect::from_xywh(px(0.0), px(0.0), px(50.0), px(50.0)), px(5.0));
         let layer = ClipRRectLayer::new(rrect, Clip::AntiAlias);
         let cloned = layer.clone();
 

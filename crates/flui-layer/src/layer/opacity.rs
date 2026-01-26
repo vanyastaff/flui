@@ -174,6 +174,7 @@ unsafe impl Sync for OpacityLayer {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_types::geometry::px;
 
     #[test]
     fn test_opacity_layer_new() {
@@ -194,11 +195,11 @@ mod tests {
 
     #[test]
     fn test_opacity_layer_with_offset() {
-        let layer = OpacityLayer::with_offset(0.75, Offset::new(10.0, 20.0));
+        let layer = OpacityLayer::with_offset(0.75, Offset::new(px(10.0), px(20.0)));
 
         assert_eq!(layer.alpha(), 0.75);
-        assert_eq!(layer.offset().dx, 10.0);
-        assert_eq!(layer.offset().dy, 20.0);
+        assert_eq!(layer.offset().dx, px(10.0));
+        assert_eq!(layer.offset().dy, px(20.0));
         assert!(layer.has_offset());
     }
 
@@ -227,8 +228,8 @@ mod tests {
         layer.set_alpha(0.75);
         assert_eq!(layer.alpha(), 0.75);
 
-        layer.set_offset(Offset::new(5.0, 10.0));
-        assert_eq!(layer.offset().dx, 5.0);
+        layer.set_offset(Offset::new(px(5.0), px(10.0)));
+        assert_eq!(layer.offset().dx, px(5.0));
     }
 
     #[test]

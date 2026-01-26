@@ -40,7 +40,7 @@ use flui_types::{
 ///         colors: vec![Color32::TRANSPARENT, Color32::WHITE],
 ///     },
 ///     BlendMode::SrcOver,
-///     Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
+///     Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0)),
 /// );
 /// ```
 #[derive(Debug, Clone)]
@@ -99,13 +99,14 @@ unsafe impl Sync for ShaderMaskLayer {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_types::geometry::px;
     use flui_types::styling::Color32;
 
     #[test]
     fn test_shader_mask_layer_new() {
         let shader = ShaderSpec::Solid(Color32::WHITE);
         let blend_mode = BlendMode::SrcOver;
-        let bounds = Rect::from_xywh(0.0, 0.0, 100.0, 100.0);
+        let bounds = Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0));
 
         let layer = ShaderMaskLayer::new(shader, blend_mode, bounds);
 
@@ -116,14 +117,14 @@ mod tests {
     #[test]
     fn test_shader_mask_layer_bounds() {
         let shader = ShaderSpec::Solid(Color32::BLACK);
-        let bounds = Rect::from_xywh(10.0, 20.0, 200.0, 150.0);
+        let bounds = Rect::from_xywh(px(10.0), px(20.0), px(200.0), px(150.0));
 
         let layer = ShaderMaskLayer::new(shader, BlendMode::SrcOver, bounds);
 
         let retrieved_bounds = layer.bounds();
         assert_eq!(retrieved_bounds, bounds);
-        assert_eq!(retrieved_bounds.width(), 200.0);
-        assert_eq!(retrieved_bounds.height(), 150.0);
+        assert_eq!(retrieved_bounds.width(), px(200.0));
+        assert_eq!(retrieved_bounds.height(), px(150.0));
     }
 
     #[test]
@@ -133,7 +134,7 @@ mod tests {
             end: (1.0, 1.0),
             colors: vec![Color32::RED, Color32::BLUE],
         };
-        let bounds = Rect::from_xywh(0.0, 0.0, 50.0, 50.0);
+        let bounds = Rect::from_xywh(px(0.0), px(0.0), px(50.0), px(50.0));
 
         let layer = ShaderMaskLayer::new(shader, BlendMode::Multiply, bounds);
 
@@ -154,7 +155,7 @@ mod tests {
             radius: 1.0,
             colors: vec![Color32::WHITE, Color32::BLACK],
         };
-        let bounds = Rect::from_xywh(0.0, 0.0, 100.0, 100.0);
+        let bounds = Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0));
 
         let layer = ShaderMaskLayer::new(shader, BlendMode::Screen, bounds);
 
@@ -180,7 +181,7 @@ mod tests {
     #[test]
     fn test_shader_mask_layer_clone() {
         let shader = ShaderSpec::Solid(Color32::RED);
-        let bounds = Rect::from_xywh(0.0, 0.0, 50.0, 50.0);
+        let bounds = Rect::from_xywh(px(0.0), px(0.0), px(50.0), px(50.0));
         let layer = ShaderMaskLayer::new(shader, BlendMode::SrcOver, bounds);
 
         let cloned = layer.clone();

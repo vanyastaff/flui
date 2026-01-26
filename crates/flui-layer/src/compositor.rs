@@ -625,6 +625,7 @@ impl SceneCompositor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_types::geometry::px;
     use flui_types::Offset;
 
     #[test]
@@ -642,7 +643,7 @@ mod tests {
         let mut tree = LayerTree::new();
         let mut builder = SceneBuilder::new(&mut tree);
 
-        let id = builder.push_offset(Offset::new(10.0, 20.0));
+        let id = builder.push_offset(Offset::new(px(10.0), px(20.0)));
 
         assert_eq!(builder.depth(), 1);
         assert_eq!(builder.current(), Some(id));
@@ -654,7 +655,7 @@ mod tests {
         let mut tree = LayerTree::new();
         let mut builder = SceneBuilder::new(&mut tree);
 
-        let offset_id = builder.push_offset(Offset::new(10.0, 20.0));
+        let offset_id = builder.push_offset(Offset::new(px(10.0), px(20.0)));
         assert_eq!(builder.depth(), 1);
 
         let opacity_id = builder.push_opacity(0.5);
@@ -703,7 +704,7 @@ mod tests {
 
         let _ = builder.push_offset(Offset::ZERO);
         let texture_id =
-            builder.add_texture(TextureId::new(42), Rect::from_ltwh(0.0, 0.0, 100.0, 100.0));
+            builder.add_texture(TextureId::new(42), Rect::from_ltwh(px(0.0), px(0.0), px(100.0), px(100.0)));
 
         let _ = builder.build();
 
@@ -717,7 +718,7 @@ mod tests {
         let mut builder = SceneBuilder::new(&mut tree);
 
         // Build: offset -> opacity -> transform -> canvas
-        let _ = builder.push_offset(Offset::new(100.0, 50.0));
+        let _ = builder.push_offset(Offset::new(px(100.0), px(50.0)));
         let _ = builder.push_opacity(0.8);
         let _ = builder.push_transform(Matrix4::scaling(2.0, 2.0, 1.0));
         let _ = builder.add_canvas(CanvasLayer::new());
@@ -735,7 +736,7 @@ mod tests {
         let mut builder = SceneBuilder::new(&mut tree);
 
         let clip_id =
-            builder.push_clip_rect(Rect::from_ltwh(0.0, 0.0, 200.0, 200.0), Clip::HardEdge);
+            builder.push_clip_rect(Rect::from_ltwh(px(0.0), px(0.0), px(200.0), px(200.0)), Clip::HardEdge);
         builder.pop();
 
         let layer = tree.get_layer(clip_id).unwrap();

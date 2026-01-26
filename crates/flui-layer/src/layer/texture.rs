@@ -211,11 +211,12 @@ unsafe impl Sync for TextureLayer {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_types::geometry::px;
 
     #[test]
     fn test_texture_layer_new() {
         let id = TextureId::new(123);
-        let rect = Rect::from_xywh(10.0, 20.0, 100.0, 50.0);
+        let rect = Rect::from_xywh(px(10.0), px(20.0), px(100.0), px(50.0));
         let layer = TextureLayer::new(id, rect);
 
         assert_eq!(layer.texture_id(), id);
@@ -228,7 +229,7 @@ mod tests {
     #[test]
     fn test_texture_layer_frozen() {
         let id = TextureId::new(456);
-        let rect = Rect::from_xywh(0.0, 0.0, 640.0, 480.0);
+        let rect = Rect::from_xywh(px(0.0), px(0.0), px(640.0), px(480.0));
         let layer = TextureLayer::frozen(id, rect);
 
         assert!(layer.is_frozen());
@@ -237,7 +238,7 @@ mod tests {
     #[test]
     fn test_texture_layer_with_filter_quality() {
         let id = TextureId::new(1);
-        let rect = Rect::from_xywh(0.0, 0.0, 100.0, 100.0);
+        let rect = Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0));
         let layer = TextureLayer::new(id, rect).with_filter_quality(FilterQuality::High);
 
         assert_eq!(layer.filter_quality(), FilterQuality::High);
@@ -246,7 +247,7 @@ mod tests {
     #[test]
     fn test_texture_layer_with_opacity() {
         let id = TextureId::new(1);
-        let rect = Rect::from_xywh(0.0, 0.0, 100.0, 100.0);
+        let rect = Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0));
         let layer = TextureLayer::new(id, rect).with_opacity(0.5);
 
         assert_eq!(layer.opacity(), 0.5);
@@ -255,7 +256,7 @@ mod tests {
     #[test]
     fn test_texture_layer_opacity_clamping() {
         let id = TextureId::new(1);
-        let rect = Rect::from_xywh(0.0, 0.0, 100.0, 100.0);
+        let rect = Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0));
 
         let layer1 = TextureLayer::new(id, rect).with_opacity(-0.5);
         assert_eq!(layer1.opacity(), 0.0);
@@ -267,7 +268,7 @@ mod tests {
     #[test]
     fn test_texture_layer_bounds() {
         let id = TextureId::new(1);
-        let rect = Rect::from_xywh(10.0, 20.0, 100.0, 50.0);
+        let rect = Rect::from_xywh(px(10.0), px(20.0), px(100.0), px(50.0));
         let layer = TextureLayer::new(id, rect);
 
         assert_eq!(layer.bounds(), rect);
@@ -278,13 +279,13 @@ mod tests {
         let mut layer = TextureLayer::default();
 
         layer.set_texture_id(TextureId::new(999));
-        layer.set_rect(Rect::from_xywh(5.0, 5.0, 50.0, 50.0));
+        layer.set_rect(Rect::from_xywh(px(5.0), px(5.0), px(50.0), px(50.0)));
         layer.set_freeze(true);
         layer.set_filter_quality(FilterQuality::Medium);
         layer.set_opacity(0.8);
 
         assert_eq!(layer.texture_id(), TextureId::new(999));
-        assert_eq!(layer.rect().left(), 5.0);
+        assert_eq!(layer.rect().left(), px(5.0));
         assert!(layer.is_frozen());
         assert_eq!(layer.filter_quality(), FilterQuality::Medium);
         assert_eq!(layer.opacity(), 0.8);
@@ -293,7 +294,7 @@ mod tests {
     #[test]
     fn test_texture_layer_visibility() {
         let id = TextureId::new(1);
-        let rect = Rect::from_xywh(0.0, 0.0, 100.0, 100.0);
+        let rect = Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0));
 
         let invisible = TextureLayer::new(id, rect).with_opacity(0.0);
         assert!(invisible.is_invisible());
@@ -310,7 +311,7 @@ mod tests {
 
     #[test]
     fn test_texture_layer_clone_copy() {
-        let layer = TextureLayer::new(TextureId::new(1), Rect::from_xywh(0.0, 0.0, 100.0, 100.0));
+        let layer = TextureLayer::new(TextureId::new(1), Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0)));
         let copied = layer;
         let cloned = layer.clone();
 

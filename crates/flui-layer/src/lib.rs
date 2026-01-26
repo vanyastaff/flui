@@ -261,7 +261,7 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_types::geometry::Rect;
+    use flui_types::geometry::{px, Rect};
     use flui_types::painting::Clip;
 
     #[test]
@@ -291,7 +291,7 @@ mod tests {
 
         // Clip layers
         let _ = tree.insert(Layer::ClipRect(ClipRectLayer::new(
-            Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
+            Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0)),
             Clip::HardEdge,
         )));
 

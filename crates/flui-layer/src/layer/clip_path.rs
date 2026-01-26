@@ -166,11 +166,11 @@ unsafe impl Sync for ClipPathLayer {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_types::geometry::Point;
+    use flui_types::geometry::{px, Point};
 
     #[test]
     fn test_clip_path_layer_new() {
-        let path = Path::rectangle(Rect::from_xywh(0.0, 0.0, 100.0, 100.0));
+        let path = Path::rectangle(Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0)));
         let layer = ClipPathLayer::new(path.clone(), Clip::AntiAlias);
 
         assert_eq!(layer.clip_path(), &path);
@@ -179,7 +179,7 @@ mod tests {
 
     #[test]
     fn test_clip_path_layer_anti_alias() {
-        let path = Path::circle(Point::new(50.0, 50.0), 25.0);
+        let path = Path::circle(Point::new(px(50.0), px(50.0)), 25.0);
         let layer = ClipPathLayer::anti_alias(path);
 
         assert!(layer.is_anti_aliased());
@@ -188,7 +188,7 @@ mod tests {
 
     #[test]
     fn test_clip_path_layer_hard_edge() {
-        let path = Path::circle(Point::new(50.0, 50.0), 25.0);
+        let path = Path::circle(Point::new(px(50.0), px(50.0)), 25.0);
         let layer = ClipPathLayer::hard_edge(path);
 
         assert!(!layer.is_anti_aliased());
@@ -197,20 +197,20 @@ mod tests {
 
     #[test]
     fn test_clip_path_layer_circle() {
-        let center = Point::new(50.0, 50.0);
+        let center = Point::new(px(50.0), px(50.0));
         let radius = 25.0;
         let layer = ClipPathLayer::circle(center, radius, Clip::AntiAlias);
 
         let bounds = layer.bounds();
-        assert!((bounds.left() - 25.0).abs() < 0.01);
-        assert!((bounds.top() - 25.0).abs() < 0.01);
-        assert!((bounds.width() - 50.0).abs() < 0.01);
-        assert!((bounds.height() - 50.0).abs() < 0.01);
+        assert!((bounds.left() - px(25.0)).abs() < px(0.01));
+        assert!((bounds.top() - px(25.0)).abs() < px(0.01));
+        assert!((bounds.width() - px(50.0)).abs() < px(0.01));
+        assert!((bounds.height() - px(50.0)).abs() < px(0.01));
     }
 
     #[test]
     fn test_clip_path_layer_oval() {
-        let rect = Rect::from_xywh(10.0, 20.0, 100.0, 50.0);
+        let rect = Rect::from_xywh(px(10.0), px(20.0), px(100.0), px(50.0));
         let layer = ClipPathLayer::oval(rect, Clip::AntiAlias);
 
         assert_eq!(layer.bounds(), rect);
@@ -219,9 +219,9 @@ mod tests {
     #[test]
     fn test_clip_path_layer_polygon() {
         let path = Path::polygon(&[
-            Point::new(50.0, 0.0),
-            Point::new(100.0, 100.0),
-            Point::new(0.0, 100.0),
+            Point::new(px(50.0), px(0.0)),
+            Point::new(px(100.0), px(100.0)),
+            Point::new(px(0.0), px(100.0)),
         ]);
         let layer = ClipPathLayer::new(path, Clip::AntiAlias);
 
@@ -239,8 +239,8 @@ mod tests {
 
     #[test]
     fn test_clip_path_layer_setters() {
-        let path1 = Path::circle(Point::new(25.0, 25.0), 10.0);
-        let path2 = Path::circle(Point::new(50.0, 50.0), 20.0);
+        let path1 = Path::circle(Point::new(px(25.0), px(25.0)), 10.0);
+        let path2 = Path::circle(Point::new(px(50.0), px(50.0)), 20.0);
         let mut layer = ClipPathLayer::new(path1, Clip::HardEdge);
 
         layer.set_clip_path(path2.clone());
@@ -252,7 +252,7 @@ mod tests {
 
     #[test]
     fn test_clip_path_layer_clone() {
-        let path = Path::rectangle(Rect::from_xywh(0.0, 0.0, 50.0, 50.0));
+        let path = Path::rectangle(Rect::from_xywh(px(0.0), px(0.0), px(50.0), px(50.0)));
         let layer = ClipPathLayer::new(path, Clip::AntiAlias);
         let cloned = layer.clone();
 

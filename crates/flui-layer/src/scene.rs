@@ -264,23 +264,24 @@ impl crate::compositor::SceneBuilder<'_> {
 mod tests {
     use super::*;
     use crate::CanvasLayer;
+    use flui_types::geometry::px;
     use flui_types::Offset;
 
     #[test]
     fn test_scene_empty() {
-        let scene = Scene::empty(Size::new(800.0, 600.0));
+        let scene = Scene::empty(Size::new(px(800.0), px(600.0)));
         assert!(scene.is_empty());
         assert!(!scene.has_content());
         assert!(scene.root().is_none());
         assert!(scene.root_layer().is_none());
         assert_eq!(scene.layer_count(), 0);
-        assert_eq!(scene.size(), Size::new(800.0, 600.0));
+        assert_eq!(scene.size(), Size::new(px(800.0), px(600.0)));
     }
 
     #[test]
     fn test_scene_from_layer() {
         let scene = Scene::from_layer(
-            Size::new(1920.0, 1080.0),
+            Size::new(px(1920.0), px(1080.0)),
             Layer::Canvas(CanvasLayer::new()),
             42,
         );
@@ -291,7 +292,7 @@ mod tests {
         assert!(scene.root_layer().is_some());
         assert_eq!(scene.layer_count(), 1);
         assert_eq!(scene.frame_number(), 42);
-        assert_eq!(scene.size(), Size::new(1920.0, 1080.0));
+        assert_eq!(scene.size(), Size::new(px(1920.0), px(1080.0)));
     }
 
     #[test]
@@ -299,7 +300,7 @@ mod tests {
         let mut tree = LayerTree::new();
         let root_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
 
-        let scene = Scene::new(Size::new(800.0, 600.0), tree, Some(root_id), 1);
+        let scene = Scene::new(Size::new(px(800.0), px(600.0)), tree, Some(root_id), 1);
 
         assert!(scene.has_content());
         assert_eq!(scene.root(), Some(root_id));
@@ -313,9 +314,9 @@ mod tests {
 
         let mut registry = LinkRegistry::new();
         let link = crate::LayerLink::new();
-        registry.register_leader(link, root_id, Offset::ZERO, Size::new(100.0, 50.0));
+        registry.register_leader(link, root_id, Offset::ZERO, Size::new(px(100.0), px(50.0)));
 
-        let scene = Scene::with_links(Size::new(800.0, 600.0), tree, Some(root_id), registry, 123);
+        let scene = Scene::with_links(Size::new(px(800.0), px(600.0)), tree, Some(root_id), registry, 123);
 
         assert_eq!(scene.link_registry().leader_count(), 1);
         assert_eq!(scene.frame_number(), 123);
@@ -337,7 +338,7 @@ mod tests {
     #[test]
     fn test_scene_dispose() {
         let scene = Scene::from_layer(
-            Size::new(800.0, 600.0),
+            Size::new(px(800.0), px(600.0)),
             Layer::Canvas(CanvasLayer::new()),
             0,
         );
@@ -357,7 +358,7 @@ mod tests {
         assert!(root_id.is_some());
 
         // Now create scene with the tree
-        let scene = Scene::new(Size::new(800.0, 600.0), tree, root_id, 0);
+        let scene = Scene::new(Size::new(px(800.0), px(600.0)), tree, root_id, 0);
         assert!(scene.has_content());
     }
 }

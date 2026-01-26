@@ -918,6 +918,7 @@ impl Default for LayerTree {
 mod tests {
     use super::*;
     use crate::layer::CanvasLayer;
+    use flui_types::geometry::px;
 
     #[test]
     fn test_layer_tree_new() {
@@ -1061,7 +1062,7 @@ mod tests {
 
     #[test]
     fn test_layer_node_with_offset() {
-        let offset = Offset::new(10.0, 20.0);
+        let offset = Offset::new(px(10.0), px(20.0));
         let node = LayerNode::new(Layer::Canvas(CanvasLayer::new())).with_offset(offset);
 
         assert_eq!(node.offset(), Some(offset));
@@ -1251,7 +1252,7 @@ mod tests {
         // Push clip rect and get its ID
         let clip_id = tree.push_clip_rect(
             root,
-            Rect::from_ltrb(0.0, 0.0, 100.0, 100.0),
+            Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0)),
             Clip::AntiAlias,
         );
 
@@ -1274,7 +1275,7 @@ mod tests {
         if let Layer::ClipRect(clip_layer) = layer {
             assert_eq!(
                 clip_layer.clip_rect(),
-                Rect::from_ltrb(0.0, 0.0, 100.0, 100.0)
+                Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0))
             );
             assert_eq!(clip_layer.clip_behavior(), Clip::AntiAlias);
         }
@@ -1292,7 +1293,7 @@ mod tests {
         let root = tree.insert(Layer::Offset(OffsetLayer::zero()));
 
         // Create rounded rect with 10px corner radius
-        let rrect = RRect::from_rect_circular(Rect::from_ltrb(0.0, 0.0, 100.0, 100.0), 10.0);
+        let rrect = RRect::from_rect_circular(Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0)), px(10.0));
 
         // Push clip rrect and get its ID
         let clip_id = tree.push_clip_rrect(root, rrect, Clip::AntiAlias);
@@ -1314,7 +1315,7 @@ mod tests {
 
         // Verify clip properties
         if let Layer::ClipRRect(clip_layer) = layer {
-            assert_eq!(clip_layer.clip_rrect().width(), 100.0);
+            assert_eq!(clip_layer.clip_rrect().width(), px(100.0));
             assert_eq!(clip_layer.clip_behavior(), Clip::AntiAlias);
         }
     }
@@ -1331,7 +1332,7 @@ mod tests {
         let root = tree.insert(Layer::Offset(OffsetLayer::zero()));
 
         // Create a circular clip path
-        let path = Path::circle(Point::new(50.0, 50.0), 50.0);
+        let path = Path::circle(Point::new(px(50.0), px(50.0)), 50.0);
 
         // Push clip path and get its ID
         let clip_id = tree.push_clip_path(root, path, Clip::AntiAlias);
@@ -1372,7 +1373,7 @@ mod tests {
         // Push clip rect
         let clip_id = tree.push_clip_rect(
             root,
-            Rect::from_ltrb(0.0, 0.0, 100.0, 100.0),
+            Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0)),
             Clip::AntiAlias,
         );
 
@@ -1407,12 +1408,12 @@ mod tests {
         // Push first clip rect (outer clip)
         let outer_clip = tree.push_clip_rect(
             root,
-            Rect::from_ltrb(0.0, 0.0, 200.0, 200.0),
+            Rect::from_ltrb(px(0.0), px(0.0), px(200.0), px(200.0)),
             Clip::HardEdge,
         );
 
         // Push second clip rrect inside first clip (inner clip)
-        let rrect = RRect::from_rect_circular(Rect::from_ltrb(10.0, 10.0, 190.0, 190.0), 20.0);
+        let rrect = RRect::from_rect_circular(Rect::from_ltrb(px(10.0), px(10.0), px(190.0), px(190.0)), px(20.0));
         let inner_clip = tree.push_clip_rrect(outer_clip, rrect, Clip::AntiAlias);
 
         // Verify hierarchy: root -> outer_clip -> inner_clip
@@ -1529,7 +1530,7 @@ mod tests {
         let root = tree.insert(Layer::Offset(OffsetLayer::zero()));
 
         // Push opacity layer with offset
-        let offset = Offset::new(10.0, 20.0);
+        let offset = Offset::new(px(10.0), px(20.0));
         let opacity_id = tree.push_opacity(root, 0.75, offset);
 
         // Verify opacity properties
@@ -1594,7 +1595,7 @@ mod tests {
         // Push clip rect inside transform
         let clip_id = tree.push_clip_rect(
             transform_id,
-            Rect::from_ltrb(0.0, 0.0, 100.0, 100.0),
+            Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0)),
             Clip::AntiAlias,
         );
 

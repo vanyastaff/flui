@@ -172,6 +172,7 @@ impl Default for PictureLayer {
 mod tests {
     use super::*;
     use flui_painting::Canvas;
+    use flui_types::geometry::px;
     use flui_types::painting::Paint;
     use flui_types::{Color, Point, Rect};
 
@@ -179,7 +180,7 @@ mod tests {
     fn test_picture_layer_creation() {
         let mut canvas = Canvas::new();
         canvas.draw_rect(
-            Rect::from_ltrb(0.0, 0.0, 100.0, 100.0),
+            Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0)),
             &Paint::fill(Color::RED),
         );
         let picture = canvas.finish();
@@ -193,7 +194,7 @@ mod tests {
     fn test_picture_layer_bounds() {
         let mut canvas = Canvas::new();
         canvas.draw_rect(
-            Rect::from_ltrb(10.0, 20.0, 100.0, 200.0),
+            Rect::from_ltrb(px(10.0), px(20.0), px(100.0), px(200.0)),
             &Paint::fill(Color::BLUE),
         );
         let picture = canvas.finish();
@@ -202,20 +203,20 @@ mod tests {
         let bounds = layer.bounds();
 
         // Bounds should encompass the drawn rectangle
-        assert!(bounds.contains(Point::new(10.0, 20.0)));
-        assert!(bounds.contains(Point::new(100.0, 200.0)));
+        assert!(bounds.contains(Point::new(px(10.0), px(20.0))));
+        assert!(bounds.contains(Point::new(px(100.0), px(200.0))));
     }
 
     #[test]
     fn test_picture_layer_with_custom_bounds() {
         let mut canvas = Canvas::new();
         canvas.draw_rect(
-            Rect::from_ltrb(0.0, 0.0, 50.0, 50.0),
+            Rect::from_ltrb(px(0.0), px(0.0), px(50.0), px(50.0)),
             &Paint::fill(Color::GREEN),
         );
         let picture = canvas.finish();
 
-        let custom_bounds = Rect::from_ltrb(0.0, 0.0, 200.0, 200.0);
+        let custom_bounds = Rect::from_ltrb(px(0.0), px(0.0), px(200.0), px(200.0));
         let layer = PictureLayer::with_bounds(picture, custom_bounds);
 
         assert_eq!(layer.bounds(), custom_bounds);
@@ -224,11 +225,11 @@ mod tests {
     #[test]
     fn test_picture_layer_set_bounds() {
         let mut canvas = Canvas::new();
-        canvas.draw_circle((50.0, 50.0).into(), 25.0, &Paint::fill(Color::YELLOW));
+        canvas.draw_circle(Point::new(px(50.0), px(50.0)), px(25.0), &Paint::fill(Color::YELLOW));
         let picture = canvas.finish();
 
         let mut layer = PictureLayer::new(picture);
-        let new_bounds = Rect::from_ltrb(0.0, 0.0, 150.0, 150.0);
+        let new_bounds = Rect::from_ltrb(px(0.0), px(0.0), px(150.0), px(150.0));
 
         layer.set_bounds(new_bounds);
         assert_eq!(layer.bounds(), new_bounds);

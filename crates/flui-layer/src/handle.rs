@@ -326,6 +326,7 @@ pub type AnyLayerHandle = LayerHandle<Layer>;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_types::geometry::px;
 
     #[test]
     fn test_layer_handle_new() {
@@ -382,7 +383,7 @@ mod tests {
         let mut handle: LayerHandle<OffsetLayer> = LayerHandle::new();
 
         let layer = handle.get_or_insert_with(|| OffsetLayer::from_xy(10.0, 20.0));
-        assert_eq!(layer.offset().dx, 10.0);
+        assert_eq!(layer.offset().dx, px(10.0));
     }
 
     #[test]

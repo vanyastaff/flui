@@ -227,6 +227,7 @@ unsafe impl Sync for TransformLayer {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_types::geometry::px;
     use std::f32::consts::{FRAC_PI_2, PI};
 
     #[test]
@@ -250,86 +251,86 @@ mod tests {
 
         assert!(layer.is_translation_only());
 
-        let point = layer.transform_point(Point::new(5.0, 5.0));
-        assert!((point.x - 15.0).abs() < 0.001);
-        assert!((point.y - 25.0).abs() < 0.001);
+        let point = layer.transform_point(Point::new(px(5.0), px(5.0)));
+        assert!((point.x - px(15.0)).abs() < px(0.001));
+        assert!((point.y - px(25.0)).abs() < px(0.001));
     }
 
     #[test]
     fn test_transform_layer_rotation() {
         let layer = TransformLayer::rotation(FRAC_PI_2); // 90 degrees
 
-        let point = layer.transform_point(Point::new(1.0, 0.0));
-        assert!(point.x.abs() < 0.001);
-        assert!((point.y - 1.0).abs() < 0.001);
+        let point = layer.transform_point(Point::new(px(1.0), px(0.0)));
+        assert!(point.x.abs() < px(0.001));
+        assert!((point.y - px(1.0)).abs() < px(0.001));
     }
 
     #[test]
     fn test_transform_layer_rotation_around() {
-        let center = Point::new(50.0, 50.0);
+        let center = Point::new(px(50.0), px(50.0));
         let layer = TransformLayer::rotation_around(PI, center); // 180 degrees
 
         // Point at (100, 50) should rotate to (0, 50) around center (50, 50)
-        let point = layer.transform_point(Point::new(100.0, 50.0));
-        assert!((point.x - 0.0).abs() < 0.001);
-        assert!((point.y - 50.0).abs() < 0.001);
+        let point = layer.transform_point(Point::new(px(100.0), px(50.0)));
+        assert!((point.x - px(0.0)).abs() < px(0.001));
+        assert!((point.y - px(50.0)).abs() < px(0.001));
     }
 
     #[test]
     fn test_transform_layer_scale() {
         let layer = TransformLayer::scale(2.0);
 
-        let point = layer.transform_point(Point::new(10.0, 20.0));
-        assert!((point.x - 20.0).abs() < 0.001);
-        assert!((point.y - 40.0).abs() < 0.001);
+        let point = layer.transform_point(Point::new(px(10.0), px(20.0)));
+        assert!((point.x - px(20.0)).abs() < px(0.001));
+        assert!((point.y - px(40.0)).abs() < px(0.001));
     }
 
     #[test]
     fn test_transform_layer_scale_xy() {
         let layer = TransformLayer::scale_xy(2.0, 3.0);
 
-        let point = layer.transform_point(Point::new(10.0, 10.0));
-        assert!((point.x - 20.0).abs() < 0.001);
-        assert!((point.y - 30.0).abs() < 0.001);
+        let point = layer.transform_point(Point::new(px(10.0), px(10.0)));
+        assert!((point.x - px(20.0)).abs() < px(0.001));
+        assert!((point.y - px(30.0)).abs() < px(0.001));
     }
 
     #[test]
     fn test_transform_layer_scale_around() {
-        let center = Point::new(50.0, 50.0);
+        let center = Point::new(px(50.0), px(50.0));
         let layer = TransformLayer::scale_around(2.0, 2.0, center);
 
         // Point at (100, 100) scaled 2x around (50, 50) should be at (150, 150)
-        let point = layer.transform_point(Point::new(100.0, 100.0));
-        assert!((point.x - 150.0).abs() < 0.001);
-        assert!((point.y - 150.0).abs() < 0.001);
+        let point = layer.transform_point(Point::new(px(100.0), px(100.0)));
+        assert!((point.x - px(150.0)).abs() < px(0.001));
+        assert!((point.y - px(150.0)).abs() < px(0.001));
 
         // Center should remain unchanged
         let center_result = layer.transform_point(center);
-        assert!((center_result.x - 50.0).abs() < 0.001);
-        assert!((center_result.y - 50.0).abs() < 0.001);
+        assert!((center_result.x - px(50.0)).abs() < px(0.001));
+        assert!((center_result.y - px(50.0)).abs() < px(0.001));
     }
 
     #[test]
     fn test_transform_layer_transform_bounds() {
         let layer = TransformLayer::translation(10.0, 20.0);
-        let bounds = Rect::from_xywh(0.0, 0.0, 100.0, 50.0);
+        let bounds = Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(50.0));
 
         let transformed = layer.transform_bounds(bounds);
-        assert!((transformed.left() - 10.0).abs() < 0.001);
-        assert!((transformed.top() - 20.0).abs() < 0.001);
-        assert!((transformed.width() - 100.0).abs() < 0.001);
-        assert!((transformed.height() - 50.0).abs() < 0.001);
+        assert!((transformed.left() - px(10.0)).abs() < px(0.001));
+        assert!((transformed.top() - px(20.0)).abs() < px(0.001));
+        assert!((transformed.width() - px(100.0)).abs() < px(0.001));
+        assert!((transformed.height() - px(50.0)).abs() < px(0.001));
     }
 
     #[test]
     fn test_transform_layer_transform_bounds_rotation() {
         let layer = TransformLayer::rotation(FRAC_PI_2); // 90 degrees
-        let bounds = Rect::from_xywh(0.0, 0.0, 100.0, 50.0);
+        let bounds = Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(50.0));
 
         let transformed = layer.transform_bounds(bounds);
         // After 90 degree rotation, width and height should swap
-        assert!((transformed.width() - 50.0).abs() < 0.001);
-        assert!((transformed.height() - 100.0).abs() < 0.001);
+        assert!((transformed.width() - px(50.0)).abs() < px(0.001));
+        assert!((transformed.height() - px(100.0)).abs() < px(0.001));
     }
 
     #[test]
@@ -348,8 +349,8 @@ mod tests {
         layer.concat(&scale);
 
         // Point at (5, 0): scale first (10, 0), then translate (20, 0)
-        let point = layer.transform_point(Point::new(5.0, 0.0));
-        assert!((point.x - 20.0).abs() < 0.001);
+        let point = layer.transform_point(Point::new(px(5.0), px(0.0)));
+        assert!((point.x - px(20.0)).abs() < px(0.001));
     }
 
     #[test]
@@ -358,12 +359,12 @@ mod tests {
         let inverse = layer.try_inverse().unwrap();
 
         // Applying transform then inverse should give identity
-        let point = Point::new(10.0, 20.0);
+        let point = Point::new(px(10.0), px(20.0));
         let transformed = layer.transform_point(point);
         let back = inverse.transform_point(transformed);
 
-        assert!((back.x - point.x).abs() < 0.001);
-        assert!((back.y - point.y).abs() < 0.001);
+        assert!((back.x - point.x).abs() < px(0.001));
+        assert!((back.y - point.y).abs() < px(0.001));
     }
 
     #[test]

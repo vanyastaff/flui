@@ -424,6 +424,7 @@ impl Default for PerformanceOverlayLayer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_types::geometry::px;
 
     #[test]
     fn test_performance_overlay_option_flags() {
@@ -438,7 +439,7 @@ mod tests {
 
     #[test]
     fn test_performance_overlay_layer_new() {
-        let rect = Rect::from_xywh(10.0, 10.0, 200.0, 100.0);
+        let rect = Rect::from_xywh(px(10.0), px(10.0), px(200.0), px(100.0));
         let options = PerformanceOverlayOption::all();
         let layer = PerformanceOverlayLayer::new(rect, options);
 
@@ -449,7 +450,7 @@ mod tests {
 
     #[test]
     fn test_performance_overlay_layer_raster_stats() {
-        let rect = Rect::from_xywh(0.0, 0.0, 100.0, 50.0);
+        let rect = Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(50.0));
         let layer = PerformanceOverlayLayer::raster_stats(rect);
 
         assert!(layer.options().displays_raster_statistics());
@@ -459,7 +460,7 @@ mod tests {
 
     #[test]
     fn test_performance_overlay_layer_engine_stats() {
-        let rect = Rect::from_xywh(0.0, 0.0, 100.0, 50.0);
+        let rect = Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(50.0));
         let layer = PerformanceOverlayLayer::engine_stats(rect);
 
         assert!(!layer.options().displays_raster_statistics());
@@ -469,7 +470,7 @@ mod tests {
 
     #[test]
     fn test_performance_overlay_layer_all_stats() {
-        let rect = Rect::from_xywh(0.0, 0.0, 100.0, 50.0);
+        let rect = Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(50.0));
         let layer = PerformanceOverlayLayer::all_stats(rect);
 
         assert!(layer.options().displays_raster_statistics());
@@ -480,8 +481,8 @@ mod tests {
 
     #[test]
     fn test_performance_overlay_layer_set_rect() {
-        let rect1 = Rect::from_xywh(0.0, 0.0, 100.0, 50.0);
-        let rect2 = Rect::from_xywh(10.0, 10.0, 200.0, 100.0);
+        let rect1 = Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(50.0));
+        let rect2 = Rect::from_xywh(px(10.0), px(10.0), px(200.0), px(100.0));
 
         let mut layer = PerformanceOverlayLayer::new(rect1, PerformanceOverlayOption::empty());
         layer.clear_needs_add_to_scene();
@@ -494,7 +495,7 @@ mod tests {
 
     #[test]
     fn test_performance_overlay_layer_set_options() {
-        let rect = Rect::from_xywh(0.0, 0.0, 100.0, 50.0);
+        let rect = Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(50.0));
         let mut layer = PerformanceOverlayLayer::new(rect, PerformanceOverlayOption::empty());
         layer.clear_needs_add_to_scene();
 

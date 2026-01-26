@@ -95,12 +95,13 @@ unsafe impl Sync for BackdropFilterLayer {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_types::geometry::px;
 
     #[test]
     fn test_backdrop_filter_layer_new() {
         let filter = ImageFilter::blur(5.0);
         let blend_mode = BlendMode::SrcOver;
-        let bounds = Rect::from_xywh(0.0, 0.0, 100.0, 100.0);
+        let bounds = Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0));
 
         let layer = BackdropFilterLayer::new(filter, blend_mode, bounds);
 
@@ -111,14 +112,14 @@ mod tests {
     #[test]
     fn test_backdrop_filter_layer_bounds() {
         let filter = ImageFilter::blur(10.0);
-        let bounds = Rect::from_xywh(10.0, 20.0, 200.0, 150.0);
+        let bounds = Rect::from_xywh(px(10.0), px(20.0), px(200.0), px(150.0));
 
         let layer = BackdropFilterLayer::new(filter, BlendMode::SrcOver, bounds);
 
         let retrieved_bounds = layer.bounds();
         assert_eq!(retrieved_bounds, bounds);
-        assert_eq!(retrieved_bounds.width(), 200.0);
-        assert_eq!(retrieved_bounds.height(), 150.0);
+        assert_eq!(retrieved_bounds.width(), px(200.0));
+        assert_eq!(retrieved_bounds.height(), px(150.0));
     }
 
     #[test]
@@ -127,7 +128,7 @@ mod tests {
             sigma_x: 5.0,
             sigma_y: 5.0,
         };
-        let bounds = Rect::from_xywh(0.0, 0.0, 50.0, 50.0);
+        let bounds = Rect::from_xywh(px(0.0), px(0.0), px(50.0), px(50.0));
 
         let layer = BackdropFilterLayer::new(filter, BlendMode::Multiply, bounds);
 
@@ -146,7 +147,7 @@ mod tests {
         use flui_types::painting::effects::ColorAdjustment;
 
         let filter = ImageFilter::ColorAdjust(ColorAdjustment::Brightness(0.2));
-        let bounds = Rect::from_xywh(0.0, 0.0, 100.0, 100.0);
+        let bounds = Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0));
 
         let layer = BackdropFilterLayer::new(filter, BlendMode::Screen, bounds);
 
@@ -171,7 +172,7 @@ mod tests {
     #[test]
     fn test_backdrop_filter_layer_clone() {
         let filter = ImageFilter::blur(5.0);
-        let bounds = Rect::from_xywh(0.0, 0.0, 50.0, 50.0);
+        let bounds = Rect::from_xywh(px(0.0), px(0.0), px(50.0), px(50.0));
         let layer = BackdropFilterLayer::new(filter, BlendMode::SrcOver, bounds);
 
         let cloned = layer.clone();

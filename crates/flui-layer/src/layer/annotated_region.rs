@@ -217,10 +217,11 @@ impl From<String> for SemanticLabel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_types::geometry::px;
 
     #[test]
     fn test_annotated_region_new() {
-        let rect = Rect::from_xywh(10.0, 20.0, 100.0, 50.0);
+        let rect = Rect::from_xywh(px(10.0), px(20.0), px(100.0), px(50.0));
         let value = Arc::new(SystemUiOverlayStyle::Dark);
         let layer = AnnotatedRegionLayer::new(rect, value);
 
@@ -255,7 +256,7 @@ mod tests {
     #[test]
     fn test_annotated_region_with_semantic_label() {
         let label = Arc::new(SemanticLabel::new("Submit Button"));
-        let layer = AnnotatedRegionLayer::new(Rect::from_xywh(0.0, 0.0, 100.0, 44.0), label);
+        let layer = AnnotatedRegionLayer::new(Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(44.0)), label);
 
         let value = layer.downcast_value::<SemanticLabel>().unwrap();
         assert_eq!(value.text(), "Submit Button");
@@ -266,8 +267,8 @@ mod tests {
         let value = Arc::new(42i32);
         let mut layer = AnnotatedRegionLayer::new(Rect::ZERO, value);
 
-        layer.set_rect(Rect::from_xywh(5.0, 5.0, 50.0, 50.0));
-        assert_eq!(layer.rect().left(), 5.0);
+        layer.set_rect(Rect::from_xywh(px(5.0), px(5.0), px(50.0), px(50.0)));
+        assert_eq!(layer.rect().left(), px(5.0));
 
         layer.set_value(Arc::new(100i32));
         assert_eq!(*layer.downcast_value::<i32>().unwrap(), 100);
@@ -276,7 +277,7 @@ mod tests {
     #[test]
     fn test_annotated_region_clone() {
         let value = Arc::new(SystemUiOverlayStyle::Dark);
-        let layer = AnnotatedRegionLayer::new(Rect::from_xywh(10.0, 20.0, 100.0, 50.0), value);
+        let layer = AnnotatedRegionLayer::new(Rect::from_xywh(px(10.0), px(20.0), px(100.0), px(50.0)), value);
 
         let cloned = layer.clone();
         assert_eq!(layer.rect(), cloned.rect());

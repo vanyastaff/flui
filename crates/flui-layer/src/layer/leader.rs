@@ -70,11 +70,11 @@ impl Default for LayerLink {
 /// let link = LayerLink::new();
 ///
 /// // Leader defines the anchor point
-/// let leader = LeaderLayer::new(link, Size::new(100.0, 30.0));
+/// let leader = LeaderLayer::new(link, Size::new(px(100.0), px(30.0)));
 ///
 /// // Follower positions relative to the leader
 /// let follower = FollowerLayer::new(link)
-///     .with_target_offset(Offset::new(0.0, 35.0)); // Below the leader
+///     .with_target_offset(Offset::new(px(0.0), px(35.0))); // Below the leader
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LeaderLayer {
@@ -161,6 +161,7 @@ unsafe impl Sync for LeaderLayer {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_types::geometry::px;
 
     #[test]
     fn test_layer_link_unique() {
@@ -174,7 +175,7 @@ mod tests {
     #[test]
     fn test_leader_layer_new() {
         let link = LayerLink::new();
-        let size = Size::new(100.0, 50.0);
+        let size = Size::new(px(100.0), px(50.0));
         let layer = LeaderLayer::new(link, size);
 
         assert_eq!(layer.link(), link);
@@ -185,8 +186,8 @@ mod tests {
     #[test]
     fn test_leader_layer_with_offset() {
         let link = LayerLink::new();
-        let size = Size::new(100.0, 50.0);
-        let offset = Offset::new(10.0, 20.0);
+        let size = Size::new(px(100.0), px(50.0));
+        let offset = Offset::new(px(10.0), px(20.0));
         let layer = LeaderLayer::with_offset(link, size, offset);
 
         assert_eq!(layer.get_offset(), offset);
@@ -195,35 +196,35 @@ mod tests {
     #[test]
     fn test_leader_layer_bounds() {
         let link = LayerLink::new();
-        let size = Size::new(100.0, 50.0);
-        let offset = Offset::new(10.0, 20.0);
+        let size = Size::new(px(100.0), px(50.0));
+        let offset = Offset::new(px(10.0), px(20.0));
         let layer = LeaderLayer::with_offset(link, size, offset);
 
         let bounds = layer.bounds();
-        assert_eq!(bounds.left(), 10.0);
-        assert_eq!(bounds.top(), 20.0);
-        assert_eq!(bounds.width(), 100.0);
-        assert_eq!(bounds.height(), 50.0);
+        assert_eq!(bounds.left(), px(10.0));
+        assert_eq!(bounds.top(), px(20.0));
+        assert_eq!(bounds.width(), px(100.0));
+        assert_eq!(bounds.height(), px(50.0));
     }
 
     #[test]
     fn test_leader_layer_setters() {
         let link = LayerLink::new();
-        let mut layer = LeaderLayer::new(link, Size::new(10.0, 10.0));
+        let mut layer = LeaderLayer::new(link, Size::new(px(10.0), px(10.0)));
 
-        layer.set_size(Size::new(200.0, 100.0));
-        layer.set_offset(Offset::new(5.0, 5.0));
+        layer.set_size(Size::new(px(200.0), px(100.0)));
+        layer.set_offset(Offset::new(px(5.0), px(5.0)));
 
-        assert_eq!(layer.size(), Size::new(200.0, 100.0));
-        assert_eq!(layer.get_offset(), Offset::new(5.0, 5.0));
+        assert_eq!(layer.size(), Size::new(px(200.0), px(100.0)));
+        assert_eq!(layer.get_offset(), Offset::new(px(5.0), px(5.0)));
     }
 
     #[test]
     fn test_leader_layer_builder() {
         let link = LayerLink::new();
-        let layer = LeaderLayer::new(link, Size::new(100.0, 50.0)).offset(Offset::new(10.0, 20.0));
+        let layer = LeaderLayer::new(link, Size::new(px(100.0), px(50.0))).offset(Offset::new(px(10.0), px(20.0)));
 
-        assert_eq!(layer.get_offset(), Offset::new(10.0, 20.0));
+        assert_eq!(layer.get_offset(), Offset::new(px(10.0), px(20.0)));
     }
 
     #[test]

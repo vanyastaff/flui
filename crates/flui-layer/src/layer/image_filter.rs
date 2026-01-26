@@ -195,6 +195,7 @@ unsafe impl Sync for ImageFilterLayer {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_types::geometry::px;
 
     #[test]
     fn test_image_filter_layer_new() {
@@ -208,12 +209,12 @@ mod tests {
     #[test]
     fn test_image_filter_layer_with_offset() {
         let filter = ImageFilter::blur(5.0);
-        let offset = Offset::new(10.0, 20.0);
+        let offset = Offset::new(px(10.0), px(20.0));
         let layer = ImageFilterLayer::with_offset(filter, offset);
 
         assert!(layer.has_offset());
-        assert_eq!(layer.offset().dx, 10.0);
-        assert_eq!(layer.offset().dy, 20.0);
+        assert_eq!(layer.offset().dx, px(10.0));
+        assert_eq!(layer.offset().dy, px(20.0));
     }
 
     #[test]
@@ -262,7 +263,7 @@ mod tests {
         layer.set_filter(ImageFilter::dilate(3.0));
         assert!(layer.is_dilate());
 
-        layer.set_offset(Offset::new(5.0, 10.0));
+        layer.set_offset(Offset::new(px(5.0), px(10.0)));
         assert!(layer.has_offset());
     }
 

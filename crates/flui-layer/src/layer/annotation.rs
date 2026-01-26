@@ -22,8 +22,8 @@
 //! let mut result = AnnotationResult::<String>::new();
 //!
 //! // Add annotations found during search
-//! result.add(AnnotationEntry::new("button".to_string(), Offset::new(10.0, 20.0)));
-//! result.add(AnnotationEntry::new("container".to_string(), Offset::new(0.0, 0.0)));
+//! result.add(AnnotationEntry::new("button".to_string(), Offset::new(px(10.0), px(20.0))));
+//! result.add(AnnotationEntry::new("container".to_string(), Offset::new(px(0.0), px(0.0))));
 //!
 //! // Access annotations
 //! assert_eq!(result.len(), 2);
@@ -260,12 +260,13 @@ impl AnnotationSearchOptions {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_types::geometry::px;
 
     #[test]
     fn test_annotation_entry_new() {
-        let entry = AnnotationEntry::new("test", Offset::new(10.0, 20.0));
+        let entry = AnnotationEntry::new("test", Offset::new(px(10.0), px(20.0)));
         assert_eq!(entry.annotation(), &"test");
-        assert_eq!(entry.local_position(), Offset::new(10.0, 20.0));
+        assert_eq!(entry.local_position(), Offset::new(px(10.0), px(20.0)));
     }
 
     #[test]
@@ -277,10 +278,10 @@ mod tests {
 
     #[test]
     fn test_annotation_entry_map() {
-        let entry = AnnotationEntry::new(42, Offset::new(5.0, 5.0));
+        let entry = AnnotationEntry::new(42, Offset::new(px(5.0), px(5.0)));
         let mapped = entry.map(|n| n.to_string());
         assert_eq!(mapped.annotation(), &"42".to_string());
-        assert_eq!(mapped.local_position(), Offset::new(5.0, 5.0));
+        assert_eq!(mapped.local_position(), Offset::new(px(5.0), px(5.0)));
     }
 
     #[test]
@@ -294,7 +295,7 @@ mod tests {
     fn test_annotation_result_add() {
         let mut result = AnnotationResult::new();
         result.add(AnnotationEntry::new("first", Offset::ZERO));
-        result.add(AnnotationEntry::new("second", Offset::new(10.0, 10.0)));
+        result.add(AnnotationEntry::new("second", Offset::new(px(10.0), px(10.0))));
 
         assert_eq!(result.len(), 2);
         assert_eq!(result.first_annotation(), Some(&"first"));

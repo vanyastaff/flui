@@ -134,13 +134,14 @@ unsafe impl Sync for OffsetLayer {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_types::geometry::px;
 
     #[test]
     fn test_offset_layer_new() {
-        let layer = OffsetLayer::new(Offset::new(10.0, 20.0));
+        let layer = OffsetLayer::new(Offset::new(px(10.0), px(20.0)));
 
-        assert_eq!(layer.offset().dx, 10.0);
-        assert_eq!(layer.offset().dy, 20.0);
+        assert_eq!(layer.offset().dx, px(10.0));
+        assert_eq!(layer.offset().dy, px(20.0));
     }
 
     #[test]
@@ -171,14 +172,14 @@ mod tests {
     fn test_offset_layer_set_offset() {
         let mut layer = OffsetLayer::zero();
 
-        layer.set_offset(Offset::new(100.0, 200.0));
+        layer.set_offset(Offset::new(px(100.0), px(200.0)));
         assert_eq!(layer.dx(), 100.0);
         assert_eq!(layer.dy(), 200.0);
     }
 
     #[test]
     fn test_offset_layer_transform_point() {
-        let layer = OffsetLayer::new(Offset::new(10.0, 20.0));
+        let layer = OffsetLayer::new(Offset::new(px(10.0), px(20.0)));
 
         let (x, y) = layer.transform_point(5.0, 5.0);
         assert_eq!(x, 15.0);
@@ -187,28 +188,28 @@ mod tests {
 
     #[test]
     fn test_offset_layer_transform_bounds() {
-        let layer = OffsetLayer::new(Offset::new(10.0, 20.0));
-        let bounds = Rect::from_xywh(0.0, 0.0, 100.0, 50.0);
+        let layer = OffsetLayer::new(Offset::new(px(10.0), px(20.0)));
+        let bounds = Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(50.0));
 
         let transformed = layer.transform_bounds(bounds);
-        assert_eq!(transformed.left(), 10.0);
-        assert_eq!(transformed.top(), 20.0);
-        assert_eq!(transformed.width(), 100.0);
-        assert_eq!(transformed.height(), 50.0);
+        assert_eq!(transformed.left(), px(10.0));
+        assert_eq!(transformed.top(), px(20.0));
+        assert_eq!(transformed.width(), px(100.0));
+        assert_eq!(transformed.height(), px(50.0));
     }
 
     #[test]
     fn test_offset_layer_add_offset() {
-        let mut layer = OffsetLayer::new(Offset::new(10.0, 20.0));
+        let mut layer = OffsetLayer::new(Offset::new(px(10.0), px(20.0)));
 
-        layer.add_offset(Offset::new(5.0, 10.0));
+        layer.add_offset(Offset::new(px(5.0), px(10.0)));
         assert_eq!(layer.dx(), 15.0);
         assert_eq!(layer.dy(), 30.0);
     }
 
     #[test]
     fn test_offset_layer_clone_copy() {
-        let layer = OffsetLayer::new(Offset::new(10.0, 20.0));
+        let layer = OffsetLayer::new(Offset::new(px(10.0), px(20.0)));
         let cloned = layer.clone();
         let copied = layer; // Copy
 
