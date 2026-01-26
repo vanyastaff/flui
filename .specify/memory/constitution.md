@@ -339,6 +339,38 @@ fn test_container_padding() { /* ... */ }
 fn test_view_element_render_integration() { /* ... */ }
 ```
 
+**Test Naming Convention (MANDATORY):**
+```rust
+// ✅ CORRECT: Descriptive names without task numbers
+#[test]
+fn test_displays_enumeration() { /* T073 internally */ }
+
+#[test]
+fn test_primary_display_detection() { /* T074 internally */ }
+
+#[test]
+fn test_high_dpi_scale_factor() { /* T075 internally */ }
+
+#[test]
+fn test_scale_factor_changed_event() { /* T080 internally */ }
+
+// ❌ WRONG: Task numbers in test names (hard to read, no semantic value)
+#[test]
+fn test_t073_displays_enumeration() { /* BAD */ }
+
+#[test]
+fn test_t080_scale_factor_changed_event() { /* BAD */ }
+```
+
+**Test Naming Rules:**
+- Use descriptive names that explain WHAT is being tested (behavior/feature)
+- NEVER include task numbers (T073, T080) in function names
+- Use underscores to separate words (snake_case)
+- Start with `test_` prefix for test discovery
+- Add category prefix for large test suites: `test_window_`, `test_display_`, `test_event_`
+- Task tracking IDs should only appear in comments if needed for traceability
+- Names should be readable without referencing task list
+
 **Test Infrastructure:**
 ```rust
 // Headless platform for CI (no GPU required)

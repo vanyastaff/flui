@@ -197,23 +197,34 @@
 
 ### T073-T078: Display Enumeration
 
-- [ ] T073 [P] [US5] Write test: `platform.displays()` returns all connected displays
-- [ ] T074 [P] [US5] Write test: `platform.primary_display()` returns OS-marked primary display
-- [ ] T075 [P] [US5] Write test: 4K monitor (2x scale) returns scale_factor = 2.0
-- [ ] T076 [P] [US5] Write test: `display.usable_bounds()` excludes taskbar/menu bar
-- [ ] T077 [P] [US5] Verify Windows display enumeration via EnumDisplayMonitors
-- [ ] T078 [P] [US5] Verify macOS display enumeration via NSScreen
+- [x] T073 [P] [US5] Write test: `platform.displays()` returns all connected displays
+  - **Status**: Implemented as `test_displays_enumeration()` in display_enumeration.rs (8/8 tests passing)
+- [x] T074 [P] [US5] Write test: `platform.primary_display()` returns OS-marked primary display
+  - **Status**: Implemented as `test_primary_display_detection()` in display_enumeration.rs
+- [x] T075 [P] [US5] Write test: 4K monitor (2x scale) returns scale_factor = 2.0
+  - **Status**: Implemented as `test_high_dpi_scale_factor()` in display_enumeration.rs
+- [x] T076 [P] [US5] Write test: `display.usable_bounds()` excludes taskbar/menu bar
+  - **Status**: Implemented as `test_usable_bounds_exclude_system_ui()` in display_enumeration.rs
+- [x] T077 [P] [US5] Verify Windows display enumeration via EnumDisplayMonitors
+  - **Status**: Implemented as `test_windows_enum_display_monitors()` (platform-specific)
+- [x] T078 [P] [US5] Verify macOS display enumeration via NSScreen
+  - **Status**: Implemented as `test_macos_nsscreen_enumeration()` (platform-specific)
 
 ### T079-T081: Multi-Monitor Support
 
-- [ ] T079 [US5] Write test: Display bounds don't overlap incorrectly in multi-monitor setup
-- [ ] T080 [US5] Write test: Moving window between monitors fires ScaleFactorChanged
-- [ ] T081 [US5] Benchmark display enumeration latency (<10ms with 4+ monitors)
+- [x] T079 [US5] Write test: Display bounds don't overlap incorrectly in multi-monitor setup
+  - **Status**: Implemented as `test_multi_monitor_bounds_arrangement()` in display_enumeration.rs
+- [x] T080 [US5] Write test: Moving window between monitors fires ScaleFactorChanged
+  - **Status**: Implemented as `test_scale_factor_changed_event()` (marked #[ignore] for manual testing)
+- [x] T081 [US5] Benchmark display enumeration latency (<10ms with 4+ monitors)
+  - **Status**: Implemented as `test_display_enumeration_performance()` (100 iterations benchmark)
 
 ### T082-T083: Documentation and Examples
 
-- [ ] T082 [US5] Create example: Display enumeration in `crates/flui-platform/examples/displays.rs`
-- [ ] T083 [US5] Document multi-monitor best practices in quickstart.md
+- [x] T082 [US5] Create example: Display enumeration in `crates/flui-platform/examples/displays.rs`
+  - **Status**: Created comprehensive 253-line example demonstrating all display features
+- [x] T083 [US5] Document multi-monitor best practices in quickstart.md
+  - **Status**: Created MULTI_MONITOR.md (447 lines) with comprehensive best practices guide
 
 **Acceptance**: Display enumeration works on Windows and macOS. Multi-monitor scenarios tested. Enumeration <10ms.
 
