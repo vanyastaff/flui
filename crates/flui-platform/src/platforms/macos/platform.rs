@@ -162,8 +162,7 @@ impl Platform for MacOSPlatform {
     }
 
     fn clipboard(&self) -> Arc<dyn Clipboard> {
-        // TODO: Implement NSPasteboard wrapper
-        unimplemented!("macOS clipboard not yet implemented")
+        Arc::new(crate::platforms::macos::MacOSClipboard::new())
     }
 
     fn capabilities(&self) -> &dyn PlatformCapabilities {

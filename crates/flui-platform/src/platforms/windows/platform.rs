@@ -674,8 +674,7 @@ impl Platform for WindowsPlatform {
     // ==================== Input & Clipboard ====================
 
     fn clipboard(&self) -> Arc<dyn Clipboard> {
-        // TODO: Implement Windows clipboard
-        Arc::new(DummyClipboard)
+        Arc::new(super::WindowsClipboard::new())
     }
 
     // ==================== Platform Capabilities ====================
@@ -741,18 +740,6 @@ impl Drop for WindowsPlatform {
 struct DummyTextSystem;
 
 impl PlatformTextSystem for DummyTextSystem {}
-
-struct DummyClipboard;
-
-impl Clipboard for DummyClipboard {
-    fn read_text(&self) -> Option<String> {
-        None
-    }
-
-    fn write_text(&self, _text: String) {
-        // No-op
-    }
-}
 
 // Windows platform capabilities
 static WINDOWS_CAPABILITIES: DesktopCapabilities = DesktopCapabilities;

@@ -34,6 +34,7 @@
 #[macro_use]
 extern crate objc;
 
+mod clipboard;
 mod display;
 mod events;
 mod liquid_glass;
@@ -44,6 +45,7 @@ mod window_ext;
 mod window_manager;
 mod window_tiling;
 
+pub use clipboard::MacOSClipboard;
 pub use display::MacOSDisplay;
 pub use events::convert_ns_event;
 pub use liquid_glass::{LiquidGlassMaterial, LiquidGlassConfig, BlendingMode};
