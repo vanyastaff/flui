@@ -114,6 +114,9 @@ impl WindowsWindow {
             // Remove background brush to allow Mica backdrop
             SetClassLongPtrW(hwnd, GCLP_HBRBACKGROUND, 0);
 
+            // Apply Windows 11 features automatically
+            Self::apply_windows_features(hwnd);
+
             tracing::info!(
                 "Created window HWND {:?} - {}x{} at ({}, {}) - scale: {}",
                 hwnd,
@@ -169,6 +172,62 @@ impl WindowsWindow {
             }
 
             Ok(window)
+        }
+    }
+
+    /// Apply Windows 11 features automatically
+    ///
+    /// This applies modern Windows 11 visual features if running on Windows 11:
+    /// - Mica backdrop for translucent background with blur
+    /// - Dark mode title bar matching system theme
+    /// - Rounded window corners
+    /// - DWM frame extension for proper backdrop rendering
+    fn apply_windows_features(hwnd: HWND) {
+        unsafe {
+            use windows::Win32::Graphics::Dwm::{
+                DwmExtendFrameIntoClientArea, DwmSetWindowAttribute, DWMWINDOWATTRIBUTE,
+            };
+            use windows::Win32::UI::Controls::MARGINS;
+
+            tracing::debug!("Applying Windows 11 features to HWND {:?}", hwnd);
+
+            // 1. Extend frame into client area (required for Mica backdrop)
+            let margins = MARGINS {
+                cxLeftWidth: -1,
+                cxRightWidth: -1,
+                cyTopHeight: -1,
+                cyBottomHeight: -1,
+            };
+            let _ = DwmExtendFrameIntoClientArea(hwnd, &margins);
+
+            // 2. Enable Mica backdrop (Windows 11+)
+            let mica_value: i32 = 2; // DWMSBT_MAINWINDOW
+            let _ = DwmSetWindowAttribute(
+                hwnd,
+                DWMWINDOWATTRIBUTE(38), // DWMWA_SYSTEMBACKDROP_TYPE
+                &mica_value as *const i32 as *const std::ffi::c_void,
+                std::mem::size_of::<i32>() as u32,
+            );
+
+            // 3. Enable dark mode title bar
+            let dark_mode_value: i32 = 1;
+            let _ = DwmSetWindowAttribute(
+                hwnd,
+                DWMWINDOWATTRIBUTE(20), // DWMWA_USE_IMMERSIVE_DARK_MODE
+                &dark_mode_value as *const i32 as *const std::ffi::c_void,
+                std::mem::size_of::<i32>() as u32,
+            );
+
+            // 4. Set rounded corners
+            let corner_value: i32 = 2; // DWMWCP_ROUND
+            let _ = DwmSetWindowAttribute(
+                hwnd,
+                DWMWINDOWATTRIBUTE(33), // DWMWA_WINDOW_CORNER_PREFERENCE
+                &corner_value as *const i32 as *const std::ffi::c_void,
+                std::mem::size_of::<i32>() as u32,
+            );
+
+            tracing::debug!("Windows 11 features applied");
         }
     }
 
