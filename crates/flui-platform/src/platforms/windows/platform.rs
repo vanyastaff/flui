@@ -266,6 +266,7 @@ impl WindowsPlatform {
             WM_ERASEBKGND => {
                 // Return 1 to prevent Windows from erasing background
                 // This allows Mica backdrop and other DWM effects to show through
+                tracing::debug!("WM_ERASEBKGND - preventing background erase");
                 LRESULT(1)
             }
 

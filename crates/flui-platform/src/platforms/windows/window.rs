@@ -111,6 +111,9 @@ impl WindowsWindow {
                 return Err(windows::core::Error::from_win32().into());
             }
 
+            // Remove background brush to allow Mica backdrop
+            SetClassLongPtrW(hwnd, GCLP_HBRBACKGROUND, 0);
+
             tracing::info!(
                 "Created window HWND {:?} - {}x{} at ({}, {}) - scale: {}",
                 hwnd,
