@@ -128,19 +128,19 @@
 
 ### T046-T050: Event Infrastructure
 
-- [ ] T046 [US3] Write test: Mouse click fires PointerEvent::Down(Primary) with logical coordinates
-- [ ] T047 [US3] Write test: Keyboard press with modifier fires KeyboardEvent with Modifiers::CONTROL
-- [ ] T048 [US3] Write test: Window resize fires WindowEvent::Resized with new logical size
-- [ ] T049 [US3] Write test: Mouse movement fires PointerEvent::Move with PixelDelta
-- [ ] T050 [US3] Write test: Multi-touch fires separate PointerEvent per touch point with unique ID
+- [X] T046 [US3] Write test: Mouse click fires PointerEvent::Down(Primary) with logical coordinates
+- [X] T047 [US3] Write test: Keyboard press with modifier fires KeyboardEvent with Modifiers::CONTROL
+- [X] T048 [US3] Write test: Window resize fires WindowEvent::Resized with new logical size
+- [X] T049 [US3] Write test: Mouse movement fires PointerEvent::Move with PixelDelta
+- [X] T050 [US3] Write test: Multi-touch fires separate PointerEvent per touch point with unique ID
 
 ### T051-T055: Windows Event Handling
 
-- [ ] T051 [P] [US3] Verify WM_LBUTTONDOWN → PointerEvent conversion in `crates/flui-platform/src/platforms/windows/event_loop.rs`
-- [ ] T052 [P] [US3] Verify WM_KEYDOWN → KeyboardEvent conversion with Key enum
-- [ ] T053 [P] [US3] Verify WM_SIZE → WindowEvent::Resized conversion
-- [ ] T054 [P] [US3] Add tracing instrumentation to measure event dispatch latency (<5ms)
-- [ ] T055 [P] [US3] Verify modifier key handling (Ctrl, Shift, Alt, Win)
+- [X] T051 [P] [US3] Verify WM_LBUTTONDOWN → PointerEvent conversion in `crates/flui-platform/src/platforms/windows/event_loop.rs`
+- [X] T052 [P] [US3] Verify WM_KEYDOWN → KeyboardEvent conversion with Key enum
+- [X] T053 [P] [US3] Verify WM_SIZE → WindowEvent::Resized conversion
+- [X] T054 [P] [US3] Add tracing instrumentation to measure event dispatch latency (<5ms)
+- [X] T055 [P] [US3] Verify modifier key handling (Ctrl, Shift, Alt, Win)
 
 ### T056-T060: macOS Event Handling
 
@@ -152,9 +152,9 @@
 
 ### T061-T063: Contract Tests and Examples
 
-- [ ] T061 [US3] Add contract test: All platforms emit identical W3C events for same OS input
-- [ ] T062 [US3] Create example: Event handler demo in `crates/flui-platform/examples/event_handling.rs`
-- [ ] T063 [US3] Benchmark event dispatch latency across platforms (<5ms from OS to callback)
+- [X] T061 [US3] Add contract test: All platforms emit identical W3C events for same OS input
+- [X] T062 [US3] Create example: Event handler demo in `crates/flui-platform/examples/event_handling.rs`
+- [X] T063 [US3] Benchmark event dispatch latency across platforms (<5ms from OS to callback)
 
 **Acceptance**: All event types work on Windows and macOS. Event dispatch latency <5ms. Contract tests pass.
 
