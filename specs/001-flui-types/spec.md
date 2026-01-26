@@ -27,6 +27,18 @@ Make measurement units part of the type system. The compiler prevents mixing inc
 
 ---
 
+## Clarifications
+
+### Session 2026-01-26
+
+- Q: What type of color blending should the `mix()` operation perform? → A: Both modes available - `mix()` for linear interpolation (lerp), separate `blend_over()` method for alpha compositing
+- Q: What epsilon value should be used for floating-point equality comparisons? → A: 1e-6 (0.000001)
+- Q: When a rectangle has negative dimensions, should the origin point be adjusted to maintain the intended visual bounds? → A: Adjust origin and clamp dimensions - negative width/height flips the rectangle to preserve visual bounds
+- Q: Should lighten/darken operations work in HSL space or RGB space? → A: Both available - `lighten()`/`darken()` use HSL lightness adjustment, separate `scale()` method for RGB multiplication
+- Q: What color should be used as the fallback when parsing invalid hex codes in release builds? → A: Transparent black (rgba(0,0,0,0)) with warning log (not silent fail)
+
+---
+
 ## User Scenarios & Testing
 
 ### User Story 1 - Device-Independent Layout (Priority: P1)
@@ -157,7 +169,7 @@ Make measurement units part of the type system. The compiler prevents mixing inc
 
 1. **Given** a brand color hex code "#FF5733" from design tools, **When** developer uses it, **Then** color renders exactly as specified
 2. **Given** a color, **When** creating hover state, **Then** developer writes `color.with_opacity(0.8)` to adjust transparency
-3. **Given** two colors, **When** blending them, **Then** developer writes `color1.mix(color2, ratio: 0.5)` for equal blend
+3. **Given** two colors, **When** blending them, **Then** developer writes `color1.mix(color2, ratio: 0.5)` for equal linear interpolation or `foreground.blend_over(background)` for alpha compositing
 4. **Given** a color, **When** converting to HSL for adjustments, **Then** developer can lighten/darken easily
 
 ---
@@ -221,12 +233,12 @@ Make measurement units part of the type system. The compiler prevents mixing inc
 
 ### Edge Cases
 
-- **Invalid Geometry**: Rectangle with negative width/height → normalize to valid rectangle (width/height clamped to 0)
+- **Invalid Geometry**: Rectangle with negative width/height → normalize to valid rectangle by adjusting origin point and clamping dimensions to preserve intended visual bounds (e.g., `Rect::from_ltwh(100, 100, -50, -50)` becomes `Rect { origin: (50, 50), size: (50, 50) }`)
 - **Empty Rectangles**: Rectangle with zero size → clearly identifiable via `is_empty()` method, doesn't crash
 - **Points at Infinity/NaN**: Points with infinite or NaN coordinates → panic in debug build with clear message, clamp to valid range in release
 - **Out-of-Range Colors**: RGB values > 255 or < 0 → clamp to valid range [0, 255]
 - **Alpha Out of Range**: Alpha > 1.0 or < 0.0 → clamp to valid range [0.0, 1.0]
-- **Invalid Hex Codes**: Malformed hex color strings → panic in debug with clear message, fall back to default color in release
+- **Invalid Hex Codes**: Malformed hex color strings → panic in debug with clear message ("Invalid hex color '#GGHHII': expected format #RRGGBB or #RRGGBBAA"), fall back to transparent black (rgba(0,0,0,0)) with warning log in release (not silent fail)
 - **Division by Zero**: Rectangle scaling by zero → results in zero-sized geometry (doesn't panic)
 - **Coincident Points**: Distance calculation between same point → returns 0.0 correctly
 
@@ -281,8 +293,8 @@ Make measurement units part of the type system. The compiler prevents mixing inc
 - **FR-032**: System MUST provide named colors (red, blue, green, black, white, transparent, grays)
 - **FR-033**: System MUST support HSL color format (hue, saturation, lightness)
 - **FR-034**: System MUST adjust color opacity
-- **FR-035**: System MUST blend two colors
-- **FR-036**: System MUST lighten/darken colors
+- **FR-035**: System MUST blend two colors via `mix()` for linear interpolation and `blend_over()` for alpha compositing
+- **FR-036**: System MUST lighten/darken colors via `lighten()`/`darken()` using HSL lightness adjustment, and provide `scale()` for RGB value multiplication
 - **FR-037**: System MUST convert between RGB and HSL formats
 - **FR-038**: System MUST extract color components (red, green, blue, alpha values)
 
@@ -308,12 +320,12 @@ Make measurement units part of the type system. The compiler prevents mixing inc
 
 **Edge Cases:**
 
-- **FR-053**: System MUST handle negative rectangle dimensions by normalizing to valid rectangle
+- **FR-053**: System MUST handle negative rectangle dimensions by normalizing to valid rectangle (adjust origin point and clamp dimensions to preserve intended visual bounds)
 - **FR-054**: System MUST clearly identify empty rectangles without crashing
 - **FR-055**: System MUST handle points at infinity/NaN by panicking in debug, clamping in release
 - **FR-056**: System MUST clamp RGB values to valid range [0, 255]
 - **FR-057**: System MUST clamp alpha values to valid range [0.0, 1.0]
-- **FR-058**: System MUST handle invalid hex codes by panicking in debug with clear message
+- **FR-058**: System MUST handle invalid hex codes by panicking in debug with clear message (e.g., "Invalid hex color '#GGHHII': expected format #RRGGBB or #RRGGBBAA"), falling back to transparent black (rgba(0,0,0,0)) in release with warning log
 - **FR-059**: System MUST handle division by zero in geometric calculations without panicking
 
 ### Key Entities
@@ -372,7 +384,7 @@ Make measurement units part of the type system. The compiler prevents mixing inc
 ### Floating Point Precision
 - Using 32-bit floats (f32) is sufficient for UI work
 - Accept minor precision loss for better performance and memory
-- Equality comparisons allow small tolerance (epsilon)
+- Equality comparisons allow small tolerance (epsilon = 1e-6 or 0.000001)
 
 ### Platform Independence
 - This crate has no platform-specific code

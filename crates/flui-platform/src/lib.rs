@@ -148,8 +148,13 @@ use std::sync::Arc;
 /// Automatically selects the correct platform based on the target OS at compile time.
 /// This is the recommended way to obtain a platform instance in cross-platform code.
 ///
+/// # Environment Variables
+///
+/// - **FLUI_HEADLESS=1**: Forces headless mode for CI/testing (overrides OS detection)
+///
 /// # Platform Selection
 ///
+/// - **Headless** (if `FLUI_HEADLESS=1`): Returns `HeadlessPlatform` - testing mode
 /// - **Windows**: Returns `WindowsPlatform` - fully implemented with Win32 API
 /// - **macOS**: Returns `MacOSPlatform` - stub (unimplemented, roadmap available)
 /// - **Linux**: Returns `LinuxPlatform` - stub (unimplemented, roadmap available)
@@ -215,6 +220,12 @@ use std::sync::Arc;
 /// }
 /// ```
 pub fn current_platform() -> anyhow::Result<Arc<dyn Platform>> {
+    // Check for headless mode via environment variable (CI/testing)
+    if std::env::var("FLUI_HEADLESS").is_ok() {
+        tracing::info!("FLUI_HEADLESS detected, using headless platform");
+        return Ok(Arc::new(HeadlessPlatform::new()));
+    }
+
     #[cfg(windows)]
     {
         Ok(Arc::new(WindowsPlatform::new()?))
