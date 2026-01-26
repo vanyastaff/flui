@@ -20,13 +20,13 @@
 
 **Goal**: Prepare development environment and verify workspace state.
 
-- [ ] T001 Verify workspace compilation with `cargo build --workspace`
-- [ ] T002 Run existing test suite to establish baseline: `cargo test -p flui-platform`
-- [ ] T003 [P] Set up tracing infrastructure in examples for debugging
-- [ ] T004 [P] Verify Windows platform tests pass (clipboard, window management, events)
-- [ ] T005 [P] Verify headless platform tests pass for CI compatibility
+- [X] T001 Verify workspace compilation with `cargo build --workspace`
+- [X] T002 Run existing test suite to establish baseline: `cargo test -p flui-platform`
+- [X] T003 [P] Set up tracing infrastructure in examples for debugging
+- [X] T004 [P] Verify Windows platform tests pass (clipboard, window management, events)
+- [X] T005 [P] Verify headless platform tests pass for CI compatibility
 
-**Acceptance**: All existing tests pass, workspace compiles clean, tracing available in examples.
+**Acceptance**: All existing tests pass (41/42 pass, 1 Unicode clipboard issue known), workspace compiles clean, tracing available in examples.
 
 ---
 
@@ -34,13 +34,13 @@
 
 **Goal**: Complete dependencies and infrastructure required by all user stories.
 
-- [ ] T006 Add `raw-window-handle = "0.6"` to Cargo.toml for wgpu integration
-- [ ] T007 Add `waker-fn = "1.2.0"` to Cargo.toml for executor improvements
-- [ ] T008 [P] Document platform detection logic in `current_platform()` function
-- [ ] T009 [P] Add contract test infrastructure for Platform trait compliance
-- [ ] T010 Create integration test template for cross-crate testing (flui-platform + flui_painting)
+- [X] T006 Add `raw-window-handle = "0.6"` to Cargo.toml for wgpu integration
+- [X] T007 Add `waker-fn = "1.2.0"` to Cargo.toml for executor improvements
+- [X] T008 [P] Document platform detection logic in `current_platform()` function
+- [X] T009 [P] Add contract test infrastructure for Platform trait compliance
+- [X] T010 Create integration test template for cross-crate testing (flui-platform + flui_painting)
 
-**Acceptance**: Dependencies added, contract test framework ready, documentation updated.
+**Acceptance**: Dependencies added (raw-window-handle, waker-fn already present), contract test framework ready (10 tests passing), integration test template created (3 tests passing, 3 placeholders for future phases), documentation updated.
 
 ---
 
@@ -97,7 +97,7 @@
 - [ ] T031 [P] [US2] Implement text measurement (bounding box) via DirectWrite
 - [ ] T032 [P] [US2] Implement glyph shaping (positioned glyphs) via DirectWrite
 - [ ] T033 [P] [US2] Add Unicode 15.0 support verification (emoji, CJK, Cyrillic, Arabic)
-- [ ] T034 [P] [US2] Benchmark text measurement latency (<1ms for <100 char strings)
+- [ ] T034 [P] [US2] Initial benchmark: text measurement latency (<1ms for <100 char strings) - see T116 for final benchmark in Phase 10
 - [ ] T035 [P] [US2] Add integration test with flui_painting Canvas API
 
 ### T036-T042: macOS Core Text Integration
@@ -107,7 +107,7 @@
 - [ ] T038 [P] [US2] Implement text measurement (bounding box) via Core Text
 - [ ] T039 [P] [US2] Implement glyph shaping (positioned glyphs) via Core Text
 - [ ] T040 [P] [US2] Add Unicode 15.0 support verification (emoji, CJK, Cyrillic, Arabic)
-- [ ] T041 [P] [US2] Benchmark text measurement latency (<1ms for <100 char strings)
+- [ ] T041 [P] [US2] Initial benchmark: text measurement latency (<1ms for <100 char strings) - see T116 for final benchmark in Phase 10
 - [ ] T042 [P] [US2] Test text system on real macOS hardware
 
 ### T043-T045: Contract Tests and Documentation
@@ -154,7 +154,7 @@
 
 - [ ] T061 [US3] Add contract test: All platforms emit identical W3C events for same OS input
 - [ ] T062 [US3] Create example: Event handler demo in `crates/flui-platform/examples/event_handling.rs`
-- [ ] T063 [US3] Benchmark event dispatch latency across platforms (<5ms from OS to callback)
+- [ ] T063 [US3] Initial benchmark: event dispatch latency across platforms (<5ms from OS to callback) - see T117 for final benchmark in Phase 10
 
 **Acceptance**: All event types work on Windows and macOS. Event dispatch latency <5ms. Contract tests pass.
 
@@ -204,7 +204,7 @@
 
 - [ ] T079 [US5] Write test: Display bounds don't overlap incorrectly in multi-monitor setup
 - [ ] T080 [US5] Write test: Moving window between monitors fires ScaleFactorChanged
-- [ ] T081 [US5] Benchmark display enumeration latency (<10ms with 4+ monitors)
+- [ ] T081 [US5] Initial benchmark: display enumeration latency (<10ms with 4+ monitors) - see T119 for final benchmark in Phase 10
 
 ### T082-T083: Documentation and Examples
 
@@ -235,7 +235,7 @@
 - [ ] T090 [P] [US6] Verify Windows executor integration with Win32 message pump
 - [ ] T091 [P] [US6] Verify macOS executor integration with CFRunLoop
 - [ ] T092 [P] [US6] Add `drain_tasks()` call in event loop for foreground executor
-- [ ] T093 [P] [US6] Benchmark executor spawn overhead (<100µs)
+- [ ] T093 [P] [US6] Initial benchmark: executor spawn overhead (<100µs) - see T120 for final benchmark in Phase 10
 - [ ] T094 [P] [US6] Create example: Background task with UI update in `crates/flui-platform/examples/executor.rs`
 
 ### T095-T096: Documentation
@@ -297,13 +297,14 @@
 - [ ] T119 [P] Benchmark display enumeration (<10ms target)
 - [ ] T120 [P] Benchmark executor spawn overhead (<100µs target)
 
-### T121-T125: Quality Gates
+### T121-T126: Quality Gates
 
 - [ ] T121 Run full workspace build: `cargo build --workspace`
 - [ ] T122 Run clippy with -D warnings: `cargo clippy --workspace -- -D warnings`
 - [ ] T123 Run formatter check: `cargo fmt --all -- --check`
 - [ ] T124 Run full test suite: `cargo test --workspace`
 - [ ] T125 Run headless CI test: `FLUI_HEADLESS=1 cargo test -p flui-platform`
+- [ ] T126 [P] Review all unsafe blocks for safety justification documentation (NFR-012 compliance)
 
 **Acceptance**: ≥70% test coverage, all documentation complete, all benchmarks meet targets, all quality gates pass.
 
@@ -311,7 +312,7 @@
 
 ## Summary
 
-**Total Tasks**: 125  
+**Total Tasks**: 126  
 **Parallelizable**: ~75 tasks (marked with `[P]`)  
 **Critical Path**: T001-T010 (Setup) → T024-T045 (Text System) → T046-T063 (Events) → T103-T125 (Polish)
 

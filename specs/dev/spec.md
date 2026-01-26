@@ -133,14 +133,17 @@
 - **FR-002**: System MUST support window modes: Normal, Minimized, Maximized, Fullscreen
 - **FR-003**: System MUST emit events for window lifecycle: Created, Resized, Moved, FocusChanged, CloseRequested, Closed
 - **FR-004**: System MUST handle DPI scaling changes (per-monitor DPI v2 on Windows, Retina on macOS)
+- **FR-004a**: System MUST support wgpu surface lifecycle - create surface on window creation, recreate surface on window resize/DPI change, destroy surface on window close (integrated via raw-window-handle)
 - **FR-005**: System MUST support multiple concurrent windows with independent event streams
 
 **Text System:**
-- **FR-006**: System MUST integrate DirectWrite (Windows) and Core Text (macOS) for text shaping
+- **FR-006**: System MUST integrate DirectWrite (Windows) and Core Text (macOS) for glyph shaping
 - **FR-007**: System MUST provide font enumeration and family lookup
+- **FR-007a**: System MUST implement font fallback chain: (1) requested family, (2) platform default font (Segoe UI/SF Pro Text), (3) first available system font (guaranteed fallback - never error)
 - **FR-008**: System MUST measure text bounds in logical pixels for layout calculations
-- **FR-009**: System MUST support full Unicode 15.0 (including emoji, CJK, Cyrillic, Arabic, etc.)
-- **FR-010**: System MUST return glyph positions for rendering integration with flui_painting
+- **FR-009**: System MUST support full Unicode 15.0 including: (1) grapheme cluster segmentation for emoji sequences (ZWJ, variation selectors), (2) Unicode normalization (NFC), (3) bidirectional text (Arabic/Hebrew RTL), (4) complex script shaping (Devanagari ligatures, Thai vowel placement), (5) automatic font fallback for missing glyphs
+- **FR-010**: System MUST return glyph positions for rendering integration with flui_painting as Vec<GlyphPosition> where each glyph contains: glyph_id (u32), x_offset (Pixels), y_offset (Pixels), x_advance (Pixels) - all coordinates relative to baseline origin
+- **FR-010a**: System MUST provide Canvas::draw_glyphs() integration contract - PlatformTextSystem::shape_glyphs() output MUST be directly compatible with flui_painting::Canvas::draw_glyphs() input without transformation
 
 **Event Handling:**
 - **FR-011**: System MUST use W3C-standard event types (ui-events crate) for cross-platform consistency
@@ -177,12 +180,46 @@
 - **FR-034**: System MUST be thread-safe (use Mutex for clipboard access)
 - **FR-035**: System MUST provide has_text() for format detection
 
+### Non-Functional Requirements
+
+**Performance:**
+- **NFR-001**: Text measurement latency MUST be <1ms for strings <100 characters (measured via criterion benchmarks)
+- **NFR-002**: Event dispatch latency MUST be <5ms from OS event to callback invocation (measured via tracing timestamps)
+- **NFR-003**: Display enumeration MUST complete in <10ms even with 4+ monitors connected (measured via benchmarks)
+- **NFR-004**: Executor spawn overhead MUST be <100µs for both background and foreground executors (measured via microbenchmarks)
+- **NFR-005**: Clipboard roundtrip (write→read) MUST complete in <1ms for 1KB UTF-8 text (measured via benchmarks)
+
+**Reliability:**
+- **NFR-006**: Window lifecycle MUST not leak memory during create/destroy cycles (verified via heap profiler: valgrind, heaptrack)
+- **NFR-007**: All platform API tests MUST pass in headless mode without GPU or display server (enables CI/CD automation)
+- **NFR-008**: Platform implementations MUST be thread-safe with no data races (verified via ThreadSanitizer, loom)
+- **NFR-009**: Event handling MUST not drop events under high load (<1000 events/second typical UI interaction)
+
+**Quality:**
+- **NFR-010**: Code coverage MUST be ≥70% for platform implementation crates (per constitution Principle VI)
+- **NFR-011**: All public APIs MUST have rustdoc with examples and panic conditions documented (per constitution Documentation Gate)
+- **NFR-012**: Unsafe code MUST have explicit safety justification in comments and PR description (per constitution Principle V)
+- **NFR-013**: All tracing must use structured logging via `tracing` crate, NEVER `println!` or `eprintln!` (per constitution Principle VI)
+
+**Compatibility:**
+- **NFR-014**: Windows platform MUST support Windows 10 (1809+) and Windows 11 with native Win32 API
+- **NFR-015**: macOS platform MUST support macOS 11 (Big Sur) and later with native AppKit/Cocoa
+- **NFR-016**: Event types MUST conform to W3C UI Events specification for cross-platform consistency
+- **NFR-017**: Headless platform MUST provide identical API surface to native platforms (full contract test coverage)
+
+**Scalability:**
+- **NFR-018**: System MUST support creating and managing 100+ concurrent windows without performance degradation
+- **NFR-019**: System MUST handle multi-monitor setups with up to 8 displays (tested with virtual displays)
+- **NFR-020**: Background executor MUST scale to available CPU cores (tokio multi-threaded runtime)
+
 ### Key Entities
 
 - **Platform**: Central abstraction providing lifecycle, window management, executors, text system, clipboard
 - **PlatformWindow**: Native window handle with size, position, mode, focus, visibility operations
 - **PlatformDisplay**: Monitor/screen with bounds, scale factor, refresh rate, primary flag
-- **PlatformTextSystem**: Font loading, text measurement, glyph shaping for rendering
+- **PlatformTextSystem**: Platform-native text measurement and glyph shaping (DirectWrite/Core Text) - provides font loading, text bounds calculation, and positioned glyphs (Vec<GlyphPosition>) for rendering
+- **FontHandle**: Opaque handle to loaded font (platform-specific: IDWriteTextFormat on Windows, CTFont on macOS)
+- **GlyphPosition**: Positioned glyph for rendering with glyph_id (u32), x_offset/y_offset/x_advance (Pixels) relative to baseline origin
 - **PlatformExecutor**: Task scheduling (Background for worker threads, Foreground for UI thread)
 - **Clipboard**: Text read/write interface with platform-native format handling
 - **WindowEvent**: Lifecycle events (Created, Resized, Moved, FocusChanged, CloseRequested, etc.)
@@ -193,12 +230,12 @@
 ### Measurable Outcomes
 
 - **SC-001**: Windows can be created and destroyed without leaks on Windows and macOS (verified via heap profiler)
-- **SC-002**: Text can be measured with <1ms latency for typical UI strings (<100 characters)
-- **SC-003**: Event dispatch latency <5ms from OS event to callback invocation (verified via tracing)
-- **SC-004**: Full test suite passes in headless mode without GPU (CI-friendly)
-- **SC-005**: Display enumeration completes in <10ms even with 4+ monitors
-- **SC-006**: Executor spawns tasks with <100µs overhead (microbenchmark verified)
-- **SC-007**: Clipboard roundtrip (write→read) completes in <1ms for 1KB text
-- **SC-008**: Code coverage ≥70% for platform implementations (per constitution requirement)
-- **SC-009**: Documentation complete for all public APIs with examples (per constitution requirement)
-- **SC-010**: No unsafe code violations without explicit justification in PR
+- **SC-002**: NFR-001 verified - Text measurement latency <1ms for strings <100 ASCII characters
+- **SC-003**: NFR-002 verified - Event dispatch latency <5ms from OS event to callback invocation
+- **SC-004**: NFR-007 verified - Full test suite passes in headless mode without GPU (CI-friendly)
+- **SC-005**: NFR-003 verified - Display enumeration completes in <10ms even with 4+ monitors
+- **SC-006**: NFR-004 verified - Executor spawns tasks with <100µs overhead (microbenchmark verified)
+- **SC-007**: NFR-005 verified - Clipboard roundtrip (write→read) completes in <1ms for 1KB UTF-8 text
+- **SC-008**: NFR-010 verified - Code coverage ≥70% for platform implementations (per constitution requirement)
+- **SC-009**: NFR-011 verified - Documentation complete for all public APIs with examples (per constitution requirement)
+- **SC-010**: NFR-012 verified - No unsafe code violations without explicit justification in PR
