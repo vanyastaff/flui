@@ -75,9 +75,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
             DwmExtendFrameIntoClientArea(hwnd, &margins).ok();
 
-            // 2. Enable Mica Alt backdrop (Windows 11+) - more transparent
-            println!("  ✓ Setting Mica Alt backdrop");
-            let mica_value: i32 = 4; // DWMSBT_TABBEDWINDOW (Mica Alt) - более прозрачный
+            // 2. Enable Mica backdrop (Windows 11+)
+            println!("  ✓ Setting Mica backdrop");
+            let mica_value: i32 = 2; // DWMSBT_MAINWINDOW (Mica) - стандартная прозрачность
             DwmSetWindowAttribute(
                 hwnd,
                 DWMWINDOWATTRIBUTE(38), // DWMWA_SYSTEMBACKDROP_TYPE
@@ -116,10 +116,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("✨ All features applied!");
         println!();
         println!("What you should see:");
-        println!("  • Translucent Mica Alt backdrop showing desktop wallpaper");
+        println!("  • Mica backdrop with subtle transparency and blur effect");
         println!("  • Dark title bar matching your Windows theme");
         println!("  • Rounded window corners");
-        println!("  • Semi-transparent background with blur effect");
+        println!("  • Background tinted with system accent color");
         println!("  • Hover over maximize button to see Snap Layouts");
         println!();
         println!("Close the window to exit");
