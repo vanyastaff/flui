@@ -52,15 +52,74 @@
 //! }));
 //! ```
 //!
-//! ## Testing
+//! ## Testing with Headless Mode
 //!
-//! The [`HeadlessPlatform`] provides a no-op implementation perfect for unit tests:
+//! The [`HeadlessPlatform`] provides a mock implementation perfect for CI/testing without
+//! requiring a display server, GPU, or OS windowing system.
+//!
+//! ### Direct Usage
 //!
 //! ```rust
-//! use flui_platform::{HeadlessPlatform, Platform};
+//! use flui_platform::{headless_platform, Platform};
 //!
-//! let platform = HeadlessPlatform::new();
+//! let platform = headless_platform();
 //! assert_eq!(platform.name(), "Headless");
+//! ```
+//!
+//! ### Environment Variable (Recommended for CI)
+//!
+//! Set `FLUI_HEADLESS=1` to force headless mode via [`current_platform()`]:
+//!
+//! ```bash
+//! # Run tests in headless mode
+//! FLUI_HEADLESS=1 cargo test
+//!
+//! # CI configuration
+//! - name: Run tests
+//!   run: cargo test
+//!   env:
+//!     FLUI_HEADLESS: 1
+//! ```
+//!
+//! ```rust,ignore
+//! use flui_platform::current_platform;
+//!
+//! // Returns HeadlessPlatform when FLUI_HEADLESS=1
+//! let platform = current_platform()?;
+//! assert_eq!(platform.name(), "Headless");
+//! ```
+//!
+//! ### What Headless Mode Provides
+//!
+//! - **Mock Windows**: `open_window()` returns mock windows (no OS windows created)
+//! - **In-Memory Clipboard**: Full clipboard API with in-memory storage
+//! - **Mock Text System**: Text measurement and font APIs (estimates)
+//! - **Mock Displays**: Single virtual display at 1920x1080
+//! - **Background Executor**: Async task execution with tokio runtime
+//! - **Foreground Executor**: Channel-based task queue for main thread
+//! - **Fast Tests**: <100ms overhead, suitable for rapid test iteration
+//! - **Parallel Safe**: Thread-safe, no race conditions in parallel test execution
+//!
+//! ### Example Test
+//!
+//! ```rust
+//! use flui_platform::{headless_platform, WindowOptions};
+//! use flui_types::geometry::{px, Size};
+//!
+//! #[test]
+//! fn test_window_creation() {
+//!     let platform = headless_platform();
+//!
+//!     let options = WindowOptions {
+//!         title: "Test".to_string(),
+//!         size: Size::new(px(800.0), px(600.0)),
+//!         visible: true,
+//!         ..Default::default()
+//!     };
+//!
+//!     let window = platform.open_window(options).expect("Failed to create window");
+//!     // Window is a mock, no actual OS resources allocated
+//! }
 //! ```
 //!
 //! # Feature Flags
