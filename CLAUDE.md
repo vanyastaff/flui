@@ -1,22 +1,3 @@
-<!-- OPENSPEC:START -->
-# OpenSpec Instructions
-
-These instructions are for AI assistants working in this project.
-
-Always open `@/openspec/AGENTS.md` when the request:
-- Mentions planning or proposals (words like proposal, spec, change, plan)
-- Introduces new capabilities, breaking changes, architecture shifts, or big performance/security work
-- Sounds ambiguous and you need the authoritative spec before coding
-
-Use `@/openspec/AGENTS.md` to learn:
-- How to create and apply change proposals
-- Spec format and conventions
-- Project structure and guidelines
-
-Keep this managed block so 'openspec update' can refresh the instructions.
-
-<!-- OPENSPEC:END -->
-
 # CLAUDE.md
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
@@ -34,13 +15,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 5. **Coverage Requirements**: Core ≥80%, Platform ≥70%, Widget ≥85%
 6. **ID Offset Pattern**: Slab uses 0-based, IDs use 1-based (NonZeroUsize)
 
-### OpenSpec Workflow
+### Speckit Workflow
 
 **For large changes** (new features, breaking changes, architecture shifts):
-1. Check if similar work exists in `specs/` or `openspec/changes/`
-2. Create proposal with `/openspec:proposal` or `/speckit.plan`
+1. Check if similar work exists in `specs/` directory
+2. Create specification with `/speckit.plan` command
 3. Follow spec → plan → tasks → implementation workflow
-4. See OpenSpec instructions at top of this file
+4. See `specs/dev/` for current example of complete workflow
 
 ### MCP Servers
 
@@ -153,17 +134,10 @@ RUST_LOG=debug cargo test -p flui_rendering
 /flui:android               # Build for Android
 ```
 
-**OpenSpec workflow (large changes):**
-```bash
-/openspec:proposal          # Create change proposal
-/openspec:apply <name>      # Apply approved change
-/openspec:archive <name>    # Archive deployed change
-```
-
-**Speckit workflow (feature planning):**
+**Speckit workflow (feature planning and specs):**
 ```bash
 /speckit.constitution       # Create/update constitution
-/speckit.plan               # Create implementation plan
+/speckit.plan               # Create implementation plan (spec + research + plan)
 /speckit.clarify            # Identify spec ambiguities
 /speckit.tasks              # Generate task breakdown
 ```
@@ -472,5 +446,5 @@ cargo clippy -p flui_rendering -- -D warnings
 8. **Reference Flutter first** - Check `.flutter/` directory before implementing new features
 9. **Use Context7 proactively** - Fetch docs for external libraries (wgpu, winit, etc.)
 10. **Batch file operations** - `read_multiple_files` for efficiency
-11. **Check OpenSpec** - Large changes (new features, breaking changes) need proposals
+11. **Use Speckit for large changes** - New features or breaking changes need spec → plan → tasks workflow
 12. **Follow ID Offset Pattern** - Slab index + 1 = ID, ID - 1 = Slab index (all ID types)
