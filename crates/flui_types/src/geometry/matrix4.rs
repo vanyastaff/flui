@@ -779,6 +779,7 @@ impl Matrix4 {
 
     #[inline]
     #[cfg(all(target_arch = "x86_64", not(target_family = "wasm")))]
+    #[allow(dead_code)] // Used only when SIMD is enabled
     fn mul_simd_sse(self, rhs: Self) -> Self {
         use std::arch::x86_64::*;
 

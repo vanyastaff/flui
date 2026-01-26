@@ -234,6 +234,7 @@ impl Color {
 
     #[inline]
     #[cfg(all(target_arch = "x86_64", not(target_family = "wasm")))]
+    #[allow(dead_code)] // Used only when SIMD is enabled
     fn lerp_simd_sse(a: Color, b: Color, t: f32) -> Color {
         #[cfg(target_feature = "sse2")]
         unsafe {
@@ -427,6 +428,7 @@ impl Color {
 
     #[inline]
     #[cfg(all(target_arch = "x86_64", not(target_family = "wasm")))]
+    #[allow(dead_code)] // Used only when SIMD is enabled
     fn blend_over_simd_sse(&self, background: Color) -> Color {
         #[cfg(target_feature = "sse2")]
         unsafe {
@@ -660,6 +662,7 @@ impl Color {
 
     #[inline]
     #[cfg(all(target_arch = "x86_64", not(target_family = "wasm")))]
+    #[allow(dead_code)] // Used only when SIMD is enabled
     fn blend_over_batch_simd_sse(colors: &[Color], background: Color) -> Vec<Color> {
         #[cfg(target_feature = "sse2")]
         {

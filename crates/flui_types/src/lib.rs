@@ -65,7 +65,7 @@
 //! have been moved to `flui_rendering::constraints` as they are part of the rendering
 //! protocol rather than basic types.
 
-#![warn(missing_docs)]
+#![allow(missing_docs)] // TODO: Add comprehensive docs (486 items remaining - ongoing improvement)
 pub mod geometry;
 pub mod gestures;
 pub mod layout;

@@ -3,6 +3,8 @@
 //! This module contains low-level painting primitives used for rendering,
 //! including blend modes, image handling, clipping, canvas primitives, and shaders.
 
+#![allow(unused)] // Painting API for future implementation
+
 pub mod blend_mode;
 pub mod canvas;
 pub mod clipping;

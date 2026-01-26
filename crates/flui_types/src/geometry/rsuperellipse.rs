@@ -300,6 +300,7 @@ impl RSuperellipse {
     // ========================================================================
 
     #[inline]
+    #[allow(dead_code)] // Helper for future contains() implementation
     fn point_in_corner(&self, dx: f32, dy: f32, radius: Radius<Pixels>) -> bool {
         if radius.x <= px(0.0) || radius.y <= px(0.0) {
             return true; // Sharp corner, already passed bbox check
