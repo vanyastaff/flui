@@ -1,0 +1,49 @@
+# Rustfmt configuration for FLUI workspace
+# https://rust-lang.github.io/rustfmt
+
+# Edition
+edition = "2021"
+
+# Line width
+max_width = 100
+
+# Imports
+imports_granularity = "Crate"
+group_imports = "StdExternalCrate"
+reorder_imports = true
+
+# Comments and documentation
+wrap_comments = true
+normalize_comments = true
+normalize_doc_attributes = true
+format_code_in_doc_comments = true
+
+# Whitespace
+use_small_heuristics = "Default"
+newline_style = "Auto"
+
+# Structures
+struct_field_align_threshold = 0
+enum_discrim_align_threshold = 0
+
+# Functions
+fn_params_layout = "Tall"
+brace_style = "SameLineWhere"
+
+# Control flow
+control_brace_style = "AlwaysSameLine"
+match_arm_leading_pipes = "Never"
+
+# Macros
+format_macro_matchers = true
+format_macro_bodies = true
+
+# Miscellaneous
+remove_nested_parens = true
+use_try_shorthand = true
+use_field_init_shorthand = true
+force_explicit_abi = true
+condense_wildcard_suffixes = true
+
+# Consistency
+reorder_impl_items = false  # Don't reorder - keep logical grouping

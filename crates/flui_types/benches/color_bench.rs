@@ -77,12 +77,13 @@ fn color_to_hex_benchmark(c: &mut Criterion) {
     });
 }
 
-fn color_premultiply_benchmark(c: &mut Criterion) {
-    let color = Color::rgba(255, 128, 64, 128);
+fn color_multiply_benchmark(c: &mut Criterion) {
+    let color1 = Color::rgba(255, 128, 64, 128);
+    let color2 = Color::rgb(200, 200, 200);
 
-    c.bench_function("Color::premultiply", |b| {
+    c.bench_function("Color::multiply", |b| {
         b.iter(|| {
-            black_box(black_box(&color).premultiply())
+            black_box(black_box(&color1).multiply(black_box(color2)))
         })
     });
 }
@@ -96,7 +97,7 @@ criterion_group!(
     color_with_alpha_benchmark,
     color_from_hex_benchmark,
     color_to_hex_benchmark,
-    color_premultiply_benchmark
+    color_multiply_benchmark
 );
 
 criterion_main!(color_benches);

@@ -6,7 +6,7 @@
 //! - Rect::union: <20ns
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use flui_types::geometry::{Point, Rect, Size, px};
+use flui_types::geometry::{Point, Rect, Size, Vec2, px};
 
 fn point_distance_benchmark(c: &mut Criterion) {
     let p1 = Point::new(px(10.0), px(20.0));
@@ -21,11 +21,11 @@ fn point_distance_benchmark(c: &mut Criterion) {
 
 fn point_addition_benchmark(c: &mut Criterion) {
     let p = Point::new(px(10.0), px(20.0));
-    let offset = flui_types::geometry::Offset::new(px(5.0), px(10.0));
+    let vec = Vec2::new(px(5.0), px(10.0));
 
-    c.bench_function("Point + Offset", |b| {
+    c.bench_function("Point + Vec2", |b| {
         b.iter(|| {
-            black_box(black_box(p) + black_box(offset))
+            black_box(p + vec)
         })
     });
 }
@@ -68,7 +68,7 @@ fn rect_inflate_benchmark(c: &mut Criterion) {
 
     c.bench_function("Rect::inflate", |b| {
         b.iter(|| {
-            black_box(black_box(&rect).inflate(black_box(px(10.0))))
+            black_box(black_box(&rect).inflate(black_box(px(10.0)), black_box(px(10.0))))
         })
     });
 }

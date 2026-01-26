@@ -27,13 +27,13 @@ fn device_pixels_to_pixels_benchmark(c: &mut Criterion) {
     });
 }
 
-fn pixels_scale_benchmark(c: &mut Criterion) {
+fn pixels_multiply_benchmark(c: &mut Criterion) {
     let value = px(100.0);
     let factor = 1.5;
 
-    c.bench_function("Pixels::scale", |b| {
+    c.bench_function("Pixels multiply", |b| {
         b.iter(|| {
-            black_box(black_box(value).scale(black_box(factor)))
+            black_box(black_box(value) * black_box(factor))
         })
     });
 }
@@ -42,9 +42,9 @@ fn pixels_arithmetic_benchmark(c: &mut Criterion) {
     let a = px(100.0);
     let b = px(50.0);
 
-    c.bench_function("Pixels addition", |b| {
-        b.iter(|| {
-            black_box(black_box(a) + black_box(b))
+    c.bench_function("Pixels addition", |bencher| {
+        bencher.iter(|| {
+            black_box(a + b)
         })
     });
 }
@@ -53,9 +53,9 @@ fn pixels_comparison_benchmark(c: &mut Criterion) {
     let a = px(100.0);
     let b = px(50.0);
 
-    c.bench_function("Pixels comparison", |b| {
-        b.iter(|| {
-            black_box(black_box(a) > black_box(b))
+    c.bench_function("Pixels comparison", |bencher| {
+        bencher.iter(|| {
+            black_box(a > b)
         })
     });
 }
@@ -64,9 +64,9 @@ fn pixels_min_max_benchmark(c: &mut Criterion) {
     let a = px(100.0);
     let b = px(50.0);
 
-    c.bench_function("Pixels::max", |b| {
-        b.iter(|| {
-            black_box(black_box(a).max(black_box(b)))
+    c.bench_function("Pixels::max", |bencher| {
+        bencher.iter(|| {
+            black_box(a.max(b))
         })
     });
 }
@@ -75,7 +75,7 @@ criterion_group!(
     conversion_benches,
     pixels_to_device_pixels_benchmark,
     device_pixels_to_pixels_benchmark,
-    pixels_scale_benchmark,
+    pixels_multiply_benchmark,
     pixels_arithmetic_benchmark,
     pixels_comparison_benchmark,
     pixels_min_max_benchmark

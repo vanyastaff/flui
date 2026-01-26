@@ -109,3 +109,61 @@ pub mod prelude {
 
     // Note: Animation types (Curve, Curves, Tween) moved to flui_animation::prelude
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Compile-Time Size Assertions (Memory Layout Contracts)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Compile-time assertions for memory layout contracts
+///
+/// These assertions ensure that core types maintain expected memory sizes
+/// across platforms and compiler versions. This is critical for:
+/// - Performance (small types passed by value, not reference)
+/// - Cache efficiency (types fit in cache lines)
+/// - ABI stability (size changes break binary compatibility)
+///
+/// If these assertions fail, it indicates a potential performance regression
+/// or breaking change that needs careful consideration.
+#[doc(hidden)]
+pub mod size_assertions {
+    use core::mem::size_of;
+
+    // Core geometry types - must be small enough to pass by value efficiently
+    const _: () = assert!(size_of::<crate::Pixels>() <= 4, "Pixels should be 4 bytes (f32)");
+    const _: () = assert!(
+        size_of::<crate::Point<crate::Pixels>>() <= 8,
+        "Point<Pixels> should be ≤8 bytes (2×f32)"
+    );
+    const _: () = assert!(
+        size_of::<crate::Size<crate::Pixels>>() <= 8,
+        "Size<Pixels> should be ≤8 bytes (2×f32)"
+    );
+    const _: () = assert!(
+        size_of::<crate::Rect<crate::Pixels>>() <= 16,
+        "Rect<Pixels> should be ≤16 bytes (4×f32)"
+    );
+    const _: () = assert!(
+        size_of::<crate::Offset<crate::Pixels>>() <= 8,
+        "Offset<Pixels> should be ≤8 bytes (2×f32)"
+    );
+
+    // Color types - single cache line
+    const _: () =
+        assert!(size_of::<crate::Color32>() <= 4, "Color32 should be 4 bytes (RGBA8)");
+    const _: () = assert!(
+        size_of::<crate::Color>() <= 16,
+        "Color should be ≤16 bytes (4×f32 RGBA)"
+    );
+
+    // Matrix - should fit in 64 bytes (single cache line)
+    const _: () = assert!(
+        size_of::<crate::Matrix4>() <= 64,
+        "Matrix4 should be ≤64 bytes (16×f32)"
+    );
+
+    // Edges - layout padding/margins
+    const _: () = assert!(
+        size_of::<crate::Edges<crate::Pixels>>() <= 16,
+        "Edges<Pixels> should be ≤16 bytes (4×f32)"
+    );
+}
