@@ -2,7 +2,7 @@
 
 use crate::geometry::{px, Offset, Pixels, Rect, Size};
 
-#[derive(Default)]
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ClipOp {
     #[default]
@@ -12,7 +12,7 @@ pub enum ClipOp {
     Difference,
 }
 
-#[derive(Default, Debug, Clone, PartialEq)]
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Clip {
     /// No clipping whatsoever.
@@ -60,7 +60,7 @@ impl Clip {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ClipBehavior {
     /// No clipping.
