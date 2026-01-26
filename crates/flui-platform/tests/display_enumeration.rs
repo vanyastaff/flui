@@ -1,6 +1,7 @@
-//! Display Enumeration Tests (Phase 7: T073-T081)
+//! Display Enumeration Tests
 //!
-//! Tests for display/monitor enumeration with DPI-aware bounds and refresh rates.
+//! Comprehensive tests for display/monitor enumeration with DPI-aware bounds,
+//! refresh rates, and multi-monitor support.
 
 use flui_platform::{current_platform, Platform, PlatformDisplay};
 use std::collections::HashSet;
@@ -12,7 +13,7 @@ fn init_tracing() {
         .try_init();
 }
 
-/// Test that platform.displays() returns all connected displays (T073)
+/// Test that platform.displays() returns all connected displays with valid properties
 #[test]
 fn test_displays_enumeration() {
     init_tracing();
@@ -89,7 +90,7 @@ fn test_displays_enumeration() {
     tracing::info!("✓ PASS: Display enumeration validated");
 }
 
-/// Test that platform.primary_display() returns OS-marked primary display (T074)
+/// Test that platform.primary_display() returns the OS-marked primary display
 #[test]
 fn test_primary_display_detection() {
     init_tracing();
@@ -141,7 +142,7 @@ fn test_primary_display_detection() {
     tracing::info!("✓ PASS: Primary display validated");
 }
 
-/// Test that 4K monitor (2x scale) returns scale_factor = 2.0 (T075)
+/// Test that HiDPI/Retina displays report scale factors >= 1.5
 #[test]
 fn test_high_dpi_scale_factor() {
     init_tracing();
@@ -226,7 +227,7 @@ fn test_high_dpi_scale_factor() {
     }
 }
 
-/// Test that display.usable_bounds() excludes taskbar/menu bar (T076)
+/// Test that display.usable_bounds() correctly excludes taskbar and menu bar areas
 #[test]
 fn test_usable_bounds_exclude_system_ui() {
     init_tracing();
@@ -296,7 +297,7 @@ fn test_usable_bounds_exclude_system_ui() {
     tracing::info!("✓ PASS: Usable bounds validated");
 }
 
-/// Verify Windows display enumeration via EnumDisplayMonitors (T077)
+/// Verify Windows display enumeration via EnumDisplayMonitors API
 #[test]
 #[cfg(windows)]
 fn test_windows_enum_display_monitors() {
@@ -344,7 +345,7 @@ fn test_windows_enum_display_monitors() {
     tracing::info!("✓ PASS: Windows display enumeration validated");
 }
 
-/// Skip test on non-Windows platforms (T077)
+/// Skip test on non-Windows platforms
 #[test]
 #[cfg(not(windows))]
 fn test_windows_enum_display_monitors() {
@@ -352,7 +353,7 @@ fn test_windows_enum_display_monitors() {
     tracing::info!("⊘ SKIP: Windows-specific test (not on Windows)");
 }
 
-/// Verify macOS display enumeration via NSScreen (T078)
+/// Verify macOS display enumeration via NSScreen API
 #[test]
 #[cfg(target_os = "macos")]
 fn test_macos_nsscreen_enumeration() {
@@ -400,7 +401,7 @@ fn test_macos_nsscreen_enumeration() {
     tracing::info!("✓ PASS: macOS display enumeration validated");
 }
 
-/// Skip test on non-macOS platforms (T078)
+/// Skip test on non-macOS platforms
 #[test]
 #[cfg(not(target_os = "macos"))]
 fn test_macos_nsscreen_enumeration() {
@@ -408,7 +409,7 @@ fn test_macos_nsscreen_enumeration() {
     tracing::info!("⊘ SKIP: macOS-specific test (not on macOS)");
 }
 
-/// Test that display bounds don't overlap incorrectly in multi-monitor setup (T079)
+/// Test that display bounds don't overlap incorrectly in multi-monitor configurations
 #[test]
 fn test_multi_monitor_bounds_arrangement() {
     init_tracing();
@@ -509,7 +510,7 @@ fn test_multi_monitor_bounds_arrangement() {
     tracing::info!("✓ PASS: Multi-monitor bounds arrangement validated");
 }
 
-/// Test that moving window between monitors fires ScaleFactorChanged (T080)
+/// Test that moving window between monitors fires ScaleFactorChanged event
 #[test]
 #[ignore] // Requires manual window dragging or programmatic window movement
 fn test_scale_factor_changed_event() {
@@ -559,7 +560,7 @@ fn test_scale_factor_changed_event() {
     tracing::info!("  - Verify WindowEvent::ScaleFactorChanged fires");
 }
 
-/// Benchmark display enumeration latency (<10ms with 4+ monitors) (T081)
+/// Benchmark display enumeration latency to ensure it's under 10ms even with multiple monitors
 #[test]
 fn test_display_enumeration_performance() {
     init_tracing();
