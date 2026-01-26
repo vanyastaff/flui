@@ -55,9 +55,14 @@ Given that feature description, do this:
       - Use N+1 for the new branch number
 
    d. Run the script `.specify/scripts/powershell/create-new-feature.ps1 -Json "$ARGUMENTS"` with the calculated number and short-name:
-      - Pass `--number N+1` and `--short-name "your-short-name"` along with the feature description
-      - Bash example: `.specify/scripts/powershell/create-new-feature.ps1 -Json "$ARGUMENTS" --json --number 5 --short-name "user-auth" "Add user authentication"`
-      - PowerShell example: `.specify/scripts/powershell/create-new-feature.ps1 -Json "$ARGUMENTS" -Json -Number 5 -ShortName "user-auth" "Add user authentication"`
+      - Pass `-Number N+1` and `-ShortName "your-short-name"` along with the feature description
+      - The script now uses **git worktree** by default for better isolation:
+        - Creates worktree at `../.worktrees/<branch-name>` (sibling to main repo)
+        - Each feature gets isolated directory - no branch switching needed
+        - Safe: never lose uncommitted work when switching features
+        - Can work on multiple features simultaneously
+      - PowerShell example: `pwsh .specify/scripts/powershell/create-new-feature.ps1 -Json -Number 5 -ShortName "user-auth" "Add user authentication"`
+      - Legacy mode (no worktree): Add `-NoWorktree` flag to use old `git checkout -b` behavior
 
    **IMPORTANT**:
    - Check all three sources (remote branches, local branches, specs directories) to find the highest number
@@ -65,8 +70,10 @@ Given that feature description, do this:
    - If no existing branches/directories found with this short-name, start with number 1
    - You must only ever run this script once per feature
    - The JSON is provided in the terminal as output - always refer to it to get the actual content you're looking for
-   - The JSON output will contain BRANCH_NAME and SPEC_FILE paths
+   - The JSON output will contain BRANCH_NAME, SPEC_FILE, WORKTREE_PATH, and USE_WORKTREE
    - For single quotes in args like "I'm Groot", use escape syntax: e.g 'I'\''m Groot' (or double-quote if possible: "I'm Groot")
+   - **Worktree Location**: When worktree is created, the SPEC_FILE will be in the worktree directory, not main repo
+   - **After Creation**: If worktree was used, inform user they can `cd <WORKTREE_PATH>` to work on the feature
 
 3. Load `.specify/templates/spec-template.md` to understand required sections.
 
@@ -192,7 +199,26 @@ Given that feature description, do this:
 
 7. Report completion with branch name, spec file path, checklist results, and readiness for the next phase (`/speckit.clarify` or `/speckit.plan`).
 
-**NOTE:** The script creates and checks out the new branch and initializes the spec file before writing.
+   **If worktree was created (USE_WORKTREE: true)**, inform the user:
+   ```
+   ✨ Feature created with git worktree isolation!
+   
+   📁 Worktree location: <WORKTREE_PATH>
+   📋 Spec file: <SPEC_FILE>
+   🌿 Branch: <BRANCH_NAME>
+   
+   To work on this feature:
+     cd "<WORKTREE_PATH>"
+   
+   Your main worktree remains untouched - you can work on both simultaneously!
+   
+   📚 Worktree management:
+     - List all: pwsh .specify/scripts/powershell/manage-worktrees.ps1 list
+     - Remove: pwsh .specify/scripts/powershell/manage-worktrees.ps1 remove <BRANCH_NAME>
+     - Docs: .specify/docs/worktree-workflow.md
+   ```
+
+**NOTE:** The script creates git worktree (or checks out branch in legacy mode) and initializes the spec file before writing.
 
 ## General Guidelines
 

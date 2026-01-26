@@ -339,6 +339,47 @@ fn test_container_padding() { /* ... */ }
 fn test_view_element_render_integration() { /* ... */ }
 ```
 
+**Test Naming Convention (MANDATORY):**
+```rust
+// ✅ CORRECT: Descriptive names and comments without task references
+#[test]
+fn test_displays_enumeration() {
+    // Verify platform returns all connected displays with valid properties
+}
+
+#[test]
+fn test_primary_display_detection() {
+    // Ensure exactly one display is marked as primary by the OS
+}
+
+#[test]
+fn test_high_dpi_scale_factor() {
+    // Validate HiDPI/Retina displays report scale factor >= 1.5
+}
+
+// ❌ WRONG: Task numbers in function names or comments
+#[test]
+fn test_t073_displays_enumeration() { /* BAD: T073 in name */ }
+
+#[test]
+fn test_displays_enumeration() {
+    // T073: Test display enumeration  /* BAD: T073 in comment */
+}
+
+#[test]
+fn test_displays_enumeration() { /* T073 */ /* BAD: will become orphaned */ }
+```
+
+**Test Naming and Documentation Rules:**
+- Use descriptive names that explain WHAT is being tested (behavior/feature)
+- NEVER include task numbers (T073, T080) in function names
+- NEVER reference task numbers in comments (specs/tasks get deleted, comments remain)
+- Use underscores to separate words (snake_case)
+- Start with `test_` prefix for test discovery
+- Add category prefix for large test suites: `test_window_`, `test_display_`, `test_event_`
+- Comments should describe the test's PURPOSE, not reference external tracking
+- Names and comments should be self-documenting without referencing task lists or specs
+
 **Test Infrastructure:**
 ```rust
 // Headless platform for CI (no GPU required)

@@ -366,12 +366,246 @@ pub trait PlatformExecutor: Send + Sync {
 ///
 /// This trait will be expanded later - for now it's a placeholder.
 /// Real implementation will handle font loading, text shaping, etc.
+/// Platform-native text measurement and glyph shaping abstraction
+///
+/// This trait provides the minimal interface needed for text layout and rendering.
+/// Platform implementations use native APIs:
+/// - Windows: DirectWrite (IDWriteFactory, IDWriteTextLayout)
+/// - macOS: Core Text (CTFont, CTLine, CTRun)
+/// - Linux: fontconfig + freetype
+///
+/// # Architecture
+///
+/// ```text
+/// flui-platform (this trait) → System font discovery + text measurement
+///         ↓
+/// flui-text (future) → Font registry, text layout, glyph shaping
+///         ↓
+/// flui_painting → GPU rendering with wgpu
+/// ```
+///
+/// # MVP Status
+///
+/// Current implementation provides **stubs** that return reasonable defaults.
+/// Full DirectWrite/Core Text integration is deferred to Phase 2.
+///
+/// See `specs/dev/plan.md` for full architecture design.
 pub trait PlatformTextSystem: Send + Sync {
     /// Get the system's default font family name
+    ///
+    /// Returns the OS default font for UI text:
+    /// - Windows: "Segoe UI"
+    /// - macOS: "SF Pro Text" (or ".AppleSystemUIFont")
+    /// - Linux: "sans-serif" or "Ubuntu"
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let text_system = platform.text_system();
+    /// let default_font = text_system.default_font_family();
+    /// assert_eq!(default_font, "Segoe UI"); // On Windows
+    /// ```
     fn default_font_family(&self) -> String {
-        "sans-serif".to_string()
+        #[cfg(windows)]
+        return "Segoe UI".to_string();
+
+        #[cfg(target_os = "macos")]
+        return "SF Pro Text".to_string();
+
+        #[cfg(target_os = "linux")]
+        return "Ubuntu".to_string();
+
+        #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
+        return "sans-serif".to_string();
+    }
+
+    /// Enumerate all available system fonts
+    ///
+    /// Returns a list of font family names installed on the system.
+    /// Used for font pickers and fallback chains.
+    ///
+    /// # Implementation Status
+    ///
+    /// **MVP**: Returns only the default font.
+    /// **Phase 2**: Query DirectWrite/Core Text for full font list.
+    ///
+    /// # Platform APIs
+    ///
+    /// - Windows: `IDWriteFontCollection::GetFontFamilyCount()` + iterate
+    /// - macOS: `CTFontManagerCopyAvailableFontFamilyNames()`
+    /// - Linux: `FcConfigGetFonts()` from fontconfig
+    fn enumerate_system_fonts(&self) -> Vec<String> {
+        vec![self.default_font_family()]
+    }
+
+    /// Load a system font by family name
+    ///
+    /// Returns the raw font file bytes (TrueType or OpenType) for the given
+    /// font family. This allows flui-text to register system fonts with
+    /// cosmic-text or other text engines.
+    ///
+    /// # Arguments
+    ///
+    /// * `family` - Font family name (e.g., "Arial", "SF Pro Text")
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Vec<u8>)` - Raw .ttf or .otf file bytes
+    /// * `Err(TextSystemError)` - Font not found or access error
+    ///
+    /// # Implementation Status
+    ///
+    /// **MVP**: Returns `Err(TextSystemError::NotImplemented)`.
+    /// **Phase 2**: Extract font data from DirectWrite/Core Text.
+    ///
+    /// # Platform APIs
+    ///
+    /// - Windows: `IDWriteFont::CreateFontFace()` → `GetFiles()` → read
+    /// - macOS: `CTFontCopyTable()` to extract OpenType tables
+    /// - Linux: `FcConfigSubstitute()` → `FcFontMatch()` → read file path
+    fn load_system_font(&self, family: &str) -> Result<Vec<u8>, TextSystemError> {
+        let _ = family;
+        Err(TextSystemError::NotImplemented)
+    }
+
+    /// Measure text bounding box
+    ///
+    /// Calculates the layout bounds for the given text string with specified
+    /// font and size. Used by layout engine to determine widget sizes.
+    ///
+    /// # Arguments
+    ///
+    /// * `text` - Text to measure (UTF-8, may contain emoji/CJK)
+    /// * `font_family` - Font family name
+    /// * `font_size` - Font size in logical pixels
+    ///
+    /// # Returns
+    ///
+    /// Rectangle containing the text bounds in logical pixels.
+    /// Origin (0, 0) is at the baseline start.
+    ///
+    /// # Implementation Status
+    ///
+    /// **MVP**: Returns approximate bounds (10px per character).
+    /// **Phase 2**: Use DirectWrite/Core Text for accurate measurement.
+    ///
+    /// # Platform APIs
+    ///
+    /// - Windows: `IDWriteTextLayout::GetMetrics()`
+    /// - macOS: `CTLineGetBounds()` or `CTLineGetTypographicBounds()`
+    fn measure_text(
+        &self,
+        text: &str,
+        font_family: &str,
+        font_size: f32,
+    ) -> flui_types::geometry::Rect<flui_types::geometry::Pixels> {
+        let _ = font_family;
+
+        use flui_types::geometry::{px, Point, Rect, Size};
+
+        // Approximate: 0.6em per character width (typical for Latin text)
+        let char_count = text.chars().count() as f32;
+        let approx_width = char_count * font_size * 0.6;
+        let approx_height = font_size * 1.2; // Include line height
+
+        Rect::from_origin_size(
+            Point::new(px(0.0), px(0.0)),
+            Size::new(px(approx_width), px(approx_height)),
+        )
+    }
+
+    /// Shape text to positioned glyphs
+    ///
+    /// Converts text string to a list of glyphs with positions, ready for
+    /// rendering. Handles complex text layout (ligatures, kerning, etc.).
+    ///
+    /// # Arguments
+    ///
+    /// * `text` - Text to shape (UTF-8, may contain emoji/CJK/RTL)
+    /// * `font_family` - Font family name
+    /// * `font_size` - Font size in logical pixels
+    ///
+    /// # Returns
+    ///
+    /// Vector of positioned glyphs with glyph IDs and offsets.
+    ///
+    /// # Implementation Status
+    ///
+    /// **MVP**: Returns empty vector (no glyph data).
+    /// **Phase 2**: Use DirectWrite/Core Text for glyph shaping.
+    ///
+    /// # Platform APIs
+    ///
+    /// - Windows: `IDWriteTextAnalyzer::GetGlyphs()` + `GetGlyphPlacements()`
+    /// - macOS: `CTLineGetGlyphRuns()` → `CTRunGetGlyphs()` + positions
+    fn shape_glyphs(
+        &self,
+        text: &str,
+        font_family: &str,
+        font_size: f32,
+    ) -> Vec<GlyphPosition> {
+        let _ = (text, font_family, font_size);
+
+        // MVP: Return empty - rendering will use fallback
+        Vec::new()
     }
 }
+
+/// Positioned glyph for rendering
+///
+/// Represents a single glyph with its position offset from the text origin.
+/// Coordinates are in logical pixels.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GlyphPosition {
+    /// Glyph ID from the font (index into glyph table)
+    pub glyph_id: u32,
+
+    /// Horizontal offset from text origin (logical pixels)
+    pub x_offset: f32,
+
+    /// Vertical offset from text origin (logical pixels)
+    pub y_offset: f32,
+
+    /// Advance width to next glyph (logical pixels)
+    pub x_advance: f32,
+}
+
+/// Text system errors
+#[derive(Debug, Clone, PartialEq)]
+pub enum TextSystemError {
+    /// Feature not yet implemented (MVP stub)
+    NotImplemented,
+
+    /// Font family not found on system
+    FontNotFound(String),
+
+    /// Failed to load font data
+    LoadFailed(String),
+
+    /// Platform API error (DirectWrite, Core Text, etc.)
+    PlatformError(String),
+}
+
+impl std::fmt::Display for TextSystemError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TextSystemError::NotImplemented => {
+                write!(f, "Text system feature not implemented (MVP stub)")
+            }
+            TextSystemError::FontNotFound(family) => {
+                write!(f, "Font family '{}' not found on system", family)
+            }
+            TextSystemError::LoadFailed(msg) => {
+                write!(f, "Failed to load font: {}", msg)
+            }
+            TextSystemError::PlatformError(msg) => {
+                write!(f, "Platform text system error: {}", msg)
+            }
+        }
+    }
+}
+
+impl std::error::Error for TextSystemError {}
 
 /// Clipboard operations
 pub trait Clipboard: Send + Sync {

@@ -94,8 +94,9 @@ impl Platform for MacOSPlatform {
     }
 
     fn text_system(&self) -> Arc<dyn PlatformTextSystem> {
-        // TODO: Implement Core Text system
-        unimplemented!("macOS Core Text system not yet implemented")
+        // TODO: Implement Core Text system (Phase 2)
+        // For now, uses trait default methods (stub implementation)
+        Arc::new(DummyTextSystem)
     }
 
     fn run(&self, on_finish_launching: Box<dyn FnOnce()>) {
@@ -215,3 +216,9 @@ impl Drop for MacOSPlatform {
         // NSApplication is a singleton, no need to release
     }
 }
+
+// ==================== Dummy Implementations ====================
+
+struct DummyTextSystem;
+
+impl PlatformTextSystem for DummyTextSystem {}
