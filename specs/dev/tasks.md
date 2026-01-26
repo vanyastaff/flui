@@ -1,0 +1,333 @@
+# Implementation Tasks: flui-platform MVP - Cross-Platform Support
+
+**Feature**: flui-platform cross-platform abstraction layer  
+**Branch**: `dev`  
+**Generated**: 2026-01-26  
+**Status**: Ready for implementation
+
+## Task Format
+
+```
+- [ ] T### [P?] [US#] Task description with file path
+```
+
+**Markers**:
+- `[P]` = Parallelizable (can work independently)
+- `[US#]` = User Story number (US1-US6)
+- File paths indicate primary file to modify/create
+
+## Phase 1: Setup & Initialization
+
+**Goal**: Prepare development environment and verify workspace state.
+
+- [ ] T001 Verify workspace compilation with `cargo build --workspace`
+- [ ] T002 Run existing test suite to establish baseline: `cargo test -p flui-platform`
+- [ ] T003 [P] Set up tracing infrastructure in examples for debugging
+- [ ] T004 [P] Verify Windows platform tests pass (clipboard, window management, events)
+- [ ] T005 [P] Verify headless platform tests pass for CI compatibility
+
+**Acceptance**: All existing tests pass, workspace compiles clean, tracing available in examples.
+
+---
+
+## Phase 2: Foundational (Blocking Prerequisites)
+
+**Goal**: Complete dependencies and infrastructure required by all user stories.
+
+- [ ] T006 Add `raw-window-handle = "0.6"` to Cargo.toml for wgpu integration
+- [ ] T007 Add `waker-fn = "1.2.0"` to Cargo.toml for executor improvements
+- [ ] T008 [P] Document platform detection logic in `current_platform()` function
+- [ ] T009 [P] Add contract test infrastructure for Platform trait compliance
+- [ ] T010 Create integration test template for cross-crate testing (flui-platform + flui_painting)
+
+**Acceptance**: Dependencies added, contract test framework ready, documentation updated.
+
+---
+
+## Phase 3: User Story 1 - Native Window Creation and Management (P1) 🎯 MVP
+
+**Goal**: Windows and macOS native window management with full lifecycle control.
+
+**Files**: `crates/flui-platform/src/platforms/{windows,macos}/window.rs`, `crates/flui-platform/src/traits/window.rs`
+
+### T011-T015: Window Lifecycle
+
+- [ ] T011 [US1] Write test: Create window with WindowOptions (title, size, decorations)
+- [ ] T012 [US1] Write test: Window close event fires on CloseRequested
+- [ ] T013 [US1] Verify WindowsPlatform window creation (already implemented)
+- [ ] T014 [US1] Verify macOS window creation compiles and test on hardware
+- [ ] T015 [US1] Write integration test: Create multiple concurrent windows
+
+### T016-T020: Window Modes and DPI
+
+- [ ] T016 [US1] Write test: Set window mode (Normal, Maximized, Fullscreen)
+- [ ] T017 [US1] Verify mode transitions on Windows platform
+- [ ] T018 [US1] Verify mode transitions on macOS platform
+- [ ] T019 [US1] Write test: DPI scaling change fires ScaleFactorChanged event
+- [ ] T020 [US1] Verify per-monitor DPI v2 on Windows, Retina support on macOS
+
+### T021-T023: Redraw and Events
+
+- [ ] T021 [US1] Write test: `window.request_redraw()` fires RedrawRequested event
+- [ ] T022 [US1] Write test: Window resize fires Resized event with new logical size
+- [ ] T023 [US1] Add contract test: All platforms implement window lifecycle identically
+
+**Acceptance**: All window management tests pass on Windows, macOS, and Headless. Multi-window scenarios work correctly.
+
+---
+
+## Phase 4: User Story 2 - Text System Integration for Rendering (P1) 🎯 MVP
+
+**Goal**: Platform-native text measurement and shaping (DirectWrite/Core Text).
+
+**Files**: `crates/flui-platform/src/platforms/{windows,macos}/text_system.rs`, `crates/flui-platform/src/traits/text_system.rs`
+
+### T024-T028: Text System Foundation
+
+- [ ] T024 [US2] Define PlatformTextSystem trait with font loading, text measurement, glyph shaping
+- [ ] T025 [US2] Write test: Load default font family returns platform font (Segoe UI/SF Pro Text)
+- [ ] T026 [US2] Write test: Measure text bounds for ASCII string with font size 16pt
+- [ ] T027 [US2] Write test: Measure text with emoji/CJK characters returns correct width
+- [ ] T028 [US2] Write test: Font fallback when requested family doesn't exist
+
+### T029-T035: Windows DirectWrite Integration
+
+- [ ] T029 [P] [US2] Implement DirectWrite initialization in WindowsPlatform
+- [ ] T030 [P] [US2] Implement font family enumeration via DirectWrite in `crates/flui-platform/src/platforms/windows/text_system.rs`
+- [ ] T031 [P] [US2] Implement text measurement (bounding box) via DirectWrite
+- [ ] T032 [P] [US2] Implement glyph shaping (positioned glyphs) via DirectWrite
+- [ ] T033 [P] [US2] Add Unicode 15.0 support verification (emoji, CJK, Cyrillic, Arabic)
+- [ ] T034 [P] [US2] Benchmark text measurement latency (<1ms for <100 char strings)
+- [ ] T035 [P] [US2] Add integration test with flui_painting Canvas API
+
+### T036-T042: macOS Core Text Integration
+
+- [ ] T036 [P] [US2] Implement Core Text initialization in MacOSPlatform
+- [ ] T037 [P] [US2] Implement font family enumeration via Core Text in `crates/flui-platform/src/platforms/macos/text_system.rs`
+- [ ] T038 [P] [US2] Implement text measurement (bounding box) via Core Text
+- [ ] T039 [P] [US2] Implement glyph shaping (positioned glyphs) via Core Text
+- [ ] T040 [P] [US2] Add Unicode 15.0 support verification (emoji, CJK, Cyrillic, Arabic)
+- [ ] T041 [P] [US2] Benchmark text measurement latency (<1ms for <100 char strings)
+- [ ] T042 [P] [US2] Test text system on real macOS hardware
+
+### T043-T045: Contract Tests and Documentation
+
+- [ ] T043 [US2] Add contract test: Windows and macOS text systems return identical results for same input
+- [ ] T044 [US2] Document text system integration with flui_painting in quickstart.md
+- [ ] T045 [US2] Create example: Text measurement and glyph rendering in `crates/flui-platform/examples/text_measurement.rs`
+
+**Acceptance**: Text measurement works on Windows and macOS with <1ms latency. Integration with flui_painting verified. Contract tests pass.
+
+---
+
+## Phase 5: User Story 3 - Cross-Platform Event Handling (P1) 🎯 MVP
+
+**Goal**: W3C-standard event types for consistent cross-platform interaction.
+
+**Files**: `crates/flui-platform/src/events/`, `crates/flui-platform/src/platforms/{windows,macos}/event_loop.rs`
+
+### T046-T050: Event Infrastructure
+
+- [ ] T046 [US3] Write test: Mouse click fires PointerEvent::Down(Primary) with logical coordinates
+- [ ] T047 [US3] Write test: Keyboard press with modifier fires KeyboardEvent with Modifiers::CONTROL
+- [ ] T048 [US3] Write test: Window resize fires WindowEvent::Resized with new logical size
+- [ ] T049 [US3] Write test: Mouse movement fires PointerEvent::Move with PixelDelta
+- [ ] T050 [US3] Write test: Multi-touch fires separate PointerEvent per touch point with unique ID
+
+### T051-T055: Windows Event Handling
+
+- [ ] T051 [P] [US3] Verify WM_LBUTTONDOWN → PointerEvent conversion in `crates/flui-platform/src/platforms/windows/event_loop.rs`
+- [ ] T052 [P] [US3] Verify WM_KEYDOWN → KeyboardEvent conversion with Key enum
+- [ ] T053 [P] [US3] Verify WM_SIZE → WindowEvent::Resized conversion
+- [ ] T054 [P] [US3] Add tracing instrumentation to measure event dispatch latency (<5ms)
+- [ ] T055 [P] [US3] Verify modifier key handling (Ctrl, Shift, Alt, Win)
+
+### T056-T060: macOS Event Handling
+
+- [ ] T056 [P] [US3] Verify NSEvent → PointerEvent conversion in `crates/flui-platform/src/platforms/macos/event_loop.rs`
+- [ ] T057 [P] [US3] Verify NSEvent → KeyboardEvent conversion with Key enum
+- [ ] T058 [P] [US3] Verify window resize → WindowEvent::Resized conversion
+- [ ] T059 [P] [US3] Add tracing instrumentation to measure event dispatch latency (<5ms)
+- [ ] T060 [P] [US3] Verify modifier key handling (Cmd, Ctrl, Shift, Alt, Fn)
+
+### T061-T063: Contract Tests and Examples
+
+- [ ] T061 [US3] Add contract test: All platforms emit identical W3C events for same OS input
+- [ ] T062 [US3] Create example: Event handler demo in `crates/flui-platform/examples/event_handling.rs`
+- [ ] T063 [US3] Benchmark event dispatch latency across platforms (<5ms from OS to callback)
+
+**Acceptance**: All event types work on Windows and macOS. Event dispatch latency <5ms. Contract tests pass.
+
+---
+
+## Phase 6: User Story 4 - Headless Platform for CI/Testing (P2)
+
+**Goal**: Run all platform API tests in CI without GPU or display server.
+
+**Files**: `crates/flui-platform/src/platforms/headless/`, `crates/flui-platform/tests/`
+
+### T064-T069: Headless Implementation
+
+- [ ] T064 [P] [US4] Write test: `current_platform()` returns HeadlessPlatform when FLUI_HEADLESS=1
+- [ ] T065 [P] [US4] Write test: Headless window creation returns mock window (no OS window)
+- [ ] T066 [P] [US4] Verify headless clipboard roundtrip (in-memory storage)
+- [ ] T067 [P] [US4] Write test: Headless executor runs tasks immediately on calling thread
+- [ ] T068 [P] [US4] Write test: Parallel test execution has no race conditions
+- [ ] T069 [P] [US4] Verify all existing tests pass in headless mode: `FLUI_HEADLESS=1 cargo test -p flui-platform`
+
+### T070-T072: CI Integration
+
+- [ ] T070 [US4] Document headless mode usage in quickstart.md
+- [ ] T071 [US4] Create CI configuration example for GitHub Actions
+- [ ] T072 [US4] Add integration test: Full test suite runs in <30s in headless mode
+
+**Acceptance**: All tests pass in headless mode. CI-friendly with no GPU/display requirements.
+
+---
+
+## Phase 7: User Story 5 - Display/Monitor Enumeration (P2)
+
+**Goal**: Query connected displays with DPI-aware bounds and refresh rates.
+
+**Files**: `crates/flui-platform/src/platforms/{windows,macos}/display.rs`, `crates/flui-platform/src/traits/display.rs`
+
+### T073-T078: Display Enumeration
+
+- [ ] T073 [P] [US5] Write test: `platform.displays()` returns all connected displays
+- [ ] T074 [P] [US5] Write test: `platform.primary_display()` returns OS-marked primary display
+- [ ] T075 [P] [US5] Write test: 4K monitor (2x scale) returns scale_factor = 2.0
+- [ ] T076 [P] [US5] Write test: `display.usable_bounds()` excludes taskbar/menu bar
+- [ ] T077 [P] [US5] Verify Windows display enumeration via EnumDisplayMonitors
+- [ ] T078 [P] [US5] Verify macOS display enumeration via NSScreen
+
+### T079-T081: Multi-Monitor Support
+
+- [ ] T079 [US5] Write test: Display bounds don't overlap incorrectly in multi-monitor setup
+- [ ] T080 [US5] Write test: Moving window between monitors fires ScaleFactorChanged
+- [ ] T081 [US5] Benchmark display enumeration latency (<10ms with 4+ monitors)
+
+### T082-T083: Documentation and Examples
+
+- [ ] T082 [US5] Create example: Display enumeration in `crates/flui-platform/examples/displays.rs`
+- [ ] T083 [US5] Document multi-monitor best practices in quickstart.md
+
+**Acceptance**: Display enumeration works on Windows and macOS. Multi-monitor scenarios tested. Enumeration <10ms.
+
+---
+
+## Phase 8: User Story 6 - Async Executor System (P3)
+
+**Goal**: Background executor for CPU/IO tasks, foreground executor for UI thread.
+
+**Files**: `crates/flui-platform/src/executors/`, `crates/flui-platform/src/platforms/{windows,macos}/executor.rs`
+
+### T084-T089: Executor Infrastructure
+
+- [ ] T084 [P] [US6] Write test: Background executor runs task on worker thread (not UI thread)
+- [ ] T085 [P] [US6] Write test: Foreground executor runs task on next event loop iteration
+- [ ] T086 [P] [US6] Write test: Background task callback can safely update UI state
+- [ ] T087 [P] [US6] Write test: Multiple background tasks execute in parallel
+- [ ] T088 [P] [US6] Write test: Foreground tasks execute in FIFO order
+- [ ] T089 [P] [US6] Verify BackgroundExecutor is Send+Sync, ForegroundExecutor is !Send
+
+### T090-T094: Platform Integration
+
+- [ ] T090 [P] [US6] Verify Windows executor integration with Win32 message pump
+- [ ] T091 [P] [US6] Verify macOS executor integration with CFRunLoop
+- [ ] T092 [P] [US6] Add `drain_tasks()` call in event loop for foreground executor
+- [ ] T093 [P] [US6] Benchmark executor spawn overhead (<100µs)
+- [ ] T094 [P] [US6] Create example: Background task with UI update in `crates/flui-platform/examples/executor.rs`
+
+### T095-T096: Documentation
+
+- [ ] T095 [US6] Document executor usage patterns in quickstart.md
+- [ ] T096 [US6] Add async/await integration example with tokio runtime
+
+**Acceptance**: Executors work on Windows and macOS. Background tasks don't block UI. Spawn overhead <100µs.
+
+---
+
+## Phase 9: Frame Scheduling (Post-MVP Enhancement)
+
+**Goal**: 60 FPS frame scheduling for animations and continuous rendering.
+
+**Files**: `crates/flui-platform/src/platforms/{windows,macos}/frame_scheduler.rs`
+
+### T097-T102: Frame Scheduler
+
+- [ ] T097 [P] Implement Windows frame scheduling with SetTimer or manual timing
+- [ ] T098 [P] Implement macOS frame scheduling with CVDisplayLink or NSTimer
+- [ ] T099 [P] Write test: Frame callback fires at ~60 FPS (16.67ms ±2ms)
+- [ ] T100 [P] Write test: On-demand rendering (ControlFlow::Wait) works correctly
+- [ ] T101 [P] Add frame time tracing for performance monitoring
+- [ ] T102 [P] Create example: Animation loop in `crates/flui-platform/examples/animation.rs`
+
+**Acceptance**: Frame scheduling works at 60 FPS with <2ms jitter on both platforms.
+
+---
+
+## Phase 10: Cross-Cutting Concerns & Polish
+
+**Goal**: Achieve 70% test coverage, complete documentation, pass all quality gates.
+
+### T103-T110: Testing and Coverage
+
+- [ ] T103 [P] Run code coverage analysis: `cargo tarpaulin -p flui-platform`
+- [ ] T104 [P] Add tests to reach ≥70% coverage target
+- [ ] T105 [P] Verify contract tests pass for all Platform trait implementations
+- [ ] T106 [P] Add integration tests for edge cases (invalid window size, missing font, etc.)
+- [ ] T107 [P] Write clipboard edge case tests (empty string, large text >1MB)
+- [ ] T108 [P] Add multi-window stress test (create/destroy 50+ windows)
+- [ ] T109 [P] Add memory leak test (heap profiler verification)
+- [ ] T110 [P] Verify all examples compile and run without errors
+
+### T111-T115: Documentation
+
+- [ ] T111 [P] Complete rustdoc for all public types, traits, and methods
+- [ ] T112 [P] Add examples to all non-trivial public APIs
+- [ ] T113 [P] Update IMPLEMENTATION_STATUS.md with final completion percentages
+- [ ] T114 [P] Review and update ARCHITECTURE.md with final design decisions
+- [ ] T115 [P] Add troubleshooting section to quickstart.md for common issues
+
+### T116-T120: Performance Verification
+
+- [ ] T116 [P] Benchmark text measurement latency (<1ms target)
+- [ ] T117 [P] Benchmark event dispatch latency (<5ms target)
+- [ ] T118 [P] Benchmark clipboard roundtrip (<1ms target)
+- [ ] T119 [P] Benchmark display enumeration (<10ms target)
+- [ ] T120 [P] Benchmark executor spawn overhead (<100µs target)
+
+### T121-T125: Quality Gates
+
+- [ ] T121 Run full workspace build: `cargo build --workspace`
+- [ ] T122 Run clippy with -D warnings: `cargo clippy --workspace -- -D warnings`
+- [ ] T123 Run formatter check: `cargo fmt --all -- --check`
+- [ ] T124 Run full test suite: `cargo test --workspace`
+- [ ] T125 Run headless CI test: `FLUI_HEADLESS=1 cargo test -p flui-platform`
+
+**Acceptance**: ≥70% test coverage, all documentation complete, all benchmarks meet targets, all quality gates pass.
+
+---
+
+## Summary
+
+**Total Tasks**: 125  
+**Parallelizable**: ~75 tasks (marked with `[P]`)  
+**Critical Path**: T001-T010 (Setup) → T024-T045 (Text System) → T046-T063 (Events) → T103-T125 (Polish)
+
+**Estimated Timeline**:
+- Phase 1-2 (Setup): 1-2 days
+- Phase 3 (Window Management): 2-3 days
+- Phase 4 (Text System): 1-2 weeks ⚠️ CRITICAL PATH
+- Phase 5 (Event Handling): 3-4 days
+- Phase 6-8 (P2/P3 Stories): 1 week
+- Phase 9-10 (Polish): 3-5 days
+
+**MVP Completion**: 2-3 weeks (phases 1-5 + phase 10)
+
+**Priority Order**: P1 stories (US1-US3) → P2 stories (US4-US5) → P3 stories (US6) → Frame Scheduling → Polish
+
+**Parallel Work Opportunities**:
+- Windows and macOS implementations can proceed independently (all `[P]` tasks)
+- Documentation can be written alongside implementation
+- Benchmarks can run in parallel with test development
