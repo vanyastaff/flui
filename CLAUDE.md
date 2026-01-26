@@ -23,6 +23,25 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## AI Assistant Guidelines
 
+### Constitution Compliance
+
+**CRITICAL:** All work must align with `.specify/memory/constitution.md` (v1.2.0). Key principles:
+
+1. **Test-First for Public APIs** - Write tests BEFORE implementation, verify red state
+2. **Type Safety First** - Foundation crates MAY use generics, Application crates MUST use concrete types
+3. **Never use println!/eprintln!** - Always use `tracing` for logging
+4. **On-demand rendering** - Use `ControlFlow::Wait`, not constant 60 FPS loops
+5. **Coverage Requirements**: Core ≥80%, Platform ≥70%, Widget ≥85%
+6. **ID Offset Pattern**: Slab uses 0-based, IDs use 1-based (NonZeroUsize)
+
+### OpenSpec Workflow
+
+**For large changes** (new features, breaking changes, architecture shifts):
+1. Check if similar work exists in `specs/` or `openspec/changes/`
+2. Create proposal with `/openspec:proposal` or `/speckit.plan`
+3. Follow spec → plan → tasks → implementation workflow
+4. See OpenSpec instructions at top of this file
+
 ### MCP Servers
 
 **Context7** - Library documentation (wgpu, lyon, glam, etc.):
@@ -49,12 +68,13 @@ View Tree (immutable) → Element Tree (mutable) → Render Tree (layout/paint)
 ```
 
 **Modular Design:** 20+ specialized crates organized in layers:
-- **Foundation:** `flui_types`, `flui-foundation`, `flui-tree`
+- **Foundation:** `flui_types`, `flui-foundation`, `flui-tree`, `flui-platform`
 - **Framework:** `flui-view`, `flui-reactivity`, `flui-scheduler`, `flui_core`
 - **Rendering:** `flui_painting`, `flui_engine`, `flui_rendering`
 - **Widget:** `flui_widgets`, `flui_animation`, `flui_interaction`
-- **Application:** `flui_app`, `flui_assets`
+- **Application:** `flui_app`, `flui_assets`, `flui_log`
 - **Tools:** `flui_devtools`, `flui_cli`, `flui_build`
+- **Layer System:** `flui-layer` (compositing), `flui-semantics` (accessibility)
 
 ### Flutter Reference Sources
 
@@ -65,14 +85,36 @@ View Tree (immutable) → Element Tree (mutable) → Render Tree (layout/paint)
 
 **Usage:** Check Flutter's approach before implementing new features, then adapt to Rust idioms (type-safe arity, Ambassador delegation, no nullability).
 
+### Development Specs and Plans
+
+`specs/` directory contains feature specifications and implementation plans:
+- `specs/dev/` - Current active development (flui-platform MVP)
+  - `spec.md` - Feature specification with user stories and requirements
+  - `plan.md` - Implementation plan with phases and technical approach
+  - `research.md` - Research findings and architectural decisions
+  - `quickstart.md` - Developer quick start guide
+  - `tasks.md` - Detailed task breakdown (125 tasks organized by phase)
+
+**When to check specs:**
+- Before implementing new features
+- When modifying existing platform code
+- To understand current priorities (P1 = MVP critical, P2 = important, P3 = nice-to-have)
+- For task assignment and parallel work opportunities (marked with `[P]`)
+
 ### Current Development Focus
 
-**IMPORTANT:** Workspace focused on `flui_rendering` development. Many crates temporarily disabled in `Cargo.toml`.
+**IMPORTANT:** Workspace in platform integration phase. Many high-level crates temporarily disabled in `Cargo.toml`.
 
-**Active crates:**
+**Active crates (Phase 1-2):**
 - Foundation: `flui_types`, `flui-foundation`, `flui-tree`
+- Platform: `flui-platform` (MVP development - cross-platform support)
 - Core: `flui-layer`, `flui-semantics`, `flui_interaction`, `flui_painting`
-- Target: `flui_rendering` (ACTIVE DEVELOPMENT)
+- Framework: `flui-scheduler`, `flui_engine`, `flui_log`, `flui_app`
+
+**Temporarily disabled until integration complete:**
+- `flui_rendering`, `flui-view`, `flui_animation`, `flui-reactivity`, `flui_widgets`, `flui_devtools`, `flui_cli`, `flui_build`
+
+**Current Priority**: Complete flui-platform MVP (see `specs/dev/` for detailed plan and tasks)
 
 ## Essential Build Commands
 
@@ -98,6 +140,7 @@ RUST_LOG=debug cargo test -p flui_rendering
 
 ### Slash Commands
 
+**FLUI-specific:**
 ```bash
 /flui:build-crate <name>    # Build crate with deps
 /flui:test-crate <name>     # Test specific crate
@@ -108,10 +151,21 @@ RUST_LOG=debug cargo test -p flui_rendering
 /flui:new-widget <name>     # Create new widget
 /flui:profile               # Profile performance
 /flui:android               # Build for Android
+```
 
+**OpenSpec workflow (large changes):**
+```bash
 /openspec:proposal          # Create change proposal
 /openspec:apply <name>      # Apply approved change
 /openspec:archive <name>    # Archive deployed change
+```
+
+**Speckit workflow (feature planning):**
+```bash
+/speckit.constitution       # Create/update constitution
+/speckit.plan               # Create implementation plan
+/speckit.clarify            # Identify spec ambiguities
+/speckit.tasks              # Generate task breakdown
 ```
 
 ## Code Architecture
@@ -163,6 +217,45 @@ Three phases: **Build** → **Layout** → **Paint**
 - `BuildPhase` - Widget rebuilds via `BuildOwner`
 - `LayoutPhase` - Size computation via `RenderTree`
 - `PaintPhase` - Layer generation via `PaintContext`
+
+### Platform Abstraction (flui-platform)
+
+**CRITICAL for MVP**: Cross-platform window management, text systems, and event handling.
+
+**Architecture:**
+```rust
+// Platform trait with lifecycle and abstractions
+pub trait Platform {
+    fn run(&self, ready: Box<dyn FnOnce()>);
+    fn open_window(&self, options: WindowOptions) -> Result<Box<dyn PlatformWindow>>;
+    fn text_system(&self) -> Arc<dyn PlatformTextSystem>;
+    fn background_executor(&self) -> Arc<dyn PlatformExecutor>;
+    fn clipboard(&self) -> Arc<dyn PlatformClipboard>;
+}
+
+// Get platform with automatic detection
+let platform = current_platform(); // Windows, macOS, or Headless
+```
+
+**Implementations:**
+- **WindowsPlatform** - Native Win32 API (100% complete)
+- **MacOSPlatform** - Native AppKit/Cocoa (90% complete, needs hardware testing)
+- **HeadlessPlatform** - Testing/CI without GPU (100% complete)
+- **WinitPlatform** - Cross-platform fallback (in progress)
+
+**Key Patterns:**
+- **Callback registry** (GPUI-inspired) - `on_quit()`, `on_window_event()`, `on_reopen()`
+- **Type erasure** - `Box<dyn PlatformWindow>`, `Arc<dyn PlatformTextSystem>`
+- **W3C events** - Use `ui-events` crate for cross-platform consistency
+- **Executor split** - Background (tokio) + Foreground (flume channel)
+
+**Text System Integration:**
+- Windows: DirectWrite for font loading, shaping, metrics
+- macOS: Core Text equivalent
+- Returns glyph positions for flui_painting Canvas API
+- Critical blocker for MVP (1-2 weeks estimated)
+
+See `specs/dev/` for detailed platform MVP plan and tasks.
 
 ## Logging and Debugging
 
@@ -307,14 +400,29 @@ impl RenderCustom {
 
 ## Key Dependencies
 
-- **wgpu 25.x** - GPU API (stay on 25.x, 26.0+ has codespan-reporting issues)
+**Core dependencies:**
+- **wgpu 25.x** - GPU API (stay on 25.x, 26.0+ has codespan-reporting issues - see https://github.com/gfx-rs/wgpu/issues/7915)
 - **parking_lot 0.12** - High-performance sync primitives (2-3x faster than std)
 - **tokio 1.43** - Async runtime (LTS until March 2026)
-- **tracing** - Structured logging (required, never println!)
-- **ambassador 0.4.2** - Trait delegation
-- **slab** - Tree node storage
+- **tracing** - Structured logging (MANDATORY, never println!)
+- **ambassador 0.4.2** - Trait delegation for RenderObject traits
+- **slab** - Tree node storage with O(1) insert/remove
+- **bon 3.8** - Builder pattern for complex widgets
 
-**Engine only:** glam 0.30, lyon, glyphon, cosmic-text
+**Platform dependencies:**
+- **winit 0.30.12** - Cross-platform windowing (fallback implementation)
+- **arboard 3.4** - Cross-platform clipboard
+- **windows 0.52** - Win32 API bindings (WindowsPlatform)
+- **cocoa 0.26.0** - AppKit bindings (MacOSPlatform)
+- **ui-events** - W3C-standard event types
+- **keyboard-types** - Platform-agnostic keyboard events
+
+**Engine-only dependencies:**
+- **glam 0.30** - GPU math (vectors, matrices)
+- **lyon** - Path tessellation to triangles
+- **glyphon** - SDF text rendering
+- **cosmic-text** - Text layout and shaping
+- **guillotiere** - Texture atlas packing
 
 ## Git Workflow
 
@@ -354,12 +462,15 @@ cargo clippy -p flui_rendering -- -D warnings
 
 ## Development Workflow Tips
 
-1. **Check workspace state** - Use `cargo metadata` or check `Cargo.toml`
-2. **Use slash commands** - Faster than cargo commands
-3. **Enable logging** - `RUST_LOG=debug` catches issues early
-4. **Build in dependency order** - Foundation → Core → Rendering
-5. **Use tracing, not println** - Essential for debugging
-6. **Check OpenSpec** - Large changes need proposals
-7. **Reference Flutter first** - Check `.flutter/` before implementing
-8. **Use Context7 proactively** - Fetch docs for external libraries
-9. **Batch file operations** - `read_multiple_files` for efficiency
+1. **Read constitution first** - `.specify/memory/constitution.md` governs all development
+2. **Check workspace state** - Many crates disabled in `Cargo.toml`, verify before building
+3. **Test-first for public APIs** - Write failing tests BEFORE implementation
+4. **Use tracing, NEVER println** - Constitution requirement, essential for debugging
+5. **Check current specs** - See `specs/dev/` for active development plans
+6. **Enable logging** - `RUST_LOG=debug` or `RUST_LOG=trace` catches issues early
+7. **Build in dependency order** - Foundation → Platform → Core → Rendering → Widget → App
+8. **Reference Flutter first** - Check `.flutter/` directory before implementing new features
+9. **Use Context7 proactively** - Fetch docs for external libraries (wgpu, winit, etc.)
+10. **Batch file operations** - `read_multiple_files` for efficiency
+11. **Check OpenSpec** - Large changes (new features, breaking changes) need proposals
+12. **Follow ID Offset Pattern** - Slab index + 1 = ID, ID - 1 = Slab index (all ID types)
