@@ -61,6 +61,12 @@ Single Rust crate at `crates/flui_types/`:
 
 > **NOTE: Write these tests FIRST, ensure they FAIL before implementation**
 
+> **CRITICAL - Test Naming Convention (Constitution v1.2.0):**
+> - ✅ CORRECT: `fn test_pixels_construction()`, `fn test_pixels_arithmetic()`
+> - ❌ WRONG: `fn test_t011_pixels()`, `fn test_pixels() { // T011 ... }`
+> - **NEVER include task numbers (T011, T012) in test function names or comments**
+> - Use descriptive names explaining WHAT is tested: `test_point_distance_symmetry`
+
 - [ ] T011 [P] [US1] Write failing unit test for Pixels::new() in crates/flui_types/tests/unit_tests/units_test.rs
 - [ ] T012 [P] [US1] Write failing unit test for Pixels arithmetic (Add, Sub, Mul, Div) in crates/flui_types/tests/unit_tests/units_test.rs
 - [ ] T013 [P] [US1] Write failing unit test for Point::new() and Point::distance_to() in crates/flui_types/tests/unit_tests/geometry_test.rs
@@ -370,6 +376,11 @@ Single Rust crate at `crates/flui_types/`:
 - [ ] T138 [P] Add comprehensive doc comments to all public APIs in src/ files
 - [ ] T139 [P] Create crate README.md with quickstart, features, installation in crates/flui_types/README.md
 - [ ] T140 Run doc tests and verify all examples compile (run `cargo test --doc`)
+
+### Developer Experience (FR-039, FR-042)
+
+- [ ] T140a [P] Implement optional helper functions: px(), dp(), rem() in crates/flui_types/src/helpers.rs (addresses FR-039)
+- [ ] T140b [P] Verify IDE autocomplete and type hints in VS Code and RustRover (addresses FR-042, SC-020)
 
 ### Final Quality Gates
 

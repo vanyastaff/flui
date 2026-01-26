@@ -251,8 +251,8 @@ Make measurement units part of the type system. The compiler prevents mixing inc
 **Unit Type System:**
 
 - **FR-001**: System MUST prevent mixing incompatible unit types at compile time (e.g., cannot add Pixels + DevicePixels)
-- **FR-002**: System MUST support Logical Pixels (device-independent) for layout calculations
-- **FR-003**: System MUST support Device Pixels (screen pixels) for GPU rendering
+- **FR-002**: System MUST provide Pixels type (device-independent logical pixels) for layout calculations
+- **FR-003**: System MUST provide DevicePixels type (screen pixels) for GPU rendering
 - **FR-004**: System MUST support Rems (font-relative) for typography-based spacing
 - **FR-005**: System MUST support Scaled Pixels (internal) for pre-scaling calculations
 - **FR-006**: System MUST require explicit conversions between unit types with scale factor/context specified
@@ -365,10 +365,10 @@ Make measurement units part of the type system. The compiler prevents mixing inc
 - **SC-013**: No heap allocations occur during basic geometric operations (verified via profiling)
 - **SC-014**: Point type is exactly 8 bytes (verified via `std::mem::size_of`)
 - **SC-015**: Rectangle type is 16-20 bytes (verified via `std::mem::size_of`)
-- **SC-016**: 90%+ code coverage from tests (measured via coverage tools)
+- **SC-016**: ≥80% code coverage from tests per constitution requirement (measured via cargo tarpaulin)
 - **SC-017**: Property-based tests verify geometric invariants (e.g., intersection is commutative)
 - **SC-018**: All public APIs have documentation with examples (verified via `cargo doc --document-private-items`)
-- **SC-019**: Simple widget code can be written without consulting documentation (validated via user testing)
+- **SC-019**: Basic widget code (<20 LOC, using Pixels/Point/Rect) can be written without consulting documentation (validated via user testing with developers unfamiliar with crate)
 - **SC-020**: IDE provides autocomplete and type hints for all unit types (verified in VS Code, RustRover)
 
 ---

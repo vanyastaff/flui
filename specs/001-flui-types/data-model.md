@@ -835,11 +835,16 @@ impl Color {
     /// Debug builds: Panics with clear message on invalid format
     /// Release builds: Returns transparent black with warning log
     pub fn from_hex(hex: &str) -> Self {
-        // Implementation: parse hex string, validate format
-        // Debug: panic!("Invalid hex color '{}': expected format #RRGGBB or #RRGGBBAA", hex);
-        // Release: tracing::warn!("Invalid hex color '{}', using transparent black", hex);
-        //          return Color::TRANSPARENT;
-        todo!()
+        // Algorithm outline:
+        // 1. Strip leading '#' if present
+        // 2. Validate length: 6 (RGB) or 8 (RGBA) hex chars
+        // 3. Parse each 2-char chunk as u8 hex: RR, GG, BB, [AA]
+        // 4. Convert to f32: r = RR as f32 / 255.0
+        // 5. Default alpha = 1.0 if not provided
+        // Error handling:
+        //   Debug: panic!("Invalid hex color '{}': expected format #RRGGBB or #RRGGBBAA", hex)
+        //   Release: tracing::warn!(...); return Color::TRANSPARENT
+        unimplemented!("See algorithm outline above")
     }
 
     /// Create from HSL values
@@ -967,8 +972,17 @@ impl Color {
 
     /// Convert to HSL representation
     pub fn to_hsl(&self) -> HSL {
-        // Implementation: RGB to HSL conversion
-        todo!()
+        // Algorithm outline (standard RGB→HSL conversion):
+        // 1. Find max and min of (r, g, b)
+        // 2. Calculate lightness: L = (max + min) / 2
+        // 3. If max == min: H = 0, S = 0 (grayscale)
+        // 4. Else calculate saturation: S = (max - min) / (1 - |2L - 1|)
+        // 5. Calculate hue based on which channel is max:
+        //    - If r is max: H = 60° × ((g - b) / (max - min) mod 6)
+        //    - If g is max: H = 60° × ((b - r) / (max - min) + 2)
+        //    - If b is max: H = 60° × ((r - g) / (max - min) + 4)
+        // 6. Return HSL { h: H, s: S, l: L }
+        unimplemented!("See algorithm outline above")
     }
 }
 ```
@@ -1008,8 +1022,25 @@ pub(crate) struct HSL {
 impl HSL {
     /// Convert to RGB color
     pub fn to_rgb(self) -> Color {
-        // Implementation: HSL to RGB conversion
-        todo!()
+        // Algorithm outline (standard HSL→RGB conversion):
+        // 1. If s == 0: grayscale, return Color { r: l, g: l, b: l, a: 1.0 }
+        // 2. Calculate temporary values:
+        //    - If l < 0.5: temp2 = l × (1 + s)
+        //    - If l ≥ 0.5: temp2 = l + s - (l × s)
+        //    - temp1 = 2 × l - temp2
+        // 3. Normalize hue: h_norm = h / 360.0 (convert to 0-1 range)
+        // 4. For each channel, calculate temp color value:
+        //    - Red:   temp_r = h_norm + 1/3
+        //    - Green: temp_g = h_norm
+        //    - Blue:  temp_b = h_norm - 1/3
+        //    - Wrap each to [0, 1]: if < 0 add 1, if > 1 subtract 1
+        // 5. Apply piecewise conversion for each temp value:
+        //    - If 6 × temp < 1: color = temp1 + (temp2 - temp1) × 6 × temp
+        //    - Else if 2 × temp < 1: color = temp2
+        //    - Else if 3 × temp < 2: color = temp1 + (temp2 - temp1) × (2/3 - temp) × 6
+        //    - Else: color = temp1
+        // 6. Return Color { r, g, b, a: 1.0 }
+        unimplemented!("See algorithm outline above")
     }
 }
 ```
