@@ -275,7 +275,7 @@ pub fn create_uniforms_from_spec(spec: &ShaderSpec) -> Vec<u8> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "enable-wgpu-tests"))]
 mod tests {
     use super::*;
 

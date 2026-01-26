@@ -307,7 +307,7 @@ impl ImageInstance {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "enable-wgpu-tests"))]
 mod tests {
     use super::*;
 

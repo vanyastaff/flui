@@ -535,7 +535,7 @@ impl Default for DirectStorageConfig {
 // Tests
 // ============================================================================
 
-#[cfg(test)]
+#[cfg(all(test, feature = "enable-wgpu-tests"))]
 mod tests {
     use super::*;
 

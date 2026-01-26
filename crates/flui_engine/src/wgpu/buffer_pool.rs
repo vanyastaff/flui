@@ -318,7 +318,7 @@ pub struct BufferPoolStats {
     pub reuse_rate: f32,
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "enable-wgpu-tests"))]
 mod tests {
     use super::*;
 

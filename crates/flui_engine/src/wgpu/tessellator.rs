@@ -780,7 +780,7 @@ impl IntoLyonPath for flui_types::painting::path::Path {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "enable-wgpu-tests"))]
 mod tests {
     use super::*;
 

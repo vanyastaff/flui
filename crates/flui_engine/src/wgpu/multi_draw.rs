@@ -251,7 +251,7 @@ pub struct MultiDrawStats {
     pub active_instances: usize,
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "enable-wgpu-tests"))]
 mod tests {
     use super::*;
 

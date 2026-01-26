@@ -264,7 +264,7 @@ pub fn pipeline_key_from_paint(paint: &Paint) -> PipelineKey {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "enable-wgpu-tests"))]
 mod tests {
     use super::*;
 

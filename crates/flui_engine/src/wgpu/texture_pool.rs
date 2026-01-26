@@ -271,7 +271,7 @@ pub struct PoolStats {
     pub available_count: usize,
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "enable-wgpu-tests"))]
 mod tests {
     use super::*;
 

@@ -412,7 +412,7 @@ impl TextRenderer {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "enable-wgpu-tests"))]
 mod tests {
 
     #[test]

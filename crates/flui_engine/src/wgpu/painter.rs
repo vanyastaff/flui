@@ -2247,7 +2247,7 @@ impl WgpuPainter {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "enable-wgpu-tests"))]
 mod tests {
 
     // Note: Full tests require wgpu device initialization

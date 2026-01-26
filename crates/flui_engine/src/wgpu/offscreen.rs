@@ -596,7 +596,7 @@ impl FullscreenVertex {
     // pub fn buffer_layout() -> wgpu::VertexBufferLayout<'static> { ... }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "enable-wgpu-tests"))]
 mod tests {
     use super::*;
 

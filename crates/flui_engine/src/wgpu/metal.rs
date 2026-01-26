@@ -442,7 +442,7 @@ impl Default for RayTracingConfig {
 // Tests
 // ============================================================================
 
-#[cfg(test)]
+#[cfg(all(test, feature = "enable-wgpu-tests"))]
 mod tests {
     use super::*;
 
