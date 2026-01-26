@@ -82,7 +82,9 @@ impl VulkanFeatures {
     pub fn detect(device: &wgpu::Device) -> Result<Self> {
         #[cfg(not(any(target_os = "linux", target_os = "android")))]
         {
-            return Err(anyhow!("Vulkan backend detection only available on Linux/Android"));
+            return Err(anyhow!(
+                "Vulkan backend detection only available on Linux/Android"
+            ));
         }
 
         // TODO: Query actual Vulkan device capabilities via ash (Vulkan FFI)
@@ -107,7 +109,11 @@ impl VulkanFeatures {
 
     /// Get a human-readable version string.
     pub fn version_string(&self) -> String {
-        format!("Vulkan {} ({})", self.api_version.as_str(), self.driver_version)
+        format!(
+            "Vulkan {} ({})",
+            self.api_version.as_str(),
+            self.driver_version
+        )
     }
 
     /// Check if running on Mesa drivers.
@@ -180,7 +186,11 @@ pub struct MesaVersion {
 impl MesaVersion {
     /// Create new Mesa version.
     pub fn new(major: u32, minor: u32, patch: u32) -> Self {
-        Self { major, minor, patch }
+        Self {
+            major,
+            minor,
+            patch,
+        }
     }
 
     /// Get version as string (e.g., "25.0.1").
@@ -238,7 +248,9 @@ impl PipelineCacheConfig {
             use std::env;
             let cache_dir = env::var("XDG_CACHE_HOME")
                 .unwrap_or_else(|_| format!("{}/.cache", env::var("HOME").unwrap_or_default()));
-            PathBuf::from(cache_dir).join("flui").join("vulkan_pipelines.bin")
+            PathBuf::from(cache_dir)
+                .join("flui")
+                .join("vulkan_pipelines.bin")
         }
 
         #[cfg(target_os = "android")]

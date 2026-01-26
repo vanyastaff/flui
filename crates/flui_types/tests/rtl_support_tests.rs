@@ -3,7 +3,7 @@
 //! This module tests bidirectional layout support for EdgeInsets/Edges,
 //! including start/end semantics and automatic mirroring for RTL languages.
 
-use flui_types::geometry::{Edges, Rect, px};
+use flui_types::geometry::{px, Edges, Rect};
 use flui_types::typography::TextDirection;
 
 // ============================================================================
@@ -50,13 +50,13 @@ fn test_text_direction_default() {
 fn test_ltr_padding_left_right() {
     // In LTR, start = left, end = right
     let padding = Edges::new(
-        px(10.0),  // top
-        px(20.0),  // right (end in LTR)
-        px(10.0),  // bottom
-        px(30.0)   // left (start in LTR)
+        px(10.0), // top
+        px(20.0), // right (end in LTR)
+        px(10.0), // bottom
+        px(30.0), // left (start in LTR)
     );
 
-    assert_eq!(padding.left, px(30.0));  // start in LTR
+    assert_eq!(padding.left, px(30.0)); // start in LTR
     assert_eq!(padding.right, px(20.0)); // end in LTR
 }
 
@@ -64,10 +64,10 @@ fn test_ltr_padding_left_right() {
 fn test_ltr_margin_application() {
     let rect = Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0));
     let margin = Edges::new(
-        px(10.0),  // top
-        px(20.0),  // right
-        px(10.0),  // bottom
-        px(30.0)   // left
+        px(10.0), // top
+        px(20.0), // right
+        px(10.0), // bottom
+        px(30.0), // left
     );
 
     let with_margin = margin.inflate_rect(rect);
@@ -88,14 +88,14 @@ fn test_rtl_conceptual_mirroring() {
 
     // For RTL, we would construct edges with mirrored values
     let rtl_padding = Edges::new(
-        px(10.0),  // top (same in RTL)
-        px(30.0),  // right (start in RTL)
-        px(10.0),  // bottom (same in RTL)
-        px(20.0)   // left (end in RTL)
+        px(10.0), // top (same in RTL)
+        px(30.0), // right (start in RTL)
+        px(10.0), // bottom (same in RTL)
+        px(20.0), // left (end in RTL)
     );
 
     assert_eq!(rtl_padding.right, px(30.0)); // start in RTL
-    assert_eq!(rtl_padding.left, px(20.0));  // end in RTL
+    assert_eq!(rtl_padding.left, px(20.0)); // end in RTL
 }
 
 #[test]
@@ -104,10 +104,10 @@ fn test_rtl_margin_application() {
 
     // RTL margin with mirrored values
     let rtl_margin = Edges::new(
-        px(10.0),  // top
-        px(30.0),  // right (start margin in RTL)
-        px(10.0),  // bottom
-        px(20.0)   // left (end margin in RTL)
+        px(10.0), // top
+        px(30.0), // right (start margin in RTL)
+        px(10.0), // bottom
+        px(20.0), // left (end margin in RTL)
     );
 
     let with_margin = rtl_margin.inflate_rect(rect);
@@ -145,10 +145,10 @@ fn edges_from_start_end(
 fn test_helper_ltr_start_end() {
     let edges = edges_from_start_end(
         TextDirection::Ltr,
-        px(10.0),  // top
-        px(30.0),  // start
-        px(10.0),  // bottom
-        px(20.0)   // end
+        px(10.0), // top
+        px(30.0), // start
+        px(10.0), // bottom
+        px(20.0), // end
     );
 
     // In LTR: start = left, end = right
@@ -160,10 +160,10 @@ fn test_helper_ltr_start_end() {
 fn test_helper_rtl_start_end() {
     let edges = edges_from_start_end(
         TextDirection::Rtl,
-        px(10.0),  // top
-        px(30.0),  // start
-        px(10.0),  // bottom
-        px(20.0)   // end
+        px(10.0), // top
+        px(30.0), // start
+        px(10.0), // bottom
+        px(20.0), // end
     );
 
     // In RTL: start = right, end = left
@@ -186,7 +186,7 @@ fn test_arabic_text_padding() {
         px(0.0),
         start_padding,
         px(0.0),
-        end_padding
+        end_padding,
     );
 
     let rtl_edges = edges_from_start_end(
@@ -194,7 +194,7 @@ fn test_arabic_text_padding() {
         px(0.0),
         start_padding,
         px(0.0),
-        end_padding
+        end_padding,
     );
 
     // Same semantic padding, different physical application
@@ -210,21 +210,9 @@ fn test_hebrew_list_item_indent() {
     // List item with start indent
     let indent = px(24.0);
 
-    let ltr_indent = edges_from_start_end(
-        TextDirection::Ltr,
-        px(0.0),
-        indent,
-        px(0.0),
-        px(0.0)
-    );
+    let ltr_indent = edges_from_start_end(TextDirection::Ltr, px(0.0), indent, px(0.0), px(0.0));
 
-    let rtl_indent = edges_from_start_end(
-        TextDirection::Rtl,
-        px(0.0),
-        indent,
-        px(0.0),
-        px(0.0)
-    );
+    let rtl_indent = edges_from_start_end(TextDirection::Rtl, px(0.0), indent, px(0.0), px(0.0));
 
     // LTR: indent from left
     assert_eq!(ltr_indent.left, px(24.0));
@@ -246,7 +234,7 @@ fn test_chat_bubble_alignment() {
         px(4.0),
         px(0.0),
         px(4.0),
-        message_margin
+        message_margin,
     );
 
     let rtl_sender = edges_from_start_end(
@@ -254,7 +242,7 @@ fn test_chat_bubble_alignment() {
         px(4.0),
         px(0.0),
         px(4.0),
-        message_margin
+        message_margin,
     );
 
     // LTR: sender on right
@@ -271,21 +259,11 @@ fn test_form_label_spacing() {
     // Form with label on start side
     let label_spacing = px(12.0);
 
-    let ltr_form = edges_from_start_end(
-        TextDirection::Ltr,
-        px(0.0),
-        label_spacing,
-        px(0.0),
-        px(0.0)
-    );
+    let ltr_form =
+        edges_from_start_end(TextDirection::Ltr, px(0.0), label_spacing, px(0.0), px(0.0));
 
-    let rtl_form = edges_from_start_end(
-        TextDirection::Rtl,
-        px(0.0),
-        label_spacing,
-        px(0.0),
-        px(0.0)
-    );
+    let rtl_form =
+        edges_from_start_end(TextDirection::Rtl, px(0.0), label_spacing, px(0.0), px(0.0));
 
     // Label spacing mirrors for RTL
     assert_eq!(ltr_form.left, px(12.0));
@@ -307,7 +285,7 @@ fn test_mixed_content_layout() {
         px(8.0),
         content_padding,
         px(8.0),
-        content_padding
+        content_padding,
     );
 
     let rtl = edges_from_start_end(
@@ -315,7 +293,7 @@ fn test_mixed_content_layout() {
         px(8.0),
         content_padding,
         px(8.0),
-        content_padding
+        content_padding,
     );
 
     // Symmetric padding is the same in both directions
@@ -323,21 +301,9 @@ fn test_mixed_content_layout() {
     assert_eq!(rtl.left, rtl.right);
 
     // But asymmetric would differ
-    let ltr_asym = edges_from_start_end(
-        TextDirection::Ltr,
-        px(0.0),
-        px(20.0),
-        px(0.0),
-        px(10.0)
-    );
+    let ltr_asym = edges_from_start_end(TextDirection::Ltr, px(0.0), px(20.0), px(0.0), px(10.0));
 
-    let rtl_asym = edges_from_start_end(
-        TextDirection::Rtl,
-        px(0.0),
-        px(20.0),
-        px(0.0),
-        px(10.0)
-    );
+    let rtl_asym = edges_from_start_end(TextDirection::Rtl, px(0.0), px(20.0), px(0.0), px(10.0));
 
     // Values are mirrored
     assert_eq!(ltr_asym.left, rtl_asym.right);
@@ -358,7 +324,7 @@ fn test_drawer_menu_padding() {
         px(24.0),
         drawer_padding,
         px(24.0),
-        px(8.0)
+        px(8.0),
     );
 
     let rtl_drawer = edges_from_start_end(
@@ -366,11 +332,11 @@ fn test_drawer_menu_padding() {
         px(24.0),
         drawer_padding,
         px(24.0),
-        px(8.0)
+        px(8.0),
     );
 
     // Drawer opens from start side
-    assert_eq!(ltr_drawer.left, px(16.0));  // LTR: left side
+    assert_eq!(ltr_drawer.left, px(16.0)); // LTR: left side
     assert_eq!(rtl_drawer.right, px(16.0)); // RTL: right side
 }
 
@@ -384,7 +350,7 @@ fn test_back_button_margin() {
         px(0.0),
         back_button_margin,
         px(0.0),
-        px(0.0)
+        px(0.0),
     );
 
     let rtl_back = edges_from_start_end(
@@ -392,7 +358,7 @@ fn test_back_button_margin() {
         px(0.0),
         back_button_margin,
         px(0.0),
-        px(0.0)
+        px(0.0),
     );
 
     // Back button on start side
@@ -409,21 +375,9 @@ fn test_leading_icon_margin() {
     // Icon at start of text field
     let icon_margin = px(12.0);
 
-    let ltr_icon = edges_from_start_end(
-        TextDirection::Ltr,
-        px(0.0),
-        icon_margin,
-        px(0.0),
-        px(8.0)
-    );
+    let ltr_icon = edges_from_start_end(TextDirection::Ltr, px(0.0), icon_margin, px(0.0), px(8.0));
 
-    let rtl_icon = edges_from_start_end(
-        TextDirection::Rtl,
-        px(0.0),
-        icon_margin,
-        px(0.0),
-        px(8.0)
-    );
+    let rtl_icon = edges_from_start_end(TextDirection::Rtl, px(0.0), icon_margin, px(0.0), px(8.0));
 
     // Leading icon position
     assert_eq!(ltr_icon.left, px(12.0));
@@ -435,21 +389,9 @@ fn test_trailing_icon_margin() {
     // Icon at end of text field
     let icon_margin = px(12.0);
 
-    let ltr_icon = edges_from_start_end(
-        TextDirection::Ltr,
-        px(0.0),
-        px(8.0),
-        px(0.0),
-        icon_margin
-    );
+    let ltr_icon = edges_from_start_end(TextDirection::Ltr, px(0.0), px(8.0), px(0.0), icon_margin);
 
-    let rtl_icon = edges_from_start_end(
-        TextDirection::Rtl,
-        px(0.0),
-        px(8.0),
-        px(0.0),
-        icon_margin
-    );
+    let rtl_icon = edges_from_start_end(TextDirection::Rtl, px(0.0), px(8.0), px(0.0), icon_margin);
 
     // Trailing icon position
     assert_eq!(ltr_icon.right, px(12.0));
@@ -471,7 +413,7 @@ fn test_card_with_action_buttons() {
         card_padding,
         card_padding,
         card_padding,
-        card_padding
+        card_padding,
     );
 
     let ltr_actions = edges_from_start_end(
@@ -479,7 +421,7 @@ fn test_card_with_action_buttons() {
         action_spacing,
         px(0.0),
         action_spacing,
-        card_padding
+        card_padding,
     );
 
     // Verify consistent padding
@@ -493,13 +435,7 @@ fn test_table_cell_alignment() {
     let cell_padding = px(12.0);
 
     for direction in [TextDirection::Ltr, TextDirection::Rtl] {
-        let padding = edges_from_start_end(
-            direction,
-            px(8.0),
-            cell_padding,
-            px(8.0),
-            cell_padding
-        );
+        let padding = edges_from_start_end(direction, px(8.0), cell_padding, px(8.0), cell_padding);
 
         // Symmetric horizontal padding
         assert_eq!(padding.left, padding.right);
@@ -515,21 +451,11 @@ fn test_table_cell_alignment() {
 fn test_rtl_rect_deflation() {
     let rect = Rect::from_xywh(px(0.0), px(0.0), px(200.0), px(100.0));
 
-    let ltr_padding = edges_from_start_end(
-        TextDirection::Ltr,
-        px(10.0),
-        px(30.0),
-        px(10.0),
-        px(20.0)
-    );
+    let ltr_padding =
+        edges_from_start_end(TextDirection::Ltr, px(10.0), px(30.0), px(10.0), px(20.0));
 
-    let rtl_padding = edges_from_start_end(
-        TextDirection::Rtl,
-        px(10.0),
-        px(30.0),
-        px(10.0),
-        px(20.0)
-    );
+    let rtl_padding =
+        edges_from_start_end(TextDirection::Rtl, px(10.0), px(30.0), px(10.0), px(20.0));
 
     let ltr_content = ltr_padding.deflate_rect(rect);
     let rtl_content = rtl_padding.deflate_rect(rect);
@@ -549,21 +475,11 @@ fn test_rtl_consistent_content_size() {
     let rect = Rect::from_xywh(px(0.0), px(0.0), px(200.0), px(100.0));
 
     // Same semantic padding in both directions
-    let ltr_padding = edges_from_start_end(
-        TextDirection::Ltr,
-        px(10.0),
-        px(30.0),
-        px(10.0),
-        px(20.0)
-    );
+    let ltr_padding =
+        edges_from_start_end(TextDirection::Ltr, px(10.0), px(30.0), px(10.0), px(20.0));
 
-    let rtl_padding = edges_from_start_end(
-        TextDirection::Rtl,
-        px(10.0),
-        px(30.0),
-        px(10.0),
-        px(20.0)
-    );
+    let rtl_padding =
+        edges_from_start_end(TextDirection::Rtl, px(10.0), px(30.0), px(10.0), px(20.0));
 
     let ltr_content = ltr_padding.deflate_rect(rect);
     let rtl_content = rtl_padding.deflate_rect(rect);

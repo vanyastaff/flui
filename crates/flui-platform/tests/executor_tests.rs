@@ -38,7 +38,10 @@ fn test_background_executor_runs_on_worker_thread() {
     // Wait for task to complete
     thread::sleep(Duration::from_millis(100));
 
-    let executed_on = task_thread_id.lock().clone().expect("Task should have executed");
+    let executed_on = task_thread_id
+        .lock()
+        .clone()
+        .expect("Task should have executed");
     assert_ne!(
         executed_on, spawning_thread_id,
         "Background task should NOT run on spawning thread"
@@ -318,7 +321,11 @@ fn test_foreground_executor_nested_spawns() {
     executor.drain_tasks();
 
     let log = execution_log.lock().clone();
-    assert_eq!(log, vec!["outer", "inner"], "drain_tasks() should execute all tasks including nested spawns");
+    assert_eq!(
+        log,
+        vec!["outer", "inner"],
+        "drain_tasks() should execute all tasks including nested spawns"
+    );
 
     tracing::info!("✓ PASS: Nested spawns handled correctly in single drain cycle");
 }
@@ -476,5 +483,8 @@ fn test_foreground_executor_high_volume() {
         drain_duration.as_millis()
     );
 
-    tracing::info!("✓ PASS: Foreground executor handles {} tasks efficiently", task_count);
+    tracing::info!(
+        "✓ PASS: Foreground executor handles {} tasks efficiently",
+        task_count
+    );
 }

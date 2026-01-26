@@ -36,7 +36,11 @@ fn test_default_font_family() {
     let text_system = platform.text_system();
 
     let default_font = text_system.default_font_family();
-    tracing::info!("Platform: {}, Default font: {}", platform.name(), default_font);
+    tracing::info!(
+        "Platform: {}, Default font: {}",
+        platform.name(),
+        default_font
+    );
 
     // Verify platform-specific default fonts
     #[cfg(windows)]
@@ -49,7 +53,10 @@ fn test_default_font_family() {
     assert_eq!(default_font, "Ubuntu", "Linux should use Ubuntu");
 
     // Verify font name is not empty
-    assert!(!default_font.is_empty(), "Default font name should not be empty");
+    assert!(
+        !default_font.is_empty(),
+        "Default font name should not be empty"
+    );
 
     tracing::info!("✓ T025: Default font family verified");
 }

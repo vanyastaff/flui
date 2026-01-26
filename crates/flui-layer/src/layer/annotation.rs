@@ -295,7 +295,10 @@ mod tests {
     fn test_annotation_result_add() {
         let mut result = AnnotationResult::new();
         result.add(AnnotationEntry::new("first", Offset::ZERO));
-        result.add(AnnotationEntry::new("second", Offset::new(px(10.0), px(10.0))));
+        result.add(AnnotationEntry::new(
+            "second",
+            Offset::new(px(10.0), px(10.0)),
+        ));
 
         assert_eq!(result.len(), 2);
         assert_eq!(result.first_annotation(), Some(&"first"));

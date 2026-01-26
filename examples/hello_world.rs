@@ -17,8 +17,10 @@ fn main() {
     let displays = platform.displays();
     println!("📺 Found {} display(s):", displays.len());
     for (i, display) in displays.iter().enumerate() {
-        println!("  Display {}: {} ({}x{} @ {:.1}x scale)",
-            i + 1, display.name(),
+        println!(
+            "  Display {}: {} ({}x{} @ {:.1}x scale)",
+            i + 1,
+            display.name(),
             display.bounds().size.width,
             display.bounds().size.height,
             display.scale_factor()

@@ -3,7 +3,7 @@
 //! This module tests per-corner values for rounded rectangles, border radii,
 //! and corner-specific styling.
 
-use flui_types::geometry::{Corners, Radius, px};
+use flui_types::geometry::{px, Corners, Radius};
 
 // ============================================================================
 // Construction Tests
@@ -15,7 +15,7 @@ fn test_corners_new() {
         Radius::circular(px(8.0)),
         Radius::circular(px(16.0)),
         Radius::circular(px(12.0)),
-        Radius::circular(px(4.0))
+        Radius::circular(px(4.0)),
     );
 
     assert_eq!(corners.top_left, Radius::circular(px(8.0)));
@@ -130,7 +130,7 @@ fn test_corners_max() {
         Radius::circular(px(8.0)),
         Radius::circular(px(24.0)),
         Radius::circular(px(12.0)),
-        Radius::circular(px(16.0))
+        Radius::circular(px(16.0)),
     );
 
     let max = corners.max();
@@ -144,7 +144,7 @@ fn test_corners_min() {
         Radius::circular(px(8.0)),
         Radius::circular(px(24.0)),
         Radius::circular(px(12.0)),
-        Radius::circular(px(16.0))
+        Radius::circular(px(16.0)),
     );
 
     let min = corners.min();
@@ -243,10 +243,10 @@ fn test_tooltip_corners() {
 fn test_speech_bubble_left() {
     // Speech bubble with pointed left corner
     let bubble = Corners::new(
-        Radius::ZERO,           // Pointed corner (top-left)
+        Radius::ZERO, // Pointed corner (top-left)
         Radius::circular(px(12.0)),
         Radius::circular(px(12.0)),
-        Radius::circular(px(12.0))
+        Radius::circular(px(12.0)),
     );
 
     assert_eq!(bubble.top_left.x, px(0.0));
@@ -259,10 +259,10 @@ fn test_speech_bubble_left() {
 fn test_asymmetric_card() {
     // Card with different corner radii for visual interest
     let card = Corners::new(
-        Radius::circular(px(16.0)),  // Large top-left
-        Radius::circular(px(4.0)),   // Small top-right
-        Radius::circular(px(16.0)),  // Large bottom-right
-        Radius::circular(px(4.0))    // Small bottom-left
+        Radius::circular(px(16.0)), // Large top-left
+        Radius::circular(px(4.0)),  // Small top-right
+        Radius::circular(px(16.0)), // Large bottom-right
+        Radius::circular(px(4.0)),  // Small bottom-left
     );
 
     assert_eq!(card.top_left.x, px(16.0));
@@ -278,7 +278,7 @@ fn test_diagonal_rounded() {
         Radius::circular(px(12.0)),
         Radius::ZERO,
         Radius::circular(px(12.0)),
-        Radius::ZERO
+        Radius::ZERO,
     );
 
     assert_eq!(diagonal.top_left.x, px(12.0));
@@ -316,7 +316,7 @@ fn test_mixed_circular_elliptical() {
         Radius::circular(px(16.0)),
         Radius::elliptical(px(20.0), px(10.0)),
         Radius::circular(px(16.0)),
-        Radius::elliptical(px(20.0), px(10.0))
+        Radius::elliptical(px(20.0), px(10.0)),
     );
 
     // Circular corners
@@ -347,7 +347,7 @@ fn test_corners_all_different() {
         Radius::circular(px(8.0)),
         Radius::circular(px(12.0)),
         Radius::circular(px(16.0)),
-        Radius::circular(px(20.0))
+        Radius::circular(px(20.0)),
     );
 
     assert_ne!(corners.top_left, corners.top_right);

@@ -129,7 +129,10 @@ pub mod size_assertions {
     use core::mem::size_of;
 
     // Core geometry types - must be small enough to pass by value efficiently
-    const _: () = assert!(size_of::<crate::Pixels>() <= 4, "Pixels should be 4 bytes (f32)");
+    const _: () = assert!(
+        size_of::<crate::Pixels>() <= 4,
+        "Pixels should be 4 bytes (f32)"
+    );
     const _: () = assert!(
         size_of::<crate::Point<crate::Pixels>>() <= 8,
         "Point<Pixels> should be ≤8 bytes (2×f32)"
@@ -148,8 +151,10 @@ pub mod size_assertions {
     );
 
     // Color types - single cache line
-    const _: () =
-        assert!(size_of::<crate::Color32>() <= 4, "Color32 should be 4 bytes (RGBA8)");
+    const _: () = assert!(
+        size_of::<crate::Color32>() <= 4,
+        "Color32 should be 4 bytes (RGBA8)"
+    );
     const _: () = assert!(
         size_of::<crate::Color>() <= 16,
         "Color should be ≤16 bytes (4×f32 RGBA)"

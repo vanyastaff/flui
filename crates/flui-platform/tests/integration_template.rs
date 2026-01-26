@@ -100,7 +100,11 @@ fn test_window_handle_compatibility() {
             tracing::info!("✓ Window created successfully");
 
             let logical_size = window.logical_size();
-            tracing::info!("Window size: {}x{}", logical_size.width.0, logical_size.height.0);
+            tracing::info!(
+                "Window size: {}x{}",
+                logical_size.width.0,
+                logical_size.height.0
+            );
 
             assert!(
                 logical_size.width.0 > 0.0 && logical_size.height.0 > 0.0,
@@ -226,7 +230,12 @@ fn test_text_system_integration() {
     let font_family = text_system.default_font_family();
     let font_size = 16.0;
 
-    tracing::info!("Measuring text '{}' with font '{}' at {}pt", text, font_family, font_size);
+    tracing::info!(
+        "Measuring text '{}' with font '{}' at {}pt",
+        text,
+        font_family,
+        font_size
+    );
 
     let bounds = text_system.measure_text(text, &font_family, font_size);
 
@@ -303,7 +312,10 @@ fn test_executor_integration() {
     let platform = get_test_platform();
     let bg_executor = platform.background_executor();
 
-    use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
 
     let task_executed = Arc::new(AtomicBool::new(false));
     let task_executed_clone = Arc::clone(&task_executed);

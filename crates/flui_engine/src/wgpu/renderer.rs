@@ -32,8 +32,8 @@
 //! renderer.render(display_list)?;
 //! ```
 
-use wgpu;
 use anyhow::Result;
+use wgpu;
 
 /// GPU backend capabilities
 #[derive(Debug, Clone)]
@@ -161,7 +161,9 @@ impl Renderer {
         });
 
         // Create surface
-        let surface = unsafe { instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::from_window(window)?) }?;
+        let surface = unsafe {
+            instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::from_window(window)?)
+        }?;
 
         // Request adapter
         let adapter = instance
@@ -381,7 +383,10 @@ impl Renderer {
     /// Select present mode based on capabilities
     fn select_present_mode(surface_caps: &wgpu::SurfaceCapabilities) -> wgpu::PresentMode {
         // Prefer Mailbox (triple buffering, low latency) > Fifo (vsync)
-        if surface_caps.present_modes.contains(&wgpu::PresentMode::Mailbox) {
+        if surface_caps
+            .present_modes
+            .contains(&wgpu::PresentMode::Mailbox)
+        {
             wgpu::PresentMode::Mailbox
         } else {
             wgpu::PresentMode::Fifo // Always supported

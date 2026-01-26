@@ -35,7 +35,8 @@ fn main() -> anyhow::Result<()> {
     let displays = platform.displays();
     println!("📺 Displays:");
     for (i, display) in displays.iter().enumerate() {
-        println!("  {}. {} - {}x{} @ {:.1}x",
+        println!(
+            "  {}. {} - {}x{} @ {:.1}x",
             i + 1,
             display.name(),
             display.bounds().size.width,

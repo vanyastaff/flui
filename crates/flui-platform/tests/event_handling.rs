@@ -186,7 +186,11 @@ fn test_window_resize_event() {
     let logical_height = (initial_size.height.0 as f32) / (scale_factor as f32);
 
     tracing::info!("Logical size: {}x{}", logical_width, logical_height);
-    tracing::info!("Physical size: {}x{}", initial_size.width.0, initial_size.height.0);
+    tracing::info!(
+        "Physical size: {}x{}",
+        initial_size.width.0,
+        initial_size.height.0
+    );
     tracing::info!("Scale factor: {}", scale_factor);
 
     // Verify logical size matches requested size (with tolerance for DPI)

@@ -7,7 +7,7 @@
 //! - Round-trip conversions
 
 use flui_types::geometry::{
-    px, device_px, scaled_px, rems, Pixels, DevicePixels, ScaledPixels, Rems,
+    device_px, px, rems, scaled_px, DevicePixels, Pixels, Rems, ScaledPixels,
 };
 
 // ============================================================================
@@ -216,9 +216,15 @@ fn test_round_trip_pixels_device_pixels_precision_loss() {
     // 21 / 2.0 = 10.5 (lost precision, difference of 0.1)
     // This is expected behavior - rounding can cause up to 0.5 / scale_factor precision loss
     let max_precision_loss = px(0.5 / scale);
-    assert!((back - original).abs() <= max_precision_loss,
-           "Round-trip precision loss exceeded tolerance: {} -> {} -> {} (diff: {}, max: {})",
-           original, device, back, (back - original).abs(), max_precision_loss);
+    assert!(
+        (back - original).abs() <= max_precision_loss,
+        "Round-trip precision loss exceeded tolerance: {} -> {} -> {} (diff: {}, max: {})",
+        original,
+        device,
+        back,
+        (back - original).abs(),
+        max_precision_loss
+    );
 }
 
 #[test]
@@ -239,8 +245,13 @@ fn test_round_trip_rems_pixels_fractional_base() {
 
     // Should be exact with f32 arithmetic
     let epsilon = 1e-5;
-    assert!((back_rems.get() - original_rems.get()).abs() < epsilon,
-           "Round-trip failed: {} -> {} -> {}", original_rems, pixels, back_rems);
+    assert!(
+        (back_rems.get() - original_rems.get()).abs() < epsilon,
+        "Round-trip failed: {} -> {} -> {}",
+        original_rems,
+        pixels,
+        back_rems
+    );
 }
 
 // ============================================================================

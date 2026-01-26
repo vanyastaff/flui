@@ -96,8 +96,8 @@ pub fn alloc_page_aligned(size: usize) -> Result<NonNull<u8>, std::alloc::AllocE
     let aligned_size = (size + page_size - 1) & !(page_size - 1);
 
     // Create aligned layout
-    let layout = Layout::from_size_align(aligned_size, page_size)
-        .map_err(|_| std::alloc::AllocError)?;
+    let layout =
+        Layout::from_size_align(aligned_size, page_size).map_err(|_| std::alloc::AllocError)?;
 
     // Allocate aligned memory
     // SAFETY: Layout is valid (verified above)
@@ -272,10 +272,7 @@ impl<T> PageAlignedVec<T> {
     pub fn clear(&mut self) {
         // SAFETY: Dropping initialized elements
         unsafe {
-            std::ptr::drop_in_place(std::slice::from_raw_parts_mut(
-                self.ptr.as_ptr(),
-                self.len,
-            ));
+            std::ptr::drop_in_place(std::slice::from_raw_parts_mut(self.ptr.as_ptr(), self.len));
         }
         self.len = 0;
     }
@@ -308,8 +305,7 @@ impl<T> Drop for PageAlignedVec<T> {
         // Deallocate memory
         let page_size = get_page_size();
         let byte_capacity = self.capacity * std::mem::size_of::<T>();
-        let layout =
-            Layout::from_size_align(byte_capacity, page_size).expect("Invalid layout");
+        let layout = Layout::from_size_align(byte_capacity, page_size).expect("Invalid layout");
 
         // SAFETY: ptr was allocated with the same layout
         unsafe {

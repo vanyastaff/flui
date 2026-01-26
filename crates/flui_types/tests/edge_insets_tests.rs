@@ -5,7 +5,7 @@
 //! - Rect inset operations
 //! - Padding and margin applications
 
-use flui_types::geometry::{Edges, Rect, Size, px};
+use flui_types::geometry::{px, Edges, Rect, Size};
 
 // ============================================================================
 // T075: Edges::all() and Edges::symmetric()
@@ -131,8 +131,8 @@ fn test_edges_deflate_rect_asymmetric() {
 
     let content = padding.deflate_rect(rect);
 
-    assert_eq!(content.left(), px(25.0));  // left padding
-    assert_eq!(content.top(), px(10.0));   // top padding
+    assert_eq!(content.left(), px(25.0)); // left padding
+    assert_eq!(content.top(), px(10.0)); // top padding
     assert_eq!(content.right(), px(180.0)); // 200 - 20 (right padding)
     assert_eq!(content.bottom(), px(135.0)); // 150 - 15 (bottom padding)
 }
@@ -160,8 +160,8 @@ fn test_edges_inflate_rect_asymmetric() {
 
     let expanded = margin.inflate_rect(rect);
 
-    assert_eq!(expanded.left(), px(88.0));   // 100 - 12 (left margin)
-    assert_eq!(expanded.top(), px(95.0));    // 100 - 5 (top margin)
+    assert_eq!(expanded.left(), px(88.0)); // 100 - 12 (left margin)
+    assert_eq!(expanded.top(), px(95.0)); // 100 - 5 (top margin)
     assert_eq!(expanded.right(), px(160.0)); // 150 + 10 (right margin)
     assert_eq!(expanded.bottom(), px(158.0)); // 150 + 8 (bottom margin)
 }
@@ -289,7 +289,7 @@ fn test_button_with_padding() {
     // Content area (where text goes)
     let text_area = padding.deflate_rect(button);
 
-    assert_eq!(text_area.width(), px(88.0));  // 120 - 16*2
+    assert_eq!(text_area.width(), px(88.0)); // 120 - 16*2
     assert_eq!(text_area.height(), px(24.0)); // 40 - 8*2
 }
 
@@ -318,8 +318,8 @@ fn test_list_item_with_asymmetric_padding() {
 
     assert_eq!(content.left(), px(24.0));
     assert_eq!(content.top(), px(12.0));
-    assert_eq!(content.width(), px(352.0));  // 400 - 48
-    assert_eq!(content.height(), px(36.0));  // 60 - 24
+    assert_eq!(content.width(), px(352.0)); // 400 - 48
+    assert_eq!(content.height(), px(36.0)); // 60 - 24
 }
 
 #[test]
@@ -329,10 +329,10 @@ fn test_safe_area_insets() {
 
     // Safe area insets (notch and home indicator)
     let safe_area = Edges::new(
-        px(44.0),  // top (notch)
-        px(0.0),   // right
-        px(34.0),  // bottom (home indicator)
-        px(0.0),   // left
+        px(44.0), // top (notch)
+        px(0.0),  // right
+        px(34.0), // bottom (home indicator)
+        px(0.0),  // left
     );
 
     let safe_content = safe_area.deflate_rect(screen);
@@ -374,12 +374,7 @@ fn test_dialog_box_layout() {
 
     // Title area (top portion)
     let title_height = px(60.0);
-    let title_rect = Rect::from_xywh(
-        content.left(),
-        content.top(),
-        content.width(),
-        title_height,
-    );
+    let title_rect = Rect::from_xywh(content.left(), content.top(), content.width(), title_height);
 
     // Actions area (bottom portion)
     let actions_height = px(60.0);

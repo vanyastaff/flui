@@ -311,7 +311,10 @@ mod tests {
 
     #[test]
     fn test_texture_layer_clone_copy() {
-        let layer = TextureLayer::new(TextureId::new(1), Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0)));
+        let layer = TextureLayer::new(
+            TextureId::new(1),
+            Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0)),
+        );
         let copied = layer;
         let cloned = layer.clone();
 

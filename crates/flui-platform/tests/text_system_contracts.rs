@@ -36,10 +36,7 @@ fn test_all_platforms_return_default_font() {
     );
 
     #[cfg(target_os = "linux")]
-    assert_eq!(
-        default_font, "Ubuntu",
-        "Linux should use Ubuntu as default"
-    );
+    assert_eq!(default_font, "Ubuntu", "Linux should use Ubuntu as default");
 }
 
 #[test]
@@ -71,18 +68,10 @@ fn test_all_platforms_measure_text_reasonably() {
     let platform = current_platform().expect("Failed to get platform");
     let text_system = platform.text_system();
 
-    let test_cases = vec![
-        ("Hello", 16.0),
-        ("World!", 20.0),
-        ("Test 123", 14.0),
-    ];
+    let test_cases = vec![("Hello", 16.0), ("World!", 20.0), ("Test 123", 14.0)];
 
     for (text, font_size) in test_cases {
-        let bounds = text_system.measure_text(
-            text,
-            &text_system.default_font_family(),
-            font_size,
-        );
+        let bounds = text_system.measure_text(text, &text_system.default_font_family(), font_size);
 
         // Width should be reasonable (roughly 0.5-0.7em per character)
         let char_count = text.chars().count() as f32;
@@ -141,11 +130,7 @@ fn test_all_platforms_handle_empty_text() {
     let platform = current_platform().expect("Failed to get platform");
     let text_system = platform.text_system();
 
-    let bounds = text_system.measure_text(
-        "",
-        &text_system.default_font_family(),
-        16.0,
-    );
+    let bounds = text_system.measure_text("", &text_system.default_font_family(), 16.0);
 
     // Empty text should have zero or near-zero width
     assert!(
@@ -167,17 +152,11 @@ fn test_all_platforms_scale_with_font_size() {
     let large_size = 24.0;
     let scale_factor = large_size / small_size; // 2.0x
 
-    let small_bounds = text_system.measure_text(
-        text,
-        &text_system.default_font_family(),
-        small_size,
-    );
+    let small_bounds =
+        text_system.measure_text(text, &text_system.default_font_family(), small_size);
 
-    let large_bounds = text_system.measure_text(
-        text,
-        &text_system.default_font_family(),
-        large_size,
-    );
+    let large_bounds =
+        text_system.measure_text(text, &text_system.default_font_family(), large_size);
 
     // Large should be approximately 2x small (within 10% tolerance)
     let width_ratio = large_bounds.width().0 / small_bounds.width().0;
@@ -214,11 +193,7 @@ fn test_all_platforms_handle_unicode() {
     ];
 
     for (text, description) in unicode_tests {
-        let bounds = text_system.measure_text(
-            text,
-            &text_system.default_font_family(),
-            16.0,
-        );
+        let bounds = text_system.measure_text(text, &text_system.default_font_family(), 16.0);
 
         // Should return some non-zero width (stub approximation is fine)
         assert!(
@@ -245,11 +220,7 @@ fn test_all_platforms_glyph_shaping_returns_vec() {
     let platform = current_platform().expect("Failed to get platform");
     let text_system = platform.text_system();
 
-    let glyphs = text_system.shape_glyphs(
-        "Test",
-        &text_system.default_font_family(),
-        16.0,
-    );
+    let glyphs = text_system.shape_glyphs("Test", &text_system.default_font_family(), 16.0);
 
     // MVP stub returns empty vec - just verify it's a valid Vec
     // (Future implementations will return actual glyphs)

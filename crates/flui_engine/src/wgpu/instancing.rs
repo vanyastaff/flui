@@ -326,7 +326,11 @@ impl TextureInstance {
     /// * `src_uv` - Source UV rectangle [u_min, v_min, u_max, v_max]
     /// * `tint` - Color tint
     #[must_use]
-    pub fn with_uv(dst_rect: flui_types::Rect<flui_types::geometry::Pixels>, src_uv: [f32; 4], tint: Color) -> Self {
+    pub fn with_uv(
+        dst_rect: flui_types::Rect<flui_types::geometry::Pixels>,
+        src_uv: [f32; 4],
+        tint: Color,
+    ) -> Self {
         Self {
             dst_rect: [
                 dst_rect.left().0,
@@ -347,7 +351,11 @@ impl TextureInstance {
     /// * `angle` - Rotation angle in radians
     /// * `tint` - Color tint
     #[must_use]
-    pub fn with_rotation(dst_rect: flui_types::Rect<flui_types::geometry::Pixels>, angle: f32, tint: Color) -> Self {
+    pub fn with_rotation(
+        dst_rect: flui_types::Rect<flui_types::geometry::Pixels>,
+        angle: f32,
+        tint: Color,
+    ) -> Self {
         Self {
             dst_rect: [
                 dst_rect.left().0,

@@ -316,7 +316,13 @@ mod tests {
         let link = crate::LayerLink::new();
         registry.register_leader(link, root_id, Offset::ZERO, Size::new(px(100.0), px(50.0)));
 
-        let scene = Scene::with_links(Size::new(px(800.0), px(600.0)), tree, Some(root_id), registry, 123);
+        let scene = Scene::with_links(
+            Size::new(px(800.0), px(600.0)),
+            tree,
+            Some(root_id),
+            registry,
+            123,
+        );
 
         assert_eq!(scene.link_registry().leader_count(), 1);
         assert_eq!(scene.frame_number(), 123);

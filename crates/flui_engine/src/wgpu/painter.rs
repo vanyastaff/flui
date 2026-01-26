@@ -18,7 +18,12 @@ use super::{
 };
 use crate::traits::Painter;
 use flui_painting::{Paint, PaintStyle};
-use flui_types::{geometry::{px, Pixels, RRect}, painting::Path, painting::TextureId, Offset, Point, Rect};
+use flui_types::{
+    geometry::{px, Pixels, RRect},
+    painting::Path,
+    painting::TextureId,
+    Offset, Point, Rect,
+};
 use wgpu::util::DeviceExt;
 
 /// GPU painter for hardware-accelerated 2D rendering
@@ -1979,7 +1984,8 @@ impl Painter for WgpuPainter {
         let transform = self.current_transform;
 
         // Transform rect corners
-        let top_left = transform.transform_point3(glam::Vec3::new(rect.left().0, rect.top().0, 0.0));
+        let top_left =
+            transform.transform_point3(glam::Vec3::new(rect.left().0, rect.top().0, 0.0));
         let bottom_right =
             transform.transform_point3(glam::Vec3::new(rect.right().0, rect.bottom().0, 0.0));
 
@@ -2063,7 +2069,12 @@ impl Painter for WgpuPainter {
     // ===== Viewport Information =====
 
     fn viewport_bounds(&self) -> Rect<Pixels> {
-        Rect::from_ltrb(px(0.0), px(0.0), px(self.size.0 as f32), px(self.size.1 as f32))
+        Rect::from_ltrb(
+            px(0.0),
+            px(0.0),
+            px(self.size.0 as f32),
+            px(self.size.1 as f32),
+        )
     }
 
     // ===== Layer Operations (Opacity) =====
@@ -2144,7 +2155,12 @@ impl WgpuPainter {
             .extend_from_slice(&stops[..stop_count]);
 
         let instance = LinearGradientInstance::new(
-            [bounds.left().0, bounds.top().0, bounds.width().0, bounds.height().0],
+            [
+                bounds.left().0,
+                bounds.top().0,
+                bounds.width().0,
+                bounds.height().0,
+            ],
             gradient_start,
             gradient_end,
             [corner_radius; 4],
@@ -2195,7 +2211,12 @@ impl WgpuPainter {
             .extend_from_slice(&stops[..stop_count]);
 
         let instance = RadialGradientInstance::new(
-            [bounds.left().0, bounds.top().0, bounds.width().0, bounds.height().0],
+            [
+                bounds.left().0,
+                bounds.top().0,
+                bounds.width().0,
+                bounds.height().0,
+            ],
             center,
             radius,
             [corner_radius; 4],

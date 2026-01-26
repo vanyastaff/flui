@@ -49,7 +49,10 @@ fn test_headless_platform_startup_under_10ms() {
     let _platform = headless_platform();
     let duration = start.elapsed();
 
-    println!("Headless platform startup: {:.3}ms", duration.as_secs_f64() * 1000.0);
+    println!(
+        "Headless platform startup: {:.3}ms",
+        duration.as_secs_f64() * 1000.0
+    );
 
     assert!(
         duration.as_millis() < 10,
@@ -76,10 +79,15 @@ fn test_headless_window_creation_under_1ms() {
     };
 
     let start = Instant::now();
-    let _window = platform.open_window(options).expect("Failed to create window");
+    let _window = platform
+        .open_window(options)
+        .expect("Failed to create window");
     let duration = start.elapsed();
 
-    println!("Headless window creation: {:.3}ms", duration.as_secs_f64() * 1000.0);
+    println!(
+        "Headless window creation: {:.3}ms",
+        duration.as_secs_f64() * 1000.0
+    );
 
     assert!(
         duration.as_millis() < 1,

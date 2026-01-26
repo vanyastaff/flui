@@ -4,7 +4,10 @@
 //! All vertices use bytemuck for zero-copy GPU uploads.
 
 use bytemuck::{Pod, Zeroable};
-use flui_types::{geometry::{Point, DevicePixels}, styling::Color};
+use flui_types::{
+    geometry::{DevicePixels, Point},
+    styling::Color,
+};
 
 /// Generic vertex for rendering
 ///

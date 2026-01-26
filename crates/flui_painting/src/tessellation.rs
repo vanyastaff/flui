@@ -191,10 +191,8 @@ pub fn tessellate_fill(
         .tessellate_path(
             &lyon_path,
             &fill_options,
-            &mut BuffersBuilder::new(&mut geometry, |vertex: FillVertex<'_>| {
-                TessellationVertex {
-                    position: vertex.position().to_array(),
-                }
+            &mut BuffersBuilder::new(&mut geometry, |vertex: FillVertex<'_>| TessellationVertex {
+                position: vertex.position().to_array(),
             }),
         )
         .map_err(|e| TessellationError::FillError(format!("{:?}", e)))?;
@@ -493,7 +491,8 @@ mod tests {
         let path = Path::circle(Point::new(px(50.0), px(50.0)), 25.0);
 
         // High tolerance = fewer triangles
-        let low_quality = tessellate_fill(&path, &TessellationOptions::with_tolerance(1.0)).unwrap();
+        let low_quality =
+            tessellate_fill(&path, &TessellationOptions::with_tolerance(1.0)).unwrap();
 
         // Low tolerance = more triangles
         let high_quality =

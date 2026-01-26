@@ -1293,7 +1293,10 @@ mod tests {
         let root = tree.insert(Layer::Offset(OffsetLayer::zero()));
 
         // Create rounded rect with 10px corner radius
-        let rrect = RRect::from_rect_circular(Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0)), px(10.0));
+        let rrect = RRect::from_rect_circular(
+            Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0)),
+            px(10.0),
+        );
 
         // Push clip rrect and get its ID
         let clip_id = tree.push_clip_rrect(root, rrect, Clip::AntiAlias);
@@ -1413,7 +1416,10 @@ mod tests {
         );
 
         // Push second clip rrect inside first clip (inner clip)
-        let rrect = RRect::from_rect_circular(Rect::from_ltrb(px(10.0), px(10.0), px(190.0), px(190.0)), px(20.0));
+        let rrect = RRect::from_rect_circular(
+            Rect::from_ltrb(px(10.0), px(10.0), px(190.0), px(190.0)),
+            px(20.0),
+        );
         let inner_clip = tree.push_clip_rrect(outer_clip, rrect, Clip::AntiAlias);
 
         // Verify hierarchy: root -> outer_clip -> inner_clip

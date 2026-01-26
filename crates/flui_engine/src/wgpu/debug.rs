@@ -5,7 +5,7 @@
 use super::commands::CommandRenderer;
 use flui_painting::{BlendMode, DisplayListCore, Paint, PointMode};
 use flui_types::{
-    geometry::{Matrix4, Offset, Point, RRect, Rect, Pixels},
+    geometry::{Matrix4, Offset, Pixels, Point, RRect, Rect},
     painting::{Image, Path},
     styling::Color,
     typography::TextStyle,
@@ -50,7 +50,13 @@ impl CommandRenderer for DebugBackend {
         self.log_command("render_rrect", &format!("rrect={:?}", rrect));
     }
 
-    fn render_circle(&mut self, center: Point<Pixels>, radius: f32, _paint: &Paint, _transform: &Matrix4) {
+    fn render_circle(
+        &mut self,
+        center: Point<Pixels>,
+        radius: f32,
+        _paint: &Paint,
+        _transform: &Matrix4,
+    ) {
         self.log_command(
             "render_circle",
             &format!("center={:?}, radius={}", center, radius),
@@ -61,7 +67,13 @@ impl CommandRenderer for DebugBackend {
         self.log_command("render_oval", &format!("rect={:?}", rect));
     }
 
-    fn render_line(&mut self, p1: Point<Pixels>, p2: Point<Pixels>, _paint: &Paint, _transform: &Matrix4) {
+    fn render_line(
+        &mut self,
+        p1: Point<Pixels>,
+        p2: Point<Pixels>,
+        _paint: &Paint,
+        _transform: &Matrix4,
+    ) {
         self.log_command("render_line", &format!("p1={:?}, p2={:?}", p1, p2));
     }
 

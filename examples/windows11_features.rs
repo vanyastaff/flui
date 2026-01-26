@@ -28,8 +28,8 @@
 #![cfg(target_os = "windows")]
 
 use flui_platform::{
+    windows::{WindowCornerPreference, WindowsBackdrop, WindowsTheme, WindowsWindowExt},
     Platform, WindowOptions,
-    windows::{WindowsWindowExt, WindowsBackdrop, WindowCornerPreference, WindowsTheme},
 };
 use flui_types::geometry::{px, Size};
 use std::sync::Arc;
@@ -76,7 +76,11 @@ fn main() -> anyhow::Result<()> {
 
     println!("✅ Window created successfully!");
     println!("📋 Window ID: {:?}", window.id());
-    println!("📐 Size: {}x{}", window.size().width.0, window.size().height.0);
+    println!(
+        "📐 Size: {}x{}",
+        window.size().width.0,
+        window.size().height.0
+    );
     println!("🖥️  DPI: {}", window.dpi());
     println!();
 

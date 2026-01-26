@@ -797,8 +797,10 @@ mod tests {
         let mut builder = SceneBuilder::new(&mut tree);
 
         let _ = builder.push_offset(Offset::ZERO);
-        let texture_id =
-            builder.add_texture(TextureId::new(42), Rect::from_ltwh(px(0.0), px(0.0), px(100.0), px(100.0)));
+        let texture_id = builder.add_texture(
+            TextureId::new(42),
+            Rect::from_ltwh(px(0.0), px(0.0), px(100.0), px(100.0)),
+        );
 
         let _ = builder.build();
 
@@ -829,8 +831,10 @@ mod tests {
         let mut tree = LayerTree::new();
         let mut builder = SceneBuilder::new(&mut tree);
 
-        let clip_id =
-            builder.push_clip_rect(Rect::from_ltwh(px(0.0), px(0.0), px(200.0), px(200.0)), Clip::HardEdge);
+        let clip_id = builder.push_clip_rect(
+            Rect::from_ltwh(px(0.0), px(0.0), px(200.0), px(200.0)),
+            Clip::HardEdge,
+        );
         builder.pop();
 
         let layer = tree.get_layer(clip_id).unwrap();

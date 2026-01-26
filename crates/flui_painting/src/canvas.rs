@@ -2231,7 +2231,12 @@ impl Canvas {
     /// });
     /// ```
     #[inline]
-    pub fn with_blend_mode<F, R>(&mut self, blend_mode: BlendMode, bounds: Option<Rect<Pixels>>, f: F) -> R
+    pub fn with_blend_mode<F, R>(
+        &mut self,
+        blend_mode: BlendMode,
+        bounds: Option<Rect<Pixels>>,
+        f: F,
+    ) -> R
     where
         F: FnOnce(&mut Self) -> R,
     {
@@ -2983,7 +2988,11 @@ impl Canvas {
 
     /// Draws a gradient-filled rectangle and returns self for chaining.
     #[inline]
-    pub fn gradient(&mut self, rect: Rect<Pixels>, shader: crate::display_list::Shader) -> &mut Self {
+    pub fn gradient(
+        &mut self,
+        rect: Rect<Pixels>,
+        shader: crate::display_list::Shader,
+    ) -> &mut Self {
         self.draw_gradient(rect, shader);
         self
     }

@@ -45,7 +45,9 @@ mod tests {
             max_size: None,
         };
 
-        let _window = platform.open_window(options).expect("Failed to create window");
+        let _window = platform
+            .open_window(options)
+            .expect("Failed to create window");
 
         // Contract verification:
         // ✓ WM_LBUTTONDOWN handler exists in windows/platform.rs:454
@@ -80,7 +82,9 @@ mod tests {
             max_size: None,
         };
 
-        let _window = platform.open_window(options).expect("Failed to create window");
+        let _window = platform
+            .open_window(options)
+            .expect("Failed to create window");
 
         // Contract verification:
         // ✓ WM_KEYDOWN handler exists in windows/platform.rs:504
@@ -117,7 +121,9 @@ mod tests {
             max_size: Some(Size::new(px(1920.0), px(1080.0))),
         };
 
-        let window = platform.open_window(options).expect("Failed to create window");
+        let window = platform
+            .open_window(options)
+            .expect("Failed to create window");
 
         // Verify window size matches requested size
         let physical_size = window.physical_size();
@@ -169,7 +175,9 @@ mod tests {
             max_size: None,
         };
 
-        let _window = platform.open_window(options).expect("Failed to create window");
+        let _window = platform
+            .open_window(options)
+            .expect("Failed to create window");
 
         // Contract verification:
         // ✓ Tracing instrumentation exists in all event handlers
@@ -209,7 +217,9 @@ mod tests {
             max_size: None,
         };
 
-        let _window = platform.open_window(options).expect("Failed to create window");
+        let _window = platform
+            .open_window(options)
+            .expect("Failed to create window");
 
         // Contract verification:
         // ✓ get_current_modifiers() function exists in windows/events.rs:242
@@ -251,7 +261,9 @@ mod tests {
             max_size: None,
         };
 
-        let window = platform.open_window(options).expect("Failed to create window");
+        let window = platform
+            .open_window(options)
+            .expect("Failed to create window");
 
         // Verify the complete event pipeline:
         // 1. Window creation successful

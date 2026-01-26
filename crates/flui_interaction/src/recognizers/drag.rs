@@ -382,8 +382,7 @@ impl DragGestureRecognizer {
         if state.state == DragPhase::Started {
             // Calculate final velocity
             let velocity = state.velocity_tracker.velocity();
-            let primary_velocity =
-                self.calculate_primary_velocity(velocity.pixels_per_second);
+            let primary_velocity = self.calculate_primary_velocity(velocity.pixels_per_second);
 
             state.state = DragPhase::Ready;
             drop(state); // Release lock before calling callback

@@ -4,8 +4,8 @@
 //! one or more render objects. Non-boundary render objects merge their
 //! semantics into the nearest boundary ancestor.
 
-use flui_types::geometry::Pixels;
 use flui_foundation::{ElementId, SemanticsId};
+use flui_types::geometry::Pixels;
 use flui_types::geometry::Rect;
 use flui_types::Matrix4;
 

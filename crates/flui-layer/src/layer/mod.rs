@@ -981,7 +981,10 @@ mod tests {
 
     #[test]
     fn test_layer_from_clip_rect() {
-        let clip = ClipRectLayer::new(Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0)), Clip::HardEdge);
+        let clip = ClipRectLayer::new(
+            Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0)),
+            Clip::HardEdge,
+        );
         let layer = Layer::from(clip);
         assert!(layer.is_clip_rect());
         assert!(layer.is_clip());
@@ -1002,13 +1005,19 @@ mod tests {
 
         // Hard edge clip doesn't need compositing
         let clip = Layer::ClipRect(ClipRectLayer::hard_edge(Rect::from_xywh(
-            px(0.0), px(0.0), px(100.0), px(100.0),
+            px(0.0),
+            px(0.0),
+            px(100.0),
+            px(100.0),
         )));
         assert!(!clip.needs_compositing());
 
         // Anti-aliased clip needs compositing
         let aa_clip = Layer::ClipRect(ClipRectLayer::anti_alias(Rect::from_xywh(
-            px(0.0), px(0.0), px(100.0), px(100.0),
+            px(0.0),
+            px(0.0),
+            px(100.0),
+            px(100.0),
         )));
         assert!(aa_clip.needs_compositing());
 

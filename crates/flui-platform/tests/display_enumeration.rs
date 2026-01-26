@@ -22,7 +22,11 @@ fn test_displays_enumeration() {
     let platform = current_platform().expect("Failed to get platform");
     let displays = platform.displays();
 
-    tracing::info!("Platform {} reports {} display(s)", platform.name(), displays.len());
+    tracing::info!(
+        "Platform {} reports {} display(s)",
+        platform.name(),
+        displays.len()
+    );
 
     // Contract: displays() must return a valid collection
     // Empty is OK for headless, but most systems have at least one
@@ -179,9 +183,7 @@ fn test_high_dpi_scale_factor() {
 
             // Common HiDPI scales: 1.5, 2.0, 2.5, 3.0, 4.0
             let common_scales = [1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 3.0, 4.0];
-            let is_common = common_scales
-                .iter()
-                .any(|&s| (scale - s).abs() < 0.01);
+            let is_common = common_scales.iter().any(|&s| (scale - s).abs() < 0.01);
 
             if is_common {
                 tracing::info!("  → Common HiDPI scale factor: {}", scale);
@@ -189,10 +191,8 @@ fn test_high_dpi_scale_factor() {
 
             // Verify logical size calculation
             let logical_size = display.logical_size();
-            let expected_logical_width =
-                bounds.size.width.0 as f32 / scale as f32;
-            let expected_logical_height =
-                bounds.size.height.0 as f32 / scale as f32;
+            let expected_logical_width = bounds.size.width.0 as f32 / scale as f32;
+            let expected_logical_height = bounds.size.height.0 as f32 / scale as f32;
 
             let width_diff = (logical_size.width.0 - expected_logical_width).abs();
             let height_diff = (logical_size.height.0 - expected_logical_height).abs();
@@ -278,11 +278,7 @@ fn test_usable_bounds_exclude_system_ui() {
         let height_diff = full_bounds.size.height.0 - usable_bounds.size.height.0;
 
         if width_diff > 0 || height_diff > 0 {
-            tracing::info!(
-                "  → System UI takes {}x{} pixels",
-                width_diff,
-                height_diff
-            );
+            tracing::info!("  → System UI takes {}x{} pixels", width_diff, height_diff);
         } else {
             tracing::info!("  → No system UI detected (full bounds = usable bounds)");
         }
@@ -419,9 +415,7 @@ fn test_multi_monitor_bounds_arrangement() {
     let displays = platform.displays();
 
     if displays.len() < 2 {
-        tracing::info!(
-            "⊘ SKIP: Single display system (need 2+ displays for multi-monitor test)"
-        );
+        tracing::info!("⊘ SKIP: Single display system (need 2+ displays for multi-monitor test)");
         return;
     }
 
@@ -458,8 +452,7 @@ fn test_multi_monitor_bounds_arrangement() {
             let bounds2 = display2.bounds();
 
             // Calculate if displays are adjacent or overlapping
-            let horizontal_gap = if bounds1.origin.x.0 + bounds1.size.width.0
-                <= bounds2.origin.x.0
+            let horizontal_gap = if bounds1.origin.x.0 + bounds1.size.width.0 <= bounds2.origin.x.0
             {
                 bounds2.origin.x.0 - (bounds1.origin.x.0 + bounds1.size.width.0)
             } else if bounds2.origin.x.0 + bounds2.size.width.0 <= bounds1.origin.x.0 {
@@ -468,9 +461,7 @@ fn test_multi_monitor_bounds_arrangement() {
                 0 // Overlapping or aligned
             };
 
-            let vertical_gap = if bounds1.origin.y.0 + bounds1.size.height.0
-                <= bounds2.origin.y.0
-            {
+            let vertical_gap = if bounds1.origin.y.0 + bounds1.size.height.0 <= bounds2.origin.y.0 {
                 bounds2.origin.y.0 - (bounds1.origin.y.0 + bounds1.size.height.0)
             } else if bounds2.origin.y.0 + bounds2.size.height.0 <= bounds1.origin.y.0 {
                 bounds1.origin.y.0 - (bounds2.origin.y.0 + bounds2.size.height.0)
@@ -534,7 +525,7 @@ fn test_scale_factor_changed_event() {
     // Find displays with different scale factors
     let mut different_scales = false;
     for i in 0..displays.len() {
-        for j in (i+1)..displays.len() {
+        for j in (i + 1)..displays.len() {
             if (displays[i].scale_factor() - displays[j].scale_factor()).abs() > 0.1 {
                 different_scales = true;
                 tracing::info!(
@@ -553,7 +544,9 @@ fn test_scale_factor_changed_event() {
         return;
     }
 
-    tracing::info!("✓ NOTE: ScaleFactorChanged event test requires manual/automated window movement");
+    tracing::info!(
+        "✓ NOTE: ScaleFactorChanged event test requires manual/automated window movement"
+    );
     tracing::info!("  Implementation would use:");
     tracing::info!("  - platform.on_window_event() to register listener");
     tracing::info!("  - window.set_position() to move between monitors");

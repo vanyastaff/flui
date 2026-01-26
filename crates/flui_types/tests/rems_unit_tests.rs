@@ -2,8 +2,8 @@
 //!
 //! Tests the Rems type for font-relative sizing, fulfilling User Story 4 requirements.
 
-use flui_types::geometry::{Rems, rems, Pixels, px};
 use flui_types::geometry::traits::Unit;
+use flui_types::geometry::{px, rems, Pixels, Rems};
 
 // ============================================================================
 // T055: Rems::new() and arithmetic tests
@@ -127,7 +127,7 @@ fn test_rems_div_assign() {
 #[test]
 fn test_rems_to_pixels_standard() {
     let r = rems(1.0);
-    let base_font = px(16.0);  // Standard 1rem = 16px
+    let base_font = px(16.0); // Standard 1rem = 16px
 
     let pixels = r.to_pixels(base_font);
     assert_eq!(pixels.get(), 16.0);
@@ -139,16 +139,16 @@ fn test_rems_to_pixels_scaled() {
     let base_font = px(16.0);
 
     let pixels = r.to_pixels(base_font);
-    assert_eq!(pixels.get(), 24.0);  // 1.5 * 16 = 24
+    assert_eq!(pixels.get(), 24.0); // 1.5 * 16 = 24
 }
 
 #[test]
 fn test_rems_to_pixels_custom_base() {
     let r = rems(2.0);
-    let base_font = px(20.0);  // Larger base font
+    let base_font = px(20.0); // Larger base font
 
     let pixels = r.to_pixels(base_font);
-    assert_eq!(pixels.get(), 40.0);  // 2.0 * 20 = 40
+    assert_eq!(pixels.get(), 40.0); // 2.0 * 20 = 40
 }
 
 #[test]
@@ -157,7 +157,7 @@ fn test_rems_to_pixels_small_value() {
     let base_font = px(16.0);
 
     let pixels = r.to_pixels(base_font);
-    assert_eq!(pixels.get(), 8.0);  // 0.5 * 16 = 8
+    assert_eq!(pixels.get(), 8.0); // 0.5 * 16 = 8
 }
 
 #[test]

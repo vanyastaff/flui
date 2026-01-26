@@ -3,7 +3,7 @@
 //! This module tests pixel-perfect GPU rendering with DevicePixels type,
 //! including conversions and geometric operations.
 
-use flui_types::geometry::{Point, Rect, Size, Offset, Vec2, device_px, px};
+use flui_types::geometry::{device_px, px, Offset, Point, Rect, Size, Vec2};
 
 // ============================================================================
 // Point<DevicePixels> Operations
@@ -65,7 +65,7 @@ fn test_device_point_to_logical_pixels() {
 
     let logical_point = Point::new(
         device_point.x.to_pixels(scale),
-        device_point.y.to_pixels(scale)
+        device_point.y.to_pixels(scale),
     );
 
     assert_eq!(logical_point.x, px(100.0));
@@ -127,7 +127,12 @@ fn test_device_rect_intersect() {
 #[test]
 fn test_device_rect_intersect_no_overlap() {
     let rect1 = Rect::from_xywh(device_px(0), device_px(0), device_px(100), device_px(100));
-    let rect2 = Rect::from_xywh(device_px(200), device_px(200), device_px(100), device_px(100));
+    let rect2 = Rect::from_xywh(
+        device_px(200),
+        device_px(200),
+        device_px(100),
+        device_px(100),
+    );
 
     let intersection = rect1.intersect(&rect2);
 
@@ -173,14 +178,19 @@ fn test_device_rect_inset() {
 
 #[test]
 fn test_device_rect_to_logical_pixels() {
-    let device_rect = Rect::from_xywh(device_px(200), device_px(400), device_px(600), device_px(800));
+    let device_rect = Rect::from_xywh(
+        device_px(200),
+        device_px(400),
+        device_px(600),
+        device_px(800),
+    );
     let scale = 2.0;
 
     let logical_rect = Rect::from_xywh(
         device_rect.left().to_pixels(scale),
         device_rect.top().to_pixels(scale),
         device_rect.width().to_pixels(scale),
-        device_rect.height().to_pixels(scale)
+        device_rect.height().to_pixels(scale),
     );
 
     assert_eq!(logical_rect.left(), px(100.0));
@@ -235,12 +245,12 @@ fn test_gpu_pixel_alignment_1x() {
         logical_rect.left().to_device_pixels(scale),
         logical_rect.top().to_device_pixels(scale),
         logical_rect.width().to_device_pixels(scale),
-        logical_rect.height().to_device_pixels(scale)
+        logical_rect.height().to_device_pixels(scale),
     );
 
     // Device pixels should be rounded to integers
     assert_eq!(device_rect.left(), device_px(11)); // 10.5 rounds to 11
-    assert_eq!(device_rect.top(), device_px(21));  // 20.5 rounds to 21
+    assert_eq!(device_rect.top(), device_px(21)); // 20.5 rounds to 21
     assert_eq!(device_rect.width(), device_px(100));
     assert_eq!(device_rect.height(), device_px(200));
 }
@@ -255,7 +265,7 @@ fn test_gpu_pixel_alignment_2x() {
         logical_rect.left().to_device_pixels(scale),
         logical_rect.top().to_device_pixels(scale),
         logical_rect.width().to_device_pixels(scale),
-        logical_rect.height().to_device_pixels(scale)
+        logical_rect.height().to_device_pixels(scale),
     );
 
     assert_eq!(device_rect.left(), device_px(20));
@@ -274,7 +284,7 @@ fn test_gpu_pixel_alignment_fractional_scale() {
         logical_rect.left().to_device_pixels(scale),
         logical_rect.top().to_device_pixels(scale),
         logical_rect.width().to_device_pixels(scale),
-        logical_rect.height().to_device_pixels(scale)
+        logical_rect.height().to_device_pixels(scale),
     );
 
     assert_eq!(device_rect.left(), device_px(15));
@@ -297,7 +307,7 @@ fn test_framebuffer_clipping_rect() {
         logical_clip.left().to_device_pixels(scale),
         logical_clip.top().to_device_pixels(scale),
         logical_clip.width().to_device_pixels(scale),
-        logical_clip.height().to_device_pixels(scale)
+        logical_clip.height().to_device_pixels(scale),
     );
 
     // Device pixels map 1:1 with framebuffer
@@ -319,8 +329,8 @@ fn test_texture_atlas_coordinates() {
     let u_max = glyph_rect.right().get() as f32 / atlas_size.width.get() as f32;
     let v_max = glyph_rect.bottom().get() as f32 / atlas_size.height.get() as f32;
 
-    assert!((u_min - 0.125).abs() < 0.001);  // 128/1024
-    assert!((v_min - 0.25).abs() < 0.001);   // 256/1024
+    assert!((u_min - 0.125).abs() < 0.001); // 128/1024
+    assert!((v_min - 0.25).abs() < 0.001); // 256/1024
     assert!((u_max - 0.15625).abs() < 0.001); // 160/1024
     assert!((v_max - 0.296875).abs() < 0.001); // 304/1024
 }
@@ -334,7 +344,7 @@ fn test_viewport_transformation() {
     let scale = 2.0;
     let logical_viewport = Size::new(
         viewport.width.to_pixels(scale),
-        viewport.height.to_pixels(scale)
+        viewport.height.to_pixels(scale),
     );
 
     assert_eq!(logical_viewport.width, px(960.0));
@@ -350,7 +360,7 @@ fn test_subpixel_rendering_alignment() {
     // Convert to device pixels for GPU rendering
     let device_pos = Point::new(
         text_pos.x.to_device_pixels(scale),
-        text_pos.y.to_device_pixels(scale)
+        text_pos.y.to_device_pixels(scale),
     );
 
     // Device pixels are always integers (rounded)
@@ -372,7 +382,7 @@ fn test_logical_to_device_to_logical_1x() {
         original.left().to_device_pixels(scale),
         original.top().to_device_pixels(scale),
         original.width().to_device_pixels(scale),
-        original.height().to_device_pixels(scale)
+        original.height().to_device_pixels(scale),
     );
 
     // Convert back to logical pixels
@@ -380,7 +390,7 @@ fn test_logical_to_device_to_logical_1x() {
         device_rect.left().to_pixels(scale),
         device_rect.top().to_pixels(scale),
         device_rect.width().to_pixels(scale),
-        device_rect.height().to_pixels(scale)
+        device_rect.height().to_pixels(scale),
     );
 
     assert_eq!(back.left(), original.left());
@@ -398,14 +408,14 @@ fn test_logical_to_device_to_logical_2x() {
         original.left().to_device_pixels(scale),
         original.top().to_device_pixels(scale),
         original.width().to_device_pixels(scale),
-        original.height().to_device_pixels(scale)
+        original.height().to_device_pixels(scale),
     );
 
     let back = Rect::from_xywh(
         device_rect.left().to_pixels(scale),
         device_rect.top().to_pixels(scale),
         device_rect.width().to_pixels(scale),
-        device_rect.height().to_pixels(scale)
+        device_rect.height().to_pixels(scale),
     );
 
     assert_eq!(back.left(), original.left());

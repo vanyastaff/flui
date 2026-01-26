@@ -225,7 +225,11 @@ mod tests {
     #[test]
     fn test_picture_layer_set_bounds() {
         let mut canvas = Canvas::new();
-        canvas.draw_circle(Point::new(px(50.0), px(50.0)), px(25.0), &Paint::fill(Color::YELLOW));
+        canvas.draw_circle(
+            Point::new(px(50.0), px(50.0)),
+            px(25.0),
+            &Paint::fill(Color::YELLOW),
+        );
         let picture = canvas.finish();
 
         let mut layer = PictureLayer::new(picture);

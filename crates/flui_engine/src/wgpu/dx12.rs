@@ -574,7 +574,7 @@ mod tests {
     fn test_work_graphs_clamping() {
         let config = WorkGraphsConfig::enabled()
             .with_max_nodes(10000)  // Should clamp to 4096
-            .with_max_recursion_depth(100);  // Should clamp to 32
+            .with_max_recursion_depth(100); // Should clamp to 32
 
         assert_eq!(config.max_nodes, 4096);
         assert_eq!(config.max_recursion_depth, 32);
@@ -610,13 +610,11 @@ mod tests {
 
     #[test]
     fn test_auto_hdr_luminance_clamping() {
-        let config = AutoHdrConfig::enabled()
-            .with_target_luminance(50.0);  // Below min (100)
+        let config = AutoHdrConfig::enabled().with_target_luminance(50.0); // Below min (100)
 
         assert_eq!(config.target_luminance, 100.0);
 
-        let config = AutoHdrConfig::enabled()
-            .with_target_luminance(20000.0);  // Above max (10000)
+        let config = AutoHdrConfig::enabled().with_target_luminance(20000.0); // Above max (10000)
 
         assert_eq!(config.target_luminance, 10000.0);
     }

@@ -222,7 +222,8 @@ mod tests {
     #[test]
     fn test_leader_layer_builder() {
         let link = LayerLink::new();
-        let layer = LeaderLayer::new(link, Size::new(px(100.0), px(50.0))).offset(Offset::new(px(10.0), px(20.0)));
+        let layer = LeaderLayer::new(link, Size::new(px(100.0), px(50.0)))
+            .offset(Offset::new(px(10.0), px(20.0)));
 
         assert_eq!(layer.get_offset(), Offset::new(px(10.0), px(20.0)));
     }

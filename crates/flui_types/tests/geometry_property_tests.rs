@@ -3,8 +3,8 @@
 //! Uses proptest to verify mathematical properties that must hold for all inputs.
 //! These tests validate contracts defined in specs/001-flui-types/contracts/README.md
 
+use flui_types::geometry::{px, Offset, Pixels, Point, Rect, Size};
 use proptest::prelude::*;
-use flui_types::geometry::{Pixels, Point, Rect, Size, Offset, px};
 
 // ============================================================================
 // Arbitrary generators for property testing
@@ -22,26 +22,22 @@ fn arb_positive_pixels() -> impl Strategy<Value = Pixels> {
 
 /// Generate arbitrary Points
 fn arb_point() -> impl Strategy<Value = Point<Pixels>> {
-    (arb_pixels(), arb_pixels())
-        .prop_map(|(x, y)| Point::new(x, y))
+    (arb_pixels(), arb_pixels()).prop_map(|(x, y)| Point::new(x, y))
 }
 
 /// Generate arbitrary Sizes (width and height must be non-negative)
 fn arb_size() -> impl Strategy<Value = Size<Pixels>> {
-    (arb_positive_pixels(), arb_positive_pixels())
-        .prop_map(|(w, h)| Size::new(w, h))
+    (arb_positive_pixels(), arb_positive_pixels()).prop_map(|(w, h)| Size::new(w, h))
 }
 
 /// Generate arbitrary Rects
 fn arb_rect() -> impl Strategy<Value = Rect<Pixels>> {
-    (arb_point(), arb_size())
-        .prop_map(|(origin, size)| Rect::new(origin, size))
+    (arb_point(), arb_size()).prop_map(|(origin, size)| Rect::new(origin, size))
 }
 
 /// Generate arbitrary Offsets
 fn arb_offset() -> impl Strategy<Value = Offset<Pixels>> {
-    (arb_pixels(), arb_pixels())
-        .prop_map(|(dx, dy)| Offset::new(dx, dy))
+    (arb_pixels(), arb_pixels()).prop_map(|(dx, dy)| Offset::new(dx, dy))
 }
 
 // ============================================================================

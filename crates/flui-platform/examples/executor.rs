@@ -49,7 +49,10 @@ fn example_background_cpu_work() {
     // Spawn CPU-intensive task
     let completed_clone = Arc::clone(&completed);
     executor.spawn(Box::new(move || {
-        println!("Background task started on thread {:?}", thread::current().id());
+        println!(
+            "Background task started on thread {:?}",
+            thread::current().id()
+        );
 
         // Simulate CPU-intensive work (e.g., image processing, data analysis)
         let result = (0..10_000_000).fold(0u64, |acc, x| acc.wrapping_add(x));
@@ -246,10 +249,7 @@ fn example_practical_image_loading() {
         foreground_executor.drain_tasks();
     }
 
-    println!(
-        "Loading complete: {}%",
-        progress.load(Ordering::SeqCst)
-    );
+    println!("Loading complete: {}%", progress.load(Ordering::SeqCst));
 }
 
 /// Example 7: Error handling and resilience

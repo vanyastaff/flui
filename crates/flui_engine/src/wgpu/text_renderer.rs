@@ -9,7 +9,11 @@ use wgpu::{Device, MultisampleState, Queue, TextureFormat};
 #[cfg(feature = "wgpu-backend")]
 use glyphon::{Cache, FontSystem, SwashCache, TextAtlas, TextRenderer as GlyphonRenderer};
 
-use flui_types::{geometry::{Point, DevicePixels}, styling::Color, typography::TextStyle};
+use flui_types::{
+    geometry::{DevicePixels, Point},
+    styling::Color,
+    typography::TextStyle,
+};
 
 /// Text rendering system
 ///

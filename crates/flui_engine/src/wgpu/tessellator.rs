@@ -5,7 +5,11 @@
 
 use super::vertex::Vertex;
 use flui_painting::{Paint, StrokeCap, StrokeJoin};
-use flui_types::{geometry::{Pixels, RRect}, styling::Color, Point, Rect};
+use flui_types::{
+    geometry::{Pixels, RRect},
+    styling::Color,
+    Point, Rect,
+};
 use lyon::path::Path;
 use lyon::tessellation::{
     BuffersBuilder, FillOptions, FillTessellator, FillVertex, StrokeOptions, StrokeTessellator,

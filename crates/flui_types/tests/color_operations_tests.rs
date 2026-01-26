@@ -184,7 +184,10 @@ fn test_color_lerp_with_alpha() {
     assert_eq!(result.r, 255);
     assert_eq!(result.g, 0);
     assert_eq!(result.b, 0);
-    assert!((result.a as i32 - 127).abs() <= 1, "Alpha should be interpolated");
+    assert!(
+        (result.a as i32 - 127).abs() <= 1,
+        "Alpha should be interpolated"
+    );
 }
 
 #[test]
@@ -328,12 +331,16 @@ fn test_lighten_darken_effect() {
     let darker = original.darken(0.2);
 
     // Verify lighten makes it brighter
-    assert!(lighter.r > original.r || lighter.g > original.g || lighter.b > original.b,
-           "Lighten should increase at least one channel");
+    assert!(
+        lighter.r > original.r || lighter.g > original.g || lighter.b > original.b,
+        "Lighten should increase at least one channel"
+    );
 
     // Verify darken makes it darker
-    assert!(darker.r < original.r && darker.g < original.g && darker.b < original.b,
-           "Darken should decrease all channels");
+    assert!(
+        darker.r < original.r && darker.g < original.g && darker.b < original.b,
+        "Darken should decrease all channels"
+    );
 
     // Lighter should be brighter than darker
     assert!(lighter.r > darker.r);
@@ -487,7 +494,7 @@ fn test_theme_color_generation() {
 #[test]
 fn test_gradient_interpolation() {
     let start = Color::rgb(255, 0, 0); // Red
-    let end = Color::rgb(0, 0, 255);   // Blue
+    let end = Color::rgb(0, 0, 255); // Blue
 
     let step1 = Color::lerp(start, end, 0.25);
     let step2 = Color::lerp(start, end, 0.5);

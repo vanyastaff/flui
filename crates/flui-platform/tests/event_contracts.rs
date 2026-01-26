@@ -41,7 +41,9 @@ fn test_platform_event_contract() {
         max_size: None,
     };
 
-    let window = platform.open_window(options).expect("Failed to create window");
+    let window = platform
+        .open_window(options)
+        .expect("Failed to create window");
 
     // ============================================================================
     // Contract 1: All platforms use W3C-standard event types
@@ -195,7 +197,9 @@ fn test_cross_platform_event_consistency() {
         max_size: Some(Size::new(px(1920.0), px(1080.0))),
     };
 
-    let window = platform.open_window(options).expect("Failed to create window");
+    let window = platform
+        .open_window(options)
+        .expect("Failed to create window");
 
     // Verify consistent behavior across all platforms
     let physical_size = window.physical_size();
@@ -277,10 +281,15 @@ fn test_event_dispatch_latency_benchmark() {
 
     // Measure window creation time
     let start = Instant::now();
-    let _window = platform.open_window(options).expect("Failed to create window");
+    let _window = platform
+        .open_window(options)
+        .expect("Failed to create window");
     let creation_time = start.elapsed();
 
-    tracing::info!("Window creation time: {:.2}ms", creation_time.as_secs_f64() * 1000.0);
+    tracing::info!(
+        "Window creation time: {:.2}ms",
+        creation_time.as_secs_f64() * 1000.0
+    );
 
     // Target: Window creation should be fast (<100ms)
     assert!(
@@ -342,7 +351,9 @@ fn test_event_handling_performance_baseline() {
             max_size: None,
         };
 
-        let window = platform.open_window(options).expect("Failed to create window");
+        let window = platform
+            .open_window(options)
+            .expect("Failed to create window");
         windows.push(window);
     }
     let total_time = start.elapsed();
@@ -359,12 +370,7 @@ fn test_event_handling_performance_baseline() {
     for (i, window) in windows.iter().enumerate() {
         let size = window.physical_size();
         let scale = window.scale_factor();
-        tracing::info!(
-            "Window {}: size={:?}, scale={}",
-            i,
-            size,
-            scale
-        );
+        tracing::info!("Window {}: size={:?}, scale={}", i, size, scale);
 
         assert!(size.width.0 > 0);
         assert!(size.height.0 > 0);

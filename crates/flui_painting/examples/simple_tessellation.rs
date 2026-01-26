@@ -28,14 +28,18 @@ fn main() {
     let rect_path = Path::rectangle(Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0)));
 
     let rect_fill = tessellate_fill(&rect_path, &TessellationOptions::default()).unwrap();
-    println!("   Fill:   {} vertices, {} triangles",
-             rect_fill.vertices.len(),
-             rect_fill.triangle_count());
+    println!(
+        "   Fill:   {} vertices, {} triangles",
+        rect_fill.vertices.len(),
+        rect_fill.triangle_count()
+    );
 
     let rect_stroke = tessellate_stroke(&rect_path, 2.0, &TessellationOptions::default()).unwrap();
-    println!("   Stroke: {} vertices, {} triangles\n",
-             rect_stroke.vertices.len(),
-             rect_stroke.triangle_count());
+    println!(
+        "   Stroke: {} vertices, {} triangles\n",
+        rect_stroke.vertices.len(),
+        rect_stroke.triangle_count()
+    );
 
     // ========================================================================
     // Example 2: Circle
@@ -46,14 +50,19 @@ fn main() {
     let circle_path = Path::circle(Point::new(px(50.0), px(50.0)), 25.0);
 
     let circle_fill = tessellate_fill(&circle_path, &TessellationOptions::default()).unwrap();
-    println!("   Fill:   {} vertices, {} triangles",
-             circle_fill.vertices.len(),
-             circle_fill.triangle_count());
+    println!(
+        "   Fill:   {} vertices, {} triangles",
+        circle_fill.vertices.len(),
+        circle_fill.triangle_count()
+    );
 
-    let circle_stroke = tessellate_stroke(&circle_path, 2.0, &TessellationOptions::default()).unwrap();
-    println!("   Stroke: {} vertices, {} triangles\n",
-             circle_stroke.vertices.len(),
-             circle_stroke.triangle_count());
+    let circle_stroke =
+        tessellate_stroke(&circle_path, 2.0, &TessellationOptions::default()).unwrap();
+    println!(
+        "   Stroke: {} vertices, {} triangles\n",
+        circle_stroke.vertices.len(),
+        circle_stroke.triangle_count()
+    );
 
     // ========================================================================
     // Example 3: Canvas Recording → DisplayList
@@ -97,24 +106,27 @@ fn main() {
 
     let test_path = Path::circle(Point::new(px(50.0), px(50.0)), 25.0);
 
-    let low_quality = tessellate_fill(
-        &test_path,
-        &TessellationOptions::with_tolerance(1.0),
-    ).unwrap();
+    let low_quality =
+        tessellate_fill(&test_path, &TessellationOptions::with_tolerance(1.0)).unwrap();
 
-    let medium_quality = tessellate_fill(
-        &test_path,
-        &TessellationOptions::with_tolerance(0.1),
-    ).unwrap();
+    let medium_quality =
+        tessellate_fill(&test_path, &TessellationOptions::with_tolerance(0.1)).unwrap();
 
-    let high_quality = tessellate_fill(
-        &test_path,
-        &TessellationOptions::with_tolerance(0.01),
-    ).unwrap();
+    let high_quality =
+        tessellate_fill(&test_path, &TessellationOptions::with_tolerance(0.01)).unwrap();
 
-    println!("   Low    (tolerance 1.0):  {} triangles", low_quality.triangle_count());
-    println!("   Medium (tolerance 0.1):  {} triangles", medium_quality.triangle_count());
-    println!("   High   (tolerance 0.01): {} triangles\n", high_quality.triangle_count());
+    println!(
+        "   Low    (tolerance 1.0):  {} triangles",
+        low_quality.triangle_count()
+    );
+    println!(
+        "   Medium (tolerance 0.1):  {} triangles",
+        medium_quality.triangle_count()
+    );
+    println!(
+        "   High   (tolerance 0.01): {} triangles\n",
+        high_quality.triangle_count()
+    );
 
     // ========================================================================
     // Example 5: Complex Path
@@ -133,14 +145,19 @@ fn main() {
     let polygon = Path::polygon(&points);
     let polygon_fill = tessellate_fill(&polygon, &TessellationOptions::default()).unwrap();
 
-    println!("   Pentagon: {} vertices, {} triangles",
-             polygon_fill.vertices.len(),
-             polygon_fill.triangle_count());
+    println!(
+        "   Pentagon: {} vertices, {} triangles",
+        polygon_fill.vertices.len(),
+        polygon_fill.triangle_count()
+    );
 
     // Print first few vertices
     println!("\n   First 5 vertices:");
     for (i, vertex) in polygon_fill.vertices.iter().take(5).enumerate() {
-        println!("     {}: ({:.2}, {:.2})", i, vertex.position[0], vertex.position[1]);
+        println!(
+            "     {}: ({:.2}, {:.2})",
+            i, vertex.position[0], vertex.position[1]
+        );
     }
 
     println!("\n===========================================");

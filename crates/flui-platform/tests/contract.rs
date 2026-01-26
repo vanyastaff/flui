@@ -53,7 +53,10 @@ fn contract_platform_creation() {
     let platform = get_test_platform();
 
     // THEN: Platform should have a non-empty name
-    assert!(!platform.name().is_empty(), "Platform name should not be empty");
+    assert!(
+        !platform.name().is_empty(),
+        "Platform name should not be empty"
+    );
 
     // THEN: Platform should have capabilities
     let caps = platform.capabilities();
@@ -79,10 +82,16 @@ fn contract_platform_displays() {
     // IF we have displays, verify basic properties
     if let Some(display) = displays.first() {
         // Name should not be empty
-        assert!(!display.name().is_empty(), "Display name should not be empty");
+        assert!(
+            !display.name().is_empty(),
+            "Display name should not be empty"
+        );
 
         // Scale factor should be positive
-        assert!(display.scale_factor() > 0.0, "Scale factor should be positive");
+        assert!(
+            display.scale_factor() > 0.0,
+            "Scale factor should be positive"
+        );
 
         // Bounds should have positive dimensions
         let bounds = display.bounds();
@@ -110,7 +119,10 @@ fn contract_platform_primary_display() {
 
     if displays.is_empty() {
         // Headless platform returns None
-        assert!(primary.is_none(), "Primary display should be None when no displays");
+        assert!(
+            primary.is_none(),
+            "Primary display should be None when no displays"
+        );
     } else {
         // Native platforms should return Some
         if let Some(primary_display) = primary {
@@ -142,7 +154,10 @@ fn contract_clipboard_operations() {
     clipboard.write_text(test_text.to_string());
 
     // THEN: We should be able to read it back
-    assert!(clipboard.has_text(), "Clipboard should have text after write");
+    assert!(
+        clipboard.has_text(),
+        "Clipboard should have text after write"
+    );
 
     let read_text = clipboard.read_text();
     assert_eq!(
@@ -167,7 +182,10 @@ fn contract_clipboard_empty() {
     let text = clipboard.read_text();
 
     if has_text {
-        assert!(text.is_some(), "If has_text is true, read should return Some");
+        assert!(
+            text.is_some(),
+            "If has_text is true, read should return Some"
+        );
     }
 }
 
@@ -284,9 +302,7 @@ fn contract_clipboard_error_handling() {
 /// T023: Test all platforms implement window lifecycle identically
 #[test]
 fn test_window_lifecycle_contract() {
-    let _ = tracing_subscriber::fmt()
-        .with_test_writer()
-        .try_init();
+    let _ = tracing_subscriber::fmt().with_test_writer().try_init();
 
     tracing::info!("T023: Testing window lifecycle contract across platforms");
 
@@ -373,7 +389,10 @@ fn test_window_lifecycle_contract() {
             // Contract 6: Window visibility API
             let is_visible = window.is_visible();
             tracing::info!("Window visibility: {}", is_visible);
-            assert!(!is_visible, "Window should not be visible with visible=false");
+            assert!(
+                !is_visible,
+                "Window should not be visible with visible=false"
+            );
 
             // Contract 7: Window focus API
             let is_focused = window.is_focused();
@@ -412,7 +431,10 @@ fn test_window_lifecycle_contract() {
                 }
             }
 
-            tracing::info!("✓ T023 PASS: Window lifecycle contract validated for {}", platform_name);
+            tracing::info!(
+                "✓ T023 PASS: Window lifecycle contract validated for {}",
+                platform_name
+            );
         }
         Err(e) => {
             tracing::info!(
@@ -428,16 +450,18 @@ fn test_window_lifecycle_contract() {
 /// Test that all platform implementations provide consistent display information
 #[test]
 fn test_display_enumeration_contract() {
-    let _ = tracing_subscriber::fmt()
-        .with_test_writer()
-        .try_init();
+    let _ = tracing_subscriber::fmt().with_test_writer().try_init();
 
     tracing::info!("Testing display enumeration contract");
 
     let platform = current_platform().expect("Failed to create platform");
     let displays = platform.displays();
 
-    tracing::info!("Platform {} has {} display(s)", platform.name(), displays.len());
+    tracing::info!(
+        "Platform {} has {} display(s)",
+        platform.name(),
+        displays.len()
+    );
 
     for (idx, display) in displays.iter().enumerate() {
         let scale = display.scale_factor();
@@ -473,9 +497,7 @@ fn test_display_enumeration_contract() {
 /// Test platform name consistency
 #[test]
 fn test_platform_name_contract() {
-    let _ = tracing_subscriber::fmt()
-        .with_test_writer()
-        .try_init();
+    let _ = tracing_subscriber::fmt().with_test_writer().try_init();
 
     let platform = current_platform().expect("Failed to create platform");
     let name = platform.name();
@@ -502,9 +524,15 @@ fn test_platform_name_contract() {
 fn test_window_options_default_contract() {
     let options = WindowOptions::default();
 
-    assert!(!options.title.is_empty(), "Default title should not be empty");
+    assert!(
+        !options.title.is_empty(),
+        "Default title should not be empty"
+    );
     assert!(options.size.width.0 > 0.0, "Default width must be positive");
-    assert!(options.size.height.0 > 0.0, "Default height must be positive");
+    assert!(
+        options.size.height.0 > 0.0,
+        "Default height must be positive"
+    );
     assert!(options.resizable, "Default should be resizable");
     assert!(options.visible, "Default should be visible");
     assert!(options.decorated, "Default should be decorated");

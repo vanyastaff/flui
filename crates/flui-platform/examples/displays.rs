@@ -52,7 +52,11 @@ fn main() -> anyhow::Result<()> {
         tracing::info!("  ID: {:?}", id);
 
         // Physical (device pixel) information
-        tracing::info!("  Physical Resolution: {}x{} pixels", bounds.size.width.0, bounds.size.height.0);
+        tracing::info!(
+            "  Physical Resolution: {}x{} pixels",
+            bounds.size.width.0,
+            bounds.size.height.0
+        );
         tracing::info!(
             "  Physical Position: ({}, {})",
             bounds.origin.x.0,
@@ -154,7 +158,11 @@ fn main() -> anyhow::Result<()> {
         let total_width = max_x - min_x;
         let total_height = max_y - min_y;
 
-        tracing::info!("  Total Desktop Area: {}x{} pixels", total_width, total_height);
+        tracing::info!(
+            "  Total Desktop Area: {}x{} pixels",
+            total_width,
+            total_height
+        );
         tracing::info!("  Bounds: ({}, {}) to ({}, {})", min_x, min_y, max_x, max_y);
 
         // Analyze arrangement
@@ -187,7 +195,9 @@ fn main() -> anyhow::Result<()> {
                 min_scale,
                 max_scale
             );
-            tracing::warn!("    → Windows may appear at different sizes when moved between displays");
+            tracing::warn!(
+                "    → Windows may appear at different sizes when moved between displays"
+            );
             tracing::warn!("    → Consider handling WindowEvent::ScaleFactorChanged");
         }
     }

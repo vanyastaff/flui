@@ -256,7 +256,10 @@ mod tests {
     #[test]
     fn test_annotated_region_with_semantic_label() {
         let label = Arc::new(SemanticLabel::new("Submit Button"));
-        let layer = AnnotatedRegionLayer::new(Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(44.0)), label);
+        let layer = AnnotatedRegionLayer::new(
+            Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(44.0)),
+            label,
+        );
 
         let value = layer.downcast_value::<SemanticLabel>().unwrap();
         assert_eq!(value.text(), "Submit Button");
@@ -277,7 +280,10 @@ mod tests {
     #[test]
     fn test_annotated_region_clone() {
         let value = Arc::new(SystemUiOverlayStyle::Dark);
-        let layer = AnnotatedRegionLayer::new(Rect::from_xywh(px(10.0), px(20.0), px(100.0), px(50.0)), value);
+        let layer = AnnotatedRegionLayer::new(
+            Rect::from_xywh(px(10.0), px(20.0), px(100.0), px(50.0)),
+            value,
+        );
 
         let cloned = layer.clone();
         assert_eq!(layer.rect(), cloned.rect());

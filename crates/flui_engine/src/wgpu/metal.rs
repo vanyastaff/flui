@@ -66,8 +66,8 @@ impl UpscaleMode {
     /// Returns the fraction of native resolution to render at.
     pub fn recommended_scale(self) -> f32 {
         match self {
-            UpscaleMode::Spatial => 0.75,    // 75% scale (e.g., 1440p → 1080p)
-            UpscaleMode::Temporal => 0.67,   // 67% scale (e.g., 1440p → 960p)
+            UpscaleMode::Spatial => 0.75,  // 75% scale (e.g., 1440p → 1080p)
+            UpscaleMode::Temporal => 0.67, // 67% scale (e.g., 1440p → 960p)
         }
     }
 
@@ -212,7 +212,9 @@ impl MetalFxUpscaler {
         // 4. Submit to GPU queue
         //
         // For now, return error as placeholder
-        Err(anyhow!("MetalFX upscaling not yet implemented - requires Metal FFI bindings"))
+        Err(anyhow!(
+            "MetalFX upscaling not yet implemented - requires Metal FFI bindings"
+        ))
     }
 }
 
@@ -486,7 +488,7 @@ mod tests {
     fn test_edr_config_clamping() {
         let config = EdrConfig::new()
             .with_headroom(100.0)  // Should clamp to 8.0
-            .with_reference_white(1000.0);  // Should clamp to 400.0
+            .with_reference_white(1000.0); // Should clamp to 400.0
 
         assert_eq!(config.headroom, 8.0);
         assert_eq!(config.reference_white, 400.0);

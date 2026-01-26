@@ -102,7 +102,13 @@ impl CommandRenderer for Backend {
         });
     }
 
-    fn render_circle(&mut self, center: Point<Pixels>, radius: f32, paint: &Paint, transform: &Matrix4) {
+    fn render_circle(
+        &mut self,
+        center: Point<Pixels>,
+        radius: f32,
+        paint: &Paint,
+        transform: &Matrix4,
+    ) {
         self.with_transform(transform, |painter| {
             painter.circle(center, radius, paint);
         });
@@ -114,7 +120,13 @@ impl CommandRenderer for Backend {
         });
     }
 
-    fn render_line(&mut self, p1: Point<Pixels>, p2: Point<Pixels>, paint: &Paint, transform: &Matrix4) {
+    fn render_line(
+        &mut self,
+        p1: Point<Pixels>,
+        p2: Point<Pixels>,
+        paint: &Paint,
+        transform: &Matrix4,
+    ) {
         self.with_transform(transform, |painter| {
             painter.line(p1, p2, paint);
         });
@@ -328,7 +340,12 @@ impl CommandRenderer for Backend {
         }
     }
 
-    fn render_gradient(&mut self, rect: Rect<Pixels>, shader: &flui_painting::Shader, transform: &Matrix4) {
+    fn render_gradient(
+        &mut self,
+        rect: Rect<Pixels>,
+        shader: &flui_painting::Shader,
+        transform: &Matrix4,
+    ) {
         use super::effects::GradientStop;
 
         self.with_transform(transform, |painter| {
@@ -785,8 +802,12 @@ impl CommandRenderer for Backend {
             10.0,
             &Paint::fill(white),
         );
-        self.painter
-            .text("ms", Point::new(x_val + px(22.0), y), 8.0, &Paint::fill(gray));
+        self.painter.text(
+            "ms",
+            Point::new(x_val + px(22.0), y),
+            8.0,
+            &Paint::fill(gray),
+        );
 
         let _ = total_frames;
     }

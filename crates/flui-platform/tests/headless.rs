@@ -116,7 +116,9 @@ fn test_t068_parallel_test_execution() {
                 ..Default::default()
             };
 
-            let _window = platform.open_window(options).expect("Failed to create window");
+            let _window = platform
+                .open_window(options)
+                .expect("Failed to create window");
 
             // Use clipboard
             let clipboard = platform.clipboard();
@@ -164,7 +166,10 @@ fn test_t069_all_tests_pass_in_headless_mode() {
 
     // Displays
     let displays = platform.displays();
-    assert!(!displays.is_empty(), "Should have at least one mock display");
+    assert!(
+        !displays.is_empty(),
+        "Should have at least one mock display"
+    );
 
     // Clipboard
     let clipboard = platform.clipboard();
@@ -205,8 +210,12 @@ fn test_headless_multiple_windows() {
         ..Default::default()
     };
 
-    let _window1 = platform.open_window(options1).expect("Failed to create window 1");
-    let _window2 = platform.open_window(options2).expect("Failed to create window 2");
+    let _window1 = platform
+        .open_window(options1)
+        .expect("Failed to create window 1");
+    let _window2 = platform
+        .open_window(options2)
+        .expect("Failed to create window 2");
 
     // Both windows created successfully (PlatformWindow trait doesn't expose id())
 }
@@ -218,10 +227,17 @@ fn test_headless_text_system() {
     let platform = headless_platform();
     let text_system = platform.text_system();
 
-    let bounds = text_system.measure_text("Hello, World!", &text_system.default_font_family(), 16.0);
+    let bounds =
+        text_system.measure_text("Hello, World!", &text_system.default_font_family(), 16.0);
 
-    assert!(bounds.width() > px(0.0), "Text measurement should return non-zero width");
-    assert!(bounds.height() > px(0.0), "Text measurement should return non-zero height");
+    assert!(
+        bounds.width() > px(0.0),
+        "Text measurement should return non-zero width"
+    );
+    assert!(
+        bounds.height() > px(0.0),
+        "Text measurement should return non-zero height"
+    );
 }
 
 #[test]

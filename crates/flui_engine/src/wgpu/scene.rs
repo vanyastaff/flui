@@ -1500,7 +1500,11 @@ mod tests {
             .build();
 
         let batches = scene.batch_primitives();
-        assert_eq!(batches.len(), 3, "Should have 3 batches: Rect<Pixels>, Text, Rect");
+        assert_eq!(
+            batches.len(),
+            3,
+            "Should have 3 batches: Rect<Pixels>, Text, Rect"
+        );
         assert_eq!(batches[0].primitive_type, PrimitiveType::Rect);
         assert_eq!(batches[0].primitives.len(), 1);
         assert_eq!(batches[1].primitive_type, PrimitiveType::Text);

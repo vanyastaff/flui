@@ -10,9 +10,7 @@ use flui_types::geometry::{px, Size};
 /// T016: Test window mode transitions (Normal, Maximized, Fullscreen)
 #[test]
 fn test_window_modes() {
-    let _ = tracing_subscriber::fmt()
-        .with_test_writer()
-        .try_init();
+    let _ = tracing_subscriber::fmt().with_test_writer().try_init();
 
     tracing::info!("T016: Testing window modes");
 
@@ -63,9 +61,7 @@ fn test_window_modes() {
 #[test]
 #[cfg(target_os = "windows")]
 fn test_windows_mode_transitions() {
-    let _ = tracing_subscriber::fmt()
-        .with_test_writer()
-        .try_init();
+    let _ = tracing_subscriber::fmt().with_test_writer().try_init();
 
     tracing::info!("T017: Testing Windows mode transitions");
 
@@ -110,9 +106,7 @@ fn test_windows_mode_transitions() {
 #[test]
 #[cfg(target_os = "macos")]
 fn test_macos_mode_transitions() {
-    let _ = tracing_subscriber::fmt()
-        .with_test_writer()
-        .try_init();
+    let _ = tracing_subscriber::fmt().with_test_writer().try_init();
 
     tracing::info!("T018: Testing macOS mode transitions");
 
@@ -156,9 +150,7 @@ fn test_macos_mode_transitions() {
 /// T019: Test DPI scaling change fires ScaleFactorChanged event
 #[test]
 fn test_dpi_scaling_change() {
-    let _ = tracing_subscriber::fmt()
-        .with_test_writer()
-        .try_init();
+    let _ = tracing_subscriber::fmt().with_test_writer().try_init();
 
     tracing::info!("T019: Testing DPI scaling change");
 
@@ -198,7 +190,9 @@ fn test_dpi_scaling_change() {
             // 3. Verify new scale factor matches target monitor
             // 4. Verify window resizes appropriately
 
-            tracing::info!("✓ T019 PASS: DPI scaling validated (Phase 5 will add event verification)");
+            tracing::info!(
+                "✓ T019 PASS: DPI scaling validated (Phase 5 will add event verification)"
+            );
         }
         Err(e) => {
             tracing::warn!("Window creation not supported: {}", e);
@@ -210,9 +204,7 @@ fn test_dpi_scaling_change() {
 /// T020: Verify per-monitor DPI v2 on Windows, Retina support on macOS
 #[test]
 fn test_per_monitor_dpi() {
-    let _ = tracing_subscriber::fmt()
-        .with_test_writer()
-        .try_init();
+    let _ = tracing_subscriber::fmt().with_test_writer().try_init();
 
     tracing::info!("T020: Testing per-monitor DPI support");
 

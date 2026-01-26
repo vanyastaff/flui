@@ -23,6 +23,5 @@ pub mod memory;
 
 // Re-export commonly used types
 pub use memory::{
-    align_to_page_size, align_to_page_size_u64, get_page_size, is_16kb_page_size,
-    PageAlignedVec,
+    align_to_page_size, align_to_page_size_u64, get_page_size, is_16kb_page_size, PageAlignedVec,
 };

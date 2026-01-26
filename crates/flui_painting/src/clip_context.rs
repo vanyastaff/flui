@@ -32,8 +32,8 @@
 //! }
 //! ```
 
-use flui_types::geometry::Pixels;
 use crate::Canvas;
+use flui_types::geometry::Pixels;
 use flui_types::{
     geometry::{RRect, Rect},
     painting::{Clip, Path},
@@ -95,8 +95,13 @@ pub trait ClipContext {
     /// });
     /// ```
     #[inline]
-    fn clip_rect_and_paint<F>(&mut self, rect: Rect<Pixels>, clip_behavior: Clip, bounds: Rect<Pixels>, painter: F)
-    where
+    fn clip_rect_and_paint<F>(
+        &mut self,
+        rect: Rect<Pixels>,
+        clip_behavior: Clip,
+        bounds: Rect<Pixels>,
+        painter: F,
+    ) where
         F: FnOnce(&mut Self),
     {
         self.clip_and_paint_impl(
@@ -180,8 +185,13 @@ pub trait ClipContext {
     /// });
     /// ```
     #[inline]
-    fn clip_path_and_paint<F>(&mut self, path: &Path, clip_behavior: Clip, bounds: Rect<Pixels>, painter: F)
-    where
+    fn clip_path_and_paint<F>(
+        &mut self,
+        path: &Path,
+        clip_behavior: Clip,
+        bounds: Rect<Pixels>,
+        painter: F,
+    ) where
         F: FnOnce(&mut Self),
     {
         self.clip_and_paint_impl(

@@ -11,9 +11,7 @@ use flui_types::geometry::{px, Size};
 #[test]
 fn test_window_creation_with_options() {
     // Initialize tracing for test debugging
-    let _ = tracing_subscriber::fmt()
-        .with_test_writer()
-        .try_init();
+    let _ = tracing_subscriber::fmt().with_test_writer().try_init();
 
     tracing::info!("T011: Testing window creation with WindowOptions");
 
@@ -79,9 +77,7 @@ fn test_window_creation_with_options() {
 /// T012: Test window close event fires on CloseRequested
 #[test]
 fn test_window_close_event() {
-    let _ = tracing_subscriber::fmt()
-        .with_test_writer()
-        .try_init();
+    let _ = tracing_subscriber::fmt().with_test_writer().try_init();
 
     tracing::info!("T012: Testing window close event");
 
@@ -123,9 +119,7 @@ fn test_window_close_event() {
 /// T015: Test creating multiple concurrent windows
 #[test]
 fn test_multiple_concurrent_windows() {
-    let _ = tracing_subscriber::fmt()
-        .with_test_writer()
-        .try_init();
+    let _ = tracing_subscriber::fmt().with_test_writer().try_init();
 
     tracing::info!("T015: Testing multiple concurrent windows");
 
@@ -174,12 +168,7 @@ fn test_multiple_concurrent_windows() {
 
     for (idx, window) in windows.iter().enumerate() {
         let size = window.logical_size();
-        tracing::info!(
-            "Window {}: {}x{}",
-            idx + 1,
-            size.width.0,
-            size.height.0
-        );
+        tracing::info!("Window {}: {}x{}", idx + 1, size.width.0, size.height.0);
 
         // Each window should have different size
         assert!(size.width.0 > 0.0 && size.height.0 > 0.0);
@@ -191,9 +180,7 @@ fn test_multiple_concurrent_windows() {
 /// T021: Test window.request_redraw() fires RedrawRequested event
 #[test]
 fn test_request_redraw() {
-    let _ = tracing_subscriber::fmt()
-        .with_test_writer()
-        .try_init();
+    let _ = tracing_subscriber::fmt().with_test_writer().try_init();
 
     tracing::info!("T021: Testing request_redraw()");
 
@@ -219,7 +206,9 @@ fn test_request_redraw() {
             // 2. Event is received by callback
             // 3. Multiple request_redraw calls coalesce
 
-            tracing::info!("✓ T021 PASS: request_redraw() validated (Phase 5 will add event verification)");
+            tracing::info!(
+                "✓ T021 PASS: request_redraw() validated (Phase 5 will add event verification)"
+            );
         }
         Err(e) => {
             tracing::warn!("Window creation not supported: {}", e);
@@ -231,9 +220,7 @@ fn test_request_redraw() {
 /// T022: Test window resize fires Resized event with new logical size
 #[test]
 fn test_window_resize_event() {
-    let _ = tracing_subscriber::fmt()
-        .with_test_writer()
-        .try_init();
+    let _ = tracing_subscriber::fmt().with_test_writer().try_init();
 
     tracing::info!("T022: Testing window resize event");
 

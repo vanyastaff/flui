@@ -159,7 +159,10 @@ mod tests {
 
     #[test]
     fn test_clip_rrect_layer_new() {
-        let rrect = RRect::from_rect_circular(Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0)), px(10.0));
+        let rrect = RRect::from_rect_circular(
+            Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0)),
+            px(10.0),
+        );
         let layer = ClipRRectLayer::new(rrect, Clip::AntiAlias);
 
         assert_eq!(layer.clip_rrect(), &rrect);
@@ -178,7 +181,10 @@ mod tests {
 
     #[test]
     fn test_clip_rrect_layer_anti_alias() {
-        let rrect = RRect::from_rect_circular(Rect::from_xywh(px(0.0), px(0.0), px(50.0), px(50.0)), px(5.0));
+        let rrect = RRect::from_rect_circular(
+            Rect::from_xywh(px(0.0), px(0.0), px(50.0), px(50.0)),
+            px(5.0),
+        );
         let layer = ClipRRectLayer::anti_alias(rrect);
 
         assert!(layer.is_anti_aliased());
@@ -187,7 +193,10 @@ mod tests {
 
     #[test]
     fn test_clip_rrect_layer_hard_edge() {
-        let rrect = RRect::from_rect_circular(Rect::from_xywh(px(0.0), px(0.0), px(50.0), px(50.0)), px(5.0));
+        let rrect = RRect::from_rect_circular(
+            Rect::from_xywh(px(0.0), px(0.0), px(50.0), px(50.0)),
+            px(5.0),
+        );
         let layer = ClipRRectLayer::hard_edge(rrect);
 
         assert!(!layer.is_anti_aliased());
@@ -215,8 +224,14 @@ mod tests {
 
     #[test]
     fn test_clip_rrect_layer_setters() {
-        let rrect1 = RRect::from_rect_circular(Rect::from_xywh(px(0.0), px(0.0), px(50.0), px(50.0)), px(5.0));
-        let rrect2 = RRect::from_rect_circular(Rect::from_xywh(px(10.0), px(10.0), px(100.0), px(100.0)), px(15.0));
+        let rrect1 = RRect::from_rect_circular(
+            Rect::from_xywh(px(0.0), px(0.0), px(50.0), px(50.0)),
+            px(5.0),
+        );
+        let rrect2 = RRect::from_rect_circular(
+            Rect::from_xywh(px(10.0), px(10.0), px(100.0), px(100.0)),
+            px(15.0),
+        );
         let mut layer = ClipRRectLayer::new(rrect1, Clip::HardEdge);
 
         layer.set_clip_rrect(rrect2);
@@ -228,7 +243,10 @@ mod tests {
 
     #[test]
     fn test_clip_rrect_layer_clone() {
-        let rrect = RRect::from_rect_circular(Rect::from_xywh(px(0.0), px(0.0), px(50.0), px(50.0)), px(5.0));
+        let rrect = RRect::from_rect_circular(
+            Rect::from_xywh(px(0.0), px(0.0), px(50.0), px(50.0)),
+            px(5.0),
+        );
         let layer = ClipRRectLayer::new(rrect, Clip::AntiAlias);
         let cloned = layer.clone();
 

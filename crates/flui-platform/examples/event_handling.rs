@@ -36,7 +36,10 @@ fn main() -> anyhow::Result<()> {
     // Query platform capabilities
     let capabilities = platform.capabilities();
     tracing::info!("Capabilities:");
-    tracing::info!("  - Multiple windows: {}", capabilities.supports_multiple_windows());
+    tracing::info!(
+        "  - Multiple windows: {}",
+        capabilities.supports_multiple_windows()
+    );
     tracing::info!("  - Touch input: {}", capabilities.supports_touch());
     tracing::info!("  - Transparency: {}", capabilities.supports_transparency());
 
@@ -60,8 +63,16 @@ fn main() -> anyhow::Result<()> {
     let scale_factor = window.scale_factor();
 
     tracing::info!("Window created:");
-    tracing::info!("  - Physical size: {}x{} px", physical_size.width.0, physical_size.height.0);
-    tracing::info!("  - Logical size: {:.0}x{:.0} pt", logical_size.width.0, logical_size.height.0);
+    tracing::info!(
+        "  - Physical size: {}x{} px",
+        physical_size.width.0,
+        physical_size.height.0
+    );
+    tracing::info!(
+        "  - Logical size: {:.0}x{:.0} pt",
+        logical_size.width.0,
+        logical_size.height.0
+    );
     tracing::info!("  - Scale factor: {:.2}x", scale_factor);
 
     // Show event types

@@ -6,9 +6,7 @@
 //! - Offset magnitude and normalization
 //! - Geometric invariants and properties
 
-use flui_types::geometry::{
-    px, Pixels, Point, Size, Rect, Offset, Vec2,
-};
+use flui_types::geometry::{px, Offset, Pixels, Point, Rect, Size, Vec2};
 
 // ============================================================================
 // T039-T040: Point distance calculations
@@ -98,8 +96,11 @@ fn test_offset_normalize() {
 
     // Normalized vector should have magnitude 1.0
     let mag = normalized.distance();
-    assert!((mag.get() - 1.0).abs() < 0.001,
-            "Normalized vector should have magnitude 1.0, got {}", mag);
+    assert!(
+        (mag.get() - 1.0).abs() < 0.001,
+        "Normalized vector should have magnitude 1.0, got {}",
+        mag
+    );
 
     // Direction should be preserved
     let expected_x = 3.0 / 5.0; // 0.6
@@ -197,7 +198,11 @@ fn test_rect_intersect_contained() {
 
     let intersection = outer.intersect(&inner);
     assert!(intersection.is_some());
-    assert_eq!(intersection.unwrap(), inner, "Intersection with contained rect is the inner rect");
+    assert_eq!(
+        intersection.unwrap(),
+        inner,
+        "Intersection with contained rect is the inner rect"
+    );
 }
 
 // ============================================================================

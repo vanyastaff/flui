@@ -3,8 +3,8 @@
 //! Tests the core Unit trait and its implementations (Pixels, DevicePixels, etc.)
 //! following the contracts defined in specs/001-flui-types/contracts/README.md
 
-use flui_types::geometry::{DevicePixels, Pixels, Radians, ScaledPixels};
 use flui_types::geometry::traits::Unit;
+use flui_types::geometry::{DevicePixels, Pixels, Radians, ScaledPixels};
 
 #[test]
 fn test_pixels_zero() {

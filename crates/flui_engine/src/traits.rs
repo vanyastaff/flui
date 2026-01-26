@@ -56,13 +56,25 @@ pub trait CommandRenderer {
     fn render_rrect(&mut self, rrect: RRect, paint: &Paint, transform: &Matrix4);
 
     /// Render a circle
-    fn render_circle(&mut self, center: Point<Pixels>, radius: f32, paint: &Paint, transform: &Matrix4);
+    fn render_circle(
+        &mut self,
+        center: Point<Pixels>,
+        radius: f32,
+        paint: &Paint,
+        transform: &Matrix4,
+    );
 
     /// Render an oval (ellipse)
     fn render_oval(&mut self, rect: Rect<Pixels>, paint: &Paint, transform: &Matrix4);
 
     /// Render a line segment
-    fn render_line(&mut self, p1: Point<Pixels>, p2: Point<Pixels>, paint: &Paint, transform: &Matrix4);
+    fn render_line(
+        &mut self,
+        p1: Point<Pixels>,
+        p2: Point<Pixels>,
+        paint: &Paint,
+        transform: &Matrix4,
+    );
 
     /// Render an arbitrary path
     fn render_path(&mut self, path: &Path, paint: &Paint, transform: &Matrix4);
@@ -196,7 +208,12 @@ pub trait CommandRenderer {
     // ===== Gradients =====
 
     /// Render a gradient-filled rectangle
-    fn render_gradient(&mut self, rect: Rect<Pixels>, shader: &flui_painting::Shader, transform: &Matrix4);
+    fn render_gradient(
+        &mut self,
+        rect: Rect<Pixels>,
+        shader: &flui_painting::Shader,
+        transform: &Matrix4,
+    );
 
     /// Render a gradient-filled rounded rectangle
     fn render_gradient_rrect(
@@ -696,7 +713,12 @@ pub trait Painter {
     }
 
     /// Draw an image with 9-slice/9-patch scaling
-    fn draw_image_nine_slice(&mut self, image: &Image, _center_slice: Rect<Pixels>, dst: Rect<Pixels>) {
+    fn draw_image_nine_slice(
+        &mut self,
+        image: &Image,
+        _center_slice: Rect<Pixels>,
+        dst: Rect<Pixels>,
+    ) {
         self.draw_image(image, dst);
         #[cfg(debug_assertions)]
         tracing::debug!("Painter::draw_image_nine_slice: using fallback (no 9-slice)");

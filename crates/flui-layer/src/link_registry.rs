@@ -374,7 +374,12 @@ mod tests {
         let follower_id = make_layer_id(2);
 
         // Register leader first
-        registry.register_leader(link, leader_id, Offset::ZERO, Size::new(px(100.0), px(50.0)));
+        registry.register_leader(
+            link,
+            leader_id,
+            Offset::ZERO,
+            Size::new(px(100.0), px(50.0)),
+        );
 
         // Register follower
         registry.register_follower(follower_id, link);
@@ -409,7 +414,12 @@ mod tests {
         let leader_id = make_layer_id(1);
         let follower_id = make_layer_id(2);
 
-        registry.register_leader(link, leader_id, Offset::ZERO, Size::new(px(100.0), px(50.0)));
+        registry.register_leader(
+            link,
+            leader_id,
+            Offset::ZERO,
+            Size::new(px(100.0), px(50.0)),
+        );
         registry.register_follower(follower_id, link);
 
         let removed_link = registry.unregister_follower(follower_id);
@@ -429,7 +439,12 @@ mod tests {
         let follower1 = make_layer_id(2);
         let follower2 = make_layer_id(3);
 
-        registry.register_leader(link, leader_id, Offset::ZERO, Size::new(px(100.0), px(50.0)));
+        registry.register_leader(
+            link,
+            leader_id,
+            Offset::ZERO,
+            Size::new(px(100.0), px(50.0)),
+        );
         registry.register_follower(follower1, link);
         registry.register_follower(follower2, link);
 
@@ -468,7 +483,11 @@ mod tests {
         let layer_id = make_layer_id(1);
 
         registry.register_leader(link, layer_id, Offset::ZERO, Size::new(px(100.0), px(50.0)));
-        registry.update_leader(link, Offset::new(px(200.0), px(300.0)), Size::new(px(150.0), px(75.0)));
+        registry.update_leader(
+            link,
+            Offset::new(px(200.0), px(300.0)),
+            Size::new(px(150.0), px(75.0)),
+        );
 
         let info = registry.get_leader(&link).unwrap();
         assert_eq!(info.offset, Offset::new(px(200.0), px(300.0)));
@@ -480,7 +499,12 @@ mod tests {
         let mut registry = LinkRegistry::new();
         let link = make_link();
 
-        registry.register_leader(link, make_layer_id(1), Offset::ZERO, Size::new(px(100.0), px(50.0)));
+        registry.register_leader(
+            link,
+            make_layer_id(1),
+            Offset::ZERO,
+            Size::new(px(100.0), px(50.0)),
+        );
         registry.register_follower(make_layer_id(2), link);
 
         assert!(!registry.is_empty());
@@ -502,7 +526,12 @@ mod tests {
         let follower2 = make_layer_id(3);
 
         // Register leader with link1
-        registry.register_leader(link1, leader_id, Offset::ZERO, Size::new(px(100.0), px(50.0)));
+        registry.register_leader(
+            link1,
+            leader_id,
+            Offset::ZERO,
+            Size::new(px(100.0), px(50.0)),
+        );
 
         // Register follower1 with link1 (has leader)
         registry.register_follower(follower1, link1);
@@ -529,7 +558,12 @@ mod tests {
         let follower2 = make_layer_id(3);
 
         // Register leader
-        registry.register_leader(link, leader_id, Offset::ZERO, Size::new(px(100.0), px(50.0)));
+        registry.register_leader(
+            link,
+            leader_id,
+            Offset::ZERO,
+            Size::new(px(100.0), px(50.0)),
+        );
 
         // Manually add followers to map (simulating deserialization or corruption)
         registry.followers.insert(follower1, link);

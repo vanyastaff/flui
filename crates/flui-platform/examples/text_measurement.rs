@@ -121,7 +121,12 @@ fn main() -> anyhow::Result<()> {
     let base_size = 12.0;
     let base_bounds = text_system.measure_text(base_text, &default_font, base_size);
 
-    println!("   Base: {}px → {:.1}w × {:.1}h", base_size, base_bounds.width().0, base_bounds.height().0);
+    println!(
+        "   Base: {}px → {:.1}w × {:.1}h",
+        base_size,
+        base_bounds.width().0,
+        base_bounds.height().0
+    );
 
     for multiplier in [1.5, 2.0, 3.0] {
         let scaled_size = base_size * multiplier;

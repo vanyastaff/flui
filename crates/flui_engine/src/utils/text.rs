@@ -6,7 +6,7 @@
 //!
 //! This is slower than raster text but supports arbitrary transformations.
 
-use flui_types::{geometry::px, Color, Point, Pixels};
+use flui_types::{geometry::px, Color, Pixels, Point};
 use glam::Mat4;
 use std::sync::Arc;
 use thiserror::Error;

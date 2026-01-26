@@ -26,8 +26,10 @@ fn main() {
 
     tracing::info!("Platform created: {}", platform.name());
     println!("Platform initialized: {}", platform.name());
-    println!("Platform capabilities available: {:?}\n",
-             std::any::type_name_of_val(&platform.capabilities()));
+    println!(
+        "Platform capabilities available: {:?}\n",
+        std::any::type_name_of_val(&platform.capabilities())
+    );
 
     // Get displays
     tracing::info!("Enumerating displays...");
@@ -40,19 +42,27 @@ fn main() {
         let bounds = display.bounds();
         println!("  Display {}:", idx + 1);
         println!("    Name: {}", display.name());
-        println!("    Physical: {}x{} @ ({}, {})",
-                 bounds.size.width, bounds.size.height,
-                 bounds.origin.x, bounds.origin.y);
+        println!(
+            "    Physical: {}x{} @ ({}, {})",
+            bounds.size.width, bounds.size.height, bounds.origin.x, bounds.origin.y
+        );
         println!("    Logical: {}x{}", logical.width, logical.height);
         println!("    Scale: {:.1}x", display.scale_factor());
-        println!("    Primary: {}", if display.is_primary() { "Yes" } else { "No" });
+        println!(
+            "    Primary: {}",
+            if display.is_primary() { "Yes" } else { "No" }
+        );
         println!();
     }
 
     if let Some(primary) = platform.primary_display() {
         let logical = primary.logical_size();
-        println!("Primary Display: {} ({}x{})\n",
-                 primary.name(), logical.width, logical.height);
+        println!(
+            "Primary Display: {} ({}x{})\n",
+            primary.name(),
+            logical.width,
+            logical.height
+        );
     }
 
     println!("✓ Platform test completed successfully!");
