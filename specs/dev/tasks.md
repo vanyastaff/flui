@@ -52,25 +52,25 @@
 
 ### T011-T015: Window Lifecycle
 
-- [ ] T011 [US1] Write test: Create window with WindowOptions (title, size, decorations)
-- [ ] T012 [US1] Write test: Window close event fires on CloseRequested
-- [ ] T013 [US1] Verify WindowsPlatform window creation (already implemented)
+- [X] T011 [US1] Write test: Create window with WindowOptions (title, size, decorations)
+- [X] T012 [US1] Write test: Window close event fires on CloseRequested
+- [X] T013 [US1] Verify WindowsPlatform window creation (already implemented)
 - [ ] T014 [US1] Verify macOS window creation compiles and test on hardware
-- [ ] T015 [US1] Write integration test: Create multiple concurrent windows
+- [X] T015 [US1] Write integration test: Create multiple concurrent windows
 
 ### T016-T020: Window Modes and DPI
 
-- [ ] T016 [US1] Write test: Set window mode (Normal, Maximized, Fullscreen)
-- [ ] T017 [US1] Verify mode transitions on Windows platform
+- [X] T016 [US1] Write test: Set window mode (Normal, Maximized, Fullscreen)
+- [X] T017 [US1] Verify mode transitions on Windows platform
 - [ ] T018 [US1] Verify mode transitions on macOS platform
-- [ ] T019 [US1] Write test: DPI scaling change fires ScaleFactorChanged event
-- [ ] T020 [US1] Verify per-monitor DPI v2 on Windows, Retina support on macOS
+- [X] T019 [US1] Write test: DPI scaling change fires ScaleFactorChanged event
+- [X] T020 [US1] Verify per-monitor DPI v2 on Windows, Retina support on macOS
 
 ### T021-T023: Redraw and Events
 
-- [ ] T021 [US1] Write test: `window.request_redraw()` fires RedrawRequested event
-- [ ] T022 [US1] Write test: Window resize fires Resized event with new logical size
-- [ ] T023 [US1] Add contract test: All platforms implement window lifecycle identically
+- [X] T021 [US1] Write test: `window.request_redraw()` fires RedrawRequested event
+- [X] T022 [US1] Write test: Window resize fires Resized event with new logical size
+- [X] T023 [US1] Add contract test: All platforms implement window lifecycle identically
 
 **Acceptance**: All window management tests pass on Windows, macOS, and Headless. Multi-window scenarios work correctly.
 
