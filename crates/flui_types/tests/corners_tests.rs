@@ -125,31 +125,25 @@ fn test_corners_map() {
 }
 
 #[test]
-fn test_corners_max() {
-    let corners = Corners::new(
-        Radius::circular(px(8.0)),
-        Radius::circular(px(24.0)),
-        Radius::circular(px(12.0)),
-        Radius::circular(px(16.0)),
-    );
+fn test_corners_max_with_pixels() {
+    // Note: max() only works with types that implement PartialOrd
+    // Radius doesn't implement PartialOrd, so we test with Pixels instead
+    let corners = Corners::new(px(8.0), px(24.0), px(12.0), px(16.0));
 
     let max = corners.max();
 
-    assert_eq!(max, Radius::circular(px(24.0)));
+    assert_eq!(max, px(24.0));
 }
 
 #[test]
-fn test_corners_min() {
-    let corners = Corners::new(
-        Radius::circular(px(8.0)),
-        Radius::circular(px(24.0)),
-        Radius::circular(px(12.0)),
-        Radius::circular(px(16.0)),
-    );
+fn test_corners_min_with_pixels() {
+    // Note: min() only works with types that implement PartialOrd
+    // Radius doesn't implement PartialOrd, so we test with Pixels instead
+    let corners = Corners::new(px(8.0), px(24.0), px(12.0), px(16.0));
 
     let min = corners.min();
 
-    assert_eq!(min, Radius::circular(px(8.0)));
+    assert_eq!(min, px(8.0));
 }
 
 // ============================================================================
