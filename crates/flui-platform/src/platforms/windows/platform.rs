@@ -277,6 +277,14 @@ impl WindowsPlatform {
                     // Skip rendering for minimized windows to save CPU/GPU resources
                     let should_skip = WindowsWindow::should_skip_render(hwnd);
                     if !should_skip {
+                        // Fill with solid black - required for Mica backdrop transparency
+                        // When app draws, this will be replaced with actual content
+                        let mut rect = RECT::default();
+                        if GetClientRect(hwnd, &mut rect).is_ok() {
+                            let black_brush = GetStockObject(BLACK_BRUSH);
+                            FillRect(hdc, &rect, HBRUSH(black_brush.0));
+                        }
+
                         // Dispatch RedrawRequested event
                         if let Some(ctx) = ctx {
                             ctx.dispatch_event(WindowEvent::RedrawRequested { window_id: ctx.window_id });

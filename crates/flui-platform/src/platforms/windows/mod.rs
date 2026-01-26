@@ -21,5 +21,8 @@ pub use window_ext::{
 #[cfg(target_os = "windows")]
 pub mod win32 {
     pub use windows::Win32::Foundation::HWND;
-    pub use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWINDOWATTRIBUTE};
+    pub use windows::Win32::Graphics::Dwm::{
+        DwmExtendFrameIntoClientArea, DwmSetWindowAttribute, DWMWINDOWATTRIBUTE,
+    };
+    pub use windows::Win32::UI::Controls::MARGINS;
 }

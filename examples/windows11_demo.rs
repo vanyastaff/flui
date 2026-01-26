@@ -65,9 +65,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         unsafe {
             println!("🎨 Applying Windows 11 features...");
 
-            // 1. Enable Mica backdrop (Windows 11+)
-            println!("  ✓ Setting Mica backdrop");
-            let mica_value: i32 = 2; // DWMSBT_MAINWINDOW (Mica)
+            // 1. Extend frame into client area (required for Mica)
+            println!("  ✓ Extending frame into client area");
+            let margins = MARGINS {
+                cxLeftWidth: -1,
+                cxRightWidth: -1,
+                cyTopHeight: -1,
+                cyBottomHeight: -1,
+            };
+            DwmExtendFrameIntoClientArea(hwnd, &margins).ok();
+
+            // 2. Enable Mica Alt backdrop (Windows 11+) - more transparent
+            println!("  ✓ Setting Mica Alt backdrop");
+            let mica_value: i32 = 4; // DWMSBT_TABBEDWINDOW (Mica Alt) - более прозрачный
             DwmSetWindowAttribute(
                 hwnd,
                 DWMWINDOWATTRIBUTE(38), // DWMWA_SYSTEMBACKDROP_TYPE
@@ -76,7 +86,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             )
             .ok();
 
-            // 2. Enable dark mode title bar
+            // 3. Enable dark mode title bar
             println!("  ✓ Enabling dark mode");
             let dark_mode_value: i32 = 1;
             DwmSetWindowAttribute(
@@ -87,9 +97,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             )
             .ok();
 
-            // 3. Set rounded corners (default on Windows 11, but explicitly set)
+            // 4. Set rounded corners (default on Windows 11, but explicitly set)
             println!("  ✓ Setting rounded corners");
-            let corner_value: i32 = 1; // DWMWCP_ROUND
+            let corner_value: i32 = 2; // DWMWCP_ROUND (2 = округленные углы)
             DwmSetWindowAttribute(
                 hwnd,
                 DWMWINDOWATTRIBUTE(33), // DWMWA_WINDOW_CORNER_PREFERENCE
@@ -98,25 +108,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             )
             .ok();
 
-            // 4. Set custom title bar color (dark blue)
-            println!("  ✓ Setting custom title bar color (dark blue)");
-            let color_value: u32 = 0x00321E14; // BGR format: (20, 30, 50) in RGB = (0x14, 0x1E, 0x32)
-            DwmSetWindowAttribute(
-                hwnd,
-                DWMWINDOWATTRIBUTE(35), // DWMWA_CAPTION_COLOR
-                &color_value as *const u32 as *const std::ffi::c_void,
-                std::mem::size_of::<u32>() as u32,
-            )
-            .ok();
+            // Note: Title bar color is NOT set - Windows will use system theme colors
+            // This allows the title bar to match the user's chosen Windows theme
         }
 
         println!();
         println!("✨ All features applied!");
         println!();
         println!("What you should see:");
-        println!("  • Translucent Mica backdrop showing desktop wallpaper");
-        println!("  • Dark title bar with dark blue color");
+        println!("  • Translucent Mica Alt backdrop showing desktop wallpaper");
+        println!("  • Dark title bar matching your Windows theme");
         println!("  • Rounded window corners");
+        println!("  • Semi-transparent background with blur effect");
         println!("  • Hover over maximize button to see Snap Layouts");
         println!();
         println!("Close the window to exit");
