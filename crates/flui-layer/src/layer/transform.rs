@@ -166,7 +166,7 @@ impl TransformLayer {
     /// Returns the axis-aligned bounding box of the transformed rectangle.
     /// This may be larger than the original bounds if the transform includes
     /// rotation.
-    pub fn transform_bounds(&self, bounds: Rect) -> Rect {
+    pub fn transform_bounds(&self, bounds: Rect<Pixels>) -> Rect<Pixels> {
         // Transform all four corners
         let corners = [
             self.transform_point(Point::new(bounds.left(), bounds.top())),

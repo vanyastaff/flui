@@ -3,7 +3,7 @@
 //! This layer clips its children to an arbitrary path shape.
 //! Corresponds to Flutter's `ClipPathLayer`.
 
-use flui_types::geometry::Rect;
+use flui_types::geometry::{Pixels, Rect};
 use flui_types::painting::{Clip, Path};
 
 /// Layer that clips children to an arbitrary path.
@@ -103,7 +103,7 @@ impl ClipPathLayer {
     /// * `rect` - Bounding rectangle of the oval
     /// * `clip_behavior` - How to apply the clip
     #[inline]
-    pub fn oval(rect: Rect, clip_behavior: Clip) -> Self {
+    pub fn oval(rect: Rect<Pixels>, clip_behavior: Clip) -> Self {
         Self::new(Path::oval(rect), clip_behavior)
     }
 
@@ -136,7 +136,7 @@ impl ClipPathLayer {
     /// This is the bounding box of the path, which may be larger
     /// than the actual clipped area for complex paths.
     #[inline]
-    pub fn bounds(&self) -> Rect {
+    pub fn bounds(&self) -> Rect<Pixels> {
         self.clip_path.compute_bounds()
     }
 

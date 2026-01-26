@@ -3,7 +3,7 @@
 //! This layer clips its children to a rounded rectangle region.
 //! Corresponds to Flutter's `ClipRRectLayer`.
 
-use flui_types::geometry::{RRect, Rect};
+use flui_types::geometry::{Pixels, RRect, Rect};
 use flui_types::painting::Clip;
 
 /// Layer that clips children to a rounded rectangle.
@@ -69,7 +69,7 @@ impl ClipRRectLayer {
     /// * `radius` - Corner radius for all corners
     /// * `clip_behavior` - How to apply the clip
     #[inline]
-    pub fn circular(rect: Rect, radius: f32, clip_behavior: Clip) -> Self {
+    pub fn circular(rect: Rect<Pixels>, radius: f32, clip_behavior: Clip) -> Self {
         Self::new(RRect::from_rect_circular(rect, radius), clip_behavior)
     }
 
@@ -116,7 +116,7 @@ impl ClipRRectLayer {
 
     /// Returns the bounding rectangle of this layer.
     #[inline]
-    pub fn bounds(&self) -> Rect {
+    pub fn bounds(&self) -> Rect<Pixels> {
         self.clip_rrect.bounding_rect()
     }
 

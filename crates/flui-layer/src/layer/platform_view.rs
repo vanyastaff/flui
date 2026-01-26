@@ -3,7 +3,7 @@
 //! This layer embeds a native platform view (Android View, iOS UIView, etc.)
 //! into the FLUI layer tree.
 
-use flui_types::geometry::Rect;
+use flui_types::geometry::{Pixels, Rect};
 
 /// Unique identifier for a platform view.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -91,7 +91,7 @@ pub struct PlatformViewLayer {
     view_id: PlatformViewId,
 
     /// Rectangle where the platform view is displayed
-    rect: Rect,
+    rect: Rect<Pixels>,
 
     /// Hit test behavior
     hit_test_behavior: PlatformViewHitTestBehavior,
@@ -100,7 +100,7 @@ pub struct PlatformViewLayer {
 impl PlatformViewLayer {
     /// Creates a new platform view layer.
     #[inline]
-    pub fn new(view_id: PlatformViewId, rect: Rect) -> Self {
+    pub fn new(view_id: PlatformViewId, rect: Rect<Pixels>) -> Self {
         Self {
             view_id,
             rect,
@@ -123,13 +123,13 @@ impl PlatformViewLayer {
 
     /// Returns the display rectangle.
     #[inline]
-    pub fn rect(&self) -> Rect {
+    pub fn rect(&self) -> Rect<Pixels> {
         self.rect
     }
 
     /// Returns the bounds (same as rect).
     #[inline]
-    pub fn bounds(&self) -> Rect {
+    pub fn bounds(&self) -> Rect<Pixels> {
         self.rect
     }
 
@@ -147,7 +147,7 @@ impl PlatformViewLayer {
 
     /// Sets the display rectangle.
     #[inline]
-    pub fn set_rect(&mut self, rect: Rect) {
+    pub fn set_rect(&mut self, rect: Rect<Pixels>) {
         self.rect = rect;
     }
 

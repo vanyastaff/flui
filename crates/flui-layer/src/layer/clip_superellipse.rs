@@ -4,7 +4,7 @@
 //! the smooth corner transitions used in iOS/SwiftUI design.
 //! Corresponds to Flutter's `ClipRSuperellipseLayer`.
 
-use flui_types::geometry::{RSuperellipse, Rect};
+use flui_types::geometry::{Pixels, RSuperellipse, Rect};
 use flui_types::painting::Clip;
 
 /// Layer that clips children to a superellipse (squircle) shape.
@@ -79,7 +79,7 @@ impl ClipSuperellipseLayer {
     /// * `radius` - Corner radius for all corners
     /// * `clip_behavior` - How to apply the clip
     #[inline]
-    pub fn circular(rect: Rect, radius: f32, clip_behavior: Clip) -> Self {
+    pub fn circular(rect: Rect<Pixels>, radius: f32, clip_behavior: Clip) -> Self {
         Self::new(
             RSuperellipse::from_rect_circular(rect, radius),
             clip_behavior,
@@ -144,13 +144,13 @@ impl ClipSuperellipseLayer {
 
     /// Returns the bounding rectangle of this layer.
     #[inline]
-    pub fn bounds(&self) -> Rect {
+    pub fn bounds(&self) -> Rect<Pixels> {
         self.clip_superellipse.outer_rect()
     }
 
     /// Returns the clip bounds (same as bounds for this layer type).
     #[inline]
-    pub fn describe_clip_bounds(&self) -> Rect {
+    pub fn describe_clip_bounds(&self) -> Rect<Pixels> {
         self.clip_superellipse.outer_rect()
     }
 

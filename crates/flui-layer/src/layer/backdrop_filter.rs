@@ -5,7 +5,7 @@
 //! child content on top.
 
 use flui_types::{
-    geometry::Rect,
+    geometry::{Pixels, Rect},
     painting::{BlendMode, ImageFilter},
 };
 
@@ -48,7 +48,7 @@ pub struct BackdropFilterLayer {
     blend_mode: BlendMode,
 
     /// Bounds for backdrop capture (pre-computed for performance)
-    bounds: Rect,
+    bounds: Rect<Pixels>,
 }
 
 impl BackdropFilterLayer {
@@ -59,7 +59,7 @@ impl BackdropFilterLayer {
     /// * `filter` - Image filter (blur, color adjustments, etc.)
     /// * `blend_mode` - Blend mode for compositing
     /// * `bounds` - Bounding rectangle for backdrop capture
-    pub fn new(filter: ImageFilter, blend_mode: BlendMode, bounds: Rect) -> Self {
+    pub fn new(filter: ImageFilter, blend_mode: BlendMode, bounds: Rect<Pixels>) -> Self {
         Self {
             filter,
             blend_mode,
@@ -78,12 +78,12 @@ impl BackdropFilterLayer {
     }
 
     /// Get the bounding rectangle of this layer.
-    pub fn bounds(&self) -> Rect {
+    pub fn bounds(&self) -> Rect<Pixels> {
         self.bounds
     }
 
     /// Set new bounds for this layer.
-    pub fn set_bounds(&mut self, bounds: Rect) {
+    pub fn set_bounds(&mut self, bounds: Rect<Pixels>) {
         self.bounds = bounds;
     }
 }

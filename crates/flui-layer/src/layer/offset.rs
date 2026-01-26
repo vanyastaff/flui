@@ -106,7 +106,7 @@ impl OffsetLayer {
     ///
     /// Returns the bounds translated by the offset.
     #[inline]
-    pub fn transform_bounds(&self, bounds: Rect) -> Rect {
+    pub fn transform_bounds(&self, bounds: Rect<Pixels>) -> Rect<Pixels> {
         bounds.translate(Vec2::new(self.offset.dx, self.offset.dy))
     }
 
@@ -114,7 +114,7 @@ impl OffsetLayer {
     ///
     /// This is used when capturing the layer to a texture for caching.
     #[inline]
-    pub fn to_image_bounds(&self, child_bounds: Rect) -> Rect {
+    pub fn to_image_bounds(&self, child_bounds: Rect<Pixels>) -> Rect<Pixels> {
         self.transform_bounds(child_bounds)
     }
 

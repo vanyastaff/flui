@@ -3,7 +3,7 @@
 //! This layer displays an external GPU texture (video, camera, platform view)
 //! at a specific location. Corresponds to Flutter's `TextureLayer`.
 
-use flui_types::geometry::Rect;
+use flui_types::geometry::{Pixels, Rect};
 use flui_types::painting::{FilterQuality, TextureId};
 
 /// Layer that displays an external GPU texture.
@@ -50,7 +50,7 @@ pub struct TextureLayer {
     texture_id: TextureId,
 
     /// Destination rectangle where the texture will be drawn
-    rect: Rect,
+    rect: Rect<Pixels>,
 
     /// Whether the texture is frozen (not updating)
     freeze: bool,
@@ -70,7 +70,7 @@ impl TextureLayer {
     /// * `texture_id` - ID of the external GPU texture
     /// * `rect` - Destination rectangle for the texture
     #[inline]
-    pub fn new(texture_id: TextureId, rect: Rect) -> Self {
+    pub fn new(texture_id: TextureId, rect: Rect<Pixels>) -> Self {
         Self {
             texture_id,
             rect,
@@ -82,7 +82,7 @@ impl TextureLayer {
 
     /// Creates a frozen texture layer (texture won't update).
     #[inline]
-    pub fn frozen(texture_id: TextureId, rect: Rect) -> Self {
+    pub fn frozen(texture_id: TextureId, rect: Rect<Pixels>) -> Self {
         Self {
             texture_id,
             rect,
@@ -121,13 +121,13 @@ impl TextureLayer {
 
     /// Returns the destination rectangle.
     #[inline]
-    pub fn rect(&self) -> Rect {
+    pub fn rect(&self) -> Rect<Pixels> {
         self.rect
     }
 
     /// Returns the bounds (same as rect for texture layers).
     #[inline]
-    pub fn bounds(&self) -> Rect {
+    pub fn bounds(&self) -> Rect<Pixels> {
         self.rect
     }
 
@@ -157,7 +157,7 @@ impl TextureLayer {
 
     /// Sets the destination rectangle.
     #[inline]
-    pub fn set_rect(&mut self, rect: Rect) {
+    pub fn set_rect(&mut self, rect: Rect<Pixels>) {
         self.rect = rect;
     }
 

@@ -4,7 +4,7 @@
 //! It stores an immutable Picture (DisplayList) that can be replayed efficiently.
 
 use flui_painting::{DisplayListCore, Picture};
-use flui_types::geometry::Rect;
+use flui_types::geometry::{Pixels, Rect};
 
 /// Picture layer - a leaf layer that contains an immutable recorded picture
 ///
@@ -62,7 +62,7 @@ pub struct PictureLayer {
     picture: Picture,
 
     /// Estimated bounds for culling
-    bounds: Rect,
+    bounds: Rect<Pixels>,
 }
 
 impl std::fmt::Debug for PictureLayer {
@@ -107,7 +107,7 @@ impl PictureLayer {
     ///
     /// * `picture` - The recorded Picture (DisplayList)
     /// * `bounds` - Explicit bounds for this layer
-    pub fn with_bounds(picture: Picture, bounds: Rect) -> Self {
+    pub fn with_bounds(picture: Picture, bounds: Rect<Pixels>) -> Self {
         Self { picture, bounds }
     }
 
@@ -123,7 +123,7 @@ impl PictureLayer {
     ///
     /// These bounds are used for culling - if the layer is outside the
     /// visible viewport, it can be skipped during rendering.
-    pub fn bounds(&self) -> Rect {
+    pub fn bounds(&self) -> Rect<Pixels> {
         self.bounds
     }
 
@@ -131,7 +131,7 @@ impl PictureLayer {
     ///
     /// This is useful when the layer is repositioned or when custom
     /// bounds are needed for culling optimization.
-    pub fn set_bounds(&mut self, bounds: Rect) {
+    pub fn set_bounds(&mut self, bounds: Rect<Pixels>) {
         self.bounds = bounds;
     }
 

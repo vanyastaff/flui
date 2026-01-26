@@ -132,7 +132,7 @@ impl LeaderLayer {
 
     /// Returns the bounds.
     #[inline]
-    pub fn bounds(&self) -> Rect {
+    pub fn bounds(&self) -> Rect<Pixels> {
         Rect::from_xywh(
             self.offset.dx,
             self.offset.dy,

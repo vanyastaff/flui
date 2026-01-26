@@ -3,7 +3,7 @@
 //! This module provides the PerformanceOverlayLayer for displaying
 //! performance metrics like frame timings, raster cache, and memory usage.
 
-use flui_types::geometry::Rect;
+use flui_types::geometry::{Pixels, Rect};
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
@@ -253,7 +253,7 @@ impl std::ops::BitOrAssign for PerformanceOverlayOption {
 #[derive(Debug, Clone)]
 pub struct PerformanceOverlayLayer {
     /// The rectangle where the overlay is displayed.
-    overlay_rect: Rect,
+    overlay_rect: Rect<Pixels>,
 
     /// The options mask controlling what is displayed.
     options: PerformanceOverlayOption,
@@ -280,7 +280,7 @@ impl PerformanceOverlayLayer {
     ///   the overlay should be displayed.
     /// * `options` - The options controlling what statistics to display.
     #[inline]
-    pub fn new(overlay_rect: Rect, options: PerformanceOverlayOption) -> Self {
+    pub fn new(overlay_rect: Rect<Pixels>, options: PerformanceOverlayOption) -> Self {
         Self {
             overlay_rect,
             options,
@@ -319,7 +319,7 @@ impl PerformanceOverlayLayer {
 
     /// Creates a performance overlay showing all raster statistics.
     #[inline]
-    pub fn raster_stats(overlay_rect: Rect) -> Self {
+    pub fn raster_stats(overlay_rect: Rect<Pixels>) -> Self {
         Self::new(
             overlay_rect,
             PerformanceOverlayOption::DISPLAY_RASTER_STATISTICS
@@ -329,7 +329,7 @@ impl PerformanceOverlayLayer {
 
     /// Creates a performance overlay showing all engine statistics.
     #[inline]
-    pub fn engine_stats(overlay_rect: Rect) -> Self {
+    pub fn engine_stats(overlay_rect: Rect<Pixels>) -> Self {
         Self::new(
             overlay_rect,
             PerformanceOverlayOption::DISPLAY_ENGINE_STATISTICS
@@ -339,13 +339,13 @@ impl PerformanceOverlayLayer {
 
     /// Creates a performance overlay showing all available statistics.
     #[inline]
-    pub fn all_stats(overlay_rect: Rect) -> Self {
+    pub fn all_stats(overlay_rect: Rect<Pixels>) -> Self {
         Self::new(overlay_rect, PerformanceOverlayOption::all())
     }
 
     /// Returns the overlay rectangle.
     #[inline]
-    pub fn overlay_rect(&self) -> Rect {
+    pub fn overlay_rect(&self) -> Rect<Pixels> {
         self.overlay_rect
     }
 
@@ -353,7 +353,7 @@ impl PerformanceOverlayLayer {
     ///
     /// This marks the layer as needing to be re-added to the scene.
     #[inline]
-    pub fn set_overlay_rect(&mut self, rect: Rect) {
+    pub fn set_overlay_rect(&mut self, rect: Rect<Pixels>) {
         if self.overlay_rect != rect {
             self.overlay_rect = rect;
             self.needs_add_to_scene = true;
@@ -385,7 +385,7 @@ impl PerformanceOverlayLayer {
 
     /// Returns the bounds of this layer.
     #[inline]
-    pub fn bounds(&self) -> Rect {
+    pub fn bounds(&self) -> Rect<Pixels> {
         self.overlay_rect
     }
 

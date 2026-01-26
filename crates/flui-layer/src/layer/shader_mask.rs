@@ -4,7 +4,7 @@
 //! by rendering child content to an offscreen texture and applying a GPU shader as a mask.
 
 use flui_types::{
-    geometry::Rect,
+    geometry::{Pixels, Rect},
     painting::{BlendMode, ShaderSpec},
 };
 
@@ -52,7 +52,7 @@ pub struct ShaderMaskLayer {
     blend_mode: BlendMode,
 
     /// Bounds for rendering (pre-computed for performance)
-    bounds: Rect,
+    bounds: Rect<Pixels>,
 }
 
 impl ShaderMaskLayer {
@@ -63,7 +63,7 @@ impl ShaderMaskLayer {
     /// * `shader` - Shader specification (linear gradient, radial gradient, etc.)
     /// * `blend_mode` - Blend mode for compositing
     /// * `bounds` - Bounding rectangle for rendering
-    pub fn new(shader: ShaderSpec, blend_mode: BlendMode, bounds: Rect) -> Self {
+    pub fn new(shader: ShaderSpec, blend_mode: BlendMode, bounds: Rect<Pixels>) -> Self {
         Self {
             shader,
             blend_mode,
@@ -82,12 +82,12 @@ impl ShaderMaskLayer {
     }
 
     /// Get the bounding rectangle of this layer.
-    pub fn bounds(&self) -> Rect {
+    pub fn bounds(&self) -> Rect<Pixels> {
         self.bounds
     }
 
     /// Set new bounds for this layer.
-    pub fn set_bounds(&mut self, bounds: Rect) {
+    pub fn set_bounds(&mut self, bounds: Rect<Pixels>) {
         self.bounds = bounds;
     }
 }

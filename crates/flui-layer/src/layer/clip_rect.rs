@@ -3,7 +3,7 @@
 //! This layer clips its children to a rectangular region.
 //! Corresponds to Flutter's `ClipRectLayer`.
 
-use flui_types::geometry::Rect;
+use flui_types::geometry::{Pixels, Rect};
 use flui_types::painting::Clip;
 
 /// Layer that clips children to a rectangle.
@@ -35,7 +35,7 @@ use flui_types::painting::Clip;
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClipRectLayer {
     /// The clipping rectangle
-    clip_rect: Rect,
+    clip_rect: Rect<Pixels>,
 
     /// Clip behavior (HardEdge, AntiAlias, etc.)
     clip_behavior: Clip,
@@ -49,7 +49,7 @@ impl ClipRectLayer {
     /// * `clip_rect` - The rectangle to clip to
     /// * `clip_behavior` - How to apply the clip (HardEdge, AntiAlias, etc.)
     #[inline]
-    pub fn new(clip_rect: Rect, clip_behavior: Clip) -> Self {
+    pub fn new(clip_rect: Rect<Pixels>, clip_behavior: Clip) -> Self {
         Self {
             clip_rect,
             clip_behavior,
@@ -60,7 +60,7 @@ impl ClipRectLayer {
     ///
     /// Hard edge clipping is faster but may show aliasing on edges.
     #[inline]
-    pub fn hard_edge(clip_rect: Rect) -> Self {
+    pub fn hard_edge(clip_rect: Rect<Pixels>) -> Self {
         Self::new(clip_rect, Clip::HardEdge)
     }
 
@@ -68,19 +68,19 @@ impl ClipRectLayer {
     ///
     /// Anti-aliased clipping is smoother but more expensive.
     #[inline]
-    pub fn anti_alias(clip_rect: Rect) -> Self {
+    pub fn anti_alias(clip_rect: Rect<Pixels>) -> Self {
         Self::new(clip_rect, Clip::AntiAlias)
     }
 
     /// Returns the clipping rectangle.
     #[inline]
-    pub fn clip_rect(&self) -> Rect {
+    pub fn clip_rect(&self) -> Rect<Pixels> {
         self.clip_rect
     }
 
     /// Sets the clipping rectangle.
     #[inline]
-    pub fn set_clip_rect(&mut self, clip_rect: Rect) {
+    pub fn set_clip_rect(&mut self, clip_rect: Rect<Pixels>) {
         self.clip_rect = clip_rect;
     }
 
@@ -98,7 +98,7 @@ impl ClipRectLayer {
 
     /// Returns the bounds of this layer (same as clip_rect).
     #[inline]
-    pub fn bounds(&self) -> Rect {
+    pub fn bounds(&self) -> Rect<Pixels> {
         self.clip_rect
     }
 

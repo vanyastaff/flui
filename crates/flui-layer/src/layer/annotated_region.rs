@@ -4,7 +4,7 @@
 //! Used for system UI integration (status bar color, etc.) and
 //! accessibility regions.
 
-use flui_types::geometry::Rect;
+use flui_types::geometry::{Pixels, Rect};
 use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
@@ -61,7 +61,7 @@ pub type AnnotationValue = Arc<dyn Any + Send + Sync>;
 /// ```
 pub struct AnnotatedRegionLayer {
     /// The annotated region bounds
-    rect: Rect,
+    rect: Rect<Pixels>,
 
     /// The annotation value (type-erased)
     value: AnnotationValue,
@@ -78,7 +78,7 @@ impl AnnotatedRegionLayer {
     /// * `rect` - The region bounds
     /// * `value` - The annotation value (must be Send + Sync)
     #[inline]
-    pub fn new<T: Any + Send + Sync>(rect: Rect, value: Arc<T>) -> Self {
+    pub fn new<T: Any + Send + Sync>(rect: Rect<Pixels>, value: Arc<T>) -> Self {
         Self {
             rect,
             value,
@@ -105,13 +105,13 @@ impl AnnotatedRegionLayer {
 
     /// Returns the region bounds.
     #[inline]
-    pub fn rect(&self) -> Rect {
+    pub fn rect(&self) -> Rect<Pixels> {
         self.rect
     }
 
     /// Returns the region bounds.
     #[inline]
-    pub fn bounds(&self) -> Rect {
+    pub fn bounds(&self) -> Rect<Pixels> {
         self.rect
     }
 
@@ -135,7 +135,7 @@ impl AnnotatedRegionLayer {
 
     /// Sets the region bounds.
     #[inline]
-    pub fn set_rect(&mut self, rect: Rect) {
+    pub fn set_rect(&mut self, rect: Rect<Pixels>) {
         self.rect = rect;
     }
 

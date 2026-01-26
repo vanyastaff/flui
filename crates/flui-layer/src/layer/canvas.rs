@@ -4,7 +4,7 @@
 //! with drawing commands that will be rendered to the screen.
 
 use flui_painting::{Canvas, DisplayList, DisplayListCore};
-use flui_types::geometry::Rect;
+use flui_types::geometry::{Pixels, Rect};
 
 /// Canvas layer - a leaf layer that contains drawing commands
 ///
@@ -77,7 +77,7 @@ impl CanvasLayer {
     }
 
     /// Returns the bounds of all drawing commands in this layer.
-    pub fn bounds(&self) -> Rect {
+    pub fn bounds(&self) -> Rect<Pixels> {
         self.canvas.display_list().bounds()
     }
 
