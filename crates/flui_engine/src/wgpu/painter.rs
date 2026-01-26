@@ -18,7 +18,7 @@ use super::{
 };
 use crate::traits::Painter;
 use flui_painting::{Paint, PaintStyle};
-use flui_types::{geometry::RRect, painting::Path, painting::TextureId, Offset, Point, Rect};
+use flui_types::{geometry::{Pixels, RRect}, painting::Path, painting::TextureId, Offset, Point, Rect};
 use wgpu::util::DeviceExt;
 
 /// GPU painter for hardware-accelerated 2D rendering
@@ -853,7 +853,7 @@ impl WgpuPainter {
     // ===== Helper Methods =====
 
     /// Apply current transform to a point
-    fn apply_transform(&self, point: Point) -> Point {
+    fn apply_transform(&self, point: Point<Pixels>) -> Point {
         let p = self.current_transform * glam::vec4(point.x, point.y, 0.0, 1.0);
         Point::new(p.x, p.y)
     }
@@ -1252,7 +1252,7 @@ impl WgpuPainter {
 // ===== Painter Trait Implementation =====
 
 impl Painter for WgpuPainter {
-    fn rect(&mut self, rect: Rect, paint: &Paint) {
+    fn rect(&mut self, rect: Rect<Pixels>, paint: &Paint) {
         #[cfg(debug_assertions)]
         tracing::trace!("WgpuPainter::rect: rect={:?}, paint={:?}", rect, paint);
 
@@ -1284,7 +1284,7 @@ impl Painter for WgpuPainter {
         }
     }
 
-    fn rrect(&mut self, rrect: RRect, paint: &Paint) {
+    fn rrect(&mut self, rrect: RRect<Pixels>, paint: &Paint) {
         if paint.style == PaintStyle::Fill {
             // Apply current transform to rect bounds
             let top_left = self.apply_transform(Point::new(rrect.rect.left(), rrect.rect.top()));
@@ -1319,7 +1319,7 @@ impl Painter for WgpuPainter {
         }
     }
 
-    fn circle(&mut self, center: Point, radius: f32, paint: &Paint) {
+    fn circle(&mut self, center: Point<Pixels>, radius: f32, paint: &Paint) {
         #[cfg(debug_assertions)]
         tracing::trace!(
             "WgpuPainter::circle: center={:?}, radius={}, paint={:?}",
@@ -1355,7 +1355,7 @@ impl Painter for WgpuPainter {
         }
     }
 
-    fn oval(&mut self, rect: Rect, paint: &Paint) {
+    fn oval(&mut self, rect: Rect<Pixels>, paint: &Paint) {
         #[cfg(debug_assertions)]
         tracing::trace!("WgpuPainter::oval: rect={:?}, paint={:?}", rect, paint);
 
@@ -1370,7 +1370,7 @@ impl Painter for WgpuPainter {
 
     fn draw_arc(
         &mut self,
-        rect: Rect,
+        rect: Rect<Pixels>,
         start_angle: f32,
         sweep_angle: f32,
         use_center: bool,
@@ -1433,7 +1433,7 @@ impl Painter for WgpuPainter {
         }
     }
 
-    fn draw_drrect(&mut self, outer: RRect, inner: RRect, paint: &Paint) {
+    fn draw_drrect(&mut self, outer: RRect<Pixels>, inner: RRect<Pixels>, paint: &Paint) {
         #[cfg(debug_assertions)]
         tracing::trace!(
             "WgpuPainter::draw_drrect: outer={:?}, inner={:?}, paint={:?}",
@@ -1454,7 +1454,7 @@ impl Painter for WgpuPainter {
         }
     }
 
-    fn line(&mut self, p1: Point, p2: Point, paint: &Paint) {
+    fn line(&mut self, p1: Point<Pixels>, p2: Point<Pixels>, paint: &Paint) {
         #[cfg(debug_assertions)]
         tracing::trace!(
             "WgpuPainter::line: p1={:?}, p2={:?}, paint={:?}",
@@ -1482,7 +1482,7 @@ impl Painter for WgpuPainter {
         }
     }
 
-    fn text(&mut self, text: &str, position: Point, font_size: f32, paint: &Paint) {
+    fn text(&mut self, text: &str, position: Point<Pixels>, font_size: f32, paint: &Paint) {
         #[cfg(debug_assertions)]
         tracing::trace!(
             "WgpuPainter::text: text='{}', position={:?}, size={}, color={:?}",
@@ -1500,7 +1500,7 @@ impl Painter for WgpuPainter {
             .add_text(text, transformed_position, font_size, paint.color);
     }
 
-    fn texture(&mut self, texture_id: TextureId, dst_rect: Rect) {
+    fn texture(&mut self, texture_id: TextureId, dst_rect: Rect<Pixels>) {
         #[cfg(debug_assertions)]
         tracing::trace!(
             "WgpuPainter::texture: id={:?}, dst_rect={:?}",
@@ -1557,7 +1557,7 @@ impl Painter for WgpuPainter {
         }
     }
 
-    fn draw_image(&mut self, image: &flui_types::painting::Image, dst_rect: Rect) {
+    fn draw_image(&mut self, image: &flui_types::painting::Image, dst_rect: Rect<Pixels>) {
         #[cfg(debug_assertions)]
         tracing::trace!(
             "WgpuPainter::draw_image: size={}x{}, dst={:?}",
@@ -1663,9 +1663,9 @@ impl Painter for WgpuPainter {
 
     fn draw_vertices(
         &mut self,
-        vertices: &[Point],
+        vertices: &[Point<Pixels>],
         colors: Option<&[flui_types::styling::Color]>,
-        _tex_coords: Option<&[Point]>, // TODO: Support texture coordinates
+        _tex_coords: Option<&[Point<Pixels>]>, // TODO: Support texture coordinates
         indices: &[u16],
         paint: &Paint,
     ) {
@@ -1727,7 +1727,7 @@ impl Painter for WgpuPainter {
     fn draw_atlas(
         &mut self,
         image: &flui_types::painting::Image,
-        sprites: &[Rect],
+        sprites: &[Rect<Pixels>],
         transforms: &[flui_types::Matrix4],
         colors: Option<&[flui_types::styling::Color]>,
     ) {
@@ -1818,8 +1818,8 @@ impl Painter for WgpuPainter {
     fn draw_texture(
         &mut self,
         texture_id: flui_types::painting::TextureId,
-        dst: Rect,
-        src: Option<Rect>,
+        dst: Rect<Pixels>,
+        src: Option<Rect<Pixels>>,
         _filter_quality: flui_types::painting::FilterQuality,
         opacity: f32,
     ) {
@@ -1947,7 +1947,7 @@ impl Painter for WgpuPainter {
         }
     }
 
-    fn translate(&mut self, offset: Offset) {
+    fn translate(&mut self, offset: Offset<Pixels>) {
         #[cfg(debug_assertions)]
         tracing::trace!("WgpuPainter::translate: offset={:?}", offset);
 
@@ -1973,7 +1973,7 @@ impl Painter for WgpuPainter {
 
     // ===== Clipping =====
 
-    fn clip_rect(&mut self, rect: Rect) {
+    fn clip_rect(&mut self, rect: Rect<Pixels>) {
         // Convert logical coordinates to physical pixels
         // Apply current transform to get screen-space coordinates
         let transform = self.current_transform;
@@ -2021,7 +2021,7 @@ impl Painter for WgpuPainter {
         );
     }
 
-    fn clip_rrect(&mut self, rrect: RRect) {
+    fn clip_rrect(&mut self, rrect: RRect<Pixels>) {
         // Rounded rectangle clipping requires stencil buffer
         // This is a more complex feature that needs:
         // 1. Stencil buffer configuration in render pass
@@ -2068,7 +2068,7 @@ impl Painter for WgpuPainter {
 
     // ===== Layer Operations (Opacity) =====
 
-    fn save_layer(&mut self, _bounds: Option<Rect>, paint: &Paint) {
+    fn save_layer(&mut self, _bounds: Option<Rect<Pixels>>, paint: &Paint) {
         // Push current opacity onto stack
         self.opacity_stack.push(self.current_opacity);
 
@@ -2130,7 +2130,7 @@ impl WgpuPainter {
     /// ```
     pub fn gradient_rect(
         &mut self,
-        bounds: Rect,
+        bounds: Rect<Pixels>,
         gradient_start: glam::Vec2,
         gradient_end: glam::Vec2,
         stops: &[super::effects::GradientStop],
@@ -2181,7 +2181,7 @@ impl WgpuPainter {
     /// ```
     pub fn radial_gradient_rect(
         &mut self,
-        bounds: Rect,
+        bounds: Rect<Pixels>,
         center: glam::Vec2,
         radius: f32,
         stops: &[super::effects::GradientStop],

@@ -3,7 +3,7 @@
 //! Manages GPU texture allocation and reuse to minimize allocation overhead
 //! during shader mask rendering.
 
-use flui_types::Size;
+use flui_types::{geometry::Pixels, Size};
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -21,7 +21,7 @@ pub struct TextureDesc {
 
 impl TextureDesc {
     /// Create texture descriptor from size
-    pub fn from_size(size: Size) -> Self {
+    pub fn from_size(size: Size<Pixels>) -> Self {
         Self {
             width: size.width.ceil() as u32,
             height: size.height.ceil() as u32,
@@ -220,7 +220,7 @@ impl TexturePool {
     /// Returns a pooled texture that will be automatically returned
     /// to the pool when dropped.
     #[must_use]
-    pub fn acquire(&self, size: Size) -> PooledTexture {
+    pub fn acquire(&self, size: Size<Pixels>) -> PooledTexture {
         let desc = TextureDesc::from_size(size);
         let mut pool = self.inner.lock();
 

@@ -27,7 +27,7 @@
 //! ```
 
 use bytemuck::{Pod, Zeroable};
-use flui_types::{styling::Color, Point, Rect};
+use flui_types::{geometry::Pixels, styling::Color, Point, Rect};
 
 /// Instance data for a rectangle
 ///
@@ -53,7 +53,7 @@ pub struct RectInstance {
 impl RectInstance {
     /// Create a simple rectangular instance
     #[must_use]
-    pub fn rect(rect: Rect, color: Color) -> Self {
+    pub fn rect(rect: Rect<Pixels>, color: Color) -> Self {
         Self {
             bounds: [rect.left(), rect.top(), rect.width(), rect.height()],
             color: color.to_f32_array(),
@@ -64,7 +64,7 @@ impl RectInstance {
 
     /// Create a rounded rectangular instance
     #[must_use]
-    pub fn rounded_rect(rect: Rect, color: Color, radius: f32) -> Self {
+    pub fn rounded_rect(rect: Rect<Pixels>, color: Color, radius: f32) -> Self {
         Self {
             bounds: [rect.left(), rect.top(), rect.width(), rect.height()],
             color: color.to_f32_array(),
@@ -76,7 +76,7 @@ impl RectInstance {
     /// Create an instance with per-corner radii
     #[must_use]
     pub fn rounded_rect_corners(
-        rect: Rect,
+        rect: Rect<Pixels>,
         color: Color,
         top_left: f32,
         top_right: f32,
@@ -143,7 +143,7 @@ pub struct CircleInstance {
 impl CircleInstance {
     /// Create a circle instance
     #[must_use]
-    pub fn new(center: Point, radius: f32, color: Color) -> Self {
+    pub fn new(center: Point<Pixels>, radius: f32, color: Color) -> Self {
         Self {
             center_radius: [center.x, center.y, radius, 0.0],
             color: color.to_f32_array(),
@@ -153,7 +153,7 @@ impl CircleInstance {
 
     /// Create an ellipse instance (stretched circle)
     #[must_use]
-    pub fn ellipse(center: Point, radius_x: f32, radius_y: f32, color: Color) -> Self {
+    pub fn ellipse(center: Point<Pixels>, radius_x: f32, radius_y: f32, color: Color) -> Self {
         Self {
             center_radius: [center.x, center.y, radius_x.max(radius_y), 0.0],
             color: color.to_f32_array(),
@@ -218,7 +218,7 @@ impl ArcInstance {
     /// * `color` - Arc color
     #[must_use]
     pub fn new(
-        center: Point,
+        center: Point<Pixels>,
         radius: f32,
         start_angle: f32,
         sweep_angle: f32,
@@ -235,7 +235,7 @@ impl ArcInstance {
     /// Create an elliptical arc instance
     #[must_use]
     pub fn ellipse(
-        center: Point,
+        center: Point<Pixels>,
         radius_x: f32,
         radius_y: f32,
         start_angle: f32,

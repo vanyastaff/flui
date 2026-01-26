@@ -90,7 +90,7 @@ pub use traits::{CommandRenderer, Painter};
 
 // wgpu backend exports
 #[cfg(feature = "wgpu-backend")]
-pub use wgpu::{Backend, LayerRender, SceneRenderer, WgpuPainter};
+pub use wgpu::{Backend, LayerRender, WgpuPainter};
 
 #[cfg(all(feature = "wgpu-backend", debug_assertions))]
 pub use wgpu::DebugBackend;

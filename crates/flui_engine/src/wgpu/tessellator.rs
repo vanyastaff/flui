@@ -5,7 +5,7 @@
 
 use super::vertex::Vertex;
 use flui_painting::{Paint, StrokeCap, StrokeJoin};
-use flui_types::{geometry::RRect, styling::Color, Point, Rect};
+use flui_types::{geometry::{Pixels, RRect}, styling::Color, Point, Rect};
 use lyon::path::Path;
 use lyon::tessellation::{
     BuffersBuilder, FillOptions, FillTessellator, FillVertex, StrokeOptions, StrokeTessellator,
@@ -166,7 +166,7 @@ impl Tessellator {
     /// Tessellate a rectangle (optimized path)
     pub fn tessellate_rect(
         &mut self,
-        rect: Rect,
+        rect: Rect<Pixels>,
         paint: &Paint,
     ) -> Result<(Vec<Vertex>, Vec<u32>)> {
         let mut path_builder = Path::builder();
@@ -184,7 +184,7 @@ impl Tessellator {
     /// Tessellate a rounded rectangle
     pub fn tessellate_rounded_rect(
         &mut self,
-        rect: Rect,
+        rect: Rect<Pixels>,
         corner_radius: f32,
         paint: &Paint,
     ) -> Result<(Vec<Vertex>, Vec<u32>)> {
@@ -246,7 +246,7 @@ impl Tessellator {
     /// Tessellate a circle
     pub fn tessellate_circle(
         &mut self,
-        center: Point,
+        center: Point<Pixels>,
         radius: f32,
         paint: &Paint,
     ) -> Result<(Vec<Vertex>, Vec<u32>)> {
@@ -265,8 +265,8 @@ impl Tessellator {
     /// Tessellate an ellipse
     pub fn tessellate_ellipse(
         &mut self,
-        center: Point,
-        radii: Point,
+        center: Point<Pixels>,
+        radii: Point<Pixels>,
         paint: &Paint,
     ) -> Result<(Vec<Vertex>, Vec<u32>)> {
         let mut path_builder = Path::builder();
@@ -295,7 +295,7 @@ impl Tessellator {
     /// Tuple of (vertices, indices) ready for GPU upload
     pub fn tessellate_arc(
         &mut self,
-        rect: Rect,
+        rect: Rect<Pixels>,
         start_angle: f32,
         sweep_angle: f32,
         use_center: bool,
@@ -487,7 +487,7 @@ impl Tessellator {
     }
 
     /// Create a lyon path from points (polyline)
-    pub fn create_polyline_path(points: &[Point], closed: bool) -> Path {
+    pub fn create_polyline_path(points: &[Point<Pixels>], closed: bool) -> Path {
         if points.is_empty() {
             return Path::builder().build();
         }
@@ -516,7 +516,7 @@ impl Tessellator {
     /// Alias for tessellate_rounded_rect that accepts RRect type.
     pub fn tessellate_rrect(
         &mut self,
-        rrect: RRect,
+        rrect: RRect<Pixels>,
         paint: &Paint,
     ) -> Result<(Vec<Vertex>, Vec<u32>)> {
         // Use average of all corner radii for simplicity
@@ -537,7 +537,7 @@ impl Tessellator {
     /// Tessellate a stroked rectangle
     pub fn tessellate_rect_stroke(
         &mut self,
-        rect: Rect,
+        rect: Rect<Pixels>,
         paint: &Paint,
     ) -> Result<(Vec<Vertex>, Vec<u32>)> {
         let mut path_builder = Path::builder();
@@ -555,8 +555,8 @@ impl Tessellator {
     /// Tessellate a line
     pub fn tessellate_line(
         &mut self,
-        p1: Point,
-        p2: Point,
+        p1: Point<Pixels>,
+        p2: Point<Pixels>,
         paint: &Paint,
     ) -> Result<(Vec<Vertex>, Vec<u32>)> {
         #[cfg(debug_assertions)]
@@ -630,7 +630,7 @@ impl IntoLyonPath for flui_types::painting::path::Path {
         use flui_types::painting::path::PathCommand;
 
         let mut builder = Path::builder();
-        let mut current_pos: Option<Point> = None;
+        let mut current_pos: Option<Point<Pixels>> = None;
         let mut has_begun = false;
 
         for command in self.commands() {

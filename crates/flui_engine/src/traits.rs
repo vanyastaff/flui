@@ -12,7 +12,7 @@
 
 use flui_painting::{BlendMode, Paint, PointMode};
 use flui_types::{
-    geometry::{Matrix4, Offset, Point, RRect, Rect},
+    geometry::{Matrix4, Offset, Pixels, Point, RRect, Rect},
     painting::{Image, Path, TextureId},
     styling::Color,
     typography::TextStyle,
@@ -38,7 +38,7 @@ use flui_types::{
 /// pub struct WgpuBackend { /* ... */ }
 ///
 /// impl CommandRenderer for WgpuBackend {
-///     fn render_rect(&mut self, rect: Rect, paint: &Paint, transform: &Matrix4) {
+///     fn render_rect(&mut self, rect: Rect<Pixels>, paint: &Paint, transform: &Matrix4) {
 ///         self.with_transform(transform, |painter| {
 ///             painter.rect(rect, paint);
 ///         });
@@ -50,19 +50,19 @@ pub trait CommandRenderer {
     // ===== Primitive Shapes =====
 
     /// Render a filled or stroked rectangle
-    fn render_rect(&mut self, rect: Rect, paint: &Paint, transform: &Matrix4);
+    fn render_rect(&mut self, rect: Rect<Pixels>, paint: &Paint, transform: &Matrix4);
 
     /// Render a rounded rectangle
-    fn render_rrect(&mut self, rrect: RRect, paint: &Paint, transform: &Matrix4);
+    fn render_rrect(&mut self, rrect: RRect<Pixels>, paint: &Paint, transform: &Matrix4);
 
     /// Render a circle
-    fn render_circle(&mut self, center: Point, radius: f32, paint: &Paint, transform: &Matrix4);
+    fn render_circle(&mut self, center: Point<Pixels>, radius: f32, paint: &Paint, transform: &Matrix4);
 
     /// Render an oval (ellipse)
-    fn render_oval(&mut self, rect: Rect, paint: &Paint, transform: &Matrix4);
+    fn render_oval(&mut self, rect: Rect<Pixels>, paint: &Paint, transform: &Matrix4);
 
     /// Render a line segment
-    fn render_line(&mut self, p1: Point, p2: Point, paint: &Paint, transform: &Matrix4);
+    fn render_line(&mut self, p1: Point<Pixels>, p2: Point<Pixels>, paint: &Paint, transform: &Matrix4);
 
     /// Render an arbitrary path
     fn render_path(&mut self, path: &Path, paint: &Paint, transform: &Matrix4);
@@ -72,7 +72,7 @@ pub trait CommandRenderer {
     /// Render an arc segment
     fn render_arc(
         &mut self,
-        rect: Rect,
+        rect: Rect<Pixels>,
         start_angle: f32,
         sweep_angle: f32,
         use_center: bool,
@@ -81,13 +81,13 @@ pub trait CommandRenderer {
     );
 
     /// Render a double rounded rectangle (ring/border)
-    fn render_drrect(&mut self, outer: RRect, inner: RRect, paint: &Paint, transform: &Matrix4);
+    fn render_drrect(&mut self, outer: RRect<Pixels>, inner: RRect<Pixels>, paint: &Paint, transform: &Matrix4);
 
     /// Render a set of points
     fn render_points(
         &mut self,
         mode: PointMode,
-        points: &[Point],
+        points: &[Point<Pixels>],
         paint: &Paint,
         transform: &Matrix4,
     );
@@ -98,7 +98,7 @@ pub trait CommandRenderer {
     fn render_text(
         &mut self,
         text: &str,
-        offset: Offset,
+        offset: Offset<Pixels>,
         style: &TextStyle,
         paint: &Paint,
         transform: &Matrix4,
@@ -108,7 +108,7 @@ pub trait CommandRenderer {
     fn render_text_span(
         &mut self,
         span: &flui_types::typography::InlineSpan,
-        offset: Offset,
+        offset: Offset<Pixels>,
         text_scale_factor: f64,
         transform: &Matrix4,
     );
@@ -119,7 +119,7 @@ pub trait CommandRenderer {
     fn render_image(
         &mut self,
         image: &Image,
-        dst: Rect,
+        dst: Rect<Pixels>,
         paint: Option<&Paint>,
         transform: &Matrix4,
     );
@@ -129,7 +129,7 @@ pub trait CommandRenderer {
     fn render_atlas(
         &mut self,
         image: &Image,
-        sprites: &[Rect],
+        sprites: &[Rect<Pixels>],
         transforms: &[Matrix4],
         colors: Option<&[Color]>,
         blend_mode: BlendMode,
@@ -141,7 +141,7 @@ pub trait CommandRenderer {
     fn render_image_repeat(
         &mut self,
         image: &Image,
-        dst: Rect,
+        dst: Rect<Pixels>,
         repeat: flui_painting::display_list::ImageRepeat,
         paint: Option<&Paint>,
         transform: &Matrix4,
@@ -152,7 +152,7 @@ pub trait CommandRenderer {
         &mut self,
         image: &Image,
         center_slice: Rect,
-        dst: Rect,
+        dst: Rect<Pixels>,
         paint: Option<&Paint>,
         transform: &Matrix4,
     );
@@ -161,7 +161,7 @@ pub trait CommandRenderer {
     fn render_image_filtered(
         &mut self,
         image: &Image,
-        dst: Rect,
+        dst: Rect<Pixels>,
         filter: flui_painting::display_list::ColorFilter,
         paint: Option<&Paint>,
         transform: &Matrix4,
@@ -171,8 +171,8 @@ pub trait CommandRenderer {
     fn render_texture(
         &mut self,
         texture_id: TextureId,
-        dst: Rect,
-        src: Option<Rect>,
+        dst: Rect<Pixels>,
+        src: Option<Rect<Pixels>>,
         filter_quality: flui_types::painting::FilterQuality,
         opacity: f32,
         transform: &Matrix4,
@@ -188,7 +188,7 @@ pub trait CommandRenderer {
         &mut self,
         child: &flui_painting::DisplayList,
         shader: &flui_painting::Shader,
-        bounds: Rect,
+        bounds: Rect<Pixels>,
         blend_mode: BlendMode,
         transform: &Matrix4,
     );
@@ -196,12 +196,12 @@ pub trait CommandRenderer {
     // ===== Gradients =====
 
     /// Render a gradient-filled rectangle
-    fn render_gradient(&mut self, rect: Rect, shader: &flui_painting::Shader, transform: &Matrix4);
+    fn render_gradient(&mut self, rect: Rect<Pixels>, shader: &flui_painting::Shader, transform: &Matrix4);
 
     /// Render a gradient-filled rounded rectangle
     fn render_gradient_rrect(
         &mut self,
-        rrect: RRect,
+        rrect: RRect<Pixels>,
         shader: &flui_painting::Shader,
         transform: &Matrix4,
     );
@@ -214,7 +214,7 @@ pub trait CommandRenderer {
         &mut self,
         child: Option<&flui_painting::DisplayList>,
         filter: &flui_painting::display_list::ImageFilter,
-        bounds: Rect,
+        bounds: Rect<Pixels>,
         blend_mode: BlendMode,
         transform: &Matrix4,
     );
@@ -224,9 +224,9 @@ pub trait CommandRenderer {
     /// Render custom vertex geometry
     fn render_vertices(
         &mut self,
-        vertices: &[Point],
+        vertices: &[Point<Pixels>],
         colors: Option<&[Color]>,
-        tex_coords: Option<&[Point]>,
+        tex_coords: Option<&[Point<Pixels>]>,
         indices: &[u16],
         paint: &Paint,
         transform: &Matrix4,
@@ -235,10 +235,10 @@ pub trait CommandRenderer {
     // ===== Clipping =====
 
     /// Set rectangular clip region
-    fn clip_rect(&mut self, rect: Rect, transform: &Matrix4);
+    fn clip_rect(&mut self, rect: Rect<Pixels>, transform: &Matrix4);
 
     /// Set rounded rectangular clip region
-    fn clip_rrect(&mut self, rrect: RRect, transform: &Matrix4);
+    fn clip_rrect(&mut self, rrect: RRect<Pixels>, transform: &Matrix4);
 
     /// Set arbitrary path clip region
     fn clip_path(&mut self, path: &Path, transform: &Matrix4);
@@ -246,12 +246,12 @@ pub trait CommandRenderer {
     // ===== Viewport Information =====
 
     /// Get the viewport bounds
-    fn viewport_bounds(&self) -> Rect;
+    fn viewport_bounds(&self) -> Rect<Pixels>;
 
     // ===== Layer Operations =====
 
     /// Save canvas state and create a new compositing layer
-    fn save_layer(&mut self, bounds: Option<Rect>, paint: &Paint, transform: &Matrix4);
+    fn save_layer(&mut self, bounds: Option<Rect<Pixels>>, paint: &Paint, transform: &Matrix4);
 
     /// Restore canvas state and composite the saved layer
     fn restore_layer(&mut self, transform: &Matrix4);
@@ -271,7 +271,7 @@ pub trait CommandRenderer {
     fn pop_clip(&mut self);
 
     /// Push a translation offset onto the transform stack
-    fn push_offset(&mut self, offset: Offset);
+    fn push_offset(&mut self, offset: Offset<Pixels>);
 
     /// Push a full matrix transformation onto the transform stack
     fn push_transform(&mut self, transform: &Matrix4);
@@ -314,7 +314,7 @@ pub trait CommandRenderer {
     fn add_performance_overlay(
         &mut self,
         options_mask: u32,
-        bounds: Rect,
+        bounds: Rect<Pixels>,
         fps: f32,
         frame_time_ms: f32,
         total_frames: u64,
@@ -333,7 +333,7 @@ pub trait CommandRenderer {
 /// # Example
 ///
 /// ```rust,ignore
-/// fn draw_button(painter: &mut impl Painter, rect: Rect, color: Color) {
+/// fn draw_button(painter: &mut impl Painter, rect: Rect<Pixels>, color: Color) {
 ///     let paint = Paint::fill(color);
 ///     painter.rect(rect, &paint);
 /// }
@@ -342,22 +342,22 @@ pub trait Painter {
     // ===== Core Drawing Methods =====
 
     /// Draw a filled or stroked rectangle
-    fn rect(&mut self, rect: Rect, paint: &Paint);
+    fn rect(&mut self, rect: Rect<Pixels>, paint: &Paint);
 
     /// Draw a rounded rectangle
-    fn rrect(&mut self, rrect: RRect, paint: &Paint);
+    fn rrect(&mut self, rrect: RRect<Pixels>, paint: &Paint);
 
     /// Draw a circle
-    fn circle(&mut self, center: Point, radius: f32, paint: &Paint);
+    fn circle(&mut self, center: Point<Pixels>, radius: f32, paint: &Paint);
 
     /// Draw a line segment
-    fn line(&mut self, p1: Point, p2: Point, paint: &Paint);
+    fn line(&mut self, p1: Point<Pixels>, p2: Point<Pixels>, paint: &Paint);
 
     /// Draw text at a position
-    fn text(&mut self, text: &str, position: Point, font_size: f32, paint: &Paint);
+    fn text(&mut self, text: &str, position: Point<Pixels>, font_size: f32, paint: &Paint);
 
     /// Draw a texture by ID (abstract platform-independent ID)
-    fn texture(&mut self, texture_id: TextureId, dst_rect: Rect);
+    fn texture(&mut self, texture_id: TextureId, dst_rect: Rect<Pixels>);
 
     // ===== Transform Stack =====
 
@@ -368,7 +368,7 @@ pub trait Painter {
     fn restore(&mut self);
 
     /// Apply a translation offset
-    fn translate(&mut self, offset: Offset);
+    fn translate(&mut self, offset: Offset<Pixels>);
 
     /// Apply a rotation (in radians)
     fn rotate(&mut self, angle: f32);
@@ -379,10 +379,10 @@ pub trait Painter {
     // ===== Clipping =====
 
     /// Set rectangular clip region
-    fn clip_rect(&mut self, rect: Rect);
+    fn clip_rect(&mut self, rect: Rect<Pixels>);
 
     /// Set rounded rectangular clip region
-    fn clip_rrect(&mut self, rrect: RRect);
+    fn clip_rrect(&mut self, rrect: RRect<Pixels>);
 
     /// Set arbitrary path clip region
     fn clip_path(&mut self, path: &Path);
@@ -390,14 +390,14 @@ pub trait Painter {
     // ===== Viewport Information =====
 
     /// Get the viewport bounds
-    fn viewport_bounds(&self) -> Rect;
+    fn viewport_bounds(&self) -> Rect<Pixels>;
 
     // ===== Gradient Helpers =====
 
     /// Sample a gradient shader at the center of a rect to get a representative color
     ///
     /// This is a fallback for when full GPU gradient rendering is not available.
-    fn sample_gradient_center(shader: &flui_painting::Shader, rect: Rect) -> Color
+    fn sample_gradient_center(shader: &flui_painting::Shader, rect: Rect<Pixels>) -> Color
     where
         Self: Sized,
     {
@@ -563,7 +563,7 @@ pub trait Painter {
     }
 
     /// Draw an oval (ellipse)
-    fn oval(&mut self, _rect: Rect, _paint: &Paint) {
+    fn oval(&mut self, _rect: Rect<Pixels>, _paint: &Paint) {
         #[cfg(debug_assertions)]
         tracing::warn!("Painter::oval: not implemented");
     }
@@ -571,7 +571,7 @@ pub trait Painter {
     /// Draw an arc
     fn draw_arc(
         &mut self,
-        _rect: Rect,
+        _rect: Rect<Pixels>,
         _start_angle: f32,
         _sweep_angle: f32,
         _use_center: bool,
@@ -582,7 +582,7 @@ pub trait Painter {
     }
 
     /// Draw a double rounded rectangle (ring/border)
-    fn draw_drrect(&mut self, _outer: RRect, _inner: RRect, _paint: &Paint) {
+    fn draw_drrect(&mut self, _outer: RRect<Pixels>, _inner: RRect<Pixels>, _paint: &Paint) {
         #[cfg(debug_assertions)]
         tracing::warn!("Painter::draw_drrect: not implemented");
     }
@@ -596,9 +596,9 @@ pub trait Painter {
     /// Draw custom vertex geometry
     fn draw_vertices(
         &mut self,
-        _vertices: &[Point],
+        _vertices: &[Point<Pixels>],
         _colors: Option<&[Color]>,
-        _tex_coords: Option<&[Point]>,
+        _tex_coords: Option<&[Point<Pixels>]>,
         _indices: &[u16],
         _paint: &Paint,
     ) {
@@ -610,7 +610,7 @@ pub trait Painter {
     fn draw_atlas(
         &mut self,
         _image: &Image,
-        _sprites: &[Rect],
+        _sprites: &[Rect<Pixels>],
         _transforms: &[Matrix4],
         _colors: Option<&[Color]>,
     ) {
@@ -619,12 +619,12 @@ pub trait Painter {
     }
 
     /// Draw text with style
-    fn text_styled(&mut self, text: &str, position: Point, font_size: f32, paint: &Paint) {
+    fn text_styled(&mut self, text: &str, position: Point<Pixels>, font_size: f32, paint: &Paint) {
         self.text(text, position, font_size, paint);
     }
 
     /// Draw an image
-    fn draw_image(&mut self, _image: &Image, _dst_rect: Rect) {
+    fn draw_image(&mut self, _image: &Image, _dst_rect: Rect<Pixels>) {
         #[cfg(debug_assertions)]
         tracing::warn!("Painter::draw_image: not implemented");
     }
@@ -633,8 +633,8 @@ pub trait Painter {
     fn draw_texture(
         &mut self,
         _texture_id: TextureId,
-        _dst: Rect,
-        _src: Option<Rect>,
+        _dst: Rect<Pixels>,
+        _src: Option<Rect<Pixels>>,
         _filter_quality: flui_types::painting::FilterQuality,
         _opacity: f32,
     ) {
@@ -647,10 +647,10 @@ pub trait Painter {
     fn text_with_shadow(
         &mut self,
         text: &str,
-        position: Point,
+        position: Point<Pixels>,
         font_size: f32,
         paint: &Paint,
-        _shadow_offset: Offset,
+        _shadow_offset: Offset<Pixels>,
         _shadow_blur: f32,
         _shadow_color: Color,
     ) {
@@ -660,9 +660,9 @@ pub trait Painter {
     /// Draw rounded rect with shadow
     fn rrect_with_shadow(
         &mut self,
-        rrect: RRect,
+        rrect: RRect<Pixels>,
         paint: &Paint,
-        _shadow_offset: Offset,
+        _shadow_offset: Offset<Pixels>,
         _shadow_blur: f32,
         _shadow_color: Color,
     ) {
@@ -672,9 +672,9 @@ pub trait Painter {
     /// Draw rect with shadow
     fn rect_with_shadow(
         &mut self,
-        rect: Rect,
+        rect: Rect<Pixels>,
         paint: &Paint,
-        _shadow_offset: Offset,
+        _shadow_offset: Offset<Pixels>,
         _shadow_blur: f32,
         _shadow_color: Color,
     ) {
@@ -687,7 +687,7 @@ pub trait Painter {
     fn draw_image_repeat(
         &mut self,
         image: &Image,
-        dst: Rect,
+        dst: Rect<Pixels>,
         _repeat: flui_painting::display_list::ImageRepeat,
     ) {
         self.draw_image(image, dst);
@@ -696,7 +696,7 @@ pub trait Painter {
     }
 
     /// Draw an image with 9-slice/9-patch scaling
-    fn draw_image_nine_slice(&mut self, image: &Image, _center_slice: Rect, dst: Rect) {
+    fn draw_image_nine_slice(&mut self, image: &Image, _center_slice: Rect, dst: Rect<Pixels>) {
         self.draw_image(image, dst);
         #[cfg(debug_assertions)]
         tracing::debug!("Painter::draw_image_nine_slice: using fallback (no 9-slice)");
@@ -706,7 +706,7 @@ pub trait Painter {
     fn draw_image_filtered(
         &mut self,
         image: &Image,
-        dst: Rect,
+        dst: Rect<Pixels>,
         _filter: flui_painting::display_list::ColorFilter,
     ) {
         self.draw_image(image, dst);
@@ -717,7 +717,7 @@ pub trait Painter {
     // ===== Layer Operations =====
 
     /// Save canvas state and create a compositing layer
-    fn save_layer(&mut self, _bounds: Option<Rect>, _paint: &Paint) {
+    fn save_layer(&mut self, _bounds: Option<Rect<Pixels>>, _paint: &Paint) {
         self.save();
         #[cfg(debug_assertions)]
         tracing::debug!("Painter::save_layer: using fallback (no offscreen compositing)");

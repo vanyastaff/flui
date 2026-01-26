@@ -4,7 +4,65 @@
 //! All vertices use bytemuck for zero-copy GPU uploads.
 
 use bytemuck::{Pod, Zeroable};
-use flui_types::{geometry::Point, styling::Color, units::DevicePixels};
+use flui_types::{geometry::{Point, DevicePixels}, styling::Color};
+
+/// Generic vertex for rendering
+///
+/// Used for general-purpose rendering with position, color, and texture coordinates.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Pod, Zeroable)]
+pub struct Vertex {
+    /// Position in device pixels
+    pub position: [f32; 2],
+
+    /// RGBA color (0.0 - 1.0)
+    pub color: [f32; 4],
+
+    /// Texture coordinates (UV)
+    pub tex_coord: [f32; 2],
+}
+
+impl Vertex {
+    /// Create a new vertex
+    #[must_use]
+    pub fn new(position: [f32; 2], color: [f32; 4], tex_coord: [f32; 2]) -> Self {
+        Self {
+            position,
+            color,
+            tex_coord,
+        }
+    }
+
+    /// Get the vertex buffer layout descriptor
+    #[must_use]
+    pub fn desc() -> wgpu::VertexBufferLayout<'static> {
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[
+                // Position
+                wgpu::VertexAttribute {
+                    offset: 0,
+                    shader_location: 0,
+                    format: wgpu::VertexFormat::Float32x2,
+                },
+                // Color
+                wgpu::VertexAttribute {
+                    offset: std::mem::size_of::<[f32; 2]>() as wgpu::BufferAddress,
+                    shader_location: 1,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+                // Texture coordinates
+                wgpu::VertexAttribute {
+                    offset: (std::mem::size_of::<[f32; 2]>() + std::mem::size_of::<[f32; 4]>())
+                        as wgpu::BufferAddress,
+                    shader_location: 2,
+                    format: wgpu::VertexFormat::Float32x2,
+                },
+            ],
+        }
+    }
+}
 
 /// Vertex for rectangle rendering
 ///

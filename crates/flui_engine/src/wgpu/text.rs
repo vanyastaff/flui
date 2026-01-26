@@ -9,7 +9,7 @@
 //! We cache `Buffer` objects keyed by (text, font_size) to avoid re-layout
 //! when the same text is rendered in subsequent frames.
 
-use flui_types::{styling::Color, Point};
+use flui_types::{geometry::Pixels, styling::Color, Point};
 use glyphon::{
     Attrs, Buffer, Cache, Color as GlyphonColor, Family, FontSystem, Metrics, Resolution, Shaping,
     SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer as GlyphonRenderer, Viewport,
@@ -232,7 +232,7 @@ impl TextRenderer {
     /// * `position` - Screen position (top-left corner)
     /// * `font_size` - Font size in pixels
     /// * `color` - Text color
-    pub fn add_text(&mut self, text: &str, position: Point, font_size: f32, color: Color) {
+    pub fn add_text(&mut self, text: &str, position: Point<Pixels>, font_size: f32, color: Color) {
         #[cfg(debug_assertions)]
         tracing::trace!(
             "TextRenderer::add_text: text='{}', position={:?}, size={}, color={:?}",

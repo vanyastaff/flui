@@ -6,7 +6,7 @@
 use super::shader_compiler::{ShaderCache, ShaderType};
 use super::texture_pool::{PooledTexture, TexturePool};
 use flui_types::{
-    geometry::Rect,
+    geometry::{Pixels, Rect},
     painting::{BlendMode, ShaderSpec},
     Size,
 };
@@ -285,7 +285,7 @@ impl OffscreenRenderer {
     /// 5. Return masked texture
     pub fn render_masked(
         &mut self,
-        child_bounds: Rect,
+        child_bounds: Rect<Pixels>,
         shader_spec: &ShaderSpec,
         blend_mode: BlendMode,
         child_texture: &wgpu::Texture,

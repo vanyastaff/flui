@@ -6,7 +6,7 @@
 //!
 //! This is slower than raster text but supports arbitrary transformations.
 
-use flui_types::{Color, Point};
+use flui_types::{Color, Point, Pixels};
 use glam::Mat4;
 use std::sync::Arc;
 use thiserror::Error;
@@ -28,7 +28,7 @@ pub struct TextRenderParams<'a> {
     /// Text to render
     pub text: &'a str,
     /// Starting position
-    pub position: Point,
+    pub position: Point<Pixels>,
     /// Font size in pixels
     pub font_size: f32,
     /// Text color
@@ -46,7 +46,7 @@ impl<'a> TextRenderParams<'a> {
     #[must_use]
     pub fn new(
         text: &'a str,
-        position: Point,
+        position: Point<Pixels>,
         font_size: f32,
         color: Color,
         transform: &'a Mat4,

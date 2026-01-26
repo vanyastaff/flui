@@ -7,7 +7,7 @@ use super::painter::WgpuPainter;
 use crate::traits::{CommandRenderer, Painter};
 use flui_painting::{BlendMode, DisplayListCore, Paint, PointMode};
 use flui_types::{
-    geometry::{Matrix4, Offset, Point, RRect, Rect, Transform},
+    geometry::{Matrix4, Offset, Pixels, Point, RRect, Rect, Transform},
     painting::{Image, Path},
     styling::Color,
     typography::TextStyle,
@@ -90,31 +90,31 @@ impl Backend {
 }
 
 impl CommandRenderer for Backend {
-    fn render_rect(&mut self, rect: Rect, paint: &Paint, transform: &Matrix4) {
+    fn render_rect(&mut self, rect: Rect<Pixels>, paint: &Paint, transform: &Matrix4) {
         self.with_transform(transform, |painter| {
             painter.rect(rect, paint);
         });
     }
 
-    fn render_rrect(&mut self, rrect: RRect, paint: &Paint, transform: &Matrix4) {
+    fn render_rrect(&mut self, rrect: RRect<Pixels>, paint: &Paint, transform: &Matrix4) {
         self.with_transform(transform, |painter| {
             painter.rrect(rrect, paint);
         });
     }
 
-    fn render_circle(&mut self, center: Point, radius: f32, paint: &Paint, transform: &Matrix4) {
+    fn render_circle(&mut self, center: Point<Pixels>, radius: f32, paint: &Paint, transform: &Matrix4) {
         self.with_transform(transform, |painter| {
             painter.circle(center, radius, paint);
         });
     }
 
-    fn render_oval(&mut self, rect: Rect, paint: &Paint, transform: &Matrix4) {
+    fn render_oval(&mut self, rect: Rect<Pixels>, paint: &Paint, transform: &Matrix4) {
         self.with_transform(transform, |painter| {
             painter.oval(rect, paint);
         });
     }
 
-    fn render_line(&mut self, p1: Point, p2: Point, paint: &Paint, transform: &Matrix4) {
+    fn render_line(&mut self, p1: Point<Pixels>, p2: Point<Pixels>, paint: &Paint, transform: &Matrix4) {
         self.with_transform(transform, |painter| {
             painter.line(p1, p2, paint);
         });
@@ -128,7 +128,7 @@ impl CommandRenderer for Backend {
 
     fn render_arc(
         &mut self,
-        rect: Rect,
+        rect: Rect<Pixels>,
         start_angle: f32,
         sweep_angle: f32,
         use_center: bool,
@@ -140,7 +140,7 @@ impl CommandRenderer for Backend {
         });
     }
 
-    fn render_drrect(&mut self, outer: RRect, inner: RRect, paint: &Paint, transform: &Matrix4) {
+    fn render_drrect(&mut self, outer: RRect<Pixels>, inner: RRect<Pixels>, paint: &Paint, transform: &Matrix4) {
         self.with_transform(transform, |painter| {
             painter.draw_drrect(outer, inner, paint);
         });
@@ -149,7 +149,7 @@ impl CommandRenderer for Backend {
     fn render_points(
         &mut self,
         mode: PointMode,
-        points: &[Point],
+        points: &[Point<Pixels>],
         paint: &Paint,
         transform: &Matrix4,
     ) {
@@ -181,7 +181,7 @@ impl CommandRenderer for Backend {
     fn render_text(
         &mut self,
         text: &str,
-        offset: Offset,
+        offset: Offset<Pixels>,
         style: &TextStyle,
         _paint: &Paint,
         transform: &Matrix4,
@@ -198,7 +198,7 @@ impl CommandRenderer for Backend {
     fn render_text_span(
         &mut self,
         _span: &flui_types::typography::InlineSpan,
-        offset: Offset,
+        offset: Offset<Pixels>,
         _text_scale_factor: f64,
         transform: &Matrix4,
     ) {
@@ -216,7 +216,7 @@ impl CommandRenderer for Backend {
     fn render_image(
         &mut self,
         image: &Image,
-        dst: Rect,
+        dst: Rect<Pixels>,
         _paint: Option<&Paint>,
         transform: &Matrix4,
     ) {
@@ -228,7 +228,7 @@ impl CommandRenderer for Backend {
     fn render_atlas(
         &mut self,
         image: &Image,
-        sprites: &[Rect],
+        sprites: &[Rect<Pixels>],
         transforms: &[Matrix4],
         colors: Option<&[Color]>,
         _blend_mode: BlendMode,
@@ -243,7 +243,7 @@ impl CommandRenderer for Backend {
     fn render_image_repeat(
         &mut self,
         image: &Image,
-        dst: Rect,
+        dst: Rect<Pixels>,
         repeat: flui_painting::display_list::ImageRepeat,
         _paint: Option<&Paint>,
         transform: &Matrix4,
@@ -256,8 +256,8 @@ impl CommandRenderer for Backend {
     fn render_image_nine_slice(
         &mut self,
         image: &Image,
-        center_slice: Rect,
-        dst: Rect,
+        center_slice: Rect<Pixels>,
+        dst: Rect<Pixels>,
         _paint: Option<&Paint>,
         transform: &Matrix4,
     ) {
@@ -269,7 +269,7 @@ impl CommandRenderer for Backend {
     fn render_image_filtered(
         &mut self,
         image: &Image,
-        dst: Rect,
+        dst: Rect<Pixels>,
         filter: flui_painting::display_list::ColorFilter,
         _paint: Option<&Paint>,
         transform: &Matrix4,
@@ -282,8 +282,8 @@ impl CommandRenderer for Backend {
     fn render_texture(
         &mut self,
         texture_id: flui_types::painting::TextureId,
-        dst: Rect,
-        src: Option<Rect>,
+        dst: Rect<Pixels>,
+        src: Option<Rect<Pixels>>,
         filter_quality: flui_types::painting::FilterQuality,
         opacity: f32,
         transform: &Matrix4,
@@ -303,7 +303,7 @@ impl CommandRenderer for Backend {
         &mut self,
         child: &flui_painting::DisplayList,
         _shader: &flui_painting::Shader,
-        _bounds: Rect,
+        _bounds: Rect<Pixels>,
         _blend_mode: BlendMode,
         _transform: &Matrix4,
     ) {
@@ -328,7 +328,7 @@ impl CommandRenderer for Backend {
         }
     }
 
-    fn render_gradient(&mut self, rect: Rect, shader: &flui_painting::Shader, transform: &Matrix4) {
+    fn render_gradient(&mut self, rect: Rect<Pixels>, shader: &flui_painting::Shader, transform: &Matrix4) {
         use super::effects::GradientStop;
 
         self.with_transform(transform, |painter| {
@@ -435,7 +435,7 @@ impl CommandRenderer for Backend {
 
     fn render_gradient_rrect(
         &mut self,
-        rrect: RRect,
+        rrect: RRect<Pixels>,
         shader: &flui_painting::Shader,
         transform: &Matrix4,
     ) {
@@ -560,7 +560,7 @@ impl CommandRenderer for Backend {
         &mut self,
         child: Option<&flui_painting::DisplayList>,
         _filter: &flui_painting::display_list::ImageFilter,
-        _bounds: Rect,
+        _bounds: Rect<Pixels>,
         _blend_mode: BlendMode,
         _transform: &Matrix4,
     ) {
@@ -589,9 +589,9 @@ impl CommandRenderer for Backend {
 
     fn render_vertices(
         &mut self,
-        vertices: &[Point],
+        vertices: &[Point<Pixels>],
         colors: Option<&[Color]>,
-        tex_coords: Option<&[Point]>,
+        tex_coords: Option<&[Point<Pixels>]>,
         indices: &[u16],
         paint: &Paint,
         transform: &Matrix4,
@@ -601,13 +601,13 @@ impl CommandRenderer for Backend {
         });
     }
 
-    fn clip_rect(&mut self, rect: Rect, transform: &Matrix4) {
+    fn clip_rect(&mut self, rect: Rect<Pixels>, transform: &Matrix4) {
         self.with_transform(transform, |painter| {
             painter.clip_rect(rect);
         });
     }
 
-    fn clip_rrect(&mut self, rrect: RRect, transform: &Matrix4) {
+    fn clip_rrect(&mut self, rrect: RRect<Pixels>, transform: &Matrix4) {
         self.with_transform(transform, |painter| {
             painter.clip_rrect(rrect);
         });
@@ -623,7 +623,7 @@ impl CommandRenderer for Backend {
         self.painter.viewport_bounds()
     }
 
-    fn save_layer(&mut self, bounds: Option<Rect>, paint: &Paint, transform: &Matrix4) {
+    fn save_layer(&mut self, bounds: Option<Rect<Pixels>>, paint: &Paint, transform: &Matrix4) {
         self.with_transform(transform, |painter| {
             painter.save_layer(bounds, paint);
         });
@@ -654,7 +654,7 @@ impl CommandRenderer for Backend {
         self.painter.restore();
     }
 
-    fn push_offset(&mut self, offset: Offset) {
+    fn push_offset(&mut self, offset: Offset<Pixels>) {
         self.painter.save();
         self.painter.translate(offset);
     }
@@ -720,7 +720,7 @@ impl CommandRenderer for Backend {
     fn add_performance_overlay(
         &mut self,
         options_mask: u32,
-        bounds: Rect,
+        bounds: Rect<Pixels>,
         fps: f32,
         frame_time_ms: f32,
         total_frames: u64,

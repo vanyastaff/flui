@@ -76,6 +76,7 @@ mod renderer;
 mod scene;
 #[allow(dead_code)]
 mod shader_compiler;
+mod shaders;
 mod tessellator;
 mod text;
 mod text_renderer;
@@ -95,8 +96,8 @@ mod layer_render;
 // PUBLIC API
 // ============================================================================
 
-// Scene rendering
-pub use scene::SceneRenderer;
+// Scene types
+pub use scene::{Scene, SceneBuilder};
 
 // Layer rendering
 pub use layer_render::LayerRender;
@@ -114,7 +115,7 @@ pub use crate::traits::Painter;
 pub use painter::WgpuPainter;
 
 // Vertex types
-pub use vertex::{ImageInstance, PathVertex, RectInstance, RectVertex};
+pub use vertex::{ImageInstance, PathVertex, RectInstance, RectVertex, Vertex};
 
 // Tessellator
 pub use tessellator::Tessellator;

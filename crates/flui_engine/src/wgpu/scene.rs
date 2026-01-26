@@ -16,7 +16,7 @@
 //!   ├─ transform: Matrix4
 //!   ├─ opacity: f32
 //!   ├─ blend_mode: BlendMode
-//!   └─ clip: Option<Rect>
+//!   └─ clip: Option<Rect<Pixels>>
 //!
 //! Primitive (enum)
 //!   ├─ Rect { rect, color, border_radius }
@@ -45,10 +45,9 @@
 //! ```
 
 use flui_types::{
-    geometry::{Point, Rect, Size},
+    geometry::{DevicePixels, Pixels, Point, Rect, Size},
     styling::Color,
     typography::TextStyle,
-    units::DevicePixels,
 };
 
 /// Immutable scene graph
@@ -1488,7 +1487,7 @@ mod tests {
             .build();
 
         let batches = scene.batch_primitives();
-        assert_eq!(batches.len(), 3, "Should have 3 batches: Rect, Text, Rect");
+        assert_eq!(batches.len(), 3, "Should have 3 batches: Rect<Pixels>, Text, Rect");
         assert_eq!(batches[0].primitive_type, PrimitiveType::Rect);
         assert_eq!(batches[0].primitives.len(), 1);
         assert_eq!(batches[1].primitive_type, PrimitiveType::Text);
