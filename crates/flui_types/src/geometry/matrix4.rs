@@ -778,8 +778,8 @@ impl Matrix4 {
     }
 
     #[inline]
+    #[cfg(all(target_arch = "x86_64", not(target_family = "wasm")))]
     fn mul_simd_sse(self, rhs: Self) -> Self {
-        #[cfg(target_arch = "x86_64")]
         use std::arch::x86_64::*;
 
         unsafe {
