@@ -102,10 +102,10 @@ pub use executor::{BackgroundExecutor, ForegroundExecutor};
 
 // Re-export core traits
 pub use traits::{
-    Clipboard, DefaultLifecycle, DesktopCapabilities, DisplayId, LifecycleEvent, LifecycleState,
-    MobileCapabilities, Platform, PlatformCapabilities, PlatformDisplay, PlatformEmbedder,
-    PlatformExecutor, PlatformLifecycle, PlatformTextSystem, PlatformWindow, WebCapabilities,
-    WindowEvent, WindowId, WindowMode, WindowOptions,
+    Clipboard, DefaultLifecycle, DesktopCapabilities, DisplayId, GlyphPosition, LifecycleEvent,
+    LifecycleState, MobileCapabilities, Platform, PlatformCapabilities, PlatformDisplay,
+    PlatformEmbedder, PlatformExecutor, PlatformLifecycle, PlatformTextSystem, PlatformWindow,
+    TextSystemError, WebCapabilities, WindowEvent, WindowId, WindowMode, WindowOptions,
 };
 
 // Re-export platform implementations
