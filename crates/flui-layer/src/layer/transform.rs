@@ -88,9 +88,9 @@ impl TransformLayer {
     /// * `anchor` - The point to rotate around
     pub fn rotation_around(angle: f32, anchor: Point<Pixels>) -> Self {
         // Translate to origin, rotate, translate back
-        let translate_to_origin = Matrix4::translation(-anchor.x, -anchor.y, 0.0);
+        let translate_to_origin = Matrix4::translation(-anchor.x.0, -anchor.y.0, 0.0);
         let rotate = Matrix4::rotation_z(angle);
-        let translate_back = Matrix4::translation(anchor.x, anchor.y, 0.0);
+        let translate_back = Matrix4::translation(anchor.x.0, anchor.y.0, 0.0);
 
         Self::new(translate_back * rotate * translate_to_origin)
     }
@@ -109,9 +109,9 @@ impl TransformLayer {
 
     /// Creates a scale transform layer around an anchor point.
     pub fn scale_around(sx: f32, sy: f32, anchor: Point<Pixels>) -> Self {
-        let translate_to_origin = Matrix4::translation(-anchor.x, -anchor.y, 0.0);
+        let translate_to_origin = Matrix4::translation(-anchor.x.0, -anchor.y.0, 0.0);
         let scale = Matrix4::scaling(sx, sy, 1.0);
-        let translate_back = Matrix4::translation(anchor.x, anchor.y, 0.0);
+        let translate_back = Matrix4::translation(anchor.x.0, anchor.y.0, 0.0);
 
         Self::new(translate_back * scale * translate_to_origin)
     }

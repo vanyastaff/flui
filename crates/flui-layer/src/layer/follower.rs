@@ -195,34 +195,38 @@ impl FollowerLayer {
 impl FollowerLayer {
     /// Creates a follower positioned below the leader (tooltip style).
     pub fn below(link: LayerLink, gap: f32) -> Self {
+        use flui_types::geometry::px;
         Self::new(link)
-            .with_leader_anchor(Offset::new(0.5, 1.0)) // Bottom-center of leader
-            .with_follower_anchor(Offset::new(0.5, 0.0)) // Top-center of follower
-            .with_target_offset(Offset::new(0.0, gap))
+            .with_leader_anchor(Offset::new(px(0.5), px(1.0))) // Bottom-center of leader
+            .with_follower_anchor(Offset::new(px(0.5), px(0.0))) // Top-center of follower
+            .with_target_offset(Offset::new(px(0.0), px(gap)))
     }
 
     /// Creates a follower positioned above the leader.
     pub fn above(link: LayerLink, gap: f32) -> Self {
+        use flui_types::geometry::px;
         Self::new(link)
-            .with_leader_anchor(Offset::new(0.5, 0.0)) // Top-center of leader
-            .with_follower_anchor(Offset::new(0.5, 1.0)) // Bottom-center of follower
-            .with_target_offset(Offset::new(0.0, -gap))
+            .with_leader_anchor(Offset::new(px(0.5), px(0.0))) // Top-center of leader
+            .with_follower_anchor(Offset::new(px(0.5), px(1.0))) // Bottom-center of follower
+            .with_target_offset(Offset::new(px(0.0), px(-gap)))
     }
 
     /// Creates a follower positioned to the right of the leader.
     pub fn right_of(link: LayerLink, gap: f32) -> Self {
+        use flui_types::geometry::px;
         Self::new(link)
-            .with_leader_anchor(Offset::new(1.0, 0.5)) // Right-center of leader
-            .with_follower_anchor(Offset::new(0.0, 0.5)) // Left-center of follower
-            .with_target_offset(Offset::new(gap, 0.0))
+            .with_leader_anchor(Offset::new(px(1.0), px(0.5))) // Right-center of leader
+            .with_follower_anchor(Offset::new(px(0.0), px(0.5))) // Left-center of follower
+            .with_target_offset(Offset::new(px(gap), px(0.0)))
     }
 
     /// Creates a follower positioned to the left of the leader.
     pub fn left_of(link: LayerLink, gap: f32) -> Self {
+        use flui_types::geometry::px;
         Self::new(link)
-            .with_leader_anchor(Offset::new(0.0, 0.5)) // Left-center of leader
-            .with_follower_anchor(Offset::new(1.0, 0.5)) // Right-center of follower
-            .with_target_offset(Offset::new(-gap, 0.0))
+            .with_leader_anchor(Offset::new(px(0.0), px(0.5))) // Left-center of leader
+            .with_follower_anchor(Offset::new(px(1.0), px(0.5))) // Right-center of follower
+            .with_target_offset(Offset::new(px(-gap), px(0.0)))
     }
 }
 

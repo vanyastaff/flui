@@ -62,8 +62,9 @@ impl OffsetLayer {
 
     /// Creates an offset layer from x and y components.
     #[inline]
-    pub const fn from_xy(dx: f32, dy: f32) -> Self {
-        Self::new(Offset::new(dx, dy))
+    pub fn from_xy(dx: f32, dy: f32) -> Self {
+        use flui_types::geometry::px;
+        Self::new(Offset::new(px(dx), px(dy)))
     }
 
     /// Returns the offset.
@@ -81,25 +82,26 @@ impl OffsetLayer {
     /// Returns the x component of the offset.
     #[inline]
     pub const fn dx(&self) -> f32 {
-        self.offset.dx
+        self.offset.dx.0
     }
 
     /// Returns the y component of the offset.
     #[inline]
     pub const fn dy(&self) -> f32 {
-        self.offset.dy
+        self.offset.dy.0
     }
 
     /// Returns true if the offset is zero.
     #[inline]
     pub fn is_zero(&self) -> bool {
-        self.offset.dx == 0.0 && self.offset.dy == 0.0
+        use flui_types::geometry::px;
+        self.offset.dx == px(0.0) && self.offset.dy == px(0.0)
     }
 
     /// Transforms a point by applying the offset.
     #[inline]
     pub fn transform_point(&self, x: f32, y: f32) -> (f32, f32) {
-        (x + self.offset.dx, y + self.offset.dy)
+        (x + self.offset.dx.0, y + self.offset.dy.0)
     }
 
     /// Transforms bounds by applying the offset.

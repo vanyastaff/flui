@@ -80,8 +80,9 @@ impl ClipSuperellipseLayer {
     /// * `clip_behavior` - How to apply the clip
     #[inline]
     pub fn circular(rect: Rect<Pixels>, radius: f32, clip_behavior: Clip) -> Self {
+        use flui_types::geometry::px;
         Self::new(
-            RSuperellipse::from_rect_circular(rect, radius),
+            RSuperellipse::from_rect_circular(rect, px(radius)),
             clip_behavior,
         )
     }

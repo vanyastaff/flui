@@ -138,7 +138,8 @@ impl OpacityLayer {
     /// Returns true if this layer has a non-zero offset.
     #[inline]
     pub fn has_offset(&self) -> bool {
-        self.offset.dx != 0.0 || self.offset.dy != 0.0
+        use flui_types::geometry::px;
+        self.offset.dx != px(0.0) || self.offset.dy != px(0.0)
     }
 
     /// Returns the alpha as a byte value (0-255).

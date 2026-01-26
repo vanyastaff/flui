@@ -70,7 +70,8 @@ impl ClipRRectLayer {
     /// * `clip_behavior` - How to apply the clip
     #[inline]
     pub fn circular(rect: Rect<Pixels>, radius: f32, clip_behavior: Clip) -> Self {
-        Self::new(RRect::from_rect_circular(rect, radius), clip_behavior)
+        use flui_types::geometry::px;
+        Self::new(RRect::from_rect_circular(rect, px(radius)), clip_behavior)
     }
 
     /// Creates a clip layer with anti-aliased rounded corners.
