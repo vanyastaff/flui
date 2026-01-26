@@ -28,7 +28,8 @@
       "Skill(speckit.constitution)",
       "Skill(speckit.constitution:*)",
       "Bash(powershell -ExecutionPolicy Bypass -File .specify/scripts/powershell/check-prerequisites.ps1 -Json -PathsOnly)",
-      "Bash(powershell -ExecutionPolicy Bypass -File .specify/scripts/powershell/setup-plan.ps1 -Json)"
+      "Bash(powershell -ExecutionPolicy Bypass -File .specify/scripts/powershell/setup-plan.ps1 -Json)",
+      "Bash(pwsh:*)"
     ]
   },
   "enabledMcpjsonServers": [
