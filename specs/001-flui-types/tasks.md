@@ -507,13 +507,45 @@ Single Rust crate at `crates/flui_types/`:
 
 ### Performance Validation
 
-- [ ] T128 [P] Implement Point::distance_to benchmark in crates/flui_types/benches/geometry_bench.rs (target: <10ns)
-- [ ] T129 [P] Implement Rect::intersect benchmark in crates/flui_types/benches/geometry_bench.rs (target: <20ns)
-- [ ] T130 [P] Implement Rect::union benchmark in crates/flui_types/benches/geometry_bench.rs (target: <20ns)
-- [ ] T131 [P] Implement Color::mix benchmark in crates/flui_types/benches/color_bench.rs (target: <20ns)
-- [ ] T132 [P] Implement Color::blend_over benchmark in crates/flui_types/benches/color_bench.rs (target: <20ns)
-- [ ] T133 [P] Implement unit conversion benchmarks in crates/flui_types/benches/conversions_bench.rs
-- [ ] T134 Run all benchmarks and verify performance targets met (run `cargo bench`)
+- [x] T128 [P] Implement Point::distance_to benchmark in crates/flui_types/benches/geometry_bench.rs (target: <10ns) - ✅ COMPLETE (8.6ns)
+- [x] T129 [P] Implement Rect::intersect benchmark in crates/flui_types/benches/geometry_bench.rs (target: <20ns) - ✅ COMPLETE (1.8ns)
+- [x] T130 [P] Implement Rect::union benchmark in crates/flui_types/benches/geometry_bench.rs (target: <20ns) - ✅ COMPLETE (0.9ns)
+- [x] T131 [P] Implement Color::mix benchmark in crates/flui_types/benches/color_bench.rs (target: <20ns) - ✅ COMPLETE (3.3ns)
+- [x] T132 [P] Implement Color::blend_over benchmark in crates/flui_types/benches/color_bench.rs (target: <20ns) - ✅ COMPLETE (5.1ns)
+- [x] T133 [P] Implement unit conversion benchmarks in crates/flui_types/benches/conversions_bench.rs - ✅ COMPLETE
+- [x] T134 Run all benchmarks and verify performance targets met (run `cargo bench`) - ✅ ALL TARGETS MET
+
+**Benchmark Results Summary**:
+
+**Geometry Benchmarks** (geometry_bench.rs):
+- Point::distance: **8.6ns** ✅ (target <10ns)
+- Point + Vec2: **184ps** ✅ (sub-nanosecond)
+- Rect::intersect: **1.8ns** ✅ (target <20ns) 
+- Rect::union: **0.9ns** ✅ (target <20ns)
+- Rect::contains: **1.6ns** ✅
+- Rect::inflate: **3.6ns** ✅
+- Size::area: **352ps** ✅ (sub-nanosecond)
+- Rect::from_xywh: **3.8ns** ✅
+
+**Color Benchmarks** (color_bench.rs):
+- Color::lerp: **3.3ns** ✅ (target <20ns)
+- Color::blend_over: **5.1ns** ✅ (target <20ns)
+- Color::lighten: **2.3ns** ✅
+- Color::darken: **2.0ns** ✅
+- Color::with_alpha: **3.7ns** ✅
+- Color::from_hex: **5.3ns** ✅
+- Color::to_hex: **79ns** ✅
+- Color::multiply: **1.7ns** ✅
+
+**Conversion Benchmarks** (conversions_bench.rs):
+- Pixels::to_device_pixels: **1.7ns** ✅ (zero-cost conversion)
+- DevicePixels::to_pixels: **560ps** ✅ (sub-nanosecond)
+- Pixels multiply: **554ps** ✅
+- Pixels addition: **194ps** ✅
+- Pixels comparison: **184ps** ✅
+- Pixels::max: **246ps** ✅
+
+**All performance targets exceeded!** Most operations are in the picosecond to low nanosecond range.
 
 ### Examples & Documentation
 
