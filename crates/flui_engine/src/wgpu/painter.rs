@@ -18,7 +18,7 @@ use super::{
 };
 use crate::traits::Painter;
 use flui_painting::{Paint, PaintStyle};
-use flui_types::{geometry::{Pixels, RRect}, painting::Path, painting::TextureId, Offset, Point, Rect};
+use flui_types::{geometry::{px, Pixels, RRect}, painting::Path, painting::TextureId, Offset, Point, Rect};
 use wgpu::util::DeviceExt;
 
 /// GPU painter for hardware-accelerated 2D rendering
@@ -853,9 +853,9 @@ impl WgpuPainter {
     // ===== Helper Methods =====
 
     /// Apply current transform to a point
-    fn apply_transform(&self, point: Point<Pixels>) -> Point {
-        let p = self.current_transform * glam::vec4(point.x, point.y, 0.0, 1.0);
-        Point::new(p.x, p.y)
+    fn apply_transform(&self, point: Point<Pixels>) -> Point<Pixels> {
+        let p = self.current_transform * glam::vec4(point.x.0, point.y.0, 0.0, 1.0);
+        Point::new(px(p.x), px(p.y))
     }
 
     /// Add tessellated shape from vertices/indices
@@ -1284,7 +1284,7 @@ impl Painter for WgpuPainter {
         }
     }
 
-    fn rrect(&mut self, rrect: RRect<Pixels>, paint: &Paint) {
+    fn rrect(&mut self, rrect: RRect, paint: &Paint) {
         if paint.style == PaintStyle::Fill {
             // Apply current transform to rect bounds
             let top_left = self.apply_transform(Point::new(rrect.rect.left(), rrect.rect.top()));
@@ -1305,10 +1305,10 @@ impl Painter for WgpuPainter {
             let instance = super::instancing::RectInstance::rounded_rect_corners(
                 transformed_rect,
                 color,
-                rrect.top_left.x.max(rrect.top_left.y),
-                rrect.top_right.x.max(rrect.top_right.y),
-                rrect.bottom_right.x.max(rrect.bottom_right.y),
-                rrect.bottom_left.x.max(rrect.bottom_left.y),
+                rrect.top_left.x.0.max(rrect.top_left.y.0),
+                rrect.top_right.x.0.max(rrect.top_right.y.0),
+                rrect.bottom_right.x.0.max(rrect.bottom_right.y.0),
+                rrect.bottom_left.x.0.max(rrect.bottom_left.y.0),
             );
             let _ = self.rect_batch.add(instance);
         } else {
@@ -1387,7 +1387,7 @@ impl Painter for WgpuPainter {
         );
 
         let center = rect.center();
-        let radius = (rect.width() + rect.height()) / 4.0; // Average radius for elliptical arcs
+        let radius = (rect.width() + rect.height()) / px(4.0); // Average radius for elliptical arcs
 
         if paint.style == PaintStyle::Fill && use_center {
             // Use GPU instancing for filled arcs with center (pie slices)
@@ -1433,7 +1433,7 @@ impl Painter for WgpuPainter {
         }
     }
 
-    fn draw_drrect(&mut self, outer: RRect<Pixels>, inner: RRect<Pixels>, paint: &Paint) {
+    fn draw_drrect(&mut self, outer: RRect, inner: RRect, paint: &Paint) {
         #[cfg(debug_assertions)]
         tracing::trace!(
             "WgpuPainter::draw_drrect: outer={:?}, inner={:?}, paint={:?}",
@@ -1638,8 +1638,8 @@ impl Painter for WgpuPainter {
             // Save transform, apply shadow offset
             self.save();
             self.translate(flui_types::Offset::new(
-                current_blur * 0.5,
-                offset_y + current_blur * 0.5,
+                px(current_blur * 0.5),
+                px(offset_y + current_blur * 0.5),
             ));
 
             // Draw the shadow layer
@@ -1706,13 +1706,13 @@ impl Painter for WgpuPainter {
 
                 let uv = _tex_coords
                     .and_then(|tc| tc.get(i))
-                    .map(|p| [p.x, p.y])
+                    .map(|p| [p.x.0, p.y.0])
                     .unwrap_or([0.0, 0.0]);
 
                 super::vertex::Vertex {
-                    position: [pos.x, pos.y],
+                    position: [pos.x.0, pos.y.0],
                     color: color.to_f32_array(),
-                    uv,
+                    tex_coord: uv,
                 }
             })
             .collect();
@@ -1787,10 +1787,10 @@ impl Painter for WgpuPainter {
 
                     // Calculate UV coordinates from sprite rect
                     let src_uv = [
-                        sprite_rect.left() / image_width,
-                        sprite_rect.top() / image_height,
-                        sprite_rect.right() / image_width,
-                        sprite_rect.bottom() / image_height,
+                        (sprite_rect.left() / image_width).0,
+                        (sprite_rect.top() / image_height).0,
+                        (sprite_rect.right() / image_width).0,
+                        (sprite_rect.bottom() / image_height).0,
                     ];
 
                     // Extract position from transform matrix
@@ -1800,7 +1800,7 @@ impl Painter for WgpuPainter {
                     let dst_width = sprite_rect.width();
                     let dst_height = sprite_rect.height();
 
-                    let dst_rect = Rect::from_xywh(dst_x, dst_y, dst_width, dst_height);
+                    let dst_rect = Rect::from_xywh(px(dst_x), px(dst_y), dst_width, dst_height);
 
                     // Create texture instance
                     let instance =
@@ -1840,10 +1840,10 @@ impl Painter for WgpuPainter {
                 let tex_width = entry.width as f32;
                 let tex_height = entry.height as f32;
                 [
-                    src_rect.left() / tex_width,
-                    src_rect.top() / tex_height,
-                    src_rect.right() / tex_width,
-                    src_rect.bottom() / tex_height,
+                    (src_rect.left() / tex_width).0,
+                    (src_rect.top() / tex_height).0,
+                    (src_rect.right() / tex_width).0,
+                    (src_rect.bottom() / tex_height).0,
                 ]
             } else {
                 // Full texture
@@ -1890,10 +1890,10 @@ impl Painter for WgpuPainter {
             // Default UV coordinates
             let src_uv = if let Some(src_rect) = src {
                 [
-                    src_rect.left(),
-                    src_rect.top(),
-                    src_rect.right(),
-                    src_rect.bottom(),
+                    src_rect.left().0,
+                    src_rect.top().0,
+                    src_rect.right().0,
+                    src_rect.bottom().0,
                 ]
             } else {
                 [0.0, 0.0, 1.0, 1.0]
@@ -1951,7 +1951,7 @@ impl Painter for WgpuPainter {
         #[cfg(debug_assertions)]
         tracing::trace!("WgpuPainter::translate: offset={:?}", offset);
 
-        let translation = glam::Mat4::from_translation(glam::vec3(offset.dx, offset.dy, 0.0));
+        let translation = glam::Mat4::from_translation(glam::vec3(offset.dx.0, offset.dy.0, 0.0));
         self.current_transform *= translation;
     }
 
@@ -1979,9 +1979,9 @@ impl Painter for WgpuPainter {
         let transform = self.current_transform;
 
         // Transform rect corners
-        let top_left = transform.transform_point3(glam::Vec3::new(rect.left(), rect.top(), 0.0));
+        let top_left = transform.transform_point3(glam::Vec3::new(rect.left().0, rect.top().0, 0.0));
         let bottom_right =
-            transform.transform_point3(glam::Vec3::new(rect.right(), rect.bottom(), 0.0));
+            transform.transform_point3(glam::Vec3::new(rect.right().0, rect.bottom().0, 0.0));
 
         // Calculate scissor rect in physical pixels
         let x = top_left.x.max(0.0) as u32;
@@ -2021,7 +2021,7 @@ impl Painter for WgpuPainter {
         );
     }
 
-    fn clip_rrect(&mut self, rrect: RRect<Pixels>) {
+    fn clip_rrect(&mut self, rrect: RRect) {
         // Rounded rectangle clipping requires stencil buffer
         // This is a more complex feature that needs:
         // 1. Stencil buffer configuration in render pass
@@ -2062,8 +2062,8 @@ impl Painter for WgpuPainter {
 
     // ===== Viewport Information =====
 
-    fn viewport_bounds(&self) -> Rect {
-        Rect::from_ltrb(0.0, 0.0, self.size.0 as f32, self.size.1 as f32)
+    fn viewport_bounds(&self) -> Rect<Pixels> {
+        Rect::from_ltrb(px(0.0), px(0.0), px(self.size.0 as f32), px(self.size.1 as f32))
     }
 
     // ===== Layer Operations (Opacity) =====
@@ -2144,7 +2144,7 @@ impl WgpuPainter {
             .extend_from_slice(&stops[..stop_count]);
 
         let instance = LinearGradientInstance::new(
-            [bounds.left(), bounds.top(), bounds.width(), bounds.height()],
+            [bounds.left().0, bounds.top().0, bounds.width().0, bounds.height().0],
             gradient_start,
             gradient_end,
             [corner_radius; 4],
@@ -2195,7 +2195,7 @@ impl WgpuPainter {
             .extend_from_slice(&stops[..stop_count]);
 
         let instance = RadialGradientInstance::new(
-            [bounds.left(), bounds.top(), bounds.width(), bounds.height()],
+            [bounds.left().0, bounds.top().0, bounds.width().0, bounds.height().0],
             center,
             radius,
             [corner_radius; 4],

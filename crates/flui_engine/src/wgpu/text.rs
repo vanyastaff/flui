@@ -9,7 +9,7 @@
 //! We cache `Buffer` objects keyed by (text, font_size) to avoid re-layout
 //! when the same text is rendered in subsequent frames.
 
-use flui_types::{geometry::Pixels, styling::Color, Point};
+use flui_types::{geometry::{Pixels, Point}, styling::Color};
 use glyphon::{
     Attrs, Buffer, Cache, Color as GlyphonColor, Family, FontSystem, Metrics, Resolution, Shaping,
     SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer as GlyphonRenderer, Viewport,
@@ -75,7 +75,7 @@ pub struct TextRenderer {
     viewport: Viewport,
 
     /// Batched text buffers for current frame (references into cache)
-    text_areas_data: Vec<(TextCacheKey, Point, GlyphonColor)>,
+    text_areas_data: Vec<(TextCacheKey, Point<Pixels>, GlyphonColor)>,
 
     /// Cache of text buffers (text + font_size -> Buffer)
     buffer_cache: HashMap<TextCacheKey, CachedBuffer>,
@@ -340,8 +340,8 @@ impl TextRenderer {
             .filter_map(|(key, position, color)| {
                 self.buffer_cache.get(key).map(|cached| TextArea {
                     buffer: &cached.buffer,
-                    left: position.x,
-                    top: position.y,
+                    left: position.x.0,
+                    top: position.y.0,
                     scale: 1.0,
                     bounds: TextBounds {
                         left: 0,

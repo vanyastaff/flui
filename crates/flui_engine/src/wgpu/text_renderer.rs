@@ -7,7 +7,7 @@ use std::sync::Arc;
 use wgpu::{Device, MultisampleState, Queue, TextureFormat};
 
 #[cfg(feature = "wgpu-backend")]
-use glyphon::{FontSystem, SwashCache, TextAtlas, TextRenderer as GlyphonRenderer};
+use glyphon::{Cache, FontSystem, SwashCache, TextAtlas, TextRenderer as GlyphonRenderer};
 
 use flui_types::{geometry::{Point, DevicePixels}, styling::Color, typography::TextStyle};
 
@@ -44,10 +44,11 @@ impl TextRenderingSystem {
     pub fn new(device: &Device, queue: &Queue, surface_format: TextureFormat) -> Self {
         let mut font_system = FontSystem::new();
         let swash_cache = SwashCache::new();
-        let mut text_atlas = TextAtlas::new(device, queue, surface_format);
+        let cache = Cache::new(device);
+        let mut text_atlas = TextAtlas::new(device, queue, &cache, surface_format);
 
         let text_renderer =
-            GlyphonRenderer::new(device, queue, MultisampleState::default(), surface_format);
+            GlyphonRenderer::new(&mut text_atlas, device, MultisampleState::default(), None);
 
         Self {
             font_system,

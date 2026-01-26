@@ -94,13 +94,13 @@ impl PipelineCache {
             layout: Some(&pipeline_layout),
             vertex: VertexState {
                 module: shader,
-                entry_point: "vs_main",
+                entry_point: Some("vs_main"),
                 buffers: &[RectVertex::desc(), RectInstance::desc()],
                 compilation_options: Default::default(),
             },
             fragment: Some(FragmentState {
                 module: shader,
-                entry_point: "fs_main",
+                entry_point: Some("fs_main"),
                 targets: &[Some(ColorTargetState {
                     format: surface_format,
                     blend: Some(BlendState::ALPHA_BLENDING),
@@ -145,13 +145,13 @@ impl PipelineCache {
             layout: Some(&pipeline_layout),
             vertex: VertexState {
                 module: shader,
-                entry_point: "vs_main",
+                entry_point: Some("vs_main"),
                 buffers: &[PathVertex::desc()],
                 compilation_options: Default::default(),
             },
             fragment: Some(FragmentState {
                 module: shader,
-                entry_point: "fs_main",
+                entry_point: Some("fs_main"),
                 targets: &[Some(ColorTargetState {
                     format: surface_format,
                     blend: Some(BlendState::ALPHA_BLENDING),
@@ -196,13 +196,13 @@ impl PipelineCache {
             layout: Some(&pipeline_layout),
             vertex: VertexState {
                 module: shader,
-                entry_point: "vs_main",
+                entry_point: Some("vs_main"),
                 buffers: &[ImageInstance::desc()],
                 compilation_options: Default::default(),
             },
             fragment: Some(FragmentState {
                 module: shader,
-                entry_point: "fs_main",
+                entry_point: Some("fs_main"),
                 targets: &[Some(ColorTargetState {
                     format: surface_format,
                     blend: Some(BlendState::ALPHA_BLENDING),
@@ -319,13 +319,13 @@ impl<'a> PipelineBuilder<'a> {
                 layout: Some(&pipeline_layout),
                 vertex: VertexState {
                     module: self.shader,
-                    entry_point: self.vertex_entry,
+                    entry_point: Some(self.vertex_entry),
                     buffers: &[], // Caller should set vertex buffers separately
                     compilation_options: Default::default(),
                 },
                 fragment: Some(FragmentState {
                     module: self.shader,
-                    entry_point: self.fragment_entry,
+                    entry_point: Some(self.fragment_entry),
                     targets: &[Some(ColorTargetState {
                         format: self.surface_format,
                         blend: Some(self.blend_state),

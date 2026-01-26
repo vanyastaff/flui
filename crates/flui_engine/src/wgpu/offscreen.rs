@@ -365,8 +365,8 @@ impl OffscreenRenderer {
         let texture_desc = wgpu::TextureDescriptor {
             label: Some("Shader Mask Offscreen Texture"),
             size: wgpu::Extent3d {
-                width: size.width as u32,
-                height: size.height as u32,
+                width: size.width.0 as u32,
+                height: size.height.0 as u32,
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,

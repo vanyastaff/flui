@@ -387,14 +387,14 @@ impl<R: CommandRenderer + ?Sized> LayerRender<R> for PlatformViewLayer {
 impl<R: CommandRenderer + ?Sized> LayerRender<R> for LeaderLayer {
     fn render(&self, renderer: &mut R) {
         let offset = self.get_offset();
-        if offset.dx != 0.0 || offset.dy != 0.0 {
+        if offset.dx.0 != 0.0 || offset.dy.0 != 0.0 {
             renderer.push_offset(offset);
         }
     }
 
     fn cleanup(&self, renderer: &mut R) {
         let offset = self.get_offset();
-        if offset.dx != 0.0 || offset.dy != 0.0 {
+        if offset.dx.0 != 0.0 || offset.dy.0 != 0.0 {
             renderer.pop_transform();
         }
     }

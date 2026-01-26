@@ -10,7 +10,7 @@ use flui_types::{geometry::{Point, DevicePixels}, styling::Color};
 ///
 /// Used for general-purpose rendering with position, color, and texture coordinates.
 #[repr(C)]
-#[derive(Copy, Clone, Debug, Pod, Zeroable)]
+#[derive(Copy, Clone, Debug, Default, Pod, Zeroable)]
 pub struct Vertex {
     /// Position in device pixels
     pub position: [f32; 2],
@@ -83,7 +83,7 @@ impl RectVertex {
     pub fn new(position: Point<DevicePixels>, color: Color) -> Self {
         Self {
             position: [position.x.0 as f32, position.y.0 as f32],
-            color: color.to_linear_f32(),
+            color: color.to_rgba_f32_array(),
         }
     }
 
@@ -147,7 +147,7 @@ impl RectInstance {
             position: [position.x.0 as f32, position.y.0 as f32],
             size: [width.0 as f32, height.0 as f32],
             border_radius,
-            color: color.to_linear_f32(),
+            color: color.to_rgba_f32_array(),
             _padding: [0.0; 3],
         }
     }
@@ -208,7 +208,7 @@ impl PathVertex {
     pub fn new(position: Point<DevicePixels>, color: Color) -> Self {
         Self {
             position: [position.x.0 as f32, position.y.0 as f32],
-            color: color.to_linear_f32(),
+            color: color.to_rgba_f32_array(),
         }
     }
 

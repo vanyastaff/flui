@@ -55,7 +55,7 @@ impl RectInstance {
     #[must_use]
     pub fn rect(rect: Rect<Pixels>, color: Color) -> Self {
         Self {
-            bounds: [rect.left(), rect.top(), rect.width(), rect.height()],
+            bounds: [rect.left().0, rect.top().0, rect.width().0, rect.height().0],
             color: color.to_f32_array(),
             corner_radii: [0.0; 4],
             transform: [1.0, 1.0, 0.0, 0.0], // Identity transform
@@ -66,7 +66,7 @@ impl RectInstance {
     #[must_use]
     pub fn rounded_rect(rect: Rect<Pixels>, color: Color, radius: f32) -> Self {
         Self {
-            bounds: [rect.left(), rect.top(), rect.width(), rect.height()],
+            bounds: [rect.left().0, rect.top().0, rect.width().0, rect.height().0],
             color: color.to_f32_array(),
             corner_radii: [radius; 4],
             transform: [1.0, 1.0, 0.0, 0.0],
@@ -84,7 +84,7 @@ impl RectInstance {
         bottom_left: f32,
     ) -> Self {
         Self {
-            bounds: [rect.left(), rect.top(), rect.width(), rect.height()],
+            bounds: [rect.left().0, rect.top().0, rect.width().0, rect.height().0],
             color: color.to_f32_array(),
             corner_radii: [top_left, top_right, bottom_right, bottom_left],
             transform: [1.0, 1.0, 0.0, 0.0],
@@ -145,7 +145,7 @@ impl CircleInstance {
     #[must_use]
     pub fn new(center: Point<Pixels>, radius: f32, color: Color) -> Self {
         Self {
-            center_radius: [center.x, center.y, radius, 0.0],
+            center_radius: [center.x.0, center.y.0, radius, 0.0],
             color: color.to_f32_array(),
             transform: [1.0, 1.0, 0.0, 0.0],
         }
@@ -155,7 +155,7 @@ impl CircleInstance {
     #[must_use]
     pub fn ellipse(center: Point<Pixels>, radius_x: f32, radius_y: f32, color: Color) -> Self {
         Self {
-            center_radius: [center.x, center.y, radius_x.max(radius_y), 0.0],
+            center_radius: [center.x.0, center.y.0, radius_x.max(radius_y), 0.0],
             color: color.to_f32_array(),
             transform: [
                 radius_x / radius_x.max(radius_y),
@@ -225,7 +225,7 @@ impl ArcInstance {
         color: Color,
     ) -> Self {
         Self {
-            center_radius: [center.x, center.y, radius, 0.0],
+            center_radius: [center.x.0, center.y.0, radius, 0.0],
             angles: [start_angle, sweep_angle, 0.0, 0.0],
             color: color.to_f32_array(),
             transform: [1.0, 1.0, 0.0, 0.0],
@@ -244,7 +244,7 @@ impl ArcInstance {
     ) -> Self {
         let max_radius = radius_x.max(radius_y);
         Self {
-            center_radius: [center.x, center.y, max_radius, 0.0],
+            center_radius: [center.x.0, center.y.0, max_radius, 0.0],
             angles: [start_angle, sweep_angle, 0.0, 0.0],
             color: color.to_f32_array(),
             transform: [radius_x / max_radius, radius_y / max_radius, 0.0, 0.0],
@@ -305,13 +305,13 @@ impl TextureInstance {
     /// * `dst_rect` - Destination rectangle in screen coordinates
     /// * `tint` - Color tint (use Color::WHITE for no tint)
     #[must_use]
-    pub fn new(dst_rect: flui_types::Rect, tint: Color) -> Self {
+    pub fn new(dst_rect: flui_types::Rect<flui_types::geometry::Pixels>, tint: Color) -> Self {
         Self {
             dst_rect: [
-                dst_rect.left(),
-                dst_rect.top(),
-                dst_rect.width(),
-                dst_rect.height(),
+                dst_rect.left().0,
+                dst_rect.top().0,
+                dst_rect.width().0,
+                dst_rect.height().0,
             ],
             src_uv: [0.0, 0.0, 1.0, 1.0], // Full texture
             tint: tint.to_f32_array(),
@@ -326,13 +326,13 @@ impl TextureInstance {
     /// * `src_uv` - Source UV rectangle [u_min, v_min, u_max, v_max]
     /// * `tint` - Color tint
     #[must_use]
-    pub fn with_uv(dst_rect: flui_types::Rect, src_uv: [f32; 4], tint: Color) -> Self {
+    pub fn with_uv(dst_rect: flui_types::Rect<flui_types::geometry::Pixels>, src_uv: [f32; 4], tint: Color) -> Self {
         Self {
             dst_rect: [
-                dst_rect.left(),
-                dst_rect.top(),
-                dst_rect.width(),
-                dst_rect.height(),
+                dst_rect.left().0,
+                dst_rect.top().0,
+                dst_rect.width().0,
+                dst_rect.height().0,
             ],
             src_uv,
             tint: tint.to_f32_array(),
@@ -347,13 +347,13 @@ impl TextureInstance {
     /// * `angle` - Rotation angle in radians
     /// * `tint` - Color tint
     #[must_use]
-    pub fn with_rotation(dst_rect: flui_types::Rect, angle: f32, tint: Color) -> Self {
+    pub fn with_rotation(dst_rect: flui_types::Rect<flui_types::geometry::Pixels>, angle: f32, tint: Color) -> Self {
         Self {
             dst_rect: [
-                dst_rect.left(),
-                dst_rect.top(),
-                dst_rect.width(),
-                dst_rect.height(),
+                dst_rect.left().0,
+                dst_rect.top().0,
+                dst_rect.width().0,
+                dst_rect.height().0,
             ],
             src_uv: [0.0, 0.0, 1.0, 1.0],
             tint: tint.to_f32_array(),

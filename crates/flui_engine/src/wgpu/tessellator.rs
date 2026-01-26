@@ -35,9 +35,10 @@ struct FillVertexConstructor {
 
 impl lyon::tessellation::FillVertexConstructor<Vertex> for FillVertexConstructor {
     fn new_vertex(&mut self, vertex: FillVertex<'_>) -> Vertex {
-        Vertex::with_color(
-            Point::new(vertex.position().x, vertex.position().y),
-            self.color,
+        Vertex::new(
+            [vertex.position().x, vertex.position().y],
+            self.color.to_rgba_f32_array(),
+            [0.0, 0.0],
         )
     }
 }
@@ -49,9 +50,10 @@ struct StrokeVertexConstructor {
 
 impl lyon::tessellation::StrokeVertexConstructor<Vertex> for StrokeVertexConstructor {
     fn new_vertex(&mut self, vertex: StrokeVertex<'_, '_>) -> Vertex {
-        Vertex::with_color(
-            Point::new(vertex.position().x, vertex.position().y),
-            self.color,
+        Vertex::new(
+            [vertex.position().x, vertex.position().y],
+            self.color.to_rgba_f32_array(),
+            [0.0, 0.0],
         )
     }
 }
@@ -171,10 +173,10 @@ impl Tessellator {
     ) -> Result<(Vec<Vertex>, Vec<u32>)> {
         let mut path_builder = Path::builder();
 
-        path_builder.begin(lyon::geom::point(rect.left(), rect.top()));
-        path_builder.line_to(lyon::geom::point(rect.right(), rect.top()));
-        path_builder.line_to(lyon::geom::point(rect.right(), rect.bottom()));
-        path_builder.line_to(lyon::geom::point(rect.left(), rect.bottom()));
+        path_builder.begin(lyon::geom::point(rect.left().0, rect.top().0));
+        path_builder.line_to(lyon::geom::point(rect.right().0, rect.top().0));
+        path_builder.line_to(lyon::geom::point(rect.right().0, rect.bottom().0));
+        path_builder.line_to(lyon::geom::point(rect.left().0, rect.bottom().0));
         path_builder.close();
 
         let path = path_builder.build();
@@ -190,13 +192,13 @@ impl Tessellator {
     ) -> Result<(Vec<Vertex>, Vec<u32>)> {
         let mut path_builder = Path::builder();
 
-        let left = rect.left();
-        let top = rect.top();
-        let right = rect.right();
-        let bottom = rect.bottom();
+        let left = rect.left().0;
+        let top = rect.top().0;
+        let right = rect.right().0;
+        let bottom = rect.bottom().0;
         let radius = corner_radius
-            .min(rect.width() / 2.0)
-            .min(rect.height() / 2.0);
+            .min(rect.width().0 / 2.0)
+            .min(rect.height().0 / 2.0);
 
         // Start at top-left, after the corner
         path_builder.begin(lyon::geom::point(left + radius, top));
@@ -253,7 +255,7 @@ impl Tessellator {
         let mut path_builder = Path::builder();
 
         path_builder.add_circle(
-            lyon::geom::point(center.x, center.y),
+            lyon::geom::point(center.x.0, center.y.0),
             radius,
             lyon::path::Winding::Positive,
         );
@@ -272,8 +274,8 @@ impl Tessellator {
         let mut path_builder = Path::builder();
 
         path_builder.add_ellipse(
-            lyon::geom::point(center.x, center.y),
-            lyon::geom::vector(radii.x, radii.y),
+            lyon::geom::point(center.x.0, center.y.0),
+            lyon::geom::vector(radii.x.0, radii.y.0),
             lyon::geom::Angle::radians(0.0),
             lyon::path::Winding::Positive,
         );
@@ -304,7 +306,7 @@ impl Tessellator {
         let mut path_builder = Path::builder();
 
         let center = rect.center();
-        let radii = lyon::geom::vector(rect.width() / 2.0, rect.height() / 2.0);
+        let radii = lyon::geom::vector((rect.width() / 2.0).0, (rect.height() / 2.0).0);
 
         // Calculate number of segments based on sweep angle for smooth curves
         let num_segments =
@@ -312,12 +314,12 @@ impl Tessellator {
         let angle_step = sweep_angle / num_segments as f32;
 
         // Start point on the arc
-        let start_x = center.x + radii.x * start_angle.cos();
-        let start_y = center.y + radii.y * start_angle.sin();
+        let start_x = center.x.0 + radii.x * start_angle.cos();
+        let start_y = center.y.0 + radii.y * start_angle.sin();
 
         if use_center {
             // Pie slice: start from center
-            path_builder.begin(lyon::geom::point(center.x, center.y));
+            path_builder.begin(lyon::geom::point(center.x.0, center.y.0));
             path_builder.line_to(lyon::geom::point(start_x, start_y));
         } else {
             // Arc only: start from arc edge
@@ -327,14 +329,14 @@ impl Tessellator {
         // Draw arc segments
         for i in 1..=num_segments {
             let angle = start_angle + angle_step * i as f32;
-            let x = center.x + radii.x * angle.cos();
-            let y = center.y + radii.y * angle.sin();
+            let x = center.x.0 + radii.x * angle.cos();
+            let y = center.y.0 + radii.y * angle.sin();
             path_builder.line_to(lyon::geom::point(x, y));
         }
 
         if use_center {
             // Pie slice: close back to center
-            path_builder.line_to(lyon::geom::point(center.x, center.y));
+            path_builder.line_to(lyon::geom::point(center.x.0, center.y.0));
             path_builder.close();
         } else {
             // Arc only: don't close
@@ -398,78 +400,78 @@ impl Tessellator {
             match winding {
                 lyon::path::Winding::Positive => {
                     // Clockwise: top-left -> top-right -> bottom-right -> bottom-left
-                    builder.begin(lyon::geom::point(left + tl_x, top));
+                    builder.begin(lyon::geom::point((left + tl_x).0, top.0));
 
                     // Top edge to top-right corner
-                    builder.line_to(lyon::geom::point(right - tr_x, top));
+                    builder.line_to(lyon::geom::point((right - tr_x).0, top.0));
                     // Top-right corner
                     builder.quadratic_bezier_to(
-                        lyon::geom::point(right, top),
-                        lyon::geom::point(right, top + tr_y),
+                        lyon::geom::point(right.0, top.0),
+                        lyon::geom::point(right.0, (top + tr_y).0),
                     );
 
                     // Right edge to bottom-right corner
-                    builder.line_to(lyon::geom::point(right, bottom - br_y));
+                    builder.line_to(lyon::geom::point(right.0, (bottom - br_y).0));
                     // Bottom-right corner
                     builder.quadratic_bezier_to(
-                        lyon::geom::point(right, bottom),
-                        lyon::geom::point(right - br_x, bottom),
+                        lyon::geom::point(right.0, bottom.0),
+                        lyon::geom::point((right - br_x).0, bottom.0),
                     );
 
                     // Bottom edge to bottom-left corner
-                    builder.line_to(lyon::geom::point(left + bl_x, bottom));
+                    builder.line_to(lyon::geom::point((left + bl_x).0, bottom.0));
                     // Bottom-left corner
                     builder.quadratic_bezier_to(
-                        lyon::geom::point(left, bottom),
-                        lyon::geom::point(left, bottom - bl_y),
+                        lyon::geom::point(left.0, bottom.0),
+                        lyon::geom::point(left.0, (bottom - bl_y).0),
                     );
 
                     // Left edge to top-left corner
-                    builder.line_to(lyon::geom::point(left, top + tl_y));
+                    builder.line_to(lyon::geom::point(left.0, (top + tl_y).0));
                     // Top-left corner
                     builder.quadratic_bezier_to(
-                        lyon::geom::point(left, top),
-                        lyon::geom::point(left + tl_x, top),
+                        lyon::geom::point(left.0, top.0),
+                        lyon::geom::point((left + tl_x).0, top.0),
                     );
 
                     builder.close();
                 }
                 lyon::path::Winding::Negative => {
                     // Counter-clockwise: top-left -> bottom-left -> bottom-right -> top-right
-                    builder.begin(lyon::geom::point(left + tl_x, top));
+                    builder.begin(lyon::geom::point((left + tl_x).0, top.0));
 
                     // Top-left corner (reverse)
                     builder.quadratic_bezier_to(
-                        lyon::geom::point(left, top),
-                        lyon::geom::point(left, top + tl_y),
+                        lyon::geom::point(left.0, top.0),
+                        lyon::geom::point(left.0, (top + tl_y).0),
                     );
 
                     // Left edge to bottom-left corner
-                    builder.line_to(lyon::geom::point(left, bottom - bl_y));
+                    builder.line_to(lyon::geom::point(left.0, (bottom - bl_y).0));
                     // Bottom-left corner
                     builder.quadratic_bezier_to(
-                        lyon::geom::point(left, bottom),
-                        lyon::geom::point(left + bl_x, bottom),
+                        lyon::geom::point(left.0, bottom.0),
+                        lyon::geom::point((left + bl_x).0, bottom.0),
                     );
 
                     // Bottom edge to bottom-right corner
-                    builder.line_to(lyon::geom::point(right - br_x, bottom));
+                    builder.line_to(lyon::geom::point((right - br_x).0, bottom.0));
                     // Bottom-right corner
                     builder.quadratic_bezier_to(
-                        lyon::geom::point(right, bottom),
-                        lyon::geom::point(right, bottom - br_y),
+                        lyon::geom::point(right.0, bottom.0),
+                        lyon::geom::point(right.0, (bottom - br_y).0),
                     );
 
                     // Right edge to top-right corner
-                    builder.line_to(lyon::geom::point(right, top + tr_y));
+                    builder.line_to(lyon::geom::point(right.0, (top + tr_y).0));
                     // Top-right corner
                     builder.quadratic_bezier_to(
-                        lyon::geom::point(right, top),
-                        lyon::geom::point(right - tr_x, top),
+                        lyon::geom::point(right.0, top.0),
+                        lyon::geom::point((right - tr_x).0, top.0),
                     );
 
                     // Top edge back to start
-                    builder.line_to(lyon::geom::point(left + tl_x, top));
+                    builder.line_to(lyon::geom::point((left + tl_x).0, top.0));
 
                     builder.close();
                 }
@@ -494,10 +496,10 @@ impl Tessellator {
 
         let mut path_builder = Path::builder();
 
-        path_builder.begin(lyon::geom::point(points[0].x, points[0].y));
+        path_builder.begin(lyon::geom::point(points[0].x.0, points[0].y.0));
 
         for point in &points[1..] {
-            path_builder.line_to(lyon::geom::point(point.x, point.y));
+            path_builder.line_to(lyon::geom::point(point.x.0, point.y.0));
         }
 
         if closed {
@@ -516,7 +518,7 @@ impl Tessellator {
     /// Alias for tessellate_rounded_rect that accepts RRect type.
     pub fn tessellate_rrect(
         &mut self,
-        rrect: RRect<Pixels>,
+        rrect: RRect,
         paint: &Paint,
     ) -> Result<(Vec<Vertex>, Vec<u32>)> {
         // Use average of all corner radii for simplicity
@@ -531,7 +533,7 @@ impl Tessellator {
             + rrect.bottom_right.y)
             / 8.0;
 
-        self.tessellate_rounded_rect(rrect.rect, radius, paint)
+        self.tessellate_rounded_rect(rrect.rect, radius.0, paint)
     }
 
     /// Tessellate a stroked rectangle
@@ -542,10 +544,10 @@ impl Tessellator {
     ) -> Result<(Vec<Vertex>, Vec<u32>)> {
         let mut path_builder = Path::builder();
 
-        path_builder.begin(lyon::geom::point(rect.left(), rect.top()));
-        path_builder.line_to(lyon::geom::point(rect.right(), rect.top()));
-        path_builder.line_to(lyon::geom::point(rect.right(), rect.bottom()));
-        path_builder.line_to(lyon::geom::point(rect.left(), rect.bottom()));
+        path_builder.begin(lyon::geom::point(rect.left().0, rect.top().0));
+        path_builder.line_to(lyon::geom::point(rect.right().0, rect.top().0));
+        path_builder.line_to(lyon::geom::point(rect.right().0, rect.bottom().0));
+        path_builder.line_to(lyon::geom::point(rect.left().0, rect.bottom().0));
         path_builder.close();
 
         let path = path_builder.build();
@@ -611,14 +613,14 @@ pub trait IntoLyonPath {
     fn to_lyon_path(&self) -> Path;
 }
 
-impl IntoLyonPath for Rect {
+impl IntoLyonPath for Rect<Pixels> {
     fn to_lyon_path(&self) -> Path {
         let mut builder = Path::builder();
 
-        builder.begin(lyon::geom::point(self.left(), self.top()));
-        builder.line_to(lyon::geom::point(self.right(), self.top()));
-        builder.line_to(lyon::geom::point(self.right(), self.bottom()));
-        builder.line_to(lyon::geom::point(self.left(), self.bottom()));
+        builder.begin(lyon::geom::point(self.left().0, self.top().0));
+        builder.line_to(lyon::geom::point(self.right().0, self.top().0));
+        builder.line_to(lyon::geom::point(self.right().0, self.bottom().0));
+        builder.line_to(lyon::geom::point(self.left().0, self.bottom().0));
         builder.close();
 
         builder.build()
@@ -640,7 +642,7 @@ impl IntoLyonPath for flui_types::painting::path::Path {
                     if has_begun {
                         builder.end(false);
                     }
-                    builder.begin(lyon::geom::point(point.x, point.y));
+                    builder.begin(lyon::geom::point(point.x.0, point.y.0));
                     current_pos = Some(*point);
                     has_begun = true;
                 }
@@ -648,35 +650,35 @@ impl IntoLyonPath for flui_types::painting::path::Path {
                 PathCommand::LineTo(point) => {
                     // Auto-begin if no move_to was called
                     if !has_begun {
-                        builder.begin(lyon::geom::point(point.x, point.y));
+                        builder.begin(lyon::geom::point(point.x.0, point.y.0));
                         has_begun = true;
                     } else {
-                        builder.line_to(lyon::geom::point(point.x, point.y));
+                        builder.line_to(lyon::geom::point(point.x.0, point.y.0));
                     }
                     current_pos = Some(*point);
                 }
 
                 PathCommand::QuadraticTo(control, end) => {
                     if !has_begun {
-                        builder.begin(lyon::geom::point(control.x, control.y));
+                        builder.begin(lyon::geom::point(control.x.0, control.y.0));
                         has_begun = true;
                     }
                     builder.quadratic_bezier_to(
-                        lyon::geom::point(control.x, control.y),
-                        lyon::geom::point(end.x, end.y),
+                        lyon::geom::point(control.x.0, control.y.0),
+                        lyon::geom::point(end.x.0, end.y.0),
                     );
                     current_pos = Some(*end);
                 }
 
                 PathCommand::CubicTo(control1, control2, end) => {
                     if !has_begun {
-                        builder.begin(lyon::geom::point(control1.x, control1.y));
+                        builder.begin(lyon::geom::point(control1.x.0, control1.y.0));
                         has_begun = true;
                     }
                     builder.cubic_bezier_to(
-                        lyon::geom::point(control1.x, control1.y),
-                        lyon::geom::point(control2.x, control2.y),
-                        lyon::geom::point(end.x, end.y),
+                        lyon::geom::point(control1.x.0, control1.y.0),
+                        lyon::geom::point(control2.x.0, control2.y.0),
+                        lyon::geom::point(end.x.0, end.y.0),
                     );
                     current_pos = Some(*end);
                 }
@@ -694,10 +696,10 @@ impl IntoLyonPath for flui_types::painting::path::Path {
                     if has_begun {
                         builder.end(false);
                     }
-                    builder.begin(lyon::geom::point(rect.left(), rect.top()));
-                    builder.line_to(lyon::geom::point(rect.right(), rect.top()));
-                    builder.line_to(lyon::geom::point(rect.right(), rect.bottom()));
-                    builder.line_to(lyon::geom::point(rect.left(), rect.bottom()));
+                    builder.begin(lyon::geom::point(rect.left().0, rect.top().0));
+                    builder.line_to(lyon::geom::point(rect.right().0, rect.top().0));
+                    builder.line_to(lyon::geom::point(rect.right().0, rect.bottom().0));
+                    builder.line_to(lyon::geom::point(rect.left().0, rect.bottom().0));
                     builder.close();
                     current_pos = None;
                     has_begun = false;
@@ -709,7 +711,7 @@ impl IntoLyonPath for flui_types::painting::path::Path {
                         builder.end(false);
                     }
                     builder.add_circle(
-                        lyon::geom::point(center.x, center.y),
+                        lyon::geom::point(center.x.0, center.y.0),
                         *radius,
                         lyon::path::Winding::Positive,
                     );
@@ -723,9 +725,9 @@ impl IntoLyonPath for flui_types::painting::path::Path {
                         builder.end(false);
                     }
                     let center = rect.center();
-                    let radii = lyon::geom::vector(rect.width() / 2.0, rect.height() / 2.0);
+                    let radii = lyon::geom::vector((rect.width() / 2.0).0, (rect.height() / 2.0).0);
                     builder.add_ellipse(
-                        lyon::geom::point(center.x, center.y),
+                        lyon::geom::point(center.x.0, center.y.0),
                         radii,
                         lyon::geom::Angle::radians(0.0),
                         lyon::path::Winding::Positive,
@@ -740,7 +742,7 @@ impl IntoLyonPath for flui_types::painting::path::Path {
                         builder.end(false);
                     }
                     let center = rect.center();
-                    let radii = lyon::geom::vector(rect.width() / 2.0, rect.height() / 2.0);
+                    let radii = lyon::geom::vector((rect.width() / 2.0).0, (rect.height() / 2.0).0);
 
                     // Approximate arc with line segments
                     // Use more segments for larger sweep angles
@@ -748,23 +750,23 @@ impl IntoLyonPath for flui_types::painting::path::Path {
                         ((sweep_angle.abs() / (std::f32::consts::PI / 6.0)).ceil() as i32).max(4);
                     let angle_step = sweep_angle / num_segments as f32;
 
-                    let start_x = center.x + radii.x * start_angle.cos();
-                    let start_y = center.y + radii.y * start_angle.sin();
+                    let start_x = center.x.0 + radii.x * start_angle.cos();
+                    let start_y = center.y.0 + radii.y * start_angle.sin();
 
                     builder.begin(lyon::geom::point(start_x, start_y));
                     has_begun = true;
 
                     for i in 1..=num_segments {
                         let angle = start_angle + angle_step * i as f32;
-                        let x = center.x + radii.x * angle.cos();
-                        let y = center.y + radii.y * angle.sin();
+                        let x = center.x.0 + radii.x * angle.cos();
+                        let y = center.y.0 + radii.y * angle.sin();
                         builder.line_to(lyon::geom::point(x, y));
                     }
 
                     let end_angle = start_angle + sweep_angle;
-                    let end_x = center.x + radii.x * end_angle.cos();
-                    let end_y = center.y + radii.y * end_angle.sin();
-                    current_pos = Some(Point::new(end_x, end_y));
+                    let end_x = center.x.0 + radii.x * end_angle.cos();
+                    let end_y = center.y.0 + radii.y * end_angle.sin();
+                    current_pos = Some(Point::new(Pixels(end_x), Pixels(end_y)));
                 }
             }
         }

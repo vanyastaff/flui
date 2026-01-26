@@ -57,7 +57,7 @@ pub fn dispatch_command<R: CommandRenderer + ?Sized>(command: &DrawCommand, rend
             paint,
             transform,
         } => {
-            renderer.render_circle(*center, *radius, paint, transform);
+            renderer.render_circle(*center, radius.0, paint, transform);
         }
         DrawCommand::DrawLine {
             p1,

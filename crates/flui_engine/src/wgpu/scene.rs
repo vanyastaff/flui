@@ -490,7 +490,6 @@ impl LayerBuilder {
 /// Standalone LayerBuilder (not attached to SceneBuilder)
 ///
 /// Use this when building layers independently of a scene.
-#[derive(Default)]
 pub struct LayerBuilderStandalone {
     primitives: Vec<Primitive>,
     transform: glam::Mat4,
@@ -499,9 +498,15 @@ pub struct LayerBuilderStandalone {
     clip: Option<Rect<DevicePixels>>,
 }
 
-impl Default for glam::Mat4 {
+impl Default for LayerBuilderStandalone {
     fn default() -> Self {
-        Self::IDENTITY
+        Self {
+            primitives: Vec::new(),
+            transform: glam::Mat4::IDENTITY,
+            opacity: 1.0,
+            blend_mode: BlendMode::Normal,
+            clip: None,
+        }
     }
 }
 
@@ -691,20 +696,19 @@ impl Primitive {
             } => {
                 // Approximate bounds (will be refined with actual text layout)
                 let font_size = style.font_size.unwrap_or(14.0);
-                Rect::new(
-                    position.x,
-                    position.y,
-                    DevicePixels(100), // Placeholder width
-                    DevicePixels(font_size as i32),
+                Rect::from_min_max(
+                    *position,
+                    Point::new(
+                        DevicePixels(position.x.0 + 100), // Placeholder width
+                        DevicePixels(position.y.0 + font_size as i32),
+                    ),
                 )
             }
             Primitive::Path { path, .. } => {
                 if path.is_empty() {
-                    return Rect::new(
-                        DevicePixels(0),
-                        DevicePixels(0),
-                        DevicePixels(0),
-                        DevicePixels(0),
+                    return Rect::from_min_max(
+                        Point::new(DevicePixels(0), DevicePixels(0)),
+                        Point::new(DevicePixels(0), DevicePixels(0)),
                     );
                 }
 
@@ -721,7 +725,7 @@ impl Primitive {
                     max_y = DevicePixels(max_y.0.max(pt.y.0));
                 }
 
-                Rect::new(min_x, min_y, max_x, max_y)
+                Rect::from_min_max(Point::new(min_x, min_y), Point::new(max_x, max_y))
             }
             Primitive::Image { rect, .. } => *rect,
             Primitive::Underline {
@@ -734,7 +738,7 @@ impl Primitive {
                 let max_x = DevicePixels(start.x.0.max(end.x.0));
                 let min_y = DevicePixels((start.y.0 as f32 - thickness / 2.0) as i32);
                 let max_y = DevicePixels((end.y.0 as f32 + thickness / 2.0) as i32);
-                Rect::new(min_x, min_y, max_x, max_y)
+                Rect::from_min_max(Point::new(min_x, min_y), Point::new(max_x, max_y))
             }
             Primitive::Shadow {
                 primitive,
@@ -743,18 +747,26 @@ impl Primitive {
                 ..
             } => {
                 let base_bounds = primitive.bounds();
-                let offset_bounds = Rect::new(
-                    DevicePixels(base_bounds.min_x().0 + offset.x.0),
-                    DevicePixels(base_bounds.min_y().0 + offset.y.0),
-                    DevicePixels(base_bounds.max_x().0 + offset.x.0),
-                    DevicePixels(base_bounds.max_y().0 + offset.y.0),
+                let offset_bounds = Rect::from_min_max(
+                    Point::new(
+                        DevicePixels(base_bounds.min_x().0 + offset.x.0),
+                        DevicePixels(base_bounds.min_y().0 + offset.y.0),
+                    ),
+                    Point::new(
+                        DevicePixels(base_bounds.max_x().0 + offset.x.0),
+                        DevicePixels(base_bounds.max_y().0 + offset.y.0),
+                    ),
                 );
-                let blur = *blur_radius as i32;
-                Rect::new(
-                    DevicePixels(offset_bounds.min_x().0 - blur),
-                    DevicePixels(offset_bounds.min_y().0 - blur),
-                    DevicePixels(offset_bounds.max_x().0 + blur),
-                    DevicePixels(offset_bounds.max_y().0 + blur),
+                let blur = *blur_radius as f32;
+                Rect::from_min_max(
+                    Point::new(
+                        DevicePixels((offset_bounds.min_x().0 as f32 - blur) as i32),
+                        DevicePixels((offset_bounds.min_y().0 as f32 - blur) as i32),
+                    ),
+                    Point::new(
+                        DevicePixels((offset_bounds.max_x().0 as f32 + blur) as i32),
+                        DevicePixels((offset_bounds.max_y().0 as f32 + blur) as i32),
+                    ),
                 )
             }
         }

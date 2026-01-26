@@ -23,8 +23,8 @@ impl TextureDesc {
     /// Create texture descriptor from size
     pub fn from_size(size: Size<Pixels>) -> Self {
         Self {
-            width: size.width.ceil() as u32,
-            height: size.height.ceil() as u32,
+            width: size.width.0.ceil() as u32,
+            height: size.height.0.ceil() as u32,
             format: TextureFormat::Rgba8,
         }
     }

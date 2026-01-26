@@ -79,7 +79,7 @@ impl GpuCapabilities {
             vendor: Self::vendor_name(info.vendor),
             max_texture_size: limits.max_texture_dimension_2d,
             supports_hdr: Self::check_hdr_support(info.backend),
-            supports_compute: features.contains(wgpu::Features::COMPUTE_SHADER),
+            supports_compute: true, // Compute shaders are supported by default in wgpu
             supports_bc_compression: features.contains(wgpu::Features::TEXTURE_COMPRESSION_BC),
             supports_astc_compression: features.contains(wgpu::Features::TEXTURE_COMPRESSION_ASTC),
             supports_etc2_compression: features.contains(wgpu::Features::TEXTURE_COMPRESSION_ETC2),
@@ -154,15 +154,14 @@ impl Renderer {
 
         tracing::info!("Creating wgpu instance with backends: {:?}", backends);
 
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             backends,
             flags: wgpu::InstanceFlags::default(),
-            dx12_shader_compiler: wgpu::Dx12Compiler::default(),
-            gles_minor_version: wgpu::Gles3MinorVersion::Automatic,
+            ..Default::default()
         });
 
         // Create surface
-        let surface = instance.create_surface(window)?;
+        let surface = unsafe { instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::from_window(window)?) }?;
 
         // Request adapter
         let adapter = instance
@@ -171,8 +170,7 @@ impl Renderer {
                 compatible_surface: Some(&surface),
                 force_fallback_adapter: false,
             })
-            .await
-            .ok_or_else(|| anyhow::anyhow!("Failed to find suitable GPU adapter"))?;
+            .await?;
 
         // Detect capabilities
         let capabilities = GpuCapabilities::detect(&adapter);
@@ -186,15 +184,13 @@ impl Renderer {
 
         // Request device and queue
         let (device, queue) = adapter
-            .request_device(
-                &wgpu::DeviceDescriptor {
-                    label: Some("FLUI GPU Device"),
-                    required_features: Self::required_features(&capabilities),
-                    required_limits: Self::required_limits(&capabilities),
-                    memory_hints: wgpu::MemoryHints::default(),
-                },
-                None, // No trace path
-            )
+            .request_device(&wgpu::DeviceDescriptor {
+                label: Some("FLUI GPU Device"),
+                required_features: Self::required_features(&capabilities),
+                required_limits: Self::required_limits(&capabilities),
+                memory_hints: wgpu::MemoryHints::default(),
+                trace: Default::default(),
+            })
             .await?;
 
         // Configure surface
@@ -231,7 +227,7 @@ impl Renderer {
     pub async fn new_offscreen() -> Result<Self> {
         let backends = Self::select_backend();
 
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             backends,
             ..Default::default()
         });
@@ -242,21 +238,18 @@ impl Renderer {
                 compatible_surface: None,
                 force_fallback_adapter: false,
             })
-            .await
-            .ok_or_else(|| anyhow::anyhow!("Failed to find GPU adapter"))?;
+            .await?;
 
         let capabilities = GpuCapabilities::detect(&adapter);
 
         let (device, queue) = adapter
-            .request_device(
-                &wgpu::DeviceDescriptor {
-                    label: Some("FLUI Offscreen Device"),
-                    required_features: Self::required_features(&capabilities),
-                    required_limits: Self::required_limits(&capabilities),
-                    memory_hints: Default::default(),
-                },
-                None,
-            )
+            .request_device(&wgpu::DeviceDescriptor {
+                label: Some("FLUI Offscreen Device"),
+                required_features: Self::required_features(&capabilities),
+                required_limits: Self::required_limits(&capabilities),
+                memory_hints: Default::default(),
+                trace: Default::default(),
+            })
             .await?;
 
         Ok(Self {

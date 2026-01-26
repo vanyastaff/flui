@@ -46,7 +46,7 @@ impl CommandRenderer for DebugBackend {
         );
     }
 
-    fn render_rrect(&mut self, rrect: RRect<Pixels>, _paint: &Paint, _transform: &Matrix4) {
+    fn render_rrect(&mut self, rrect: RRect, _paint: &Paint, _transform: &Matrix4) {
         self.log_command("render_rrect", &format!("rrect={:?}", rrect));
     }
 
@@ -89,8 +89,8 @@ impl CommandRenderer for DebugBackend {
 
     fn render_drrect(
         &mut self,
-        _outer: RRect<Pixels>,
-        _inner: RRect<Pixels>,
+        _outer: RRect,
+        _inner: RRect,
         _paint: &Paint,
         _transform: &Matrix4,
     ) {
@@ -265,7 +265,7 @@ impl CommandRenderer for DebugBackend {
 
     fn render_gradient_rrect(
         &mut self,
-        rrect: RRect<Pixels>,
+        rrect: RRect,
         shader: &flui_painting::Shader,
         _transform: &Matrix4,
     ) {
@@ -318,7 +318,7 @@ impl CommandRenderer for DebugBackend {
         self.log_command("clip_rect", &format!("rect={:?}", rect));
     }
 
-    fn clip_rrect(&mut self, rrect: RRect<Pixels>, _transform: &Matrix4) {
+    fn clip_rrect(&mut self, rrect: RRect, _transform: &Matrix4) {
         self.log_command("clip_rrect", &format!("rrect={:?}", rrect));
     }
 
@@ -326,7 +326,7 @@ impl CommandRenderer for DebugBackend {
         self.log_command("clip_path", &format!("commands={}", path.commands().len()));
     }
 
-    fn viewport_bounds(&self) -> Rect {
+    fn viewport_bounds(&self) -> Rect<Pixels> {
         self.viewport
     }
 
@@ -343,7 +343,7 @@ impl CommandRenderer for DebugBackend {
 
     // ===== Layer Tree Operations =====
 
-    fn push_clip_rect(&mut self, rect: &Rect, clip_behavior: flui_types::painting::Clip) {
+    fn push_clip_rect(&mut self, rect: &Rect<Pixels>, clip_behavior: flui_types::painting::Clip) {
         self.log_command(
             "push_clip_rect",
             &format!("rect={:?}, behavior={:?}", rect, clip_behavior),

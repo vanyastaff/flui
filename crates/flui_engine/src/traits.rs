@@ -12,7 +12,7 @@
 
 use flui_painting::{BlendMode, Paint, PointMode};
 use flui_types::{
-    geometry::{Matrix4, Offset, Pixels, Point, RRect, Rect},
+    geometry::{px, Matrix4, Offset, Pixels, Point, RRect, Rect},
     painting::{Image, Path, TextureId},
     styling::Color,
     typography::TextStyle,
@@ -53,7 +53,7 @@ pub trait CommandRenderer {
     fn render_rect(&mut self, rect: Rect<Pixels>, paint: &Paint, transform: &Matrix4);
 
     /// Render a rounded rectangle
-    fn render_rrect(&mut self, rrect: RRect<Pixels>, paint: &Paint, transform: &Matrix4);
+    fn render_rrect(&mut self, rrect: RRect, paint: &Paint, transform: &Matrix4);
 
     /// Render a circle
     fn render_circle(&mut self, center: Point<Pixels>, radius: f32, paint: &Paint, transform: &Matrix4);
@@ -81,7 +81,7 @@ pub trait CommandRenderer {
     );
 
     /// Render a double rounded rectangle (ring/border)
-    fn render_drrect(&mut self, outer: RRect<Pixels>, inner: RRect<Pixels>, paint: &Paint, transform: &Matrix4);
+    fn render_drrect(&mut self, outer: RRect, inner: RRect, paint: &Paint, transform: &Matrix4);
 
     /// Render a set of points
     fn render_points(
@@ -151,7 +151,7 @@ pub trait CommandRenderer {
     fn render_image_nine_slice(
         &mut self,
         image: &Image,
-        center_slice: Rect,
+        center_slice: Rect<Pixels>,
         dst: Rect<Pixels>,
         paint: Option<&Paint>,
         transform: &Matrix4,
@@ -201,7 +201,7 @@ pub trait CommandRenderer {
     /// Render a gradient-filled rounded rectangle
     fn render_gradient_rrect(
         &mut self,
-        rrect: RRect<Pixels>,
+        rrect: RRect,
         shader: &flui_painting::Shader,
         transform: &Matrix4,
     );
@@ -238,7 +238,7 @@ pub trait CommandRenderer {
     fn clip_rect(&mut self, rect: Rect<Pixels>, transform: &Matrix4);
 
     /// Set rounded rectangular clip region
-    fn clip_rrect(&mut self, rrect: RRect<Pixels>, transform: &Matrix4);
+    fn clip_rrect(&mut self, rrect: RRect, transform: &Matrix4);
 
     /// Set arbitrary path clip region
     fn clip_path(&mut self, path: &Path, transform: &Matrix4);
@@ -259,7 +259,7 @@ pub trait CommandRenderer {
     // ===== Layer Tree Operations =====
 
     /// Push a rectangular clip onto the clip stack
-    fn push_clip_rect(&mut self, rect: &Rect, clip_behavior: flui_types::painting::Clip);
+    fn push_clip_rect(&mut self, rect: &Rect<Pixels>, clip_behavior: flui_types::painting::Clip);
 
     /// Push a rounded rectangular clip onto the clip stack
     fn push_clip_rrect(&mut self, rrect: &RRect, clip_behavior: flui_types::painting::Clip);
@@ -345,7 +345,7 @@ pub trait Painter {
     fn rect(&mut self, rect: Rect<Pixels>, paint: &Paint);
 
     /// Draw a rounded rectangle
-    fn rrect(&mut self, rrect: RRect<Pixels>, paint: &Paint);
+    fn rrect(&mut self, rrect: RRect, paint: &Paint);
 
     /// Draw a circle
     fn circle(&mut self, center: Point<Pixels>, radius: f32, paint: &Paint);
@@ -382,7 +382,7 @@ pub trait Painter {
     fn clip_rect(&mut self, rect: Rect<Pixels>);
 
     /// Set rounded rectangular clip region
-    fn clip_rrect(&mut self, rrect: RRect<Pixels>);
+    fn clip_rrect(&mut self, rrect: RRect);
 
     /// Set arbitrary path clip region
     fn clip_path(&mut self, path: &Path);
@@ -425,10 +425,10 @@ pub trait Painter {
                 let dy = to.dy - from.dy;
                 let len_sq = dx * dx + dy * dy;
 
-                let t = if len_sq > f32::EPSILON {
-                    let px = center_x - from.dx;
-                    let py = center_y - from.dy;
-                    ((px * dx + py * dy) / len_sq).clamp(0.0, 1.0)
+                let t = if len_sq.0 > f32::EPSILON {
+                    let offset_x = center_x - from.dx;
+                    let offset_y = center_y - from.dy;
+                    ((offset_x * dx + offset_y * dy) / len_sq).clamp(0.0, 1.0)
                 } else {
                     0.5
                 };
@@ -457,7 +457,7 @@ pub trait Painter {
                 let dist = (dx * dx + dy * dy).sqrt();
 
                 let t = if *radius > f32::EPSILON {
-                    (dist / radius).clamp(0.0, 1.0)
+                    (dist.0 / radius).clamp(0.0, 1.0)
                 } else {
                     0.0
                 };
@@ -582,7 +582,7 @@ pub trait Painter {
     }
 
     /// Draw a double rounded rectangle (ring/border)
-    fn draw_drrect(&mut self, _outer: RRect<Pixels>, _inner: RRect<Pixels>, _paint: &Paint) {
+    fn draw_drrect(&mut self, _outer: RRect, _inner: RRect, _paint: &Paint) {
         #[cfg(debug_assertions)]
         tracing::warn!("Painter::draw_drrect: not implemented");
     }
@@ -660,7 +660,7 @@ pub trait Painter {
     /// Draw rounded rect with shadow
     fn rrect_with_shadow(
         &mut self,
-        rrect: RRect<Pixels>,
+        rrect: RRect,
         paint: &Paint,
         _shadow_offset: Offset<Pixels>,
         _shadow_blur: f32,
@@ -696,7 +696,7 @@ pub trait Painter {
     }
 
     /// Draw an image with 9-slice/9-patch scaling
-    fn draw_image_nine_slice(&mut self, image: &Image, _center_slice: Rect, dst: Rect<Pixels>) {
+    fn draw_image_nine_slice(&mut self, image: &Image, _center_slice: Rect<Pixels>, dst: Rect<Pixels>) {
         self.draw_image(image, dst);
         #[cfg(debug_assertions)]
         tracing::debug!("Painter::draw_image_nine_slice: using fallback (no 9-slice)");

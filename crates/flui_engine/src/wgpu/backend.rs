@@ -7,7 +7,7 @@ use super::painter::WgpuPainter;
 use crate::traits::{CommandRenderer, Painter};
 use flui_painting::{BlendMode, DisplayListCore, Paint, PointMode};
 use flui_types::{
-    geometry::{Matrix4, Offset, Pixels, Point, RRect, Rect, Transform},
+    geometry::{px, Matrix4, Offset, Pixels, Point, RRect, Rect, Transform},
     painting::{Image, Path},
     styling::Color,
     typography::TextStyle,
@@ -75,7 +75,7 @@ impl Backend {
         let (tx, ty, rotation, sx, sy) = transform_enum.decompose();
 
         if tx != 0.0 || ty != 0.0 {
-            self.painter.translate(Offset::new(tx, ty));
+            self.painter.translate(Offset::new(px(tx), px(ty)));
         }
         if rotation.abs() > f32::EPSILON {
             self.painter.rotate(rotation);
@@ -96,7 +96,7 @@ impl CommandRenderer for Backend {
         });
     }
 
-    fn render_rrect(&mut self, rrect: RRect<Pixels>, paint: &Paint, transform: &Matrix4) {
+    fn render_rrect(&mut self, rrect: RRect, paint: &Paint, transform: &Matrix4) {
         self.with_transform(transform, |painter| {
             painter.rrect(rrect, paint);
         });
@@ -140,7 +140,7 @@ impl CommandRenderer for Backend {
         });
     }
 
-    fn render_drrect(&mut self, outer: RRect<Pixels>, inner: RRect<Pixels>, paint: &Paint, transform: &Matrix4) {
+    fn render_drrect(&mut self, outer: RRect, inner: RRect, paint: &Paint, transform: &Matrix4) {
         self.with_transform(transform, |painter| {
             painter.draw_drrect(outer, inner, paint);
         });
@@ -206,8 +206,8 @@ impl CommandRenderer for Backend {
         // For now, just log that we received a text span
         self.with_transform(transform, |_painter| {
             tracing::debug!(
-                offset_x = offset.dx,
-                offset_y = offset.dy,
+                offset_x = offset.dx.0,
+                offset_y = offset.dy.0,
                 "render_text_span: rich text span rendering not yet implemented"
             );
         });
@@ -370,8 +370,8 @@ impl CommandRenderer for Backend {
 
                     painter.gradient_rect(
                         rect,
-                        glam::Vec2::new(from.dx, from.dy),
-                        glam::Vec2::new(to.dx, to.dy),
+                        glam::Vec2::new(from.dx.0, from.dy.0),
+                        glam::Vec2::new(to.dx.0, to.dy.0),
                         &gradient_stops,
                         0.0, // No corner radius for rect
                     );
@@ -413,7 +413,7 @@ impl CommandRenderer for Backend {
 
                     painter.radial_gradient_rect(
                         rect,
-                        glam::Vec2::new(center.dx, center.dy),
+                        glam::Vec2::new(center.dx.0, center.dy.0),
                         *radius,
                         &gradient_stops,
                         0.0, // No corner radius for rect
@@ -435,7 +435,7 @@ impl CommandRenderer for Backend {
 
     fn render_gradient_rrect(
         &mut self,
-        rrect: RRect<Pixels>,
+        rrect: RRect,
         shader: &flui_painting::Shader,
         transform: &Matrix4,
     ) {
@@ -445,7 +445,7 @@ impl CommandRenderer for Backend {
             // Get average corner radius
             let corner_radius =
                 (rrect.top_left.x + rrect.top_right.x + rrect.bottom_left.x + rrect.bottom_right.x)
-                    / 4.0;
+                    / px(4.0);
 
             match shader {
                 flui_painting::Shader::LinearGradient {
@@ -485,8 +485,8 @@ impl CommandRenderer for Backend {
 
                     painter.gradient_rect(
                         rrect.rect,
-                        glam::Vec2::new(from.dx, from.dy),
-                        glam::Vec2::new(to.dx, to.dy),
+                        glam::Vec2::new(from.dx.0, from.dy.0),
+                        glam::Vec2::new(to.dx.0, to.dy.0),
                         &gradient_stops,
                         corner_radius,
                     );
@@ -528,7 +528,7 @@ impl CommandRenderer for Backend {
 
                     painter.radial_gradient_rect(
                         rrect.rect,
-                        glam::Vec2::new(center.dx, center.dy),
+                        glam::Vec2::new(center.dx.0, center.dy.0),
                         *radius,
                         &gradient_stops,
                         corner_radius,
@@ -607,7 +607,7 @@ impl CommandRenderer for Backend {
         });
     }
 
-    fn clip_rrect(&mut self, rrect: RRect<Pixels>, transform: &Matrix4) {
+    fn clip_rrect(&mut self, rrect: RRect, transform: &Matrix4) {
         self.with_transform(transform, |painter| {
             painter.clip_rrect(rrect);
         });
@@ -619,7 +619,7 @@ impl CommandRenderer for Backend {
         });
     }
 
-    fn viewport_bounds(&self) -> Rect {
+    fn viewport_bounds(&self) -> Rect<Pixels> {
         self.painter.viewport_bounds()
     }
 
@@ -635,7 +635,7 @@ impl CommandRenderer for Backend {
 
     // ===== Layer Tree Operations =====
 
-    fn push_clip_rect(&mut self, rect: &Rect, _clip_behavior: flui_types::painting::Clip) {
+    fn push_clip_rect(&mut self, rect: &Rect<Pixels>, _clip_behavior: flui_types::painting::Clip) {
         self.painter.save();
         self.painter.clip_rect(*rect);
     }
@@ -667,7 +667,7 @@ impl CommandRenderer for Backend {
         let (tx, ty, rotation, sx, sy) = transform_enum.decompose();
 
         if tx != 0.0 || ty != 0.0 {
-            self.painter.translate(Offset::new(tx, ty));
+            self.painter.translate(Offset::new(px(tx), px(ty)));
         }
         if rotation.abs() > f32::EPSILON {
             self.painter.rotate(rotation);
@@ -733,12 +733,12 @@ impl CommandRenderer for Backend {
         let bg_color = Color::rgba(10, 10, 15, 200);
         let bg_paint = Paint::fill(bg_color);
         let bg_rrect =
-            RRect::from_rect_and_radius(bounds, flui_types::geometry::Radius::circular(4.0));
+            RRect::from_rect_and_radius(bounds, flui_types::geometry::Radius::circular(px(4.0)));
         self.painter.rrect(bg_rrect, &bg_paint);
 
-        let x = bounds.left() + 8.0;
-        let x_val = bounds.left() + 50.0;
-        let mut y = bounds.top() + 14.0;
+        let x = bounds.left() + px(8.0);
+        let x_val = bounds.left() + px(50.0);
+        let mut y = bounds.top() + px(14.0);
 
         // GPU label (cyan) + FPS value
         let cyan = Color::rgba(0, 200, 200, 255);
@@ -763,15 +763,15 @@ impl CommandRenderer for Backend {
         // FPS unit (dimmer)
         let gray = Color::rgba(130, 130, 130, 255);
         let fps_w = if fps >= 100.0 {
-            24.0
+            px(24.0)
         } else if fps >= 10.0 {
-            16.0
+            px(16.0)
         } else {
-            8.0
+            px(8.0)
         };
         self.painter
             .text("FPS", Point::new(x_val + fps_w, y), 8.0, &Paint::fill(gray));
-        y += 14.0;
+        y += px(14.0);
 
         // Frametime label (purple) + value
         let purple = Color::rgba(200, 100, 255, 255);
@@ -786,7 +786,7 @@ impl CommandRenderer for Backend {
             &Paint::fill(white),
         );
         self.painter
-            .text("ms", Point::new(x_val + 22.0, y), 8.0, &Paint::fill(gray));
+            .text("ms", Point::new(x_val + px(22.0), y), 8.0, &Paint::fill(gray));
 
         let _ = total_frames;
     }

@@ -6,7 +6,7 @@
 //!
 //! This is slower than raster text but supports arbitrary transformations.
 
-use flui_types::{Color, Point, Pixels};
+use flui_types::{geometry::px, Color, Point, Pixels};
 use glam::Mat4;
 use std::sync::Arc;
 use thiserror::Error;
@@ -152,11 +152,11 @@ impl VectorTextRenderer {
             if !has_outline {
                 // No outline (e.g., space character) - skip rendering but advance cursor
                 if let Some(advance) = face.glyph_hor_advance(glyph_id) {
-                    x_offset += advance as f32 * scale;
+                    x_offset += px(advance as f32 * scale);
                 }
-                x_offset += params.letter_spacing;
+                x_offset += px(params.letter_spacing);
                 if ch.is_whitespace() {
-                    x_offset += params.word_spacing;
+                    x_offset += px(params.word_spacing);
                 }
                 continue;
             }
@@ -183,8 +183,8 @@ impl VectorTextRenderer {
             let vertex_offset = vertices.len() as u32;
 
             for point in buffers.vertices.iter() {
-                let local_x = point.x + x_offset;
-                let local_y = point.y + params.position.y;
+                let local_x = point.x + x_offset.0;
+                let local_y = point.y + params.position.y.0;
 
                 // Apply full 4x4 transformation with perspective division
                 let m = params.transform.to_cols_array_2d();
@@ -214,13 +214,13 @@ impl VectorTextRenderer {
 
             // Advance cursor
             if let Some(advance) = face.glyph_hor_advance(glyph_id) {
-                x_offset += advance as f32 * scale;
+                x_offset += px(advance as f32 * scale);
             }
 
-            x_offset += params.letter_spacing;
+            x_offset += px(params.letter_spacing);
 
             if ch.is_whitespace() {
-                x_offset += params.word_spacing;
+                x_offset += px(params.word_spacing);
             }
         }
 
