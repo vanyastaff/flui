@@ -57,14 +57,25 @@ View Tree (immutable) → Element Tree (mutable) → Render Tree (layout/paint)
 - **Tools:** `flui_devtools`, `flui_cli`, `flui_build`
 - **Layer System:** `flui-layer` (compositing), `flui-semantics` (accessibility)
 
-### Flutter Reference Sources
+### Reference Sources
 
-`.flutter/` directory contains Flutter framework source code for reference:
+**Flutter (`.flutter/`)** - UI framework architecture reference:
 - `.flutter/src/rendering/` - RenderObject implementations
 - `.flutter/src/widgets/` - Widget and Element implementations
 - `.flutter/rendering.dart`, `widgets.dart`, `animation.dart` - API overview
+- **Usage:** Three-tree architecture, widget patterns, layout algorithms
 
-**Usage:** Check Flutter's approach before implementing new features, then adapt to Rust idioms (type-safe arity, Ambassador delegation, no nullability).
+**GPUI (`.gpui/`)** - Rust UI framework and platform patterns reference:
+- `.gpui/src/platform/` - Platform abstraction (Windows, macOS, Linux)
+- `.gpui/src/platform.rs` - Platform trait design
+- `.gpui/src/window.rs` - Window management patterns
+- `.gpui/src/executor.rs` - Async executor implementation
+- **Usage:** Platform trait patterns, callback registry, type erasure, interior mutability
+
+**When to reference:**
+- Check Flutter for UI architecture and widget patterns
+- Check GPUI for platform abstraction and Rust-specific patterns
+- Adapt both to FLUI's type-safe idioms (Arity system, Ambassador delegation, no nullability)
 
 ### Development Specs and Plans
 
@@ -217,11 +228,12 @@ let platform = current_platform(); // Windows, macOS, or Headless
 - **HeadlessPlatform** - Testing/CI without GPU (100% complete)
 - **WinitPlatform** - Cross-platform fallback (in progress)
 
-**Key Patterns:**
-- **Callback registry** (GPUI-inspired) - `on_quit()`, `on_window_event()`, `on_reopen()`
-- **Type erasure** - `Box<dyn PlatformWindow>`, `Arc<dyn PlatformTextSystem>`
-- **W3C events** - Use `ui-events` crate for cross-platform consistency
-- **Executor split** - Background (tokio) + Foreground (flume channel)
+**Key Patterns (from GPUI):**
+- **Callback registry** - `on_quit()`, `on_window_event()`, `on_reopen()` (see `.gpui/src/platform.rs:166-279`)
+- **Type erasure** - `Box<dyn PlatformWindow>`, `Arc<dyn PlatformTextSystem>` for platform-agnostic code
+- **Interior mutability** - `Arc<Mutex<T>>` for thread-safe `&self` methods (improved from GPUI's `Rc<RefCell<T>>`)
+- **Executor pattern** - Background (tokio) + Foreground (flume channel) split
+- **W3C events** - Use `ui-events` crate for cross-platform consistency (not GPUI-specific)
 
 **Text System Integration:**
 - Windows: DirectWrite for font loading, shaping, metrics
@@ -443,7 +455,7 @@ cargo clippy -p flui_rendering -- -D warnings
 5. **Check current specs** - See `specs/dev/` for active development plans
 6. **Enable logging** - `RUST_LOG=debug` or `RUST_LOG=trace` catches issues early
 7. **Build in dependency order** - Foundation → Platform → Core → Rendering → Widget → App
-8. **Reference Flutter first** - Check `.flutter/` directory before implementing new features
+8. **Reference sources** - Check `.flutter/` for UI patterns, `.gpui/` for platform/Rust patterns
 9. **Use Context7 proactively** - Fetch docs for external libraries (wgpu, winit, etc.)
 10. **Batch file operations** - `read_multiple_files` for efficiency
 11. **Use Speckit for large changes** - New features or breaking changes need spec → plan → tasks workflow
