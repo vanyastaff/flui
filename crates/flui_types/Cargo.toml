@@ -31,6 +31,8 @@ glam = { version = "0.30", optional = true }
 [dev-dependencies]
 criterion = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+proptest = "1.5"
+trybuild = "1.0"
 
 [features]
 default = []
@@ -57,3 +59,34 @@ full = ["serde", "simd", "mint"]
 
 # NOTE: Image and font loading moved to flui_assets crate.
 # flui_types only provides type definitions!
+
+[[bench]]
+name = "geometry_bench"
+harness = false
+
+[[bench]]
+name = "color_bench"
+harness = false
+
+[[bench]]
+name = "conversions_bench"
+harness = false
+
+[lints.clippy]
+# Deny critical issues
+correctness = "deny"
+suspicious = "deny"
+complexity = "warn"
+perf = "warn"
+style = "warn"
+
+# Allow some pedantic lints
+pedantic = { level = "warn", priority = -1 }
+must_use_candidate = "allow"
+module_name_repetitions = "allow"
+similar_names = "allow"
+
+# Specific warnings
+missing_inline_in_public_items = "warn"
+missing_panics_doc = "warn"
+missing_errors_doc = "warn"
