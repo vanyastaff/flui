@@ -47,7 +47,7 @@ pub enum PathCommand {
     AddArc(Rect<Pixels>, f32, f32),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Path {
     /// The list of path commands.
@@ -91,6 +91,42 @@ impl Path {
     pub fn oval(rect: Rect<Pixels>) -> Self {
         let mut path = Self::new();
         path.add_oval(rect);
+        path
+    }
+
+    /// Creates a circular path.
+    ///
+    /// # Arguments
+    ///
+    /// * `center` - Center point of the circle
+    /// * `radius` - Radius of the circle
+    #[must_use]
+    pub fn circle(center: Point<Pixels>, radius: f32) -> Self {
+        use crate::geometry::px;
+        let rect = Rect::from_xywh(
+            px(center.x.0 - radius),
+            px(center.y.0 - radius),
+            px(radius * 2.0),
+            px(radius * 2.0),
+        );
+        Self::oval(rect)
+    }
+
+    /// Creates a polygon path from a slice of points.
+    ///
+    /// # Arguments
+    ///
+    /// * `points` - Vertices of the polygon
+    #[must_use]
+    pub fn polygon(points: &[Point<Pixels>]) -> Self {
+        let mut path = Self::new();
+        if let Some((first, rest)) = points.split_first() {
+            path.move_to(*first);
+            for point in rest {
+                path.line_to(*point);
+            }
+            path.close();
+        }
         path
     }
 

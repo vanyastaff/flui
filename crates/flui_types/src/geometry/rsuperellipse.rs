@@ -15,6 +15,7 @@ use super::{px, Pixels};
 use super::{Radius, Rect};
 
 #[repr(C)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct RSuperellipse {
     /// The bounding rectangle.
     rect: Rect<Pixels>,
