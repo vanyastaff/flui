@@ -74,6 +74,9 @@ desktop = ["winit"]
 wayland = []
 x11 = []
 
+[dev-dependencies]
+tracing-subscriber = { workspace = true }
+
 # Re-export dependencies that might be needed by consumers
 [package.metadata.docs.rs]
 all-features = true

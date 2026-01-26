@@ -3,26 +3,36 @@
 //! Usage:
 //! ```bash
 //! cargo run --example minimal_window -p flui-platform --features=winit-backend
+//! # With debug tracing:
+//! RUST_LOG=debug cargo run --example minimal_window -p flui-platform
 //! ```
 
-use std::sync::Arc;
-
 fn main() {
-    // Note: Logging requires tracing-subscriber dependency
+    // Initialize tracing for debugging
+    use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::EnvFilter::from_default_env())
+        .with(tracing_subscriber::fmt::layer())
+        .init();
+    tracing::info!("Tracing initialized for minimal_window example");
 
     println!("===========================================");
     println!("  FLUI Platform Minimal Window Test");
     println!("===========================================\n");
 
     // Try to get platform
+    tracing::info!("Initializing platform...");
     let platform = flui_platform::current_platform().expect("Failed to create platform");
 
+    tracing::info!("Platform created: {}", platform.name());
     println!("Platform initialized: {}", platform.name());
     println!("Platform capabilities available: {:?}\n",
              std::any::type_name_of_val(&platform.capabilities()));
 
     // Get displays
+    tracing::info!("Enumerating displays...");
     let displays = platform.displays();
+    tracing::info!("Found {} display(s)", displays.len());
     println!("Found {} display(s):\n", displays.len());
 
     for (idx, display) in displays.iter().enumerate() {
