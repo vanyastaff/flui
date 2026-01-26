@@ -594,7 +594,7 @@ mod tests {
         let velocity = tracker.velocity();
 
         // Should be approximately 1000 px/s horizontally
-        assert!(velocity.pixels_per_second.dx > PixelDelta(900.0));
-        assert!(velocity.pixels_per_second.dx < PixelDelta(1100.0));
+        assert!(velocity.pixels_per_second.dx > Pixels(900.0));
+        assert!(velocity.pixels_per_second.dx < Pixels(1100.0));
     }
 }

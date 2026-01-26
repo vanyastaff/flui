@@ -266,7 +266,7 @@ pub(crate) mod tests {
 
     /// Mock layer for testing
     pub(crate) struct MockLayer {
-        pub(crate) bounds: Rect,
+        pub(crate) bounds: Rect<Pixels>,
     }
 
     impl HitTestable for MockLayer {
