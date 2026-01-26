@@ -68,7 +68,7 @@ fn main() -> anyhow::Result<()> {
         max_size: None,
     };
 
-    let window = platform.create_window(window_options)?;
+    let window = platform.open_window(window_options)?;
 
     // Get mutable access to window for applying Windows-specific features
     // Note: In real code, this would be done differently since Arc<WindowsWindow>

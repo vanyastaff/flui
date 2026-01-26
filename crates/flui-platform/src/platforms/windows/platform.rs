@@ -198,7 +198,7 @@ impl WindowsPlatform {
             hInstance: hinstance.into(),
             hIcon: HICON::default(),
             hCursor: load_cursor_style(IDC_ARROW)?,
-            hbrBackground: HBRUSH::default(),
+            hbrBackground: HBRUSH(std::ptr::null_mut()), // No background - allows Mica backdrop to show through
             lpszMenuName: PCWSTR::null(),
             lpszClassName: WINDOW_CLASS_NAME,
         };
@@ -261,6 +261,12 @@ impl WindowsPlatform {
                 }
 
                 LRESULT(0)
+            }
+
+            WM_ERASEBKGND => {
+                // Return 1 to prevent Windows from erasing background
+                // This allows Mica backdrop and other DWM effects to show through
+                LRESULT(1)
             }
 
             WM_PAINT => {

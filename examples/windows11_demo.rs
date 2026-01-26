@@ -120,6 +120,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("  • Hover over maximize button to see Snap Layouts");
         println!();
         println!("Close the window to exit");
+        println!();
+        println!("NOTE: Mica backdrop may appear as solid color if:");
+        println!("  - Transparency effects are disabled in Windows settings");
+        println!("  - Windows theme doesn't support it");
+        println!("  - Using Windows 10 instead of Windows 11");
     }
 
     // Run the platform message loop (this will block until all windows are closed)
