@@ -383,6 +383,63 @@ impl<'a> SceneBuilder<'a> {
         self.add_leaf(Layer::Canvas(canvas))
     }
 
+    /// Adds a picture layer with recorded drawing commands.
+    ///
+    /// This is the primary method for adding cached/recorded content to the scene.
+    /// The picture is an immutable DisplayList that was previously recorded via Canvas.
+    ///
+    /// # Architecture
+    ///
+    /// ```text
+    /// Canvas → finish() → Picture → SceneBuilder::add_picture() → PictureLayer
+    /// ```
+    ///
+    /// # Arguments
+    ///
+    /// * `picture` - The recorded Picture (DisplayList) from Canvas::finish()
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use flui_layer::{LayerTree, SceneBuilder};
+    /// use flui_painting::Canvas;
+    /// use flui_types::{Rect, Color};
+    /// use flui_types::painting::Paint;
+    /// use flui_types::geometry::px;
+    ///
+    /// // Record drawing commands
+    /// let mut canvas = Canvas::new();
+    /// canvas.draw_rect(
+    ///     Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0)),
+    ///     &Paint::fill(Color::RED)
+    /// );
+    /// let picture = canvas.finish();
+    ///
+    /// // Add to scene
+    /// let mut tree = LayerTree::new();
+    /// let mut builder = SceneBuilder::new(&mut tree);
+    /// let picture_id = builder.add_picture(picture);
+    ///
+    /// let root = builder.build();
+    /// assert!(root.is_some());
+    /// ```
+    ///
+    /// # Performance
+    ///
+    /// PictureLayer enables Flutter's repaint boundary optimization:
+    /// - Cached pictures can be replayed without re-recording
+    /// - Reduces CPU overhead for unchanged content
+    /// - Enables partial screen updates
+    ///
+    /// # See Also
+    ///
+    /// - [`add_canvas`](Self::add_canvas) - For mutable canvas recording
+    /// - [`PictureLayer`](crate::PictureLayer) - The layer type created
+    pub fn add_picture(&mut self, picture: flui_painting::Picture) -> LayerId {
+        use crate::layer::PictureLayer;
+        self.add_leaf(Layer::Picture(PictureLayer::new(picture)))
+    }
+
     /// Adds a texture layer for GPU texture rendering.
     ///
     /// # Arguments
@@ -695,6 +752,43 @@ mod tests {
         // Now we can check tree structure
         let children = tree.children(offset_id).unwrap();
         assert!(children.contains(&canvas_id));
+    }
+
+    #[test]
+    fn test_scene_builder_add_picture() {
+        use flui_painting::Canvas;
+        use flui_types::painting::Paint;
+        use flui_types::{Color, Rect};
+
+        let mut tree = LayerTree::new();
+        let mut builder = SceneBuilder::new(&mut tree);
+
+        // Record a picture
+        let mut canvas = Canvas::new();
+        canvas.draw_rect(
+            Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0)),
+            &Paint::fill(Color::RED),
+        );
+        let picture = canvas.finish();
+
+        // Add picture to scene
+        let offset_id = builder.push_offset(Offset::ZERO);
+        let picture_id = builder.add_picture(picture);
+
+        // Picture should not be pushed onto stack
+        assert_eq!(builder.depth(), 1);
+        assert_eq!(builder.current(), Some(offset_id));
+
+        // Finish building to release borrow
+        let _root = builder.build();
+
+        // Verify tree structure
+        let children = tree.children(offset_id).unwrap();
+        assert!(children.contains(&picture_id));
+
+        // Verify layer type
+        let layer = tree.get_layer(picture_id).unwrap();
+        assert!(layer.is_picture());
     }
 
     #[test]

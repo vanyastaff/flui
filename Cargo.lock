@@ -1066,6 +1066,7 @@ dependencies = [
 name = "flui_engine"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "bytemuck",
  "env_logger",
  "flui-foundation",
@@ -1079,6 +1080,7 @@ dependencies = [
  "lyon",
  "parking_lot",
  "pollster",
+ "raw-window-handle",
  "slab",
  "thiserror 2.0.17",
  "tokio",
@@ -1127,6 +1129,7 @@ dependencies = [
  "cosmic-text 0.12.1",
  "flui-foundation",
  "flui_types",
+ "lyon",
  "parking_lot",
  "serde",
  "thiserror 2.0.17",

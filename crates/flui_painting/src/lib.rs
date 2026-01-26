@@ -169,6 +169,10 @@ pub mod error;
 pub mod text_layout;
 pub mod text_painter;
 
+// Optional modules (feature-gated)
+#[cfg(feature = "tessellation")]
+pub mod tessellation;
+
 // ===== Facade Pattern: Public Re-exports =====
 //
 // Re-export all public types at the crate root for convenient access.
