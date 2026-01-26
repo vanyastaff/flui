@@ -207,6 +207,28 @@ use std::sync::Arc;
 /// Automatically selects the correct platform based on the target OS at compile time.
 /// This is the recommended way to obtain a platform instance in cross-platform code.
 ///
+/// # Detection Logic
+///
+/// The platform selection follows a two-stage process:
+///
+/// 1. **Runtime Environment Check** (executed first):
+///    - Checks `FLUI_HEADLESS` environment variable
+///    - If set (any value), returns `HeadlessPlatform` immediately
+///    - Bypasses all compile-time OS detection
+///    - Used for CI/testing without GPU or display server
+///
+/// 2. **Compile-Time OS Detection** (if not headless):
+///    - Uses Rust's `#[cfg]` attributes to select platform at compile time
+///    - Selection order (first match wins):
+///      - `cfg(windows)` → `WindowsPlatform`
+///      - `cfg(target_os = "macos")` → `MacOSPlatform`
+///      - `cfg(target_os = "linux")` → `LinuxPlatform`
+///      - `cfg(target_os = "android")` → `AndroidPlatform`
+///      - `cfg(target_os = "ios")` → `IOSPlatform`
+///      - `cfg(target_arch = "wasm32")` → `WebPlatform`
+///    - Conditional guards prevent multiple platforms being compiled
+///    - Results in zero runtime overhead (selection happens at compile time)
+///
 /// # Environment Variables
 ///
 /// - **FLUI_HEADLESS=1**: Forces headless mode for CI/testing (overrides OS detection)

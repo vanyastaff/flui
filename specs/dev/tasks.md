@@ -30,17 +30,17 @@
 
 ---
 
-## Phase 2: Foundational (Blocking Prerequisites)
+## Phase 2: Foundational (Blocking Prerequisites) ✅
 
 **Goal**: Complete dependencies and infrastructure required by all user stories.
 
-- [ ] T006 Add `raw-window-handle = "0.6"` to Cargo.toml for wgpu integration
-- [ ] T007 Add `waker-fn = "1.2.0"` to Cargo.toml for executor improvements
-- [ ] T008 [P] Document platform detection logic in `current_platform()` function
-- [ ] T009 [P] Add contract test infrastructure for Platform trait compliance
-- [ ] T010 Create integration test template for cross-crate testing (flui-platform + flui_painting)
+- [x] T006 Add `raw-window-handle = "0.6"` to Cargo.toml for wgpu integration (already present)
+- [x] T007 Add `waker-fn = "1.2.0"` to Cargo.toml for executor improvements (already present)
+- [x] T008 [P] Document platform detection logic in `current_platform()` function with two-stage detection flow
+- [x] T009 [P] Add contract test infrastructure for Platform trait compliance (created `tests/common/contract_framework.rs`)
+- [x] T010 Create integration test template for cross-crate testing (created `tests/integration_template.rs`)
 
-**Acceptance**: Dependencies added, contract test framework ready, documentation updated.
+**Acceptance**: ✅ Dependencies verified in Cargo.toml. Contract test framework with `PlatformContract`, `ContractTest`, and common contract checks created. Comprehensive integration test template with 10 sections (setup, window handles, graphics, events, text system, clipboard, executors, multi-crate, helpers, docs) ready for use. Platform detection logic documented with runtime + compile-time flow.
 
 ---
 
