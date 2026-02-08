@@ -3,6 +3,9 @@
 //! Ensures frames are presented at the right time to avoid tearing and
 //! maintain smooth animation.
 //!
+//! **Note**: `wait_for_vsync()` currently uses `thread::sleep` for timing simulation.
+//! Real platform VSync integration comes from `flui-platform` via `VsyncDrivenScheduler::on_vsync()`.
+//!
 //! ## Type-Safe Timing
 //!
 //! ```rust

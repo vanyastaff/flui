@@ -229,41 +229,6 @@ impl FrameBudgetExt for FrameBudget {
 }
 
 // =============================================================================
-// GAT-based Provider Traits
-// =============================================================================
-
-/// Advanced ticker provider using GAT for flexible callback types
-///
-/// This trait uses Generic Associated Types (GAT) to allow different
-/// callback ownership patterns.
-pub trait AdvancedTickerProvider: Send + Sync {
-    /// The callback type for scheduled ticks
-    type Callback<'a>: FnOnce(Seconds) + Send + 'a
-    where
-        Self: 'a;
-
-    /// Schedule a tick with a callback
-    fn schedule_tick<'a>(&'a self, callback: Self::Callback<'a>);
-
-    /// Schedule a tick at a specific time
-    fn schedule_tick_at<'a>(&'a self, time: Milliseconds, callback: Self::Callback<'a>);
-}
-
-/// Frame provider with GAT for flexible frame callback types
-pub trait FrameProvider: Send + Sync {
-    /// The callback type for frame events
-    type FrameCallback<'a>: FnOnce(&FrameTiming) + Send + 'a
-    where
-        Self: 'a;
-
-    /// Schedule a callback for the next frame
-    fn on_next_frame<'a>(&'a self, callback: Self::FrameCallback<'a>);
-
-    /// Schedule a callback after frame completion
-    fn after_frame<'a>(&'a self, callback: Self::FrameCallback<'a>);
-}
-
-// =============================================================================
 // Conversion Traits
 // =============================================================================
 

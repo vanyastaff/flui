@@ -1,7 +1,7 @@
 //! Main scheduler - coordinates frame lifecycle and task execution
 //!
 //! The Scheduler is the central orchestrator for FLUI's rendering pipeline,
-//! following Flutter's SchedulerBinding model with proper phase separation.
+//! following Flutter's scheduler model with proper phase separation.
 //!
 //! ## Frame Lifecycle (Flutter-like)
 //!
@@ -52,10 +52,14 @@
 //! ```
 
 use crate::budget::FrameBudget;
+use crate::config::{
+    adjust_duration_for_epoch, time_dilation, PerformanceMode, PerformanceModeRequestHandle,
+    TimingsCallback,
+};
 use crate::duration::{FrameDuration, Milliseconds};
 use crate::frame::{
-    AppLifecycleState, FrameCallback, FrameId, FramePhase, FrameTiming, PersistentFrameCallback,
-    PostFrameCallback, SchedulerPhase, TransientFrameCallback,
+    AppLifecycleState, FrameCallback, FrameId, FramePhase, FrameTiming, OneShotFrameCallback,
+    PostFrameCallback, RecurringFrameCallback, SchedulerPhase,
 };
 use crate::id::{CallbackIdMarker, IdGenerator, TypedId};
 use crate::task::{Priority, TaskQueue};
@@ -68,10 +72,10 @@ use parking_lot::Mutex;
 use std::collections::VecDeque;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::task::{Context, Poll, Waker};
-use web_time::Instant;
+use web_time::{Duration, Instant};
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
@@ -82,13 +86,13 @@ pub type CallbackId = TypedId<CallbackIdMarker>;
 /// Cancellable transient callback with ID
 struct CancellableTransientCallback {
     id: CallbackId,
-    callback: TransientFrameCallback,
+    callback: OneShotFrameCallback,
 }
 
 /// Cancellable persistent callback with ID
 struct CancellablePersistentCallback {
     id: CallbackId,
-    callback: PersistentFrameCallback,
+    callback: RecurringFrameCallback,
 }
 
 /// Cancellable post-frame callback with ID
@@ -118,7 +122,7 @@ struct FrameCompletionState {
 ///
 /// # Example
 ///
-/// ```rust,ignore
+/// ```rust,no_run
 /// use flui_scheduler::Scheduler;
 ///
 /// async fn do_end_of_frame_work(scheduler: &Scheduler) {
@@ -407,9 +411,33 @@ pub struct Scheduler {
     /// Pending frame completion futures waiting to be notified
     frame_completion_waiters: Arc<Mutex<Vec<FrameCompletionNotifier>>>,
 
-    /// Binding state for SchedulerBinding trait implementation
-    /// Stored per-instance for proper test isolation
-    pub(crate) binding_state: Arc<Mutex<crate::binding::SchedulerBindingState>>,
+    // =========================================================================
+    // Binding state (formerly in SchedulerBindingState)
+    // =========================================================================
+    /// Whether frame scheduling is enabled
+    frames_enabled: Arc<AtomicBool>,
+
+    /// Epoch start for time dilation calculations
+    epoch_start: Arc<Mutex<Duration>>,
+
+    /// Timings callbacks for performance reporting
+    timings_callbacks: Arc<Mutex<Vec<TimingsCallback>>>,
+
+    /// Pending frame timings awaiting report
+    pending_timings: Arc<Mutex<Vec<FrameTiming>>>,
+
+    /// Last time a timings report was sent
+    last_timings_report: Arc<Mutex<Instant>>,
+
+    /// Active performance mode request count
+    pub(crate) performance_mode_requests: Arc<AtomicU32>,
+
+    /// Current performance mode
+    current_performance_mode: Arc<Mutex<PerformanceMode>>,
+
+    /// Idle callbacks — executed when no frame is scheduled and task queue is empty
+    #[allow(clippy::type_complexity)]
+    idle_callbacks: Arc<Mutex<Vec<Box<dyn FnOnce() + Send>>>>,
 }
 
 impl Scheduler {
@@ -452,7 +480,14 @@ impl Scheduler {
             lifecycle_state: Arc::new(AtomicU8::new(AppLifecycleState::Resumed as u8)),
             lifecycle_listeners: Arc::new(Mutex::new(Vec::new())),
             frame_completion_waiters: Arc::new(Mutex::new(Vec::new())),
-            binding_state: Arc::new(Mutex::new(crate::binding::SchedulerBindingState::new())),
+            frames_enabled: Arc::new(AtomicBool::new(true)),
+            epoch_start: Arc::new(Mutex::new(Duration::ZERO)),
+            timings_callbacks: Arc::new(Mutex::new(Vec::new())),
+            pending_timings: Arc::new(Mutex::new(Vec::new())),
+            last_timings_report: Arc::new(Mutex::new(Instant::now())),
+            performance_mode_requests: Arc::new(AtomicU32::new(0)),
+            current_performance_mode: Arc::new(Mutex::new(PerformanceMode::Normal)),
+            idle_callbacks: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -491,6 +526,7 @@ impl Scheduler {
     ///
     /// This corresponds to Flutter's `handleBeginFrame`.
     /// Executes transient callbacks (animation tickers) with the vsync timestamp.
+    #[tracing::instrument(skip(self))]
     pub fn handle_begin_frame(&self, vsync_time: Instant) -> FrameId {
         // Store vsync time for all tickers to use
         *self.current_vsync_time.lock() = Some(vsync_time);
@@ -516,10 +552,7 @@ impl Scheduler {
         };
 
         if !transient.is_empty() {
-            eprintln!(
-                "[DEBUG] handle_begin_frame: executing {} transient callbacks",
-                transient.len()
-            );
+            tracing::debug!(count = transient.len(), "executing transient callbacks");
         }
 
         for cancellable in transient {
@@ -556,6 +589,7 @@ impl Scheduler {
     ///
     /// This corresponds to Flutter's `handleDrawFrame`.
     /// Executes persistent callbacks (rendering pipeline).
+    #[tracing::instrument(skip(self))]
     pub fn handle_draw_frame(&self) {
         // Phase 3: PersistentCallbacks (rendering pipeline)
         self.set_scheduler_phase(SchedulerPhase::PersistentCallbacks);
@@ -583,8 +617,18 @@ impl Scheduler {
             }
         }
 
-        // Execute priority tasks (always execute all - don't skip UI updates!)
-        self.task_queue.execute_all();
+        // Execute priority tasks with budget awareness:
+        // - UserInput and Animation always run (critical for responsiveness)
+        // - Build runs if not over budget
+        // - Idle runs only if deadline is not near
+        self.task_queue.execute_until(Priority::Animation);
+
+        if !self.is_over_budget() {
+            self.task_queue.execute_until(Priority::Build);
+        }
+        if !self.is_deadline_near() {
+            self.task_queue.execute_until(Priority::Idle);
+        }
 
         // Phase 4: PostFrameCallbacks
         self.set_scheduler_phase(SchedulerPhase::PostFrameCallbacks);
@@ -599,6 +643,9 @@ impl Scheduler {
             if timing.is_janky() {
                 self.janky_frames.lock().push(timing.id);
             }
+
+            // Record timing for batched reporting
+            self.pending_timings.lock().push(timing);
 
             // Execute post-frame callbacks
             let callbacks = {
@@ -634,6 +681,7 @@ impl Scheduler {
     /// Calls handle_begin_frame and handle_draw_frame in sequence.
     /// Use this for simple cases; for proper vsync integration,
     /// call handle_begin_frame and handle_draw_frame separately.
+    #[tracing::instrument(skip(self))]
     pub fn execute_frame(&self) -> FrameId {
         let vsync_time = Instant::now();
         let frame_id = self.handle_begin_frame(vsync_time);
@@ -647,6 +695,7 @@ impl Scheduler {
     /// - App initialization
     /// - Reducing first-frame jank
     /// - Forcing immediate layout updates
+    #[tracing::instrument(skip(self))]
     pub fn schedule_warm_up_frame(&self) {
         if self.warm_up_done.load(Ordering::Acquire) {
             return;
@@ -667,7 +716,7 @@ impl Scheduler {
     /// This is the correct way for tickers to receive frame timing.
     ///
     /// Returns a `CallbackId` that can be used to cancel the callback before it fires.
-    pub fn schedule_frame_callback(&self, callback: TransientFrameCallback) -> CallbackId {
+    pub fn schedule_frame_callback(&self, callback: OneShotFrameCallback) -> CallbackId {
         let id = self.callback_id_gen.next();
         self.transient_callbacks
             .lock()
@@ -725,7 +774,7 @@ impl Scheduler {
     /// Use for the rendering pipeline (build/layout/paint).
     ///
     /// Returns a `CallbackId` that can be used to remove the callback.
-    pub fn add_persistent_frame_callback(&self, callback: PersistentFrameCallback) -> CallbackId {
+    pub fn add_persistent_frame_callback(&self, callback: RecurringFrameCallback) -> CallbackId {
         let id = self.callback_id_gen.next();
         self.persistent_callbacks
             .lock()
@@ -886,50 +935,6 @@ impl Scheduler {
     pub fn set_phase(&self, phase: FramePhase) {
         if let Some(timing) = self.current_frame.lock().as_mut() {
             timing.phase = phase;
-        }
-    }
-
-    /// Begin a new frame (legacy - use handle_begin_frame for new code)
-    pub fn begin_frame(&self) -> FrameId {
-        self.handle_begin_frame(Instant::now())
-    }
-
-    /// End the current frame (legacy - use handle_draw_frame for new code)
-    pub fn end_frame(&self) {
-        // Only complete if we're in a frame
-        if self.phase() != SchedulerPhase::Idle {
-            // Skip to post-frame if needed
-            if self.phase() != SchedulerPhase::PostFrameCallbacks {
-                // Force transition (skip validation for legacy API)
-                self.scheduler_phase
-                    .store(SchedulerPhase::PostFrameCallbacks as u8, Ordering::Release);
-            }
-
-            let timing = self.current_frame.lock().take();
-            if let Some(timing) = timing {
-                self.budget.lock().record_frame_duration(timing.elapsed());
-
-                let callbacks = {
-                    let mut cbs = self.post_frame_callbacks.lock();
-                    std::mem::take(&mut *cbs)
-                };
-
-                for cancellable in callbacks {
-                    // DashMap provides lock-free contains_key
-                    if self.cancelled_callbacks.contains_key(&cancellable.id) {
-                        continue;
-                    }
-                    (cancellable.callback)(&timing);
-                }
-
-                self.cancelled_callbacks.clear();
-
-                // Notify frame completion futures
-                self.notify_frame_completion(&timing);
-            }
-
-            self.scheduler_phase
-                .store(SchedulerPhase::Idle as u8, Ordering::Release);
         }
     }
 
@@ -1123,6 +1128,7 @@ impl Scheduler {
     ///     // Skip frame rendering
     /// }
     /// ```
+    #[tracing::instrument(skip(self))]
     pub fn handle_app_lifecycle_state_change(&self, new_state: AppLifecycleState) {
         // Atomically swap state and get old value
         let old_state = AppLifecycleState::from_u8(
@@ -1214,7 +1220,9 @@ impl Scheduler {
     ///
     /// # Example
     ///
-    /// ```rust,ignore
+    /// ```rust,no_run
+    /// use flui_scheduler::Scheduler;
+    ///
     /// async fn wait_for_frame(scheduler: &Scheduler) {
     ///     // Wait for the current/next frame to complete
     ///     let timing = scheduler.end_of_frame().await;
@@ -1250,6 +1258,228 @@ impl Scheduler {
                 waker.wake();
             }
         }
+    }
+
+    // =========================================================================
+    // Binding Methods (formerly on SchedulerBinding trait)
+    // =========================================================================
+
+    /// Get the current scheduler phase (alias for `phase()`)
+    pub fn scheduler_phase(&self) -> SchedulerPhase {
+        self.phase()
+    }
+
+    /// Check if a frame has been scheduled (alias for `is_frame_scheduled()`)
+    pub fn has_scheduled_frame(&self) -> bool {
+        self.is_frame_scheduled()
+    }
+
+    /// Check whether frame scheduling is enabled
+    pub fn frames_enabled(&self) -> bool {
+        self.frames_enabled.load(Ordering::Acquire)
+    }
+
+    /// Enable or disable frame scheduling
+    pub fn set_frames_enabled(&mut self, enabled: bool) {
+        self.frames_enabled.store(enabled, Ordering::Release);
+    }
+
+    /// Schedule a frame if frames are enabled
+    ///
+    /// Unlike `request_frame()`, this checks `frames_enabled` first.
+    pub fn schedule_frame_if_enabled(&self) {
+        if self.frames_enabled.load(Ordering::Acquire) {
+            self.request_frame();
+        }
+    }
+
+    /// Schedule a forced frame (ignores `frames_enabled`)
+    pub fn schedule_forced_frame(&self) {
+        self.request_frame();
+    }
+
+    /// Ensure a visual update is scheduled
+    ///
+    /// Calls `schedule_frame_if_enabled()` to guarantee a frame will be processed.
+    pub fn ensure_visual_update(&self) {
+        self.schedule_frame_if_enabled();
+    }
+
+    /// Reset the epoch for time dilation calculations
+    ///
+    /// Called when time dilation changes to avoid large time jumps.
+    pub fn reset_epoch(&self) {
+        *self.epoch_start.lock() = Duration::ZERO;
+    }
+
+    /// Get the current frame timestamp adjusted for epoch and time dilation
+    pub fn current_frame_time_stamp(&self) -> Duration {
+        let epoch = *self.epoch_start.lock();
+        adjust_duration_for_epoch(epoch, Duration::ZERO)
+    }
+
+    /// Get the current system frame timestamp
+    pub fn current_system_frame_time_stamp(&self) -> Instant {
+        self.current_vsync_time().unwrap_or_else(Instant::now)
+    }
+
+    /// Adjust a duration for the current epoch and time dilation
+    pub fn adjust_for_epoch(&self, raw: Duration) -> Duration {
+        let epoch = *self.epoch_start.lock();
+        adjust_duration_for_epoch(raw, epoch)
+    }
+
+    /// Request a performance mode
+    ///
+    /// Returns a handle that releases the request when dropped.
+    pub fn request_performance_mode(&self, _mode: PerformanceMode) -> PerformanceModeRequestHandle {
+        self.performance_mode_requests
+            .fetch_add(1, Ordering::AcqRel);
+
+        let requests = Arc::clone(&self.performance_mode_requests);
+        PerformanceModeRequestHandle::new(move || {
+            requests.fetch_sub(1, Ordering::AcqRel);
+        })
+    }
+
+    /// Add a timings callback for receiving frame performance reports
+    pub fn add_timings_callback(&self, callback: TimingsCallback) {
+        self.timings_callbacks.lock().push(callback);
+    }
+
+    /// Remove a timings callback
+    pub fn remove_timings_callback(&self, callback: &TimingsCallback) {
+        let mut callbacks = self.timings_callbacks.lock();
+        callbacks.retain(|c| !Arc::ptr_eq(c, callback));
+    }
+
+    /// Report pending frame timings to registered callbacks.
+    ///
+    /// Timings are batched and reported approximately once per second in
+    /// release mode, or every ~100ms in debug/profile builds. Call this
+    /// from the event loop to flush pending timings.
+    ///
+    /// Returns the number of timings reported.
+    pub fn report_timings(&self) -> usize {
+        let timings = {
+            let mut pending = self.pending_timings.lock();
+            if pending.is_empty() {
+                return 0;
+            }
+            std::mem::take(&mut *pending)
+        };
+
+        let callbacks = self.timings_callbacks.lock().clone();
+        let count = timings.len();
+
+        for callback in &callbacks {
+            callback(&timings);
+        }
+
+        *self.last_timings_report.lock() = Instant::now();
+        count
+    }
+
+    /// Get the time since the last timings report was sent
+    pub fn time_since_last_timings_report(&self) -> Duration {
+        self.last_timings_report.lock().elapsed()
+    }
+
+    /// Get the current performance mode
+    ///
+    /// The mode is determined by the highest-priority active request.
+    pub fn current_performance_mode(&self) -> PerformanceMode {
+        *self.current_performance_mode.lock()
+    }
+
+    /// Set the current performance mode directly
+    ///
+    /// This is typically called internally when performance mode requests
+    /// change, but can also be called by the platform integration layer.
+    pub fn set_performance_mode(&self, mode: PerformanceMode) {
+        *self.current_performance_mode.lock() = mode;
+    }
+
+    /// Debug assert: no transient callbacks are pending
+    ///
+    /// Returns `true` if there are no pending transient callbacks.
+    pub fn debug_assert_no_transient_callbacks(&self, _reason: &str) -> bool {
+        self.transient_callbacks.lock().is_empty()
+    }
+
+    /// Debug assert: no pending performance mode requests
+    ///
+    /// Returns `true` if all performance mode requests have been released.
+    pub fn debug_assert_no_pending_performance_mode_requests(&self, _reason: &str) -> bool {
+        self.performance_mode_requests.load(Ordering::Acquire) == 0
+    }
+
+    /// Debug assert: no time dilation is active
+    ///
+    /// Returns `true` if time dilation is at the default value (1.0).
+    pub fn debug_assert_no_time_dilation(&self, _reason: &str) -> bool {
+        (time_dilation() - 1.0).abs() < f64::EPSILON
+    }
+
+    // =========================================================================
+    // Idle Callbacks
+    // =========================================================================
+
+    /// Schedule a callback to run when the scheduler is idle.
+    ///
+    /// Idle callbacks execute when:
+    /// 1. No frame is scheduled
+    /// 2. The task queue is empty
+    /// 3. The app is in `Resumed` state
+    ///
+    /// The event loop calls `execute_idle_callbacks()` when it has no other work.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use flui_scheduler::Scheduler;
+    ///
+    /// let scheduler = Scheduler::new();
+    ///
+    /// scheduler.schedule_idle_callback(|| {
+    ///     // Do background cleanup work
+    /// });
+    /// ```
+    pub fn schedule_idle_callback(&self, callback: impl FnOnce() + Send + 'static) {
+        self.idle_callbacks.lock().push(Box::new(callback));
+    }
+
+    /// Execute all pending idle callbacks.
+    ///
+    /// Called by the event loop when the scheduler has no other work to do.
+    /// Only executes if the scheduler is idle, the task queue is empty,
+    /// and the app is in `Resumed` state.
+    ///
+    /// Returns the number of callbacks executed.
+    pub fn execute_idle_callbacks(&self) -> usize {
+        // Only run idle callbacks when truly idle
+        if self.is_frame_scheduled() || !self.task_queue.is_empty() {
+            return 0;
+        }
+        if !self.lifecycle_state().should_render() {
+            return 0;
+        }
+
+        let callbacks = {
+            let mut cbs = self.idle_callbacks.lock();
+            std::mem::take(&mut *cbs)
+        };
+
+        let count = callbacks.len();
+        for callback in callbacks {
+            callback();
+        }
+        count
+    }
+
+    /// Check if there are pending idle callbacks.
+    pub fn has_idle_callbacks(&self) -> bool {
+        !self.idle_callbacks.lock().is_empty()
     }
 }
 
@@ -1929,5 +2159,77 @@ mod tests {
         assert!(r1.is_ready());
         assert!(r2.is_ready());
         assert!(r3.is_ready());
+    }
+
+    // Idle Callback Tests
+
+    #[test]
+    fn test_idle_callback_execution() {
+        let scheduler = Scheduler::new();
+        let called = Arc::new(Mutex::new(false));
+
+        let c = Arc::clone(&called);
+        scheduler.schedule_idle_callback(move || {
+            *c.lock() = true;
+        });
+
+        assert!(scheduler.has_idle_callbacks());
+
+        // Execute idle callbacks (no frame scheduled, queue empty, Resumed state)
+        let count = scheduler.execute_idle_callbacks();
+        assert_eq!(count, 1);
+        assert!(*called.lock());
+        assert!(!scheduler.has_idle_callbacks());
+    }
+
+    #[test]
+    fn test_idle_callbacks_skip_when_frame_scheduled() {
+        let scheduler = Scheduler::new();
+        let called = Arc::new(Mutex::new(false));
+
+        let c = Arc::clone(&called);
+        scheduler.schedule_idle_callback(move || {
+            *c.lock() = true;
+        });
+
+        // Schedule a frame — idle callbacks should NOT run
+        scheduler.request_frame();
+        let count = scheduler.execute_idle_callbacks();
+        assert_eq!(count, 0);
+        assert!(!*called.lock());
+    }
+
+    #[test]
+    fn test_idle_callbacks_skip_when_hidden() {
+        let scheduler = Scheduler::new();
+        let called = Arc::new(Mutex::new(false));
+
+        let c = Arc::clone(&called);
+        scheduler.schedule_idle_callback(move || {
+            *c.lock() = true;
+        });
+
+        // Hide app — idle callbacks should NOT run
+        scheduler.handle_app_lifecycle_state_change(AppLifecycleState::Hidden);
+        let count = scheduler.execute_idle_callbacks();
+        assert_eq!(count, 0);
+        assert!(!*called.lock());
+    }
+
+    #[test]
+    fn test_multiple_idle_callbacks() {
+        let scheduler = Scheduler::new();
+        let counter = Arc::new(Mutex::new(0));
+
+        for _ in 0..5 {
+            let c = Arc::clone(&counter);
+            scheduler.schedule_idle_callback(move || {
+                *c.lock() += 1;
+            });
+        }
+
+        let count = scheduler.execute_idle_callbacks();
+        assert_eq!(count, 5);
+        assert_eq!(*counter.lock(), 5);
     }
 }

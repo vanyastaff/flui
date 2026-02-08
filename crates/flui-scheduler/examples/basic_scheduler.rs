@@ -8,7 +8,6 @@
 use flui_scheduler::{
     scheduler::Scheduler,
     task::{Priority, TaskQueue},
-    SchedulerBinding,
 };
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;

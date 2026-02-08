@@ -646,18 +646,18 @@ impl Default for FrameTiming {
 /// These are one-time callbacks that fire during the animation phase.
 /// Animation tickers use this to receive the vsync timestamp.
 /// Receives the vsync timestamp for synchronized timing.
-pub type TransientFrameCallback = Box<dyn FnOnce(Instant) + Send>;
+pub type OneShotFrameCallback = Box<dyn FnOnce(Instant) + Send>;
 
-/// Frame callback - executed at frame boundaries (legacy, prefer TransientFrameCallback)
+/// Frame callback - executed at frame boundaries (legacy, prefer OneShotFrameCallback)
 pub type FrameCallback = Box<dyn FnOnce(&FrameTiming) + Send>;
 
-/// Persistent frame callback (can be called multiple times)
+/// Recurring frame callback (runs every frame)
 ///
 /// These run during the PersistentCallbacks phase every frame.
 /// The rendering pipeline (build/layout/paint) registers here.
-/// Uses Arc for cheap cloning - persistent callbacks are cloned before execution
+/// Uses Arc for cheap cloning - recurring callbacks are cloned before execution
 /// to avoid holding locks during callback invocation.
-pub type PersistentFrameCallback = Arc<dyn Fn(&FrameTiming) + Send + Sync>;
+pub type RecurringFrameCallback = Arc<dyn Fn(&FrameTiming) + Send + Sync>;
 
 /// Post-frame callback - executed after frame completes
 ///

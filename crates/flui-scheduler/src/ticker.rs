@@ -637,7 +637,7 @@ impl ScheduledTicker {
     where
         F: FnMut(f64) + Send + 'static,
     {
-        eprintln!("[DEBUG] ScheduledTicker::start called");
+        tracing::debug!("ScheduledTicker::start called");
         *self.state.lock() = TickerState::Active;
         *self.start_time.lock() = Some(Instant::now());
         *self.callback.lock() = Some(Arc::new(Mutex::new(callback)));
@@ -645,7 +645,7 @@ impl ScheduledTicker {
 
         // Schedule for next frame
         self.schedule_next_frame();
-        eprintln!("[DEBUG] ScheduledTicker::start completed, scheduled next frame");
+        tracing::debug!("ScheduledTicker start completed, scheduled next frame");
     }
 
     /// Start with a type-safe callback
@@ -742,77 +742,21 @@ impl ScheduledTicker {
 
         *self.scheduled.lock() = true;
 
-        // Clone Arcs for the callback
         let state = Arc::clone(&self.state);
         let start_time = Arc::clone(&self.start_time);
         let callback = Arc::clone(&self.callback);
         let scheduled = Arc::clone(&self.scheduled);
         let scheduler = Arc::clone(&self.scheduler);
 
-        // Register transient callback - fires during TransientCallbacks phase
         self.scheduler
-            .schedule_frame_callback(Box::new(move |_vsync_time| {
-                eprintln!("[DEBUG] ScheduledTicker transient callback fired");
-                // Clear scheduled flag
-                *scheduled.lock() = false;
-
-                // Check if still active
-                let current_state = *state.lock();
-                eprintln!("[DEBUG] ScheduledTicker: state = {:?}", current_state);
-                if current_state != TickerState::Active {
-                    eprintln!("[DEBUG] ScheduledTicker: not active, returning early");
-                    return;
-                }
-
-                // Calculate elapsed time
-                let elapsed = if let Some(start) = *start_time.lock() {
-                    start.elapsed().as_secs_f64()
-                } else {
-                    eprintln!("[DEBUG] ScheduledTicker: no start_time, returning early");
-                    return;
-                };
-
-                // Invoke callback
-                if let Some(cb) = callback.lock().as_ref() {
-                    eprintln!(
-                        "[DEBUG] ScheduledTicker callback: invoking user callback, elapsed={:.3}s",
-                        elapsed
-                    );
-                    cb.lock()(elapsed);
-                }
-
-                // Schedule next frame if still active
-                let current_state = *state.lock();
-                eprintln!(
-                    "[DEBUG] ScheduledTicker callback: state after callback = {:?}",
-                    current_state
-                );
-                if current_state == TickerState::Active {
-                    eprintln!("[DEBUG] ScheduledTicker callback: scheduling next frame");
-                    *scheduled.lock() = true;
-
-                    // Clone for next callback
-                    let state = Arc::clone(&state);
-                    let start_time = Arc::clone(&start_time);
-                    let callback = Arc::clone(&callback);
-                    let scheduled_inner = Arc::clone(&scheduled);
-                    let scheduler_inner = Arc::clone(&scheduler);
-
-                    scheduler.schedule_frame_callback(Box::new(move |_vsync| {
-                        // Recursive scheduling via helper
-                        Self::tick_and_reschedule(
-                            state,
-                            start_time,
-                            callback,
-                            scheduled_inner,
-                            scheduler_inner,
-                        );
-                    }));
-                }
+            .schedule_frame_callback(Box::new(move |_vsync| {
+                Self::tick_and_reschedule(state, start_time, callback, scheduled, scheduler);
             }));
     }
 
-    /// Helper for recursive frame scheduling
+    /// Tick callback and reschedule for next frame if still active.
+    ///
+    /// This is the single code path for all scheduled ticker frame callbacks.
     #[allow(clippy::type_complexity)]
     fn tick_and_reschedule(
         state: Arc<Mutex<TickerState>>,
@@ -823,21 +767,26 @@ impl ScheduledTicker {
     ) {
         *scheduled.lock() = false;
 
-        if *state.lock() != TickerState::Active {
+        let current_state = *state.lock();
+        tracing::trace!(state = ?current_state, "ScheduledTicker tick");
+        if current_state != TickerState::Active {
             return;
         }
 
         let elapsed = if let Some(start) = *start_time.lock() {
             start.elapsed().as_secs_f64()
         } else {
+            tracing::trace!("ScheduledTicker no start_time, skipping");
             return;
         };
 
         if let Some(cb) = callback.lock().as_ref() {
+            tracing::trace!(elapsed, "ScheduledTicker invoking callback");
             cb.lock()(elapsed);
         }
 
         if *state.lock() == TickerState::Active {
+            tracing::trace!("ScheduledTicker scheduling next frame");
             *scheduled.lock() = true;
 
             let state = Arc::clone(&state);
@@ -923,6 +872,8 @@ struct TickerFutureInner {
 pub struct TickerFuture {
     /// Shared inner state
     inner: Arc<TickerFutureInner>,
+    /// Event listener for async notification (avoids busy-loop)
+    listener: Option<event_listener::EventListener>,
 }
 
 impl TickerFuture {
@@ -933,6 +884,7 @@ impl TickerFuture {
                 state: Mutex::new(TickerFutureState::Pending),
                 event: Event::new(),
             }),
+            listener: None,
         }
     }
 
@@ -947,6 +899,7 @@ impl TickerFuture {
                 state: Mutex::new(TickerFutureState::Complete),
                 event: Event::new(),
             }),
+            listener: None,
         }
     }
 
@@ -1028,51 +981,35 @@ impl TickerFuture {
     /// This is useful for cleanup operations that should run regardless of
     /// how the ticker ends.
     ///
-    /// Note: The callback is invoked synchronously when the future state changes
-    /// via `set_complete()` or `set_canceled()`. If the future is already resolved
-    /// when this method is called, the callback is invoked immediately.
+    /// If the future is already resolved when this method is called, the callback
+    /// is invoked immediately on the current thread. Otherwise, a lightweight
+    /// listener is registered that invokes the callback when the state changes.
+    ///
+    /// **Note**: If the future is still pending, this method blocks the current
+    /// thread until the ticker completes or is canceled. For non-blocking usage,
+    /// use [`or_cancel`](Self::or_cancel) with async/await instead.
     pub fn when_complete_or_cancel<F>(&self, callback: F)
     where
         F: FnOnce() + Send + 'static,
     {
-        // Check if already resolved - if so, call immediately
-        {
-            let current_state = *self.inner.state.lock();
-            if current_state != TickerFutureState::Pending {
-                callback();
-                return;
-            }
+        // Fast path: already resolved — call immediately
+        if *self.inner.state.lock() != TickerFutureState::Pending {
+            callback();
+            return;
         }
 
-        // Register a listener and spawn a task to wait for the event
-        let inner = Arc::clone(&self.inner);
-        let callback = Arc::new(Mutex::new(Some(callback)));
+        // Register listener BEFORE re-checking state (avoid race)
+        let listener = self.inner.event.listen();
 
-        // Use event-listener's on_notify to register the callback
-        // This is efficient - no busy-waiting, no thread spawning
-        std::thread::Builder::new()
-            .name("ticker-completion-listener".into())
-            .spawn(move || {
-                // Wait for notification using blocking listener
-                let listener = inner.event.listen();
+        // Re-check after registering (state may have changed)
+        if *self.inner.state.lock() != TickerFutureState::Pending {
+            callback();
+            return;
+        }
 
-                // Check state before waiting (might have changed)
-                if *inner.state.lock() != TickerFutureState::Pending {
-                    if let Some(cb) = callback.lock().take() {
-                        cb();
-                    }
-                    return;
-                }
-
-                // Block until notified
-                listener.wait();
-
-                // Invoke callback
-                if let Some(cb) = callback.lock().take() {
-                    cb();
-                }
-            })
-            .expect("Failed to spawn ticker completion listener thread");
+        // Block on the listener until notified (no thread spawning)
+        listener.wait();
+        callback();
     }
 }
 
@@ -1086,6 +1023,7 @@ impl Clone for TickerFuture {
     fn clone(&self) -> Self {
         Self {
             inner: Arc::clone(&self.inner),
+            listener: None, // Fresh listener per clone
         }
     }
 }
@@ -1093,18 +1031,28 @@ impl Clone for TickerFuture {
 impl Future for TickerFuture {
     type Output = ();
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let state = *self.inner.state.lock();
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        loop {
+            let state = *self.inner.state.lock();
 
-        match state {
-            TickerFutureState::Complete => Poll::Ready(()),
-            TickerFutureState::Canceled | TickerFutureState::Pending => {
-                // Primary future never completes on cancel (Flutter behavior)
-                // Register for notification via event-listener
-                // Note: For proper async support, we'd need to store the listener
-                // For now, we just check the state and return Pending
-                cx.waker().wake_by_ref();
-                Poll::Pending
+            match state {
+                TickerFutureState::Complete => return Poll::Ready(()),
+                TickerFutureState::Canceled | TickerFutureState::Pending => {
+                    // Primary future only completes on Complete (Flutter behavior:
+                    // cancel doesn't resolve the base future, only or_cancel() does)
+                    if self.listener.is_none() {
+                        self.listener = Some(self.inner.event.listen());
+                    }
+                    if let Some(ref mut listener) = self.listener {
+                        match Pin::new(listener).poll(cx) {
+                            Poll::Ready(()) => {
+                                self.listener = None;
+                                continue; // Re-check state
+                            }
+                            Poll::Pending => return Poll::Pending,
+                        }
+                    }
+                }
             }
         }
     }

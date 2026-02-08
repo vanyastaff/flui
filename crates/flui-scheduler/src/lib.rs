@@ -156,8 +156,8 @@
 #![warn(clippy::all)]
 
 // Core modules
-pub mod binding;
 pub mod budget;
+pub mod config;
 pub mod frame;
 pub mod scheduler;
 pub mod task;
@@ -171,18 +171,17 @@ pub mod traits;
 pub mod typestate;
 
 // Re-exports - Core types
-pub use binding::{
-    default_scheduling_strategy, set_time_dilation, time_dilation, FrameCallbackId,
-    PerformanceMode, PerformanceModeRequestHandle, SchedulerBinding, SchedulerServiceExtensions,
-    SchedulingStrategy, TaskCallback, TimingsCallback,
-};
 pub use budget::{
     AllPhaseStats, BudgetPolicy, FrameBudget, FrameBudgetBuilder, PhaseStats, SharedBudget,
 };
+pub use config::{
+    default_scheduling_strategy, set_time_dilation, time_dilation, PerformanceMode,
+    PerformanceModeRequestHandle, SchedulingStrategy, TimingsCallback, SERVICE_EXT_TIME_DILATION,
+};
 pub use frame::{
     AppLifecycleState, FrameCallback, FrameId, FramePhase, FrameTiming, FrameTimingBuilder,
-    LifecycleStateCallback, PersistentFrameCallback, PostFrameCallback, SchedulerPhase,
-    TransientFrameCallback,
+    LifecycleStateCallback, OneShotFrameCallback, PostFrameCallback, RecurringFrameCallback,
+    SchedulerPhase,
 };
 pub use scheduler::{
     CallbackId, FrameCompletionFuture, FrameSkipPolicy, Scheduler, SchedulerBuilder,
@@ -203,15 +202,13 @@ pub use duration::{FrameDuration, Microseconds, Milliseconds, Percentage, Second
 // Re-exports - ID types
 pub use id::{
     CallbackIdMarker, FrameHandle, FrameIdMarker, Handle, IdGenerator, IdMarker, TaskHandle,
-    TaskIdMarker, TickerIdMarker, TypedCallbackId, TypedFrameId, TypedId, TypedTaskId,
-    TypedTickerId,
+    TaskIdMarker, TickerIdMarker, TypedId,
 };
 
 // Re-exports - Trait types
 pub use traits::{
-    AdvancedTickerProvider, AnimationPriority, BuildPriority, FrameBudgetExt, FrameProvider,
-    FrameTimingExt, IdlePriority, PriorityExt, PriorityLevel, ToMilliseconds, ToSeconds,
-    UserInputPriority,
+    AnimationPriority, BuildPriority, FrameBudgetExt, FrameTimingExt, IdlePriority, PriorityExt,
+    PriorityLevel, ToMilliseconds, ToSeconds, UserInputPriority,
 };
 
 // Re-exports - Typestate types
@@ -223,9 +220,9 @@ pub use typestate::{
 pub mod prelude {
     // Core types
     pub use crate::{
-        BudgetPolicy, FrameBudget, FrameId, FramePhase, FrameTiming, Priority, ScheduledTicker,
-        Scheduler, SchedulerBinding, SchedulerPhase, Task, TaskId, TaskQueue, Ticker,
-        TickerProvider, TickerState, TransientFrameCallback,
+        BudgetPolicy, FrameBudget, FrameId, FramePhase, FrameTiming, OneShotFrameCallback,
+        Priority, ScheduledTicker, Scheduler, SchedulerPhase, Task, TaskId, TaskQueue, Ticker,
+        TickerProvider, TickerState,
     };
 
     // Duration types
@@ -248,15 +245,11 @@ pub mod prelude_advanced {
     pub use crate::task::TypedTask;
 
     // Type-safe IDs
-    pub use crate::id::{
-        FrameHandle, Handle, IdGenerator, TypedCallbackId, TypedFrameId, TypedId, TypedTaskId,
-        TypedTickerId,
-    };
+    pub use crate::id::{FrameHandle, Handle, IdGenerator, TypedId};
 
     // Type-level priorities
     pub use crate::traits::{
-        AdvancedTickerProvider, AnimationPriority, BuildPriority, FrameProvider, IdlePriority,
-        PriorityLevel, UserInputPriority,
+        AnimationPriority, BuildPriority, IdlePriority, PriorityLevel, UserInputPriority,
     };
 
     // Additional types

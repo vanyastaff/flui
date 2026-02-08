@@ -4,14 +4,14 @@
 //! across multiple components working together.
 
 use flui_scheduler::{
-    binding::{PerformanceMode, SchedulerServiceExtensions},
+    config::PerformanceMode,
     duration::{FrameDuration, Milliseconds},
     frame::{AppLifecycleState, SchedulerPhase},
     scheduler::{FrameSkipPolicy, Scheduler, SchedulerBuilder},
     task::{Priority, TaskQueue},
     ticker::{ScheduledTicker, Ticker, TickerCanceled, TickerFuture, TickerState},
     vsync::{VsyncDrivenScheduler, VsyncMode, VsyncScheduler},
-    FrameBudget, SchedulerBinding,
+    FrameBudget,
 };
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
@@ -436,7 +436,7 @@ fn test_frame_budget_jank_detection() {
 fn test_scheduler_binding_trait() {
     let scheduler = Scheduler::new();
 
-    // Test SchedulerBinding trait methods
+    // Test scheduler binding methods (now inherent on Scheduler)
     assert_eq!(scheduler.scheduler_phase(), SchedulerPhase::Idle);
     assert!(!scheduler.has_scheduled_frame());
 
@@ -458,13 +458,8 @@ fn test_performance_mode_request() {
 
 #[test]
 fn test_service_extensions() {
-    let ext = SchedulerServiceExtensions::TimeDilation;
-    assert_eq!(ext.name(), "timeDilation");
-    assert_eq!(ext.to_string(), "timeDilation");
-
-    let all = SchedulerServiceExtensions::all();
-    assert_eq!(all.len(), 1);
-    assert_eq!(all[0], SchedulerServiceExtensions::TimeDilation);
+    use flui_scheduler::SERVICE_EXT_TIME_DILATION;
+    assert_eq!(SERVICE_EXT_TIME_DILATION, "timeDilation");
 }
 
 // ============================================================================
@@ -724,40 +719,35 @@ fn test_scheduler_binding_schedule_methods() {
     let scheduler = Scheduler::new();
 
     // Test schedule_frame
-    SchedulerBinding::schedule_frame(&scheduler);
+    scheduler.schedule_frame_if_enabled();
     assert!(scheduler.has_scheduled_frame());
 
     scheduler.execute_frame();
 
     // Test schedule_forced_frame
-    SchedulerBinding::schedule_forced_frame(&scheduler);
+    scheduler.schedule_forced_frame();
     assert!(scheduler.has_scheduled_frame());
 
     scheduler.execute_frame();
 
     // Test ensure_visual_update
-    SchedulerBinding::ensure_visual_update(&scheduler);
+    scheduler.ensure_visual_update();
 }
 
 #[test]
-fn test_scheduler_binding_frame_callbacks() {
+fn test_scheduler_frame_callback_cancel() {
     let scheduler = Scheduler::new();
     let called = Arc::new(AtomicU32::new(0));
 
-    // Schedule with rescheduling flag
     let c = Arc::clone(&called);
-    let id = scheduler.schedule_frame_callback_fn(
-        Box::new(move |_duration| {
-            c.fetch_add(1, Ordering::SeqCst);
-        }),
-        true, // rescheduling
-    );
+    let id = scheduler.schedule_frame_callback(Box::new(move |_| {
+        c.fetch_add(1, Ordering::SeqCst);
+    }));
 
-    assert!(id >= 0);
     assert_eq!(scheduler.transient_callback_count(), 1);
 
     // Cancel it
-    scheduler.cancel_frame_callback_with_id(id);
+    scheduler.cancel_frame_callback(id);
 
     // Execute frame - callback should not be called
     scheduler.execute_frame();
@@ -765,17 +755,14 @@ fn test_scheduler_binding_frame_callbacks() {
 }
 
 #[test]
-fn test_scheduler_binding_post_frame_with_label() {
+fn test_scheduler_post_frame_callback() {
     let scheduler = Scheduler::new();
     let called = Arc::new(AtomicU32::new(0));
 
     let c = Arc::clone(&called);
-    scheduler.add_post_frame_callback_with_label(
-        Box::new(move |_timing| {
-            c.fetch_add(1, Ordering::SeqCst);
-        }),
-        Some("test_callback"),
-    );
+    scheduler.add_post_frame_callback(Box::new(move |_timing| {
+        c.fetch_add(1, Ordering::SeqCst);
+    }));
 
     scheduler.execute_frame();
     assert_eq!(called.load(Ordering::SeqCst), 1);
@@ -787,15 +774,9 @@ fn test_scheduler_binding_schedule_task() {
     let executed = Arc::new(AtomicU32::new(0));
 
     let e = Arc::clone(&executed);
-    SchedulerBinding::schedule_task(
-        &scheduler,
-        Box::new(move || {
-            e.fetch_add(1, Ordering::SeqCst);
-            42
-        }),
-        Priority::Animation,
-        Some("test_task"),
-    );
+    scheduler.add_task(Priority::Animation, move || {
+        e.fetch_add(1, Ordering::SeqCst);
+    });
 
     scheduler.execute_frame();
     assert_eq!(executed.load(Ordering::SeqCst), 1);
@@ -811,9 +792,10 @@ fn test_scheduler_binding_handle_begin_draw_frame() {
         c.fetch_add(1, Ordering::SeqCst);
     }));
 
-    // Use binding methods directly
-    SchedulerBinding::handle_begin_frame(&scheduler, Some(Duration::from_millis(100)));
-    SchedulerBinding::handle_draw_frame(&scheduler);
+    // Use scheduler methods directly
+    let vsync_time = web_time::Instant::now();
+    scheduler.handle_begin_frame(vsync_time);
+    scheduler.handle_draw_frame();
 
     assert_eq!(called.load(Ordering::SeqCst), 1);
 }
@@ -824,7 +806,7 @@ fn test_scheduler_binding_timings_callback() {
     let timings_received = Arc::new(AtomicU32::new(0));
 
     let t = Arc::clone(&timings_received);
-    let callback: flui_scheduler::binding::TimingsCallback = Arc::new(move |_timings| {
+    let callback: flui_scheduler::config::TimingsCallback = Arc::new(move |_timings| {
         t.fetch_add(1, Ordering::SeqCst);
     });
 
@@ -843,18 +825,12 @@ fn test_scheduler_binding_timings_callback() {
 fn test_scheduler_binding_lifecycle_change() {
     let scheduler = Scheduler::new();
 
-    // Use binding method
-    SchedulerBinding::handle_app_lifecycle_state_changed(&scheduler, AppLifecycleState::Paused);
-    assert_eq!(
-        SchedulerBinding::lifecycle_state(&scheduler),
-        AppLifecycleState::Paused
-    );
+    // Use scheduler methods directly
+    scheduler.handle_app_lifecycle_state_change(AppLifecycleState::Paused);
+    assert_eq!(scheduler.lifecycle_state(), AppLifecycleState::Paused);
 
-    SchedulerBinding::handle_app_lifecycle_state_changed(&scheduler, AppLifecycleState::Resumed);
-    assert_eq!(
-        SchedulerBinding::lifecycle_state(&scheduler),
-        AppLifecycleState::Resumed
-    );
+    scheduler.handle_app_lifecycle_state_change(AppLifecycleState::Resumed);
+    assert_eq!(scheduler.lifecycle_state(), AppLifecycleState::Resumed);
 }
 
 #[test]
@@ -924,7 +900,7 @@ fn test_scheduler_binding_debug_assert_no_performance_requests() {
 
 #[test]
 fn test_scheduler_binding_debug_assert_no_time_dilation() {
-    use flui_scheduler::binding::set_time_dilation;
+    use flui_scheduler::config::set_time_dilation;
 
     let scheduler = Scheduler::new();
 
@@ -1551,7 +1527,6 @@ fn test_typed_id_creation() {
 #[test]
 fn test_typed_id_raw() {
     use flui_scheduler::id::TypedFrameId;
-    use std::num::NonZeroU64;
 
     let id = TypedFrameId::new();
     let raw = id.raw();
@@ -1714,7 +1689,7 @@ fn test_id_generator_default() {
 
 #[test]
 fn test_handle() {
-    use flui_scheduler::id::{FrameHandle, TaskHandle};
+    use flui_scheduler::id::FrameHandle;
 
     let handle = FrameHandle::new(10, 5);
 
@@ -2593,8 +2568,7 @@ fn test_phase_stats() {
 
 #[test]
 fn test_all_phase_stats() {
-    use flui_scheduler::budget::{AllPhaseStats, PhaseStats};
-    use flui_scheduler::duration::Percentage;
+    use flui_scheduler::budget::AllPhaseStats;
 
     // Default
     let stats = AllPhaseStats::default();
@@ -3001,7 +2975,7 @@ fn test_scheduler_should_schedule_frame() {
 
 #[test]
 fn test_time_dilation_same_value() {
-    use flui_scheduler::binding::{set_time_dilation, time_dilation};
+    use flui_scheduler::config::{set_time_dilation, time_dilation};
 
     // Set to a value
     set_time_dilation(2.0);
@@ -3017,7 +2991,7 @@ fn test_time_dilation_same_value() {
 
 #[test]
 fn test_performance_mode_all_variants() {
-    use flui_scheduler::binding::PerformanceMode;
+    use flui_scheduler::config::PerformanceMode;
 
     let modes = [
         PerformanceMode::Normal,
@@ -3037,7 +3011,7 @@ fn test_performance_mode_all_variants() {
 
 #[test]
 fn test_scheduler_adjust_for_epoch() {
-    use flui_scheduler::binding::set_time_dilation;
+    use flui_scheduler::config::set_time_dilation;
 
     let scheduler = Scheduler::new();
 
