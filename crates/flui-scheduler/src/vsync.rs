@@ -20,6 +20,7 @@
 
 use crate::duration::{Microseconds, Milliseconds};
 use parking_lot::Mutex;
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Duration;
 use web_time::Instant;
@@ -152,7 +153,7 @@ pub struct VsyncScheduler {
     stats: Arc<Mutex<VsyncStats>>,
 
     /// Interval history for averaging (last 60 frames)
-    interval_history: Arc<Mutex<Vec<Microseconds>>>,
+    interval_history: Arc<Mutex<VecDeque<Microseconds>>>,
 }
 
 impl VsyncScheduler {
@@ -176,7 +177,7 @@ impl VsyncScheduler {
             callback: Arc::new(Mutex::new(None)),
             active: Arc::new(Mutex::new(false)),
             stats: Arc::new(Mutex::new(VsyncStats::default())),
-            interval_history: Arc::new(Mutex::new(Vec::with_capacity(60))),
+            interval_history: Arc::new(Mutex::new(VecDeque::with_capacity(60))),
         }
     }
 
@@ -295,9 +296,9 @@ impl VsyncScheduler {
 
             // Update history
             let mut history = self.interval_history.lock();
-            history.push(interval);
+            history.push_back(interval);
             if history.len() > 60 {
-                history.remove(0);
+                history.pop_front();
             }
 
             // Calculate average

@@ -33,7 +33,7 @@
 //! ```
 
 use std::fmt;
-use std::ops::{Add, Div, Mul, Sub};
+use std::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Sub, SubAssign};
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
@@ -154,6 +154,20 @@ impl Sub for Milliseconds {
     }
 }
 
+impl AddAssign for Milliseconds {
+    #[inline]
+    fn add_assign(&mut self, rhs: Self) {
+        self.0 += rhs.0;
+    }
+}
+
+impl SubAssign for Milliseconds {
+    #[inline]
+    fn sub_assign(&mut self, rhs: Self) {
+        self.0 -= rhs.0;
+    }
+}
+
 impl Mul<f64> for Milliseconds {
     type Output = Self;
 
@@ -163,12 +177,26 @@ impl Mul<f64> for Milliseconds {
     }
 }
 
+impl MulAssign<f64> for Milliseconds {
+    #[inline]
+    fn mul_assign(&mut self, rhs: f64) {
+        self.0 *= rhs;
+    }
+}
+
 impl Div<f64> for Milliseconds {
     type Output = Self;
 
     #[inline]
     fn div(self, rhs: f64) -> Self::Output {
         Self(self.0 / rhs)
+    }
+}
+
+impl DivAssign<f64> for Milliseconds {
+    #[inline]
+    fn div_assign(&mut self, rhs: f64) {
+        self.0 /= rhs;
     }
 }
 
@@ -279,6 +307,38 @@ impl Sub for Seconds {
     #[inline]
     fn sub(self, rhs: Self) -> Self::Output {
         Self(self.0 - rhs.0)
+    }
+}
+
+impl AddAssign for Seconds {
+    #[inline]
+    fn add_assign(&mut self, rhs: Self) {
+        self.0 += rhs.0;
+    }
+}
+
+impl SubAssign for Seconds {
+    #[inline]
+    fn sub_assign(&mut self, rhs: Self) {
+        self.0 -= rhs.0;
+    }
+}
+
+impl Mul<f64> for Seconds {
+    type Output = Self;
+
+    #[inline]
+    fn mul(self, rhs: f64) -> Self::Output {
+        Self(self.0 * rhs)
+    }
+}
+
+impl Div<f64> for Seconds {
+    type Output = Self;
+
+    #[inline]
+    fn div(self, rhs: f64) -> Self::Output {
+        Self(self.0 / rhs)
     }
 }
 

@@ -347,14 +347,11 @@ impl Default for Ticker {
     }
 }
 
-impl Clone for Ticker {
-    fn clone(&self) -> Self {
-        Self {
-            id: TickerId::new(), // New ID for cloned ticker
-            inner: Arc::clone(&self.inner),
-        }
-    }
-}
+// NOTE: Ticker intentionally does NOT implement Clone.
+// The previous Clone impl shared `Arc<Mutex<TickerInner>>` with a new TickerId,
+// meaning two tickers with different IDs controlled the same callback/state.
+// Stopping one would silently stop the other — a correctness footgun.
+// If you need multiple tickers, create them individually with `Ticker::new()`.
 
 impl std::fmt::Debug for Ticker {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

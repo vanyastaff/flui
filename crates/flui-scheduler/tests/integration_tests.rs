@@ -2137,17 +2137,20 @@ fn test_ticker_start_typed() {
 }
 
 #[test]
-fn test_ticker_clone() {
+fn test_ticker_independent_instances() {
     let mut ticker1 = Ticker::new();
     ticker1.start(|_| {});
 
-    let ticker2 = ticker1.clone();
+    let mut ticker2 = Ticker::new();
+    ticker2.start(|_| {});
 
-    // Cloned ticker has different ID
+    // Separate tickers have different IDs
     assert_ne!(ticker1.id(), ticker2.id());
 
-    // But shares state (they share Arc)
-    assert_eq!(ticker1.state(), ticker2.state());
+    // Independent state
+    ticker1.stop();
+    assert_eq!(ticker1.state(), TickerState::Stopped);
+    assert_eq!(ticker2.state(), TickerState::Active);
 }
 
 #[test]
@@ -3292,9 +3295,9 @@ fn test_ticker_unmute_no_op_from_active_state() {
 }
 
 #[test]
-fn test_ticker_clone_gets_new_id() {
+fn test_ticker_new_gets_unique_id() {
     let ticker1 = Ticker::new();
-    let ticker2 = ticker1.clone();
+    let ticker2 = Ticker::new();
     assert_ne!(ticker1.id(), ticker2.id());
 }
 

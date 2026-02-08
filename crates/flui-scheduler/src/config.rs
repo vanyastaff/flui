@@ -247,33 +247,23 @@ mod tests {
 
     #[test]
     fn test_performance_mode_handle() {
-        use std::sync::atomic::Ordering;
-
         let scheduler = Scheduler::new();
 
         // Request latency mode
         let handle = scheduler.request_performance_mode(PerformanceMode::Latency);
 
         // Check request count
-        assert_eq!(
-            scheduler.performance_mode_requests.load(Ordering::Acquire),
-            1
-        );
+        assert_eq!(scheduler.performance_mode_request_count(), 1);
 
         // Drop handle
         drop(handle);
 
         // Check request is released
-        assert_eq!(
-            scheduler.performance_mode_requests.load(Ordering::Acquire),
-            0
-        );
+        assert_eq!(scheduler.performance_mode_request_count(), 0);
     }
 
     #[test]
     fn test_binding_state_isolation() {
-        use std::sync::atomic::Ordering;
-
         // Test that each scheduler has its own state
         let scheduler1 = Scheduler::new();
         let scheduler2 = Scheduler::new();
@@ -282,16 +272,10 @@ mod tests {
         let _handle = scheduler1.request_performance_mode(PerformanceMode::Latency);
 
         // Verify scheduler1 has the request
-        assert_eq!(
-            scheduler1.performance_mode_requests.load(Ordering::Acquire),
-            1
-        );
+        assert_eq!(scheduler1.performance_mode_request_count(), 1);
 
         // Verify scheduler2 is unaffected (proper isolation)
-        assert_eq!(
-            scheduler2.performance_mode_requests.load(Ordering::Acquire),
-            0
-        );
+        assert_eq!(scheduler2.performance_mode_request_count(), 0);
     }
 
     #[test]

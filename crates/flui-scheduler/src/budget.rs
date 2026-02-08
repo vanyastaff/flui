@@ -23,6 +23,7 @@
 use crate::duration::{FrameDuration, Milliseconds, Percentage};
 use crate::frame::FramePhase;
 use parking_lot::Mutex;
+use std::collections::VecDeque;
 use std::sync::Arc;
 use web_time::Instant;
 
@@ -187,7 +188,7 @@ pub struct FrameBudget {
     avg_frame_time: Milliseconds,
 
     /// Frame time history (last 60 frames)
-    frame_times: Vec<Milliseconds>,
+    frame_times: VecDeque<Milliseconds>,
 
     /// Frame counter
     frame_count: u64,
@@ -203,7 +204,7 @@ impl FrameBudget {
             phase_timing: PhaseTiming::default(),
             last_frame_time: Milliseconds::ZERO,
             avg_frame_time: Milliseconds::ZERO,
-            frame_times: Vec::with_capacity(60),
+            frame_times: VecDeque::with_capacity(60),
             frame_count: 0,
         }
     }
@@ -217,7 +218,7 @@ impl FrameBudget {
             phase_timing: PhaseTiming::default(),
             last_frame_time: Milliseconds::ZERO,
             avg_frame_time: Milliseconds::ZERO,
-            frame_times: Vec::with_capacity(60),
+            frame_times: VecDeque::with_capacity(60),
             frame_count: 0,
         }
     }
@@ -328,11 +329,12 @@ impl FrameBudget {
     /// Record total frame duration (type-safe)
     pub fn record_frame_duration(&mut self, total: Milliseconds) {
         self.last_frame_time = total;
+        self.frame_count += 1;
 
         // Update rolling average
-        self.frame_times.push(total);
+        self.frame_times.push_back(total);
         if self.frame_times.len() > 60 {
-            self.frame_times.remove(0);
+            self.frame_times.pop_front();
         }
 
         let sum: f64 = self.frame_times.iter().map(|m| m.value()).sum();
@@ -447,11 +449,13 @@ impl FrameBudget {
     }
 
     /// Finish current frame and record total time
+    ///
+    /// This is a convenience that calls [`record_frame_duration`](Self::record_frame_duration)
+    /// with the elapsed time since [`reset`](Self::reset) was called.
     pub fn finish_frame(&mut self) {
         if let Some(start) = self.frame_start {
             let total = Milliseconds::new(start.elapsed().as_secs_f64() * 1000.0);
             self.record_frame_duration(total);
-            self.frame_count += 1;
         }
         self.frame_start = None;
     }

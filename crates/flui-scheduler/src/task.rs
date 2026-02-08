@@ -386,74 +386,73 @@ impl TaskQueue {
 
     /// Execute all tasks up to a certain priority
     ///
+    /// Drains matching tasks in a single lock acquisition, then executes
+    /// outside the lock to minimize contention on the hot path.
+    ///
     /// Returns number of tasks executed
     pub fn execute_until(&self, min_priority: Priority) -> usize {
-        let mut executed = 0;
-
-        loop {
-            let task = {
-                let mut queue = self.queue.lock();
-                if let Some(pt) = queue.peek() {
-                    if pt.0.priority >= min_priority {
-                        queue.pop().map(|pt| pt.0)
-                    } else {
-                        break; // Lower priority task, stop
-                    }
+        let tasks = {
+            let mut queue = self.queue.lock();
+            let mut batch = Vec::new();
+            while let Some(pt) = queue.peek() {
+                if pt.0.priority >= min_priority {
+                    batch.push(queue.pop().unwrap().0);
                 } else {
-                    break; // Empty queue
+                    break;
                 }
-            };
-
-            if let Some(task) = task {
-                task.execute();
-                executed += 1;
             }
-        }
+            batch
+        };
 
-        executed
+        let count = tasks.len();
+        for task in tasks {
+            task.execute();
+        }
+        count
     }
 
     /// Execute all tasks of a specific priority
     ///
     /// Returns number of tasks executed
     pub fn execute_priority(&self, priority: Priority) -> usize {
-        let mut executed = 0;
-
-        loop {
-            let task = {
-                let mut queue = self.queue.lock();
-                if let Some(pt) = queue.peek() {
-                    if pt.0.priority == priority {
-                        queue.pop().map(|pt| pt.0)
-                    } else {
-                        break;
-                    }
+        let tasks = {
+            let mut queue = self.queue.lock();
+            let mut batch = Vec::new();
+            while let Some(pt) = queue.peek() {
+                if pt.0.priority == priority {
+                    batch.push(queue.pop().unwrap().0);
                 } else {
                     break;
                 }
-            };
-
-            if let Some(task) = task {
-                task.execute();
-                executed += 1;
             }
-        }
+            batch
+        };
 
-        executed
+        let count = tasks.len();
+        for task in tasks {
+            task.execute();
+        }
+        count
     }
 
     /// Execute all pending tasks
     ///
     /// Returns number of tasks executed
     pub fn execute_all(&self) -> usize {
-        let mut executed = 0;
+        let tasks: Vec<Task> = {
+            let mut queue = self.queue.lock();
+            let mut batch = Vec::with_capacity(queue.len());
+            while let Some(pt) = queue.pop() {
+                batch.push(pt.0);
+            }
+            batch
+        };
 
-        while let Some(task) = self.pop() {
+        let count = tasks.len();
+        for task in tasks {
             task.execute();
-            executed += 1;
         }
-
-        executed
+        count
     }
 
     /// Clear all pending tasks
