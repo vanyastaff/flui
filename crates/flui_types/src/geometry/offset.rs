@@ -74,6 +74,7 @@ impl<T: Unit> Offset<T> {
     /// let offset = Offset::new(px(10.0), px(20.0));
     /// assert_eq!(offset.dx.get(), 10.0);
     /// assert_eq!(offset.dy.get(), 20.0);
+    #[inline]
     #[must_use]
     pub const fn new(dx: T, dy: T) -> Self {
         Self { dx, dy }
@@ -90,6 +91,7 @@ impl<T: Unit> Offset<T> {
     /// let swapped = offset.swap();
     /// assert_eq!(swapped.dx.get(), 20.0);
     /// assert_eq!(swapped.dy.get(), 10.0);
+    #[inline]
     #[must_use]
     pub fn swap(self) -> Self {
         Self {
@@ -109,6 +111,7 @@ impl<T: Unit> Offset<T> {
     /// let doubled: Offset<Pixels> = offset.map(|v| v * 2.0);
     /// assert_eq!(doubled.dx.get(), 20.0);
     /// assert_eq!(doubled.dy.get(), 40.0);
+    #[inline]
     #[must_use]
     pub fn map<U: Unit>(&self, f: impl Fn(T) -> U) -> Offset<U> {
         Offset {
@@ -148,6 +151,7 @@ impl<T: Unit> Offset<T> {
     /// let vec: Vec2<Pixels> = offset.to_vec2();
     /// assert_eq!(vec.x.get(), 10.0);
     /// assert_eq!(vec.y.get(), 20.0);
+    #[inline]
     #[must_use]
     pub fn to_vec2(self) -> Vec2<T> {
         Vec2 {
@@ -172,6 +176,7 @@ impl<T: Unit> Offset<T> {
     /// let px_offset = Offset::<Pixels>::new(px(10.0), px(20.0));
     /// let f32_offset: Offset<Pixels> = px_offset.cast();
     /// assert_eq!(f32_offset.dx.get(), 10.0);
+    #[inline]
     #[must_use]
     pub fn cast<U: Unit>(self) -> Offset<U>
     where
@@ -198,6 +203,7 @@ where
     /// let offset = Offset::new(px(10.0), px(20.0));
     /// let f32_offset = offset.to_f32();
     /// assert_eq!(f32_offset.dx.get(), 10.0);
+    #[inline]
     #[must_use]
     pub fn to_f32(self) -> Offset<Pixels> {
         Offset {
@@ -223,6 +229,7 @@ impl Offset<Pixels> {
     /// assert!((offset.dx.get() - 10.0).abs() < 0.001);
     /// assert!(offset.dy.get().abs() < 0.001);
     /// ```
+    #[inline]
     pub fn from_direction(direction: f32, distance: f32) -> Self {
         Self::new(
             Pixels(distance * direction.cos()),
@@ -245,6 +252,7 @@ impl Offset<Pixels> {
     /// assert_eq!(offset.dx.get(), 20.0);
     /// assert_eq!(offset.dy.get(), 30.0);
     /// ```
+    #[inline]
     pub fn from_points(from: Point<Pixels>, to: Point<Pixels>) -> Self {
         Self::new(to.x - from.x, to.y - from.y)
     }
@@ -259,6 +267,7 @@ impl Offset<Pixels> {
     /// assert!(Offset::ZERO.is_zero());
     /// assert!(!Offset::new(px(1.0), px(0.0)).is_zero());
     /// ```
+    #[inline]
     pub fn is_zero(&self) -> bool {
         self.dx == Pixels::ZERO && self.dy == Pixels::ZERO
     }
@@ -272,9 +281,10 @@ impl Offset<Pixels> {
     ///
     /// let offset = Offset::new(px(3.0), px(4.0));
     /// assert_eq!(offset.distance().get(), 5.0); // 3-4-5 triangle
+    #[inline]
     #[must_use]
     pub fn distance(&self) -> Pixels {
-        (self.dx * self.dx + self.dy * self.dy).sqrt()
+        Pixels(self.dx.0.hypot(self.dy.0))
     }
 
     /// Get the squared magnitude (avoids sqrt for performance).
@@ -286,6 +296,7 @@ impl Offset<Pixels> {
     ///
     /// let offset = Offset::new(px(3.0), px(4.0));
     /// assert_eq!(offset.distance_squared().get(), 25.0);
+    #[inline]
     #[must_use]
     pub const fn distance_squared(&self) -> Pixels {
         Pixels(self.dx.0 * self.dx.0 + self.dy.0 * self.dy.0)
@@ -301,6 +312,7 @@ impl Offset<Pixels> {
     /// let right = Offset::new(px(1.0), px(0.0));
     /// assert!((right.direction() - 0.0).abs() < 0.001);
     /// ```
+    #[inline]
     pub fn direction(&self) -> f32 {
         self.dy.atan2(self.dx)
     }
@@ -315,11 +327,13 @@ impl Offset<Pixels> {
     /// assert!(Offset::ZERO.is_finite());
     /// assert!(!Offset::INFINITE.is_finite());
     /// ```
+    #[inline]
     pub fn is_finite(&self) -> bool {
         self.dx.is_finite() && self.dy.is_finite()
     }
 
     /// Check if this offset is infinite.
+    #[inline]
     pub fn is_infinite(&self) -> bool {
         !self.is_finite()
     }
@@ -335,6 +349,7 @@ impl Offset<Pixels> {
     /// let scaled = offset.scale(2.0);
     /// assert_eq!(scaled, Offset::new(px(20.0), px(40.0)));
     /// ```
+    #[inline]
     pub fn scale(&self, factor: f32) -> Self {
         Self::new(self.dx * factor, self.dy * factor)
     }
@@ -351,6 +366,7 @@ impl Offset<Pixels> {
     /// let c = a.translate(b);
     /// assert_eq!(c, Offset::new(px(15.0), px(30.0)));
     /// ```
+    #[inline]
     pub fn translate(self, other: impl Into<Offset<Pixels>>) -> Self {
         let other = other.into();
         Self::new(self.dx + other.dx, self.dy + other.dy)
@@ -368,6 +384,7 @@ impl Offset<Pixels> {
     /// let mid = a.lerp(b, 0.5);
     /// assert_eq!(mid, Offset::new(px(5.0), px(5.0)));
     /// ```
+    #[inline]
     pub fn lerp(self, other: impl Into<Offset<Pixels>>, t: f32) -> Offset<Pixels> {
         let other = other.into();
         let t = t.clamp(0.0, 1.0);
@@ -387,6 +404,7 @@ impl Offset<Pixels> {
     /// let offset = Offset::new(px(10.0), px(20.0));
     /// let point = offset.to_point();
     /// assert_eq!(point, Point::new(px(10.0), px(20.0)));
+    #[inline]
     #[must_use]
     pub const fn to_point(self) -> Point<Pixels> {
         Point::new(self.dx, self.dy)
@@ -404,6 +422,7 @@ impl Offset<Pixels> {
     /// let offset = Offset::new(px(10.0), px(20.0));
     /// let size = offset.to_size();
     /// assert_eq!(size, Size::new(px(10.0), px(20.0)));
+    #[inline]
     #[must_use]
     pub fn to_size(self) -> Size<Pixels> {
         Size::new(self.dx.max(Pixels::ZERO), self.dy.max(Pixels::ZERO))
@@ -411,6 +430,7 @@ impl Offset<Pixels> {
 
     /// Normalize this offset to a unit vector.
     ///
+    #[inline]
     #[must_use]
     pub fn normalize(&self) -> Offset<Pixels> {
         let dist = self.distance();
@@ -422,47 +442,56 @@ impl Offset<Pixels> {
         }
     }
 
+    #[inline]
     #[must_use]
     pub const fn dot(&self, other: Offset<Pixels>) -> Pixels {
         Pixels(self.dx.0 * other.dx.0 + self.dy.0 * other.dy.0)
     }
 
+    #[inline]
     #[must_use]
     pub const fn cross(&self, other: Offset<Pixels>) -> Pixels {
         Pixels(self.dx.0 * other.dy.0 - self.dy.0 * other.dx.0)
     }
 
+    #[inline]
     #[must_use]
     pub fn rotate(&self, angle: f32) -> Offset<Pixels> {
         let (sin, cos) = angle.sin_cos();
         Offset::new(self.dx * cos - self.dy * sin, self.dx * sin + self.dy * cos)
     }
 
+    #[inline]
     #[must_use]
     pub fn rotate_radians(&self, angle: crate::geometry::Radians) -> Offset<Pixels> {
         self.rotate(angle.0)
     }
 
+    #[inline]
     #[must_use]
     pub fn round(&self) -> Offset<Pixels> {
         Offset::new(self.dx.round(), self.dy.round())
     }
 
+    #[inline]
     #[must_use]
     pub fn floor(&self) -> Offset<Pixels> {
         Offset::new(self.dx.floor(), self.dy.floor())
     }
 
+    #[inline]
     #[must_use]
     pub fn ceil(&self) -> Offset<Pixels> {
         Offset::new(self.dx.ceil(), self.dy.ceil())
     }
 
+    #[inline]
     #[must_use]
     pub fn clamp(&self, min: Offset<Pixels>, max: Offset<Pixels>) -> Offset<Pixels> {
         Offset::new(self.dx.clamp(min.dx, max.dx), self.dy.clamp(min.dy, max.dy))
     }
 
+    #[inline]
     #[must_use]
     pub const fn abs(&self) -> Offset<Pixels> {
         Offset::new(
@@ -495,6 +524,7 @@ impl Offset<Pixels> {
     /// assert!((clamped.distance().get() - 25.0).abs() < 0.1);
     /// // Direction preserved: still pointing in same direction
     /// assert!((clamped.direction() - offset.direction()).abs() < 0.01);
+    #[inline]
     #[must_use]
     pub fn clamp_magnitude(&self, max: f32) -> Offset<Pixels> {
         let magnitude = self.distance();
@@ -529,6 +559,7 @@ impl Offset<Pixels> {
     /// // Moving beyond target distance returns target
     /// let at_target = start.move_towards(target, 20.0);
     /// assert_eq!(at_target, target);
+    #[inline]
     #[must_use]
     pub fn move_towards(
         &self,
@@ -562,6 +593,7 @@ impl Offset<Pixels> {
     ///
     /// let angle = right.angle_to(up);
     /// assert!((angle - PI / 2.0).abs() < 0.01);
+    #[inline]
     #[must_use]
     pub fn angle_to(&self, other: impl Into<Offset<Pixels>>) -> f32 {
         let other = other.into();
@@ -570,12 +602,14 @@ impl Offset<Pixels> {
         det.atan2(dot).abs()
     }
 
+    #[inline]
     #[must_use]
     pub fn angle_to_radians(&self, other: impl Into<Offset<Pixels>>) -> crate::geometry::Radians {
         crate::geometry::radians(self.angle_to(other))
     }
 
     /// Convert this offset to a delta offset.
+    #[inline]
     #[must_use]
     pub const fn to_delta(self) -> Offset<PixelDelta> {
         Offset::new(PixelDelta(self.dx.0), PixelDelta(self.dy.0))
@@ -588,12 +622,14 @@ impl Offset<Pixels> {
 
 impl Offset<PixelDelta> {
     /// Get the magnitude (distance) of this offset from the origin.
+    #[inline]
     #[must_use]
     pub fn distance(&self) -> PixelDelta {
-        PixelDelta((self.dx.0 * self.dx.0 + self.dy.0 * self.dy.0).sqrt())
+        PixelDelta(self.dx.0.hypot(self.dy.0))
     }
 
     /// Convert this delta offset to a regular pixel offset.
+    #[inline]
     #[must_use]
     pub const fn to_pixels(self) -> Offset<Pixels> {
         Offset::new(Pixels(self.dx.0), Pixels(self.dy.0))
@@ -907,6 +943,7 @@ impl Offset<Pixels> {
     /// assert_eq!(device.dx.get(), 20);
     /// assert_eq!(device.dy.get(), 40);
     /// ```
+    #[inline]
     #[must_use]
     pub fn scale_with(
         self,
@@ -934,6 +971,7 @@ impl Offset<super::units::DevicePixels> {
     /// assert_eq!(logical.dx, px(10.0));
     /// assert_eq!(logical.dy, px(20.0));
     /// ```
+    #[inline]
     #[must_use]
     pub fn unscale(
         self,

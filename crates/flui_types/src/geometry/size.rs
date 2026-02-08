@@ -58,12 +58,14 @@ impl Size<Pixels> {
 
 impl<T: Unit> Size<T> {
     /// Creates a size with the given width and height.
+    #[inline]
     #[must_use]
     pub const fn new(width: T, height: T) -> Self {
         Self { width, height }
     }
 
     /// Creates a size with the same value for width and height.
+    #[inline]
     #[must_use]
     pub fn splat(value: T) -> Self {
         Self {
@@ -91,6 +93,7 @@ where
     /// let s = Size::<f32>::square(10.0);
     /// assert_eq!(s.width, px(10.0));
     /// assert_eq!(s.height, px(10.0));
+    #[inline]
     #[must_use]
     pub fn square(side: T) -> Self {
         Self {
@@ -111,6 +114,7 @@ where
     ///
     /// let s2 = Size::<f32>::new(10.0, 10.0);
     /// assert!(!s2.is_empty());
+    #[inline]
     #[must_use]
     pub fn is_empty(&self) -> bool
     where
@@ -128,6 +132,7 @@ where
     ///
     /// let s = Size::<f32>::new(10.0, 20.0);
     /// assert_eq!(s.area(), 200.0);
+    #[inline]
     #[must_use]
     pub fn area(&self) -> f32 {
         let w: f32 = self.width.into();
@@ -146,6 +151,7 @@ where
     ///
     /// let s = Size::<f32>::new(16.0, 9.0);
     /// assert!((s.aspect_ratio() - 1.777).abs() < 0.01);
+    #[inline]
     #[must_use]
     pub fn aspect_ratio(&self) -> f32 {
         let w: f32 = self.width.into();
@@ -167,6 +173,7 @@ where
     /// let s = Size::<f32>::new(100.0, 200.0);
     /// let c = s.center();
     /// assert_eq!(c, Point::<f32>::new(50.0, 100.0));
+    #[inline]
     #[must_use]
     pub fn center(&self) -> Point<T>
     where
@@ -192,6 +199,7 @@ where
     /// let s = Size::<f32>::new(10.0, 20.0);
     /// assert!(s.contains(Point::<f32>::new(5.0, 10.0)));
     /// assert!(!s.contains(Point::<f32>::new(15.0, 10.0)));
+    #[inline]
     #[must_use]
     pub fn contains(&self, point: Point<T>) -> bool {
         let w: f32 = self.width.into();
@@ -213,6 +221,7 @@ where
     /// let s2 = Size::<f32>::new(80.0, 60.0);
     /// let result = s1.min(s2);
     /// assert_eq!(result, Size::<f32>::new(80.0, 50.0));
+    #[inline]
     #[must_use]
     pub fn min(self, other: Self) -> Self {
         let w1: f32 = self.width.into();
@@ -237,6 +246,7 @@ where
     /// let s2 = Size::<f32>::new(80.0, 60.0);
     /// let result = s1.max(s2);
     /// assert_eq!(result, Size::<f32>::new(100.0, 60.0));
+    #[inline]
     #[must_use]
     pub fn max(self, other: Self) -> Self {
         let w1: f32 = self.width.into();
@@ -266,6 +276,7 @@ impl<T: Unit> Size<T> {
     /// let size_px = Size::new(px(100.0), px(200.0));
     /// let size_f32: Size<Pixels> = size_px.cast();
     /// assert_eq!(size_f32.width, px(100.0));
+    #[inline]
     #[must_use]
     pub fn cast<U: Unit>(self) -> Size<U>
     where
@@ -292,6 +303,7 @@ where
     /// let size = Size::new(px(100.0), px(200.0));
     /// let f32_size = size.to_f32();
     /// assert_eq!(f32_size.width, px(100.0));
+    #[inline]
     #[must_use]
     pub fn to_f32(self) -> Size<Pixels> {
         Size {
@@ -309,6 +321,7 @@ where
     ///
     /// let s = Size::<f32>::new(100.0, 200.0);
     /// assert_eq!(s.to_array(), [100.0, 200.0]);
+    #[inline]
     #[must_use]
     pub fn to_array(self) -> [f32; 2] {
         [self.width.into(), self.height.into()]
@@ -324,6 +337,7 @@ where
     /// let s = Size::<f32>::new(100.0, 200.0);
     /// let v = s.to_vec2();
     /// assert_eq!(v, Vec2::<f32>::new(100.0, 200.0));
+    #[inline]
     #[must_use]
     pub fn to_vec2(self) -> Vec2<T> {
         Vec2 {
@@ -361,6 +375,7 @@ impl<T: Unit> From<Vec2<T>> for Size<T> {
 
 impl<T: Unit> Size<T> {
     /// Returns a size with a new width value.
+    #[inline]
     #[must_use]
     pub fn with_width(self, width: T) -> Self {
         Self {
@@ -370,6 +385,7 @@ impl<T: Unit> Size<T> {
     }
 
     /// Returns a size with a new height value.
+    #[inline]
     #[must_use]
     pub fn with_height(self, height: T) -> Self {
         Self {
@@ -379,12 +395,14 @@ impl<T: Unit> Size<T> {
     }
 
     /// Transposes the size (swaps width and height).
+    #[inline]
     #[must_use]
     pub fn transpose(self) -> Self {
         Self::new(self.height, self.width)
     }
 
     /// Swaps width and height (alias for transpose).
+    #[inline]
     #[must_use]
     pub fn swap(self) -> Self {
         self.transpose()
@@ -397,60 +415,70 @@ impl<T: Unit> Size<T> {
 
 impl Size<Pixels> {
     /// Checks if width or height is zero or negative.
+    #[inline]
     #[must_use]
     pub fn is_zero_area(self) -> bool {
         self.width <= px(0.0) || self.height <= px(0.0)
     }
 
     /// Checks if both dimensions are approximately zero.
+    #[inline]
     #[must_use]
     pub fn is_zero(self) -> bool {
         self.width.abs() < px(f32::EPSILON) && self.height.abs() < px(f32::EPSILON)
     }
 
     /// Returns the smaller of width or height.
+    #[inline]
     #[must_use]
     pub fn min_side(self) -> Pixels {
         self.width.min(self.height)
     }
 
     /// Returns the larger of width or height.
+    #[inline]
     #[must_use]
     pub fn max_side(self) -> Pixels {
         self.width.max(self.height)
     }
 
     /// Clamps both dimensions between min and max values.
+    #[inline]
     #[must_use]
     pub fn clamp(self, min: Self, max: Self) -> Self {
         self.max(min).min(max)
     }
 
     /// Rounds both dimensions to nearest integer.
+    #[inline]
     #[must_use]
     pub fn round(self) -> Self {
         Self::new(self.width.round(), self.height.round())
     }
 
     /// Rounds both dimensions up.
+    #[inline]
     #[must_use]
     pub fn ceil(self) -> Self {
         Self::new(self.width.ceil(), self.height.ceil())
     }
 
     /// Rounds both dimensions down.
+    #[inline]
     #[must_use]
     pub fn floor(self) -> Self {
         Self::new(self.width.floor(), self.height.floor())
     }
 
     /// Truncates both dimensions toward zero.
+    #[inline]
     #[must_use]
     pub fn trunc(self) -> Self {
         Self::new(self.width.trunc(), self.height.trunc())
     }
 
     /// Expands both dimensions away from zero.
+    #[inline]
     #[must_use]
     pub fn expand(self) -> Self {
         Self::new(
@@ -468,24 +496,28 @@ impl Size<Pixels> {
     }
 
     /// Checks if both dimensions are finite (not infinity or NaN).
+    #[inline]
     #[must_use]
     pub fn is_finite(self) -> bool {
         self.width.is_finite() && self.height.is_finite()
     }
 
     /// Checks if either dimension is NaN.
+    #[inline]
     #[must_use]
     pub fn is_nan(self) -> bool {
         self.width.is_nan() || self.height.is_nan()
     }
 
     /// Checks if both dimensions are positive.
+    #[inline]
     #[must_use]
     pub fn is_positive(self) -> bool {
         self.width > px(0.0) && self.height > px(0.0)
     }
 
     /// Linearly interpolates between two sizes.
+    #[inline]
     #[must_use]
     pub fn lerp(self, other: Self, t: f32) -> Self {
         Self::new(
@@ -497,6 +529,7 @@ impl Size<Pixels> {
     /// Scales to fit within bounds while maintaining aspect ratio.
     ///
     /// Returns the largest size that fits completely within `bounds`.
+    #[inline]
     #[must_use]
     pub fn fit_within(self, bounds: Self) -> Self {
         if self.is_zero_area() || bounds.is_zero_area() {
@@ -509,6 +542,7 @@ impl Size<Pixels> {
     /// Scales to fill bounds while maintaining aspect ratio.
     ///
     /// Returns the smallest size that completely covers `bounds`.
+    #[inline]
     #[must_use]
     pub fn fill_bounds(self, bounds: Self) -> Self {
         if self.is_zero_area() || bounds.is_zero_area() {
@@ -519,6 +553,7 @@ impl Size<Pixels> {
     }
 
     /// Adjusts height to match the given aspect ratio (width / height).
+    #[inline]
     #[must_use]
     pub fn with_aspect_ratio(self, ratio: f32) -> Self {
         if ratio <= 0.0 {
@@ -529,20 +564,23 @@ impl Size<Pixels> {
     }
 
     /// Computes the perimeter (2 * (width + height)).
+    #[inline]
     #[must_use]
     pub fn perimeter(self) -> Pixels {
         px(2.0) * (self.width + self.height)
     }
 
     /// Computes the diagonal length (Pythagorean theorem).
+    #[inline]
     #[must_use]
     pub fn diagonal(self) -> Pixels {
-        (self.width * self.width + self.height * self.height).sqrt()
+        px(self.width.get().hypot(self.height.get()))
     }
 
     /// Returns a size scaled uniformly to the given maximum dimension.
     ///
     /// Scales uniformly to fit within the given maximum dimension.
+    #[inline]
     #[must_use]
     pub fn scale_to_max(self, max: f32) -> Self {
         if self.width <= px(0.0) || self.height <= px(0.0) || max <= 0.0 {
@@ -553,6 +591,7 @@ impl Size<Pixels> {
     }
 
     /// Checks if two sizes are approximately equal.
+    #[inline]
     #[must_use]
     pub fn approx_eq(self, other: Self) -> bool {
         (self.width - other.width).abs() < px(f32::EPSILON)
@@ -560,18 +599,21 @@ impl Size<Pixels> {
     }
 
     /// Checks if the size is valid (finite and non-negative).
+    #[inline]
     #[must_use]
     pub fn is_valid(self) -> bool {
         self.is_finite() && self.width >= px(0.0) && self.height >= px(0.0)
     }
 
     /// Returns a size with absolute values of both dimensions.
+    #[inline]
     #[must_use]
     pub fn abs(self) -> Self {
         Self::new(self.width.abs(), self.height.abs())
     }
 
     /// Returns the sign of each dimension.
+    #[inline]
     #[must_use]
     pub fn signum(self) -> Self {
         Self::new(self.width.signum(), self.height.signum())
@@ -596,6 +638,7 @@ impl Size<Pixels> {
     /// assert_eq!(device.width.get(), 200);
     /// assert_eq!(device.height.get(), 400);
     /// ```
+    #[inline]
     #[must_use]
     pub fn scale_with(
         self,
@@ -623,6 +666,7 @@ impl Size<super::units::DevicePixels> {
     /// assert_eq!(logical.width, px(100.0));
     /// assert_eq!(logical.height, px(200.0));
     /// ```
+    #[inline]
     #[must_use]
     pub fn unscale(
         self,
@@ -642,6 +686,7 @@ impl Size<super::units::DevicePixels> {
 
 impl<T: Unit> Size<T> {
     /// Maps a function over both dimensions.
+    #[inline]
     #[must_use]
     pub fn map<U>(&self, f: impl Fn(T) -> U) -> Size<U>
     where
@@ -828,6 +873,7 @@ impl<T: Unit> Default for Size<T> {
 // ============================================================================
 
 /// Convenience function to create a Pixels size from width and height floats.
+#[inline]
 #[must_use]
 pub const fn size(width: f32, height: f32) -> Size<Pixels> {
     Size::new(px(width), px(height))
@@ -963,6 +1009,7 @@ impl Size<super::units::Pixels> {
     ///
     /// let size = Size::new(px(100.0), px(200.0));
     /// let scaled = size.scale(2.0);  // 2x Retina display
+    #[inline]
     #[must_use]
     pub fn scale(&self, factor: f32) -> Size<super::units::ScaledPixels> {
         Size {
@@ -986,6 +1033,7 @@ impl Size<super::units::ScaledPixels> {
     ///
     /// let size = Size::new(scaled_px(199.7), scaled_px(299.3));
     /// let device = size.to_device_pixels();
+    #[inline]
     #[must_use]
     pub fn to_device_pixels(&self) -> Size<super::units::DevicePixels> {
         Size {

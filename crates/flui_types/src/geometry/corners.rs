@@ -113,6 +113,7 @@ impl<T> Corners<T> {
     }
 
     /// Maps each corner value using the provided function.
+    #[inline]
     #[must_use]
     pub fn map<U>(&self, f: impl Fn(&T) -> U) -> Corners<U> {
         Corners {
@@ -124,6 +125,7 @@ impl<T> Corners<T> {
     }
 
     /// Returns the value for the specified corner.
+    #[inline]
     #[must_use]
     pub fn corner(&self, corner: super::Corner) -> T
     where
@@ -138,6 +140,7 @@ impl<T> Corners<T> {
     }
 
     /// Returns the maximum value among all corners.
+    #[inline]
     #[must_use]
     pub fn max(&self) -> T
     where
@@ -190,6 +193,7 @@ impl<T> Corners<T> {
 
 impl Corners<super::units::Pixels> {
     /// Scales these corner values to scaled pixels.
+    #[inline]
     #[must_use]
     pub fn scale(&self, factor: f32) -> Corners<super::units::ScaledPixels> {
         Corners {

@@ -219,6 +219,7 @@ impl<T: Unit> Transform2D<T> {
     // ============================================================================
 
     /// Checks if this is the identity transform.
+    #[inline]
     pub fn is_identity(&self) -> bool {
         (self.m11 - 1.0).abs() < 1e-6
             && self.m12.abs() < 1e-6
@@ -229,6 +230,7 @@ impl<T: Unit> Transform2D<T> {
     }
 
     /// Checks if this transform preserves axis alignment (only translation and scale).
+    #[inline]
     pub fn is_axis_aligned(&self) -> bool {
         self.m12.abs() < 1e-6 && self.m21.abs() < 1e-6
     }
@@ -286,6 +288,7 @@ impl Transform2D<Pixels> {
     /// Applies this transform to a rectangle.
     ///
     /// Returns the axis-aligned bounding box of the transformed rectangle.
+    #[inline]
     pub fn transform_rect(&self, rect: Rect<Pixels>) -> Rect<Pixels> {
         let min = self.transform_point(rect.min);
         let max = self.transform_point(rect.max);
@@ -308,6 +311,7 @@ impl Transform2D<Pixels> {
     /// let result = combined.transform_point(point);
     /// assert_eq!(result.x, px(30.0));  // (5 + 10) * 2 = 30
     /// ```
+    #[inline]
     pub fn then(&self, other: &Transform2D<Pixels>) -> Transform2D<Pixels> {
         Transform2D {
             m11: self.m11 * other.m11 + self.m12 * other.m21,
@@ -323,6 +327,7 @@ impl Transform2D<Pixels> {
     /// Returns the inverse transform, if it exists.
     ///
     /// Returns `None` if the transform is not invertible (determinant is zero).
+    #[inline]
     pub fn inverse(&self) -> Option<Transform2D<Pixels>> {
         let det = self.m11 * self.m22 - self.m12 * self.m21;
         if det.abs() < 1e-10 {

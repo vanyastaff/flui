@@ -290,9 +290,8 @@ impl Matrix4 {
 
     /// Returns whether this is an identity matrix with custom epsilon.
     pub fn is_identity_with_epsilon(&self, epsilon: f32) -> bool {
-        let identity = Self::identity();
         for i in 0..16 {
-            if (self.m[i] - identity.m[i]).abs() > epsilon {
+            if (self.m[i] - Self::IDENTITY.m[i]).abs() > epsilon {
                 return false;
             }
         }

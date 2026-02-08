@@ -49,24 +49,28 @@ impl<T: Unit> Default for QuadBez<T> {
 
 impl<T: Unit> QuadBez<T> {
     /// Creates a new quadratic Bézier curve from three points.
+    #[inline]
     #[must_use]
     pub const fn new(p0: Point<T>, p1: Point<T>, p2: Point<T>) -> Self {
         Self { p0, p1, p2 }
     }
 
     /// Returns the start point of the curve.
+    #[inline]
     #[must_use]
     pub const fn start(&self) -> Point<T> {
         self.p0
     }
 
     /// Returns the end point of the curve.
+    #[inline]
     #[must_use]
     pub const fn end(&self) -> Point<T> {
         self.p2
     }
 
     /// Returns the control point of the curve.
+    #[inline]
     #[must_use]
     pub const fn control(&self) -> Point<T> {
         self.p1
@@ -82,6 +86,7 @@ where
     T: Into<f32> + From<f32>,
 {
     /// Evaluates the curve at parameter t ∈ [0, 1].
+    #[inline]
     #[must_use]
     pub fn eval(&self, t: f32) -> Point<T> {
         let mt = 1.0 - t;
@@ -102,6 +107,7 @@ where
     }
 
     /// Returns the tangent vector at parameter t.
+    #[inline]
     #[must_use]
     pub fn tangent(&self, t: f32) -> Vec2<T> {
         let mt = 1.0 - t;
@@ -121,6 +127,7 @@ where
 
     /// Splits the curve at parameter t into two curves.
     /// Splits the curve at parameter t into two curves.
+    #[inline]
     #[must_use]
     pub fn split(&self, t: f32) -> (Self, Self) {
         let p01 = self.p0.lerp(self.p1, t);
@@ -131,6 +138,7 @@ where
     }
 
     /// Translates the curve by the given offset.
+    #[inline]
     #[must_use]
     pub fn translate(&self, offset: Vec2<T>) -> Self {
         Self {
@@ -141,6 +149,7 @@ where
     }
 
     /// Linearly interpolates between this curve and another at parameter t.
+    #[inline]
     #[must_use]
     pub fn lerp(self, other: Self, t: f32) -> Self {
         Self {
@@ -157,6 +166,7 @@ where
 
 impl QuadBez<Pixels> {
     /// Returns the normalized direction vector at parameter t.
+    #[inline]
     #[must_use]
     pub fn direction(&self, t: f32) -> Vec2<Pixels> {
         self.tangent(t).normalize_or(Vec2::X)
@@ -164,6 +174,7 @@ impl QuadBez<Pixels> {
 
     /// Computes an approximate bounding box for the curve.
     /// Computes an approximate bounding box for the curve.
+    #[inline]
     #[must_use]
     pub fn bounding_box(&self) -> Rect<Pixels> {
         let min_x = self.p0.x.min(self.p1.x).min(self.p2.x);
@@ -175,6 +186,7 @@ impl QuadBez<Pixels> {
     }
 
     /// Computes the arc length of the curve using recursive subdivision.
+    #[inline]
     #[must_use]
     pub fn arc_length(&self, tolerance: f32) -> f32 {
         self.arc_length_recursive(0.0, 1.0, tolerance)
@@ -224,6 +236,7 @@ impl QuadBez<Pixels> {
     }
 
     /// Converts this quadratic Bézier to a cubic Bézier curve.
+    #[inline]
     #[must_use]
     pub fn to_cubic(&self) -> CubicBez<Pixels> {
         // Q(t) = C(t) when:
@@ -288,30 +301,35 @@ impl<T: Unit> Default for CubicBez<T> {
 
 impl<T: Unit> CubicBez<T> {
     /// Creates a new cubic Bézier curve from four points.
+    #[inline]
     #[must_use]
     pub const fn new(p0: Point<T>, p1: Point<T>, p2: Point<T>, p3: Point<T>) -> Self {
         Self { p0, p1, p2, p3 }
     }
 
     /// Returns the start point of the curve.
+    #[inline]
     #[must_use]
     pub const fn start(&self) -> Point<T> {
         self.p0
     }
 
     /// Returns the end point of the curve.
+    #[inline]
     #[must_use]
     pub const fn end(&self) -> Point<T> {
         self.p3
     }
 
     /// Returns the first control point.
+    #[inline]
     #[must_use]
     pub const fn control1(&self) -> Point<T> {
         self.p1
     }
 
     /// Returns the second control point.
+    #[inline]
     #[must_use]
     pub const fn control2(&self) -> Point<T> {
         self.p2
@@ -327,6 +345,7 @@ where
     T: Into<f32> + From<f32>,
 {
     /// Evaluates the curve at parameter t ∈ [0, 1].
+    #[inline]
     #[must_use]
     pub fn eval(&self, t: f32) -> Point<T> {
         let mt = 1.0 - t;
@@ -351,6 +370,7 @@ where
     }
 
     /// Returns the tangent vector at parameter t.
+    #[inline]
     #[must_use]
     pub fn tangent(&self, t: f32) -> Vec2<T> {
         let mt = 1.0 - t;
@@ -373,6 +393,7 @@ where
     }
 
     /// Splits the curve at parameter t into two curves.
+    #[inline]
     #[must_use]
     pub fn split(&self, t: f32) -> (Self, Self) {
         let p01 = self.p0.lerp(self.p1, t);
@@ -391,6 +412,7 @@ where
     }
 
     /// Translates the curve by the given offset.
+    #[inline]
     #[must_use]
     pub fn translate(&self, offset: Vec2<T>) -> Self {
         Self {
@@ -402,6 +424,7 @@ where
     }
 
     /// Reverses the direction of the curve.
+    #[inline]
     #[must_use]
     pub const fn reverse(&self) -> Self {
         Self {
@@ -413,6 +436,7 @@ where
     }
 
     /// Linearly interpolates between this curve and another at parameter t.
+    #[inline]
     #[must_use]
     pub fn lerp(self, other: Self, t: f32) -> Self {
         Self {
@@ -430,12 +454,14 @@ where
 
 impl CubicBez<Pixels> {
     /// Returns the normalized direction vector at parameter t.
+    #[inline]
     #[must_use]
     pub fn direction(&self, t: f32) -> Vec2<Pixels> {
         self.tangent(t).normalize_or(Vec2::X)
     }
 
     /// Computes an approximate bounding box for the curve.
+    #[inline]
     #[must_use]
     pub fn bounding_box(&self) -> Rect<Pixels> {
         let min_x = self.p0.x.min(self.p1.x).min(self.p2.x).min(self.p3.x);
@@ -447,6 +473,7 @@ impl CubicBez<Pixels> {
     }
 
     /// Computes the arc length of the curve using recursive subdivision.
+    #[inline]
     #[must_use]
     pub fn arc_length(&self, tolerance: f32) -> f32 {
         self.arc_length_recursive(0.0, 1.0, tolerance)
@@ -511,6 +538,7 @@ impl CubicBez<Pixels> {
     }
 
     /// Flattens the curve into a series of line segments within the given tolerance.
+    #[inline]
     #[must_use]
     pub fn flatten(&self, tolerance: f32) -> Vec<Point<Pixels>> {
         let mut points = vec![self.p0];
@@ -537,6 +565,7 @@ impl CubicBez<Pixels> {
     }
 
     /// Finds approximate intersection points with a line segment.
+    #[inline]
     #[must_use]
     pub fn intersect_line(&self, line: &Line<Pixels>) -> Vec<Point<Pixels>> {
         // Simplified: flatten and check segments

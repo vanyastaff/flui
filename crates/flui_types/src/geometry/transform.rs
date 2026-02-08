@@ -403,6 +403,7 @@ impl Transform {
     ///     .then(Transform::rotate(PI / 4.0))
     ///     .then(Transform::scale(2.0));
     /// ```
+    #[inline]
     pub fn then(self, other: Transform) -> Self {
         match (self, other) {
             // Identity optimizations
@@ -418,8 +419,10 @@ impl Transform {
                 transforms.push(other);
                 Transform::Compose(transforms)
             }
-            (this, Transform::Compose(mut transforms)) => {
-                transforms.insert(0, this);
+            (this, Transform::Compose(other_transforms)) => {
+                let mut transforms = Vec::with_capacity(1 + other_transforms.len());
+                transforms.push(this);
+                transforms.extend(other_transforms);
                 Transform::Compose(transforms)
             }
 
@@ -509,6 +512,7 @@ impl Transform {
     // ===== Query Methods =====
 
     /// Check if this is an identity transform (no transformation)
+    #[inline]
     pub fn is_identity(&self) -> bool {
         match self {
             Transform::Identity => true,
@@ -519,6 +523,7 @@ impl Transform {
     }
 
     /// Check if this transform includes translation
+    #[inline]
     pub fn has_translation(&self) -> bool {
         match self {
             Transform::Translate { .. } => true,
@@ -530,6 +535,7 @@ impl Transform {
     }
 
     /// Check if this transform includes rotation
+    #[inline]
     pub fn has_rotation(&self) -> bool {
         match self {
             Transform::Rotate { .. } | Transform::RotateAround { .. } => true,
@@ -539,6 +545,7 @@ impl Transform {
     }
 
     /// Check if this transform includes scaling
+    #[inline]
     pub fn has_scale(&self) -> bool {
         match self {
             Transform::Scale { .. } | Transform::ScaleXY { .. } | Transform::ScaleAround { .. } => {
@@ -550,6 +557,7 @@ impl Transform {
     }
 
     /// Check if this transform includes skew
+    #[inline]
     pub fn has_skew(&self) -> bool {
         match self {
             Transform::Skew { .. } => true,
@@ -563,6 +571,7 @@ impl Transform {
     /// Compute the inverse transform (if possible)
     ///
     /// Returns None if the transform is not invertible (e.g., scale by 0).
+    #[inline]
     pub fn inverse(&self) -> Option<Transform> {
         // For simple transforms, we can compute analytical inverses
         // For complex cases, fall back to matrix inversion
@@ -623,6 +632,7 @@ impl Transform {
     /// let (tx, ty, rotation, sx, sy) = transform.decompose();
     /// // Apply via painter: translate(tx, ty) → rotate(rotation) → scale(sx, sy)
     /// ```
+    #[inline]
     pub fn decompose(&self) -> (f32, f32, f32, f32, f32) {
         let matrix: Matrix4 = self.clone().into();
 

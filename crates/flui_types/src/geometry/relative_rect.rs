@@ -25,6 +25,7 @@ pub struct RelativeRect<T: Unit> {
 // ============================================================================
 
 impl<T: Unit> RelativeRect<T> {
+    #[inline]
     #[must_use]
     pub const fn from_ltrb(left: T, top: T, right: T, bottom: T) -> Self {
         Self {
@@ -44,6 +45,7 @@ impl<T: NumericUnit> RelativeRect<T>
 where
     T: Add<Output = T> + Sub<Output = T> + Mul<f32, Output = T>,
 {
+    #[inline]
     #[must_use]
     pub fn from_size(offset: Offset<T>, size: Size<T>, parent: Size<T>) -> Self {
         Self {
@@ -54,6 +56,7 @@ where
         }
     }
 
+    #[inline]
     #[must_use]
     pub fn from_left_top_width_height(
         left: T,
@@ -70,6 +73,7 @@ where
         }
     }
 
+    #[inline]
     #[must_use]
     pub fn to_size(&self, parent: Size<T>) -> Size<T> {
         Size::new(
@@ -78,6 +82,7 @@ where
         )
     }
 
+    #[inline]
     #[must_use]
     pub fn shift(&self, offset: Offset<T>) -> Self {
         Self {
@@ -88,6 +93,7 @@ where
         }
     }
 
+    #[inline]
     #[must_use]
     pub fn inflate(&self, delta: T) -> Self {
         Self {
@@ -98,6 +104,7 @@ where
         }
     }
 
+    #[inline]
     #[must_use]
     pub fn deflate(&self, delta: T) -> Self
     where

@@ -506,6 +506,7 @@ where
 {
     /// Returns the intersection of two rectangles, or `None` if they don't overlap.
     #[must_use]
+    #[inline]
     pub fn intersect(&self, other: &Self) -> Option<Self> {
         let min_x = if self.min.x > other.min.x {
             self.min.x
@@ -798,6 +799,7 @@ impl Rect<Pixels> {
     /// assert_eq!(device.size().width.get(), 200);
     /// ```
     #[must_use]
+    #[inline]
     pub fn scale_with(
         self,
         scale: super::units::ScaleFactor<Pixels, super::units::DevicePixels>,
@@ -824,6 +826,7 @@ impl Rect<super::units::DevicePixels> {
     /// assert_eq!(logical.size().width, px(100.0));
     /// ```
     #[must_use]
+    #[inline]
     pub fn unscale(
         self,
         scale: super::units::ScaleFactor<Pixels, super::units::DevicePixels>,

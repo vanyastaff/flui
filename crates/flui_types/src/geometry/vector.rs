@@ -81,24 +81,28 @@ impl Vec2<Pixels> {
     pub const NAN: Self = Self::new(px(f32::NAN), px(f32::NAN));
 
     /// Checks if two vectors are approximately equal within epsilon tolerance.
+    #[inline]
     #[must_use]
     pub fn approx_eq(self, other: Self) -> bool {
         (self.x - other.x).abs() < px(f32::EPSILON) && (self.y - other.y).abs() < px(f32::EPSILON)
     }
 
     /// Checks if the vector contains finite values (not NaN or infinity).
+    #[inline]
     #[must_use]
     pub fn is_valid(self) -> bool {
         self.is_finite()
     }
 
     /// Computes the Manhattan distance (L1 norm).
+    #[inline]
     #[must_use]
     pub fn manhattan_length(self) -> Pixels {
         self.x.abs() + self.y.abs()
     }
 
     /// Computes the Chebyshev distance (infinity norm).
+    #[inline]
     #[must_use]
     pub fn chebyshev_length(self) -> Pixels {
         self.x.abs().max(self.y.abs())
@@ -111,12 +115,14 @@ impl Vec2<Pixels> {
 
 impl<T: Unit> Vec2<T> {
     /// Creates a vector from x and y components.
+    #[inline]
     #[must_use]
     pub const fn new(x: T, y: T) -> Self {
         Self { x, y }
     }
 
     /// Creates a vector with both components set to the same value.
+    #[inline]
     #[must_use]
     pub fn splat(value: T) -> Self {
         Self { x: value, y: value }
@@ -132,12 +138,14 @@ where
     T: From<f32>,
 {
     /// Creates a vector from a two-element array.
+    #[inline]
     #[must_use]
     pub fn from_array(a: [f32; 2]) -> Self {
         Self::new(T::from(a[0]), T::from(a[1]))
     }
 
     /// Creates a vector from a tuple.
+    #[inline]
     #[must_use]
     pub fn from_tuple(t: (f32, f32)) -> Self {
         Self::new(T::from(t.0), T::from(t.1))
@@ -152,6 +160,7 @@ impl Vec2<Pixels> {
     /// Creates a unit vector from an angle in radians.
     ///
     /// - `angle = 0` → `(1, 0)` (pointing right)
+    #[inline]
     #[must_use]
     pub fn from_angle(angle: f32) -> Self {
         Self::new(px(angle.cos()), px(angle.sin()))
@@ -167,6 +176,7 @@ impl Vec2<Pixels> {
     ///
     /// let v = Vec2::from_radians(Radians::from_degrees(90.0));
     /// assert!((v.y - 1.0).abs() < 0.001);
+    #[inline]
     #[must_use]
     pub fn from_radians(angle: crate::geometry::Radians) -> Self {
         Self::from_angle(angle.0)
@@ -179,24 +189,28 @@ impl Vec2<Pixels> {
 
 impl<T: Unit> Vec2<T> {
     /// Returns a vector with a new x component.
+    #[inline]
     #[must_use]
     pub const fn with_x(self, x: T) -> Self {
         Self::new(x, self.y)
     }
 
     /// Returns a vector with a new y component.
+    #[inline]
     #[must_use]
     pub const fn with_y(self, y: T) -> Self {
         Self::new(self.x, y)
     }
 
     /// Swaps the x and y components.
+    #[inline]
     #[must_use]
     pub fn swap(self) -> Self {
         Self::new(self.y, self.x)
     }
 
     /// Maps a function over both components to create a new vector.
+    #[inline]
     #[must_use]
     pub fn map<U: Unit>(self, f: impl Fn(T) -> U) -> Vec2<U> {
         Vec2 {
@@ -211,18 +225,21 @@ where
     T: Into<f32>,
 {
     /// Converts the vector to a two-element array.
+    #[inline]
     #[must_use]
     pub fn to_array(self) -> [f32; 2] {
         [self.x.into(), self.y.into()]
     }
 
     /// Converts the vector to a tuple.
+    #[inline]
     #[must_use]
     pub fn to_tuple(self) -> (f32, f32) {
         (self.x.into(), self.y.into())
     }
 
     /// Converts the vector to a point (displacement becomes position).
+    #[inline]
     #[must_use]
     pub fn to_point(self) -> Point<T> {
         Point::new(self.x, self.y)
@@ -243,6 +260,7 @@ impl<T: Unit> Vec2<T> {
     ///
     /// let px_vec = Vec2::<Pixels>::new(px(10.0), px(20.0));
     /// let f32_vec: Vec2<Pixels> = px_vec.cast();
+    #[inline]
     #[must_use]
     pub fn cast<U: Unit>(self) -> Vec2<U>
     where
@@ -260,6 +278,7 @@ where
     T: Into<f32>,
 {
     /// Converts the vector to use Pixels unit type.
+    #[inline]
     #[must_use]
     pub fn to_f32(self) -> Vec2<Pixels> {
         Vec2 {
@@ -279,6 +298,7 @@ where
 {
     /// Returns the length (magnitude) of the vector.
     ///
+    #[inline]
     #[must_use]
     pub fn length(&self) -> f32 {
         let x: f32 = self.x.into();
@@ -288,6 +308,7 @@ where
 
     /// Returns the squared length of the vector.
     ///
+    #[inline]
     #[must_use]
     pub fn length_squared(&self) -> f32 {
         let x: f32 = self.x.into();
@@ -297,6 +318,7 @@ where
 
     /// Returns a normalized (unit length) vector.
     ///
+    #[inline]
     #[must_use]
     pub fn try_normalize(&self) -> Option<Vec2<Pixels>> {
         let len = self.length();
@@ -307,18 +329,21 @@ where
         }
     }
 
+    #[inline]
     #[must_use]
     pub fn normalize(&self) -> Vec2<Pixels> {
         self.try_normalize().unwrap_or(Vec2::ZERO)
     }
 
     /// Returns a normalized vector, or a fallback if length is near zero.
+    #[inline]
     #[must_use]
     pub fn normalize_or(&self, fallback: Vec2<Pixels>) -> Vec2<Pixels> {
         self.try_normalize().unwrap_or(fallback)
     }
 
     /// Checks if this vector is normalized (unit length).
+    #[inline]
     #[must_use]
     pub fn is_normalized(&self) -> bool {
         (self.length_squared() - 1.0).abs() < 1e-4
@@ -338,6 +363,7 @@ where
     /// Properties:
     /// - `a · b = |a| |b| cos(θ)`
     /// - `a · b = 0` when perpendicular
+    #[inline]
     #[must_use]
     pub fn dot(&self, other: &Self) -> f32 {
         let x1: f32 = self.x.into();
@@ -350,6 +376,7 @@ where
     /// 2D cross product (also called "perp dot product").
     ///
     /// Returns the z-component of the 3D cross product if vectors were in XY plane.
+    #[inline]
     #[must_use]
     pub fn cross(&self, other: &Self) -> f32 {
         let x1: f32 = self.x.into();
@@ -366,6 +393,7 @@ where
 {
     /// Returns a perpendicular vector (rotated 90° counter-clockwise).
     ///
+    #[inline]
     #[must_use]
     pub fn perp(&self) -> Self {
         Self::new(T::from(-(self.y.into())), T::from(self.x.into()))
@@ -375,6 +403,7 @@ where
     ///
     /// - `t = 0.0` → `self`
     /// - `t = 0.5` → midpoint
+    #[inline]
     #[must_use]
     pub fn lerp(&self, other: &Self, t: f32) -> Self {
         let x1: f32 = self.x.into();
@@ -387,6 +416,7 @@ where
 
     /// Projects this vector onto another vector.
     ///
+    #[inline]
     #[must_use]
     pub fn project(&self, onto: &Self) -> Self {
         let len_sq = onto.length_squared();
@@ -403,6 +433,7 @@ where
 
     /// Reflects this vector about a normal.
     ///
+    #[inline]
     #[must_use]
     pub fn reflect(&self, normal: &Self) -> Self {
         let dot = self.dot(normal);
@@ -425,6 +456,7 @@ where
 {
     /// Returns the angle from the positive X axis in radians.
     ///
+    #[inline]
     #[must_use]
     pub fn angle(&self) -> f32 {
         let x: f32 = self.x.into();
@@ -445,6 +477,7 @@ where
     /// let v = Vec2::new(0.0, 1.0);
     /// let angle = v.angle_radians();
     /// assert!((angle.0 - PI / 2.0).abs() < 0.001);
+    #[inline]
     #[must_use]
     pub fn angle_radians(&self) -> crate::geometry::Radians {
         crate::geometry::radians(self.angle())
@@ -457,6 +490,7 @@ where
 {
     /// Returns the angle between this vector and another in radians.
     ///
+    #[inline]
     #[must_use]
     pub fn angle_between(&self, other: &Self) -> f32 {
         let dot = self.dot(other);
@@ -482,11 +516,13 @@ where
     /// let v2 = Vec2::new(0.0, 1.0);
     /// let angle = v1.angle_between_radians(&v2);
     /// assert!((angle.0 - PI / 2.0).abs() < 0.001);
+    #[inline]
     #[must_use]
     pub fn angle_between_radians(&self, other: &Self) -> crate::geometry::Radians {
         crate::geometry::radians(self.angle_between(other))
     }
     /// Rotates the vector by an angle in radians (counter-clockwise).
+    #[inline]
     #[must_use]
     pub fn rotate(&self, angle: f32) -> Self {
         let (sin, cos) = angle.sin_cos();
@@ -507,6 +543,7 @@ where
     /// let v = Vec2::new(1.0, 0.0);
     /// let rotated = v.rotate_radians(Radians::from_degrees(90.0));
     /// assert!((rotated.y - 1.0).abs() < 0.001);
+    #[inline]
     #[must_use]
     pub fn rotate_radians(&self, angle: crate::geometry::Radians) -> Self {
         self.rotate(angle.0)
@@ -522,6 +559,7 @@ where
     T: Into<f32> + From<f32>,
 {
     /// Returns a vector with the minimum components from two vectors.
+    #[inline]
     #[must_use]
     pub fn min(&self, other: &Self) -> Self {
         let x1: f32 = self.x.into();
@@ -533,6 +571,7 @@ where
     }
 
     /// Returns a vector with the maximum components from two vectors.
+    #[inline]
     #[must_use]
     pub fn max(&self, other: &Self) -> Self {
         let x1: f32 = self.x.into();
@@ -544,6 +583,7 @@ where
     }
 
     /// Clamps each component between corresponding min and max values.
+    #[inline]
     #[must_use]
     pub fn clamp(&self, min: &Self, max: &Self) -> Self {
         let x: f32 = self.x.into();
@@ -560,6 +600,7 @@ where
     }
 
     /// Clamps the vector's length to a specified range.
+    #[inline]
     #[must_use]
     pub fn clamp_length(&self, min: f32, max: f32) -> Self {
         let len = self.length();
@@ -583,6 +624,7 @@ where
     }
 
     /// Returns a vector with absolute values of each component.
+    #[inline]
     #[must_use]
     pub fn abs(&self) -> Self {
         let x: f32 = self.x.into();
@@ -591,6 +633,7 @@ where
     }
 
     /// Returns a vector with the sign of each component (-1, 0, or 1).
+    #[inline]
     #[must_use]
     pub fn signum(&self) -> Self {
         let x: f32 = self.x.into();
@@ -599,6 +642,7 @@ where
     }
 
     /// Returns the minimum component value.
+    #[inline]
     #[must_use]
     pub fn min_element(&self) -> f32 {
         let x: f32 = self.x.into();
@@ -607,6 +651,7 @@ where
     }
 
     /// Returns the maximum component value.
+    #[inline]
     #[must_use]
     pub fn max_element(&self) -> f32 {
         let x: f32 = self.x.into();
@@ -624,6 +669,7 @@ where
     T: Into<f32> + From<f32>,
 {
     /// Rounds each component to the nearest integer.
+    #[inline]
     #[must_use]
     pub fn round(&self) -> Self {
         let x: f32 = self.x.into();
@@ -632,6 +678,7 @@ where
     }
 
     /// Rounds each component up to the nearest integer.
+    #[inline]
     #[must_use]
     pub fn ceil(&self) -> Self {
         let x: f32 = self.x.into();
@@ -640,6 +687,7 @@ where
     }
 
     /// Rounds each component down to the nearest integer.
+    #[inline]
     #[must_use]
     pub fn floor(&self) -> Self {
         let x: f32 = self.x.into();
@@ -648,6 +696,7 @@ where
     }
 
     /// Truncates each component toward zero.
+    #[inline]
     #[must_use]
     pub fn trunc(&self) -> Self {
         let x: f32 = self.x.into();
@@ -656,6 +705,7 @@ where
     }
 
     /// Expands each component away from zero (ceil for positive, floor for negative).
+    #[inline]
     #[must_use]
     pub fn expand(&self) -> Self {
         let x: f32 = self.x.into();
@@ -668,6 +718,7 @@ where
     }
 
     /// Returns the fractional part of each component.
+    #[inline]
     #[must_use]
     pub fn fract(&self) -> Self {
         let x: f32 = self.x.into();
@@ -685,6 +736,7 @@ where
     T: Into<f32>,
 {
     /// Checks if all components are finite (not infinity or NaN).
+    #[inline]
     #[must_use]
     pub fn is_finite(&self) -> bool {
         let x: f32 = self.x.into();
@@ -693,6 +745,7 @@ where
     }
 
     /// Checks if any component is NaN.
+    #[inline]
     #[must_use]
     pub fn is_nan(&self) -> bool {
         let x: f32 = self.x.into();
@@ -706,6 +759,7 @@ where
     T: Into<f32> + From<f32>,
 {
     /// Checks if the vector is approximately zero (length near zero).
+    #[inline]
     #[must_use]
     pub fn is_zero(&self) -> bool {
         self.length_squared() < f32::EPSILON * f32::EPSILON
@@ -887,6 +941,7 @@ impl<T: Unit> Default for Vec2<T> {
 // ============================================================================
 
 /// Convenience function to create a Pixels vector from x and y floats.
+#[inline]
 #[must_use]
 pub const fn vec2(x: f32, y: f32) -> Vec2<Pixels> {
     Vec2::new(px(x), px(y))

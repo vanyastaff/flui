@@ -43,12 +43,14 @@ pub struct Circle<T: Unit> {
 
 impl<T: Unit> Circle<T> {
     /// Creates a new circle with the given center and radius.
+    #[inline]
     #[must_use]
     pub const fn new(center: Point<T>, radius: T) -> Self {
         Self { center, radius }
     }
 
     /// Returns a copy of this circle with a new center.
+    #[inline]
     #[must_use]
     pub const fn with_center(&self, center: Point<T>) -> Self {
         Self {
@@ -58,6 +60,7 @@ impl<T: Unit> Circle<T> {
     }
 
     /// Returns a copy of this circle with a new radius.
+    #[inline]
     #[must_use]
     pub const fn with_radius(&self, radius: T) -> Self {
         Self {
@@ -67,6 +70,7 @@ impl<T: Unit> Circle<T> {
     }
 
     /// Maps the circle's unit type using the provided function.
+    #[inline]
     #[must_use]
     pub fn map<U: Unit>(&self, f: impl Fn(T) -> U + Copy) -> Circle<U>
     where
@@ -85,6 +89,7 @@ impl<T: Unit> Circle<T> {
 
 impl Circle<Pixels> {
     /// Creates a circle with the given radius centered at the origin.
+    #[inline]
     #[must_use]
     pub const fn from_radius(radius: Pixels) -> Self {
         Self {
@@ -94,6 +99,7 @@ impl Circle<Pixels> {
     }
 
     /// Creates a circle from explicit center coordinates and radius.
+    #[inline]
     #[must_use]
     pub const fn from_coords(cx: Pixels, cy: Pixels, radius: Pixels) -> Self {
         Self {
@@ -103,6 +109,7 @@ impl Circle<Pixels> {
     }
 
     /// Creates the largest circle that fits inside the given rectangle.
+    #[inline]
     #[must_use]
     pub fn inscribed_in_rect(rect: Rect<Pixels>) -> Self {
         Self {
@@ -112,6 +119,7 @@ impl Circle<Pixels> {
     }
 
     /// Creates the smallest circle that contains the given rectangle.
+    #[inline]
     #[must_use]
     pub fn circumscribed_around_rect(rect: Rect<Pixels>) -> Self {
         let center = rect.center();
@@ -129,6 +137,7 @@ where
     T: Into<f32> + From<f32>,
 {
     /// Returns the diameter of the circle (2 × radius).
+    #[inline]
     #[must_use]
     pub fn diameter(&self) -> T {
         let r: f32 = self.radius.into();
@@ -136,12 +145,14 @@ where
     }
 
     /// Returns the circumference of the circle (2πr).
+    #[inline]
     #[must_use]
     pub fn circumference(&self) -> f32 {
         std::f32::consts::TAU * self.radius.into()
     }
 
     /// Returns the area of the circle (πr²).
+    #[inline]
     #[must_use]
     pub fn area(&self) -> f32 {
         let r: f32 = self.radius.into();
@@ -149,6 +160,7 @@ where
     }
 
     /// Returns the smallest axis-aligned bounds that contains this circle.
+    #[inline]
     #[must_use]
     pub fn bounding_box(&self) -> super::Bounds<T>
     where
@@ -170,12 +182,14 @@ where
     T: Into<f32> + From<f32> + PartialOrd,
 {
     /// Returns `true` if the circle has zero radius.
+    #[inline]
     #[must_use]
     pub fn is_zero(&self) -> bool {
         self.radius.into() == 0.0
     }
 
     /// Returns `true` if the circle is valid (non-negative radius, finite center).
+    #[inline]
     #[must_use]
     pub fn is_valid(&self) -> bool {
         let r: f32 = self.radius.into();
@@ -183,6 +197,7 @@ where
     }
 
     /// Returns `true` if the point is inside or on the circle's boundary.
+    #[inline]
     #[must_use]
     pub fn contains(&self, point: Point<T>) -> bool {
         let r: f32 = self.radius.into();
@@ -190,6 +205,7 @@ where
     }
 
     /// Returns `true` if the point is strictly inside the circle (not on boundary).
+    #[inline]
     #[must_use]
     pub fn contains_strict(&self, point: Point<T>) -> bool {
         let r: f32 = self.radius.into();
@@ -197,6 +213,7 @@ where
     }
 
     /// Returns `true` if this circle completely contains the other circle.
+    #[inline]
     #[must_use]
     pub fn contains_circle(&self, other: &Circle<T>) -> bool {
         let dist = self.center.distance(other.center);
@@ -206,6 +223,7 @@ where
     }
 
     /// Returns `true` if this circle overlaps with another circle.
+    #[inline]
     #[must_use]
     pub fn overlaps(&self, other: &Circle<T>) -> bool {
         let dist_sq = self.center.distance_squared(other.center);
@@ -218,18 +236,21 @@ where
     /// Returns the signed distance from the point to the circle boundary.
     ///
     /// Negative values indicate the point is inside the circle.
+    #[inline]
     #[must_use]
     pub fn signed_distance(&self, point: Point<T>) -> f32 {
         self.center.distance(point) - self.radius.into()
     }
 
     /// Returns the absolute distance from the point to the circle boundary.
+    #[inline]
     #[must_use]
     pub fn distance_to_point(&self, point: Point<T>) -> f32 {
         self.signed_distance(point).abs()
     }
 
     /// Returns the nearest point on the circle boundary to the given point.
+    #[inline]
     #[must_use]
     pub fn nearest_point(&self, point: Point<T>) -> Point<T> {
         let center_f32 = self.center.to_f32();
@@ -250,6 +271,7 @@ where
     /// Returns the point on the circle boundary at the given angle.
     ///
     /// Angle is measured from the positive X axis, counter-clockwise.
+    #[inline]
     #[must_use]
     pub fn point_at_angle(&self, angle: Radians) -> Point<T> {
         let center_f32 = self.center.to_f32();
@@ -263,6 +285,7 @@ where
     /// Returns the angle from the circle center to the given point.
     ///
     /// Result is in the range [-π, π].
+    #[inline]
     #[must_use]
     pub fn angle_to(&self, point: Point<T>) -> Radians {
         let center_f32 = self.center.to_f32();
@@ -280,6 +303,7 @@ where
     T: Into<f32> + From<f32>,
 {
     /// Translates the circle by the given offset vector.
+    #[inline]
     #[must_use]
     pub fn translate(&self, offset: Vec2<T>) -> Self {
         Self {
@@ -289,6 +313,7 @@ where
     }
 
     /// Scales the circle's radius by the given factor.
+    #[inline]
     #[must_use]
     pub fn scale(&self, factor: f32) -> Self {
         Self {
@@ -300,6 +325,7 @@ where
     /// Increases the circle's radius by the given amount.
     ///
     /// The result is clamped to ensure radius remains non-negative.
+    #[inline]
     #[must_use]
     pub fn inflate(&self, amount: T) -> Self {
         let new_radius = (self.radius.into() + amount.into()).max(0.0);
@@ -312,6 +338,7 @@ where
     /// Decreases the circle's radius by the given amount.
     ///
     /// Equivalent to `inflate(-amount)`.
+    #[inline]
     #[must_use]
     pub fn deflate(&self, amount: T) -> Self
     where
@@ -321,6 +348,7 @@ where
     }
 
     /// Linearly interpolates between this circle and another.
+    #[inline]
     #[must_use]
     pub fn lerp(self, other: Self, t: f32) -> Self {
         let r1: f32 = self.radius.into();
@@ -341,6 +369,7 @@ where
     T: Into<f32>,
 {
     /// Converts the circle to f32-based Pixels.
+    #[inline]
     #[must_use]
     pub fn to_f32(&self) -> Circle<Pixels> {
         Circle {
@@ -355,6 +384,7 @@ where
     T: Into<f32>,
 {
     /// Converts the circle to an array [center_x, center_y, radius].
+    #[inline]
     #[must_use]
     pub fn to_array(&self) -> [f32; 3] {
         [
@@ -373,6 +403,7 @@ impl Circle<Pixels> {
     /// Computes the intersection points between this circle and a line.
     ///
     /// Returns `None` if they don't intersect, or `Some((p1, p2))` with the two intersection points.
+    #[inline]
     #[must_use]
     pub fn intersect_line(
         &self,
@@ -405,6 +436,7 @@ impl Circle<Pixels> {
 
 impl Circle<super::Pixels> {
     /// Scales the circle to scaled pixels by the given factor.
+    #[inline]
     #[must_use]
     pub fn scale_to_scaled(&self, factor: f32) -> Circle<super::ScaledPixels> {
         Circle {

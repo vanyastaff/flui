@@ -79,12 +79,14 @@ impl<T: Unit> Default for Bounds<T> {
 
 impl<T: Unit> Bounds<T> {
     /// Creates new bounds from an origin point and size.
+    #[inline]
     #[must_use]
     pub const fn new(origin: Point<T>, size: Size<T>) -> Self {
         Self { origin, size }
     }
 
     /// Maps the bounds to a different unit type by applying a function to each component.
+    #[inline]
     #[must_use]
     pub fn map<U: Unit>(&self, f: impl Fn(T) -> U + Copy) -> Bounds<U>
     where
@@ -97,6 +99,7 @@ impl<T: Unit> Bounds<T> {
     }
 
     /// Transforms the origin by applying a function while keeping the size unchanged.
+    #[inline]
     #[must_use]
     pub fn map_origin(self, f: impl Fn(T) -> T) -> Self
     where
@@ -109,6 +112,7 @@ impl<T: Unit> Bounds<T> {
     }
 
     /// Transforms the size by applying a function while keeping the origin unchanged.
+    #[inline]
     #[must_use]
     pub fn map_size(self, f: impl Fn(T) -> T) -> Self
     where
@@ -132,6 +136,7 @@ where
     /// Creates bounds from two corner points.
     ///
     /// Computes the size from the difference between bottom-right and top-left corners.
+    #[inline]
     #[must_use]
     pub fn from_corners(top_left: Point<T>, bottom_right: Point<T>) -> Self {
         Self {
@@ -143,6 +148,7 @@ where
     /// Creates bounds from a specific corner point and size.
     ///
     /// The corner parameter determines which corner the origin point represents.
+    #[inline]
     #[must_use]
     pub fn from_corner_and_size(corner: Corner, origin: Point<T>, size: Size<T>) -> Self {
         let origin = match corner {
@@ -160,6 +166,7 @@ where
     T: Add<T, Output = T> + Sub<T, Output = T> + Div<f32, Output = T>,
 {
     /// Creates bounds centered at the given point with the specified size.
+    #[inline]
     #[must_use]
     pub fn centered_at(center: Point<T>, size: Size<T>) -> Self {
         Self {
@@ -178,48 +185,56 @@ where
     T: Add<T, Output = T>,
 {
     /// Returns the Y coordinate of the top edge.
+    #[inline]
     #[must_use]
     pub fn top(&self) -> T {
         self.origin.y
     }
 
     /// Returns the Y coordinate of the bottom edge.
+    #[inline]
     #[must_use]
     pub fn bottom(&self) -> T {
         self.origin.y + self.size.height
     }
 
     /// Returns the X coordinate of the left edge.
+    #[inline]
     #[must_use]
     pub fn left(&self) -> T {
         self.origin.x
     }
 
     /// Returns the X coordinate of the right edge.
+    #[inline]
     #[must_use]
     pub fn right(&self) -> T {
         self.origin.x + self.size.width
     }
 
     /// Returns the top-left corner point.
+    #[inline]
     #[must_use]
     pub fn top_left(&self) -> Point<T> {
         self.origin
     }
 
     /// Returns the top-right corner point.
+    #[inline]
     #[must_use]
     pub fn top_right(&self) -> Point<T> {
         Point::new(self.origin.x + self.size.width, self.origin.y)
     }
 
     /// Returns the bottom-left corner point.
+    #[inline]
     #[must_use]
     pub fn bottom_left(&self) -> Point<T> {
         Point::new(self.origin.x, self.origin.y + self.size.height)
     }
 
     /// Returns the bottom-right corner point.
+    #[inline]
     #[must_use]
     pub fn bottom_right(&self) -> Point<T> {
         Point::new(
@@ -229,6 +244,7 @@ where
     }
 
     /// Returns the point at the specified corner.
+    #[inline]
     #[must_use]
     pub fn corner(&self, corner: Corner) -> Point<T> {
         match corner {
@@ -240,6 +256,7 @@ where
     }
 
     /// Returns the center point of the bounds.
+    #[inline]
     #[must_use]
     pub fn center(&self) -> Point<T>
     where
@@ -263,6 +280,7 @@ where
     /// Checks if these bounds overlap with another bounds.
     ///
     /// Returns `true` if the two bounds share any area.
+    #[inline]
     #[must_use]
     pub fn intersects(&self, other: &Self) -> bool {
         let my_br = self.bottom_right();
@@ -277,6 +295,7 @@ where
     /// Checks if the given point is inside these bounds.
     ///
     /// Returns `true` if the point is within or on the edges of the bounds.
+    #[inline]
     #[must_use]
     pub fn contains(&self, point: &Point<T>) -> bool {
         point.x >= self.origin.x
@@ -286,6 +305,7 @@ where
     }
 
     /// Checks if these bounds are completely contained within another bounds.
+    #[inline]
     #[must_use]
     pub fn is_contained_within(&self, other: &Self) -> bool {
         other.contains(&self.origin) && other.contains(&self.bottom_right())
@@ -300,6 +320,7 @@ where
     ///
     /// Returns a bounds representing the overlapping area. If there is no overlap,
     /// the returned bounds may have negative or zero size.
+    #[inline]
     #[must_use]
     pub fn intersect(&self, other: &Self) -> Self {
         let top_left = Point::new(
@@ -337,6 +358,7 @@ where
     /// Computes the union of these bounds with another bounds.
     ///
     /// Returns the smallest bounds that completely contains both input bounds.
+    #[inline]
     #[must_use]
     pub fn union(&self, other: &Self) -> Self {
         let top_left = Point::new(
@@ -375,6 +397,7 @@ where
     ///
     /// Returns `Some(point)` with coordinates relative to the origin if the point is within
     /// the bounds, or `None` if the point is outside.
+    #[inline]
     #[must_use]
     pub fn localize(&self, point: &Point<T>) -> Option<Point<T>> {
         if self.contains(point) {
@@ -396,6 +419,7 @@ where
     /// Expands the bounds uniformly in all directions by the specified amount.
     ///
     /// The origin moves outward by `amount`, and the size increases by `2 * amount`.
+    #[inline]
     #[must_use]
     pub fn dilate(&self, amount: T) -> Self {
         let double_amount = amount + amount;
@@ -411,6 +435,7 @@ where
     /// Extends the bounds by different amounts on each edge.
     ///
     /// The edges parameter specifies how much to expand each side.
+    #[inline]
     #[must_use]
     pub fn extend(&self, amount: Edges<T>) -> Self {
         Self {
@@ -425,6 +450,7 @@ where
     /// Shrinks the bounds uniformly in all directions by the specified amount.
     ///
     /// This is the opposite of `dilate` - equivalent to `dilate(-amount)`.
+    #[inline]
     #[must_use]
     pub fn inset(&self, amount: T) -> Self
     where
@@ -437,6 +463,7 @@ where
     ///
     /// Returns edges representing the distance from each side of these bounds
     /// to the corresponding side of the outer bounds.
+    #[inline]
     #[must_use]
     pub fn space_within(&self, outer: &Self) -> Edges<T> {
         Edges {
@@ -560,6 +587,7 @@ impl<T: Unit + NumericUnit> From<Bounds<T>> for Rect<T> {
 
 impl Bounds<super::units::Pixels> {
     /// Scales the bounds by a factor, converting to scaled pixels.
+    #[inline]
     #[must_use]
     pub fn scale(&self, factor: f32) -> Bounds<super::units::ScaledPixels> {
         Bounds {
@@ -575,6 +603,7 @@ impl Bounds<super::units::Pixels> {
 
 impl Bounds<super::units::ScaledPixels> {
     /// Converts scaled pixel bounds to device pixels by rounding.
+    #[inline]
     #[must_use]
     pub fn to_device_pixels(&self) -> Bounds<super::units::DevicePixels> {
         Bounds {
@@ -616,6 +645,7 @@ where
 
 impl<T: Unit> Bounds<T> {
     /// Returns `true` if the bounds have zero or negative area.
+    #[inline]
     #[must_use]
     pub fn is_empty(&self) -> bool
     where
@@ -628,6 +658,7 @@ impl<T: Unit> Bounds<T> {
     }
 
     /// Casts the bounds to a different unit type.
+    #[inline]
     #[must_use]
     pub fn cast<U: Unit>(self) -> Bounds<U>
     where
@@ -640,6 +671,7 @@ impl<T: Unit> Bounds<T> {
     }
 
     /// Converts the bounds to f32-based Pixels.
+    #[inline]
     #[must_use]
     pub fn to_f32(self) -> Bounds<Pixels>
     where

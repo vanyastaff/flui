@@ -43,6 +43,7 @@ impl RSuperellipse {
     // Constructors
     // ========================================================================
 
+    #[inline]
     #[must_use]
     pub fn from_ltrb_r(
         left: Pixels,
@@ -60,6 +61,7 @@ impl RSuperellipse {
         }
     }
 
+    #[inline]
     #[must_use]
     pub fn from_ltrb_xy(
         left: Pixels,
@@ -74,6 +76,7 @@ impl RSuperellipse {
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[inline]
     pub fn from_ltrb_and_corners(
         left: Pixels,
         top: Pixels,
@@ -93,6 +96,7 @@ impl RSuperellipse {
         }
     }
 
+    #[inline]
     #[must_use]
     pub fn from_rect_and_radius(rect: Rect<Pixels>, radius: Radius<Pixels>) -> Self {
         Self {
@@ -104,6 +108,7 @@ impl RSuperellipse {
         }
     }
 
+    #[inline]
     #[must_use]
     pub fn from_rect_and_corners(
         rect: Rect<Pixels>,
@@ -121,6 +126,7 @@ impl RSuperellipse {
         }
     }
 
+    #[inline]
     #[must_use]
     pub fn from_rect_circular(rect: Rect<Pixels>, radius: Pixels) -> Self {
         Self::from_rect_and_radius(rect, Radius::circular(radius))
@@ -130,61 +136,73 @@ impl RSuperellipse {
     // Properties
     // ========================================================================
 
+    #[inline]
     #[must_use]
     pub fn outer_rect(&self) -> Rect<Pixels> {
         self.rect
     }
 
+    #[inline]
     #[must_use]
     pub fn left(&self) -> Pixels {
         self.rect.left()
     }
 
+    #[inline]
     #[must_use]
     pub fn top(&self) -> Pixels {
         self.rect.top()
     }
 
+    #[inline]
     #[must_use]
     pub fn right(&self) -> Pixels {
         self.rect.right()
     }
 
+    #[inline]
     #[must_use]
     pub fn bottom(&self) -> Pixels {
         self.rect.bottom()
     }
 
+    #[inline]
     #[must_use]
     pub fn width(&self) -> Pixels {
         self.rect.width()
     }
 
+    #[inline]
     #[must_use]
     pub fn height(&self) -> Pixels {
         self.rect.height()
     }
 
+    #[inline]
     #[must_use]
     pub fn tl_radius(&self) -> Radius<Pixels> {
         self.tl_radius
     }
 
+    #[inline]
     #[must_use]
     pub fn tr_radius(&self) -> Radius<Pixels> {
         self.tr_radius
     }
 
+    #[inline]
     #[must_use]
     pub fn br_radius(&self) -> Radius<Pixels> {
         self.br_radius
     }
 
+    #[inline]
     #[must_use]
     pub fn bl_radius(&self) -> Radius<Pixels> {
         self.bl_radius
     }
 
+    #[inline]
     #[must_use]
     pub fn has_uniform_corners(&self) -> bool {
         self.tl_radius == self.tr_radius
@@ -192,6 +210,7 @@ impl RSuperellipse {
             && self.br_radius == self.bl_radius
     }
 
+    #[inline]
     #[must_use]
     pub fn has_circular_corners(&self) -> bool {
         self.tl_radius.is_circular()
@@ -200,6 +219,7 @@ impl RSuperellipse {
             && self.bl_radius.is_circular()
     }
 
+    #[inline]
     #[must_use]
     pub fn is_rect(&self) -> bool {
         self.tl_radius.is_zero()
@@ -208,6 +228,7 @@ impl RSuperellipse {
             && self.bl_radius.is_zero()
     }
 
+    #[inline]
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.rect.is_empty()
@@ -217,6 +238,7 @@ impl RSuperellipse {
     // Safe inner rectangles
     // ========================================================================
 
+    #[inline]
     #[must_use]
     pub fn safe_inner_rect(&self) -> Rect<Pixels> {
         // Use the maximum corner radii to determine safe insets
@@ -233,6 +255,7 @@ impl RSuperellipse {
         )
     }
 
+    #[inline]
     #[must_use]
     pub fn wide_middle_rect(&self) -> Rect<Pixels> {
         let inset_top = self.tl_radius.y.max(self.tr_radius.y);
@@ -246,6 +269,7 @@ impl RSuperellipse {
         )
     }
 
+    #[inline]
     #[must_use]
     pub fn tall_middle_rect(&self) -> Rect<Pixels> {
         let inset_left = self.tl_radius.x.max(self.bl_radius.x);
@@ -263,6 +287,7 @@ impl RSuperellipse {
     // Transformations
     // ========================================================================
 
+    #[inline]
     #[must_use]
     pub fn inflate(&self, delta: Pixels) -> Self {
         Self {
@@ -274,11 +299,13 @@ impl RSuperellipse {
         }
     }
 
+    #[inline]
     #[must_use]
     pub fn deflate(&self, delta: Pixels) -> Self {
         self.inflate(-delta)
     }
 
+    #[inline]
     #[must_use]
     pub fn scale(&self, factor: f32) -> Self {
         Self {
@@ -319,6 +346,7 @@ impl RSuperellipse {
     // Interpolation
     // ========================================================================
 
+    #[inline]
     #[must_use]
     pub fn lerp(a: Self, b: Self, t: f32) -> Self {
         Self {

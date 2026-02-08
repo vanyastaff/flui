@@ -120,6 +120,7 @@ impl<T> Edges<T> {
 
     /// Maps each edge value using the provided function.
     #[must_use]
+    #[inline]
     pub fn map<U>(&self, f: impl Fn(&T) -> U) -> Edges<U> {
         Edges {
             top: f(&self.top),
@@ -131,12 +132,14 @@ impl<T> Edges<T> {
 
     /// Returns `true` if any edge satisfies the predicate.
     #[must_use]
+    #[inline]
     pub fn any(&self, f: impl Fn(&T) -> bool) -> bool {
         f(&self.top) || f(&self.right) || f(&self.bottom) || f(&self.left)
     }
 
     /// Returns `true` if all edges satisfy the predicate.
     #[must_use]
+    #[inline]
     pub fn all_satisfy(&self, f: impl Fn(&T) -> bool) -> bool {
         f(&self.top) && f(&self.right) && f(&self.bottom) && f(&self.left)
     }
@@ -226,6 +229,7 @@ impl Edges<super::units::Pixels> {
     /// assert_eq!(size.height, px(40.0)); // top + bottom = 10 + 30
     /// ```
     #[must_use]
+    #[inline]
     pub fn total_size(&self) -> super::Size<super::units::Pixels> {
         super::Size::new(self.horizontal_total(), self.vertical_total())
     }
@@ -243,6 +247,7 @@ impl Edges<super::units::Pixels> {
     /// assert_eq!(offset.dy, px(10.0)); // top
     /// ```
     #[must_use]
+    #[inline]
     pub fn top_left(&self) -> super::Offset<super::units::Pixels> {
         super::Offset::new(self.left, self.top)
     }
@@ -260,6 +265,7 @@ impl Edges<super::units::Pixels> {
     /// assert_eq!(offset.dy, px(30.0)); // bottom
     /// ```
     #[must_use]
+    #[inline]
     pub fn bottom_right(&self) -> super::Offset<super::units::Pixels> {
         super::Offset::new(self.right, self.bottom)
     }
@@ -278,6 +284,7 @@ impl Edges<super::units::Pixels> {
     /// assert!(!non_zero.is_zero());
     /// ```
     #[must_use]
+    #[inline]
     pub fn is_zero(&self) -> bool {
         use super::units::px;
         self.left == px(0.0)
@@ -300,6 +307,7 @@ impl Edges<super::units::Pixels> {
     /// assert!(!negative.is_non_negative());
     /// ```
     #[must_use]
+    #[inline]
     pub fn is_non_negative(&self) -> bool {
         use super::units::px;
         self.left >= px(0.0)
@@ -323,6 +331,7 @@ impl Edges<super::units::Pixels> {
     /// assert_eq!(clamped.left, px(20.0));
     /// ```
     #[must_use]
+    #[inline]
     pub fn clamp_non_negative(&self) -> Self {
         use super::units::px;
         Self {
@@ -351,6 +360,7 @@ impl Edges<super::units::Pixels> {
 
     /// Scales all edges by the given factor, converting to scaled pixels.
     #[must_use]
+    #[inline]
     pub fn scale(&self, factor: f32) -> Edges<super::units::ScaledPixels> {
         Edges {
             top: self.top.scale(factor),
@@ -378,6 +388,7 @@ impl Edges<super::units::Pixels> {
     /// assert_eq!(inflated.bottom(), px(110.0));
     /// ```
     #[must_use]
+    #[inline]
     pub fn inflate_rect(
         &self,
         rect: super::Rect<super::units::Pixels>,
@@ -406,6 +417,7 @@ impl Edges<super::units::Pixels> {
     /// assert_eq!(deflated.bottom(), px(90.0));
     /// ```
     #[must_use]
+    #[inline]
     pub fn deflate_rect(
         &self,
         rect: super::Rect<super::units::Pixels>,
@@ -432,6 +444,7 @@ impl Edges<super::units::Pixels> {
     /// assert_eq!(inflated.height, px(120.0)); // 100 + 10 + 10
     /// ```
     #[must_use]
+    #[inline]
     pub fn inflate_size(
         &self,
         size: super::Size<super::units::Pixels>,
@@ -458,6 +471,7 @@ impl Edges<super::units::Pixels> {
     /// assert_eq!(deflated.height, px(80.0)); // 100 - 10 - 10
     /// ```
     #[must_use]
+    #[inline]
     pub fn deflate_size(
         &self,
         size: super::Size<super::units::Pixels>,
@@ -481,6 +495,7 @@ impl Edges<super::units::Pixels> {
     /// assert_eq!(flipped.right, px(40.0));
     /// ```
     #[must_use]
+    #[inline]
     pub fn flip_horizontal(&self) -> Self {
         Self {
             top: self.top,
@@ -503,6 +518,7 @@ impl Edges<super::units::Pixels> {
     /// assert_eq!(flipped.bottom, px(10.0));
     /// ```
     #[must_use]
+    #[inline]
     pub fn flip_vertical(&self) -> Self {
         Self {
             top: self.bottom,
