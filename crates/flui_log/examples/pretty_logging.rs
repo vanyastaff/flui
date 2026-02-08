@@ -74,7 +74,14 @@ fn main() {
 
 #[cfg(not(feature = "pretty"))]
 fn main() {
-    eprintln!("⚠️  This example requires the 'pretty' feature!");
-    eprintln!("Run with: cargo run --example pretty_logging --features pretty");
+    // Use compile_error-style approach: print to stderr and exit.
+    // This is an example binary, not library code — tracing is not yet
+    // initialized so we must use std I/O to tell the user what to do.
+    use std::io::Write;
+    let _ = writeln!(
+        std::io::stderr(),
+        "This example requires the 'pretty' feature!\n\
+         Run with: cargo run --example pretty_logging --features pretty"
+    );
     std::process::exit(1);
 }

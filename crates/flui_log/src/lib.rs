@@ -84,7 +84,7 @@ mod logger;
 #[cfg(target_os = "android")]
 pub mod android_layer;
 
-pub use logger::Logger;
+pub use logger::{InitError, Logger};
 
 // Re-export tracing macros for convenience
 pub use tracing::{debug, error, info, trace, warn, Level};

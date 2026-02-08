@@ -179,12 +179,15 @@ struct StringRecorder {
     has_fields: bool,
 }
 
+/// Typical log message size — avoids reallocations for most events.
+const DEFAULT_LOG_CAPACITY: usize = 128;
+
 impl StringRecorder {
-    /// Create a new empty recorder
+    /// Create a new recorder with pre-allocated buffer
     #[inline]
     fn new() -> Self {
         Self {
-            output: String::new(),
+            output: String::with_capacity(DEFAULT_LOG_CAPACITY),
             has_fields: false,
         }
     }
@@ -196,28 +199,49 @@ impl StringRecorder {
     }
 }
 
+impl StringRecorder {
+    /// Write a message field, prepending it before any existing field output.
+    fn write_message(&mut self, msg: &str) {
+        if self.output.is_empty() {
+            self.output.push_str(msg);
+        } else {
+            // Prepend message before existing fields, avoiding a second full-size allocation
+            let sep = " | ";
+            self.output.insert_str(0, sep);
+            self.output.insert_str(0, msg);
+        }
+    }
+
+    /// Write a non-message field as `key=value`.
+    fn write_field(&mut self, name: &str, value: &str) {
+        if self.has_fields {
+            self.output.push(' ');
+        }
+        self.has_fields = true;
+        write!(self.output, "{}={}", name, value).unwrap();
+    }
+}
+
 impl Visit for StringRecorder {
+    /// Handle string values without Debug quoting for clean logcat output.
+    fn record_str(&mut self, field: &Field, value: &str) {
+        if field.name() == "message" {
+            self.write_message(value);
+        } else {
+            self.write_field(field.name(), value);
+        }
+    }
+
+    /// Fallback for non-string values — uses Debug formatting.
     fn record_debug(&mut self, field: &Field, value: &dyn Debug) {
         if field.name() == "message" {
-            // Message field goes first
-            if !self.output.is_empty() {
-                // If we already have fields, prepend the message
-                self.output = format!("{:?}\n{}", value, self.output);
-            } else {
-                // First field is the message
-                write!(self.output, "{:?}", value).unwrap();
-            }
+            let msg = format!("{:?}", value);
+            self.write_message(&msg);
         } else {
-            // Other fields are appended as key=value pairs
             if self.has_fields {
-                write!(self.output, " ").unwrap();
-            } else {
-                // First non-message field needs a separator if message exists
-                if !self.output.is_empty() {
-                    write!(self.output, " | ").unwrap();
-                }
-                self.has_fields = true;
+                self.output.push(' ');
             }
+            self.has_fields = true;
             write!(self.output, "{}={:?}", field.name(), value).unwrap();
         }
     }
@@ -257,10 +281,11 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for AndroidLayer {
             Level::ERROR => android_log_sys::LogPriority::ERROR,
         };
 
-        // Use the event target as the log tag (usually the module path)
-        // Fallback to app_name if target is empty or contains null bytes
+        // Use the event target as the log tag (usually the module path).
+        // Fallback chain: target → app_name → hardcoded "flui" (guaranteed null-free).
         let tag = std::ffi::CString::new(metadata.target())
-            .unwrap_or_else(|_| std::ffi::CString::new(&self.app_name).unwrap());
+            .or_else(|_| std::ffi::CString::new(self.app_name.as_str()))
+            .unwrap_or_else(|_| std::ffi::CString::new("flui").unwrap());
 
         // Create C string for the message
         // If the message contains null bytes, truncate at the first null
@@ -300,47 +325,73 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for AndroidLayer {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_string_recorder_message_only() {
-        let mut recorder = StringRecorder::new();
-        let field = Field::new("message", tracing::field::CallsiteKind::Event);
-        recorder.record_debug(&field, &"Hello, world!");
+    /// Helper: create a mock [`Field`] by name using a static callsite.
+    ///
+    /// `tracing::field::Field::new` is internal API and may break across
+    /// versions. This helper isolates that risk to a single location.
+    fn mock_field(name: &'static str) -> Field {
+        Field::new(name, tracing::field::CallsiteKind::Event)
+    }
 
+    // --- record_str tests (string values, no Debug quoting) ---
+
+    #[test]
+    fn test_record_str_message_only() {
+        let mut recorder = StringRecorder::new();
+        recorder.record_str(&mock_field("message"), "Hello, world!");
+
+        assert_eq!(recorder.into_string(), "Hello, world!");
+    }
+
+    #[test]
+    fn test_record_str_message_then_fields() {
+        let mut recorder = StringRecorder::new();
+        recorder.record_str(&mock_field("message"), "User action");
+        recorder.record_debug(&mock_field("user_id"), &42);
+        recorder.record_str(&mock_field("action"), "login");
+
+        let output = recorder.into_string();
+        assert_eq!(output, "User action | user_id=42 action=login");
+    }
+
+    #[test]
+    fn test_record_str_fields_then_message() {
+        let mut recorder = StringRecorder::new();
+        recorder.record_str(&mock_field("key1"), "value1");
+        recorder.record_debug(&mock_field("key2"), &123);
+        recorder.record_str(&mock_field("message"), "late msg");
+
+        let output = recorder.into_string();
+        assert_eq!(output, "late msg | key1=value1 key2=123");
+    }
+
+    // --- record_debug tests (non-string values, Debug formatting) ---
+
+    #[test]
+    fn test_record_debug_message_only() {
+        let mut recorder = StringRecorder::new();
+        recorder.record_debug(&mock_field("message"), &"Hello, world!");
+
+        // Debug formatting adds quotes around &str
         assert_eq!(recorder.into_string(), "\"Hello, world!\"");
     }
 
     #[test]
-    fn test_string_recorder_message_with_fields() {
+    fn test_record_debug_fields_only() {
         let mut recorder = StringRecorder::new();
-
-        let msg_field = Field::new("message", tracing::field::CallsiteKind::Event);
-        recorder.record_debug(&msg_field, &"User action");
-
-        let id_field = Field::new("user_id", tracing::field::CallsiteKind::Event);
-        recorder.record_debug(&id_field, &42);
-
-        let name_field = Field::new("action", tracing::field::CallsiteKind::Event);
-        recorder.record_debug(&name_field, &"login");
+        recorder.record_debug(&mock_field("key1"), &"value1");
+        recorder.record_debug(&mock_field("key2"), &123);
 
         let output = recorder.into_string();
-        assert!(output.contains("\"User action\""));
-        assert!(output.contains("user_id=42"));
-        assert!(output.contains("action=\"login\""));
+        assert_eq!(output, "key1=\"value1\" key2=123");
     }
 
+    // --- pre-allocation test ---
+
     #[test]
-    fn test_string_recorder_fields_only() {
-        let mut recorder = StringRecorder::new();
-
-        let field1 = Field::new("key1", tracing::field::CallsiteKind::Event);
-        recorder.record_debug(&field1, &"value1");
-
-        let field2 = Field::new("key2", tracing::field::CallsiteKind::Event);
-        recorder.record_debug(&field2, &123);
-
-        let output = recorder.into_string();
-        assert!(output.contains("key1=\"value1\""));
-        assert!(output.contains("key2=123"));
+    fn test_string_recorder_preallocated() {
+        let recorder = StringRecorder::new();
+        assert!(recorder.output.capacity() >= DEFAULT_LOG_CAPACITY);
     }
 
     #[test]

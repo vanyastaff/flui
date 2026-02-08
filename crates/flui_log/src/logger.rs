@@ -1,4 +1,30 @@
 use tracing::Level;
+use tracing_subscriber::util::{SubscriberInitExt, TryInitError};
+
+/// Error returned when logging initialization fails.
+///
+/// This is a thin wrapper around [`tracing_subscriber::util::TryInitError`],
+/// returned by [`Logger::try_init`] when the global subscriber has already been set.
+#[derive(Debug)]
+pub struct InitError(TryInitError);
+
+impl core::fmt::Display for InitError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "failed to initialize logger: {}", self.0)
+    }
+}
+
+impl From<TryInitError> for InitError {
+    fn from(err: TryInitError) -> Self {
+        Self(err)
+    }
+}
+
+impl std::error::Error for InitError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.0)
+    }
+}
 
 /// Cross-platform logging for FLUI
 ///
@@ -135,6 +161,7 @@ impl Default for Logger {
 
 impl Logger {
     /// Create a new Logger with default settings
+    #[inline]
     #[must_use]
     pub fn new() -> Self {
         Self::default()
@@ -150,6 +177,7 @@ impl Logger {
     /// let logger = Logger::new();
     /// assert_eq!(logger.app_name(), "flui");
     /// ```
+    #[inline]
     #[must_use]
     pub fn app_name(&self) -> &str {
         &self.app_name
@@ -165,6 +193,7 @@ impl Logger {
     /// let logger = Logger::new();
     /// assert_eq!(logger.filter(), "info,wgpu=warn");
     /// ```
+    #[inline]
     #[must_use]
     pub fn filter(&self) -> &str {
         &self.filter
@@ -180,6 +209,7 @@ impl Logger {
     /// let logger = Logger::new();
     /// assert_eq!(logger.level(), &Level::INFO);
     /// ```
+    #[inline]
     #[must_use]
     pub fn level(&self) -> &Level {
         &self.level
@@ -199,6 +229,7 @@ impl Logger {
     /// let is_pretty = logger.use_pretty();
     /// ```
     #[cfg(feature = "pretty")]
+    #[inline]
     #[must_use]
     pub fn use_pretty(&self) -> bool {
         self.use_pretty
@@ -219,6 +250,7 @@ impl Logger {
     /// let logger = Logger::new()
     ///     .with_app_name("my_game");
     /// ```
+    #[inline]
     #[must_use]
     pub fn with_app_name(mut self, app_name: impl Into<String>) -> Self {
         self.app_name = app_name.into();
@@ -235,6 +267,7 @@ impl Logger {
     /// let logger = Logger::new()
     ///     .with_filter("debug,wgpu=warn,flui_core=trace");
     /// ```
+    #[inline]
     #[must_use]
     pub fn with_filter(mut self, filter: impl Into<String>) -> Self {
         self.filter = filter.into();
@@ -251,6 +284,7 @@ impl Logger {
     /// let logger = Logger::new()
     ///     .with_level(Level::DEBUG);
     /// ```
+    #[inline]
     #[must_use]
     pub fn with_level(mut self, level: Level) -> Self {
         self.level = level;
@@ -271,6 +305,7 @@ impl Logger {
     ///     .with_pretty(true);  // Requires "pretty" feature
     /// ```
     #[cfg(feature = "pretty")]
+    #[inline]
     #[must_use]
     pub fn with_pretty(mut self, pretty: bool) -> Self {
         self.use_pretty = pretty;
@@ -292,6 +327,7 @@ impl Logger {
     /// # Panics
     ///
     /// Panics if the global tracing subscriber has already been set.
+    /// Use [`try_init`](Self::try_init) for a non-panicking alternative.
     ///
     /// # Examples
     ///
@@ -307,6 +343,27 @@ impl Logger {
     ///     .init();
     /// ```
     pub fn init(&self) {
+        self.try_init().expect("Failed to initialize logger");
+    }
+
+    /// Try to initialize the logging system, returning an error on failure.
+    ///
+    /// This is the non-panicking alternative to [`init`](Self::init). Returns
+    /// an error if the global tracing subscriber has already been set — useful
+    /// in tests where multiple test cases may attempt initialization.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use flui_log::Logger;
+    ///
+    /// // In tests — ignore double-init
+    /// let _ = Logger::default().try_init();
+    ///
+    /// // In applications — handle the error
+    /// Logger::default().try_init().expect("logging already initialized");
+    /// ```
+    pub fn try_init(&self) -> Result<(), InitError> {
         use tracing_subscriber::{layer::SubscriberExt, Registry};
 
         // Create filter layer from environment or config
@@ -327,10 +384,8 @@ impl Logger {
                     .with(LevelFilter::from_level(self.level))
                     .with(ForestLayer::default());
 
-                tracing::subscriber::set_global_default(subscriber)
-                    .expect("Failed to set tracing subscriber");
-
-                return;
+                subscriber.try_init()?;
+                return Ok(());
             }
 
             // Standard fmt layer for desktop (fallback or when "pretty" not enabled)
@@ -339,10 +394,14 @@ impl Logger {
                 .with_level(true)
                 .with_line_number(true);
 
-            let subscriber = Registry::default().with(filter_layer).with(fmt_layer);
+            let subscriber = Registry::default()
+                .with(filter_layer)
+                .with(tracing_subscriber::filter::LevelFilter::from_level(
+                    self.level,
+                ))
+                .with(fmt_layer);
 
-            tracing::subscriber::set_global_default(subscriber)
-                .expect("Failed to set tracing subscriber");
+            subscriber.try_init()?;
         }
 
         // === ANDROID ===
@@ -352,75 +411,31 @@ impl Logger {
 
             let subscriber = Registry::default().with(filter_layer).with(android_layer);
 
-            tracing::subscriber::set_global_default(subscriber)
-                .expect("Failed to set tracing subscriber");
+            subscriber.try_init()?;
 
             tracing::info!("Logging initialized (Android/logcat)");
         }
 
         // === iOS ===
-        // Uses tracing-oslog crate which integrates with Apple's unified logging system (os_log).
-        // Logs can be viewed in:
-        // - Xcode Console (when running from Xcode)
-        // - Console.app (macOS application)
-        // - Command line: `log stream --predicate 'subsystem == "com.flui.app"'`
-        //
-        // The subsystem identifier ("com.flui.app") should match your app's bundle ID
-        // for proper log organization. The category ("default") groups related logs.
-        //
-        // os_log advantages:
-        // - Native Apple platform integration
-        // - Efficient structured logging
-        // - Privacy-preserving by default
-        // - Integration with Apple's debugging tools
         #[cfg(target_os = "ios")]
         {
             use tracing_oslog::OsLogger;
 
-            // Create os_log logger with subsystem and category
-            // Subsystem: Formatted as "com.{app_name}.app" for proper iOS identification
-            // Category: Logical grouping for logs (e.g., "network", "ui", "database")
             let subsystem = format!("com.{}.app", self.app_name);
             let os_logger = OsLogger::new(&subsystem, "default");
 
             let subscriber = Registry::default().with(filter_layer).with(os_logger);
 
-            tracing::subscriber::set_global_default(subscriber)
-                .expect("Failed to set tracing subscriber");
+            subscriber.try_init()?;
 
             tracing::info!("Logging initialized (iOS/os_log)");
         }
 
         // === WASM ===
-        // Uses tracing-wasm crate which integrates with browser DevTools console.
-        // Leverages window.performance API for timing measurements.
-        //
-        // Requirements:
-        // - Browser environment (Chrome, Firefox, Safari, Edge)
-        // - Does NOT work in Node.js or Cloudflare Workers (no window.performance)
-        //
-        // Logs appear in browser DevTools console (F12):
-        // - TRACE/DEBUG → console.debug()
-        // - INFO → console.info()
-        // - WARN → console.warn()
-        // - ERROR → console.error()
-        //
-        // Features:
-        // - Color-coded output in DevTools
-        // - Performance marks and measures
-        // - Stack traces for errors
-        // - Interactive console exploration
-        //
-        // Note: WASMLayer uses window.performance.mark/measure for timing,
-        // so you can see span durations in the browser's Performance tab.
         #[cfg(target_arch = "wasm32")]
         {
             use tracing_wasm::WASMLayerConfigBuilder;
 
-            // Configure WASM layer with max level from Logger settings
-            // Additional configuration options:
-            // - set_report_logs_in_timings(bool) - Include logs in performance timeline
-            // - set_console_config(ConsoleConfig) - Customize console output format
             let wasm_layer = tracing_wasm::WASMLayer::new(
                 WASMLayerConfigBuilder::new()
                     .set_max_level(self.level)
@@ -429,11 +444,12 @@ impl Logger {
 
             let subscriber = Registry::default().with(filter_layer).with(wasm_layer);
 
-            tracing::subscriber::set_global_default(subscriber)
-                .expect("Failed to set tracing subscriber");
+            subscriber.try_init()?;
 
             tracing::info!("Logging initialized (WASM/browser console)");
         }
+
+        Ok(())
     }
 }
 
