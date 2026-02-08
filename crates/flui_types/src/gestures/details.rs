@@ -27,6 +27,7 @@ pub struct TapDownDetails {
 
 impl TapDownDetails {
     /// Creates new tap down details
+    #[inline]
     pub const fn new(global_position: Offset<Pixels>, local_position: Offset<Pixels>) -> Self {
         Self {
             global_position,
@@ -36,6 +37,7 @@ impl TapDownDetails {
     }
 
     /// Builder method to set the device kind
+    #[inline]
     pub fn with_kind(mut self, kind: PointerDeviceKind) -> Self {
         self.kind = kind;
         self
@@ -57,6 +59,7 @@ pub struct TapUpDetails {
 
 impl TapUpDetails {
     /// Creates new tap up details
+    #[inline]
     pub const fn new(global_position: Offset<Pixels>, local_position: Offset<Pixels>) -> Self {
         Self {
             global_position,
@@ -66,6 +69,7 @@ impl TapUpDetails {
     }
 
     /// Builder method to set the device kind
+    #[inline]
     pub fn with_kind(mut self, kind: PointerDeviceKind) -> Self {
         self.kind = kind;
         self
@@ -94,6 +98,7 @@ pub struct DragStartDetails {
 
 impl DragStartDetails {
     /// Creates new drag start details
+    #[inline]
     pub const fn new(
         source_time_stamp: Duration,
         global_position: Offset<Pixels>,
@@ -108,6 +113,7 @@ impl DragStartDetails {
     }
 
     /// Builder method to set the device kind
+    #[inline]
     pub fn with_kind(mut self, kind: PointerDeviceKind) -> Self {
         self.kind = kind;
         self
@@ -126,6 +132,7 @@ pub struct DragDownDetails {
 
 impl DragDownDetails {
     /// Creates new drag down details
+    #[inline]
     pub const fn new(global_position: Offset<Pixels>, local_position: Offset<Pixels>) -> Self {
         Self {
             global_position,
@@ -158,6 +165,7 @@ pub struct DragUpdateDetails {
 
 impl DragUpdateDetails {
     /// Creates new drag update details
+    #[inline]
     pub const fn new(
         source_time_stamp: Duration,
         delta: Offset<Pixels>,
@@ -174,6 +182,7 @@ impl DragUpdateDetails {
     }
 
     /// Builder method to set the primary delta
+    #[inline]
     pub fn with_primary_delta(mut self, primary_delta: f32) -> Self {
         self.primary_delta = Some(primary_delta);
         self
@@ -192,6 +201,7 @@ pub struct DragEndDetails {
 
 impl DragEndDetails {
     /// Creates new drag end details
+    #[inline]
     pub const fn new(velocity: Velocity) -> Self {
         Self {
             velocity,
@@ -200,6 +210,7 @@ impl DragEndDetails {
     }
 
     /// Builder method to set the primary velocity
+    #[inline]
     pub fn with_primary_velocity(mut self, primary_velocity: f32) -> Self {
         self.primary_velocity = Some(primary_velocity);
         self
@@ -222,6 +233,7 @@ pub struct ScaleStartDetails {
 
 impl ScaleStartDetails {
     /// Creates new scale start details
+    #[inline]
     pub const fn new(focal_point: OffsetPair, pointer_count: usize) -> Self {
         Self {
             focal_point,
@@ -259,6 +271,7 @@ pub struct ScaleUpdateDetails {
 
 impl ScaleUpdateDetails {
     /// Creates new scale update details
+    #[inline]
     pub const fn new(
         focal_point: OffsetPair,
         scale: f32,
@@ -277,12 +290,14 @@ impl ScaleUpdateDetails {
     }
 
     /// Builder method to set the focal point delta
+    #[inline]
     pub fn with_focal_point_delta(mut self, delta: Offset<Pixels>) -> Self {
         self.focal_point_delta = delta;
         self
     }
 
     /// Builder method to set individual scale factors
+    #[inline]
     pub fn with_scale_factors(mut self, horizontal: f32, vertical: f32) -> Self {
         self.horizontal_scale = horizontal;
         self.vertical_scale = vertical;
@@ -302,6 +317,7 @@ pub struct ScaleEndDetails {
 
 impl ScaleEndDetails {
     /// Creates new scale end details
+    #[inline]
     pub const fn new(velocity: Velocity, pointer_count: usize) -> Self {
         Self {
             velocity,
@@ -329,6 +345,7 @@ pub struct LongPressDownDetails {
 
 impl LongPressDownDetails {
     /// Creates new long press down details
+    #[inline]
     pub const fn new(global_position: Offset<Pixels>, local_position: Offset<Pixels>) -> Self {
         Self {
             global_position,
@@ -338,6 +355,7 @@ impl LongPressDownDetails {
     }
 
     /// Builder method to set the device kind
+    #[inline]
     pub fn with_kind(mut self, kind: PointerDeviceKind) -> Self {
         self.kind = kind;
         self
@@ -356,6 +374,7 @@ pub struct LongPressStartDetails {
 
 impl LongPressStartDetails {
     /// Creates new long press start details
+    #[inline]
     pub const fn new(global_position: Offset<Pixels>, local_position: Offset<Pixels>) -> Self {
         Self {
             global_position,
@@ -382,6 +401,7 @@ pub struct LongPressMoveUpdateDetails {
 
 impl LongPressMoveUpdateDetails {
     /// Creates new long press move update details
+    #[inline]
     pub const fn new(
         global_position: Offset<Pixels>,
         local_position: Offset<Pixels>,
@@ -412,6 +432,7 @@ pub struct LongPressEndDetails {
 
 impl LongPressEndDetails {
     /// Creates new long press end details
+    #[inline]
     pub const fn new(
         global_position: Offset<Pixels>,
         local_position: Offset<Pixels>,
@@ -447,6 +468,7 @@ pub struct ForcePressDetails {
 
 impl ForcePressDetails {
     /// Creates new force press details
+    #[inline]
     pub const fn new(
         global_position: Offset<Pixels>,
         local_position: Offset<Pixels>,
@@ -462,6 +484,7 @@ impl ForcePressDetails {
     }
 
     /// Returns the normalized pressure (0.0 to 1.0)
+    #[inline]
     pub fn normalized_pressure(&self) -> f32 {
         if self.max_pressure > 0.0 {
             (self.pressure / self.max_pressure).clamp(0.0, 1.0)

@@ -128,6 +128,7 @@ impl OffsetPair {
 }
 
 impl Default for OffsetPair {
+    #[inline]
     fn default() -> Self {
         Self::ZERO
     }
@@ -274,6 +275,7 @@ impl PointerData {
     /// );
     /// ```
     #[must_use]
+    #[inline]
     pub fn new(
         time_stamp: Duration,
         position: Offset<Pixels>,
@@ -511,6 +513,7 @@ impl PointerData {
     /// assert!(valid.is_finite());
     /// ```
     #[must_use]
+    #[inline]
     pub fn is_finite(&self) -> bool {
         self.position.dx.is_finite()
             && self.position.dy.is_finite()

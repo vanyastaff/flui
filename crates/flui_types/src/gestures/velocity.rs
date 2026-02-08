@@ -235,6 +235,7 @@ impl Velocity {
     /// assert_eq!(clamped.magnitude(), 50.0);
     /// ```
     #[must_use]
+    #[inline]
     pub fn clamp_magnitude(&self, min: f32, max: f32) -> Self {
         let magnitude = self.magnitude();
         if magnitude == 0.0 {
@@ -302,6 +303,7 @@ impl Velocity {
     /// assert_eq!(distance, Offset::new(100.0, 0.0));
     /// ```
     #[must_use]
+    #[inline]
     pub fn distance_over_duration(&self, duration: Duration) -> Offset<Pixels> {
         let seconds = duration.as_secs_f32();
         self.pixels_per_second * seconds
@@ -343,6 +345,7 @@ impl Velocity {
 }
 
 impl Default for Velocity {
+    #[inline]
     fn default() -> Self {
         Self::ZERO
     }
