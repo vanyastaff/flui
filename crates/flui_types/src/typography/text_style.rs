@@ -33,6 +33,7 @@ impl FontWeight {
     pub const BOLD: Self = Self::W700;
 
     #[must_use]
+    #[inline]
     pub const fn value(&self) -> u16 {
         match self {
             Self::W100 => 100,
@@ -48,11 +49,13 @@ impl FontWeight {
     }
 
     #[must_use]
+    #[inline]
     pub const fn is_bold(&self) -> bool {
         self.value() >= 600
     }
 
     #[must_use]
+    #[inline]
     pub const fn from_css(value: i32) -> Self {
         match value {
             0..=150 => Self::W100,
@@ -69,6 +72,7 @@ impl FontWeight {
 }
 
 impl Default for FontWeight {
+    #[inline]
     fn default() -> Self {
         Self::NORMAL
     }
@@ -94,6 +98,7 @@ pub struct FontFeature {
 
 impl FontFeature {
     /// Creates a new font feature.
+    #[inline]
     pub fn new(feature: impl Into<String>, value: i32) -> Self {
         Self {
             feature: feature.into(),
@@ -102,11 +107,13 @@ impl FontFeature {
     }
 
     /// Creates an enabled font feature.
+    #[inline]
     pub fn enable(feature: impl Into<String>) -> Self {
         Self::new(feature, 1)
     }
 
     /// Creates a disabled font feature.
+    #[inline]
     pub fn disable(feature: impl Into<String>) -> Self {
         Self::new(feature, 0)
     }
@@ -123,6 +130,7 @@ pub struct FontVariation {
 
 impl FontVariation {
     /// Creates a new font variation.
+    #[inline]
     pub fn new(axis: impl Into<String>, value: f64) -> Self {
         Self {
             axis: axis.into(),
@@ -153,29 +161,34 @@ pub struct StrutStyle {
 
 impl StrutStyle {
     /// Creates a new strut style.
+    #[inline]
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Sets the font family.
+    #[inline]
     pub fn with_font_family(mut self, font_family: impl Into<String>) -> Self {
         self.font_family = Some(font_family.into());
         self
     }
 
     /// Sets the font size.
+    #[inline]
     pub fn with_font_size(mut self, font_size: f64) -> Self {
         self.font_size = Some(font_size);
         self
     }
 
     /// Sets the line height.
+    #[inline]
     pub fn with_height(mut self, height: f64) -> Self {
         self.height = Some(height);
         self
     }
 
     /// Sets whether to force strut height.
+    #[inline]
     pub fn with_force_strut_height(mut self, force: bool) -> Self {
         self.force_strut_height = force;
         self
@@ -218,77 +231,90 @@ pub struct TextStyle {
 
 impl TextStyle {
     /// Creates a new text style.
+    #[inline]
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Sets the text color.
+    #[inline]
     pub fn with_color(mut self, color: Color) -> Self {
         self.color = Some(color);
         self
     }
 
     /// Sets the font size.
+    #[inline]
     pub fn with_font_size(mut self, font_size: f64) -> Self {
         self.font_size = Some(font_size);
         self
     }
 
     /// Sets the font weight.
+    #[inline]
     pub fn with_font_weight(mut self, font_weight: FontWeight) -> Self {
         self.font_weight = Some(font_weight);
         self
     }
 
     /// Sets the font style.
+    #[inline]
     pub fn with_font_style(mut self, font_style: FontStyle) -> Self {
         self.font_style = Some(font_style);
         self
     }
 
     /// Sets the font family.
+    #[inline]
     pub fn with_font_family(mut self, font_family: impl Into<String>) -> Self {
         self.font_family = Some(font_family.into());
         self
     }
 
     /// Sets the letter spacing.
+    #[inline]
     pub fn with_letter_spacing(mut self, letter_spacing: f64) -> Self {
         self.letter_spacing = Some(letter_spacing);
         self
     }
 
     /// Sets the word spacing.
+    #[inline]
     pub fn with_word_spacing(mut self, word_spacing: f64) -> Self {
         self.word_spacing = Some(word_spacing);
         self
     }
 
     /// Sets the line height.
+    #[inline]
     pub fn with_height(mut self, height: f64) -> Self {
         self.height = Some(height);
         self
     }
 
     /// Adds a font feature.
+    #[inline]
     pub fn with_font_feature(mut self, feature: FontFeature) -> Self {
         self.font_features.push(feature);
         self
     }
 
     /// Adds a font variation.
+    #[inline]
     pub fn with_font_variation(mut self, variation: FontVariation) -> Self {
         self.font_variations.push(variation);
         self
     }
 
     /// Adds a shadow.
+    #[inline]
     pub fn with_shadow(mut self, shadow: TextShadow) -> Self {
         self.shadows.push(shadow);
         self
     }
 
     /// Merges this style with another, with the other taking precedence.
+    #[inline]
     pub fn merge(&self, other: &TextStyle) -> Self {
         Self {
             color: other.color.or(self.color),
@@ -344,6 +370,7 @@ pub struct TextShadow {
 
 impl TextShadow {
     /// Creates a new text shadow.
+    #[inline]
     pub fn new(color: Color, offset_x: f64, offset_y: f64, blur_radius: f64) -> Self {
         Self {
             color,

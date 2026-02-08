@@ -19,6 +19,7 @@ pub enum TextAlign {
 
 impl TextAlign {
     #[must_use]
+    #[inline]
     pub const fn resolve(&self, direction: TextDirection) -> Self {
         match self {
             Self::Start => match direction {
@@ -34,11 +35,13 @@ impl TextAlign {
     }
 
     #[must_use]
+    #[inline]
     pub const fn is_direction_dependent(&self) -> bool {
         matches!(self, Self::Start | Self::End)
     }
 
     #[must_use]
+    #[inline]
     pub const fn horizontal_factor(&self) -> f32 {
         match self {
             Self::Left | Self::Justify => 0.0,
@@ -63,6 +66,7 @@ pub enum TextAlignVertical {
 
 impl TextAlignVertical {
     #[must_use]
+    #[inline]
     pub const fn vertical_factor(&self) -> f32 {
         match self {
             Self::Top => 0.0,
@@ -86,16 +90,19 @@ pub enum TextDirection {
 
 impl TextDirection {
     #[must_use]
+    #[inline]
     pub const fn is_ltr(&self) -> bool {
         matches!(self, Self::Ltr)
     }
 
     #[must_use]
+    #[inline]
     pub const fn is_rtl(&self) -> bool {
         matches!(self, Self::Rtl)
     }
 
     #[must_use]
+    #[inline]
     pub const fn opposite(&self) -> Self {
         match self {
             Self::Ltr => Self::Rtl,

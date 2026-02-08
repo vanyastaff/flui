@@ -19,11 +19,13 @@ impl TextDecoration {
     pub const LINE_THROUGH: Self = Self { flags: 1 << 2 };
 
     #[must_use]
+    #[inline]
     pub const fn new(flags: u8) -> Self {
         Self { flags }
     }
 
     #[must_use]
+    #[inline]
     pub const fn combine(decorations: &[Self]) -> Self {
         let mut flags = 0;
         let mut i = 0;
@@ -35,27 +37,32 @@ impl TextDecoration {
     }
 
     #[must_use]
+    #[inline]
     pub const fn has_underline(&self) -> bool {
         self.flags & Self::UNDERLINE.flags != 0
     }
 
     #[must_use]
+    #[inline]
     pub const fn has_overline(&self) -> bool {
         self.flags & Self::OVERLINE.flags != 0
     }
 
     #[must_use]
+    #[inline]
     pub const fn has_line_through(&self) -> bool {
         self.flags & Self::LINE_THROUGH.flags != 0
     }
 
     #[must_use]
+    #[inline]
     pub const fn is_none(&self) -> bool {
         self.flags == 0
     }
 }
 
 impl Default for TextDecoration {
+    #[inline]
     fn default() -> Self {
         Self::NONE
     }
@@ -108,6 +115,7 @@ pub struct TextHeightBehavior {
 }
 
 impl Default for TextHeightBehavior {
+    #[inline]
     fn default() -> Self {
         Self {
             apply_height_to_first_ascent: true,
@@ -118,6 +126,7 @@ impl Default for TextHeightBehavior {
 
 impl TextHeightBehavior {
     /// Creates a new text height behavior.
+    #[inline]
     pub fn new(apply_to_first_ascent: bool, apply_to_last_descent: bool) -> Self {
         Self {
             apply_height_to_first_ascent: apply_to_first_ascent,
@@ -166,6 +175,7 @@ pub struct TextDecorationConfig {
 }
 
 impl Default for TextDecorationConfig {
+    #[inline]
     fn default() -> Self {
         Self {
             decoration: TextDecoration::NONE,
@@ -178,6 +188,7 @@ impl Default for TextDecorationConfig {
 
 impl TextDecorationConfig {
     #[must_use]
+    #[inline]
     pub fn new(decoration: TextDecoration) -> Self {
         Self {
             decoration,
@@ -186,18 +197,21 @@ impl TextDecorationConfig {
     }
 
     #[must_use]
+    #[inline]
     pub fn with_style(mut self, style: TextDecorationStyle) -> Self {
         self.style = style;
         self
     }
 
     #[must_use]
+    #[inline]
     pub fn with_color(mut self, color: Color) -> Self {
         self.color = Some(color);
         self
     }
 
     #[must_use]
+    #[inline]
     pub fn with_thickness(mut self, thickness: f64) -> Self {
         self.thickness = Some(thickness);
         self

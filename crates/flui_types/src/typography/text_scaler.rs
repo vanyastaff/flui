@@ -52,12 +52,14 @@ pub trait TextScaler: Debug + Send + Sync {
     /// # Returns
     ///
     /// The scaled font size.
+    #[inline]
     fn scale(&self, font_size: f64) -> f64;
 
     /// Returns the base text scale factor.
     ///
     /// For linear scaling, this is the multiplier applied to all sizes.
     /// For non-linear scaling, this represents the "typical" scale factor.
+    #[inline]
     fn text_scale_factor(&self) -> f64;
 
     #[inline]
@@ -66,10 +68,12 @@ pub trait TextScaler: Debug + Send + Sync {
     }
 
     /// Clones this scaler into a boxed trait object.
+    #[inline]
     fn clone_box(&self) -> Box<dyn TextScaler>;
 }
 
 impl Clone for Box<dyn TextScaler> {
+    #[inline]
     fn clone(&self) -> Self {
         self.clone_box()
     }
@@ -82,6 +86,7 @@ pub struct LinearTextScaler {
 
 impl LinearTextScaler {
     #[must_use]
+    #[inline]
     pub fn new(factor: f64) -> Self {
         assert!(
             factor >= 0.0 && !factor.is_nan(),
@@ -91,17 +96,20 @@ impl LinearTextScaler {
     }
 
     #[must_use]
+    #[inline]
     pub const fn identity() -> Self {
         Self { factor: 1.0 }
     }
 
     #[must_use]
+    #[inline]
     pub const fn factor(&self) -> f64 {
         self.factor
     }
 }
 
 impl Default for LinearTextScaler {
+    #[inline]
     fn default() -> Self {
         Self::identity()
     }
@@ -118,6 +126,7 @@ impl TextScaler for LinearTextScaler {
         self.factor
     }
 
+    #[inline]
     fn clone_box(&self) -> Box<dyn TextScaler> {
         Box::new(*self)
     }
@@ -137,6 +146,7 @@ impl TextScaler for NoScaling {
         1.0
     }
 
+    #[inline]
     fn clone_box(&self) -> Box<dyn TextScaler> {
         Box::new(*self)
     }
@@ -154,6 +164,7 @@ pub struct ClampedTextScaler {
 
 impl ClampedTextScaler {
     #[must_use]
+    #[inline]
     pub fn new(small_factor: f64, large_factor: f64, threshold: f64) -> Self {
         assert!(
             small_factor >= 0.0 && !small_factor.is_nan(),
@@ -175,22 +186,26 @@ impl ClampedTextScaler {
     }
 
     #[must_use]
+    #[inline]
     pub const fn small_factor(&self) -> f64 {
         self.small_factor
     }
 
     #[must_use]
+    #[inline]
     pub const fn large_factor(&self) -> f64 {
         self.large_factor
     }
 
     #[must_use]
+    #[inline]
     pub const fn threshold(&self) -> f64 {
         self.threshold
     }
 }
 
 impl TextScaler for ClampedTextScaler {
+    #[inline]
     fn scale(&self, font_size: f64) -> f64 {
         if font_size < self.threshold {
             font_size * self.small_factor
@@ -199,11 +214,13 @@ impl TextScaler for ClampedTextScaler {
         }
     }
 
+    #[inline]
     fn text_scale_factor(&self) -> f64 {
         // Return the small factor as the "typical" scale
         self.small_factor
     }
 
+    #[inline]
     fn clone_box(&self) -> Box<dyn TextScaler> {
         Box::new(*self)
     }

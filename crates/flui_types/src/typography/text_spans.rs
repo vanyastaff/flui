@@ -9,6 +9,7 @@ use std::sync::Arc;
 /// (inline objects like images).
 pub trait InlineSpanTrait: std::fmt::Debug {
     /// Returns the style for this span, if any.
+    #[inline]
     fn style(&self) -> Option<&TextStyle> {
         None
     }
@@ -16,6 +17,7 @@ pub trait InlineSpanTrait: std::fmt::Debug {
     /// Visits this span and its children.
     ///
     /// The visitor returns false to stop traversal.
+    #[inline]
     fn visit(&self, visitor: &mut dyn FnMut(&dyn InlineSpanTrait) -> bool)
     where
         Self: Sized,
@@ -24,11 +26,13 @@ pub trait InlineSpanTrait: std::fmt::Debug {
     }
 
     /// Returns the text content of this span, if any.
+    #[inline]
     fn to_plain_text(&self) -> String {
         String::new()
     }
 
     /// Returns true if this span contains semantic labels.
+    #[inline]
     fn has_semantics(&self) -> bool {
         false
     }
@@ -46,6 +50,7 @@ pub struct InlineSpan {
 impl InlineSpan {
     /// Creates a new inline span from any type implementing `InlineSpanTrait`.
     #[must_use]
+    #[inline]
     pub fn new<T: InlineSpanTrait + Send + Sync + 'static>(span: T) -> Self {
         Self {
             inner: Arc::new(span),
@@ -54,30 +59,35 @@ impl InlineSpan {
 
     /// Returns a reference to the trait object.
     #[must_use]
+    #[inline]
     pub fn as_trait(&self) -> &(dyn InlineSpanTrait + Send + Sync) {
         &*self.inner
     }
 
     /// Returns the style for this span, if any.
     #[must_use]
+    #[inline]
     pub fn style(&self) -> Option<&TextStyle> {
         self.inner.style()
     }
 
     /// Returns the plain text content.
     #[must_use]
+    #[inline]
     pub fn to_plain_text(&self) -> String {
         self.inner.to_plain_text()
     }
 
     /// Returns true if this span has semantic labels.
     #[must_use]
+    #[inline]
     pub fn has_semantics(&self) -> bool {
         self.inner.has_semantics()
     }
 }
 
 impl PartialEq for InlineSpan {
+    #[inline]
     fn eq(&self, other: &Self) -> bool {
         // Compare by pointer equality for Arc (identity comparison)
         // For deep comparison, use to_plain_text() or compare serialized forms
@@ -86,6 +96,7 @@ impl PartialEq for InlineSpan {
 }
 
 impl From<TextSpan> for InlineSpan {
+    #[inline]
     fn from(span: TextSpan) -> Self {
         Self::new(span)
     }
@@ -114,6 +125,7 @@ pub struct TextSpan {
 }
 
 impl std::fmt::Debug for TextSpan {
+    #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TextSpan")
             .field("text", &self.text)
@@ -127,6 +139,7 @@ impl std::fmt::Debug for TextSpan {
 }
 
 impl PartialEq for TextSpan {
+    #[inline]
     fn eq(&self, other: &Self) -> bool {
         self.text == other.text
             && self.style == other.style
@@ -140,6 +153,7 @@ impl PartialEq for TextSpan {
 impl TextSpan {
     /// Creates a new text span with the given text.
     #[must_use]
+    #[inline]
     pub fn new(text: impl Into<String>) -> Self {
         Self {
             text: Some(text.into()),
@@ -149,6 +163,7 @@ impl TextSpan {
 
     /// Creates a new text span with text and style.
     #[must_use]
+    #[inline]
     pub fn styled(text: impl Into<String>, style: TextStyle) -> Self {
         Self {
             text: Some(text.into()),
@@ -159,6 +174,7 @@ impl TextSpan {
 
     /// Creates a span with only children (no direct text).
     #[must_use]
+    #[inline]
     pub fn with_children(children: Vec<TextSpan>) -> Self {
         Self {
             text: None,
@@ -169,6 +185,7 @@ impl TextSpan {
 
     /// Adds a style to this span.
     #[must_use]
+    #[inline]
     pub fn with_style(mut self, style: TextStyle) -> Self {
         self.style = Some(style);
         self
@@ -176,6 +193,7 @@ impl TextSpan {
 
     /// Adds a child span.
     #[must_use]
+    #[inline]
     pub fn with_child(mut self, child: TextSpan) -> Self {
         self.children.push(child);
         self
@@ -183,6 +201,7 @@ impl TextSpan {
 
     /// Adds a semantic label for accessibility.
     #[must_use]
+    #[inline]
     pub fn with_semantics_label(mut self, label: impl Into<String>) -> Self {
         self.semantics_label = Some(label.into());
         self
@@ -190,6 +209,7 @@ impl TextSpan {
 
     /// Sets the mouse cursor for this span.
     #[must_use]
+    #[inline]
     pub fn with_mouse_cursor(mut self, cursor: MouseCursor) -> Self {
         self.mouse_cursor = Some(cursor);
         self
@@ -197,6 +217,7 @@ impl TextSpan {
 
     /// Adds a tap callback handler.
     #[must_use]
+    #[inline]
     pub fn with_on_tap<F>(mut self, callback: F) -> Self
     where
         F: Fn() + Send + Sync + 'static,
@@ -207,6 +228,7 @@ impl TextSpan {
 
     /// Returns the plain text content of this span and all children.
     #[must_use]
+    #[inline]
     pub fn to_plain_text(&self) -> String {
         let mut result = String::new();
         if let Some(text) = &self.text {
@@ -221,6 +243,7 @@ impl TextSpan {
     /// Visits this span and its children.
     ///
     /// The visitor returns false to stop traversal.
+    #[inline]
     pub fn visit<F>(&self, visitor: &mut F)
     where
         F: FnMut(&TextSpan) -> bool,
@@ -235,18 +258,21 @@ impl TextSpan {
 
     /// Returns the number of direct children.
     #[must_use]
+    #[inline]
     pub fn child_count(&self) -> usize {
         self.children.len()
     }
 
     /// Returns true if this span has no children.
     #[must_use]
+    #[inline]
     pub fn is_leaf(&self) -> bool {
         self.children.is_empty()
     }
 
     /// Returns the total number of spans (this span + all descendants).
     #[must_use]
+    #[inline]
     pub fn total_span_count(&self) -> usize {
         1 + self
             .children
@@ -257,44 +283,52 @@ impl TextSpan {
 
     /// Returns the total text length including children.
     #[must_use]
+    #[inline]
     pub fn text_length(&self) -> usize {
         self.to_plain_text().len()
     }
 
     /// Returns true if this span has a tap handler.
     #[must_use]
+    #[inline]
     pub fn is_interactive(&self) -> bool {
         self.on_tap.is_some()
     }
 
     /// Returns true if this span has semantic labels.
     #[must_use]
+    #[inline]
     pub fn has_semantics(&self) -> bool {
         self.semantics_label.is_some()
     }
 
     /// Returns the text content, if any.
     #[must_use]
+    #[inline]
     pub fn text(&self) -> Option<&str> {
         self.text.as_deref()
     }
 
     /// Returns the style, if any.
     #[must_use]
+    #[inline]
     pub fn style(&self) -> Option<&TextStyle> {
         self.style.as_ref()
     }
 }
 
 impl InlineSpanTrait for TextSpan {
+    #[inline]
     fn style(&self) -> Option<&TextStyle> {
         self.style.as_ref()
     }
 
+    #[inline]
     fn to_plain_text(&self) -> String {
         self.to_plain_text()
     }
 
+    #[inline]
     fn has_semantics(&self) -> bool {
         self.semantics_label.is_some()
     }
@@ -358,6 +392,7 @@ pub struct PlaceholderSpan {
 impl PlaceholderSpan {
     /// Creates a new placeholder span.
     #[must_use]
+    #[inline]
     pub fn new(width: f64, height: f64, alignment: PlaceholderAlignment) -> Self {
         Self {
             width,
@@ -370,6 +405,7 @@ impl PlaceholderSpan {
 
     /// Sets the baseline alignment.
     #[must_use]
+    #[inline]
     pub fn with_baseline(mut self, baseline: TextBaseline, offset: f64) -> Self {
         self.baseline = Some(baseline);
         self.baseline_offset = offset;
@@ -378,30 +414,35 @@ impl PlaceholderSpan {
 
     /// Returns the width.
     #[must_use]
+    #[inline]
     pub const fn width(&self) -> f64 {
         self.width
     }
 
     /// Returns the height.
     #[must_use]
+    #[inline]
     pub const fn height(&self) -> f64 {
         self.height
     }
 
     /// Returns the alignment.
     #[must_use]
+    #[inline]
     pub const fn alignment(&self) -> PlaceholderAlignment {
         self.alignment
     }
 
     /// Returns the area (width * height).
     #[must_use]
+    #[inline]
     pub const fn area(&self) -> f64 {
         self.width * self.height
     }
 
     /// Returns the aspect ratio (width / height).
     #[must_use]
+    #[inline]
     pub fn aspect_ratio(&self) -> f64 {
         if self.height == 0.0 {
             f64::INFINITY
@@ -412,6 +453,7 @@ impl PlaceholderSpan {
 }
 
 impl InlineSpanTrait for PlaceholderSpan {
+    #[inline]
     fn to_plain_text(&self) -> String {
         "\u{FFFC}".to_string() // Object replacement character
     }
@@ -439,6 +481,7 @@ pub struct PlaceholderDimensions {
 impl PlaceholderDimensions {
     /// Creates new placeholder dimensions.
     #[must_use]
+    #[inline]
     pub fn new(
         width: f64,
         height: f64,
@@ -457,30 +500,35 @@ impl PlaceholderDimensions {
 
     /// Returns the width.
     #[must_use]
+    #[inline]
     pub const fn width(&self) -> f64 {
         self.width
     }
 
     /// Returns the height.
     #[must_use]
+    #[inline]
     pub const fn height(&self) -> f64 {
         self.height
     }
 
     /// Returns the alignment.
     #[must_use]
+    #[inline]
     pub const fn alignment(&self) -> PlaceholderAlignment {
         self.alignment
     }
 
     /// Returns the area (width * height).
     #[must_use]
+    #[inline]
     pub const fn area(&self) -> f64 {
         self.width * self.height
     }
 
     /// Returns the aspect ratio (width / height).
     #[must_use]
+    #[inline]
     pub fn aspect_ratio(&self) -> f64 {
         if self.height == 0.0 {
             f64::INFINITY
