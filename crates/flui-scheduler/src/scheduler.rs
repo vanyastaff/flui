@@ -217,6 +217,15 @@ pub enum FrameSkipPolicy {
     LimitedSkip = 3,
 }
 
+impl TryFrom<u8> for FrameSkipPolicy {
+    type Error = u8;
+
+    #[inline]
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        Self::try_from_u8(value).ok_or(value)
+    }
+}
+
 impl FrameSkipPolicy {
     /// Try to convert from u8 representation
     ///
@@ -607,7 +616,7 @@ impl Scheduler {
                 .collect::<Vec<_>>()
         };
 
-        for (id, callback) in persistent_callbacks.iter() {
+        for (id, callback) in &persistent_callbacks {
             // DashMap provides lock-free contains_key
             if self.cancelled_callbacks.contains_key(id) {
                 continue;

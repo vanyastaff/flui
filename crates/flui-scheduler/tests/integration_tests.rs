@@ -1147,7 +1147,7 @@ fn test_frame_timing_builder_all_fields() {
 
     let timing = FrameTimingBuilder::new().target_fps(120).build();
 
-    assert!((timing.target_duration_ms - 8.333).abs() < 0.1);
+    assert!((timing.target_duration_ms() - 8.333).abs() < 0.1);
 }
 
 #[test]

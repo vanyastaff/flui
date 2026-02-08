@@ -155,6 +155,15 @@ impl SchedulerPhase {
     }
 }
 
+impl TryFrom<u8> for SchedulerPhase {
+    type Error = u8;
+
+    #[inline]
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        Self::try_from_u8(value).ok_or(value)
+    }
+}
+
 impl fmt::Display for SchedulerPhase {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -388,6 +397,15 @@ impl AppLifecycleState {
     }
 }
 
+impl TryFrom<u8> for AppLifecycleState {
+    type Error = u8;
+
+    #[inline]
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        Self::try_from_u8(value).ok_or(value)
+    }
+}
+
 impl fmt::Display for AppLifecycleState {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -474,6 +492,22 @@ impl FramePhase {
     }
 }
 
+impl TryFrom<u8> for FramePhase {
+    type Error = u8;
+
+    #[inline]
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::Idle),
+            1 => Ok(Self::Build),
+            2 => Ok(Self::Layout),
+            3 => Ok(Self::Paint),
+            4 => Ok(Self::Composite),
+            v => Err(v),
+        }
+    }
+}
+
 impl fmt::Display for FramePhase {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -522,21 +556,16 @@ pub struct FrameTiming {
 
     /// Current phase
     pub phase: FramePhase,
-
-    /// Target frame duration in milliseconds (for backwards compat)
-    pub target_duration_ms: f64,
 }
 
 impl FrameTiming {
     /// Create a new frame timing
     pub fn new(target_fps: u32) -> Self {
-        let frame_duration = FrameDuration::from_fps(target_fps);
         Self {
             id: FrameId::new(),
             start_time: Instant::now(),
-            frame_duration,
+            frame_duration: FrameDuration::from_fps(target_fps),
             phase: FramePhase::Idle,
-            target_duration_ms: frame_duration.as_ms().value(),
         }
     }
 
@@ -545,10 +574,15 @@ impl FrameTiming {
         Self {
             id: FrameId::new(),
             start_time: Instant::now(),
-            target_duration_ms: frame_duration.as_ms().value(),
             frame_duration,
             phase: FramePhase::Idle,
         }
+    }
+
+    /// Get target frame duration in milliseconds
+    #[inline]
+    pub fn target_duration_ms(&self) -> f64 {
+        self.frame_duration.as_ms().value()
     }
 
     /// Get elapsed time since frame start as type-safe Milliseconds
@@ -596,13 +630,13 @@ impl FrameTiming {
     /// Calculate how much over/under budget (negative = over budget)
     #[inline]
     pub fn budget_delta_ms(&self) -> f64 {
-        self.target_duration_ms - self.elapsed_ms()
+        self.target_duration_ms() - self.elapsed_ms()
     }
 
     /// Get budget utilization as percentage
     #[inline]
     pub fn utilization(&self) -> Percentage {
-        Percentage::from_ratio(self.elapsed_ms() / self.target_duration_ms)
+        Percentage::from_ratio(self.elapsed_ms() / self.target_duration_ms())
     }
 
     /// Check if deadline is near (>80% budget used)
@@ -737,7 +771,7 @@ mod tests {
         let timing = FrameTiming::new(60); // 16.67ms target
         assert!(!timing.is_over_budget());
         assert!(timing.remaining().value() > 0.0);
-        assert!((timing.target_duration_ms - 1000.0 / 60.0).abs() < 0.01);
+        assert!((timing.target_duration_ms() - 1000.0 / 60.0).abs() < 0.01);
     }
 
     #[test]

@@ -179,11 +179,11 @@ impl FrameTimingExt for FrameTiming {
     }
 
     fn frame_duration(&self) -> FrameDuration {
-        FrameDuration::from_fps((1000.0 / self.target_duration_ms) as u32)
+        self.frame_duration
     }
 
     fn utilization(&self) -> Percentage {
-        Percentage::from_ratio(self.elapsed_ms() / self.target_duration_ms)
+        Percentage::from_ratio(self.elapsed_ms() / self.target_duration_ms())
     }
 }
 

@@ -124,6 +124,14 @@ impl TickerState {
     }
 }
 
+/// Shared inner state for a Ticker (single allocation, single lock)
+struct TickerInner {
+    state: TickerState,
+    start_time: Option<Instant>,
+    callback: Option<TickerCallback>,
+    muted_elapsed: Seconds,
+}
+
 /// Animation ticker with runtime state management
 ///
 /// A Ticker provides callbacks on every frame, allowing you to drive animations
@@ -156,17 +164,8 @@ pub struct Ticker {
     /// Unique identifier
     id: TickerId,
 
-    /// Current state
-    state: Arc<Mutex<TickerState>>,
-
-    /// Start time
-    start_time: Arc<Mutex<Option<Instant>>>,
-
-    /// Callback
-    callback: Arc<Mutex<Option<TickerCallback>>>,
-
-    /// Elapsed time when muted
-    muted_elapsed: Arc<Mutex<Seconds>>,
+    /// All mutable state behind a single lock
+    inner: Arc<Mutex<TickerInner>>,
 }
 
 impl Ticker {
@@ -174,10 +173,12 @@ impl Ticker {
     pub fn new() -> Self {
         Self {
             id: TickerId::new(),
-            state: Arc::new(Mutex::new(TickerState::Idle)),
-            start_time: Arc::new(Mutex::new(None)),
-            callback: Arc::new(Mutex::new(None)),
-            muted_elapsed: Arc::new(Mutex::new(Seconds::ZERO)),
+            inner: Arc::new(Mutex::new(TickerInner {
+                state: TickerState::Idle,
+                start_time: None,
+                callback: None,
+                muted_elapsed: Seconds::ZERO,
+            })),
         }
     }
 
@@ -194,10 +195,11 @@ impl Ticker {
     where
         F: FnMut(f64) + Send + 'static,
     {
-        *self.state.lock() = TickerState::Active;
-        *self.start_time.lock() = Some(Instant::now());
-        *self.callback.lock() = Some(Box::new(callback));
-        *self.muted_elapsed.lock() = Seconds::ZERO;
+        let mut inner = self.inner.lock();
+        inner.state = TickerState::Active;
+        inner.start_time = Some(Instant::now());
+        inner.callback = Some(Box::new(callback));
+        inner.muted_elapsed = Seconds::ZERO;
     }
 
     /// Start the ticker with a type-safe callback
@@ -212,8 +214,9 @@ impl Ticker {
     ///
     /// This permanently stops the ticker. Call `start()` to restart.
     pub fn stop(&mut self) {
-        *self.state.lock() = TickerState::Stopped;
-        *self.callback.lock() = None;
+        let mut inner = self.inner.lock();
+        inner.state = TickerState::Stopped;
+        inner.callback = None;
     }
 
     /// Mute the ticker
@@ -221,14 +224,12 @@ impl Ticker {
     /// This temporarily pauses the ticker without clearing the callback.
     /// Time does not advance while muted.
     pub fn mute(&mut self) {
-        let state = *self.state.lock();
-        if state == TickerState::Active {
-            // Save current elapsed time
-            if let Some(start) = *self.start_time.lock() {
-                let elapsed = Seconds::new(start.elapsed().as_secs_f64());
-                *self.muted_elapsed.lock() = elapsed;
+        let mut inner = self.inner.lock();
+        if inner.state == TickerState::Active {
+            if let Some(start) = inner.start_time {
+                inner.muted_elapsed = Seconds::new(start.elapsed().as_secs_f64());
             }
-            *self.state.lock() = TickerState::Muted;
+            inner.state = TickerState::Muted;
         }
     }
 
@@ -236,20 +237,19 @@ impl Ticker {
     ///
     /// Resumes a muted ticker. Time continues from where it was paused.
     pub fn unmute(&mut self) {
-        let state = *self.state.lock();
-        if state == TickerState::Muted {
-            // Adjust start time to account for muted period
-            let muted_elapsed = *self.muted_elapsed.lock();
+        let mut inner = self.inner.lock();
+        if inner.state == TickerState::Muted {
             let now = Instant::now();
-            let adjusted_start = now - std::time::Duration::from_secs_f64(muted_elapsed.value());
-            *self.start_time.lock() = Some(adjusted_start);
-            *self.state.lock() = TickerState::Active;
+            let adjusted_start =
+                now - std::time::Duration::from_secs_f64(inner.muted_elapsed.value());
+            inner.start_time = Some(adjusted_start);
+            inner.state = TickerState::Active;
         }
     }
 
     /// Toggle mute state
     pub fn toggle_mute(&mut self) {
-        let state = *self.state.lock();
+        let state = self.inner.lock().state;
         match state {
             TickerState::Active => self.mute(),
             TickerState::Muted => self.unmute(),
@@ -262,33 +262,37 @@ impl Ticker {
     /// This should be called once per frame. It invokes the callback if the
     /// ticker is active.
     pub fn tick<T: TickerProvider>(&self, _provider: &T) {
-        let state = *self.state.lock();
+        let mut inner = self.inner.lock();
 
-        if state != TickerState::Active {
+        if inner.state != TickerState::Active {
             return;
         }
 
-        if let Some(start) = *self.start_time.lock() {
-            let elapsed = start.elapsed().as_secs_f64();
+        let Some(start) = inner.start_time else {
+            return;
+        };
+        let elapsed = start.elapsed().as_secs_f64();
 
-            // Clone callback to avoid holding lock during invocation
-            let callback_opt = self.callback.lock().take();
+        // Take callback to avoid borrowing inner during invocation
+        let Some(mut callback) = inner.callback.take() else {
+            return;
+        };
 
-            if let Some(mut callback) = callback_opt {
-                callback(elapsed);
+        // Release lock during callback invocation
+        drop(inner);
+        callback(elapsed);
 
-                // Restore callback if still active
-                if *self.state.lock() == TickerState::Active {
-                    *self.callback.lock() = Some(callback);
-                }
-            }
+        // Restore callback if still active
+        let mut inner = self.inner.lock();
+        if inner.state == TickerState::Active {
+            inner.callback = Some(callback);
         }
     }
 
     /// Get current state
     #[inline]
     pub fn state(&self) -> TickerState {
-        *self.state.lock()
+        self.inner.lock().state
     }
 
     /// Check if ticker is active
@@ -300,7 +304,7 @@ impl Ticker {
     /// Check if ticker is muted
     #[inline]
     pub fn is_muted(&self) -> bool {
-        *self.state.lock() == TickerState::Muted
+        self.inner.lock().state == TickerState::Muted
     }
 
     /// Check if ticker is running (active or muted)
@@ -311,16 +315,14 @@ impl Ticker {
 
     /// Get elapsed time as type-safe Seconds
     pub fn elapsed(&self) -> Seconds {
-        match *self.state.lock() {
+        let inner = self.inner.lock();
+        match inner.state {
             TickerState::Idle | TickerState::Stopped => Seconds::ZERO,
-            TickerState::Muted => *self.muted_elapsed.lock(),
-            TickerState::Active => {
-                if let Some(start) = *self.start_time.lock() {
-                    Seconds::new(start.elapsed().as_secs_f64())
-                } else {
-                    Seconds::ZERO
-                }
-            }
+            TickerState::Muted => inner.muted_elapsed,
+            TickerState::Active => inner
+                .start_time
+                .map(|s| Seconds::new(s.elapsed().as_secs_f64()))
+                .unwrap_or(Seconds::ZERO),
         }
     }
 
@@ -331,10 +333,11 @@ impl Ticker {
 
     /// Reset the ticker to initial state
     pub fn reset(&mut self) {
-        *self.state.lock() = TickerState::Idle;
-        *self.start_time.lock() = None;
-        *self.callback.lock() = None;
-        *self.muted_elapsed.lock() = Seconds::ZERO;
+        let mut inner = self.inner.lock();
+        inner.state = TickerState::Idle;
+        inner.start_time = None;
+        inner.callback = None;
+        inner.muted_elapsed = Seconds::ZERO;
     }
 }
 
@@ -348,10 +351,7 @@ impl Clone for Ticker {
     fn clone(&self) -> Self {
         Self {
             id: TickerId::new(), // New ID for cloned ticker
-            state: Arc::clone(&self.state),
-            start_time: Arc::clone(&self.start_time),
-            callback: Arc::clone(&self.callback),
-            muted_elapsed: Arc::clone(&self.muted_elapsed),
+            inner: Arc::clone(&self.inner),
         }
     }
 }
@@ -536,6 +536,15 @@ impl Extend<Ticker> for TickerGroup {
 /// Callback for ScheduledTicker that receives elapsed time in seconds
 pub type ScheduledTickerCallback = Arc<Mutex<dyn FnMut(f64) + Send>>;
 
+/// Shared inner state for a ScheduledTicker (single allocation, single lock)
+struct ScheduledTickerInner {
+    state: TickerState,
+    start_time: Option<Instant>,
+    callback: Option<ScheduledTickerCallback>,
+    muted_elapsed: Seconds,
+    scheduled: bool,
+}
+
 /// A Flutter-like ticker that automatically schedules with the scheduler
 ///
 /// Unlike `Ticker` which requires manual `tick()` calls, `ScheduledTicker`
@@ -585,7 +594,6 @@ pub type ScheduledTickerCallback = Arc<Mutex<dyn FnMut(f64) + Send>>;
 ///    Each animation controller owns exactly one ticker.
 ///
 /// If you need multiple tickers, create them individually with `ScheduledTicker::new()`.
-#[allow(clippy::type_complexity)]
 pub struct ScheduledTicker {
     /// Unique identifier
     id: TickerId,
@@ -593,20 +601,8 @@ pub struct ScheduledTicker {
     /// Reference to the scheduler
     scheduler: Arc<crate::scheduler::Scheduler>,
 
-    /// Current state
-    state: Arc<Mutex<TickerState>>,
-
-    /// Start time
-    start_time: Arc<Mutex<Option<Instant>>>,
-
-    /// Callback (wrapped for sharing across frame callbacks)
-    callback: Arc<Mutex<Option<Arc<Mutex<dyn FnMut(f64) + Send>>>>>,
-
-    /// Elapsed time when muted
-    muted_elapsed: Arc<Mutex<Seconds>>,
-
-    /// Whether next frame callback is scheduled
-    scheduled: Arc<Mutex<bool>>,
+    /// All mutable state behind a single lock
+    inner: Arc<Mutex<ScheduledTickerInner>>,
 }
 
 impl ScheduledTicker {
@@ -615,11 +611,13 @@ impl ScheduledTicker {
         Self {
             id: TickerId::new(),
             scheduler,
-            state: Arc::new(Mutex::new(TickerState::Idle)),
-            start_time: Arc::new(Mutex::new(None)),
-            callback: Arc::new(Mutex::new(None)),
-            muted_elapsed: Arc::new(Mutex::new(Seconds::ZERO)),
-            scheduled: Arc::new(Mutex::new(false)),
+            inner: Arc::new(Mutex::new(ScheduledTickerInner {
+                state: TickerState::Idle,
+                start_time: None,
+                callback: None,
+                muted_elapsed: Seconds::ZERO,
+                scheduled: false,
+            })),
         }
     }
 
@@ -638,10 +636,13 @@ impl ScheduledTicker {
         F: FnMut(f64) + Send + 'static,
     {
         tracing::debug!("ScheduledTicker::start called");
-        *self.state.lock() = TickerState::Active;
-        *self.start_time.lock() = Some(Instant::now());
-        *self.callback.lock() = Some(Arc::new(Mutex::new(callback)));
-        *self.muted_elapsed.lock() = Seconds::ZERO;
+        {
+            let mut inner = self.inner.lock();
+            inner.state = TickerState::Active;
+            inner.start_time = Some(Instant::now());
+            inner.callback = Some(Arc::new(Mutex::new(callback)));
+            inner.muted_elapsed = Seconds::ZERO;
+        }
 
         // Schedule for next frame
         self.schedule_next_frame();
@@ -658,42 +659,45 @@ impl ScheduledTicker {
 
     /// Stop the ticker
     pub fn stop(&mut self) {
-        *self.state.lock() = TickerState::Stopped;
-        *self.callback.lock() = None;
-        *self.scheduled.lock() = false;
+        let mut inner = self.inner.lock();
+        inner.state = TickerState::Stopped;
+        inner.callback = None;
+        inner.scheduled = false;
     }
 
     /// Mute the ticker (pause without stopping)
     pub fn mute(&mut self) {
-        let state = *self.state.lock();
-        if state == TickerState::Active {
-            if let Some(start) = *self.start_time.lock() {
-                let elapsed = Seconds::new(start.elapsed().as_secs_f64());
-                *self.muted_elapsed.lock() = elapsed;
+        let mut inner = self.inner.lock();
+        if inner.state == TickerState::Active {
+            if let Some(start) = inner.start_time {
+                inner.muted_elapsed = Seconds::new(start.elapsed().as_secs_f64());
             }
-            *self.state.lock() = TickerState::Muted;
+            inner.state = TickerState::Muted;
         }
     }
 
     /// Unmute the ticker (resume)
     pub fn unmute(&mut self) {
-        let state = *self.state.lock();
-        if state == TickerState::Muted {
-            let muted_elapsed = *self.muted_elapsed.lock();
+        {
+            let mut inner = self.inner.lock();
+            if inner.state != TickerState::Muted {
+                return;
+            }
             let now = Instant::now();
-            let adjusted_start = now - std::time::Duration::from_secs_f64(muted_elapsed.value());
-            *self.start_time.lock() = Some(adjusted_start);
-            *self.state.lock() = TickerState::Active;
-
-            // Re-schedule
-            self.schedule_next_frame();
+            let adjusted_start =
+                now - std::time::Duration::from_secs_f64(inner.muted_elapsed.value());
+            inner.start_time = Some(adjusted_start);
+            inner.state = TickerState::Active;
         }
+
+        // Re-schedule
+        self.schedule_next_frame();
     }
 
     /// Get current state
     #[inline]
     pub fn state(&self) -> TickerState {
-        *self.state.lock()
+        self.inner.lock().state
     }
 
     /// Check if active
@@ -705,7 +709,7 @@ impl ScheduledTicker {
     /// Check if muted
     #[inline]
     pub fn is_muted(&self) -> bool {
-        *self.state.lock() == TickerState::Muted
+        self.inner.lock().state == TickerState::Muted
     }
 
     /// Check if running (active or muted)
@@ -716,93 +720,84 @@ impl ScheduledTicker {
 
     /// Get elapsed time
     pub fn elapsed(&self) -> Seconds {
-        match *self.state.lock() {
+        let inner = self.inner.lock();
+        match inner.state {
             TickerState::Idle | TickerState::Stopped => Seconds::ZERO,
-            TickerState::Muted => *self.muted_elapsed.lock(),
-            TickerState::Active => {
-                if let Some(start) = *self.start_time.lock() {
-                    Seconds::new(start.elapsed().as_secs_f64())
-                } else {
-                    Seconds::ZERO
-                }
-            }
+            TickerState::Muted => inner.muted_elapsed,
+            TickerState::Active => inner
+                .start_time
+                .map(|s| Seconds::new(s.elapsed().as_secs_f64()))
+                .unwrap_or(Seconds::ZERO),
         }
     }
 
     /// Schedule callback for next frame
     fn schedule_next_frame(&self) {
-        // Only schedule if active and not already scheduled
-        if *self.state.lock() != TickerState::Active {
-            return;
+        {
+            let mut inner = self.inner.lock();
+            if inner.state != TickerState::Active || inner.scheduled {
+                return;
+            }
+            inner.scheduled = true;
         }
 
-        if *self.scheduled.lock() {
-            return;
-        }
-
-        *self.scheduled.lock() = true;
-
-        let state = Arc::clone(&self.state);
-        let start_time = Arc::clone(&self.start_time);
-        let callback = Arc::clone(&self.callback);
-        let scheduled = Arc::clone(&self.scheduled);
+        let inner = Arc::clone(&self.inner);
         let scheduler = Arc::clone(&self.scheduler);
 
         self.scheduler
             .schedule_frame_callback(Box::new(move |_vsync| {
-                Self::tick_and_reschedule(state, start_time, callback, scheduled, scheduler);
+                Self::tick_and_reschedule(inner, scheduler);
             }));
     }
 
     /// Tick callback and reschedule for next frame if still active.
     ///
     /// This is the single code path for all scheduled ticker frame callbacks.
-    #[allow(clippy::type_complexity)]
     fn tick_and_reschedule(
-        state: Arc<Mutex<TickerState>>,
-        start_time: Arc<Mutex<Option<Instant>>>,
-        callback: Arc<Mutex<Option<Arc<Mutex<dyn FnMut(f64) + Send>>>>>,
-        scheduled: Arc<Mutex<bool>>,
+        inner: Arc<Mutex<ScheduledTickerInner>>,
         scheduler: Arc<crate::scheduler::Scheduler>,
     ) {
-        *scheduled.lock() = false;
+        // Compute elapsed and grab callback under lock, then release before invoking
+        let (elapsed, callback) = {
+            let mut guard = inner.lock();
+            guard.scheduled = false;
 
-        let current_state = *state.lock();
-        tracing::trace!(state = ?current_state, "ScheduledTicker tick");
-        if current_state != TickerState::Active {
-            return;
-        }
+            tracing::trace!(state = ?guard.state, "ScheduledTicker tick");
+            if guard.state != TickerState::Active {
+                return;
+            }
 
-        let elapsed = if let Some(start) = *start_time.lock() {
-            start.elapsed().as_secs_f64()
-        } else {
-            tracing::trace!("ScheduledTicker no start_time, skipping");
-            return;
+            let Some(start) = guard.start_time else {
+                tracing::trace!("ScheduledTicker no start_time, skipping");
+                return;
+            };
+
+            (start.elapsed().as_secs_f64(), guard.callback.clone())
         };
 
-        if let Some(cb) = callback.lock().as_ref() {
+        if let Some(cb) = callback {
             tracing::trace!(elapsed, "ScheduledTicker invoking callback");
             cb.lock()(elapsed);
         }
 
-        if *state.lock() == TickerState::Active {
-            tracing::trace!("ScheduledTicker scheduling next frame");
-            *scheduled.lock() = true;
+        // Re-schedule if still active
+        let should_reschedule = {
+            let mut guard = inner.lock();
+            if guard.state == TickerState::Active {
+                tracing::trace!("ScheduledTicker scheduling next frame");
+                guard.scheduled = true;
+                true
+            } else {
+                false
+            }
+        };
 
-            let state = Arc::clone(&state);
-            let start_time = Arc::clone(&start_time);
-            let callback = Arc::clone(&callback);
-            let scheduled_inner = Arc::clone(&scheduled);
+        if should_reschedule {
+            let inner = Arc::clone(&inner);
             let scheduler_inner = Arc::clone(&scheduler);
 
             scheduler.schedule_frame_callback(Box::new(move |_vsync| {
-                Self::tick_and_reschedule(
-                    state,
-                    start_time,
-                    callback,
-                    scheduled_inner,
-                    scheduler_inner,
-                );
+                Self::tick_and_reschedule(inner, scheduler_inner);
             }));
         }
     }
@@ -810,11 +805,11 @@ impl ScheduledTicker {
 
 impl std::fmt::Debug for ScheduledTicker {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let inner = self.inner.lock();
         f.debug_struct("ScheduledTicker")
             .field("id", &self.id)
-            .field("state", &self.state())
-            .field("elapsed", &self.elapsed())
-            .field("scheduled", &*self.scheduled.lock())
+            .field("state", &inner.state)
+            .field("scheduled", &inner.scheduled)
             .finish()
     }
 }

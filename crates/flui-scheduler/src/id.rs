@@ -59,7 +59,7 @@ pub trait IdMarker: sealed::IdMarkerSealed + Send + Sync + 'static {
 }
 
 /// Marker for frame identifiers
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct FrameIdMarker;
 
 impl IdMarker for FrameIdMarker {
@@ -67,7 +67,7 @@ impl IdMarker for FrameIdMarker {
 }
 
 /// Marker for task identifiers
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TaskIdMarker;
 
 impl IdMarker for TaskIdMarker {
@@ -75,7 +75,7 @@ impl IdMarker for TaskIdMarker {
 }
 
 /// Marker for ticker identifiers
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TickerIdMarker;
 
 impl IdMarker for TickerIdMarker {
@@ -83,7 +83,7 @@ impl IdMarker for TickerIdMarker {
 }
 
 /// Marker for callback identifiers
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct CallbackIdMarker;
 
 impl IdMarker for CallbackIdMarker {
@@ -114,7 +114,7 @@ impl IdMarker for CallbackIdMarker {
 /// // These are different types - can't be mixed!
 /// assert_ne!(std::any::TypeId::of::<FrameId>(), std::any::TypeId::of::<TaskId>());
 /// ```
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TypedId<M: IdMarker> {
     value: NonZeroU64,
     _marker: PhantomData<M>,
@@ -182,32 +182,6 @@ impl<M: IdMarker> TypedId<M> {
 impl<M: IdMarker> Default for TypedId<M> {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-impl<M: IdMarker> PartialEq for TypedId<M> {
-    fn eq(&self, other: &Self) -> bool {
-        self.value == other.value
-    }
-}
-
-impl<M: IdMarker> Eq for TypedId<M> {}
-
-impl<M: IdMarker> Hash for TypedId<M> {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.value.hash(state);
-    }
-}
-
-impl<M: IdMarker> PartialOrd for TypedId<M> {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl<M: IdMarker> Ord for TypedId<M> {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.value.cmp(&other.value)
     }
 }
 

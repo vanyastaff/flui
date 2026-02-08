@@ -32,12 +32,12 @@ pub type TimingsCallback = Arc<dyn Fn(&[FrameTiming]) + Send + Sync>;
 ///
 /// Called to determine whether a task at a given priority should run.
 /// Returns `true` if the task should execute, `false` to defer.
-pub type SchedulingStrategy = Box<dyn Fn(i32, &Scheduler) -> bool + Send + Sync>;
+pub type SchedulingStrategy = Box<dyn Fn(crate::task::Priority, &Scheduler) -> bool + Send + Sync>;
 
 /// Default scheduling strategy — runs tasks when not over budget.
-pub fn default_scheduling_strategy(priority: i32, scheduler: &Scheduler) -> bool {
-    // Always run high priority tasks (Animation = 100000, UserInput = 1000000)
-    if priority >= 100000 {
+pub fn default_scheduling_strategy(priority: crate::task::Priority, scheduler: &Scheduler) -> bool {
+    // Always run high priority tasks (Animation, UserInput)
+    if priority >= crate::task::Priority::Animation {
         return true;
     }
 
@@ -296,14 +296,16 @@ mod tests {
 
     #[test]
     fn test_default_scheduling_strategy() {
+        use crate::task::Priority;
+
         let scheduler = Scheduler::new();
 
         // High priority should always run
-        assert!(default_scheduling_strategy(100000, &scheduler));
-        assert!(default_scheduling_strategy(1000000, &scheduler));
+        assert!(default_scheduling_strategy(Priority::Animation, &scheduler));
+        assert!(default_scheduling_strategy(Priority::UserInput, &scheduler));
 
         // Lower priority depends on budget
-        assert!(default_scheduling_strategy(0, &scheduler));
+        assert!(default_scheduling_strategy(Priority::Idle, &scheduler));
     }
 
     #[test]
