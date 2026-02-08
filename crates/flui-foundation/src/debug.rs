@@ -667,7 +667,7 @@ impl fmt::Display for DiagnosticsNode {
 /// # Examples
 ///
 /// ```rust
-/// use flui_foundation::{Diagnosticable, DiagnosticsNode, DiagnosticsProperty};
+/// use flui_foundation::{Diagnosticable, DiagnosticsBuilder, DiagnosticsNode, DiagnosticsProperty};
 ///
 /// #[derive(Debug)]
 /// struct MyView {
@@ -676,9 +676,9 @@ impl fmt::Display for DiagnosticsNode {
 /// }
 ///
 /// impl Diagnosticable for MyView {
-///     fn debug_fill_properties(&self, properties: &mut Vec<DiagnosticsProperty>) {
-///         properties.push(DiagnosticsProperty::new("width", self.width));
-///         properties.push(DiagnosticsProperty::new("height", self.height));
+///     fn debug_fill_properties(&self, builder: &mut DiagnosticsBuilder) {
+///         builder.add("width", self.width);
+///         builder.add("height", self.height);
 ///     }
 /// }
 /// ```

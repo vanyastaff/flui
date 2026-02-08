@@ -5,7 +5,7 @@
 //!
 //! # Features
 //!
-//! - `ObserverList<T>` - Index-based observer management with O(1) add/remove
+//! - `ObserverList<T>` - Observer management with O(1) add/remove via `HashMap` index
 //! - `HashedObserverList<T>` - Hash-based for unique observers with O(1) operations
 //!
 //! # Examples
@@ -28,7 +28,7 @@
 //! ```
 
 use parking_lot::RwLock;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::id::ObserverId;
@@ -36,7 +36,7 @@ use crate::id::ObserverId;
 /// A list of observers with O(1) add/remove by ID.
 ///
 /// Uses `VecDeque` internally for cache-friendly iteration and
-/// stable indices during iteration.
+/// a `HashMap<ObserverId, usize>` index for O(1) removal by ID.
 ///
 /// # Thread Safety
 ///
@@ -45,6 +45,8 @@ use crate::id::ObserverId;
 #[derive(Debug)]
 pub struct ObserverList<T> {
     observers: VecDeque<Option<(ObserverId, T)>>,
+    /// Maps `ObserverId` → slot index for O(1) removal.
+    id_to_index: HashMap<ObserverId, usize>,
     len: usize,
     /// Indices of removed slots for reuse
     free_slots: Vec<usize>,
@@ -56,9 +58,10 @@ impl<T> ObserverList<T> {
     /// Creates a new empty observer list.
     #[inline]
     #[must_use]
-    pub const fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             observers: VecDeque::new(),
+            id_to_index: HashMap::new(),
             len: 0,
             free_slots: Vec::new(),
             next_id: 1,
@@ -71,6 +74,7 @@ impl<T> ObserverList<T> {
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             observers: VecDeque::with_capacity(capacity),
+            id_to_index: HashMap::with_capacity(capacity),
             len: 0,
             free_slots: Vec::new(),
             next_id: 1,
@@ -98,26 +102,25 @@ impl<T> ObserverList<T> {
         let id = ObserverId::new(self.next_id);
         self.next_id += 1;
 
-        if let Some(slot) = self.free_slots.pop() {
+        let slot_idx = if let Some(slot) = self.free_slots.pop() {
             self.observers[slot] = Some((id, observer));
+            slot
         } else {
+            let idx = self.observers.len();
             self.observers.push_back(Some((id, observer)));
-        }
+            idx
+        };
 
+        self.id_to_index.insert(id, slot_idx);
         self.len += 1;
         id
     }
 
-    /// Removes an observer by its ID.
+    /// Removes an observer by its ID in O(1) time.
     ///
     /// Returns the observer if found, or `None` if not found.
-    /// This is O(n) in worst case but typically fast due to early exit.
     pub fn remove(&mut self, id: ObserverId) -> Option<T> {
-        let idx = self
-            .observers
-            .iter()
-            .position(|slot| slot.as_ref().is_some_and(|(slot_id, _)| *slot_id == id))?;
-
+        let idx = self.id_to_index.remove(&id)?;
         let (_, observer) = self.observers[idx].take()?;
         self.free_slots.push(idx);
         self.len -= 1;
@@ -145,16 +148,24 @@ impl<T> ObserverList<T> {
     /// Clears all observers from the list.
     pub fn clear(&mut self) {
         self.observers.clear();
+        self.id_to_index.clear();
         self.free_slots.clear();
         self.len = 0;
     }
 
-    /// Compacts the list by removing empty slots.
+    /// Compacts the list by removing empty slots and rebuilding the index.
     ///
     /// Call this periodically if you have many add/remove cycles.
     pub fn compact(&mut self) {
         self.observers.retain(Option::is_some);
         self.free_slots.clear();
+        // Rebuild the id-to-index map after slot positions changed
+        self.id_to_index.clear();
+        for (idx, slot) in self.observers.iter().enumerate() {
+            if let Some((id, _)) = slot {
+                self.id_to_index.insert(*id, idx);
+            }
+        }
     }
 }
 
@@ -168,6 +179,7 @@ impl<T: Clone> Clone for ObserverList<T> {
     fn clone(&self) -> Self {
         Self {
             observers: self.observers.clone(),
+            id_to_index: self.id_to_index.clone(),
             len: self.len,
             free_slots: self.free_slots.clone(),
             next_id: self.next_id,

@@ -137,9 +137,15 @@ impl ChangeNotifier {
     }
 
     /// Call all the registered listeners.
+    ///
+    /// Callbacks are cloned (cheap `Arc` ref-count bump) and the lock is
+    /// released before any callback is invoked. This prevents deadlocks
+    /// when a callback calls `add_listener` or `remove_listener` on the
+    /// same notifier, matching Flutter's `ChangeNotifier.notifyListeners()`
+    /// re-entrancy semantics.
     pub fn notify_listeners(&self) {
-        let listeners = self.listeners.lock();
-        for callback in listeners.values() {
+        let callbacks: Vec<ListenerCallback> = self.listeners.lock().values().cloned().collect();
+        for callback in &callbacks {
             callback();
         }
     }
@@ -479,7 +485,7 @@ mod tests {
 
         assert!(id1 < id2);
         assert_eq!(id1.get(), 1);
-        assert_eq!(format!("{}", id1), "ListenerId(1)");
+        assert_eq!(format!("{}", id1), "Listener(1)");
     }
 
     #[test]
