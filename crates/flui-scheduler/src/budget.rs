@@ -187,6 +187,9 @@ pub struct FrameBudget {
     /// Average frame time (rolling window)
     avg_frame_time: Milliseconds,
 
+    /// Running sum of frame times in the rolling window (avoids re-summing each frame)
+    running_sum: f64,
+
     /// Frame time history (last 60 frames)
     frame_times: VecDeque<Milliseconds>,
 
@@ -204,6 +207,7 @@ impl FrameBudget {
             phase_timing: PhaseTiming::default(),
             last_frame_time: Milliseconds::ZERO,
             avg_frame_time: Milliseconds::ZERO,
+            running_sum: 0.0,
             frame_times: VecDeque::with_capacity(60),
             frame_count: 0,
         }
@@ -218,6 +222,7 @@ impl FrameBudget {
             phase_timing: PhaseTiming::default(),
             last_frame_time: Milliseconds::ZERO,
             avg_frame_time: Milliseconds::ZERO,
+            running_sum: 0.0,
             frame_times: VecDeque::with_capacity(60),
             frame_count: 0,
         }
@@ -331,14 +336,16 @@ impl FrameBudget {
         self.last_frame_time = total;
         self.frame_count += 1;
 
-        // Update rolling average
+        // Update running sum: add new, subtract evicted
+        self.running_sum += total.value();
         self.frame_times.push_back(total);
         if self.frame_times.len() > 60 {
-            self.frame_times.pop_front();
+            if let Some(evicted) = self.frame_times.pop_front() {
+                self.running_sum -= evicted.value();
+            }
         }
 
-        let sum: f64 = self.frame_times.iter().map(|m| m.value()).sum();
-        self.avg_frame_time = Milliseconds::new(sum / self.frame_times.len() as f64);
+        self.avg_frame_time = Milliseconds::new(self.running_sum / self.frame_times.len() as f64);
     }
 
     /// Get phase stats

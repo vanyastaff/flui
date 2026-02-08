@@ -531,7 +531,7 @@ impl Extend<Ticker> for TickerGroup {
 // =============================================================================
 
 /// Callback for ScheduledTicker that receives elapsed time in seconds
-pub type ScheduledTickerCallback = Arc<Mutex<dyn FnMut(f64) + Send>>;
+pub type ScheduledTickerCallback = Box<dyn FnMut(f64) + Send>;
 
 /// Shared inner state for a ScheduledTicker (single allocation, single lock)
 struct ScheduledTickerInner {
@@ -637,7 +637,7 @@ impl ScheduledTicker {
             let mut inner = self.inner.lock();
             inner.state = TickerState::Active;
             inner.start_time = Some(Instant::now());
-            inner.callback = Some(Arc::new(Mutex::new(callback)));
+            inner.callback = Some(Box::new(callback));
             inner.muted_elapsed = Seconds::ZERO;
         }
 
@@ -750,12 +750,14 @@ impl ScheduledTicker {
     /// Tick callback and reschedule for next frame if still active.
     ///
     /// This is the single code path for all scheduled ticker frame callbacks.
+    /// Uses take-invoke-restore to avoid holding the lock during callback invocation
+    /// and avoids the extra Arc<Mutex> wrapper that was previously on the callback.
     fn tick_and_reschedule(
         inner: Arc<Mutex<ScheduledTickerInner>>,
         scheduler: Arc<crate::scheduler::Scheduler>,
     ) {
-        // Compute elapsed and grab callback under lock, then release before invoking
-        let (elapsed, callback) = {
+        // Take elapsed and callback under lock, then release before invoking
+        let (elapsed, mut callback) = {
             let mut guard = inner.lock();
             guard.scheduled = false;
 
@@ -769,18 +771,21 @@ impl ScheduledTicker {
                 return;
             };
 
-            (start.elapsed().as_secs_f64(), guard.callback.clone())
+            // Take callback out to invoke without holding the lock
+            (start.elapsed().as_secs_f64(), guard.callback.take())
         };
 
-        if let Some(cb) = callback {
+        if let Some(ref mut cb) = callback {
             tracing::trace!(elapsed, "ScheduledTicker invoking callback");
-            cb.lock()(elapsed);
+            cb(elapsed);
         }
 
-        // Re-schedule if still active
+        // Restore callback and re-schedule if still active
         let should_reschedule = {
             let mut guard = inner.lock();
+            // Only restore if still active (stop() may have been called during callback)
             if guard.state == TickerState::Active {
+                guard.callback = callback;
                 tracing::trace!("ScheduledTicker scheduling next frame");
                 guard.scheduled = true;
                 true

@@ -108,6 +108,16 @@ impl VsyncStats {
     }
 }
 
+/// Mutable state consolidated behind a single lock (reduces 6 Arc allocations to 1)
+struct VsyncInner {
+    mode: VsyncMode,
+    last_vsync: Option<Instant>,
+    callback: Option<VsyncCallback>,
+    active: bool,
+    stats: VsyncStats,
+    interval_history: VecDeque<Microseconds>,
+}
+
 /// VSync scheduler
 ///
 /// Coordinates frame presentation with display refresh to avoid tearing.
@@ -131,29 +141,14 @@ impl VsyncStats {
 /// assert!((interval.value() - 16.666).abs() < 0.1);
 /// ```
 pub struct VsyncScheduler {
-    /// VSync mode
-    mode: Arc<Mutex<VsyncMode>>,
-
-    /// Target refresh rate (Hz)
+    /// Target refresh rate (Hz) — immutable after construction
     refresh_rate: u32,
 
-    /// Frame interval in microseconds
+    /// Frame interval in microseconds — immutable after construction
     frame_interval_us: Microseconds,
 
-    /// Last vsync time
-    last_vsync: Arc<Mutex<Option<Instant>>>,
-
-    /// VSync callback
-    callback: Arc<Mutex<Option<VsyncCallback>>>,
-
-    /// Whether vsync is active
-    active: Arc<Mutex<bool>>,
-
-    /// Statistics
-    stats: Arc<Mutex<VsyncStats>>,
-
-    /// Interval history for averaging (last 60 frames)
-    interval_history: Arc<Mutex<VecDeque<Microseconds>>>,
+    /// All mutable state behind a single lock
+    inner: Arc<Mutex<VsyncInner>>,
 }
 
 impl VsyncScheduler {
@@ -170,32 +165,34 @@ impl VsyncScheduler {
         let frame_interval_us = Microseconds::new(1_000_000 / refresh_rate as i64);
 
         Self {
-            mode: Arc::new(Mutex::new(VsyncMode::On)),
             refresh_rate,
             frame_interval_us,
-            last_vsync: Arc::new(Mutex::new(None)),
-            callback: Arc::new(Mutex::new(None)),
-            active: Arc::new(Mutex::new(false)),
-            stats: Arc::new(Mutex::new(VsyncStats::default())),
-            interval_history: Arc::new(Mutex::new(VecDeque::with_capacity(60))),
+            inner: Arc::new(Mutex::new(VsyncInner {
+                mode: VsyncMode::On,
+                last_vsync: None,
+                callback: None,
+                active: false,
+                stats: VsyncStats::default(),
+                interval_history: VecDeque::with_capacity(60),
+            })),
         }
     }
 
     /// Create with a specific VSync mode
     pub fn with_mode(refresh_rate: u32, mode: VsyncMode) -> Self {
         let scheduler = Self::new(refresh_rate);
-        *scheduler.mode.lock() = mode;
+        scheduler.inner.lock().mode = mode;
         scheduler
     }
 
     /// Set vsync mode
     pub fn set_mode(&self, mode: VsyncMode) {
-        *self.mode.lock() = mode;
+        self.inner.lock().mode = mode;
     }
 
     /// Get current vsync mode
     pub fn mode(&self) -> VsyncMode {
-        *self.mode.lock()
+        self.inner.lock().mode
     }
 
     /// Get refresh rate
@@ -223,27 +220,27 @@ impl VsyncScheduler {
     where
         F: FnMut(Instant) + Send + 'static,
     {
-        *self.callback.lock() = Some(Box::new(callback));
+        self.inner.lock().callback = Some(Box::new(callback));
     }
 
     /// Clear vsync callback
     pub fn clear_callback(&self) {
-        *self.callback.lock() = None;
+        self.inner.lock().callback = None;
     }
 
     /// Start vsync loop
     pub fn start(&self) {
-        *self.active.lock() = true;
+        self.inner.lock().active = true;
     }
 
     /// Stop vsync loop
     pub fn stop(&self) {
-        *self.active.lock() = false;
+        self.inner.lock().active = false;
     }
 
     /// Check if vsync is active
     pub fn is_active(&self) -> bool {
-        *self.active.lock()
+        self.inner.lock().active
     }
 
     /// Wait for next vsync
@@ -257,14 +254,16 @@ impl VsyncScheduler {
     pub fn wait_for_vsync(&self) -> Instant {
         let now = Instant::now();
 
-        match *self.mode.lock() {
-            VsyncMode::Off => {
-                // No waiting
-                now
-            }
+        // Read mode and last_vsync under a single lock
+        let (mode, last) = {
+            let inner = self.inner.lock();
+            (inner.mode, inner.last_vsync)
+        };
+
+        match mode {
+            VsyncMode::Off => now,
             VsyncMode::On | VsyncMode::Adaptive | VsyncMode::TripleBuffer => {
-                // Calculate time until next vsync
-                if let Some(last) = *self.last_vsync.lock() {
+                if let Some(last) = last {
                     let elapsed = now.duration_since(last);
                     let interval = self.frame_interval_duration();
 
@@ -274,7 +273,7 @@ impl VsyncScheduler {
                         Instant::now()
                     } else {
                         // Missed vsync
-                        self.stats.lock().missed_count += 1;
+                        self.inner.lock().stats.missed_count += 1;
                         now
                     }
                 } else {
@@ -290,39 +289,40 @@ impl VsyncScheduler {
     pub fn signal_vsync(&self) {
         let now = Instant::now();
 
+        let mut inner = self.inner.lock();
+
         // Calculate interval from last vsync
-        if let Some(last) = *self.last_vsync.lock() {
+        if let Some(last) = inner.last_vsync {
             let interval = Microseconds::new(now.duration_since(last).as_micros() as i64);
 
             // Update history
-            let mut history = self.interval_history.lock();
-            history.push_back(interval);
-            if history.len() > 60 {
-                history.pop_front();
+            inner.interval_history.push_back(interval);
+            if inner.interval_history.len() > 60 {
+                inner.interval_history.pop_front();
             }
 
             // Calculate average
-            let sum: i64 = history.iter().map(|i| i.value()).sum();
-            let avg = Microseconds::new(sum / history.len() as i64);
+            let sum: i64 = inner.interval_history.iter().map(|i| i.value()).sum();
+            let avg = Microseconds::new(sum / inner.interval_history.len() as i64);
 
             // Update stats
-            let mut stats = self.stats.lock();
-            stats.last_interval = interval;
-            stats.avg_interval = avg;
-            stats.signal_count += 1;
+            inner.stats.last_interval = interval;
+            inner.stats.avg_interval = avg;
+            inner.stats.signal_count += 1;
         }
 
-        *self.last_vsync.lock() = Some(now);
+        inner.last_vsync = Some(now);
 
-        if let Some(callback) = self.callback.lock().as_mut() {
+        if let Some(callback) = inner.callback.as_mut() {
             callback(now);
         }
     }
 
     /// Get time since last vsync
     pub fn time_since_vsync(&self) -> Option<Duration> {
-        self.last_vsync
+        self.inner
             .lock()
+            .last_vsync
             .map(|last| Instant::now().duration_since(last))
     }
 
@@ -334,31 +334,33 @@ impl VsyncScheduler {
 
     /// Predict next vsync time
     pub fn predict_next_vsync(&self) -> Option<Instant> {
-        self.last_vsync
+        self.inner
             .lock()
+            .last_vsync
             .map(|last| last + self.frame_interval_duration())
     }
 
     /// Get vsync statistics
     pub fn stats(&self) -> VsyncStats {
-        *self.stats.lock()
+        self.inner.lock().stats
     }
 
     /// Reset statistics
     pub fn reset_stats(&self) {
-        *self.stats.lock() = VsyncStats::default();
-        self.interval_history.lock().clear();
+        let mut inner = self.inner.lock();
+        inner.stats = VsyncStats::default();
+        inner.interval_history.clear();
     }
 
     /// Check if running at target refresh rate
     pub fn is_at_target_rate(&self) -> bool {
-        let stats = self.stats.lock();
-        if stats.avg_interval.value() == 0 {
+        let inner = self.inner.lock();
+        if inner.stats.avg_interval.value() == 0 {
             return true;
         }
 
         let target = self.frame_interval_us.value();
-        let actual = stats.avg_interval.value();
+        let actual = inner.stats.avg_interval.value();
 
         // Within 5% tolerance
         let tolerance = target / 20;
@@ -545,11 +547,12 @@ impl std::fmt::Debug for VsyncDrivenScheduler {
 
 impl std::fmt::Debug for VsyncScheduler {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let inner = self.inner.lock();
         f.debug_struct("VsyncScheduler")
             .field("refresh_rate", &self.refresh_rate)
-            .field("mode", &self.mode())
-            .field("active", &self.is_active())
-            .field("stats", &self.stats())
+            .field("mode", &inner.mode)
+            .field("active", &inner.active)
+            .field("stats", &inner.stats)
             .finish()
     }
 }

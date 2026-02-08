@@ -535,9 +535,10 @@ impl Scheduler {
         self.set_scheduler_phase(SchedulerPhase::TransientCallbacks);
 
         // Execute transient callbacks (animations get vsync timestamp)
-        let transient = {
+        // Use drain() instead of take() to preserve Vec capacity across frames
+        let transient: Vec<_> = {
             let mut cbs = self.callbacks.transient.lock();
-            std::mem::take(&mut *cbs)
+            cbs.drain(..).collect()
         };
 
         if !transient.is_empty() {
@@ -558,9 +559,9 @@ impl Scheduler {
         // at the end of handle_draw_frame is sufficient.
 
         // Execute legacy frame callbacks
-        let callbacks = {
+        let callbacks: Vec<_> = {
             let mut cbs = self.callbacks.frame.lock();
-            std::mem::take(&mut *cbs)
+            cbs.drain(..).collect()
         };
 
         for callback in callbacks {
@@ -589,19 +590,21 @@ impl Scheduler {
         self.frame.budget.lock().reset();
 
         // Execute persistent frame callbacks (rendering pipeline)
-        let persistent_callbacks = {
-            let cbs = self.callbacks.persistent.lock();
-            cbs.iter()
-                .map(|c| (c.id, c.callback.clone()))
-                .collect::<Vec<_>>()
-        };
+        // Copy FrameTiming once outside the loop to avoid re-locking per callback.
+        // Clone callbacks to release the lock before invoking (callbacks may
+        // call scheduler methods that take other locks).
+        let timing_snapshot = *self.frame.current_frame.lock();
+        if let Some(timing) = timing_snapshot {
+            let persistent_callbacks: Vec<_> = {
+                let cbs = self.callbacks.persistent.lock();
+                cbs.iter()
+                    .filter(|c| !self.callbacks.cancelled.contains_key(&c.id))
+                    .map(|c| c.callback.clone())
+                    .collect()
+            };
 
-        for (id, callback) in &persistent_callbacks {
-            if self.callbacks.cancelled.contains_key(id) {
-                continue;
-            }
-            if let Some(timing) = self.frame.current_frame.lock().as_ref() {
-                callback(timing);
+            for callback in &persistent_callbacks {
+                callback(&timing);
             }
         }
 
@@ -633,9 +636,9 @@ impl Scheduler {
             self.binding.pending_timings.lock().push(timing);
 
             // Execute post-frame callbacks
-            let callbacks = {
+            let callbacks: Vec<_> = {
                 let mut cbs = self.callbacks.post_frame.lock();
-                std::mem::take(&mut *cbs)
+                cbs.drain(..).collect()
             };
 
             for cancellable in callbacks {
@@ -1242,9 +1245,9 @@ impl Scheduler {
 
     /// Internal: Notify all frame completion waiters
     fn notify_frame_completion(&self, timing: &FrameTiming) {
-        let waiters = {
+        let waiters: Vec<_> = {
             let mut waiters = self.frame.completion_waiters.lock();
-            std::mem::take(&mut *waiters)
+            waiters.drain(..).collect()
         };
 
         for notifier in waiters {
@@ -1362,12 +1365,12 @@ impl Scheduler {
     ///
     /// Returns the number of timings reported.
     pub fn report_timings(&self) -> usize {
-        let timings = {
+        let timings: Vec<_> = {
             let mut pending = self.binding.pending_timings.lock();
             if pending.is_empty() {
                 return 0;
             }
-            std::mem::take(&mut *pending)
+            pending.drain(..).collect()
         };
 
         let callbacks = self.binding.timings_callbacks.lock().clone();
@@ -1469,9 +1472,9 @@ impl Scheduler {
             return 0;
         }
 
-        let callbacks = {
+        let callbacks: Vec<_> = {
             let mut cbs = self.callbacks.idle.lock();
-            std::mem::take(&mut *cbs)
+            cbs.drain(..).collect()
         };
 
         let count = callbacks.len();

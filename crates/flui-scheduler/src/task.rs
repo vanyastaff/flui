@@ -393,7 +393,7 @@ impl TaskQueue {
     pub fn execute_until(&self, min_priority: Priority) -> usize {
         let tasks = {
             let mut queue = self.queue.lock();
-            let mut batch = Vec::new();
+            let mut batch = Vec::with_capacity(queue.len());
             while let Some(pt) = queue.peek() {
                 if pt.0.priority >= min_priority {
                     batch.push(queue.pop().unwrap().0);
@@ -417,7 +417,7 @@ impl TaskQueue {
     pub fn execute_priority(&self, priority: Priority) -> usize {
         let tasks = {
             let mut queue = self.queue.lock();
-            let mut batch = Vec::new();
+            let mut batch = Vec::with_capacity(queue.len());
             while let Some(pt) = queue.peek() {
                 if pt.0.priority == priority {
                     batch.push(queue.pop().unwrap().0);
