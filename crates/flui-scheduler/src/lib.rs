@@ -120,7 +120,7 @@
 //! ## Feature Flags
 //!
 //! - **`serde`** - Enable serialization support for duration types, priorities,
-//!   and statistics. Adds [`serde::Serialize`] and [`serde::Deserialize`] derives
+//!   and statistics. Adds `Serialize` and `Deserialize` derives
 //!   to data types.
 //!
 //! ```toml

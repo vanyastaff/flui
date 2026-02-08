@@ -1,6 +1,6 @@
 //! Scheduler configuration types and utilities.
 //!
-//! This module provides standalone types used by the [`Scheduler`](crate::Scheduler):
+//! This module provides standalone types used by the [`Scheduler`]:
 //!
 //! - **Time dilation**: Slow down animations for debugging
 //! - **Performance mode**: Hint to the runtime about expected workload
@@ -212,6 +212,25 @@ impl Drop for PerformanceModeRequestHandle {
 pub const SERVICE_EXT_TIME_DILATION: &str = "timeDilation";
 
 // ============================================================================
+// Internal Helper
+// ============================================================================
+
+/// Adjust a duration for the epoch and time dilation.
+pub(crate) fn adjust_duration_for_epoch(
+    raw: web_time::Duration,
+    epoch_start: web_time::Duration,
+) -> web_time::Duration {
+    let since_epoch = raw.saturating_sub(epoch_start);
+    let dilation = time_dilation();
+
+    if (dilation - 1.0).abs() < f64::EPSILON {
+        since_epoch
+    } else {
+        web_time::Duration::from_secs_f64(since_epoch.as_secs_f64() / dilation)
+    }
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 
@@ -311,24 +330,5 @@ mod tests {
 
         // Reset
         set_time_dilation(1.0);
-    }
-}
-
-// ============================================================================
-// Internal Helper
-// ============================================================================
-
-/// Adjust a duration for the epoch and time dilation.
-pub(crate) fn adjust_duration_for_epoch(
-    raw: web_time::Duration,
-    epoch_start: web_time::Duration,
-) -> web_time::Duration {
-    let since_epoch = raw.saturating_sub(epoch_start);
-    let dilation = time_dilation();
-
-    if (dilation - 1.0).abs() < f64::EPSILON {
-        since_epoch
-    } else {
-        web_time::Duration::from_secs_f64(since_epoch.as_secs_f64() / dilation)
     }
 }
