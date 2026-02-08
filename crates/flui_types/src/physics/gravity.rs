@@ -24,6 +24,7 @@ pub struct GravitySimulation {
 
 impl GravitySimulation {
     #[must_use]
+    #[inline]
     pub fn new(acceleration: f32, start: f32, end: f32, velocity: f32) -> Self {
         Self {
             acceleration,
@@ -35,32 +36,38 @@ impl GravitySimulation {
     }
 
     #[must_use]
+    #[inline]
     pub fn with_tolerance(mut self, tolerance: Tolerance) -> Self {
         self.tolerance = tolerance;
         self
     }
 
     #[must_use]
+    #[inline]
     pub fn acceleration(&self) -> f32 {
         self.acceleration
     }
 
     #[must_use]
+    #[inline]
     pub fn start(&self) -> f32 {
         self.start
     }
 
     #[must_use]
+    #[inline]
     pub fn end(&self) -> f32 {
         self.end
     }
 
     #[must_use]
+    #[inline]
     pub fn initial_velocity(&self) -> f32 {
         self.initial_velocity
     }
 
     #[must_use]
+    #[inline]
     pub fn is_valid(&self) -> bool {
         self.acceleration.is_finite()
             && self.start.is_finite()
@@ -70,6 +77,7 @@ impl GravitySimulation {
     }
 
     #[must_use]
+    #[inline]
     pub fn time_at_end(&self) -> Option<f32> {
         let distance = self.end - self.start;
 

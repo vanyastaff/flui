@@ -47,6 +47,7 @@ impl Tolerance {
     };
 
     #[must_use]
+    #[inline]
     pub const fn new(distance: f32, velocity: f32, time: f32) -> Self {
         Self {
             distance,
@@ -56,31 +57,37 @@ impl Tolerance {
     }
 
     #[must_use]
+    #[inline]
     pub fn is_finite(&self) -> bool {
         self.distance.is_finite() && self.velocity.is_finite() && self.time.is_finite()
     }
 
     #[must_use]
+    #[inline]
     pub fn is_valid(&self) -> bool {
         self.is_finite() && self.distance >= 0.0 && self.velocity >= 0.0 && self.time >= 0.0
     }
 
     #[must_use]
+    #[inline]
     pub fn is_distance_within(&self, distance: f32) -> bool {
         distance.abs() < self.distance
     }
 
     #[must_use]
+    #[inline]
     pub fn is_velocity_within(&self, velocity: f32) -> bool {
         velocity.abs() < self.velocity
     }
 
     #[must_use]
+    #[inline]
     pub fn is_time_within(&self, time: f32) -> bool {
         time.abs() < self.time
     }
 
     #[must_use]
+    #[inline]
     pub fn scale(self, factor: f32) -> Self {
         Self {
             distance: self.distance * factor,
@@ -90,6 +97,7 @@ impl Tolerance {
     }
 
     #[must_use]
+    #[inline]
     pub const fn from_distance_velocity(distance: f32, velocity: f32) -> Self {
         Self {
             distance,
@@ -100,6 +108,7 @@ impl Tolerance {
 }
 
 impl Default for Tolerance {
+    #[inline]
     fn default() -> Self {
         Self::DEFAULT
     }

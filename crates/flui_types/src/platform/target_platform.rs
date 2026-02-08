@@ -26,31 +26,37 @@ pub enum TargetPlatform {
 
 impl TargetPlatform {
     #[must_use]
+    #[inline]
     pub const fn is_mobile(&self) -> bool {
         matches!(self, Self::Android | Self::iOS | Self::Fuchsia)
     }
 
     #[must_use]
+    #[inline]
     pub const fn is_desktop(&self) -> bool {
         matches!(self, Self::MacOS | Self::Linux | Self::Windows)
     }
 
     #[must_use]
+    #[inline]
     pub const fn is_web(&self) -> bool {
         matches!(self, Self::Web)
     }
 
     #[must_use]
+    #[inline]
     pub const fn is_apple(&self) -> bool {
         matches!(self, Self::iOS | Self::MacOS)
     }
 
     #[must_use]
+    #[inline]
     pub const fn is_touch_primary(&self) -> bool {
         self.is_mobile() || matches!(self, Self::Web)
     }
 
     #[must_use]
+    #[inline]
     pub const fn as_str(&self) -> &'static str {
         match self {
             Self::Android => "android",
@@ -65,6 +71,7 @@ impl TargetPlatform {
 }
 
 impl Default for TargetPlatform {
+    #[inline]
     fn default() -> Self {
         // Detect the current platform at compile time
         #[cfg(target_os = "android")]

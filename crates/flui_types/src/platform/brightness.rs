@@ -14,16 +14,19 @@ pub enum Brightness {
 
 impl Brightness {
     #[must_use]
+    #[inline]
     pub const fn is_light(&self) -> bool {
         matches!(self, Self::Light)
     }
 
     #[must_use]
+    #[inline]
     pub const fn is_dark(&self) -> bool {
         matches!(self, Self::Dark)
     }
 
     #[must_use]
+    #[inline]
     pub const fn invert(&self) -> Self {
         match self {
             Self::Light => Self::Dark,
@@ -32,6 +35,7 @@ impl Brightness {
     }
 
     #[must_use]
+    #[inline]
     pub const fn background_color(&self) -> Color {
         match self {
             Self::Light => Color::rgba(255, 255, 255, 255), // White
@@ -40,6 +44,7 @@ impl Brightness {
     }
 
     #[must_use]
+    #[inline]
     pub const fn foreground_color(&self) -> Color {
         match self {
             Self::Light => Color::rgba(0, 0, 0, 255),      // Black
@@ -48,6 +53,7 @@ impl Brightness {
     }
 
     #[must_use]
+    #[inline]
     pub const fn surface_color(&self) -> Color {
         match self {
             Self::Light => Color::rgba(255, 255, 255, 255), // White
@@ -56,6 +62,7 @@ impl Brightness {
     }
 
     #[must_use]
+    #[inline]
     pub const fn shadow_opacity(&self) -> f32 {
         match self {
             Self::Light => 0.2,
@@ -64,6 +71,7 @@ impl Brightness {
     }
 
     #[must_use]
+    #[inline]
     pub fn parse(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "light" => Some(Self::Light),
@@ -73,6 +81,7 @@ impl Brightness {
     }
 
     #[must_use]
+    #[inline]
     pub const fn as_str(&self) -> &'static str {
         match self {
             Self::Light => "light",

@@ -31,6 +31,7 @@ pub struct SpringDescription {
 
 impl SpringDescription {
     #[must_use]
+    #[inline]
     pub const fn new(mass: f32, stiffness: f32, damping: f32) -> Self {
         Self {
             mass,
@@ -40,6 +41,7 @@ impl SpringDescription {
     }
 
     #[must_use]
+    #[inline]
     pub fn with_critical_damping(mass: f32, stiffness: f32) -> Self {
         let damping = 2.0 * (mass * stiffness).sqrt();
         Self {
@@ -50,23 +52,27 @@ impl SpringDescription {
     }
 
     #[must_use]
+    #[inline]
     pub fn bouncy() -> Self {
         // Mass=1, Stiffness=300, Damping=10 gives ~0.4 damping ratio
         Self::new(1.0, 300.0, 10.0)
     }
 
     #[must_use]
+    #[inline]
     pub fn stiff() -> Self {
         Self::with_critical_damping(1.0, 500.0)
     }
 
     #[must_use]
+    #[inline]
     pub fn soft() -> Self {
         // Mass=1, Stiffness=100, Damping=30 gives ~1.5 damping ratio
         Self::new(1.0, 100.0, 30.0)
     }
 
     #[must_use]
+    #[inline]
     pub fn spring_type(&self) -> SpringType {
         let critical_damping = 2.0 * (self.mass * self.stiffness).sqrt();
         let damping_ratio = self.damping / critical_damping;
@@ -81,17 +87,20 @@ impl SpringDescription {
     }
 
     #[must_use]
+    #[inline]
     pub fn damping_ratio(&self) -> f32 {
         let critical_damping = 2.0 * (self.mass * self.stiffness).sqrt();
         self.damping / critical_damping
     }
 
     #[must_use]
+    #[inline]
     pub fn natural_frequency(&self) -> f32 {
         (self.stiffness / self.mass).sqrt()
     }
 
     #[must_use]
+    #[inline]
     pub fn damped_frequency(&self) -> f32 {
         let w0 = self.natural_frequency();
         let zeta = self.damping_ratio();
@@ -99,6 +108,7 @@ impl SpringDescription {
     }
 
     #[must_use]
+    #[inline]
     pub fn period(&self) -> Option<f32> {
         let wd = self.damped_frequency();
         if wd > 0.0 {
@@ -109,6 +119,7 @@ impl SpringDescription {
     }
 
     #[must_use]
+    #[inline]
     pub fn is_valid(&self) -> bool {
         self.mass > 0.0
             && self.stiffness > 0.0
@@ -119,6 +130,7 @@ impl SpringDescription {
     }
 
     #[must_use]
+    #[inline]
     pub fn critical_damping(&self) -> f32 {
         2.0 * (self.mass * self.stiffness).sqrt()
     }
@@ -144,6 +156,7 @@ pub struct SpringSimulation {
 
 impl SpringSimulation {
     #[must_use]
+    #[inline]
     pub fn new(spring: SpringDescription, start: f32, end: f32, velocity: f32) -> Self {
         Self {
             spring,
@@ -155,32 +168,38 @@ impl SpringSimulation {
     }
 
     #[must_use]
+    #[inline]
     pub fn with_tolerance(mut self, tolerance: Tolerance) -> Self {
         self.tolerance = tolerance;
         self
     }
 
     #[must_use]
+    #[inline]
     pub fn spring(&self) -> &SpringDescription {
         &self.spring
     }
 
     #[must_use]
+    #[inline]
     pub fn start(&self) -> f32 {
         self.start
     }
 
     #[must_use]
+    #[inline]
     pub fn end(&self) -> f32 {
         self.end
     }
 
     #[must_use]
+    #[inline]
     pub fn initial_velocity(&self) -> f32 {
         self.initial_velocity
     }
 
     #[must_use]
+    #[inline]
     pub fn is_valid(&self) -> bool {
         self.spring.is_valid()
             && self.start.is_finite()
@@ -190,6 +209,7 @@ impl SpringSimulation {
     }
 
     /// Calculate position for an underdamped spring
+    #[inline]
     fn position_underdamped(&self, time: f32) -> f32 {
         let m = self.spring.mass;
         let k = self.spring.stiffness;
@@ -207,6 +227,7 @@ impl SpringSimulation {
     }
 
     /// Calculate velocity for an underdamped spring
+    #[inline]
     fn velocity_underdamped(&self, time: f32) -> f32 {
         let m = self.spring.mass;
         let k = self.spring.stiffness;
@@ -227,6 +248,7 @@ impl SpringSimulation {
     }
 
     /// Calculate position for a critically damped spring
+    #[inline]
     fn position_critical(&self, time: f32) -> f32 {
         let m = self.spring.mass;
         let k = self.spring.stiffness;
@@ -240,6 +262,7 @@ impl SpringSimulation {
     }
 
     /// Calculate velocity for a critically damped spring
+    #[inline]
     fn velocity_critical(&self, time: f32) -> f32 {
         let m = self.spring.mass;
         let k = self.spring.stiffness;
@@ -253,6 +276,7 @@ impl SpringSimulation {
     }
 
     /// Calculate position for an overdamped spring
+    #[inline]
     fn position_overdamped(&self, time: f32) -> f32 {
         let m = self.spring.mass;
         let k = self.spring.stiffness;
@@ -273,6 +297,7 @@ impl SpringSimulation {
     }
 
     /// Calculate velocity for an overdamped spring
+    #[inline]
     fn velocity_overdamped(&self, time: f32) -> f32 {
         let m = self.spring.mass;
         let k = self.spring.stiffness;

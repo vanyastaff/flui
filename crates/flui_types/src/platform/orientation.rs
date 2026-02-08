@@ -18,16 +18,19 @@ pub enum DeviceOrientation {
 
 impl DeviceOrientation {
     #[must_use]
+    #[inline]
     pub const fn is_portrait(&self) -> bool {
         matches!(self, Self::PortraitUp | Self::PortraitDown)
     }
 
     #[must_use]
+    #[inline]
     pub const fn is_landscape(&self) -> bool {
         matches!(self, Self::LandscapeLeft | Self::LandscapeRight)
     }
 
     #[must_use]
+    #[inline]
     pub const fn rotation_degrees(&self) -> f32 {
         match self {
             Self::PortraitUp => 0.0,
@@ -38,11 +41,13 @@ impl DeviceOrientation {
     }
 
     #[must_use]
+    #[inline]
     pub fn rotation_radians(&self) -> f32 {
         self.rotation_degrees().to_radians()
     }
 
     #[must_use]
+    #[inline]
     pub const fn rotate_clockwise(&self) -> Self {
         match self {
             Self::PortraitUp => Self::LandscapeRight,
@@ -53,6 +58,7 @@ impl DeviceOrientation {
     }
 
     #[must_use]
+    #[inline]
     pub const fn rotate_counter_clockwise(&self) -> Self {
         match self {
             Self::PortraitUp => Self::LandscapeLeft,
@@ -63,6 +69,7 @@ impl DeviceOrientation {
     }
 
     #[must_use]
+    #[inline]
     pub const fn opposite(&self) -> Self {
         match self {
             Self::PortraitUp => Self::PortraitDown,
@@ -73,11 +80,13 @@ impl DeviceOrientation {
     }
 
     #[must_use]
+    #[inline]
     pub const fn is_upside_down(&self) -> bool {
         matches!(self, Self::PortraitDown)
     }
 
     #[must_use]
+    #[inline]
     pub fn parse(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "portrait_up" | "portraitup" => Some(Self::PortraitUp),
@@ -89,6 +98,7 @@ impl DeviceOrientation {
     }
 
     #[must_use]
+    #[inline]
     pub const fn as_str(&self) -> &'static str {
         match self {
             Self::PortraitUp => "portrait_up",

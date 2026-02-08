@@ -26,6 +26,7 @@ impl Locale {
     /// assert_eq!(locale.language(), "en");
     /// assert_eq!(locale.country(), Some("US"));
     /// ```
+    #[inline]
     pub fn new(language: impl Into<String>, country: Option<impl Into<String>>) -> Self {
         Self {
             language: language.into(),
@@ -46,6 +47,7 @@ impl Locale {
     /// assert_eq!(locale.country(), Some("CN"));
     /// assert_eq!(locale.script(), Some("Hans"));
     /// ```
+    #[inline]
     pub fn with_script(
         language: impl Into<String>,
         country: Option<impl Into<String>>,
@@ -59,21 +61,25 @@ impl Locale {
     }
 
     #[must_use]
+    #[inline]
     pub fn language(&self) -> &str {
         &self.language
     }
 
     #[must_use]
+    #[inline]
     pub fn country(&self) -> Option<&str> {
         self.country.as_deref()
     }
 
     #[must_use]
+    #[inline]
     pub fn script(&self) -> Option<&str> {
         self.script.as_deref()
     }
 
     #[must_use]
+    #[inline]
     pub fn to_language_tag(&self) -> String {
         if let Some(country) = &self.country {
             format!("{}_{}", self.language, country)
@@ -83,11 +89,13 @@ impl Locale {
     }
 
     #[must_use]
+    #[inline]
     pub fn is_ltr(&self) -> bool {
         !self.is_rtl()
     }
 
     #[must_use]
+    #[inline]
     pub fn is_rtl(&self) -> bool {
         matches!(
             self.language.as_str(),
@@ -96,6 +104,7 @@ impl Locale {
     }
 
     #[must_use]
+    #[inline]
     pub fn from_language_tag(tag: &str) -> Option<Self> {
         if tag.is_empty() {
             return None;
@@ -131,6 +140,7 @@ impl Locale {
 }
 
 impl fmt::Display for Locale {
+    #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.to_language_tag())
     }
@@ -139,36 +149,43 @@ impl fmt::Display for Locale {
 // Common locales
 impl Locale {
     /// English (United States)
+    #[inline]
     pub fn en_us() -> Self {
         Self::new("en", Some("US"))
     }
 
     /// English (United Kingdom)
+    #[inline]
     pub fn en_gb() -> Self {
         Self::new("en", Some("GB"))
     }
 
     /// Spanish (Spain)
+    #[inline]
     pub fn es_es() -> Self {
         Self::new("es", Some("ES"))
     }
 
     /// French (France)
+    #[inline]
     pub fn fr_fr() -> Self {
         Self::new("fr", Some("FR"))
     }
 
     /// German (Germany)
+    #[inline]
     pub fn de_de() -> Self {
         Self::new("de", Some("DE"))
     }
 
     /// Chinese (China)
+    #[inline]
     pub fn zh_cn() -> Self {
         Self::new("zh", Some("CN"))
     }
 
     /// Japanese (Japan)
+    #[inline]
     pub fn ja_jp() -> Self {
         Self::new("ja", Some("JP"))
     }

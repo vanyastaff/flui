@@ -21,6 +21,7 @@ pub struct FrictionSimulation {
 
 impl FrictionSimulation {
     #[must_use]
+    #[inline]
     pub fn new(drag: f32, position: f32, velocity: f32) -> Self {
         Self {
             drag,
@@ -31,32 +32,38 @@ impl FrictionSimulation {
     }
 
     #[must_use]
+    #[inline]
     pub fn with_tolerance(mut self, tolerance: Tolerance) -> Self {
         self.tolerance = tolerance;
         self
     }
 
     #[must_use]
+    #[inline]
     pub fn drag(&self) -> f32 {
         self.drag
     }
 
     #[must_use]
+    #[inline]
     pub fn start_position(&self) -> f32 {
         self.position_at_zero
     }
 
     #[must_use]
+    #[inline]
     pub fn initial_velocity(&self) -> f32 {
         self.velocity_at_zero
     }
 
     #[must_use]
+    #[inline]
     pub fn final_position(&self) -> f32 {
         self.position_at_zero + self.velocity_at_zero / self.drag
     }
 
     #[must_use]
+    #[inline]
     pub fn is_valid(&self) -> bool {
         self.drag > 0.0
             && self.drag.is_finite()
@@ -66,6 +73,7 @@ impl FrictionSimulation {
     }
 
     #[must_use]
+    #[inline]
     pub fn time_to_velocity(&self, target_velocity: f32) -> Option<f32> {
         if self.drag <= 0.0 || target_velocity.abs() > self.velocity_at_zero.abs() {
             return None;
@@ -86,6 +94,7 @@ impl FrictionSimulation {
     }
 
     #[must_use]
+    #[inline]
     pub fn distance_to_velocity(&self, target_velocity: f32) -> f32 {
         if let Some(time) = self.time_to_velocity(target_velocity) {
             self.position(time) - self.position_at_zero
@@ -95,6 +104,7 @@ impl FrictionSimulation {
     }
 
     #[must_use]
+    #[inline]
     pub fn deceleration(&self, time: f32) -> f32 {
         -self.drag * self.velocity(time)
     }
@@ -137,6 +147,7 @@ pub struct BoundedFrictionSimulation {
 
 impl BoundedFrictionSimulation {
     #[must_use]
+    #[inline]
     pub fn new(drag: f32, position: f32, velocity: f32, boundary: f32) -> Self {
         Self {
             friction: FrictionSimulation::new(drag, position, velocity),
@@ -146,22 +157,26 @@ impl BoundedFrictionSimulation {
     }
 
     #[must_use]
+    #[inline]
     pub fn with_tolerance(mut self, tolerance: Tolerance) -> Self {
         self.friction = self.friction.with_tolerance(tolerance);
         self
     }
 
     #[must_use]
+    #[inline]
     pub fn boundary(&self) -> f32 {
         self.boundary
     }
 
     #[must_use]
+    #[inline]
     pub fn inner(&self) -> &FrictionSimulation {
         &self.friction
     }
 
     #[must_use]
+    #[inline]
     pub fn will_hit_boundary(&self) -> bool {
         let final_pos = self.friction.final_position();
         if self.positive_direction {
@@ -172,6 +187,7 @@ impl BoundedFrictionSimulation {
     }
 
     #[must_use]
+    #[inline]
     pub fn is_at_boundary(&self, time: f32) -> bool {
         let pos = self.friction.position(time);
         if self.positive_direction {
@@ -182,6 +198,7 @@ impl BoundedFrictionSimulation {
     }
 
     #[must_use]
+    #[inline]
     pub fn is_valid(&self) -> bool {
         self.friction.is_valid() && self.boundary.is_finite()
     }
