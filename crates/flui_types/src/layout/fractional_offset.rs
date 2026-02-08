@@ -46,11 +46,13 @@ impl FractionalOffset {
     pub const BOTTOM_RIGHT: Self = Self { dx: 1.0, dy: 1.0 };
 
     #[must_use]
+    #[inline]
     pub const fn new(dx: f32, dy: f32) -> Self {
         Self { dx, dy }
     }
 
     #[must_use]
+    #[inline]
     pub fn from_alignment(alignment: crate::layout::Alignment) -> Self {
         Self {
             dx: (alignment.x + 1.0) / 2.0,
@@ -59,11 +61,13 @@ impl FractionalOffset {
     }
 
     #[must_use]
+    #[inline]
     pub fn to_alignment(&self) -> crate::layout::Alignment {
         crate::layout::Alignment::new(self.dx * 2.0 - 1.0, self.dy * 2.0 - 1.0)
     }
 
     #[must_use]
+    #[inline]
     pub fn lerp(a: Self, b: Self, t: f32) -> Self {
         Self {
             dx: a.dx + (b.dx - a.dx) * t,
@@ -72,11 +76,13 @@ impl FractionalOffset {
     }
 
     #[must_use]
+    #[inline]
     pub fn is_finite(&self) -> bool {
         self.dx.is_finite() && self.dy.is_finite()
     }
 
     #[must_use]
+    #[inline]
     pub fn negate(&self) -> Self {
         Self {
             dx: -self.dx,
@@ -88,6 +94,7 @@ impl FractionalOffset {
 impl std::ops::Add for FractionalOffset {
     type Output = Self;
 
+    #[inline]
     fn add(self, other: Self) -> Self {
         Self {
             dx: self.dx + other.dx,
@@ -99,6 +106,7 @@ impl std::ops::Add for FractionalOffset {
 impl std::ops::Sub for FractionalOffset {
     type Output = Self;
 
+    #[inline]
     fn sub(self, other: Self) -> Self {
         Self {
             dx: self.dx - other.dx,
@@ -110,6 +118,7 @@ impl std::ops::Sub for FractionalOffset {
 impl std::ops::Mul<f32> for FractionalOffset {
     type Output = Self;
 
+    #[inline]
     fn mul(self, factor: f32) -> Self {
         Self {
             dx: self.dx * factor,
@@ -121,6 +130,7 @@ impl std::ops::Mul<f32> for FractionalOffset {
 impl std::ops::Div<f32> for FractionalOffset {
     type Output = Self;
 
+    #[inline]
     fn div(self, divisor: f32) -> Self {
         Self {
             dx: self.dx / divisor,
@@ -132,6 +142,7 @@ impl std::ops::Div<f32> for FractionalOffset {
 impl std::ops::Neg for FractionalOffset {
     type Output = Self;
 
+    #[inline]
     fn neg(self) -> Self {
         self.negate()
     }

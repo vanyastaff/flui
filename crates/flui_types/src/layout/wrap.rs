@@ -28,6 +28,7 @@ pub enum WrapAlignment {
 
 impl WrapAlignment {
     #[must_use]
+    #[inline]
     pub const fn uses_spacing(&self) -> bool {
         matches!(
             self,
@@ -36,11 +37,13 @@ impl WrapAlignment {
     }
 
     #[must_use]
+    #[inline]
     pub const fn is_edge_aligned(&self) -> bool {
         matches!(self, WrapAlignment::Start | WrapAlignment::End)
     }
 
     #[must_use]
+    #[inline]
     pub const fn is_centered(&self) -> bool {
         matches!(self, WrapAlignment::Center)
     }
@@ -61,11 +64,13 @@ pub enum WrapCrossAlignment {
 
 impl WrapCrossAlignment {
     #[must_use]
+    #[inline]
     pub const fn is_edge_aligned(&self) -> bool {
         matches!(self, WrapCrossAlignment::Start | WrapCrossAlignment::End)
     }
 
     #[must_use]
+    #[inline]
     pub const fn is_centered(&self) -> bool {
         matches!(self, WrapCrossAlignment::Center)
     }

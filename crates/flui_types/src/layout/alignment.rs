@@ -19,11 +19,13 @@ pub enum MainAxisSize {
 
 impl MainAxisSize {
     /// Check if this is Min.
+    #[inline]
     pub const fn is_min(self) -> bool {
         matches!(self, MainAxisSize::Min)
     }
 
     /// Check if this is Max.
+    #[inline]
     pub const fn is_max(self) -> bool {
         matches!(self, MainAxisSize::Max)
     }
@@ -77,6 +79,7 @@ impl MainAxisAlignment {
     /// assert!(!MainAxisAlignment::Start.requires_custom_spacing());
     /// assert!(MainAxisAlignment::SpaceBetween.requires_custom_spacing());
     /// ```
+    #[inline]
     pub const fn requires_custom_spacing(self) -> bool {
         matches!(
             self,
@@ -100,6 +103,7 @@ impl MainAxisAlignment {
     /// assert_eq!(leading, 0.0);
     /// assert_eq!(between, 50.0); // 100 / 2 gaps
     /// ```
+    #[inline]
     pub fn calculate_spacing(self, available_space: f32, child_count: usize) -> (f32, f32) {
         if child_count == 0 {
             return (0.0, 0.0);
@@ -169,6 +173,7 @@ impl CrossAxisAlignment {
     /// assert!(!CrossAxisAlignment::Start.requires_custom_sizing());
     /// assert!(CrossAxisAlignment::Stretch.requires_custom_sizing());
     /// ```
+    #[inline]
     pub const fn requires_custom_sizing(self) -> bool {
         matches!(
             self,
@@ -199,6 +204,7 @@ impl Alignment {
     /// assert_eq!(alignment.x, 0.5);
     /// assert_eq!(alignment.y, -0.5);
     /// ```
+    #[inline]
     pub const fn new(x: f32, y: f32) -> Self {
         Self { x, y }
     }
@@ -231,6 +237,7 @@ impl Alignment {
     pub const BOTTOM_RIGHT: Self = Self::new(1.0, 1.0);
 
     #[must_use]
+    #[inline]
     pub fn lerp(a: Self, b: Self, t: f32) -> Self {
         let t = t.clamp(0.0, 1.0);
         Self::new(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t)
@@ -238,12 +245,14 @@ impl Alignment {
 }
 
 impl Default for Alignment {
+    #[inline]
     fn default() -> Self {
         Self::CENTER
     }
 }
 
 impl From<(f32, f32)> for Alignment {
+    #[inline]
     fn from((x, y): (f32, f32)) -> Self {
         Alignment::new(x, y)
     }
@@ -252,6 +261,7 @@ impl From<(f32, f32)> for Alignment {
 impl Add for Alignment {
     type Output = Self;
 
+    #[inline]
     fn add(self, rhs: Self) -> Self::Output {
         Self::new(self.x + rhs.x, self.y + rhs.y)
     }
@@ -260,6 +270,7 @@ impl Add for Alignment {
 impl Neg for Alignment {
     type Output = Self;
 
+    #[inline]
     fn neg(self) -> Self::Output {
         Self::new(-self.x, -self.y)
     }
@@ -275,6 +286,7 @@ pub struct AlignmentDirectional {
 
 impl AlignmentDirectional {
     /// Create a new directional alignment.
+    #[inline]
     pub const fn new(start: f32, y: f32) -> Self {
         Self { start, y }
     }
@@ -311,6 +323,7 @@ impl AlignmentDirectional {
     /// # Arguments
     ///
     /// * `is_ltr` - true for left-to-right, false for right-to-left
+    #[inline]
     pub fn resolve(&self, is_ltr: bool) -> Alignment {
         if is_ltr {
             Alignment::new(self.start, self.y)
@@ -320,6 +333,7 @@ impl AlignmentDirectional {
     }
 
     /// Linear interpolation between two directional alignments.
+    #[inline]
     pub fn lerp(a: Self, b: Self, t: f32) -> Self {
         let t = t.clamp(0.0, 1.0);
         Self::new(a.start + (b.start - a.start) * t, a.y + (b.y - a.y) * t)
@@ -327,6 +341,7 @@ impl AlignmentDirectional {
 }
 
 impl Default for AlignmentDirectional {
+    #[inline]
     fn default() -> Self {
         Self::CENTER
     }
@@ -335,6 +350,7 @@ impl Default for AlignmentDirectional {
 impl Add for AlignmentDirectional {
     type Output = Self;
 
+    #[inline]
     fn add(self, rhs: Self) -> Self::Output {
         Self::new(self.start + rhs.start, self.y + rhs.y)
     }
@@ -343,6 +359,7 @@ impl Add for AlignmentDirectional {
 impl Neg for AlignmentDirectional {
     type Output = Self;
 
+    #[inline]
     fn neg(self) -> Self::Output {
         Self::new(-self.start, -self.y)
     }
@@ -362,6 +379,7 @@ impl AlignmentGeometry {
     /// # Arguments
     ///
     /// * `is_ltr` - true for left-to-right, false for right-to-left
+    #[inline]
     pub fn resolve(&self, is_ltr: bool) -> Alignment {
         match self {
             AlignmentGeometry::Absolute(alignment) => *alignment,
@@ -371,18 +389,21 @@ impl AlignmentGeometry {
 }
 
 impl From<Alignment> for AlignmentGeometry {
+    #[inline]
     fn from(alignment: Alignment) -> Self {
         AlignmentGeometry::Absolute(alignment)
     }
 }
 
 impl From<AlignmentDirectional> for AlignmentGeometry {
+    #[inline]
     fn from(alignment: AlignmentDirectional) -> Self {
         AlignmentGeometry::Directional(alignment)
     }
 }
 
 impl Default for AlignmentGeometry {
+    #[inline]
     fn default() -> Self {
         AlignmentGeometry::Absolute(Alignment::CENTER)
     }

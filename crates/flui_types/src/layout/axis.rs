@@ -31,6 +31,7 @@ impl Axis {
     /// assert_eq!(Axis::Horizontal.opposite(), Axis::Vertical);
     /// assert_eq!(Axis::Vertical.opposite(), Axis::Horizontal);
     /// ```
+    #[inline]
     pub const fn opposite(self) -> Self {
         match self {
             Axis::Horizontal => Axis::Vertical,
@@ -48,6 +49,7 @@ impl Axis {
     /// assert!(Axis::Horizontal.is_horizontal());
     /// assert!(!Axis::Vertical.is_horizontal());
     /// ```
+    #[inline]
     pub const fn is_horizontal(self) -> bool {
         matches!(self, Axis::Horizontal)
     }
@@ -62,6 +64,7 @@ impl Axis {
     /// assert!(Axis::Vertical.is_vertical());
     /// assert!(!Axis::Horizontal.is_vertical());
     /// ```
+    #[inline]
     pub const fn is_vertical(self) -> bool {
         matches!(self, Axis::Vertical)
     }
@@ -215,6 +218,7 @@ impl AxisDirection {
     /// assert_eq!(AxisDirection::LeftToRight.axis(), Axis::Horizontal);
     /// assert_eq!(AxisDirection::TopToBottom.axis(), Axis::Vertical);
     /// ```
+    #[inline]
     pub const fn axis(self) -> Axis {
         match self {
             AxisDirection::LeftToRight | AxisDirection::RightToLeft => Axis::Horizontal,
@@ -232,6 +236,7 @@ impl AxisDirection {
     /// assert_eq!(AxisDirection::LeftToRight.opposite(), AxisDirection::RightToLeft);
     /// assert_eq!(AxisDirection::TopToBottom.opposite(), AxisDirection::BottomToTop);
     /// ```
+    #[inline]
     pub const fn opposite(self) -> Self {
         match self {
             AxisDirection::LeftToRight => AxisDirection::RightToLeft,
@@ -251,6 +256,7 @@ impl AxisDirection {
     /// assert!(AxisDirection::LeftToRight.is_positive());
     /// assert!(!AxisDirection::RightToLeft.is_positive());
     /// ```
+    #[inline]
     pub const fn is_positive(self) -> bool {
         matches!(
             self,
@@ -268,6 +274,7 @@ impl AxisDirection {
     /// assert!(AxisDirection::RightToLeft.is_negative());
     /// assert!(!AxisDirection::LeftToRight.is_negative());
     /// ```
+    #[inline]
     pub const fn is_negative(self) -> bool {
         !self.is_positive()
     }
@@ -282,6 +289,7 @@ impl AxisDirection {
     /// assert!(AxisDirection::RightToLeft.is_reversed());
     /// assert!(!AxisDirection::LeftToRight.is_reversed());
     /// ```
+    #[inline]
     pub const fn is_reversed(self) -> bool {
         matches!(
             self,
@@ -319,6 +327,7 @@ impl AxisDirection {
     /// assert_eq!(AxisDirection::from_axis(Axis::Horizontal, false), AxisDirection::LeftToRight);
     /// assert_eq!(AxisDirection::from_axis(Axis::Horizontal, true), AxisDirection::RightToLeft);
     /// ```
+    #[inline]
     pub const fn from_axis(axis: Axis, reversed: bool) -> Self {
         match (axis, reversed) {
             (Axis::Horizontal, false) => AxisDirection::LeftToRight,
@@ -340,6 +349,7 @@ impl AxisDirection {
     /// assert_eq!(AxisDirection::TopToBottom.flip(), AxisDirection::LeftToRight);
     /// assert_eq!(AxisDirection::BottomToTop.flip(), AxisDirection::RightToLeft);
     /// ```
+    #[inline]
     pub const fn flip(self) -> Self {
         match self {
             AxisDirection::LeftToRight => AxisDirection::TopToBottom,
@@ -395,6 +405,7 @@ impl Orientation {
     /// assert_eq!(Orientation::Portrait.main_axis(), Axis::Vertical);
     /// assert_eq!(Orientation::Landscape.main_axis(), Axis::Horizontal);
     /// ```
+    #[inline]
     pub const fn main_axis(self) -> Axis {
         match self {
             Orientation::Portrait => Axis::Vertical,
@@ -412,16 +423,19 @@ impl Orientation {
     /// assert_eq!(Orientation::Portrait.cross_axis(), Axis::Horizontal);
     /// assert_eq!(Orientation::Landscape.cross_axis(), Axis::Vertical);
     /// ```
+    #[inline]
     pub const fn cross_axis(self) -> Axis {
         self.main_axis().opposite()
     }
 
     /// Check if this is portrait orientation.
+    #[inline]
     pub const fn is_portrait(self) -> bool {
         matches!(self, Orientation::Portrait)
     }
 
     /// Check if this is landscape orientation.
+    #[inline]
     pub const fn is_landscape(self) -> bool {
         matches!(self, Orientation::Landscape)
     }
@@ -452,6 +466,7 @@ impl VerticalDirection {
     /// assert_eq!(VerticalDirection::Down.to_axis_direction(), AxisDirection::TopToBottom);
     /// assert_eq!(VerticalDirection::Up.to_axis_direction(), AxisDirection::BottomToTop);
     /// ```
+    #[inline]
     pub const fn to_axis_direction(self) -> AxisDirection {
         match self {
             VerticalDirection::Down => AxisDirection::TopToBottom,
@@ -460,11 +475,13 @@ impl VerticalDirection {
     }
 
     /// Check if this direction is down (top to bottom).
+    #[inline]
     pub const fn is_down(self) -> bool {
         matches!(self, VerticalDirection::Down)
     }
 
     /// Check if this direction is up (bottom to top).
+    #[inline]
     pub const fn is_up(self) -> bool {
         matches!(self, VerticalDirection::Up)
     }
@@ -479,6 +496,7 @@ impl VerticalDirection {
     /// assert_eq!(VerticalDirection::Down.opposite(), VerticalDirection::Up);
     /// assert_eq!(VerticalDirection::Up.opposite(), VerticalDirection::Down);
     /// ```
+    #[inline]
     pub const fn opposite(self) -> Self {
         match self {
             VerticalDirection::Down => VerticalDirection::Up,
@@ -493,6 +511,7 @@ mod tests {
     use crate::geometry::units::px;
 
     #[test]
+    #[inline]
     fn test_axis_operations() {
         let horizontal = Axis::Horizontal;
         let vertical = Axis::Vertical;
@@ -507,6 +526,7 @@ mod tests {
     }
 
     #[test]
+    #[inline]
     fn test_axis_size_operations() {
         let size = Size::new(px(100.0), px(50.0));
 
@@ -521,6 +541,7 @@ mod tests {
     }
 
     #[test]
+    #[inline]
     fn test_axis_make_size() {
         assert_eq!(
             Axis::Horizontal.make_size(100.0),
@@ -542,6 +563,7 @@ mod tests {
     }
 
     #[test]
+    #[inline]
     fn test_axis_flip_size() {
         let size = Size::new(px(100.0), px(50.0));
         assert_eq!(
@@ -555,6 +577,7 @@ mod tests {
     }
 
     #[test]
+    #[inline]
     fn test_axis_direction_operations() {
         let ltr = AxisDirection::LeftToRight;
         let rtl = AxisDirection::RightToLeft;
@@ -593,6 +616,7 @@ mod tests {
     }
 
     #[test]
+    #[inline]
     fn test_axis_direction_from_axis() {
         assert_eq!(
             AxisDirection::from_axis(Axis::Horizontal, false),
@@ -613,6 +637,7 @@ mod tests {
     }
 
     #[test]
+    #[inline]
     fn test_orientation_operations() {
         let portrait = Orientation::Portrait;
         let landscape = Orientation::Landscape;
@@ -629,6 +654,7 @@ mod tests {
     }
 
     #[test]
+    #[inline]
     fn test_orientation_from_size() {
         assert_eq!(
             Orientation::from_size(Size::new(px(100.0), px(200.0))),
@@ -646,6 +672,7 @@ mod tests {
     }
 
     #[test]
+    #[inline]
     fn test_vertical_direction_operations() {
         let down = VerticalDirection::Down;
         let up = VerticalDirection::Up;

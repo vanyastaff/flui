@@ -274,6 +274,7 @@ impl BoxConstraints {
 }
 
 impl Default for BoxConstraints {
+    #[inline]
     fn default() -> Self {
         Self::unbounded()
     }
@@ -307,6 +308,7 @@ mod tests {
     use crate::geometry::px;
 
     #[test]
+    #[inline]
     fn test_tight_constraints() {
         let size = Size::new(px(100.0), px(200.0));
         let constraints = BoxConstraints::tight(size);
@@ -317,6 +319,7 @@ mod tests {
     }
 
     #[test]
+    #[inline]
     fn test_loose_constraints() {
         let size = Size::new(px(100.0), px(200.0));
         let constraints = BoxConstraints::loose(size);
@@ -327,6 +330,7 @@ mod tests {
     }
 
     #[test]
+    #[inline]
     fn test_constrain() {
         let constraints = BoxConstraints::new(px(50.0), px(150.0), px(100.0), px(300.0));
 
@@ -347,6 +351,7 @@ mod tests {
     }
 
     #[test]
+    #[inline]
     fn test_bounded() {
         let bounded = BoxConstraints::loose(Size::new(px(100.0), px(200.0)));
         assert!(bounded.is_bounded());
@@ -356,6 +361,7 @@ mod tests {
     }
 
     #[test]
+    #[inline]
     fn test_loosen() {
         let tight = BoxConstraints::tight(Size::new(px(100.0), px(200.0)));
         let loose = tight.loosen();
@@ -367,6 +373,7 @@ mod tests {
     }
 
     #[test]
+    #[inline]
     fn test_normalize() {
         // Invalid constraints (min > max)
         let invalid = BoxConstraints::new(

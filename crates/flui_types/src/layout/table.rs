@@ -31,6 +31,7 @@ pub enum TableColumnWidth {
 }
 
 impl Default for TableColumnWidth {
+    #[inline]
     fn default() -> Self {
         TableColumnWidth::Flex(1.0)
     }

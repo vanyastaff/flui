@@ -16,16 +16,19 @@ pub enum FlexFit {
 
 impl FlexFit {
     #[must_use]
+    #[inline]
     pub const fn is_tight(&self) -> bool {
         matches!(self, FlexFit::Tight)
     }
 
     #[must_use]
+    #[inline]
     pub const fn is_loose(&self) -> bool {
         matches!(self, FlexFit::Loose)
     }
 
     #[must_use]
+    #[inline]
     pub const fn flip(&self) -> Self {
         match self {
             FlexFit::Tight => FlexFit::Loose,

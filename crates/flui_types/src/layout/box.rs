@@ -140,6 +140,7 @@ impl BoxFit {
     /// - `fitted_size` is the size the image should be rendered at
     /// - `source_size` is the portion of the source image to use
     #[must_use]
+    #[inline]
     pub fn apply(self, input_size: Size<Pixels>, output_size: Size<Pixels>) -> FittedSizes {
         let input_aspect_ratio = if input_size.height.abs() > Pixels(EPSILON) {
             input_size.width / input_size.height
@@ -365,6 +366,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[inline]
     fn test_box_fit_properties() {
         assert!(BoxFit::Cover.may_clip());
         assert!(!BoxFit::Contain.may_clip());
@@ -380,24 +382,28 @@ mod tests {
     }
 
     #[test]
+    #[inline]
     fn test_box_fit_default() {
         let default = BoxFit::default();
         assert_eq!(default, BoxFit::Contain);
     }
 
     #[test]
+    #[inline]
     fn test_box_shape_is_circle() {
         assert!(BoxShape::Circle.is_circle());
         assert!(!BoxShape::Rectangle.is_circle());
     }
 
     #[test]
+    #[inline]
     fn test_box_shape_is_rectangle() {
         assert!(BoxShape::Rectangle.is_rectangle());
         assert!(!BoxShape::Circle.is_rectangle());
     }
 
     #[test]
+    #[inline]
     fn test_box_shape_default() {
         let default = BoxShape::default();
         assert_eq!(default, BoxShape::Rectangle);
