@@ -29,6 +29,7 @@ impl Color {
     /// let red = Color::rgba(255, 0, 0, 255);
     /// let semi_transparent = Color::rgba(100, 200, 150, 128);
     /// ```
+    #[inline]
     pub const fn rgba(r: u8, g: u8, b: u8, a: u8) -> Self {
         Self { r, g, b, a }
     }
@@ -45,6 +46,7 @@ impl Color {
     /// let blue = Color::rgb(0, 0, 255);
     /// assert!(blue.is_opaque());
     /// ```
+    #[inline]
     pub const fn rgb(r: u8, g: u8, b: u8) -> Self {
         Self::rgba(r, g, b, 255)
     }
@@ -61,6 +63,7 @@ impl Color {
     /// let red = Color::from_argb(0xFFFF0000);
     /// assert_eq!(red, Color::rgb(255, 0, 0));
     /// ```
+    #[inline]
     pub const fn from_argb(argb: u32) -> Self {
         let a = ((argb >> 24) & 0xFF) as u8;
         let r = ((argb >> 16) & 0xFF) as u8;
@@ -91,6 +94,7 @@ impl Color {
     ///
     /// assert!(Color::from_hex("invalid").is_err());
     /// ```
+    #[inline]
     pub fn from_hex(hex: &str) -> Result<Self, ParseColorError> {
         let hex = hex.trim_start_matches('#');
 
@@ -109,6 +113,7 @@ impl Color {
 
     // ===== Component accessors =====
 
+    #[inline]
     #[must_use]
     pub const fn opacity(&self) -> f32 {
         self.a as f32 / 255.0
@@ -128,6 +133,7 @@ impl Color {
     ///
     /// assert_eq!(transparent_red.a, 128);
     /// ```
+    #[inline]
     pub const fn with_alpha(&self, alpha: u8) -> Self {
         Self::rgba(self.r, self.g, self.b, alpha)
     }
@@ -146,22 +152,26 @@ impl Color {
     ///
     /// assert_eq!(half.a, 127); // 0.5 * 255
     /// ```
+    #[inline]
     pub fn with_opacity(&self, opacity: f32) -> Self {
         let alpha = (opacity.clamp(0.0, 1.0) * 255.0) as u8;
         self.with_alpha(alpha)
     }
 
     /// Returns a new color with the specified red component.
+    #[inline]
     pub const fn with_red(&self, red: u8) -> Self {
         Self::rgba(red, self.g, self.b, self.a)
     }
 
     /// Returns a new color with the specified green component.
+    #[inline]
     pub const fn with_green(&self, green: u8) -> Self {
         Self::rgba(self.r, green, self.b, self.a)
     }
 
     /// Returns a new color with the specified blue component.
+    #[inline]
     pub const fn with_blue(&self, blue: u8) -> Self {
         Self::rgba(self.r, self.g, blue, self.a)
     }
@@ -169,11 +179,13 @@ impl Color {
     // ===== Checks =====
 
     /// Returns true if this color is fully transparent (alpha = 0).
+    #[inline]
     pub const fn is_transparent(&self) -> bool {
         self.a == 0
     }
 
     /// Returns true if this color is fully opaque (alpha = 255).
+    #[inline]
     pub const fn is_opaque(&self) -> bool {
         self.a == 255
     }
@@ -196,6 +208,7 @@ impl Color {
     /// let purple = Color::lerp(red, blue, 0.5);
     /// assert!(purple.r > 0 && purple.b > 0);
     /// ```
+    #[inline]
     pub fn lerp(a: Color, b: Color, t: f32) -> Color {
         #[cfg(all(feature = "simd", target_arch = "x86_64", target_feature = "sse2"))]
         {
@@ -297,20 +310,38 @@ impl Color {
         }
     }
 
+    #[inline]
     #[must_use]
     pub const fn to_argb(&self) -> u32 {
         ((self.a as u32) << 24) | ((self.r as u32) << 16) | ((self.g as u32) << 8) | (self.b as u32)
     }
 
     #[must_use]
+    #[inline]
     pub fn to_hex(&self) -> String {
+        // Lookup table avoids format! machinery (no padding, no Display trait dispatch).
+        const HEX: &[u8; 16] = b"0123456789ABCDEF";
+
         if self.is_opaque() {
-            format!("#{:02X}{:02X}{:02X}", self.r, self.g, self.b)
+            let mut s = String::with_capacity(7);
+            s.push('#');
+            for &b in &[self.r, self.g, self.b] {
+                s.push(HEX[(b >> 4) as usize] as char);
+                s.push(HEX[(b & 0x0F) as usize] as char);
+            }
+            s
         } else {
-            format!("#{:02X}{:02X}{:02X}{:02X}", self.a, self.r, self.g, self.b)
+            let mut s = String::with_capacity(9);
+            s.push('#');
+            for &b in &[self.a, self.r, self.g, self.b] {
+                s.push(HEX[(b >> 4) as usize] as char);
+                s.push(HEX[(b & 0x0F) as usize] as char);
+            }
+            s
         }
     }
 
+    #[inline]
     #[must_use]
     pub const fn to_rgba_f32(&self) -> (f32, f32, f32, f32) {
         (
@@ -321,6 +352,7 @@ impl Color {
         )
     }
 
+    #[inline]
     #[must_use]
     pub const fn to_rgba_f32_array(&self) -> [f32; 4] {
         [
@@ -331,6 +363,7 @@ impl Color {
         ]
     }
 
+    #[inline]
     #[must_use]
     pub fn from_rgba_f32_array(rgba: [f32; 4]) -> Self {
         Self::rgba(
@@ -341,6 +374,7 @@ impl Color {
         )
     }
 
+    #[inline]
     #[must_use]
     pub fn to_f32_array(&self) -> [f32; 4] {
         [
@@ -351,21 +385,25 @@ impl Color {
         ]
     }
 
+    #[inline]
     #[must_use]
     pub const fn red_f32(&self) -> f32 {
         self.r as f32 / 255.0
     }
 
+    #[inline]
     #[must_use]
     pub const fn green_f32(&self) -> f32 {
         self.g as f32 / 255.0
     }
 
+    #[inline]
     #[must_use]
     pub const fn blue_f32(&self) -> f32 {
         self.b as f32 / 255.0
     }
 
+    #[inline]
     #[must_use]
     pub const fn alpha_f32(&self) -> f32 {
         self.a as f32 / 255.0
@@ -374,6 +412,7 @@ impl Color {
     // ===== Helper methods for rendering =====
 
     #[must_use]
+    #[inline]
     pub fn blend_over(&self, background: Color) -> Color {
         // Fast paths
         if self.a == 255 {
@@ -535,6 +574,7 @@ impl Color {
         }
     }
 
+    #[inline]
     #[must_use]
     pub const fn multiply(&self, other: Color) -> Color {
         Color::rgba(
@@ -545,6 +585,7 @@ impl Color {
         )
     }
 
+    #[inline]
     #[must_use]
     pub fn darken(&self, factor: f32) -> Color {
         let factor = factor.clamp(0.0, 1.0);
@@ -556,6 +597,7 @@ impl Color {
         )
     }
 
+    #[inline]
     #[must_use]
     pub fn lighten(&self, factor: f32) -> Color {
         let factor = factor.clamp(0.0, 1.0);
@@ -567,21 +609,25 @@ impl Color {
         )
     }
 
+    #[inline]
     #[must_use]
     pub const fn luminance(&self) -> f32 {
         (0.2126 * self.r as f32 + 0.7152 * self.g as f32 + 0.0722 * self.b as f32) / 255.0
     }
 
+    #[inline]
     #[must_use]
     pub const fn is_dark(&self) -> bool {
         self.luminance() < 0.5
     }
 
+    #[inline]
     #[must_use]
     pub const fn is_light(&self) -> bool {
         self.luminance() >= 0.5
     }
 
+    #[inline]
     #[must_use]
     pub const fn contrasting_text_color(&self) -> Color {
         if self.is_dark() {
@@ -592,6 +638,7 @@ impl Color {
     }
 
     #[must_use]
+    #[inline]
     pub fn lerp_multi_stop(stops: &[(Color, f32)], t: f32) -> Color {
         if stops.is_empty() {
             return Color::TRANSPARENT;
@@ -603,126 +650,41 @@ impl Color {
 
         let t = t.clamp(0.0, 1.0);
 
-        // Find the two stops that bracket t
-        for i in 0..stops.len() - 1 {
-            let (color1, stop1) = stops[i];
-            let (color2, stop2) = stops[i + 1];
+        // Binary search for the interval containing t — O(log n) vs O(n) linear scan.
+        // partition_point returns the first index where stop > t,
+        // so the bracket is [idx-1, idx].
+        let idx = stops.partition_point(|&(_, stop)| stop <= t);
 
-            if t >= stop1 && t <= stop2 {
-                // Interpolate between these two stops
-                let range = stop2 - stop1;
-                if range.abs() < f32::EPSILON {
-                    return color1;
-                }
-
-                let local_t = (t - stop1) / range;
-                return Color::lerp(color1, color2, local_t);
-            }
+        if idx == 0 {
+            return stops[0].0;
+        }
+        if idx >= stops.len() {
+            return stops[stops.len() - 1].0;
         }
 
-        // If we're past the last stop, return the last color
-        stops.last().unwrap().0
+        let (color1, stop1) = stops[idx - 1];
+        let (color2, stop2) = stops[idx];
+
+        let range = stop2 - stop1;
+        if range.abs() < f32::EPSILON {
+            return color1;
+        }
+
+        let local_t = (t - stop1) / range;
+        Color::lerp(color1, color2, local_t)
     }
 
+    /// Blends each color over the given background.
+    ///
+    /// Each element's `blend_over` already uses SIMD internally when available,
+    /// so no additional batch SIMD wrapper is needed.
     #[must_use]
-    pub fn blend_over_batch(colors: &[Color], background: Color) -> Vec<Color> {
-        if colors.is_empty() {
-            return Vec::new();
-        }
-
-        #[cfg(all(feature = "simd", target_arch = "x86_64", target_feature = "sse2"))]
-        {
-            Self::blend_over_batch_simd_sse(colors, background)
-        }
-
-        #[cfg(all(feature = "simd", target_arch = "aarch64", target_feature = "neon"))]
-        {
-            Self::blend_over_batch_simd_neon(colors, background)
-        }
-
-        #[cfg(not(all(
-            feature = "simd",
-            any(
-                all(target_arch = "x86_64", target_feature = "sse2"),
-                all(target_arch = "aarch64", target_feature = "neon")
-            )
-        )))]
-        {
-            Self::blend_over_batch_scalar(colors, background)
-        }
-    }
-
     #[inline]
-    fn blend_over_batch_scalar(colors: &[Color], background: Color) -> Vec<Color> {
+    pub fn blend_over_batch(colors: &[Color], background: Color) -> Vec<Color> {
         colors
             .iter()
             .map(|color| color.blend_over(background))
             .collect()
-    }
-
-    #[inline]
-    #[cfg(all(target_arch = "x86_64", not(target_family = "wasm")))]
-    #[allow(dead_code)] // Used only when SIMD is enabled
-    fn blend_over_batch_simd_sse(colors: &[Color], background: Color) -> Vec<Color> {
-        #[cfg(target_feature = "sse2")]
-        {
-            let mut result = Vec::with_capacity(colors.len());
-
-            // Process 4 colors at a time
-            let chunks = colors.chunks_exact(4);
-            let remainder = chunks.remainder();
-
-            for chunk in chunks {
-                // For each color in the chunk, blend it over the background
-                for color in chunk {
-                    result.push(color.blend_over(background));
-                }
-            }
-
-            // Handle remainder
-            for color in remainder {
-                result.push(color.blend_over(background));
-            }
-
-            result
-        }
-
-        #[cfg(not(target_feature = "sse2"))]
-        {
-            Self::blend_over_batch_scalar(colors, background)
-        }
-    }
-
-    #[inline]
-    #[cfg(all(target_arch = "aarch64", not(target_family = "wasm")))]
-    fn blend_over_batch_simd_neon(colors: &[Color], background: Color) -> Vec<Color> {
-        #[cfg(target_feature = "neon")]
-        {
-            let mut result = Vec::with_capacity(colors.len());
-
-            // Process 4 colors at a time
-            let chunks = colors.chunks_exact(4);
-            let remainder = chunks.remainder();
-
-            for chunk in chunks {
-                // For each color in the chunk, blend it over the background
-                for color in chunk {
-                    result.push(color.blend_over(background));
-                }
-            }
-
-            // Handle remainder
-            for color in remainder {
-                result.push(color.blend_over(background));
-            }
-
-            result
-        }
-
-        #[cfg(not(target_feature = "neon"))]
-        {
-            Self::blend_over_batch_scalar(colors, background)
-        }
     }
 
     // ===== Common color constants =====
@@ -767,6 +729,7 @@ impl Color {
 }
 
 impl Default for Color {
+    #[inline]
     fn default() -> Self {
         Color::TRANSPARENT
     }
@@ -775,24 +738,28 @@ impl Default for Color {
 // ===== Conversions =====
 
 impl From<(u8, u8, u8)> for Color {
+    #[inline]
     fn from((r, g, b): (u8, u8, u8)) -> Self {
         Color::rgb(r, g, b)
     }
 }
 
 impl From<(u8, u8, u8, u8)> for Color {
+    #[inline]
     fn from((r, g, b, a): (u8, u8, u8, u8)) -> Self {
         Color::rgba(r, g, b, a)
     }
 }
 
 impl From<[u8; 3]> for Color {
+    #[inline]
     fn from([r, g, b]: [u8; 3]) -> Self {
         Color::rgb(r, g, b)
     }
 }
 
 impl From<[u8; 4]> for Color {
+    #[inline]
     fn from([r, g, b, a]: [u8; 4]) -> Self {
         Color::rgba(r, g, b, a)
     }
@@ -824,6 +791,7 @@ impl crate::geometry::ApproxEq for Color {
     /// assert!(c1.approx_eq(&c2));
     /// assert!(c1.approx_eq(&c3));  // Within default epsilon
     /// ```
+    #[inline]
     fn approx_eq_eps(&self, other: &Self, epsilon: f32) -> bool {
         let (r1, g1, b1, a1) = self.to_rgba_f32();
         let (r2, g2, b2, a2) = other.to_rgba_f32();
@@ -846,6 +814,7 @@ pub enum ParseColorError {
 }
 
 impl std::fmt::Display for ParseColorError {
+    #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ParseColorError::InvalidHex => write!(f, "Invalid hex color format"),

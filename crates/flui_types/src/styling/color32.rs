@@ -31,6 +31,7 @@ use super::Color;
 pub struct Color32([u8; 4]);
 
 impl std::fmt::Debug for Color32 {
+    #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let [r, g, b, a] = self.0;
         write!(f, "#{r:02X}{g:02X}{b:02X}{a:02X}")
@@ -243,6 +244,7 @@ impl Color32 {
     /// let blue = Color32::BLUE;
     /// let purple = red.lerp_to(blue, 0.5);
     /// ```
+    #[inline]
     pub fn lerp_to(&self, other: Self, t: f32) -> Self {
         let t = t.clamp(0.0, 1.0);
         let lerp_u8 = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * t + 0.5) as u8;
@@ -268,6 +270,7 @@ impl Color32 {
     /// let fg = Color32::from_rgba_unmultiplied(255, 0, 0, 128);
     /// let result = fg.blend_over(bg);
     /// ```
+    #[inline]
     pub fn blend_over(self, background: Self) -> Self {
         // self is "on top", background is "behind"
         background.gamma_multiply_u8(255 - self.a()) + self
@@ -400,6 +403,7 @@ impl std::ops::Add for Color32 {
 
 impl From<Color> for Color32 {
     /// Converts from [`Color`] to [`Color32`] with premultiplied alpha.
+    #[inline]
     fn from(color: Color) -> Self {
         Self::from_rgba_unmultiplied(color.r, color.g, color.b, color.a)
     }
@@ -407,6 +411,7 @@ impl From<Color> for Color32 {
 
 impl From<Color32> for Color {
     /// Converts from [`Color32`] to [`Color`] with unmultiplied alpha.
+    #[inline]
     fn from(color: Color32) -> Self {
         let [r, g, b, a] = color.to_rgba_unmultiplied();
         Color::rgba(r, g, b, a)
@@ -415,6 +420,7 @@ impl From<Color32> for Color {
 
 impl From<[u8; 4]> for Color32 {
     /// Creates from premultiplied RGBA array.
+    #[inline]
     fn from([r, g, b, a]: [u8; 4]) -> Self {
         Self::from_rgba_premultiplied(r, g, b, a)
     }
@@ -422,6 +428,7 @@ impl From<[u8; 4]> for Color32 {
 
 impl From<Color32> for [u8; 4] {
     /// Converts to premultiplied RGBA array.
+    #[inline]
     fn from(color: Color32) -> Self {
         color.to_array()
     }
@@ -429,6 +436,7 @@ impl From<Color32> for [u8; 4] {
 
 impl From<(u8, u8, u8)> for Color32 {
     /// Creates opaque color from RGB tuple.
+    #[inline]
     fn from((r, g, b): (u8, u8, u8)) -> Self {
         Self::from_rgb(r, g, b)
     }
@@ -436,6 +444,7 @@ impl From<(u8, u8, u8)> for Color32 {
 
 impl From<(u8, u8, u8, u8)> for Color32 {
     /// Creates from unmultiplied RGBA tuple.
+    #[inline]
     fn from((r, g, b, a): (u8, u8, u8, u8)) -> Self {
         Self::from_rgba_unmultiplied(r, g, b, a)
     }

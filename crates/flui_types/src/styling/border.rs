@@ -20,11 +20,13 @@ pub enum BorderStyle {
 
 impl BorderStyle {
     /// Returns true if this style is solid.
+    #[inline]
     pub const fn is_solid(&self) -> bool {
         matches!(self, BorderStyle::Solid)
     }
 
     /// Returns true if this style is none.
+    #[inline]
     pub const fn is_none(&self) -> bool {
         matches!(self, BorderStyle::None)
     }
@@ -160,6 +162,7 @@ impl BorderSide<Pixels> {
     /// Returns true if this border side is effectively visible.
     ///
     /// A border is visible if its style is solid and its width is greater than 0.
+    #[inline]
     pub fn is_visible(&self) -> bool {
         use crate::geometry::px;
         self.style.is_solid() && self.width > px(0.0)
@@ -174,6 +177,7 @@ where
     ///
     /// If the two sides have different styles, the interpolation switches
     /// abruptly at t = 0.5.
+    #[inline]
     pub fn lerp(a: Self, b: Self, t: f32) -> Self {
         let t = t.clamp(0.0, 1.0);
 
@@ -195,6 +199,7 @@ where
     }
 
     /// Scale the width of this border side by the given factor.
+    #[inline]
     pub fn scale(&self, factor: f32) -> Self {
         Self {
             width: self.width * factor,
@@ -204,6 +209,7 @@ where
 }
 
 impl<T: Unit> Default for BorderSide<T> {
+    #[inline]
     fn default() -> Self {
         Self {
             color: Color::BLACK,
@@ -230,16 +236,19 @@ pub enum BorderPosition {
 
 impl BorderPosition {
     /// Returns all border positions in order: Top, Right, Bottom, Left
+    #[inline]
     pub const fn all() -> [Self; 4] {
         [Self::Top, Self::Right, Self::Bottom, Self::Left]
     }
 
     /// Returns true if this is a horizontal position (Top or Bottom)
+    #[inline]
     pub const fn is_horizontal(&self) -> bool {
         matches!(self, Self::Top | Self::Bottom)
     }
 
     /// Returns true if this is a vertical position (Left or Right)
+    #[inline]
     pub const fn is_vertical(&self) -> bool {
         matches!(self, Self::Left | Self::Right)
     }

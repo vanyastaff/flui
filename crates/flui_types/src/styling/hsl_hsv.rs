@@ -23,6 +23,7 @@ impl HSLColor {
     /// Values are clamped/wrapped to valid ranges:
     /// - hue: wrapped to 0-360 (handles negative values correctly)
     /// - saturation, lightness, alpha: clamped to 0-1
+    #[inline]
     pub fn new(hue: f32, saturation: f32, lightness: f32, alpha: f32) -> Self {
         Self {
             hue: hue.rem_euclid(360.0), // Correctly wraps negative hues
@@ -33,27 +34,32 @@ impl HSLColor {
     }
 
     /// Returns a copy with adjusted lightness.
+    #[inline]
     pub fn with_lightness(&self, lightness: f32) -> Self {
         Self::new(self.hue, self.saturation, lightness, self.alpha)
     }
 
     /// Returns a copy with adjusted saturation.
+    #[inline]
     pub fn with_saturation(&self, saturation: f32) -> Self {
         Self::new(self.hue, saturation, self.lightness, self.alpha)
     }
 
     /// Returns a copy with adjusted hue.
+    #[inline]
     pub fn with_hue(&self, hue: f32) -> Self {
         Self::new(hue, self.saturation, self.lightness, self.alpha)
     }
 
     /// Returns a copy with adjusted alpha.
+    #[inline]
     pub fn with_alpha(&self, alpha: f32) -> Self {
         Self::new(self.hue, self.saturation, self.lightness, alpha)
     }
 }
 
 impl From<Color> for HSLColor {
+    #[inline]
     fn from(color: Color) -> Self {
         let r = color.r as f32 / 255.0;
         let g = color.g as f32 / 255.0;
@@ -89,6 +95,7 @@ impl From<Color> for HSLColor {
 }
 
 impl From<HSLColor> for Color {
+    #[inline]
     fn from(hsl: HSLColor) -> Self {
         let c = (1.0 - (2.0 * hsl.lightness - 1.0).abs()) * hsl.saturation;
         let x = c * (1.0 - ((hsl.hue / 60.0) % 2.0 - 1.0).abs());
@@ -135,6 +142,7 @@ impl HSVColor {
     /// Values are clamped/wrapped to valid ranges:
     /// - hue: wrapped to 0-360 (handles negative values correctly)
     /// - saturation, value, alpha: clamped to 0-1
+    #[inline]
     pub fn new(hue: f32, saturation: f32, value: f32, alpha: f32) -> Self {
         Self {
             hue: hue.rem_euclid(360.0), // Correctly wraps negative hues
@@ -145,27 +153,32 @@ impl HSVColor {
     }
 
     /// Returns a copy with adjusted value/brightness.
+    #[inline]
     pub fn with_value(&self, value: f32) -> Self {
         Self::new(self.hue, self.saturation, value, self.alpha)
     }
 
     /// Returns a copy with adjusted saturation.
+    #[inline]
     pub fn with_saturation(&self, saturation: f32) -> Self {
         Self::new(self.hue, saturation, self.value, self.alpha)
     }
 
     /// Returns a copy with adjusted hue.
+    #[inline]
     pub fn with_hue(&self, hue: f32) -> Self {
         Self::new(hue, self.saturation, self.value, self.alpha)
     }
 
     /// Returns a copy with adjusted alpha.
+    #[inline]
     pub fn with_alpha(&self, alpha: f32) -> Self {
         Self::new(self.hue, self.saturation, self.value, alpha)
     }
 }
 
 impl From<Color> for HSVColor {
+    #[inline]
     fn from(color: Color) -> Self {
         let r = color.r as f32 / 255.0;
         let g = color.g as f32 / 255.0;
@@ -196,6 +209,7 @@ impl From<Color> for HSVColor {
 }
 
 impl From<HSVColor> for Color {
+    #[inline]
     fn from(hsv: HSVColor) -> Self {
         let c = hsv.value * hsv.saturation;
         let x = c * (1.0 - ((hsv.hue / 60.0) % 2.0 - 1.0).abs());

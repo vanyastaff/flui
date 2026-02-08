@@ -75,11 +75,13 @@ impl Shadow<Pixels> {
     /// Converts a blur radius in pixels to sigma units for use in Gaussian blur.
     ///
     /// This follows the same conversion that Flutter uses.
+    #[inline]
     pub fn convert_radius_to_sigma(radius: Pixels) -> f32 {
         radius.0 * 0.57735 + 0.5
     }
 
     /// The standard deviation of the Gaussian blur to apply to the shadow.
+    #[inline]
     pub fn blur_sigma(&self) -> f32 {
         Self::convert_radius_to_sigma(self.blur_radius)
     }
@@ -90,6 +92,7 @@ where
     T: std::ops::Mul<f32, Output = T>,
 {
     /// Linearly interpolate between two shadows.
+    #[inline]
     pub fn lerp(a: Self, b: Self, t: f32) -> Self {
         let t = t.clamp(0.0, 1.0);
         Self {
@@ -106,6 +109,7 @@ where
     ///
     /// If the lists are different lengths, the shorter list is padded with
     /// transparent shadows at offset zero with zero blur.
+    #[inline]
     pub fn lerp_list(a: &[Self], b: &[Self], t: f32) -> Vec<Self> {
         let t = t.clamp(0.0, 1.0);
         let max_len = a.len().max(b.len());
@@ -129,6 +133,7 @@ where
     }
 
     /// Scales the shadow's offset and blur radius by the given factor.
+    #[inline]
     pub fn scale(&self, factor: f32) -> Self {
         Self {
             offset: self.offset * factor,
@@ -139,6 +144,7 @@ where
 }
 
 impl<T: Unit> Default for Shadow<T> {
+    #[inline]
     fn default() -> Self {
         Self {
             color: Color::BLACK,
@@ -289,11 +295,13 @@ impl<T: Unit> BoxShadow<T> {
 
 impl BoxShadow<Pixels> {
     /// Converts a blur radius in pixels to sigma units for use in Gaussian blur.
+    #[inline]
     pub fn convert_radius_to_sigma(radius: Pixels) -> f32 {
         Shadow::<Pixels>::convert_radius_to_sigma(radius)
     }
 
     /// The standard deviation of the Gaussian blur to apply to the shadow.
+    #[inline]
     pub fn blur_sigma(&self) -> f32 {
         Self::convert_radius_to_sigma(self.blur_radius)
     }
@@ -304,6 +312,7 @@ where
     T: std::ops::Mul<f32, Output = T>,
 {
     /// Linearly interpolate between two box shadows.
+    #[inline]
     pub fn lerp(a: Self, b: Self, t: f32) -> Self {
         let t = t.clamp(0.0, 1.0);
         Self {
@@ -319,6 +328,7 @@ where
     }
 
     /// Linearly interpolate between two lists of box shadows.
+    #[inline]
     pub fn lerp_list(a: &[Self], b: &[Self], t: f32) -> Vec<Self> {
         let t = t.clamp(0.0, 1.0);
         let max_len = a.len().max(b.len());
@@ -346,6 +356,7 @@ where
     }
 
     /// Scales the shadow's offset, blur radius, and spread radius by the given factor.
+    #[inline]
     pub fn scale(&self, factor: f32) -> Self {
         Self {
             offset: self.offset * factor,
@@ -357,6 +368,7 @@ where
 }
 
 impl<T: Unit> From<Shadow<T>> for BoxShadow<T> {
+    #[inline]
     fn from(shadow: Shadow<T>) -> Self {
         Self {
             color: shadow.color,
@@ -369,6 +381,7 @@ impl<T: Unit> From<Shadow<T>> for BoxShadow<T> {
 }
 
 impl<T: Unit> Default for BoxShadow<T> {
+    #[inline]
     fn default() -> Self {
         Self {
             color: Color::BLACK,

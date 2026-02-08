@@ -21,6 +21,7 @@ pub enum Gradient {
 
 impl Gradient {
     /// Returns the colors in this gradient.
+    #[inline]
     pub fn colors(&self) -> &[Color] {
         match self {
             Gradient::Linear(g) => &g.colors,
@@ -30,6 +31,7 @@ impl Gradient {
     }
 
     /// Returns the color stops in this gradient, if any.
+    #[inline]
     pub fn stops(&self) -> Option<&[f32]> {
         match self {
             Gradient::Linear(g) => g.stops.as_deref(),
@@ -42,6 +44,7 @@ impl Gradient {
     ///
     /// Returns None if the gradients are of different types or have
     /// different numbers of colors.
+    #[inline]
     pub fn lerp(a: &Self, b: &Self, t: f32) -> Option<Self> {
         let t = t.clamp(0.0, 1.0);
         match (a, b) {
@@ -82,6 +85,7 @@ pub struct LinearGradient {
 
 impl LinearGradient {
     /// Creates a linear gradient.
+    #[inline]
     pub fn new(
         begin: Alignment,
         end: Alignment,
@@ -99,6 +103,7 @@ impl LinearGradient {
     }
 
     /// Creates a simple linear gradient from left to right.
+    #[inline]
     pub fn horizontal(colors: Vec<Color>) -> Self {
         Self::new(
             Alignment::CENTER_LEFT,
@@ -110,6 +115,7 @@ impl LinearGradient {
     }
 
     /// Creates a simple linear gradient from top to bottom.
+    #[inline]
     pub fn vertical(colors: Vec<Color>) -> Self {
         Self::new(
             Alignment::TOP_CENTER,
@@ -139,6 +145,7 @@ impl LinearGradient {
     ///     Alignment::CENTER_RIGHT,
     /// );
     /// ```
+    #[inline]
     pub fn simple(start_color: Color, end_color: Color, begin: Alignment, end: Alignment) -> Self {
         Self::new(
             begin,
@@ -160,6 +167,7 @@ impl LinearGradient {
     ///
     /// let gradient = LinearGradient::diagonal(vec![Color::RED, Color::YELLOW, Color::BLUE]);
     /// ```
+    #[inline]
     pub fn diagonal(colors: Vec<Color>) -> Self {
         Self::new(
             Alignment::TOP_LEFT,
@@ -173,6 +181,7 @@ impl LinearGradient {
     /// Linearly interpolate between two linear gradients.
     ///
     /// Returns None if the gradients have different numbers of colors.
+    #[inline]
     pub fn lerp(a: &Self, b: &Self, t: f32) -> Option<Self> {
         if a.colors.len() != b.colors.len() {
             return None;
@@ -237,6 +246,7 @@ pub struct RadialGradient {
 
 impl RadialGradient {
     #[allow(clippy::too_many_arguments)]
+    #[inline]
     pub fn new(
         center: Alignment,
         radius: f32,
@@ -258,6 +268,7 @@ impl RadialGradient {
     }
 
     /// Creates a simple radial gradient centered in the box.
+    #[inline]
     pub fn centered(radius: f32, colors: Vec<Color>) -> Self {
         Self::new(
             Alignment::CENTER,
@@ -283,6 +294,7 @@ impl RadialGradient {
     /// // White center fading to black edges
     /// let gradient = RadialGradient::circular(vec![Color::WHITE, Color::BLACK]);
     /// ```
+    #[inline]
     pub fn circular(colors: Vec<Color>) -> Self {
         Self::new(
             Alignment::CENTER,
@@ -296,6 +308,7 @@ impl RadialGradient {
     }
 
     /// Linearly interpolate between two radial gradients.
+    #[inline]
     pub fn lerp(a: &Self, b: &Self, t: f32) -> Option<Self> {
         if a.colors.len() != b.colors.len() {
             return None;
@@ -366,6 +379,7 @@ pub struct SweepGradient {
 
 impl SweepGradient {
     /// Creates a sweep gradient.
+    #[inline]
     pub fn new(
         center: Alignment,
         colors: Vec<Color>,
@@ -385,6 +399,7 @@ impl SweepGradient {
     }
 
     /// Creates a simple sweep gradient centered in the box that goes full circle.
+    #[inline]
     pub fn centered(colors: Vec<Color>) -> Self {
         Self::new(
             Alignment::CENTER,
@@ -397,6 +412,7 @@ impl SweepGradient {
     }
 
     /// Linearly interpolate between two sweep gradients.
+    #[inline]
     pub fn lerp(a: &Self, b: &Self, t: f32) -> Option<Self> {
         if a.colors.len() != b.colors.len() {
             return None;
@@ -439,6 +455,7 @@ pub trait GradientTransform: std::fmt::Debug {
     /// Transform the gradient according to this transformation.
     ///
     /// Returns a transformation matrix that should be applied to the gradient.
+    #[inline]
     fn transform(&self) -> [[f32; 3]; 3];
 }
 
@@ -451,12 +468,14 @@ pub struct GradientRotation {
 
 impl GradientRotation {
     /// Creates a new gradient rotation.
+    #[inline]
     pub const fn new(radians: f32) -> Self {
         Self { radians }
     }
 }
 
 impl GradientTransform for GradientRotation {
+    #[inline]
     fn transform(&self) -> [[f32; 3]; 3] {
         let cos = self.radians.cos();
         let sin = self.radians.sin();

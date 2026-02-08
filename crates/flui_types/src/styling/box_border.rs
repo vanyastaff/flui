@@ -106,6 +106,7 @@ impl<T: Unit> Border<T> {
     }
 
     /// Returns true if all sides are uniform (same BorderSide).
+    #[inline]
     pub fn is_uniform(&self) -> bool {
         match (self.top, self.right, self.bottom, self.left) {
             (Some(t), Some(r), Some(b), Some(l)) => t == r && r == b && b == l,
@@ -116,6 +117,7 @@ impl<T: Unit> Border<T> {
 }
 
 impl<T: Unit> Default for Border<T> {
+    #[inline]
     fn default() -> Self {
         Self::none()
     }
@@ -126,6 +128,7 @@ where
     T: std::ops::Mul<f32, Output = T>,
 {
     /// Linearly interpolates between two borders.
+    #[inline]
     pub fn lerp(a: Self, b: Self, t: f32) -> Self {
         Self {
             top: match (a.top, b.top) {
@@ -253,6 +256,7 @@ impl<T: Unit> BorderDirectional<T> {
 }
 
 impl<T: Unit> Default for BorderDirectional<T> {
+    #[inline]
     fn default() -> Self {
         Self::none()
     }
@@ -261,10 +265,12 @@ impl<T: Unit> Default for BorderDirectional<T> {
 /// Common trait for border types.
 pub trait BoxBorder<T: Unit> {
     /// Returns true if this border is uniform (all sides the same).
+    #[inline]
     fn is_uniform(&self) -> bool;
 }
 
 impl<T: Unit> BoxBorder<T> for Border<T> {
+    #[inline]
     fn is_uniform(&self) -> bool {
         Border::is_uniform(self)
     }

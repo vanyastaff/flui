@@ -38,6 +38,7 @@ pub struct DecorationImage {
 
 impl DecorationImage {
     #[must_use]
+    #[inline]
     pub fn new(image: Image) -> Self {
         Self {
             image,
@@ -50,30 +51,35 @@ impl DecorationImage {
     }
 
     #[must_use]
+    #[inline]
     pub fn with_fit(mut self, fit: BoxFit) -> Self {
         self.fit = Some(fit);
         self
     }
 
     #[must_use]
+    #[inline]
     pub const fn with_alignment(mut self, alignment: Alignment) -> Self {
         self.alignment = alignment;
         self
     }
 
     #[must_use]
+    #[inline]
     pub const fn with_repeat(mut self, repeat: ImageRepeat) -> Self {
         self.repeat = repeat;
         self
     }
 
     #[must_use]
+    #[inline]
     pub const fn with_opacity(mut self, opacity: f32) -> Self {
         self.opacity = opacity;
         self
     }
 
     #[must_use]
+    #[inline]
     pub const fn with_color_filter(mut self, color_filter: ColorFilter) -> Self {
         self.color_filter = Some(color_filter);
         self
@@ -86,11 +92,13 @@ impl DecorationImage {
 pub trait Decoration: std::fmt::Debug {
     /// Returns true if this decoration is complex enough that it might
     /// change its appearance when the size changes.
+    #[inline]
     fn is_complex(&self) -> bool {
         false
     }
 
     /// Linearly interpolate between two decorations.
+    #[inline]
     fn lerp_decoration(a: &Self, b: &Self, t: f32) -> Option<Self>
     where
         Self: Sized;
@@ -181,6 +189,7 @@ impl<T: Unit> BoxDecoration<T> {
     }
 
     /// Creates a box decoration with an image.
+    #[inline]
     pub fn with_image(image: DecorationImage) -> Self {
         Self {
             color: None,
@@ -193,30 +202,35 @@ impl<T: Unit> BoxDecoration<T> {
     }
 
     /// Creates a copy of this decoration with the given color.
+    #[inline]
     pub const fn set_color(mut self, color: Option<Color>) -> Self {
         self.color = color;
         self
     }
 
     /// Creates a copy of this decoration with the given border.
+    #[inline]
     pub const fn set_border(mut self, border: Option<Border<T>>) -> Self {
         self.border = border;
         self
     }
 
     /// Creates a copy of this decoration with the given border radius.
+    #[inline]
     pub const fn set_border_radius(mut self, border_radius: Option<BorderRadius>) -> Self {
         self.border_radius = border_radius;
         self
     }
 
     /// Creates a copy of this decoration with the given box shadow.
+    #[inline]
     pub fn set_box_shadow(mut self, box_shadow: Option<Vec<BoxShadow<T>>>) -> Self {
         self.box_shadow = box_shadow;
         self
     }
 
     /// Creates a copy of this decoration with the given gradient.
+    #[inline]
     pub fn set_gradient(mut self, gradient: Option<Gradient>) -> Self {
         self.gradient = gradient;
         self
@@ -228,6 +242,7 @@ where
     T: std::ops::Mul<f32, Output = T>,
 {
     /// Linearly interpolate between two box decorations.
+    #[inline]
     pub fn lerp(a: &Self, b: &Self, t: f32) -> Self {
         let t = t.clamp(0.0, 1.0);
 
@@ -290,6 +305,7 @@ where
 }
 
 impl<T: Unit> Default for BoxDecoration<T> {
+    #[inline]
     fn default() -> Self {
         Self::new()
     }
@@ -299,10 +315,12 @@ impl<T: NumericUnit> Decoration for BoxDecoration<T>
 where
     T: std::ops::Mul<f32, Output = T>,
 {
+    #[inline]
     fn is_complex(&self) -> bool {
         self.gradient.is_some() || self.box_shadow.is_some()
     }
 
+    #[inline]
     fn lerp_decoration(a: &Self, b: &Self, t: f32) -> Option<Self> {
         Some(BoxDecoration::lerp(a, b, t))
     }
