@@ -1007,12 +1007,16 @@ impl FocusManagerInner {
     }
 
     pub fn set_primary_focus(&self, node_id: Option<FocusNodeId>) {
-        let previous = *self.primary_focus.read();
-        if previous == node_id {
-            return;
-        }
-
-        *self.primary_focus.write() = node_id;
+        // Single write lock to atomically read previous and write new (avoids TOCTOU race)
+        let previous = {
+            let mut focus = self.primary_focus.write();
+            let previous = *focus;
+            if previous == node_id {
+                return;
+            }
+            *focus = node_id;
+            previous
+        };
 
         // Record in enclosing scope's history
         if let Some(id) = node_id {

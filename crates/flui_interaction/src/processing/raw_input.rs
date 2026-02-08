@@ -43,6 +43,7 @@ use crate::ids::PointerId;
 use flui_types::geometry::Offset;
 use parking_lot::Mutex;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -244,8 +245,8 @@ pub struct RawInputHandler {
     tracking: Arc<Mutex<HashMap<PointerId, PointerTrackingState>>>,
     /// Callback for raw events.
     callback: Arc<Mutex<Option<RawInputCallback>>>,
-    /// Whether raw mode is enabled.
-    enabled: Arc<Mutex<bool>>,
+    /// Whether raw mode is enabled (lock-free atomic flag).
+    enabled: Arc<AtomicBool>,
 }
 
 impl Default for RawInputHandler {
@@ -260,7 +261,7 @@ impl RawInputHandler {
         Self {
             tracking: Arc::new(Mutex::new(HashMap::new())),
             callback: Arc::new(Mutex::new(None)),
-            enabled: Arc::new(Mutex::new(true)),
+            enabled: Arc::new(AtomicBool::new(true)),
         }
     }
 
@@ -276,20 +277,21 @@ impl RawInputHandler {
 
     /// Enable or disable raw input handling.
     pub fn set_enabled(&self, enabled: bool) {
-        *self.enabled.lock() = enabled;
+        self.enabled.store(enabled, Ordering::Release);
     }
 
     /// Check if raw input is enabled.
+    #[inline]
     pub fn is_enabled(&self) -> bool {
-        *self.enabled.lock()
+        self.enabled.load(Ordering::Acquire)
     }
 
     /// Handle a pointer event, converting to raw event and invoking callback.
     ///
     /// Returns the generated `RawPointerEvent` if one was created.
     pub fn handle_event(&self, event: &PointerEvent) -> Option<RawPointerEvent> {
-        // Single lock acquisition for enabled check (avoids separate is_enabled() call)
-        if !*self.enabled.lock() {
+        // Lock-free enabled check via AtomicBool
+        if !self.enabled.load(Ordering::Acquire) {
             return None;
         }
 

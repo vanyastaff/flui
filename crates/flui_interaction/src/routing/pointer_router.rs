@@ -302,6 +302,7 @@ mod tests {
     use super::*;
     use crate::events::{make_move_event, PointerType};
     use flui_types::geometry::{Offset, Pixels};
+    use parking_lot::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn make_event(device: i32, position: Offset<Pixels>) -> PointerEvent {
@@ -432,16 +433,16 @@ mod tests {
         let router = PointerRouter::new();
         let pointer = PointerId::new(0); // PRIMARY pointer
 
-        let order = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let order = Arc::new(Mutex::new(Vec::new()));
 
         let order1 = order.clone();
         let global_handler = Arc::new(move |_: &PointerEvent| {
-            order1.lock().unwrap().push("global");
+            order1.lock().push("global");
         });
 
         let order2 = order.clone();
         let pointer_handler = Arc::new(move |_: &PointerEvent| {
-            order2.lock().unwrap().push("pointer");
+            order2.lock().push("pointer");
         });
 
         router.add_global_handler(global_handler);
@@ -450,7 +451,7 @@ mod tests {
         let event = make_event(0, Offset::new(Pixels(50.0), Pixels(50.0)));
         router.route(&event);
 
-        let calls = order.lock().unwrap();
+        let calls = order.lock();
         assert_eq!(*calls, vec!["global", "pointer"]);
     }
 

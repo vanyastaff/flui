@@ -73,6 +73,18 @@ struct SignalHandler {
     callback: SignalCallback,
 }
 
+/// Find the highest priority handler from a list.
+///
+/// If multiple handlers have the same priority, the last registered wins.
+fn find_winner(handlers: &[SignalHandler]) -> Option<&SignalHandler> {
+    handlers
+        .iter()
+        .max_by(|a, b| match a.priority.cmp(&b.priority) {
+            std::cmp::Ordering::Equal => a.id.cmp(&b.id),
+            other => other,
+        })
+}
+
 /// Resolver for pointer signal conflicts
 ///
 /// Manages multiple handlers for pointer signals and resolves conflicts
@@ -173,20 +185,7 @@ impl PointerSignalResolver {
             return; // No handlers registered
         };
 
-        // Find highest priority handler
-        let winner = handlers.iter().max_by(|a, b| {
-            // First compare by priority
-            match a.priority.cmp(&b.priority) {
-                std::cmp::Ordering::Equal => {
-                    // If same priority, later registration wins
-                    a.id.cmp(&b.id)
-                }
-                other => other,
-            }
-        });
-
-        // Invoke winner's callback
-        if let Some(handler) = winner {
+        if let Some(handler) = find_winner(handlers) {
             let callback = handler.callback.clone();
             // Release lock before calling callback
             drop(inner);
@@ -207,14 +206,7 @@ impl PointerSignalResolver {
             return false;
         };
 
-        let winner = handlers
-            .iter()
-            .max_by(|a, b| match a.priority.cmp(&b.priority) {
-                std::cmp::Ordering::Equal => a.id.cmp(&b.id),
-                other => other,
-            });
-
-        if let Some(handler) = winner {
+        if let Some(handler) = find_winner(handlers) {
             let callback = handler.callback.clone();
             drop(inner);
             callback(event);
