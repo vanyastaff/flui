@@ -348,7 +348,7 @@ impl DragGestureRecognizer {
                 // Update drag
                 if let Some(last_pos) = state.last_position {
                     let delta = (position - last_pos).to_delta();
-                    state.total_delta = state.total_delta + delta;
+                    state.total_delta += delta;
                     state.last_position = Some(position);
                     state.last_time = Some(Instant::now());
                     state

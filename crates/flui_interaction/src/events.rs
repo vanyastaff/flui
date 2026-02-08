@@ -399,6 +399,7 @@ impl From<KeyboardEvent> for InputEvent {
 // ============================================================================
 
 /// Extracts PointerInfo from a PointerEvent.
+#[inline]
 fn get_pointer_info(event: &PointerEvent) -> Option<&PointerInfo> {
     match event {
         PointerEvent::Down(e) => Some(&e.pointer),
@@ -413,6 +414,7 @@ fn get_pointer_info(event: &PointerEvent) -> Option<&PointerInfo> {
 }
 
 /// Extracts PointerState from a PointerEvent.
+#[inline]
 fn get_pointer_state(event: &PointerEvent) -> Option<&PointerState> {
     match event {
         PointerEvent::Down(e) => Some(&e.state),
@@ -438,6 +440,7 @@ pub trait PointerEventExt {
 }
 
 impl PointerEventExt for PointerEvent {
+    #[inline]
     fn position(&self) -> Offset<Pixels> {
         if let Some(state) = get_pointer_state(self) {
             let pos = state.position;
@@ -447,6 +450,7 @@ impl PointerEventExt for PointerEvent {
         }
     }
 
+    #[inline]
     fn pointer_type(&self) -> Option<PointerType> {
         get_pointer_info(self).map(|info| info.pointer_type)
     }
@@ -658,6 +662,37 @@ pub fn make_scroll_event(position: Offset<Pixels>, delta: Offset<Pixels>) -> Poi
             scale_factor: 1.0,
         },
     })
+}
+
+// ============================================================================
+// Pointer ID extraction utility (shared across routing modules)
+// ============================================================================
+
+/// Extracts a stable `PointerId` from a `PointerEvent`.
+///
+/// Returns `PointerId(0)` for the primary pointer, or a hashed ID for others.
+/// This is used by event routing, pointer routing, and raw input modules.
+#[inline]
+pub fn extract_pointer_id(event: &PointerEvent) -> crate::ids::PointerId {
+    let info = match event {
+        PointerEvent::Down(e) => &e.pointer,
+        PointerEvent::Up(e) => &e.pointer,
+        PointerEvent::Move(e) => &e.pointer,
+        PointerEvent::Cancel(info) | PointerEvent::Enter(info) | PointerEvent::Leave(info) => info,
+        PointerEvent::Scroll(e) => &e.pointer,
+        PointerEvent::Gesture(e) => &e.pointer,
+    };
+    let raw_id = match info.pointer_id {
+        Some(p) if p.is_primary_pointer() => 0,
+        Some(p) => {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            p.hash(&mut hasher);
+            (hasher.finish() & 0x7FFFFFFF) as i32
+        }
+        None => 0,
+    };
+    crate::ids::PointerId::new(raw_id)
 }
 
 /// Kind of pointer event for event construction

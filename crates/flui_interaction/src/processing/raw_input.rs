@@ -288,7 +288,8 @@ impl RawInputHandler {
     ///
     /// Returns the generated `RawPointerEvent` if one was created.
     pub fn handle_event(&self, event: &PointerEvent) -> Option<RawPointerEvent> {
-        if !self.is_enabled() {
+        // Single lock acquisition for enabled check (avoids separate is_enabled() call)
+        if !*self.enabled.lock() {
             return None;
         }
 
@@ -303,30 +304,10 @@ impl RawInputHandler {
         raw_event
     }
 
-    /// Extract pointer ID from event (use 0 for primary pointer)
+    /// Extract pointer ID from event (use 0 for primary pointer).
+    #[inline]
     fn get_pointer_id(event: &PointerEvent) -> PointerId {
-        let id = match event {
-            PointerEvent::Down(e) => e.pointer.pointer_id,
-            PointerEvent::Up(e) => e.pointer.pointer_id,
-            PointerEvent::Move(e) => e.pointer.pointer_id,
-            PointerEvent::Cancel(info) | PointerEvent::Enter(info) | PointerEvent::Leave(info) => {
-                info.pointer_id
-            }
-            PointerEvent::Scroll(e) => e.pointer.pointer_id,
-            PointerEvent::Gesture(e) => e.pointer.pointer_id,
-        };
-        // Use 0 for primary pointer, hash for others
-        let raw_id = match id {
-            Some(p) if p.is_primary_pointer() => 0,
-            Some(p) => {
-                use std::hash::{Hash, Hasher};
-                let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                p.hash(&mut hasher);
-                (hasher.finish() & 0x7FFFFFFF) as i32
-            }
-            None => 0,
-        };
-        PointerId::new(raw_id)
+        crate::events::extract_pointer_id(event)
     }
 
     /// Convert a PointerEvent to RawPointerEvent.
@@ -418,16 +399,14 @@ impl RawInputHandler {
             PointerEvent::Cancel(info) => {
                 let device_kind = info.pointer_type;
 
-                // Get last position from tracking, or use ZERO
-                let position = self
-                    .tracking
-                    .lock()
-                    .get(&pointer)
-                    .map(|s| s.last_position)
-                    .unwrap_or(Offset::ZERO);
-
-                // Stop tracking
-                self.tracking.lock().remove(&pointer);
+                // Single lock: get last position and remove in one acquisition
+                let position = {
+                    let mut tracking = self.tracking.lock();
+                    tracking
+                        .remove(&pointer)
+                        .map(|s| s.last_position)
+                        .unwrap_or(Offset::ZERO)
+                };
 
                 Some(RawPointerEvent::Cancel {
                     pointer,

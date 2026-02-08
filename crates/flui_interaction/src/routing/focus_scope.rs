@@ -765,45 +765,42 @@ pub struct ReadingOrderPolicy;
 
 impl FocusTraversalPolicy for ReadingOrderPolicy {
     fn find_next(&self, current: FocusNodeId, nodes: &[Arc<FocusNode>]) -> Option<FocusNodeId> {
-        let mut sorted = nodes.to_vec();
-        self.sort_nodes(&mut sorted);
-
-        let current_idx = sorted.iter().position(|n| n.id() == current)?;
+        let sorted = self.sorted_indices(nodes);
+        let current_idx = sorted.iter().position(|&i| nodes[i].id() == current)?;
         let next_idx = (current_idx + 1) % sorted.len();
-        Some(sorted[next_idx].id())
+        Some(nodes[sorted[next_idx]].id())
     }
 
     fn find_previous(&self, current: FocusNodeId, nodes: &[Arc<FocusNode>]) -> Option<FocusNodeId> {
-        let mut sorted = nodes.to_vec();
-        self.sort_nodes(&mut sorted);
-
-        let current_idx = sorted.iter().position(|n| n.id() == current)?;
+        let sorted = self.sorted_indices(nodes);
+        let current_idx = sorted.iter().position(|&i| nodes[i].id() == current)?;
         let prev_idx = if current_idx == 0 {
             sorted.len() - 1
         } else {
             current_idx - 1
         };
-        Some(sorted[prev_idx].id())
+        Some(nodes[sorted[prev_idx]].id())
     }
 
     fn find_first(&self, nodes: &[Arc<FocusNode>]) -> Option<FocusNodeId> {
-        let mut sorted = nodes.to_vec();
-        self.sort_nodes(&mut sorted);
-        sorted.first().map(|n| n.id())
+        let sorted = self.sorted_indices(nodes);
+        sorted.first().map(|&i| nodes[i].id())
     }
 
     fn find_last(&self, nodes: &[Arc<FocusNode>]) -> Option<FocusNodeId> {
-        let mut sorted = nodes.to_vec();
-        self.sort_nodes(&mut sorted);
-        sorted.last().map(|n| n.id())
+        let sorted = self.sorted_indices(nodes);
+        sorted.last().map(|&i| nodes[i].id())
     }
 }
 
 impl ReadingOrderPolicy {
-    fn sort_nodes(&self, nodes: &mut [Arc<FocusNode>]) {
-        nodes.sort_by(|a, b| {
-            let rect_a = a.rect();
-            let rect_b = b.rect();
+    /// Returns indices into `nodes` sorted by reading order (top-to-bottom, left-to-right).
+    /// Avoids cloning Arc<FocusNode> — only sorts lightweight indices.
+    fn sorted_indices(&self, nodes: &[Arc<FocusNode>]) -> Vec<usize> {
+        let mut indices: Vec<usize> = (0..nodes.len()).collect();
+        indices.sort_by(|&a, &b| {
+            let rect_a = nodes[a].rect();
+            let rect_b = nodes[b].rect();
 
             // Primary: top-to-bottom
             let y_cmp = rect_a
@@ -820,6 +817,7 @@ impl ReadingOrderPolicy {
                 .partial_cmp(&rect_b.left())
                 .unwrap_or(Ordering::Equal)
         });
+        indices
     }
 }
 

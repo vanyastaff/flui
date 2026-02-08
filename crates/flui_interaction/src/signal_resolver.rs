@@ -42,8 +42,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::events::PointerEvent;
-use flui_types::geometry::{px, Offset};
-
 use crate::ids::{HandlerId, PointerId};
 
 /// Callback for handling pointer signals
@@ -259,7 +257,7 @@ impl Default for PointerSignalResolver {
 mod tests {
     use super::*;
     use crate::ids::PointerId;
-    use flui_types::geometry::Offset;
+    use flui_types::geometry::{px, Offset};
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     #[test]

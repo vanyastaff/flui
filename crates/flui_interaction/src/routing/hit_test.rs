@@ -220,11 +220,13 @@ impl HitTestResult {
     }
 
     /// Returns the path of hit entries.
+    #[inline]
     pub fn path(&self) -> &[HitTestEntry] {
         &self.path
     }
 
     /// Returns mutable path.
+    #[inline]
     pub fn path_mut(&mut self) -> &mut Vec<HitTestEntry> {
         &mut self.path
     }
@@ -283,16 +285,19 @@ impl HitTestResult {
     }
 
     /// Returns the number of entries.
+    #[inline]
     pub fn len(&self) -> usize {
         self.path.len()
     }
 
     /// Returns true if empty.
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.path.is_empty()
     }
 
     /// Returns an iterator over the entries.
+    #[inline]
     pub fn iter(&self) -> impl Iterator<Item = &HitTestEntry> {
         self.path.iter()
     }

@@ -79,11 +79,13 @@ impl GestureRecognizerState {
     }
 
     /// Get the gesture arena
+    #[inline]
     pub fn arena(&self) -> &GestureArena {
         &self.arena
     }
 
     /// Get the primary pointer ID (if tracking one)
+    #[inline]
     pub fn primary_pointer(&self) -> Option<PointerId> {
         *self.primary_pointer.lock()
     }
@@ -94,6 +96,7 @@ impl GestureRecognizerState {
     }
 
     /// Get the initial position of the primary pointer
+    #[inline]
     pub fn initial_position(&self) -> Option<Offset<Pixels>> {
         *self.initial_position.lock()
     }
@@ -104,6 +107,7 @@ impl GestureRecognizerState {
     }
 
     /// Check if recognizer has been disposed
+    #[inline]
     pub fn is_disposed(&self) -> bool {
         *self.disposed.lock()
     }

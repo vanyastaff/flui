@@ -11,7 +11,7 @@
 //! Flutter reference: https://api.flutter.dev/flutter/gestures/DoubleTapGestureRecognizer-class.html
 
 use super::recognizer::{GestureRecognizer, GestureRecognizerState};
-use flui_types::geometry::{px, Pixels};
+use flui_types::geometry::Pixels;
 
 use crate::arena::GestureArenaMember;
 use crate::events::{PointerEvent, PointerEventExt, PointerType};
@@ -432,6 +432,7 @@ mod tests {
     use super::*;
     use crate::arena::GestureArena;
     use crate::events::make_up_event;
+    use flui_types::geometry::px;
 
     #[test]
     fn test_double_tap_recognizer_creation() {

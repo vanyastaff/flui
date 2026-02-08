@@ -35,6 +35,7 @@ use flui_types::geometry::Pixels;
 // Re-export Velocity and VelocityEstimate from flui_types
 pub use flui_types::gestures::{Velocity, VelocityEstimate};
 
+use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 // ============================================================================
@@ -103,8 +104,8 @@ struct PositionSample {
 /// ```
 #[derive(Debug, Clone)]
 pub struct VelocityTracker {
-    /// Ring buffer of position samples.
-    samples: Vec<PositionSample>,
+    /// Ring buffer of position samples (VecDeque for O(1) front removal).
+    samples: VecDeque<PositionSample>,
     /// Strategy for velocity estimation.
     strategy: VelocityEstimationStrategy,
 }
@@ -131,7 +132,7 @@ impl VelocityTracker {
     /// Create a new velocity tracker with default polynomial strategy.
     pub fn new() -> Self {
         Self {
-            samples: Vec::with_capacity(MAX_SAMPLES),
+            samples: VecDeque::with_capacity(MAX_SAMPLES),
             strategy: VelocityEstimationStrategy::default(),
         }
     }
@@ -139,29 +140,31 @@ impl VelocityTracker {
     /// Create a velocity tracker with a specific estimation strategy.
     pub fn with_strategy(strategy: VelocityEstimationStrategy) -> Self {
         Self {
-            samples: Vec::with_capacity(MAX_SAMPLES),
+            samples: VecDeque::with_capacity(MAX_SAMPLES),
             strategy,
         }
     }
 
     /// Add a position sample.
+    #[inline]
     pub fn add_position(&mut self, time: Instant, position: Offset<Pixels>) {
         // Remove samples older than HORIZON
         let cutoff = time.checked_sub(HORIZON).unwrap_or(time);
         self.samples.retain(|s| s.time >= cutoff);
 
         // Add new sample
-        self.samples.push(PositionSample { time, position });
+        self.samples.push_back(PositionSample { time, position });
 
-        // Limit total samples
+        // Limit total samples — O(1) pop from front with VecDeque
         if self.samples.len() > MAX_SAMPLES {
-            self.samples.remove(0);
+            self.samples.pop_front();
         }
     }
 
     /// Get the estimated velocity.
     ///
     /// Returns `Velocity::ZERO` if there aren't enough samples.
+    #[inline]
     pub fn velocity(&self) -> Velocity {
         if self.samples.len() < MIN_SAMPLES {
             return Velocity::ZERO;
@@ -175,6 +178,7 @@ impl VelocityTracker {
     }
 
     /// Reset the tracker, clearing all samples.
+    #[inline]
     pub fn reset(&mut self) {
         self.samples.clear();
     }
@@ -205,13 +209,13 @@ impl VelocityTracker {
         // Reference time is the last sample
         let ref_time = self.samples[n - 1].time;
 
-        // Convert samples to relative time (seconds before ref_time)
-        let mut times: Vec<f64> = Vec::with_capacity(n);
-        let mut x_positions: Vec<f64> = Vec::with_capacity(n);
-        let mut y_positions: Vec<f64> = Vec::with_capacity(n);
-        let mut weights: Vec<f64> = Vec::with_capacity(n);
+        // Stack-allocated arrays — no heap allocation (MAX_SAMPLES = 20)
+        let mut times = [0.0f64; MAX_SAMPLES];
+        let mut x_positions = [0.0f64; MAX_SAMPLES];
+        let mut y_positions = [0.0f64; MAX_SAMPLES];
+        let mut weights = [0.0f64; MAX_SAMPLES];
 
-        for sample in &self.samples {
+        for (i, sample) in self.samples.iter().enumerate() {
             // Time in seconds (negative, going back from ref_time)
             let dt = ref_time.duration_since(sample.time).as_secs_f64();
             let t = -dt; // Negative because we're going back in time
@@ -220,15 +224,15 @@ impl VelocityTracker {
             // Weight decays with e^(-dt / tau) where tau = 50ms
             let weight = (-dt / 0.05).exp();
 
-            times.push(t);
-            x_positions.push(sample.position.dx.get() as f64);
-            y_positions.push(sample.position.dy.get() as f64);
-            weights.push(weight);
+            times[i] = t;
+            x_positions[i] = sample.position.dx.get() as f64;
+            y_positions[i] = sample.position.dy.get() as f64;
+            weights[i] = weight;
         }
 
         // Fit polynomial and get velocity (derivative at t=0)
-        let vx = polynomial_fit_velocity(&times, &x_positions, &weights);
-        let vy = polynomial_fit_velocity(&times, &y_positions, &weights);
+        let vx = polynomial_fit_velocity(&times[..n], &x_positions[..n], &weights[..n]);
+        let vy = polynomial_fit_velocity(&times[..n], &y_positions[..n], &weights[..n]);
 
         Velocity::new(Offset::new(Pixels(vx as f32), Pixels(vy as f32)))
     }
@@ -489,7 +493,6 @@ impl VelocityTracker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_types::geometry::PixelDelta;
 
     #[test]
     fn test_velocity_zero() {

@@ -34,7 +34,6 @@
 
 use crate::events::PointerEvent;
 use crate::ids::PointerId;
-use flui_types::geometry::Pixels;
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -292,37 +291,17 @@ impl PointerRouter {
     }
 }
 
-/// Helper to extract pointer ID from event
+/// Helper to extract pointer ID from event.
+#[inline]
 fn get_pointer_id(event: &PointerEvent) -> PointerId {
-    let id = match event {
-        PointerEvent::Down(e) => e.pointer.pointer_id,
-        PointerEvent::Up(e) => e.pointer.pointer_id,
-        PointerEvent::Move(e) => e.pointer.pointer_id,
-        PointerEvent::Cancel(info) | PointerEvent::Enter(info) | PointerEvent::Leave(info) => {
-            info.pointer_id
-        }
-        PointerEvent::Scroll(e) => e.pointer.pointer_id,
-        PointerEvent::Gesture(e) => e.pointer.pointer_id,
-    };
-    // Use 0 for primary pointer, hash for others
-    let raw_id = match id {
-        Some(p) if p.is_primary_pointer() => 0,
-        Some(p) => {
-            use std::hash::{Hash, Hasher};
-            let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            p.hash(&mut hasher);
-            (hasher.finish() & 0x7FFFFFFF) as i32
-        }
-        None => 0,
-    };
-    PointerId::new(raw_id)
+    crate::events::extract_pointer_id(event)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::events::{make_move_event, PointerType};
-    use flui_types::geometry::Offset;
+    use flui_types::geometry::{Offset, Pixels};
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn make_event(device: i32, position: Offset<Pixels>) -> PointerEvent {
