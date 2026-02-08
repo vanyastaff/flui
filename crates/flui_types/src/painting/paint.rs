@@ -41,6 +41,7 @@ pub struct Paint {
 impl Paint {
     /// Creates a fill paint with the given color.
     #[must_use]
+    #[inline]
     pub const fn fill(color: Color) -> Self {
         Self {
             style: PaintStyle::Fill,
@@ -56,6 +57,7 @@ impl Paint {
 
     /// Creates a stroke paint with the given color and width.
     #[must_use]
+    #[inline]
     pub fn stroke(color: Color, width: f32) -> Self {
         debug_assert!(
             width >= 0.0 && !width.is_nan(),
@@ -76,12 +78,14 @@ impl Paint {
 
     /// Creates a paint builder for fluent construction.
     #[must_use]
+    #[inline]
     pub const fn builder() -> PaintBuilder {
         PaintBuilder::new()
     }
 
     /// Sets the paint style.
     #[must_use]
+    #[inline]
     pub const fn with_style(mut self, style: PaintStyle) -> Self {
         self.style = style;
         self
@@ -89,6 +93,7 @@ impl Paint {
 
     /// Sets the color.
     #[must_use]
+    #[inline]
     pub const fn with_color(mut self, color: Color) -> Self {
         self.color = color;
         self
@@ -96,6 +101,7 @@ impl Paint {
 
     /// Sets the stroke width.
     #[must_use]
+    #[inline]
     pub fn with_stroke_width(mut self, width: f32) -> Self {
         debug_assert!(
             width >= 0.0 && !width.is_nan(),
@@ -108,6 +114,7 @@ impl Paint {
 
     /// Sets the stroke cap style.
     #[must_use]
+    #[inline]
     pub const fn with_stroke_cap(mut self, cap: StrokeCap) -> Self {
         self.stroke_cap = cap;
         self
@@ -115,6 +122,7 @@ impl Paint {
 
     /// Sets the stroke join style.
     #[must_use]
+    #[inline]
     pub const fn with_stroke_join(mut self, join: StrokeJoin) -> Self {
         self.stroke_join = join;
         self
@@ -122,6 +130,7 @@ impl Paint {
 
     /// Sets the blend mode.
     #[must_use]
+    #[inline]
     pub const fn with_blend_mode(mut self, blend_mode: BlendMode) -> Self {
         self.blend_mode = blend_mode;
         self
@@ -129,6 +138,7 @@ impl Paint {
 
     /// Sets anti-aliasing.
     #[must_use]
+    #[inline]
     pub const fn with_anti_alias(mut self, aa: bool) -> Self {
         self.anti_alias = aa;
         self
@@ -136,6 +146,7 @@ impl Paint {
 
     /// Sets the shader.
     #[must_use]
+    #[inline]
     pub fn with_shader(mut self, shader: Shader) -> Self {
         self.shader = Some(shader);
         self
@@ -143,30 +154,35 @@ impl Paint {
 
     /// Returns true if this is a fill paint.
     #[must_use]
+    #[inline]
     pub const fn is_fill(&self) -> bool {
         matches!(self.style, PaintStyle::Fill)
     }
 
     /// Returns true if this is a stroke paint.
     #[must_use]
+    #[inline]
     pub const fn is_stroke(&self) -> bool {
         matches!(self.style, PaintStyle::Stroke)
     }
 
     /// Returns true if a shader is set.
     #[must_use]
+    #[inline]
     pub const fn has_shader(&self) -> bool {
         self.shader.is_some()
     }
 
     /// Returns true if anti-aliasing is enabled.
     #[must_use]
+    #[inline]
     pub const fn is_anti_aliased(&self) -> bool {
         self.anti_alias
     }
 
     /// Returns the effective stroke width (0 for fill).
     #[must_use]
+    #[inline]
     pub const fn effective_stroke_width(&self) -> f32 {
         match self.style {
             PaintStyle::Stroke => self.stroke_width,
@@ -176,18 +192,21 @@ impl Paint {
 
     /// Returns true if the paint is fully opaque.
     #[must_use]
+    #[inline]
     pub const fn is_opaque(&self) -> bool {
         self.color.a == 255 && matches!(self.blend_mode, BlendMode::SrcOver | BlendMode::Src)
     }
 
     /// Returns true if the paint is fully transparent.
     #[must_use]
+    #[inline]
     pub const fn is_transparent(&self) -> bool {
         self.color.a == 0
     }
 
     /// Sets the alpha channel.
     #[must_use]
+    #[inline]
     pub fn with_alpha(mut self, alpha: u8) -> Self {
         self.color = self.color.with_alpha(alpha);
         self
@@ -195,6 +214,7 @@ impl Paint {
 
     /// Sets the opacity (0.0 to 1.0).
     #[must_use]
+    #[inline]
     pub fn with_opacity(mut self, opacity: f32) -> Self {
         self.color = self.color.with_opacity(opacity);
         self
@@ -202,6 +222,7 @@ impl Paint {
 }
 
 impl Default for Paint {
+    #[inline]
     fn default() -> Self {
         Self::fill(Color::BLACK)
     }
@@ -221,12 +242,14 @@ pub enum PaintStyle {
 impl PaintStyle {
     /// Returns true if this is a fill style.
     #[must_use]
+    #[inline]
     pub const fn is_fill(&self) -> bool {
         matches!(self, PaintStyle::Fill)
     }
 
     /// Returns true if this is a stroke style.
     #[must_use]
+    #[inline]
     pub const fn is_stroke(&self) -> bool {
         matches!(self, PaintStyle::Stroke)
     }
@@ -241,6 +264,7 @@ pub struct PaintBuilder {
 impl PaintBuilder {
     /// Creates a new paint builder with default values.
     #[must_use]
+    #[inline]
     pub const fn new() -> Self {
         Self {
             paint: Paint::fill(Color::BLACK),
@@ -249,6 +273,7 @@ impl PaintBuilder {
 
     /// Sets the paint style.
     #[must_use]
+    #[inline]
     pub const fn style(mut self, style: PaintStyle) -> Self {
         self.paint.style = style;
         self
@@ -256,6 +281,7 @@ impl PaintBuilder {
 
     /// Sets the color.
     #[must_use]
+    #[inline]
     pub const fn color(mut self, color: Color) -> Self {
         self.paint.color = color;
         self
@@ -263,6 +289,7 @@ impl PaintBuilder {
 
     /// Sets the stroke width.
     #[must_use]
+    #[inline]
     pub const fn stroke_width(mut self, width: f32) -> Self {
         self.paint.stroke_width = width;
         self
@@ -270,6 +297,7 @@ impl PaintBuilder {
 
     /// Sets the stroke cap.
     #[must_use]
+    #[inline]
     pub const fn stroke_cap(mut self, cap: StrokeCap) -> Self {
         self.paint.stroke_cap = cap;
         self
@@ -277,6 +305,7 @@ impl PaintBuilder {
 
     /// Sets the stroke join.
     #[must_use]
+    #[inline]
     pub const fn stroke_join(mut self, join: StrokeJoin) -> Self {
         self.paint.stroke_join = join;
         self
@@ -284,6 +313,7 @@ impl PaintBuilder {
 
     /// Sets the blend mode.
     #[must_use]
+    #[inline]
     pub const fn blend_mode(mut self, blend_mode: BlendMode) -> Self {
         self.paint.blend_mode = blend_mode;
         self
@@ -291,6 +321,7 @@ impl PaintBuilder {
 
     /// Sets anti-aliasing.
     #[must_use]
+    #[inline]
     pub const fn anti_alias(mut self, aa: bool) -> Self {
         self.paint.anti_alias = aa;
         self
@@ -298,6 +329,7 @@ impl PaintBuilder {
 
     /// Sets the shader.
     #[must_use]
+    #[inline]
     pub fn shader(mut self, shader: Shader) -> Self {
         self.paint.shader = Some(shader);
         self
@@ -305,12 +337,14 @@ impl PaintBuilder {
 
     /// Builds the paint.
     #[must_use]
+    #[inline]
     pub fn build(self) -> Paint {
         self.paint
     }
 }
 
 impl Default for PaintBuilder {
+    #[inline]
     fn default() -> Self {
         Self::new()
     }

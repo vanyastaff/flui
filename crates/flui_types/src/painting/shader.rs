@@ -498,6 +498,7 @@ impl ShaderSpec {
     /// let shader = spec.to_shader(Size::new(100.0, 100.0));
     /// ```
     #[must_use]
+    #[inline]
     pub fn to_shader<T>(&self, size: Size<T>) -> Shader
     where
         T: NumericUnit + Into<f32>,
@@ -581,6 +582,7 @@ impl ShaderSpec {
     /// **Solid:**
     /// - `vec4<f32>` color (16 bytes)
     #[must_use]
+    #[inline]
     pub fn to_uniform_data(&self) -> Vec<u8> {
         match self {
             ShaderSpec::LinearGradient { start, end, colors } => {

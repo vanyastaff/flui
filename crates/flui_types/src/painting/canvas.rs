@@ -165,28 +165,33 @@ pub struct TextureId(u64);
 
 impl TextureId {
     #[must_use]
+    #[inline]
     pub const fn new(id: u64) -> Self {
         Self(id)
     }
 
     #[must_use]
+    #[inline]
     pub const fn get(self) -> u64 {
         self.0
     }
 
     #[must_use]
+    #[inline]
     pub const fn is_null(self) -> bool {
         self.0 == 0
     }
 }
 
 impl From<u64> for TextureId {
+    #[inline]
     fn from(id: u64) -> Self {
         Self::new(id)
     }
 }
 
 impl From<TextureId> for u64 {
+    #[inline]
     fn from(id: TextureId) -> Self {
         id.get()
     }
@@ -213,21 +218,25 @@ pub enum PointMode {
 
 impl PointMode {
     #[must_use]
+    #[inline]
     pub const fn is_points(&self) -> bool {
         matches!(self, PointMode::Points)
     }
 
     #[must_use]
+    #[inline]
     pub const fn is_lines(&self) -> bool {
         matches!(self, PointMode::Lines)
     }
 
     #[must_use]
+    #[inline]
     pub const fn is_polygon(&self) -> bool {
         matches!(self, PointMode::Polygon)
     }
 
     #[must_use]
+    #[inline]
     pub const fn min_points(&self) -> usize {
         match self {
             PointMode::Points => 1,

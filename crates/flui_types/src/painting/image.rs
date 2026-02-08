@@ -36,6 +36,7 @@ pub struct Image {
 }
 
 impl Default for Image {
+    #[inline]
     fn default() -> Self {
         Self {
             width: 0,
@@ -58,6 +59,7 @@ impl Image {
     ///
     /// Panics if the data length doesn't match `width * height * 4`.
     #[must_use]
+    #[inline]
     pub fn from_rgba8(width: u32, height: u32, data: Vec<u8>) -> Self {
         assert_eq!(
             data.len(),
@@ -78,6 +80,7 @@ impl Image {
     ///
     /// The caller must ensure that the data length matches `width * height * 4`.
     #[must_use]
+    #[inline]
     pub fn from_rgba8_unchecked(width: u32, height: u32, data: Vec<u8>) -> Self {
         Self {
             width,
@@ -148,16 +151,16 @@ impl Image {
     /// assert_eq!(image.height(), 100);
     /// ```
     #[must_use]
+    #[inline]
     pub fn solid_color(width: u32, height: u32, color: Color) -> Self {
         let pixel_count = (width * height) as usize;
-        let mut data = Vec::with_capacity(pixel_count * 4);
-
-        for _ in 0..pixel_count {
-            data.push(color.r);
-            data.push(color.g);
-            data.push(color.b);
-            data.push(color.a);
-        }
+        let pixel = [color.r, color.g, color.b, color.a];
+        let data: Vec<u8> = pixel
+            .iter()
+            .copied()
+            .cycle()
+            .take(pixel_count * 4)
+            .collect();
 
         Self::from_rgba8(width, height, data)
     }
@@ -176,6 +179,7 @@ impl Image {
     /// assert_eq!(image.height(), 150);
     /// ```
     #[must_use]
+    #[inline]
     pub fn transparent(width: u32, height: u32) -> Self {
         Self::solid_color(width, height, Color::TRANSPARENT)
     }
@@ -208,6 +212,7 @@ impl PartialEq for Image {
     /// Images are equal if they have the same dimensions and point to the same data.
     ///
     /// Note: This uses Arc pointer equality, not pixel-by-pixel comparison.
+    #[inline]
     fn eq(&self, other: &Self) -> bool {
         self.width == other.width
             && self.height == other.height
@@ -332,6 +337,7 @@ impl ImageConfiguration {
 }
 
 impl Default for ImageConfiguration {
+    #[inline]
     fn default() -> Self {
         Self::new()
     }

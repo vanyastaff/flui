@@ -121,6 +121,7 @@ impl ColorMatrix {
     }
 
     /// Create an identity matrix (no transformation).
+    #[inline]
     pub fn identity() -> Self {
         Self::new([
             1.0, 0.0, 0.0, 0.0, 0.0, // R
@@ -133,6 +134,7 @@ impl ColorMatrix {
     /// Create a grayscale matrix.
     ///
     /// Uses luminance weights: R=0.2126, G=0.7152, B=0.0722
+    #[inline]
     pub fn grayscale() -> Self {
         let r = 0.2126;
         let g = 0.7152;
@@ -147,6 +149,7 @@ impl ColorMatrix {
     }
 
     /// Create a sepia matrix.
+    #[inline]
     pub fn sepia() -> Self {
         Self::new([
             0.393, 0.769, 0.189, 0.0, 0.0, // R
@@ -161,6 +164,7 @@ impl ColorMatrix {
     /// # Arguments
     ///
     /// * `amount` - Brightness adjustment (-1.0 to 1.0, 0.0 = no change)
+    #[inline]
     pub fn brightness(amount: f32) -> Self {
         Self::new([
             1.0, 0.0, 0.0, 0.0, amount, // R
@@ -175,6 +179,7 @@ impl ColorMatrix {
     /// # Arguments
     ///
     /// * `amount` - Contrast multiplier (0.0 to 2.0, 1.0 = no change)
+    #[inline]
     pub fn contrast(amount: f32) -> Self {
         let offset = 0.5 * (1.0 - amount);
 
@@ -191,6 +196,7 @@ impl ColorMatrix {
     /// # Arguments
     ///
     /// * `amount` - Saturation multiplier (0.0 to 2.0, 1.0 = no change, 0.0 = grayscale)
+    #[inline]
     pub fn saturation(amount: f32) -> Self {
         let r = 0.2126 * (1.0 - amount);
         let g = 0.7152 * (1.0 - amount);
@@ -225,6 +231,7 @@ impl ColorMatrix {
     /// # Arguments
     ///
     /// * `degrees` - Hue rotation in degrees (0.0 to 360.0)
+    #[inline]
     pub fn hue_rotate(degrees: f32) -> Self {
         let radians = degrees * std::f32::consts::PI / 180.0;
         let cos = radians.cos();
@@ -260,6 +267,7 @@ impl ColorMatrix {
     }
 
     /// Create an inversion matrix.
+    #[inline]
     pub fn invert() -> Self {
         Self::new([
             -1.0, 0.0, 0.0, 0.0, 1.0, // R
@@ -278,6 +286,7 @@ impl ColorMatrix {
     /// # Returns
     ///
     /// Transformed color as [r, g, b, a]
+    #[inline]
     pub fn apply(&self, color: [f32; 4]) -> [f32; 4] {
         let [r, g, b, a] = color;
 
@@ -312,6 +321,7 @@ impl ColorMatrix {
     /// Multiply this matrix with another matrix.
     ///
     /// This allows composing multiple color transformations.
+    #[inline]
     pub fn multiply(&self, other: &ColorMatrix) -> Self {
         let mut result = [0.0; 20];
 
@@ -333,6 +343,7 @@ impl ColorMatrix {
 }
 
 impl Default for ColorMatrix {
+    #[inline]
     fn default() -> Self {
         Self::identity()
     }
@@ -364,6 +375,7 @@ pub struct StrokeOptions {
 }
 
 impl Default for StrokeOptions {
+    #[inline]
     fn default() -> Self {
         Self {
             width: 1.0,

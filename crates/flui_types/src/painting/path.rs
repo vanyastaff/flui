@@ -63,6 +63,7 @@ pub struct Path {
 
 impl Path {
     #[must_use]
+    #[inline]
     pub fn new() -> Self {
         Self {
             commands: SmallVec::new(),
@@ -72,6 +73,7 @@ impl Path {
     }
 
     #[must_use]
+    #[inline]
     pub fn with_fill_type(fill_type: PathFillType) -> Self {
         Self {
             commands: SmallVec::new(),
@@ -81,6 +83,7 @@ impl Path {
     }
 
     #[must_use]
+    #[inline]
     pub fn rectangle(rect: Rect<Pixels>) -> Self {
         let mut path = Self::new();
         path.add_rect(rect);
@@ -88,6 +91,7 @@ impl Path {
     }
 
     #[must_use]
+    #[inline]
     pub fn oval(rect: Rect<Pixels>) -> Self {
         let mut path = Self::new();
         path.add_oval(rect);
@@ -101,6 +105,7 @@ impl Path {
     /// * `center` - Center point of the circle
     /// * `radius` - Radius of the circle
     #[must_use]
+    #[inline]
     pub fn circle(center: Point<Pixels>, radius: f32) -> Self {
         use crate::geometry::px;
         let rect = Rect::from_xywh(
@@ -118,6 +123,7 @@ impl Path {
     ///
     /// * `points` - Vertices of the polygon
     #[must_use]
+    #[inline]
     pub fn polygon(points: &[Point<Pixels>]) -> Self {
         let mut path = Self::new();
         if let Some((first, rest)) = points.split_first() {
@@ -131,6 +137,7 @@ impl Path {
     }
 
     #[must_use]
+    #[inline]
     pub fn arc(rect: Rect<Pixels>, start_angle: f32, sweep_angle: f32) -> Self {
         let mut path = Self::new();
         path.add_arc(rect, start_angle, sweep_angle);
@@ -138,6 +145,7 @@ impl Path {
     }
 
     #[must_use]
+    #[inline]
     pub fn from_rrect(rrect: crate::geometry::RRect) -> Self {
         let mut path = Self::new();
 
@@ -234,6 +242,7 @@ impl Path {
     }
 
     #[must_use]
+    #[inline]
     pub const fn fill_type(&self) -> PathFillType {
         self.fill_type
     }
@@ -275,11 +284,13 @@ impl Path {
     }
 
     #[must_use]
+    #[inline]
     pub fn commands(&self) -> &[PathCommand] {
         &self.commands
     }
 
     #[must_use]
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.commands.is_empty()
     }
@@ -291,11 +302,13 @@ impl Path {
     }
 
     #[must_use]
+    #[inline]
     pub fn cached_bounds(&self) -> Option<Rect<Pixels>> {
         self.bounds
     }
 
     #[must_use]
+    #[inline]
     pub fn compute_bounds(&self) -> Rect<Pixels> {
         // Quick return if cached
         if let Some(bounds) = self.bounds {
@@ -306,6 +319,7 @@ impl Path {
     }
 
     /// Internal bounds computation (shared between bounds() and compute_bounds())
+    #[inline]
     fn compute_bounds_internal(&self) -> Rect<Pixels> {
         let mut min_x = f32::INFINITY;
         let mut min_y = f32::INFINITY;
@@ -361,6 +375,7 @@ impl Path {
     }
 
     #[must_use]
+    #[inline]
     pub fn bounds(&mut self) -> Rect<Pixels> {
         if let Some(bounds) = self.bounds {
             return bounds;
@@ -372,6 +387,7 @@ impl Path {
     }
 
     #[must_use]
+    #[inline]
     pub fn translate(&self, offset: Offset<Pixels>) -> Self {
         let delta = Vec2::new(offset.dx, offset.dy);
         let commands = self
@@ -405,6 +421,7 @@ impl Path {
 
     /// Ray casting algorithm for even-odd fill rule.
     #[must_use]
+    #[inline]
     fn contains_even_odd(&self, point: Point<Pixels>) -> bool {
         let mut crossings = 0;
         let mut current_pos = Point::new(px(0.0), px(0.0));
@@ -475,6 +492,7 @@ impl Path {
     }
 
     /// Winding number algorithm for non-zero fill rule.
+    #[inline]
     fn contains_non_zero(&self, point: Point<Pixels>) -> bool {
         let mut winding = 0;
         let mut current_pos = Point::new(px(0.0), px(0.0));
@@ -535,6 +553,7 @@ impl Path {
     }
 
     /// Tests if a horizontal ray from point intersects a line segment.
+    #[inline]
     fn ray_intersects_segment(
         &self,
         point: Point<Pixels>,
@@ -552,6 +571,7 @@ impl Path {
     }
 
     /// Compute winding contribution of a line segment.
+    #[inline]
     fn segment_winding(&self, point: Point<Pixels>, p1: Point<Pixels>, p2: Point<Pixels>) -> i32 {
         if p1.y <= point.y {
             if p2.y > point.y {
@@ -571,11 +591,13 @@ impl Path {
 
     /// Test if point is left of line segment (p1 -> p2).
     /// Returns > 0 for left, < 0 for right, 0 for on line.
+    #[inline]
     fn is_left(&self, p1: Point<Pixels>, p2: Point<Pixels>, point: Point<Pixels>) -> f32 {
         ((p2.x - p1.x) * (point.y - p1.y) - (point.x - p1.x) * (p2.y - p1.y)).0
     }
 
     /// Count crossings for quadratic bezier curve (approximated).
+    #[inline]
     fn count_curve_crossings_quad(
         &self,
         point: Point<Pixels>,
@@ -603,6 +625,7 @@ impl Path {
     }
 
     /// Count crossings for cubic bezier curve (approximated).
+    #[inline]
     fn count_curve_crossings_cubic(
         &self,
         point: Point<Pixels>,
@@ -631,6 +654,7 @@ impl Path {
     }
 
     /// Winding number for quadratic curve.
+    #[inline]
     fn curve_winding_quad(
         &self,
         point: Point<Pixels>,
@@ -655,6 +679,7 @@ impl Path {
     }
 
     /// Winding number for cubic curve.
+    #[inline]
     fn curve_winding_cubic(
         &self,
         point: Point<Pixels>,
@@ -680,6 +705,7 @@ impl Path {
     }
 
     /// Evaluate quadratic bezier at parameter t.
+    #[inline]
     fn eval_quadratic<T>(&self, p0: Point<T>, p1: Point<T>, p2: Point<T>, t: f32) -> Point<T>
     where
         T: NumericUnit + Into<f32> + From<f32>,
@@ -695,6 +721,7 @@ impl Path {
     }
 
     /// Evaluate cubic bezier at parameter t.
+    #[inline]
     fn eval_cubic<T>(
         &self,
         p0: Point<T>,
@@ -730,6 +757,7 @@ impl Path {
 }
 
 impl Default for Path {
+    #[inline]
     fn default() -> Self {
         Self::new()
     }

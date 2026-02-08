@@ -40,21 +40,25 @@ pub enum Clip {
 
 impl Clip {
     #[must_use]
+    #[inline]
     pub const fn is_anti_aliased(&self) -> bool {
         matches!(self, Clip::AntiAlias | Clip::AntiAliasWithSaveLayer)
     }
 
     #[must_use]
+    #[inline]
     pub const fn saves_layer(&self) -> bool {
         matches!(self, Clip::AntiAliasWithSaveLayer)
     }
 
     #[must_use]
+    #[inline]
     pub const fn clips(&self) -> bool {
         !matches!(self, Clip::None)
     }
 
     #[must_use]
+    #[inline]
     pub const fn is_efficient(&self) -> bool {
         matches!(self, Clip::None | Clip::HardEdge)
     }
@@ -83,6 +87,7 @@ pub enum ClipBehavior {
 
 impl ClipBehavior {
     #[must_use]
+    #[inline]
     pub const fn to_clip(self) -> Clip {
         match self {
             ClipBehavior::None => Clip::None,
@@ -93,11 +98,13 @@ impl ClipBehavior {
     }
 
     #[must_use]
+    #[inline]
     pub const fn clips(self) -> bool {
         !matches!(self, ClipBehavior::None)
     }
 
     #[must_use]
+    #[inline]
     pub const fn is_anti_aliased(self) -> bool {
         matches!(
             self,
@@ -107,6 +114,7 @@ impl ClipBehavior {
 }
 
 impl From<ClipBehavior> for Clip {
+    #[inline]
     fn from(behavior: ClipBehavior) -> Self {
         behavior.to_clip()
     }
@@ -124,6 +132,7 @@ pub trait NotchedShape: std::fmt::Debug {
     /// The `guest` is the bounding rectangle of the notch.
     ///
     /// Returns a path that describes the outer edge of the shape with the notch.
+    #[inline]
     fn get_outer_path(
         &self,
         host: Rect<Pixels>,
@@ -140,23 +149,27 @@ pub struct CircularNotchedRectangle {
 
 impl CircularNotchedRectangle {
     #[must_use]
+    #[inline]
     pub const fn new() -> Self {
         Self { margin: 4.0 }
     }
 
     #[must_use]
+    #[inline]
     pub const fn with_margin(margin: f32) -> Self {
         Self { margin }
     }
 }
 
 impl Default for CircularNotchedRectangle {
+    #[inline]
     fn default() -> Self {
         Self::new()
     }
 }
 
 impl NotchedShape for CircularNotchedRectangle {
+    #[inline]
     fn get_outer_path(
         &self,
         host: Rect<Pixels>,
@@ -226,17 +239,20 @@ pub struct AutomaticNotchedShape<T: NotchedShape> {
 
 impl<T: NotchedShape> AutomaticNotchedShape<T> {
     #[must_use]
+    #[inline]
     pub const fn new(inner: T) -> Self {
         Self { inner, scale: 1.0 }
     }
 
     #[must_use]
+    #[inline]
     pub const fn with_scale(inner: T, scale: f32) -> Self {
         Self { inner, scale }
     }
 }
 
 impl<T: NotchedShape> NotchedShape for AutomaticNotchedShape<T> {
+    #[inline]
     fn get_outer_path(
         &self,
         host: Rect<Pixels>,

@@ -149,6 +149,7 @@ pub enum BlendMode {
 
 impl BlendMode {
     #[must_use]
+    #[inline]
     pub const fn is_porter_duff(&self) -> bool {
         matches!(
             self,
@@ -170,16 +171,19 @@ impl BlendMode {
     }
 
     #[must_use]
+    #[inline]
     pub const fn requires_destination(&self) -> bool {
         !matches!(self, BlendMode::Clear | BlendMode::Src)
     }
 
     #[must_use]
+    #[inline]
     pub const fn is_advanced(&self) -> bool {
         !self.is_porter_duff()
     }
 
     #[must_use]
+    #[inline]
     pub const fn can_lighten(&self) -> bool {
         matches!(
             self,
@@ -188,6 +192,7 @@ impl BlendMode {
     }
 
     #[must_use]
+    #[inline]
     pub const fn can_darken(&self) -> bool {
         matches!(
             self,
@@ -196,6 +201,7 @@ impl BlendMode {
     }
 
     #[must_use]
+    #[inline]
     pub const fn is_compositional(&self) -> bool {
         self.is_porter_duff()
     }
