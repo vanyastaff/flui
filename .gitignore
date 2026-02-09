@@ -5,6 +5,8 @@
 # Compiled files and executables
 /target/
 debug/
+.claude
+.agents
 
 # Cargo.lock is usually committed for binary crates, but uncomment if needed
 # Cargo.lock

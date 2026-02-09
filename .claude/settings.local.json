@@ -1,8 +1,16 @@
 {
   "permissions": {
     "allow": [
+      "mcp__filesystem__read_multiple_files",
+      "mcp__acp__Edit",
+      "mcp__acp__Bash",
+      "mcp__filesystem__directory_tree",
+      "mcp__sequential-thinking__sequentialthinking",
       "Skill(commit-commands:commit)",
-      "Skill(commit-commands:commit:*)"
+      "Skill(commit-commands:commit:*)",
+      "mcp__filesystem__list_directory",
+      "mcp__filesystem__read_text_file",
+      "mcp__acp__Write"
     ]
   }
 }

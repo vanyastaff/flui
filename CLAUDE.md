@@ -130,20 +130,41 @@ cargo test -p flui_rendering -- --nocapture
 RUST_LOG=debug cargo test -p flui_rendering
 ```
 
-### Slash Commands
+### Skills (`.claude/skills/`)
 
-**FLUI-specific:**
+**Build & Test (user-invocable):**
 ```bash
-/flui:build-crate <name>    # Build crate with deps
-/flui:test-crate <name>     # Test specific crate
-/flui:run-example <name>    # Run example with timeout
-/flui:check-tree            # Verify three-tree architecture
-/flui:deps                  # Analyze dependencies
-/flui:lint                  # Lint workspace
-/flui:new-widget <name>     # Create new widget
-/flui:profile               # Profile performance
-/flui:android               # Build for Android
+/build-crate <name>         # Build crate with dependency ordering
+/test-crate <name> [filter] # Test crate with optional test filter
+/lint [crate-name]          # Run clippy + rustfmt checks
+/check-workspace            # Full workspace health check
+/check-tree                 # Verify three-tree architecture (runs in Explore agent)
+/deps [crate-name]          # Analyze dependencies, detect conflicts
+/profile [crate-name]       # Profile build times and binary sizes
+/run-example <name> [timeout] # Build and run an example
+/fix-warnings [crate-name]  # Auto-fix compiler warnings
+/new-widget <name> [arity]  # Scaffold a new widget (View + Element + RenderObject)
 ```
+
+**Auto-loaded knowledge (Claude uses automatically when relevant):**
+- `api-conventions` - FLUI API design patterns (arity, ambassador, ID offset)
+- `render-object` - RenderObject/RenderBox implementation reference
+- `platform-impl` - Platform abstraction patterns and native API reference
+
+### Agents (`.claude/agents/`)
+
+| Agent | Model | Purpose |
+|-------|-------|---------|
+| `rust-expert` | Opus | Rust language: traits, lifetimes, unsafe, generics, borrow checker |
+| `platform-specialist` | Opus | Platform code: Win32, AppKit, windowing, text systems |
+| `flutter-architect` | Opus | Adapt Flutter patterns to FLUI: layout, paint, widget lifecycle |
+| `debugger` | Sonnet | Debug compilation errors, runtime panics, test failures |
+| `code-reviewer` | Sonnet | Code review with FLUI conventions checklist (has persistent memory) |
+| `test-engineer` | Sonnet | Write tests, improve coverage, test-first methodology |
+| `performance-tuner` | Sonnet | Profile and optimize: layout, rendering, memory, build times |
+| `docs-writer` | Haiku | Write rustdoc documentation and API examples |
+
+### Slash Commands (legacy, migrated to skills)
 
 **Speckit workflow (feature planning and specs):**
 ```bash
