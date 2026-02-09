@@ -157,8 +157,8 @@ pub trait TreeWriteNav<I: Identifier>: TreeWrite<I> + super::TreeNav<I> {
     /// This method has no default implementation because it requires
     /// access to the internal node structure. Implementations must
     /// provide their own version that:
-    /// 1. Validates child and new_parent exist
-    /// 2. Checks for cycles (new_parent must not be a descendant of child)
+    /// 1. Validates child and `new_parent` exist
+    /// 2. Checks for cycles (`new_parent` must not be a descendant of child)
     /// 3. Updates old parent's children list
     /// 4. Updates new parent's children list
     /// 5. Updates child's parent reference

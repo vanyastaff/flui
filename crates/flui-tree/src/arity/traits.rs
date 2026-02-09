@@ -26,22 +26,27 @@ use super::runtime::{PerformanceHint, RuntimeArity};
 ///
 /// The `Accessor` associated type uses GAT to provide flexible iteration:
 ///
-/// ```rust,ignore
-/// trait Arity {
-///     type Accessor<'a, T: 'a>: ChildrenAccess<'a, T>;
-///     type Iterator<'a, T: 'a>: Iterator<Item = &'a T> where T: 'a;
-/// }
+/// ```
+/// use flui_tree::arity::{Arity, Variable, ChildrenAccess};
+///
+/// // The Arity trait defines an Accessor type via GAT:
+/// let children: &[u32] = &[1, 2, 3];
+/// let accessor = Variable::from_slice(children);
+/// assert_eq!(accessor.len(), 3);
 /// ```
 ///
 /// # HRTB Support
 ///
 /// All operations are compatible with Higher-Rank Trait Bounds:
 ///
-/// ```rust,ignore
-/// fn find_child<A, P>(accessor: A, predicate: P) -> Option<ElementId>
-/// where
-///     A: ChildrenAccess<ElementId>,
-///     P: for<'a> Fn(&'a ElementId) -> bool,
+/// ```
+/// use flui_tree::arity::{Arity, Variable, ChildrenAccess};
+///
+/// let children: &[u32] = &[10, 20, 30];
+/// let accessor = Variable::from_slice(children);
+/// // HRTB predicate works with any lifetime
+/// let found = accessor.find_where(|x| *x > 15);
+/// assert_eq!(found, Some(&20));
 /// ```
 ///
 /// # Performance Constants
@@ -94,6 +99,7 @@ pub trait Arity: sealed::Sealed + Send + Sync + Debug + Copy + Default + 'static
     fn validate_count(count: usize) -> bool;
 
     /// Get performance hint for the given count.
+    #[must_use]
     fn performance_hint(count: usize) -> PerformanceHint {
         let (_, hint) = Self::runtime_arity().validate_with_hint(count);
         hint

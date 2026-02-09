@@ -24,15 +24,52 @@ pub enum SiblingsDirection {
 ///
 /// # Example
 ///
-/// ```rust,ignore
+/// ```
+/// # use flui_tree::{Ancestors, Siblings, SiblingsDirection, TreeNav, TreeRead};
+/// # use flui_foundation::ElementId;
+/// # struct N { parent: Option<ElementId>, children: Vec<ElementId> }
+/// # struct T(Vec<Option<N>>);
+/// # impl T { fn ins(&mut self, p: Option<ElementId>) -> ElementId {
+/// #     let id = ElementId::new(self.0.len()+1);
+/// #     self.0.push(Some(N { parent: p, children: vec![] }));
+/// #     if let Some(pid) = p { self.0[pid.get()-1].as_mut().unwrap().children.push(id); }
+/// #     id
+/// # }}
+/// # impl TreeRead<ElementId> for T {
+/// #     type Node = N;
+/// #     fn get(&self, id: ElementId) -> Option<&N> { self.0.get(id.get()-1)?.as_ref() }
+/// #     fn len(&self) -> usize { self.0.iter().flatten().count() }
+/// #     fn node_ids(&self) -> impl Iterator<Item = ElementId> + '_ {
+/// #         (0..self.0.len()).filter_map(|i| if self.0[i].is_some() { Some(ElementId::new(i+1)) } else { None })
+/// #     }
+/// # }
+/// # impl TreeNav<ElementId> for T {
+/// #     fn parent(&self, id: ElementId) -> Option<ElementId> { self.get(id)?.parent }
+/// #     fn children(&self, id: ElementId) -> impl Iterator<Item = ElementId> + '_ {
+/// #         self.get(id).into_iter().flat_map(|n| n.children.iter().copied())
+/// #     }
+/// #     fn ancestors(&self, s: ElementId) -> impl Iterator<Item = ElementId> + '_ { Ancestors::new(self, s) }
+/// #     fn descendants(&self, r: ElementId) -> impl Iterator<Item = (ElementId, usize)> + '_ {
+/// #         flui_tree::DescendantsWithDepth::new(self, r)
+/// #     }
+/// #     fn siblings(&self, id: ElementId) -> impl Iterator<Item = ElementId> + '_ {
+/// #         self.parent(id).into_iter().flat_map(move |p| self.children(p).filter(move |&c| c != id))
+/// #     }
+/// # }
+/// # let mut tree = T(vec![]);
+/// # let root = tree.ins(None);
+/// # let a = tree.ins(Some(root));
+/// # let b = tree.ins(Some(root));
+/// # let c = tree.ins(Some(root));
+/// # let d = tree.ins(Some(root));
 /// // For parent with children [A, B, C, D]
 /// // Starting from B, forward:
-/// let siblings: Vec<_> = tree.siblings(b, Forward, false).collect();
-/// assert_eq!(siblings, vec![C, D]);
+/// let sibs: Vec<_> = Siblings::forward(&tree, b).collect();
+/// assert_eq!(sibs, vec![c, d]);
 ///
 /// // Starting from C, backward, including self:
-/// let siblings: Vec<_> = tree.siblings(c, Backward, true).collect();
-/// assert_eq!(siblings, vec![C, B, A]);
+/// let sibs: Vec<_> = Siblings::new(&tree, c, SiblingsDirection::Backward, true).collect();
+/// assert_eq!(sibs, vec![c, b, a]);
 /// ```
 #[derive(Debug)]
 pub struct Siblings<'a, I: Identifier, T: TreeNav<I>> {
@@ -178,11 +215,48 @@ impl<I: Identifier, T: TreeNav<I>> std::iter::ExactSizeIterator for Siblings<'_,
 ///
 /// # Example
 ///
-/// ```rust,ignore
+/// ```
+/// # use flui_tree::{Ancestors, AllSiblings, TreeNav, TreeRead};
+/// # use flui_foundation::ElementId;
+/// # struct N { parent: Option<ElementId>, children: Vec<ElementId> }
+/// # struct T(Vec<Option<N>>);
+/// # impl T { fn ins(&mut self, p: Option<ElementId>) -> ElementId {
+/// #     let id = ElementId::new(self.0.len()+1);
+/// #     self.0.push(Some(N { parent: p, children: vec![] }));
+/// #     if let Some(pid) = p { self.0[pid.get()-1].as_mut().unwrap().children.push(id); }
+/// #     id
+/// # }}
+/// # impl TreeRead<ElementId> for T {
+/// #     type Node = N;
+/// #     fn get(&self, id: ElementId) -> Option<&N> { self.0.get(id.get()-1)?.as_ref() }
+/// #     fn len(&self) -> usize { self.0.iter().flatten().count() }
+/// #     fn node_ids(&self) -> impl Iterator<Item = ElementId> + '_ {
+/// #         (0..self.0.len()).filter_map(|i| if self.0[i].is_some() { Some(ElementId::new(i+1)) } else { None })
+/// #     }
+/// # }
+/// # impl TreeNav<ElementId> for T {
+/// #     fn parent(&self, id: ElementId) -> Option<ElementId> { self.get(id)?.parent }
+/// #     fn children(&self, id: ElementId) -> impl Iterator<Item = ElementId> + '_ {
+/// #         self.get(id).into_iter().flat_map(|n| n.children.iter().copied())
+/// #     }
+/// #     fn ancestors(&self, s: ElementId) -> impl Iterator<Item = ElementId> + '_ { Ancestors::new(self, s) }
+/// #     fn descendants(&self, r: ElementId) -> impl Iterator<Item = (ElementId, usize)> + '_ {
+/// #         flui_tree::DescendantsWithDepth::new(self, r)
+/// #     }
+/// #     fn siblings(&self, id: ElementId) -> impl Iterator<Item = ElementId> + '_ {
+/// #         self.parent(id).into_iter().flat_map(move |p| self.children(p).filter(move |&c| c != id))
+/// #     }
+/// # }
+/// # let mut tree = T(vec![]);
+/// # let root = tree.ins(None);
+/// # let a = tree.ins(Some(root));
+/// # let b = tree.ins(Some(root));
+/// # let c = tree.ins(Some(root));
+/// # let d = tree.ins(Some(root));
 /// // For parent with children [A, B, C, D]
 /// // Starting from B:
 /// let siblings: Vec<_> = AllSiblings::new(&tree, b).collect();
-/// assert_eq!(siblings, vec![A, C, D]);
+/// assert_eq!(siblings, vec![a, c, d]);
 /// ```
 #[derive(Debug)]
 pub struct AllSiblings<'a, I: Identifier, T: TreeNav<I>> {

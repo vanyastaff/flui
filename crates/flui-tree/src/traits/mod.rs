@@ -25,9 +25,9 @@
 //! flui-tree provides ONLY pure tree abstractions. Domain-specific
 //! implementations live in their respective crates:
 //!
-//! - **flui_rendering**: RenderTree, DirtyTracking, render iterators
-//! - **flui-element**: ElementTree, lifecycle, reconciliation
-//! - **flui-view**: ViewTree, snapshots
+//! - **`flui_rendering`**: `RenderTree`, `DirtyTracking`, render iterators
+//! - **flui-element**: `ElementTree`, lifecycle, reconciliation
+//! - **flui-view**: `ViewTree`, snapshots
 //!
 //! # Generic ID Parameter
 //!
@@ -41,7 +41,9 @@ pub mod node;
 mod read;
 mod write;
 
-pub use nav::TreeNav;
+pub use nav::{TreeNav, TreeNavExt};
 pub use node::{Node, NodeExt, NodeTypeInfo};
-pub use read::TreeRead;
+pub use read::{
+    collect_matching_nodes, count_matching_nodes, NodePredicate, NodeVisitor, TreeRead, TreeReadExt,
+};
 pub use write::{TreeWrite, TreeWriteNav};

@@ -34,9 +34,9 @@ use flui_foundation::Identifier;
 ///
 /// # Example
 ///
-/// ```rust,ignore
+/// ```
 /// use flui_tree::TreeRead;
-/// use flui_foundation::ElementId;
+/// use flui_tree::ElementId;
 ///
 /// struct SimpleTree {
 ///     nodes: Vec<Option<String>>,
@@ -63,6 +63,13 @@ use flui_foundation::Identifier;
 ///         })
 ///     }
 /// }
+///
+/// let tree = SimpleTree {
+///     nodes: vec![Some("hello".into()), None, Some("world".into())],
+/// };
+/// assert_eq!(tree.len(), 2);
+/// assert_eq!(tree.get(ElementId::new(1)), Some(&"hello".to_string()));
+/// assert_eq!(tree.get(ElementId::new(2)), None);
 /// ```
 pub trait TreeRead<I: Identifier>: Send + Sync {
     /// The node type stored in the tree.
@@ -173,35 +180,14 @@ pub trait TreeRead<I: Identifier>: Send + Sync {
     }
 }
 
-/// Sealed trait pattern to prevent external implementations.
-///
-/// This ensures that only well-tested implementations in this crate
-/// can implement the core TreeRead trait, preventing subtle bugs
-/// from incorrect external implementations.
-///
-/// External crates can implement the sealed trait via
-/// `flui_tree::traits::sealed::TreeReadSealed`.
-pub(crate) mod sealed {
-    /// Sealed trait marker.
-    ///
-    /// Only types in this crate can implement this trait,
-    /// ensuring TreeRead remains correctly implemented.
-    pub trait Sealed {}
-
-    // Blanket implementations for wrapper types
-    impl<T: Sealed + ?Sized> Sealed for &T {}
-    impl<T: Sealed + ?Sized> Sealed for &mut T {}
-    impl<T: Sealed + ?Sized> Sealed for Box<T> {}
-}
-
 // ============================================================================
 // EXTENSION TRAIT FOR ADDITIONAL FUNCTIONALITY
 // ============================================================================
 
-/// Extension trait for TreeRead with additional utility methods.
+/// Extension trait for `TreeRead` with additional utility methods.
 ///
 /// This trait provides higher-level operations built on top of
-/// the core TreeRead functionality using HRTB patterns.
+/// the core `TreeRead` functionality using HRTB patterns.
 pub trait TreeReadExt<I: Identifier>: TreeRead<I> {
     /// Find first node matching a predicate using HRTB.
     ///

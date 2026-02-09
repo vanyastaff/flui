@@ -24,21 +24,22 @@
 //!
 //! # Usage
 //!
-//! ```rust,ignore
-//! use flui_tree::{Mounted, Unmounted, Mountable, Unmountable, Depth};
-//! use flui_foundation::Identifier;
+//! ```
+//! use flui_tree::{Mounted, Unmounted, Mountable, Unmountable, NodeState, Depth, ElementId};
+//! use flui_tree::Identifier;
+//! use std::marker::PhantomData;
 //!
 //! struct MyNode<S: NodeState> {
 //!     depth: Depth,
-//!     parent: Option<MyId>,
+//!     parent: Option<ElementId>,
 //!     _state: PhantomData<S>,
 //! }
 //!
 //! impl Mountable for MyNode<Unmounted> {
-//!     type Id = MyId;
+//!     type Id = ElementId;
 //!     type Mounted = MyNode<Mounted>;
 //!
-//!     fn mount(self, parent: Option<MyId>, parent_depth: Depth) -> MyNode<Mounted> {
+//!     fn mount(self, parent: Option<ElementId>, parent_depth: Depth) -> MyNode<Mounted> {
 //!         MyNode {
 //!             depth: if parent.is_some() { parent_depth.child_depth() } else { Depth::root() },
 //!             parent,
@@ -48,12 +49,27 @@
 //! }
 //!
 //! impl Unmountable for MyNode<Mounted> {
-//!     type Id = MyId;
+//!     type Id = ElementId;
 //!     type Unmounted = MyNode<Unmounted>;
 //!
-//!     fn parent(&self) -> Option<MyId> { self.parent }
+//!     fn parent(&self) -> Option<ElementId> { self.parent }
 //!     fn depth(&self) -> Depth { self.depth }
-//!     fn unmount(self) -> MyNode<Unmounted> { /* ... */ }
+//!     fn unmount(self) -> MyNode<Unmounted> {
+//!         MyNode { depth: Depth::root(), parent: None, _state: PhantomData }
+//!     }
+//! }
+//!
+//! fn main() {
+//!     let node: MyNode<Unmounted> = MyNode {
+//!         depth: Depth::root(),
+//!         parent: None,
+//!         _state: PhantomData,
+//!     };
+//!     let parent_id = ElementId::zip(1);
+//!     let mounted = node.mount(Some(parent_id), Depth::root());
+//!     assert_eq!(mounted.depth(), Depth::new(1));
+//!     assert_eq!(mounted.parent(), Some(parent_id));
+//!     let _unmounted = mounted.unmount();
 //! }
 //! ```
 
@@ -76,15 +92,21 @@ mod sealed {
 ///
 /// # Example
 ///
-/// ```rust,ignore
-/// use flui_tree::NodeState;
+/// ```
+/// use flui_tree::{NodeState, Mounted, Unmounted};
 ///
-/// fn process<S: NodeState>(node: &Node<S>) {
-///     println!("State: {}", S::name());
+/// fn check_state<S: NodeState>() -> &'static str {
 ///     if S::IS_MOUNTED {
-///         // ...
+///         "mounted"
+///     } else {
+///         "unmounted"
 ///     }
 /// }
+///
+/// assert_eq!(check_state::<Mounted>(), "mounted");
+/// assert_eq!(check_state::<Unmounted>(), "unmounted");
+/// assert_eq!(Mounted::name(), "Mounted");
+/// assert_eq!(Unmounted::name(), "Unmounted");
 /// ```
 pub trait NodeState: sealed::Sealed + Send + Sync + Copy + Default + 'static {
     /// Whether this state represents a mounted node.
@@ -103,9 +125,11 @@ pub trait NodeState: sealed::Sealed + Send + Sync + Copy + Default + 'static {
 ///
 /// # Example
 ///
-/// ```rust,ignore
-/// let node: MyNode<Unmounted> = MyNode::new();
-/// let mounted = node.mount(Some(parent_id), parent_depth);
+/// ```
+/// use flui_tree::{Unmounted, NodeState};
+///
+/// assert!(!Unmounted::IS_MOUNTED);
+/// assert_eq!(Unmounted::name(), "Unmounted");
 /// ```
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct Unmounted;
@@ -129,11 +153,11 @@ impl NodeState for Unmounted {
 ///
 /// # Example
 ///
-/// ```rust,ignore
-/// let mounted: MyNode<Mounted> = node.mount(Some(parent_id), parent_depth);
-/// let parent = mounted.parent(); // Only available when Mounted
-/// let depth = mounted.depth();
-/// let unmounted = mounted.unmount();
+/// ```
+/// use flui_tree::{Mounted, NodeState};
+///
+/// assert!(Mounted::IS_MOUNTED);
+/// assert_eq!(Mounted::name(), "Mounted");
 /// ```
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct Mounted;
@@ -162,16 +186,37 @@ impl NodeState for Mounted {
 ///
 /// # Example
 ///
-/// ```rust,ignore
-/// use flui_tree::{Mountable, Depth};
+/// ```
+/// use flui_tree::{Mountable, MountableExt, Unmountable, Depth, ElementId};
+/// use flui_tree::{Mounted, Unmounted, NodeState, Identifier};
+/// use std::marker::PhantomData;
 ///
-/// let unmounted = ViewHandle::from_config(config);
+/// struct MyNode<S: NodeState> {
+///     depth: Depth,
+///     parent: Option<ElementId>,
+///     _state: PhantomData<S>,
+/// }
+///
+/// impl Mountable for MyNode<Unmounted> {
+///     type Id = ElementId;
+///     type Mounted = MyNode<Mounted>;
+///
+///     fn mount(self, parent: Option<ElementId>, parent_depth: Depth) -> MyNode<Mounted> {
+///         MyNode {
+///             depth: if parent.is_some() { parent_depth.child_depth() } else { Depth::root() },
+///             parent,
+///             _state: PhantomData,
+///         }
+///     }
+/// }
 ///
 /// // Mount as root (parent = None)
-/// let root = unmounted.mount(None, Depth::root());
+/// let root = MyNode::<Unmounted> { depth: Depth::root(), parent: None, _state: PhantomData };
+/// let mounted_root = root.mount(None, Depth::root());
 ///
 /// // Mount as child
-/// let child = another.mount(Some(parent_id), parent.depth());
+/// let child = MyNode::<Unmounted> { depth: Depth::root(), parent: None, _state: PhantomData };
+/// let mounted_child = child.mount(Some(ElementId::zip(1)), Depth::root());
 /// ```
 pub trait Mountable: Sized {
     /// The identifier type for this tree.
@@ -205,20 +250,49 @@ pub trait Mountable: Sized {
 ///
 /// # Example
 ///
-/// ```rust,ignore
-/// use flui_tree::Unmountable;
+/// ```
+/// use flui_tree::{Mountable, Unmountable, Depth, ElementId};
+/// use flui_tree::{Mounted, Unmounted, NodeState, Identifier};
+/// use std::marker::PhantomData;
 ///
-/// let mounted: ViewHandle<Mounted> = /* ... */;
+/// struct MyNode<S: NodeState> {
+///     depth: Depth,
+///     parent: Option<ElementId>,
+///     _state: PhantomData<S>,
+/// }
+///
+/// impl Mountable for MyNode<Unmounted> {
+///     type Id = ElementId;
+///     type Mounted = MyNode<Mounted>;
+///     fn mount(self, parent: Option<ElementId>, parent_depth: Depth) -> MyNode<Mounted> {
+///         MyNode {
+///             depth: if parent.is_some() { parent_depth.child_depth() } else { Depth::root() },
+///             parent,
+///             _state: PhantomData,
+///         }
+///     }
+/// }
+///
+/// impl Unmountable for MyNode<Mounted> {
+///     type Id = ElementId;
+///     type Unmounted = MyNode<Unmounted>;
+///     fn parent(&self) -> Option<ElementId> { self.parent }
+///     fn depth(&self) -> Depth { self.depth }
+///     fn unmount(self) -> MyNode<Unmounted> {
+///         MyNode { depth: Depth::root(), parent: None, _state: PhantomData }
+///     }
+/// }
+///
+/// let node = MyNode::<Unmounted> { depth: Depth::root(), parent: None, _state: PhantomData };
+/// let mounted = node.mount(Some(ElementId::zip(1)), Depth::new(2));
 ///
 /// // Access position
-/// if let Some(parent) = mounted.parent() {
-///     println!("Parent: {:?}", parent);
-/// }
-/// println!("Depth: {}", mounted.depth());
-/// println!("Is root: {}", mounted.is_root());
+/// assert_eq!(mounted.parent(), Some(ElementId::zip(1)));
+/// assert_eq!(mounted.depth(), Depth::new(3));
+/// assert!(!mounted.is_root());
 ///
 /// // Unmount
-/// let unmounted = mounted.unmount();
+/// let _unmounted = mounted.unmount();
 /// ```
 pub trait Unmountable: Sized {
     /// The identifier type for this tree.

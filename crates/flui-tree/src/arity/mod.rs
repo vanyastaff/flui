@@ -13,7 +13,7 @@
 //! | Type | Description | Use Case |
 //! |------|-------------|----------|
 //! | [`Leaf`] | 0 children | Text, Image, Spacer |
-//! | [`Optional`] | 0 or 1 child | SizedBox, Container |
+//! | [`Optional`] | 0 or 1 child | `SizedBox`, Container |
 //! | [`Single`] | exactly 1 child | Padding, Align, Transform |
 //! | [`Exact<N>`] | exactly N children | Custom layouts |
 //! | [`AtLeast<N>`] | N or more children | Min-child layouts |
@@ -32,17 +32,17 @@
 //!
 //! # Example
 //!
-//! ```rust,ignore
+//! ```
 //! use flui_tree::arity::{Arity, Single, Variable, ArityStorage};
 //!
 //! // Single child container
 //! struct RenderPadding {
-//!     child: ArityStorage<RenderObjectId, Single>,
+//!     child: ArityStorage<u32, Single>,
 //! }
 //!
 //! // Variable children container
 //! struct RenderFlex {
-//!     children: ArityStorage<RenderObjectId, Variable>,
+//!     children: ArityStorage<u32, Variable>,
 //! }
 //! ```
 

@@ -24,7 +24,7 @@
 //!
 //! # Usage
 //!
-//! ```rust,ignore
+//! ```
 //! use flui_tree::{Depth, AtomicDepth, DepthAware};
 //!
 //! // Basic depth operations
@@ -47,6 +47,8 @@
 
 use std::fmt;
 use std::sync::atomic::{AtomicUsize, Ordering};
+
+use thiserror::Error;
 
 // ============================================================================
 // CONSTANTS
@@ -81,13 +83,14 @@ pub const ROOT_DEPTH: usize = 0;
 ///
 /// `Depth` is a zero-cost abstraction - same size as `usize`:
 ///
-/// ```rust,ignore
+/// ```
+/// use flui_tree::Depth;
 /// assert_eq!(std::mem::size_of::<Depth>(), std::mem::size_of::<usize>());
 /// ```
 ///
 /// # Examples
 ///
-/// ```rust,ignore
+/// ```
 /// use flui_tree::Depth;
 ///
 /// let root = Depth::root();
@@ -113,7 +116,8 @@ impl Depth {
     ///
     /// # Example
     ///
-    /// ```rust,ignore
+    /// ```
+    /// use flui_tree::Depth;
     /// let depth = Depth::new(3);
     /// assert_eq!(depth.get(), 3);
     /// ```
@@ -129,7 +133,8 @@ impl Depth {
     ///
     /// # Example
     ///
-    /// ```rust,ignore
+    /// ```
+    /// use flui_tree::Depth;
     /// assert!(Depth::new_checked(100).is_some());
     /// assert!(Depth::new_checked(300).is_none());
     /// ```
@@ -147,7 +152,8 @@ impl Depth {
     ///
     /// # Example
     ///
-    /// ```rust,ignore
+    /// ```
+    /// use flui_tree::Depth;
     /// let root = Depth::root();
     /// assert!(root.is_root());
     /// assert_eq!(root.get(), 0);
@@ -187,7 +193,8 @@ impl Depth {
     ///
     /// # Example
     ///
-    /// ```rust,ignore
+    /// ```
+    /// use flui_tree::Depth;
     /// let parent = Depth::new(5);
     /// let child = parent.child_depth();
     /// assert_eq!(child.get(), 6);
@@ -218,7 +225,8 @@ impl Depth {
     ///
     /// # Example
     ///
-    /// ```rust,ignore
+    /// ```
+    /// use flui_tree::Depth;
     /// let child = Depth::new(3);
     /// let parent = child.parent_depth().unwrap();
     /// assert_eq!(parent.get(), 2);
@@ -266,7 +274,8 @@ impl Depth {
     ///
     /// # Example
     ///
-    /// ```rust,ignore
+    /// ```
+    /// use flui_tree::Depth;
     /// let a = Depth::new(2);
     /// let b = Depth::new(7);
     /// assert_eq!(a.distance_to(b), 5);
@@ -373,13 +382,39 @@ impl From<Depth> for usize {
     }
 }
 
+// NOTE: `TryFrom<usize>` cannot be implemented because `From<usize>` exists
+// (blanket impl conflict). Use `Depth::new_checked()` or `Depth::try_new()`
+// for validated conversion.
+
+impl Depth {
+    /// Validated constructor returning a `Result`.
+    ///
+    /// Equivalent to [`new_checked`](Self::new_checked) but returns a typed error
+    /// instead of `Option`, making it suitable for `?`-based error propagation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DepthError::MaxDepthExceeded`] if `value > MAX_TREE_DEPTH`.
+    #[inline]
+    pub const fn try_new(value: usize) -> Result<Self, DepthError> {
+        if value <= MAX_TREE_DEPTH {
+            Ok(Self(value))
+        } else {
+            Err(DepthError::MaxDepthExceeded {
+                attempted: value,
+                max: MAX_TREE_DEPTH,
+            })
+        }
+    }
+}
+
 // ============================================================================
 // ATOMIC DEPTH
 // ============================================================================
 
 /// Thread-safe atomic depth for concurrent access.
 ///
-/// Used in Element and RenderElement where depth may be accessed
+/// Used in Element and `RenderElement` where depth may be accessed
 /// from multiple threads during tree operations.
 ///
 /// # Ordering
@@ -390,7 +425,7 @@ impl From<Depth> for usize {
 ///
 /// # Example
 ///
-/// ```rust,ignore
+/// ```
 /// use flui_tree::{AtomicDepth, Depth};
 ///
 /// let depth = AtomicDepth::root();
@@ -463,10 +498,60 @@ impl AtomicDepth {
     /// Atomically increments depth (for child).
     ///
     /// Returns the new depth value.
+    ///
+    /// # Note
+    ///
+    /// This method does not check against [`MAX_TREE_DEPTH`]. Use
+    /// [`try_increment`](Self::try_increment) or
+    /// [`saturating_increment`](Self::saturating_increment) for bounded variants.
     #[inline]
     pub fn increment(&self) -> Depth {
         let new_val = self.0.fetch_add(1, Ordering::AcqRel) + 1;
         Depth::new(new_val)
+    }
+
+    /// Atomically increments depth, returning `None` if at [`MAX_TREE_DEPTH`].
+    ///
+    /// Uses compare-and-swap to ensure the increment is safe.
+    #[inline]
+    pub fn try_increment(&self) -> Option<Depth> {
+        loop {
+            let current = self.0.load(Ordering::Acquire);
+            if current >= MAX_TREE_DEPTH {
+                return None;
+            }
+
+            if self
+                .0
+                .compare_exchange_weak(current, current + 1, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                return Some(Depth::new(current + 1));
+            }
+        }
+    }
+
+    /// Atomically increments depth, clamping at [`MAX_TREE_DEPTH`].
+    ///
+    /// Returns the new depth value (which will be at most `MAX_TREE_DEPTH`).
+    #[inline]
+    pub fn saturating_increment(&self) -> Depth {
+        loop {
+            let current = self.0.load(Ordering::Acquire);
+            let new_val = if current >= MAX_TREE_DEPTH {
+                MAX_TREE_DEPTH
+            } else {
+                current + 1
+            };
+
+            if self
+                .0
+                .compare_exchange_weak(current, new_val, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                return Depth::new(new_val);
+            }
+        }
     }
 
     /// Atomically decrements depth (for parent).
@@ -494,6 +579,10 @@ impl AtomicDepth {
     /// Compare and swap depth value.
     ///
     /// Returns `Ok(current)` if swap succeeded, `Err(actual)` if not.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(actual_depth)` if the current value doesn't match `current`.
     #[inline]
     pub fn compare_exchange(&self, current: Depth, new: Depth) -> Result<Depth, Depth> {
         self.0
@@ -543,9 +632,11 @@ impl From<usize> for AtomicDepth {
 // ============================================================================
 
 /// Errors that can occur during depth operations.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Error)]
+#[non_exhaustive]
 pub enum DepthError {
     /// Attempted to exceed maximum tree depth.
+    #[error("max depth exceeded: {attempted} > {max}")]
     MaxDepthExceeded {
         /// The depth that was attempted.
         attempted: usize,
@@ -553,8 +644,10 @@ pub enum DepthError {
         max: usize,
     },
     /// Attempted to get parent of root.
+    #[error("cannot get parent depth of root node")]
     NoParentForRoot,
     /// Depth mismatch during validation.
+    #[error("depth mismatch: expected {expected}, got {actual}")]
     DepthMismatch {
         /// The expected depth.
         expected: usize,
@@ -562,24 +655,6 @@ pub enum DepthError {
         actual: usize,
     },
 }
-
-impl fmt::Display for DepthError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::MaxDepthExceeded { attempted, max } => {
-                write!(f, "max depth exceeded: {attempted} > {max}")
-            }
-            Self::NoParentForRoot => {
-                write!(f, "cannot get parent depth of root node")
-            }
-            Self::DepthMismatch { expected, actual } => {
-                write!(f, "depth mismatch: expected {expected}, got {actual}")
-            }
-        }
-    }
-}
-
-impl std::error::Error for DepthError {}
 
 // ============================================================================
 // DEPTH AWARE TRAIT
@@ -591,7 +666,7 @@ impl std::error::Error for DepthError {}
 ///
 /// # Example
 ///
-/// ```rust,ignore
+/// ```
 /// use flui_tree::{Depth, DepthAware};
 ///
 /// struct MyElement {
@@ -628,6 +703,10 @@ pub trait DepthAware {
     }
 
     /// Validates depth against expected value.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DepthError::DepthMismatch`] if `self.depth() != expected`.
     #[inline]
     fn validate_depth(&self, expected: Depth) -> Result<(), DepthError> {
         let actual = self.depth();
@@ -758,6 +837,17 @@ mod tests {
         assert_eq!(value, 5);
     }
 
+    #[test]
+    fn test_depth_try_new() {
+        assert_eq!(Depth::try_new(100).unwrap().get(), 100);
+        assert!(Depth::try_new(MAX_TREE_DEPTH).is_ok());
+        assert!(Depth::try_new(MAX_TREE_DEPTH + 1).is_err());
+        assert!(matches!(
+            Depth::try_new(MAX_TREE_DEPTH + 1).unwrap_err(),
+            DepthError::MaxDepthExceeded { .. }
+        ));
+    }
+
     // === ATOMIC DEPTH TESTS ===
 
     #[test]
@@ -786,6 +876,31 @@ mod tests {
         let new = depth.increment();
         assert_eq!(new, Depth::new(6));
         assert_eq!(depth.get(), Depth::new(6));
+    }
+
+    #[test]
+    fn test_atomic_depth_try_increment() {
+        let depth = AtomicDepth::new(5);
+        let new = depth.try_increment().unwrap();
+        assert_eq!(new, Depth::new(6));
+
+        // At max depth, should return None
+        let at_max = AtomicDepth::new(MAX_TREE_DEPTH);
+        assert!(at_max.try_increment().is_none());
+        assert_eq!(at_max.get(), Depth::new(MAX_TREE_DEPTH));
+    }
+
+    #[test]
+    fn test_atomic_depth_saturating_increment() {
+        let depth = AtomicDepth::new(5);
+        let new = depth.saturating_increment();
+        assert_eq!(new, Depth::new(6));
+
+        // At max depth, should clamp
+        let at_max = AtomicDepth::new(MAX_TREE_DEPTH);
+        let clamped = at_max.saturating_increment();
+        assert_eq!(clamped, Depth::new(MAX_TREE_DEPTH));
+        assert_eq!(at_max.get(), Depth::new(MAX_TREE_DEPTH));
     }
 
     #[test]
@@ -884,5 +999,142 @@ mod tests {
 
         assert!(node.validate_depth(Depth::new(3)).is_ok());
         assert!(node.validate_depth(Depth::new(5)).is_err());
+    }
+
+    // === EDGE-CASE TESTS ===
+
+    #[test]
+    fn test_atomic_depth_concurrent_increments() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let atomic = Arc::new(AtomicDepth::new(0));
+        let mut handles = Vec::new();
+
+        for _ in 0..8 {
+            let atomic = Arc::clone(&atomic);
+            handles.push(thread::spawn(move || {
+                for _ in 0..100 {
+                    atomic.increment();
+                }
+            }));
+        }
+
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        assert_eq!(atomic.get(), Depth::new(800));
+    }
+
+    #[test]
+    fn test_atomic_depth_try_increment_repeated_at_max() {
+        let atomic = AtomicDepth::new(MAX_TREE_DEPTH - 1);
+
+        // First try_increment should succeed, reaching MAX_TREE_DEPTH.
+        let result = atomic.try_increment();
+        assert_eq!(result, Some(Depth::new(MAX_TREE_DEPTH)));
+
+        // Second try_increment should fail since we are at MAX_TREE_DEPTH.
+        let result = atomic.try_increment();
+        assert!(result.is_none());
+
+        // Five more attempts should all fail.
+        for _ in 0..5 {
+            assert!(atomic.try_increment().is_none());
+        }
+
+        // Value must still be MAX_TREE_DEPTH.
+        assert_eq!(atomic.get(), Depth::new(MAX_TREE_DEPTH));
+    }
+
+    #[test]
+    fn test_atomic_depth_concurrent_try_increment_at_boundary() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let atomic = Arc::new(AtomicDepth::new(MAX_TREE_DEPTH - 1));
+        let mut handles = Vec::new();
+
+        for _ in 0..10 {
+            let atomic = Arc::clone(&atomic);
+            handles.push(thread::spawn(move || atomic.try_increment()));
+        }
+
+        let results: Vec<Option<Depth>> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+
+        let success_count = results.iter().filter(|r| r.is_some()).count();
+        let none_count = results.iter().filter(|r| r.is_none()).count();
+
+        // Exactly one thread should succeed.
+        assert_eq!(success_count, 1);
+        assert_eq!(none_count, 9);
+
+        // Final value must be MAX_TREE_DEPTH.
+        assert_eq!(atomic.get(), Depth::new(MAX_TREE_DEPTH));
+    }
+
+    #[test]
+    fn test_depth_distance_at_max_values() {
+        let root = Depth::new(0);
+        let max = Depth::new(MAX_TREE_DEPTH);
+
+        assert_eq!(root.distance_to(max), MAX_TREE_DEPTH);
+        assert_eq!(max.distance_to(root), MAX_TREE_DEPTH);
+
+        // Distance from a depth to itself is always 0.
+        assert_eq!(root.distance_to(root), 0);
+        assert_eq!(max.distance_to(max), 0);
+    }
+
+    #[test]
+    fn test_depth_saturating_operations_at_boundaries() {
+        let max = Depth::new(MAX_TREE_DEPTH);
+        let zero = Depth::new(0);
+
+        // saturating_child_depth at MAX stays at MAX.
+        assert_eq!(max.saturating_child_depth(), Depth::new(MAX_TREE_DEPTH));
+
+        // saturating_parent_depth at 0 stays at 0.
+        assert_eq!(zero.saturating_parent_depth(), Depth::new(0));
+
+        // saturating_add(usize::MAX) at 0 clamps to MAX_TREE_DEPTH.
+        assert_eq!(zero.saturating_add(usize::MAX), Depth::new(MAX_TREE_DEPTH));
+
+        // saturating_sub(usize::MAX) at MAX clamps to 0.
+        assert_eq!(max.saturating_sub(usize::MAX), Depth::new(0));
+    }
+
+    #[test]
+    fn test_depth_checked_add_overflow() {
+        let max = Depth::new(MAX_TREE_DEPTH);
+        let near_max = Depth::new(MAX_TREE_DEPTH - 5);
+
+        // checked_add at MAX with 1 returns None.
+        assert!(max.checked_add(1).is_none());
+
+        // checked_add at MAX-5 with 5 returns Some(MAX).
+        assert_eq!(near_max.checked_add(5), Some(Depth::new(MAX_TREE_DEPTH)));
+
+        // checked_add at MAX-5 with 6 returns None (would exceed MAX).
+        assert!(near_max.checked_add(6).is_none());
+    }
+
+    #[test]
+    fn test_depth_aware_validate_at_boundaries() {
+        let mut node = TestNode {
+            depth: Depth::new(MAX_TREE_DEPTH),
+        };
+
+        // Validating against the actual depth should succeed.
+        assert!(node.validate_depth(Depth::new(MAX_TREE_DEPTH)).is_ok());
+
+        // Validating against a different depth should fail.
+        assert!(node.validate_depth(Depth::new(0)).is_err());
+
+        // Also verify at root boundary.
+        node.set_depth(Depth::new(0));
+        assert!(node.validate_depth(Depth::new(0)).is_ok());
+        assert!(node.validate_depth(Depth::new(MAX_TREE_DEPTH)).is_err());
     }
 }

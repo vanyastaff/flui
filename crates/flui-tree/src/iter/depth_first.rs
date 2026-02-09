@@ -38,12 +38,48 @@ pub enum DepthFirstOrder {
 ///
 /// # Example
 ///
-/// ```rust,ignore
-/// use flui_tree::{DepthFirstIter, DepthFirstOrder};
-///
+/// ```
+/// # use flui_tree::{Ancestors, DepthFirstIter, DepthFirstOrder, TreeNav, TreeRead};
+/// # use flui_foundation::ElementId;
+/// # struct N { parent: Option<ElementId>, children: Vec<ElementId> }
+/// # struct T(Vec<Option<N>>);
+/// # impl T { fn ins(&mut self, p: Option<ElementId>) -> ElementId {
+/// #     let id = ElementId::new(self.0.len()+1);
+/// #     self.0.push(Some(N { parent: p, children: vec![] }));
+/// #     if let Some(pid) = p { self.0[pid.get()-1].as_mut().unwrap().children.push(id); }
+/// #     id
+/// # }}
+/// # impl TreeRead<ElementId> for T {
+/// #     type Node = N;
+/// #     fn get(&self, id: ElementId) -> Option<&N> { self.0.get(id.get()-1)?.as_ref() }
+/// #     fn len(&self) -> usize { self.0.iter().flatten().count() }
+/// #     fn node_ids(&self) -> impl Iterator<Item = ElementId> + '_ {
+/// #         (0..self.0.len()).filter_map(|i| if self.0[i].is_some() { Some(ElementId::new(i+1)) } else { None })
+/// #     }
+/// # }
+/// # impl TreeNav<ElementId> for T {
+/// #     fn parent(&self, id: ElementId) -> Option<ElementId> { self.get(id)?.parent }
+/// #     fn children(&self, id: ElementId) -> impl Iterator<Item = ElementId> + '_ {
+/// #         self.get(id).into_iter().flat_map(|n| n.children.iter().copied())
+/// #     }
+/// #     fn ancestors(&self, s: ElementId) -> impl Iterator<Item = ElementId> + '_ { Ancestors::new(self, s) }
+/// #     fn descendants(&self, r: ElementId) -> impl Iterator<Item = (ElementId, usize)> + '_ {
+/// #         flui_tree::DescendantsWithDepth::new(self, r)
+/// #     }
+/// #     fn siblings(&self, id: ElementId) -> impl Iterator<Item = ElementId> + '_ {
+/// #         self.parent(id).into_iter().flat_map(move |p| self.children(p).filter(move |&c| c != id))
+/// #     }
+/// # }
+/// # let mut tree = T(vec![]);
+/// # let root = tree.ins(None);
+/// # let b = tree.ins(Some(root));
+/// # let c = tree.ins(Some(root));
+/// # let d = tree.ins(Some(b));
+/// # let e = tree.ins(Some(b));
 /// // Post-order traversal (children before parents)
 /// let post_order: Vec<_> = DepthFirstIter::new(&tree, root, DepthFirstOrder::PostOrder)
 ///     .collect();
+/// assert_eq!(post_order, vec![d, e, b, c, root]);
 /// ```
 #[derive(Debug)]
 pub struct DepthFirstIter<'a, I: Identifier, T: TreeNav<I>> {

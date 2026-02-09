@@ -13,11 +13,12 @@ use super::types::{Exact, Leaf, Optional, Variable};
 ///
 /// # Example
 ///
-/// ```rust,ignore
-/// struct RenderPadding {
-///     children: SingleChildStorage<RenderObjectId>,
-///     padding: EdgeInsets,
-/// }
+/// ```
+/// use flui_tree::arity::{SingleChildStorage, ChildrenStorage};
+///
+/// let mut storage: SingleChildStorage<u32> = SingleChildStorage::new();
+/// storage.set_single_child(42).unwrap();
+/// assert_eq!(storage.single_child(), Some(&42));
 /// ```
 pub type SingleChildStorage<T> = ArityStorage<T, Exact<1>>;
 
@@ -28,11 +29,13 @@ pub type SingleChildStorage<T> = ArityStorage<T, Exact<1>>;
 ///
 /// # Example
 ///
-/// ```rust,ignore
-/// struct RenderSizedBox {
-///     children: OptionalChildStorage<RenderObjectId>,
-///     size: Size,
-/// }
+/// ```
+/// use flui_tree::arity::{OptionalChildStorage, ChildrenStorage};
+///
+/// let mut storage: OptionalChildStorage<u32> = OptionalChildStorage::new();
+/// assert!(storage.is_empty());
+/// storage.add_child(10).unwrap();
+/// assert_eq!(storage.single_child(), Some(&10));
 /// ```
 pub type OptionalChildStorage<T> = ArityStorage<T, Optional>;
 
@@ -43,11 +46,14 @@ pub type OptionalChildStorage<T> = ArityStorage<T, Optional>;
 ///
 /// # Example
 ///
-/// ```rust,ignore
-/// struct RenderFlex {
-///     children: VariableChildrenStorage<RenderObjectId>,
-///     direction: Axis,
-/// }
+/// ```
+/// use flui_tree::arity::{VariableChildrenStorage, ChildrenStorage};
+///
+/// let mut storage: VariableChildrenStorage<u32> = VariableChildrenStorage::new();
+/// storage.add_child(1).unwrap();
+/// storage.add_child(2).unwrap();
+/// storage.add_child(3).unwrap();
+/// assert_eq!(storage.child_count(), 3);
 /// ```
 pub type VariableChildrenStorage<T> = ArityStorage<T, Variable>;
 
@@ -58,10 +64,11 @@ pub type VariableChildrenStorage<T> = ArityStorage<T, Variable>;
 ///
 /// # Example
 ///
-/// ```rust,ignore
-/// struct RenderText {
-///     children: LeafStorage<RenderObjectId>,
-///     text: String,
-/// }
+/// ```
+/// use flui_tree::arity::{LeafStorage, ChildrenStorage};
+///
+/// let storage: LeafStorage<u32> = LeafStorage::new();
+/// assert!(storage.is_empty());
+/// assert!(storage.child_count() == 0);
 /// ```
 pub type LeafStorage<T> = ArityStorage<T, Leaf>;

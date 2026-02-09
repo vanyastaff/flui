@@ -33,23 +33,62 @@
 //! flui-tree provides ONLY generic tree iterators. Domain-specific
 //! iterators live in their respective crates:
 //!
-//! - **flui_rendering**: RenderChildren, RenderAncestors, RenderDescendants
+//! - **`flui_rendering`**: `RenderChildren`, `RenderAncestors`, `RenderDescendants`
 //! - **flui-element**: Element-specific iterators
 //!
 //! # Example
 //!
-//! ```rust,ignore
-//! use flui_tree::{TreeNav, Ancestors, Descendants};
+//! ```
+//! # use flui_tree::{Ancestors, TreeNav, TreeRead};
+//! # use flui_foundation::ElementId;
+//! # struct N { parent: Option<ElementId>, children: Vec<ElementId> }
+//! # struct T(Vec<Option<N>>);
+//! # impl T { fn ins(&mut self, p: Option<ElementId>) -> ElementId {
+//! #     let id = ElementId::new(self.0.len()+1);
+//! #     self.0.push(Some(N { parent: p, children: vec![] }));
+//! #     if let Some(pid) = p { self.0[pid.get()-1].as_mut().unwrap().children.push(id); }
+//! #     id
+//! # }}
+//! # impl TreeRead<ElementId> for T {
+//! #     type Node = N;
+//! #     fn get(&self, id: ElementId) -> Option<&N> { self.0.get(id.get()-1)?.as_ref() }
+//! #     fn len(&self) -> usize { self.0.iter().flatten().count() }
+//! #     fn node_ids(&self) -> impl Iterator<Item = ElementId> + '_ {
+//! #         (0..self.0.len()).filter_map(|i| if self.0[i].is_some() { Some(ElementId::new(i+1)) } else { None })
+//! #     }
+//! # }
+//! # impl TreeNav<ElementId> for T {
+//! #     fn parent(&self, id: ElementId) -> Option<ElementId> { self.get(id)?.parent }
+//! #     fn children(&self, id: ElementId) -> impl Iterator<Item = ElementId> + '_ {
+//! #         self.get(id).into_iter().flat_map(|n| n.children.iter().copied())
+//! #     }
+//! #     fn ancestors(&self, s: ElementId) -> impl Iterator<Item = ElementId> + '_ { Ancestors::new(self, s) }
+//! #     fn descendants(&self, r: ElementId) -> impl Iterator<Item = (ElementId, usize)> + '_ {
+//! #         flui_tree::DescendantsWithDepth::new(self, r)
+//! #     }
+//! #     fn siblings(&self, id: ElementId) -> impl Iterator<Item = ElementId> + '_ {
+//! #         self.parent(id).into_iter().flat_map(move |p| self.children(p).filter(move |&c| c != id))
+//! #     }
+//! # }
+//! # let mut tree = T(vec![]);
+//! # let root = tree.ins(None);
+//! # let child1 = tree.ins(Some(root));
+//! # let child2 = tree.ins(Some(root));
+//! # let gc1 = tree.ins(Some(child1));
+//! # let gc2 = tree.ins(Some(child2));
+//! # let node_id = gc1;
+//! use flui_tree::Descendants;
 //!
 //! // Find all ancestors
 //! let path_to_root: Vec<_> = tree.ancestors(node_id).collect();
 //!
 //! // Find all descendants at depth 2
 //! let level_2: Vec<_> = tree
-//!     .descendants_with_depth(root)
+//!     .descendants(root)
 //!     .filter(|(_, depth)| *depth == 2)
 //!     .map(|(id, _)| id)
 //!     .collect();
+//! assert_eq!(level_2, vec![gc1, gc2]);
 //! ```
 
 mod ancestors;

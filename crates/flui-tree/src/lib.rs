@@ -29,45 +29,56 @@
 //!
 //! ## Example
 //!
-//! ```rust,ignore
-//! use flui_tree::{Mounted, Unmounted, NodeState, Depth};
+//! ```
+//! use flui_tree::{Mounted, Unmounted, Mountable, Unmountable, NodeState, Depth, ElementId, Identifier};
 //! use std::marker::PhantomData;
 //!
 //! struct MyNode<S: NodeState> {
 //!     depth: Depth,
-//!     parent: Option<NodeId>,
+//!     parent: Option<ElementId>,
 //!     _state: PhantomData<S>,
 //! }
 //!
 //! impl MyNode<Unmounted> {
-//!     fn new() -> Self { /* ... */ }
-//!     fn mount(self, parent: Option<NodeId>, depth: Depth) -> MyNode<Mounted> { /* ... */ }
+//!     fn new() -> Self {
+//!         MyNode { depth: Depth::root(), parent: None, _state: PhantomData }
+//!     }
 //! }
 //!
-//! impl MyNode<Mounted> {
-//!     fn parent(&self) -> Option<NodeId> { self.parent }
+//! impl Mountable for MyNode<Unmounted> {
+//!     type Id = ElementId;
+//!     type Mounted = MyNode<Mounted>;
+//!
+//!     fn mount(self, parent: Option<ElementId>, parent_depth: Depth) -> MyNode<Mounted> {
+//!         MyNode {
+//!             depth: if parent.is_some() { parent_depth.child_depth() } else { Depth::root() },
+//!             parent,
+//!             _state: PhantomData,
+//!         }
+//!     }
+//! }
+//!
+//! impl Unmountable for MyNode<Mounted> {
+//!     type Id = ElementId;
+//!     type Unmounted = MyNode<Unmounted>;
+//!
+//!     fn parent(&self) -> Option<ElementId> { self.parent }
 //!     fn depth(&self) -> Depth { self.depth }
-//!     fn unmount(self) -> MyNode<Unmounted> { /* ... */ }
+//!     fn unmount(self) -> MyNode<Unmounted> {
+//!         MyNode { depth: Depth::root(), parent: None, _state: PhantomData }
+//!     }
+//! }
+//!
+//! fn main() {
+//!     let node = MyNode::<Unmounted>::new();
+//!     let mounted = node.mount(Some(ElementId::new(1)), Depth::root());
+//!     assert_eq!(mounted.depth(), Depth::new(1));
+//!     let _unmounted = mounted.unmount();
 //! }
 //! ```
 
 #![warn(rust_2018_idioms, clippy::all, clippy::pedantic)]
-#![allow(
-    dead_code,
-    unused_variables,
-    missing_docs,
-    missing_debug_implementations,
-    unreachable_pub,
-    clippy::module_name_repetitions,
-    clippy::must_use_candidate,
-    clippy::return_self_not_must_use,
-    clippy::doc_markdown,
-    clippy::missing_errors_doc,
-    clippy::missing_panics_doc,
-    clippy::too_many_lines,
-    clippy::if_not_else,
-    clippy::match_same_arms
-)]
+#![allow(clippy::module_name_repetitions, clippy::too_many_lines)]
 
 // ============================================================================
 // MODULES
@@ -86,7 +97,7 @@ pub mod visitor;
 // RE-EXPORTS - Core Traits
 // ============================================================================
 
-pub use traits::{TreeNav, TreeRead, TreeWrite, TreeWriteNav};
+pub use traits::{TreeNav, TreeNavExt, TreeRead, TreeReadExt, TreeWrite, TreeWriteNav};
 
 // ============================================================================
 // RE-EXPORTS - Node State & Lifecycle (Typestate)
@@ -107,7 +118,10 @@ pub use arity::{
 // RE-EXPORTS - Node System
 // ============================================================================
 
-pub use traits::{Node, NodeExt, NodeTypeInfo};
+pub use traits::{
+    collect_matching_nodes, count_matching_nodes, Node, NodeExt, NodePredicate, NodeTypeInfo,
+    NodeVisitor,
+};
 
 // ============================================================================
 // RE-EXPORTS - Depth System
@@ -251,9 +265,12 @@ pub mod prelude {
         TreeDiff,
         TreeError,
         TreeNav,
+        // Extension traits
+        TreeNavExt,
         TreeNavPathExt,
         TreePath,
         TreeRead,
+        TreeReadExt,
         TreeResult,
         TreeVisitor,
         TreeVisitorMut,
@@ -277,6 +294,7 @@ pub mod prelude {
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Returns a summary of what this crate provides.
+#[must_use]
 pub fn crate_summary() -> &'static str {
     "Tree abstractions with typestate: NodeState (Mounted/Unmounted), TreeRead, TreeNav, TreeWrite"
 }

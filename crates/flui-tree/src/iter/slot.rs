@@ -14,7 +14,7 @@
 //!
 //! # Usage
 //!
-//! ```rust,ignore
+//! ```
 //! use flui_tree::{Slot, Depth};
 //! use flui_foundation::ElementId;
 //!
@@ -311,7 +311,7 @@ impl<I: Identifier> fmt::Display for Slot<I> {
 ///
 /// # Example
 ///
-/// ```rust,ignore
+/// ```
 /// use flui_tree::{Slot, Depth};
 /// use flui_foundation::ElementId;
 ///
@@ -323,6 +323,11 @@ impl<I: Identifier> fmt::Display for Slot<I> {
 ///     .with_previous_sibling(ElementId::new(5))
 ///     .with_next_sibling(ElementId::new(7))
 ///     .build();
+///
+/// assert_eq!(slot.parent(), ElementId::new(1));
+/// assert_eq!(slot.index(), 2);
+/// assert_eq!(slot.previous_sibling(), Some(ElementId::new(5)));
+/// assert_eq!(slot.next_sibling(), Some(ElementId::new(7)));
 /// ```
 #[derive(Debug, Clone)]
 pub struct SlotBuilder<I: Identifier> {
@@ -401,18 +406,18 @@ impl<I: Identifier> SlotBuilder<I> {
 ///
 /// # Example
 ///
-/// ```rust,ignore
+/// ```
 /// use flui_tree::IndexedSlot;
 /// use flui_foundation::ElementId;
 ///
 /// // Start with first slot
-/// let mut slot = IndexedSlot::<ElementId>::first();
+/// let slot = IndexedSlot::<ElementId>::first();
 /// assert_eq!(slot.index(), 0);
 /// assert!(slot.previous().is_none());
 ///
-/// // Mount first child, get slot for second
-/// let child1_id = mount_child(child1);
-/// slot = slot.next(child1_id);
+/// // After mounting a child, advance to the next slot
+/// let child1_id = ElementId::new(1);
+/// let slot = slot.next(child1_id);
 /// assert_eq!(slot.index(), 1);
 /// assert_eq!(slot.previous(), Some(child1_id));
 /// ```
@@ -537,17 +542,23 @@ impl<I: Identifier> From<usize> for IndexedSlot<I> {
 ///
 /// # Example
 ///
-/// ```rust,ignore
+/// ```
 /// use flui_tree::SlotIter;
 /// use flui_foundation::ElementId;
 ///
 /// let mut slots = SlotIter::<ElementId>::new();
+/// assert_eq!(slots.index(), 0);
 ///
-/// for child in children {
+/// // Simulate mounting children in order
+/// let child_ids = [ElementId::new(1), ElementId::new(2), ElementId::new(3)];
+/// for &child_id in &child_ids {
 ///     let slot = slots.current();
-///     let child_id = mount_child(child, slot);
+///     // Use slot.index() and slot.previous() during mount...
 ///     slots.advance(child_id);
 /// }
+///
+/// assert_eq!(slots.index(), 3);
+/// assert_eq!(slots.current().previous(), Some(ElementId::new(3)));
 /// ```
 #[derive(Debug, Clone)]
 pub struct SlotIter<I: Identifier> {
@@ -821,5 +832,82 @@ mod tests {
     fn test_slot_iter_starting_at() {
         let iter = SlotIter::<ElementId>::starting_at(5);
         assert_eq!(iter.index(), 5);
+    }
+
+    // === EDGE-CASE TESTS ===
+
+    #[test]
+    fn test_slot_iter_fused() {
+        // Advance a SlotIter through 3 children, collect indexed slots,
+        // then verify that after reset the iterator restarts cleanly.
+        // This tests that the iterator state is always well-defined
+        // (analogous to FusedIterator guarantees).
+        let mut iter = SlotIter::<ElementId>::new();
+
+        let child_ids = [ElementId::new(1), ElementId::new(2), ElementId::new(3)];
+        let mut collected = Vec::new();
+
+        for &child_id in &child_ids {
+            collected.push(iter.current());
+            iter.advance(child_id);
+        }
+
+        assert_eq!(collected.len(), 3);
+        assert_eq!(collected[0].index(), 0);
+        assert!(collected[0].previous().is_none());
+        assert_eq!(collected[1].index(), 1);
+        assert_eq!(collected[1].previous(), Some(ElementId::new(1)));
+        assert_eq!(collected[2].index(), 2);
+        assert_eq!(collected[2].previous(), Some(ElementId::new(2)));
+
+        // After exhausting, the iterator should remain in a consistent state
+        // Calling current() repeatedly should return the same slot
+        let post_slot = iter.current();
+        assert_eq!(post_slot.index(), 3);
+        assert_eq!(post_slot.previous(), Some(ElementId::new(3)));
+
+        for _ in 0..5 {
+            let repeated = iter.current();
+            assert_eq!(repeated.index(), post_slot.index());
+            assert_eq!(repeated.previous(), post_slot.previous());
+        }
+    }
+
+    #[test]
+    fn test_indexed_slot_boundary() {
+        // Only child scenario: index 0, count 1
+        // prev() should be None, next slot moves past the single child.
+        // is_first() should be true. With no next sibling, this is
+        // effectively the last child too.
+        let slot = IndexedSlot::<ElementId>::new(0, None);
+
+        // prev() should be None (already at index 0)
+        assert!(slot.prev().is_none());
+
+        // is_first() should be true
+        assert!(slot.is_first());
+
+        // After advancing to next, we're past the only child
+        let next = slot.next(ElementId::new(42));
+        assert_eq!(next.index(), 1);
+        assert_eq!(next.previous(), Some(ElementId::new(42)));
+        assert!(!next.is_first());
+    }
+
+    #[test]
+    fn test_slot_builder_empty() {
+        // Build a slot at index 0 with no siblings configured.
+        // The resulting slot should have no sibling references.
+        let parent_id = ElementId::new(1);
+        let slot = Slot::builder(parent_id, 0, Depth::new(0)).build();
+
+        assert_eq!(slot.parent(), parent_id);
+        assert_eq!(slot.index(), 0);
+        assert!(slot.previous_sibling().is_none());
+        assert!(slot.next_sibling().is_none());
+        assert!(slot.is_first_child());
+        assert!(slot.is_last_child());
+        assert!(slot.is_only_child());
+        assert!(!slot.has_siblings());
     }
 }

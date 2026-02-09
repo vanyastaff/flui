@@ -26,11 +26,12 @@ use super::traits::Arity;
 ///
 /// # Example
 ///
-/// ```rust,ignore
-/// fn layout_leaf<T>(children: &[T]) {
-///     let accessor = Leaf::from_slice(children);
-///     assert!(accessor.is_empty());
-/// }
+/// ```
+/// use flui_tree::arity::{Arity, Leaf, ChildrenAccess};
+///
+/// let children: &[u32] = &[];
+/// let accessor = Leaf::from_slice(children);
+/// assert!(accessor.is_empty());
 /// ```
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Leaf;
@@ -79,6 +80,10 @@ impl Arity for Leaf {
 
 impl Leaf {
     /// Leaf-specific never operation - first child is impossible.
+    ///
+    /// # Panics
+    ///
+    /// Always panics. Leaf nodes cannot have children.
     pub fn first_impossible<T>(_children: &[T]) -> ! {
         panic!("Leaf nodes cannot have children - this operation is impossible")
     }
@@ -91,16 +96,17 @@ impl Leaf {
 /// Optional arity marker — 0 or 1 child.
 ///
 /// For nodes that can work with or without a child
-/// (e.g., SizedBox, Container, ColoredBox).
+/// (e.g., `SizedBox`, Container, `ColoredBox`).
 ///
 /// # Example
 ///
-/// ```rust,ignore
-/// fn layout_optional<T>(children: &[T]) {
-///     let accessor = Optional::from_slice(children);
-///     if let Some(child) = accessor.get() {
-///         // Process child
-///     }
+/// ```
+/// use flui_tree::arity::{Arity, Optional, OptionalChild};
+///
+/// let children: &[u32] = &[42];
+/// let accessor = Optional::from_slice(children);
+/// if let Some(child) = accessor.get() {
+///     assert_eq!(*child, 42);
 /// }
 /// ```
 #[derive(Debug, Clone, Copy, Default)]
@@ -154,11 +160,14 @@ impl Arity for Optional {
 ///
 /// # Example
 ///
-/// ```rust,ignore
-/// fn layout_pair<T>(children: &[T]) {
-///     let accessor = Exact::<2>::from_slice(children);
-///     let (first, second) = accessor.pair();
-/// }
+/// ```
+/// use flui_tree::arity::{Arity, Exact};
+///
+/// let children: &[u32] = &[1, 2];
+/// let accessor = Exact::<2>::from_slice(children);
+/// let (first, second) = accessor.pair();
+/// assert_eq!(*first, 1);
+/// assert_eq!(*second, 2);
 /// ```
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Exact<const N: usize>;
@@ -214,17 +223,18 @@ pub type Single = Exact<1>;
 // AT_LEAST<N> (N or more children)
 // ============================================================================
 
-/// AtLeast arity marker — N or more children.
+/// `AtLeast` arity marker — N or more children.
 ///
 /// For nodes that require a minimum number of children.
 ///
 /// # Example
 ///
-/// ```rust,ignore
-/// fn layout_at_least_two<T>(children: &[T]) {
-///     let accessor = AtLeast::<2>::from_slice(children);
-///     assert!(accessor.len() >= 2);
-/// }
+/// ```
+/// use flui_tree::arity::{Arity, AtLeast, ChildrenAccess};
+///
+/// let children: &[u32] = &[1, 2, 3];
+/// let accessor = AtLeast::<2>::from_slice(children);
+/// assert!(accessor.len() >= 2);
 /// ```
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AtLeast<const N: usize>;
@@ -278,13 +288,13 @@ impl<const N: usize> Arity for AtLeast<N> {
 ///
 /// # Example
 ///
-/// ```rust,ignore
-/// fn layout_variable<T>(children: &[T]) {
-///     let accessor = Variable::from_slice(children);
-///     for child in accessor.iter() {
-///         // Process each child
-///     }
-/// }
+/// ```
+/// use flui_tree::arity::{Arity, Variable, ChildrenAccess};
+///
+/// let children: &[u32] = &[1, 2, 3];
+/// let accessor = Variable::from_slice(children);
+/// let sum: u32 = accessor.iter().sum();
+/// assert_eq!(sum, 6);
 /// ```
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Variable;
@@ -330,11 +340,12 @@ impl Arity for Variable {
 ///
 /// # Example
 ///
-/// ```rust,ignore
-/// fn layout_range<T>(children: &[T]) {
-///     let accessor = Range::<2, 5>::from_slice(children);
-///     assert!(accessor.len() >= 2 && accessor.len() <= 5);
-/// }
+/// ```
+/// use flui_tree::arity::{Arity, Range, ChildrenAccess};
+///
+/// let children: &[u32] = &[1, 2, 3];
+/// let accessor = Range::<2, 5>::from_slice(children);
+/// assert!(accessor.len() >= 2 && accessor.len() <= 5);
 /// ```
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Range<const MIN: usize, const MAX: usize>;

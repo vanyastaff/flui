@@ -17,22 +17,26 @@
 //!
 //! # Usage
 //!
-//! ```rust,ignore
-//! use flui_tree::{TreeDiff, DiffOp, TreeNav};
+//! ```
+//! use flui_tree::{TreeDiff, DiffOp, ChildDiff, ChildOp};
+//! use flui_tree::ElementId;
 //!
-//! // Compare two tree states
-//! let diff = TreeDiff::compute(&old_tree, &new_tree, root_id);
+//! // Use ChildDiff for comparing children lists of a parent node
+//! let old_children = vec![ElementId::new(1), ElementId::new(2), ElementId::new(3)];
+//! let new_children = vec![ElementId::new(1), ElementId::new(3), ElementId::new(4)];
 //!
-//! // Apply operations
+//! let diff = ChildDiff::compute(ElementId::new(10), old_children, new_children);
+//!
 //! for op in diff.ops() {
 //!     match op {
-//!         DiffOp::Insert { id, parent, index } => { /* mount new */ }
-//!         DiffOp::Remove { id } => { /* unmount */ }
-//!         DiffOp::Move { id, new_parent, new_index } => { /* reposition */ }
-//!         DiffOp::Update { id } => { /* rebuild */ }
-//!         DiffOp::Keep { id } => { /* no-op */ }
+//!         ChildOp::Keep { id, index } => { /* unchanged */ }
+//!         ChildOp::Insert { id, index } => { /* mount new */ }
+//!         ChildOp::Remove { id } => { /* unmount */ }
+//!         ChildOp::Reorder { id, old_index, new_index } => { /* reposition */ }
 //!     }
 //! }
+//!
+//! assert!(!diff.is_empty());
 //! ```
 
 use std::collections::{HashMap, HashSet};
@@ -209,7 +213,7 @@ pub struct TreeDiff<I: Identifier> {
 }
 
 /// Statistics about a tree diff.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct DiffStats {
     /// Number of inserted nodes.
     pub inserts: usize,
@@ -609,15 +613,31 @@ pub struct ChildDiff<I: Identifier> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ChildOp<I: Identifier> {
     /// Keep child at same position.
-    Keep { id: I, index: usize },
+    Keep {
+        /// The child node ID.
+        id: I,
+        /// Position index within parent.
+        index: usize,
+    },
     /// Insert new child.
-    Insert { id: I, index: usize },
+    Insert {
+        /// The child node ID to insert.
+        id: I,
+        /// Position index to insert at.
+        index: usize,
+    },
     /// Remove child.
-    Remove { id: I },
+    Remove {
+        /// The child node ID to remove.
+        id: I,
+    },
     /// Move child to new index.
     Reorder {
+        /// The child node ID to reorder.
         id: I,
+        /// Previous position index.
         old_index: usize,
+        /// New position index.
         new_index: usize,
     },
 }
@@ -1046,5 +1066,161 @@ mod tests {
             index: 0,
         };
         assert_eq!(op.id(), ElementId::new(5));
+    }
+
+    // === EDGE-CASE TESTS ===
+
+    #[test]
+    fn test_child_diff_both_empty() {
+        let old: Vec<ElementId> = vec![];
+        let new: Vec<ElementId> = vec![];
+
+        let diff = ChildDiff::compute(ElementId::new(1), old, new);
+
+        assert!(diff.is_empty());
+        assert_eq!(diff.ops().len(), 0);
+    }
+
+    #[test]
+    fn test_child_diff_completely_disjoint() {
+        let old = vec![ElementId::new(1), ElementId::new(2), ElementId::new(3)];
+        let new = vec![ElementId::new(4), ElementId::new(5), ElementId::new(6)];
+
+        let diff = ChildDiff::compute(ElementId::new(100), old, new);
+
+        let removes: Vec<_> = diff
+            .ops()
+            .iter()
+            .filter(|op| matches!(op, ChildOp::Remove { .. }))
+            .collect();
+        let inserts: Vec<_> = diff
+            .ops()
+            .iter()
+            .filter(|op| matches!(op, ChildOp::Insert { .. }))
+            .collect();
+        let keeps: Vec<_> = diff
+            .ops()
+            .iter()
+            .filter(|op| matches!(op, ChildOp::Keep { .. }))
+            .collect();
+        let reorders: Vec<_> = diff
+            .ops()
+            .iter()
+            .filter(|op| matches!(op, ChildOp::Reorder { .. }))
+            .collect();
+
+        assert_eq!(removes.len(), 3);
+        assert_eq!(inserts.len(), 3);
+        assert_eq!(keeps.len(), 0);
+        assert_eq!(reorders.len(), 0);
+
+        // Verify all old IDs are removed
+        for id_val in 1..=3 {
+            assert!(diff
+                .ops()
+                .iter()
+                .any(|op| matches!(op, ChildOp::Remove { id } if *id == ElementId::new(id_val))));
+        }
+
+        // Verify all new IDs are inserted
+        for id_val in 4..=6 {
+            assert!(diff.ops().iter().any(
+                |op| matches!(op, ChildOp::Insert { id, .. } if *id == ElementId::new(id_val))
+            ));
+        }
+    }
+
+    #[test]
+    fn test_child_diff_reverse_order() {
+        let old = vec![
+            ElementId::new(1),
+            ElementId::new(2),
+            ElementId::new(3),
+            ElementId::new(4),
+            ElementId::new(5),
+        ];
+        let new = vec![
+            ElementId::new(5),
+            ElementId::new(4),
+            ElementId::new(3),
+            ElementId::new(2),
+            ElementId::new(1),
+        ];
+
+        let diff = ChildDiff::compute(ElementId::new(100), old, new);
+
+        assert!(!diff.is_empty());
+
+        let reorders: Vec<_> = diff
+            .ops()
+            .iter()
+            .filter(|op| matches!(op, ChildOp::Reorder { .. }))
+            .collect();
+
+        // All items except the middle one (index 2 stays at index 2) should be reordered
+        assert!(!reorders.is_empty());
+
+        // No inserts or removes since all IDs are the same
+        let removes: Vec<_> = diff
+            .ops()
+            .iter()
+            .filter(|op| matches!(op, ChildOp::Remove { .. }))
+            .collect();
+        let inserts: Vec<_> = diff
+            .ops()
+            .iter()
+            .filter(|op| matches!(op, ChildOp::Insert { .. }))
+            .collect();
+
+        assert_eq!(removes.len(), 0);
+        assert_eq!(inserts.len(), 0);
+    }
+
+    #[test]
+    fn test_child_diff_single_insert() {
+        let old: Vec<ElementId> = vec![];
+        let new = vec![ElementId::new(1)];
+
+        let diff = ChildDiff::compute(ElementId::new(100), old, new);
+
+        assert_eq!(diff.changes(), 1);
+        assert_eq!(diff.ops().len(), 1);
+        assert!(matches!(
+            diff.ops()[0],
+            ChildOp::Insert {
+                id,
+                index: 0
+            } if id == ElementId::new(1)
+        ));
+    }
+
+    #[test]
+    fn test_child_diff_single_remove() {
+        let old = vec![ElementId::new(1)];
+        let new: Vec<ElementId> = vec![];
+
+        let diff = ChildDiff::compute(ElementId::new(100), old, new);
+
+        assert_eq!(diff.changes(), 1);
+        assert_eq!(diff.ops().len(), 1);
+        assert!(matches!(
+            diff.ops()[0],
+            ChildOp::Remove { id } if id == ElementId::new(1)
+        ));
+    }
+
+    #[test]
+    fn test_diff_stats_empty_diff() {
+        let diff = TreeDiff::<ElementId>::empty();
+        let stats = diff.stats();
+
+        assert_eq!(stats.inserts, 0);
+        assert_eq!(stats.removes, 0);
+        assert_eq!(stats.moves, 0);
+        assert_eq!(stats.updates, 0);
+        assert_eq!(stats.keeps, 0);
+        assert_eq!(stats.total(), 0);
+        assert_eq!(stats.structural_changes(), 0);
+        assert!(stats.is_empty());
     }
 }

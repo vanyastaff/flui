@@ -170,7 +170,10 @@ pub enum AccessFrequency {
 
 /// Special accessor for never operations that always panics.
 #[derive(Debug)]
-pub struct NeverAccessor<T: Send + Sync>(pub(crate) PhantomData<T>);
+pub struct NeverAccessor<T: Send + Sync>(
+    /// Phantom data marker for the element type.
+    pub(crate) PhantomData<T>,
+);
 
 impl<T: Send + Sync> Clone for NeverAccessor<T> {
     fn clone(&self) -> Self {
@@ -223,7 +226,10 @@ impl<T: Send + Sync> NeverAccessor<T> {
 /// - **Const evaluation** for all methods
 /// - **Zero runtime cost** - everything optimized away
 #[derive(Debug)]
-pub struct NoChildren<T>(pub(crate) PhantomData<T>);
+pub struct NoChildren<T>(
+    /// Phantom data marker for the element type.
+    pub(crate) PhantomData<T>,
+);
 
 impl<T> Clone for NoChildren<T> {
     fn clone(&self) -> Self {
@@ -279,6 +285,7 @@ impl<T> NoChildren<T> {
 
     /// Const evaluation support for empty check.
     #[inline]
+    #[must_use]
     pub const fn is_guaranteed_empty(&self) -> bool {
         true
     }
@@ -293,6 +300,7 @@ impl<T> NoChildren<T> {
 /// Provides an `Option`-like API for accessing the optional child.
 #[derive(Debug)]
 pub struct OptionalChild<'a, T> {
+    /// Slice holding zero or one child element.
     pub(crate) children: &'a [T],
 }
 
@@ -342,18 +350,21 @@ impl<'a, T: 'a + Send + Sync> ChildrenAccess<'a, T> for OptionalChild<'a, T> {
 impl<'a, T> OptionalChild<'a, T> {
     /// Returns the child if present.
     #[inline]
+    #[must_use]
     pub fn get(&self) -> Option<&'a T> {
         self.children.first()
     }
 
     /// Returns `true` if there is a child.
     #[inline]
+    #[must_use]
     pub fn is_some(&self) -> bool {
         !self.children.is_empty()
     }
 
     /// Returns `true` if there is no child.
     #[inline]
+    #[must_use]
     pub fn is_none(&self) -> bool {
         self.children.is_empty()
     }
@@ -364,6 +375,7 @@ impl<'a, T> OptionalChild<'a, T> {
     ///
     /// Panics if there is no child.
     #[inline]
+    #[must_use]
     pub fn unwrap(&self) -> &'a T {
         self.children.first().expect("Optional child is None")
     }
@@ -414,11 +426,15 @@ impl<T: Copy> OptionalChild<'_, T> {
     ///
     /// # Example
     ///
-    /// ```rust,ignore
-    /// let accessor = Optional::from_slice(&[element_id]);
-    /// let id: Option<ElementId> = accessor.copied();
+    /// ```
+    /// use flui_tree::arity::{Arity, Optional};
+    ///
+    /// let accessor = Optional::from_slice(&[42u32]);
+    /// let value: Option<u32> = accessor.copied();
+    /// assert_eq!(value, Some(42));
     /// ```
     #[inline]
+    #[must_use]
     pub fn copied(&self) -> Option<T> {
         self.children.first().copied()
     }
@@ -434,6 +450,7 @@ impl<T: Copy> OptionalChild<'_, T> {
 /// Specialized methods are provided for common arities (1, 2, 3).
 #[derive(Debug)]
 pub struct FixedChildren<'a, T, const N: usize> {
+    /// Reference to a fixed-size array of exactly `N` children.
     pub(crate) children: &'a [T; N],
 }
 
@@ -492,6 +509,7 @@ impl<'a, T, const N: usize> FixedChildren<'a, T, N> {
     ///
     /// This method provides zero-cost conversion to array type.
     #[inline]
+    #[must_use]
     pub const fn as_array(&self) -> &'a [T; N] {
         self.children
     }
@@ -515,6 +533,7 @@ impl<'a, T, const N: usize> FixedChildren<'a, T, N> {
     ///
     /// Panics if `index >= N`.
     #[inline]
+    #[must_use]
     pub fn get(&self, index: usize) -> &'a T {
         &self.children[index]
     }
@@ -530,6 +549,7 @@ impl<'a, T, const N: usize> FixedChildren<'a, T, N> {
 impl<'a, T> FixedChildren<'a, T, 1> {
     /// Returns the single child (guaranteed to exist).
     #[inline]
+    #[must_use]
     pub fn single(&self) -> &'a T {
         &self.children[0]
     }
@@ -539,18 +559,21 @@ impl<'a, T> FixedChildren<'a, T, 1> {
 impl<'a, T> FixedChildren<'a, T, 2> {
     /// Returns the first child.
     #[inline]
+    #[must_use]
     pub fn first(&self) -> &'a T {
         &self.children[0]
     }
 
     /// Returns the second child.
     #[inline]
+    #[must_use]
     pub fn second(&self) -> &'a T {
         &self.children[1]
     }
 
     /// Returns both children as a tuple.
     #[inline]
+    #[must_use]
     pub fn pair(&self) -> (&'a T, &'a T) {
         (&self.children[0], &self.children[1])
     }
@@ -560,24 +583,28 @@ impl<'a, T> FixedChildren<'a, T, 2> {
 impl<'a, T> FixedChildren<'a, T, 3> {
     /// Returns the first child.
     #[inline]
+    #[must_use]
     pub fn first(&self) -> &'a T {
         &self.children[0]
     }
 
     /// Returns the second child.
     #[inline]
+    #[must_use]
     pub fn second(&self) -> &'a T {
         &self.children[1]
     }
 
     /// Returns the third child.
     #[inline]
+    #[must_use]
     pub fn third(&self) -> &'a T {
         &self.children[2]
     }
 
     /// Returns all three children as a tuple.
     #[inline]
+    #[must_use]
     pub fn triple(&self) -> (&'a T, &'a T, &'a T) {
         (&self.children[0], &self.children[1], &self.children[2])
     }
@@ -592,6 +619,7 @@ impl<'a, T> FixedChildren<'a, T, 3> {
 /// Provides slice-based access to any number of children.
 #[derive(Debug)]
 pub struct SliceChildren<'a, T> {
+    /// Slice of children with variable length.
     pub(crate) children: &'a [T],
 }
 
@@ -641,36 +669,42 @@ impl<'a, T: 'a + Send + Sync> ChildrenAccess<'a, T> for SliceChildren<'a, T> {
 impl<'a, T> SliceChildren<'a, T> {
     /// Returns a reference to the child at the given index, if it exists.
     #[inline]
+    #[must_use]
     pub fn get(&self, index: usize) -> Option<&'a T> {
         self.children.get(index)
     }
 
     /// Returns an iterator over the children.
     #[inline]
+    #[must_use]
     pub fn iter(&self) -> impl ExactSizeIterator<Item = &'a T> + DoubleEndedIterator {
         self.children.iter()
     }
 
     /// Returns the first child, if any.
     #[inline]
+    #[must_use]
     pub fn first(&self) -> Option<&'a T> {
         self.children.first()
     }
 
     /// Returns the last child, if any.
     #[inline]
+    #[must_use]
     pub fn last(&self) -> Option<&'a T> {
         self.children.last()
     }
 
     /// Returns an iterator over (index, child) pairs.
     #[inline]
+    #[must_use]
     pub fn enumerate(&self) -> impl ExactSizeIterator<Item = (usize, &'a T)> {
         self.children.iter().enumerate()
     }
 
     /// Returns a reversed iterator over the children.
     #[inline]
+    #[must_use]
     pub fn rev(&self) -> impl ExactSizeIterator<Item = &'a T> {
         self.children.iter().rev()
     }
@@ -686,30 +720,25 @@ impl<'a, T> SliceChildren<'a, T> {
 /// Instead of `.iter_copy()`, use `.iter().copied()` or call `.copied()` on
 /// the accessor to get a `Copied` wrapper.
 ///
+/// Note: This type implements `Iterator` on a `Copy` type intentionally
+/// to allow cheap iteration with value semantics.
+///
 /// # Example
 ///
-/// ```rust,ignore
-/// let ids: &[ElementId] = &[id1, id2, id3];
+/// ```
+/// use flui_tree::arity::{Arity, Variable, ChildrenAccess};
+///
+/// let ids: &[u32] = &[10, 20, 30];
 /// let accessor = Variable::from_slice(ids);
 ///
 /// // Standard iterator pattern
-/// for id in accessor.iter().copied() {
-///     // id is ElementId (by value)
-/// }
+/// let sum_ref: u32 = accessor.iter().copied().sum();
+/// assert_eq!(sum_ref, 60);
 ///
 /// // Or use the Copied wrapper
-/// for id in accessor.copied() {
-///     // id is ElementId (by value)
-/// }
+/// let sum_val: u32 = accessor.copied().sum();
+/// assert_eq!(sum_val, 60);
 /// ```
-/// A wrapper that provides value iteration for `Copy` types.
-///
-/// This is the idiomatic Rust way to get values from accessors.
-/// Instead of `.iter_copy()`, use `.iter().copied()` or call `.copied()` on
-/// the accessor to get a `Copied` wrapper.
-///
-/// Note: This type implements `Iterator` on a `Copy` type intentionally
-/// to allow cheap iteration with value semantics.
 #[derive(Debug, Clone, Copy)]
 pub struct Copied<'a, T> {
     children: &'a [T],
@@ -780,14 +809,16 @@ impl<'a, T: Copy> SliceChildren<'a, T> {
     ///
     /// # Example
     ///
-    /// ```rust,ignore
-    /// let ids: &[ElementId] = &[id1, id2, id3];
+    /// ```
+    /// use flui_tree::arity::{Arity, Variable, ChildrenAccess};
+    ///
+    /// let ids: &[u32] = &[10, 20, 30];
     /// let accessor = Variable::from_slice(ids);
-    /// for id in accessor.copied() {
-    ///     // id is ElementId (by value)
-    /// }
+    /// let values: Vec<u32> = accessor.copied().collect();
+    /// assert_eq!(values, vec![10, 20, 30]);
     /// ```
     #[inline]
+    #[must_use]
     pub fn copied(&self) -> Copied<'a, T> {
         Copied {
             children: self.children,
@@ -801,6 +832,7 @@ impl<'a, T: Copy, const N: usize> FixedChildren<'a, T, N> {
     ///
     /// This is the idiomatic way to iterate over `Copy` values.
     #[inline]
+    #[must_use]
     pub fn copied(&self) -> Copied<'a, T> {
         Copied {
             children: self.children.as_slice(),
@@ -885,6 +917,7 @@ impl<'a, T> SmartChildren<'a, T> {
     }
 
     /// Get the allocation strategy being used.
+    #[must_use]
     pub const fn strategy(&self) -> AllocationStrategy {
         self.strategy
     }
@@ -1006,16 +1039,19 @@ impl<'a, T, const MIN: usize, const MAX: usize> BoundedChildren<'a, T, MIN, MAX>
     }
 
     /// Get compile-time bounds information.
+    #[must_use]
     pub const fn bounds() -> (usize, usize) {
         (MIN, MAX)
     }
 
     /// Check if current size is at minimum bound.
+    #[must_use]
     pub const fn is_at_min(&self) -> bool {
         self.children.len() == MIN
     }
 
     /// Check if current size is at maximum bound.
+    #[must_use]
     pub const fn is_at_max(&self) -> bool {
         self.children.len() == MAX
     }
@@ -1093,6 +1129,7 @@ impl<'a, T> TypedChildren<'a, T> {
     }
 
     /// Get type information.
+    #[must_use]
     pub const fn type_info(&self) -> TypeInfo {
         self.type_info
     }

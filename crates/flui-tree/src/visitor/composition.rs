@@ -6,6 +6,7 @@
 use super::{sealed, TreeVisitor, VisitorResult};
 use crate::TreeNav;
 use flui_foundation::Identifier;
+use std::fmt;
 use std::marker::PhantomData;
 
 // ============================================================================
@@ -16,6 +17,7 @@ use std::marker::PhantomData;
 ///
 /// Both visitors are called for each node, allowing multiple
 /// operations in a single tree traversal.
+#[derive(Debug)]
 pub struct ComposedVisitor<A, B> {
     /// First visitor.
     pub first: A,
@@ -100,6 +102,7 @@ fn combine_results(a: VisitorResult, b: VisitorResult) -> VisitorResult {
 // ============================================================================
 
 /// A visitor that combines three visitors into one.
+#[derive(Debug)]
 pub struct TripleComposedVisitor<A, B, C> {
     /// First visitor.
     pub first: A,
@@ -168,6 +171,14 @@ pub struct VisitorVec<I: Identifier> {
     visitors: Vec<Box<dyn DynVisitor<I>>>,
 }
 
+impl<I: Identifier> fmt::Debug for VisitorVec<I> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("VisitorVec")
+            .field("len", &self.visitors.len())
+            .finish()
+    }
+}
+
 /// Object-safe visitor trait for dynamic dispatch.
 ///
 /// Generic over ID type to support any tree.
@@ -184,6 +195,7 @@ pub trait DynVisitor<I: Identifier>: Send + Sync {
 
 impl<I: Identifier> VisitorVec<I> {
     /// Create an empty visitor collection.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             visitors: Vec::new(),
@@ -191,6 +203,7 @@ impl<I: Identifier> VisitorVec<I> {
     }
 
     /// Create with pre-allocated capacity.
+    #[must_use]
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             visitors: Vec::with_capacity(capacity),
@@ -203,11 +216,13 @@ impl<I: Identifier> VisitorVec<I> {
     }
 
     /// Get the number of visitors.
+    #[must_use]
     pub fn len(&self) -> usize {
         self.visitors.len()
     }
 
     /// Check if empty.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.visitors.is_empty()
     }
@@ -260,6 +275,14 @@ pub struct ConditionalVisitor<V, P, I> {
     visitor: V,
     predicate: P,
     _marker: PhantomData<I>,
+}
+
+impl<V: fmt::Debug, P, I> fmt::Debug for ConditionalVisitor<V, P, I> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ConditionalVisitor")
+            .field("visitor", &self.visitor)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<V, P, I> ConditionalVisitor<V, P, I> {
@@ -327,6 +350,14 @@ pub struct MappedVisitor<V, F, I> {
     visitor: V,
     mapper: F,
     _marker: PhantomData<I>,
+}
+
+impl<V: fmt::Debug, F, I> fmt::Debug for MappedVisitor<V, F, I> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MappedVisitor")
+            .field("visitor", &self.visitor)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<V, F, I> MappedVisitor<V, F, I> {

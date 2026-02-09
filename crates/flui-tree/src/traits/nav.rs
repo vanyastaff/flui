@@ -96,7 +96,7 @@ pub trait TreeNav<I: Identifier>: super::TreeRead<I> {
     ///
     /// # Performance
     ///
-    /// Uses stack-allocated buffer up to MAX_DEPTH, then heap allocation.
+    /// Uses stack-allocated buffer up to `MAX_DEPTH`, then heap allocation.
     fn ancestors(&self, start: I) -> impl Iterator<Item = I> + '_;
 
     /// Returns an iterator over all descendants in depth-first order.
@@ -278,7 +278,7 @@ pub trait TreeNav<I: Identifier>: super::TreeRead<I> {
     }
 }
 
-/// Extension trait for TreeNav with HRTB-based operations.
+/// Extension trait for `TreeNav` with HRTB-based operations.
 ///
 /// This trait provides higher-level operations using Higher-Rank Trait Bounds
 /// for maximum flexibility with predicates and visitors.
@@ -360,9 +360,13 @@ pub trait TreeNavExt<I: Identifier>: TreeNav<I> {
     ///
     /// # Example
     ///
-    /// ```rust,ignore
+    /// ```no_run
+    /// # use flui_tree::{TreeNavExt, ElementId};
+    /// # fn example(tree: &impl flui_tree::TreeNav<ElementId>) {
+    /// let grandchild = ElementId::new(3);
     /// let path = tree.path_to_node(grandchild);
-    /// assert!(path.is_ancestor_of(&tree.path_to_node(great_grandchild)));
+    /// assert!(!path.is_empty());
+    /// # }
     /// ```
     fn path_to_node(&self, target: I) -> TreePath<I> {
         TreePath::from_node(self, target)
@@ -402,11 +406,15 @@ pub trait TreeNavExt<I: Identifier>: TreeNav<I> {
     ///
     /// # Example
     ///
-    /// ```rust,ignore
+    /// ```no_run
+    /// # use flui_tree::{TreeNavExt, ElementId};
+    /// # fn example(tree: &impl flui_tree::TreeNav<ElementId>) {
+    /// let some_node = ElementId::new(1);
     /// let mut cursor = tree.cursor_at(some_node);
     /// while cursor.go_first_child() {
-    ///     println!("Descended to: {:?}", cursor.current());
+    ///     // descended further into the tree
     /// }
+    /// # }
     /// ```
     fn cursor_at(&self, position: I) -> TreeCursor<'_, Self, I>
     where
@@ -426,11 +434,15 @@ pub trait TreeNavExt<I: Identifier>: TreeNav<I> {
     ///
     /// # Example
     ///
-    /// ```rust,ignore
+    /// ```no_run
+    /// # use flui_tree::{TreeNavExt, ElementId};
+    /// # fn example(tree: &impl flui_tree::TreeNav<ElementId>) {
+    /// let root = ElementId::new(1);
     /// let mut cursor = tree.cursor_with_history(root, 10);
     /// cursor.go_child(0);
     /// cursor.go_child(1);
     /// cursor.go_back();  // Returns to previous position
+    /// # }
     /// ```
     fn cursor_with_history(&self, position: I, max_history: usize) -> TreeCursor<'_, Self, I>
     where
@@ -450,19 +462,6 @@ pub trait TreeNavExt<I: Identifier>: TreeNav<I> {
 
 // Blanket implementation for all TreeNav types
 impl<I: Identifier, T: TreeNav<I>> TreeNavExt<I> for T {}
-
-/// Sealed trait pattern for TreeNav.
-///
-/// Ensures only well-tested implementations can provide navigation.
-/// External crates can implement via `flui_tree::traits::sealed::TreeNavSealed`.
-pub(crate) mod sealed {
-    pub trait Sealed {}
-
-    // Blanket implementations for wrapper types
-    impl<T: Sealed + ?Sized> Sealed for &T {}
-    impl<T: Sealed + ?Sized> Sealed for &mut T {}
-    impl<T: Sealed + ?Sized> Sealed for Box<T> {}
-}
 
 // ============================================================================
 // BLANKET IMPLEMENTATIONS
@@ -593,8 +592,6 @@ mod tests {
     struct TestTree {
         nodes: std::collections::HashMap<ElementId, TestNode>,
     }
-
-    impl super::super::read::sealed::Sealed for TestTree {}
 
     impl TestTree {
         fn new() -> Self {

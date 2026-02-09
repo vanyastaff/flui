@@ -20,37 +20,43 @@
 //!
 //! # When to Use Each
 //!
-//! | Use Case | TreePath | IndexPath |
+//! | Use Case | `TreePath` | `IndexPath` |
 //! |----------|----------|-----------|
 //! | Runtime navigation | ✅ | ❌ |
 //! | Error reporting | ✅ | ❌ |
-//! | DevTools selection | ✅ | ✅ |
+//! | `DevTools` selection | ✅ | ✅ |
 //! | Serialization | ❌ | ✅ |
 //! | Cross-tree operations | ❌ | ✅ |
 //! | Clipboard/undo | ❌ | ✅ |
 //!
 //! # Usage
 //!
-//! ```rust,ignore
-//! use flui_tree::{TreePath, IndexPath, TreeNav, TreeNavPathExt};
+//! ```
+//! use flui_tree::TreePath;
+//! use flui_foundation::ElementId;
 //!
-//! // Create path from node
-//! let path = TreePath::from_node(&tree, deep_node_id);
-//! println!("Path: {:?}", path);  // [root, child, grandchild]
+//! // Create a path from a slice of IDs (root -> child -> grandchild)
+//! let path = TreePath::from_slice(&[
+//!     ElementId::new(1),
+//!     ElementId::new(2),
+//!     ElementId::new(5),
+//! ]);
+//! assert_eq!(path.len(), 3);
 //!
 //! // Navigate path
 //! let parent_path = path.parent().unwrap();
-//! let child_path = path.child(new_child_id);
+//! let child_path = path.child(ElementId::new(10));
 //!
 //! // Compare paths
-//! if parent_path.is_ancestor_of(&path) {
-//!     println!("parent is ancestor of child");
-//! }
+//! assert!(parent_path.is_ancestor_of(&path));
 //!
-//! // Resolve back to node
-//! if let Some(node_id) = path.resolve(&tree) {
-//!     let node = tree.get(node_id);
-//! }
+//! // IndexPath for position-based navigation
+//! use flui_tree::IndexPath;
+//!
+//! let ipath = IndexPath::new(&[0, 2, 1]);
+//! let parent = ipath.parent().unwrap();
+//! let child = ipath.child(0);
+//! assert!(parent.is_ancestor_of(&ipath));
 //! ```
 
 use std::fmt;
@@ -82,19 +88,22 @@ use crate::traits::TreeNav;
 ///
 /// # Examples
 ///
-/// ```rust,ignore
-/// use flui_tree::{TreePath, TreeNav};
+/// ```
+/// use flui_tree::TreePath;
+/// use flui_foundation::ElementId;
 ///
-/// // Create from node
-/// let path = TreePath::from_node(&tree, target_id);
+/// // Create from a slice of IDs
+/// let path = TreePath::from_slice(&[ElementId::new(1), ElementId::new(2), ElementId::new(5)]);
 ///
 /// // Navigate
 /// let parent = path.parent().unwrap();
-/// let child = path.child(child_id);
+/// let child = path.child(ElementId::new(10));
 ///
 /// // Compare
 /// assert!(parent.is_ancestor_of(&path));
-/// let common = path.common_prefix(&other_path);
+/// let other = TreePath::from_slice(&[ElementId::new(1), ElementId::new(3)]);
+/// let common = path.common_prefix(&other);
+/// assert_eq!(common.len(), 1);
 /// ```
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct TreePath<I: Identifier> {
@@ -534,7 +543,7 @@ impl<'a, I: Identifier> IntoIterator for &'a TreePath<I> {
 ///
 /// # Example
 ///
-/// ```rust,ignore
+/// ```
 /// use flui_tree::IndexPath;
 ///
 /// let path = IndexPath::new(&[0, 2, 1]);  // root -> 1st child -> 3rd child -> 2nd child
@@ -543,10 +552,10 @@ impl<'a, I: Identifier> IntoIterator for &'a TreePath<I> {
 /// let parent = path.parent().unwrap();
 /// let child = path.child(0);
 ///
-/// // Resolve in a tree
-/// if let Some(node_id) = path.resolve(&tree, root_id) {
-///     println!("Found node: {:?}", node_id);
-/// }
+/// // Compare
+/// assert!(parent.is_ancestor_of(&path));
+/// assert_eq!(path.depth(), 3);
+/// assert_eq!(child.depth(), 4);
 /// ```
 #[derive(Clone, PartialEq, Eq, Hash, Default)]
 pub struct IndexPath {
@@ -638,7 +647,7 @@ impl IndexPath {
         self.indices.is_empty()
     }
 
-    /// Returns true if path is empty (alias for is_root).
+    /// Returns true if path is empty (alias for `is_root`).
     #[inline]
     #[must_use]
     pub fn is_empty(&self) -> bool {
@@ -668,6 +677,7 @@ impl IndexPath {
 
     /// Iterates over indices from root to target.
     #[inline]
+    #[must_use]
     pub fn iter(&self) -> impl DoubleEndedIterator<Item = u32> + ExactSizeIterator + '_ {
         self.indices.iter().copied()
     }
@@ -841,23 +851,23 @@ impl Index<usize> for IndexPath {
 // EXTENSION TRAIT
 // ============================================================================
 
-/// Extension trait adding path operations to TreeNav.
+/// Extension trait adding path operations to `TreeNav`.
 ///
 /// This trait is automatically implemented for all types that implement `TreeNav`.
 pub trait TreeNavPathExt<I: Identifier>: TreeNav<I> {
-    /// Creates a TreePath from a node.
+    /// Creates a `TreePath` from a node.
     #[inline]
     fn path_to(&self, target: I) -> TreePath<I> {
         TreePath::from_node(self, target)
     }
 
-    /// Creates an IndexPath from a node.
+    /// Creates an `IndexPath` from a node.
     #[inline]
     fn index_path_to(&self, target: I) -> IndexPath {
         IndexPath::from_node(self, target)
     }
 
-    /// Resolves an IndexPath to a node ID.
+    /// Resolves an `IndexPath` to a node ID.
     #[inline]
     fn resolve_index_path(&self, path: &IndexPath, root: I) -> Option<I> {
         path.resolve(self, root)
@@ -1090,5 +1100,52 @@ mod tests {
 
         let root = IndexPath::root();
         assert_eq!(format!("{}", root), "[root]");
+    }
+
+    // === EDGE-CASE TESTS ===
+
+    #[test]
+    fn test_tree_path_max_depth() {
+        use crate::depth::MAX_TREE_DEPTH;
+
+        // Create a TreePath with MAX_TREE_DEPTH IDs
+        let ids: Vec<ElementId> = (1..=MAX_TREE_DEPTH).map(|i| ElementId::new(i)).collect();
+
+        let path = TreePath::from_slice(&ids);
+
+        assert_eq!(path.len(), MAX_TREE_DEPTH);
+        assert_eq!(path.root_id(), Some(ElementId::new(1)));
+        assert_eq!(path.target(), Some(ElementId::new(MAX_TREE_DEPTH)));
+        assert_eq!(path.at(0), Some(ElementId::new(1)));
+        assert_eq!(
+            path.at(MAX_TREE_DEPTH - 1),
+            Some(ElementId::new(MAX_TREE_DEPTH))
+        );
+        assert_eq!(path.depth(), MAX_TREE_DEPTH - 1);
+    }
+
+    #[test]
+    fn test_index_path_empty() {
+        let path = IndexPath::root();
+
+        assert!(path.is_empty());
+        assert_eq!(path.len(), 0);
+        assert!(path.parent().is_none());
+        assert!(path.is_root());
+        assert!(path.last_index().is_none());
+        assert!(path.at(0).is_none());
+    }
+
+    #[test]
+    fn test_tree_path_common_prefix_no_overlap() {
+        // Two paths with completely different IDs share no common prefix
+        let path1 =
+            TreePath::from_slice(&[ElementId::new(1), ElementId::new(2), ElementId::new(3)]);
+        let path2 =
+            TreePath::from_slice(&[ElementId::new(10), ElementId::new(20), ElementId::new(30)]);
+
+        let common = path1.common_prefix(&path2);
+        assert!(common.is_empty());
+        assert_eq!(common.len(), 0);
     }
 }

@@ -18,35 +18,26 @@
 //!
 //! # Usage
 //!
-//! ```rust,ignore
-//! use flui_arity::{ArityStorage, Exact, Optional, Variable};
+//! ```
+//! use flui_tree::arity::{ArityStorage, Exact, Optional, Variable, ChildrenStorage, ChildrenStorageExt};
 //!
 //! // Single child storage
-//! let mut storage: ArityStorage<Element, Exact<1>> = ArityStorage::new();
-//! storage.set_single_child(element)?;
+//! let mut storage: ArityStorage<u32, Exact<1>> = ArityStorage::new();
+//! storage.set_single_child(42).unwrap();
+//! assert_eq!(storage.single_child(), Some(&42));
 //!
 //! // Optional child storage
-//! let mut storage: ArityStorage<Element, Optional> = ArityStorage::new();
-//! storage.add_child(element)?;  // Can add if empty
-//! storage.clear_children()?;     // Can clear
+//! let mut storage: ArityStorage<u32, Optional> = ArityStorage::new();
+//! storage.add_child(10).unwrap();
+//! storage.clear_children().unwrap();
+//! assert!(storage.is_empty());
 //!
 //! // Variable children storage
-//! let mut storage: ArityStorage<Element, Variable> = ArityStorage::new();
-//! storage.add_child(elem1)?;
-//! storage.add_child(elem2)?;
-//! for child in storage.iter() { /* ... */ }
-//! ```
-//!
-//! # Delegation
-//!
-//! `ArityStorage` implements `ChildrenStorage<T>` and can be used with Ambassador:
-//!
-//! ```rust,ignore
-//! #[derive(Delegate)]
-//! #[delegate(ChildrenStorage<Box<dyn RenderBox>>, target = "storage")]
-//! pub struct Proxy<A: Arity> {
-//!     storage: ArityStorage<Box<dyn RenderBox>, A>,
-//! }
+//! let mut storage: ArityStorage<u32, Variable> = ArityStorage::new();
+//! storage.add_child(1).unwrap();
+//! storage.add_child(2).unwrap();
+//! let sum: u32 = storage.iter().sum();
+//! assert_eq!(sum, 3);
 //! ```
 
 use smallvec::SmallVec;
@@ -95,7 +86,7 @@ pub enum ArityStorage<T, A: Arity> {
     Optional(Option<T>),
 
     /// Exact arity: exactly N children (inline up to 4).
-    /// Uses SmallVec for cache-friendly storage.
+    /// Uses `SmallVec` for cache-friendly storage.
     Exact(SmallVec<[T; 4]>),
 
     /// Variable arity: any number of children.
@@ -114,20 +105,20 @@ impl<T, A: Arity> ArityStorage<T, A> {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
-    /// let storage: ArityStorage<Element, Exact<1>> = ArityStorage::new();
-    /// let storage: ArityStorage<Element, Optional> = ArityStorage::new();
-    /// let storage: ArityStorage<Element, Variable> = ArityStorage::new();
+    /// ```
+    /// use flui_tree::arity::{ArityStorage, Exact, Optional, Variable};
+    ///
+    /// let storage: ArityStorage<u32, Exact<1>> = ArityStorage::new();
+    /// let storage: ArityStorage<u32, Optional> = ArityStorage::new();
+    /// let storage: ArityStorage<u32, Variable> = ArityStorage::new();
     /// ```
     pub fn new() -> Self {
         match A::runtime_arity() {
-            RuntimeArity::Exact(0) => ArityStorage::Leaf(PhantomData),
+            RuntimeArity::Exact(0) | RuntimeArity::Never => ArityStorage::Leaf(PhantomData),
             RuntimeArity::Optional => ArityStorage::Optional(None),
             RuntimeArity::Exact(_) => ArityStorage::Exact(SmallVec::new()),
-            RuntimeArity::Variable => ArityStorage::Variable(Vec::new()),
-            RuntimeArity::AtLeast(_) => ArityStorage::Variable(Vec::new()),
+            RuntimeArity::Variable | RuntimeArity::AtLeast(_) => ArityStorage::Variable(Vec::new()),
             RuntimeArity::Range(_, _) => ArityStorage::Range(Vec::new()),
-            RuntimeArity::Never => ArityStorage::Leaf(PhantomData),
         }
     }
 
@@ -136,13 +127,13 @@ impl<T, A: Arity> ArityStorage<T, A> {
     /// This pre-allocates space to avoid reallocations.
     pub fn with_capacity(capacity: usize) -> Self {
         match A::runtime_arity() {
-            RuntimeArity::Exact(0) => ArityStorage::Leaf(PhantomData),
+            RuntimeArity::Exact(0) | RuntimeArity::Never => ArityStorage::Leaf(PhantomData),
             RuntimeArity::Optional => ArityStorage::Optional(None),
             RuntimeArity::Exact(_) => ArityStorage::Exact(SmallVec::new()),
-            RuntimeArity::Variable => ArityStorage::Variable(Vec::with_capacity(capacity)),
-            RuntimeArity::AtLeast(_) => ArityStorage::Variable(Vec::with_capacity(capacity)),
+            RuntimeArity::Variable | RuntimeArity::AtLeast(_) => {
+                ArityStorage::Variable(Vec::with_capacity(capacity))
+            }
             RuntimeArity::Range(_, _) => ArityStorage::Range(Vec::with_capacity(capacity)),
-            RuntimeArity::Never => ArityStorage::Leaf(PhantomData),
         }
     }
 }
@@ -167,8 +158,7 @@ impl<T, A: Arity> ArityStorage<T, A> {
                 None => &[],
             },
             ArityStorage::Exact(vec) => vec.as_slice(),
-            ArityStorage::Variable(vec) => vec.as_slice(),
-            ArityStorage::Range(vec) => vec.as_slice(),
+            ArityStorage::Variable(vec) | ArityStorage::Range(vec) => vec.as_slice(),
         }
     }
 }
@@ -189,8 +179,7 @@ impl<T: Send + Sync, A: Arity> ChildrenStorage<T> for ArityStorage<T, A> {
                 }
             }
             ArityStorage::Exact(vec) => vec.get(index),
-            ArityStorage::Variable(vec) => vec.get(index),
-            ArityStorage::Range(vec) => vec.get(index),
+            ArityStorage::Variable(vec) | ArityStorage::Range(vec) => vec.get(index),
         }
     }
 
@@ -205,8 +194,7 @@ impl<T: Send + Sync, A: Arity> ChildrenStorage<T> for ArityStorage<T, A> {
                 }
             }
             ArityStorage::Exact(vec) => vec.get_mut(index),
-            ArityStorage::Variable(vec) => vec.get_mut(index),
-            ArityStorage::Range(vec) => vec.get_mut(index),
+            ArityStorage::Variable(vec) | ArityStorage::Range(vec) => vec.get_mut(index),
         }
     }
 
@@ -215,8 +203,7 @@ impl<T: Send + Sync, A: Arity> ChildrenStorage<T> for ArityStorage<T, A> {
             ArityStorage::Leaf(_) => 0,
             ArityStorage::Optional(opt) => usize::from(opt.is_some()),
             ArityStorage::Exact(vec) => vec.len(),
-            ArityStorage::Variable(vec) => vec.len(),
-            ArityStorage::Range(vec) => vec.len(),
+            ArityStorage::Variable(vec) | ArityStorage::Range(vec) => vec.len(),
         }
     }
 
@@ -239,8 +226,7 @@ impl<T: Send + Sync, A: Arity> ChildrenStorage<T> for ArityStorage<T, A> {
                 }
             }
             ArityStorage::Exact(vec) => vec.as_mut_slice(),
-            ArityStorage::Variable(vec) => vec.as_mut_slice(),
-            ArityStorage::Range(vec) => vec.as_mut_slice(),
+            ArityStorage::Variable(vec) | ArityStorage::Range(vec) => vec.as_mut_slice(),
         }
     }
 
@@ -267,15 +253,7 @@ impl<T: Send + Sync, A: Arity> ChildrenStorage<T> for ArityStorage<T, A> {
                     Ok(Some(std::mem::replace(&mut vec[0], child)))
                 }
             }
-            ArityStorage::Variable(vec) => {
-                if vec.is_empty() {
-                    vec.push(child);
-                    Ok(None)
-                } else {
-                    Ok(Some(std::mem::replace(&mut vec[0], child)))
-                }
-            }
-            ArityStorage::Range(vec) => {
+            ArityStorage::Variable(vec) | ArityStorage::Range(vec) => {
                 if vec.is_empty() {
                     vec.push(child);
                     Ok(None)
@@ -297,14 +275,7 @@ impl<T: Send + Sync, A: Arity> ChildrenStorage<T> for ArityStorage<T, A> {
                     Some(vec.remove(0))
                 }
             }
-            ArityStorage::Variable(vec) => {
-                if vec.is_empty() {
-                    None
-                } else {
-                    Some(vec.remove(0))
-                }
-            }
-            ArityStorage::Range(vec) => {
+            ArityStorage::Variable(vec) | ArityStorage::Range(vec) => {
                 if vec.is_empty() {
                     None
                 } else {
@@ -346,11 +317,7 @@ impl<T: Send + Sync, A: Arity> ChildrenStorage<T> for ArityStorage<T, A> {
                 vec.push(child);
                 Ok(())
             }
-            ArityStorage::Variable(vec) => {
-                vec.push(child);
-                Ok(())
-            }
-            ArityStorage::Range(vec) => {
+            ArityStorage::Variable(vec) | ArityStorage::Range(vec) => {
                 vec.push(child);
                 Ok(())
             }
@@ -386,11 +353,7 @@ impl<T: Send + Sync, A: Arity> ChildrenStorage<T> for ArityStorage<T, A> {
                 vec.insert(index, child);
                 Ok(())
             }
-            ArityStorage::Variable(vec) => {
-                vec.insert(index, child);
-                Ok(())
-            }
-            ArityStorage::Range(vec) => {
+            ArityStorage::Variable(vec) | ArityStorage::Range(vec) => {
                 vec.insert(index, child);
                 Ok(())
             }
@@ -425,14 +388,7 @@ impl<T: Send + Sync, A: Arity> ChildrenStorage<T> for ArityStorage<T, A> {
                     None
                 }
             }
-            ArityStorage::Variable(vec) => {
-                if index < vec.len() {
-                    Some(vec.remove(index))
-                } else {
-                    None
-                }
-            }
-            ArityStorage::Range(vec) => {
+            ArityStorage::Variable(vec) | ArityStorage::Range(vec) => {
                 if index < vec.len() {
                     Some(vec.remove(index))
                 } else {
@@ -459,8 +415,7 @@ impl<T: Send + Sync, A: Arity> ChildrenStorage<T> for ArityStorage<T, A> {
             ArityStorage::Leaf(_) => None,
             ArityStorage::Optional(opt) => opt.take(),
             ArityStorage::Exact(vec) => vec.pop(),
-            ArityStorage::Variable(vec) => vec.pop(),
-            ArityStorage::Range(vec) => vec.pop(),
+            ArityStorage::Variable(vec) | ArityStorage::Range(vec) => vec.pop(),
         }
     }
 
@@ -485,11 +440,7 @@ impl<T: Send + Sync, A: Arity> ChildrenStorage<T> for ArityStorage<T, A> {
                 vec.clear();
                 Ok(())
             }
-            ArityStorage::Variable(vec) => {
-                vec.clear();
-                Ok(())
-            }
-            ArityStorage::Range(vec) => {
+            ArityStorage::Variable(vec) | ArityStorage::Range(vec) => {
                 vec.clear();
                 Ok(())
             }
@@ -498,8 +449,7 @@ impl<T: Send + Sync, A: Arity> ChildrenStorage<T> for ArityStorage<T, A> {
 
     fn reserve(&mut self, additional: usize) {
         match self {
-            ArityStorage::Variable(vec) => vec.reserve(additional),
-            ArityStorage::Range(vec) => vec.reserve(additional),
+            ArityStorage::Variable(vec) | ArityStorage::Range(vec) => vec.reserve(additional),
             ArityStorage::Exact(vec) => vec.reserve(additional),
             _ => {} // No-op for other variants
         }
@@ -507,8 +457,7 @@ impl<T: Send + Sync, A: Arity> ChildrenStorage<T> for ArityStorage<T, A> {
 
     fn shrink_to_fit(&mut self) {
         match self {
-            ArityStorage::Variable(vec) => vec.shrink_to_fit(),
-            ArityStorage::Range(vec) => vec.shrink_to_fit(),
+            ArityStorage::Variable(vec) | ArityStorage::Range(vec) => vec.shrink_to_fit(),
             ArityStorage::Exact(vec) => vec.shrink_to_fit(),
             _ => {} // No-op for other variants
         }
@@ -523,8 +472,7 @@ impl<T: Send + Sync, A: Arity> ChildrenStorage<T> for ArityStorage<T, A> {
         match self.runtime_arity() {
             RuntimeArity::Exact(n) => count < n,
             RuntimeArity::Optional => count < 1,
-            RuntimeArity::AtLeast(_) => true,
-            RuntimeArity::Variable => true,
+            RuntimeArity::AtLeast(_) | RuntimeArity::Variable => true,
             RuntimeArity::Range(_, max) => count < max,
             RuntimeArity::Never => false,
         }
@@ -538,10 +486,8 @@ impl<T: Send + Sync, A: Arity> ChildrenStorage<T> for ArityStorage<T, A> {
         let count = self.child_count();
         match self.runtime_arity() {
             RuntimeArity::Exact(n) => count > n,
-            RuntimeArity::Optional => true,
-            RuntimeArity::AtLeast(min) => count > min,
-            RuntimeArity::Variable => true,
-            RuntimeArity::Range(min, _) => count > min,
+            RuntimeArity::Optional | RuntimeArity::Variable => true,
+            RuntimeArity::AtLeast(min) | RuntimeArity::Range(min, _) => count > min,
             RuntimeArity::Never => false,
         }
     }
@@ -550,8 +496,7 @@ impl<T: Send + Sync, A: Arity> ChildrenStorage<T> for ArityStorage<T, A> {
         match self.runtime_arity() {
             RuntimeArity::Exact(n) => Some(n),
             RuntimeArity::Optional => Some(1),
-            RuntimeArity::AtLeast(_) => None,
-            RuntimeArity::Variable => None,
+            RuntimeArity::AtLeast(_) | RuntimeArity::Variable => None,
             RuntimeArity::Range(_, max) => Some(max),
             RuntimeArity::Never => Some(0),
         }
@@ -560,11 +505,8 @@ impl<T: Send + Sync, A: Arity> ChildrenStorage<T> for ArityStorage<T, A> {
     fn min_children(&self) -> usize {
         match self.runtime_arity() {
             RuntimeArity::Exact(n) => n,
-            RuntimeArity::Optional => 0,
-            RuntimeArity::AtLeast(min) => min,
-            RuntimeArity::Variable => 0,
-            RuntimeArity::Range(min, _) => min,
-            RuntimeArity::Never => 0,
+            RuntimeArity::Optional | RuntimeArity::Variable | RuntimeArity::Never => 0,
+            RuntimeArity::AtLeast(min) | RuntimeArity::Range(min, _) => min,
         }
     }
 }
@@ -575,16 +517,20 @@ impl<T: Send + Sync, A: Arity> ChildrenStorage<T> for ArityStorage<T, A> {
 
 /// View enum that wraps different accessor types.
 ///
-/// This allows creating read-only views of ArityStorage.
+/// This allows creating read-only views of `ArityStorage`.
 #[derive(Debug, Clone)]
 pub enum ArityStorageView<'a, T> {
+    /// Leaf view: no children (zero-sized accessor).
     Leaf(NoChildren<T>),
+    /// Optional view: 0 or 1 child accessor.
     Optional(OptionalChild<'a, T>),
+    /// Slice view: variable-length children accessor.
     Slice(SliceChildren<'a, T>),
 }
 
 impl<'a, T: 'a> ArityStorageView<'a, T> {
     /// Get the underlying slice.
+    #[must_use]
     pub fn as_slice(&self) -> &'a [T] {
         match self {
             ArityStorageView::Leaf(_) => &[],
@@ -594,11 +540,13 @@ impl<'a, T: 'a> ArityStorageView<'a, T> {
     }
 
     /// Get the number of children.
+    #[must_use]
     pub fn len(&self) -> usize {
         self.as_slice().len()
     }
 
     /// Check if empty.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.as_slice().is_empty()
     }
@@ -626,12 +574,11 @@ impl<T, A: Arity> ArityStorage<T, A> {
             ArityStorage::Exact(vec) => ArityStorageView::Slice(SliceChildren {
                 children: vec.as_slice(),
             }),
-            ArityStorage::Variable(vec) => ArityStorageView::Slice(SliceChildren {
-                children: vec.as_slice(),
-            }),
-            ArityStorage::Range(vec) => ArityStorageView::Slice(SliceChildren {
-                children: vec.as_slice(),
-            }),
+            ArityStorage::Variable(vec) | ArityStorage::Range(vec) => {
+                ArityStorageView::Slice(SliceChildren {
+                    children: vec.as_slice(),
+                })
+            }
         }
     }
 }
@@ -649,8 +596,9 @@ impl<T, A: Arity> ArityStorage<T, A> {
         T: Send + Sync,
     {
         match A::runtime_arity() {
-            RuntimeArity::Variable => ArityStorage::Variable(iter.into_iter().collect()),
-            RuntimeArity::AtLeast(_) => ArityStorage::Variable(iter.into_iter().collect()),
+            RuntimeArity::Variable | RuntimeArity::AtLeast(_) => {
+                ArityStorage::Variable(iter.into_iter().collect())
+            }
             RuntimeArity::Range(_, _) => ArityStorage::Range(iter.into_iter().collect()),
             _ => {
                 // For other arities, create empty and try to add
@@ -687,13 +635,13 @@ impl<T, A: Arity> ArityStorage<T, A> {
 
                 // Validate result against arity
                 let runtime_arity = A::runtime_arity();
-                if !runtime_arity.validate(vec.len()) {
+                if runtime_arity.validate(vec.len()) {
+                    Ok(())
+                } else {
                     Err(ArityError::InvalidChildCount {
                         arity: runtime_arity,
                         actual: vec.len(),
                     })
-                } else {
-                    Ok(())
                 }
             }
             ArityStorage::Variable(vec) => {
@@ -705,13 +653,13 @@ impl<T, A: Arity> ArityStorage<T, A> {
 
                 // Validate result against arity
                 let runtime_arity = A::runtime_arity();
-                if !runtime_arity.validate(vec.len()) {
+                if runtime_arity.validate(vec.len()) {
+                    Ok(())
+                } else {
                     Err(ArityError::InvalidChildCount {
                         arity: runtime_arity,
                         actual: vec.len(),
                     })
-                } else {
-                    Ok(())
                 }
             }
         }
@@ -846,5 +794,58 @@ mod tests {
         let mut storage: ArityStorage<i32, Variable> = ArityStorage::from_iter(vec![1, 2, 3, 4, 5]);
         storage.retain(|x| *x % 2 == 0).unwrap();
         assert_eq!(storage.children_slice(), &[2, 4]);
+    }
+
+    #[test]
+    fn test_leaf_storage_rejects_add() {
+        let mut storage: ArityStorage<u32, Leaf> = ArityStorage::new();
+        assert!(storage.is_empty());
+
+        // Leaf storage must reject add_child
+        let result = storage.add_child(1);
+        assert!(result.is_err(), "Leaf storage must reject add_child");
+
+        match result.unwrap_err() {
+            ArityError::TooManyChildren { arity, attempted } => {
+                assert_eq!(arity, RuntimeArity::Exact(0));
+                assert_eq!(attempted, 1);
+            }
+            other => panic!("expected TooManyChildren, got: {other:?}"),
+        }
+
+        // Verify the storage is still empty after the rejected add
+        assert!(storage.is_empty());
+        assert_eq!(storage.child_count(), 0);
+    }
+
+    #[test]
+    fn test_optional_storage_rejects_second() {
+        let mut storage: ArityStorage<u32, Optional> = ArityStorage::new();
+        assert!(storage.is_empty());
+
+        // First add_child succeeds
+        let result1 = storage.add_child(1);
+        assert!(
+            result1.is_ok(),
+            "first add_child on Optional should succeed"
+        );
+        assert_eq!(storage.child_count(), 1);
+        assert_eq!(storage.single_child(), Some(&1));
+
+        // Second add_child must fail with TooManyChildren
+        let result2 = storage.add_child(2);
+        assert!(result2.is_err(), "second add_child on Optional must fail");
+
+        match result2.unwrap_err() {
+            ArityError::TooManyChildren { arity, attempted } => {
+                assert_eq!(arity, RuntimeArity::Optional);
+                assert_eq!(attempted, 2);
+            }
+            other => panic!("expected TooManyChildren, got: {other:?}"),
+        }
+
+        // Verify the original child is still intact
+        assert_eq!(storage.child_count(), 1);
+        assert_eq!(storage.single_child(), Some(&1));
     }
 }

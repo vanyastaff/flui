@@ -30,23 +30,20 @@
 //!
 //! # Usage
 //!
-//! ```rust,ignore
-//! use flui_tree::{Node, Children, Single, Variable};
-//! use flui_foundation::ElementId;
+//! ```
+//! use flui_tree::Node;
+//! use flui_tree::ElementId;
 //!
 //! // Define a node type
 //! struct Element {
 //!     name: String,
-//!     // ...
 //! }
 //!
 //! impl Node for Element {
 //!     type Id = ElementId;
 //! }
 //!
-//! // Use with Children container
-//! let mut children: Children<Element, Variable> = Children::new();
-//! children.push(Element { name: "child".into() });
+//! let node = Element { name: "child".into() };
 //! ```
 //!
 //! # Design Philosophy
@@ -93,9 +90,9 @@ use flui_foundation::Identifier;
 ///
 /// ## Basic Implementation
 ///
-/// ```rust,ignore
+/// ```
 /// use flui_tree::Node;
-/// use flui_foundation::ElementId;
+/// use flui_tree::ElementId;
 ///
 /// struct MyElement {
 ///     data: String,
@@ -108,32 +105,40 @@ use flui_foundation::Identifier;
 ///
 /// ## With Generic Node
 ///
-/// ```rust,ignore
+/// ```
 /// use flui_tree::Node;
-/// use std::marker::PhantomData;
+/// use flui_tree::ElementId;
 ///
 /// struct GenericNode<T: Send + Sync + 'static> {
 ///     value: T,
 /// }
 ///
-/// // Assuming MyId implements the required traits
 /// impl<T: Send + Sync + 'static> Node for GenericNode<T> {
-///     type Id = MyId;
+///     type Id = ElementId;
 /// }
 /// ```
 ///
-/// ## Usage with Children
+/// ## Using `NodeExt` and `NodeTypeInfo`
 ///
-/// ```rust,ignore
-/// use flui_tree::{Node, Children, Variable, Unmounted, Mounted};
+/// ```
+/// use flui_tree::{Node, NodeExt, NodeTypeInfo};
+/// use flui_tree::ElementId;
 ///
-/// fn process_children<N: Node>(
-///     children: Children<N, Variable, Unmounted>,
-///     parent_id: N::Id,
-///     mut mount_fn: impl FnMut(N, N::Id) -> N::Id,
-/// ) -> Children<N, Variable, Mounted> {
-///     children.mount(parent_id, mount_fn)
+/// struct MyNode {
+///     value: i32,
 /// }
+///
+/// impl Node for MyNode {
+///     type Id = ElementId;
+/// }
+///
+/// // NodeExt is automatically available
+/// let type_name = MyNode::type_name();
+/// assert!(type_name.contains("MyNode"));
+///
+/// // NodeTypeInfo for introspection
+/// let info = NodeTypeInfo::of::<MyNode>();
+/// assert!(info.node_size > 0);
 /// ```
 pub trait Node: Sized + Send + Sync + 'static {
     /// The identifier type for this node.
@@ -152,11 +157,13 @@ pub trait Node: Sized + Send + Sync + 'static {
 /// This trait is automatically implemented for all types that implement `Node`.
 pub trait NodeExt: Node {
     /// Returns the name of this node type (for debugging).
+    #[must_use]
     fn type_name() -> &'static str {
         std::any::type_name::<Self>()
     }
 
     /// Returns the name of the ID type (for debugging).
+    #[must_use]
     fn id_type_name() -> &'static str {
         std::any::type_name::<Self::Id>()
     }
@@ -184,7 +191,8 @@ pub struct NodeTypeInfo {
 }
 
 impl NodeTypeInfo {
-    /// Creates NodeTypeInfo for a given Node type.
+    /// Creates `NodeTypeInfo` for a given Node type.
+    #[must_use]
     pub fn of<N: Node>() -> Self {
         Self {
             node_type: std::any::type_name::<N>(),

@@ -8,7 +8,7 @@
 //! `flui-tree` provides ONLY generic tree errors. Domain-specific errors
 //! should be defined in their respective crates:
 //!
-//! - **flui_rendering**: `RenderError`, `LayoutError`, `PaintError`
+//! - **`flui_rendering`**: `RenderError`, `LayoutError`, `PaintError`
 //! - **flui-element**: `ElementError`, `LifecycleError`
 //! - **flui-view**: `ViewError`, `BuildError`
 //!
@@ -126,48 +126,56 @@ impl TreeError {
 
     /// Creates a `NotFound` error.
     #[inline]
+    #[must_use]
     pub const fn not_found(id: usize) -> Self {
         Self::NotFound(id)
     }
 
     /// Creates an `AlreadyExists` error.
     #[inline]
+    #[must_use]
     pub const fn already_exists(id: usize) -> Self {
         Self::AlreadyExists(id)
     }
 
     /// Creates an `InvalidParent` error.
     #[inline]
+    #[must_use]
     pub const fn invalid_parent(child: usize, parent: usize) -> Self {
         Self::InvalidParent { child, parent }
     }
 
     /// Creates a `CycleDetected` error.
     #[inline]
+    #[must_use]
     pub const fn cycle_detected(id: usize) -> Self {
         Self::CycleDetected(id)
     }
 
     /// Creates a `MaxDepthExceeded` error.
     #[inline]
+    #[must_use]
     pub const fn max_depth_exceeded(element: usize, max: usize) -> Self {
         Self::MaxDepthExceeded { element, max }
     }
 
     /// Creates an `EmptyTree` error.
     #[inline]
+    #[must_use]
     pub const fn empty_tree() -> Self {
         Self::EmptyTree
     }
 
     /// Creates a `NotSupported` error.
     #[inline]
+    #[must_use]
     pub const fn not_supported(id: usize, reason: &'static str) -> Self {
         Self::NotSupported(id, reason)
     }
 
     /// Creates a `ConcurrentModification` error.
     #[inline]
+    #[must_use]
     pub const fn concurrent_modification() -> Self {
         Self::ConcurrentModification
     }
@@ -187,6 +195,7 @@ impl TreeError {
     /// Most tree errors are associated with a specific element.
     /// This method extracts that element ID for logging, debugging,
     /// or error recovery purposes.
+    #[must_use]
     pub const fn element_id(&self) -> Option<usize> {
         match self {
             Self::NotFound(id)
@@ -217,6 +226,7 @@ impl TreeError {
     /// - `CycleDetected` - Tree invariant violated
     /// - `ConcurrentModification` - Data race detected
     /// - `Internal` - Implementation bug
+    #[must_use]
     pub const fn is_recoverable(&self) -> bool {
         matches!(self, Self::NotFound(_) | Self::NotSupported(_, _))
     }
@@ -225,6 +235,7 @@ impl TreeError {
     ///
     /// Structural errors indicate that the tree's fundamental invariants
     /// may be violated, requiring careful recovery or reconstruction.
+    #[must_use]
     pub const fn is_structural(&self) -> bool {
         matches!(
             self,
@@ -236,6 +247,7 @@ impl TreeError {
     ///
     /// Lookup errors are typically benign and indicate that an
     /// element simply doesn't exist in the tree.
+    #[must_use]
     pub const fn is_lookup_error(&self) -> bool {
         matches!(self, Self::NotFound(_) | Self::AlreadyExists(_))
     }
@@ -243,6 +255,7 @@ impl TreeError {
     /// Returns `true` if this error indicates an internal bug.
     ///
     /// If this returns `true`, please report the error as a bug.
+    #[must_use]
     pub const fn is_internal(&self) -> bool {
         matches!(self, Self::Internal(_))
     }

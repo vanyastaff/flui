@@ -5,24 +5,17 @@
 //!
 //! # Example
 //!
-//! ```rust,ignore
-//! use flui_tree::{FallibleVisitor, visit_fallible, TreeNav};
-//! use flui_foundation::Identifier;
+//! ```
+//! use flui_tree::visitor::fallible::validate_depth;
+//! use flui_tree::visitor::fallible::try_for_each;
+//! use flui_tree::ElementId;
 //!
-//! struct ValidationVisitor;
+//! // Use the built-in validate_depth for depth limit checking,
+//! // or try_for_each for custom fallible logic.
+//! // These convenience functions work without implementing the sealed trait.
 //!
-//! impl<I: Identifier, T: TreeNav<I>> FallibleVisitor<I, T> for ValidationVisitor {
-//!     type Error = String;
-//!
-//!     fn visit(&mut self, id: I, depth: usize) -> Result<VisitorResult, Self::Error> {
-//!         if depth > 100 {
-//!             return Err("Tree too deep".to_string());
-//!         }
-//!         Ok(VisitorResult::Continue)
-//!     }
-//! }
-//!
-//! let result = visit_fallible(&tree, root, &mut ValidationVisitor);
+//! // Example: try_for_each with a fallible callback
+//! // (requires a tree implementing TreeNav; see tests for full examples)
 //! ```
 
 use super::{sealed, VisitorResult};
@@ -58,6 +51,11 @@ pub trait FallibleVisitor<I: Identifier, T: TreeNav<I>>: sealed::Sealed {
     ///
     /// - `Ok(VisitorResult)` - Continue with the given traversal directive
     /// - `Err(error)` - Stop traversal and propagate the error
+    ///
+    /// # Errors
+    ///
+    /// Returns `Self::Error` if the visitor encounters a condition that should
+    /// halt traversal and propagate an error to the caller.
     fn visit(&mut self, id: I, depth: usize) -> Result<VisitorResult, Self::Error>;
 
     /// Called before visiting children (optional hook).
@@ -66,12 +64,22 @@ pub trait FallibleVisitor<I: Identifier, T: TreeNav<I>>: sealed::Sealed {
     ///
     /// - `Ok(())` - Continue to children
     /// - `Err(error)` - Stop traversal and propagate the error
+    ///
+    /// # Errors
+    ///
+    /// Returns `Self::Error` if the pre-children hook encounters a condition
+    /// that should halt traversal.
     #[inline]
     fn pre_children(&mut self, _id: I, _depth: usize) -> Result<(), Self::Error> {
         Ok(())
     }
 
     /// Called after visiting all children (optional hook).
+    ///
+    /// # Errors
+    ///
+    /// Returns `Self::Error` if the post-children hook encounters a condition
+    /// that should halt traversal.
     #[inline]
     fn post_children(&mut self, _id: I, _depth: usize) -> Result<(), Self::Error> {
         Ok(())
@@ -90,6 +98,11 @@ pub trait FallibleVisitorMut<I: Identifier, T: TreeNav<I>>: sealed::Sealed {
         Self: 'a;
 
     /// Visit a node with tree access, potentially returning an error.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Self::Error` if the visitor encounters a condition that should
+    /// halt traversal and propagate an error to the caller.
     fn visit<'a>(
         &'a mut self,
         tree: &'a T,
@@ -107,7 +120,7 @@ pub trait FallibleVisitorMut<I: Identifier, T: TreeNav<I>>: sealed::Sealed {
 /// Error wrapper for visitor errors with context.
 #[derive(Debug)]
 pub struct VisitorError<E: Error, I: Identifier> {
-    /// The underlying error.
+    /// The underlying error that caused the visitor to fail.
     pub inner: E,
     /// The element where the error occurred.
     pub element: I,
@@ -169,6 +182,12 @@ impl<E: Error + 'static, I: Identifier> Error for VisitorError<E, I> {
 /// Depth-first traversal with a fallible visitor.
 ///
 /// Stops traversal on first error and returns it.
+///
+/// # Errors
+///
+/// Returns [`VisitorError`] wrapping the visitor's error type if the visitor
+/// returns an error during traversal. The error includes the element ID and
+/// depth where the failure occurred.
 pub fn visit_fallible<I, T, V>(
     tree: &T,
     root: I,
@@ -226,6 +245,12 @@ where
 }
 
 /// Breadth-first traversal with a fallible visitor.
+///
+/// # Errors
+///
+/// Returns [`VisitorError`] wrapping the visitor's error type if the visitor
+/// returns an error during traversal. The error includes the element ID and
+/// depth where the failure occurred.
 pub fn visit_fallible_breadth_first<I, T, V>(
     tree: &T,
     root: I,
@@ -261,6 +286,12 @@ where
 }
 
 /// Traverse with path tracking for detailed error context.
+///
+/// # Errors
+///
+/// Returns [`VisitorError`] wrapping the visitor's error type if the visitor
+/// returns an error during traversal. The error includes the element ID, depth,
+/// and the full path from root to the node where the failure occurred.
 pub fn visit_fallible_with_path<I, T, V>(
     tree: &T,
     root: I,
@@ -325,8 +356,17 @@ pub struct DepthLimitVisitor<I> {
     _marker: PhantomData<I>,
 }
 
+impl<I> fmt::Debug for DepthLimitVisitor<I> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DepthLimitVisitor")
+            .field("max_depth", &self.max_depth)
+            .finish()
+    }
+}
+
 impl<I: Identifier> DepthLimitVisitor<I> {
     /// Create a new depth limit visitor.
+    #[must_use]
     pub fn new(max_depth: usize) -> Self {
         Self {
             max_depth,
@@ -338,7 +378,9 @@ impl<I: Identifier> DepthLimitVisitor<I> {
 /// Error returned when depth limit is exceeded.
 #[derive(Debug, Clone)]
 pub struct DepthLimitExceeded {
+    /// The actual depth that was encountered, exceeding the limit.
     pub actual_depth: usize,
+    /// The maximum allowed depth that was configured.
     pub max_depth: usize,
 }
 
@@ -375,6 +417,12 @@ impl<I: Identifier, T: TreeNav<I>> FallibleVisitor<I, T> for DepthLimitVisitor<I
 pub struct TryForEachVisitor<F, E, I> {
     callback: F,
     _marker: PhantomData<(E, I)>,
+}
+
+impl<F, E, I> fmt::Debug for TryForEachVisitor<F, E, I> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TryForEachVisitor").finish_non_exhaustive()
+    }
 }
 
 impl<F, E, I> TryForEachVisitor<F, E, I> {
@@ -414,6 +462,17 @@ pub struct TryCollectVisitor<F, E, I> {
     predicate: F,
     collected: Vec<I>,
     _marker: PhantomData<E>,
+}
+
+impl<F, E, I> fmt::Debug for TryCollectVisitor<F, E, I>
+where
+    I: fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TryCollectVisitor")
+            .field("collected", &self.collected)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<F, E, I> TryCollectVisitor<F, E, I> {
@@ -466,6 +525,11 @@ where
 // ============================================================================
 
 /// Execute a fallible closure for each node.
+///
+/// # Errors
+///
+/// Returns [`VisitorError`] wrapping error type `E` if the callback returns
+/// an error for any node during traversal.
 pub fn try_for_each<I, T, F, E>(tree: &T, root: I, callback: F) -> Result<(), VisitorError<E, I>>
 where
     I: Identifier,
@@ -479,6 +543,11 @@ where
 }
 
 /// Collect nodes with validation, stopping on first error.
+///
+/// # Errors
+///
+/// Returns [`VisitorError`] wrapping error type `E` if the predicate returns
+/// an error for any node during traversal.
 pub fn try_collect<I, T, F, E>(
     tree: &T,
     root: I,
@@ -496,6 +565,11 @@ where
 }
 
 /// Validate tree depth doesn't exceed limit.
+///
+/// # Errors
+///
+/// Returns [`VisitorError`] wrapping [`DepthLimitExceeded`] if any node in the
+/// tree exceeds the specified `max_depth`.
 pub fn validate_depth<I, T>(
     tree: &T,
     root: I,

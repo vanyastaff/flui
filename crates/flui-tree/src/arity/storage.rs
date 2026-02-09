@@ -6,12 +6,12 @@
 //!
 //! # Design Philosophy
 //!
-//! - **ChildrenAccess**: Read-only views (borrows, `Copy`, cheap)
-//! - **ChildrenStorage**: Mutable ownership (owns data, enables delegation)
+//! - **`ChildrenAccess`**: Read-only views (borrows, `Copy`, cheap)
+//! - **`ChildrenStorage`**: Mutable ownership (owns data, enables delegation)
 //!
 //! # Key Differences
 //!
-//! | Aspect | ChildrenAccess | ChildrenStorage |
+//! | Aspect | `ChildrenAccess` | `ChildrenStorage` |
 //! |--------|----------------|-----------------|
 //! | Ownership | Borrows (`&'a [T]`) | Owns data |
 //! | Lifetime | Has `'a` parameter | No lifetime |
@@ -20,24 +20,16 @@
 //! | Use Case | Iteration, queries | Modification |
 //! | Delegation | Not suitable | Perfect for Proxy |
 //!
-//! # Usage with Proxy
+//! # Usage with `ArityStorage`
 //!
-//! ```rust,ignore
-//! use ambassador::Delegate;
+//! ```
+//! use flui_tree::arity::{ArityStorage, Variable, ChildrenStorage};
 //!
-//! #[derive(Delegate)]
-//! #[delegate(ChildrenStorage<Box<P::Object>>, target = "storage")]
-//! pub struct Proxy<P: Protocol, A: Arity> {
-//!     storage: ArityStorage<Box<P::Object>, A>,  // Delegates here!
-//!     // ...
-//! }
-//!
-//! impl RenderProxyBox for Proxy<BoxProtocol> {
-//!     fn child(&self) -> Option<&dyn RenderBox> {
-//!         self.single_child()  // Uses delegated method!
-//!             .map(|b| b.as_ref() as &dyn RenderBox)
-//!     }
-//! }
+//! let mut storage: ArityStorage<u32, Variable> = ArityStorage::new();
+//! storage.add_child(1).unwrap();
+//! storage.add_child(2).unwrap();
+//! assert_eq!(storage.child_count(), 2);
+//! assert_eq!(storage.single_child(), Some(&1));
 //! ```
 
 use ambassador::delegatable_trait;
@@ -66,12 +58,13 @@ use super::runtime::RuntimeArity;
 /// This trait is designed for delegation via Ambassador. All methods are
 /// simple (no generics, no `impl Trait` returns) to ensure compatibility.
 ///
-/// ```rust,ignore
-/// #[derive(Delegate)]
-/// #[delegate(ChildrenStorage<Box<dyn RenderBox>>, target = "storage")]
-/// pub struct Proxy<A: Arity> {
-///     storage: ArityStorage<Box<dyn RenderBox>, A>,
-/// }
+/// ```
+/// use flui_tree::arity::{ArityStorage, Variable, ChildrenStorage};
+///
+/// // ArityStorage implements ChildrenStorage
+/// let mut storage: ArityStorage<u32, Variable> = ArityStorage::new();
+/// storage.add_child(10).unwrap();
+/// assert_eq!(storage.get_child(0), Some(&10));
 /// ```
 ///
 /// # Extension Methods
@@ -144,7 +137,7 @@ pub trait ChildrenStorage<T> {
     // MULTI-CHILD OPERATIONS (for Variable, Range, AtLeast)
     // ========================================================================
 
-    /// Add child to storage (for Variable, Range, AtLeast).
+    /// Add child to storage (for Variable, Range, `AtLeast`).
     ///
     /// # Errors
     ///

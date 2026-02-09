@@ -19,6 +19,7 @@ pub use fallible::{
 };
 
 use std::collections::VecDeque;
+use std::fmt;
 use std::marker::PhantomData;
 
 use super::TreeNav;
@@ -48,6 +49,7 @@ pub enum VisitorResult {
 impl VisitorResult {
     /// Check if traversal should continue.
     #[inline]
+    #[must_use]
     pub const fn should_continue(self) -> bool {
         matches!(
             self,
@@ -60,6 +62,7 @@ impl VisitorResult {
 
     /// Check if children should be visited.
     #[inline]
+    #[must_use]
     pub const fn should_visit_children(self) -> bool {
         matches!(
             self,
@@ -69,18 +72,21 @@ impl VisitorResult {
 
     /// Check if traversal should stop completely.
     #[inline]
+    #[must_use]
     pub const fn should_stop(self) -> bool {
         matches!(self, Self::Stop)
     }
 
     /// Check if siblings should be skipped.
     #[inline]
+    #[must_use]
     pub const fn should_skip_siblings(self) -> bool {
         matches!(self, Self::SkipSiblings)
     }
 
     /// Get performance hint for iteration strategy.
     #[inline]
+    #[must_use]
     pub const fn iteration_hint(self) -> IterationHint {
         match self {
             Self::ContinueDepthFirst => IterationHint::DepthFirst,
@@ -217,6 +223,19 @@ pub(crate) mod sealed {
 // TRAVERSAL FUNCTIONS
 // ============================================================================
 
+/// Internal traversal control signal.
+///
+/// Richer than `bool` to distinguish "stop everything" from "skip remaining siblings."
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TraversalSignal {
+    /// Continue normal traversal.
+    Continue,
+    /// Skip remaining siblings at the caller's level.
+    SkipSiblings,
+    /// Stop traversal completely.
+    Stop,
+}
+
 /// Depth-first traversal.
 pub fn visit_depth_first<I, T, V>(tree: &T, root: I, visitor: &mut V) -> bool
 where
@@ -224,16 +243,16 @@ where
     T: TreeNav<I>,
     V: TreeVisitor<I, T>,
 {
-    visit_depth_first_impl::<I, T, V, 64>(tree, root, 0, visitor)
+    visit_depth_first_impl(tree, root, 0, visitor) != TraversalSignal::Stop
 }
 
-/// Internal depth-first implementation with stack optimization.
-fn visit_depth_first_impl<I, T, V, const STACK_SIZE: usize>(
+/// Internal depth-first implementation with correct `SkipSiblings` propagation.
+fn visit_depth_first_impl<I, T, V>(
     tree: &T,
     node: I,
     depth: usize,
     visitor: &mut V,
-) -> bool
+) -> TraversalSignal
 where
     I: Identifier,
     T: TreeNav<I>,
@@ -242,8 +261,10 @@ where
     let result = visitor.visit(node, depth);
 
     match result {
-        VisitorResult::Stop => return false,
-        VisitorResult::SkipChildren | VisitorResult::SkipSiblings => return true,
+        VisitorResult::Stop => return TraversalSignal::Stop,
+        // SkipSiblings: tell the parent to stop iterating siblings after this node.
+        VisitorResult::SkipSiblings => return TraversalSignal::SkipSiblings,
+        VisitorResult::SkipChildren => return TraversalSignal::Continue,
         _ => {}
     }
 
@@ -253,15 +274,19 @@ where
         let children: Vec<I> = tree.children(node).collect();
 
         for child in children {
-            if !visit_depth_first_impl::<I, T, V, STACK_SIZE>(tree, child, depth + 1, visitor) {
-                return false;
+            match visit_depth_first_impl(tree, child, depth + 1, visitor) {
+                TraversalSignal::Stop => return TraversalSignal::Stop,
+                // A child said "skip my siblings" — break out of the children loop
+                // but continue traversal at the parent level.
+                TraversalSignal::SkipSiblings => break,
+                TraversalSignal::Continue => {}
             }
         }
 
         visitor.post_children(node, depth);
     }
 
-    true
+    TraversalSignal::Continue
 }
 
 /// Breadth-first traversal.
@@ -271,14 +296,36 @@ where
     T: TreeNav<I>,
     V: TreeVisitor<I, T>,
 {
-    let mut queue: VecDeque<(I, usize)> = VecDeque::with_capacity(128);
-    queue.push_back((root, 0));
+    let mut queue: VecDeque<(I, usize, Option<I>)> = VecDeque::with_capacity(128);
+    queue.push_back((root, 0, None));
 
-    while let Some((node, depth)) = queue.pop_front() {
+    // When SkipSiblings is returned, we record the (parent, depth) to skip.
+    let mut skip_parent: Option<(I, usize)> = None;
+
+    while let Some((node, depth, parent)) = queue.pop_front() {
+        // If we're skipping siblings under a specific parent at a specific depth,
+        // skip nodes that share the same parent and depth.
+        if let Some((skip_p, skip_d)) = skip_parent {
+            if depth == skip_d && parent == Some(skip_p) {
+                continue;
+            }
+            // Once we've moved past the skipped level, clear the flag.
+            if depth != skip_d {
+                skip_parent = None;
+            }
+        }
+
         let result = visitor.visit(node, depth);
 
         match result {
             VisitorResult::Stop => return false,
+            VisitorResult::SkipSiblings => {
+                // Record parent to skip remaining siblings at this level.
+                if let Some(p) = parent {
+                    skip_parent = Some((p, depth));
+                }
+                continue;
+            }
             VisitorResult::SkipChildren => continue,
             _ => {}
         }
@@ -287,7 +334,7 @@ where
             visitor.pre_children(node, depth);
 
             for child in tree.children(node) {
-                queue.push_back((child, depth + 1));
+                queue.push_back((child, depth + 1, Some(node)));
             }
 
             visitor.post_children(node, depth);
@@ -348,6 +395,7 @@ fn visit_typed_impl<I, T, V>(
 // ============================================================================
 
 /// Collector visitor for gathering element IDs.
+#[derive(Debug)]
 pub struct CollectVisitor<I> {
     /// Collected element IDs.
     pub collected: Vec<I>,
@@ -355,6 +403,7 @@ pub struct CollectVisitor<I> {
 
 impl<I> CollectVisitor<I> {
     /// Create new collector with default capacity.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             collected: Vec::new(),
@@ -362,6 +411,7 @@ impl<I> CollectVisitor<I> {
     }
 
     /// Create collector with specific capacity.
+    #[must_use]
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             collected: Vec::with_capacity(capacity),
@@ -369,6 +419,7 @@ impl<I> CollectVisitor<I> {
     }
 
     /// Consume visitor and return collected items.
+    #[must_use]
     pub fn into_inner(self) -> Vec<I> {
         self.collected
     }
@@ -390,8 +441,9 @@ impl<I> Default for CollectVisitor<I> {
 }
 
 /// Counting visitor with overflow protection.
+#[derive(Debug)]
 pub struct CountVisitor {
-    /// Current count with overflow protection.
+    /// Current count of visited nodes.
     pub count: usize,
     /// Maximum count before stopping (overflow protection).
     pub max_count: Option<usize>,
@@ -399,6 +451,7 @@ pub struct CountVisitor {
 
 impl CountVisitor {
     /// Create new counter.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             count: 0,
@@ -407,6 +460,7 @@ impl CountVisitor {
     }
 
     /// Create counter with maximum limit.
+    #[must_use]
     pub fn with_limit(max_count: usize) -> Self {
         Self {
             count: 0,
@@ -415,11 +469,13 @@ impl CountVisitor {
     }
 
     /// Get current count.
+    #[must_use]
     pub fn count(&self) -> usize {
         self.count
     }
 
     /// Check if limit has been reached.
+    #[must_use]
     pub fn is_at_limit(&self) -> bool {
         self.max_count.is_some_and(|max| self.count >= max)
     }
@@ -447,6 +503,7 @@ impl Default for CountVisitor {
 /// Find visitor with predicate support.
 pub struct FindVisitor<I, P> {
     predicate: P,
+    /// The found element, if any matched the predicate.
     pub found: Option<I>,
     stop_on_first: bool,
 }
@@ -479,6 +536,15 @@ impl<I, P> FindVisitor<I, P> {
     }
 }
 
+impl<I: fmt::Debug, P> fmt::Debug for FindVisitor<I, P> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FindVisitor")
+            .field("found", &self.found)
+            .field("stop_on_first", &self.stop_on_first)
+            .finish_non_exhaustive()
+    }
+}
+
 impl<I, P> sealed::Sealed for FindVisitor<I, P> {}
 
 impl<I, T, P> TreeVisitor<I, T> for FindVisitor<I, P>
@@ -499,7 +565,9 @@ where
 }
 
 /// Max depth finder with early termination optimization.
+#[derive(Debug)]
 pub struct MaxDepthVisitor {
+    /// The maximum depth encountered so far.
     pub max_depth: usize,
     current_max: usize,
     termination_threshold: Option<usize>,
@@ -507,6 +575,7 @@ pub struct MaxDepthVisitor {
 
 impl MaxDepthVisitor {
     /// Create new max depth finder.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             max_depth: 0,
@@ -516,6 +585,7 @@ impl MaxDepthVisitor {
     }
 
     /// Create finder with early termination.
+    #[must_use]
     pub fn with_threshold(threshold: usize) -> Self {
         Self {
             max_depth: 0,
@@ -566,6 +636,12 @@ impl<I, F> ForEachVisitor<I, F> {
     }
 }
 
+impl<I, F> fmt::Debug for ForEachVisitor<I, F> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ForEachVisitor").finish_non_exhaustive()
+    }
+}
+
 impl<I, F> sealed::Sealed for ForEachVisitor<I, F> {}
 
 impl<I, T, F> TreeVisitor<I, T> for ForEachVisitor<I, F>
@@ -586,13 +662,22 @@ pub struct StatefulVisitor<State, Data> {
     _state: PhantomData<State>,
 }
 
+impl<State, Data> fmt::Debug for StatefulVisitor<State, Data> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("StatefulVisitor").finish_non_exhaustive()
+    }
+}
+
 /// Visitor states for typestate pattern.
 pub mod states {
     /// Initial state - visitor just created.
+    #[derive(Debug)]
     pub struct Initial;
     /// Started state - visitor has begun traversal.
+    #[derive(Debug)]
     pub struct Started;
     /// Finished state - visitor has completed traversal.
+    #[derive(Debug)]
     pub struct Finished;
 }
 
@@ -946,6 +1031,234 @@ mod tests {
         assert_eq!(
             VisitorResult::ContinueDepthFirst.iteration_hint(),
             IterationHint::DepthFirst
+        );
+    }
+
+    // Helper visitor that returns SkipSiblings when it encounters a target node.
+    struct SkipSiblingsVisitor {
+        target: ElementId,
+        visited: Vec<ElementId>,
+    }
+
+    impl sealed::Sealed for SkipSiblingsVisitor {}
+
+    impl TreeVisitor<ElementId, TestTree> for SkipSiblingsVisitor {
+        fn visit(&mut self, id: ElementId, _depth: usize) -> VisitorResult {
+            self.visited.push(id);
+            if id == self.target {
+                VisitorResult::SkipSiblings
+            } else {
+                VisitorResult::Continue
+            }
+        }
+    }
+
+    #[test]
+    fn test_skip_siblings_dfs() {
+        // Tree:  root -> [child1, child2, child3]
+        //                  child1 -> [gc1]
+        // When child1 returns SkipSiblings, child2 and child3 should NOT be visited.
+        let mut tree = TestTree::new();
+        let root = ElementId::new(1);
+        let child1 = ElementId::new(2);
+        let child2 = ElementId::new(3);
+        let child3 = ElementId::new(4);
+        let gc1 = ElementId::new(5);
+
+        tree.insert(root, None);
+        tree.insert(child1, Some(root));
+        tree.insert(child2, Some(root));
+        tree.insert(child3, Some(root));
+        tree.insert(gc1, Some(child1));
+
+        let mut visitor = SkipSiblingsVisitor {
+            target: child1,
+            visited: Vec::new(),
+        };
+        let completed = visit_depth_first(&tree, root, &mut visitor);
+
+        assert!(completed, "traversal should not be stopped");
+        // root is visited, then child1 triggers SkipSiblings.
+        // child1's children (gc1) are NOT visited because SkipSiblings skips children too.
+        // child2 and child3 are NOT visited because they are siblings of child1.
+        assert!(visitor.visited.contains(&root));
+        assert!(visitor.visited.contains(&child1));
+        assert!(
+            !visitor.visited.contains(&child2),
+            "child2 should be skipped (sibling of child1)"
+        );
+        assert!(
+            !visitor.visited.contains(&child3),
+            "child3 should be skipped (sibling of child1)"
+        );
+    }
+
+    #[test]
+    fn test_skip_siblings_bfs() {
+        // Same tree structure, same expectations for BFS.
+        let mut tree = TestTree::new();
+        let root = ElementId::new(1);
+        let child1 = ElementId::new(2);
+        let child2 = ElementId::new(3);
+        let child3 = ElementId::new(4);
+
+        tree.insert(root, None);
+        tree.insert(child1, Some(root));
+        tree.insert(child2, Some(root));
+        tree.insert(child3, Some(root));
+
+        let mut visitor = SkipSiblingsVisitor {
+            target: child1,
+            visited: Vec::new(),
+        };
+        let completed = visit_breadth_first(&tree, root, &mut visitor);
+
+        assert!(completed, "traversal should not be stopped");
+        assert!(visitor.visited.contains(&root));
+        assert!(visitor.visited.contains(&child1));
+        assert!(
+            !visitor.visited.contains(&child2),
+            "child2 should be skipped (sibling of child1)"
+        );
+        assert!(
+            !visitor.visited.contains(&child3),
+            "child3 should be skipped (sibling of child1)"
+        );
+    }
+
+    // Helper visitor that returns Stop on the first node.
+    struct StopImmediatelyVisitor {
+        call_count: usize,
+    }
+
+    impl sealed::Sealed for StopImmediatelyVisitor {}
+
+    impl TreeVisitor<ElementId, TestTree> for StopImmediatelyVisitor {
+        fn visit(&mut self, _id: ElementId, _depth: usize) -> VisitorResult {
+            self.call_count += 1;
+            VisitorResult::Stop
+        }
+    }
+
+    #[test]
+    fn test_visitor_result_stop_terminates() {
+        // Build a tree with root -> [child1, child2], child1 -> [gc1]
+        let mut tree = TestTree::new();
+        let root = ElementId::new(1);
+        let child1 = ElementId::new(2);
+        let child2 = ElementId::new(3);
+        let gc1 = ElementId::new(4);
+
+        tree.insert(root, None);
+        tree.insert(child1, Some(root));
+        tree.insert(child2, Some(root));
+        tree.insert(gc1, Some(child1));
+
+        // DFS: visitor returns Stop on the very first node (root).
+        // It should be called exactly once.
+        let mut visitor = StopImmediatelyVisitor { call_count: 0 };
+        let completed = visit_depth_first(&tree, root, &mut visitor);
+
+        assert!(!completed, "traversal should report stopped (return false)");
+        assert_eq!(
+            visitor.call_count, 1,
+            "visitor should be called exactly once when Stop is returned immediately"
+        );
+
+        // BFS: same expectation.
+        let mut visitor_bfs = StopImmediatelyVisitor { call_count: 0 };
+        let completed_bfs = visit_breadth_first(&tree, root, &mut visitor_bfs);
+
+        assert!(
+            !completed_bfs,
+            "BFS traversal should report stopped (return false)"
+        );
+        assert_eq!(
+            visitor_bfs.call_count, 1,
+            "BFS visitor should be called exactly once when Stop is returned immediately"
+        );
+    }
+
+    // Helper visitor that returns SkipChildren on a specific target node.
+    struct SkipChildrenVisitor {
+        target: ElementId,
+        visited: Vec<ElementId>,
+    }
+
+    impl sealed::Sealed for SkipChildrenVisitor {}
+
+    impl TreeVisitor<ElementId, TestTree> for SkipChildrenVisitor {
+        fn visit(&mut self, id: ElementId, _depth: usize) -> VisitorResult {
+            self.visited.push(id);
+            if id == self.target {
+                VisitorResult::SkipChildren
+            } else {
+                VisitorResult::Continue
+            }
+        }
+    }
+
+    #[test]
+    fn test_visitor_result_skip_children_on_leaf() {
+        // Tree: root -> [leaf1, leaf2, leaf3]
+        // leaf1, leaf2, leaf3 have no children (they are leaves).
+        // Returning SkipChildren on leaf1 should be equivalent to Continue:
+        // iteration must continue to siblings leaf2 and leaf3.
+        let mut tree = TestTree::new();
+        let root = ElementId::new(1);
+        let leaf1 = ElementId::new(2);
+        let leaf2 = ElementId::new(3);
+        let leaf3 = ElementId::new(4);
+
+        tree.insert(root, None);
+        tree.insert(leaf1, Some(root));
+        tree.insert(leaf2, Some(root));
+        tree.insert(leaf3, Some(root));
+
+        // DFS
+        let mut visitor = SkipChildrenVisitor {
+            target: leaf1,
+            visited: Vec::new(),
+        };
+        let completed = visit_depth_first(&tree, root, &mut visitor);
+
+        assert!(completed, "traversal should complete normally");
+        assert_eq!(
+            visitor.visited.len(),
+            4,
+            "all 4 nodes should be visited: root, leaf1, leaf2, leaf3"
+        );
+        assert!(visitor.visited.contains(&root));
+        assert!(visitor.visited.contains(&leaf1));
+        assert!(
+            visitor.visited.contains(&leaf2),
+            "leaf2 should still be visited after SkipChildren on sibling leaf1"
+        );
+        assert!(
+            visitor.visited.contains(&leaf3),
+            "leaf3 should still be visited after SkipChildren on sibling leaf1"
+        );
+
+        // BFS: same expectations.
+        let mut visitor_bfs = SkipChildrenVisitor {
+            target: leaf1,
+            visited: Vec::new(),
+        };
+        let completed_bfs = visit_breadth_first(&tree, root, &mut visitor_bfs);
+
+        assert!(completed_bfs, "BFS traversal should complete normally");
+        assert_eq!(
+            visitor_bfs.visited.len(),
+            4,
+            "BFS: all 4 nodes should be visited"
+        );
+        assert!(
+            visitor_bfs.visited.contains(&leaf2),
+            "BFS: leaf2 should still be visited"
+        );
+        assert!(
+            visitor_bfs.visited.contains(&leaf3),
+            "BFS: leaf3 should still be visited"
         );
     }
 }
