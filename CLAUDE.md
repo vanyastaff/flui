@@ -38,7 +38,7 @@ View Tree (immutable) → Element Tree (mutable) → Render Tree (layout/paint)
 
 ## Constitution Compliance
 
-**CRITICAL:** All work must align with `.specify/memory/constitution.md` (v2.0.0). Key principles:
+**CRITICAL:** All work must align with `.specify/memory/constitution.md` (v2.2.0). Key principles:
 
 1. **Flutter as Reference, Not Copy** - Adapt Flutter patterns to Rust idioms, no Dart translation
 2. **Strict Crate Dependency DAG** - Dependencies flow downward only, no circular deps

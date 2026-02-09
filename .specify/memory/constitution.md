@@ -1,36 +1,17 @@
 <!--
   Sync Impact Report
   ==================
-  Version change: 1.2.0 → 2.0.0 (MAJOR)
-  Bump rationale: Complete restructuring — all 6 original principles
-    replaced by 5 new architectural principles, 8 new sections added,
-    scope expanded from narrow implementation rules to comprehensive
-    project governance.
+  Version change: 2.1.0 → 2.2.0 (MINOR)
+  Bump rationale: New Rendering Pipeline section added,
+    documenting flui-painting → flui-engine data flow
+    and crate boundary rules.
 
-  Modified principles:
-    - "Test-First for Public APIs" → merged into Testing section
-    - "Type Safety First" → subsumed by Principle IV (Composition)
-      and Rust Standards
-    - "Structured Observability" → merged into Rust Standards
-    - "On-Demand Rendering" → merged into Performance Constraints
-    - "Coverage Requirements" → merged into Testing section
-    - "ID Offset Pattern" → moved to Codebase Conventions
+  Modified sections: None
 
   Added sections:
-    - Project Identity
-    - Crate Architecture (full ~20 crate listing)
-    - Core Architectural Principles (5 new principles)
-    - Rust Standards
-    - Widget System Conventions
-    - Testing (expanded)
-    - Performance Constraints
-    - Rendering Backend
-    - Codebase Conventions (ID Offset, Arity, Ambassador)
-    - Anti-Patterns
+    - Rendering Pipeline (3-step flow + 4 boundary rules)
 
-  Removed sections:
-    - Core Principles (6 narrow principles → replaced by above)
-    - Technical Constraints (content redistributed)
+  Removed sections: None
 
   Templates requiring updates:
     - .specify/templates/plan-template.md ✅ no update needed
@@ -40,8 +21,10 @@
     - .specify/templates/agent-file-template.md ✅ no update needed
 
   Files requiring follow-up:
-    - CLAUDE.md ⚠ update version reference 1.2.0 → 2.0.0
-      and Constitution Compliance section content
+    - CLAUDE.md ⚠ update version reference 2.1.0 → 2.2.0
+
+  Deferred items:
+    - TODO: re-evaluate wgpu 26.x pin by 2026-Q3
 -->
 
 # FLUI Constitution
@@ -205,6 +188,7 @@ Minimum coverage thresholds by crate category:
 
 - **Primary backend**: wgpu (cross-platform, Rust-native, WebGPU API).
   MUST stay on wgpu 25.x (26.0+ has breaking issues).
+  <!-- TODO: re-evaluate wgpu 26.x pin by 2026-Q3 -->
 - **Backend abstraction**: `flui-painting` defines `trait PaintBackend`.
   `flui-platform` contains concrete implementations. Architecture
   is ready for alternative backends (blade, skia-safe, vello) but
@@ -214,8 +198,59 @@ Minimum coverage thresholds by crate category:
   MUST NOT reference wgpu types directly.
 - **Text rendering**: `cosmic-text` / `glyphon`.
 - **Shader pipeline**: WGSL shaders stored in `flui-painting/shaders/`.
-- **Current platforms**: desktop (Windows, macOS, Linux) via winit.
-- **Future platforms**: web (WASM + WebGPU), mobile (TBD).
+
+## Rendering Pipeline
+
+`flui-painting` → `flui-engine` flow:
+
+1. Widget `paint()` calls `Canvas` API (`flui-painting`)
+2. Canvas records commands into `DisplayList` (`flui-painting`)
+3. Engine consumes DisplayLists, tessellates, batches,
+   and submits GPU work via wgpu (`flui-engine`)
+
+### Boundary rules
+
+- `flui-painting` defines the recording API (`Canvas`, `DisplayList`,
+  `TextPainter`, `ClipContext`). It MUST NOT depend on `flui-engine`
+  or wgpu.
+- `flui-engine` consumes painting primitives and owns all GPU
+  state (buffers, textures, shaders, pipelines).
+- `flui-engine/src/wgpu/` contains backend-specific code including
+  platform paths (`vulkan.rs`, `metal.rs`, `dx12.rs`) for wgpu
+  backend selection and workarounds.
+- Tessellation exists in both crates: `flui-painting` does geometric
+  tessellation (paths → vertices), `flui-engine` MAY re-tessellate
+  or optimize for GPU submission.
+
+## Platform Architecture
+
+`flui-platform` provides a platform abstraction layer with per-target
+implementations behind a unified trait interface.
+
+| Platform | Status | Notes |
+|----------|--------|-------|
+| Windows | Active | clipboard, display, events, window, window_ext |
+| macOS | Scaffold | via winit |
+| Linux | Scaffold | via winit |
+| Android | In progress | memory management started |
+| iOS | Scaffold | |
+| Web | Scaffold | WASM + WebGPU target |
+| Headless | Active | testing without GPU/window |
+
+### Platform rules
+
+- **winit** is the primary windowing abstraction. Platform-specific
+  code SHOULD go through winit where possible.
+- **Direct platform code** (e.g., `windows/clipboard.rs`,
+  `windows/display.rs`) is for capabilities winit does not cover.
+- **Headless platform** MUST support full widget tree lifecycle
+  (build, layout, paint to buffer) for integration testing.
+- **New platform modules** MUST implement the shared platform
+  traits from `src/traits/`.
+- **`src/shared/`** contains cross-platform utilities reused by
+  all platform implementations.
+- **`executor.rs`** provides the async executor strategy
+  (per-platform if needed).
 
 ## Codebase Conventions
 
@@ -295,4 +330,4 @@ These patterns are explicitly prohibited:
   gate in `plan-template.md`.
 - All code reviews MUST verify adherence to these principles.
 
-**Version**: 2.0.0 | **Ratified**: 2026-02-08 | **Last Amended**: 2026-02-08
+**Version**: 2.2.0 | **Ratified**: 2026-02-08 | **Last Amended**: 2026-02-08
