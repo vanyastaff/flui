@@ -402,7 +402,7 @@ impl Matrix4 {
 
     /// Transforms multiple points using SSE SIMD operations.
     /// Reserved for future batch transformation API.
-    #[allow(dead_code)]
+    #[allow(dead_code, unsafe_code)]
     #[inline]
     fn transform_points_simd_sse(&self, points: &[Point<Pixels>]) -> Vec<Point<Pixels>> {
         #[cfg(target_feature = "sse")]
@@ -468,7 +468,7 @@ impl Matrix4 {
 
     /// Transforms multiple points using NEON SIMD operations.
     /// Reserved for future batch transformation API.
-    #[allow(dead_code)]
+    #[allow(dead_code, unsafe_code)]
     #[inline]
     fn transform_points_simd_neon(&self, points: &[Point<Pixels>]) -> Vec<Point<Pixels>> {
         #[cfg(target_feature = "neon")]
@@ -778,7 +778,7 @@ impl Matrix4 {
 
     #[inline]
     #[cfg(all(target_arch = "x86_64", not(target_family = "wasm")))]
-    #[allow(dead_code)] // Used only when SIMD is enabled
+    #[allow(dead_code, unsafe_code)]
     fn mul_simd_sse(self, rhs: Self) -> Self {
         use std::arch::x86_64::*;
 
@@ -789,20 +789,20 @@ impl Matrix4 {
             // result[col][row] = sum of self.m[k * 4 + row] * rhs.m[col * 4 + k]
             for col in 0..4 {
                 // Load column 'col' from rhs (4 elements): rhs.m[col*4 + 0..3]
-                let _rhs_col = _mm_loadu_ps(&rhs.m[col * 4]);
+                let _rhs_col = _mm_loadu_ps(&raw const rhs.m[col * 4]);
 
                 // For each row, calculate the dot product
                 // We need: self[0][row] * rhs[col][0] + self[1][row] * rhs[col][1] + ...
                 // Which is: self.m[0*4 + row] * rhs.m[col*4 + 0] + self.m[1*4 + row] * rhs.m[col*4 + 1] + ...
 
                 // Load rows from self as columns (since we need self.m[k*4 + row] for all rows at once)
-                let self_col0 = _mm_loadu_ps(&self.m[0]); // self[0][0..3]
-                let self_col1 = _mm_loadu_ps(&self.m[4]); // self[1][0..3]
-                let self_col2 = _mm_loadu_ps(&self.m[8]); // self[2][0..3]
-                let self_col3 = _mm_loadu_ps(&self.m[12]); // self[3][0..3]
+                let self_col0 = _mm_loadu_ps(&raw const self.m[0]); // self[0][0..3]
+                let self_col1 = _mm_loadu_ps(&raw const self.m[4]); // self[1][0..3]
+                let self_col2 = _mm_loadu_ps(&raw const self.m[8]); // self[2][0..3]
+                let self_col3 = _mm_loadu_ps(&raw const self.m[12]); // self[3][0..3]
 
                 // Broadcast each element of rhs column
-                let rhs_k0 = _mm_set1_ps(rhs.m[col * 4 + 0]);
+                let rhs_k0 = _mm_set1_ps(rhs.m[col * 4]);
                 let rhs_k1 = _mm_set1_ps(rhs.m[col * 4 + 1]);
                 let rhs_k2 = _mm_set1_ps(rhs.m[col * 4 + 2]);
                 let rhs_k3 = _mm_set1_ps(rhs.m[col * 4 + 3]);
@@ -813,7 +813,7 @@ impl Matrix4 {
                 res = _mm_add_ps(res, _mm_mul_ps(self_col2, rhs_k2));
                 res = _mm_add_ps(res, _mm_mul_ps(self_col3, rhs_k3));
 
-                _mm_storeu_ps(&mut result[col * 4], res);
+                _mm_storeu_ps(&raw mut result[col * 4], res);
             }
 
             Self { m: result }
@@ -822,6 +822,7 @@ impl Matrix4 {
 
     #[inline]
     #[cfg(target_arch = "aarch64")]
+    #[allow(unsafe_code)]
     fn mul_simd_neon(self, rhs: Self) -> Self {
         use std::arch::aarch64::*;
 
@@ -837,7 +838,7 @@ impl Matrix4 {
             // Process each column of result
             for col in 0..4 {
                 // Broadcast each element of rhs column
-                let rhs_k0 = vdupq_n_f32(rhs.m[col * 4 + 0]);
+                let rhs_k0 = vdupq_n_f32(rhs.m[col * 4]);
                 let rhs_k1 = vdupq_n_f32(rhs.m[col * 4 + 1]);
                 let rhs_k2 = vdupq_n_f32(rhs.m[col * 4 + 2]);
                 let rhs_k3 = vdupq_n_f32(rhs.m[col * 4 + 3]);

@@ -61,8 +61,7 @@ impl Paint {
     pub fn stroke(color: Color, width: f32) -> Self {
         debug_assert!(
             width >= 0.0 && !width.is_nan(),
-            "Stroke width must be non-negative and not NaN, got: {}",
-            width
+            "Stroke width must be non-negative and not NaN, got: {width}",
         );
         Self {
             style: PaintStyle::Stroke,
@@ -105,8 +104,7 @@ impl Paint {
     pub fn with_stroke_width(mut self, width: f32) -> Self {
         debug_assert!(
             width >= 0.0 && !width.is_nan(),
-            "Stroke width must be non-negative and not NaN, got: {}",
-            width
+            "Stroke width must be non-negative and not NaN, got: {width}",
         );
         self.stroke_width = width;
         self

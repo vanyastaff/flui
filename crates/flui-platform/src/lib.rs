@@ -106,7 +106,6 @@
 //! use flui_platform::{headless_platform, WindowOptions};
 //! use flui_types::geometry::{px, Size};
 //!
-//! #[test]
 //! fn test_window_creation() {
 //!     let platform = headless_platform();
 //!

@@ -327,14 +327,14 @@ impl RSuperellipse {
     // ========================================================================
 
     #[inline]
-    #[allow(dead_code)] // Helper for future contains() implementation
+    #[allow(dead_code, clippy::unused_self)] // Helper for future contains() implementation
     fn point_in_corner(&self, dx: f32, dy: f32, radius: Radius<Pixels>) -> bool {
+        // Superellipse exponent (2.5 approximates iOS squircle)
+        const N: f32 = 2.5;
+
         if radius.x <= px(0.0) || radius.y <= px(0.0) {
             return true; // Sharp corner, already passed bbox check
         }
-
-        // Superellipse exponent (2.5 approximates iOS squircle)
-        const N: f32 = 2.5;
 
         let nx = (dx.abs() / radius.x.0).powf(N);
         let ny = (dy.abs() / radius.y.0).powf(N);

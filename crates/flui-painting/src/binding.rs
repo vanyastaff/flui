@@ -386,7 +386,7 @@ impl std::fmt::Debug for PaintingBinding {
                 &self.image_cache.current_size_bytes(),
             )
             .field("has_shader_warm_up", &self.shader_warm_up.is_some())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -455,12 +455,9 @@ impl PaintingBinding {
 
     /// Handles a system message (e.g., font change notification).
     pub fn handle_system_message(&self, message_type: &str) {
-        match message_type {
-            "fontsChange" => {
-                tracing::debug!("System fonts changed");
-                self.system_fonts.notify_listeners();
-            }
-            _ => {}
+        if message_type == "fontsChange" {
+            tracing::debug!("System fonts changed");
+            self.system_fonts.notify_listeners();
         }
     }
 }

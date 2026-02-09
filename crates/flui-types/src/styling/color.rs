@@ -247,7 +247,7 @@ impl Color {
 
     #[inline]
     #[cfg(all(target_arch = "x86_64", not(target_family = "wasm")))]
-    #[allow(dead_code)] // Used only when SIMD is enabled
+    #[allow(dead_code, unsafe_code)]
     fn lerp_simd_sse(a: Color, b: Color, t: f32) -> Color {
         #[cfg(target_feature = "sse2")]
         unsafe {
@@ -467,7 +467,7 @@ impl Color {
 
     #[inline]
     #[cfg(all(target_arch = "x86_64", not(target_family = "wasm")))]
-    #[allow(dead_code)] // Used only when SIMD is enabled
+    #[allow(dead_code, unsafe_code)]
     fn blend_over_simd_sse(&self, background: Color) -> Color {
         #[cfg(target_feature = "sse2")]
         unsafe {
@@ -887,7 +887,7 @@ mod tests {
     #[test]
     #[ignore] // TODO: Implement to_hsl and from_hsl methods
     fn test_approx_eq_hsl_conversion_roundtrip() {
-        let original = Color::rgb(120, 180, 200);
+        let _original = Color::rgb(120, 180, 200);
         // let hsl = original.to_hsl();
         // let roundtrip = Color::from_hsl(hsl.0, hsl.1, hsl.2);
 
@@ -898,7 +898,7 @@ mod tests {
     #[test]
     #[ignore] // TODO: Implement to_hsv and from_hsv methods
     fn test_approx_eq_hsv_conversion_roundtrip() {
-        let original = Color::rgb(80, 120, 160);
+        let _original = Color::rgb(80, 120, 160);
         // let hsv = original.to_hsv();
         // let roundtrip = Color::from_hsv(hsv.0, hsv.1, hsv.2);
 

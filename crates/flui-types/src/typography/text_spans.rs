@@ -277,7 +277,7 @@ impl TextSpan {
         1 + self
             .children
             .iter()
-            .map(|c| c.total_span_count())
+            .map(TextSpan::total_span_count)
             .sum::<usize>()
     }
 

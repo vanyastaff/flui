@@ -276,7 +276,7 @@ mod inner {
                         y = run.line_top;
 
                         // Find x position by iterating glyphs
-                        for glyph in run.glyphs.iter() {
+                        for glyph in &run.glyphs {
                             if glyph.start <= position.offset && position.offset <= glyph.end {
                                 // Interpolate within glyph if needed
                                 let glyph_progress = if glyph.end > glyph.start {
@@ -321,28 +321,27 @@ mod inner {
             }
 
             // If no line found, use last line or return 0
-            let target_line = match target_line {
-                Some(l) => l,
-                None => {
-                    // Check if below all lines
-                    let mut last_line = 0;
-                    for run in self.buffer.layout_runs() {
-                        last_line = run.line_i;
-                    }
-                    if y >= line_top {
-                        last_line
-                    } else {
-                        return TextPosition::upstream(0);
-                    }
+            let target_line = if let Some(l) = target_line {
+                l
+            } else {
+                // Check if below all lines
+                let mut last_line = 0;
+                for run in self.buffer.layout_runs() {
+                    last_line = run.line_i;
+                }
+                if y >= line_top {
+                    last_line
+                } else {
+                    return TextPosition::upstream(0);
                 }
             };
 
             // Find glyph at x in target line
             for run in self.buffer.layout_runs() {
                 if run.line_i == target_line {
-                    let mut last_offset = run.glyphs.first().map(|g| g.start).unwrap_or(0);
+                    let mut last_offset = run.glyphs.first().map_or(0, |g| g.start);
 
-                    for glyph in run.glyphs.iter() {
+                    for glyph in &run.glyphs {
                         let glyph_center = glyph.x + glyph.w / 2.0;
 
                         if x < glyph_center {
@@ -364,15 +363,14 @@ mod inner {
         /// Returns line metrics for all lines in the layout.
         pub fn get_line_metrics(&self) -> Vec<LineMetrics> {
             let mut metrics = Vec::new();
-            let mut line_number = 0;
 
-            for run in self.buffer.layout_runs() {
+            for (line_number, run) in self.buffer.layout_runs().enumerate() {
                 let ascent = self.font_size * 0.8;
                 let descent = self.font_size * 0.2;
 
                 // Calculate text indices for this line
-                let start_index = run.glyphs.first().map(|g| g.start).unwrap_or(0);
-                let end_index = run.glyphs.last().map(|g| g.end).unwrap_or(start_index);
+                let start_index = run.glyphs.first().map_or(0, |g| g.start);
+                let end_index = run.glyphs.last().map_or(start_index, |g| g.end);
 
                 metrics.push(LineMetrics::new(
                     true, // hard_break - assume true for now
@@ -389,8 +387,6 @@ mod inner {
                     end_index, // end_excluding_whitespace (simplified)
                     end_index, // end_including_newline (simplified)
                 ));
-
-                line_number += 1;
             }
 
             // Ensure at least one line

@@ -593,8 +593,8 @@ impl WindowTrait for WindowsWindow {
     fn set_position(&mut self, position: Point<Pixels>) {
         unsafe {
             let scale = self.state.lock().scale_factor;
-            let x = logical_to_device(position.x.0, scale) as i32;
-            let y = logical_to_device(position.y.0, scale) as i32;
+            let x = logical_to_device(position.x.0, scale);
+            let y = logical_to_device(position.y.0, scale);
 
             SetWindowPos(
                 self.hwnd,
@@ -618,8 +618,8 @@ impl WindowTrait for WindowsWindow {
     fn set_size(&mut self, size: Size<Pixels>) {
         unsafe {
             let scale = self.state.lock().scale_factor;
-            let width = logical_to_device(size.width.0, scale) as i32;
-            let height = logical_to_device(size.height.0, scale) as i32;
+            let width = logical_to_device(size.width.0, scale);
+            let height = logical_to_device(size.height.0, scale);
 
             SetWindowPos(
                 self.hwnd,
@@ -816,8 +816,8 @@ impl WindowTrait for WindowsWindow {
         unsafe {
             let hinstance = GetModuleHandleW(None).unwrap();
             CrossRawWindowHandle::Windows {
-                hwnd: self.hwnd.0 as *mut std::ffi::c_void,
-                hinstance: hinstance.0 as *mut std::ffi::c_void,
+                hwnd: self.hwnd.0,
+                hinstance: hinstance.0,
             }
         }
     }

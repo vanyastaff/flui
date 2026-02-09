@@ -191,7 +191,9 @@ pub fn mouse_button_event(
     lparam: LPARAM,
     scale_factor: f32,
 ) -> PlatformInput {
-    let (state, _) = pointer_state(lparam, scale_factor, if is_down { 0.5 } else { 0.0 });
+    let (state, modifiers) = pointer_state(lparam, scale_factor, if is_down { 0.5 } else { 0.0 });
+
+    let _ = modifiers;
 
     let event = if is_down {
         PointerEvent::Down(PointerButtonEvent {
@@ -212,7 +214,8 @@ pub fn mouse_button_event(
 
 /// Convert WM_MOUSEMOVE to W3C PointerEvent
 pub fn mouse_move_event(lparam: LPARAM, scale_factor: f32) -> PlatformInput {
-    let (state, _) = pointer_state(lparam, scale_factor, 0.0);
+    let (state, modifiers) = pointer_state(lparam, scale_factor, 0.0);
+    let _ = modifiers;
 
     let event = PointerEvent::Move(PointerUpdate {
         pointer: primary_mouse_info(),
@@ -229,7 +232,8 @@ pub fn mouse_wheel_event(wparam: WPARAM, lparam: LPARAM, scale_factor: f32) -> P
     let delta = ((wparam.0 as i32) >> 16) as i16 as f32;
     let lines = delta / 120.0; // WHEEL_DELTA = 120
 
-    let (state, _) = pointer_state(lparam, scale_factor, 0.0);
+    let (state, modifiers) = pointer_state(lparam, scale_factor, 0.0);
+    let _ = modifiers;
 
     let event = PointerEvent::Scroll(ui_events::pointer::PointerScrollEvent {
         pointer: primary_mouse_info(),

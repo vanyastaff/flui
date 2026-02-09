@@ -132,7 +132,6 @@ pub trait NotchedShape: std::fmt::Debug {
     /// The `guest` is the bounding rectangle of the notch.
     ///
     /// Returns a path that describes the outer edge of the shape with the notch.
-    #[inline]
     fn get_outer_path(
         &self,
         host: Rect<Pixels>,

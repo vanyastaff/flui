@@ -53,6 +53,7 @@ impl FractionalOffset {
 
     #[must_use]
     #[inline]
+    #[allow(clippy::manual_midpoint)]
     pub fn from_alignment(alignment: crate::layout::Alignment) -> Self {
         Self {
             dx: (alignment.x + 1.0) / 2.0,

@@ -47,6 +47,7 @@ pub struct Point<T: Unit> {
 }
 
 impl<T: Unit> Default for Point<T> {
+    #[inline]
     fn default() -> Self {
         Self {
             x: T::zero(),
@@ -213,7 +214,7 @@ where
     /// assert_eq!(p_doubled, Point::new(6.0, 8.0));
     #[inline]
     #[must_use]
-    pub fn map<U>(&self, f: impl Fn(T) -> U) -> Point<U>
+    pub fn map<U>(self, f: impl Fn(T) -> U) -> Point<U>
     where
         U: Unit,
     {
@@ -915,6 +916,7 @@ impl<T> fmt::Display for Point<T>
 where
     T: Unit + fmt::Display + Clone + fmt::Debug + Default + PartialEq,
 {
+    #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "({}, {})", self.x, self.y)
     }
@@ -978,7 +980,7 @@ where
     T: super::traits::Half,
 {
     #[inline]
-    fn half(&self) -> Self {
+    fn half(self) -> Self {
         Self {
             x: self.x.half(),
             y: self.y.half(),
@@ -1011,7 +1013,7 @@ where
     T: super::traits::Double,
 {
     #[inline]
-    fn double(&self) -> Self {
+    fn double(self) -> Self {
         Self {
             x: self.x.double(),
             y: self.y.double(),
@@ -1027,6 +1029,7 @@ impl<T> Sum for Point<T>
 where
     T: NumericUnit,
 {
+    #[inline]
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
         iter.fold(Point::default(), |acc, p| {
             Point::new(T::add(acc.x, p.x), T::add(acc.y, p.y))
@@ -1038,6 +1041,7 @@ impl<'a, T> Sum<&'a Point<T>> for Point<T>
 where
     T: NumericUnit,
 {
+    #[inline]
     fn sum<I: Iterator<Item = &'a Self>>(iter: I) -> Self {
         iter.fold(Point::default(), |acc, p| {
             Point::new(T::add(acc.x, p.x), T::add(acc.y, p.y))
@@ -1105,7 +1109,7 @@ impl Point<super::units::Pixels> {
     /// let scaled = p.scale(2.0);  // 2x Retina display
     #[inline]
     #[must_use]
-    pub fn scale(&self, factor: f32) -> Point<super::units::ScaledPixels> {
+    pub fn scale(self, factor: f32) -> Point<super::units::ScaledPixels> {
         Point {
             x: self.x.scale(factor),
             y: self.y.scale(factor),
@@ -1123,7 +1127,7 @@ impl Point<super::units::Pixels> {
     /// assert_eq!(p.magnitude(), 5.0);
     #[inline]
     #[must_use]
-    pub fn magnitude(&self) -> f32 {
+    pub fn magnitude(self) -> f32 {
         self.x.get().hypot(self.y.get())
     }
 }
@@ -1144,7 +1148,7 @@ impl Point<super::units::ScaledPixels> {
     /// let device = p.to_device_pixels();
     #[inline]
     #[must_use]
-    pub fn to_device_pixels(&self) -> Point<super::units::DevicePixels> {
+    pub fn to_device_pixels(self) -> Point<super::units::DevicePixels> {
         Point {
             x: self.x.to_device_pixels(),
             y: self.y.to_device_pixels(),

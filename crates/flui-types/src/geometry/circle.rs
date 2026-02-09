@@ -412,9 +412,9 @@ impl Circle<Pixels> {
         let d = line.to_vec();
         let f = line.p0 - self.center;
 
-        let a = d.dot(&d);
-        let b = 2.0 * f.dot(&d);
-        let c = f.dot(&f) - (self.radius * self.radius).0;
+        let a = d.dot(d);
+        let b = 2.0 * f.dot(d);
+        let c = f.dot(f) - (self.radius * self.radius).0;
 
         let discriminant: f32 = b * b - 4.0 * a * c;
 

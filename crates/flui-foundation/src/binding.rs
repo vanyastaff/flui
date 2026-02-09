@@ -208,13 +208,12 @@ macro_rules! impl_binding_singleton {
 /// let binding = check_instance::<GestureBinding>();
 /// ```
 pub fn check_instance<B: HasInstance>() -> &'static B {
-    if !B::is_initialized() {
-        panic!(
-            "Binding {} has not been initialized. \
-             Call {0}::ensure_initialized() first.",
-            std::any::type_name::<B>()
-        );
-    }
+    assert!(
+        B::is_initialized(),
+        "Binding {} has not been initialized. \
+         Call {0}::ensure_initialized() first.",
+        std::any::type_name::<B>()
+    );
     B::instance()
 }
 

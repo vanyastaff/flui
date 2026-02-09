@@ -195,7 +195,7 @@ impl QuadBez<Pixels> {
     fn arc_length_recursive(&self, t0: f32, t1: f32, tolerance: f32) -> f32 {
         let p0 = self.eval(t0);
         let p1 = self.eval(t1);
-        let pm = self.eval((t0 + t1) / 2.0);
+        let pm = self.eval(f32::midpoint(t0, t1));
 
         let chord = p0.distance(p1);
         let arc = p0.distance(pm) + pm.distance(p1);
@@ -203,7 +203,7 @@ impl QuadBez<Pixels> {
         if (arc - chord) < tolerance {
             arc
         } else {
-            let mid = (t0 + t1) / 2.0;
+            let mid = f32::midpoint(t0, t1);
             self.arc_length_recursive(t0, mid, tolerance)
                 + self.arc_length_recursive(mid, t1, tolerance)
         }
@@ -223,7 +223,7 @@ impl QuadBez<Pixels> {
             return p1;
         }
 
-        let t_mid = (t0 + t1) / 2.0;
+        let t_mid = f32::midpoint(t0, t1);
 
         let d0 = point.distance_squared(self.eval(t0));
         let d1 = point.distance_squared(self.eval(t1));
@@ -482,7 +482,7 @@ impl CubicBez<Pixels> {
     fn arc_length_recursive(&self, t0: f32, t1: f32, tolerance: f32) -> f32 {
         let p0 = self.eval(t0);
         let p1 = self.eval(t1);
-        let pm = self.eval((t0 + t1) / 2.0);
+        let pm = self.eval(f32::midpoint(t0, t1));
 
         let chord = p0.distance(p1);
         let arc = p0.distance(pm) + pm.distance(p1);
@@ -490,7 +490,7 @@ impl CubicBez<Pixels> {
         if (arc - chord) < tolerance {
             arc
         } else {
-            let mid = (t0 + t1) / 2.0;
+            let mid = f32::midpoint(t0, t1);
             self.arc_length_recursive(t0, mid, tolerance)
                 + self.arc_length_recursive(mid, t1, tolerance)
         }
@@ -549,7 +549,7 @@ impl CubicBez<Pixels> {
     fn flatten_recursive(&self, t0: f32, t1: f32, tolerance: f32, points: &mut Vec<Point<Pixels>>) {
         let p0 = self.eval(t0);
         let p1 = self.eval(t1);
-        let pm = self.eval((t0 + t1) / 2.0);
+        let pm = self.eval(f32::midpoint(t0, t1));
 
         // Check if the midpoint is close enough to the line
         let line = Line::new(p0, p1);
@@ -558,7 +558,7 @@ impl CubicBez<Pixels> {
         if dist <= tolerance {
             points.push(p1);
         } else {
-            let mid = (t0 + t1) / 2.0;
+            let mid = f32::midpoint(t0, t1);
             self.flatten_recursive(t0, mid, tolerance, points);
             self.flatten_recursive(mid, t1, tolerance, points);
         }

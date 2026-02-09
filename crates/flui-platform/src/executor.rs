@@ -175,6 +175,7 @@ impl Default for BackgroundExecutor {
 /// ```
 pub struct ForegroundExecutor {
     sender: flume::Sender<Box<dyn FnOnce() + Send>>,
+    #[allow(clippy::type_complexity)]
     receiver: Arc<Mutex<flume::Receiver<Box<dyn FnOnce() + Send>>>>,
 }
 

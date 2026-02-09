@@ -49,6 +49,7 @@ pub struct Rect<T: Unit> {
 }
 
 impl<T: Unit> Default for Rect<T> {
+    #[inline]
     fn default() -> Self {
         Self {
             min: Point::new(T::zero(), T::zero()),
@@ -896,6 +897,7 @@ where
 }
 
 impl fmt::Display for Rect<Pixels> {
+    #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.format_display(f)
     }

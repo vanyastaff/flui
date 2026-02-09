@@ -60,6 +60,7 @@ impl HSLColor {
 
 impl From<Color> for HSLColor {
     #[inline]
+    #[allow(clippy::manual_midpoint)]
     fn from(color: Color) -> Self {
         let r = color.r as f32 / 255.0;
         let g = color.g as f32 / 255.0;

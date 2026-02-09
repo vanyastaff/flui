@@ -113,7 +113,7 @@ impl<T: Unit> Offset<T> {
     /// assert_eq!(doubled.dy.get(), 40.0);
     #[inline]
     #[must_use]
-    pub fn map<U: Unit>(&self, f: impl Fn(T) -> U) -> Offset<U> {
+    pub fn map<U: Unit>(self, f: impl Fn(T) -> U) -> Offset<U> {
         Offset {
             dx: f(self.dx),
             dy: f(self.dy),
@@ -268,7 +268,7 @@ impl Offset<Pixels> {
     /// assert!(!Offset::new(px(1.0), px(0.0)).is_zero());
     /// ```
     #[inline]
-    pub fn is_zero(&self) -> bool {
+    pub fn is_zero(self) -> bool {
         self.dx == Pixels::ZERO && self.dy == Pixels::ZERO
     }
 
@@ -283,7 +283,7 @@ impl Offset<Pixels> {
     /// assert_eq!(offset.distance().get(), 5.0); // 3-4-5 triangle
     #[inline]
     #[must_use]
-    pub fn distance(&self) -> Pixels {
+    pub fn distance(self) -> Pixels {
         Pixels(self.dx.0.hypot(self.dy.0))
     }
 
@@ -313,7 +313,7 @@ impl Offset<Pixels> {
     /// assert!((right.direction() - 0.0).abs() < 0.001);
     /// ```
     #[inline]
-    pub fn direction(&self) -> f32 {
+    pub fn direction(self) -> f32 {
         self.dy.atan2(self.dx)
     }
 
@@ -328,13 +328,13 @@ impl Offset<Pixels> {
     /// assert!(!Offset::INFINITE.is_finite());
     /// ```
     #[inline]
-    pub fn is_finite(&self) -> bool {
+    pub fn is_finite(self) -> bool {
         self.dx.is_finite() && self.dy.is_finite()
     }
 
     /// Check if this offset is infinite.
     #[inline]
-    pub fn is_infinite(&self) -> bool {
+    pub fn is_infinite(self) -> bool {
         !self.is_finite()
     }
 
@@ -350,7 +350,7 @@ impl Offset<Pixels> {
     /// assert_eq!(scaled, Offset::new(px(20.0), px(40.0)));
     /// ```
     #[inline]
-    pub fn scale(&self, factor: f32) -> Self {
+    pub fn scale(self, factor: f32) -> Self {
         Self::new(self.dx * factor, self.dy * factor)
     }
 
@@ -432,7 +432,7 @@ impl Offset<Pixels> {
     ///
     #[inline]
     #[must_use]
-    pub fn normalize(&self) -> Offset<Pixels> {
+    pub fn normalize(self) -> Offset<Pixels> {
         let dist = self.distance();
         if dist > Pixels(f32::EPSILON) {
             let dist_f32 = dist.0;
@@ -444,56 +444,56 @@ impl Offset<Pixels> {
 
     #[inline]
     #[must_use]
-    pub const fn dot(&self, other: Offset<Pixels>) -> Pixels {
+    pub const fn dot(self, other: Offset<Pixels>) -> Pixels {
         Pixels(self.dx.0 * other.dx.0 + self.dy.0 * other.dy.0)
     }
 
     #[inline]
     #[must_use]
-    pub const fn cross(&self, other: Offset<Pixels>) -> Pixels {
+    pub const fn cross(self, other: Offset<Pixels>) -> Pixels {
         Pixels(self.dx.0 * other.dy.0 - self.dy.0 * other.dx.0)
     }
 
     #[inline]
     #[must_use]
-    pub fn rotate(&self, angle: f32) -> Offset<Pixels> {
+    pub fn rotate(self, angle: f32) -> Offset<Pixels> {
         let (sin, cos) = angle.sin_cos();
         Offset::new(self.dx * cos - self.dy * sin, self.dx * sin + self.dy * cos)
     }
 
     #[inline]
     #[must_use]
-    pub fn rotate_radians(&self, angle: crate::geometry::Radians) -> Offset<Pixels> {
+    pub fn rotate_radians(self, angle: crate::geometry::Radians) -> Offset<Pixels> {
         self.rotate(angle.0)
     }
 
     #[inline]
     #[must_use]
-    pub fn round(&self) -> Offset<Pixels> {
+    pub fn round(self) -> Offset<Pixels> {
         Offset::new(self.dx.round(), self.dy.round())
     }
 
     #[inline]
     #[must_use]
-    pub fn floor(&self) -> Offset<Pixels> {
+    pub fn floor(self) -> Offset<Pixels> {
         Offset::new(self.dx.floor(), self.dy.floor())
     }
 
     #[inline]
     #[must_use]
-    pub fn ceil(&self) -> Offset<Pixels> {
+    pub fn ceil(self) -> Offset<Pixels> {
         Offset::new(self.dx.ceil(), self.dy.ceil())
     }
 
     #[inline]
     #[must_use]
-    pub fn clamp(&self, min: Offset<Pixels>, max: Offset<Pixels>) -> Offset<Pixels> {
+    pub fn clamp(self, min: Offset<Pixels>, max: Offset<Pixels>) -> Offset<Pixels> {
         Offset::new(self.dx.clamp(min.dx, max.dx), self.dy.clamp(min.dy, max.dy))
     }
 
     #[inline]
     #[must_use]
-    pub const fn abs(&self) -> Offset<Pixels> {
+    pub const fn abs(self) -> Offset<Pixels> {
         Offset::new(
             if self.dx.0 >= 0.0 {
                 self.dx
@@ -526,14 +526,14 @@ impl Offset<Pixels> {
     /// assert!((clamped.direction() - offset.direction()).abs() < 0.01);
     #[inline]
     #[must_use]
-    pub fn clamp_magnitude(&self, max: f32) -> Offset<Pixels> {
+    pub fn clamp_magnitude(self, max: f32) -> Offset<Pixels> {
         let magnitude = self.distance();
         let max_px = Pixels(max);
         if magnitude > max_px && magnitude > Pixels(f32::EPSILON) {
             let scale = max / magnitude.0;
             Offset::new(self.dx * scale, self.dy * scale)
         } else {
-            *self
+            self
         }
     }
 
@@ -562,19 +562,19 @@ impl Offset<Pixels> {
     #[inline]
     #[must_use]
     pub fn move_towards(
-        &self,
+        self,
         target: impl Into<Offset<Pixels>>,
         max_distance: f32,
     ) -> Offset<Pixels> {
         let target = target.into();
-        let delta = target - *self;
+        let delta = target - self;
         let distance = delta.distance();
 
         if distance <= Pixels(max_distance) || distance < Pixels(f32::EPSILON) {
             target
         } else {
             let direction = delta.normalize();
-            *self + direction * max_distance
+            self + direction * max_distance
         }
     }
 
@@ -595,7 +595,7 @@ impl Offset<Pixels> {
     /// assert!((angle - PI / 2.0).abs() < 0.01);
     #[inline]
     #[must_use]
-    pub fn angle_to(&self, other: impl Into<Offset<Pixels>>) -> f32 {
+    pub fn angle_to(self, other: impl Into<Offset<Pixels>>) -> f32 {
         let other = other.into();
         let dot = self.dot(other);
         let det = self.cross(other);
@@ -604,7 +604,7 @@ impl Offset<Pixels> {
 
     #[inline]
     #[must_use]
-    pub fn angle_to_radians(&self, other: impl Into<Offset<Pixels>>) -> crate::geometry::Radians {
+    pub fn angle_to_radians(self, other: impl Into<Offset<Pixels>>) -> crate::geometry::Radians {
         crate::geometry::radians(self.angle_to(other))
     }
 
@@ -624,7 +624,7 @@ impl Offset<PixelDelta> {
     /// Get the magnitude (distance) of this offset from the origin.
     #[inline]
     #[must_use]
-    pub fn distance(&self) -> PixelDelta {
+    pub fn distance(self) -> PixelDelta {
         PixelDelta(self.dx.0.hypot(self.dy.0))
     }
 
@@ -641,24 +641,28 @@ impl Offset<PixelDelta> {
 // ============================================================================
 
 impl From<(Pixels, Pixels)> for Offset<Pixels> {
+    #[inline]
     fn from((dx, dy): (Pixels, Pixels)) -> Self {
         Offset::new(dx, dy)
     }
 }
 
 impl From<[Pixels; 2]> for Offset<Pixels> {
+    #[inline]
     fn from([dx, dy]: [Pixels; 2]) -> Self {
         Offset::new(dx, dy)
     }
 }
 
 impl From<Point<Pixels>> for Offset<Pixels> {
+    #[inline]
     fn from(point: Point<Pixels>) -> Self {
         Offset::new(point.x, point.y)
     }
 }
 
 impl From<Offset<Pixels>> for Point<Pixels> {
+    #[inline]
     fn from(offset: Offset<Pixels>) -> Self {
         offset.to_point()
     }
@@ -777,10 +781,11 @@ impl<T: NumericUnit> Display for Offset<T>
 where
     T: Into<f32>,
 {
+    #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let dx: f32 = self.dx.into();
         let dy: f32 = self.dy.into();
-        write!(f, "Offset({}, {})", dx, dy)
+        write!(f, "Offset({dx}, {dy})")
     }
 }
 
@@ -789,6 +794,7 @@ where
 // ============================================================================
 
 impl<T: Unit> Default for Offset<T> {
+    #[inline]
     fn default() -> Self {
         Self::new(T::zero(), T::zero())
     }
@@ -831,7 +837,7 @@ where
     T: super::traits::Half,
 {
     #[inline]
-    fn half(&self) -> Self {
+    fn half(self) -> Self {
         Self {
             dx: self.dx.half(),
             dy: self.dy.half(),
@@ -864,7 +870,7 @@ where
     T: super::traits::Double,
 {
     #[inline]
-    fn double(&self) -> Self {
+    fn double(self) -> Self {
         Self {
             dx: self.dx.double(),
             dy: self.dy.double(),
@@ -993,6 +999,7 @@ impl<T> std::iter::Sum for Offset<T>
 where
     T: NumericUnit,
 {
+    #[inline]
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
         iter.fold(Offset::new(T::zero(), T::zero()), |acc, o| {
             Offset::new(T::add(acc.dx, o.dx), T::add(acc.dy, o.dy))

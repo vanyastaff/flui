@@ -44,11 +44,9 @@ impl TextAlign {
     #[inline]
     pub const fn horizontal_factor(&self) -> f32 {
         match self {
-            Self::Left | Self::Justify => 0.0,
+            Self::Left | Self::Justify | Self::Start => 0.0,
             Self::Center => 0.5,
-            Self::Right => 1.0,
-            Self::Start => 0.0, // Assume LTR if not resolved
-            Self::End => 1.0,
+            Self::Right | Self::End => 1.0,
         }
     }
 }

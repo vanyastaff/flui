@@ -493,7 +493,7 @@ impl Transform {
                 // Apply transforms left-to-right (multiply matrices right-to-left)
                 transforms
                     .iter()
-                    .map(|t| t.to_matrix_internal())
+                    .map(Transform::to_matrix_internal)
                     .fold(Matrix4::identity(), |acc, matrix| acc * matrix)
             }
 
@@ -517,7 +517,7 @@ impl Transform {
         match self {
             Transform::Identity => true,
             Transform::Matrix(m) => m.is_identity(),
-            Transform::Compose(transforms) => transforms.iter().all(|t| t.is_identity()),
+            Transform::Compose(transforms) => transforms.iter().all(Transform::is_identity),
             _ => false,
         }
     }
@@ -526,9 +526,10 @@ impl Transform {
     #[inline]
     pub fn has_translation(&self) -> bool {
         match self {
-            Transform::Translate { .. } => true,
-            Transform::RotateAround { .. } | Transform::ScaleAround { .. } => true,
-            Transform::Compose(transforms) => transforms.iter().any(|t| t.has_translation()),
+            Transform::Translate { .. }
+            | Transform::RotateAround { .. }
+            | Transform::ScaleAround { .. } => true,
+            Transform::Compose(transforms) => transforms.iter().any(Transform::has_translation),
             Transform::Matrix(m) => m.m[12] != 0.0 || m.m[13] != 0.0,
             _ => false,
         }
@@ -539,7 +540,7 @@ impl Transform {
     pub fn has_rotation(&self) -> bool {
         match self {
             Transform::Rotate { .. } | Transform::RotateAround { .. } => true,
-            Transform::Compose(transforms) => transforms.iter().any(|t| t.has_rotation()),
+            Transform::Compose(transforms) => transforms.iter().any(Transform::has_rotation),
             _ => false,
         }
     }
@@ -551,7 +552,7 @@ impl Transform {
             Transform::Scale { .. } | Transform::ScaleXY { .. } | Transform::ScaleAround { .. } => {
                 true
             }
-            Transform::Compose(transforms) => transforms.iter().any(|t| t.has_scale()),
+            Transform::Compose(transforms) => transforms.iter().any(Transform::has_scale),
             _ => false,
         }
     }
@@ -561,7 +562,7 @@ impl Transform {
     pub fn has_skew(&self) -> bool {
         match self {
             Transform::Skew { .. } => true,
-            Transform::Compose(transforms) => transforms.iter().any(|t| t.has_skew()),
+            Transform::Compose(transforms) => transforms.iter().any(Transform::has_skew),
             _ => false,
         }
     }

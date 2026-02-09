@@ -10,7 +10,12 @@
       "Skill(commit-commands:commit:*)",
       "mcp__filesystem__list_directory",
       "mcp__filesystem__read_text_file",
-      "mcp__acp__Write"
+      "mcp__acp__Write",
+      "WebFetch(domain:docs.rs)",
+      "WebFetch(domain:github.com)",
+      "mcp__filesystem__write_file",
+      "Skill(rust-best-practices)",
+      "Skill(rust-best-practices:*)"
     ]
   }
 }

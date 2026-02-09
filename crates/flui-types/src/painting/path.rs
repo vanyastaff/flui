@@ -434,25 +434,26 @@ impl Path {
                     subpath_start = *p;
                 }
                 PathCommand::LineTo(p) => {
-                    if self.ray_intersects_segment(point, current_pos, *p) {
+                    if Self::ray_intersects_segment(point, current_pos, *p) {
                         crossings += 1;
                     }
                     current_pos = *p;
                 }
                 PathCommand::Close => {
-                    if self.ray_intersects_segment(point, current_pos, subpath_start) {
+                    if Self::ray_intersects_segment(point, current_pos, subpath_start) {
                         crossings += 1;
                     }
                     current_pos = subpath_start;
                 }
                 PathCommand::QuadraticTo(c, e) => {
                     // Approximate with line segments
-                    crossings += self.count_curve_crossings_quad(point, current_pos, *c, *e);
+                    crossings += Self::count_curve_crossings_quad(point, current_pos, *c, *e);
                     current_pos = *e;
                 }
                 PathCommand::CubicTo(c1, c2, e) => {
                     // Approximate with line segments
-                    crossings += self.count_curve_crossings_cubic(point, current_pos, *c1, *c2, *e);
+                    crossings +=
+                        Self::count_curve_crossings_cubic(point, current_pos, *c1, *c2, *e);
                     current_pos = *e;
                 }
                 PathCommand::AddRect(rect) => {
@@ -505,19 +506,19 @@ impl Path {
                     subpath_start = *p;
                 }
                 PathCommand::LineTo(p) => {
-                    winding += self.segment_winding(point, current_pos, *p);
+                    winding += Self::segment_winding(point, current_pos, *p);
                     current_pos = *p;
                 }
                 PathCommand::Close => {
-                    winding += self.segment_winding(point, current_pos, subpath_start);
+                    winding += Self::segment_winding(point, current_pos, subpath_start);
                     current_pos = subpath_start;
                 }
                 PathCommand::QuadraticTo(c, e) => {
-                    winding += self.curve_winding_quad(point, current_pos, *c, *e);
+                    winding += Self::curve_winding_quad(point, current_pos, *c, *e);
                     current_pos = *e;
                 }
                 PathCommand::CubicTo(c1, c2, e) => {
-                    winding += self.curve_winding_cubic(point, current_pos, *c1, *c2, *e);
+                    winding += Self::curve_winding_cubic(point, current_pos, *c1, *c2, *e);
                     current_pos = *e;
                 }
                 PathCommand::AddRect(rect) => {
@@ -554,12 +555,7 @@ impl Path {
 
     /// Tests if a horizontal ray from point intersects a line segment.
     #[inline]
-    fn ray_intersects_segment(
-        &self,
-        point: Point<Pixels>,
-        p1: Point<Pixels>,
-        p2: Point<Pixels>,
-    ) -> bool {
+    fn ray_intersects_segment(point: Point<Pixels>, p1: Point<Pixels>, p2: Point<Pixels>) -> bool {
         // Ray extends to the right from point
         if (p1.y > point.y) == (p2.y > point.y) {
             return false; // Both endpoints on same side of ray
@@ -572,17 +568,17 @@ impl Path {
 
     /// Compute winding contribution of a line segment.
     #[inline]
-    fn segment_winding(&self, point: Point<Pixels>, p1: Point<Pixels>, p2: Point<Pixels>) -> i32 {
+    fn segment_winding(point: Point<Pixels>, p1: Point<Pixels>, p2: Point<Pixels>) -> i32 {
         if p1.y <= point.y {
             if p2.y > point.y {
                 // Upward crossing
-                if self.is_left(p1, p2, point) > 0.0 {
+                if Self::is_left(p1, p2, point) > 0.0 {
                     return 1;
                 }
             }
         } else if p2.y <= point.y {
             // Downward crossing
-            if self.is_left(p1, p2, point) < 0.0 {
+            if Self::is_left(p1, p2, point) < 0.0 {
                 return -1;
             }
         }
@@ -592,14 +588,13 @@ impl Path {
     /// Test if point is left of line segment (p1 -> p2).
     /// Returns > 0 for left, < 0 for right, 0 for on line.
     #[inline]
-    fn is_left(&self, p1: Point<Pixels>, p2: Point<Pixels>, point: Point<Pixels>) -> f32 {
+    fn is_left(p1: Point<Pixels>, p2: Point<Pixels>, point: Point<Pixels>) -> f32 {
         ((p2.x - p1.x) * (point.y - p1.y) - (point.x - p1.x) * (p2.y - p1.y)).0
     }
 
     /// Count crossings for quadratic bezier curve (approximated).
     #[inline]
     fn count_curve_crossings_quad(
-        &self,
         point: Point<Pixels>,
         p0: Point<Pixels>,
         p1: Point<Pixels>,
@@ -613,10 +608,10 @@ impl Path {
             let t1 = t_values[i];
             let t2 = t_values[i + 1];
 
-            let start = self.eval_quadratic(p0, p1, p2, t1);
-            let end = self.eval_quadratic(p0, p1, p2, t2);
+            let start = Self::eval_quadratic(p0, p1, p2, t1);
+            let end = Self::eval_quadratic(p0, p1, p2, t2);
 
-            if self.ray_intersects_segment(point, start, end) {
+            if Self::ray_intersects_segment(point, start, end) {
                 crossings += 1;
             }
         }
@@ -627,7 +622,6 @@ impl Path {
     /// Count crossings for cubic bezier curve (approximated).
     #[inline]
     fn count_curve_crossings_cubic(
-        &self,
         point: Point<Pixels>,
         p0: Point<Pixels>,
         p1: Point<Pixels>,
@@ -642,10 +636,10 @@ impl Path {
             let t1 = t_values[i];
             let t2 = t_values[i + 1];
 
-            let start = self.eval_cubic(p0, p1, p2, p3, t1);
-            let end = self.eval_cubic(p0, p1, p2, p3, t2);
+            let start = Self::eval_cubic(p0, p1, p2, p3, t1);
+            let end = Self::eval_cubic(p0, p1, p2, p3, t2);
 
-            if self.ray_intersects_segment(point, start, end) {
+            if Self::ray_intersects_segment(point, start, end) {
                 crossings += 1;
             }
         }
@@ -656,7 +650,6 @@ impl Path {
     /// Winding number for quadratic curve.
     #[inline]
     fn curve_winding_quad(
-        &self,
         point: Point<Pixels>,
         p0: Point<Pixels>,
         p1: Point<Pixels>,
@@ -669,10 +662,10 @@ impl Path {
             let t1 = t_values[i];
             let t2 = t_values[i + 1];
 
-            let start = self.eval_quadratic(p0, p1, p2, t1);
-            let end = self.eval_quadratic(p0, p1, p2, t2);
+            let start = Self::eval_quadratic(p0, p1, p2, t1);
+            let end = Self::eval_quadratic(p0, p1, p2, t2);
 
-            winding += self.segment_winding(point, start, end);
+            winding += Self::segment_winding(point, start, end);
         }
 
         winding
@@ -681,7 +674,6 @@ impl Path {
     /// Winding number for cubic curve.
     #[inline]
     fn curve_winding_cubic(
-        &self,
         point: Point<Pixels>,
         p0: Point<Pixels>,
         p1: Point<Pixels>,
@@ -695,10 +687,10 @@ impl Path {
             let t1 = t_values[i];
             let t2 = t_values[i + 1];
 
-            let start = self.eval_cubic(p0, p1, p2, p3, t1);
-            let end = self.eval_cubic(p0, p1, p2, p3, t2);
+            let start = Self::eval_cubic(p0, p1, p2, p3, t1);
+            let end = Self::eval_cubic(p0, p1, p2, p3, t2);
 
-            winding += self.segment_winding(point, start, end);
+            winding += Self::segment_winding(point, start, end);
         }
 
         winding
@@ -706,7 +698,7 @@ impl Path {
 
     /// Evaluate quadratic bezier at parameter t.
     #[inline]
-    fn eval_quadratic<T>(&self, p0: Point<T>, p1: Point<T>, p2: Point<T>, t: f32) -> Point<T>
+    fn eval_quadratic<T>(p0: Point<T>, p1: Point<T>, p2: Point<T>, t: f32) -> Point<T>
     where
         T: NumericUnit + Into<f32> + From<f32>,
     {
@@ -722,14 +714,7 @@ impl Path {
 
     /// Evaluate cubic bezier at parameter t.
     #[inline]
-    fn eval_cubic<T>(
-        &self,
-        p0: Point<T>,
-        p1: Point<T>,
-        p2: Point<T>,
-        p3: Point<T>,
-        t: f32,
-    ) -> Point<T>
+    fn eval_cubic<T>(p0: Point<T>, p1: Point<T>, p2: Point<T>, p3: Point<T>, t: f32) -> Point<T>
     where
         T: NumericUnit + Into<f32> + From<f32>,
     {

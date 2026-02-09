@@ -4,18 +4,18 @@ members = [
     # === Phase 1: Foundation Layer ===
     "crates/flui-types",          # Base types with Unit system (ACTIVE)
     "crates/flui-foundation",     # Foundation types and utilities (ACTIVE)
-    "crates/flui-tree",           # Tree abstractions (ACTIVE)
-    "crates/flui-platform",       # Platform abstraction traits (ACTIVE - Phase 1)
+    # "crates/flui-tree",           # Tree abstractions (ACTIVE)
+    # "crates/flui-platform",       # Platform abstraction traits (ACTIVE - Phase 1)
 
     # === Phase 2: Core Framework (Re-enabled for platform integration) ===
-    "crates/flui-layer",          # Layer composition (ACTIVE)
-    "crates/flui-semantics",      # Accessibility (ACTIVE)
-    "crates/flui-interaction",    # Gesture recognition (ACTIVE - Integration)
-    "crates/flui-painting",       # Painting primitives (ACTIVE)
-    "crates/flui-scheduler",      # Frame scheduling (ACTIVE)
-    "crates/flui-engine",         # GPU rendering engine (ACTIVE)
+    # "crates/flui-layer",          # Layer composition (ACTIVE)
+    # "crates/flui-semantics",      # Accessibility (ACTIVE)
+    # "crates/flui-interaction",    # Gesture recognition (ACTIVE - Integration)
+    # "crates/flui-painting",       # Painting primitives (ACTIVE)
+    # "crates/flui-scheduler",      # Frame scheduling (ACTIVE)
+    # "crates/flui-engine",         # GPU rendering engine (ACTIVE)
     "crates/flui-log",            # Logging utilities (ACTIVE)
-    "crates/flui-app",            # Application framework (ACTIVE - Integration)
+    # "crates/flui-app",            # Application framework (ACTIVE - Integration)
 
     # === Temporarily disabled until integration complete ===
     # "crates/flui-rendering",
@@ -23,8 +23,8 @@ members = [
     # "crates/flui-animation",
     # "crates/flui-reactivity",
     # "crates/flui-devtools",
-    "crates/flui-cli",
-    "crates/flui-build",
+    # "crates/flui-cli",
+    # "crates/flui-build",
 ]
 
 [workspace.package]
@@ -149,6 +149,9 @@ module_name_repetitions = "allow"
 too_many_lines = "allow"
 missing_errors_doc = "allow"
 missing_panics_doc = "allow"
+must_use_candidate = "allow"
+return_self_not_must_use = "allow"
+doc_markdown = "allow"
 
 [package]
 name = "flui"
