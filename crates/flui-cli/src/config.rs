@@ -2,7 +2,10 @@
 //!
 //! These configuration types are part of the public API but are not yet
 //! used by all commands. They are intended for future enhancements.
-#![allow(dead_code)]
+#![expect(
+    dead_code,
+    reason = "config types prepared for future command integration"
+)]
 //!
 //! This module provides configuration types following Rust API Guidelines:
 //!

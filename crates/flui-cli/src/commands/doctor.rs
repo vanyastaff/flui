@@ -329,7 +329,7 @@ fn check_ios_targets(all_ok: &mut bool) -> String {
 }
 
 #[cfg(not(target_os = "macos"))]
-#[allow(dead_code)]
+#[expect(dead_code, reason = "cross-platform stub, called only on macOS")]
 fn check_ios(_verbose: bool, _all_ok: &mut bool) -> String {
     String::new()
 }

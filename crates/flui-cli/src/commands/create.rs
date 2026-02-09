@@ -116,7 +116,7 @@ fn run_cargo_check(dir: &Path) -> CliResult<()> {
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let _ = cliclack::log::warning("cargo check reported issues:");
-        eprintln!("{}", stderr);
+        let _ = cliclack::log::warning(stderr);
         let _ = cliclack::log::remark("The project was created but may need fixes.");
     }
 

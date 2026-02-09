@@ -234,7 +234,7 @@ fn browsers(details: bool) -> String {
 struct BrowserInfo {
     name: String,
     version: Option<String>,
-    #[allow(dead_code)]
+    #[expect(dead_code, reason = "collected for future --details path display")]
     path: Option<String>,
 }
 

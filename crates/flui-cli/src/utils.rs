@@ -3,13 +3,13 @@ use std::path::Path;
 use std::process::Command;
 
 /// Check if a command exists in PATH
-#[allow(dead_code)]
+#[expect(dead_code, reason = "utility for future command availability checks")]
 pub fn command_exists(cmd: &str) -> bool {
     which::which(cmd).is_ok()
 }
 
 /// Run a command and capture output
-#[allow(dead_code)]
+#[expect(dead_code, reason = "utility for future command execution")]
 pub fn run_command(cmd: &str, args: &[&str], cwd: Option<&Path>) -> CliResult<String> {
     let mut command = Command::new(cmd);
     command.args(args);
@@ -32,7 +32,7 @@ pub fn run_command(cmd: &str, args: &[&str], cwd: Option<&Path>) -> CliResult<St
 }
 
 /// Copy directory recursively
-#[allow(dead_code)]
+#[expect(dead_code, reason = "utility for future template copying")]
 pub fn copy_dir_recursive(src: &Path, dst: &Path) -> CliResult<()> {
     if !dst.exists() {
         std::fs::create_dir_all(dst)?;

@@ -93,7 +93,10 @@ impl TemplateBuilder {
     /// Configure whether to run cargo check after generation.
     ///
     /// Default is `true`.
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "builder option for future cargo check integration"
+    )]
     pub fn with_cargo_check(mut self, check: bool) -> Self {
         self.run_cargo_check = check;
         self
@@ -115,7 +118,7 @@ impl TemplateBuilder {
 
         match self.template {
             Template::Counter => counter::generate(dir, name_str, org_str)?,
-            // TODO: Implement specific templates for Todo, Dashboard, Widget, Plugin, Empty
+            // TODO(#templates): Implement specific templates for Todo, Dashboard, Widget, Plugin, Empty
             _ => basic::generate(dir, name_str, org_str)?,
         }
 
@@ -134,7 +137,7 @@ impl TemplateBuilder {
 /// Contains information about the generated project that can be used
 /// for further operations or user feedback.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(dead_code)]
+#[expect(dead_code, reason = "fields used for future post-generation reporting")]
 pub struct GeneratedProject {
     /// The project name.
     pub name: ProjectName,
@@ -148,7 +151,10 @@ pub struct GeneratedProject {
     pub git_initialized: bool,
 }
 
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "method reserved for future post-generation reporting"
+)]
 impl GeneratedProject {
     /// Get the full application ID (e.g., "com.example.my_app").
     pub fn app_id(&self) -> String {

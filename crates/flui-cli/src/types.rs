@@ -117,7 +117,7 @@ impl ProjectName {
     /// This is not unsafe in the Rust sense, but the caller should ensure
     /// the name is valid according to project name rules. This is useful
     /// for trusted internal sources or deserialization.
-    #[allow(dead_code)]
+    #[expect(dead_code, reason = "reserved for trusted internal sources")]
     pub fn new_unchecked(name: impl Into<String>) -> Self {
         Self(name.into())
     }
@@ -509,7 +509,7 @@ impl ProjectPath {
     ///
     /// Useful when you want to check existence separately or
     /// when working with paths that may be created later.
-    #[allow(dead_code)]
+    #[expect(dead_code, reason = "reserved for deferred existence check")]
     pub fn new_unchecked(name: &ProjectName, base: Option<PathBuf>) -> Self {
         let path = if let Some(base) = base {
             base.join(name.as_str())
