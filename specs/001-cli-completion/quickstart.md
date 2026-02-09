@@ -71,14 +71,14 @@ cargo clippy -p flui-cli -- -D warnings
 
 After implementation, verify:
 
-- [ ] `flui create my-app` generates a project that passes `cargo check`
-- [ ] `flui create my-app --local` generates path-based dependencies
-- [ ] `flui emulators list` shows available emulators (or helpful error if no SDK)
+- [x] `flui create my-app` generates a project that passes `cargo check`
+- [x] `flui create my-app --local` generates path-based dependencies
+- [x] `flui emulators list` shows available emulators (or helpful error if no SDK)
 - [ ] `flui emulators launch <name>` starts an emulator
-- [ ] `flui platform add android` creates directory and updates `flui.toml`
+- [x] `flui platform add android` creates directory and updates `flui.toml`
 - [ ] `flui platform remove android` removes with confirmation prompt
-- [ ] `flui devtools` shows instructions (without devtools feature)
+- [x] `flui devtools` shows instructions (without devtools feature)
 - [ ] `flui run --hot-reload` watches files and rebuilds on change
-- [ ] `cargo test -p flui-cli` passes all tests
-- [ ] `cargo clippy -p flui-cli -- -D warnings` has no warnings
+- [x] `cargo test -p flui-cli` passes all tests
+- [x] `cargo clippy -p flui-cli -- -D warnings` has no warnings
 - [ ] Test coverage >= 70%

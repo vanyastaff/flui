@@ -161,8 +161,11 @@ target_platforms = {platform_list}
 [assets]
 directories = ["assets"]
 
-[fonts]
-# Add custom fonts here
+# [[fonts]]
+# family = "Roboto"
+# fonts = [
+#     {{ asset = "fonts/Roboto-Regular.ttf", weight = 400, style = "normal" }},
+# ]
 "#
     );
 

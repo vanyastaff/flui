@@ -180,8 +180,6 @@ target_platforms = {platform_list}
 # Asset directories
 directories = ["assets"]
 
-[fonts]
-# Custom fonts can be added here
 # [[fonts]]
 # family = "Roboto"
 # fonts = [
