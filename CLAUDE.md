@@ -38,14 +38,17 @@ View Tree (immutable) → Element Tree (mutable) → Render Tree (layout/paint)
 
 ## Constitution Compliance
 
-**CRITICAL:** All work must align with `.specify/memory/constitution.md` (v1.2.0). Key principles:
+**CRITICAL:** All work must align with `.specify/memory/constitution.md` (v2.0.0). Key principles:
 
-1. **Test-First for Public APIs** - Write tests BEFORE implementation, verify red state
-2. **Type Safety First** - Foundation crates MAY use generics, Application crates MUST use concrete types
-3. **Never use println!/eprintln!** - Always use `tracing` for logging
-4. **On-demand rendering** - Use `ControlFlow::Wait`, not constant 60 FPS loops
-5. **Coverage Requirements**: Core ≥80%, Platform ≥70%, Widget ≥85%
-6. **ID Offset Pattern**: Slab uses 0-based, IDs use 1-based (NonZeroUsize)
+1. **Flutter as Reference, Not Copy** - Adapt Flutter patterns to Rust idioms, no Dart translation
+2. **Strict Crate Dependency DAG** - Dependencies flow downward only, no circular deps
+3. **Zero Unsafe in Widget/App Layer** - `unsafe` only in `flui-platform`, `flui-painting`, `flui-engine`
+4. **Composition Over Inheritance** - Traits + generics + enum dispatch, not `dyn` by default
+5. **Declarative API, Imperative Internals** - `build()` is pure, internals optimize freely
+6. **No `unwrap()`/`println!`/`dbg!`** - Use `thiserror`/`anyhow` for errors, `tracing` for logging
+7. **On-demand Rendering** - `ControlFlow::Wait`, render only when dirty, 60fps target
+8. **Coverage Requirements** - Core ≥80%, Platform ≥70%, Widget ≥85%
+9. **ID Offset Pattern** - Slab 0-based, IDs 1-based (NonZeroUsize)
 
 ## Essential Build Commands
 
