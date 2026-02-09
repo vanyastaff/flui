@@ -22,7 +22,6 @@ members = [
     # "crates/flui-view",
     # "crates/flui-animation",
     # "crates/flui-reactivity",
-    # "crates/flui-widgets",
     # "crates/flui-devtools",
     # "crates/flui-cli",
     # "crates/flui-build",
@@ -186,9 +185,6 @@ flui-foundation = { path = "crates/flui-foundation" }
 
 # === Platform Layer (for examples) ===
 flui-platform = { path = "crates/flui-platform" }
-
-# === Widgets (when stable) ===
-# flui-widgets = { path = "crates/flui-widgets" }
 
 # === Logging ===
 tracing.workspace = true
