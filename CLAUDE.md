@@ -277,3 +277,10 @@ git commit -m "feat: Add new widget
 - "trait not in scope" → Check prelude: `use flui_rendering::prelude::*;`
 - "mismatched types" with Arity → Verify `BoxChild<Single>` matches `impl RenderBox<Single>`
 - **wgpu issues:** Stay on 25.x (see https://github.com/gfx-rs/wgpu/issues/7915)
+
+## Active Technologies
+- Rust 1.91 (workspace `rust-version`) + clap 4.5, cliclack 0.3.6, console 0.15, flui-build, flui-log, toml 0.9, which 8.0, serde, thiserror, tracing, dirs 5.0 (001-cli-completion)
+- File-based (`flui.toml` project config, `~/.flui/config.toml` global config) (001-cli-completion)
+
+## Recent Changes
+- 001-cli-completion: Added Rust 1.91 (workspace `rust-version`) + clap 4.5, cliclack 0.3.6, console 0.15, flui-build, flui-log, toml 0.9, which 8.0, serde, thiserror, tracing, dirs 5.0

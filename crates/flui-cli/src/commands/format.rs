@@ -28,7 +28,7 @@ pub fn execute(check: bool) -> CliResult<()> {
         cmd = cmd.check();
     }
 
-    cmd.output_style(OutputStyle::Streaming).run()?;
+    let _ = cmd.output_style(OutputStyle::Streaming).run()?;
 
     if check {
         cliclack::outro(style("Code is properly formatted").green())?;

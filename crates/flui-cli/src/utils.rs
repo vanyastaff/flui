@@ -2,14 +2,21 @@ use crate::error::{CliError, CliResult};
 use std::path::Path;
 use std::process::Command;
 
-/// Check if a command exists in PATH
-#[expect(dead_code, reason = "utility for future command availability checks")]
+// Re-export scaffolding from flui-build where the logic belongs.
+// Used by platform add/remove commands (Phase 4).
+#[expect(unused_imports, reason = "re-exports for Phase 4 platform commands")]
+pub use flui_build::scaffold::{
+    is_valid_platform, scaffold_platform, valid_platform_names, ScaffoldParams,
+};
+
+/// Check if a command exists in PATH.
+#[expect(dead_code, reason = "utility functions for future commands")]
 pub fn command_exists(cmd: &str) -> bool {
     which::which(cmd).is_ok()
 }
 
-/// Run a command and capture output
-#[expect(dead_code, reason = "utility for future command execution")]
+/// Run a command and capture output.
+#[expect(dead_code, reason = "utility functions for future commands")]
 pub fn run_command(cmd: &str, args: &[&str], cwd: Option<&Path>) -> CliResult<String> {
     let mut command = Command::new(cmd);
     command.args(args);
@@ -25,14 +32,14 @@ pub fn run_command(cmd: &str, args: &[&str], cwd: Option<&Path>) -> CliResult<St
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr);
         Err(CliError::CommandFailed {
-            context: format!("Command failed: {}", stderr),
+            context: format!("Command failed: {stderr}"),
             exit_code: output.status.code(),
         })
     }
 }
 
-/// Copy directory recursively
-#[expect(dead_code, reason = "utility for future template copying")]
+/// Copy directory recursively.
+#[allow(dead_code, reason = "utility functions for future commands")]
 pub fn copy_dir_recursive(src: &Path, dst: &Path) -> CliResult<()> {
     if !dst.exists() {
         std::fs::create_dir_all(dst)?;

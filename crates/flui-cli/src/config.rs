@@ -191,6 +191,7 @@ pub struct BuildConfig {
 
 /// Build mode specific configuration.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[expect(clippy::struct_excessive_bools, reason = "mirrors TOML config schema")]
 pub struct BuildModeConfig {
     /// Enable incremental compilation.
     #[serde(default)]
@@ -283,7 +284,7 @@ pub struct GlobalConfig {
     /// Default build settings.
     #[serde(default)]
     pub build: GlobalBuildConfig,
-    /// DevTools settings.
+    /// `DevTools` settings.
     #[serde(default)]
     pub devtools: DevToolsConfig,
     /// Telemetry settings.
@@ -383,13 +384,13 @@ impl Default for GlobalBuildConfig {
     }
 }
 
-/// DevTools configuration.
+/// `DevTools` configuration.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DevToolsConfig {
-    /// Default port for DevTools server.
+    /// Default port for `DevTools` server.
     #[serde(default = "default_devtools_port")]
     pub port: u16,
-    /// Auto-launch DevTools in browser.
+    /// Auto-launch `DevTools` in browser.
     #[serde(default = "default_auto_launch")]
     pub auto_launch: bool,
 }
@@ -420,7 +421,7 @@ fn default_channel() -> String {
 fn default_jobs() -> usize {
     // Use std::thread::available_parallelism when available
     std::thread::available_parallelism()
-        .map(|n| n.get())
+        .map(std::num::NonZero::get)
         .unwrap_or(4)
 }
 

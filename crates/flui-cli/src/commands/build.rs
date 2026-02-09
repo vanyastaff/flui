@@ -12,8 +12,8 @@ use std::path::PathBuf;
 /// Build options collected into a struct to avoid excessive bool parameters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[expect(
-    dead_code,
-    reason = "structured options for future progress-based builds"
+    clippy::struct_excessive_bools,
+    reason = "structured options for build configuration flags"
 )]
 pub struct BuildOptions {
     /// Build in release mode.
@@ -37,6 +37,10 @@ pub struct BuildOptions {
     clippy::fn_params_excessive_bools,
     reason = "mirrors clap argument structure"
 )]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "mirrors clap argument structure"
+)]
 pub fn execute(
     target: BuildTarget,
     release: bool,
@@ -54,17 +58,17 @@ pub fn execute(
     };
 
     let mode = if release { "release" } else { "debug" };
-    cliclack::intro(style(format!(" flui build {} ", target)).on_cyan().black())?;
+    cliclack::intro(style(format!(" flui build {target} ")).on_cyan().black())?;
     cliclack::log::info(format!("Mode: {}", style(mode).cyan()))?;
 
     // Use flui_build for cross-platform builds
     let result = match target {
-        BuildTarget::Android => build_android(&options, output.as_ref()),
-        BuildTarget::Ios => build_ios(&options),
-        BuildTarget::Web => build_web(&options, output.as_ref()),
-        BuildTarget::Desktop => build_desktop(&options, output.as_ref()),
+        BuildTarget::Android => build_android(options, output.as_ref()),
+        BuildTarget::Ios => build_ios(options),
+        BuildTarget::Web => build_web(options, output.as_ref()),
+        BuildTarget::Desktop => build_desktop(options, output.as_ref()),
         BuildTarget::Windows | BuildTarget::Linux | BuildTarget::Macos => {
-            build_specific_platform(target, &options, output.as_ref())
+            build_specific_platform(target, options, output.as_ref())
         }
     };
 
@@ -78,7 +82,7 @@ pub fn execute(
     Ok(())
 }
 
-/// Execute build with progress indicators from flui_build.
+/// Execute build with progress indicators from `flui_build`.
 ///
 /// This function provides detailed progress tracking using indicatif progress bars.
 ///
@@ -86,6 +90,14 @@ pub fn execute(
 ///
 /// Returns an error if the build fails.
 #[expect(dead_code, reason = "progress-based build for future verbose mode")]
+#[expect(
+    clippy::fn_params_excessive_bools,
+    reason = "mirrors clap argument structure"
+)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "mirrors clap argument structure"
+)]
 pub fn execute_with_progress(
     target: BuildTarget,
     release: bool,
@@ -106,17 +118,17 @@ pub fn execute_with_progress(
 
     let result = match target {
         BuildTarget::Android => {
-            build_android_with_progress(&options, output.as_ref(), &progress_manager)
+            build_android_with_progress(options, output.as_ref(), &progress_manager)
         }
-        BuildTarget::Ios => build_ios(&options),
-        BuildTarget::Web => build_web_with_progress(&options, output.as_ref(), &progress_manager),
+        BuildTarget::Ios => build_ios(options),
+        BuildTarget::Web => build_web_with_progress(options, output.as_ref(), &progress_manager),
         BuildTarget::Desktop => {
-            build_desktop_with_progress(&options, output.as_ref(), &progress_manager)
+            build_desktop_with_progress(options, output.as_ref(), &progress_manager)
         }
         BuildTarget::Windows | BuildTarget::Linux | BuildTarget::Macos => {
             build_specific_platform_with_progress(
                 target,
-                &options,
+                options,
                 output.as_ref(),
                 &progress_manager,
             )
@@ -127,7 +139,7 @@ pub fn execute_with_progress(
     result
 }
 
-fn build_android(options: &BuildOptions, output: Option<&PathBuf>) -> CliResult<()> {
+fn build_android(options: BuildOptions, output: Option<&PathBuf>) -> CliResult<()> {
     let spinner = cliclack::spinner();
     spinner.start("Building Android APK...");
 
@@ -161,13 +173,11 @@ fn build_android(options: &BuildOptions, output: Option<&PathBuf>) -> CliResult<
         .context("Android environment validation failed")?;
 
     spinner.set_message("Building Rust libraries...");
-    let artifacts = android_builder
-        .build_rust(&ctx)
+    let artifacts = pollster::block_on(android_builder.build_rust(&ctx))
         .context("Failed to build Rust libraries")?;
 
     spinner.set_message("Building APK...");
-    let final_artifacts = android_builder
-        .build_platform(&ctx, &artifacts)
+    let final_artifacts = pollster::block_on(android_builder.build_platform(&ctx, &artifacts))
         .context("Failed to build APK")?;
 
     spinner.stop(format!("{} Android APK built", style("✓").green()));
@@ -185,7 +195,7 @@ fn build_android(options: &BuildOptions, output: Option<&PathBuf>) -> CliResult<
 }
 
 fn build_android_with_progress(
-    options: &BuildOptions,
+    options: BuildOptions,
     output: Option<&PathBuf>,
     manager: &ProgressManager,
 ) -> CliResult<()> {
@@ -225,16 +235,14 @@ fn build_android_with_progress(
     // Build Rust phase
     progress.start_phase(BuildPhase::BuildRust, Some("Compiling Rust libraries..."));
     progress.set_progress(30);
-    let artifacts = android_builder
-        .build_rust(&ctx)
+    let artifacts = pollster::block_on(android_builder.build_rust(&ctx))
         .context("Failed to build Rust libraries")?;
     progress.finish_phase("Rust libraries compiled");
 
     // Build platform phase
     progress.start_phase(BuildPhase::BuildPlatform, Some("Building APK..."));
     progress.set_progress(70);
-    let final_artifacts = android_builder
-        .build_platform(&ctx, &artifacts)
+    let final_artifacts = pollster::block_on(android_builder.build_platform(&ctx, &artifacts))
         .context("Failed to build APK")?;
 
     progress.finish(format!(
@@ -246,7 +254,7 @@ fn build_android_with_progress(
     Ok(())
 }
 
-fn build_ios(options: &BuildOptions) -> CliResult<()> {
+fn build_ios(options: BuildOptions) -> CliResult<()> {
     cliclack::log::warning("iOS builds not yet supported")?;
 
     let release_flag = if options.release { " --release" } else { "" };
@@ -263,7 +271,7 @@ fn build_ios(options: &BuildOptions) -> CliResult<()> {
     Ok(())
 }
 
-fn build_web(options: &BuildOptions, output: Option<&PathBuf>) -> CliResult<()> {
+fn build_web(options: BuildOptions, output: Option<&PathBuf>) -> CliResult<()> {
     let spinner = cliclack::spinner();
     spinner.start("Building Web (WASM)...");
 
@@ -297,13 +305,11 @@ fn build_web(options: &BuildOptions, output: Option<&PathBuf>) -> CliResult<()> 
         .context("Web environment validation failed")?;
 
     spinner.set_message("Building WASM...");
-    let artifacts = web_builder
-        .build_rust(&ctx)
-        .context("Failed to build WASM")?;
+    let artifacts =
+        pollster::block_on(web_builder.build_rust(&ctx)).context("Failed to build WASM")?;
 
     spinner.set_message("Building web package...");
-    let final_artifacts = web_builder
-        .build_platform(&ctx, &artifacts)
+    let final_artifacts = pollster::block_on(web_builder.build_platform(&ctx, &artifacts))
         .context("Failed to build web package")?;
 
     spinner.stop(format!("{} Web package built", style("✓").green()));
@@ -318,7 +324,7 @@ fn build_web(options: &BuildOptions, output: Option<&PathBuf>) -> CliResult<()> 
 }
 
 fn build_web_with_progress(
-    options: &BuildOptions,
+    options: BuildOptions,
     output: Option<&PathBuf>,
     manager: &ProgressManager,
 ) -> CliResult<()> {
@@ -358,16 +364,14 @@ fn build_web_with_progress(
     // Build Rust phase
     progress.start_phase(BuildPhase::BuildRust, Some("Compiling to WASM..."));
     progress.set_progress(30);
-    let artifacts = web_builder
-        .build_rust(&ctx)
-        .context("Failed to build WASM")?;
+    let artifacts =
+        pollster::block_on(web_builder.build_rust(&ctx)).context("Failed to build WASM")?;
     progress.finish_phase("WASM compiled");
 
     // Build platform phase
     progress.start_phase(BuildPhase::BuildPlatform, Some("Packaging web assets..."));
     progress.set_progress(70);
-    let final_artifacts = web_builder
-        .build_platform(&ctx, &artifacts)
+    let final_artifacts = pollster::block_on(web_builder.build_platform(&ctx, &artifacts))
         .context("Failed to build web package")?;
 
     progress.finish(format!(
@@ -379,7 +383,7 @@ fn build_web_with_progress(
     Ok(())
 }
 
-fn build_desktop(options: &BuildOptions, output: Option<&PathBuf>) -> CliResult<()> {
+fn build_desktop(options: BuildOptions, output: Option<&PathBuf>) -> CliResult<()> {
     let spinner = cliclack::spinner();
     spinner.start("Building Desktop binary...");
 
@@ -411,13 +415,11 @@ fn build_desktop(options: &BuildOptions, output: Option<&PathBuf>) -> CliResult<
         .context("Desktop environment validation failed")?;
 
     spinner.set_message("Building binary...");
-    let artifacts = desktop_builder
-        .build_rust(&ctx)
-        .context("Failed to build binary")?;
+    let artifacts =
+        pollster::block_on(desktop_builder.build_rust(&ctx)).context("Failed to build binary")?;
 
     spinner.set_message("Copying binary...");
-    let final_artifacts = desktop_builder
-        .build_platform(&ctx, &artifacts)
+    let final_artifacts = pollster::block_on(desktop_builder.build_platform(&ctx, &artifacts))
         .context("Failed to copy binary")?;
 
     spinner.stop(format!("{} Desktop binary built", style("✓").green()));
@@ -435,7 +437,7 @@ fn build_desktop(options: &BuildOptions, output: Option<&PathBuf>) -> CliResult<
 }
 
 fn build_desktop_with_progress(
-    options: &BuildOptions,
+    options: BuildOptions,
     output: Option<&PathBuf>,
     manager: &ProgressManager,
 ) -> CliResult<()> {
@@ -473,16 +475,14 @@ fn build_desktop_with_progress(
     // Build Rust phase
     progress.start_phase(BuildPhase::BuildRust, Some("Compiling binary..."));
     progress.set_progress(30);
-    let artifacts = desktop_builder
-        .build_rust(&ctx)
-        .context("Failed to build binary")?;
+    let artifacts =
+        pollster::block_on(desktop_builder.build_rust(&ctx)).context("Failed to build binary")?;
     progress.finish_phase("Binary compiled");
 
     // Build platform phase
     progress.start_phase(BuildPhase::BuildPlatform, Some("Copying artifacts..."));
     progress.set_progress(70);
-    let final_artifacts = desktop_builder
-        .build_platform(&ctx, &artifacts)
+    let final_artifacts = pollster::block_on(desktop_builder.build_platform(&ctx, &artifacts))
         .context("Failed to copy binary")?;
 
     progress.finish(format!(
@@ -496,13 +496,13 @@ fn build_desktop_with_progress(
 
 fn build_specific_platform(
     target: BuildTarget,
-    options: &BuildOptions,
+    options: BuildOptions,
     output: Option<&PathBuf>,
 ) -> CliResult<()> {
     let target_triple = target.target_triple();
 
     let spinner = cliclack::spinner();
-    spinner.start(format!("Building for target: {}...", target_triple));
+    spinner.start(format!("Building for target: {target_triple}..."));
 
     let workspace_root = std::env::current_dir()?;
     let profile = if options.release {
@@ -534,13 +534,11 @@ fn build_specific_platform(
         .context("Environment validation failed")?;
 
     spinner.set_message("Building...");
-    let artifacts = desktop_builder
-        .build_rust(&ctx)
-        .context("Failed to build")?;
+    let artifacts =
+        pollster::block_on(desktop_builder.build_rust(&ctx)).context("Failed to build")?;
 
     spinner.set_message("Copying artifacts...");
-    let final_artifacts = desktop_builder
-        .build_platform(&ctx, &artifacts)
+    let final_artifacts = pollster::block_on(desktop_builder.build_platform(&ctx, &artifacts))
         .context("Failed to copy artifacts")?;
 
     spinner.stop(format!(
@@ -559,7 +557,7 @@ fn build_specific_platform(
 
 fn build_specific_platform_with_progress(
     target: BuildTarget,
-    options: &BuildOptions,
+    options: BuildOptions,
     output: Option<&PathBuf>,
     manager: &ProgressManager,
 ) -> CliResult<()> {
@@ -600,16 +598,14 @@ fn build_specific_platform_with_progress(
     // Build Rust phase
     progress.start_phase(BuildPhase::BuildRust, Some("Compiling..."));
     progress.set_progress(30);
-    let artifacts = desktop_builder
-        .build_rust(&ctx)
-        .context("Failed to build")?;
+    let artifacts =
+        pollster::block_on(desktop_builder.build_rust(&ctx)).context("Failed to build")?;
     progress.finish_phase("Compiled");
 
     // Build platform phase
     progress.start_phase(BuildPhase::BuildPlatform, Some("Copying artifacts..."));
     progress.set_progress(70);
-    let final_artifacts = desktop_builder
-        .build_platform(&ctx, &artifacts)
+    let final_artifacts = pollster::block_on(desktop_builder.build_platform(&ctx, &artifacts))
         .context("Failed to copy artifacts")?;
 
     progress.finish(format!(

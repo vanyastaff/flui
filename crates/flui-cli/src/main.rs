@@ -50,6 +50,15 @@ mod templates;
 pub mod types;
 mod utils;
 
+/// Prelude module re-exporting commonly used types.
+///
+/// Import with `use crate::prelude::*;` for convenient access.
+pub mod prelude {
+    pub use crate::error::{CliError, CliResult, OptionExt, ResultExt};
+    pub use crate::runner::{CargoCommand, CommandResult, GitCommand, OutputStyle};
+    pub use crate::types::{OrganizationId, ProjectName, ProjectPath};
+}
+
 /// Command-line interface for FLUI - A declarative UI framework for Rust.
 #[derive(Debug, Parser)]
 #[command(name = "flui")]
@@ -88,6 +97,10 @@ enum Commands {
         /// Custom output directory
         #[arg(long)]
         path: Option<PathBuf>,
+
+        /// Use local path dependencies instead of crates.io versions
+        #[arg(long)]
+        local: bool,
 
         /// Create a library instead of an application
         #[arg(long)]
@@ -206,11 +219,10 @@ enum Commands {
         platform: Option<String>,
     },
 
-    /// Launch emulators
+    /// Manage emulators and simulators
     Emulators {
-        /// Launch specific emulator
-        #[arg(long)]
-        launch: Option<String>,
+        #[command(subcommand)]
+        subcommand: EmulatorSubcommand,
     },
 
     /// Clean build artifacts
@@ -224,9 +236,9 @@ enum Commands {
         platform: Option<String>,
     },
 
-    /// Update flui_cli and project dependencies
+    /// Update `flui_cli` and project dependencies
     Upgrade {
-        /// Update flui_cli only
+        /// Update `flui_cli` only
         #[arg(long)]
         self_update: bool,
 
@@ -248,7 +260,7 @@ enum Commands {
         check: bool,
     },
 
-    /// Launch DevTools
+    /// Launch `DevTools`
     Devtools {
         /// Port to listen on
         #[arg(short, long, default_value = "9100")]
@@ -279,6 +291,22 @@ enum PlatformSubcommand {
 
     /// List supported platforms
     List,
+}
+
+#[derive(Debug, Subcommand)]
+enum EmulatorSubcommand {
+    /// List available emulators and simulators
+    List {
+        /// Filter by platform (android or ios)
+        #[arg(long)]
+        platform: Option<String>,
+    },
+
+    /// Launch a specific emulator or simulator
+    Launch {
+        /// Emulator name to launch
+        name: String,
+    },
 }
 
 /// Available project templates.
@@ -489,28 +517,42 @@ fn main() {
             template,
             platforms,
             path,
+            local,
             lib,
             interactive,
         } => {
             if interactive || name.is_none() {
                 // Interactive mode — newtypes already validated by prompts
-                let config = commands::create_interactive::interactive_create()?;
-                commands::create::execute(
-                    config.name,
-                    config.org,
-                    config.template,
-                    platforms,
-                    path,
-                    lib,
-                )
+                (|| {
+                    let config = commands::create_interactive::interactive_create()?;
+                    commands::create::execute(
+                        config.name,
+                        config.org,
+                        config.template,
+                        config.platforms.or(platforms),
+                        path,
+                        local,
+                        lib,
+                    )
+                })()
             } else {
                 // Non-interactive mode — validate raw strings into newtypes
-                let Some(name) = name else {
-                    unreachable!("name is Some due to previous check")
-                };
-                let project_name = crate::types::ProjectName::new(name)?;
-                let org_id = crate::types::OrganizationId::new(org)?;
-                commands::create::execute(project_name, org_id, template, platforms, path, lib)
+                (|| {
+                    let Some(name) = name else {
+                        unreachable!("name is Some due to previous check")
+                    };
+                    let project_name = crate::types::ProjectName::new(name)?;
+                    let org_id = crate::types::OrganizationId::new(org)?;
+                    commands::create::execute(
+                        project_name,
+                        org_id,
+                        template,
+                        platforms,
+                        path,
+                        local,
+                        lib,
+                    )
+                })()
             }
         }
 
@@ -556,7 +598,12 @@ fn main() {
 
         Commands::Devices { details, platform } => commands::devices::execute(details, platform),
 
-        Commands::Emulators { launch } => commands::emulators::execute(launch),
+        Commands::Emulators { subcommand } => match subcommand {
+            EmulatorSubcommand::List { platform } => {
+                commands::emulators::execute_list(platform.as_deref())
+            }
+            EmulatorSubcommand::Launch { name } => commands::emulators::execute_launch(&name),
+        },
 
         Commands::Clean { deep, platform } => commands::clean::execute(deep, platform),
 
@@ -579,7 +626,7 @@ fn main() {
     };
 
     if let Err(e) = result {
-        let _ = cliclack::log::error(format!("{}", e));
+        let _ = cliclack::log::error(format!("{e}"));
         std::process::exit(1);
     }
 }

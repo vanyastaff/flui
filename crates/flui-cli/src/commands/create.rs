@@ -27,12 +27,17 @@ use std::path::{Path, PathBuf};
 /// - Directory already exists
 /// - Template generation fails
 /// - Git initialization fails
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "mirrors clap argument structure"
+)]
 pub fn execute(
     project_name: ProjectName,
     org_id: OrganizationId,
     template: Template,
-    _platforms: Option<Vec<Platform>>,
+    platforms: Option<Vec<Platform>>,
     path: Option<PathBuf>,
+    local: bool,
     _is_lib: bool,
 ) -> CliResult<()> {
     cliclack::intro(style(" flui create ").on_cyan().black())?;
@@ -54,10 +59,19 @@ pub fn execute(
         style(template.description()).cyan()
     ))?;
 
+    // Convert Platform enums to string names for the builder.
+    let platform_names: Vec<String> = platforms
+        .unwrap_or_default()
+        .iter()
+        .map(std::string::ToString::to_string)
+        .collect();
+
     let spinner = cliclack::spinner();
     spinner.start("Generating project files...");
     let _generated = TemplateBuilder::new(project_name.clone(), org_id)
         .template(template)
+        .local(local)
+        .platforms(platform_names)
         .with_git(false)
         .with_cargo_check(false)
         .generate(project_dir)?;
@@ -79,12 +93,12 @@ pub fn execute(
     let next_steps = format!(
         "{}\n  {}\n  {}",
         style("To get started:").bold(),
-        style(format!("cd {}", project_name)).dim(),
+        style(format!("cd {project_name}")).dim(),
         style("flui run").dim(),
     );
     cliclack::note("Next Steps", next_steps)?;
 
-    cliclack::outro(style(format!("Successfully created '{}'", project_name)).green())?;
+    cliclack::outro(style(format!("Successfully created '{project_name}'")).green())?;
 
     Ok(())
 }

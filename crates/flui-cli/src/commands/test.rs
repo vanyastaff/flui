@@ -19,6 +19,10 @@ use console::style;
 /// # Errors
 ///
 /// Returns `CliError::TestsFailed` if any tests fail.
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "mirrors clap argument structure"
+)]
 pub fn execute(
     filter: Option<String>,
     unit: bool,
@@ -44,7 +48,7 @@ pub fn execute(
         cliclack::log::info("Running integration tests only")?;
     }
 
-    cmd.output_style(OutputStyle::Streaming).run()?;
+    let _ = cmd.output_style(OutputStyle::Streaming).run()?;
 
     cliclack::outro(style("All tests passed").green())?;
 

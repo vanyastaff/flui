@@ -19,5 +19,8 @@ tokio = { workspace = true, features = ["process"] }
 which.workspace = true
 indicatif.workspace = true  # Progress bars for build status
 
+[dev-dependencies]
+tempfile.workspace = true
+
 [lints]
 workspace = true
