@@ -24,7 +24,7 @@ members = [
     # "crates/flui-reactivity",
     # "crates/flui-devtools",
     # "crates/flui-cli",
-    # "crates/flui-build",
+    "crates/flui-build",
 ]
 
 [workspace.package]

@@ -38,7 +38,8 @@ pub async fn run_command<S: AsRef<str>>(program: &str, args: &[S]) -> BuildResul
 }
 
 /// Run a command and capture output
-pub async fn run_command_with_output<S: AsRef<str>>(
+#[allow(dead_code)]
+pub(crate) async fn run_command_with_output<S: AsRef<str>>(
     program: &str,
     args: &[S],
 ) -> BuildResult<String> {
@@ -116,10 +117,11 @@ pub async fn run_command_in_dir<S: AsRef<str>>(
 /// # Arguments
 ///
 /// * `program` - Command to run
-/// * `args` - Command arguments  
+/// * `args` - Command arguments
 /// * `progress` - Optional progress reporter
 /// * `verbose` - If true, show all output; if false, only show parsed events
-pub async fn run_command_with_progress<S: AsRef<str>>(
+#[allow(dead_code)]
+pub(crate) async fn run_command_with_progress<S: AsRef<str>>(
     program: &str,
     args: &[S],
     mut progress: Option<&mut BuildProgress>,

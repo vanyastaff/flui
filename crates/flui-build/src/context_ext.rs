@@ -15,7 +15,7 @@
 ///         targets: vec!["aarch64-linux-android".to_string()],
 ///     })
 ///     .with_profile(Profile::Release)
-///     .with_feature("webgpu".to_string())
+///     .with_feature("webgpu")
 ///     .build();
 ///
 /// // Extension methods are available automatically
@@ -62,7 +62,7 @@ use crate::platform::{BuilderContext, Platform, Profile};
 ///         targets: vec!["aarch64-linux-android".to_string()],
 ///     })
 ///     .with_profile(Profile::Release)
-///     .with_feature("webgpu".to_string())
+///     .with_feature("webgpu")
 ///     .build();
 ///
 /// let args = ctx.cargo_args();
@@ -78,8 +78,8 @@ use crate::platform::{BuilderContext, Platform, Profile};
 /// let ctx = BuilderContextBuilder::new(PathBuf::from("."))
 ///     .with_platform(Platform::Web { target: "web".to_string() })
 ///     .with_profile(Profile::Debug)
-///     .with_feature("webgpu".to_string())
-///     .with_feature("audio".to_string())
+///     .with_feature("webgpu")
+///     .with_feature("audio")
 ///     .build();
 ///
 /// if ctx.has_feature("webgpu") {
@@ -146,7 +146,7 @@ pub trait BuilderContextExt {
     /// let ctx = BuilderContextBuilder::new(PathBuf::from("."))
     ///     .with_platform(Platform::Desktop { target: None })
     ///     .with_profile(Profile::Release)
-    ///     .with_feature("webgpu".to_string())
+    ///     .with_feature("webgpu")
     ///     .build();
     ///
     /// let args = ctx.cargo_args();
@@ -198,7 +198,7 @@ pub trait BuilderContextExt {
     /// let ctx = BuilderContextBuilder::new(PathBuf::from("."))
     ///     .with_platform(Platform::Web { target: "web".to_string() })
     ///     .with_profile(Profile::Debug)
-    ///     .with_feature("webgpu".to_string())
+    ///     .with_feature("webgpu")
     ///     .build();
     ///
     /// assert!(ctx.has_feature("webgpu"));
@@ -223,7 +223,7 @@ pub trait BuilderContextExt {
     /// let ctx = BuilderContextBuilder::new(PathBuf::from("."))
     ///     .with_platform(Platform::Desktop { target: None })
     ///     .with_profile(Profile::Debug)
-    ///     .with_feature("audio".to_string())
+    ///     .with_feature("audio")
     ///     .build();
     ///
     /// assert!(ctx.has_any_feature(&["audio", "video"]));
@@ -248,8 +248,8 @@ pub trait BuilderContextExt {
     /// let ctx = BuilderContextBuilder::new(PathBuf::from("."))
     ///     .with_platform(Platform::Desktop { target: None })
     ///     .with_profile(Profile::Debug)
-    ///     .with_feature("audio".to_string())
-    ///     .with_feature("video".to_string())
+    ///     .with_feature("audio")
+    ///     .with_feature("video")
     ///     .build();
     ///
     /// assert!(ctx.has_all_features(&["audio", "video"]));
@@ -268,8 +268,8 @@ pub trait BuilderContextExt {
     /// let ctx = BuilderContextBuilder::new(PathBuf::from("."))
     ///     .with_platform(Platform::Desktop { target: None })
     ///     .with_profile(Profile::Debug)
-    ///     .with_feature("audio".to_string())
-    ///     .with_feature("video".to_string())
+    ///     .with_feature("audio")
+    ///     .with_feature("video")
     ///     .build();
     ///
     /// assert_eq!(ctx.feature_count(), 2);

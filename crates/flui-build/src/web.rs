@@ -192,7 +192,7 @@ impl PlatformBuilder for WebBuilder {
 }
 
 /// Recursively copy directory
-fn copy_dir_recursive(src: &PathBuf, dst: &PathBuf) -> BuildResult<()> {
+fn copy_dir_recursive(src: &Path, dst: &Path) -> BuildResult<()> {
     std::fs::create_dir_all(dst)?;
 
     for entry in std::fs::read_dir(src)? {

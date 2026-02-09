@@ -84,20 +84,16 @@ pub fn resolve_ndk_home(android_home: &Path) -> BuildResult<PathBuf> {
     // Try ANDROID_HOME/ndk/<version>
     let ndk_dir = android_home.join("ndk");
     if ndk_dir.exists() {
-        // Find the latest NDK version
-        let mut versions = vec![];
-        for entry in std::fs::read_dir(&ndk_dir)? {
-            let entry = entry?;
-            if entry.file_type()?.is_dir() {
-                versions.push(entry.path());
-            }
-        }
+        // Find the latest NDK version by sorted directory names
+        let latest = std::fs::read_dir(&ndk_dir)?
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_type().is_ok_and(|ft| ft.is_dir()))
+            .map(|entry| entry.path())
+            .max();
 
-        if !versions.is_empty() {
-            versions.sort();
-            let latest = versions.last().unwrap();
-            tracing::debug!("Found NDK at: {:?}", latest);
-            return Ok(latest.clone());
+        if let Some(path) = latest {
+            tracing::debug!("Found NDK at: {:?}", path);
+            return Ok(path);
         }
     }
 

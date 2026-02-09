@@ -22,33 +22,44 @@ impl DesktopBuilder {
         })
     }
 
-    fn detect_host_target() -> String {
-        // Get host triple
+    fn detect_host_target() -> BuildResult<String> {
+        // Get host triple from rustc
         let output = std::process::Command::new("rustc")
             .args(["-vV"])
             .output()
-            .expect("Failed to run rustc");
+            .map_err(|e| BuildError::CommandFailed {
+                command: "rustc -vV".to_string(),
+                exit_code: -1,
+                stderr: e.to_string(),
+            })?;
 
         let output_str = String::from_utf8_lossy(&output.stdout);
 
-        for line in output_str.lines() {
-            if line.starts_with("host:") {
-                return line.split(':').nth(1).unwrap().trim().to_string();
-            }
+        let host = output_str
+            .lines()
+            .find(|line| line.starts_with("host:"))
+            .and_then(|line| line.split(':').nth(1))
+            .map(|s| s.trim().to_string());
+
+        if let Some(target) = host {
+            return Ok(target);
         }
 
         // Fallback to common targets
-        if cfg!(target_os = "windows") {
-            "x86_64-pc-windows-msvc".to_string()
+        let fallback = if cfg!(target_os = "windows") {
+            "x86_64-pc-windows-msvc"
         } else if cfg!(target_os = "macos") {
             if cfg!(target_arch = "aarch64") {
-                "aarch64-apple-darwin".to_string()
+                "aarch64-apple-darwin"
             } else {
-                "x86_64-apple-darwin".to_string()
+                "x86_64-apple-darwin"
             }
         } else {
-            "x86_64-unknown-linux-gnu".to_string()
-        }
+            "x86_64-unknown-linux-gnu"
+        };
+
+        tracing::warn!("Could not detect host target from rustc, falling back to {fallback}");
+        Ok(fallback.to_string())
     }
 }
 
@@ -67,9 +78,10 @@ impl PlatformBuilder for DesktopBuilder {
 
     fn build_rust(&self, ctx: &BuilderContext) -> BuildResult<BuildArtifacts> {
         let target = match &ctx.platform {
-            crate::platform::Platform::Desktop { target } => {
-                target.clone().unwrap_or_else(Self::detect_host_target)
-            }
+            crate::platform::Platform::Desktop { target } => match target {
+                Some(t) => t.clone(),
+                None => Self::detect_host_target()?,
+            },
             _ => {
                 return Err(BuildError::InvalidPlatform {
                     reason: "Expected Desktop platform".to_string(),

@@ -66,7 +66,7 @@ pub mod platform;
 /// Build progress tracking and reporting
 pub mod progress;
 /// Utility functions and helpers
-pub mod util;
+pub(crate) mod util;
 /// Web/WASM platform build support
 pub mod web;
 

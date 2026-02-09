@@ -225,12 +225,12 @@ impl<P, Pr> BuilderContextBuilder<P, Pr> {
     /// use std::path::PathBuf;
     ///
     /// let builder = BuilderContextBuilder::new(PathBuf::from("."))
-    ///     .with_feature("feature1".to_string())
-    ///     .with_feature("feature2".to_string());
+    ///     .with_feature("feature1")
+    ///     .with_feature("feature2");
     /// ```
     #[must_use]
-    pub fn with_feature(mut self, feature: String) -> Self {
-        self.features.push(feature);
+    pub fn with_feature(mut self, feature: impl Into<String>) -> Self {
+        self.features.push(feature.into());
         self
     }
 
@@ -339,8 +339,8 @@ mod tests {
         let ctx = BuilderContextBuilder::new(PathBuf::from("."))
             .with_platform(Platform::Desktop { target: None })
             .with_profile(Profile::Release)
-            .with_feature("feat1".to_string())
-            .with_feature("feat2".to_string())
+            .with_feature("feat1")
+            .with_feature("feat2")
             .build();
 
         assert_eq!(ctx.features.len(), 2);

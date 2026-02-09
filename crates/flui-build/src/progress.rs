@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 /// Build phase indicator
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BuildPhase {
     /// Validating environment and tools
     Validate,
