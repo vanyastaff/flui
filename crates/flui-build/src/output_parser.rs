@@ -3,8 +3,6 @@
 //! This module provides parsers that extract meaningful progress information
 //! from the output of various build tools (cargo, gradle, wasm-pack).
 
-use std::sync::Arc;
-
 /// Parsed build event from tool output
 #[derive(Debug, Clone)]
 pub enum BuildEvent {
@@ -229,12 +227,12 @@ impl OutputParser for WasmPackParser {
 
 /// Get parser for a specific tool
 #[must_use]
-pub fn get_parser(tool: &str) -> Arc<dyn OutputParser> {
+pub fn get_parser(tool: &str) -> Box<dyn OutputParser> {
     match tool.to_lowercase().as_str() {
-        "gradle" | "gradlew" | "gradlew.bat" => Arc::new(GradleParser),
-        "wasm-pack" => Arc::new(WasmPackParser),
-        "xcodebuild" | "xcode" => Arc::new(XcodeParser),
-        _ => Arc::new(CargoParser), // Default to cargo parser (includes "cargo" and "cargo-ndk")
+        "gradle" | "gradlew" | "gradlew.bat" => Box::new(GradleParser),
+        "wasm-pack" => Box::new(WasmPackParser),
+        "xcodebuild" | "xcode" => Box::new(XcodeParser),
+        _ => Box::new(CargoParser), // Default to cargo parser (includes "cargo" and "cargo-ndk")
     }
 }
 

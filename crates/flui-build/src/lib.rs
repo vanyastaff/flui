@@ -20,16 +20,13 @@
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//!     // Create build context
-//!     let ctx = BuilderContext {
-//!         workspace_root: PathBuf::from("."),
-//!         platform: Platform::Android {
+//!     // Create build context via builder
+//!     let ctx = BuilderContextBuilder::new(PathBuf::from("."))
+//!         .with_platform(Platform::Android {
 //!             targets: vec!["arm64-v8a".to_string()],
-//!         },
-//!         profile: Profile::Release,
-//!         features: vec![],
-//!         output_dir: PathBuf::from("target/flui-out/android"),
-//!     };
+//!         })
+//!         .with_profile(Profile::Release)
+//!         .build();
 //!
 //!     // Create Android builder
 //!     let builder = AndroidBuilder::new(&ctx.workspace_root)?;

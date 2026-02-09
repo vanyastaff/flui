@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::error::BuildResult;
+use crate::error::{BuildError, BuildResult};
 
 /// Private module to seal the `PlatformBuilder` trait.
 ///
@@ -11,8 +11,11 @@ pub(crate) mod private {
     pub trait Sealed {}
 }
 
-/// Build context containing configuration and paths
+/// Build context containing configuration and paths.
+///
+/// Use [`BuilderContextBuilder`](crate::BuilderContextBuilder) to construct instances.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct BuilderContext {
     /// Root directory of the workspace
     pub workspace_root: PathBuf,
@@ -74,6 +77,18 @@ pub enum Profile {
     Release,
 }
 
+impl std::fmt::Display for Profile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::fmt::Display for Platform {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
 impl Profile {
     /// Returns the cargo flag for this profile
     ///
@@ -105,19 +120,24 @@ impl From<&str> for Profile {
     }
 }
 
-impl From<&str> for Platform {
-    fn from(s: &str) -> Self {
+impl TryFrom<&str> for Platform {
+    type Error = BuildError;
+
+    fn try_from(s: &str) -> Result<Self, Self::Error> {
         match s {
-            "android" => Platform::Android {
+            "android" => Ok(Platform::Android {
                 targets: vec!["aarch64-linux-android".to_string()],
-            },
-            "ios" => Platform::IOS {
+            }),
+            "ios" => Ok(Platform::IOS {
                 targets: vec!["aarch64-apple-ios".to_string()],
-            },
-            "web" => Platform::Web {
+            }),
+            "web" => Ok(Platform::Web {
                 target: "web".to_string(),
-            },
-            _ => Platform::Desktop { target: None },
+            }),
+            "desktop" => Ok(Platform::Desktop { target: None }),
+            other => Err(BuildError::InvalidPlatform {
+                reason: format!("unknown platform '{other}', expected: android, ios, web, desktop"),
+            }),
         }
     }
 }

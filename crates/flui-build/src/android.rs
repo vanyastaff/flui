@@ -51,11 +51,12 @@ impl PlatformBuilder for AndroidBuilder {
         check_command_exists("cargo")?;
 
         // Try to find cargo-ndk
-        let cargo_ndk_result = std::process::Command::new("cargo")
+        let cargo_ndk_ok = std::process::Command::new("cargo")
             .args(["ndk", "--version"])
-            .output();
+            .output()
+            .is_ok_and(|output| output.status.success());
 
-        if cargo_ndk_result.is_err() || !cargo_ndk_result.as_ref().unwrap().status.success() {
+        if !cargo_ndk_ok {
             return Err(BuildError::ToolNotFound {
                 tool: "cargo-ndk".to_string(),
                 install_hint: "cargo install cargo-ndk".to_string(),

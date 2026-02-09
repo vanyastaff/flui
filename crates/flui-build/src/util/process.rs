@@ -151,7 +151,7 @@ pub(crate) async fn run_command_with_progress<S: AsRef<str>>(
 
         while let Ok(Some(line)) = lines.next_line().await {
             if verbose {
-                println!("{line}");
+                tracing::info!("{}", line);
             }
 
             if let Some(event) = parser.parse_line(&line) {
