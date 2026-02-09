@@ -236,6 +236,4 @@ impl Simulation for BoundedFrictionSimulation {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-}
+mod tests {}

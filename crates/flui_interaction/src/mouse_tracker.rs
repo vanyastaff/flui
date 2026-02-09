@@ -43,6 +43,7 @@
 //! ```
 
 use parking_lot::Mutex;
+use smallvec::SmallVec;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -262,20 +263,21 @@ impl MouseTracker {
             hit_test_result.iter().map(|entry| entry.target).collect();
 
         // Find regions that were entered (new but not in old)
-        let entered: Vec<RegionId> = new_regions
+        // SmallVec avoids heap allocation for typical mouse moves (1-4 regions)
+        let entered: SmallVec<[RegionId; 4]> = new_regions
             .difference(&state.active_regions)
             .copied()
             .collect();
 
         // Find regions that were exited (old but not in new)
-        let exited: Vec<RegionId> = state
+        let exited: SmallVec<[RegionId; 4]> = state
             .active_regions
             .difference(&new_regions)
             .copied()
             .collect();
 
         // Find regions that are still active (for hover events)
-        let hovering: Vec<RegionId> = new_regions
+        let hovering: SmallVec<[RegionId; 4]> = new_regions
             .intersection(&state.active_regions)
             .copied()
             .collect();
@@ -289,8 +291,8 @@ impl MouseTracker {
         state.active_regions = new_regions;
         state.current_cursor = new_cursor;
 
-        // Trigger callbacks (must be done outside the lock to avoid deadlock)
-        let enter_callbacks: Vec<_> = entered
+        // Collect callbacks (must be invoked outside the lock to avoid deadlock)
+        let enter_callbacks: SmallVec<[MouseEnterCallback; 4]> = entered
             .iter()
             .filter_map(|id| {
                 inner
@@ -300,7 +302,7 @@ impl MouseTracker {
             })
             .collect();
 
-        let exit_callbacks: Vec<_> = exited
+        let exit_callbacks: SmallVec<[MouseExitCallback; 4]> = exited
             .iter()
             .filter_map(|id| {
                 inner
@@ -310,7 +312,7 @@ impl MouseTracker {
             })
             .collect();
 
-        let hover_callbacks: Vec<_> = hovering
+        let hover_callbacks: SmallVec<[MouseHoverCallback; 4]> = hovering
             .iter()
             .filter_map(|id| {
                 inner
@@ -359,6 +361,7 @@ impl MouseTracker {
     }
 
     /// Checks if any mouse is currently connected
+    #[inline]
     pub fn mouse_is_connected(&self) -> bool {
         self.inner.lock().mouse_connected
     }
@@ -419,6 +422,7 @@ impl MouseTracker {
     /// Gets the current cursor for the primary mouse device (device 0).
     ///
     /// This is a convenience method for single-mouse scenarios.
+    #[inline]
     pub fn current_cursor(&self) -> CursorIcon {
         self.device_cursor(0)
     }

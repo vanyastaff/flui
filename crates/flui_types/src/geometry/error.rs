@@ -340,6 +340,4 @@ impl GeometryError {
 pub type GeometryResult<T> = Result<T, GeometryError>;
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-}
+mod tests {}

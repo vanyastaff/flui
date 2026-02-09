@@ -47,7 +47,6 @@ pub trait BorderRadiusExt {
     ///
     /// let radius = BorderRadius::circular(px(16.0));
     /// ```
-    #[inline]
     fn circular(radius: Pixels) -> Self;
 
     /// Creates a border radius with all corners having the same elliptical radius.
@@ -60,7 +59,6 @@ pub trait BorderRadiusExt {
     ///
     /// let radius = BorderRadius::elliptical(px(20.0), px(10.0));
     /// ```
-    #[inline]
     fn elliptical(x: Pixels, y: Pixels) -> Self;
 
     /// Creates a border radius with all corners having the same radius.
@@ -74,11 +72,9 @@ pub trait BorderRadiusExt {
     /// let r = Radius::elliptical(px(20.0), px(10.0));
     /// let radius = BorderRadius::all(r);
     /// ```
-    #[inline]
     fn all(radius: Radius<Pixels>) -> Self;
 
     /// Creates a border radius with only the specified corners having radii.
-    #[inline]
     fn only(
         top_left: Radius<Pixels>,
         top_right: Radius<Pixels>,
@@ -87,27 +83,21 @@ pub trait BorderRadiusExt {
     ) -> Self;
 
     /// Creates a border radius with only the top-left corner having a radius.
-    #[inline]
     fn top_left_only(radius: Radius<Pixels>) -> Self;
 
     /// Creates a border radius with only the top-right corner having a radius.
-    #[inline]
     fn top_right_only(radius: Radius<Pixels>) -> Self;
 
     /// Creates a border radius with only the bottom-left corner having a radius.
-    #[inline]
     fn bottom_left_only(radius: Radius<Pixels>) -> Self;
 
     /// Creates a border radius with only the bottom-right corner having a radius.
-    #[inline]
     fn bottom_right_only(radius: Radius<Pixels>) -> Self;
 
     /// Creates a border radius with vertical (top and bottom) corners having the same radius.
-    #[inline]
     fn vertical(top: Radius<Pixels>, bottom: Radius<Pixels>) -> Self;
 
     /// Creates a border radius with horizontal (left and right) corners having the same radius.
-    #[inline]
     fn horizontal(left: Radius<Pixels>, right: Radius<Pixels>) -> Self;
 
     /// Creates a border radius for the top corners only.
@@ -122,7 +112,6 @@ pub trait BorderRadiusExt {
     ///
     /// let radius = BorderRadius::top(Radius::circular(px(16.0)));
     /// ```
-    #[inline]
     fn top(radius: Radius<Pixels>) -> Self;
 
     /// Creates a border radius for the bottom corners only.
@@ -137,7 +126,6 @@ pub trait BorderRadiusExt {
     ///
     /// let radius = BorderRadius::bottom(Radius::circular(px(16.0)));
     /// ```
-    #[inline]
     fn bottom(radius: Radius<Pixels>) -> Self;
 
     /// Creates a "pill" border radius (fully rounded sides).
@@ -153,30 +141,24 @@ pub trait BorderRadiusExt {
     /// // Perfect for buttons, tags, and badges
     /// let radius = BorderRadius::pill();
     /// ```
-    #[inline]
     fn pill() -> Self;
 
     /// A border radius with zero radius on all corners.
     const ZERO: Self;
 
     /// Linearly interpolate between two border radii.
-    #[inline]
     fn lerp(a: Self, b: Self, t: f32) -> Self;
 
     /// Returns a copy of this border radius with the top-left corner replaced.
-    #[inline]
     fn with_top_left(self, top_left: Radius<Pixels>) -> Self;
 
     /// Returns a copy of this border radius with the top-right corner replaced.
-    #[inline]
     fn with_top_right(self, top_right: Radius<Pixels>) -> Self;
 
     /// Returns a copy of this border radius with the bottom-left corner replaced.
-    #[inline]
     fn with_bottom_left(self, bottom_left: Radius<Pixels>) -> Self;
 
     /// Returns a copy of this border radius with the bottom-right corner replaced.
-    #[inline]
     fn with_bottom_right(self, bottom_right: Radius<Pixels>) -> Self;
 }
 

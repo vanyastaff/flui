@@ -455,7 +455,6 @@ pub trait GradientTransform: std::fmt::Debug {
     /// Transform the gradient according to this transformation.
     ///
     /// Returns a transformation matrix that should be applied to the gradient.
-    #[inline]
     fn transform(&self) -> [[f32; 3]; 3];
 }
 

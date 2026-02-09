@@ -185,16 +185,19 @@ impl GestureBinding {
     // ========================================================================
 
     /// Get the pointer router.
+    #[inline]
     pub fn pointer_router(&self) -> &PointerRouter {
         &self.pointer_router
     }
 
     /// Get the gesture arena.
+    #[inline]
     pub fn arena(&self) -> &GestureArena {
         &self.arena
     }
 
     /// Get the default gesture settings.
+    #[inline]
     pub fn default_settings(&self) -> &GestureSettings {
         &self.default_settings
     }
@@ -376,11 +379,13 @@ impl GestureBinding {
     }
 
     /// Check if there are pending move events to process.
+    #[inline]
     pub fn has_pending_moves(&self) -> bool {
         !self.pending_moves.is_empty()
     }
 
     /// Get the number of pending move events.
+    #[inline]
     pub fn pending_move_count(&self) -> usize {
         self.pending_moves.len()
     }
@@ -395,6 +400,7 @@ impl GestureBinding {
     }
 
     /// Check if there's a cached hit test for a pointer.
+    #[inline]
     pub fn has_hit_test(&self, pointer_id: PointerId) -> bool {
         self.hit_tests.contains_key(&pointer_id)
     }
@@ -410,6 +416,7 @@ impl GestureBinding {
     }
 
     /// Get the number of active pointers (with cached hit tests).
+    #[inline]
     pub fn active_pointer_count(&self) -> usize {
         self.hit_tests.len()
     }
@@ -445,35 +452,9 @@ impl GestureBinding {
     // ========================================================================
 
     /// Extract pointer ID from event.
+    #[inline]
     fn extract_pointer_id(&self, event: &PointerEvent) -> PointerId {
-        // Use a hash of the pointer info to create a stable ID
-        let info = match event {
-            PointerEvent::Down(e) => &e.pointer,
-            PointerEvent::Up(e) => &e.pointer,
-            PointerEvent::Move(e) => &e.pointer,
-            PointerEvent::Cancel(e) => e,
-            PointerEvent::Enter(e) => e,
-            PointerEvent::Leave(e) => e,
-            PointerEvent::Scroll(e) => &e.pointer,
-            PointerEvent::Gesture(e) => &e.pointer,
-        };
-
-        // Use pointer_id if available, otherwise use device ID
-        let id = if let Some(pid) = info.pointer_id {
-            use std::hash::{Hash, Hasher};
-            let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            pid.hash(&mut hasher);
-            (hasher.finish() & 0x7FFFFFFF) as i32
-        } else if let Some(did) = info.persistent_device_id {
-            use std::hash::{Hash, Hasher};
-            let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            did.hash(&mut hasher);
-            (hasher.finish() & 0x7FFFFFFF) as i32
-        } else {
-            0 // Primary pointer
-        };
-
-        PointerId::new(id)
+        crate::events::extract_pointer_id(event)
     }
 
     /// Dispatch event to hit test targets.

@@ -52,23 +52,21 @@ pub trait TextScaler: Debug + Send + Sync {
     /// # Returns
     ///
     /// The scaled font size.
-    #[inline]
     fn scale(&self, font_size: f64) -> f64;
 
     /// Returns the base text scale factor.
     ///
     /// For linear scaling, this is the multiplier applied to all sizes.
     /// For non-linear scaling, this represents the "typical" scale factor.
-    #[inline]
     fn text_scale_factor(&self) -> f64;
 
+    /// Returns true if this scaler is the identity (scale factor ~1.0).
     #[inline]
     fn is_identity(&self) -> bool {
         (self.text_scale_factor() - 1.0).abs() < f64::EPSILON
     }
 
     /// Clones this scaler into a boxed trait object.
-    #[inline]
     fn clone_box(&self) -> Box<dyn TextScaler>;
 }
 

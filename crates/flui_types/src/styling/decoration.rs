@@ -98,7 +98,6 @@ pub trait Decoration: std::fmt::Debug {
     }
 
     /// Linearly interpolate between two decorations.
-    #[inline]
     fn lerp_decoration(a: &Self, b: &Self, t: f32) -> Option<Self>
     where
         Self: Sized;

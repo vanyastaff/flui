@@ -265,7 +265,6 @@ impl<T: Unit> Default for BorderDirectional<T> {
 /// Common trait for border types.
 pub trait BoxBorder<T: Unit> {
     /// Returns true if this border is uniform (all sides the same).
-    #[inline]
     fn is_uniform(&self) -> bool;
 }
 
