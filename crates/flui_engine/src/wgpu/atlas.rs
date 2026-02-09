@@ -197,7 +197,7 @@ impl TextureAtlas {
             let rect = entry.rect;
 
             queue.write_texture(
-                wgpu::ImageCopyTexture {
+                wgpu::TexelCopyTextureInfo {
                     texture: &self.texture,
                     mip_level: 0,
                     origin: wgpu::Origin3d {
@@ -208,7 +208,7 @@ impl TextureAtlas {
                     aspect: wgpu::TextureAspect::All,
                 },
                 data,
-                wgpu::ImageDataLayout {
+                wgpu::TexelCopyBufferLayout {
                     offset: 0,
                     bytes_per_row: Some(rect.width * 4), // RGBA8
                     rows_per_image: Some(rect.height),

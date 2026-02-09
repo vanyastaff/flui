@@ -1,3 +1,8 @@
+// Engine crate is under active development — many types contain wgpu handles
+// that don't implement Debug, and many fields/constants are reserved for future
+// rendering paths not yet wired up.
+#![allow(dead_code, missing_debug_implementations)]
+
 //! FLUI Rendering Engine - GPU-accelerated rendering for FLUI
 //!
 //! This crate provides GPU rendering backends for FLUI. The default backend

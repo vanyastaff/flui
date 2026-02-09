@@ -160,7 +160,8 @@ impl Renderer {
             ..Default::default()
         });
 
-        // Create surface
+        // Create surface — requires unsafe: wgpu surface creation from raw window handle
+        #[allow(unsafe_code)]
         let surface = unsafe {
             instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::from_window(window)?)
         }?;
@@ -422,7 +423,7 @@ impl Renderer {
     }
 
     /// Get reference to wgpu surface (if available)
-    pub fn surface(&self) -> Option<&wgpu::Surface> {
+    pub fn surface(&self) -> Option<&wgpu::Surface<'_>> {
         self.surface.as_ref()
     }
 

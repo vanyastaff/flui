@@ -3,7 +3,6 @@
 //! This module integrates glyphon for GPU-accelerated text rendering.
 //! Handles font loading, glyph atlas management, and text layout.
 
-use std::sync::Arc;
 use wgpu::{Device, MultisampleState, Queue, TextureFormat};
 
 #[cfg(feature = "wgpu-backend")]
@@ -46,7 +45,7 @@ impl TextRenderingSystem {
     /// * `queue` - GPU queue
     /// * `surface_format` - Target surface texture format
     pub fn new(device: &Device, queue: &Queue, surface_format: TextureFormat) -> Self {
-        let mut font_system = FontSystem::new();
+        let font_system = FontSystem::new();
         let swash_cache = SwashCache::new();
         let cache = Cache::new(device);
         let mut text_atlas = TextAtlas::new(device, queue, &cache, surface_format);
@@ -92,7 +91,7 @@ impl TextRenderingSystem {
     /// * `device` - GPU device
     /// * `queue` - GPU queue
     /// * `runs` - Text runs to render
-    pub fn render_text_runs(&mut self, device: &Device, queue: &Queue, runs: &[TextRun]) {
+    pub fn render_text_runs(&mut self, _device: &Device, _queue: &Queue, runs: &[TextRun]) {
         // TODO: Implement actual glyphon rendering
         // This requires:
         // 1. Convert TextRun to glyphon::TextArea

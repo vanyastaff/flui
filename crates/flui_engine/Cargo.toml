@@ -31,6 +31,10 @@ serialization = ["lyon/serialization"]
 devtools = ["dep:flui_devtools"]
 lyon-debugger = ["lyon/debugger"]
 
+# === Test Features ===
+enable-wgpu-tests = []
+disabled-tests = []
+
 [dependencies]
 flui_types = { path = "../flui_types" }
 flui_painting = { path = "../flui_painting" }

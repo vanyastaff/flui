@@ -45,7 +45,7 @@
 //! ```
 
 use flui_types::{
-    geometry::{DevicePixels, Pixels, Point, Rect, Size},
+    geometry::{DevicePixels, Point, Rect, Size},
     styling::Color,
     typography::TextStyle,
 };

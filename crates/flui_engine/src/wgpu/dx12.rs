@@ -31,8 +31,9 @@
 //!     .with_target_luminance(1000.0);  // 1000 nits
 //! ```
 
-use anyhow::{anyhow, Result};
-use std::sync::Arc;
+#[cfg(not(target_os = "windows"))]
+use anyhow::anyhow;
+use anyhow::Result;
 
 // ============================================================================
 // DirectX 12 Feature Detection
@@ -81,7 +82,7 @@ impl Dx12Features {
     /// # Errors
     ///
     /// Returns error if device is not DirectX 12 backend.
-    pub fn detect(device: &wgpu::Device) -> Result<Self> {
+    pub fn detect(_device: &wgpu::Device) -> Result<Self> {
         #[cfg(not(target_os = "windows"))]
         {
             return Err(anyhow!("DirectX 12 is only available on Windows"));

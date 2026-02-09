@@ -636,7 +636,7 @@ impl IntoLyonPath for flui_types::painting::path::Path {
         use flui_types::painting::path::PathCommand;
 
         let mut builder = Path::builder();
-        let mut current_pos: Option<Point<Pixels>> = None;
+        let mut _current_pos: Option<Point<Pixels>> = None;
         let mut has_begun = false;
 
         for command in self.commands() {
@@ -647,7 +647,7 @@ impl IntoLyonPath for flui_types::painting::path::Path {
                         builder.end(false);
                     }
                     builder.begin(lyon::geom::point(point.x.0, point.y.0));
-                    current_pos = Some(*point);
+                    _current_pos = Some(*point);
                     has_begun = true;
                 }
 
@@ -659,7 +659,7 @@ impl IntoLyonPath for flui_types::painting::path::Path {
                     } else {
                         builder.line_to(lyon::geom::point(point.x.0, point.y.0));
                     }
-                    current_pos = Some(*point);
+                    _current_pos = Some(*point);
                 }
 
                 PathCommand::QuadraticTo(control, end) => {
@@ -671,7 +671,7 @@ impl IntoLyonPath for flui_types::painting::path::Path {
                         lyon::geom::point(control.x.0, control.y.0),
                         lyon::geom::point(end.x.0, end.y.0),
                     );
-                    current_pos = Some(*end);
+                    _current_pos = Some(*end);
                 }
 
                 PathCommand::CubicTo(control1, control2, end) => {
@@ -684,14 +684,14 @@ impl IntoLyonPath for flui_types::painting::path::Path {
                         lyon::geom::point(control2.x.0, control2.y.0),
                         lyon::geom::point(end.x.0, end.y.0),
                     );
-                    current_pos = Some(*end);
+                    _current_pos = Some(*end);
                 }
 
                 PathCommand::Close => {
                     if has_begun {
                         builder.close();
                         has_begun = false;
-                        current_pos = None;
+                        _current_pos = None;
                     }
                 }
 
@@ -705,7 +705,7 @@ impl IntoLyonPath for flui_types::painting::path::Path {
                     builder.line_to(lyon::geom::point(rect.right().0, rect.bottom().0));
                     builder.line_to(lyon::geom::point(rect.left().0, rect.bottom().0));
                     builder.close();
-                    current_pos = None;
+                    _current_pos = None;
                     has_begun = false;
                 }
 
@@ -719,7 +719,7 @@ impl IntoLyonPath for flui_types::painting::path::Path {
                         *radius,
                         lyon::path::Winding::Positive,
                     );
-                    current_pos = None;
+                    _current_pos = None;
                     has_begun = false;
                 }
 
@@ -736,7 +736,7 @@ impl IntoLyonPath for flui_types::painting::path::Path {
                         lyon::geom::Angle::radians(0.0),
                         lyon::path::Winding::Positive,
                     );
-                    current_pos = None;
+                    _current_pos = None;
                     has_begun = false;
                 }
 
@@ -770,7 +770,7 @@ impl IntoLyonPath for flui_types::painting::path::Path {
                     let end_angle = start_angle + sweep_angle;
                     let end_x = center.x.0 + radii.x * end_angle.cos();
                     let end_y = center.y.0 + radii.y * end_angle.sin();
-                    current_pos = Some(Point::new(Pixels(end_x), Pixels(end_y)));
+                    _current_pos = Some(Point::new(Pixels(end_x), Pixels(end_y)));
                 }
             }
         }

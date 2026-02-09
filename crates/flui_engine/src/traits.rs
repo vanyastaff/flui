@@ -12,7 +12,7 @@
 
 use flui_painting::{BlendMode, Paint, PointMode};
 use flui_types::{
-    geometry::{px, Matrix4, Offset, Pixels, Point, RRect, Rect},
+    geometry::{Matrix4, Offset, Pixels, Point, RRect, Rect},
     painting::{Image, Path, TextureId},
     styling::Color,
     typography::TextStyle,

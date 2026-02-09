@@ -3,7 +3,6 @@
 //! This module manages all render pipelines for different primitive types.
 //! Pipelines are created once and cached for reuse.
 
-use std::sync::Arc;
 use wgpu::{
     BlendState, ColorTargetState, ColorWrites, Device, FragmentState, FrontFace, MultisampleState,
     PipelineLayoutDescriptor, PolygonMode, PrimitiveState, PrimitiveTopology, RenderPipeline,
