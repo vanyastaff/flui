@@ -1,5 +1,5 @@
 [package]
-name = "flui_cli"
+name = "flui-cli"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -16,10 +16,10 @@ path = "src/main.rs"
 
 [dependencies]
 # Build system
-flui_build = { path = "../flui_build" }
+flui-build = { path = "../flui-build" }
 
 # Logging
-flui_log = { path = "../flui_log" }
+flui-log = { path = "../flui-log" }
 
 # CLI framework
 clap = { version = "4.5", features = ["derive", "cargo", "env", "color"] }

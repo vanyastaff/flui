@@ -1,5 +1,5 @@
 [package]
-name = "flui_assets"
+name = "flui-assets"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -9,11 +9,11 @@ repository.workspace = true
 readme = "README.md"
 keywords = ["assets", "cache", "async", "game", "ui"]
 categories = ["asynchronous", "caching", "game-development", "gui"]
-documentation = "https://docs.rs/flui_assets"
+documentation = "https://docs.rs/flui-assets"
 
 [dependencies]
 # Internal dependencies
-flui_types = { path = "../flui_types" }
+flui-types = { path = "../flui-types" }
 
 # Async runtime
 tokio = { workspace = true, features = ["fs", "io-util"] }

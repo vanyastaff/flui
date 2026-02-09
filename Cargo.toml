@@ -2,7 +2,7 @@
 resolver = "2"
 members = [
     # === Phase 1: Foundation Layer ===
-    "crates/flui_types",          # Base types with Unit system (ACTIVE)
+    "crates/flui-types",          # Base types with Unit system (ACTIVE)
     "crates/flui-foundation",     # Foundation types and utilities (ACTIVE)
     "crates/flui-tree",           # Tree abstractions (ACTIVE)
     "crates/flui-platform",       # Platform abstraction traits (ACTIVE - Phase 1)
@@ -10,22 +10,22 @@ members = [
     # === Phase 2: Core Framework (Re-enabled for platform integration) ===
     "crates/flui-layer",          # Layer composition (ACTIVE)
     "crates/flui-semantics",      # Accessibility (ACTIVE)
-    "crates/flui_interaction",    # Gesture recognition (ACTIVE - Integration)
-    "crates/flui_painting",       # Painting primitives (ACTIVE)
+    "crates/flui-interaction",    # Gesture recognition (ACTIVE - Integration)
+    "crates/flui-painting",       # Painting primitives (ACTIVE)
     "crates/flui-scheduler",      # Frame scheduling (ACTIVE)
-    "crates/flui_engine",         # GPU rendering engine (ACTIVE)
-    "crates/flui_log",            # Logging utilities (ACTIVE)
-    "crates/flui_app",            # Application framework (ACTIVE - Integration)
+    "crates/flui-engine",         # GPU rendering engine (ACTIVE)
+    "crates/flui-log",            # Logging utilities (ACTIVE)
+    "crates/flui-app",            # Application framework (ACTIVE - Integration)
 
     # === Temporarily disabled until integration complete ===
-    # "crates/flui_rendering",
+    # "crates/flui-rendering",
     # "crates/flui-view",
-    # "crates/flui_animation",
+    # "crates/flui-animation",
     # "crates/flui-reactivity",
-    # "crates/flui_widgets",
-    # "crates/flui_devtools",
-    # "crates/flui_cli",
-    # "crates/flui_build",
+    # "crates/flui-widgets",
+    # "crates/flui-devtools",
+    # "crates/flui-cli",
+    # "crates/flui-build",
 ]
 
 [workspace.package]
@@ -60,7 +60,7 @@ serde_json = "1.0"
 # BUILDER UTILITIES - Used by widgets
 bon = "3.8"
 
-# DELEGATION - Used by flui-tree and flui_rendering
+# DELEGATION - Used by flui-tree and flui-rendering
 ambassador = "0.4.2"
 
 # ERROR HANDLING & LOGGING - Used everywhere
@@ -71,7 +71,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "ansi"]
 tracing-forest = { version = "0.3", features = ["smallvec"] }
 
 # === Shared GPU/Window dependencies ===
-# Used by flui_engine, flui_app, and root examples
+# Used by flui-engine, flui-app, and root examples
 # GPU RENDERING (WGPU BACKEND) - Version 25.x (stable)
 # Note: wgpu 26.0+ and 27.0.x have compilation issues with codespan-reporting
 # The bug is in codespan library itself (feature-flag incompatibility)
@@ -84,26 +84,26 @@ pollster = "0.4"
 # CLIPBOARD - Cross-platform clipboard access
 arboard = "3.4"
 
-# IMAGE PROCESSING - Used by flui_assets and flui_engine
+# IMAGE PROCESSING - Used by flui-assets and flui-engine
 # TODO: Re-enable "webp" feature when image-webp is fixed for Rust 1.91+
 # See: https://github.com/image-rs/image-webp/issues/102
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif"] }
 
-# FONT PARSING - Used by flui_assets and flui_engine
+# FONT PARSING - Used by flui-assets and flui-engine
 ttf-parser = "0.25"
 
 # === Engine-specific dependencies (NOT in workspace) ===
-# These are ONLY used in flui_engine:
+# These are ONLY used in flui-engine:
 # - glam (GPU math)
 # - glyphon, cosmic-text (text rendering)
 # - lyon (tessellation)
 # - guillotiere (texture atlas)
 # - bytemuck
 
-# CACHING - Used by flui_core and flui_assets
+# CACHING - Used by flui_core and flui-assets
 moka = { version = "0.12", features = ["future"] }
 
-# NETWORKING - Used by flui_assets
+# NETWORKING - Used by flui-assets
 reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls"] }
 
 # UI EVENTS - Cross-platform input event abstraction (W3C compliant)
@@ -116,13 +116,13 @@ ahash = "0.8"
 bitflags = "2.10"
 dyn-clone = "1.0"
 downcast-rs = "2.0.2"
-which = "5.0" # Command discovery - Used by flui_build
-indicatif = "0.17" # Progress bars - Used by flui_build
+which = "5.0" # Command discovery - Used by flui-build
+indicatif = "0.17" # Progress bars - Used by flui-build
 
-# STRING INTERNING - Used by flui_assets
+# STRING INTERNING - Used by flui-assets
 lasso = { version = "0.7", features = ["multi-threaded"] }
 
-# OPTIMIZED SMART POINTERS - Used by flui_assets
+# OPTIMIZED SMART POINTERS - Used by flui-assets
 triomphe = "0.1"
 
 # PERFORMANCE & PROFILING
@@ -159,36 +159,36 @@ keywords = ["gui", "ui", "wgpu", "flutter", "reactive"]
 
 [dependencies]
 # === Foundation Layer ===
-flui_types = { path = "crates/flui_types" }
+flui-types = { path = "crates/flui-types" }
 flui-foundation = { path = "crates/flui-foundation" }
 # flui-tree = { path = "crates/flui-tree" }
 
 # === Core Layer ===
 # flui-layer = { path = "crates/flui-layer" }  # Temporarily disabled - needs Pixels migration
 # flui-semantics = { path = "crates/flui-semantics" }
-# flui_interaction = { path = "crates/flui_interaction" }
-# flui_painting = { path = "crates/flui_painting" }
+# flui-interaction = { path = "crates/flui-interaction" }
+# flui-painting = { path = "crates/flui-painting" }
 
 # === Rendering Layer ===
-# flui_rendering = { path = "crates/flui_rendering" }
-# flui_engine = { path = "crates/flui_engine" }  # GPU backend - enable when needed
+# flui-rendering = { path = "crates/flui-rendering" }
+# flui-engine = { path = "crates/flui-engine" }  # GPU backend - enable when needed
 
 # === View Layer ===
 # flui-view = { path = "crates/flui-view" }
 
 # === Reactive Layer ===
 # flui-scheduler = { path = "crates/flui-scheduler" }
-# flui_animation = { path = "crates/flui_animation" }
+# flui-animation = { path = "crates/flui-animation" }
 # flui-reactivity = { path = "crates/flui-reactivity" }
 
 # === Application Layer ===
-# flui_app = { path = "crates/flui_app" }
+# flui-app = { path = "crates/flui-app" }
 
 # === Platform Layer (for examples) ===
 flui-platform = { path = "crates/flui-platform" }
 
 # === Widgets (when stable) ===
-# flui_widgets = { path = "crates/flui_widgets" }
+# flui-widgets = { path = "crates/flui-widgets" }
 
 # === Logging ===
 tracing.workspace = true
@@ -205,8 +205,8 @@ default = []
 # Serialization support across all crates
 serde = [
     # "flui_core/serde",  # Temporarily disabled
-    "flui_types/serde",
-    # "flui_rendering/serde",  # Temporarily disabled
+    "flui-types/serde",
+    # "flui-rendering/serde",  # Temporarily disabled
 ]
 
 # === Performance Features ===
@@ -221,10 +221,10 @@ serde = [
 
 # === DevTools Features ===
 # Developer tools integration (temporarily disabled)
-# devtools = ["flui_engine/devtools"]
+# devtools = ["flui-engine/devtools"]
 
 # TODO: Re-enable when memory-profiler dependencies are fixed
-# memory-profiler = ["devtools", "flui_engine/memory-profiler"]
+# memory-profiler = ["devtools", "flui-engine/memory-profiler"]
 
 # === Convenience Features ===
 # Enable all stable features (temporarily disabled)

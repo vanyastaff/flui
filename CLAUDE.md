@@ -49,12 +49,12 @@ View Tree (immutable) → Element Tree (mutable) → Render Tree (layout/paint)
 ```
 
 **Modular Design:** 20+ specialized crates organized in layers:
-- **Foundation:** `flui_types`, `flui-foundation`, `flui-tree`, `flui-platform`
+- **Foundation:** `flui-types`, `flui-foundation`, `flui-tree`, `flui-platform`
 - **Framework:** `flui-view`, `flui-reactivity`, `flui-scheduler`, `flui_core`
-- **Rendering:** `flui_painting`, `flui_engine`, `flui_rendering`
-- **Widget:** `flui_widgets`, `flui_animation`, `flui_interaction`
-- **Application:** `flui_app`, `flui_assets`, `flui_log`
-- **Tools:** `flui_devtools`, `flui_cli`, `flui_build`
+- **Rendering:** `flui-painting`, `flui-engine`, `flui-rendering`
+- **Widget:** `flui-widgets`, `flui-animation`, `flui-interaction`
+- **Application:** `flui-app`, `flui-assets`, `flui-log`
+- **Tools:** `flui-devtools`, `flui-cli`, `flui-build`
 - **Layer System:** `flui-layer` (compositing), `flui-semantics` (accessibility)
 
 ### Reference Sources
@@ -98,13 +98,13 @@ View Tree (immutable) → Element Tree (mutable) → Render Tree (layout/paint)
 **IMPORTANT:** Workspace in platform integration phase. Many high-level crates temporarily disabled in `Cargo.toml`.
 
 **Active crates (Phase 1-2):**
-- Foundation: `flui_types`, `flui-foundation`, `flui-tree`
+- Foundation: `flui-types`, `flui-foundation`, `flui-tree`
 - Platform: `flui-platform` (MVP development - cross-platform support)
-- Core: `flui-layer`, `flui-semantics`, `flui_interaction`, `flui_painting`
-- Framework: `flui-scheduler`, `flui_engine`, `flui_log`, `flui_app`
+- Core: `flui-layer`, `flui-semantics`, `flui-interaction`, `flui-painting`
+- Framework: `flui-scheduler`, `flui-engine`, `flui-log`, `flui-app`
 
 **Temporarily disabled until integration complete:**
-- `flui_rendering`, `flui-view`, `flui_animation`, `flui-reactivity`, `flui_widgets`, `flui_devtools`, `flui_cli`, `flui_build`
+- `flui-rendering`, `flui-view`, `flui-animation`, `flui-reactivity`, `flui-widgets`, `flui-devtools`, `flui-cli`, `flui-build`
 
 **Current Priority**: Complete flui-platform MVP (see `specs/dev/` for detailed plan and tasks)
 
@@ -116,18 +116,18 @@ cargo build --workspace
 cargo test --workspace
 cargo clippy --workspace -- -D warnings
 cargo fmt --all
-cargo check -p flui_rendering
+cargo check -p flui-rendering
 
 # Dependency order (Foundation → Core → Rendering)
-cargo build -p flui_types
+cargo build -p flui-types
 cargo build -p flui-foundation
 cargo build -p flui-tree
-cargo build -p flui_rendering
+cargo build -p flui-rendering
 
 # Test specific crate
-cargo test -p flui_rendering test_layout_constraints
-cargo test -p flui_rendering -- --nocapture
-RUST_LOG=debug cargo test -p flui_rendering
+cargo test -p flui-rendering test_layout_constraints
+cargo test -p flui-rendering -- --nocapture
+RUST_LOG=debug cargo test -p flui-rendering
 ```
 
 ### Skills (`.claude/skills/`)
@@ -259,7 +259,7 @@ let platform = current_platform(); // Windows, macOS, or Headless
 **Text System Integration:**
 - Windows: DirectWrite for font loading, shaping, metrics
 - macOS: Core Text equivalent
-- Returns glyph positions for flui_painting Canvas API
+- Returns glyph positions for flui-painting Canvas API
 - Critical blocker for MVP (1-2 weeks estimated)
 
 See `specs/dev/` for detailed platform MVP plan and tasks.
@@ -456,8 +456,8 @@ cargo clean && cargo build --workspace
 cargo metadata --format-version 1 | grep -A 5 "workspace_members"
 
 # Verify crate
-cargo check -p flui_rendering
-cargo clippy -p flui_rendering -- -D warnings
+cargo check -p flui-rendering
+cargo clippy -p flui-rendering -- -D warnings
 ```
 
 **Common errors:**

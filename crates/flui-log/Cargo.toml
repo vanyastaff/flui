@@ -1,5 +1,5 @@
 [package]
-name = "flui_log"
+name = "flui-log"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true

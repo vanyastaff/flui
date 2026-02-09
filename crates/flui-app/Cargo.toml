@@ -1,5 +1,5 @@
 [package]
-name = "flui_app"
+name = "flui-app"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -27,16 +27,16 @@ performance-overlay = []
 [dependencies]
 # Core FLUI crates
 flui-view = { path = "../flui-view" }
-flui_rendering = { path = "../flui_rendering" }
-flui_types = { path = "../flui_types" }
+flui-rendering = { path = "../flui-rendering" }
+flui-types = { path = "../flui-types" }
 flui-foundation = { path = "../flui-foundation" }
-flui_interaction = { path = "../flui_interaction" }
+flui-interaction = { path = "../flui-interaction" }
 flui-scheduler = { path = "../flui-scheduler" }
-flui_painting = { path = "../flui_painting" }
+flui-painting = { path = "../flui-painting" }
 flui-layer = { path = "../flui-layer" }
 flui-semantics = { path = "../flui-semantics" }
-flui_engine = { path = "../flui_engine" }
-flui_log = { path = "../flui_log" }
+flui-engine = { path = "../flui-engine" }
+flui-log = { path = "../flui-log" }
 
 # Windowing (desktop)
 winit = { workspace = true }

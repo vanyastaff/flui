@@ -19,7 +19,7 @@ flui-foundation = { path = "../flui-foundation" }
 flui-tree = { path = "../flui-tree" }
 
 # Types - geometry, semantics types
-flui_types = { path = "../flui_types" }
+flui-types = { path = "../flui-types" }
 
 # Slab storage for O(1) access
 slab = "0.4"

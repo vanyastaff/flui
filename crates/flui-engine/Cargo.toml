@@ -1,5 +1,5 @@
 [package]
-name = "flui_engine"
+name = "flui-engine"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -28,7 +28,7 @@ gles = ["wgpu-backend", "wgpu/gles", "wgpu/wgsl"]
 # === Optional Features ===
 images = ["dep:image"]
 serialization = ["lyon/serialization"]
-devtools = ["dep:flui_devtools"]
+devtools = ["dep:flui-devtools"]
 lyon-debugger = ["lyon/debugger"]
 
 # === Test Features ===
@@ -36,11 +36,11 @@ enable-wgpu-tests = []
 disabled-tests = []
 
 [dependencies]
-flui_types = { path = "../flui_types" }
-flui_painting = { path = "../flui_painting" }
+flui-types = { path = "../flui-types" }
+flui-painting = { path = "../flui-painting" }
 flui-foundation = { path = "../flui-foundation" }
 flui-layer = { path = "../flui-layer" }
-flui_devtools = { path = "../flui_devtools", optional = true }
+flui-devtools = { path = "../flui-devtools", optional = true }
 
 # === GPU Rendering (wgpu backend) ===
 wgpu = { workspace = true, default-features = false, optional = true }

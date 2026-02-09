@@ -1,5 +1,5 @@
 [package]
-name = "flui_types"
+name = "flui-types"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -57,7 +57,7 @@ glam = ["dep:glam"]
 # Enable all features
 full = ["serde", "simd", "mint"]
 
-# NOTE: Image and font loading moved to flui_assets crate.
+# NOTE: Image and font loading moved to flui-assets crate.
 # flui_types only provides type definitions!
 
 [[bench]]

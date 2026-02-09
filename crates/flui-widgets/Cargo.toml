@@ -1,5 +1,5 @@
 [package]
-name = "flui_widgets"
+name = "flui-widgets"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,11 +11,11 @@ keywords = ["ui", "gui", "widgets", "flutter"]
 categories = ["gui"]
 
 [dependencies]
-flui_rendering = { path = "../flui_rendering" }
-flui_painting = { path = "../flui_painting" }
-flui_types = { path = "../flui_types" }
-flui_interaction = { path = "../flui_interaction" }
-flui_animation = { path = "../flui_animation" }
+flui-rendering = { path = "../flui-rendering" }
+flui-painting = { path = "../flui-painting" }
+flui-types = { path = "../flui-types" }
+flui-interaction = { path = "../flui-interaction" }
+flui-animation = { path = "../flui-animation" }
 flui-view = { path = "../flui-view" }
 flui-foundation = { path = "../flui-foundation" }
 bon = { workspace = true }
@@ -28,7 +28,7 @@ default = []
 
 # === Serialization ===
 # Serde support for widget state serialization
-serde = ["flui_types/serde", "flui_rendering/serde"]
+serde = ["flui-types/serde", "flui-rendering/serde"]
 
 [dev-dependencies]
 flui-scheduler = { path = "../flui-scheduler" }

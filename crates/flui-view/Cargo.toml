@@ -12,10 +12,10 @@ categories = ["gui"]
 [dependencies]
 flui-foundation = { path = "../flui-foundation" }
 flui-tree = { path = "../flui-tree" }
-flui_types = { path = "../flui_types" }
-flui_rendering = { path = "../flui_rendering" }
-flui_interaction = { path = "../flui_interaction" }
-flui_log = { path = "../flui_log" }
+flui-types = { path = "../flui-types" }
+flui-rendering = { path = "../flui-rendering" }
+flui-interaction = { path = "../flui-interaction" }
+flui-log = { path = "../flui-log" }
 
 # Core dependencies
 bitflags.workspace = true

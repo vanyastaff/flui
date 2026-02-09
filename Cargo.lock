@@ -901,10 +901,75 @@ version = "0.1.0"
 dependencies = [
  "flui-foundation",
  "flui-platform",
- "flui_types",
+ "flui-types",
  "tracing",
  "tracing-forest",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "flui-app"
+version = "0.1.0"
+dependencies = [
+ "dpi",
+ "flui-engine",
+ "flui-foundation",
+ "flui-interaction",
+ "flui-layer",
+ "flui-log",
+ "flui-painting",
+ "flui-rendering",
+ "flui-scheduler",
+ "flui-semantics",
+ "flui-types",
+ "flui-view",
+ "parking_lot",
+ "pollster",
+ "thiserror 2.0.17",
+ "tracing",
+ "ui-events-winit",
+ "winit",
+]
+
+[[package]]
+name = "flui-devtools"
+version = "0.1.0"
+dependencies = [
+ "criterion",
+ "flui-engine",
+ "notify",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "web-time",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "flui-engine"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bytemuck",
+ "env_logger",
+ "flui-devtools",
+ "flui-foundation",
+ "flui-layer",
+ "flui-painting",
+ "flui-types",
+ "glam",
+ "glyphon",
+ "image",
+ "lyon",
+ "parking_lot",
+ "pollster",
+ "raw-window-handle",
+ "slab",
+ "thiserror 2.0.17",
+ "tokio",
+ "tracing",
+ "ttf-parser 0.25.1",
+ "wgpu",
 ]
 
 [[package]]
@@ -921,16 +986,63 @@ dependencies = [
 ]
 
 [[package]]
+name = "flui-interaction"
+version = "0.1.0"
+dependencies = [
+ "bitflags 2.10.0",
+ "crossbeam",
+ "cursor-icon",
+ "dashmap",
+ "dpi",
+ "flui-foundation",
+ "flui-types",
+ "futures",
+ "once_cell",
+ "parking_lot",
+ "smallvec",
+ "tokio",
+ "tracing",
+ "ui-events",
+]
+
+[[package]]
 name = "flui-layer"
 version = "0.1.0"
 dependencies = [
  "flui-foundation",
+ "flui-painting",
  "flui-tree",
- "flui_painting",
- "flui_types",
+ "flui-types",
  "parking_lot",
  "rayon",
  "slab",
+ "tracing",
+]
+
+[[package]]
+name = "flui-log"
+version = "0.1.0"
+dependencies = [
+ "android_log-sys",
+ "tokio",
+ "tracing",
+ "tracing-forest",
+ "tracing-oslog",
+ "tracing-subscriber",
+ "tracing-wasm",
+]
+
+[[package]]
+name = "flui-painting"
+version = "0.1.0"
+dependencies = [
+ "cosmic-text 0.12.1",
+ "flui-foundation",
+ "flui-types",
+ "lyon",
+ "parking_lot",
+ "serde",
+ "thiserror 2.0.17",
  "tracing",
 ]
 
@@ -946,7 +1058,7 @@ dependencies = [
  "core-foundation 0.10.1",
  "core-graphics 0.24.0",
  "dpi",
- "flui_types",
+ "flui-types",
  "flume",
  "foreign-types",
  "keyboard-types",
@@ -962,6 +1074,31 @@ dependencies = [
  "waker-fn",
  "windows 0.59.0",
  "winit",
+]
+
+[[package]]
+name = "flui-rendering"
+version = "0.1.0"
+dependencies = [
+ "ambassador",
+ "bitflags 2.10.0",
+ "criterion",
+ "downcast-rs 2.0.2",
+ "flui-foundation",
+ "flui-interaction",
+ "flui-layer",
+ "flui-painting",
+ "flui-semantics",
+ "flui-tree",
+ "flui-types",
+ "mockall",
+ "once_cell",
+ "parking_lot",
+ "serde",
+ "slab",
+ "smallvec",
+ "thiserror 2.0.17",
+ "tracing",
 ]
 
 [[package]]
@@ -985,7 +1122,7 @@ dependencies = [
  "accesskit",
  "flui-foundation",
  "flui-tree",
- "flui_types",
+ "flui-types",
  "parking_lot",
  "rustc-hash 2.1.1",
  "slab",
@@ -1008,162 +1145,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "flui-view"
-version = "0.1.0"
-dependencies = [
- "bitflags 2.10.0",
- "downcast-rs 2.0.2",
- "dyn-clone",
- "flui-foundation",
- "flui-tree",
- "flui_interaction",
- "flui_log",
- "flui_rendering",
- "flui_types",
- "parking_lot",
- "slab",
- "tracing",
-]
-
-[[package]]
-name = "flui_app"
-version = "0.1.0"
-dependencies = [
- "dpi",
- "flui-foundation",
- "flui-layer",
- "flui-scheduler",
- "flui-semantics",
- "flui-view",
- "flui_engine",
- "flui_interaction",
- "flui_log",
- "flui_painting",
- "flui_rendering",
- "flui_types",
- "parking_lot",
- "pollster",
- "thiserror 2.0.17",
- "tracing",
- "ui-events-winit",
- "winit",
-]
-
-[[package]]
-name = "flui_devtools"
-version = "0.1.0"
-dependencies = [
- "criterion",
- "flui_engine",
- "notify",
- "parking_lot",
- "serde",
- "serde_json",
- "web-time",
- "windows-sys 0.59.0",
-]
-
-[[package]]
-name = "flui_engine"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "bytemuck",
- "env_logger",
- "flui-foundation",
- "flui-layer",
- "flui_devtools",
- "flui_painting",
- "flui_types",
- "glam",
- "glyphon",
- "image",
- "lyon",
- "parking_lot",
- "pollster",
- "raw-window-handle",
- "slab",
- "thiserror 2.0.17",
- "tokio",
- "tracing",
- "ttf-parser 0.25.1",
- "wgpu",
-]
-
-[[package]]
-name = "flui_interaction"
-version = "0.1.0"
-dependencies = [
- "bitflags 2.10.0",
- "crossbeam",
- "cursor-icon",
- "dashmap",
- "dpi",
- "flui-foundation",
- "flui_types",
- "futures",
- "once_cell",
- "parking_lot",
- "smallvec",
- "tokio",
- "tracing",
- "ui-events",
-]
-
-[[package]]
-name = "flui_log"
-version = "0.1.0"
-dependencies = [
- "android_log-sys",
- "tokio",
- "tracing",
- "tracing-forest",
- "tracing-oslog",
- "tracing-subscriber",
- "tracing-wasm",
-]
-
-[[package]]
-name = "flui_painting"
-version = "0.1.0"
-dependencies = [
- "cosmic-text 0.12.1",
- "flui-foundation",
- "flui_types",
- "lyon",
- "parking_lot",
- "serde",
- "thiserror 2.0.17",
- "tracing",
-]
-
-[[package]]
-name = "flui_rendering"
-version = "0.1.0"
-dependencies = [
- "ambassador",
- "bitflags 2.10.0",
- "criterion",
- "downcast-rs 2.0.2",
- "flui-foundation",
- "flui-layer",
- "flui-semantics",
- "flui-tree",
- "flui_interaction",
- "flui_painting",
- "flui_types",
- "mockall",
- "once_cell",
- "parking_lot",
- "serde",
- "slab",
- "smallvec",
- "thiserror 2.0.17",
- "tracing",
-]
-
-[[package]]
-name = "flui_types"
+name = "flui-types"
 version = "0.1.0"
 dependencies = [
  "criterion",
@@ -1177,6 +1159,24 @@ dependencies = [
  "tokio",
  "tracing",
  "trybuild",
+]
+
+[[package]]
+name = "flui-view"
+version = "0.1.0"
+dependencies = [
+ "bitflags 2.10.0",
+ "downcast-rs 2.0.2",
+ "dyn-clone",
+ "flui-foundation",
+ "flui-interaction",
+ "flui-log",
+ "flui-rendering",
+ "flui-tree",
+ "flui-types",
+ "parking_lot",
+ "slab",
+ "tracing",
 ]
 
 [[package]]

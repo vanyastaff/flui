@@ -1,5 +1,5 @@
 [package]
-name = "flui_rendering"
+name = "flui-rendering"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -8,9 +8,9 @@ description = "Rendering layer for Flui framework"
 repository.workspace = true
 
 [dependencies]
-flui_types = { path = "../flui_types" }
-flui_painting = { path = "../flui_painting" }
-flui_interaction = { path = "../flui_interaction" }
+flui-types = { path = "../flui-types" }
+flui-painting = { path = "../flui-painting" }
+flui-interaction = { path = "../flui-interaction" }
 flui-foundation = { path = "../flui-foundation" }
 flui-tree = { path = "../flui-tree" }
 flui-layer = { path = "../flui-layer" }
@@ -33,4 +33,4 @@ mockall = "0.13"
 
 [features]
 default = []
-serde = ["dep:serde", "flui_types/serde"]
+serde = ["dep:serde", "flui-types/serde"]

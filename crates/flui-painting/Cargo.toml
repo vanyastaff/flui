@@ -1,5 +1,5 @@
 [package]
-name = "flui_painting"
+name = "flui-painting"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -12,7 +12,7 @@ categories = ["graphics", "gui", "rendering"]
 readme = "README.md"
 
 [dependencies]
-flui_types = { path = "../flui_types" }
+flui-types = { path = "../flui-types" }
 flui-foundation = { path = "../flui-foundation" }
 
 thiserror = { workspace = true }
@@ -32,7 +32,7 @@ lyon = { version = "1.0", optional = true }
 default = ["text", "tessellation"]
 text = ["dep:cosmic-text"]
 tessellation = ["dep:lyon"]
-serde = ["dep:serde", "flui_types/serde"]
+serde = ["dep:serde", "flui-types/serde"]
 
 [lints]
 workspace = true

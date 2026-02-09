@@ -21,10 +21,10 @@ flui-foundation = { path = "../flui-foundation" }
 flui-tree = { path = "../flui-tree" }
 
 # Types - geometry, painting types
-flui_types = { path = "../flui_types" }
+flui-types = { path = "../flui-types" }
 
 # Painting - Canvas, DisplayList
-flui_painting = { path = "../flui_painting" }
+flui-painting = { path = "../flui-painting" }
 
 # Slab storage for O(1) access
 slab = "0.4"

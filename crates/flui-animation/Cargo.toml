@@ -1,5 +1,5 @@
 [package]
-name = "flui_animation"
+name = "flui-animation"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -15,7 +15,7 @@ workspace = true
 
 [dependencies]
 # Core FLUI types
-flui_types = { path = "../flui_types" }
+flui-types = { path = "../flui-types" }
 flui-foundation = { path = "../flui-foundation" }
 flui-scheduler = { path = "../flui-scheduler" }
 
@@ -36,4 +36,4 @@ tracing-subscriber.workspace = true
 [features]
 default = []
 ## Enable serde serialization/deserialization support for animation types.
-serde = ["dep:serde", "flui_types/serde"]
+serde = ["dep:serde", "flui-types/serde"]

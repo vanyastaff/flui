@@ -9,16 +9,16 @@ repository.workspace = true
 
 [dependencies]
 # Core rendering traits
-flui_rendering = { path = "../flui_rendering" }
+flui-rendering = { path = "../flui-rendering" }
 
 # Types and geometry
-flui_types = { path = "../flui_types" }
+flui-types = { path = "../flui-types" }
 
 # Painting primitives
-flui_painting = { path = "../flui_painting" }
+flui-painting = { path = "../flui-painting" }
 
 # Interaction/hit testing
-flui_interaction = { path = "../flui_interaction" }
+flui-interaction = { path = "../flui-interaction" }
 
 # Foundation types (ElementId, etc.)
 flui-foundation = { path = "../flui-foundation" }
@@ -40,4 +40,4 @@ criterion.workspace = true
 
 [features]
 default = []
-serde = ["dep:serde", "flui_types/serde", "flui_rendering/serde"]
+serde = ["dep:serde", "flui-types/serde", "flui-rendering/serde"]

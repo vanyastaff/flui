@@ -9,7 +9,7 @@ repository.workspace = true
 description = "Platform abstraction layer for FLUI - cross-platform window and input handling"
 
 [dependencies]
-flui_types = { path = "../flui_types" }
+flui-types = { path = "../flui-types" }
 
 # UI Events - W3C compliant event types
 ui-events = { workspace = true }
