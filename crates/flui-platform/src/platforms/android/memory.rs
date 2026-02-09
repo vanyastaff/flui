@@ -14,7 +14,7 @@
 //! # Usage
 //!
 //! ```rust,ignore
-//! use flui_engine::android::memory::{PageAlignedVec, get_page_size};
+//! use flui_platform::platforms::android::memory::{PageAlignedVec, get_page_size};
 //!
 //! // Create page-aligned buffer for GPU
 //! let mut buffer = PageAlignedVec::<u8>::with_capacity(8192);
@@ -132,7 +132,7 @@ pub unsafe fn dealloc_page_aligned(ptr: NonNull<u8>, size: usize) {
 /// # Example
 ///
 /// ```rust,ignore
-/// use flui_engine::android::memory::PageAlignedVec;
+/// use flui_platform::platforms::android::memory::PageAlignedVec;
 ///
 /// // Create buffer for 1024 vertices
 /// let mut vertices = PageAlignedVec::<Vertex>::with_capacity(1024);
@@ -360,7 +360,6 @@ mod tests {
     #[test]
     fn test_page_size_detection() {
         let page_size = get_page_size();
-        println!("Detected page size: {} bytes", page_size);
 
         // Page size must be at least 4KB
         assert!(page_size >= 4096);
