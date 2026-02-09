@@ -86,7 +86,7 @@ fn android_devices(details: bool) -> String {
                         _ => (style("●").dim(), style(status).dim()),
                     };
 
-                    devices.push(format!("  {} {} ({})", icon, device_id, status_styled));
+                    devices.push(format!("  {icon} {device_id} ({status_styled})"));
 
                     if details && status == "device" {
                         if let Ok(model_output) = Command::new("adb")
@@ -99,7 +99,7 @@ fn android_devices(details: bool) -> String {
                             if !model.is_empty() {
                                 devices.push(format!(
                                     "    {}",
-                                    style(format!("Model: {}", model)).dim()
+                                    style(format!("Model: {model}")).dim()
                                 ));
                             }
                         }
@@ -221,7 +221,7 @@ fn browsers(details: bool) -> String {
             if let Some(version) = &browser.version {
                 result.push(format!(
                     "    {}",
-                    style(format!("Version: {}", version)).dim()
+                    style(format!("Version: {version}")).dim()
                 ));
             }
         }

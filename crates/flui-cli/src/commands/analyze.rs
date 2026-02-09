@@ -32,7 +32,7 @@ pub fn execute(fix: bool, pedantic: bool) -> CliResult<()> {
         cliclack::log::info("Auto-fixing issues...")?;
     }
 
-    cmd.output_style(OutputStyle::Streaming).run()?;
+    let _ = cmd.output_style(OutputStyle::Streaming).run()?;
 
     cliclack::outro(style("Analysis complete - no issues found").green())?;
 

@@ -313,6 +313,7 @@ impl CliError {
     ///
     /// Some errors (like user cancellation) are expected and recoverable,
     /// while others indicate actual failures.
+    #[must_use]
     pub fn is_recoverable(&self) -> bool {
         matches!(self, Self::UserCancelled | Self::FormattingCheckFailed)
     }
@@ -320,11 +321,10 @@ impl CliError {
     /// Get exit code for this error.
     ///
     /// Returns an appropriate exit code for use with `std::process::exit()`.
+    #[must_use]
     pub fn exit_code(&self) -> i32 {
         match self {
             Self::UserCancelled => 0,
-            Self::FormattingCheckFailed => 1,
-            Self::TestsFailed | Self::AnalysisFailed => 1,
             Self::NotImplemented { .. } => 2,
             _ => 1,
         }
@@ -377,7 +377,7 @@ where
     }
 }
 
-/// Extension trait for Option to convert to CliError.
+/// Extension trait for Option to convert to `CliError`.
 ///
 /// # Examples
 ///
@@ -389,7 +389,7 @@ where
 /// }
 /// ```
 pub trait OptionExt<T> {
-    /// Convert None to a CliError with the given message.
+    /// Convert None to a `CliError` with the given message.
     fn ok_or_context(self, message: impl Into<String>) -> CliResult<T>;
 }
 

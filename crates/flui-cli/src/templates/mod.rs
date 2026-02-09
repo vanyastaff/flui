@@ -55,6 +55,8 @@ pub struct TemplateBuilder {
     template: Template,
     init_git: bool,
     run_cargo_check: bool,
+    local: bool,
+    platforms: Vec<String>,
 }
 
 impl TemplateBuilder {
@@ -71,6 +73,8 @@ impl TemplateBuilder {
             template: Template::Counter,
             init_git: true,
             run_cargo_check: true,
+            local: false,
+            platforms: Vec::new(),
         }
     }
 
@@ -90,13 +94,23 @@ impl TemplateBuilder {
         self
     }
 
+    /// Use local path dependencies instead of crates.io versions.
+    ///
+    /// Default is `false`.
+    pub fn local(mut self, local: bool) -> Self {
+        self.local = local;
+        self
+    }
+
+    /// Set the target platforms for scaffolding.
+    pub fn platforms(mut self, platforms: Vec<String>) -> Self {
+        self.platforms = platforms;
+        self
+    }
+
     /// Configure whether to run cargo check after generation.
     ///
     /// Default is `true`.
-    #[expect(
-        dead_code,
-        reason = "builder option for future cargo check integration"
-    )]
     pub fn with_cargo_check(mut self, check: bool) -> Self {
         self.run_cargo_check = check;
         self
@@ -117,9 +131,11 @@ impl TemplateBuilder {
         let org_str = self.org.as_str();
 
         match self.template {
-            Template::Counter => counter::generate(dir, name_str, org_str)?,
+            Template::Counter => {
+                counter::generate(dir, name_str, org_str, self.local, &self.platforms)?;
+            }
             // TODO(#templates): Implement specific templates for Todo, Dashboard, Widget, Plugin, Empty
-            _ => basic::generate(dir, name_str, org_str)?,
+            _ => basic::generate(dir, name_str, org_str, self.local, &self.platforms)?,
         }
 
         Ok(GeneratedProject {
@@ -137,7 +153,6 @@ impl TemplateBuilder {
 /// Contains information about the generated project that can be used
 /// for further operations or user feedback.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[expect(dead_code, reason = "fields used for future post-generation reporting")]
 pub struct GeneratedProject {
     /// The project name.
     pub name: ProjectName,
@@ -156,7 +171,7 @@ pub struct GeneratedProject {
     reason = "method reserved for future post-generation reporting"
 )]
 impl GeneratedProject {
-    /// Get the full application ID (e.g., "com.example.my_app").
+    /// Get the full application ID (e.g., "`com.example.my_app`").
     pub fn app_id(&self) -> String {
         self.org.app_id(&self.name)
     }

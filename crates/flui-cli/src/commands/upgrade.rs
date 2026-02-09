@@ -1,6 +1,6 @@
-//! Upgrade command for updating flui_cli and dependencies.
+//! Upgrade command for updating `flui_cli` and dependencies.
 //!
-//! Handles both self-update (flui_cli) and project dependency updates.
+//! Handles both self-update (`flui_cli`) and project dependency updates.
 
 use crate::error::CliResult;
 use crate::runner::{CargoCommand, OutputStyle};
@@ -10,12 +10,12 @@ use console::style;
 ///
 /// # Arguments
 ///
-/// * `self_update` - Update only flui_cli itself
+/// * `self_update` - Update only `flui_cli` itself
 /// * `dependencies` - Update only project dependencies
 ///
 /// # Errors
 ///
-/// Returns `CliError::UpgradeFailed` if flui_cli upgrade fails.
+/// Returns `CliError::UpgradeFailed` if `flui_cli` upgrade fails.
 /// Returns `CliError::UpdateFailed` if dependency update fails.
 pub fn execute(self_update: bool, dependencies: bool) -> CliResult<()> {
     cliclack::intro(style(" flui upgrade ").on_blue().white())?;
@@ -28,7 +28,7 @@ pub fn execute(self_update: bool, dependencies: bool) -> CliResult<()> {
         let spinner = cliclack::spinner();
         spinner.start("Upgrading flui_cli...");
 
-        CargoCommand::install("flui_cli")
+        let _ = CargoCommand::install("flui_cli")
             .force()
             .output_style(OutputStyle::Silent)
             .run()?;
@@ -40,7 +40,7 @@ pub fn execute(self_update: bool, dependencies: bool) -> CliResult<()> {
         let spinner = cliclack::spinner();
         spinner.start("Updating project dependencies...");
 
-        CargoCommand::update()
+        let _ = CargoCommand::update()
             .output_style(OutputStyle::Silent)
             .run()?;
 

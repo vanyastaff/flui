@@ -63,6 +63,8 @@ pub mod output_parser;
 pub mod platform;
 /// Build progress tracking and reporting
 pub mod progress;
+/// Platform scaffolding for new projects
+pub mod scaffold;
 /// Utility functions and helpers
 pub(crate) mod util;
 /// Web/WASM platform build support

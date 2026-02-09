@@ -1,3 +1,9 @@
+//! CLI command implementations.
+//!
+//! Each submodule corresponds to a top-level `flui` subcommand (e.g. `create`,
+//! `build`, `run`, `doctor`). Commands are registered in the clap `Cli` enum
+//! and dispatched from `main.rs`.
+
 pub(crate) mod analyze;
 pub(crate) mod build;
 pub(crate) mod clean;

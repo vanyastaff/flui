@@ -18,18 +18,22 @@ use std::path::Path;
 /// # Errors
 ///
 /// Returns `CliError::CleanFailed` if cargo clean fails.
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "mirrors clap argument structure"
+)]
 pub fn execute(deep: bool, platform: Option<String>) -> CliResult<()> {
     cliclack::intro(style(" flui clean ").on_red().white())?;
 
     let spinner = cliclack::spinner();
 
     if let Some(ref plat) = platform {
-        spinner.start(format!("Cleaning {} artifacts...", plat));
+        spinner.start(format!("Cleaning {plat} artifacts..."));
         clean_platform(plat)?;
         spinner.stop(format!("{} {} cleaned", style("✓").green(), plat));
     } else {
         spinner.start("Cleaning cargo artifacts...");
-        CargoCommand::clean()
+        let _ = CargoCommand::clean()
             .output_style(OutputStyle::Silent)
             .run()?;
         spinner.stop(format!("{} Cargo artifacts cleaned", style("✓").green()));
@@ -37,7 +41,7 @@ pub fn execute(deep: bool, platform: Option<String>) -> CliResult<()> {
         if deep {
             let spinner = cliclack::spinner();
             spinner.start("Cleaning platform directories...");
-            clean_platform_dirs()?;
+            clean_platform_dirs();
             spinner.stop(format!(
                 "{} Platform directories cleaned",
                 style("✓").green()
@@ -77,11 +81,10 @@ fn clean_platform(platform: &str) -> CliResult<()> {
 }
 
 /// Clean all platform-specific build directories.
-fn clean_platform_dirs() -> CliResult<()> {
+fn clean_platform_dirs() {
     for platform in &["android", "ios", "web"] {
         let _ = clean_platform(platform);
     }
-    Ok(())
 }
 
 /// Remove a directory if it exists.

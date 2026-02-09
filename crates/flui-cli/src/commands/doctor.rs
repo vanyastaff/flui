@@ -4,6 +4,7 @@
 
 use crate::error::CliResult;
 use console::style;
+use std::fmt::Write;
 use std::process::Command;
 
 /// Execute the doctor command.
@@ -14,6 +15,10 @@ use std::process::Command;
 /// * `android` - Check only Android toolchain
 /// * `ios` - Check only iOS toolchain
 /// * `web` - Check only Web toolchain
+#[expect(
+    clippy::fn_params_excessive_bools,
+    reason = "matches CLI arg structure"
+)]
 pub fn execute(verbose: bool, android: bool, ios: bool, web: bool) -> CliResult<()> {
     cliclack::intro(style(" flui doctor ").on_cyan().black())?;
 
@@ -89,7 +94,7 @@ fn check_rust(verbose: bool, all_ok: &mut bool) -> String {
 
     if verbose {
         if let Ok(path) = which::which("rustc") {
-            result.push_str(&format!("\n  Path: {}", style(path.display()).dim()));
+            write!(result, "\n  Path: {}", style(path.display()).dim()).ok();
         }
     }
 
@@ -115,7 +120,7 @@ fn check_flui() -> String {
     format!(
         "{} FLUI CLI: {}",
         style("✓").green(),
-        style(format!("v{}", version)).cyan()
+        style(format!("v{version}")).cyan()
     )
 }
 
@@ -143,12 +148,12 @@ fn check_java(verbose: bool, all_ok: &mut bool) -> String {
 
     if verbose {
         if let Ok(java_home) = std::env::var("JAVA_HOME") {
-            result.push_str(&format!("\n  JAVA_HOME: {}", style(java_home).dim()));
+            write!(result, "\n  JAVA_HOME: {}", style(java_home).dim()).ok();
         }
     }
 
     if version_output.contains("version \"1.8") {
-        result.push_str(&format!("\n  {}", style("⚠ Java 11+ recommended").yellow()));
+        write!(result, "\n  {}", style("⚠ Java 11+ recommended").yellow()).ok();
     }
 
     result
@@ -232,12 +237,14 @@ fn check_android_targets(all_ok: &mut bool) -> String {
                 style("Missing").yellow()
             );
             for target in &missing {
-                result.push_str(&format!("\n  {} {}", style("⚠").yellow(), target));
+                write!(result, "\n  {} {}", style("⚠").yellow(), target).ok();
             }
-            result.push_str(&format!(
+            write!(
+                result,
                 "\n  {}",
                 style(format!("rustup target add {}", missing.join(" "))).dim()
-            ));
+            )
+            .ok();
             result
         }
     } else {
@@ -387,10 +394,12 @@ fn check_wgpu(verbose: bool) -> String {
     let mut result = format!("{} wgpu: {}", style("✓").green(), style("Available").cyan());
 
     if verbose {
-        result.push_str(&format!(
+        write!(
+            result,
             "\n  {}",
             style("Provided via Rust dependencies").dim()
-        ));
+        )
+        .ok();
     }
 
     result

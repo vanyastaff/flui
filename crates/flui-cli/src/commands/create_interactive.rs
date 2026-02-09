@@ -6,7 +6,7 @@
 use crate::error::{CliError, CliResult};
 use crate::runner::{input, select};
 use crate::types::{OrganizationId, ProjectName};
-use crate::Template;
+use crate::{Platform, Template};
 use console::style;
 
 /// Configuration collected from interactive prompts.
@@ -18,6 +18,8 @@ pub struct ProjectConfig {
     pub org: OrganizationId,
     /// Selected project template.
     pub template: Template,
+    /// Selected target platforms (None means use defaults).
+    pub platforms: Option<Vec<Platform>>,
 }
 
 /// Run the interactive project creation wizard.
@@ -73,6 +75,24 @@ pub fn interactive_create() -> CliResult<ProjectConfig> {
         .interact()
         .map_err(|_| CliError::UserCancelled)?;
 
+    // Ask for target platforms
+    let platforms: Vec<Platform> = cliclack::multiselect("Select target platforms")
+        .item(Platform::Windows, "Windows", "Desktop")
+        .item(Platform::Linux, "Linux", "Desktop")
+        .item(Platform::Macos, "macOS", "Desktop")
+        .item(Platform::Android, "Android", "Mobile")
+        .item(Platform::Ios, "iOS", "Mobile (macOS only)")
+        .item(Platform::Web, "Web", "WASM")
+        .required(false)
+        .interact()
+        .map_err(|_| CliError::UserCancelled)?;
+
+    let platforms = if platforms.is_empty() {
+        None
+    } else {
+        Some(platforms)
+    };
+
     // Validation already happened in the input prompts above,
     // so these constructions are guaranteed to succeed.
     let name = ProjectName::new(&name)?;
@@ -82,5 +102,6 @@ pub fn interactive_create() -> CliResult<ProjectConfig> {
         name,
         org,
         template,
+        platforms,
     })
 }

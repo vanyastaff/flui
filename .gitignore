@@ -8,6 +8,8 @@ debug/
 .claude
 .agents
 
+/%TEMP%/
+
 # Cargo.lock is usually committed for binary crates, but uncomment if needed
 # Cargo.lock
 

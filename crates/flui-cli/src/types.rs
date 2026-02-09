@@ -5,8 +5,8 @@
 //!
 //! - **C-NEWTYPE**: Newtypes provide static distinctions
 //! - **C-VALIDATE**: Functions validate their arguments
-//! - **C-COMMON-TRAITS**: Types implement common traits (Debug, Clone, PartialEq, Eq, Hash)
-//! - **C-CONV-TRAITS**: Conversions use standard traits (From, TryFrom, AsRef)
+//! - **C-COMMON-TRAITS**: Types implement common traits (Debug, Clone, `PartialEq`, Eq, Hash)
+//! - **C-CONV-TRAITS**: Conversions use standard traits (From, `TryFrom`, `AsRef`)
 //! - **C-DEBUG**: All public types implement Debug
 //! - **C-DEFAULT**: Default for types with sensible defaults
 //!
@@ -31,7 +31,8 @@ use crate::error::{CliError, CliResult};
 use serde::{Deserialize, Serialize};
 use std::borrow::Borrow;
 use std::fmt::{self, Display, Formatter};
-use std::path::PathBuf;
+use std::ops::Deref;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 /// Reserved Rust keywords that cannot be used as project names.
@@ -117,19 +118,20 @@ impl ProjectName {
     /// This is not unsafe in the Rust sense, but the caller should ensure
     /// the name is valid according to project name rules. This is useful
     /// for trusted internal sources or deserialization.
-    #[expect(dead_code, reason = "reserved for trusted internal sources")]
     pub fn new_unchecked(name: impl Into<String>) -> Self {
         Self(name.into())
     }
 
     /// Get the project name as a string slice.
     #[inline]
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
 
     /// Convert into the underlying String.
     #[inline]
+    #[must_use]
     pub fn into_inner(self) -> String {
         self.0
     }
@@ -144,6 +146,7 @@ impl ProjectName {
     /// let name = ProjectName::new("my-app")?;
     /// assert_eq!(name.to_crate_name(), "my_app");
     /// ```
+    #[must_use]
     pub fn to_crate_name(&self) -> String {
         self.0.replace('-', "_")
     }
@@ -204,6 +207,16 @@ impl AsRef<str> for ProjectName {
 impl Borrow<str> for ProjectName {
     #[inline]
     fn borrow(&self) -> &str {
+        &self.0
+    }
+}
+
+// C-CONV-TRAITS: Deref for transparent access to &str methods
+impl Deref for ProjectName {
+    type Target = str;
+
+    #[inline]
+    fn deref(&self) -> &str {
         &self.0
     }
 }
@@ -303,12 +316,14 @@ impl OrganizationId {
 
     /// Get the organization ID as a string slice.
     #[inline]
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
 
     /// Convert into the underlying String.
     #[inline]
+    #[must_use]
     pub fn into_inner(self) -> String {
         self.0
     }
@@ -327,6 +342,7 @@ impl OrganizationId {
     /// let app_id = org.app_id(&name);
     /// assert_eq!(app_id, "com.example.my_app");
     /// ```
+    #[must_use]
     pub fn app_id(&self, name: &ProjectName) -> String {
         format!("{}.{}", self.0, name.to_crate_name())
     }
@@ -339,6 +355,7 @@ impl OrganizationId {
     /// let org = OrganizationId::new("com.example.team")?;
     /// assert_eq!(org.segment_count(), 3);
     /// ```
+    #[must_use]
     pub fn segment_count(&self) -> usize {
         self.0.split('.').count()
     }
@@ -408,6 +425,16 @@ impl AsRef<str> for OrganizationId {
 impl Borrow<str> for OrganizationId {
     #[inline]
     fn borrow(&self) -> &str {
+        &self.0
+    }
+}
+
+// C-CONV-TRAITS: Deref for transparent access to &str methods
+impl Deref for OrganizationId {
+    type Target = str;
+
+    #[inline]
+    fn deref(&self) -> &str {
         &self.0
     }
 }
@@ -509,7 +536,7 @@ impl ProjectPath {
     ///
     /// Useful when you want to check existence separately or
     /// when working with paths that may be created later.
-    #[expect(dead_code, reason = "reserved for deferred existence check")]
+    #[must_use]
     pub fn new_unchecked(name: &ProjectName, base: Option<PathBuf>) -> Self {
         let path = if let Some(base) = base {
             base.join(name.as_str())
@@ -521,35 +548,49 @@ impl ProjectPath {
 
     /// Get a reference to the underlying path.
     #[inline]
-    pub fn as_path(&self) -> &std::path::Path {
+    #[must_use]
+    pub fn as_path(&self) -> &Path {
         &self.0
     }
 
-    /// Convert into the underlying PathBuf.
+    /// Convert into the underlying `PathBuf`.
     #[inline]
+    #[must_use]
     pub fn into_inner(self) -> PathBuf {
         self.0
     }
 
     /// Check if the path exists.
+    #[must_use]
     pub fn exists(&self) -> bool {
         self.0.exists()
     }
 
     /// Get the parent directory.
-    pub fn parent(&self) -> Option<&std::path::Path> {
+    #[must_use]
+    pub fn parent(&self) -> Option<&Path> {
         self.0.parent()
     }
 
     /// Join a relative path.
-    pub fn join(&self, path: impl AsRef<std::path::Path>) -> PathBuf {
+    pub fn join(&self, path: impl AsRef<Path>) -> PathBuf {
         self.0.join(path)
     }
 }
 
-impl AsRef<std::path::Path> for ProjectPath {
+impl AsRef<Path> for ProjectPath {
     #[inline]
-    fn as_ref(&self) -> &std::path::Path {
+    fn as_ref(&self) -> &Path {
+        &self.0
+    }
+}
+
+// C-CONV-TRAITS: Deref for transparent access to Path methods
+impl Deref for ProjectPath {
+    type Target = Path;
+
+    #[inline]
+    fn deref(&self) -> &Path {
         &self.0
     }
 }

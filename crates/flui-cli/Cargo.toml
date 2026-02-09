@@ -30,6 +30,7 @@ thiserror = { workspace = true }
 
 # Serialization
 serde = { workspace = true }
+serde_json = { workspace = true }
 
 tracing = { workspace = true }
 toml = "0.9"
@@ -39,6 +40,19 @@ which = "8.0"
 cliclack = "0.3.6"
 console = "0.15"
 dirs = "5.0"
+
+# Async runtime (for flui-build async builders)
+pollster = { workspace = true }
+
+# File watching (hot reload)
+notify-debouncer-mini = "0.5"
+
+# Optional: DevTools integration
+flui-devtools = { path = "../flui-devtools", optional = true }
+
+[features]
+default = []
+devtools = ["dep:flui-devtools"]
 
 [dev-dependencies]
 tempfile = "3.10"

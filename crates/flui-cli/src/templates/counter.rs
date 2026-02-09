@@ -1,16 +1,23 @@
 use crate::error::{CliResult, ResultExt};
+use flui_build::scaffold::{scaffold_platform, ScaffoldParams};
 use std::fs;
 use std::path::Path;
 
-pub fn generate(dir: &Path, name: &str, org: &str) -> CliResult<()> {
+pub fn generate(
+    dir: &Path,
+    name: &str,
+    org: &str,
+    local: bool,
+    platforms: &[String],
+) -> CliResult<()> {
     // Create Cargo.toml
-    generate_cargo_toml(dir, name)?;
+    generate_cargo_toml(dir, name, local)?;
 
     // Create src/main.rs
     generate_main(dir)?;
 
     // Create flui.toml
-    generate_flui_config(dir, name, org)?;
+    generate_flui_config(dir, name, org, platforms)?;
 
     // Create README.md
     generate_readme(dir, name)?;
@@ -18,22 +25,43 @@ pub fn generate(dir: &Path, name: &str, org: &str) -> CliResult<()> {
     // Create assets directory
     fs::create_dir_all(dir.join("assets"))?;
 
+    // Scaffold platform directories
+    scaffold_platforms(dir, name, org, platforms)?;
+
     Ok(())
 }
 
-fn generate_cargo_toml(dir: &Path, name: &str) -> CliResult<()> {
+fn generate_cargo_toml(dir: &Path, name: &str, local: bool) -> CliResult<()> {
+    let version = env!("CARGO_PKG_VERSION");
+
+    let deps = if local {
+        r#"flui_app = { path = "../../crates/flui_app" }
+flui_widgets = { path = "../../crates/flui_widgets" }
+flui_core = { path = "../../crates/flui_core" }
+flui_types = { path = "../../crates/flui_types" }"#
+            .to_string()
+    } else {
+        format!(
+            r#"flui_app = "{version}"
+flui_widgets = "{version}"
+flui_core = "{version}"
+flui_types = "{version}""#
+        )
+    };
+
+    let mode_comment = if local { " (local development)" } else { "" };
+
     let content = format!(
-        r#"[package]
-name = "{}"
+        r#"# FLUI Template v{version}{mode_comment}
+
+[package]
+name = "{name}"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.90"
+rust-version = "1.91"
 
 [dependencies]
-flui_app = {{ path = "../../crates/flui_app" }}
-flui_widgets = {{ path = "../../crates/flui_widgets" }}
-flui_core = {{ path = "../../crates/flui_core" }}
-flui_types = {{ path = "../../crates/flui_types" }}
+{deps}
 
 # Logging
 tracing = "0.1"
@@ -47,8 +75,7 @@ opt-level = 3
 lto = "thin"
 codegen-units = 1
 strip = "debuginfo"
-"#,
-        name
+"#
     );
 
     fs::write(dir.join("Cargo.toml"), content).context("Failed to create Cargo.toml")?;
@@ -132,15 +159,22 @@ impl View for CounterView {
     Ok(())
 }
 
-fn generate_flui_config(dir: &Path, name: &str, org: &str) -> CliResult<()> {
+fn generate_flui_config(dir: &Path, name: &str, org: &str, platforms: &[String]) -> CliResult<()> {
+    let platform_list = if platforms.is_empty() {
+        r#"["windows", "linux", "macos"]"#.to_string()
+    } else {
+        let quoted: Vec<String> = platforms.iter().map(|p| format!("\"{p}\"")).collect();
+        format!("[{}]", quoted.join(", "))
+    };
+
     let content = format!(
         r#"[app]
-name = "{}"
+name = "{name}"
 version = "0.1.0"
-organization = "{}"
+organization = "{org}"
 
 [build]
-target_platforms = ["windows", "linux", "macos"]
+target_platforms = {platform_list}
 
 [assets]
 # Asset directories
@@ -153,8 +187,7 @@ directories = ["assets"]
 # fonts = [
 #     {{ asset = "fonts/Roboto-Regular.ttf", weight = 400, style = "normal" }},
 # ]
-"#,
-        name, org
+"#
     );
 
     fs::write(dir.join("flui.toml"), content).context("Failed to create flui.toml")?;
@@ -195,5 +228,27 @@ flui test
     );
 
     fs::write(dir.join("README.md"), content).context("Failed to create README.md")?;
+    Ok(())
+}
+
+/// Scaffold platform directories based on the selected platforms.
+fn scaffold_platforms(dir: &Path, name: &str, org: &str, platforms: &[String]) -> CliResult<()> {
+    if platforms.is_empty() {
+        return Ok(());
+    }
+
+    let lib_name = name.replace('-', "_");
+    let package_name = format!("{org}.{lib_name}");
+    let params = ScaffoldParams {
+        app_name: name,
+        lib_name: &lib_name,
+        package_name: &package_name,
+    };
+
+    for platform in platforms {
+        scaffold_platform(platform, dir, &params)
+            .map_err(|e| crate::error::CliError::build_failed(platform, e.to_string()))?;
+    }
+
     Ok(())
 }

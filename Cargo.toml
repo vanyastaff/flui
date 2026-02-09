@@ -23,7 +23,7 @@ members = [
     # "crates/flui-animation",
     # "crates/flui-reactivity",
     # "crates/flui-devtools",
-    # "crates/flui-cli",
+    "crates/flui-cli",
     "crates/flui-build",
 ]
 
@@ -123,6 +123,9 @@ lasso = { version = "0.7", features = ["multi-threaded"] }
 
 # OPTIMIZED SMART POINTERS - Used by flui-assets
 triomphe = "0.1"
+
+# TESTING
+tempfile = "3.15"
 
 # PERFORMANCE & PROFILING
 criterion = "0.7"

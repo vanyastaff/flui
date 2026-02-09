@@ -18,7 +18,7 @@ use std::io;
 ///
 /// Returns `CliError::ShellDetectionFailed` if shell cannot be detected.
 pub fn execute(shell: Option<Shell>) -> CliResult<()> {
-    let shell = shell.map_or_else(detect_shell, Ok)?;
+    let shell = shell.unwrap_or_else(detect_shell);
 
     cliclack::intro(style(" flui completions ").on_yellow().black())?;
 
@@ -30,41 +30,41 @@ pub fn execute(shell: Option<Shell>) -> CliResult<()> {
 
     cliclack::outro(format!(
         "Completions generated for {}",
-        style(format!("{:?}", shell)).cyan()
+        style(format!("{shell:?}")).cyan()
     ))?;
 
     Ok(())
 }
 
 /// Detect the user's shell from environment variables.
-fn detect_shell() -> CliResult<Shell> {
+fn detect_shell() -> Shell {
     // Try SHELL environment variable (Unix)
     if let Ok(shell_path) = std::env::var("SHELL") {
         if shell_path.contains("bash") {
-            return Ok(Shell::Bash);
+            return Shell::Bash;
         } else if shell_path.contains("zsh") {
-            return Ok(Shell::Zsh);
+            return Shell::Zsh;
         } else if shell_path.contains("fish") {
-            return Ok(Shell::Fish);
+            return Shell::Fish;
         }
     }
 
     // Try ComSpec (Windows)
     if let Ok(comspec) = std::env::var("ComSpec") {
         if comspec.contains("powershell") || comspec.contains("pwsh") {
-            return Ok(Shell::PowerShell);
+            return Shell::PowerShell;
         }
     }
 
     // Platform-specific defaults
     #[cfg(unix)]
-    return Ok(Shell::Bash);
+    return Shell::Bash;
 
     #[cfg(windows)]
-    return Ok(Shell::PowerShell);
+    return Shell::PowerShell;
 
     #[cfg(not(any(unix, windows)))]
-    Err(CliError::ShellDetectionFailed)
+    Shell::Bash
 }
 
 /// Installation instructions for the detected shell.

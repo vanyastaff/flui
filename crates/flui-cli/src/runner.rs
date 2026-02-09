@@ -67,6 +67,7 @@ use std::process::{Command, ExitStatus, Stdio};
 /// breaking changes (C-NON-EXHAUSTIVE).
 #[derive(Debug, Clone)]
 #[non_exhaustive]
+#[derive(Default)]
 pub enum OutputStyle {
     /// No output, only return status.
     Silent,
@@ -75,6 +76,7 @@ pub enum OutputStyle {
     Spinner(String),
 
     /// Stream output in real-time.
+    #[default]
     Streaming,
 
     /// Capture and display all output after completion.
@@ -82,12 +84,6 @@ pub enum OutputStyle {
 
     /// Show verbose output with command details.
     Verbose,
-}
-
-impl Default for OutputStyle {
-    fn default() -> Self {
-        Self::Streaming
-    }
 }
 
 // ============================================================================
@@ -161,9 +157,9 @@ impl From<CommandFailure> for CliError {
 pub struct CommandResult {
     /// Exit status of the command.
     pub status: ExitStatus,
-    /// Captured stdout (if OutputStyle::Captured).
+    /// Captured stdout (if `OutputStyle::Captured`).
     pub stdout: Option<String>,
-    /// Captured stderr (if OutputStyle::Captured).
+    /// Captured stderr (if `OutputStyle::Captured`).
     pub stderr: Option<String>,
 }
 
@@ -204,18 +200,21 @@ impl CommandRunner {
     }
 
     /// Set output style.
+    #[must_use]
     pub fn output_style(mut self, style: OutputStyle) -> Self {
         self.output_style = style;
         self
     }
 
     /// Set message to show on success.
+    #[must_use]
     pub fn on_success(mut self, message: impl Into<String>) -> Self {
         self.success_message = Some(message.into());
         self
     }
 
     /// Set failure type to return on command failure.
+    #[must_use]
     pub fn on_failure(mut self, failure: CommandFailure) -> Self {
         self.failure_type = Some(failure);
         self
@@ -223,9 +222,10 @@ impl CommandRunner {
 
     /// Execute the command and handle output.
     pub fn run(mut self) -> CliResult<CommandResult> {
-        match &self.output_style {
+        let style = std::mem::take(&mut self.output_style);
+        match style {
             OutputStyle::Silent => self.run_silent(),
-            OutputStyle::Spinner(msg) => self.run_with_spinner(msg.clone()),
+            OutputStyle::Spinner(msg) => self.run_with_spinner(&msg),
             OutputStyle::Streaming => self.run_streaming(),
             OutputStyle::Captured => self.run_captured(),
             OutputStyle::Verbose => self.run_verbose(),
@@ -243,9 +243,9 @@ impl CommandRunner {
         self.handle_result(status, None, None)
     }
 
-    fn run_with_spinner(&mut self, message: String) -> CliResult<CommandResult> {
+    fn run_with_spinner(&mut self, message: &str) -> CliResult<CommandResult> {
         let spinner = cliclack::spinner();
-        spinner.start(&message);
+        spinner.start(message);
 
         self.command.stdout(Stdio::piped()).stderr(Stdio::piped());
 
@@ -254,7 +254,7 @@ impl CommandRunner {
             .output()
             .with_context(|| format!("Failed to execute: {}", self.error_context))?;
 
-        spinner.stop(&message);
+        spinner.stop(message);
 
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -362,36 +362,43 @@ pub struct CargoCommand {
 
 impl CargoCommand {
     /// Create a cargo build command.
+    #[must_use]
     pub fn build() -> Self {
         Self::new("build").on_failure(CommandFailure::Build("default".into()))
     }
 
     /// Create a cargo test command.
+    #[must_use]
     pub fn test() -> Self {
         Self::new("test").on_failure(CommandFailure::Test)
     }
 
     /// Create a cargo clippy command.
+    #[must_use]
     pub fn clippy() -> Self {
         Self::new("clippy").on_failure(CommandFailure::Clippy)
     }
 
     /// Create a cargo fmt command.
+    #[must_use]
     pub fn fmt() -> Self {
         Self::new("fmt").on_failure(CommandFailure::Format)
     }
 
     /// Create a cargo clean command.
+    #[must_use]
     pub fn clean() -> Self {
         Self::new("clean").on_failure(CommandFailure::Clean)
     }
 
     /// Create a cargo run command.
+    #[must_use]
     pub fn run_app() -> Self {
         Self::new("run").on_failure(CommandFailure::Run)
     }
 
     /// Create a cargo update command.
+    #[must_use]
     pub fn update() -> Self {
         Self::new("update").on_failure(CommandFailure::Update)
     }
@@ -417,12 +424,14 @@ impl CargoCommand {
     }
 
     /// Add a single argument.
+    #[must_use]
     pub fn arg(mut self, arg: impl Into<String>) -> Self {
         self.args.push(arg.into());
         self
     }
 
     /// Add multiple arguments.
+    #[must_use]
     pub fn args<I, S>(mut self, args: I) -> Self
     where
         I: IntoIterator<Item = S>,
@@ -433,12 +442,14 @@ impl CargoCommand {
     }
 
     /// Add argument after -- separator.
+    #[must_use]
     pub fn separator_arg(mut self, arg: impl Into<String>) -> Self {
         self.separator_args.push(arg.into());
         self
     }
 
     /// Add multiple arguments after -- separator.
+    #[must_use]
     pub fn separator_args<I, S>(mut self, args: I) -> Self
     where
         I: IntoIterator<Item = S>,
@@ -449,100 +460,119 @@ impl CargoCommand {
     }
 
     /// Build in release mode.
+    #[must_use]
     pub fn release(self) -> Self {
         self.arg("--release")
     }
 
     /// Target all workspace members.
+    #[must_use]
     pub fn workspace(self) -> Self {
         self.arg("--workspace")
     }
 
     /// Target specific package.
+    #[must_use]
     pub fn package(self, name: impl Into<String>) -> Self {
         self.arg("-p").arg(name)
     }
 
     /// Add --all flag.
+    #[must_use]
     pub fn all(self) -> Self {
         self.arg("--all")
     }
 
     /// Add --check flag (for cargo fmt).
+    #[must_use]
     pub fn check(mut self) -> Self {
         self.failure_type = Some(CommandFailure::FormatCheck);
         self.arg("--check")
     }
 
     /// Add --force flag.
+    #[must_use]
     pub fn force(self) -> Self {
         self.arg("--force")
     }
 
     /// Add test filter.
+    #[must_use]
     pub fn filter(self, filter: impl Into<String>) -> Self {
         self.arg(filter)
     }
 
     /// Add --lib flag (test only library).
+    #[must_use]
     pub fn lib_only(self) -> Self {
         self.arg("--lib")
     }
 
     /// Add --test flag (test only integration tests).
+    #[must_use]
     pub fn integration_only(self) -> Self {
         self.arg("--test")
     }
 
     /// Add -D warnings (for clippy).
+    #[must_use]
     pub fn deny_warnings(self) -> Self {
         self.separator_arg("-D").separator_arg("warnings")
     }
 
-    /// Add -W clippy::pedantic (for clippy).
+    /// Add -W `clippy::pedantic` (for clippy).
+    #[must_use]
     pub fn pedantic(self) -> Self {
         self.separator_arg("-W").separator_arg("clippy::pedantic")
     }
 
     /// Add --fix flag (for clippy).
+    #[must_use]
     pub fn fix(self) -> Self {
         self.arg("--fix")
     }
 
     /// Add --verbose flag.
+    #[must_use]
     pub fn verbose(self) -> Self {
         self.arg("--verbose")
     }
 
     /// Set custom target triple.
+    #[must_use]
     pub fn target(self, triple: impl Into<String>) -> Self {
         self.arg("--target").arg(triple)
     }
 
     /// Set custom profile.
+    #[must_use]
     pub fn profile(self, profile: impl Into<String>) -> Self {
         self.arg(format!("--profile={}", profile.into()))
     }
 
     /// Set environment variable.
+    #[must_use]
     pub fn env(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.env_vars.push((key.into(), value.into()));
         self
     }
 
     /// Set output style.
+    #[must_use]
     pub fn output_style(mut self, style: OutputStyle) -> Self {
         self.output_style = style;
         self
     }
 
     /// Set success message.
+    #[must_use]
     pub fn on_success(mut self, message: impl Into<String>) -> Self {
         self.success_message = Some(message.into());
         self
     }
 
     /// Set failure type.
+    #[must_use]
     pub fn on_failure(mut self, failure: CommandFailure) -> Self {
         self.failure_type = Some(failure);
         self
@@ -600,16 +630,19 @@ pub struct GitCommand {
 
 impl GitCommand {
     /// Create a git init command.
+    #[must_use]
     pub fn init() -> Self {
         Self::new("init")
     }
 
     /// Create a git add command.
+    #[must_use]
     pub fn add() -> Self {
         Self::new("add")
     }
 
     /// Create a git commit command.
+    #[must_use]
     pub fn commit() -> Self {
         Self::new("commit")
     }
@@ -624,22 +657,26 @@ impl GitCommand {
     }
 
     /// Add argument.
+    #[must_use]
     pub fn arg(mut self, arg: impl Into<String>) -> Self {
         self.args.push(arg.into());
         self
     }
 
     /// Add all files.
+    #[must_use]
     pub fn all(self) -> Self {
         self.arg("-A")
     }
 
     /// Set commit message.
+    #[must_use]
     pub fn message(self, msg: impl Into<String>) -> Self {
         self.arg("-m").arg(msg)
     }
 
     /// Set output style.
+    #[must_use]
     pub fn output_style(mut self, style: OutputStyle) -> Self {
         self.output_style = style;
         self
