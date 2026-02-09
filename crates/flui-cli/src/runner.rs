@@ -157,6 +157,7 @@ impl From<CommandFailure> for CliError {
 
 /// Result of a command execution.
 #[derive(Debug)]
+#[must_use]
 pub struct CommandResult {
     /// Exit status of the command.
     pub status: ExitStatus,
@@ -353,6 +354,7 @@ pub struct CargoCommand {
     subcommand: String,
     args: Vec<String>,
     separator_args: Vec<String>, // args after --
+    env_vars: Vec<(String, String)>,
     output_style: OutputStyle,
     success_message: Option<String>,
     failure_type: Option<CommandFailure>,
@@ -407,6 +409,7 @@ impl CargoCommand {
             subcommand: subcommand.into(),
             args: Vec::new(),
             separator_args: Vec::new(),
+            env_vars: Vec::new(),
             output_style: OutputStyle::Streaming,
             success_message: None,
             failure_type: None,
@@ -523,9 +526,7 @@ impl CargoCommand {
 
     /// Set environment variable.
     pub fn env(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
-        // Store for later, applied during run
-        self.args
-            .push(format!("__ENV__{}={}", key.into(), value.into()));
+        self.env_vars.push((key.into(), value.into()));
         self
     }
 
@@ -552,15 +553,14 @@ impl CargoCommand {
         let mut cmd = Command::new("cargo");
         cmd.arg(&self.subcommand);
 
-        // Add regular args (filtering out env vars)
+        // Add environment variables
+        for (key, value) in &self.env_vars {
+            cmd.env(key, value);
+        }
+
+        // Add regular args
         for arg in &self.args {
-            if let Some(env_def) = arg.strip_prefix("__ENV__") {
-                if let Some((key, value)) = env_def.split_once('=') {
-                    cmd.env(key, value);
-                }
-            } else {
-                cmd.arg(arg);
-            }
+            cmd.arg(arg);
         }
 
         // Add separator args

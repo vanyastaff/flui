@@ -115,13 +115,8 @@ impl TemplateBuilder {
 
         match self.template {
             Template::Counter => counter::generate(dir, name_str, org_str)?,
-            Template::Basic => basic::generate(dir, name_str, org_str)?,
-            // TODO: Implement specific templates
-            Template::Todo => basic::generate(dir, name_str, org_str)?,
-            Template::Dashboard => basic::generate(dir, name_str, org_str)?,
-            Template::Widget => basic::generate(dir, name_str, org_str)?,
-            Template::Plugin => basic::generate(dir, name_str, org_str)?,
-            Template::Empty => basic::generate(dir, name_str, org_str)?,
+            // TODO: Implement specific templates for Todo, Dashboard, Widget, Plugin, Empty
+            _ => basic::generate(dir, name_str, org_str)?,
         }
 
         Ok(GeneratedProject {

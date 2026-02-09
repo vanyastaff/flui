@@ -10,7 +10,7 @@ use flui_build::{
 use std::path::PathBuf;
 
 /// Build options collected into a struct to avoid excessive bool parameters.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[allow(dead_code)]
 pub struct BuildOptions {
     /// Build in release mode.
@@ -132,7 +132,10 @@ fn build_android(options: &BuildOptions, output: Option<&PathBuf>) -> CliResult<
         Profile::Debug
     };
 
-    let mut builder = BuilderContextBuilder::new(workspace_root.clone())
+    let android_builder =
+        AndroidBuilder::new(&workspace_root).context("Failed to initialize Android builder")?;
+
+    let mut builder = BuilderContextBuilder::new(workspace_root)
         .with_platform(Platform::Android {
             targets: vec!["arm64-v8a".to_string()],
         })
@@ -145,9 +148,6 @@ fn build_android(options: &BuildOptions, output: Option<&PathBuf>) -> CliResult<
     let ctx = builder.build();
 
     std::fs::create_dir_all(&ctx.output_dir)?;
-
-    let android_builder =
-        AndroidBuilder::new(&workspace_root).context("Failed to initialize Android builder")?;
 
     spinner.set_message("Validating Android environment...");
     android_builder
@@ -192,7 +192,10 @@ fn build_android_with_progress(
         Profile::Debug
     };
 
-    let mut builder = BuilderContextBuilder::new(workspace_root.clone())
+    let android_builder =
+        AndroidBuilder::new(&workspace_root).context("Failed to initialize Android builder")?;
+
+    let mut builder = BuilderContextBuilder::new(workspace_root)
         .with_platform(Platform::Android {
             targets: vec!["arm64-v8a".to_string()],
         })
@@ -204,9 +207,6 @@ fn build_android_with_progress(
 
     let ctx = builder.build();
     std::fs::create_dir_all(&ctx.output_dir)?;
-
-    let android_builder =
-        AndroidBuilder::new(&workspace_root).context("Failed to initialize Android builder")?;
 
     // Validate phase
     progress.start_phase(BuildPhase::Validate, Some("Checking Android SDK..."));
@@ -268,7 +268,10 @@ fn build_web(options: &BuildOptions, output: Option<&PathBuf>) -> CliResult<()> 
         Profile::Debug
     };
 
-    let mut builder = BuilderContextBuilder::new(workspace_root.clone())
+    let web_builder =
+        WebBuilder::new(&workspace_root).context("Failed to initialize Web builder")?;
+
+    let mut builder = BuilderContextBuilder::new(workspace_root)
         .with_platform(Platform::Web {
             target: "web".to_string(),
         })
@@ -281,9 +284,6 @@ fn build_web(options: &BuildOptions, output: Option<&PathBuf>) -> CliResult<()> 
     let ctx = builder.build();
 
     std::fs::create_dir_all(&ctx.output_dir)?;
-
-    let web_builder =
-        WebBuilder::new(&workspace_root).context("Failed to initialize Web builder")?;
 
     spinner.set_message("Validating Web environment...");
     web_builder
@@ -325,7 +325,10 @@ fn build_web_with_progress(
         Profile::Debug
     };
 
-    let mut builder = BuilderContextBuilder::new(workspace_root.clone())
+    let web_builder =
+        WebBuilder::new(&workspace_root).context("Failed to initialize Web builder")?;
+
+    let mut builder = BuilderContextBuilder::new(workspace_root)
         .with_platform(Platform::Web {
             target: "web".to_string(),
         })
@@ -337,9 +340,6 @@ fn build_web_with_progress(
 
     let ctx = builder.build();
     std::fs::create_dir_all(&ctx.output_dir)?;
-
-    let web_builder =
-        WebBuilder::new(&workspace_root).context("Failed to initialize Web builder")?;
 
     // Validate phase
     progress.start_phase(BuildPhase::Validate, Some("Checking wasm-pack..."));
@@ -384,7 +384,10 @@ fn build_desktop(options: &BuildOptions, output: Option<&PathBuf>) -> CliResult<
         Profile::Debug
     };
 
-    let mut builder = BuilderContextBuilder::new(workspace_root.clone())
+    let desktop_builder =
+        DesktopBuilder::new(&workspace_root).context("Failed to initialize Desktop builder")?;
+
+    let mut builder = BuilderContextBuilder::new(workspace_root)
         .with_platform(Platform::Desktop { target: None })
         .with_profile(profile);
 
@@ -395,9 +398,6 @@ fn build_desktop(options: &BuildOptions, output: Option<&PathBuf>) -> CliResult<
     let ctx = builder.build();
 
     std::fs::create_dir_all(&ctx.output_dir)?;
-
-    let desktop_builder =
-        DesktopBuilder::new(&workspace_root).context("Failed to initialize Desktop builder")?;
 
     spinner.set_message("Validating Desktop environment...");
     desktop_builder
@@ -442,7 +442,10 @@ fn build_desktop_with_progress(
         Profile::Debug
     };
 
-    let mut builder = BuilderContextBuilder::new(workspace_root.clone())
+    let desktop_builder =
+        DesktopBuilder::new(&workspace_root).context("Failed to initialize Desktop builder")?;
+
+    let mut builder = BuilderContextBuilder::new(workspace_root)
         .with_platform(Platform::Desktop { target: None })
         .with_profile(profile);
 
@@ -452,9 +455,6 @@ fn build_desktop_with_progress(
 
     let ctx = builder.build();
     std::fs::create_dir_all(&ctx.output_dir)?;
-
-    let desktop_builder =
-        DesktopBuilder::new(&workspace_root).context("Failed to initialize Desktop builder")?;
 
     // Validate phase
     progress.start_phase(BuildPhase::Validate, Some("Checking build tools..."));
@@ -505,7 +505,10 @@ fn build_specific_platform(
         Profile::Debug
     };
 
-    let mut builder = BuilderContextBuilder::new(workspace_root.clone())
+    let desktop_builder =
+        DesktopBuilder::new(&workspace_root).context("Failed to initialize builder")?;
+
+    let mut builder = BuilderContextBuilder::new(workspace_root)
         .with_platform(Platform::Desktop {
             target: Some(target_triple.to_string()),
         })
@@ -518,9 +521,6 @@ fn build_specific_platform(
     let ctx = builder.build();
 
     std::fs::create_dir_all(&ctx.output_dir)?;
-
-    let desktop_builder =
-        DesktopBuilder::new(&workspace_root).context("Failed to initialize builder")?;
 
     spinner.set_message("Validating environment...");
     desktop_builder
@@ -567,7 +567,10 @@ fn build_specific_platform_with_progress(
         Profile::Debug
     };
 
-    let mut builder = BuilderContextBuilder::new(workspace_root.clone())
+    let desktop_builder =
+        DesktopBuilder::new(&workspace_root).context("Failed to initialize builder")?;
+
+    let mut builder = BuilderContextBuilder::new(workspace_root)
         .with_platform(Platform::Desktop {
             target: Some(target_triple.to_string()),
         })
@@ -579,9 +582,6 @@ fn build_specific_platform_with_progress(
 
     let ctx = builder.build();
     std::fs::create_dir_all(&ctx.output_dir)?;
-
-    let desktop_builder =
-        DesktopBuilder::new(&workspace_root).context("Failed to initialize builder")?;
 
     // Validate phase
     progress.start_phase(BuildPhase::Validate, Some("Checking build tools..."));

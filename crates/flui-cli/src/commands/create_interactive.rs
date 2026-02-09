@@ -13,9 +13,9 @@ use console::style;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectConfig {
     /// Validated project name.
-    pub name: String,
+    pub name: ProjectName,
     /// Validated organization ID.
-    pub org: String,
+    pub org: OrganizationId,
     /// Selected project template.
     pub template: Template,
 }
@@ -73,7 +73,11 @@ pub fn interactive_create() -> CliResult<ProjectConfig> {
         .interact()
         .map_err(|_| CliError::UserCancelled)?;
 
-    // If we get here, user didn't cancel
+    // Validation already happened in the input prompts above,
+    // so these constructions are guaranteed to succeed.
+    let name = ProjectName::new(&name)?;
+    let org = OrganizationId::new(&org)?;
+
     Ok(ProjectConfig {
         name,
         org,

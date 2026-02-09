@@ -14,8 +14,8 @@ use std::path::{Path, PathBuf};
 ///
 /// # Arguments
 ///
-/// * `name` - Project name (will be validated)
-/// * `org` - Organization ID in reverse domain notation
+/// * `project_name` - Validated project name
+/// * `org_id` - Validated organization ID
 /// * `template` - Template to use for project generation
 /// * `_platforms` - Target platforms (reserved for future use)
 /// * `path` - Optional custom output directory
@@ -24,22 +24,17 @@ use std::path::{Path, PathBuf};
 /// # Errors
 ///
 /// Returns an error if:
-/// - Project name is invalid
 /// - Directory already exists
 /// - Template generation fails
 /// - Git initialization fails
 pub fn execute(
-    name: String,
-    org: String,
+    project_name: ProjectName,
+    org_id: OrganizationId,
     template: Template,
     _platforms: Option<Vec<Platform>>,
     path: Option<PathBuf>,
     _is_lib: bool,
 ) -> CliResult<()> {
-    // Validate and create type-safe wrappers
-    let project_name = ProjectName::new(&name)?;
-    let org_id = OrganizationId::new(&org)?;
-
     cliclack::intro(style(" flui create ").on_cyan().black())?;
     cliclack::log::info(format!("Project: {}", style(&project_name).cyan()))?;
 

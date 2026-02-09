@@ -493,23 +493,24 @@ fn main() {
             interactive,
         } => {
             if interactive || name.is_none() {
-                // Interactive mode
-                match commands::create_interactive::interactive_create() {
-                    Ok(config) => commands::create::execute(
-                        config.name,
-                        config.org,
-                        config.template,
-                        platforms,
-                        path,
-                        lib,
-                    ),
-                    Err(e) => Err(e),
-                }
-            } else if let Some(name) = name {
-                // Non-interactive mode
-                commands::create::execute(name, org, template, platforms, path, lib)
+                // Interactive mode — newtypes already validated by prompts
+                let config = commands::create_interactive::interactive_create()?;
+                commands::create::execute(
+                    config.name,
+                    config.org,
+                    config.template,
+                    platforms,
+                    path,
+                    lib,
+                )
             } else {
-                unreachable!("name is Some due to previous check")
+                // Non-interactive mode — validate raw strings into newtypes
+                let Some(name) = name else {
+                    unreachable!("name is Some due to previous check")
+                };
+                let project_name = crate::types::ProjectName::new(name)?;
+                let org_id = crate::types::OrganizationId::new(org)?;
+                commands::create::execute(project_name, org_id, template, platforms, path, lib)
             }
         }
 

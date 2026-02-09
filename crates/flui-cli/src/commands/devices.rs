@@ -16,7 +16,7 @@ use std::process::Command;
 pub fn execute(details: bool, _platform: Option<String>) -> CliResult<()> {
     cliclack::intro(style(" flui devices ").on_magenta().black())?;
 
-    let mut sections = Vec::new();
+    let mut sections = Vec::with_capacity(12);
 
     // Desktop
     sections.push(format!("{}", style("Desktop").bold()));
@@ -66,7 +66,7 @@ fn android_devices(details: bool) -> String {
     match Command::new("adb").args(["devices"]).output() {
         Ok(output) => {
             let output_str = String::from_utf8_lossy(&output.stdout);
-            let mut devices = Vec::new();
+            let mut devices = Vec::with_capacity(4);
 
             for line in output_str.lines().skip(1) {
                 let line = line.trim();
@@ -137,7 +137,7 @@ fn ios_simulators(details: bool) -> String {
     {
         Ok(output) => {
             let output_str = String::from_utf8_lossy(&output.stdout);
-            let mut simulators = Vec::new();
+            let mut simulators = Vec::with_capacity(8);
 
             for line in output_str.lines() {
                 let line = line.trim();
@@ -213,7 +213,7 @@ fn browsers(details: bool) -> String {
         );
     }
 
-    let mut result = Vec::new();
+    let mut result = Vec::with_capacity(browsers.len() * 2);
     for browser in &browsers {
         result.push(format!("  {} {}", style("●").green(), browser.name));
 
@@ -239,7 +239,7 @@ struct BrowserInfo {
 }
 
 fn detect_browsers() -> Vec<BrowserInfo> {
-    let mut browsers = Vec::new();
+    let mut browsers = Vec::with_capacity(4);
 
     #[cfg(target_os = "windows")]
     {
@@ -298,7 +298,7 @@ fn detect_browsers() -> Vec<BrowserInfo> {
 fn enumerate_browsers_windows() -> Vec<BrowserInfo> {
     use std::path::Path;
 
-    let mut browsers = Vec::new();
+    let mut browsers = Vec::with_capacity(6);
 
     let ps_command = r#"
         foreach ($hive in @('HKLM', 'HKCU')) {

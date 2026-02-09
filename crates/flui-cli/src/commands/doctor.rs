@@ -17,7 +17,7 @@ use std::process::Command;
 pub fn execute(verbose: bool, android: bool, ios: bool, web: bool) -> CliResult<()> {
     cliclack::intro(style(" flui doctor ").on_cyan().black())?;
 
-    let mut results = Vec::new();
+    let mut results = Vec::with_capacity(10);
     let mut all_ok = true;
 
     // Core checks (always run)
@@ -70,49 +70,44 @@ pub fn execute(verbose: bool, android: bool, ios: bool, web: bool) -> CliResult<
 }
 
 fn check_rust(verbose: bool, all_ok: &mut bool) -> String {
-    match Command::new("rustc").arg("--version").output() {
-        Ok(output) => {
-            let version = String::from_utf8_lossy(&output.stdout);
-            let mut result = format!(
-                "{} Rust: {}",
-                style("✓").green(),
-                style(version.trim()).cyan()
-            );
+    let Ok(output) = Command::new("rustc").arg("--version").output() else {
+        *all_ok = false;
+        return format!(
+            "{} Rust: {}\n  {}",
+            style("✗").red(),
+            style("Not found").red(),
+            style("Install from https://rustup.rs/").dim()
+        );
+    };
 
-            if verbose {
-                if let Ok(path) = which::which("rustc") {
-                    result.push_str(&format!("\n  Path: {}", style(path.display()).dim()));
-                }
-            }
-            result
-        }
-        Err(_) => {
-            *all_ok = false;
-            format!(
-                "{} Rust: {}\n  {}",
-                style("✗").red(),
-                style("Not found").red(),
-                style("Install from https://rustup.rs/").dim()
-            )
+    let version = String::from_utf8_lossy(&output.stdout);
+    let mut result = format!(
+        "{} Rust: {}",
+        style("✓").green(),
+        style(version.trim()).cyan()
+    );
+
+    if verbose {
+        if let Ok(path) = which::which("rustc") {
+            result.push_str(&format!("\n  Path: {}", style(path.display()).dim()));
         }
     }
+
+    result
 }
 
 fn check_cargo(all_ok: &mut bool) -> String {
-    match Command::new("cargo").arg("--version").output() {
-        Ok(output) => {
-            let version = String::from_utf8_lossy(&output.stdout);
-            format!(
-                "{} Cargo: {}",
-                style("✓").green(),
-                style(version.trim()).cyan()
-            )
-        }
-        Err(_) => {
-            *all_ok = false;
-            format!("{} Cargo: {}", style("✗").red(), style("Not found").red())
-        }
-    }
+    let Ok(output) = Command::new("cargo").arg("--version").output() else {
+        *all_ok = false;
+        return format!("{} Cargo: {}", style("✗").red(), style("Not found").red());
+    };
+
+    let version = String::from_utf8_lossy(&output.stdout);
+    format!(
+        "{} Cargo: {}",
+        style("✓").green(),
+        style(version.trim()).cyan()
+    )
 }
 
 fn check_flui() -> String {
@@ -125,45 +120,42 @@ fn check_flui() -> String {
 }
 
 fn check_java(verbose: bool, all_ok: &mut bool) -> String {
-    match Command::new("java").arg("-version").output() {
-        Ok(output) => {
-            let version_output = String::from_utf8_lossy(&output.stderr);
-            if let Some(line) = version_output.lines().next() {
-                let mut result =
-                    format!("{} Java: {}", style("✓").green(), style(line.trim()).cyan());
+    let Ok(output) = Command::new("java").arg("-version").output() else {
+        *all_ok = false;
+        return format!(
+            "{} Java: {}\n  {}",
+            style("✗").red(),
+            style("Not found").red(),
+            style("Download from https://adoptium.net/").dim()
+        );
+    };
 
-                if verbose {
-                    if let Ok(java_home) = std::env::var("JAVA_HOME") {
-                        result.push_str(&format!("\n  JAVA_HOME: {}", style(java_home).dim()));
-                    }
-                }
+    let version_output = String::from_utf8_lossy(&output.stderr);
+    let Some(line) = version_output.lines().next() else {
+        return format!(
+            "{} Java: {}",
+            style("⚠").yellow(),
+            style("Version not detected").yellow()
+        );
+    };
 
-                if version_output.contains("version \"1.8") {
-                    result.push_str(&format!("\n  {}", style("⚠ Java 11+ recommended").yellow()));
-                }
-                result
-            } else {
-                format!(
-                    "{} Java: {}",
-                    style("⚠").yellow(),
-                    style("Version not detected").yellow()
-                )
-            }
-        }
-        Err(_) => {
-            *all_ok = false;
-            format!(
-                "{} Java: {}\n  {}",
-                style("✗").red(),
-                style("Not found").red(),
-                style("Download from https://adoptium.net/").dim()
-            )
+    let mut result = format!("{} Java: {}", style("✓").green(), style(line.trim()).cyan());
+
+    if verbose {
+        if let Ok(java_home) = std::env::var("JAVA_HOME") {
+            result.push_str(&format!("\n  JAVA_HOME: {}", style(java_home).dim()));
         }
     }
+
+    if version_output.contains("version \"1.8") {
+        result.push_str(&format!("\n  {}", style("⚠ Java 11+ recommended").yellow()));
+    }
+
+    result
 }
 
 fn check_android(verbose: bool, all_ok: &mut bool) -> String {
-    let mut results = Vec::new();
+    let mut results = Vec::with_capacity(3);
 
     // Check ANDROID_HOME
     if let Ok(android_home) = std::env::var("ANDROID_HOME") {
@@ -255,7 +247,7 @@ fn check_android_targets(all_ok: &mut bool) -> String {
 
 #[cfg(target_os = "macos")]
 fn check_ios(verbose: bool, all_ok: &mut bool) -> String {
-    let mut results = Vec::new();
+    let mut results = Vec::with_capacity(3);
 
     match Command::new("xcode-select").arg("-p").output() {
         Ok(output) => {
@@ -343,7 +335,7 @@ fn check_ios(_verbose: bool, _all_ok: &mut bool) -> String {
 }
 
 fn check_web(all_ok: &mut bool) -> String {
-    let mut results = Vec::new();
+    let mut results = Vec::with_capacity(2);
 
     // Check wasm-pack
     match Command::new("wasm-pack").arg("--version").output() {

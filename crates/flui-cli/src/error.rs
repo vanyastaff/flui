@@ -75,6 +75,17 @@ pub enum CliError {
         reason: String,
     },
 
+    /// Invalid organization identifier provided.
+    ///
+    /// Organization IDs must be in reverse domain notation (e.g., "com.example").
+    #[error("Invalid organization ID '{id}': {reason}")]
+    InvalidOrganizationId {
+        /// The invalid organization ID
+        id: String,
+        /// Reason why the ID is invalid
+        reason: String,
+    },
+
     // ========================================================================
     // Tool/Environment Errors
     // ========================================================================
@@ -213,6 +224,13 @@ pub enum CliError {
         #[source]
         source: Box<dyn std::error::Error + Send + Sync>,
     },
+
+    /// A required value was missing.
+    ///
+    /// Used when converting `Option::None` to an error without
+    /// an underlying source error.
+    #[error("{0}")]
+    Missing(String),
 
     /// Command execution failed.
     ///
@@ -377,13 +395,7 @@ pub trait OptionExt<T> {
 
 impl<T> OptionExt<T> for Option<T> {
     fn ok_or_context(self, message: impl Into<String>) -> CliResult<T> {
-        self.ok_or_else(|| CliError::WithContext {
-            message: message.into(),
-            source: Box::new(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                "Value not found",
-            )),
-        })
+        self.ok_or_else(|| CliError::Missing(message.into()))
     }
 }
 

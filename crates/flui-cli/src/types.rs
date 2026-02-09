@@ -35,12 +35,14 @@ use std::path::PathBuf;
 use std::str::FromStr;
 
 /// Reserved Rust keywords that cannot be used as project names.
+///
+/// **Sorted lexicographically** for use with `binary_search`.
 const RESERVED_KEYWORDS: &[&str] = &[
-    "abstract", "as", "async", "await", "become", "box", "break", "const", "continue", "crate",
-    "do", "dyn", "else", "enum", "extern", "false", "final", "fn", "for", "if", "impl", "in",
-    "let", "loop", "macro", "match", "mod", "move", "mut", "override", "priv", "pub", "ref",
-    "return", "self", "Self", "static", "struct", "super", "trait", "true", "type", "typeof",
-    "unsafe", "unsized", "use", "virtual", "where", "while", "yield",
+    "Self", "abstract", "as", "async", "await", "become", "box", "break", "const", "continue",
+    "crate", "do", "dyn", "else", "enum", "extern", "false", "final", "fn", "for", "if", "impl",
+    "in", "let", "loop", "macro", "match", "mod", "move", "mut", "override", "priv", "pub", "ref",
+    "return", "self", "static", "struct", "super", "trait", "true", "type", "typeof", "unsafe",
+    "unsized", "use", "virtual", "where", "while", "yield",
 ];
 
 // ============================================================================
@@ -172,7 +174,7 @@ impl ProjectName {
             });
         }
 
-        if RESERVED_KEYWORDS.contains(&name) {
+        if RESERVED_KEYWORDS.binary_search(&name).is_ok() {
             return Err(CliError::InvalidProjectName {
                 name: name.to_string(),
                 reason: format!("'{name}' is a reserved Rust keyword"),
@@ -356,23 +358,23 @@ impl OrganizationId {
 
     fn validate(org: &str) -> CliResult<()> {
         if org.is_empty() {
-            return Err(CliError::InvalidProjectName {
-                name: org.to_string(),
+            return Err(CliError::InvalidOrganizationId {
+                id: org.to_string(),
                 reason: "Organization ID cannot be empty".to_string(),
             });
         }
 
         for part in org.split('.') {
             if part.is_empty() {
-                return Err(CliError::InvalidProjectName {
-                    name: org.to_string(),
+                return Err(CliError::InvalidOrganizationId {
+                    id: org.to_string(),
                     reason: "Organization ID has empty segment".to_string(),
                 });
             }
 
             if !part.chars().all(|c| c.is_alphanumeric() || c == '_') {
-                return Err(CliError::InvalidProjectName {
-                    name: org.to_string(),
+                return Err(CliError::InvalidOrganizationId {
+                    id: org.to_string(),
                     reason: "Organization ID segments must be alphanumeric".to_string(),
                 });
             }
