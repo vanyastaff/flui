@@ -42,6 +42,7 @@
 //! let relative_px = half.to_pixels(parent_width, rem_size); // 100px
 //! ```
 
+use super::traits::IsZero;
 use super::{px, ParseLengthError, Pixels};
 use std::fmt::{self, Debug, Display};
 use std::str::FromStr;
@@ -80,36 +81,35 @@ impl Rems {
     }
 
     /// Converts to pixels using the given rem size.
+    #[inline]
     #[must_use]
     pub fn to_pixels(self, rem_size: Pixels) -> Pixels {
         px(self.0 * rem_size.get())
     }
 
-    /// Returns `true` if the value is zero.
-    #[inline]
-    pub fn is_zero(self) -> bool {
-        self.0.abs() < f32::EPSILON
-    }
-
     /// Returns the absolute value.
+    #[inline]
     #[must_use]
     pub fn abs(self) -> Self {
         Self(self.0.abs())
     }
 
     /// Returns the minimum of two values.
+    #[inline]
     #[must_use]
     pub fn min(self, other: Self) -> Self {
         Self(self.0.min(other.0))
     }
 
     /// Returns the maximum of two values.
+    #[inline]
     #[must_use]
     pub fn max(self, other: Self) -> Self {
         Self(self.0.max(other.0))
     }
 
     /// Clamps the value to the given range.
+    #[inline]
     #[must_use]
     pub fn clamp(self, min: Self, max: Self) -> Self {
         Self(self.0.clamp(min.0, max.0))
@@ -128,36 +128,42 @@ impl Rems {
     }
 
     /// Returns the largest integer less than or equal to the value.
+    #[inline]
     #[must_use]
     pub fn floor(self) -> Self {
         Self(self.0.floor())
     }
 
     /// Returns the smallest integer greater than or equal to the value.
+    #[inline]
     #[must_use]
     pub fn ceil(self) -> Self {
         Self(self.0.ceil())
     }
 
     /// Returns the nearest integer to the value.
+    #[inline]
     #[must_use]
     pub fn round(self) -> Self {
         Self(self.0.round())
     }
 
     /// Returns the integer part of the value.
+    #[inline]
     #[must_use]
     pub fn trunc(self) -> Self {
         Self(self.0.trunc())
     }
 
     /// Scales the value by the given factor.
+    #[inline]
     #[must_use]
     pub fn scale(self, factor: f32) -> Self {
         Self(self.0 * factor)
     }
 
     /// Applies a function to the underlying value.
+    #[inline]
     #[must_use]
     pub fn map(self, f: impl FnOnce(f32) -> f32) -> Self {
         Self(f(self.0))
@@ -176,6 +182,7 @@ impl Rems {
     }
 
     /// Linearly interpolates between this value and another.
+    #[inline]
     #[must_use]
     pub fn lerp(self, other: Self, t: f32) -> Self {
         Self(self.0 + (other.0 - self.0) * t)
@@ -183,21 +190,16 @@ impl Rems {
 }
 
 impl Display for Rems {
+    #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}rem", self.0)
     }
 }
 
 impl Debug for Rems {
+    #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         Display::fmt(self, f)
-    }
-}
-
-impl From<Pixels> for Rems {
-    #[inline]
-    fn from(value: Pixels) -> Self {
-        Self(value.0)
     }
 }
 
@@ -212,12 +214,14 @@ impl From<Rems> for f32 {
 impl Eq for Rems {}
 
 impl PartialOrd for Rems {
+    #[inline]
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
 impl Ord for Rems {
+    #[inline]
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.0.total_cmp(&other.0)
     }
@@ -225,6 +229,7 @@ impl Ord for Rems {
 
 // Hashing (using to_bits for proper NaN handling)
 impl std::hash::Hash for Rems {
+    #[inline]
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.0.to_bits().hash(state);
     }
@@ -394,12 +399,14 @@ impl Neg for Rems {
 // Note: Half, Double, IsZero, Sign, ApproxEq, GeometryOps are implemented in traits.rs
 
 impl std::iter::Sum for Rems {
+    #[inline]
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
         iter.fold(Rems::ZERO, |acc, x| acc + x)
     }
 }
 
 impl<'a> std::iter::Sum<&'a Rems> for Rems {
+    #[inline]
     fn sum<I: Iterator<Item = &'a Self>>(iter: I) -> Self {
         iter.fold(Rems::ZERO, |acc, x| acc + *x)
     }
@@ -410,6 +417,7 @@ impl<'a> std::iter::Sum<&'a Rems> for Rems {
 // ============================================================================
 
 /// Percentage value (0.0 = 0%, 1.0 = 100%).
+#[derive(Copy, Clone, Default, PartialEq)]
 #[repr(transparent)]
 pub struct Percentage(pub f32);
 
@@ -440,14 +448,39 @@ impl Percentage {
 }
 
 impl Display for Percentage {
+    #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}%", self.0 * 100.0)
     }
 }
 
 impl Debug for Percentage {
+    #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         Display::fmt(self, f)
+    }
+}
+
+impl Eq for Percentage {}
+
+impl PartialOrd for Percentage {
+    #[inline]
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Percentage {
+    #[inline]
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.0.total_cmp(&other.0)
+    }
+}
+
+impl std::hash::Hash for Percentage {
+    #[inline]
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.0.to_bits().hash(state);
     }
 }
 
@@ -480,9 +513,9 @@ impl AbsoluteLength {
     /// assert!(zero_rem.is_zero());
     /// assert!(!nonzero.is_zero());
     /// ```
-    pub fn is_zero(&self) -> bool {
+    pub fn is_zero(self) -> bool {
         match self {
-            AbsoluteLength::Pixels(px) => px.get() == 0.0,
+            AbsoluteLength::Pixels(px) => px.is_zero(),
             AbsoluteLength::Rems(rems) => rems.is_zero(),
         }
     }
@@ -507,28 +540,32 @@ impl AbsoluteLength {
 }
 
 impl Default for AbsoluteLength {
+    #[inline]
     fn default() -> Self {
         Self::Pixels(Pixels::ZERO)
     }
 }
 
 impl From<Pixels> for AbsoluteLength {
+    #[inline]
     fn from(pixels: Pixels) -> Self {
         Self::Pixels(pixels)
     }
 }
 
 impl From<Rems> for AbsoluteLength {
+    #[inline]
     fn from(rems: Rems) -> Self {
         Self::Rems(rems)
     }
 }
 
 impl Display for AbsoluteLength {
+    #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Pixels(pixels) => write!(f, "{}", pixels),
-            Self::Rems(rems) => write!(f, "{}", rems),
+            Self::Pixels(pixels) => write!(f, "{pixels}"),
+            Self::Rems(rems) => write!(f, "{rems}"),
         }
     }
 }
@@ -605,42 +642,47 @@ impl DefiniteLength {
     }
 
     /// Checks if the length is zero.
-    pub fn is_zero(&self) -> bool {
+    pub fn is_zero(self) -> bool {
         match self {
             DefiniteLength::Absolute(abs) => abs.is_zero(),
-            DefiniteLength::Fraction(frac) => *frac == 0.0,
+            DefiniteLength::Fraction(frac) => frac == 0.0,
         }
     }
 }
 
 impl Default for DefiniteLength {
+    #[inline]
     fn default() -> Self {
         Self::Absolute(AbsoluteLength::default())
     }
 }
 
 impl From<Pixels> for DefiniteLength {
+    #[inline]
     fn from(pixels: Pixels) -> Self {
         Self::Absolute(AbsoluteLength::Pixels(pixels))
     }
 }
 
 impl From<Rems> for DefiniteLength {
+    #[inline]
     fn from(rems: Rems) -> Self {
         Self::Absolute(AbsoluteLength::Rems(rems))
     }
 }
 
 impl From<AbsoluteLength> for DefiniteLength {
+    #[inline]
     fn from(abs: AbsoluteLength) -> Self {
         Self::Absolute(abs)
     }
 }
 
 impl Display for DefiniteLength {
+    #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Absolute(abs) => write!(f, "{}", abs),
+            Self::Absolute(abs) => write!(f, "{abs}"),
             Self::Fraction(frac) => write!(f, "{}%", frac * 100.0),
         }
     }
@@ -720,33 +762,38 @@ impl Length {
 }
 
 impl From<Pixels> for Length {
+    #[inline]
     fn from(pixels: Pixels) -> Self {
         Self::Definite(pixels.into())
     }
 }
 
 impl From<Rems> for Length {
+    #[inline]
     fn from(rems: Rems) -> Self {
         Self::Definite(rems.into())
     }
 }
 
 impl From<AbsoluteLength> for Length {
+    #[inline]
     fn from(abs: AbsoluteLength) -> Self {
         Self::Definite(abs.into())
     }
 }
 
 impl From<DefiniteLength> for Length {
+    #[inline]
     fn from(def: DefiniteLength) -> Self {
         Self::Definite(def)
     }
 }
 
 impl Display for Length {
+    #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Definite(def) => write!(f, "{}", def),
+            Self::Definite(def) => write!(f, "{def}"),
             Self::Auto => write!(f, "auto"),
         }
     }
@@ -777,3 +824,332 @@ impl FromStr for Length {
 // ============================================================================
 // TESTS
 // ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::geometry::px;
+
+    // ---- Rems ----
+
+    #[test]
+    fn rems_construction() {
+        let r = rems(1.5);
+        assert_eq!(r.get(), 1.5);
+        assert_eq!(Rems::new(2.0).get(), 2.0);
+        assert_eq!(Rems::ZERO.get(), 0.0);
+    }
+
+    #[test]
+    fn rems_to_pixels() {
+        let rem_size = px(16.0);
+        assert_eq!(rems(1.0).to_pixels(rem_size), px(16.0));
+        assert_eq!(rems(1.5).to_pixels(rem_size), px(24.0));
+        assert_eq!(rems(0.0).to_pixels(rem_size), px(0.0));
+    }
+
+    #[test]
+    fn rems_arithmetic() {
+        assert_eq!(rems(1.0) + rems(2.0), rems(3.0));
+        assert_eq!(rems(3.0) - rems(1.0), rems(2.0));
+        assert_eq!(rems(2.0) * 3.0, rems(6.0));
+        assert_eq!(3.0 * rems(2.0), rems(6.0));
+        assert_eq!(rems(6.0) / 2.0, rems(3.0));
+        assert_eq!(rems(6.0) / rems(2.0), 3.0);
+        assert_eq!(-rems(1.0), rems(-1.0));
+    }
+
+    #[test]
+    fn rems_assign_arithmetic() {
+        let mut r = rems(1.0);
+        r += rems(2.0);
+        assert_eq!(r, rems(3.0));
+        r -= rems(1.0);
+        assert_eq!(r, rems(2.0));
+        r *= 3.0;
+        assert_eq!(r, rems(6.0));
+        r /= 2.0;
+        assert_eq!(r, rems(3.0));
+    }
+
+    #[test]
+    fn rems_math_operations() {
+        assert_eq!(rems(-2.5).abs(), rems(2.5));
+        assert_eq!(rems(1.0).min(rems(2.0)), rems(1.0));
+        assert_eq!(rems(1.0).max(rems(2.0)), rems(2.0));
+        assert_eq!(rems(5.0).clamp(rems(1.0), rems(3.0)), rems(3.0));
+        assert_eq!(rems(1.7).floor(), rems(1.0));
+        assert_eq!(rems(1.2).ceil(), rems(2.0));
+        assert_eq!(rems(1.5).round(), rems(2.0));
+        assert_eq!(rems(1.9).trunc(), rems(1.0));
+    }
+
+    #[test]
+    fn rems_scale_map_lerp() {
+        assert_eq!(rems(2.0).scale(3.0), rems(6.0));
+        assert_eq!(rems(2.0).map(|v| v * v), rems(4.0));
+        assert_eq!(rems(0.0).lerp(rems(10.0), 0.5), rems(5.0));
+        assert_eq!(rems(0.0).lerp(rems(10.0), 0.0), rems(0.0));
+        assert_eq!(rems(0.0).lerp(rems(10.0), 1.0), rems(10.0));
+    }
+
+    #[test]
+    fn rems_validation() {
+        assert!(rems(1.0).is_finite());
+        assert!(!rems(f32::INFINITY).is_finite());
+        assert!(rems(f32::NAN).is_nan());
+        assert!(!rems(1.0).is_nan());
+        assert!(rems(f32::INFINITY).is_infinite());
+        assert!(!rems(1.0).is_infinite());
+        assert_eq!(rems(2.5).signum(), 1.0);
+        assert_eq!(rems(-2.5).signum(), -1.0);
+    }
+
+    #[test]
+    fn rems_display() {
+        assert_eq!(format!("{}", rems(1.5)), "1.5rem");
+        assert_eq!(format!("{:?}", rems(1.5)), "1.5rem");
+    }
+
+    #[test]
+    fn rems_ordering_and_hash() {
+        assert!(rems(1.0) < rems(2.0));
+        assert!(rems(2.0) > rems(1.0));
+        assert_eq!(rems(1.0).cmp(&rems(1.0)), std::cmp::Ordering::Equal);
+
+        use std::collections::HashSet;
+        let mut set = HashSet::new();
+        set.insert(rems(1.0));
+        set.insert(rems(1.0));
+        assert_eq!(set.len(), 1);
+    }
+
+    #[test]
+    fn rems_from_str() {
+        assert_eq!("1.5".parse::<Rems>().unwrap(), rems(1.5));
+        assert_eq!("2rem".parse::<Rems>().unwrap(), rems(2.0));
+        assert_eq!("  3.0rem  ".parse::<Rems>().unwrap(), rems(3.0));
+        assert!("abc".parse::<Rems>().is_err());
+    }
+
+    #[test]
+    fn rems_sum() {
+        let values = vec![rems(1.0), rems(2.0), rems(3.0)];
+        let total: Rems = values.iter().sum();
+        assert_eq!(total, rems(6.0));
+        let total_owned: Rems = values.into_iter().sum();
+        assert_eq!(total_owned, rems(6.0));
+    }
+
+    #[test]
+    fn rems_is_zero_via_trait() {
+        use crate::geometry::traits::IsZero;
+        assert!(Rems::ZERO.is_zero());
+        assert!(!rems(1.0).is_zero());
+    }
+
+    // ---- Percentage ----
+
+    #[test]
+    fn percentage_construction() {
+        assert_eq!(Percentage::ZERO.get(), 0.0);
+        assert_eq!(Percentage::FULL.get(), 1.0);
+        assert_eq!(Percentage::new(0.5).get(), 0.5);
+    }
+
+    #[test]
+    fn percentage_of() {
+        assert_eq!(Percentage::new(0.5).of(px(200.0)), px(100.0));
+        assert_eq!(Percentage::FULL.of(px(100.0)), px(100.0));
+        assert_eq!(Percentage::ZERO.of(px(100.0)), px(0.0));
+    }
+
+    #[test]
+    fn percentage_display() {
+        assert_eq!(format!("{}", Percentage::new(0.5)), "50%");
+        assert_eq!(format!("{}", Percentage::FULL), "100%");
+    }
+
+    #[test]
+    fn percentage_copy_eq_hash_ord() {
+        let a = Percentage::new(0.5);
+        let b = a; // Copy
+        assert_eq!(a, b);
+        assert!(Percentage::new(0.3) < Percentage::new(0.7));
+
+        use std::collections::HashSet;
+        let mut set = HashSet::new();
+        set.insert(a);
+        set.insert(b);
+        assert_eq!(set.len(), 1);
+    }
+
+    // ---- AbsoluteLength ----
+
+    #[test]
+    fn absolute_length_construction() {
+        let px_len: AbsoluteLength = px(100.0).into();
+        let rem_len: AbsoluteLength = rems(2.0).into();
+        assert_eq!(px_len, AbsoluteLength::Pixels(px(100.0)));
+        assert_eq!(rem_len, AbsoluteLength::Rems(rems(2.0)));
+    }
+
+    #[test]
+    fn absolute_length_is_zero() {
+        assert!(AbsoluteLength::Pixels(px(0.0)).is_zero());
+        assert!(AbsoluteLength::Rems(Rems::ZERO).is_zero());
+        assert!(!AbsoluteLength::Pixels(px(10.0)).is_zero());
+    }
+
+    #[test]
+    fn absolute_length_to_pixels() {
+        let rem_size = px(16.0);
+        assert_eq!(
+            AbsoluteLength::Pixels(px(100.0)).to_pixels(rem_size),
+            px(100.0)
+        );
+        assert_eq!(
+            AbsoluteLength::Rems(rems(2.0)).to_pixels(rem_size),
+            px(32.0)
+        );
+    }
+
+    #[test]
+    fn absolute_length_to_rems() {
+        let rem_size = px(16.0);
+        assert_eq!(AbsoluteLength::Rems(rems(2.0)).to_rems(rem_size), rems(2.0));
+        let converted = AbsoluteLength::Pixels(px(32.0)).to_rems(rem_size);
+        assert_eq!(converted, rems(2.0));
+    }
+
+    #[test]
+    fn absolute_length_display() {
+        assert_eq!(format!("{}", AbsoluteLength::Pixels(px(100.0))), "100px");
+        assert_eq!(format!("{}", AbsoluteLength::Rems(rems(2.0))), "2rem");
+    }
+
+    #[test]
+    fn absolute_length_from_str() {
+        assert_eq!(
+            "100px".parse::<AbsoluteLength>().unwrap(),
+            AbsoluteLength::Pixels(px(100.0))
+        );
+        assert_eq!(
+            "2rem".parse::<AbsoluteLength>().unwrap(),
+            AbsoluteLength::Rems(rems(2.0))
+        );
+        assert_eq!(
+            "50".parse::<AbsoluteLength>().unwrap(),
+            AbsoluteLength::Pixels(px(50.0))
+        );
+        assert!("abc".parse::<AbsoluteLength>().is_err());
+    }
+
+    #[test]
+    fn absolute_length_default() {
+        assert_eq!(
+            AbsoluteLength::default(),
+            AbsoluteLength::Pixels(Pixels::ZERO)
+        );
+    }
+
+    // ---- DefiniteLength ----
+
+    #[test]
+    fn definite_length_construction() {
+        let abs: DefiniteLength = px(100.0).into();
+        let frac = relative(0.5);
+        assert!(matches!(abs, DefiniteLength::Absolute(_)));
+        assert!(matches!(frac, DefiniteLength::Fraction(_)));
+    }
+
+    #[test]
+    fn definite_length_to_pixels() {
+        let parent = px(200.0);
+        let rem_size = px(16.0);
+        assert_eq!(
+            DefiniteLength::from(px(100.0)).to_pixels(parent, rem_size),
+            px(100.0)
+        );
+        assert_eq!(
+            DefiniteLength::from(rems(2.0)).to_pixels(parent, rem_size),
+            px(32.0)
+        );
+        assert_eq!(relative(0.5).to_pixels(parent, rem_size), px(100.0));
+    }
+
+    #[test]
+    fn definite_length_is_zero() {
+        assert!(DefiniteLength::from(px(0.0)).is_zero());
+        assert!(relative(0.0).is_zero());
+        assert!(!DefiniteLength::from(px(10.0)).is_zero());
+        assert!(!relative(0.5).is_zero());
+    }
+
+    #[test]
+    fn definite_length_display() {
+        assert_eq!(format!("{}", DefiniteLength::from(px(100.0))), "100px");
+        assert_eq!(format!("{}", relative(0.5)), "50%");
+    }
+
+    #[test]
+    fn definite_length_from_str() {
+        assert_eq!(
+            "100px".parse::<DefiniteLength>().unwrap(),
+            DefiniteLength::from(px(100.0))
+        );
+        assert_eq!(
+            "50%".parse::<DefiniteLength>().unwrap(),
+            DefiniteLength::Fraction(0.5)
+        );
+        assert_eq!(
+            "2rem".parse::<DefiniteLength>().unwrap(),
+            DefiniteLength::Absolute(AbsoluteLength::Rems(rems(2.0)))
+        );
+        assert!("abc".parse::<DefiniteLength>().is_err());
+    }
+
+    // ---- Length ----
+
+    #[test]
+    fn length_construction() {
+        assert!(auto().is_auto());
+        assert!(!auto().is_definite());
+        assert!(Length::from(px(100.0)).is_definite());
+        assert!(!Length::from(px(100.0)).is_auto());
+    }
+
+    #[test]
+    fn length_to_pixels() {
+        let parent = px(200.0);
+        let rem_size = px(16.0);
+        assert_eq!(auto().to_pixels(parent, rem_size), None);
+        assert_eq!(
+            Length::from(px(100.0)).to_pixels(parent, rem_size),
+            Some(px(100.0))
+        );
+    }
+
+    #[test]
+    fn length_display() {
+        assert_eq!(format!("{}", auto()), "auto");
+        assert_eq!(format!("{}", Length::from(px(100.0))), "100px");
+    }
+
+    #[test]
+    fn length_from_str() {
+        assert_eq!("auto".parse::<Length>().unwrap(), Length::Auto);
+        assert_eq!("AUTO".parse::<Length>().unwrap(), Length::Auto);
+        assert_eq!("100px".parse::<Length>().unwrap(), Length::from(px(100.0)));
+        assert_eq!(
+            "50%".parse::<Length>().unwrap(),
+            Length::Definite(DefiniteLength::Fraction(0.5))
+        );
+        assert!("???".parse::<Length>().is_err());
+    }
+
+    #[test]
+    fn length_default() {
+        assert_eq!(Length::default(), Length::Auto);
+    }
+}

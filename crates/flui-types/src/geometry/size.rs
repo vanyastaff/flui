@@ -14,7 +14,9 @@ use super::{Point, Vec2};
 /// Generic over unit type `T`. Common usage:
 /// - `Size<Pixels>` - UI dimensions
 /// - `Size<DevicePixels>` - Screen dimensions
-/// - `Size<Pixels>` - Normalized/dimensionless size
+/// - `Size<ScaledPixels>` - High-DPI scaled dimensions
+///
+/// Display format: `{width}×{height}` (e.g. `800px×600px`).
 ///
 /// # Examples
 ///
@@ -22,8 +24,8 @@ use super::{Point, Vec2};
 /// use flui_types::geometry::{Size, px, Pixels};
 ///
 /// let ui_size = Size::<Pixels>::new(px(800.0), px(600.0));
-/// let normalized = Size::<f32>::new(1.0, 1.0);
-/// assert_eq!(normalized.area(), 1.0);
+/// assert_eq!(ui_size.area(), 480_000.0);
+/// ```
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 #[repr(C)]
 pub struct Size<T: Unit> {
@@ -67,7 +69,7 @@ impl<T: Unit> Size<T> {
     /// Creates a size with the same value for width and height.
     #[inline]
     #[must_use]
-    pub fn splat(value: T) -> Self {
+    pub const fn splat(value: T) -> Self {
         Self {
             width: value,
             height: value,
@@ -79,62 +81,111 @@ impl<T: Unit> Size<T> {
 // Size-specific operations (generic with NumericUnit)
 // ============================================================================
 
-impl<T: NumericUnit> Size<T>
-where
-    T: Into<f32> + From<f32>,
-{
+impl<T: Unit> Size<T> {
     /// Creates a square size with the given side length.
     ///
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::Size;
+    /// use flui_types::geometry::{Size, px, Pixels};
     ///
-    /// let s = Size::<f32>::square(10.0);
+    /// let s = Size::<Pixels>::square(px(10.0));
     /// assert_eq!(s.width, px(10.0));
     /// assert_eq!(s.height, px(10.0));
+    /// ```
     #[inline]
     #[must_use]
-    pub fn square(side: T) -> Self {
+    pub const fn square(side: T) -> Self {
         Self {
             width: side,
             height: side,
         }
     }
+}
 
+impl<T: NumericUnit> Size<T> {
+    /// Component-wise minimum.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::geometry::{Size, px, Pixels};
+    ///
+    /// let s1 = Size::<Pixels>::new(px(100.0), px(50.0));
+    /// let s2 = Size::<Pixels>::new(px(80.0), px(60.0));
+    /// let result = s1.min(s2);
+    /// assert_eq!(result, Size::<Pixels>::new(px(80.0), px(50.0)));
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn min(self, other: Self) -> Self {
+        Self {
+            width: NumericUnit::min(self.width, other.width),
+            height: NumericUnit::min(self.height, other.height),
+        }
+    }
+
+    /// Component-wise maximum.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::geometry::{Size, px, Pixels};
+    ///
+    /// let s1 = Size::<Pixels>::new(px(100.0), px(50.0));
+    /// let s2 = Size::<Pixels>::new(px(80.0), px(60.0));
+    /// let result = s1.max(s2);
+    /// assert_eq!(result, Size::<Pixels>::new(px(100.0), px(60.0)));
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn max(self, other: Self) -> Self {
+        Self {
+            width: NumericUnit::max(self.width, other.width),
+            height: NumericUnit::max(self.height, other.height),
+        }
+    }
+}
+
+impl<T: NumericUnit> Size<T>
+where
+    T: Into<f32> + From<f32>,
+{
     /// Returns true if width or height is zero.
     ///
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::Size;
+    /// use flui_types::geometry::{Size, px, Pixels};
     ///
-    /// let s1 = Size::<f32>::new(0.0, 10.0);
+    /// let s1 = Size::<Pixels>::new(px(0.0), px(10.0));
     /// assert!(s1.is_empty());
     ///
-    /// let s2 = Size::<f32>::new(10.0, 10.0);
+    /// let s2 = Size::<Pixels>::new(px(10.0), px(10.0));
     /// assert!(!s2.is_empty());
+    /// ```
     #[inline]
     #[must_use]
-    pub fn is_empty(&self) -> bool
+    pub fn is_empty(self) -> bool
     where
         T: IsZero,
     {
         self.width.is_zero() || self.height.is_zero()
     }
 
-    /// Returns the area (width × height).
+    /// Returns the area (width * height).
     ///
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::Size;
+    /// use flui_types::geometry::{Size, px, Pixels};
     ///
-    /// let s = Size::<f32>::new(10.0, 20.0);
+    /// let s = Size::<Pixels>::new(px(10.0), px(20.0));
     /// assert_eq!(s.area(), 200.0);
+    /// ```
     #[inline]
     #[must_use]
-    pub fn area(&self) -> f32 {
+    pub fn area(self) -> f32 {
         let w: f32 = self.width.into();
         let h: f32 = self.height.into();
         w * h
@@ -147,19 +198,20 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::Size;
+    /// use flui_types::geometry::{Size, px, Pixels};
     ///
-    /// let s = Size::<f32>::new(16.0, 9.0);
+    /// let s = Size::<Pixels>::new(px(16.0), px(9.0));
     /// assert!((s.aspect_ratio() - 1.777).abs() < 0.01);
+    /// ```
     #[inline]
     #[must_use]
-    pub fn aspect_ratio(&self) -> f32 {
+    pub fn aspect_ratio(self) -> f32 {
         let w: f32 = self.width.into();
         let h: f32 = self.height.into();
-        if h != 0.0 {
-            w / h
-        } else {
+        if h == 0.0 {
             0.0
+        } else {
+            w / h
         }
     }
 
@@ -168,14 +220,15 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Size, Point};
+    /// use flui_types::geometry::{Size, Point, px, Pixels};
     ///
-    /// let s = Size::<f32>::new(100.0, 200.0);
+    /// let s = Size::<Pixels>::new(px(100.0), px(200.0));
     /// let c = s.center();
-    /// assert_eq!(c, Point::<f32>::new(50.0, 100.0));
+    /// assert_eq!(c, Point::<Pixels>::new(px(50.0), px(100.0)));
+    /// ```
     #[inline]
     #[must_use]
-    pub fn center(&self) -> Point<T>
+    pub fn center(self) -> Point<T>
     where
         T: Half,
     {
@@ -194,70 +247,21 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Size, Point};
+    /// use flui_types::geometry::{Size, Point, px, Pixels};
     ///
-    /// let s = Size::<f32>::new(10.0, 20.0);
-    /// assert!(s.contains(Point::<f32>::new(5.0, 10.0)));
-    /// assert!(!s.contains(Point::<f32>::new(15.0, 10.0)));
+    /// let s = Size::<Pixels>::new(px(10.0), px(20.0));
+    /// assert!(s.contains(Point::<Pixels>::new(px(5.0), px(10.0))));
+    /// assert!(!s.contains(Point::<Pixels>::new(px(15.0), px(10.0))));
+    /// ```
     #[inline]
     #[must_use]
-    pub fn contains(&self, point: Point<T>) -> bool {
+    pub fn contains(self, point: Point<T>) -> bool {
         let w: f32 = self.width.into();
         let h: f32 = self.height.into();
         let x: f32 = point.x.into();
         let y: f32 = point.y.into();
 
         x >= 0.0 && x <= w && y >= 0.0 && y <= h
-    }
-
-    /// Component-wise minimum.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_types::geometry::Size;
-    ///
-    /// let s1 = Size::<f32>::new(100.0, 50.0);
-    /// let s2 = Size::<f32>::new(80.0, 60.0);
-    /// let result = s1.min(s2);
-    /// assert_eq!(result, Size::<f32>::new(80.0, 50.0));
-    #[inline]
-    #[must_use]
-    pub fn min(self, other: Self) -> Self {
-        let w1: f32 = self.width.into();
-        let h1: f32 = self.height.into();
-        let w2: f32 = other.width.into();
-        let h2: f32 = other.height.into();
-
-        Self {
-            width: T::from(w1.min(w2)),
-            height: T::from(h1.min(h2)),
-        }
-    }
-
-    /// Component-wise maximum.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_types::geometry::Size;
-    ///
-    /// let s1 = Size::<f32>::new(100.0, 50.0);
-    /// let s2 = Size::<f32>::new(80.0, 60.0);
-    /// let result = s1.max(s2);
-    /// assert_eq!(result, Size::<f32>::new(100.0, 60.0));
-    #[inline]
-    #[must_use]
-    pub fn max(self, other: Self) -> Self {
-        let w1: f32 = self.width.into();
-        let h1: f32 = self.height.into();
-        let w2: f32 = other.width.into();
-        let h2: f32 = other.height.into();
-
-        Self {
-            width: T::from(w1.max(w2)),
-            height: T::from(h1.max(h2)),
-        }
     }
 }
 
@@ -276,6 +280,7 @@ impl<T: Unit> Size<T> {
     /// let size_px = Size::new(px(100.0), px(200.0));
     /// let size_f32: Size<Pixels> = size_px.cast();
     /// assert_eq!(size_f32.width, px(100.0));
+    /// ```
     #[inline]
     #[must_use]
     pub fn cast<U: Unit>(self) -> Size<U>
@@ -303,6 +308,7 @@ where
     /// let size = Size::new(px(100.0), px(200.0));
     /// let f32_size = size.to_f32();
     /// assert_eq!(f32_size.width, px(100.0));
+    /// ```
     #[inline]
     #[must_use]
     pub fn to_f32(self) -> Size<Pixels> {
@@ -317,10 +323,11 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::Size;
+    /// use flui_types::geometry::{Size, px, Pixels};
     ///
-    /// let s = Size::<f32>::new(100.0, 200.0);
+    /// let s = Size::<Pixels>::new(px(100.0), px(200.0));
     /// assert_eq!(s.to_array(), [100.0, 200.0]);
+    /// ```
     #[inline]
     #[must_use]
     pub fn to_array(self) -> [f32; 2] {
@@ -332,11 +339,12 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Size, Vec2};
+    /// use flui_types::geometry::{Size, Vec2, px, Pixels};
     ///
-    /// let s = Size::<f32>::new(100.0, 200.0);
+    /// let s = Size::<Pixels>::new(px(100.0), px(200.0));
     /// let v = s.to_vec2();
-    /// assert_eq!(v, Vec2::<f32>::new(100.0, 200.0));
+    /// assert_eq!(v, Vec2::<Pixels>::new(px(100.0), px(200.0)));
+    /// ```
     #[inline]
     #[must_use]
     pub fn to_vec2(self) -> Vec2<T> {
@@ -419,13 +427,6 @@ impl Size<Pixels> {
     #[must_use]
     pub fn is_zero_area(self) -> bool {
         self.width <= px(0.0) || self.height <= px(0.0)
-    }
-
-    /// Checks if both dimensions are approximately zero.
-    #[inline]
-    #[must_use]
-    pub fn is_zero(self) -> bool {
-        self.width.abs() < px(f32::EPSILON) && self.height.abs() < px(f32::EPSILON)
     }
 
     /// Returns the smaller of width or height.
@@ -521,8 +522,8 @@ impl Size<Pixels> {
     #[must_use]
     pub fn lerp(self, other: Self, t: f32) -> Self {
         Self::new(
-            self.width + (other.width - self.width) * px(t),
-            self.height + (other.height - self.height) * px(t),
+            self.width + (other.width - self.width) * t,
+            self.height + (other.height - self.height) * t,
         )
     }
 
@@ -583,19 +584,13 @@ impl Size<Pixels> {
     #[inline]
     #[must_use]
     pub fn scale_to_max(self, max: f32) -> Self {
-        if self.width <= px(0.0) || self.height <= px(0.0) || max <= 0.0 {
+        let w = self.width.get();
+        let h = self.height.get();
+        if w <= 0.0 || h <= 0.0 || max <= 0.0 {
             return Self::ZERO;
         }
-        let scale = (max / self.width.0).min(max / self.height.0);
-        Self::new(self.width * px(scale), self.height * px(scale))
-    }
-
-    /// Checks if two sizes are approximately equal.
-    #[inline]
-    #[must_use]
-    pub fn approx_eq(self, other: Self) -> bool {
-        (self.width - other.width).abs() < px(f32::EPSILON)
-            && (self.height - other.height).abs() < px(f32::EPSILON)
+        let scale = (max / w).min(max / h);
+        Self::new(px(w * scale), px(h * scale))
     }
 
     /// Checks if the size is valid (finite and non-negative).
@@ -688,7 +683,7 @@ impl<T: Unit> Size<T> {
     /// Maps a function over both dimensions.
     #[inline]
     #[must_use]
-    pub fn map<U>(&self, f: impl Fn(T) -> U) -> Size<U>
+    pub fn map<U>(self, f: impl Fn(T) -> U) -> Size<U>
     where
         U: Unit,
     {
@@ -850,6 +845,7 @@ impl From<Size<Pixels>> for [f32; 2] {
 // ============================================================================
 
 impl<T: Unit + Display> Display for Size<T> {
+    #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}×{}", self.width, self.height)
     }
@@ -860,6 +856,7 @@ impl<T: Unit + Display> Display for Size<T> {
 // ============================================================================
 
 impl<T: Unit> Default for Size<T> {
+    #[inline]
     fn default() -> Self {
         Self {
             width: T::zero(),
@@ -912,7 +909,7 @@ where
     T: super::traits::Half,
 {
     #[inline]
-    fn half(&self) -> Self {
+    fn half(self) -> Self {
         Self {
             width: self.width.half(),
             height: self.height.half(),
@@ -943,7 +940,7 @@ where
     T: super::traits::Double,
 {
     #[inline]
-    fn double(&self) -> Self {
+    fn double(self) -> Self {
         Self {
             width: self.width.double(),
             height: self.height.double(),
@@ -974,6 +971,7 @@ impl<T> std::iter::Sum for Size<T>
 where
     T: NumericUnit,
 {
+    #[inline]
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
         iter.fold(Size::new(T::zero(), T::zero()), |acc, s| {
             Size::new(T::add(acc.width, s.width), T::add(acc.height, s.height))
@@ -985,6 +983,7 @@ impl<'a, T> std::iter::Sum<&'a Size<T>> for Size<T>
 where
     T: NumericUnit,
 {
+    #[inline]
     fn sum<I: Iterator<Item = &'a Self>>(iter: I) -> Self {
         iter.fold(Size::new(T::zero(), T::zero()), |acc, s| {
             Size::new(T::add(acc.width, s.width), T::add(acc.height, s.height))
@@ -1009,9 +1008,10 @@ impl Size<super::units::Pixels> {
     ///
     /// let size = Size::new(px(100.0), px(200.0));
     /// let scaled = size.scale(2.0);  // 2x Retina display
+    /// ```
     #[inline]
     #[must_use]
-    pub fn scale(&self, factor: f32) -> Size<super::units::ScaledPixels> {
+    pub fn scale(self, factor: f32) -> Size<super::units::ScaledPixels> {
         Size {
             width: self.width.scale(factor),
             height: self.height.scale(factor),
@@ -1033,9 +1033,10 @@ impl Size<super::units::ScaledPixels> {
     ///
     /// let size = Size::new(scaled_px(199.7), scaled_px(299.3));
     /// let device = size.to_device_pixels();
+    /// ```
     #[inline]
     #[must_use]
-    pub fn to_device_pixels(&self) -> Size<super::units::DevicePixels> {
+    pub fn to_device_pixels(self) -> Size<super::units::DevicePixels> {
         Size {
             width: self.width.to_device_pixels(),
             height: self.height.to_device_pixels(),

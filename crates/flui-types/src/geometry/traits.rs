@@ -3,7 +3,7 @@
 //! This module provides helper traits that enable ergonomic operations on
 //! geometry types. Inspired by GPUI's design patterns.
 
-use super::{DevicePixels, Pixels, Radians, Rems, ScaledPixels};
+use super::{DevicePixels, PixelDelta, Pixels, Radians, Rems, ScaledPixels};
 use std::fmt::Debug;
 use std::ops::{Add, Mul, Neg, Sub};
 
@@ -11,6 +11,7 @@ use std::ops::{Add, Mul, Neg, Sub};
 // AXIS - 2D cartesian axes
 // ============================================================================
 
+/// The two axes of a 2D cartesian coordinate system.
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]
 pub enum Axis {
     /// The vertical axis (y, up and down).
@@ -20,6 +21,7 @@ pub enum Axis {
 }
 
 impl Axis {
+    /// Returns the perpendicular axis.
     #[must_use]
     pub const fn invert(self) -> Self {
         match self {
@@ -28,16 +30,19 @@ impl Axis {
         }
     }
 
+    /// Returns `true` if this is the vertical axis.
     #[must_use]
     pub const fn is_vertical(self) -> bool {
         matches!(self, Axis::Vertical)
     }
 
+    /// Returns `true` if this is the horizontal axis.
     #[must_use]
     pub const fn is_horizontal(self) -> bool {
         matches!(self, Axis::Horizontal)
     }
 
+    /// Returns the array index for this axis (horizontal=0, vertical=1).
     #[must_use]
     pub const fn index(self) -> usize {
         match self {
@@ -46,6 +51,8 @@ impl Axis {
         }
     }
 
+    /// Selects a value based on the axis.
+    #[inline]
     #[must_use]
     pub fn select<T>(self, horizontal: T, vertical: T) -> T {
         match self {
@@ -160,55 +167,43 @@ pub trait Along {
 /// ```
 pub trait Half {
     #[must_use]
-    fn half(&self) -> Self;
+    fn half(self) -> Self;
 }
 
 impl Half for f32 {
     #[inline]
-    fn half(&self) -> Self {
+    fn half(self) -> Self {
         self * 0.5
     }
 }
 
 impl Half for f64 {
     #[inline]
-    fn half(&self) -> Self {
+    fn half(self) -> Self {
         self * 0.5
     }
 }
 
-impl Half for Pixels {
-    #[inline]
-    fn half(&self) -> Self {
-        Pixels(self.get() * 0.5)
-    }
+/// Implements `Half` for an f32-backed unit type.
+macro_rules! impl_half_f32_unit {
+    ($($ty:ty),+) => {
+        $(
+            impl Half for $ty {
+                #[inline]
+                fn half(self) -> Self {
+                    Self(self.get() * 0.5)
+                }
+            }
+        )+
+    };
 }
 
-impl Half for Rems {
-    #[inline]
-    fn half(&self) -> Self {
-        Rems(self.get() * 0.5)
-    }
-}
-
-impl Half for ScaledPixels {
-    #[inline]
-    fn half(&self) -> Self {
-        ScaledPixels(self.get() * 0.5)
-    }
-}
+impl_half_f32_unit!(Pixels, Rems, ScaledPixels, Radians, PixelDelta);
 
 impl Half for DevicePixels {
     #[inline]
-    fn half(&self) -> Self {
+    fn half(self) -> Self {
         DevicePixels(self.get() / 2)
-    }
-}
-
-impl Half for Radians {
-    #[inline]
-    fn half(&self) -> Self {
-        Radians(self.get() * 0.5)
     }
 }
 
@@ -231,55 +226,43 @@ impl Half for Radians {
 /// ```
 pub trait Double {
     #[must_use]
-    fn double(&self) -> Self;
+    fn double(self) -> Self;
 }
 
 impl Double for f32 {
     #[inline]
-    fn double(&self) -> Self {
+    fn double(self) -> Self {
         self * 2.0
     }
 }
 
 impl Double for f64 {
     #[inline]
-    fn double(&self) -> Self {
+    fn double(self) -> Self {
         self * 2.0
     }
 }
 
-impl Double for Pixels {
-    #[inline]
-    fn double(&self) -> Self {
-        Pixels(self.get() * 2.0)
-    }
+/// Implements `Double` for an f32-backed unit type.
+macro_rules! impl_double_f32_unit {
+    ($($ty:ty),+) => {
+        $(
+            impl Double for $ty {
+                #[inline]
+                fn double(self) -> Self {
+                    Self(self.get() * 2.0)
+                }
+            }
+        )+
+    };
 }
 
-impl Double for Rems {
-    #[inline]
-    fn double(&self) -> Self {
-        Rems(self.get() * 2.0)
-    }
-}
-
-impl Double for ScaledPixels {
-    #[inline]
-    fn double(&self) -> Self {
-        ScaledPixels(self.get() * 2.0)
-    }
-}
+impl_double_f32_unit!(Pixels, Rems, ScaledPixels, Radians, PixelDelta);
 
 impl Double for DevicePixels {
     #[inline]
-    fn double(&self) -> Self {
+    fn double(self) -> Self {
         DevicePixels(self.get() * 2)
-    }
-}
-
-impl Double for Radians {
-    #[inline]
-    fn double(&self) -> Self {
-        Radians(self.get() * 2.0)
     }
 }
 
@@ -333,38 +316,26 @@ impl IsZero for usize {
     }
 }
 
-impl IsZero for Pixels {
-    #[inline]
-    fn is_zero(&self) -> bool {
-        self.get().abs() < f32::EPSILON
-    }
+/// Implements `IsZero` for an f32-backed unit type (uses epsilon comparison).
+macro_rules! impl_is_zero_f32_unit {
+    ($($ty:ty),+) => {
+        $(
+            impl IsZero for $ty {
+                #[inline]
+                fn is_zero(&self) -> bool {
+                    self.get().abs() < f32::EPSILON
+                }
+            }
+        )+
+    };
 }
 
-impl IsZero for Rems {
-    #[inline]
-    fn is_zero(&self) -> bool {
-        self.get().abs() < f32::EPSILON
-    }
-}
-
-impl IsZero for ScaledPixels {
-    #[inline]
-    fn is_zero(&self) -> bool {
-        self.get().abs() < f32::EPSILON
-    }
-}
+impl_is_zero_f32_unit!(Pixels, Rems, ScaledPixels, Radians, PixelDelta);
 
 impl IsZero for DevicePixels {
     #[inline]
     fn is_zero(&self) -> bool {
         self.get() == 0
-    }
-}
-
-impl IsZero for Radians {
-    #[inline]
-    fn is_zero(&self) -> bool {
-        self.0.abs() < f32::EPSILON
     }
 }
 
@@ -419,6 +390,7 @@ pub trait Sign: Neg<Output = Self> + Sized {
     /// Returns the sign of the value (-1, 0, or 1).
     fn signum(self) -> Self;
 
+    /// Returns the sign as an integer: 1, -1, or 0.
     #[inline]
     fn abs_sign(&self) -> i32 {
         if self.is_positive() {
@@ -430,6 +402,9 @@ pub trait Sign: Neg<Output = Self> + Sized {
         }
     }
 }
+
+// Primitive impls use fully qualified syntax to avoid infinite recursion
+// with the trait method shadowing the inherent method.
 
 impl Sign for f32 {
     #[inline]
@@ -444,7 +419,7 @@ impl Sign for f32 {
 
     #[inline]
     fn signum(self) -> Self {
-        self.signum()
+        f32::signum(self)
     }
 }
 
@@ -461,7 +436,7 @@ impl Sign for f64 {
 
     #[inline]
     fn signum(self) -> Self {
-        self.signum()
+        f64::signum(self)
     }
 }
 
@@ -478,60 +453,35 @@ impl Sign for i32 {
 
     #[inline]
     fn signum(self) -> Self {
-        self.signum()
+        i32::signum(self)
     }
 }
 
-impl Sign for Pixels {
-    #[inline]
-    fn is_positive(&self) -> bool {
-        self.get() > 0.0
-    }
+/// Implements `Sign` for an f32-backed unit type.
+macro_rules! impl_sign_f32_unit {
+    ($($ty:ty),+) => {
+        $(
+            impl Sign for $ty {
+                #[inline]
+                fn is_positive(&self) -> bool {
+                    self.get() > 0.0
+                }
 
-    #[inline]
-    fn is_negative(&self) -> bool {
-        self.get() < 0.0
-    }
+                #[inline]
+                fn is_negative(&self) -> bool {
+                    self.get() < 0.0
+                }
 
-    #[inline]
-    fn signum(self) -> Self {
-        Pixels(self.get().signum())
-    }
+                #[inline]
+                fn signum(self) -> Self {
+                    Self(self.get().signum())
+                }
+            }
+        )+
+    };
 }
 
-impl Sign for Rems {
-    #[inline]
-    fn is_positive(&self) -> bool {
-        self.get() > 0.0
-    }
-
-    #[inline]
-    fn is_negative(&self) -> bool {
-        self.get() < 0.0
-    }
-
-    #[inline]
-    fn signum(self) -> Self {
-        Rems(self.get().signum())
-    }
-}
-
-impl Sign for ScaledPixels {
-    #[inline]
-    fn is_positive(&self) -> bool {
-        self.get() > 0.0
-    }
-
-    #[inline]
-    fn is_negative(&self) -> bool {
-        self.get() < 0.0
-    }
-
-    #[inline]
-    fn signum(self) -> Self {
-        ScaledPixels(self.get().signum())
-    }
-}
+impl_sign_f32_unit!(Pixels, Rems, ScaledPixels, Radians, PixelDelta);
 
 impl Sign for DevicePixels {
     #[inline]
@@ -547,23 +497,6 @@ impl Sign for DevicePixels {
     #[inline]
     fn signum(self) -> Self {
         DevicePixels(self.get().signum())
-    }
-}
-
-impl Sign for Radians {
-    #[inline]
-    fn is_positive(&self) -> bool {
-        self.get() > 0.0
-    }
-
-    #[inline]
-    fn is_negative(&self) -> bool {
-        self.get() < 0.0
-    }
-
-    #[inline]
-    fn signum(self) -> Self {
-        Radians(self.get().signum())
     }
 }
 
@@ -618,31 +551,26 @@ impl ApproxEq for f64 {
     }
 }
 
-impl ApproxEq for Pixels {
-    #[inline]
-    fn approx_eq_eps(&self, other: &Self, epsilon: f32) -> bool {
-        (self.get() - other.get()).abs() < epsilon
-    }
+/// Implements `ApproxEq` for an f32-backed unit type.
+macro_rules! impl_approx_eq_f32_unit {
+    ($($ty:ty),+) => {
+        $(
+            impl ApproxEq for $ty {
+                #[inline]
+                fn approx_eq_eps(&self, other: &Self, epsilon: f32) -> bool {
+                    (self.get() - other.get()).abs() < epsilon
+                }
+            }
+        )+
+    };
 }
 
-impl ApproxEq for Rems {
-    #[inline]
-    fn approx_eq_eps(&self, other: &Self, epsilon: f32) -> bool {
-        (self.get() - other.get()).abs() < epsilon
-    }
-}
+impl_approx_eq_f32_unit!(Pixels, Rems, ScaledPixels, Radians, PixelDelta);
 
-impl ApproxEq for ScaledPixels {
+impl ApproxEq for DevicePixels {
     #[inline]
     fn approx_eq_eps(&self, other: &Self, epsilon: f32) -> bool {
-        (self.get() - other.get()).abs() < epsilon
-    }
-}
-
-impl ApproxEq for Radians {
-    #[inline]
-    fn approx_eq_eps(&self, other: &Self, epsilon: f32) -> bool {
-        (self.get() - other.get()).abs() < epsilon
+        (self.get() - other.get()).abs() <= epsilon as i32
     }
 }
 
@@ -713,17 +641,17 @@ impl<T> GeometryOps for T
 where
     T: NumericUnit + Mul<f32, Output = T>,
 {
-    #[inline(always)]
+    #[inline]
     fn clamp(self, min: Self, max: Self) -> Self {
         self.max(min).min(max)
     }
 
-    #[inline(always)]
+    #[inline]
     fn lerp(self, other: Self, t: f32) -> Self {
         self + (other - self) * t
     }
 
-    #[inline(always)]
+    #[inline]
     fn saturating_lerp(self, other: Self, t: f32) -> Self {
         let clamped_t = t.clamp(0.0, 1.0);
         self.lerp(other, clamped_t)

@@ -36,6 +36,7 @@
 
 use std::fmt::{self, Debug, Display};
 use std::iter::Sum;
+use std::marker::PhantomData;
 use std::ops::{
     Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Rem, RemAssign, Sub, SubAssign,
 };
@@ -235,23 +236,31 @@ impl Pixels {
         Self(value as f32)
     }
 
-    /// Converts logical pixels to device pixels using a scale factor.
+    /// Converts logical pixels to device pixels using a raw scale factor.
+    ///
+    /// Prefer [`Pixels::to_device`] with a typed [`ScaleFactor`] for compile-time safety.
     #[must_use]
     pub fn to_device_pixels(self, scale_factor: f32) -> DevicePixels {
         DevicePixels((self.0 * scale_factor).round() as i32)
     }
 
-    /// Converts device pixels to logical pixels using a scale factor.
+    /// Converts device pixels to logical pixels using a raw scale factor.
+    ///
+    /// Prefer [`DevicePixels::to_logical`] with a typed [`ScaleFactor`] for compile-time safety.
     #[must_use]
     pub fn from_device_pixels(device: DevicePixels, scale_factor: f32) -> Self {
         Pixels(device.0 as f32 / scale_factor)
     }
 
+    /// Converts scaled pixels to logical pixels using a raw scale factor.
+    ///
+    /// Prefer [`ScaledPixels::to_logical`] for the equivalent operation.
     #[must_use]
     pub fn from_scaled_pixels(scaled: ScaledPixels, scale_factor: f32) -> Self {
         Pixels(scaled.0 / scale_factor)
     }
 
+    /// Applies a function to the underlying value.
     #[must_use]
     pub fn map(self, f: impl FnOnce(f32) -> f32) -> Self {
         Pixels(f(self.0))
@@ -522,12 +531,14 @@ impl From<Pixels> for usize {
 
 // Formatting
 impl Display for Pixels {
+    #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}px", self.0)
     }
 }
 
 impl Debug for Pixels {
+    #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         Display::fmt(self, f)
     }
@@ -537,12 +548,14 @@ impl Debug for Pixels {
 impl Eq for Pixels {}
 
 impl PartialOrd for Pixels {
+    #[inline]
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
 impl Ord for Pixels {
+    #[inline]
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.0.total_cmp(&other.0)
     }
@@ -572,10 +585,15 @@ impl<'a> Sum<&'a Pixels> for Pixels {
 // PIXEL DELTA - Type-safe displacement/velocity in pixels
 // ============================================================================
 
+/// Type-safe displacement or velocity in logical pixels.
+///
+/// Unlike [`Pixels`] which represents an absolute position or measurement,
+/// `PixelDelta` represents a signed change (offset, velocity, scroll distance).
 #[derive(Copy, Clone, Default, PartialEq)]
 #[repr(transparent)]
 pub struct PixelDelta(pub f32);
 
+/// Shorthand constructor for `PixelDelta`.
 #[inline]
 pub const fn delta_px(value: f32) -> PixelDelta {
     PixelDelta(value)
@@ -591,81 +609,97 @@ impl PixelDelta {
     /// Minimum representable delta value.
     pub const MIN: PixelDelta = PixelDelta(f32::MIN);
 
+    /// Creates a new `PixelDelta` value.
     #[inline]
     pub const fn new(value: f32) -> Self {
         Self(value)
     }
 
+    /// Gets the raw f32 value.
     #[inline]
     pub const fn get(self) -> f32 {
         self.0
     }
 
+    /// Rounds down to the nearest integer.
     #[must_use]
     pub fn floor(self) -> Self {
         Self(self.0.floor())
     }
 
+    /// Rounds to the nearest integer.
     #[must_use]
     pub fn round(self) -> Self {
         Self(self.0.round())
     }
 
+    /// Rounds up to the nearest integer.
     #[must_use]
     pub fn ceil(self) -> Self {
         Self(self.0.ceil())
     }
 
+    /// Truncates the fractional part.
     #[must_use]
     pub fn trunc(self) -> Self {
         Self(self.0.trunc())
     }
 
+    /// Returns the absolute value.
     #[must_use]
     pub fn abs(self) -> Self {
         Self(self.0.abs())
     }
 
+    /// Returns the sign as a raw f32.
     #[inline]
     pub fn signum_raw(self) -> f32 {
         self.0.signum()
     }
 
+    /// Returns true if the value is finite (not NaN or infinite).
     #[inline]
     pub fn is_finite(self) -> bool {
         self.0.is_finite()
     }
 
+    /// Returns true if the value is NaN.
     #[inline]
     pub fn is_nan(self) -> bool {
         self.0.is_nan()
     }
 
+    /// Returns true if the value is infinite.
     #[inline]
     pub fn is_infinite(self) -> bool {
         self.0.is_infinite()
     }
 
+    /// Returns the minimum of two values.
     #[must_use]
     pub fn min(self, other: Self) -> Self {
         Self(self.0.min(other.0))
     }
 
+    /// Returns the maximum of two values.
     #[must_use]
     pub fn max(self, other: Self) -> Self {
         Self(self.0.max(other.0))
     }
 
+    /// Clamps the value between min and max.
     #[must_use]
     pub fn clamp(self, min: Self, max: Self) -> Self {
         Self(self.0.clamp(min.0, max.0))
     }
 
+    /// Applies a function to the underlying value.
     #[must_use]
     pub fn map(self, f: impl FnOnce(f32) -> f32) -> Self {
         PixelDelta(f(self.0))
     }
 
+    /// Converts this delta to an absolute [`Pixels`] value.
     #[must_use]
     pub fn to_pixels(self) -> Pixels {
         Pixels(self.0)
@@ -845,12 +879,14 @@ impl From<PixelDelta> for f64 {
 // ============================================================================
 
 impl Display for PixelDelta {
+    #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}Δpx", self.0)
     }
 }
 
 impl Debug for PixelDelta {
+    #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         Display::fmt(self, f)
     }
@@ -863,12 +899,14 @@ impl Debug for PixelDelta {
 impl Eq for PixelDelta {}
 
 impl PartialOrd for PixelDelta {
+    #[inline]
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
 impl Ord for PixelDelta {
+    #[inline]
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.0.total_cmp(&other.0)
     }
@@ -1085,6 +1123,7 @@ impl From<i32> for DevicePixels {
 
 impl From<u32> for DevicePixels {
     #[inline]
+    #[allow(clippy::cast_possible_wrap)]
     fn from(value: u32) -> Self {
         Self(value as i32)
     }
@@ -1092,6 +1131,7 @@ impl From<u32> for DevicePixels {
 
 impl From<usize> for DevicePixels {
     #[inline]
+    #[allow(clippy::cast_possible_wrap)]
     fn from(value: usize) -> Self {
         Self(value as i32)
     }
@@ -1127,12 +1167,14 @@ impl From<DevicePixels> for usize {
 
 // Formatting
 impl Display for DevicePixels {
+    #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}dpx", self.0)
     }
 }
 
 impl Debug for DevicePixels {
+    #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{} px (device)", self.0)
     }
@@ -1303,11 +1345,15 @@ impl ScaledPixels {
         self.0.signum()
     }
 
+    /// Converts scaled pixels to logical pixels using a raw scale factor.
+    ///
+    /// Prefer [`ScaledPixels::to_logical`] for the equivalent operation.
     #[must_use]
     pub fn to_pixels(self, scale_factor: f32) -> Pixels {
         Pixels(self.0 / scale_factor)
     }
 
+    /// Applies a function to the underlying value.
     #[must_use]
     pub fn map(self, f: impl FnOnce(f32) -> f32) -> Self {
         ScaledPixels(f(self.0))
@@ -1318,12 +1364,14 @@ impl ScaledPixels {
 impl Eq for ScaledPixels {}
 
 impl PartialOrd for ScaledPixels {
+    #[inline]
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
 impl Ord for ScaledPixels {
+    #[inline]
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.0.total_cmp(&other.0)
     }
@@ -1499,12 +1547,14 @@ impl From<ScaledPixels> for f32 {
 
 // Formatting
 impl Display for ScaledPixels {
+    #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}spx", self.0)
     }
 }
 
 impl Debug for ScaledPixels {
+    #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{} px (scaled)", self.0)
     }
@@ -1523,6 +1573,7 @@ pub struct ParseLengthError {
 }
 
 impl Display for ParseLengthError {
+    #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
@@ -1645,10 +1696,15 @@ impl std::str::FromStr for ScaledPixels {
 // RADIANS - Type-safe angle representation
 // ============================================================================
 
+/// Type-safe angle representation in radians.
+///
+/// Wraps an f32 value representing an angle in radians.
+/// Provides angular arithmetic, normalization, and degree conversions.
 #[derive(Copy, Clone, Default, PartialEq)]
 #[repr(transparent)]
 pub struct Radians(pub f32);
 
+/// Shorthand constructor for `Radians`.
 #[inline]
 pub const fn radians(value: f32) -> Radians {
     Radians(value)
@@ -1664,52 +1720,58 @@ impl Radians {
     /// 2π radians (360 degrees, full circle).
     pub const TAU: Radians = Radians(std::f32::consts::TAU);
 
+    /// Creates a new `Radians` value.
     #[inline]
     pub const fn new(value: f32) -> Self {
         Self(value)
     }
 
+    /// Gets the raw f32 value.
     #[inline]
     pub const fn get(self) -> f32 {
         self.0
     }
 
+    /// Creates a `Radians` value from degrees.
     #[inline]
     pub fn from_degrees(degrees: f32) -> Self {
         Self(degrees.to_radians())
     }
 
+    /// Converts this angle to degrees.
     #[inline]
     pub fn to_degrees(self) -> f32 {
         self.0.to_degrees()
     }
 
+    /// Normalizes the angle to the range `[0, 2π)`.
     #[inline]
     pub fn normalize(self) -> Self {
         let tau = std::f32::consts::TAU;
         Self(self.0.rem_euclid(tau))
     }
 
-    #[inline]
-    pub fn is_zero(self) -> bool {
-        self.0.abs() < f32::EPSILON
-    }
-
+    /// Returns true if the value is finite (not NaN or infinite).
     #[inline]
     pub fn is_finite(self) -> bool {
         self.0.is_finite()
     }
 
+    /// Returns the absolute value.
     #[must_use]
     pub fn abs(self) -> Self {
         Self(self.0.abs())
     }
 
+    /// Returns the sign as -1.0, 0.0, or 1.0.
     #[inline]
     pub fn signum(self) -> f32 {
         self.0.signum()
     }
 
+    /// Interpolates between two angles along the shortest arc.
+    ///
+    /// Takes the shortest path around the circle, handling the 0/2π wrap-around.
     #[inline]
     pub fn lerp(self, other: Self, t: f32) -> Self {
         let diff = (other.0 - self.0).rem_euclid(std::f32::consts::TAU);
@@ -1721,6 +1783,7 @@ impl Radians {
         Self(self.0 + shortest * t)
     }
 
+    /// Linear interpolation between two angles without wrap-around handling.
     #[inline]
     pub fn lerp_linear(self, other: Self, t: f32) -> Self {
         Self(self.0 + (other.0 - self.0) * t)
@@ -1728,25 +1791,20 @@ impl Radians {
 }
 
 impl Display for Radians {
+    #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}rad", self.0)
     }
 }
 
 impl Debug for Radians {
+    #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         Display::fmt(self, f)
     }
 }
 
 // Conversions
-impl From<Pixels> for Radians {
-    #[inline]
-    fn from(value: Pixels) -> Self {
-        Self(value.0)
-    }
-}
-
 impl From<Radians> for f32 {
     #[inline]
     fn from(radians: Radians) -> Self {
@@ -1804,35 +1862,44 @@ impl Neg for Radians {
     }
 }
 
-impl Mul<Pixels> for Radians {
+impl Mul<f32> for Radians {
     type Output = Self;
 
     #[inline]
-    fn mul(self, rhs: Pixels) -> Self::Output {
-        Self(self.0 * rhs.0)
+    fn mul(self, rhs: f32) -> Self::Output {
+        Self(self.0 * rhs)
     }
 }
 
-impl MulAssign<Pixels> for Radians {
+impl Mul<Radians> for f32 {
+    type Output = Radians;
+
     #[inline]
-    fn mul_assign(&mut self, rhs: Pixels) {
-        self.0 *= rhs.0;
+    fn mul(self, rhs: Radians) -> Self::Output {
+        Radians(self * rhs.0)
     }
 }
 
-impl Div<Pixels> for Radians {
+impl MulAssign<f32> for Radians {
+    #[inline]
+    fn mul_assign(&mut self, rhs: f32) {
+        self.0 *= rhs;
+    }
+}
+
+impl Div<f32> for Radians {
     type Output = Self;
 
     #[inline]
-    fn div(self, rhs: Pixels) -> Self::Output {
-        Self(self.0 / rhs.0)
+    fn div(self, rhs: f32) -> Self::Output {
+        Self(self.0 / rhs)
     }
 }
 
-impl DivAssign<Pixels> for Radians {
+impl DivAssign<f32> for Radians {
     #[inline]
-    fn div_assign(&mut self, rhs: Pixels) {
-        self.0 /= rhs.0;
+    fn div_assign(&mut self, rhs: f32) {
+        self.0 /= rhs;
     }
 }
 
@@ -1888,12 +1955,14 @@ impl NumericUnit for Radians {
 impl Eq for Radians {}
 
 impl PartialOrd for Radians {
+    #[inline]
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
 impl Ord for Radians {
+    #[inline]
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.0.total_cmp(&other.0)
     }
@@ -1903,6 +1972,19 @@ impl Ord for Radians {
 impl std::hash::Hash for Radians {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.0.to_bits().hash(state);
+    }
+}
+
+// Sum trait for iterator support
+impl Sum for Radians {
+    fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
+        iter.fold(Radians::ZERO, |acc, x| acc + x)
+    }
+}
+
+impl<'a> Sum<&'a Radians> for Radians {
+    fn sum<I: Iterator<Item = &'a Self>>(iter: I) -> Self {
+        iter.fold(Radians::ZERO, |acc, x| acc + *x)
     }
 }
 
@@ -1963,8 +2045,6 @@ impl std::str::FromStr for Radians {
 // ============================================================================
 // SCALE FACTOR - Type-safe unit conversions
 // ============================================================================
-
-use std::marker::PhantomData;
 
 /// Scale factor for converting between unit types
 ///
